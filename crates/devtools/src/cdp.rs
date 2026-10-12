@@ -53,7 +53,8 @@ fn handle_browser_get_version() -> JsonValue {
     obj.insert("product".into(), JsonValue::String(format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));
     obj.insert("protocolVersion".into(), JsonValue::String("1.3".into()));
     obj.insert("revision".into(), JsonValue::String("rev0".into()));
-    obj.insert("userAgent".into(), JsonValue::String(format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));
+    // BUG-1614: the UA the network actually sends (default profile).
+    obj.insert("userAgent".into(), JsonValue::String(lumen_core::CHROME_USER_AGENT.into()));
     JsonValue::Object(obj)
 }
 

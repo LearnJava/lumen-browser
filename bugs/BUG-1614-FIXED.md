@@ -1,6 +1,6 @@
 # BUG-1614 — Идентичность браузера расходится между HTTP UA, navigator, userAgentData и Client Hints
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** network/js (`crates/network/src/http`, `crates/js/src/ua_client_hints.rs`, `navigator_bindings.rs`, `shim/web_api_shim_mid_b.js:746`)
 

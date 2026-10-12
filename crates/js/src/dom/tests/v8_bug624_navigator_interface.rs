@@ -104,3 +104,25 @@ fn java_enabled_is_an_operation_returning_false() {
     assert!(is_true(&rt, "navigator.javaEnabled() === false"));
     assert!(is_true(&rt, "Navigator.prototype.javaEnabled.name === 'javaEnabled'"));
 }
+
+/// BUG-1614: a UA override renames the whole browser, not just `userAgent` —
+/// a Firefox UA must not keep Chrome's `vendor` / `userAgentData`.
+#[test]
+fn user_agent_override_renames_every_identity_field() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert!(is_true(&rt, "navigator.userAgentData.brands.length === 2 && navigator.vendor === 'Google Inc.'"));
+    rt.eval(&crate::v8_runtime::user_agent_override_script(
+        "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0",
+    ))
+    .unwrap();
+    assert!(is_true(&rt, "navigator.userAgent.indexOf('Firefox/128') > 0"));
+    assert!(is_true(&rt, "navigator.appVersion === '5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0'"));
+    assert!(is_true(&rt, "navigator.vendor === '' && navigator.productSub === '20100101'"));
+    assert!(is_true(&rt, "typeof navigator.userAgentData === 'undefined' && typeof NavigatorUAData === 'undefined'"));
+    // and back to a Chromium UA: userAgentData returns, built from the new major
+    rt.eval(&crate::v8_runtime::user_agent_override_script(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    ))
+    .unwrap();
+    assert!(is_true(&rt, "navigator.userAgentData.brands.some(function(b) { return b.brand === 'Chromium' && b.version === '140'; })"));
+}

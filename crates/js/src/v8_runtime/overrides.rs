@@ -30,33 +30,37 @@ pub fn set_global_user_agent_override(ua: Option<String>) {
 }
 
 /// The active `navigator.userAgent` override, if any.
-pub(super) fn global_user_agent_override() -> Option<String> {
+pub(crate) fn global_user_agent_override() -> Option<String> {
     GLOBAL_UA_OVERRIDE.lock().ok().and_then(|g| g.clone())
 }
 
-/// Build the JS snippet that redefines `navigator.userAgent` to `ua`
-/// (BUG-295). Shared between `install_dom` (next-navigation application) and
-/// the shell's immediate-apply path (the already-loaded page), so both go
-/// through the same escaping.
+/// Build the JS snippet that redefines the browser's name to match `ua`
+/// (BUG-295, widened by BUG-1614): `navigator.userAgent`, `appVersion`,
+/// `vendor`, `productSub` and `userAgentData` all follow the one
+/// [`lumen_core::Identity`] derived from `ua`, so an overridden page never
+/// keeps a stale Chrome `userAgentData` next to a Firefox UA. Shared between
+/// `install_dom` (next-navigation application) and the shell's immediate-apply
+/// path (the already-loaded page), so both go through the same escaping.
 ///
 /// The two paths see different shapes (BUG-624): during `install_dom`
 /// `userAgent` is still a writable own property of the singleton, while on a
 /// loaded page it is a getter on `Navigator.prototype` with no setter, where a
-/// plain assignment is silently dropped. Hence: assign while the own property
-/// exists, otherwise redefine the prototype getter.
+/// plain assignment is silently dropped. Hence: define on the instance while
+/// an own property exists (or there is no `Navigator`), otherwise redefine the
+/// prototype getter.
 pub fn user_agent_override_script(ua: &str) -> String {
-    let escaped = ua.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let id = lumen_core::Identity::from_user_agent(ua);
+    let q = crate::navigator_bindings::json_string;
+    let user_agent_data = match &id.ua_data {
+        Some(d) => format!("put('userAgentData', {});", crate::ua_client_hints::ua_data_instance_expr(d)),
+        None => "drop('userAgentData'); try { delete globalThis.NavigatorUAData; } catch(_) {}".to_string(),
+    };
     format!(
-        "(function() {{ var ua = \"{escaped}\"; \
-           if (Object.prototype.hasOwnProperty.call(navigator, 'userAgent') || \
-               typeof Navigator !== 'function') {{ navigator.userAgent = ua; return; }} \
-           var nav = navigator; \
-           Object.defineProperty(Navigator.prototype, 'userAgent', {{ \
-             get: Object.getOwnPropertyDescriptor({{ get userAgent() {{ \
-               if (this !== nav) throw new TypeError('Illegal invocation'); return ua; \
-             }} }}, 'userAgent').get, \
-             enumerable: true, configurable: true }}); \
-         }})();"
+        "(function() {{ var nav = navigator;            function put(name, v) {{              if (Object.prototype.hasOwnProperty.call(nav, name) || typeof Navigator !== 'function') {{                Object.defineProperty(nav, name, {{ value: v, writable: name === 'userAgent',                  configurable: true, enumerable: true }}); return; }}              var holder = {{ get [name]() {{                if (this !== nav) throw new TypeError('Illegal invocation'); return v; }} }};              Object.defineProperty(Navigator.prototype, name, {{                get: Object.getOwnPropertyDescriptor(holder, name).get,                enumerable: true, configurable: true }});            }}            function drop(name) {{              try {{ delete nav[name]; }} catch(_) {{}}              if (typeof Navigator === 'function') {{ try {{ delete Navigator.prototype[name]; }} catch(_) {{}} }}            }}            put('userAgent', {user_agent});            put('appVersion', {app_version});            put('vendor', {vendor});            put('productSub', {product_sub});            {user_agent_data}          }})();",
+        user_agent = q(&id.user_agent),
+        app_version = q(&id.app_version),
+        vendor = q(&id.vendor),
+        product_sub = q(&id.product_sub),
     )
 }
 

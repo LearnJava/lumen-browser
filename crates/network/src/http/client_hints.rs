@@ -5,7 +5,9 @@
 //!
 //! Lumen's policy per ADR-007:
 //! - Chrome/Firefox/Safari/Edge/Lumen profiles: send Client Hints when requested (UA, viewport, etc.)
-//! - Strict/TorBrowser profiles: do not send Client Hints (privacy-first)
+//! - TorBrowser: no Client Hints (Tor Browser is Firefox, which has none).
+//! - Strict keeps the Chrome UA, so it sends Chrome's low-entropy hints too:
+//!   a Chrome UA without `Sec-CH-UA` is a bot signal (BUG-1614).
 
 use crate::http::HttpProfile;
 
@@ -23,11 +25,12 @@ impl ClientHintsProfile {
     pub fn for_http_profile(profile: HttpProfile) -> Self {
         match profile {
             HttpProfile::Chrome
+            | HttpProfile::Strict
             | HttpProfile::Firefox
             | HttpProfile::Safari
             | HttpProfile::Edge
             | HttpProfile::Lumen => ClientHintsProfile::Enabled,
-            HttpProfile::Strict | HttpProfile::TorBrowser => ClientHintsProfile::Disabled,
+            HttpProfile::TorBrowser => ClientHintsProfile::Disabled,
         }
     }
 }
@@ -45,28 +48,34 @@ pub fn should_send_client_hints(
     ch_profile == ClientHintsProfile::Enabled && server_requested
 }
 
-/// Build Client Hints headers for the given UA string (Lumen).
-///
-/// Standard Client Hints sent by Chrome:
-/// - Sec-CH-UA: `"Lumen/<version>"` (version tracks `CARGO_PKG_VERSION`)
-/// - Sec-CH-UA-Mobile: `?0` (not mobile)
-/// - Sec-CH-UA-Platform: `"Windows"` / `"Linux"` / `"macOS"` (detected from OS)
-///
-/// Note: Sec-CH-UA values are quoted and prefixed with the brand+version.
+/// Low-entropy Client Hints a profile sends on **every** request, like Chrome
+/// does: `Sec-CH-UA` (GREASE brand list of the profile's Chromium major),
+/// `Sec-CH-UA-Mobile`, `Sec-CH-UA-Platform`. Empty for profiles whose real
+/// browser has no UA-CH (Firefox, Safari, Tor, Lumen) and for `Disabled`
+/// profiles. Derived from the same [`lumen_core::Identity`] the JS layer uses,
+/// so `navigator.userAgentData` and the headers cannot disagree (BUG-1614).
+#[must_use]
+pub fn low_entropy_client_hints(profile: HttpProfile) -> Vec<(&'static str, String)> {
+    if ClientHintsProfile::for_http_profile(profile) == ClientHintsProfile::Disabled {
+        return Vec::new();
+    }
+    lumen_core::Identity::from_user_agent(super::profile_user_agent(profile)).low_entropy_client_hints()
+}
+
+/// Build Client Hints headers for the profile. `server_requested` gates the
+/// opt-in hints; the low-entropy set is what [`low_entropy_client_hints`] returns.
 pub fn client_hints_headers(
     profile: HttpProfile,
     server_requested: bool,
-    os_platform: &str,
+    _os_platform: &str,
 ) -> Vec<(String, String)> {
     if !should_send_client_hints(profile, server_requested) {
         return Vec::new();
     }
-
-    vec![
-        ("Sec-CH-UA".to_string(), format!(r#""Lumen/{}""#, env!("CARGO_PKG_VERSION"))),
-        ("Sec-CH-UA-Mobile".to_string(), "?0".to_string()),
-        ("Sec-CH-UA-Platform".to_string(), format!(r#""{}""#, os_platform)),
-    ]
+    low_entropy_client_hints(profile)
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
 }
 
 #[cfg(test)]
@@ -84,8 +93,8 @@ mod tests {
     }
 
     #[test]
-    fn test_client_hints_disabled_for_strict() {
-        assert!(!should_send_client_hints(HttpProfile::Strict, true));
+    fn test_client_hints_enabled_for_strict() {
+        assert!(should_send_client_hints(HttpProfile::Strict, true));
     }
 
     #[test]
@@ -102,14 +111,18 @@ mod tests {
     fn test_client_hints_headers_chrome() {
         let hints = client_hints_headers(HttpProfile::Chrome, true, "Windows");
         assert_eq!(hints.len(), 3);
-        assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA" && v.contains("Lumen")));
+        let ua = hints.iter().find(|(k, _)| k == "Sec-CH-UA").unwrap();
+        assert!(ua.1.contains(&format!("\"Chromium\";v=\"{}\"", lumen_core::CHROME_MAJOR)));
+        assert!(!ua.1.contains("Lumen"));
         assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA-Mobile" && v == "?0"));
-        assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA-Platform" && v.contains("Windows")));
+        assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA-Platform" && v == "\"Windows\""));
     }
 
     #[test]
-    fn test_client_hints_headers_empty_for_strict() {
-        let hints = client_hints_headers(HttpProfile::Strict, true, "Windows");
-        assert!(hints.is_empty());
+    fn test_low_entropy_hints_only_for_chromium_profiles() {
+        assert_eq!(low_entropy_client_hints(HttpProfile::Edge).len(), 3);
+        for p in [HttpProfile::Firefox, HttpProfile::Safari, HttpProfile::TorBrowser, HttpProfile::Lumen] {
+            assert!(low_entropy_client_hints(p).is_empty(), "{p:?}");
+        }
     }
 }
