@@ -17,7 +17,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 13: 12 id `fixed-table-layout-003e*` + 8 `-003f*` + 10 `fixed-table-layout-*` + 8 `collapsing-border-model-*` (последние — по имени, без пробы). Зонтик: 38 id; проба — только `fixed-table-layout-003e01`. Смежно с [BUG-1346](BUG-1346-OPEN.md) (та же геометрия collapsed-границ, другой симптом).
+WPT-RUN-14 срез 13: 12 id `fixed-table-layout-003e*` + 8 `-003f*` + 10 `fixed-table-layout-*` + 8 `collapsing-border-model-*` (последние — по имени, без пробы). Зонтик: 38 id; проба — только `fixed-table-layout-003e01`. Смежно с [BUG-1346](BUG-1346-FIXED.md) (та же геометрия collapsed-границ, другой симптом).
 
 ## Что делать
 
