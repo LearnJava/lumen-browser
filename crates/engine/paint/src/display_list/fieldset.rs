@@ -31,7 +31,7 @@ pub(crate) fn fieldset_decoration_box(b: &LayoutBox) -> Option<LayoutBox> {
         node: b.node,
         rect,
         style: b.style.clone(),
-        used_line_height: b.used_line_height,
+        used_padding: None, used_line_height: b.used_line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,

@@ -2719,7 +2719,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
-            used_line_height: 16.0 * 1.2,
+            used_padding: None, used_line_height: 16.0 * 1.2,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -2985,7 +2985,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
-            used_line_height: 16.0 * 1.2,
+            used_padding: None, used_line_height: 16.0 * 1.2,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -3006,7 +3006,7 @@ mod tests {
         LayoutBox {
             node,
             rect,
-            used_line_height: 16.0 * 1.2,
+            used_padding: None, used_line_height: 16.0 * 1.2,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

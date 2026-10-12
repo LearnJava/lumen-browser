@@ -283,7 +283,7 @@ pub(crate) fn anon_inline_run(
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -343,7 +343,7 @@ pub(crate) fn build_anon_text_item(
     Some(LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: item_style.font_size * item_style.line_height,
+        used_padding: None, used_line_height: item_style.font_size * item_style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -735,7 +735,7 @@ pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items:
     LayoutBox {
         node,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -1152,7 +1152,7 @@ pub(crate) fn inject_pseudo(
             let b = LayoutBox {
                 node: parent_id,
                 rect: Rect::ZERO,
-                used_line_height: ps.font_size * ps.line_height,
+                used_padding: None, used_line_height: ps.font_size * ps.line_height,
                 grid_baselines: None,
                 fieldset_legend: None,
                 subgrid_tracks: None,
@@ -1425,7 +1425,7 @@ pub(crate) fn inject_marker(
     children.insert(0, LayoutBox {
         node:     parent_id,
         rect:     Rect::ZERO,
-        used_line_height: ms.font_size * ms.line_height,
+        used_padding: None, used_line_height: ms.font_size * ms.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,

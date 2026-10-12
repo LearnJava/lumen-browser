@@ -57,6 +57,7 @@ fn box_self_paint_eq<'a>(
         rect,
         style,
         used_line_height,
+        used_padding,
         kind,
         children,
         col_span,
@@ -75,6 +76,7 @@ fn box_self_paint_eq<'a>(
         && rect_bits_eq(rect, &b.rect)
         && styles_eq(style, &b.style)
         && used_line_height.to_bits() == b.used_line_height.to_bits()
+        && used_padding.map(|p| p.map(f32::to_bits)) == b.used_padding.map(|p| p.map(f32::to_bits))
         && subgrid_tracks == &b.subgrid_tracks
         && fieldset_legend == &b.fieldset_legend
         && col_span == &b.col_span
