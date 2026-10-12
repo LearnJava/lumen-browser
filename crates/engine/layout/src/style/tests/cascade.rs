@@ -116,6 +116,23 @@ use super::*;
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 
+    #[test]
+    fn negative_sizes_and_padding_are_dropped() {
+        // BUG-1349: CSS 2.1 §8.4/§10.2/§10.4/§10.5 — отрицательные значения отбрасывают объявление.
+        let s = cascade_at(
+            r#"<div style="width:-1px;height:-5px;max-width:-1%;max-height:-1em;min-width:-2em;padding-top:-1em;padding-left:-3%;padding:-1px 2px">x</div>"#,
+            "",
+            &[0],
+        );
+        assert_eq!(s.width, None);
+        assert_eq!(s.height, None);
+        assert_eq!(s.max_width, None);
+        assert_eq!(s.max_height, None);
+        assert_eq!(s.min_width, None);
+        assert_eq!(s.padding_top, Length::Px(0.0));
+        assert_eq!(s.padding_left, Length::Px(0.0));
+    }
+
     // ─── @layer cascade ordering (CSS Cascade L5 §6.4.5) ─────────────────────
 
     #[test]

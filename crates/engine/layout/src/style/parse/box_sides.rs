@@ -15,7 +15,7 @@ use crate::style::values::length::split_top_level_ws;
 use crate::style::{
     BorderStyle, BreakValue, ComputedStyle, CssColor, Length, LengthOrAuto, OutlineColor,
     OutlineStyle, OverscrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis,
-    ScrollSnapStrictness, ScrollSnapType, parse_length_q,
+    ScrollSnapStrictness, ScrollSnapType, is_negative_literal, parse_length_q,
 };
 
 /// Резолвит длину для margin / padding / border. `%` в Phase 0 не поддержан
@@ -88,6 +88,7 @@ pub(in crate::style) fn set_inset_side(
 /// Устанавливает одну сторону padding как typed `Length`.
 /// `auto` не валиден для padding — игнорируем; отрицательные px — игнорируем.
 pub(in crate::style) fn set_padding_side(target: &mut Length, val: &str, is_quirks: bool) {
+    if is_negative_literal(val) { return; }
     if let Some(len) = parse_length_q(val, is_quirks) {
         if matches!(&len, Length::Px(v) if *v < 0.0) { return; }
         *target = len;
@@ -155,6 +156,7 @@ pub(in crate::style) fn parse_margin_shorthand(
 /// `auto` не валиден; отрицательные px тоже. При ошибке — None.
 pub(in crate::style) fn parse_padding_shorthand(val: &str, is_quirks: bool) -> Option<(Length, Length, Length, Length)> {
     let parse = |s: &str| -> Option<Length> {
+        if is_negative_literal(s) { return None; }
         let len = parse_length_q(s, is_quirks)?;
         if matches!(&len, Length::Px(v) if *v < 0.0) { return None; }
         Some(len)

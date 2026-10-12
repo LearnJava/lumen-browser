@@ -305,7 +305,7 @@ pub use substitute::env_calls_well_formed;
 pub(in crate::style) use substitute::{
     expand_attr_val, expand_custom_functions_scoped, expand_mixin_apply, expand_vars,
 };
-pub(in crate::style) use values::length::{parse_length_q, parse_sizing_length};
+pub(in crate::style) use values::length::{is_negative_literal, parse_length_q, parse_sizing_length};
 use parse::font_size::{FontSizeBasis, apply_font_size};
 
 // SPLIT-ST10. Окружение прохода уехало в `style::env`, фан-аут рестайла — в
