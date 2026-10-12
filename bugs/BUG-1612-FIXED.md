@@ -1,6 +1,6 @@
 # BUG-1612 — Выход по Ctrl+W на последней вкладке и по Esc не сохраняет сессию
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** shell (`lumen/tabs_cmd.rs:219`, `app/mod.rs:239`, `lumen/session.rs`)
 
@@ -27,3 +27,7 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление
+
+Esc исправлен ранее в BUG-1611. Последняя вкладка: `close_tab` перед `event_loop.exit()` зовёт `save_session_on_close` и `save_full_session` (lumen/tabs_cmd.rs).
