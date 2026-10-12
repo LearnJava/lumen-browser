@@ -200,6 +200,10 @@ impl TabStrip {
     /// range). Caller must guard against removing the only tab (check `len() > 1`).
     pub fn remove(&mut self, idx: usize) -> usize {
         self.tabs.remove(idx);
+        // A tab removed left of the active one shifts it down by one.
+        if idx < self.active {
+            self.active -= 1;
+        }
         let new_active = if self.active >= self.tabs.len() {
             self.tabs.len().saturating_sub(1)
         } else {
@@ -583,6 +587,19 @@ mod tests {
         let new_active = s.remove(2);
         assert_eq!(s.len(), 2);
         assert_eq!(new_active, 1);
+    }
+
+    #[test]
+    fn remove_tab_left_of_active_keeps_active_tab() {
+        let mut s = TabStrip::new();
+        s.push_blank(0.0);
+        s.push_blank(0.0);
+        s.push_blank(0.0);
+        s.active = 1;
+        let active_id = s.tabs[1].id;
+        let new_active = s.remove(0);
+        assert_eq!(new_active, 0);
+        assert_eq!(s.tabs[s.active].id, active_id);
     }
 
     #[test]
