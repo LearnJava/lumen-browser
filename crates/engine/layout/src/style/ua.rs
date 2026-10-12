@@ -70,7 +70,7 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // canvas icon or an embedded widget next to text always took its own
         // line instead of flowing beside it. `is_atomic_inline_level` picks
         // them up the same way it picks up `<img>` (IFC-3).
-        "video" | "canvas" | "audio" | "iframe" => Display::Inline,
+        "video" | "canvas" | "audio" | "iframe" | "svg" => Display::Inline,
         // OBJECT-1: `<object>`/`<embed>` — тот же класс (HTML LS §15.3.1 не
         // даёт им `display: block`). С картинкой внутри это atomic inline
         // replaced-бокс (`is_image_element`), с fallback-содержимым — обычный
