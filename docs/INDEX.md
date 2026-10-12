@@ -27,6 +27,8 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 | Architecture, principles, scope | [`plan/architecture.md`](plan/architecture.md) §1, §3 · plan index [`lumen-plan.md`](../lumen-plan.md) |
 | Dependency policy (own vs vendored) | [`plan/tech-stack.md`](plan/tech-stack.md) §5 · [ADR-027](decisions/ADR-027-own-vs-vendored-boundary.md) |
 | Why a decision was made | [`decisions/`](decisions/) (ADRs) · `DECISIONS.md` (historical, read-only) |
+| External research behind decisions (user-facing UX details, site compatibility «level 0») | [`research/`](research/README.md) |
+| Site compatibility strategy: identity, trust roots, compat pack, hand-off | [ADR-034](decisions/ADR-034-site-compatibility-strategy.md) · track `COMPAT` in `ROADMAP.md` |
 | Browser chrome (UI) architecture | [`shell-ui-architecture.md`](shell-ui-architecture.md) |
 
 ## Process

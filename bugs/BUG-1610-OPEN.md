@@ -1,6 +1,7 @@
 # BUG-1610 — EME: `navigator.requestMediaKeySystemAccess` не определён (696 TypeError в `encrypted-media`)
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → ROADMAP.md: COMPAT-EME)
+**Тип:** недостающая функциональность EME (по собственному тексту бага), задача — COMPAT-EME (дорожка COMPAT, ADR-034 п.9) (2026-10-12).
 **Заведён:** 2026-10-11 (P2, WPT-RUN-7 срез 68, baseline `encrypted-media`)
 **Область:** js (Encrypted Media Extensions — `navigator.requestMediaKeySystemAccess`, `MediaKeys`, `MediaKeySession`, `MediaSource`)
 
