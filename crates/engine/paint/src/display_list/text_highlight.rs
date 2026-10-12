@@ -37,6 +37,8 @@ pub fn emit_text_with_highlights(
         font_features,
         font_palette: None,
         tab_size,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name,
         text_orientation,
     });

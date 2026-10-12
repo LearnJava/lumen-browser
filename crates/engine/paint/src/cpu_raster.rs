@@ -533,7 +533,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, font_weight, font_style,
-                font_features, font_family, text_orientation, ..
+                font_features, font_family, text_orientation, letter_spacing, word_spacing, ..
             } => {
                 // Text uses the bundled Inter face by default (family ignored,
                 // weight/style emulated as synthetic bold/italic); a real
@@ -548,6 +548,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
                     &mut layer.pm, rect, text, *font_size, color,
                     *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
                     font_features, font_family, font_provider, *text_orientation,
+                    (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                 )? {
                     layer.mark(ink);
                 }
@@ -2983,7 +2984,7 @@ fn rasterize_text_rotated(
     let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
     let Some((l, t, r, b)) = rasterize_text(
         &mut local, &local_rect, text, font_size, color, tab_size, None, font_weight,
-        font_style, font_features, font_family, font_provider, None,
+        font_style, font_features, font_family, font_provider, None, (0.0, 0.0),
     )?
     else {
         return Ok(None);
@@ -3129,7 +3130,7 @@ fn rasterize_text_mixed(
                 Rect { x: rect.x, y: rect.y + y_cursor, width: rect.width, height: rect.height };
             if let Some(b) = rasterize_text(
                 pixmap, &dest_rect, &seg_text, font_size, color, tab_size, clip, font_weight,
-                font_style, font_features, font_family, font_provider, None,
+                font_style, font_features, font_family, font_provider, None, (0.0, 0.0),
             )? {
                 mark_ink(b, &mut ink);
             }
@@ -3138,7 +3139,7 @@ fn rasterize_text_mixed(
                 .ok_or("Failed to create mixed-orientation text layer")?;
             if let Some((l, t, r, b)) = rasterize_text(
                 &mut local, &local_rect, &seg_text, font_size, color, tab_size, None, font_weight,
-                font_style, font_features, font_family, font_provider, None,
+                font_style, font_features, font_family, font_provider, None, (0.0, 0.0),
             )? {
                 let transform =
                     tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x + rect.width, rect.y + y_cursor);
@@ -3203,6 +3204,7 @@ fn rasterize_text(
     font_family: &[String],
     font_provider: Option<&dyn FontProvider>,
     text_orientation: Option<TextOrientation>,
+    (letter_spacing, word_spacing): (f32, f32),
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
         return Ok(None);
@@ -3375,7 +3377,13 @@ fn rasterize_text(
                         }
                     }
                 }
-                cursor_x += sg.x_advance as f32 * advance_scale;
+                cursor_x += sg.x_advance as f32 * advance_scale + letter_spacing;
+                // CSS Text L3 §8.1 — `word-spacing` follows every word separator.
+                if word_spacing != 0.0
+                    && sub_text.get(sg.cluster as usize..).is_some_and(|t| t.starts_with(' '))
+                {
+                    cursor_x += word_spacing;
+                }
             }
         }
     }
@@ -3878,6 +3886,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -3894,6 +3904,37 @@ mod tests {
             }
         }
         assert!(inked, "DrawText produced no blue ink");
+    }
+
+    /// BUG-1339: `letter-spacing` / `word-spacing` раздвигают глифы в растре —
+    /// правая граница чернил сдвигается вправо на суммарный интервал.
+    #[test]
+    fn draw_text_letter_and_word_spacing_shift_ink() {
+        let ink_right = |text: &str, letter: f32, word: f32| {
+            let cmds = vec![DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
+                rect: rect(2.0, 2.0, 300.0, 40.0),
+                text: text.to_string(),
+                font_size: 20.0,
+                color: Color { r: 0, g: 0, b: 255, a: 255 },
+                font_family: Vec::new(),
+                font_weight: lumen_layout::FontWeight::default(),
+                font_style: lumen_layout::FontStyle::default(),
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                letter_spacing: crate::display_list::spacing_to_fixed(letter),
+                word_spacing: crate::display_list::spacing_to_fixed(word),
+                highlight_name: None,
+                text_orientation: None,
+            }];
+            let img = rasterize_cpu(320, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
+            (0..320).rev().find(|&x| (0..48).any(|y| { let (r, g, b, _) = px(&img, x, y); b > r && b > g })).unwrap()
+        };
+        let base = ink_right("A B", 0.0, 0.0);
+        assert!(ink_right("A B", 10.0, 0.0) >= base + 19, "letter-spacing: два интервала до последнего глифа");
+        assert!(ink_right("A B", 0.0, 30.0) >= base + 29, "word-spacing сдвигает слово после пробела");
     }
 
     /// Ph3 writing-mode vertical, Срез 1: `text_orientation: Sideways` rotates
@@ -3917,6 +3958,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: orientation,
             }]
@@ -3975,6 +4018,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: Some(TextOrientation::Sideways),
         }];
@@ -4023,6 +4068,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: orientation,
             }]
@@ -4061,6 +4108,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: orientation,
             }]
@@ -4099,6 +4148,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -4127,6 +4178,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: None,
             },
@@ -4162,6 +4215,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -4212,6 +4267,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -4342,6 +4399,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];

@@ -882,6 +882,8 @@ pub fn build_validation_tooltip(
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: None,
     });
@@ -1339,6 +1341,8 @@ pub fn build_select_dropdown(
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         });
@@ -1495,6 +1499,8 @@ pub fn build_base_select_dropdown(
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         });
@@ -1726,6 +1732,8 @@ pub fn build_date_picker(
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: None,
     });
@@ -1744,6 +1752,8 @@ pub fn build_date_picker(
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: None,
     });
@@ -1765,6 +1775,8 @@ pub fn build_date_picker(
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: None,
     });
@@ -1787,6 +1799,8 @@ pub fn build_date_picker(
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         });
@@ -1825,6 +1839,8 @@ pub fn build_date_picker(
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         });
