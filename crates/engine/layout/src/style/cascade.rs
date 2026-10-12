@@ -1346,6 +1346,21 @@ pub(crate) fn compute_style_shareable(
         style.display = Display::Block;
     }
 
+    // CSS 2.1 §9.7 — a floated or absolutely positioned element is blockified: the table-internal
+    // values (`table-row-group`, `table-row`, `table-cell`, …, `table-caption`) compute to `block`
+    // and `inline-table` to `table`, so the box stops taking part in the table layout.
+    if style.float_side != crate::style::FloatSide::None
+        || matches!(style.position, crate::style::Position::Absolute | crate::style::Position::Fixed)
+    {
+        style.display = match style.display {
+            Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup
+            | Display::TableRow | Display::TableColumnGroup | Display::TableColumn
+            | Display::TableCell | Display::TableCaption => Display::Block,
+            Display::InlineTable => Display::Table,
+            d => d,
+        };
+    }
+
     // WHATWG Compat §2.1 — legacy `display: -webkit-box`/`-webkit-inline-box` is laid out as a
     // flex container whose axis is `-webkit-box-orient` (Gap Decorations L1 applies to it, WPT
     // `css-gaps/flex/webkit-box.tentative`). The original keyword is kept in `legacy_box_display`

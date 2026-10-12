@@ -573,6 +573,31 @@ fn finish_table(
     if target - natural > 0.01 {
         super::table_height::distribute(&mut frame.b, &frame.init, target - natural);
     }
+
+    // CSS 2.1 §17 / Position L3 §3: an absolutely positioned child of a table box is not a table
+    // part — it is out of flow and placed against its containing block once the table's own
+    // size is final (BUG-1357). Its static position is the table's content-box corner.
+    let abs: Vec<(usize, f32, f32)> = frame
+        .b
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|(i, _)| (i, frame.init.content_x, frame.init.content_y))
+        .collect();
+    if !abs.is_empty() {
+        let my_pcb = if super::multicol_abspos::establishes_abs_cb(&s) {
+            Rect::new(
+                frame.b.rect.x + s.border_left_width,
+                frame.b.rect.y + s.border_top_width,
+                (frame.b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                (frame.b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            )
+        } else {
+            frame.init.children_pcb
+        };
+        super::multicol_abspos::lay_out_abs_children(&mut frame.b, &abs, measurer, viewport, my_pcb, hp);
+    }
 }
 
 /// CSS 2.1 §17.5.1 — `display: table-column(-group)` не раскладываются как блоки: их прямоугольник —
