@@ -1266,3 +1266,12 @@ use super::*;
         assert!((rx - 50.0).abs() < 0.5, "rx = min(50,150)=50, got {rx}");
         assert!((ry - 25.0).abs() < 0.5, "ry = min(25,75)=25, got {ry}");
     }
+
+    #[test]
+    fn background_image_trailing_token_drops_declaration() {
+        // CSS Values §2.2 (BUG-1347): `url(x) repeat` недопустимо — объявление отбрасывается.
+        let s = cascade_at("<div></div>", "div { background-image: url(x.png) repeat; }", &[0]);
+        assert!(s.background_layers.is_empty());
+        let s = cascade_at("<div></div>", "div { background-image: url(x.png); }", &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+    }

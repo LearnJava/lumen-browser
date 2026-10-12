@@ -330,6 +330,11 @@ pub(in crate::style) fn apply_decl_paint(
             // CSS Backgrounds L3 §3.1 — comma-separated list of images.
             let trimmed = val.trim();
             let pieces = split_top_level_commas(trimmed);
+            // CSS Values §2.2: токен после `<image>` (`url(x) repeat`) делает объявление
+            // недопустимым — оно отбрасывается целиком.
+            if pieces.iter().any(|s| image_has_trailing_tokens(s.trim())) {
+                return true;
+            }
             // Сохраняем текущие per-layer данные для cycling после изменения размера.
             let old_layers = std::mem::take(&mut style.background_layers);
             style.background_layers = pieces.iter().enumerate().map(|(i, s)| {
@@ -1125,4 +1130,34 @@ fn set_svg_geometry(
     };
     *target = resolved;
     true
+}
+
+/// `true`, если после одиночного `<image>` (`fn(...)` или ключевого слова) идут лишние токены.
+fn image_has_trailing_tokens(s: &str) -> bool {
+    let Some(open) = s.find('(') else {
+        return s.split_ascii_whitespace().count() > 1;
+    };
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in s.char_indices().skip_while(|&(i, _)| i < open) {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return !s[i + 1..].trim().is_empty();
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    false
 }
