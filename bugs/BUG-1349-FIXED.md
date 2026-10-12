@@ -1,6 +1,6 @@
 # BUG-1349 — Отрицательные `width`, `height`, `min-*`, `max-*` и `padding*` принимаются, а должны отбрасываться (CSS 2.1 §8.4, §10.2, §10.4, §10.5, §10.7)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 12, `css/CSS2` (normal-flow + margin-padding-clear))
 **Область:** layout/css-parser (`crates/engine/layout/src/style/apply/`, `style/parse/` — `width`/`height`/`min-*`/`max-*`/`padding*`)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 12: 16 id с «minimum minus one value» в названии
 ## Как проверить
 
 `css/CSS2/margin-padding-clear/padding-top-067.xht`, `css/CSS2/normal-flow/max-width-089.xht` — `reftest_pixdiff.py --viewport 800x600 --ahem` даёт `identical`.
+
+## Исправление
+
+`is_negative_literal` (`style/values/length.rs`): `parse_sizing_length` (width/height/min-/max-/logical sizes) и `set_padding_side`/`parse_padding_shorthand` отбрасывают литерал с отрицательным числом в любой единице (`em`, `%` и т.д.), `calc()` не затрагивается. Тест: `negative_sizes_and_padding_are_dropped`.
