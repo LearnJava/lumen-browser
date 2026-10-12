@@ -975,7 +975,9 @@ fn post_child_bookkeeping(
         if merged > old_gap {
             frame.b.children[idx].rect.y += merged - old_gap;
         }
-        frame.init.child_y += merged;
+        // `child_y` already includes the previous sibling's bottom margin
+        // (`prev_block_mb`); the merged gap replaces it rather than stacking.
+        frame.init.child_y += merged - frame.init.prev_block_mb;
         frame.init.prev_block_mb = merged;
     } else {
         let child = &frame.b.children[idx];
