@@ -294,6 +294,19 @@ fn is_bg_position_token(s: &str) -> bool {
         || s.ends_with("vmin")
         || s.ends_with("vmax")
         || s.parse::<f32>().is_ok_and(|v| v == 0.0)
+        || is_dimension_token(&lo)
+        || ["calc(", "min(", "max(", "clamp("].iter().any(|f| lo.starts_with(f))
+}
+
+/// `<number><unit>` с любой единицей (`in`/`cm`/`mm`/`pt`/`pc`/`q`/`ex`/`ch`…).
+fn is_dimension_token(s: &str) -> bool {
+    let num_end = s
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '+' | '-')))
+        .unwrap_or(s.len());
+    num_end > 0
+        && s[..num_end].parse::<f32>().is_ok()
+        && s[num_end..].chars().all(|c| c.is_ascii_alphabetic())
+        && num_end < s.len()
 }
 
 /// CSS Backgrounds L3 §3.5 — parse one axis token of `background-size` /
