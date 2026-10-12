@@ -104,6 +104,14 @@ pub(crate) fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
     Rect::new(rect.x + dx, rect.y + dy, rect.width, rect.height)
 }
 
+/// BUG-1337: рёбра бокса картинки по целым пикселям (как `FillRect`, ничья —
+/// вверх), иначе у `DrawImage` на дробной позиции 1-px полупрозрачная кромка.
+pub(crate) fn snap_image_box(rect: Rect) -> Rect {
+    let snap = |v: f32| (v + 0.5).floor();
+    let (x0, y0) = (snap(rect.x), snap(rect.y));
+    Rect::new(x0, y0, snap(rect.x + rect.width) - x0, snap(rect.y + rect.height) - y0)
+}
+
 /// Применяет аккумулированный 2D-аффинный трансформ к clip-rect-у и
 /// возвращает AABB трансформированных углов в screen-координатах.
 ///

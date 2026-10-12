@@ -1886,7 +1886,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let scrolled = translate_rect(*rect, dx, dy);
+                    let scrolled = snap_image_box(translate_rect(*rect, dx, dy));
                     let fit = *object_fit;
                     let pos = *object_position;
 
@@ -1990,7 +1990,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let scrolled = translate_rect(*rect, dx, dy);
+                    let scrolled = snap_image_box(translate_rect(*rect, dx, dy));
                     let fit = *object_fit;
                     let pos = *object_position;
                     let gpu_key = self.compute_image_gpu_key(src, scrolled, fit, pos);
@@ -5943,6 +5943,7 @@ use types::ColorTables;
 
 mod sticky_geom;
 use sticky_geom::{
+    snap_image_box,
     apply_affine_to_grad_verts, apply_transform_to_clip, leaf_is_offscreen, sticky_bound,
     sticky_offset_dx, sticky_offset_dy, translate_rect, VertexPos, COVERAGE_CACHE_MAX_VERTS,
 };

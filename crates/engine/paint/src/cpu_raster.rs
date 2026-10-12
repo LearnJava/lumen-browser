@@ -472,7 +472,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 let layer = layers.last_mut().expect("base layer");
                 match image_map.get(src.as_str()) {
                     Some(img) => {
-                        rasterize_image(&mut layer.pm, rect, img, *object_fit, *object_position, c)?;
+                        rasterize_image(&mut layer.pm, &snap_border_box(*rect), img, *object_fit, *object_position, c)?;
                     }
                     None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
@@ -484,7 +484,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 let layer = layers.last_mut().expect("base layer");
                 match image_map.get(src.as_str()) {
                     Some(img) => {
-                        rasterize_image(&mut layer.pm, rect, img, *object_fit, *object_position, c)?;
+                        rasterize_image(&mut layer.pm, &snap_border_box(*rect), img, *object_fit, *object_position, c)?;
                     }
                     None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
@@ -5368,6 +5368,33 @@ mod tests {
         let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
         let (r, g, b, a) = px(&img, 30, 30);
         assert!(r > 230 && g < 25 && b < 25 && a == 255, "image centre is red, got ({r},{g},{b},{a})");
+    }
+
+    /// BUG-1337: `DrawImage` на дробной позиции привязан к целым пикселям —
+    /// без полупрозрачной кромки на верхней/нижней строке.
+    #[test]
+    fn draw_image_fractional_rect_is_pixel_snapped() {
+        let blue = Image {
+            width: 1,
+            height: 1,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: vec![0, 0, 255, 255],
+            icc_profile: None,
+        };
+        let images = vec![("b.png".to_string(), std::sync::Arc::new(blue))];
+        let cmds = vec![DisplayCommand::DrawImage {
+            rect: rect(0.0, 25.72, 20.0, 50.0),
+            src: "b.png".to_string(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(30, 100, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 5, 26), (0, 0, 255, 255), "first row is solid");
+        assert_eq!(px(&img, 5, 75), (0, 0, 255, 255), "last row is solid");
+        assert_eq!(px(&img, 5, 25), (255, 255, 255, 255), "row above stays white");
+        assert_eq!(px(&img, 5, 76), (255, 255, 255, 255), "row below stays white");
     }
 
     /// BUG-221: a missing `src` still falls back to the grey placeholder.

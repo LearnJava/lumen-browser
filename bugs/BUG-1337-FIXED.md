@@ -1,6 +1,6 @@
 # BUG-1337 — `DrawImage` на дробной позиции не привязан к пикселям: у картинки 1-px полупрозрачная кромка, у блока рядом — нет
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 (P6: `snap_border_box` в CPU, `snap_image_box` в wgpu для DrawImage/LazyImageSlot)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` — ветка `DrawImage`; тот же приём привязки, что для `FillRect`/`DrawBorder` в BUG-553 срез 32/38, не применён к картинкам)
 
