@@ -669,9 +669,13 @@ impl Lumen {
                     move || { flag.set(true); },
                 );
             }
-            // UX-LOADING: Esc во время загрузки останавливает её, а не закрывает окно.
-            KeyCommand::Exit if code == KeyCode::Escape && self.nav_start.is_some() => self.stop_loading(),
-            KeyCommand::Exit => event_loop.exit(),
+            // BUG-1611: Esc останавливает идущую загрузку и больше ничего не делает —
+            // выход идёт только через CloseRequested (beforeunload + сохранение сессии).
+            KeyCommand::StopLoading => {
+                if self.nav_start.is_some() {
+                    self.stop_loading();
+                }
+            }
             KeyCommand::FindOpen => {
                 self.hint.close();
                 self.find.open();

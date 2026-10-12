@@ -1495,10 +1495,10 @@ fn keybinding_ctrl_shift_r_is_read_later() {
 }
 
 #[test]
-fn keybinding_escape_exit() {
+fn keybinding_escape_stop_loading() {
     assert_eq!(
         keybinding_for(KeyCode::Escape, ModifiersState::empty()),
-        Some(KeyCommand::Exit),
+        Some(KeyCommand::StopLoading),
     );
 }
 
