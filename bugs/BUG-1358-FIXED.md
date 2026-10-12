@@ -1,6 +1,6 @@
 # BUG-1358 — `border-collapse: collapse` + `table-layout: fixed`: ячейка с широкой боковой рамкой смещена влево на всю ширину рамки
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/table.rs` — геометрия ячеек collapsed-модели при фиксированной раскладке)
 
@@ -26,3 +26,7 @@ WPT-RUN-14 срез 13: 12 id `fixed-table-layout-003e*` + 8 `-003f*` + 10 `fixe
 ## Как проверить
 
 `css/CSS2/tables/fixed-table-layout-003e01.xht`, `collapsing-border-model-003.xht`.
+
+## Исправление
+
+В `fixed_layout_col_widths` при collapse ширина для авто-колонок считается с учётом общих внутренних линий сетки (`collapse_v_edges`): сумма border-box ширин = ширина таблицы + внутренние рёбра. Тест `table_collapse_fixed.rs`.

@@ -491,6 +491,7 @@ fn fixed_layout_col_widths(
     b: &LayoutBox,
     n_cols: usize,
     content_width: f32,
+    overlap: f32,
     h_spacing: f32,
     viewport: Size,
 ) -> Vec<f32> {
@@ -514,7 +515,7 @@ fn fixed_layout_col_widths(
     }
     cols.resize(n_cols, None);
 
-    let available = (content_width - (n_cols + 1) as f32 * h_spacing).max(0.0);
+    let available = (content_width + overlap - (n_cols + 1) as f32 * h_spacing).max(0.0);
     let explicit: f32 = cols.iter().filter_map(|w| *w).sum();
     let auto_count = cols.iter().filter(|w| w.is_none()).count();
     if auto_count > 0 {
@@ -860,7 +861,14 @@ fn compute_table_col_widths(
     // CSS Tables L2 §17.5.2.1 — `table-layout: fixed` (only with a non-`auto` table `width`):
     // column widths come from the first row alone; content never widens a column.
     if b.style.table_layout == TableLayout::Fixed && b.style.width.is_some() {
-        return fixed_layout_col_widths(b, n_cols, content_width, h_spacing, viewport);
+        // §17.6.2: in the collapsed model neighbouring cells share their grid-line border, so the
+        // columns' border-box widths sum to the table width plus the shared inner edge widths.
+        let overlap: f32 = if h_spacing == 0.0 && matches!(b.style.border_collapse, BorderCollapse::Collapse) {
+            collapse_v_edges(b, n_cols).iter().sum()
+        } else {
+            0.0
+        };
+        return fixed_layout_col_widths(b, n_cols, content_width, overlap, h_spacing, viewport);
     }
 
     // Subtract spacing slots from available width before distributing to auto columns.
