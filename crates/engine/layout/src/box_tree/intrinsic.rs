@@ -559,13 +559,14 @@ pub(crate) fn preferred_inline_block_width(
             let Some(cw) = preferred_inline_block_width(c, measurer, viewport) else {
                 continue;
             };
+            let cem = c.style.font_size;
+            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
             if c.style.float_side != FloatSide::None {
-                let cem = c.style.font_size;
-                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
                 float_sum += cw + ml.max(0.0) + mr.max(0.0);
             } else {
-                inflow_max = inflow_max.max(cw);
+                // BUG-1351: вклад блока в потоке — его margin-box (CSS 2.1 §10.3.5).
+                inflow_max = inflow_max.max(cw + ml + mr);
             }
         }
         inflow_max.max(float_sum)
@@ -679,13 +680,14 @@ pub(crate) fn max_content_outer_width(
                 continue;
             }
             let cw = max_content_outer_width(c, measurer, viewport);
+            let cem = c.style.font_size;
+            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
             if c.style.float_side != FloatSide::None {
-                let cem = c.style.font_size;
-                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
-                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
                 float_sum += cw + ml.max(0.0) + mr.max(0.0);
             } else {
-                inflow_max = inflow_max.max(cw);
+                // BUG-1351: вклад блока в потоке — его margin-box (CSS 2.1 §10.3.5).
+                inflow_max = inflow_max.max(cw + ml + mr);
             }
         }
         inflow_max.max(float_sum)
