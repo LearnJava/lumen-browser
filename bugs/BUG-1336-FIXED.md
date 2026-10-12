@@ -1,6 +1,6 @@
 # BUG-1336 — `display: table-column` / `table-column-group` (и `<col>`, `<colgroup>`): фон и рамка не рисуются — бокс 0×0
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12 — `place_column_boxes` в `table_trampoline.rs`: прямоугольник «колонки × высота строк», `span` из атрибута
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 11, `css/CSS2` (backgrounds + borders))
 **Область:** layout/paint (`crates/engine/layout/src/box_tree/table.rs` — колонкам не назначается прямоугольник по колонкам таблицы)
 

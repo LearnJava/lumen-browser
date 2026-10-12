@@ -14,7 +14,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 24: `css-tables/border-conflict-resolution`, `border-collapse-double-border`, `border-collapse-dynamic-section`, `tentative/collapsed-borders-painting-order-001…013`, `tentative/border-collapse-spanning-cells-001…004`, `subpixel-collapsed-borders-*`, `collapsed-border-paint-phase-*`, `out-of-order-elements-collapsed-border`, `rowspan-cell-border-after-color`, `tentative/paint/collapsed-border-large-cell`. Родственные [BUG-1346](BUG-1346-OPEN.md), [BUG-1358](BUG-1358-OPEN.md), [BUG-1336](BUG-1336-OPEN.md): другие стороны модели collapsed borders. Причина по 13 `painting-order` и 4 `spanning-cells` — по именам и текстам, не пробой.
+WPT-RUN-14 срез 24: `css-tables/border-conflict-resolution`, `border-collapse-double-border`, `border-collapse-dynamic-section`, `tentative/collapsed-borders-painting-order-001…013`, `tentative/border-collapse-spanning-cells-001…004`, `subpixel-collapsed-borders-*`, `collapsed-border-paint-phase-*`, `out-of-order-elements-collapsed-border`, `rowspan-cell-border-after-color`, `tentative/paint/collapsed-border-large-cell`. Родственные [BUG-1346](BUG-1346-OPEN.md), [BUG-1358](BUG-1358-OPEN.md), [BUG-1336](BUG-1336-FIXED.md): другие стороны модели collapsed borders. Причина по 13 `painting-order` и 4 `spanning-cells` — по именам и текстам, не пробой.
 
 ## Что делать
 
