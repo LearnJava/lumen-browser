@@ -33,7 +33,8 @@ pub(crate) enum TypeableField {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum KeyCommand {
     Reload,
-    Exit,
+    /// Esc: останавливает идущую загрузку; окно никогда не закрывает.
+    StopLoading,
     FindOpen,
     /// Открыть адресную строку (Ctrl+L / F6). Позволяет ввести URL или
     /// поисковый запрос прямо в браузере без перезапуска из CLI.
@@ -147,8 +148,8 @@ pub(crate) enum KeyCommand {
 ///
 /// F5 без модификаторов  → Reload.
 /// Ctrl+R                → Reload.
-/// Esc без модификаторов → Exit.
-/// Ctrl+W                → Exit.
+/// Esc без модификаторов → StopLoading.
+/// Ctrl+W                → CloseTab.
 /// Ctrl+F                → FindOpen.
 /// F (без модификаторов) → HintModeOpen (kbd-навигация по ссылкам/кнопкам).
 /// ↓ / ↑                 → ScrollLineDown / ScrollLineUp (без модификаторов).
@@ -169,7 +170,7 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
     match code {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
         KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
-        KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
+        KeyCode::Escape if no_mods => Some(KeyCommand::StopLoading),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::CloseTab),
         KeyCode::KeyT if ctrl_only => Some(KeyCommand::NewTab),
         KeyCode::KeyT if ctrl_and_shift => Some(KeyCommand::ReopenClosedTab),

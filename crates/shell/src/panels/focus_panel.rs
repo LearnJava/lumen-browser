@@ -7,7 +7,7 @@
 //! (`#focusDone`) appears when the session is complete.
 //!
 //! Toggled with `Ctrl+Shift+F` (default 25-minute Pomodoro).  While active,
-//! `Escape` exits focus mode (instead of quitting the app).
+//! `Escape` exits focus mode (never quits the app).
 //!
 //! All timing math lives in [`PomodoroTimer`] and is driven by a monotonic
 //! wall-clock millisecond timestamp fed from the shell's `about_to_wait` loop,
