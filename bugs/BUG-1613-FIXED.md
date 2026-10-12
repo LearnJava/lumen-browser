@@ -1,6 +1,6 @@
 # BUG-1613 — Закрытие фоновой вкладки слева сбивает активную и затирает снимок
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-12
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** shell (`crates/shell/src/tabs/strip.rs:201`, `lumen/tabs_cmd.rs:531`)
 
@@ -24,3 +24,7 @@ TabStrip::remove (tabs/strip.rs:201-210) не уменьшает active, ког�
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление
+
+`TabStrip::remove` уменьшает `active`, если удалена вкладка левее активной (tabs/strip.rs); тест `remove_tab_left_of_active_keeps_active_tab`. Тот же путь чинит выселение при гибернации (hibernation.rs).
