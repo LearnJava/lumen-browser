@@ -217,7 +217,10 @@ impl Lumen {
             return;
         }
         if self.tab_strip.len() == 1 {
-            // Last tab — exit.
+            // Last tab — exit, writing the session like CloseRequested does
+            // (BUG-1612): otherwise the next start restores a stale tab set.
+            self.save_session_on_close();
+            self.save_full_session();
             event_loop.exit();
             return;
         }
