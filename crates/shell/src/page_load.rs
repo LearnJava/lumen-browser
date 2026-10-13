@@ -990,7 +990,9 @@ impl Lumen {
     /// "Proceed anyway" on the cert interstitial (ph3-tls-hardening A6):
     /// record a session-scoped TLS-bypass override for the failed
     /// navigation's host, then retry it. No-op if the interstitial isn't
-    /// currently showing anything (double-click, stale event, ...).
+    /// currently showing anything (double-click, stale event, ...), or if
+    /// the failure is not overridable (Known HSTS Host, revoked certificate —
+    /// BUG-1615, `CertInterstitial::can_proceed`).
     ///
     /// `self.source` still holds the same `PageSource::Url` the failed
     /// navigation was for — `CertInterstitial::open` never touched it, only
@@ -1003,8 +1005,8 @@ impl Lumen {
         };
         if is_threat {
             crate::threat_store::allow_host(&host);
-        } else {
-            lumen_network::tls::bypass::allow_host(&host);
+        } else if !lumen_network::tls::bypass::allow_host(&host) {
+            return;
         }
         self.relayout_chrome_host();
         self.reload();

@@ -3688,6 +3688,20 @@ impl HttpClient {
         self.hsts.is_some()
     }
 
+    /// Известный HSTS-хост (RFC 6797 §8.4): есть в preload-листе либо в
+    /// подключённом store (с `includeSubDomains`). Для такого хоста ошибка
+    /// TLS обязана рвать соединение без права «Всё равно перейти»
+    /// (BUG-1615). Без подключённого store — только preload-лист.
+    #[must_use]
+    pub fn is_known_hsts_host(&self, host: &str) -> bool {
+        let host = host.trim().to_ascii_lowercase();
+        get_preload_list().is_preloaded(&host)
+            || self
+                .hsts
+                .as_deref()
+                .is_some_and(|h| h.is_https_only(&host, hsts::current_unix_time()))
+    }
+
     /// Подключить credential-провайдер для HTTP authentication (RFC 7235 /
     /// 7616 / 7617). По умолчанию — нет: запросы уходят без `Authorization`
     /// header, и 401 пробрасывается как `Err`. С подключённым провайдером:

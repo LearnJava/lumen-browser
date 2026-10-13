@@ -332,6 +332,7 @@ fn security_box_detaches_and_routes_its_buttons() {
             detail: "certificate expired".to_owned(),
             proceed_label: String::new(),
             other_browser: true,
+            proceed_blocked: false,
         },
         ..lumen_chrome::ChromeModel::default()
     };
