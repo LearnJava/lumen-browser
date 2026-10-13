@@ -1483,15 +1483,18 @@ fn connect_inner(
 /// same "no revocation info" line rather than guessing. Threading the real
 /// verdict through is left to a follow-up slice.
 fn cert_info_from_completed_handshake(conn: &ClientConnection) -> Option<tls::CertInfo> {
-    let cert_der = conn.peer_certificates()?.first()?;
+    let chain = conn.peer_certificates()?;
+    let cert_der = chain.first()?;
     let tls_version = protocol_version_label(conn.protocol_version());
     let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref());
-    Some(tls::CertInfo::from_peer_cert(
+    let mut info = tls::CertInfo::from_peer_cert(
         cert_der.as_ref(),
         &tls_version,
         tls::ocsp::OcspVerdict::Unknown,
         ct_verdict,
-    ))
+    );
+    info.local_root = tls::os_roots::local_root_name(chain).unwrap_or_default();
+    Some(info)
 }
 
 /// Render a negotiated [`rustls::ProtocolVersion`] for `CertInfo::tls_version`

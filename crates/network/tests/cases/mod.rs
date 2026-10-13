@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod bug785_extra_ca;
+mod osroots_trust;
 mod http_client_fingerprint_profile;
 mod nav_post_body;
 mod tls_integration;
