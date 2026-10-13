@@ -6,6 +6,8 @@
 //! iframes) are all derived from one User-Agent string here, so they cannot
 //! contradict each other. The Chromium major comes from [`chrome_major!`].
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// Major version of the stable Chrome the Chromium profiles impersonate — the
 /// single source for every Chromium UA string and for the Client Hints brands.
 ///
@@ -29,6 +31,16 @@ pub const CHROME_USER_AGENT: &str = concat!(
     ".0.0.0 Safari/537.36"
 );
 
+/// Chrome User-Agent with the trailing `Lumen/x.y` token (Edge / Ladybird model,
+/// ADR-034 §1) — the `chrome_lumen` identity. The version is the browser's own
+/// `CARGO_PKG_VERSION`, never a literal.
+pub const CHROME_LUMEN_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
+    chrome_major!(),
+    ".0.0.0 Safari/537.36 Lumen/",
+    env!("CARGO_PKG_VERSION")
+);
+
 /// Edge User-Agent — the Chromium UA of the same major plus the `Edg/` token.
 pub const EDGE_USER_AGENT: &str = concat!(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/",
@@ -37,6 +49,69 @@ pub const EDGE_USER_AGENT: &str = concat!(
     chrome_major!(),
     ".0.0.0"
 );
+
+/// Which Chromium-grammar identity the `Chrome` / `Strict` HTTP profiles wear
+/// (ADR-034 §1, `identity` knob of `fingerprint.toml` / `LUMEN_IDENTITY`).
+///
+/// Only the User-Agent token differs: every other header, the TLS/H2 preset and
+/// the rest of the fingerprint stay byte-identical, so an A/B run measures the
+/// token and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IdentityVariant {
+    /// Plain Chrome grammar, no Lumen token — the default.
+    #[default]
+    ChromeUnbranded,
+    /// Chrome grammar plus a trailing `Lumen/x.y` and a `Lumen` Client Hints brand.
+    ChromeLumen,
+}
+
+impl IdentityVariant {
+    /// Parse a knob value (`chrome_unbranded` | `chrome_lumen`, case-insensitive,
+    /// `-` accepted for `_`).
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "chrome_unbranded" => Some(Self::ChromeUnbranded),
+            "chrome_lumen" => Some(Self::ChromeLumen),
+            _ => None,
+        }
+    }
+
+    /// The Chromium User-Agent this variant sends.
+    #[must_use]
+    pub const fn user_agent(self) -> &'static str {
+        match self {
+            Self::ChromeUnbranded => CHROME_USER_AGENT,
+            Self::ChromeLumen => CHROME_LUMEN_USER_AGENT,
+        }
+    }
+}
+
+/// Process-global active variant: `false` = unbranded. Set once at startup by the
+/// shell (`config::init_global`) before any request is built, read by the HTTP
+/// header builders and the JS identity so they cannot disagree.
+static LUMEN_TOKEN: AtomicBool = AtomicBool::new(false);
+
+/// Select the process-global identity variant.
+pub fn set_identity_variant(variant: IdentityVariant) {
+    LUMEN_TOKEN.store(variant == IdentityVariant::ChromeLumen, Ordering::Relaxed);
+}
+
+/// The process-global identity variant ([`IdentityVariant::ChromeUnbranded`] until set).
+#[must_use]
+pub fn identity_variant() -> IdentityVariant {
+    if LUMEN_TOKEN.load(Ordering::Relaxed) {
+        IdentityVariant::ChromeLumen
+    } else {
+        IdentityVariant::ChromeUnbranded
+    }
+}
+
+/// The Chromium User-Agent the `Chrome` / `Strict` profiles send right now.
+#[must_use]
+pub fn chrome_user_agent() -> &'static str {
+    identity_variant().user_agent()
+}
 
 /// UA family, detected from the User-Agent string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +200,13 @@ fn parse_major(ua: &str, token: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// Dotted version after `Lumen/` (`0.5.0`), if the UA carries the Lumen token.
+fn lumen_token_version(ua: &str) -> Option<String> {
+    let rest = ua.split("Lumen/").nth(1)?;
+    let v: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    (!v.is_empty()).then_some(v)
+}
+
 /// `(navigator.platform, UA-CH platform)` implied by the UA string.
 fn detect_platform(ua: &str) -> (&'static str, &'static str) {
     if ua.contains("Macintosh") {
@@ -165,6 +247,11 @@ impl Identity {
             if family == UaFamily::Edge {
                 real.push(("Microsoft Edge", m.to_string()));
                 real_full.push(("Microsoft Edge", format!("{m}.0.0.0")));
+            }
+            // Brands always follow the UA (ADR-034): the token brings its brand.
+            if let Some(v) = lumen_token_version(ua) {
+                real.push(("Lumen", v.split('.').next().unwrap_or(&v).to_string()));
+                real_full.push(("Lumen", v));
             }
             UaData {
                 brands: grease_list(m, &real, ""),
@@ -265,6 +352,46 @@ mod tests {
         assert_eq!((s.family, s.platform.as_str(), s.vendor.as_str()), (UaFamily::Safari, "MacIntel", "Apple Computer, Inc."));
         let f = Identity::from_user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0");
         assert_eq!(f.platform, "Linux x86_64");
+    }
+
+    #[test]
+    fn variant_parses_both_spellings_and_rejects_the_rest() {
+        assert_eq!(IdentityVariant::parse("chrome_lumen"), Some(IdentityVariant::ChromeLumen));
+        assert_eq!(IdentityVariant::parse(" Chrome-Unbranded "), Some(IdentityVariant::ChromeUnbranded));
+        assert_eq!(IdentityVariant::parse("firefox_win"), None);
+        assert_eq!(IdentityVariant::default(), IdentityVariant::ChromeUnbranded);
+    }
+
+    #[test]
+    fn lumen_variant_is_chrome_plus_trailing_token_only() {
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(CHROME_LUMEN_USER_AGENT, format!("{CHROME_USER_AGENT} Lumen/{version}"));
+        assert_eq!(IdentityVariant::ChromeLumen.user_agent(), CHROME_LUMEN_USER_AGENT);
+        assert_eq!(IdentityVariant::ChromeUnbranded.user_agent(), CHROME_USER_AGENT);
+    }
+
+    #[test]
+    fn lumen_token_adds_its_brand_to_client_hints_and_nothing_else() {
+        let plain = Identity::from_user_agent(CHROME_USER_AGENT);
+        let lumen = Identity::from_user_agent(CHROME_LUMEN_USER_AGENT);
+        let major = env!("CARGO_PKG_VERSION").split('.').next().unwrap();
+        let d = lumen.ua_data.as_ref().unwrap();
+        assert!(d.brands.contains(&("Chromium".into(), CHROME_MAJOR.into())));
+        assert!(d.brands.contains(&("Lumen".into(), major.into())));
+        assert_eq!(d.brands.len(), 3);
+        assert!(d.full_version_list.contains(&("Lumen".into(), env!("CARGO_PKG_VERSION").into())));
+        assert_eq!(lumen.family, UaFamily::Chrome);
+        assert!(lumen.user_agent.ends_with(&format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));
+        assert!(lumen.app_version.ends_with(&format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));
+        // Platform, vendor and the remaining hints are those of the plain identity.
+        assert_eq!(
+            (&lumen.platform, &lumen.vendor, &lumen.product_sub),
+            (&plain.platform, &plain.vendor, &plain.product_sub)
+        );
+        let (pd, ld) = (plain.ua_data.as_ref().unwrap(), d);
+        assert_eq!((&pd.platform, &pd.platform_version, &pd.full_version), (&ld.platform, &ld.platform_version, &ld.full_version));
+        assert!(lumen.low_entropy_client_hints()[0].1.contains("\"Lumen\";v=\""));
+        assert!(!plain.low_entropy_client_hints()[0].1.contains("Lumen"));
     }
 
     #[test]

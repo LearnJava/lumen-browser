@@ -117,7 +117,7 @@ pub fn current_identity() -> lumen_core::Identity {
         .read()
         .ok()
         .and_then(|slot| slot.clone())
-        .unwrap_or_else(|| lumen_core::Identity::from_user_agent(lumen_core::CHROME_USER_AGENT))
+        .unwrap_or_else(|| lumen_core::Identity::from_user_agent(lumen_core::chrome_user_agent()))
 }
 
 /// Return the currently configured profile, or the default if none was set.

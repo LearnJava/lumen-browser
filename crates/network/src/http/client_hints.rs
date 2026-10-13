@@ -56,10 +56,24 @@ pub fn should_send_client_hints(
 /// so `navigator.userAgentData` and the headers cannot disagree (BUG-1614).
 #[must_use]
 pub fn low_entropy_client_hints(profile: HttpProfile) -> Vec<(&'static str, String)> {
+    low_entropy_client_hints_for(profile, lumen_core::identity_variant())
+}
+
+/// [`low_entropy_client_hints`] for an explicit identity variant. The variant
+/// only affects the Chrome / Strict profiles (adds the `Lumen` brand).
+#[must_use]
+pub fn low_entropy_client_hints_for(
+    profile: HttpProfile,
+    variant: lumen_core::IdentityVariant,
+) -> Vec<(&'static str, String)> {
     if ClientHintsProfile::for_http_profile(profile) == ClientHintsProfile::Disabled {
         return Vec::new();
     }
-    lumen_core::Identity::from_user_agent(super::profile_user_agent(profile)).low_entropy_client_hints()
+    let ua = match profile {
+        HttpProfile::Chrome | HttpProfile::Strict => variant.user_agent(),
+        _ => super::profile_user_agent(profile),
+    };
+    lumen_core::Identity::from_user_agent(ua).low_entropy_client_hints()
 }
 
 /// Build Client Hints headers for the profile. `server_requested` gates the

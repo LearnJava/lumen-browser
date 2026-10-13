@@ -5,6 +5,7 @@
 //! via header order variance (common detection vector for anti-bots like Cloudflare/DataDome).
 
 use std::collections::VecDeque;
+use lumen_core::IdentityVariant;
 
 /// HTTP profile — determines header order, casing, and HTTP/2 SETTINGS configuration.
 ///
@@ -141,8 +142,8 @@ pub fn sends_global_privacy_control(profile: HttpProfile) -> bool {
 /// Append the low-entropy Client Hints (`Sec-CH-UA`, `-Mobile`, `-Platform`)
 /// that Chromium sends on every request. Their absence next to a Chrome UA is
 /// an Akamai signal (BUG-1113 bisect, BUG-1614).
-fn add_low_entropy_hints(headers: &mut HeaderOrder, profile: HttpProfile) {
-    for (name, value) in super::client_hints::low_entropy_client_hints(profile) {
+fn add_low_entropy_hints(headers: &mut HeaderOrder, profile: HttpProfile, variant: IdentityVariant) {
+    for (name, value) in super::client_hints::low_entropy_client_hints_for(profile, variant) {
         headers.add(name, value);
     }
 }
@@ -164,6 +165,25 @@ pub fn build_request_headers(
     extra_headers: &str,
     profile: HttpProfile,
 ) -> String {
+    build_request_headers_for(
+        host,
+        accept_encoding,
+        extra_headers,
+        profile,
+        lumen_core::identity_variant(),
+    )
+}
+
+/// [`build_request_headers`] with an explicit identity variant instead of the
+/// process-global one. The variant only changes the Chrome / Strict profiles
+/// (trailing `Lumen/x.y` UA token and the `Lumen` Client Hints brand).
+pub fn build_request_headers_for(
+    host: &str,
+    accept_encoding: &str,
+    extra_headers: &str,
+    profile: HttpProfile,
+    variant: IdentityVariant,
+) -> String {
     let mut headers = HeaderOrder::new(profile);
 
     match profile {
@@ -172,8 +192,8 @@ pub fn build_request_headers(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
-            add_low_entropy_hints(&mut headers, profile);
-            headers.add("User-Agent", super::CHROME_USER_AGENT);
+            add_low_entropy_hints(&mut headers, profile, variant);
+            headers.add("User-Agent", variant.user_agent());
             // Real Chrome sends the full document `Accept` on a navigation,
             // not `*/*` (RP-7: `*/*` is a cheap anti-bot tell).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
@@ -236,7 +256,7 @@ pub fn build_request_headers(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
-            add_low_entropy_hints(&mut headers, profile);
+            add_low_entropy_hints(&mut headers, profile, variant);
             headers.add("User-Agent", super::EDGE_USER_AGENT);
             // Edge (Chromium) sends the same document `Accept` as Chrome (RP-7).
             headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
@@ -404,6 +424,39 @@ mod tests {
         assert!(!headers.contains("Accept: */*"));
         assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
         assert!(headers.contains("Connection: keep-alive"));
+    }
+
+    /// The header block minus the UA line and the `Sec-CH-UA` brand list.
+    fn without_identity_lines(block: &str) -> Vec<&str> {
+        block
+            .split("\r\n")
+            .filter(|l| !l.starts_with("User-Agent:") && !l.starts_with("Sec-CH-UA:"))
+            .collect()
+    }
+
+    #[test]
+    fn test_identity_variant_changes_only_ua_token_and_brand() {
+        for profile in [HttpProfile::Chrome, HttpProfile::Strict] {
+            let plain = build_request_headers_for("a.test", "gzip", "", profile, IdentityVariant::ChromeUnbranded);
+            let lumen = build_request_headers_for("a.test", "gzip", "", profile, IdentityVariant::ChromeLumen);
+            let version = env!("CARGO_PKG_VERSION");
+            assert!(lumen.contains(&format!("Lumen/{version}\r\n")), "{profile:?}");
+            assert!(lumen.contains("\"Lumen\";v=\""), "{profile:?}");
+            assert!(!plain.contains("Lumen"), "{profile:?}");
+            // Header order and every other header are identical.
+            assert_eq!(without_identity_lines(&plain), without_identity_lines(&lumen), "{profile:?}");
+            let names = |b: &str| b.split("\r\n").map(|l| l.split(':').next().unwrap().to_string()).collect::<Vec<_>>();
+            assert_eq!(names(&plain), names(&lumen), "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn test_identity_variant_ignored_by_other_profiles() {
+        for profile in [HttpProfile::Edge, HttpProfile::Firefox, HttpProfile::Safari, HttpProfile::TorBrowser] {
+            let plain = build_request_headers_for("a.test", "gzip", "", profile, IdentityVariant::ChromeUnbranded);
+            let lumen = build_request_headers_for("a.test", "gzip", "", profile, IdentityVariant::ChromeLumen);
+            assert_eq!(plain, lumen, "{profile:?}");
+        }
     }
 
     #[test]

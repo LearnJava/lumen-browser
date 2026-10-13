@@ -1074,7 +1074,7 @@ fn capabilities() -> JsonValue {
     );
     caps.insert("setWindowRect".into(), JsonValue::Bool(false));
     // BUG-1614: the UA the network actually sends (default profile), not a Lumen token.
-    caps.insert("userAgent".into(), JsonValue::String(lumen_core::CHROME_USER_AGENT.into()));
+    caps.insert("userAgent".into(), JsonValue::String(lumen_core::chrome_user_agent().into()));
     JsonValue::Object(caps)
 }
 

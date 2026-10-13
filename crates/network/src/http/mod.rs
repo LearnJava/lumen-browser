@@ -20,11 +20,14 @@ pub mod h2_settings;
 pub mod client_hints;
 
 pub use headers::{
-    HttpProfile, HeaderOrder, build_request_headers, h2_fingerprint_headers,
-    sends_global_privacy_control,
+    HttpProfile, HeaderOrder, build_request_headers, build_request_headers_for,
+    h2_fingerprint_headers, sends_global_privacy_control,
 };
 pub use h2_settings::{H2Settings, H2StreamPriority};
-pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers, low_entropy_client_hints};
+pub use client_hints::{
+    ClientHintsProfile, should_send_client_hints, client_hints_headers, low_entropy_client_hints,
+    low_entropy_client_hints_for,
+};
 
 /// HTTP/1.1 User-Agent value for Lumen-native profile.
 ///
@@ -53,7 +56,7 @@ pub const SAFARI_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_1
 #[must_use]
 pub fn profile_user_agent(profile: HttpProfile) -> &'static str {
     match profile {
-        HttpProfile::Chrome | HttpProfile::Strict => CHROME_USER_AGENT,
+        HttpProfile::Chrome | HttpProfile::Strict => lumen_core::chrome_user_agent(),
         HttpProfile::Edge => EDGE_USER_AGENT,
         HttpProfile::Firefox => FIREFOX_USER_AGENT,
         HttpProfile::Safari => SAFARI_USER_AGENT,

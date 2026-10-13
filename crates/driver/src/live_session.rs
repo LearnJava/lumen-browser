@@ -352,7 +352,7 @@ impl BrowserSession for LiveWindowSession {
         }
         #[cfg(not(feature = "v8"))]
         {
-            lumen_core::CHROME_USER_AGENT.to_string()
+            lumen_core::chrome_user_agent().to_string()
         }
     }
 
