@@ -29,7 +29,7 @@ Write only inside the repository and its worktrees under `.claude/worktrees/`. N
 
 Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — `/lumen-task-finish`; starting one — `/lumen-task-start` (explicit `/` invocation only).
 
-1. `git pull origin main` first, before reading STATUS files or branching.
+1. `git pull -q origin main` first, before reading STATUS files or branching.
 2. "You are developer N" → continue your existing `p<N>-…` branch if there is one, else take the **first** line of `STATUS-PN.md`. Strictly top-down: the order encodes dependencies. If line 1 cannot start, say why and ask.
 3. Take the task: `cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` — fetches origin, refuses if any unmerged branch carries the task id, occupies the pool slot and pushes the branch. Only a branch **on origin** reserves.
 4. Every commit: gate → commit → `merge --no-ff` into `main` → push. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify` (also enforced by `.claude/settings.json`). CI is not awaited — watch `main` after the push.
