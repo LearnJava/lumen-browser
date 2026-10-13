@@ -82,6 +82,9 @@ pub enum PaletteAction {
     /// Hand the current page to another installed browser (COMPAT-HANDOFF);
     /// the reason picks which one.
     OpenInOtherBrowser(HandoffReason),
+    /// Same, and remember the choice for this site for 30 days: later links
+    /// to it open in that browser.
+    RememberOtherBrowser(HandoffReason),
 }
 
 impl PaletteAction {
@@ -113,6 +116,18 @@ impl PaletteAction {
             PaletteAction::OpenInOtherBrowser(HandoffReason::Calls) => {
                 "Open in Another Browser (video calls)"
             }
+            PaletteAction::RememberOtherBrowser(HandoffReason::Other) => {
+                "Always Open This Site in Another Browser (30 days)"
+            }
+            PaletteAction::RememberOtherBrowser(HandoffReason::Crypto) => {
+                "Always Open This Site in Another Browser (30 days, GOST / e-signature)"
+            }
+            PaletteAction::RememberOtherBrowser(HandoffReason::Drm) => {
+                "Always Open This Site in Another Browser (30 days, DRM video)"
+            }
+            PaletteAction::RememberOtherBrowser(HandoffReason::Calls) => {
+                "Always Open This Site in Another Browser (30 days, video calls)"
+            }
         }
     }
 
@@ -134,7 +149,8 @@ impl PaletteAction {
             PaletteAction::ToggleVimMode => "Ctrl+Alt+V",
             PaletteAction::ImportBrowserData
             | PaletteAction::TranslatePage
-            | PaletteAction::OpenInOtherBrowser(_) => "",
+            | PaletteAction::OpenInOtherBrowser(_)
+            | PaletteAction::RememberOtherBrowser(_) => "",
         }
     }
 
@@ -161,6 +177,10 @@ impl PaletteAction {
             PaletteAction::OpenInOtherBrowser(HandoffReason::Crypto),
             PaletteAction::OpenInOtherBrowser(HandoffReason::Drm),
             PaletteAction::OpenInOtherBrowser(HandoffReason::Calls),
+            PaletteAction::RememberOtherBrowser(HandoffReason::Other),
+            PaletteAction::RememberOtherBrowser(HandoffReason::Crypto),
+            PaletteAction::RememberOtherBrowser(HandoffReason::Drm),
+            PaletteAction::RememberOtherBrowser(HandoffReason::Calls),
         ]
     }
 }

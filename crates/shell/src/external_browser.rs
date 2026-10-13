@@ -180,6 +180,30 @@ pub fn is_handoff_url(url: &str) -> bool {
         && !url.chars().any(|c| c.is_control())
 }
 
+/// Перехватывать ли клик по ссылке `target` на странице `current` при живом
+/// правиле: цель — http(s) и другой сайт. Ссылки внутри сайта открываются в
+/// Lumen: страницу там пользователь уже открыл сам.
+#[must_use]
+pub fn is_cross_site_handoff(current: &str, target: &str) -> bool {
+    is_handoff_url(target) && !lumen_storage::same_site(current, target)
+}
+
+/// Браузер из списка по идентификатору правила.
+#[must_use]
+pub fn find_by_id<'a>(browsers: &'a [ExternalBrowser], id: &str) -> Option<&'a ExternalBrowser> {
+    browsers.iter().find(|b| b.id == id)
+}
+
+/// Текст уведомления после передачи; предупреждение — только при первой.
+#[must_use]
+pub fn handoff_notice(browser_name: &str, first_time: bool) -> String {
+    if first_time {
+        format!("Открыто в {browser_name}. {FIRST_HANDOFF_WARNING}")
+    } else {
+        format!("Открыто в {browser_name}.")
+    }
+}
+
 /// Запустить `browser` с `url`. Только URL — без cookie и без данных форм.
 pub fn launch(browser: &ExternalBrowser, url: &str) -> std::io::Result<()> {
     if !is_handoff_url(url) {
@@ -453,6 +477,29 @@ mod tests {
         assert!(!is_handoff_url("https://a.com/\r\n--new-window"));
         let err = launch(&installed()[0], "file:///C:/x").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn link_is_intercepted_only_across_sites() {
+        let cur = "https://news.example.com/a";
+        assert!(is_cross_site_handoff(cur, "https://bank.ru/login"));
+        assert!(!is_cross_site_handoff(cur, "https://www.example.com/b"));
+        assert!(!is_cross_site_handoff(cur, "mailto:a@bank.ru"));
+        assert!(!is_cross_site_handoff(cur, "javascript:void(0)"));
+    }
+
+    #[test]
+    fn warning_only_on_first_handoff() {
+        assert!(handoff_notice("Edge", true).contains(FIRST_HANDOFF_WARNING));
+        assert_eq!(handoff_notice("Edge", false), "Открыто в Edge.");
+    }
+
+    #[test]
+    fn rule_browser_is_found_by_id() {
+        let list = installed();
+        let id = list[0].id.clone();
+        assert_eq!(find_by_id(&list, &id), Some(&list[0]));
+        assert!(find_by_id(&list, "no-such-browser").is_none());
     }
 
     #[test]

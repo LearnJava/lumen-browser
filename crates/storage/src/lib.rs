@@ -90,7 +90,7 @@ pub use hsts::{
 pub use cached_dns::{CachedDnsResolver, Clock, SystemClock};
 pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
-pub use external_browser_rules::{ExternalBrowserRule, ExternalBrowserRules, RULE_TTL_SECS};
+pub use external_browser_rules::{same_site, ExternalBrowserRule, ExternalBrowserRules, RULE_TTL_SECS};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use indexed_db::{IdbStore, NativeIdbStore};

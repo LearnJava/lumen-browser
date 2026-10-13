@@ -1419,6 +1419,9 @@ pub(crate) struct Lumen {
     /// On-disk permission store (`permissions.db`); `permission` uses it except
     /// while the Anonymous profile is active (see `sync_permission_store`).
     pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,
+    /// Rules «open this site in another browser» for 30 days (COMPAT-HANDOFF),
+    /// `external_browser_rules.db`; unused while the Anonymous profile is active.
+    pub(crate) external_browser_rules: Arc<lumen_storage::ExternalBrowserRules>,
     /// Right-docked sidebar web panel state (7D.3).
     ///
     /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.
