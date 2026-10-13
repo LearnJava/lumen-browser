@@ -449,6 +449,9 @@ impl Lumen {
                 // error arm above — this navigation never reveals a
                 // transition, so its captured snapshot must not survive it.
                 self.pending_mpa_view_transition_snapshot = None;
+                // COMPAT-ERRORS: вместо прежней страницы, оставшейся на экране,
+                // вкладка показывает страницу ошибки с кодом Chromium.
+                self.show_net_error(&msg);
             }
             LoadEvent::CertError(url, host, cert_err, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {
