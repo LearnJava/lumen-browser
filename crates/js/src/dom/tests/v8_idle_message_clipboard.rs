@@ -325,7 +325,22 @@ fn navigator_clipboard_stub_read_resolves_string() {
                  navigator.clipboard.readText().then(function(v) { ok = typeof v === 'string'; });",
     )
     .unwrap();
+    // UX-PERMISSIONS-4: the read waits for the user's answer.
+    assert_eq!(rt.take_permission_requests(), vec!["clipboard-read".to_string()]);
+    assert!(!bool_eval(&rt, "ok"));
+    rt.eval(&crate::notifications_bindings::settle_script("clipboard-read", "granted")).unwrap();
     assert!(bool_eval(&rt, "ok"));
+}
+
+#[test]
+fn navigator_clipboard_read_rejected_when_denied() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        "var err = '';                  navigator.clipboard.readText().catch(function(e) { err = e.name; });",
+    )
+    .unwrap();
+    rt.eval(&crate::notifications_bindings::settle_script("clipboard-read", "denied")).unwrap();
+    assert!(bool_eval(&rt, "err === 'NotAllowedError'"));
 }
 
 // BUG-765: `navigator.clipboard` must be entirely absent on an insecure origin.
@@ -529,4 +544,32 @@ fn is_secure_context_survives_same_document_navigation() {
 fn cross_origin_isolated_is_false() {
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
+}
+
+#[test]
+fn navigator_clipboard_read_asks_and_returns_items() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        "var n = -1; var denied = ''; \
+         navigator.clipboard.read().then(function(items) { n = items.length; });",
+    )
+    .unwrap();
+    assert_eq!(rt.take_permission_requests(), vec!["clipboard-read".to_string()]);
+    rt.eval(&crate::notifications_bindings::settle_script("clipboard-read", "granted")).unwrap();
+    // No native binding in tests → empty clipboard → no items.
+    assert!(bool_eval(&rt, "n === 0"));
+    assert!(bool_eval(&rt, "new ClipboardItem({'text/plain': new Blob(['a'])}).types[0] === 'text/plain'"));
+}
+
+#[test]
+fn navigator_clipboard_write_accepts_text_plain_item() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        "var done = false; var bad = ''; \
+         navigator.clipboard.write([new ClipboardItem({'text/plain': new Blob(['hi'])})]).then(function() { done = true; }); \
+         navigator.clipboard.write([new ClipboardItem({'image/png': new Blob(['x'])})]).catch(function(e) { bad = e.name; });",
+    )
+    .unwrap();
+    assert!(bool_eval(&rt, "done"));
+    assert!(bool_eval(&rt, "bad === 'NotAllowedError'"));
 }

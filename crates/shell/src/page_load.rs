@@ -997,17 +997,38 @@ impl Lumen {
     /// `load_failed`/`load_error_message` — so `reload()` retries the exact
     /// URL the interstitial was blocking.
     pub(crate) fn proceed_cert_interstitial(&mut self) {
+        let is_threat = self.cert_interstitial.threat.is_some();
         let Some((_url, host)) = self.cert_interstitial.proceed() else {
             return;
         };
-        lumen_network::tls::bypass::allow_host(&host);
+        if is_threat {
+            crate::threat_store::allow_host(&host);
+        } else {
+            lumen_network::tls::bypass::allow_host(&host);
+        }
+        self.relayout_chrome_host();
         self.reload();
+    }
+
+    /// UX-LOADING: остановить навигацию активной вкладки. Поколение
+    /// увеличивается, поэтому все события фоновой загрузки (`LoadEvent`)
+    /// отбрасываются сверкой `generation != load_generation`; страница
+    /// остаётся такой, какой её успели нарисовать.
+    pub(crate) fn stop_loading(&mut self) {
+        if self.nav_start.take().is_none() {
+            return;
+        }
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.stream_builder = None;
+        self.relayout_chrome_host();
+        self.request_redraw();
     }
 
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
     /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
     /// предыдущий display_list, печатаем причину в stderr.
     pub(crate) fn reload(&mut self) {
+        self.restore_crashed_source();
         if matches!(self.source, PageSource::Empty) {
             return;
         }
@@ -1240,6 +1261,7 @@ impl Lumen {
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
+                self.hscroll_drag = None;
                 self.frame_scroll_drag = None;
                 // Активные анимации старой страницы сбрасываем.
                 self.scroll_anim = None;
@@ -1392,6 +1414,7 @@ impl Lumen {
             nav: crate::nav_timing::NavResponseMeta::default(),
             // lumen-driver path has no TLS handshake plumbing to this boundary.
             cert_info: None,
+            response_policies: Default::default(),
             // lumen-driver's headless pipeline has no parse-time snapshot pass.
             prescript_layout_rects: None,
         })
@@ -1484,6 +1507,20 @@ impl Lumen {
             // загрузки. Для File/Snapshot/Static тело уже в памяти, поэтому его
             // достаточно нарезать на STREAM_CHUNK_BYTES (прежнее поведение).
             let raw = if let PageSource::Url { url, .. } = &source {
+                // UX-SECURITY-UI: адрес из базы Safe Browsing не загружаем.
+                if let Some((list, threat)) = crate::threat_store::check(url) {
+                    let host = lumen_core::url::Url::parse(url)
+                        .map_or_else(|_| url.clone(), |u| u.host().to_owned());
+                    let _ = proxy.send_event(LoadEvent::ThreatBlocked(
+                        url.clone(),
+                        host,
+                        list,
+                        threat,
+                        tab_id,
+                        generation,
+                    ));
+                    return;
+                }
                 // BUG-757: база preload-хинтов — адрес, с которого РЕАЛЬНО
                 // течёт тело (его приносит сам chunk), а не запрошенный: после
                 // редиректа они разные, и относительный `src` уходил на
@@ -2095,6 +2132,38 @@ impl Lumen {
         );
     }
 
+    /// UX-PARTITION-10: след политик загруженной страницы в профильных хранилищах,
+    /// чтобы «Очистить» данные сайта их находило. Манифест — только ссылка (тело
+    /// не скачивается).
+    fn record_page_policies(&self, origin: &str, p: &crate::page_pipeline::ResponsePolicies, now: i64) {
+        if !p.csp.is_empty() {
+            let _ = self.csp_policies.store(origin, &p.csp.join(", "), now);
+        }
+        if let Some(policy) = p
+            .referrer
+            .as_deref()
+            .and_then(|h| h.rsplit(',').find_map(lumen_storage::ReferrerPolicy::parse))
+        {
+            let _ = self.referrer_policies.set(origin, policy, now);
+        }
+        if let Some(h) = p.permissions_policy.as_deref() {
+            let _ = self.permissions_policies.store(origin, h, now);
+        }
+        let href = self
+            .layout_source
+            .as_ref()
+            .and_then(|ls| ls.document.lock().ok().and_then(|d| crate::doc_extract::manifest_link_href(&d)));
+        if let Some(href) = href {
+            let resolved = self
+                .source
+                .url_str()
+                .and_then(|base| lumen_core::url::Url::parse(base).ok())
+                .and_then(|b| b.resolve(&href).ok())
+                .map_or(href, |u| u.as_str().to_owned());
+            let _ = self.web_manifests.store(origin, &resolved, "", now);
+        }
+    }
+
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
@@ -2109,6 +2178,7 @@ impl Lumen {
         self.sync_engine_js_state();
         // The new runtime starts empty; re-seed it with the current Navigation state.
         self.commit_nav_state();
+        self.autofill_saved_login();
         // Cross-document unification (see `pending_post_reload_traversal`): a
         // multi-step traversal landed on a same-document entry of the document
         // that just finished loading — apply its popstate/URL update now, on
@@ -2301,6 +2371,7 @@ impl Lumen {
         self.scroll_y = restore_y;
         self.issue_scroll_command();
         self.scroll_drag = None;
+        self.hscroll_drag = None;
         self.frame_scroll_drag = None;
         self.scroll_anim = None;
         self.momentum_anim = None;
@@ -2309,6 +2380,7 @@ impl Lumen {
         self.form_state.clear();
         self.frame_text_cursor.clear();
         self.frame_text_selection_anchor.clear();
+        self.field_history.clear();
         self.text_drag = None;
         self.doc_select = None;
         self.validation_tooltip = None;
@@ -2349,6 +2421,11 @@ impl Lumen {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let _ = self.history_store.record_visit(url, title, now_secs);
+            // UX-PARTITION-9: счётчик визитов по origin, чтобы «Очистить» находило след.
+            if let Some(origin) = self.source.origin_str() {
+                let _ = self.site_engagement.record_visit(&origin, now_secs);
+                self.record_page_policies(&origin, &page.response_policies, now_secs);
+            }
         }
         // Clear GIF animation state from previous page.
         self.animated_gifs.clear();
@@ -2415,6 +2492,13 @@ impl Lumen {
                 if host.is_empty() { None } else { Some(format!("{}{}", scheme, host.to_ascii_lowercase())) }
             });
             self.permission.set_origin(origin);
+            // UX-PERMISSIONS-3: a saved answer shows in `Notification.permission`
+            // without the page having to call requestPermission().
+            use crate::panels::permission_panel::{PermissionKind, PermissionState};
+            let saved = self.permission.state_for(PermissionKind::Notifications);
+            if saved != PermissionState::Ask {
+                self.settle_page_permission(PermissionKind::Notifications, saved);
+            }
         }
 
         // PH3-19: store the page's FontRegistry for dynamic web-font registration
@@ -2994,6 +3078,10 @@ pub(crate) enum LoadEvent {
     /// "Proceed anyway"), the structured reason, tab id, and generation (U-1);
     /// see [`Self::EarlyPreloadHints`] (BUG-1214).
     CertError(String, String, lumen_core::error::CertError, usize, u64),
+    /// UX-SECURITY-UI срез 2: адрес навигации найден в локальной базе Safe
+    /// Browsing, загрузка не начата. Поля: URL, хост, имя списка, тип угрозы,
+    /// вкладка, поколение.
+    ThreatBlocked(String, String, String, lumen_storage::ThreatType, usize, u64),
     /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →
     /// layout) выполнен на фоновом потоке; готовый результат применяется на
     /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Предпоследнее

@@ -38,6 +38,30 @@ use super::*;
     }
 
     #[test]
+    fn background_shorthand_position_accepts_all_length_units() {
+        // BUG-1344: in/cm/mm/pt/pc/ex/ch/calc() в сокращении не сбрасывают позицию.
+        for v in ["0.5in", "1cm", "1mm", "1pt", "1pc", "1ex", "1ch", "calc(5px + 1em)"] {
+            let long = cascade_at(
+                "<div></div>",
+                &format!("div {{ background-position: {v} {v}; }}"),
+                &[0],
+            );
+            let short = cascade_at(
+                "<div></div>",
+                &format!("div {{ background: url(x.png) no-repeat {v} {v}; }}"),
+                &[0],
+            );
+            assert_eq!(
+                short.background_layers[0].position.x, long.background_layers[0].position.x, "{v}"
+            );
+            assert_eq!(
+                short.background_layers[0].position.y, long.background_layers[0].position.y, "{v}"
+            );
+            assert_ne!(short.background_layers[0].position.x, PositionComponent::Percent(0.0), "{v}");
+        }
+    }
+
+    #[test]
     fn background_position_single_value_centers_y() {
         // Один token — второй компонент defaults to `center` (50%).
         let s = cascade_at(
@@ -1241,4 +1265,13 @@ use super::*;
         );
         assert!((rx - 50.0).abs() < 0.5, "rx = min(50,150)=50, got {rx}");
         assert!((ry - 25.0).abs() < 0.5, "ry = min(25,75)=25, got {ry}");
+    }
+
+    #[test]
+    fn background_image_trailing_token_drops_declaration() {
+        // CSS Values §2.2 (BUG-1347): `url(x) repeat` недопустимо — объявление отбрасывается.
+        let s = cascade_at("<div></div>", "div { background-image: url(x.png) repeat; }", &[0]);
+        assert!(s.background_layers.is_empty());
+        let s = cascade_at("<div></div>", "div { background-image: url(x.png); }", &[0]);
+        assert_eq!(s.background_layers.len(), 1);
     }

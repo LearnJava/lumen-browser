@@ -52,10 +52,10 @@ import cdata_audit  # noqa: E402
 import corpus_stats  # noqa: E402
 import run_corpus  # noqa: E402
 
-#: Types no executor exists for (WPT-RUN-8). They are in the denominator and
+#: Types no executor exists for (WPT-RUN-8; crashtest S1 and print-reftest S2 have one). They are in the denominator and
 #: score zero by construction, so they are reported apart from the types whose
 #: zero is an engine result.
-NO_EXECUTOR = ("wdspec", "print-reftest", "aamtest")
+NO_EXECUTOR = ("wdspec", "aamtest")
 
 #: Id markers for "wptserve hands this test out over TLS". `.https.` is the
 #: obvious one; `.h2.` is the trap — HTTP/2 is served on the h2 port, which is

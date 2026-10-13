@@ -1660,7 +1660,7 @@ use super::*;
     #[test]
     fn block_between_inline_creates_separate_run() {
         // <div> — блочный элемент; текст до и после — разные InlineRun-ы.
-        let root = lay("<p>before</p><div>mid</div><p>after</p>", "");
+        let root = lay("<p>before</p><div>mid</div><p>after</p>", "p { margin: 0 }");
         // 3 блока по 19.2 = 57.6
         assert!(
             (root.rect.height - 57.6).abs() < 0.1,

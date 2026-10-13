@@ -116,7 +116,8 @@ impl TabStops {
             Some(n) => {
                 let space = m.char_width_with_families(' ', style.font_size, fams)
                     + style.letter_spacing
-                    + style.word_spacing;
+                    + style.word_spacing
+                    + style.word_spacing_pct * m.char_width_with_families(' ', style.font_size, fams);
                 n * space
             }
             None => style.tab_size,
@@ -670,15 +671,69 @@ pub(crate) fn pretty_wrap(
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
-/// `pre_space` / `post_space` (inline box model: margin + border + padding).
-/// `white_space` controls whether whitespace is preserved (pre/pre-wrap).
+/// CSS Text L3 §7.1: стартовые позиции строк при `text-indent` (с `hanging`/`each-line`).
+#[derive(Clone, Copy)]
+pub(crate) struct LineIndent {
+    /// Отступ первой строки.
+    pub(crate) first: f32,
+    /// Отступ строки, начатой мягким переносом.
+    pub(crate) soft: f32,
+    /// Отступ строки после принудительного разрыва (`<br>`, перевод строки).
+    pub(crate) after_forced: f32,
+}
+
+impl LineIndent {
+    /// Только первая строка отступает на `first`.
+    pub(crate) fn first_line(first: f32) -> Self {
+        Self { first, soft: 0.0, after_forced: 0.0 }
+    }
+
+    /// `length` + флаги `hanging`/`each-line`; `inset` — сдвиг первой строки сверх отступа;
+    /// `continuation` — прогон идёт после блока в потоке, его первая строка не стартовая
+    /// (если не `each-line`).
+    pub(crate) fn new(length: f32, hanging: bool, each_line: bool, inset: f32, continuation: bool) -> Self {
+        let on = |indented: bool| if indented { length } else { 0.0 };
+        let start_line = !continuation || each_line;
+        Self {
+            first: on(start_line != hanging) + inset,
+            soft: on(hanging),
+            after_forced: on(each_line != hanging),
+        }
+    }
+}
+
+/// Отступ только у первой строки; см. [`wrap_inline_run_indented`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
     container_font_size: f32,
     text_indent: f32,
+    viewport: Size,
+    m: &dyn TextMeasurer,
+    hyphens: Hyphens,
+    hp: &dyn HyphenationProvider,
+    white_space: crate::style::WhiteSpace,
+    word_break: WordBreak,
+    overflow_wrap: OverflowWrap,
+    line_break: LineBreak,
+) -> Vec<Vec<InlineFrag>> {
+    wrap_inline_run_indented(
+        segments, max_width, container_font_size, LineIndent::first_line(text_indent),
+        viewport, m, hyphens, hp, white_space, word_break, overflow_wrap, line_break,
+    )
+}
+
+/// Разбивает прогон сегментов на строки, склеивая слова
+/// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
+/// `pre_space` / `post_space` (inline box model: margin + border + padding).
+/// `white_space` controls whether whitespace is preserved (pre/pre-wrap).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wrap_inline_run_indented(
+    segments: &[InlineSegment],
+    max_width: f32,
+    container_font_size: f32,
+    indent: LineIndent,
     viewport: Size,
     m: &dyn TextMeasurer,
     hyphens: Hyphens,
@@ -708,7 +763,7 @@ pub(crate) fn wrap_inline_run(
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
     let mut current_line: Vec<InlineFrag> = Vec::new();
     // CSS Text L3 §7.1: text-indent только на первой строке.
-    let mut current_x = text_indent;
+    let mut current_x = indent.first;
     // CSS Text L3 §4.1.1 — whether the previous segment ended with collapsible
     // whitespace, so the first word of the next segment gets one inter-word gap.
     // A segment boundary with no whitespace on either side joins tightly (e.g.
@@ -725,7 +780,7 @@ pub(crate) fn wrap_inline_run(
         // Forced line break from \n in white-space: pre/pre-wrap text.
         if seg.forced_break {
             result.push(std::mem::take(&mut current_line));
-            current_x = 0.0;
+            current_x = indent.after_forced;
             prev_trailing_ws = false;
             pre_wrap_space_before = false;
             continue;
@@ -748,6 +803,7 @@ pub(crate) fn wrap_inline_run(
                 let starts_space = seg.text.starts_with([' ', '\t']);
                 let params = super::inline_wrap_preserved::PreservedWrap {
                     max_width, viewport, m, white_space, word_break, overflow_wrap, line_break,
+                    soft_x: indent.soft,
                     break_before: !no_break_before
                         && pre_wrap_space_before
                         && (white_space == crate::style::WhiteSpace::BreakSpaces || !starts_space),
@@ -776,7 +832,7 @@ pub(crate) fn wrap_inline_run(
             let gap = if current_line.is_empty() { 0.0 } else { img_space };
             if !current_line.is_empty() && current_x + gap + seg.pre_space + img_w > max_width {
                 result.push(std::mem::take(&mut current_line));
-                current_x = 0.0;
+                current_x = indent.soft;
             }
             let line_gap = if current_line.is_empty() { 0.0 } else { img_space };
             current_x += line_gap + seg.pre_space;
@@ -807,6 +863,34 @@ pub(crate) fn wrap_inline_run(
             continue;
         }
 
+        // An empty piece of an inline box cut by a block (CSS 2.1 §9.2.1.1): no text, but
+        // its border/padding still occupy a (zero-width) fragment of the line.
+        if seg.text.is_empty() && seg.is_element_box && (seg.pre_space > 0.0 || seg.post_space > 0.0) {
+            let style = &seg.style;
+            let em = style.font_size;
+            current_x += seg.pre_space;
+            current_line.push(InlineFrag {
+                x: current_x,
+                y_offset: 0.0,
+                width: 0.0,
+                text: String::new(),
+                style: style.clone(),
+                padding_left: style.padding_left.resolve_or_zero(em, max_width, viewport),
+                padding_right: style.padding_right.resolve_or_zero(em, max_width, viewport),
+                is_element_box: true,
+                img_src: None,
+                img_is_lazy: false,
+                is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
+                merged_sources: Vec::new(),
+            });
+            current_x += seg.post_space;
+            prev_trailing_ws = false;
+            continue;
+        }
+
         // Collect words; split_css_whitespace preserves U+00AD within tokens.
         let raw_words: Vec<&str> = split_css_whitespace(&seg.text).collect();
         if raw_words.is_empty() {
@@ -819,7 +903,7 @@ pub(crate) fn wrap_inline_run(
         let style = &seg.style;
         let em = style.font_size;
         let ls = style.letter_spacing;
-        let ws = style.word_spacing;
+        let ws = style.word_spacing + style.word_spacing_pct * space_w;
         let inter_word = space_w + ls + ws;
 
         // Resolved padding for this segment's inline box (for paint use).
@@ -906,7 +990,7 @@ pub(crate) fn wrap_inline_run(
                             // Nothing fits in what is left of this line — wrap
                             // and measure again against the full width.
                             result.push(std::mem::take(&mut current_line));
-                            current_x = 0.0;
+                            current_x = indent.soft;
                             continue;
                         }
                         // The line is empty and even the shortest chunk
@@ -944,7 +1028,7 @@ pub(crate) fn wrap_inline_run(
                     start = end;
                     if start < display_word.len() {
                         result.push(std::mem::take(&mut current_line));
-                        current_x = 0.0;
+                        current_x = indent.soft;
                     }
                 }
                 current_x += post;
@@ -989,7 +1073,7 @@ pub(crate) fn wrap_inline_run(
                         merged_sources: Vec::new(),
                     });
                     result.push(std::mem::take(&mut current_line));
-                    current_x = 0.0;
+                    current_x = indent.soft;
                     // Emit suffix as first fragment on new line.
                     let sfx_w = measure_text_w_varied(&sfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                     current_line.push(InlineFrag {
@@ -1050,7 +1134,7 @@ pub(crate) fn wrap_inline_run(
                         rest = tail;
                         if !rest.is_empty() {
                             result.push(std::mem::take(&mut current_line));
-                            current_x = 0.0;
+                            current_x = indent.soft;
                         }
                     }
                     current_x += post;
@@ -1061,7 +1145,7 @@ pub(crate) fn wrap_inline_run(
                 // line has nowhere to wrap to: it stays and overflows.
                 if needs_wrap {
                     result.push(std::mem::take(&mut current_line));
-                    current_x = 0.0;
+                    current_x = indent.soft;
                 }
             }
 
@@ -1106,7 +1190,7 @@ pub(crate) fn wrap_inline_run(
                     rest = tail;
                     if !rest.is_empty() {
                         result.push(std::mem::take(&mut current_line));
-                        current_x = 0.0;
+                        current_x = indent.soft;
                     }
                 }
                 current_x += post;
@@ -1460,6 +1544,84 @@ pub(crate) fn apply_text_overflow_ellipsis(
                 truncate_frag_with_ellipsis(&mut line[last], avail, font_size, m, ellipsis, ellipsis_w);
             }
         }
+    }
+}
+
+/// CSS UI L4 §6.2 — `text-overflow: "<string>"`: строки шире `max_width` теряют конец,
+/// на его место встаёт `marker`. В отличие от «…», который дописывается в стиль последнего
+/// фрагмента, метка — отдельный фрагмент со стилем блока-контейнера (§6.2: метка стилизуется
+/// как блок; `text-emphasis` на неё не действует). Метка шире строки обрезается краем бокса
+/// (клип у `overflow`); первый символ строки остаётся всегда.
+pub(crate) fn apply_text_overflow_string(
+    lines: &mut [Vec<InlineFrag>],
+    max_width: f32,
+    marker: &str,
+    block_style: &std::sync::Arc<ComputedStyle>,
+    line_h: f32,
+    m: &dyn TextMeasurer,
+) {
+    let marker_w: f32 = marker
+        .chars()
+        .map(|ch| m.char_width_with_families(ch, block_style.font_size, &block_style.font_family) + block_style.letter_spacing)
+        .sum();
+    let mut marker_style = None;
+    for line in lines.iter_mut() {
+        let Some(last) = line.last() else { continue };
+        if last.x + last.width <= max_width {
+            continue;
+        }
+        let budget = (max_width - marker_w).max(0.0);
+        let mut end_x = 0.0_f32;
+        let mut kept = 0_usize;
+        for f in line.iter_mut() {
+            if f.x + f.width <= budget {
+                end_x = f.x + f.width;
+                kept += 1;
+                continue;
+            }
+            // The frag crosses the budget: keep the chars that still fit (always the line's first).
+            let mut buf = String::new();
+            let mut w = f.x + f.padding_left;
+            for ch in f.text.chars() {
+                let cw = m.char_width_with_families(ch, f.style.font_size, &f.style.font_family) + f.style.letter_spacing;
+                if w + cw > budget && !(kept == 0 && buf.is_empty()) {
+                    break;
+                }
+                buf.push(ch);
+                w += cw;
+            }
+            if !buf.is_empty() {
+                f.text = buf;
+                f.width = w - f.x;
+                f.padding_right = 0.0;
+                end_x = w;
+                kept += 1;
+            }
+            break;
+        }
+        let mut e = line[kept.saturating_sub(1)].clone();
+        line.truncate(kept);
+        e.style = marker_style
+            .get_or_insert_with(|| {
+                let mut st = (**block_style).clone();
+                st.text_emphasis_style = crate::TextEmphasisStyle::None;
+                st.vertical_align = VerticalAlign::Baseline;
+                std::sync::Arc::new(st)
+            })
+            .clone();
+        e.text = marker.to_string();
+        e.x = end_x;
+        e.width = marker_w;
+        // Same half-leading as `apply_inline_vertical_align` gives a baseline-aligned frag.
+        e.y_offset = ((line_h - block_style.font_size) / 2.0).max(0.0);
+        e.padding_left = 0.0;
+        e.padding_right = 0.0;
+        e.is_element_box = false;
+        e.img_src = None;
+        e.img_is_lazy = false;
+        e.bidi_level = 0;
+        e.merged_sources.clear();
+        line.push(e);
     }
 }
 

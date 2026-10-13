@@ -218,6 +218,9 @@ pub struct ComputedStyle {
     /// только на word-boundary, не между всеми символами. Может быть
     /// отрицательным.
     pub word_spacing: f32,
+    /// Процентная часть `word-spacing` (доля ширины U+0020 шрифта; 0.25 = 25%).
+    /// Резолвится в раскладке, где известна метрика пробела.
+    pub word_spacing_pct: f32,
     pub text_decoration_line: TextDecorationLine,
     /// CSS Text Decoration L3 §3 — `text-decoration-color`. `CurrentColor`
     /// означает «использовать style.color при рендеринге» (initial value по
@@ -402,6 +405,8 @@ pub struct ComputedStyle {
     pub scroll_target_group: ScrollTargetGroup,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
+    /// Второе значение `text-overflow` (правая сторона строки); одно значение задаёт обе.
+    pub text_overflow_right: TextOverflow,
     /// CSS Text Size Adjustment L1 §2 — `text-size-adjust` / legacy alias
     /// `-webkit-text-size-adjust`. Наследуется. Initial `Auto`. BUG-513.
     /// Phase 0: parse + store + interpolate — нет мобильного пайплайна
@@ -1215,6 +1220,7 @@ impl ComputedStyle {
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
+            && (self.word_spacing_pct - other.word_spacing_pct).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
             && self.text_decoration_color == other.text_decoration_color
             && self.text_decoration_style == other.text_decoration_style
@@ -1267,6 +1273,7 @@ impl ComputedStyle {
             text_indent: Length::Px(0.0),
             letter_spacing: 0.0,
             word_spacing: 0.0,
+            word_spacing_pct: 0.0,
             text_decoration_line: TextDecorationLine::default(),
             text_decoration_color: CssColor::CurrentColor,
             text_decoration_style: TextDecorationStyle::Solid,
@@ -1341,6 +1348,7 @@ impl ComputedStyle {
             scroll_marker_group: None,
             scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
+            text_overflow_right: TextOverflow::Clip,
             text_size_adjust: TextSizeAdjust::default(),
             opacity: 1.0,
             outline_width: 3.0,
@@ -1641,6 +1649,7 @@ impl ComputedStyle {
             text_indent: inherited.text_indent.clone(),
             letter_spacing: inherited.letter_spacing,
             word_spacing: inherited.word_spacing,
+            word_spacing_pct: inherited.word_spacing_pct,
             text_decoration_line: inherited.text_decoration_line,
             text_decoration_color: inherited.text_decoration_color,
             text_decoration_style: inherited.text_decoration_style,
@@ -1734,6 +1743,7 @@ impl ComputedStyle {
             scroll_marker_group: None,
             scroll_target_group: ScrollTargetGroup::None,
             text_overflow: TextOverflow::Clip,
+            text_overflow_right: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 3.0,
             outline_style: OutlineStyle::None,

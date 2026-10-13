@@ -109,7 +109,7 @@ pub(crate) fn restore_js_context(
     // same limitation `ls_storage` already has.
     let ss_store = crate::ss_store_for_base(&base, ss_storage);
     let idb = crate::idb_store_for_base(&base, idb_dir);
-    let sw = crate::sw_store_for_base(&base, sw_backend);
+    let sw = crate::sw_store_for_base(&base, sw_backend, None);
     let js_cookie_jar = cookie_jar.clone();
     let image_hook = image_hook_ctx.map(|c| {
         crate::dynamic_image_hook::DynamicImgFetchHook::for_document(

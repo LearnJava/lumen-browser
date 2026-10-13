@@ -292,6 +292,8 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
             font_features: vec![(*b"liga", 1)],
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }
@@ -524,6 +526,8 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 8.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: None,
             });
@@ -620,6 +624,8 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 8.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: None,
             });
@@ -635,7 +641,7 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
             if let DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
                 font_stretch, font_variation_axes, font_features, font_palette: _,
-                tab_size, highlight_name, text_orientation,
+                tab_size, letter_spacing, word_spacing, highlight_name, text_orientation,
             } = cmd
             {
                 h_rect(&mut h, rect);
@@ -661,6 +667,8 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
                 }
                 h.write_u8(0);
                 h_f32(&mut h, *tab_size);
+                h.write_i16(*letter_spacing);
+                h.write_i16(*word_spacing);
                 h.write_u8(u8::from(highlight_name.is_some()));
                 h.write_u8(u8::from(text_orientation.is_some()));
             }

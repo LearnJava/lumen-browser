@@ -93,6 +93,7 @@ impl Lumen {
                 && let Ok(Some(note)) = self.notes_store.get(id)
             {
                 self.note_viewer.open(id, &note.url, &note.selection, &note.comment);
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             return;
@@ -127,6 +128,14 @@ impl Lumen {
         // (DS-11), committed e.g. by pasting a copied tile link.
         if let Some(action) = newtab::parse_action(value.trim()) {
             self.apply_newtab_action(action);
+            return;
+        }
+
+        // `about:handoff` — sites handed to another browser (COMPAT-HANDOFF).
+        // Its `?remove=`/`?recheck=`/`?keep=` action links are only honoured
+        // by a click on that page itself (`apply_handoff_link`), never here.
+        if value.trim() == handoff_page::HANDOFF_URL {
+            self.show_handoff_sites();
             return;
         }
 

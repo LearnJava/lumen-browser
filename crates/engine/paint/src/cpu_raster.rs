@@ -472,7 +472,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 let layer = layers.last_mut().expect("base layer");
                 match image_map.get(src.as_str()) {
                     Some(img) => {
-                        rasterize_image(&mut layer.pm, rect, img, *object_fit, *object_position, c)?;
+                        rasterize_image(&mut layer.pm, &snap_border_box(*rect), img, *object_fit, *object_position, c)?;
                     }
                     None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
@@ -484,7 +484,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 let layer = layers.last_mut().expect("base layer");
                 match image_map.get(src.as_str()) {
                     Some(img) => {
-                        rasterize_image(&mut layer.pm, rect, img, *object_fit, *object_position, c)?;
+                        rasterize_image(&mut layer.pm, &snap_border_box(*rect), img, *object_fit, *object_position, c)?;
                     }
                     None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
@@ -533,7 +533,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, font_weight, font_style,
-                font_features, font_family, text_orientation, ..
+                font_features, font_family, text_orientation, letter_spacing, word_spacing, ..
             } => {
                 // Text uses the bundled Inter face by default (family ignored,
                 // weight/style emulated as synthetic bold/italic); a real
@@ -548,6 +548,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
                     &mut layer.pm, rect, text, *font_size, color,
                     *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
                     font_features, font_family, font_provider, *text_orientation,
+                    (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                 )? {
                     layer.mark(ink);
                 }
@@ -2752,9 +2753,18 @@ fn rasterize_background_image(
                     let vx1 = (tx + tile_w).min(x_end);
                     let vy1 = (ty + tile_h).min(y_end);
                     if vx1 > vx0 && vy1 > vy0 {
-                        let placed = Rect::new(tx, ty, tile_w, tile_h);
-                        let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
-                        blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                        // Snap tile edges to device pixels (CSS Backgrounds §3.9):
+                        // neighbours share the same rounded edge, so a fractional
+                        // position (`center`) leaves no 1px AA seam between tiles.
+                        let (sx0, sx1) = (tx.round(), (tx + tile_w).round().max(tx.round() + 1.0));
+                        let (sy0, sy1) = (ty.round(), (ty + tile_h).round().max(ty.round() + 1.0));
+                        let placed = Rect::new(sx0, sy0, sx1 - sx0, sy1 - sy0);
+                        let (vx0, vx1) = (vx0.round().max(sx0), vx1.round().min(sx1));
+                        let (vy0, vy1) = (vy0.round().max(sy0), vy1.round().min(sy1));
+                        if vx1 > vx0 && vy1 > vy0 {
+                            let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
+                            blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                        }
                     }
                 }
                 if !repeat_x {
@@ -2983,7 +2993,7 @@ fn rasterize_text_rotated(
     let local_rect = Rect { x: 0.0, y: 0.0, width: rect.width, height: rect.height };
     let Some((l, t, r, b)) = rasterize_text(
         &mut local, &local_rect, text, font_size, color, tab_size, None, font_weight,
-        font_style, font_features, font_family, font_provider, None,
+        font_style, font_features, font_family, font_provider, None, (0.0, 0.0),
     )?
     else {
         return Ok(None);
@@ -3129,7 +3139,7 @@ fn rasterize_text_mixed(
                 Rect { x: rect.x, y: rect.y + y_cursor, width: rect.width, height: rect.height };
             if let Some(b) = rasterize_text(
                 pixmap, &dest_rect, &seg_text, font_size, color, tab_size, clip, font_weight,
-                font_style, font_features, font_family, font_provider, None,
+                font_style, font_features, font_family, font_provider, None, (0.0, 0.0),
             )? {
                 mark_ink(b, &mut ink);
             }
@@ -3138,7 +3148,7 @@ fn rasterize_text_mixed(
                 .ok_or("Failed to create mixed-orientation text layer")?;
             if let Some((l, t, r, b)) = rasterize_text(
                 &mut local, &local_rect, &seg_text, font_size, color, tab_size, None, font_weight,
-                font_style, font_features, font_family, font_provider, None,
+                font_style, font_features, font_family, font_provider, None, (0.0, 0.0),
             )? {
                 let transform =
                     tiny_skia::Transform::from_row(0.0, 1.0, -1.0, 0.0, rect.x + rect.width, rect.y + y_cursor);
@@ -3203,6 +3213,7 @@ fn rasterize_text(
     font_family: &[String],
     font_provider: Option<&dyn FontProvider>,
     text_orientation: Option<TextOrientation>,
+    (letter_spacing, word_spacing): (f32, f32),
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
         return Ok(None);
@@ -3375,7 +3386,13 @@ fn rasterize_text(
                         }
                     }
                 }
-                cursor_x += sg.x_advance as f32 * advance_scale;
+                cursor_x += sg.x_advance as f32 * advance_scale + letter_spacing;
+                // CSS Text L3 §8.1 — `word-spacing` follows every word separator.
+                if word_spacing != 0.0
+                    && sub_text.get(sg.cluster as usize..).is_some_and(|t| t.starts_with(' '))
+                {
+                    cursor_x += word_spacing;
+                }
             }
         }
     }
@@ -3878,6 +3895,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -3894,6 +3913,37 @@ mod tests {
             }
         }
         assert!(inked, "DrawText produced no blue ink");
+    }
+
+    /// BUG-1339: `letter-spacing` / `word-spacing` раздвигают глифы в растре —
+    /// правая граница чернил сдвигается вправо на суммарный интервал.
+    #[test]
+    fn draw_text_letter_and_word_spacing_shift_ink() {
+        let ink_right = |text: &str, letter: f32, word: f32| {
+            let cmds = vec![DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
+                rect: rect(2.0, 2.0, 300.0, 40.0),
+                text: text.to_string(),
+                font_size: 20.0,
+                color: Color { r: 0, g: 0, b: 255, a: 255 },
+                font_family: Vec::new(),
+                font_weight: lumen_layout::FontWeight::default(),
+                font_style: lumen_layout::FontStyle::default(),
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                letter_spacing: crate::display_list::spacing_to_fixed(letter),
+                word_spacing: crate::display_list::spacing_to_fixed(word),
+                highlight_name: None,
+                text_orientation: None,
+            }];
+            let img = rasterize_cpu(320, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
+            (0..320).rev().find(|&x| (0..48).any(|y| { let (r, g, b, _) = px(&img, x, y); b > r && b > g })).unwrap()
+        };
+        let base = ink_right("A B", 0.0, 0.0);
+        assert!(ink_right("A B", 10.0, 0.0) >= base + 19, "letter-spacing: два интервала до последнего глифа");
+        assert!(ink_right("A B", 0.0, 30.0) >= base + 29, "word-spacing сдвигает слово после пробела");
     }
 
     /// Ph3 writing-mode vertical, Срез 1: `text_orientation: Sideways` rotates
@@ -3917,6 +3967,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: orientation,
             }]
@@ -3975,6 +4027,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: Some(TextOrientation::Sideways),
         }];
@@ -4023,6 +4077,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: orientation,
             }]
@@ -4061,6 +4117,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: orientation,
             }]
@@ -4099,6 +4157,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -4127,6 +4187,8 @@ mod tests {
                 font_features: Vec::new(),
                 font_palette: None,
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: None,
             },
@@ -4162,6 +4224,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -4212,6 +4276,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -4342,6 +4408,8 @@ mod tests {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }];
@@ -5370,6 +5438,33 @@ mod tests {
         assert!(r > 230 && g < 25 && b < 25 && a == 255, "image centre is red, got ({r},{g},{b},{a})");
     }
 
+    /// BUG-1337: `DrawImage` на дробной позиции привязан к целым пикселям —
+    /// без полупрозрачной кромки на верхней/нижней строке.
+    #[test]
+    fn draw_image_fractional_rect_is_pixel_snapped() {
+        let blue = Image {
+            width: 1,
+            height: 1,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: vec![0, 0, 255, 255],
+            icc_profile: None,
+        };
+        let images = vec![("b.png".to_string(), std::sync::Arc::new(blue))];
+        let cmds = vec![DisplayCommand::DrawImage {
+            rect: rect(0.0, 25.72, 20.0, 50.0),
+            src: "b.png".to_string(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(30, 100, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 5, 26), (0, 0, 255, 255), "first row is solid");
+        assert_eq!(px(&img, 5, 75), (0, 0, 255, 255), "last row is solid");
+        assert_eq!(px(&img, 5, 25), (255, 255, 255, 255), "row above stays white");
+        assert_eq!(px(&img, 5, 76), (255, 255, 255, 255), "row below stays white");
+    }
+
     /// BUG-221: a missing `src` still falls back to the grey placeholder.
     #[test]
     fn draw_image_missing_src_is_placeholder() {
@@ -5473,6 +5568,27 @@ mod tests {
         for (x, y) in [(3u32, 3u32), (60, 60)] {
             let (r, g, b, _) = px(&img, x, y);
             assert!(g > 150 && r < 60 && b < 60, "tile at ({x},{y}) green, got ({r},{g},{b})");
+        }
+    }
+
+    /// BUG-1343: tiles at a half-pixel offset must not leave AA seams.
+    #[test]
+    fn background_tiles_at_fractional_position_have_no_seams() {
+        let images = vec![("b.png".to_string(), std::sync::Arc::new(solid_2x2([0, 0, 255, 255])))];
+        let area = rect(0.0, 0.0, 64.0, 8.0);
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: area,
+            origin_rect: area,
+            src: "b.png".to_string(),
+            size: BackgroundSize::Length(lumen_layout::BgSizeAxis::Px(15.0), lumen_layout::BgSizeAxis::Px(8.0)),
+            position: ObjectPosition { x: lumen_layout::PositionComponent::Px(2.5), y: lumen_layout::PositionComponent::Px(0.0) },
+            repeat: BackgroundRepeat::RepeatX,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 8, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        for x in 4..60 {
+            let (r, g, b, _) = px(&img, x, 4);
+            assert!(b > 250 && r < 5 && g < 5, "seam at x={x}: ({r},{g},{b})");
         }
     }
 

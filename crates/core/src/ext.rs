@@ -90,6 +90,13 @@ pub trait StorageBackend: Send + Sync {
         origin: Option<&str>,
         top_level_site: Option<&str>,
     ) -> Result<Vec<String>>;
+
+    /// Удалить все записи, у которых `origin` или `top_level_site` (непустые)
+    /// удовлетворяют `pred`. Возвращает число удалённых записей. По умолчанию
+    /// ничего не удаляет (бэкенд без перечисления партиций).
+    fn clear_matching(&mut self, _pred: &dyn Fn(&str) -> bool) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 /// Поисковая система для omnibox.

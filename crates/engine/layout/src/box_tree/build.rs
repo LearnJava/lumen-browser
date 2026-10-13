@@ -157,7 +157,7 @@ fn build_ruby_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -219,6 +219,7 @@ fn build_ruby_group_box(
             );
         } else {
             if !pending.is_empty() {
+                super::segment_break::collapse_segment_breaks(&mut pending);
                 children.push(anon_inline_run(
                     owner_id, parent_style, std::mem::take(&mut pending), BoxRole::AnonymousInlineRun,
                 ));
@@ -230,6 +231,7 @@ fn build_ruby_group_box(
         }
     }
     if !pending.is_empty() {
+        super::segment_break::collapse_segment_breaks(&mut pending);
         children.push(anon_inline_run(owner_id, parent_style, pending, BoxRole::AnonymousInlineRun));
     }
     let mut bstyle = anon_style(parent_style);
@@ -243,7 +245,7 @@ fn build_ruby_group_box(
     LayoutBox {
         node: owner_id,
         rect: Rect::ZERO,
-        used_line_height: bstyle.font_size * bstyle.line_height,
+        used_padding: None, used_line_height: bstyle.font_size * bstyle.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -321,7 +323,7 @@ fn build_base_select_box(
     let trigger = LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: trigger_style.font_size * trigger_style.line_height,
+        used_padding: None, used_line_height: trigger_style.font_size * trigger_style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -342,7 +344,7 @@ fn build_base_select_box(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -724,11 +726,20 @@ fn build_box_inner(
                         )
                     }
                 };
+                // Это intrinsic-подсказка, а не авторский размер (grid `stretch` у replaced
+                // растягивает именно такую ось, BUG-1311); пропорция — из размера bitmap.
                 if style.width.is_none() {
-                    Arc::make_mut(&mut style).width = Some(Length::Px(cw as f32 + fill_extra_w));
+                    let st = Arc::make_mut(&mut style);
+                    st.width = Some(Length::Px(cw as f32 + fill_extra_w));
+                    st.width_is_intrinsic_hint = true;
                 }
                 if style.height.is_none() {
-                    Arc::make_mut(&mut style).height = Some(Length::Px(ch as f32 + fill_extra_h));
+                    let st = Arc::make_mut(&mut style);
+                    st.height = Some(Length::Px(ch as f32 + fill_extra_h));
+                    st.height_is_intrinsic_hint = true;
+                }
+                if style.aspect_ratio.is_none() && cw > 0 && ch > 0 {
+                    Arc::make_mut(&mut style).aspect_ratio = Some((cw as f32, ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
@@ -919,6 +930,20 @@ fn build_box_inner(
         }
     };
 
+    // CSS 2.1 §17: `margin` and `padding` do not apply to row groups and rows.
+    // BUG-1352
+    if matches!(kind, BoxKind::TableRow | BoxKind::TableRowGroup) {
+        let st = Arc::make_mut(&mut style);
+        st.margin_top = LengthOrAuto::ZERO;
+        st.margin_right = LengthOrAuto::ZERO;
+        st.margin_bottom = LengthOrAuto::ZERO;
+        st.margin_left = LengthOrAuto::ZERO;
+        st.padding_top = Length::Px(0.0);
+        st.padding_right = Length::Px(0.0);
+        st.padding_bottom = Length::Px(0.0);
+        st.padding_left = Length::Px(0.0);
+    }
+
     // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree.
     // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
     // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
@@ -929,7 +954,7 @@ fn build_box_inner(
         return LayoutBox {
             node: id,
             rect: Rect::ZERO,
-            used_line_height: style.font_size * style.line_height,
+            used_padding: None, used_line_height: style.font_size * style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -1220,6 +1245,7 @@ fn build_box_inner(
                 // CSS §4.1.2 white-space collapsing: whitespace between
                 // inline-level siblings collapses to a single space.
                 let mut had_ws = false;
+                let mut had_break = false;
                 // CSS Pseudo-elements L4 §5.1: first letter of this inline run hasn't been
                 // split out yet. Passed through all collect_inline_segments calls in this loop.
                 let mut need_first_letter = true;
@@ -1247,6 +1273,7 @@ fn build_box_inner(
                         // contains whitespace (a bare U+0001 is zero-advance in Edge).
                         NodeData::Text(s) if is_discardable_text(s, style.white_space) => {
                             had_ws |= s.chars().any(is_collapsible_whitespace);
+                            had_break |= s.contains('\n');
                             i += 1;
                             continue;
                         }
@@ -1268,8 +1295,10 @@ fn build_box_inner(
                             && !last.style.white_space.preserves_whitespace()
                             && !last.text.ends_with(|c: char| is_wrap_whitespace(c))
                         {
-                            last.text.push(' ');
+                            let gap = super::segment_break::folded_gap(&last.text, had_break);
+                            last.text.push(gap);
                         }
+                        had_break = false;
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, &mut pending_escapes, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
@@ -1294,7 +1323,7 @@ fn build_box_inner(
                             row_items.push(LayoutBox {
                                 node: id,
                                 rect: Rect::ZERO,
-                                used_line_height: gap_style.font_size * gap_style.line_height,
+                                used_padding: None, used_line_height: gap_style.font_size * gap_style.line_height,
                                 grid_baselines: None,
                                 fieldset_legend: None,
                                 subgrid_tracks: None,
@@ -1308,6 +1337,7 @@ fn build_box_inner(
                         }
                         row_items.push(build_box_or_reuse(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                         had_ws = false;
+                        had_break = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
                         && probe_display(doc, sheet, cid, &style, viewport, dark_mode, counters)
@@ -1443,7 +1473,11 @@ fn build_box_inner(
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
-    let (col_span, row_span) = if style.display == Display::TableCell {
+    let (col_span, row_span) = if matches!(style.display, Display::TableColumn | Display::TableColumnGroup) {
+        // HTML `span` на `<col>`/`<colgroup>`: число колонок таблицы, которое покрывает бокс.
+        let sp = doc.get(id).get_attr("span").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
+        (sp, 1)
+    } else if style.display == Display::TableCell {
         let cs = doc
             .get(id)
             .get_attr("colspan")
@@ -1477,7 +1511,7 @@ fn build_box_inner(
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend,
         subgrid_tracks: None,

@@ -35,7 +35,7 @@ use crate::style::{
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextAlignLast, TextDecorationLine, TextDecorationStyle, TextWrapMode, TextWrapStyle,
     Hyphens, LineBreak, OverflowWrap, WordBreak,
-    TextEmphasisStyle, TextOrientation, TextOverflow, TextShadow, TextTransform, TimingFunction,
+    TextEmphasisStyle, TextOrientation, TextShadow, TextTransform, TimingFunction,
     TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
@@ -1446,7 +1446,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
     // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
     m.insert("letter-spacing".into(), if style.letter_spacing == 0.0 { "normal".into() } else { px_str(style.letter_spacing) });
-    m.insert("word-spacing".into(), px_str(style.word_spacing));
+    m.insert("word-spacing".into(), px_str(style.word_spacing + style.word_spacing_pct * 0.5 * style.font_size));
     m.insert("text-align".into(), match style.text_align {
         TextAlign::Start => "start",
         TextAlign::End => "end",
@@ -1577,10 +1577,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextDecorationStyle::Wavy => "wavy",
     }.into());
     m.insert("text-decoration-color".into(), css_color_to_css(&style.text_decoration_color));
-    m.insert("text-overflow".into(), match style.text_overflow {
-        TextOverflow::Clip => "clip",
-        TextOverflow::Ellipsis => "ellipsis",
-    }.into());
+    m.insert("text-overflow".into(), if style.text_overflow == style.text_overflow_right {
+        style.text_overflow.to_css()
+    } else {
+        format!("{} {}", style.text_overflow.to_css(), style.text_overflow_right.to_css())
+    });
     // CSS Text Size Adjustment L1 §2 (BUG-513): both spellings read the same
     // underlying field, same convention as `-webkit-line-clamp`/`line-clamp`
     // above. `none` never round-trips — its computed value is `100%`.

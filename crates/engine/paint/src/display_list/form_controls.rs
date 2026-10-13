@@ -92,6 +92,8 @@ fn emit_input_value_text(
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
             Some(s.text_orientation)
@@ -244,6 +246,8 @@ fn emit_input_placeholder_text(
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
             Some(s.text_orientation)
@@ -649,6 +653,8 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                 Some(s.text_orientation)
@@ -684,6 +690,8 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                 Some(s.text_orientation)
@@ -791,6 +799,8 @@ pub(crate) fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         axes
                      },
                      tab_size: 0.0,
+                     letter_spacing: 0,
+                     word_spacing: 0,
                      highlight_name: None,
                      text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                          Some(s.text_orientation)

@@ -147,6 +147,14 @@ impl BfCache {
         self.order.clear();
     }
 
+    /// UX-PARTITION: выбросить записи страниц сайта `site`; возвращает их число.
+    pub fn clear_site(&mut self, site: &crate::partition::PartitionKey) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|url, _| !site.matches(url));
+        self.order.retain(|url| self.entries.contains_key(url));
+        before - self.entries.len()
+    }
+
     /// Check whether a frozen page exists for the given URL.
     pub fn has_frozen(&self, url: &str) -> bool {
         self.entries

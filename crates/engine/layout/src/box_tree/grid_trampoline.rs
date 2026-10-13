@@ -866,6 +866,17 @@ fn post_final_item(
         align
     };
     let mut stretch_h: Option<f32> = None;
+    let mut stretch_w: Option<f32> = None;
+    // Box Alignment L3 §6.2: у replaced-бокса с пропорцией `normal` ведёт себя как `start`;
+    // растягивает его только явный `stretch` — по auto-оси, вторая ось выводится из пропорции.
+    let replaced_ratio = matches!(item.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. })
+        && is.aspect_ratio.is_some();
+    let h_auto = is.height.is_none() || is.height_is_intrinsic_hint;
+    let w_auto = is.width.is_none() || is.width_is_intrinsic_hint;
+    let justify_stretch = matches!(
+        if matches!(is.justify_self, AlignValue::Auto) { s.justify_items } else { is.justify_self },
+        AlignValue::Stretch
+    );
     let (auto_t, auto_b) = (is.margin_top.is_auto(), is.margin_bottom.is_auto());
     let (auto_l, auto_r) = (is.margin_left.is_auto(), is.margin_right.is_auto());
     match align {
@@ -898,7 +909,12 @@ fn post_final_item(
             // CSS Grid §11.2: `stretch` only grows items whose used block size is
             // `auto`; an explicit `height` is preserved (the item is top-aligned in
             // the cell, leaving free space below — like Edge).
-            if is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
+            let explicit = matches!(align, AlignValue::Stretch);
+            if replaced_ratio && !explicit {
+                // `normal` у replaced с пропорцией = `start`: размер остаётся intrinsic.
+            } else if replaced_ratio {
+                (stretch_h, stretch_w) = stretch_replaced_block(is, &mut item.rect, cell_h - m_t - m_b, justify_stretch);
+            } else if h_auto && is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
                 let h = (cell_h - m_t - m_b).max(item.rect.height);
                 item.rect.height = h;
                 stretch_h = Some(h);
@@ -966,6 +982,12 @@ fn post_final_item(
         AlignValue::LastBaseline => {
             item.rect.x = cell_x + cell_w - item.rect.width - m_r;
         }
+        AlignValue::Stretch if replaced_ratio && w_auto => {
+            // Явный `justify-self: stretch` у replaced: ширина = область; высота по пропорции,
+            // если её не растянул `align-self`.
+            (stretch_h, stretch_w) = stretch_replaced_inline(is, &mut item.rect, cell_w - m_l - m_r, stretch_h, stretch_w);
+            item.rect.x = cell_x + m_l;
+        }
         AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
             item.rect.x = cell_x + m_l;
         }
@@ -989,7 +1011,7 @@ fn post_final_item(
     // against that stale height. Relay out with the final height as a used-
     // size override so it re-resolves, mirroring `flex_trampoline`'s
     // `relayout_column_flex` (`box_tree/flex_trampoline.rs`).
-    if let Some(h) = stretch_h {
+    if stretch_h.is_some() || stretch_w.is_some() {
         // If `item` is itself a subgrid, its column/row tracks resolve through
         // the thread-local `SubgridContextGuard` `step_final_item` set up for
         // the original placement pass (already dropped by the time this
@@ -1009,9 +1031,10 @@ fn post_final_item(
             frame.init.final_args(&frame.b.children[i], (cell_x, cell_y), cell_w, None, viewport, measurer);
         let item = &mut frame.b.children[i];
         lay_out_with_used_size(
-            item, cell_x, cell_y, offer_w, Some(h), measurer, viewport, pcb, hp, false,
+            item, cell_x, cell_y, offer_w, stretch_h, measurer, viewport, pcb, hp, false,
             UsedSizeOverride {
-                height: Some(h),
+                height: stretch_h,
+                width: stretch_w,
                 box_sizing: Some(BoxSizing::BorderBox),
                 ..Default::default()
             },
@@ -1019,6 +1042,51 @@ fn post_final_item(
     }
     let item = &mut frame.b.children[i];
     crate::incremental::translate_subtree(item, new_x - item.rect.x, new_y - item.rect.y);
+}
+
+/// Явный `align-self: stretch` у replaced с пропорцией (Box Alignment L3 §6.2): высота = область,
+/// ширина по пропорции, если `justify-self` её не растягивает. Возвращает (высота, ширина).
+#[inline(never)]
+fn stretch_replaced_block(is: &ComputedStyle, rect: &mut Rect, avail_h: f32, justify_stretch: bool) -> (Option<f32>, Option<f32>) {
+    let h = avail_h.max(0.0);
+    if !(is.height.is_none() || is.height_is_intrinsic_hint) || h <= 0.0 {
+        return (None, None);
+    }
+    let w_auto = is.width.is_none() || is.width_is_intrinsic_hint;
+    let ratio = is.aspect_ratio;
+    rect.height = h;
+    let mut stretch_w = None;
+    if w_auto && !justify_stretch && let Some((aw, ah)) = ratio && ah > 0.0 {
+        let w = h * aw / ah;
+        rect.width = w;
+        stretch_w = Some(w);
+    }
+    (Some(h), stretch_w)
+}
+
+/// Явный `justify-self: stretch` у replaced с пропорцией: ширина = область, высота по пропорции,
+/// если её не растянул `align-self`. Принимает и возвращает текущие (высота, ширина).
+#[inline(never)]
+fn stretch_replaced_inline(
+    is: &ComputedStyle,
+    rect: &mut Rect,
+    avail_w: f32,
+    stretch_h: Option<f32>,
+    stretch_w: Option<f32>,
+) -> (Option<f32>, Option<f32>) {
+    let w = avail_w.max(0.0);
+    if w <= 0.0 {
+        return (stretch_h, stretch_w);
+    }
+    rect.width = w;
+    let h_auto = is.height.is_none() || is.height_is_intrinsic_hint;
+    let mut stretch_h = stretch_h;
+    if stretch_h.is_none() && h_auto && let Some((aw, ah)) = is.aspect_ratio && aw > 0.0 {
+        let h = w * ah / aw;
+        rect.height = h;
+        stretch_h = Some(h);
+    }
+    (stretch_h, Some(w))
 }
 
 /// Runs once every item is placed — (moved in from `layout_dispatch.rs`'s

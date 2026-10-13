@@ -9,6 +9,7 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod avif_decode;
 mod decode_dispatch;
 mod icc_color_management;
 mod jpeg_decode;

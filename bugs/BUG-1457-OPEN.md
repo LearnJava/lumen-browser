@@ -30,3 +30,7 @@ WPT-RUN-14 срез 20: `css-pseudo/active-selection-011.html`, `highlight-paint
 ## Как проверить
 
 Таблица выше; `css/css-pseudo/highlight-cascade/highlight-pseudos-computed.html`, `css/css-pseudo/active-selection-011.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 27 (2026-10-09)
+
+`css/css-highlight-api` — 122 id, 32 зелёных (27,5 %), 90 не зелёных: 82 reftest `thick`, 1 `thin-only`, 2 `no-match-ref` (`highlight-image.html`, `highlight-text-dynamic.html`), 5 testharness с упавшими сабтестами (38 из 69). 74 `painting/*` + 16 в корне. Те же симптомы, что выше: `CSS.highlights.set('x', new Highlight(range))` и `::highlight(x){background-color:green;color:green}` на `--screenshot` дают 0 зелёных px; `getComputedStyle(p, "::highlight(x)").backgroundColor` — `rgba(0, 0, 0, 0)`. Сверх того в `css-highlight-api`: `idlharness.window.html` (9 из 33 — `Highlight`/`HighlightRegistry` перечислимы и записываемы, `maplike`/`setlike` не перечислимы), `highlight-pseudo-parsing.html` (`insertRule` в оторванный лист — BUG-1439), `highlight-pseudo-from-font-computed.html` (`text-underline-offset: from-font` — `auto`), `HighlightRegistry-highlightsFromPoint.html` (`contentWindow` — `null`, BUG-480). 14 reftest — `reftest-wait`.

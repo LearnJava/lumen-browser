@@ -116,7 +116,7 @@ impl FontContext {
             let fs = b.style.font_size.max(0.0);
             (
                 m.char_width_with_families('0', fs, &b.style.font_family),
-                m.x_height_px(fs),
+                m.x_height_px_with_families(fs, &b.style.font_family),
             )
         });
         // `lh`: `used_line_height` is the measurer-resolved value; fall back to
@@ -161,7 +161,7 @@ impl RootFontGuard {
                 Some(crate::style::push_root_font_metrics(Some((
                     lh,
                     m.char_width_with_families('0', fs, &src.style.font_family),
-                    m.x_height_px(fs),
+                    m.x_height_px_with_families(fs, &src.style.font_family),
                 ))))
             }
             _ => None,
@@ -541,6 +541,13 @@ pub(super) fn dispatch_box(
     let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. })
         || (matches!(b.kind, BoxKind::FormControl { .. })
             && !matches!(s.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
+    // BUG-1345: paint reads the replaced content box from `used_padding`; `em`/`rem`/`%` sides
+    // are unresolvable there.
+    b.used_padding = (is_replaced
+        && [&s.padding_top, &s.padding_right, &s.padding_bottom, &s.padding_left]
+            .iter()
+            .any(|l| !matches!(l, Length::Px(_))))
+    .then_some([padding_top, padding_right, padding_bottom, padding_left]);
     // CSS Basic UI L4 §4.4 — field-sizing: content.
     // Pre-compute intrinsic (padding-box width, padding-box height) from text content.
     // Only applies to text-entry FormControls when UA did not supply explicit dimensions.
@@ -881,7 +888,12 @@ pub(super) fn dispatch_box(
             } else {
                 content_width
             };
-            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport) + first_line_inset;
+            let indent_len = s.text_indent.resolve_or_zero(em, cb, viewport);
+            let text_indent_px = indent_len + first_line_inset;
+            let line_indent = super::inline_wrap::LineIndent::new(
+                indent_len, s.text_extra.indent_hanging, s.text_extra.indent_each_line, first_line_inset,
+                s.text_extra.indent_continuation,
+            );
             // UAX #9 P2–I2 once per paragraph, before any wrapping trial: the
             // result splits segments at embedding-level boundaries, and every
             // re-wrap (::first-line pass B, text-wrap: balance/pretty) must see
@@ -948,8 +960,8 @@ pub(super) fn dispatch_box(
                         fl_seg
                     })
                     .collect();
-                let mut lines_a = wrap_inline_run(
-                    &fl_segments, wrap_width, fls.font_size, text_indent_px, viewport,
+                let mut lines_a = super::inline_wrap::wrap_inline_run_indented(
+                    &fl_segments, wrap_width, fls.font_size, line_indent, viewport,
                     m, Hyphens::None, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                 );
                 if lines_a.len() <= 1 {
@@ -987,7 +999,7 @@ pub(super) fn dispatch_box(
                     all
                 }
             } else {
-                let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
+                let raw_lines = super::inline_wrap::wrap_inline_run_indented(segments, wrap_width, s.font_size, line_indent, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
                 // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
                 // wrapping is active (wrap_width is finite) and text actually wraps.
                 let clamp_balance = line_clamp_flow::balance_limit(&s, raw_lines.len());
@@ -1074,12 +1086,25 @@ pub(super) fn dispatch_box(
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
             // container flow (`line_clamp_flow`), not run by run; here it only takes priority
             // over text-overflow:ellipsis (both cannot apply simultaneously).
-            if !s.line_clamp.is_some_and(|n| n > 0)
-                && s.text_overflow == TextOverflow::Ellipsis
-                && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
-            {
-                // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
-                apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
+            // CSS UI L4 §6.1: text-overflow требует overflow != visible; метка — значение
+            // правой стороны строки (левая сторона не рисуется: нет прокрутки к её краю).
+            if s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible {
+                let clamped = s.line_clamp.is_some_and(|n| n > 0);
+                match &s.text_overflow_right {
+                    TextOverflow::Ellipsis if !clamped => {
+                        apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
+                    }
+                    // Внутри line-clamp метка нужна строкам до отсечки; на последней видимой
+                    // строке (n-й) стоит «…» отсечки — её не трогаем.
+                    TextOverflow::Str(marker) => {
+                        let upto = match s.line_clamp {
+                            Some(n) if n > 0 && lines.len() > n as usize => n as usize - 1,
+                            _ => lines.len(),
+                        };
+                        apply_text_overflow_string(&mut lines[..upto], content_width, marker, &b.style, line_h, m);
+                    }
+                    _ => {}
+                }
             }
         } else {
             *lines = one_line_fallback(segments);
@@ -1248,6 +1273,10 @@ pub(super) fn dispatch_box(
                 // box's own border-box height is unchanged, only the content area seen
                 // by children shrinks.
                 Some((content_h - scrollbar_gutter_block(&s)).max(0.0))
+            } else if b.node.index() == 0 && s.height.is_none() {
+                // CSS 2.1 §10.5: the document root's child (`<html>`) resolves a
+                // percentage `height` against the initial containing block (viewport).
+                available_height
             } else {
                 None
             };
@@ -1412,6 +1441,25 @@ pub(super) fn dispatch_box(
             // line — the original fixed-size, index-addressed `b.children`
             // cannot grow while this loop walks it.
             let orig_children = std::mem::take(&mut b.children);
+            // CSS Text L3 §7.1: `text-align` shifts the whole line box, atomic
+            // inlines included. When the row holds an atomic inline, its text
+            // runs are laid out start-aligned and the row is shifted as a unit
+            // in phase 2 (`align_lines` alone sees only the run's own width).
+            let row_align = match (b.style.text_align, b.style.direction == Direction::Rtl) {
+                (TextAlign::Center, _) => Some(TextAlign::Center),
+                (TextAlign::Right, _) | (TextAlign::End, false) | (TextAlign::Start, true) => {
+                    Some(TextAlign::Right)
+                }
+                _ => None,
+            }
+            .filter(|_| {
+                orig_children.iter().any(|c| {
+                    !matches!(
+                        c.kind,
+                        BoxKind::InlineRun { .. } | BoxKind::InlineSpace | BoxKind::Skip
+                    )
+                })
+            });
             let mut children: Vec<LayoutBox> = Vec::with_capacity(orig_children.len());
             let mut metrics: Vec<(f32, f32)> = Vec::with_capacity(orig_children.len());
             // rows: (row_y, above, below, Vec<child_index>)
@@ -1479,6 +1527,11 @@ pub(super) fn dispatch_box(
                     continue;
                 }
                 let is_run = matches!(child.kind, BoxKind::InlineRun { .. });
+                if is_run && row_align.is_some() {
+                    let st = Arc::make_mut(&mut child.style);
+                    st.text_align = TextAlign::Left;
+                    st.text_align_last = TextAlignLast::Auto;
+                }
                 // Схлопнутый пробел в начале текста существует только пока текст
                 // не первый на строке: `wrap_inline_run` срезает его как пробел в
                 // начале строки, поэтому зазор после atomic inline даёт этот сдвиг.
@@ -1579,6 +1632,7 @@ pub(super) fn dispatch_box(
                         let cont_box = LayoutBox {
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
+                            used_padding: None,
                             used_line_height,
                             grid_baselines: None,
                             fieldset_legend: None,
@@ -1714,6 +1768,35 @@ pub(super) fn dispatch_box(
                     }
                 }
             }
+            if let Some(align) = row_align {
+                for (_, _, _, child_idxs) in &rows {
+                    let mut left = f32::MAX;
+                    let mut right = f32::MIN;
+                    for &idx in child_idxs {
+                        let c = &b.children[idx];
+                        let c_em = c.style.font_size;
+                        let ml = c.style.margin_left.resolve_or_zero(c_em, content_width, viewport);
+                        let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+                        let adv = if matches!(c.kind, BoxKind::InlineRun { .. }) {
+                            inline_run_advance(c, measurer)
+                        } else {
+                            c.rect.width
+                        };
+                        left = left.min(c.rect.x - ml);
+                        right = right.max(c.rect.x + adv + mr);
+                    }
+                    if left > right {
+                        continue;
+                    }
+                    let free = (content_width - (right - left)).max(0.0);
+                    let dx = if align == TextAlign::Center { free / 2.0 } else { free };
+                    if dx > 0.0 {
+                        for &idx in child_idxs {
+                            shift_tree(&mut b.children[idx], dx, 0.0);
+                        }
+                    }
+                }
+            }
             for (idx, dy) in adjustments {
                 // Round dy to integer CSS pixels so vertical-aligned children land on
                 // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
@@ -1790,13 +1873,13 @@ pub(super) fn dispatch_box(
             // When no explicit CSS width is given, tables use shrink-to-fit: the table box is
             // only as wide as its columns require (total column widths + border-spacing gaps).
             // This differs from block elements which fill the available inline size.
-            if s.width.is_none() {
-                let intrinsic = table_intrinsic_content_width(b, viewport);
-                if intrinsic > 0.0 && intrinsic < content_width {
-                    b.rect.width = (intrinsic + padding_left + padding_right
-                        + s.border_left_width + s.border_right_width).max(0.0);
-                    content_width = intrinsic;
-                }
+            if s.width.is_none()
+                && let Some(intrinsic) = table_intrinsic_content_width(b, viewport, measurer)
+                && intrinsic < content_width
+            {
+                b.rect.width = (intrinsic + padding_left + padding_right
+                    + s.border_left_width + s.border_right_width).max(0.0);
+                content_width = intrinsic;
             }
             // LAYOUT-2 срез 6: column-width/collapse-geometry precompute (native —
             // see `build_table_init`'s doc comment) runs here, but the per-row/

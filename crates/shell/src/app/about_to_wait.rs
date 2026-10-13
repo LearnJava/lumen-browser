@@ -16,6 +16,10 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &MainHandle<'_>) {
+        self.flush_ime_cancel();
+        // UX-DIALOGS: первым делом — JS-поток может стоять в `alert`, и тогда
+        // остальные чтения движка вернутся пустыми (`js_blocked`).
+        self.poll_page_dialog();
         // FRAME-8: спавнит фоновые потоки для того, что скан прошлого тика
         // поставил в очередь — до какой-либо накачки JS в ЭТОМ тике, ровно
         // на дистанции в один полный проход event loop от места, где скан
@@ -511,6 +515,7 @@ impl Lumen {
         // the (inherently async, no synchronous geometry consumer) zoom relayout
         // off the UI thread; otherwise fall back to the synchronous path. Either
         // path clears the pending state and (on apply) resets the preview to 1:1.
+        self.sync_site_zoom();
         if let Some(deadline) = self.pending_zoom_relayout {
             if std::time::Instant::now() >= deadline {
                 // Consume the debounce regardless of path so it fires once per
@@ -1293,6 +1298,13 @@ impl Lumen {
             self.pending_waits = still_pending;
         }
 
+        // UX-LOADING: спиннер вкладки и кнопка «Остановить» следуют за `nav_start`.
+        if self.chrome_loading_shown != self.nav_start.is_some() {
+            self.chrome_loading_shown = self.nav_start.is_some();
+            self.relayout_chrome_host();
+            self.request_redraw();
+        }
+
         // BUG-1145: ответы движкового потока на eval и сроки ожидания. Приход
         // ответа будит цикл сам (`AutomationWake`), а срок — нет, поэтому
         // ближайший вкладываем в уже выставленный `ControlFlow`.
@@ -1370,6 +1382,25 @@ impl Lumen {
         self.downloads.poll();
         self.poll_update_ui();
 
+        self.poll_page_translation();
+
+        // UX-IMPORT: drain the background profile-import thread, if running.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Some(summary) = self.import_manager.poll(
+            &self.bookmarks,
+            &self.history_store,
+            password_store::global(),
+            now_unix,
+        ) {
+            eprintln!("[import] готово: {summary}");
+            notification::show_os_notification("Импорт из браузера", &summary);
+            self.refresh_bookmarks();
+            self.request_redraw();
+        }
+
         // _lumen_network_download(url, filename): start downloads requested by
         // page scripts / <a download>. Relative URLs are resolved against the
         // active document URL.
@@ -1398,6 +1429,9 @@ impl Lumen {
                     self.network_panel
                         .record_js_request(&r.method, &r.url, r.status, r.duration_ms);
                 }
+                if self.network_panel.visible || self.privacy.visible {
+                    self.relayout_chrome_host();
+                }
                 self.request_redraw();
             }
         }
@@ -1418,7 +1452,31 @@ impl Lumen {
         // `query`; без флага — байт-идентично прежнему `js.take_notification_requests()`).
         for (title, body) in self.drain_query_js(|j| j.take_notification_requests()).unwrap_or_default()
         {
+            // UX-PARTITION-8: след уведомления в профиле, чтобы «Очистить»
+            // данные сайта его находило.
+            if let Some(origin) = self.source.origin_str() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let _ = self.notifications_store.show(&origin, &title, &body, None, "", None, now);
+            }
             notification::show_os_notification(&title, &body);
+        }
+
+        // UX-PERMISSIONS-2: `Notification.requestPermission()` asks for a decision.
+        // A saved answer settles the page at once, otherwise the popover opens
+        // and the click on its allow/deny button settles it (chrome_ui).
+        for name in self.drain_query_js(|j| j.take_permission_requests()).unwrap_or_default() {
+            let Some(kind) = panels::permission_panel::PermissionKind::from_page_name(&name) else {
+                continue;
+            };
+            match self.permission.request(kind) {
+                Some(state) => self.settle_page_permission(kind, state),
+                None => {
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                }
+            }
         }
 
         // window.open() popup requests: each entry opens a new tab and navigates it
@@ -1832,6 +1890,7 @@ impl Lumen {
                 }
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
+                    self.relayout_chrome_host();
                     self.request_redraw();
                 }
             }
@@ -1972,6 +2031,9 @@ impl Lumen {
         // redrawing while the ring animates (only while active and running).
         if self.focus.active {
             self.focus.tick(now_ms);
+            if self.focus.label_changed() {
+                self.relayout_chrome_host();
+            }
             if self.focus.timer.running {
                 self.request_redraw();
             }

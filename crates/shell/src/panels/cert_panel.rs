@@ -49,6 +49,9 @@ pub struct PanelCertData {
     pub revocation_status: String,
     /// Certificate Transparency status (A4) — e.g. `"2 SCTs (sufficient)"`.
     pub ct_status: String,
+    /// Name of the root installed on this computer that anchors the chain
+    /// (COMPAT-TRUST-OSROOTS); empty for a chain to a built-in root.
+    pub local_root: String,
     /// A6: human-readable reason the connection was rejected, when the page
     /// currently shown was reached only via "Proceed anyway" on the cert
     /// interstitial (`cert_interstitial.rs`). `None` for an ordinary,
@@ -88,6 +91,7 @@ impl From<lumen_network::CertInfo> for PanelCertData {
             tls_version: info.tls_version,
             revocation_status: info.revocation_status,
             ct_status: info.ct_status,
+            local_root: info.local_root,
             error: None,
         }
     }
@@ -185,7 +189,7 @@ fn build_rows(cert: &PanelCertData) -> Vec<(&'static str, String)> {
         cert.ct_status.clone()
     };
 
-    vec![
+    let mut rows = vec![
         ("Subject CN",   cert.subject_cn.clone()),
         ("Subject Org",  if cert.subject_org.is_empty() { String::from("\u{2014}") } else { cert.subject_org.clone() }),
         ("Issuer CN",    cert.issuer_cn.clone()),
@@ -197,7 +201,14 @@ fn build_rows(cert: &PanelCertData) -> Vec<(&'static str, String)> {
         ("SHA-256",      fingerprint),
         ("Revocation",   revocation),
         ("CT Status",    ct_status),
-    ]
+    ];
+    if !cert.local_root.is_empty() {
+        rows.push((
+            "Trust Root",
+            format!("Проверено корнем, установленным на этом компьютере: {}", cert.local_root),
+        ));
+    }
+    rows
 }
 
 /// Maximum scroll offset in CSS px for the given cert data.
@@ -229,6 +240,7 @@ mod tests {
             tls_version: String::from("TLS 1.3"),
             revocation_status: String::from("good"),
             ct_status: String::from("2 SCTs (sufficient)"),
+            local_root: String::new(),
             error: None,
         }
     }
@@ -316,6 +328,17 @@ mod tests {
         let cert = sample_cert();
         let rows = build_rows(&cert);
         assert_eq!(rows.len(), 11);
+    }
+
+    #[test]
+    fn local_root_adds_a_trust_row() {
+        let mut cert = sample_cert();
+        cert.local_root = String::from("Kaspersky Anti-Virus Personal Root Certificate");
+        let rows = build_rows(&cert);
+        assert_eq!(rows.len(), 12);
+        let (label, value) = rows.last().expect("row");
+        assert_eq!(*label, "Trust Root");
+        assert!(value.starts_with("Проверено корнем, установленным на этом компьютере: Kaspersky"));
     }
 
     #[test]

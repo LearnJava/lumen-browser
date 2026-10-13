@@ -433,8 +433,12 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
             overflow_str(s.overflow_y)
         );
     }
-    if s.text_overflow == TextOverflow::Ellipsis {
-        let _ = write!(out, " text-overflow=ellipsis");
+    match &s.text_overflow_right {
+        TextOverflow::Clip => {}
+        TextOverflow::Ellipsis => out.push_str(" text-overflow=ellipsis"),
+        TextOverflow::Str(t) => {
+            let _ = write!(out, " text-overflow={t:?}");
+        }
     }
     if s.cursor != Cursor::Auto {
         let _ = write!(out, " cursor={:?}", s.cursor);
@@ -570,7 +574,7 @@ mod tests {
 
     #[test]
     fn default_style_fields_are_omitted() {
-        let root = lay("<p>x</p>", "");
+        let root = lay("<p>x</p>", "p { margin: 0 }");
         let s = serialize_layout_tree(&root);
         // color, fs, lh, margin, padding не должны попасть — все дефолтные.
         assert!(!s.contains("color="), "{s}");

@@ -38,7 +38,7 @@ fn deep_chain(depth: usize) -> LayoutBox {
     let mut node = LayoutBox {
         node: NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, LEAF_SIZE, LEAF_SIZE),
-        used_line_height: leaf_line_height,
+        used_padding: None, used_line_height: leaf_line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -57,7 +57,7 @@ fn deep_chain(depth: usize) -> LayoutBox {
         node = LayoutBox {
             node: NodeId::from_index(i + 1),
             rect: Rect::new(0.0, 0.0, LEAF_SIZE, LEAF_SIZE),
-            used_line_height: leaf_line_height,
+            used_padding: None, used_line_height: leaf_line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

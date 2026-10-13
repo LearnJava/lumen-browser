@@ -41,7 +41,8 @@ impl Lumen {
             || self.history_panel.visible
             || self.shortcuts_panel.visible
             || self.cert_panel.visible
-            || self.vertical_tabs.visible;
+            || self.vertical_tabs.visible
+            || self.tree_tabs.visible;
         let enabled = !wheel_route_disabled()
             && !any_panel
             && self.split_view.is_none()

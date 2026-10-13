@@ -32,6 +32,9 @@ pub fn break_opportunities(text: &str, strictness: LineBreak) -> Vec<usize> {
         return anywhere_opportunities(text);
     }
     let mut out = Vec::new();
+    if text.chars().any(is_complex_script) {
+        out = complex_script_opportunities(text);
+    }
     let mut prev: Option<(char, Class)> = None;
     for (off, ch) in text.char_indices() {
         let cls = classify(ch);
@@ -41,6 +44,74 @@ pub fn break_opportunities(text: &str, strictness: LineBreak) -> Vec<usize> {
             out.push(off);
         }
         prev = Some((ch, cls));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Dictionary segmentation of the UAX #14 class SA scripts (Thai, Lao, Khmer,
+/// Myanmar), which write words without spaces. Trait-anchor (ADR-027): the
+/// provisional implementation is `icu_segmenter`; layout only sees this trait.
+pub trait ComplexScriptSegmenter: Send + Sync {
+    /// Byte offsets strictly inside `run` (a maximal SA-script run) where a
+    /// line may break.
+    fn opportunities(&self, run: &str) -> Vec<usize>;
+}
+
+/// `icu_segmenter` with compiled LSTM/dictionary data.
+struct IcuSegmenter(icu_segmenter::LineSegmenterBorrowed<'static>);
+
+impl ComplexScriptSegmenter for IcuSegmenter {
+    fn opportunities(&self, run: &str) -> Vec<usize> {
+        self.0
+            .segment_str(run)
+            .filter(|&p| p > 0 && p < run.len())
+            .collect()
+    }
+}
+
+fn complex_segmenter() -> &'static dyn ComplexScriptSegmenter {
+    static SEG: std::sync::OnceLock<IcuSegmenter> = std::sync::OnceLock::new();
+    SEG.get_or_init(|| {
+        IcuSegmenter(icu_segmenter::LineSegmenter::new_auto(
+            icu_segmenter::options::LineBreakOptions::default(),
+        ))
+    })
+}
+
+/// Thai, Lao, Myanmar, Khmer (incl. Khmer symbols) and their combining marks.
+fn is_complex_script(ch: char) -> bool {
+    matches!(ch,
+        '\u{0E01}'..='\u{0E5B}' | '\u{0E81}'..='\u{0EDF}'
+        | '\u{1000}'..='\u{109F}' | '\u{1780}'..='\u{17FF}' | '\u{19E0}'..='\u{19FF}'
+        | '\u{A9E0}'..='\u{A9FF}' | '\u{AA60}'..='\u{AA7F}')
+}
+
+/// Opportunities inside each maximal SA-script run of `text`, in `text` offsets.
+fn complex_script_opportunities(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let flush = |start: usize, end: usize, out: &mut Vec<usize>| {
+        out.extend(
+            complex_segmenter()
+                .opportunities(&text[start..end])
+                .into_iter()
+                .map(|o| o + start),
+        );
+    };
+    let mut run_start: Option<usize> = None;
+    for (off, ch) in text.char_indices() {
+        match (is_complex_script(ch), run_start) {
+            (true, None) => run_start = Some(off),
+            (false, Some(s)) => {
+                flush(s, off, &mut out);
+                run_start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = run_start {
+        flush(s, text.len(), &mut out);
     }
     out
 }
@@ -240,6 +311,20 @@ mod tests {
         assert!(break_opportunities("longwordwithout", LineBreak::Strict).is_empty());
         // Latin punctuation must not open a break either.
         assert!(break_opportunities("f(x)=y!", LineBreak::Normal).is_empty());
+    }
+
+    #[test]
+    fn thai_run_breaks_at_dictionary_words() {
+        let text = "สวัสดีครับผมชื่อสมชายยินดีที่ได้รู้จัก";
+        let opps = break_opportunities(text, LineBreak::Auto);
+        assert!(opps.len() >= 3, "{opps:?}");
+        assert!(opps.iter().all(|&o| text.is_char_boundary(o)));
+    }
+
+    #[test]
+    fn khmer_run_breaks() {
+        let text = "ខ្ញុំចូលចិត្តរៀនភាសាខ្មែរណាស់";
+        assert!(!break_opportunities(text, LineBreak::Auto).is_empty());
     }
 
     #[test]

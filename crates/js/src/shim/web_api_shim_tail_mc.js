@@ -102,8 +102,18 @@ Object.defineProperties(window, {
 // runs unless a page calls it. Fixed 1 is spec-conformant here: this engine's
 // rendering pipeline is not HiDPI-aware, so there is no real per-monitor
 // ratio to report yet.
+// UX-ZOOM: browser page zoom scales the ratio (CSSOM View §4: "the number of
+// device pixels per CSS pixel", which a page zoom changes), so it follows
+// `_lumen_get_zoom_factor` — 1 at 100%, 1.5 at 150%.
 if (typeof globalThis.devicePixelRatio === 'undefined') {
-    globalThis.devicePixelRatio = 1;
+    Object.defineProperty(globalThis, 'devicePixelRatio', {
+        get: function() { return _lumen_get_zoom_factor(); },
+        set: function(v) {
+            Object.defineProperty(globalThis, 'devicePixelRatio',
+                { value: v, writable: true, configurable: true, enumerable: true });
+        },
+        configurable: true, enumerable: true
+    });
 }
 // BUG-479: both now return a Promise (CSSOM View's "Scrolling with a
 // promise" revision) settled through `_lumen_scroll_settle_promise`

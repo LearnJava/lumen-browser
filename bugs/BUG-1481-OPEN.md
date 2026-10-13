@@ -30,3 +30,7 @@ WPT-RUN-14 срез 21: `css-position/position-absolute-center-001.html`, `-002.
 ## Как проверить
 
 Таблица выше; `css/css-position/position-absolute-center-001.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
+
+`css/css-align/abspos/*` (67 id, 856 из 1 086 сабтестов): `{align,justify}-self-*-{htb,vlr,vrl}-*`, `*-default-overflow-*`, `safe-*-self-*`, `stretch-intrinsic-size-*`, `table-*-self-stretch`. Тот же код нужен для статической позиции ([BUG-1528](BUG-1528-OPEN.md)) и размера по `justify-self` без `width` ([BUG-1526](BUG-1526-OPEN.md)).

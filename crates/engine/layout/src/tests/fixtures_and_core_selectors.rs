@@ -739,14 +739,14 @@ use super::*;
 
     #[test]
     fn stacked_blocks_height_sums() {
-        let root = lay("<p>a</p><p>b</p><p>c</p>", "");
+        let root = lay("<p>a</p><p>b</p><p>c</p>", "p { margin: 0 }");
         // 3 строки по 19.2
         assert!((root.rect.height - 57.6).abs() < 0.1);
     }
 
     #[test]
     fn whitespace_only_text_skipped() {
-        let root = lay("<p>a</p>\n  \n<p>b</p>", "");
+        let root = lay("<p>a</p>\n  \n<p>b</p>", "p { margin: 0 }");
         // Пробельные узлы между <p> не должны давать вертикального пространства.
         assert!((root.rect.height - 38.4).abs() < 0.1);
     }

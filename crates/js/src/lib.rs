@@ -25,6 +25,7 @@ pub mod download_bindings;
 pub mod network_log_bindings;
 pub mod pip_bindings;
 pub mod clipboard;
+pub mod dialog;
 pub mod contacts;
 pub mod cookie_banner;
 pub mod cookie_store;
@@ -191,7 +192,7 @@ pub use dom::{
 #[cfg(feature = "v8-backend")]
 pub use v8_runtime::{attr_narrowing_enabled, child_list_narrowing_enabled, fresh_node_roots_enabled, DomChanges, DomTouched};
 pub use view_transitions::ViewTransitionEvent;
-pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
+pub use navigator_bindings::{NavigatorProfile, current_identity, set_identity, set_navigator_profile};
 pub use surface_api::{global_privacy_control_enabled, set_global_privacy_control};
 pub use lumen_core::WebStorage;
 

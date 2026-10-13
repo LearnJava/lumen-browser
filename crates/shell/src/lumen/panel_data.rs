@@ -74,6 +74,64 @@ impl Lumen {
         }
     }
 
+    /// UX-PARTITION: удалить все данные `site` из хранилищ профиля и
+    /// из памяти вкладок (localStorage/sessionStorage, решения разрешений).
+    pub(crate) fn clear_site_data(&mut self, site: &lumen_storage::PartitionKey) {
+        self.ls_storage.retain(|origin, _| !site.matches(origin));
+        self.ss_storage.retain(|origin, _| !site.matches(origin));
+        self.permission.forget_site(site);
+        if let Ok(mut workers) = self.sw_worker_store.lock() {
+            workers.retain(|(origin, _scope), _| !site.matches(origin));
+        }
+        let bfcache_removed = self.bfcache.clear_site(site)
+            + self.bg_tabs.values_mut().map(|t| t.bfcache.clear_site(site)).sum::<usize>();
+        let sw_snapshots = self
+            .sw_backend
+            .lock()
+            .map_err(|e| e.to_string())
+            .and_then(|mut b| b.clear_matching(&|o| site.matches(o)).map_err(|e| e.to_string()));
+        let jar = self.active_cookie_jar();
+        let targets = lumen_storage::SiteDataTargets {
+            cookies: Some(&*jar),
+            permissions: Some(&*self.permissions_disk_store),
+            cache_storage: Some(&*self.cache_store),
+            service_workers: Some(&*self.sw_registry),
+            notifications: Some(&*self.notifications_store),
+            site_engagement: Some(&*self.site_engagement),
+            csp_policies: Some(&*self.csp_policies),
+            referrer_policies: Some(&*self.referrer_policies),
+            permissions_policies: Some(&*self.permissions_policies),
+            web_manifests: Some(&*self.web_manifests),
+            autofill: crate::autofill_store::global(),
+            idb_dir: self.idb_dir.as_deref(),
+            ..lumen_storage::SiteDataTargets::default()
+        };
+        let mut report = lumen_storage::clear_site_data(site, &targets);
+        report.removed.push(("http_cache", crate::config::clear_http_cache_site(site)));
+        report.removed.push(("bfcache", bfcache_removed));
+        match sw_snapshots {
+            Ok(n) => report.removed.push(("sw_snapshots", n)),
+            Err(e) => report.failed.push(("sw_snapshots", e)),
+        }
+        match self.push_store.clear_site(site) {
+            Ok(n) => report.removed.push(("push_subscriptions", n)),
+            Err(e) => report.failed.push(("push_subscriptions", e.to_string())),
+        }
+        match lumen_storage::clear_hsts_shared_site(site) {
+            Ok(n) => report.removed.push(("hsts", n)),
+            Err(e) => report.failed.push(("hsts", e.to_string())),
+        }
+        eprintln!(
+            "clear_site_data {}: удалено {} записей, ошибок {}",
+            site.site(),
+            report.total(),
+            report.failed.len()
+        );
+        for (store, err) in &report.failed {
+            eprintln!("clear_site_data {store}: {err}");
+        }
+    }
+
     pub(crate) fn refresh_read_later(&mut self) {
         let mut entries = self
             .read_later_store
@@ -85,6 +143,9 @@ impl Lumen {
                 .unwrap_or_default(),
         );
         self.read_later_panel.refresh(entries);
+        if self.read_later_panel.visible {
+            self.relayout_chrome_host();
+        }
     }
 
     pub(crate) fn refresh_bookmarks(&mut self) {
@@ -149,6 +210,17 @@ impl Lumen {
     /// [`Self::ai_backend`]: with the default [`lumen_core::NullAiBackend`]
     /// `summarise`/`embed` return empty, so `set_semantic` is simply skipped —
     /// no `feature = "ai"` gate needed here.
+    /// UX-IMPORT: запустить фоновый перенос закладок/истории/паролей из
+    /// найденных профилей Chrome/Edge/Firefox (`import_manager.rs`) и
+    /// открыть менеджер закладок сразу — с тем, что уже есть; импортированное
+    /// появится по завершении (`Self::import_manager.poll`, вызывается из
+    /// `about_to_wait`, которое же показывает итог OS-уведомлением).
+    pub(crate) fn import_browser_data(&mut self) {
+        self.import_manager.start();
+        self.bookmark_panel.visible = true;
+        self.refresh_bookmarks();
+    }
+
     pub(crate) fn bookmark_current_page(&mut self) {
         let url = self.current_display_url().to_owned();
         if url.is_empty() {

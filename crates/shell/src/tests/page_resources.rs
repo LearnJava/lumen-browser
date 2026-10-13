@@ -1495,10 +1495,10 @@ fn keybinding_ctrl_shift_r_is_read_later() {
 }
 
 #[test]
-fn keybinding_escape_exit() {
+fn keybinding_escape_stop_loading() {
     assert_eq!(
         keybinding_for(KeyCode::Escape, ModifiersState::empty()),
-        Some(KeyCommand::Exit),
+        Some(KeyCommand::StopLoading),
     );
 }
 
@@ -1507,6 +1507,14 @@ fn keybinding_ctrl_w_close_tab() {
     assert_eq!(
         keybinding_for(KeyCode::KeyW, ModifiersState::CONTROL),
         Some(KeyCommand::CloseTab),
+    );
+}
+
+#[test]
+fn keybinding_ctrl_shift_t_reopens_closed_tab() {
+    assert_eq!(
+        keybinding_for(KeyCode::KeyT, ModifiersState::CONTROL | ModifiersState::SHIFT),
+        Some(KeyCommand::ReopenClosedTab),
     );
 }
 

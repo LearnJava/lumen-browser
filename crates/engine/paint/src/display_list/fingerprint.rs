@@ -141,6 +141,8 @@ pub(crate) fn hash_command_into(
             font_features,
             font_palette,
             tab_size,
+            letter_spacing,
+            word_spacing,
             highlight_name,
             text_orientation,
         } => {
@@ -175,6 +177,8 @@ pub(crate) fn hash_command_into(
                 let _ = write!(hf, "{font_palette:?}");
             }
             h_f32(h, *tab_size);
+            h.write_i16(*letter_spacing);
+            h.write_i16(*word_spacing);
             match highlight_name {
                 Some(s) => {
                     h.write_u8(1);

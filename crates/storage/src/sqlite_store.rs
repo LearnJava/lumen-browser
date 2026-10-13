@@ -174,6 +174,34 @@ impl StorageBackend for SqliteStorage {
         }
         Ok(keys)
     }
+
+    fn clear_matching(&mut self, pred: &dyn Fn(&str) -> bool) -> Result<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("sqlite mutex poisoned".into()))?;
+        let pairs: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT DISTINCT origin, top_level_site FROM kv")
+                .map_err(|e| Error::Storage(format!("sqlite prepare clear_matching: {e}")))?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| Error::Storage(format!("sqlite query clear_matching: {e}")))?;
+            rows.collect::<std::result::Result<_, _>>()
+                .map_err(|e| Error::Storage(format!("sqlite row clear_matching: {e}")))?
+        };
+        let hit = |s: &str| !s.is_empty() && pred(s);
+        let mut removed = 0;
+        for (origin, tls) in pairs.iter().filter(|(o, t)| hit(o) || hit(t)) {
+            removed += conn
+                .execute(
+                    "DELETE FROM kv WHERE origin = ?1 AND top_level_site = ?2",
+                    params![origin, tls],
+                )
+                .map_err(|e| Error::Storage(format!("sqlite delete clear_matching: {e}")))?;
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +290,20 @@ mod tests {
         let mut s = make();
         s.put(None, None, "k", b"v").unwrap();
         assert_eq!(s.get(Some(""), Some(""), "k").unwrap(), Some(b"v".to_vec()));
+    }
+
+    #[test]
+    fn clear_matching_removes_origin_and_top_level_site() {
+        let mut s = make();
+        s.put(None, None, "g", b"0").unwrap();
+        s.put(Some("https://a.x.com"), None, "k", b"1").unwrap();
+        s.put(Some("https://y.org"), Some("https://x.com"), "k", b"2").unwrap();
+        s.put(Some("https://y.org"), None, "k", b"3").unwrap();
+        let n = s.clear_matching(&|v| v.contains("x.com")).unwrap();
+        assert_eq!(n, 2);
+        assert!(s.get(None, None, "g").unwrap().is_some());
+        assert!(s.get(Some("https://y.org"), None, "k").unwrap().is_some());
+        assert!(s.get(Some("https://a.x.com"), None, "k").unwrap().is_none());
     }
 
     #[test]

@@ -34,3 +34,15 @@ WPT-RUN-14 срез 20: `css-cascade/layer-cssom-order-reverse.html`, `scope-css
 ## Как проверить
 
 Таблица выше; `css/css-cascade/layer-cssom-order-reverse.html`, `css/css-nesting/cssom.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+Не только `@layer`/`@scope`: `CSSStyleSheet.replaceSync('@container STYLE(--foo: bar){}')` и `insertRule('@container …')`/`@supports`/`@property`/`@function`/`@mixin`/`@view-transition` дают пустой `cssRules` или `SyntaxError`; глобалов `CSSConditionRule`, `CSSSupportsRule`, `CSSContainerRule`, `CSSPropertyRule`, `CSSFunctionRule`, `CSSViewTransitionRule`, `CSSGroupingRule` нет. Здесь же: `[...sheet.cssRules]` не итерируется (BUG-1506). Затронуто в срезе 22: `container-queries/at-container-{style-,scroll-state/}*` (22 ERROR на `assert_implements_style_container_queries`), `css-mixins/*/…cssom|parsing`, `css-properties-values-api/at-property-cssom`, `css-conditional/js/*`, `css-view-transitions/navigation/at-rule-cssom` — не меньше 40 id.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+`css/cssom`: 26 id по at-правилам (`CSSKeyframesRule`, `CSSFontFaceRule`, `CSSImportRule`, `CSSNamespaceRule`, `CSSPageRule`, `CSSConditionRule`, `CSSContainerRule`, `CSSGroupingRule`, `insertRule` для `@namespace`/`@import`; 166 из 179 сабтестов) + `css-counter-styles`: `typeof CSSCounterStyleRule` — `undefined`, `cssRules[0]` для `@counter-style foo{…}` — `undefined` (`counter-style-at-rule/*-syntax.html`, `cssom/*` — 29 id, `idlharness.html` 33 из 37). Проба: `<style>@font-face{…} @keyframes k{…} @import url(x.css); @page{margin:1px}</style>` — `sheet.cssRules` пуст. Разбор — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles.
+
+## Повторное измерение: WPT-RUN-14 срез 26 (2026-10-09)
+
+`<style>@page{size:A4;margin:1in} @page foo{margin:2in} @page :first{margin:3in}</style>` — `sheet.cssRules.length` 0; `@keyframes k{…} @starting-style{div{opacity:0}} @counter-style c{…}` — `cssRules.length` 0; `typeof CSSPageRule`, `CSSMarginRule`, `CSSKeyframesRule`, `CSSStartingStyleRule`, `CSSCounterStyleRule` — `undefined`. Новые id: `css-page` 13 (`cssom/*`, `page-rule-declarations-*`, `parsing/margin-rules-*`: `rules is not iterable`, `Cannot read properties of undefined (reading 'cssRules')`), `css-transitions` 3 (`starting-style-rule-none`, `starting-style-cascade`: `Prerequisite: @starting-style parses`; `parsing/starting-style-parsing`), `css-animations` 2 (`keyframes-rule-caching`, `KeyframeEffect-setKeyframes`: `insertRule` бросает `SyntaxError`), `css-shadow` 3 (`host-parsing`, `slotted-parsing`, `host-context-parsing`: `insertRule … the index provided is larger than the maximum index`, 36 + 7 сабтестов).

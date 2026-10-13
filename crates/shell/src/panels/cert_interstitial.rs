@@ -7,11 +7,8 @@
 //! wires the *state*: a real `Error::CertInvalid` navigation failure opens
 //! this panel (`user_event.rs`'s `LoadEvent::CertError` handler) instead of
 //! silently falling into the generic `LoadError` path, and [`proceed`] is
-//! the seam a click/keyboard action calls to record the "Proceed anyway"
-//! decision. A dedicated `#certInterstitial` chrome asset + `data-action`
-//! wiring (the actual "Your connection is not private" screen the design
-//! renders) is a follow-up CC design-asset slice — the same split already
-//! true of `cert_panel.rs`'s revocation/CT rows (see its module doc).
+//! the seam the `#securityBox` "Proceed anyway" button (or Enter) calls to
+//! record the decision; [`CertInterstitial::chrome_model`] feeds the screen.
 
 /// Blocking interstitial shown when a navigation's TLS handshake fails cert
 /// verification.
@@ -27,6 +24,10 @@ pub struct CertInterstitial {
     pub host: String,
     /// Structured failure reason, for [`Self::reason_text`].
     pub error: Option<lumen_core::error::CertError>,
+    /// Угроза из локальной базы Safe Browsing (UX-SECURITY-UI, срез 2):
+    /// `(имя списка, тип)`. `Some` — экран показывает предупреждение о сайте, а не
+    /// ошибку сертификата.
+    pub threat: Option<(String, lumen_storage::ThreatType)>,
 }
 
 impl CertInterstitial {
@@ -40,6 +41,16 @@ impl CertInterstitial {
         self.url = url;
         self.host = host;
         self.error = Some(error);
+        self.threat = None;
+        self.visible = true;
+    }
+
+    /// Показать предупреждение о сайте из базы Safe Browsing.
+    pub fn open_threat(&mut self, url: String, host: String, list: String, threat: lumen_storage::ThreatType) {
+        self.url = url;
+        self.host = host;
+        self.error = None;
+        self.threat = Some((list, threat));
         self.visible = true;
     }
 
@@ -59,6 +70,49 @@ impl CertInterstitial {
         }
         self.visible = false;
         Some((std::mem::take(&mut self.url), self.host.clone()))
+    }
+
+    /// Модель экрана `#securityBox` (UX-SECURITY-UI); скрытый экран — по умолчанию.
+    pub fn chrome_model(&self) -> lumen_chrome::ChromeSecurityModel {
+        if !self.visible {
+            return lumen_chrome::ChromeSecurityModel::default();
+        }
+        if let Some((list, threat)) = &self.threat {
+            let (title, message) = crate::threat_store::describe(threat, &self.host);
+            return lumen_chrome::ChromeSecurityModel {
+                open: true,
+                title,
+                message,
+                detail: format!("{} ({list})", threat.as_code()),
+                proceed_label: "Всё равно перейти".to_owned(),
+                other_browser: false,
+            };
+        }
+        lumen_chrome::ChromeSecurityModel {
+            open: true,
+            title: "Ваше подключение не защищено".to_owned(),
+            message: format!(
+                "Сертификат сайта {} не прошёл проверку. Злоумышленники могут перехватить пароли и другие данные.",
+                self.host
+            ),
+            detail: self.reason_text().unwrap_or_default(),
+            proceed_label: "Всё равно перейти".to_owned(),
+            other_browser: self.handoff_reason().is_some(),
+        }
+    }
+
+    /// Причина передачи во внешний браузер (COMPAT-HO-02), если она есть:
+    /// цепочка не ведёт к доверенному корню — корень НУЦ ставят в ОС, и другой
+    /// браузер его видит. Просроченный, отозванный, самоподписанный сертификат
+    /// и чужое имя там дадут ту же ошибку; угроза Safe Browsing — не повод
+    /// обходить предупреждение.
+    pub fn handoff_reason(&self) -> Option<crate::external_browser::HandoffReason> {
+        match self.error {
+            Some(lumen_core::error::CertError::Untrusted(_)) => {
+                Some(crate::external_browser::HandoffReason::Crypto)
+            }
+            _ => None,
+        }
     }
 
     /// Human-readable one-line reason, for the interstitial body text and
@@ -110,6 +164,58 @@ mod tests {
     fn proceed_on_hidden_interstitial_returns_none() {
         let mut i = CertInterstitial::new();
         assert_eq!(i.proceed(), None);
+    }
+
+    #[test]
+    fn chrome_model_is_open_only_while_visible() {
+        let mut i = CertInterstitial::new();
+        assert!(!i.chrome_model().open);
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired);
+        let m = i.chrome_model();
+        assert!(m.open);
+        assert!(m.message.contains("bad.example"));
+        assert_eq!(m.detail, "certificate expired");
+        i.close();
+        assert!(!i.chrome_model().open);
+    }
+
+    #[test]
+    fn other_browser_offered_only_for_untrusted_chain() {
+        use crate::external_browser::HandoffReason;
+        let mut i = CertInterstitial::new();
+        i.open("https://nuc.example/".to_owned(), "nuc.example".to_owned(), CertError::Untrusted("UnknownIssuer".to_owned()));
+        assert_eq!(i.handoff_reason(), Some(HandoffReason::Crypto));
+        assert!(i.chrome_model().other_browser);
+        for err in [CertError::Expired, CertError::SelfSigned, CertError::NameMismatch, CertError::Revoked] {
+            i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), err);
+            assert_eq!(i.handoff_reason(), None);
+            assert!(!i.chrome_model().other_browser);
+        }
+        i.open_threat(
+            "https://phish.example/".to_owned(),
+            "phish.example".to_owned(),
+            "local".to_owned(),
+            lumen_storage::ThreatType::SocialEngineering,
+        );
+        assert!(!i.chrome_model().other_browser);
+    }
+
+    #[test]
+    fn threat_screen_names_phishing_and_clears_on_cert_open() {
+        let mut i = CertInterstitial::new();
+        i.open_threat(
+            "https://phish.example/".to_owned(),
+            "phish.example".to_owned(),
+            "local".to_owned(),
+            lumen_storage::ThreatType::SocialEngineering,
+        );
+        let m = i.chrome_model();
+        assert!(m.open);
+        assert!(m.title.contains("фишинг"));
+        assert_eq!(m.detail, "social_engineering (local)");
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired);
+        assert!(i.threat.is_none());
+        assert_eq!(i.chrome_model().detail, "certificate expired");
     }
 
     #[test]

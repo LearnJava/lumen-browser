@@ -39,6 +39,11 @@ pub struct LayoutBox {
     /// `LayoutBox` without ever calling into that pass (tests, ad-hoc
     /// fixtures).
     pub used_line_height: f32,
+    /// BUG-1345 — used `[top, right, bottom, left]` padding of a replaced box (`<img>`, `<video>`, …) in px,
+    /// when any side is `em`/`rem`/`%`. Paint places the bitmap in the content box and cannot resolve those
+    /// units itself (`Length::px()` answers 0 for them; `%` needs the containing block). `None` — all sides
+    /// are `px`, read them from `style`. Lives here, not in `style`: `style` is `Arc`-shared (see `used_line_height`).
+    pub used_padding: Option<[f32; 4]>,
     /// CSS Grid L1 §6.1 — первая и последняя базовая линия grid-контейнера,
     /// от верхней кромки его border box. Пишется раскладкой сетки (строки и
     /// выравнивание items известны только ей, по готовому дереву их не

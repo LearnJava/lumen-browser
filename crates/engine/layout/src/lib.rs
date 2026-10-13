@@ -305,6 +305,13 @@ pub trait TextMeasurer {
         font_size_px * 0.5
     }
 
+    /// [`Self::x_height_px`] с учётом CSS `font-family` каскада — см.
+    /// [`Self::descent_px_with_families`]. Нужен для `ex`/`rex` (BUG-1340).
+    fn x_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.x_height_px(font_size_px)
+    }
+
     /// Line-gap шрифта в пикселях при размере `font_size_px` — рекомендуемый
     /// межстрочный зазор поверх content area (ascent + descent), источник —
     /// `OS/2.sTypoLineGap`/`hhea.lineGap` (FONTLOAD-13, BUG-467).

@@ -679,6 +679,7 @@ pub(crate) fn run_cli() -> ExitCode {
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
     let mut startup_profile = config::load().unwrap_or_default();
+    startup_profile.apply_identity_env(std::env::var("LUMEN_IDENTITY").ok().as_deref());
     // BUG-295: automation sessions (BiDi / MCP) use an in-memory HTTP cache, never
     // the persistent on-disk one. The disk cache is keyed by URL and survives across
     // runs, so on the fixed ports an automation server reuses (e.g. wptserve's

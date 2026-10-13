@@ -141,3 +141,11 @@ fn table_without_columns_keeps_the_specified_height() {
     let html = r#"<table id="t" style="height:50px"><tr style="height:100px"></tr></table>"#;
     assert_eq!(rects(html, "", &["t"])[0].height, 50.0);
 }
+
+#[test]
+fn collapsed_group_border_sticks_out_of_table_width() {
+    // WPT css/CSS2/borders/border-applies-to-001: width:100px — ширина сетки, рамка группы сверх.
+    let html = r#"<div id="t" style="display:table;border-collapse:collapse;table-layout:fixed;width:100px"><div id="g" style="display:table-row-group;border:4px solid green"><div style="display:table-row"><div style="display:table-cell;height:48px">a</div><div style="display:table-cell;height:48px">b</div></div></div></div>"#;
+    let r = rects(html, "", &["t", "g"]);
+    assert_eq!((r[0].width, r[1].width), (104.0, 104.0), "{r:?}");
+}

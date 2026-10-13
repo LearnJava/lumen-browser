@@ -1,45 +1,19 @@
 //! Keyboard shortcuts settings panel (D-4).
 //!
-//! A centred overlay (360 × 500 px) opened by `Ctrl+Shift+/`.
-//! Displays all `KeyCommand` variants with their current keybinding.
+//! State of the `#shortcutsOverlay` modal of the engine chrome, opened by
+//! `Ctrl+Shift+/`. Lists all `KeyCommand` variants with their current keybinding.
 //! Clicking a row enters rebind mode — the next keypress is recorded
 //! as the new binding and persisted via `lumen_storage::KeyboardShortcuts`.
+//! Rendering lives in the chrome document (`lumen_chrome::bind_model`); the
+//! list is windowed here because the chrome has no wheel-scroll container.
 
-use crate::panels::themes::Palette;
-use crate::theme_tokens::radius;
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand};
-
-type DisplayList = Vec<DisplayCommand>;
-
-// ── Geometry ─────────────────────────────────────────────────────────────────
-
-/// Panel width in CSS px.
-pub const PANEL_W: f32 = 360.0;
-/// Panel height in CSS px.
-pub const PANEL_H: f32 = 500.0;
-/// Header bar height.
-const HEADER_H: f32 = 36.0;
-/// Height of one shortcut row.
-const ROW_H: f32 = 36.0;
-/// Left / right padding inside each row.
-const PAD_H: f32 = 14.0;
-/// Width of the × close button hit zone.
-const CLOSE_W: f32 = 30.0;
-/// Visible content area height (panel minus header).
-const CONTENT_H: f32 = PANEL_H - HEADER_H;
-
-// ── Colours ──────────────────────────────────────────────────────────────────
-
-/// Semantic amber used for the "awaiting keypress" rebind hint — not a surface colour.
-const REBIND_TEXT: Color = Color { r: 200, g: 170, b: 80, a: 255 };
-/// Semantic red used for the × close glyph — not a surface colour.
-const CLOSE_COL: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-/// Semantic blue used for key-binding text — not a surface colour.
-const KEY_COL: Color = Color { r: 100, g: 160, b: 240, a: 255 };
-/// Semantic blue highlight used for the rebind-active row background — not a surface colour.
-const ROW_REBIND: Color = Color { r: 30, g: 50, b: 80, a: 255 };
+/// Height of one `.sc-row` in `assets/chrome/chrome.html`, CSS px.
+const ROW_H: f32 = 32.0;
+/// Chrome height of `#shortcutsOverlay`'s modal besides the list: header, footer
+/// and the body's vertical padding.
+const MODAL_CHROME_H: f32 = 110.0;
+/// The modal's `max-height` as a fraction of the viewport (`.modal`).
+const MODAL_MAX_FRAC: f32 = 0.82;
 
 // ── Shortcut row data ─────────────────────────────────────────────────────────
 
@@ -121,24 +95,13 @@ pub fn default_rows() -> Vec<ShortcutRow> {
 
 // ── Panel state ───────────────────────────────────────────────────────────────
 
-/// Hit result from `hit_test`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ShortcutsHit {
-    /// User clicked the × close button.
-    Close,
-    /// User clicked a shortcut row to start rebinding (row index).
-    StartRebind(usize),
-    /// Click inside panel but not on an actionable element.
-    Consumed,
-}
-
 /// Keyboard shortcuts panel UI state.
 #[derive(Debug)]
 pub struct ShortcutsPanel {
     /// Whether the panel is currently visible.
     pub visible: bool,
-    /// Vertical scroll offset in the content area (px).
-    pub scroll_y: f32,
+    /// Index of the first row shown in the (windowed) list.
+    pub first_row: usize,
     /// Index of the row currently awaiting a new keypress, if any.
     pub rebinding: Option<usize>,
     /// All rows with their current (possibly overridden) bindings.
@@ -158,7 +121,7 @@ impl ShortcutsPanel {
                 row.key = ov.key.clone();
             }
         }
-        Self { visible: false, scroll_y: 0.0, rebinding: None, rows }
+        Self { visible: false, first_row: 0, rebinding: None, rows }
     }
 
     /// Show the panel.
@@ -178,10 +141,15 @@ impl ShortcutsPanel {
         self.rebinding = None;
     }
 
-    /// Scroll the content area by `delta` px (clamped to valid range).
-    pub fn scroll_by(&mut self, delta: f32) {
-        let max_scroll = (self.rows.len() as f32 * ROW_H - CONTENT_H).max(0.0);
-        self.scroll_y = (self.scroll_y + delta).clamp(0.0, max_scroll);
+    /// How many rows fit into the modal at viewport height `viewport_h` (CSS px).
+    pub fn visible_count(viewport_h: f32) -> usize {
+        (((viewport_h * MODAL_MAX_FRAC - MODAL_CHROME_H) / ROW_H) as usize).max(3)
+    }
+
+    /// Scroll the window by `delta` rows (clamped to the valid range).
+    pub fn scroll_rows(&mut self, delta: i32, viewport_h: f32) {
+        let max_first = self.rows.len().saturating_sub(Self::visible_count(viewport_h));
+        self.first_row = self.first_row.saturating_add_signed(delta as isize).min(max_first);
     }
 
     /// Called when a rebind keypress arrives.
@@ -207,141 +175,11 @@ impl ShortcutsPanel {
     pub fn cancel_rebind(&mut self) {
         self.rebinding = None;
     }
-
-    /// Hit-test a click at `(cx, cy)` in panel-local coordinates.
-    pub fn hit_test(&self, cx: f32, cy: f32) -> ShortcutsHit {
-        // Close button (top-right corner of header).
-        if cy < HEADER_H && cx > PANEL_W - CLOSE_W {
-            return ShortcutsHit::Close;
-        }
-        // Content area: check which row was clicked.
-        if cy >= HEADER_H {
-            let content_y = cy - HEADER_H + self.scroll_y;
-            let row_idx = (content_y / ROW_H) as usize;
-            if row_idx < self.rows.len() {
-                return ShortcutsHit::StartRebind(row_idx);
-            }
-        }
-        ShortcutsHit::Consumed
-    }
-
-    /// Render the panel into `dl`, anchored at `(ox, oy)` in screen space.
-    ///
-    /// `pal` — active theme palette; surface colours are read from it so the
-    /// panel follows light/dark theme switches.
-    pub fn build_panel(&self, dl: &mut DisplayList, ox: f32, oy: f32, pal: &Palette) {
-        // Outer border.
-        dl.push(DisplayCommand::FillRoundedRect {
-            rect: Rect::new(ox - 1.0, oy - 1.0, PANEL_W + 2.0, PANEL_H + 2.0),
-            radii: CornerRadii { tl: radius::LG, tl_y: radius::LG, tr: radius::LG, tr_y: radius::LG,
-                                 bl: radius::LG, bl_y: radius::LG, br: radius::LG, br_y: radius::LG },
-            color: pal.overlay_border,
-        });
-        // Panel background.
-        dl.push(DisplayCommand::FillRect {
-            rect: Rect::new(ox, oy, PANEL_W, PANEL_H),
-            color: pal.overlay_bg,
-        });
-
-        // Header bar. Inset 1px from the outer border, so its radius is the
-        // panel radius minus that inset to stay visually concentric.
-        let header_radius = radius::LG - 1.0;
-        dl.push(DisplayCommand::FillRoundedRect {
-            rect: Rect::new(ox, oy, PANEL_W, HEADER_H),
-            radii: CornerRadii { tl: header_radius, tl_y: header_radius, tr: header_radius, tr_y: header_radius,
-                                 bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
-            color: pal.header_bg,
-        });
-        dl.push(txt("Горячие клавиши", ox + PAD_H, oy + 10.0,
-                    PANEL_W - PAD_H * 2.0 - CLOSE_W, 13.0, FontWeight::BOLD, pal.text));
-        dl.push(txt("×", ox + PANEL_W - CLOSE_W + 6.0, oy + 9.0,
-                    20.0, 15.0, FontWeight::BOLD, CLOSE_COL));
-
-        // Clip content area.
-        dl.push(DisplayCommand::PushClipRect {
-            rect: Rect::new(ox, oy + HEADER_H, PANEL_W, CONTENT_H),
-        });
-
-        let visible_start = (self.scroll_y / ROW_H) as usize;
-        let visible_end = ((self.scroll_y + CONTENT_H) / ROW_H).ceil() as usize + 1;
-
-        for (i, row) in self.rows.iter().enumerate() {
-            if i < visible_start || i > visible_end {
-                continue;
-            }
-            let row_top = oy + HEADER_H + i as f32 * ROW_H - self.scroll_y;
-            let bg = if self.rebinding == Some(i) {
-                ROW_REBIND
-            } else if i % 2 == 0 {
-                pal.overlay_bg
-            } else {
-                pal.row_alt_bg
-            };
-            dl.push(DisplayCommand::FillRect {
-                rect: Rect::new(ox, row_top, PANEL_W, ROW_H),
-                color: bg,
-            });
-            // Separator at bottom of row.
-            dl.push(DisplayCommand::FillRect {
-                rect: Rect::new(ox, row_top + ROW_H - 1.0, PANEL_W, 1.0),
-                color: pal.divider,
-            });
-            // Action label (left).
-            dl.push(txt(row.label, ox + PAD_H, row_top + 10.0,
-                        PANEL_W * 0.58, 12.0, FontWeight::NORMAL, pal.text));
-            // Key badge (right) or rebind hint.
-            let (badge_text, badge_col) = if self.rebinding == Some(i) {
-                ("Нажмите клавишу\u{2026}".to_owned(), REBIND_TEXT)
-            } else {
-                (row.binding_label(), KEY_COL)
-            };
-            let badge_x = ox + PANEL_W - PAD_H - 120.0;
-            dl.push(DisplayCommand::FillRoundedRect {
-                rect: Rect::new(badge_x - 4.0, row_top + 7.0, 128.0, 22.0),
-                radii: CornerRadii { tl: radius::MD, tl_y: radius::MD, tr: radius::MD, tr_y: radius::MD,
-                                     bl: radius::MD, bl_y: radius::MD, br: radius::MD, br_y: radius::MD },
-                color: pal.item_bg,
-            });
-            dl.push(txt(badge_text, badge_x, row_top + 10.0,
-                        120.0, 11.0, FontWeight::NORMAL, badge_col));
-        }
-
-        dl.push(DisplayCommand::PopClip);
-    }
-}
-
-fn txt(text: impl Into<String>, x: f32, y: f32, w: f32, font_size: f32,
-       weight: FontWeight, color: Color) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(x, y, w, font_size * 1.4),
-        text: text.into(),
-        font_size,
-        color,
-        font_family: Vec::new(),
-        font_weight: weight,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::themes::Palette;
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = ShortcutsPanel::new(&[]);
-        let mut dl: DisplayList = Vec::new();
-        p.build_panel(&mut dl, 0.0, 0.0, &Palette::DARK);
-        assert!(!dl.is_empty());
-    }
 
     #[test]
     fn new_panel_is_hidden() {
@@ -413,30 +251,6 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_close_button() {
-        let p = ShortcutsPanel::new(&[]);
-        assert_eq!(p.hit_test(PANEL_W - 5.0, 10.0), ShortcutsHit::Close);
-    }
-
-    #[test]
-    fn hit_test_row_starts_rebind() {
-        let p = ShortcutsPanel::new(&[]);
-        let hit = p.hit_test(100.0, HEADER_H + 5.0);
-        assert_eq!(hit, ShortcutsHit::StartRebind(0));
-    }
-
-    #[test]
-    fn scroll_clamps_to_range() {
-        let mut p = ShortcutsPanel::new(&[]);
-        p.open();
-        p.scroll_by(-100.0);
-        assert_eq!(p.scroll_y, 0.0);
-        p.scroll_by(999_999.0);
-        let max = (p.rows.len() as f32 * ROW_H - CONTENT_H).max(0.0);
-        assert_eq!(p.scroll_y, max);
-    }
-
-    #[test]
     fn binding_label_formats_correctly() {
         let row = ShortcutRow {
             command: "Reload",
@@ -445,5 +259,14 @@ mod tests {
             key: "R".to_string(),
         };
         assert_eq!(row.binding_label(), "Ctrl+R");
+    }
+
+    #[test]
+    fn scroll_rows_clamps_to_range() {
+        let mut p = ShortcutsPanel::new(&[]);
+        p.scroll_rows(-5, 700.0);
+        assert_eq!(p.first_row, 0);
+        p.scroll_rows(10_000, 700.0);
+        assert_eq!(p.first_row, p.rows.len() - ShortcutsPanel::visible_count(700.0));
     }
 }

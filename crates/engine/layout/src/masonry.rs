@@ -83,7 +83,7 @@ mod tests {
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(0),
             rect: Rect::new(0.0, 0.0, 100.0, height),
-            used_line_height: 16.0 * 1.2,
+            used_padding: None, used_line_height: 16.0 * 1.2,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

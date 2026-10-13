@@ -34,6 +34,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
     CREATE INDEX IF NOT EXISTS autofill_origin_field_idx
         ON autofill(origin, field_name);
     "#,
+},
+Migration {
+    version: 2,
+    sql: r#"
+    ALTER TABLE autofill ADD COLUMN site TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS autofill_site_idx ON autofill(site);
+    "#,
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +63,11 @@ impl std::fmt::Debug for Autofill {
 }
 
 impl Autofill {
+    /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        crate::partition::clear_by_site(&self.conn, "autofill", "autofill", site)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Storage(format!("autofill open: {e}")))?;
@@ -74,6 +86,8 @@ impl Autofill {
         set_common_pragmas(&conn).map_err(|e| Error::Storage(format!("autofill pragmas: {e}")))?;
         run_migrations(&mut conn, MIGRATIONS)
             .map_err(|e| Error::Storage(format!("autofill init: {e}")))?;
+        crate::partition::backfill_site(&conn, "autofill", "origin")
+            .map_err(|e| Error::Storage(format!("autofill backfill site: {e}")))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -96,12 +110,12 @@ impl Autofill {
             .lock()
             .map_err(|_| Error::Storage("autofill mutex poisoned".into()))?;
         conn.execute(
-            "INSERT INTO autofill (origin, field_name, value, last_used)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO autofill (origin, field_name, value, last_used, site)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (origin, field_name, value) DO UPDATE SET
                  frequency = frequency + 1,
                  last_used = MAX(last_used, excluded.last_used)",
-            params![origin, field_name, value, now_unix],
+            params![origin, field_name, value, now_unix, crate::partition::site_of(origin)],
         )
         .map_err(|e| Error::Storage(format!("autofill record: {e}")))?;
         Ok(())
@@ -134,6 +148,24 @@ impl Autofill {
             out.push(r.map_err(|e| Error::Storage(format!("autofill row: {e}")))?);
         }
         Ok(out)
+    }
+
+    /// Все записи для страницы управления: по сайту, полю, затем свежие первыми.
+    pub fn list_all(&self) -> Result<Vec<AutofillEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("autofill mutex poisoned".into()))?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT origin, field_name, value, frequency, last_used
+                 FROM autofill ORDER BY origin, field_name, last_used DESC",
+            )
+            .map_err(|e| Error::Storage(format!("autofill list_all prepare: {e}")))?;
+        let rows = stmt
+            .query_map([], row_to_entry)
+            .map_err(|e| Error::Storage(format!("autofill list_all query: {e}")))?;
+        rows.map(|r| r.map_err(|e| Error::Storage(format!("autofill row: {e}")))).collect()
     }
 
     /// Самое популярное значение для поля.
@@ -209,6 +241,19 @@ mod tests {
 
     fn make() -> Autofill {
         Autofill::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn list_all_spans_origins_and_fields() {
+        let a = make();
+        a.record("https://b/", "email", "b@x", 1).unwrap();
+        a.record("https://a/", "tel", "123", 1).unwrap();
+        a.record("https://a/", "email", "a@x", 1).unwrap();
+        let all: Vec<_> = a.list_all().unwrap().into_iter().map(|e| (e.origin, e.field_name)).collect();
+        assert_eq!(
+            all,
+            [("https://a/".into(), "email".into()), ("https://a/".into(), "tel".into()), ("https://b/".into(), "email".into())]
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (decision) — implementation blocked, see Consequences
+Superseded by [ADR-035](ADR-035-media-decoding-without-ffmpeg.md) (user, 2026-10-12): media is decoded without FFmpeg — `rav1d` + OS decoders + the existing Rust audio decoders, on every platform. The `lumen-media-ffmpeg` crate described below stays as an opt-in developer backend (`ffmpeg-video`), never shipped. Original status: Accepted (decision) — implementation blocked, see Consequences
 
 ## Date
 

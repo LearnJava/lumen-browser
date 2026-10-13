@@ -44,13 +44,26 @@ impl Lumen {
             let Ok(doc) = handle.doc.lock() else { return };
             let root = doc.root();
             let submit_event = lumen_dom::submit_form(&doc, form);
-            let enctype = forms::enctype_of_form(&doc, form);
+            let mut enctype = forms::enctype_of_form(&doc, form);
             let dialog_node = lumen_dom::find_ancestor_dialog(&doc, submitter.unwrap_or(form));
-            // `target` читается с ФОРМЫ, а не с кнопки: `formtarget` (как и
-            // `formaction`/`formmethod`) страница не учитывает нигде, и заводить
-            // это расхождение во фрейме нельзя — отклонение записано в
-            // bugs/BUG-480-OPEN.md.
-            let target = doc.get(form).get_attr("target").unwrap_or_default().to_owned();
+            // `target` — с формы, `formtarget` кнопки его перекрывает
+            // (UX-FORM-SUBMITTER); так же перекрываются action/method/enctype.
+            let mut target = doc.get(form).get_attr("target").unwrap_or_default().to_owned();
+            let (mut action, mut method) = match &submit_event {
+                lumen_dom::FormSubmitEvent::Valid { action, method, .. } => {
+                    (action.clone(), method.clone())
+                }
+                _ => (String::new(), String::new()),
+            };
+            forms::apply_submitter_overrides(
+                &doc, submitter, &mut action, &mut method, &mut enctype, &mut target,
+            );
+            let submit_event = match submit_event {
+                lumen_dom::FormSubmitEvent::Valid { fields, .. } => {
+                    lumen_dom::FormSubmitEvent::Valid { action, method, fields }
+                }
+                other => other,
+            };
             // GAP-CSPENF срез 29: `form-action` гейтится политикой РЕБЁНКА
             // (форма его собственная), тем же `document_csp_policy`, что
             // страница использует для своей — origin тоже ребёнка (`nav_base`
@@ -67,13 +80,20 @@ impl Lumen {
                 {
                     return;
                 }
-                let body = if enctype == "multipart/form-data" {
+                // Кодируем сразу в байты и с настоящим `Content-Type`: POST-ветка
+                // ниже отправляет именно их, а строка `body` — производная.
+                let (content_type, body_bytes) = if enctype == "multipart/form-data" {
                     let boundary = "----LumenFormBoundary0000000000000000";
-                    let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
-                    String::from_utf8_lossy(&bytes).into_owned()
+                    forms::encode_form_fields_multipart(&fields, boundary)
+                } else if enctype == "text/plain" {
+                    forms::encode_form_fields_plain(&fields)
                 } else {
-                    forms::encode_form_fields(&fields)
+                    (
+                        "application/x-www-form-urlencoded".to_owned(),
+                        forms::encode_form_fields(&fields).into_bytes(),
+                    )
                 };
+                let body = String::from_utf8_lossy(&body_bytes).into_owned();
                 use lumen_core::event::{Event, TabId};
                 self.event_sink.emit(&Event::FormSubmit {
                     tab_id: TabId(0),
@@ -99,22 +119,14 @@ impl Lumen {
                         }
                     }
                     "get" => {
-                        let url_body = if enctype == "multipart/form-data" {
-                            forms::encode_form_fields(&fields)
-                        } else {
-                            body.clone()
-                        };
+                        // GET кодирует поля urlencoded при любом enctype.
+                        let url_body = forms::encode_form_fields(&fields);
                         let get_url = forms::make_get_url(&action, &url_body);
-                        self.frame_submit_navigate(idx, &get_url, &target, &nav_base, csp_gate.as_ref());
+                        self.frame_submit_navigate(idx, &get_url, &target, &nav_base, csp_gate.as_ref(), None);
                     }
                     _ => {
-                        // POST не отправляет и страница (`run_form_submission`) —
-                        // сетевая половина там не написана вовсе. Расхождения
-                        // «во фрейме умеем, на странице нет» быть не может.
-                        eprintln!(
-                            "[forms] iframe POST {action} enctype={enctype} body-len={}",
-                            body.len()
-                        );
+                        let nav_body = lumen_network::NavigationBody::post(content_type, body_bytes);
+                        self.frame_submit_navigate(idx, &action, &target, &nav_base, csp_gate.as_ref(), Some(nav_body));
                     }
                 }
             }
@@ -175,6 +187,7 @@ impl Lumen {
         target: &str,
         nav_base: &ResourceBase,
         csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
+        nav_body: Option<lumen_network::NavigationBody>,
     ) {
         if let Some((policy, original_policy)) = csp_gate {
             let self_origin = nav_base.origin();
@@ -207,14 +220,18 @@ impl Lumen {
                     &nav_base.resolve_str(get_url),
                 );
                 let uir = crate::csp_enforce::navigation_wants_uir_header(csp_gate);
-                self.navigate_to(PageSource::from_arg(Some(&resolved)).with_uir_header(uir));
+                let mut nav = PageSource::from_arg(Some(&resolved)).with_uir_header(uir);
+                if let (PageSource::Url { body: slot, .. }, Some(b)) = (&mut nav, nav_body) {
+                    *slot = Some(Box::new(b));
+                }
+                self.navigate_to(nav);
             }
             LinkTarget::Frame(target_idx) => {
                 if !links::is_navigable_href(get_url) {
                     eprintln!("iframe: action '{get_url}' внутри фрейма не навигабелен — пропуск");
                     return;
                 }
-                self.navigate_frame_to(target_idx, get_url, nav_base, None);
+                self.navigate_frame_to_with_body(target_idx, get_url, nav_base, None, nav_body);
             }
         }
     }

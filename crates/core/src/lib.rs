@@ -22,6 +22,7 @@ pub mod geom;
 pub mod hash;
 pub mod icc;
 pub mod id_hash;
+pub mod identity;
 pub mod idn;
 pub mod json;
 pub mod memory_pressure;
@@ -39,6 +40,10 @@ pub mod web_storage;
 pub use auth::{generate_token, tokens_match};
 pub use capability::{Capability, CapabilityToken};
 pub use color::{ColorSpace, detect_color_space_from_icc};
+pub use identity::{
+    chrome_user_agent, identity_variant, set_identity_variant, Identity, IdentityVariant, UaData,
+    UaFamily, CHROME_LUMEN_USER_AGENT, CHROME_MAJOR, CHROME_USER_AGENT, EDGE_USER_AGENT,
+};
 pub use icc::{DataColorSpace, IccProfile, ProfileClass, ToneCurve, XyzNumber};
 pub use pcs::{Lab, Xyz};
 pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};

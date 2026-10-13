@@ -1,6 +1,6 @@
-Block rect=(0.00, 0.00, 800.00, 19.20)
-  Block rect=(0.00, 0.00, 800.00, 19.20)
-    InlineRun rect=(0.00, 0.00, 800.00, 19.20)
+Block rect=(0.00, 16.00, 800.00, 19.20)
+  Block rect=(0.00, 16.00, 800.00, 19.20) m=(1.00em, 0.00, 1.00em, 0.00)
+    InlineRun rect=(0.00, 16.00, 800.00, 19.20)
       seg[0] "before "
       seg[1] "link" decoration=underline
       seg[2] " after"

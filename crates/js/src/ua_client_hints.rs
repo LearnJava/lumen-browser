@@ -1,128 +1,148 @@
 //! User-Agent Client Hints (W3C UA-CH §4–6)
-//! Phase 0: static Chrome 114 profile — all values are fixed.
-//! `navigator.userAgentData` exposes low-entropy values directly.
-//! `getHighEntropyValues(hints)` returns Promise<UADataValues> with static fields.
+//! `navigator.userAgentData` exposes low-entropy values directly;
+//! `getHighEntropyValues(hints)` returns Promise<UADataValues>.
+//!
+//! The brands, versions and platform come from the process-global
+//! [`lumen_core::Identity`] (BUG-1614) — the same source the HTTP `Sec-CH-UA*`
+//! headers and `navigator.userAgent` use, so the layers cannot disagree.
+//! Non-Chromium identities (Firefox, Safari, Tor, Lumen) have no
+//! `userAgentData` at all, like the real browsers.
 
-/// V8 port of the former rquickjs `install_ua_client_hints_bindings` (Ph3 V8 migration
-/// S5-S7, rquickjs side removed in S12b-B3): identical JS shim, evaluated via
-/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
-///
-/// Adds `navigator.userAgentData` (a `NavigatorUAData` instance) and exports
-/// `NavigatorUAData` on `globalThis`. Phase 0: static Chrome 114 / Windows 10 profile.
 #[cfg(feature = "v8-backend")]
-pub(crate) fn install_ua_client_hints_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
-    use lumen_core::ext::JsRuntime as _;
-    rt.eval(UA_CLIENT_HINTS_SHIM)?;
-    Ok(())
+use lumen_core::UaData;
+
+#[cfg(feature = "v8-backend")]
+use crate::navigator_bindings::json_string as js_str;
+
+#[cfg(feature = "v8-backend")]
+fn brand_list(list: &[(String, String)]) -> String {
+    let items: Vec<String> = list
+        .iter()
+        .map(|(b, v)| format!("new NavigatorUABrandVersion({}, {})", js_str(b), js_str(v)))
+        .collect();
+    format!("[{}]", items.join(", "))
 }
 
+/// JS expression (an IIFE) that defines `globalThis.NavigatorUAData` and
+/// evaluates to the single `navigator.userAgentData` instance for `d`.
+/// Shared by the page install and the worker `NavigatorID` shim.
 #[cfg(feature = "v8-backend")]
-const UA_CLIENT_HINTS_SHIM: &str = r#"
-(function() {
-  // NavigatorUABrandVersion — one entry in the brands / fullVersionList arrays.
-  function NavigatorUABrandVersion(brand, version) {
+pub(crate) fn ua_data_instance_expr(d: &UaData) -> String {
+    format!(
+        r#"(function() {{
+  function NavigatorUABrandVersion(brand, version) {{
     this.brand = brand;
     this.version = version;
-  }
-  NavigatorUABrandVersion.prototype.toJSON = function() {
-    return { brand: this.brand, version: this.version };
-  };
-
-  // Low-entropy brand list (reported without permission).
-  var _brands = [
-    new NavigatorUABrandVersion("Not A;Brand", "99"),
-    new NavigatorUABrandVersion("Chromium", "114"),
-    new NavigatorUABrandVersion("Google Chrome", "114")
-  ];
-
-  // High-entropy full-version list.
-  var _fullVersionList = [
-    new NavigatorUABrandVersion("Not A;Brand", "99.0.0.0"),
-    new NavigatorUABrandVersion("Chromium", "114.0.5735.133"),
-    new NavigatorUABrandVersion("Google Chrome", "114.0.5735.133")
-  ];
-
-  // Static high-entropy values (Phase 0: fixed Chrome 114 / Windows 10 x64).
-  var _highEntropy = {
-    platform:        "Windows",
-    platformVersion: "10.0.0",
+  }}
+  NavigatorUABrandVersion.prototype.toJSON = function() {{
+    return {{ brand: this.brand, version: this.version }};
+  }};
+  var _brands = {brands};
+  var _fullVersionList = {full_version_list};
+  var _platform = {platform};
+  var _highEntropy = {{
+    platform:        {platform},
+    platformVersion: {platform_version},
     architecture:    "x86",
     bitness:         "64",
     model:           "",
-    uaFullVersion:   "114.0.5735.133",
+    uaFullVersion:   {full_version},
     wow64:           false
-  };
-
-  // NavigatorUAData — the object exposed as navigator.userAgentData.
-  // No constructor operation in the spec: page script gets 'Illegal constructor';
-  // the single instance is created via Object.create below.
-  function NavigatorUAData() { throw new TypeError('Illegal constructor'); }
-  Object.defineProperty(NavigatorUAData.prototype, Symbol.toStringTag, {
+  }};
+  function NavigatorUAData() {{ throw new TypeError('Illegal constructor'); }}
+  Object.defineProperty(NavigatorUAData.prototype, Symbol.toStringTag, {{
     value: 'NavigatorUAData', configurable: true
-  });
-
-  // Low-entropy accessors.
-  Object.defineProperty(NavigatorUAData.prototype, 'brands', {
-    get: function() { return _brands.slice(); },
+  }});
+  Object.defineProperty(NavigatorUAData.prototype, 'brands', {{
+    get: function() {{ return _brands.slice(); }},
     enumerable: true, configurable: true
-  });
-  Object.defineProperty(NavigatorUAData.prototype, 'mobile', {
-    get: function() { return false; },
+  }});
+  Object.defineProperty(NavigatorUAData.prototype, 'mobile', {{
+    get: function() {{ return false; }},
     enumerable: true, configurable: true
-  });
-  Object.defineProperty(NavigatorUAData.prototype, 'platform', {
-    get: function() { return "Windows"; },
+  }});
+  Object.defineProperty(NavigatorUAData.prototype, 'platform', {{
+    get: function() {{ return _platform; }},
     enumerable: true, configurable: true
-  });
-
-  // High-entropy accessor — returns Promise<UADataValues>.
-  // Resolves immediately with the requested subset of static values.
-  NavigatorUAData.prototype.getHighEntropyValues = function(hints) {
-    if (!Array.isArray(hints)) {
+  }});
+  NavigatorUAData.prototype.getHighEntropyValues = function(hints) {{
+    if (!Array.isArray(hints)) {{
       return Promise.reject(new TypeError('hints must be an array'));
-    }
-    var result = {};
-    // Always include low-entropy fields in the resolved object.
+    }}
+    var result = {{}};
     result.brands   = _brands.slice();
     result.mobile   = false;
-    result.platform = "Windows";
-    // Add each requested high-entropy hint.
-    for (var i = 0; i < hints.length; i++) {
+    result.platform = _platform;
+    for (var i = 0; i < hints.length; i++) {{
       var h = hints[i];
-      if (h === 'fullVersionList') {
+      if (h === 'fullVersionList') {{
         result.fullVersionList = _fullVersionList.slice();
-      } else if (h in _highEntropy) {
+      }} else if (h in _highEntropy) {{
         result[h] = _highEntropy[h];
-      }
-    }
+      }}
+    }}
     return Promise.resolve(result);
-  };
-
-  // W3C §6.1 serialisation.
-  NavigatorUAData.prototype.toJSON = function() {
-    return {
-      brands:   _brands.map(function(b) { return b.toJSON(); }),
+  }};
+  NavigatorUAData.prototype.toJSON = function() {{
+    return {{
+      brands:   _brands.map(function(b) {{ return b.toJSON(); }}),
       mobile:   false,
-      platform: "Windows"
-    };
-  };
-
-  // Expose class on globalThis (window alias when available).
+      platform: _platform
+    }};
+  }};
   globalThis.NavigatorUAData = NavigatorUAData;
+  return Object.create(NavigatorUAData.prototype);
+}})()"#,
+        brands = brand_list(&d.brands),
+        full_version_list = brand_list(&d.full_version_list),
+        platform = js_str(&d.platform),
+        platform_version = js_str(&d.platform_version),
+        full_version = js_str(&d.full_version),
+    )
+}
 
-  // Install navigator.userAgentData.
-  if (typeof navigator !== 'undefined') {
-    try {
-      Object.defineProperty(navigator, 'userAgentData', {
-        value: Object.create(NavigatorUAData.prototype),
-        writable: false,
-        configurable: true,
-        enumerable: true
-      });
-    } catch(_) {}
-  }
-})();
-"#;
+/// Script that (re)defines `navigator.userAgentData` for `ua_data`, or removes
+/// it (and `NavigatorUAData`) when the identity has none. Also used by the
+/// `emulation.setUserAgentOverride` path so an overridden UA never keeps a
+/// stale Chromium `userAgentData`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn ua_data_install_script(ua_data: Option<&UaData>) -> String {
+    match ua_data {
+        Some(d) => format!(
+            "(function() {{ var inst = {}; \
+               if (typeof navigator === 'undefined') return; \
+               try {{ Object.defineProperty(navigator, 'userAgentData', {{ \
+                 value: inst, writable: false, configurable: true, enumerable: true }}); }} catch(_) {{}} \
+             }})();",
+            ua_data_instance_expr(d)
+        ),
+        None => "(function() { \
+               if (typeof navigator !== 'undefined') { try { delete navigator.userAgentData; } catch(_) {} } \
+               try { delete globalThis.NavigatorUAData; } catch(_) {} \
+             })();"
+            .to_string(),
+    }
+}
+
+/// Install `navigator.userAgentData` from the process-global identity
+/// (V8 port of the former rquickjs `install_ua_client_hints_bindings`).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_ua_client_hints_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    install_ua_client_hints_bindings_v8_with(rt, &crate::navigator_bindings::current_identity())
+}
+
+/// [`install_ua_client_hints_bindings_v8`] against an explicit identity.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_ua_client_hints_bindings_v8_with(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    id: &lumen_core::Identity,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    if id.ua_data.is_some() {
+        rt.eval(&ua_data_install_script(id.ua_data.as_ref()))?;
+    }
+    Ok(())
+}
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
@@ -138,7 +158,8 @@ mod tests {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval("var window = globalThis; var navigator = {}; globalThis.navigator = navigator;")
             .unwrap();
-        install_ua_client_hints_bindings_v8(&rt).unwrap();
+        let id = lumen_core::Identity::from_user_agent(lumen_core::CHROME_USER_AGENT);
+        install_ua_client_hints_bindings_v8_with(&rt, &id).unwrap();
         f(&rt);
     }
 
@@ -159,7 +180,7 @@ mod tests {
                 .eval(
                     r#"
                     var d = navigator.userAgentData;
-                    d.brands.length === 3 &&
+                    d.brands.length === 2 &&
                     d.mobile === false &&
                     d.platform === "Windows"
                     "#,

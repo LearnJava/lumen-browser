@@ -743,7 +743,9 @@ var _sw_container = Object.assign({
 // brand-checked accessors/operations once every module has run.
 function Navigator() { throw new TypeError('Illegal constructor'); }
 var navigator = Object.assign(Object.create(Navigator.prototype), {
-    userAgent: 'Lumen/0.5.0',
+    // Placeholder: `navigator_bindings.rs` (build_navigator_shim) overwrites it from
+    // lumen_core::Identity — the one source shared with the HTTP headers (BUG-1614).
+    userAgent: '',
     language: 'en-US',
     onLine: false,
     // Beacon API (W3C Beacon §3.1): fire-and-forget POST to url.
@@ -803,12 +805,16 @@ if (_lumen_secure_context !== false) {
 if (_lumen_secure_context !== false) {
 navigator.clipboard = {
     readText: function() {
-        return new Promise(function(resolve, reject) {
-            try {
-                var text = (typeof _lumen_clipboard_read === 'function')
-                    ? _lumen_clipboard_read() : '';
-                resolve(typeof text === 'string' ? text : '');
-            } catch(e) { reject(e); }
+        // UX-PERMISSIONS-4: reading the OS clipboard needs the user's consent.
+        var ask = (typeof _lumen_ask_permission === 'function')
+            ? _lumen_ask_permission('clipboard-read') : Promise.resolve('granted');
+        return ask.then(function(state) {
+            if (state !== 'granted') {
+                throw new DOMException('Read permission denied.', 'NotAllowedError');
+            }
+            var text = (typeof _lumen_clipboard_read === 'function')
+                ? _lumen_clipboard_read() : '';
+            return typeof text === 'string' ? text : '';
         });
     },
     writeText: function(text) {
@@ -821,8 +827,48 @@ navigator.clipboard = {
             } catch(e) { reject(e); }
         });
     },
-    read:  function() { return Promise.resolve([]); },
-    write: function() { return Promise.resolve(undefined); },
+    // UX-PERMISSIONS-5: read() asks like readText(); the OS clipboard is exposed
+    // as one text/plain item (empty clipboard → no items).
+    read:  function() {
+        return navigator.clipboard.readText().then(function(text) {
+            return text === '' ? [] : [new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }) })];
+        });
+    },
+    // UX-PERMISSIONS-6: write() puts the first item's text/plain on the OS clipboard.
+    write: function(items) {
+        if (!items || typeof items.length !== 'number') {
+            return Promise.reject(new TypeError("Failed to execute 'write' on 'Clipboard': parameter 1 is not a sequence."));
+        }
+        var item = items[0];
+        if (!item) { return Promise.resolve(undefined); }
+        if (item.types.indexOf('text/plain') < 0) {
+            return Promise.reject(new DOMException('Type text/plain not supported for write.', 'NotAllowedError'));
+        }
+        return item.getType('text/plain').then(function(blob) {
+            return blob.text();
+        }).then(function(text) {
+            return navigator.clipboard.writeText(text);
+        });
+    },
+};
+// Clipboard API §6: ClipboardItem — a map of MIME type → Blob (or Promise<Blob>).
+globalThis.ClipboardItem = class ClipboardItem {
+    constructor(items) {
+        if (items === null || typeof items !== 'object' || Object.keys(items).length === 0) {
+            throw new TypeError("Failed to construct 'ClipboardItem': at least one type is required.");
+        }
+        this._items = items;
+        this.presentationStyle = 'unspecified';
+    }
+    get types() { return Object.keys(this._items); }
+    getType(type) {
+        var v = this._items[type];
+        if (v === undefined) {
+            return Promise.reject(new DOMException('Type ' + type + ' not found', 'NotFoundError'));
+        }
+        return Promise.resolve(v);
+    }
+    static supports(type) { return type === 'text/plain' || type === 'text/html'; }
 };
 }
 
@@ -1472,6 +1518,16 @@ function _lumen_dispatch_composition(type, data) {
     _lumen_dispatch(nid, evt);
 }
 
+// UX-IME: composition event aimed at a node by id (the focused text field),
+// without going through the global `_ime_active_element`. UI Events §5.3:
+// composition events bubble and are not cancelable.
+function _lumen_dispatch_composition_at(nid, type, data) {
+    var evt = new Event(type, { bubbles: true, isTrusted: true });
+    evt.data = String(data);
+    evt.locale = '';
+    _lumen_dispatch(nid, evt);
+}
+
 // ── Page lifecycle events: pageshow / pagehide (HTML Living Standard §8.6) ───
 // _lumen_bfcache_persisted is set to true by an injected init script when the
 // shell restores a page from bfcache. Pages can read event.persisted to detect
@@ -1543,6 +1599,17 @@ function _lumen_fire_beforeunload() {
         } catch(e) { _lumen_report_exception(e); }
     }
     return !!evt.defaultPrevented || String(evt.returnValue) !== '';
+}
+
+// UX-DIALOGS: «prompt to unload a document» (HTML LS §7.4.5) for the shell:
+// dispatches `beforeunload` once and answers whether the page asked to stay.
+// Only a page the user has interacted with may prompt (sticky activation) — the
+// rule that stops a page from trapping a visitor it never heard from.
+function _lumen_beforeunload_wants_prompt() {
+    var asked = _lumen_fire_beforeunload();
+    var active = false;
+    try { active = navigator.userActivation.hasBeenActive === true; } catch (e) {}
+    return !!(asked && active);
 }
 
 // «unload a document» (HTML LS §7.4.6). The order is fixed by the spec:

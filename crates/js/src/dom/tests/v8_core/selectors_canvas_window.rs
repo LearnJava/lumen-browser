@@ -761,6 +761,17 @@ fn alert_does_not_crash() {
 }
 
 #[test]
+fn dialogs_without_ui_answer_defaults() {
+    // Без UI-стороны (`lumen_js::dialog::install_ui`) диалоги отвечают сразу:
+    // alert принят, confirm — false, prompt — null (UX-DIALOGS).
+    let rt = v8_runtime_with_dom(make_doc());
+    let got = rt
+        .eval("alert() === undefined && confirm('q') === false && prompt('q', 'd') === null")
+        .unwrap();
+    assert_eq!(got, lumen_core::JsValue::Bool(true));
+}
+
+#[test]
 fn window_print_emits_request() {
     let rt = v8_runtime_with_dom(make_doc());
     rt.eval("window.print()").unwrap();

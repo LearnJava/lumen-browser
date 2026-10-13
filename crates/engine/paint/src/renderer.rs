@@ -1667,6 +1667,8 @@ impl Renderer {
                     font_features: _,
                     font_palette,
                     tab_size,
+                    letter_spacing,
+                    word_spacing,
                     highlight_name: _,
                     text_orientation,
                 } => {
@@ -1741,6 +1743,7 @@ impl Renderer {
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
+                                (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
                             );
                             rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
@@ -1778,6 +1781,7 @@ impl Renderer {
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
+                                (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
                             );
                         }
@@ -1886,7 +1890,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let scrolled = translate_rect(*rect, dx, dy);
+                    let scrolled = snap_image_box(translate_rect(*rect, dx, dy));
                     let fit = *object_fit;
                     let pos = *object_position;
 
@@ -1966,6 +1970,7 @@ impl Renderer {
                                 self.text_run_cache_enabled,
                                 &[],
                                 0.0,
+                                (0.0, 0.0),
                                 None,
                             );
                             if let Some(m) = transform_stack.last() {
@@ -1990,7 +1995,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let scrolled = translate_rect(*rect, dx, dy);
+                    let scrolled = snap_image_box(translate_rect(*rect, dx, dy));
                     let fit = *object_fit;
                     let pos = *object_position;
                     let gpu_key = self.compute_image_gpu_key(src, scrolled, fit, pos);
@@ -5943,6 +5948,7 @@ use types::ColorTables;
 
 mod sticky_geom;
 use sticky_geom::{
+    snap_image_box,
     apply_affine_to_grad_verts, apply_transform_to_clip, leaf_is_offscreen, sticky_bound,
     sticky_offset_dx, sticky_offset_dy, translate_rect, VertexPos, COVERAGE_CACHE_MAX_VERTS,
 };

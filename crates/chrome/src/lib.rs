@@ -19,13 +19,14 @@
 mod gate;
 mod model;
 pub use model::{
+    ChromeAccessModel, ChromeConsoleLineModel, ChromeConsoleModel, ChromeNetworkModel, ChromeNetworkRowModel, ChromeFocusModel, ChromeInspectorModel, ChromeInspectorRowModel, ChromeNoteModel, ChromePipModel, ChromeTabCtxModel, ChromePageCtxModel, ChromePrivacyModel, ChromePrivacyRowModel, ChromeReadLaterModel, ChromeReadLaterRowModel,
     bind_model, bind_model_tracked, ChromeArchiveEntryModel, ChromeBookmarkCardModel, ChromeBookmarkFolderModel,
-    ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadModel,
+    ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeControlPanelModel, ChromeDownloadAction, ChromeDownloadModel,
     ChromeDropdownModel, ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
-    ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel,
-    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeUpdateAction,
-    ChromeUpdateModel, ChromeWorkspaceModel,
+    ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel, ChromeShortcutRowModel, ChromeShortcutsModel,
+    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeTabTree, ChromeUpdateAction,
+    ChromeDialogModel, ChromeSecurityModel, ChromeLoginOfferModel, ChromeUpdateModel, ChromeWorkspaceModel,
     ControlPanelShape, OmniboxModel, SelectorTouch, NO_DOMAIN_LABEL,
 };
 

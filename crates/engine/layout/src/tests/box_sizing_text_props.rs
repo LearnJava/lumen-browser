@@ -1176,6 +1176,41 @@ use super::*;
         }
     }
 
+    /// BUG-1334: UA-поля `p/ul/ol/dl/pre/menu/blockquote/figure/dd` и padding списков.
+    #[test]
+    fn block_elements_get_ua_margins_and_list_padding() {
+        let em1 = LengthOrAuto::Length(Length::Em(1.0));
+        let px = |v: f32| LengthOrAuto::Length(Length::Px(v));
+        let style_of = |html: &str, path: &[usize]| {
+            let doc = lumen_html_parser::parse(html);
+            let mut id = doc.body().unwrap();
+            for &i in path {
+                id = doc.get(id).children[i];
+            }
+            crate::style::compute_style(
+                &doc,
+                id,
+                &lumen_css_parser::Stylesheet::default(),
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+                false,
+            )
+        };
+        for tag in ["p", "pre", "dl", "menu", "ul", "ol"] {
+            let st = style_of(&format!("<{tag}>x</{tag}>"), &[0]);
+            assert_eq!(st.margin_top, em1, "{tag} margin-top");
+            assert_eq!(st.margin_bottom, em1, "{tag} margin-bottom");
+        }
+        let ul = style_of("<ul><li>x</li></ul>", &[0]);
+        assert_eq!(ul.padding_left, Length::Px(40.0));
+        let bq = style_of("<blockquote>x</blockquote>", &[0]);
+        assert_eq!((bq.margin_left, bq.margin_right), (px(40.0), px(40.0)));
+        let dd = style_of("<dl><dd>x</dd></dl>", &[0, 0]);
+        assert_eq!((dd.margin_top, dd.margin_left), (px(0.0), px(40.0)));
+        let nested = style_of("<ul><li><ul><li>x</li></ul></li></ul>", &[0, 0, 0]);
+        assert_eq!((nested.margin_top, nested.margin_bottom), (px(0.0), px(0.0)));
+    }
+
     /// UA-дефолты заголовка перекрываются author-CSS (font-size через
     /// pre-pass, margin через main-pass каскада).
     #[test]
@@ -1447,6 +1482,47 @@ use super::*;
         assert_eq!(p.style.text_indent, Length::Px(25.0));
     }
 
+    /// x первого фрагмента каждой строки абзаца (Fixed8: 8 px на символ).
+    fn indent_line_starts(html: &str, css: &str) -> Vec<f32> {
+        let root = lay_measured(html, css, 100.0);
+        let p = first_element_child(&root);
+        let mut xs = Vec::new();
+        for c in &p.children {
+            if let BoxKind::InlineRun { lines, .. } = &c.kind {
+                xs.extend(lines.iter().filter_map(|l| l.first().map(|f| f.x)));
+            }
+        }
+        xs
+    }
+
+    #[test]
+    fn text_indent_each_line_indents_after_forced_break() {
+        let xs = indent_line_starts("<p>aa bb<br>cc<br>dd</p>", "p { text-indent: 40px each-line; }");
+        assert_eq!(xs, [40.0, 40.0, 40.0]);
+    }
+
+    #[test]
+    fn text_indent_plain_leaves_lines_after_break_flush() {
+        let xs = indent_line_starts("<p>aa bb<br>cc<br>dd</p>", "p { text-indent: 40px; }");
+        assert_eq!(xs, [40.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn text_indent_hanging_indents_all_but_first_line() {
+        let xs = indent_line_starts("<p>aa bb cc dd ee ff</p>", "p { text-indent: 40px hanging; }");
+        assert!(xs.len() >= 2, "{xs:?}");
+        assert_eq!(xs[0], 0.0);
+        assert!(xs[1..].iter().all(|x| *x == 40.0), "{xs:?}");
+    }
+
+    #[test]
+    fn text_indent_hanging_each_line_skips_lines_after_break() {
+        let xs = indent_line_starts("<p>aa bb cc dd ee ff<br>gg</p>", "p { text-indent: 40px hanging each-line; }");
+        assert_eq!(xs[0], 0.0);
+        assert_eq!(xs[1], 40.0);
+        assert_eq!(*xs.last().unwrap(), 0.0, "{xs:?}");
+    }
+
     #[test]
     fn text_indent_shifts_first_line() {
         // С text-indent первое слово начинается со сдвигом.
@@ -1581,6 +1657,19 @@ use super::*;
         let root = lay("<p>x</p>", "p { word-spacing: 10px; }");
         let p = first_element_child(&root);
         assert!((p.style.word_spacing - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn word_spacing_percent_and_calc_kept_as_space_fraction() {
+        // BUG-1333: `%` — доля ширины U+0020, резолвится в раскладке.
+        let root = lay("<p>x</p>", "p { word-spacing: 100%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.word_spacing_pct - 1.0).abs() < 0.001);
+        assert_eq!(p.style.word_spacing, 0.0);
+        let root = lay("<p>x</p>", "p { word-spacing: calc(25% + 2px); }");
+        let p = first_element_child(&root);
+        assert!((p.style.word_spacing_pct - 0.25).abs() < 0.001);
+        assert!((p.style.word_spacing - 2.0).abs() < 0.001);
     }
 
     #[test]

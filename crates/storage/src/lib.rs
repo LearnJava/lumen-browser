@@ -25,9 +25,13 @@ pub mod cookies;
 pub mod csp_policies;
 pub mod dns_cache;
 pub mod downloads;
+pub mod external_browser_rules;
 pub mod history;
 pub mod hsts;
 pub mod http_cache;
+pub mod import;
+pub mod import_logins;
+pub mod import_logins_firefox;
 pub mod indexed_db;
 pub mod keyboard_shortcuts;
 pub mod migrations;
@@ -35,6 +39,7 @@ pub mod omnibox_aliases;
 pub mod newtab_tiles;
 pub mod notifications;
 pub mod print_prefs;
+pub mod partition;
 pub mod permissions;
 pub mod permissions_policy;
 pub mod plugins;
@@ -57,6 +62,7 @@ pub mod sw_interceptor;
 pub mod sw_store;
 pub mod sqlite_store;
 pub mod store;
+pub mod saved_logins;
 pub mod tab_groups;
 pub mod tab_sessions;
 pub mod tab_snapshot;
@@ -66,6 +72,7 @@ pub mod workspaces;
 pub use a11y_prefs::{A11yPrefs, A11yPrefsSnapshot, CursorSize};
 pub use adblock::{AdblockStore, ListMeta, Subscription};
 pub use autofill::{Autofill, AutofillEntry};
+pub use saved_logins::{SaveOutcome, SavedLogin, SavedLogins};
 pub use browser_settings::{BrowserSettings, BrowserSettingsSnapshot};
 pub use bfcache::{BfCache, BfCacheEntry, BfCachePayload, FrozenPage};
 pub use keyboard_shortcuts::{KeyboardShortcutEntry, KeyboardShortcuts};
@@ -77,18 +84,20 @@ pub use cache_storage::{CacheStorage, CachedEntry};
 pub use cookies::{default_path, parse_set_cookie, parse_set_cookie_with_psl, Cookie, CookieJar, CookieJarProvider, SameSite};
 pub use csp_policies::{parse_csp_header, CspPolicies, CspPolicy};
 pub use hsts::{
-    default_db_path as hsts_db_path, parse_sts_header, shared_store as shared_hsts_store, HstsEntry,
+    clear_shared_site as clear_hsts_shared_site, default_db_path as hsts_db_path, parse_sts_header, shared_store as shared_hsts_store, HstsEntry,
     HstsStore,
 };
 pub use cached_dns::{CachedDnsResolver, Clock, SystemClock};
 pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
+pub use external_browser_rules::{same_site, ExternalBrowserRule, ExternalBrowserRules, RULE_TTL_SECS};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use indexed_db::{IdbStore, NativeIdbStore};
 pub use migrations::{run_migrations, set_common_pragmas, Migration};
 pub use notifications::{Notification, Notifications};
 pub use print_prefs::{PrintPrefs, PrintPrefsSnapshot};
+pub use partition::{clear_site_data, PartitionKey, SiteDataReport, SiteDataTargets};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use permissions_policy::{
     parse_permissions_policy, PermissionsAllowlist, PermissionsPolicies, PermissionsPolicy,

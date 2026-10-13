@@ -176,6 +176,11 @@ pub(crate) fn route_query_js<R: Send + 'static>(
     js: Option<&Arc<dyn PersistentJs>>,
     read: impl FnOnce(&Arc<dyn PersistentJs>) -> R + Send + 'static,
 ) -> Option<R> {
+    // UX-DIALOGS: JS-поток стоит в модальном диалоге и не ответит; блокирующее
+    // чтение повисло бы до `QUERY_TIMEOUT`, не давая UI нарисовать модалку.
+    if lumen_js::dialog::js_blocked() {
+        return None;
+    }
     match engine {
         // `query` вернёт `Some(inner)`, где `inner` — результат `read`, либо `None`
         // если хэндл ещё не зеркалирован в состояние; двойной `Option` схлопываем

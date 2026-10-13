@@ -194,6 +194,12 @@ pub(crate) struct Lumen {
     /// box. Appended to `overlay_buf` in `RedrawRequested`, unclipped,
     /// independent of [`ChromeOverlayFrameCache`]'s strip-segment cache.
     pub(crate) chrome_floating_dl: Option<lumen_paint::DisplayList>,
+    /// BUG-1605: standalone display list for the popovers/modals salvaged out
+    /// of `#contentArea` (find bar, command palette, `#accessOverlay`, DevTools
+    /// panels, …). They sit *inside* `chrome_page_host_rect`, which the
+    /// 4-strip clip discards, so they are painted from here, unclipped, while
+    /// staying in `chrome_layout` for hit-testing. `None` when none is open.
+    pub(crate) chrome_popover_dl: Option<lumen_paint::DisplayList>,
     /// CC-18 срез 3: per-panel drag offset from the CSS-computed position, in
     /// window CSS px, keyed by element id (`ids::DEMO_BAR`/`ids::INFO_PANEL`).
     ///
@@ -256,6 +262,9 @@ pub(crate) struct Lumen {
     /// [`ChromeOverlayFrameCache`]'s doc comment for why "unconditional" (not
     /// "only when bytes changed") is the correct, safe choice here.
     pub(crate) chrome_layout_generation: u64,
+    /// UX-LOADING: `nav_start.is_some()` as last bound into the chrome
+    /// (spinner / stop button); a flip re-binds the chrome.
+    pub(crate) chrome_loading_shown: bool,
     /// PERF-16 срез 2: кэш emit display list по поддереву для хрома — между проходами
     /// [`Self::relayout_chrome_host`] неизменившиеся куски воспроизводятся копированием
     /// (`LUMEN_NO_EMIT_CACHE=1` выключает).
@@ -482,6 +491,9 @@ pub(crate) struct Lumen {
     /// layout viewport: `effective = physical / (meta_scale * zoom_factor)`.
     /// Resets to 1.0 on tab switch (stored in `PageSnapshot` for background tabs).
     pub(crate) zoom_factor: f32,
+    /// Host `zoom_factor` is remembered under (UX-ZOOM); `None` for pages without
+    /// an `http(s)` host. `sync_site_zoom` re-reads the stored zoom when it changes.
+    pub(crate) zoom_host: Option<String>,
     /// Zoom factor the current display list was laid out at (ADR-016 M0.3).
     ///
     /// Transform-first zoom lets `zoom_factor` diverge from this between a
@@ -533,6 +545,12 @@ pub(crate) struct Lumen {
     /// начала drag-а — это даёт «закреплённый под пальцем» thumb (стандартный
     /// scrollbar UX).
     pub(crate) scroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Активный drag горизонтального thumb-а страницы (UX-SCROLLBAR).
+    /// В `ScrollDrag` поля `*_y` несут X: `(start_scroll_x, start_mouse_x)`.
+    pub(crate) hscroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Состояния thumb-ов (вертикальный, горизонтальный) на последней
+    /// отрисовке: смена при движении мыши запрашивает перерисовку.
+    pub(crate) last_thumb_states: (scrollbar::ThumbState, scrollbar::ThumbState),
     /// Активный drag СОБСТВЕННОГО scrollbar-thumb-а фрейма (FRAME-3
     /// remainder) — зеркало [`Self::scroll_drag`], но должен помнить ЕЩЁ и
     /// КАКОЙ фрейм: несколько фреймов на странице держат независимые
@@ -857,6 +875,23 @@ pub(crate) struct Lumen {
     /// `(origin, scope)` internally, same pattern as `cache_store`. In-memory
     /// SQLite; persisted only for the lifetime of the session.
     pub(crate) push_store: Arc<lumen_storage::PushStore>,
+    /// Session-scoped SQLite registry of service worker registrations
+    /// (`lumen_storage::ServiceWorkers`). Distinct from `sw_worker_store` (live
+    /// worker handles); UX-PARTITION: "Clear site data" wipes it per site.
+    pub(crate) sw_registry: Arc<lumen_storage::ServiceWorkers>,
+    /// Session-scoped Web Notifications store (`lumen_storage::Notifications`);
+    /// UX-PARTITION: "Clear site data" wipes it per site.
+    pub(crate) notifications_store: Arc<lumen_storage::Notifications>,
+    /// Session-scoped per-origin visit counters (`lumen_storage::SiteEngagementStore`);
+    /// UX-PARTITION: "Clear site data" wipes it per site.
+    pub(crate) site_engagement: Arc<lumen_storage::SiteEngagementStore>,
+    /// Session-scoped per-origin policy records of the loaded pages (UX-PARTITION-10):
+    /// CSP, Referrer-Policy, Permissions-Policy and the Web App Manifest link.
+    /// "Clear site data" wipes them per site.
+    pub(crate) csp_policies: Arc<lumen_storage::CspPolicies>,
+    pub(crate) referrer_policies: Arc<lumen_storage::ReferrerPolicies>,
+    pub(crate) permissions_policies: Arc<lumen_storage::PermissionsPolicies>,
+    pub(crate) web_manifests: Arc<lumen_storage::WebManifests>,
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
@@ -1183,6 +1218,9 @@ pub(crate) struct Lumen {
     /// alongside `frame_text_cursor` on navigation/tab reset — see that
     /// field's doc comment.
     pub(crate) frame_text_selection_anchor: HashMap<(usize, NodeId), usize>,
+    /// Undo/redo stacks of typeable fields (UX-UNDO), keyed by frame index
+    /// (`None` = the page) and `NodeId`. Cleared with `frame_text_cursor`.
+    pub(crate) field_history: HashMap<(Option<usize>, NodeId), FieldHistory>,
     /// `<input type="color">` ВНУТРИ содержимого фрейма, чей picker-оверлей
     /// открыт (FRAME-6), keyed the same way [`Self::frame_text_cursor`] is —
     /// `NodeId` уникален лишь внутри своего документа. Зеркало страничного
@@ -1212,7 +1250,7 @@ pub(crate) struct Lumen {
     /// [`super::text_drag_select::Lumen::update_text_drag_select`] on every
     /// `CursorMoved` while held, and disarmed on `ElementState::Released`
     /// (`mouse_input.rs`) — the button-release path every other drag field on
-    /// this struct (`scroll_drag`, `panel_resize`, `dnd_state`) already
+    /// this struct (`scroll_drag`, `dnd_state`) already
     /// follows.
     pub(crate) text_drag: Option<super::text_drag_select::TextDragTarget>,
     /// Mouse-drag selection over ordinary page text in progress — armed by
@@ -1230,8 +1268,43 @@ pub(crate) struct Lumen {
     /// Download manager: background download threads, progress channel, and
     /// panel visibility state. Panel toggled via Ctrl+Shift+J.
     pub(crate) downloads: download::DownloadManager,
+    /// UX-IMPORT: фоновый поток импорта закладок/истории/паролей из
+    /// Chrome/Edge/Firefox (`import_manager.rs`). Запускается действием
+    /// палитры «Import Bookmarks and History»; `poll()` зовётся там же, где
+    /// [`Self::downloads`].
+    pub(crate) import_manager: import_manager::ImportManager,
+    /// UX-TRANSLATE: перевод текущей страницы локальной моделью
+    /// (`translate_manager.rs`); результат подбирается в `about_to_wait`.
+    pub(crate) translate_manager: translate_manager::TranslateManager,
     /// UPD-9: self-update infobar/settings state (`update_ui.rs`).
     pub(crate) update_ui: update_ui::UpdateUi,
+    /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);
+    /// `None` — панель скрыта.
+    pub(crate) login_offer: Option<password_store::LoginOffer>,
+    /// UX-DIALOGS: открытый модальный диалог страницы (`#dialogBox`); пока он
+    /// есть, страница и остальной хром не получают ввода.
+    pub(crate) page_dialog: Option<super::dialogs::PageDialog>,
+    /// UX-DIALOGS: UI-сторона посредника `lumen_js::dialog` подключена.
+    pub(crate) page_dialog_wired: bool,
+    /// UX-DIALOGS: уход со страницы, ждущий ответа на `beforeunload`-диалог.
+    pub(crate) pending_leave: Option<super::dialogs::PendingLeave>,
+    /// UX-DIALOGS: пользователь подтвердил уход — повторный вход в навигацию
+    /// не спрашивает и не перепосылает события.
+    pub(crate) leave_confirmed: bool,
+    /// UX-PASSWORDS срез 3: подставленный на странице аккаунт; панель
+    /// «Другой аккаунт» показывается, если у сайта их несколько.
+    pub(crate) login_fill: Option<password_store::LoginFill>,
+    /// UX-PASSWORDS срез 4: форма регистрации, которой предложен сгенерированный
+    /// пароль (поля нового пароля и подтверждения). Сам пароль не хранится —
+    /// создаётся по кнопке.
+    pub(crate) login_gen: Option<Vec<NodeId>>,
+    /// UX-AUTOFILL срез 2: предложение запомнить значения формы (та же панель
+    /// `#loginBar`, что и у паролей; пароль и автозаполнение друг друга не вытесняют).
+    pub(crate) autofill_offer: Option<autofill_store::AutofillOffer>,
+    /// UX-AUTOFILL срез 4: карта, которую предложено сохранить (отдельное явное подтверждение).
+    pub(crate) card_offer: Option<card_store::Card>,
+    /// Карты в открытом списке у поля номера: подпись строки → (поле, значения) для подстановки.
+    pub(crate) card_menu: Vec<(String, Vec<(NodeId, String)>)>,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.
@@ -1253,6 +1326,9 @@ pub(crate) struct Lumen {
     /// is evicted from `bg_tabs` and stored in `tab_snapshots`; only this
     /// cheap struct remains in RAM.
     pub(crate) hibernated_tabs: HashMap<usize, tab_lifecycle::TabMetadata>,
+    /// UX-CRASH: HTML показанного экрана падения и исходный источник упавшей
+    /// страницы — `reload()` возвращает его вместо повторного показа экрана.
+    pub(crate) crashed: Option<(String, PageSource)>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     pub(crate) tab_snapshots: lumen_storage::TabSnapshotStore,
     /// SQLite-backed checkpoint store for T2 (BackgroundOld) tabs (ADR-008 §10I).
@@ -1309,8 +1385,8 @@ pub(crate) struct Lumen {
     /// Persistent workspace storage — SQLite in-memory during testing; wired to
     /// a disk path in production via `Workspaces::open(path)`.
     pub(crate) workspaces: lumen_storage::Workspaces,
-    /// Profile switcher dropdown state (DS-14), anchored below the toolbar
-    /// avatar button (`toolbar::avatar_x()`).
+    /// Profile switcher dropdown state (DS-14); drawn by `#profileMenu`/
+    /// `#profileMenuH` in the engine chrome.
     pub(crate) profile_menu: panels::profile_menu::ProfileMenuPanel,
     /// Persistent profile registry (§9.3, DS-14): profile metadata + which
     /// one is active. Opened from the portable data dir
@@ -1340,6 +1416,12 @@ pub(crate) struct Lumen {
     /// `Ctrl+Shift+P` toggles visibility.  State is in-memory only (no
     /// persistence across sessions).
     pub(crate) permission: panels::permission_panel::PermissionPanel,
+    /// On-disk permission store (`permissions.db`); `permission` uses it except
+    /// while the Anonymous profile is active (see `sync_permission_store`).
+    pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,
+    /// Rules «open this site in another browser» for 30 days (COMPAT-HANDOFF),
+    /// `external_browser_rules.db`; unused while the Anonymous profile is active.
+    pub(crate) external_browser_rules: Arc<lumen_storage::ExternalBrowserRules>,
     /// Right-docked sidebar web panel state (7D.3).
     ///
     /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.
@@ -1347,12 +1429,6 @@ pub(crate) struct Lumen {
     /// When visible, `page_content_width_css()` subtracts
     /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     pub(crate) sidebar: panels::sidebar_panel::SidebarPanel,
-    /// Re-layoutable source of the web sidebar page (parsed DOM + stylesheet).
-    ///
-    /// Kept so a drag-resize of the sidebar can reflow its content to the new
-    /// width instead of stretching a frozen display list. `None` until a page
-    /// is opened via [`Self::open_sidebar_page`].
-    pub(crate) sidebar_source: Option<LayoutSource>,
     /// AI assistant sidebar panel (§12.8, GG-1).
     ///
     /// Right-docked 200 CSS px panel with a prompt input field and response area.
@@ -1362,14 +1438,6 @@ pub(crate) struct Lumen {
     pub(crate) ai_panel: panels::ai_panel::AiPanel,
     /// Persisted, drag-resizable widths of the docked sidebars (F2-6).
     ///
-    /// Replaces the panels' compiled `PANEL_WIDTH` constants: `width_for(id,
-    /// default)` supplies the active width, dragging a panel's inner edge calls
-    /// `set_width` + `relayout` + `save`. Loaded at startup, so the layout
-    /// survives a restart.
-    pub(crate) panel_layout: panel_layout::PanelLayout,
-    /// In-flight docked-panel resize drag: `(dock side, panel id)` of the edge
-    /// currently being dragged, or `None` when no resize is active.
-    pub(crate) panel_resize: Option<(panel_layout::Dock, &'static str)>,
     /// Floating overlay showing a single user annotation (§12.2, GG-2).
     ///
     /// Opened when the user selects a `@notes`-search result from the omnibox
@@ -1710,6 +1778,8 @@ pub(crate) struct Lumen {
     /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
     /// window / Close others / Close to the right. Hidden unless `open`.
     pub(crate) tab_context_menu: tabs::context_menu::TabContextMenu,
+    /// UX-REOPEN-TAB: stack of recently closed tabs (Ctrl+Shift+T).
+    pub(crate) closed_tabs: tabs::closed::ClosedTabs,
     /// Page-level spell-check suggestion menu (P3-spell slice 3): opened by
     /// right-clicking a misspelled word in a focused text `<input>`. Hidden
     /// unless open.

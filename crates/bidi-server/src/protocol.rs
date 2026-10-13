@@ -1073,7 +1073,8 @@ fn capabilities() -> JsonValue {
         JsonValue::String(std::env::consts::OS.into()),
     );
     caps.insert("setWindowRect".into(), JsonValue::Bool(false));
-    caps.insert("userAgent".into(), JsonValue::String(format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));
+    // BUG-1614: the UA the network actually sends (default profile), not a Lumen token.
+    caps.insert("userAgent".into(), JsonValue::String(lumen_core::chrome_user_agent().into()));
     JsonValue::Object(caps)
 }
 

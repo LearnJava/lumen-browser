@@ -57,6 +57,26 @@ pub(crate) fn install_print(
     Ok(())
 }
 
+/// `alert`/`confirm`/`prompt`/`beforeunload`: блокирующий модальный диалог
+/// (UX-DIALOGS). Ответ — строка: `"1"` + текст при согласии, `"0"` при отказе.
+pub(crate) fn install_dialogs(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    store: &mut Vec<OwnedNativeFn>,
+) -> JsResult<()> {
+    reg!(scope, ctx, store, "_lumen_dialog", |kind: String, message: String, default_value: String, origin: String| -> String {
+        let kind = match kind.as_str() {
+            "confirm" => crate::dialog::DialogKind::Confirm,
+            "prompt" => crate::dialog::DialogKind::Prompt,
+            "beforeunload" => crate::dialog::DialogKind::BeforeUnload,
+            _ => crate::dialog::DialogKind::Alert,
+        };
+        let reply = crate::dialog::request(kind, &message, &default_value, &origin);
+        if reply.accepted { format!("1{}", reply.text) } else { "0".to_owned() }
+    });
+    Ok(())
+}
+
 /// `<dialog>` focus/blur requests (HTML LS §6.6.3).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_dialog_focus(

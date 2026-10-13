@@ -135,6 +135,23 @@ enum LoopMode {
     Thread(std::sync::mpsc::Receiver<browser_thread::UiMsg>),
 }
 
+/// Открыть хранилище в `<exe>/data/<file>`; при ошибке (нет прав, битый файл)
+/// падаем на in-memory — окно важнее истории.
+#[allow(clippy::expect_used)]  // in-memory SQLite не падает, docs/lint-policy.md §10
+fn open_persistent<T, E: std::fmt::Display + std::fmt::Debug>(
+    file: &str,
+    open: impl FnOnce(std::path::PathBuf) -> Result<T, E>,
+    in_memory: impl FnOnce() -> Result<T, E>,
+    what: &str,
+) -> T {
+    let dir = adblock::browser_data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    open(dir.join(file)).unwrap_or_else(|e| {
+        eprintln!("[lumen] {what}: {e}; using in-memory store");
+        in_memory().expect("in-memory store always opens")
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_window_mode_inner(
@@ -245,6 +262,7 @@ fn run_window_mode_inner(
     // the per-tab checkbox flips it via lumen_network::set_global_adblock_enabled.
     // Returns the persistent store; offline-first (cached lists / bundled fallback).
     let adblock_store = config::init_adblock();
+    crate::threat_store::install_subresource_filter();
 
     // Background refresh of external filter lists (EasyList/EasyPrivacy):
     // conditional GET of any list past its ~4-day expiry, then hot-swap the
@@ -261,6 +279,15 @@ fn run_window_mode_inner(
                     eprintln!("adblock: lists updated, filter hot-swapped ({count} rules)");
                 }
             })
+            .ok();
+    }
+
+    // UX-SECURITY-UI: фоновая загрузка списков фишинга/вредоносных сайтов.
+    {
+        let http = config::global().apply_http(lumen_network::HttpClient::new());
+        std::thread::Builder::new()
+            .name("threat-feeds".to_owned())
+            .spawn(move || crate::threat_feeds::refresh(&http))
             .ok();
     }
 
@@ -326,6 +353,24 @@ fn run_window_mode_inner(
         .collect();
     let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
 
+    // UX-PERMISSIONS: решения сайтов на диске; делится с push_store.
+    let permissions_store = Arc::new(open_persistent(
+        "permissions.db",
+        lumen_storage::Permissions::open,
+        lumen_storage::Permissions::open_in_memory,
+        "permissions init",
+    ));
+    let external_browser_rules = Arc::new(open_persistent(
+        "external_browser_rules.db",
+        lumen_storage::ExternalBrowserRules::open,
+        lumen_storage::ExternalBrowserRules::open_in_memory,
+        "external_browser_rules init",
+    ));
+    let _ = external_browser_rules.purge_expired(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
+    );
     let mut app = Lumen {
         display_list: Vec::new(),
         display_list_epoch: 1,
@@ -357,6 +402,7 @@ fn run_window_mode_inner(
         chrome_content_area_detached: None,
         chrome_floating_detached: Vec::new(),
         chrome_floating_dl: None,
+        chrome_popover_dl: None,
         chrome_float_offsets: HashMap::new(),
         chrome_float_drag: None,
         chrome_float_last_press: None,
@@ -367,6 +413,7 @@ fn run_window_mode_inner(
         chrome_prev_forced_colors: false,
         chrome_dl_content_hash: None,
         chrome_layout_generation: 0,
+        chrome_loading_shown: false,
         chrome_emit_cache: lumen_paint::SubtreeEmitCache::new(),
         chrome_overlay_frame_cache: None,
         chrome_anim_frame: None,
@@ -416,6 +463,8 @@ fn run_window_mode_inner(
         hovered_frame: None,
         active_nid: None,
         scroll_drag: None,
+        hscroll_drag: None,
+        last_thumb_states: Default::default(),
         frame_scroll_drag: None,
         scroll_anim: None,
         scroll_shared,
@@ -490,8 +539,25 @@ fn run_window_mode_inner(
         ),
         push_store: Arc::new(lumen_storage::PushStore::new(
             Arc::new(lumen_storage::PushSubscriptions::open_in_memory().expect("push_store init")),
-            Arc::new(lumen_storage::Permissions::open_in_memory().expect("push_store permissions init")),
+            permissions_store.clone(),
         )),
+        sw_registry: Arc::new(
+            lumen_storage::ServiceWorkers::open_in_memory().expect("sw_registry init"),
+        ),
+        notifications_store: Arc::new(
+            lumen_storage::Notifications::open_in_memory().expect("notifications_store init"),
+        ),
+        csp_policies: Arc::new(lumen_storage::CspPolicies::open_in_memory().expect("csp_policies init")),
+        referrer_policies: Arc::new(
+            lumen_storage::ReferrerPolicies::open_in_memory().expect("referrer_policies init"),
+        ),
+        permissions_policies: Arc::new(
+            lumen_storage::PermissionsPolicies::open_in_memory().expect("permissions_policies init"),
+        ),
+        web_manifests: Arc::new(lumen_storage::WebManifests::open_in_memory().expect("web_manifests init")),
+        site_engagement: Arc::new(
+            lumen_storage::SiteEngagementStore::open_in_memory().expect("site_engagement init"),
+        ),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),
@@ -523,10 +589,20 @@ fn run_window_mode_inner(
         load_failed: false,
         load_error_message: None,
         nav_start: None,
-        history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
+        history_fts: open_persistent(
+            "history_fts.db",
+            HistoryFts::open,
+            HistoryFts::open_in_memory,
+            "history_fts init",
+        ),
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
-        next_history_id: 1,
+        // Rowid в history_fts переживает перезапуск: микросекунды эпохи
+        // не пересекаются с rowid прошлых сессий.
+        next_history_id: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(1),
         hyp_provider: Arc::new(KnuthLiangHyphenation::new()),
         animated_gifs: HashMap::new(),
         gif_last_frame: HashMap::new(),
@@ -556,6 +632,7 @@ fn run_window_mode_inner(
         focused_node: None,
         focused_frame: None,
         frame_text_cursor: HashMap::new(),
+        field_history: HashMap::new(),
         frame_text_selection_anchor: HashMap::new(),
         frame_color_picker: None,
         frame_date_picker: None,
@@ -568,11 +645,24 @@ fn run_window_mode_inner(
         downloads: download::DownloadManager::open_history(
             adblock::browser_data_dir().join("downloads.db"),
         ),
+        import_manager: import_manager::ImportManager::new(),
+        translate_manager: translate_manager::TranslateManager::default(),
         update_ui: update_ui::UpdateUi::new(),
+        login_offer: None,
+        page_dialog: None,
+        page_dialog_wired: false,
+        pending_leave: None,
+        leave_confirmed: false,
+        autofill_offer: None,
+        card_offer: None,
+        card_menu: Vec::new(),
+        login_fill: None,
+        login_gen: None,
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),
         hibernated_tabs: HashMap::new(),
+        crashed: None,
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
             .expect("tab_snapshots in-memory"),
         t2_store: lumen_storage::SleepingTabStore::open_in_memory()
@@ -607,18 +697,29 @@ fn run_window_mode_inner(
         control_panel_mini_open: false,
         control_panel_info_open: false,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
-        permission: panels::permission_panel::PermissionPanel::new(),
+        permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
+        permissions_disk_store: permissions_store,
+        external_browser_rules,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
-        sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),
-        panel_layout: panel_layout::PanelLayout::load(),
-        panel_resize: None,
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),
         ai_backend: Box::new(lumen_core::NullAiBackend),
-        bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
+        // UX-IMPORT: закладки переживают перезапуск (раньше были только
+        // in-memory — закладка пропадала при выходе, в т.ч. импортированные).
+        bookmarks: open_persistent(
+            "bookmarks.db",
+            lumen_storage::Bookmarks::open,
+            lumen_storage::Bookmarks::open_in_memory,
+            "bookmarks init",
+        ),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         tab_groups: lumen_storage::TabGroups::open_in_memory().expect("tab_groups in-memory"),
-        history_store: History::open_in_memory().expect("history_store in-memory"),
+        history_store: open_persistent(
+            "history.db",
+            History::open,
+            History::open_in_memory,
+            "history_store init",
+        ),
         history_panel: panels::history_panel::HistoryPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
@@ -698,6 +799,7 @@ fn run_window_mode_inner(
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
         laid_out_zoom_factor: zoom::ZOOM_DEFAULT,
+        zoom_host: None,
         pending_zoom_relayout: None,
         display_url: None,
         current_history_state_json: String::from("null"),
@@ -711,6 +813,7 @@ fn run_window_mode_inner(
         tab_drag: None,
         dnd_state: None,
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
+        closed_tabs: tabs::closed::ClosedTabs::default(),
         page_context_menu: page_context_menu::PageContextMenu::default(),
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
         spell_ignored: std::collections::HashSet::new(),
@@ -720,6 +823,8 @@ fn run_window_mode_inner(
         cert_panel: panels::cert_panel::CertPanel::new(),
         cert_interstitial: panels::cert_interstitial::CertInterstitial::new(),
     };
+    // UX-PERMISSIONS-3: a persisted Anonymous profile must not write decisions to disk.
+    app.sync_permission_store();
     // BUG-411: seed the shields fallback from the persisted "Блокировать
     // рекламу" setting and push it at the process-global filter, which
     // `config::init_adblock` deliberately leaves off. Before this the setting

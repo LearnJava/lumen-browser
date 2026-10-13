@@ -144,7 +144,7 @@ pub(crate) fn extract_first_letter_float(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
-            used_line_height: inner_style.font_size * inner_style.line_height,
+            used_padding: None, used_line_height: inner_style.font_size * inner_style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -161,7 +161,7 @@ pub(crate) fn extract_first_letter_float(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
-            used_line_height: outer_style.font_size * outer_style.line_height,
+            used_padding: None, used_line_height: outer_style.font_size * outer_style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -273,7 +273,7 @@ pub(crate) fn extract_initial_letter(
         let inner = LayoutBox {
             node,
             rect: Rect::ZERO,
-            used_line_height: inner_style.font_size * inner_style.line_height,
+            used_padding: None, used_line_height: inner_style.font_size * inner_style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -299,7 +299,7 @@ pub(crate) fn extract_initial_letter(
         return Some(LayoutBox {
             node,
             rect: Rect::ZERO,
-            used_line_height: outer_style.font_size * outer_style.line_height,
+            used_padding: None, used_line_height: outer_style.font_size * outer_style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,
@@ -594,7 +594,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
         let box2 = LayoutBox {
             node: child.node,
             rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
-            used_line_height: base_h,
+            used_padding: None, used_line_height: base_h,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

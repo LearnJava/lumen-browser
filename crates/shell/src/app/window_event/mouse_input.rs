@@ -30,6 +30,7 @@ impl Lumen {
             // menu before deciding whether to reopen it.
             if state == ElementState::Pressed && self.page_context_menu.is_open() {
                 self.page_context_menu.close();
+                self.relayout_chrome_host();
             }
             // CC-4: right-click on a tab opens the tab context menu
             // instead of starting a mouse gesture.
@@ -55,6 +56,7 @@ impl Lumen {
                     let collapsed = group.is_some_and(|g| self.tab_strip.is_collapsed(g));
                     self.tab_context_menu
                         .open_for(idx, pinned, grouped, collapsed, x_css, y_css);
+                    self.relayout_chrome_host();
                     self.request_redraw();
                     return;
                 }
@@ -121,29 +123,25 @@ impl Lumen {
             if self.floating_panel_press(x_css, y_css, event_loop) {
                 return;
             }
-            // F2-6: a press on a docked panel's inner edge begins a
-            // resize drag; the click never reaches the page / panels.
-            if let Some(edge) = self.resize_edge_at(x_css, y_css) {
-                self.panel_resize = Some(edge);
+            // UX-DIALOGS: модальный диалог страницы — остальное не кликается.
+            if self.page_dialog.is_some() {
                 return;
             }
             // CC-4: while the tab context menu is open it captures the
             // click — picking a row runs the action, anywhere else just
             // dismisses it. The click never reaches the page / panels.
             if self.tab_context_menu.is_open() {
-                let win_w = self.viewport_width_css();
-                let win_h = self.window_height_css();
-                let action = tabs::context_menu::action_at(
-                    &self.tab_context_menu,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                );
+                let action = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                    hit.path.iter().find_map(|&nid| {
+                        self.chrome_data_attr(nid, "data-tab-ctx")
+                            .and_then(|v| tabs::context_menu::MenuAction::from_attr(&v))
+                    })
+                });
                 self.tab_context_menu.close();
                 if let Some(action) = action {
                     self.exec_tab_menu_action(action, event_loop);
                 }
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }
@@ -151,13 +149,17 @@ impl Lumen {
             // captures the click — picking a row applies the correction /
             // dictionary action, anywhere else just dismisses it.
             if self.page_context_menu.is_open() {
-                let win_w = self.viewport_width_css();
-                let win_h = self.window_height_css();
-                let action = self.page_context_menu.action_at(x_css, y_css, win_w, win_h);
+                let action = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                    hit.path.iter().find_map(|&nid| {
+                        self.chrome_data_attr(nid, "data-page-ctx")
+                            .and_then(|v| self.page_context_menu.action_from_attr(&v))
+                    })
+                });
                 if let Some(action) = action {
                     self.exec_spell_menu_action(action);
                 }
                 self.page_context_menu.close();
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }
@@ -165,30 +167,57 @@ impl Lumen {
             // captures clicks on its buttons / close / body before they
             // reach the page. A click outside the panel closes it.
             if self.downloads.visible {
-                let win = (
-                    self.viewport_width_css() as u32,
-                    self.window_height_css() as u32,
-                );
-                if let Some(action) = download::hit_test(&self.downloads, x_css, y_css, win) {
-                    use download::DownloadAction;
-                    match action {
-                        DownloadAction::Open(id) => {
-                            self.downloads.open_download(id);
+                let path = self.chrome_hit_test(x_css, y_css).map(|h| h.path).unwrap_or_default();
+                let button = path.iter().find_map(|&nid| {
+                    let action = self
+                        .chrome_data_attr(nid, "data-dl")
+                        .and_then(|v| lumen_chrome::ChromeDownloadAction::from_attr(&v));
+                    let id = self.chrome_data_id(nid, "data-dl-id");
+                    action.zip(id).map(|(a, id)| (a, id as u32))
+                });
+                let is_clear =
+                    path.iter().any(|&nid| self.chrome_data_attr(nid, "data-dl").as_deref() == Some("clear"));
+                let in_panel = path.iter().any(|&nid| {
+                    self.chrome_doc
+                        .as_ref()
+                        .is_some_and(|(doc, _)| doc.get(nid).get_attr("id") == Some(lumen_chrome::ids::DOWNLOADS_PANEL))
+                });
+                if let Some((action, raw)) = button {
+                    if let Some(id) = self.downloads.entries().iter().map(|e| e.id).find(|id| id.raw() == raw) {
+                        match action {
+                            lumen_chrome::ChromeDownloadAction::Open => {
+                                self.downloads.open_download(id);
+                            }
+                            lumen_chrome::ChromeDownloadAction::Reveal => {
+                                self.downloads.show_in_folder(id);
+                            }
+                            lumen_chrome::ChromeDownloadAction::Cancel => self.downloads.cancel(id),
                         }
-                        DownloadAction::Reveal(id) => {
-                            self.downloads.show_in_folder(id);
-                        }
-                        DownloadAction::Cancel(id) => {
-                            self.downloads.cancel(id);
-                        }
-                        DownloadAction::ClearFinished => {
-                            self.downloads.clear_finished();
-                        }
-                        DownloadAction::Close | DownloadAction::Outside => {
-                            self.downloads.close();
-                        }
-                        DownloadAction::Inside => {}
                     }
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                    return;
+                }
+                if is_clear {
+                    self.downloads.clear_finished();
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                    return;
+                }
+                // `×` (`data-action="toggle-downloads"`) falls through to the
+                // chrome dispatch below; the rest of the panel swallows the
+                // click, a click outside closes the popover.
+                let on_action = path.iter().any(|&nid| {
+                    self.chrome_doc
+                        .as_ref()
+                        .is_some_and(|(doc, _)| doc.get(nid).get_attr("data-action").is_some())
+                });
+                if in_panel && !on_action {
+                    return;
+                }
+                if !in_panel {
+                    self.downloads.close();
+                    self.relayout_chrome_host();
                     self.request_redraw();
                     return;
                 }
@@ -258,62 +287,42 @@ impl Lumen {
             // Command palette (task #23): modal — captures every click.
             // A click on a row activates it; a click on the scrim closes.
             if self.command_palette.visible {
-                // BUG-461: measured `.cp-box`/`.cp-row` rects from the
-                // engine chrome layout, not a guessed viewport-centred box —
-                // see `Lumen::chrome_cp_box_rect`'s doc comment.
-                let box_rect = self.chrome_cp_box_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
-                let row_rects = self.chrome_cp_row_rects();
-                match panels::command_palette::hit_test(
-                    x_css,
-                    y_css,
-                    box_rect,
-                    &row_rects,
-                    self.command_palette.scroll_row,
-                ) {
-                    panels::command_palette::PaletteHit::Row(filtered_idx) => {
-                        self.command_palette.selected = filtered_idx;
-                        if let Some(item) = self.command_palette.selected_item().cloned() {
-                            self.command_palette.close();
-                            self.activate_palette(&item, event_loop);
-                        }
-                    }
-                    panels::command_palette::PaletteHit::Dismiss => {
+                // `data-cp-index` on a `.cp-row` activates it; a hit on the
+                // `#cpOverlay` scrim itself (not `.cp-box`) closes.
+                let hit = self.chrome_hit_test(x_css, y_css);
+                let row = hit.as_ref().and_then(|h| {
+                    h.path.iter().find_map(|&nid| self.chrome_data_id(nid, "data-cp-index"))
+                });
+                let on_scrim = hit.as_ref().is_none_or(|h| {
+                    h.path.first().and_then(|&nid| self.chrome_node_id_is(nid, lumen_chrome::ids::CP_OVERLAY))
+                        .unwrap_or(true)
+                });
+                if let Some(idx) = row {
+                    self.command_palette.selected = idx as usize;
+                    if let Some(item) = self.command_palette.selected_item().cloned() {
                         self.command_palette.close();
+                        self.activate_palette(&item, event_loop);
                     }
-                    panels::command_palette::PaletteHit::Inside => {}
+                } else if on_scrim {
+                    self.command_palette.close();
                 }
                 self.request_redraw();
                 return;
             }
 
-            // Focus mode widget (task #25): floating top-right card. A
-            // click on the ring pauses/resumes; the `×` corner exits.
-            if self.focus.active {
-                let win_w = self.viewport_width_css();
-                if let Some(hit) =
-                    panels::focus_panel::hit_test(&self.focus, x_css, y_css, win_w)
-                {
-                    match hit {
-                        panels::focus_panel::FocusHit::TogglePause => {
-                            self.focus.timer.toggle_pause();
-                            if self.focus.timer.running {
-                                let now_ms =
-                                    self.epoch.elapsed().as_secs_f64() * 1000.0;
-                                self.focus.tick(now_ms);
-                            }
-                        }
-                        panels::focus_panel::FocusHit::Exit => self.focus.exit(),
-                    }
-                    self.request_redraw();
-                    return;
-                }
-            }
+            // Focus mode pill: `.focus-timer` in the engine chrome
+            // (`toggle-focus-timer` pauses, `toggle-focus` exits).
 
             // Picture-in-picture window (task #21): floating draggable
             // card. `×` closes, the centre button toggles play/pause, the
             // title bar starts a drag, the body swallows the click.
             if self.pip.active
-                && let Some(hit) = panels::pip_window::hit_test(&self.pip, x_css, y_css)
+                && let Some(hit) = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                    hit.path.iter().find_map(|&nid| {
+                        self.chrome_data_attr(nid, "data-pip")
+                            .and_then(|v| panels::pip_window::PipHit::from_attr(&v))
+                    })
+                })
             {
                 match hit {
                     panels::pip_window::PipHit::Close => self.pip.close(),
@@ -323,6 +332,7 @@ impl Lumen {
                     }
                     panels::pip_window::PipHit::Body => {}
                 }
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }
@@ -351,352 +361,21 @@ impl Lumen {
             // buttons, toolbar buttons) lived here — removed along with
             // the paint/hit-test functions it called, unreachable since
             // CC-4 routed those clicks through `chrome_hit_test` above.
-            // Archive panel: close on click below tab bar when open.
-            if self.archive.visible {
-                let win_w = self.viewport_width_css();
-                match tabs::archive::hit_test_panel(
-                    &self.archive,
-                    x_css,
-                    y_css,
-                    win_w,
-                    toolbar::CHROME_H,
-                ) {
-                    Some(tabs::archive::ArchiveHit::Restore(id)) => {
-                        if let Some(entry) = self.archive.take(id)
-                            && !entry.url.is_empty()
-                        {
-                            self.navigate_to(PageSource::url(entry.url));
-                        }
-                        self.archive.close();
-                        self.request_redraw();
-                        return;
-                    }
-                    Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
-                        self.archive.take(id);
-                        self.request_redraw();
-                        return;
-                    }
-                    Some(tabs::archive::ArchiveHit::Inside) => {
-                        self.request_redraw();
-                        return;
-                    }
-                    Some(tabs::archive::ArchiveHit::Outside) | None => {
-                        self.archive.close();
-                        self.request_redraw();
-                    }
-                }
-            }
+            // Archive panel: `#archivePanel` in the engine chrome
+            // (`toggle-archive` / `archive-restore` / `archive-dismiss`).
 
-            // Vertical tab panel: intercept clicks within its (possibly
-            // cross-docked) area. Panel hit-test is left-relative, so map
-            // the window x into panel-local space.
-            let vt_w = self.panel_layout.width_for(
-                panel_layout::ID_VERTICAL_TABS,
-                panels::vertical_tabs::PANEL_WIDTH,
-            );
-            let vt_origin = self
-                .dock_origin_x(self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS), vt_w);
-            if self.vertical_tabs.visible
-                && x_css >= vt_origin
-                && x_css < vt_origin + vt_w
-            {
-                let win_h = self.viewport_height_css() + toolbar::CHROME_H;
-                match panels::vertical_tabs::hit_test(
-                    &self.tab_strip,
-                    x_css - vt_origin,
-                    y_css,
-                    toolbar::CHROME_H,
-                    win_h,
-                    self.vertical_tabs.scroll_y,
-                    vt_w,
-                ) {
-                    Some(panels::vertical_tabs::VTabHit::Tab(idx)) => {
-                        self.switch_tab(idx);
-                    }
-                    Some(panels::vertical_tabs::VTabHit::Close(idx)) => {
-                        self.close_tab(idx, event_loop);
-                    }
-                    Some(panels::vertical_tabs::VTabHit::Empty) | None => {}
-                }
-                return;
-            }
+            // Privacy network panel: `#privacyPanel` in the engine chrome
+            // (`bind_privacy`, `toggle-privacy`).
 
-            // Tree-style tab panel: intercept clicks within its (possibly
-            // cross-docked) area, mapping window x into panel-local space.
-            let tt_w = self.panel_layout.width_for(
-                panel_layout::ID_TREE_TABS,
-                panels::tree_tabs::PANEL_WIDTH,
-            );
-            let tt_origin = self
-                .dock_origin_x(self.sidebar_dock_side(panel_layout::ID_TREE_TABS), tt_w);
-            if self.tree_tabs.visible
-                && x_css >= tt_origin
-                && x_css < tt_origin + tt_w
-            {
-                let win_h = self.viewport_height_css() + toolbar::CHROME_H;
-                match panels::tree_tabs::hit_test(
-                    &self.tab_strip,
-                    &self.tree_tabs,
-                    x_css - tt_origin,
-                    y_css,
-                    toolbar::CHROME_H,
-                    win_h,
-                    tt_w,
-                ) {
-                    Some(panels::tree_tabs::TreeTabHit::Tab(idx)) => {
-                        self.switch_tab(idx);
-                    }
-                    Some(panels::tree_tabs::TreeTabHit::Close(idx)) => {
-                        self.close_tab(idx, event_loop);
-                    }
-                    Some(panels::tree_tabs::TreeTabHit::Arrow(tab_id)) => {
-                        let expanding = self.tree_tabs.collapsed.contains(&tab_id);
-                        self.tree_tabs.toggle_collapsed(tab_id);
-                        if expanding {
-                            // Purge stale collapse entries for tabs that were closed
-                            // while their parent subtree was hidden.
-                            let subtree = tabs::tree::subtree_ids(
-                                &self.tab_strip.tabs, tab_id,
-                            );
-                            let valid: std::collections::HashSet<usize> =
-                                self.tab_strip.tabs.iter().map(|t| t.id).collect();
-                            self.tree_tabs.collapsed.retain(|id| {
-                                valid.contains(id) || !subtree.contains(id)
-                            });
-                        }
-                        self.request_redraw();
-                    }
-                    Some(panels::tree_tabs::TreeTabHit::Empty) | None => {}
-                }
-                return;
-            }
-
-            // Profile switcher dropdown (DS-14): anchored below the
-            // toolbar avatar button. BUG-403/BUG-404 class: use the
-            // measured `page_offset()` Y, not the legacy-only
-            // `toolbar::CHROME_H` constant, so the hit-test matches
-            // wherever the popover is actually drawn (both chromes).
-            if self.profile_menu.visible {
-                let avatar_x = toolbar::avatar_x();
-                let (_, page_y_offset) = self.page_offset();
-                if let Some(hit) = panels::profile_menu::hit_test(
-                    &self.profile_menu,
-                    x_css,
-                    y_css,
-                    avatar_x,
-                    page_y_offset,
-                ) {
-                    match hit {
-                        panels::profile_menu::ProfileMenuHit::SwitchTo(id) => {
-                            if self.profiles.set_active(Some(id)).is_ok() {
-                                self.profile_menu.set_active(Some(id));
-                                // DS-16: Anonymous is ephemeral — every
-                                // time it becomes active, start from a
-                                // fresh in-memory jar so no cookie
-                                // survives a previous Anonymous session.
-                                if self.active_profile_is_anonymous() {
-                                    self.reset_anonymous_cookie_jar();
-                                }
-                            }
-                            self.profile_menu.visible = false;
-                            // CC-6: re-sync the CSS chrome's data-profile (no-op off the flag).
-                            self.relayout_chrome_host();
-                        }
-                        panels::profile_menu::ProfileMenuHit::Empty => {}
-                    }
-                    self.request_redraw();
-                    return;
-                }
-            }
-
-            // Shields floating panel (7C.4): top-right overlay.
-            if self.shields.visible {
-                // BUG-461: `#permPopover`'s real measured rect, not a guess
-                // anchored to the window edge/`toolbar::CHROME_H`.
-                let popover_rect =
-                    self.chrome_perm_popover_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
-                if let Some(hit) = panels::shields_panel::hit_test(
-                    &self.shields,
-                    x_css,
-                    y_css,
-                    popover_rect,
-                ) {
-                    match hit {
-                        panels::shields_panel::ShieldsHit::Toggle => {
-                            // BUG-411: same per-site flip the engine
-                            // popover's switch performs (this legacy
-                            // hit-test is still ungated — BUG-404).
-                            self.shields.toggle_current_site();
-                            self.sync_adblock_filter();
-                            self.request_redraw();
-                        }
-                        panels::shields_panel::ShieldsHit::Close => {
-                            self.shields.visible = false;
-                            self.request_redraw();
-                        }
-                        panels::shields_panel::ShieldsHit::Empty => {}
-                    }
-                    return;
-                }
-            }
-
-            // Privacy network panel (V5): right-docked overlay.
-            if self.privacy.visible {
-                let tab_h = toolbar::CHROME_H;
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css() + tab_h;
-                match panels::privacy_panel::hit_test(
-                    &self.privacy,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                    tab_h,
-                ) {
-                    panels::privacy_panel::PrivacyHit::Close => {
-                        self.privacy.visible = false;
-                        self.request_redraw();
-                        return;
-                    }
-                    // Swallow clicks inside the panel so they don't reach
-                    // the page underneath.
-                    panels::privacy_panel::PrivacyHit::Inside => return,
-                    panels::privacy_panel::PrivacyHit::Outside => {}
-                }
-            }
-
-            // Permission popover (7C.2): top-left overlay below tab bar.
-            if self.permission.visible {
-                // BUG-461: `#permPopover`'s real measured rect, not a guess
-                // anchored to the window edge/`toolbar::CHROME_H`.
-                let popover_rect =
-                    self.chrome_perm_popover_rect().unwrap_or(lumen_core::geom::Rect::ZERO);
-                if let Some(hit) = panels::permission_panel::hit_test(
-                    &self.permission,
-                    x_css,
-                    y_css,
-                    popover_rect,
-                ) {
-                    match hit {
-                        panels::permission_panel::PermissionHit::Toggle(kind) => {
-                            self.permission.cycle_permission(kind);
-                            self.request_redraw();
-                        }
-                        panels::permission_panel::PermissionHit::Close => {
-                            self.permission.visible = false;
-                            self.request_redraw();
-                        }
-                        panels::permission_panel::PermissionHit::Empty => {}
-                    }
-                    return;
-                }
-            }
-
-            // §12.3 Read-later panel (Ctrl+Shift+R): right-docked overlay.
-            if self.read_later_panel.visible {
-                use panels::read_later_panel::ReadLaterHit;
-                let win_w = self.viewport_width_css();
-                let tab_h = toolbar::CHROME_H;
-                let px = win_w - panels::read_later_panel::PANEL_W - 4.0;
-                let py = tab_h + 4.0;
-                let hit = panels::read_later_panel::hit_test(
-                    x_css,
-                    y_css,
-                    px,
-                    py,
-                    &self.read_later_panel.entries,
-                    self.read_later_panel.scroll_offset,
-                );
-                match hit {
-                    ReadLaterHit::Close => {
-                        self.read_later_panel.visible = false;
-                        self.request_redraw();
-                    }
-                    ReadLaterHit::Open(id) => {
-                        // Load from offline HTML snapshot.
-                        if let Ok(Some(entry)) = self.read_later_store.get(id) {
-                            let html = String::from_utf8_lossy(&entry.html_snapshot)
-                                .into_owned();
-                            let base_url = entry.url.clone();
-                            let _ = self.read_later_store.set_status(
-                                id,
-                                lumen_knowledge::ReadStatus::Read,
-                            );
-                            self.read_later_panel.visible = false;
-                            self.navigate_to(PageSource::Snapshot { html, base_url });
-                        }
-                    }
-                    ReadLaterHit::Delete(id) => {
-                        let _ = self.read_later_store.delete(id);
-                        self.refresh_read_later();
-                        self.request_redraw();
-                    }
-                    ReadLaterHit::Inside => { /* swallow */ }
-                    ReadLaterHit::Outside => {
-                        self.read_later_panel.visible = false;
-                        self.request_redraw();
-                    }
-                }
-                return;
-            }
+            // §12.3 Read-later panel: `#readLaterPanel` in the engine chrome
+            // (`read-later-open` / `read-later-delete` / `toggle-read-later`).
 
             // CC-10b/CC-15-6: the legacy bookmark-manager overlay's click
             // hit-test lived here, gated off the rollback flag —
             // `#view-bookmarks` in the engine chrome owns it now.
 
-            // Accessibility settings panel (E-2): centred overlay.
-            if self.a11y_panel.visible {
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css();
-                use panels::a11y_panel::A11yHit;
-                let hit = panels::a11y_panel::hit_test(
-                    &self.a11y_panel,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                );
-                match hit {
-                    A11yHit::Close => {
-                        let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
-                        self.a11y_panel.visible = false;
-                        self.deliver_a11y_media_changes();
-                        // Re-style with the (possibly toggled) forced-colors pref.
-                        // Async-safe (M2.2b-6): closing the panel only shifts
-                        // chrome + re-evaluates forced-colors; no page-geometry
-                        // read follows (just `request_redraw` + `return`).
-                        self.relayout_chrome();
-                    }
-                    A11yHit::FontMultiplier(v) => {
-                        self.a11y_panel.draft.font_size_multiplier = v as f64;
-                    }
-                    A11yHit::ReducedMotion => {
-                        self.a11y_panel.draft.reduced_motion =
-                            !self.a11y_panel.draft.reduced_motion;
-                    }
-                    A11yHit::ForcedColors => {
-                        self.a11y_panel.draft.forced_colors =
-                            !self.a11y_panel.draft.forced_colors;
-                    }
-                    A11yHit::CursorSizeOption(size) => {
-                        self.a11y_panel.draft.cursor_size = size;
-                    }
-                    A11yHit::Inside => { /* swallow */ }
-                    A11yHit::Outside => {
-                        let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
-                        self.a11y_panel.visible = false;
-                        self.deliver_a11y_media_changes();
-                        // Re-style with the (possibly toggled) forced-colors pref.
-                        // Async-safe (M2.2b-6): closing the panel only shifts
-                        // chrome + re-evaluates forced-colors; no page-geometry
-                        // read follows (just `request_redraw` + `return`).
-                        self.relayout_chrome();
-                    }
-                }
-                self.request_redraw();
-                return;
-            }
-
+            // UX-CHROME-PANELS: the accessibility panel's click hit-test lived
+            // here - `#accessOverlay` in the engine chrome owns it now.
             // CC-10b/CC-15-6: the legacy print-dialog click hit-test lived
             // here, gated off the rollback flag — the engine chrome's own
             // print panel owns it now.
@@ -705,33 +384,8 @@ impl Lumen {
             // here, gated off the rollback flag — `#view-settings` in the
             // engine chrome owns it now.
 
-            // Keyboard shortcuts panel (§D-4): centred overlay.
-            if self.shortcuts_panel.visible {
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css();
-                let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
-                let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
-                use panels::shortcuts_panel::ShortcutsHit;
-                let lx = x_css - kp_x;
-                let ly = y_css - kp_y;
-                if (0.0..panels::shortcuts_panel::PANEL_W).contains(&lx)
-                    && (0.0..panels::shortcuts_panel::PANEL_H).contains(&ly)
-                {
-                    match self.shortcuts_panel.hit_test(lx, ly) {
-                        ShortcutsHit::Close => {
-                            self.shortcuts_panel.close();
-                        }
-                        ShortcutsHit::StartRebind(idx) => {
-                            self.shortcuts_panel.rebinding = Some(idx);
-                        }
-                        ShortcutsHit::Consumed => {}
-                    }
-                } else {
-                    self.shortcuts_panel.close();
-                }
-                self.request_redraw();
-                return;
-            }
+            // UX-CHROME-PANELS: the shortcuts panel's click hit-test lived
+            // here - `#shortcutsOverlay` in the engine chrome owns it now.
 
             // CC-10b/CC-15-6: the legacy certificate-panel click hit-test
             // lived here, gated off the rollback flag — the engine chrome's
@@ -741,23 +395,7 @@ impl Lumen {
             // here, gated off the rollback flag — `#view-history` in the
             // engine chrome owns it now.
 
-            // Note viewer overlay (§12.2, GG-2): click [×] to close.
-            if self.note_viewer.visible {
-                let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                    let s = w.inner_size();
-                    (s.width, s.height)
-                });
-                if let Some(hit) = self.note_viewer.hit_test(x_css, y_css, win_size) {
-                    match hit {
-                        panels::note_viewer::NoteHit::Close => {
-                            self.note_viewer.close();
-                            self.request_redraw();
-                        }
-                        panels::note_viewer::NoteHit::Body => {}
-                    }
-                    return;
-                }
-            }
+            // Note viewer: `#noteOverlay` in the engine chrome (`close-note`).
 
             // CC-10b/CC-15-6: the legacy AI-sidebar click hit-test lived
             // here, gated off the rollback flag — `#rightSidebar` in the
@@ -767,62 +405,8 @@ impl Lumen {
             // here, gated off the rollback flag — `#rightSidebar` in the
             // engine chrome owns it now.
 
-            // Workspace switcher bar (7A.3): clicks in the bottom bar area.
-            if self.workspace_panel.visible {
-                let win_w = self.viewport_width_css();
-                let win_h = self.viewport_height_css()
-                    + toolbar::CHROME_H
-                    + panels::workspace_panel::SWITCHER_HEIGHT;
-                if let Some(hit) = panels::workspace_panel::hit_test(
-                    &self.workspace_panel,
-                    x_css,
-                    y_css,
-                    win_w,
-                    win_h,
-                ) {
-                    match hit {
-                        panels::workspace_panel::WorkspaceHit::SwitchTo(id) => {
-                            self.workspace_panel.set_active(Some(id));
-                            self.request_redraw();
-                        }
-                        panels::workspace_panel::WorkspaceHit::DeleteWorkspace(id) => {
-                            // Never delete the last workspace — require at least one.
-                            if self.workspace_panel.workspaces.len() > 1 {
-                                let _ = self.workspaces.delete(id);
-                                self.refresh_workspaces();
-                                // If the deleted workspace was active, switch to first.
-                                if self.workspace_panel.active_id == Some(id) {
-                                    let first_id = self
-                                        .workspace_panel
-                                        .workspaces
-                                        .first()
-                                        .map(|w| w.id);
-                                    self.workspace_panel.set_active(first_id);
-                                }
-                                self.request_redraw();
-                            }
-                        }
-                        panels::workspace_panel::WorkspaceHit::NewWorkspace => {
-                            let idx = self.workspace_panel.workspaces.len();
-                            let name = format!("Workspace {}", idx + 1);
-                            let color = panels::workspace_panel::default_color_for_index(idx);
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs() as i64)
-                                .unwrap_or(0);
-                            if let Ok(id) =
-                                self.workspaces.create(&name, color, "", None, now)
-                            {
-                                self.refresh_workspaces();
-                                self.workspace_panel.set_active(Some(id));
-                            }
-                            self.request_redraw();
-                        }
-                        panels::workspace_panel::WorkspaceHit::Empty => {}
-                    }
-                    return;
-                }
-            }
+            // Workspace switcher bar: `#workspaceBar` in the engine chrome
+            // (`select-workspace` / `delete-workspace` / `add-workspace`).
 
             // Split-view focus routing: clicking in the right pane
             // transfers focus there; clicking in the left pane transfers
@@ -870,6 +454,25 @@ impl Lumen {
                 return;
             }
 
+            // UX-SCROLLBAR: горизонтальная полоса страницы (ниже фреймов,
+            // выше вертикальной: уголок принадлежит вертикальной).
+            match self.hscroll_hit(x_css, y_css) {
+                scrollbar::TrackClick::Thumb => {
+                    self.hscroll_drag = Some(scrollbar::ScrollDrag::new(self.scroll_x, x_css));
+                    self.request_redraw();
+                    return;
+                }
+                scrollbar::TrackClick::Above => {
+                    self.scroll_x_by(-page_step(self.page_content_width_css()));
+                    return;
+                }
+                scrollbar::TrackClick::Below => {
+                    self.scroll_x_by(page_step(self.page_content_width_css()));
+                    return;
+                }
+                scrollbar::TrackClick::None => {}
+            }
+
             let vh = self.viewport_height_css();
             match scrollbar::classify_track_click(
                 x_css,
@@ -884,6 +487,7 @@ impl Lumen {
                         self.scroll_y,
                         y_css,
                     ));
+                    self.request_redraw();
                 }
                 scrollbar::TrackClick::Above => {
                     // Клик по track выше thumb-а — прыжок на страницу вверх.
@@ -907,18 +511,6 @@ impl Lumen {
         } else {
             // Released — завершаем drag (если был) и сбрасываем resize.
             self.resize_active = None;
-            // F2-6: end a docked-panel resize drag and persist the layout.
-            if let Some((_, id)) = self.panel_resize.take() {
-                self.panel_layout.save();
-                // Reflow the web sidebar page to its new width: its content
-                // is a frozen display list, so unlike the AI panel (drawn
-                // procedurally) it does not reflow during the drag itself.
-                if id == panel_layout::ID_SIDEBAR {
-                    self.relayout_sidebar();
-                }
-                self.update_cursor_icon();
-                return;
-            }
             // BUG-480 срез 23: `:active` под-документа снимается на отпускании
             // ровно как страничный ниже.
             if self.active_frame.is_some() {
@@ -1028,6 +620,7 @@ impl Lumen {
             // offset it produced stays, only the tracking stops.
             self.floating_panel_end_drag();
             self.scroll_drag = None;
+            self.hscroll_drag = None;
             self.frame_scroll_drag = None;
             // FRAME-7 остаток: end an in-progress mouse-drag text selection —
             // the selection itself stays, only the drag tracking stops.

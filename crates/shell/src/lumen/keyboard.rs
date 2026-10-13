@@ -12,6 +12,7 @@
 //! `handle_key` differ.
 
 use crate::*;
+use super::text_input::{clipboard_op_for, history_op_for};
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -25,6 +26,11 @@ impl Lumen {
         let PhysicalKey::Code(code) = key_event.physical_key else {
             return;
         };
+
+        // UX-DIALOGS: модальный диалог страницы забирает весь ввод.
+        if self.handle_page_dialog_key(code, key_event, event_loop) {
+            return;
+        }
 
         // Командная палитра — модальный overlay: пока открыта, перехватывает все
         // клавиши (Esc/Enter/↑/↓/Backspace/печать). Ctrl+K (toggle) пропускается
@@ -77,6 +83,7 @@ impl Lumen {
         // Note viewer overlay: Escape closes it.
         if self.note_viewer.visible && code == KeyCode::Escape && !key_event.repeat {
             self.note_viewer.close();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
@@ -85,12 +92,11 @@ impl Lumen {
         // while shown — Escape dismisses it ("Back"; the failed navigation's
         // error stays settled, same as any other `LoadError`), Enter
         // triggers "Proceed anyway" (records the session bypass + retries).
-        // Only a keyboard path exists so far — the blocking chrome-DOM
-        // screen with visible Back/Proceed buttons is a follow-up CC
-        // design-asset slice (see `cert_interstitial.rs`'s module doc).
+        // The same two actions are the `#securityBox` buttons (UX-SECURITY-UI).
         if self.cert_interstitial.visible && !key_event.repeat {
             if code == KeyCode::Escape {
                 self.cert_interstitial.close();
+                self.relayout_chrome_host();
                 self.request_redraw();
                 return;
             }
@@ -162,6 +168,7 @@ impl Lumen {
                 input::vim::VimAction::OpenFind => {
                     self.hint.close();
                     self.find.open();
+                    self.relayout_chrome_host();
                     self.request_redraw();
                     return;
                 }
@@ -262,6 +269,7 @@ impl Lumen {
             && !key_event.repeat
         {
             self.tab_context_menu.close();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
@@ -273,6 +281,7 @@ impl Lumen {
             && !key_event.repeat
         {
             self.page_context_menu.close();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
@@ -286,6 +295,7 @@ impl Lumen {
             && !key_event.repeat
         {
             self.focus.exit();
+            self.relayout_chrome_host();
             self.request_redraw();
             return;
         }
@@ -432,6 +442,47 @@ impl Lumen {
                 for ch in text.chars() {
                     self.inject_char(ch);
                 }
+                self.request_redraw();
+                return;
+            }
+        }
+
+        // Clipboard commands in a focused typeable field (page or frame):
+        // Ctrl+A/C/X/V, Ctrl+Insert, Shift+Insert, Shift+Delete (UX-CLIPBOARD).
+        // Before the global table, where Ctrl+A/C/V mean nothing for a field,
+        // and before the cursor branch below, whose Shift+Delete/Insert would
+        // otherwise be dropped. Only when a typeable field actually has focus —
+        // a bare Ctrl+C over page text still copies the selection (above).
+        if let Some(op) = clipboard_op_for(code, self.modifiers) {
+            let in_frame = self
+                .focused_frame
+                .is_some_and(|(idx, nid)| self.frame_typeable_field(idx, nid).is_some());
+            let handled = if in_frame {
+                self.frame_field_clipboard_op(op)
+            } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+                self.field_clipboard_op(op)
+            } else {
+                false
+            };
+            if handled {
+                self.request_redraw();
+                return;
+            }
+        }
+
+        // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z in a focused typeable field (UX-UNDO).
+        if let Some(op) = history_op_for(code, self.modifiers) {
+            let in_frame = self
+                .focused_frame
+                .is_some_and(|(idx, nid)| self.frame_typeable_field(idx, nid).is_some());
+            let handled = if in_frame {
+                self.frame_field_history_op(op)
+            } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+                self.field_history_op(op)
+            } else {
+                false
+            };
+            if handled {
                 self.request_redraw();
                 return;
             }
@@ -618,10 +669,17 @@ impl Lumen {
                     move || { flag.set(true); },
                 );
             }
-            KeyCommand::Exit => event_loop.exit(),
+            // BUG-1611: Esc останавливает идущую загрузку и больше ничего не делает —
+            // выход идёт только через CloseRequested (beforeunload + сохранение сессии).
+            KeyCommand::StopLoading => {
+                if self.nav_start.is_some() {
+                    self.stop_loading();
+                }
+            }
             KeyCommand::FindOpen => {
                 self.hint.close();
                 self.find.open();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::OpenAddressBar => {
@@ -709,6 +767,7 @@ impl Lumen {
                 }
             }
             KeyCommand::NewTab => self.open_new_tab(),
+            KeyCommand::ReopenClosedTab => self.reopen_closed_tab(),
             KeyCommand::CloseTab => {
                 let idx = self.tab_strip.active;
                 self.close_tab(idx, event_loop);
@@ -757,18 +816,12 @@ impl Lumen {
                 self.relayout_chrome();
                 self.request_redraw();
             }
-            KeyCommand::FlipActiveDock => {
-                // Cross-dock the active sidebar (tabs, AI, or web);
-                // flip_active_sidebar_dock relayouts internally on success.
-                if self.flip_active_sidebar_dock() {
-                    self.request_redraw();
-                }
-            }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
                 // Viewport height changes — re-layout so content doesn't hide
                 // under bar (ADR-016 M2.2b: async-safe chrome-inset relayout).
                 self.relayout_chrome();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::ToggleShields => {
@@ -776,7 +829,9 @@ impl Lumen {
                 self.request_redraw();
             }
             KeyCommand::TogglePermissions => {
-                self.permission.toggle();
+                for kind in self.permission.toggle() {
+                    self.settle_page_permission(kind, panels::permission_panel::PermissionState::Ask);
+                }
                 self.request_redraw();
             }
             KeyCommand::ToggleCookieBannerDismiss => {
@@ -809,18 +864,11 @@ impl Lumen {
             }
             KeyCommand::ToggleA11y => {
                 if self.a11y_panel.visible {
-                    let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
-                    self.a11y_panel.visible = false;
-                    self.deliver_a11y_media_changes();
-                    // Re-style with the (possibly toggled) forced-colors pref.
-                    // ADR-016 M2.2b-3: async-safe — closing the a11y panel widens
-                    // the content viewport and re-styles under the new
-                    // forced-colors preference, but nothing reads page geometry
-                    // synchronously afterwards, so route off-thread when enabled.
-                    self.relayout_chrome();
+                    self.close_a11y_panel();
                 } else {
                     self.a11y_panel.load_draft(self.a11y_store.snapshot());
                     self.a11y_panel.visible = true;
+                    self.relayout_chrome_host();
                 }
                 self.request_redraw();
             }
@@ -865,18 +913,22 @@ impl Lumen {
             }
             KeyCommand::DevConsole => {
                 self.devtools_console.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::DevInspector => {
                 self.dom_inspector.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::DevNetwork => {
                 self.network_panel.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::TogglePrivacy => {
                 self.privacy.toggle();
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::TogglePip => {
@@ -888,6 +940,7 @@ impl Lumen {
                 if self.read_later_panel.visible {
                     self.refresh_read_later();
                 }
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             KeyCommand::ToggleReaderView => {
@@ -899,6 +952,7 @@ impl Lumen {
             KeyCommand::ToggleShortcuts => {
                 self.shortcuts_panel.toggle();
                 self.request_redraw();
+                self.relayout_chrome_host();
             }
             KeyCommand::TogglePrint => {
                 self.print_panel.toggle();
@@ -913,18 +967,9 @@ impl Lumen {
                 // CC-10: see the matching comment on `ToggleCommandPalette`.
                 self.relayout_chrome_host();
             }
-            KeyCommand::ZoomIn => {
-                self.zoom_factor = zoom::zoom_in(self.zoom_factor);
-                self.begin_zoom_preview();
-            }
-            KeyCommand::ZoomOut => {
-                self.zoom_factor = zoom::zoom_out(self.zoom_factor);
-                self.begin_zoom_preview();
-            }
-            KeyCommand::ZoomReset => {
-                self.zoom_factor = zoom::zoom_reset();
-                self.begin_zoom_preview();
-            }
+            KeyCommand::ZoomIn => self.step_page_zoom(true),
+            KeyCommand::ZoomOut => self.step_page_zoom(false),
+            KeyCommand::ZoomReset => self.reset_page_zoom(),
         }
     }
 

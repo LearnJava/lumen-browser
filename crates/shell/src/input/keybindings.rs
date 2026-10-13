@@ -33,7 +33,8 @@ pub(crate) enum TypeableField {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum KeyCommand {
     Reload,
-    Exit,
+    /// Esc: останавливает идущую загрузку; окно никогда не закрывает.
+    StopLoading,
     FindOpen,
     /// Открыть адресную строку (Ctrl+L / F6). Позволяет ввести URL или
     /// поисковый запрос прямо в браузере без перезапуска из CLI.
@@ -62,6 +63,8 @@ pub(crate) enum KeyCommand {
     HintModeOpen,
     /// Открыть новую вкладку (Ctrl+T).
     NewTab,
+    /// Открыть последнюю закрытую вкладку (Ctrl+Shift+T).
+    ReopenClosedTab,
     /// Закрыть текущую вкладку или выйти, если вкладка последняя (Ctrl+W).
     CloseTab,
     /// Переключиться на следующую вкладку циклически (Ctrl+Tab).
@@ -79,8 +82,6 @@ pub(crate) enum KeyCommand {
     ToggleVerticalTabs,
     /// Показать/скрыть tree-style панель вкладок (Ctrl+Shift+B).
     ToggleTreeTabs,
-    /// Перенести активный сайдбар вкладок к противоположному краю окна (Ctrl+Alt+B).
-    FlipActiveDock,
     /// Показать/скрыть панель воркспейсов (Ctrl+Shift+W).
     ToggleWorkspaces,
     /// Показать/скрыть панель Shields (Ctrl+Shift+S).
@@ -147,8 +148,8 @@ pub(crate) enum KeyCommand {
 ///
 /// F5 без модификаторов  → Reload.
 /// Ctrl+R                → Reload.
-/// Esc без модификаторов → Exit.
-/// Ctrl+W                → Exit.
+/// Esc без модификаторов → StopLoading.
+/// Ctrl+W                → CloseTab.
 /// Ctrl+F                → FindOpen.
 /// F (без модификаторов) → HintModeOpen (kbd-навигация по ссылкам/кнопкам).
 /// ↓ / ↑                 → ScrollLineDown / ScrollLineUp (без модификаторов).
@@ -169,9 +170,10 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
     match code {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
         KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
-        KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
+        KeyCode::Escape if no_mods => Some(KeyCommand::StopLoading),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::CloseTab),
         KeyCode::KeyT if ctrl_only => Some(KeyCommand::NewTab),
+        KeyCode::KeyT if ctrl_and_shift => Some(KeyCommand::ReopenClosedTab),
         KeyCode::Tab if ctrl_only => Some(KeyCommand::NextTab),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
         KeyCode::KeyF if no_mods => Some(KeyCommand::HintModeOpen),
@@ -204,10 +206,6 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
         // Ctrl+Shift+B — toggle tree-style tab sidebar
         KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleTreeTabs)
-        }
-        // Ctrl+Alt+B — move the active tab sidebar to the opposite edge (cross-dock)
-        KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::ALT) => {
-            Some(KeyCommand::FlipActiveDock)
         }
         // Ctrl+Shift+W — toggle workspace switcher bar
         KeyCode::KeyW if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {

@@ -2026,6 +2026,7 @@ var window = {
     localStorage: localStorage,
     sessionStorage: sessionStorage,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
+    _lumen_dispatch_composition_at: _lumen_dispatch_composition_at,
     _lumen_dispatch_mouse_event:        _lumen_dispatch_mouse_event,
     _lumen_dispatch_locked_mousemove:   _lumen_dispatch_locked_mousemove,
     _lumen_dispatch_pointer_event:      _lumen_dispatch_pointer_event,

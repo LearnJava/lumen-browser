@@ -84,6 +84,21 @@ fn dispatch_composition_without_target_does_not_crash() {
 }
 
 #[test]
+fn dispatch_composition_at_targets_node_and_bubbles() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _log = [];
+                var el = document.getElementById('main');
+                document.body.addEventListener('compositionupdate', function(e) {
+                    _log.push(e.type + ':' + e.data);
+                });
+                _lumen_dispatch_composition_at(el.__nid__, 'compositionupdate', 'あい');
+            "#).unwrap();
+    let result = rt.eval("_log.join('|')").unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("compositionupdate:あい".into()));
+}
+
+#[test]
 fn window_has_dispatch_composition() {
     let rt = v8_runtime_with_dom(make_doc());
     let result = rt

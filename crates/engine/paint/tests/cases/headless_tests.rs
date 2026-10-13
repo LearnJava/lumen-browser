@@ -737,6 +737,8 @@ fn mixed_culled_levels_dl() -> Vec<DisplayCommand> {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 8.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         },
@@ -1488,6 +1490,8 @@ fn state_elision_is_pixel_identical() {
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 8.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: None,
     });
@@ -1536,6 +1540,8 @@ fn text_dl(text: &str, y: f32) -> Vec<DisplayCommand> {
         font_features: Vec::new(),
         font_palette: None,
         tab_size: 8.0,
+        letter_spacing: 0,
+        word_spacing: 0,
         highlight_name: None,
         text_orientation: None,
     }]

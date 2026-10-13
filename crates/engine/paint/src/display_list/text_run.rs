@@ -71,6 +71,8 @@ fn emit_text_emphasis_marks(
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         });
@@ -98,6 +100,10 @@ fn emit_text_frags(
 ) {
     for frag in line {
         if !matches!(frag.style.visibility, Visibility::Visible) {
+            continue;
+        }
+        // Empty piece of an inline box cut by a block: box edge only, no glyphs.
+        if frag.text.is_empty() && frag.img_src.is_none() {
             continue;
         }
         let frag_y = line_y + frag.y_offset;
@@ -173,6 +179,8 @@ fn emit_text_frags(
                 axes
             },
             tab_size: frag.style.tab_size,
+            letter_spacing: super::spacing_to_fixed(frag.style.letter_spacing),
+            word_spacing: super::spacing_to_fixed(frag.style.word_spacing + frag.style.word_spacing_pct * 0.25 * frag.style.font_size),
             highlight_name: None,
             text_orientation: if frag.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                 Some(frag.style.text_orientation)
@@ -316,6 +324,8 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
                     axes
                 },
                 tab_size: frag.style.tab_size,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: Some(frag.style.text_orientation),
             });
@@ -357,7 +367,7 @@ pub(crate) fn emit_inline_run(
     } else {
         raw_line_h
     };
-    let wants_ellipsis = matches!(b.style.text_overflow, TextOverflow::Ellipsis)
+    let wants_ellipsis = matches!(b.style.text_overflow_right, TextOverflow::Ellipsis)
         && overflow_clips(b.style.overflow_x);
 
     emit_first_line_background(b, lines, line_h, dpr, out);
@@ -419,6 +429,8 @@ pub(crate) fn emit_inline_run(
                     axes
                 },
                 tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: None,
                 text_orientation: if ef.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                     Some(ef.style.text_orientation)
