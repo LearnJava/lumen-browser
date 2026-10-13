@@ -1,0 +1,60 @@
+{
+ "name": "lumen-chrome_lumen",
+ "source": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\target\\debug\\lumen.exe --dump-source, LUMEN_IDENTITY=chrome_lumen",
+ "note": "plain HTTP на 127.0.0.1",
+ "captured": "2026-10-13",
+ "headers": [
+  [
+   "Host",
+   "127.0.0.1"
+  ],
+  [
+   "Connection",
+   "keep-alive"
+  ],
+  [
+   "Cache-Control",
+   "max-age=0"
+  ],
+  [
+   "Sec-CH-UA",
+   "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\", \"Lumen\";v=\"0\""
+  ],
+  [
+   "Sec-CH-UA-Mobile",
+   "?0"
+  ],
+  [
+   "Sec-CH-UA-Platform",
+   "\"Windows\""
+  ],
+  [
+   "User-Agent",
+   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Lumen/0.5.0"
+  ],
+  [
+   "Accept",
+   "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+  ],
+  [
+   "Accept-Encoding",
+   "br, gzip, deflate"
+  ],
+  [
+   "Accept-Language",
+   "en-US,en;q=0.9"
+  ],
+  [
+   "Sec-Fetch-Site",
+   "none"
+  ],
+  [
+   "Sec-Fetch-Mode",
+   "navigate"
+  ],
+  [
+   "Sec-Fetch-Dest",
+   "document"
+  ]
+ ]
+}
