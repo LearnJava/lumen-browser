@@ -70,6 +70,13 @@ impl ExternalBrowserRule {
     }
 }
 
+/// `true`, если два URL/хоста принадлежат одному сайту (eTLD+1) — тот же ключ,
+/// по которому хранятся правила. Ссылка внутри сайта не перехватывается.
+#[must_use]
+pub fn same_site(a: &str, b: &str) -> bool {
+    crate::partition::site_of(a) == crate::partition::site_of(b)
+}
+
 /// SQLite-хранилище правил внешнего браузера.
 pub struct ExternalBrowserRules {
     conn: Mutex<Connection>,
@@ -231,6 +238,12 @@ mod tests {
 
     fn store() -> ExternalBrowserRules {
         ExternalBrowserRules::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn same_site_compares_registrable_domains() {
+        assert!(same_site("https://www.example.com/a", "https://login.example.com/b"));
+        assert!(!same_site("https://example.com/", "https://example.org/"));
     }
 
     #[test]

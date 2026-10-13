@@ -148,7 +148,8 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
                 PaletteAction::ToggleShields => self.shields.toggle(),
-                PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason),
+                PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason, false),
+                PaletteAction::RememberOtherBrowser(reason) => self.open_in_other_browser(*reason, true),
                 PaletteAction::ToggleVimMode => {
                     if self.vim_mode.is_some() {
                         self.vim_mode = None;
@@ -159,34 +160,5 @@ impl Lumen {
             },
         }
         self.request_redraw();
-    }
-
-    /// Hand the current page to another installed browser (COMPAT-HANDOFF).
-    ///
-    /// One-shot, user-initiated: no 30-day rule is created here. Only the URL
-    /// leaves the process (COMPAT-HO-03); the result - the browser that was
-    /// started, or the reason none fits - is reported as an OS notification.
-    pub(crate) fn open_in_other_browser(&mut self, reason: crate::external_browser::HandoffReason) {
-        use crate::external_browser::{
-            enumerate, launch, no_suitable_message, pick, Pick, FIRST_HANDOFF_WARNING,
-        };
-        let url = self.current_display_url().to_owned();
-        let browsers = enumerate();
-        let own = std::env::current_exe().ok();
-        let body = if !crate::external_browser::is_handoff_url(&url) {
-            "Во внешний браузер передаются только http(s)-страницы.".to_owned()
-        } else {
-            match pick(reason, &browsers, own.as_deref()) {
-                Pick::NoSuitable => no_suitable_message(reason).to_owned(),
-                Pick::Browser(b) => match launch(b, &url) {
-                    Ok(()) => {
-                        eprintln!("[handoff] reason={} browser={}", reason.code(), b.id);
-                        format!("Открыто в {}. {FIRST_HANDOFF_WARNING}", b.name)
-                    }
-                    Err(err) => format!("Не удалось запустить {}: {err}", b.name),
-                },
-            }
-        };
-        notification::show_os_notification("Lumen", &body);
     }
 }

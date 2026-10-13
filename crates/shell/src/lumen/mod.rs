@@ -31,6 +31,7 @@ mod frame_forms;
 mod frame_links;
 mod frame_text_input;
 mod gestures;
+mod handoff;
 mod hibernation;
 mod hint_mode;
 mod keyboard;

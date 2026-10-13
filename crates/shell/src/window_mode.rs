@@ -360,6 +360,17 @@ fn run_window_mode_inner(
         lumen_storage::Permissions::open_in_memory,
         "permissions init",
     ));
+    let external_browser_rules = Arc::new(open_persistent(
+        "external_browser_rules.db",
+        lumen_storage::ExternalBrowserRules::open,
+        lumen_storage::ExternalBrowserRules::open_in_memory,
+        "external_browser_rules init",
+    ));
+    let _ = external_browser_rules.purge_expired(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
+    );
     let mut app = Lumen {
         display_list: Vec::new(),
         display_list_epoch: 1,
@@ -688,6 +699,7 @@ fn run_window_mode_inner(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
         permissions_disk_store: permissions_store,
+        external_browser_rules,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         ai_panel: panels::ai_panel::AiPanel::new(),
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),

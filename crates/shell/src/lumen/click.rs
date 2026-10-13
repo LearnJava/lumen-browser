@@ -938,6 +938,11 @@ impl Lumen {
                     if self.navigate_to_link_blocked(csp_gate.as_ref(), &href) {
                         return;
                     }
+                    // COMPAT-HANDOFF: a live 30-day rule for the target site sends
+                    // the link to the other browser instead of any branch below.
+                    if self.link_handed_off(&href) {
+                        return;
+                    }
                     let t = target_attr.trim();
                     // GAP-NAVCTX срез 2 (BUG-883): `_blank` is reserved by the
                     // spec and never names a live frame (HTML LS §7.3.2) — check
