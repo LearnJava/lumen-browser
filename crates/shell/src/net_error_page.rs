@@ -1,0 +1,205 @@
+//! COMPAT-ERRORS: страница сетевой ошибки главного документа.
+//!
+//! Раньше `LoadEvent::LoadError` ставил `load_failed` и ничего не рисовал — на
+//! экране оставалась выгруженная прежняя страница. Теперь вкладка показывает
+//! статическую страницу по правилам COMPAT-ERR-00
+//! (`docs/research/site-compat/report.md` §8.4): заголовок ≤80 символов, первая
+//! фраза — что случилось словами пользователя, 1–3 действия, внизу мелко — код
+//! как в Chromium. Здесь — чистая часть (тексты и HTML); показ — `lumen/net_error.rs`.
+
+use lumen_core::net_error::NetErrorCode;
+
+use crate::crash_page::escape_html;
+use crate::PageSource;
+
+/// Тексты страницы для кода: (заголовок, первая фраза, действия).
+///
+/// Вердикт «кто виноват» не выносится: проб нет, поэтому уровень — «не знаем»
+/// или «вероятно», и слов вроде «сбой на стороне сайта» тут нет.
+fn texts(code: NetErrorCode, host: &str) -> (String, String, &'static [&'static str]) {
+    use NetErrorCode as C;
+    match code {
+        C::NameNotResolved => (
+            format!("Не удаётся найти сайт {host}"),
+            "Имя сайта не удалось превратить в адрес. Либо в адресе опечатка, либо нет связи с DNS-сервером.".into(),
+            &[
+                "Проверьте, нет ли опечатки в адресе.",
+                "Проверьте подключение к интернету: другие сайты открываются?",
+                "Если сайт открывается в другом браузере на этом компьютере, откройте его там.",
+            ],
+        ),
+        C::ConnectionRefused => (
+            format!("Сайт {host} отклонил подключение"),
+            "Компьютер, на котором работает сайт, ответил отказом на попытку подключиться.".into(),
+            &[
+                "Повторите через несколько минут: сервис мог перезапускаться.",
+                "Если вы используете VPN или прокси, попробуйте открыть сайт без них.",
+            ],
+        ),
+        C::ConnectionTimedOut => (
+            format!("Сайт {host} слишком долго не отвечает"),
+            "Подключиться не удалось: ответ не пришёл за отведённое время.".into(),
+            &[
+                "Проверьте подключение к интернету.",
+                "Повторите позже: сайт или сеть могут быть перегружены.",
+                "Если вы используете VPN или прокси, попробуйте открыть сайт без них.",
+            ],
+        ),
+        C::ConnectionReset | C::ConnectionClosed => (
+            format!("Соединение с сайтом {host} прервано"),
+            "Соединение было установлено, но оборвалось раньше, чем пришла страница целиком.".into(),
+            &[
+                "Повторите загрузку.",
+                "Если ошибка повторяется на разных сайтах, проверьте антивирус и сетевые настройки.",
+            ],
+        ),
+        C::AddressUnreachable => (
+            format!("Не удаётся добраться до сайта {host}"),
+            "До компьютера сайта нет маршрута: сеть или хост недоступны.".into(),
+            &[
+                "Проверьте подключение к интернету.",
+                "Если вы используете VPN или прокси, проверьте их.",
+            ],
+        ),
+        C::TooManyRedirects => (
+            format!("Сайт {host} зациклил перенаправления"),
+            "Сайт бесконечно отправляет браузер с одного адреса на другой.".into(),
+            &[
+                "Удалите cookie этого сайта и повторите: чаще всего петлю замыкает устаревший cookie.",
+                "Если не помогло, проблема на стороне сайта.",
+            ],
+        ),
+        C::InvalidResponse => (
+            format!("Сайт {host} прислал непонятный ответ"),
+            "Ответ сервера не удалось разобрать как HTTP.".into(),
+            &["Повторите загрузку.", "Если ошибка постоянная, откройте сайт в другом браузере."],
+        ),
+        C::SslProtocolError => (
+            format!("Не удалось установить защищённое соединение с {host}"),
+            "Сайт и Lumen не договорились о параметрах шифрования.".into(),
+            &[
+                "Повторите загрузку.",
+                "Если вы используете антивирус с проверкой HTTPS, попробуйте открыть сайт при выключенной проверке.",
+            ],
+        ),
+        C::FileNotFound => (
+            "Файл не найден".to_owned(),
+            "По этому адресу на компьютере нет файла или папки.".into(),
+            &["Проверьте путь: файл могли переместить или удалить."],
+        ),
+        C::InvalidUrl => (
+            "Адрес указан неверно".to_owned(),
+            "Адрес не удалось разобрать.".into(),
+            &["Проверьте адрес на опечатки."],
+        ),
+        C::UnknownUrlScheme => (
+            "Lumen не открывает адреса такого вида".to_owned(),
+            "Схема адреса (часть до двоеточия) не поддерживается.".into(),
+            &["Если адрес должен открывать другое приложение, откройте его вручную."],
+        ),
+        C::BlockedByClient => (
+            "Загрузка заблокирована".to_owned(),
+            "Lumen не стал загружать эту страницу: её заблокировала политика безопасности или защита от трекеров.".into(),
+            &["Если страница нужна, отключите защиту для этого сайта на значке щита."],
+        ),
+        C::Failed => (
+            "Не удалось загрузить страницу".to_owned(),
+            "Причину определить не удалось.".into(),
+            &["Повторите загрузку.", "Если ошибка постоянная, откройте страницу в другом браузере."],
+        ),
+    }
+}
+
+/// Хост адреса для заголовка; без хоста (файл, пустой адрес) — сам адрес.
+fn host_of(url: &str) -> String {
+    lumen_core::url::Url::parse(url)
+        .ok()
+        .map(|u| u.host().to_owned())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| url.to_owned())
+}
+
+/// HTML страницы ошибки. `url` — адрес несостоявшейся навигации (кнопка
+/// «Повторить» ведёт на него), `detail` — исходный текст ошибки: попадает в
+/// мелкий блок внизу, чтобы сообщение об ошибке было с чем сверять.
+pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str) -> String {
+    let (title, lead, actions) = texts(code, &escape_html(&host_of(url)));
+    let items: String = actions.iter().map(|a| format!("<li>{}</li>", escape_html(a))).collect();
+    let retry = if url.is_empty() {
+        String::new()
+    } else {
+        format!("<p><a class=\"btn\" href=\"{}\">Повторить</a></p>", escape_html(url))
+    };
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
+<style>body{{font-family:sans-serif;margin:0;padding:80px 40px;background:#f4f4f6;color:#222}}\
+h1{{font-size:26px;max-width:640px}}p,li{{font-size:16px;max-width:640px}}li{{margin:4px 0}}\
+a.btn{{display:inline-block;padding:10px 22px;background:#2b6cdf;color:#fff;border-radius:6px;\
+text-decoration:none}}.code{{margin-top:48px;font-size:12px;color:#777}}\
+pre{{font-size:12px;color:#777;max-width:640px;white-space:pre-wrap}}</style></head>\
+<body><h1>{title}</h1><p>{lead}</p><ul>{items}</ul>{retry}\
+<div class=\"code\">{code_name}</div><pre>{detail}</pre></body></html>",
+        lead = escape_html(&lead),
+        code_name = code.name(),
+        detail = escape_html(detail),
+    )
+}
+
+/// Источник страницы ошибки для навигации на `url`.
+pub(crate) fn net_error_source(url: &str, code: NetErrorCode, detail: &str) -> PageSource {
+    PageSource::Static { html: build_net_error_html(url, code, detail), url: url.to_owned() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_names_host_and_chromium_code() {
+        let html = build_net_error_html("https://nope.example/a?b=1", NetErrorCode::NameNotResolved, "resolve nope.example: x");
+        assert!(html.contains("Не удаётся найти сайт nope.example"));
+        assert!(html.contains("ERR_NAME_NOT_RESOLVED"));
+        assert!(html.contains("href=\"https://nope.example/a?b=1\""));
+        assert!(html.contains("resolve nope.example: x"));
+    }
+
+    #[test]
+    fn page_escapes_url_and_detail() {
+        let html = build_net_error_html("http://a/?q=\"><script>", NetErrorCode::Failed, "<b>&");
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;b&gt;&amp;"));
+    }
+
+    #[test]
+    fn titles_fit_the_80_char_rule_and_no_blame_words() {
+        let host = "очень-длинное-имя-хоста.example";
+        for code in [
+            NetErrorCode::NameNotResolved,
+            NetErrorCode::ConnectionRefused,
+            NetErrorCode::ConnectionTimedOut,
+            NetErrorCode::ConnectionReset,
+            NetErrorCode::AddressUnreachable,
+            NetErrorCode::TooManyRedirects,
+            NetErrorCode::InvalidResponse,
+            NetErrorCode::SslProtocolError,
+            NetErrorCode::FileNotFound,
+            NetErrorCode::InvalidUrl,
+            NetErrorCode::UnknownUrlScheme,
+            NetErrorCode::BlockedByClient,
+            NetErrorCode::Failed,
+        ] {
+            let (title, lead, actions) = texts(code, host);
+            assert!(title.chars().count() <= 80, "{code:?}: {title}");
+            assert!((1..=3).contains(&actions.len()), "{code:?}");
+            for t in [title.as_str(), lead.as_str()] {
+                assert!(!t.contains("атак") && !t.contains("угроз"), "{code:?}: {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn file_source_has_no_retry_link() {
+        let html = build_net_error_html("", NetErrorCode::FileNotFound, "");
+        assert!(!html.contains("class=\"btn\""));
+    }
+}

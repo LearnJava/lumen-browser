@@ -38,6 +38,7 @@ mod keyboard;
 mod nav_state;
 mod navigation;
 mod crash;
+mod net_error;
 mod newtab_page;
 mod omnibox_bar;
 mod page_snapshot;
