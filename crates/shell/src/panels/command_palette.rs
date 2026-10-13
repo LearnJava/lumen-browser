@@ -85,6 +85,8 @@ pub enum PaletteAction {
     /// Same, and remember the choice for this site for 30 days: later links
     /// to it open in that browser.
     RememberOtherBrowser(HandoffReason),
+    /// Open `about:handoff`: sites currently handed to another browser.
+    ShowHandoffSites,
 }
 
 impl PaletteAction {
@@ -128,6 +130,7 @@ impl PaletteAction {
             PaletteAction::RememberOtherBrowser(HandoffReason::Calls) => {
                 "Always Open This Site in Another Browser (30 days, video calls)"
             }
+            PaletteAction::ShowHandoffSites => "Sites Opened in Another Browser",
         }
     }
 
@@ -150,7 +153,8 @@ impl PaletteAction {
             PaletteAction::ImportBrowserData
             | PaletteAction::TranslatePage
             | PaletteAction::OpenInOtherBrowser(_)
-            | PaletteAction::RememberOtherBrowser(_) => "",
+            | PaletteAction::RememberOtherBrowser(_)
+            | PaletteAction::ShowHandoffSites => "",
         }
     }
 
@@ -181,6 +185,7 @@ impl PaletteAction {
             PaletteAction::RememberOtherBrowser(HandoffReason::Crypto),
             PaletteAction::RememberOtherBrowser(HandoffReason::Drm),
             PaletteAction::RememberOtherBrowser(HandoffReason::Calls),
+            PaletteAction::ShowHandoffSites,
         ]
     }
 }

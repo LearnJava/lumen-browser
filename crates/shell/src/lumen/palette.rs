@@ -150,6 +150,7 @@ impl Lumen {
                 PaletteAction::ToggleShields => self.shields.toggle(),
                 PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason, false),
                 PaletteAction::RememberOtherBrowser(reason) => self.open_in_other_browser(*reason, true),
+                PaletteAction::ShowHandoffSites => self.show_handoff_sites(),
                 PaletteAction::ToggleVimMode => {
                     if self.vim_mode.is_some() {
                         self.vim_mode = None;

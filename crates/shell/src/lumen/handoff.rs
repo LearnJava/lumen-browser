@@ -67,6 +67,64 @@ impl Lumen {
         notification::show_os_notification("Lumen", &body);
     }
 
+    /// Страница `about:handoff`: живые правила со сведёнными именами браузеров.
+    pub(crate) fn build_handoff_source(&self) -> PageSource {
+        let now = now_unix();
+        let browsers = enumerate();
+        let version = env!("CARGO_PKG_VERSION");
+        let rows: Vec<handoff_page::HandoffRow> = self
+            .external_browser_rules
+            .list_active(now)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|rule| handoff_page::HandoffRow {
+                browser_name: find_by_id(&browsers, &rule.browser_id).map(|b| b.name.clone()),
+                needs_recheck: rule.needs_recheck(version),
+                site: rule.site,
+                reason: rule.reason,
+                expires_at: rule.expires_at,
+            })
+            .collect();
+        PageSource::Static {
+            html: handoff_page::build_handoff_html(&rows, now),
+            url: handoff_page::HANDOFF_URL.to_owned(),
+        }
+    }
+
+    /// Открыть страницу «Сайты, открытые в другом браузере».
+    pub(crate) fn show_handoff_sites(&mut self) {
+        self.navigate_to(self.build_handoff_source());
+    }
+
+    /// Клик по ссылке `resolved` со страницы `about:handoff`: выполнить действие
+    /// и вернуть `true`. Ссылки действий принимаются только с самой этой страницы —
+    /// чужая страница не может снять или продлить правило.
+    pub(crate) fn apply_handoff_link(&mut self, resolved: &str) -> bool {
+        if self.current_display_url() != handoff_page::HANDOFF_URL {
+            return false;
+        }
+        let Some(action) = handoff_page::parse_action(resolved) else {
+            return false;
+        };
+        let rules = &self.external_browser_rules;
+        match action {
+            handoff_page::HandoffAction::Remove { site } => {
+                let _ = rules.remove(&site);
+            }
+            handoff_page::HandoffAction::Keep { site } => {
+                let _ = rules.renew(&site, env!("CARGO_PKG_VERSION"), now_unix());
+            }
+            handoff_page::HandoffAction::Recheck { site } => {
+                let _ = rules.remove(&site);
+                eprintln!("[handoff] recheck site={site}");
+                self.navigate_to(PageSource::from_arg(Some(&format!("https://{site}/"))));
+                return true;
+            }
+        }
+        self.navigate_replace(self.build_handoff_source());
+        true
+    }
+
     fn remember_handoff(&self, url: &str, browser_id: &str, reason: HandoffReason) {
         let version = env!("CARGO_PKG_VERSION");
         if let Err(err) =
