@@ -114,6 +114,7 @@ mod engine_bridge;
 mod crash_page;
 mod engine_thread;
 mod download;
+mod external_browser;
 mod import_manager;
 mod translate_manager;
 mod find;
