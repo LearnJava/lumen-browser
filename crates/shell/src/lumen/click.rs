@@ -1132,6 +1132,8 @@ impl Lumen {
                         // as a real navigation.
                         if let Some(action) = newtab::parse_action(&resolved) {
                             self.apply_newtab_action(action);
+                        } else if self.apply_net_error_link(&resolved) {
+                            // `about:handoff?open=...` on the network error page.
                         } else if self.apply_handoff_link(&resolved) {
                             // `about:handoff?...` on the handoff page itself.
                         } else if let Some(frag) =

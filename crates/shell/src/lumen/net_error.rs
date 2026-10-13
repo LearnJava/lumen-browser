@@ -15,10 +15,7 @@ impl Lumen {
     /// `load_failed`/`load_error_message` остаются выставленными — на них
     /// опираются `wait{document_ready}` и автоматизация (BUG-308, BUG-438).
     pub(crate) fn show_net_error(&mut self, msg: &str) {
-        let showing_error = self.crashed.as_ref().is_some_and(|(html, _)| {
-            matches!(&self.source, PageSource::Static { html: h, .. } if h == html)
-        });
-        if showing_error {
+        if self.showing_crashed_page().is_some() {
             return;
         }
         let code = NetErrorCode::classify(msg);
@@ -38,5 +35,34 @@ impl Lumen {
         self.crashed = Some((html_copy, original));
         self.load_failed = true;
         self.load_error_message = Some(msg.to_owned());
+    }
+
+    /// Исходный источник, если на экране сохранённая в [`Lumen::crashed`]
+    /// страница (ошибки или падения), а не страница, ушедшая из-под неё.
+    fn showing_crashed_page(&self) -> Option<(&str, &PageSource)> {
+        let (html, original) = self.crashed.as_ref()?;
+        matches!(&self.source, PageSource::Static { html: h, .. } if h == html)
+            .then_some((html.as_str(), original))
+    }
+
+    /// Клик по ссылке кнопки «Открыть в другом браузере» страницы ошибки:
+    /// передать адрес несостоявшейся навигации и вернуть `true`. Ссылка
+    /// принимается только пока на экране сама страница ошибки — чужая страница
+    /// не может запустить внешний браузер.
+    pub(crate) fn apply_net_error_link(&mut self, resolved: &str) -> bool {
+        let Some(reason) = net_error_page::parse_handoff_link(resolved) else {
+            return false;
+        };
+        let Some((html, original)) = self.showing_crashed_page() else {
+            return false;
+        };
+        if !html.contains(resolved) {
+            return false;
+        }
+        let Some(url) = original.url_str().map(str::to_owned) else {
+            return false;
+        };
+        self.open_url_in_other_browser(&url, reason, false);
+        true
     }
 }

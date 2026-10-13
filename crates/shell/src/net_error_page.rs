@@ -10,6 +10,8 @@
 use lumen_core::net_error::NetErrorCode;
 
 use crate::crash_page::escape_html;
+use crate::external_browser::{is_handoff_url, HandoffReason};
+use crate::handoff_page::HANDOFF_URL;
 use crate::PageSource;
 
 /// Тексты страницы для кода: (заголовок, первая фраза, действия).
@@ -110,6 +112,33 @@ fn texts(code: NetErrorCode, host: &str) -> (String, String, &'static [&'static 
     }
 }
 
+/// Причина передачи другому браузеру для кнопки «Открыть в другом браузере»
+/// (COMPAT-HANDOFF); `None` — кнопки нет. Сбой рукопожатия — вероятно ГОСТ-TLS
+/// (нужен Яндекс/Chromium-Gost), прочие сетевые сбои — «сайт не работает».
+/// Блокировка политикой/защитой и ошибки адреса не обходятся: другой браузер
+/// дал бы ту же ошибку или снял бы защиту, которую пользователь включил.
+fn handoff_reason(code: NetErrorCode) -> Option<HandoffReason> {
+    use NetErrorCode as C;
+    match code {
+        C::SslProtocolError => Some(HandoffReason::Crypto),
+        C::FileNotFound | C::InvalidUrl | C::UnknownUrlScheme | C::BlockedByClient => None,
+        _ => Some(HandoffReason::Other),
+    }
+}
+
+/// Ссылка кнопки; принимается только пока на экране сама страница ошибки
+/// (`Lumen::apply_net_error_link`).
+fn handoff_link(reason: HandoffReason) -> String {
+    format!("{HANDOFF_URL}?open={}", reason.code())
+}
+
+/// Причина из резолвнутой ссылки кнопки; `None` — не ссылка этой страницы.
+#[must_use]
+pub(crate) fn parse_handoff_link(url: &str) -> Option<HandoffReason> {
+    let code = url.strip_prefix(HANDOFF_URL)?.strip_prefix("?open=")?;
+    HandoffReason::from_code(code)
+}
+
 /// Хост адреса для заголовка; без хоста (файл, пустой адрес) — сам адрес.
 fn host_of(url: &str) -> String {
     lumen_core::url::Url::parse(url)
@@ -130,6 +159,12 @@ pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str) 
     } else {
         format!("<p><a class=\"btn\" href=\"{}\">Повторить</a></p>", escape_html(url))
     };
+    let other = match handoff_reason(code) {
+        Some(reason) if is_handoff_url(url) => {
+            format!("<p><a href=\"{}\">Открыть в другом браузере</a></p>", handoff_link(reason))
+        }
+        _ => String::new(),
+    };
     format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
 <style>body{{font-family:sans-serif;margin:0;padding:80px 40px;background:#f4f4f6;color:#222}}\
@@ -137,7 +172,7 @@ h1{{font-size:26px;max-width:640px}}p,li{{font-size:16px;max-width:640px}}li{{ma
 a.btn{{display:inline-block;padding:10px 22px;background:#2b6cdf;color:#fff;border-radius:6px;\
 text-decoration:none}}.code{{margin-top:48px;font-size:12px;color:#777}}\
 pre{{font-size:12px;color:#777;max-width:640px;white-space:pre-wrap}}</style></head>\
-<body><h1>{title}</h1><p>{lead}</p><ul>{items}</ul>{retry}\
+<body><h1>{title}</h1><p>{lead}</p><ul>{items}</ul>{retry}{other}\
 <div class=\"code\">{code_name}</div><pre>{detail}</pre></body></html>",
         lead = escape_html(&lead),
         code_name = code.name(),
@@ -195,6 +230,29 @@ mod tests {
                 assert!(!t.contains("атак") && !t.contains("угроз"), "{code:?}: {t}");
             }
         }
+    }
+
+    #[test]
+    fn other_browser_link_only_for_http_and_not_for_blocks() {
+        let html = build_net_error_html("https://a.example/", NetErrorCode::ConnectionTimedOut, "");
+        assert!(html.contains("href=\"about:handoff?open=other\">Открыть в другом браузере"));
+        let html = build_net_error_html("https://a.example/", NetErrorCode::SslProtocolError, "");
+        assert!(html.contains("about:handoff?open=crypto"));
+        for code in [NetErrorCode::BlockedByClient, NetErrorCode::InvalidUrl, NetErrorCode::FileNotFound] {
+            let html = build_net_error_html("https://a.example/", code, "");
+            assert!(!html.contains("about:handoff"), "{code:?}");
+        }
+        let html = build_net_error_html("file:///x", NetErrorCode::Failed, "");
+        assert!(!html.contains("about:handoff"));
+    }
+
+    #[test]
+    fn handoff_link_roundtrip() {
+        for r in [HandoffReason::Crypto, HandoffReason::Other] {
+            assert_eq!(parse_handoff_link(&handoff_link(r)), Some(r));
+        }
+        assert_eq!(parse_handoff_link("about:handoff?open=evil"), None);
+        assert_eq!(parse_handoff_link("about:handoff?remove=a.example"), None);
     }
 
     #[test]
