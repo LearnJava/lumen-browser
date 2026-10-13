@@ -85,6 +85,7 @@ impl CertInterstitial {
                 message,
                 detail: format!("{} ({list})", threat.as_code()),
                 proceed_label: "Всё равно перейти".to_owned(),
+                other_browser: false,
             };
         }
         lumen_chrome::ChromeSecurityModel {
@@ -96,6 +97,21 @@ impl CertInterstitial {
             ),
             detail: self.reason_text().unwrap_or_default(),
             proceed_label: "Всё равно перейти".to_owned(),
+            other_browser: self.handoff_reason().is_some(),
+        }
+    }
+
+    /// Причина передачи во внешний браузер (COMPAT-HO-02), если она есть:
+    /// цепочка не ведёт к доверенному корню — корень НУЦ ставят в ОС, и другой
+    /// браузер его видит. Просроченный, отозванный, самоподписанный сертификат
+    /// и чужое имя там дадут ту же ошибку; угроза Safe Browsing — не повод
+    /// обходить предупреждение.
+    pub fn handoff_reason(&self) -> Option<crate::external_browser::HandoffReason> {
+        match self.error {
+            Some(lumen_core::error::CertError::Untrusted(_)) => {
+                Some(crate::external_browser::HandoffReason::Crypto)
+            }
+            _ => None,
         }
     }
 
@@ -161,6 +177,27 @@ mod tests {
         assert_eq!(m.detail, "certificate expired");
         i.close();
         assert!(!i.chrome_model().open);
+    }
+
+    #[test]
+    fn other_browser_offered_only_for_untrusted_chain() {
+        use crate::external_browser::HandoffReason;
+        let mut i = CertInterstitial::new();
+        i.open("https://nuc.example/".to_owned(), "nuc.example".to_owned(), CertError::Untrusted("UnknownIssuer".to_owned()));
+        assert_eq!(i.handoff_reason(), Some(HandoffReason::Crypto));
+        assert!(i.chrome_model().other_browser);
+        for err in [CertError::Expired, CertError::SelfSigned, CertError::NameMismatch, CertError::Revoked] {
+            i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), err);
+            assert_eq!(i.handoff_reason(), None);
+            assert!(!i.chrome_model().other_browser);
+        }
+        i.open_threat(
+            "https://phish.example/".to_owned(),
+            "phish.example".to_owned(),
+            "local".to_owned(),
+            lumen_storage::ThreatType::SocialEngineering,
+        );
+        assert!(!i.chrome_model().other_browser);
     }
 
     #[test]

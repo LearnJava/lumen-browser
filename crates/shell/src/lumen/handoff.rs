@@ -43,20 +43,26 @@ impl Lumen {
     /// по которой подходящего нет, — показывается уведомлением ОС.
     pub(crate) fn open_in_other_browser(&mut self, reason: HandoffReason, remember: bool) {
         let url = self.current_display_url().to_owned();
+        self.open_url_in_other_browser(&url, reason, remember);
+    }
+
+    /// То же для заданного адреса: экран ошибки сертификата передаёт адрес,
+    /// на который навигация не состоялась, а не адрес показанной страницы.
+    pub(crate) fn open_url_in_other_browser(&mut self, url: &str, reason: HandoffReason, remember: bool) {
         let browsers = enumerate();
         let own = std::env::current_exe().ok();
-        let body = if !is_handoff_url(&url) {
+        let body = if !is_handoff_url(url) {
             "Во внешний браузер передаются только http(s)-страницы.".to_owned()
         } else if remember && self.active_profile_is_anonymous() {
             "В анонимном профиле правила передачи не сохраняются.".to_owned()
         } else {
             match pick(reason, &browsers, own.as_deref()) {
                 Pick::NoSuitable => no_suitable_message(reason).to_owned(),
-                Pick::Browser(b) => match launch(b, &url) {
+                Pick::Browser(b) => match launch(b, url) {
                     Ok(()) => {
                         eprintln!("[handoff] reason={} browser={} remember={remember}", reason.code(), b.id);
                         if remember {
-                            self.remember_handoff(&url, &b.id, reason);
+                            self.remember_handoff(url, &b.id, reason);
                         }
                         handoff_notice(&b.name, take_first_handoff())
                     }

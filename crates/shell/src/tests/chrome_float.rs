@@ -331,6 +331,7 @@ fn security_box_detaches_and_routes_its_buttons() {
             message: "bad.example".to_owned(),
             detail: "certificate expired".to_owned(),
             proceed_label: String::new(),
+            other_browser: true,
         },
         ..lumen_chrome::ChromeModel::default()
     };
@@ -349,6 +350,10 @@ fn security_box_detaches_and_routes_its_buttons() {
     };
     assert_eq!(press(lumen_chrome::ids::SECURITY_PROCEED_BTN), Some(lumen_chrome::ChromeAction::SecurityProceed));
     assert_eq!(press(lumen_chrome::ids::SECURITY_BACK_BTN), Some(lumen_chrome::ChromeAction::SecurityBack));
+    assert_eq!(
+        press(lumen_chrome::ids::SECURITY_OTHER_BTN),
+        Some(lumen_chrome::ChromeAction::SecurityOtherBrowser)
+    );
 }
 
 /// UX-CHROME-PANELS срез 21: `#profileFrame` в анонимном профиле отцепляется,
