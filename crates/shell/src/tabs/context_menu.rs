@@ -5,24 +5,26 @@
 //! the engine chrome (`#tabCtxMenu`, UX-CHROME-PANELS); this module owns the
 //! state, the clamped anchor and the row-attribute → [`MenuAction`] mapping.
 //!
-//! Menu items (9): Duplicate / Pin·Unpin / Move to new window / Add to new
+//! Menu items (13): Duplicate / Pin·Unpin / Move to new window / Add to new
 //! group / Collapse·Expand group / Remove from group / Close others / Close
-//! tabs to the right / Reopen closed tab. The actual mutations are performed
-//! by the shell.
+//! tabs to the right / Reopen closed tab / Open in another browser (four
+//! reasons, COMPAT-HANDOFF). The actual mutations are performed by the shell.
 
 use lumen_chrome::ChromeTabCtxModel;
+
+use crate::external_browser::HandoffReason;
 
 /// Menu width in CSS px (matches `.tab-ctx` in `chrome.html`).
 const MENU_W: f32 = 210.0;
 /// Row height in CSS px (`.tab-ctx-row`).
 const ROW_H: f32 = 28.0;
-/// Vertical padding above the first / below the last row, plus the three
+/// Vertical padding above the first / below the last row, plus the four
 /// 1-px separators and the 1-px border on each side.
-const CHROME_H: f32 = 10.0 + 3.0 + 2.0;
+const CHROME_H: f32 = 10.0 + 4.0 + 2.0;
 
 /// Total menu height in CSS px (background box).
 fn menu_height() -> f32 {
-    ROW_H * 9.0 + CHROME_H
+    ROW_H * 13.0 + CHROME_H
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -49,6 +51,9 @@ pub enum MenuAction {
     CloseOthers,
     /// Close all tabs positioned to the right of the target (pinned tabs survive).
     CloseRight,
+    /// Hand the target tab's page to another installed browser, picked by the
+    /// reason (COMPAT-HANDOFF). One-shot: no site rule is created.
+    OpenInOtherBrowser(HandoffReason),
 }
 
 impl MenuAction {
@@ -64,6 +69,10 @@ impl MenuAction {
             "close-others" => Self::CloseOthers,
             "close-right" => Self::CloseRight,
             "reopen" => Self::ReopenClosed,
+            "other-browser" => Self::OpenInOtherBrowser(HandoffReason::Other),
+            "other-browser-crypto" => Self::OpenInOtherBrowser(HandoffReason::Crypto),
+            "other-browser-drm" => Self::OpenInOtherBrowser(HandoffReason::Drm),
+            "other-browser-calls" => Self::OpenInOtherBrowser(HandoffReason::Calls),
             _ => return None,
         })
     }
@@ -193,6 +202,18 @@ mod tests {
         assert_eq!(MenuAction::from_attr("pin"), Some(MenuAction::TogglePin));
         assert_eq!(MenuAction::from_attr("reopen"), Some(MenuAction::ReopenClosed));
         assert_eq!(MenuAction::from_attr("nope"), None);
+    }
+
+    #[test]
+    fn other_browser_rows_carry_their_reason() {
+        for (attr, reason) in [
+            ("other-browser", HandoffReason::Other),
+            ("other-browser-crypto", HandoffReason::Crypto),
+            ("other-browser-drm", HandoffReason::Drm),
+            ("other-browser-calls", HandoffReason::Calls),
+        ] {
+            assert_eq!(MenuAction::from_attr(attr), Some(MenuAction::OpenInOtherBrowser(reason)));
+        }
     }
 
     #[test]
