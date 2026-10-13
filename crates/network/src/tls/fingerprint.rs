@@ -141,6 +141,10 @@ pub struct CertInfo {
     /// A4), e.g. `"2 SCTs from distinct known logs"`. Empty when not yet
     /// evaluated (stub data).
     pub ct_status: String,
+    /// Name of the root installed on this computer (OS store, not the built-in
+    /// Mozilla list) that anchors the chain — e.g. an antivirus's HTTPS
+    /// inspection root (COMPAT-TRUST-OSROOTS). Empty for an ordinary chain.
+    pub local_root: String,
 }
 
 impl CertInfo {
@@ -165,6 +169,7 @@ impl CertInfo {
             tls_version: tls_version.to_owned(),
             revocation_status: String::new(),
             ct_status: String::new(),
+            local_root: String::new(),
         }
     }
 
@@ -200,6 +205,7 @@ impl CertInfo {
             tls_version: tls_version.to_owned(),
             revocation_status: describe_ocsp_verdict(ocsp_verdict),
             ct_status: describe_ct_verdict(ct_verdict),
+            local_root: String::new(),
         }
     }
 }
