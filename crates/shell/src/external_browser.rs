@@ -71,6 +71,12 @@ impl HandoffReason {
         }
     }
 
+    /// Обратное к [`Self::code`]; незнакомый код — `None`.
+    #[must_use]
+    pub fn from_code(code: &str) -> Option<Self> {
+        [Self::Crypto, Self::Drm, Self::Calls, Self::Other].into_iter().find(|r| r.code() == code)
+    }
+
     /// Порядок предпочтения семейств; пустой хвост значит «других не берём».
     fn preference(self) -> &'static [BrowserKind] {
         use BrowserKind::{Chrome, ChromiumGost, Edge, Firefox, Other, Yandex};
