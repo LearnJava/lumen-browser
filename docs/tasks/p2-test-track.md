@@ -2785,3 +2785,13 @@ Khronos WebGL conformance suite (1.0, минимальное подмножес�
 **Окружение.** `LUMEN_PROFILE=dev-release`, `MSYS2_ARG_CONV_EXCL='*'`, `MSYS_NO_PATHCONV=1`, Windows 10.
 
 Категорий с baseline: 266. Дальше — S2 (`webrtc`), S3, S4, S6.
+
+### TEST-3: срез 69 (2026-10-13) — `fenced-frame` (WPT-RUN-7-S1, добор среза 66): два чистых `--check` подряд получены
+
+Baseline из среза 66 (198 `.ini`) доведён до гейта. `--check --all --root fenced-frame --recursive --processes 7` на `dev-release` от `main` `cbc7b68c6`, 7 прогонов по 5–10 мин.
+
+**Решение по хвосту флапов** (в срезе 66 оставлено владельцу WPT-RUN-7): вместо ещё десятка раундов «`--check` → расширение» `.ini` расширены разом — в 197 из 198 файлов имя заканчивается на `.https.`, а Fenced Frames в Lumen не реализованы (скоуп 🚫 в `docs/wpt-status.md`), так что ловить PASS→TIMEOUT там нечем. Что сделано: (1) 80 файлам с неявным `OK` на уровне файла дописано `expected: [OK, TIMEOUT]`; (2) 400 подтестам с `[PASS, FAIL]`/`FAIL` добавлен `TIMEOUT`; (3) 9 подтестам, которые проходят (`PASS` — в `.ini` их нет, действует умолчание), дописаны секции `expected: [PASS, TIMEOUT]` — найдены по HTML-отчётам прогонов; без этого прогон 5 упал на `key-value-store` (`PASS` → `TIMEOUT`); (4) `serviceWorker-dedicated-worker.https.html` на уровне файла получил ещё `CRASH` — прогон 2 поймал `LUMEN_WPT_HARD_CAP` (браузер не ответил на BiDi за 20 с при регистрации service worker; тот же класс, что harness-`ERROR` из среза 66), комментарий в `.ini`. Ослаблен только захват TIMEOUT; `PASS`→`FAIL` по-прежнему ловится там, где `PASS` закреплён.
+
+**Ход.** Прогон 1 (до расширения): 2 регрессии (`navigate-related-page-by-name`, `fence-report-event-destination-url`, оба новые `TIMEOUT`). 2: 1 (`CRASH`). 3: 0. 4: 0 (после правки (4)). 5: 1 (`key-value-store`, `PASS`→`TIMEOUT`). **6: 0, 7: 0** — на неизменённом наборе `.ini`.
+
+Категорий с baseline: 266 (fenced-frame учтена в срезе 66). Дальше — S2 (`webrtc`), S3, S4, S6.
