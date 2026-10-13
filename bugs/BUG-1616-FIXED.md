@@ -1,6 +1,6 @@
 # BUG-1616 — SameSite и разделение cookie не работают в браузере (top_level_site=None)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-14 (P6) — SameSite; разбиение по сайту вынесено в [BUG-1628](BUG-1628-OPEN.md)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** shell/network (`page_source.rs:266`, `resource_base.rs:206`, `network/src/lib.rs:2802`, `storage/src/cookies.rs:678`)
 
@@ -31,3 +31,16 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправлено (2026-10-14, P6)
+
+SameSite теперь работает в живом окне; Total Cookie Protection сознательно оставлена выключенной и заведена отдельно ([BUG-1628](BUG-1628-OPEN.md)).
+
+- **Сайт документа доходит до `HttpClient`.** Навигация (`page_source.rs` `initiator_site`) передаёт сайт инициатора из уже обработанного `Referer`; подресурсы, `fetch()`/XHR и iframe-документы (`resource_base.rs` `http_client_for_subresource_with_policy`) — сайт документа-владельца (`config::connection_site`, eTLD+1 по PSL). Для `file:`, `about:blank`, `data:` и навигации без инициатора (адресная строка, история, `no-referrer`) — `None`: запрос считается same-site.
+- **Контекст запроса — трёхзначный** (`lumen_core::ext::CookieSiteContext`, `CookieProvider::get_for_request_in_context`): `SameSite`, `CrossSiteTopLevelSafe` (межсайтовая top-level навигация методом GET: `Strict` не уходит, `Lax` уходит), `CrossSite` (подресурс, фрейм, POST-навигация: уходят только `None` и cookie без атрибута). Булев `get_for_request` остался для старых реализаций.
+- **Cookie без атрибута `SameSite`** (и с нераспознанным значением) — `SameSite::Unspecified`, ведёт себя как `None` (решение Р11: Lax-по-умолчанию рвёт возврат с 3-D Secure) и, в отличие от явного `None`, не требует `Secure`. Прежние строки БД с `Lax` остаются `Lax`.
+- **Граница сайта по точке:** `evilexample.com` больше не «внутри» `example.com` (раньше `ends_with` без точки) — и в SameSite, и в third-party для EasyList (`$third-party` теперь получает реальный контекст).
+- **Ключ раздела jar-а — `None`** (`network::COOKIE_PARTITION`): `top_level_site` клиента служит только SameSite и third-party, а не ключом БД. Иначе cookie, выставленные HTTP-ответом фрейма или `document.cookie`, оказались бы в другом разделе.
+- **Известные границы:** вложенный iframe судится по сайту ближайшего родителя, а не верхнего документа; подресурсы самого iframe — по его собственному сайту (в этих случаях ограничение мягче, чем в Chrome, но не жёстче); `NetworkTransport::fetch` помечен как top-level навигация (BUG-292) и поэтому пропускает `Lax` межсайтово.
+
+Тесты: `cookies.rs` (`provider_samesite_filters_by_request_context`, `provider_legacy_cross_site_flag_is_subresource_context`, `parse_samesite_variants`), `network/src/lib.rs` (`cookie_site_context_follows_document_site_and_request_kind`, `host_in_site_respects_label_boundary`, `cookie_site_context_unsafe_navigation_is_cross_site`), `page_source.rs` (`initiator_site_*`).

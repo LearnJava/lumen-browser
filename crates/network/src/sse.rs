@@ -280,7 +280,6 @@ pub(crate) struct EventSource {
 /// Cookie context of the document that opened the `EventSource`.
 pub(crate) struct SseCookies {
     pub(crate) jar: Arc<dyn lumen_core::ext::CookieProvider>,
-    pub(crate) top_level_site: Option<String>,
     pub(crate) document_host: Option<String>,
 }
 
@@ -351,7 +350,7 @@ impl EventSource {
         if c.document_host.as_deref().is_some_and(|d| d != host) {
             return String::new();
         }
-        let val = c.jar.get_for_request(&host, &self.url.path_and_query(), is_tls, c.top_level_site.as_deref(), false);
+        let val = c.jar.get_for_request(&host, &self.url.path_and_query(), is_tls, crate::COOKIE_PARTITION, false);
         if val.is_empty() { String::new() } else { format!("Cookie: {val}\r\n") }
     }
 
@@ -413,7 +412,7 @@ impl EventSource {
             let request_path = self.url.path_and_query();
             for (k, v) in &headers {
                 if k.eq_ignore_ascii_case("set-cookie") {
-                    c.jar.process_set_cookie(v, &host, &request_path, is_tls, c.top_level_site.as_deref());
+                    c.jar.process_set_cookie(v, &host, &request_path, is_tls, crate::COOKIE_PARTITION);
                 }
             }
         }
@@ -1190,7 +1189,6 @@ mod tests {
         let Ok(url) = Url::parse(&format!("http://127.0.0.1:{}/sse", addr.port())) else { panic!("url") };
         let cookies = SseCookies {
             jar: Arc::new(FixedJar),
-            top_level_site: None,
             document_host: Some("127.0.0.1".to_owned()),
         };
         let es = EventSource::connect(&url, Arc::new(LoopbackDns), Arc::new(lumen_core::ext::NoopEventSink), TabId(0), Some(cookies));
