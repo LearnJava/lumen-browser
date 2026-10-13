@@ -451,6 +451,11 @@ impl FingerprintProfile {
 pub fn connection_site(url: &lumen_core::url::Url) -> String {
     use lumen_core::ext::PublicSuffixList;
     let host = url.host_ascii_normalized();
+    // The PSL treats `127.0.0.1` as a name and returns `0.1`; an IP literal is
+    // its own site (BUG-1616: the same value is the site-for-cookies).
+    if host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok() {
+        return host.to_owned();
+    }
     lumen_storage::PslProvider::new()
         .registrable_domain(host)
         .unwrap_or(host)
