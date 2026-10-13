@@ -24,10 +24,17 @@ default_permission_mode = ""
   pre_task_hook = ""
   post_task_hook = ""
   crash_recovery_prompt = ""
+  context_primer = false
+  context_handoff = false
+  handoff_context_tokens = 150000
+  runtime = ""
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
 
 [[session]]
   name = "S2"
-  prompt = "Программист 2, который разрабатывает wpt тесты."
+  prompt = "Программист 2, который разрабатывает wpt тесты. "
   auto_restart = true
   max_tasks = 0
   stop_when_no_tasks = true
@@ -49,6 +56,12 @@ default_permission_mode = ""
   pre_task_hook = ""
   post_task_hook = ""
   crash_recovery_prompt = ""
+  context_primer = false
+  context_handoff = false
+  runtime = "hermes"
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
 
 [[session]]
   name = "S3"
@@ -74,6 +87,13 @@ default_permission_mode = ""
   pre_task_hook = ""
   post_task_hook = ""
   crash_recovery_prompt = ""
+  context_primer = false
+  context_handoff = false
+  handoff_context_tokens = 150000
+  runtime = ""
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
 
 [[session]]
   name = "Chat"
@@ -82,7 +102,7 @@ default_permission_mode = ""
   max_tasks = 0
   stop_when_no_tasks = false
   task_source = ""
-  model = "sonnet"
+  model = "opus"
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
@@ -99,6 +119,12 @@ default_permission_mode = ""
   pre_task_hook = ""
   post_task_hook = ""
   crash_recovery_prompt = ""
+  context_primer = false
+  context_handoff = false
+  runtime = ""
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
 
 [[session]]
   name = "S4"
@@ -124,6 +150,13 @@ default_permission_mode = ""
   pre_task_hook = ""
   post_task_hook = ""
   crash_recovery_prompt = ""
+  context_primer = false
+  context_handoff = false
+  handoff_context_tokens = 150000
+  runtime = ""
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
 
 [[session]]
   name = "S5"
@@ -149,6 +182,13 @@ default_permission_mode = ""
   pre_task_hook = ""
   post_task_hook = ""
   crash_recovery_prompt = ""
+  context_primer = false
+  context_handoff = false
+  handoff_context_tokens = 150000
+  runtime = ""
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
 
 [[session]]
   name = "S6"
@@ -157,7 +197,7 @@ default_permission_mode = ""
   max_tasks = 0
   stop_when_no_tasks = true
   task_source = "STATUS-P6.md"
-  model = "opus"
+  model = "sonnet"
   fallback_model = ""
   fallback_model_on_rate_limit = false
   effort = "high"
@@ -176,3 +216,8 @@ default_permission_mode = ""
   crash_recovery_prompt = ""
   context_primer = false
   context_handoff = false
+  handoff_context_tokens = 150000
+  runtime = ""
+  hermes_provider = ""
+  hermes_profile = ""
+  hermes_max_turns = 0
