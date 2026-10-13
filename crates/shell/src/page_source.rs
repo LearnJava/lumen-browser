@@ -261,7 +261,7 @@ impl PageSource {
                 if let Some(jar) = cookie_jar {
                     builder = builder.with_cookie_jar(
                         Arc::new(lumen_storage::CookieJarProvider::new(jar)),
-                        None,
+                        initiator_site(referrer.as_deref()),
                     );
                 }
                 let client = crate::config::global()
@@ -386,7 +386,7 @@ impl PageSource {
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
-                None,
+                initiator_site(referrer.as_deref()),
             );
         }
         let client = crate::config::global()
@@ -508,6 +508,20 @@ pub(crate) struct RawPage {
     /// into `LoadedPage::cert_info` by the `LoadDone`/`RenderDone` handler.
     /// `None` for every non-network source, same as `csp_header`.
     pub(crate) cert_info: Option<lumen_network::CertInfo>,
+}
+
+/// Сайт инициатора навигации (BUG-1616): registrable domain из `Referer`, уже
+/// прошедшего referrer policy. Он идёт в `HttpClient::with_cookie_jar` как
+/// site-for-cookies: по нему `SameSite=Strict` не уходит с межсайтового клика,
+/// а `Lax` уходит (top-level GET). `None` — адресная строка, история,
+/// автоматизация, `Referrer-Policy: no-referrer`: инициатора нет, cookie едут
+/// все.
+fn initiator_site(referrer: Option<&str>) -> Option<String> {
+    let url = lumen_core::url::Url::parse(referrer?).ok()?;
+    if url.host().is_empty() {
+        return None;
+    }
+    Some(crate::config::connection_site(&url))
 }
 
 /// Parse every `Link:` header value collected from `103 Early Hints`
@@ -1208,5 +1222,20 @@ mod tests {
     fn permissions_policy_allowed_feature_is_none() {
         let headers = vec![("Permissions-Policy".to_owned(), "sync-xhr=*".to_owned())];
         assert_eq!(permissions_policy_sync_xhr_disposition(&headers), None);
+    }
+
+    #[test]
+    fn initiator_site_is_registrable_domain_of_referrer() {
+        assert_eq!(initiator_site(Some("https://shop.example.com/cart?x=1")).as_deref(), Some("example.com"));
+        assert_eq!(initiator_site(Some("https://a.example.co.uk/")).as_deref(), Some("example.co.uk"));
+        // IP / localhost: the bare host.
+        assert_eq!(initiator_site(Some("http://127.0.0.1:8080/")).as_deref(), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn initiator_site_absent_without_usable_referrer() {
+        assert_eq!(initiator_site(None), None);
+        assert_eq!(initiator_site(Some("not a url")), None);
+        assert_eq!(initiator_site(Some("about:blank")), None);
     }
 }

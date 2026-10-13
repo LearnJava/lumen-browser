@@ -24,7 +24,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use lumen_core::ext::{CookieProvider, PublicSuffixList};
+use lumen_core::ext::{CookieProvider, CookieSiteContext, PublicSuffixList};
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
@@ -55,11 +55,16 @@ const MIGRATIONS: &[Migration] = &[Migration {
 pub enum SameSite {
     /// Cookie отправляется только для same-site навигации.
     Strict,
-    /// Cookie отправляется при top-level cross-site навигации (default браузеров).
-    #[default]
+    /// Cookie отправляется при top-level cross-site навигации безопасным методом.
     Lax,
     /// Cookie отправляется во всех случаях (требует `Secure`).
     None,
+    /// Атрибут `SameSite` не задан (или значение не распознано). Chromium
+    /// трактует такой cookie как `Lax`; Lumen пока — как `None` (решение Р11,
+    /// BUG-1616: Lax-по-умолчанию рвёт возврат с 3-D Secure, где банк делает
+    /// межсайтовый POST). В отличие от явного `None` не требует `Secure`.
+    #[default]
+    Unspecified,
 }
 
 impl SameSite {
@@ -68,6 +73,7 @@ impl SameSite {
             Self::Strict => "Strict",
             Self::Lax => "Lax",
             Self::None => "None",
+            Self::Unspecified => "Unspecified",
         }
     }
 
@@ -75,7 +81,8 @@ impl SameSite {
         match s {
             "Strict" => Self::Strict,
             "None" => Self::None,
-            // default — Lax (включая повреждённые / пустые значения).
+            "Unspecified" => Self::Unspecified,
+            // повреждённые / пустые значения — Lax (как было до Unspecified).
             _ => Self::Lax,
         }
     }
@@ -408,7 +415,7 @@ pub fn default_path(request_path: &str) -> &str {
 ///   а не путь запроса);
 /// - `Secure` (без значения);
 /// - `HttpOnly` (без значения);
-/// - `SameSite=Strict|Lax|None` — иначе default Lax.
+/// - `SameSite=Strict|Lax|None` — иначе [`SameSite::Unspecified`].
 ///
 /// Возвращает `None` если name/value не распарсилось (нет `=` в первом
 /// сегменте) или name пустое.
@@ -466,7 +473,7 @@ pub fn parse_set_cookie_with_psl(
     let mut max_age: Option<i64> = None;
     let mut secure = false;
     let mut http_only = false;
-    let mut same_site = SameSite::Lax;
+    let mut same_site = SameSite::Unspecified;
 
     for raw in parts {
         let attr = raw.trim();
@@ -508,6 +515,10 @@ pub fn parse_set_cookie_with_psl(
                 same_site = SameSite::None;
             } else if val.eq_ignore_ascii_case("lax") {
                 same_site = SameSite::Lax;
+            } else {
+                // RFC 6265bis §5.5 шаг 17: нераспознанное значение — как если
+                // бы атрибута не было.
+                same_site = SameSite::Unspecified;
             }
         }
     }
@@ -641,6 +652,19 @@ impl CookieJarProvider {
     }
 }
 
+/// RFC 6265bis §5.4: может ли cookie с политикой `policy` уйти в запросе
+/// контекста `ctx`. `Strict` — только same-site; `Lax` — ещё и на
+/// межсайтовой top-level навигации безопасным методом; `None` и
+/// [`SameSite::Unspecified`] (Р11) — без ограничений.
+fn same_site_allows(policy: SameSite, ctx: CookieSiteContext) -> bool {
+    match (policy, ctx) {
+        (_, CookieSiteContext::SameSite) => true,
+        (SameSite::Strict, _) => false,
+        (SameSite::Lax, CookieSiteContext::CrossSite) => false,
+        _ => true,
+    }
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -657,29 +681,29 @@ impl CookieProvider for CookieJarProvider {
         top_level_site: Option<&str>,
         is_cross_site: bool,
     ) -> String {
+        let ctx = if is_cross_site { CookieSiteContext::CrossSite } else { CookieSiteContext::SameSite };
+        self.get_for_request_in_context(host, path, is_secure, top_level_site, ctx)
+    }
+
+    fn get_for_request_in_context(
+        &self,
+        host: &str,
+        path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+        ctx: CookieSiteContext,
+    ) -> String {
         let now = now_unix();
         let Ok(cookies) = self.jar.get_for_request(host, path, is_secure, now, top_level_site)
         else {
             return String::new();
         };
-        let mut parts: Vec<String> = Vec::new();
-        for c in &cookies {
-            // SameSite enforcement per RFC 6265bis §5.4:
-            //   Strict → only same-site context
-            //   Lax    → allowed for cross-site only if this is a top-level safe request
-            //             (the calller sets is_cross_site; subresources are always blocked)
-            //   None   → unrestricted (but requires Secure, enforced at Set-Cookie time)
-            if is_cross_site && c.same_site == SameSite::Strict {
-                continue;
-            }
-            if is_cross_site && c.same_site == SameSite::Lax {
-                // For subresource cross-site requests, skip Lax cookies.
-                // (We don't distinguish top-level navigation here; Phase 0 conservative.)
-                continue;
-            }
-            parts.push(format!("{}={}", c.name, c.value));
-        }
-        parts.join("; ")
+        cookies
+            .iter()
+            .filter(|c| same_site_allows(c.same_site, ctx))
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     fn process_set_cookie(
@@ -1044,7 +1068,7 @@ mod tests {
     #[test]
     fn samesite_preserved_through_roundtrip() {
         let jar = make_jar();
-        for ss in [SameSite::Strict, SameSite::Lax, SameSite::None] {
+        for ss in [SameSite::Strict, SameSite::Lax, SameSite::None, SameSite::Unspecified] {
             let mut c = make_cookie("example.com", "/", &format!("k_{ss:?}"), "v");
             c.same_site = ss;
             jar.set(c, None).unwrap();
@@ -1056,6 +1080,7 @@ mod tests {
         assert!(policies.contains(&SameSite::Strict));
         assert!(policies.contains(&SameSite::Lax));
         assert!(policies.contains(&SameSite::None));
+        assert!(policies.contains(&SameSite::Unspecified));
     }
 
     // ── parse_set_cookie ──
@@ -1070,7 +1095,7 @@ mod tests {
         assert_eq!(c.expires_at, None);
         assert!(!c.secure);
         assert!(!c.http_only);
-        assert_eq!(c.same_site, SameSite::Lax);
+        assert_eq!(c.same_site, SameSite::Unspecified);
     }
 
     #[test]
@@ -1162,8 +1187,8 @@ mod tests {
             ("k=v; SameSite=Strict", SameSite::Strict),
             ("k=v; SameSite=lax", SameSite::Lax),  // case-insensitive
             ("k=v; SameSite=None", SameSite::None),
-            ("k=v; SameSite=garbage", SameSite::Lax),  // unknown → default
-            ("k=v", SameSite::Lax),  // missing → default
+            ("k=v; SameSite=garbage", SameSite::Unspecified),  // unknown → default
+            ("k=v", SameSite::Unspecified),  // missing → default
         ] {
             let c = parse_set_cookie(header, "example.com", "/", 0).unwrap();
             assert_eq!(c.same_site, expected, "header: {header}");
@@ -1369,6 +1394,43 @@ mod tests {
 
     fn provider() -> CookieJarProvider {
         CookieJarProvider::new(Arc::new(make_jar()))
+    }
+
+    /// BUG-1616: три политики и три контекста запроса (RFC 6265bis §5.4).
+    #[test]
+    fn provider_samesite_filters_by_request_context() {
+        use lumen_core::ext::CookieSiteContext::{CrossSite, CrossSiteTopLevelSafe, SameSite as SameSiteCtx};
+        let p = provider();
+        for h in [
+            "s=1; SameSite=Strict",
+            "l=1; SameSite=Lax",
+            "n=1; SameSite=None; Secure",
+            "u=1",
+        ] {
+            p.process_set_cookie(h, "shop.example", "/", true, None);
+        }
+        let get = |ctx| {
+            let raw = p.get_for_request_in_context("shop.example", "/", true, None, ctx);
+            let mut parts: Vec<&str> = raw.split("; ").filter(|c| !c.is_empty()).collect();
+            parts.sort_unstable();
+            parts.join("; ")
+        };
+        assert_eq!(get(SameSiteCtx), "l=1; n=1; s=1; u=1");
+        // Межсайтовая top-level навигация GET: Strict не уходит, Lax уходит.
+        assert_eq!(get(CrossSiteTopLevelSafe), "l=1; n=1; u=1");
+        // Межсайтовый подресурс / фрейм: только None и cookie без атрибута (Р11).
+        assert_eq!(get(CrossSite), "n=1; u=1");
+    }
+
+    /// Старый булев вход: `is_cross_site=true` = подресурс.
+    #[test]
+    fn provider_legacy_cross_site_flag_is_subresource_context() {
+        let p = provider();
+        p.process_set_cookie("l=1; SameSite=Lax", "a.example", "/", false, None);
+        p.process_set_cookie("u=1", "a.example", "/", false, None);
+        assert_eq!(p.get_for_request("a.example", "/", false, None, true), "u=1");
+        let same = p.get_for_request("a.example", "/", false, None, false);
+        assert!(same.contains("l=1") && same.contains("u=1"), "{same}");
     }
 
     #[test]

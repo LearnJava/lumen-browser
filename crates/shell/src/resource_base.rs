@@ -200,10 +200,16 @@ impl ResourceBase {
             // called fresh per fetch batch, so cross-navigation preflight
             // reuse is not the goal here, only enabling the call at all.
             .with_cors_cache(Arc::new(lumen_network::PreflightCache::new()));
+        // BUG-1616: the document's own site is the site-for-cookies of every
+        // subresource / `fetch()` / XHR / frame request made on its behalf —
+        // `SameSite=Strict|Lax` cookies stay home on a cross-site request.
+        // A frame fetches through the embedder's base, so its document request
+        // is judged against the embedding page's site. `None` for `file:`.
+        let document_url = self.url();
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
-                None,
+                document_url.as_ref().map(crate::config::connection_site),
             );
         }
         let mut client = crate::config::global().apply_http(builder);
@@ -222,7 +228,7 @@ impl ResourceBase {
         // `http_client_for_subresource` call sites. срез 3: `referrer_policy`
         // is the caller's resolved policy (see this method's doc comment) —
         // still the project default at every call site not yet upgraded.
-        if let Some(document_url) = self.url() {
+        if let Some(document_url) = document_url {
             // PERF-13: pooled connections are partitioned by document site.
             client = client
                 .with_connection_site(&crate::config::connection_site(&document_url))
