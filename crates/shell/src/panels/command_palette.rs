@@ -32,6 +32,8 @@
 //! consecutive runs and word-boundary starts, so `nt` ranks *New Tab* above
 //! *Print*. An empty query shows every item in insertion order (commands first).
 
+use crate::external_browser::HandoffReason;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Maximum number of result rows shown at once (the list scrolls beyond
@@ -77,6 +79,9 @@ pub enum PaletteAction {
     ImportBrowserData,
     /// Translate the page with the local model, or revert the translation.
     TranslatePage,
+    /// Hand the current page to another installed browser (COMPAT-HANDOFF);
+    /// the reason picks which one.
+    OpenInOtherBrowser(HandoffReason),
 }
 
 impl PaletteAction {
@@ -98,6 +103,16 @@ impl PaletteAction {
             PaletteAction::ToggleVimMode => "Toggle Vim Mode",
             PaletteAction::ImportBrowserData => "Import Bookmarks and History",
             PaletteAction::TranslatePage => "Translate Page / Show Original",
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Other) => "Open in Another Browser",
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Crypto) => {
+                "Open in Another Browser (GOST / e-signature)"
+            }
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Drm) => {
+                "Open in Another Browser (DRM video)"
+            }
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Calls) => {
+                "Open in Another Browser (video calls)"
+            }
         }
     }
 
@@ -117,7 +132,9 @@ impl PaletteAction {
             PaletteAction::ToggleDevConsole => "F12",
             PaletteAction::ToggleShields => "Ctrl+Shift+S",
             PaletteAction::ToggleVimMode => "Ctrl+Alt+V",
-            PaletteAction::ImportBrowserData | PaletteAction::TranslatePage => "",
+            PaletteAction::ImportBrowserData
+            | PaletteAction::TranslatePage
+            | PaletteAction::OpenInOtherBrowser(_) => "",
         }
     }
 
@@ -140,6 +157,10 @@ impl PaletteAction {
             PaletteAction::ToggleVimMode,
             PaletteAction::ImportBrowserData,
             PaletteAction::TranslatePage,
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Other),
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Crypto),
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Drm),
+            PaletteAction::OpenInOtherBrowser(HandoffReason::Calls),
         ]
     }
 }
