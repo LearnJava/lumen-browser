@@ -1,6 +1,9 @@
 //! COMPAT-ERRORS: типизация сбоя навигации главного документа кодами Chromium.
 //!
-//! Сетевой слой возвращает `Error::Network(String)`, но сообщения имеют
+//! Места возникновения, где причина известна точно (DNS, connect, редиректы,
+//! файл), возвращают `Error::NetFailure { code, .. }` — [`NetErrorCode::of_error`]
+//! берёт код оттуда. Остальной сетевой слой возвращает `Error::Network(String)`:
+//! сообщения имеют
 //! стабильные префиксы по точке возникновения (`resolve …`, `connect …`,
 //! `TLS handshake …`, `too many redirects`) и несут номер ошибки ОС
 //! (`(os error 10061)`). [`NetErrorCode::classify`] разбирает их в код, под
@@ -63,6 +66,41 @@ impl NetErrorCode {
             Self::BlockedByClient => "ERR_BLOCKED_BY_CLIENT",
             Self::HttpStatus(_) => "ERR_HTTP_RESPONSE_CODE_FAILURE",
             Self::Failed => "ERR_FAILED",
+        }
+    }
+
+    /// Код ошибки загрузки: типизированный `Error::NetFailure`, затем
+    /// `io::Error` (файловая загрузка), затем разбор текста — [`Self::classify`].
+    #[must_use]
+    pub fn of_error(err: &(dyn std::error::Error + 'static)) -> Self {
+        if let Some(crate::error::Error::NetFailure { code, .. }) = err.downcast_ref::<crate::error::Error>() {
+            return *code;
+        }
+        if let Some(code) = err.downcast_ref::<std::io::Error>().and_then(Self::from_io) {
+            return code;
+        }
+        Self::classify(&err.to_string())
+    }
+
+    /// Код по `io::Error`: номер ошибки ОС точнее `ErrorKind` (Windows отдаёт
+    /// WSA-номера, которые `std` сводит к `Uncategorized`), затем сам вид.
+    /// `None` — вид ничего не говорит о причине.
+    #[must_use]
+    pub fn from_io(err: &std::io::Error) -> Option<Self> {
+        use std::io::ErrorKind as K;
+        if let Some(code) = err.raw_os_error().and_then(|n| u32::try_from(n).ok()).and_then(code_from_os_error) {
+            return Some(code);
+        }
+        match err.kind() {
+            K::TimedOut | K::WouldBlock => Some(Self::ConnectionTimedOut),
+            K::ConnectionRefused => Some(Self::ConnectionRefused),
+            K::ConnectionReset => Some(Self::ConnectionReset),
+            K::ConnectionAborted | K::BrokenPipe | K::UnexpectedEof => Some(Self::ConnectionClosed),
+            K::HostUnreachable | K::NetworkUnreachable | K::AddrNotAvailable | K::NetworkDown => {
+                Some(Self::AddressUnreachable)
+            }
+            K::NotFound => Some(Self::FileNotFound),
+            _ => None,
         }
     }
 
@@ -217,6 +255,30 @@ mod tests {
         assert_eq!(code("network error: http status 502"), NetErrorCode::HttpStatus(502));
         assert_eq!(code("http status x"), NetErrorCode::Failed);
         assert_eq!(NetErrorCode::HttpStatus(504).name(), "ERR_HTTP_RESPONSE_CODE_FAILURE");
+    }
+
+    #[test]
+    fn typed_error_wins_over_its_text() {
+        // Текст говорит «timed out», код — «отказ»: берётся код.
+        let err = crate::error::Error::NetFailure {
+            code: NetErrorCode::ConnectionRefused,
+            message: "connect a:80: timed out".into(),
+        };
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::ConnectionRefused);
+        assert_eq!(err.to_string(), "network error: connect a:80: timed out");
+        let plain = crate::error::Error::Network("connect a:80: timed out".into());
+        assert_eq!(NetErrorCode::of_error(&plain), NetErrorCode::ConnectionTimedOut);
+    }
+
+    #[test]
+    fn io_error_maps_by_os_number_then_kind() {
+        use std::io::{Error, ErrorKind};
+        let os = Error::from_raw_os_error(10061);
+        assert_eq!(NetErrorCode::from_io(&os), Some(NetErrorCode::ConnectionRefused));
+        let kind = Error::new(ErrorKind::TimedOut, "локализованный текст");
+        assert_eq!(NetErrorCode::from_io(&kind), Some(NetErrorCode::ConnectionTimedOut));
+        assert_eq!(NetErrorCode::of_error(&Error::new(ErrorKind::NotFound, "x")), NetErrorCode::FileNotFound);
+        assert_eq!(NetErrorCode::from_io(&Error::new(ErrorKind::InvalidData, "x")), None);
     }
 
     #[test]

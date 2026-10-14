@@ -27,8 +27,8 @@ impl Lumen {
     /// Заменяет страницу, которую не удалось загрузить, страницей ошибки.
     /// `load_failed`/`load_error_message` остаются выставленными — на них
     /// опираются `wait{document_ready}` и автоматизация (BUG-308, BUG-438).
-    pub(crate) fn show_net_error(&mut self, msg: &str) {
-        self.show_error_page(msg, NetErrorCode::classify(msg));
+    pub(crate) fn show_net_error(&mut self, msg: &str, code: NetErrorCode) {
+        self.show_error_page(msg, code);
     }
 
     /// Сбой финального pipeline (`RenderDone(Err)`): сеть тут ни при чём, а

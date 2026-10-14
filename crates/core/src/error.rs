@@ -87,6 +87,14 @@ pub enum Error {
     /// mapping lives on the network side; this variant stays TLS-library
     /// agnostic).
     CertInvalid(CertError),
+    /// COMPAT-ERRORS срез 4: сбой сети с кодом, определённым в месте возникновения
+    /// (`io::ErrorKind`/номер ошибки ОС при connect, ответ резолвера, длина
+    /// цепочки редиректов), а не угаданным по тексту. Печатается как
+    /// [`Self::Network`], так что разбор по строке остаётся запасным путём.
+    NetFailure {
+        code: crate::net_error::NetErrorCode,
+        message: String,
+    },
 }
 
 /// Structured reason a TLS certificate failed verification — the payload of
@@ -184,6 +192,7 @@ impl fmt::Display for Error {
                 write!(f, "{directive} blocked '{blocked_uri}' per policy \"{original_policy}\"")
             }
             Self::CertInvalid(cert_err) => write!(f, "TLS handshake: {cert_err}"),
+            Self::NetFailure { message, .. } => write!(f, "network error: {message}"),
         }
     }
 }
