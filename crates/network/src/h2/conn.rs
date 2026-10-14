@@ -44,6 +44,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use lumen_core::error::Error;
+use lumen_core::net_error::NetErrorCode;
 
 use crate::h2::{
     frame::{
@@ -337,7 +338,7 @@ impl<S: Read + Write> H2Conn<S> {
                     );
                     let n = read.map_err(io_err)?;
                     if n == 0 {
-                        return Err(Error::Network("H2: unexpected EOF".to_owned()));
+                        return Err(Error::net_failure(NetErrorCode::ConnectionClosed, "H2: unexpected EOF"));
                     }
                 }
                 Err(e) => return Err(frame_err(e)),
@@ -609,13 +610,13 @@ impl<S: Read + Write> H2Conn<S> {
                 let fields = self
                     .decoder
                     .decode(&hdr_block)
-                    .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+                    .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
                 let status = fields
                     .iter()
                     .find(|f| f.name == b":status")
                     .and_then(|f| std::str::from_utf8(&f.value).ok())
                     .and_then(|s| s.parse::<u16>().ok())
-                    .ok_or_else(|| Error::Network("H2: response missing :status".to_owned()))?;
+                    .ok_or_else(|| Error::net_failure(NetErrorCode::InvalidResponse, "H2: response missing :status"))?;
                 if (100..200).contains(&status) {
                     // Informational — reset the accumulator for the block
                     // that follows and keep waiting. RFC 9113 §8.1: a 1xx
@@ -828,13 +829,13 @@ impl<S: Read + Write> H2Conn<S> {
                 let fields = self
                     .decoder
                     .decode(&hdr_bytes)
-                    .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+                    .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
                 let status = fields
                     .iter()
                     .find(|f| f.name == b":status")
                     .and_then(|f| std::str::from_utf8(&f.value).ok())
                     .and_then(|s| s.parse::<u16>().ok())
-                    .ok_or_else(|| Error::Network("H2: response missing :status".to_owned()))?;
+                    .ok_or_else(|| Error::net_failure(NetErrorCode::InvalidResponse, "H2: response missing :status"))?;
                 if let Some(stream) = self.pending_streams.get_mut(&sid) {
                     if (100..200).contains(&status) {
                         // Informational — RFC 9113 §8.1 forbids END_STREAM on
@@ -1157,7 +1158,7 @@ impl<S: Read + Write> H2Conn<S> {
         let fields = self
             .decoder
             .decode(&block)
-            .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+            .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
         let Some(st) = self.pending_streams.get_mut(&sid) else {
             return Ok(None);
         };
@@ -1172,7 +1173,7 @@ impl<S: Read + Write> H2Conn<S> {
         match status {
             None => Ok(Some(StreamEvent::Failed {
                 sid,
-                error: Error::Network("H2: response missing :status".to_owned()),
+                error: Error::net_failure(NetErrorCode::InvalidResponse, "H2: response missing :status"),
                 retryable: false,
             })),
             // Informational — RFC 9113 §8.1 forbids END_STREAM on a 1xx block.
@@ -1202,7 +1203,7 @@ impl<S: Read + Write> H2Conn<S> {
         if let Some(block) = self.push_block.take() {
             self.decoder
                 .decode(&block)
-                .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+                .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
         }
         Ok(())
     }
@@ -1211,11 +1212,11 @@ impl<S: Read + Write> H2Conn<S> {
 // ── Error helpers ─────────────────────────────────────────────────────────
 
 fn io_err(e: std::io::Error) -> Error {
-    Error::Network(format!("H2 I/O: {e}"))
+    crate::http1::read_failure("H2 I/O", &e)
 }
 
 fn frame_err(e: FrameError) -> Error {
-    Error::Network(format!("H2 frame: {e}"))
+    Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 frame: {e}"))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
