@@ -74,10 +74,7 @@ impl Lumen {
         let (submit_event, enctype, dialog_node, target, csp_gate) = prepared;
         match submit_event {
             lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                if fire_submit_event
-                    && let Some(sub) = submitter
-                    && !self.frame_dispatch_submit_event(idx, form, sub)
-                {
+                if fire_submit_event && !self.frame_dispatch_submit_event(idx, form, submitter) {
                     return;
                 }
                 // Кодируем сразу в байты и с настоящим `Content-Type`: POST-ветка
@@ -150,15 +147,16 @@ impl Lumen {
     /// страницы, отсутствие рантайма и ошибка самого вызова дают `true`:
     /// документ без скриптов обязан отправляться, а сломанная рассылка не имеет
     /// права молча съесть настоящую отправку.
-    fn frame_dispatch_submit_event(&mut self, idx: usize, form: NodeId, submitter: NodeId) -> bool {
+    fn frame_dispatch_submit_event(
+        &mut self,
+        idx: usize,
+        form: NodeId,
+        submitter: Option<NodeId>,
+    ) -> bool {
         let Some(js) = self.frames.get(idx).and_then(|h| h.js.clone()) else {
             return true;
         };
-        let script = format!(
-            "_lumen_dispatch_submit_event({}, {})",
-            form.index(),
-            submitter.index(),
-        );
+        let script = super::form_submit::submit_event_script(form, submitter);
         // `_lumen_dispatch_rich` отдаёт `!event.defaultPrevented`, JSON-ом —
         // значит отменяет только литеральный `false`.
         //

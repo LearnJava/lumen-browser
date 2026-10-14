@@ -8469,9 +8469,9 @@
       {
        "id": "UX-ENTER-SUBMIT",
        "title": "Неявная отправка формы по Enter",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Enter в поле страницы ничего не делает: символ CR отсекается is_control (keyboard.rs:438-440), keybinding_for(Enter) = None (keybindings.rs:287), keydown Enter странице не уходит, неявной отправки формы (HTML §4.10.21.2) нет ни в шелле, ни в шиме. Поисковые формы сайтов по Enter не работают. Объём: keydown Enter → если не отменён, неявная отправка через кнопку по умолчанию формы (или submit без неё при одном поле), как клик по submitter; то же во фрейме. Приёмка: форма поиска с одним полем без кнопки — Enter отправляет; preventDefault на keydown — не отправляет. Проверено чтением кода, живым прогоном — нет. docs/research/browser-ux/report.md §4.2 Исследование — docs/research/browser-ux/report.md."
+       "note": "**Сделано (2026-10-14, ветка `p6-ux-enter-submit`):** Enter (и Shift+Enter, не автоповтор) в текстовом `<input>` после неотменённого keydown запускает неявную отправку формы (HTML §4.10.21.2): `lumen_dom::implicit_submission` (`engine/dom/src/implicit_submit.rs`) выбирает кнопку по умолчанию — первую кнопку submit в порядке дерева, отключённая отменяет отправку — либо, если кнопок нет и поле блокирующее одно, отправляет форму без submitter; шелл (`Lumen::implicit_submit_on_enter`, вызов из `handle_key` после contenteditable) гонит это через `run_form_submission` с отменяемым `submit` (`SubmitEvent.submitter === null` без кнопки; `pending_submits` и скрипт события приняли `Option<NodeId>`); то же для поля внутри `<iframe>` (`run_frame_form_submission`). **Остаток:** владелец формы — ближайший предок `<form>` (атрибута `form=` нет); живой прогон в окне не делался, проверено юнит-тестами DOM (7) и чтением кода. docs/research/browser-ux/report.md §4.2 Исследование — docs/research/browser-ux/report.md."
       },
       {
        "id": "UX-OMNI-EDIT",

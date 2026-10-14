@@ -618,7 +618,7 @@ pub(crate) struct Lumen {
     pub(crate) pending_clicks: Vec<(u64, crate::lumen::click::PendingClick)>,
     pub(crate) next_click_proceed_id: u64,
     /// То же для `submit`-события формы: (`id`, форма, submitter, страница, момент).
-    pub(crate) pending_submits: Vec<(u64, NodeId, NodeId, String, std::time::Instant)>,
+    pub(crate) pending_submits: Vec<(u64, NodeId, Option<NodeId>, String, std::time::Instant)>,
     /// THREAD-9 срез 6: результаты `javascript:` URL (клик, `location.href=`),
     /// вычисленные движковой задачей; `about_to_wait` превращает каждый в
     /// `navigate_replace`. Попадает только строковое значение завершения.
