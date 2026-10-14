@@ -437,7 +437,7 @@ impl Lumen {
                     }
                 }
             }
-            LoadEvent::LoadError(msg, tab_id, generation) => {
+            LoadEvent::LoadError(msg, code, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {
                     self.mark_bg_tab_needs_reload(tab_id);
                     return;
@@ -459,7 +459,7 @@ impl Lumen {
                 self.pending_mpa_view_transition_snapshot = None;
                 // COMPAT-ERRORS: вместо прежней страницы, оставшейся на экране,
                 // вкладка показывает страницу ошибки с кодом Chromium.
-                self.show_net_error(&msg);
+                self.show_net_error(&msg, code);
             }
             LoadEvent::CertError(url, host, cert_err, cause, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {

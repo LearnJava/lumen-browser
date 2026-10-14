@@ -41,6 +41,7 @@ use lumen_core::ext::{
     JsSseSession, JsWebSocketProvider, JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink,
     RequestFilter, SseProvider, SseSession, WebSocketProvider, WebSocketSession,
 };
+use lumen_core::net_error::NetErrorCode;
 use lumen_core::url::Url;
 
 mod auth;
@@ -1293,14 +1294,29 @@ const HAPPY_EYEBALLS_DELAY: std::time::Duration = std::time::Duration::from_mill
 /// previous one fails or after `delay`, without cancelling it. The first
 /// established connection wins; losing attempts finish in their own threads
 /// and drop their socket. A single address connects inline.
+/// Причина неудачного TCP-connect: код (из `io::Error`, не из текста) и текст.
+type ConnectFailure = (NetErrorCode, String);
+
+fn connect_failure(addr: &std::net::SocketAddr, e: &std::io::Error) -> ConnectFailure {
+    (NetErrorCode::from_io(e).unwrap_or(NetErrorCode::AddressUnreachable), format!("{addr}: {e}"))
+}
+
+fn timed_out_failure() -> ConnectFailure {
+    (NetErrorCode::ConnectionTimedOut, "timed out".to_owned())
+}
+
+fn net_failure(code: NetErrorCode, message: String) -> Error {
+    Error::NetFailure { code, message }
+}
+
 fn connect_happy_eyeballs(
     addrs: &[std::net::SocketAddr],
     timeout: std::time::Duration,
     delay: std::time::Duration,
-) -> std::result::Result<TcpStream, String> {
+) -> std::result::Result<TcpStream, ConnectFailure> {
     match addrs {
-        [] => return Err("no addresses".to_owned()),
-        [a] => return TcpStream::connect_timeout(a, timeout).map_err(|e| format!("{a}: {e}")),
+        [] => return Err((NetErrorCode::NameNotResolved, "no addresses".to_owned())),
+        [a] => return TcpStream::connect_timeout(a, timeout).map_err(|e| connect_failure(a, &e)),
         _ => {}
     }
     let first_v6 = addrs[0].is_ipv6();
@@ -1317,7 +1333,7 @@ fn connect_happy_eyeballs(
     let (tx, rx) = std::sync::mpsc::channel();
     let mut pending = 0usize;
     let mut next = 0usize;
-    let mut last_err = String::new();
+    let mut last_err: Option<ConnectFailure> = None;
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if next < ordered.len() {
@@ -1326,12 +1342,12 @@ fn connect_happy_eyeballs(
             pending += 1;
             let tx = tx.clone();
             std::thread::spawn(move || {
-                let r = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("{addr}: {e}"));
+                let r = TcpStream::connect_timeout(&addr, timeout).map_err(|e| connect_failure(&addr, &e));
                 let _ = tx.send(r);
             });
         }
         if pending == 0 {
-            return Err(last_err);
+            return Err(last_err.unwrap_or_else(timed_out_failure));
         }
         let wait = if next < ordered.len() {
             delay
@@ -1342,11 +1358,11 @@ fn connect_happy_eyeballs(
             Ok(Ok(s)) => return Ok(s),
             Ok(Err(e)) => {
                 pending -= 1;
-                last_err = e;
+                last_err = Some(e);
             }
             Err(_) => {
                 if next >= ordered.len() {
-                    return Err(if last_err.is_empty() { "timed out".to_owned() } else { last_err });
+                    return Err(last_err.unwrap_or_else(timed_out_failure));
                 }
             }
         }
@@ -1369,15 +1385,15 @@ fn connect_inner(
         // DNS is resolved by the proxy (no local leak) — required for Tor.
         let proxy_addrs = resolver
             .resolve(&s5.host, s5.port)
-            .map_err(|e| Error::Network(format!("resolve SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
+            .map_err(|e| net_failure(NetErrorCode::NameNotResolved, format!("resolve SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
         if proxy_addrs.is_empty() {
-            return Err(Error::Network(format!(
-                "resolve SOCKS5 proxy {}:{}: no addresses",
-                s5.host, s5.port
-            )));
+            return Err(net_failure(
+                NetErrorCode::NameNotResolved,
+                format!("resolve SOCKS5 proxy {}:{}: no addresses", s5.host, s5.port),
+            ));
         }
         let proxy_tcp = connect_happy_eyeballs(&proxy_addrs, CONNECT_TIMEOUT, HAPPY_EYEBALLS_DELAY)
-            .map_err(|e| Error::Network(format!("connect SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
+            .map_err(|(code, e)| net_failure(code, format!("connect SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
         // BUG-935 (S10): `socks5_connect` below does several `read_exact`
         // calls with no read timeout on the socket at all — a proxy that
         // accepts the TCP connect (passes `CONNECT_TIMEOUT`) but stalls
@@ -1399,14 +1415,15 @@ fn connect_inner(
         // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
         let addrs = resolver
             .resolve(host, port)
-            .map_err(|e| Error::Network(format!("resolve {host}:{port}: {e}")))?;
+            .map_err(|e| net_failure(NetErrorCode::NameNotResolved, format!("resolve {host}:{port}: {e}")))?;
         if addrs.is_empty() {
-            return Err(Error::Network(format!(
-                "resolve {host}:{port}: no addresses"
-            )));
+            return Err(net_failure(
+                NetErrorCode::NameNotResolved,
+                format!("resolve {host}:{port}: no addresses"),
+            ));
         }
         connect_happy_eyeballs(&addrs, CONNECT_TIMEOUT, HAPPY_EYEBALLS_DELAY)
-            .map_err(|e| Error::Network(format!("connect {host}:{port}: {e}")))?
+            .map_err(|(code, e)| net_failure(code, format!("connect {host}:{port}: {e}")))?
     };
 
     // BUG-307: without this, a server that accepts the TCP/TLS connection and
@@ -2299,7 +2316,7 @@ fn emit_request_failed(
 ) -> Error {
     if let Some(s) = sink {
         let reason = match &err {
-            Error::Network(msg) => msg.clone(),
+            Error::Network(msg) | Error::NetFailure { message: msg, .. } => msg.clone(),
             other => other.to_string(),
         };
         s.emit(&Event::RequestFailed {
@@ -2559,7 +2576,7 @@ fn fetch_with_redirect(
     http_error_is_response: bool,
 ) -> Result<(Response, Url)> {
     if hops_left == 0 {
-        return Err(Error::Network("too many redirects".to_owned()));
+        return Err(net_failure(NetErrorCode::TooManyRedirects, "too many redirects".to_owned()));
     }
 
     // DATAURL-1: `data:` не идёт в сеть вообще — до HSTS/require_http_scheme
@@ -3036,7 +3053,7 @@ fn fetch_with_redirect(
             304 => return Ok((resp, url.clone())),
             301 | 302 | 303 | 307 | 308 => {
                 let location = header_value(&resp.headers, "location")
-                    .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
+                    .ok_or_else(|| net_failure(NetErrorCode::TooManyRedirects, "redirect without Location".to_owned()))?;
                 let next = url
                     .resolve(location)
                     .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
@@ -6588,6 +6605,23 @@ mod tests {
         drop(bad);
         assert!(connect_happy_eyeballs(&[a, a], std::time::Duration::from_secs(5), std::time::Duration::from_millis(50)).is_err());
         assert!(connect_happy_eyeballs(&[], std::time::Duration::from_secs(1), std::time::Duration::from_millis(50)).is_err());
+    }
+
+    /// COMPAT-ERRORS срез 4: отказ в connect получает код из `io::Error`, а не
+    /// из текста сообщения.
+    #[test]
+    fn refused_connect_carries_a_typed_code() {
+        let bad = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = bad.local_addr().unwrap();
+        drop(bad);
+        let (code, text) = connect_happy_eyeballs(&[a], std::time::Duration::from_secs(5), std::time::Duration::from_millis(50))
+            .expect_err("closed port");
+        assert_eq!(code, NetErrorCode::ConnectionRefused, "{text}");
+        let (code, _) = connect_happy_eyeballs(&[a, a], std::time::Duration::from_secs(5), std::time::Duration::from_millis(50))
+            .expect_err("closed port");
+        assert_eq!(code, NetErrorCode::ConnectionRefused);
+        let err = net_failure(code, format!("connect {a}: refused"));
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::ConnectionRefused);
     }
 
     // ── JsSseSessionImpl (HTML Living Standard §9.2) ─────────────────────────

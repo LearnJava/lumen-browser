@@ -1589,7 +1589,12 @@ impl Lumen {
                                     generation,
                                 ))
                             }
-                            _ => proxy.send_event(LoadEvent::LoadError(e.to_string(), tab_id, generation)),
+                            _ => proxy.send_event(LoadEvent::LoadError(
+                                e.to_string(),
+                                lumen_core::net_error::NetErrorCode::of_error(&*e),
+                                tab_id,
+                                generation,
+                            )),
                         };
                         return;
                     }
@@ -1599,7 +1604,8 @@ impl Lumen {
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), tab_id, generation));
+                        let code = lumen_core::net_error::NetErrorCode::of_error(&*e);
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), code, tab_id, generation));
                         return;
                     }
                 };
@@ -1631,7 +1637,8 @@ impl Lumen {
             // статуса; страницу ошибки с автоповтором показывает `show_net_error`.
             if crate::net_error_page::is_empty_server_error(raw.status, &raw.bytes) {
                 let msg = lumen_core::net_error::http_status_message(raw.status);
-                let _ = proxy.send_event(LoadEvent::LoadError(msg, tab_id, generation));
+                let code = lumen_core::net_error::NetErrorCode::HttpStatus(raw.status);
+                let _ = proxy.send_event(LoadEvent::LoadError(msg, code, tab_id, generation));
                 return;
             }
 
@@ -3082,7 +3089,9 @@ pub(crate) enum LoadEvent {
     /// Ошибка при загрузке страницы. Предпоследнее поле — id вкладки,
     /// последнее — generation навигации (U-1); см. [`Self::EarlyPreloadHints`]
     /// (BUG-1214).
-    LoadError(String, usize, u64),
+    /// Сообщение, код сбоя (COMPAT-ERRORS: определён в месте возникновения,
+    /// а не разобран из сообщения), вкладка, поколение.
+    LoadError(String, lumen_core::net_error::NetErrorCode, usize, u64),
     /// ph3-tls-hardening A6: the fetch failed because the TLS handshake's
     /// certificate did not verify (`lumen_core::error::Error::CertInvalid`,
     /// downcast out of the `Box<dyn Error>` the streaming/static fetch paths
