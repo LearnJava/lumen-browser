@@ -38,3 +38,5 @@ python scripts/perf_audit.py --only example --exe target/dev-release/lumen.exe
 ## Кого блокирует
 
 COMPAT-CORPUS-1 (`scripts/compat_crawl.py`, ветка `p2-compat-corpus-1`): плечо Lumen не проверить, приёмка на `corpus.txt`+top100 невозможна. Любой прогон `perf_audit.py` и COMPAT-AB-IDENTITY-HARNESS на живом окне — по той же причине.
+
+См. также BUG-1630: на `main` e0c276e88 testharness по BiDi стоит в TIMEOUT из-за `loading` в `chrome_ui.rs` (UX-LOADING); вероятно, та же причина — проверить в живом окне.

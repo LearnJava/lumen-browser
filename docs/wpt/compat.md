@@ -1,0 +1,61 @@
+# WPT `compat/` — регулярный прогон с reftest (COMPAT-CSS-WPT)
+
+Набор `tests/wpt/compat/` (Compat Standard: `-webkit-*` алиасы, legacy flexbox, `-webkit-gradient`, `::-webkit-scrollbar`,
+`-webkit-text-fill-color`) — 38 автоматизируемых id по манифесту. Строки-источники: `CSS-SPECS.md` §«Compat», подпункты `COMPAT-CSS-*`.
+
+## Результат 2026-10-14 (первый прогон с reftest)
+
+Бинарь: `main` e0c276e88 + `loading: false` в `crates/shell/src/chrome_ui.rs` (см. BUG-1630; без этой правки testharness
+не исполняется). Три прогона подряд дали один и тот же результат. Снимок — [`runs/2026-10-14-compat.json`](runs/2026-10-14-compat.json).
+
+| | значение |
+|---|---|
+| id по шкале wpt.fyi | **16 из 38 (41,68 %)** |
+| testharness-id, harness OK | 13 (из них полностью зелёных 4) |
+| reftest-id | 25 (**9 PASS**, 16 FAIL) — исполнялись впервые |
+| подтестов | 50 из 138 |
+| статусы | FAIL=16, OK=13, PASS=9 |
+
+Прежний `run_report.py` видел 13 testharness-id из 39 и 9 из 71 подтеста; reftest в нём не было.
+
+Полностью зелёные: `historical` 3/3, `webkit-box-removing-triggering-anonymous-merge` 1/1, `webkit-gradient-sign` 2/2,
+`webkit-scrollbar-parse` 1/1; reftest — `webkit-background-origin-text`, `-box-align-001`, `-box-clamp-bottom-border`,
+`-box-clamp-visibility-change`, `-box-fieldset`, `-box-z-index`, `-linear-gradient-diff-unprefixed`,
+`-text-fill-color-property-003`, `-005`.
+
+## Провалы и привязка
+
+| id | результат | строка CSS-SPECS / BUG |
+|---|---|---|
+| `css-style-declaration-alias-enumeration` | 0/51 | CSS-SPECS.md:781 (`-webkit-*` алиасы) |
+| `webkit-mask-box-enumeration` | 0/6 | [BUG-1631](../../bugs/BUG-1631-OPEN.md) (`webkitMaskBoxImage*`) |
+| `idlharness.window` | 23/29 (`window.orientation`, `onorientationchange` у Window и HTMLBodyElement) | [BUG-1632](../../bugs/BUG-1632-OPEN.md) |
+| `webkit-box-blockify`, `-horizontal-reverse-variants`, `-horizontal-rtl-variants`, `-ignores-flex-wrap.tentative`, `-rtl-flex` (reftest FAIL); `webkit-box-item-shrink-001` 12/20, `-002` 5/18; `webkit-box-vertically-centered` 0/1 | | CSS-SPECS.md:785 (legacy flexbox) |
+| `webkit-linear-gradient-line-{top,right,bottom,left}` (reftest FAIL); `webkit-gradient-comma` 1/2; `webkit-radial-gradient-radii` 2/3 | | CSS-SPECS.md:784 (`-webkit-*-gradient`) |
+| `webkit-text-fill-color-property-001a/b/c/d, 002, 004, 006` (reftest FAIL); `webkit-text-fill-color-currentColor` 0/1 | | CSS-SPECS.md:786 (`-webkit-text-fill-color`) |
+
+Каждый провал привязан к строке CSS-SPECS или к BUG; непривязанных нет.
+
+## Блокер прогона: BUG-1630
+
+На `main` testharness по BiDi стоит в `TIMEOUT` (первый плохой коммит 27e264dc5 UX-LOADING, строка `loading: …` в
+`chrome_ui.rs`). Reftest (`--ipc-server`) не затронуты. Пока [BUG-1630](../../bugs/BUG-1630-OPEN.md) открыт, прогон
+воспроизводится только на бинаре с `loading: false` (правка не коммитится).
+
+## Ожидания (`.ini`)
+
+`tests/wpt/metadata/compat/` — testharness обновлён `run_report.py --update-expected`; для 16 FAIL-reftest заведены
+`<id>.html.ini` с `expected: FAIL` и комментарием-привязкой (их читает `--check` только для testharness; reftest
+исполняет `run_corpus.py`, ожидания там — документ).
+
+## Повтор (после каждого среза P4)
+
+```
+export LUMEN_PROFILE=dev-release MSYS2_ARG_CONV_EXCL='/dom'
+<venv>/python tests/wpt/run_corpus.py --binary <lumen.exe> --prefixes compat \
+  --out-dir .tmp/wpt-compat --processes 7 --run-json .tmp/wpt-compat/run.json
+<venv>/python tests/wpt/run_report.py --binary <lumen.exe> --all --root compat --recursive --check
+```
+
+`MANIFEST.json` в git не лежит: первый прогон без `--skip-manifest-update` пересоздаёт его (~40 с). Интерпретатор с
+патчем pywebsocket3 — `p2-work/tests/wpt/.venv`. Прогон `compat/` занимает ~14 с.

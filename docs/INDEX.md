@@ -17,7 +17,7 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 | CSS property / spec status | `CSS-SPECS.md` |
 | Bug priority rules | [`bug-priority.md`](bug-priority.md) |
 | Per-crate state, API and traps | [`SUBSYSTEMS.md`](../SUBSYSTEMS.md) → `subsystems/<crate>.md` |
-| WPT status and vendoring | [`wpt-status.md`](wpt-status.md) · `tests/wpt/VENDOR.md` · [`wpt-vendor-notes/`](wpt-vendor-notes/) |
+| WPT status and vendoring | [`wpt-status.md`](wpt-status.md) · [`wpt/compat.md`](wpt/compat.md) (compat/ + reftest) · `tests/wpt/VENDOR.md` · [`wpt-vendor-notes/`](wpt-vendor-notes/) |
 
 ## Architecture and decisions
 

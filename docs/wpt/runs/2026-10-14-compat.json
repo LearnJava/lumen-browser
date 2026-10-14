@@ -1,0 +1,76 @@
+{
+  "batch_small": 0,
+  "binary": "D:/RustProjects/lumen-browser/.claude/worktrees/functional-honking-pinwheel/.tmp/bin/lumen.exe",
+  "commit": "6450ab4cc",
+  "exclude_prefixes": [],
+  "finished": "2026-10-14T16:12:13",
+  "max_browser_gb": 4.0,
+  "no_paint": true,
+  "parallel_shards": 1,
+  "prefixes": [
+    "compat"
+  ],
+  "processes": 7,
+  "rss_cap_kills": 0,
+  "scope": [
+    "compat"
+  ],
+  "scored": {
+    "coverage": {
+      "by_type": {},
+      "leaked_examples": [],
+      "lost": 0,
+      "lost_by_shard": [],
+      "lost_in_ran_shards": 0,
+      "no_executor": 0,
+      "no_executor_by_type": {},
+      "shard_empty": 0
+    },
+    "empty_shards": [],
+    "per_category": {
+      "compat": {
+        "by_type": {
+          "reftest": 25,
+          "testharness": 13
+        },
+        "harness_ok": 22,
+        "ids": 38,
+        "not_run": 0,
+        "pass_rate": 0.4168,
+        "ran": 38,
+        "score": 15.84,
+        "subtests_passed": 50,
+        "subtests_total": 138
+      }
+    },
+    "recovered_shards": [],
+    "status_counts": {
+      "FAIL": 16,
+      "OK": 13,
+      "PASS": 9
+    },
+    "totals": {
+      "harness_ok": 22,
+      "ids": 38,
+      "not_run": 0,
+      "pass_rate": 0.4168,
+      "ran": 38,
+      "score": 15.84,
+      "subtests_passed": 50,
+      "subtests_total": 138
+    }
+  },
+  "shards": [
+    {
+      "auto_ids": 38,
+      "ids": 38,
+      "name": "compat",
+      "outcome": "ran",
+      "prefix": "/compat/",
+      "report": ".tmp\\wpt-compat\\compat.json",
+      "returncode": 1,
+      "seconds": 14.2
+    }
+  ],
+  "shared_queue": false
+}
