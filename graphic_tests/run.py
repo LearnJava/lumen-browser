@@ -13,6 +13,7 @@
     python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
     python graphic_tests/run.py --per-test-process  # opt-out из живого окна: kill+relaunch на каждый тест
     python graphic_tests/run.py --paint-bisect 100  # DEVX-4: diff% при отключении каждого LUMEN_NO_* флага
+    python graphic_tests/run.py --self-test         # TEST-9: проверка GPU_CAPTURE без запуска браузера
 
 Workflow:
   1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
@@ -25,9 +26,10 @@ Workflow:
 тест NavigateTab + Screenshot — обратно приходит детерминированный CPU-снимок (PNG),
 который уже от (0,0), поэтому магента-калибровка/crop offset не нужны. Протокол —
 length-prefixed bincode (см. секцию «IPC client» ниже и crates/ipc/src/lib.rs).
-Edge-эталон, ffmpeg-crop и diff-метрика — те же. NB: CPU-бэкенд снимка пока не на
-паритете с femtovg по border-radius/gradients/images (BUG-221), поэтому --ipc
-опционален, а gdigrab остаётся дефолтным захватом.
+Edge-эталон, ffmpeg-crop и diff-метрика — те же. BUG-221 закрыт: CPU-снимок исполняет
+скрипты страницы (dump_mode.rs), поэтому JS-тесты в --ipc проходят. Дефолтным
+остаётся gdigrab — CPU-снимок расходится с реальным окном на GPU-чувствительных
+тестах (трансформы, clip-path, фильтры, AA-края; GPU_CAPTURE); им нужен gdigrab.
 
 Живое окно — режим по умолчанию (SDC-4, ранее SDC-3 за флагом --live): один
 процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест (то был
@@ -36,9 +38,9 @@ Edge-эталон, ffmpeg-crop и diff-метрика — те же. NB: CPU-б�
 `tools/call navigate` грузит страницу, `tools/call wait{condition:document_ready}`
 даёт настоящий сигнал готовности вместо `time.sleep(LUMEN_WAIT_SEC)`. Сам
 пиксельный снимок — по-прежнему gdigrab настоящего femtovg-окна (не CPU-путь MCP
-`resource://screenshot`, у которого тот же разрыв паритета, что и у --ipc),
-поэтому этот режим совместим с реальным JS (TEST-57, 129-138 — им нужен настоящий
-движок, не CPU-снимок без исполнения скриптов). TEST-00 калибрует crop offset
+`resource://screenshot`, у которого тот же разрыв на GPU-чувствительных тестах,
+что и у --ipc), поэтому этот режим даёт пиксели реального окна и совместим с
+реальным JS (TEST-57, 129-138). TEST-00 калибрует crop offset
 один раз за прогон, как и раньше — окно/процесс просто не пересоздаётся между
 тестами. `--per-test-process` возвращает старое поведение (kill+relaunch на
 каждый тест) как явный opt-out — diagnostic fallback, если живое окно ведёт себя
@@ -655,6 +657,39 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 
+# TEST-9: тесты, которым нужен gdigrab (реальное GPU-окно); остальные могут идти
+# через --ipc (CPU-снимок). S1 только вводит таблицу — дефолтный захват не меняется.
+GPU_CAPTURE: frozenset[str] = frozenset({
+    '100', '109', '130', '135', '136',                  # трансформы, clip-path
+    '30', '52', '56',                                   # фильтры, блюр, blend
+    '16', '51', '53', '45', '147', '79', '117', '97',   # AA-края
+    '19', '55', '57', '59', '62', '78', '80',           # прочие
+})
+
+
+def capture_mode_for(tid: str) -> str:
+    """Способ захвата Lumen для теста: 'gdigrab' (GPU-подмножество) или 'ipc'."""
+    return 'gdigrab' if tid in GPU_CAPTURE else 'ipc'
+
+
+def self_test() -> int:
+    """Проверка GPU_CAPTURE без запуска браузера. 0 — ок, 1 — есть ошибки."""
+    errors: list[str] = []
+    known = {t[0] for t in TESTS}
+    for tid in sorted(GPU_CAPTURE - known, key=int):
+        errors.append(f'GPU_CAPTURE: id {tid} нет в TESTS')
+    expected = 23  # число id в ROADMAP TEST-9 (5 + 3 + 8 + 7)
+    if len(GPU_CAPTURE) != expected:
+        errors.append(f'GPU_CAPTURE: {len(GPU_CAPTURE)} id вместо {expected} (дубль в литерале?)')
+    for tid, want in (('100', 'gdigrab'), ('97', 'gdigrab'), ('03', 'ipc'), ('00', 'ipc')):
+        got = capture_mode_for(tid)
+        if got != want:
+            errors.append(f'capture_mode_for({tid!r}) = {got!r}, ожидалось {want!r}')
+    for e in errors:
+        print(f'--self-test: {e}')
+    print('--self-test: ' + ('FAIL' if errors else f'ok ({len(GPU_CAPTURE)} id в GPU_CAPTURE, {len(known)} тестов)'))
+    return 1 if errors else 0
+
 
 def check_debtor(tid: str, pct: float) -> tuple[str | None, str]:
     """Проверяет тест против KNOWN_DEBTORS.
@@ -1035,8 +1070,8 @@ class LumenIpcClient:
 # готовности вместо слепого `time.sleep(LUMEN_WAIT_SEC)`. Сам пиксельный
 # снимок по-прежнему берётся через gdigrab (реальный femtovg-рендер) — MCP
 # `resource://screenshot` рендерит через CPU-путь, который пока не на
-# паритете с femtovg по border-radius/градиентам/картинкам (тот же разрыв,
-# что и у --ipc, см. докстринг модуля).
+# паритете с femtovg на GPU-чувствительных тестах (тот же разрыв, что и у
+# --ipc, см. докстринг модуля и GPU_CAPTURE).
 
 # document_ready проверяет только `layout_box.is_some()` — сам GPU-рендер
 # (femtovg/wgpu present) и композитинг ОС идут отдельным циклом и не
@@ -2026,11 +2061,17 @@ def main() -> int:
     parser.add_argument('--bisect', metavar='ID',
                         help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
                              'вердикт: сломано свойство или взаимодействие')
+    parser.add_argument('--self-test', action='store_true',
+                        help='TEST-9: проверить GPU_CAPTURE (id есть в TESTS, нет дублей, '
+                             'capture_mode_for на образцах) и выйти; браузер не запускается')
     parser.add_argument('--paint-bisect', metavar='ID',
                         help='DEVX-4: прогнать тест N+1 раз — baseline и с поочерёдным '
                              'отключением каждого LUMEN_NO_* paint-флага (renderer.rs); '
                              'таблица diff%% — какая оптимизация меняет картинку')
     args = parser.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     if args.ipc and args.per_test_process:
         print('--ipc и --per-test-process взаимоисключающие (--ipc уже держит один процесс '
