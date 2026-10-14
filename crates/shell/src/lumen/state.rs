@@ -1787,6 +1787,9 @@ pub(crate) struct Lumen {
     /// COMPAT-SIG-01: локальный журнал сильных сигналов «сайт не работает»
     /// (в памяти окна, наружу не уходит).
     pub(crate) compat_signals: compat_signals::SignalLog,
+    /// Его копия на диске, `compat_signals.db`: окно «повторное выключение
+    /// защиты за 7 суток» и прошлые сигналы переживают перезапуск.
+    pub(crate) compat_signal_store: Arc<lumen_storage::CompatSignalStore>,
     /// Words the user added to the persistent dictionary
     /// (`data/spell/user_words.txt`), lowercase. Treated as correct spellings.
     pub(crate) spell_user_words: std::collections::HashSet<String>,

@@ -21,6 +21,7 @@ pub mod bookmarks;
 pub mod broadcast_channels;
 pub mod cache_storage;
 pub mod cached_dns;
+pub mod compat_signals;
 pub mod cookies;
 pub mod csp_policies;
 pub mod dns_cache;
@@ -88,6 +89,7 @@ pub use hsts::{
     HstsStore,
 };
 pub use cached_dns::{CachedDnsResolver, Clock, SystemClock};
+pub use compat_signals::{CompatSignalStore, StoredSignal};
 pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
 pub use external_browser_rules::{same_site, ExternalBrowserRule, ExternalBrowserRules, RULE_TTL_SECS};

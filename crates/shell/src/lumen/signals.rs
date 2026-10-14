@@ -3,9 +3,10 @@
 //! получают часы и адрес текущей страницы.
 //!
 //! Пишутся только http(s)-страницы вне анонимного профиля. Сигнал не уходит
-//! никуда (COMPAT-SIG-05): пока потребителя нет, он виден в stderr.
+//! никуда (COMPAT-SIG-05): пока потребителя нет, он виден в stderr и лежит в
+//! `compat_signals.db` (журнал и момент последнего выключения защиты по сайту).
 
-use crate::compat_signals::Signal;
+use crate::compat_signals::{site_of, Signal, SignalKind, SignalLog, PROTECTION_REPEAT_SECS};
 use crate::external_browser::is_handoff_url;
 use crate::*;
 
@@ -13,6 +14,33 @@ use super::handoff::now_unix;
 
 fn announce(signal: &Signal) {
     eprintln!("[signal] {} site={} detail={}", signal.kind.code(), signal.site, signal.detail);
+}
+
+/// Открыть `compat_signals.db` (при ошибке диска — в памяти), убрать
+/// устаревшее и поднять журнал окна из того, что осталось.
+pub(crate) fn open_signal_log() -> (SignalLog, Arc<lumen_storage::CompatSignalStore>) {
+    let store = Arc::new(crate::window_mode::open_persistent(
+        "compat_signals.db",
+        lumen_storage::CompatSignalStore::open,
+        lumen_storage::CompatSignalStore::open_in_memory,
+        "compat_signals init",
+    ));
+    let _ = store.purge(now_unix(), PROTECTION_REPEAT_SECS);
+    let signals = store
+        .load_signals()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|s| {
+            Some(Signal {
+                kind: SignalKind::from_code(&s.kind)?,
+                site: s.site,
+                at: s.at,
+                detail: s.detail,
+            })
+        })
+        .collect();
+    let log = SignalLog::restore(signals, store.load_protection_off().unwrap_or_default());
+    (log, store)
 }
 
 impl Lumen {
@@ -28,7 +56,7 @@ impl Lumen {
     pub(crate) fn note_user_reload(&mut self) {
         let Some(url) = self.signal_url() else { return };
         if let Some(signal) = self.compat_signals.record_reload(&url, now_unix()) {
-            announce(&signal);
+            self.persist_signal(&signal);
         }
     }
 
@@ -36,8 +64,10 @@ impl Lumen {
     /// сильный сигнал.
     pub(crate) fn note_site_protection_off(&mut self) {
         let Some(url) = self.signal_url() else { return };
-        if let Some(signal) = self.compat_signals.record_protection_off(&url, now_unix()) {
-            announce(&signal);
+        let now = now_unix();
+        let _ = self.compat_signal_store.set_protection_off(&site_of(&url), now);
+        if let Some(signal) = self.compat_signals.record_protection_off(&url, now) {
+            self.persist_signal(&signal);
         }
     }
 
@@ -47,6 +77,17 @@ impl Lumen {
             return;
         }
         let signal = self.compat_signals.record_open_in_other(url, reason_code, now_unix());
-        announce(&signal);
+        self.persist_signal(&signal);
+    }
+
+    /// Показать сигнал в stderr и дописать его в журнал на диске.
+    fn persist_signal(&self, signal: &Signal) {
+        announce(signal);
+        let _ = self.compat_signal_store.append(&lumen_storage::StoredSignal {
+            kind: signal.kind.code().to_owned(),
+            site: signal.site.clone(),
+            at: signal.at,
+            detail: signal.detail.clone(),
+        });
     }
 }

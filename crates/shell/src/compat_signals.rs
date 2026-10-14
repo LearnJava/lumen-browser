@@ -3,8 +3,10 @@
 //!
 //! Чистая часть без часов и ввода-вывода: время приходит аргументом (unix-секунды).
 //! Детектор ничего не отправляет (COMPAT-SIG-05) и не хранит адреса целиком —
-//! только сайт (eTLD+1) и код сигнала. Журнал живёт в памяти окна и не
-//! переживает перезапуск; анонимный профиль в него не пишет (решает вызывающий).
+//! только сайт (eTLD+1) и код сигнала. Журнал живёт в памяти окна; на диск его
+//! пишет `lumen/signals.rs` (`lumen_storage::CompatSignalStore`) и поднимает
+//! при старте через [`SignalLog::restore`], чтобы окно 7 суток переживало
+//! перезапуск. Анонимный профиль в журнал не пишет (решает вызывающий).
 //!
 //! Сильные сигналы (отчёт site-compat §COMPAT-SIG-01):
 //! - 3 перезагрузки одного URL за 30 с;
@@ -34,6 +36,15 @@ pub enum SignalKind {
 }
 
 impl SignalKind {
+    /// Вид по коду из [`SignalKind::code`]; неизвестный код (запись новой
+    /// версии) — `None`.
+    #[must_use]
+    pub fn from_code(code: &str) -> Option<Self> {
+        [Self::ReloadBurst, Self::ProtectionOffAgain, Self::OpenInOther]
+            .into_iter()
+            .find(|k| k.code() == code)
+    }
+
     /// Стабильный код сигнала (для журнала и будущего opt-in агрегата).
     #[must_use]
     pub fn code(self) -> &'static str {
@@ -69,12 +80,24 @@ pub struct SignalLog {
 }
 
 /// Сайт (eTLD+1) адреса; без хоста — сам адрес в нижнем регистре.
-fn site_of(url: &str) -> String {
+pub fn site_of(url: &str) -> String {
     lumen_storage::PartitionKey::parse(url)
         .map_or_else(|| url.to_ascii_lowercase(), |k| k.site().to_owned())
 }
 
 impl SignalLog {
+    /// Журнал, поднятый с диска: сигналы от старых к новым и моменты выключения
+    /// защиты по сайтам. Лишнее сверх [`LOG_CAP`] отбрасывается с головы.
+    #[must_use]
+    pub fn restore(signals: Vec<Signal>, protection_off: Vec<(String, i64)>) -> Self {
+        let skip = signals.len().saturating_sub(LOG_CAP);
+        Self {
+            log: signals.into_iter().skip(skip).collect(),
+            reloads: HashMap::new(),
+            protection_off: protection_off.into_iter().collect(),
+        }
+    }
+
     fn push(&mut self, kind: SignalKind, site: String, at: i64, detail: &str) -> Signal {
         if self.log.len() == LOG_CAP {
             self.log.pop_front();
@@ -210,6 +233,32 @@ mod tests {
         );
         assert_eq!(log.count_for(SignalKind::OpenInOther, "https://example.co.uk/"), 1);
         assert_eq!(log.count_for(SignalKind::OpenInOther, "https://example.com/"), 0);
+    }
+
+    #[test]
+    fn restored_protection_window_still_fires() {
+        let mut log = SignalLog::restore(Vec::new(), vec![("example.com".to_owned(), 100)]);
+        let s = log.record_protection_off("https://example.com/", 100 + 3 * 86_400);
+        assert_eq!(s.map(|s| s.kind), Some(SignalKind::ProtectionOffAgain));
+    }
+
+    #[test]
+    fn restore_keeps_the_newest_cap_signals_and_codes_round_trip() {
+        let signals: Vec<Signal> = (0..(LOG_CAP as i64 + 5))
+            .map(|at| Signal {
+                kind: SignalKind::OpenInOther,
+                site: "a.com".into(),
+                at,
+                detail: String::new(),
+            })
+            .collect();
+        let log = SignalLog::restore(signals, Vec::new());
+        assert_eq!(log.recent().count(), LOG_CAP);
+        assert_eq!(log.recent().next().map(|s| s.at), Some(5));
+        for k in [SignalKind::ReloadBurst, SignalKind::ProtectionOffAgain, SignalKind::OpenInOther] {
+            assert_eq!(SignalKind::from_code(k.code()), Some(k));
+        }
+        assert_eq!(SignalKind::from_code("future_kind"), None);
     }
 
     #[test]

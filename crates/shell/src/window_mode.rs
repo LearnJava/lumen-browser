@@ -138,7 +138,7 @@ enum LoopMode {
 /// Открыть хранилище в `<exe>/data/<file>`; при ошибке (нет прав, битый файл)
 /// падаем на in-memory — окно важнее истории.
 #[allow(clippy::expect_used)]  // in-memory SQLite не падает, docs/lint-policy.md §10
-fn open_persistent<T, E: std::fmt::Display + std::fmt::Debug>(
+pub(crate) fn open_persistent<T, E: std::fmt::Display + std::fmt::Debug>(
     file: &str,
     open: impl FnOnce(std::path::PathBuf) -> Result<T, E>,
     in_memory: impl FnOnce() -> Result<T, E>,
@@ -371,6 +371,7 @@ fn run_window_mode_inner(
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
     );
+    let (compat_signals, compat_signal_store) = lumen::signals::open_signal_log();
     let mut app = Lumen {
         display_list: Vec::new(),
         display_list_epoch: 1,
@@ -815,7 +816,8 @@ fn run_window_mode_inner(
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
         closed_tabs: tabs::closed::ClosedTabs::default(),
         page_context_menu: page_context_menu::PageContextMenu::default(),
-        compat_signals: compat_signals::SignalLog::default(),
+        compat_signals,
+        compat_signal_store,
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
         spell_ignored: std::collections::HashSet::new(),
         shell_theme: panels::themes::ShellTheme::default(),
