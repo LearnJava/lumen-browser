@@ -15,6 +15,7 @@
 use std::io::Read;
 
 use lumen_core::error::{Error, Result};
+use lumen_core::net_error::NetErrorCode;
 use lumen_core::ext::ContentDecoder;
 
 /// Buffer-size для внутреннего ring-buffer-а `brotli-decompressor`. 4096 —
@@ -45,7 +46,7 @@ impl ContentDecoder for BrotliContentDecoder {
         let mut out = Vec::new();
         decompressor
             .read_to_end(&mut out)
-            .map_err(|e| Error::Other(format!("brotli decode failed: {e}")))?;
+            .map_err(|e| Error::net_failure(NetErrorCode::ContentDecodingFailed, format!("brotli decode failed: {e}")))?;
         Ok(out)
     }
 }
@@ -97,11 +98,11 @@ mod tests {
         let d = BrotliContentDecoder::new();
         let err = d.decode(&bad).expect_err("must reject invalid brotli");
         match err {
-            Error::Other(msg) => assert!(
-                msg.contains("brotli decode failed"),
-                "unexpected error message: {msg}"
-            ),
-            other => panic!("expected Error::Other, got {other:?}"),
+            Error::NetFailure { code, message } => {
+                assert_eq!(code, NetErrorCode::ContentDecodingFailed);
+                assert!(message.contains("brotli decode failed"), "unexpected error message: {message}");
+            }
+            other => panic!("expected Error::NetFailure, got {other:?}"),
         }
     }
 
@@ -111,8 +112,11 @@ mod tests {
         let d = BrotliContentDecoder::new();
         let err = d.decode(&[]).expect_err("empty input must error");
         match err {
-            Error::Other(msg) => assert!(msg.contains("brotli decode failed")),
-            other => panic!("expected Error::Other, got {other:?}"),
+            Error::NetFailure { code, message } => {
+                assert_eq!(code, NetErrorCode::ContentDecodingFailed);
+                assert!(message.contains("brotli decode failed"));
+            }
+            other => panic!("expected Error::NetFailure, got {other:?}"),
         }
     }
 

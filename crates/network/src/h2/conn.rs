@@ -580,17 +580,16 @@ impl<S: Read + Write> H2Conn<S> {
 
                 // ── Error frames ───────────────────────────────────────────
                 Frame::Goaway { error_code, .. } => {
-                    return Err(Error::Network(format!(
-                        "H2 GOAWAY: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(format!("H2 GOAWAY: error_code={error_code:#x}"), error_code));
                 }
                 Frame::RstStream {
                     stream_id,
                     error_code,
                 } if stream_id == sid => {
-                    return Err(Error::Network(format!(
-                        "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(
+                        format!("H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"),
+                        error_code,
+                    ));
                 }
 
                 // ── Everything else ────────────────────────────────────────
@@ -796,17 +795,16 @@ impl<S: Read + Write> H2Conn<S> {
 
                 // ── Error frames ───────────────────────────────────────────
                 Frame::Goaway { error_code, .. } => {
-                    return Err(Error::Network(format!(
-                        "H2 GOAWAY: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(format!("H2 GOAWAY: error_code={error_code:#x}"), error_code));
                 }
                 Frame::RstStream {
                     stream_id,
                     error_code,
                 } if stream_id == sid => {
-                    return Err(Error::Network(format!(
-                        "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(
+                        format!("H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"),
+                        error_code,
+                    ));
                 }
 
                 // ── Everything else ────────────────────────────────────────
@@ -1037,9 +1035,10 @@ impl<S: Read + Write> H2Conn<S> {
                 return Ok(match self.pending_streams.remove(&stream_id) {
                     Some(st) if !st.discard => Some(StreamEvent::Failed {
                         sid: stream_id,
-                        error: Error::Network(format!(
-                            "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
-                        )),
+                        error: peer_error(
+                            format!("H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"),
+                            error_code,
+                        ),
                         retryable: error_code == ERROR_REFUSED_STREAM,
                     }),
                     _ => None,
@@ -1213,6 +1212,17 @@ impl<S: Read + Write> H2Conn<S> {
 
 fn io_err(e: std::io::Error) -> Error {
     crate::http1::read_failure("H2 I/O", &e)
+}
+
+/// COMPAT-ERRORS срез 6: GOAWAY/RST_STREAM от пира. Штатные коды (NO_ERROR,
+/// CANCEL, REFUSED_STREAM — сервер просто закрыл поток) — соединение закрыто,
+/// остальные — `ERR_HTTP2_PROTOCOL_ERROR`.
+fn peer_error(message: String, error_code: u32) -> Error {
+    let code = match error_code {
+        ERROR_NO_ERROR | ERROR_CANCEL | ERROR_REFUSED_STREAM => NetErrorCode::ConnectionClosed,
+        _ => NetErrorCode::Http2ProtocolError,
+    };
+    Error::net_failure(code, message)
 }
 
 fn frame_err(e: FrameError) -> Error {
@@ -1626,6 +1636,17 @@ mod tests {
             .fetch("GET", "https", "example.com", "/", &[])
             .unwrap_err();
         assert!(format!("{err}").contains("RST_STREAM"));
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::Http2ProtocolError);
+    }
+
+    #[test]
+    fn peer_close_codes_are_a_closed_connection_not_a_protocol_error() {
+        for code in [ERROR_NO_ERROR, ERROR_CANCEL, ERROR_REFUSED_STREAM] {
+            let err = peer_error("x".to_owned(), code);
+            assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::ConnectionClosed, "{code:#x}");
+        }
+        let err = peer_error("x".to_owned(), 0x02);
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::Http2ProtocolError);
     }
 
     #[test]
@@ -1643,6 +1664,7 @@ mod tests {
             .fetch("GET", "https", "example.com", "/", &[])
             .unwrap_err();
         assert!(format!("{err}").contains("GOAWAY"));
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::Http2ProtocolError);
     }
 
     #[test]

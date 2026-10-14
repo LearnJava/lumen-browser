@@ -40,6 +40,13 @@ pub enum NetErrorCode {
     UnknownUrlScheme,
     /// Запрос заблокирован политикой браузера (CORS, CSP, перехватчик).
     BlockedByClient,
+    /// Сервер или прокси оборвал HTTP/2 по ошибке протокола (GOAWAY/RST_STREAM
+    /// с кодом, отличным от штатного завершения).
+    Http2ProtocolError,
+    /// Прокси не открыл туннель `CONNECT` (ответ не 2xx).
+    TunnelConnectionFailed,
+    /// Тело ответа не разжалось по `Content-Encoding` (gzip, deflate, br).
+    ContentDecodingFailed,
     /// Сервер ответил 5xx и не прислал тела: показывать нечего, кроме самого статуса.
     HttpStatus(u16),
     /// Причина не распознана.
@@ -64,6 +71,9 @@ impl NetErrorCode {
             Self::InvalidUrl => "ERR_INVALID_URL",
             Self::UnknownUrlScheme => "ERR_UNKNOWN_URL_SCHEME",
             Self::BlockedByClient => "ERR_BLOCKED_BY_CLIENT",
+            Self::Http2ProtocolError => "ERR_HTTP2_PROTOCOL_ERROR",
+            Self::TunnelConnectionFailed => "ERR_TUNNEL_CONNECTION_FAILED",
+            Self::ContentDecodingFailed => "ERR_CONTENT_DECODING_FAILED",
             Self::HttpStatus(_) => "ERR_HTTP_RESPONSE_CODE_FAILURE",
             Self::Failed => "ERR_FAILED",
         }
@@ -297,5 +307,8 @@ mod tests {
     fn names_follow_chromium() {
         assert_eq!(NetErrorCode::NameNotResolved.name(), "ERR_NAME_NOT_RESOLVED");
         assert_eq!(NetErrorCode::Failed.name(), "ERR_FAILED");
+        assert_eq!(NetErrorCode::Http2ProtocolError.name(), "ERR_HTTP2_PROTOCOL_ERROR");
+        assert_eq!(NetErrorCode::TunnelConnectionFailed.name(), "ERR_TUNNEL_CONNECTION_FAILED");
+        assert_eq!(NetErrorCode::ContentDecodingFailed.name(), "ERR_CONTENT_DECODING_FAILED");
     }
 }
