@@ -1030,7 +1030,6 @@ impl V8JsRuntime {
         install_v8!(background_sync::install_background_sync_v8);
         install_v8!(badging::install_badging_bindings_v8);
         install_v8!(battery_bindings::install_battery_bindings_v8);
-        install_v8!(bluetooth::install_bluetooth_bindings_v8);
         install_v8!(broadcast_channel::install_broadcast_channel_bindings_v8);
         install_v8!(close_watcher::install_close_watcher_v8);
         install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
@@ -1154,7 +1153,6 @@ impl V8JsRuntime {
         install_v8!(screen_orientation::install_screen_orientation_bindings_v8);
         install_v8!(scroll_snap_events::install_scroll_snap_events_bindings_v8);
         install_v8!(scroll_timeline::install_scroll_timeline_bindings_v8);
-        install_v8!(serial::install_serial_bindings_v8);
         install_v8!(shape_detection::install_shape_detection_bindings_v8);
         install_v8!(shared_storage::install_shared_storage_v8);
         install_v8!(soft_navigation::install_soft_navigation_api_v8);
@@ -1195,7 +1193,6 @@ impl V8JsRuntime {
         if let Err(e) = crate::web_audio::install_web_audio_api_v8(self, &page_origin) {
             eprintln!("v8: web_audio::install_web_audio_api_v8 failed: {e}");
         }
-        install_v8!(webhid::install_webhid_bindings_v8);
         install_v8!(web_locks::install_web_locks_bindings_v8);
         install_v8!(web_midi::install_web_midi_api_v8);
         install_v8!(webrtc_stub::install_webrtc_bindings_v8);
@@ -1206,7 +1203,6 @@ impl V8JsRuntime {
         if let Err(e) = crate::webtransport::install_webtransport_v8(self, fp_webtransport) {
             eprintln!("v8: webtransport::install_webtransport_v8 failed: {e}");
         }
-        install_v8!(webusb::install_webusb_bindings_v8);
         install_v8!(webxr::install_webxr_bindings_v8);
         install_v8!(window_management::install_window_management_api_v8);
         install_v8!(xhr::install_xhr_bindings_v8);

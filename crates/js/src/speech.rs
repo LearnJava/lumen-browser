@@ -6,8 +6,9 @@
 //! - `SpeechSynthesisVoice` — one synthetic voice "Lumen Voice" (en-US, localService=true).
 //! - `SpeechSynthesisEvent` / `SpeechSynthesisErrorEvent` — constructible `Event` subclasses;
 //!   every event an utterance delivers is an instance of one of them (BUG-680).
-//! - `window.SpeechRecognition` / `window.webkitSpeechRecognition` — stub that always rejects
-//!   with `service-not-allowed` (no ML model bundled in Phase 0).
+//! - `SpeechRecognition` / `webkitSpeechRecognition` are deliberately **not** exposed
+//!   (COMPAT-API-01-DEVICE): there is no recognition backend, and a page that sees the
+//!   constructor shows a microphone button that can only fail with `service-not-allowed`.
 //!
 //! Platform TTS backend (synthesis only):
 //! - **Windows 10+**: `System.Speech.Synthesis.SpeechSynthesizer` via PowerShell (SAPI 5).
@@ -299,58 +300,6 @@ if (typeof setTimeout === 'function') {
     }, 0);
 }
 
-// ── SpeechRecognition stub ────────────────────────────────────────────────────
-// No ML model is bundled in Phase 0.  All recognition requests immediately
-// fail with service-not-allowed, matching the behaviour of browsers with no
-// permission or no microphone access.
-function SpeechRecognition() {
-    this.lang              = '';
-    this.continuous        = false;
-    this.interimResults    = false;
-    this.maxAlternatives   = 1;
-    this.serviceURI        = '';
-    this.onstart           = null;
-    this.onend             = null;
-    this.onerror           = null;
-    this.onresult          = null;
-    this.onnomatch         = null;
-    this.onspeechstart     = null;
-    this.onspeechend       = null;
-    this.onaudiostart      = null;
-    this.onaudioend        = null;
-    this._listeners        = {};
-}
-
-SpeechRecognition.prototype.addEventListener = function(type, fn) {
-    if (!this._listeners[type]) this._listeners[type] = [];
-    this._listeners[type].push(fn);
-};
-SpeechRecognition.prototype.removeEventListener = function(type, fn) {
-    if (!this._listeners[type]) return;
-    this._listeners[type] = this._listeners[type].filter(function(f) { return f !== fn; });
-};
-SpeechRecognition.prototype._fire = function(type, extra) {
-    var ev = Object.assign({ type: type }, extra || {});
-    var handler = this['on' + type];
-    if (typeof handler === 'function') { try { handler.call(this, ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } }
-    var ls = this._listeners[type];
-    if (ls) ls.forEach(function(f) { try { f(ev); } catch (_) { if (typeof _lumen_report_exception === 'function') _lumen_report_exception(_); } });
-};
-SpeechRecognition.prototype.start = function() {
-    var self = this;
-    if (typeof setTimeout === 'function') {
-        setTimeout(function() {
-            self._fire('error', {
-                error: 'service-not-allowed',
-                message: 'Speech recognition not available in Lumen (Phase 0)'
-            });
-            self._fire('end');
-        }, 0);
-    }
-};
-SpeechRecognition.prototype.stop  = function() {};
-SpeechRecognition.prototype.abort = function() {};
-
 // ── Export to globals ─────────────────────────────────────────────────────────
 // In Lumen's QuickJS environment `window` is a plain JS object defined by
 // the DOM shim (`var window = { ... }` at top-level).  All Web API globals
@@ -361,8 +310,6 @@ if (typeof window !== 'undefined') {
     window.SpeechSynthesisEvent      = SpeechSynthesisEvent;
     window.SpeechSynthesisErrorEvent = SpeechSynthesisErrorEvent;
     window.speechSynthesis          = speechSynthesis;
-    window.SpeechRecognition        = SpeechRecognition;
-    window.webkitSpeechRecognition  = SpeechRecognition;
 }
 // Also expose on globalThis so Worker contexts and bare-name access work.
 globalThis.SpeechSynthesisUtterance = SpeechSynthesisUtterance;
@@ -370,8 +317,6 @@ globalThis.SpeechSynthesisVoice     = SpeechSynthesisVoice;
 globalThis.SpeechSynthesisEvent      = SpeechSynthesisEvent;
 globalThis.SpeechSynthesisErrorEvent = SpeechSynthesisErrorEvent;
 globalThis.speechSynthesis          = speechSynthesis;
-globalThis.SpeechRecognition        = SpeechRecognition;
-globalThis.webkitSpeechRecognition  = SpeechRecognition;
 
 })();
 "#;
