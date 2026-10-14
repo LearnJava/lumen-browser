@@ -287,9 +287,11 @@ impl Lumen {
         self.rebuild_chrome_floating_dl();
         // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
         // above) — these nodes stay in the tree and paint normally.
-        self.chrome_omni_input_rect = omni_input
-            .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
-            .map(|b| b.rect);
+        let omni_box = omni_input.and_then(|id| lumen_layout::find_box_by_node(&layout, id));
+        self.chrome_omni_input_rect = omni_box.map(|b| b.rect);
+        if let Some(b) = omni_box {
+            self.chrome_omni_font_size = b.style.font_size;
+        }
         // CC-11: sync transitions — compare chrome_prev_styles with the fresh
         // layout before replacing it, mirroring apply_relayout_result's
         // page-side sync (main.rs's collect_box_styles + sync loop). No
@@ -1162,6 +1164,14 @@ impl Lumen {
                     // so the `:focus-within` ring/caret show on this same
                     // click, not one input later (see the matching comment
                     // in `Self::handle_address_bar_key`).
+                    self.relayout_chrome_host();
+                } else {
+                    // UX-OMNI-EDIT: click in the already-focused field puts
+                    // the caret on the glyph under the pointer. (The first
+                    // click opens with the whole address selected; this
+                    // dispatch runs on press, so a drag past SM_CXDRAG is
+                    // not told apart from a click — no drag-select yet.)
+                    self.omnibox_place_caret_at(x_css);
                     self.relayout_chrome_host();
                 }
             } else if let Some((nid, action)) = self.chrome_action_at(&hit) {

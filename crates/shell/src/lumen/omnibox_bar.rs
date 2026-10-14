@@ -52,6 +52,44 @@ impl Lumen {
                 self.address_bar.set_suggestions(sugg);
                 self.request_redraw();
             }
+            KeyCode::Delete => {
+                self.address_bar.delete_forward();
+                let sugg = self.query_omnibox_suggestions();
+                self.address_bar.set_suggestions(sugg);
+                self.request_redraw();
+            }
+            // UX-OMNI-EDIT: caret and selection. Shift extends the selection,
+            // Ctrl jumps by word; the dropdown is not re-queried (the text
+            // is unchanged), moving the caret just drops the highlighted row.
+            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End
+                if !self.modifiers.alt_key() =>
+            {
+                let extend = self.modifiers.shift_key();
+                let word = self.modifiers.control_key();
+                match code {
+                    KeyCode::ArrowLeft if word => self.address_bar.move_word_left(extend),
+                    KeyCode::ArrowLeft => self.address_bar.move_left(extend),
+                    KeyCode::ArrowRight if word => self.address_bar.move_word_right(extend),
+                    KeyCode::ArrowRight => self.address_bar.move_right(extend),
+                    KeyCode::Home => self.address_bar.move_home(extend),
+                    _ => self.address_bar.move_end(extend),
+                }
+                self.request_redraw();
+            }
+            // «Выделить всё»: Ctrl+A, and the focus shortcuts again while the
+            // field is already focused (Ctrl+L / F6 / Alt+D).
+            KeyCode::KeyA | KeyCode::KeyL if self.modifiers == ModifiersState::CONTROL => {
+                self.address_bar.select_all();
+                self.request_redraw();
+            }
+            KeyCode::F6 if self.modifiers.is_empty() => {
+                self.address_bar.select_all();
+                self.request_redraw();
+            }
+            KeyCode::KeyD if self.modifiers == ModifiersState::ALT => {
+                self.address_bar.select_all();
+                self.request_redraw();
+            }
             _ => {
                 if let Some(text) = key_event.text.as_ref()
                     && !text.is_empty()
@@ -429,5 +467,112 @@ impl Lumen {
         }
 
         suggestions
+    }
+}
+
+/// UX-OMNI-EDIT: left inset of the text inside `#omniInput` (the UA's 2px
+/// horizontal padding; the asset sets `border:none`) — the same constant
+/// `forms::input_caret_rect` uses.
+const OMNI_TEXT_INSET: f32 = 2.0;
+
+/// The field's rect and the x (window CSS px) of every glyph edge of `input`
+/// at `font_size`: `edges[i]` is the gap before the `i`-th character,
+/// `edges[len]` the end of the text. Measured with the bundled Inter, so it
+/// is per-glyph (not a fixed advance) but ignores kerning.
+fn omnibox_glyph_edges(field: Rect, input: &str, font_size: f32) -> Option<Vec<f32>> {
+    use lumen_layout::TextMeasurer;
+    let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+    let m = lumen_paint::FontMeasurer::new(&font).ok()?;
+    let mut x = field.x + OMNI_TEXT_INSET;
+    let mut edges = Vec::with_capacity(input.len() + 1);
+    edges.push(x);
+    for c in input.chars() {
+        x += m.char_width(c, font_size);
+        edges.push(x);
+    }
+    Some(edges)
+}
+
+/// Index of the glyph gap nearest to `x` (what a click at `x` puts the caret on).
+fn nearest_edge(edges: &[f32], x: f32) -> usize {
+    edges
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))
+        .map_or(0, |(i, _)| i)
+}
+
+impl Lumen {
+    /// Caret bar of the open address bar at the glyph gap under
+    /// `AddressBarState::cursor`, in window CSS px. Unlike the old flush-right
+    /// placement it also exists in an empty field. `None` while a dropdown row
+    /// is selected or there is no chrome layout yet; the painter additionally
+    /// hides it over a live selection (the highlight stands in for the caret),
+    /// the IME anchor keeps using it there.
+    pub(crate) fn omnibox_caret_rect(&self) -> Option<Rect> {
+        if !self.address_bar.is_open() || self.address_bar.selected_idx().is_some() {
+            return None;
+        }
+        let field = self.chrome_omni_input_rect?;
+        let edges = omnibox_glyph_edges(field, self.address_bar.input(), self.chrome_omni_font_size)?;
+        let x = edges.get(self.address_bar.cursor()).copied()?;
+        // Text wider than the field scrolls in the real input; keep the bar inside it.
+        let x = x.min(field.x + field.width - 4.0);
+        Some(Rect::new(x, field.y + 4.0, 2.0, (field.height - 8.0).max(0.0)))
+    }
+
+    /// Translucent highlight over the selected part of the address bar text,
+    /// clipped to the field. `None` without a selection.
+    pub(crate) fn omnibox_selection_overlay(&self, pal: &crate::panels::themes::Palette) -> Option<lumen_paint::DisplayList> {
+        if !self.address_bar.is_open() || self.address_bar.selected_idx().is_some() {
+            return None;
+        }
+        let (start, end) = self.address_bar.selection()?;
+        let field = self.chrome_omni_input_rect?;
+        let edges = omnibox_glyph_edges(field, self.address_bar.input(), self.chrome_omni_font_size)?;
+        let (x0, x1) = (*edges.get(start)?, *edges.get(end)?);
+        let rect = Rect::new(x0, field.y + 3.0, (x1 - x0).max(0.0), (field.height - 6.0).max(0.0));
+        Some(vec![
+            lumen_paint::DisplayCommand::PushClipRect { rect: field },
+            lumen_paint::DisplayCommand::FillRect { rect, color: lumen_layout::Color { a: 90, ..pal.accent } },
+            lumen_paint::DisplayCommand::PopClip,
+        ])
+    }
+
+    /// Click inside the already-focused address bar field: put the caret on
+    /// the glyph gap nearest to `x` (window CSS px), collapsing any selection.
+    pub(crate) fn omnibox_place_caret_at(&mut self, x: f32) {
+        let Some(field) = self.chrome_omni_input_rect else { return };
+        let Some(edges) = omnibox_glyph_edges(field, self.address_bar.input(), self.chrome_omni_font_size) else {
+            return;
+        };
+        self.address_bar.set_cursor(nearest_edge(&edges, x), false);
+    }
+}
+
+#[cfg(test)]
+mod omnibox_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn nearest_edge_picks_closest_gap() {
+        let edges = [10.0, 18.0, 30.0];
+        assert_eq!(nearest_edge(&edges, 0.0), 0);
+        assert_eq!(nearest_edge(&edges, 13.9), 0);
+        assert_eq!(nearest_edge(&edges, 14.1), 1);
+        assert_eq!(nearest_edge(&edges, 25.0), 2);
+        assert_eq!(nearest_edge(&edges, 999.0), 2);
+    }
+
+    #[test]
+    fn glyph_edges_grow_per_glyph_and_start_at_the_inset() {
+        let field = Rect::new(100.0, 10.0, 400.0, 28.0);
+        let edges = omnibox_glyph_edges(field, "il W", 12.5).expect("bundled font parses");
+        assert_eq!(edges.len(), 5);
+        assert_eq!(edges[0], 102.0);
+        assert!(edges.windows(2).all(|w| w[1] > w[0]));
+        // Per-glyph, not a fixed advance: narrow «i» is thinner than wide «W».
+        assert!(edges[1] - edges[0] < edges[4] - edges[3]);
+        assert_eq!(omnibox_glyph_edges(field, "", 12.5).expect("parses"), vec![102.0]);
     }
 }
