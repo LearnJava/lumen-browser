@@ -15,6 +15,7 @@
 pub mod bypass;
 pub mod cert_error;
 pub mod cert_fields;
+pub mod failure;
 pub mod ct;
 pub mod ct_logs;
 pub mod fingerprint;

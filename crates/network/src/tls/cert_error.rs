@@ -33,6 +33,7 @@ fn map_certificate_error(err: &rustls::CertificateError) -> CertError {
     use rustls::CertificateError as CE;
     match err {
         CE::Expired | CE::ExpiredContext { .. } => CertError::Expired,
+        CE::NotValidYet | CE::NotValidYetContext { .. } => CertError::NotValidYet,
         CE::Revoked => CertError::Revoked,
         CE::NotValidForName | CE::NotValidForNameContext { .. } => CertError::NameMismatch,
         // webpki reports a self-signed leaf as "issuer not found" too, same
@@ -58,6 +59,14 @@ mod tests {
             rustls::CertificateError::Expired,
         ));
         assert_eq!(from_io_error(&err), Some(CertError::Expired));
+    }
+
+    #[test]
+    fn not_valid_yet_maps_to_not_valid_yet() {
+        let err = io_error_from(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::NotValidYet,
+        ));
+        assert_eq!(from_io_error(&err), Some(CertError::NotValidYet));
     }
 
     #[test]

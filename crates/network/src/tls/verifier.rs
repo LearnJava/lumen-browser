@@ -45,7 +45,7 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
-use super::bypass;
+use super::{bypass, failure};
 use super::ocsp::{self, OcspVerdict};
 
 /// Render a rustls `ServerName` down to the plain hostname string
@@ -71,6 +71,8 @@ fn server_name_host(name: &ServerName<'_>) -> String {
 #[derive(Debug)]
 pub struct LumenVerifier {
     inner: Arc<WebPkiServerVerifier>,
+    /// `Name` contents of every trust anchor, for [`failure::summarize`].
+    anchor_subjects: Vec<Vec<u8>>,
 }
 
 impl LumenVerifier {
@@ -83,10 +85,11 @@ impl LumenVerifier {
         root_store: RootCertStore,
         provider: &Arc<CryptoProvider>,
     ) -> Result<Arc<Self>, rustls::client::VerifierBuilderError> {
+        let anchor_subjects = root_store.roots.iter().map(|a| a.subject.as_ref().to_vec()).collect();
         let inner =
             WebPkiServerVerifier::builder_with_provider(Arc::new(root_store), provider.clone())
                 .build()?;
-        Ok(Arc::new(Self { inner }))
+        Ok(Arc::new(Self { inner, anchor_subjects }))
     }
 }
 
@@ -127,7 +130,16 @@ impl ServerCertVerifier for LumenVerifier {
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
         let ocsp_verdict = ocsp::parse_stapled_response(ocsp_response);
         let bypassed = bypass::is_allowed(&server_name_host(server_name));
-        apply_bypass_policy(chain_result, ocsp_verdict, bypassed)
+        let result = apply_bypass_policy(chain_result, ocsp_verdict, bypassed);
+        if result.is_err() {
+            // COMPAT-TRUST-CAUSES: the chain is gone once rustls reports the
+            // bare reason, so keep what the cause classifier needs.
+            let mut chain = vec![end_entity.clone()];
+            chain.extend(intermediates.iter().cloned());
+            let now_unix = i64::try_from(now.as_secs()).unwrap_or(i64::MAX);
+            failure::record(&server_name_host(server_name), failure::summarize(&chain, &self.anchor_subjects, now_unix));
+        }
+        result
     }
 
     fn verify_tls12_signature(
