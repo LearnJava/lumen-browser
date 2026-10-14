@@ -1,0 +1,29 @@
+# Стенд G (COMPAT-CORPUS-4): страницы антибот-проверок и капч. Читает scripts/captcha_stand.py.
+# Колонки (разделитель — табуляция): id, вендор, оракул, URL, заметка.
+# Оракул «пройдено»:
+#   token     — после загрузки в странице появился непустой токен (автопроход тестовым ключом, капча не решается)
+#   render    — виджет вендора отрисован (iframe нужного хоста ≥20×20 px) и страница не ушла в петлю; капча не решается
+#   score     — страница показала балл reCAPTCHA v3 (число 0..1)
+#   unblocked — страница-защита пройдена сама (без клика): итоговая страница не challenge и не отказ
+# Вендор: turnstile | cf | recaptcha | hcaptcha | smartcaptcha | datadome | akamai | imperva | ddosguard | qrator | anubis | human
+# Демо-страницы и защищённые сайты — внешние; недоступность страницы сама есть результат («отказ»), список не правится под прогон.
+turnstile-nonint	turnstile	token	https://peet.ws/turnstile-test/non-interactive.html	Cloudflare Turnstile, тестовый ключ «всегда проходит», без взаимодействия (BUG-1595)
+turnstile-managed	turnstile	token	https://peet.ws/turnstile-test/managed.html	Turnstile managed, тестовый ключ
+turnstile-interactive	turnstile	render	https://peet.ws/turnstile-test/interactive.html	Turnstile interactive, виджет с чекбоксом
+turnstile-2captcha	turnstile	render	https://2captcha.com/demo/cloudflare-turnstile	Turnstile на стороннем демо
+cf-managed-challenge	cf	unblocked	https://nopecha.com/demo/cloudflare	Cloudflare managed challenge («Just a moment…») перед демо
+recaptcha-v2-checkbox	recaptcha	render	https://www.google.com/recaptcha/api2/demo	reCAPTCHA v2, чекбокс (офиц. демо Google)
+recaptcha-v2-checkbox-appspot	recaptcha	render	https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php	reCAPTCHA v2, чекбокс (демо appspot)
+recaptcha-v2-invisible	recaptcha	render	https://recaptcha-demo.appspot.com/recaptcha-v2-invisible.php	reCAPTCHA v2 invisible, значок виджета
+recaptcha-v3-score	recaptcha	score	https://recaptcha-demo.appspot.com/recaptcha-v3-request-scores.php	reCAPTCHA v3: страница запрашивает и печатает балл
+hcaptcha-demo	hcaptcha	render	https://accounts.hcaptcha.com/demo	hCaptcha, офиц. демо
+hcaptcha-2captcha	hcaptcha	render	https://2captcha.com/demo/hcaptcha	hCaptcha на стороннем демо
+smartcaptcha-2captcha	smartcaptcha	render	https://2captcha.com/demo/yandex-smart-captcha	Яндекс SmartCaptcha на стороннем демо
+datadome-leboncoin	datadome	unblocked	https://www.leboncoin.fr/	Сайт под DataDome; cookie datadome
+akamai-nike	akamai	unblocked	https://www.nike.com/	Сайт под Akamai Bot Manager; cookie _abck
+imperva-incapsula	imperva	unblocked	https://www.imperva.com/	Imperva; cookie incap_ses_/visid_incap_ (вендор подтверждается cookie в прогоне)
+ddosguard-site	ddosguard	unblocked	https://ddos-guard.net/	DDoS-Guard; cookie __ddg*
+qrator-site	qrator	unblocked	https://qrator.net/	Qrator; cookie qrator_jsid
+anubis-techaro	anubis	unblocked	https://anubis.techaro.lol/	Anubis PoW (SHA-256 в Web Worker); cookie techaro.lol-anubis-auth
+anubis-gnome-gitlab	anubis	unblocked	https://gitlab.gnome.org/GNOME/gtk	Anubis на реальном сайте
+human-zillow	human	unblocked	https://www.zillow.com/	HUMAN (PerimeterX) «Press & Hold»; cookie _px*

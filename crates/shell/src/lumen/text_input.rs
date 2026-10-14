@@ -482,7 +482,10 @@ impl Lumen {
         // — keydown → input → keyup dispatch off-UI-thread under the flag, then the
         // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
         // off-flag.
-        self.dispatch_injected_key(node_id, "keydown", &key);
+        if !self.injected_keydown_allowed(node_id, &key) {
+            self.dispatch_injected_key(node_id, "keyup", &key);
+            return false;
+        }
         let consumed = self.edit_focused_field_at_cursor(EditAction::InsertChar(ch));
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, &key);
@@ -500,7 +503,10 @@ impl Lumen {
     /// the key.
     pub(crate) fn inject_backspace(&mut self) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
-        self.dispatch_injected_key(node_id, "keydown", "Backspace");
+        if !self.injected_keydown_allowed(node_id, "Backspace") {
+            self.dispatch_injected_key(node_id, "keyup", "Backspace");
+            return false;
+        }
         let consumed = self.edit_focused_field_at_cursor(EditAction::Backspace);
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, "Backspace");
@@ -517,7 +523,10 @@ impl Lumen {
     /// Returns `true` when a form control consumed the key.
     pub(crate) fn inject_delete_forward(&mut self) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
-        self.dispatch_injected_key(node_id, "keydown", "Delete");
+        if !self.injected_keydown_allowed(node_id, "Delete") {
+            self.dispatch_injected_key(node_id, "keyup", "Delete");
+            return false;
+        }
         let consumed = self.edit_focused_field_at_cursor(EditAction::DeleteForward);
         for event_type in &["input", "keyup"] {
             self.dispatch_injected_key(node_id, event_type, "Delete");
@@ -641,6 +650,18 @@ impl Lumen {
             node_id, event_type, key, key,
         );
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+    }
+
+    /// Send the `keydown` of a key a text field is about to act on and say
+    /// whether the page left it alone: a handler that cancels it (an input
+    /// mask refusing a letter) stops the edit (UX-PAGE-KEYDOWN).
+    ///
+    /// `key` must already be escaped for a single-quoted JS literal.
+    fn injected_keydown_allowed(&self, node_id: usize, key: &str) -> bool {
+        let script = format!(
+            "_lumen_dispatch_key_event({node_id}, 'keydown', '{key}', '{key}', false, false, false, false)",
+        );
+        self.eval_key_script(script)
     }
 
     /// Fire a trusted composition event at the focused page text field

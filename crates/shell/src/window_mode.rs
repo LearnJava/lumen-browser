@@ -455,6 +455,7 @@ fn run_window_mode_inner(
         cv_events: Vec::new(),
         prev_layout_shift_rects: std::collections::HashMap::new(),
         last_input_epoch_s: f32::NEG_INFINITY,
+        page_keys_down: Vec::new(),
         transition_events: Vec::new(),
         animation_events: Vec::new(),
         dark_mode: false,

@@ -333,6 +333,7 @@ fn security_box_detaches_and_routes_its_buttons() {
             proceed_label: String::new(),
             other_browser: true,
             proceed_blocked: false,
+            time_settings: true,
         },
         ..lumen_chrome::ChromeModel::default()
     };
@@ -358,6 +359,10 @@ fn security_box_detaches_and_routes_its_buttons() {
     assert_eq!(
         press(lumen_chrome::ids::SECURITY_OTHER_ANY_BTN),
         Some(lumen_chrome::ChromeAction::SecurityOtherBrowserAny)
+    );
+    assert_eq!(
+        press(lumen_chrome::ids::SECURITY_TIME_BTN),
+        Some(lumen_chrome::ChromeAction::SecurityTimeSettings)
     );
 }
 

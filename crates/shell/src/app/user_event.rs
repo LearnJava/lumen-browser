@@ -461,7 +461,7 @@ impl Lumen {
                 // вкладка показывает страницу ошибки с кодом Chromium.
                 self.show_net_error(&msg);
             }
-            LoadEvent::CertError(url, host, cert_err, tab_id, generation) => {
+            LoadEvent::CertError(url, host, cert_err, cause, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {
                     self.mark_bg_tab_needs_reload(tab_id);
                     return;
@@ -478,7 +478,7 @@ impl Lumen {
                 let hsts_host = crate::config::global()
                     .apply_http(lumen_network::HttpClient::new())
                     .is_known_hsts_host(&host);
-                self.cert_interstitial.open(url, host, cert_err, hsts_host);
+                self.cert_interstitial.open_with_cause(url, host, cert_err, hsts_host, cause);
                 let msg = self.cert_interstitial.reason_text().unwrap_or_default();
                 self.load_error_message = Some(msg.clone());
                 click_log::log_load_err(&self.source.describe(), &msg);

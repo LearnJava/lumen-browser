@@ -31,6 +31,9 @@ pub struct CertInterstitial {
     /// `true` when the failed host is a Known HSTS Host (RFC 6797 §8.4/§12.1:
     /// the connection MUST be terminated, no user override) — BUG-1615.
     pub hsts_host: bool,
+    /// Diagnosed cause of the error (COMPAT-TRUST-CAUSES): which headline and
+    /// advice the screen shows instead of the generic warning.
+    pub cause: crate::cert_cause::CertCause,
 }
 
 impl CertInterstitial {
@@ -43,6 +46,7 @@ impl CertInterstitial {
     ///
     /// `hsts_host`: the host is a Known HSTS Host (preload list or a learned
     /// policy) — see [`Self::can_proceed`].
+    #[cfg(test)]
     pub fn open(
         &mut self,
         url: String,
@@ -50,11 +54,24 @@ impl CertInterstitial {
         error: lumen_core::error::CertError,
         hsts_host: bool,
     ) {
+        self.open_with_cause(url, host, error, hsts_host, crate::cert_cause::CertCause::Unexplained);
+    }
+
+    /// [`Self::open`] with the diagnosed `cause` of the error.
+    pub fn open_with_cause(
+        &mut self,
+        url: String,
+        host: String,
+        error: lumen_core::error::CertError,
+        hsts_host: bool,
+        cause: crate::cert_cause::CertCause,
+    ) {
         self.url = url;
         self.host = host;
         self.error = Some(error);
         self.threat = None;
         self.hsts_host = hsts_host;
+        self.cause = cause;
         self.visible = true;
     }
 
@@ -65,6 +82,7 @@ impl CertInterstitial {
         self.error = None;
         self.threat = Some((list, threat));
         self.hsts_host = false;
+        self.cause = crate::cert_cause::CertCause::Unexplained;
         self.visible = true;
     }
 
@@ -108,19 +126,39 @@ impl CertInterstitial {
                 proceed_label: "Всё равно перейти".to_owned(),
                 other_browser: false,
                 proceed_blocked: false,
+                time_settings: false,
             };
         }
+        // Unexplained errors keep the warning about interception; an explained
+        // one (clock, antivirus, portal, ...) says what actually happened.
+        let (title, message) = self.cause.describe(&self.host).unwrap_or_else(|| {
+            (
+                "Ваше подключение не защищено".to_owned(),
+                format!(
+                    "Сертификат сайта {} не прошёл проверку. Злоумышленники могут перехватить пароли и другие данные.",
+                    self.host
+                ),
+            )
+        });
         lumen_chrome::ChromeSecurityModel {
             open: true,
-            title: "Ваше подключение не защищено".to_owned(),
-            message: format!(
-                "Сертификат сайта {} не прошёл проверку. Злоумышленники могут перехватить пароли и другие данные.",
-                self.host
-            ),
-            detail: self.reason_text().unwrap_or_default(),
+            title,
+            message,
+            detail: self.detail_text(),
             proceed_label: "Всё равно перейти".to_owned(),
             other_browser: self.handoff_reason().is_some(),
             proceed_blocked: !self.can_proceed(),
+            time_settings: self.cause.offers_time_settings(),
+        }
+    }
+
+    /// Small print at the bottom of the screen: Chromium's code
+    /// (`ERR_CERT_DATE_INVALID`, ...) and the technical reason, so the
+    /// instructions written against those codes apply.
+    fn detail_text(&self) -> String {
+        match &self.error {
+            Some(error) => format!("{} · {error}", error.chromium_code()),
+            None => String::new(),
         }
     }
 
@@ -197,7 +235,7 @@ mod tests {
         let m = i.chrome_model();
         assert!(m.open);
         assert!(m.message.contains("bad.example"));
-        assert_eq!(m.detail, "certificate expired");
+        assert_eq!(m.detail, "ERR_CERT_DATE_INVALID · certificate expired");
         i.close();
         assert!(!i.chrome_model().open);
     }
@@ -238,7 +276,7 @@ mod tests {
         assert_eq!(m.detail, "social_engineering (local)");
         i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
         assert!(i.threat.is_none());
-        assert_eq!(i.chrome_model().detail, "certificate expired");
+        assert_eq!(i.chrome_model().detail, "ERR_CERT_DATE_INVALID · certificate expired");
     }
 
     #[test]
@@ -278,5 +316,51 @@ mod tests {
         let mut i = CertInterstitial::new();
         i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
         assert!(i.can_proceed());
+    }
+
+    #[test]
+    fn unexplained_error_keeps_the_generic_warning() {
+        let mut i = CertInterstitial::new();
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::SelfSigned, false);
+        let m = i.chrome_model();
+        assert_eq!(m.title, "Ваше подключение не защищено");
+        assert!(m.message.contains("Злоумышленники"));
+        assert!(!m.time_settings);
+        assert!(m.detail.starts_with("ERR_CERT_AUTHORITY_INVALID"));
+    }
+
+    #[test]
+    fn diagnosed_cause_replaces_the_generic_warning() {
+        use crate::cert_cause::CertCause;
+        let mut i = CertInterstitial::new();
+        let clock = CertCause::WrongClock { system_unix: 1_791_979_200, reference_unix: None };
+        i.open_with_cause("https://a.example/".to_owned(), "a.example".to_owned(), CertError::NotValidYet, false, clock);
+        let m = i.chrome_model();
+        assert!(m.title.contains("дата"));
+        assert!(m.message.contains("14.10.2026"));
+        assert!(!m.message.contains("Злоумышленники"));
+        assert!(m.time_settings);
+        assert_eq!(m.detail, "ERR_CERT_DATE_INVALID · certificate not yet valid");
+
+        let av = CertCause::Antivirus { product: "Kaspersky" };
+        i.open_with_cause("https://b.example/".to_owned(), "b.example".to_owned(), CertError::Untrusted("x".to_owned()), false, av);
+        let m = i.chrome_model();
+        assert!(m.title.contains("Kaspersky"));
+        assert!(!m.time_settings);
+
+        // A later error without a diagnosis must not inherit the old cause.
+        i.open("https://c.example/".to_owned(), "c.example".to_owned(), CertError::Expired, false);
+        assert_eq!(i.cause, CertCause::Unexplained);
+    }
+
+    #[test]
+    fn revoked_screen_names_the_ca_and_has_no_proceed() {
+        use crate::cert_cause::CertCause;
+        let mut i = CertInterstitial::new();
+        i.open_with_cause("https://r.example/".to_owned(), "r.example".to_owned(), CertError::Revoked, false, CertCause::Revoked);
+        let m = i.chrome_model();
+        assert_eq!(m.title, "Сертификат отозван");
+        assert!(m.proceed_blocked);
+        assert!(m.detail.starts_with("ERR_CERT_REVOKED"));
     }
 }

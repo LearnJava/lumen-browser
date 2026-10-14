@@ -42,6 +42,7 @@ mod crash;
 mod net_error;
 mod newtab_page;
 mod omnibox_bar;
+mod page_keys;
 mod page_snapshot;
 mod page_views;
 mod page_zoom;

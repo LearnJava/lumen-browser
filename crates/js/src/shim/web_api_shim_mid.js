@@ -1370,6 +1370,10 @@ function _lumen_note_activation_input(type, key) {
     if (isKeyEvent && key && _LUMEN_MODIFIER_ONLY_KEYS[key]) {
         return;
     }
+    // HTML LS §6.4.1: only a `keydown` that is not Escape activates.
+    if (isKeyEvent && (type !== 'keydown' || key === 'Escape')) {
+        return;
+    }
     if (type === 'mousedown' || type === 'pointerdown' || type === 'click' || isKeyEvent) {
         _lumen_mark_user_activation();
     }

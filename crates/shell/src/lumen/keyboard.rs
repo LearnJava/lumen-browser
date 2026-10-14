@@ -18,6 +18,10 @@ impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn handle_key(&mut self, event_loop: &MainHandle<'_>, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
+            // UX-PAGE-KEYDOWN: a key the page saw go down owes it the `keyup`.
+            if let PhysicalKey::Code(code) = key_event.physical_key {
+                self.page_keyup(code, key_event);
+            }
             return;
         }
         // GAP-LAYOUTSHIFT: mark real user input for the CLS `had_input` flag
@@ -297,6 +301,13 @@ impl Lumen {
             self.focus.exit();
             self.relayout_chrome_host();
             self.request_redraw();
+            return;
+        }
+
+        // UX-PAGE-KEYDOWN: from here on the key is the page's to see first. A
+        // handler that cancels `keydown` stops every default action below —
+        // scrolling, hint mode, caret movement, typing, Tab focus.
+        if self.page_keydown_cancelled(code, key_event) {
             return;
         }
 

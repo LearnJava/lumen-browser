@@ -106,6 +106,9 @@ pub enum CertError {
     Untrusted(String),
     /// The leaf or an intermediate certificate is past its `notAfter`.
     Expired,
+    /// The certificate's `notBefore` is still in the future (rustls
+    /// `NotValidYet`). Usually a wrong system clock (COMPAT-TRUST-CAUSES).
+    NotValidYet,
     /// The certificate has been revoked (stapled OCSP `certStatus: revoked`).
     Revoked,
     /// Fewer than the policy-required number of valid SCTs from distinct CT
@@ -121,11 +124,29 @@ pub enum CertError {
     Other(String),
 }
 
+impl CertError {
+    /// Chromium's name for this failure (`ERR_CERT_*`), shown small at the
+    /// bottom of the error screen: troubleshooting instructions are written
+    /// against these codes (COMPAT-TRUST-CAUSES).
+    #[must_use]
+    pub fn chromium_code(&self) -> &'static str {
+        match self {
+            Self::Untrusted(_) | Self::SelfSigned => "ERR_CERT_AUTHORITY_INVALID",
+            Self::Expired | Self::NotValidYet => "ERR_CERT_DATE_INVALID",
+            Self::Revoked => "ERR_CERT_REVOKED",
+            Self::CtInsufficient => "ERR_CERTIFICATE_TRANSPARENCY_REQUIRED",
+            Self::NameMismatch => "ERR_CERT_COMMON_NAME_INVALID",
+            Self::Other(_) => "ERR_CERT_INVALID",
+        }
+    }
+}
+
 impl fmt::Display for CertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Untrusted(reason) => write!(f, "untrusted certificate chain: {reason}"),
             Self::Expired => write!(f, "certificate expired"),
+            Self::NotValidYet => write!(f, "certificate not yet valid"),
             Self::Revoked => write!(f, "certificate revoked"),
             Self::CtInsufficient => write!(f, "insufficient certificate transparency evidence"),
             Self::NameMismatch => write!(f, "certificate not valid for this hostname"),
