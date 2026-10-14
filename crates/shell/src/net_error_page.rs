@@ -126,6 +126,17 @@ fn handoff_reason(code: NetErrorCode) -> Option<HandoffReason> {
     }
 }
 
+/// Выбор другой причины под основной ссылкой: от причины зависит, какой
+/// браузер подойдёт (ГОСТ-TLS — не Chrome/Edge, DRM и звонки — не ГОСТ-браузер).
+fn other_reasons(chosen: HandoffReason) -> String {
+    let links: Vec<String> = [HandoffReason::Crypto, HandoffReason::Drm, HandoffReason::Calls, HandoffReason::Other]
+        .into_iter()
+        .filter(|r| *r != chosen)
+        .map(|r| format!("<a href=\"{}\">{}</a>", handoff_link(r), r.label()))
+        .collect();
+    format!("<p class=\"alt\">Причина другая: {}</p>", links.join(" · "))
+}
+
 /// Ссылка кнопки; принимается только пока на экране сама страница ошибки
 /// (`Lumen::apply_net_error_link`).
 fn handoff_link(reason: HandoffReason) -> String {
@@ -161,7 +172,11 @@ pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str) 
     };
     let other = match handoff_reason(code) {
         Some(reason) if is_handoff_url(url) => {
-            format!("<p><a href=\"{}\">Открыть в другом браузере</a></p>", handoff_link(reason))
+            format!(
+                "<p><a href=\"{}\">Открыть в другом браузере</a></p>{}",
+                handoff_link(reason),
+                other_reasons(reason)
+            )
         }
         _ => String::new(),
     };
@@ -170,7 +185,7 @@ pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str) 
 <style>body{{font-family:sans-serif;margin:0;padding:80px 40px;background:#f4f4f6;color:#222}}\
 h1{{font-size:26px;max-width:640px}}p,li{{font-size:16px;max-width:640px}}li{{margin:4px 0}}\
 a.btn{{display:inline-block;padding:10px 22px;background:#2b6cdf;color:#fff;border-radius:6px;\
-text-decoration:none}}.code{{margin-top:48px;font-size:12px;color:#777}}\
+text-decoration:none}}p.alt{{font-size:13px;color:#555}}.code{{margin-top:48px;font-size:12px;color:#777}}\
 pre{{font-size:12px;color:#777;max-width:640px;white-space:pre-wrap}}</style></head>\
 <body><h1>{title}</h1><p>{lead}</p><ul>{items}</ul>{retry}{other}\
 <div class=\"code\">{code_name}</div><pre>{detail}</pre></body></html>",
@@ -244,6 +259,18 @@ mod tests {
         }
         let html = build_net_error_html("file:///x", NetErrorCode::Failed, "");
         assert!(!html.contains("about:handoff"));
+    }
+
+    #[test]
+    fn other_reasons_are_offered_except_the_chosen_one() {
+        let html = build_net_error_html("https://a.example/", NetErrorCode::ConnectionTimedOut, "");
+        for code in ["crypto", "drm", "calls"] {
+            assert!(html.contains(&format!("href=\"about:handoff?open={code}\"")), "{code}");
+        }
+        assert_eq!(html.matches("about:handoff?open=other").count(), 1);
+        let html = build_net_error_html("https://a.example/", NetErrorCode::SslProtocolError, "");
+        assert_eq!(html.matches("about:handoff?open=crypto").count(), 1);
+        assert!(html.contains("about:handoff?open=other\">сайт не работает"));
     }
 
     #[test]

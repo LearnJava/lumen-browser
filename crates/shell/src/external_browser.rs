@@ -77,6 +77,17 @@ impl HandoffReason {
         [Self::Crypto, Self::Drm, Self::Calls, Self::Other].into_iter().find(|r| r.code() == code)
     }
 
+    /// Название причины для ссылок выбора на экранах ошибок.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Crypto => "ГОСТ / ЭП",
+            Self::Drm => "DRM-видео",
+            Self::Calls => "видеозвонки",
+            Self::Other => "сайт не работает",
+        }
+    }
+
     /// Порядок предпочтения семейств; пустой хвост значит «других не берём».
     fn preference(self) -> &'static [BrowserKind] {
         use BrowserKind::{Chrome, ChromiumGost, Edge, Firefox, Other, Yandex};

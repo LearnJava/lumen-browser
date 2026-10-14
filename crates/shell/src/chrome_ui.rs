@@ -1212,6 +1212,14 @@ impl Lumen {
                     self.open_url_in_other_browser(&url, reason, false);
                 }
             }
+            ChromeAction::SecurityOtherBrowserAny => {
+                // Цепочку без AIA другие браузеры достраивают сами: причина
+                // «сайт не работает» ведёт в Edge/Chrome, а не в ГОСТ-браузер.
+                if self.cert_interstitial.handoff_reason().is_some() {
+                    let url = self.cert_interstitial.url.clone();
+                    self.open_url_in_other_browser(&url, crate::external_browser::HandoffReason::Other, false);
+                }
+            }
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
             ChromeAction::NewTab => self.open_new_tab(),
