@@ -8834,9 +8834,19 @@
         {
          "id": "COMPAT-CORPUS-1",
          "title": "Краулер паритета с эталоном Chrome: 5 проверок",
-         "status": "planned",
+         "status": "done",
          "size": "L",
-         "note": "Новый scripts/compat_crawl.py, не режим perf_audit (там --mode compat = процесс на сайт, путаница BUG-992). Берёт LiveBrowser/classify_status/count_sigs из scripts/perf_audit.py и запуск Chrome for Testing по CDP из scripts/chrome_interaction_baseline.py:89. 5 проверок: класс HTTP-статуса; стена (файл RU/EN-сигнатур — сейчас их нет); новые необработанные исключения; пиксельный дифф с маской (graphic_tests/run.py:1425); ≥95% роль+имя интерактивных узлов (resource://a11y_tree против Accessibility.getFullAXTree). Расхождение — повторный прогон. Приёмка: на corpus.txt+top100 5 проверок посчитаны у ≥95% сайтов, флапы ≤5%, CPR в отчёте. Источник: docs/research/site-compat/report.md §7.6 п.9."
+         "note": "ЗАКРЫТ 2026-10-14 (ветка p2-compat-corpus-1-s3): scripts/compat_crawl.py и scripts/test_compat_crawl.py готовы — 5 проверок (класс HTTP-статуса; стена через общий scripts/wall_signatures.py; новые исключения; пиксельный дифф с маской; a11y роль+имя), повторный прогон при расхождении, CPR, --resume; 18 юнит-тестов проходят. Живая приёмка на corpus.txt+top100 вынесена в COMPAT-CORPUS-1-BASE: плечо Lumen не отдаёт первый кадр (BUG-1629). Исходная постановка: Новый scripts/compat_crawl.py, не режим perf_audit (там --mode compat = процесс на сайт, путаница BUG-992). Берёт LiveBrowser/classify_status/count_sigs из scripts/perf_audit.py и запуск Chrome for Testing по CDP из scripts/chrome_interaction_baseline.py:89. 5 проверок: класс HTTP-статуса; стена (файл RU/EN-сигнатур — сейчас их нет); новые необработанные исключения; пиксельный дифф с маской (graphic_tests/run.py:1425); ≥95% роль+имя интерактивных узлов (resource://a11y_tree против Accessibility.getFullAXTree). Расхождение — повторный прогон. Приёмка: на corpus.txt+top100 5 проверок посчитаны у ≥95% сайтов, флапы ≤5%, CPR в отчёте. Источник: docs/research/site-compat/report.md §7.6 п.9."
+        },
+        {
+         "id": "COMPAT-CORPUS-1-BASE",
+         "title": "Краулер паритета: живой прогон на corpus.txt+top100",
+         "status": "planned",
+         "size": "S",
+         "note": "Краулер scripts/compat_crawl.py (COMPAT-CORPUS-1) не прогнан вживую. Объём: `python scripts/compat_crawl.py` на corpus.txt+top100 с плечом Lumen и эталоном Chrome; проверить обработку http_status=None при повторной навигации в той же вкладке; CPR и долю флапов записать в docs/perf/journal.md. Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`). Приёмка: 5 проверок посчитаны у ≥95% сайтов, флапы ≤5%, CPR в отчёте. Источник: docs/research/site-compat/report.md §7.6 п.9.",
+         "bugs": [
+          "BUG-1629"
+         ]
         },
         {
          "id": "COMPAT-CORPUS-4",
