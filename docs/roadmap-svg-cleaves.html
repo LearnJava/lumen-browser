@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-13",
+ "generated": "2026-10-14",
  "counts": {
-  "open": 398,
-  "fixed": 1164,
+  "open": 396,
+  "fixed": 1167,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1565,
+ "total_bugs": 1566,
  "phases": [
   {
    "id": "P0",
@@ -8590,37 +8590,37 @@
       {
        "id": "COMPAT-TRUST-OSROOTS",
        "title": "Корни Windows (ROOT/CA/GPO) в доверии TLS с индикатором",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Доверие = webpki-roots + env LUMEN_EXTRA_CA_CERT (tls/mod.rs:51), хранилище Windows не читается: при HTTPS-проверке Kaspersky/ESET каждый сайт — UnknownIssuer и экран «Злоумышленники…», обход только на хост и до перезапуска, CDN-подресурсы падают молча. Сделать: читать ROOT/CA/Enterprise/GPO и Disallowed через windows-sys (уже в графе); корень с SPKI НУЦ из ОС не доверять до COMPAT-TRUST-NUC; QUIC оставить на webpki (откат на TCP, lib.rs:780); в панели сертификата «Проверено корнем, установленным на этом компьютере: <имя>». Приёмка: тестовый корень в CurrentUser\\Root — OK; SPKI НУЦ — отказ; ВМ с Kaspersky и ESET — топ-50 без экрана. Источник: docs/research/site-compat/report.md §6.2, §9 Р5"
+       "note": "**Сделано (2026-10-13, ветка `p6-compat-trust-osroots`):** `crates/network/src/tls/os_roots.rs`, корни ROOT и Disallowed из хранилища Windows, панель сертификата; не сделано: проверка на ВМ с Kaspersky/ESET (ручная приёмка), `CA` не читается намеренно. Исходная постановка: Доверие = webpki-roots + env LUMEN_EXTRA_CA_CERT (tls/mod.rs:51), хранилище Windows не читается: при HTTPS-проверке Kaspersky/ESET каждый сайт — UnknownIssuer и экран «Злоумышленники…», обход только на хост и до перезапуска, CDN-подресурсы падают молча. Сделать: читать ROOT/CA/Enterprise/GPO и Disallowed через windows-sys (уже в графе); корень с SPKI НУЦ из ОС не доверять до COMPAT-TRUST-NUC; QUIC оставить на webpki (откат на TCP, lib.rs:780); в панели сертификата «Проверено корнем, установленным на этом компьютере: <имя>». Приёмка: тестовый корень в CurrentUser\\Root — OK; SPKI НУЦ — отказ; ВМ с Kaspersky и ESET — топ-50 без экрана. Источник: docs/research/site-compat/report.md §6.2, §9 Р5"
       },
       {
        "id": "COMPAT-API-01",
        "title": "Правдивое feature detection: не объявлять неработающие API",
-       "status": "planned",
+       "status": "active",
        "size": "M",
        "note": "Сейчас объявлены, но не работают: IdentityCredential (crates/js/src/credentials.rs:358, get({identity}) всегда отказ :486), navigator.usb/hid/serial/bluetooth и SpeechRecognition, RTCPeerConnection (webrtc_stub.rs: фиктивный SDP, соединения нет), WebCodecs (web_codecs.rs:561). Срезы: FEDCM, DEVICE, WEBCODECS, WEBRTC + юнит-проба списка необъявленных API против регресса, пересъёмка baseline WPT затронутых категорий. Отдельно 3 бага: медиа-запросы, MediaRecorder, WebGPU. Приёмка: проба ('IdentityCredential' in window === false и т.д.) зелёная в scoped-test. Источник: docs/research/site-compat/report.md §8.1 COMPAT-API-01, §7.4, §9 Р16, §10 №3 Связанные баги: медиа-запросы, WebGPU, MediaRecorder (BUGS.md, этот же день). Решение — ADR-034 п.2.",
        "tasks": [
         {
          "id": "COMPAT-API-01-FEDCM",
          "title": "Убрать IdentityCredential/IdentityProvider, пока FedCM не работает",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "Срез 1 COMPAT-API-01. Сейчас IdentityCredential/IdentityProvider на window (crates/js/src/credentials.rs:358-365, экспорт :527), а get({identity}) всегда NotSupportedError (:486): SDK, проверяющий конструктор (GIS One Tap), уходит в FedCM-ветку, и вход молча пропадает (по исследованию; на GIS не проверено). Объём: убрать классы и экспорт, get({identity}) оставить отказом, перевернуть тесты :783-895, пересъёмка baseline WPT fedcm. Приёмка: 'IdentityCredential' in window === false и 'IdentityProvider' in window === false. Источник: docs/research/site-compat/report.md §8.1 COMPAT-API-01, §7.4; areas/05 PR-09"
+         "note": "**Сделано (2026-10-14, ветка `p6-compat-api-01-fedcm`):** `IdentityCredential`/`IdentityProvider` убраны из `crates/js/src/credentials.rs` (классы и экспорт), `get({identity})` остаётся отказом `NotSupportedError`; тесты перевёрнуты (`fedcm_interfaces_are_not_exposed`); baseline WPT `fedcm` не пересъёмлялся — категории нет в `docs/wpt/runs/` (вендорена без прогона). Исходная постановка: Срез 1 COMPAT-API-01. Сейчас IdentityCredential/IdentityProvider на window (crates/js/src/credentials.rs:358-365, экспорт :527), а get({identity}) всегда NotSupportedError (:486): SDK, проверяющий конструктор (GIS One Tap), уходит в FedCM-ветку, и вход молча пропадает (по исследованию; на GIS не проверено). Объём: убрать классы и экспорт, get({identity}) оставить отказом, перевернуть тесты :783-895, пересъёмка baseline WPT fedcm. Приёмка: 'IdentityCredential' in window === false и 'IdentityProvider' in window === false. Источник: docs/research/site-compat/report.md §8.1 COMPAT-API-01, §7.4; areas/05 PR-09"
         },
         {
          "id": "COMPAT-API-01-DEVICE",
          "title": "Не объявлять device-API и SpeechRecognition-заглушки",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "Срез 2 COMPAT-API-01. Сейчас navigator.usb/hid/serial/bluetooth и (webkit)SpeechRecognition — заглушки (crates/js/src/webusb.rs:171, webhid.rs:103, serial.rs:58, bluetooth.rs:69, speech.rs:339): вызов сразу отклоняется, но 'usb' in navigator === true, и сайт показывает «подключить» вместо «используйте Chrome». Объём: снять установку (v8_runtime.rs:1032/1156/1197/1208, speech.rs:364-374; speechSynthesis оставить), тесты, baseline WPT 5 категорий. Приёмка: 'usb'/'hid'/'serial'/'bluetooth' in navigator и 'webkitSpeechRecognition' in window — все false; вернуть, если стенд A/B покажет нужду антиботов (Р16). Источник: docs/research/site-compat/report.md §8.1, §7.4; areas/08 CMP-10"
+         "note": "**Сделано (2026-10-14, ветка `p6-compat-api-01-device`):** модули `webusb.rs`/`webhid.rs`/`serial.rs`/`bluetooth.rs` удалены целиком (установка из `v8_runtime.rs` и `pub mod` из `lib.rs` сняты), заглушка `SpeechRecognition`/`webkitSpeechRecognition` убрана из `speech.rs` (`speechSynthesis` оставлен); тесты перевёрнуты (`device_apis_are_not_exposed`, `speech_recognition_is_not_exposed`). Baseline WPT 5 категорий (`bluetooth`, `serial`, `webhid`, `webusb`, `speech-api`) не пересъёмлялся: ожидаемо упадёт к нулю (категории вне скоупа, прогон 2026-10-05 держал 0–30 % сабтестов на заглушках); пересъёмка — при очередном полном прогоне. Исходная постановка: Срез 2 COMPAT-API-01. Сейчас navigator.usb/hid/serial/bluetooth и (webkit)SpeechRecognition — заглушки (crates/js/src/webusb.rs:171, webhid.rs:103, serial.rs:58, bluetooth.rs:69, speech.rs:339): вызов сразу отклоняется, но 'usb' in navigator === true, и сайт показывает «подключить» вместо «используйте Chrome». Объём: снять установку (v8_runtime.rs:1032/1156/1197/1208, speech.rs:364-374; speechSynthesis оставить), тесты, baseline WPT 5 категорий. Приёмка: 'usb'/'hid'/'serial'/'bluetooth' in navigator и 'webkitSpeechRecognition' in window — все false; вернуть, если стенд A/B покажет нужду антиботов (Р16). Источник: docs/research/site-compat/report.md §8.1, §7.4; areas/08 CMP-10"
         },
         {
          "id": "COMPAT-API-01-WEBCODECS",
          "title": "Не объявлять классы WebCodecs без кодеков",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "Срез 4 COMPAT-API-01. Сейчас VideoEncoder/VideoDecoder/AudioEncoder/AudioDecoder на window (crates/js/src/web_codecs.rs:561-564), configure() асинхронно отдаёт NotSupportedError, isConfigSupported резолвит голое false вместо {supported:false, config} (:87, :122, :157, :192). Объём: не объявлять 4 класса кодеков (VideoFrame/EncodedVideoChunk оставить — нужны media_devices.rs и screen_capture.rs), обновить решение U-4 в subsystems/js.md:1350, baseline WPT webcodecs. Приёмка: 'VideoDecoder' in window === false и 'AudioDecoder' in window === false. Источник: docs/research/site-compat/report.md §8.1 COMPAT-API-01, §11 п.4; areas/04"
+         "note": "**Сделано (2026-10-14, ветка `p6-compat-api-01-webcodecs`):** классы `VideoEncoder`/`VideoDecoder`/`AudioEncoder`/`AudioDecoder` убраны из `crates/js/src/web_codecs.rs` целиком (`isConfigSupported`-заглушки тоже); `VideoFrame`/`AudioData`/`EncodedVideoChunk`/`EncodedAudioChunk`/`VideoColorSpace` оставлены; тест `codec_classes_are_not_exposed`; решение U-4 в `subsystems/js.md` помечено снятым; baseline WPT `webcodecs` не пересъёмлялся — категории нет в `docs/wpt/runs/` (вендорена без прогона). Исходная постановка: Срез 4 COMPAT-API-01. Сейчас VideoEncoder/VideoDecoder/AudioEncoder/AudioDecoder на window (crates/js/src/web_codecs.rs:561-564), configure() асинхронно отдаёт NotSupportedError, isConfigSupported резолвит голое false вместо {supported:false, config} (:87, :122, :157, :192). Объём: не объявлять 4 класса кодеков (VideoFrame/EncodedVideoChunk оставить — нужны media_devices.rs и screen_capture.rs), обновить решение U-4 в subsystems/js.md:1350, baseline WPT webcodecs. Приёмка: 'VideoDecoder' in window === false и 'AudioDecoder' in window === false. Источник: docs/research/site-compat/report.md §8.1 COMPAT-API-01, §11 п.4; areas/04"
         },
         {
          "id": "COMPAT-API-01-WEBRTC",
@@ -8643,14 +8643,14 @@
        "title": "«Открыть в другом браузере»: реестр, выбор по причине, правило на 30 дней",
        "status": "planned",
        "size": "M",
-       "note": "Нет перечисления браузеров (StartMenuInternet в коде нет, у windows-sys нет Win32_System_Registry, crates/shell/Cargo.toml:149) и запуска чужого exe с URL: есть только свой exe (tabs_cmd.rs:488) и ShellExecuteW для файлов (download.rs:767), он отдаст URL браузеру по умолчанию. Объём: HKLM+HKCU StartMenuInternet → exe; «Открыть в…» в меню, экранах ошибок и панели; выбор по причине (НУЦ/ГОСТ/ЭП → Яндекс/Chromium-Gost, DRM/звонки → Edge/Chrome); правило домена на 30 дней только по клику, на диске; список «Сайты, открытые в другом браузере». Приёмка: при Lumen по умолчанию открываются Edge, Chrome, Яндекс, Firefox; правило снимается на 31-й день. docs/research/site-compat/report.md §8.7"
+       "note": "**Сделано (2026-10-13, срез 1, ветка `p1-compat-handoff`):** ядро без UI — `crates/shell/src/external_browser.rs` (перечисление `SOFTWARE\\Clients\\StartMenuInternet` HKLM+HKCU через windows-sys `Win32_System_Registry`, разбор командной строки, семейства Edge/Chrome/Яндекс/Chromium-Gost/Firefox, `pick` по причине crypto/drm/calls/other — для crypto Chrome и Edge не подставляются, `no_suitable_message`, `launch` исполняемым файлом с URL только для http(s); четыре команды палитры «Open in Another Browser» — одноразовая передача без правила) и `lumen_storage::ExternalBrowserRules` (правило на сайт eTLD+1 на 30 дней, `active_for`/`list_active`/`renew`/`remove`/`purge_expired`, `needs_recheck` по версии Lumen). **Сделано (2026-10-13, срез 2, ветка `p1-compat-handoff-2`):** `lumen/handoff.rs` — `external_browser_rules.db` в состоянии окна (просроченные правила чистятся при старте), палитра «Always Open This Site in Another Browser (30 days)» ×4 причины создаёт правило (в анонимном профиле — нет), `Lumen::link_handed_off` после CSP-гейта клика: живое правило на сайт цели + цель на другом сайте (`is_cross_site_handoff`, `lumen_storage::same_site`) → ссылка уходит в браузер правила, иначе (браузер пропал, не запустился, анонимный профиль) — в Lumen; `FIRST_HANDOFF_WARNING` — один раз на установку (метка `data/handoff-warned`). **Сделано (2026-10-13, срез 3, ветка `p1-compat-handoff-3`):** `about:handoff` (`handoff_page.rs`, `lumen/handoff.rs`) — страница «Сайты, открытые в другом браузере»: сайт, браузер (нет в реестре — пометка), причина, дней до конца; «Убрать»; при `needs_recheck` — «Проверить снова в Lumen» (снимает правило, открывает `https://сайт/`) и «Оставить там» (`renew`). Открывается командой палитры и адресной строкой; ссылки-действия `about:handoff?remove|recheck|keep=` исполняются только кликом на самой странице (`apply_handoff_link`). **Сделано (2026-10-13, срез 4, ветка `p1-compat-handoff-4`):** меню вкладки — четыре строки «Открыть в другом браузере» (общая, «…для ГОСТ / ЭП», «…для DRM-видео», «…для видеозвонков»; `MenuAction::OpenInOtherBrowser`, `chrome.html` `#tabCtxOther*`), одноразово, вкладка-цель выводится вперёд и её URL уходит в `open_in_other_browser`. **Сделано (2026-10-13, срез 5, ветка `p1-compat-handoff-5`):** экран ошибки сертификата (`#securityBox`) — кнопка «Открыть в другом браузере» (`ChromeAction::SecurityOtherBrowser`, `CertInterstitial::handoff_reason`) только для `CertError::Untrusted` (причина Crypto, НУЦ), с адресом несостоявшейся навигации (`open_url_in_other_browser`); просроченный/отозванный/самоподписанный/чужое имя и Safe Browsing — без кнопки (другой браузер даст ту же ошибку / не повод обходить предупреждение). **Сделано (2026-10-14, срез 6, ветка `p1-compat-handoff-6`):** страница сетевой ошибки (`net_error_page.rs`) — ссылка «Открыть в другом браузере» `about:handoff?open=<причина>` для http(s)-адреса: `SslProtocolError` → Crypto, остальные сбои → Other, без ссылки `BlockedByClient`/`InvalidUrl`/`UnknownUrlScheme`/`FileNotFound` (другой браузер дал бы ту же ошибку или снял бы защиту); `Lumen::apply_net_error_link` (click.rs) принимает ссылку, только пока на экране сохранённая страница ошибки с этой ссылкой, и передаёт адрес несостоявшейся навигации (`open_url_in_other_browser`, одноразово). **Сделано (2026-10-14, срез 7, ветка `p1-compat-handoff-7`):** выбор причины пользователем на экранах ошибок — страница сетевой ошибки под основной ссылкой даёт «Причина другая: …» (`other_reasons`, остальные из `HandoffReason::label`: ГОСТ / ЭП, DRM-видео, видеозвонки, сайт не работает; ссылки те же `about:handoff?open=<код>`, проверка страницы ошибки прежняя); экран сертификата (`Untrusted`) — две кнопки: «Открыть для ГОСТ / ЭП в другом браузере» (Crypto) и «Открыть в обычном браузере» (Other, `ChromeAction::SecurityOtherBrowserAny`, `#securityOtherAnyBtn`): Edge/Chrome достраивают цепочку по AIA, которой в Lumen пока нет (COMPAT-TRUST-AIA). **Сделано (2026-10-14, срез 8, ветка `p1-compat-handoff-8`):** контекстное меню страницы — правый клик без протяжки (`GestureRecognizer::is_plain_click`; протяжка остаётся жестом) на http(s)-странице вне chrome открывает `#pageCtxMenu` с пятью строками (`HANDOFF_ROWS`: «Открыть в другом браузере», «… если ГОСТ / ЭП / DRM-видео / видеозвонки», «Всегда открывать сайт там (30 дней)»; `PageContextMenu::open_page`, `ChromePageCtxModel::extra_rows`; меню шире — 280 px); локальные сигналы COMPAT-SIG-01 — `compat_signals::SignalLog` (3 перезагрузки одного URL за 30 с, повторное выключение защиты на сайте за 7 суток, каждая передача во внешний браузер; хранится сайт eTLD+1 и код, в памяти окна, в анонимном профиле не пишется, наружу не уходит) и точки сбора `lumen/signals.rs` (кнопка/F5/палитра, `ToggleSiteShields`, `open_url_in_other_browser`). **Сделано (2026-10-14, срез 9, ветка `p1-compat-handoff-9`):** журнал сигналов на диске — `lumen_storage::CompatSignalStore` (`compat_signals.db`: последние 100 сигналов и момент последнего выключения защиты по сайту), `lumen/signals.rs::open_signal_log` поднимает `SignalLog::restore` при старте, окно 7 суток переживает перезапуск; записи старше 30 суток стираются; «очистить данные просмотра» журнал пока не трогает. **Осталось:** потребитель сигналов — чип (COMPAT-SIG-04), «Открыть в…» в панели (COMPAT-PANEL), приёмка на машине с установленными Edge/Chrome/Яндекс/Firefox и 31-й день правила. Прежняя постановка (срез 1 закрыл перечисление браузеров): Нет перечисления браузеров (StartMenuInternet в коде нет, у windows-sys нет Win32_System_Registry, crates/shell/Cargo.toml:149) и запуска чужого exe с URL: есть только свой exe (tabs_cmd.rs:488) и ShellExecuteW для файлов (download.rs:767), он отдаст URL браузеру по умолчанию. Объём: HKLM+HKCU StartMenuInternet → exe; «Открыть в…» в меню, экранах ошибок и панели; выбор по причине (НУЦ/ГОСТ/ЭП → Яндекс/Chromium-Gost, DRM/звонки → Edge/Chrome); правило домена на 30 дней только по клику, на диске; список «Сайты, открытые в другом браузере». Приёмка: при Lumen по умолчанию открываются Edge, Chrome, Яндекс, Firefox; правило снимается на 31-й день. docs/research/site-compat/report.md §8.7"
       },
       {
        "id": "COMPAT-ERRORS",
        "title": "Страницы ошибок навигации по классам с кодами Chromium",
        "status": "planned",
        "size": "L",
-       "note": "Сетевая ошибка главного документа не показывает ничего: LoadError(String) (page_load.rs:1586) лишь ставит load_failed (user_event.rs:432), на экране остаётся выгруженная прежняя страница (page_load.rs:1028). Ошибки сети не типизированы (core/error.rs:13), кодов ERR_* нет; экран сертификата один на все причины и пугает «злоумышленниками» (cert_interstitial.rs:92); крах без «ошибка Lumen» и «Открыть в…» (crash_page.rs:38). Объём: NetError с кодами Chromium, страница сети/DNS/таймаута/5xx с автоповтором, тексты по COMPAT-ERR-00, три уровня уверенности; НУЦ/ГОСТ/ЭП/VPN/DRM/антибот — срезами. Приёмка: набор ≥60 поломок, ≥90% верных вердиктов. docs/research/site-compat/report.md §8.4"
+       "note": "**Сделано (2026-10-14, срез 1, ветка `p1-compat-errors`):** `lumen_core::net_error::NetErrorCode` (имена Chromium; разбор текста ошибки по префиксу точки возникновения и `(os error N)`), `net_error_page.rs` (заголовок ≤80, действия, «Повторить», код внизу) и `Lumen::show_net_error` — `LoadError` подменяет источник статической страницей ошибки, F5 повторяет исходную навигацию, `load_failed` сохраняется. **Осталось:** типизация в сетевом слое вместо разбора строки; страница 502/503/504 с автоповтором; «нет сети» (проба других сайтов, COMPAT-ERR-01); `RenderDone(Err)`; кнопка отчёта и «Открыть в…»; размеченный набор ≥60 поломок. Исходная постановка: Сетевая ошибка главного документа не показывает ничего: LoadError(String) (page_load.rs:1586) лишь ставит load_failed (user_event.rs:432), на экране остаётся выгруженная прежняя страница (page_load.rs:1028). Ошибки сети не типизированы (core/error.rs:13), кодов ERR_* нет; экран сертификата один на все причины и пугает «злоумышленниками» (cert_interstitial.rs:92); крах без «ошибка Lumen» и «Открыть в…» (crash_page.rs:38). Объём: NetError с кодами Chromium, страница сети/DNS/таймаута/5xx с автоповтором, тексты по COMPAT-ERR-00, три уровня уверенности; НУЦ/ГОСТ/ЭП/VPN/DRM/антибот — срезами. Приёмка: набор ≥60 поломок, ≥90% верных вердиктов. docs/research/site-compat/report.md §8.4"
       },
       {
        "id": "COMPAT-TRUST-CAUSES",
@@ -8871,7 +8871,7 @@
       {
        "id": "COMPAT-AB-IDENTITY",
        "title": "A/B 2×2 идентичности: стек Lumen/Chrome × UA с токеном Lumen/без",
-       "status": "active",
+       "status": "done",
        "size": "L",
        "note": "A/B 2×2 (стек Lumen/Chrome × UA с токеном Lumen/без) целиком строить не на чем. Есть: perf_audit.py --mode compat (процесс на сайт, SITE_REFUSED/NET_FAIL, perf_audit.py:188-215), perf_compare.py (--base/--chrome), корпуса docs/perf/corpus*.txt (23+~100, RU нет), база Chrome 153. Нет: ручки токена (COMPAT-AB-IDENTITY-KNOB), плеча Chrome и матрицы BUG-1113 (COMPAT-AB-IDENTITY-HARNESS), стенда антиботов, детектора мягких стен (200 + unsupported browser). Зависит от B-IDENTITY. Объём L. Приёмка: таблица 4 ячеек по ≥100 сайтам корпуса и стенду, доля отказов из-за токена посчитана, решения Р1/Р2/Р4/Р16 записаны. docs/research/site-compat/report.md §7.4, §10 п.17",
        "tasks": [
@@ -8885,7 +8885,7 @@
         {
          "id": "COMPAT-AB-IDENTITY-HARNESS",
          "title": "Скрипты плеча Chrome, матрицы заголовков и классификатора стен для A/B",
-         "status": "planned",
+         "status": "done",
          "size": "M",
          "note": "Плечо «стек Chrome» вне репозитория: база runs/2026-09-23-top100-split-chrome.json снята незакоммиченным скриптом (SKILL.md:39-41), antibot_matrix.py/header_bisect.py из BUG-1113 (curl_cffi impersonate=chrome × httpx) потеряны вместе с .tmp, эхо-сервера заголовков в scripts/ нет. Объём M: scripts/compat_ab_chrome.py (Chrome for Testing той же мажорной версии, --user-agent с токеном и без, свежий профиль на сайт, JSON как у perf_audit), scripts/header_matrix.py, эхо-сервер и сигнатуры стен (DataDome/Cloudflare/Akamai, unsupported browser). Приёмка: скрипты воспроизводят таблицу BUG-1113 на 5 сайтах, khanacademy с Chrome/130 размечен как стена. docs/research/site-compat/report.md §7.6 п.9"
         }
@@ -11814,24 +11814,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1615": {
+  "BUG-1628": {
    "status": "open",
-   "title": "«Всё равно перейти» показывается и срабатывает на HSTS-хостах (включая preload) и при отозванном сертификате — нарушение RFC 6797 §8.4/§12.1",
-   "component": "network/shell (`tls/verifier.rs:107`, `page_load.rs:999`, `panels/cert_interstitial.rs:98`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1616": {
-   "status": "open",
-   "title": "SameSite и разделение cookie в браузере не работают: шелл передаёт `top_level_site=None` во все HttpClient, `is_cross_site` всегда false — Strict/Lax не применя…",
-   "component": "shell/network (`page_source.rs:266`, `resource_base.rs:206`, `network/src/lib.rs:2802`, `storage/src/cookies.rs:678`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1617": {
-   "status": "open",
-   "title": "`getTimezoneOffset()` подменён на 0 в обычном профиле, а `getHours`/`Intl` берут пояс хоста: сайты сдвигают время на 3 ч; ADR-007 разрешал UTC только для Strict",
-   "component": "js (`crates/js/src/navigator_bindings.rs:372`, `temporal_api.rs:585`)",
+   "title": "Total Cookie Protection не подключена: все обращения к jar идут с ключом раздела `None`, сторонние cookie общие для всех сайтов (остаток BUG-1616)",
+   "component": "network/shell/js/storage (`network/src/lib.rs` `COOKIE_PARTITION`, `js/src/v8_runtime/install/storage.rs`, `shell/src/frames.rs`)",
    "date": null,
    "debtor": false
   },
@@ -20073,6 +20059,27 @@
    "component": "network/js (`crates/network/src/http`, `crates/js/src/ua_client_hints.rs`, `navigator_bindings.rs`, `shim/web_api_shim_mid_b.js:746`)",
    "date": "2026-10-12",
    "debtor": false
+  },
+  "BUG-1616": {
+   "status": "fixed",
+   "title": "SameSite и разделение cookie в браузере не работают: шелл передаёт `top_level_site=None` во все HttpClient, `is_cross_site` всегда false — Strict/Lax не применя…",
+   "component": "shell/network (`page_source.rs:266`, `resource_base.rs:206`, `network/src/lib.rs:2802`, `storage/src/cookies.rs:678`)",
+   "date": "2026-10-14",
+   "debtor": false
+  },
+  "BUG-1615": {
+   "status": "fixed",
+   "title": "«Всё равно перейти» показывается и срабатывает на HSTS-хостах (включая preload) и при отозванном сертификате — нарушение RFC 6797 §8.4/§12.1 **Исправлено 2026-1…",
+   "component": "network/shell (`tls/verifier.rs:107`, `page_load.rs:999`, `panels/cert_interstitial.rs:98`)",
+   "date": "2026-10-14",
+   "debtor": false
+  },
+  "BUG-1617": {
+   "status": "fixed",
+   "title": "`getTimezoneOffset()` подменён на 0 в обычном профиле, а `getHours`/`Intl` берут пояс хоста: сайты сдвигают время на 3 ч; ADR-007 разрешал UTC только для Strict…",
+   "component": "js (`crates/js/src/navigator_bindings.rs:372`, `temporal_api.rs:585`)",
+   "date": "2026-10-14",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -22467,6 +22474,9 @@
   ],
   "network/shell (`tls/verifier.rs:107`, `page_load.rs:999`, `panels/cert_interstitial.rs:98`)": [
    "BUG-1615"
+  ],
+  "network/shell/js/storage (`network/src/lib.rs` `COOKIE_PARTITION`, `js/src/v8_runtime/install/storage.rs`, `shell/src/frames.rs`)": [
+   "BUG-1628"
   ],
   "paint": [
    "BUG-015",
