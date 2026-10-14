@@ -31,3 +31,4 @@ mod speech_api;
 mod v8_eval;
 mod v8_smoke;
 mod webauthn_credentials;
+mod webrtc_not_declared;

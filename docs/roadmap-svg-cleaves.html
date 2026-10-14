@@ -8625,9 +8625,9 @@
         {
          "id": "COMPAT-API-01-WEBRTC",
          "title": "RTCPeerConnection без стека — честный отказ вместо вечного «подключения»",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "Срез 3 COMPAT-API-01; решение — ADR-034 п.2, 2026-10-12 (пересматривает скоуп GAP-WEBRTC/BUG-727; вернуть объявление, если A/B на стенде антиботов покажет нужду, Р16). Сейчас crates/js/src/webrtc_stub.rs: createOffer — фиктивный SDP (:241), setRemoteDescription принимает любое (:260), addTrack → null (:307), DataChannel навсегда 'connecting' (:317), connectionState всегда 'new' (:191): звонок не падает, а висит. Объём: не объявлять RTCPeerConnection и соседей (или конструктор → NotSupportedError по итогам A/B антиботов), baseline WPT webrtc*. Приёмка: typeof RTCPeerConnection === 'undefined'; проба rtc-two-peer (tests/wpt/verify_layout_shift_and_peer_gaps.py) не виснет. Источник: docs/research/site-compat/report.md §8.1, §9 Р16"
+         "note": "**Сделано (2026-10-14, ветка `p6-compat-api-01-webrtc`):** модуль `crates/js/src/webrtc_stub.rs` удалён целиком (установка из `v8_runtime.rs` и `pub mod` из `lib.rs` сняты) — `RTCPeerConnection`/`RTCSessionDescription`/`RTCIceCandidate` не объявлены, `typeof RTCPeerConnection === 'undefined'`; тест `crates/js/tests/cases/webrtc_not_declared.rs`; baseline WPT `webrtc*` не пересъёмлялся. Проба `rtc-two-peer` в `tests/wpt/verify_layout_shift_and_peer_gaps.py` теперь упирается в ReferenceError, а не в зависание. Ниже — исходная постановка.  | Срез 3 COMPAT-API-01; решение — ADR-034 п.2, 2026-10-12 (пересматривает скоуп GAP-WEBRTC/BUG-727; вернуть объявление, если A/B на стенде антиботов покажет нужду, Р16). Сейчас crates/js/src/webrtc_stub.rs: createOffer — фиктивный SDP (:241), setRemoteDescription принимает любое (:260), addTrack → null (:307), DataChannel навсегда 'connecting' (:317), connectionState всегда 'new' (:191): звонок не падает, а висит. Объём: не объявлять RTCPeerConnection и соседей (или конструктор → NotSupportedError по итогам A/B антиботов), baseline WPT webrtc*. Приёмка: typeof RTCPeerConnection === 'undefined'; проба rtc-two-peer (tests/wpt/verify_layout_shift_and_peer_gaps.py) не виснет. Источник: docs/research/site-compat/report.md §8.1, §9 Р16"
         },
         {
          "id": "COMPAT-API-CENSUS",
