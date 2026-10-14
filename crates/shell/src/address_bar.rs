@@ -382,6 +382,9 @@ pub struct AddressBarState {
     suggestions: Vec<OmniboxSuggestion>,
     /// Индекс выделенной подсказки в dropdown. `None` — курсор в поле ввода.
     selected_idx: Option<usize>,
+    /// Пользователь менял текст после `open()` (UX-FOCUS-ARBITER): набранное
+    /// нельзя закрывать из-за событий страницы (конец загрузки).
+    edited: bool,
 }
 
 impl AddressBarState {
@@ -390,6 +393,7 @@ impl AddressBarState {
     /// не дописывается к нему.
     pub fn open(&mut self, current_url: &str) {
         self.open = true;
+        self.edited = false;
         self.input = current_url.to_owned();
         self.anchor = 0;
         self.cursor = self.char_len();
@@ -400,6 +404,7 @@ impl AddressBarState {
 
     pub fn close(&mut self) {
         self.open = false;
+        self.edited = false;
         self.input.clear();
         self.cursor = 0;
         self.anchor = 0;
@@ -410,6 +415,20 @@ impl AddressBarState {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Менялся ли текст после `open()`.
+    pub fn is_edited(&self) -> bool {
+        self.open && self.edited
+    }
+
+    /// Закрыть бар, если пользователь ещё ничего не набрал: так бар, открытый
+    /// на старом адресе, не переживает навигацию, а набранное — переживает
+    /// конец загрузки страницы.
+    pub fn close_if_untouched(&mut self) {
+        if !self.is_edited() {
+            self.close();
+        }
     }
 
     pub fn input(&self) -> &str {
@@ -500,6 +519,7 @@ impl AddressBarState {
         if !self.open {
             return;
         }
+        self.edited = true;
         self.delete_selection();
         let mut at = self.byte_at(self.cursor);
         for c in s.chars() {
@@ -519,6 +539,7 @@ impl AddressBarState {
         if !self.open {
             return;
         }
+        self.edited = true;
         if !self.delete_selection() && self.cursor > 0 {
             let (b0, b1) = (self.byte_at(self.cursor - 1), self.byte_at(self.cursor));
             self.input.replace_range(b0..b1, "");
@@ -533,6 +554,7 @@ impl AddressBarState {
         if !self.open {
             return;
         }
+        self.edited = true;
         if !self.delete_selection() && self.cursor < self.char_len() {
             let (b0, b1) = (self.byte_at(self.cursor), self.byte_at(self.cursor + 1));
             self.input.replace_range(b0..b1, "");
@@ -828,6 +850,30 @@ mod tests {
         assert_eq!(s.input(), "");
         assert!(s.suggestions().is_empty());
         assert_eq!(s.selected_idx(), None);
+    }
+
+    #[test]
+    fn edited_flag_tracks_user_typing_and_survives_untouched_close() {
+        let mut s = AddressBarState::default();
+        s.open("https://old.example/");
+        assert!(!s.is_edited());
+        // Конец загрузки страницы закрывает нетронутый бар…
+        s.close_if_untouched();
+        assert!(!s.is_open());
+        // …но не тот, в который уже что-то набрали.
+        s.open("");
+        s.append_str("vk");
+        assert!(s.is_edited());
+        s.close_if_untouched();
+        assert!(s.is_open());
+        assert_eq!(s.input(), "vk");
+        // Новое открытие сбрасывает признак.
+        s.open("x");
+        assert!(!s.is_edited());
+        s.backspace();
+        assert!(s.is_edited());
+        s.close();
+        assert!(!s.is_edited());
     }
 
     #[test]

@@ -1291,7 +1291,7 @@ impl Lumen {
             }
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
-            ChromeAction::NewTab => self.open_new_tab(),
+            ChromeAction::NewTab => self.open_new_tab_for_typing(),
             ChromeAction::ZoomReset => self.reset_page_zoom(),
             ChromeAction::SaveLogin
             | ChromeAction::NeverSaveLogin

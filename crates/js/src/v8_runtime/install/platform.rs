@@ -208,6 +208,11 @@ pub(crate) fn install_user_activation(
             consumed.store(false, Ordering::Relaxed);
         });
     }
+    // UX-FOCUS-ARBITER: `true` while the address bar holds the keyboard — the
+    // `autofocus` flush and a script's `element.focus()` read it and stay put.
+    reg!(scope, ctx, store, "_lumen_chrome_owns_keyboard", || -> bool {
+        crate::chrome_input::chrome_owns_keyboard()
+    });
     {
         let consumed = Arc::clone(&activation_consumed);
         reg!(scope, ctx, store, "_lumen_consume_user_activation", move || {

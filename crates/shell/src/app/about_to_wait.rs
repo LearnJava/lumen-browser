@@ -16,6 +16,9 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_about_to_wait(&mut self, event_loop: &MainHandle<'_>) {
+        // UX-FOCUS-ARBITER: пока открыта адресная строка, клавиатура принадлежит
+        // ей — `autofocus` и `focus()` страницы читают этот флаг.
+        lumen_js::chrome_input::set_chrome_owns_keyboard(self.address_bar.is_open());
         self.flush_ime_cancel();
         // UX-DIALOGS: первым делом — JS-поток может стоять в `alert`, и тогда
         // остальные чтения движка вернутся пустыми (`js_blocked`).
