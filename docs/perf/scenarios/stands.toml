@@ -1,0 +1,42 @@
+# Стенды самопроверки раннера (stand = true): локальные страницы из samples/compat-scenarios/.
+# Не входят в SPR-w — показывают, что сам раннер, MCP-шаги и оракул работают.
+
+[[scenario]]
+id = "stand-login-two-step"
+title = "Двухшаговый вход (почта → пароль → вход) на локальном стенде"
+category = "login"
+lang = "en"
+stand = true
+steps = [
+  { do = "navigate", url = "{stand}/login-two-step.html" },
+  { do = "wait", cond = "document_ready" },
+  { do = "type", selector = "#email", text = "tester@example.com" },
+  { do = "click", selector = "#next" },
+  { do = "wait", cond = "visible", selector = "#pw", timeout_s = 10 },
+  { do = "type", selector = "#pw", text = "not-a-real-password" },
+  { do = "click_text", text = "^Sign in$" },
+]
+oracle = [
+  { kind = "url", value = "login-done\\.html\\?u=tester" },
+  { kind = "visible", value = "#ok" },
+  { kind = "text", value = "Signed in" },
+]
+
+[[scenario]]
+id = "stand-checkout-form"
+title = "Форма оплаты: ввод карты и отправка формы (GET) на локальном стенде"
+category = "payment"
+lang = "en"
+stand = true
+steps = [
+  { do = "navigate", url = "{stand}/checkout.html" },
+  { do = "wait", cond = "document_ready" },
+  { do = "type", selector = "#card", text = "4111111111111111" },
+  { do = "type", selector = "#exp", text = "12/30" },
+  { do = "type", selector = "#cvc", text = "123" },
+  { do = "click", selector = "#submit" },
+]
+oracle = [
+  { kind = "visible", value = "#result" },
+  { kind = "text", value = "Payment accepted: 1111" },
+]
