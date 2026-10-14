@@ -636,6 +636,10 @@ pub struct V8JsRuntime {
     /// Pending OS notification requests queued by `new Notification(...)` in JS.
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
     pub(super) pending_notifications: crate::notifications_bindings::NotificationQueue,
+    /// Permission prompts the page asked for (`Notification.requestPermission()`
+    /// in the interactive mode, UX-PERMISSIONS-2): the permission names the
+    /// shell has to put in front of the user and settle afterwards.
+    pub(super) pending_permission_requests: Arc<Mutex<Vec<String>>>,
     /// Live dedicated-`Worker` threads spawned by this page (Ph3 V8 migration
     /// S10). Mirrors [`crate::QuickJsRuntime`]'s `workers` field.
     pub(super) workers: crate::worker::WorkerRegistry,
@@ -811,6 +815,7 @@ impl V8JsRuntime {
             document_referrer: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
+            pending_permission_requests: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
             worker_port_messages: Arc::new(Mutex::new(Vec::new())),
@@ -942,6 +947,22 @@ impl V8JsRuntime {
     /// natives registered by [`crate::notifications_bindings::install_notifications_bindings_v8`].
     pub(crate) fn notification_queue(&self) -> crate::notifications_bindings::NotificationQueue {
         Arc::clone(&self.pending_notifications)
+    }
+
+    /// Shared handle to the page's permission-prompt queue (see
+    /// [`Self::take_permission_requests`]).
+    pub(crate) fn permission_request_queue(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.pending_permission_requests)
+    }
+
+    /// Drain the permission prompts the page raised since the last call
+    /// (`"notifications"`). The shell asks the user, then settles the page's
+    /// promises with [`crate::notifications_bindings::settle_script`].
+    pub fn take_permission_requests(&self) -> Vec<String> {
+        match self.pending_permission_requests.lock() {
+            Ok(mut q) => std::mem::take(&mut *q),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Drain all OS notification requests queued by `new Notification(...)` in JS.
@@ -1307,7 +1328,19 @@ impl V8JsRuntime {
     /// backs `window.visualViewport.scale` as of GAP-VVPORT срез 3 — see
     /// [`Self::update_meta_viewport_scale`].
     pub fn update_zoom_factor(&self, zoom: f32) {
-        *self.zoom_factor.lock().unwrap_or_else(|e| e.into_inner()) = zoom;
+        let changed = {
+            let mut g = self.zoom_factor.lock().unwrap_or_else(|e| e.into_inner());
+            let changed = (*g - zoom).abs() > f32::EPSILON;
+            *g = zoom;
+            changed
+        };
+        // UX-ZOOM: a zoom step reflows the layout viewport, so the page sees
+        // `resize` (the caller pushed the new viewport size just before this).
+        if changed {
+            let _ = self.eval(
+                "if(typeof _lumen_fire_window_resize_event==='function')_lumen_fire_window_resize_event();",
+            );
+        }
     }
 
     /// Update `<meta name=viewport initial-scale>` of the current document,

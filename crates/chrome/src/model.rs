@@ -18,6 +18,12 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use lumen_dom::{Attribute, Document, Namespace, NodeData, NodeId, QualName};
 
+mod dialog;
+mod security;
+pub use security::ChromeSecurityModel;
+mod login_bar;
+pub use dialog::ChromeDialogModel;
+pub use login_bar::ChromeLoginOfferModel;
 mod update_bar;
 pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
 
@@ -38,10 +44,15 @@ pub struct ChromeModel {
     /// `"guest"`) for the active profile, or `None` for a non-seeded profile
     /// with no matching CSS branch (the attribute is then omitted).
     pub profile_slug: Option<String>,
+    /// `true` shows the profile dropdown (`#profileMenu`/`#profileMenuH`,
+    /// UX-CHROME-PANELS) — mirrors `ProfileMenuPanel::visible`.
+    pub profile_menu_open: bool,
     /// Open tabs, in strip order.
     pub tabs: Vec<ChromeTabModel>,
     /// Workspaces shown in the sidebar switcher.
     pub workspaces: Vec<ChromeWorkspaceModel>,
+    /// `true` shows `#workspaceBar` (UX-CHROME-PANELS) — mirrors `WorkspacePanel::visible`.
+    pub workspace_bar_open: bool,
     /// Omnibox `#omniInput` value + spoof-warning banner (CC-7).
     pub omnibox: OmniboxModel,
     /// `true` narrows the vertical sidebar to its icon rail (`#sidebar.collapsed`,
@@ -56,6 +67,9 @@ pub struct ChromeModel {
     pub downloads_open: bool,
     /// Download entries rendered into `#downloadsPanel`'s `.dl-list` (CC-9).
     pub downloads: Vec<ChromeDownloadModel>,
+    /// `true` shows the header «Очистить» button (`.dl-clear`) — at least one
+    /// download is finished (`DownloadManager::has_finished_entries`).
+    pub downloads_clearable: bool,
     /// `true` shows `#archivePanel` (BUG-408) — mirrors `TabArchive::visible`.
     pub archive_open: bool,
     /// Archived-tab entries rendered into `#archivePanel`'s `.arc-list`
@@ -97,6 +111,30 @@ pub struct ChromeModel {
     pub palette: ChromePaletteModel,
     /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
     pub cert: ChromeCertModel,
+    /// `#shortcutsOverlay` snapshot (UX-CHROME-PANELS) — mirrors `ShortcutsPanel`.
+    pub shortcuts: ChromeShortcutsModel,
+    /// `#devtools` snapshot (UX-CHROME-PANELS) — mirrors `ConsolePanel`.
+    pub console: ChromeConsoleModel,
+    /// `#networkPanel` snapshot (UX-CHROME-PANELS) — mirrors `NetworkPanel`.
+    pub network: ChromeNetworkModel,
+    /// `#readLaterPanel` snapshot (UX-CHROME-PANELS) — mirrors `ReadLaterPanel`.
+    pub read_later: ChromeReadLaterModel,
+    /// `#privacyPanel` snapshot (UX-CHROME-PANELS) — mirrors `PrivacyPanel`.
+    pub privacy: ChromePrivacyModel,
+    /// `.focus-timer` snapshot (UX-CHROME-PANELS) — mirrors `FocusModePanel`.
+    pub focus: ChromeFocusModel,
+    /// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
+    pub note: ChromeNoteModel,
+    /// `#tabCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `TabContextMenu`.
+    pub tab_ctx: ChromeTabCtxModel,
+    /// `#pipCard` snapshot (UX-CHROME-PANELS) — mirrors `PipWindow`.
+    pub pip: ChromePipModel,
+    /// `#pageCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `PageContextMenu`.
+    pub page_ctx: ChromePageCtxModel,
+    /// `#inspPanel` snapshot (UX-CHROME-PANELS) — mirrors `DomInspectorPanel`.
+    pub inspector: ChromeInspectorModel,
+    /// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
+    pub access: ChromeAccessModel,
     /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
     pub print: ChromePrintModel,
     /// Which `#contentArea` view is shown (CC-10b).
@@ -113,6 +151,12 @@ pub struct ChromeModel {
     pub control_panel: ChromeControlPanelModel,
     /// `#updateBar` + settings "Обновления" snapshot (UPD-9).
     pub update: ChromeUpdateModel,
+    /// `#loginBar` «сохранить пароль?» (UX-PASSWORDS).
+    pub login_offer: ChromeLoginOfferModel,
+    /// `#dialogBox` — `alert`/`confirm`/`prompt` страницы (UX-DIALOGS).
+    pub dialog: ChromeDialogModel,
+    /// `#securityBox` — ошибка сертификата / вредоносный сайт (UX-SECURITY-UI).
+    pub security: ChromeSecurityModel,
 }
 
 /// `#demoBar` floating control panel snapshot (CC-18) — the panel itself
@@ -305,6 +349,34 @@ pub struct ChromeSettingsModel {
     /// `SettingsPanel::draft.fingerprint_mode != "off"` — binds the
     /// "Блокировать фингерпринтинг" toggle.
     pub fingerprint_on: bool,
+    /// Сохранённые логины для раздела «Пароли» (UX-PASSWORDS, срез 5):
+    /// `(origin, username)`. Пароли сюда не попадают.
+    pub passwords: Vec<(String, String)>,
+    /// `false` — хранилище недоступно (приватный режим, Tor): раздел это говорит.
+    pub passwords_available: bool,
+    /// Сохранённые значения форм для раздела «Автозаполнение» (UX-AUTOFILL,
+    /// срез 5): `(origin, ключ поля, значение)`.
+    pub autofill: Vec<(String, String, String)>,
+    /// Сохранённые карты: `(последние четыре цифры, подпись)`; номер сюда не попадает.
+    pub cards: Vec<(String, String)>,
+    /// `false` — хранилище автозаполнения недоступно (приватный режим, Tor).
+    pub autofill_available: bool,
+    /// Решения сайтов для раздела «Разрешения» (UX-PERMISSIONS):
+    /// `(origin, вид, разрешено?)`.
+    pub site_permissions: Vec<(String, String, bool)>,
+    /// Top-level site текущей страницы для «Данные сайта» (UX-PARTITION);
+    /// `None` — страницы без сайта (`file:`, пустая вкладка).
+    pub current_site: Option<String>,
+    /// Проверка орфографии включена (UX-SPELLCHECK) — `#spellToggle`.
+    pub spell_enabled: bool,
+    /// Языки словарей `(стем, включён)` для `#spellLangList`; пусто — словари
+    /// не загружены (ещё грузятся или папки `data/spell` нет).
+    pub spell_languages: Vec<(String, bool)>,
+    /// Языки перевода страницы `(код, подпись, выбран)` для `#translateLangList`
+    /// (UX-TRANSLATE); пусто — список остаётся статичным.
+    pub translate_languages: Vec<(String, String, bool)>,
+    /// Модель перевода, показанная в `#translateModel`.
+    pub translate_model: String,
 }
 
 /// `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
@@ -402,6 +474,49 @@ pub struct ChromeDownloadModel {
     /// at this fill (in-flight downloads only); `None` omits the bar
     /// (matches the asset's own "done" cards, which carry no progress track).
     pub progress_fraction: Option<f32>,
+    /// Buttons under the card (`.dl-actions`): Open + Reveal for finished
+    /// downloads, Cancel for in-flight ones, none otherwise.
+    pub actions: Vec<ChromeDownloadAction>,
+}
+
+/// One `.dl-actions` button of a [`ChromeDownloadModel`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromeDownloadAction {
+    /// Open the file (`data-dl="open"`).
+    Open,
+    /// Reveal the file in the OS file manager (`data-dl="reveal"`).
+    Reveal,
+    /// Cancel the transfer (`data-dl="cancel"`).
+    Cancel,
+}
+
+impl ChromeDownloadAction {
+    /// `data-dl` attribute value the shell reads back via the chrome hit-test.
+    pub fn attr(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Reveal => "reveal",
+            Self::Cancel => "cancel",
+        }
+    }
+
+    /// Inverse of [`Self::attr`].
+    pub fn from_attr(v: &str) -> Option<Self> {
+        match v {
+            "open" => Some(Self::Open),
+            "reveal" => Some(Self::Reveal),
+            "cancel" => Some(Self::Cancel),
+            _ => None,
+        }
+    }
+
+    fn icon_and_label(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Open => ("#i-ext", "Открыть"),
+            Self::Reveal => ("#i-folder", "В папке"),
+            Self::Cancel => ("#i-x", "Отмена"),
+        }
+    }
 }
 
 /// One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
@@ -444,10 +559,8 @@ pub struct ChromePaletteModel {
 /// the omnibox dropdown/download cards) — this reuses the `.dd-icon`/
 /// `.dd-text`/`.dd-title`/`.dd-sub` shape `.cp-row .dd-icon{...}`'s own CSS
 /// implies (`assets/chrome/chrome.html`), mirroring [`build_dd_row`].
-/// Row-click activation is out of this slice's DoD — the design carries no
-/// `data-action` for individual result rows (only `#cpOverlay` itself has
-/// one, to close on scrim click); keyboard navigation (`select_next`/`prev`
-/// + Enter) already works independently of rendering.
+/// A row carries `data-cp-index` (its filtered index) rather than a
+/// `data-action`: only `#cpOverlay` itself has one, to close on scrim click.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChromePaletteResultModel {
     /// Main text (`.dd-title`) — command name or bookmark/history title.
@@ -460,6 +573,10 @@ pub struct ChromePaletteResultModel {
     /// `background:var(--surface-2)` style (the same shade `.cp-row:hover`
     /// uses), not a class.
     pub selected: bool,
+    /// Index into the palette's *filtered* list (scroll offset included) —
+    /// stamped as `data-cp-index` so a click resolves to its row through
+    /// the chrome hit test.
+    pub index: usize,
 }
 
 /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`.
@@ -484,6 +601,272 @@ pub struct ChromeCertModel {
     pub rows: [String; 6],
     /// `.cert-fp` text.
     pub fingerprint: String,
+}
+
+/// One `.sc-row` of `#shortcutsOverlay`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeShortcutRowModel {
+    /// Index into `ShortcutsPanel::rows` — written to `data-sc-index` so a
+    /// click resolves to the right row even though the list is windowed.
+    pub index: usize,
+    /// Action label, e.g. `"Перезагрузить"`.
+    pub label: String,
+    /// Binding badge, e.g. `"Ctrl+R"`, or the rebind prompt.
+    pub binding: String,
+    /// `true` while this row awaits a new keypress.
+    pub rebinding: bool,
+}
+
+/// `#shortcutsOverlay` snapshot (UX-CHROME-PANELS) — mirrors `ShortcutsPanel`.
+///
+/// `rows` is the already-windowed slice the shell wants visible: the chrome
+/// has no wheel-driven scroll container, so the shell owns the scroll offset.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeShortcutsModel {
+    /// `true` shows the overlay — mirrors `ShortcutsPanel::visible`.
+    pub open: bool,
+    /// Rows rendered into `#scList`.
+    pub rows: Vec<ChromeShortcutRowModel>,
+}
+
+/// One `#dt-console` line (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeConsoleLineModel {
+    /// `0` log, `1` warn, `2` error — same encoding as the JS runtime's
+    /// console buffer.
+    pub level: u8,
+    /// Message text.
+    pub text: String,
+}
+
+/// `#devtools` snapshot (UX-CHROME-PANELS) — mirrors `ConsolePanel`.
+///
+/// `lines` is the already-windowed tail the shell wants visible: the chrome
+/// has no wheel-driven scroll container.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeConsoleModel {
+    /// `true` shows the panel — mirrors `ConsolePanel::visible`.
+    pub open: bool,
+    /// Number of stored messages (shown in the tab title).
+    pub total: usize,
+    /// Lines rendered into `#dt-console`, oldest first.
+    pub lines: Vec<ChromeConsoleLineModel>,
+}
+
+/// One `.net-row` of `#dt-network` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeNetworkRowModel {
+    /// HTTP method.
+    pub method: String,
+    /// Status text: numeric code, `blocked`, failure stage or `…`.
+    pub status: String,
+    /// `2`/`3`/`4` pick the `.status-badge` colour (2xx / 3xx / 4xx-5xx,
+    /// blocked, failed); `0` is a pending request without a badge colour.
+    pub status_class: u8,
+    /// Timing text (`123 ms`, `…`, `—`).
+    pub time: String,
+    /// Request URL (the chrome clips it with CSS).
+    pub url: String,
+    /// Request was blocked by the shields.
+    pub blocked: bool,
+    /// Request failed at the network level.
+    pub failed: bool,
+}
+
+/// `#networkPanel` snapshot (UX-CHROME-PANELS) — mirrors `NetworkPanel`.
+///
+/// `rows` is the already-windowed slice (the shell owns the wheel scroll),
+/// oldest first.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeNetworkModel {
+    /// `true` shows the panel — mirrors `NetworkPanel::visible`.
+    pub open: bool,
+    /// Number of recorded requests (shown in the tab title).
+    pub total: usize,
+    /// Rows rendered into `#dt-network`.
+    pub rows: Vec<ChromeNetworkRowModel>,
+}
+
+/// `.focus-timer` snapshot (UX-CHROME-PANELS) — mirrors `FocusModePanel`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeFocusModel {
+    /// `true` shows the pill — focus mode is engaged.
+    pub active: bool,
+    /// `true` while the countdown runs (pause icon); `false` shows play.
+    pub running: bool,
+    /// Session complete: shows the `#focusDone` banner.
+    pub finished: bool,
+    /// Remaining time as `MM:SS`.
+    pub label: String,
+}
+
+/// `#pipCard` snapshot (UX-CHROME-PANELS) — mirrors `PipWindow`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePipModel {
+    /// `true` shows the card.
+    pub open: bool,
+    /// Left edge in window CSS px.
+    pub x: f32,
+    /// Top edge in window CSS px.
+    pub y: f32,
+    /// Nominally playing — the centre button shows pause bars, else a triangle.
+    pub playing: bool,
+    /// Title-bar text; empty falls back to «Picture-in-Picture».
+    pub title: String,
+    /// Poster image URL; empty leaves the grey frame.
+    pub poster: String,
+}
+
+/// `#tabCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `TabContextMenu`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeTabCtxModel {
+    /// `true` shows the menu.
+    pub open: bool,
+    /// Left edge in window CSS px (already clamped inside the window).
+    pub x: f32,
+    /// Top edge in window CSS px (already clamped inside the window).
+    pub y: f32,
+    /// Target tab is pinned — the row reads «Открепить».
+    pub pinned: bool,
+    /// Target tab's group is collapsed — the row reads «Развернуть группу».
+    pub collapsed: bool,
+}
+
+/// `#pageCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `PageContextMenu`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePageCtxModel {
+    /// `true` shows the menu.
+    pub open: bool,
+    /// Left edge in window CSS px (already clamped inside the window).
+    pub x: f32,
+    /// Top edge in window CSS px (already clamped inside the window).
+    pub y: f32,
+    /// Suggestion / saved-value rows, in order.
+    pub suggestions: Vec<String>,
+    /// Append the «Добавить в словарь» / «Пропустить» rows (spell menu only).
+    pub spell_footer: bool,
+}
+
+/// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeNoteModel {
+    /// `true` shows the modal.
+    pub open: bool,
+    /// Source URL the note was taken on.
+    pub url: String,
+    /// Highlighted text from the source page.
+    pub selection: String,
+    /// User comment; empty hides the row.
+    pub comment: String,
+}
+
+/// One `.pv-row` of `#pvList` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePrivacyRowModel {
+    /// Tracker domain (primary line).
+    pub host: String,
+    /// Secondary line: matched filter or HTTP status.
+    pub sub: String,
+    /// `blocked` / `allowed` / `pending` — picks the dot and text colour.
+    pub state: String,
+}
+
+/// `#privacyPanel` snapshot (UX-CHROME-PANELS) — mirrors `PrivacyPanel`.
+///
+/// `rows` is the already-windowed slice, newest first (the shell owns the
+/// wheel scroll).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePrivacyModel {
+    /// `true` shows the panel — mirrors `PrivacyPanel::visible`.
+    pub open: bool,
+    /// Blocked requests in the snapshot.
+    pub blocked: usize,
+    /// Allowed (sent) requests in the snapshot.
+    pub allowed: usize,
+    /// `shown/total` scroll indicator; empty when the list fits.
+    pub position: String,
+    /// Rows rendered into `#pvList`.
+    pub rows: Vec<ChromePrivacyRowModel>,
+}
+
+/// One `.rl-row` of `#rlList` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeReadLaterRowModel {
+    /// Store id; round-trips through `data-read-later-id` on both buttons.
+    pub id: i64,
+    /// Page title.
+    pub title: String,
+    /// `host  ·  date` line.
+    pub meta: String,
+    /// Badge text (`Unread` / `Read` / `Archived`).
+    pub status: String,
+    /// `true` paints the green read badge instead of the blue unread one.
+    pub read: bool,
+}
+
+/// `#readLaterPanel` snapshot (UX-CHROME-PANELS) — mirrors `ReadLaterPanel`.
+///
+/// `rows` is the already-windowed slice (the shell owns the wheel scroll).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeReadLaterModel {
+    /// `true` shows the panel — mirrors `ReadLaterPanel::visible`.
+    pub open: bool,
+    /// Number of saved pages (shown in the header).
+    pub total: usize,
+    /// Rows rendered into `#rlList`.
+    pub rows: Vec<ChromeReadLaterRowModel>,
+}
+
+/// One line of `#inspRows` (UX-CHROME-PANELS).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeInspectorRowModel {
+    /// `0` property row (`key: value`), `1` rule selector header, `2` separator
+    /// between rule blocks.
+    pub kind: u8,
+    /// Property name or selector text.
+    pub key: String,
+    /// Property value (empty for selector and separator lines).
+    pub value: String,
+}
+
+/// `#inspPanel` snapshot (UX-CHROME-PANELS) — mirrors `DomInspectorPanel`.
+///
+/// `rows` and `net_rows` are the already-windowed slices (the shell owns the
+/// wheel scroll). `rows` serves the Elements/Styles/Computed tabs, `net_rows`
+/// the Network tab; the shell leaves the one that does not apply empty.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeInspectorModel {
+    /// `true` shows the panel — mirrors `DomInspectorPanel::visible`.
+    pub open: bool,
+    /// Active tab: `0` Elements, `1` Styles, `2` Computed, `3` Network.
+    pub tab: u8,
+    /// Label of the pinned element (`div#main.card`); empty without selection.
+    pub label: String,
+    /// `NodeId(n)` of the pinned element; empty without selection.
+    pub node: String,
+    /// Placeholder shown instead of rows (`Hover a box…`, `(no CSS rules matched)`).
+    pub hint: String,
+    /// Property / selector lines of the active element tab.
+    pub rows: Vec<ChromeInspectorRowModel>,
+    /// Request rows of the Network tab, oldest first.
+    pub net_rows: Vec<ChromeNetworkRowModel>,
+    /// `shown/total` scroll indicator; empty when everything fits.
+    pub position: String,
+}
+
+/// `#accessOverlay` snapshot (UX-CHROME-PANELS) — mirrors `A11yPanel`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromeAccessModel {
+    /// `true` shows the overlay — mirrors `A11yPanel::visible`.
+    pub open: bool,
+    /// `data-value` of the active `#acFontPills` pill (`"1"`, `"1.25"`, …).
+    pub font_value: String,
+    /// `#acMotionToggle` state (prefers-reduced-motion).
+    pub reduced_motion: bool,
+    /// `#acColorsToggle` state (forced colors).
+    pub forced_colors: bool,
+    /// `data-value` of the active `#acCursorPills` pill (`normal`/`large`/`extra`).
+    pub cursor_value: String,
 }
 
 /// `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
@@ -543,6 +926,9 @@ pub struct OmniboxModel {
     /// `Some(message)` shows `#omniWarn` (adds `.show`) with this spoof-guard
     /// warning text; `None` hides it.
     pub warning: Option<String>,
+    /// `Some(percent)` shows the `#zoomBtn` page-zoom indicator with this
+    /// label (UX-ZOOM); `None` — zoom is 100 % and the button stays hidden.
+    pub zoom_percent: Option<u32>,
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
@@ -560,6 +946,10 @@ pub struct ChromeTabModel {
     /// swaps the close button for a `.tab-badge` (mirrors the asset's own
     /// hibernated row, which carries no close button).
     pub sleeping: bool,
+    /// `true` while this tab's navigation is in flight (UX-LOADING) — the
+    /// `.tab-fav` slot becomes a `.spinner`, and for the active tab the
+    /// reload button turns into a stop button.
+    pub loading: bool,
     /// `true` when the tab has an opener (`TabEntry::opener_id`, tree-style
     /// tabs 7A.2) — adds the `.child` class + a `.tree-line` connector span
     /// (CC-8). The asset's CSS only defines indentation for a single nesting
@@ -567,6 +957,10 @@ pub struct ChromeTabModel {
     /// as its parent's children rather than one level deeper — a known
     /// limitation of the frozen reference, not this binding.
     pub is_child: bool,
+    /// Tree-mode placement (UX-CHROME-PANELS 14, `Ctrl+Shift+B`): `Some` when
+    /// the sidebar lists tabs as a tree — indentation by depth and, for a
+    /// tab with children, a collapse arrow. `None` in the flat list.
+    pub tree: Option<ChromeTabTree>,
     /// `#RRGGBB` accent for the container strip (`.container-stripe`) — the
     /// caller derives this from `TabEntry::container.border_color()`, or
     /// `None` for `ContainerKind::None`, in which case the strip is omitted
@@ -578,6 +972,16 @@ pub struct ChromeTabModel {
     /// field at all, so a grouped tab rendered identically to an ungrouped
     /// one under the engine chrome.
     pub group: Option<ChromeTabGroup>,
+}
+
+/// Where a tab sits in the tree-style sidebar list (`TreeTabsPanel`, 7A.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChromeTabTree {
+    /// Nesting depth: 0 for a root tab, one more per opener above it.
+    pub depth: usize,
+    /// `Some(expanded)` for a tab with children — renders the `.tab-arrow`
+    /// button (▾ expanded / ▸ collapsed); `None` for a leaf.
+    pub expanded: Option<bool>,
 }
 
 /// A tab's group membership, as rendered by `.group-stripe` (BUG-409).
@@ -784,6 +1188,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
         set_attr(doc, body, "data-demo", model.control_panel.shape.attr_value());
     }
     bind_control_panel(doc, model);
+    bind_profile_menu(doc, model);
     if let Some(sidebar) = doc.find_by_id(crate::ids::SIDEBAR) {
         set_class_token(doc, sidebar, "collapsed", model.sidebar_collapsed);
     }
@@ -799,14 +1204,32 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     if let Some(container) = find_by_class(doc, "hbar-ws") {
         rebuild_hbar_ws_list(doc, container, &model.workspaces);
     }
+    if let Some(btn) = find_by_attr(doc, "data-action", "reload") {
+        let loading = model.tabs.iter().any(|t| t.active && t.loading);
+        set_class_token(doc, btn, "loading", loading);
+        set_attr(doc, btn, "aria-label", if loading { "Остановить" } else { "Обновить" });
+    }
     bind_omnibox(doc, &model.omnibox);
     bind_dropdown(doc, &model.dropdown);
     bind_find_bar(doc, &model.find);
-    bind_downloads(doc, model.downloads_open, &model.downloads);
+    bind_downloads(doc, model.downloads_open, &model.downloads, model.downloads_clearable);
     bind_archive(doc, model.archive_open, &model.archive);
     bind_popover(doc, model);
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
+    bind_shortcuts(doc, &model.shortcuts);
+    bind_console(doc, &model.console);
+    bind_network(doc, &model.network);
+    bind_inspector(doc, &model.inspector);
+    bind_read_later(doc, &model.read_later);
+    bind_privacy(doc, &model.privacy);
+    bind_focus(doc, &model.focus);
+    bind_note(doc, &model.note);
+    bind_tab_ctx(doc, &model.tab_ctx);
+    bind_pip(doc, &model.pip);
+    bind_page_ctx(doc, &model.page_ctx);
+    bind_workspace_bar(doc, model.workspace_bar_open, &model.workspaces);
+    bind_access(doc, &model.access);
     bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
     bind_history(doc, &model.history);
@@ -814,6 +1237,9 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_settings(doc, &model.settings);
     bind_right_sidebar(doc, &model.right_sidebar);
     update_bar::bind_update(doc, &model.update);
+    login_bar::bind_login_offer(doc, &model.login_offer);
+    dialog::bind_dialog(doc, &model.dialog);
+    security::bind_security(doc, &model.security);
 }
 
 /// Like [`bind_model`], but also reports what the call actually changed, split
@@ -1067,6 +1493,12 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
         }
     }
     let Some(main) = find_by_class(doc, "set-main") else { return };
+    bind_passwords(doc, settings);
+    bind_autofill(doc, settings);
+    bind_site_permissions(doc, settings);
+    bind_site_data(doc, settings);
+    bind_spelling(doc, settings);
+    bind_translate(doc, settings);
     for section in doc.get(main).children.clone() {
         let is_active = doc.get(section).get_attr("data-set") == Some(settings.active_section.as_str());
         set_class_token(doc, section, "active", is_active);
@@ -1081,6 +1513,224 @@ fn bind_settings(doc: &mut Document, settings: &ChromeSettingsModel) {
         if let Some(&fp) = toggles.get(1) {
             set_class_token(doc, fp, "on", settings.fingerprint_on);
         }
+    }
+}
+
+/// Перестраивает `#pwList` из [`ChromeSettingsModel::passwords`] и меняет
+/// `#pwDesc`, если хранилище недоступно (UX-PASSWORDS, срез 5).
+fn bind_passwords(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(desc) = doc.find_by_id(crate::ids::PW_DESC) {
+        let text = if !settings.passwords_available {
+            "Менеджер паролей недоступен в приватном или анонимном профиле."
+        } else if settings.passwords.is_empty() {
+            "Сохранённых паролей нет. Они появятся после входа на сайт и согласия на сохранение."
+        } else {
+            "Пароли хранятся зашифрованными ключом профиля. Здесь виден только список аккаунтов."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::PW_LIST) else { return };
+    remove_children_with_class(doc, list, "pw-row");
+    for (origin, username) in &settings.passwords {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row pw-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, origin);
+        attach_child(doc, text, title);
+        let desc = doc.create_element(QualName::html("div"));
+        set_attr(doc, desc, "class", "st-desc");
+        append_text(doc, desc, if username.is_empty() { "(без логина)" } else { username });
+        attach_child(doc, text, desc);
+        attach_child(doc, row, text);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "upd-check");
+        set_attr(doc, del, "data-action", "delete-saved-login");
+        set_attr(doc, del, "data-login-origin", origin);
+        set_attr(doc, del, "data-login-user", username);
+        set_attr(doc, del, "aria-label", "Удалить пароль");
+        append_text(doc, del, "Удалить");
+        attach_child(doc, row, del);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Перестраивает `#permList` из [`ChromeSettingsModel::site_permissions`]
+/// (UX-PERMISSIONS): строка на решение, кнопка «Отозвать».
+fn bind_site_permissions(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(desc) = doc.find_by_id(crate::ids::PERM_DESC) {
+        let text = if settings.site_permissions.is_empty() {
+            "Сохранённых решений нет. Они появятся после того, как вы разрешите или запретите доступ сайту."
+        } else {
+            "Решения сохраняются между сессиями. Отзыв возвращает сайту запрос при следующем обращении."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::PERM_LIST) else { return };
+    remove_children_with_class(doc, list, "perm-row");
+    for (origin, kind, allowed) in &settings.site_permissions {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row perm-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, origin);
+        attach_child(doc, text, title);
+        let desc = doc.create_element(QualName::html("div"));
+        set_attr(doc, desc, "class", "st-desc");
+        append_text(doc, desc, &format!("{kind} · {}", if *allowed { "разрешено" } else { "запрещено" }));
+        attach_child(doc, text, desc);
+        attach_child(doc, row, text);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "upd-check");
+        set_attr(doc, del, "data-action", "revoke-site-permission");
+        set_attr(doc, del, "data-perm-origin", origin);
+        set_attr(doc, del, "data-perm-kind", kind);
+        set_attr(doc, del, "aria-label", "Отозвать");
+        append_text(doc, del, "Отозвать");
+        attach_child(doc, row, del);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Раздел «Орфография»: выключатель и строка на язык словаря (UX-SPELLCHECK).
+fn bind_spelling(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(toggle) = doc.find_by_id(crate::ids::SPELL_TOGGLE) {
+        set_class_token(doc, toggle, "on", settings.spell_enabled);
+    }
+    if let Some(desc) = doc.find_by_id(crate::ids::SPELL_DESC) {
+        let text = if settings.spell_languages.is_empty() {
+            "Словари не загружены: положите пары <язык>.aff и <язык>.dic в папку data/spell и перезапустите браузер."
+        } else {
+            "Подчёркивает ошибки в полях ввода; слова проверяются локально, текст никуда не отправляется."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::SPELL_LANG_LIST) else { return };
+    remove_children_with_class(doc, list, "spell-lang-row");
+    for (stem, on) in &settings.spell_languages {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row spell-lang-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, stem);
+        attach_child(doc, text, title);
+        attach_child(doc, row, text);
+        let toggle = doc.create_element(QualName::html("div"));
+        set_attr(doc, toggle, "class", if *on { "toggle on" } else { "toggle" });
+        set_attr(doc, toggle, "data-action", "toggle-spell-language");
+        set_attr(doc, toggle, "data-spell-lang", stem);
+        let thumb = doc.create_element(QualName::html("div"));
+        set_attr(doc, thumb, "class", "thumb");
+        attach_child(doc, toggle, thumb);
+        attach_child(doc, row, toggle);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Раздел «Перевод»: строка на язык перевода (UX-TRANSLATE) и название модели.
+fn bind_translate(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if settings.translate_languages.is_empty() {
+        return;
+    }
+    if let Some(model) = doc.find_by_id(crate::ids::TRANSLATE_MODEL) {
+        set_text(doc, model, &settings.translate_model);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::TRANSLATE_LANG_LIST) else { return };
+    remove_children_with_class(doc, list, "translate-lang-row");
+    for (code, label, on) in &settings.translate_languages {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row translate-lang-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, label);
+        attach_child(doc, text, title);
+        attach_child(doc, row, text);
+        let toggle = doc.create_element(QualName::html("div"));
+        set_attr(doc, toggle, "class", if *on { "toggle on" } else { "toggle" });
+        set_attr(doc, toggle, "data-action", "set-translate-language");
+        set_attr(doc, toggle, "data-lang", code);
+        let thumb = doc.create_element(QualName::html("div"));
+        set_attr(doc, thumb, "class", "thumb");
+        attach_child(doc, toggle, thumb);
+        attach_child(doc, row, toggle);
+        attach_child(doc, list, row);
+    }
+}
+
+/// Блок «Данные сайта»: имя сайта и `data-site` кнопки очистки (UX-PARTITION).
+fn bind_site_data(doc: &mut Document, settings: &ChromeSettingsModel) {
+    let site = settings.current_site.as_deref().unwrap_or("");
+    if let Some(name) = doc.find_by_id(crate::ids::SITE_DATA_SITE) {
+        set_text(doc, name, if site.is_empty() { "Нет открытого сайта" } else { site });
+    }
+    if let Some(btn) = doc.find_by_id(crate::ids::SITE_DATA_BTN) {
+        set_attr(doc, btn, "data-site", site);
+    }
+}
+
+/// Перестраивает `#afList` из [`ChromeSettingsModel::autofill`] и
+/// [`ChromeSettingsModel::cards`] (UX-AUTOFILL, срез 5).
+fn bind_autofill(doc: &mut Document, settings: &ChromeSettingsModel) {
+    if let Some(desc) = doc.find_by_id(crate::ids::AF_DESC) {
+        let text = if !settings.autofill_available {
+            "Автозаполнение недоступно в приватном или анонимном профиле."
+        } else if settings.autofill.is_empty() && settings.cards.is_empty() {
+            "Сохранённых данных форм нет. Они появятся после отправки формы и согласия на сохранение."
+        } else {
+            "Значения форм хранятся открытым текстом, карты — зашифрованными; код проверки карты не сохраняется."
+        };
+        set_text(doc, desc, text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::AF_LIST) else { return };
+    remove_children_with_class(doc, list, "af-row");
+    type Row<'a> = (String, String, Vec<(&'a str, &'a str)>);
+    let mut rows: Vec<Row<'_>> = Vec::new();
+    for (last4, label) in &settings.cards {
+        rows.push((label.clone(), "Платёжная карта".to_owned(), vec![("data-action", "delete-saved-card"), ("data-card-last4", last4)]));
+    }
+    for (origin, field, value) in &settings.autofill {
+        rows.push((
+            value.clone(),
+            format!("{origin} · {field}"),
+            vec![
+                ("data-action", "delete-autofill-entry"),
+                ("data-af-origin", origin),
+                ("data-af-field", field),
+                ("data-af-value", value),
+            ],
+        ));
+    }
+    for (title_text, desc_text, attrs) in rows {
+        let row = doc.create_element(QualName::html("div"));
+        set_attr(doc, row, "class", "set-row af-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "st-text");
+        let title = doc.create_element(QualName::html("div"));
+        set_attr(doc, title, "class", "st-title");
+        append_text(doc, title, &title_text);
+        attach_child(doc, text, title);
+        let desc = doc.create_element(QualName::html("div"));
+        set_attr(doc, desc, "class", "st-desc");
+        append_text(doc, desc, &desc_text);
+        attach_child(doc, text, desc);
+        attach_child(doc, row, text);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "upd-check");
+        for (k, v) in attrs {
+            set_attr(doc, del, k, v);
+        }
+        set_attr(doc, del, "aria-label", "Удалить");
+        append_text(doc, del, "Удалить");
+        attach_child(doc, row, del);
+        attach_child(doc, list, row);
     }
 }
 
@@ -1146,6 +1796,7 @@ fn bind_palette(doc: &mut Document, palette: &ChromePaletteModel) {
 fn build_cp_row(doc: &mut Document, r: &ChromePaletteResultModel) -> NodeId {
     let row = doc.create_element(QualName::html("div"));
     set_attr(doc, row, "class", "cp-row");
+    set_attr(doc, row, "data-cp-index", &r.index.to_string());
     if r.selected {
         set_attr(doc, row, "style", "background:var(--surface-2)");
     }
@@ -1186,6 +1837,449 @@ fn bind_cert(doc: &mut Document, cert: &ChromeCertModel) {
     }
     if let Some(fp) = find_descendant_by_class(doc, overlay, "cert-fp") {
         set_text(doc, fp, &cert.fingerprint);
+    }
+}
+
+/// Toggles `#devtools`'s `.open` class, writes the message count into the
+/// tab title and rebuilds the `.console-line`s of `#dt-console` from
+/// [`ChromeConsoleModel::lines`] (UX-CHROME-PANELS).
+fn bind_console(doc: &mut Document, console: &ChromeConsoleModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::DEVTOOLS) else { return };
+    set_class_token(doc, panel, "open", console.open);
+    if let Some(title) = doc.find_by_id(crate::ids::DT_CONSOLE_TITLE) {
+        set_text(doc, title, &format!("Console ({})", console.total));
+    }
+    let Some(list) = doc.find_by_id(crate::ids::DT_CONSOLE) else { return };
+    remove_children_with_class(doc, list, "console-line");
+    for line in &console.lines {
+        let node = doc.create_element(QualName::html("div"));
+        let class = match line.level {
+            1 => "console-line warn",
+            2 => "console-line error",
+            _ => "console-line",
+        };
+        set_attr(doc, node, "class", class);
+        let text = doc.create_element(QualName::html("span"));
+        append_text(doc, text, &line.text);
+        attach_child(doc, node, text);
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#networkPanel`'s `.open` class, writes the request count into the
+/// tab title and rebuilds the `.net-row`s of `#dt-network` from
+/// [`ChromeNetworkModel::rows`] (UX-CHROME-PANELS).
+fn bind_network(doc: &mut Document, network: &ChromeNetworkModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::NETWORK_PANEL) else { return };
+    set_class_token(doc, panel, "open", network.open);
+    if let Some(title) = doc.find_by_id(crate::ids::DT_NETWORK_TITLE) {
+        set_text(doc, title, &format!("Network ({})", network.total));
+    }
+    let Some(list) = doc.find_by_id(crate::ids::DT_NETWORK) else { return };
+    bind_net_rows(doc, list, &network.rows);
+}
+
+/// Rebuilds the `.net-row`s of `list` from `rows` (shared by `#dt-network` and
+/// the inspector's Network tab).
+fn bind_net_rows(doc: &mut Document, list: NodeId, rows: &[ChromeNetworkRowModel]) {
+    remove_children_with_class(doc, list, "net-row");
+    for row in rows {
+        let node = doc.create_element(QualName::html("div"));
+        let class = if row.blocked {
+            "net-row blocked"
+        } else if row.failed {
+            "net-row failed"
+        } else {
+            "net-row"
+        };
+        set_attr(doc, node, "class", class);
+        let status_class = match row.status_class {
+            2 => "net-status status-badge s2",
+            3 => "net-status status-badge s3",
+            4 => "net-status status-badge s4",
+            _ => "net-status status-badge",
+        };
+        for (class, text) in [
+            ("net-method", &row.method),
+            (status_class, &row.status),
+            ("net-time", &row.time),
+            ("net-url", &row.url),
+        ] {
+            let cell = doc.create_element(QualName::html("span"));
+            set_attr(doc, cell, "class", class);
+            append_text(doc, cell, text);
+            attach_child(doc, node, cell);
+        }
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#inspPanel`'s `.open` class, marks the active tab button, writes
+/// the pinned element's label / `NodeId` / placeholder / scroll indicator and
+/// rebuilds the `.insp-row`s of `#inspRows` and the `.net-row`s of `#inspNet`
+/// (UX-CHROME-PANELS).
+fn bind_inspector(doc: &mut Document, insp: &ChromeInspectorModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::INSP_PANEL) else { return };
+    set_class_token(doc, panel, "open", insp.open);
+    for (i, id) in [
+        crate::ids::INSP_TAB_ELEMENTS,
+        crate::ids::INSP_TAB_STYLES,
+        crate::ids::INSP_TAB_COMPUTED,
+        crate::ids::INSP_TAB_NETWORK,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if let Some(tab) = doc.find_by_id(id) {
+            set_class_token(doc, tab, "active", usize::from(insp.tab) == i);
+        }
+    }
+    for (id, value) in [
+        (crate::ids::INSP_LABEL, &insp.label),
+        (crate::ids::INSP_NODE, &insp.node),
+        (crate::ids::INSP_HINT, &insp.hint),
+        (crate::ids::INSP_POS, &insp.position),
+    ] {
+        if let Some(n) = doc.find_by_id(id) {
+            set_text(doc, n, value);
+        }
+    }
+    if let Some(list) = doc.find_by_id(crate::ids::INSP_NET) {
+        bind_net_rows(doc, list, &insp.net_rows);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::INSP_ROWS) else { return };
+    remove_children_with_class(doc, list, "insp-row");
+    for row in &insp.rows {
+        let node = doc.create_element(QualName::html("div"));
+        let class = match row.kind {
+            1 => "insp-row insp-sel",
+            2 => "insp-row insp-sep",
+            _ => "insp-row",
+        };
+        set_attr(doc, node, "class", class);
+        if row.kind != 2 {
+            let key = doc.create_element(QualName::html("span"));
+            set_attr(doc, key, "class", "insp-key");
+            let key_text = if row.kind == 0 { format!("{}:", row.key) } else { row.key.clone() };
+            append_text(doc, key, &key_text);
+            attach_child(doc, node, key);
+            if row.kind == 0 {
+                let val = doc.create_element(QualName::html("span"));
+                set_attr(doc, val, "class", "insp-val");
+                append_text(doc, val, &row.value);
+                attach_child(doc, node, val);
+            }
+        }
+        attach_child(doc, list, node);
+    }
+}
+
+
+/// Toggles `#focusTimer`'s `.open` class, writes the countdown into
+/// `#focusTime`, swaps the play/pause icon and shows `#focusDone` once the
+/// session is complete (UX-CHROME-PANELS). Only the `.open`/`.show` classes
+/// are touched: the design's `body.focus-mode` also hides the sidebar and
+/// toolbar, which would desync the shell's page viewport.
+fn bind_focus(doc: &mut Document, focus: &ChromeFocusModel) {
+    let Some(pill) = doc.find_by_id(crate::ids::FOCUS_TIMER) else { return };
+    set_class_token(doc, pill, "open", focus.active);
+    if let Some(n) = doc.find_by_id(crate::ids::FOCUS_TIME) {
+        let label = if focus.active { focus.label.as_str() } else { "25:00" };
+        set_text(doc, n, label);
+    }
+    if let Some(icon) = doc.find_by_id(crate::ids::FOCUS_TOGGLE_ICON) {
+        set_attr(doc, icon, "href", if focus.running { "#i-pause" } else { "#i-play" });
+    }
+    if let Some(done) = doc.find_by_id(crate::ids::FOCUS_DONE) {
+        set_class_token(doc, done, "show", focus.active && focus.finished);
+    }
+}
+
+/// Toggles `#pipCard`'s `.open`/`.playing` classes, places it at the card's
+/// position and writes the title and poster (UX-CHROME-PANELS).
+fn bind_pip(doc: &mut Document, pip: &ChromePipModel) {
+    let Some(root) = doc.find_by_id(crate::ids::PIP_CARD) else { return };
+    set_class_token(doc, root, "open", pip.open);
+    if !pip.open {
+        return;
+    }
+    set_class_token(doc, root, "playing", pip.playing);
+    set_attr(doc, root, "style", &format!("left:{}px;top:{}px", pip.x, pip.y));
+    if let Some(n) = doc.find_by_id(crate::ids::PIP_TITLE) {
+        let title = if pip.title.is_empty() { "Picture-in-Picture" } else { pip.title.as_str() };
+        set_text(doc, n, title);
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::PIP_POSTER) {
+        set_class_token(doc, n, "empty", pip.poster.is_empty());
+        if !pip.poster.is_empty() {
+            set_attr(doc, n, "src", &pip.poster);
+        }
+    }
+}
+
+/// Toggles `#tabCtxMenu`'s `.open` class, places it at the clamped anchor and
+/// flips the Pin/Collapse row wording (UX-CHROME-PANELS).
+fn bind_tab_ctx(doc: &mut Document, menu: &ChromeTabCtxModel) {
+    let Some(root) = doc.find_by_id(crate::ids::TAB_CTX_MENU) else { return };
+    set_class_token(doc, root, "open", menu.open);
+    if !menu.open {
+        return;
+    }
+    set_attr(doc, root, "style", &format!("left:{}px;top:{}px", menu.x, menu.y));
+    if let Some(n) = doc.find_by_id(crate::ids::TAB_CTX_PIN) {
+        set_text(doc, n, if menu.pinned { "Открепить" } else { "Закрепить" });
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::TAB_CTX_TOGGLE_GROUP) {
+        set_text(doc, n, if menu.collapsed { "Развернуть группу" } else { "Свернуть группу" });
+    }
+}
+
+/// Toggles `#pageCtxMenu`'s `.open` class, places it and rebuilds its rows:
+/// one `use:<i>` button per suggestion, then optionally «Добавить в словарь» /
+/// «Пропустить» behind a separator (UX-CHROME-PANELS).
+fn bind_page_ctx(doc: &mut Document, menu: &ChromePageCtxModel) {
+    let Some(root) = doc.find_by_id(crate::ids::PAGE_CTX_MENU) else { return };
+    set_class_token(doc, root, "open", menu.open);
+    remove_children_with_class(doc, root, "page-ctx-row");
+    if !menu.open {
+        return;
+    }
+    set_attr(doc, root, "style", &format!("left:{}px;top:{}px", menu.x, menu.y));
+    let mut rows: Vec<(String, String, bool)> = menu
+        .suggestions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (format!("use:{i}"), s.clone(), false))
+        .collect();
+    if menu.spell_footer {
+        let sep = !rows.is_empty();
+        rows.push(("add".to_owned(), "Добавить в словарь".to_owned(), sep));
+        rows.push(("ignore".to_owned(), "Пропустить".to_owned(), false));
+    }
+    for (action, label, sep) in rows {
+        let btn = doc.create_element(QualName::html("button"));
+        set_attr(doc, btn, "class", if sep { "page-ctx-row sep" } else { "page-ctx-row" });
+        set_attr(doc, btn, "data-page-ctx", &action);
+        append_text(doc, btn, &label);
+        attach_child(doc, root, btn);
+    }
+}
+
+/// Toggles `#noteOverlay`'s `.open` class and writes the note's URL, quoted
+/// selection and comment into the modal body (UX-CHROME-PANELS).
+fn bind_note(doc: &mut Document, note: &ChromeNoteModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::NOTE_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", note.open);
+    for (id, value) in [
+        (crate::ids::NOTE_URL, &note.url),
+        (crate::ids::NOTE_SEL, &note.selection),
+        (crate::ids::NOTE_COMMENT, &note.comment),
+    ] {
+        if let Some(n) = doc.find_by_id(id) {
+            set_text(doc, n, value);
+        }
+    }
+}
+
+/// Toggles `#workspaceBar`'s `.open` class and rebuilds the `.wsb-chip`s of
+/// `#wsbChips` from `workspaces` (UX-CHROME-PANELS).
+fn bind_workspace_bar(doc: &mut Document, open: bool, workspaces: &[ChromeWorkspaceModel]) {
+    let Some(bar) = doc.find_by_id(crate::ids::WORKSPACE_BAR) else { return };
+    set_class_token(doc, bar, "open", open);
+    let Some(list) = doc.find_by_id(crate::ids::WSB_CHIPS) else { return };
+    // Reconciled in place (not cleared and rebuilt): `bind_model` runs on every
+    // chrome relayout, and fresh node ids would dirty a hidden subtree on every
+    // keystroke (BUG-341).
+    reconcile_row_list(doc, list, "wsb-chip", workspaces, build_wsb_chip, update_wsb_chip, None);
+}
+
+fn apply_wsb_chip_attrs(doc: &mut Document, chip: NodeId, ws: &ChromeWorkspaceModel) {
+    set_attr(doc, chip, "class", if ws.active { "wsb-chip active" } else { "wsb-chip" });
+    set_attr(doc, chip, "style", &format!("--ws-color:{}", ws.color));
+}
+
+/// Both buttons carry their own `data-ws-id`: `chrome_action_at` only sees the
+/// `data-action`-carrying node.
+fn build_wsb_chip(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
+    let chip = doc.create_element(QualName::html("div"));
+    apply_wsb_chip_attrs(doc, chip, ws);
+    let name = doc.create_element(QualName::html("button"));
+    set_attr(doc, name, "class", "wsb-name");
+    set_attr(doc, name, "data-action", "select-workspace");
+    set_attr(doc, name, "data-ws-id", &ws.id.to_string());
+    append_text(doc, name, &ws.name);
+    attach_child(doc, chip, name);
+    let del = doc.create_element(QualName::html("button"));
+    set_attr(doc, del, "class", "wsb-del");
+    set_attr(doc, del, "data-action", "delete-workspace");
+    set_attr(doc, del, "data-ws-id", &ws.id.to_string());
+    set_attr(doc, del, "aria-label", "Удалить пространство");
+    append_text(doc, del, "×");
+    attach_child(doc, chip, del);
+    chip
+}
+
+fn update_wsb_chip(doc: &mut Document, chip: NodeId, ws: &ChromeWorkspaceModel) {
+    let children: Vec<NodeId> = doc.get(chip).children.clone();
+    let (Some(&name), Some(&del)) = (children.first(), children.get(1)) else {
+        for child in children {
+            detach_node(doc, child);
+        }
+        let fresh = build_wsb_chip(doc, ws);
+        let kids: Vec<NodeId> = doc.get(fresh).children.clone();
+        for k in kids {
+            attach_child(doc, chip, k);
+        }
+        apply_wsb_chip_attrs(doc, chip, ws);
+        return;
+    };
+    apply_wsb_chip_attrs(doc, chip, ws);
+    let id = ws.id.to_string();
+    set_attr(doc, name, "data-ws-id", &id);
+    set_text(doc, name, &ws.name);
+    set_attr(doc, del, "data-ws-id", &id);
+}
+
+/// Toggles `#privacyPanel`'s `.open` class, writes the blocked/allowed tallies
+/// and the scroll indicator, and rebuilds the `.pv-row`s of `#pvList` from
+/// [`ChromePrivacyModel::rows`] (UX-CHROME-PANELS).
+fn bind_privacy(doc: &mut Document, pv: &ChromePrivacyModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::PRIVACY_PANEL) else { return };
+    set_class_token(doc, panel, "open", pv.open);
+    if let Some(n) = doc.find_by_id(crate::ids::PV_BLOCKED) {
+        set_text(doc, n, &format!("{} blocked", pv.blocked));
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::PV_ALLOWED) {
+        set_text(doc, n, &format!("{} allowed", pv.allowed));
+    }
+    if let Some(n) = doc.find_by_id(crate::ids::PV_POSITION) {
+        set_text(doc, n, &pv.position);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::PV_LIST) else { return };
+    remove_children_with_class(doc, list, "pv-row");
+    for row in &pv.rows {
+        let node = doc.create_element(QualName::html("div"));
+        set_attr(doc, node, "class", &format!("pv-row {}", row.state));
+        let dot = doc.create_element(QualName::html("span"));
+        set_attr(doc, dot, "class", "pv-dot");
+        attach_child(doc, node, dot);
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "pv-text");
+        for (class, value) in [("pv-host", &row.host), ("pv-sub", &row.sub)] {
+            let line = doc.create_element(QualName::html("div"));
+            set_attr(doc, line, "class", class);
+            append_text(doc, line, value);
+            attach_child(doc, text, line);
+        }
+        attach_child(doc, node, text);
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#readLaterPanel`'s `.open` class, writes the saved-page count into
+/// the header and rebuilds the `.rl-row`s of `#rlList` from
+/// [`ChromeReadLaterModel::rows`] (UX-CHROME-PANELS).
+fn bind_read_later(doc: &mut Document, rl: &ChromeReadLaterModel) {
+    let Some(panel) = doc.find_by_id(crate::ids::READ_LATER_PANEL) else { return };
+    set_class_token(doc, panel, "open", rl.open);
+    if let Some(title) = doc.find_by_id(crate::ids::RL_TITLE) {
+        let text = if rl.total == 0 { "Read Later".to_owned() } else { format!("Read Later ({})", rl.total) };
+        set_text(doc, title, &text);
+    }
+    let Some(list) = doc.find_by_id(crate::ids::RL_LIST) else { return };
+    remove_children_with_class(doc, list, "rl-row");
+    for row in &rl.rows {
+        let node = doc.create_element(QualName::html("div"));
+        set_attr(doc, node, "class", "rl-row");
+        let text = doc.create_element(QualName::html("div"));
+        set_attr(doc, text, "class", "rl-text");
+        // The text block opens the page; it carries the id itself because
+        // `chrome_action_at` only sees the `data-action`-carrying node.
+        set_attr(doc, text, "data-action", "read-later-open");
+        set_attr(doc, text, "data-read-later-id", &row.id.to_string());
+        for (class, value) in [("rl-title", &row.title), ("rl-meta", &row.meta)] {
+            let line = doc.create_element(QualName::html("div"));
+            set_attr(doc, line, "class", class);
+            append_text(doc, line, value);
+            attach_child(doc, text, line);
+        }
+        attach_child(doc, node, text);
+        let badge = doc.create_element(QualName::html("span"));
+        set_attr(doc, badge, "class", if row.read { "rl-badge read" } else { "rl-badge" });
+        append_text(doc, badge, &row.status);
+        attach_child(doc, node, badge);
+        let del = doc.create_element(QualName::html("button"));
+        set_attr(doc, del, "class", "rl-delete");
+        set_attr(doc, del, "data-action", "read-later-delete");
+        set_attr(doc, del, "aria-label", "Удалить");
+        set_attr(doc, del, "data-read-later-id", &row.id.to_string());
+        append_text(doc, del, "×");
+        attach_child(doc, node, del);
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `#shortcutsOverlay`'s `.open` class and rebuilds the `.sc-row`s of
+/// `#scList` from [`ChromeShortcutsModel::rows`] (UX-CHROME-PANELS).
+fn bind_shortcuts(doc: &mut Document, shortcuts: &ChromeShortcutsModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::SHORTCUTS_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", shortcuts.open);
+    let Some(list) = doc.find_by_id(crate::ids::SC_LIST) else { return };
+    remove_children_with_class(doc, list, "sc-row");
+    for row in &shortcuts.rows {
+        let node = doc.create_element(QualName::html("div"));
+        set_attr(doc, node, "class", if row.rebinding { "sc-row rebinding" } else { "sc-row" });
+        set_attr(doc, node, "data-action", "rebind-shortcut");
+        set_attr(doc, node, "data-sc-index", &row.index.to_string());
+        let label = doc.create_element(QualName::html("span"));
+        set_attr(doc, label, "class", "sc-label");
+        append_text(doc, label, &row.label);
+        attach_child(doc, node, label);
+        let key = doc.create_element(QualName::html("span"));
+        set_attr(doc, key, "class", "sc-key");
+        append_text(doc, key, &row.binding);
+        attach_child(doc, node, key);
+        attach_child(doc, list, node);
+    }
+}
+
+/// Toggles `.open` on both profile dropdowns (`#profileMenu` in the vertical
+/// sidebar, `#profileMenuH` in the horizontal bar) and marks the item of the
+/// active profile `.active` (UX-CHROME-PANELS).
+fn bind_profile_menu(doc: &mut Document, model: &ChromeModel) {
+    for id in [crate::ids::PROFILE_MENU, crate::ids::PROFILE_MENU_H] {
+        let Some(menu) = doc.find_by_id(id) else { continue };
+        set_class_token(doc, menu, "open", model.profile_menu_open);
+        for item in find_descendants_by_class(doc, menu, "pm-item") {
+            let on = doc.get(item).get_attr("data-profile") == model.profile_slug.as_deref();
+            set_class_token(doc, item, "active", on);
+        }
+    }
+}
+
+/// Toggles `#accessOverlay`'s `.open` class, moves `.active` between the pills
+/// of `#acFontPills`/`#acCursorPills` and flips the two `.toggle`s' `.on`
+/// (UX-CHROME-PANELS).
+fn bind_access(doc: &mut Document, access: &ChromeAccessModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::ACCESS_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", access.open);
+    for (id, value) in [
+        (crate::ids::AC_FONT_PILLS, access.font_value.as_str()),
+        (crate::ids::AC_CURSOR_PILLS, access.cursor_value.as_str()),
+    ] {
+        let Some(group) = doc.find_by_id(id) else { continue };
+        for pill in find_descendants_by_class(doc, group, "ac-pill") {
+            let on = doc.get(pill).get_attr("data-value") == Some(value);
+            set_class_token(doc, pill, "active", on);
+        }
+    }
+    for (id, on) in [
+        (crate::ids::AC_MOTION_TOGGLE, access.reduced_motion),
+        (crate::ids::AC_COLORS_TOGGLE, access.forced_colors),
+    ] {
+        if let Some(t) = doc.find_by_id(id) {
+            set_class_token(doc, t, "on", on);
+        }
     }
 }
 
@@ -1283,9 +2377,12 @@ fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
 
 /// Toggles `#downloadsPanel`'s `.open` class and rebuilds `.dl-card` rows
 /// from `downloads` (CC-9).
-fn bind_downloads(doc: &mut Document, open: bool, downloads: &[ChromeDownloadModel]) {
+fn bind_downloads(doc: &mut Document, open: bool, downloads: &[ChromeDownloadModel], clearable: bool) {
     let Some(panel) = doc.find_by_id(crate::ids::DOWNLOADS_PANEL) else { return };
     set_class_token(doc, panel, "open", open);
+    if let Some(header) = find_by_class(doc, "dl-header") {
+        set_class_token(doc, header, "has-finished", clearable);
+    }
     let Some(list) = find_by_class(doc, "dl-list") else { return };
     remove_children_with_class(doc, list, "dl-card");
     for d in downloads {
@@ -1326,6 +2423,22 @@ fn build_dl_card(doc: &mut Document, d: &ChromeDownloadModel) -> NodeId {
         set_attr(doc, fill, "style", &format!("width:{}%", (fraction.clamp(0.0, 1.0) * 100.0)));
         attach_child(doc, track, fill);
         attach_child(doc, card, track);
+    }
+
+    if !d.actions.is_empty() {
+        let actions = doc.create_element(QualName::html("div"));
+        set_attr(doc, actions, "class", "dl-actions");
+        for action in &d.actions {
+            let (icon, label) = action.icon_and_label();
+            let btn = doc.create_element(QualName::html("button"));
+            set_attr(doc, btn, "data-dl", action.attr());
+            // Own copy of the id: the hit path is read button-first.
+            set_attr(doc, btn, "data-dl-id", &d.id.to_string());
+            append_icon(doc, btn, icon);
+            append_text(doc, btn, label);
+            attach_child(doc, actions, btn);
+        }
+        attach_child(doc, card, actions);
     }
 
     card
@@ -1461,6 +2574,14 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     if let Some(input) = doc.find_by_id(crate::ids::OMNI_INPUT) {
         set_attr(doc, input, "value", &omnibox.value);
     }
+    if let Some(btn) = doc.find_by_id(crate::ids::ZOOM_BTN) {
+        set_class_token(doc, btn, "show", omnibox.zoom_percent.is_some());
+    }
+    if let (Some(label), Some(percent)) =
+        (doc.find_by_id(crate::ids::ZOOM_LABEL), omnibox.zoom_percent)
+    {
+        set_text(doc, label, &format!("{percent}%"));
+    }
     let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
     set_class_token(doc, warn, "show", omnibox.warning.is_some());
     if let Some(message) = &omnibox.warning {
@@ -1575,7 +2696,18 @@ fn apply_tab_row_attrs(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     set_attr(doc, row, "class", &class);
     set_attr(doc, row, "data-tab-id", &tab.id.to_string());
     set_attr(doc, row, "aria-selected", if tab.active { "true" } else { "false" });
+    // The asset indents one nesting level through `.child`; tree mode carries
+    // its own margin, `TREE_INDENT_PX` per level.
+    match tab.tree {
+        Some(t) if t.depth > 0 => {
+            set_attr(doc, row, "style", &format!("margin-left:{}px", t.depth * TREE_INDENT_PX));
+        }
+        _ => remove_attr(doc, row, "style"),
+    }
 }
+
+/// Indent per tree level in the sidebar list, CSS px (as `.tab-row.child`).
+const TREE_INDENT_PX: usize = 12;
 
 /// Builds `row`'s children fresh (tree-line? / stripe? / fav / title /
 /// badge-or-close) — assumes `row` currently has none. Shared by
@@ -1585,6 +2717,16 @@ fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMod
         let tree_line = doc.create_element(QualName::html("span"));
         set_attr(doc, tree_line, "class", "tree-line");
         attach_child(doc, row, tree_line);
+    }
+
+    if let Some(expanded) = tab.tree.and_then(|t| t.expanded) {
+        let arrow = doc.create_element(QualName::html("button"));
+        set_attr(doc, arrow, "class", "tab-arrow");
+        set_attr(doc, arrow, "data-action", "toggle-tab-subtree");
+        set_attr(doc, arrow, "data-tab-id", &tab.id.to_string());
+        set_attr(doc, arrow, "aria-expanded", if expanded { "true" } else { "false" });
+        append_text(doc, arrow, arrow_glyph(expanded));
+        attach_child(doc, row, arrow);
     }
 
     if let Some(group) = &tab.group {
@@ -1603,8 +2745,8 @@ fn populate_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMod
     }
 
     let fav = doc.create_element(QualName::html("span"));
-    set_attr(doc, fav, "class", "tab-fav");
-    append_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    append_text(doc, fav, &fav_text(tab));
     attach_child(doc, row, fav);
 
     let title = doc.create_element(QualName::html("span"));
@@ -1656,6 +2798,18 @@ fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     if has_tree_line {
         idx += 1;
     }
+    let arrow_state = tab.tree.and_then(|t| t.expanded);
+    let has_arrow = children.get(idx).is_some_and(|&c| has_class(doc, c, "tab-arrow"));
+    if has_arrow != arrow_state.is_some() {
+        rebuild_tab_row_children(doc, row, tab);
+        return;
+    }
+    if let Some(expanded) = arrow_state {
+        set_attr(doc, children[idx], "data-tab-id", &tab.id.to_string());
+        set_attr(doc, children[idx], "aria-expanded", if expanded { "true" } else { "false" });
+        set_text(doc, children[idx], arrow_glyph(expanded));
+        idx += 1;
+    }
     let has_group_stripe = children.get(idx).is_some_and(|&c| has_class(doc, c, "group-stripe"));
     if has_group_stripe != tab.group.is_some() {
         rebuild_tab_row_children(doc, row, tab);
@@ -1679,7 +2833,8 @@ fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
         rebuild_tab_row_children(doc, row, tab);
         return;
     };
-    set_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    set_text(doc, fav, &fav_text(tab));
     set_text(doc, title, &tab.title);
     idx += 2;
 
@@ -1690,6 +2845,10 @@ fn update_tab_row(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
         }
         _ => rebuild_tab_row_children(doc, row, tab),
     }
+}
+
+fn arrow_glyph(expanded: bool) -> &'static str {
+    if expanded { "\u{25BE}" } else { "\u{25B8}" }
 }
 
 fn rebuild_tab_row_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
@@ -1792,8 +2951,8 @@ fn apply_hbar_tab_attrs(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
 
 fn populate_hbar_tab_children(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     let fav = doc.create_element(QualName::html("span"));
-    set_attr(doc, fav, "class", "tab-fav");
-    append_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    append_text(doc, fav, &fav_text(tab));
     attach_child(doc, row, fav);
 
     let title = doc.create_element(QualName::html("span"));
@@ -1815,7 +2974,8 @@ fn update_hbar_tab(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
         populate_hbar_tab_children(doc, row, tab);
         return;
     };
-    set_text(doc, fav, &first_letter(&tab.title));
+    set_attr(doc, fav, "class", fav_class(tab));
+    set_text(doc, fav, &fav_text(tab));
     set_text(doc, title, &tab.title);
 }
 
@@ -1845,6 +3005,15 @@ fn build_hbar_ws_pill(doc: &mut Document, ws: &ChromeWorkspaceModel) -> NodeId {
 fn update_hbar_ws_pill(doc: &mut Document, pill: NodeId, ws: &ChromeWorkspaceModel) {
     apply_hbar_ws_pill_attrs(doc, pill, ws);
     set_text(doc, pill, &ws.name);
+}
+
+/// Class of the `.tab-fav` slot: the asset's `.spinner` while loading.
+fn fav_class(tab: &ChromeTabModel) -> &'static str {
+    if tab.loading { "spinner" } else { "tab-fav" }
+}
+
+fn fav_text(tab: &ChromeTabModel) -> String {
+    if tab.loading { String::new() } else { first_letter(&tab.title) }
 }
 
 fn first_letter(s: &str) -> String {
@@ -2140,8 +3309,8 @@ mod tests {
         let mut doc = parse_asset();
         let tab = |title: &str| {
             model_with_tabs(vec![ChromeTabModel {
-                id: 1, title: title.to_owned(), active: true, sleeping: false,
-                is_child: false, container_color: None, group: None,
+                id: 1, title: title.to_owned(), active: true, sleeping: false, loading: false,
+                is_child: false, tree: None, container_color: None, group: None,
             }])
         };
         bind_model_tracked(&mut doc, &tab("Alpha"));
@@ -2196,8 +3365,8 @@ mod tests {
     fn bind_model_tracked_reports_nothing_touched_for_an_unchanged_model() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
-            is_child: false, container_color: None, group: None,
+            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None, group: None,
             }]);
         let first = bind_model_tracked(&mut doc, &model);
         assert!(!first.is_empty(), "the very first bind populates the tab list — must report touched nodes");
@@ -2237,18 +3406,18 @@ mod tests {
     fn bind_model_tracked_reports_the_container_when_a_tab_is_added() {
         let mut doc = parse_asset();
         let one_tab = model_with_tabs(vec![ChromeTabModel {
-            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
-            is_child: false, container_color: None, group: None,
+            id: 1, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None, group: None,
             }]);
         bind_model_tracked(&mut doc, &one_tab);
         let two_tabs = model_with_tabs(vec![
             ChromeTabModel {
-                id: 1, title: "Alpha".to_owned(), active: true, sleeping: false,
-                is_child: false, container_color: None, group: None,
+                id: 1, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
+                is_child: false, tree: None, container_color: None, group: None,
             },
             ChromeTabModel {
-                id: 2, title: "Beta".to_owned(), active: false, sleeping: false,
-                is_child: false, container_color: None, group: None,
+                id: 2, title: "Beta".to_owned(), active: false, sleeping: false, loading: false,
+                is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         let touched = bind_model_tracked(&mut doc, &two_tabs);
@@ -2293,12 +3462,12 @@ mod tests {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
             ChromeTabModel {
-                id: 7, title: "Alpha".to_owned(), active: true, sleeping: false,
-                is_child: false, container_color: None, group: None,
+                id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false,
+                is_child: false, tree: None, container_color: None, group: None,
             },
             ChromeTabModel {
-                id: 9, title: "Beta".to_owned(), active: false, sleeping: true,
-                is_child: false, container_color: None, group: None,
+                id: 9, title: "Beta".to_owned(), active: false, sleeping: true, loading: false,
+                is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2336,9 +3505,9 @@ mod tests {
     fn rebinding_unchanged_tabs_preserves_row_and_descendant_node_ids() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
-            ChromeTabModel { id: 9, title: "Beta".to_owned(), active: false, sleeping: true, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 9, title: "Beta".to_owned(), active: false, sleeping: true, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2368,7 +3537,7 @@ mod tests {
     fn rebinding_a_changed_title_keeps_the_row_id_and_updates_text_in_place() {
         let mut doc = parse_asset();
         let mut model = model_with_tabs(vec![
-            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 7, title: "Alpha".to_owned(), active: true, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2399,9 +3568,9 @@ mod tests {
     fn shrinking_the_tab_list_detaches_the_trailing_row_and_keeps_the_survivor_id() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
-            ChromeTabModel { id: 2, title: "Two".to_owned(), active: false, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 2, title: "Two".to_owned(), active: false, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2422,7 +3591,7 @@ mod tests {
     fn toggling_sleeping_keeps_the_row_id_and_swaps_badge_for_close_button() {
         let mut doc = parse_asset();
         let mut model = model_with_tabs(vec![
-            ChromeTabModel { id: 1, title: "One".to_owned(), active: false, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: false, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2437,6 +3606,28 @@ mod tests {
         let children = doc.get(row_after).children.clone();
         assert!(children.iter().any(|&c| has_class(&doc, c, "tab-badge")));
         assert!(!children.iter().any(|&c| has_class(&doc, c, "tab-close")));
+    }
+
+    /// UX-LOADING: `loading` turns the active tab's fav slot into `.spinner`
+    /// and the reload button into the stop button; clearing it restores both.
+    #[test]
+    fn loading_tab_shows_spinner_and_stop_button() {
+        let mut doc = parse_asset();
+        let mut model = model_with_tabs(vec![
+            ChromeTabModel { id: 1, title: "One".to_owned(), active: true, sleeping: false, loading: true, is_child: false, tree: None, container_color: None, group: None },
+        ]);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        let row = doc.get(container).children.iter().copied().find(|&c| has_class(&doc, c, "tab-row")).unwrap();
+        let fav = doc.get(row).children.iter().copied().find(|&c| has_class(&doc, c, "spinner"));
+        assert!(fav.is_some(), "loading tab must carry a .spinner");
+        let btn = find_by_attr(&doc, "data-action", "reload").expect("asset has the reload button");
+        assert!(has_class(&doc, btn, "loading"));
+
+        model.tabs[0].loading = false;
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, fav.unwrap(), "tab-fav"));
+        assert!(!has_class(&doc, btn, "loading"));
     }
 
     /// Same identity-preservation guarantee for the workspace switcher.
@@ -2494,8 +3685,8 @@ mod tests {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
             ChromeTabModel {
-                id: 3, title: "Gamma".to_owned(), active: true, sleeping: false,
-                is_child: false, container_color: None, group: None,
+                id: 3, title: "Gamma".to_owned(), active: true, sleeping: false, loading: false,
+                is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2551,8 +3742,8 @@ mod tests {
     fn child_tab_gets_the_child_class_tree_line_and_container_stripe() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 11, title: "Reply".to_owned(), active: false, sleeping: false,
-            is_child: true, container_color: Some("#1F9D55".to_owned()), group: None,
+            id: 11, title: "Reply".to_owned(), active: false, sleeping: false, loading: false,
+            is_child: true, tree: None, container_color: Some("#1F9D55".to_owned()), group: None,
             }]);
         bind_model(&mut doc, &model);
         let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
@@ -2576,6 +3767,64 @@ mod tests {
         assert_eq!(doc.get(stripe).get_attr("style"), Some("background:#1F9D55"));
     }
 
+    fn tree_tab(id: usize, depth: usize, expanded: Option<bool>) -> ChromeTabModel {
+        ChromeTabModel {
+            id, title: format!("T{id}"), active: false, sleeping: false, loading: false,
+            is_child: depth > 0, tree: Some(ChromeTabTree { depth, expanded }),
+            container_color: None, group: None,
+        }
+    }
+
+    fn first_tab_rows(doc: &Document) -> Vec<NodeId> {
+        let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
+        doc.get(container).children.iter().copied().filter(|&c| has_class(doc, c, "tab-row")).collect()
+    }
+
+    /// UX-CHROME-PANELS 14: tree mode renders a collapse arrow only on a
+    /// parent row and indents deeper levels by `TREE_INDENT_PX` each.
+    #[test]
+    fn tree_rows_carry_arrow_on_parents_and_indent_by_depth() {
+        let mut doc = parse_asset();
+        let model = model_with_tabs(vec![
+            tree_tab(1, 0, Some(true)),
+            tree_tab(2, 1, Some(false)),
+            tree_tab(3, 2, None),
+        ]);
+        bind_model(&mut doc, &model);
+        let rows = first_tab_rows(&doc);
+        assert_eq!(rows.len(), 3);
+        let arrow = |row: NodeId| doc.get(row).children.iter().copied().find(|&c| has_class(&doc, c, "tab-arrow"));
+        let a1 = arrow(rows[0]).expect("parent row has an arrow");
+        assert_eq!(doc.get(a1).get_attr("data-action"), Some("toggle-tab-subtree"));
+        assert_eq!(doc.get(a1).get_attr("data-tab-id"), Some("1"));
+        assert_eq!(doc.get(a1).get_attr("aria-expanded"), Some("true"));
+        let a2 = arrow(rows[1]).expect("collapsed parent has an arrow");
+        assert_eq!(doc.get(a2).get_attr("aria-expanded"), Some("false"));
+        assert!(arrow(rows[2]).is_none(), "a leaf has no arrow");
+        assert_eq!(doc.get(rows[0]).get_attr("style"), None);
+        assert_eq!(doc.get(rows[1]).get_attr("style"), Some("margin-left:12px"));
+        assert_eq!(doc.get(rows[2]).get_attr("style"), Some("margin-left:24px"));
+    }
+
+    /// Folding a subtree flips the arrow in place on the next bind, and
+    /// leaving tree mode drops the arrow and the indent again.
+    #[test]
+    fn tree_row_updates_in_place_when_folded_and_when_mode_ends() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &model_with_tabs(vec![tree_tab(1, 0, Some(true)), tree_tab(2, 1, None)]));
+        let row = first_tab_rows(&doc)[0];
+        bind_model(&mut doc, &model_with_tabs(vec![tree_tab(1, 0, Some(false))]));
+        let rows = first_tab_rows(&doc);
+        assert_eq!(rows, vec![row], "the parent row keeps its node");
+        let arrow = doc.get(row).children.iter().copied().find(|&c| has_class(&doc, c, "tab-arrow")).unwrap();
+        assert_eq!(doc.get(arrow).get_attr("aria-expanded"), Some("false"));
+        let flat = ChromeTabModel { tree: None, ..tree_tab(1, 0, None) };
+        bind_model(&mut doc, &model_with_tabs(vec![flat]));
+        let row = first_tab_rows(&doc)[0];
+        assert!(!doc.get(row).children.iter().any(|&c| has_class(&doc, c, "tab-arrow")));
+        assert_eq!(doc.get(row).get_attr("style"), None);
+    }
+
     /// BUG-409: a grouped tab renders `.group-stripe` before `.container-stripe`
     /// (matching `populate_tab_row_children`'s order), coloured per
     /// `ChromeTabGroup::color` and titled with the group name for the sidebar's
@@ -2584,8 +3833,8 @@ mod tests {
     fn grouped_tab_renders_a_group_stripe_before_the_container_stripe() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 3, title: "Roadmap".to_owned(), active: false, sleeping: false,
-            is_child: false, container_color: Some("#1F9D55".to_owned()),
+            id: 3, title: "Roadmap".to_owned(), active: false, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: Some("#1F9D55".to_owned()),
             group: Some(ChromeTabGroup { color: "#8B5CF6".to_owned(), name: "Проект Х".to_owned(), collapsed: false }),
         }]);
         bind_model(&mut doc, &model);
@@ -2614,8 +3863,8 @@ mod tests {
     fn collapsed_group_stripe_title_hints_at_the_fold() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 4, title: "Chip".to_owned(), active: false, sleeping: false,
-            is_child: false, container_color: None,
+            id: 4, title: "Chip".to_owned(), active: false, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None,
             group: Some(ChromeTabGroup { color: "#3B82F6".to_owned(), name: "Работа".to_owned(), collapsed: true }),
         }]);
         bind_model(&mut doc, &model);
@@ -2641,8 +3890,8 @@ mod tests {
     fn ungrouped_tab_has_no_group_stripe() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![ChromeTabModel {
-            id: 5, title: "Solo".to_owned(), active: false, sleeping: false,
-            is_child: false, container_color: None, group: None,
+            id: 5, title: "Solo".to_owned(), active: false, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None, group: None,
         }]);
         bind_model(&mut doc, &model);
         let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
@@ -2664,8 +3913,8 @@ mod tests {
     fn rebinding_a_tab_that_joins_a_group_updates_row_in_place() {
         let mut doc = parse_asset();
         let ungrouped = model_with_tabs(vec![ChromeTabModel {
-            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false,
-            is_child: false, container_color: None, group: None,
+            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None, group: None,
         }]);
         bind_model(&mut doc, &ungrouped);
         let container = doc.find_by_id(crate::ids::SB_TABS).expect("asset has #sbTabs");
@@ -2678,8 +3927,8 @@ mod tests {
             .expect("one tab row bound");
 
         let grouped = model_with_tabs(vec![ChromeTabModel {
-            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false,
-            is_child: false, container_color: None,
+            id: 6, title: "Later Group".to_owned(), active: false, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None,
             group: Some(ChromeTabGroup { color: "#EF4444".to_owned(), name: "Red".to_owned(), collapsed: false }),
         }]);
         bind_model(&mut doc, &grouped);
@@ -2704,9 +3953,9 @@ mod tests {
     fn bound_tab_rows_carry_role_tab_and_aria_selected_in_both_layouts() {
         let mut doc = parse_asset();
         let model = model_with_tabs(vec![
-            ChromeTabModel { id: 1, title: "Активная".to_owned(), active: true, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 1, title: "Активная".to_owned(), active: true, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
-            ChromeTabModel { id: 2, title: "Пример".to_owned(), active: false, sleeping: false, is_child: false, container_color: None, group: None,
+            ChromeTabModel { id: 2, title: "Пример".to_owned(), active: false, sleeping: false, loading: false, is_child: false, tree: None, container_color: None, group: None,
             },
         ]);
         bind_model(&mut doc, &model);
@@ -2749,7 +3998,7 @@ mod tests {
     fn omnibox_value_is_written_to_the_input_element() {
         let mut doc = parse_asset();
         let model = ChromeModel {
-            omnibox: OmniboxModel { value: "https://example.com".to_owned(), warning: None },
+            omnibox: OmniboxModel { value: "https://example.com".to_owned(), ..Default::default() },
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -2758,10 +4007,32 @@ mod tests {
     }
 
     #[test]
+    fn omnibox_zoom_indicator_follows_the_model() {
+        let mut doc = parse_asset();
+        let btn = doc.find_by_id(crate::ids::ZOOM_BTN).expect("asset has #zoomBtn");
+        let label = doc.find_by_id(crate::ids::ZOOM_LABEL).expect("asset has #zoomLabel");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
+        let model = ChromeModel {
+            omnibox: OmniboxModel { zoom_percent: Some(150), ..Default::default() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, btn, "show"));
+        let text = match &doc.get(doc.get(label).children[0]).data {
+            NodeData::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(text, "150%");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
+    }
+
+    #[test]
     fn omnibox_warning_shows_the_warn_banner_with_its_message() {
         let mut doc = parse_asset();
         let model = ChromeModel {
-            omnibox: OmniboxModel { value: String::new(), warning: Some("spoof risk".to_owned()) },
+            omnibox: OmniboxModel { value: String::new(), warning: Some("spoof risk".to_owned()), ..Default::default() },
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -2888,7 +4159,9 @@ mod tests {
                 name: "report.pdf".to_owned(),
                 meta: "1.0 MB — идёт загрузка…".to_owned(),
                 progress_fraction: Some(0.5),
+                actions: vec![ChromeDownloadAction::Cancel],
             }],
+            downloads_clearable: true,
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -2907,6 +4180,12 @@ mod tests {
             .and_then(|&track| doc.get(track).children.iter().copied().find(|&c| has_class(&doc, c, "dl-progress-fill")))
             .expect("in-flight entry must render a progress fill");
         assert_eq!(doc.get(fill).get_attr("style"), Some("width:50%"));
+        let header = find_by_class(&doc, "dl-header").expect("asset has .dl-header");
+        assert!(has_class(&doc, header, "has-finished"));
+        let actions = doc.get(cards[0]).children.iter().copied().find(|&c| has_class(&doc, c, "dl-actions")).expect(".dl-actions");
+        let btn = doc.get(actions).children[0];
+        assert_eq!(doc.get(btn).get_attr("data-dl"), Some("cancel"));
+        assert_eq!(doc.get(btn).get_attr("data-dl-id"), Some("1"));
     }
 
     #[test]
@@ -3088,11 +4367,13 @@ mod tests {
                         label: "New Tab".to_owned(),
                         sub_label: "Ctrl+T".to_owned(),
                         selected: true,
+                        index: 0,
                     },
                     ChromePaletteResultModel {
                         label: "New Window".to_owned(),
                         sub_label: "".to_owned(),
                         selected: false,
+                        index: 1,
                     },
                 ],
             },
@@ -3109,6 +4390,8 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(doc.get(rows[0]).get_attr("style"), Some("background:var(--surface-2)"));
         assert_eq!(doc.get(rows[1]).get_attr("style"), None);
+        assert_eq!(doc.get(rows[0]).get_attr("data-cp-index"), Some("0"));
+        assert_eq!(doc.get(rows[1]).get_attr("data-cp-index"), Some("1"));
     }
 
     #[test]
@@ -3120,6 +4403,465 @@ mod tests {
         let list = doc.find_by_id(crate::ids::CP_LIST).expect("asset has #cpList");
         let empty = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "cp-empty"));
         assert!(empty.is_some(), "no results must render the .cp-empty state");
+    }
+
+    #[test]
+    fn console_panel_opens_and_renders_lines() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            console: ChromeConsoleModel {
+                open: true,
+                total: 3,
+                lines: vec![
+                    ChromeConsoleLineModel { level: 0, text: "hello".to_owned() },
+                    ChromeConsoleLineModel { level: 1, text: "careful".to_owned() },
+                    ChromeConsoleLineModel { level: 2, text: "boom".to_owned() },
+                ],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::DEVTOOLS).expect("asset has #devtools");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::DT_CONSOLE_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Console (3)");
+        let list = doc.find_by_id(crate::ids::DT_CONSOLE).expect("list");
+        let lines = find_descendants_by_class(&doc, list, "console-line");
+        assert_eq!(lines.len(), 3);
+        assert!(has_class(&doc, lines[1], "warn"));
+        assert!(has_class(&doc, lines[2], "error"));
+        let span = doc.get(lines[0]).children[0];
+        assert_eq!(text_of(&doc, span), "hello");
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::DEVTOOLS).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::DT_CONSOLE).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "console-line").is_empty());
+    }
+
+    #[test]
+    fn network_panel_opens_and_renders_rows() {
+        let mut doc = parse_asset();
+        let row = |status: &str, class: u8, blocked: bool| ChromeNetworkRowModel {
+            method: "GET".to_owned(),
+            status: status.to_owned(),
+            status_class: class,
+            time: "12 ms".to_owned(),
+            url: "https://example.test/a".to_owned(),
+            blocked,
+            failed: false,
+        };
+        let model = ChromeModel {
+            network: ChromeNetworkModel {
+                open: true,
+                total: 2,
+                rows: vec![row("200", 2, false), row("blocked", 4, true)],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::NETWORK_PANEL).expect("asset has #networkPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::DT_NETWORK_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Network (2)");
+        let list = doc.find_by_id(crate::ids::DT_NETWORK).expect("list");
+        let rows = find_descendants_by_class(&doc, list, "net-row");
+        assert_eq!(rows.len(), 2);
+        assert!(has_class(&doc, rows[1], "blocked"));
+        let badges = find_descendants_by_class(&doc, list, "status-badge");
+        assert!(has_class(&doc, badges[0], "s2"));
+        assert!(has_class(&doc, badges[1], "s4"));
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::NETWORK_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::DT_NETWORK).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "net-row").is_empty());
+    }
+
+    #[test]
+    fn read_later_panel_opens_and_renders_rows() {
+        let mut doc = parse_asset();
+        let row = |id: i64, read: bool| ChromeReadLaterRowModel {
+            id,
+            title: format!("Page {id}"),
+            meta: "example.com  ·  2024-01-15".to_owned(),
+            status: if read { "Read" } else { "Unread" }.to_owned(),
+            read,
+        };
+        let model = ChromeModel {
+            read_later: ChromeReadLaterModel { open: true, total: 2, rows: vec![row(7, false), row(9, true)] },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::READ_LATER_PANEL).expect("asset has #readLaterPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let title = doc.find_by_id(crate::ids::RL_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Read Later (2)");
+        let list = doc.find_by_id(crate::ids::RL_LIST).expect("list");
+        let rows = find_descendants_by_class(&doc, list, "rl-row");
+        assert_eq!(rows.len(), 2);
+        let badges = find_descendants_by_class(&doc, list, "rl-badge");
+        assert!(!has_class(&doc, badges[0], "read"));
+        assert!(has_class(&doc, badges[1], "read"));
+        let del = find_descendants_by_class(&doc, list, "rl-delete");
+        assert_eq!(doc.get(del[1]).get_attr("data-action"), Some("read-later-delete"));
+        assert_eq!(doc.get(del[1]).get_attr("data-read-later-id"), Some("9"));
+        let open = find_descendants_by_class(&doc, list, "rl-text");
+        assert_eq!(doc.get(open[0]).get_attr("data-action"), Some("read-later-open"));
+        assert_eq!(doc.get(open[0]).get_attr("data-read-later-id"), Some("7"));
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::READ_LATER_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::RL_LIST).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "rl-row").is_empty());
+        let title = doc.find_by_id(crate::ids::RL_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Read Later");
+    }
+
+    #[test]
+    fn privacy_panel_opens_and_renders_rows() {
+        let mut doc = parse_asset();
+        let row = |host: &str, state: &str| ChromePrivacyRowModel {
+            host: host.to_owned(),
+            sub: "blocked · ||x^".to_owned(),
+            state: state.to_owned(),
+        };
+        let model = ChromeModel {
+            privacy: ChromePrivacyModel {
+                open: true,
+                blocked: 1,
+                allowed: 2,
+                position: "3/9".to_owned(),
+                rows: vec![row("ads.test", "blocked"), row("cdn.test", "allowed")],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::PRIVACY_PANEL).expect("asset has #privacyPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let blocked = doc.find_by_id(crate::ids::PV_BLOCKED).expect("blocked");
+        assert_eq!(text_of(&doc, blocked), "1 blocked");
+        let allowed = doc.find_by_id(crate::ids::PV_ALLOWED).expect("allowed");
+        assert_eq!(text_of(&doc, allowed), "2 allowed");
+        let pos = doc.find_by_id(crate::ids::PV_POSITION).expect("position");
+        assert_eq!(text_of(&doc, pos), "3/9");
+        let list = doc.find_by_id(crate::ids::PV_LIST).expect("list");
+        let rows = find_descendants_by_class(&doc, list, "pv-row");
+        assert_eq!(rows.len(), 2);
+        assert!(has_class(&doc, rows[0], "blocked"));
+        assert!(has_class(&doc, rows[1], "allowed"));
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::PRIVACY_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+        let list = doc.find_by_id(crate::ids::PV_LIST).expect("list");
+        assert!(find_descendants_by_class(&doc, list, "pv-row").is_empty());
+    }
+
+    #[test]
+    fn workspace_bar_opens_and_renders_chips() {
+        let mut doc = parse_asset();
+        let ws = |id: i64, active: bool| ChromeWorkspaceModel {
+            id,
+            name: format!("WS {id}"),
+            active,
+            color: "#0066FF".to_owned(),
+        };
+        let model = ChromeModel {
+            workspaces: vec![ws(4, true), ws(8, false)],
+            workspace_bar_open: true,
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let bar = doc.find_by_id(crate::ids::WORKSPACE_BAR).expect("asset has #workspaceBar");
+        assert!(has_class(&doc, bar, "open"));
+        let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
+        let chips = find_descendants_by_class(&doc, list, "wsb-chip");
+        assert_eq!(chips.len(), 2);
+        assert!(has_class(&doc, chips[0], "active"));
+        assert!(!has_class(&doc, chips[1], "active"));
+        let dels = find_descendants_by_class(&doc, list, "wsb-del");
+        assert_eq!(doc.get(dels[1]).get_attr("data-action"), Some("delete-workspace"));
+        assert_eq!(doc.get(dels[1]).get_attr("data-ws-id"), Some("8"));
+        let names = find_descendants_by_class(&doc, list, "wsb-name");
+        assert_eq!(doc.get(names[0]).get_attr("data-action"), Some("select-workspace"));
+        assert_eq!(doc.get(names[0]).get_attr("data-ws-id"), Some("4"));
+        assert_eq!(text_of(&doc, names[0]), "WS 4");
+        bind_model(&mut doc, &ChromeModel::default());
+        let bar = doc.find_by_id(crate::ids::WORKSPACE_BAR).expect("bar");
+        assert!(!has_class(&doc, bar, "open"));
+        let list = doc.find_by_id(crate::ids::WSB_CHIPS).expect("chips");
+        assert!(find_descendants_by_class(&doc, list, "wsb-chip").is_empty());
+    }
+
+    #[test]
+    fn pip_card_opens_places_and_toggles_glyph() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            pip: ChromePipModel {
+                open: true,
+                x: 30.0,
+                y: 50.0,
+                playing: true,
+                title: "Clip".to_owned(),
+                poster: "https://e.test/p.png".to_owned(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let root = doc.find_by_id(crate::ids::PIP_CARD).expect("asset has #pipCard");
+        assert!(has_class(&doc, root, "open") && has_class(&doc, root, "playing"));
+        assert_eq!(doc.get(root).get_attr("style"), Some("left:30px;top:50px"));
+        let title = doc.find_by_id(crate::ids::PIP_TITLE).expect("title");
+        assert_eq!(text_of(&doc, title), "Clip");
+        let poster = doc.find_by_id(crate::ids::PIP_POSTER).expect("poster");
+        assert_eq!(doc.get(poster).get_attr("src"), Some("https://e.test/p.png"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, root, "open"));
+    }
+
+    #[test]
+    fn tab_ctx_menu_opens_places_and_flips_labels() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            tab_ctx: ChromeTabCtxModel { open: true, x: 40.0, y: 12.0, pinned: true, collapsed: true },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let root = doc.find_by_id(crate::ids::TAB_CTX_MENU).expect("asset has #tabCtxMenu");
+        assert!(has_class(&doc, root, "open"));
+        assert_eq!(doc.get(root).get_attr("style"), Some("left:40px;top:12px"));
+        let pin = doc.find_by_id(crate::ids::TAB_CTX_PIN).expect("pin row");
+        assert_eq!(text_of(&doc, pin), "Открепить");
+        let grp = doc.find_by_id(crate::ids::TAB_CTX_TOGGLE_GROUP).expect("group row");
+        assert_eq!(text_of(&doc, grp), "Развернуть группу");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, root, "open"));
+    }
+
+    #[test]
+    fn page_ctx_menu_builds_rows() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            page_ctx: ChromePageCtxModel {
+                open: true,
+                x: 10.0,
+                y: 20.0,
+                suggestions: vec!["world".to_owned(), "would".to_owned()],
+                spell_footer: true,
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let root = doc.find_by_id(crate::ids::PAGE_CTX_MENU).expect("asset has #pageCtxMenu");
+        assert!(has_class(&doc, root, "open"));
+        assert_eq!(doc.get(root).get_attr("style"), Some("left:10px;top:20px"));
+        assert_eq!(find_descendants_by_class(&doc, root, "page-ctx-row").len(), 4);
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, root, "open"));
+        assert!(find_descendants_by_class(&doc, root, "page-ctx-row").is_empty());
+    }
+
+    #[test]
+    fn note_modal_opens_and_shows_fields() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            note: ChromeNoteModel {
+                open: true,
+                url: "https://a.test/p".to_owned(),
+                selection: "quoted".to_owned(),
+                comment: "mine".to_owned(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::NOTE_OVERLAY).expect("asset has #noteOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let url = doc.find_by_id(crate::ids::NOTE_URL).expect("url");
+        assert_eq!(text_of(&doc, url), "https://a.test/p");
+        let sel = doc.find_by_id(crate::ids::NOTE_SEL).expect("selection");
+        assert_eq!(text_of(&doc, sel), "quoted");
+        let cmt = doc.find_by_id(crate::ids::NOTE_COMMENT).expect("comment");
+        assert_eq!(text_of(&doc, cmt), "mine");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, overlay, "open"));
+    }
+
+    #[test]
+    fn focus_timer_shows_countdown_icon_and_done_banner() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            focus: ChromeFocusModel { active: true, running: true, finished: false, label: "24:59".to_owned() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let pill = doc.find_by_id(crate::ids::FOCUS_TIMER).expect("asset has the focus pill");
+        assert!(has_class(&doc, pill, "open"));
+        let time = doc.find_by_id(crate::ids::FOCUS_TIME).expect("time");
+        assert_eq!(text_of(&doc, time), "24:59");
+        let icon = doc.find_by_id(crate::ids::FOCUS_TOGGLE_ICON).expect("icon");
+        assert_eq!(doc.get(icon).get_attr("href"), Some("#i-pause"));
+        let done = doc.find_by_id(crate::ids::FOCUS_DONE).expect("done");
+        assert!(!has_class(&doc, done, "show"));
+        let model = ChromeModel {
+            focus: ChromeFocusModel { active: true, running: false, finished: true, label: "00:00".to_owned() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert_eq!(doc.get(icon).get_attr("href"), Some("#i-play"));
+        assert!(has_class(&doc, done, "show"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, pill, "open"));
+        assert!(!has_class(&doc, done, "show"));
+    }
+
+    #[test]
+    fn inspector_panel_binds_tab_rows_and_network() {
+        let mut doc = parse_asset();
+        let row = |kind: u8, key: &str, value: &str| ChromeInspectorRowModel {
+            kind,
+            key: key.to_owned(),
+            value: value.to_owned(),
+        };
+        let model = ChromeModel {
+            inspector: ChromeInspectorModel {
+                open: true,
+                tab: 1,
+                label: "div#a".to_owned(),
+                node: "NodeId(3)".to_owned(),
+                rows: vec![row(1, ".a", ""), row(0, "color", "red"), row(2, "", "")],
+                position: "3/30".to_owned(),
+                ..ChromeInspectorModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::INSP_PANEL).expect("asset has #inspPanel");
+        assert!(has_class(&doc, panel, "open"));
+        let styles = doc.find_by_id(crate::ids::INSP_TAB_STYLES).expect("styles tab");
+        assert!(has_class(&doc, styles, "active"));
+        let elements = doc.find_by_id(crate::ids::INSP_TAB_ELEMENTS).expect("elements tab");
+        assert!(!has_class(&doc, elements, "active"));
+        let label = doc.find_by_id(crate::ids::INSP_LABEL).expect("label");
+        assert_eq!(text_of(&doc, label), "div#a");
+        let list = doc.find_by_id(crate::ids::INSP_ROWS).expect("rows");
+        let rows = find_descendants_by_class(&doc, list, "insp-row");
+        assert_eq!(rows.len(), 3);
+        assert!(has_class(&doc, rows[0], "insp-sel"));
+        assert!(has_class(&doc, rows[2], "insp-sep"));
+        let keys = find_descendants_by_class(&doc, list, "insp-key");
+        assert_eq!(text_of(&doc, keys[1]), "color:");
+        // Network tab: request rows go to #inspNet, element rows are cleared.
+        let net = ChromeNetworkRowModel {
+            method: "GET".to_owned(),
+            status: "200".to_owned(),
+            status_class: 2,
+            time: "5 ms".to_owned(),
+            url: "https://a.test/".to_owned(),
+            blocked: false,
+            failed: false,
+        };
+        let model = ChromeModel {
+            inspector: ChromeInspectorModel {
+                open: true,
+                tab: 3,
+                net_rows: vec![net],
+                ..ChromeInspectorModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::INSP_ROWS).expect("rows");
+        assert!(find_descendants_by_class(&doc, list, "insp-row").is_empty());
+        let netlist = doc.find_by_id(crate::ids::INSP_NET).expect("net");
+        assert_eq!(find_descendants_by_class(&doc, netlist, "net-row").len(), 1);
+        bind_model(&mut doc, &ChromeModel::default());
+        let panel = doc.find_by_id(crate::ids::INSP_PANEL).expect("panel");
+        assert!(!has_class(&doc, panel, "open"));
+    }
+
+    #[test]
+    fn profile_menus_open_and_mark_active_item() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            profile_menu_open: true,
+            profile_slug: Some("work".to_owned()),
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        for id in [crate::ids::PROFILE_MENU, crate::ids::PROFILE_MENU_H] {
+            let menu = doc.find_by_id(id).expect("asset has the profile menu");
+            assert!(has_class(&doc, menu, "open"), "{id} must be open");
+            let active: Vec<_> = find_descendants_by_class(&doc, menu, "pm-item")
+                .into_iter()
+                .filter(|&i| has_class(&doc, i, "active"))
+                .map(|i| doc.get(i).get_attr("data-profile").unwrap_or("").to_owned())
+                .collect();
+            assert_eq!(active, ["work"], "{id}");
+        }
+        bind_model(&mut doc, &ChromeModel::default());
+        let menu = doc.find_by_id(crate::ids::PROFILE_MENU).expect("menu");
+        assert!(!has_class(&doc, menu, "open"));
+    }
+
+    #[test]
+    fn access_overlay_moves_active_pills_and_toggles() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            access: ChromeAccessModel {
+                open: true,
+                font_value: "1.5".into(),
+                reduced_motion: true,
+                forced_colors: false,
+                cursor_value: "large".into(),
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::ACCESS_OVERLAY).expect("asset has #accessOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let active_of = |doc: &Document, id: &str| -> Vec<String> {
+            let g = doc.find_by_id(id).expect("pill group");
+            find_descendants_by_class(doc, g, "ac-pill")
+                .into_iter()
+                .filter(|&p| has_class(doc, p, "active"))
+                .map(|p| doc.get(p).get_attr("data-value").unwrap_or("").to_owned())
+                .collect()
+        };
+        assert_eq!(active_of(&doc, crate::ids::AC_FONT_PILLS), ["1.5"]);
+        assert_eq!(active_of(&doc, crate::ids::AC_CURSOR_PILLS), ["large"]);
+        let motion = doc.find_by_id(crate::ids::AC_MOTION_TOGGLE).expect("motion toggle");
+        let colors = doc.find_by_id(crate::ids::AC_COLORS_TOGGLE).expect("colors toggle");
+        assert!(has_class(&doc, motion, "on"));
+        assert!(!has_class(&doc, colors, "on"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, overlay, "open"));
+        assert!(!has_class(&doc, motion, "on"));
+    }
+
+    #[test]
+    fn shortcuts_overlay_rebuilds_rows_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            shortcuts: ChromeShortcutsModel {
+                open: true,
+                rows: vec![
+                    ChromeShortcutRowModel { index: 3, label: "A".into(), binding: "Ctrl+A".into(), rebinding: false },
+                    ChromeShortcutRowModel { index: 4, label: "B".into(), binding: "...".into(), rebinding: true },
+                ],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let overlay = doc.find_by_id(crate::ids::SHORTCUTS_OVERLAY).expect("asset has #shortcutsOverlay");
+        assert!(has_class(&doc, overlay, "open"));
+        let list = doc.find_by_id(crate::ids::SC_LIST).expect("asset has #scList");
+        let rows = find_descendants_by_class(&doc, list, "sc-row");
+        assert_eq!(rows.len(), 2, "seed row must be replaced");
+        assert_eq!(doc.get(rows[1]).get_attr("data-sc-index"), Some("4"));
+        assert!(has_class(&doc, rows[1], "rebinding"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, overlay, "open"));
+        assert!(find_descendants_by_class(&doc, list, "sc-row").is_empty());
     }
 
     #[test]
@@ -3587,6 +5329,155 @@ mod tests {
     }
 
     #[test]
+    fn settings_autofill_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "autofill".to_owned(),
+                autofill: vec![("https://a.test".into(), "email".into(), "a@b.c".into())],
+                cards: vec![("1111".into(), "•••• 1111".into())],
+                autofill_available: true,
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::AF_LIST).expect("#afList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2, "образец заменён строками модели: карта, затем значение");
+        let card_del = find_descendants_by_class(&doc, rows[0], "upd-check")[0];
+        assert_eq!(doc.get(card_del).get_attr("data-action"), Some("delete-saved-card"));
+        assert_eq!(doc.get(card_del).get_attr("data-card-last4"), Some("1111"));
+        let del = find_descendants_by_class(&doc, rows[1], "upd-check")[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("delete-autofill-entry"));
+        assert_eq!(doc.get(del).get_attr("data-af-origin"), Some("https://a.test"));
+        assert_eq!(doc.get(del).get_attr("data-af-field"), Some("email"));
+        assert_eq!(doc.get(del).get_attr("data-af-value"), Some("a@b.c"));
+    }
+
+    #[test]
+    fn settings_site_permissions_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "permissions".to_owned(),
+                site_permissions: vec![("https://a.test".into(), "Camera".into(), true)],
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::PERM_LIST).expect("#permList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 1, "образец заменён строкой модели");
+        let del = find_descendants_by_class(&doc, rows[0], "upd-check")[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("revoke-site-permission"));
+        assert_eq!(doc.get(del).get_attr("data-perm-origin"), Some("https://a.test"));
+        assert_eq!(doc.get(del).get_attr("data-perm-kind"), Some("Camera"));
+    }
+
+    #[test]
+    fn settings_spelling_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "spelling".to_owned(),
+                spell_enabled: false,
+                spell_languages: vec![("en_US".into(), true), ("ru_RU".into(), false)],
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let toggle = doc.find_by_id(crate::ids::SPELL_TOGGLE).expect("#spellToggle");
+        assert!(!has_class(&doc, toggle, "on"));
+        let list = doc.find_by_id(crate::ids::SPELL_LANG_LIST).expect("#spellLangList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2, "статичная демо-строка заменена строками модели");
+        let ru = find_descendants_by_class(&doc, rows[1], "toggle")[0];
+        assert_eq!(doc.get(ru).get_attr("data-action"), Some("toggle-spell-language"));
+        assert_eq!(doc.get(ru).get_attr("data-spell-lang"), Some("ru_RU"));
+        assert!(!has_class(&doc, ru, "on"));
+        let en = find_descendants_by_class(&doc, rows[0], "toggle")[0];
+        assert!(has_class(&doc, en, "on"));
+    }
+
+    #[test]
+    fn settings_translate_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "translate".to_owned(),
+                translate_languages: vec![("ru".into(), "Русский".into(), false), ("de".into(), "Deutsch".into(), true)],
+                translate_model: "phi3:mini".to_owned(),
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::TRANSLATE_LANG_LIST).expect("#translateLangList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2);
+        let de = find_descendants_by_class(&doc, rows[1], "toggle")[0];
+        assert_eq!(doc.get(de).get_attr("data-action"), Some("set-translate-language"));
+        assert_eq!(doc.get(de).get_attr("data-lang"), Some("de"));
+        assert!(has_class(&doc, de, "on"));
+        let ru = find_descendants_by_class(&doc, rows[0], "toggle")[0];
+        assert!(!has_class(&doc, ru, "on"));
+    }
+
+    #[test]
+    fn settings_site_data_button_carries_current_site() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "permissions".to_owned(),
+                current_site: Some("a.test".into()),
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let btn = doc.find_by_id(crate::ids::SITE_DATA_BTN).expect("#siteDataBtn");
+        assert_eq!(doc.get(btn).get_attr("data-action"), Some("clear-site-data"));
+        assert_eq!(doc.get(btn).get_attr("data-site"), Some("a.test"));
+    }
+
+    #[test]
+    fn settings_passwords_rows_follow_the_model() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path).expect("chrome.html");
+        let mut doc = lumen_html_parser::parse(&html);
+        let model = ChromeModel {
+            settings: ChromeSettingsModel {
+                active_section: "passwords".to_owned(),
+                passwords: vec![("https://a.test".into(), "anna".into()), ("https://b.test".into(), String::new())],
+                passwords_available: true,
+                ..ChromeSettingsModel::default()
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = doc.find_by_id(crate::ids::PW_LIST).expect("#pwList");
+        let rows = doc.get(list).children.clone();
+        assert_eq!(rows.len(), 2, "статический образец заменён строками модели");
+        let del = find_descendants_by_class(&doc, rows[0], "upd-check")[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("delete-saved-login"));
+        assert_eq!(doc.get(del).get_attr("data-login-origin"), Some("https://a.test"));
+        assert_eq!(doc.get(del).get_attr("data-login-user"), Some("anna"));
+    }
+
+    #[test]
     fn settings_privacy_toggles_reflect_ad_block_and_fingerprint_state() {
         let mut doc = parse_asset();
         let model = ChromeModel {
@@ -3594,6 +5485,7 @@ mod tests {
                 active_section: "privacy".to_owned(),
                 ad_block_on: true,
                 fingerprint_on: false,
+                ..ChromeSettingsModel::default()
             },
             ..ChromeModel::default()
         };

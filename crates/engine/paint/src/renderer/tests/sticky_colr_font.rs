@@ -425,6 +425,7 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         true,
         &[],
         0.0,
+        (0.0, 0.0),
         None,
     );
 
@@ -529,6 +530,7 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         true,
         &[],
         0.0,
+        (0.0, 0.0),
         Some(&selection),
     );
 
@@ -581,6 +583,7 @@ fn text_run_cache_skips_color_glyph_runs() {
             true,
             &[],
             0.0,
+            (0.0, 0.0),
             None,
         );
     }
@@ -630,6 +633,7 @@ fn text_run_cache_replays_identical_vertices() {
             enabled,
             &[],
             0.0,
+            (0.0, 0.0),
             None,
         );
         out
@@ -1082,6 +1086,8 @@ fn text_face_ids_are_addressed_by_command_index() {
             font_features: Vec::new(),
             font_palette: None,
             tab_size: 8.0,
+            letter_spacing: 0,
+            word_spacing: 0,
             highlight_name: None,
             text_orientation: None,
         }

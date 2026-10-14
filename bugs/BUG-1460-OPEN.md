@@ -38,3 +38,7 @@ WPT-RUN-14 срез 20: `css-cascade/layer-media-query.html` (TIMEOUT, 8 саб�
 ## Как проверить
 
 Таблица выше; `css/css-cascade/layer-media-query.html`, `css/css-cascade/scope-media.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+`css-conditional`: `at-supports-002`, `at-supports-003`, `at-supports-023`, `css-supports-025.xht`, `css-supports-026.xht`, `css-supports-046.xht` — 6 reftest `thick`, все — `@media{@supports}` или `@supports{@media}` (проба: оба порядка и `@media{@media}`, `@supports{@supports}` дают `black`; `@layer{@supports}` — верно). Кластер `cond-nesting` в `docs/wpt-vendor-notes/css.md` §css-view-transitions + css-conditional + …

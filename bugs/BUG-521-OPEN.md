@@ -70,3 +70,7 @@ text). Implementing `text-decoration-fill`/`text-decoration-stroke`/
 glyph-outline stroking in both backends independently — the same shape as
 `border-image`'s missing 9-slice paint algorithm (BUG-492). Moved to
 `CSS-SPECS.md`'s CSS Fill & Stroke row; removed from `STATUS-P3.md`.
+
+## Повторный замер 2026-10-11 (WPT-RUN-14 срез 28, P2)
+
+`css/fill-stroke`: 11 id, зелёных 2, не зелёных 9 (348 из 395 подтестов): `animation/fill-interpolation` 145 из 192, `animation/stroke-color-interpolation` 172 из 172, `text-decoration-{fill,stroke}/*` 24 из 24, `webkit-text-stroke-computed` 3 из 3, `paint-order-001` reftest `thick`. `CSS.supports("text-decoration-fill","red")` и `("-webkit-text-stroke","1px red")` — `false`. Бинарь от 2026-10-08.

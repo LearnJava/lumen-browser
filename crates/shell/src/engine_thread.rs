@@ -89,7 +89,35 @@ impl std::fmt::Display for EngineWork {
 
 /// Слот «что исполняется и с какого момента»: движковый поток пишет его вокруг
 /// каждого сообщения пачки, UI-сторона читает через [`EngineThread::busy`].
-type BusySlot = Arc<Mutex<Option<(EngineWork, Instant)>>>;
+type BusySlot = Arc<EngineStatus>;
+
+/// Состояние движкового потока, видимое UI-стороне: что исполняется (`busy`) и
+/// чем закончилось упавшее задание (`crash`, UX-CRASH).
+#[derive(Default)]
+struct EngineStatus {
+    busy: Mutex<Option<(EngineWork, Instant)>>,
+    /// Сообщение паники последнего упавшего задания; забирает
+    /// [`EngineThread::take_crash`]. Поток после паники **живёт** — задание
+    /// перехвачено `catch_unwind`, следующие исполняются как обычно.
+    crash: Mutex<Option<String>>,
+}
+
+/// Исполняет `f`, превращая панику в запись `crash` (UX-CRASH): без перехвата
+/// паника задания убивала движковый поток, и страница молча теряла JS/layout.
+/// `None` — задание упало.
+fn guarded<R>(status: &EngineStatus, what: &str, f: impl FnOnce() -> R) -> Option<R> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => Some(r),
+        Err(payload) => {
+            let msg = format!("{what}: {}", crate::crash_page::panic_text(payload.as_ref()));
+            eprintln!("[engine-thread] задание упало: {msg}");
+            if let Ok(mut slot) = status.crash.lock() {
+                slot.get_or_insert(msg);
+            }
+            None
+        }
+    }
+}
 
 /// Задание/сигнал движковому потоку. Задания `Run` коалесцируются (latest-wins с
 /// generation-guard); `Readback` — request/reply по immutable-снимку, исполняется
@@ -214,8 +242,14 @@ impl<C: Send + 'static, S: Send + 'static> EngineThread<C, S> {
     /// Что движковый поток исполняет прямо сейчас и сколько уже (BUG-1145);
     /// `None` — поток простаивает на `recv()`.
     pub fn busy(&self) -> Option<(EngineWork, Duration)> {
-        let guard = self.busy.lock().ok()?;
+        let guard = self.busy.busy.lock().ok()?;
         guard.map(|(work, since)| (work, since.elapsed()))
+    }
+
+    /// Забирает сообщение паники задания, упавшего на движковом потоке (UX-CRASH);
+    /// `None` — падений не было. Поток при этом жив.
+    pub fn take_crash(&self) -> Option<String> {
+        self.busy.crash.lock().ok()?.take()
     }
 
     /// Ставит задание движковому потоку (fire-and-forget). `generation` —
@@ -447,8 +481,9 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 if Some(i) == newest_run {
                     *applied_generation = generation;
                     set_busy(busy, Some(EngineWork::Layout));
-                    let commit = job();
-                    if let Ok(mut slot) = latest.lock() {
+                    if let Some(commit) = guarded(busy, "layout", job)
+                        && let Ok(mut slot) = latest.lock()
+                    {
                         *slot = Some(commit);
                     }
                 }
@@ -458,8 +493,10 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 // `send` может вернуть `Err`, если тот отказался ждать — тогда
                 // молча роняем (queue depth 1, никогда не блокирует поток).
                 set_busy(busy, Some(EngineWork::Readback));
-                let commit = job();
-                let _ = reply.send(commit);
+                // Паника → `reply` дропается, вызывающий откатывается на sync.
+                if let Some(commit) = guarded(busy, "readback", job) {
+                    let _ = reply.send(commit);
+                }
             }
             EngineMsg::Task { caller, job } => {
                 // Task исполняется всегда и по порядку над персистентным состоянием
@@ -479,7 +516,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
                 // могли сказать, какой из вызывающих её поставил.
                 let log_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
                 set_busy(busy, Some(EngineWork::Task(caller)));
-                job(state);
+                guarded(busy, &format!("task from {caller}"), || job(state));
                 if let Some(t0) = log_t0 {
                     eprintln!(
                         "[engine] task {:.2}ms (engine-thread Task, from {caller})",
@@ -498,7 +535,7 @@ fn run_batch<C: Send + 'static, S: Send + 'static>(
 /// Публикует в `busy` текущее сообщение пачки (BUG-1145); `None` — пачка
 /// исполнена, поток уходит обратно на `recv()`.
 fn set_busy(busy: &BusySlot, work: Option<EngineWork>) {
-    if let Ok(mut slot) = busy.lock() {
+    if let Ok(mut slot) = busy.busy.lock() {
         *slot = work.map(|w| (w, Instant::now()));
     }
 }
@@ -918,5 +955,26 @@ mod tests {
             assert!(Instant::now() < deadline, "поток не вернулся в простой");
             thread::yield_now();
         }
+    }
+
+    #[test]
+    fn panicking_task_is_reported_and_thread_survives() {
+        // UX-CRASH: паника задания не убивает поток, а оседает в `take_crash`.
+        let engine = EngineThread::<u64, u64>::spawn_with_state(0).expect("spawn engine thread");
+        assert_eq!(engine.take_crash(), None);
+        engine.task(|_| std::panic::panic_any("взрыв в задании"));
+        engine.task(|s| *s += 3);
+        assert_eq!(engine.query(|s| *s), Some(3), "поток жив и исполняет следующие задания");
+        let crash = engine.take_crash().expect("падение записано");
+        assert!(crash.contains("взрыв в задании"), "{crash}");
+        assert_eq!(engine.take_crash(), None, "take_crash забирает запись");
+    }
+
+    #[test]
+    fn panicking_readback_returns_none_to_caller() {
+        let engine = EngineThread::<u64, u64>::spawn_with_state(0).expect("spawn engine thread");
+        assert_eq!(engine.readback(|| std::panic::panic_any("readback упал")), None);
+        assert_eq!(engine.readback(|| 5), Some(5));
+        assert!(engine.take_crash().is_some());
     }
 }

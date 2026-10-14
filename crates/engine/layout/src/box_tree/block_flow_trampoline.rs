@@ -124,7 +124,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         node: slot.node,
         rect: Rect::ZERO,
         style: Arc::clone(&slot.style),
-        used_line_height: 0.0,
+        used_padding: None, used_line_height: 0.0,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -363,6 +363,14 @@ fn step_child(
             }
             _ => marker_shift = inside_marker_w,
         }
+    }
+    // CSS Text L3 §7.1: `text-indent` belongs to the container's first line; a run that
+    // follows an in-flow block (`<br>`, nested `<div>`) continues the container.
+    if frame.init.seen_inflow_child
+        && matches!(frame.b.children[i].kind, BoxKind::InlineRun { .. })
+        && !frame.b.children[i].style.text_extra.indent_continuation
+    {
+        Arc::make_mut(&mut frame.b.children[i].style).text_extra.indent_continuation = true;
     }
     let child_y = frame.init.child_y;
     // Normal flow: narrow x/width for active floats.
@@ -647,19 +655,30 @@ fn place_float(
     // the space beside existing floats, drop it below them until it fits (or
     // no float remains to clear). This wraps a row of left floats onto a new
     // line in a narrow container instead of overflowing past the edge.
+    let same_line_top = same_line_float_top(&frame.b.children, i, child_y);
+    let child = &mut frame.b.children[i];
+    let fc = &mut frame.init.fc;
     let probe_ml = child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport);
     let probe_mr = child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport);
     let outer_w = probe_ml + child.rect.width + probe_mr;
-    let mut float_y = child_y;
-    while !fc.is_empty() {
+    // CSS 2.1 §9.5.1 rules 6/8: a float that follows inline content on the same
+    // line starts at the top of that line when it fits beside it (BUG-1338);
+    // the loop below still drops it when it does not fit.
+    let mut float_y = same_line_top.filter(|&t| t < child_y).unwrap_or(child_y);
+    while !fc.is_empty() || float_y < child_y {
         let l = fc.left_edge_at(float_y, content_x);
         let r = fc.right_edge_at(float_y, container_right);
         if outer_w <= (r - l).max(0.0) {
             break;
         }
         match fc.next_float_bottom(float_y) {
-            Some(ny) => float_y = ny,
-            None => break,
+            Some(ny) => float_y = ny.max(float_y),
+            None => {
+                if float_y < child_y {
+                    float_y = child_y;
+                }
+                break;
+            }
         }
     }
     let dropped = (float_y - child_y).abs() > f32::EPSILON;
@@ -747,6 +766,33 @@ fn place_float(
     child.rect.x = laid_out_at.0;
     child.rect.y = laid_out_at.1;
     shift_tree(child, final_x - laid_out_at.0, final_y - laid_out_at.1);
+}
+
+/// Top of the line the float at `children[i]` shares with the inline content
+/// right before it (an `InlineRun` / single-row `InlineBlockRow` ending at
+/// `child_y`), if any.
+fn same_line_float_top(children: &[LayoutBox], i: usize, child_y: f32) -> Option<f32> {
+    let prev = children[..i].iter().rev().find(|c| {
+        c.style.float_side == FloatSide::None
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+            && c.style.display != crate::style::Display::None
+    })?;
+    if (prev.rect.y + prev.rect.height - child_y).abs() > 0.5 || prev.rect.height <= 0.0 {
+        return None;
+    }
+    match &prev.kind {
+        BoxKind::InlineRun { lines, segments, .. } => {
+            if lines.is_empty() || segments.last().is_none_or(|s| s.forced_break) {
+                return None;
+            }
+            Some(prev.rect.y + prev.rect.height * (lines.len() - 1) as f32 / lines.len() as f32)
+        }
+        BoxKind::InlineBlockRow => {
+            let y0 = prev.children.first()?.rect.y;
+            prev.children.iter().all(|c| (c.rect.y - y0).abs() < 0.5).then_some(prev.rect.y)
+        }
+        _ => None,
+    }
 }
 
 /// Margin-box geometry of a just-placed float (see [`wire_shape_outside`]).
@@ -929,7 +975,9 @@ fn post_child_bookkeeping(
         if merged > old_gap {
             frame.b.children[idx].rect.y += merged - old_gap;
         }
-        frame.init.child_y += merged;
+        // `child_y` already includes the previous sibling's bottom margin
+        // (`prev_block_mb`); the merged gap replaces it rather than stacking.
+        frame.init.child_y += merged - frame.init.prev_block_mb;
         frame.init.prev_block_mb = merged;
     } else {
         let child = &frame.b.children[idx];

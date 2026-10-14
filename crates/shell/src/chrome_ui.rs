@@ -8,6 +8,9 @@
 
 use crate::*;
 
+/// Console lines `#dt-console` has room for (250 px panel minus its tab row).
+const CONSOLE_VISIBLE_LINES: usize = 8;
+
 impl Lumen {
     /// CC-4 (docs/tasks/p1-css-chrome.md): re-lays-out and re-paints the
     /// engine-drawn chrome document at the current window size. No-op when the
@@ -59,6 +62,15 @@ impl Lumen {
         // CC-6: rebind ChromeModel from current shell state before every
         // layout pass — no separate dirty flag, `bind_model` is cheap (a
         // handful of attribute/text mutations + two small list rebuilds).
+        if self.network_panel.visible {
+            self.network_panel.refresh();
+        }
+        if self.privacy.visible {
+            self.privacy.refresh();
+        }
+        if self.dom_inspector.visible {
+            self.dom_inspector.set_network_entries(self.network_panel.entries_clone());
+        }
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
         // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
@@ -238,13 +250,7 @@ impl Lumen {
             take_content_area(
                 &mut layout,
                 id,
-                &[
-                    lumen_chrome::ids::FIND_BAR,
-                    lumen_chrome::ids::DOWNLOADS_PANEL,
-                    lumen_chrome::ids::CP_OVERLAY,
-                    lumen_chrome::ids::CERT_OVERLAY,
-                    lumen_chrome::ids::PRINT_OVERLAY,
-                ],
+                &SALVAGED_POPOVER_IDS,
                 doc,
             )
         });
@@ -263,8 +269,10 @@ impl Lumen {
         // `FloatingPanelDetachment`'s doc comment for why they'd otherwise be
         // silently discarded. Painted separately, unclipped, via
         // `chrome_floating_dl` (`RedrawRequested`).
+        let popover_nodes: Vec<_> =
+            SALVAGED_POPOVER_IDS.iter().filter_map(|&id| doc.find_by_id(id).map(|n| (n, id))).collect();
         let mut floating_detached = Vec::new();
-        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR] {
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
             if let Some(node) = doc.find_by_id(id)
                 && let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id)
             {
@@ -297,7 +305,28 @@ impl Lumen {
             }
         }
         self.chrome_prev_styles = new_styles;
+        // BUG-1605: the salvaged popovers lie inside `chrome_page_host_rect`, so
+        // the strip clip in `build_chrome_overlay_strips` would discard every
+        // one of them. Lift them out for the chrome paint, paint them on their
+        // own (z-index order) and put them back — hit-testing and the next
+        // pass's incremental basis keep seeing them in `layout`.
+        let mut popovers = Vec::new();
+        for (node, id) in popover_nodes {
+            if let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id) {
+                popovers.push(detached);
+            }
+        }
         let dl = paint_ordered_cached(&layout, &mut self.chrome_emit_cache);
+        let mut popover_dl = lumen_paint::DisplayList::new();
+        let mut by_z: Vec<&FloatingPanelDetachment> = popovers.iter().collect();
+        by_z.sort_by_key(|d| d.removed.style.z_index.unwrap_or(0));
+        for d in by_z {
+            popover_dl.extend_from_slice(&paint_ordered(&d.removed));
+        }
+        self.chrome_popover_dl = (!popover_dl.is_empty()).then_some(popover_dl);
+        for d in popovers.into_iter().rev() {
+            let _ = restore_floating_panel(&mut layout, d);
+        }
         // BUG-405 срез 48 (диагностика, п.85): не гейтит поведение — только
         // печать под `LUMEN_FRAME_LOG=2`. `hash_display_list` берёт `dl` как
         // overlay-лейн (content — пустой срез), тот же тотальный хэш, что уже
@@ -320,6 +349,28 @@ impl Lumen {
         self.chrome_layout = Some((layout, dl));
     }
 
+    /// Strip indices of the sidebar tab list in display order, with the tree
+    /// placement of each row in tree mode (UX-CHROME-PANELS 14,
+    /// `Ctrl+Shift+B`): `tree::visible_order` omits collapsed subtrees and
+    /// gives every row its depth and (with children) a collapse arrow. The flat
+    /// list follows `visible_indices()` (BUG-409: a collapsed group's
+    /// non-leftmost members stay hidden behind the chip row).
+    pub(crate) fn sidebar_tab_order(&self) -> Vec<(usize, Option<lumen_chrome::ChromeTabTree>)> {
+        if !self.tree_tabs.visible {
+            return self.tab_strip.visible_indices().into_iter().map(|i| (i, None)).collect();
+        }
+        tabs::tree::visible_order(&self.tab_strip.tabs, &self.tree_tabs.collapsed)
+            .iter()
+            .map(|r| {
+                let tree = lumen_chrome::ChromeTabTree {
+                    depth: r.depth,
+                    expanded: r.has_children.then(|| !self.tree_tabs.collapsed.contains(&r.id)),
+                };
+                (r.strip_idx, Some(tree))
+            })
+            .collect()
+    }
+
     /// CC-6 (docs/tasks/p1-css-chrome.md): snapshots tab strip, workspaces,
     /// theme, tab layout, and active profile into a [`lumen_chrome::ChromeModel`]
     /// — [`Self::relayout_chrome_host`] binds this before every chrome layout
@@ -332,17 +383,28 @@ impl Lumen {
         // a collapsed group's non-leftmost members stay hidden behind the
         // leftmost (chip) row, mirroring the legacy strip's own collapse
         // behaviour. For a strip with no collapsed groups this is `0..len()`.
-        let tabs = self
-            .tab_strip
-            .visible_indices()
+        let order = self.sidebar_tab_order();
+        // The sidebar list is windowed by `vertical_tabs.scroll_rows` (the
+        // chrome has no wheel-scrollable container).
+        let skip = self
+            .vertical_tabs
+            .scroll_rows
+            .min(panels::vertical_tabs::VerticalTabsPanel::max_scroll_rows(order.len()));
+        let tabs = order
             .into_iter()
-            .map(|i| {
+            .skip(skip)
+            .map(|(i, tree)| {
                 let t = &self.tab_strip.tabs[i];
                 lumen_chrome::ChromeTabModel {
+                    tree,
                     id: t.id,
                     title: t.title.clone(),
                     active: Some(t.id) == active_id,
                     sleeping: t.tab_state == TabState::Hibernated,
+                    // UX-LOADING: only the active tab's navigation is live —
+                    // a background tab's streaming events are discarded
+                    // (`mark_bg_tab_needs_reload`), so it is not "loading".
+                    loading: Some(t.id) == active_id && self.nav_start.is_some(),
                     // CC-8: tree-style tabs (7A.2) — a tab with an opener is
                     // rendered as a `.child` row with a `.tree-line` connector.
                     // The asset's CSS only indents one nesting level, so this
@@ -464,6 +526,16 @@ impl Lumen {
                     name: d.filename.clone(),
                     meta,
                     progress_fraction,
+                    actions: match &d.status {
+                        download::DownloadStatus::Done { .. } => vec![
+                            lumen_chrome::ChromeDownloadAction::Open,
+                            lumen_chrome::ChromeDownloadAction::Reveal,
+                        ],
+                        download::DownloadStatus::InProgress | download::DownloadStatus::Pending => {
+                            vec![lumen_chrome::ChromeDownloadAction::Cancel]
+                        }
+                        _ => Vec::new(),
+                    },
                 }
             })
             .collect();
@@ -524,6 +596,7 @@ impl Lumen {
                         label: item.title.clone(),
                         sub_label,
                         selected: rank == self.command_palette.selected,
+                        index: rank,
                     }
                 })
             })
@@ -572,6 +645,78 @@ impl Lumen {
                 rows: std::array::from_fn(|_| "\u{2014}".to_owned()),
                 fingerprint: "\u{2014}".to_owned(),
             },
+        };
+        // UX-CHROME-PANELS: `#shortcutsOverlay` — the shell windows the rows
+        // (the chrome has no wheel-scroll container).
+        let shortcuts = {
+            let panel = &self.shortcuts_panel;
+            let count = panels::shortcuts_panel::ShortcutsPanel::visible_count(self.viewport_height_css());
+            let rows = panel
+                .rows
+                .iter()
+                .enumerate()
+                .skip(panel.first_row)
+                .take(count)
+                .map(|(index, r)| {
+                    let rebinding = panel.rebinding == Some(index);
+                    lumen_chrome::ChromeShortcutRowModel {
+                        index,
+                        label: r.label.to_owned(),
+                        binding: if rebinding { "Нажмите клавишу…".to_owned() } else { r.binding_label() },
+                        rebinding,
+                    }
+                })
+                .collect();
+            lumen_chrome::ChromeShortcutsModel { open: panel.visible, rows }
+        };
+        // UX-CHROME-PANELS: `#devtools` shows the tail of the JS console (the
+        // chrome has no wheel-scroll container, so no scrolling).
+        let console = {
+            let panel = &self.devtools_console;
+            let msgs = panel.messages();
+            let lines = msgs[msgs.len().saturating_sub(CONSOLE_VISIBLE_LINES)..]
+                .iter()
+                .map(|m| lumen_chrome::ChromeConsoleLineModel {
+                    level: match m.level {
+                        devtools::console_panel::ConsoleLevel::Log => 0,
+                        devtools::console_panel::ConsoleLevel::Warn => 1,
+                        devtools::console_panel::ConsoleLevel::Error => 2,
+                    },
+                    text: m.text.clone(),
+                })
+                .collect();
+            lumen_chrome::ChromeConsoleModel { open: panel.visible, total: msgs.len(), lines }
+        };
+        // UX-CHROME-PANELS: `#networkPanel` mirrors the (already refreshed) `NetworkPanel`.
+        let network = self.network_panel.chrome_model();
+        // UX-CHROME-PANELS: `#readLaterPanel` mirrors `ReadLaterPanel`.
+        let read_later = self.read_later_panel.chrome_model();
+        // UX-CHROME-PANELS: `#privacyPanel` mirrors the (already refreshed) `PrivacyPanel`.
+        let privacy = self.privacy.chrome_model(panels::privacy_panel::list_body_height(
+            self.viewport_height_css() + toolbar::CHROME_H,
+            toolbar::CHROME_H,
+        ));
+        // UX-CHROME-PANELS: `#accessOverlay` mirrors the draft of `A11yPanel`.
+        let access = {
+            let panel = &self.a11y_panel;
+            let m = panel.draft.font_size_multiplier;
+            let font_value = [0.8_f64, 1.0, 1.25, 1.5, 2.0]
+                .iter()
+                .find(|v| (**v - m).abs() < 1e-6)
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let cursor_value = match panel.draft.cursor_size {
+                lumen_storage::CursorSize::Normal => "normal",
+                lumen_storage::CursorSize::Large => "large",
+                lumen_storage::CursorSize::ExtraLarge => "extra",
+            };
+            lumen_chrome::ChromeAccessModel {
+                open: panel.visible,
+                font_value,
+                reduced_motion: panel.draft.reduced_motion,
+                forced_colors: panel.draft.forced_colors,
+                cursor_value: cursor_value.to_owned(),
+            }
         };
         // CC-10b: which `#contentArea` view is shown — mirrors whichever of
         // the three legacy panel `visible` flags is set (kept mutually
@@ -647,10 +792,87 @@ impl Lumen {
                 })
                 .collect(),
         };
+        // UX-PASSWORDS срез 5: список читается из SQLite, поэтому только пока
+        // открыта именно вкладка «Пароли».
+        let passwords_store = password_store::global().filter(|_| !self.active_profile_is_anonymous());
+        let passwords = if self.settings_panel.visible && self.chrome_settings_section == "passwords" {
+            passwords_store
+                .and_then(|s| s.list().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(origin, _)| origin != card_store::ORIGIN)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // UX-AUTOFILL срез 5: значения форм и карты читаются так же — только на своей вкладке.
+        let autofill_store = autofill_store::global().filter(|_| !self.active_profile_is_anonymous());
+        let autofill_open = self.settings_panel.visible && self.chrome_settings_section == "autofill";
+        let autofill: Vec<(String, String, String)> = if autofill_open {
+            autofill_store
+                .and_then(|s| s.list_all().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| (e.origin, e.field_name, e.value))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let cards: Vec<(String, String)> = if autofill_open {
+            passwords_store
+                .map(|s| card_store::saved_cards(s).iter().map(|c| (c.last4(), c.label())).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let settings = lumen_chrome::ChromeSettingsModel {
             active_section: self.chrome_settings_section.clone(),
             ad_block_on: self.settings_panel.draft.shields_enabled,
             fingerprint_on: self.settings_panel.draft.fingerprint_mode != "off",
+            passwords,
+            passwords_available: passwords_store.is_some(),
+            autofill,
+            cards,
+            autofill_available: autofill_store.is_some(),
+            site_permissions: if self.settings_panel.visible && self.chrome_settings_section == "permissions" {
+                self.permission
+                    .saved()
+                    .into_iter()
+                    .map(|(origin, kind, state)| {
+                        (origin, kind.label().to_owned(), state == panels::permission_panel::PermissionState::Allow)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            current_site: self
+                .permission
+                .current_origin
+                .as_deref()
+                .and_then(lumen_storage::PartitionKey::parse)
+                .map(|k| k.site().to_owned()),
+            spell_enabled: crate::assets::SPELL_DICTS.get().is_none_or(|d| d.prefs().enabled),
+            spell_languages: if self.settings_panel.visible && self.chrome_settings_section == "spelling" {
+                crate::assets::SPELL_DICTS.get().map(|d| d.languages()).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            translate_languages: if self.settings_panel.visible && self.chrome_settings_section == "translate" {
+                let current = self.settings_store.translate_language();
+                crate::translate_manager::LANGUAGES
+                    .iter()
+                    .map(|(code, _, label)| ((*code).to_owned(), (*label).to_owned(), *code == current))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            translate_model: if self.settings_panel.focused_input == Some(panels::settings_panel::SettingInput::TranslateModel) {
+                format!("{}▏", self.settings_panel.translate_model_draft)
+            } else {
+                Some(self.settings_store.translate_model())
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| crate::translate_manager::DEFAULT_MODEL.to_owned())
+            },
         };
         // CC-10b: the design's single tabbed `#rightSidebar` merges the
         // legacy independently-dockable `ai_panel`/`sidebar` — kept mutually
@@ -667,8 +889,9 @@ impl Lumen {
         };
         lumen_chrome::ChromeModel {
             dark_theme: self.dark_mode,
-            layout_vertical: self.vertical_tabs.visible,
+            layout_vertical: self.vertical_tabs.visible || self.tree_tabs.visible,
             profile_slug,
+            profile_menu_open: self.profile_menu.visible,
             control_panel: lumen_chrome::ChromeControlPanelModel {
                 shape: self.control_panel_shape,
                 mini_open: self.control_panel_mini_open,
@@ -679,12 +902,14 @@ impl Lumen {
             omnibox: lumen_chrome::OmniboxModel {
                 value: omnibox_value,
                 warning: omnibox_warning.map(str::to_owned),
+                zoom_percent: zoom::percent_label(self.zoom_factor),
             },
             sidebar_collapsed: self.chrome_sidebar_collapsed,
             dropdown,
             find,
             downloads_open: self.downloads.visible,
             downloads,
+            downloads_clearable: self.downloads.has_finished_entries(),
             archive_open: self.archive.visible,
             archive,
             popover_open,
@@ -697,6 +922,23 @@ impl Lumen {
             site_shields_on: self.shields.enabled_for_current(),
             palette,
             cert,
+            shortcuts,
+            console,
+            network,
+            inspector: self.dom_inspector.chrome_model(),
+            read_later,
+            privacy,
+            focus: self.focus.chrome_model(),
+            note: self.note_viewer.chrome_model(),
+            pip: self.pip.chrome_model(),
+            tab_ctx: self
+                .tab_context_menu
+                .chrome_model(self.viewport_width_css(), self.window_height_css()),
+            page_ctx: self
+                .page_context_menu
+                .chrome_model(self.viewport_width_css(), self.window_height_css()),
+            workspace_bar_open: self.workspace_panel.visible,
+            access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
                 landscape: self.print_panel.orientation == panels::print_panel::Orientation::Landscape,
@@ -708,6 +950,9 @@ impl Lumen {
             settings,
             right_sidebar,
             update: self.update_ui.chrome_model(),
+            login_offer: self.login_offer_model(),
+            dialog: self.page_dialog_model(),
+            security: self.security_model(),
         }
     }
 
@@ -792,45 +1037,16 @@ impl Lumen {
         lumen_layout::find_box_by_node(layout, nid).map(|b| b.rect)
     }
 
-    /// BUG-461: `.cp-box`'s real measured rect — the command palette's
-    /// modal box, used as [`panels::command_palette::hit_test`]'s Dismiss
-    /// boundary. `#cpOverlay` (`ids::CP_OVERLAY`) has exactly one child in
-    /// the asset, `.cp-box` itself (see `assets/chrome/chrome.html`), so its
-    /// first child's rect is `.cp-box`'s — no id of its own is needed.
-    pub(crate) fn chrome_cp_box_rect(&self) -> Option<Rect> {
+    /// `#sbTabs` rect (UX-CHROME-PANELS 14): where the wheel scrolls the
+    /// sidebar tab list.
+    pub(crate) fn chrome_sb_tabs_rect(&self) -> Option<Rect> {
+        self.chrome_node_rect(lumen_chrome::ids::SB_TABS)
+    }
+
+    /// `true` when `nid` is the chrome element with DOM id `id`.
+    pub(crate) fn chrome_node_id_is(&self, nid: NodeId, id: &str) -> Option<bool> {
         let (doc, _) = self.chrome_doc.as_ref()?;
-        let (layout, _) = self.chrome_layout.as_ref()?;
-        let overlay_id = doc.find_by_id(lumen_chrome::ids::CP_OVERLAY)?;
-        let overlay_box = lumen_layout::find_box_by_node(layout, overlay_id)?;
-        overlay_box.children.first().map(|b| b.rect)
-    }
-
-    /// BUG-461: real measured rects of the currently rendered `.cp-row`
-    /// elements, in `#cpList` tree order — the same `scroll_row`-relative
-    /// window `Lumen::chrome_model_snapshot`'s `palette_results` slices, so
-    /// index `i` here is filtered-index `scroll_row + i`. Replaces the fixed
-    /// `ROW_H`/`INPUT_H` arithmetic `panels::command_palette::hit_test` used
-    /// to compute a row's y-range from — that assumed row height/box width
-    /// could (and did) drift from what `chrome.css` actually renders.
-    pub(crate) fn chrome_cp_row_rects(&self) -> Vec<Rect> {
-        let Some((doc, _)) = self.chrome_doc.as_ref() else { return Vec::new() };
-        let Some((layout, _)) = self.chrome_layout.as_ref() else { return Vec::new() };
-        let Some(list_id) = doc.find_by_id(lumen_chrome::ids::CP_LIST) else { return Vec::new() };
-        lumen_layout::find_box_by_node(layout, list_id)
-            .map(|b| b.children.iter().map(|c| c.rect).collect())
-            .unwrap_or_default()
-    }
-
-    /// BUG-461: `#permPopover`'s real measured rect — the shared popover for
-    /// both the shields panel and the per-site permission panel. Replaces
-    /// `shields_panel`/`permission_panel`'s `panel_origin()` guesses, which
-    /// anchored a hardcoded box size to the window edge/`toolbar::CHROME_H`
-    /// instead of the omnibox-relative position `chrome.css` actually uses
-    /// (`.popover{ position:absolute; top:34px; right:0 }` inside
-    /// `.omnibox-wrap`) — the same `BUG-404`-class drift `page_offset()`
-    /// already fixed for `profile_menu`.
-    pub(crate) fn chrome_perm_popover_rect(&self) -> Option<Rect> {
-        self.chrome_node_rect(lumen_chrome::ids::PERM_POPOVER)
+        Some(doc.find_by_id(id) == Some(nid))
     }
 
     /// CC-6: reads and parses a `data-tab-id`/`data-ws-id`-style integer
@@ -881,6 +1097,20 @@ impl Lumen {
     pub(crate) fn reset_anonymous_cookie_jar(&mut self) {
         self.anonymous_cookie_jar =
             Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
+    }
+
+    /// UX-PERMISSIONS-3: Anonymous decides into a fresh in-memory store (as
+    /// with its cookie jar), every other profile into `permissions.db`.
+    /// Call after the active profile changed and once at startup.
+    pub(crate) fn sync_permission_store(&mut self) {
+        let store = if self.active_profile_is_anonymous() {
+            lumen_storage::Permissions::open_in_memory().ok().map(Arc::new)
+        } else {
+            Some(Arc::clone(&self.permissions_disk_store))
+        };
+        if let Some(store) = store {
+            self.permission.set_store(store);
+        }
     }
 
     /// BUG-934: the CC-5 chrome hit-test + `data-action` dispatch (originally
@@ -950,6 +1180,11 @@ impl Lumen {
     ) {
         use lumen_chrome::ChromeAction;
         match action {
+            ChromeAction::Reload if self.nav_start.is_some() => {
+                // UX-LOADING: while a navigation is in flight the same
+                // button is "Остановить".
+                self.stop_loading();
+            }
             ChromeAction::Reload => {
                 // Mirrors `toolbar::ToolbarHit::Reload` — routed through the
                 // UserInteraction task source rather than called directly
@@ -960,7 +1195,40 @@ impl Lumen {
                     move || { flag.set(true); },
                 );
             }
+            ChromeAction::SecurityProceed => {
+                self.proceed_cert_interstitial();
+                self.request_redraw();
+            }
+            ChromeAction::SecurityBack => {
+                self.cert_interstitial.close();
+                self.relayout_chrome_host();
+                self.request_redraw();
+            }
+            ChromeAction::SecurityOtherBrowser => {
+                // Экран остаётся открытым: передача одноразовая, а решение
+                // «перейти» или «назад» пользователь принимает отдельно.
+                if let Some(reason) = self.cert_interstitial.handoff_reason() {
+                    let url = self.cert_interstitial.url.clone();
+                    self.open_url_in_other_browser(&url, reason, false);
+                }
+            }
+            ChromeAction::SecurityOtherBrowserAny => {
+                // Цепочку без AIA другие браузеры достраивают сами: причина
+                // «сайт не работает» ведёт в Edge/Chrome, а не в ГОСТ-браузер.
+                if self.cert_interstitial.handoff_reason().is_some() {
+                    let url = self.cert_interstitial.url.clone();
+                    self.open_url_in_other_browser(&url, crate::external_browser::HandoffReason::Other, false);
+                }
+            }
+            ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
+            ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
             ChromeAction::NewTab => self.open_new_tab(),
+            ChromeAction::ZoomReset => self.reset_page_zoom(),
+            ChromeAction::SaveLogin
+            | ChromeAction::NeverSaveLogin
+            | ChromeAction::NextLogin
+            | ChromeAction::UseGeneratedPassword
+            | ChromeAction::DismissLogin => self.dispatch_login_action(action),
             ChromeAction::OpenCertViewer => {
                 let cert = self.cert_info.clone();
                 self.cert_panel.toggle(cert);
@@ -1042,6 +1310,8 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
+            // UX-TRANSLATE-4: toolbar button, same toggle as the palette entry.
+            ChromeAction::TranslatePage => self.toggle_page_translation(),
             ChromeAction::OpenPrintDialog => {
                 self.print_panel.toggle();
                 // CC-10: see the matching comment on `ToggleShieldPopover`.
@@ -1070,12 +1340,83 @@ impl Lumen {
                 self.handle_print_confirm();
                 self.relayout_chrome_host();
             }
-            ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
+            ChromeAction::ToggleDevtools => {
+                self.devtools_console.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleNetwork => {
+                self.network_panel.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleInspector => {
+                self.dom_inspector.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabElements => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Elements);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabStyles => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Styles);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabComputed => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Computed);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::InspectorTabNetwork => {
+                self.dom_inspector.switch_tab(devtools::inspector::InspectorTab::Network);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ClearNetwork => {
+                self.network_panel.clear_log();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::CloseNote => {
+                self.note_viewer.close();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::TogglePrivacy => {
+                self.privacy.toggle();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleReadLater => {
+                self.read_later_panel.toggle();
+                if self.read_later_panel.visible {
+                    self.refresh_read_later();
+                }
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ReadLaterOpen => {
+                if let Some(id) = self.chrome_data_id(nid, "data-read-later-id")
+                    && let Ok(Some(entry)) = self.read_later_store.get(id)
+                {
+                    // Offline HTML snapshot; opening marks the entry as read.
+                    let html = String::from_utf8_lossy(&entry.html_snapshot).into_owned();
+                    let base_url = entry.url.clone();
+                    let _ = self.read_later_store.set_status(id, lumen_knowledge::ReadStatus::Read);
+                    self.read_later_panel.visible = false;
+                    self.navigate_to(PageSource::Snapshot { html, base_url });
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ReadLaterDelete => {
+                if let Some(id) = self.chrome_data_id(nid, "data-read-later-id") {
+                    let _ = self.read_later_store.delete(id);
+                    self.refresh_read_later();
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ClearConsole => {
+                self.devtools_console.clear();
+                self.relayout_chrome_host();
+            }
             ChromeAction::ToggleProfileMenu => {
                 self.profile_menu.toggle();
                 if self.profile_menu.visible {
                     self.refresh_profile_menu_entries();
                 }
+                self.relayout_chrome_host();
             }
             // CC-10b: `data-view` picks the target. `#view-page`/`#view-history`/
             // `#view-bookmarks`/`#view-settings` are mutually exclusive
@@ -1191,10 +1532,94 @@ impl Lumen {
             // panel's cached rows — `refresh_history` then re-reads it.
             ChromeAction::ClearHistory => {
                 let _ = self.history_store.clear();
+                let _ = self.history_fts.clear();
                 // PERF-15: the site memory is keyed by visited page URLs —
                 // history in all but name.
                 crate::site_memory::forget_all();
                 self.refresh_history();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::DeleteSavedLogin => {
+                let origin = self.chrome_data_attr(nid, "data-login-origin").filter(|o| !o.is_empty());
+                let user = self.chrome_data_attr(nid, "data-login-user");
+                if let (Some(origin), Some(user), Some(store)) = (origin, user, password_store::global()) {
+                    let _ = store.delete(&origin, &user);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::DeleteAutofillEntry => {
+                let origin = self.chrome_data_attr(nid, "data-af-origin").filter(|o| !o.is_empty());
+                let field = self.chrome_data_attr(nid, "data-af-field").filter(|f| !f.is_empty());
+                let value = self.chrome_data_attr(nid, "data-af-value");
+                if let (Some(origin), Some(field), Some(value), Some(store)) =
+                    (origin, field, value, autofill_store::global())
+                {
+                    let _ = store.delete(&origin, &field, &value);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::RevokeSitePermission => {
+                let origin = self.chrome_data_attr(nid, "data-perm-origin").filter(|o| !o.is_empty());
+                let kind = self
+                    .chrome_data_attr(nid, "data-perm-kind")
+                    .and_then(|k| panels::permission_panel::PermissionKind::ALL.into_iter().find(|p| p.label() == k));
+                if let (Some(origin), Some(kind)) = (origin, kind) {
+                    self.permission.revoke(&origin, kind);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ToggleSpellcheck => {
+                if let Some(dicts) = crate::assets::SPELL_DICTS.get() {
+                    let enabled = dicts.prefs().enabled;
+                    dicts.set_enabled(!enabled, &spellcheck::prefs_path());
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ToggleSpellLanguage => {
+                if let (Some(dicts), Some(lang)) =
+                    (crate::assets::SPELL_DICTS.get(), self.chrome_data_attr(nid, "data-spell-lang"))
+                {
+                    let on = dicts.languages().into_iter().find(|(s, _)| *s == lang).is_some_and(|(_, on)| on);
+                    dicts.set_language(&lang, !on, &spellcheck::prefs_path());
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::SetTranslateLanguage => {
+                if let Some(lang) = self.chrome_data_attr(nid, "data-lang") {
+                    let _ = self.settings_store.set_translate_language(&lang);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::EditTranslateModel => {
+                self.settings_panel.translate_model_draft = self.settings_store.translate_model();
+                self.settings_panel.focused_input = Some(panels::settings_panel::SettingInput::TranslateModel);
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ClearSiteData => {
+                let site = self
+                    .chrome_data_attr(nid, "data-site")
+                    .and_then(|s| lumen_storage::PartitionKey::parse(&s));
+                if let Some(site) = site {
+                    self.clear_site_data(&site);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::DeleteSavedCard => {
+                let last4 = self.chrome_data_attr(nid, "data-card-last4").filter(|l| !l.is_empty());
+                if let (Some(last4), Some(store)) = (last4, password_store::global()) {
+                    let _ = store.delete(card_store::ORIGIN, &last4);
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ClearAutofill => {
+                if let Some(store) = autofill_store::global() {
+                    let _ = store.clear();
+                }
+                if let Some(store) = password_store::global() {
+                    for card in card_store::saved_cards(store) {
+                        let _ = store.delete(card_store::ORIGIN, &card.last4());
+                    }
+                }
                 self.relayout_chrome_host();
             }
             ChromeAction::OpenBookmark => {
@@ -1229,6 +1654,24 @@ impl Lumen {
                     self.switch_tab(idx);
                 }
             }
+            // Tree mode (`Ctrl+Shift+B`): the `.tab-arrow` of a parent row
+            // folds/unfolds its subtree.
+            ChromeAction::ToggleTabSubtree => {
+                if let Some(id) = self.chrome_data_id(nid, "data-tab-id") {
+                    let id = id as usize;
+                    let expanding = self.tree_tabs.collapsed.contains(&id);
+                    self.tree_tabs.toggle_collapsed(id);
+                    if expanding {
+                        // Purge stale collapse entries for tabs closed while
+                        // their parent subtree was hidden.
+                        let subtree = tabs::tree::subtree_ids(&self.tab_strip.tabs, id);
+                        let valid: std::collections::HashSet<usize> =
+                            self.tab_strip.tabs.iter().map(|t| t.id).collect();
+                        self.tree_tabs.collapsed.retain(|c| valid.contains(c) || !subtree.contains(c));
+                    }
+                    self.relayout_chrome_host();
+                }
+            }
             ChromeAction::CloseTab => {
                 if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
                     && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
@@ -1239,6 +1682,21 @@ impl Lumen {
             ChromeAction::SelectWorkspace => {
                 if let Some(id) = self.chrome_data_id(nid, "data-ws-id") {
                     self.workspace_panel.set_active(Some(id));
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::DeleteWorkspace => {
+                // Never delete the last workspace — require at least one.
+                if let Some(id) = self.chrome_data_id(nid, "data-ws-id")
+                    && self.workspace_panel.workspaces.len() > 1
+                {
+                    let _ = self.workspaces.delete(id);
+                    self.refresh_workspaces();
+                    // If the deleted workspace was active, switch to the first.
+                    if self.workspace_panel.active_id == Some(id) {
+                        let first_id = self.workspace_panel.workspaces.first().map(|w| w.id);
+                        self.workspace_panel.set_active(first_id);
+                    }
                     self.relayout_chrome_host();
                 }
             }
@@ -1284,7 +1742,7 @@ impl Lumen {
             // directly per `data-perm` ("allow"/"deny"). Unlike the legacy
             // panel's single cycle button, the design has two distinct
             // buttons with no "ask" control, so this sets state directly
-            // rather than calling `PermissionPanel::cycle_permission`.
+            // rather than cycling.
             ChromeAction::SetPermission => {
                 if let Some(kind) = self.chrome_permission_kind_for_node(nid)
                     && let Some(perm) = self
@@ -1298,7 +1756,10 @@ impl Lumen {
                         _ => None,
                     };
                     if let Some(state) = state {
-                        self.permission.set_permission(kind, state);
+                        let waited = self.permission.answer(kind, state);
+                        if waited {
+                            self.settle_page_permission(kind, state);
+                        }
                         self.relayout_chrome_host();
                     }
                 }
@@ -1323,12 +1784,62 @@ impl Lumen {
                     self.print_panel.close();
                     self.relayout_chrome_host();
                 }
+                Some(ChromeModalKind::Shortcuts) => {
+                    self.shortcuts_panel.close();
+                    self.relayout_chrome_host();
+                }
+                Some(ChromeModalKind::Access) => self.close_a11y_panel(),
                 None => {}
             },
             // CC-10b: `.set-nav .item`/`.set-section` both carry the same
             // slug on `data-section`/`data-set` — `bind_settings` matches
             // `ChromeSettingsModel::active_section` against either
             // attribute, so this only needs to store the clicked slug.
+            // UX-CHROME-PANELS: click on a `.sc-row` starts a rebind of that row.
+            ChromeAction::RebindShortcut => {
+                let idx = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-sc-index"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                if let Some(idx) = idx.filter(|&i| i < self.shortcuts_panel.rows.len()) {
+                    self.shortcuts_panel.rebinding = Some(idx);
+                    self.relayout_chrome_host();
+                }
+            }
+            // UX-CHROME-PANELS: `#accessOverlay` controls edit the draft;
+            // it is persisted on close (`close_a11y_panel`).
+            ChromeAction::AccessSetFont | ChromeAction::AccessSetCursor => {
+                let value = self
+                    .chrome_doc
+                    .as_ref()
+                    .and_then(|(doc, _)| doc.get(nid).get_attr("data-value").map(str::to_owned));
+                match (action, value.as_deref()) {
+                    (ChromeAction::AccessSetFont, Some(v)) => {
+                        if let Ok(m) = v.parse::<f64>() {
+                            self.a11y_panel.draft.font_size_multiplier = m;
+                        }
+                    }
+                    (_, Some(v)) => {
+                        use lumen_storage::CursorSize;
+                        self.a11y_panel.draft.cursor_size = match v {
+                            "large" => CursorSize::Large,
+                            "extra" => CursorSize::ExtraLarge,
+                            _ => CursorSize::Normal,
+                        };
+                    }
+                    _ => {}
+                }
+                self.relayout_chrome_host();
+            }
+            ChromeAction::AccessToggleMotion => {
+                self.a11y_panel.draft.reduced_motion = !self.a11y_panel.draft.reduced_motion;
+                self.relayout_chrome_host();
+            }
+            ChromeAction::AccessToggleColors => {
+                self.a11y_panel.draft.forced_colors = !self.a11y_panel.draft.forced_colors;
+                self.relayout_chrome_host();
+            }
             ChromeAction::SetSettingsSection => {
                 if let Some(section) =
                     self.chrome_doc.as_ref().and_then(|(doc, _)| doc.get(nid).get_attr("data-section"))
@@ -1419,12 +1930,14 @@ impl Lumen {
                     && self.profiles.set_active(Some(id)).is_ok()
                 {
                     self.profile_menu.set_active(Some(id));
+                    self.profile_menu.visible = false;
                     // DS-16: Anonymous is ephemeral — mirrors the legacy
                     // overlay's own reset so switching via either site never
                     // carries a cookie over from a previous Anonymous run.
                     if self.active_profile_is_anonymous() {
                         self.reset_anonymous_cookie_jar();
                     }
+                    self.sync_permission_store();
                     self.relayout_chrome_host();
                 }
             }
@@ -1475,16 +1988,17 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
             }
-            // CC-18: the floating panel's "Фокус" button is a new
-            // `chrome_doc`-reachable site for the same flag
-            // `KeyCommand::ToggleFocusMode` already flips — real state
-            // (`self.focus.active`), so the legacy ring widget
-            // (`panels::focus_panel`, still the only thing that paints it)
-            // now genuinely appears/disappears from here too. The visual
-            // cutover to the frozen design's own `.focus-timer` pill
-            // (BUG-426) stays unimplemented: `body` never gets a
-            // `focus-mode` class from this action, so nothing paints out of
-            // `chrome_doc` itself yet — a follow-up, not this slice.
+            // CC-18: the "Фокус" button, the pill's exit button and
+            // `KeyCommand::ToggleFocusMode` all flip `self.focus.active`;
+            // the `.focus-timer` pill follows it via `bind_focus`.
+            ChromeAction::ToggleFocusTimer => {
+                self.focus.timer.toggle_pause();
+                if self.focus.timer.running {
+                    let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                    self.focus.tick(now_ms);
+                }
+                self.relayout_chrome_host();
+            }
             ChromeAction::ToggleFocus => {
                 self.focus.toggle(panels::focus_panel::DEFAULT_POMODORO_MIN);
                 if self.focus.active {
@@ -1550,18 +2064,6 @@ impl Lumen {
             // all — no force-HTTPS setting, no extensions/QA-flag store —
             // so a click still can't resolve to anything.
             //
-            // `ToggleFocusTimer`: distinct from `ToggleFocus` above — no
-            // `#demoBar` button reaches it (CC-18's panel has no play/pause
-            // control), and it's still only wired from the legacy
-            // `panels::focus_panel` overlay's own hit-test.
-            //
-            // `SetDevtoolsTab`: `.dt-tab`'s four static rows (Elements /
-            // Console / Network / Sources, `data-dt-tab="…"`) mock a
-            // multi-panel DevTools UI the engine does not have —
-            // `self.devtools_console: ConsolePanel` is a single JS-console
-            // view with no per-tab data behind Elements/Network/Sources, so
-            // there is nothing to switch between.
-            //
             // `ToggleQaPanel` (CC-18, `#demoBar`'s "QA-панель" button): the
             // QA/tester panel it targets is `strip_qa_panel_html`-excluded
             // from the product build entirely (same exclusion that already
@@ -1579,10 +2081,20 @@ impl Lumen {
             ChromeAction::DragPanel
             | ChromeAction::ArchiveCard
             | ChromeAction::ToggleSwitch
-            | ChromeAction::ToggleFocusTimer
-            | ChromeAction::SetDevtoolsTab
             | ChromeAction::ToggleQaPanel => {}
         }
+    }
+
+    /// UX-CHROME-PANELS: persists the accessibility draft, hides the panel and
+    /// re-delivers media changes (prefers-reduced-motion / forced colors).
+    pub(crate) fn close_a11y_panel(&mut self) {
+        let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+        self.a11y_panel.visible = false;
+        self.deliver_a11y_media_changes();
+        // Re-style with the (possibly toggled) forced-colors pref; no page
+        // geometry is read afterwards, so this stays async-safe (M2.2b-6).
+        self.relayout_chrome();
+        self.relayout_chrome_host();
     }
 
     /// CC-10: which modal `nid` (a `close-modal`-carrying node, or one of its
@@ -1593,6 +2105,8 @@ impl Lumen {
         let (doc, _) = self.chrome_doc.as_ref()?;
         let cert_overlay = doc.find_by_id(lumen_chrome::ids::CERT_OVERLAY);
         let print_overlay = doc.find_by_id(lumen_chrome::ids::PRINT_OVERLAY);
+        let shortcuts_overlay = doc.find_by_id(lumen_chrome::ids::SHORTCUTS_OVERLAY);
+        let access_overlay = doc.find_by_id(lumen_chrome::ids::ACCESS_OVERLAY);
         let mut cur = Some(nid);
         while let Some(id) = cur {
             if Some(id) == cert_overlay {
@@ -1600,6 +2114,12 @@ impl Lumen {
             }
             if Some(id) == print_overlay {
                 return Some(ChromeModalKind::Print);
+            }
+            if Some(id) == shortcuts_overlay {
+                return Some(ChromeModalKind::Shortcuts);
+            }
+            if Some(id) == access_overlay {
+                return Some(ChromeModalKind::Access);
             }
             cur = doc.get(id).parent;
         }
@@ -1625,6 +2145,23 @@ impl Lumen {
         let popover = doc.find_by_id(lumen_chrome::ids::PERM_POPOVER)?;
         let idx = doc.get(popover).children.iter().copied().filter(|&c| has_class(c, "perm-row")).position(|c| c == cur)?;
         panels::permission_panel::PermissionKind::ALL.get(idx).copied()
+    }
+
+    /// UX-PERMISSIONS-2: hand the user's answer to the page's pending
+    /// `Notification.requestPermission()` promises.
+    pub(crate) fn settle_page_permission(
+        &self,
+        kind: panels::permission_panel::PermissionKind,
+        state: panels::permission_panel::PermissionState,
+    ) {
+        use panels::permission_panel::PermissionState;
+        let name = match state {
+            PermissionState::Allow => "granted",
+            PermissionState::Deny => "denied",
+            PermissionState::Ask => "default",
+        };
+        let script = lumen_js::notifications_bindings::settle_script(kind.page_name(), name);
+        let _ = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| j.eval_js(&script));
     }
 
     /// BUG-411: push the shields state of the current host into the
@@ -1725,6 +2262,29 @@ pub(crate) fn chrome_node_changes(
             .chain(t.structural.then_some((*id, NodeChange::Unattributed)))
     })
 }
+
+/// `#contentArea` children that [`take_content_area`] keeps in the chrome tree
+/// (hit-testing reads them there) and that [`Lumen::relayout_chrome_host`]
+/// paints separately, unclipped — BUG-1605.
+pub(crate) const SALVAGED_POPOVER_IDS: [&str; 17] = [
+    lumen_chrome::ids::FIND_BAR,
+    lumen_chrome::ids::DOWNLOADS_PANEL,
+    lumen_chrome::ids::CP_OVERLAY,
+    lumen_chrome::ids::CERT_OVERLAY,
+    lumen_chrome::ids::SHORTCUTS_OVERLAY,
+    lumen_chrome::ids::ACCESS_OVERLAY,
+    lumen_chrome::ids::PRINT_OVERLAY,
+    lumen_chrome::ids::DEVTOOLS,
+    lumen_chrome::ids::NETWORK_PANEL,
+    lumen_chrome::ids::INSP_PANEL,
+    lumen_chrome::ids::READ_LATER_PANEL,
+    lumen_chrome::ids::PRIVACY_PANEL,
+    lumen_chrome::ids::NOTE_OVERLAY,
+    lumen_chrome::ids::TAB_CTX_MENU,
+    lumen_chrome::ids::PIP_CARD,
+    lumen_chrome::ids::PAGE_CTX_MENU,
+    lumen_chrome::ids::WORKSPACE_BAR,
+];
 
 /// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
 /// (depth-first, first match) — not just its children, but its own box (and
@@ -2064,4 +2624,6 @@ pub(crate) fn chrome_overlay_digest_reuse_disabled() -> bool {
 pub(crate) enum ChromeModalKind {
     Cert,
     Print,
+    Shortcuts,
+    Access,
 }

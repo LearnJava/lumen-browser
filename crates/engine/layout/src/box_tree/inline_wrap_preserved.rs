@@ -28,6 +28,8 @@ pub(crate) struct PreservedWrap<'a> {
     /// Whether a line may break between the previous segment and this one
     /// (the previous text ended with a wrap opportunity).
     pub(crate) break_before: bool,
+    /// Позиция начала строки после мягкого переноса (`text-indent: hanging`).
+    pub(crate) soft_x: f32,
 }
 
 /// A preserved space: the only characters after which `pre-wrap` may wrap.
@@ -155,7 +157,7 @@ pub(crate) fn wrap_preserved_segment(
             );
             first_piece &= piece_start == s;
             result.push(std::mem::take(current_line));
-            *current_x = 0.0;
+            *current_x = p.soft_x;
             piece_start = s;
             pending_w = 0.0;
             // A tab in the token now starts from the new line's edge.

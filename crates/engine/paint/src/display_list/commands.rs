@@ -102,6 +102,14 @@ pub enum DisplayCommand {
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
         tab_size: f32,
+        /// CSS Text L3 §8.2 — `letter-spacing`: добавляется после каждого
+        /// символа (layout уже учёл его в ширине фрагмента). 0 = `normal`.
+        /// Фиксированная точка 1/64 px (`spacing_to_fixed`/`spacing_px`): `i16`
+        /// вместо `f32`, чтобы `DisplayCommand` не вырос (тест размера 192).
+        letter_spacing: i16,
+        /// CSS Text L3 §8.1 — `word-spacing` (процент приближён от font-size),
+        /// те же единицы; добавляется после каждого пробела. 0 = `normal`.
+        word_spacing: i16,
         highlight_name: Option<String>,
         /// CSS Writing Modes L3 §6.5 — `text-orientation`. `None` = horizontal text;
         /// `Some(...)` signals vertical layout: paint rotates glyphs 90° CW for
@@ -654,6 +662,17 @@ pub enum DisplayCommand {
     },
 }
 
+/// px → фиксированная точка 1/64 px для `DrawText::{letter,word}_spacing`
+/// (насыщение по границам `i16`, ±511 px).
+pub fn spacing_to_fixed(px: f32) -> i16 {
+    (px * 64.0).round().clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+}
+
+/// Обратное к [`spacing_to_fixed`].
+pub fn spacing_px(fixed: i16) -> f32 {
+    f32::from(fixed) / 64.0
+}
+
 impl DisplayCommand {
     /// Имя варианта команды для диагностики (`LUMEN_FRAME_LOG=2`:
     /// разбивка времени paint-фазы по типам команд).
@@ -858,6 +877,8 @@ mod tests {
                 font_features: vec![(*b"liga", 1)],
                 font_palette: Some(FontPaletteSelection::Light),
                 tab_size: 8.0,
+                letter_spacing: 0,
+                word_spacing: 0,
                 highlight_name: Some("mark".to_string()),
                 text_orientation: Some(TextOrientation::Sideways),
             },

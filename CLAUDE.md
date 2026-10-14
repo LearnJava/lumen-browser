@@ -8,7 +8,7 @@ Loaded in full at the start of every session, so it holds **routing and invarian
 
 - **Layering:** `lumen-core` → dom/font/parsers → layout → paint → shell. No cycles. All architectural invariants — [`docs/invariants.md`](docs/invariants.md).
 - **V8 (`rusty_v8`) is the only JS engine**; `rquickjs` is gone from the workspace — never target it.
-- **Never hardcode a version** — derive it from `CARGO_PKG_VERSION` (the one manual site: the `navigator.userAgent` literal in `crates/js/src/shim/web_api_shim_mid_b.js`).
+- **Never hardcode a version** — derive it from `CARGO_PKG_VERSION`. The browser's name in every layer comes from one `lumen_core::Identity`; the Chrome major is `chrome_major!` (`crates/core/src/identity.rs`).
 
 ## Where to look
 
@@ -29,7 +29,7 @@ Write only inside the repository and its worktrees under `.claude/worktrees/`. N
 
 Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — `/lumen-task-finish`; starting one — `/lumen-task-start` (explicit `/` invocation only).
 
-1. `git pull origin main` first, before reading STATUS files or branching.
+1. `git pull -q origin main` first, before reading STATUS files or branching.
 2. "You are developer N" → continue your existing `p<N>-…` branch if there is one, else take the **first** line of `STATUS-PN.md`. Strictly top-down: the order encodes dependencies. If line 1 cannot start, say why and ask.
 3. Take the task: `cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` — fetches origin, refuses if any unmerged branch carries the task id, occupies the pool slot and pushes the branch. Only a branch **on origin** reserves.
 4. Every commit: gate → commit → `merge --no-ff` into `main` → push. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify` (also enforced by `.claude/settings.json`). CI is not awaited — watch `main` after the push.

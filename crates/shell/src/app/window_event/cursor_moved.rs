@@ -12,23 +12,8 @@ use winit::dpi::PhysicalPosition;
 impl Lumen {
     pub(crate) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.cursor_position = Some(position);
-        // F2-6: while resizing a docked panel, the drag owns the cursor —
-        // update its width and relayout, skip page/inspector hover work.
-        if self.panel_resize.is_some() {
-            let dpr = self
-                .renderer
-                .as_ref()
-                .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                .max(1e-6);
-            let x_css = (position.x as f32) / dpr;
-            if self.drag_panel_resize(x_css) {
-                self.request_redraw();
-            }
-            self.update_cursor_icon();
-            return;
-        }
         // CC-18 срез 3: while dragging the floating panel by its header the
-        // drag owns the cursor, exactly like `panel_resize` above — move the
+        // drag owns the cursor, — move the
         // panel and skip page hover / inspector / gesture work. No relayout:
         // the offset is applied when the floating display list is rebuilt.
         if self.chrome_float_drag.is_some() {
@@ -108,10 +93,6 @@ impl Lumen {
             }
             // Collect events to fire while mutating state, then release the
             // mutable borrow before calling self.js_drag_event() (needs &self).
-            // Width of any left-docked sidebar, computed before the
-            // `dnd_state` mutable borrow so page-coord conversion can
-            // subtract it. Cross-dock aware across all four sidebars.
-            let left_dock_w = self.left_dock().map_or(0.0, |(_, w)| w);
             let ev_opt: Option<DndMoveEvents> = if let Some(dnd) = self.dnd_state.as_mut() {
                 let dpr = self
                     .renderer
@@ -121,7 +102,7 @@ impl Lumen {
                 let x_css = (position.x as f32) / dpr;
                 let y_css = (position.y as f32) / dpr;
                 let (page_x, page_y) = (
-                    x_css - left_dock_w + self.scroll_x,
+                    x_css + self.scroll_x,
                     y_css - toolbar::CHROME_H + self.scroll_y,
                 );
                 let target_nid = self.layout_box.as_ref().and_then(|lb| {
@@ -194,6 +175,18 @@ impl Lumen {
             );
             self.scroll_to(target);
         }
+        // UX-SCROLLBAR: активный drag горизонтального thumb-а страницы.
+        if let Some(drag) = self.hscroll_drag {
+            let dpr = self
+                .renderer
+                .as_ref()
+                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                .max(1e-6);
+            let cursor_x_css = (position.x as f32) / dpr;
+            let (vw, _, v_present) = self.hbar_layout();
+            let target = scrollbar::hscroll_for(&drag, cursor_x_css, self.content_width, vw, v_present);
+            self.scroll_x_by(target - self.scroll_x);
+        }
         // FRAME-3 remainder: активный drag СОБСТВЕННОГО scrollbar-а фрейма —
         // тот же приём, что выше у страничного `scroll_drag`, но целевой
         // фрейм несёт свой индекс (несколько фреймов держат независимые
@@ -244,6 +237,7 @@ impl Lumen {
                 win_w,
                 win_h,
             );
+            self.relayout_chrome_host();
             self.request_redraw();
         }
         // Pointer Lock: skip normal hover/mousemove dispatch while locked.
@@ -392,29 +386,7 @@ impl Lumen {
         // only `settings_panel::tooltip_for`/`build_tooltip`, both
         // deleted with the legacy paint, so every `CursorMoved` while
         // the panel was open cost a `request_redraw()` for nothing.
-        // CC-4: update tab context-menu hover highlight.
-        if self.tab_context_menu.is_open() {
-            let dpr = self
-                .renderer
-                .as_ref()
-                .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                .max(1e-6);
-            let x_css = (position.x as f32) / dpr;
-            let y_css = (position.y as f32) / dpr;
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            let new_hover = tabs::context_menu::item_at(
-                &self.tab_context_menu,
-                x_css,
-                y_css,
-                win_w,
-                win_h,
-            );
-            if new_hover != self.tab_context_menu.hovered {
-                self.tab_context_menu.hovered = new_hover;
-                self.request_redraw();
-            }
-        }
+        // Tab context menu hover: `.tab-ctx-row:hover` in the engine chrome.
         // B-7/CC-CSS-4: Active resize — update element width/height as mouse
         // moves, gated to the axes the grip's `resize` value allows (a pure
         // `resize: vertical` grip must not also change width on a diagonal drag).

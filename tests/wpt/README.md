@@ -716,6 +716,13 @@ never-vetted sub-suites, not part of the 168-file count).
 TIMEOUT = `test-wait` never cleared. A crashtest with no `<script>` has no JS runtime,
 so the executor stops waiting `NAV_SETTLE_S` after navigate and checks liveness only.
 
+`print-reftest` items run too (`LumenPrintRefTestExecutor`, WPT-RUN-8-S2): each page set is one
+`lumen --print-to-pdf` child; the per-page rasters are read straight out of its PDF (raw
+DeviceRGB image per page, `pdf_pages_to_png_b64`) and compared by `RefTestImplementation`
+like a reftest. The page is fixed at A4 with 48 px margins, so the test's own
+`viewport_size` (5in x 3in upstream) is not applied — the harness logs `Unexpected viewport
+size` per screenshot, harmless; `page_ranges` is applied. Needs Pillow (already in the venv).
+
 (Omit `--binary` and it defaults to `target/$LUMEN_PROFILE/lumen.exe`; pass it
 explicitly when running the script from a `git worktree`, whose own `target/`
 is empty. Use `run_smoke.py` with an explicit test-id list instead only to run

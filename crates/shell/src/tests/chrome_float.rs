@@ -271,3 +271,119 @@ fn upd9_update_bar_detaches_paints_and_routes_its_button() {
         "restart button is hidden until the archive is staged"
     );
 }
+
+/// UX-PASSWORDS: `#loginBar` отцепляется как `#updateBar` и не налезает на него
+/// по горизонтали, а кнопка «Сохранить» разрешается в `SaveLogin`.
+#[test]
+fn login_bar_detaches_and_routes_its_buttons() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let bar = doc.find_by_id(lumen_chrome::ids::LOGIN_BAR).expect("has #loginBar");
+
+    let model = lumen_chrome::ChromeModel {
+        login_offer: lumen_chrome::ChromeLoginOfferModel {
+            open: true,
+            title: "Сохранить пароль?".to_owned(),
+            meta: "example.com · anna".to_owned(),
+            save_label: "Сохранить".to_owned(),
+            fill: false,
+            generate: false,
+            never_label: String::new(),
+        },
+        update: lumen_chrome::ChromeUpdateModel { bar_open: true, ..Default::default() },
+        ..lumen_chrome::ChromeModel::default()
+    };
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let (rect, detached) = take_floating_panel(&mut layout, bar, lumen_chrome::ids::LOGIN_BAR)
+        .expect("open #loginBar must be detachable");
+    assert!(rect.right() < 1920.0 - 18.0 - 340.0 + 0.5, "не должен перекрывать #updateBar: {rect:?}");
+    assert!(fills_rect(&paint_ordered(&detached.removed), rect), "bar background must paint");
+
+    let press = |id| {
+        let node = doc.find_by_id(id).expect("button id");
+        let r = lumen_layout::find_box_by_node(&detached.removed, node).expect("button box").rect;
+        let hit = hit_test(Point::new(r.x + r.width / 2.0, r.y + r.height / 2.0), &detached.removed)
+            .expect("press hits the bar");
+        action_at(&doc, &hit)
+    };
+    assert_eq!(press(lumen_chrome::ids::LOGIN_SAVE_BTN), Some(lumen_chrome::ChromeAction::SaveLogin));
+}
+
+/// UX-SECURITY-UI: `#securityBox` отцепляется как плавающая панель, обе кнопки
+/// разрешаются в свои действия.
+#[test]
+fn security_box_detaches_and_routes_its_buttons() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let bx = doc.find_by_id(lumen_chrome::ids::SECURITY_BOX).expect("has #securityBox");
+
+    let model = lumen_chrome::ChromeModel {
+        security: lumen_chrome::ChromeSecurityModel {
+            open: true,
+            title: "Ваше подключение не защищено".to_owned(),
+            message: "bad.example".to_owned(),
+            detail: "certificate expired".to_owned(),
+            proceed_label: String::new(),
+            other_browser: true,
+            proceed_blocked: false,
+        },
+        ..lumen_chrome::ChromeModel::default()
+    };
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let (rect, detached) = take_floating_panel(&mut layout, bx, lumen_chrome::ids::SECURITY_BOX)
+        .expect("open #securityBox must be detachable");
+    assert!(fills_rect(&paint_ordered(&detached.removed), rect), "box background must paint");
+
+    let press = |id| {
+        let node = doc.find_by_id(id).expect("button id");
+        let r = lumen_layout::find_box_by_node(&detached.removed, node).expect("button box").rect;
+        let hit = hit_test(Point::new(r.x + r.width / 2.0, r.y + r.height / 2.0), &detached.removed)
+            .expect("press hits the box");
+        action_at(&doc, &hit)
+    };
+    assert_eq!(press(lumen_chrome::ids::SECURITY_PROCEED_BTN), Some(lumen_chrome::ChromeAction::SecurityProceed));
+    assert_eq!(press(lumen_chrome::ids::SECURITY_BACK_BTN), Some(lumen_chrome::ChromeAction::SecurityBack));
+    assert_eq!(
+        press(lumen_chrome::ids::SECURITY_OTHER_BTN),
+        Some(lumen_chrome::ChromeAction::SecurityOtherBrowser)
+    );
+    assert_eq!(
+        press(lumen_chrome::ids::SECURITY_OTHER_ANY_BTN),
+        Some(lumen_chrome::ChromeAction::SecurityOtherBrowserAny)
+    );
+}
+
+/// UX-CHROME-PANELS срез 21: `#profileFrame` в анонимном профиле отцепляется,
+/// покрывает окно целиком и рисует обводку; вне анонимного — не рисуется.
+#[test]
+fn profile_frame_covers_window_only_for_anonymous() {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let probe = |slug: &str| {
+        let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+        let model = lumen_chrome::ChromeModel {
+            profile_slug: Some(slug.to_owned()),
+            ..lumen_chrome::ChromeModel::default()
+        };
+        let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+        let node = doc.find_by_id(lumen_chrome::ids::PROFILE_FRAME).expect("has #profileFrame");
+        let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+        take_floating_panel(&mut layout, node, lumen_chrome::ids::PROFILE_FRAME)
+            .map(|(rect, d)| (rect, paint_ordered(&d.removed).len()))
+    };
+    let (rect, cmds) = probe("anonymous").expect("anonymous: рамка есть в дереве");
+    assert_eq!((rect.x, rect.y, rect.width, rect.height), (0.0, 0.0, 1920.0, 1040.0));
+    assert!(cmds > 0, "обводка должна рисоваться");
+    let off = probe("personal").map_or(0, |(_, n)| n);
+    assert_eq!(off, 0, "вне анонимного профиля рамка не рисуется");
+}

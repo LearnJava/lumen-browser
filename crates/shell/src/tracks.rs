@@ -191,6 +191,8 @@ pub fn build_cue_overlay(
                     font_features: Vec::new(),
                     font_palette: None,
                     tab_size: 0.0,
+                    letter_spacing: 0,
+                    word_spacing: 0,
                     highlight_name: None,
                     text_orientation: None,
                 });

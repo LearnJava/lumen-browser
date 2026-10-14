@@ -161,3 +161,7 @@ here; P4 can add a dedicated Tier row when this draft graduates or is picked up.
 Status flipped to `OPEN (ДОРАБОТКА → CSS-SPECS.md)`. No `STATUS-P3.md` pointer
 existed for this row to remove (BUGS.md:56 was not in the pointer list —
 pre-existing drift, not introduced by this revision).
+
+## Повторное измерение: WPT-RUN-14 срез 26 (2026-10-09)
+
+`css/css-borders` целиком: 204 automatable id, 47.49 (23.3 %), 161 не зелёный — `corner-shape/` 79, `border-shape/` 43, `tentative/` 31, прочее 8 (из них 5 — привязка ширины границы к пикселям, [BUG-1585](BUG-1585-OPEN.md)). 42 reftest `render-corner-shape.html?corner-shape=…` пиксельно не проверены: параметры лежат в имени id, и `reftest_pixdiff.py` файл по такому пути не открывает (`nosrc`); остальные 18 reftest `corner-shape` и 30 `border-shape` — `thick`. `CSS.supports("corner-shape","squircle")`, `("border-shape","circle(50%)")`, `("border-clip","none")` — `false`. Строка с составом работ — `CSS-SPECS.md` (`corner-shape` / `border-shape` / …).

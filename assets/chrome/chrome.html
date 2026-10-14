@@ -167,7 +167,9 @@ body[data-demo="mini"] .demo-bar.mini-open .demo-hint{ display:block; }
   position:relative; flex:1; min-width:0;
 }
 /* Профиль = обводка всего окна (правило вложенных рам, уровень 0) */
-body[data-profile="anonymous"] .app-frame{ box-shadow:inset 0 0 0 2px var(--accent); }
+/* UX-CHROME-PANELS срез 21: обводка анонимного профиля — #profileFrame поверх страницы (см. ниже) */
+.profile-frame{ position:fixed; left:0; top:0; right:0; bottom:0; display:none; pointer-events:none; z-index:9999; box-shadow:inset 0 0 0 2px var(--accent); }
+body[data-profile="anonymous"] .profile-frame{ display:block; }
 body[data-profile="guest"] .app-frame{ filter:grayscale(1); }
 
 .app-body{ flex:1; display:flex; min-height:0; }
@@ -199,6 +201,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
   display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:var(--radius-md); width:100%; background:none; border:none; text-align:left;
 }
 .profile-menu .pm-item:hover{ background:var(--surface-2); }
+.profile-menu .pm-item.active{ background:var(--surface-2); font-weight:700; }
+.hbar-profile-wrap{ position:relative; display:flex; align-items:center; }
+.hbar-profile-wrap .profile-menu{ top:30px; left:0; }
 .pm-dot{ width:9px; height:9px; border-radius:50%; flex:none; }
 
 .sb-divider{ height:1px; background:var(--stroke); margin:2px 0; }
@@ -228,6 +233,8 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .tab-row.active{ background:var(--surface-2); border-left-color:var(--ws-color, var(--accent)); }
 .tab-row.child{ margin-left:12px; }
 .tab-row .tree-line{ position:absolute; left:-8px; top:-2px; bottom:14px; width:8px; border-left:1px solid var(--stroke); border-bottom:1px solid var(--stroke); border-radius:0 0 0 4px; }
+.tab-arrow{ width:12px; height:16px; flex:none; border:none; background:none; padding:0; font-size:11px; line-height:16px; color:var(--text-secondary); }
+.tab-arrow:hover{ color:var(--text-primary); }
 .container-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; margin-right:1px; }
 .group-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; margin-right:1px; }
 .tab-fav{ width:14px; height:14px; border-radius:3px; flex:none; display:flex; align-items:center; justify-content:center; background:var(--surface-2); font-size:9px; overflow:hidden; }
@@ -239,6 +246,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .tab-row:hover .tab-close{ display:flex; }
 .tab-close:hover{ background:var(--stroke); }
 .spinner{ width:12px; height:12px; border-radius:50%; border:1.6px solid var(--stroke); border-top-color:var(--accent); animation:spin .7s linear infinite; }
+.tb-btn .ic-stop{ display:none; }
+.tb-btn.loading .ic-stop{ display:block; }
+.tb-btn.loading .ic-reload{ display:none; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
 
 /* Свернуть сайдбар */
@@ -297,6 +307,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
   border-radius:var(--radius-md); padding:6px 8px; display:none; align-items:center; gap:6px;
 }
 .omnibox-warn.show{ display:flex; }
+/* UX-ZOOM: индикатор масштаба страницы; виден только при масштабе ≠ 100 %, клик сбрасывает. */
+.zoom-btn{ display:none; height:22px; padding:0 6px; border-radius:var(--radius-md); border:none; background:var(--accent-soft); color:var(--accent); font-size:11px; align-items:center; justify-content:center; }
+.zoom-btn.show{ display:flex; }
 
 .dropdown{
   position:absolute; top:38px; left:0; right:0; background:var(--surface-0); border:1px solid var(--stroke);
@@ -502,11 +515,13 @@ body[data-theme="dark"] .hist-banner{ background:#332b06; border-color:#5c4d0f; 
 .dt-tab{ padding:0 12px; height:100%; display:flex; align-items:center; font-size:11.5px; color:var(--text-secondary); border-bottom:2px solid transparent; }
 .dt-tab:hover{ color:var(--text-primary); }
 .dt-tab.active{ color:var(--text-primary); border-bottom-color:var(--accent); font-weight:600; }
-.dt-close{ margin-left:auto; width:22px; height:22px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); }
+.dt-clear{ margin-left:auto; height:22px; padding:0 8px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); font-size:11px; }
+.dt-clear:hover{ background:var(--surface-2); }
+.dt-close{ margin-left:6px; width:22px; height:22px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); }
 .dt-close:hover{ background:var(--surface-2); }
 .dt-panel{ flex:1; overflow-y:auto; display:none; font-family:var(--font-mono); font-size:11.5px; }
 .dt-panel.active{ display:block; }
-.console-line{ padding:4px 10px; border-bottom:1px solid var(--stroke); display:flex; gap:8px; }
+.console-line{ padding:4px 10px; white-space:nowrap; overflow:hidden; border-bottom:1px solid var(--stroke); display:flex; gap:8px; }
 .console-line.error{ background:rgba(224,52,43,.08); border-left:3px solid var(--red-badge); }
 .console-line.warn{ background:rgba(216,164,0,.08); border-left:3px solid var(--yellow); }
 .console-line .ln{ color:var(--text-secondary); }
@@ -517,6 +532,14 @@ body[data-theme="dark"] .hist-banner{ background:#332b06; border-color:#5c4d0f; 
 .status-badge.s2{ background:rgba(31,157,85,.14); color:var(--green); }
 .status-badge.s3{ background:rgba(11,111,224,.14); color:var(--blue-badge); }
 .status-badge.s4{ background:rgba(224,52,43,.14); color:var(--red-badge); }
+.net-row{ display:flex; gap:10px; padding:4px 10px; border-bottom:1px solid var(--stroke); white-space:nowrap; overflow:hidden; }
+.net-row.blocked{ background:rgba(224,52,43,.08); border-left:3px solid var(--red-badge); }
+.net-row.failed{ background:rgba(216,164,0,.08); border-left:3px solid var(--yellow); }
+.net-row .net-method{ flex:none; width:48px; color:var(--blue-badge); }
+.net-row .net-status{ flex:none; width:52px; }
+.net-row .net-time{ flex:none; width:64px; color:var(--text-secondary); }
+.net-row .net-url{ flex:1; overflow:hidden; }
+#dt-network:empty::before{ content:"(no requests yet)"; display:block; padding:6px 10px; color:var(--text-secondary); }
 .elements-tree{ padding:10px; white-space:pre; line-height:1.7; }
 .elements-tree .tag{ color:#0B6FE0; } .elements-tree .attr{ color:#8B5CF6; } .elements-tree .val{ color:#1F9D55; }
 body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="dark"] .elements-tree .attr{ color:#c4a7ff; } body[data-theme="dark"] .elements-tree .val{ color:#7de3a3; }
@@ -530,6 +553,10 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 }
 .downloads-panel.open{ display:flex; }
 .dl-header{ display:flex; align-items:center; padding:10px 12px; border-bottom:1px solid var(--stroke); font-weight:600; font-size:12.5px; }
+.dl-clear{ display:none; margin-left:auto; font-size:10.5px; padding:4px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-secondary); }
+.dl-clear:hover{ background:var(--surface-2); }
+.dl-header.has-finished .dl-clear{ display:block; }
+.dl-header.has-finished .dl-close{ margin-left:6px; }
 .dl-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
 .dl-close:hover{ background:var(--surface-2); }
 .dl-list{ overflow-y:auto; padding:8px; }
@@ -544,6 +571,52 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .dl-actions{ display:flex; gap:6px; margin-top:8px; }
 .dl-actions button{ font-size:10.5px; padding:4px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; gap:4px; }
 .dl-actions button:hover{ background:var(--surface-2); }
+
+/* ---------- Login bar (UX-PASSWORDS) ---------- */
+.login-bar{
+  position:fixed; right:378px; top:92px; width:340px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; gap:10px; padding:12px; z-index:640;
+}
+.login-bar.open{ display:flex; }
+.login-actions{ display:flex; gap:6px; justify-content:flex-end; }
+.login-actions button{ font-size:11px; padding:5px 10px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); }
+.login-actions button:hover{ background:var(--surface-2); }
+.login-bar .fill-only, .login-bar .gen-only{ display:none; }
+.login-bar.fill .fill-only{ display:inline-block; }
+.login-bar.fill .offer-only{ display:none; }
+.login-bar.generate .gen-only{ display:inline-block; }
+.login-bar.generate .offer-only{ display:none; }
+.login-actions button.primary{ border-color:var(--accent); background:var(--accent); color:#fff; }
+
+/* ---------- Page dialog (UX-DIALOGS) ---------- */
+.dialog-box{
+  position:fixed; left:calc(50% - 210px); top:120px; width:420px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 24px 60px rgba(0,0,0,.32);
+  display:none; flex-direction:column; gap:12px; padding:16px; z-index:700;
+}
+.dialog-box.open{ display:flex; }
+.dialog-box .dlg-msg{ font-size:12.5px; margin-top:6px; white-space:pre-wrap; max-height:240px; overflow:hidden; }
+.dialog-box .dlg-input{ display:none; border:1px solid var(--accent); border-radius:var(--radius-sm); padding:6px 8px; font-size:12.5px; background:var(--surface-0); }
+.dialog-box.has-input .dlg-input{ display:block; }
+.dialog-box.no-cancel #dialogCancelBtn{ display:none; }
+
+/* ---------- Security interstitial (UX-SECURITY-UI) ---------- */
+.security-box{
+  position:fixed; left:calc(50% - 240px); top:140px; width:480px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-top:4px solid #d93025; border-radius:var(--radius-lg); box-shadow:0 24px 60px rgba(0,0,0,.4);
+  display:none; flex-direction:column; gap:12px; padding:16px; z-index:710;
+}
+.security-box.open{ display:flex; }
+.security-box .sec-msg{ font-size:12.5px; margin-top:6px; }
+.security-box .sec-detail{ font-size:11.5px; color:var(--text-secondary); margin-top:6px; }
+.security-box .primary-safe{ border-color:var(--accent); background:var(--accent); color:#fff; }
+.security-box .login-actions{ flex-wrap:wrap; }
+.security-box #securityOtherBtn{ display:none; }
+.security-box #securityOtherAnyBtn{ display:none; }
+.security-box.has-other #securityOtherBtn{ display:inline-block; }
+.security-box.has-other #securityOtherAnyBtn{ display:inline-block; }
+.security-box.no-proceed #securityProceedBtn{ display:none; }
 
 /* ---------- Update bar (UPD-9) ---------- */
 .update-bar{
@@ -589,6 +662,123 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .arc-actions button{ width:22px; height:22px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; justify-content:center; color:var(--text-secondary); }
 .arc-actions button:hover{ background:var(--surface-2); color:var(--text-primary); }
 
+.read-later-panel{
+  position:absolute; right:4px; top:4px; width:420px; background:var(--surface-0);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; z-index:70; overflow:hidden;
+}
+.read-later-panel.open{ display:flex; }
+.rl-header{ display:flex; align-items:center; padding:10px 12px; border-bottom:1px solid var(--stroke); font-weight:600; font-size:12.5px; }
+.rl-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.rl-close:hover{ background:var(--surface-2); }
+.rl-row{ display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--stroke); }
+.rl-row:hover{ background:var(--surface-1); }
+.rl-text{ flex:1; min-width:0; }
+.rl-title{ font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rl-meta{ font-size:10.5px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rl-badge{ flex:none; padding:1px 6px; border-radius:var(--radius-sm); font-size:9px; font-weight:700; color:#fff; background:rgba(55,115,210,.86); }
+.rl-badge.read{ background:rgba(55,150,75,.8); }
+.rl-delete{ flex:none; width:22px; height:22px; border:none; background:none; font-size:14px; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.rl-delete:hover{ background:var(--surface-2); color:var(--red-badge); }
+#rlList:empty::before{ content:"No saved pages yet. Use @read-later <url> to save."; display:block; padding:16px 12px; font-size:12px; color:var(--text-secondary); }
+
+.insp-panel{
+  position:absolute; right:0; top:0; bottom:0; width:300px; background:var(--surface-0);
+  border-left:1px solid var(--stroke); display:none; flex-direction:column; z-index:66; overflow:hidden;
+}
+.insp-panel.open{ display:flex; }
+.insp-header{ display:flex; align-items:center; height:30px; flex:none; padding:0 10px; background:var(--surface-1); font-size:12px; color:var(--text-secondary); }
+.insp-pos{ margin-left:auto; font-size:10.5px; }
+.insp-close{ margin-left:6px; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.insp-close:hover{ background:var(--surface-2); }
+.insp-tabs{ display:flex; height:26px; flex:none; background:var(--surface-1); border-bottom:1px solid var(--stroke); }
+.insp-tab{ flex:1; border:none; background:none; font-size:12px; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.insp-tab:hover{ color:var(--text-primary); }
+.insp-tab.active{ color:var(--text-primary); border-bottom-color:var(--accent); font-weight:600; }
+.insp-label{ padding:6px 10px 0; font-family:var(--font-mono); font-size:13px; color:var(--accent); overflow:hidden; white-space:nowrap; }
+.insp-node{ padding:0 10px 4px; font-family:var(--font-mono); font-size:12px; color:var(--text-secondary); }
+.insp-hint{ padding:8px 10px; font-size:12px; color:var(--text-secondary); }
+.insp-hint:empty{ display:none; }
+#inspRows{ flex:none; font-family:var(--font-mono); font-size:12px; overflow:hidden; }
+.insp-row{ display:flex; gap:6px; height:18px; padding:0 10px; white-space:nowrap; overflow:hidden; }
+.insp-key{ flex:none; max-width:46%; color:var(--blue-badge); overflow:hidden; }
+.insp-val{ flex:1; min-width:0; overflow:hidden; }
+.insp-row.insp-sel .insp-key{ max-width:none; color:var(--accent); }
+.insp-row.insp-sep{ height:1px; margin:2px 10px 0; padding:0; background:var(--stroke); }
+#inspNet{ flex:1; font-family:var(--font-mono); font-size:11.5px; overflow:hidden; }
+#inspNet .net-row{ gap:6px; padding:4px 10px; }
+#inspNet .net-row .net-method{ width:40px; }
+#inspNet .net-row .net-status{ width:40px; }
+#inspNet .net-row .net-time{ width:52px; }
+#inspNet:empty::before{ content:"(no requests yet)"; display:block; padding:8px 10px; color:var(--text-secondary); }
+.privacy-panel{
+  position:absolute; right:0; top:0; bottom:0; width:320px; background:var(--surface-0);
+  border-left:1px solid var(--stroke); display:none; flex-direction:column; z-index:65; overflow:hidden;
+}
+.privacy-panel.open{ display:flex; }
+.pv-header{ display:flex; align-items:center; height:34px; flex:none; padding:0 12px; background:var(--surface-1); font-weight:600; font-size:12.5px; }
+.pv-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.pv-close:hover{ background:var(--surface-2); }
+.pv-summary{ display:flex; align-items:center; gap:16px; height:30px; flex:none; padding:0 12px; background:var(--surface-1); border-bottom:1px solid var(--stroke); font-size:12px; font-weight:700; }
+.pv-blocked{ color:var(--red-badge); }
+.pv-allowed{ color:var(--green); }
+.pv-position{ margin-left:auto; font-size:10.5px; font-weight:400; color:var(--text-secondary); }
+.pv-list{ flex:1; overflow:hidden; }
+.pv-row{ display:flex; align-items:center; gap:8px; height:38px; padding:0 12px; }
+.pv-row:nth-child(even){ background:var(--surface-1); }
+.pv-dot{ flex:none; width:8px; height:8px; border-radius:4px; background:var(--green); }
+.pv-row.blocked .pv-dot{ background:var(--red-badge); }
+.pv-row.pending .pv-dot{ background:var(--text-secondary); }
+.pv-text{ flex:1; min-width:0; }
+.pv-host{ font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pv-sub{ font-size:10.5px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pv-row.blocked .pv-sub{ color:var(--red-badge); }
+#pvList:empty::before{ content:"No requests yet"; display:block; padding:14px 12px; font-size:12px; color:var(--text-secondary); }
+
+.workspace-bar{
+  position:absolute; left:0; right:0; bottom:0; height:32px; background:var(--surface-0);
+  border-top:1px solid var(--stroke); display:none; align-items:center; gap:6px; padding:0 8px 0 6px; z-index:66;
+}
+.workspace-bar.open{ display:flex; }
+.wsb-chips{ flex:1; display:flex; align-items:center; gap:6px; overflow:hidden; }
+.wsb-chip{ display:flex; align-items:center; height:22px; max-width:160px; border-radius:var(--radius-lg); background:var(--surface-1); border-bottom:2px solid transparent; font-size:11px; color:var(--text-secondary); }
+.wsb-chip.active{ background:var(--surface-2); border-bottom-color:var(--ws-color, var(--accent)); color:var(--text-primary); }
+.wsb-name{ border:none; background:none; padding:0 4px 0 10px; font-size:11px; color:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wsb-del{ border:none; background:none; width:18px; font-size:11px; color:var(--red-badge); }
+.wsb-add{ flex:none; width:30px; height:22px; border:none; border-radius:var(--radius-lg); background:var(--surface-1); font-size:12px; color:var(--green); }
+.wsb-add:hover{ background:var(--surface-2); }
+
+.note-url{ font-family:var(--font-mono); font-size:11px; color:var(--accent); word-break:break-all; margin-bottom:10px; }
+.note-sel{ margin:0 0 10px; padding:8px 10px; border-left:3px solid var(--accent); background:var(--surface-1); font-style:italic; font-size:13px; }
+.note-comment{ font-size:12px; color:var(--text-secondary); }
+.note-comment:empty{ display:none; }
+
+.tab-ctx{ position:fixed; display:none; width:210px; padding:5px 0; background:var(--surface-0); border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 8px 24px rgba(0,0,0,.18); z-index:300; }
+.tab-ctx.open{ display:block; }
+.tab-ctx-row{ display:block; width:100%; height:28px; padding:0 14px; border:none; background:none; text-align:left; font-size:13px; line-height:28px; color:var(--text-primary); }
+.tab-ctx-row:hover{ background:var(--surface-2); }
+.page-ctx{ position:fixed; display:none; width:230px; padding:5px 0; background:var(--surface-0); border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 8px 24px rgba(0,0,0,.18); z-index:300; }
+.page-ctx.open{ display:block; }
+.page-ctx-row{ display:block; width:100%; height:28px; padding:0 14px; border:none; background:none; text-align:left; font-size:13px; line-height:28px; color:var(--text-primary); }
+.page-ctx-row:hover{ background:var(--surface-2); }
+.page-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
+.tab-ctx-row.sep{ border-top:1px solid var(--stroke); height:29px; }
+
+.pip-card{ position:fixed; display:none; width:320px; height:180px; background:#18181e; border:1px solid var(--stroke); border-radius:var(--radius-lg); overflow:hidden; }
+.pip-card.open{ display:block; }
+.pip-poster{ position:absolute; left:0; top:0; width:320px; height:180px; object-fit:cover; }
+.pip-poster.empty{ display:none; }
+.pip-header{ position:absolute; left:0; top:0; width:100%; height:26px; background:rgba(10,10,14,.7); }
+.pip-title{ position:absolute; left:10px; top:5px; width:270px; height:16px; overflow:hidden; white-space:nowrap; font-size:12px; line-height:16px; color:var(--text-primary); }
+.pip-close{ position:absolute; right:0; top:0; width:26px; height:26px; padding:0; border:none; background:none; font-size:15px; line-height:26px; color:#dc9696; }
+.pip-play{ position:absolute; left:136px; top:66px; width:48px; height:48px; padding:0; border:none; border-radius:24px; background:rgba(0,0,0,.43); }
+.pip-bar{ position:absolute; top:13px; width:5px; height:22px; background:#f0f0f4; }
+.pip-bar.a{ left:13px; }
+.pip-bar.b{ left:23px; }
+.pip-tri{ position:absolute; left:19px; top:12px; width:0; height:0; border-top:12px solid transparent; border-bottom:12px solid transparent; border-left:20px solid #f0f0f4; }
+.pip-card.playing .pip-tri{ display:none; }
+.pip-card:not(.playing) .pip-bar{ display:none; }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -616,7 +806,7 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 
 /* ---------- Focus mode ---------- */
 .focus-timer{ position:absolute; top:14px; right:14px; display:none; align-items:center; gap:10px; background:rgba(20,20,24,.55); backdrop-filter:blur(6px); color:#fff; padding:6px 12px; border-radius:999px; font-size:12px; z-index:100; }
-body.focus-mode .focus-timer{ display:flex; }
+body.focus-mode .focus-timer, .focus-timer.open{ display:flex; }
 body.focus-mode .sidebar, body.focus-mode .toolbar, body.focus-mode .row1-horizontal, body.focus-mode .right-sidebar{ display:none !important; }
 .focus-exit{ border:none; background:rgba(255,255,255,.15); color:#fff; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
 
@@ -661,6 +851,18 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 .modal-foot button{ padding:6px 14px; border-radius:var(--radius-md); font-size:12px; border:1px solid var(--stroke); background:var(--surface-0); }
 .modal-foot button:hover{ background:var(--surface-2); }
 .modal-foot button.primary{ background:var(--accent); color:#fff; border-color:var(--accent); }
+
+.sc-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; height:32px; padding:0 4px; font-size:12px; border-bottom:1px solid var(--stroke); }
+.sc-row:hover{ background:var(--surface-2); }
+.sc-row .sc-key{ font-family:var(--font-mono); font-size:11px; color:var(--accent); background:var(--surface-1); border-radius:var(--radius-sm); padding:3px 8px; }
+.sc-row.rebinding .sc-key{ color:var(--text-secondary); }
+.sc-hint{ font-size:11px; color:var(--text-secondary); margin-right:auto; align-self:center; }
+
+.ac-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:40px; font-size:12px; border-bottom:1px solid var(--stroke); }
+.ac-pills{ display:flex; gap:4px; }
+.ac-pill{ padding:4px 9px; font-size:11.5px; border:1px solid var(--stroke); border-radius:999px; background:var(--surface-0); }
+.ac-pill:hover{ background:var(--surface-2); }
+.ac-pill.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
 
 /* ---------- Print dialog ---------- */
 .print-body{ display:flex; height:440px; }
@@ -736,6 +938,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
 <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
 <symbol id="i-pause" viewBox="0 0 24 24"><line x1="7" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="17" y2="20"/></symbol>
+<symbol id="i-translate" viewBox="0 0 24 24"><path d="M4 5h9M8.5 3v2M6 5c.5 3.5 3 6.5 6.5 8M12 5c-.5 3.5-3 6.5-7 8.5"/><path d="M13 21l4-10 4 10M14.5 17.5h5"/></symbol>
 <symbol id="i-printer" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></symbol>
 </defs>
 </svg>
@@ -820,6 +1023,51 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
   </div>
 </div>
 
+<!-- ================= LOGIN BAR (UX-PASSWORDS) ================= -->
+<div class="login-bar" id="loginBar">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-lock"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="loginTitle">Сохранить пароль?</div><div class="upd-meta" id="loginMeta"></div></div>
+    <button class="upd-close" data-action="dismiss-login" aria-label="Закрыть"><svg class="icon"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="login-actions">
+    <button class="primary gen-only" id="loginGenBtn" data-action="use-generated-password">Использовать</button>
+    <button class="fill-only" id="loginNextBtn" data-action="next-login">Другой аккаунт</button>
+    <button class="offer-only" id="loginNeverBtn" data-action="never-save-login">Никогда для этого сайта</button>
+    <button class="primary offer-only" id="loginSaveBtn" data-action="save-login">Сохранить</button>
+  </div>
+</div>
+
+<!-- ================= PAGE DIALOG (UX-DIALOGS) ================= -->
+<div class="dialog-box" id="dialogBox" role="alertdialog">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-bell"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="dialogTitle"></div><div class="dlg-msg" id="dialogMessage"></div></div>
+  </div>
+  <div class="dlg-input" id="dialogInput"></div>
+  <div class="login-actions">
+    <button id="dialogCancelBtn" data-action="dialog-cancel">Отмена</button>
+    <button class="primary" id="dialogOkBtn" data-action="dialog-ok">OK</button>
+  </div>
+</div>
+
+<!-- ================= SECURITY INTERSTITIAL (UX-SECURITY-UI) ================= -->
+<div class="security-box" id="securityBox" role="alertdialog">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-shield"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="securityTitle"></div><div class="sec-msg" id="securityMessage"></div><div class="sec-detail" id="securityDetail"></div></div>
+  </div>
+  <div class="login-actions">
+    <button id="securityProceedBtn" data-action="security-proceed"></button>
+    <button id="securityOtherBtn" data-action="security-other-browser">Открыть для ГОСТ / ЭП в другом браузере</button>
+    <button id="securityOtherAnyBtn" data-action="security-other-browser-any">Открыть в обычном браузере</button>
+    <button class="primary-safe" id="securityBackBtn" data-action="security-back">Назад</button>
+  </div>
+</div>
+
+<!-- Обводка окна анонимного профиля: отделяется от дерева как плавающая панель -->
+<div class="profile-frame" id="profileFrame"></div>
+
 <!-- ================= STAGE ================= -->
 <div class="stage">
 <div class="app-frame" id="appFrame">
@@ -867,6 +1115,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
         </div>
 
         <div class="tab-row" data-ws="personal" data-title="Почта — Входящие (12)" data-url="mail.example.com/inbox" data-action="select-tab" role="tab" aria-selected="false">
+          <button class="tab-arrow" data-action="toggle-tab-subtree" aria-expanded="true" aria-label="Свернуть ветку">▾</button>
           <span class="tab-fav">M</span>
           <span class="tab-title">Почта — Входящие (12)</span>
           <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
@@ -947,7 +1196,15 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
       <!-- ============ HORIZONTAL TOP ROW 1 ============ -->
       <div class="hbar-row1 horizontal-only row1-horizontal">
         <button class="hbar-menu"><svg class="icon"><use href="#i-menu"/></svg></button>
-        <button class="hbar-profile" data-action="toggle-profile-menu"><span class="pm-dot" style="background:var(--accent)"></span><span id="profileNameH">Костя · Личный</span></button>
+        <div class="hbar-profile-wrap">
+          <button class="hbar-profile" data-action="toggle-profile-menu"><span class="pm-dot" style="background:var(--accent)"></span><span id="profileNameH">Костя · Личный</span></button>
+          <div class="profile-menu" id="profileMenuH">
+            <button class="pm-item" data-action="set-profile" data-profile="personal"><span class="pm-dot" style="background:#0066FF"></span>Личный</button>
+            <button class="pm-item" data-action="set-profile" data-profile="work"><span class="pm-dot" style="background:#8B5CF6"></span>Рабочий</button>
+            <button class="pm-item" data-action="set-profile" data-profile="anonymous"><span class="pm-dot" style="background:#FF3B30"></span>Анонимный</button>
+            <button class="pm-item" data-action="set-profile" data-profile="guest"><span class="pm-dot" style="background:#8E8E93"></span>Гость</button>
+          </div>
+        </div>
         <div class="hbar-divider"></div>
         <div class="hbar-ws">
           <button class="hbar-ws-pill active" data-ws="personal" style="--ws-color:#0066FF" data-action="select-workspace">Личное</button>
@@ -971,7 +1228,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
         <div class="tb-nav">
           <button class="tb-btn"><svg class="icon"><use href="#i-back"/></svg></button>
           <button class="tb-btn"><svg class="icon"><use href="#i-fwd"/></svg></button>
-          <button class="tb-btn" data-action="reload" aria-label="Обновить"><svg class="icon"><use href="#i-reload"/></svg></button>
+          <button class="tb-btn" data-action="reload" aria-label="Обновить"><svg class="icon ic-reload"><use href="#i-reload"/></svg><svg class="icon ic-stop"><use href="#i-x"/></svg></button>
         </div>
 
         <div class="omnibox-wrap">
@@ -979,6 +1236,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button class="lock-btn" id="lockBtn" data-action="open-cert-viewer" aria-label="Просмотр сертификата"><svg class="icon"><use href="#i-lock"/></svg></button>
             <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" role="combobox" aria-autocomplete="list">
             <div class="omnibox-actions">
+              <button class="zoom-btn" id="zoomBtn" data-action="zoom-reset" aria-label="Сбросить масштаб страницы"><span id="zoomLabel">100%</span></button>
               <button class="tb-btn" title="В закладки"><svg class="icon"><use href="#i-star"/></svg></button>
               <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" data-action="toggle-shield-popover" aria-label="Экран приватности"><svg class="icon"><use href="#i-shield"/></svg></button>
             </div>
@@ -1069,6 +1327,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <button class="tb-btn" data-action="open-ai-sidebar" aria-label="ИИ-сайдбар"><svg class="icon"><use href="#i-spark"/></svg></button>
           <button class="tb-btn" id="archiveToggleBtn" data-action="toggle-archive" aria-label="Архив вкладок"><svg class="icon"><use href="#i-clock"/></svg></button>
           <button class="tb-btn" id="dlToggleBtn" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-download"/></svg><span class="tb-dot"></span></button>
+          <button class="tb-btn" data-action="translate-page" aria-label="Перевести страницу"><svg class="icon"><use href="#i-translate"/></svg></button>
           <button class="tb-btn" data-action="open-print-dialog"><svg class="icon"><use href="#i-printer"/></svg></button>
           <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-code"/></svg></button>
           <button class="tb-btn" data-action="show-view" data-view="settings" aria-label="Настройки"><svg class="icon"><use href="#i-gear"/></svg></button>
@@ -1198,6 +1457,11 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <button class="item" data-action="set-settings-section" data-section="general">General</button>
                 <button class="item active" data-action="set-settings-section" data-section="privacy">Privacy</button>
                 <button class="item" data-action="set-settings-section" data-section="appearance">Appearance</button>
+                <button class="item" data-action="set-settings-section" data-section="passwords">Пароли</button>
+                <button class="item" data-action="set-settings-section" data-section="autofill">Автозаполнение</button>
+                <button class="item" data-action="set-settings-section" data-section="permissions">Разрешения</button>
+                <button class="item" data-action="set-settings-section" data-section="spelling">Орфография</button>
+                <button class="item" data-action="set-settings-section" data-section="translate">Перевод</button>
                 <button class="item" data-action="set-settings-section" data-section="sync">Синхронизация</button>
                 <button class="item" data-action="set-settings-section" data-section="ext">Расширения</button>
                 <button class="item" data-action="set-settings-section" data-section="qa">QA / Тестировщикам</button>
@@ -1274,6 +1538,46 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                   </div>
                 </div>
 
+                <div class="set-section" data-set="passwords">
+                  <div class="set-block"><h3>Сохранённые пароли</h3><div class="desc" id="pwDesc">Пароли хранятся зашифрованными ключом профиля. Здесь виден только список аккаунтов.</div>
+                    <div id="pwList"><div class="set-row pw-row"><div class="st-text"><div class="st-title">example.com</div><div class="st-desc">user</div></div><button class="upd-check" data-action="delete-saved-login" data-login-origin="https://example.com" data-login-user="user" aria-label="Удалить пароль">Удалить</button></div></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="autofill">
+                  <div class="set-block"><h3>Автозаполнение</h3><div class="desc" id="afDesc">Значения форм хранятся открытым текстом, карты — зашифрованными; код проверки карты не сохраняется.</div>
+                    <div id="afList"><div class="set-row af-row"><div class="st-text"><div class="st-title">•••• 1111</div><div class="st-desc">Платёжная карта</div></div><button class="upd-check" data-action="delete-saved-card" data-card-last4="1111" aria-label="Удалить">Удалить</button></div><div class="set-row af-row"><div class="st-text"><div class="st-title">user@example.com</div><div class="st-desc">https://example.com · email</div></div><button class="upd-check" data-action="delete-autofill-entry" data-af-origin="https://example.com" data-af-field="email" data-af-value="user@example.com" aria-label="Удалить">Удалить</button></div></div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Очистить всё</div><div class="st-desc">Удаляет все сохранённые значения форм и карты</div></div><button class="upd-check" data-action="clear-autofill">Очистить</button></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="permissions">
+                  <div class="set-block"><h3>Разрешения сайтов</h3><div class="desc" id="permDesc">Решения сохраняются между сессиями. Отзыв возвращает сайту запрос при следующем обращении.</div>
+                    <div id="permList"><div class="set-row perm-row"><div class="st-text"><div class="st-title">https://example.com</div><div class="st-desc">Camera · разрешено</div></div><button class="upd-check" data-action="revoke-site-permission" data-perm-origin="https://example.com" data-perm-kind="Camera" aria-label="Отозвать">Отозвать</button></div></div>
+                  </div>
+                  <div class="set-block"><h3>Данные сайта</h3><div class="desc" id="siteDataDesc">Удаляет cookies, кэш, разрешения, хранилища и службы текущего сайта вместе с его поддоменами.</div>
+                    <div class="set-row"><div class="st-text"><div class="st-title" id="siteDataSite">example.com</div></div><button class="upd-check" id="siteDataBtn" data-action="clear-site-data" data-site="">Очистить</button></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="spelling">
+                  <div class="set-block"><h3>Проверка орфографии</h3><div class="desc" id="spellDesc">Подчёркивает ошибки в полях ввода; слова проверяются локально, текст никуда не отправляется.</div>
+                    <div class="set-row"><div class="st-text"><div class="st-title">Проверять орфографию</div><div class="st-desc">В полях ввода и редактируемых областях</div></div><div class="toggle on" id="spellToggle" data-action="toggle-spellcheck"><div class="thumb"></div></div></div>
+                  </div>
+                  <div class="set-block"><h3>Языки</h3><div class="desc">Словари из папки data/spell. Слово верно, если оно верно хотя бы в одном включённом языке.</div>
+                    <div id="spellLangList"><div class="set-row spell-lang-row"><div class="st-text"><div class="st-title">en_US</div></div><div class="toggle on" data-action="toggle-spell-language" data-spell-lang="en_US"><div class="thumb"></div></div></div></div>
+                  </div>
+                </div>
+
+                <div class="set-section" data-set="translate">
+                  <div class="set-block"><h3>Перевод страниц</h3><div class="desc">Страница переводится локальной моделью через Ollama, текст не уходит в сеть. Запуск — кнопка в тулбаре или палитра команд. Модель задаётся ниже или переменной LUMEN_TRANSLATE_MODEL (она приоритетнее).</div>
+                    <div class="set-row" data-action="edit-translate-model"><div class="st-text"><div class="st-title">Модель (клик — изменить, Enter — сохранить)</div><div class="st-desc" id="translateModel">phi3:mini</div></div></div>
+                  </div>
+                  <div class="set-block"><h3>Переводить на</h3><div class="desc">Язык, на который переводится страница.</div>
+                    <div id="translateLangList"><div class="set-row translate-lang-row"><div class="st-text"><div class="st-title">Русский</div></div><div class="toggle on" data-action="set-translate-language" data-lang="ru"><div class="thumb"></div></div></div></div>
+                  </div>
+                </div>
+
                 <div class="set-section" data-set="sync">
                   <div class="set-block"><h3>Синхронизация</h3><div class="desc">Только локальная P2P или ваш WebDAV/S3 — без принудительного облака.</div>
                     <label class="radio-card"><input type="radio" name="sync" checked><div><div class="rc-title">Локальная P2P</div><div class="rc-desc">Устройства в одной сети синхронизируются напрямую.</div></div></label>
@@ -1309,52 +1613,45 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button data-action="toggle-find" aria-label="Найти на странице"><svg class="icon"><use href="#i-x"/></svg></button>
           </div>
 
-          <!-- DevTools -->
+          <!-- DevTools: консоль JS (UX-CHROME-PANELS срез 4). Elements/Network/Sources в движке — отдельные панели, здесь только Console. -->
           <div class="devtools" id="devtools">
             <div class="dt-tabs">
-              <div class="dt-tab active" data-action="set-devtools-tab" data-dt-tab="elements">Elements</div>
-              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="console">Console</div>
-              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="network">Network</div>
-              <div class="dt-tab" data-action="set-devtools-tab" data-dt-tab="sources">Sources</div>
+              <div class="dt-tab active" id="dtConsoleTitle">Console</div>
+              <button class="dt-clear" data-action="clear-console">Очистить</button>
               <button class="dt-close" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
-            <div class="dt-panel active" id="dt-elements">
-              <div class="elements-tree"><span class="tag">&lt;div</span> <span class="attr">class</span>=<span class="val">"tab-row active"</span><span class="tag">&gt;</span>
-  <span class="tag">&lt;span</span> <span class="attr">class</span>=<span class="val">"container-stripe"</span><span class="tag">/&gt;</span>
-  <span class="tag">&lt;span</span> <span class="attr">class</span>=<span class="val">"tab-fav"</span><span class="tag">&gt;</span>L<span class="tag">&lt;/span&gt;</span>
-  <span class="tag">&lt;span</span> <span class="attr">class</span>=<span class="val">"tab-title"</span><span class="tag">&gt;</span>Дизайн-система Lumen<span class="tag">&lt;/span&gt;</span>
-<span class="tag">&lt;/div&gt;</span></div>
+            <div class="dt-panel active" id="dt-console"></div>
+          </div>
+
+          <!-- DevTools: сеть (UX-CHROME-PANELS срез 5). Класс devtools даёт позицию и высоту консоли. -->
+          <div class="devtools" id="networkPanel">
+            <div class="dt-tabs">
+              <div class="dt-tab active" id="dtNetworkTitle">Network</div>
+              <button class="dt-clear" data-action="clear-network">Очистить</button>
+              <button class="dt-close" data-action="toggle-network" aria-label="Network"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
-            <div class="dt-panel" id="dt-console">
-              <div class="console-line"><span class="ln">12:04:11</span><span>[wgpu] surface reconfigured 1360×560 @2x</span></div>
-              <div class="console-line warn"><span class="ln">12:04:12</span><span>Deprecated CSS: -webkit-appearance используется в стороннем скрипте</span></div>
-              <div class="console-line error"><span class="ln">12:04:13</span><span>Uncaught TypeError: cannot read property 'focus' of null — omnibox.js:118</span></div>
-              <div class="console-line"><span class="ln">12:04:14</span><span>[shields] заблокировано 6 трекеров на этой странице</span></div>
+            <div class="dt-panel active" id="dt-network"></div>
+          </div>
+
+          <!-- DevTools: инспектор DOM (UX-CHROME-PANELS срез 11). Подсветка бокса под курсором остаётся слоем страницы. -->
+          <div class="insp-panel" id="inspPanel">
+            <div class="insp-header">Inspector (Ctrl+Shift+I)<span class="insp-pos" id="inspPos"></span><button class="insp-close" data-action="toggle-inspector" aria-label="Inspector"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="insp-tabs">
+              <button class="insp-tab active" id="inspTabElements" data-action="inspector-tab-elements">Elements</button>
+              <button class="insp-tab" id="inspTabStyles" data-action="inspector-tab-styles">Styles</button>
+              <button class="insp-tab" id="inspTabComputed" data-action="inspector-tab-computed">Computed</button>
+              <button class="insp-tab" id="inspTabNetwork" data-action="inspector-tab-network">Network</button>
             </div>
-            <div class="dt-panel" id="dt-network">
-              <table class="net-table">
-                <tr><th>Status</th><th>Name</th><th>Type</th><th>Size</th><th>Time</th></tr>
-                <tr><td><span class="status-badge s2">200</span></td><td>lumen-ds.figma.com/file</td><td>document</td><td>84 KB</td><td>120 ms</td></tr>
-                <tr><td><span class="status-badge s3">304</span></td><td>fonts/golos-text.woff2</td><td>font</td><td>0 KB</td><td>4 ms</td></tr>
-                <tr><td><span class="status-badge s2">200</span></td><td>api/tabs/sync</td><td>fetch</td><td>2 KB</td><td>38 ms</td></tr>
-                <tr><td><span class="status-badge s4">403</span></td><td>tracker.ads.example/pixel</td><td>xhr</td><td>—</td><td>заблокировано</td></tr>
-                <tr><td><span class="status-badge s4">500</span></td><td>legacy-widget.example/init</td><td>script</td><td>1 KB</td><td>212 ms</td></tr>
-              </table>
-            </div>
-            <div class="dt-panel" id="dt-sources">
-              <div class="dt-src elements-tree"><span class="attr">// omnibox.js</span>
-<span class="tag">function</span> resolveInput(value) {
-  <span class="tag">if</span> (isPunycodeSpoof(value)) {
-    <span class="tag">return</span> toPunycode(value);
-  }
-  <span class="tag">return</span> value;
-}</div>
-            </div>
+            <div class="insp-label" id="inspLabel"></div>
+            <div class="insp-node" id="inspNode"></div>
+            <div class="insp-hint" id="inspHint"></div>
+            <div id="inspRows"></div>
+            <div id="inspNet"></div>
           </div>
 
           <!-- Downloads panel -->
           <div class="downloads-panel" id="downloadsPanel">
-            <div class="dl-header">Загрузки<button class="dl-close" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="dl-header">Загрузки<button class="dl-clear" data-dl="clear">Очистить</button><button class="dl-close" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-x"/></svg></button></div>
             <div class="dl-list">
               <div class="dl-card" id="dlActive">
                 <div class="dl-row"><div class="dl-icon">PDF</div><div><div class="dl-name">lumen-design-system.pdf</div><div class="dl-meta" id="dlMeta">2.1 MB — идёт загрузка…</div></div></div>
@@ -1394,6 +1691,25 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             </div>
           </div>
 
+          <!-- Workspace switcher bar (UX-CHROME-PANELS) -->
+          <div class="workspace-bar" id="workspaceBar">
+            <div class="wsb-chips" id="wsbChips"><div class="wsb-chip"><button class="wsb-name" data-action="select-workspace">Default</button><button class="wsb-del" data-action="delete-workspace" aria-label="Удалить пространство">×</button></div></div>
+            <button class="wsb-add" data-action="add-workspace" aria-label="Новое пространство">+</button>
+          </div>
+
+          <!-- Privacy network panel (UX-CHROME-PANELS) -->
+          <div class="privacy-panel" id="privacyPanel">
+            <div class="pv-header">Privacy<button class="pv-close" data-action="toggle-privacy" aria-label="Privacy"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="pv-summary"><span class="pv-blocked" id="pvBlocked">0 blocked</span><span class="pv-allowed" id="pvAllowed">0 allowed</span><span class="pv-position" id="pvPosition"></span></div>
+            <div class="pv-list" id="pvList"></div>
+          </div>
+
+          <!-- Read-later panel (UX-CHROME-PANELS) -->
+          <div class="read-later-panel" id="readLaterPanel">
+            <div class="rl-header"><span id="rlTitle">Read Later</span><button class="rl-close" data-action="toggle-read-later" aria-label="Read Later"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div id="rlList"><div class="rl-row"><div class="rl-text" data-action="read-later-open"><div class="rl-title">Saved page</div><div class="rl-meta">example.com</div></div><span class="rl-badge">Unread</span><button class="rl-delete" data-action="read-later-delete" aria-label="Удалить">×</button></div></div>
+          </div>
+
           <!-- Command palette -->
           <div class="cp-overlay" id="cpOverlay" data-action="close-palette">
             <div class="cp-box">
@@ -1403,13 +1719,62 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           </div>
 
           <!-- Focus timer (реально считает: старт/пауза) -->
-          <div class="focus-timer">
+          <div class="focus-timer" id="focusTimer">
             <svg class="icon" style="stroke:#fff"><use href="#i-clock"/></svg>
             <span id="focusTime">25:00</span>
-            <button class="ft-toggle" id="focusToggle" data-action="toggle-focus-timer"><svg class="icon"><use href="#i-play"/></svg></button>
+            <button class="ft-toggle" id="focusToggle" data-action="toggle-focus-timer"><svg class="icon"><use id="focusToggleIcon" href="#i-play"/></svg></button>
             <button class="focus-exit" data-action="toggle-focus"><svg class="icon" style="stroke:#fff;width:11px;height:11px"><use href="#i-x"/></svg></button>
           </div>
           <div class="focus-done" id="focusDone"><svg class="icon" style="stroke:#fff;width:12px;height:12px"><use href="#i-clock"/></svg>Помодоро завершён — пора сделать перерыв</div>
+
+          <!-- Tab context menu (UX-CHROME-PANELS) -->
+          <div class="tab-ctx" id="tabCtxMenu">
+            <button class="tab-ctx-row" id="tabCtxDuplicate" data-tab-ctx="duplicate">Дублировать</button>
+            <button class="tab-ctx-row" id="tabCtxPin" data-tab-ctx="pin">Закрепить</button>
+            <button class="tab-ctx-row" id="tabCtxNewWindow" data-tab-ctx="new-window">В новое окно</button>
+            <button class="tab-ctx-row sep" id="tabCtxNewGroup" data-tab-ctx="new-group">В новую группу</button>
+            <button class="tab-ctx-row" id="tabCtxToggleGroup" data-tab-ctx="toggle-group">Свернуть группу</button>
+            <button class="tab-ctx-row" id="tabCtxUngroup" data-tab-ctx="ungroup">Убрать из группы</button>
+            <button class="tab-ctx-row sep" id="tabCtxCloseOthers" data-tab-ctx="close-others">Закрыть другие</button>
+            <button class="tab-ctx-row" id="tabCtxCloseRight" data-tab-ctx="close-right">Закрыть справа</button>
+            <button class="tab-ctx-row sep" id="tabCtxReopen" data-tab-ctx="reopen">Открыть закрытую вкладку</button>
+            <button class="tab-ctx-row sep" id="tabCtxOther" data-tab-ctx="other-browser">Открыть в другом браузере</button>
+            <button class="tab-ctx-row" id="tabCtxOtherCrypto" data-tab-ctx="other-browser-crypto">…для ГОСТ / ЭП</button>
+            <button class="tab-ctx-row" id="tabCtxOtherDrm" data-tab-ctx="other-browser-drm">…для DRM-видео</button>
+            <button class="tab-ctx-row" id="tabCtxOtherCalls" data-tab-ctx="other-browser-calls">…для видеозвонков</button>
+          </div>
+
+          <!-- Page spell / autofill menu (UX-CHROME-PANELS); rows are bound -->
+          <div class="page-ctx" id="pageCtxMenu"></div>
+
+          <!-- Picture-in-picture card (UX-CHROME-PANELS) -->
+          <div class="pip-card" id="pipCard" data-pip="body">
+            <img class="pip-poster" id="pipPoster">
+            <div class="pip-header" id="pipHeader" data-pip="header">
+              <div class="pip-title" id="pipTitle"></div>
+              <button class="pip-close" id="pipClose" data-pip="close">×</button>
+            </div>
+            <button class="pip-play" id="pipPlay" data-pip="play">
+              <div class="pip-bar a"></div>
+              <div class="pip-bar b"></div>
+              <div class="pip-tri"></div>
+            </button>
+          </div>
+
+          <!-- Note viewer modal (UX-CHROME-PANELS) -->
+          <div class="modal-overlay" id="noteOverlay">
+            <div class="modal">
+              <div class="modal-head">
+                <h3>Заметка</h3>
+                <button class="modal-close" data-action="close-note" aria-label="Закрыть"><svg class="icon"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="modal-body">
+                <div class="note-url" id="noteUrl"></div>
+                <blockquote class="note-sel" id="noteSel"></blockquote>
+                <div class="note-comment" id="noteComment"></div>
+              </div>
+            </div>
+          </div>
 
           <!-- Certificate Viewer -->
           <div class="modal-overlay" id="certOverlay" data-action="close-modal">
@@ -1444,6 +1809,54 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="modal-foot">
                 <button data-action="close-modal">Закрыть</button>
                 <button class="primary" data-action="close-modal">Экспорт .pem</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Keyboard shortcuts -->
+          <div class="modal-overlay" id="shortcutsOverlay" data-action="close-modal">
+            <div class="modal">
+              <div class="modal-head">
+                <svg class="icon icon-lg"><use href="#i-code"/></svg>
+                <h3>Горячие клавиши</h3>
+                <button class="modal-close" data-action="close-modal"><svg class="icon"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="modal-body">
+                <div class="sc-list" id="scList"><div class="sc-row" data-action="rebind-shortcut" data-sc-index="0"><span class="sc-label">Перезагрузить</span><span class="sc-key">Ctrl+R</span></div></div>
+              </div>
+              <div class="modal-foot">
+                <span class="sc-hint">Клик по строке — задать новое сочетание, Esc — отмена</span>
+                <button data-action="close-modal">Закрыть</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Accessibility -->
+          <div class="modal-overlay" id="accessOverlay" data-action="close-modal">
+            <div class="modal">
+              <div class="modal-head">
+                <svg class="icon icon-lg"><use href="#i-gear"/></svg>
+                <h3>Специальные возможности</h3>
+                <button class="modal-close" data-action="close-modal"><svg class="icon"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="modal-body">
+                <div class="ac-row"><span>Размер шрифта</span><div class="ac-pills" id="acFontPills">
+                  <button class="ac-pill" data-action="access-set-font" data-value="0.8">0.8×</button>
+                  <button class="ac-pill active" data-action="access-set-font" data-value="1">1×</button>
+                  <button class="ac-pill" data-action="access-set-font" data-value="1.25">1.25×</button>
+                  <button class="ac-pill" data-action="access-set-font" data-value="1.5">1.5×</button>
+                  <button class="ac-pill" data-action="access-set-font" data-value="2">2×</button>
+                </div></div>
+                <div class="ac-row"><span>Уменьшить анимацию</span><div class="toggle" id="acMotionToggle" data-action="access-toggle-motion"><div class="thumb"></div></div></div>
+                <div class="ac-row"><span>Принудительные цвета</span><div class="toggle" id="acColorsToggle" data-action="access-toggle-colors"><div class="thumb"></div></div></div>
+                <div class="ac-row"><span>Размер курсора</span><div class="ac-pills" id="acCursorPills">
+                  <button class="ac-pill active" data-action="access-set-cursor" data-value="normal">Обычный</button>
+                  <button class="ac-pill" data-action="access-set-cursor" data-value="large">Большой</button>
+                  <button class="ac-pill" data-action="access-set-cursor" data-value="extra">Огромный</button>
+                </div></div>
+              </div>
+              <div class="modal-foot">
+                <button class="primary" data-action="close-modal">Готово</button>
               </div>
             </div>
           </div>

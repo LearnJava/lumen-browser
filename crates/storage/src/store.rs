@@ -194,6 +194,15 @@ impl StorageBackend for InMemoryStorage {
             .map(|pk| pk.key.clone())
             .collect())
     }
+
+    fn clear_matching(&mut self, pred: &dyn Fn(&str) -> bool) -> Result<usize> {
+        let before = self.data.len();
+        self.data.retain(|pk, _| {
+            let hit = |s: &str| !s.is_empty() && pred(s);
+            !(hit(&pk.origin) || hit(&pk.top_level_site))
+        });
+        Ok(before - self.data.len())
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -203,6 +212,18 @@ mod tests {
     use super::*;
 
     // ── CRUD ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clear_matching_skips_global_partition() {
+        let mut s = InMemoryStorage::new();
+        s.put(None, None, "g", b"0").unwrap();
+        s.put(Some("https://a.x.com"), None, "k", b"1").unwrap();
+        s.put(Some("https://y.org"), Some("https://x.com"), "k", b"2").unwrap();
+        s.put(Some("https://y.org"), None, "k", b"3").unwrap();
+        assert_eq!(s.clear_matching(&|v| v.contains("x.com")).unwrap(), 2);
+        assert!(s.get(None, None, "g").unwrap().is_some());
+        assert!(s.get(Some("https://y.org"), None, "k").unwrap().is_some());
+    }
 
     #[test]
     fn put_then_get_returns_value() {

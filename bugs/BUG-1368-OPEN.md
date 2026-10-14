@@ -29,3 +29,7 @@ WPT-RUN-14 срез 14: 35 id после правки однодвоеточны
 ## Как проверить
 
 `css/CSS2/generated-content/content-011.xht`, `content-013.xht`, `counters-order-000.xht`, `lists/counter-reset-increment-002.xht`.
+
+## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
+
+`css/css-lists`: 19 reftest `thick` (`counter-001`, `counter-004`, `counters-001/004/006`, `counters-scope-001…004`, `counter-set-001`, `marker-counter`, `*-display-contents`, `*-display-none`, `counter-reset-increment-overflow-underflow`, `pseudo-element-remove-update`, `deep-pseudo-element-remove-update`). Проба: `.b::before{counter-increment:x;content:counter(x)}` при `counter-reset:x 5` — `5`, `5` (ожидается `6`, `7`); `.b::before{counter-reset:y 3;content:counter(y)}` — `0`. См. также BUG-1568 (неявный `list-item`, `reversed()`, `display:none`).

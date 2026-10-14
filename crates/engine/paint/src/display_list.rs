@@ -53,7 +53,7 @@ mod paint_types;
 pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClipShape};
 
 mod commands;
-pub use commands::{DisplayCommand, DisplayList};
+pub use commands::{spacing_px, spacing_to_fixed, DisplayCommand, DisplayList};
 
 mod geometry;
 pub use geometry::{contains_backdrop_filter, cull_display_list, fit_image_quad, fit_image_rect, ProvenanceIndex, ProvenanceSpan};

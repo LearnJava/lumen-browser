@@ -112,7 +112,8 @@ pub use sheet_sync::CascadeSource;
 pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;
 // Приватная привязка, чтобы `use super::*;` потомков (в т.ч. `install::net`)
 // продолжала видеть помощника под прежним именем.
-use overrides::{global_timezone_override, global_user_agent_override};
+use overrides::global_timezone_override;
+pub(crate) use overrides::global_user_agent_override;
 pub(crate) use overrides::global_permission_overrides;
 use runtime::pairs_from_flat;
 
@@ -418,6 +419,8 @@ impl V8JsRuntime {
             install::install_console(scope, ctx, store, Arc::clone(&console_messages))?;
 
             install::install_print(scope, ctx, store, Arc::clone(&print_requests))?;
+
+            install::install_dialogs(scope, ctx, store)?;
 
             install::install_dialog_focus(
                 scope,
@@ -1110,8 +1113,11 @@ impl V8JsRuntime {
         install_v8!(navigation_api::install_navigation_api_v8);
         install_v8!(navigator_bindings::install_navigator_bindings_v8);
         install_v8!(network_log_bindings::install_network_log_bindings_v8);
-        // Default permission: "denied" (mirrors lib.rs::install_dom's hardcoded `false`).
-        if let Err(e) = crate::notifications_bindings::install_notifications_bindings_v8(self, false)
+        // UX-PERMISSIONS-2: starts at "default"; requestPermission() prompts via the shell.
+        if let Err(e) = crate::notifications_bindings::install_notifications_mode(
+            self,
+            crate::notifications_bindings::NotifPermMode::Interactive,
+        )
         {
             eprintln!("v8: notifications_bindings::install_notifications_bindings_v8 failed: {e}");
         }

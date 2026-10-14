@@ -472,6 +472,22 @@ fn finish_entry(frame: &mut Frame, viewport: Size) {
     frame.init.cur_y = group.rect.y + group.rect.height + g_mb;
 }
 
+/// CSS 2.1 §17.6.2 — в collapsed-режиме рамка строки/группы строк лежит на линии сетки, и
+/// `width` таблицы задаёт ширину сетки, а не рамки: внешняя рамка выступает за неё. Здесь
+/// строки и группы получают border-box `сетка + половина своих левой и правой рамок`, а
+/// таблица — на наибольшую из таких надбавок шире. Рамки ячеек уже учтены привязкой крайних ячеек.
+fn widen_for_outer_group_borders(frame: &mut Frame) {
+    let mut extra = 0.0_f32;
+    for child in &mut frame.b.children {
+        if matches!(child.kind, BoxKind::TableRow | BoxKind::TableRowGroup) {
+            let bw = (child.style.border_left_width + child.style.border_right_width) / 2.0;
+            child.rect.width += bw;
+            extra = extra.max(bw);
+        }
+    }
+    frame.b.rect.width += extra;
+}
+
 /// Runs once every top-level entry is placed — CSS 2.1 §17.5 Pass 2 (extend
 /// each rowspan cell's height to its last spanned row's bottom edge), then
 /// (moved in from `layout_dispatch.rs`'s former post-`lay_out_table` code)
@@ -532,6 +548,12 @@ fn finish_table(
         frame.b.rect.width = frame.init.collapse_width;
     }
 
+    if frame.init.collapse && frame.init.n_cols > 0 {
+        widen_for_outer_group_borders(frame);
+    }
+
+    place_column_boxes(frame);
+
     // Естественная высота (border box) — по строкам и подписям; `height`/`min-height` её
     // только поднимают (CSS 2.1 §17.5.3), а излишек делится между строками.
     let chrome = frame.init.padding_top + frame.init.padding_bottom + s.border_top_width + s.border_bottom_width;
@@ -550,5 +572,95 @@ fn finish_table(
     frame.b.rect.height = target;
     if target - natural > 0.01 {
         super::table_height::distribute(&mut frame.b, &frame.init, target - natural);
+    }
+
+    // CSS 2.1 §17 / Position L3 §3: an absolutely positioned child of a table box is not a table
+    // part — it is out of flow and placed against its containing block once the table's own
+    // size is final (BUG-1357). Its static position is the table's content-box corner.
+    let abs: Vec<(usize, f32, f32)> = frame
+        .b
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|(i, _)| (i, frame.init.content_x, frame.init.content_y))
+        .collect();
+    if !abs.is_empty() {
+        let my_pcb = if super::multicol_abspos::establishes_abs_cb(&s) {
+            Rect::new(
+                frame.b.rect.x + s.border_left_width,
+                frame.b.rect.y + s.border_top_width,
+                (frame.b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                (frame.b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            )
+        } else {
+            frame.init.children_pcb
+        };
+        super::multicol_abspos::lay_out_abs_children(&mut frame.b, &abs, measurer, viewport, my_pcb, hp);
+    }
+}
+
+/// CSS 2.1 §17.5.1 — `display: table-column(-group)` не раскладываются как блоки: их прямоугольник —
+/// «покрытые колонки × высота всех строк». Нужен только для фона и рамки, которые рисуются под
+/// группами строк и ячейками (колонки идут в дереве раньше строк).
+fn place_column_boxes(frame: &mut Frame) {
+    let n_cols = frame.init.col_widths.len();
+    let (Some(top), Some(bottom)) = (
+        frame.init.flat_row_rects.iter().map(|&(y, _)| y).reduce(f32::min),
+        frame.init.flat_row_rects.iter().map(|&(y, h)| y + h).reduce(f32::max),
+    ) else {
+        return;
+    };
+    let init = &frame.init;
+    let col_x = |k: usize| -> f32 {
+        if let Some(cx) = &init.collapse_col_x {
+            cx.get(k).copied().unwrap_or(init.content_x)
+        } else {
+            init.content_x + (k + 1) as f32 * init.h_spacing + init.col_widths[..k.min(n_cols)].iter().sum::<f32>()
+        }
+    };
+    // Прямоугольник по полуинтервалу колонок [a, b).
+    let span_rect = |a: usize, b: usize| -> Option<Rect> {
+        let (a, b) = (a.min(n_cols), b.min(n_cols));
+        if a >= b {
+            return None;
+        }
+        let x = col_x(a);
+        let right = col_x(b - 1) + init.col_widths[b - 1];
+        Some(Rect { x, y: top, width: (right - x).max(0.0), height: (bottom - top).max(0.0) })
+    };
+    let mut next = 0usize;
+    for child in &mut frame.b.children {
+        match child.style.display {
+            Display::TableColumn => {
+                let end = next + child.col_span as usize;
+                if let Some(r) = span_rect(next, end) {
+                    child.rect = r;
+                }
+                next = end;
+            }
+            Display::TableColumnGroup => {
+                let start = next;
+                let has_cols = child.children.iter().any(|c| c.style.display == Display::TableColumn);
+                if has_cols {
+                    for col in &mut child.children {
+                        if col.style.display != Display::TableColumn {
+                            continue;
+                        }
+                        let end = next + col.col_span as usize;
+                        if let Some(r) = span_rect(next, end) {
+                            col.rect = r;
+                        }
+                        next = end;
+                    }
+                } else {
+                    next += child.col_span as usize;
+                }
+                if let Some(r) = span_rect(start, next) {
+                    child.rect = r;
+                }
+            }
+            _ => {}
+        }
     }
 }

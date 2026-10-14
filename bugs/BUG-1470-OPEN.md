@@ -32,3 +32,8 @@ WPT-RUN-14 срез 21: `css-position/static-position/htb-ltr-ltr.html`, `positi
 ## Как проверить
 
 Таблица выше; `css/css-position/static-position/htb-ltr-ltr.html`.
+
+## Попутно: `css-text/white-space/seg-break-transformation-019.tentative.html`
+
+Абсолютный, фиксированный и плавающий `<aside>` между `aa&#x200b;` и `⏎bbb` разрывает строку (`bbb` на следующей строке, ожидается та же). После [BUG-1330](BUG-1330-FIXED.md) разрыв сегмента в такой разметке уже снимается правильно, тест остаётся красным именно из-за этой строки.
+

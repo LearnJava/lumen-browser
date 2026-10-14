@@ -140,6 +140,12 @@ impl std::fmt::Debug for HttpCache {
 }
 
 impl HttpCache {
+    /// Удалить все данные сайта `site` (любой origin/host этого eTLD+1).
+    pub fn clear_site(&self, site: &crate::partition::PartitionKey) -> Result<usize> {
+        Ok(crate::partition::clear_column(&self.conn, "http_cache", "http_cache", "top_level_site", site)?
+            + crate::partition::clear_column(&self.conn, "http_cache", "http_cache", "url", site)?)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| Error::Storage(format!("http_cache open: {e}")))?;

@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended by [ADR-034](ADR-034-site-compatibility-strategy.md) (2026-10-12):** the default
+UA string (Layer 3 last bullet and the «keep our own UA» alternative — replaced by one consistent
+`IdentityProfile`, Chrome grammar first, a `Lumen/x.y` token after an A/B measurement), Client Hints
+(sent by default, brands follow the UA), and the Standard profile's `Accept-Language`/time-zone
+defaults (real Windows values in Personal/Work profiles; `en-US`/UTC only in Anonymous/Tor). The red
+lines below are unchanged.
 
 ## Date
 

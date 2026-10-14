@@ -118,6 +118,22 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
         }
     }
 
+    /// BUG-1345: `em`/`rem`/`%` padding of a replaced box keeps the bitmap in the content box.
+    #[test]
+    fn img_bitmap_content_box_with_relative_padding_units() {
+        for (pad, left) in [("2em", 20.0), ("2rem", 32.0), ("5%", 40.0)] {
+            let dl = build(
+                r#"<div style="width:800px"><img src="x" width="10" height="20"></div>"#,
+                &format!("*{{margin:0}}html{{font-size:16px}}div{{font-size:10px}}img{{padding-left:{pad}}}"),
+            );
+            let imgs = images(&dl);
+            assert_eq!(imgs.len(), 1);
+            if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+                assert_eq!((rect.x, rect.width), (left, 10.0), "padding-left:{pad}");
+            }
+        }
+    }
+
     // ── Тесты loading="lazy" / LazyImageSlot ───────────────────────────────
 
     fn lazy_slots(dl: &DisplayList) -> Vec<&DisplayCommand> {

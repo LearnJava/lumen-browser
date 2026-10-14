@@ -135,14 +135,22 @@ impl Lumen {
                     }
                 }
                 PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
+                PaletteAction::ImportBrowserData => self.import_browser_data(),
+                PaletteAction::TranslatePage => self.toggle_page_translation(),
                 PaletteAction::ToggleVerticalTabs => {
                     self.vertical_tabs.toggle();
                     self.persist_tab_layout();
                     // ADR-016 M2.2b: async-safe chrome-inset relayout.
                     self.relayout_chrome();
                 }
-                PaletteAction::ToggleDevConsole => self.devtools_console.toggle(),
+                PaletteAction::ToggleDevConsole => {
+                    self.devtools_console.toggle();
+                    self.relayout_chrome_host();
+                }
                 PaletteAction::ToggleShields => self.shields.toggle(),
+                PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason, false),
+                PaletteAction::RememberOtherBrowser(reason) => self.open_in_other_browser(*reason, true),
+                PaletteAction::ShowHandoffSites => self.show_handoff_sites(),
                 PaletteAction::ToggleVimMode => {
                     if self.vim_mode.is_some() {
                         self.vim_mode = None;

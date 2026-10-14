@@ -103,6 +103,7 @@ impl Lumen {
         let slot = self.form_state.entry(nid).or_default();
         slot.cursor = Some(cursor);
         slot.selection_anchor = Some(cursor);
+        self.publish_text_selection_for(nid, &current);
         self.text_drag = Some(TextDragTarget::Page(nid));
         self.request_redraw();
     }
@@ -130,6 +131,7 @@ impl Lumen {
                     return;
                 };
                 self.form_state.entry(nid).or_default().cursor = Some(cursor);
+                self.publish_text_selection_for(nid, &current);
                 self.request_redraw();
             }
             TextDragTarget::Frame(idx, nid) => {

@@ -167,7 +167,7 @@ impl Lumen {
         self.settings_panel
             .set_adblock_subs(self.adblock_store.list_subscriptions().unwrap_or_default());
         self.settings_panel
-            .set_spell_locale(SPELL_DICTS.get().map(|d| d.locale().to_owned()));
+            .set_spell_locale(SPELL_DICTS.get().map(|d| d.active_locale()));
     }
 
     /// Close the settings panel, flushing the draft to every backing store.
@@ -227,7 +227,22 @@ impl Lumen {
         if self.modifiers.control_key() || self.modifiers.super_key() {
             return false;
         }
+        let editing_model = self.settings_panel.focused_input == Some(crate::panels::settings_panel::SettingInput::TranslateModel);
         match code {
+            KeyCode::Escape if !key_event.repeat && editing_model => {
+                self.settings_panel.focused_input = None;
+                self.relayout_chrome_host();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Enter if !key_event.repeat && editing_model => {
+                let model = self.settings_panel.translate_model_draft.trim().to_owned();
+                let _ = self.settings_store.set_translate_model(&model);
+                self.settings_panel.focused_input = None;
+                self.relayout_chrome_host();
+                self.request_redraw();
+                true
+            }
             KeyCode::Escape if !key_event.repeat => {
                 self.close_settings_panel();
                 self.request_redraw();
@@ -235,6 +250,7 @@ impl Lumen {
             }
             KeyCode::Backspace if self.settings_panel.focused_input.is_some() => {
                 self.settings_panel.backspace();
+                self.relayout_chrome_host();
                 self.request_redraw();
                 true
             }
@@ -247,6 +263,7 @@ impl Lumen {
                         for ch in text.chars() {
                             self.settings_panel.append_char(ch);
                         }
+                        self.relayout_chrome_host();
                         self.request_redraw();
                         return true;
                     }
@@ -268,6 +285,7 @@ impl Lumen {
             if code == KeyCode::Escape {
                 self.shortcuts_panel.cancel_rebind();
                 self.request_redraw();
+                self.relayout_chrome_host();
                 return true;
             }
             let modifier = {
@@ -288,11 +306,13 @@ impl Lumen {
             let key = key.trim_start_matches("Key").trim_start_matches("Digit").to_string();
             self.shortcuts_panel.accept_rebind(modifier, &key);
             self.request_redraw();
+            self.relayout_chrome_host();
             return true;
         }
         if code == KeyCode::Escape {
             self.shortcuts_panel.close();
             self.request_redraw();
+            self.relayout_chrome_host();
             return true;
         }
         false

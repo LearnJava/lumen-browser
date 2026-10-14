@@ -226,12 +226,14 @@ impl Lumen {
     /// Cheap enough to call on every drag step: it walks two small subtrees,
     /// no layout and no cascade.
     pub(crate) fn rebuild_chrome_floating_dl(&mut self) {
-        if demo_panel_hidden() {
-            self.chrome_floating_dl = None;
-            return;
-        }
+        // UX-CHROME-PANELS срез 21: `#profileFrame` — обводка окна, а не
+        // панель; рычаг `LUMEN_NO_DEMO_PANEL` её не прячет.
+        let hidden = demo_panel_hidden();
         let mut dl = lumen_paint::DisplayList::new();
         for detached in &self.chrome_floating_detached {
+            if hidden && detached.panel_id != lumen_chrome::ids::PROFILE_FRAME {
+                continue;
+            }
             match self.chrome_float_offsets.get(detached.panel_id).copied() {
                 Some((dx, dy)) if dx != 0.0 || dy != 0.0 => {
                     let mut moved = detached.removed.clone();
@@ -265,6 +267,10 @@ impl Lumen {
             return None;
         }
         self.chrome_floating_detached.iter().rev().find_map(|d| {
+            // Обводка окна накрывает весь экран, но не принимает указатель.
+            if d.panel_id == lumen_chrome::ids::PROFILE_FRAME {
+                return None;
+            }
             let (dx, dy) = self.floating_panel_offset(d.panel_id);
             let (px, py) = (x_css - dx, y_css - dy);
             let r = d.removed.rect;
@@ -341,7 +347,7 @@ impl Lumen {
 
     /// CC-18 срез 3: advances an in-progress header drag to the pointer's new
     /// position. Returns `true` when a drag is live (the caller then owns the
-    /// motion and skips page hover work, mirroring `panel_resize`).
+    /// motion and skips page hover work).
     ///
     /// Only the offset and the floating display list are rebuilt — no
     /// relayout: the panel's position is a paint-time property here, so the

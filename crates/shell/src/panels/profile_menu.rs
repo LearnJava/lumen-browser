@@ -1,6 +1,7 @@
-//! Profile switcher dropdown (DS-14): anchored below the avatar button in
-//! the permanent toolbar's left cluster (`toolbar::avatar_x()`). Lists every
-//! profile as a colour dot + name; clicking one switches the active profile.
+//! Profile switcher dropdown state (DS-14). The dropdown itself is
+//! `#profileMenu`/`#profileMenuH` in `assets/chrome/chrome.html`
+//! (UX-CHROME-PANELS); this module keeps the profile list, the active id and
+//! the seeded-profile lookups.
 //!
 //! Scope (DS-14, `docs/tasks/p1-design-v3.md`): this slice changes only the
 //! active-profile pointer and the chrome's visual signature (avatar
@@ -8,28 +9,9 @@
 //! separate history/cookie-jar/bookmarks per profile — is explicitly NOT
 //! implemented here; see DS-16.
 
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+use lumen_layout::Color;
 
-use crate::panels::themes::Palette;
-use crate::theme_tokens::{self, radius};
-
-// ── Visual constants ─────────────────────────────────────────────────────────
-
-/// Width of the dropdown in CSS px (`.profile-menu` in the design reference).
-pub const MENU_W: f32 = 190.0;
-/// Height of one profile row.
-const ROW_H: f32 = 30.0;
-/// Padding around the row list, inside the menu border.
-const MENU_PAD: f32 = 6.0;
-/// Diameter of the colour dot preceding each profile name.
-const DOT_SZ: f32 = 9.0;
-/// Gap between the toolbar's bottom edge and the dropdown (mirrors
-/// `shields_panel::PANEL_TOP_OFFSET`).
-const MENU_TOP_OFFSET: f32 = 4.0;
-const FONT_SZ: f32 = 12.0;
-const MENU_RADIUS: f32 = radius::LG;
+use crate::theme_tokens;
 
 // ── Default profile seed ─────────────────────────────────────────────────────
 
@@ -149,138 +131,11 @@ impl Default for ProfileMenuPanel {
     }
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
-
-/// Result of a click inside the profile dropdown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProfileMenuHit {
-    /// Switch to the profile with the given id.
-    SwitchTo(i64),
-    /// Clicked inside the dropdown but on a non-actionable area (padding).
-    Empty,
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the profile dropdown.
-///
-/// Returns `None` when the click is outside the dropdown. `avatar_x` is
-/// `toolbar::avatar_x()`; `chrome_h` is `toolbar::CHROME_H` — the dropdown
-/// is anchored below the toolbar, left-aligned with the avatar button.
-pub fn hit_test(
-    panel: &ProfileMenuPanel,
-    x: f32,
-    y: f32,
-    avatar_x: f32,
-    chrome_h: f32,
-) -> Option<ProfileMenuHit> {
-    let (mx, my) = menu_origin(avatar_x, chrome_h);
-    let menu_h = menu_height(panel);
-    if x < mx || x >= mx + MENU_W || y < my || y >= my + menu_h {
-        return None;
-    }
-    if y < my + MENU_PAD {
-        return Some(ProfileMenuHit::Empty);
-    }
-    let row_idx = ((y - my - MENU_PAD) / ROW_H) as usize;
-    match panel.entries.get(row_idx) {
-        Some(entry) => Some(ProfileMenuHit::SwitchTo(entry.id)),
-        None => Some(ProfileMenuHit::Empty),
-    }
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Build the display list for the profile dropdown.
-///
-/// Anchored at `(avatar_x, chrome_h + MENU_TOP_OFFSET)`. Each row shows a
-/// colour dot + profile name; the active row gets a highlighted background
-/// and bold text.
-pub fn build_panel(
-    panel: &ProfileMenuPanel,
-    avatar_x: f32,
-    chrome_h: f32,
-    pal: &Palette,
-) -> DisplayList {
-    let (mx, my) = menu_origin(avatar_x, chrome_h);
-    let menu_h = menu_height(panel);
-    let mut out = DisplayList::with_capacity(4 + panel.entries.len() * 3);
-
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(mx, my, MENU_W, menu_h),
-        radii: uniform_radii(MENU_RADIUS),
-        color: pal.overlay_border,
-    });
-    out.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(mx + 1.0, my + 1.0, MENU_W - 2.0, menu_h - 2.0),
-        radii: uniform_radii(MENU_RADIUS - 1.0),
-        color: pal.overlay_bg,
-    });
-
-    for (i, entry) in panel.entries.iter().enumerate() {
-        let row_y = my + MENU_PAD + i as f32 * ROW_H;
-        let is_active = panel.active_id == Some(entry.id);
-
-        if is_active {
-            out.push(DisplayCommand::FillRoundedRect {
-                rect: Rect::new(mx + 3.0, row_y, MENU_W - 6.0, ROW_H),
-                radii: uniform_radii(radius::MD),
-                color: pal.item_selected_bg,
-            });
-        }
-
-        let dot_y = row_y + (ROW_H - DOT_SZ) * 0.5;
-        out.push(DisplayCommand::FillRoundedRect {
-            rect: Rect::new(mx + MENU_PAD + 4.0, dot_y, DOT_SZ, DOT_SZ),
-            radii: uniform_radii(DOT_SZ * 0.5),
-            color: entry.color,
-        });
-
-        let text_x = mx + MENU_PAD + 4.0 + DOT_SZ + 8.0;
-        let text_y = row_y + (ROW_H - FONT_SZ * 1.3) * 0.5;
-        out.push(DisplayCommand::DrawText {
-            font_stretch: lumen_layout::FontStretch::NORMAL,
-            rect: Rect::new(text_x, text_y, (mx + MENU_W - MENU_PAD - text_x).max(0.0), FONT_SZ * 1.3),
-            text: entry.name.clone(),
-            font_size: FONT_SZ,
-            color: if is_active { pal.text } else { pal.text_dim },
-            font_family: Vec::new(),
-            font_weight: if is_active { FontWeight::BOLD } else { FontWeight::NORMAL },
-            font_style: FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            highlight_name: None,
-            text_orientation: None,
-        });
-    }
-
-    out
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Top-left corner of the dropdown in CSS px.
-fn menu_origin(avatar_x: f32, chrome_h: f32) -> (f32, f32) {
-    (avatar_x, chrome_h + MENU_TOP_OFFSET)
-}
-
-/// Total dropdown height for the current entry count.
-fn menu_height(panel: &ProfileMenuPanel) -> f32 {
-    MENU_PAD * 2.0 + panel.entries.len() as f32 * ROW_H
-}
-
-fn uniform_radii(r: f32) -> CornerRadii {
-    CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const AVATAR_X: f32 = 10.0;
-    const CHROME_H: f32 = 72.0;
 
     fn make_panel() -> ProfileMenuPanel {
         let mut p = ProfileMenuPanel::new();
@@ -342,69 +197,6 @@ mod tests {
         let mut p = ProfileMenuPanel::new();
         p.set_active(Some(2));
         assert_eq!(p.active_id, Some(2));
-    }
-
-    // ── Hit-testing ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn hit_outside_menu_returns_none() {
-        let p = make_panel();
-        assert_eq!(hit_test(&p, 0.0, 0.0, AVATAR_X, CHROME_H), None);
-    }
-
-    #[test]
-    fn hit_first_row_switches() {
-        let p = make_panel();
-        let (mx, my) = menu_origin(AVATAR_X, CHROME_H);
-        let hit = hit_test(&p, mx + MENU_PAD + 5.0, my + MENU_PAD + 5.0, AVATAR_X, CHROME_H);
-        assert_eq!(hit, Some(ProfileMenuHit::SwitchTo(1)));
-    }
-
-    #[test]
-    fn hit_second_row_switches() {
-        let p = make_panel();
-        let (mx, my) = menu_origin(AVATAR_X, CHROME_H);
-        let y = my + MENU_PAD + ROW_H + 5.0;
-        let hit = hit_test(&p, mx + 20.0, y, AVATAR_X, CHROME_H);
-        assert_eq!(hit, Some(ProfileMenuHit::SwitchTo(2)));
-    }
-
-    #[test]
-    fn hit_top_padding_is_empty() {
-        let p = make_panel();
-        let (mx, my) = menu_origin(AVATAR_X, CHROME_H);
-        let hit = hit_test(&p, mx + 20.0, my + 1.0, AVATAR_X, CHROME_H);
-        assert_eq!(hit, Some(ProfileMenuHit::Empty));
-    }
-
-    // ── Rendering ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn build_panel_emits_commands() {
-        let p = make_panel();
-        let dl = build_panel(&p, AVATAR_X, CHROME_H, &Palette::DARK);
-        assert!(!dl.is_empty());
-    }
-
-    #[test]
-    fn build_panel_draws_all_names() {
-        let p = make_panel();
-        let dl = build_panel(&p, AVATAR_X, CHROME_H, &Palette::DARK);
-        for name in ["Личный", "Рабочий", "Анонимный"] {
-            let found = dl.iter().any(|c| {
-                matches!(c, DisplayCommand::DrawText { text, .. } if text == name)
-            });
-            assert!(found, "missing row for {name}");
-        }
-    }
-
-    #[test]
-    fn build_panel_no_rows_for_empty_list() {
-        let mut p = make_panel();
-        p.entries.clear();
-        let dl = build_panel(&p, AVATAR_X, CHROME_H, &Palette::DARK);
-        let texts = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
-        assert_eq!(texts, 0);
     }
 
     // ── Colour mapping ───────────────────────────────────────────────────────

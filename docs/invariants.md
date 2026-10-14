@@ -72,7 +72,7 @@ that no ADR/policy file states — decide it there first.
 - `unsafe` only at FFI boundaries, every block carrying `// SAFETY:`. — `[gate: clippy::undocumented_unsafe_blocks = deny]`
 - `///` on every public item. — `[gate: missing_docs = deny]` (pre-existing debt behind file-scoped `#![allow]`, [lint-policy.md §10](lint-policy.md))
 - A new `.rs` file is ≤2000 lines; an over-size file does not grow unnoticed. — `[gate: scripts/check_file_sizes.py, CI job file-size]`
-- No hardcoded version string — everything derives from `CARGO_PKG_VERSION`. One deliberate exception: the `navigator.userAgent` literal in `crates/js/src/shim/web_api_shim_mid_b.js`. — [plan/phases.md](plan/phases.md) §Политика версий и фаз
+- No hardcoded version string — everything derives from `CARGO_PKG_VERSION`. The browser name seen by pages and servers (UA, `Sec-CH-UA*`, `navigator.*`) derives from one `lumen_core::Identity`; the Chrome major lives only in `chrome_major!`. — [plan/phases.md](plan/phases.md) §Политика версий и фаз
 - Every member crate carries `[lints] workspace = true`, or it silently escapes all of the above. — [lint-policy.md](lint-policy.md)
 
 ## Cross-cutting traps that read as invariants

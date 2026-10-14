@@ -53,3 +53,7 @@ WPT-RUN-14 срез 18, `css/css-masking/clip-path/`: `clip-path-circle-001…00
 
 `css/css-masking/clip-path/clip-path-circle-002.html`, `clip-path-ellipse-001.html`, `clip-path-contentBox-1a.html`,
 `clip-path-borderBox-1c.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 23 (2026-10-08)
+
+Тот же строковый разбор аргументов форм действует и у `shape-outside` (`parse_circle_px`, `parse_shape_ellipse_px` в `box_tree/shapes_floats.rs`): `circle()`, `circle(closest-side)`, `circle(50%)`, `ellipse(50% 50%)` без `at`, `at left top` дают прямоугольное обтекание, у `circle()` `at <position>` отбрасывается (BUG-1517, 25 reftest). Исправлять разбор аргументов нужно один раз для `clip-path` и `shape-outside`.

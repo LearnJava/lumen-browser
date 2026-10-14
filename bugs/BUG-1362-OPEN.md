@@ -31,3 +31,7 @@ WPT-RUN-14 срез 13: 153 id `tables/table-anonymous-objects-*` (все 153 `t
 ## Как проверить
 
 `css/CSS2/tables/table-anonymous-objects-001.xht`, `-009.xht`, `-017.xht`, `-059.xht`.
+
+## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
+
+`css/css-tables`: 18 id строят ячейку без строки (`display:table-cell` прямо в `display:table`/`div`) — `absolute-tables-001`, `dynamic-table-cell-height`, `fixup-dynamic-anonymous-*`, `percentage-sizing-of-table-cell-children-002…006`, `percent-height-replaced-in-percent-cell-002…004`, `percentages-grandchildren-quirks-mode-*`, `subpixel-table-cell-width-*`. Проба (`--mcp`): `display:table` > `display:table-cell{width:50px;height:30px}` — таблица 1024×0, ячейка 0×0; через `table-row` — 50×30.

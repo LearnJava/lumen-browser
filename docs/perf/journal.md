@@ -709,3 +709,30 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
 ### Дополнение к THREAD-12 (2026-10-07): выбросы 5–22 мс — артефакт пробы
 
 Выбросы `build: chrome` 5–22 мс после правки появлялись в прогонах, где временная проба печатала `eprintln!` ВНУТРИ измеряемого окна: stderr делит блокировку с потоком движка (он пишет большие блоки журнала), и печать пробы ждала её. Метки поставлены в переменные, печать вынесена за `bmarks[0]`: 3 прогона lenta.ru + 3 ria.ru (`LUMEN_FRAME_LOG=1`; число кадров не фиксировалось, в последних прогонах их было мало — 2 и 14, так что выборка скромная) дали один кадр выше 2 мс — 8 мс на ria.ru, из них 7,6 мс между началом блока overlay и концом сборки хрома (метка 2,45 → 10,10), причина не выясняется (одиночный выброс). Корректная проба внутри окна кадра — только переменные, печать после окна.
+
+## 2026-10-13 — COMPAT-AB-IDENTITY-HARNESS — плечо Chrome и матрица заголовков (не прогон корпуса)
+
+Приборы для A/B идентичности: `scripts/compat_ab_chrome.py` (Chrome for Testing 153.0.8010.52, `plain`/`lumen`),
+`scripts/header_matrix.py` (TLS × заголовки, бисект, снятие наборов), `scripts/header_echo_server.py`,
+`scripts/wall_signatures.py`. Маршрут: напрямую, одна машина, один IP. Сырьё — `runs/2026-10-13-ab-chrome.json`,
+`runs/2026-10-13-header-matrix.md`, `runs/2026-10-13-header-bisect.md`; наборы заголовков — `header-sets/`.
+
+- **Таблица BUG-1113 воспроизведена частично, остальное — смена сайтов.** zillow: 403 PerimeterX с набором
+  `lumen-2026-09-23` на обоих TLS, 200 с набором Chrome 153; бисект: решает один заголовок, `User-Agent`
+  (Chrome/130 → 153). Решают заголовки, не TLS, как и в BUG-1113. accuweather, adobe, washingtonpost теперь 200 и с
+  `DNT: 1` — Akamai-правило по `DNT` на этом IP не срабатывает. reuters: 401 DataDome во всех ячейках и у
+  настоящего Chrome (репутация IP, не заголовки).
+- **khanacademy с Chrome/130.** Настоящий Chrome: `WALL_SOFT` (200, `unsupported-browser`), с 153 — `OK`, оба
+  варианта идентичности. `curl_cffi` с Chrome/130: 200 `unsupported-browser`; на не-браузерном TLS сайт сейчас отдаёт
+  «Client Challenge» (`/_fs-ch-…`) при любом UA — это отдельная подпись `js-challenge`.
+- **Токен `Lumen/x.y` на 6 сайтах:** блокировок из-за токена 0 из 6 (`runs/2026-10-13-ab-chrome.json`). Выборка
+  мала, решение Р1 требует ≥100 сайтов (COMPAT-AB-IDENTITY).
+- **Расхождения набора Lumen (`lumen-chrome_unbranded`) с Chrome 153 на проводе:** у Lumen есть
+  `Cache-Control: max-age=0` (Chrome на обычной навигации его не шлёт), нет `Upgrade-Insecure-Requests: 1`,
+  `Sec-Fetch-User: ?1`, `zstd` в `Accept-Encoding`; порядок другой (Chrome: `sec-ch-ua*`, `Upgrade-Insecure-Requests`,
+  `User-Agent`, `Accept`, `Sec-Fetch-*`, `Accept-Encoding`, `Accept-Language`). Бисект BUG-1113 показал, что по
+  отдельности они на тех пяти сайтах ничего не меняли; заводить дефект рано. Снято по plain HTTP на loopback, по HTTPS
+  набор Chrome может отличаться.
+- **Ловушки приборов:** `--user-agent` у Chrome обнуляет Client Hints (поэтому UA ставится через CDP-override с
+  метаданными); `navigator.userAgentData` пуст на `about:blank` (бренды берутся на loopback); холодный старт Chrome
+  изредка не открывает CDP-порт — три попытки.

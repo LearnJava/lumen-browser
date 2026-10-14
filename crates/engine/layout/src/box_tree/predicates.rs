@@ -365,4 +365,6 @@ pub(crate) fn is_inline_replaced_media_element(doc: &Document, id: NodeId) -> bo
         || is_canvas_element(doc, id)
         || is_audio_element(doc, id)
         || is_iframe_element(doc, id)
+        // BUG-1354: a replaced `<svg>` in flow is inline-level (CSS 2.1 §10.3.2).
+        || is_svg_root(doc, id)
 }

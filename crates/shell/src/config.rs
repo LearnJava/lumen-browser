@@ -24,7 +24,12 @@
 //! languages           = "en-US,en"      # comma-separated; first entry = navigator.language
 //! doh_url             = "https://cloudflare-dns.com/dns-query"  # DNS over HTTPS resolver (optional)
 //! http3               = true            # HTTP/3 (QUIC) via Alt-Svc discovery (default: false)
+//! identity            = "chrome_unbranded"  # chrome_unbranded|chrome_lumen (env LUMEN_IDENTITY wins)
 //! ```
+//!
+//! `identity = "chrome_lumen"` appends the `Lumen/x.y` token to the User-Agent of
+//! the `chrome`/`strict` profiles in every layer (HTTP, `navigator.*`, Client
+//! Hints brand) and changes nothing else — the A/B knob of ADR-034 §1.
 //!
 //! Applied at startup: [`FingerprintProfile::install_navigator`] pushes the
 //! navigator/screen/timezone values into the process-global JS profile, and
@@ -32,6 +37,7 @@
 //! [`HttpClient`].
 
 use lumen_core::url::Url;
+use lumen_core::IdentityVariant;
 use lumen_network::{
     DiskHttpCache, HttpCache, HttpCacheBackend, HttpClient, HttpProfile, Socks5Proxy, TlsProfile,
 };
@@ -53,7 +59,13 @@ static GLOBAL: OnceLock<FingerprintProfile> = OnceLock::new();
 /// the profile *before* the single call that installs it; a repeat call here
 /// is now a bug, flagged loudly in debug builds instead of failing silently.
 pub fn init_global(profile: FingerprintProfile) -> bool {
+    // ADR-034: the User-Agent token is read by the HTTP header builders and the
+    // JS identity, so it must be selected before the first request is built.
+    let identity = profile.identity;
     let set = GLOBAL.set(profile).is_ok();
+    if set {
+        lumen_core::set_identity_variant(identity);
+    }
     debug_assert!(
         set,
         "config::init_global вызван повторно — OnceLock уже занят, профиль отброшен молча (BUG-1210)"
@@ -88,6 +100,15 @@ static HTTP_CACHE: OnceLock<Option<Arc<dyn HttpCacheBackend>>> = OnceLock::new()
 /// frozen for the process lifetime (the privacy mode is fixed at startup).
 fn shared_http_cache(private: bool) -> Option<Arc<dyn HttpCacheBackend>> {
     HTTP_CACHE.get_or_init(|| build_http_cache(private)).clone()
+}
+
+/// UX-PARTITION: delete every cached response whose URL belongs to `site`.
+/// Returns 0 when the shared cache has not been created yet (nothing cached).
+pub fn clear_http_cache_site(site: &lumen_storage::PartitionKey) -> usize {
+    HTTP_CACHE
+        .get()
+        .and_then(Option::as_ref)
+        .map_or(0, |cache| cache.clear_matching(&|url| site.matches(url)))
 }
 
 /// Construct the HTTP cache backend for the requested privacy mode (no global
@@ -210,6 +231,10 @@ pub struct FingerprintProfile {
     /// cached `h3` alternative takes the QUIC leg before any TCP work, with a
     /// transparent fallback to H2 / H1.1 on failure.
     pub http3: bool,
+    /// Chromium-grammar identity variant (token or not). Applies to the
+    /// `chrome`/`strict` HTTP profiles only; Edge, Firefox, Safari, Tor and
+    /// Lumen keep their own User-Agent.
+    pub identity: IdentityVariant,
 }
 
 impl Default for FingerprintProfile {
@@ -232,11 +257,22 @@ impl Default for FingerprintProfile {
             socks5_proxy: None,
             no_persistent_state: false,
             http3: false,
+            identity: IdentityVariant::default(),
         }
     }
 }
 
 impl FingerprintProfile {
+    /// Let `LUMEN_IDENTITY` (`chrome_unbranded` | `chrome_lumen`) override the
+    /// `identity` key — the knob `perf_audit.py --env LUMEN_IDENTITY=…` turns for
+    /// the A/B run, without editing `fingerprint.toml`. An unset, empty or
+    /// unknown value leaves the profile as loaded.
+    pub fn apply_identity_env(&mut self, env_value: Option<&str>) {
+        if let Some(v) = env_value.and_then(IdentityVariant::parse) {
+            self.identity = v;
+        }
+    }
+
     /// Resolve the effective TLS profile: explicit override, else derived from
     /// the HTTP profile.
     #[must_use]
@@ -284,6 +320,11 @@ impl FingerprintProfile {
     #[cfg(feature = "v8")]
     pub fn install_navigator(&self) {
         lumen_js::set_navigator_profile(self.navigator_profile());
+        // BUG-1614: the JS-visible name of the browser comes from the very
+        // User-Agent the HTTP profile sends, so the layers cannot disagree.
+        lumen_js::set_identity(lumen_core::Identity::from_user_agent(
+            lumen_network::http::profile_user_agent(self.http_profile),
+        ));
         lumen_js::set_global_privacy_control(lumen_network::sends_global_privacy_control(
             self.http_profile,
         ));
@@ -411,6 +452,11 @@ impl FingerprintProfile {
 pub fn connection_site(url: &lumen_core::url::Url) -> String {
     use lumen_core::ext::PublicSuffixList;
     let host = url.host_ascii_normalized();
+    // The PSL treats `127.0.0.1` as a name and returns `0.1`; an IP literal is
+    // its own site (BUG-1616: the same value is the site-for-cookies).
+    if host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok() {
+        return host.to_owned();
+    }
     lumen_storage::PslProvider::new()
         .registrable_domain(host)
         .unwrap_or(host)
@@ -602,6 +648,11 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
         "http3" => {
             p.http3 = matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes");
         }
+        "identity" => {
+            if let Some(v) = IdentityVariant::parse(value) {
+                p.identity = v;
+            }
+        }
         _ => {}
     }
 }
@@ -751,6 +802,21 @@ mod tests {
         assert_eq!(Arc::strong_count(&cache), 2);
         drop(alias);
         assert_eq!(Arc::strong_count(&cache), 1);
+    }
+
+    #[test]
+    fn identity_key_parses_and_env_wins() {
+        assert_eq!(FingerprintProfile::default().identity, IdentityVariant::ChromeUnbranded);
+        let mut p = parse("identity = \"chrome_lumen\"\n");
+        assert_eq!(p.identity, IdentityVariant::ChromeLumen);
+        // Unknown key values and unknown / empty env values leave it alone.
+        assert_eq!(parse("identity = \"firefox_win\"\n").identity, IdentityVariant::ChromeUnbranded);
+        p.apply_identity_env(Some(""));
+        p.apply_identity_env(Some("bogus"));
+        p.apply_identity_env(None);
+        assert_eq!(p.identity, IdentityVariant::ChromeLumen);
+        p.apply_identity_env(Some("chrome_unbranded"));
+        assert_eq!(p.identity, IdentityVariant::ChromeUnbranded);
     }
 
     #[test]

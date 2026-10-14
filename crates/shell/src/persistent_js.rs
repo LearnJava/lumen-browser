@@ -568,6 +568,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// notifications were created since the last drain.
     #[allow(dead_code)]
     fn take_notification_requests(&self) -> Vec<(String, String)>;
+    /// Drain permission prompts raised by the page (`"notifications"`,
+    /// UX-PERMISSIONS-2); the shell asks the user and settles the promises.
+    fn take_permission_requests(&self) -> Vec<String>;
     /// Purge JS-side per-node caches for nodes that have been detached from
     /// the DOM and have zero live JS references.
     ///
@@ -661,12 +664,19 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Run the spec's «prompt to unload a document» steps (HTML LS §7.4.5) —
     /// dispatch `beforeunload` on the outgoing page.
     ///
-    /// The page's answer («I asked to stay») is deliberately not honoured: that
-    /// needs a user-facing confirm dialog, which this engine does not have.
-    /// See BUG-834 and `_lumen_fire_beforeunload` in the JS shim.
+    /// The page's answer is not read here: the user-initiated navigations ask
+    /// through [`Self::beforeunload_wants_prompt`] first (UX-DIALOGS) and only
+    /// fall back to this when that query had no answer in time. See BUG-834 and
+    /// `_lumen_fire_beforeunload` in the JS shim.
     #[allow(dead_code)]
     fn fire_beforeunload(&self) {
         self.eval_js("_lumen_fire_beforeunload()");
+    }
+    /// UX-DIALOGS: dispatch `beforeunload` and report whether the page asks the
+    /// user to confirm leaving (it set `returnValue`/`preventDefault()` and has
+    /// had a user gesture). The handlers have run once by the time this returns.
+    fn beforeunload_wants_prompt(&self) -> bool {
+        matches!(self.eval_js_value("_lumen_beforeunload_wants_prompt()").as_deref(), Ok("true"))
     }
     /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
     ///
@@ -1337,6 +1347,9 @@ impl PersistentJs for V8PersistentJs {
             .into_iter()
             .map(|r| (r.title, r.body))
             .collect()
+    }
+    fn take_permission_requests(&self) -> Vec<String> {
+        self.rt.take_permission_requests()
     }
     fn gc_collect(&self, dead_nids: &[u32]) {
         if dead_nids.is_empty() {

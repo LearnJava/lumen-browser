@@ -18,7 +18,7 @@
 //! # Layout
 //!
 //! The panel is anchored to the bottom of the window, full width, up to
-//! [`MAX_VISIBLE_LINES`] rows of [`LINE_H`] height each, plus a header bar.
+//! [`MAX_VISIBLE_LINES`] rows, rendered as `#networkPanel` in the engine chrome
 //! Requests are displayed oldest-first (scroll_offset = 0 shows the tail).
 
 use std::sync::{Arc, Mutex};
@@ -26,44 +26,7 @@ use std::time::Instant;
 
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
-use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{DisplayCommand, DisplayList};
 
-// ── Colours ───────────────────────────────────────────────────────────────────
-
-const BG: Color = Color { r: 24, g: 24, b: 28, a: 240 };
-const HEADER_BG: Color = Color { r: 32, g: 33, b: 38, a: 255 };
-const FG_URL: Color = Color { r: 210, g: 212, b: 218, a: 255 };
-const FG_METHOD: Color = Color { r: 130, g: 180, b: 240, a: 255 };
-const FG_DIM: Color = Color { r: 130, g: 132, b: 140, a: 255 };
-const FG_TIME: Color = Color { r: 160, g: 162, b: 170, a: 255 };
-/// 2xx success.
-const STATUS_OK: Color = Color { r: 90, g: 200, b: 120, a: 255 };
-/// 3xx redirect.
-const STATUS_REDIRECT: Color = Color { r: 220, g: 190, b: 90, a: 255 };
-/// 4xx / 5xx error, blocked, and failed requests.
-const STATUS_ERROR: Color = Color { r: 237, g: 90, b: 90, a: 255 };
-/// Pending (no status yet).
-const STATUS_PENDING: Color = Color { r: 140, g: 142, b: 150, a: 255 };
-const BLOCKED_BG: Color = Color { r: 45, g: 20, b: 20, a: 255 };
-/// Row background for network-level failures (DNS/TCP/TLS/read errors).
-const FAILED_BG: Color = Color { r: 40, g: 25, b: 10, a: 255 };
-
-// ── Layout constants ──────────────────────────────────────────────────────────
-
-const HEADER_H: f32 = 32.0;
-const LINE_H: f32 = 20.0;
-const FONT_SIZE: f32 = 12.0;
-const H_PAD: f32 = 10.0;
-/// X offset of the method column (CSS px from the panel's left edge).
-const COL_METHOD: f32 = H_PAD;
-/// X offset of the status column.
-const COL_STATUS: f32 = 60.0;
-/// X offset of the timing column.
-const COL_TIME: f32 = 120.0;
-/// X offset of the URL column.
-const COL_URL: f32 = 185.0;
 /// Maximum number of request rows visible without scrolling.
 const MAX_VISIBLE_LINES: usize = 12;
 /// Hard cap on stored entries (oldest are dropped when exceeded).
@@ -395,154 +358,37 @@ impl NetworkPanel {
     }
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
+// ── Chrome model ──────────────────────────────────────────────────────────────
 
-/// Build the viewport-locked network panel overlay.
-///
-/// Returns an empty `DisplayList` when `panel.visible` is `false`.
-/// `(win_w, win_h)` are the window dimensions in CSS pixels (same units used by
-/// all other shell overlay builders).
-pub fn build_network_panel(panel: &NetworkPanel, (win_w, win_h): (u32, u32)) -> DisplayList {
-    if !panel.visible {
-        return Vec::new();
+impl NetworkPanel {
+    /// Rows `#networkPanel` shows: the last [`MAX_VISIBLE_LINES`] entries,
+    /// shifted back by `scroll_offset`, oldest first (UX-CHROME-PANELS).
+    pub fn chrome_model(&self) -> lumen_chrome::ChromeNetworkModel {
+        let total = self.entries.len();
+        let end = total.saturating_sub(self.scroll_offset);
+        let start = end.saturating_sub(MAX_VISIBLE_LINES);
+        let rows = self.entries[start..end]
+            .iter()
+            .map(chrome_row)
+            .collect();
+        lumen_chrome::ChromeNetworkModel { open: self.visible, total, rows }
     }
-
-    let visible_count = panel.entries.len().min(MAX_VISIBLE_LINES);
-    let panel_h = HEADER_H + visible_count.max(1) as f32 * LINE_H;
-    let panel_y = win_h as f32 - panel_h;
-    let panel_w = win_w as f32;
-
-    let mut out: DisplayList = Vec::with_capacity(4 + visible_count * 4);
-
-    // Background.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, panel_y, panel_w, panel_h),
-        color: BG,
-    });
-
-    // Header bar.
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, panel_y, panel_w, HEADER_H),
-        color: HEADER_BG,
-    });
-
-    // Header label.
-    out.push(make_text(
-        format!("Network ({} requests)", panel.entries.len()),
-        H_PAD,
-        panel_y + (HEADER_H - FONT_SIZE) / 2.0,
-        panel_w * 0.5,
-        FONT_SIZE,
-        FG_DIM,
-    ));
-
-    // Close hint.
-    out.push(make_text(
-        "Ctrl+Shift+E to close".to_string(),
-        panel_w - 150.0,
-        panel_y + (HEADER_H - FONT_SIZE) / 2.0,
-        140.0,
-        FONT_SIZE,
-        FG_DIM,
-    ));
-
-    // Empty-state hint.
-    if panel.entries.is_empty() {
-        out.push(make_text(
-            "(no requests yet)".to_string(),
-            H_PAD,
-            panel_y + HEADER_H + (LINE_H - FONT_SIZE) / 2.0,
-            panel_w - H_PAD * 2.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-        return out;
-    }
-
-    // Request rows — show the last MAX_VISIBLE_LINES, respecting scroll_offset.
-    let total = panel.entries.len();
-    let end = total.saturating_sub(panel.scroll_offset);
-    let start = end.saturating_sub(MAX_VISIBLE_LINES);
-
-    for (i, entry) in panel.entries[start..end].iter().enumerate() {
-        let row_y = panel_y + HEADER_H + i as f32 * LINE_H;
-        let text_y = row_y + (LINE_H - FONT_SIZE) / 2.0;
-
-        // Highlight blocked / failed rows.
-        if entry.blocked {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(0.0, row_y, panel_w, LINE_H),
-                color: BLOCKED_BG,
-            });
-        } else if entry.failed {
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(0.0, row_y, panel_w, LINE_H),
-                color: FAILED_BG,
-            });
-        }
-
-        // Method column.
-        out.push(make_text(
-            entry.method.clone(),
-            COL_METHOD,
-            text_y,
-            COL_STATUS - COL_METHOD,
-            FONT_SIZE,
-            FG_METHOD,
-        ));
-
-        // Status column.
-        out.push(make_text(
-            status_label(entry),
-            COL_STATUS,
-            text_y,
-            COL_TIME - COL_STATUS,
-            FONT_SIZE,
-            status_color(entry),
-        ));
-
-        // Timing column.
-        out.push(make_text(
-            timing_label(entry),
-            COL_TIME,
-            text_y,
-            COL_URL - COL_TIME,
-            FONT_SIZE,
-            FG_TIME,
-        ));
-
-        // URL column (truncated to fit).
-        out.push(make_text(
-            truncate_url(&entry.url, panel_w - COL_URL - H_PAD),
-            COL_URL,
-            text_y,
-            panel_w - COL_URL - H_PAD,
-            FONT_SIZE,
-            FG_URL,
-        ));
-    }
-
-    // Scroll indicator if requests overflow the visible area.
-    if total > MAX_VISIBLE_LINES {
-        let indicator = if panel.scroll_offset > 0 {
-            format!("↑↓  {end}/{total}")
-        } else {
-            format!("{total}/{total}")
-        };
-        out.push(make_text(
-            indicator,
-            panel_w - 250.0,
-            panel_y + (HEADER_H - FONT_SIZE) / 2.0,
-            90.0,
-            FONT_SIZE,
-            FG_DIM,
-        ));
-    }
-
-    out
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// One request as a chrome `.net-row` (also used by the inspector's Network tab).
+pub(super) fn chrome_row(e: &NetworkEntry) -> lumen_chrome::ChromeNetworkRowModel {
+    lumen_chrome::ChromeNetworkRowModel {
+        method: e.method.clone(),
+        status: status_label(e),
+        status_class: status_class(e),
+        time: timing_label(e),
+        url: e.url.clone(),
+        blocked: e.blocked,
+        failed: e.failed,
+    }
+}
 
 /// Status text for an entry: `"blocked"`, failure stage, numeric code, or `"…"`.
 fn status_label(entry: &NetworkEntry) -> String {
@@ -563,16 +409,16 @@ fn status_label(entry: &NetworkEntry) -> String {
     }
 }
 
-/// Status colour: green 2xx, amber 3xx, red 4xx/5xx & blocked & failed, grey pending.
-fn status_color(entry: &NetworkEntry) -> Color {
+/// Status badge class: `2` 2xx, `3` 3xx, `4` 4xx/5xx & blocked & failed, `0` pending.
+fn status_class(entry: &NetworkEntry) -> u8 {
     if entry.blocked || entry.failed {
-        return STATUS_ERROR;
+        return 4;
     }
     match entry.status {
-        Some(c) if (200..300).contains(&c) => STATUS_OK,
-        Some(c) if (300..400).contains(&c) => STATUS_REDIRECT,
-        Some(_) => STATUS_ERROR,
-        None => STATUS_PENDING,
+        Some(c) if (200..300).contains(&c) => 2,
+        Some(c) if (300..400).contains(&c) => 3,
+        Some(_) => 4,
+        None => 0,
     }
 }
 
@@ -584,40 +430,6 @@ fn timing_label(entry: &NetworkEntry) -> String {
         format!("{ms} ms")
     } else {
         "…".to_string()
-    }
-}
-
-/// Truncate a URL to roughly fit `width` CSS px (assuming ~6.5 px/char at the
-/// panel font size), prepending an ellipsis when the tail is kept.
-fn truncate_url(url: &str, width: f32) -> String {
-    let max_chars = (width / 6.5).floor().max(8.0) as usize;
-    let count = url.chars().count();
-    if count <= max_chars {
-        return url.to_owned();
-    }
-    // Keep the tail (path/file is usually more informative than the scheme).
-    let skip = count - (max_chars - 1);
-    let tail: String = url.chars().skip(skip).collect();
-    format!("…{tail}")
-}
-
-fn make_text(text: String, x: f32, y: f32, w: f32, font_size: f32, color: Color) -> DisplayCommand {
-    DisplayCommand::DrawText {
-        font_stretch: lumen_layout::FontStretch::NORMAL,
-        rect: Rect::new(x, y, w, font_size * 1.4),
-        text,
-        font_size,
-        color,
-        // DS-4: DevTools network panel text is monospace (bundled JetBrains Mono).
-        font_family: vec!["JetBrains Mono".to_string()],
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
     }
 }
 
@@ -806,27 +618,18 @@ mod tests {
         assert_eq!(p.scroll_offset, 20 - MAX_VISIBLE_LINES);
     }
 
-    // ── Rendering ──────────────────────────────────────────────────────────────
+    // ── Chrome model ───────────────────────────────────────────────────────────
 
     #[test]
-    fn build_hidden_returns_empty() {
+    fn chrome_model_hidden_reports_closed() {
         let p = NetworkPanel::new(make_log());
-        assert!(build_network_panel(&p, (1280, 800)).is_empty());
+        let m = p.chrome_model();
+        assert!(!m.open);
+        assert!(m.rows.is_empty());
     }
 
     #[test]
-    fn build_visible_empty_has_header() {
-        let mut p = NetworkPanel::new(make_log());
-        p.visible = true;
-        let dl = build_network_panel(&p, (1280, 800));
-        let has_header = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Network"))
-        });
-        assert!(has_header);
-    }
-
-    #[test]
-    fn build_shows_request_row() {
+    fn chrome_model_shows_request_row() {
         let log = make_log();
         {
             let mut g = log.lock().unwrap();
@@ -836,33 +639,27 @@ mod tests {
         let mut p = NetworkPanel::new(log);
         p.visible = true;
         p.refresh();
-        let dl = build_network_panel(&p, (1280, 800));
-        let has_status = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "200")
-        });
-        let has_url = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
-        });
-        assert!(has_status, "must show status 200");
-        assert!(has_url, "must show URL");
+        let m = p.chrome_model();
+        assert!(m.open);
+        assert_eq!(m.total, 1);
+        assert_eq!(m.rows[0].status, "200");
+        assert_eq!(m.rows[0].status_class, 2);
+        assert!(m.rows[0].url.contains("example.com"));
     }
 
     #[test]
-    fn build_shows_blocked_row() {
+    fn chrome_model_marks_blocked_row() {
         let log = make_log();
         log.lock().unwrap().record_blocked("https://ads.com/track.js", "easylist");
         let mut p = NetworkPanel::new(log);
-        p.visible = true;
         p.refresh();
-        let dl = build_network_panel(&p, (1280, 800));
-        let has_blocked = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "blocked")
-        });
-        assert!(has_blocked);
+        let m = p.chrome_model();
+        assert_eq!(m.rows[0].status, "blocked");
+        assert!(m.rows[0].blocked);
     }
 
     #[test]
-    fn build_caps_at_max_visible_lines() {
+    fn chrome_model_caps_at_max_visible_lines() {
         let log = make_log();
         {
             let mut g = log.lock().unwrap();
@@ -872,20 +669,19 @@ mod tests {
             }
         }
         let mut p = NetworkPanel::new(log);
-        p.visible = true;
         p.refresh();
-        let dl = build_network_panel(&p, (1280, 800));
-        // Count status-column "200" cells (one per visible row).
-        let rows = dl.iter().filter(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "200")
-        }).count();
-        assert_eq!(rows, MAX_VISIBLE_LINES);
+        let m = p.chrome_model();
+        assert_eq!(m.rows.len(), MAX_VISIBLE_LINES);
+        assert_eq!(m.total, MAX_VISIBLE_LINES + 5);
+        assert!(m.rows.last().unwrap().url.ends_with(&format!("/{}", MAX_VISIBLE_LINES + 4)));
+        p.scroll_up(5);
+        assert!(p.chrome_model().rows.last().unwrap().url.ends_with(&format!("/{}", MAX_VISIBLE_LINES - 1)));
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     #[test]
-    fn status_color_buckets() {
+    fn status_class_buckets() {
         let mk = |status: Option<u16>, blocked: bool, failed: bool| NetworkEntry {
             method: "GET".into(),
             url: "https://a.com/".into(),
@@ -902,12 +698,12 @@ mod tests {
             start: Instant::now(),
             duration_ms: None,
         };
-        assert_eq!(status_color(&mk(Some(204), false, false)), STATUS_OK);
-        assert_eq!(status_color(&mk(Some(301), false, false)), STATUS_REDIRECT);
-        assert_eq!(status_color(&mk(Some(404), false, false)), STATUS_ERROR);
-        assert_eq!(status_color(&mk(None, false, false)), STATUS_PENDING);
-        assert_eq!(status_color(&mk(None, true, false)), STATUS_ERROR);
-        assert_eq!(status_color(&mk(None, false, true)), STATUS_ERROR);
+        assert_eq!(status_class(&mk(Some(204), false, false)), 2);
+        assert_eq!(status_class(&mk(Some(301), false, false)), 3);
+        assert_eq!(status_class(&mk(Some(404), false, false)), 4);
+        assert_eq!(status_class(&mk(None, false, false)), 0);
+        assert_eq!(status_class(&mk(None, true, false)), 4);
+        assert_eq!(status_class(&mk(None, false, true)), 4);
     }
 
     // ── RequestFailed ──────────────────────────────────────────────────────────
@@ -978,24 +774,6 @@ mod tests {
     }
 
     #[test]
-    fn build_shows_failed_row() {
-        let log = make_log();
-        {
-            let mut g = log.lock().unwrap();
-            g.record_started("GET", "https://fail.example/");
-            g.record_failed("https://fail.example/", "dns", "NXDOMAIN");
-        }
-        let mut p = NetworkPanel::new(log);
-        p.visible = true;
-        p.refresh();
-        let dl = build_network_panel(&p, (1280, 800));
-        let has_stage = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::DrawText { text, .. } if text == "dns")
-        });
-        assert!(has_stage, "must show failure stage in status column");
-    }
-
-    #[test]
     fn status_label_failed_shows_stage() {
         let entry = NetworkEntry {
             method: "GET".into(),
@@ -1023,19 +801,5 @@ mod tests {
             duration_ms: Some(10),
         };
         assert_eq!(timing_label(&entry), "—");
-    }
-
-    #[test]
-    fn truncate_url_keeps_tail() {
-        let long = "https://example.com/very/long/path/to/resource.js";
-        // Width 100 px → ~15 chars, enough to keep the file name in the tail.
-        let t = truncate_url(long, 100.0);
-        assert!(t.starts_with('…'));
-        assert!(t.ends_with("resource.js"));
-    }
-
-    #[test]
-    fn truncate_url_short_untouched() {
-        assert_eq!(truncate_url("https://a.com/", 400.0), "https://a.com/");
     }
 }

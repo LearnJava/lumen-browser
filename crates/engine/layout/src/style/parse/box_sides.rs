@@ -15,7 +15,7 @@ use crate::style::values::length::split_top_level_ws;
 use crate::style::{
     BorderStyle, BreakValue, ComputedStyle, CssColor, Length, LengthOrAuto, OutlineColor,
     OutlineStyle, OverscrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis,
-    ScrollSnapStrictness, ScrollSnapType, parse_length_q,
+    ScrollSnapStrictness, ScrollSnapType, is_negative_literal, parse_length_q,
 };
 
 /// Резолвит длину для margin / padding / border. `%` в Phase 0 не поддержан
@@ -88,6 +88,7 @@ pub(in crate::style) fn set_inset_side(
 /// Устанавливает одну сторону padding как typed `Length`.
 /// `auto` не валиден для padding — игнорируем; отрицательные px — игнорируем.
 pub(in crate::style) fn set_padding_side(target: &mut Length, val: &str, is_quirks: bool) {
+    if is_negative_literal(val) { return; }
     if let Some(len) = parse_length_q(val, is_quirks) {
         if matches!(&len, Length::Px(v) if *v < 0.0) { return; }
         *target = len;
@@ -155,6 +156,7 @@ pub(in crate::style) fn parse_margin_shorthand(
 /// `auto` не валиден; отрицательные px тоже. При ошибке — None.
 pub(in crate::style) fn parse_padding_shorthand(val: &str, is_quirks: bool) -> Option<(Length, Length, Length, Length)> {
     let parse = |s: &str| -> Option<Length> {
+        if is_negative_literal(s) { return None; }
         let len = parse_length_q(s, is_quirks)?;
         if matches!(&len, Length::Px(v) if *v < 0.0) { return None; }
         Some(len)
@@ -543,12 +545,31 @@ pub(in crate::style) fn parse_break_value(s: &str) -> Option<BreakValue> {
     }
 }
 
+/// Initial `border-*` values on all four sides (`medium` / `none` / `currentcolor`).
+fn reset_border_sides(style: &mut ComputedStyle) {
+    style.border_top_width = 3.0;
+    style.border_right_width = 3.0;
+    style.border_bottom_width = 3.0;
+    style.border_left_width = 3.0;
+    style.border_top_style = BorderStyle::None;
+    style.border_right_style = BorderStyle::None;
+    style.border_bottom_style = BorderStyle::None;
+    style.border_left_style = BorderStyle::None;
+    style.border_top_color = CssColor::CurrentColor;
+    style.border_right_color = CssColor::CurrentColor;
+    style.border_bottom_color = CssColor::CurrentColor;
+    style.border_left_color = CssColor::CurrentColor;
+}
+
 /// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
 /// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
 pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
     // Top-level split: a colour like `rgba(0, 0, 255, 0.5)` is one token.
     let tokens = split_top_level_ws(val);
-    let mut invisible = false;
+    // CSS Backgrounds L3 §4.4: the shorthand resets every sub-property to its initial value
+    // (`medium` / `none` / `currentcolor`) before applying the listed ones (BUG-1342).
+    let mut invisible = true;
+    reset_border_sides(style);
     for tok in &tokens {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             style.border_top_width = v;
@@ -590,7 +611,11 @@ pub(in crate::style) fn apply_border_side_shorthand(
     viewport: Size,
     is_quirks: bool,
 ) {
-    let mut invisible = false;
+    // Same reset as `apply_border_shorthand`: unlisted sub-properties return to initial.
+    let mut invisible = true;
+    *width = 3.0;
+    *bstyle = BorderStyle::None;
+    *color = CssColor::CurrentColor;
     for tok in split_top_level_ws(val) {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             *width = v;

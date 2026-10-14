@@ -1,6 +1,7 @@
 # BUG-1393 — `-webkit-transform`, `-webkit-box-shadow`, `-webkit-border-radius`, `-webkit-transition`, `-webkit-box-sizing`, `-webkit-animation`, `-webkit-flex` не распознаются в таблице стилей
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md: строка «`-webkit-*` алиасы Compat Standard»)
+**Тип:** нет таблицы алиасов `-webkit-*` — недостающая функциональность, строка в CSS-SPECS.md (подсекция «[T1] WHATWG Compat / Chrome-измы»), владелец P4 (2026-10-12).
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 16, `css/css-overflow` + `css/css-sizing`)
 **Область:** layout (`crates/engine/layout/src/style/apply/*.rs` — таблица имён свойств)
 

@@ -1003,6 +1003,81 @@ use super::*;
         );
     }
 
+    /// CSS UI L4 §6.1: `<string>` и две стороны; одно значение задаёт обе.
+    #[test]
+    fn text_overflow_string_and_two_values_parsed() {
+        let root = lay(
+            "<p>x</p><div id=a>y</div><div id=b>z</div><div id=c>w</div>",
+            "p { text-overflow: \"-\"; } #a { text-overflow: clip 'a\\62 c'; } \
+             #b { text-overflow: ellipsis ellipsis ellipsis; } #c { text-overflow: \"unterminated; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_overflow, TextOverflow::Str("-".into()));
+        assert_eq!(p.style.text_overflow_right, TextOverflow::Str("-".into()));
+        let blocks: Vec<_> = root.children.iter().filter(|c| matches!(c.kind, crate::BoxKind::Block)).collect();
+        assert_eq!(blocks[1].style.text_overflow, TextOverflow::Clip);
+        assert_eq!(blocks[1].style.text_overflow_right, TextOverflow::Str("abc".into()));
+        // Три значения и незакрытая строка — невалидны, остаётся initial.
+        assert_eq!(blocks[2].style.text_overflow, TextOverflow::Clip);
+        assert_eq!(blocks[3].style.text_overflow, TextOverflow::Clip);
+    }
+
+    /// `text-overflow: "<string>"` — конец строки заменяется строкой отдельным фрагментом
+    /// со стилем блока.
+    #[test]
+    fn text_overflow_string_replaces_line_end() {
+        // Fixed8: 8 px/char. "Hello World" = 88 px, бокс 64 px, метка «--» 16 px:
+        // budget = 48 px → "Hello " (6 символов), метка встаёт на x = 48.
+        let root = lay_measured(
+            "<p>Hello World</p>",
+            "p { width: 64px; overflow: hidden; white-space: nowrap; text-overflow: \"--\"; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let crate::BoxKind::InlineRun { lines, .. } = &p.children[0].kind else {
+            panic!("expected InlineRun");
+        };
+        let line = &lines[0];
+        assert_eq!(line.len(), 2, "текст и метка — два фрагмента");
+        assert_eq!(line[0].text, "Hello ");
+        assert_eq!(line[1].text, "--");
+        assert!((line[1].x - 48.0).abs() < 0.01, "метка за текстом: {}", line[1].x);
+        assert!((line[1].width - 16.0).abs() < 0.01);
+    }
+
+    /// Метка шире бокса: первый символ остаётся, метка обрезается клипом бокса.
+    #[test]
+    fn text_overflow_string_wider_than_box_keeps_first_char() {
+        let root = lay_measured(
+            "<p>Hello World</p>",
+            "p { width: 32px; overflow: hidden; white-space: nowrap; text-overflow: \"123456789\"; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let crate::BoxKind::InlineRun { lines, .. } = &p.children[0].kind else {
+            panic!("expected InlineRun");
+        };
+        let texts: Vec<&str> = lines[0].iter().map(|f| f.text.as_str()).collect();
+        assert_eq!(texts, ["H", "123456789"]);
+    }
+
+    /// Внутри `line-clamp` строки до отсечки получают метку, строка отсечки — нет.
+    #[test]
+    fn text_overflow_string_in_line_clamp_skips_cut_line() {
+        let root = lay_measured(
+            "<p>aaaaaaaaaaaaaaaa<br>bbbbbbbbbbbbbbbb<br>cc</p>",
+            "p { width: 64px; overflow: hidden; white-space: nowrap; line-clamp: 2; \
+               text-overflow: \"-\"; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let crate::BoxKind::InlineRun { lines, .. } = &p.children[0].kind else {
+            panic!("expected InlineRun");
+        };
+        assert!(lines[0].last().is_some_and(|f| f.text == "-"), "первая строка: {:?}", lines[0]);
+        assert!(lines.get(1).is_none_or(|l| l.iter().all(|f| f.text != "-")));
+    }
+
     // ── selector matching: back-tracking edge cases ─────────────────────────
 
     /// `div div p` — двойной descendant. Должен матчить, когда есть два

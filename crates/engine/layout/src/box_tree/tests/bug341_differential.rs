@@ -106,7 +106,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     let inline_box = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
-        used_line_height: inline_style.font_size * inline_style.line_height,
+        used_padding: None, used_line_height: inline_style.font_size * inline_style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -127,7 +127,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     let mut root = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
-        used_line_height: root_style.font_size * root_style.line_height,
+        used_padding: None, used_line_height: root_style.font_size * root_style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -171,7 +171,7 @@ fn font_size_adjust_keeps_absolute_line_height_fixed() {
     let mut b = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
-        used_line_height: s.font_size * s.line_height,
+        used_padding: None, used_line_height: s.font_size * s.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -210,7 +210,7 @@ fn font_size_adjust_scales_relative_number_line_height() {
     let mut b = super::super::LayoutBox {
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
-        used_line_height: s.font_size * s.line_height,
+        used_padding: None, used_line_height: s.font_size * s.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -250,7 +250,7 @@ fn post_build_walks_leave_a_reused_subtree_alone() {
         super::super::LayoutBox {
             node: lumen_dom::NodeId::from_index(0),
             rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
-            used_line_height: -1.0,
+            used_padding: None, used_line_height: -1.0,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

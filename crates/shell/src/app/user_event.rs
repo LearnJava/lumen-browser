@@ -259,7 +259,7 @@ impl Lumen {
                 // the tab's map, so the store outlives the document being built.
                 let ss_store = ss_store_for_base(&raw.base, &mut self.ss_storage);
                 let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
-                let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
+                let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend, Some(&self.sw_registry));
                 // BUG-171 этап 2: тяжёлый финальный pipeline (fetch скриптов →
                 // QuickJS → fetch+декод картинок/CSS/шрифтов → layout) уезжает с
                 // UI-потока на фоновый. Пока он крутится, event loop остаётся
@@ -339,6 +339,11 @@ impl Lumen {
                     // parameter list.
                     .map(|(mut page, layout_source, js_ctx)| {
                         page.cert_info = raw.cert_info.clone();
+                        page.response_policies = crate::page_pipeline::ResponsePolicies {
+                            csp: raw.csp_header.clone(),
+                            referrer: raw.referrer_policy_header.clone(),
+                            permissions_policy: raw.permissions_policy_header.clone(),
+                        };
                         (page, layout_source, js_ctx)
                     });
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
@@ -444,6 +449,9 @@ impl Lumen {
                 // error arm above — this navigation never reveals a
                 // transition, so its captured snapshot must not survive it.
                 self.pending_mpa_view_transition_snapshot = None;
+                // COMPAT-ERRORS: вместо прежней страницы, оставшейся на экране,
+                // вкладка показывает страницу ошибки с кодом Chromium.
+                self.show_net_error(&msg);
             }
             LoadEvent::CertError(url, host, cert_err, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {
@@ -458,12 +466,34 @@ impl Lumen {
                 // the user sees is "your connection is not private", not a
                 // raw network-error string.
                 self.load_failed = true;
-                self.cert_interstitial.open(url, host, cert_err);
+                // BUG-1615: a Known HSTS Host gets no "Proceed anyway".
+                let hsts_host = crate::config::global()
+                    .apply_http(lumen_network::HttpClient::new())
+                    .is_known_hsts_host(&host);
+                self.cert_interstitial.open(url, host, cert_err, hsts_host);
                 let msg = self.cert_interstitial.reason_text().unwrap_or_default();
                 self.load_error_message = Some(msg.clone());
                 click_log::log_load_err(&self.source.describe(), &msg);
                 health_log::log_load_error(&self.source.describe(), &msg);
                 eprintln!("TLS-сертификат отклонён {}: {msg}", self.source.describe());
+                self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                self.pending_mpa_view_transition_snapshot = None;
+            }
+            LoadEvent::ThreatBlocked(url, host, list, threat, tab_id, generation) => {
+                if !self.is_active_tab(tab_id) {
+                    self.mark_bg_tab_needs_reload(tab_id);
+                    return;
+                }
+                if generation != self.load_generation { return; }
+                self.nav_start = None;
+                self.load_failed = true;
+                let msg = format!("{} ({list})", threat.as_code());
+                self.cert_interstitial.open_threat(url, host, list, threat);
+                self.load_error_message = Some(msg.clone());
+                click_log::log_load_err(&self.source.describe(), &msg);
+                health_log::log_load_error(&self.source.describe(), &msg);
+                eprintln!("Сайт в базе Safe Browsing {}: {msg}", self.source.describe());
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
                 self.pending_mpa_view_transition_snapshot = None;

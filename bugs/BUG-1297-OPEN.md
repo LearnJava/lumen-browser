@@ -35,3 +35,7 @@ WPT-RUN-14 срез 6: `css/css-backgrounds/parsing/*` и `inheritance.sub.html`
 ## Как проверить
 
 `css/css-backgrounds/parsing/{background,border,box-shadow,border-radius}-*.html`, `inheritance.sub.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 23 (2026-10-08)
+
+Тот же класс «`element.style` не валидирует и не канонизирует» — для `shape-outside`/`shape-margin`/`shape-image-threshold`, `clip-path: <basic-shape>` и свойств Text Decoration: BUG-1516 (74 id, 972 из 1 157 сабтестов).

@@ -74,7 +74,7 @@ fn wrapper(node_index: usize, children: Vec<LayoutBox>) -> LayoutBox {
     LayoutBox {
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -99,7 +99,7 @@ fn leaf() -> LayoutBox {
     LayoutBox {
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
-        used_line_height: style.font_size * style.line_height,
+        used_padding: None, used_line_height: style.font_size * style.line_height,
         grid_baselines: None,
         fieldset_legend: None,
         subgrid_tracks: None,
@@ -177,7 +177,7 @@ fn deep_subgrid_chain_lays_out_without_overflowing_the_stack() {
         LayoutBox {
             node: lumen_dom::NodeId::from_index(node_index),
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
-            used_line_height: style.font_size * style.line_height,
+            used_padding: None, used_line_height: style.font_size * style.line_height,
             grid_baselines: None,
             fieldset_legend: None,
             subgrid_tracks: None,

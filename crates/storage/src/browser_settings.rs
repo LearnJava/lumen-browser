@@ -36,6 +36,8 @@ const KEY_THEME: &str = "theme";
 const KEY_DOWNLOAD_PATH: &str = "download_path";
 const KEY_TAB_LAYOUT: &str = "tab_layout";
 const KEY_PANEL_LAYOUT: &str = "panel_layout";
+const KEY_TRANSLATE_LANGUAGE: &str = "translate_language";
+const KEY_TRANSLATE_MODEL: &str = "translate_model";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
@@ -52,6 +54,8 @@ const DEFAULT_THEME: &str = "dark";
 const DEFAULT_DOWNLOAD_PATH: &str = "";
 const DEFAULT_TAB_LAYOUT: &str = "horizontal";
 const DEFAULT_PANEL_LAYOUT: &str = "";
+const DEFAULT_TRANSLATE_LANGUAGE: &str = "ru";
+const DEFAULT_TRANSLATE_MODEL: &str = "";
 
 /// All browser settings in a single value type for easy read/write.
 #[derive(Debug, Clone, PartialEq)]
@@ -288,6 +292,26 @@ impl BrowserSettings {
         self.set_str(KEY_PANEL_LAYOUT, layout)
     }
 
+    /// Target language code of page translation (BCP 47, e.g. `"ru"`).
+    pub fn translate_language(&self) -> String {
+        self.get_str(KEY_TRANSLATE_LANGUAGE, DEFAULT_TRANSLATE_LANGUAGE)
+    }
+
+    /// Set the page-translation target language.
+    pub fn set_translate_language(&self, code: &str) -> Result<()> {
+        self.set_str(KEY_TRANSLATE_LANGUAGE, code)
+    }
+
+    /// Local model name used for page translation. Empty = built-in default.
+    pub fn translate_model(&self) -> String {
+        self.get_str(KEY_TRANSLATE_MODEL, DEFAULT_TRANSLATE_MODEL)
+    }
+
+    /// Set the page-translation model name.
+    pub fn set_translate_model(&self, model: &str) -> Result<()> {
+        self.set_str(KEY_TRANSLATE_MODEL, model)
+    }
+
     /// Read all settings into a snapshot value.
     pub fn snapshot(&self) -> BrowserSettingsSnapshot {
         BrowserSettingsSnapshot {
@@ -341,6 +365,17 @@ mod tests {
         assert!((s.font_size() - 16.0).abs() < f64::EPSILON);
         assert_eq!(s.theme(), "dark");
         assert_eq!(s.download_path(), "");
+    }
+
+    #[test]
+    fn translate_settings_default_and_round_trip() {
+        let s = store();
+        assert_eq!(s.translate_language(), "ru");
+        assert_eq!(s.translate_model(), "");
+        s.set_translate_language("de").unwrap();
+        s.set_translate_model("llama3").unwrap();
+        assert_eq!(s.translate_language(), "de");
+        assert_eq!(s.translate_model(), "llama3");
     }
 
     #[test]

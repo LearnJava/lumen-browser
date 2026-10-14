@@ -96,8 +96,9 @@ def classify(t):
     except OSError:
         return t, 'nosrc', 0
     # `(?:\w+:)?` — в `.svg`-тестах ссылка записана как `<html:link rel="match" …/>`.
-    m = re.search(r'<(?:\w+:)?link[^>]+rel=["\']match["\'][^>]*href=["\']([^"\']+)["\']', src) or \
-        re.search(r'<(?:\w+:)?link[^>]+href=["\']([^"\']+)["\'][^>]*rel=["\']match["\']', src)
+    # Кавычки у атрибутов необязательны: `<link rel=match href=flex-basis-ref.html>` (css-viewport/zoom/explicit-inherit/*).
+    m = re.search(r'<(?:\w+:)?link[^>]+rel=["\']?match["\']?[\s/>][^>]*href=["\']?([^"\'\s>]+)', src) or \
+        re.search(r'<(?:\w+:)?link[^>]+href=["\']?([^"\'\s>]+)["\']?[^>]*rel=["\']?match["\']?[\s/>]', src)
     if not m:
         return t, 'no-match-ref', 0
     ref = m.group(1)

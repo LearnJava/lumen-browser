@@ -230,6 +230,19 @@ impl Length {
     }
 }
 
+/// `true`, если `s` — литерал `<length>`/`<percentage>` со строго отрицательным числом
+/// (`-1px`, `-5%`, `-1em`). Функции (`calc()`) не затрагиваются: их итог зажимается при вычислении.
+pub(in crate::style) fn is_negative_literal(s: &str) -> bool {
+    let s = s.trim();
+    if !s.starts_with('-') || s.contains('(') {
+        return false;
+    }
+    let end = s[1..]
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map_or(s.len(), |i| i + 1);
+    s[..end].parse::<f32>().is_ok_and(|n| n < 0.0)
+}
+
 /// Парсит sizing-значение для `width`/`height`/`min-width`/`max-width` и т.д.
 /// Обрабатывает:
 /// - `auto` → `None`
@@ -240,6 +253,10 @@ impl Length {
 /// - всё остальное → `parse_length_q()`
 pub(in crate::style) fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<Length> {
     let v = s.trim();
+    // CSS 2.1 §10.2/§10.4/§10.5: отрицательные размеры недопустимы — декларация отбрасывается.
+    if is_negative_literal(v) {
+        return None;
+    }
     match v {
         "auto" => None,
         "min-content" => Some(Length::MinContent),

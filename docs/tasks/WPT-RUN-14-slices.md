@@ -2,7 +2,7 @@
 
 Родительская задача — WPT-RUN-14 (ROADMAP:970). Владелец — P2. Цель родителя: у всей категории `css` есть вердикт, топ-10 кластеров разнесены по очередям P1/P4.
 
-Этот файл описывает первую волну из десяти модулей (S1…S10), пять срезов CSS2 (S11…S15), `css-overflow` + `css-sizing` (S16) и раскладку остальных модулей `css` (S17…S28, заведена 2026-10-07 при закрытии S16: 33 496 id `css` минус 18 000+ уже разобранных). Агрегирующий срез (сводка «кластер → id → владелец» по всему `css`) заводится после S28.
+Этот файл описывает первую волну из десяти модулей (S1…S10), пять срезов CSS2 (S11…S15), `css-overflow` + `css-sizing` (S16) и раскладку остальных модулей `css` (S17…S28, заведена 2026-10-07 при закрытии S16: 33 496 id `css` минус 18 000+ уже разобранных). Агрегирующий срез (сводка «кластер → id → владелец» по всему `css`) сделан после S28.
 
 ## Почему через `run_corpus.py`, а не `run_report.py`
 
@@ -68,12 +68,12 @@
 | S19 | css-images + css-values + css-color | `css/css-images,css/css-values,css/css-color` | 1 371 | `.tmp/wpt-run14/images-values-color` |
 | S20 | selectors + css-pseudo + css-nesting + css-namespaces + css-cascade | `css/selectors,css/css-pseudo,css/css-nesting,css/css-namespaces,css/css-cascade` | 1 371 | `.tmp/wpt-run14/selectors-pseudo` |
 | S21 | css-anchor-position + css-position + css-display | `css/css-anchor-position,css/css-position,css/css-display` | 1 126 | `.tmp/wpt-run14/anchor-position-display` |
-| S22 | css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins | `css/css-view-transitions,css/css-conditional,css/css-variables,css/css-properties-values-api,css/css-mixins` | ~1 350 | `.tmp/wpt-run14/view-transitions-variables` |
-| S23 | css-text-decor + css-gaps + css-shapes | `css/css-text-decor,css/css-gaps,css/css-shapes` | ~1 143 | `.tmp/wpt-run14/text-decor-gaps-shapes` |
-| S24 | filter-effects + css-inline + css-tables + css-align | `css/filter-effects,css/css-inline,css/css-tables,css/css-align` | ~1 368 | `.tmp/wpt-run14/filter-inline-tables-align` |
-| S25 | css-typed-om + cssom-view + cssom + css-lists + css-counter-styles | `css/css-typed-om,css/cssom-view,css/cssom,css/css-lists,css/css-counter-styles` | ~1 282 | `.tmp/wpt-run14/typed-om-cssom-lists` |
-| S26 | css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap | `css/css-page,css/css-animations,css/css-transitions,css/css-shadow,css/css-borders,css/css-scroll-snap` | ~1 194 | `.tmp/wpt-run14/page-animations-borders` |
-| S27 | css-ruby + css-layout-api + css-box + motion + css-highlight-api + css-paint-api + css-viewport + mediaqueries | `css/css-ruby,css/css-layout-api,css/css-box,css/motion,css/css-highlight-api,css/css-paint-api,css/css-viewport,css/mediaqueries` | ~1 059 | `.tmp/wpt-run14/ruby-box-motion-mq` |
+| S22 | css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins | `css/css-view-transitions,css/css-conditional,css/css-variables,css/css-properties-values-api,css/css-mixins` | 1 350 | `.tmp/wpt-run14/view-transitions-variables` |
+| S23 | css-text-decor + css-gaps + css-shapes | `css/css-text-decor,css/css-gaps,css/css-shapes` | 1 143 | `.tmp/wpt-run14/text-decor-gaps-shapes` |
+| S24 | filter-effects + css-inline + css-tables + css-align | `css/filter-effects,css/css-inline,css/css-tables,css/css-align` | 1 368 | `.tmp/wpt-run14/filter-inline-tables-align` |
+| S25 | css-typed-om + cssom-view + cssom + css-lists + css-counter-styles | `css/css-typed-om,css/cssom-view,css/cssom,css/css-lists,css/css-counter-styles` | 1 282 | `.tmp/wpt-run14/typed-cssom-lists` |
+| S26 | css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap | `css/css-page,css/css-animations,css/css-transitions,css/css-shadow,css/css-borders,css/css-scroll-snap` | 1 194 | `.tmp/wpt-run14/page-animations-borders` |
+| S27 | css-ruby + css-layout-api + css-box + motion + css-highlight-api + css-paint-api + css-viewport + mediaqueries | `css/css-ruby,css/css-layout-api,css/css-box,css/motion,css/css-highlight-api,css/css-paint-api,css/css-viewport,css/mediaqueries` | 1 059 | `.tmp/wpt-run14/ruby-box-motion-mq` |
 | S28 | остальные 30 малых модулей | `--prefixes` по каждому: css-logical, compositing, css-scroll-anchoring, css-content, css-scrollbars, css-will-change, css-syntax, css-color-adjust, css-rhythm, geometry, css-font-loading, printing, css-forms, css-image-animation, css-style-attr, css-easing, css-exclusions, css-overscroll-behavior, fill-stroke, css-env, css-device-adapt, css-size-adjust, css-link-params, css-forced-color-adjust, css-color-hdr, reference, css-zoom, css-motion-path, fetching, css-parser-api | ~794 | `.tmp/wpt-run14/small-modules` |
 
 Числа S17…S28 — automatable id по манифесту (без `manual`/`visual`), посчитаны 2026-10-07; числа S1…S10 — файлы тестов на диске, без `support/`, `reference/` и `-ref.*`. Точные id даёт манифест. Если срез заметно длиннее часа, разделить его на два и записать это в ROADMAP-строку среза.
@@ -91,3 +91,5 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/run_corpus.py --selftest
 ```
 
 У S2…S15 кода нет; гейт — п. «Готово, когда».
+
+**S28 (2026-10-11):** 803 id в манифесте, 794 automatable, 768 выполнено (26 `print-reftest` без исполнителя). Прогон снят на бинаре от 2026-10-08: на `main` после UX-LOADING `--bidi-port` не отвечает на `script.evaluate`/`navigate` ([BUG-1597](../../bugs/BUG-1597-OPEN.md)). Модули `css-gcpm`, `css-round-display`, `css-speech`, `CSS1` в срезы не входят: в манифесте у них только `manual`/`visual`/`support`, automatable id нет. Агрегирующий срез сделан 2026-10-11 без нового прогона — сводка «кластер → id → владелец» по всему `css` в `docs/wpt-vendor-notes/css.md` §«Сводка по всему `css`». Единый пересчёт `css` целиком — после починки BUG-1597.

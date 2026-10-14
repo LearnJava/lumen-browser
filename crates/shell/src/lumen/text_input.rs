@@ -28,6 +28,9 @@ use crate::*;
 /// paths rather than duplicated.
 pub(crate) enum EditAction {
     InsertChar(char),
+    /// Paste (UX-CLIPBOARD): text already sanitized by
+    /// `text_cursor::sanitize_paste`.
+    InsertStr(String),
     Backspace,
     DeleteForward,
 }
@@ -39,10 +42,60 @@ impl EditAction {
     pub(crate) fn apply(&self, current: &str, cursor: usize) -> (String, usize) {
         match self {
             EditAction::InsertChar(ch) => insert_char_at(current, cursor, *ch),
+            EditAction::InsertStr(text) => insert_str_at(current, cursor, text),
             EditAction::Backspace => delete_char_before(current, cursor),
             EditAction::DeleteForward => (delete_char_after(current, cursor), cursor),
         }
     }
+
+    /// Undo-grouping class of this edit (UX-UNDO); anything that replaces a
+    /// selection is its own step.
+    pub(crate) fn history_kind(&self, current: &str, cursor: usize, had_selection: bool) -> EditKind {
+        if had_selection {
+            return EditKind::Other;
+        }
+        match self {
+            EditAction::InsertChar(ch) => EditKind::Typing {
+                word_start: !ch.is_whitespace()
+                    && cursor > 0
+                    && current.chars().nth(cursor - 1).is_some_and(char::is_whitespace),
+            },
+            EditAction::InsertStr(_) => EditKind::Other,
+            EditAction::Backspace => EditKind::Backspace,
+            EditAction::DeleteForward => EditKind::DeleteForward,
+        }
+    }
+}
+
+/// Undo / redo command on a focused text field (UX-UNDO).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HistoryOp {
+    Undo,
+    Redo,
+}
+
+impl HistoryOp {
+    pub(crate) fn input_type(self) -> &'static str {
+        match self {
+            HistoryOp::Undo => "historyUndo",
+            HistoryOp::Redo => "historyRedo",
+        }
+    }
+}
+
+/// Ctrl+Z → undo, Ctrl+Y / Ctrl+Shift+Z → redo.
+pub(crate) fn history_op_for(code: KeyCode, mods: ModifiersState) -> Option<HistoryOp> {
+    if mods == ModifiersState::CONTROL {
+        return match code {
+            KeyCode::KeyZ => Some(HistoryOp::Undo),
+            KeyCode::KeyY => Some(HistoryOp::Redo),
+            _ => None,
+        };
+    }
+    if mods == ModifiersState::CONTROL | ModifiersState::SHIFT && code == KeyCode::KeyZ {
+        return Some(HistoryOp::Redo);
+    }
+    None
 }
 
 impl Lumen {
@@ -110,6 +163,7 @@ impl Lumen {
     /// external mutation (JS `input.value = …`, spellcheck replace) can shrink
     /// the value out from under a stale cursor.
     fn field_cursor(&mut self, nid: lumen_dom::NodeId, current: &str) -> usize {
+        self.absorb_script_selection(nid, current);
         let len = char_len(current);
         let slot = self.form_state.entry(nid).or_default();
         let c = *slot.cursor.get_or_insert(len);
@@ -196,6 +250,7 @@ impl Lumen {
         let slot = self.form_state.entry(nid).or_default();
         slot.cursor = Some(next);
         slot.selection_anchor = None;
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -209,6 +264,7 @@ impl Lumen {
         let slot = self.form_state.entry(nid).or_default();
         slot.cursor = Some(target);
         slot.selection_anchor = None;
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -228,6 +284,7 @@ impl Lumen {
             slot.selection_anchor = Some(cursor);
         }
         slot.cursor = Some(next);
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -245,6 +302,7 @@ impl Lumen {
             slot.selection_anchor = Some(cursor);
         }
         slot.cursor = Some(target);
+        self.publish_text_selection_for(nid, &current);
         true
     }
 
@@ -320,11 +378,14 @@ impl Lumen {
         let Some(nid) = self.focused_node else { return false };
         let Some((kind, current)) = self.typeable_field(nid) else { return false };
         let cursor = self.field_cursor(nid, &current);
-        let (next, next_cursor) = match self.field_selection_range(nid, cursor) {
+        let selection = self.field_selection_range(nid, cursor);
+        let history_kind = action.history_kind(&current, cursor, selection.is_some());
+        let (next, next_cursor) = match selection {
             Some((start, end)) => {
                 let spliced = delete_char_range(&current, start, end);
                 match action {
                     EditAction::InsertChar(ch) => insert_char_at(&spliced, start, ch),
+                    EditAction::InsertStr(text) => insert_str_at(&spliced, start, &text),
                     EditAction::Backspace | EditAction::DeleteForward => (spliced, start),
                 }
             }
@@ -334,26 +395,76 @@ impl Lumen {
         slot.cursor = Some(next_cursor);
         slot.selection_anchor = None;
         if next == current {
+            self.publish_text_selection_for(nid, &current);
             return true;
         }
+        self.field_history.entry((None, nid)).or_default().record(
+            FieldSnapshot { value: current, cursor },
+            history_kind,
+            &next,
+            next_cursor,
+            std::time::Instant::now(),
+        );
+        self.write_field_value(nid, kind, &next);
+        true
+    }
+
+    /// Store `next` as the page field's value: DOM, the runtime overlay and the
+    /// JS shadow, then relayout.
+    fn write_field_value(&mut self, nid: lumen_dom::NodeId, kind: TypeableField, next: &str) {
         if let Some(src) = self.layout_source.as_mut()
             && let Ok(mut doc) = src.document.lock()
         {
             match kind {
-                TypeableField::Input => forms::set_value(&mut doc, nid, &next),
-                TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, &next),
+                TypeableField::Input => forms::set_value(&mut doc, nid, next),
+                TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, next),
             }
         }
         // Runtime value overlay used by form submission and constraint
         // validation (`forms::collect_form_entries`) — kept in step with the DOM
         // exactly like the spellcheck-replace path does.
-        self.form_state.entry(nid).or_default().value = next.clone();
+        self.form_state.entry(nid).or_default().value = next.to_owned();
+        self.publish_text_selection_for(nid, next);
         route_eval_js(
             self.engine_thread.as_ref(),
             self.js_ctx.as_ref(),
-            format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(&next)),
+            format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(next)),
         );
         self.relayout_form();
+    }
+
+    /// Ctrl+Z / Ctrl+Y in the focused page `<input>` / `<textarea>` (UX-UNDO).
+    /// `true` iff a typeable field was focused (even with nothing to undo).
+    /// Fires a cancelable `beforeinput` and then `input`, `inputType`
+    /// `historyUndo` / `historyRedo`; cancelling leaves the field as it was.
+    pub(crate) fn field_history_op(&mut self, op: HistoryOp) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((kind, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current);
+        let here = FieldSnapshot { value: current, cursor };
+        let Some(hist) = self.field_history.get_mut(&(None, nid)) else { return true };
+        let Some(target) = (match op {
+            HistoryOp::Undo => hist.undo(&here),
+            HistoryOp::Redo => hist.redo(&here),
+        }) else {
+            return true;
+        };
+        let ty = op.input_type();
+        if !self.page_input_event(nid, "beforeinput", ty, None) {
+            if let Some(hist) = self.field_history.get_mut(&(None, nid)) {
+                match op {
+                    HistoryOp::Undo => hist.redo(&target),
+                    HistoryOp::Redo => hist.undo(&target),
+                };
+            }
+            return true;
+        }
+        let len = char_len(&target.value);
+        let slot = self.form_state.entry(nid).or_default();
+        slot.cursor = Some(target.cursor.min(len));
+        slot.selection_anchor = None;
+        self.write_field_value(nid, kind, &target.value);
+        self.page_input_event(nid, "input", ty, None);
         true
     }
 
@@ -414,6 +525,112 @@ impl Lumen {
         consumed
     }
 
+    /// Ctrl+A / Ctrl+C / Ctrl+X / Ctrl+V in the focused page `<input>` /
+    /// `<textarea>` (UX-CLIPBOARD). `true` iff a typeable field was focused
+    /// and so consumed the key (even when there was nothing to copy).
+    ///
+    /// copy/cut/paste fire a cancelable trusted `ClipboardEvent` first; cut and
+    /// paste also fire a cancelable `beforeinput` and, after the edit, `input`
+    /// (`deleteByCut` / `insertFromPaste`). Cancelling any of them skips the
+    /// default action, as in a browser. Password fields never put their value
+    /// on the clipboard.
+    pub(crate) fn field_clipboard_op(&mut self, op: ClipboardOp) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((kind, current)) = self.typeable_field(nid) else { return false };
+        let cursor = self.field_cursor(nid, &current);
+        let sel = self.field_selection_range(nid, cursor);
+        let (maxlength, password) = self
+            .layout_source
+            .as_ref()
+            .and_then(|src| src.document.lock().ok())
+            .map(|doc| field_meta_in(&doc, nid))
+            .unwrap_or((None, false));
+        match op {
+            ClipboardOp::SelectAll => {
+                let slot = self.form_state.entry(nid).or_default();
+                slot.selection_anchor = Some(0);
+                slot.cursor = Some(char_len(&current));
+                self.publish_text_selection_for(nid, &current);
+            }
+            ClipboardOp::Copy | ClipboardOp::Cut => {
+                let Some((start, end)) = sel else { return true };
+                if password {
+                    return true;
+                }
+                let cut = op == ClipboardOp::Cut;
+                let name = if cut { "cut" } else { "copy" };
+                if let ClipboardReply::Cancelled(data) = self.page_clipboard_event(nid, name, "") {
+                    write_clipboard_nonempty(&data);
+                    return true;
+                }
+                write_clipboard_nonempty(&char_range(&current, start, end));
+                if cut && self.page_input_event(nid, "beforeinput", "deleteByCut", None) {
+                    self.edit_focused_field_at_cursor(EditAction::Backspace);
+                    self.page_input_event(nid, "input", "deleteByCut", None);
+                }
+            }
+            ClipboardOp::Paste => {
+                use lumen_core::ext::ClipboardProvider;
+                let raw = platform::clipboard::PlatformClipboard.read_text();
+                if raw.is_empty() {
+                    return true;
+                }
+                if let ClipboardReply::Cancelled(_) = self.page_clipboard_event(nid, "paste", &raw) {
+                    return true;
+                }
+                let replaced = sel.map_or(0, |(s, e)| e - s);
+                let text = sanitize_paste(
+                    &raw,
+                    kind == TypeableField::Textarea,
+                    maxlength,
+                    char_len(&current),
+                    replaced,
+                );
+                if text.is_empty() {
+                    return true;
+                }
+                if self.page_input_event(nid, "beforeinput", "insertFromPaste", Some(&text)) {
+                    self.edit_focused_field_at_cursor(EditAction::InsertStr(text.clone()));
+                    self.page_input_event(nid, "input", "insertFromPaste", Some(&text));
+                }
+            }
+        }
+        true
+    }
+
+    /// Fire the trusted clipboard event on page node `nid` and read back
+    /// whether (and with what data) a handler cancelled it. Goes through the
+    /// query path so a handler's `preventDefault()` is known before the shell
+    /// decides to run the default action.
+    fn page_clipboard_event(&self, nid: lumen_dom::NodeId, kind: &str, text: &str) -> ClipboardReply {
+        let script = format!(
+            "_lumen_dispatch_clipboard_event({}, '{}', '{}')",
+            nid.index(),
+            kind,
+            escape_js_string(text)
+        );
+        let reply = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |js| js.eval_js_completion(&script).ok().flatten(),
+        )
+        .flatten();
+        ClipboardReply::parse(reply.as_deref())
+    }
+
+    /// Fire `beforeinput` / `input` for a clipboard edit; `true` = not cancelled
+    /// (only `beforeinput` is cancelable).
+    fn page_input_event(&self, nid: lumen_dom::NodeId, kind: &str, input_type: &str, data: Option<&str>) -> bool {
+        let script = input_event_script(nid.index(), kind, input_type, data);
+        route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |js| js.eval_js_completion(&script).ok().flatten(),
+        )
+        .flatten()
+        .is_none_or(|r| r != "0")
+    }
+
     /// Send one `_lumen_dispatch_key_event` for an injected/typed key.
     ///
     /// `key` must already be escaped for a single-quoted JS literal
@@ -426,6 +643,69 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    /// Fire a trusted composition event at the focused page text field
+    /// (UX-IME); a focused frame field gets it in the frame's own JS context.
+    fn page_composition_event(&self, kind: &str, data: &str) {
+        if let Some((idx, nid)) = self.focused_frame {
+            self.frame_composition_event(idx, nid, kind, data);
+            return;
+        }
+        let Some(nid) = self.focused_node else { return };
+        if self.typeable_field(nid).is_none() {
+            return;
+        }
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!(
+                "_lumen_dispatch_composition_at({}, '{}', '{}')",
+                nid.index(),
+                kind,
+                escape_js_string(data)
+            ),
+        );
+    }
+
+    /// Close an open composition: the sink event plus `compositionend`.
+    fn end_composition(&mut self, data: &str) {
+        use lumen_core::event::{Event, TabId};
+        if self.ime_composing.take().is_some() {
+            self.event_sink
+                .emit(&Event::ImeCompositionEnded { tab_id: TabId(0), data: data.to_owned() });
+            self.page_composition_event("compositionend", data);
+        }
+    }
+
+    /// Insert IME-committed text where typed characters would go: the open
+    /// address bar, a frame field, or a page field.
+    fn insert_ime_text(&mut self, text: &str) {
+        if self.address_bar.is_open() {
+            self.address_bar.append_str(text);
+            let sugg = self.query_omnibox_suggestions();
+            self.address_bar.set_suggestions(sugg);
+            self.relayout_chrome_host();
+        } else if self.focused_frame.is_some() {
+            for ch in text.chars() {
+                self.inject_frame_char(ch);
+            }
+        } else if self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some()) {
+            for ch in text.chars() {
+                self.inject_char(ch);
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// winit sends `Preedit("")` right before every `Commit` (and alone on
+    /// cancel). The empty preedit therefore only marks the composition as
+    /// "text cleared"; if no `Commit` follows in the same event-loop batch
+    /// this closes it as a cancel with empty data.
+    pub(crate) fn flush_ime_cancel(&mut self) {
+        if self.ime_composing.as_deref() == Some("") {
+            self.end_composition("");
+        }
+    }
+
     pub(crate) fn handle_ime(&mut self, ime: &Ime) {
         use lumen_core::event::{Event, TabId};
         let tab_id = TabId(0);
@@ -433,12 +713,13 @@ impl Lumen {
             Ime::Enabled => {
                 // Не диспатчим compositionstart сразу — ждём первый Preedit
                 // с текстом (браузеры так же: событие только когда есть данные).
+                self.update_ime_cursor_area();
             }
             Ime::Preedit(text, _cursor) if text.is_empty() => {
-                // Пустой preedit = конец composition без Commit (отмена).
-                if self.ime_composing.take().is_some() {
-                    self.event_sink
-                        .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
+                // Не закрываем сразу: за пустым preedit идёт Commit (winit
+                // гарантирует) и `compositionend` должен нести его текст.
+                if self.ime_composing.is_some() {
+                    self.ime_composing = Some(String::new());
                 }
             }
             Ime::Preedit(text, _cursor) => {
@@ -446,32 +727,304 @@ impl Lumen {
                     // Первый непустой preedit — начало composition.
                     self.event_sink
                         .emit(&Event::ImeCompositionStarted { tab_id });
+                    self.page_composition_event("compositionstart", "");
+                    self.update_ime_cursor_area();
                 }
                 self.ime_composing = Some(text.clone());
                 self.event_sink.emit(&Event::ImeCompositionUpdated {
                     tab_id,
                     data: text.clone(),
                 });
+                self.page_composition_event("compositionupdate", text);
             }
             Ime::Commit(text) => {
-                // Commit приходит после пустого Preedit (winit гарантирует),
-                // но на случай если нет — сбрасываем composing сами.
-                self.ime_composing = None;
-                self.event_sink.emit(&Event::ImeCompositionEnded {
-                    tab_id,
-                    data: text.clone(),
-                });
+                if self.ime_composing.is_none() {
+                    // Commit без Preedit (прямой ввод через IME) — события
+                    // всё равно идут парой start/end.
+                    self.event_sink.emit(&Event::ImeCompositionStarted { tab_id });
+                    self.page_composition_event("compositionstart", "");
+                    self.ime_composing = Some(String::new());
+                }
+                self.page_composition_event("compositionupdate", text);
+                self.end_composition(text);
+                self.insert_ime_text(text);
             }
             Ime::Disabled => {
                 // IME деактивирован. Если composition была открыта — закрываем.
-                if self.ime_composing.take().is_some() {
-                    self.event_sink
-                        .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
-                }
+                self.end_composition("");
             }
+        }
+        // The preedit overlays are repainted from `ime_composing`.
+        self.request_redraw();
+    }
+
+    /// Tell the OS where the caret is so the IME candidate window opens next
+    /// to it instead of at the window corner (UX-IME). Physical pixels.
+    pub(crate) fn update_ime_cursor_area(&self) {
+        let Some(window) = self.window.as_ref() else { return };
+        let dpr = self.renderer.as_ref().map_or(1.0_f64, |r| r.scale_factor()).max(1e-6);
+        // CSS px, window coordinates.
+        let rect = if self.address_bar.is_open() {
+            self.chrome_omni_input_rect.map(|f| (f.x + f.width - 8.0, f.y + 4.0, 2.0, (f.height - 8.0).max(1.0)))
+        } else if let Some(nid) = self.focused_node.filter(|_| self.focused_frame.is_none()) {
+            self.page_caret_rect(nid).map(|r| {
+                let (ox, oy) = self.page_offset();
+                (r.x + ox - self.scroll_x, r.y + oy - self.scroll_y, r.width.max(1.0), r.height.max(1.0))
+            })
+        } else {
+            None
+        };
+        if let Some((x, y, w, h)) = rect {
+            window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(f64::from(x) * dpr, f64::from(y) * dpr),
+                winit::dpi::PhysicalSize::new(f64::from(w) * dpr, f64::from(h) * dpr),
+            );
         }
     }
 
+    /// UX-IME-2: the in-progress composition of the focused page field —
+    /// preedit text drawn at the caret over a field-coloured patch, with an
+    /// underline. Page coordinates; `None` unless a non-empty preedit is live
+    /// in a page-level (not frame, not address-bar) field.
+    pub(crate) fn ime_preedit_overlay(&self) -> Option<lumen_paint::DisplayList> {
+        let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
+        if self.address_bar.is_open() || self.focused_frame.is_some() {
+            return None;
+        }
+        let nid = self.focused_node?;
+        let field_lb = forms::find_layout_box(self.layout_box.as_ref()?, nid)?;
+        let caret = self.page_caret_rect(nid)?;
+        Some(preedit_commands(text, field_lb, caret))
+    }
+
+    /// UX-IME-4: the same preedit for a focused field INSIDE a frame, shifted
+    /// into page coordinates and clipped to the frame's viewport.
+    pub(crate) fn ime_frame_preedit_overlay(&self) -> Option<lumen_paint::DisplayList> {
+        let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
+        if self.address_bar.is_open() {
+            return None;
+        }
+        let (fidx, nid) = self.focused_frame?;
+        let handle = self.frames.get(fidx)?;
+        let field_lb = forms::find_layout_box(handle.layout.as_ref()?, nid)?;
+        let (kind, value, cursor) = if let Some((_, _, c, v)) = self.focused_frame_input_caret() {
+            (TypeableField::Input, v, c)
+        } else {
+            let (_, _, c, v) = self.focused_frame_textarea_caret()?;
+            (TypeableField::Textarea, v, c)
+        };
+        let caret = match kind {
+            TypeableField::Input => forms::input_caret_rect(field_lb, &value, cursor),
+            TypeableField::Textarea => {
+                let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+                let m = lumen_paint::FontMeasurer::new(&font).ok()?;
+                let fs = field_lb.style.font_size;
+                let measure = |s: &str| -> f32 {
+                    use lumen_layout::TextMeasurer;
+                    s.chars().map(|c| m.char_width(c, fs)).sum()
+                };
+                forms::textarea_caret_rect(field_lb, &value, cursor, &measure)
+            }
+        };
+        let (ox, oy) = crate::frames::frame_page_origin(&self.frames, fidx)?;
+        let shift = |r: lumen_core::geom::Rect| lumen_core::geom::Rect { x: r.x + ox, y: r.y + oy, ..r };
+        let mut moved = field_lb.clone();
+        moved.rect = shift(moved.rect);
+        let mut cmds = vec![lumen_paint::DisplayCommand::PushClipRect {
+            rect: lumen_core::geom::Rect::new(ox, oy, handle.viewport.width, handle.viewport.height),
+        }];
+        cmds.extend(preedit_commands(text, &moved, shift(caret)));
+        cmds.push(lumen_paint::DisplayCommand::PopClip);
+        Some(cmds)
+    }
+
+    /// UX-IME-3: the in-progress composition in the open address bar — preedit
+    /// text with an underline, right-aligned to the field's caret edge (the
+    /// same simplified flush-right placement the omnibox caret uses). Window
+    /// coordinates; `None` unless a non-empty preedit is live.
+    pub(crate) fn ime_omnibox_preedit_overlay(&self, pal: &crate::panels::themes::Palette) -> Option<lumen_paint::DisplayList> {
+        use lumen_layout::{FontStyle, FontWeight};
+        let text = self.ime_composing.as_deref().filter(|t| !t.is_empty())?;
+        if !self.address_bar.is_open() {
+            return None;
+        }
+        let field = self.chrome_omni_input_rect?;
+        let fs = (field.height * 0.5).clamp(10.0, 20.0);
+        let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
+        let width = width.min((field.width - 16.0).max(fs));
+        let x = (field.x + field.width - 8.0 - width).max(field.x + 4.0);
+        let rect = lumen_core::geom::Rect::new(x, field.y + 4.0, width, (field.height - 8.0).max(fs));
+        Some(vec![
+            lumen_paint::DisplayCommand::PushClipRect { rect: field },
+            lumen_paint::DisplayCommand::FillRect { rect, color: pal.input_bg },
+            lumen_paint::DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
+                rect,
+                text: text.to_string(),
+                font_size: fs,
+                color: pal.text,
+                font_family: Vec::new(),
+                font_weight: FontWeight::NORMAL,
+                font_style: FontStyle::Normal,
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 0.0,
+                letter_spacing: 0,
+                word_spacing: 0,
+                highlight_name: None,
+                text_orientation: None,
+            },
+            lumen_paint::DisplayCommand::FillRect {
+                rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
+                color: pal.text,
+            },
+            lumen_paint::DisplayCommand::PopClip,
+        ])
+    }
+
+    /// Caret rectangle of the focused page field in page coordinates.
+    fn page_caret_rect(&self, nid: lumen_dom::NodeId) -> Option<lumen_core::geom::Rect> {
+        let (kind, value) = self.focused_field_snapshot.field(nid)?;
+        let len = char_len(&value);
+        let cursor = self.form_state.get(&nid).and_then(|s| s.cursor).unwrap_or(len).min(len);
+        let field_lb = forms::find_layout_box(self.layout_box.as_ref()?, nid)?;
+        match kind {
+            TypeableField::Input => Some(forms::input_caret_rect(field_lb, &value, cursor)),
+            TypeableField::Textarea => {
+                let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+                let m = lumen_paint::FontMeasurer::new(&font).ok()?;
+                let fs = field_lb.style.font_size;
+                let measure = |s: &str| -> f32 {
+                    use lumen_layout::TextMeasurer;
+                    s.chars().map(|c| m.char_width(c, fs)).sum()
+                };
+                Some(forms::textarea_caret_rect(field_lb, &value, cursor, &measure))
+            }
+        }
+    }
+}
+
+/// Preedit patch + text + underline at `caret`, clipped to the field box
+/// (UX-IME-2/4). `field_lb` and `caret` share one coordinate space.
+fn preedit_commands(text: &str, field_lb: &lumen_layout::LayoutBox, caret: lumen_core::geom::Rect) -> lumen_paint::DisplayList {
+    use lumen_layout::{Color, CssColor, FontStyle, FontWeight};
+    let style = &field_lb.style;
+    let fs = style.font_size;
+    let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
+    let width = width.min((field_lb.rect.x + field_lb.rect.width - caret.x).max(fs));
+    let bg = match style.background_color {
+        Some(CssColor::Rgba(c)) if c.a == 255 => c,
+        _ => Color { r: 255, g: 255, b: 255, a: 255 },
+    };
+    let line_h = fs * 1.2;
+    let rect = lumen_core::geom::Rect::new(caret.x, caret.y, width, line_h.min(caret.height.max(fs)));
+    let fg = style.color;
+    vec![
+        lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
+        lumen_paint::DisplayCommand::FillRect { rect, color: bg },
+        lumen_paint::DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect,
+            text: text.to_string(),
+            font_size: fs,
+            color: fg,
+            font_family: style.font_family.clone(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
+            highlight_name: None,
+            text_orientation: None,
+        },
+        lumen_paint::DisplayCommand::FillRect {
+            rect: lumen_core::geom::Rect::new(rect.x, rect.y + rect.height - 1.0, width, 1.0),
+            color: fg,
+        },
+        lumen_paint::DisplayCommand::PopClip,
+    ]
+}
+
+/// Clipboard command on a focused text field (UX-CLIPBOARD).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ClipboardOp {
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+}
+
+/// Which clipboard command a key press is, if any: Ctrl+A/C/X/V and the
+/// legacy Ctrl+Insert (copy) / Shift+Insert (paste) / Shift+Delete (cut).
+pub(crate) fn clipboard_op_for(code: KeyCode, mods: ModifiersState) -> Option<ClipboardOp> {
+    if mods == ModifiersState::CONTROL {
+        return match code {
+            KeyCode::KeyA => Some(ClipboardOp::SelectAll),
+            KeyCode::KeyC | KeyCode::Insert => Some(ClipboardOp::Copy),
+            KeyCode::KeyX => Some(ClipboardOp::Cut),
+            KeyCode::KeyV => Some(ClipboardOp::Paste),
+            _ => None,
+        };
+    }
+    if mods == ModifiersState::SHIFT {
+        return match code {
+            KeyCode::Insert => Some(ClipboardOp::Paste),
+            KeyCode::Delete => Some(ClipboardOp::Cut),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// What the page's clipboard-event handlers decided.
+pub(crate) enum ClipboardReply {
+    /// Not cancelled (or no JS to ask): run the default action.
+    Proceed,
+    /// `preventDefault()` was called; the payload is whatever the handler put
+    /// into `clipboardData` (copy/cut write that instead of the selection).
+    Cancelled(String),
+}
+
+impl ClipboardReply {
+    /// Parse `_lumen_dispatch_clipboard_event`'s reply (`'N'` / `'P<data>'`).
+    pub(crate) fn parse(reply: Option<&str>) -> Self {
+        match reply.and_then(|r| r.strip_prefix('P')) {
+            Some(data) => ClipboardReply::Cancelled(data.to_owned()),
+            None => ClipboardReply::Proceed,
+        }
+    }
+}
+
+/// `_lumen_dispatch_input_event(...)` call for a clipboard edit.
+pub(crate) fn input_event_script(nid: usize, kind: &str, input_type: &str, data: Option<&str>) -> String {
+    let data = match data {
+        Some(d) => format!("'{}'", escape_js_string(d)),
+        None => "null".to_owned(),
+    };
+    format!("_lumen_dispatch_input_event({nid}, '{kind}', '{input_type}', {data})")
+}
+
+/// Put `text` on the OS clipboard unless it is empty (an empty write would
+/// wipe the user's clipboard for no reason).
+pub(crate) fn write_clipboard_nonempty(text: &str) {
+    if !text.is_empty() {
+        use lumen_core::ext::ClipboardProvider;
+        platform::clipboard::PlatformClipboard.write_text(text);
+    }
+}
+
+/// `maxlength` and whether the control is a password field, for the clipboard
+/// commands — read from an already-locked `doc`.
+pub(crate) fn field_meta_in(doc: &lumen_dom::Document, nid: lumen_dom::NodeId) -> (Option<usize>, bool) {
+    let Some(node) = doc.try_get(nid) else { return (None, false) };
+    (
+        parse_maxlength(node.get_attr("maxlength")),
+        matches!(node.input_type(), Some(lumen_dom::InputType::Password)),
+    )
 }
 
 /// [`Lumen::typeable_field`] against an already-locked `doc` — shared with
@@ -506,4 +1059,66 @@ pub(crate) fn typeable_field_in(
         return None;
     }
     Some((TypeableField::Input, doc.control_value(nid).into_owned()))
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+
+    #[test]
+    fn key_to_clipboard_op() {
+        let c = ModifiersState::CONTROL;
+        let s = ModifiersState::SHIFT;
+        assert_eq!(clipboard_op_for(KeyCode::KeyV, c), Some(ClipboardOp::Paste));
+        assert_eq!(clipboard_op_for(KeyCode::KeyX, c), Some(ClipboardOp::Cut));
+        assert_eq!(clipboard_op_for(KeyCode::KeyC, c), Some(ClipboardOp::Copy));
+        assert_eq!(clipboard_op_for(KeyCode::KeyA, c), Some(ClipboardOp::SelectAll));
+        assert_eq!(clipboard_op_for(KeyCode::Insert, s), Some(ClipboardOp::Paste));
+        assert_eq!(clipboard_op_for(KeyCode::Delete, s), Some(ClipboardOp::Cut));
+        assert_eq!(clipboard_op_for(KeyCode::KeyV, ModifiersState::empty()), None);
+        assert_eq!(clipboard_op_for(KeyCode::KeyV, c | s), None);
+    }
+
+    #[test]
+    fn key_to_history_op() {
+        let c = ModifiersState::CONTROL;
+        let s = ModifiersState::SHIFT;
+        assert_eq!(history_op_for(KeyCode::KeyZ, c), Some(HistoryOp::Undo));
+        assert_eq!(history_op_for(KeyCode::KeyY, c), Some(HistoryOp::Redo));
+        assert_eq!(history_op_for(KeyCode::KeyZ, c | s), Some(HistoryOp::Redo));
+        assert_eq!(history_op_for(KeyCode::KeyZ, ModifiersState::empty()), None);
+        assert_eq!(history_op_for(KeyCode::KeyY, c | s), None);
+    }
+
+    #[test]
+    fn history_kind_word_start() {
+        let k = |a: &EditAction, cur: &str, c, sel| a.history_kind(cur, c, sel);
+        assert_eq!(k(&EditAction::InsertChar('b'), "a ", 2, false), EditKind::Typing { word_start: true });
+        assert_eq!(k(&EditAction::InsertChar('b'), "a", 1, false), EditKind::Typing { word_start: false });
+        assert_eq!(k(&EditAction::InsertChar('b'), "a ", 2, true), EditKind::Other);
+        assert_eq!(k(&EditAction::Backspace, "ab", 2, false), EditKind::Backspace);
+    }
+
+    #[test]
+    fn reply_parse() {
+        assert!(matches!(ClipboardReply::parse(None), ClipboardReply::Proceed));
+        assert!(matches!(ClipboardReply::parse(Some("N")), ClipboardReply::Proceed));
+        match ClipboardReply::parse(Some("Pabc")) {
+            ClipboardReply::Cancelled(d) => assert_eq!(d, "abc"),
+            ClipboardReply::Proceed => panic!("must be cancelled"),
+        }
+    }
+
+    #[test]
+    fn insert_str_edit_action_splices_selection() {
+        let (next, cur) = EditAction::InsertStr("XY".into()).apply("abcd", 2);
+        assert_eq!((next.as_str(), cur), ("abXYcd", 4));
+    }
+
+    #[test]
+    fn input_event_script_escapes_data() {
+        let s = input_event_script(7, "input", "insertFromPaste", Some("it's"));
+        assert_eq!(s, r#"_lumen_dispatch_input_event(7, 'input', 'insertFromPaste', 'it\'s')"#);
+        assert!(input_event_script(7, "input", "deleteByCut", None).ends_with("null)"));
+    }
 }

@@ -32,3 +32,7 @@ WPT-RUN-14 срез 21: `css-display/parsing/display-invalid.html` (55 сабт�
 ## Как проверить
 
 Таблица выше; `css/css-display/parsing/display-invalid.html`.
+
+## Повторное измерение: WPT-RUN-14 срез 22 (2026-10-08)
+
+`css-conditional/js/CSS-supports-CSSStyleDeclaration.html` — 600 из 1 495 сабтестов «expected false but got true» (`CSS.supports('display','bogus')` — `true`); `css-variables/variable-supports-*` (13 reftest) и `css-supports-*.xht` частично зависят от этого же (значение декларации в `@supports (prop: value)` тоже не проверяется) — BUG-1493 (грамматика условия) отделён.

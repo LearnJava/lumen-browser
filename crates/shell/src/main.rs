@@ -111,8 +111,14 @@ mod config;
 mod deterministic;
 mod devtools;
 mod engine_bridge;
+mod crash_page;
+mod net_error_page;
 mod engine_thread;
 mod download;
+mod external_browser;
+mod handoff_page;
+mod import_manager;
+mod translate_manager;
 mod find;
 mod frame_ancestry;
 mod frame_dynamic_load;
@@ -127,13 +133,20 @@ mod image_cache;
 mod memory_poll;
 mod newtab;
 mod input;
+#[allow(dead_code)] // UX-AUTOFILL: потребители — срезы 2–4
+mod autofill_form;
+mod autofill_store;
+mod threat_feeds;
+mod threat_store;
+mod card_store;
+mod login_form;
+mod password_store;
 mod links;
 mod lumen;
 mod momentum_anim;
 mod nav_timing;
 mod notification;
 mod omnibox;
-mod panel_layout;
 mod page_context_menu;
 mod page_load;
 mod page_pipeline;
@@ -256,7 +269,8 @@ use crate::input::winit_events::{css_cursor_to_winit, cursor_icon_for_hover, win
 use crate::js_escape::js_string_literal;
 use crate::js_escape::{escape_js_string, escape_js_string_char};
 use crate::text_cursor::{
-    char_len, delete_char_after, delete_char_before, delete_char_range, insert_char_at,
+    char_len, char_range, delete_char_after, delete_char_before, delete_char_range, insert_char_at,
+    insert_str_at, parse_maxlength, sanitize_paste, EditKind, FieldHistory, FieldSnapshot,
 };
 use crate::panels::doc_pip_os_window::DocPipOsWindow;
 use crate::panels::pip_os_window::PipOsWindow;
@@ -272,7 +286,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SpellChecker as _, SuspendedHeap};
+use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_core::ColorSpace;
 use lumen_encoding::KnuthLiangHyphenation;

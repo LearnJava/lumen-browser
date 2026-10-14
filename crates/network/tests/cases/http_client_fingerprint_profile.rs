@@ -5,7 +5,7 @@
 //! - build_request_headers() produces Chrome-matching header order
 //! - Accept-Language is `en-US,en;q=0.9` (does not leak real locale)
 //! - Sec-Fetch-* headers present in Chrome/Edge/TorBrowser, absent in Firefox
-//! - Client Hints disabled for Strict/TorBrowser profiles
+//! - Client Hints disabled for the TorBrowser profile
 //! - H2 SETTINGS wire format matches per-profile values
 
 #[cfg(test)]
@@ -77,13 +77,14 @@ mod tests {
     #[test]
     fn chrome_headers_start_with_host_connection_cache_control() {
         let h = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::Chrome);
-        // Chrome order: Host, Connection, Cache-Control, User-Agent, Accept, ...
+        // Chrome order: Host, Connection, Cache-Control, Sec-CH-UA x3, User-Agent, Accept, ...
         let lines: Vec<&str> = h.lines().collect();
         assert!(lines[0].starts_with("Host:"), "Host must be first: {:?}", lines[0]);
         assert!(lines[1].starts_with("Connection:"), "Connection must be second: {:?}", lines[1]);
         assert!(lines[2].starts_with("Cache-Control:"), "Cache-Control must be third: {:?}", lines[2]);
-        assert!(lines[3].starts_with("User-Agent:"), "User-Agent must be fourth: {:?}", lines[3]);
-        assert!(lines[4].starts_with("Accept:"), "Accept must be fifth: {:?}", lines[4]);
+        assert!(lines[3].starts_with("Sec-CH-UA:"), "Sec-CH-UA must be fourth: {:?}", lines[3]);
+        assert!(lines[6].starts_with("User-Agent:"), "User-Agent must be seventh: {:?}", lines[6]);
+        assert!(lines[7].starts_with("Accept:"), "Accept must be eighth: {:?}", lines[7]);
     }
 
     #[test]
@@ -230,8 +231,8 @@ mod tests {
 
     #[test]
     fn client_hints_disabled_for_strict_even_when_server_requests() {
-        assert!(!should_send_client_hints(HttpProfile::Strict, true),
-            "Strict profile must never send Client Hints");
+        assert!(should_send_client_hints(HttpProfile::Strict, true),
+            "Strict keeps the Chrome UA, so it sends Chrome's low-entropy hints (BUG-1614)");
     }
 
     #[test]
@@ -264,8 +265,8 @@ mod tests {
     }
 
     #[test]
-    fn client_hints_headers_strict_empty() {
-        let hints = client_hints_headers(HttpProfile::Strict, true, "Windows");
-        assert!(hints.is_empty(), "Strict profile must return no Client Hints headers");
+    fn client_hints_headers_tor_empty() {
+        let hints = client_hints_headers(HttpProfile::TorBrowser, true, "Windows");
+        assert!(hints.is_empty(), "Tor Browser (Firefox) has no Client Hints");
     }
 }

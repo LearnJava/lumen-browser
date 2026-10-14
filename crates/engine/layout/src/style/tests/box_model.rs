@@ -80,6 +80,19 @@ use super::*;
     }
 
     #[test]
+    fn border_shorthand_resets_unlisted_color() {
+        // BUG-1342: `border: solid 10px` без цвета → currentcolor, а не цвет прежнего правила.
+        let s = style_for("border-color: red; border: solid 10px");
+        assert_eq!(s.border_top_color, CssColor::CurrentColor);
+        assert_eq!(s.border_left_color, CssColor::CurrentColor);
+        let s = style_for("border-top-color: red; border-top: solid 2px");
+        assert_eq!(s.border_top_color, CssColor::CurrentColor);
+        // Без стиля ширина вычисляется в 0.
+        let s = style_for("border-width: 5px; border: red");
+        assert_eq!(s.border_top_width, 0.0);
+    }
+
+    #[test]
     fn border_top_side_shorthand() {
         let s = style_for("border-top: 3px dotted green");
         assert!((s.border_top_width - 3.0).abs() < 0.01);

@@ -90,6 +90,14 @@ flate2 = { workspace = true }
 regex = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
+[target.'cfg(windows)'.dependencies]
+# Provisional (§5): windows-sys — CertOpenStore/CertEnumCertificatesInStore: чтение корней
+# доверия из хранилища Windows (ROOT и Disallowed, COMPAT-TRUST-OSROOTS). Уже в графе
+# (lumen-storage, lumen-a11y, lumen-shell): новых записей в Cargo.lock нет. Trait-anchor:
+# нет, единственный потребитель — tls/os_roots.rs. Graduation: постоянная, пока
+# Windows — поддерживаемая платформа.
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
 [dev-dependencies]
 # Test-only: OS CSPRNG (rand_core 0.6 `OsRng`, the version `rsa` 0.9 signs with) to
 # supply the PSS salt when producing signature fixtures in the RSASSA-PSS

@@ -150,14 +150,8 @@ impl Lumen {
         // its computed style, suppressing normal navigation / JS dispatch.
         if self.dom_inspector.visible {
             let win_w_css = self.viewport_width_css();
-            // Click inside the right-docked panel → UI interaction (tab switch).
+            // Click inside the right-docked panel → the engine chrome owns it.
             if self.dom_inspector.is_panel_click(x_css, win_w_css) {
-                if self.dom_inspector.click_tab_at(
-                    x_css, y_css, win_w_css,
-                    toolbar::CHROME_H,
-                ) {
-                    self.request_redraw();
-                }
                 return;
             }
             // Click on the page → pin the box under cursor.
@@ -204,6 +198,7 @@ impl Lumen {
                     })
                     .unwrap_or_default();
                 self.dom_inspector.select(node, label, props, styles_rules, computed_props);
+                self.relayout_chrome_host();
                 self.request_redraw();
             }
             return;
@@ -515,6 +510,9 @@ impl Lumen {
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.notify_focus_changed(focus_idx);
             });
+        }
+        if frame_target.is_none() {
+            self.try_open_autofill_menu(new_focused);
         }
         // BUG-480 срез 16: точка внутри содержимого фрейма адресует под-документ,
         // и на этом путь родителя кончается. Ранний возврат — не оптимизация:
@@ -940,6 +938,11 @@ impl Lumen {
                     if self.navigate_to_link_blocked(csp_gate.as_ref(), &href) {
                         return;
                     }
+                    // COMPAT-HANDOFF: a live 30-day rule for the target site sends
+                    // the link to the other browser instead of any branch below.
+                    if self.link_handed_off(&href) {
+                        return;
+                    }
                     let t = target_attr.trim();
                     // GAP-NAVCTX срез 2 (BUG-883): `_blank` is reserved by the
                     // spec and never names a live frame (HTML LS §7.3.2) — check
@@ -1129,6 +1132,10 @@ impl Lumen {
                         // as a real navigation.
                         if let Some(action) = newtab::parse_action(&resolved) {
                             self.apply_newtab_action(action);
+                        } else if self.apply_net_error_link(&resolved) {
+                            // `about:handoff?open=...` on the network error page.
+                        } else if self.apply_handoff_link(&resolved) {
+                            // `about:handoff?...` on the handoff page itself.
                         } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {

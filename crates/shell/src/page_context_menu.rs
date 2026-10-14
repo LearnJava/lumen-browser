@@ -4,18 +4,17 @@
 //! misspelled word in a focused text input opens a floating menu listing up to
 //! five correction candidates followed by "Add to dictionary" and "Ignore".
 //!
-//! Like [`crate::tabs::context_menu`], this module owns only geometry,
-//! rendering and hit-testing — the shell performs the actual value edit /
+//! Like [`crate::tabs::context_menu`], the menu is drawn by the engine chrome
+//! (`#pageCtxMenu`, UX-CHROME-PANELS); this module owns only state and
+//! geometry — rows are picked by the chrome hit-test and the shell performs the actual value edit /
 //! dictionary mutation. Unlike the tab menu the row set is dynamic (it depends
 //! on how many suggestions the checker returned), so the height and hit-testing
-//! are computed from `items.len()`.
+//! is computed from `items.len()`.
 
-use lumen_core::geom::Rect;
 use lumen_dom::NodeId;
-use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+use lumen_chrome::ChromePageCtxModel;
 
-// ── Visual constants (mirror the dark-chrome tab context menu) ────────────────
+// ── Geometry (mirrors `.page-ctx` in `assets/chrome/chrome.html`) ──────────────
 
 /// Menu width in CSS px.
 pub const MENU_W: f32 = 230.0;
@@ -23,20 +22,6 @@ pub const MENU_W: f32 = 230.0;
 const ROW_H: f32 = 28.0;
 /// Vertical padding above the first / below the last row.
 const PAD_Y: f32 = 5.0;
-/// Left text inset inside a row.
-const TEXT_PAD_X: f32 = 14.0;
-/// Row text font size.
-const FONT_SZ: f32 = 13.0;
-/// Corner radius of the menu background.
-const RADIUS: f32 = crate::theme_tokens::radius::LG;
-
-const MENU_BG: Color = Color { r: 38, g: 39, b: 44, a: 250 };
-const MENU_BORDER: Color = Color { r: 70, g: 71, b: 78, a: 255 };
-const ROW_HOVER_BG: Color = Color { r: 58, g: 78, b: 120, a: 255 };
-const ITEM_TEXT: Color = Color { r: 222, g: 222, b: 230, a: 255 };
-/// Suggestion rows are drawn slightly brighter to read as the primary action.
-const SUGGEST_TEXT: Color = Color { r: 236, g: 236, b: 244, a: 255 };
-const DIVIDER: Color = Color { r: 60, g: 61, b: 68, a: 255 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -112,12 +97,13 @@ pub struct PageContextMenu {
     anchor_x: f32,
     /// Raw cursor Y where the menu was summoned, CSS px (pre-clamp).
     anchor_y: f32,
-    /// Row index currently under the cursor, for hover highlight.
-    pub hovered: Option<usize>,
     /// Ordered rows shown in the menu.
     items: Vec<SpellMenuAction>,
     /// Context for applying the chosen action.
     target: Option<SpellTarget>,
+    /// `false` — строки «Добавить в словарь»/«Пропустить» отсутствуют: меню
+    /// значений автозаполнения (UX-AUTOFILL срез 3), а не орфографии.
+    spell_footer: bool,
 }
 
 impl PageContextMenu {
@@ -129,18 +115,28 @@ impl PageContextMenu {
             suggestions.into_iter().take(5).map(SpellMenuAction::Use).collect();
         items.push(SpellMenuAction::AddToDict);
         items.push(SpellMenuAction::Ignore);
+        self.spell_footer = true;
         self.items = items;
         self.target = Some(target);
         self.anchor_x = x;
         self.anchor_y = y;
-        self.hovered = None;
         self.open = true;
+    }
+
+    /// UX-AUTOFILL срез 3: открыть меню сохранённых значений под полем.
+    /// `target.text` — введённое сейчас; выбор строки заменяет его целиком.
+    pub fn open_values(&mut self, x: f32, y: f32, values: Vec<String>, target: SpellTarget) {
+        self.items = values.into_iter().take(5).map(SpellMenuAction::Use).collect();
+        self.spell_footer = false;
+        self.target = Some(target);
+        self.anchor_x = x;
+        self.anchor_y = y;
+        self.open = !self.items.is_empty();
     }
 
     /// Hide the menu and drop its context.
     pub fn close(&mut self) {
         self.open = false;
-        self.hovered = None;
         self.items.clear();
         self.target = None;
     }
@@ -160,12 +156,6 @@ impl PageContextMenu {
         PAD_Y * 2.0 + ROW_H * self.items.len() as f32
     }
 
-    /// Index of the first "Add to dictionary" / "Ignore" row (the divider sits
-    /// above it). Equals the suggestion count.
-    fn divider_row(&self) -> usize {
-        self.items.len().saturating_sub(2)
-    }
-
     /// Compute the clamped top-left anchor so the menu stays inside the window.
     fn anchor(&self, window_w: f32, window_h: f32) -> (f32, f32) {
         let h = self.menu_height();
@@ -174,108 +164,41 @@ impl PageContextMenu {
         (x, y)
     }
 
-    /// Map a CSS-px `(x, y)` to the row index under it, or `None`.
-    pub fn item_at(&self, x: f32, y: f32, window_w: f32, window_h: f32) -> Option<usize> {
-        if !self.open {
-            return None;
-        }
-        let (x0, y0) = self.anchor(window_w, window_h);
-        let h = self.menu_height();
-        if x < x0 || x >= x0 + MENU_W || y < y0 || y >= y0 + h {
-            return None;
-        }
-        let row_top = y0 + PAD_Y;
-        if y < row_top {
-            return None;
-        }
-        let idx = ((y - row_top) / ROW_H) as usize;
-        if idx < self.items.len() { Some(idx) } else { None }
-    }
-
-    /// Map a CSS-px `(x, y)` to the [`SpellMenuAction`] under it, or `None`.
-    pub fn action_at(&self, x: f32, y: f32, window_w: f32, window_h: f32) -> Option<SpellMenuAction> {
-        self.item_at(x, y, window_w, window_h).map(|i| self.items[i].clone())
-    }
-
-    /// Build a viewport-locked display list for the open menu; empty when closed.
-    pub fn build_overlay(&self, window_w: f32, window_h: f32) -> DisplayList {
-        if !self.open {
-            return DisplayList::new();
-        }
-        let (x0, y0) = self.anchor(window_w, window_h);
-        let h = self.menu_height();
-        let mut out = DisplayList::with_capacity(self.items.len() * 2 + 2);
-
-        // Border (drawn 1 px larger behind the background fill).
-        out.push(DisplayCommand::FillRoundedRect {
-            rect: Rect::new(x0 - 1.0, y0 - 1.0, MENU_W + 2.0, h + 2.0),
-            radii: corners(RADIUS),
-            color: MENU_BORDER,
-        });
-        // Background.
-        out.push(DisplayCommand::FillRoundedRect {
-            rect: Rect::new(x0, y0, MENU_W, h),
-            radii: corners(RADIUS),
-            color: MENU_BG,
-        });
-
-        let divider_row = self.divider_row();
-        for (i, action) in self.items.iter().enumerate() {
-            let row_y = y0 + PAD_Y + i as f32 * ROW_H;
-
-            // Hover highlight.
-            if self.hovered == Some(i) {
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(x0 + 2.0, row_y, MENU_W - 4.0, ROW_H),
-                    color: ROW_HOVER_BG,
-                });
+    /// Maps a `data-page-ctx` attribute value of `#pageCtxMenu`'s rows
+    /// (`use:<index>` / `add` / `ignore`) to the action it stands for.
+    pub fn action_from_attr(&self, value: &str) -> Option<SpellMenuAction> {
+        match value {
+            "add" => Some(SpellMenuAction::AddToDict),
+            "ignore" => Some(SpellMenuAction::Ignore),
+            _ => {
+                let idx: usize = value.strip_prefix("use:")?.parse().ok()?;
+                match self.items.get(idx)? {
+                    a @ SpellMenuAction::Use(_) => Some(a.clone()),
+                    _ => None,
+                }
             }
-
-            // Divider above the first non-suggestion row (skip when there are
-            // no suggestions — the divider would sit at the very top).
-            if i == divider_row && divider_row > 0 {
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(x0 + 8.0, row_y - 1.0, MENU_W - 16.0, 1.0),
-                    color: DIVIDER,
-                });
-            }
-
-            let (text, color) = match action {
-                SpellMenuAction::Use(s) => (s.clone(), SUGGEST_TEXT),
-                SpellMenuAction::AddToDict => ("Добавить в словарь".to_owned(), ITEM_TEXT),
-                SpellMenuAction::Ignore => ("Пропустить".to_owned(), ITEM_TEXT),
-            };
-
-            out.push(DisplayCommand::DrawText {
-                font_stretch: lumen_layout::FontStretch::NORMAL,
-                rect: Rect::new(
-                    x0 + TEXT_PAD_X,
-                    row_y + (ROW_H - FONT_SZ * 1.3) * 0.5,
-                    MENU_W - TEXT_PAD_X * 2.0,
-                    FONT_SZ * 1.3,
-                ),
-                text,
-                font_size: FONT_SZ,
-                color,
-                font_family: Vec::new(),
-                font_weight: FontWeight::NORMAL,
-                font_style: FontStyle::Normal,
-                font_variation_axes: Vec::new(),
-                font_features: Vec::new(),
-                font_palette: None,
-                tab_size: 0.0,
-                highlight_name: None,
-                text_orientation: None,
-            });
         }
-
-        out
     }
-}
 
-/// Uniform corner radii helper.
-fn corners(r: f32) -> CornerRadii {
-    CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r }
+    /// Snapshot for `#pageCtxMenu`: the anchor clamped into a `window_w` ×
+    /// `window_h` window and the suggestion labels.
+    pub fn chrome_model(&self, window_w: f32, window_h: f32) -> ChromePageCtxModel {
+        let (x, y) = self.anchor(window_w, window_h);
+        ChromePageCtxModel {
+            open: self.open,
+            x,
+            y,
+            suggestions: self
+                .items
+                .iter()
+                .filter_map(|a| match a {
+                    SpellMenuAction::Use(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            spell_footer: self.spell_footer,
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -295,12 +218,10 @@ mod tests {
         }
     }
 
-    /// Count the visible menu rows via the rendered overlay.
+    /// Count the visible menu rows (suggestions plus the spell footer).
     fn row_count(m: &PageContextMenu) -> usize {
-        m.build_overlay(1024.0, 720.0)
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawText { .. }))
-            .count()
+        let c = m.chrome_model(1024.0, 720.0);
+        c.suggestions.len() + if c.spell_footer { 2 } else { 0 }
     }
 
     fn open_menu() -> PageContextMenu {
@@ -315,11 +236,22 @@ mod tests {
     }
 
     #[test]
+    fn values_menu_has_no_spell_rows() {
+        let mut m = PageContextMenu::default();
+        m.open_values(100.0, 50.0, vec!["Омск".to_owned(), "Орёл".to_owned()], target());
+        assert!(m.is_open());
+        assert_eq!(row_count(&m), 2);
+        assert_eq!(m.action_from_attr("use:0"), Some(SpellMenuAction::Use("Омск".to_owned())));
+        assert!(!m.chrome_model(1024.0, 720.0).spell_footer);
+        m.open_values(100.0, 50.0, Vec::new(), target());
+        assert!(!m.is_open());
+    }
+
+    #[test]
     fn default_is_closed() {
         let m = PageContextMenu::default();
         assert!(!m.is_open());
-        assert!(m.build_overlay(1024.0, 720.0).is_empty());
-        assert_eq!(m.item_at(100.0, 50.0, 1024.0, 720.0), None);
+        assert!(!m.chrome_model(1024.0, 720.0).open);
     }
 
     #[test]
@@ -345,7 +277,7 @@ mod tests {
         let mut m = open_menu();
         m.close();
         assert!(!m.is_open());
-        assert_eq!(row_count(&m), 0);
+        assert!(m.chrome_model(1024.0, 720.0).suggestions.is_empty());
         assert!(m.target().is_none());
     }
 
@@ -356,49 +288,21 @@ mod tests {
     }
 
     #[test]
-    fn overlay_emits_all_text_rows() {
-        let m = open_menu();
-        let dl = m.build_overlay(1024.0, 720.0);
-        let rows = dl
-            .iter()
-            .filter(|c| matches!(c, DisplayCommand::DrawText { .. }))
-            .count();
-        assert_eq!(rows, 4);
-        let has = |needle: &str| {
-            dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == needle))
-        };
-        assert!(has("world"));
-        assert!(has("Добавить в словарь"));
-        assert!(has("Пропустить"));
+    fn chrome_model_lists_suggestions() {
+        let c = open_menu().chrome_model(1024.0, 720.0);
+        assert!(c.open && c.spell_footer);
+        assert_eq!(c.suggestions, vec!["world".to_owned(), "would".to_owned()]);
+        assert_eq!((c.x, c.y), (100.0, 50.0));
     }
 
     #[test]
-    fn action_at_maps_rows() {
+    fn row_attrs_map_to_actions() {
         let m = open_menu();
-        let y0 = 50.0 + PAD_Y;
-        assert_eq!(
-            m.action_at(110.0, y0 + 2.0, 1024.0, 720.0),
-            Some(SpellMenuAction::Use("world".to_owned()))
-        );
-        assert_eq!(
-            m.action_at(110.0, y0 + ROW_H + 2.0, 1024.0, 720.0),
-            Some(SpellMenuAction::Use("would".to_owned()))
-        );
-        assert_eq!(
-            m.action_at(110.0, y0 + 2.0 * ROW_H + 2.0, 1024.0, 720.0),
-            Some(SpellMenuAction::AddToDict)
-        );
-        assert_eq!(
-            m.action_at(110.0, y0 + 3.0 * ROW_H + 2.0, 1024.0, 720.0),
-            Some(SpellMenuAction::Ignore)
-        );
-    }
-
-    #[test]
-    fn action_at_outside_is_none() {
-        let m = open_menu();
-        assert_eq!(m.action_at(10.0, 60.0, 1024.0, 720.0), None);
-        assert_eq!(m.action_at(110.0, 50.0 + m.menu_height() + 20.0, 1024.0, 720.0), None);
+        assert_eq!(m.action_from_attr("use:1"), Some(SpellMenuAction::Use("would".to_owned())));
+        assert_eq!(m.action_from_attr("use:2"), None);
+        assert_eq!(m.action_from_attr("add"), Some(SpellMenuAction::AddToDict));
+        assert_eq!(m.action_from_attr("ignore"), Some(SpellMenuAction::Ignore));
+        assert_eq!(m.action_from_attr("nope"), None);
     }
 
     #[test]
@@ -415,11 +319,5 @@ mod tests {
         let mut m = PageContextMenu::default();
         m.open_for(10.0, 10.0, Vec::new(), target());
         assert_eq!(row_count(&m), 2);
-        let y0 = 10.0 + PAD_Y;
-        assert_eq!(m.action_at(20.0, y0 + 2.0, 1024.0, 720.0), Some(SpellMenuAction::AddToDict));
-        assert_eq!(
-            m.action_at(20.0, y0 + ROW_H + 2.0, 1024.0, 720.0),
-            Some(SpellMenuAction::Ignore)
-        );
     }
 }

@@ -1,0 +1,8 @@
+# Сайты BUG-1113 (bugs/BUG-1113-FIXED.md): пять отказов антибота плюс мягкая стена khanacademy.
+# Формат `slug url` как у corpus.txt. Эталон для scripts/header_matrix.py и scripts/compat_ab_chrome.py.
+zillow https://www.zillow.com/
+reuters https://www.reuters.com/
+accuweather https://www.accuweather.com/
+adobe https://www.adobe.com/
+washingtonpost https://www.washingtonpost.com/
+khanacademy https://www.khanacademy.org/

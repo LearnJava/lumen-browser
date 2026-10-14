@@ -21,7 +21,9 @@
 
 use crate::*;
 
-use super::text_input::EditAction;
+use super::text_input::{
+    ClipboardOp, ClipboardReply, EditAction, HistoryOp, field_meta_in, input_event_script, write_clipboard_nonempty,
+};
 
 impl Lumen {
     /// Классифицировать `nid` в документе фрейма `idx` как typeable-поле —
@@ -208,11 +210,14 @@ impl Lumen {
         let Some((idx, nid)) = self.focused_frame else { return false };
         let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
         let cursor = self.frame_field_cursor(idx, nid, &current);
-        let (next, next_cursor) = match self.frame_field_selection_range(idx, nid, cursor) {
+        let selection = self.frame_field_selection_range(idx, nid, cursor);
+        let history_kind = action.history_kind(&current, cursor, selection.is_some());
+        let (next, next_cursor) = match selection {
             Some((start, end)) => {
                 let spliced = delete_char_range(&current, start, end);
                 match action {
                     EditAction::InsertChar(ch) => insert_char_at(&spliced, start, ch),
+                    EditAction::InsertStr(text) => insert_str_at(&spliced, start, &text),
                     EditAction::Backspace | EditAction::DeleteForward => (spliced, start),
                 }
             }
@@ -223,9 +228,22 @@ impl Lumen {
         if next == current {
             return true;
         }
+        self.field_history.entry((Some(idx), nid)).or_default().record(
+            FieldSnapshot { value: current, cursor },
+            history_kind,
+            &next,
+            next_cursor,
+            std::time::Instant::now(),
+        );
+        self.write_frame_field_value(idx, nid, kind, &next)
+    }
+
+    /// Store `next` as the frame field's value: its document, the JS shadow of
+    /// the frame, then a frame refresh. `false` when the frame is gone.
+    fn write_frame_field_value(&mut self, idx: usize, nid: NodeId, kind: TypeableField, next: &str) -> bool {
         if !self.with_frame_doc(idx, |doc| match kind {
-            TypeableField::Input => forms::set_value(doc, nid, &next),
-            TypeableField::Textarea => forms::set_textarea_text(doc, nid, &next),
+            TypeableField::Input => forms::set_value(doc, nid, next),
+            TypeableField::Textarea => forms::set_textarea_text(doc, nid, next),
         }) {
             return false;
         }
@@ -234,11 +252,133 @@ impl Lumen {
             js.eval_js(&format!(
                 "_lumen_set_field_value({}, '{}')",
                 nid.index(),
-                escape_js_string(&next)
+                escape_js_string(next)
             ));
         }
         self.refresh_frames(Some(idx));
         true
+    }
+
+    /// Ctrl+Z / Ctrl+Y in a frame field — mirror of
+    /// [`super::text_input::Lumen::field_history_op`] (UX-UNDO).
+    pub(crate) fn frame_field_history_op(&mut self, op: HistoryOp) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let here = FieldSnapshot { value: current, cursor };
+        let Some(hist) = self.field_history.get_mut(&(Some(idx), nid)) else { return true };
+        let Some(target) = (match op {
+            HistoryOp::Undo => hist.undo(&here),
+            HistoryOp::Redo => hist.redo(&here),
+        }) else {
+            return true;
+        };
+        let ty = op.input_type();
+        if !self.frame_clip_input_event(idx, nid, "beforeinput", ty, None) {
+            if let Some(hist) = self.field_history.get_mut(&(Some(idx), nid)) {
+                match op {
+                    HistoryOp::Undo => hist.redo(&target),
+                    HistoryOp::Redo => hist.undo(&target),
+                };
+            }
+            return true;
+        }
+        let len = char_len(&target.value);
+        self.frame_text_cursor.insert((idx, nid), target.cursor.min(len));
+        self.frame_text_selection_anchor.remove(&(idx, nid));
+        self.write_frame_field_value(idx, nid, kind, &target.value);
+        self.frame_clip_input_event(idx, nid, "input", ty, None);
+        true
+    }
+
+    /// Ctrl+A / Ctrl+C / Ctrl+X / Ctrl+V во typeable-поле фрейма — зеркало
+    /// [`super::text_input::Lumen::field_clipboard_op`] (UX-CLIPBOARD); события
+    /// уходят в JS-контекст ФРЕЙМА.
+    pub(crate) fn frame_field_clipboard_op(&mut self, op: ClipboardOp) -> bool {
+        let Some((idx, nid)) = self.focused_frame else { return false };
+        let Some((kind, current)) = self.frame_typeable_field(idx, nid) else { return false };
+        let cursor = self.frame_field_cursor(idx, nid, &current);
+        let sel = self.frame_field_selection_range(idx, nid, cursor);
+        let (maxlength, password) = self
+            .frames
+            .get(idx)
+            .and_then(|h| h.doc.lock().ok())
+            .map(|doc| field_meta_in(&doc, nid))
+            .unwrap_or((None, false));
+        match op {
+            ClipboardOp::SelectAll => {
+                self.frame_text_selection_anchor.insert((idx, nid), 0);
+                self.frame_text_cursor.insert((idx, nid), char_len(&current));
+            }
+            ClipboardOp::Copy | ClipboardOp::Cut => {
+                let Some((start, end)) = sel else { return true };
+                if password {
+                    return true;
+                }
+                let cut = op == ClipboardOp::Cut;
+                let name = if cut { "cut" } else { "copy" };
+                if let ClipboardReply::Cancelled(data) = self.frame_clipboard_event(idx, nid, name, "") {
+                    write_clipboard_nonempty(&data);
+                    return true;
+                }
+                write_clipboard_nonempty(&char_range(&current, start, end));
+                if cut && self.frame_clip_input_event(idx, nid, "beforeinput", "deleteByCut", None) {
+                    self.edit_focused_frame_field_at_cursor(EditAction::Backspace);
+                    self.frame_clip_input_event(idx, nid, "input", "deleteByCut", None);
+                }
+            }
+            ClipboardOp::Paste => {
+                use lumen_core::ext::ClipboardProvider;
+                let raw = platform::clipboard::PlatformClipboard.read_text();
+                if raw.is_empty() {
+                    return true;
+                }
+                if let ClipboardReply::Cancelled(_) = self.frame_clipboard_event(idx, nid, "paste", &raw) {
+                    return true;
+                }
+                let replaced = sel.map_or(0, |(s, e)| e - s);
+                let text = sanitize_paste(
+                    &raw,
+                    kind == TypeableField::Textarea,
+                    maxlength,
+                    char_len(&current),
+                    replaced,
+                );
+                if text.is_empty() {
+                    return true;
+                }
+                if self.frame_clip_input_event(idx, nid, "beforeinput", "insertFromPaste", Some(&text)) {
+                    self.edit_focused_frame_field_at_cursor(EditAction::InsertStr(text.clone()));
+                    self.frame_clip_input_event(idx, nid, "input", "insertFromPaste", Some(&text));
+                }
+            }
+        }
+        true
+    }
+
+    /// Eval `script` в JS-контексте фрейма `idx`, вернуть строковый результат.
+    #[allow(unused_variables)] // js читается только под feature = "v8"
+    fn frame_eval_completion(&self, idx: usize, script: &str) -> Option<String> {
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
+            return js.eval_js_completion(script).ok().flatten();
+        }
+        None
+    }
+
+    fn frame_clipboard_event(&self, idx: usize, nid: NodeId, kind: &str, text: &str) -> ClipboardReply {
+        let script = format!(
+            "_lumen_dispatch_clipboard_event({}, '{}', '{}')",
+            nid.index(),
+            kind,
+            escape_js_string(text)
+        );
+        ClipboardReply::parse(self.frame_eval_completion(idx, &script).as_deref())
+    }
+
+    fn frame_clip_input_event(&self, idx: usize, nid: NodeId, kind: &str, input_type: &str, data: Option<&str>) -> bool {
+        let script = input_event_script(nid.index(), kind, input_type, data);
+        self.frame_eval_completion(idx, &script).is_none_or(|r| r != "0")
     }
 
     /// Отправить один `_lumen_dispatch_key_event` в JS-контекст фрейма `idx` —
@@ -251,6 +391,21 @@ impl Lumen {
             js.eval_js(&format!(
                 "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
                 node_id, event_type, key, key,
+            ));
+        }
+    }
+
+    /// UX-IME-4: composition-событие на поле фрейма — прямым `eval_js` по
+    /// хэндлу фрейма, как [`Self::dispatch_frame_key`].
+    #[allow(unused_variables)] // js.eval_js читается только под feature = "v8"
+    pub(crate) fn frame_composition_event(&self, idx: usize, nid: lumen_dom::NodeId, kind: &str, data: &str) {
+        #[cfg(feature = "v8")]
+        if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
+            js.eval_js(&format!(
+                "_lumen_dispatch_composition_at({}, '{}', '{}')",
+                nid.index(),
+                kind,
+                escape_js_string(data)
             ));
         }
     }

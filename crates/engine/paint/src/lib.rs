@@ -595,6 +595,8 @@ struct OwnedFontMetrics {
     /// Line-gap в font units, тем же приоритетом источника, что и
     /// `ascent_units` (FONTLOAD-13).
     line_gap_units: u16,
+    /// x-height в font units (`OS/2.sxHeight`, иначе `units_per_em / 2`) — для `ex` (BUG-1340).
+    x_height_units: u16,
     /// `line-height: normal` line-spacing metrics (FONTLOAD-15, BUG-467) —
     /// see [`FontMeasurer`]'s field of the same name for why this trio is
     /// separate from `ascent_units`/`descent_units`/`line_gap_units` above.
@@ -636,9 +638,15 @@ impl OwnedFontMetrics {
             .as_ref()
             .map_or(hhea.line_gap, |o| o.typo_line_gap)
             .unsigned_abs();
+        let x_height_units = os2
+            .as_ref()
+            .and_then(|o| o.x_height)
+            .filter(|&v| v > 0)
+            .map_or(head.units_per_em / 2, |v| v as u16);
         let (normal_ascent_units, normal_descent_units, normal_line_gap_units) =
             normal_line_height_units(os2.as_ref(), &hhea);
         Ok(Self {
+            x_height_units,
             cmap_data,
             advance_widths,
             units_per_em: head.units_per_em,
@@ -667,6 +675,11 @@ impl OwnedFontMetrics {
     /// Descent в px — та же формула, что [`FontMeasurer::descent_px`].
     fn descent_px(&self, font_size_px: f32) -> f32 {
         self.descent_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    /// x-height в px — та же формула, что [`FontMeasurer::x_height_px`].
+    fn x_height_px(&self, font_size_px: f32) -> f32 {
+        self.x_height_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     /// Line-gap в px — та же формула, что [`FontMeasurer::line_gap_px`]
@@ -931,6 +944,16 @@ impl PrimaryFontMetrics<'_> {
                     .map_or_else(|| metrics.descent_px(adjusted_px), |pct| adjusted_px * pct)
             }
             Self::Shared(m) => m.descent_px(font_size_px),
+        }
+    }
+
+    /// x-height в px (BUG-1340) — size-adjust домножает размер, как у ascent.
+    fn x_height_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned { metrics, size_adjust, .. } => {
+                metrics.x_height_px(font_size_px * size_adjust.unwrap_or(1.0))
+            }
+            Self::Shared(m) => m.x_height_px(font_size_px),
         }
     }
 
@@ -1233,6 +1256,7 @@ impl MultiFontMeasurer {
                 ascent_units: 0,
                 descent_units: 0,
                 line_gap_units: 0,
+                x_height_units: 500,
                 normal_ascent_units: 0,
                 normal_descent_units: 0,
                 normal_line_gap_units: 0,
@@ -1351,6 +1375,13 @@ impl TextMeasurer for MultiFontMeasurer {
         match self.primary_metrics(families) {
             Some(m) => m.line_gap_px(font_size_px),
             None => self.line_gap_px(font_size_px),
+        }
+    }
+
+    fn x_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        match self.primary_metrics(families) {
+            Some(m) => m.x_height_px(font_size_px),
+            None => self.x_height_px(font_size_px),
         }
     }
 

@@ -19,6 +19,7 @@ pub mod ct;
 pub mod ct_logs;
 pub mod fingerprint;
 pub mod ocsp;
+pub mod os_roots;
 pub mod verifier;
 
 pub use fingerprint::{
@@ -46,12 +47,14 @@ pub const EXTRA_CA_CERT_ENV: &str = "LUMEN_EXTRA_CA_CERT";
 
 /// Build a `RootCertStore`: the built-in webpki roots plus, if
 /// `LUMEN_EXTRA_CA_CERT` names a readable, parsable PEM file, its
-/// certificates. Use this everywhere a `RootCertStore` is needed instead of
+/// certificates, plus the roots installed in the OS store minus its
+/// `Disallowed` list ([`os_roots`], COMPAT-TRUST-OSROOTS). Use this everywhere a `RootCertStore` is needed instead of
 /// building one ad hoc — see [`EXTRA_CA_CERT_ENV`].
 pub fn trusted_root_store() -> rustls::RootCertStore {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     root_store.add_parsable_certificates(extra_ca_certs().iter().cloned());
+    os_roots::merge_os_roots(&mut root_store);
     root_store
 }
 

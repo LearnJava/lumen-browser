@@ -19,6 +19,9 @@ psl = "2"
 # Permanent (§5): SHA-256 for per-origin IDB file key derivation (C-5).
 # Already in the dependency graph via lumen-js and lumen-network (sha2 0.10).
 sha2 = "0.10"
+# Provisional (§5): разбор Chromium `Bookmarks` JSON при импорте (UX-IMPORT).
+# Уже в графе (lumen-ai). Graduation: свой разбор JSON, если появится в lumen-core.
+serde_json = "1.0"
 # Provisional (§5): deflate compression for T3-hibernated DOM blobs (ADR-008 §10J.1).
 # Reuses the already-vendored flate2 (PNG iCCP path) — no new external dependency.
 # Pure-Rust miniz_oxide backend, cross-OS bit-stable, no C toolchain. Graduation
@@ -41,7 +44,30 @@ getrandom = "0.2"
 # the shared secret with the push service's ephemeral key. Already in the
 # dependency graph via lumen-js and lumen-network (same version/features).
 p256 = { version = "0.13", features = ["ecdh"] }
+# Provisional (§5): AES-256-CBC + PKCS#5 PBES2 для импорта паролей Firefox
+# (UX-IMPORT) — `key4.db` расшифровывается стандартным RFC 8018, не
+# внутренним форматом NSS. aes/cbc уже в графе (lumen-js, тот же паттерн
+# `cbc::Decryptor::<aes::Aes256>` — crates/js/src/subtle_crypto.rs); pkcs5 и
+# pbkdf2 — новые записи в Cargo.lock. Неподтверждено против настоящего
+# профиля Firefox — см. doc-comment import_logins_firefox.rs.
+# Graduation: постоянная, пока поддерживается импорт из Firefox.
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pkcs5 = { version = "0.7", features = ["pbes2", "alloc"] }
+# Provisional (§5): PBKDF2-HMAC-SHA256 — та же цель, тестовый шифрующий
+# встречный ход (production-код только расшифровывает через pkcs5).
+pbkdf2 = "0.12"
+# Provisional (§5): NSS выводит "эффективный пароль" как SHA1(globalSalt +
+# masterPassword) — только это, не общий хеш-примитив широкого назначения.
+sha1 = "0.10"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[target.'cfg(windows)'.dependencies]
+# Provisional (§5): windows-sys — CryptUnprotectData (DPAPI) для ключа паролей Chrome/Edge
+# при импорте (UX-IMPORT). Уже в графе (lumen-a11y, lumen-shell, winit): новых записей
+# в Cargo.lock нет. Trait-anchor: нет, единственный потребитель — import_logins.rs.
+# Graduation: постоянная, пока импорт из Chromium на Windows поддерживается.
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
 # Integration test only: serialise a real parsed `Document` to verify the

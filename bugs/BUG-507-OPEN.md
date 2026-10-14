@@ -54,3 +54,7 @@ vendored surface) — 7 ERROR (0 subtests each) + 4 FAIL subtests in the 8th.
 Committed `.ini` under `tests/wpt/metadata/css/css-exclusions/` for all 8
 files: `expected: ERROR` (no subtests) for the 7 `assert_implements`
 setup-failures, per-subtest `expected: FAIL` for `inheritance.html`.
+
+## Повторный замер 2026-10-11 (WPT-RUN-14 срез 28, P2)
+
+`css/css-exclusions`: 12 id, зелёных 0 — 7 ERROR `assert_implements: 'wrap-flow: both' undefined` (`CSS.supports("wrap-flow","both")` и `("wrap-through","none")` — `false`, проба 2026-10-11), 4 reftest `thick` (`css3-exclusions/exclusions-wrap-flow-01…04.xht`), `inheritance.html` 4 из 4. Бинарь от 2026-10-08.

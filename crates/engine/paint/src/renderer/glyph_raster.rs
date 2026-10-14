@@ -457,12 +457,15 @@ fn build_text_run_key(
     out: &mut Vec<u32>,
     font_size: f32,
     tab_size: f32,
+    (letter_spacing, word_spacing): (f32, f32),
     primary_face_id: usize,
     axes: &[([u8; 4], f32)],
 ) {
     out.clear();
     out.push(font_size.to_bits());
     out.push(tab_size.to_bits());
+    out.push(letter_spacing.to_bits());
+    out.push(word_spacing.to_bits());
     out.push(primary_face_id as u32);
     out.push(axes.len() as u32);
     for (tag, value) in axes {
@@ -509,6 +512,7 @@ pub(crate) fn push_text_glyphs(
     runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
+    (letter_spacing, word_spacing): (f32, f32),
     font_palette: Option<&FontPaletteSelection>,
 ) -> f32 {
     // BUG-405 срез 13: разбивка команды текста (`text-sub`, уровень 3).
@@ -570,6 +574,7 @@ pub(crate) fn push_text_glyphs(
             &mut key,
             font_size,
             tab_size,
+            (letter_spacing, word_spacing),
             primary_face_id,
             font_variation_axes,
         );
@@ -612,6 +617,9 @@ pub(crate) fn push_text_glyphs(
     let mut plan: Option<Vec<TextRunStep>> = cache_on.then(Vec::new);
     let _t_loop = sub_timer(log, &TEXT_SUB.lp);
     let mut cursor_x = rect.x;
+    // CSS Text L3 §8.1/§8.2 — `letter-spacing` следует за каждым символом,
+    // `word-spacing` — за каждым пробелом (layout уже учёл их в ширине).
+    let glyph_spacing = |ch: char| letter_spacing + if ch == ' ' { word_spacing } else { 0.0 };
     for ch in text.chars() {
         // CSS Text L3 §10.1 — tab character advances by tab_size pixels.
         if ch == '\t' && tab_size > 0.0 {
@@ -705,7 +713,7 @@ pub(crate) fn push_text_glyphs(
                 }
             }
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
-                cursor_x += adv as f32 * advance_scale;
+                cursor_x += adv as f32 * advance_scale + glyph_spacing(ch);
             }
             // Цветной глиф зависит от палитры и цвета текста — run с ним
             // мимо кэша целиком (см. [`TextRunCache`]).
@@ -725,7 +733,7 @@ pub(crate) fn push_text_glyphs(
 
         if let Some(g) = cached_glyph {
             let t_quad = log.then(std::time::Instant::now);
-            let advance = g.advance_native as f32 * advance_scale;
+            let advance = g.advance_native as f32 * advance_scale + glyph_spacing(ch);
             push_glyph_quad(out, &g, cursor_x, baseline_y, glyph_display_scale, color);
             cursor_x += advance;
             if let Some(plan) = plan.as_mut() {
@@ -739,7 +747,7 @@ pub(crate) fn push_text_glyphs(
             // Глиф не отрисовался (composite-fallback, empty или нет места
             // в атласе). Двигаем cursor на advance из выбранного face-а.
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
-                let advance = adv as f32 * advance_scale;
+                let advance = adv as f32 * advance_scale + glyph_spacing(ch);
                 cursor_x += advance;
                 if let Some(plan) = plan.as_mut() {
                     plan.push(TextRunStep::Advance(advance));
@@ -811,7 +819,7 @@ pub(crate) fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, runs, runs_enabled, font_variation_axes, tab_size, font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -819,7 +827,7 @@ pub(crate) fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, runs, runs_enabled, font_variation_axes, tab_size, font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;

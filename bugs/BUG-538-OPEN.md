@@ -67,3 +67,7 @@ the `auto | text | cap | ex | alphabetic | ideographic | ideographic-ink`
 vocabulary + the `leading` fallback keyword), wire cascade/inherit (both
 non-inherited per spec), then add both to `computed_style_to_map` so this
 doesn't immediately re-trigger BUG-537's class once implemented.
+
+## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
+
+`css/css-inline/text-box-trim/*`: 102 id не зелёные (13 testharness — CSSOM `text-box-*-computed`/`-valid`/`-invalid`/`-shorthand`, 28 `nosrc` с вариантом `?class=…`, 61 reftest `thick`). `CSS.supports('text-box-trim','trim-start')`, `('text-box-edge','cap alphabetic')`, `('text-box','trim-both cap alphabetic')` — `false`. Три `print-reftest` (`not-at-page-edges-00{1,2,3}-print`) — исполнителя нет.

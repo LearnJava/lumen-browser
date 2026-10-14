@@ -83,7 +83,7 @@ pub(in crate::style) fn parse_quotes(value: &str) -> Option<Quotes> {
 /// Extracts consecutive CSS string literals from `s` (single- or double-quoted),
 /// unescaping `\XXXXXX` hex escapes and `\<char>` literals. Non-string tokens are
 /// skipped. Used by [`parse_quotes`].
-fn parse_css_string_sequence(s: &str) -> Vec<String> {
+pub(in crate::style) fn parse_css_string_sequence(s: &str) -> Vec<String> {
     let chars: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;

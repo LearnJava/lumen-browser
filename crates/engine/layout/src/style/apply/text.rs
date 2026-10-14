@@ -395,15 +395,18 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "word-spacing" => {
-            // CSS Text L3 §11.3: normal (= 0) | <length>. `%` требует
-            // метрику space-glyph — Phase 0 не считаем, игнорируем.
+            // CSS Text L3 §11.3: normal (= 0) | <length-percentage>. `%` — доля
+            // ширины U+0020, известной только в раскладке: храним отдельно
+            // (`word_spacing_pct`), для calc() разделяем линейно базой 0 и 1.
             if val.trim() == "normal" {
                 style.word_spacing = 0.0;
-            } else if let Some(px) = parse_length_q(val, is_quirks).and_then(|len| match len {
-                Length::Percent(_) => None,
-                other => other.resolve(em_basis, None, viewport),
-            }) {
-                style.word_spacing = px;
+                style.word_spacing_pct = 0.0;
+            } else if let Some(len) = parse_length_q(val, is_quirks)
+                && let Some(base) = len.resolve(em_basis, Some(0.0), viewport)
+            {
+                let unit = len.resolve(em_basis, Some(1.0), viewport).unwrap_or(base);
+                style.word_spacing = base;
+                style.word_spacing_pct = unit - base;
             }
         }
         "text-transform" => {
@@ -448,13 +451,11 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "text-overflow" => {
-            // CSS UI L4: clip | ellipsis. <string> (custom marker) и
-            // two-value формы не поддерживаем в Phase 0.
-            style.text_overflow = match val.split_whitespace().next() {
-                Some("clip") => TextOverflow::Clip,
-                Some("ellipsis") => TextOverflow::Ellipsis,
-                _ => style.text_overflow,
-            };
+            // CSS UI L4 §6.1: [ clip | ellipsis | <string> ]{1,2}.
+            if let Some((left, right)) = TextOverflow::parse_pair(val) {
+                style.text_overflow = left;
+                style.text_overflow_right = right;
+            }
         }
         "text-size-adjust" | "-webkit-text-size-adjust" => {
             // CSS Text Size Adjustment L1 §2: auto | none | <percentage [0,∞]>. BUG-513.

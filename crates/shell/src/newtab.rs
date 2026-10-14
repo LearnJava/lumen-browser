@@ -134,7 +134,7 @@ pub fn merge_tiles(pinned: &[TopSite], top_sites: &[TopSite]) -> Vec<TopSite> {
 
 /// Экранирует символы, опасные в HTML-тексте и в значении атрибута.
 /// Применяется и к заголовкам, и к URL перед вставкой в разметку.
-fn escape_html(s: &str) -> String {
+pub(crate) fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

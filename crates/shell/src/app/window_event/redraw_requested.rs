@@ -78,7 +78,8 @@ impl Lumen {
             let scroll_y = self.scroll_y;
             let settled = self.scroll_anim.is_none()
                 && self.momentum_anim.is_none()
-                && self.scroll_drag.is_none();
+                && self.scroll_drag.is_none()
+                && self.hscroll_drag.is_none();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                 let moved = j.set_page_scroll_y(scroll_y);
                 if moved {
@@ -686,6 +687,10 @@ impl Lumen {
             framed.append(&mut overlay_buf);
             overlay_buf = framed;
         }
+        // UX-IME-3: address-bar preedit, painted above the chrome document.
+        if let Some(mut cmds) = self.ime_omnibox_preedit_overlay(&pal) {
+            overlay_buf.append(&mut cmds);
+        }
         // BUG-1059: `#demoBar`/`#infoPanel` (CC-18) — detached from
         // `chrome_layout`'s tree in `relayout_chrome_host` precisely because
         // they sit *inside* `chrome_page_host_rect` and would otherwise fall
@@ -698,6 +703,13 @@ impl Lumen {
             let mut floating = floating_dl.clone();
             floating.append(&mut overlay_buf);
             overlay_buf = floating;
+        }
+        // BUG-1605: popovers and modals salvaged out of `#contentArea` — inside
+        // the host rect the strip clip above removes, painted unclipped here.
+        if let Some(popover_dl) = self.chrome_popover_dl.as_ref().filter(|dl| !dl.is_empty()) {
+            let mut popovers = popover_dl.clone();
+            popovers.append(&mut overlay_buf);
+            overlay_buf = popovers;
         }
         if let Some(t0) = frame_log_t0 {
             bmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
@@ -712,12 +724,25 @@ impl Lumen {
             // FRAME-3 remainder: собственный scrollbar каждого видимого
             // фрейма — то же приём, добавлен в ту же полосу overlay-а рядом
             // со страничным.
-            let mut scrollbar_cmds = scrollbar::build_scrollbar_overlay(
+            let (v_state, h_state) = self.page_thumb_states();
+            self.last_thumb_states = (v_state, h_state);
+            let mut scrollbar_cmds = scrollbar::build_scrollbar_overlay_with_state(
                 self.scroll_y,
                 self.content_height,
                 self.viewport_width_css(),
                 self.viewport_height_css(),
+                v_state,
             );
+            let (hbar_vw, hbar_x, v_present) = self.hbar_layout();
+            scrollbar_cmds.extend(scrollbar::build_hscrollbar_overlay(
+                self.scroll_x,
+                self.content_width,
+                hbar_vw,
+                self.viewport_height_css(),
+                hbar_x,
+                v_present,
+                h_state,
+            ));
             scrollbar_cmds.extend(frames::frame_scrollbar_overlay(
                 &self.frames,
                 self.scroll_x,
@@ -975,125 +1000,21 @@ impl Lumen {
         // gated off the rollback flag — `#downloadsPanel` in the engine
         // chrome (`bind_downloads`, CC-9) is the only renderer now.
 
-        // DevTools JS console panel: bottom overlay, toggled by F12.
-        if self.devtools_console.visible {
-            let con_win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut con_cmds = devtools::console_panel::build_console_panel(
-                &self.devtools_console,
-                con_win_size,
-            );
-            overlay_buf.append(&mut con_cmds);
-        }
+        // DevTools JS console: `#devtools` in the engine chrome
+        // (`bind_console`), toggled by F12.
 
-        // DevTools network panel: bottom overlay, toggled by Ctrl+Shift+E.
-        if self.network_panel.visible {
-            self.network_panel.refresh();
-            let net_win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut net_cmds = devtools::network_panel::build_network_panel(
-                &self.network_panel,
-                net_win_size,
-            );
-            overlay_buf.append(&mut net_cmds);
-        }
+        // DevTools network panel: `#networkPanel` in the engine chrome
+        // (`bind_network`), toggled by Ctrl+Shift+E.
 
-        // Privacy network panel (V5): right-docked overlay, Ctrl+Shift+Y.
-        if self.privacy.visible {
-            self.privacy.refresh();
-            let priv_win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut priv_cmds = panels::privacy_panel::build_privacy_panel(
-                &self.privacy,
-                priv_win_size,
-                toolbar::CHROME_H,
-                &pal,
-            );
-            overlay_buf.append(&mut priv_cmds);
-        }
+        // Privacy network panel: `#privacyPanel` in the engine chrome
+        // (`bind_privacy`), toggled by Ctrl+Shift+Y.
 
-        // DevTools DOM inspector: right-docked computed-style side panel.
-        // Viewport-locked; the box-model overlay for the hovered node is
-        // emitted into the scrollable page layer below.
-        if self.dom_inspector.visible {
-            let dpr = self
-                .renderer
-                .as_ref()
-                .map_or(1.0_f32, |r| r.scale_factor() as f32)
-                .max(1e-6);
-            let (pw, ph) = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let win_css = (
-                (pw as f32 / dpr) as u32,
-                (ph as f32 / dpr) as u32,
-            );
-            // Feed the inspector's Network tab a fresh request snapshot
-            // from the shared NetworkLog (CC-9).
-            let net_entries = self.network_panel.entries_clone();
-            self.dom_inspector.set_network_entries(net_entries);
-            let mut insp_cmds = devtools::inspector::build_inspector_panel(
-                &self.dom_inspector,
-                win_css,
-                toolbar::CHROME_H,
-            );
-            overlay_buf.append(&mut insp_cmds);
-        }
+        // DevTools DOM inspector side panel: `#inspPanel` in the engine
+        // chrome (`bind_inspector`); the box-model overlay of the hovered node
+        // is emitted into the scrollable page layer below.
 
-        // Vertical tab panel: docked left sidebar, below the tab bar.
-        // Rendered before the tab bar so tab bar draws on top.
-        if self.vertical_tabs.visible {
-            let win_h = self.viewport_height_css() + toolbar::CHROME_H;
-            let vt_w = self.panel_layout.width_for(
-                panel_layout::ID_VERTICAL_TABS,
-                panels::vertical_tabs::PANEL_WIDTH,
-            );
-            let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
-                &self.tab_strip,
-                toolbar::CHROME_H,
-                win_h,
-                self.vertical_tabs.scroll_y,
-                &pal,
-                vt_w,
-                self.workspace_panel.active_accent(),
-            );
-            // Cross-dock: the panel paints left-relative; re-home it onto
-            // the right edge when flipped there.
-            let vt_side = self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS);
-            Self::offset_overlay_x(&mut vt_cmds, self.dock_origin_x(vt_side, vt_w));
-            overlay_buf.append(&mut vt_cmds);
-        }
-
-        // Tree-style tab panel (7A.2): same slot as vertical_tabs, but with
-        // parent-child indentation and collapse/expand arrows.
-        // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
-        if self.tree_tabs.visible {
-            let win_h = self.viewport_height_css() + toolbar::CHROME_H;
-            let tt_w = self.panel_layout.width_for(
-                panel_layout::ID_TREE_TABS,
-                panels::tree_tabs::PANEL_WIDTH,
-            );
-            let mut tt_cmds = panels::tree_tabs::build_panel(
-                &self.tab_strip,
-                &self.tree_tabs,
-                toolbar::CHROME_H,
-                win_h,
-                &pal,
-                tt_w,
-            );
-            // Cross-dock: re-home the left-relative panel onto the right
-            // edge when flipped there.
-            let tt_side = self.sidebar_dock_side(panel_layout::ID_TREE_TABS);
-            Self::offset_overlay_x(&mut tt_cmds, self.dock_origin_x(tt_side, tt_w));
-            overlay_buf.append(&mut tt_cmds);
-        }
+        // Vertical / tree tab list: `#sbTabs` in the engine chrome sidebar
+        // (`bind_model`; tree mode adds depth + `.tab-arrow` rows).
 
         // Shields floating panel (7C.4): top-right overlay anchored below
         // the tab bar. Refresh blocked counts before rendering — kept
@@ -1105,64 +1026,13 @@ impl Lumen {
             self.shields.refresh();
         }
 
-        // Note viewer overlay (§12.2, GG-2): floating annotation panel.
-        if self.note_viewer.visible {
-            let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                let s = w.inner_size();
-                (s.width, s.height)
-            });
-            let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size, &pal);
-            overlay_buf.append(&mut nv_cmds);
-        }
+        // Note viewer: `#noteOverlay` in the engine chrome (`bind_note`).
 
-        // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
-        // Rendered before the tab bar so tab bar always draws on top.
-        if self.workspace_panel.visible {
-            let win_w = self.viewport_width_css();
-            // Full window height including tab bar — bar is docked at bottom.
-            let win_h = self.viewport_height_css()
-                + toolbar::CHROME_H
-                + panels::workspace_panel::SWITCHER_HEIGHT;
-            let mut ws_cmds = panels::workspace_panel::build_panel(
-                &self.workspace_panel,
-                win_w,
-                win_h,
-                &pal,
-            );
-            overlay_buf.append(&mut ws_cmds);
-        }
+        // Workspace switcher bar: `#workspaceBar` in the engine chrome
+        // (`bind_workspace_bar`), toggled by Ctrl+Shift+W.
 
-        // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
-        if self.a11y_panel.visible {
-            let win_w = self.viewport_width_css();
-            let win_h = self.viewport_height_css();
-            let win_size = (win_w as u32, win_h as u32);
-            let mut a11y_cmds =
-                panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size, &pal);
-            overlay_buf.append(&mut a11y_cmds);
-        }
-
-        // Keyboard shortcuts panel (§D-4): centred floating overlay.
-        if self.shortcuts_panel.visible {
-            let win_w = self.viewport_width_css();
-            let win_h = self.viewport_height_css();
-            let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
-            let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
-            self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
-        }
-
-        // §12.3 Read-later panel: right-docked overlay.
-        if self.read_later_panel.visible {
-            let win_w = self.viewport_width_css();
-            let tab_h = toolbar::CHROME_H;
-            let mut rl_cmds = panels::read_later_panel::build_panel(
-                &self.read_later_panel,
-                win_w,
-                tab_h,
-                &pal,
-            );
-            overlay_buf.append(&mut rl_cmds);
-        }
+        // §12.3 Read-later panel: `#readLaterPanel` in the engine chrome
+        // (`bind_read_later`), toggled by Ctrl+Shift+R.
 
         // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
         // locked strip at y=0..TAB_BAR_HEIGHT) lived here — removed
@@ -1171,67 +1041,14 @@ impl Lumen {
         // `toolbar::build_toolbar`. Under the engine-drawn chrome
         // (CC-4) it never ran.
 
-        // Profile switcher dropdown (DS-14): BUG-403 — kept as a
-        // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
-        // §CC-15-1 decision), not migrated to `ChromeModel`/`bind_model`
-        // like the CC-9/CC-10 panels. Its hit-test (below, in the
-        // `MouseInput` handler) was already unconditional — this render
-        // call must match, or a click toggles `profile_menu.visible`
-        // with nothing ever drawn (the actual BUG-403 symptom) while
-        // the invisible popover still eats clicks under it. Anchored
-        // via `page_offset()` rather than the legacy-only
-        // `toolbar::CHROME_H` constant so the dropdown lines up with
-        // the engine-drawn toolbar's *measured* bottom edge, not an
-        // assumed one — the same class of drift BUG-404 flags for
-        // `flush_pointer_moves`.
-        if !self.focus.active && self.profile_menu.visible {
-            let (_, page_y_offset) = self.page_offset();
-            let mut pm_cmds = panels::profile_menu::build_panel(
-                &self.profile_menu,
-                toolbar::avatar_x(),
-                page_y_offset,
-                &pal,
-            );
-            overlay_buf.append(&mut pm_cmds);
-        }
+        // Tab context menu: `#tabCtxMenu` in the engine chrome (`bind_tab_ctx`).
 
-        // CC-4: tab context menu — drawn above the tab strip.
-        if self.tab_context_menu.is_open() {
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            let mut menu_cmds = tabs::context_menu::build_overlay(
-                &self.tab_context_menu,
-                win_w,
-                win_h,
-            );
-            overlay_buf.append(&mut menu_cmds);
-        }
+        // P3-spell срез 3: page spell suggestion menu.
+        // Now `#pageCtxMenu` in the engine chrome (`bind_page_ctx`).
 
-        // P3-spell срез 3: page spell suggestion menu — drawn above the
-        // page and tab strip like the tab context menu.
-        if self.page_context_menu.is_open() {
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            let mut menu_cmds = self.page_context_menu.build_overlay(win_w, win_h);
-            overlay_buf.append(&mut menu_cmds);
-        }
+        // Focus mode pill: `.focus-timer` in the engine chrome (`bind_focus`).
 
-        // Focus mode widget (task #25): floating Pomodoro card with an
-        // arc progress ring, drawn on top of everything (including where
-        // the now-hidden tab bar was).
-        if self.focus.active {
-            let win_w = self.viewport_width_css();
-            let mut focus_cmds =
-                panels::focus_panel::build_panel(&self.focus, win_w, &pal);
-            overlay_buf.append(&mut focus_cmds);
-        }
-
-        // Picture-in-picture window (task #21) — drawn last so it floats
-        // above all other chrome.
-        if self.pip.active {
-            let mut pip_cmds = panels::pip_window::build_panel(&self.pip, &pal);
-            overlay_buf.append(&mut pip_cmds);
-        }
+        // Picture-in-picture card: `#pipCard` in the engine chrome (`bind_pip`).
 
         // Loading spinner for hibernated tab restore >200ms (10K.3).
         if let Some(start_ms) = self.restore_spinner_start_ms {
@@ -1459,6 +1276,28 @@ impl Lumen {
             }
         }
 
+        // UX-IME-2: preedit text with underline at the caret of the page field.
+        if let Some(mut cmds) = self.ime_preedit_overlay() {
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut cmds);
+            } else {
+                let mut buf = page_buf.take().unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut cmds);
+                page_buf = Some(buf);
+            }
+        }
+
+        // UX-IME-4: preedit text of a focused field inside a frame.
+        if let Some(mut cmds) = self.ime_frame_preedit_overlay() {
+            if let Some(dl) = anim_dl.as_mut() {
+                dl.append(&mut cmds);
+            } else {
+                let mut buf = page_buf.take().unwrap_or_else(|| self.display_list.clone());
+                buf.append(&mut cmds);
+                page_buf = Some(buf);
+            }
+        }
+
         // FRAME-7 остаток (1): caret bar for a focused `<input>`/`<textarea>`
         // INSIDE a frame — a shell-side overlay in PAGE coordinates
         // (`frames::frame_page_origin` translates the rect found in the
@@ -1640,20 +1479,8 @@ impl Lumen {
             }
         }
 
-        // DS-15: Anonymous profile draws a thin red inset outline
-        // around the whole window (design ref: `box-shadow: inset 0
-        // 0 0 2px var(--accent)` on `.app-frame`). Appended last of
-        // all chrome overlays so it sits above every panel/modal —
-        // web content itself is never touched, only the chrome layer.
-        if active_profile_name.as_deref().is_some_and(panels::profile_menu::is_anonymous) {
-            let win_w = self.viewport_width_css();
-            let win_h = self.window_height_css();
-            overlay_buf.append(&mut panels::themes::anonymous_border(
-                win_w,
-                win_h,
-                theme_tokens::profile::ANONYMOUS,
-            ));
-        }
+        // DS-15: the anonymous profile's window outline is `#profileFrame`
+        // in the engine chrome (floating, painted via `chrome_floating_dl`).
 
         if let Some(t0) = frame_log_t0 {
             bmarks[2] = t0.elapsed().as_secs_f64() * 1e3;
