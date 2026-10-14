@@ -1195,7 +1195,8 @@ impl V8JsRuntime {
         }
         install_v8!(web_locks::install_web_locks_bindings_v8);
         install_v8!(web_midi::install_web_midi_api_v8);
-        install_v8!(webrtc_stub::install_webrtc_bindings_v8);
+        // WebRTC is deliberately not installed (COMPAT-API-01-WEBRTC, ADR-034):
+        // no ICE/DTLS/SCTP stack, so `RTCPeerConnection` must stay undeclared.
         // GAP-WEBTRANSPORT срез 2b: needs `fetch_provider` to drive a real
         // Extended CONNECT attempt, so it takes an extra arg like
         // `view_transitions`/`web_audio` above instead of the plain
