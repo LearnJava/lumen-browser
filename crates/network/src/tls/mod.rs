@@ -21,6 +21,7 @@ pub mod ct_logs;
 pub mod fingerprint;
 pub mod ocsp;
 pub mod os_roots;
+pub mod probe;
 pub mod verifier;
 
 pub use fingerprint::{
@@ -131,8 +132,20 @@ pub fn http_to_tls_profile(http: HttpProfile) -> TlsProfile {
 /// - Protocol versions: TLS 1.2 + 1.3 for Standard, TLS 1.3 only for
 ///   Strict and Tor.
 /// - ALPN: h2 + http/1.1 for Standard/Strict; http/1.1 only for Tor.
-#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn build_client_config(profile: TlsProfile, root_store: rustls::RootCertStore) -> ClientConfig {
+    build_client_config_wrapping(profile, root_store, |v| v)
+}
+
+/// [`build_client_config`] with a hook around the verifier: `wrap` receives the
+/// [`LumenVerifier`] built for `root_store` and returns the verifier the config
+/// actually uses. The probe (`tls::probe`, COMPAT-CORPUS-5) wraps it to record
+/// the chain and the stapled OCSP bytes of a handshake it also lets finish.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn build_client_config_wrapping(
+    profile: TlsProfile,
+    root_store: rustls::RootCertStore,
+    wrap: impl FnOnce(Arc<LumenVerifier>) -> Arc<dyn rustls::client::danger::ServerCertVerifier>,
+) -> ClientConfig {
     use rustls::crypto::aws_lc_rs as crypto;
 
     let mut provider = crypto::default_provider();
@@ -205,7 +218,7 @@ pub fn build_client_config(profile: TlsProfile, root_store: rustls::RootCertStor
         .with_protocol_versions(versions)
         .expect("protocol versions valid for the configured cipher suites")
         .dangerous()
-        .with_custom_certificate_verifier(verifier)
+        .with_custom_certificate_verifier(wrap(verifier))
         .with_no_client_auth();
 
     cfg.alpn_protocols = match profile {
