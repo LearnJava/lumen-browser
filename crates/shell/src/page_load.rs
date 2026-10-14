@@ -1577,10 +1577,14 @@ impl Lumen {
                             Some(lumen_core::error::Error::CertInvalid(cert_err)) => {
                                 let host = lumen_core::url::Url::parse(url)
                                     .map_or_else(|_| url.clone(), |u| u.host().to_owned());
+                                // COMPAT-TRUST-CAUSES: the probe and the chain lookup
+                                // block, so they run here, not on the UI thread.
+                                let cause = crate::cert_cause::diagnose(&host, cert_err);
                                 proxy.send_event(LoadEvent::CertError(
                                     url.clone(),
                                     host,
                                     cert_err.clone(),
+                                    cause,
                                     tab_id,
                                     generation,
                                 ))
@@ -3085,9 +3089,10 @@ pub(crate) enum LoadEvent {
     /// return before it collapses to a string). Routes to the cert
     /// interstitial instead of the generic `LoadError` path. Fields: full
     /// navigation URL, hostname (the key `tls::bypass::allow_host` needs for
-    /// "Proceed anyway"), the structured reason, tab id, and generation (U-1);
+    /// "Proceed anyway"), the structured reason, its diagnosed cause
+    /// (COMPAT-TRUST-CAUSES), tab id, and generation (U-1);
     /// see [`Self::EarlyPreloadHints`] (BUG-1214).
-    CertError(String, String, lumen_core::error::CertError, usize, u64),
+    CertError(String, String, lumen_core::error::CertError, crate::cert_cause::CertCause, usize, u64),
     /// UX-SECURITY-UI срез 2: адрес навигации найден в локальной базе Safe
     /// Browsing, загрузка не начата. Поля: URL, хост, имя списка, тип угрозы,
     /// вкладка, поколение.

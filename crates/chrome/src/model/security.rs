@@ -27,6 +27,9 @@ pub struct ChromeSecurityModel {
     /// `true` прячет кнопку «Всё равно перейти» (`.no-proceed`): HSTS-хост и
     /// отозванный сертификат обходу не подлежат (RFC 6797 §8.4, BUG-1615).
     pub proceed_blocked: bool,
+    /// `true` показывает кнопку «Настройки времени Windows» (`.has-time`):
+    /// ошибка вызвана неверными часами компьютера (COMPAT-TRUST-CAUSES).
+    pub time_settings: bool,
 }
 
 pub(super) fn bind_security(doc: &mut Document, sec: &ChromeSecurityModel) {
@@ -34,6 +37,7 @@ pub(super) fn bind_security(doc: &mut Document, sec: &ChromeSecurityModel) {
         set_class_token(doc, bx, "open", sec.open);
         set_class_token(doc, bx, "has-other", sec.other_browser);
         set_class_token(doc, bx, "no-proceed", sec.proceed_blocked);
+        set_class_token(doc, bx, "has-time", sec.time_settings);
     }
     if let Some(n) = doc.find_by_id(crate::ids::SECURITY_TITLE) {
         set_text(doc, n, &sec.title);
@@ -72,6 +76,7 @@ mod tests {
                 proceed_label: String::new(),
                 other_browser: true,
                 proceed_blocked: true,
+                time_settings: true,
             },
             ..ChromeModel::default()
         };
@@ -79,6 +84,7 @@ mod tests {
         assert!(has_class(&doc, bx, "open"));
         assert!(has_class(&doc, bx, "has-other"));
         assert!(has_class(&doc, bx, "no-proceed"));
+        assert!(has_class(&doc, bx, "has-time"));
         bind_model(&mut doc, &ChromeModel::default());
         assert!(!has_class(&doc, bx, "has-other"));
         bind_model(&mut doc, &model);
