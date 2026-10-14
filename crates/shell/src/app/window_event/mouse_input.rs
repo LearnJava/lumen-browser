@@ -79,8 +79,13 @@ impl Lumen {
                     self.request_redraw();
                 }
             }
+        } else if button == MouseButton::Middle {
+            // UX-TAB-CLOSE-FREEZE: a middle click on a tab closes it.
+            if state == ElementState::Pressed {
+                self.close_tab_under_middle_click(event_loop);
+            }
         } else if button != MouseButton::Left {
-            // Middle / back / forward — ignore.
+            // Back / forward — ignore.
         } else if state == ElementState::Pressed {
             // CSS :active — set immediately on press so :active rules apply.
             if self.active_nid != self.hovered_nid {

@@ -817,6 +817,7 @@ fn run_window_mode_inner(
         tab_drag: None,
         dnd_state: None,
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
+        hbar_freeze: None,
         closed_tabs: tabs::closed::ClosedTabs::default(),
         page_context_menu: page_context_menu::PageContextMenu::default(),
         compat_signals,

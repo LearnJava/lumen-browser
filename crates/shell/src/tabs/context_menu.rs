@@ -5,7 +5,7 @@
 //! the engine chrome (`#tabCtxMenu`, UX-CHROME-PANELS); this module owns the
 //! state, the clamped anchor and the row-attribute → [`MenuAction`] mapping.
 //!
-//! Menu items (13): Duplicate / Pin·Unpin / Move to new window / Add to new
+//! Menu items (14): Duplicate / Close / Pin·Unpin / Move to new window / Add to new
 //! group / Collapse·Expand group / Remove from group / Close others / Close
 //! tabs to the right / Reopen closed tab / Open in another browser (four
 //! reasons, COMPAT-HANDOFF). The actual mutations are performed by the shell.
@@ -24,7 +24,7 @@ const CHROME_H: f32 = 10.0 + 4.0 + 2.0;
 
 /// Total menu height in CSS px (background box).
 fn menu_height() -> f32 {
-    ROW_H * 13.0 + CHROME_H
+    ROW_H * 14.0 + CHROME_H
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -36,6 +36,8 @@ pub enum MenuAction {
     ReopenClosed,
     /// Duplicate the target tab (open a copy of its page right after it).
     Duplicate,
+    /// Close the target tab (UX-TAB-CLOSE-FREEZE; freezes the horizontal strip width).
+    Close,
     /// Toggle the pinned flag of the target tab.
     TogglePin,
     /// Move the target tab into a new OS window (Phase 0: new process + close).
@@ -61,6 +63,7 @@ impl MenuAction {
     pub fn from_attr(value: &str) -> Option<Self> {
         Some(match value {
             "duplicate" => Self::Duplicate,
+            "close" => Self::Close,
             "pin" => Self::TogglePin,
             "new-window" => Self::MoveToNewWindow,
             "new-group" => Self::AddToNewGroup,
@@ -200,6 +203,7 @@ mod tests {
     fn row_attrs_map_to_actions() {
         assert_eq!(MenuAction::from_attr("duplicate"), Some(MenuAction::Duplicate));
         assert_eq!(MenuAction::from_attr("pin"), Some(MenuAction::TogglePin));
+        assert_eq!(MenuAction::from_attr("close"), Some(MenuAction::Close));
         assert_eq!(MenuAction::from_attr("reopen"), Some(MenuAction::ReopenClosed));
         assert_eq!(MenuAction::from_attr("nope"), None);
     }

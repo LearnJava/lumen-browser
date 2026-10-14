@@ -18,6 +18,7 @@ mod chrome_incremental_dl;
 mod cli;
 mod css_url_rebase;
 mod form_post_nav;
+mod hbar_strip;
 mod page_pipeline;
 mod page_resources;
 mod screenshot_web_fonts;
