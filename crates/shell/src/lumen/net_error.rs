@@ -28,10 +28,20 @@ impl Lumen {
     /// `load_failed`/`load_error_message` остаются выставленными — на них
     /// опираются `wait{document_ready}` и автоматизация (BUG-308, BUG-438).
     pub(crate) fn show_net_error(&mut self, msg: &str) {
+        self.show_error_page(msg, NetErrorCode::classify(msg));
+    }
+
+    /// Сбой финального pipeline (`RenderDone(Err)`): сеть тут ни при чём, а
+    /// сообщение — внутреннее (шрифт, CSP, разбор), поэтому код всегда
+    /// `ERR_FAILED`, без угадывания по словам вроде «not found».
+    pub(crate) fn show_render_error(&mut self, msg: &str) {
+        self.show_error_page(msg, NetErrorCode::Failed);
+    }
+
+    fn show_error_page(&mut self, msg: &str, code: NetErrorCode) {
         if self.showing_crashed_page().is_some() {
             return;
         }
-        let code = NetErrorCode::classify(msg);
         let original = self.source.clone();
         let retry_url = original.url_str().unwrap_or("").to_owned();
         let auto_retry = self.next_auto_retry(&retry_url, code);

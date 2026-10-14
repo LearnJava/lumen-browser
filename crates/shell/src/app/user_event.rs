@@ -426,6 +426,14 @@ impl Lumen {
                         // drop it rather than let a later unrelated reload
                         // reveal a stale cross-fade.
                         self.pending_mpa_view_transition_snapshot = None;
+                        // COMPAT-ERRORS срез 3: сбой финального pipeline раньше
+                        // оставлял на экране последний streaming-кадр без единого
+                        // слова о причине — теперь тот же экран ошибки, что и у
+                        // `LoadError` (код `ERR_FAILED`, «Повторить» и F5 заново
+                        // грузят исходный адрес).
+                        self.stream_builder = None;
+                        self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                        self.show_render_error(&e);
                     }
                 }
             }

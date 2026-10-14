@@ -64,7 +64,6 @@ pub mod view_transitions;
 pub mod subtle_crypto;
 pub mod temporal_api;
 pub mod webgl_canvas;
-pub mod webrtc_stub;
 pub mod webtransport;
 pub mod worker;
 #[cfg(feature = "v8-backend")]

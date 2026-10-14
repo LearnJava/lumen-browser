@@ -53,3 +53,5 @@ throws `TypeError`). Filed as [BUG-1058](../../bugs/BUG-1058-FIXED.md).
 `null`). Живая проба подтвердила оба факта напрямую и опровергла паттерн
 guard-less-конструктора (`RTCPeerConnection()` без `new` корректно бросает
 `TypeError`) — заведён [BUG-1058](../bugs/BUG-1058-FIXED.md).
+
+**Обновление 2026-10-14 (COMPAT-API-01-WEBRTC):** `crates/js/src/webrtc_stub.rs` удалён — `RTCPeerConnection`, `RTCSessionDescription`, `RTCIceCandidate` больше не объявлены (ADR-034 п.2). Абзацы выше описывают состояние до этого среза; категория `webrtc*` в `docs/wpt/runs/` не пересъёмлялась, её baseline устарел (все тесты теперь падают быстро на `ReferenceError`, а не по TIMEOUT).
