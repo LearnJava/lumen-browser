@@ -354,6 +354,10 @@ fn security_box_detaches_and_routes_its_buttons() {
         press(lumen_chrome::ids::SECURITY_OTHER_BTN),
         Some(lumen_chrome::ChromeAction::SecurityOtherBrowser)
     );
+    assert_eq!(
+        press(lumen_chrome::ids::SECURITY_OTHER_ANY_BTN),
+        Some(lumen_chrome::ChromeAction::SecurityOtherBrowserAny)
+    );
 }
 
 /// UX-CHROME-PANELS срез 21: `#profileFrame` в анонимном профиле отцепляется,
