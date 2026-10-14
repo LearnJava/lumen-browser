@@ -1,0 +1,33 @@
+# Сигнатуры «стен» для проверки 2 краулера паритета (scripts/compat_crawl.py, COMPAT-CORPUS-1).
+# Стена — страница-заслонка вместо контента: проверка браузера, WAF-отказ, «браузер не
+# поддерживается», «включите JavaScript». Проверка 2 падает, если на странице Lumen найдена
+# стена, которой нет у Chrome на том же сайте (сравниваются множества `класс:id`).
+#
+# Формат: <класс> <TAB> <id> <TAB> <регулярное выражение (регистр не важен, Python re)>
+# Классы: challenge (проверка браузера/антибот), captcha, waf (отказ в доступе),
+#         unsupported (браузер не поддерживается/устарел), nojs (нужен JavaScript), geo.
+# Это временное место: целевой дом сигнатур — пакет совместимости (report.md §7.6 п.3, п.4);
+# классификатор поломок один на страницы ошибок, панель сайта и краулер.
+# Строки с # — комментарии; пустые игнорируются; id уникален в пределах файла.
+challenge	cf-just-a-moment	just a moment\.\.\.|checking your browser before accessing|performing security verification
+challenge	cf-ray-block	attention required! \| cloudflare|sorry, you have been blocked
+challenge	cf-enable-js-cookies	enable javascript and cookies to continue
+challenge	ddos-guard	ddos-guard|проверка браузера перед переходом
+challenge	qrator	qrator|защита от ddos|проверяем ваш браузер
+challenge	ru-checking-browser	идёт проверка (вашего )?браузера|проверка безопасности соединения|выполняется проверка (безопасности|браузера)
+challenge	generic-verify-human	verify you are (a )?human|подтвердите,? что вы (не робот|человек)
+challenge	akamai-reference	reference #\d+\.[0-9a-f]+
+captcha	yandex-smartcaptcha	smartcaptcha|вы не робот\?|confirm that you.re not a robot
+captcha	recaptcha-prompt	i.m not a robot|я не робот
+captcha	hcaptcha	hcaptcha|please complete the security check
+waf	access-denied	access denied|you don.t have permission to access|доступ (к (сайту|странице) )?(запрещ[её]н|ограничен)
+waf	request-blocked	request blocked|your request has been blocked|запрос заблокирован|ваш запрос (был )?заблокирован
+waf	forbidden	403 forbidden|error 1020|error 1010|http error 403
+waf	unusual-traffic	unusual traffic from your computer|подозрительн\w+ (трафик|активност)
+unsupported	browser-not-supported	(your|this) browser is (not supported|out of date|outdated|unsupported)|browser not supported|unsupported browser
+unsupported	update-browser	please (upgrade|update) your browser|обновите (свой )?браузер|ваш браузер устарел|устаревш\w+ браузер
+unsupported	use-modern-browser	use a (modern|supported) browser|используйте (современный|поддерживаемый) браузер
+unsupported	browser-not-supported-ru	браузер не поддерживается|ваш браузер не поддерживается
+nojs	enable-javascript	you need to enable javascript|please enable javascript|javascript is (required|disabled)|требуется включить javascript|включите javascript
+nojs	noscript-ru	для работы (сайта )?необходим javascript|для корректной работы (сайта )?включите javascript
+geo	geo-blocked	not available in your (country|region)|недоступен в вашем регионе|доступ из вашей (страны|региона) ограничен
