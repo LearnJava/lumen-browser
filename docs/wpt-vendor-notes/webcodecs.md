@@ -7,3 +7,5 @@ Test category, added 2026-08-09 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 ## Прогон и находки (`docs/wpt-status.md`)
 
 Вендорена целиком 2026-08-09 (`tests/wpt/webcodecs/`, 134 файла), нет аппаратного/софт кодек-конвейера. `run_report.py --all --root webcodecs --recursive --processes=4` (~13 мин, 126 отобранных id): **18/126 harness OK, 27/214 сабтестов**. 103 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](../../bugs/BUG-657-FIXED.md)). Доминирующая находка на исполнившихся тестах — `VideoFrame`/`AudioData` не сохраняют payload источника (конструктор отбрасывает `data`), `VideoFrame.copyTo()`/`.allocationSize()` отсутствуют целиком, `EncodedVideoChunk`/`EncodedAudioChunk.copyTo()` — no-op несмотря на хранимые данные, `VideoColorSpace` не установлен — не требует кодека, заведён [BUG-710](../../bugs/BUG-710-FIXED.md)
+
+**Обновление 2026-10-14 (COMPAT-API-01-WEBCODECS):** `VideoEncoder`/`VideoDecoder`/`AudioEncoder`/`AudioDecoder` больше не объявлены (остались типы данных `VideoFrame`, `AudioData`, `Encoded*Chunk`). Абзацы выше описывают состояние до этого среза; категория `webcodecs` в `docs/wpt/runs/` отсутствует, baseline пересъёмке не подлежит.
