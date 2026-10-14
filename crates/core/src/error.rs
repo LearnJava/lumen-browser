@@ -164,6 +164,23 @@ impl fmt::Display for CertError {
     }
 }
 
+impl Error {
+    /// Сбой сети с кодом, известным в месте возникновения.
+    #[must_use]
+    pub fn net_failure(code: crate::net_error::NetErrorCode, message: impl Into<String>) -> Self {
+        Self::NetFailure { code, message: message.into() }
+    }
+
+    /// Сбой ввода-вывода сокета: код берётся из `io::Error` (номер ОС, затем
+    /// `ErrorKind`), а если вид ничего не говорит — `fallback`. Текст —
+    /// `"{context}: {err}"`, как у прежних `Error::Network(format!(..))`.
+    #[must_use]
+    pub fn net_io(context: &str, err: &std::io::Error, fallback: crate::net_error::NetErrorCode) -> Self {
+        let code = crate::net_error::NetErrorCode::from_io(err).unwrap_or(fallback);
+        Self::NetFailure { code, message: format!("{context}: {err}") }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

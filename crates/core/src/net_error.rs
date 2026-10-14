@@ -282,6 +282,18 @@ mod tests {
     }
 
     #[test]
+    fn net_io_prefers_the_io_code_over_the_fallback() {
+        use std::io::{Error as IoError, ErrorKind};
+        let reset = IoError::new(ErrorKind::ConnectionReset, "x");
+        let e = crate::error::Error::net_io("read body", &reset, NetErrorCode::InvalidResponse);
+        assert_eq!(NetErrorCode::of_error(&e), NetErrorCode::ConnectionReset);
+        let opaque = IoError::new(ErrorKind::InvalidData, "x");
+        let e = crate::error::Error::net_io("TLS handshake", &opaque, NetErrorCode::SslProtocolError);
+        assert_eq!(NetErrorCode::of_error(&e), NetErrorCode::SslProtocolError);
+        assert_eq!(e.to_string(), "network error: TLS handshake: x");
+    }
+
+    #[test]
     fn names_follow_chromium() {
         assert_eq!(NetErrorCode::NameNotResolved.name(), "ERR_NAME_NOT_RESOLVED");
         assert_eq!(NetErrorCode::Failed.name(), "ERR_FAILED");

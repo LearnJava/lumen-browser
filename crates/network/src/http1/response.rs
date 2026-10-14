@@ -4,8 +4,10 @@
 use std::io::{BufRead, Read};
 
 use lumen_core::error::{Error, Result};
+use lumen_core::net_error::NetErrorCode;
 
 use crate::http1::chunked::{read_body_to_eof, read_chunked};
+use crate::http1::read_failure;
 use crate::{Connection, Response, header_value};
 
 /// Разобранная head-секция ответа: `(status, headers, server_wants_close,
@@ -50,10 +52,10 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
         let n = conn
             .reader
             .read_line(&mut status_line)
-            .map_err(|e| Error::Network(format!("read status: {e}")))?;
+            .map_err(|e| read_failure("read status", &e))?;
         if n == 0 {
             conn.closed = true;
-            return Err(Error::Network("EOF before status line".to_owned()));
+            return Err(Error::net_failure(NetErrorCode::ConnectionClosed, "EOF before status line"));
         }
         let status = parse_status(&status_line)?;
 
@@ -64,10 +66,10 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
             let n = conn
                 .reader
                 .read_line(&mut line)
-                .map_err(|e| Error::Network(format!("read header: {e}")))?;
+                .map_err(|e| read_failure("read header", &e))?;
             if n == 0 {
                 conn.closed = true;
-                return Err(Error::Network("EOF in headers".to_owned()));
+                return Err(Error::net_failure(NetErrorCode::ConnectionClosed, "EOF in headers"));
             }
             let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
@@ -139,7 +141,7 @@ pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
         let mut buf = vec![0u8; len];
         if let Err(e) = conn.reader.read_exact(&mut buf) {
             conn.closed = true;
-            return Err(Error::Network(format!("read body: {e}")));
+            return Err(read_failure("read body", &e));
         }
         buf
     } else if status == 204 || status == 304 {
@@ -174,6 +176,6 @@ pub(crate) fn parse_status(line: &str) -> Result<u16> {
     let code = parts
         .next()
         .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| Error::Network(format!("bad status line: {line:?}")))?;
+        .ok_or_else(|| Error::net_failure(NetErrorCode::InvalidResponse, format!("bad status line: {line:?}")))?;
     Ok(code)
 }

@@ -1441,7 +1441,7 @@ fn connect_inner(
     }
 
     let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+        .map_err(|e| net_failure(NetErrorCode::InvalidUrl, format!("invalid hostname '{host}': {e}")))?;
 
     let config = if force_h1 {
         tls_config_h1_for_profile(tls_profile)
@@ -1449,7 +1449,7 @@ fn connect_inner(
         tls_config_for_profile(tls_profile)
     };
     let mut conn = ClientConnection::new(config, server_name)
-        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+        .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("TLS handshake: {e}")))?;
 
     // BUG-935 (S9): callers that want an unbounded post-connect read (WS/SSE,
     // which pass `read_timeout: None` so the long-lived body can idle
@@ -1599,7 +1599,7 @@ pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::Cl
 fn handshake_io_error(context: &str, e: std::io::Error) -> Error {
     match tls::cert_error::from_io_error(&e) {
         Some(cert_err) => Error::CertInvalid(cert_err),
-        None => Error::Network(format!("{context}: {e}")),
+        None => Error::net_io(context, &e, NetErrorCode::SslProtocolError),
     }
 }
 
@@ -1610,10 +1610,10 @@ fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<bool> {
     match alpn {
         None | Some(b"http/1.1") => Ok(false),
         Some(b"h2") => Ok(true),
-        Some(other) => Err(Error::Network(format!(
-            "unexpected ALPN protocol: {:?}",
-            String::from_utf8_lossy(other),
-        ))),
+        Some(other) => Err(net_failure(
+            NetErrorCode::SslProtocolError,
+            format!("unexpected ALPN protocol: {:?}", String::from_utf8_lossy(other)),
+        )),
     }
 }
 
@@ -1917,17 +1917,17 @@ fn fetch_single(
                 let full_request = format!("{}{}\r\n", connect_request, auth_header);
 
                 stream.write_all(full_request.as_bytes())
-                    .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
+                    .map_err(|e| http1::write_failure("write CONNECT request", &e))?;
                 stream.flush()
-                    .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
+                    .map_err(|e| http1::write_failure("flush CONNECT request", &e))?;
 
                 // Читаем ответ на CONNECT (должен быть 200 OK).
                 let mut reader = BufReader::new(stream);
                 let mut status_line = String::new();
                 let n = reader.read_line(&mut status_line)
-                    .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
+                    .map_err(|e| http1::read_failure("read CONNECT status", &e))?;
                 if n == 0 {
-                    return Err(Error::Network("EOF before CONNECT status line".to_owned()));
+                    return Err(net_failure(NetErrorCode::ConnectionClosed, "EOF before CONNECT status line".to_owned()));
                 }
 
                 if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
@@ -1938,7 +1938,7 @@ fn fetch_single(
                 loop {
                     let mut line = String::new();
                     let n = reader.read_line(&mut line)
-                        .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
+                        .map_err(|e| http1::read_failure("read CONNECT header", &e))?;
                     if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
                         break;
                     }
@@ -1954,11 +1954,11 @@ fn fetch_single(
                 };
 
                 let server_name = ServerName::try_from(host.to_owned())
-                    .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+                    .map_err(|e| net_failure(NetErrorCode::InvalidUrl, format!("invalid hostname '{host}': {e}")))?;
 
                 let tls_config = tls_config_for_profile(tls_profile);
                 let mut tls_conn = ClientConnection::new(tls_config, server_name)
-                    .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+                    .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("TLS handshake: {e}")))?;
 
                 let mut tcp_copy = tcp;
                 tls_conn.complete_io(&mut tcp_copy)
@@ -8783,8 +8783,11 @@ mod tests {
     fn handshake_io_error_falls_back_to_network_for_non_cert_failure() {
         let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls::Error::DecryptError);
         match handshake_io_error("TLS handshake", io_err) {
-            Error::Network(msg) => assert!(msg.starts_with("TLS handshake: ")),
-            other => panic!("expected Error::Network, got {other:?}"),
+            Error::NetFailure { code, message } => {
+                assert!(message.starts_with("TLS handshake: "));
+                assert_eq!(code, NetErrorCode::SslProtocolError);
+            }
+            other => panic!("expected Error::NetFailure, got {other:?}"),
         }
     }
 
