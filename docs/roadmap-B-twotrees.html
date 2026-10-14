@@ -8859,9 +8859,19 @@
         {
          "id": "COMPAT-CORPUS-4",
          "title": "Стенд G: ≥15 страниц антибот-проверок, GPR",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Сейчас проверка капч разовая и ручная (UX-ANTIBOT, ROADMAP:1108: reCAPTCHA и hCaptcha рисуются, Turnstile сломан — BUG-1595 OPEN). Объём: ≥15 страниц — Turnstile, CF managed challenge, reCAPTCHA v2/v3, hCaptcha, SmartCaptcha, DataDome, Akamai, Imperva, DDoS-Guard, Qrator, Anubis; вердикт на страницу: пройдено / петля (тот же challenge ≥3 раз в минуту) / виджет не отрисован / отказ; балл v3; капчи не решаются; эталон — Chrome той же версии. Ночью, регрессия блокирует релиз. Приёмка: база GPR на ≥15 страницах и балл v3 записаны, на стенде можно гонять A/B 2×2 идентичности. Источник: docs/research/site-compat/report.md §7.8; areas/03 ID-13."
+         "note": "ЗАКРЫТ 2026-10-14 (ветка p2-compat-corpus-4-s2): стенд scripts/captcha_stand.py и корпус docs/perf/corpus-captcha.tsv (20 страниц, 12 вендоров) готовы, плечо Chrome снято — docs/perf/runs/2026-10-14-captcha-chrome.json: GPR 14/20 = 0.70, балл reCAPTCHA v3 = 0.9 (маршрут home-direct, Chrome из кэша Playwright). Плечо Lumen, база GPR Lumen и ночной прогон вынесены в COMPAT-CORPUS-4-BASE: живое окно не отдаёт первый кадр (BUG-1629), на старом бинаре 19 из 20 страниц — «отказ» из-за таймаута navigate. Исходная постановка: Сейчас проверка капч разовая и ручная (UX-ANTIBOT, ROADMAP:1108: reCAPTCHA и hCaptcha рисуются, Turnstile сломан — BUG-1595 OPEN). Объём: ≥15 страниц — Turnstile, CF managed challenge, reCAPTCHA v2/v3, hCaptcha, SmartCaptcha, DataDome, Akamai, Imperva, DDoS-Guard, Qrator, Anubis; вердикт на страницу: пройдено / петля (тот же challenge ≥3 раз в минуту) / виджет не отрисован / отказ; балл v3; капчи не решаются; эталон — Chrome той же версии. Ночью, регрессия блокирует релиз. Приёмка: база GPR на ≥15 страницах и балл v3 записаны, на стенде можно гонять A/B 2×2 идентичности. Источник: docs/research/site-compat/report.md §7.8; areas/03 ID-13."
+        },
+        {
+         "id": "COMPAT-CORPUS-4-BASE",
+         "title": "Стенд G: база GPR Lumen, A/B 2×2, ночной прогон",
+         "status": "planned",
+         "size": "S",
+         "note": "Стенд G (COMPAT-CORPUS-4) снят только на Chrome. Объём: `python scripts/captcha_stand.py --arm lumen --route home-direct` на том же корпусе, `--compare docs/perf/runs/2026-10-14-captcha-chrome.json`, базу GPR Lumen и балл v3 записать в docs/perf/runs/ и docs/perf/journal.md; затем A/B 2×2 идентичности через `--env LUMEN_IDENTITY=chrome_lumen\\|chrome_unbranded` (COMPAT-AB-IDENTITY-KNOB); ночной прогон с `--baseline` и блокировкой релиза при падении «пройдено» — на машине владельца (COMPAT-BIZ). Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`, `navigate` на example.com 47 с). Приёмка: GPR Lumen на ≥15 страницах и балл v3 записаны.",
+         "bugs": [
+          "BUG-1629"
+         ]
         },
         {
          "id": "COMPAT-CORPUS-2",
@@ -23011,9 +23021,6 @@
   ],
   "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
    "BUG-1355"
-  ],
-  "shell/mcp (живое окно `--mcp-live-port`)": [
-   "BUG-1629"
   ],
   "shell/network": [
    "BUG-234"
