@@ -466,7 +466,11 @@ impl Lumen {
                 // the user sees is "your connection is not private", not a
                 // raw network-error string.
                 self.load_failed = true;
-                self.cert_interstitial.open(url, host, cert_err);
+                // BUG-1615: a Known HSTS Host gets no "Proceed anyway".
+                let hsts_host = crate::config::global()
+                    .apply_http(lumen_network::HttpClient::new())
+                    .is_known_hsts_host(&host);
+                self.cert_interstitial.open(url, host, cert_err, hsts_host);
                 let msg = self.cert_interstitial.reason_text().unwrap_or_default();
                 self.load_error_message = Some(msg.clone());
                 click_log::log_load_err(&self.source.describe(), &msg);

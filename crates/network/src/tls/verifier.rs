@@ -90,6 +90,27 @@ impl LumenVerifier {
     }
 }
 
+/// Combine webpki's chain verdict, the stapled-OCSP verdict and the user's
+/// "Proceed anyway" override into the handshake result.
+///
+/// A6: a bypass turns a chain failure into a pass. BUG-1615: it never
+/// overrides `Revoked` — a revoked certificate is not a configuration
+/// mistake the user can accept (the bypass registry also refuses HSTS hosts,
+/// RFC 6797 §8.4, see [`bypass::allow_host`]).
+fn apply_bypass_policy(
+    chain_result: Result<ServerCertVerified, RustlsError>,
+    ocsp_verdict: OcspVerdict,
+    bypassed: bool,
+) -> Result<ServerCertVerified, RustlsError> {
+    if ocsp_verdict == OcspVerdict::Revoked {
+        return Err(RustlsError::InvalidCertificate(CertificateError::Revoked));
+    }
+    match chain_result {
+        Err(_) if bypassed => Ok(ServerCertVerified::assertion()),
+        other => other,
+    }
+}
+
 impl ServerCertVerifier for LumenVerifier {
     fn verify_server_cert(
         &self,
@@ -102,23 +123,11 @@ impl ServerCertVerifier for LumenVerifier {
         let chain_result =
             self.inner
                 .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
-        let verified = match chain_result {
-            Ok(v) => v,
-            Err(_) if bypass::is_allowed(&server_name_host(server_name)) => {
-                // A6: user already clicked "Proceed anyway" for this host —
-                // accept without re-validating anything else below either.
-                return Ok(ServerCertVerified::assertion());
-            }
-            Err(e) => return Err(e),
-        };
         // A3: layer the stapled-OCSP revocation check on top of webpki's chain trust.
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
-        if ocsp::parse_stapled_response(ocsp_response) == OcspVerdict::Revoked
-            && !bypass::is_allowed(&server_name_host(server_name))
-        {
-            return Err(RustlsError::InvalidCertificate(CertificateError::Revoked));
-        }
-        Ok(verified)
+        let ocsp_verdict = ocsp::parse_stapled_response(ocsp_response);
+        let bypassed = bypass::is_allowed(&server_name_host(server_name));
+        apply_bypass_policy(chain_result, ocsp_verdict, bypassed)
     }
 
     fn verify_tls12_signature(
@@ -181,5 +190,27 @@ mod tests {
     fn server_name_host_reads_ip_address() {
         let name = ServerName::try_from("127.0.0.1").expect("valid IP address");
         assert_eq!(server_name_host(&name), "127.0.0.1");
+    }
+
+    #[test]
+    fn bypass_does_not_override_revoked() {
+        let chain = Ok(ServerCertVerified::assertion());
+        assert!(matches!(
+            apply_bypass_policy(chain, OcspVerdict::Revoked, true),
+            Err(RustlsError::InvalidCertificate(CertificateError::Revoked))
+        ));
+        let bad_chain = Err(RustlsError::InvalidCertificate(CertificateError::Expired));
+        assert!(matches!(
+            apply_bypass_policy(bad_chain, OcspVerdict::Revoked, true),
+            Err(RustlsError::InvalidCertificate(CertificateError::Revoked))
+        ));
+    }
+
+    #[test]
+    fn bypass_overrides_chain_failure_only_when_set() {
+        let bad = || Err(RustlsError::InvalidCertificate(CertificateError::Expired));
+        assert!(apply_bypass_policy(bad(), OcspVerdict::Good, true).is_ok());
+        assert!(apply_bypass_policy(bad(), OcspVerdict::Good, false).is_err());
+        assert!(apply_bypass_policy(Ok(ServerCertVerified::assertion()), OcspVerdict::Good, false).is_ok());
     }
 }

@@ -27,15 +27,32 @@ fn registry() -> &'static RwLock<HashSet<String>> {
 /// handshake to this exact hostname (case-sensitive; callers should pass an
 /// already-lowercased host, as DNS names conventionally are) skips cert
 /// verification failures instead of hard-failing.
-pub fn allow_host(host: &str) {
+///
+/// BUG-1615: a Known HSTS Host must never be bypassable (RFC 6797 §8.4/§12.1),
+/// so a host on the built-in preload list is refused here and `false` is
+/// returned. Learned (dynamic) HSTS entries live in the shell's store, which
+/// the caller checks before getting here
+/// ([`HttpClient::is_known_hsts_host`](crate::HttpClient::is_known_hsts_host)).
+pub fn allow_host(host: &str) -> bool {
+    if is_hsts_preloaded(host) {
+        return false;
+    }
     if let Ok(mut set) = registry().write() {
         set.insert(host.to_owned());
+        return true;
     }
+    false
 }
 
 /// Whether `host` has an active "Proceed anyway" override for this session.
+/// Always `false` for a preloaded HSTS host, even if it was recorded some
+/// other way.
 pub fn is_allowed(host: &str) -> bool {
-    registry().read().is_ok_and(|set| set.contains(host))
+    !is_hsts_preloaded(host) && registry().read().is_ok_and(|set| set.contains(host))
+}
+
+fn is_hsts_preloaded(host: &str) -> bool {
+    crate::get_preload_list().is_preloaded(host)
 }
 
 /// Clear every recorded override. Test-only — production has no UI to revoke
@@ -79,5 +96,15 @@ mod tests {
         allow_host("temp.example");
         clear_for_test();
         assert!(!is_allowed("temp.example"));
+    }
+
+    #[test]
+    fn preloaded_hsts_host_is_never_bypassed() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_for_test();
+        // Any host from the embedded preload list; google.com is in it.
+        assert!(crate::get_preload_list().is_preloaded("google.com"));
+        assert!(!allow_host("google.com"));
+        assert!(!is_allowed("google.com"));
     }
 }
