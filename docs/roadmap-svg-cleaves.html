@@ -55,10 +55,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-14",
+ "generated": "2026-10-15",
  "counts": {
-  "open": 400,
-  "fixed": 1167,
+  "open": 399,
+  "fixed": 1168,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -5856,7 +5856,7 @@
       {
        "id": "TEST-9-S1",
        "title": "TEST-9-S1: GPU-подмножество и self-test графтестов",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "graphic_tests/run.py: константа GPU_CAPTURE с id из строки TEST-9, функция capture_mode_for и флаг --self-test, исправлены устаревшие докстринги. Поведение захвата не меняется. Бриф [docs/tasks/TEST-9-S1.md](docs/tasks/TEST-9-S1.md)"
       },
@@ -8483,9 +8483,9 @@
       {
        "id": "UX-TAB-CLOSE-FREEZE",
        "title": "Закрытие вкладок мышью и заморозка ширины полосы",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "В горизонтальной полосе (по умолчанию, browser_settings.rs:55) вкладку мышью не закрыть: у .hbar-tab нет × (chrome/src/model.rs:2934-2961), средний клик игнорируется (mouse_input.rs:78-79), в меню вкладки нет «Закрыть» (chrome.html:1724-1732); ширина по заголовку 110–200 px (chrome.html:269-273). Объём: × на вкладках (на неактивных прятать при ширине <68 px, зона ≥16×16 px), средний клик закрывает, «Закрыть» в меню; равная ширина; заморозка ширины после закрытия мышью, пока курсор в полосе (+40 px по вертикали, +60 по горизонтали), сброс по уходу курсора, новой вкладке, ресайзу. Приёмка: 5 кликов в одной точке закрывают 5 соседних вкладок. docs/research/browser-ux/report.md §6 №9, §9 №25 Исследование — docs/research/browser-ux/report.md."
+       "note": "**Сделано (2026-10-15, ветка `p6-ux-tab-close-freeze-2`):** у `.hbar-tab` есть × (`close-tab`, на активной и при hover), средний клик по вкладке закрывает её (`close_tab_under_middle_click`), в меню вкладки пункт «Закрыть», вкладки равной ширины (flex, 72–200 px, `ChromeModel::hbar_tab_width`), после закрытия мышью ширина замораживается (`shell/src/tabs/strip_freeze.rs`) до ухода курсора из полосы (+60 px по горизонтали, +40 по вертикали), новой вкладки или ресайза. Не делалось: «прятать × на неактивных при <68 px» — при min-width 72 px условие не достигается. Живая проверка «5 кликов в одной точке» не выполнена (раскладка проверена тестом `tests::hbar_strip`). Исходное описание: В горизонтальной полосе (по умолчанию, browser_settings.rs:55) вкладку мышью не закрыть: у .hbar-tab нет × (chrome/src/model.rs:2934-2961), средний клик игнорируется (mouse_input.rs:78-79), в меню вкладки нет «Закрыть» (chrome.html:1724-1732); ширина по заголовку 110–200 px (chrome.html:269-273). Объём: × на вкладках (на неактивных прятать при ширине <68 px, зона ≥16×16 px), средний клик закрывает, «Закрыть» в меню; равная ширина; заморозка ширины после закрытия мышью, пока курсор в полосе (+40 px по вертикали, +60 по горизонтали), сброс по уходу курсора, новой вкладке, ресайзу. Приёмка: 5 кликов в одной точке закрывают 5 соседних вкладок. docs/research/browser-ux/report.md §6 №9, §9 №25 Исследование — docs/research/browser-ux/report.md."
       },
       {
        "id": "UX-FOCUS-ARBITER",
@@ -10102,13 +10102,6 @@
    "status": "open",
    "title": "Процентные `margin`/`padding` grid-item считаются от ширины контейнера, а не grid-области (`margin-left:30%` при области 200 в контейнере 300 → 90 вместо 60). W…",
    "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — база `%` у item'а)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1609": {
-   "status": "open",
-   "title": "остаток BUG-1311: `<input type=checkbox/radio/range>`, `<button>`, текстовый input в grid-области не растягиваются ни при `normal`, ни при явном `stretch` (chec…",
-   "component": "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs` — `post_final_item`, form controls)",
    "date": null,
    "debtor": false
   },
@@ -20135,6 +20128,13 @@
    "component": "js (`crates/js/src/navigator_bindings.rs:372`, `temporal_api.rs:585`)",
    "date": "2026-10-14",
    "debtor": false
+  },
+  "BUG-1609": {
+   "status": "fixed",
+   "title": "нативные контролы без пропорции (checkbox/radio/range, `<button>`, текстовые поля, select/textarea) не растягивались в grid-области; UA-размер помечен `width_is…",
+   "component": "layout (`grid_trampoline.rs` — `post_final_item`, `ua.rs` — `apply_ua_form_controls`)",
+   "date": "2026-10-14",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -21801,9 +21801,6 @@
   "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs::post_final_item`)": [
    "BUG-644"
   ],
-  "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs` — `post_final_item`, form controls)": [
-   "BUG-1609"
-  ],
   "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs` — финальная раскладка grid-item, растянутого по строке)": [
    "BUG-1414"
   ],
@@ -22183,6 +22180,9 @@
   ],
   "layout (`grid_trampoline.rs` — `post_final_item`, `build.rs` — `<canvas>`)": [
    "BUG-1311"
+  ],
+  "layout (`grid_trampoline.rs` — `post_final_item`, `ua.rs` — `apply_ua_form_controls`)": [
+   "BUG-1609"
   ],
   "layout (`offset-path` кроме `path()`/`ray()`: ничего не делает)": [
    "BUG-1588"

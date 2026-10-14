@@ -325,6 +325,26 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// UX-TAB-CLOSE-FREEZE: middle click on a tab in the engine-drawn strip
+    /// closes it (resolved through the chrome hit-test + `data-tab-id`, like
+    /// the right-click menu), freezing the horizontal strip's tab width.
+    pub(crate) fn close_tab_under_middle_click(&mut self, event_loop: &crate::browser_thread::MainHandle<'_>) {
+        if self.page_dialog.is_some() || self.tab_context_menu.is_open() || self.page_context_menu.is_open() {
+            return;
+        }
+        let Some(cursor) = self.cursor_position else { return };
+        let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
+        let (x_css, y_css) = ((cursor.x as f32) / dpr, (cursor.y as f32) / dpr);
+        let tab_id = self
+            .chrome_hit_test(x_css, y_css)
+            .and_then(|hit| hit.path.iter().find_map(|&nid| self.chrome_data_id(nid, "data-tab-id")));
+        let Some(id) = tab_id else { return };
+        if let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize) {
+            self.freeze_hbar_for_close(id as usize);
+            self.close_tab(idx, event_loop);
+        }
+    }
+
     /// Execute a tab context-menu action (CC-4) on `tab_context_menu.target_idx`.
     pub(crate) fn exec_tab_menu_action(
         &mut self,
@@ -342,6 +362,10 @@ impl Lumen {
                 self.request_redraw();
             }
             MenuAction::Duplicate => self.duplicate_tab(idx),
+            MenuAction::Close => {
+                self.freeze_hbar_for_close(self.tab_strip.tabs[idx].id);
+                self.close_tab(idx, event_loop);
+            }
             MenuAction::ReopenClosed => self.reopen_closed_tab(),
             MenuAction::OpenInOtherBrowser(reason) => {
                 // The handoff reads the active page's URL: bring the target

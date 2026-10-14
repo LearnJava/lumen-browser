@@ -71,6 +71,7 @@ impl Lumen {
         if self.dom_inspector.visible {
             self.dom_inspector.set_network_entries(self.network_panel.entries_clone());
         }
+        self.refresh_hbar_freeze();
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
         // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
@@ -940,6 +941,7 @@ impl Lumen {
                 .page_context_menu
                 .chrome_model(self.viewport_width_css(), self.window_height_css()),
             workspace_bar_open: self.workspace_panel.visible,
+            hbar_tab_width: self.hbar_freeze.map(|f| f.width),
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1043,6 +1045,56 @@ impl Lumen {
     /// sidebar tab list.
     pub(crate) fn chrome_sb_tabs_rect(&self) -> Option<Rect> {
         self.chrome_node_rect(lumen_chrome::ids::SB_TABS)
+    }
+
+    /// UX-TAB-CLOSE-FREEZE: pins the horizontal strip to the width tab
+    /// `tab_id` has right now, so the neighbour that slides under the cursor
+    /// after the close is exactly as wide. Call *before* the tab is closed by
+    /// a mouse action. No-op when the horizontal strip is not on screen.
+    pub(crate) fn freeze_hbar_for_close(&mut self, tab_id: usize) {
+        if self.vertical_tabs.visible || self.tree_tabs.visible {
+            return;
+        }
+        let width = (|| {
+            let (doc, _) = self.chrome_doc.as_ref()?;
+            let (layout, _) = self.chrome_layout.as_ref()?;
+            let strip = doc.find_by_id(lumen_chrome::ids::HBAR_TABS)?;
+            let want = tab_id.to_string();
+            let row = doc.get(strip).children.iter().copied().find(|&c| {
+                let attrs = doc.get(c);
+                attrs.get_attr("data-tab-id") == Some(want.as_str())
+                    && attrs.get_attr("class").is_some_and(|cl| cl.split_whitespace().any(|t| t == "hbar-tab"))
+            })?;
+            lumen_layout::find_box_by_node(layout, row).map(|b| b.rect.width)
+        })();
+        if let Some(w) = width.filter(|w| *w > 0.0) {
+            self.hbar_freeze = Some(tabs::strip_freeze::HbarFreeze::new(w, self.tab_strip.len(), self.viewport_width_css()));
+        }
+    }
+
+    /// UX-TAB-CLOSE-FREEZE: drops a stale freeze (tab opened, window resized)
+    /// before the chrome model is rebuilt.
+    pub(crate) fn refresh_hbar_freeze(&mut self) {
+        if let Some(mut freeze) = self.hbar_freeze {
+            let keep = freeze.keep(self.tab_strip.len(), self.viewport_width_css());
+            self.hbar_freeze = keep.then_some(freeze);
+        }
+    }
+
+    /// UX-TAB-CLOSE-FREEZE: releases the freeze once the cursor leaves the
+    /// strip's zone (strip rect + 60 px sideways, 40 px up/down).
+    pub(crate) fn release_hbar_freeze_if_outside(&mut self, x_css: f32, y_css: f32) {
+        if self.hbar_freeze.is_none() {
+            return;
+        }
+        let inside = self
+            .chrome_node_rect(lumen_chrome::ids::HBAR_TABS)
+            .is_some_and(|r| tabs::strip_freeze::in_freeze_zone((r.x, r.y, r.width, r.height), x_css, y_css));
+        if !inside {
+            self.hbar_freeze = None;
+            self.relayout_chrome_host();
+            self.request_redraw();
+        }
     }
 
     /// `true` when `nid` is the chrome element with DOM id `id`.
@@ -1693,6 +1745,7 @@ impl Lumen {
                 if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
                     && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
                 {
+                    self.freeze_hbar_for_close(id as usize);
                     self.close_tab(idx, event_loop);
                 }
             }
