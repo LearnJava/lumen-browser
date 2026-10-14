@@ -32,7 +32,7 @@ mod frame_links;
 mod frame_text_input;
 mod gestures;
 mod handoff;
-mod signals;
+pub(crate) mod signals;
 mod hibernation;
 mod hint_mode;
 mod keyboard;
