@@ -465,6 +465,10 @@ pub(crate) struct Lumen {
     /// than an unexpected shift). `f32::NEG_INFINITY` until the first input,
     /// so `had_input` reads `false` for the entire pre-interaction period.
     pub(crate) last_input_epoch_s: f32,
+    /// UX-PAGE-KEYDOWN: physical keys whose `keydown` reached the page and
+    /// whose release is still due — each one owes the page a `keyup`
+    /// (see `lumen/page_keys.rs`).
+    pub(crate) page_keys_down: Vec<KeyCode>,
     /// GAP-CSSANIM срез 1: queue of `transitionrun`/`transitionstart`/
     /// `transitionend`/`transitioncancel` events the page's `TransitionScheduler`
     /// produced (`sync()` in `apply_relayout_result`, `tick()` in

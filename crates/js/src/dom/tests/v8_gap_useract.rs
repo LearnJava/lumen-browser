@@ -111,3 +111,42 @@ fn requiring_user_activation_gate_reflects_real_state() {
     let rejected = rt.eval("(function(){ try { requireUserActivation(); return false; } catch (e) { return true; } })()").unwrap();
     assert_eq!(rejected, lumen_core::JsValue::Bool(false), "fresh gesture: gate must pass");
 }
+
+#[test]
+fn escape_and_keyup_do_not_activate() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval("_lumen_dispatch_key_event(_lumen_root_nid, 'keydown', 'Escape', 'Escape', 27, 0, 0, false, false);")
+        .unwrap();
+    assert!(!is_active(&rt), "Escape is not an activation-triggering key (HTML LS §6.4.1)");
+    rt.eval("_lumen_dispatch_key_event(_lumen_root_nid, 'keyup', 'a', 'KeyA', 65, 0, 0, false, false);")
+        .unwrap();
+    assert!(!is_active(&rt), "only keydown activates, never keyup");
+}
+
+/// UX-PAGE-KEYDOWN: the shell sends every physical key through this entry
+/// point and reads the answer — `false` = the page cancelled `keydown`.
+#[test]
+fn trusted_keydown_reports_prevent_default_and_carries_key_fields() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(
+        "var seen = []; \
+         document.addEventListener('keydown', function(e) { \
+             seen.push([e.key, e.code, e.keyCode, e.location, e.shiftKey, e.ctrlKey, e.repeat, e.isTrusted].join('|')); \
+             if (e.code === 'Space') e.preventDefault(); \
+         });",
+    )
+    .unwrap();
+    let plain = rt
+        .eval("_lumen_dispatch_key_event(_lumen_root_nid, 'keydown', 'j', 'KeyJ', 74, 0, 2, true, false)")
+        .unwrap();
+    assert_eq!(plain, lumen_core::JsValue::Bool(true));
+    let prevented = rt
+        .eval("_lumen_dispatch_key_event(_lumen_root_nid, 'keydown', ' ', 'Space', 32, 0, 0, false, false)")
+        .unwrap();
+    assert_eq!(prevented, lumen_core::JsValue::Bool(false), "preventDefault must reach the shell");
+    let seen = rt.eval("seen.join(';')").unwrap();
+    assert_eq!(
+        seen,
+        lumen_core::JsValue::String("j|KeyJ|74|0|true|false|true|true; |Space|32|0|false|false|false|true".to_owned())
+    );
+}
