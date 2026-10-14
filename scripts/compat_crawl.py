@@ -14,7 +14,7 @@ Lumen (живое окно, MCP) и Chrome (CDP, свой изолированн
 
   1 status      итоговый HTTP-статус того же класса (2xx/3xx/4xx/5xx), что у Chrome;
   2 walls       нет стены (проверка браузера, WAF, «не поддерживается», пустой белый
-                экран), которой нет у Chrome; сигнатуры — docs/compat/wall-signatures.txt;
+                экран), которой нет у Chrome; классификатор — scripts/wall_signatures.py;
   3 exceptions  нет новых необработанных исключений / console.error (по нормализованному
                 тексту): сигнатуры Lumen минус сигнатуры Chrome;
   4 pixels      доля отличающихся блоков кадра ниже порога после маскировки динамики
@@ -60,13 +60,13 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import chrome_interaction_baseline as cib  # noqa: E402
 import perf_audit as pa  # noqa: E402
+import wall_signatures as ws  # noqa: E402
 from bench_chromium import WS, free_port  # noqa: E402
 
 DEFAULT_CORPORA = [
     REPO_ROOT / "docs" / "perf" / "corpus.txt",
     REPO_ROOT / "docs" / "perf" / "corpus-top100-foreign.txt",
 ]
-DEFAULT_SIGNATURES = REPO_ROOT / "docs" / "compat" / "wall-signatures.txt"
 OUT_ROOT = REPO_ROOT / ".tmp" / "compat-crawl"
 
 CHECKS = ("status", "walls", "exceptions", "pixels", "a11y")
@@ -128,31 +128,22 @@ def check_status(chrome: dict, lumen: dict) -> dict:
     return {"ok": c == l, "detail": f"chrome={chrome.get('http_status')} lumen={lumen.get('http_status')}"}
 
 
-def load_wall_signatures(path: Path) -> list[tuple[str, str, re.Pattern]]:
-    """Файл сигнатур -> [(класс, id, regex)]; битая строка — ошибка, а не тихий пропуск."""
-    out, seen = [], set()
-    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3 or not all(p.strip() for p in parts):
-            raise ValueError(f"{path}:{n}: ожидается `класс<TAB>id<TAB>regex`")
-        cls, sid, rx = (p.strip() for p in parts)
-        if sid in seen:
-            raise ValueError(f"{path}:{n}: повторный id {sid}")
-        seen.add(sid)
-        out.append((cls, sid, re.compile(rx, re.IGNORECASE)))
-    return out
+def wall_hits(snap: dict) -> set[str]:
+    """Стены на снимке плеча: `жёсткая|мягкая:id сигнала` по общему классификатору.
+
+    Тексту доверяем и как телу, и как видимому тексту: сырого HTML у снимка нет,
+    а подписи вендоров (`Just a moment...`, `Attention Required`) видны на странице.
+    """
+    text = snap.get("text") or ""
+    r = ws.classify_wall(snap.get("http_status"), None, body=text, visible_text=text)
+    if r["kind"] not in ("hard", "soft"):
+        return set()
+    return {f"{r['kind']}:{sid}" for sid in r["signals"]}
 
 
-def wall_hits(text: str, sigs: list[tuple[str, str, re.Pattern]]) -> set[str]:
-    return {f"{cls}:{sid}" for cls, sid, rx in sigs if rx.search(text)}
-
-
-def check_walls(chrome: dict, lumen: dict, sigs: list) -> dict:
-    ch, lu = wall_hits(chrome.get("text") or "", sigs), wall_hits(lumen.get("text") or "", sigs)
-    if len((lumen.get("text") or "").strip()) < NEAR_EMPTY_LUMEN \
-            and len((chrome.get("text") or "").strip()) >= NEAR_EMPTY_CHROME:
+def check_walls(chrome: dict, lumen: dict) -> dict:
+    ch, lu = wall_hits(chrome), wall_hits(lumen)
+    if len((lumen.get("text") or "").strip()) < NEAR_EMPTY_LUMEN             and len((chrome.get("text") or "").strip()) >= NEAR_EMPTY_CHROME:
         lu.add("blank:near-empty")
     extra = sorted(lu - ch)
     return {"ok": not extra, "detail": ", ".join(extra) if extra else "", "extra": extra,
@@ -290,12 +281,12 @@ def check_pixels(chrome_frame: tuple | None, lumen_frame: tuple | None, masks: l
     return d
 
 
-def evaluate(chrome: dict, lumen: dict, sigs: list, args) -> dict:
+def evaluate(chrome: dict, lumen: dict, args) -> dict:
     """Пять проверок по снимкам двух плеч -> {имя: {ok, detail, …}}."""
     scale = (chrome.get("scale") or lumen.get("scale") or 1.0)
     return {
         "status": check_status(chrome, lumen),
-        "walls": check_walls(chrome, lumen, sigs),
+        "walls": check_walls(chrome, lumen),
         "exceptions": check_exceptions(chrome, lumen),
         "pixels": check_pixels(chrome.get("frame"), lumen.get("frame"),
                                (chrome.get("masks") or []) + (lumen.get("masks") or []),
@@ -593,7 +584,7 @@ def png_width(path: str | None) -> int | None:
 # ── Сайт целиком ─────────────────────────────────────────────────────────────
 
 
-def run_attempt(br, ref: ChromeRef, slug: str, url: str, args, out_dir: Path, attempt: int, sigs: list) -> dict:
+def run_attempt(br, ref: ChromeRef, slug: str, url: str, args, out_dir: Path, attempt: int) -> dict:
     """Один прогон обоих плеч + пять проверок."""
     lumen = lumen_snapshot(br, url, args, out_dir / f"{slug}.lumen{attempt}.png")
     vp = lumen.get("viewport") or [args.viewport_w, args.viewport_h, 1]
@@ -611,7 +602,7 @@ def run_attempt(br, ref: ChromeRef, slug: str, url: str, args, out_dir: Path, at
     chrome["scale"] = lumen["scale"] = lumen["scale"] or chrome["scale"]
     result = {"chrome": chrome, "lumen": lumen}
     if chrome["ok"] or chrome.get("http_status"):
-        result["checks"] = evaluate(chrome, lumen, sigs, args)
+        result["checks"] = evaluate(chrome, lumen, args)
     return result
 
 
@@ -624,15 +615,15 @@ def slim(snap: dict) -> dict:
     return out
 
 
-def measure_site(br, ref, slug: str, url: str, args, out_dir: Path, sigs: list) -> dict:
+def measure_site(br, ref, slug: str, url: str, args, out_dir: Path) -> dict:
     rec: dict = {"slug": slug, "url": url, "started_at": datetime.now().isoformat(timespec="seconds")}
-    first = run_attempt(br, ref, slug, url, args, out_dir, 1, sigs)
+    first = run_attempt(br, ref, slug, url, args, out_dir, 1)
     runs = [first]
     if "checks" not in first:
         rec["ref_failed"] = True  # эталон не открыл сайт: паритет не с чем сравнивать
         rec["ref_error"] = first["chrome"].get("net_error") or first["chrome"].get("error")
     elif not all(c["ok"] for c in first["checks"].values()) and not args.no_rerun:
-        runs.append(run_attempt(br, ref, slug, url, args, out_dir, 2, sigs))
+        runs.append(run_attempt(br, ref, slug, url, args, out_dir, 2))
     rec["reran"] = len(runs) > 1
     rec["runs"] = [{"chrome": slim(r["chrome"]), "lumen": slim(r["lumen"])} for r in runs]
     last = runs[-1]
@@ -707,7 +698,6 @@ def main() -> None:
     ap.add_argument("--exe", help="путь к lumen.exe")
     ap.add_argument("--chrome", help="путь к chrome.exe (по умолчанию Chrome for Testing из ms-playwright)")
     ap.add_argument("--headless", action="store_true", help="Chrome без окна (UA без HeadlessChrome)")
-    ap.add_argument("--signatures", type=Path, default=DEFAULT_SIGNATURES)
     ap.add_argument("--out", type=Path, help="каталог результата (по умолчанию .tmp/compat-crawl/<ts>)")
     ap.add_argument("--resume", type=Path, help="продолжить прогон в этом каталоге")
     ap.add_argument("--timeout", type=int, default=45, help="секунд на загрузку сайта в каждом плече")
@@ -740,7 +730,6 @@ def main() -> None:
         sys.exit(f"Корпус пуст (фильтр --only {only})")
     if args.limit:
         sites = sites[:args.limit]
-    sigs = load_wall_signatures(args.signatures)
 
     out_dir = args.resume or args.out or OUT_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = out_dir.resolve()  # Chrome и lumen запускаются с другим cwd
@@ -767,7 +756,7 @@ def main() -> None:
                 continue
             if args.restart_every and len(done) and i % args.restart_every == 0:
                 br.restart()
-            rec = measure_site(br, ref, slug, url, args, out_dir, sigs)
+            rec = measure_site(br, ref, slug, url, args, out_dir)
             records.append(rec)
             done.add(slug)
             with results_path.open("a", encoding="utf-8") as f:

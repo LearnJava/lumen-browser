@@ -40,35 +40,24 @@ class StatusAndWalls(unittest.TestCase):
         self.assertTrue(cc.check_status({"http_status": 403}, {"http_status": 451})["ok"])
         self.assertFalse(cc.check_status({"http_status": 200}, {"http_status": None})["ok"])
 
-    def test_signature_file_parses(self):
-        sigs = cc.load_wall_signatures(cc.DEFAULT_SIGNATURES)
-        self.assertGreaterEqual(len(sigs), 15)
-        hits = cc.wall_hits("Just a moment... Checking your browser", sigs)
-        self.assertIn("challenge:cf-just-a-moment", hits)
-        self.assertIn("unsupported:update-browser", cc.wall_hits("Обновите браузер для работы", sigs))
+    def test_wall_hits_from_shared_classifier(self):
+        hard = cc.wall_hits({"http_status": 403, "text": "Checking if the site connection is secure"})
+        self.assertTrue(any(h.startswith("hard:") for h in hard), hard)
+        soft = cc.wall_hits({"http_status": 200, "text": "Your browser is not supported. Please upgrade your browser."})
+        self.assertTrue(any(h.startswith("soft:") for h in soft), soft)
+        self.assertEqual(cc.wall_hits({"http_status": 200, "text": "Обычная страница"}), set())
 
     def test_wall_only_extra_counts(self):
-        sigs = cc.load_wall_signatures(cc.DEFAULT_SIGNATURES)
-        both = {"text": "Access denied " + "x" * 2000}
-        self.assertTrue(cc.check_walls(both, both, sigs)["ok"])
-        r = cc.check_walls({"text": "Welcome " * 300}, {"text": "Access denied"}, sigs)
+        wall = {"http_status": 403, "text": "Checking if the site connection is secure"}
+        self.assertTrue(cc.check_walls(wall, wall)["ok"])
+        r = cc.check_walls({"http_status": 200, "text": "Welcome " * 300}, wall)
         self.assertFalse(r["ok"])
-        self.assertIn("waf:access-denied", r["extra"])
+        self.assertTrue(r["extra"])
 
     def test_near_empty_page(self):
-        r = cc.check_walls({"text": "word " * 400}, {"text": "  "}, [])
+        r = cc.check_walls({"text": "word " * 400}, {"text": "  "})
         self.assertEqual(r["extra"], ["blank:near-empty"])
-        self.assertTrue(cc.check_walls({"text": "short"}, {"text": ""}, [])["ok"])
-
-    def test_bad_signature_line(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "s.txt"
-            p.write_text("waf\tonly-two-fields\n", encoding="utf-8")
-            with self.assertRaises(ValueError):
-                cc.load_wall_signatures(p)
-            p.write_text("waf\ta\tx\nwaf\ta\ty\n", encoding="utf-8")
-            with self.assertRaises(ValueError):
-                cc.load_wall_signatures(p)
+        self.assertTrue(cc.check_walls({"text": "short"}, {"text": ""})["ok"])
 
 
 class Exceptions(unittest.TestCase):
@@ -185,7 +174,7 @@ class Aggregation(unittest.TestCase):
     def test_evaluate_end_to_end(self):
         snap = {"text": "hello " * 400, "http_status": 200, "exceptions": [], "ax": [("link", "a")],
                 "frame": None, "masks": []}
-        res = cc.evaluate(dict(snap), dict(snap), [], ARGS)
+        res = cc.evaluate(dict(snap), dict(snap), ARGS)
         self.assertEqual(set(res), set(cc.CHECKS))
         self.assertFalse(res["pixels"]["ok"])  # нет кадра -> не паритет
         self.assertTrue(res["status"]["ok"] and res["walls"]["ok"] and res["exceptions"]["ok"] and res["a11y"]["ok"])
