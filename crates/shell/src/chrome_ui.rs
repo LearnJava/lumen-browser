@@ -1901,7 +1901,9 @@ impl Lumen {
             // current host, and unlike the legacy panel's switch — which only
             // ever painted itself — it drives the real process-global filter.
             ChromeAction::ToggleSiteShields => {
-                self.shields.toggle_current_site();
+                if !self.shields.toggle_current_site() {
+                    self.note_site_protection_off();
+                }
                 self.sync_adblock_filter();
                 self.relayout_chrome_host();
             }

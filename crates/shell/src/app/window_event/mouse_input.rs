@@ -70,10 +70,14 @@ impl Lumen {
             }
             if state == ElementState::Pressed {
                 self.gesture.begin(x_css, y_css);
-            } else if state == ElementState::Released
-                && let Some(action) = self.gesture.finish()
-            {
-                self.execute_gesture_action(action, event_loop);
+            } else if state == ElementState::Released {
+                let plain_click = self.gesture.is_plain_click();
+                if let Some(action) = self.gesture.finish() {
+                    self.execute_gesture_action(action, event_loop);
+                } else if plain_click && self.try_open_page_menu(x_css, y_css) {
+                    // COMPAT-HANDOFF: правый клик без протяжки — меню страницы.
+                    self.request_redraw();
+                }
             }
         } else if button != MouseButton::Left {
             // Middle / back / forward — ignore.

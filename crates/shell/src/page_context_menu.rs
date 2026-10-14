@@ -1,8 +1,11 @@
 //! Page-level right-click context menu (P3-spell slice 3).
 //!
-//! Currently this is the spell-check suggestion menu: right-clicking a
-//! misspelled word in a focused text input opens a floating menu listing up to
+//! Two flavours share the widget. The spell-check suggestion menu: right-clicking
+//! a misspelled word in a focused text input opens a floating menu listing up to
 //! five correction candidates followed by "Add to dictionary" and "Ignore".
+//! The page menu (COMPAT-HANDOFF): a plain right-click on an http(s) page opens
+//! «Открыть в другом браузере» with the reason choices
+//! ([`HANDOFF_ROWS`]).
 //!
 //! Like [`crate::tabs::context_menu`], the menu is drawn by the engine chrome
 //! (`#pageCtxMenu`, UX-CHROME-PANELS); this module owns only state and
@@ -14,20 +17,40 @@
 use lumen_dom::NodeId;
 use lumen_chrome::ChromePageCtxModel;
 
+use crate::external_browser::HandoffReason;
+
 // ── Geometry (mirrors `.page-ctx` in `assets/chrome/chrome.html`) ──────────────
 
 /// Menu width in CSS px.
-pub const MENU_W: f32 = 230.0;
+pub const MENU_W: f32 = 280.0;
 /// Height of one menu row in CSS px.
 const ROW_H: f32 = 28.0;
 /// Vertical padding above the first / below the last row.
 const PAD_Y: f32 = 5.0;
 
+/// Rows of the page menu: `(data-page-ctx value, reason, remember, label)`.
+/// The first four hand the page over once, the last creates a 30-day site rule.
+pub const HANDOFF_ROWS: [(&str, HandoffReason, bool, &str); 5] = [
+    ("ho:other", HandoffReason::Other, false, "Открыть в другом браузере"),
+    ("ho:crypto", HandoffReason::Crypto, false, "… если ГОСТ / ЭП"),
+    ("ho:drm", HandoffReason::Drm, false, "… если DRM-видео"),
+    ("ho:calls", HandoffReason::Calls, false, "… если видеозвонки"),
+    ("ho:always", HandoffReason::Other, true, "Всегда открывать сайт там (30 дней)"),
+];
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/// An action the user can pick from the spell suggestion menu.
+/// An action the user can pick from the page menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpellMenuAction {
+    /// COMPAT-HANDOFF: hand the page to another browser (`remember` — also
+    /// create the 30-day site rule).
+    Handoff {
+        /// Why the page is handed over — picks the browser.
+        reason: HandoffReason,
+        /// Create the site rule.
+        remember: bool,
+    },
     /// Replace the misspelled word with this suggestion.
     Use(String),
     /// Add the misspelled word to the persistent user dictionary.
@@ -104,9 +127,22 @@ pub struct PageContextMenu {
     /// `false` — строки «Добавить в словарь»/«Пропустить» отсутствуют: меню
     /// значений автозаполнения (UX-AUTOFILL срез 3), а не орфографии.
     spell_footer: bool,
+    /// `true` — page menu: the «Открыть в другом браузере» rows ([`HANDOFF_ROWS`]).
+    handoff: bool,
 }
 
 impl PageContextMenu {
+    /// COMPAT-HANDOFF: open the page menu at cursor `(x, y)`.
+    pub fn open_page(&mut self, x: f32, y: f32) {
+        self.items.clear();
+        self.target = None;
+        self.spell_footer = false;
+        self.handoff = true;
+        self.anchor_x = x;
+        self.anchor_y = y;
+        self.open = true;
+    }
+
     /// Open the menu at cursor `(x, y)` for `target`, offering `suggestions`
     /// (already truncated to at most five by the caller) followed by the
     /// "Add to dictionary" and "Ignore" rows.
@@ -116,6 +152,7 @@ impl PageContextMenu {
         items.push(SpellMenuAction::AddToDict);
         items.push(SpellMenuAction::Ignore);
         self.spell_footer = true;
+        self.handoff = false;
         self.items = items;
         self.target = Some(target);
         self.anchor_x = x;
@@ -128,6 +165,7 @@ impl PageContextMenu {
     pub fn open_values(&mut self, x: f32, y: f32, values: Vec<String>, target: SpellTarget) {
         self.items = values.into_iter().take(5).map(SpellMenuAction::Use).collect();
         self.spell_footer = false;
+        self.handoff = false;
         self.target = Some(target);
         self.anchor_x = x;
         self.anchor_y = y;
@@ -137,6 +175,7 @@ impl PageContextMenu {
     /// Hide the menu and drop its context.
     pub fn close(&mut self) {
         self.open = false;
+        self.handoff = false;
         self.items.clear();
         self.target = None;
     }
@@ -153,7 +192,8 @@ impl PageContextMenu {
 
     /// Total menu height in CSS px (background box).
     fn menu_height(&self) -> f32 {
-        PAD_Y * 2.0 + ROW_H * self.items.len() as f32
+        let handoff = if self.handoff { HANDOFF_ROWS.len() } else { 0 };
+        PAD_Y * 2.0 + ROW_H * (self.items.len() + handoff) as f32
     }
 
     /// Compute the clamped top-left anchor so the menu stays inside the window.
@@ -167,6 +207,11 @@ impl PageContextMenu {
     /// Maps a `data-page-ctx` attribute value of `#pageCtxMenu`'s rows
     /// (`use:<index>` / `add` / `ignore`) to the action it stands for.
     pub fn action_from_attr(&self, value: &str) -> Option<SpellMenuAction> {
+        if self.handoff
+            && let Some(&(_, reason, remember, _)) = HANDOFF_ROWS.iter().find(|r| r.0 == value)
+        {
+            return Some(SpellMenuAction::Handoff { reason, remember });
+        }
         match value {
             "add" => Some(SpellMenuAction::AddToDict),
             "ignore" => Some(SpellMenuAction::Ignore),
@@ -197,6 +242,11 @@ impl PageContextMenu {
                 })
                 .collect(),
             spell_footer: self.spell_footer,
+            extra_rows: if self.handoff {
+                HANDOFF_ROWS.iter().map(|r| (r.0.to_owned(), r.3.to_owned())).collect()
+            } else {
+                Vec::new()
+            },
         }
     }
 }
@@ -221,7 +271,7 @@ mod tests {
     /// Count the visible menu rows (suggestions plus the spell footer).
     fn row_count(m: &PageContextMenu) -> usize {
         let c = m.chrome_model(1024.0, 720.0);
-        c.suggestions.len() + if c.spell_footer { 2 } else { 0 }
+        c.suggestions.len() + if c.spell_footer { 2 } else { 0 } + c.extra_rows.len()
     }
 
     fn open_menu() -> PageContextMenu {
@@ -245,6 +295,35 @@ mod tests {
         assert!(!m.chrome_model(1024.0, 720.0).spell_footer);
         m.open_values(100.0, 50.0, Vec::new(), target());
         assert!(!m.is_open());
+    }
+
+    #[test]
+    fn page_menu_offers_handoff_rows() {
+        let mut m = PageContextMenu::default();
+        m.open_page(100.0, 50.0);
+        assert!(m.is_open());
+        assert!(m.target().is_none());
+        assert_eq!(row_count(&m), HANDOFF_ROWS.len());
+        assert_eq!(
+            m.action_from_attr("ho:drm"),
+            Some(SpellMenuAction::Handoff { reason: HandoffReason::Drm, remember: false })
+        );
+        assert_eq!(
+            m.action_from_attr("ho:always"),
+            Some(SpellMenuAction::Handoff { reason: HandoffReason::Other, remember: true })
+        );
+        assert_eq!(m.action_from_attr("add"), Some(SpellMenuAction::AddToDict));
+        let c = m.chrome_model(1024.0, 720.0);
+        assert!(c.open && !c.spell_footer && c.suggestions.is_empty());
+    }
+
+    #[test]
+    fn spell_menu_has_no_handoff_rows() {
+        let mut m = open_menu();
+        assert_eq!(m.action_from_attr("ho:other"), None);
+        m.open_page(0.0, 0.0);
+        m.open_for(0.0, 0.0, vec!["a".to_owned()], target());
+        assert!(m.chrome_model(1024.0, 720.0).extra_rows.is_empty());
     }
 
     #[test]

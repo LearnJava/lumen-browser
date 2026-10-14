@@ -2053,6 +2053,7 @@ impl Lumen {
         // (UserInteraction source), исполняется после microtask checkpoint.
         // `take` атомарно сбрасывает флаг, чтобы reload вызвался только раз.
         if self.pending_reload.take() {
+            self.note_user_reload();
             self.reload();
         }
 

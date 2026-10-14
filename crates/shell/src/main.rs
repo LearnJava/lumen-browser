@@ -33,6 +33,7 @@ mod browser_thread;
 mod animation_scheduler;
 mod automation_server;
 mod click_log;
+mod compat_signals;
 mod health_log;
 mod backend_factory;
 mod bench_frames;

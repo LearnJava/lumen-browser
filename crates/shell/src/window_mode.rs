@@ -815,6 +815,7 @@ fn run_window_mode_inner(
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
         closed_tabs: tabs::closed::ClosedTabs::default(),
         page_context_menu: page_context_menu::PageContextMenu::default(),
+        compat_signals: compat_signals::SignalLog::default(),
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
         spell_ignored: std::collections::HashSet::new(),
         shell_theme: panels::themes::ShellTheme::default(),
