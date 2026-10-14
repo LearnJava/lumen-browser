@@ -288,6 +288,26 @@ pub fn extract_leaf_fields(cert_der: &[u8]) -> Option<LeafFields> {
     })
 }
 
+/// The raw `issuer` and `subject` `Name` contents (without the outer SEQUENCE
+/// header) of a certificate, in that order — the same byte form
+/// `rustls::pki_types::TrustAnchor::subject` uses, so a chain's issuer can be
+/// matched against a trust anchor by plain byte equality
+/// ([`super::os_roots::local_root_name`]).
+pub fn issuer_and_subject_der(cert_der: &[u8]) -> Option<(&[u8], &[u8])> {
+    let certificate = Der::new(cert_der).read_tagged(TAG_SEQUENCE)?;
+    let tbs = Der::new(certificate).read_tagged(TAG_SEQUENCE)?;
+    let mut tbs = Der::new(tbs);
+    if tbs.peek_tag() == Some(TAG_CONTEXT_0) {
+        tbs.read_tlv()?;
+    }
+    tbs.read_tagged(TAG_INTEGER)?;
+    tbs.read_tagged(TAG_SEQUENCE)?;
+    let issuer = tbs.read_tagged(TAG_SEQUENCE)?;
+    tbs.read_tagged(TAG_SEQUENCE)?; // validity
+    let subject = tbs.read_tagged(TAG_SEQUENCE)?;
+    Some((issuer, subject))
+}
+
 /// SHA-256 fingerprint of the whole DER-encoded certificate, formatted as
 /// upper-case hex bytes separated by colons (`"AA:BB:CC:…"`), matching
 /// [`super::CertInfo::fingerprint_sha256`]'s documented format.

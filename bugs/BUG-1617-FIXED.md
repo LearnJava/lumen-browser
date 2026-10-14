@@ -1,6 +1,6 @@
 # BUG-1617 — getTimezoneOffset=0 противоречит getHours и Intl
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-14 (P6)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** js (`crates/js/src/navigator_bindings.rs:372`, `temporal_api.rs:585`)
 
@@ -27,3 +27,9 @@ getTimezoneOffset подменён константой 0 на каждой ст
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление
+
+`NavigatorProfile::timezone_offset: Option<i32>` (`navigator_bindings.rs`), умолчание `None` — в обычном профиле шим пояс не трогает, так что `getTimezoneOffset` остаётся нативным и согласован с `getHours`/`toString`/`Intl`/`Temporal.Now` (на МСК-машине `-180`). Воркеры пояс не подменяли и не подменяют, поэтому страница и воркер теперь согласны. Tor (`config.rs::navigator_profile`) задаёт `Some(0)`: UTC во всех локальных API Date, `toLocale*String` и `Intl.DateTimeFormat` (если BiDi `setTimezoneOverride` уже обернул Intl — его пояс приоритетнее). Явный ненулевой `timezone_offset` в `fingerprint.toml` по-прежнему подменяет только `getTimezoneOffset` (документировано в `config.rs`).
+
+**Остаток:** в воркерах Tor-профиль по-прежнему не переводит `Date` в UTC (шим навигатора там не ставится) — страница и воркер расходятся только в Tor.

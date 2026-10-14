@@ -426,6 +426,14 @@ impl Lumen {
                         // drop it rather than let a later unrelated reload
                         // reveal a stale cross-fade.
                         self.pending_mpa_view_transition_snapshot = None;
+                        // COMPAT-ERRORS срез 3: сбой финального pipeline раньше
+                        // оставлял на экране последний streaming-кадр без единого
+                        // слова о причине — теперь тот же экран ошибки, что и у
+                        // `LoadError` (код `ERR_FAILED`, «Повторить» и F5 заново
+                        // грузят исходный адрес).
+                        self.stream_builder = None;
+                        self.stream_sheet = lumen_css_parser::Stylesheet::default();
+                        self.show_render_error(&e);
                     }
                 }
             }
@@ -449,6 +457,9 @@ impl Lumen {
                 // error arm above — this navigation never reveals a
                 // transition, so its captured snapshot must not survive it.
                 self.pending_mpa_view_transition_snapshot = None;
+                // COMPAT-ERRORS: вместо прежней страницы, оставшейся на экране,
+                // вкладка показывает страницу ошибки с кодом Chromium.
+                self.show_net_error(&msg);
             }
             LoadEvent::CertError(url, host, cert_err, tab_id, generation) => {
                 if !self.is_active_tab(tab_id) {
@@ -463,7 +474,11 @@ impl Lumen {
                 // the user sees is "your connection is not private", not a
                 // raw network-error string.
                 self.load_failed = true;
-                self.cert_interstitial.open(url, host, cert_err);
+                // BUG-1615: a Known HSTS Host gets no "Proceed anyway".
+                let hsts_host = crate::config::global()
+                    .apply_http(lumen_network::HttpClient::new())
+                    .is_known_hsts_host(&host);
+                self.cert_interstitial.open(url, host, cert_err, hsts_host);
                 let msg = self.cert_interstitial.reason_text().unwrap_or_default();
                 self.load_error_message = Some(msg.clone());
                 click_log::log_load_err(&self.source.describe(), &msg);

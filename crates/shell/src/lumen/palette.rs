@@ -113,7 +113,10 @@ impl Lumen {
                     let idx = self.tab_strip.active;
                     self.close_tab(idx, event_loop);
                 }
-                PaletteAction::Reload => self.reload(),
+                PaletteAction::Reload => {
+                    self.note_user_reload();
+                    self.reload();
+                }
                 PaletteAction::NavigateBack => self.navigate_back(),
                 PaletteAction::NavigateForward => self.navigate_forward(),
                 PaletteAction::FindOnPage => {
@@ -148,6 +151,9 @@ impl Lumen {
                     self.relayout_chrome_host();
                 }
                 PaletteAction::ToggleShields => self.shields.toggle(),
+                PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason, false),
+                PaletteAction::RememberOtherBrowser(reason) => self.open_in_other_browser(*reason, true),
+                PaletteAction::ShowHandoffSites => self.show_handoff_sites(),
                 PaletteAction::ToggleVimMode => {
                     if self.vim_mode.is_some() {
                         self.vim_mode = None;

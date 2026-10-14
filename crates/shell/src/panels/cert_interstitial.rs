@@ -28,6 +28,9 @@ pub struct CertInterstitial {
     /// `(имя списка, тип)`. `Some` — экран показывает предупреждение о сайте, а не
     /// ошибку сертификата.
     pub threat: Option<(String, lumen_storage::ThreatType)>,
+    /// `true` when the failed host is a Known HSTS Host (RFC 6797 §8.4/§12.1:
+    /// the connection MUST be terminated, no user override) — BUG-1615.
+    pub hsts_host: bool,
 }
 
 impl CertInterstitial {
@@ -37,11 +40,21 @@ impl CertInterstitial {
     }
 
     /// Show the interstitial for a failed navigation to `url`/`host`.
-    pub fn open(&mut self, url: String, host: String, error: lumen_core::error::CertError) {
+    ///
+    /// `hsts_host`: the host is a Known HSTS Host (preload list or a learned
+    /// policy) — see [`Self::can_proceed`].
+    pub fn open(
+        &mut self,
+        url: String,
+        host: String,
+        error: lumen_core::error::CertError,
+        hsts_host: bool,
+    ) {
         self.url = url;
         self.host = host;
         self.error = Some(error);
         self.threat = None;
+        self.hsts_host = hsts_host;
         self.visible = true;
     }
 
@@ -51,7 +64,15 @@ impl CertInterstitial {
         self.host = host;
         self.error = None;
         self.threat = Some((list, threat));
+        self.hsts_host = false;
         self.visible = true;
+    }
+
+    /// Whether the "Proceed anyway" action may be offered and honoured.
+    /// Never on a Known HSTS Host (RFC 6797 §8.4/§12.1, ADR-034 §3) and never
+    /// for a revoked certificate (BUG-1615).
+    pub fn can_proceed(&self) -> bool {
+        !self.hsts_host && !matches!(self.error, Some(lumen_core::error::CertError::Revoked))
     }
 
     /// Dismiss without proceeding ("Back" / navigate away).
@@ -65,7 +86,7 @@ impl CertInterstitial {
     /// Returns `None` if the interstitial isn't currently showing anything
     /// to proceed past.
     pub fn proceed(&mut self) -> Option<(String, String)> {
-        if !self.visible {
+        if !self.visible || !self.can_proceed() {
             return None;
         }
         self.visible = false;
@@ -85,6 +106,8 @@ impl CertInterstitial {
                 message,
                 detail: format!("{} ({list})", threat.as_code()),
                 proceed_label: "Всё равно перейти".to_owned(),
+                other_browser: false,
+                proceed_blocked: false,
             };
         }
         lumen_chrome::ChromeSecurityModel {
@@ -96,6 +119,22 @@ impl CertInterstitial {
             ),
             detail: self.reason_text().unwrap_or_default(),
             proceed_label: "Всё равно перейти".to_owned(),
+            other_browser: self.handoff_reason().is_some(),
+            proceed_blocked: !self.can_proceed(),
+        }
+    }
+
+    /// Причина передачи во внешний браузер (COMPAT-HO-02), если она есть:
+    /// цепочка не ведёт к доверенному корню — корень НУЦ ставят в ОС, и другой
+    /// браузер его видит. Просроченный, отозванный, самоподписанный сертификат
+    /// и чужое имя там дадут ту же ошибку; угроза Safe Browsing — не повод
+    /// обходить предупреждение.
+    pub fn handoff_reason(&self) -> Option<crate::external_browser::HandoffReason> {
+        match self.error {
+            Some(lumen_core::error::CertError::Untrusted(_)) => {
+                Some(crate::external_browser::HandoffReason::Crypto)
+            }
+            _ => None,
         }
     }
 
@@ -121,7 +160,7 @@ mod tests {
     #[test]
     fn open_shows_and_stores_reason() {
         let mut i = CertInterstitial::new();
-        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired);
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
         assert!(i.visible);
         assert_eq!(i.host, "bad.example");
         assert_eq!(i.reason_text().as_deref(), Some("certificate expired"));
@@ -130,7 +169,7 @@ mod tests {
     #[test]
     fn close_hides_without_clearing_reason() {
         let mut i = CertInterstitial::new();
-        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::SelfSigned);
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::SelfSigned, false);
         i.close();
         assert!(!i.visible);
     }
@@ -138,7 +177,7 @@ mod tests {
     #[test]
     fn proceed_returns_url_and_host_and_hides() {
         let mut i = CertInterstitial::new();
-        i.open("https://bad.example/path".to_owned(), "bad.example".to_owned(), CertError::Untrusted("x".to_owned()));
+        i.open("https://bad.example/path".to_owned(), "bad.example".to_owned(), CertError::Untrusted("x".to_owned()), false);
         let result = i.proceed();
         assert_eq!(result, Some(("https://bad.example/path".to_owned(), "bad.example".to_owned())));
         assert!(!i.visible);
@@ -154,13 +193,34 @@ mod tests {
     fn chrome_model_is_open_only_while_visible() {
         let mut i = CertInterstitial::new();
         assert!(!i.chrome_model().open);
-        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired);
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
         let m = i.chrome_model();
         assert!(m.open);
         assert!(m.message.contains("bad.example"));
         assert_eq!(m.detail, "certificate expired");
         i.close();
         assert!(!i.chrome_model().open);
+    }
+
+    #[test]
+    fn other_browser_offered_only_for_untrusted_chain() {
+        use crate::external_browser::HandoffReason;
+        let mut i = CertInterstitial::new();
+        i.open("https://nuc.example/".to_owned(), "nuc.example".to_owned(), CertError::Untrusted("UnknownIssuer".to_owned()), false);
+        assert_eq!(i.handoff_reason(), Some(HandoffReason::Crypto));
+        assert!(i.chrome_model().other_browser);
+        for err in [CertError::Expired, CertError::SelfSigned, CertError::NameMismatch, CertError::Revoked] {
+            i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), err, false);
+            assert_eq!(i.handoff_reason(), None);
+            assert!(!i.chrome_model().other_browser);
+        }
+        i.open_threat(
+            "https://phish.example/".to_owned(),
+            "phish.example".to_owned(),
+            "local".to_owned(),
+            lumen_storage::ThreatType::SocialEngineering,
+        );
+        assert!(!i.chrome_model().other_browser);
     }
 
     #[test]
@@ -176,7 +236,7 @@ mod tests {
         assert!(m.open);
         assert!(m.title.contains("фишинг"));
         assert_eq!(m.detail, "social_engineering (local)");
-        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired);
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
         assert!(i.threat.is_none());
         assert_eq!(i.chrome_model().detail, "certificate expired");
     }
@@ -185,5 +245,38 @@ mod tests {
     fn reason_text_none_when_never_opened() {
         let i = CertInterstitial::new();
         assert_eq!(i.reason_text(), None);
+    }
+
+    #[test]
+    fn hsts_host_cannot_proceed() {
+        let mut i = CertInterstitial::new();
+        i.open("https://hsts.example/".to_owned(), "hsts.example".to_owned(), CertError::SelfSigned, true);
+        assert!(!i.can_proceed());
+        assert_eq!(i.proceed(), None);
+        assert!(i.visible, "interstitial stays up: there is nothing to proceed to");
+    }
+
+    #[test]
+    fn chrome_model_hides_proceed_button_when_blocked() {
+        let mut i = CertInterstitial::new();
+        i.open("https://hsts.example/".to_owned(), "hsts.example".to_owned(), CertError::SelfSigned, true);
+        assert!(i.chrome_model().proceed_blocked);
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
+        assert!(!i.chrome_model().proceed_blocked);
+    }
+
+    #[test]
+    fn revoked_cert_cannot_proceed() {
+        let mut i = CertInterstitial::new();
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Revoked, false);
+        assert!(!i.can_proceed());
+        assert_eq!(i.proceed(), None);
+    }
+
+    #[test]
+    fn ordinary_error_on_plain_host_can_proceed() {
+        let mut i = CertInterstitial::new();
+        i.open("https://bad.example/".to_owned(), "bad.example".to_owned(), CertError::Expired, false);
+        assert!(i.can_proceed());
     }
 }

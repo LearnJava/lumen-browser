@@ -131,6 +131,14 @@ impl Lumen {
             return;
         }
 
+        // `about:handoff` — sites handed to another browser (COMPAT-HANDOFF).
+        // Its `?remove=`/`?recheck=`/`?keep=` action links are only honoured
+        // by a click on that page itself (`apply_handoff_link`), never here.
+        if value.trim() == handoff_page::HANDOFF_URL {
+            self.show_handoff_sites();
+            return;
+        }
+
         // `about:newtab` — internal start page with a speed dial of pinned +
         // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {

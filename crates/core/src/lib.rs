@@ -27,6 +27,7 @@ pub mod idn;
 pub mod json;
 pub mod memory_pressure;
 pub mod module;
+pub mod net_error;
 pub mod pcs;
 pub mod profile;
 pub mod punycode;

@@ -1483,15 +1483,18 @@ fn connect_inner(
 /// same "no revocation info" line rather than guessing. Threading the real
 /// verdict through is left to a follow-up slice.
 fn cert_info_from_completed_handshake(conn: &ClientConnection) -> Option<tls::CertInfo> {
-    let cert_der = conn.peer_certificates()?.first()?;
+    let chain = conn.peer_certificates()?;
+    let cert_der = chain.first()?;
     let tls_version = protocol_version_label(conn.protocol_version());
     let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref());
-    Some(tls::CertInfo::from_peer_cert(
+    let mut info = tls::CertInfo::from_peer_cert(
         cert_der.as_ref(),
         &tls_version,
         tls::ocsp::OcspVerdict::Unknown,
         ct_verdict,
-    ))
+    );
+    info.local_root = tls::os_roots::local_root_name(chain).unwrap_or_default();
+    Some(info)
 }
 
 /// Render a negotiated [`rustls::ProtocolVersion`] for `CertInfo::tls_version`
@@ -2451,6 +2454,42 @@ fn resolve_http_error_status(
 /// финального ([BUG-757]).
 ///
 /// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
+/// `host` принадлежит сайту `site` (registrable domain из shell): сам `site`
+/// либо его поддомен. Граница по точке — `evilexample.com` не входит в
+/// `example.com`.
+fn host_in_site(host: &str, site: &str) -> bool {
+    host == site || host.strip_suffix(site).is_some_and(|rest| rest.ends_with('.'))
+}
+
+/// Ключ хранилища cookie (Total Cookie Protection), который `HttpClient` отдаёт
+/// jar-у. `None`, пока разбиение не подключено сквозь документ, фреймы и
+/// `document.cookie` (BUG-1616 закрывает только SameSite): `top_level_site`
+/// клиента служит ему лишь для SameSite и third-party, а не ключом БД — иначе
+/// cookie, выставленные в одном контексте, не читались бы в другом.
+pub(crate) const COOKIE_PARTITION: Option<&str> = None;
+
+/// Контекст SameSite запроса к `host` из документа сайта `top_level_site`
+/// (RFC 6265bis §5.2): для top-level навигации безопасным методом `Lax`
+/// проходит и межсайтово, для остального межсайтового — нет.
+fn cookie_site_context(
+    host: &str,
+    top_level_site: Option<&str>,
+    is_top_level: bool,
+    method: &str,
+) -> lumen_core::ext::CookieSiteContext {
+    use lumen_core::ext::CookieSiteContext;
+    match top_level_site {
+        Some(site) if !host_in_site(host, site) => {
+            if is_top_level && method.eq_ignore_ascii_case("GET") {
+                CookieSiteContext::CrossSiteTopLevelSafe
+            } else {
+                CookieSiteContext::CrossSite
+            }
+        }
+        _ => CookieSiteContext::SameSite,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn fetch_with_redirect(
@@ -2628,7 +2667,7 @@ fn fetch_with_redirect(
     // SameSite/TCP path above). `None` fields leave the rule unrestricted.
     let filter_ctx = lumen_core::ext::RequestContext {
         resource_type: destination.map(destination_to_resource_type),
-        third_party: top_level_site.map(|tls| !host_ascii.ends_with(tls) && host_ascii != tls),
+        third_party: top_level_site.map(|tls| !host_in_site(&host_ascii, tls)),
         is_top_level,
         document_host,
     };
@@ -2782,9 +2821,9 @@ fn fetch_with_redirect(
         if !extra_request_headers.is_empty() {
             h.push_str(extra_request_headers);
         }
-        // Inject Cookie header (RFC 6265 §5.4). Cross-site is true when
-        // top_level_site is set and differs from the request host (covers
-        // both SameSite enforcement and Total Cookie Protection).
+        // Inject Cookie header (RFC 6265 §5.4). The request is cross-site when
+        // top_level_site is set and the request host is outside it
+        // (`cookie_site_context`); that selects the SameSite cookies.
         //
         // GAP-CANVASORIGIN срез 4: a CORS request's credentials mode gates
         // this independently of SameSite — `Omit`/`SameOrigin` (the default,
@@ -2799,16 +2838,13 @@ fn fetch_with_redirect(
             _ => true,
         };
         if credentials_allowed && let Some(jar) = cookie_jar {
-            let is_cross_site = match top_level_site {
-                Some(tls) => !host_ascii.ends_with(tls) && host_ascii != tls,
-                None => false,
-            };
-            let cookie_val = jar.get_for_request(
+            let site_ctx = cookie_site_context(&host_ascii, top_level_site, is_top_level, actual_method);
+            let cookie_val = jar.get_for_request_in_context(
                 &host_ascii,
                 &url.path_and_query(),
                 is_tls,
-                top_level_site,
-                is_cross_site,
+                COOKIE_PARTITION,
+                site_ctx,
             );
             if !cookie_val.is_empty() {
                 h.push_str("Cookie: ");
@@ -2977,7 +3013,7 @@ fn fetch_with_redirect(
             // прятал cookie от соседних путей каталога (BUG-756).
             let request_path = url.path_and_query();
             for val in all_header_values(&resp.headers, "set-cookie") {
-                jar.process_set_cookie(val, &host_ascii, &request_path, is_tls, top_level_site);
+                jar.process_set_cookie(val, &host_ascii, &request_path, is_tls, COOKIE_PARTITION);
             }
         }
 
@@ -3652,6 +3688,20 @@ impl HttpClient {
         self.hsts.is_some()
     }
 
+    /// Известный HSTS-хост (RFC 6797 §8.4): есть в preload-листе либо в
+    /// подключённом store (с `includeSubDomains`). Для такого хоста ошибка
+    /// TLS обязана рвать соединение без права «Всё равно перейти»
+    /// (BUG-1615). Без подключённого store — только preload-лист.
+    #[must_use]
+    pub fn is_known_hsts_host(&self, host: &str) -> bool {
+        let host = host.trim().to_ascii_lowercase();
+        get_preload_list().is_preloaded(&host)
+            || self
+                .hsts
+                .as_deref()
+                .is_some_and(|h| h.is_https_only(&host, hsts::current_unix_time()))
+    }
+
     /// Подключить credential-провайдер для HTTP authentication (RFC 7235 /
     /// 7616 / 7617). По умолчанию — нет: запросы уходят без `Authorization`
     /// header, и 401 пробрасывается как `Err`. С подключённым провайдером:
@@ -3803,9 +3853,12 @@ impl HttpClient {
     /// Attach a cookie store. The provider receives `Cookie:` injection
     /// requests and `Set-Cookie:` responses on every fetch.
     ///
-    /// `top_level_site` — registrable domain of the top-level document (used
-    /// for Total Cookie Protection partitioning and SameSite evaluation).
-    /// Pass `None` when no top-level context is known (e.g. background fetch).
+    /// `top_level_site` — registrable domain of the site the requests are made
+    /// for (the tab's top-level document, or the initiator of a navigation).
+    /// Drives SameSite evaluation and the EasyList third-party option; it is
+    /// **not** the cookie storage partition key (see [`COOKIE_PARTITION`]).
+    /// Pass `None` when no site context is known (e.g. background fetch): every
+    /// request is then treated as same-site.
     #[must_use]
     pub fn with_cookie_jar(
         mut self,
@@ -3813,7 +3866,9 @@ impl HttpClient {
         top_level_site: Option<String>,
     ) -> Self {
         self.cookie_jar = Some(jar);
-        self.top_level_site = top_level_site;
+        // An empty site (a document without a host: `about:blank`, `data:`)
+        // is no site at all — otherwise every request would look cross-site.
+        self.top_level_site = top_level_site.filter(|s| !s.is_empty());
         self
     }
 
@@ -6000,7 +6055,6 @@ impl SseProvider for HttpClient {
     ) -> Result<Box<dyn SseSession>> {
         let cookies = self.cookie_jar.as_ref().map(|jar| sse::SseCookies {
             jar: Arc::clone(jar),
-            top_level_site: self.top_level_site.clone(),
             document_host: self.document_host().map(str::to_owned),
         });
         let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id, cookies)?;
@@ -9118,6 +9172,103 @@ mod tests {
         assert_eq!(gets, vec!["/auth/authorize?state=x", "/auth/step?cid=42"]);
 
         server.join().unwrap();
+    }
+
+    /// Jar, запоминающий SameSite-контекст и ключ раздела каждого запроса.
+    #[derive(Default)]
+    struct ContextJar {
+        seen: Mutex<Vec<(lumen_core::ext::CookieSiteContext, Option<String>)>>,
+    }
+
+    impl CookieProvider for ContextJar {
+        fn get_for_request(&self, _: &str, _: &str, _: bool, _: Option<&str>, _: bool) -> String {
+            unreachable!("network must call get_for_request_in_context")
+        }
+
+        fn get_for_request_in_context(
+            &self,
+            _host: &str,
+            _path: &str,
+            _is_secure: bool,
+            top_level_site: Option<&str>,
+            ctx: lumen_core::ext::CookieSiteContext,
+        ) -> String {
+            self.seen.lock().unwrap().push((ctx, top_level_site.map(str::to_owned)));
+            String::new()
+        }
+
+        fn process_set_cookie(&self, _: &str, _: &str, _: &str, _: bool, _: Option<&str>) {}
+    }
+
+    /// BUG-1616: контекст запроса зависит от сайта документа и вида запроса;
+    /// ключ раздела jar-а остаётся `None` (TCP не подключён).
+    #[test]
+    fn cookie_site_context_follows_document_site_and_request_kind() {
+        use lumen_core::ext::CookieSiteContext::{CrossSite, CrossSiteTopLevelSafe, SameSite};
+        let ok = || mock_http_server(1, |_| b"HTTP/1.1 200 OK
+Content-Length: 2
+Connection: close
+
+ok".to_vec());
+
+        // Подресурс чужого сайта: Strict и Lax не едут.
+        let (port, server) = ok();
+        let jar = Arc::new(ContextJar::default());
+        let client = HttpClient::new().with_cookie_jar(jar.clone(), Some("example.com".into()));
+        client
+            .fetch_subresource(&Url::parse(&format!("http://127.0.0.1:{port}/img")).unwrap(), RequestDestination::Image)
+            .expect("fetch_subresource");
+        server.join().unwrap();
+        assert_eq!(*jar.seen.lock().unwrap(), vec![(CrossSite, None)]);
+
+        // Top-level GET-навигация с чужого сайта: Lax едет.
+        let (port, server) = ok();
+        let jar = Arc::new(ContextJar::default());
+        let client = HttpClient::new().with_cookie_jar(jar.clone(), Some("example.com".into()));
+        client
+            .fetch_page(&Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(), None, false)
+            .expect("fetch_page");
+        server.join().unwrap();
+        assert_eq!(*jar.seen.lock().unwrap(), vec![(CrossSiteTopLevelSafe, None)]);
+
+        // Тот же сайт — и подресурс, и навигация без ограничений.
+        let (port, server) = ok();
+        let jar = Arc::new(ContextJar::default());
+        let client = HttpClient::new().with_cookie_jar(jar.clone(), Some("127.0.0.1".into()));
+        client
+            .fetch_subresource(&Url::parse(&format!("http://127.0.0.1:{port}/img")).unwrap(), RequestDestination::Image)
+            .expect("fetch_subresource");
+        server.join().unwrap();
+        assert_eq!(*jar.seen.lock().unwrap(), vec![(SameSite, None)]);
+
+        // Без контекста сайта (фон, нет инициатора) — как раньше, всё same-site.
+        let (port, server) = ok();
+        let jar = Arc::new(ContextJar::default());
+        let client = HttpClient::new().with_cookie_jar(jar.clone(), None);
+        client
+            .fetch_subresource(&Url::parse(&format!("http://127.0.0.1:{port}/img")).unwrap(), RequestDestination::Image)
+            .expect("fetch_subresource");
+        server.join().unwrap();
+        assert_eq!(*jar.seen.lock().unwrap(), vec![(SameSite, None)]);
+    }
+
+    #[test]
+    fn host_in_site_respects_label_boundary() {
+        assert!(host_in_site("example.com", "example.com"));
+        assert!(host_in_site("shop.example.com", "example.com"));
+        assert!(!host_in_site("evilexample.com", "example.com"));
+        assert!(!host_in_site("example.com.evil.net", "example.com"));
+        assert!(!host_in_site("com", "example.com"));
+    }
+
+    #[test]
+    fn cookie_site_context_unsafe_navigation_is_cross_site() {
+        use lumen_core::ext::CookieSiteContext::{CrossSite, CrossSiteTopLevelSafe, SameSite};
+        assert_eq!(cookie_site_context("a.test", Some("b.test"), true, "GET"), CrossSiteTopLevelSafe);
+        assert_eq!(cookie_site_context("a.test", Some("b.test"), true, "POST"), CrossSite);
+        assert_eq!(cookie_site_context("a.test", Some("b.test"), false, "GET"), CrossSite);
+        assert_eq!(cookie_site_context("a.test", Some("a.test"), true, "POST"), SameSite);
+        assert_eq!(cookie_site_context("a.test", None, false, "GET"), SameSite);
     }
 
     #[test]

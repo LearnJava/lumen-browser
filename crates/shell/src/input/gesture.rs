@@ -220,6 +220,17 @@ impl GestureRecognizer {
         self.map.lookup(dir)
     }
 
+    /// `true`, если правая кнопка зажата и курсор почти не сдвинулся — отпускание
+    /// даст обычный клик, а не жест ([`Self::finish`] вернёт `None` по
+    /// [`MIN_DRAG_PX`]). Спрашивать до `finish`.
+    pub fn is_plain_click(&self) -> bool {
+        self.active.as_ref().is_some_and(|g| {
+            let dx = g.current.0 - g.start.0;
+            let dy = g.current.1 - g.start.1;
+            (dx * dx + dy * dy).sqrt() < MIN_DRAG_PX
+        })
+    }
+
     /// Cancel the in-progress drag without emitting an action.
     ///
     /// Call on `CursorLeft` or window-focus-lost events.
@@ -432,6 +443,17 @@ mod tests {
         let _ = r.finish();
         assert!(!r.is_active());
         assert_eq!(r.finish(), None); // second finish = no-op
+    }
+
+    #[test]
+    fn plain_click_is_not_a_drag() {
+        let mut r = GestureRecognizer::new();
+        assert!(!r.is_plain_click(), "без begin клика нет");
+        r.begin(10.0, 10.0);
+        r.track(11.0, 10.0);
+        assert!(r.is_plain_click());
+        r.track(10.0 + MIN_DRAG_PX, 10.0);
+        assert!(!r.is_plain_click());
     }
 
     #[test]

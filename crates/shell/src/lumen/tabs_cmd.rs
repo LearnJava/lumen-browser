@@ -343,6 +343,14 @@ impl Lumen {
             }
             MenuAction::Duplicate => self.duplicate_tab(idx),
             MenuAction::ReopenClosed => self.reopen_closed_tab(),
+            MenuAction::OpenInOtherBrowser(reason) => {
+                // The handoff reads the active page's URL: bring the target
+                // tab forward first (same as Duplicate).
+                if idx != self.tab_strip.active {
+                    self.switch_tab(idx);
+                }
+                self.open_in_other_browser(reason, false);
+            }
             MenuAction::MoveToNewWindow => self.move_tab_to_new_window(idx, event_loop),
             MenuAction::AddToNewGroup => {
                 // CC-6: bundle the target tab into a fresh group, cycling the

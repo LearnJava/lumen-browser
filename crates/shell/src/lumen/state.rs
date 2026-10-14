@@ -1329,6 +1329,9 @@ pub(crate) struct Lumen {
     /// UX-CRASH: HTML показанного экрана падения и исходный источник упавшей
     /// страницы — `reload()` возвращает его вместо повторного показа экрана.
     pub(crate) crashed: Option<(String, PageSource)>,
+    /// COMPAT-ERRORS: адрес, чья страница ошибки 5xx уже повторялась сама,
+    /// число показов подряд и момент последнего — отсчёт пауз автоповтора.
+    pub(crate) net_error_retries: Option<(String, usize, std::time::Instant)>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     pub(crate) tab_snapshots: lumen_storage::TabSnapshotStore,
     /// SQLite-backed checkpoint store for T2 (BackgroundOld) tabs (ADR-008 §10I).
@@ -1419,6 +1422,9 @@ pub(crate) struct Lumen {
     /// On-disk permission store (`permissions.db`); `permission` uses it except
     /// while the Anonymous profile is active (see `sync_permission_store`).
     pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,
+    /// Rules «open this site in another browser» for 30 days (COMPAT-HANDOFF),
+    /// `external_browser_rules.db`; unused while the Anonymous profile is active.
+    pub(crate) external_browser_rules: Arc<lumen_storage::ExternalBrowserRules>,
     /// Right-docked sidebar web panel state (7D.3).
     ///
     /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.
@@ -1781,6 +1787,12 @@ pub(crate) struct Lumen {
     /// right-clicking a misspelled word in a focused text `<input>`. Hidden
     /// unless open.
     pub(crate) page_context_menu: page_context_menu::PageContextMenu,
+    /// COMPAT-SIG-01: локальный журнал сильных сигналов «сайт не работает»
+    /// (в памяти окна, наружу не уходит).
+    pub(crate) compat_signals: compat_signals::SignalLog,
+    /// Его копия на диске, `compat_signals.db`: окно «повторное выключение
+    /// защиты за 7 суток» и прошлые сигналы переживают перезапуск.
+    pub(crate) compat_signal_store: Arc<lumen_storage::CompatSignalStore>,
     /// Words the user added to the persistent dictionary
     /// (`data/spell/user_words.txt`), lowercase. Treated as correct spellings.
     pub(crate) spell_user_words: std::collections::HashSet<String>,

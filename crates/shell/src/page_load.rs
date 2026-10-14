@@ -990,7 +990,9 @@ impl Lumen {
     /// "Proceed anyway" on the cert interstitial (ph3-tls-hardening A6):
     /// record a session-scoped TLS-bypass override for the failed
     /// navigation's host, then retry it. No-op if the interstitial isn't
-    /// currently showing anything (double-click, stale event, ...).
+    /// currently showing anything (double-click, stale event, ...), or if
+    /// the failure is not overridable (Known HSTS Host, revoked certificate —
+    /// BUG-1615, `CertInterstitial::can_proceed`).
     ///
     /// `self.source` still holds the same `PageSource::Url` the failed
     /// navigation was for — `CertInterstitial::open` never touched it, only
@@ -1003,8 +1005,8 @@ impl Lumen {
         };
         if is_threat {
             crate::threat_store::allow_host(&host);
-        } else {
-            lumen_network::tls::bypass::allow_host(&host);
+        } else if !lumen_network::tls::bypass::allow_host(&host) {
+            return;
         }
         self.relayout_chrome_host();
         self.reload();
@@ -1620,6 +1622,14 @@ impl Lumen {
                 }
                 raw
             };
+
+            // COMPAT-ERRORS: 5xx без тела — показывать нечего, кроме самого
+            // статуса; страницу ошибки с автоповтором показывает `show_net_error`.
+            if crate::net_error_page::is_empty_server_error(raw.status, &raw.bytes) {
+                let msg = lumen_core::net_error::http_status_message(raw.status);
+                let _ = proxy.send_event(LoadEvent::LoadError(msg, tab_id, generation));
+                return;
+            }
 
             // Финальные hint-ы из буферизованного хвоста сканера.
             let tail = preload_scanner.end();

@@ -21,11 +21,19 @@ pub struct ChromeSecurityModel {
     pub detail: String,
     /// Подпись опасного действия «Всё равно перейти».
     pub proceed_label: String,
+    /// `true` показывает кнопку «Открыть в другом браузере» (`.has-other`):
+    /// другой браузер может помочь, только когда причина — не доверенный корень.
+    pub other_browser: bool,
+    /// `true` прячет кнопку «Всё равно перейти» (`.no-proceed`): HSTS-хост и
+    /// отозванный сертификат обходу не подлежат (RFC 6797 §8.4, BUG-1615).
+    pub proceed_blocked: bool,
 }
 
 pub(super) fn bind_security(doc: &mut Document, sec: &ChromeSecurityModel) {
     if let Some(bx) = doc.find_by_id(crate::ids::SECURITY_BOX) {
         set_class_token(doc, bx, "open", sec.open);
+        set_class_token(doc, bx, "has-other", sec.other_browser);
+        set_class_token(doc, bx, "no-proceed", sec.proceed_blocked);
     }
     if let Some(n) = doc.find_by_id(crate::ids::SECURITY_TITLE) {
         set_text(doc, n, &sec.title);
@@ -62,11 +70,18 @@ mod tests {
                 message: "bad.example".into(),
                 detail: "certificate expired".into(),
                 proceed_label: String::new(),
+                other_browser: true,
+                proceed_blocked: true,
             },
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
         assert!(has_class(&doc, bx, "open"));
+        assert!(has_class(&doc, bx, "has-other"));
+        assert!(has_class(&doc, bx, "no-proceed"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, bx, "has-other"));
+        bind_model(&mut doc, &model);
         let btn = doc.find_by_id(crate::ids::SECURITY_PROCEED_BTN).expect("proceed button");
         match doc.get(doc.get(btn).children[0]).data {
             lumen_dom::NodeData::Text(ref t) => assert_eq!(t, "Всё равно перейти"),

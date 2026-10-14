@@ -454,6 +454,12 @@ jobs:
           python scripts/check_claude_md.py --self-test
           python scripts/check_claude_md.py
 
+      # Corpus C (docs/perf/corpus-c*): the .txt files must match the .tsv, 200 RU + 300 global.
+      - name: Corpus C files are consistent (docs/perf/corpus-c.md)
+        run: |
+          python scripts/corpus_c.py --self-test
+          python scripts/corpus_c.py check
+
   cross:
     # Cold path: push-to-main and nightly only (see the header comment). Keeps the
     # macOS/Windows coverage that the old 3-OS matrix gave — including the unit

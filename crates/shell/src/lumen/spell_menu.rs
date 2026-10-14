@@ -196,8 +196,13 @@ impl Lumen {
     /// набор пропущенных на сессию.
     pub(crate) fn exec_spell_menu_action(&mut self, action: page_context_menu::SpellMenuAction) {
         use page_context_menu::{SpellMenuAction, SpellTargetKind};
+        if let SpellMenuAction::Handoff { reason, remember } = action {
+            self.open_in_other_browser(reason, remember);
+            return;
+        }
         let Some(target) = self.page_context_menu.target().cloned() else { return };
         match action {
+            SpellMenuAction::Handoff { .. } => {}
             SpellMenuAction::Use(replacement) => {
                 // UX-AUTOFILL срез 4: строка карты заполняет несколько полей формы.
                 let card_fill = self

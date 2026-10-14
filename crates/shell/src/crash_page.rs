@@ -19,7 +19,7 @@ pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-fn escape_html(s: &str) -> String {
+pub(crate) fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

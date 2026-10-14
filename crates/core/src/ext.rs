@@ -353,6 +353,21 @@ pub trait HttpCredentialProvider: Send + Sync {
     fn credentials(&self, challenge: &HttpAuthChallenge) -> Option<HttpCredentials>;
 }
 
+/// Site relationship of an outgoing request to the document it is made for
+/// (RFC 6265bis §5.2 "same-site" / "cross-site" request), which decides
+/// which `SameSite` cookies may be attached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CookieSiteContext {
+    /// Same registrable domain as the site-for-cookies: every cookie applies.
+    SameSite,
+    /// Cross-site top-level navigation with a safe method (`GET`): `Strict`
+    /// cookies are withheld, `Lax` and `None` are sent.
+    CrossSiteTopLevelSafe,
+    /// Cross-site subresource / frame / script request, or a cross-site
+    /// navigation with an unsafe method: only `None` (and unspecified) cookies.
+    CrossSite,
+}
+
 /// HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
 /// lumen-storage (CookieJar) without creating a circular dependency.
 ///
@@ -378,6 +393,24 @@ pub trait CookieProvider: Send + Sync {
         top_level_site: Option<&str>,
         is_cross_site: bool,
     ) -> String;
+
+    /// Same as [`Self::get_for_request`], but with the full SameSite request
+    /// context ([`CookieSiteContext`]): a cross-site top-level `GET`
+    /// navigation still carries `SameSite=Lax` cookies (RFC 6265bis §5.2.1),
+    /// which a plain `is_cross_site` flag cannot express.
+    ///
+    /// The default collapses the context to the flag, i.e. treats every
+    /// cross-site request like a subresource (the conservative reading).
+    fn get_for_request_in_context(
+        &self,
+        host: &str,
+        path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+        ctx: CookieSiteContext,
+    ) -> String {
+        self.get_for_request(host, path, is_secure, top_level_site, ctx != CookieSiteContext::SameSite)
+    }
 
     /// Process a `Set-Cookie` header received from a response.
     ///

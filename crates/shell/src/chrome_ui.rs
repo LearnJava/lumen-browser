@@ -1204,6 +1204,22 @@ impl Lumen {
                 self.relayout_chrome_host();
                 self.request_redraw();
             }
+            ChromeAction::SecurityOtherBrowser => {
+                // Экран остаётся открытым: передача одноразовая, а решение
+                // «перейти» или «назад» пользователь принимает отдельно.
+                if let Some(reason) = self.cert_interstitial.handoff_reason() {
+                    let url = self.cert_interstitial.url.clone();
+                    self.open_url_in_other_browser(&url, reason, false);
+                }
+            }
+            ChromeAction::SecurityOtherBrowserAny => {
+                // Цепочку без AIA другие браузеры достраивают сами: причина
+                // «сайт не работает» ведёт в Edge/Chrome, а не в ГОСТ-браузер.
+                if self.cert_interstitial.handoff_reason().is_some() {
+                    let url = self.cert_interstitial.url.clone();
+                    self.open_url_in_other_browser(&url, crate::external_browser::HandoffReason::Other, false);
+                }
+            }
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
             ChromeAction::NewTab => self.open_new_tab(),
@@ -1885,7 +1901,9 @@ impl Lumen {
             // current host, and unlike the legacy panel's switch — which only
             // ever painted itself — it drives the real process-global filter.
             ChromeAction::ToggleSiteShields => {
-                self.shields.toggle_current_site();
+                if !self.shields.toggle_current_site() {
+                    self.note_site_protection_off();
+                }
                 self.sync_adblock_filter();
                 self.relayout_chrome_host();
             }

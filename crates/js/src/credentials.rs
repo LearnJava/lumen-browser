@@ -1,8 +1,7 @@
 //! `navigator.credentials` (WebAuthn / passkeys + WebOTP + FedCM) bridge.
 //!
 //! The JS shim ([`CREDENTIALS_SHIM`]) implements `navigator.credentials.create()`
-//! and `.get()` plus `PublicKeyCredential`, `OTPCredential`, and `IdentityCredential`
-//! classes.
+//! and `.get()` plus `PublicKeyCredential` and `OTPCredential` classes.
 //! WebAuthn operations marshal requests to the native bindings `_lumen_webauthn_create` /
 //! `_lumen_webauthn_get` (registered by the V8 install path, `v8_runtime.rs::install_dom`),
 //! which forward to the process-global [`CredentialProvider`] installed by the shell via
@@ -16,7 +15,9 @@
 //!
 //! FedCM API (`navigator.credentials.get({identity: {providers: [...]}})`) is Phase 0:
 //! always rejects with `NotSupportedError`. `IdentityCredential` and `IdentityProvider`
-//! are exposed on `window` for spec-conformant feature detection (FedCM §5).
+//! are deliberately **not** exposed on `window` (COMPAT-API-01-FEDCM): an SDK that
+//! feature-detects the constructor (Google Identity Services One Tap) would take the
+//! FedCM branch and the sign-in would silently vanish.
 //! Phase 1: real IDP flow requires browser-mediated UI + network fetch to
 //! `configURL/.well-known/web-identity` — deferred to shell integration.
 //!
@@ -354,15 +355,6 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   function OTPCredential(){ throw new TypeError('Illegal constructor'); }
   OTPCredential.prototype = Object.create(Credential.prototype);
   OTPCredential.prototype.constructor = OTPCredential;
-  // FedCM §5 — token is populated by IDP redirect in Phase 1 (shell integration).
-  function IdentityCredential(){ throw new TypeError('Illegal constructor'); }
-  IdentityCredential.prototype = Object.create(Credential.prototype);
-  IdentityCredential.prototype.constructor = IdentityCredential;
-  // FedCM §5.1 — getUserInfo() fetches accounts from IDP accounts endpoint.
-  function IdentityProvider(){ throw new TypeError('Illegal constructor'); }
-  IdentityProvider.getUserInfo = function(){
-    return Promise.reject(mkErr('NotSupportedError', 'FedCM IdentityProvider.getUserInfo() is not supported'));
-  };
   // Legacy no-constructor interface (WebIDL): `new CredentialsContainer()` and
   // `CredentialsContainer()` both throw; the singleton below is built via
   // `Object.create(CredentialsContainer.prototype)`, which never invokes this.
@@ -524,8 +516,6 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   var g = (typeof globalThis !== 'undefined') ? globalThis : this;
   g.PublicKeyCredential = PublicKeyCredential;
   g.OTPCredential = OTPCredential;
-  g.IdentityCredential = IdentityCredential;
-  g.IdentityProvider = IdentityProvider;
   g.CredentialsContainer = CredentialsContainer;
   g.Credential = Credential;
   g.AuthenticatorResponse = AuthenticatorResponse;
@@ -776,33 +766,18 @@ mod v8_fedcm {
         }
     }
 
+    // COMPAT-API-01-FEDCM: FedCM is not implemented, so the interfaces must not be
+    // visible to feature detection (GIS One Tap probes the constructor).
     #[test]
-    fn fedcm_identity_credential_class_exists() {
+    fn fedcm_interfaces_are_not_exposed() {
         let rt = with_credentials_shim();
         assert!(
-            js_bool(&rt, "typeof window.IdentityCredential === 'function'"),
-            "IdentityCredential should be exported on window"
+            js_bool(&rt, "!('IdentityCredential' in window) && !('IdentityProvider' in window)"),
+            "IdentityCredential/IdentityProvider must not be on window"
         );
-    }
-
-    #[test]
-    fn fedcm_identity_provider_class_exists() {
-        let rt = with_credentials_shim();
         assert!(
-            js_bool(&rt, "typeof window.IdentityProvider === 'function'"),
-            "IdentityProvider should be exported on window"
-        );
-    }
-
-    #[test]
-    fn fedcm_identity_provider_get_user_info_returns_promise() {
-        let rt = with_credentials_shim();
-        assert!(
-            js_bool(
-                &rt,
-                "IdentityProvider.getUserInfo({configURL:'https://idp.test', clientId:'c'}) instanceof Promise"
-            ),
-            "IdentityProvider.getUserInfo() should return a Promise"
+            js_bool(&rt, "typeof IdentityCredential === 'undefined' && typeof IdentityProvider === 'undefined'"),
+            "IdentityCredential/IdentityProvider must not be global bindings"
         );
     }
 
@@ -815,18 +790,6 @@ mod v8_fedcm {
                 "navigator.credentials.get({identity:{providers:[{configURL:'https://idp.test',clientId:'c'}]}}) instanceof Promise"
             ),
             "credentials.get({{identity:...}}) should return a Promise"
-        );
-    }
-
-    #[test]
-    fn fedcm_identity_credential_constructor_throws() {
-        let rt = with_credentials_shim();
-        assert!(
-            js_bool(
-                &rt,
-                "(function(){ try { new IdentityCredential(); return false; } catch(e) { return e instanceof TypeError; } })()"
-            ),
-            "IdentityCredential constructor should throw TypeError"
         );
     }
 
@@ -864,18 +827,6 @@ mod v8_fedcm {
     }
 
     #[test]
-    fn identity_provider_constructor_throws_illegal_constructor() {
-        let rt = with_credentials_shim();
-        assert!(
-            js_bool(
-                &rt,
-                "(function(){ try { new IdentityProvider(); return false; } catch(e) { return e instanceof TypeError; } })()"
-            ),
-            "IdentityProvider constructor should throw TypeError"
-        );
-    }
-
-    #[test]
     fn credentials_container_has_tostringtag() {
         let rt = with_credentials_shim();
         assert!(
@@ -888,12 +839,8 @@ mod v8_fedcm {
     }
 
     #[test]
-    fn identity_credential_prototype_constructor_matches_own_class() {
+    fn credential_subclass_prototype_constructor_matches_own_class() {
         let rt = with_credentials_shim();
-        assert!(
-            js_bool(&rt, "IdentityCredential.prototype.constructor === IdentityCredential"),
-            "IdentityCredential.prototype.constructor must not fall through to Credential"
-        );
         assert!(
             js_bool(&rt, "PublicKeyCredential.prototype.constructor === PublicKeyCredential"),
             "PublicKeyCredential.prototype.constructor must not fall through to Credential"

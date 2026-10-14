@@ -21,10 +21,12 @@ pub mod bookmarks;
 pub mod broadcast_channels;
 pub mod cache_storage;
 pub mod cached_dns;
+pub mod compat_signals;
 pub mod cookies;
 pub mod csp_policies;
 pub mod dns_cache;
 pub mod downloads;
+pub mod external_browser_rules;
 pub mod history;
 pub mod hsts;
 pub mod http_cache;
@@ -87,8 +89,10 @@ pub use hsts::{
     HstsStore,
 };
 pub use cached_dns::{CachedDnsResolver, Clock, SystemClock};
+pub use compat_signals::{CompatSignalStore, StoredSignal};
 pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
+pub use external_browser_rules::{same_site, ExternalBrowserRule, ExternalBrowserRules, RULE_TTL_SECS};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use indexed_db::{IdbStore, NativeIdbStore};

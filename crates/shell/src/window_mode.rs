@@ -138,7 +138,7 @@ enum LoopMode {
 /// Открыть хранилище в `<exe>/data/<file>`; при ошибке (нет прав, битый файл)
 /// падаем на in-memory — окно важнее истории.
 #[allow(clippy::expect_used)]  // in-memory SQLite не падает, docs/lint-policy.md §10
-fn open_persistent<T, E: std::fmt::Display + std::fmt::Debug>(
+pub(crate) fn open_persistent<T, E: std::fmt::Display + std::fmt::Debug>(
     file: &str,
     open: impl FnOnce(std::path::PathBuf) -> Result<T, E>,
     in_memory: impl FnOnce() -> Result<T, E>,
@@ -360,6 +360,18 @@ fn run_window_mode_inner(
         lumen_storage::Permissions::open_in_memory,
         "permissions init",
     ));
+    let external_browser_rules = Arc::new(open_persistent(
+        "external_browser_rules.db",
+        lumen_storage::ExternalBrowserRules::open,
+        lumen_storage::ExternalBrowserRules::open_in_memory,
+        "external_browser_rules init",
+    ));
+    let _ = external_browser_rules.purge_expired(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
+    );
+    let (compat_signals, compat_signal_store) = lumen::signals::open_signal_log();
     let mut app = Lumen {
         display_list: Vec::new(),
         display_list_epoch: 1,
@@ -652,6 +664,7 @@ fn run_window_mode_inner(
         bg_tabs: HashMap::new(),
         hibernated_tabs: HashMap::new(),
         crashed: None,
+        net_error_retries: None,
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
             .expect("tab_snapshots in-memory"),
         t2_store: lumen_storage::SleepingTabStore::open_in_memory()
@@ -688,6 +701,7 @@ fn run_window_mode_inner(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
         permissions_disk_store: permissions_store,
+        external_browser_rules,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         ai_panel: panels::ai_panel::AiPanel::new(),
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),
@@ -803,6 +817,8 @@ fn run_window_mode_inner(
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
         closed_tabs: tabs::closed::ClosedTabs::default(),
         page_context_menu: page_context_menu::PageContextMenu::default(),
+        compat_signals,
+        compat_signal_store,
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
         spell_ignored: std::collections::HashSet::new(),
         shell_theme: panels::themes::ShellTheme::default(),
