@@ -37,6 +37,8 @@ pub enum NetErrorCode {
     UnknownUrlScheme,
     /// Запрос заблокирован политикой браузера (CORS, CSP, перехватчик).
     BlockedByClient,
+    /// Сервер ответил 5xx и не прислал тела: показывать нечего, кроме самого статуса.
+    HttpStatus(u16),
     /// Причина не распознана.
     Failed,
 }
@@ -59,6 +61,7 @@ impl NetErrorCode {
             Self::InvalidUrl => "ERR_INVALID_URL",
             Self::UnknownUrlScheme => "ERR_UNKNOWN_URL_SCHEME",
             Self::BlockedByClient => "ERR_BLOCKED_BY_CLIENT",
+            Self::HttpStatus(_) => "ERR_HTTP_RESPONSE_CODE_FAILURE",
             Self::Failed => "ERR_FAILED",
         }
     }
@@ -70,6 +73,9 @@ impl NetErrorCode {
     pub fn classify(message: &str) -> Self {
         let msg = message.strip_prefix("network error: ").unwrap_or(message);
         let lower = msg.to_ascii_lowercase();
+        if let Some(status) = lower.strip_prefix(HTTP_STATUS_PREFIX).and_then(|n| n.trim().parse().ok()) {
+            return Self::HttpStatus(status);
+        }
         if lower.starts_with("blocked") || lower.contains("err_blocked_by_client") {
             return Self::BlockedByClient;
         }
@@ -114,6 +120,17 @@ impl NetErrorCode {
         }
         Self::Failed
     }
+}
+
+/// Начало сообщения о пустом ответе 5xx — см. [`http_status_message`].
+const HTTP_STATUS_PREFIX: &str = "http status ";
+
+/// Сообщение для `LoadEvent::LoadError`, когда главный документ пришёл с кодом
+/// 5xx и пустым телом; [`NetErrorCode::classify`] возвращает по нему
+/// [`NetErrorCode::HttpStatus`].
+#[must_use]
+pub fn http_status_message(status: u16) -> String {
+    format!("{HTTP_STATUS_PREFIX}{status}")
 }
 
 /// Номер из хвоста `(os error N)` — `std::io::Error` печатает его на любом
@@ -192,6 +209,14 @@ mod tests {
     fn file_and_unknown() {
         assert_eq!(code("No such file or directory (os error 2)"), NetErrorCode::FileNotFound);
         assert_eq!(code("что-то странное"), NetErrorCode::Failed);
+    }
+
+    #[test]
+    fn empty_server_error_roundtrips_through_the_message() {
+        assert_eq!(code(&http_status_message(503)), NetErrorCode::HttpStatus(503));
+        assert_eq!(code("network error: http status 502"), NetErrorCode::HttpStatus(502));
+        assert_eq!(code("http status x"), NetErrorCode::Failed);
+        assert_eq!(NetErrorCode::HttpStatus(504).name(), "ERR_HTTP_RESPONSE_CODE_FAILURE");
     }
 
     #[test]

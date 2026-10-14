@@ -1623,6 +1623,14 @@ impl Lumen {
                 raw
             };
 
+            // COMPAT-ERRORS: 5xx без тела — показывать нечего, кроме самого
+            // статуса; страницу ошибки с автоповтором показывает `show_net_error`.
+            if crate::net_error_page::is_empty_server_error(raw.status, &raw.bytes) {
+                let msg = lumen_core::net_error::http_status_message(raw.status);
+                let _ = proxy.send_event(LoadEvent::LoadError(msg, tab_id, generation));
+                return;
+            }
+
             // Финальные hint-ы из буферизованного хвоста сканера.
             let tail = preload_scanner.end();
             if !tail.is_empty() {

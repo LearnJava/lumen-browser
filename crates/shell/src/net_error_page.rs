@@ -104,11 +104,64 @@ fn texts(code: NetErrorCode, host: &str) -> (String, String, &'static [&'static 
             "Lumen не стал загружать эту страницу: её заблокировала политика безопасности или защита от трекеров.".into(),
             &["Если страница нужна, отключите защиту для этого сайта на значке щита."],
         ),
+        C::HttpStatus(status) => (
+            format!("Сайт {host} не отдал страницу (HTTP {status})"),
+            format!("Сервер сайта ответил кодом {status} ({}) и не прислал ни одной страницы.", status_meaning(status)),
+            &[
+                "Подождите: такие сбои обычно проходят за несколько минут.",
+                "Если ошибка постоянная, откройте сайт в другом браузере.",
+            ],
+        ),
         C::Failed => (
             "Не удалось загрузить страницу".to_owned(),
             "Причину определить не удалось.".into(),
             &["Повторите загрузку.", "Если ошибка постоянная, откройте страницу в другом браузере."],
         ),
+    }
+}
+
+/// Главный документ с кодом 5xx и пустым (или пробельным) телом — браузер
+/// показывает вместо него страницу ошибки, как Chromium. С телом сервер
+/// сам объяснил сбой, и его страницу не трогаем.
+pub(crate) fn is_empty_server_error(status: u16, body: &[u8]) -> bool {
+    (500..=599).contains(&status) && body.iter().all(u8::is_ascii_whitespace)
+}
+
+/// Что означает код 5xx — одним оборотом, без вердикта «кто виноват».
+fn status_meaning(status: u16) -> &'static str {
+    match status {
+        502 => "сервер-посредник получил от основного сервера неверный ответ",
+        503 => "сервер временно не принимает запросы",
+        504 => "сервер-посредник не дождался основного сервера",
+        _ => "сервер не смог обработать запрос",
+    }
+}
+
+/// Паузы между автоповторами 5xx, секунды; после последней повтор останавливается.
+const AUTO_RETRY_DELAYS: [u32; 3] = [5, 15, 45];
+
+/// Автоповтор страницы ошибки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutoRetry {
+    /// Для этой ошибки автоповтора нет.
+    Off,
+    /// Страница сама повторит загрузку через столько секунд.
+    In(u32),
+    /// Попытки закончились — дальше только кнопка «Повторить».
+    Exhausted,
+}
+
+impl AutoRetry {
+    /// Автоповтор для `attempt`-го показа (с нуля) страницы ошибки с кодом
+    /// `code`: только 502/503/504 — признак временного сбоя; прочие 5xx и
+    /// сетевые сбои повторять вслепую нельзя (POST, перегруженный сервер).
+    pub(crate) fn for_attempt(code: NetErrorCode, attempt: usize) -> Self {
+        match code {
+            NetErrorCode::HttpStatus(502..=504) => {
+                AUTO_RETRY_DELAYS.get(attempt).map_or(Self::Exhausted, |s| Self::In(*s))
+            }
+            _ => Self::Off,
+        }
     }
 }
 
@@ -162,13 +215,26 @@ fn host_of(url: &str) -> String {
 /// HTML страницы ошибки. `url` — адрес несостоявшейся навигации (кнопка
 /// «Повторить» ведёт на него), `detail` — исходный текст ошибки: попадает в
 /// мелкий блок внизу, чтобы сообщение об ошибке было с чем сверять.
-pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str) -> String {
+pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str, auto_retry: AutoRetry) -> String {
     let (title, lead, actions) = texts(code, &escape_html(&host_of(url)));
     let items: String = actions.iter().map(|a| format!("<li>{}</li>", escape_html(a))).collect();
     let retry = if url.is_empty() {
         String::new()
     } else {
         format!("<p><a class=\"btn\" href=\"{}\">Повторить</a></p>", escape_html(url))
+    };
+    // Автоповтор — `<meta refresh>` на сам адрес: страница ошибки показывается
+    // под адресом несостоявшейся навигации, и таймер заново загружает его.
+    let (refresh, auto_note) = match auto_retry {
+        AutoRetry::In(secs) if !url.is_empty() => (
+            format!("<meta http-equiv=\"refresh\" content=\"{secs};url={}\">", escape_html(url)),
+            format!("<p class=\"alt\">Страница сама повторит загрузку через {secs} с.</p>"),
+        ),
+        AutoRetry::Exhausted => (
+            String::new(),
+            "<p class=\"alt\">Автоматические повторы закончились: нажмите «Повторить», когда будет удобно.</p>".to_owned(),
+        ),
+        _ => (String::new(), String::new()),
     };
     let other = match handoff_reason(code) {
         Some(reason) if is_handoff_url(url) => {
@@ -181,13 +247,13 @@ pub(crate) fn build_net_error_html(url: &str, code: NetErrorCode, detail: &str) 
         _ => String::new(),
     };
     format!(
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">{refresh}<title>{title}</title>\
 <style>body{{font-family:sans-serif;margin:0;padding:80px 40px;background:#f4f4f6;color:#222}}\
 h1{{font-size:26px;max-width:640px}}p,li{{font-size:16px;max-width:640px}}li{{margin:4px 0}}\
 a.btn{{display:inline-block;padding:10px 22px;background:#2b6cdf;color:#fff;border-radius:6px;\
 text-decoration:none}}p.alt{{font-size:13px;color:#555}}.code{{margin-top:48px;font-size:12px;color:#777}}\
 pre{{font-size:12px;color:#777;max-width:640px;white-space:pre-wrap}}</style></head>\
-<body><h1>{title}</h1><p>{lead}</p><ul>{items}</ul>{retry}{other}\
+<body><h1>{title}</h1><p>{lead}</p><ul>{items}</ul>{retry}{auto_note}{other}\
 <div class=\"code\">{code_name}</div><pre>{detail}</pre></body></html>",
         lead = escape_html(&lead),
         code_name = code.name(),
@@ -196,8 +262,8 @@ pre{{font-size:12px;color:#777;max-width:640px;white-space:pre-wrap}}</style></h
 }
 
 /// Источник страницы ошибки для навигации на `url`.
-pub(crate) fn net_error_source(url: &str, code: NetErrorCode, detail: &str) -> PageSource {
-    PageSource::Static { html: build_net_error_html(url, code, detail), url: url.to_owned() }
+pub(crate) fn net_error_source(url: &str, code: NetErrorCode, detail: &str, auto_retry: AutoRetry) -> PageSource {
+    PageSource::Static { html: build_net_error_html(url, code, detail, auto_retry), url: url.to_owned() }
 }
 
 #[cfg(test)]
@@ -206,7 +272,7 @@ mod tests {
 
     #[test]
     fn page_names_host_and_chromium_code() {
-        let html = build_net_error_html("https://nope.example/a?b=1", NetErrorCode::NameNotResolved, "resolve nope.example: x");
+        let html = build_net_error_html("https://nope.example/a?b=1", NetErrorCode::NameNotResolved, "resolve nope.example: x", AutoRetry::Off);
         assert!(html.contains("Не удаётся найти сайт nope.example"));
         assert!(html.contains("ERR_NAME_NOT_RESOLVED"));
         assert!(html.contains("href=\"https://nope.example/a?b=1\""));
@@ -215,7 +281,7 @@ mod tests {
 
     #[test]
     fn page_escapes_url_and_detail() {
-        let html = build_net_error_html("http://a/?q=\"><script>", NetErrorCode::Failed, "<b>&");
+        let html = build_net_error_html("http://a/?q=\"><script>", NetErrorCode::Failed, "<b>&", AutoRetry::Off);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;b&gt;&amp;"));
     }
@@ -236,6 +302,10 @@ mod tests {
             NetErrorCode::InvalidUrl,
             NetErrorCode::UnknownUrlScheme,
             NetErrorCode::BlockedByClient,
+            NetErrorCode::HttpStatus(502),
+            NetErrorCode::HttpStatus(503),
+            NetErrorCode::HttpStatus(504),
+            NetErrorCode::HttpStatus(500),
             NetErrorCode::Failed,
         ] {
             let (title, lead, actions) = texts(code, host);
@@ -249,26 +319,26 @@ mod tests {
 
     #[test]
     fn other_browser_link_only_for_http_and_not_for_blocks() {
-        let html = build_net_error_html("https://a.example/", NetErrorCode::ConnectionTimedOut, "");
+        let html = build_net_error_html("https://a.example/", NetErrorCode::ConnectionTimedOut, "", AutoRetry::Off);
         assert!(html.contains("href=\"about:handoff?open=other\">Открыть в другом браузере"));
-        let html = build_net_error_html("https://a.example/", NetErrorCode::SslProtocolError, "");
+        let html = build_net_error_html("https://a.example/", NetErrorCode::SslProtocolError, "", AutoRetry::Off);
         assert!(html.contains("about:handoff?open=crypto"));
         for code in [NetErrorCode::BlockedByClient, NetErrorCode::InvalidUrl, NetErrorCode::FileNotFound] {
-            let html = build_net_error_html("https://a.example/", code, "");
+            let html = build_net_error_html("https://a.example/", code, "", AutoRetry::Off);
             assert!(!html.contains("about:handoff"), "{code:?}");
         }
-        let html = build_net_error_html("file:///x", NetErrorCode::Failed, "");
+        let html = build_net_error_html("file:///x", NetErrorCode::Failed, "", AutoRetry::Off);
         assert!(!html.contains("about:handoff"));
     }
 
     #[test]
     fn other_reasons_are_offered_except_the_chosen_one() {
-        let html = build_net_error_html("https://a.example/", NetErrorCode::ConnectionTimedOut, "");
+        let html = build_net_error_html("https://a.example/", NetErrorCode::ConnectionTimedOut, "", AutoRetry::Off);
         for code in ["crypto", "drm", "calls"] {
             assert!(html.contains(&format!("href=\"about:handoff?open={code}\"")), "{code}");
         }
         assert_eq!(html.matches("about:handoff?open=other").count(), 1);
-        let html = build_net_error_html("https://a.example/", NetErrorCode::SslProtocolError, "");
+        let html = build_net_error_html("https://a.example/", NetErrorCode::SslProtocolError, "", AutoRetry::Off);
         assert_eq!(html.matches("about:handoff?open=crypto").count(), 1);
         assert!(html.contains("about:handoff?open=other\">сайт не работает"));
     }
@@ -284,7 +354,42 @@ mod tests {
 
     #[test]
     fn file_source_has_no_retry_link() {
-        let html = build_net_error_html("", NetErrorCode::FileNotFound, "");
+        let html = build_net_error_html("", NetErrorCode::FileNotFound, "", AutoRetry::Off);
         assert!(!html.contains("class=\"btn\""));
+    }
+
+    #[test]
+    fn empty_5xx_page_names_status_and_refreshes_itself() {
+        let url = "https://a.example/p?x=1&y=2";
+        let html = build_net_error_html(url, NetErrorCode::HttpStatus(503), "http status 503", AutoRetry::In(15));
+        assert!(html.contains("Сайт a.example не отдал страницу (HTTP 503)"));
+        assert!(html.contains("ERR_HTTP_RESPONSE_CODE_FAILURE"));
+        assert!(html.contains("<meta http-equiv=\"refresh\" content=\"15;url=https://a.example/p?x=1&amp;y=2\">"));
+        assert!(html.contains("повторит загрузку через 15 с"));
+        assert!(html.contains("about:handoff?open=other"));
+    }
+
+    #[test]
+    fn auto_retry_backs_off_then_stops_and_only_for_gateway_codes() {
+        let c = NetErrorCode::HttpStatus(502);
+        assert_eq!(AutoRetry::for_attempt(c, 0), AutoRetry::In(5));
+        assert_eq!(AutoRetry::for_attempt(c, 1), AutoRetry::In(15));
+        assert_eq!(AutoRetry::for_attempt(c, 2), AutoRetry::In(45));
+        assert_eq!(AutoRetry::for_attempt(c, 3), AutoRetry::Exhausted);
+        assert_eq!(AutoRetry::for_attempt(NetErrorCode::HttpStatus(500), 0), AutoRetry::Off);
+        assert_eq!(AutoRetry::for_attempt(NetErrorCode::ConnectionTimedOut, 0), AutoRetry::Off);
+        let html = build_net_error_html("https://a.example/", c, "", AutoRetry::Exhausted);
+        assert!(!html.contains("http-equiv"));
+        assert!(html.contains("Автоматические повторы закончились"));
+    }
+
+    #[test]
+    fn only_5xx_without_a_body_is_replaced() {
+        assert!(is_empty_server_error(503, b""));
+        assert!(is_empty_server_error(500, b" \t\n"));
+        assert!(!is_empty_server_error(503, b"<h1>maintenance</h1>"));
+        assert!(!is_empty_server_error(404, b""));
+        assert!(!is_empty_server_error(0, b""));
+        assert!(!is_empty_server_error(200, b""));
     }
 }

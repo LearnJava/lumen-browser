@@ -1329,6 +1329,9 @@ pub(crate) struct Lumen {
     /// UX-CRASH: HTML показанного экрана падения и исходный источник упавшей
     /// страницы — `reload()` возвращает его вместо повторного показа экрана.
     pub(crate) crashed: Option<(String, PageSource)>,
+    /// COMPAT-ERRORS: адрес, чья страница ошибки 5xx уже повторялась сама,
+    /// число показов подряд и момент последнего — отсчёт пауз автоповтора.
+    pub(crate) net_error_retries: Option<(String, usize, std::time::Instant)>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     pub(crate) tab_snapshots: lumen_storage::TabSnapshotStore,
     /// SQLite-backed checkpoint store for T2 (BackgroundOld) tabs (ADR-008 §10I).
