@@ -745,6 +745,9 @@ pub struct ChromePageCtxModel {
     pub suggestions: Vec<String>,
     /// Append the «Добавить в словарь» / «Пропустить» rows (spell menu only).
     pub spell_footer: bool,
+    /// Rows `(data-page-ctx value, label)` appended after the suggestions
+    /// behind a separator — the page menu's «Открыть в другом браузере».
+    pub extra_rows: Vec<(String, String)>,
 }
 
 /// `#noteOverlay` snapshot (UX-CHROME-PANELS) — mirrors `NoteViewerPanel`.
@@ -2036,7 +2039,8 @@ fn bind_tab_ctx(doc: &mut Document, menu: &ChromeTabCtxModel) {
 
 /// Toggles `#pageCtxMenu`'s `.open` class, places it and rebuilds its rows:
 /// one `use:<i>` button per suggestion, then optionally «Добавить в словарь» /
-/// «Пропустить» behind a separator (UX-CHROME-PANELS).
+/// «Пропустить» behind a separator and the model's `extra_rows` behind another
+/// (UX-CHROME-PANELS).
 fn bind_page_ctx(doc: &mut Document, menu: &ChromePageCtxModel) {
     let Some(root) = doc.find_by_id(crate::ids::PAGE_CTX_MENU) else { return };
     set_class_token(doc, root, "open", menu.open);
@@ -2055,6 +2059,9 @@ fn bind_page_ctx(doc: &mut Document, menu: &ChromePageCtxModel) {
         let sep = !rows.is_empty();
         rows.push(("add".to_owned(), "Добавить в словарь".to_owned(), sep));
         rows.push(("ignore".to_owned(), "Пропустить".to_owned(), false));
+    }
+    for (i, (action, label)) in menu.extra_rows.iter().enumerate() {
+        rows.push((action.clone(), label.clone(), i == 0 && !rows.is_empty()));
     }
     for (action, label, sep) in rows {
         let btn = doc.create_element(QualName::html("button"));
@@ -4648,6 +4655,7 @@ mod tests {
                 y: 20.0,
                 suggestions: vec!["world".to_owned(), "would".to_owned()],
                 spell_footer: true,
+                extra_rows: vec![("ho:other".to_owned(), "Открыть в другом браузере".to_owned())],
             },
             ..ChromeModel::default()
         };
@@ -4655,7 +4663,8 @@ mod tests {
         let root = doc.find_by_id(crate::ids::PAGE_CTX_MENU).expect("asset has #pageCtxMenu");
         assert!(has_class(&doc, root, "open"));
         assert_eq!(doc.get(root).get_attr("style"), Some("left:10px;top:20px"));
-        assert_eq!(find_descendants_by_class(&doc, root, "page-ctx-row").len(), 4);
+        assert_eq!(find_descendants_by_class(&doc, root, "page-ctx-row").len(), 5);
+        assert_eq!(find_descendants_by_class(&doc, root, "sep").len(), 2);
         bind_model(&mut doc, &ChromeModel::default());
         assert!(!has_class(&doc, root, "open"));
         assert!(find_descendants_by_class(&doc, root, "page-ctx-row").is_empty());

@@ -14,7 +14,7 @@ use crate::*;
 /// Файл-метка «предупреждение перед первой передачей уже показано».
 const WARNED_MARKER: &str = "handoff-warned";
 
-fn now_unix() -> i64 {
+pub(super) fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
@@ -34,6 +34,18 @@ fn take_first_handoff() -> bool {
 }
 
 impl Lumen {
+    /// Меню страницы по правому клику без сдвига (жесты остаются на протяжке):
+    /// пункты «Открыть в другом браузере» — только на http(s)-странице и вне
+    /// chrome. `true` — меню открыто, клик обработан.
+    pub(crate) fn try_open_page_menu(&mut self, x_css: f32, y_css: f32) -> bool {
+        if self.point_over_chrome(x_css, y_css) || !is_handoff_url(self.current_display_url()) {
+            return false;
+        }
+        self.page_context_menu.open_page(x_css, y_css);
+        self.relayout_chrome_host();
+        true
+    }
+
     /// Передать текущую страницу другому установленному браузеру.
     ///
     /// Без `remember` — одноразово, правила не создаётся. С `remember` по клику
@@ -61,6 +73,7 @@ impl Lumen {
                 Pick::Browser(b) => match launch(b, url) {
                     Ok(()) => {
                         eprintln!("[handoff] reason={} browser={} remember={remember}", reason.code(), b.id);
+                        self.note_open_in_other(url, reason.code());
                         if remember {
                             self.remember_handoff(url, &b.id, reason);
                         }

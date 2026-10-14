@@ -1784,6 +1784,9 @@ pub(crate) struct Lumen {
     /// right-clicking a misspelled word in a focused text `<input>`. Hidden
     /// unless open.
     pub(crate) page_context_menu: page_context_menu::PageContextMenu,
+    /// COMPAT-SIG-01: локальный журнал сильных сигналов «сайт не работает»
+    /// (в памяти окна, наружу не уходит).
+    pub(crate) compat_signals: compat_signals::SignalLog,
     /// Words the user added to the persistent dictionary
     /// (`data/spell/user_words.txt`), lowercase. Treated as correct spellings.
     pub(crate) spell_user_words: std::collections::HashSet<String>,

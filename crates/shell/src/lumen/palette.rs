@@ -113,7 +113,10 @@ impl Lumen {
                     let idx = self.tab_strip.active;
                     self.close_tab(idx, event_loop);
                 }
-                PaletteAction::Reload => self.reload(),
+                PaletteAction::Reload => {
+                    self.note_user_reload();
+                    self.reload();
+                }
                 PaletteAction::NavigateBack => self.navigate_back(),
                 PaletteAction::NavigateForward => self.navigate_forward(),
                 PaletteAction::FindOnPage => {
