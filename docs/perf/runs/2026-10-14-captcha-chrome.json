@@ -1,0 +1,627 @@
+{
+ "arm": "chrome",
+ "label": "baseline-chrome",
+ "route": "home-direct",
+ "build": {
+  "binary": "C:\\Users\\kostja\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe",
+  "chrome_version": "148.0.7778.96"
+ },
+ "env": {},
+ "started": "2026-10-14-1349",
+ "summary": {
+  "pages": 20,
+  "passed": 14,
+  "gpr": 0.7,
+  "verdicts": {
+   "пройдено": 14,
+   "петля": 0,
+   "не_отрисован": 5,
+   "отказ": 0,
+   "завис": 1
+  },
+  "by_vendor": {
+   "akamai": "1/1",
+   "anubis": "2/2",
+   "cf": "1/1",
+   "datadome": "0/1",
+   "ddosguard": "1/1",
+   "hcaptcha": "1/2",
+   "human": "1/1",
+   "imperva": "1/1",
+   "qrator": "1/1",
+   "recaptcha": "4/4",
+   "smartcaptcha": "0/1",
+   "turnstile": "1/4"
+  },
+  "v3_scores": [
+   0.9
+  ]
+ },
+ "results": [
+  {
+   "observed_s": 14.0,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "title": "cloudflare turnstile",
+   "text_len": 51,
+   "text_head": "Cloudflare turnstile demo\nNon-interactive challenge",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "token_fields": {
+    "cf-turnstile-response": 730,
+    "g-recaptcha-response": 730
+   },
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "turnstile-nonint",
+   "vendor": "turnstile",
+   "oracle": "token",
+   "url": "https://peet.ws/turnstile-test/non-interactive.html",
+   "wall_s": 15.8
+  },
+  {
+   "observed_s": 60.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://peet.ws/turnstile-test/managed.html",
+   "title": "cloudflare turnstile",
+   "text_len": 43,
+   "text_head": "Cloudflare turnstile demo\nManaged challenge",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "не_отрисован",
+   "reason": "токена нет",
+   "id": "turnstile-managed",
+   "vendor": "turnstile",
+   "oracle": "token",
+   "url": "https://peet.ws/turnstile-test/managed.html",
+   "wall_s": 85.8
+  },
+  {
+   "observed_s": 60.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://peet.ws/turnstile-test/interactive.html",
+   "title": "Page not found · GitHub Pages",
+   "text_len": 383,
+   "text_head": "404\n\nFile not found\n\nThe site configured at this address does not contain the requested file.\n\nIf this is your site, make sure that the filename case matches the URL as well as any file permissions.\nFor root URLs (like http://example.com/) you must provide an index.html file.\n\nRead the full documentation for more information about using GitHub Pages.\n\nGitHub Status — @githubstatus",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "не_отрисован",
+   "reason": "iframe виджета нет",
+   "id": "turnstile-interactive",
+   "vendor": "turnstile",
+   "oracle": "render",
+   "url": "https://peet.ws/turnstile-test/interactive.html",
+   "wall_s": 61.6
+  },
+  {
+   "observed_s": 60.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://2captcha.com/demo/cloudflare-turnstile",
+   "title": "Cloudflare Turnstile demo: Sample Form with Cloudflare Turnstile",
+   "text_len": 4502,
+   "text_head": "To home page\nCaptcha solver\nEntry job\nAPI\nProxy\nScrapers\nData for AI\nResources\nSign up\nLog in\nCloudflare Turnstile demo\n\nThis page explains how Cloudflare Turnstile is displayed and how Cloudflare Turnstile verification works. You can also check how the Cloudflare Challenge works on example page.\n\nCloudflare Turnstile\nCloudflare Challenge\nCheck\nReset\n\nIn many cases Cloudflare Turnstile hinder accessibility, frustrate users, limits access to open information, makes testing application and sites difficult. Use Cloudflare Turnstile solver for automatic bypass.\n\nCloudflare Turnstile solver\nAPI\n\nHo",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "cdn.respond.io"
+   ],
+   "verdict": "не_отрисован",
+   "reason": "iframe виджета нет",
+   "id": "turnstile-2captcha",
+   "vendor": "turnstile",
+   "oracle": "render",
+   "url": "https://2captcha.com/demo/cloudflare-turnstile",
+   "wall_s": 109.5
+  },
+  {
+   "observed_s": 8.0,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://nopecha.com/demo/cloudflare",
+   "title": "Один момент…",
+   "text_len": 282,
+   "text_head": "nopecha.com\nВыполнение проверки безопасности\n\nЭтот веб-сайт использует сервис безопасности для защиты от вредоносных ботов. Эта страница отображается, пока веб-сайт проверяет, что вы не бот.\n\nRay ID: a4a60b7d8f0c6655\nПроизводительность и безопасность с Cloudflare\nКонфиденциальность",
+   "api": {
+    "turnstile": "object",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "cf-managed-challenge",
+   "vendor": "cf",
+   "oracle": "unblocked",
+   "url": "https://nopecha.com/demo/cloudflare",
+   "wall_s": 11.5
+  },
+  {
+   "observed_s": 8.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://www.google.com/recaptcha/api2/demo",
+   "title": "Демонстрация ReCAPTCHA",
+   "text_len": 90,
+   "text_head": "Пример формы с ReCAPTCHA\nИмя\nФамилия\nЭлектронная почта\n\nВаш любимый цвет:\n\nкрасный\nзеленый",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "www.google.com",
+    "",
+    "www.google.com"
+   ],
+   "widget_frames": [
+    {
+     "host": "www.google.com",
+     "w": 304,
+     "h": 78
+    },
+    {
+     "host": "www.google.com",
+     "w": 300,
+     "h": 150
+    }
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "recaptcha-v2-checkbox",
+   "vendor": "recaptcha",
+   "oracle": "render",
+   "url": "https://www.google.com/recaptcha/api2/demo",
+   "wall_s": 9.6
+  },
+  {
+   "observed_s": 10.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php",
+   "title": "reCAPTCHA demo - \"I'm not a robot\" checkbox",
+   "text_len": 158,
+   "text_head": "reCAPTCHA demo\n\"I'm not a robot\" checkbox\n\n↩️ Home\n\nComplete the reCAPTCHA then submit the form.\n\nAn example form\nExample input A: \nExample input B: \nSubmit ↦",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "www.google.com",
+    "",
+    "www.google.com",
+    "",
+    "www.google.com"
+   ],
+   "widget_frames": [
+    {
+     "host": "www.google.com",
+     "w": 304,
+     "h": 78
+    },
+    {
+     "host": "www.google.com",
+     "w": 256,
+     "h": 60
+    },
+    {
+     "host": "www.google.com",
+     "w": 300,
+     "h": 150
+    }
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "recaptcha-v2-checkbox-appspot",
+   "vendor": "recaptcha",
+   "oracle": "render",
+   "url": "https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php",
+   "wall_s": 12.0
+  },
+  {
+   "observed_s": 10.0,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://recaptcha-demo.appspot.com/recaptcha-v2-invisible.php",
+   "title": "reCAPTCHA demo - Invisible",
+   "text_len": 150,
+   "text_head": "reCAPTCHA demo\nInvisible\n\n↩️ Home\n\nSubmit the form and reCAPTCHA will run automatically.\n\nAn example form\nExample input A: \nExample input B: \nSubmit ↦",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "www.google.com",
+    "",
+    "www.google.com",
+    "",
+    "www.google.com"
+   ],
+   "widget_frames": [
+    {
+     "host": "www.google.com",
+     "w": 256,
+     "h": 60
+    },
+    {
+     "host": "www.google.com",
+     "w": 256,
+     "h": 60
+    },
+    {
+     "host": "www.google.com",
+     "w": 1918,
+     "h": 150
+    }
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "recaptcha-v2-invisible",
+   "vendor": "recaptcha",
+   "oracle": "render",
+   "url": "https://recaptcha-demo.appspot.com/recaptcha-v2-invisible.php",
+   "wall_s": 12.0
+  },
+  {
+   "observed_s": 14.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://recaptcha-demo.appspot.com/recaptcha-v3-request-scores.php",
+   "title": "reCAPTCHA demo - Request scores",
+   "text_len": 579,
+   "text_head": "reCAPTCHA demo\nRequest scores\n\n↩️ Home\n\nThe reCAPTCHA v3 API provides a confidence score for each request.\n\nNOTE:This is a sample implementation, the score returned here is not a reflection on your Google account or type of traffic. In production, refer to the distribution of scores shown in your admin interface and adjust your own threshold accordingly. Do not raise issues regarding the score you see here.\n\nreCAPTCHA script loading\ngrecaptcha.ready() fired, calling\ngrecaptcha.execute('6LdKlZEpAAAAAAOQjzC2v_d36tWxCl6dWsozdSy9', {action: 'examples/v3scores'})'\n\n⤴️ Try again",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "object",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "",
+    "www.google.com",
+    "www.google.com",
+    ""
+   ],
+   "v3_score": 0.9,
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "recaptcha-v3-score",
+   "vendor": "recaptcha",
+   "oracle": "score",
+   "url": "https://recaptcha-demo.appspot.com/recaptcha-v3-request-scores.php",
+   "wall_s": 16.8
+  },
+  {
+   "observed_s": 8.9,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://accounts.hcaptcha.com/demo",
+   "title": "Демо-версия hCAPTCHA",
+   "text_len": 302,
+   "text_head": "?hl=XXX Используйте это для изменения параметра hl JS API.\n?sitekey=XXX Используйте это для изменения ключа сайта.\n?secret=XXX Используйте это для изменения секрета siteverify.\n?sitekey=XXX&secret=XXX Используйте это, чтобы изменить оба параметра.\n\n\n\nОбразец формы с hCAPTCHA\nПоле формы (необязательно)",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "object",
+    "hcaptcha": "object"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "newassets.hcaptcha.com",
+    "newassets.hcaptcha.com"
+   ],
+   "widget_frames": [
+    {
+     "host": "newassets.hcaptcha.com",
+     "w": 302,
+     "h": 76
+    },
+    {
+     "host": "newassets.hcaptcha.com",
+     "w": 300,
+     "h": 150
+    }
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "hcaptcha-demo",
+   "vendor": "hcaptcha",
+   "oracle": "render",
+   "url": "https://accounts.hcaptcha.com/demo",
+   "wall_s": 58.6
+  },
+  {
+   "observed_s": 60.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://2captcha.com/",
+   "title": "AI captcha solver: Bypass reCAPTCHA and any captchas using best auto captcha solving service API",
+   "text_len": 7822,
+   "text_head": "Captcha solver\nEntry job\nAPI\nProxy\nScrapers\nData for AI\nResources\nSign up\nLog in\nCaptcha solving service\n\nAPI clients: Python, PHP, Java, viеw more\n\n#1 captcha solver on GitHub\n\n24/7 tech support\n\nUse the API key in the software\n\nQuick start\nCaptcha entry work\n\nCaptcha typing job\n\nWork from home\n\nEarn money without registration fees\n\nDaily payment\n\nStart earning\nOrder сaptchas: types and prices\nThe server load does not affect the price\nPay only for solved captchas\n99.9% uptime\ncaptcha type\t\nUseful links\n\tPrice per 1000\tSolving speed\tFree capacity, per minute\n\nreCAPTCHA v2\n\t\nHow to solve\nDemo\n\t",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "cdn.respond.io"
+   ],
+   "verdict": "не_отрисован",
+   "reason": "iframe виджета нет",
+   "id": "hcaptcha-2captcha",
+   "vendor": "hcaptcha",
+   "oracle": "render",
+   "url": "https://2captcha.com/demo/hcaptcha",
+   "wall_s": 62.0
+  },
+  {
+   "observed_s": 60.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://2captcha.com/demo/yandex-smart-captcha",
+   "title": "Page not found",
+   "text_len": 1232,
+   "text_head": "To home page\nCaptcha solver\nEntry job\nAPI\nProxy\nScrapers\nData for AI\nResources\nSign up\nLog in\nUh-oh, the page you requested may have been removed.\n\nGo to our captcha solver or residential proxies, or contact us for a quick reply.\n\nCaptcha solver\nResidential proxies\n\nContact sales\n\nSend message\n\nScale up your business with 2Captcha\n\nContact sales\nCaptcha solver\nCaptcha solver API\nBrowser extension\nPuppeteer\nSelenium\nPlaywright\nHow-to tutorials\nCompany\nPricing\nEnterprise support\nAffiliate program\nAbout\nBlog\nSoftware\nCaptcha supported\nreCAPTCHA\nImage Captcha\nCloudflare Turnstile\nArkose Labs captc",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "cdn.respond.io"
+   ],
+   "verdict": "не_отрисован",
+   "reason": "iframe виджета нет",
+   "id": "smartcaptcha-2captcha",
+   "vendor": "smartcaptcha",
+   "oracle": "render",
+   "url": "https://2captcha.com/demo/yandex-smart-captcha",
+   "wall_s": 61.7
+  },
+  {
+   "observed_s": 60.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://www.leboncoin.fr/",
+   "title": "leboncoin.fr",
+   "text_len": 0,
+   "text_head": "",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [
+    "datadome"
+   ],
+   "frames": [
+    "geo.captcha-delivery.com"
+   ],
+   "verdict": "завис",
+   "reason": "итоговая страница не загрузилась (rs=complete, текст 0 симв.)",
+   "id": "datadome-leboncoin",
+   "vendor": "datadome",
+   "oracle": "unblocked",
+   "url": "https://www.leboncoin.fr/",
+   "wall_s": 85.6
+  },
+  {
+   "observed_s": 12.2,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://www.nike.com/nl/",
+   "title": "Nike. Just Do It. Nike NL",
+   "text_len": 4717,
+   "text_head": "Gegevens verbeteren je ervaring\n\nWe gebruiken cookies (en soortgelijke technologieën) voor een betere werking van onze platforms en zodat we je relevantere informatie en gepersonaliseerde advertenties kunnen tonen.\n\nMet deze cookies, die zowel van Nike als van derden afkomstig zijn, verzamelen wij en onze partners (26 in totaal) unieke identificatoren (zoals je IP-adres) aan de hand waarvan we je browsegegevens kunnen volgen en vastleggen op en buiten onze platforms. Wij doen dit om je ervaring te verbeteren door onze platforms op je voorkeuren aan te passen en je gepersonaliseerde content te ",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [
+    "www.nike.com",
+    "nikeconsumerservices.my.site.com"
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "akamai-nike",
+   "vendor": "akamai",
+   "oracle": "unblocked",
+   "url": "https://www.nike.com/",
+   "wall_s": 14.0
+  },
+  {
+   "observed_s": 12.5,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://www.imperva.com/",
+   "title": "Cyber Security Leader | Imperva, Inc.",
+   "text_len": 6317,
+   "text_head": "Under DDoS Attack?\n1-855-993-3676\n Login\nEN\nStart for Free\nContact Us\nProducts\nSolutions\nSupport\nPartners\nCustomers\nResources\nCompany\nImperva WAF and API Security Earns Top Position in SecureIQLab 2026 Cloud WAAP Report\nRead the report\nComprehensive digital security\nApplication Security\nProtect applications and APIs anywhere\nMitigate DDoS, bot, API and supply chain attacks\nComply with PCI 4.0\nLearn more\nData Security\nSecure sensitive data across on-premises and cloud environments\nSimplify compliance and audit reporting\nLearn more\nImperva latest news\nHow Sabre Protects Global Travel Application",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [
+    "incap_ses_526_2439"
+   ],
+   "frames": [
+    "www.youtube.com"
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "imperva-incapsula",
+   "vendor": "imperva",
+   "oracle": "unblocked",
+   "url": "https://www.imperva.com/",
+   "wall_s": 14.4
+  },
+  {
+   "observed_s": 12.7,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://ddos-guard.net/",
+   "title": "DDoS-Guard | Reliable DDoS Protection & Mitigation",
+   "text_len": 4463,
+   "text_head": "dCAPTCHA — a new service from DDoS-Guard with a free plan\n\nDetails\nProducts & Solutions\nKnowledge Base\nAbout Us\nBlog\n+55 613 142-52-02\nLog in\nCreate account\n15 years of reliable DDoS protection\n\nWorks at any scale — from a one-page website to high‑load enterprise infrastructure\n\nActivate protection\nDDoS Protection\nWebsite Protection\nNetwork Protection\nCloud Solutions\nProtected Hosting\nProtected VDS/VPS\nProtected Dedicated Servers\nRelated Services\nCaptcha for your website\nNEW\nBot Mitigation\nWeb Application Firewall\nSecurity Audit\n4 Tbps\n\nscrubbing capacity\n\n882 000+\n\nprojects under protection\n\n",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [
+    "__ddg10_",
+    "__ddg8_",
+    "__ddg9_"
+   ],
+   "frames": [
+    "captcha.ddos-guard.net"
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "ddosguard-site",
+   "vendor": "ddosguard",
+   "oracle": "unblocked",
+   "url": "https://ddos-guard.net/",
+   "wall_s": 14.8
+  },
+  {
+   "observed_s": 14.5,
+   "loads": 2,
+   "probe_errors": 0,
+   "final_url": "https://qrator.net/",
+   "title": "Qrator Labs: DDoS Attacks Protection, WAF, DNS, Hosting, CDN, and Bot Protection",
+   "text_len": 8876,
+   "text_head": "Solutions\nLibrary\nTariffs\nClients\nPartners\nCompany\n+420-602-558-144\nI'm under attack\nLog in\nSign Up\nContinuous\nCustomer\n|\nState-of-the-art network security solutions to ensure applications\nand infrastructure availability and make every business stay unstoppable,\nresilient and secure without hidden costs\n\nWhat is Qrator Labs?\n\nI'm under attack\n7 days trial\n\n6 +\n\nTbps uplink connection capacity\n\n13\n\nScrubbing centers worldwide\n\n1000 +\n\nCustomers around the globe\n\n24 / 7\n\nAlways-on automatic protection\nIntegrated Cloud-based Network Security Offerings powered by Owned Approach and Deep Technical ",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "qrator-site",
+   "vendor": "qrator",
+   "oracle": "unblocked",
+   "url": "https://qrator.net/",
+   "wall_s": 16.1
+  },
+  {
+   "observed_s": 12.1,
+   "loads": 2,
+   "probe_errors": 0,
+   "final_url": "https://anubis.techaro.lol/",
+   "title": "Anubis: Web AI Firewall Utility | Anubis",
+   "text_len": 787,
+   "text_head": "Skip to main content\nAnubis\nBlog\nDocs\nUnbranded Version\nGitHub\nSponsor the Project\nAnubis\n\nWeigh the soul of incoming HTTP requests to protect your website!\n\nGet started\nEasy to Use\n\nAnubis sits in the background and weighs the risk of incoming requests. If it asks a client to complete a challenge, no user interaction is required.\n\nLightweight\n\nAnubis is so lightweight you'll forget it's there until you look at your hosting bill. On average it uses less than 128 MB of ram.\n\nBlock the scrapers\n\nAnubis uses a combination of heuristics to identify and block bots before they take your website down",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [
+    "techaro.lol-anubis-auth-347ddb4a",
+    "techaro.lol-anubis-cookie-verification-347ddb4a"
+   ],
+   "frames": [],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "anubis-techaro",
+   "vendor": "anubis",
+   "oracle": "unblocked",
+   "url": "https://anubis.techaro.lol/",
+   "wall_s": 15.5,
+   "rerun": "первый прогон: сбой стенда: RuntimeError: Chrome не поднял CDP-цель за 4 попытки: нет CDP-цели page"
+  },
+  {
+   "observed_s": 12.1,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://gitlab.gnome.org/GNOME/gtk",
+   "title": "GNOME / gtk · GitLab",
+   "text_len": 6938,
+   "text_head": "Skip to main content\nHomepage\nExplore\nSearch or go to…\n/\nSign in\nPrimary navigation\nProject\ngtk\nPinned\nMembers\nWork items\n-\nBranches\nMerge requests\n-\nPipelines\nMore features\nManage\nPlan\nCode\nBuild\nDeploy\nOperate\nMonitor\nAnalyze\nHelp\nCollapse sidebar\nGNOME\ngtk\ngtk\n Star\n296\nProject ID: 665\nActions\nProject information\n\nGTK is a multi-platform toolkit for creating graphical user interfaces.\n\n90,591 Commits\n1,450 Branches\n866 Tags\n50 Releases\nREADME\nGNU Library General Public License v2 only\nCHANGELOG\nCONTRIBUTING\nGitLab Pages\n\nCreated on\n\nFebruary 08, 2018\nmain\ngtk\nFind file\nCode\nActions\nMerge br",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [],
+   "frames": [],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "anubis-gnome-gitlab",
+   "vendor": "anubis",
+   "oracle": "unblocked",
+   "url": "https://gitlab.gnome.org/GNOME/gtk",
+   "wall_s": 14.0
+  },
+  {
+   "observed_s": 10.0,
+   "loads": 1,
+   "probe_errors": 0,
+   "final_url": "https://www.zillow.com/",
+   "title": "Zillow: Real Estate, Apartments, Mortgages & Home Values",
+   "text_len": 3206,
+   "text_head": "Skip main navigation\nBuy\nRent\nSell\nGet a mortgage\nFind an agent\nManage rentals\nAdvertise\nGet help\nSign in\nRentals. Homes.\nAgents. Loans.\nSubmit Search\nNo options are currently available.\nGet home recommendations\n\nSign in for a more personalized experience.\n\nSign in\nFind homes you can afford with BuyAbility℠\nAnswer a few questions. We'll highlight homes you're likely to qualify for.\n$ - -\nTarget home price\n$ - -\nMax home price\n$ -- /mo\nTarget payment\n-- %\nYour est. rate\n-- %\nAPR\nGet your BuyAbility\nSkip to the end of the carousel\nWithin BuyAbility\nWithin BuyAbility\nWithin BuyAbility\nSkip to the",
+   "api": {
+    "turnstile": "undefined",
+    "grecaptcha": "undefined",
+    "hcaptcha": "undefined"
+   },
+   "vendor_cookies": [
+    "_px3",
+    "_pxvid"
+   ],
+   "frames": [
+    "",
+    "js.px-cloud.net",
+    "www.googletagmanager.com",
+    "insight.adsrvr.org",
+    "4704202.fls.doubleclick.net",
+    "4704202.fls.doubleclick.net",
+    "tr.snapchat.com"
+   ],
+   "verdict": "пройдено",
+   "reason": "оракул выполнен",
+   "id": "human-zillow",
+   "vendor": "human",
+   "oracle": "unblocked",
+   "url": "https://www.zillow.com/",
+   "wall_s": 35.7
+  }
+ ]
+}

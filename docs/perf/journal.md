@@ -736,3 +736,19 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
 - **Ловушки приборов:** `--user-agent` у Chrome обнуляет Client Hints (поэтому UA ставится через CDP-override с
   метаданными); `navigator.userAgentData` пуст на `about:blank` (бренды берутся на loopback); холодный старт Chrome
   изредка не открывает CDP-порт — три попытки.
+
+## 2026-10-14 — COMPAT-CORPUS-4 — стенд G (капчи и антибот), плечо Chrome — Windows 10, маршрут home-direct
+
+Прибор `scripts/captcha_stand.py` над `docs/perf/corpus-captcha.tsv` (20 страниц, 12 вендоров), сырой результат —
+`docs/perf/runs/2026-10-14-captcha-chrome.json`. Капчи не решаются; вердикт на страницу — пройдено / петля /
+не_отрисован / отказ / завис.
+
+- **Chrome (Chromium из кэша Playwright):** GPR 14/20 = 0.70; балл reCAPTCHA v3 = 0.9. По вендорам: reCAPTCHA 4/4,
+  Anubis 2/2, Akamai, CF managed, DDoS-Guard, Imperva, Qrator, human 1/1, hCaptcha 1/2, Turnstile 1/4, SmartCaptcha 0/1,
+  DataDome 0/1 (`завис`: пустая страница). Turnstile managed/interactive и виджеты 2captcha-демо не отрисовываются
+  даже в Chrome при чистом профиле и автоматизации — это эталон, а не дефект Lumen.
+- **Lumen:** не снято. Живое окно не отдаёт первый кадр до конца `wait` (BUG-1629): `navigate` на example.com 47 с,
+  19 из 20 страниц — «отказ» по таймауту, это дефект окна, а не результат стенда. База GPR Lumen — COMPAT-CORPUS-4-BASE.
+- **Ловушки приборов:** демо-страница v3 в Chrome сама `fetch` на verify не отправляет (запрос не виден в CDP) —
+  зонд один раз повторяет её вызовы `grecaptcha.execute` + verify; старт Chrome изредка не открывает CDP-цель
+  (в длинном прогоне одна страница из 20), стенд делает 4 попытки, упавшая страница перезапускается отдельно (`rerun` в JSON).
