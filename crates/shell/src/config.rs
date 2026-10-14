@@ -17,7 +17,7 @@
 //! screen_width        = 1920
 //! screen_height       = 1080
 //! color_depth         = 24
-//! timezone_offset     = 0               # minutes, getTimezoneOffset() convention (+ = behind UTC)
+//! timezone_offset     = 0               # absent = host zone (BUG-1617); 0 = every Date/Intl API in UTC; other = getTimezoneOffset() only
 //! hardware_concurrency = 8
 //! device_memory       = 8
 //! platform            = "Win32"
@@ -203,8 +203,9 @@ pub struct FingerprintProfile {
     pub screen_height: u32,
     /// `screen.colorDepth` / `screen.pixelDepth` in bits.
     pub color_depth: u32,
-    /// `Date.prototype.getTimezoneOffset()` value in minutes (+ = behind UTC).
-    pub timezone_offset: i32,
+    /// Time-zone normalisation in minutes (+ = behind UTC); `None` keeps the host
+    /// zone (BUG-1617). See [`lumen_js::NavigatorProfile::timezone_offset`].
+    pub timezone_offset: Option<i32>,
     /// DNS over HTTPS resolver URL. `None` disables DoH; falls back to system DNS.
     /// Example: `https://cloudflare-dns.com/dns-query`.
     pub doh_url: Option<String>,
@@ -250,7 +251,7 @@ impl Default for FingerprintProfile {
             screen_width: 1920,
             screen_height: 1080,
             color_depth: 24,
-            timezone_offset: 0,
+            timezone_offset: None,
             doh_url: None,
             proxy: None,
             socks5_proxy: None,
@@ -304,7 +305,7 @@ impl FingerprintProfile {
             screen_width: if is_tor { 1000 } else { self.screen_width },
             screen_height: if is_tor { 900 } else { self.screen_height },
             color_depth: self.color_depth,
-            timezone_offset: if is_tor { 0 } else { self.timezone_offset },
+            timezone_offset: if is_tor { Some(0) } else { self.timezone_offset },
         }
     }
 
@@ -629,7 +630,7 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
         }
         "timezone_offset" => {
             if let Ok(v) = value.parse() {
-                p.timezone_offset = v;
+                p.timezone_offset = Some(v);
             }
         }
         "doh_url" if !value.is_empty() => {
@@ -756,7 +757,7 @@ mod tests {
         assert_eq!(p.screen_width, 1920);
         assert_eq!(p.screen_height, 1080);
         assert_eq!(p.color_depth, 24);
-        assert_eq!(p.timezone_offset, 0);
+        assert_eq!(p.timezone_offset, None);
     }
 
     #[test]
@@ -846,7 +847,7 @@ mod tests {
         assert_eq!(p.screen_width, 2560);
         assert_eq!(p.screen_height, 1440);
         assert_eq!(p.color_depth, 30);
-        assert_eq!(p.timezone_offset, -120);
+        assert_eq!(p.timezone_offset, Some(-120));
     }
 
     #[test]
@@ -1065,6 +1066,6 @@ mod tests {
         assert_eq!(nav.screen_height, 900);
         assert_eq!(nav.platform, "Win32");
         assert_eq!(nav.languages, vec!["en-US".to_string(), "en".to_string()]);
-        assert_eq!(nav.timezone_offset, 0);
+        assert_eq!(nav.timezone_offset, Some(0));
     }
 }

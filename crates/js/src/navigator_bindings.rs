@@ -14,7 +14,9 @@
 //! - `screen.availWidth` / `screen.availHeight` → same as width/height
 //! - `screen.colorDepth` / `screen.pixelDepth`  → 24 (standard true-colour)
 //! - `screen.orientation`                        → stub { type: "landscape-primary", angle: 0 }
-//! - `Date.prototype.getTimezoneOffset`          → always returns 0 (UTC normalisation)
+//! - Time zone: **not** normalised by default (BUG-1617) — `getTimezoneOffset`, local
+//!   `Date` getters and `Intl` all report the host zone. `timezone_offset = Some(0)`
+//!   (Tor profile) switches every local-time API to UTC together.
 //!
 //! Must be called **after** `v8_runtime.rs::install_dom` (requires `navigator` to exist).
 //!
@@ -48,9 +50,12 @@ pub struct NavigatorProfile {
     pub screen_height: u32,
     /// `screen.colorDepth` / `screen.pixelDepth` in bits.
     pub color_depth: u32,
-    /// Value returned by `Date.prototype.getTimezoneOffset()`, in minutes
-    /// (positive = behind UTC, matching the JS convention). `0` = UTC.
-    pub timezone_offset: i32,
+    /// Time-zone normalisation, in minutes (positive = behind UTC, matching the
+    /// `getTimezoneOffset()` convention). `None` (default, BUG-1617) leaves the host
+    /// zone alone, so `getTimezoneOffset`, `getHours`, `toString` and `Intl` agree.
+    /// `Some(0)` makes every local-time API report UTC. Any other value only
+    /// replaces `getTimezoneOffset()` — the remaining APIs keep the host zone.
+    pub timezone_offset: Option<i32>,
 }
 
 impl Default for NavigatorProfile {
@@ -63,7 +68,7 @@ impl Default for NavigatorProfile {
             screen_width: 1920,
             screen_height: 1080,
             color_depth: 24,
-            timezone_offset: 0,
+            timezone_offset: None,
         }
     }
 }
@@ -135,8 +140,8 @@ pub fn current_navigator_profile() -> NavigatorProfile {
 ///
 /// Overwrites high-entropy fingerprinting properties on `navigator` and
 /// creates a normalised `screen` object on `globalThis`. Also patches
-/// `Date.prototype.getTimezoneOffset` to return the profile's offset, so
-/// timezone cannot be inferred from JS date arithmetic.
+/// the time-zone APIs only when the profile asks for it (Tor: UTC everywhere);
+/// the default leaves the host zone untouched (BUG-1617).
 ///
 /// Must be called after `v8_runtime.rs::install_dom`. V8 port of the former rquickjs
 /// `install_navigator_bindings` (Ph3 V8 migration S5-S7): identical JS shim,
@@ -445,13 +450,7 @@ fn build_navigator_shim(p: &NavigatorProfile, id: &lumen_core::Identity) -> Stri
     }}
   }} catch(_) {{}}
 
-  // ── timezone normalisation ──────────────────────────────────────────────────
-  // Override getTimezoneOffset to return the configured offset (0 = UTC).
-  // Fingerprinting scripts call new Date().getTimezoneOffset() to infer the
-  // local timezone; a fixed value collapses users without breaking arithmetic.
-  try {{
-    Date.prototype.getTimezoneOffset = function() {{ return {timezone_offset}; }};
-  }} catch(_) {{}}
+  {timezone_script}
 }})();
 "#,
         hardware_concurrency = p.hardware_concurrency,
@@ -462,9 +461,78 @@ fn build_navigator_shim(p: &NavigatorProfile, id: &lumen_core::Identity) -> Stri
         screen_width = p.screen_width,
         screen_height = p.screen_height,
         color_depth = p.color_depth,
-        timezone_offset = p.timezone_offset,
+        timezone_script = timezone_script(p.timezone_offset),
     )
 }
+
+/// JS fragment for the time-zone part of the shim (BUG-1617).
+///
+/// `None` → empty: replacing only `getTimezoneOffset` made it disagree with the
+/// native local getters, `toString` and `Intl`, which all read the host zone.
+fn timezone_script(offset: Option<i32>) -> String {
+    match offset {
+        None => String::new(),
+        Some(0) => TZ_UTC_SCRIPT.to_string(),
+        Some(n) => format!(
+            "try {{ Date.prototype.getTimezoneOffset = function() {{ return {n}; }}; }} catch(_) {{}}"
+        ),
+    }
+}
+
+/// Every local-time `Date` API reports UTC (Tor profile).
+const TZ_UTC_SCRIPT: &str = r#"try {
+    const P = Date.prototype;
+    const def = (name, fn, len) => {
+      Object.defineProperty(fn, 'name', { value: name, configurable: true });
+      Object.defineProperty(fn, 'length', { value: len, configurable: true });
+      Object.defineProperty(P, name, { value: fn, writable: true, configurable: true, enumerable: false });
+    };
+    def('getTimezoneOffset', function() { return 0; }, 0);
+    for (const n of ['FullYear', 'Month', 'Date', 'Day', 'Hours', 'Minutes', 'Seconds', 'Milliseconds']) {
+      const u = P['getUTC' + n];
+      def('get' + n, function() { return u.call(this); }, 0);
+    }
+    for (const n of ['FullYear', 'Month', 'Date', 'Hours', 'Minutes', 'Seconds', 'Milliseconds']) {
+      const u = P['setUTC' + n];
+      def('set' + n, function() { return u.apply(this, arguments); }, u.length);
+    }
+    const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const p2 = (v) => String(v).padStart(2, '0');
+    const datePart = (d) => {
+      const y = d.getUTCFullYear();
+      const ys = y < 0 ? '-' + String(-y).padStart(6, '0') : String(y).padStart(4, '0');
+      return DAYS[d.getUTCDay()] + ' ' + MONTHS[d.getUTCMonth()] + ' ' + p2(d.getUTCDate()) + ' ' + ys;
+    };
+    const timePart = (d) =>
+      p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ':' + p2(d.getUTCSeconds())
+      + ' GMT+0000 (Coordinated Universal Time)';
+    const valid = (d) => !Number.isNaN(P.getTime.call(d));
+    def('toString', function() { return valid(this) ? datePart(this) + ' ' + timePart(this) : 'Invalid Date'; }, 0);
+    def('toDateString', function() { return valid(this) ? datePart(this) : 'Invalid Date'; }, 0);
+    def('toTimeString', function() { return valid(this) ? timePart(this) : 'Invalid Date'; }, 0);
+    for (const n of ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString']) {
+      const orig = P[n];
+      def(n, function(locales, options) {
+        const o = options == null ? {} : Object.assign({}, options);
+        if (!('timeZone' in o)) o.timeZone = 'UTC';
+        return orig.call(this, locales, o);
+      }, 0);
+    }
+    if (typeof Intl !== 'undefined' && Intl.DateTimeFormat && !Intl.DateTimeFormat.__lumenPatched) {
+      const Orig = Intl.DateTimeFormat;
+      function LumenDateTimeFormat(locales, options) {
+        const o = options ? Object.assign({}, options) : {};
+        if (!('timeZone' in o)) o.timeZone = 'UTC';
+        if (!(this instanceof LumenDateTimeFormat)) return new LumenDateTimeFormat(locales, o);
+        return new Orig(locales, o);
+      }
+      LumenDateTimeFormat.prototype = Orig.prototype;
+      LumenDateTimeFormat.__lumenPatched = true;
+      if (Orig.supportedLocalesOf) LumenDateTimeFormat.supportedLocalesOf = Orig.supportedLocalesOf.bind(Orig);
+      Intl.DateTimeFormat = LumenDateTimeFormat;
+    }
+  } catch(_) {}"#;
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
@@ -593,12 +661,58 @@ mod tests {
         assert_eq!(ok, JsValue::Bool(true));
     }
 
+    /// BUG-1617: the default profile must not touch the zone — the offset has to
+    /// agree with the native local getters, whatever the host zone is.
     #[test]
-    fn timezone_offset_is_zero() {
+    fn default_profile_keeps_host_timezone_consistent() {
         let rt = make_rt();
         install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt
+            .eval(
+                "(() => { const d = new Date(Date.UTC(2026, 6, 1, 12, 0, 0)); \
+                    const local = (12 * 60 - d.getTimezoneOffset() + 1440) % 1440; \
+                    return local === d.getHours() * 60 + d.getMinutes() \
+                        && Function.prototype.toString.call(Date.prototype.getTimezoneOffset) \
+                            .includes('[native code]'); })()",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    /// Tor profile: every local-time API reports UTC together.
+    #[test]
+    fn utc_profile_normalises_all_local_time_apis() {
+        let rt = make_rt();
+        let p = NavigatorProfile { timezone_offset: Some(0), ..NavigatorProfile::default() };
+        install_navigator_bindings_v8_with(&rt, &p).unwrap();
+        let out = rt
+            .eval(
+                "(() => { const d = new Date(Date.UTC(2026, 6, 1, 12, 34, 56, 789)); \
+                    return [d.getTimezoneOffset(), d.getHours(), d.getMinutes(), d.getDate(), d.getDay(), \
+                        d.toString(), d.toDateString(), d.toTimeString(), \
+                        new Intl.DateTimeFormat().resolvedOptions().timeZone, \
+                        d.toLocaleTimeString('en-US'), \
+                        (() => { const e = new Date(0); e.setHours(5); return e.getTime(); })()].join('|'); })()",
+            )
+            .unwrap();
+        assert_eq!(
+            out,
+            JsValue::String(
+                "0|12|34|1|3|Wed Jul 01 2026 12:34:56 GMT+0000 (Coordinated Universal Time)|\
+                 Wed Jul 01 2026|12:34:56 GMT+0000 (Coordinated Universal Time)|UTC|12:34:56 PM|18000000"
+                    .into()
+            )
+        );
+    }
+
+    /// A non-zero explicit offset only replaces `getTimezoneOffset()`.
+    #[test]
+    fn explicit_offset_replaces_only_get_timezone_offset() {
+        let rt = make_rt();
+        let p = NavigatorProfile { timezone_offset: Some(-120), ..NavigatorProfile::default() };
+        install_navigator_bindings_v8_with(&rt, &p).unwrap();
         let offset = rt.eval("new Date().getTimezoneOffset()").unwrap();
-        assert_eq!(offset, JsValue::Number(0.0), "getTimezoneOffset must return 0 (UTC)");
+        assert_eq!(offset, JsValue::Number(-120.0));
     }
 
     // ── custom profile (9F.1) ────────────────────────────────────────────────
@@ -612,7 +726,7 @@ mod tests {
             screen_width: 2560,
             screen_height: 1440,
             color_depth: 30,
-            timezone_offset: -120,
+            timezone_offset: Some(-120),
         }
     }
 
@@ -677,7 +791,7 @@ mod tests {
         assert_eq!(p.screen_width, 1920);
         assert_eq!(p.screen_height, 1080);
         assert_eq!(p.color_depth, 24);
-        assert_eq!(p.timezone_offset, 0);
+        assert_eq!(p.timezone_offset, None);
     }
 
     /// BUG-776: the fixed half of `NavigatorID` is written out twice — once by
