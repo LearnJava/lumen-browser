@@ -35,6 +35,8 @@ pub mod page_translate;
 mod journal;
 use journal::ContentJournal;
 mod forms;
+mod implicit_submit;
+pub use implicit_submit::{implicit_submission, ImplicitSubmission};
 pub use forms::{
     check_form_gate, check_validity_form, collect_dom_form_fields, element_validity,
     find_ancestor_form, invalid_controls_in_form, set_radio_checked, submit_form, submitter_override, FormInfo,

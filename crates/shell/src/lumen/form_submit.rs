@@ -98,15 +98,19 @@ impl Lumen {
                     // `preventDefault()` the navigation. That made every
                     // SPA login form (Keycloak, Next.js) unusable, through
                     // the UI and through MCP/BiDi `click` alike.
-                    if fire_submit_event && let Some(sub) = submitter {
+                    //
+                    // UX-ENTER-SUBMIT: неявная отправка формы без кнопки идёт
+                    // с `submitter == null` (§4.10.21.2) — событие всё равно
+                    // уходит, иначе обработчик SPA-формы поиска не узнает о ней.
+                    if fire_submit_event {
                         // THREAD-9 срез 6: с движковым потоком ответ «не
                         // отменён ли submit» приходит сообщением, а отправка
                         // повторяется без события (`collect_click_proceed`).
                         if self.engine_thread.is_some() {
-                            self.queue_submit_dispatch(form, sub);
+                            self.queue_submit_dispatch(form, submitter);
                             return;
                         }
-                        if !self.dispatch_submit_event(form, sub) {
+                        if !self.dispatch_submit_event(form, submitter) {
                             return;
                         }
                     }
@@ -265,12 +269,8 @@ impl Lumen {
 
     /// THREAD-9 срез 6: ставит `submit`-событие в движок и запоминает форму до
     /// ответа; UI-поток не ждёт.
-    fn queue_submit_dispatch(&mut self, form: NodeId, submitter: NodeId) {
-        let script = format!(
-            "_lumen_dispatch_submit_event({}, {})",
-            form.index(),
-            submitter.index(),
-        );
+    fn queue_submit_dispatch(&mut self, form: NodeId, submitter: Option<NodeId>) {
+        let script = submit_event_script(form, submitter);
         let id = self.next_click_proceed_id;
         self.next_click_proceed_id += 1;
         let inbox = Arc::clone(&self.click_proceed_inbox);
@@ -288,12 +288,8 @@ impl Lumen {
         self.request_redraw();
     }
 
-    fn dispatch_submit_event(&mut self, form: NodeId, submitter: NodeId) -> bool {
-        let script = format!(
-            "_lumen_dispatch_submit_event({}, {})",
-            form.index(),
-            submitter.index(),
-        );
+    fn dispatch_submit_event(&mut self, form: NodeId, submitter: Option<NodeId>) -> bool {
+        let script = submit_event_script(form, submitter);
         // `_lumen_dispatch_rich` returns `!event.defaultPrevented`, JSON-encoded
         // by `eval_js_value` — so only a literal `false` cancels.
         let proceed = match route_query_js(
@@ -307,4 +303,45 @@ impl Lumen {
         self.queue_js_navigate_read();
         proceed
     }
+
+    /// UX-ENTER-SUBMIT: Enter in a text field submits its form (HTML LS
+    /// §4.10.21.2) — through the form's default button, or with no submitter
+    /// when the form has no button and this is its only text field. Runs after
+    /// the page saw `keydown` and did not cancel it. `true` = the key is spent.
+    ///
+    /// Shift is allowed (Chrome submits on Shift+Enter too); Ctrl/Alt/Meta and
+    /// auto-repeat are not, so holding the key never re-submits.
+    pub(crate) fn implicit_submit_on_enter(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if !matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+            || key_event.repeat
+            || !(self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+        {
+            return false;
+        }
+        if let Some((idx, nid)) = self.focused_frame {
+            let target = self
+                .frames
+                .get(idx)
+                .and_then(|h| h.doc.lock().ok())
+                .and_then(|doc| lumen_dom::implicit_submission(&doc, nid));
+            let Some(target) = target else { return false };
+            self.run_frame_form_submission(idx, target.form, target.submitter, true);
+            return true;
+        }
+        let Some(nid) = self.focused_node else { return false };
+        let target = self.layout_source.as_ref().and_then(|src| {
+            let doc = src.document.lock().ok()?;
+            lumen_dom::implicit_submission(&doc, nid)
+        });
+        let Some(target) = target else { return false };
+        self.run_form_submission(target.form, target.submitter, true);
+        true
+    }
+}
+
+/// Script that fires the cancelable `submit` event at `form`; `-1` is "no
+/// submitter" (`SubmitEvent.submitter === null`).
+pub(crate) fn submit_event_script(form: NodeId, submitter: Option<NodeId>) -> String {
+    let submitter = submitter.map_or(-1, |s| s.index() as i64);
+    format!("_lumen_dispatch_submit_event({}, {submitter})", form.index())
 }

@@ -406,6 +406,13 @@ impl Lumen {
             }
         }
 
+        // UX-ENTER-SUBMIT: Enter в текстовом поле формы — неявная отправка
+        // (HTML §4.10.21.2). После contenteditable (там Enter вставляет абзац)
+        // и после `keydown`, который страница не отменила.
+        if self.implicit_submit_on_enter(code, key_event) {
+            return;
+        }
+
         // Text editing inside a typeable field ВНУТРИ фрейма (BUG-480 срез 22)
         // — та же логика и то же место, что у страницы ниже, но проверяется
         // ПЕРВОЙ: `self.focused_node` в этот момент указывает на host-элемент

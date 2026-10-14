@@ -1217,7 +1217,7 @@ impl Lumen {
             } else if let Some(pos) = self.pending_submits.iter().position(|s| s.0 == id) {
                 let (_, form, sub, url, _) = self.pending_submits.remove(pos);
                 if proceed && url == self.current_display_url() {
-                    self.run_form_submission(form, Some(sub), false);
+                    self.run_form_submission(form, sub, false);
                 }
             }
         }
@@ -1248,7 +1248,7 @@ impl Lumen {
         });
         for (form, sub, url) in stale_submits {
             if url == self.current_display_url() {
-                self.run_form_submission(form, Some(sub), false);
+                self.run_form_submission(form, sub, false);
             }
         }
     }
