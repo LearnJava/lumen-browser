@@ -664,6 +664,7 @@ fn run_window_mode_inner(
         bg_tabs: HashMap::new(),
         hibernated_tabs: HashMap::new(),
         crashed: None,
+        net_error_retries: None,
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
             .expect("tab_snapshots in-memory"),
         t2_store: lumen_storage::SleepingTabStore::open_in_memory()
