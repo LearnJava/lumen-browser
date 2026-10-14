@@ -46,6 +46,7 @@ impl CertInterstitial {
     ///
     /// `hsts_host`: the host is a Known HSTS Host (preload list or a learned
     /// policy) — see [`Self::can_proceed`].
+    #[cfg(test)]
     pub fn open(
         &mut self,
         url: String,
