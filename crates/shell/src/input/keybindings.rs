@@ -36,7 +36,7 @@ pub(crate) enum KeyCommand {
     /// Esc: останавливает идущую загрузку; окно никогда не закрывает.
     StopLoading,
     FindOpen,
-    /// Открыть адресную строку (Ctrl+L / F6). Позволяет ввести URL или
+    /// Открыть адресную строку (Ctrl+L / F6 / Alt+D). Позволяет ввести URL или
     /// поисковый запрос прямо в браузере без перезапуска из CLI.
     OpenAddressBar,
     /// Навигация назад (Alt+Left). Восстанавливает из bfcache если возможно.
@@ -179,6 +179,7 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
         KeyCode::KeyF if no_mods => Some(KeyCommand::HintModeOpen),
         KeyCode::KeyL if ctrl_only => Some(KeyCommand::OpenAddressBar),
         KeyCode::F6 if no_mods => Some(KeyCommand::OpenAddressBar),
+        KeyCode::KeyD if alt_only => Some(KeyCommand::OpenAddressBar),
         KeyCode::ArrowLeft if alt_only => Some(KeyCommand::HistoryBack),
         KeyCode::ArrowRight if alt_only => Some(KeyCommand::HistoryForward),
         KeyCode::ArrowDown if no_mods => Some(KeyCommand::ScrollLineDown),

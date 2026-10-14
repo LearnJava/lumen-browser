@@ -124,6 +124,10 @@ pub(crate) struct Lumen {
     /// `address_bar::AddressBarState`, no native caret exists for `<input>`
     /// yet). `None` off the flag or before the first chrome layout.
     pub(crate) chrome_omni_input_rect: Option<Rect>,
+    /// UX-OMNI-EDIT: computed `font-size` (CSS px) of `#omniInput`, from the
+    /// same layout pass as [`Self::chrome_omni_input_rect`] — the scale the
+    /// per-glyph caret/selection geometry measures the text at.
+    pub(crate) chrome_omni_font_size: f32,
     /// CC-8 (docs/tasks/p1-css-chrome.md): `true` collapses the vertical
     /// sidebar to its icon rail (`#sidebar.collapsed`, `--sidebar-w-collapsed`
     /// in the asset). Toggled by `ChromeAction::ToggleSidebar`

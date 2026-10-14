@@ -395,6 +395,7 @@ fn run_window_mode_inner(
         chrome_hovered_nid: None,
         chrome_active_nid: None,
         chrome_omni_input_rect: None,
+        chrome_omni_font_size: 12.5,
         chrome_sidebar_collapsed: false,
         chrome_settings_section: "general".to_owned(),
         chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
