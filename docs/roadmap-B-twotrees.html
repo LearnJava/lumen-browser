@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-14",
  "counts": {
-  "open": 396,
+  "open": 397,
   "fixed": 1167,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1566,
+ "total_bugs": 1567,
  "phases": [
   {
    "id": "P0",
@@ -8668,7 +8668,7 @@
        "title": "Страницы ошибок навигации по классам с кодами Chromium",
        "status": "planned",
        "size": "L",
-       "note": "**Сделано (2026-10-14, срез 1, ветка `p1-compat-errors`):** `lumen_core::net_error::NetErrorCode` (имена Chromium; разбор текста ошибки по префиксу точки возникновения и `(os error N)`), `net_error_page.rs` (заголовок ≤80, действия, «Повторить», код внизу) и `Lumen::show_net_error` — `LoadError` подменяет источник статической страницей ошибки, F5 повторяет исходную навигацию, `load_failed` сохраняется. **Осталось:** типизация в сетевом слое вместо разбора строки; страница 502/503/504 с автоповтором; «нет сети» (проба других сайтов, COMPAT-ERR-01); `RenderDone(Err)`; кнопка отчёта и «Открыть в…»; размеченный набор ≥60 поломок. Исходная постановка: Сетевая ошибка главного документа не показывает ничего: LoadError(String) (page_load.rs:1586) лишь ставит load_failed (user_event.rs:432), на экране остаётся выгруженная прежняя страница (page_load.rs:1028). Ошибки сети не типизированы (core/error.rs:13), кодов ERR_* нет; экран сертификата один на все причины и пугает «злоумышленниками» (cert_interstitial.rs:92); крах без «ошибка Lumen» и «Открыть в…» (crash_page.rs:38). Объём: NetError с кодами Chromium, страница сети/DNS/таймаута/5xx с автоповтором, тексты по COMPAT-ERR-00, три уровня уверенности; НУЦ/ГОСТ/ЭП/VPN/DRM/антибот — срезами. Приёмка: набор ≥60 поломок, ≥90% верных вердиктов. docs/research/site-compat/report.md §8.4"
+       "note": "**Сделано (2026-10-14, срез 1, ветка `p1-compat-errors`):** `lumen_core::net_error::NetErrorCode` (имена Chromium; разбор текста ошибки по префиксу точки возникновения и `(os error N)`), `net_error_page.rs` (заголовок ≤80, действия, «Повторить», код внизу) и `Lumen::show_net_error` — `LoadError` подменяет источник статической страницей ошибки, F5 повторяет исходную навигацию, `load_failed` сохраняется. **Сделано (2026-10-14, срез 2, ветка `p1-compat-errors-2`):** страница 5xx — `LoadEvent::LoadError(\"http status N\")` из потока загрузки, если код 500–599 и тело пустое (`net_error_page::is_empty_server_error`; с телом страницу сервера не трогаем), `NetErrorCode::HttpStatus(u16)` (`ERR_HTTP_RESPONSE_CODE_FAILURE`), для 502/503/504 `<meta refresh>` на сам адрес с паузами 5/15/45 с (`AutoRetry`, счёт попыток `Lumen::net_error_retries` по подряд идущим показам одного адреса, окно 120 с), после третьей — «Автоматические повторы закончились». Живой прогон окна не делался: покрыто юнит-тестами и существующим `<meta refresh>` (BUG-566). **Сделано (2026-10-14, срез 3, ветка `p1-compat-errors-3`):** `LoadEvent::RenderDone(Err)` (сбой финального pipeline: шрифт, CSP, разбор) показывает страницу ошибки `ERR_FAILED` через `Lumen::show_render_error` — код не угадывается по словам сообщения, как у сетевых сбоев; раньше на экране молча оставался последний streaming-кадр. Юнит-теста нет: обработчик события требует живого `Lumen`. **Осталось:** типизация в сетевом слое вместо разбора строки; «нет сети» (проба других сайтов, COMPAT-ERR-01); кнопка отчёта и «Открыть в…»; размеченный набор ≥60 поломок. Исходная постановка: Сетевая ошибка главного документа не показывает ничего: LoadError(String) (page_load.rs:1586) лишь ставит load_failed (user_event.rs:432), на экране остаётся выгруженная прежняя страница (page_load.rs:1028). Ошибки сети не типизированы (core/error.rs:13), кодов ERR_* нет; экран сертификата один на все причины и пугает «злоумышленниками» (cert_interstitial.rs:92); крах без «ошибка Lumen» и «Открыть в…» (crash_page.rs:38). Объём: NetError с кодами Chromium, страница сети/DNS/таймаута/5xx с автоповтором, тексты по COMPAT-ERR-00, три уровня уверенности; НУЦ/ГОСТ/ЭП/VPN/DRM/антибот — срезами. Приёмка: набор ≥60 поломок, ≥90% верных вердиктов. docs/research/site-compat/report.md §8.4"
       },
       {
        "id": "COMPAT-TRUST-CAUSES",
@@ -8845,7 +8845,7 @@
       {
        "id": "COMPAT-CORPUS",
        "title": "Приборы совместимости: корпуса S и C, стенд G, робот T",
-       "status": "planned",
+       "status": "active",
        "size": "XL",
        "note": "Дорожка приборов уровня 0, владелец P2. Сейчас есть только перф-аудит scripts/perf_audit.py (3 режима, статусы SITE_REFUSED/BROKEN_RENDER/HUNG/DEAD, classify_status :176) на 14+100 сайтах без RU-банков и госсайтов; эталон Chrome — только тайминги (docs/perf/runs/2026-09-23-top100-split-chrome.json), скрипта замера нет; проверок паритета, сценариев, стенда антиботов, робота доверия и ночного прогона нет. Срезы COMPAT-CORPUS-1…5. Приёмка дорожки: базы CPR-RU/CPR-Global, SPR-w, GPR и журнал смены CA записаны (определения — отчёт §7.8). Источник: docs/research/site-compat/report.md §7.6 п.9, §7.7 этап 1 п.10, §10 №8.",
        "tasks": [
@@ -8866,9 +8866,16 @@
         {
          "id": "COMPAT-CORPUS-2",
          "title": "Корпус C: 500 сайтов (200 RU + 300), две точки, ночной прогон",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Сейчас docs/perf/corpus.txt — 14 сайтов (5 RU, ни банка, ни Госуслуг, ни маркетплейса), corpus-top100-foreign.txt — 100 без RU, только главные. Объём: corpus-c-ru (200) и corpus-c-global (300): главная + одна внутренняя, ранг-вес, категория, источник рейтинга; темп человека, без входа, капчи не решаются. Ночью топ-200, остальные ротацией ≥1 раз/нед на отдельной машине (живой прогон требует окна на переднем плане; self-hosted — docs/ci-offload.md §10); точки: резидентный IP РФ и зарубежная, не VPN. Машина и IP — решение владельца (COMPAT-BIZ). Приёмка: база CPR-RU/CPR-Global на 500 сайтах с обеих точек в журнале. Источник: docs/research/site-compat/report.md §7.7 этап 1 п.10."
+         "note": "ЗАКРЫТ 2026-10-14 (ветка p2-compat-corpus-2): корпуса собраны и лежат в репозитории — docs/perf/corpus-c-ru.txt (200) и corpus-c-global.txt (300), формат `slug url` для perf_audit --corpus, главная + внутренняя страница (внутренней нет у ~20%: стена антибота или нет открытой ссылки), метаданные (категория, ранг Tranco N26LW, вес 3/2/1, источник, статус главной) в docs/perf/corpus-c.tsv. Допуск сайта — корзина CrUX, порядок — Tranco; пересборка scripts/corpus_c_build.py (с сетью, раз в квартал). Ночное расписание — scripts/corpus_c.py plan/run: топ-100 RU + топ-100 global каждую ночь, остальные 300 ротацией ровно раз в 7 ночей, check и --self-test. Не сделано (вынесено в COMPAT-CORPUS-2-BASE): сама база CPR на двух точках — нужны краулер COMPAT-CORPUS-1 и решение владельца о машине и IP. Задача была: Сейчас docs/perf/corpus.txt — 14 сайтов (5 RU, ни банка, ни Госуслуг, ни маркетплейса), corpus-top100-foreign.txt — 100 без RU, только главные. Объём: corpus-c-ru (200) и corpus-c-global (300): главная + одна внутренняя, ранг-вес, категория, источник рейтинга; темп человека, без входа, капчи не решаются. Ночью топ-200, остальные ротацией ≥1 раз/нед на отдельной машине (живой прогон требует окна на переднем плане; self-hosted — docs/ci-offload.md §10); точки: резидентный IP РФ и зарубежная, не VPN. Машина и IP — решение владельца (COMPAT-BIZ). Приёмка: база CPR-RU/CPR-Global на 500 сайтах с обеих точек в журнале. Источник: docs/research/site-compat/report.md §7.7 этап 1 п.10."
+        },
+        {
+         "id": "COMPAT-CORPUS-2-BASE",
+         "title": "Первая база CPR корпуса C с двух точек",
+         "status": "planned",
+         "size": "S",
+         "note": "Корпус C (COMPAT-CORPUS-2) готов, но по нему ничего не прогнано. Объём: первый прогон 500 сайтов с точки «резидентный IP РФ» и с зарубежной точки (`scripts/corpus_c.py run --point ru|abroad`, потребитель — scripts/compat_crawl.py из COMPAT-CORPUS-1), CPR-RU/CPR-Global и разрыв по отказам записать в docs/perf/journal.md. Блокеры: COMPAT-CORPUS-1; машина и IP — решение владельца (COMPAT-BIZ), живой прогон требует окна на переднем плане. Приёмка: база CPR на 500 сайтах с обеих точек в журнале. Источник: docs/research/site-compat/report.md §7.7 этап 1 п.10."
         },
         {
          "id": "COMPAT-CORPUS-5",
@@ -11906,6 +11913,13 @@
    "status": "open",
    "title": "`WM_GETOBJECT` не доходит до моста MSAA (у event loop нет msg hook), хотя CAPABILITIES.md:269 обещает корень MSAA; та же дыра мешает `WM_SETTINGCHANGE` (UX-OSPA…",
    "component": "a11y/shell (`a11y/platform/windows.rs:159`, `window_mode.rs:34`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1629": {
+   "status": "open",
+   "title": "Первый кадр в живом окне приходит через 32–131 с (ровно по истечении таймаута `wait document_ready`), `perf_audit.py` даёт HUNG/TIMEOUT на `main` 71cf66b5d; сбо…",
+   "component": "shell/mcp (живое окно `--mcp-live-port`)",
    "date": null,
    "debtor": false
   },
@@ -22997,6 +23011,9 @@
   ],
   "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
    "BUG-1355"
+  ],
+  "shell/mcp (живое окно `--mcp-live-port`)": [
+   "BUG-1629"
   ],
   "shell/network": [
    "BUG-234"

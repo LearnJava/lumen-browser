@@ -53,7 +53,7 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 | How to probe, how to read a WPT failure | [`probe-method.md`](probe-method.md) |
 | Live engine gaps a probe will walk into | [`engine-gaps.md`](engine-gaps.md) — read before writing any probe |
 | Conformance measurement | [`conformance-method.md`](conformance-method.md) |
-| How to measure and accept a perf change | [`perf-method.md`](perf-method.md) · [`benchmarking-strategy.md`](benchmarking-strategy.md) · [`perf/`](perf/) |
+| How to measure and accept a perf change | [`perf-method.md`](perf-method.md) · [`benchmarking-strategy.md`](benchmarking-strategy.md) · [`perf/`](perf/) · real-site corpus C (500 sites) [`perf/corpus-c.md`](perf/corpus-c.md) |
 | Testing an external site with Lumen | [`testing-your-site-with-lumen.md`](testing-your-site-with-lumen.md) |
 | Fuzzing (Linux/WSL/CI only) | [`fuzz/README.md`](../fuzz/README.md) |
 | Build speed · CI | [`build-speed.md`](build-speed.md) · [`ci-offload.md`](ci-offload.md) |
