@@ -1,8 +1,7 @@
 //! Web Speech API integration tests (W3C Web Speech §3–4).
 //!
 //! Verifies that `speechSynthesis`, `SpeechSynthesisUtterance`, `SpeechSynthesisVoice`,
-//! `SpeechRecognition`, and `webkitSpeechRecognition` are properly installed in the
-//! full DOM environment.
+//! are properly installed in the full DOM environment; `SpeechRecognition` is not.
 //!
 //! Ported from `QuickJsRuntime` to `V8JsRuntime` in S12b-B5: the rquickjs side of
 //! `speech.rs` was removed, so `speechSynthesis` etc. are only installed under V8.
@@ -217,52 +216,14 @@ fn cancel_clears_queue_and_resets_speaking() {
     ));
 }
 
-// ── SpeechRecognition stub ────────────────────────────────────────────────────
+// ── SpeechRecognition is not exposed (COMPAT-API-01-DEVICE) ──────────────────
 
 #[test]
-fn speech_recognition_is_defined() {
-    let rt = make_rt();
-    assert!(bool_eval(&rt, "typeof SpeechRecognition === 'function'"));
-}
-
-#[test]
-fn webkit_speech_recognition_alias() {
+fn speech_recognition_is_not_exposed() {
     let rt = make_rt();
     assert!(bool_eval(
         &rt,
-        "SpeechRecognition === webkitSpeechRecognition"
-    ));
-}
-
-#[test]
-fn recognition_has_required_methods() {
-    let rt = make_rt();
-    assert!(bool_eval(
-        &rt,
-        "var r = new SpeechRecognition(); \
-         typeof r.start === 'function' && \
-         typeof r.stop  === 'function' && \
-         typeof r.abort === 'function'"
-    ));
-}
-
-#[test]
-fn recognition_has_event_handlers() {
-    let rt = make_rt();
-    assert!(bool_eval(
-        &rt,
-        "var r = new SpeechRecognition(); \
-         'onresult' in r && 'onerror' in r && 'onend' in r && 'onstart' in r"
-    ));
-}
-
-#[test]
-fn recognition_default_properties() {
-    let rt = make_rt();
-    assert!(bool_eval(
-        &rt,
-        "var r = new SpeechRecognition(); \
-         r.continuous === false && r.interimResults === false && r.maxAlternatives === 1"
+        "!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window) &&          typeof SpeechRecognition === 'undefined' && typeof webkitSpeechRecognition === 'undefined'"
     ));
 }
 

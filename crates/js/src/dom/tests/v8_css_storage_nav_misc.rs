@@ -238,8 +238,7 @@ fn storage_access_created_document_via_implementation_rejects_invalid_state() {
 }
 
 // BUG-067/070: WEB_API_SHIM defined `Event` but no global `EventTarget`, so
-// every shim doing `class X extends EventTarget` (WebHID, WebUSB,
-// Bluetooth, WebSerial, WebXR, Navigation API) threw "EventTarget is not defined"
+// every shim doing `class X extends EventTarget` (WebXR, Navigation API, …) threw "EventTarget is not defined"
 // during install_dom and silently failed to install.
 
 #[test]
@@ -263,46 +262,19 @@ fn event_target_dispatch_invokes_listener() {
 // `event_target_dependent_apis_installed` split into one test per API
 // (S12b-24 scoping note) for clearer per-API failure attribution.
 
+// COMPAT-API-01-DEVICE: WebUSB/WebHID/Web Serial/Web Bluetooth are not implemented, so
+// feature detection must say so (a page that sees `navigator.usb` offers «connect»).
 #[test]
-fn event_target_dependent_navigator_hid_installed() {
+fn device_apis_are_not_exposed() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof navigator.hid === 'object'"));
-}
-
-#[test]
-fn event_target_dependent_navigator_usb_installed() {
-    let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof navigator.usb === 'object'"));
-}
-
-#[test]
-fn event_target_dependent_navigator_bluetooth_installed() {
-    let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof navigator.bluetooth === 'object'"));
-}
-
-#[test]
-fn event_target_dependent_navigator_serial_installed() {
-    let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof navigator.serial === 'object'"));
-}
-
-#[test]
-fn serial_get_ports_returns_promise() {
-    let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "navigator.serial.getPorts() instanceof Promise"));
-}
-
-#[test]
-fn serial_request_port_returns_promise() {
-    let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "navigator.serial.requestPort({filters:[]}) instanceof Promise"));
-}
-
-#[test]
-fn serial_port_class_exists() {
-    let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "typeof window.SerialPort === 'function'"));
+    assert!(bool_eval(
+        &rt,
+        "!('usb' in navigator) && !('hid' in navigator) && !('serial' in navigator)          && !('bluetooth' in navigator)"
+    ));
+    assert!(bool_eval(
+        &rt,
+        "['USB','USBDevice','HID','HIDDevice','Serial','SerialPort','Bluetooth','BluetoothDevice']         .every(function(n){ return !(n in window); })"
+    ));
 }
 
 #[test]
