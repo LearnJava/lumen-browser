@@ -1,0 +1,501 @@
+# slug	сегмент	позиция	вес	ранг-tranco	категория	источник	статус-главной	главная	внутренняя
+mail-ru	ru	1	3	14	portal	tranco:N26LW+pinned	200	https://mail.ru/	https://mail.ru/about
+yandex-ru	ru	2	3	96	search	tranco:N26LW+pinned	200	https://yandex.ru/	https://yandex.ru/about
+nic-ru	ru	3	3	109	hosting	tranco:N26LW	200	https://nic.ru/	https://nic.ru/about
+reg-ru	ru	4	3	126	hosting	tranco:N26LW	200	https://reg.ru/	https://reg.ru/about
+vk-com	ru	5	3	142	social	tranco:N26LW+pinned	200	https://vk.com/	https://vk.com/about
+mts-ru	ru	6	3	163	telecom	tranco:N26LW+pinned	200	https://mts.ru/	https://moskva.mts.ru/personal/mobilnaya-svyaz/uslugi/mobilnaya-svyaz/limit_na_svyaz
+ozon-ru	ru	7	3	235	marketplace	tranco:N26LW+pinned	307	https://ozon.ru/	
+ok-ru	ru	8	3	309	social	tranco:N26LW+pinned	200	https://ok.ru/	https://ok.ru/games
+drom-ru	ru	9	3	334	auto	tranco:N26LW	200	https://drom.ru/	https://www.drom.ru/info/misc/audi-103897.html
+ivi-ru	ru	10	3	508	video	tranco:N26LW	200	https://ivi.ru/	https://www.ivi.ru/movies/fentezi
+gosuslugi-ru	ru	11	3	523	gov	tranco:N26LW+pinned	200	https://gosuslugi.ru/	https://gosuslugi.ru/about
+sberbank-ru	ru	12	3	547	bank	tranco:N26LW+pinned	200	https://sberbank.ru/	https://sberbank.ru/about
+wildberries-ru	ru	13	3	602	marketplace	tranco:N26LW+pinned	498	https://wildberries.ru/	
+avito-ru	ru	14	3	615	classifieds	tranco:N26LW+pinned	439	https://avito.ru/	https://avito.ru/help
+consultant-ru	ru	15	3	743	reference	tranco:N26LW	200	https://consultant.ru/	https://www.consultant.ru/edu/
+wb-ru	ru	16	3	859	marketplace	tranco:N26LW	498	https://wb.ru/	
+rt-ru	ru	17	3	881	telecom	tranco:N26LW	200	https://www.rt.ru/	https://msk.rt.ru/b2c/partners_program
+pikabu-ru	ru	18	3	889	forum	tranco:N26LW	200	https://pikabu.ru/	https://pikabu.ru/@Gandbol
+tbank-ru	ru	19	3	970	bank	tranco:N26LW+pinned	200	https://tbank.ru/	https://www.tbank.ru/business/currency/
+rustore-ru	ru	20	3	1010	software	tranco:N26LW	200	https://rustore.ru/	https://www.rustore.ru/catalog/app/com.drive2
+t2-ru	ru	21	3	1018	telecom	tranco:N26LW	503/tls-unverified	https://t2.ru/	
+megafon-ru	ru	22	3	1097	telecom	tranco:N26LW+pinned	200	https://megafon.ru/	https://megafon.ru/help
+kontur-ru	ru	23	3	1114	saas	tranco:N26LW	200	https://kontur.ru/	https://kontur.ru/press
+gismeteo-ru	ru	24	3	1192	weather	tranco:N26LW	200	https://gismeteo.ru/	https://www.gismeteo.ru/weather-sankt-peterburg-4079/gm/
+rutube-ru	ru	25	3	1245	video	tranco:N26LW+pinned	200	https://rutube.ru/	
+tabor-ru	ru	26	3	1263	software	tranco:N26LW	200	https://tabor.ru/	https://tabor.ru/id67820256
+beboo-ru	ru	27	3	1270	social	tranco:N26LW	200	https://beboo.ru/	https://beboo.ru/znakomstva
+max-ru	ru	28	3	1289	messenger	tranco:N26LW	200	https://max.ru/	https://max.ru/about
+rbc-ru	ru	29	3	1363	news	tranco:N26LW+pinned	200	https://www.rbc.ru/	
+mangabuff-ru	ru	30	3	1418	entertainment	tranco:N26LW	200	https://mangabuff.ru/	https://mangabuff.ru/manga/posle-razryva-otnoshenii-vse-moi-prizvannye-zveri-stali-temnymi-sushchestvami
+imgsrc-ru	ru	31	3	1629	entertainment	tranco:N26LW	200	https://www.imgsrc.ru/	https://www.imgsrc.ru/tatianayelkina/86178242.html?utm_source=main_reco
+dns-shop-ru	ru	32	3	1817	shop	tranco:N26LW+pinned	401	https://dns-shop.ru/	
+rambler-ru	ru	33	3	1837	portal	tranco:N26LW	200	https://rambler.ru/	https://www.rambler.ru/eco/
+beeline-ru	ru	34	3	1987	telecom	tranco:N26LW+pinned	200	https://beeline.ru/	https://spb.beeline.ru/shop/catalog/audio/kolonki/
+vkvideo-ru	ru	35	3	2201	video	tranco:N26LW	302	https://www.vkvideo.ru/	
+vtb-ru	ru	36	3	2209	bank	tranco:N26LW+pinned	unreachable	https://www.vtb.ru/	
+mirtesen-ru	ru	37	3	2257	social	tranco:N26LW	200	https://mirtesen.ru/	https://mirtesen.ru/topic/politics?utm_medium=from_left_sidebar
+hh-ru	ru	38	3	2260	jobs	tranco:N26LW+pinned	200	https://hh.ru/	https://spb.hh.ru/employer/1455?from=footer_new&hhtmFromLabel=footer_new&hhtmFrom=main
+askona-ru	ru	39	3	2383	shop	tranco:N26LW	unreachable	https://www.askona.ru/	
+kinopoisk-ru	ru	40	3	2403	video	tranco:N26LW+pinned	200	https://kinopoisk.ru/	https://kinopoisk.ru/about
+mos-ru	ru	41	3	2447	gov	tranco:N26LW+pinned	200	https://mos.ru/	https://www.mos.ru/news/item/177109073/
+ria-ru	ru	42	3	2449	news	tranco:N26LW+pinned	200	https://ria.ru/	https://ria.ru/nadezhnye-lyudi/
+magnit-ru	ru	43	3	2459	shop	tranco:N26LW+pinned	200	https://magnit.ru/	https://magnit.ru/catalog/64697
+2gis-ru	ru	44	3	2524	maps	tranco:N26LW+pinned	200	https://2gis.ru/	https://2gis.ru/spb/geo/5348647327760881
+x5-ru	ru	45	3	2584	corporate	tranco:N26LW	200	https://x5.ru/	https://www.x5.ru/en/investors/share-price-chart/
+cdek-ru	ru	46	3	2710	logistics	tranco:N26LW	200	https://cdek.ru/	https://cdek.ru/about
+tutu-ru	ru	47	3	2722	travel	tranco:N26LW	200	https://tutu.ru/	https://www.tutu.ru/poezda/Moskva/Kursk/?date=17.10.2026
+smi2-ru	ru	48	3	3010	news	tranco:N26LW	200	https://smi2.ru/	https://smi2.ru/comment
+raiffeisen-ru	ru	49	3	3101	bank	tranco:N26LW+pinned	200	https://raiffeisen.ru/	https://www.raiffeisen.ru/retail/consumerloans/personalnyj-kredit/
+alfabank-ru	ru	50	3	3109	bank	tranco:N26LW+pinned	200	https://alfabank.ru/	https://alfabank.ru/about
+profi-ru	ru	51	2	3173	classifieds	tranco:N26LW	200	https://profi.ru/	https://profi.ru/catalog/sport/?fromSection=main_screen
+lenta-ru	ru	52	2	3175	news	tranco:N26LW+pinned	200	https://lenta.ru/	https://lenta.ru/extlink/2026/10/12/bezbleska-1/?intlnk=true
+vkusvill-ru	ru	53	2	3199	shop	tranco:N26LW+pinned	200	https://vkusvill.ru/	https://vkusvill.ru/media/journal/piling-dlya-litsa.html
+hse-ru	ru	54	2	3278	education	tranco:N26LW	200	https://hse.ru/	https://www.hse.ru/en/dormitory/
+aeroflot-ru	ru	55	2	3280	travel	tranco:N26LW	503	https://aeroflot.ru/	
+saby-ru	ru	56	2	3358	saas	tranco:N26LW	200	https://saby.ru/	https://saby.ru/staff
+cbr-ru	ru	57	2	3425	gov	tranco:N26LW+pinned	200/tls-unverified	https://cbr.ru/	https://cbr.ru/microfinance/
+cian-ru	ru	58	2	3785	classifieds	tranco:N26LW	200	https://cian.ru/	https://cian.ru/help
+garant-ru	ru	59	2	3796	reference	tranco:N26LW	200	https://garant.ru/	https://www.garant.ru/hotlaw/peter/2268762/
+goldapple-ru	ru	60	2	3824	shop	tranco:N26LW	200	https://goldapple.ru/	https://goldapple.ru/about
+tass-ru	ru	61	2	3838	news	tranco:N26LW	200	https://tass.ru/	https://tass.ru/about
+kp-ru	ru	62	2	3844	news	tranco:N26LW	200	https://kp.ru/	
+finam-ru	ru	63	2	3852	finance	tranco:N26LW	200	https://finam.ru/	https://finam.ru/about
+banki-ru	ru	64	2	3855	finance	tranco:N26LW	200	https://banki.ru/	https://www.banki.ru/microloans/
+rzd-ru	ru	65	2	3864	travel	tranco:N26LW+pinned	200	https://rzd.ru/	https://www.rzd.ru/ru/11717
+vkplay-ru	ru	66	2	3867	games	tranco:N26LW	200	https://vkplay.ru/	https://vkplay.ru/about-us
+vseinstrumenti-ru	ru	67	2	3901	shop	tranco:N26LW	403	https://vseinstrumenti.ru/	
+fotostrana-ru	ru	68	2	4026	social	tranco:N26LW	200	https://fotostrana.ru/	https://fotostrana.ru/support/help/?page=agreements&part=recommend
+mk-ru	ru	69	2	4129	news	tranco:N26LW	200	https://mk.ru/	https://www.mk.ru/projects/razbiraemgarderob/
+sports-ru	ru	70	2	4158	sport	tranco:N26LW	200	https://sports.ru/	https://www.sports.ru/hockey/club/spartak/
+aif-ru	ru	71	2	4163	news	tranco:N26LW	200	https://aif.ru/	https://aif.ru/society/safety
+thepoizon-ru	ru	72	2	4199	marketplace	tranco:N26LW	200	https://thepoizon.ru/	https://www.thepoizon.ru/category/wallets-card-holders-accessories
+pochta-ru	ru	73	2	4270	logistics	tranco:N26LW+pinned	200	https://pochta.ru/	https://www.pochta.ru/scan/personal?from=main
+samokat-ru	ru	74	2	4296	shop	tranco:N26LW+pinned	200	https://samokat.ru/	https://samokat.ru/about
+aliexpress-ru	ru	75	2	4360	marketplace	tranco:N26LW	200	https://aliexpress.ru/	https://aliexpress.ru/about
+litres-ru	ru	76	2	4365	books	tranco:N26LW	200	https://litres.ru/	https://www.litres.ru/genre/sport-zdorove-krasota-201615/
+vedomosti-ru	ru	77	2	4566	news	tranco:N26LW	200	https://vedomosti.ru/	https://www.vedomosti.ru/story/toplivo
+liveinternet-ru	ru	78	2	4642	reference	tranco:N26LW	200	https://liveinternet.ru/	https://www.liveinternet.ru/rating/ru/software/
+rg-ru	ru	79	2	4679	news	tranco:N26LW	200	https://rg.ru/	https://rg.ru/2026/10/14/ochevidcy-rasskazali-rg-o-nalete-bpla-na-balakovo-gde-atakovali-cod-sbera.html
+kommersant-ru	ru	80	2	4689	news	tranco:N26LW	200	https://kommersant.ru/	https://www.kommersant.ru/doc/9025651
+gazprombank-ru	ru	81	2	4794	bank	tranco:N26LW+pinned	200	https://gazprombank.ru/	https://www.gazprombank.ru/personal/avtokredit/6019259/
+drive2-ru	ru	82	2	4850	auto	tranco:N26LW	200	https://drive2.ru/	https://www.drive2.ru/cars/foton/
+farpost-ru	ru	83	2	4920	classifieds	tranco:N26LW	200	https://farpost.ru/	https://www.farpost.ru/home/
+iz-ru	ru	84	2	4982	news	tranco:N26LW	200	https://iz.ru/	https://iz.ru/2183881/smi-uznali-o-vstrevozhennosti-politikov-es-na-fone-ubiistva-u-evroparlamenta-izi?main_click
+bspb-ru	ru	85	2	5001	bank	tranco:N26LW	200	https://bspb.ru/	https://www.bspb.ru/retail/ebs
+interfax-ru	ru	86	2	5023	news	tranco:N26LW	200	https://interfax.ru/	https://www.interfax.ru/russia/1122307
+rusprofile-ru	ru	87	2	5053	reference	tranco:N26LW	200/tls-unverified	https://rusprofile.ru/	https://www.rusprofile.ru/codes/880000
+aviasales-ru	ru	88	2	5062	travel	tranco:N26LW	200	https://aviasales.ru/	https://www.aviasales.ru/routes/kuf/beg
+sovcombank-ru	ru	89	2	5185	bank	tranco:N26LW+pinned	401	https://sovcombank.ru/	
+vc-ru	ru	90	2	5435	news	tranco:N26LW	200	https://vc.ru/	https://vc.ru/about
+auto-ru	ru	91	2	5539	auto	tranco:N26LW	200	https://auto.ru/	https://auto.ru/sankt-peterburg/cars/omoda/all/
+azbyka-ru	ru	92	2	5612	reference	tranco:N26LW	200	https://azbyka.ru/	https://azbyka.ru/life/shodite-v-roddom/
+uchi-ru	ru	93	2	5755	education	tranco:N26LW	200	https://uchi.ru/	https://uchi.ru/about
+nspk-ru	ru	94	2	5864	payments	tranco:N26LW	200	https://nspk.ru/	https://nspk.ru/vacancies
+kion-ru	ru	95	2	5872	video	tranco:N26LW	200	https://kion.ru/	https://kion.ru/banners-actions/switch-to-kid-mode
+playground-ru	ru	96	2	5878	games	tranco:N26LW	200	https://playground.ru/	https://www.playground.ru/euro_truck_simulator_2/forum
+sportbox-ru	ru	97	2	6002	sport	tranco:N26LW	307	https://sportbox.ru/	
+smotrim-ru	ru	98	2	6144	video	tranco:N26LW	200	https://smotrim.ru/	https://smotrim.ru/show
+dellin-ru	ru	99	2	6217	logistics	tranco:N26LW	401	https://dellin.ru/	
+stihi-ru	ru	100	2	6251	books	tranco:N26LW	200	https://stihi.ru/	https://stihi.ru/avtor/mirakuli
+s7-ru	ru	101	2	6333	travel	tranco:N26LW	200	https://s7.ru/	https://s7.ru/about
+gazeta-ru	ru	102	2	6378	news	tranco:N26LW	200	https://gazeta.ru/	https://gazeta.ru/about
+irecommend-ru	ru	103	2	6508	forum	tranco:N26LW	200	https://irecommend.ru/	https://irecommend.ru/content/lekarstvo-mikrolaks-mikrolaks
+eapteka-ru	ru	104	2	6546	health	tranco:N26LW	503	https://eapteka.ru/	
+radiopotok-ru	ru	105	2	6556	music	tranco:N26LW	200	https://radiopotok.ru/	https://radiopotok.ru/radio/999
+sudrf-ru	ru	106	2	6644	gov	tranco:N26LW	200	https://sudrf.ru/	https://sudrf.ru/index.php?id=300
+gdebenz-ru	ru	107	2	6838	auto	tranco:N26LW	200	https://gdebenz.ru/	https://gdebenz.ru/khabarovsk
+lamoda-ru	ru	108	2	6842	shop	tranco:N26LW+pinned	200	https://lamoda.ru/	https://lamoda.ru/about
+prodoctorov-ru	ru	109	2	6936	health	tranco:N26LW	200	https://prodoctorov.ru/	https://prodoctorov.ru/about
+aniwaves-ru	ru	110	2	7195	entertainment	tranco:N26LW	unreachable	https://www.aniwaves.ru/	
+matchtv-ru	ru	111	2	7300	sport	tranco:N26LW	307	https://matchtv.ru/	https://matchtv.ru/about
+domclick-ru	ru	112	2	7466	classifieds	tranco:N26LW	401	https://domclick.ru/	
+1tv-ru	ru	113	2	7524	news	tranco:N26LW	200	https://1tv.ru/	https://www.1tv.ru/kastingi-pervogo
+ntv-ru	ru	114	2	7600	news	tranco:N26LW	200	https://ntv.ru/	https://www.ntv.ru/peredacha/segodnya/m23700/o835272
+pravda-ru	ru	115	2	7664	news	tranco:N26LW	200	https://pravda.ru/	https://www.pravda.ru/world/2425830-barbera-thornhill-us-ambassador-controversy/
+heroeswm-ru	ru	116	2	7753	games	tranco:N26LW	200	https://heroeswm.ru/	https://www.heroeswm.ru/plstats.php
+iamcook-ru	ru	117	2	7811	reference	tranco:N26LW	200	https://iamcook.ru/	https://www.iamcook.ru/showsubsection/garniri
+mvideo-ru	ru	118	2	8059	shop	tranco:N26LW+pinned	403	https://mvideo.ru/	
+soccer365-ru	ru	119	2	8169	sport	tranco:N26LW	200	https://soccer365.ru/	https://soccer365.ru/stats/goalscorers_of_the_year/
+litmarket-ru	ru	120	2	8414	books	tranco:N26LW	503	https://litmarket.ru/	
+wartank-ru	ru	121	2	8539	games	tranco:N26LW	200	https://wartank.ru/	https://wartank.ru/start;jsessionid=3E1749FBC73299CF7FA2739B165EDA12
+sport-express-ru	ru	122	2	8544	sport	tranco:N26LW	200	https://www.sport-express.ru/	https://www.sport-express.ru/martial/mma/aca/
+minecraft-inside-ru	ru	123	2	8629	games	tranco:N26LW	200	https://minecraft-inside.ru/	https://minecraft-inside.ru/mods/8955-minecraft-forge.html
+popcornnews-ru	ru	124	2	8684	entertainment	tranco:N26LW	200	https://popcornnews.ru/	https://www.popcornnews.ru/persons/Eminem
+forbes-ru	ru	125	2	8788	news	tranco:N26LW	200	https://forbes.ru/	https://forbes.ru/about
+yoomoney-ru	ru	126	2	8927	payments	tranco:N26LW	200	https://yoomoney.ru/	https://yoomoney.ru/get
+progorod43-ru	ru	127	2	8931	news	tranco:N26LW	200	https://progorod43.ru/	https://progorod43.ru/news/164780
+sefan-ru	ru	128	2	9077	reference	tranco:N26LW	200	https://sefan.ru/	https://sefan.ru/loads.php?lan=ru&style=2
+hibiny-ru	ru	129	2	9198	news	tranco:N26LW	200	https://hibiny.ru/	https://hibiny.ru/about
+avidreaders-ru	ru	130	2	9247	books	tranco:N26LW	200	https://avidreaders.ru/	https://avidreaders.ru/book/mir-kniga-pervaya.html
+litboom-ru	ru	131	2	9452	books	tranco:N26LW	200	https://litboom.ru/	https://litboom.ru/jumoristicheskoe-fjentezi/
+litgorod-ru	ru	132	2	9532	books	tranco:N26LW	200	https://litgorod.ru/	https://litgorod.ru/books/view/75495
+progoroduhta-ru	ru	133	2	9585	news	tranco:N26LW	200	https://progoroduhta.ru/	https://progoroduhta.ru/news/101727
+playwekings-ru	ru	134	2	10021	games	tranco:N26LW	200	https://playwekings.ru/	https://playwekings.ru/start
+prochepetsk-ru	ru	135	2	10162	news	tranco:N26LW	200	https://prochepetsk.ru/	https://prochepetsk.ru/novosti-rossii/88147
+lipetsknews-ru	ru	136	2	10337	news	tranco:N26LW	200	https://lipetsknews.ru/	https://lipetsknews.ru/news/70578
+ngs-ru	ru	137	2	10700	news	tranco:N26LW	200	https://ngs.ru/	https://ngs.ru/text/animals/2026/10/14/76699002/
+mosreg-ru	ru	138	2	10736	gov	tranco:N26LW	200	https://mosreg.ru/	https://mosreg.ru/about
+evotor-ru	ru	139	2	10905	saas	tranco:N26LW	200	https://evotor.ru/	
+klerk-ru	ru	140	2	10986	reference	tranco:N26LW	200	https://klerk.ru/	https://www.klerk.ru/buh/news/713617/
+gid-ru	ru	141	2	11057	reference	tranco:N26LW	200	https://gid.ru/	https://gid.ru/news
+nso-ru	ru	142	2	11156	gov	tranco:N26LW	200	https://nso.ru/	https://nso.ru/page/2409
+lesta-ru	ru	143	2	11219	games	tranco:N26LW	307	https://lesta.ru/	https://lesta.ru/contacts
+ostrovok-ru	ru	144	2	11279	travel	tranco:N26LW	200	https://ostrovok.ru/	https://ostrovok.ru/legal/site/privacy-policy-advertisement/
+lenreg-ru	ru	145	2	11921	gov	tranco:N26LW	unreachable	https://www.lenreg.ru/	
+fontanka-ru	ru	146	2	12058	news	tranco:N26LW	200	https://fontanka.ru/	https://www.fontanka.ru/2026/10/14/76698970/
+happ-su	ru	147	2	12421	software	tranco:N26LW	200	https://happ.su/	https://happ.info/zh/
+e1-ru	ru	148	2	12453	news	tranco:N26LW	200	https://e1.ru/	https://www.e1.ru/text/gorod/2026/10/14/76698949/
+cloudpayments-ru	ru	149	2	12606	payments	tranco:N26LW	200/tls-unverified	https://cloudpayments.ru/	https://cloudpayments.ru/tips/
+loveplanet-ru	ru	150	2	12674	social	tranco:N26LW	200	https://loveplanet.ru/	https://loveplanet.ru/page/edriscornn/frl-2
+khl-ru	ru	151	2	12791	sport	tranco:N26LW	307	https://www.khl.ru/	
+dnevnik-ru	ru	152	2	12885	education	tranco:N26LW	200	https://dnevnik.ru/	https://dnevnik.ru/news
+cikrf-ru	ru	153	2	12890	gov	tranco:N26LW	unreachable	https://www.cikrf.ru/	
+detmir-ru	ru	154	2	12892	shop	tranco:N26LW+pinned	200	https://detmir.ru/	https://www.detmir.ru/catalog/index/name/konstruktory/
+mamba-ru	ru	155	2	12897	social	tranco:N26LW	403	https://mamba.ru/	
+rp5-ru	ru	156	2	12905	weather	tranco:N26LW	200/tls-unverified	https://rp5.ru/	https://rp5.ru/Weather_in_Tallinn_(airport)
+profinance-ru	ru	157	2	13053	finance	tranco:N26LW	200	https://profinance.ru/	https://www.profinance.ru/news/2026/10/07/ckc3-kursy-valyut-tsb-rf-kurs-rublya-k-dollaru-evro-yuanyu-bel-rublyu-somoni-somu-i-s.html
+vesti-ru	ru	158	2	13196	news	tranco:N26LW	200	https://vesti.ru/	https://www.vesti.ru/politika/vnutrennyaya-politika/socialnaya-politika
+sutochno-ru	ru	159	2	13218	travel	tranco:N26LW	200	https://sutochno.ru/	https://sutochno.ru/about
+letu-ru	ru	160	2	13282	shop	tranco:N26LW	200	https://letu.ru/	https://letu.ru/about
+urfu-ru	ru	161	2	13353	education	tranco:N26LW	200	https://urfu.ru/	https://urfu.ru/ru/applicant/docs-abiturient/programs/
+tanki-su	ru	162	2	13454	games	tranco:N26LW	200	https://tanki.su/	https://tanki.su/ru/content/guide/economy/
+t-j-ru	ru	163	2	13478	news	tranco:N26LW	200	https://t-j.ru/	https://t-j.ru/news/kaliningradskaya-oblast-kruiz/
+komus-ru	ru	164	2	13497	shop	tranco:N26LW	200	https://komus.ru/	https://www.komus.ru/region/change?region=63
+topwar-ru	ru	165	2	13600	news	tranco:N26LW	200	https://topwar.ru/	https://topwar.ru/291529-reuters-ssha-pytajutsja-vernut-rossiju-v-peregovory-s-pomoschju-dizelnoj-sdelki.html
+cnews-ru	ru	166	2	13620	news	tranco:N26LW	200	https://cnews.ru/	https://www.cnews.ru/news/top/2026-10-12_rossijskim_proizvoditelyam
+news-ru	ru	167	2	13658	news	tranco:N26LW	307	https://news.ru/	https://news.ru/about
+skyeng-ru	ru	168	2	13661	education	tranco:N26LW	200	https://skyeng.ru/	https://skyeng.ru/programs/
+b2b-center-ru	ru	169	2	13878	saas	tranco:N26LW	200	https://b2b-center.ru/	https://b2b-center.ru/about
+vz-ru	ru	170	2	14092	news	tranco:N26LW	200	https://vz.ru/	https://vz.ru/opinions/2026/10/12/1460924.html
+dtf-ru	ru	171	2	14114	news	tranco:N26LW	200	https://dtf.ru/	https://dtf.ru/team/4124171-skonchalsya-avtor-dtf-sergei-granger-mihailenko
+spbu-ru	ru	172	2	14159	education	tranco:N26LW	200	https://spbu.ru/	https://spbu.ru/universitet/mezhdunarodnaya-deyatelnost
+film-ru	ru	173	2	14320	video	tranco:N26LW	200	https://film.ru/	https://www.film.ru/movies/ochen-strashnoe-kino-6
+livelib-ru	ru	174	2	14333	books	tranco:N26LW	200	https://livelib.ru/	https://www.livelib.ru/characters
+sima-land-ru	ru	175	2	14364	marketplace	tranco:N26LW	200	https://sima-land.ru/	https://www.sima-land.ru/upakovka/?catalog=grey
+cyberleninka-ru	ru	176	2	14386	science	tranco:N26LW	200	https://cyberleninka.ru/	https://cyberleninka.ru/article/c/chemical-engineering
+ati-su	ru	177	2	14463	logistics	tranco:N26LW	200	https://ati.su/	https://ati.su/trafficlight?utm_source=main_page
+perekrestok-ru	ru	178	2	14484	shop	tranco:N26LW	200	https://perekrestok.ru/	https://perekrestok.ru/about
+trudvsem-ru	ru	179	2	14676	gov	tranco:N26LW	200	https://trudvsem.ru/	https://trudvsem.ru/information-pages/molodezh
+woman-ru	ru	180	2	14695	forum	tranco:N26LW	200	https://woman.ru/	https://www.woman.ru/theme/nostalgia/
+mts-link-ru	ru	181	2	14757	saas	tranco:N26LW	200	https://mts-link.ru/	https://mts-link.ru/task/healthcare/
+afisha-ru	ru	182	2	14807	entertainment	tranco:N26LW	200	https://afisha.ru/	https://afisha.ru/about
+tatar-ru	ru	183	2	14855	gov	tranco:N26LW	200/tls-unverified	https://tatar.ru/	https://tatarstan.ru/catalogue.htm
+5ka-ru	ru	184	2	14861	shop	tranco:N26LW+pinned	200	https://5ka.ru/	https://5ka.ru/about
+tgstat-ru	ru	185	2	14970	reference	tranco:N26LW	403	https://tgstat.ru/	
+vgtimes-ru	ru	186	2	15145	games	tranco:N26LW	200	https://vgtimes.ru/	https://vgtimes.ru/articles/170689-vzlom-ps5-relapse.html
+labirint-ru	ru	187	2	15159	books	tranco:N26LW	200/tls-unverified	https://labirint.ru/	https://www.labirint.ru/school/
+barbars-ru	ru	188	2	15180	entertainment	tranco:N26LW	200	https://barbars.ru/	https://barbars.ru/help/0/agreement;jsessionid=2488C6297A29261834E28D75CFF913AB
+ingos-ru	ru	189	2	15208	insurance	tranco:N26LW	200/tls-unverified	https://ingos.ru/	https://www.ingos.ru/life/neschastnyj-sluchaj
+lemanapro-ru	ru	190	2	15401	shop	tranco:N26LW	401	https://lemanapro.ru/	
+citilink-ru	ru	191	2	16132	shop	tranco:N26LW+pinned	200	https://citilink.ru/	https://citilink.ru/about
+sportmaster-ru	ru	192	2	16774	shop	tranco:N26LW+pinned	401	https://sportmaster.ru/	
+kuper-ru	ru	193	2	17199	shop	tranco:N26LW+pinned	200	https://kuper.ru/	https://kuper.ru/about
+kaspersky-ru	ru	194	2	17588	software	tranco:N26LW+pinned	200	https://kaspersky.ru/	https://www.kaspersky.ru/about
+megamarket-ru	ru	195	2	26992	marketplace	tranco:N26LW+pinned	200	https://megamarket.ru/	https://megamarket.ru/about
+eldorado-ru	ru	196	2	31046	shop	tranco:N26LW+pinned	503/tls-unverified	https://eldorado.ru/	
+leroymerlin-ru	ru	197	2	52365	shop	tranco:N26LW+pinned	unreachable	https://www.leroymerlin.ru/	
+nalog-gov-ru	ru	198	2	0	gov	tranco:N26LW+pinned	200	https://nalog.gov.ru/	https://www.nalog.gov.ru/rn77/news/activities_fts/16656056/
+pfr-gov-ru	ru	199	2	0	gov	tranco:N26LW+pinned	200	https://pfr.gov.ru/	https://sfr.gov.ru/branches/altaikr/
+sfr-gov-ru	ru	200	2	0	gov	tranco:N26LW+pinned	200	https://sfr.gov.ru/	https://sfr.gov.ru/branches/altaikr/
+google-com	global	1	3	1	search	tranco:N26LW	200	https://google.com/	https://www.google.com/setprefs?sig=0_6WiuunGPRj8bvg3rTq_nxW7yxG0%3D&hl=fy&source=homepage&sa=X&ved=0ahUKEwiC8cvnkrmXAxVi2gIHHRpBJkwQ2ZgBCCg
+cloudflare-com	global	2	3	2	infra-saas	tranco:N26LW	200	https://cloudflare.com/	https://www.cloudflare.com/resource-hub/
+microsoft-com	global	3	3	7	tech-corp	tranco:N26LW	200	https://microsoft.com/	https://www.microsoft.com/software-development-companies?icid=DSM_All_SoftwareCompanies&ocid=cmm3atxvn98
+apple-com	global	4	3	9	tech-corp	tranco:N26LW	200	https://apple.com/	https://www.apple.com/apple-card/
+youtube-com	global	5	3	10	video	tranco:N26LW	200	https://youtube.com/	https://youtube.com/about
+instagram-com	global	6	3	11	social	tranco:N26LW	200	https://instagram.com/	https://instagram.com/about
+linkedin-com	global	7	3	18	social	tranco:N26LW	200	https://linkedin.com/	https://www.linkedin.com/talent/post-a-job?trk=homepage-basic_talent-finder-cta
+amazon-com	global	8	3	27	marketplace	tranco:N26LW	200	https://amazon.com/	https://amazon.com/about
+github-com	global	9	3	30	devtools	tranco:N26LW	200	https://github.com/	https://github.com/enterprise/startups
+wikipedia-org	global	10	3	31	reference	tranco:N26LW	200	https://wikipedia.org/	
+netflix-com	global	11	3	44	video	tranco:N26LW	200	https://netflix.com/	https://www.netflix.com/redeem
+x-com	global	12	3	48	social	tranco:N26LW	200	https://x.com/	https://x.com/privacy
+icloud-com	global	13	3	51	saas	tranco:N26LW	200	https://icloud.com/	https://icloud.com/contacts
+pinterest-com	global	14	3	53	social	tranco:N26LW	200	https://pinterest.com/	https://pinterest.com/about
+tiktok-com	global	15	3	58	video	tranco:N26LW	200	https://tiktok.com/	https://tiktok.com/about
+yahoo-com	global	16	3	62	portal	tranco:N26LW	200	https://yahoo.com/	https://www.yahoo.com/entertainment/celebrity/articles/pablo-torre-reveals-art-play-021924577.html
+adobe-com	global	17	3	63	software	tranco:N26LW	200	https://adobe.com/	https://www.adobe.com/homepage/fragments/loggedout/redesign/default/customer-testimonials/customer-testimonials
+zoom-us	global	18	3	67	saas	tranco:N26LW	200	https://zoom.us/	https://www.zoom.com/en/products/cx-insights/
+roblox-com	global	19	3	68	games	tranco:N26LW	200	https://roblox.com/	https://roblox.com/about
+spotify-com	global	20	3	71	music	tranco:N26LW	200	https://spotify.com/	https://spotify.com/about
+baidu-com	global	21	3	77	search	tranco:N26LW	200	https://baidu.com/	
+qq-com	global	22	3	81	portal	tranco:N26LW	200	https://qq.com/	https://qq.com/about
+vimeo-com	global	23	3	85	video	tranco:N26LW	200	https://vimeo.com/	https://vimeo.com/solutions/creative-professionals
+chatgpt-com	global	24	3	91	ai	tranco:N26LW	403	https://chatgpt.com/	
+t-me	global	25	3	102	messenger	tranco:N26LW	200	https://t.me/	https://telegram.org/blog/welcome-messages-buttons-TG-13
+reddit-com	global	26	3	103	forum	tranco:N26LW	403	https://reddit.com/	https://reddit.com/about
+epicgames-com	global	27	3	107	games	tranco:N26LW	403	https://epicgames.com/	
+openai-com	global	28	3	111	ai	tranco:N26LW	403	https://openai.com/	
+samsung-com	global	29	3	113	hardware	tranco:N26LW	200	https://samsung.com/	https://www.samsung.com/nl/tvs/75-inch-tv/
+dropbox-com	global	30	3	130	saas	tranco:N26LW	200	https://dropbox.com/	https://www.dropbox.com/features/cloud-storage
+intuit-com	global	31	3	131	finance	tranco:N26LW	200	https://intuit.com/	https://www.intuit.com/accessibility/
+nih-gov	global	32	3	136	science	tranco:N26LW	403	https://nih.gov/	
+snapchat-com	global	33	3	137	social	tranco:N26LW	200	https://snapchat.com/	https://www.snapchat.com:443/local/united-states/illinois/chicago/nightlife
+archive-org	global	34	3	147	reference	tranco:N26LW	200	https://archive.org/	https://archive.org/about
+godaddy-com	global	35	3	150	hosting	tranco:N26LW	403	https://godaddy.com/	https://godaddy.com/help
+tumblr-com	global	36	3	153	social	tranco:N26LW	200	https://tumblr.com/	https://www.tumblr.com/explore/video
+nytimes-com	global	37	3	156	news	tranco:N26LW	403	https://nytimes.com/	https://nytimes.com/help
+shopify-com	global	38	3	168	saas	tranco:N26LW	200	https://shopify.com/	https://www.shopify.com/shop
+paypal-com	global	39	3	169	payments	tranco:N26LW	200	https://paypal.com/	https://www.paypal.com/us/advertiser
+discord-com	global	40	3	176	messenger	tranco:N26LW	200	https://discord.com/	https://discord.com/ads/quests-success-stories
+t-online-de	global	41	3	177	news	tranco:N26LW	200	https://t-online.de/	https://www.t-online.de/gesundheit/krankheiten-symptome/coronavirus/
+flickr-com	global	42	3	183	social	tranco:N26LW	200	https://flickr.com/	https://flickr.com/company/about-us
+soundcloud-com	global	43	3	190	music	tranco:N26LW	200	https://soundcloud.com/	https://soundcloud.com/popular/searches
+theguardian-com	global	44	3	194	news	tranco:N26LW	200	https://theguardian.com/	https://theguardian.com/about
+medium-com	global	45	3	196	news	tranco:N26LW	403	https://medium.com/	
+cnn-com	global	46	3	199	news	tranco:N26LW	200	https://cnn.com/	https://cnn.com/about
+ebay-com	global	47	3	201	marketplace	tranco:N26LW	403	https://ebay.com/	https://ebay.com/help
+forbes-com	global	48	3	214	news	tranco:N26LW	200	https://forbes.com/	https://www.forbes.com/policy/
+bbc-com	global	49	3	215	news	tranco:N26LW	200	https://bbc.com/	https://www.bbc.com/travel/destinations/caribbean
+sciencedirect-com	global	50	3	216	science	tranco:N26LW	403	https://sciencedirect.com/	
+mit-edu	global	51	2	220	education	tranco:N26LW	200	https://mit.edu/	https://web.mit.edu/alumni
+twitch-tv	global	52	2	221	video	tranco:N26LW	200	https://twitch.tv/	https://twitch.tv/about-us
+researchgate-net	global	53	2	222	science	tranco:N26LW	403	https://researchgate.net/	
+stripe-com	global	54	2	229	payments	tranco:N26LW	200	https://stripe.com/	https://stripe.com/en-nl/customers/klarna
+sourceforge-net	global	55	2	241	devtools	tranco:N26LW	200	https://sourceforge.net/	https://sourceforge.net/projects/portableapps/
+namecheap-com	global	56	2	249	hosting	tranco:N26LW	403	https://namecheap.com/	
+hubspot-com	global	57	2	256	saas	tranco:N26LW	200	https://hubspot.com/	https://www.hubspot.com/use-case/generate-leads
+roku-com	global	58	2	257	video	tranco:N26LW	200	https://roku.com/	https://roku.com/about
+linktr-ee	global	59	2	261	saas	tranco:N26LW	200	https://linktr.ee/	https://linktr.ee/about/contact
+reuters-com	global	60	2	278	news	tranco:N26LW	401	https://reuters.com/	
+weather-com	global	61	2	279	weather	tranco:N26LW	200	https://weather.com/	https://weather.com/news/wildfires
+hp-com	global	62	2	292	hardware	tranco:N26LW	200	https://hp.com/	https://www.hp.com/nl-nl/shop/listings/desktops?subbrand=z-workstation
+springer-com	global	63	2	293	science	tranco:N26LW	200	https://springer.com/	https://link.springer.com/brands/springer/de/why-publish-with-springer
+www-gov-uk	global	64	2	294	gov	tranco:N26LW	200	https://www.gov.uk/	https://www.gov.uk/browse/visas-immigration
+autodesk-com	global	65	2	296	software	tranco:N26LW	200	https://autodesk.com/	https://www.autodesk.com/campaigns/fusion-360/multi-seat-offer
+nature-com	global	66	2	298	science	tranco:N26LW	200	https://nature.com/	https://www.nature.com/articles/d41586-026-03069-0
+steampowered-com	global	67	2	301	games	tranco:N26LW	200	https://steampowered.com/	https://store.steampowered.com/app/4888270/Season_5_Battlefield_Pro__Battlefield_6_and_REDSEC/?snr=1_4_4__tab-TopGrossing
+salesforce-com	global	68	2	304	saas	tranco:N26LW	200	https://salesforce.com/	https://www.salesforce.com/nl/pricing/
+alibaba-com	global	69	2	311	marketplace	tranco:N26LW	200	https://www.alibaba.com/	https://www.alibaba.com/trade/search?tab=all&has4Tab=true&SearchText=Electric%20Scooters&categoryId=100006091
+mi-com	global	70	2	318	hardware	tranco:N26LW	200	https://mi.com/	https://www.mi.com/nl/service/support/vipservice.html
+wiley-com	global	71	2	319	science	tranco:N26LW	200	https://wiley.com/	https://www.wiley.com/en-nl/research/subjects/health-sciences
+etsy-com	global	72	2	323	marketplace	tranco:N26LW	403	https://etsy.com/	https://etsy.com/about
+bilibili-com	global	73	2	343	video	tranco:N26LW	200	https://bilibili.com/	https://www.bilibili.com/c/food/
+dell-com	global	74	2	344	hardware	tranco:N26LW	200	https://dell.com/	https://www.dell.com/nl-nl/shop/desktop-computers/scr/desktop/appref=dell-pro-product-line
+naver-com	global	75	2	347	search	tranco:N26LW	200	https://naver.com/	
+slack-com	global	76	2	350	saas	tranco:N26LW	200	https://slack.com/	https://slack.com/solutions/media
+ea-com	global	77	2	351	games	tranco:N26LW	200	https://ea.com/	https://www.ea.com/news/ea-fc-the-grounds-is-here
+mobile-de	global	78	2	353	classifieds	tranco:N26LW	403	https://mobile.de/	
+nasa-gov	global	79	2	355	science	tranco:N26LW	200	https://nasa.gov/	https://www.nasa.gov/humans-in-space/astronauts/
+brave-com	global	80	2	356	software	tranco:N26LW	200	https://brave.com/	https://brave.com/brave-ads/search/
+tp-link-com	global	81	2	357	hardware	tranco:N26LW	200	https://tp-link.com/	https://www.tp-link.com/us/business-networking/soho-switch-unmanaged/
+cdc-gov	global	82	2	361	health	tranco:N26LW	200	https://cdc.gov/	https://www.cdc.gov/salmonella/outbreaks/broccoli-sprouts-09-26/index.html
+washingtonpost-com	global	83	2	365	news	tranco:N26LW	200	https://washingtonpost.com/	https://www.washingtonpost.com/people/kyle-melnick/
+gitlab-com	global	84	2	366	devtools	tranco:N26LW	200	https://gitlab.com/	https://about.gitlab.com/gitlab-security-standard/
+tradingview-com	global	85	2	367	finance	tranco:N26LW	200	https://tradingview.com/	https://www.tradingview.com/symbols/XAUUSD/
+nvidia-com	global	86	2	377	hardware	tranco:N26LW	200	https://nvidia.com/	https://www.nvidia.com/en-eu/networking/products/infiniband/
+bloomberg-com	global	87	2	383	news	tranco:N26LW	403	https://bloomberg.com/	
+wsj-com	global	88	2	388	news	tranco:N26LW	401	https://wsj.com/	https://wsj.com/about-us
+globo-com	global	89	2	396	news	tranco:N26LW	200	https://globo.com/	
+bsky-app	global	90	2	402	social	tranco:N26LW	200	https://bsky.app/	
+calendly-com	global	91	2	404	saas	tranco:N26LW	200	https://calendly.com/	https://calendly.com/features/mobile-apps
+unsplash-com	global	92	2	417	media	tranco:N26LW	401	https://unsplash.com/	
+go-com	global	93	2	418	entertainment	tranco:N26LW	200	https://go.com/	https://go.com/about
+indeed-com	global	94	2	421	jobs	tranco:N26LW	403	https://indeed.com/	https://indeed.com/about
+duckduckgo-com	global	95	2	424	search	tranco:N26LW	200	https://duckduckgo.com/	https://duckduckgo.com/newsletter
+line-me	global	96	2	425	messenger	tranco:N26LW	200	https://line.me/	https://www.line.me/ko/
+claude-ai	global	97	2	426	ai	tranco:N26LW	403	https://claude.ai/	
+steamcommunity-com	global	98	2	429	games	tranco:N26LW	200	https://steamcommunity.com/	https://steamcommunity.com/market/
+temu-com	global	99	2	430	marketplace	tranco:N26LW	200	https://temu.com/	https://www.temu.com/channel/local-warehouse.html
+dailymotion-com	global	100	2	431	video	tranco:N26LW	200	https://dailymotion.com/	https://dailymotion.com/about
+supercell-com	global	101	2	436	games	tranco:N26LW	200	https://supercell.com/	https://supercell.com/en/new-games/
+huawei-com	global	102	2	439	hardware	tranco:N26LW	200	https://www.huawei.com/	https://www.huawei.com/za/
+substack-com	global	103	2	440	news	tranco:N26LW	200	https://substack.com/	https://substack.com/@plumsykes/note/c-360603426
+taobao-com	global	104	2	447	marketplace	tranco:N26LW	200	https://www.taobao.com/	https://www.taobao.com/about
+duolingo-com	global	105	2	451	education	tranco:N26LW	200	https://duolingo.com/	https://duolingo.com/about
+fandom-com	global	106	2	452	entertainment	tranco:N26LW	403	https://fandom.com/	
+aol-com	global	107	2	455	portal	tranco:N26LW	200	https://aol.com/	https://www.aol.com:443/about-us/
+businessinsider-com	global	108	2	456	news	tranco:N26LW	200	https://businessinsider.com/	https://www.businessinsider.com/science
+pixabay-com	global	109	2	457	media	tranco:N26LW	403	https://pixabay.com/	
+arxiv-org	global	110	2	461	science	tranco:N26LW	200	https://arxiv.org/	https://arxiv.org/list/physics.atom-ph/recent
+grammarly-com	global	111	2	464	saas	tranco:N26LW	200	https://grammarly.com/	https://www.grammarly.com/plagiarism-checker
+speedtest-net	global	112	2	466	tools	tranco:N26LW	200	https://speedtest.net/	https://www.speedtest.net/th
+aliexpress-com	global	113	2	475	marketplace	tranco:N26LW	200	https://aliexpress.com/	https://aliexpress.com/about
+cnbc-com	global	114	2	476	news	tranco:N26LW	200	https://cnbc.com/	https://cnbc.com/about
+walmart-com	global	115	2	478	shop	tranco:N26LW	200	https://walmart.com/	https://www.walmart.com/plus
+goodreads-com	global	116	2	481	books	tranco:N26LW	200	https://goodreads.com/	https://www.goodreads.com/genres/mystery
+quora-com	global	117	2	487	forum	tranco:N26LW	403	https://quora.com/	
+shein-com	global	118	2	494	shop	tranco:N26LW	200	https://shein.com/	
+npr-org	global	119	2	499	news	tranco:N26LW	200	https://npr.org/	https://www.npr.org/podcasts-and-shows/
+noaa-gov	global	120	2	501	weather	tranco:N26LW	200	https://noaa.gov/	https://www.noaa.gov/tools-and-resources
+scribd-com	global	121	2	513	books	tranco:N26LW	200	https://scribd.com/	https://www.scribd.com/docs/Games-Activities
+indiatimes-com	global	122	2	515	news	tranco:N26LW	200	https://indiatimes.com/	https://www.indiatimes.com/lifestyle/
+behance-net	global	123	2	516	social	tranco:N26LW	403	https://behance.net/	https://behance.net/about
+foxnews-com	global	124	2	518	news	tranco:N26LW	200	https://foxnews.com/	https://www.foxnews.com/games/lil-snack-word-swap
+eventbrite-com	global	125	2	522	travel	tranco:N26LW	200	https://eventbrite.com/	
+slideshare-net	global	126	2	536	education	tranco:N26LW	200	https://slideshare.net/	https://www.slideshare.net/category/data-analytics
+uol-com-br	global	127	2	539	portal	tranco:N26LW	200	https://uol.com.br/	https://www.uol.com.br/esporte/tenis/
+capcut-com	global	128	2	540	software	tranco:N26LW	200	https://capcut.com/	https://www.capcut.com/tools/ai-video-editor
+ft-com	global	129	2	551	news	tranco:N26LW	403	https://ft.com/	
+fast-com	global	130	2	555	tools	tranco:N26LW	200	https://fast.com/	https://fast.com/it/
+free-fr	global	131	2	564	telecom	tranco:N26LW	200	https://free.fr/	https://www.free.fr/freebox/service-free-proxi
+tandfonline-com	global	132	2	567	science	tranco:N26LW	403	https://tandfonline.com/	
+rakuten-co-jp	global	133	2	573	marketplace	tranco:N26LW	200	https://rakuten.co.jp/	https://rakuten.co.jp/contact
+deviantart-com	global	134	2	577	social	tranco:N26LW	403	https://deviantart.com/	
+tripadvisor-com	global	135	2	580	travel	tranco:N26LW	403	https://tripadvisor.com/	
+wps-com	global	136	2	581	software	tranco:N26LW	200	https://wps.com/	https://www.wps.com/tools/webp-to-png/
+threads-com	global	137	2	592	social	tranco:N26LW	200	https://threads.com/	https://threads.com/about
+ca-gov	global	138	2	595	gov	tranco:N26LW	200	https://ca.gov/	https://www.ca.gov/departments/193/services/15/
+playstation-com	global	139	2	599	games	tranco:N26LW	200	https://playstation.com/	https://www.playstation.com/nl-nl/games/resident-evil-requiem/
+usatoday-com	global	140	2	605	news	tranco:N26LW	200	https://usatoday.com/	https://eu.usatoday.com/opinion/
+target-com	global	141	2	612	shop	tranco:N26LW	429	https://target.com/	https://target.com/about
+ovh-net	global	142	2	614	hosting	tranco:N26LW	200	https://ovh.net/	
+atlassian-com	global	143	2	616	saas	tranco:N26LW	200	https://atlassian.com/	https://atlassian.com/contact
+mdpi-com	global	144	2	623	science	tranco:N26LW	200	https://mdpi.com/	https://www.mdpi.com/2032-6653/17/10/522/pdf?version=1791968341
+wix-com	global	145	2	626	saas	tranco:N26LW	200	https://wix.com/	https://wix.com/about
+accuweather-com	global	146	2	633	weather	tranco:N26LW	200	https://accuweather.com/	https://www.accuweather.com/web-api/three-day-redirect?key=247498&target=
+ikea-com	global	147	2	636	shop	tranco:N26LW	200	https://ikea.com/	https://www.ikea.com/global/en/stories/design/kronoren-storage-family-260819/
+nintendo-com	global	148	2	640	games	tranco:N26LW	200	https://nintendo.com/	https://nintendo.com/about
+ups-com	global	149	2	643	logistics	tranco:N26LW	200	https://ups.com/	https://www.ups.com/us/en/customized-shipping-logistic-services/wholesale-logistics-services
+merriam-webster-com	global	150	2	652	reference	tranco:N26LW	403	https://merriam-webster.com/	
+jotform-com	global	151	2	655	saas	tranco:N26LW	200	https://jotform.com/	https://www.jotform.com/integrations/hubspot
+dailymail-com	global	152	2	667	news	tranco:N26LW	200	https://dailymail.com/	https://dailymail.com/contact
+nike-com	global	153	2	668	shop	tranco:N26LW	200	https://nike.com/	https://www.nike.com/nl/en/w/womens-best-5e1x6z76m50
+elpais-com	global	154	2	681	news	tranco:N26LW	200	https://elpais.com/	https://elpais.com/opinion/2026-10-14/instrucciones-para-esconder-un-buque-de-guerra.html
+britannica-com	global	155	2	682	reference	tranco:N26LW	403	https://britannica.com/	
+perplexity-ai	global	156	2	684	ai	tranco:N26LW	200	https://perplexity.ai/	
+surveymonkey-com	global	157	2	691	saas	tranco:N26LW	200	https://surveymonkey.com/	https://www.surveymonkey.com/templates/
+cambridge-org	global	158	2	696	science	tranco:N26LW	403	https://cambridge.org/	
+lemonde-fr	global	159	2	702	news	tranco:N26LW	200	https://lemonde.fr/	https://www.lemonde.fr/religions/
+kick-com	global	160	2	704	video	tranco:N26LW	200	https://kick.com/	https://kick.com/category/fortnite
+cbsnews-com	global	161	2	706	news	tranco:N26LW	200	https://cbsnews.com/	https://www.cbsnews.com/philadelphia/live/
+yelp-com	global	162	2	710	reviews	tranco:N26LW	403	https://yelp.com/	https://yelp.com/about
+viber-com	global	163	2	712	messenger	tranco:N26LW	200	https://viber.com/	https://www.viber.com/en/about/
+airbnb-com	global	164	2	715	travel	tranco:N26LW	200	https://airbnb.com/	https://www.airbnb.com/services
+shopee-com-br	global	165	2	720	marketplace	tranco:N26LW	200	https://shopee.com.br/	https://shopee.com.br/about
+ring-com	global	166	2	721	hardware	tranco:N26LW	200	https://ring.com/	https://ring.com/support/articles/l94iz/using-ring-discounts?srsltid=AfmBOorZKSgmNddboHYYEP6UIvUSTWto8e_VGLwI2imThcQiu5y7DmgI
+marriott-com	global	167	2	724	travel	tranco:N26LW	403	https://marriott.com/	
+uber-com	global	168	2	729	travel	tranco:N26LW	200	https://uber.com/	https://uber.com/about
+itch-io	global	169	2	731	games	tranco:N26LW	200	https://itch.io/	https://itch.io/games/genre-puzzle
+box-com	global	170	2	732	saas	tranco:N26LW	200	https://box.com/	
+independent-co-uk	global	171	2	738	news	tranco:N26LW	200	https://independent.co.uk/	https://www.independent.co.uk/news/uk/politics/sas-death-on-the-rock-uk-intelligence-gibraltar-northern-ireland-b3056384.html
+asus-com	global	172	2	748	hardware	tranco:N26LW	200	https://www.asus.com/	https://www.asus.com/microsite/gamebundle-amd/
+allegro-pl	global	173	2	752	marketplace	tranco:N26LW	403	https://allegro.pl/	https://allegro.pl/help
+python-org	global	174	2	753	devtools	tranco:N26LW	200	https://python.org/	https://python.org/help
+mediafire-com	global	175	2	762	saas	tranco:N26LW	200	https://mediafire.com/	https://www.mediafire.com/software/mobile/
+imgur-com	global	176	2	769	media	tranco:N26LW	200	https://imgur.com/	https://imgur.com/about
+homedepot-com	global	177	2	770	shop	tranco:N26LW	403	https://homedepot.com/	
+bild-de	global	178	2	771	news	tranco:N26LW	200	https://bild.de/	https://www.bild.de/sport/fussball/arminia-bielefeld/startseite-bielefeld-41429882.bild.html
+mlb-com	global	179	2	774	sport	tranco:N26LW	200	https://mlb.com/	https://mlb.com/help
+nikkei-com	global	180	2	781	news	tranco:N26LW	200	https://nikkei.com/	https://www.nikkei.com:443/article/DGXZQOUF0442V0U6A900C2000000/
+seznam-cz	global	181	2	783	portal	tranco:N26LW	200	https://seznam.cz/	
+zillow-com	global	182	2	791	classifieds	tranco:N26LW	200	https://zillow.com/	https://www.zillow.com/miami-fl/apartments/
+craigslist-org	global	183	2	792	classifieds	tranco:N26LW	200	https://craigslist.org/	https://www.craigslist.org/search/area/amsterdam?cat=rts
+bestbuy-com	global	184	2	795	shop	tranco:N26LW	200	https://bestbuy.com/	https://www.bestbuy.com/site/help-topics/international-orders/pcmcat204400050019.c?id=pcmcat204400050019&intl=nosplash
+welt-de	global	185	2	797	news	tranco:N26LW	200	https://welt.de/	
+wattpad-com	global	186	2	799	books	tranco:N26LW	200	https://wattpad.com/	https://www.wattpad.com/story/147933890
+apnews-com	global	187	2	803	news	tranco:N26LW	403	https://apnews.com/	
+lenovo-com	global	188	2	804	hardware	tranco:N26LW	200	https://lenovo.com/	https://lenovo.com/help
+ameblo-jp	global	189	2	805	social	tranco:N26LW	200	https://ameblo.jp/	https://ameblo.jp/nicosmilenicoo/entry-12981268255.html
+fiverr-com	global	190	2	806	marketplace	tranco:N26LW	200	https://fiverr.com/	https://www.fiverr.com/categories/writing-translation?source=category_tree
+wp-pl	global	191	2	812	portal	tranco:N26LW	200	https://wp.pl/	https://wp.pl/about
+disneyplus-com	global	192	2	820	video	tranco:N26LW	200	https://disneyplus.com/	https://www.disneyplus.com/browse/entity-5526d12b-7904-40cd-9bda-5af3fbfe3077
+att-com	global	193	2	822	telecom	tranco:N26LW	200	https://att.com/	https://att.com/about
+zoho-com	global	194	2	833	saas	tranco:N26LW	200	https://zoho.com/	https://www.zoho.com/people/?ireft=nhome&src=fa
+usps-com	global	195	2	841	logistics	tranco:N26LW	200	https://usps.com/	https://www.usps.com/manage/mailboxes.htm
+deepl-com	global	196	2	846	ai	tranco:N26LW	200	https://deepl.com/	https://www.deepl.com/en/microsoft-365
+discogs-com	global	197	2	850	music	tranco:N26LW	403	https://discogs.com/	
+lefigaro-fr	global	198	2	852	news	tranco:N26LW	200	https://lefigaro.fr/	https://www.lefigaro.fr/meteo
+academia-edu	global	199	2	853	science	tranco:N26LW	403	https://academia.edu/	
+agoda-com	global	200	2	854	travel	tranco:N26LW	200	https://agoda.com/	
+ryanair-com	global	201	1	857	travel	tranco:N26LW	200	https://ryanair.com/	https://ryanair.com/about
+pexels-com	global	202	1	861	media	tranco:N26LW	403	https://pexels.com/	
+curseforge-com	global	203	1	873	games	tranco:N26LW	403	https://curseforge.com/	
+chess-com	global	204	1	875	games	tranco:N26LW	200	https://chess.com/	https://www.chess.com/play/computer
+biblegateway-com	global	205	1	884	reference	tranco:N26LW	200	https://biblegateway.com/	https://www.biblegateway.com/learn/
+figma-com	global	206	1	890	saas	tranco:N26LW	200	https://figma.com/	https://www.figma.com/product-managers/
+nbcnews-com	global	207	1	897	news	tranco:N26LW	200	https://nbcnews.com/	https://www.nbcnews.com/nextstepsforveterans
+focus-de	global	208	1	900	news	tranco:N26LW	200	https://focus.de/	https://www.focus.de/wissen/technik/
+daum-net	global	209	1	915	portal	tranco:N26LW	200	https://daum.net/	https://daum.net/about
+coupang-com	global	210	1	916	marketplace	tranco:N26LW	403	https://coupang.com/	
+mayoclinic-org	global	211	1	917	health	tranco:N26LW	200	https://mayoclinic.org/	https://mayoclinic.org/about
+latimes-com	global	212	1	920	news	tranco:N26LW	200	https://latimes.com/	https://latimes.com/about
+lg-com	global	213	1	921	hardware	tranco:N26LW	200	https://lg.com/	https://www.lg.com/nl/televisies-soundbars/tv-by-inch/70-75-inch/
+bankofamerica-com	global	214	1	923	bank	tranco:N26LW	200	https://bankofamerica.com/	https://www.bankofamerica.com/auto-loans/
+kleinanzeigen-de	global	215	1	924	classifieds	tranco:N26LW	200	https://kleinanzeigen.de/	https://www.kleinanzeigen.de/s-hunde/c134
+classlink-com	global	216	1	936	education	tranco:N26LW	200	https://classlink.com/	https://www.classlink.com/products/analytics-plus
+mercadolivre-com-br	global	217	1	937	marketplace	tranco:N26LW	200	https://mercadolivre.com.br/	https://www.mercadolivre.com.br/c/bebes
+mercadolibre-com-ar	global	218	1	941	marketplace	tranco:N26LW	200	https://mercadolibre.com.ar/	https://www.mercadolibre.com.ar/e/negocios
+patreon-com	global	219	1	942	social	tranco:N26LW	200	https://patreon.com/	https://www.patreon.com/product/manage-business
+genius-com	global	220	1	943	music	tranco:N26LW	403	https://genius.com/	https://genius.com/about
+state-gov	global	221	1	946	gov	tranco:N26LW	200	https://state.gov/	https://www.state.gov/countries-areas/japan/
+note-com	global	222	1	950	social	tranco:N26LW	200	https://note.com/	https://note.com/terms/investment_disclaimer
+poki-com	global	223	1	957	games	tranco:N26LW	200	https://poki.com/	https://poki.com/en/g/blacktop-police-chase
+character-ai	global	224	1	959	ai	tranco:N26LW	403	https://character.ai/	https://character.ai/about
+flipkart-com	global	225	1	961	marketplace	tranco:N26LW	200	https://flipkart.com/	https://flipkart.com/about-us
+repubblica-it	global	226	1	963	news	tranco:N26LW	200	https://repubblica.it/	https://www.repubblica.it/esteri/2026/10/14/diretta/guerra_ucraina_russia_news_oggi-425646301/
+otto-de	global	227	1	964	shop	tranco:N26LW	200	https://otto.de/	https://www.otto.de/garten/zaeune/
+fidelity-com	global	228	1	969	bank	tranco:N26LW	200	https://fidelity.com/	https://www.fidelity.com:443/intlacct/solutions_page.shtml
+hm-com	global	229	1	971	shop	tranco:N26LW	503	https://hm.com/	https://hm.com/about
+trendyol-com	global	230	1	972	marketplace	tranco:N26LW	403	https://trendyol.com/	
+corriere-it	global	231	1	973	news	tranco:N26LW	200	https://corriere.it/	https://www.corriere.it/economia/chiedi-esperto/
+xiaohongshu-com	global	232	1	975	social	tranco:N26LW	200	https://xiaohongshu.com/	https://xiaohongshu.com/help
+lowes-com	global	233	1	978	shop	tranco:N26LW	200	https://lowes.com/	
+onet-pl	global	234	1	980	portal	tranco:N26LW	200	https://onet.pl/	https://www.onet.pl/gry/pl/krzyzowka-matematyczna
+change-org	global	235	1	983	social	tranco:N26LW	200	https://change.org/	https://www.change.org/topic?source_location=footer_link
+caixa-gov-br	global	236	1	984	bank	tranco:N26LW	302	https://www.caixa.gov.br/	
+nexusmods-com	global	237	1	986	games	tranco:N26LW	403	https://nexusmods.com/	
+ancestry-com	global	238	1	988	reference	tranco:N26LW	403	https://ancestry.com/	
+sofascore-com	global	239	1	995	sport	tranco:N26LW	403	https://sofascore.com/	
+kwai-com	global	240	1	996	video	tranco:N26LW	200	https://kwai.com/	https://www.kwai.com/business
+costco-com	global	241	1	997	shop	tranco:N26LW	200	https://costco.com/	https://www.costco.com/w/-/locations
+flightradar24-com	global	242	1	1000	travel	tranco:N26LW	403	https://flightradar24.com/	
+flashscore-com	global	243	1	1005	sport	tranco:N26LW	200	https://flashscore.com/	https://www.flashscore.com/tennis/
+webmd-com	global	244	1	1007	health	tranco:N26LW	200	https://webmd.com/	https://www.webmd.com/parenting/default.htm
+clever-com	global	245	1	1008	education	tranco:N26LW	200	https://clever.com/	https://www.clever.com/consulting-services
+hilton-com	global	246	1	1011	travel	tranco:N26LW	403	https://hilton.com/	https://hilton.com/help
+konami-net	global	247	1	1014	games	tranco:N26LW	unreachable	https://www.konami.net/	
+bol-com	global	248	1	1016	marketplace	tranco:N26LW	403	https://bol.com/	
+nexon-com	global	249	1	1022	games	tranco:N26LW	200	https://nexon.com/	https://nexon.com/about
+elmundo-es	global	250	1	1023	news	tranco:N26LW	200	https://elmundo.es/	https://www.elmundo.es/deportes/formula-1.html
+ecosia-org	global	251	1	1027	search	tranco:N26LW	403	https://ecosia.org/	
+healthline-com	global	252	1	1038	health	tranco:N26LW	200	https://healthline.com/	https://www.healthline.com/vitamins-supplements
+docomo-ne-jp	global	253	1	1042	telecom	tranco:N26LW	200	https://www.docomo.ne.jp/	https://www.docomo.ne.jp/charge/?icid=CRP_drawer_to_CRP_CHA
+kohls-com	global	254	1	1043	shop	tranco:N26LW	403	https://kohls.com/	
+letterboxd-com	global	255	1	1044	video	tranco:N26LW	403	https://letterboxd.com/	
+theatlantic-com	global	256	1	1046	news	tranco:N26LW	403	https://theatlantic.com/	
+olx-pl	global	257	1	1047	classifieds	tranco:N26LW	403	https://olx.pl/	
+huffpost-com	global	258	1	1051	news	tranco:N26LW	200	https://huffpost.com/	https://www.huffpost.com/entertainment/celebrity
+garmin-com	global	259	1	1053	hardware	tranco:N26LW	200	https://garmin.com/	https://www.garmin.com/nl-NL/p/646691/
+wise-com	global	260	1	1054	payments	tranco:N26LW	200	https://wise.com/	https://wise.com/nl/send-money/send-money-to-czech-republic
+infobae-com	global	261	1	1055	news	tranco:N26LW	200	https://infobae.com/	https://www.infobae.com/america/mundo/2026/10/14/un-ataque-ruso-contra-una-central-de-kiev-dejo-un-muerto-y-cerca-de-20-heridos/
+n-tv-de	global	262	1	1057	news	tranco:N26LW	200	https://n-tv.de/	https://www.n-tv.de/regionales/sachsen-anhalt/
+moneycontrol-com	global	263	1	1060	finance	tranco:N26LW	200	https://moneycontrol.com/	https://www.moneycontrol.com/news/business/ipo/
+ameba-jp	global	264	1	1063	social	tranco:N26LW	302	https://www.ameba.jp/	
+starlink-com	global	265	1	1064	telecom	tranco:N26LW	200	https://starlink.com/	https://starlink.com/about
+pbs-org	global	266	1	1070	news	tranco:N26LW	200	https://pbs.org/	https://www.pbs.org/show/us-and-holocaust/
+ouest-france-fr	global	267	1	1075	news	tranco:N26LW	200	https://ouest-france.fr/	https://www.ouest-france.fr/pays-de-la-loire/laval-53000/
+skroutz-gr	global	268	1	1076	shop	tranco:N26LW	403	https://skroutz.gr/	
+instructure-com	global	269	1	1078	education	tranco:N26LW	200	https://instructure.com/	https://www.instructure.com/solutions/workforce-development
+goal-com	global	270	1	1082	sport	tranco:N26LW	200	https://goal.com/	https://www.goal.com/en/player/k-mbappe%CC%81/5e9ilgrz3tzg9kd1gk3yvrahh
+terra-com-br	global	271	1	1088	portal	tranco:N26LW	200	https://terra.com.br/	https://www.terra.com.br/economia/
+as-com	global	272	1	1092	sport	tranco:N26LW	200	https://as.com/	https://as.com/resultados/ficha/equipo/betis/171/
+magnific-com	global	273	1	1095	ai	tranco:N26LW	200	https://magnific.com/	https://www.magnific.com/ai?from_element=mainmenu_ai_tools_v1_footer_see-all-tools
+bfmtv-com	global	274	1	1096	news	tranco:N26LW	200	https://bfmtv.com/	https://www.bfmtv.com:443/politique/parlement/
+crazygames-com	global	275	1	1098	games	tranco:N26LW	200	https://crazygames.com/	https://www.crazygames.com/privacy-policy
+ilovepdf-com	global	276	1	1099	tools	tranco:N26LW	200	https://ilovepdf.com/	https://www.ilovepdf.com/protect-pdf
+douyin-com	global	277	1	1100	video	tranco:N26LW	200	https://douyin.com/	https://douyin.com/help
+marca-com	global	278	1	1101	sport	tranco:N26LW	200	https://marca.com/	https://www.marca.com/futbol/champions-league/equipos.html
+tabelog-com	global	279	1	1107	reviews	tranco:N26LW	403	https://tabelog.com/	
+huggingface-co	global	280	1	1108	ai	tranco:N26LW	200	https://huggingface.co/	https://huggingface.co/inference/models
+interia-pl	global	281	1	1111	portal	tranco:N26LW	200	https://interia.pl/	
+aparat-com	global	282	1	1115	video	tranco:N26LW	200	https://aparat.com/	https://aparat.com/about
+wordwall-net	global	283	1	1116	education	tranco:N26LW	200	https://wordwall.net/	https://wordwall.net/about/template/flashcards
+gofundme-com	global	284	1	1117	payments	tranco:N26LW	200	https://gofundme.com/	https://www.gofundme.com/c/pricing
+finn-no	global	285	1	1118	classifieds	tranco:N26LW	200	https://finn.no/	https://www.finn.no/mobility/browse/boat
+gsmarena-com	global	286	1	1119	hardware	tranco:N26LW	200	https://gsmarena.com/	https://www.gsmarena.com/apple_home_collection_launches_with_lg_and_schneider_cameras_thermostats_and_sensors-news-75026.php
+giphy-com	global	287	1	1128	media	tranco:N26LW	200	https://giphy.com/	https://giphy.com/gifs/lol-grammys-steven-tyler-BFYLNwlsSNtcc
+cookpad-com	global	288	1	1129	reference	tranco:N26LW	200	https://cookpad.com/	https://cookpad.com/jp/recipes/26485406?ref=search_top&via=recommended_top_recipe
+t-mobile-com	global	289	1	1132	telecom	tranco:N26LW	200	https://t-mobile.com/	https://www.t-mobile.com/offers/t-mobile-revvl-phone-deals?INTNAV=tNav%3ADeals%3AREVVL
+nypost-com	global	290	1	1141	news	tranco:N26LW	200	https://nypost.com/	https://nypost.com/human-interest/
+aftonbladet-se	global	291	1	1143	news	tranco:N26LW	200	https://aftonbladet.se/	https://www.aftonbladet.se/sportbladet/fotboll
+hltv-org	global	292	1	1146	sport	tranco:N26LW	403	https://hltv.org/	https://hltv.org/contact
+hotpepper-jp	global	293	1	1147	reviews	tranco:N26LW	200	https://hotpepper.jp/	https://www.hotpepper.jp/SA22/Y869/XE13/
+vivo-com	global	294	1	1149	hardware	tranco:N26LW	200	https://vivo.com/	https://www.vivo.com/en/support
+kickstarter-com	global	295	1	1152	marketplace	tranco:N26LW	403	https://kickstarter.com/	
+skysports-com	global	296	1	1155	sport	tranco:N26LW	200	https://www.skysports.com/	https://www.skysports.com/watch/sky-sports-tennis
+riotgames-com	global	297	1	1156	games	tranco:N26LW	200	https://riotgames.com/	https://www.riotgames.com/en/work-with-us/offices
+lanacion-com-ar	global	298	1	1159	news	tranco:N26LW	200	https://lanacion.com.ar/	https://www.lanacion.com.ar/tema/dolar-blue-tid67294/
+one-com	global	299	1	1160	hosting	tranco:N26LW	200	https://one.com/	https://www.one.com/en-gb/wordpress-hosting/managed-wordpress/
+clarin-com	global	300	1	1164	news	tranco:N26LW	200	https://clarin.com/	https://www.clarin.com/deportes
