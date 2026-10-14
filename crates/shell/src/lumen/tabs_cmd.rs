@@ -168,6 +168,19 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// Ctrl+T, the «+» button and the new-tab gesture: a blank tab with the
+    /// address bar already open and empty, so the next keystrokes land in it
+    /// (UX-FOCUS-ARBITER). Page- and automation-driven tabs call
+    /// [`Self::open_new_tab`] directly — they navigate at once.
+    pub(crate) fn open_new_tab_for_typing(&mut self) {
+        self.open_new_tab();
+        self.hint.close();
+        self.address_bar.open("");
+        // CC-7: the engine-rendered `#omniInput` mirrors the open state.
+        self.relayout_chrome_host();
+        self.request_redraw();
+    }
+
     /// Open or toggle split view (Ctrl+\).
     ///
     /// Picks the next tab after the active one for the right pane. If no other

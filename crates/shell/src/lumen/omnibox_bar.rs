@@ -90,6 +90,10 @@ impl Lumen {
                 self.address_bar.select_all();
                 self.request_redraw();
             }
+            // Ctrl+T while typing still opens a new tab (with a fresh, empty bar).
+            KeyCode::KeyT if self.modifiers == ModifiersState::CONTROL && !key_event.repeat => {
+                self.open_new_tab_for_typing();
+            }
             _ => {
                 if let Some(text) = key_event.text.as_ref()
                     && !text.is_empty()
