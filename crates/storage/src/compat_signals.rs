@@ -159,6 +159,19 @@ impl CompatSignalStore {
         Ok(())
     }
 
+    /// Стереть всё, что известно о сайте `site` (eTLD+1): записи журнала и
+    /// момент выключения защиты («очистить данные сайта»). Возвращает число
+    /// удалённых записей журнала.
+    pub fn clear_site(&self, site: &str) -> Result<usize> {
+        let conn = self.lock()?;
+        let removed = conn
+            .execute("DELETE FROM signals WHERE site = ?1", params![site])
+            .map_err(|e| Error::Storage(format!("compat_signals clear_site signals: {e}")))?;
+        conn.execute("DELETE FROM protection_off WHERE site = ?1", params![site])
+            .map_err(|e| Error::Storage(format!("compat_signals clear_site protection: {e}")))?;
+        Ok(removed)
+    }
+
     /// Стереть всё («очистить данные просмотра»).
     pub fn clear(&self) -> Result<()> {
         self.lock()?
@@ -188,6 +201,30 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!((all[0].kind.as_str(), all[0].site.as_str()), ("reload3", "a.com"));
         assert_eq!(all[1].detail, "drm");
+    }
+
+    #[test]
+    fn clear_site_drops_only_that_site() {
+        let s = CompatSignalStore::open_in_memory().unwrap();
+        s.append(&sig("reload3", "a.com", T0)).unwrap();
+        s.append(&sig("reload3", "b.com", T0 + 1)).unwrap();
+        s.set_protection_off("a.com", T0).unwrap();
+        s.set_protection_off("b.com", T0).unwrap();
+        assert_eq!(s.clear_site("a.com").unwrap(), 1);
+        let all = s.load_signals().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].site, "b.com");
+        assert_eq!(s.load_protection_off().unwrap(), vec![("b.com".to_owned(), T0)]);
+    }
+
+    #[test]
+    fn clear_drops_journal_and_protection_moments() {
+        let s = CompatSignalStore::open_in_memory().unwrap();
+        s.append(&sig("reload3", "a.com", T0)).unwrap();
+        s.set_protection_off("a.com", T0).unwrap();
+        s.clear().unwrap();
+        assert!(s.load_signals().unwrap().is_empty());
+        assert!(s.load_protection_off().unwrap().is_empty());
     }
 
     #[test]

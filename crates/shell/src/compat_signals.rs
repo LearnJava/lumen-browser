@@ -141,6 +141,21 @@ impl SignalLog {
         self.push(SignalKind::OpenInOther, site_of(url), now, reason_code)
     }
 
+    /// Забыть всё («очистить историю»): журнал, счётчики перезагрузок и
+    /// моменты выключения защиты.
+    pub fn clear(&mut self) {
+        self.log.clear();
+        self.reloads.clear();
+        self.protection_off.clear();
+    }
+
+    /// Забыть всё о сайте `site` (eTLD+1) («очистить данные сайта»).
+    pub fn clear_site(&mut self, site: &str) {
+        self.log.retain(|s| s.site != site);
+        self.reloads.retain(|url, _| site_of(url) != site);
+        self.protection_off.remove(site);
+    }
+
     /// Сигналы от старых к новым.
     #[allow(dead_code)] // потребитель — чип помощи (COMPAT-SIG-04 / COMPAT-PANEL)
     pub fn recent(&self) -> impl Iterator<Item = &Signal> {
@@ -161,6 +176,32 @@ mod tests {
     use super::*;
 
     const URL: &str = "https://www.example.co.uk/page?q=1";
+
+    #[test]
+    fn clear_forgets_log_reloads_and_protection_moments() {
+        let mut log = SignalLog::default();
+        log.record_open_in_other(URL, "drm", 100);
+        log.record_reload(URL, 100);
+        log.record_reload(URL, 101);
+        log.record_protection_off(URL, 100);
+        log.clear();
+        assert_eq!(log.recent().count(), 0);
+        // Счёт перезагрузок и момент выключения защиты начались заново.
+        assert!(log.record_reload(URL, 102).is_none());
+        assert!(log.record_protection_off(URL, 103).is_none());
+    }
+
+    #[test]
+    fn clear_site_keeps_other_sites() {
+        let mut log = SignalLog::default();
+        log.record_open_in_other(URL, "drm", 100);
+        log.record_open_in_other("https://other.org/", "calls", 101);
+        log.record_protection_off(URL, 100);
+        log.clear_site("example.co.uk");
+        let rest: Vec<_> = log.recent().map(|s| s.site.as_str()).collect();
+        assert_eq!(rest, ["other.org"]);
+        assert!(log.record_protection_off(URL, 102).is_none(), "момент забыт");
+    }
 
     #[test]
     fn three_reloads_in_window_make_a_signal() {

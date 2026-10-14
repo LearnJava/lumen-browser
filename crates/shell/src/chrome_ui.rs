@@ -1543,6 +1543,8 @@ impl Lumen {
                 // PERF-15: the site memory is keyed by visited page URLs —
                 // history in all but name.
                 crate::site_memory::forget_all();
+                // COMPAT-SIG-01: журнал сигналов хранит те же сайты.
+                self.forget_all_signals();
                 self.refresh_history();
                 self.relayout_chrome_host();
             }
