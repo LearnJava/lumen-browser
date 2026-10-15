@@ -74,6 +74,31 @@ pub(crate) fn build_page_with_selection_highlight(
     out
 }
 
+/// The `(from, to)` char range a double (`clicks == 2`) or triple press selects
+/// around char index `cursor` of a field `value`: the word, or the whole value
+/// of an `<input>` / the line between line feeds of a `<textarea>`. `None` for
+/// an empty value.
+fn field_run(kind: TypeableField, value: &str, cursor: usize, clicks: u8) -> Option<(usize, usize)> {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+    let cursor = cursor.min(chars.len());
+    if clicks == 2 {
+        let byte = value.char_indices().nth(cursor).map_or(value.len(), |(b, _)| b);
+        let (from, to) = lumen_dom::word_bounds(value, byte)?;
+        return Some((value[..from].chars().count(), value[..to].chars().count()));
+    }
+    Some(match kind {
+        TypeableField::Input => (0, chars.len()),
+        TypeableField::Textarea => {
+            let from = chars[..cursor].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+            let to = chars[cursor..].iter().position(|&c| c == '\n').map_or(chars.len(), |i| cursor + i);
+            (from, to)
+        }
+    })
+}
+
 /// Runs `f` with the bundled-font measurer, `None` only if the bundled font
 /// fails to parse (a corrupted binary) — a hit test must not `unwrap` there.
 fn with_measurer<R>(f: impl FnOnce(&dyn TextMeasurer) -> R) -> Option<R> {
@@ -141,6 +166,56 @@ impl Lumen {
         // ancestor says `all` — `caret_at_point` already skips it.
         let pos = with_measurer(|m| lumen_layout::caret_at_point(lb, px, py, m))??;
         Some((pos, scope))
+    }
+
+    /// UX-DBLCLICK: the second press of a streak selects the word under the
+    /// pointer, the third (and later) the whole paragraph — in a focused
+    /// `<input>`/`<textarea>` (armed by `begin_text_drag_select`) or in page
+    /// text (armed by [`Self::begin_doc_select`]). Runs right after both, so
+    /// the press has already put the caret where the click landed. `user-select:
+    /// all` text is already selected whole and is left alone; a frame's field
+    /// keeps the plain caret.
+    pub(crate) fn select_by_click_count(&mut self, x_css: f32, y_css: f32, clicks: u8) {
+        if clicks < 2 {
+            return;
+        }
+        if let Some(super::text_drag_select::TextDragTarget::Page(nid)) = self.text_drag {
+            self.select_field_run(nid, clicks);
+            return;
+        }
+        let Some(drag) = self.doc_select.clone() else { return };
+        let (px, py) = self.page_point(x_css, y_css);
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let mut doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(pos) = doc.get_selection().anchor else { return };
+        let range = if clicks == 2 {
+            lumen_dom::word_range_at(&doc, pos)
+        } else {
+            self.layout_box
+                .as_ref()
+                .and_then(|lb| lumen_layout::paragraph_range_at_point(lb, px, py))
+        };
+        let Some(mut range) = range else { return };
+        if let Some(scope) = &drag.contain {
+            range.start = lumen_layout::clamp_to_range(range.start, scope);
+            range.end = lumen_layout::clamp_to_range(range.end, scope);
+        }
+        doc.set_selection(lumen_dom::Selection { anchor: Some(range.start), focus: Some(range.end) });
+        drop(doc);
+        self.request_redraw();
+    }
+
+    /// Word (2 presses) or whole value / line (3+) of the focused page field
+    /// `nid` around its cursor, as the field's selection.
+    fn select_field_run(&mut self, nid: lumen_dom::NodeId, clicks: u8) {
+        let Some((kind, value)) = self.typeable_field(nid) else { return };
+        let Some(cursor) = self.form_state.get(&nid).and_then(|s| s.cursor) else { return };
+        let Some((from, to)) = field_run(kind, &value, cursor, clicks) else { return };
+        let slot = self.form_state.entry(nid).or_default();
+        slot.selection_anchor = Some(from);
+        slot.cursor = Some(to);
+        self.publish_text_selection_for(nid, &value);
+        self.request_redraw();
     }
 
     /// Extend the focus end of an in-progress page-text drag to the char under
@@ -246,6 +321,24 @@ impl Lumen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_run_double_press_picks_the_word_in_chars() {
+        // Char indices, not bytes: "привет мир" — cursor inside the second word.
+        assert_eq!(field_run(TypeableField::Input, "привет мир", 8, 2), Some((7, 10)));
+        assert_eq!(field_run(TypeableField::Input, "привет мир", 0, 2), Some((0, 6)));
+        // End of value: the word before the cursor.
+        assert_eq!(field_run(TypeableField::Input, "привет мир", 10, 2), Some((7, 10)));
+        assert_eq!(field_run(TypeableField::Input, "", 0, 2), None);
+    }
+
+    #[test]
+    fn field_run_triple_press_is_the_value_or_the_line() {
+        assert_eq!(field_run(TypeableField::Input, "one two", 3, 3), Some((0, 7)));
+        assert_eq!(field_run(TypeableField::Textarea, "ab\ncd ef\ngh", 5, 3), Some((3, 8)));
+        assert_eq!(field_run(TypeableField::Textarea, "ab\ncd", 1, 3), Some((0, 2)));
+        assert_eq!(field_run(TypeableField::Textarea, "ab\ncd", 5, 3), Some((3, 5)));
+    }
 
     fn text(x: f32, y: f32) -> DisplayCommand {
         DisplayCommand::DrawText {

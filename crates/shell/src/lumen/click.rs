@@ -599,11 +599,12 @@ impl Lumen {
         if let Some(result) = hit_result.as_ref() {
             let mod_flags: u8 = self.modifier_flags();
             let script = format!(
-                "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {})",
+                "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {}, {})",
                 result.node.index(),
                 x_css as i32,
                 y_css as i32,
                 mod_flags,
+                self.click_streak.count(),
             );
             // ADR-016 M2.2c-2d (10): read-after-eval click dispatch — сам
             // `_lumen_dispatch_mouse_event('click', …)` уходит fire-and-forget через

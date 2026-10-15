@@ -55,9 +55,9 @@ fn double_click_follows_the_os_time_and_slop() {
     assert!(!slow.is_double_click(-1.0, 0.0, 0.0), "time must not run backwards");
 
     let wide = with(|p| p.double_click_slop = (10.0, 6.0));
-    assert!(wide.is_double_click(100.0, 9.0, 5.0));
-    assert!(!wide.is_double_click(100.0, 11.0, 0.0));
-    assert!(!wide.is_double_click(100.0, 0.0, 7.0), "axes are independent");
+    assert!(wide.is_double_click(100.0, 5.0, 3.0), "the zone is centred: half of it each way");
+    assert!(!wide.is_double_click(100.0, 5.5, 0.0));
+    assert!(!wide.is_double_click(100.0, 0.0, 3.5), "axes are independent");
 }
 
 #[test]

@@ -1397,10 +1397,13 @@ function _lumen_dispatch_rich(start_nid, event) {
 // Called from shell with actual viewport coordinates and modifier state.
 // Creates a trusted MouseEvent and dispatches it through the DOM.
 // mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
-function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+// detail: click count for mousedown/mouseup/click/dblclick (UI Events §3.5);
+// omitted/0 for movement events. 'dblclick' is dispatched like the others.
+function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, buttons, mod, detail) {
     _lumen_note_activation_input(type);
     var ev = new MouseEvent(type, {
         bubbles: true, cancelable: true, isTrusted: true,
+        detail: detail | 0,
         clientX: clientX, clientY: clientY,
         screenX: clientX, screenY: clientY,
         pageX:   clientX, pageY:   clientY,
