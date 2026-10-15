@@ -64,6 +64,11 @@ tracy = ["dep:tracy-client", "lumen-layout/tracy"]
 # `cargo build --workspace` не трогает FFmpeg вовсе.
 ffmpeg-video = ["v8", "dep:lumen-media-ffmpeg", "lumen-media-ffmpeg/ffmpeg", "lumen-js/ffmpeg-video"]
 
+# UX-VIDEO-AV1: ассемблерные ядра AV1-декодера (AVIF и видео), ~3,5x быстрее портируемого
+# Rust-пути. Релизная сборка: `--features av1-asm`, на x86 нужен nasm в PATH. NOT в default:
+# без неё `cargo build` не требует nasm (docs/perf/av1-decode.md).
+av1-asm = ["lumen-image/av1-asm"]
+
 [dependencies]
 lumen-core.workspace = true
 # PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).

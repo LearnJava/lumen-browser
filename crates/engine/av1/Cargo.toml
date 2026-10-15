@@ -1,0 +1,33 @@
+[package]
+name = "lumen-av1"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: общий AV1-декодер (rav1d) для картинок AVIF и видео — безопасная обёртка и преобразование YUV в RGBA (UX-VIDEO-AV1, ADR-035 п.2)"
+
+[features]
+# Ассемблерные ядра rav1d (x86: nasm в PATH при сборке; ARM64: ассемблер toolchain).
+# Выключено по умолчанию, чтобы `cargo build` работал без nasm; релиз — `--features av1-asm`
+# у lumen-shell (docs/perf/av1-decode.md).
+asm = ["rav1d/asm"]
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+# Provisional: memory-safe порт dav1d на Rust (BSD-2), ADR-035 п.2 — единственный
+# встроенный AV1-декодер на всех платформах. Выделен из lumen-image (AVIF) в общий
+# крейт, чтобы им пользовались и картинки, и видео.
+# Trait-anchor: lumen_core::ext::VideoDecoder (бэкенд реестра UX-VIDEO-NATIVE) и
+# lumen_core::ext::ImageDecoder (AvifImageDecoder).
+# Graduation: permanent — AV1 реальный веб-кодек (YouTube, VK Видео, AVIF).
+# `asm` по умолчанию выключен (на x86 нужен nasm): портируемый Rust-путь без внешних
+# инструментов сборки. Релизные сборки включают его фичей `asm` (замер 1080p:
+# без asm ~0,9x реального времени, с asm ~3,3x — docs/perf/av1-decode.md).
+rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
+
+[dev-dependencies]
+lumen-media-demux.workspace = true
+
+[lints]
+workspace = true
