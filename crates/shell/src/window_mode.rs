@@ -31,6 +31,13 @@ pub(crate) fn run_window_mode(
 ) -> ExitCode {
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
+    // UX-OSPARAMS: a deterministic run (golden dumps, graphic tests) ignores the
+    // machine's input/accessibility settings, so they cannot move a pixel.
+    if deterministic.enabled {
+        platform::os_params::freeze_defaults();
+    }
+    // Load the registry now so `os_params_gen` below starts from its real value.
+    let _ = platform::os_params::current();
     let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
     // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
     // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
@@ -395,6 +402,7 @@ fn run_window_mode_inner(
         chrome_hovered_nid: None,
         chrome_active_nid: None,
         chrome_omni_input_rect: None,
+        chrome_omni_font_size: 12.5,
         chrome_sidebar_collapsed: false,
         chrome_settings_section: "general".to_owned(),
         chrome_animation_scheduler: animation_scheduler::AnimationScheduler::new(),
@@ -407,6 +415,7 @@ fn run_window_mode_inner(
         chrome_float_offsets: HashMap::new(),
         chrome_float_drag: None,
         chrome_float_last_press: None,
+        click_streak: Default::default(),
         chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
         chrome_restyle_indexes: lumen_layout::style::RestyleIndexCache::default(),
         chrome_prev_interactive: (None, None, None),
@@ -459,6 +468,7 @@ fn run_window_mode_inner(
         transition_events: Vec::new(),
         animation_events: Vec::new(),
         dark_mode: false,
+        os_params_gen: platform::os_params::generation(),
         cursor_position: None,
         pending_pointer_moves: Vec::new(),
         hovered_nid: None,
@@ -663,6 +673,7 @@ fn run_window_mode_inner(
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),
+        lazy_tabs: HashMap::new(),
         hibernated_tabs: HashMap::new(),
         crashed: None,
         net_error_retries: None,
@@ -701,6 +712,7 @@ fn run_window_mode_inner(
         control_panel_info_open: false,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
+        blocked_popups: std::collections::HashMap::new(),
         permissions_disk_store: permissions_store,
         external_browser_rules,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
@@ -816,6 +828,7 @@ fn run_window_mode_inner(
         tab_drag: None,
         dnd_state: None,
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
+        hbar_freeze: None,
         closed_tabs: tabs::closed::ClosedTabs::default(),
         page_context_menu: page_context_menu::PageContextMenu::default(),
         compat_signals,
@@ -830,6 +843,12 @@ fn run_window_mode_inner(
     };
     // UX-PERMISSIONS-3: a persisted Anonymous profile must not write decisions to disk.
     app.sync_permission_store();
+    // COMPAT-PRIVACY-UNBREAK-LOCALE: a persisted Anonymous profile starts with en-US.
+    app.sync_profile_locale();
+    // UX-USER-ACTIVATION: popups, clipboard writes and permission prompts need
+    // a user gesture in the interactive browser; `LUMEN_ALLOW_POPUPS=1` lifts
+    // the gate for automation that drives pages with `eval`.
+    lumen_js::popup_policy::set_gate_enabled(std::env::var_os("LUMEN_ALLOW_POPUPS").is_none());
     // BUG-411: seed the shields fallback from the persisted "Блокировать
     // рекламу" setting and push it at the process-global filter, which
     // `config::init_adblock` deliberately leaves off. Before this the setting

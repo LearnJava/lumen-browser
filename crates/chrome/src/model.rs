@@ -53,6 +53,11 @@ pub struct ChromeModel {
     pub workspaces: Vec<ChromeWorkspaceModel>,
     /// `true` shows `#workspaceBar` (UX-CHROME-PANELS) — mirrors `WorkspacePanel::visible`.
     pub workspace_bar_open: bool,
+    /// UX-TAB-CLOSE-FREEZE: `Some(w)` pins every `.hbar-tab` to `w` CSS px
+    /// (the width the tab had when it was closed with the mouse), so the next
+    /// tab slides under the cursor instead of the strip re-flowing; `None`
+    /// leaves the tabs to the equal-width flex rule of the asset.
+    pub hbar_tab_width: Option<f32>,
     /// Omnibox `#omniInput` value + spoof-warning banner (CC-7).
     pub omnibox: OmniboxModel,
     /// `true` narrows the vertical sidebar to its icon rail (`#sidebar.collapsed`,
@@ -86,13 +91,13 @@ pub struct ChromeModel {
     /// trackers/ads/fingerprint breakdown would be fabricated), so this binds
     /// only the one real number rather than inventing the other two.
     pub blocked_total: u32,
-    /// Grant state for the four permission rows, in asset order (`Камера`,
-    /// `Микрофон`, `Уведомления`, `Буфер обмена`) — exactly
+    /// Grant state for the five permission rows, in asset order (`Камера`,
+    /// `Микрофон`, `Уведомления`, `Буфер обмена`, `Всплывающие окна`) — exactly
     /// `PermissionKind::ALL`. The last two rows were added to the design
     /// reference by [BUG-411](../../../bugs/BUG-411-FIXED.md); before that the
     /// asset had only the first two, which left `Notifications`/`Clipboard`
     /// unreachable from the UI.
-    pub permissions: [ChromePermState; 4],
+    pub permissions: [ChromePermState; 5],
     /// Host the popover applies to (`shieldSiteRow` + the `#permDomain` span in
     /// its `Разрешения — …` heading), or empty when no host-bearing page is
     /// loaded (`about:blank`, `file://`) — [BUG-411](../../../bugs/BUG-411-FIXED.md).
@@ -932,6 +937,10 @@ pub struct OmniboxModel {
     /// `Some(percent)` shows the `#zoomBtn` page-zoom indicator with this
     /// label (UX-ZOOM); `None` — zoom is 100 % and the button stays hidden.
     pub zoom_percent: Option<u32>,
+    /// `n > 0` shows the `#popupBtn` blocked-popup indicator with this count
+    /// (UX-USER-ACTIVATION): the page called `window.open()` without a user
+    /// gesture `n` times since it loaded.
+    pub popups_blocked: u32,
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
@@ -1200,6 +1209,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     }
     if let Some(container) = doc.find_by_id(crate::ids::HBAR_TABS) {
         rebuild_hbar_tab_list(doc, container, &model.tabs);
+        apply_hbar_tab_freeze(doc, container, model.hbar_tab_width);
     }
     if let Some(container) = find_by_attr(doc, "data-testid", "workspace-switcher") {
         rebuild_workspace_list(doc, container, &model.workspaces);
@@ -2589,6 +2599,12 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     {
         set_text(doc, label, &format!("{percent}%"));
     }
+    if let Some(btn) = doc.find_by_id(crate::ids::POPUP_BTN) {
+        set_class_token(doc, btn, "show", omnibox.popups_blocked > 0);
+    }
+    if let Some(label) = doc.find_by_id(crate::ids::POPUP_LABEL) {
+        set_text(doc, label, &omnibox.popups_blocked.max(1).to_string());
+    }
     let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
     set_class_token(doc, warn, "show", omnibox.warning.is_some());
     if let Some(message) = &omnibox.warning {
@@ -2939,6 +2955,19 @@ fn rebuild_hbar_tab_list(doc: &mut Document, container: NodeId, tabs: &[ChromeTa
     reconcile_row_list(doc, container, "hbar-tab", tabs, build_hbar_tab, update_hbar_tab, None);
 }
 
+/// UX-TAB-CLOSE-FREEZE: pins every `.hbar-tab` of `container` to `width` CSS px
+/// via an inline style, or drops the style again when `width` is `None`.
+fn apply_hbar_tab_freeze(doc: &mut Document, container: NodeId, width: Option<f32>) {
+    let rows: Vec<NodeId> =
+        doc.get(container).children.iter().copied().filter(|&r| has_class(doc, r, "hbar-tab")).collect();
+    for row in rows {
+        match width {
+            Some(w) => set_attr(doc, row, "style", &format!("width:{w}px;min-width:{w}px;max-width:{w}px;flex:none")),
+            None => remove_attr(doc, row, "style"),
+        }
+    }
+}
+
 fn build_hbar_tab(doc: &mut Document, tab: &ChromeTabModel) -> NodeId {
     let row = doc.create_element(QualName::html("div"));
     set_attr(doc, row, "data-action", "select-tab");
@@ -2966,6 +2995,16 @@ fn populate_hbar_tab_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMo
     set_attr(doc, title, "class", "tab-title");
     append_text(doc, title, &tab.title);
     attach_child(doc, row, title);
+
+    // UX-TAB-CLOSE-FREEZE: the × is always present (CSS shows it on the active
+    // tab and on hover), carrying its own `data-tab-id` like the sidebar's.
+    let close = doc.create_element(QualName::html("button"));
+    set_attr(doc, close, "class", "tab-close");
+    set_attr(doc, close, "data-action", "close-tab");
+    set_attr(doc, close, "aria-label", "Закрыть вкладку");
+    set_attr(doc, close, "data-tab-id", &tab.id.to_string());
+    append_text(doc, close, "\u{00D7}");
+    attach_child(doc, row, close);
 }
 
 /// Updates an existing `.hbar-tab` in place (BUG-341/CC-14 — see
@@ -2974,7 +3013,7 @@ fn populate_hbar_tab_children(doc: &mut Document, row: NodeId, tab: &ChromeTabMo
 fn update_hbar_tab(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     apply_hbar_tab_attrs(doc, row, tab);
     let children: Vec<NodeId> = doc.get(row).children.clone();
-    let (Some(&fav), Some(&title)) = (children.first(), children.get(1)) else {
+    let (Some(&fav), Some(&title), Some(&close)) = (children.first(), children.get(1), children.get(2)) else {
         for child in children {
             detach_node(doc, child);
         }
@@ -2984,6 +3023,7 @@ fn update_hbar_tab(doc: &mut Document, row: NodeId, tab: &ChromeTabModel) {
     set_attr(doc, fav, "class", fav_class(tab));
     set_text(doc, fav, &fav_text(tab));
     set_text(doc, title, &tab.title);
+    set_attr(doc, close, "data-tab-id", &tab.id.to_string());
 }
 
 /// Mirrors [`rebuild_workspace_list`] into `.hbar-ws` (`.hbar-ws-pill`
@@ -3710,6 +3750,49 @@ mod tests {
         assert_eq!(doc.get(rows[0]).get_attr("data-tab-id"), Some("3"));
     }
 
+    /// UX-TAB-CLOSE-FREEZE: every `.hbar-tab` carries a `close-tab` × keyed to
+    /// its own tab id, and `hbar_tab_width` pins/unpins the inline width.
+    #[test]
+    fn hbar_tab_has_close_button_and_freeze_width() {
+        let mut doc = parse_asset();
+        let tab = |id: usize| ChromeTabModel {
+            id, title: format!("T{id}"), active: id == 1, sleeping: false, loading: false,
+            is_child: false, tree: None, container_color: None, group: None,
+        };
+        let mut model = model_with_tabs(vec![tab(1), tab(2)]);
+        model.hbar_tab_width = Some(120.0);
+        bind_model(&mut doc, &model);
+        let container = doc.find_by_id(crate::ids::HBAR_TABS).expect("asset has #hbarTabs");
+        let rows: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "hbar-tab")).collect();
+        assert_eq!(rows.len(), 2);
+        for (row, id) in rows.iter().zip(["1", "2"]) {
+            let close = doc
+                .get(*row)
+                .children
+                .iter()
+                .copied()
+                .find(|&c| has_class(&doc, c, "tab-close"))
+                .expect("hbar tab has a close button");
+            assert_eq!(doc.get(close).get_attr("data-action"), Some("close-tab"));
+            assert_eq!(doc.get(close).get_attr("data-tab-id"), Some(id));
+            assert_eq!(
+                doc.get(*row).get_attr("style"),
+                Some("width:120px;min-width:120px;max-width:120px;flex:none")
+            );
+        }
+        // Closing tab 1 keeps the pin on the survivor, releasing drops it.
+        let mut model = model_with_tabs(vec![tab(2)]);
+        model.hbar_tab_width = Some(120.0);
+        bind_model(&mut doc, &model);
+        model.hbar_tab_width = None;
+        bind_model(&mut doc, &model);
+        let rows: Vec<NodeId> =
+            doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "hbar-tab")).collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(doc.get(rows[0]).get_attr("style"), None);
+    }
+
     #[test]
     fn hbar_workspace_pills_mirror_the_sidebar_switcher() {
         let mut doc = parse_asset();
@@ -4281,6 +4364,7 @@ mod tests {
                 ChromePermState::Deny,
                 ChromePermState::Deny,
                 ChromePermState::Allow,
+                ChromePermState::Allow,
             ],
             ..ChromeModel::default()
         };
@@ -4301,8 +4385,9 @@ mod tests {
 
         let rows: Vec<NodeId> =
             doc.get(popover).children.iter().copied().filter(|&c| has_class(&doc, c, "perm-row")).collect();
-        // BUG-411 added the Notifications/Clipboard rows the design was missing.
-        assert_eq!(rows.len(), 4);
+        // BUG-411 added the Notifications/Clipboard rows the design was missing;
+        // UX-USER-ACTIVATION added the pop-ups row.
+        assert_eq!(rows.len(), 5);
         let camera_actions = doc.get(rows[0]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
         let camera_allow = doc.get(camera_actions).children.iter().copied().find(|&c| has_class(&doc, c, "allow")).unwrap();
         assert!(has_class(&doc, camera_allow, "selected-allow"));
@@ -4346,6 +4431,27 @@ mod tests {
         assert_eq!(text_of(&doc, span), NO_DOMAIN_LABEL);
         assert!(has_class(&doc, toggle, "on"));
         assert_eq!(text_of(&doc, state), "Вкл");
+    }
+
+    /// UX-USER-ACTIVATION: `#popupBtn` shows the number of blocked popups and
+    /// hides again when there are none.
+    #[test]
+    fn blocked_popup_indicator_follows_the_count() {
+        let mut doc = parse_asset();
+        let btn = doc.find_by_id(crate::ids::POPUP_BTN).expect("asset has #popupBtn");
+        let label = doc.find_by_id(crate::ids::POPUP_LABEL).expect("asset has #popupLabel");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
+        let model = ChromeModel {
+            omnibox: OmniboxModel { popups_blocked: 3, ..Default::default() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, btn, "show"));
+        assert_eq!(text_of(&doc, label), "3");
+        assert_eq!(doc.get(btn).get_attr("data-action"), Some("toggle-shield-popover"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
     }
 
     #[test]

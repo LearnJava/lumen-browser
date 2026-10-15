@@ -44,6 +44,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use lumen_core::error::Error;
+use lumen_core::net_error::NetErrorCode;
 
 use crate::h2::{
     frame::{
@@ -337,7 +338,7 @@ impl<S: Read + Write> H2Conn<S> {
                     );
                     let n = read.map_err(io_err)?;
                     if n == 0 {
-                        return Err(Error::Network("H2: unexpected EOF".to_owned()));
+                        return Err(Error::net_failure(NetErrorCode::ConnectionClosed, "H2: unexpected EOF"));
                     }
                 }
                 Err(e) => return Err(frame_err(e)),
@@ -579,17 +580,16 @@ impl<S: Read + Write> H2Conn<S> {
 
                 // ── Error frames ───────────────────────────────────────────
                 Frame::Goaway { error_code, .. } => {
-                    return Err(Error::Network(format!(
-                        "H2 GOAWAY: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(format!("H2 GOAWAY: error_code={error_code:#x}"), error_code));
                 }
                 Frame::RstStream {
                     stream_id,
                     error_code,
                 } if stream_id == sid => {
-                    return Err(Error::Network(format!(
-                        "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(
+                        format!("H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"),
+                        error_code,
+                    ));
                 }
 
                 // ── Everything else ────────────────────────────────────────
@@ -609,13 +609,13 @@ impl<S: Read + Write> H2Conn<S> {
                 let fields = self
                     .decoder
                     .decode(&hdr_block)
-                    .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+                    .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
                 let status = fields
                     .iter()
                     .find(|f| f.name == b":status")
                     .and_then(|f| std::str::from_utf8(&f.value).ok())
                     .and_then(|s| s.parse::<u16>().ok())
-                    .ok_or_else(|| Error::Network("H2: response missing :status".to_owned()))?;
+                    .ok_or_else(|| Error::net_failure(NetErrorCode::InvalidResponse, "H2: response missing :status"))?;
                 if (100..200).contains(&status) {
                     // Informational — reset the accumulator for the block
                     // that follows and keep waiting. RFC 9113 §8.1: a 1xx
@@ -795,17 +795,16 @@ impl<S: Read + Write> H2Conn<S> {
 
                 // ── Error frames ───────────────────────────────────────────
                 Frame::Goaway { error_code, .. } => {
-                    return Err(Error::Network(format!(
-                        "H2 GOAWAY: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(format!("H2 GOAWAY: error_code={error_code:#x}"), error_code));
                 }
                 Frame::RstStream {
                     stream_id,
                     error_code,
                 } if stream_id == sid => {
-                    return Err(Error::Network(format!(
-                        "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
-                    )));
+                    return Err(peer_error(
+                        format!("H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"),
+                        error_code,
+                    ));
                 }
 
                 // ── Everything else ────────────────────────────────────────
@@ -828,13 +827,13 @@ impl<S: Read + Write> H2Conn<S> {
                 let fields = self
                     .decoder
                     .decode(&hdr_bytes)
-                    .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+                    .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
                 let status = fields
                     .iter()
                     .find(|f| f.name == b":status")
                     .and_then(|f| std::str::from_utf8(&f.value).ok())
                     .and_then(|s| s.parse::<u16>().ok())
-                    .ok_or_else(|| Error::Network("H2: response missing :status".to_owned()))?;
+                    .ok_or_else(|| Error::net_failure(NetErrorCode::InvalidResponse, "H2: response missing :status"))?;
                 if let Some(stream) = self.pending_streams.get_mut(&sid) {
                     if (100..200).contains(&status) {
                         // Informational — RFC 9113 §8.1 forbids END_STREAM on
@@ -1036,9 +1035,10 @@ impl<S: Read + Write> H2Conn<S> {
                 return Ok(match self.pending_streams.remove(&stream_id) {
                     Some(st) if !st.discard => Some(StreamEvent::Failed {
                         sid: stream_id,
-                        error: Error::Network(format!(
-                            "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
-                        )),
+                        error: peer_error(
+                            format!("H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"),
+                            error_code,
+                        ),
                         retryable: error_code == ERROR_REFUSED_STREAM,
                     }),
                     _ => None,
@@ -1157,7 +1157,7 @@ impl<S: Read + Write> H2Conn<S> {
         let fields = self
             .decoder
             .decode(&block)
-            .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+            .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
         let Some(st) = self.pending_streams.get_mut(&sid) else {
             return Ok(None);
         };
@@ -1172,7 +1172,7 @@ impl<S: Read + Write> H2Conn<S> {
         match status {
             None => Ok(Some(StreamEvent::Failed {
                 sid,
-                error: Error::Network("H2: response missing :status".to_owned()),
+                error: Error::net_failure(NetErrorCode::InvalidResponse, "H2: response missing :status"),
                 retryable: false,
             })),
             // Informational — RFC 9113 §8.1 forbids END_STREAM on a 1xx block.
@@ -1202,7 +1202,7 @@ impl<S: Read + Write> H2Conn<S> {
         if let Some(block) = self.push_block.take() {
             self.decoder
                 .decode(&block)
-                .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+                .map_err(|e| Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 HPACK decode: {e}")))?;
         }
         Ok(())
     }
@@ -1211,11 +1211,22 @@ impl<S: Read + Write> H2Conn<S> {
 // ── Error helpers ─────────────────────────────────────────────────────────
 
 fn io_err(e: std::io::Error) -> Error {
-    Error::Network(format!("H2 I/O: {e}"))
+    crate::http1::read_failure("H2 I/O", &e)
+}
+
+/// COMPAT-ERRORS срез 6: GOAWAY/RST_STREAM от пира. Штатные коды (NO_ERROR,
+/// CANCEL, REFUSED_STREAM — сервер просто закрыл поток) — соединение закрыто,
+/// остальные — `ERR_HTTP2_PROTOCOL_ERROR`.
+fn peer_error(message: String, error_code: u32) -> Error {
+    let code = match error_code {
+        ERROR_NO_ERROR | ERROR_CANCEL | ERROR_REFUSED_STREAM => NetErrorCode::ConnectionClosed,
+        _ => NetErrorCode::Http2ProtocolError,
+    };
+    Error::net_failure(code, message)
 }
 
 fn frame_err(e: FrameError) -> Error {
-    Error::Network(format!("H2 frame: {e}"))
+    Error::net_failure(NetErrorCode::InvalidResponse, format!("H2 frame: {e}"))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -1625,6 +1636,17 @@ mod tests {
             .fetch("GET", "https", "example.com", "/", &[])
             .unwrap_err();
         assert!(format!("{err}").contains("RST_STREAM"));
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::Http2ProtocolError);
+    }
+
+    #[test]
+    fn peer_close_codes_are_a_closed_connection_not_a_protocol_error() {
+        for code in [ERROR_NO_ERROR, ERROR_CANCEL, ERROR_REFUSED_STREAM] {
+            let err = peer_error("x".to_owned(), code);
+            assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::ConnectionClosed, "{code:#x}");
+        }
+        let err = peer_error("x".to_owned(), 0x02);
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::Http2ProtocolError);
     }
 
     #[test]
@@ -1642,6 +1664,7 @@ mod tests {
             .fetch("GET", "https", "example.com", "/", &[])
             .unwrap_err();
         assert!(format!("{err}").contains("GOAWAY"));
+        assert_eq!(NetErrorCode::of_error(&err), NetErrorCode::Http2ProtocolError);
     }
 
     #[test]

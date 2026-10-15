@@ -3,8 +3,9 @@
 
 use std::io::Write;
 
-use lumen_core::error::{Error, Result};
+use lumen_core::error::Result;
 
+use crate::http1::write_failure;
 use crate::{Connection, HttpProfile, RangeRequest, RangeValidator, RequestBody, apply_ua_override, http};
 
 impl Connection {
@@ -75,15 +76,15 @@ impl Connection {
         let stream = self.reader.get_mut();
         stream
             .write_all(req.as_bytes())
-            .map_err(|e| Error::Network(format!("write request: {e}")))?;
+            .map_err(|e| write_failure("write request", &e))?;
         if let Some(b) = body {
             stream
                 .write_all(b.bytes)
-                .map_err(|e| Error::Network(format!("write body: {e}")))?;
+                .map_err(|e| write_failure("write body", &e))?;
         }
         stream
             .flush()
-            .map_err(|e| Error::Network(format!("flush request: {e}")))?;
+            .map_err(|e| write_failure("flush request", &e))?;
         Ok(())
     }
 }

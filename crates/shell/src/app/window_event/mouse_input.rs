@@ -79,8 +79,15 @@ impl Lumen {
                     self.request_redraw();
                 }
             }
+        } else if button == MouseButton::Middle {
+            // UX-TAB-CLOSE-FREEZE: a middle click on a tab closes it.
+            if state == ElementState::Pressed {
+                self.close_tab_under_middle_click(event_loop);
+                // UX-LINK-CLICKS: …and over the page it opens the link in a tab.
+                self.open_link_under_middle_click();
+            }
         } else if button != MouseButton::Left {
-            // Middle / back / forward — ignore.
+            // Back / forward — ignore.
         } else if state == ElementState::Pressed {
             // CSS :active — set immediately on press so :active rules apply.
             if self.active_nid != self.hovered_nid {
@@ -226,6 +233,14 @@ impl Lumen {
                     return;
                 }
             }
+            // UX-DBLCLICK: count this press within the OS double-click time
+            // and zone; the count is `detail` of mousedown/mouseup/click.
+            let clicks = self.click_streak.press(
+                &platform::os_params::current(),
+                self.epoch.elapsed().as_secs_f64() * 1000.0,
+                x_css,
+                y_css,
+            );
             // Fire mousedown + pointerdown on the hovered DOM element.
             // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
             // any default action (click). Only when cursor is over page content.
@@ -236,7 +251,7 @@ impl Lumen {
                 self.flush_pointer_moves();
                 let nid = hov.index() as u32;
                 self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
-                self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
+                self.js_click_event(nid, "mousedown", (x_css, y_css), (0, 1), clicks);
             }
             // BUG-480 срез 16: курсор над содержимым фрейма — нажатие
             // принадлежит под-документу. Ветка исключающая: пока `hovered_frame`
@@ -263,7 +278,7 @@ impl Lumen {
 
             // HTML5 DnD (PH3-9 / HTML LS §9.3.3): start candidate when the
             // pressed element is draggable.  Drag does not activate until the
-            // cursor moves ≥ DND_THRESHOLD px (handled in CursorMoved).
+            // cursor leaves the OS drag zone (handled in CursorMoved).
             #[cfg(feature = "v8")]
             if let Some(hov) = self.hovered_nid
                 && let Some(ls) = self.layout_source.as_ref() {
@@ -510,6 +525,16 @@ impl Lumen {
                     // CSS UI L4 §6.2: page-text drag selection with
                     // `user-select` enforced; a field drag armed above wins.
                     self.begin_doc_select(x_css, y_css);
+                    // UX-DBLCLICK: the second press of a streak fires
+                    // `dblclick` right after its `click`, the second and
+                    // third select a word and a paragraph.
+                    #[cfg(feature = "v8")]
+                    if clicks == 2
+                        && let Some(hov) = self.hovered_nid
+                    {
+                        self.js_click_event(hov.index() as u32, "dblclick", (x_css, y_css), (0, 0), 2);
+                    }
+                    self.select_by_click_count(x_css, y_css, clicks);
                 }
             }
         } else {

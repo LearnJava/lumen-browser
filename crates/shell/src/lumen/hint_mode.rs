@@ -43,7 +43,7 @@ impl Lumen {
     /// и навигирует по ссылке если узел внутри `<a href>`. Используется
     /// hint-режимом для активации элемента без участия мыши.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    fn activate_node(&mut self, node_id: NodeId) {
+    pub(crate) fn activate_node(&mut self, node_id: NodeId) {
         // JS click dispatch (bubbling от узла до document).
         // Hint-mode activations have no real mouse coordinates, so x/y are 0.
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as the mouse click

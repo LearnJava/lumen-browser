@@ -64,6 +64,11 @@ tracy = ["dep:tracy-client", "lumen-layout/tracy"]
 # `cargo build --workspace` не трогает FFmpeg вовсе.
 ffmpeg-video = ["v8", "dep:lumen-media-ffmpeg", "lumen-media-ffmpeg/ffmpeg", "lumen-js/ffmpeg-video"]
 
+# UX-VIDEO-AV1: ассемблерные ядра AV1-декодера (AVIF и видео), ~3,5x быстрее портируемого
+# Rust-пути. Релизная сборка: `--features av1-asm`, на x86 нужен nasm в PATH. NOT в default:
+# без неё `cargo build` не требует nasm (docs/perf/av1-decode.md).
+av1-asm = ["lumen-image/av1-asm"]
+
 [dependencies]
 lumen-core.workspace = true
 # PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).
@@ -146,13 +151,29 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # creation time. Already a workspace dep (lumen-a11y) and a transitive one via
 # winit, so no new Cargo.lock entries.
 # Graduation: permanent while startup remains a tracked §4 score-table metric.
+#
+# Also UX-OSPARAMS (src/platform/os_params/windows.rs): the OS input settings
+# (double-click time, drag slop, wheel lines, animations) and the hidden window
+# that receives the broadcast `WM_SETTINGCHANGE` — the UI/HiDpi/KeyboardAndMouse/
+# WindowsAndMessaging/Gdi/LibraryLoader features. Permanent while the shell reads
+# system input parameters; no new Cargo.lock entries (all features are already
+# unified in workspace-hack through winit).
+# `Win32_Globalization` (GetUserPreferredUILanguages, src/os_locale.rs) feeds
+# `Accept-Language` / `navigator.languages` with the Windows language list; the
+# feature is already enabled workspace-wide through winit.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
 ] }
 
 [dev-dependencies]

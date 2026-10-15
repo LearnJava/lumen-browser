@@ -199,8 +199,10 @@ impl Lumen {
                 self.momentum_anim = None;
                 self.forward_momentum_stop();
                 self.touchpad_vel = (0.0, 0.0);
-                let dx = -cols * 40.0;
-                let dy = -lines * 40.0;
+                // UX-OSPARAMS: шаг щелчка — из настройки ОС, не 40 px.
+                let step = crate::wheel_scroll::wheel_notch_px(self.viewport_height_css());
+                let dx = -cols * step;
+                let dy = -lines * step;
                 let (dx_css, dy_css) = if shift { (dy, 0.0) } else { (dx, dy) };
                 if right_pane_focused {
                     let vh = self.viewport_height_css();

@@ -675,3 +675,24 @@ fn collect_inline_scripts_separates_modules() {
     assert!(scripts[0].contains("var x"));
     assert!(mods[0].contains("export const y"));
 }
+
+#[test]
+fn parse_cli_dump_tls_takes_several_targets() {
+    let cli = parse_cli(&args(&["--dump-tls", "gosuslugi.ru", "@docs/perf/tls-top200-ru.txt"])).expect("ok");
+    match cli {
+        CliMode::DumpTls { targets } => {
+            assert_eq!(targets, ["gosuslugi.ru", "@docs/perf/tls-top200-ru.txt"]);
+        }
+        _ => panic!("expected DumpTls"),
+    }
+}
+
+#[test]
+fn parse_cli_dump_tls_without_target_errors() {
+    parse_cli(&args(&["--dump-tls"])).unwrap_err();
+}
+
+#[test]
+fn parse_cli_dump_tls_rejects_flag_as_target() {
+    parse_cli(&args(&["--dump-tls", "--dump-source"])).unwrap_err();
+}

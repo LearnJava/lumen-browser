@@ -32,12 +32,27 @@ impl Lumen {
     /// Coordinates are CSS viewport pixels.
     #[cfg(feature = "v8")]
     pub(crate) fn js_mouse_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
+        self.js_click_event(nid, event_type, (x_css, y_css), (button, buttons), 0);
+    }
+
+    /// [`Self::js_mouse_event`] with `MouseEvent.detail` — the click count of
+    /// `mousedown`/`mouseup`/`click`/`dblclick` (UX-DBLCLICK, UI Events §3.5).
+    #[cfg(feature = "v8")]
+    pub(crate) fn js_click_event(
+        &self,
+        nid: u32,
+        event_type: &str,
+        at: (f32, f32),
+        (button, buttons): (u8, u8),
+        detail: u8,
+    ) {
         let script = format!(
-            "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
+            "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {}, {})",
             nid, event_type,
-            x_css as i32, y_css as i32,
+            at.0 as i32, at.1 as i32,
             button, buttons,
             self.mod_flags(),
+            detail,
         );
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
@@ -181,6 +196,7 @@ impl Lumen {
     /// capture take → lostpointercapture).
     #[cfg(feature = "v8")]
     pub(crate) fn js_pointer_release(&self, hit_nid: u32, x_css: f32, y_css: f32) {
+        let detail = self.click_streak.count();
         let flags = self.mod_flags();
         let (x, y) = (x_css as i32, y_css as i32);
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
@@ -189,7 +205,7 @@ impl Lumen {
                 "_lumen_dispatch_pointer_event({ptr_nid}, 'pointerup', {x}, {y}, 0, 0, {flags})"
             ));
             js.eval_js(&format!(
-                "_lumen_dispatch_mouse_event({hit_nid}, 'mouseup', {x}, {y}, 0, 0, {flags})"
+                "_lumen_dispatch_mouse_event({hit_nid}, 'mouseup', {x}, {y}, 0, 0, {flags}, {detail})"
             ));
             if let Some(cap_nid) = js.take_pointer_capture() {
                 js.eval_js(&format!("_lumen_dispatch_capture_event({cap_nid}, 'lostpointercapture')"));

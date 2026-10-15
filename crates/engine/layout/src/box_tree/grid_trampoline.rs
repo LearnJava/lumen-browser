@@ -873,6 +873,12 @@ fn post_final_item(
         && is.aspect_ratio.is_some();
     let h_auto = is.height.is_none() || is.height_is_intrinsic_hint;
     let w_auto = is.width.is_none() || is.width_is_intrinsic_hint;
+    // Нативный контрол без пропорции (BUG-1609): `normal` и `stretch` растягивают каждую
+    // `auto`-ось независимо; UA-размер (`13×13` у checkbox, `174×21` у текстового поля) — не
+    // авторский `width`/`height`, а запасной intrinsic-размер.
+    let form_ctl = matches!(item.kind, BoxKind::FormControl { .. }) && !replaced_ratio;
+    let form_h_auto = form_ctl && (is.height.is_none() || is.height_is_ua_default);
+    let form_w_auto = form_ctl && (is.width.is_none() || is.width_is_ua_default);
     let justify_stretch = matches!(
         if matches!(is.justify_self, AlignValue::Auto) { s.justify_items } else { is.justify_self },
         AlignValue::Stretch
@@ -914,6 +920,10 @@ fn post_final_item(
                 // `normal` у replaced с пропорцией = `start`: размер остаётся intrinsic.
             } else if replaced_ratio {
                 (stretch_h, stretch_w) = stretch_replaced_block(is, &mut item.rect, cell_h - m_t - m_b, justify_stretch);
+            } else if form_h_auto && cell_h - m_t - m_b > 0.0 {
+                let h = cell_h - m_t - m_b;
+                item.rect.height = h;
+                stretch_h = Some(h);
             } else if h_auto && is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
                 let h = (cell_h - m_t - m_b).max(item.rect.height);
                 item.rect.height = h;
@@ -988,6 +998,12 @@ fn post_final_item(
             (stretch_h, stretch_w) = stretch_replaced_inline(is, &mut item.rect, cell_w - m_l - m_r, stretch_h, stretch_w);
             item.rect.x = cell_x + m_l;
         }
+        AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal if form_w_auto && cell_w - m_l - m_r > 0.0 => {
+            let w = cell_w - m_l - m_r;
+            item.rect.width = w;
+            stretch_w = Some(w);
+            item.rect.x = cell_x + m_l;
+        }
         AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
             item.rect.x = cell_x + m_l;
         }
@@ -1012,6 +1028,12 @@ fn post_final_item(
     // size override so it re-resolves, mirroring `flex_trampoline`'s
     // `relayout_column_flex` (`box_tree/flex_trampoline.rs`).
     if stretch_h.is_some() || stretch_w.is_some() {
+        // Повторная раскладка читает размеры как border-box: нерастянутая ось контрола с
+        // `content-box`-размером (UA `13px` + рамка) иначе потеряла бы рамку.
+        if form_ctl {
+            stretch_h = stretch_h.or(Some(item.rect.height));
+            stretch_w = stretch_w.or(Some(item.rect.width));
+        }
         // If `item` is itself a subgrid, its column/row tracks resolve through
         // the thread-local `SubgridContextGuard` `step_final_item` set up for
         // the original placement pass (already dropped by the time this

@@ -71,6 +71,7 @@ impl Lumen {
         if self.dom_inspector.visible {
             self.dom_inspector.set_network_entries(self.network_panel.entries_clone());
         }
+        self.refresh_hbar_freeze();
         let model = self.chrome_model_snapshot();
         let Some((doc, sheet)) = self.chrome_doc.as_mut() else { return };
         // BUG-341 S6: `bind_model_tracked` (not plain `bind_model`) — reports
@@ -287,9 +288,11 @@ impl Lumen {
         self.rebuild_chrome_floating_dl();
         // CC-7/CC-9: captured non-destructively (unlike `#contentArea`
         // above) — these nodes stay in the tree and paint normally.
-        self.chrome_omni_input_rect = omni_input
-            .and_then(|id| lumen_layout::find_box_by_node(&layout, id))
-            .map(|b| b.rect);
+        let omni_box = omni_input.and_then(|id| lumen_layout::find_box_by_node(&layout, id));
+        self.chrome_omni_input_rect = omni_box.map(|b| b.rect);
+        if let Some(b) = omni_box {
+            self.chrome_omni_font_size = b.style.font_size;
+        }
         // CC-11: sync transitions — compare chrome_prev_styles with the fresh
         // layout before replacing it, mirroring apply_relayout_result's
         // page-side sync (main.rs's collect_box_styles + sync loop). No
@@ -903,6 +906,10 @@ impl Lumen {
                 value: omnibox_value,
                 warning: omnibox_warning.map(str::to_owned),
                 zoom_percent: zoom::percent_label(self.zoom_factor),
+                popups_blocked: self
+                    .blocked_popups
+                    .get(&self.tab_strip.tabs[self.tab_strip.active].id)
+                    .map_or(0, |urls| u32::try_from(urls.len()).unwrap_or(u32::MAX)),
             },
             sidebar_collapsed: self.chrome_sidebar_collapsed,
             dropdown,
@@ -938,6 +945,7 @@ impl Lumen {
                 .page_context_menu
                 .chrome_model(self.viewport_width_css(), self.window_height_css()),
             workspace_bar_open: self.workspace_panel.visible,
+            hbar_tab_width: self.hbar_freeze.map(|f| f.width),
             access,
             print: lumen_chrome::ChromePrintModel {
                 open: self.print_panel.visible,
@@ -1043,6 +1051,56 @@ impl Lumen {
         self.chrome_node_rect(lumen_chrome::ids::SB_TABS)
     }
 
+    /// UX-TAB-CLOSE-FREEZE: pins the horizontal strip to the width tab
+    /// `tab_id` has right now, so the neighbour that slides under the cursor
+    /// after the close is exactly as wide. Call *before* the tab is closed by
+    /// a mouse action. No-op when the horizontal strip is not on screen.
+    pub(crate) fn freeze_hbar_for_close(&mut self, tab_id: usize) {
+        if self.vertical_tabs.visible || self.tree_tabs.visible {
+            return;
+        }
+        let width = (|| {
+            let (doc, _) = self.chrome_doc.as_ref()?;
+            let (layout, _) = self.chrome_layout.as_ref()?;
+            let strip = doc.find_by_id(lumen_chrome::ids::HBAR_TABS)?;
+            let want = tab_id.to_string();
+            let row = doc.get(strip).children.iter().copied().find(|&c| {
+                let attrs = doc.get(c);
+                attrs.get_attr("data-tab-id") == Some(want.as_str())
+                    && attrs.get_attr("class").is_some_and(|cl| cl.split_whitespace().any(|t| t == "hbar-tab"))
+            })?;
+            lumen_layout::find_box_by_node(layout, row).map(|b| b.rect.width)
+        })();
+        if let Some(w) = width.filter(|w| *w > 0.0) {
+            self.hbar_freeze = Some(tabs::strip_freeze::HbarFreeze::new(w, self.tab_strip.len(), self.viewport_width_css()));
+        }
+    }
+
+    /// UX-TAB-CLOSE-FREEZE: drops a stale freeze (tab opened, window resized)
+    /// before the chrome model is rebuilt.
+    pub(crate) fn refresh_hbar_freeze(&mut self) {
+        if let Some(mut freeze) = self.hbar_freeze {
+            let keep = freeze.keep(self.tab_strip.len(), self.viewport_width_css());
+            self.hbar_freeze = keep.then_some(freeze);
+        }
+    }
+
+    /// UX-TAB-CLOSE-FREEZE: releases the freeze once the cursor leaves the
+    /// strip's zone (strip rect + 60 px sideways, 40 px up/down).
+    pub(crate) fn release_hbar_freeze_if_outside(&mut self, x_css: f32, y_css: f32) {
+        if self.hbar_freeze.is_none() {
+            return;
+        }
+        let inside = self
+            .chrome_node_rect(lumen_chrome::ids::HBAR_TABS)
+            .is_some_and(|r| tabs::strip_freeze::in_freeze_zone((r.x, r.y, r.width, r.height), x_css, y_css));
+        if !inside {
+            self.hbar_freeze = None;
+            self.relayout_chrome_host();
+            self.request_redraw();
+        }
+    }
+
     /// `true` when `nid` is the chrome element with DOM id `id`.
     pub(crate) fn chrome_node_id_is(&self, nid: NodeId, id: &str) -> Option<bool> {
         let (doc, _) = self.chrome_doc.as_ref()?;
@@ -1099,6 +1157,17 @@ impl Lumen {
             Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
     }
 
+    /// COMPAT-PRIVACY-UNBREAK-LOCALE: `Accept-Language` and `navigator.languages`
+    /// follow the active profile — the OS list in Personal/Work, `en-US` in
+    /// Anonymous. Call after the active profile changed and once at startup.
+    pub(crate) fn sync_profile_locale(&self) {
+        let anonymous = self.active_profile_is_anonymous();
+        #[cfg(feature = "v8")]
+        crate::config::global().install_navigator_for(anonymous);
+        #[cfg(not(feature = "v8"))]
+        crate::config::global().install_accept_language(anonymous);
+    }
+
     /// UX-PERMISSIONS-3: Anonymous decides into a fresh in-memory store (as
     /// with its cookie jar), every other profile into `permissions.db`.
     /// Call after the active profile changed and once at startup.
@@ -1109,6 +1178,12 @@ impl Lumen {
             Some(Arc::clone(&self.permissions_disk_store))
         };
         if let Some(store) = store {
+            // UX-USER-ACTIVATION: the JS gate asks this store whether the user
+            // allowed popups / clipboard writes for the document's site.
+            let gate_store = Arc::clone(&store);
+            lumen_js::popup_policy::set_site_resolver(Some(Arc::new(move |origin, kind| {
+                panels::permission_panel::site_allows(&gate_store, origin, kind)
+            })));
             self.permission.set_store(store);
         }
     }
@@ -1162,6 +1237,14 @@ impl Lumen {
                     // so the `:focus-within` ring/caret show on this same
                     // click, not one input later (see the matching comment
                     // in `Self::handle_address_bar_key`).
+                    self.relayout_chrome_host();
+                } else {
+                    // UX-OMNI-EDIT: click in the already-focused field puts
+                    // the caret on the glyph under the pointer. (The first
+                    // click opens with the whole address selected; this
+                    // dispatch runs on press, so a drag past SM_CXDRAG is
+                    // not told apart from a click — no drag-select yet.)
+                    self.omnibox_place_caret_at(x_css);
                     self.relayout_chrome_host();
                 }
             } else if let Some((nid, action)) = self.chrome_action_at(&hit) {
@@ -1229,7 +1312,7 @@ impl Lumen {
             }
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
-            ChromeAction::NewTab => self.open_new_tab(),
+            ChromeAction::NewTab => self.open_new_tab_for_typing(),
             ChromeAction::ZoomReset => self.reset_page_zoom(),
             ChromeAction::SaveLogin
             | ChromeAction::NeverSaveLogin
@@ -1543,6 +1626,8 @@ impl Lumen {
                 // PERF-15: the site memory is keyed by visited page URLs —
                 // history in all but name.
                 crate::site_memory::forget_all();
+                // COMPAT-SIG-01: журнал сигналов хранит те же сайты.
+                self.forget_all_signals();
                 self.refresh_history();
                 self.relayout_chrome_host();
             }
@@ -1683,6 +1768,7 @@ impl Lumen {
                 if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
                     && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id as usize)
                 {
+                    self.freeze_hbar_for_close(id as usize);
                     self.close_tab(idx, event_loop);
                 }
             }
@@ -1763,6 +1849,13 @@ impl Lumen {
                         _ => None,
                     };
                     if let Some(state) = state {
+                        if kind == panels::permission_panel::PermissionKind::Popups
+                            && state == panels::permission_panel::PermissionState::Allow
+                        {
+                            // The user answered the indicator: it has done its job.
+                            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+                            self.blocked_popups.remove(&tab_id);
+                        }
                         let waited = self.permission.answer(kind, state);
                         if waited {
                             self.settle_page_permission(kind, state);
@@ -1947,6 +2040,7 @@ impl Lumen {
                         self.reset_anonymous_cookie_jar();
                     }
                     self.sync_permission_store();
+                    self.sync_profile_locale();
                     self.relayout_chrome_host();
                 }
             }

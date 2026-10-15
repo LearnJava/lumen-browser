@@ -124,6 +124,10 @@ pub(crate) struct Lumen {
     /// `address_bar::AddressBarState`, no native caret exists for `<input>`
     /// yet). `None` off the flag or before the first chrome layout.
     pub(crate) chrome_omni_input_rect: Option<Rect>,
+    /// UX-OMNI-EDIT: computed `font-size` (CSS px) of `#omniInput`, from the
+    /// same layout pass as [`Self::chrome_omni_input_rect`] — the scale the
+    /// per-glyph caret/selection geometry measures the text at.
+    pub(crate) chrome_omni_font_size: f32,
     /// CC-8 (docs/tasks/p1-css-chrome.md): `true` collapses the vertical
     /// sidebar to its icon rail (`#sidebar.collapsed`, `--sidebar-w-collapsed`
     /// in the asset). Toggled by `ChromeAction::ToggleSidebar`
@@ -217,6 +221,9 @@ pub(crate) struct Lumen {
     /// double-click detection (winit delivers raw press/release, there is no
     /// OS double-click event to read).
     pub(crate) chrome_float_last_press: Option<FloatingPanelPress>,
+    /// UX-DBLCLICK: left-press streak behind `MouseEvent.detail`, `dblclick`
+    /// and the word/paragraph selection ([`super::click_count`]).
+    pub(crate) click_streak: super::click_count::ClickStreak,
     /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
     /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
     /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct
@@ -489,6 +496,10 @@ pub(crate) struct Lumen {
     /// `deliver_media_query_changes(.., self.dark_mode)`. Default `false` (light)
     /// до создания окна и в headless/deterministic-режимах (стабильность snapshot-ов).
     pub(crate) dark_mode: bool,
+    /// UX-OSPARAMS: `platform::os_params::generation()` this state last acted on.
+    /// A mismatch on redraw means the OS settings changed (the watcher thread
+    /// woke the loop) and the media queries must be re-evaluated.
+    pub(crate) os_params_gen: u64,
     /// Per-tab user zoom factor (100% = 1.0). Changed via Ctrl+= / Ctrl+- / Ctrl+0.
     ///
     /// Combined with `<meta viewport initial-scale>` to compute the effective CSS
@@ -1324,6 +1335,11 @@ pub(crate) struct Lumen {
     ///
     /// `None` entry means the tab was opened but never loaded (blank new tab).
     pub(crate) bg_tabs: HashMap<usize, PageSnapshot>,
+    /// Фоновые вкладки, открытые ссылкой и ещё не загруженные (UX-LINK-CLICKS):
+    /// id вкладки → адрес. Сеть и движок не трогаются, пока вкладку не
+    /// выберут; `switch_tab` и закрытие активной вкладки запускают навигацию
+    /// по этому адресу ([`Lumen::load_lazy_tab`]).
+    pub(crate) lazy_tabs: HashMap<usize, String>,
     /// Lightweight identity for hibernated (T3) tabs — keyed by `TabEntry::id`.
     ///
     /// When a background tab is promoted to Hibernated its full `PageSnapshot`
@@ -1423,6 +1439,10 @@ pub(crate) struct Lumen {
     /// `Ctrl+Shift+P` toggles visibility.  State is in-memory only (no
     /// persistence across sessions).
     pub(crate) permission: panels::permission_panel::PermissionPanel,
+    /// `window.open()` URLs the page tried without a user gesture, per tab id
+    /// (UX-USER-ACTIVATION). Non-empty lights `#popupBtn`; a navigation of
+    /// the tab or an «allow» in the popover clears it.
+    pub(crate) blocked_popups: std::collections::HashMap<usize, Vec<String>>,
     /// On-disk permission store (`permissions.db`); `permission` uses it except
     /// while the Anonymous profile is active (see `sync_permission_store`).
     pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,
@@ -1778,13 +1798,16 @@ pub(crate) struct Lumen {
     ///
     /// `Some` from `mousedown` on a draggable element until `mouseup`.
     /// Transitions to `active = true` after the cursor travels ≥
-    /// `DND_THRESHOLD` px, at which point `dragstart` is fired on `src_nid`.
+    /// the OS drag threshold (`OsParams::exceeds_drag`), at which point `dragstart` is fired on `src_nid`.
     /// On `mouseup`: fires `drop` on the current target, `dragend` on `src_nid`,
     /// then clears this field.
     pub(crate) dnd_state: Option<DndState>,
     /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
     /// window / Close others / Close to the right. Hidden unless `open`.
     pub(crate) tab_context_menu: tabs::context_menu::TabContextMenu,
+    /// UX-TAB-CLOSE-FREEZE: pinned width of the horizontal tab strip after a
+    /// mouse close; `None` when the strip lays out freely.
+    pub(crate) hbar_freeze: Option<tabs::strip_freeze::HbarFreeze>,
     /// UX-REOPEN-TAB: stack of recently closed tabs (Ctrl+Shift+T).
     pub(crate) closed_tabs: tabs::closed::ClosedTabs,
     /// Page-level spell-check suggestion menu (P3-spell slice 3): opened by

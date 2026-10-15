@@ -26,6 +26,12 @@ impl Lumen {
             return;
         }
         self.update_cursor_icon();
+        // UX-TAB-CLOSE-FREEZE: the cursor leaving the strip's zone releases
+        // the width freeze left by a mouse close.
+        if self.hbar_freeze.is_some() {
+            let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
+            self.release_hbar_freeze_if_outside((position.x as f32) / dpr, (position.y as f32) / dpr);
+        }
         // DevTools inspector: highlight the box under the cursor.
         if self.dom_inspector.visible {
             let dpr = self
@@ -113,7 +119,7 @@ impl Lumen {
                 if !dnd.active {
                     let dx = x_css - dnd.press_x;
                     let dy = y_css - dnd.press_y;
-                    if dx * dx + dy * dy >= DND_THRESHOLD * DND_THRESHOLD {
+                    if platform::os_params::current().exceeds_drag(dx, dy) {
                         dnd.active = true;
                         dragstart = true;
                     }

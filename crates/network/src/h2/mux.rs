@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 
 use lumen_core::error::Error;
 use lumen_core::ext::AbortToken;
+use lumen_core::net_error::NetErrorCode;
 
 use super::conn::{H2Conn, H2Response, StreamEvent, H2_BODY_EXCEEDS_SEND_WINDOW};
 use crate::{tls::CertInfo, RawStream};
@@ -100,7 +101,7 @@ pub(crate) struct MuxError {
 
 impl MuxError {
     fn retryable(msg: &str) -> Self {
-        Self { error: Error::Network(format!("H2 connection unusable: {msg}")), retryable: true }
+        Self { error: Error::net_failure(NetErrorCode::ConnectionClosed, format!("H2 connection unusable: {msg}")), retryable: true }
     }
 }
 
@@ -248,10 +249,16 @@ impl Owner {
             Some(e) => e.to_string(),
             None => "connection closed".to_owned(),
         };
+        // Код причины потери соединения: что известно о фатальной ошибке,
+        // иначе просто «соединение закрыто».
+        let code = match fatal.as_ref().map(|e| NetErrorCode::of_error(e)) {
+            Some(code) if code != NetErrorCode::Failed => code,
+            _ => NetErrorCode::ConnectionClosed,
+        };
         for (sid, a) in std::mem::take(&mut self.active) {
             let retryable = a.idempotent && !self.conn.response_started(sid);
             let _ = a.reply.send(Err(MuxError {
-                error: Error::Network(format!("H2 connection lost: {msg}")),
+                error: Error::net_failure(code, format!("H2 connection lost: {msg}")),
                 retryable,
             }));
         }
@@ -412,7 +419,8 @@ impl Owner {
     fn check_liveness(&mut self) -> Result<(), Error> {
         let now = Instant::now();
         match self.ping_sent {
-            Some(sent) if now.duration_since(sent) > self.ping_timeout => Err(Error::Network(
+            Some(sent) if now.duration_since(sent) > self.ping_timeout => Err(Error::net_failure(
+                NetErrorCode::ConnectionTimedOut,
                 format!("no response to PING for {} ms", self.ping_timeout.as_millis()),
             )),
             Some(_) => Ok(()),
@@ -437,10 +445,10 @@ impl Owner {
             if let Some(a) = self.active.remove(&sid) {
                 let _ = self.conn.cancel_stream(sid);
                 let _ = a.reply.send(Err(MuxError {
-                    error: Error::Network(format!(
-                        "H2 stream {sid} timed out after {}s without data",
-                        STREAM_TIMEOUT.as_secs()
-                    )),
+                    error: Error::net_failure(
+                        NetErrorCode::ConnectionTimedOut,
+                        format!("H2 stream {sid} timed out after {}s without data", STREAM_TIMEOUT.as_secs()),
+                    ),
                     retryable: false,
                 }));
             }

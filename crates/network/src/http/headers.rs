@@ -185,6 +185,9 @@ pub fn build_request_headers_for(
     variant: IdentityVariant,
 ) -> String {
     let mut headers = HeaderOrder::new(profile);
+    // One value for every profile: the shell-provided locale (or the built-in
+    // default); Tor Browser stays pinned (see `accept_language`).
+    let accept_language = super::accept_language::accept_language_for(profile);
 
     match profile {
         HttpProfile::Chrome | HttpProfile::Strict => {
@@ -202,7 +205,7 @@ pub fn build_request_headers_for(
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
-            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+            headers.add("Accept-Language", &accept_language);
 
             // DNT (Do Not Track) — Strict only. Stock Chrome does not send it;
             // `DNT: 1` next to a Chrome UA is an impossible combination that
@@ -234,7 +237,7 @@ pub fn build_request_headers_for(
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
-            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+            headers.add("Accept-Language", &accept_language);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
         }
@@ -248,7 +251,7 @@ pub fn build_request_headers_for(
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
-            headers.add("Accept-Language", "en-US,en;q=0.9");
+            headers.add("Accept-Language", &accept_language);
             headers.add("Connection", "keep-alive");
         }
         HttpProfile::Edge => {
@@ -265,7 +268,7 @@ pub fn build_request_headers_for(
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
-            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+            headers.add("Accept-Language", &accept_language);
 
             // Edge includes Sec-Fetch-* like Chrome
             headers.add("Sec-Fetch-Site", "none");
@@ -288,7 +291,7 @@ pub fn build_request_headers_for(
             headers.add("Host", host);
             headers.add("User-Agent", super::TOR_BROWSER_USER_AGENT);
             headers.add("Accept", super::TOR_BROWSER_ACCEPT);
-            headers.add("Accept-Language", super::TOR_BROWSER_ACCEPT_LANGUAGE);
+            headers.add("Accept-Language", &accept_language);
 
             if !accept_encoding.is_empty() {
                 headers.add("Accept-Encoding", accept_encoding);
@@ -320,7 +323,7 @@ pub fn build_request_headers_for(
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
-            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+            headers.add("Accept-Language", &accept_language);
 
             // Sec-GPC (Global Privacy Control) — Lumen's own profile states the
             // opt-out by default; there is no other browser to stay identical to.

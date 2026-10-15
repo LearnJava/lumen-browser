@@ -1471,6 +1471,26 @@ fn keybinding_f5_reload() {
 }
 
 #[test]
+fn keybinding_ctrl_f5_and_shift_f5_hard_reload() {
+    assert_eq!(
+        keybinding_for(KeyCode::F5, ModifiersState::CONTROL),
+        Some(KeyCommand::HardReload),
+    );
+    assert_eq!(
+        keybinding_for(KeyCode::F5, ModifiersState::SHIFT),
+        Some(KeyCommand::HardReload),
+    );
+}
+
+#[test]
+fn keybinding_ctrl_shift_r_stays_read_later() {
+    assert_eq!(
+        keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL | ModifiersState::SHIFT),
+        Some(KeyCommand::ToggleReadLater),
+    );
+}
+
+#[test]
 fn keybinding_ctrl_r_reload() {
     assert_eq!(
         keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL),
@@ -1553,6 +1573,14 @@ fn keybinding_ctrl_l_opens_address_bar() {
 fn keybinding_f6_opens_address_bar() {
     assert_eq!(
         keybinding_for(KeyCode::F6, ModifiersState::empty()),
+        Some(KeyCommand::OpenAddressBar),
+    );
+}
+
+#[test]
+fn keybinding_alt_d_opens_address_bar() {
+    assert_eq!(
+        keybinding_for(KeyCode::KeyD, ModifiersState::ALT),
         Some(KeyCommand::OpenAddressBar),
     );
 }

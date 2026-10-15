@@ -52,6 +52,7 @@ pub fn default_rows() -> Vec<ShortcutRow> {
     let entries: &[(&str, &str, &str, &str)] = &[
         // command           label                    modifier       key
         ("Reload",           "Перезагрузить",          "ctrl",        "R"),
+        ("HardReload",       "Перезагрузить без кэша", "ctrl",        "F5"),
         ("HistoryBack",      "Назад",                  "alt",         "ArrowLeft"),
         ("HistoryForward",   "Вперёд",                 "alt",         "ArrowRight"),
         ("OpenAddressBar",   "Открыть адресную строку","ctrl",        "L"),

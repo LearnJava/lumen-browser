@@ -18,7 +18,7 @@ impl Lumen {
         match action {
             GestureAction::NavigateBack => self.navigate_back(),
             GestureAction::NavigateForward => self.navigate_forward(),
-            GestureAction::NewTab => self.open_new_tab(),
+            GestureAction::NewTab => self.open_new_tab_for_typing(),
             GestureAction::CloseTab => {
                 let idx = self.tab_strip.active;
                 self.close_tab(idx, event_loop);

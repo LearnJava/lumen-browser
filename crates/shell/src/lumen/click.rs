@@ -28,6 +28,9 @@ pub(crate) struct PendingClick {
     /// Страница на момент клика: ответ про другую страницу отбрасывается.
     display_url: String,
     queued_at: std::time::Instant,
+    /// Модификаторы в момент клика (`link_open::MOD_*`): активация может
+    /// случиться позже, когда клавиши уже отпущены (UX-LINK-CLICKS).
+    mods: u8,
 }
 
 impl Lumen {
@@ -67,7 +70,7 @@ impl Lumen {
     /// каждая ветка навигации ниже обязана резолвить `href` тем же способом
     /// (`Self::resolve_and_upgrade_href`), а не сырым `resolve_href` — иначе
     /// проверка и реальный переход смотрели бы на разные URL.
-    fn navigate_to_link_blocked(
+    pub(super) fn navigate_to_link_blocked(
         &mut self,
         csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
         href: &str,
@@ -95,7 +98,7 @@ impl Lumen {
     /// [`Self::navigate_to_link_blocked`] must call this instead of
     /// `self.source.resolve_href` directly, or the gate check above and the
     /// address actually navigated to would disagree on which URL they mean.
-    fn resolve_and_upgrade_href(
+    pub(super) fn resolve_and_upgrade_href(
         &self,
         csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
         href: &str,
@@ -594,17 +597,14 @@ impl Lumen {
         // Passes viewport coordinates and modifier key state so
         // handlers can read event.clientX/clientY/ctrlKey/etc.
         if let Some(result) = hit_result.as_ref() {
-            let mod_flags: u8 =
-                (self.modifiers.control_key() as u8)
-                | ((self.modifiers.shift_key()  as u8) << 1)
-                | ((self.modifiers.alt_key()    as u8) << 2)
-                | ((self.modifiers.super_key()  as u8) << 3);
+            let mod_flags: u8 = self.modifier_flags();
             let script = format!(
-                "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {})",
+                "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {}, {})",
                 result.node.index(),
                 x_css as i32,
                 y_css as i32,
                 mod_flags,
+                self.click_streak.count(),
             );
             // ADR-016 M2.2c-2d (10): read-after-eval click dispatch — сам
             // `_lumen_dispatch_mouse_event('click', …)` уходит fire-and-forget через
@@ -630,6 +630,7 @@ impl Lumen {
                 click_log_hit: click_log_hit.clone(),
                 display_url: self.current_display_url().to_owned(),
                 queued_at: std::time::Instant::now(),
+                mods: mod_flags,
             };
             if self.engine_thread.is_some() {
                 // THREAD-9 срез 6: продолжение вместо блокирующего `query`.
@@ -677,6 +678,7 @@ impl Lumen {
                 click_log_hit,
                 display_url: String::new(),
                 queued_at: std::time::Instant::now(),
+                mods: 0,
             });
         }
     }
@@ -685,7 +687,7 @@ impl Lumen {
     /// того, как обработчики страницы не отменили событие.
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn click_activate(&mut self, pending: PendingClick) {
-        let PendingClick { x_css, y_css, page_x, page_y, scroll_y, hit_result, click_log_hit, .. } = pending;
+        let PendingClick { x_css, y_css, page_x, page_y, scroll_y, hit_result, click_log_hit, mods, .. } = pending;
         let form_action: forms::FormClickAction =
             if let (Some(result), Some(src)) =
                 (hit_result.as_ref(), self.layout_source.as_ref())
@@ -941,6 +943,14 @@ impl Lumen {
                     // COMPAT-HANDOFF: a live 30-day rule for the target site sends
                     // the link to the other browser instead of any branch below.
                     if self.link_handed_off(&href) {
+                        return;
+                    }
+                    // UX-LINK-CLICKS: Ctrl/Shift/Alt+click picks the destination
+                    // itself (background/foreground tab, window, nothing) and
+                    // overrides `target` — the same as in other browsers.
+                    let how = super::link_open::LinkOpen::from_click(mods, false);
+                    if how != super::link_open::LinkOpen::Here {
+                        self.place_link(how, &href, csp_gate.as_ref());
                         return;
                     }
                     let t = target_attr.trim();

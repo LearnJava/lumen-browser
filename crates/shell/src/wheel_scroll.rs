@@ -27,8 +27,12 @@ use winit::event::{MouseScrollDelta, TouchPhase, WindowEvent};
 use crate::browser_thread::UiMsg;
 use crate::render_thread::RenderLink;
 
-/// Шаг одного щелчка колеса, CSS px (как в `on_mouse_wheel`).
-pub(crate) const LINE_STEP_PX: f32 = 40.0;
+/// Шаг одного щелчка колеса, CSS px: из настройки ОС «строк за щелчок»
+/// (UX-OSPARAMS; 3 строки — 100 px, 6 — 200 px), а не зашитые 40 px.
+/// Общий для `on_mouse_wheel` и маршрута рендер-потока.
+pub(crate) fn wheel_notch_px(viewport_height: f32) -> f32 {
+    crate::platform::os_params::current().wheel_notch_px(viewport_height)
+}
 
 /// Рычаг отката маршрутизации колеса.
 pub(crate) fn wheel_route_disabled() -> bool {
@@ -303,7 +307,8 @@ impl WheelRouter {
                     return false;
                 }
                 crate::present_log::wheel(lines);
-                let (dx, dy) = swap(-cols * LINE_STEP_PX, -lines * LINE_STEP_PX, self.shift);
+                let step = wheel_notch_px(snap.viewport[3] - snap.viewport[1]);
+                let (dx, dy) = swap(-cols * step, -lines * step, self.shift);
                 link.send_wheel(WheelInput::Notch { dx, dy }, snap.max_y, snap.max_x, self.viewport_point(&snap));
                 true
             }

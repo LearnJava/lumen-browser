@@ -233,7 +233,7 @@ dependencies = [
  "arrayvec",
  "bitreader",
  "byteorder",
- "fallible_collections",
+ "fallible_collections 0.5.2",
  "leb128",
  "log",
 ]
@@ -1072,6 +1072,15 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fallible_collections"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a88c69768c0a15262df21899142bc6df9b9b823546d4b4b9a7bc2d6c448ec6fd"
+dependencies = [
+ "hashbrown 0.13.2",
+]
+
+[[package]]
+name = "fallible_collections"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dab93c7205280c4785c44517fe84d99751b81f6deb8450cb196da6be88e332bb"
@@ -1515,6 +1524,15 @@ dependencies = [
  "crunchy",
  "num-traits",
  "zerocopy 0.8.48",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
+dependencies = [
+ "ahash",
 ]
 
 [[package]]
@@ -2326,6 +2344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-av1"
+version = "0.5.0"
+dependencies = [
+ "lumen-media-demux",
+ "rav1d",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-bench"
 version = "0.5.0"
 dependencies = [
@@ -2475,9 +2502,9 @@ dependencies = [
  "gif 0.14.2",
  "image-webp 0.2.4",
  "jxl-oxide",
+ "lumen-av1",
  "lumen-core",
  "png",
- "rav1d",
  "resvg",
  "weezl",
  "workspace-hack",
@@ -2566,6 +2593,17 @@ dependencies = [
  "lumen-driver",
  "serde",
  "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
+name = "lumen-media-demux"
+version = "0.5.0"
+dependencies = [
+ "lewton",
+ "matroska-demuxer",
+ "mp4parse",
+ "ogg",
  "workspace-hack",
 ]
 
@@ -2758,6 +2796,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "matroska-demuxer"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cbf36668475a45a46bf8710e927e7458b7c387e7c46ddb5457ae0c71cf5e817"
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2801,6 +2845,20 @@ checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "mp4parse"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63a35203d3c6ce92d5251c77520acb2e57108c88728695aa883f70023624c570"
+dependencies = [
+ "bitreader",
+ "byteorder",
+ "fallible_collections 0.4.9",
+ "log",
+ "num-traits",
+ "static_assertions",
 ]
 
 [[package]]

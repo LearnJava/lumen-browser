@@ -369,6 +369,11 @@ impl OmniboxSuggestion {
 pub struct AddressBarState {
     open: bool,
     input: String,
+    /// Позиция каретки в символах (UX-OMNI-EDIT), `0..=input.chars().count()`.
+    cursor: usize,
+    /// Второй конец выделения; выделен диапазон между `anchor` и `cursor`,
+    /// пусто при `anchor == cursor`.
+    anchor: usize,
     /// Если `Some`, caller должен навигироваться на это значение и вызвать
     /// `clear_commit()`. Устанавливается в `commit()`.
     pending_commit: Option<String>,
@@ -377,13 +382,21 @@ pub struct AddressBarState {
     suggestions: Vec<OmniboxSuggestion>,
     /// Индекс выделенной подсказки в dropdown. `None` — курсор в поле ввода.
     selected_idx: Option<usize>,
+    /// Пользователь менял текст после `open()` (UX-FOCUS-ARBITER): набранное
+    /// нельзя закрывать из-за событий страницы (конец загрузки).
+    edited: bool,
 }
 
 impl AddressBarState {
-    /// Открыть бар, предзаполнив поле текущим URL страницы.
+    /// Открыть бар, предзаполнив поле текущим URL страницы. Адрес выделен
+    /// целиком (Ctrl+L / F6 / Alt+D / первый клик): набор заменяет его, а
+    /// не дописывается к нему.
     pub fn open(&mut self, current_url: &str) {
         self.open = true;
+        self.edited = false;
         self.input = current_url.to_owned();
+        self.anchor = 0;
+        self.cursor = self.char_len();
         self.pending_commit = None;
         self.suggestions.clear();
         self.selected_idx = None;
@@ -391,7 +404,10 @@ impl AddressBarState {
 
     pub fn close(&mut self) {
         self.open = false;
+        self.edited = false;
         self.input.clear();
+        self.cursor = 0;
+        self.anchor = 0;
         self.pending_commit = None;
         self.suggestions.clear();
         self.selected_idx = None;
@@ -399,6 +415,20 @@ impl AddressBarState {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Менялся ли текст после `open()`.
+    pub fn is_edited(&self) -> bool {
+        self.open && self.edited
+    }
+
+    /// Закрыть бар, если пользователь ещё ничего не набрал: так бар, открытый
+    /// на старом адресе, не переживает навигацию, а набранное — переживает
+    /// конец загрузки страницы.
+    pub fn close_if_untouched(&mut self) {
+        if !self.is_edited() {
+            self.close();
+        }
     }
 
     pub fn input(&self) -> &str {
@@ -441,26 +471,189 @@ impl AddressBarState {
         };
     }
 
-    /// Добавить непечатаемые символы (printable chars из keyboard event).
+    /// Длина ввода в символах.
+    fn char_len(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    /// Байтовое смещение символа с индексом `idx` (за концом — длина строки).
+    fn byte_at(&self, idx: usize) -> usize {
+        self.input.char_indices().nth(idx).map_or(self.input.len(), |(b, _)| b)
+    }
+
+    /// Позиция каретки в символах.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Выделенный диапазон `[начало, конец)` в символах; `None`, если выделения нет.
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        (self.anchor != self.cursor).then(|| (self.anchor.min(self.cursor), self.anchor.max(self.cursor)))
+    }
+
+    /// Удалить выделение; `true`, если что-то удалено. Каретка встаёт на его начало.
+    fn delete_selection(&mut self) -> bool {
+        let Some((start, end)) = self.selection() else {
+            return false;
+        };
+        let (b0, b1) = (self.byte_at(start), self.byte_at(end));
+        self.input.replace_range(b0..b1, "");
+        self.cursor = start;
+        self.anchor = start;
+        true
+    }
+
+    /// Куда встанет каретка и как изменится выделение: `extend` — сдвинуть
+    /// только `cursor` (Shift), иначе схлопнуть выделение в точку.
+    fn place_cursor(&mut self, idx: usize, extend: bool) {
+        self.cursor = idx.min(self.char_len());
+        if !extend {
+            self.anchor = self.cursor;
+        }
+        self.selected_idx = None;
+    }
+
+    /// Вставить печатные символы на место выделения / в позицию каретки
+    /// (printable chars из keyboard event).
     pub fn append_str(&mut self, s: &str) {
         if !self.open {
             return;
         }
+        self.edited = true;
+        self.delete_selection();
+        let mut at = self.byte_at(self.cursor);
         for c in s.chars() {
-            if !c.is_control() && self.input.len() < MAX_INPUT_LEN {
-                self.input.push(c);
+            if !c.is_control() && self.input.len() + c.len_utf8() <= MAX_INPUT_LEN {
+                self.input.insert(at, c);
+                at += c.len_utf8();
+                self.cursor += 1;
             }
         }
+        self.anchor = self.cursor;
         // Сбросить выделение при ручном вводе.
         self.selected_idx = None;
     }
 
-    /// Backspace — удалить последний Unicode-символ.
+    /// Backspace — удалить выделение либо символ перед кареткой.
     pub fn backspace(&mut self) {
+        if !self.open {
+            return;
+        }
+        self.edited = true;
+        if !self.delete_selection() && self.cursor > 0 {
+            let (b0, b1) = (self.byte_at(self.cursor - 1), self.byte_at(self.cursor));
+            self.input.replace_range(b0..b1, "");
+            self.cursor -= 1;
+            self.anchor = self.cursor;
+        }
+        self.selected_idx = None;
+    }
+
+    /// Delete — удалить выделение либо символ после каретки.
+    pub fn delete_forward(&mut self) {
+        if !self.open {
+            return;
+        }
+        self.edited = true;
+        if !self.delete_selection() && self.cursor < self.char_len() {
+            let (b0, b1) = (self.byte_at(self.cursor), self.byte_at(self.cursor + 1));
+            self.input.replace_range(b0..b1, "");
+        }
+        self.selected_idx = None;
+    }
+
+    /// Выделить весь ввод (Ctrl+A, повторный Ctrl+L / F6 / Alt+D).
+    pub fn select_all(&mut self) {
         if self.open {
-            self.input.pop();
+            self.anchor = 0;
+            self.cursor = self.char_len();
             self.selected_idx = None;
         }
+    }
+
+    /// ← / Shift+←. Без Shift выделение схлопывается к его левому краю.
+    pub fn move_left(&mut self, extend: bool) {
+        if !self.open {
+            return;
+        }
+        let to = match self.selection() {
+            Some((start, _)) if !extend => start,
+            _ => self.cursor.saturating_sub(1),
+        };
+        self.place_cursor(to, extend);
+    }
+
+    /// → / Shift+→. Без Shift выделение схлопывается к его правому краю.
+    pub fn move_right(&mut self, extend: bool) {
+        if !self.open {
+            return;
+        }
+        let to = match self.selection() {
+            Some((_, end)) if !extend => end,
+            _ => self.cursor + 1,
+        };
+        self.place_cursor(to, extend);
+    }
+
+    /// Ctrl+← / Ctrl+Shift+←: к началу слова слева.
+    pub fn move_word_left(&mut self, extend: bool) {
+        if self.open {
+            let to = self.word_boundary(false);
+            self.place_cursor(to, extend);
+        }
+    }
+
+    /// Ctrl+→ / Ctrl+Shift+→: к началу слова справа.
+    pub fn move_word_right(&mut self, extend: bool) {
+        if self.open {
+            let to = self.word_boundary(true);
+            self.place_cursor(to, extend);
+        }
+    }
+
+    /// Home / Shift+Home.
+    pub fn move_home(&mut self, extend: bool) {
+        if self.open {
+            self.place_cursor(0, extend);
+        }
+    }
+
+    /// End / Shift+End.
+    pub fn move_end(&mut self, extend: bool) {
+        if self.open {
+            self.place_cursor(self.char_len(), extend);
+        }
+    }
+
+    /// Поставить каретку в `idx` (клик по уже сфокусированному полю).
+    pub fn set_cursor(&mut self, idx: usize, extend: bool) {
+        if self.open {
+            self.place_cursor(idx, extend);
+        }
+    }
+
+    /// Ближайшая граница слова от каретки: слово — подряд идущие буквы/цифры;
+    /// `/ . ? & = - :` и прочие знаки — разделители (как в Chrome).
+    fn word_boundary(&self, forward: bool) -> usize {
+        let chars: Vec<char> = self.input.chars().collect();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        let mut i = self.cursor.min(chars.len());
+        if forward {
+            while i < chars.len() && word(chars[i]) {
+                i += 1;
+            }
+            while i < chars.len() && !word(chars[i]) {
+                i += 1;
+            }
+        } else {
+            while i > 0 && !word(chars[i - 1]) {
+                i -= 1;
+            }
+            while i > 0 && word(chars[i - 1]) {
+                i -= 1;
+            }
+        }
+        i
     }
 
     /// Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
@@ -520,6 +713,135 @@ mod tests {
     }
 
     #[test]
+    fn open_selects_whole_address_and_typing_replaces_it() {
+        // UX-OMNI-EDIT: Ctrl+L, «vk.com» → в строке vk.com, а не «https://site/путьvk.com».
+        let mut s = AddressBarState::default();
+        s.open("https://site/path");
+        assert_eq!(s.selection(), Some((0, 17)));
+        s.append_str("vk.com");
+        assert_eq!(s.input(), "vk.com");
+        assert_eq!(s.selection(), None);
+        assert_eq!(s.cursor(), 6);
+    }
+
+    #[test]
+    fn open_empty_has_no_selection() {
+        let mut s = AddressBarState::default();
+        s.open("");
+        assert_eq!(s.selection(), None);
+        assert_eq!(s.cursor(), 0);
+    }
+
+    #[test]
+    fn backspace_on_selection_deletes_all_of_it() {
+        let mut s = AddressBarState::default();
+        s.open("abc");
+        s.backspace();
+        assert_eq!(s.input(), "");
+    }
+
+    #[test]
+    fn typing_inserts_at_caret() {
+        let mut s = AddressBarState::default();
+        s.open("ac");
+        s.move_home(false);
+        s.move_right(false);
+        s.append_str("b");
+        assert_eq!(s.input(), "abc");
+        assert_eq!(s.cursor(), 2);
+    }
+
+    #[test]
+    fn arrows_collapse_selection_to_its_edges() {
+        let mut s = AddressBarState::default();
+        s.open("abc");
+        s.move_left(false);
+        assert_eq!((s.cursor(), s.selection()), (0, None));
+        s.select_all();
+        s.move_right(false);
+        assert_eq!((s.cursor(), s.selection()), (3, None));
+    }
+
+    #[test]
+    fn shift_arrows_extend_selection_from_anchor() {
+        let mut s = AddressBarState::default();
+        s.open("abcd");
+        s.move_home(false);
+        s.move_right(true);
+        s.move_right(true);
+        assert_eq!(s.selection(), Some((0, 2)));
+        s.move_left(true);
+        assert_eq!(s.selection(), Some((0, 1)));
+        s.move_end(true);
+        assert_eq!(s.selection(), Some((0, 4)));
+    }
+
+    #[test]
+    fn delete_removes_char_after_caret_or_selection() {
+        let mut s = AddressBarState::default();
+        s.open("abc");
+        s.move_home(false);
+        s.delete_forward();
+        assert_eq!(s.input(), "bc");
+        s.move_end(false);
+        s.delete_forward(); // на конце — ничего, без паники
+        assert_eq!(s.input(), "bc");
+        s.select_all();
+        s.delete_forward();
+        assert_eq!(s.input(), "");
+    }
+
+    #[test]
+    fn editing_handles_multibyte_chars() {
+        let mut s = AddressBarState::default();
+        s.open("пример");
+        s.move_end(false);
+        s.backspace();
+        assert_eq!(s.input(), "приме");
+        s.move_home(false);
+        s.move_right(false);
+        s.append_str("ы");
+        assert_eq!(s.input(), "пыриме");
+        s.delete_forward();
+        assert_eq!(s.input(), "пыиме");
+    }
+
+    #[test]
+    fn word_jumps_stop_at_url_separators() {
+        let mut s = AddressBarState::default();
+        s.open("https://a.b/c-d");
+        s.move_home(false);
+        s.move_word_right(false);
+        assert_eq!(s.cursor(), 8); // «https» → после «://»
+        s.move_word_right(false);
+        assert_eq!(s.cursor(), 10); // «a.»
+        s.move_end(false);
+        s.move_word_left(false);
+        assert_eq!(s.cursor(), 14); // «d»
+        s.move_word_left(false);
+        assert_eq!(s.cursor(), 12); // «c»
+    }
+
+    #[test]
+    fn set_cursor_clamps_and_clears_selection() {
+        let mut s = AddressBarState::default();
+        s.open("abc");
+        s.set_cursor(99, false);
+        assert_eq!((s.cursor(), s.selection()), (3, None));
+        s.set_cursor(1, true);
+        assert_eq!(s.selection(), Some((1, 3)));
+    }
+
+    #[test]
+    fn caret_ops_ignored_when_closed() {
+        let mut s = AddressBarState::default();
+        s.move_right(false);
+        s.select_all();
+        s.delete_forward();
+        assert_eq!((s.cursor(), s.selection()), (0, None));
+    }
+
+    #[test]
     fn close_resets_state() {
         let mut s = AddressBarState::default();
         s.open("https://example.com");
@@ -528,6 +850,30 @@ mod tests {
         assert_eq!(s.input(), "");
         assert!(s.suggestions().is_empty());
         assert_eq!(s.selected_idx(), None);
+    }
+
+    #[test]
+    fn edited_flag_tracks_user_typing_and_survives_untouched_close() {
+        let mut s = AddressBarState::default();
+        s.open("https://old.example/");
+        assert!(!s.is_edited());
+        // Конец загрузки страницы закрывает нетронутый бар…
+        s.close_if_untouched();
+        assert!(!s.is_open());
+        // …но не тот, в который уже что-то набрали.
+        s.open("");
+        s.append_str("vk");
+        assert!(s.is_edited());
+        s.close_if_untouched();
+        assert!(s.is_open());
+        assert_eq!(s.input(), "vk");
+        // Новое открытие сбрасывает признак.
+        s.open("x");
+        assert!(!s.is_edited());
+        s.backspace();
+        assert!(s.is_edited());
+        s.close();
+        assert!(!s.is_edited());
     }
 
     #[test]
@@ -558,6 +904,7 @@ mod tests {
     fn backspace_removes_last_char() {
         let mut s = AddressBarState::default();
         s.open("abc");
+        s.move_end(false);
         s.backspace();
         assert_eq!(s.input(), "ab");
         s.backspace();
@@ -570,6 +917,7 @@ mod tests {
     fn commit_takes_url_and_closes() {
         let mut s = AddressBarState::default();
         s.open("https://example.com");
+        s.move_end(false);
         s.append_str("/page");
         s.commit();
         assert!(!s.is_open());
@@ -607,6 +955,7 @@ mod tests {
     fn chrome_omnibox_value_shows_live_input_when_focused() {
         let mut s = AddressBarState::default();
         s.open("https://example.com");
+        s.move_end(false);
         s.append_str("/more");
         let (value, warning) = chrome_omnibox_value(&s, "https://example.com");
         assert_eq!(value, "https://example.com/more");

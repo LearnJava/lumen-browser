@@ -9,6 +9,7 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod accept_language;
 mod bug785_extra_ca;
 mod osroots_trust;
 mod http_client_fingerprint_profile;

@@ -26,6 +26,8 @@ members = [
     "crates/engine/encoding",
     "crates/engine/image",
     "crates/engine/media-ffmpeg",
+    "crates/engine/media-demux",
+    "crates/engine/av1",
     "crates/engine/canvas",
     "crates/engine/a11y",
     "workspace-hack",
@@ -96,6 +98,8 @@ lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
 lumen-image = { path = "crates/engine/image" }
 lumen-media-ffmpeg = { path = "crates/engine/media-ffmpeg" }
+lumen-media-demux = { path = "crates/engine/media-demux" }
+lumen-av1 = { path = "crates/engine/av1" }
 lumen-canvas = { path = "crates/engine/canvas" }
 lumen-a11y = { path = "crates/engine/a11y" }
 

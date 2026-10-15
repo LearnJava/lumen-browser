@@ -55,6 +55,8 @@ pub enum PaletteAction {
     CloseTab,
     /// Reload the current page.
     Reload,
+    /// Reload the current page around the HTTP cache.
+    HardReload,
     /// Navigate back in history.
     NavigateBack,
     /// Navigate forward in history.
@@ -96,6 +98,7 @@ impl PaletteAction {
             PaletteAction::NewTab => "New Tab",
             PaletteAction::CloseTab => "Close Tab",
             PaletteAction::Reload => "Reload Page",
+            PaletteAction::HardReload => "Hard Reload (Bypass Cache)",
             PaletteAction::NavigateBack => "Back",
             PaletteAction::NavigateForward => "Forward",
             PaletteAction::FindOnPage => "Find on Page",
@@ -140,6 +143,7 @@ impl PaletteAction {
             PaletteAction::NewTab => "Ctrl+T",
             PaletteAction::CloseTab => "Ctrl+W",
             PaletteAction::Reload => "Ctrl+R",
+            PaletteAction::HardReload => "Ctrl+F5",
             PaletteAction::NavigateBack => "Alt+←",
             PaletteAction::NavigateForward => "Alt+→",
             PaletteAction::FindOnPage => "Ctrl+F",
@@ -165,6 +169,7 @@ impl PaletteAction {
             PaletteAction::NewTab,
             PaletteAction::CloseTab,
             PaletteAction::Reload,
+            PaletteAction::HardReload,
             PaletteAction::NavigateBack,
             PaletteAction::NavigateForward,
             PaletteAction::FindOnPage,

@@ -33,10 +33,13 @@ pub(crate) enum TypeableField {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum KeyCommand {
     Reload,
+    /// Ctrl+F5 / Shift+F5: перезагрузка в обход HTTP-кэша — документ и
+    /// подресурсы идут в сеть с `Cache-Control: no-cache`.
+    HardReload,
     /// Esc: останавливает идущую загрузку; окно никогда не закрывает.
     StopLoading,
     FindOpen,
-    /// Открыть адресную строку (Ctrl+L / F6). Позволяет ввести URL или
+    /// Открыть адресную строку (Ctrl+L / F6 / Alt+D). Позволяет ввести URL или
     /// поисковый запрос прямо в браузере без перезапуска из CLI.
     OpenAddressBar,
     /// Навигация назад (Alt+Left). Восстанавливает из bfcache если возможно.
@@ -148,6 +151,7 @@ pub(crate) enum KeyCommand {
 ///
 /// F5 без модификаторов  → Reload.
 /// Ctrl+R                → Reload.
+/// Ctrl+F5 / Shift+F5    → HardReload (в обход кэша).
 /// Esc без модификаторов → StopLoading.
 /// Ctrl+W                → CloseTab.
 /// Ctrl+F                → FindOpen.
@@ -158,9 +162,9 @@ pub(crate) enum KeyCommand {
 /// Space / Shift+Space   → ScrollPageDown / ScrollPageUp (привычка пробела в браузерах).
 /// Home / End            → ScrollHome / ScrollEnd.
 ///
-/// Прочие комбинации (Ctrl+Shift+R, F5+Ctrl, и т.д.) — пока None: не хотим
-/// перехватывать привычные web-shortcuts (force-reload, etc.) до того, как
-/// решим, что они должны делать.
+/// Ctrl+Shift+R занят панелью Read-later (§12.3): судьбу этого сочетания как
+/// force-reload решает пользователь (COMPAT-PANEL-NOCACHE). Прочие комбинации
+/// — пока None: не перехватываем привычные web-shortcuts без решения.
 pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
     let ctrl_only = mods == ModifiersState::CONTROL;
     let shift_only = mods == ModifiersState::SHIFT;
@@ -169,6 +173,7 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
     let ctrl_and_shift = mods == (ModifiersState::CONTROL | ModifiersState::SHIFT);
     match code {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
+        KeyCode::F5 if ctrl_only || shift_only => Some(KeyCommand::HardReload),
         KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
         KeyCode::Escape if no_mods => Some(KeyCommand::StopLoading),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::CloseTab),
@@ -179,6 +184,7 @@ pub(crate) fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyC
         KeyCode::KeyF if no_mods => Some(KeyCommand::HintModeOpen),
         KeyCode::KeyL if ctrl_only => Some(KeyCommand::OpenAddressBar),
         KeyCode::F6 if no_mods => Some(KeyCommand::OpenAddressBar),
+        KeyCode::KeyD if alt_only => Some(KeyCommand::OpenAddressBar),
         KeyCode::ArrowLeft if alt_only => Some(KeyCommand::HistoryBack),
         KeyCode::ArrowRight if alt_only => Some(KeyCommand::HistoryForward),
         KeyCode::ArrowDown if no_mods => Some(KeyCommand::ScrollLineDown),

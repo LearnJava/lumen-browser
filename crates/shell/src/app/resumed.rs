@@ -49,6 +49,14 @@ impl Lumen {
             self.dark_mode = platform::dark_mode::theme_prefers_dark(window.theme());
         }
 
+        // UX-OSPARAMS: follow OS input settings (double-click time, drag slop,
+        // wheel lines, animations on/off). The watcher only wakes this window;
+        // `on_redraw_requested` sees the generation change and re-evaluates.
+        {
+            let wake = window.clone();
+            platform::os_params::start_watcher(move || wake.request_redraw());
+        }
+
         // PH2-7 Phase 1: pass the native HWND to the a11y bridge so it can fire
         // Win32 WinEvent notifications (NotifyWinEvent) for focus and tree changes.
         // Only attempted on Windows where WinUiaBridge is active; on other OSes

@@ -77,6 +77,22 @@ pub(crate) enum NotifPermMode {
     Interactive,
 }
 
+/// Suffix of a queued prompt name that was raised without a live user
+/// activation (UX-USER-ACTIVATION): the shell answers it from a saved decision
+/// but never opens the permission popover for it.
+pub const NO_GESTURE_SUFFIX: &str = ":nogesture";
+
+/// Queue entry for the prompt `name`: bare when the page acted on a gesture (or
+/// the gate is off), `name:nogesture` otherwise.
+#[cfg(feature = "v8-backend")]
+fn prompt_name(name: &str, gesture: bool) -> String {
+    if gesture || !crate::popup_policy::gate_enabled() {
+        name.to_string()
+    } else {
+        format!("{name}{NO_GESTURE_SUFFIX}")
+    }
+}
+
 /// JS source that settles the page's pending prompt for `name`
 /// (`notifications`, `microphone`, `clipboard-read`) with the user's answer
 /// (`granted` / `denied` / `default`).
@@ -99,7 +115,7 @@ pub(crate) fn install_notifications_mode(
     rt: &crate::v8_runtime::V8JsRuntime,
     mode: NotifPermMode,
 ) -> lumen_core::JsResult<()> {
-    use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn3};
+    use crate::v8_compat::{into_v8_fn1, into_v8_fn2, into_v8_fn3};
     use lumen_core::ext::JsRuntime as _;
 
     let queue = rt.notification_queue();
@@ -127,14 +143,15 @@ pub(crate) fn install_notifications_mode(
         NotifPermMode::Interactive => "default",
     };
     let prompts = rt.permission_request_queue();
-    let request_permission = into_v8_fn0(move || -> String {
+    let request_permission = into_v8_fn1(move |gesture: bool| -> String {
         if mode != NotifPermMode::Interactive {
             return perm.to_string();
         }
+        let name = prompt_name("notifications", gesture);
         if let Ok(mut q) = prompts.lock()
-            && !q.iter().any(|n| n == "notifications")
+            && !q.contains(&name)
         {
-            q.push("notifications".to_string());
+            q.push(name);
         }
         "pending".to_string()
     });
@@ -146,7 +163,8 @@ pub(crate) fn install_notifications_mode(
     // grants at once, as those APIs did before they could ask.
     if mode == NotifPermMode::Interactive {
         let prompts = rt.permission_request_queue();
-        let prompt = crate::v8_compat::into_v8_fn1(move |name: String| -> bool {
+        let prompt = into_v8_fn2(move |name: String, gesture: bool| -> bool {
+            let name = prompt_name(&name, gesture);
             if let Ok(mut q) = prompts.lock()
                 && !q.contains(&name)
             {
@@ -349,11 +367,16 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
     }
     resolve(result);
   }
+  // UX-USER-ACTIVATION: prompts raised without a live user activation are
+  // answered from a saved decision only, never shown.
+  function _gesture() {
+    return typeof _lumen_user_activation_is_active !== 'function' || _lumen_user_activation_is_active();
+  }
   Notification.requestPermission = function(callback) {
     return new Promise(function(resolve) {
       var result;
       try {
-        result = _lumen_notification_request_permission();
+        result = _lumen_notification_request_permission(_gesture());
       } catch(e) {
         result = 'denied';
       }
@@ -379,7 +402,7 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
     return new Promise(function(resolve) {
       if (typeof _lumen_permission_prompt !== 'function') { resolve('granted'); return; }
       (_asks[name] = _asks[name] || []).push(resolve);
-      try { _lumen_permission_prompt(name); } catch (e) { _lumen_permission_settle(name, 'denied'); }
+      try { _lumen_permission_prompt(name, _gesture()); } catch (e) { _lumen_permission_settle(name, 'denied'); }
     });
   };
   __lumen_C._lumen_permission_settle = function(name, state) {
