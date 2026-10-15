@@ -168,6 +168,18 @@ fn hbar_track(
     (len > 0.0).then_some(len)
 }
 
+/// Занимает ли горизонтальная полоса страницы нижний край viewport-а
+/// (те же условия, что у [`build_hscrollbar_overlay`]).
+pub fn hscrollbar_visible(
+    scroll_x: f32,
+    content_width: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+    vertical_present: bool,
+) -> bool {
+    hbar_track(scroll_x, content_width, viewport_width, viewport_height, vertical_present).is_some()
+}
+
 /// Горизонтальная полоса прокрутки страницы: дорожка вдоль нижнего края
 /// viewport-а, thumb пропорционален `viewport_width / content_width`.
 /// `origin_x` — левый край области страницы в координатах overlay-а (ширина

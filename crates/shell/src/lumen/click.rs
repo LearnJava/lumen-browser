@@ -491,6 +491,7 @@ impl Lumen {
         let new_focused = hit_result.as_ref().map(|r| r.node);
         let focus_changed = new_focused != self.focused_node;
         self.focused_node = new_focused;
+        self.focus_from_keyboard = false;
         // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
         if focus_changed {
             // ADR-016 M2.2b-7: `focused_node` is set synchronously above, so

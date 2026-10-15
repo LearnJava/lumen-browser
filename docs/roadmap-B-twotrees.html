@@ -8564,9 +8564,9 @@
       {
        "id": "UX-STATUS-BUBBLE",
        "title": "Пузырь URL при наведении на ссылку",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Пузыря URL при наведении на ссылку нет: HitTarget::status_url (surface/types.rs:340) никто не читает, в chrome.html элемента нет, cursor_moved.rs:343-376 только обновляет hover. Объём: #statusBubble в движковом хроме у нижнего левого угла; источник — hovered_nid → links::find_link (links.rs:25) и фокус Tab на ссылке; формат — форматтер из UX-URL-COPY (idn::display_host, путь раскодирован); ширина до 50% контента, хост не режется, сокращается середина пути; прозрачен для мыши. Приёмка: показ через 80 мс + fade 120 мс, скрытие через 250 + 200 мс, смена между ссылками без fade, рамка не ближе 20 px к курсору, омоглиф → punycode. docs/research/browser-ux/report.md §4.3 LINK-07…LINK-11, §9 №8 Исследование — docs/research/browser-ux/report.md."
+       "note": "**Сделано (2026-10-15, ветка `p6-ux-status-bubble`):** `#statusBubble` в `assets/chrome/chrome.html`, таймлайн/усечение/уход от курсора — `crates/shell/src/status_bubble.rs`, клей — `lumen/status_bubble.rs` (hover и Tab-фокус, адрес через `url_display::display_url`), привязка — `lumen_chrome::ChromeStatusBubbleModel`. Не сделано: ссылки внутри `<iframe>`; живая проверка окном не выполнена (экран заблокирован), только модульные тесты. Исходная постановка: Пузыря URL при наведении на ссылку нет: HitTarget::status_url (surface/types.rs:340) никто не читает, в chrome.html элемента нет, cursor_moved.rs:343-376 только обновляет hover. Объём: #statusBubble в движковом хроме у нижнего левого угла; источник — hovered_nid → links::find_link (links.rs:25) и фокус Tab на ссылке; формат — форматтер из UX-URL-COPY (idn::display_host, путь раскодирован); ширина до 50% контента, хост не режется, сокращается середина пути; прозрачен для мыши. Приёмка: показ через 80 мс + fade 120 мс, скрытие через 250 + 200 мс, смена между ссылками без fade, рамка не ближе 20 px к курсору, омоглиф → punycode. docs/research/browser-ux/report.md §4.3 LINK-07…LINK-11, §9 №8 Исследование — docs/research/browser-ux/report.md."
       },
       {
        "id": "UX-CLOSE-WARNINGS",

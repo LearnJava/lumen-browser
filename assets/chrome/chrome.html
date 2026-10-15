@@ -805,6 +805,13 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .find-count.error{ color:var(--red-badge); }
 .find-bar button{ width:22px; height:22px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; }
 .find-bar button:hover{ background:var(--surface-2); }
+.status-bubble{
+  position:absolute; left:0; bottom:0; max-width:50%; display:none; box-sizing:border-box; padding:3px 10px; font-size:12px; line-height:16px;
+  color:var(--text-primary); background:var(--surface-0); border:1px solid var(--stroke); border-left:none; border-bottom:none;
+  border-radius:0 var(--radius-sm) 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; z-index:61; pointer-events:none;
+}
+.status-bubble.open{ display:block; }
+.status-bubble.right{ left:auto; right:0; border-left:1px solid var(--stroke); border-right:none; border-radius:var(--radius-sm) 0 0 0; }
 
 /* ---------- Command Palette ---------- */
 .cp-overlay{ position:absolute; inset:0; background:var(--overlay-bg); display:none; align-items:flex-start; justify-content:center; padding-top:90px; z-index:200; }
@@ -1650,6 +1657,9 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button title="Вниз">↓</button>
             <button data-action="toggle-find" aria-label="Найти на странице"><svg class="icon"><use href="#i-x"/></svg></button>
           </div>
+
+          <!-- Пузырь адреса ссылки под курсором (UX-STATUS-BUBBLE): текст, прозрачность и угол задаёт модель. -->
+          <div class="status-bubble" id="statusBubble" dir="ltr" aria-hidden="true"></div>
 
           <!-- DevTools: консоль JS (UX-CHROME-PANELS срез 4). Elements/Network/Sources в движке — отдельные панели, здесь только Console. -->
           <div class="devtools" id="devtools">

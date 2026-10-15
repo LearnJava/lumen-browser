@@ -502,6 +502,19 @@ pub(crate) struct Lumen {
     pub(crate) os_params_gen: u64,
     /// UX-CARET: blink phase of the text caret ([`crate::caret_blink`]).
     pub(crate) caret_blink: crate::caret_blink::CaretBlink,
+    /// UX-STATUS-BUBBLE: show/hide timeline of the link-address bubble
+    /// ([`crate::status_bubble`]).
+    pub(crate) status_bubble: crate::status_bubble::StatusBubble,
+    /// UX-STATUS-BUBBLE: what `#statusBubble` was last bound to; the chrome is
+    /// relaid out only when this changes.
+    pub(crate) status_bubble_pushed: lumen_chrome::ChromeStatusBubbleModel,
+    /// UX-STATUS-BUBBLE: pointer position the timeline last saw (any change
+    /// restarts the pre-show delay).
+    pub(crate) status_bubble_cursor: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// UX-STATUS-BUBBLE: the page focus was put on its node by the keyboard
+    /// (Tab, `accesskey`), not by a click — only then does a focused link
+    /// show its address.
+    pub(crate) focus_from_keyboard: bool,
     /// UX-CARET: the OS window is the active one (`WindowEvent::Focused`); a
     /// background window draws no caret. Starts `true`: headless runs never
     /// receive the event.
