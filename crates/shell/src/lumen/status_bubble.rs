@@ -14,6 +14,13 @@ const FONT_PX: f32 = 12.0;
 const PAD_X: f32 = 21.0;
 const HEIGHT: f32 = 23.0;
 
+/// The human-readable address of the link `node` sits in (`url_display::display_url`:
+/// decoded path, homoglyph host → punycode), `None` when it is not inside a link.
+fn link_address(doc: &lumen_dom::Document, node: lumen_dom::NodeId, resolve: impl Fn(&str) -> String) -> Option<String> {
+    let href = crate::links::find_link_href(doc, node)?;
+    Some(lumen_core::url_display::display_url(&resolve(&href)).0)
+}
+
 impl Lumen {
     /// The address to show, formatted for a human (`url_display::display_url`:
     /// decoded path, homoglyph host → punycode), or `None` without a link.
@@ -24,12 +31,8 @@ impl Lumen {
             None => return None,
         };
         let src = self.layout_source.as_ref()?;
-        let href = {
-            let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
-            crate::links::find_link_href(&doc, node)?
-        };
-        let resolved = self.source.resolve_href(&href);
-        Some(lumen_core::url_display::display_url(&resolved).0)
+        let doc = src.document.lock().unwrap_or_else(|e| e.into_inner());
+        link_address(&doc, node, |href| self.source.resolve_href(href))
     }
 
     /// Distance from the bottom of the window to the bottom of its monitor, CSS px.
@@ -115,5 +118,45 @@ impl Lumen {
             self.request_redraw();
         }
         self.status_bubble.next_wakeup(now)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc() -> lumen_dom::Document {
+        lumen_html_parser::parse(
+            "<body><a id=a href='/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82?q=1'><b id=inner>x</b></a><p id=p>t</p>             <a id=h href='http://xn--80ak6aa92e.com/'>h</a></body>",
+        )
+    }
+
+    fn resolve(href: &str) -> String {
+        match href.strip_prefix('/') {
+            Some(rest) => format!("https://example.com/{rest}"),
+            None => href.to_owned(),
+        }
+    }
+
+    #[test]
+    fn address_is_resolved_and_readable_from_a_descendant_of_the_link() {
+        let d = doc();
+        let inner = d.find_by_id("inner").unwrap();
+        assert_eq!(link_address(&d, inner, resolve).as_deref(), Some("https://example.com/привет?q=1"));
+    }
+
+    #[test]
+    fn no_address_outside_a_link() {
+        let d = doc();
+        let p = d.find_by_id("p").unwrap();
+        assert_eq!(link_address(&d, p, resolve), None);
+    }
+
+    #[test]
+    fn punycode_host_is_kept_as_punycode() {
+        let d = doc();
+        let h = d.find_by_id("h").unwrap();
+        let shown = link_address(&d, h, resolve).unwrap();
+        assert!(shown.contains("xn--80ak6aa92e.com"), "{shown}");
     }
 }
