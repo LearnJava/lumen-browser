@@ -1147,6 +1147,8 @@ impl Lumen {
                             // `about:handoff?open=...` on the network error page.
                         } else if self.apply_handoff_link(&resolved) {
                             // `about:handoff?...` on the handoff page itself.
+                        } else if self.apply_compat_link(&resolved) {
+                            // `about:compat?...` on the compat-pack page itself.
                         } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {

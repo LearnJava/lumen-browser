@@ -27,7 +27,7 @@ pub use model::{
     ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel, ChromeShortcutRowModel, ChromeShortcutsModel,
     ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeTabTree, ChromeUpdateAction,
     ChromeDialogModel, ChromeSecurityModel, ChromeLoginOfferModel, ChromeMediaBarModel, ChromeStatusBubbleModel, ChromeUpdateModel, ChromeWorkspaceModel,
-    ControlPanelShape, OmniboxModel, SelectorTouch, NO_DOMAIN_LABEL,
+    ControlPanelShape, OmniboxModel, SelectorTouch, NO_DOMAIN_LABEL, compat_fixes_label,
 };
 
 /// Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]

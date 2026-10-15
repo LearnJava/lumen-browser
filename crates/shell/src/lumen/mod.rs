@@ -32,6 +32,7 @@ mod frame_forms;
 mod frame_links;
 mod frame_text_input;
 mod gestures;
+mod compat;
 mod handoff;
 pub(crate) mod signals;
 mod hibernation;
