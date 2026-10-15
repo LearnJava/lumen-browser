@@ -22,6 +22,7 @@ above both. When a row and its file disagree, the file wins and the row is the t
 | lumen-encoding | ✅ detector + decoders + Unicode provider + hyphenation | [subsystems/encoding.md](subsystems/encoding.md) |
 | lumen-image | ✅ PNG + JPEG + WebP + GIF + AVIF + SVG (resvg, LIB-4) | [subsystems/image.md](subsystems/image.md) |
 | lumen-media-demux | ✅ Демуксеры MP4/fMP4, WebM/Matroska, Ogg без FFmpeg: дорожки, кодеки RFC 6381, пакеты с метками времени, перемотка (UX-VIDEO-DEMUX, ADR-035 п.2); не подключён к `crates/js` | [subsystems/media-demux.md](subsystems/media-demux.md) |
+| lumen-av1 | ✅ Общий AV1-декодер (rav1d) для AVIF и видео: потоковый `Decoder`, кадры YUV с pts, YUV→RGBA; кадры побитово как у ffmpeg/libdav1d; asm — фичей `av1-asm` (UX-VIDEO-AV1, ADR-035 п.2); не подключён к `<video>` | [subsystems/av1.md](subsystems/av1.md) |
 | lumen-media-ffmpeg | 🟡 `VideoDecoder`/`VideoDecodeSession` через hand-rolled FFmpeg FFI, feature `ffmpeg` (off by default); не подключён к `crates/js` (GAP-MEDIADECODE, ADR-030) | [subsystems/media-ffmpeg.md](subsystems/media-ffmpeg.md) |
 | lumen-js | ✅ V8 (`rusty_v8` 150.1.0) — the only engine since S12b (2026-08-04) | [subsystems/js.md](subsystems/js.md) |
 | lumen-storage | ✅ SQLite + IndexedDB + cookies + history + profiles + HTTP cache + 15 further stores | [subsystems/storage.md](subsystems/storage.md) |

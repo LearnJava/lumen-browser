@@ -73,6 +73,10 @@ of `lumen-image` for AVIF with a working `dav1d_open`/`dav1d_send_data` wrapper
 6. **MSE** (adaptive streaming: YouTube, VK Видео, Rutube) is built once, on top of this registry, for
    all platforms (`COMPAT-MSE`). DRM stays separate (ADR-034 §9).
 
+### Addendum 2026-10-15 (UX-VIDEO-AV1): `asm` у rav1d
+
+Замер 1080p/30 кадр/с, 10 с, ≈4,5 Мбит/с на машине разработчика (i5-10210U, 8 потоков): без `asm` декодер работает на ≈0,9× реального времени — не хватает; с `asm` (nasm) ≈3,3×, на одном потоке 2,25× ([docs/perf/av1-decode.md](../perf/av1-decode.md)). Решение: общий крейт `lumen-av1` держит `asm` за фичей (`lumen-shell --features av1-asm`), в default она выключена, чтобы `cargo build` не требовал nasm; **релизные сборки обязаны её включать**. Аппаратный AV1 через ОС остаётся быстрым путём там, где он есть.
+
 ## Alternatives considered
 
 | Alternative | Why rejected |
