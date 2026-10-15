@@ -850,6 +850,7 @@ fn run_window_mode_inner(
         page_context_menu: page_context_menu::PageContextMenu::default(),
         compat_signals,
         gate_loop: gate_detect::GateLoop::default(),
+        fix_panel: compat_panel::CompatPanel::default(),
         compat_signal_store,
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
         spell_ignored: std::collections::HashSet::new(),

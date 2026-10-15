@@ -928,6 +928,7 @@ impl Lumen {
             popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
             site_shields_on: self.shields.enabled_for_current(),
             compat_fixes: u32::try_from(self.compat_applied.len()).unwrap_or(u32::MAX),
+            fix: self.fix_panel_model(),
             palette,
             cert,
             shortcuts,
@@ -1335,7 +1336,7 @@ impl Lumen {
                 self.relayout_chrome_host();
             }
             ChromeAction::ToggleShieldPopover => {
-                self.shields.toggle();
+                self.toggle_site_popover();
                 // CC-9: `#permPopover`'s `.open` class is baked into
                 // `chrome_layout` at `relayout_chrome_host` time, same gap
                 // CC-7 found for `#omniInput` — without this the popover
@@ -2022,6 +2023,14 @@ impl Lumen {
                 self.permission.visible = false;
                 self.show_compat_page();
             }
+            // COMPAT-PANEL: ступени секции «Сайт работает не так?».
+            ChromeAction::CompatNocache => self.fix_no_cache(),
+            ChromeAction::CompatReset => self.fix_reset_ask(),
+            ChromeAction::CompatResetConfirm => self.fix_reset_confirm(),
+            ChromeAction::CompatResetCancel => self.fix_reset_cancel(),
+            ChromeAction::CompatHandoff => self.fix_handoff(),
+            ChromeAction::CompatWorkedYes => self.fix_answer(true),
+            ChromeAction::CompatWorkedNo => self.fix_answer(false),
             ChromeAction::CompatDisableReload => {
                 self.shields.visible = false;
                 self.permission.visible = false;
