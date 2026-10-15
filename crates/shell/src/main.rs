@@ -198,7 +198,7 @@ use crate::doc_extract::{
     DynamicCssBase, collect_style_attr_csp_blocked, extract_style_blocks, extract_title,
     inline_style_fingerprint, stylesheet_link_fingerprint, window_title,
 };
-use crate::input::dnd::{DND_THRESHOLD, DndState};
+use crate::input::dnd::DndState;
 use crate::page_pipeline::{
     JsLayoutSnapshot, LayoutSource, LoadedPage, RenderOutcome, dispatch_preload_hints,
     effective_base, parse_and_layout, render_bytes,

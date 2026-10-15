@@ -113,7 +113,7 @@ impl Lumen {
                 if !dnd.active {
                     let dx = x_css - dnd.press_x;
                     let dy = y_css - dnd.press_y;
-                    if dx * dx + dy * dy >= DND_THRESHOLD * DND_THRESHOLD {
+                    if platform::os_params::current().exceeds_drag(dx, dy) {
                         dnd.active = true;
                         dragstart = true;
                     }

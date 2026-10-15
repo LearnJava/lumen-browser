@@ -263,7 +263,7 @@ impl Lumen {
 
             // HTML5 DnD (PH3-9 / HTML LS §9.3.3): start candidate when the
             // pressed element is draggable.  Drag does not activate until the
-            // cursor moves ≥ DND_THRESHOLD px (handled in CursorMoved).
+            // cursor leaves the OS drag zone (handled in CursorMoved).
             #[cfg(feature = "v8")]
             if let Some(hov) = self.hovered_nid
                 && let Some(ls) = self.layout_source.as_ref() {

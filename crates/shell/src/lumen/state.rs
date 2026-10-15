@@ -489,6 +489,10 @@ pub(crate) struct Lumen {
     /// `deliver_media_query_changes(.., self.dark_mode)`. Default `false` (light)
     /// до создания окна и в headless/deterministic-режимах (стабильность snapshot-ов).
     pub(crate) dark_mode: bool,
+    /// UX-OSPARAMS: `platform::os_params::generation()` this state last acted on.
+    /// A mismatch on redraw means the OS settings changed (the watcher thread
+    /// woke the loop) and the media queries must be re-evaluated.
+    pub(crate) os_params_gen: u64,
     /// Per-tab user zoom factor (100% = 1.0). Changed via Ctrl+= / Ctrl+- / Ctrl+0.
     ///
     /// Combined with `<meta viewport initial-scale>` to compute the effective CSS
@@ -1778,7 +1782,7 @@ pub(crate) struct Lumen {
     ///
     /// `Some` from `mousedown` on a draggable element until `mouseup`.
     /// Transitions to `active = true` after the cursor travels ≥
-    /// `DND_THRESHOLD` px, at which point `dragstart` is fired on `src_nid`.
+    /// the OS drag threshold (`OsParams::exceeds_drag`), at which point `dragstart` is fired on `src_nid`.
     /// On `mouseup`: fires `drop` on the current target, `dragend` on `src_nid`,
     /// then clears this field.
     pub(crate) dnd_state: Option<DndState>,

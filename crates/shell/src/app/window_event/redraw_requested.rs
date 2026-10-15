@@ -25,6 +25,9 @@ impl Lumen {
         let timestamp_ms =
             self.epoch.elapsed().as_secs_f64() * 1000.0;
 
+        // UX-OSPARAMS: the OS settings changed since the last frame.
+        self.apply_os_params_change();
+
         // Диагностика кадра (LUMEN_FRAME_LOG=1): полное время
         // RedrawRequested (шаги 1–6). Paint-фаза отдельно логируется
         // бэкендом строкой `[frame] paint …`.

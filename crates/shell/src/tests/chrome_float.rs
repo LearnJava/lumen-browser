@@ -7,6 +7,7 @@
 use super::*;
 
 use crate::chrome_float::{drag_offset, is_double_press, FloatingPanelPress};
+use crate::platform::os_params::OsParams;
 
 /// Раскладывает настоящий chrome-документ и отцепляет `#demoBar` ровно так,
 /// как это делает `relayout_chrome_host` — общая преамбула всех тестов ниже.
@@ -127,23 +128,38 @@ fn cc18_double_click_detection_needs_same_panel_time_and_place() {
         at_ms: 1_000.0,
         pos: (100.0, 200.0),
     };
+    let os = OsParams::DEFAULT;
     assert!(
-        !is_double_press(None, lumen_chrome::ids::DEMO_BAR, 1_100.0, 100.0, 200.0),
+        !is_double_press(&os, None, lumen_chrome::ids::DEMO_BAR, 1_100.0, 100.0, 200.0),
         "первое нажатие в сессии дабл-кликом быть не может"
     );
-    assert!(is_double_press(Some(&prev), lumen_chrome::ids::DEMO_BAR, 1_200.0, 102.0, 199.0));
+    assert!(is_double_press(&os, Some(&prev), lumen_chrome::ids::DEMO_BAR, 1_200.0, 102.0, 199.0));
     assert!(
-        !is_double_press(Some(&prev), lumen_chrome::ids::DEMO_BAR, 2_500.0, 100.0, 200.0),
+        !is_double_press(&os, Some(&prev), lumen_chrome::ids::DEMO_BAR, 2_500.0, 100.0, 200.0),
         "пауза больше порога — это два отдельных нажатия"
     );
     assert!(
-        !is_double_press(Some(&prev), lumen_chrome::ids::DEMO_BAR, 1_200.0, 140.0, 200.0),
+        !is_double_press(&os, Some(&prev), lumen_chrome::ids::DEMO_BAR, 1_200.0, 140.0, 200.0),
         "курсор уехал — это не дабл-клик, а новое перетаскивание"
     );
     assert!(
-        !is_double_press(Some(&prev), lumen_chrome::ids::INFO_PANEL, 1_200.0, 100.0, 200.0),
+        !is_double_press(&os, Some(&prev), lumen_chrome::ids::INFO_PANEL, 1_200.0, 100.0, 200.0),
         "нажатия по шапкам разных панелей не складываются в дабл-клик"
     );
+}
+
+/// UX-OSPARAMS: время и допуск дабл-клика берутся из ОС, а не из констант.
+#[test]
+fn osparams_double_press_follows_os_time_and_slop() {
+    let prev = FloatingPanelPress {
+        panel_id: lumen_chrome::ids::DEMO_BAR,
+        at_ms: 1_000.0,
+        pos: (100.0, 200.0),
+    };
+    let slow = OsParams { double_click_ms: 2_000, double_click_slop: (10.0, 10.0), ..OsParams::DEFAULT };
+    // 1,5 с и 8 px: для настроек по умолчанию это два нажатия, для замедленных — дабл-клик.
+    assert!(!is_double_press(&OsParams::DEFAULT, Some(&prev), lumen_chrome::ids::DEMO_BAR, 2_500.0, 108.0, 200.0));
+    assert!(is_double_press(&slow, Some(&prev), lumen_chrome::ids::DEMO_BAR, 2_500.0, 108.0, 200.0));
 }
 
 /// Сам сброс: смещение снимается, и панель снова рисуется ровно в
