@@ -2616,6 +2616,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-media-native"
+version = "0.5.0"
+dependencies = [
+ "lewton",
+ "lumen-av1",
+ "lumen-core",
+ "lumen-media-demux",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-network"
 version = "0.5.0"
 dependencies = [
