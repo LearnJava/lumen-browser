@@ -687,6 +687,18 @@ impl Lumen {
                     move || { flag.set(true); },
                 );
             }
+            KeyCommand::HardReload => {
+                // Тот же путь, что у Reload; режим «без кэша» включается внутри
+                // задачи и действует до следующей навигации.
+                let flag = Rc::clone(&self.pending_reload);
+                self.runtime.handle().queue_task(
+                    runtime::TaskSource::UserInteraction,
+                    move || {
+                        crate::config::request_hard_reload();
+                        flag.set(true);
+                    },
+                );
+            }
             // BUG-1611: Esc останавливает идущую загрузку и больше ничего не делает —
             // выход идёт только через CloseRequested (beforeunload + сохранение сессии).
             KeyCommand::StopLoading => {
