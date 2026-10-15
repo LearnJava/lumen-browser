@@ -8680,9 +8680,9 @@
       {
        "id": "COMPAT-PANEL-NOCACHE",
        "title": "Перезагрузка без кэша (Ctrl+F5, Shift+F5)",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Жёсткой перезагрузки нет: F5 и Ctrl+R — обычный Reload (keybindings.rs:170), Ctrl+F5 и Shift+F5 не назначены (keybindings.rs:160), Ctrl+Shift+R занят панелью Read-later (keybindings.rs:267), Command::Reload{bypass_cache} живёт только в тесте (surface/ctx.rs:156). Есть дисковый HTTP-кэш (config.rs:74), поэтому F5 может отдать подресурсы из него. Объём: перезагрузка в обход кэша (no-cache на документ и подресурсы), Ctrl+F5, Shift+F5, пункт панели; судьбу Ctrl+Shift+R решает пользователь. Приёмка: после Ctrl+F5 в сетевом логе 0 ответов из кэша. docs/research/site-compat/report.md §8.2 COMPAT-EXIT-02, COMPAT-EXIT-06"
+       "note": "**Сделано (2026-10-15, ветка `p1-compat-panel-nocache`):** `KeyCommand::HardReload` на Ctrl+F5 и Shift+F5, пункт «Hard Reload (Bypass Cache)» в палитре команд и строка в панели горячих клавиш; `config::request_hard_reload` взводит режим, `start_streaming_load` фиксирует его за навигацией, `apply_http` отдаёт клиенту `HttpClient::with_cache_bypass(true)`: кэш не читается (документ, подресурсы, предзагрузка по памяти сайта), запросы идут с `Cache-Control: no-cache` + `Pragma: no-cache` (вытесняют дефолтный `max-age=0`), свежий ответ записывается в кэш. Режим живёт до следующей навигации, JS `fetch()`/XHR кэш и так не читают. Ctrl+Shift+R оставлен за Read-later — решение пользователя. Живой прогон окна не делался: покрыто юнит-тестами сети (3) и раскладки клавиш (2). **Исходная постановка:** Жёсткой перезагрузки нет: F5 и Ctrl+R — обычный Reload (keybindings.rs:170), Ctrl+F5 и Shift+F5 не назначены (keybindings.rs:160), Ctrl+Shift+R занят панелью Read-later (keybindings.rs:267), Command::Reload{bypass_cache} живёт только в тесте (surface/ctx.rs:156). Есть дисковый HTTP-кэш (config.rs:74), поэтому F5 может отдать подресурсы из него. Объём: перезагрузка в обход кэша (no-cache на документ и подресурсы), Ctrl+F5, Shift+F5, пункт панели; судьбу Ctrl+Shift+R решает пользователь. Приёмка: после Ctrl+F5 в сетевом логе 0 ответов из кэша. docs/research/site-compat/report.md §8.2 COMPAT-EXIT-02, COMPAT-EXIT-06"
       },
       {
        "id": "COMPAT-PRIVACY-UNBREAK",
