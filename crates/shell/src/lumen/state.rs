@@ -1432,6 +1432,10 @@ pub(crate) struct Lumen {
     /// `Ctrl+Shift+P` toggles visibility.  State is in-memory only (no
     /// persistence across sessions).
     pub(crate) permission: panels::permission_panel::PermissionPanel,
+    /// `window.open()` URLs the page tried without a user gesture, per tab id
+    /// (UX-USER-ACTIVATION). Non-empty lights `#popupBtn`; a navigation of
+    /// the tab or an «allow» in the popover clears it.
+    pub(crate) blocked_popups: std::collections::HashMap<usize, Vec<String>>,
     /// On-disk permission store (`permissions.db`); `permission` uses it except
     /// while the Anonymous profile is active (see `sync_permission_store`).
     pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,

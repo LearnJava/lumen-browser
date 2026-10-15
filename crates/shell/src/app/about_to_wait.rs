@@ -1469,10 +1469,21 @@ impl Lumen {
         // UX-PERMISSIONS-2: `Notification.requestPermission()` asks for a decision.
         // A saved answer settles the page at once, otherwise the popover opens
         // and the click on its allow/deny button settles it (chrome_ui).
-        for name in self.drain_query_js(|j| j.take_permission_requests()).unwrap_or_default() {
-            let Some(kind) = panels::permission_panel::PermissionKind::from_page_name(&name) else {
+        for raw in self.drain_query_js(|j| j.take_permission_requests()).unwrap_or_default() {
+            // UX-USER-ACTIVATION: a prompt raised without a user gesture is
+            // answered from a saved decision only; undecided → `default`,
+            // the popover never opens for it.
+            let (name, gesture) = match raw.strip_suffix(lumen_js::notifications_bindings::NO_GESTURE_SUFFIX) {
+                Some(name) => (name, false),
+                None => (raw.as_str(), true),
+            };
+            let Some(kind) = panels::permission_panel::PermissionKind::from_page_name(name) else {
                 continue;
             };
+            if !gesture {
+                self.settle_page_permission(kind, self.permission.state_for(kind));
+                continue;
+            }
             match self.permission.request(kind) {
                 Some(state) => self.settle_page_permission(kind, state),
                 None => {
@@ -1508,7 +1519,15 @@ impl Lumen {
             // request in the same batch would pick up the FIRST popup's tab
             // id as its "opener" instead of the real one.
             let opener_tab_id = self.tab_strip.tabs[self.tab_strip.active].id as u32;
-            for (url, target, _width, _height, token, no_opener) in popups {
+            for (url, target, _width, _height, token, no_opener, blocked) in popups {
+                if blocked {
+                    // UX-USER-ACTIVATION: `window.open()` already returned
+                    // `null`; remember it for the indicator, open nothing.
+                    self.blocked_popups.entry(opener_tab_id as usize).or_default().push(url);
+                    self.relayout_chrome_host();
+                    self.request_redraw();
+                    continue;
+                }
                 // GAP-NAVCTX срез 1 (BUG-884): `open("javascript:...")` must run
                 // the code (in the OPENER's context, per HTML LS §7.4.5) rather
                 // than reach the network layer, which today rejects `javascript:`

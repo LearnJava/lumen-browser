@@ -590,9 +590,12 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `bool` (GAP-NAVCTX срез 11, BUG-797) is `true` when `features` carried
     /// `noopener`/`noreferrer` — the shell must then skip
     /// `window_messaging::arm_pending_opener` for this popup. Returns an
-    /// empty vec between `window.open()` calls.
+    /// empty vec between `window.open()` calls. The last `bool`
+    /// (UX-USER-ACTIVATION) is `true` for a call the user-activation gate
+    /// already blocked: `window.open()` returned `null`, nothing may be opened,
+    /// the shell only records `url` for the blocked-popup indicator.
     #[allow(dead_code)]
-    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32, bool)>;
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32, bool, bool)>;
     /// Drain `console.log/warn/error` messages buffered in the JS runtime.
     ///
     /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
@@ -1364,11 +1367,11 @@ impl PersistentJs for V8PersistentJs {
             "if(typeof _lumen_gc_collect==='function')_lumen_gc_collect([{arr}]);"
         ));
     }
-    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32, bool)> {
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32, u32, bool, bool)> {
         self.rt
             .take_window_open_requests()
             .into_iter()
-            .map(|r| (r.url, r.target, r.width, r.height, r.token, r.no_opener))
+            .map(|r| (r.url, r.target, r.width, r.height, r.token, r.no_opener, r.blocked))
             .collect()
     }
     fn take_console_messages(&self) -> Vec<(u8, String)> {

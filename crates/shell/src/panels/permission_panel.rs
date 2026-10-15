@@ -34,15 +34,19 @@ pub enum PermissionKind {
     Notifications,
     /// Clipboard read/write access.
     Clipboard,
+    /// Pop-ups opened by `window.open()` without a user gesture
+    /// (UX-USER-ACTIVATION). `Allow` lets the site open them freely.
+    Popups,
 }
 
 impl PermissionKind {
-    /// All four permission kinds in display order.
-    pub const ALL: [PermissionKind; 4] = [
+    /// All permission kinds in display order.
+    pub const ALL: [PermissionKind; 5] = [
         PermissionKind::Camera,
         PermissionKind::Microphone,
         PermissionKind::Notifications,
         PermissionKind::Clipboard,
+        PermissionKind::Popups,
     ];
 
     fn to_store(self) -> StoreKind {
@@ -51,6 +55,7 @@ impl PermissionKind {
             Self::Microphone => StoreKind::Microphone,
             Self::Notifications => StoreKind::Notifications,
             Self::Clipboard => StoreKind::Clipboard,
+            Self::Popups => StoreKind::Other("popups".to_owned()),
         }
     }
 
@@ -60,6 +65,7 @@ impl PermissionKind {
             StoreKind::Microphone => Some(Self::Microphone),
             StoreKind::Notifications => Some(Self::Notifications),
             StoreKind::Clipboard => Some(Self::Clipboard),
+            StoreKind::Other(name) if name == "popups" => Some(Self::Popups),
             _ => None,
         }
     }
@@ -72,6 +78,7 @@ impl PermissionKind {
             Self::Microphone => "microphone",
             Self::Notifications => "notifications",
             Self::Clipboard => "clipboard-read",
+            Self::Popups => "popups",
         }
     }
 
@@ -87,8 +94,30 @@ impl PermissionKind {
             Self::Microphone => "Microphone",
             Self::Notifications => "Notifications",
             Self::Clipboard => "Clipboard",
+            Self::Popups => "Pop-ups",
         }
     }
+}
+
+/// Permission key of a page: `scheme://host` in lower case, without port and
+/// path — what the panel and the store are keyed by. `None` for a URL with no
+/// host (`about:blank`, `data:`).
+pub fn permission_origin(url: &str) -> Option<String> {
+    let scheme_end = url.find("://")?;
+    let scheme = &url[..scheme_end + 3];
+    let rest = &url[scheme_end + 3..];
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = &rest[..host_end];
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    if host.is_empty() { None } else { Some(format!("{}{}", scheme, host.to_ascii_lowercase())) }
+}
+
+/// Lookup the JS gate uses (`lumen_js::popup_policy::set_site_resolver`):
+/// did the user allow `kind` (a store name: `popups`, `clipboard`) for the
+/// document at `origin` (`location.origin`, with port)?
+pub fn site_allows(store: &Permissions, origin: &str, kind: &str) -> bool {
+    let Some(key) = permission_origin(origin) else { return false };
+    matches!(store.query(&key, &StoreKind::parse(kind), now_unix()), Ok(StoreState::Granted))
 }
 
 /// Grant state for a single permission on a single origin.
@@ -320,6 +349,32 @@ mod tests {
         p.visible = true;
         p.current_origin = origin.map(|s| s.to_owned());
         p
+    }
+
+    #[test]
+    fn permission_origin_drops_port_path_and_case() {
+        assert_eq!(permission_origin("https://Example.COM:8443/a?b#c").as_deref(), Some("https://example.com"));
+        assert_eq!(permission_origin("https://example.com").as_deref(), Some("https://example.com"));
+        assert_eq!(permission_origin("about:blank"), None);
+        assert_eq!(permission_origin("null"), None);
+    }
+
+    #[test]
+    fn popups_row_is_persisted_and_visible_to_the_gate() {
+        let store = Arc::new(Permissions::open_in_memory().unwrap());
+        let mut p = PermissionPanel::new().with_store(store.clone());
+        p.set_origin(Some("https://a.test".to_owned()));
+        assert!(!site_allows(&store, "https://a.test:81", "popups"), "default is ask");
+        p.set_permission(PermissionKind::Popups, PermissionState::Allow);
+        assert!(site_allows(&store, "https://a.test:81", "popups"), "allowed, port ignored");
+        assert!(!site_allows(&store, "https://a.test", "clipboard"), "other kinds are separate");
+        assert!(!site_allows(&store, "https://b.test", "popups"), "other sites are separate");
+        // A new panel over the same store reloads it.
+        let mut q = PermissionPanel::new().with_store(store);
+        q.set_origin(Some("https://a.test".to_owned()));
+        assert_eq!(q.state_for(PermissionKind::Popups), PermissionState::Allow);
+        q.revoke("https://a.test", PermissionKind::Popups);
+        assert_eq!(q.state_for(PermissionKind::Popups), PermissionState::Ask);
     }
 
     // ── PermissionPanel ──────────────────────────────────────────────────────
