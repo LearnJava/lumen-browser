@@ -229,7 +229,7 @@ pub(crate) fn is_atomic_inline_level(
     !out_of_flow
         && matches!(
             display,
-            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
         )
 }
 
@@ -726,7 +726,11 @@ pub(crate) fn breaks_inline_row(b: &LayoutBox) -> bool {
     !matches!(b.origin.role, BoxRole::AnonymousInlineRun)
         && !matches!(
             b.style.display,
-            Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+            Display::Inline
+                | Display::InlineBlock
+                | Display::InlineFlex
+                | Display::InlineGrid
+                | Display::InlineTable
         )
 }
 
