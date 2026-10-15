@@ -31,6 +31,7 @@
 use lumen_layout::Color;
 use lumen_core::idn::{HostDisplay, SpoofReason, display_host};
 use lumen_core::url::Url;
+use lumen_core::url_display::{display_url, readable_url};
 
 // ── Визуальные константы ──────────────────────────────────────────────────────
 //
@@ -100,7 +101,7 @@ fn spoof_warning_message(reason: SpoofReason) -> &'static str {
 /// this never needs an "about:blank"/"Введите URL…" text fallback.
 pub(crate) fn chrome_omnibox_value(state: &AddressBarState, current_url: &str) -> (String, Option<&'static str>) {
     if !state.is_open() {
-        let (guarded, _) = guard_display_text(current_url);
+        let (guarded, _) = guard_display_text(&readable_url(current_url));
         return (guarded, None);
     }
     let display_input = match state.selected_idx() {
@@ -385,6 +386,10 @@ pub struct AddressBarState {
     /// Пользователь менял текст после `open()` (UX-FOCUS-ARBITER): набранное
     /// нельзя закрывать из-за событий страницы (конец загрузки).
     edited: bool,
+    /// Адрес, с которым открыт бар (UX-URL-COPY): в поле он показан читаемо
+    /// (`readable_url`), а Enter без правок должен уйти по исходной записи, а не
+    /// по раскодированной.
+    source_url: Option<String>,
 }
 
 impl AddressBarState {
@@ -394,7 +399,8 @@ impl AddressBarState {
     pub fn open(&mut self, current_url: &str) {
         self.open = true;
         self.edited = false;
-        self.input = current_url.to_owned();
+        self.input = readable_url(current_url);
+        self.source_url = Some(current_url.to_owned());
         self.anchor = 0;
         self.cursor = self.char_len();
         self.pending_commit = None;
@@ -405,6 +411,7 @@ impl AddressBarState {
     pub fn close(&mut self) {
         self.open = false;
         self.edited = false;
+        self.source_url = None;
         self.input.clear();
         self.cursor = 0;
         self.anchor = 0;
@@ -511,6 +518,27 @@ impl AddressBarState {
             self.anchor = self.cursor;
         }
         self.selected_idx = None;
+    }
+
+    /// Что кладётся в буфер по Ctrl+C / Ctrl+X: `None`, если ничего не выделено
+    /// (UX-URL-COPY). Выделен весь адрес — полный URL со схемой в читаемой записи
+    /// (`display_url`: кириллица без `%D0…`, омоглиф в хосте — Punycode); часть —
+    /// ровно видимая подстрока.
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection()?;
+        if start == 0 && end == self.char_len() {
+            return Some(display_url(&self.input).0);
+        }
+        Some(self.input[self.byte_at(start)..self.byte_at(end)].to_owned())
+    }
+
+    /// Ctrl+X: вырезать выделенное; возвращает то, что идёт в буфер.
+    pub fn cut_selection(&mut self) -> Option<String> {
+        let text = self.selected_text()?;
+        self.edited = true;
+        self.delete_selection();
+        self.selected_idx = None;
+        Some(text)
     }
 
     /// Вставить печатные символы на место выделения / в позицию каретки
@@ -666,7 +694,11 @@ impl AddressBarState {
         let value = if let Some(idx) = self.selected_idx {
             self.suggestions.get(idx).map(|s| s.commit_value().to_owned())
         } else if !self.input.is_empty() {
-            Some(self.input.clone())
+            // Без правок уходит исходный адрес: читаемая запись — только вид.
+            Some(match &self.source_url {
+                Some(src) if readable_url(src) == self.input => src.clone(),
+                _ => self.input.clone(),
+            })
         } else {
             None
         };
@@ -1380,5 +1412,102 @@ mod tests {
         s.select_next();
         s.commit();
         assert_eq!(s.take_commit(), Some("https://xn--pple-43d.com/".to_owned()));
+    }
+    // ── UX-URL-COPY ──────────────────────────────────────────────────────────
+
+    const ENC: &str = "https://site.ru/%D0%BD%D0%BE%D0%B2%D0%BE%D1%81%D1%82%D0%B8/%D1%91%D0%B6";
+
+    #[test]
+    fn open_shows_readable_address() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        assert_eq!(s.input(), "https://site.ru/новости/ёж");
+    }
+
+    #[test]
+    fn copy_whole_address_gives_full_readable_url() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        let text = s.selected_text().expect("open() выделяет адрес целиком");
+        assert_eq!(text, "https://site.ru/новости/ёж");
+        assert!(!text.contains("%D0"));
+    }
+
+    #[test]
+    fn copy_part_gives_visible_substring() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        s.set_cursor(16, false); // после «https://site.ru/»
+        s.set_cursor(26, true);
+        assert_eq!(s.selected_text().as_deref(), Some("новости/ёж"));
+    }
+
+    #[test]
+    fn copy_without_selection_is_none() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        s.move_end(false);
+        assert_eq!(s.selected_text(), None);
+    }
+
+    #[test]
+    fn copy_whole_address_with_homoglyph_gives_punycode() {
+        let mut s = AddressBarState::default();
+        s.open("https://аpple.com/login");
+        assert_eq!(s.selected_text().as_deref(), Some("https://xn--pple-43d.com/login"));
+    }
+
+    #[test]
+    fn copy_whole_typed_text_that_is_not_a_url_is_verbatim() {
+        let mut s = AddressBarState::default();
+        s.open("");
+        s.append_str("рецепт борща");
+        s.select_all();
+        assert_eq!(s.selected_text().as_deref(), Some("рецепт борща"));
+    }
+
+    #[test]
+    fn cut_removes_selection_and_returns_it() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        s.set_cursor(16, false);
+        s.set_cursor(26, true);
+        assert_eq!(s.cut_selection().as_deref(), Some("новости/ёж"));
+        assert_eq!(s.input(), "https://site.ru/");
+        assert!(s.is_edited());
+        assert_eq!(s.cut_selection(), None);
+    }
+
+    #[test]
+    fn paste_replaces_selection() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        s.append_str("vk.com
+");
+        assert_eq!(s.input(), "vk.com");
+    }
+
+    #[test]
+    fn enter_without_edits_navigates_to_original_encoding() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        s.commit();
+        assert_eq!(s.take_commit().as_deref(), Some(ENC));
+    }
+
+    #[test]
+    fn enter_after_edit_commits_the_edited_text() {
+        let mut s = AddressBarState::default();
+        s.open(ENC);
+        s.move_end(false);
+        s.append_str("/2");
+        s.commit();
+        assert_eq!(s.take_commit().as_deref(), Some("https://site.ru/новости/ёж/2"));
+    }
+
+    #[test]
+    fn closed_bar_shows_readable_address() {
+        let s = AddressBarState::default();
+        assert_eq!(chrome_omnibox_value(&s, ENC).0, "https://site.ru/новости/ёж");
     }
 }

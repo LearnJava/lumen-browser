@@ -38,6 +38,7 @@ pub mod spell;
 pub mod sri;
 pub mod trace;
 pub mod url;
+pub mod url_display;
 pub mod web_storage;
 
 pub use auth::{generate_token, tokens_match};
