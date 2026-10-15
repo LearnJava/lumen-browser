@@ -37,12 +37,13 @@ fn ru_header() -> String {
 }
 
 /// One-shot echo server: answers 200 and hands back the request head.
-fn echo_server() -> (u16, thread::JoinHandle<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().expect("addr").port();
+fn echo_server() -> Result<(u16, thread::JoinHandle<String>), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
     let handle = thread::spawn(move || {
-        let (mut sock, _) = listener.accept().expect("accept");
-        let mut reader = BufReader::new(sock.try_clone().expect("clone"));
+        let Ok((mut sock, _)) = listener.accept() else { return String::new() };
+        let Ok(clone) = sock.try_clone() else { return String::new() };
+        let mut reader = BufReader::new(clone);
         let mut head = String::new();
         loop {
             let mut line = String::new();
@@ -58,7 +59,7 @@ fn echo_server() -> (u16, thread::JoinHandle<String>) {
         let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
         head
     });
-    (port, handle)
+    Ok((port, handle))
 }
 
 #[test]
@@ -71,7 +72,7 @@ fn h1_request_on_the_wire_carries_the_shell_locale() {
     let _lock = ACCEPT_LANGUAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _clear = ClearOnDrop;
     set_global_accept_language(Some(ru_header()));
-    let (port, server) = echo_server();
+    let (port, server) = echo_server().expect("echo server");
     let url = Url::parse(&format!("http://127.0.0.1:{port}/")).expect("url");
     let page = HttpClient::new().fetch_page(&url, None, false).expect("navigation");
     assert_eq!(page.body, b"ok");
