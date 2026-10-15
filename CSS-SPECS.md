@@ -171,7 +171,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `display` | 🟡 | block/inline/none/flex/inline-flex/grid/inline-grid/inline-block/flow-root/contents/list-item; многословные формы (`inline flow-root`, `block ruby`, `list-item block`) и `math`/`ruby`/`grid-lanes`/`run-in` дают `block` (WPT-RUN-14 S21, 2026-10-08, [BUG-1476](bugs/BUG-1476-OPEN.md), [BUG-1467](bugs/BUG-1467-OPEN.md)) |
+| `display` | 🟡 | block/inline/none/flex/inline-flex/grid/inline-grid/inline-block/inline-table/flow-root/contents/list-item; многословные формы (`inline flow-root`, `block ruby`, `list-item block`) и `math`/`ruby`/`grid-lanes`/`run-in` дают `block` (WPT-RUN-14 S21, 2026-10-08, [BUG-1476](bugs/BUG-1476-OPEN.md), [BUG-1467](bugs/BUG-1467-OPEN.md)) |
 | `width` | ✅ | auto, px/em/%, calc/min/max/clamp |
 | `height` | ✅ | same as width |
 | `min-width` | ✅ | lengths, auto=None |

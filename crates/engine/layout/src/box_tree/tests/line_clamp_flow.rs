@@ -170,3 +170,34 @@ fn count_and_auto_clamp_to_the_earlier_limit() {
     assert!(!has(&html, "#c{line-clamp:3 auto}", "r4"));
     assert!(has(&html, "#c{line-clamp:3 auto}", "r3"));
 }
+
+fn table_cell(id: &str) -> String {
+    format!(
+        r#"<table id="{id}" style="display:inline-table;border-spacing:0"><tr><td style="padding:0;width:10px;height:10px"></td></tr></table>"#
+    )
+}
+
+#[test]
+fn inline_table_is_an_atomic_inline_in_the_row() {
+    // `display: inline-table` не рвёт ряд, как блочная `Table`: три таблицы через
+    // `<br>` — три ряда, line-clamp: 2 оставляет два.
+    let html = format!(
+        r#"<div id="c">{}<br>{}<br>{}</div><div id="after"></div>"#,
+        table_cell("t1"),
+        table_cell("t2"),
+        table_cell("t3")
+    );
+    let r = rects(&html, "#c{line-clamp:2}", &["c", "after"]);
+    assert_eq!((r[0].height, r[1].y), (20.0, 20.0), "{r:?}");
+    assert!(!has(&html, "#c{line-clamp:2}", "t3"));
+    assert!(has(&html, "#c{line-clamp:2}", "t2"));
+}
+
+#[test]
+fn inline_table_shares_a_line_with_its_siblings() {
+    let html = format!(r#"<div id="c">{}{}</div>"#, table_cell("t1"), table_cell("t2"));
+    let r = rects(&html, "", &["t1", "t2"]);
+    assert_eq!((r[0].y, r[1].y), (0.0, 0.0), "{r:?}");
+    assert_eq!(r[0].width, 10.0, "{r:?}");
+    assert!(r[1].x >= r[0].x + 10.0, "{r:?}");
+}
