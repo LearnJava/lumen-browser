@@ -625,33 +625,18 @@ impl Lumen {
             // `address_bar` state machine — no native `<input>` caret
             // exists (`crates/chrome/src/model.rs` only binds the
             // *value*), so it's hand-painted here, on top of the
-            // chrome document just painted above. Same simplified
-            // "flush right of the field" placement `build_inline_field`
-            // used for the old overlay caret (`address_bar.rs`) — not
-            // per-glyph-measured, and it never needed to be while
-            // `AddressBarState` only supports append/backspace at the
-            // end of the string. Hidden while a dropdown suggestion is
+            // chrome document just painted above, at the glyph gap under
+            // the state's caret (UX-OMNI-EDIT; also in an empty field).
+            // Hidden over a live selection (the highlight is appended
+            // after this segment) and while a dropdown suggestion is
             // selected, mirroring the same overlay behavior.
             //
             // BUG-405 срез 50: computed up front, not inside the build
             // branch below — it is part of `ChromeOverlayFrameCache`'s key
             // (a caret blink/selection change must miss the cache exactly
             // like a real `chrome_dl` change would).
-            let caret_plan = if self.address_bar.is_open()
-                && self.address_bar.selected_idx().is_none()
-                && !self.address_bar.input().is_empty()
-            {
-                self.chrome_omni_input_rect.map(|field| {
-                    (
-                        Rect::new(
-                            field.x + field.width - 8.0,
-                            field.y + 4.0,
-                            2.0,
-                            (field.height - 8.0).max(0.0),
-                        ),
-                        lumen_layout::Color { a: 220, ..pal.accent },
-                    )
-                })
+            let caret_plan = if self.address_bar.selection().is_none() {
+                self.omnibox_caret_rect().map(|rect| (rect, lumen_layout::Color { a: 220, ..pal.accent }))
             } else {
                 None
             };
@@ -689,6 +674,12 @@ impl Lumen {
                 (!chrome_overlay_digest_reuse_disabled()).then_some((framed.len(), digests));
             framed.append(&mut overlay_buf);
             overlay_buf = framed;
+        }
+        // UX-OMNI-EDIT: selection highlight over the address-bar text, above
+        // the chrome document (appended after the cached chrome segment, so
+        // `chrome_tail_digests` stays a valid prefix-block description).
+        if let Some(mut cmds) = self.omnibox_selection_overlay(&pal) {
+            overlay_buf.append(&mut cmds);
         }
         // UX-IME-3: address-bar preedit, painted above the chrome document.
         if let Some(mut cmds) = self.ime_omnibox_preedit_overlay(&pal) {

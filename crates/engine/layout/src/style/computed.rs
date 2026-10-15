@@ -613,6 +613,12 @@ pub struct ComputedStyle {
     /// both attributes at once, and BUG-736's row-direction flex case is
     /// gated on the CROSS axis (height) hint, not the main axis (width) one.
     pub height_is_intrinsic_hint: bool,
+    /// `width` задан UA-стилем нативного контрола (`apply_ua_form_controls`), а не автором:
+    /// grid `normal`/`stretch` растягивает такую ось как `auto` (BUG-1609). Авторское
+    /// `width` (в т.ч. `initial`/`inherit`) сбрасывает флаг, как `width_is_intrinsic_hint`.
+    pub width_is_ua_default: bool,
+    /// То же для `height`.
+    pub height_is_ua_default: bool,
     /// CSS Box Alignment L3 — alignment свойства для flex/grid items.
     /// Все не наследуются. Phase 0: parsing only.
     pub align_items: AlignValue,
@@ -1404,6 +1410,8 @@ impl ComputedStyle {
             aspect_ratio: None,
             width_is_intrinsic_hint: false,
             height_is_intrinsic_hint: false,
+            width_is_ua_default: false,
+            height_is_ua_default: false,
             align_items: AlignValue::Auto,
             align_self: AlignValue::Auto,
             align_content: AlignValue::Auto,
@@ -1791,6 +1799,8 @@ impl ComputedStyle {
             aspect_ratio: None,
             width_is_intrinsic_hint: false,
             height_is_intrinsic_hint: false,
+            width_is_ua_default: false,
+            height_is_ua_default: false,
             // Box Alignment — все не наследуются, default = Auto.
             align_items: AlignValue::Auto,
             align_self: AlignValue::Auto,

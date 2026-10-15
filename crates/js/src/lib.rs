@@ -9,6 +9,8 @@ pub mod background_sync;
 pub mod badging;
 pub mod periodic_sync;
 pub mod battery_bindings;
+pub mod chrome_input;
+pub mod popup_policy;
 pub mod css_properties_values_api;
 pub mod esm;
 pub mod import_attributes;

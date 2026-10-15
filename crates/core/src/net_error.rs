@@ -26,6 +26,11 @@ pub enum NetErrorCode {
     ConnectionClosed,
     /// Сеть или хост недостижимы (нет маршрута).
     AddressUnreachable,
+    /// У компьютера нет интернета вовсе: после сетевого сбоя ни один из
+    /// контрольных публичных адресов не принял соединение. Сеть сама такого
+    /// кода не отдаёт — его ставит оболочка по результату пробы
+    /// (`lumen_network::connectivity`), поэтому `classify` его не возвращает.
+    InternetDisconnected,
     /// Цепочка перенаправлений слишком длинная или без `Location`.
     TooManyRedirects,
     /// Ответ не разобрался как HTTP.
@@ -40,6 +45,13 @@ pub enum NetErrorCode {
     UnknownUrlScheme,
     /// Запрос заблокирован политикой браузера (CORS, CSP, перехватчик).
     BlockedByClient,
+    /// Сервер или прокси оборвал HTTP/2 по ошибке протокола (GOAWAY/RST_STREAM
+    /// с кодом, отличным от штатного завершения).
+    Http2ProtocolError,
+    /// Прокси не открыл туннель `CONNECT` (ответ не 2xx).
+    TunnelConnectionFailed,
+    /// Тело ответа не разжалось по `Content-Encoding` (gzip, deflate, br).
+    ContentDecodingFailed,
     /// Сервер ответил 5xx и не прислал тела: показывать нечего, кроме самого статуса.
     HttpStatus(u16),
     /// Причина не распознана.
@@ -57,6 +69,7 @@ impl NetErrorCode {
             Self::ConnectionReset => "ERR_CONNECTION_RESET",
             Self::ConnectionClosed => "ERR_CONNECTION_CLOSED",
             Self::AddressUnreachable => "ERR_ADDRESS_UNREACHABLE",
+            Self::InternetDisconnected => "ERR_INTERNET_DISCONNECTED",
             Self::TooManyRedirects => "ERR_TOO_MANY_REDIRECTS",
             Self::InvalidResponse => "ERR_INVALID_RESPONSE",
             Self::SslProtocolError => "ERR_SSL_PROTOCOL_ERROR",
@@ -64,9 +77,21 @@ impl NetErrorCode {
             Self::InvalidUrl => "ERR_INVALID_URL",
             Self::UnknownUrlScheme => "ERR_UNKNOWN_URL_SCHEME",
             Self::BlockedByClient => "ERR_BLOCKED_BY_CLIENT",
+            Self::Http2ProtocolError => "ERR_HTTP2_PROTOCOL_ERROR",
+            Self::TunnelConnectionFailed => "ERR_TUNNEL_CONNECTION_FAILED",
+            Self::ContentDecodingFailed => "ERR_CONTENT_DECODING_FAILED",
             Self::HttpStatus(_) => "ERR_HTTP_RESPONSE_CODE_FAILURE",
             Self::Failed => "ERR_FAILED",
         }
+    }
+
+    /// Мог ли сбой быть следствием отсутствия интернета: DNS не ответил,
+    /// ответ не пришёл или нет маршрута. Отказ в соединении, сброс и всё, что
+    /// случилось после установленного соединения, доказывают обратное — связь
+    /// была, и пробу запускать незачем.
+    #[must_use]
+    pub fn may_mean_offline(self) -> bool {
+        matches!(self, Self::NameNotResolved | Self::ConnectionTimedOut | Self::AddressUnreachable)
     }
 
     /// Код ошибки загрузки: типизированный `Error::NetFailure`, затем
@@ -144,7 +169,7 @@ impl NetErrorCode {
         if lower.contains("connection reset") {
             return Self::ConnectionReset;
         }
-        if lower.contains("eof") || lower.contains("connection abort") || lower.contains("broken pipe") {
+        if CLOSED_MARKERS.iter().any(|m| lower.contains(m)) {
             return Self::ConnectionClosed;
         }
         if lower.contains("no such file") || lower.contains("not found") || lower.contains("cannot find the") {
@@ -153,12 +178,27 @@ impl NetErrorCode {
         if lower.starts_with("connect ") {
             return Self::AddressUnreachable;
         }
-        if lower.contains("malformed") || lower.contains("invalid status") || lower.contains("invalid http") {
+        if INVALID_RESPONSE_MARKERS.iter().any(|m| lower.contains(m)) {
             return Self::InvalidResponse;
         }
         Self::Failed
     }
 }
+
+/// Слова текстов, в которых соединение закрыли до конца ответа: `EOF …` сетевого
+/// слоя и `Display` `io::Error` (`UnexpectedEof` — «failed to fill whole buffer»).
+const CLOSED_MARKERS: &[&str] = &[
+    "eof",
+    "end of file",
+    "fill whole buffer",
+    "connection closed",
+    "connection abort",
+    "broken pipe",
+];
+
+/// Слова текстов, в которых байты пришли, но не сложились в HTTP-ответ.
+const INVALID_RESPONSE_MARKERS: &[&str] =
+    &["malformed", "invalid status", "invalid http", "bad status line", "invalid chunk size", "missing :status"];
 
 /// Начало сообщения о пустом ответе 5xx — см. [`http_status_message`].
 const HTTP_STATUS_PREFIX: &str = "http status ";
@@ -205,6 +245,24 @@ mod tests {
     fn dns_failure_is_name_not_resolved() {
         assert_eq!(code("network error: resolve nope.invalid: failed (os error 11001)"), NetErrorCode::NameNotResolved);
         assert_eq!(code("resolve a.b: no addresses returned"), NetErrorCode::NameNotResolved);
+    }
+
+    #[test]
+    fn only_silent_failures_may_mean_no_internet() {
+        for c in [NetErrorCode::NameNotResolved, NetErrorCode::ConnectionTimedOut, NetErrorCode::AddressUnreachable] {
+            assert!(c.may_mean_offline(), "{c:?}");
+        }
+        for c in [
+            NetErrorCode::ConnectionRefused,
+            NetErrorCode::ConnectionReset,
+            NetErrorCode::SslProtocolError,
+            NetErrorCode::HttpStatus(503),
+            NetErrorCode::InternetDisconnected,
+            NetErrorCode::Failed,
+        ] {
+            assert!(!c.may_mean_offline(), "{c:?}");
+        }
+        assert_eq!(NetErrorCode::InternetDisconnected.name(), "ERR_INTERNET_DISCONNECTED");
     }
 
     #[test]
@@ -282,8 +340,23 @@ mod tests {
     }
 
     #[test]
+    fn net_io_prefers_the_io_code_over_the_fallback() {
+        use std::io::{Error as IoError, ErrorKind};
+        let reset = IoError::new(ErrorKind::ConnectionReset, "x");
+        let e = crate::error::Error::net_io("read body", &reset, NetErrorCode::InvalidResponse);
+        assert_eq!(NetErrorCode::of_error(&e), NetErrorCode::ConnectionReset);
+        let opaque = IoError::new(ErrorKind::InvalidData, "x");
+        let e = crate::error::Error::net_io("TLS handshake", &opaque, NetErrorCode::SslProtocolError);
+        assert_eq!(NetErrorCode::of_error(&e), NetErrorCode::SslProtocolError);
+        assert_eq!(e.to_string(), "network error: TLS handshake: x");
+    }
+
+    #[test]
     fn names_follow_chromium() {
         assert_eq!(NetErrorCode::NameNotResolved.name(), "ERR_NAME_NOT_RESOLVED");
         assert_eq!(NetErrorCode::Failed.name(), "ERR_FAILED");
+        assert_eq!(NetErrorCode::Http2ProtocolError.name(), "ERR_HTTP2_PROTOCOL_ERROR");
+        assert_eq!(NetErrorCode::TunnelConnectionFailed.name(), "ERR_TUNNEL_CONNECTION_FAILED");
+        assert_eq!(NetErrorCode::ContentDecodingFailed.name(), "ERR_CONTENT_DECODING_FAILED");
     }
 }

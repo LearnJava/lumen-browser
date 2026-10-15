@@ -311,6 +311,21 @@ window.open = function(url, target, features) {
   if (url !== '') {
     try { url = new URL(url, _lumen_loc_href).href; } catch (e) {}
   }
+  // UX-USER-ACTIVATION: a new browsing context needs a live user activation
+  // (HTML LS 6.4.3, popup blocking). The activation is consumed, so a second
+  // open() from the same gesture is blocked; a blocked call returns null (the
+  // shell lights the blocked-popup indicator). `_self` navigates the caller
+  // and is not a popup. Inert unless the shell turned the gate on and the
+  // site is not allowed to open popups.
+  if (target.toLowerCase() !== '_self' && typeof _lumen_gesture_required === 'function'
+      && _lumen_gesture_required(String(location.origin), 'popups')) {
+    if (typeof _lumen_user_activation_is_active === 'function' && _lumen_user_activation_is_active()) {
+      _lumen_consume_user_activation();
+    } else {
+      _lumen_popup_blocked(url, target);
+      return null;
+    }
+  }
   var token = _lumen_window_open(url, target, features);
   var href = url || 'about:blank';
   var stub = {

@@ -208,6 +208,11 @@ pub(crate) fn install_user_activation(
             consumed.store(false, Ordering::Relaxed);
         });
     }
+    // UX-FOCUS-ARBITER: `true` while the address bar holds the keyboard — the
+    // `autofocus` flush and a script's `element.focus()` read it and stay put.
+    reg!(scope, ctx, store, "_lumen_chrome_owns_keyboard", || -> bool {
+        crate::chrome_input::chrome_owns_keyboard()
+    });
     {
         let consumed = Arc::clone(&activation_consumed);
         reg!(scope, ctx, store, "_lumen_consume_user_activation", move || {
@@ -936,8 +941,29 @@ pub(crate) fn install_window_open(
                     }
                 }
                 let token = crate::window_messaging::alloc_token();
-                wor.lock().unwrap().push(PopupRequest { url, target, width, height, token, no_opener });
+                wor.lock().unwrap().push(PopupRequest { url, target, width, height, token, no_opener, blocked: false });
                 token
+            }
+        );
+    }
+    // UX-USER-ACTIVATION: `window.open()` without a live activation returned
+    // `null` in JS; this only reports the attempt, so the shell can light the
+    // blocked-popup indicator. `_lumen_gesture_required(origin, kind)` is the
+    // gate itself (`crate::popup_policy`): `true` when the call needs a gesture.
+    {
+        let wor = Arc::clone(&window_open_requests);
+        reg!(scope, ctx, store,
+            "_lumen_popup_blocked",
+            move |url: String, target: String| {
+                wor.lock().unwrap().push(PopupRequest {
+                    url, target, width: 0, height: 0, token: 0, no_opener: false, blocked: true,
+                });
+            }
+        );
+        reg!(scope, ctx, store,
+            "_lumen_gesture_required",
+            move |origin: String, kind: String| -> bool {
+                crate::popup_policy::gesture_required(&origin, &kind)
             }
         );
     }

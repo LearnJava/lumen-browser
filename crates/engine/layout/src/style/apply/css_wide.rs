@@ -576,11 +576,13 @@ fn apply_css_wide_keyword_with(
             // marker the same way an ordinary value does (see `layout.rs`'s
             // `"width"` arm).
             style.width_is_intrinsic_hint = false;
+            style.width_is_ua_default = false;
         }
         "height" => {
             style.height = if inh_only_inherit { inherited.height.clone() } else { init.height.clone() };
             // BUG-736: see the `"width"` arm above.
             style.height_is_intrinsic_hint = false;
+            style.height_is_ua_default = false;
         }
         // CSS Logical Properties L1 — inline-size / block-size.
         "inline-size" => style.inline_size = if inh_only_inherit { inherited.inline_size.clone() } else { init.inline_size.clone() },

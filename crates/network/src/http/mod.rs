@@ -5,7 +5,8 @@
 //! - HTTP/1.1 header casing matching Chrome
 //! - HTTP/2 SETTINGS frame values matching Chrome
 //! - HTTP/2 stream priority pattern matching Chrome
-//! - Accept-Language default value (`en-US,en;q=0.9`)
+//! - Accept-Language default value (`en-US,en;q=0.9`), replaceable by the shell
+//!   ([`accept_language`])
 //! - Client Hints handling per profile
 //!
 //! Per-profile HTTP configs:
@@ -15,10 +16,14 @@
 //!   Windows-uniform UA), so a Lumen "Tor mode" request matches genuine Tor
 //!   Browser traffic instead of presenting a unique minimal fingerprint
 
+pub mod accept_language;
 pub mod headers;
 pub mod h2_settings;
 pub mod client_hints;
 
+pub use accept_language::{
+    accept_language_header, expand_language_list, global_accept_language, set_global_accept_language,
+};
 pub use headers::{
     HttpProfile, HeaderOrder, build_request_headers, build_request_headers_for,
     h2_fingerprint_headers, sends_global_privacy_control,
@@ -65,7 +70,8 @@ pub fn profile_user_agent(profile: HttpProfile) -> &'static str {
     }
 }
 
-/// Default Accept-Language header (does not leak real locale).
+/// Default Accept-Language header (does not leak real locale). The shell
+/// replaces it with the user's locale via [`set_global_accept_language`].
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
 /// Chrome `Accept` header for a **top-level document navigation**.

@@ -269,11 +269,13 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .hbar-tabs{ flex:1; display:flex; gap:2px; overflow-x:auto; min-width:0; }
 .hbar-tab{
   display:flex; align-items:center; gap:6px; height:26px; padding:0 8px; border-radius:var(--radius-sm) var(--radius-sm) 0 0;
-  min-width:110px; max-width:200px; border-bottom:2px solid transparent; cursor:pointer;
+  flex:1 1 0; min-width:72px; max-width:200px; border-bottom:2px solid transparent; cursor:pointer;
 }
 .hbar-tab:hover{ background:var(--surface-2); }
 .hbar-tab.active{ background:var(--surface-2); border-bottom-color:var(--ws-color, var(--accent)); }
 .hbar-tab .tab-title{ font-size:11.5px; }
+.hbar-tab.active .tab-close, .hbar-tab:hover .tab-close{ display:flex; }
+.hbar-tab .tab-close{ font-size:14px; line-height:14px; }
 .hbar-add{ width:24px; height:24px; border-radius:var(--radius-sm); border:none; background:none; color:var(--text-secondary); flex:none; align-self:center; }
 .hbar-add:hover{ background:var(--surface-2); }
 
@@ -310,6 +312,9 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 /* UX-ZOOM: индикатор масштаба страницы; виден только при масштабе ≠ 100 %, клик сбрасывает. */
 .zoom-btn{ display:none; height:22px; padding:0 6px; border-radius:var(--radius-md); border:none; background:var(--accent-soft); color:var(--accent); font-size:11px; align-items:center; justify-content:center; }
 .zoom-btn.show{ display:flex; }
+/* UX-USER-ACTIVATION: страница пыталась открыть окно без жеста пользователя; клик открывает «Разрешения» с переключателем «Всплывающие окна». */
+.popup-btn{ display:none; height:22px; padding:0 6px; border-radius:var(--radius-md); border:none; background:var(--accent-soft); color:var(--accent); font-size:11px; align-items:center; justify-content:center; gap:4px; }
+.popup-btn.show{ display:flex; }
 
 .dropdown{
   position:absolute; top:38px; left:0; right:0; background:var(--surface-0); border:1px solid var(--stroke);
@@ -1240,6 +1245,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <input id="omniInput" type="text" placeholder="Поиск или адрес сайта… (попробуйте: аpple.com)" role="combobox" aria-autocomplete="list">
             <div class="omnibox-actions">
               <button class="zoom-btn" id="zoomBtn" data-action="zoom-reset" aria-label="Сбросить масштаб страницы"><span id="zoomLabel">100%</span></button>
+              <button class="popup-btn" id="popupBtn" data-action="toggle-shield-popover" aria-label="Всплывающее окно заблокировано"><svg class="icon"><use href="#i-ext"/></svg><span id="popupLabel">1</span></button>
               <button class="tb-btn" title="В закладки"><svg class="icon"><use href="#i-star"/></svg></button>
               <button class="tb-btn" id="shieldBtn" data-testid="shield-btn" data-action="toggle-shield-popover" aria-label="Экран приватности"><svg class="icon"><use href="#i-shield"/></svg></button>
             </div>
@@ -1317,6 +1323,14 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="perm-name">Буфер обмена</div>
               <div class="perm-actions">
                 <button class="perm-btn allow" title="Разрешить" data-action="set-permission" data-perm="allow">✓</button>
+                <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
+              </div>
+            </div>
+            <div class="perm-row">
+              <svg class="icon icon-lg" style="position:relative"><use href="#i-ext"/></svg>
+              <div class="perm-name">Всплывающие окна</div>
+              <div class="perm-actions">
+                <button class="perm-btn allow" title="Разрешить для сайта" data-action="set-permission" data-perm="allow">✓</button>
                 <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
               </div>
             </div>
@@ -1733,6 +1747,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <!-- Tab context menu (UX-CHROME-PANELS) -->
           <div class="tab-ctx" id="tabCtxMenu">
             <button class="tab-ctx-row" id="tabCtxDuplicate" data-tab-ctx="duplicate">Дублировать</button>
+            <button class="tab-ctx-row" id="tabCtxClose" data-tab-ctx="close">Закрыть</button>
             <button class="tab-ctx-row" id="tabCtxPin" data-tab-ctx="pin">Закрепить</button>
             <button class="tab-ctx-row" id="tabCtxNewWindow" data-tab-ctx="new-window">В новое окно</button>
             <button class="tab-ctx-row sep" id="tabCtxNewGroup" data-tab-ctx="new-group">В новую группу</button>

@@ -189,7 +189,7 @@ impl Lumen {
     pub(crate) fn page_keydown_cancelled(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
         if !self.js_present
             || self.focused_frame.is_some()
-            || is_reserved(code, self.modifiers)
+            || is_reserved(shortcut_code(code, key_event), self.modifiers)
             || self.field_dispatches_key_itself(code, key_event)
         {
             return false;
