@@ -298,6 +298,7 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            WindowEvent::Focused(focused) => self.set_window_focused(focused),
             WindowEvent::ModifiersChanged(new_mods) => {
                 self.modifiers = winit_modifiers_state(&new_mods);
             }

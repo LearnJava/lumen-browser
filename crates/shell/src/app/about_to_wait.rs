@@ -547,6 +547,11 @@ impl Lumen {
             let poll = std::time::Instant::now() + std::time::Duration::from_millis(4);
             next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
         }
+        // UX-CARET: wake exactly when the caret's blink phase flips (and
+        // repaint if it did); nothing is scheduled while the caret is solid.
+        if let Some(blink) = self.caret_next_wakeup() {
+            next_wakeup = Some(next_wakeup.map_or(blink, |t| t.min(blink)));
+        }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
             // BUG-271: no pending deadline — park the loop for real. Without

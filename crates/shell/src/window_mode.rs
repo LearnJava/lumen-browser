@@ -479,6 +479,8 @@ fn run_window_mode_inner(
         animation_events: Vec::new(),
         dark_mode: false,
         os_params_gen: platform::os_params::generation(),
+        caret_blink: crate::caret_blink::CaretBlink::new(std::time::Instant::now()),
+        window_focused: true,
         cursor_position: None,
         pending_pointer_moves: Vec::new(),
         hovered_nid: None,

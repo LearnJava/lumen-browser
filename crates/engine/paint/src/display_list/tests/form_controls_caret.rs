@@ -85,3 +85,24 @@ fn caret_color_auto_follows_text_color() {
     });
     assert_eq!(caret_color, Some(black), "caret-color:auto must follow the text color");
 }
+
+/// UX-CARET: the OS text-cursor thickness reaches the bar.
+#[test]
+fn caret_width_override_sets_bar_width() {
+    let (tree, node) = caret_fixture("abc");
+    let stacking_tree = StackingTree::build(&tree);
+    let order = PaintOrder::from_tree(&stacking_tree);
+
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        node,
+        CompositorOverride { caret: Some(1), caret_width: Some(3.5), ..Default::default() },
+    );
+    let frame = CompositorAnimFrame { overrides, has_active: false };
+    let dl = build_display_list_ordered_with_anim(&tree, &stacking_tree, &order, Some(&frame));
+
+    let wide = dl
+        .iter()
+        .any(|c| matches!(c, DisplayCommand::FillRect { rect, .. } if (rect.width - 3.5).abs() < 0.001));
+    assert!(wide, "caret_width = 3.5 must emit a 3.5-wide FillRect");
+}

@@ -28,6 +28,12 @@ impl Lumen {
         // UX-OSPARAMS: the OS settings changed since the last frame.
         self.apply_os_params_change();
 
+        // UX-CARET: this frame's blink phase and bar widths, decided once so
+        // the address bar, page fields and frame fields agree.
+        let caret_on = self.caret_frame_visible();
+        let page_caret_w = self.page_caret_width();
+        let chrome_caret_w = self.chrome_caret_width();
+
         // Диагностика кадра (LUMEN_FRAME_LOG=1): полное время
         // RedrawRequested (шаги 1–6). Paint-фаза отдельно логируется
         // бэкендом строкой `[frame] paint …`.
@@ -634,8 +640,11 @@ impl Lumen {
             // branch below — it is part of `ChromeOverlayFrameCache`'s key
             // (a caret blink/selection change must miss the cache exactly
             // like a real `chrome_dl` change would).
-            let caret_plan = if self.address_bar.selection().is_none() {
-                self.omnibox_caret_rect().map(|rect| (rect, lumen_layout::Color { a: 220, ..pal.accent }))
+            let caret_plan = if self.address_bar.selection().is_none() && caret_on {
+                self.omnibox_caret_rect().map(|rect| {
+                    let rect = lumen_core::geom::Rect { width: chrome_caret_w, ..rect };
+                    (rect, lumen_layout::Color { a: 220, ..pal.accent })
+                })
             } else {
                 None
             };
@@ -889,7 +898,7 @@ impl Lumen {
         // per-NodeId override map as CSS-animation offload. BUG-1108: all
         // focused-field paint reads the `try_lock` snapshot refreshed here.
         self.refresh_focused_field_snapshot();
-        let caret_override = self.focused_input_caret();
+        let caret_override = if caret_on { self.focused_input_caret() } else { None };
         let selection_override = self.focused_input_selection();
         let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let mut anim_dl: Option<lumen_paint::DisplayList> =
@@ -900,7 +909,9 @@ impl Lumen {
                     .map(|f| f.to_compositor_frame())
                     .unwrap_or_default();
                 if let Some((nid, cursor)) = caret_override {
-                    comp.overrides.entry(nid).or_default().caret = Some(cursor);
+                    let ov = comp.overrides.entry(nid).or_default();
+                    ov.caret = Some(cursor);
+                    ov.caret_width = Some(page_caret_w);
                 }
                 if let Some((nid, start, end)) = selection_override {
                     comp.overrides.entry(nid).or_default().selection = Some((start, end));
@@ -1237,7 +1248,8 @@ impl Lumen {
             }
         }
 
-        if let Some((nid, cursor, value)) = self.focused_textarea_caret()
+        if caret_on
+            && let Some((nid, cursor, value)) = self.focused_textarea_caret()
             && self.focused_textarea_selection().is_none()
             && let Some(lb) = self.layout_box.as_ref()
             && let Some(field_lb) = forms::find_layout_box(lb, nid)
@@ -1249,7 +1261,10 @@ impl Lumen {
                 use lumen_layout::TextMeasurer;
                 s.chars().map(|c| m.char_width(c, fs)).sum()
             };
-            let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
+            let rect = lumen_core::geom::Rect {
+                width: page_caret_w,
+                ..forms::textarea_caret_rect(field_lb, &value, cursor, &measure)
+            };
             // CSS UI L4 §6.3 `caret-color: auto` follows the text color —
             // same resolution `emit_input_caret` applies for `<input>`.
             let color = field_lb.style.used_caret_color();
@@ -1344,12 +1359,16 @@ impl Lumen {
             }
         }
         if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
+            && caret_on
             && let Some((fidx, nid, cursor, value)) = self.focused_frame_input_caret()
             && self.focused_frame_input_selection().is_none()
             && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
             && let Some((ox, oy)) = frames::frame_page_origin(&self.frames, fidx)
         {
-            let rect = forms::input_caret_rect(field_lb, &value, cursor);
+            let rect = lumen_core::geom::Rect {
+                width: page_caret_w,
+                ..forms::input_caret_rect(field_lb, &value, cursor)
+            };
             let color = field_lb.style.used_caret_color();
             let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
                 x: r.x + ox,
@@ -1429,6 +1448,7 @@ impl Lumen {
             }
         }
         if let Some(handle) = self.focused_frame.and_then(|(idx, _)| self.frames.get(idx))
+            && caret_on
             && let Some((fidx, nid, cursor, value)) = self.focused_frame_textarea_caret()
             && self.focused_frame_textarea_selection().is_none()
             && let Some(field_lb) = handle.layout.as_ref().and_then(|lb| forms::find_layout_box(lb, nid))
@@ -1441,7 +1461,10 @@ impl Lumen {
                 use lumen_layout::TextMeasurer;
                 s.chars().map(|c| m.char_width(c, fs)).sum()
             };
-            let rect = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
+            let rect = lumen_core::geom::Rect {
+                width: page_caret_w,
+                ..forms::textarea_caret_rect(field_lb, &value, cursor, &measure)
+            };
             let color = field_lb.style.used_caret_color();
             let translate = |r: lumen_core::geom::Rect| lumen_core::geom::Rect {
                 x: r.x + ox,
