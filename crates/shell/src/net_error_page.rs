@@ -104,6 +104,31 @@ fn texts(code: NetErrorCode, host: &str) -> (String, String, &'static [&'static 
             "Lumen не стал загружать эту страницу: её заблокировала политика безопасности или защита от трекеров.".into(),
             &["Если страница нужна, отключите защиту для этого сайта на значке щита."],
         ),
+        C::Http2ProtocolError => (
+            format!("Соединение с сайтом {host} оборвано по ошибке протокола"),
+            "Сервер (или промежуточный узел) закрыл соединение HTTP/2 с кодом ошибки, а не штатно.".into(),
+            &[
+                "Повторите загрузку: сбой часто разовый.",
+                "Если вы используете антивирус, VPN или прокси, попробуйте открыть сайт без них.",
+                "Если ошибка постоянная, откройте сайт в другом браузере.",
+            ],
+        ),
+        C::TunnelConnectionFailed => (
+            format!("Прокси не открыл соединение с сайтом {host}"),
+            "Прокси-сервер отказался передавать защищённое соединение к сайту.".into(),
+            &[
+                "Проверьте настройки прокси.",
+                "Попробуйте открыть сайт без прокси или через другой.",
+            ],
+        ),
+        C::ContentDecodingFailed => (
+            format!("Страница сайта {host} пришла повреждённой"),
+            "Ответ сервера заявлен как сжатый, но распаковать его не удалось.".into(),
+            &[
+                "Повторите загрузку: возможно, ответ повредился в пути.",
+                "Если ошибка постоянная, откройте сайт в другом браузере.",
+            ],
+        ),
         C::HttpStatus(status) => (
             format!("Сайт {host} не отдал страницу (HTTP {status})"),
             format!("Сервер сайта ответил кодом {status} ({}) и не прислал ни одной страницы.", status_meaning(status)),
@@ -298,6 +323,9 @@ mod tests {
             NetErrorCode::TooManyRedirects,
             NetErrorCode::InvalidResponse,
             NetErrorCode::SslProtocolError,
+            NetErrorCode::Http2ProtocolError,
+            NetErrorCode::TunnelConnectionFailed,
+            NetErrorCode::ContentDecodingFailed,
             NetErrorCode::FileNotFound,
             NetErrorCode::InvalidUrl,
             NetErrorCode::UnknownUrlScheme,

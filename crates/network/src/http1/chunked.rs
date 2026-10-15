@@ -235,11 +235,13 @@ impl<R: BufRead> Read for BodyReader<'_, R> {
 struct TeeReader<'a, R: Read> {
     inner: R,
     captured: &'a mut Vec<u8>,
+    /// Читающий сокет вернул ошибку: сбой декодера после этого — не битые данные.
+    failed: bool,
 }
 
 impl<R: Read> Read for TeeReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
+        let n = self.inner.read(buf).inspect_err(|_| self.failed = true)?;
         self.captured.extend_from_slice(&buf[..n]);
         Ok(n)
     }
@@ -360,8 +362,10 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
         let mut tee = TeeReader {
             inner: &mut body,
             captured: &mut raw,
+            failed: false,
         };
         let mut err = None;
+        let mut decode_err = None;
         {
             let mut dec: Box<dyn Read + '_> = match decode {
                 StreamDecode::Brotli => {
@@ -377,11 +381,19 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
                     Ok(0) => break,
                     Ok(n) => sink(&buf[..n], &headers),
                     Err(e) => {
-                        err = Some(read_failure("decode body", &e));
+                        decode_err = Some(e);
                         break;
                     }
                 }
             }
+        }
+        if let Some(e) = decode_err {
+            // Сбой чтения сокета под декодером — сетевая ошибка; иначе байты не разжались.
+            err = Some(if tee.failed {
+                read_failure("read body", &e)
+            } else {
+                Error::net_failure(NetErrorCode::ContentDecodingFailed, format!("decode body: {e}"))
+            });
         }
         // Дочитать остаток framed-тела (декодер мог остановиться на конце
         // brotli/gzip-потока раньше Content-Length), чтобы соединение было

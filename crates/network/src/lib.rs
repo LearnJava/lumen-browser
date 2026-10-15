@@ -1931,7 +1931,7 @@ fn fetch_single(
                 }
 
                 if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
-                    return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
+                    return Err(net_failure(NetErrorCode::TunnelConnectionFailed, format!("CONNECT tunnel failed: {}", status_line.trim())));
                 }
 
                 // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
