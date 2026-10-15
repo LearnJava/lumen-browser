@@ -927,6 +927,7 @@ impl Lumen {
             // legacy panels that used to show them.
             popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
             site_shields_on: self.shields.enabled_for_current(),
+            compat_fixes: u32::try_from(self.compat_applied.len()).unwrap_or(u32::MAX),
             palette,
             cert,
             shortcuts,
@@ -2014,6 +2015,17 @@ impl Lumen {
                 }
                 self.sync_adblock_filter();
                 self.relayout_chrome_host();
+            }
+            // COMPAT-PACK-IND: кнопки строки «К сайту применено N исправлений».
+            ChromeAction::CompatDetails => {
+                self.shields.visible = false;
+                self.permission.visible = false;
+                self.show_compat_page();
+            }
+            ChromeAction::CompatDisableReload => {
+                self.shields.visible = false;
+                self.permission.visible = false;
+                self.compat_disable_applied_and_reload();
             }
             ChromeAction::ToggleFingerprintMode => {
                 self.settings_panel.toggle_fingerprint_mode();

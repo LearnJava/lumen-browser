@@ -1463,6 +1463,9 @@ pub(crate) struct Lumen {
     /// (UX-USER-ACTIVATION). Non-empty lights `#popupBtn`; a navigation of
     /// the tab or an «allow» in the popover clears it.
     pub(crate) blocked_popups: std::collections::HashMap<usize, Vec<String>>,
+    /// Записи пакета совместимости, применённые к загруженной странице
+    /// (COMPAT-PACK-IND): считаются при каждой загрузке, питают индикатор в `#permPopover`.
+    pub(crate) compat_applied: Vec<crate::compat_indicator::AppliedFix>,
     /// On-disk permission store (`permissions.db`); `permission` uses it except
     /// while the Anonymous profile is active (see `sync_permission_store`).
     pub(crate) permissions_disk_store: Arc<lumen_storage::Permissions>,

@@ -729,6 +729,7 @@ fn run_window_mode_inner(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
         blocked_popups: std::collections::HashMap::new(),
+        compat_applied: Vec::new(),
         permissions_disk_store: permissions_store,
         external_browser_rules,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),

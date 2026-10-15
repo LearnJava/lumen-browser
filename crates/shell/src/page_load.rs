@@ -2505,6 +2505,8 @@ impl Lumen {
                 if host.is_empty() { None } else { Some(host.to_ascii_lowercase()) }
             });
             self.shields.clear_log();
+            // COMPAT-PACK-IND: правки пакета для нового хоста + по console.info на запись.
+            self.refresh_compat_applied(domain.as_deref());
             self.shields.set_domain(domain);
             // BUG-411: the new host may carry its own shields exception —
             // re-point the live filter at it.
