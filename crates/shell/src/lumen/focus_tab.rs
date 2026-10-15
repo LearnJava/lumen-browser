@@ -39,6 +39,14 @@ impl Lumen {
         let Some(next) = next else {
             return false;
         };
+        self.focus_page_node(next, forward)
+    }
+
+    /// Put page focus on `next` with the side effects a click has (restyle,
+    /// accessibility bridge, `document.activeElement`, `focus` events), and
+    /// continue into an `<iframe>` host's own order. Shared by Tab navigation
+    /// and `accesskey` activation. `false` iff `next` already had focus.
+    pub(crate) fn focus_page_node(&mut self, next: lumen_dom::NodeId, forward: bool) -> bool {
         if Some(next) == self.focused_node && self.focused_frame.is_none() {
             return false;
         }

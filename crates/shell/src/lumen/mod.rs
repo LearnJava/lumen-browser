@@ -8,6 +8,7 @@
 //! the visibility of methods called from outside their new home differ.
 
 mod a11y_media;
+mod accesskey;
 mod ai_answer;
 mod animated_computed_style;
 mod animation_events;

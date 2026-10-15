@@ -27,9 +27,13 @@ impl Lumen {
         // GAP-LAYOUTSHIFT: mark real user input for the CLS `had_input` flag
         // (Layout Instability L1 §3), same as `on_mouse_input`'s press branch.
         self.last_input_epoch_s = self.epoch.elapsed().as_secs_f32();
-        let PhysicalKey::Code(code) = key_event.physical_key else {
+        let PhysicalKey::Code(physical) = key_event.physical_key else {
             return;
         };
+        // UX-HOTKEYS-LAYOUT: every browser-side shortcut table below sees the
+        // Latin key of the active layout (physical position as the fallback);
+        // only the page-facing `keydown` keeps the physical key.
+        let code = shortcut_code(physical, key_event);
 
         // UX-DIALOGS: модальный диалог страницы забирает весь ввод.
         if self.handle_page_dialog_key(code, key_event, event_loop) {
@@ -307,7 +311,7 @@ impl Lumen {
         // UX-PAGE-KEYDOWN: from here on the key is the page's to see first. A
         // handler that cancels `keydown` stops every default action below —
         // scrolling, hint mode, caret movement, typing, Tab focus.
-        if self.page_keydown_cancelled(code, key_event) {
+        if self.page_keydown_cancelled(physical, key_event) {
             return;
         }
 
@@ -655,6 +659,11 @@ impl Lumen {
         }
 
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
+            // UX-HOTKEYS-LAYOUT: an Alt chord no browser command claims is the
+            // page's `accesskey`.
+            if !key_event.repeat {
+                self.activate_accesskey(physical, key_event);
+            }
             return;
         };
         // Scroll-команды разрешаем на repeat (auto-repeat при удержании),

@@ -81,6 +81,53 @@ fn build_focus_order(doc: &Document, flat_tree: &FlatTree, root: NodeId) -> Vec<
         .collect()
 }
 
+/// First element in tree order under `root` whose `accesskey` lists one of
+/// `chars` (HTML Standard §6.6.2: a space-separated list of single-character
+/// tokens, compared case-insensitively) and that can take focus — `hidden`
+/// subtrees and elements that are not focusable at all (a disabled control, a
+/// plain `<div>`) are skipped. `chars` is ordered best first: the first
+/// character with any matching element wins, so a page that declares
+/// `accesskey="ф"` beats the physical-position fallback `a`.
+pub(crate) fn find_accesskey_target(
+    doc: &Document,
+    flat_tree: &FlatTree,
+    root: NodeId,
+    chars: &[char],
+) -> Option<NodeId> {
+    let mut candidates: Vec<(NodeId, Vec<char>)> = Vec::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let node = doc.get(id);
+        if node.get_attr("hidden").is_some() {
+            continue;
+        }
+        if let Some(keys) = node.get_attr("accesskey") {
+            let focusable = sequential_tab_index(node).is_some()
+                || node.get_attr("tabindex").is_some_and(|v| v.trim().parse::<i32>().is_ok());
+            if focusable {
+                let tokens = keys
+                    .split_whitespace()
+                    .filter_map(|t| {
+                        let mut it = t.chars();
+                        let c = it.next()?;
+                        it.next().is_none().then(|| c.to_lowercase().next().unwrap_or(c))
+                    })
+                    .collect();
+                candidates.push((id, tokens));
+            }
+        }
+        for &child in flat_tree.children_of(doc, id).iter().rev() {
+            stack.push(child);
+        }
+    }
+    chars.iter().find_map(|c| {
+        candidates
+            .iter()
+            .find(|(_, tokens)| tokens.contains(c))
+            .map(|(id, _)| *id)
+    })
+}
+
 /// Next (`forward = true`) or previous (`forward = false`) node in `root`'s
 /// Tab order relative to `current`, wrapping around at either end.
 /// `current = None`, or a `current` no longer in the order (e.g. it left the
@@ -223,6 +270,49 @@ mod tests {
         assert_eq!(next_focus_target(&doc, &flat, doc.root(), Some(a), false), Some(c));
         assert_eq!(next_focus_target(&doc, &flat, doc.root(), None, true), Some(a));
         assert_eq!(next_focus_target(&doc, &flat, doc.root(), None, false), Some(c));
+    }
+
+    fn accesskey(html: &str, chars: &[char]) -> Option<String> {
+        let doc = parse(html);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        find_accesskey_target(&doc, &flat, doc.root(), chars)
+            .and_then(|id| doc.get(id).get_attr("id").map(str::to_owned))
+    }
+
+    #[test]
+    fn accesskey_matches_case_insensitively_and_in_tree_order() {
+        let html = "<body><a id=x href=/ accesskey=\"B A\">x</a><input id=y accesskey=a></body>";
+        assert_eq!(accesskey(html, &['a']).as_deref(), Some("x"));
+        assert_eq!(accesskey(html, &['b']).as_deref(), Some("x"));
+        assert_eq!(accesskey(html, &['c']), None);
+        assert_eq!(
+            accesskey("<body><input id=y accesskey=A></body>", &['a']).as_deref(),
+            Some("y")
+        );
+    }
+
+    #[test]
+    fn accesskey_prefers_the_earlier_candidate_character() {
+        let html = "<body><input id=lat accesskey=a><input id=cyr accesskey=\"ф\"></body>";
+        assert_eq!(accesskey(html, &['ф', 'a']).as_deref(), Some("cyr"));
+        assert_eq!(accesskey(html, &['я', 'a']).as_deref(), Some("lat"));
+    }
+
+    #[test]
+    fn accesskey_skips_hidden_disabled_and_unfocusable() {
+        assert_eq!(accesskey("<body><div id=d accesskey=a>x</div></body>", &['a']), None);
+        assert_eq!(accesskey("<body><button id=b accesskey=a disabled>x</button></body>", &['a']), None);
+        assert_eq!(
+            accesskey("<body><div hidden><input id=h accesskey=a></div><input id=v accesskey=a></body>", &['a'])
+                .as_deref(),
+            Some("v")
+        );
+        assert_eq!(
+            accesskey("<body><div id=t tabindex=-1 accesskey=a>x</div></body>", &['a']).as_deref(),
+            Some("t")
+        );
+        // A multi-character token is not a valid accesskey.
+        assert_eq!(accesskey("<body><input id=m accesskey=ab></body>", &['a']), None);
     }
 
     #[test]
