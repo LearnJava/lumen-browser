@@ -212,6 +212,14 @@ impl Lumen {
             return;
         }
 
+        // `about:compat` — the compat pack: every record, per-record off switch
+        // (COMPAT-PACK-PAGE). Its `?off=`/`?on=`/`?pack=` action links are only
+        // honoured by a click on that page itself (`apply_compat_link`).
+        if value.trim() == compat_page::COMPAT_URL {
+            self.show_compat_page();
+            return;
+        }
+
         // `about:newtab` — internal start page with a speed dial of pinned +
         // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {

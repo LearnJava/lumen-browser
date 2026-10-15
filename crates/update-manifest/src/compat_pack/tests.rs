@@ -267,3 +267,43 @@ fn embedded_base_copy_is_valid() {
     let base = CompatPack::parse_unsigned(raw.as_bytes(), &TestPsl).expect("base copy must validate");
     assert_eq!(CompatPack::base(&TestPsl), base);
 }
+
+#[test]
+fn policy_switches_off_one_record_or_the_whole_pack() {
+    let p = pack(vec![
+        entry("a-css", "a.com", css("x{}")),
+        entry("a-flag", "a.com", Action::EngineFlag { flag: "webkit-scrollbar".into() }),
+        entry("b-css", "b.com", css("y{}")),
+    ]);
+    let ids = |policy: &CompatPolicy, host: &str| -> Vec<String> {
+        p.active_entries_for_host(host, policy).iter().map(|e| e.id.clone()).collect()
+    };
+    let on = CompatPolicy::default();
+    assert_eq!(ids(&on, "www.a.com"), ["a-css", "a-flag"]);
+
+    // A record switched off applies nowhere; its neighbours are untouched.
+    let one_off = CompatPolicy { pack_off: false, disabled: vec!["a-css".into()] };
+    assert_eq!(ids(&one_off, "a.com"), ["a-flag"]);
+    assert_eq!(ids(&one_off, "b.com"), ["b-css"]);
+    assert!(!one_off.is_entry_on("a-css") && one_off.is_entry_on("b-css"));
+
+    // «Do not use the Lumen list»: nothing applies on any host.
+    let all_off = CompatPolicy { pack_off: true, disabled: Vec::new() };
+    assert!(ids(&all_off, "a.com").is_empty() && ids(&all_off, "b.com").is_empty());
+    assert!(!all_off.is_entry_on("b-css"));
+}
+
+#[test]
+fn action_kind_matches_wire_name() {
+    for (action, kind) in [
+        (css("x{}"), "css"),
+        (Action::HideBanner { selector: ".b".into(), text: "t".into() }, "hide_banner"),
+        (Action::Identity { profile: IdentityProfile::FirefoxWin }, "identity"),
+        (Action::KnownIssue { message: "m".into() }, "known_issue"),
+    ] {
+        assert_eq!(action.kind(), kind);
+        let json = serde_json::to_value(&action).unwrap();
+        assert_eq!(json["kind"], kind);
+        assert!(!action.summary().is_empty());
+    }
+}
