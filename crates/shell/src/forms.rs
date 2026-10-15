@@ -891,6 +891,65 @@ pub fn build_validation_tooltip(
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Password-field indicator (Caps Lock, layout)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const INDICATOR_FONT_SIZE: f32 = 12.0;
+const INDICATOR_PAD_X: f32 = 5.0;
+const INDICATOR_PAD_Y: f32 = 3.0;
+const INDICATOR_GAP: f32 = 4.0;
+
+/// Small browser-drawn badges (`⇪` Caps Lock, `RU` layout) hugging the top-right
+/// corner of a focused password field, one pill per entry of `labels`.
+///
+/// The badges sit **outside** the field, above its top edge, so they never cover
+/// the field's own text or the site's "show password" button that lives inside
+/// its right end; when the field is flush with the top of the viewport they go
+/// below it instead. Part of the browser overlay, hence invisible to scripts.
+/// `anchor` is in document coordinates, the result is viewport-fixed.
+pub fn build_input_indicator(anchor: Rect, labels: &[&str], scroll_y: f32, viewport_w: f32) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    if labels.is_empty() {
+        return out;
+    }
+    let h = INDICATOR_FONT_SIZE + INDICATOR_PAD_Y * 2.0;
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|l| l.chars().count() as f32 * 8.0 + INDICATOR_PAD_X * 2.0)
+        .collect();
+    let total = widths.iter().sum::<f32>() + INDICATOR_GAP * (labels.len() - 1) as f32;
+
+    let field_top = anchor.y - scroll_y;
+    let y = if field_top >= h + 2.0 { field_top - h - 2.0 } else { field_top + anchor.height + 2.0 };
+    let mut x = (anchor.x + anchor.width - total).min(viewport_w - total).max(0.0);
+
+    for (label, w) in labels.iter().zip(widths) {
+        let pill = Rect::new(x, y, w, h);
+        out.push(DisplayCommand::FillRect { rect: pill, color: Color { r: 45, g: 45, b: 48, a: 235 } });
+        out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: Rect::new(x + INDICATOR_PAD_X, y + INDICATOR_PAD_Y, w - INDICATOR_PAD_X * 2.0, INDICATOR_FONT_SIZE),
+            text: (*label).to_owned(),
+            font_size: INDICATOR_FONT_SIZE,
+            color: Color { r: 255, g: 255, b: 255, a: 255 },
+            font_family: vec![],
+            font_weight: FontWeight(600),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
+            highlight_name: None,
+            text_orientation: None,
+        });
+        x += w + INDICATOR_GAP;
+    }
+    out
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Form submission
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1927,6 +1986,56 @@ pub fn advance_month(year: i32, month: u8, delta: i32) -> (i32, u8) {
 mod tests {
     use super::*;
     use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
+
+    fn indicator_pills(dl: &DisplayList) -> Vec<Rect> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn indicator_without_labels_draws_nothing() {
+        assert!(build_input_indicator(Rect::new(10.0, 100.0, 200.0, 30.0), &[], 0.0, 800.0).is_empty());
+    }
+
+    #[test]
+    fn indicator_sits_above_the_field_at_its_right_edge() {
+        let field = Rect::new(10.0, 100.0, 200.0, 30.0);
+        let dl = build_input_indicator(field, &["\u{21ea}"], 0.0, 800.0);
+        let pills = indicator_pills(&dl);
+        assert_eq!(pills.len(), 1);
+        let p = pills[0];
+        assert!(p.y + p.height <= field.y, "outside the field, above it: {p:?}");
+        assert!((p.x + p.width - (field.x + field.width)).abs() < 0.01, "right-aligned: {p:?}");
+        assert!(dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "\u{21ea}")));
+    }
+
+    #[test]
+    fn indicator_goes_below_when_the_field_touches_the_viewport_top() {
+        let field = Rect::new(10.0, 100.0, 200.0, 30.0);
+        // Scrolled so the field's top is at viewport y = 4: no room above.
+        let pills = indicator_pills(&build_input_indicator(field, &["RU"], 96.0, 800.0));
+        assert!(pills[0].y >= 4.0 + field.height, "{:?}", pills[0]);
+    }
+
+    #[test]
+    fn indicator_pills_do_not_overlap_and_stay_in_the_viewport() {
+        let field = Rect::new(700.0, 100.0, 200.0, 30.0);
+        let pills = indicator_pills(&build_input_indicator(field, &["\u{21ea}", "RU"], 0.0, 800.0));
+        assert_eq!(pills.len(), 2);
+        assert!(pills[0].x + pills[0].width <= pills[1].x, "{pills:?}");
+        assert!(pills[1].x + pills[1].width <= 800.0 + 0.01, "{pills:?}");
+    }
+
+    #[test]
+    fn caps_lock_glyph_exists_in_the_ui_font() {
+        let font = lumen_font::Font::parse(crate::assets::INTER_FONT).unwrap();
+        let gid = font.cmap().unwrap().glyph_index(0x21ea);
+        assert!(gid.is_some_and(|g| g != 0), "U+21EA missing from Inter: the badge would draw a box");
+    }
     use lumen_layout::{ComputedStyle, DirtyBits};
 
     fn make_submit_doc() -> (Document, NodeId) {

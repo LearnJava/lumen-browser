@@ -772,8 +772,18 @@ impl Lumen {
             bmarks[1] = t0.elapsed().as_secs_f64() * 1e3;
         }
 
+        // BUG-1108: every focused-field read below (indicator, caret, selection,
+        // squiggles) goes through this `try_lock` snapshot, refreshed once here.
+        self.refresh_focused_field_snapshot();
         // Forms: validation tooltip and color picker overlays.
         let vp_w = self.viewport_width_css();
+        // UX-CAPSLOCK: Caps Lock / layout badges over a focused password field.
+        // Browser overlay, not page content: scripts never see it.
+        if let Some((anchor, labels)) = self.secret_field_indicator() {
+            let mut badges = forms::build_input_indicator(anchor, &labels, self.scroll_y, vp_w);
+            badges.append(&mut overlay_buf);
+            overlay_buf = badges;
+        }
         if let Some((anchor, msg)) = &self.validation_tooltip {
             let mut tt = forms::build_validation_tooltip(
                 *anchor, msg, self.scroll_y, vp_w,
@@ -909,7 +919,6 @@ impl Lumen {
         // FRAME-7: the focused `<input>`'s caret and selection ride the same
         // per-NodeId override map as CSS-animation offload. BUG-1108: all
         // focused-field paint reads the `try_lock` snapshot refreshed here.
-        self.refresh_focused_field_snapshot();
         let caret_override = if caret_on { self.focused_input_caret() } else { None };
         let selection_override = self.focused_input_selection();
         let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();

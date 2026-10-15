@@ -21,6 +21,11 @@ impl Lumen {
         if key_event.state == ElementState::Pressed {
             self.caret_restart();
         }
+        // UX-CAPSLOCK: a Caps Lock press or an Alt+Shift layout switch changes the
+        // badges over a focused password field; repaint now, not at the next blink.
+        if self.focused_node.is_some_and(|nid| self.focused_field_snapshot.secret(nid)) {
+            self.request_redraw();
+        }
         if key_event.state != ElementState::Pressed {
             // UX-PAGE-KEYDOWN: a key the page saw go down owes it the `keyup`.
             if let PhysicalKey::Code(code) = key_event.physical_key {

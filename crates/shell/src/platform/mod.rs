@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod dark_mode;
 pub mod display_color_profile;
 pub mod file_dialog;
+pub mod keyboard_state;
 pub mod os_params;
 pub mod screen_capture;
 pub mod video_audio_sink;
