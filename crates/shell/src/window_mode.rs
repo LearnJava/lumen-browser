@@ -31,6 +31,13 @@ pub(crate) fn run_window_mode(
 ) -> ExitCode {
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
+    // UX-OSPARAMS: a deterministic run (golden dumps, graphic tests) ignores the
+    // machine's input/accessibility settings, so they cannot move a pixel.
+    if deterministic.enabled {
+        platform::os_params::freeze_defaults();
+    }
+    // Load the registry now so `os_params_gen` below starts from its real value.
+    let _ = platform::os_params::current();
     let mut event_loop_builder = EventLoop::<LoadEvent>::with_user_event();
     // BUG-1027: на Unix (кроме macOS) `main()` уводит всю работу на поток
     // `lumen-main` со 128 МиБ стека — иначе рекурсивные по глубине DOM обходы
@@ -460,6 +467,7 @@ fn run_window_mode_inner(
         transition_events: Vec::new(),
         animation_events: Vec::new(),
         dark_mode: false,
+        os_params_gen: platform::os_params::generation(),
         cursor_position: None,
         pending_pointer_moves: Vec::new(),
         hovered_nid: None,

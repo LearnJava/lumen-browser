@@ -1509,7 +1509,7 @@ impl Lumen {
                 let (vw, vh) = (viewport.width, viewport.height);
                 let zoom_factor = self.zoom_factor;
                 let dark_mode = self.dark_mode;
-                let reduced_motion = self.a11y_store.reduced_motion();
+                let reduced_motion = self.effective_reduced_motion();
                 let forced_colors_pref = self.a11y_store.forced_colors();
                 // CSSOM-7 (BUG-977): push the live cascade alongside the rest
                 // of this snapshot, same `Arc` `apply_relayout_result` already
