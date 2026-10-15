@@ -102,6 +102,12 @@ pub struct TabStrip {
     pub groups: Vec<TabGroup>,
     /// Counter for generating fresh `TabGroup::id` values.
     pub(crate) next_group_id: usize,
+    /// UX-LINK-CLICKS: цепочка вкладок, открытых ссылками из одной вкладки —
+    /// `(id вкладки-родителя, id последней вставленной)`. Следующая вкладка
+    /// ложится сразу за последней, поэтому три Ctrl+клика из C дают `C 1 2 3`.
+    /// Цепочка действует, пока родитель остаётся активным: переключение на
+    /// другую вкладку её обрывает (см. [`TabStrip::push_link_child`]).
+    pub(crate) link_chain: Option<(usize, usize)>,
 }
 
 impl TabStrip {
@@ -123,6 +129,7 @@ impl TabStrip {
             next_id: 1,
             groups: Vec::new(),
             next_group_id: 0,
+            link_chain: None,
         }
     }
 
@@ -174,6 +181,69 @@ impl TabStrip {
             adblock: false,
         });
         self.tabs.len() - 1
+    }
+
+    /// Вставляет пустую вкладку, открытую ссылкой из вкладки `opener_id`, и
+    /// возвращает её индекс (UX-LINK-CLICKS).
+    ///
+    /// Место — сразу правее родителя, а для второй и следующих вкладок из той
+    /// же цепочки — правее предыдущей порождённой (порядок щелчков сохраняется).
+    /// Группа наследуется от родителя. `active` сдвигается, если вставка
+    /// произошла левее него. Родитель, которого уже нет, — вставка в конец.
+    pub fn push_link_child(&mut self, opener_id: usize, now_ms: f64) -> usize {
+        let opener_idx = self.tabs.iter().position(|t| t.id == opener_id);
+        let chain_ok = self.tabs.get(self.active).is_some_and(|t| t.id == opener_id);
+        let after = match (self.link_chain, chain_ok) {
+            (Some((o, last)), true) if o == opener_id => {
+                self.tabs.iter().position(|t| t.id == last).or(opener_idx)
+            }
+            _ => opener_idx,
+        };
+        let id = self.next_id;
+        self.next_id += 1;
+        let group_id = opener_idx.and_then(|i| self.tabs[i].group_id);
+        let entry = TabEntry {
+            id,
+            title: "Новая вкладка".to_owned(),
+            tab_state: TabState::Active,
+            opener_id: Some(opener_id),
+            container: ContainerKind::None,
+            last_activated_ms: now_ms,
+            pinned: false,
+            group_id,
+            adblock: false,
+        };
+        let at = after.map_or(self.tabs.len(), |i| i + 1);
+        self.tabs.insert(at, entry);
+        if at <= self.active {
+            self.active += 1;
+        }
+        self.link_chain = Some((opener_id, id));
+        at
+    }
+
+    /// Id вкладки, которая станет активной после закрытия вкладки `idx`
+    /// (UX-LINK-CLICKS): ребёнок → сестра (общий родитель; правая, иначе
+    /// левая) → родитель → правый сосед → левый сосед. `None`, если вкладка
+    /// единственная.
+    pub fn successor_id(&self, idx: usize) -> Option<usize> {
+        let closing = self.tabs.get(idx)?;
+        let child = self.tabs.iter().position(|t| t.opener_id == Some(closing.id));
+        let sibling = closing.opener_id.and_then(|o| {
+            let same = |t: &TabEntry| t.opener_id == Some(o);
+            let right = (idx + 1..self.tabs.len()).find(|&i| same(&self.tabs[i]));
+            right.or_else(|| (0..idx).rev().find(|&i| same(&self.tabs[i])))
+        });
+        let parent = closing
+            .opener_id
+            .and_then(|o| self.tabs.iter().position(|t| t.id == o));
+        let right = (idx + 1 < self.tabs.len()).then_some(idx + 1);
+        let left = idx.checked_sub(1);
+        [child, sibling, parent, right, left]
+            .into_iter()
+            .flatten()
+            .find(|&i| i != idx)
+            .map(|i| self.tabs[i].id)
     }
 
     /// Record `now_ms` as the activation timestamp for the tab at `idx`.
@@ -993,4 +1063,86 @@ mod tests {
         assert_eq!(s.group_of(new_idx), Some(g));
     }
 
+    /// Ids вкладок в порядке полосы.
+    fn tab_ids(s: &TabStrip) -> Vec<usize> {
+        s.tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn link_children_chain_right_of_parent() {
+        // UX-LINK-CLICKS приёмка: 3 Ctrl+клика из C → C 1 2 3, активна C.
+        let mut s = strip_with_n(3); // 0 1 2
+        s.active = 1;
+        let c = s.tabs[1].id;
+        for _ in 0..3 {
+            s.push_link_child(c, 0.0);
+        }
+        assert_eq!(tab_ids(&s), vec![0, 1, 3, 4, 5, 2]);
+        assert_eq!(s.active, 1, "родитель остаётся активным");
+        assert!(s.tabs[2..5].iter().all(|t| t.opener_id == Some(c)));
+    }
+
+    #[test]
+    fn link_child_before_active_shifts_active() {
+        let mut s = strip_with_n(3);
+        s.active = 2;
+        let first = s.tabs[0].id;
+        s.push_link_child(first, 0.0);
+        assert_eq!(s.active, 3, "вставка левее активной сдвигает индекс");
+        assert_eq!(s.tabs[s.active].id, 2);
+    }
+
+    #[test]
+    fn link_chain_restarts_after_break() {
+        let mut s = strip_with_n(2); // 0 1
+        let c = s.tabs[0].id;
+        s.push_link_child(c, 0.0); // 0 2 1
+        s.push_link_child(c, 0.0); // 0 2 3 1
+        assert_eq!(tab_ids(&s), vec![0, 2, 3, 1]);
+        // Переключение вкладки (`switch_tab`) обрывает цепочку: следующая
+        // вкладка снова встаёт сразу за родителем.
+        s.link_chain = None;
+        s.push_link_child(c, 0.0);
+        assert_eq!(tab_ids(&s), vec![0, 4, 2, 3, 1]);
+    }
+
+    #[test]
+    fn link_group_is_inherited() {
+        let mut s = strip_with_n(2);
+        let g = s.create_group("G", GroupColor::Blue);
+        s.assign_to_group(0, g);
+        let idx = s.push_link_child(s.tabs[0].id, 0.0);
+        assert_eq!(s.group_of(idx), Some(g));
+    }
+
+    #[test]
+    fn successor_prefers_child_then_sibling_then_parent() {
+        let mut s = strip_with_n(3); // 0 1 2
+        s.active = 1;
+        let c = s.tabs[1].id;
+        for _ in 0..3 {
+            s.push_link_child(c, 0.0);
+        }
+        // 0 1(C) 3 4 5 2. Закрываем сестру 4: правая сестра 5.
+        assert_eq!(s.successor_id(3), Some(5));
+        // Последняя сестра 5: правой нет → левая 4.
+        assert_eq!(s.successor_id(4), Some(4));
+        // У C есть ребёнок → первый ребёнок.
+        assert_eq!(s.successor_id(1), Some(3));
+        // Единственный ребёнок без сестёр → родитель.
+        let mut t = strip_with_n(3);
+        let p = t.tabs[1].id;
+        t.active = 1;
+        t.push_link_child(p, 0.0); // 0 1 3 2
+        assert_eq!(t.successor_id(2), Some(p));
+    }
+
+    #[test]
+    fn successor_without_relations_is_right_then_left() {
+        let s = strip_with_n(3);
+        assert_eq!(s.successor_id(0), Some(1));
+        assert_eq!(s.successor_id(1), Some(2));
+        assert_eq!(s.successor_id(2), Some(1));
+        assert_eq!(TabStrip::new().successor_id(0), None);
+    }
 }

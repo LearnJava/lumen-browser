@@ -47,6 +47,7 @@ use lumen_core::url::Url;
 mod auth;
 mod bad_port;
 pub mod captive;
+pub mod connectivity;
 
 /// Биндит эфемерный TCP-порт, перебирая кандидатов у ОС, пока не получит
 /// порт вне списка «bad ports» Fetch §3.9 (`bad_port::is_bad_port`).
@@ -1441,7 +1442,7 @@ fn connect_inner(
     }
 
     let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+        .map_err(|e| net_failure(NetErrorCode::InvalidUrl, format!("invalid hostname '{host}': {e}")))?;
 
     let config = if force_h1 {
         tls_config_h1_for_profile(tls_profile)
@@ -1449,7 +1450,7 @@ fn connect_inner(
         tls_config_for_profile(tls_profile)
     };
     let mut conn = ClientConnection::new(config, server_name)
-        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+        .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("TLS handshake: {e}")))?;
 
     // BUG-935 (S9): callers that want an unbounded post-connect read (WS/SSE,
     // which pass `read_timeout: None` so the long-lived body can idle
@@ -1599,7 +1600,7 @@ pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::Cl
 fn handshake_io_error(context: &str, e: std::io::Error) -> Error {
     match tls::cert_error::from_io_error(&e) {
         Some(cert_err) => Error::CertInvalid(cert_err),
-        None => Error::Network(format!("{context}: {e}")),
+        None => Error::net_io(context, &e, NetErrorCode::SslProtocolError),
     }
 }
 
@@ -1610,10 +1611,10 @@ fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<bool> {
     match alpn {
         None | Some(b"http/1.1") => Ok(false),
         Some(b"h2") => Ok(true),
-        Some(other) => Err(Error::Network(format!(
-            "unexpected ALPN protocol: {:?}",
-            String::from_utf8_lossy(other),
-        ))),
+        Some(other) => Err(net_failure(
+            NetErrorCode::SslProtocolError,
+            format!("unexpected ALPN protocol: {:?}", String::from_utf8_lossy(other)),
+        )),
     }
 }
 
@@ -1917,28 +1918,28 @@ fn fetch_single(
                 let full_request = format!("{}{}\r\n", connect_request, auth_header);
 
                 stream.write_all(full_request.as_bytes())
-                    .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
+                    .map_err(|e| http1::write_failure("write CONNECT request", &e))?;
                 stream.flush()
-                    .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
+                    .map_err(|e| http1::write_failure("flush CONNECT request", &e))?;
 
                 // Читаем ответ на CONNECT (должен быть 200 OK).
                 let mut reader = BufReader::new(stream);
                 let mut status_line = String::new();
                 let n = reader.read_line(&mut status_line)
-                    .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
+                    .map_err(|e| http1::read_failure("read CONNECT status", &e))?;
                 if n == 0 {
-                    return Err(Error::Network("EOF before CONNECT status line".to_owned()));
+                    return Err(net_failure(NetErrorCode::ConnectionClosed, "EOF before CONNECT status line".to_owned()));
                 }
 
                 if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
-                    return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
+                    return Err(net_failure(NetErrorCode::TunnelConnectionFailed, format!("CONNECT tunnel failed: {}", status_line.trim())));
                 }
 
                 // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
                 loop {
                     let mut line = String::new();
                     let n = reader.read_line(&mut line)
-                        .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
+                        .map_err(|e| http1::read_failure("read CONNECT header", &e))?;
                     if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
                         break;
                     }
@@ -1954,11 +1955,11 @@ fn fetch_single(
                 };
 
                 let server_name = ServerName::try_from(host.to_owned())
-                    .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+                    .map_err(|e| net_failure(NetErrorCode::InvalidUrl, format!("invalid hostname '{host}': {e}")))?;
 
                 let tls_config = tls_config_for_profile(tls_profile);
                 let mut tls_conn = ClientConnection::new(tls_config, server_name)
-                    .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+                    .map_err(|e| net_failure(NetErrorCode::SslProtocolError, format!("TLS handshake: {e}")))?;
 
                 let mut tcp_copy = tcp;
                 tls_conn.complete_io(&mut tcp_copy)
@@ -3252,6 +3253,9 @@ pub struct HttpClient {
     cors_cache: Option<Arc<cors::PreflightCache>>,
     /// RFC 7234 response cache. Optional — without it every request goes to the network.
     http_cache: Option<Arc<dyn http_cache::HttpCacheBackend>>,
+    /// Hard reload (Ctrl+F5): the cache is not read, requests carry
+    /// `Cache-Control: no-cache` + `Pragma: no-cache`; responses still update the cache.
+    cache_bypass: bool,
     /// RFC 6265 cookie jar. Injects `Cookie:` headers and persists `Set-Cookie:` responses.
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
@@ -3408,6 +3412,7 @@ impl HttpClient {
             mixed_content: None,
             cors_cache: None,
             http_cache: None,
+            cache_bypass: false,
             cookie_jar: None,
             top_level_site: None,
             fingerprint_profile: HttpProfile::Chrome,
@@ -3451,9 +3456,33 @@ impl HttpClient {
         self
     }
 
+    /// Hard reload: skip reading the HTTP cache and ask the origin (and any
+    /// intermediary) for a fresh copy with `Cache-Control: no-cache` +
+    /// `Pragma: no-cache`, as Chrome does on Ctrl+F5 / Shift+F5. Fresh
+    /// responses still replace the cache entry.
+    #[must_use]
+    pub fn with_cache_bypass(mut self, bypass: bool) -> Self {
+        self.cache_bypass = bypass;
+        self
+    }
+
+    /// Request lines of a hard reload (empty otherwise). They land in
+    /// `extra_headers`, which replaces the profile's default `Cache-Control`.
+    fn cache_bypass_headers(&self) -> &'static str {
+        if self.cache_bypass { "Cache-Control: no-cache\r\nPragma: no-cache\r\n" } else { "" }
+    }
+
+    /// Cache entry for `url`, unless this client is doing a hard reload.
+    fn cache_lookup(&self, url: &str) -> Option<http_cache::CacheEntrySnapshot> {
+        if self.cache_bypass {
+            return None;
+        }
+        self.http_cache.as_ref()?.get(url)
+    }
+
     /// `Upgrade-Insecure-Requests` + `Referer` lines of a top-level navigation.
     fn navigation_extra_headers(&self, send_uir_header: bool) -> String {
-        let mut h = String::new();
+        let mut h = String::from(self.cache_bypass_headers());
         if send_uir_header {
             h.push_str("Upgrade-Insecure-Requests: 1\r\n");
         }
@@ -4322,7 +4351,7 @@ impl HttpClient {
 
         // HTTP cache check (RFC 7234).
         if let Some(cache) = &self.http_cache
-            && let Some(snap) = cache.get(&url_str)
+            && let Some(snap) = self.cache_lookup(&url_str)
         {
             if snap.is_fresh {
                 self.emit_resource_timing(
@@ -4407,7 +4436,7 @@ impl HttpClient {
             }
         }
 
-        let extra_headers = format!("{uir_header}{referer_header}");
+        let extra_headers = format!("{}{uir_header}{referer_header}", self.cache_bypass_headers());
         let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
@@ -4645,7 +4674,7 @@ impl HttpClient {
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         if req_body.is_none()
             && let Some(cache) = &self.http_cache
-            && let Some(snap) = cache.get(&url_str)
+            && let Some(snap) = self.cache_lookup(&url_str)
         {
             if snap.is_fresh {
                 return Ok(PageResponse {
@@ -4768,7 +4797,7 @@ impl HttpClient {
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         if req_body.is_none()
             && let Some(cache) = &self.http_cache
-            && let Some(snap) = cache.get(&url_str)
+            && let Some(snap) = self.cache_lookup(&url_str)
         {
             if snap.is_fresh {
                 on_chunk(&snap.body, url, &snap.headers);
@@ -4871,7 +4900,7 @@ impl NetworkTransport for HttpClient {
 
         // HTTP cache check (RFC 7234).
         if let Some(cache) = &self.http_cache
-            && let Some(snap) = cache.get(&url_str)
+            && let Some(snap) = self.cache_lookup(&url_str)
         {
             if snap.is_fresh {
                 return Ok(snap.body);
@@ -4939,7 +4968,7 @@ impl NetworkTransport for HttpClient {
             self.mixed_content.as_ref(),
             destination,
             None,
-            "",
+            self.cache_bypass_headers(),
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.document_host(),
@@ -8783,8 +8812,11 @@ mod tests {
     fn handshake_io_error_falls_back_to_network_for_non_cert_failure() {
         let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls::Error::DecryptError);
         match handshake_io_error("TLS handshake", io_err) {
-            Error::Network(msg) => assert!(msg.starts_with("TLS handshake: ")),
-            other => panic!("expected Error::Network, got {other:?}"),
+            Error::NetFailure { code, message } => {
+                assert!(message.starts_with("TLS handshake: "));
+                assert_eq!(code, NetErrorCode::SslProtocolError);
+            }
+            other => panic!("expected Error::NetFailure, got {other:?}"),
         }
     }
 
@@ -13130,6 +13162,95 @@ mod http_cache_tests {
         assert_eq!(body2, b"body");
 
         server.join().unwrap();
+    }
+
+    /// Server that answers once and hands back the raw request head.
+    fn recording_server(response: &'static [u8]) -> (u16, Arc<std::sync::Mutex<String>>, thread::JoinHandle<()>) {
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let head = Arc::new(std::sync::Mutex::new(String::new()));
+        let head_w = Arc::clone(&head);
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 { break; }
+                if line == "\r\n" || line == "\n" { break; }
+                head_w.lock().unwrap().push_str(&line);
+            }
+            let _ = sock.write_all(response);
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+        (port, head, handle)
+    }
+
+    const FRESH_CACHE_HEADERS: &[(&str, &str)] = &[("Cache-Control", "max-age=3600")];
+
+    fn cache_with_fresh_entry(url: &str) -> Arc<http_cache::HttpCache> {
+        let cache = Arc::new(http_cache::HttpCache::new());
+        let headers: Vec<(String, String)> = FRESH_CACHE_HEADERS
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        cache.store(url, 200, b"stale".to_vec(), &headers);
+        cache
+    }
+
+    const FRESH_RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nCache-Control: max-age=3600\r\nContent-Length: 5\r\nConnection: close\r\n\r\nfresh";
+
+    #[test]
+    fn hard_reload_navigation_skips_fresh_cache_entry() {
+        let (port, head, server) = recording_server(FRESH_RESPONSE);
+        let url = format!("http://127.0.0.1:{port}/page");
+        let mem_cache = cache_with_fresh_entry(&url);
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
+        let parsed = Url::parse(&url).unwrap();
+
+        // A normal navigation is served from the fresh entry — no network.
+        let plain = HttpClient::new().with_http_cache(Arc::clone(&cache));
+        assert_eq!(plain.fetch_page(&parsed, None, false).unwrap().body, b"stale");
+
+        let hard = HttpClient::new().with_http_cache(Arc::clone(&cache)).with_cache_bypass(true);
+        assert_eq!(hard.fetch_page(&parsed, None, false).unwrap().body, b"fresh");
+        server.join().unwrap();
+
+        let head = head.lock().unwrap().to_ascii_lowercase();
+        assert!(head.contains("cache-control: no-cache\r\n"), "{head}");
+        assert!(head.contains("pragma: no-cache\r\n"), "{head}");
+        assert_eq!(head.matches("cache-control:").count(), 1, "the profile default must be replaced: {head}");
+        // The fresh response replaces the entry for the next, ordinary load.
+        assert_eq!(plain.fetch_page(&parsed, None, false).unwrap().body, b"fresh");
+    }
+
+    #[test]
+    fn hard_reload_subresource_skips_fresh_cache_entry() {
+        let (port, head, server) = recording_server(FRESH_RESPONSE);
+        let url = format!("http://127.0.0.1:{port}/style.css");
+        let mem_cache = cache_with_fresh_entry(&url);
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
+        let parsed = Url::parse(&url).unwrap();
+
+        let hard = HttpClient::new().with_http_cache(cache).with_cache_bypass(true);
+        let (body, _) = hard
+            .fetch_subresource_with_content_type(&parsed, RequestDestination::Style)
+            .unwrap();
+        assert_eq!(body, b"fresh");
+        server.join().unwrap();
+        let head = head.lock().unwrap().to_ascii_lowercase();
+        assert!(head.contains("cache-control: no-cache\r\n"), "{head}");
+        assert!(head.contains("pragma: no-cache\r\n"), "{head}");
+    }
+
+    #[test]
+    fn ordinary_request_carries_no_pragma() {
+        let (port, head, server) = recording_server(FRESH_RESPONSE);
+        let parsed = Url::parse(&format!("http://127.0.0.1:{port}/page")).unwrap();
+        HttpClient::new().fetch_page(&parsed, None, false).unwrap();
+        server.join().unwrap();
+        let head = head.lock().unwrap().to_ascii_lowercase();
+        assert!(!head.contains("pragma:"), "{head}");
+        assert!(!head.contains("cache-control: no-cache"), "{head}");
     }
 
     #[test]

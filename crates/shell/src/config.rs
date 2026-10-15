@@ -93,6 +93,32 @@ pub fn global() -> &'static FingerprintProfile {
 /// behave as before — always fetched from the network.
 static HTTP_CACHE: OnceLock<Option<Arc<dyn HttpCacheBackend>>> = OnceLock::new();
 
+/// Hard reload (Ctrl+F5 / Shift+F5): the next navigation is loaded around the
+/// HTTP cache. `NEXT` is armed by the user action, `ACTIVE` is what that
+/// navigation's clients read ([`FingerprintProfile::apply_http`]); the next
+/// navigation start overwrites it, so an ordinary load never inherits it.
+/// Process-wide on purpose: a page's subresource clients are built on many
+/// threads and none of them knows which navigation asked.
+static HARD_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HARD_RELOAD_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Arm the hard-reload mode for the navigation that starts next.
+pub fn request_hard_reload() {
+    HARD_RELOAD_NEXT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// A navigation starts: the armed hard-reload request (if any) becomes its mode.
+pub fn begin_navigation_cache_mode() {
+    use std::sync::atomic::Ordering::SeqCst;
+    HARD_RELOAD_ACTIVE.store(HARD_RELOAD_NEXT.swap(false, SeqCst), SeqCst);
+}
+
+/// Whether the current navigation bypasses the HTTP cache.
+#[must_use]
+pub fn hard_reload_active() -> bool {
+    HARD_RELOAD_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Lazily build (once) and return the shared HTTP cache for this session.
 ///
 /// `private` selects an in-memory cache (nothing written to disk) instead of the
@@ -463,7 +489,7 @@ impl FingerprintProfile {
         // — including repeat visits to the same site. Tor / private sessions get
         // an in-memory cache that never persists to disk.
         if let Some(cache) = shared_http_cache(private) {
-            client = client.with_http_cache(cache);
+            client = client.with_http_cache(cache).with_cache_bypass(hard_reload_active());
         }
 
         // PERF-13: process-wide connection pools, so an HTTP/2 origin keeps

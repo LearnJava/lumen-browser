@@ -177,6 +177,11 @@ pub struct PopupRequest {
     /// shell must not arm `window_messaging::arm_pending_opener` for this
     /// popup, leaving the JS shim's `window.opener = null` default in place.
     pub no_opener: bool,
+    /// UX-USER-ACTIVATION: the call came without a live user activation and
+    /// the site is not allowed to open popups — `window.open()` already
+    /// returned `null`; the shell only records it for the blocked-popup
+    /// indicator and must not open a tab.
+    pub blocked: bool,
 }
 
 /// A print request emitted by `window.print()` (W-2 Phase 1).

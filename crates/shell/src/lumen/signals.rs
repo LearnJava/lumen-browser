@@ -80,6 +80,19 @@ impl Lumen {
         self.persist_signal(&signal);
     }
 
+    /// «Очистить историю»: журнал сигналов — те же посещённые сайты, стирается
+    /// вместе с ней, в памяти и на диске.
+    pub(crate) fn forget_all_signals(&mut self) {
+        self.compat_signals.clear();
+        let _ = self.compat_signal_store.clear();
+    }
+
+    /// «Очистить данные сайта»: сигналы этого сайта.
+    pub(crate) fn forget_site_signals(&mut self, site: &lumen_storage::PartitionKey) {
+        self.compat_signals.clear_site(site.site());
+        let _ = self.compat_signal_store.clear_site(site.site());
+    }
+
     /// Показать сигнал в stderr и дописать его в журнал на диске.
     fn persist_signal(&self, signal: &Signal) {
         announce(signal);

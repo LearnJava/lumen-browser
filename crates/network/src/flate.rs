@@ -16,6 +16,7 @@ use std::io::Read;
 
 use flate2::read::{MultiGzDecoder, ZlibDecoder};
 use lumen_core::error::{Error, Result};
+use lumen_core::net_error::NetErrorCode;
 use lumen_core::ext::ContentDecoder;
 
 /// `ContentDecoder` для `Content-Encoding: gzip`. Stateless: один экземпляр
@@ -44,7 +45,7 @@ impl ContentDecoder for GzipContentDecoder {
         let mut out = Vec::new();
         decoder
             .read_to_end(&mut out)
-            .map_err(|e| Error::Other(format!("gzip decode failed: {e}")))?;
+            .map_err(|e| Error::net_failure(NetErrorCode::ContentDecodingFailed, format!("gzip decode failed: {e}")))?;
         Ok(out)
     }
 }
@@ -82,9 +83,10 @@ impl ContentDecoder for DeflateContentDecoder {
                 out.clear();
                 let mut raw = flate2::read::DeflateDecoder::new(input);
                 raw.read_to_end(&mut out).map_err(|raw_err| {
-                    Error::Other(format!(
-                        "deflate decode failed (zlib: {zlib_err}; raw: {raw_err})"
-                    ))
+                    Error::net_failure(
+                        NetErrorCode::ContentDecodingFailed,
+                        format!("deflate decode failed (zlib: {zlib_err}; raw: {raw_err})"),
+                    )
                 })?;
                 Ok(out)
             }
@@ -155,8 +157,11 @@ mod tests {
         let d = GzipContentDecoder::new();
         let err = d.decode(&[0xff_u8; 32]).expect_err("must reject invalid gzip");
         match err {
-            Error::Other(msg) => assert!(msg.contains("gzip decode failed")),
-            other => panic!("expected Error::Other, got {other:?}"),
+            Error::NetFailure { code, message } => {
+                assert_eq!(code, NetErrorCode::ContentDecodingFailed);
+                assert!(message.contains("gzip decode failed"));
+            }
+            other => panic!("expected Error::NetFailure, got {other:?}"),
         }
     }
 
@@ -190,8 +195,11 @@ mod tests {
         let d = DeflateContentDecoder::new();
         let err = d.decode(&[0xff_u8; 4]).expect_err("must reject invalid deflate");
         match err {
-            Error::Other(msg) => assert!(msg.contains("deflate decode failed")),
-            other => panic!("expected Error::Other, got {other:?}"),
+            Error::NetFailure { code, message } => {
+                assert_eq!(code, NetErrorCode::ContentDecodingFailed);
+                assert!(message.contains("deflate decode failed"));
+            }
+            other => panic!("expected Error::NetFailure, got {other:?}"),
         }
     }
 

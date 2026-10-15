@@ -80,6 +80,7 @@ impl Lumen {
         self.ls_storage.retain(|origin, _| !site.matches(origin));
         self.ss_storage.retain(|origin, _| !site.matches(origin));
         self.permission.forget_site(site);
+        self.forget_site_signals(site);
         if let Ok(mut workers) = self.sw_worker_store.lock() {
             workers.retain(|(origin, _scope), _| !site.matches(origin));
         }

@@ -45,6 +45,7 @@ mod diag_stderr;
 mod doc_extract;
 mod display_list_metrics;
 mod dump_mode;
+mod dump_tls;
 mod event_sink;
 mod focus_nav;
 mod frame_pacing;
@@ -78,6 +79,7 @@ use window_mode::run_window_mode;
 use page_load::{LoadEvent, STREAM_PAINT_INTERVAL_MS};
 use view_transition::{ViewTransitionEvent, ViewTransitionState};
 use cli_args::*;
+use dump_tls::run_dump_tls;
 use dump_mode::{
     PrintOptions, canvas_updates_as_images, default_pdf_output_path, do_print_to_pdf_with_opts,
     render_source_to_png, run_dump_mode, run_print_to_pdf, run_screenshot, run_trace_nav,
@@ -116,6 +118,7 @@ mod engine_bridge;
 mod crash_page;
 mod cert_cause;
 mod net_error_page;
+mod net_probe;
 mod engine_thread;
 mod download;
 mod external_browser;

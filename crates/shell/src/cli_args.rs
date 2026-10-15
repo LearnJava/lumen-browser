@@ -21,6 +21,7 @@ pub(crate) fn print_usage() {
     eprintln!("  lumen --dump-source <path-or-url>               — декодированный HTML в stdout");
     eprintln!("  lumen --dump-layout <path-or-url>               — layout-дерево в stdout");
     eprintln!("  lumen --dump-display-list <path-or-url>         — display list в stdout");
+    eprintln!("  lumen --dump-tls <host|url|@file>...            — цепочка TLS: issuer, корень, SCT, отзыв; JSON-строка на хост (COMPAT-CORPUS-5)");
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
     eprintln!("  lumen --screenshot <out.png> <path-or-url>     — CPU-снимок страницы в PNG (без окна)");
     eprintln!("  lumen --trace-nav <out.json> <path-or-url>     — таймлайн одной навигации в Chrome-trace JSON");
@@ -547,6 +548,9 @@ pub(crate) enum CliMode {
     OpenWindow(PageSource),
     /// Headless: pipeline прогоняется до нужной фазы, результат идёт в stdout.
     Dump { source: PageSource, kind: DumpKind },
+    /// Headless (COMPAT-CORPUS-5): рукопожатие TLS с каждым хостом, по JSON-строке
+    /// в stdout — issuer, кто выдал корень, SCT, вердикт отзыва. Страница не грузится.
+    DumpTls { targets: Vec<String> },
     /// Headless: страница рендерится постранично и сохраняется как PDF.
     PrintToPdf { source: PageSource, output: std::path::PathBuf },
     /// Headless: страница рендерится CPU-растеризатором и сохраняется как PNG.
@@ -574,6 +578,7 @@ impl CliMode {
                 DumpKind::Layout => "dump-layout",
                 DumpKind::DisplayList => "dump-display-list",
             },
+            Self::DumpTls { .. } => "dump-tls",
             Self::PrintToPdf { .. } => "print-to-pdf",
             Self::Screenshot { .. } => "screenshot",
             Self::TraceNav { .. } => "trace-nav",
@@ -625,6 +630,15 @@ impl DumpKind {
 /// Dump-флаги принимаются только в первой позиции — иначе пришлось бы парсить
 /// аргументы произвольным порядком, что не нужно для текущего скоупа.
 pub(crate) fn parse_cli(args: &[String]) -> Result<CliMode, String> {
+    if let [flag, targets @ ..] = args
+        && flag == "--dump-tls"
+    {
+        return match targets.iter().find(|t| t.starts_with("--")) {
+            _ if targets.is_empty() => Err(format!("флаг {flag} требует хост, URL или @файл")),
+            Some(bad) => Err(format!("ожидался хост после {flag}, получен флаг {bad}")),
+            None => Ok(CliMode::DumpTls { targets: targets.to_vec() }),
+        };
+    }
     match args {
         [] => Ok(CliMode::OpenWindow(PageSource::Empty)),
         [arg] => {
@@ -933,6 +947,7 @@ pub(crate) fn run_cli() -> ExitCode {
             run_dump_mode(&source, kind, event_sink, viewport_override)
         }
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, forced_colors, det_cfg, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
+        CliMode::DumpTls { targets } => run_dump_tls(&targets),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => {
             run_screenshot(&source, &output, event_sink, viewport_override)

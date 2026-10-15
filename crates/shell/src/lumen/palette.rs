@@ -117,6 +117,11 @@ impl Lumen {
                     self.note_user_reload();
                     self.reload();
                 }
+                PaletteAction::HardReload => {
+                    crate::config::request_hard_reload();
+                    self.note_user_reload();
+                    self.reload();
+                }
                 PaletteAction::NavigateBack => self.navigate_back(),
                 PaletteAction::NavigateForward => self.navigate_forward(),
                 PaletteAction::FindOnPage => {
