@@ -64,6 +64,16 @@ the worst of the options.
    - TLS/HTTP-2 fingerprint work (replacing or reshaping `rustls`) is **not** started until the JS
      layer is consistent and the A/B attributes refusals to the stack on ≥ 3 % of the top-1000 or on
      any must-work site.
+   - **A/B result (2026-10-15, 533 sites, 100 must-work; [matrix](../perf/runs/2026-10-15-ab-matrix.md)):**
+     the `Lumen/x.y` token (and the `Lumen` brand in `Sec-CH-UA`) blocks 1 site = 0.19 % (fiverr-com,
+     PerimeterX), no must-work site, none in the real-Chrome arm → the Р1/Р2 threshold (≤ 0.5 %) is met:
+     the default may move to Chrome grammar + trailing `Lumen/x.y`, fiverr-com gets a `chrome_unbranded`
+     record. Stack: Chrome lets in / Lumen blocks 25 sites (4.7 %), but only one (eapteka-ru) is
+     confirmed to depend on the TLS fingerprint; 7 are the missing Russian root CA (OS trust, not
+     `rustls` shape), 2 DNS, 7 JS challenges the no-JS Lumen arm cannot pass, 4 anti-bot refusals
+     identical even for `curl_cffi impersonate=chrome` (JS/cookie challenge) → Р4 threshold not met,
+     **the TLS/H2 project stays closed**. Р16 (device APIs, `window.chrome`) is **not measured**: the Lumen
+     arm executes no JS (live window, BUG-1629); re-measure the stack share and Р16 with a JS arm.
 2. **Feature detection never lies.** An API that cannot work is not exposed: no `IdentityCredential`
    until FedCM works; device APIs (USB/Serial/HID/Bluetooth) removed unless the anti-bot bench shows
    their presence is required; `RTCPeerConnection` without a stack fails honestly and the UI says
@@ -162,6 +172,7 @@ the worst of the options.
   anti-bot teams; the legal entity for these contracts (sanctions exposure of Widevine/OpenH264 is
   unverified — decide with a lawyer); the Russian lab (residential IPs of several carriers, test
   Gosuslugi accounts, test e-signature tokens).
-- **Revisit when:** the A/B 2×2 completes (token, CH brands, `window.chrome`, device APIs); the
+- **Revisit when:** the A/B 2×2 is repeated with a JS arm in Lumen (`window.chrome`, device APIs,
+  JS challenges; token/brand part done 2026-10-15); the
   network stack is blamed for ≥ 3 % of top-1000 refusals (TLS/H2 project); the 3-D Secure corpus
   passes (SameSite); a CDM licence is granted or refused; Privacy Pass / PACT attestation stabilizes.

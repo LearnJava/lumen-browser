@@ -774,3 +774,22 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
   `python scripts/compat_scenarios.py --ref --nightly --exe <свежий lumen.exe>`; плечо `--ref` отсеет остаточные неверные оракулы.
 - **Границы раннера** (docs/compat-scenarios.md §Границы): нет смены вкладок (попап OAuth, окно 3DS), нет ввода внутри чужих
   кадров, диалог выбора файла блокирует прогон. 3DS проверяется стендом с кадром ACS и `postMessage` (`stand-3ds-iframe`).
+
+## 2026-10-15 — COMPAT-AB-IDENTITY — A/B 2×2 идентичности на корпусе из 535 сайтов — Windows 10, маршрут home-direct
+
+Не прогон `perf_audit.py`: свод [runs/2026-10-15-ab-matrix.md](runs/2026-10-15-ab-matrix.md) (сырые записи — `2026-10-15-ab-chrome.json`, `2026-10-15-ab-lumen.json`, матрица заголовков — `2026-10-15-ab-header-matrix.md`). Корпус [corpus-ab.txt](corpus-ab.txt) (500 главных страниц corpus-c + стенд G + BUG-1113 + corpus.txt), измерено 533 (2 мёртвых), must-work 100. Плечо Chrome — Chrome for Testing 153 (JS исполняется), плечо Lumen — `--dump-source` (HTTP без JS; живое окно не отдаёт кадр, BUG-1629).
+
+| Ячейка | OK | заблокировано |
+|---|---|---|
+| chrome / plain | 466 | 44 (8,3 %) |
+| chrome / lumen | 467 | 41 (7,7 %) |
+| lumen / plain | 472 | 50 (9,4 %) |
+| lumen / lumen | 473 | 51 (9,6 %) |
+
+**Сравнение с прошлым прогоном:** первый прогон A/B.
+**Находки:**
+- Токен `Lumen/x.y` блокирует 1 сайт из 533 (fiverr-com, PerimeterX 403) = 0,19 % при пороге Р1 0,5 %, must-work — 0; плечо Chrome: 0. Р1/Р2 — токен и бренд CH допустимы, решение в ADR-034.
+- «Chrome пустил, Lumen заблокирован» 4,69 % (25), но стеку TLS/H2 подтверждённо приписан 1 сайт (eapteka-ru): 7 — нет российского корня в хранилище Lumen (`UnknownIssuer`: rzd, bspb, alfabank, nspk, tbank, sberbank, vtb), 2 — DNS, 7 — JS-челленджи/заглушки, которые плечо без JS не проходит, 4 антибот-отказа (t2-ru, dns-shop-ru, dellin-ru, domclick-ru) не зависят ни от TLS, ни от заголовков (отказывают и `curl_cffi impersonate=chrome`). Р4: проект TLS/H2 не открывать.
+- Поправка по ходу: фразы «unsupported browser» искались в сыром исходнике и давали 16 ложных WALL_SOFT (tiktok, t-online, uber…: строки из бандлов) — теперь ищутся в видимом тексте.
+- Р16 не измерим без JS-плеча Lumen.
+**Заведённые баги:** нет новых (BUG-1629 уже открыт). Не решённое этим прогоном: российский корень в хранилище Lumen (7 банковских/гос сайтов) — пункт «OS-доверие» ADR-034.
