@@ -14,7 +14,7 @@
 //!
 //! **Наличие.** [`availability`] один раз спрашивает ОС, есть ли MFT для H.264,
 //! HEVC и AAC; реестр по нему отвечает на `canPlayType`, а оболочка — какую
-//! подсказку показать ([`crate::os_codec_hint`]).
+//! подсказку показать ([`crate::os_codec_status`]).
 
 mod audio;
 mod video;
@@ -23,13 +23,14 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use lumen_media_demux::{Codec, TrackInfo};
-use windows::core::{s, w, Interface, GUID, HRESULT};
+use windows::core::{s, w, Interface, GUID, HRESULT, PCSTR};
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, MFAudioFormat_AAC, MFMediaType_Audio,
     MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_HEVC, MFSTARTUP_LITE, MFT_CATEGORY_AUDIO_DECODER,
     MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO,
     MF_VERSION,
 };
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
 
@@ -50,6 +51,20 @@ type MftEnumExFn = unsafe extern "system" fn(
 ) -> HRESULT;
 type MfCreateObjFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
 type MfCreateBufferFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> HRESULT;
+
+/// Адрес экспорта `name` библиотеки `lib` как указателя на функцию типа `F`.
+///
+/// # Safety
+/// `F` должен быть `extern "system" fn(..)` с сигнатурой, совпадающей с экспортом.
+unsafe fn symbol<F: Copy>(lib: HMODULE, name: PCSTR) -> Option<F> {
+    debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<usize>());
+    // SAFETY: `lib` — живой модуль (не выгружается); по контракту `F` — указатель
+    // на функцию того же размера, что и `address`.
+    unsafe {
+        let address = GetProcAddress(lib, name)?;
+        Some(std::mem::transmute_copy::<_, F>(&address))
+    }
+}
 
 /// Функции `mfplat.dll`, найденные во время работы.
 pub(crate) struct Api {
@@ -75,12 +90,12 @@ impl Api {
         // только в System32 (не в каталоге exe и не по PATH).
         unsafe {
             let lib = LoadLibraryExW(w!("mfplat.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
-            let start: MfStartupFn = std::mem::transmute(GetProcAddress(lib, s!("MFStartup"))?);
+            let start: MfStartupFn = symbol(lib, s!("MFStartup"))?;
             let api = Api {
-                enum_ex: std::mem::transmute(GetProcAddress(lib, s!("MFTEnumEx"))?),
-                create_media_type: std::mem::transmute(GetProcAddress(lib, s!("MFCreateMediaType"))?),
-                create_sample: std::mem::transmute(GetProcAddress(lib, s!("MFCreateSample"))?),
-                create_memory_buffer: std::mem::transmute(GetProcAddress(lib, s!("MFCreateMemoryBuffer"))?),
+                enum_ex: symbol(lib, s!("MFTEnumEx"))?,
+                create_media_type: symbol(lib, s!("MFCreateMediaType"))?,
+                create_sample: symbol(lib, s!("MFCreateSample"))?,
+                create_memory_buffer: symbol(lib, s!("MFCreateMemoryBuffer"))?,
             };
             // Один раз на процесс, `MFShutdown` не нужен: библиотека живёт до выхода.
             start(MF_VERSION, MFSTARTUP_LITE).is_ok().then_some(api)

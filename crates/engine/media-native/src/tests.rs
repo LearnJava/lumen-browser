@@ -21,6 +21,12 @@ fn can_play(mime: &str) -> &'static str {
     NativeVideoDecoder::default().can_play_type(mime)
 }
 
+/// Декодер только на встроенных кодеках: результат не зависит от того, какие
+/// декодеры (H.264/HEVC/AAC) есть у ОС на машине, где идут тесты.
+fn bundled_decoder() -> NativeVideoDecoder {
+    NativeVideoDecoder::with_registry(Box::leak(Box::new(registry::Registry::bundled())))
+}
+
 #[test]
 fn can_play_type_av1_probably() {
     assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08\""), "probably");
@@ -30,7 +36,9 @@ fn can_play_type_av1_probably() {
 
 #[test]
 fn can_play_type_unknown_or_unopenable_codec_is_empty() {
-    // Кодеки, которых в реестре нет (H.264/AAC придут от ОС, VP9/Opus — по замеру).
+    // Кодеки, которых во встроенном реестре нет (H.264/HEVC/AAC придут от ОС,
+    // VP9/Opus — по замеру).
+    let can_play = |mime: &str| bundled_decoder().can_play_type(mime);
     assert_eq!(can_play("video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\""), "");
     assert_eq!(can_play("video/webm; codecs=\"vp09.00.10.08\""), "");
     assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08, opus\""), "");
@@ -189,10 +197,10 @@ fn mp4_with_av1_plays_from_a_late_keyframe_without_repeating_headers() {
 
 #[test]
 fn unsupported_video_codec_fails_to_open_with_a_reason() {
-    let hevc = NativeVideoDecoder::default().open(HEVC_MP4).err().unwrap();
+    let hevc = bundled_decoder().open(HEVC_MP4).err().unwrap();
     assert!(hevc.contains("нет декодера"), "{hevc}");
     assert!(hevc.contains("hev1"), "{hevc}");
-    let vp9 = NativeVideoDecoder::default().open(VP9_WEBM).err().unwrap();
+    let vp9 = bundled_decoder().open(VP9_WEBM).err().unwrap();
     assert!(vp9.contains("нет декодера"), "{vp9}");
 }
 
@@ -218,4 +226,113 @@ fn decoder_identity() {
     let d = NativeVideoDecoder::default();
     assert_eq!(d.decoder_name(), "lumen-native");
     assert!(d.mime_types().contains(&"video/webm"));
+}
+
+/// Декодеры ОС (Windows, Media Foundation): H.264 + AAC из `tests/data/h264-aac.mp4`
+/// (320×180, 25 кадр/с, B-кадры, AAC-LC стерео). Если у машины нет декодера
+/// (Windows N без Media Feature Pack) или он отключён `LUMEN_OS_DECODERS=0`,
+/// тест ничего не проверяет — в этом случае работает «нет декодера» ниже.
+#[cfg(windows)]
+mod os_decoders {
+    use super::*;
+
+    const H264_AAC: &[u8] = include_bytes!("../tests/data/h264-aac.mp4");
+
+    fn os_ready() -> bool {
+        let s = os_codec_status().unwrap();
+        s.h264 && s.aac
+    }
+
+    #[test]
+    fn can_play_type_follows_installed_decoders() {
+        let s = os_codec_status().unwrap();
+        let want = |ok: bool| if ok { "probably" } else { "" };
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.42E01E\""), want(s.h264));
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.64001F, mp4a.40.2\""), want(s.h264 && s.aac));
+        assert_eq!(can_play("audio/mp4; codecs=\"mp4a.40.2\""), want(s.aac));
+        assert_eq!(can_play("video/mp4; codecs=\"hvc1.1.6.L93.B0\""), want(s.hevc));
+        // Профили, которых у декодера ОС нет, не обещаются.
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.6e0028\""), "");
+        assert_eq!(can_play("video/mp4; codecs=\"mp4a.40.34\""), "");
+        // VP9/Opus ОС не даёт.
+        assert_eq!(can_play("video/mp4; codecs=\"vp09.00.10.08\""), "");
+        // Встроенные кодеки остаются.
+        assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08\""), "probably");
+    }
+
+    #[test]
+    fn h264_aac_opens_and_decodes_frames() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        assert_eq!(s.dimensions(), (320, 180));
+        let a = s.audio_track().expect("звуковая дорожка AAC");
+        assert_eq!(a.channels, 2);
+        let first = s.frame_at(0.0).unwrap();
+        assert_eq!(first.len(), 320 * 180 * 4);
+        assert!(first.chunks(4).all(|px| px[3] == 255));
+        // Не чёрный и не сплошной цвет: тестовая картинка с разными пикселями.
+        assert!(first.chunks(4).any(|px| px[0] != first[0] || px[1] != first[1]));
+        let later = s.frame_at(0.8).unwrap();
+        assert_ne!(first, later, "картинка меняется со временем");
+        assert_eq!(later, s.frame_at(0.8).unwrap());
+    }
+
+    #[test]
+    fn h264_seek_back_matches_fresh_open() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        let at_half = s.frame_at(0.5).unwrap();
+        s.frame_at(1.2).unwrap();
+        assert_eq!(s.frame_at(0.5).unwrap(), at_half);
+        assert_eq!(open(H264_AAC).frame_at(0.5).unwrap(), at_half);
+    }
+
+    #[test]
+    fn h264_sequential_playback_matches_seek() {
+        if !os_ready() {
+            return;
+        }
+        let mut playing = open(H264_AAC);
+        let mut t = 0.0;
+        while t < 0.9 {
+            playing.frame_at(t).unwrap();
+            t += 0.04;
+        }
+        assert_eq!(playing.frame_at(0.9).unwrap(), open(H264_AAC).frame_at(0.9).unwrap());
+    }
+
+    #[test]
+    fn aac_pcm_is_audible_and_covers_the_file() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        s.frame_at(0.0).unwrap();
+        // `decode_audio_pcm` считает сэмплы на канал: стерео — вдвое больше значений.
+        let first = s.decode_audio_pcm(4410).unwrap();
+        assert_eq!(first.len(), 4410 * 2);
+        assert!(first.iter().any(|&x| x.abs() > 1000), "звук должен быть слышен");
+        let mut total = first.len();
+        loop {
+            let chunk = s.decode_audio_pcm(4410).unwrap();
+            total += chunk.len();
+            if chunk.len() < 4410 * 2 {
+                break;
+            }
+        }
+        // 2 с × 44,1 кГц × 2 канала; допуск — срез приращения кодера на краях.
+        assert!(total.abs_diff(2 * 44_100 * 2) <= 2 * 2048 * 2, "получено {total} значений");
+    }
+
+    #[test]
+    fn os_decoders_can_be_switched_off_only_by_env_at_start() {
+        // Отключение читается один раз при первой загрузке Media Foundation, поэтому
+        // здесь проверяем только согласованность двух ответов.
+        let s = os_codec_status().unwrap();
+        assert_eq!(s.media_feature_pack_missing(), !s.h264 && !s.aac);
+    }
 }
