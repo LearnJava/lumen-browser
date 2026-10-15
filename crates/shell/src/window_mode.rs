@@ -235,6 +235,16 @@ fn run_window_mode_inner(
         platform::screen_capture::PlatformScreenCapture,
     ));
 
+    // UX-VIDEO-NATIVE: контейнерный декодер `<video>` — до создания JS-контекстов
+    // (canPlayType и `__lumen_video_container_load` читают его при установке биндингов).
+    // С фичей `ffmpeg-video` вместо собственного декодера встаёт FFmpeg (dev-бэкенд).
+    #[cfg(all(feature = "v8", not(feature = "ffmpeg-video")))]
+    lumen_js::set_video_decoder(std::sync::Arc::new(
+        lumen_media_native::NativeVideoDecoder::default(),
+    ));
+    #[cfg(all(feature = "v8", feature = "ffmpeg-video"))]
+    lumen_js::set_video_decoder(std::sync::Arc::new(lumen_media_ffmpeg::FfmpegVideoDecoder));
+
     // Wire HTMLVideoElement GIF playback store (PH3-12).
     // The same Arc is shared with JS native bindings and the shell's render tick.
     #[cfg(feature = "v8")]
@@ -622,11 +632,10 @@ fn run_window_mode_inner(
         gif_last_frame: HashMap::new(),
         video_gif_last_frame: HashMap::new(),
         video_gif_frames: HashMap::new(),
-        video_ffmpeg_sessions: HashMap::new(),
-        video_ffmpeg_last_ms: HashMap::new(),
-        #[cfg(feature = "ffmpeg-video")]
-        video_ffmpeg_audio_sinks: HashMap::new(),
-        video_ffmpeg_last_audio_ms: HashMap::new(),
+        video_sessions: HashMap::new(),
+        video_last_ms: HashMap::new(),
+        video_audio_sinks: HashMap::new(),
+        video_last_audio_ms: HashMap::new(),
         frames: Vec::new(),
         frame_env: None,
         frame_nav_requests: Vec::new(),

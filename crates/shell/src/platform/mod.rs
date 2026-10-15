@@ -8,6 +8,5 @@ pub mod display_color_profile;
 pub mod file_dialog;
 pub mod os_params;
 pub mod screen_capture;
-#[cfg(feature = "ffmpeg-video")]
 pub mod video_audio_sink;
 pub mod wake_lock;

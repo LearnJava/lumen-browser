@@ -1,0 +1,36 @@
+[package]
+name = "lumen-media-native"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: собственный VideoDecoder без FFmpeg — реестр декодеров кодеков поверх демуксеров (UX-VIDEO-NATIVE, ADR-035 п.1)"
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+lumen-core.workspace = true
+lumen-media-demux.workspace = true
+lumen-av1.workspace = true
+# Тот же lewton, что у lumen-media-demux (Ogg): декодирование Vorbis в PCM, чистый Rust.
+lewton = "0.10"
+
+# Provisional: windows (windows-rs 0.58) — COM-интерфейсы Media Foundation
+# (IMFTransform, IMFSample, IMFMediaType, IMFActivate): H.264/HEVC/AAC из ОС
+# (COMPAT-MEDIA-OSDEC-WIN, ADR-035 п.3). windows-sys даёт только сырые
+# функции, без интерфейсов, — вручную писать vtable'ы незачем. Версия та же,
+# что у gpu-allocator (wgpu), так что в Cargo.lock новых записей нет.
+# Функции mfplat.dll (MFStartup, MFTEnumEx, MFCreateSample…) в сборку не
+# линкуются: их находит `LoadLibraryExW`+`GetProcAddress`, иначе exe не
+# запустится на Windows N/KN без Media Feature Pack (там mfplat.dll нет).
+# Graduation: permanent, пока декодеры ОС — путь для патентованных кодеков.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+] }
+
+[lints]
+workspace = true

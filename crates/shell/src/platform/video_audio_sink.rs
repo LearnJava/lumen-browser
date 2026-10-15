@@ -1,10 +1,10 @@
-//! Streaming PCM playback for FFmpeg-backed `<video>` audio (GAP-MEDIADECODE
+//! Streaming PCM playback for container-backed `<video>` audio (GAP-MEDIADECODE
 //! срез 14).
 //!
 //! Unlike [`super::audio_player::PlatformAudioPlayer`], which decodes an
 //! `<audio>`'s whole container up front via `rodio::Decoder`, this sink
 //! receives already-decoded interleaved S16 PCM chunks
-//! (`VideoDecodeSession::decode_audio_pcm`) from `Lumen::tick_video_ffmpegs`
+//! (`VideoDecodeSession::decode_audio_pcm`) from `Lumen::tick_video_sessions`
 //! and queues them on a `rodio::Sink` as `rodio::buffer::SamplesBuffer`
 //! sources, one small chunk per render tick.
 
@@ -13,7 +13,7 @@ use rodio::{OutputStream, OutputStreamHandle, Sink};
 /// One open output stream + sink for a single `<video>` node's audio track.
 ///
 /// `OutputStream` is `!Send`; this is only ever constructed and used from
-/// `Lumen::tick_video_ffmpegs`, which — like the rest of `Lumen`'s per-page
+/// `Lumen::tick_video_sessions`, which — like the rest of `Lumen`'s per-page
 /// state — runs entirely on the UI thread, so it never needs to cross a
 /// thread boundary.
 pub(crate) struct VideoPcmAudioSink {

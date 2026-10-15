@@ -27,6 +27,7 @@ members = [
     "crates/engine/image",
     "crates/engine/media-ffmpeg",
     "crates/engine/media-demux",
+    "crates/engine/media-native",
     "crates/engine/av1",
     "crates/engine/canvas",
     "crates/engine/a11y",
@@ -99,6 +100,7 @@ lumen-encoding = { path = "crates/engine/encoding" }
 lumen-image = { path = "crates/engine/image" }
 lumen-media-ffmpeg = { path = "crates/engine/media-ffmpeg" }
 lumen-media-demux = { path = "crates/engine/media-demux" }
+lumen-media-native = { path = "crates/engine/media-native" }
 lumen-av1 = { path = "crates/engine/av1" }
 lumen-canvas = { path = "crates/engine/canvas" }
 lumen-a11y = { path = "crates/engine/a11y" }

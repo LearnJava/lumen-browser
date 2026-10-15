@@ -8259,9 +8259,9 @@
         {
          "id": "UX-VIDEO-NATIVE",
          "title": "Свой декодер видео и реестр декодеров в штатной сборке",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Собственный VideoDecoder «lumen-native» и реестр декодеров (ADR-035 п.1): реализация VideoDecoder/VideoDecodeSession (lumen_core::ext) без FFmpeg поверх UX-VIDEO-DEMUX и бэкендов кодеков; порядок по кодеку — аппаратный декодер ОС → программный ОС → встроенный свободный. Путь воспроизведения шелла (tick_video_ffmpegs в page_load.rs, pending_ffmpeg_loads в crates/js/src/video_gif_store.rs:118) переименовать в нейтральный и кормить из реестра в штатной сборке; canPlayType (crates/js/src/video_bindings.rs:363) и decodingInfo — по тому, что реестр реально откроет на этой машине (ADR-034 п.2); lumen-media-ffmpeg остаётся только за ffmpeg-video. Приёмка: в штатной сборке без ffmpeg-video WebM (AV1 + Vorbis) играет со звуком, перемотка работает; canPlayType('video/webm; codecs=\"av01.0.05M.08\"') = 'probably', неизвестный кодек — ''."
+         "note": "**Сделано (2026-10-15, ветка `p1-ux-video-native`):** крейт `crates/engine/media-native` (`lumen-media-native`): `NativeVideoDecoder`, реестр бэкендов кодеков (AV1 → `lumen-av1`, Vorbis → `lewton`; сюда же встанут бэкенды ОС), `canPlayType` по реестру (`probably`/`maybe`/`\"\"`), `NativeSession` с общим курсором демуксера для видео и звука; `lumen_core::ext::VideoDecoder::can_play_type`; в `lumen-js` глобальный `set_video_decoder`, нативная `__lumen_video_container_load` (только при установленном декодере), `pending_container_loads`, фича `ffmpeg-video` снята; в шелле `tick_video_sessions`, `fetch_video_bytes` и `video_audio_sink` безусловны, `NativeVideoDecoder` ставится в `window_mode.rs` (с `--features ffmpeg-video` вместо него FFmpeg). Проверено вживую (окно, `--mcp-live-port`, фикстура `av1-vorbis.webm`): `canPlayType('video/webm; codecs=\"av01.0.05M.08\"')` = `probably`, неизвестный кодек — `\"\"`, `play()` ведёт `currentTime` до конца (`ended`), звуковой выход открывается, `currentTime = 0.1` перематывает. Ограничения: нераспознанный кодек даёт `MEDIA_ERR_DECODE`, а не `SRC_NOT_SUPPORTED`; H.264/HEVC/AAC — `COMPAT-MEDIA-OSDEC-*`. Исходная постановка: Собственный VideoDecoder «lumen-native» и реестр декодеров (ADR-035 п.1): реализация VideoDecoder/VideoDecodeSession (lumen_core::ext) без FFmpeg поверх UX-VIDEO-DEMUX и бэкендов кодеков; порядок по кодеку — аппаратный декодер ОС → программный ОС → встроенный свободный. Путь воспроизведения шелла (tick_video_ffmpegs в page_load.rs, pending_ffmpeg_loads в crates/js/src/video_gif_store.rs:118) переименовать в нейтральный и кормить из реестра в штатной сборке; canPlayType (crates/js/src/video_bindings.rs:363) и decodingInfo — по тому, что реестр реально откроет на этой машине (ADR-034 п.2); lumen-media-ffmpeg остаётся только за ffmpeg-video. Приёмка: в штатной сборке без ffmpeg-video WebM (AV1 + Vorbis) играет со звуком, перемотка работает; canPlayType('video/webm; codecs=\"av01.0.05M.08\"') = 'probably', неизвестный кодек — ''."
         },
         {
          "id": "UX-VIDEO-AAC-RUST",
@@ -8956,16 +8956,32 @@
       {
        "id": "COMPAT-MEDIA-OSDEC",
        "title": "H.264/AAC/HEVC через Media Foundation и D3D11VA",
-       "status": "planned",
+       "status": "active",
        "size": "L",
        "note": "Патентованные H.264/HEVC/AAC — только из ОС, ничего не вшиваем (ADR-035 п.3); разбито по платформам: COMPAT-MEDIA-OSDEC-WIN (Media Foundation + D3D11VA), -MAC (VideoToolbox/AudioToolbox), -LINUX (VA-API + кодеки дистрибутива). Общее: бэкенд реестра UX-VIDEO-NATIVE, проверка наличия декодера при старте, плашка с точной подсказкой, если его нет, canPlayType/decodingInfo по факту (ADR-034 п.2). Источник: docs/research/site-compat/areas/04-media-drm-codecs-rtc.md §3.",
        "tasks": [
         {
          "id": "COMPAT-MEDIA-OSDEC-WIN",
          "title": "Windows: H.264/HEVC/AAC через Media Foundation и D3D11VA",
-         "status": "planned",
+         "status": "done",
          "size": "L",
-         "note": "Windows: H.264/AAC/HEVC через Media Foundation (IMFSourceReader / IMFTransform) с аппаратным D3D11VA — бэкенд реестра UX-VIDEO-NATIVE; детект Windows N/KN без Media Feature Pack и HEVC без расширения → плашка со ссылкой на установку; блок-лист драйверов с откатом на программный декодер MF; позже — кадры GPU без копирования в рендер. Приёмка: на Windows 10/11 в штатной сборке mp4 (H.264+AAC) играет со звуком; на N-редакции — плашка и canPlayType('video/mp4') = ''. Источник: docs/research/site-compat/areas/04-media-drm-codecs-rtc.md §3."
+         "note": "**Сделано (2026-10-15, ветка `p1-compat-media-osdec-win`):** модуль `mf/` крейта `lumen-media-native` (`cfg(windows)`): H.264/HEVC (Annex B из `avcC`/`hvcC`) и AAC декодируют синхронные MFT ОС (`IMFTransform`), пакеты отдаёт наш демуксер; функции `mfplat.dll` не линкуются, а грузятся `LoadLibraryExW`+`GetProcAddress` (exe запускается на Windows N/KN); `mf::availability()` один раз опрашивает ОС, `canPlayType` отвечает по факту (профили `avc1` Baseline/Main/High, `hvc1` Main/Main10, `mp4a.40.2/5/29`), `Registry::builtin()` = ОС + встроенные AV1/Vorbis; `os_codec_status()`/`WINDOWS_OPTIONAL_FEATURES_URI` для оболочки; `LUMEN_OS_DECODERS=0` отключает декодеры ОС. Фикстура `h264-aac.mp4`, 38 тестов крейта зелёные (кадры, перемотка, PCM, `canPlayType`). Остаток вынесен: COMPAT-MEDIA-OSDEC-WIN-BAR (плашка), COMPAT-MEDIA-OSDEC-WIN-D3D (D3D11VA). Исходное описание: Windows: H.264/AAC/HEVC через Media Foundation (IMFSourceReader / IMFTransform) с аппаратным D3D11VA — бэкенд реестра UX-VIDEO-NATIVE; детект Windows N/KN без Media Feature Pack и HEVC без расширения → плашка со ссылкой на установку; блок-лист драйверов с откатом на программный декодер MF; позже — кадры GPU без копирования в рендер. Приёмка: на Windows 10/11 в штатной сборке mp4 (H.264+AAC) играет со звуком; на N-редакции — плашка и canPlayType('video/mp4') = ''. Источник: docs/research/site-compat/areas/04-media-drm-codecs-rtc.md §3.",
+         "tasks": [
+          {
+           "id": "COMPAT-MEDIA-OSDEC-WIN-BAR",
+           "title": "Плашка «установите Media Feature Pack» на Windows N/KN",
+           "status": "planned",
+           "size": "M",
+           "note": "Плашка на Windows N/KN: `lumen_media_native::os_codec_status().media_feature_pack_missing()` уже есть (нет ни H.264, ни AAC), `WINDOWS_OPTIONAL_FEATURES_URI` (`ms-settings:optionalfeatures`) — адрес установки Media Feature Pack. Нужно: (1) сигнал JS→оболочка о том, что `<video>`/`<audio>` не открылся из-за отсутствия декодера ОС (сейчас сбой уходит только в `MEDIA_ERR_*` на странице); (2) инфобар `#mediaBar` по образцу `#loginBar` (chrome.html, `ids`, `ChromeModel`, действие `ChromeAction`, список отцепляемых панелей в `chrome_ui.rs`, тест `chrome_float`), текст «Для воспроизведения этого видео нужен пакет мультимедиа Windows» + кнопка открывает `ms-settings:optionalfeatures` + «Скрыть» (на сессию); (3) то же для HEVC без расширения «HEVC Video Extensions» (Microsoft Store). Приёмка: при `LUMEN_OS_DECODERS=0` страница с `<video src=x.mp4>` (H.264+AAC) показывает плашку со ссылкой, `canPlayType('video/mp4')` = `''` для `avc1`; на машине с декодерами плашки нет. Источник: docs/research/site-compat/areas/04-media-drm-codecs-rtc.md §3."
+          },
+          {
+           "id": "COMPAT-MEDIA-OSDEC-WIN-D3D",
+           "title": "D3D11VA для H.264/HEVC с откатом на программный MFT",
+           "status": "planned",
+           "size": "L",
+           "note": "Аппаратное декодирование H.264/HEVC на Windows: сейчас в `mf/video.rs` только программные синхронные MFT (`MFT_ENUM_FLAG_SYNCMFT`). Нужно: D3D11VA через `MFT_MESSAGE_SET_D3D_MANAGER` (`IMFDXGIDeviceManager`, `D3D11_CREATE_DEVICE_VIDEO_SUPPORT`) для DXVA-MFT ОС, считывание кадра с GPU (staging-текстура → NV12/P010 → RGBA), откат на программный MFT при любой ошибке инициализации или первого кадра, блок-лист драйверов (по `VendorId`/версии из DXGI-адаптера, файл в репозитории и переменная `LUMEN_OS_DECODERS=sw` для принудительного программного пути). Позже (вне задачи) — кадры GPU без копирования в рендер. Приёмка: на машине с GPU кадр 1080p H.264 декодируется через D3D11VA (лог бэкенда), результат попиксельно близок программному (допуск ±2 на канал), при сбое драйвера воспроизведение продолжается программно. Источник: docs/research/site-compat/areas/04-media-drm-codecs-rtc.md §3."
+          }
+         ]
         },
         {
          "id": "COMPAT-MEDIA-OSDEC-MAC",

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>3DS checkout stand</title>
+<style>body{font-family:sans-serif;margin:40px}input,button{font-size:16px;padding:8px;margin:6px 0;display:block}iframe{border:1px solid #888;width:360px;height:160px}</style></head>
+<body>
+<h1>Pay with 3-D Secure</h1>
+<form id="pay">
+  <input id="card" placeholder="Card number" inputmode="numeric" autocomplete="cc-number">
+  <button id="submit" type="submit">Pay</button>
+</form>
+<div id="challenge" hidden>
+  <p>Bank verification</p>
+  <iframe id="acs" title="3DS challenge"></iframe>
+</div>
+<p id="result" hidden></p>
+<script>
+// Имитация 3DS 2.x: после «Pay» открывается кадр банка (ACS), подтверждение возвращается в страницу
+// магазина через postMessage; страница магазина показывает итог.
+document.getElementById('pay').addEventListener('submit', function (e) {
+  e.preventDefault();
+  document.getElementById('pay').hidden = true;
+  document.getElementById('challenge').hidden = false;
+  document.getElementById('acs').src = '3ds-acs.html?card=' + encodeURIComponent(document.getElementById('card').value);
+});
+window.addEventListener('message', function (e) {
+  if (!e.data || e.data.type !== '3ds-done') return;
+  document.getElementById('challenge').hidden = true;
+  var r = document.getElementById('result');
+  r.hidden = false;
+  r.textContent = e.data.status === 'Y' ? '3DS passed: ' + e.data.card.slice(-4) : '3DS failed';
+});
+</script>
+</body></html>

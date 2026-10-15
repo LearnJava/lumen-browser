@@ -1,0 +1,199 @@
+# Банки, оплата, госуслуги (вес 3). Без учётных записей: страница входа открывается, форма принимает ввод,
+# платёжная форма (в т.ч. кадры эквайера) отрисовывается. Шаги внутри чужих кадров (ввод карты в iframe
+# эквайера) и смена вкладки (попап 3DS/OAuth) раннер пока не умеет — см. docs/compat-scenarios.md §Границы.
+# Полная цепочка 3DS проверяется на локальном стенде stand-3ds-redirect (docs/perf/scenarios/stands.toml).
+
+[[scenario]]
+id = "bank-sberbank"
+title = "Сбербанк: главная страница отрисована, пункт СберБанк Онлайн на месте"
+category = "bank"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.sberbank.ru/ru/person" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Принять|Согласен|Хорошо)$", optional = true },
+  { do = "sleep", seconds = 2 },
+]
+oracle = [
+  { kind = "text", value = "СберБанк Онлайн|Сбербанк Онлайн" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "bank-tbank"
+title = "Т-Банк: страница входа, поле телефона принимает ввод"
+category = "bank"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.tbank.ru/login/" },
+  { do = "wait", cond = "visible", selector = "input" },
+  { do = "type", selector = "input", text = "9001234567" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelector('input').value.replace(/\\D/g,'').length >= 4" },
+]
+
+[[scenario]]
+id = "bank-vtb"
+title = "ВТБ Онлайн: страница входа загружается"
+category = "bank"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://online.vtb.ru/login" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "ВТБ|Войти|Вход|Логин" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "bank-alfa"
+title = "Альфа-Банк: страница входа Альфа-Онлайн загружается"
+category = "bank"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://web.alfabank.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Альфа|Войти|Вход|Номер телефона|Логин" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "bank-chase"
+title = "Chase: страница входа, поля логина и пароля принимают ввод"
+category = "bank"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.chase.com/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Chase|Sign in" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "pay-paypal-signin"
+mode = "manual"
+title = "PayPal: вход, почта → шаг пароля"
+category = "payment"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.paypal.com/signin" },
+  { do = "wait", cond = "visible", selector = "#email" },
+  { do = "type", selector = "#email", text = "lumen.compat.probe.7391@example.com" },
+  { do = "click", selector = "#btnNext" },
+]
+oracle = [
+  { kind = "visible", value = "#password" },
+]
+
+[[scenario]]
+id = "pay-stripe-checkout"
+title = "Stripe Checkout (демо): платёжная форма и кадры карты отрисовываются"
+category = "payment"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://checkout.stripe.dev/preview" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 4 },
+]
+oracle = [
+  { kind = "text", value = "Stripe" },
+  { kind = "text", value = "Checkout|payments|Pay" },
+]
+
+[[scenario]]
+id = "pay-yoomoney"
+title = "ЮMoney: главная и вход, кошелёк"
+category = "payment"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://yoomoney.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "ЮMoney|Войти|Кошелёк" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "pay-cloudpayments-demo"
+title = "CloudPayments (демо виджета): форма оплаты открывается"
+category = "payment"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://cloudpayments.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "CloudPayments|платеж|оплат" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "gov-gosuslugi-home"
+title = "Госуслуги: главная страница, кнопка «Войти»"
+category = "gov"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.gosuslugi.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Госуслуги|Войти" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "gov-nalog-lk"
+title = "ФНС: вход в личный кабинет физлица, форма открывается"
+category = "gov"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://lkfl2.nalog.ru/lkfl/login" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Личный кабинет|Вход|ИНН|Госуслуги" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "gov-mos-ru"
+title = "mos.ru: главная и поиск услуги"
+category = "gov"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.mos.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Москва|mos.ru|Услуги" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "gov-uk-signin"
+title = "GOV.UK One Login: страница входа открывается"
+category = "gov"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.gov.uk/sign-in-universal-credit" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "text", value = "Sign in|Universal Credit" },
+  { kind = "not_text", value = "ERR_" },
+]
