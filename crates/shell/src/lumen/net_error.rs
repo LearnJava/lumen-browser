@@ -46,6 +46,14 @@ impl Lumen {
         let retry_url = original.url_str().unwrap_or("").to_owned();
         let auto_retry = self.next_auto_retry(&retry_url, code);
         let page = net_error_page::net_error_source(&retry_url, code, msg, auto_retry);
+        self.show_static_error_page(page, msg);
+    }
+
+    /// Подменяет страницу, которую не удалось показать, готовой статической
+    /// страницей `page` (ошибка сети, антибот-панель). Исходный источник
+    /// остаётся в [`Lumen::crashed`] — F5 и кнопки возвращают его.
+    pub(super) fn show_static_error_page(&mut self, page: PageSource, msg: &str) {
+        let original = self.source.clone();
         let PageSource::Static { html, url } = page else { return };
         let html_copy = html.clone();
         // Адрес в строке — несостоявшаяся навигация; у файла кнопки «Повторить»

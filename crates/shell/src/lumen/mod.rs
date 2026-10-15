@@ -42,6 +42,7 @@ mod nav_state;
 mod navigation;
 mod crash;
 mod net_error;
+mod gate;
 mod newtab_page;
 mod omnibox_bar;
 mod page_keys;

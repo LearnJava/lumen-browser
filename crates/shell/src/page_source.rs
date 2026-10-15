@@ -227,6 +227,7 @@ impl PageSource {
                 status: 0,
                 redirected: false,
                 cert_info: None,
+                gate: None,
             }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
@@ -246,6 +247,7 @@ impl PageSource {
                     status: 0,
                     redirected: false,
                     cert_info: None,
+                gate: None,
                 })
             }
             PageSource::Url { url, body, upgrade_insecure_requests, referrer } => {
@@ -289,6 +291,9 @@ impl PageSource {
                     .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-embedder-policy"))
                     .map(|(_, v)| v.as_str());
                 let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep).is_cross_origin_isolated();
+                let gate = crate::gate_detect::inspect(
+                    status, &resp_headers, &bytes, &final_url.to_string(), response_content_type(&resp_headers).as_deref(),
+                );
                 Ok(RawPage {
                     bytes,
                     // BUG-757: база документа — адрес, с которого пришёл
@@ -310,6 +315,7 @@ impl PageSource {
                     status,
                     redirected,
                     cert_info,
+                    gate,
                 })
             }
             PageSource::Snapshot { html, base_url } => {
@@ -330,6 +336,7 @@ impl PageSource {
                     status: 0,
                     redirected: false,
                     cert_info: None,
+                gate: None,
                 })
             }
             PageSource::Static { html, url } => {
@@ -350,6 +357,7 @@ impl PageSource {
                     status: 0,
                     redirected: false,
                     cert_info: None,
+                gate: None,
                 })
             }
         }
@@ -412,6 +420,9 @@ impl PageSource {
             .map(|(_, v)| v.as_str());
         let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep)
             .is_cross_origin_isolated();
+        let gate = crate::gate_detect::inspect(
+            status, &resp_headers, &bytes, &final_url.to_string(), response_content_type(&resp_headers).as_deref(),
+        );
         Ok(RawPage {
             // BUG-757: см. `load_bytes` — база из финального URL ответа. Тот же
             // адрес приходит и в `on_chunk` (вторым аргументом), поэтому
@@ -431,6 +442,7 @@ impl PageSource {
             status,
             redirected,
             cert_info,
+            gate,
         })
     }
 
@@ -517,6 +529,9 @@ pub(crate) struct RawPage {
     /// into `LoadedPage::cert_info` by the `LoadDone`/`RenderDone` handler.
     /// `None` for every non-network source, same as `csp_header`.
     pub(crate) cert_info: Option<lumen_network::CertInfo>,
+    /// COMPAT-GATE-DETECT: антибот-стена или баннер «браузер не поддерживается»,
+    /// опознанные в ответе. `None` — обычная страница и любой не сетевой источник.
+    pub(crate) gate: Option<crate::gate_detect::Verdict>,
 }
 
 /// Сайт инициатора навигации (BUG-1616): registrable domain из `Referer`, уже
