@@ -26,6 +26,7 @@ members = [
     "crates/engine/encoding",
     "crates/engine/image",
     "crates/engine/media-ffmpeg",
+    "crates/engine/media-demux",
     "crates/engine/canvas",
     "crates/engine/a11y",
     "workspace-hack",
