@@ -31,6 +31,30 @@ class ParseStderr(unittest.TestCase):
         self.assertIsNone(r["http_status"])
 
 
+class VisibleText(unittest.TestCase):
+    def test_strips_bundles_and_noscript(self):
+        html = ('<html><script>var s="unsupported browser"</script><style>.a{}</style>'
+                '<noscript>Update your browser</noscript><!-- upgrade your browser --><p>Hello</p></html>')
+        t = al.visible_text(html)
+        self.assertIn("Hello", t)
+        self.assertNotIn("unsupported", t.lower())
+        self.assertNotIn("update your browser", t.lower())
+
+    def test_visible_stub_survives(self):
+        self.assertIn("Upgrade your browser", al.visible_text("<body><h1>Upgrade your browser</h1></body>"))
+
+
+class StackCause(unittest.TestCase):
+    def test_causes(self):
+        c = am.stack_cause
+        self.assertEqual(c({"status": "NET_FAIL", "net_error": "tls: TLS handshake: untrusted certificate chain: UnknownIssuer"}), "trust")
+        self.assertEqual(c({"status": "NET_FAIL", "net_error": "dns: resolve x: network error"}), "dns")
+        self.assertEqual(c({"status": "NET_FAIL", "net_error": "tls: TLS handshake: unexpected end of file"}), "tls")
+        self.assertEqual(c({"status": "SITE_REFUSED", "net_error": None}), "antibot")
+        self.assertEqual(c({"status": "SITE_REFUSED", "net_error": None, "wall": {"signals": ["cloudflare-chl"]}}), "jschl")
+        self.assertEqual(c({"status": "WALL_SOFT", "net_error": None}), "soft")
+
+
 class Classify(unittest.TestCase):
     NONE = {"kind": "none", "vendor": None, "signals": []}
 

@@ -117,6 +117,26 @@ def blocked(rec: dict | None) -> bool | None:
     return rec["status"] in BLOCKED
 
 
+TLS_CAUSES = ("antibot", "tls")
+
+
+def stack_cause(rec: dict) -> str:
+    """Почему Lumen не пущен там, где Chrome пущен: trust (нет корня в хранилище), dns, tls (рукопожатие оборвано),
+    antibot (отказ по статусу/вендору), jschl (JS-челлендж Cloudflare), soft (заглушка в тексте исходника), other."""
+    err = (rec.get("net_error") or "").lower()
+    if "unknownissuer" in err or "untrusted certificate" in err:
+        return "trust"
+    if err.startswith("dns:"):
+        return "dns"
+    if err.startswith("tls:"):
+        return "tls"
+    if any(str(sig).startswith("cloudflare") for sig in (rec.get("wall") or {}).get("signals", [])):
+        return "jschl"  # челлендж Cloudflare проходит JS, а плечо Lumen его не исполняет
+    if rec["status"] in ("SITE_REFUSED", "HTTP_ERROR"):
+        return "antibot"
+    return "soft" if rec["status"] == "WALL_SOFT" else "other"
+
+
 def analyse(cells: dict, weights: dict[str, int]) -> dict:
     slugs = list(dict.fromkeys(k[2] for k in cells))
     complete, dead = [], []
@@ -149,8 +169,14 @@ def analyse(cells: dict, weights: dict[str, int]) -> dict:
     out["stack_pct"] = round(100 * len(out["stack"]) / n, 2)
     out["token_must"] = [s for s in out["token"]["lumen"] if weights.get(s) == 3]
     out["stack_must"] = [s for s in out["stack"] if weights.get(s) == 3]
+    out["stack_cause"] = {s: stack_cause(cells[("lumen", "plain", s)]) for s in out["stack"]}
+    # Р4 про отпечаток TLS/H2 (rustls): корневые сертификаты, DNS и заглушки «обновите браузер» в исходнике без JS
+    # к нему не относятся — у них свои починки (OS-доверие, резолвер, JS-плечо).
+    out["stack_tls"] = [s for s in out["stack"] if out["stack_cause"][s] in TLS_CAUSES]
+    out["stack_tls_pct"] = round(100 * len(out["stack_tls"]) / n, 2)
+    out["stack_tls_must"] = [s for s in out["stack_tls"] if weights.get(s) == 3]
     out["verdict_r1"] = "переход на chrome_lumen допустим" if out["token_pct"] <= TOKEN_THRESHOLD and not out["token_must"] else "оставить chrome_unbranded"
-    out["verdict_r4"] = "проект TLS/H2 открывать" if out["stack_pct"] >= STACK_THRESHOLD or out["stack_must"] else "TLS/H2 не трогать"
+    out["verdict_r4"] = "проект TLS/H2 открывать" if out["stack_tls_pct"] >= STACK_THRESHOLD or out["stack_tls_must"] else "TLS/H2 не трогать"
     return out
 
 
@@ -188,6 +214,12 @@ def render_md(res: dict, cells: dict, weights: dict[str, int], meta: str) -> str
     out += listing("Chrome: заблокирован без токена, пущен с ним — шум", res["token_reverse"]["chrome"], "chrome", "plain", "chrome", "lumen")
     out += [f"## Стек (plain): Chrome пустил, Lumen заблокирован: {len(res['stack'])} из {n} = {res['stack_pct']} % (порог Р4 ≥ {STACK_THRESHOLD} %, must-work: {len(res['stack_must'])})", ""]
     out += listing("Chrome пустил, Lumen заблокирован", res["stack"], "chrome", "plain", "lumen", "plain")
+    causes = {}
+    for s, c in res["stack_cause"].items():
+        causes.setdefault(c, []).append(s)
+    out += ["Причины (`stack_cause`): " + "; ".join(f"{c} — {len(v)} ({', '.join(v)})" for c, v in sorted(causes.items())), "",
+            f"К отпечатку TLS/H2 относятся причины {'/'.join(TLS_CAUSES)}: {len(res['stack_tls'])} из {n} = {res['stack_tls_pct']} %, "
+            f"must-work: {len(res['stack_tls_must'])} ({', '.join(res['stack_tls_must']) or '—'}).", ""]
     out += listing("Lumen пустил, Chrome заблокирован (Chrome исполняет JS-стены, Lumen — нет)", res["stack_reverse"], "chrome", "plain", "lumen", "plain")
     out += [f"Заблокированы обоими (plain): {len(res['both_block'])} — {', '.join(res['both_block']) or '—'}", ""]
     out += ["## Вердикты", "", f"- Р1/Р2: {res['verdict_r1']}.", f"- Р4: {res['verdict_r4']}.", ""]

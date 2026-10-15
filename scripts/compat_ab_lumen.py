@@ -82,6 +82,17 @@ def parse_stderr(err: str) -> dict:
     }
 
 
+RE_HIDDEN = re.compile(r"<!--.*?-->|<(script|style|noscript|template|svg)\b.*?</\1\s*>", re.S | re.I)
+RE_TAG = re.compile(r"<[^>]*>")
+
+
+def visible_text(html: str) -> str:
+    """Видимый текст исходника: без скриптов, стилей, `<noscript>` и комментариев. Фразы «unsupported browser»
+    лежат в бандлах и JSON больших страниц (tiktok, t-online) — по сырому исходнику это ложная стена; Chrome-плечо
+    ищет по `innerText`, то есть без них."""
+    return RE_TAG.sub(" ", RE_HIDDEN.sub(" ", html))
+
+
 def classify(rec: dict, wall: dict) -> str:
     """Таксономия `compat_ab_chrome.classify` без DOM-признаков: JS здесь не исполняется."""
     st = rec.get("http_status")
@@ -132,7 +143,7 @@ def audit_site(exe: Path, slug: str, url: str, variant: str, timeout: float, ext
     finally:
         remove_profile(profile)
     rec["body_bytes"] = len(body.encode("utf-8"))
-    wall = classify_wall(rec.get("http_status"), None, body[:MAX_BODY], net_error=rec.get("net_error"), visible_text=body[:MAX_BODY])
+    wall = classify_wall(rec.get("http_status"), None, body[:MAX_BODY], net_error=rec.get("net_error"), visible_text=visible_text(body[:MAX_BODY]))
     rec["wall"] = wall
     rec["status"] = classify(rec, wall)
     rec["wall_s"] = round(time.monotonic() - t0, 1)
