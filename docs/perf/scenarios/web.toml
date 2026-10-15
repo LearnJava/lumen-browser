@@ -1,0 +1,227 @@
+# Повседневная сеть (вес 1): поиск, новости, магазины, карты, соцсети. Оракул — результат пути пользователя
+# (выдача поиска, карточка товара, карта), а не просто «страница загрузилась».
+
+# Не калибруется с точки 2026-10-15: Chrome получает ERR_CONNECTION_CLOSED на узле сайта (маршрут/блокировка); проверить с другой точки.
+[[scenario]]
+id = "search-yandex"
+title = "Яндекс: запрос из строки в URL → выдача"
+category = "search"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://yandex.ru/search/?text=%D0%BF%D0%BE%D0%B3%D0%BE%D0%B4%D0%B0+%D0%BC%D0%BE%D1%81%D0%BA%D0%B2%D0%B0" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 2 },
+]
+oracle = [
+  { kind = "text", value = "погода|Погода" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "search-google"
+title = "Google: запрос → выдача"
+category = "search"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.google.com/search?q=rust+programming+language&hl=en" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Accept all|Reject all)$", optional = true },
+]
+oracle = [
+  { kind = "text", value = "Rust" },
+  { kind = "visible", value = "#search, #main, #rso" },
+]
+
+[[scenario]]
+id = "search-duckduckgo"
+title = "DuckDuckGo: запрос → выдача"
+category = "search"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://duckduckgo.com/?q=rust+programming+language&ia=web" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Rust" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "news-lenta"
+title = "Lenta.ru: главная, заголовки новостей отрисованы"
+category = "news"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://lenta.ru/" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('a[href*=\"/news/\"]').length >= 5" },
+]
+
+[[scenario]]
+id = "news-rbc"
+title = "РБК: главная, заголовки отрисованы"
+category = "news"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.rbc.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 2 },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('a[href*=\"rbc.ru\"]').length >= 10" },
+]
+
+[[scenario]]
+id = "news-bbc"
+title = "BBC News: главная, заголовки отрисованы"
+category = "news"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.bbc.com/news" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Yes, I agree|Accept)$", optional = true },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('h2, h3').length >= 5" },
+]
+
+# Эталон: документ остаётся в readyState interactive (не complete) 30 с.
+[[scenario]]
+id = "news-habr"
+title = "Хабр: лента статей отрисована"
+category = "news"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://habr.com/ru/articles/" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('article').length >= 5" },
+]
+
+[[scenario]]
+id = "shop-ozon"
+title = "Ozon: главная, поле поиска принимает запрос"
+category = "shop"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.ozon.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 4 },
+]
+oracle = [
+  { kind = "text", value = "Ozon|Найти|каталог" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+# Не калибруется с точки 2026-10-15: Chrome получает ERR_CONNECTION_CLOSED на узле сайта (маршрут/блокировка); проверить с другой точки.
+[[scenario]]
+id = "shop-wildberries"
+title = "Wildberries: главная, каталог отрисован"
+category = "shop"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.wildberries.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 5 },
+]
+oracle = [
+  { kind = "text", value = "Wildberries|Войти|Каталог" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "shop-avito"
+title = "Авито: главная, объявления отрисованы"
+category = "shop"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://www.avito.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Авито|объявлен" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "shop-amazon"
+title = "Amazon: главная, строка поиска"
+category = "shop"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.amazon.com/" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "visible", value = "#twotabsearchtextbox" },
+]
+
+# Не калибруется с точки 2026-10-15: Chrome получает ERR_CONNECTION_CLOSED на узле сайта (маршрут/блокировка); проверить с другой точки.
+[[scenario]]
+id = "maps-yandex"
+title = "Яндекс Карты: карта отрисована (canvas / тайлы)"
+category = "maps"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://yandex.ru/maps/213/moscow/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 6 },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('canvas').length >= 1" },
+  { kind = "not_text", value = "ERR_" },
+]
+oracle_wait_s = 20
+
+[[scenario]]
+id = "maps-google"
+title = "Google Maps: карта отрисована"
+category = "maps"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.google.com/maps?hl=en" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Accept all|Reject all)$", optional = true },
+  { do = "sleep", seconds = 6 },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('canvas').length >= 1" },
+]
+oracle_wait_s = 20
+
+[[scenario]]
+id = "social-vk"
+title = "VK: главная, форма входа отрисована"
+category = "social"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://vk.com/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "ВКонтакте|Войти" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "social-telegram-channel"
+title = "Telegram: публичный канал в веб-ленте, посты отрисованы"
+category = "social"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://t.me/s/durov" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelectorAll('.tgme_widget_message').length >= 3" },
+]

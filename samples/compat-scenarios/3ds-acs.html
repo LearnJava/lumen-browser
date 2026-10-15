@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Bank ACS stand</title>
+<style>body{font-family:sans-serif;margin:12px}button{font-size:16px;padding:8px}</style></head>
+<body>
+<p>Confirm payment in your bank app, or enter the code.</p>
+<input id="otp" placeholder="SMS code" inputmode="numeric">
+<button id="confirm" type="button">Confirm</button>
+<script>
+document.getElementById('confirm').addEventListener('click', function () {
+  var card = new URLSearchParams(location.search).get('card') || '';
+  parent.postMessage({type: '3ds-done', status: 'Y', card: card}, '*');
+});
+</script>
+</body></html>

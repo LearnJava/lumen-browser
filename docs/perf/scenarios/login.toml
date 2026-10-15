@@ -1,0 +1,208 @@
+# Вход до пароля (вес 3): страница входа открывается, поле логина принимает ввод, переход на шаг пароля
+# или отказ «такого аккаунта нет». Реальных учётных записей нет — вводится несуществующий логин;
+# оракул принимает любой из честных исходов сайта (шаг пароля / «аккаунт не найден»).
+# Селекторы и тексты калибруются по Chrome (`--chrome-only`), подробности — docs/compat-scenarios.md.
+
+[[scenario]]
+id = "login-google"
+title = "Google: ввод почты → шаг пароля или «аккаунт не найден»"
+category = "login"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://accounts.google.com/signin/v2/identifier?hl=en" },
+  { do = "wait", cond = "visible", selector = "#identifierId, input[type=email]" },
+  { do = "type", selector = "#identifierId, input[type=email]", text = "lumen.compat.probe.7391@gmail.com" },
+  { do = "click_text", text = "^(Next|Далее)$" },
+]
+oracle = [
+  { kind = "text", value = "Couldn.t find|Enter your password|Show password|Введите пароль" },
+]
+
+# Не калибруется с точки 2026-10-15: Chrome получает ERR_CONNECTION_CLOSED на узле сайта (маршрут/блокировка); проверить с другой точки.
+[[scenario]]
+id = "login-yandex-id"
+title = "Яндекс ID: логин → шаг пароля или «такого аккаунта нет»"
+category = "login"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://passport.yandex.ru/auth" },
+  { do = "wait", cond = "visible", selector = "#passp-field-login" },
+  { do = "type", selector = "#passp-field-login", text = "lumen-compat-probe-7391" },
+  { do = "click_text", text = "^Войти$" },
+]
+oracle = [
+  { kind = "text", value = "Такого аккаунта нет|Введите пароль|Неверный логин|Пароль" },
+]
+
+[[scenario]]
+id = "login-vk-id"
+title = "VK ID: страница входа, поле телефона принимает ввод (без отправки — SMS не уходит)"
+category = "login"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://id.vk.com/auth?app_id=7913379&v=1.67.0&redirect_uri=https%3A%2F%2Fvk.com%2Ffeed&uuid=lumen" },
+  { do = "wait", cond = "visible", selector = "input[name=phone]", timeout_s = 30 },
+  { do = "type", selector = "input[name=phone]", text = "9000000000" },
+]
+oracle = [
+  { kind = "visible", value = "button[type=submit]" },
+  { kind = "eval", value = "document.querySelector('input[name=phone]').value.replace(/\\D/g,'').length >= 4" },
+]
+
+[[scenario]]
+id = "login-esia"
+title = "Госуслуги (ЕСИА): форма «логин и пароль» отрисована и принимает ввод"
+category = "login"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://esia.gosuslugi.ru/login/" },
+  { do = "wait", cond = "visible", selector = "#login", timeout_s = 30 },
+  { do = "type", selector = "#login", text = "lumen-probe@example.com" },
+  { do = "type", selector = "#password", text = "not-a-real-password" },
+]
+oracle = [
+  { kind = "visible", value = "#password" },
+  { kind = "eval", value = "document.querySelector('#login').value.length > 5 && document.querySelector('#password').value.length > 5" },
+]
+
+[[scenario]]
+id = "login-mailru"
+title = "Mail.ru (через VK ID): логин → шаг пароля или «аккаунт не зарегистрирован»"
+category = "login"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://account.mail.ru/login" },
+  { do = "wait", cond = "visible", selector = "input[type=text]", timeout_s = 30 },
+  { do = "type", selector = "input[type=text]", text = "lumen.compat.probe.7391" },
+  { do = "click_text", text = "^(Ввести пароль|Войти|Продолжить)$" },
+]
+oracle = [
+  { kind = "text", value = "Введите пароль|Пароль|не зарегистрирован|не существует|не найден" },
+]
+
+[[scenario]]
+id = "login-ok-ru"
+title = "Одноклассники: страница входа загружается, поля логина и пароля принимают ввод"
+category = "login"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://ok.ru/" },
+  { do = "wait", cond = "visible", selector = "input[name='st.email']" },
+  { do = "type", selector = "input[name='st.email']", text = "lumen-probe@example.com" },
+  { do = "type", selector = "input[name='st.password']", text = "not-a-real-password" },
+]
+oracle = [
+  { kind = "visible", value = "input[name='st.password']" },
+  { kind = "eval", value = "document.querySelector(\"input[name='st.email']\").value.length > 0" },
+]
+
+[[scenario]]
+id = "login-microsoft"
+title = "Microsoft: ввод почты → шаг пароля или «учётной записи нет»"
+category = "login"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://login.live.com/" },
+  { do = "wait", cond = "visible", selector = "input[type=email]", timeout_s = 30 },
+  { do = "type", selector = "input[type=email]", text = "lumen.compat.probe.7391@outlook.com" },
+  { do = "click_text", text = "^(Next|Далее)$" },
+]
+oracle = [
+  { kind = "text", value = "doesn.t exist|couldn.t find|Enter password|Create one|Не удалось найти|Введите пароль" },
+]
+
+[[scenario]]
+id = "login-github"
+title = "GitHub: логин и неверный пароль → «Incorrect username or password»"
+category = "login"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://github.com/login" },
+  { do = "wait", cond = "visible", selector = "#login_field" },
+  { do = "type", selector = "#login_field", text = "lumen-compat-probe-7391" },
+  { do = "type", selector = "#password", text = "not-a-real-password" },
+  { do = "click", selector = "input[type=submit]" },
+]
+oracle = [
+  { kind = "text", value = "Incorrect username or password" },
+]
+
+[[scenario]]
+id = "login-facebook"
+title = "Facebook: форма входа, неверные данные → сообщение сайта"
+category = "login"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.facebook.com/login/?locale=en_US" },
+  { do = "wait", cond = "visible", selector = "input[name=email]" },
+  { do = "type", selector = "input[name=email]", text = "lumen.compat.probe@example.com" },
+  { do = "type", selector = "input[name=pass]", text = "not-a-real-password" },
+  { do = "click_text", text = "^(Log in|Войти)$" },
+]
+oracle = [
+  { kind = "text", value = "incorrect|doesn.t match|wrong|isn.t connected|Find your account|неверн" },
+]
+
+# Эталон нестабилен: Amazon то отдаёт форму почты, то капчу/пустую страницу (headless Chrome, 2026-10-15).
+[[scenario]]
+id = "login-amazon"
+title = "Amazon: ввод почты → шаг пароля или «аккаунта нет»"
+category = "login"
+mode = "manual"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.amazon.com/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.com%2F&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=usflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0" },
+  { do = "wait", cond = "visible", selector = "#ap_email_login, #ap_email, input[name=email]", timeout_s = 30 },
+  { do = "type", selector = "#ap_email_login, #ap_email, input[name=email]", text = "lumen.compat.probe.7391@example.com" },
+  { do = "click", selector = "#continue, input[type=submit]" },
+]
+oracle = [
+  { kind = "text", value = "Password|Пароль|We cannot find an account|Create your Amazon account|Не удаётся найти" },
+]
+
+[[scenario]]
+id = "login-sber-id"
+title = "СберID: страница входа открывается, поле телефона/логина принимает ввод"
+category = "login"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://id.sber.ru/" },
+  { do = "wait", cond = "visible", selector = "input" },
+  { do = "type", selector = "input", text = "9001234567" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelector('input').value.replace(/\\D/g,'').length >= 4" },
+]
+
+[[scenario]]
+id = "login-twitch"
+title = "Twitch: страница входа, поля логина и пароля принимают ввод"
+category = "login"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.twitch.tv/login" },
+  { do = "wait", cond = "visible", selector = "#login-username" },
+  { do = "type", selector = "#login-username", text = "lumen_compat_probe" },
+  { do = "type", selector = "#password-input", text = "not-a-real-password" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelector('#login-username').value === 'lumen_compat_probe'" },
+  { kind = "visible", value = "#password-input" },
+]
+
+# Поля входа Reddit лежат в shadow DOM (селектором верхнего документа недоступны) — проверяется отрисовка страницы входа.
+[[scenario]]
+id = "login-reddit"
+title = "Reddit: страница входа отрисована (поля в shadow DOM — ввод не проверяется)"
+category = "login"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.reddit.com/login/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Log In|Войти|Вход" },
+  { kind = "eval", value = "document.querySelectorAll('button').length >= 3" },
+]

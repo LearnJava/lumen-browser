@@ -304,5 +304,38 @@ class RunTests(unittest.TestCase):
         self.assertIn("| a | 3 | fail | wall hard:cloudflare |", md)
 
 
+class CorpusTests(unittest.TestCase):
+    """Корпус docs/perf/scenarios/*.toml: формат верен и соблюдены границы приёмки COMPAT-CORPUS-3."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.scenarios, cls.errors = cs.load_scenarios()
+        cls.real = [s for s in cls.scenarios if cs.counts_in_spr(s)]
+
+    def test_format_is_valid(self):
+        self.assertEqual(self.errors, [])
+
+    def test_corpus_size_languages_and_nightly(self):
+        self.assertGreaterEqual(len(self.real), 40)
+        self.assertGreaterEqual(sum(1 for s in self.real if s.get("lang") == "ru"), 15)
+        self.assertGreaterEqual(sum(1 for s in self.real if s.get("lang", "en") == "en"), 15)
+        self.assertGreaterEqual(sum(1 for s in self.real if s.get("mode", "nightly") == "nightly"), 10)
+
+    def test_categories_cover_the_report_list(self):
+        cats = {s["category"] for s in self.real}
+        self.assertTrue({"login", "bank", "payment", "gov", "video", "mail", "docs", "file"} <= cats, cats)
+
+    def test_handoffs_are_outside_the_metric(self):
+        handoffs = [s for s in self.scenarios if s.get("handoff")]
+        self.assertTrue(handoffs)
+        self.assertFalse(any(cs.counts_in_spr(s) for s in handoffs))
+
+    def test_no_real_credentials_in_scenarios(self):
+        for s in self.real:
+            for st in s["steps"]:
+                if st.get("do") == "type" and any(k in st["selector"].lower() for k in ("password", "passwd", "name=pass")):
+                    self.assertIn(st["text"], ("not-a-real-password", "{pass}"), s["id"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

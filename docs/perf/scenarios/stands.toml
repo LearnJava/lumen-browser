@@ -40,3 +40,23 @@ oracle = [
   { kind = "visible", value = "#result" },
   { kind = "text", value = "Payment accepted: 1111" },
 ]
+
+[[scenario]]
+id = "stand-3ds-iframe"
+title = "3DS-имитация: карта → кадр банка (ACS) → подтверждение → postMessage в страницу магазина"
+category = "payment"
+lang = "en"
+stand = true
+steps = [
+  { do = "navigate", url = "{stand}/3ds-pay.html" },
+  { do = "wait", cond = "document_ready" },
+  { do = "type", selector = "#card", text = "4000000000003220" },
+  { do = "click", selector = "#submit" },
+  { do = "wait", cond = "visible", selector = "#acs", timeout_s = 10 },
+  { do = "sleep", seconds = 1.5 },
+  { do = "eval", code = "(() => { const d = document.getElementById('acs').contentDocument; if (!d || !d.getElementById('confirm')) return false; d.getElementById('confirm').click(); return true; })()", expect = true },
+]
+oracle = [
+  { kind = "visible", value = "#result" },
+  { kind = "text", value = "3DS passed: 3220" },
+]

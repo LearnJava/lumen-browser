@@ -747,6 +747,8 @@ def main() -> int:
     ap.add_argument("--no-rerun", action="store_true", help="не повторять провалившийся сценарий")
     ap.add_argument("--ref", action="store_true",
                     help="сначала пройти сценарий в Chrome (эталон); не прошёл и там — skip ref_fail, в SPR-w не идёт")
+    ap.add_argument("--chrome-only", action="store_true",
+                    help="калибровка оракулов: прогнать только в Chrome, без окна Lumen (результат — как у Lumen, с пометкой chrome_only)")
     ap.add_argument("--chrome", help="путь к chrome.exe (по умолчанию Chrome for Testing из ms-playwright)")
     ap.add_argument("--headless", action="store_true", help="Chrome без окна")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VAL", help="доп. окружение для lumen")
@@ -786,7 +788,7 @@ def main() -> int:
     results_path = out_dir / "results.jsonl"
     records = read_results(results_path)
     done = {r["id"] for r in records}
-    exe = pa.find_exe(args.exe)
+    exe = pa.find_exe(args.exe) if not args.chrome_only else Path("chrome-only")
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                             cwd=REPO_ROOT).stdout.strip()
     meta = {"commit": commit, "exe": str(exe), "when": datetime.now().strftime("%Y-%m-%d %H:%M")}
@@ -797,7 +799,7 @@ def main() -> int:
         stand_srv, stand_url = start_stand(STAND_DIR)
     ctx = {"stand": stand_url}
     chrome = None
-    if args.ref:
+    if args.ref or args.chrome_only:
         import chrome_interaction_baseline as cib
         from compat_crawl import ChromeRef
         binary = args.chrome or cib.default_binary()
@@ -806,13 +808,30 @@ def main() -> int:
             return 1
         meta["chrome"] = cib.chromium_version(binary)
         chrome = ChromeRef(binary, args.headless, out_dir)
-    br = pa.LiveBrowser(exe, out_dir, DEFAULT_TIMEOUT_S)
-    drv = LiveDriver(br, DEFAULT_TIMEOUT_S)
+    br = drv = None
+    if not args.chrome_only:
+        br = pa.LiveBrowser(exe, out_dir, DEFAULT_TIMEOUT_S)
+        drv = LiveDriver(br, DEFAULT_TIMEOUT_S)
     try:
         for i, sc in enumerate(chosen, 1):
             if sc["id"] in done:
                 continue
             ref_rec = None
+            if args.chrome_only:
+                cdrv = ChromeDriver(chrome, DEFAULT_TIMEOUT_S)
+                try:
+                    rec = run_scenario(cdrv, sc, ctx, out_dir, rerun=not args.no_rerun)
+                finally:
+                    cdrv.close()
+                rec["chrome_only"] = True
+                records.append(rec)
+                with results_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                scr = (rec.get("screen") or {}).get("class", "")
+                print(f"[{i}/{len(chosen)}] {sc['id']}: chrome {rec['outcome']}{' (' + scr + ')' if scr else ''}"
+                      f"{' ' + str(rec.get('failed_oracle') or rec.get('failed_step') or '')[:110] if rec['outcome'] != 'pass' else ''}",
+                      flush=True)
+                continue
             if chrome is not None and not skip_reason(sc, os.environ):
                 cdrv = ChromeDriver(chrome, DEFAULT_TIMEOUT_S)
                 try:
@@ -835,7 +854,8 @@ def main() -> int:
                   f"{' ref=' + rec['ref_outcome'] if rec.get('ref_outcome') else ''}"
                   f"{' lumen=' + rec['lumen_outcome'] if rec.get('lumen_outcome') else ''}", flush=True)
     finally:
-        br.close()
+        if br is not None:
+            br.close()
         if chrome is not None:
             chrome.close()
         if stand_srv:
