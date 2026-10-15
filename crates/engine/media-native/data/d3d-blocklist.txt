@@ -1,0 +1,14 @@
+# Блок-лист адаптеров для аппаратного декодирования (D3D11VA) в Media Foundation
+# (COMPAT-MEDIA-OSDEC-WIN-D3D). Адаптер из списка не получает D3D-менеджер, и
+# видео сразу идёт через программный MFT ОС. Тот же путь включает переменная
+# окружения LUMEN_OS_DECODERS=sw. Файл вшивается в exe (include_str!).
+#
+# Строка:  <VendorId> <DeviceId|*> <версия драйвера «строго ниже»|*>   # причина
+#   VendorId / DeviceId — шестнадцатеричные, из DXGI_ADAPTER_DESC (0x10de, 0x8086…);
+#   версия драйвера — a.b.c.d из IDXGIAdapter::CheckInterfaceSupport(IDXGIDevice),
+#   например 31.0.101.2140; «*» — любая версия (адаптер заблокирован целиком).
+# Пустые строки и всё после «#» игнорируются.
+
+# Microsoft Basic Render Driver / WARP: программный растеризатор, DXVA нет —
+# D3D-путь только добавил бы копирование кадров.
+0x1414 * *   # Microsoft Basic Render Driver (WARP)
