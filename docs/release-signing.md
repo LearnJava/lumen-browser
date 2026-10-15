@@ -12,6 +12,10 @@ How a release gets the signed `latest.json` the browser's updater trusts
 | CI step | `.github/workflows/release.yml`, job `release`, step «Sign update manifest» |
 | Browser side (check, download, apply) | `crates/shell/src/update.rs`, `update_ui.rs` |
 
+Signatures carry a domain tag (`sign_tagged` — `tag ‖ 0x00 ‖ body`): the manifest signs under
+`lumen-update-manifest-v1`, the compat pack (`compat_pack.rs`, `PACK_TRUSTED_KEYS`) under
+`lumen-compat-pack-v1`, so one never verifies as the other. A signer CLI for the pack is not written yet.
+
 The signer and the browser share one crate on purpose: both call the same
 private `UpdateManifest::signing_body`, so the signed bytes cannot drift from
 the verified ones.
