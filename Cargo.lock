@@ -2591,6 +2591,7 @@ dependencies = [
 name = "lumen-media-demux"
 version = "0.5.0"
 dependencies = [
+ "lewton",
  "matroska-demuxer",
  "mp4parse",
  "ogg",

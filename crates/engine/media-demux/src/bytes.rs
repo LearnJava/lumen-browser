@@ -31,10 +31,6 @@ impl<'a> Be<'a> {
         self.bytes(1).map(|b| b[0])
     }
 
-    pub(crate) fn u16(&mut self) -> Option<u16> {
-        self.bytes(2).map(|b| u16::from_be_bytes([b[0], b[1]]))
-    }
-
     pub(crate) fn u32(&mut self) -> Option<u32> {
         self.bytes(4)
             .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))

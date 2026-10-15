@@ -160,7 +160,7 @@ pub type Result<T> = std::result::Result<T, DemuxError>;
 
 enum Inner<'a> {
     Mp4(mp4::Mp4<'a>),
-    Matroska(matroska::Mkv<'a>),
+    Matroska(Box<matroska::Mkv<'a>>),
     Ogg(ogg_demux::OggDemux<'a>),
 }
 
@@ -182,7 +182,7 @@ impl<'a> Demuxer<'a> {
             Some(Container::Ogg) => (Container::Ogg, Inner::Ogg(ogg_demux::OggDemux::open(bytes)?)),
             Some(_) => {
                 let m = matroska::Mkv::open(bytes)?;
-                (m.container(), Inner::Matroska(m))
+                (m.container(), Inner::Matroska(Box::new(m)))
             }
             None => return Err(DemuxError::UnknownContainer),
         };
@@ -231,7 +231,8 @@ impl<'a> Demuxer<'a> {
 
     /// Перемотка: следующие пакеты каждой дорожки начинаются с ближайшей
     /// точки входа не позже `target_us` (аудио — с пакета, покрывающего
-    /// момент). Для Matroska точность — до кластера/ключевого кадра по Cues.
+    /// момент). Для Matroska — до ближайшего ключевого кадра видео (индекс строится
+    /// проходом по файлу при первой перемотке).
     ///
     /// # Errors
     /// [`DemuxError`] — повреждённый индекс контейнера.

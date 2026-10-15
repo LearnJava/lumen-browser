@@ -13,7 +13,7 @@ use crate::{ticks_to_us, Codec, DemuxError, Packet, Result, TrackInfo, TrackKind
 const OPUS_RATE: u64 = 48_000;
 
 enum Kind {
-    Vorbis { ident: Option<IdentHeader>, setup: Option<SetupHeader> },
+    Vorbis { ident: Option<Box<IdentHeader>>, setup: Option<Box<SetupHeader>> },
     Opus { pre_skip: u16 },
     Theora { kf_shift: u32, fps_num: u32, fps_den: u32 },
     Flac { rate: u32 },
@@ -268,6 +268,7 @@ impl Stream {
                             (i.blocksize_0, i.blocksize_1),
                         )
                         .ok()
+                        .map(Box::new)
                     });
                 }
                 parsed.map(|i| {
@@ -282,7 +283,7 @@ impl Stream {
                         sample_rate: i.audio_sample_rate,
                         channels: u16::from(i.audio_channels),
                     };
-                    *ident = Some(i);
+                    *ident = Some(Box::new(i));
                     info
                 })
             }

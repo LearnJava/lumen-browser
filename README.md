@@ -187,6 +187,7 @@ lumen-browser/
     │   ├── a11y/                 — дерево доступности (WAI-ARIA)
     │   ├── encoding/             — кодировки (cp1251/KOI8-R/…), Unicode line-break/bidi
     │   ├── image/                — декодирование изображений
+    │   ├── media-demux/          — демуксеры MP4/WebM/Ogg (без FFmpeg)
     │   └── media-ffmpeg/         — декодирование видео (`<video>`)
     ├── js/                      — биндинги V8 ↔ DOM/Web API
     ├── network/                 — HTTP/HTTPS/HTTP2, DNS, куки, адблок

@@ -313,11 +313,9 @@ fn video_info(moov: &BoxRef<'_>, id: u32, t: &Track) -> Option<TrackInfo> {
         width = u32::from(u16::from_be_bytes([body[0], body[1]]));
         height = u32::from(u16::from_be_bytes([body[2], body[3]]));
     }
-    if width == 0 || height == 0 {
-        if let Some(h) = &t.tkhd {
-            width = h.width >> 16;
-            height = h.height >> 16;
-        }
+    if let Some(h) = t.tkhd.as_ref().filter(|_| width == 0 || height == 0) {
+        width = h.width >> 16;
+        height = h.height >> 16;
     }
     let (codec, codec_string, extradata) = match &fourcc {
         b"avc1" | b"avc3" => {
@@ -447,8 +445,8 @@ fn table_samples(t: &Track) -> Result<Vec<RawSample>> {
         let chunk_no = u32::try_from(ci + 1).unwrap_or(u32::MAX);
         let per_chunk = runs
             .iter()
-            .rev()
-            .find(|r| r.first_chunk <= chunk_no)
+            .take_while(|r| r.first_chunk <= chunk_no)
+            .last()
             .map_or(0, |r| r.samples_per_chunk);
         let mut off = chunk_off;
         for _ in 0..per_chunk {

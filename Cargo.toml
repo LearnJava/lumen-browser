@@ -97,6 +97,7 @@ lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
 lumen-image = { path = "crates/engine/image" }
 lumen-media-ffmpeg = { path = "crates/engine/media-ffmpeg" }
+lumen-media-demux = { path = "crates/engine/media-demux" }
 lumen-canvas = { path = "crates/engine/canvas" }
 lumen-a11y = { path = "crates/engine/a11y" }
 
