@@ -18,7 +18,9 @@
 //!   относительно вычисленного rect-а на величину аккумулированного spacing-а;
 //! - find-bar фиксированных размеров в правом верхнем углу окна;
 //! - regex: lookahead/lookbehind и Unicode category недоступны (NFA-движок);
-//! - совпадения не пересекают границы TextFragment (одно слово / run).
+//! - plain-режим склеивает соседние `DrawText` одной строки (смена стиля внутри
+//!   слова), но не склеивает через перенос строки и границу блока;
+//!   regex-режим по-прежнему ищет внутри одного TextFragment.
 
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, TextFragment, TextMeasurer};
@@ -111,10 +113,29 @@ impl FindState {
 /// Найденный матч: bounding box в координатах окна и индекс DrawText-команды
 /// в исходном display list (нужен, чтобы вставить highlight-FillRect строго
 /// перед своим текстом, а не глобально в начале списка).
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// Матч, пересёкший границу фрагментов (смена стиля внутри строки: `foo<b>bar</b>`),
+/// остаётся ОДНИМ матчем — для счётчика, активного индекса и меток на полосе
+/// прокрутки; его продолжение в следующих `DrawText` лежит в [`FindMatch::tail`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct FindMatch {
     pub rect: Rect,
     pub dl_index: usize,
+    /// Куски матча в следующих `DrawText` той же строки (пусто для матча
+    /// внутри одного фрагмента).
+    pub tail: Vec<(Rect, usize)>,
+}
+
+impl FindMatch {
+    /// Матч целиком внутри одной `DrawText`-команды.
+    pub fn single(rect: Rect, dl_index: usize) -> Self {
+        Self { rect, dl_index, tail: Vec::new() }
+    }
+
+    /// Все куски матча (`rect`, `dl_index`) в порядке чтения.
+    pub fn pieces(&self) -> impl Iterator<Item = (Rect, usize)> + '_ {
+        std::iter::once((self.rect, self.dl_index)).chain(self.tail.iter().copied())
+    }
 }
 
 pub const HIGHLIGHT_INACTIVE: Color = Color { r: 255, g: 235, b: 90, a: 255 };
@@ -156,7 +177,11 @@ pub fn scroll_to_match(
 }
 
 /// Находит все непересекающиеся вхождения `query` в DrawText-командах `dl`.
-/// Поиск case-insensitive (ASCII + Unicode 1:1 lowercase mapping).
+///
+/// Сравнение — [`fold_char`]/[`query_char_matches`]: регистр не важен, NBSP = пробел,
+/// «е» в запросе находит и «е», и «ё», а «ё» — только «ё»; «й» и «и» различны.
+/// Соседние `DrawText` одной строки (смена стиля посреди слова) склеиваются в один
+/// поисковый поток, так что матч может пересекать границу фрагмента.
 pub fn find_matches(
     dl: &DisplayList,
     query: &str,
@@ -165,63 +190,120 @@ pub fn find_matches(
     if query.is_empty() {
         return Vec::new();
     }
-    let query_chars: Vec<char> = query.chars().collect();
+    let query_chars: Vec<char> = query.chars().map(fold_char).collect();
     let mut out = Vec::new();
+    let mut group: Vec<Seg> = Vec::new();
     for (idx, cmd) in dl.iter().enumerate() {
-        if let DisplayCommand::DrawText { rect, text, font_size, .. } = cmd {
-            collect_in_text(text, *font_size, *rect, idx, &query_chars, measurer, &mut out);
+        let DisplayCommand::DrawText { rect, text, font_size, .. } = cmd else {
+            continue;
+        };
+        if let Some(last) = group.last()
+            && !continues_line(last.rect, *rect)
+        {
+            collect_in_group(&group, &query_chars, measurer, &mut out);
+            group.clear();
         }
+        group.push(Seg {
+            dl_index: idx,
+            rect: *rect,
+            font_size: *font_size,
+            chars: text.chars().collect(),
+        });
     }
+    collect_in_group(&group, &query_chars, measurer, &mut out);
     out
 }
 
-fn collect_in_text(
-    text: &str,
-    font_size: f32,
-    text_rect: Rect,
+/// Один `DrawText` в группе склеиваемых фрагментов.
+struct Seg {
     dl_index: usize,
+    rect: Rect,
+    font_size: f32,
+    chars: Vec<char>,
+}
+
+/// Допуск стыковки соседних фрагментов по x (CSS px).
+const JOIN_X_TOLERANCE: f32 = 1.0;
+
+/// `next` продолжает ту же строку, что и `prev`: вертикальные интервалы
+/// перекрываются хотя бы наполовину меньшего, а левый край `next` стыкуется
+/// с правым краем `prev`. Разные блоки / строки / inline-block с отступом сюда
+/// не попадают — иначе «конец абзаца»+«начало следующего» склеивались бы.
+fn continues_line(prev: Rect, next: Rect) -> bool {
+    let top = prev.y.max(next.y);
+    let bottom = (prev.y + prev.height).min(next.y + next.height);
+    let min_h = prev.height.min(next.height);
+    if min_h <= 0.0 || bottom - top < min_h * 0.5 {
+        return false;
+    }
+    (next.x - (prev.x + prev.width)).abs() <= JOIN_X_TOLERANCE
+}
+
+/// Нормализация символа для сравнения: нижний регистр (1:1) и все виды
+/// неразрывного пробела → обычный пробел.
+fn fold_char(c: char) -> char {
+    match c {
+        '\u{00A0}' | '\u{202F}' | '\u{2007}' => ' ',
+        _ if c.is_ascii() => c.to_ascii_lowercase(),
+        _ => c.to_lowercase().next().unwrap_or(c),
+    }
+}
+
+/// `page` — уже свёрнутый [`fold_char`] символ страницы, `query` — свёрнутый
+/// символ запроса. Асимметрично: запрос «е» находит «ё», запрос «ё» — только «ё».
+fn query_char_matches(page: char, query: char) -> bool {
+    page == query || (query == 'е' && page == 'ё')
+}
+
+fn collect_in_group(
+    group: &[Seg],
     query_chars: &[char],
     measurer: &dyn TextMeasurer,
     out: &mut Vec<FindMatch>,
 ) {
-    let text_chars: Vec<char> = text.chars().collect();
     let q = query_chars.len();
-    let n = text_chars.len();
+    // Плоский поток (сегмент, позиция в сегменте, свёрнутый символ).
+    let flat: Vec<(usize, usize, char)> = group
+        .iter()
+        .enumerate()
+        .flat_map(|(si, seg)| {
+            seg.chars.iter().enumerate().map(move |(ci, &c)| (si, ci, fold_char(c)))
+        })
+        .collect();
+    let n = flat.len();
     if q == 0 || q > n {
         return;
     }
+    let width = |seg: &Seg, from: usize, to: usize| -> f32 {
+        seg.chars[from..to].iter().map(|c| measurer.char_width(*c, seg.font_size)).sum()
+    };
     let mut i = 0;
     while i + q <= n {
-        if (0..q).all(|k| chars_eq_ci(text_chars[i + k], query_chars[k])) {
-            let prefix_w: f32 = text_chars[..i]
-                .iter()
-                .map(|c| measurer.char_width(*c, font_size))
-                .sum();
-            let match_w: f32 = text_chars[i..i + q]
-                .iter()
-                .map(|c| measurer.char_width(*c, font_size))
-                .sum();
-            out.push(FindMatch {
-                rect: Rect::new(text_rect.x + prefix_w, text_rect.y, match_w, text_rect.height),
-                dl_index,
-            });
+        if (0..q).all(|k| query_char_matches(flat[i + k].2, query_chars[k])) {
+            let (first_seg, first_ci, _) = flat[i];
+            let (last_seg, last_ci, _) = flat[i + q - 1];
+            let mut pieces: Vec<(Rect, usize)> = Vec::new();
+            for (si, seg) in group.iter().enumerate().take(last_seg + 1).skip(first_seg) {
+                let from = if si == first_seg { first_ci } else { 0 };
+                let to = if si == last_seg { last_ci + 1 } else { seg.chars.len() };
+                if from >= to {
+                    continue;
+                }
+                let x = seg.rect.x + width(seg, 0, from);
+                pieces.push((
+                    Rect::new(x, seg.rect.y, width(seg, from, to), seg.rect.height),
+                    seg.dl_index,
+                ));
+            }
+            let mut it = pieces.into_iter();
+            if let Some((rect, dl_index)) = it.next() {
+                out.push(FindMatch { rect, dl_index, tail: it.collect() });
+            }
             i += q;
         } else {
             i += 1;
         }
     }
-}
-
-fn chars_eq_ci(a: char, b: char) -> bool {
-    if a == b {
-        return true;
-    }
-    if a.is_ascii() && b.is_ascii() {
-        return a.eq_ignore_ascii_case(&b);
-    }
-    let la = a.to_lowercase().next().unwrap_or(a);
-    let lb = b.to_lowercase().next().unwrap_or(b);
-    la == lb
 }
 
 /// Проверяет, является ли `pattern` корректным regex-паттерном.
@@ -299,15 +381,10 @@ pub fn find_matches_regex(
             if match_w < f32::EPSILON {
                 continue;
             }
-            out.push(FindMatch {
-                rect: Rect::new(
-                    frag.rect.x + prefix_w,
-                    frag.rect.y,
-                    match_w,
-                    frag.rect.height,
-                ),
+            out.push(FindMatch::single(
+                Rect::new(frag.rect.x + prefix_w, frag.rect.y, match_w, frag.rect.height),
                 dl_index,
-            });
+            ));
         }
     }
     out
@@ -327,24 +404,23 @@ pub fn build_page_with_highlights(
 ) -> DisplayList {
     let mut out: DisplayList = Vec::with_capacity(base.len() + matches.len());
 
-    let mut by_index: Vec<Vec<(usize, &FindMatch)>> = vec![Vec::new(); base.len()];
+    let mut by_index: Vec<Vec<(usize, Rect)>> = vec![Vec::new(); base.len()];
     for (i, m) in matches.iter().enumerate() {
-        if m.dl_index < base.len() {
-            by_index[m.dl_index].push((i, m));
+        for (rect, dl_index) in m.pieces() {
+            if dl_index < base.len() {
+                by_index[dl_index].push((i, rect));
+            }
         }
     }
 
     for (idx, cmd) in base.iter().enumerate() {
-        for (i, m) in &by_index[idx] {
+        for (i, rect) in &by_index[idx] {
             let color = if *i == state.active {
                 HIGHLIGHT_ACTIVE
             } else {
                 HIGHLIGHT_INACTIVE
             };
-            out.push(DisplayCommand::FillRect {
-                rect: m.rect,
-                color,
-            });
+            out.push(DisplayCommand::FillRect { rect: *rect, color });
         }
         out.push(cmd.clone());
     }
@@ -509,6 +585,86 @@ mod tests {
         let m = find_matches(&dl, "hello", &Fixed8);
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].dl_index, 1);
+    }
+
+    // ── UX-FIND-ALL: ё≈е, NBSP, границы фрагментов ───────────────────────────
+
+    fn texts(words: &[&str]) -> DisplayList {
+        words.iter().enumerate().map(|(i, w)| draw_text(w, 0.0, 20.0 * i as f32, 100.0, 20.0)).collect()
+    }
+
+    #[test]
+    fn query_e_finds_both_e_and_yo() {
+        let dl = texts(&["еж", "ёж", "Ёж"]);
+        assert_eq!(find_matches(&dl, "еж", &Fixed8).len(), 3);
+    }
+
+    #[test]
+    fn query_yo_finds_only_yo() {
+        let dl = texts(&["еж", "ёж", "ЁЖ"]);
+        let m = find_matches(&dl, "ёж", &Fixed8);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].dl_index, 1);
+        assert_eq!(m[1].dl_index, 2);
+    }
+
+    #[test]
+    fn i_does_not_find_short_i() {
+        let dl = texts(&["й", "Й"]);
+        assert!(find_matches(&dl, "и", &Fixed8).is_empty());
+        assert_eq!(find_matches(&dl, "й", &Fixed8).len(), 2);
+    }
+
+    #[test]
+    fn nbsp_equals_space_both_ways() {
+        let dl = vec![draw_text("a\u{00A0}b", 0.0, 0.0, 100.0, 20.0)];
+        assert_eq!(find_matches(&dl, "a b", &Fixed8).len(), 1);
+        let dl = vec![draw_text("a b", 0.0, 0.0, 100.0, 20.0)];
+        assert_eq!(find_matches(&dl, "a\u{00A0}b", &Fixed8).len(), 1);
+    }
+
+    #[test]
+    fn match_crosses_style_boundary_on_same_line() {
+        // "foo" + "bar" в соседних DrawText одной строки (<b> посреди слова).
+        let dl = vec![
+            draw_text("xfoo", 0.0, 0.0, 32.0, 20.0),
+            draw_text("bary", 32.0, 0.0, 32.0, 20.0),
+        ];
+        let m = find_matches(&dl, "foobar", &Fixed8);
+        assert_eq!(m.len(), 1, "один матч, а не два куска");
+        assert_eq!(m[0].dl_index, 0);
+        assert!((m[0].rect.x - 8.0).abs() < 0.01 && (m[0].rect.width - 24.0).abs() < 0.01);
+        assert_eq!(m[0].tail.len(), 1);
+        assert_eq!(m[0].tail[0].1, 1);
+        assert!((m[0].tail[0].0.x - 32.0).abs() < 0.01 && (m[0].tail[0].0.width - 24.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn match_does_not_cross_lines_or_gaps() {
+        let dl = vec![
+            draw_text("foo", 0.0, 0.0, 24.0, 20.0),
+            draw_text("bar", 0.0, 20.0, 24.0, 20.0),
+            draw_text("baz", 100.0, 20.0, 24.0, 20.0),
+        ];
+        assert!(find_matches(&dl, "foobar", &Fixed8).is_empty());
+        assert!(find_matches(&dl, "barbaz", &Fixed8).is_empty());
+    }
+
+    #[test]
+    fn cross_fragment_match_highlights_every_piece_once() {
+        let dl = vec![
+            draw_text("fo", 0.0, 0.0, 16.0, 20.0),
+            draw_text("o", 16.0, 0.0, 8.0, 20.0),
+        ];
+        let m = find_matches(&dl, "foo", &Fixed8);
+        assert_eq!(m.len(), 1);
+        let mut state = FindState::default();
+        state.open();
+        state.append_str("foo");
+        let out = build_page_with_highlights(&dl, &state, &m);
+        let fills = out.iter().filter(|c| matches!(c, DisplayCommand::FillRect { .. })).count();
+        assert_eq!(fills, 2, "по подсветке на каждый кусок");
+        assert_eq!(out.len(), 4);
     }
 
     // ── FindState ──────────────────────────────────────────────────────────────
