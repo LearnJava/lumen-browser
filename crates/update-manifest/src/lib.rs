@@ -184,14 +184,61 @@ impl UpdateManifest {
     }
 }
 
+/// Domain tag of the update-manifest signature (see [`sign_tagged`]).
+const MANIFEST_TAG: &str = "lumen-update-manifest-v1";
+
+/// Sign `body` under `signing_key` with the domain tag `tag` and return the
+/// base64 signature. The tag is signed together with the body
+/// (`tag ‖ 0x00 ‖ body`), so a signature minted for one document kind (a
+/// release manifest, a compat pack) can never verify as another even when
+/// both are signed by the same key and the bodies happen to coincide.
+#[must_use]
+pub fn sign_tagged(tag: &str, body: &[u8], signing_key: &ed25519_dalek::SigningKey) -> String {
+    use ed25519_dalek::Signer;
+    let signature = signing_key.sign(&tagged_message(tag, body));
+    lumen_core::hash::base64_encode(&signature.to_bytes())
+}
+
+/// Verify a base64 `signature_b64` made by [`sign_tagged`] over `body` with
+/// the same `tag` under the raw public key `key_bytes`.
+pub fn verify_tagged(
+    tag: &str,
+    body: &[u8],
+    signature_b64: &str,
+    key_bytes: &[u8; 32],
+) -> Result<(), ManifestVerifyError> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    // A key embedded in a trusted-keys list is a build-time invariant, not
+    // untrusted input reachable independently of `UnknownKeyId` — the only
+    // way this fails is a malformed list entry, a programming error, not
+    // something a signature check should distinguish for a caller.
+    let Ok(verifying_key) = VerifyingKey::from_bytes(key_bytes) else {
+        return Err(ManifestVerifyError::UnknownKeyId);
+    };
+    let sig_bytes = lumen_core::hash::base64_decode(signature_b64).ok_or(ManifestVerifyError::MalformedSignature)?;
+    let sig_bytes: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| ManifestVerifyError::MalformedSignature)?;
+    verifying_key
+        .verify(&tagged_message(tag, body), &Signature::from_bytes(&sig_bytes))
+        .map_err(|_| ManifestVerifyError::SignatureMismatch)
+}
+
+fn tagged_message(tag: &str, body: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(tag.len() + 1 + body.len());
+    msg.extend_from_slice(tag.as_bytes());
+    msg.push(0);
+    msg.extend_from_slice(body);
+    msg
+}
+
 /// Set `manifest.key_id` to `key_id` and `manifest.signature` to an ed25519
 /// signature over the resulting [`UpdateManifest::signing_body`] under
 /// `signing_key`. `key_id` is set first because it is itself a signed field.
 pub fn sign_manifest(manifest: &mut UpdateManifest, key_id: &str, signing_key: &ed25519_dalek::SigningKey) {
-    use ed25519_dalek::Signer;
     manifest.key_id = key_id.to_string();
-    let signature = signing_key.sign(&manifest.signing_body());
-    manifest.signature = lumen_core::hash::base64_encode(&signature.to_bytes());
+    manifest.signature = sign_tagged(MANIFEST_TAG, &manifest.signing_body(), signing_key);
 }
 
 /// Verify `manifest`'s signature against `trusted_keys`.
@@ -204,32 +251,12 @@ pub fn verify_manifest_with_keys(
     manifest: &UpdateManifest,
     trusted_keys: &[(&str, [u8; 32])],
 ) -> Result<(), ManifestVerifyError> {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
     let key_bytes = trusted_keys
         .iter()
         .find(|(id, _)| *id == manifest.key_id)
         .map(|(_, bytes)| *bytes)
         .ok_or(ManifestVerifyError::UnknownKeyId)?;
-    // A key embedded in `trusted_keys` is a build-time invariant, not
-    // untrusted input reachable independently of `UnknownKeyId` above — the
-    // only way this fails is a malformed entry in the trusted-keys list
-    // itself, which is a programming error, not something a signature check
-    // should distinguish for a caller.
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_bytes) else {
-        return Err(ManifestVerifyError::UnknownKeyId);
-    };
-
-    let sig_bytes = lumen_core::hash::base64_decode(&manifest.signature)
-        .ok_or(ManifestVerifyError::MalformedSignature)?;
-    let sig_bytes: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| ManifestVerifyError::MalformedSignature)?;
-    let signature = Signature::from_bytes(&sig_bytes);
-
-    verifying_key
-        .verify(&manifest.signing_body(), &signature)
-        .map_err(|_| ManifestVerifyError::SignatureMismatch)
+    verify_tagged(MANIFEST_TAG, &manifest.signing_body(), &manifest.signature, &key_bytes)
 }
 
 /// Verify `manifest`'s signature against [`TRUSTED_KEYS`] — the production
@@ -269,6 +296,8 @@ pub fn manifest_version_from_tag(tag: &str) -> Option<String> {
     let bare = tag.strip_prefix('v').unwrap_or(tag);
     Version::parse(bare).map(|v| v.to_string())
 }
+
+pub mod compat_pack;
 
 #[cfg(test)]
 mod tests;
