@@ -834,6 +834,8 @@ fn run_window_mode_inner(
     };
     // UX-PERMISSIONS-3: a persisted Anonymous profile must not write decisions to disk.
     app.sync_permission_store();
+    // COMPAT-PRIVACY-UNBREAK-LOCALE: a persisted Anonymous profile starts with en-US.
+    app.sync_profile_locale();
     // UX-USER-ACTIVATION: popups, clipboard writes and permission prompts need
     // a user gesture in the interactive browser; `LUMEN_ALLOW_POPUPS=1` lifts
     // the gate for automation that drives pages with `eval`.

@@ -146,8 +146,12 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # creation time. Already a workspace dep (lumen-a11y) and a transitive one via
 # winit, so no new Cargo.lock entries.
 # Graduation: permanent while startup remains a tracked §4 score-table metric.
+# `Win32_Globalization` (GetUserPreferredUILanguages, src/os_locale.rs) feeds
+# `Accept-Language` / `navigator.languages` with the Windows language list; the
+# feature is already enabled workspace-wide through winit.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Registry",
