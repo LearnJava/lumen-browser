@@ -819,6 +819,14 @@ navigator.clipboard = {
     },
     writeText: function(text) {
         return new Promise(function(resolve, reject) {
+            // UX-USER-ACTIVATION: writing the clipboard needs a live user
+            // activation unless the user allowed the clipboard for the site.
+            if (typeof _lumen_gesture_required === 'function'
+                && _lumen_gesture_required(String(location.origin), 'clipboard')
+                && !(typeof _lumen_user_activation_is_active === 'function' && _lumen_user_activation_is_active())) {
+                reject(new DOMException('Write permission denied.', 'NotAllowedError'));
+                return;
+            }
             try {
                 if (typeof _lumen_clipboard_write === 'function') {
                     _lumen_clipboard_write(String(text == null ? '' : text));

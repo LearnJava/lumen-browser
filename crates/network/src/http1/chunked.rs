@@ -5,7 +5,9 @@
 use std::io::{BufRead, Read};
 
 use lumen_core::error::{Error, Result};
+use lumen_core::net_error::NetErrorCode;
 
+use crate::http1::read_failure;
 use crate::http1::response::read_head;
 use crate::{ChunkSink, Connection, Response, header_value};
 
@@ -20,12 +22,12 @@ pub(crate) fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
         let mut size_line = String::new();
         reader
             .read_line(&mut size_line)
-            .map_err(|e| Error::Network(format!("chunked size: {e}")))?;
+            .map_err(|e| read_failure("chunked size", &e))?;
         let size_str = size_line.trim_end_matches(['\r', '\n']);
         // Chunk extensions after ';' are ignored.
         let size_hex = size_str.split(';').next().unwrap_or("").trim();
         let chunk_size = usize::from_str_radix(size_hex, 16)
-            .map_err(|_| Error::Network(format!("invalid chunk size: {size_hex:?}")))?;
+            .map_err(|_| Error::net_failure(NetErrorCode::InvalidResponse, format!("invalid chunk size: {size_hex:?}")))?;
         if chunk_size == 0 {
             // Last chunk: дочитать trailer-section (произвольно много
             // trailer-header строк) до пустой строки.
@@ -33,7 +35,7 @@ pub(crate) fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
                 let mut line = String::new();
                 let n = reader
                     .read_line(&mut line)
-                    .map_err(|e| Error::Network(format!("chunked trailer: {e}")))?;
+                    .map_err(|e| read_failure("chunked trailer", &e))?;
                 if n == 0 {
                     // EOF — для chunked это допустимо после last-chunk
                     // (трейлер опционален), но caller должен mark соединение
@@ -50,13 +52,13 @@ pub(crate) fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
         let mut chunk = vec![0u8; chunk_size];
         reader
             .read_exact(&mut chunk)
-            .map_err(|e| Error::Network(format!("chunked body: {e}")))?;
+            .map_err(|e| read_failure("chunked body", &e))?;
         body.extend_from_slice(&chunk);
         // CRLF after chunk data.
         let mut crlf = [0u8; 2];
         reader
             .read_exact(&mut crlf)
-            .map_err(|e| Error::Network(format!("chunked crlf: {e}")))?;
+            .map_err(|e| read_failure("chunked crlf", &e))?;
     }
     Ok(body)
 }
@@ -233,11 +235,13 @@ impl<R: BufRead> Read for BodyReader<'_, R> {
 struct TeeReader<'a, R: Read> {
     inner: R,
     captured: &'a mut Vec<u8>,
+    /// Читающий сокет вернул ошибку: сбой декодера после этого — не битые данные.
+    failed: bool,
 }
 
 impl<R: Read> Read for TeeReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
+        let n = self.inner.read(buf).inspect_err(|_| self.failed = true)?;
         self.captured.extend_from_slice(&buf[..n]);
         Ok(n)
     }
@@ -262,7 +266,7 @@ pub(crate) fn read_body_to_eof<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
             Ok(0) => return Ok(buf),
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(buf),
-            Err(e) => return Err(Error::Network(format!("read body: {e}"))),
+            Err(e) => return Err(read_failure("read body", &e)),
         }
     }
 }
@@ -276,7 +280,7 @@ pub(crate) fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFram
             let mut buf = vec![0u8; len];
             reader
                 .read_exact(&mut buf)
-                .map_err(|e| Error::Network(format!("read body: {e}")))?;
+                .map_err(|e| read_failure("read body", &e))?;
             Ok(buf)
         }
         BodyFraming::Eof => read_body_to_eof(reader),
@@ -346,7 +350,7 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
                     sink(&buf[..n], &headers);
                 }
                 Err(e) => {
-                    err = Some(Error::Network(format!("read body: {e}")));
+                    err = Some(read_failure("read body", &e));
                     break;
                 }
             }
@@ -358,8 +362,10 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
         let mut tee = TeeReader {
             inner: &mut body,
             captured: &mut raw,
+            failed: false,
         };
         let mut err = None;
+        let mut decode_err = None;
         {
             let mut dec: Box<dyn Read + '_> = match decode {
                 StreamDecode::Brotli => {
@@ -375,11 +381,19 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
                     Ok(0) => break,
                     Ok(n) => sink(&buf[..n], &headers),
                     Err(e) => {
-                        err = Some(Error::Network(format!("decode body: {e}")));
+                        decode_err = Some(e);
                         break;
                     }
                 }
             }
+        }
+        if let Some(e) = decode_err {
+            // Сбой чтения сокета под декодером — сетевая ошибка; иначе байты не разжались.
+            err = Some(if tee.failed {
+                read_failure("read body", &e)
+            } else {
+                Error::net_failure(NetErrorCode::ContentDecodingFailed, format!("decode body: {e}"))
+            });
         }
         // Дочитать остаток framed-тела (декодер мог остановиться на конце
         // brotli/gzip-потока раньше Content-Length), чтобы соединение было
@@ -391,7 +405,7 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
                     Ok(0) => break,
                     Ok(_) => {}
                     Err(e) => {
-                        err = Some(Error::Network(format!("read body: {e}")));
+                        err = Some(read_failure("read body", &e));
                         break;
                     }
                 }

@@ -8,6 +8,7 @@
 //! the visibility of methods called from outside their new home differ.
 
 mod a11y_media;
+mod accesskey;
 mod ai_answer;
 mod animated_computed_style;
 mod animation_events;
@@ -60,6 +61,7 @@ mod session;
 mod smil;
 mod spell_menu;
 mod state;
+mod link_open;
 mod tabs_cmd;
 mod doc_select;
 mod text_drag_select;

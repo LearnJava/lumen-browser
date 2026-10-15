@@ -308,6 +308,7 @@ pub(in crate::style) fn apply_decl_layout(
                 // this value is genuinely specified, not a replaced
                 // element's intrinsic-size fallback.
                 style.width_is_intrinsic_hint = false;
+                style.width_is_ua_default = false;
             }
         }
         "height" => {
@@ -318,6 +319,7 @@ pub(in crate::style) fn apply_decl_layout(
                 style.anchor_size_h = None;
                 // BUG-736: see the `"width"` arm above.
                 style.height_is_intrinsic_hint = false;
+                style.height_is_ua_default = false;
             }
         }
         // CSS Logical Properties L1 §2.1 — inline-size / block-size.

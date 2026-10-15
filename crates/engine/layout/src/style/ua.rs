@@ -508,33 +508,45 @@ pub(in crate::style) fn apply_ua_form_controls(doc: &Document, node: NodeId, sty
                 }
                 "checkbox" | "radio" => {
                     style.width = Some(Length::Px(13.0));
+                    style.width_is_ua_default = true;
                     style.height = Some(Length::Px(13.0));
+                    style.height_is_ua_default = true;
                 }
                 "range" => {
                     style.width = Some(Length::Px(129.0));
+                    style.width_is_ua_default = true;
                     style.height = Some(Length::Px(20.0));
+                    style.height_is_ua_default = true;
                     // Range input has no visible border — track/thumb are drawn by paint.
                     return;
                 }
                 _ => {
                     style.width = Some(Length::Px(174.0));
+                    style.width_is_ua_default = true;
                     style.height = Some(Length::Px(21.0));
+                    style.height_is_ua_default = true;
                 }
             }
         }
         "button" => {
             style.height = Some(Length::Px(21.0));
+            style.height_is_ua_default = true;
         }
         "textarea" => {
             style.width = Some(Length::Px(200.0));
+            style.width_is_ua_default = true;
             style.height = Some(Length::Px(48.0));
+            style.height_is_ua_default = true;
         }
         "select" => {
             style.height = Some(Length::Px(21.0));
+            style.height_is_ua_default = true;
         }
         "progress" | "meter" => {
             style.width = Some(Length::Px(300.0));
+            style.width_is_ua_default = true;
             style.height = Some(Length::Px(16.0));
+            style.height_is_ua_default = true;
         }
         _ => return,
     }
