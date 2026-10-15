@@ -238,43 +238,47 @@ pub enum SelectScope {
     Contain(Range),
 }
 
+/// First and last text position of the `InlineRun`s under `b`.
+fn text_span(b: &LayoutBox, first: &mut Option<DomPosition>, last: &mut Option<DomPosition>) {
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        for f in lines.iter().flatten() {
+            if f.text.is_empty() || f.img_src.is_some() {
+                continue;
+            }
+            let (end_node, end_off) = match f.merged_sources.last() {
+                Some(m) => (m.source_node, m.source_char_offset + (f.text.len() as u32 - m.text_byte)),
+                None => (f.source_node, f.source_char_offset + f.text.len() as u32),
+            };
+            if first.is_none() {
+                *first = Some(DomPosition { container: f.source_node, offset: f.source_char_offset });
+            }
+            *last = Some(DomPosition { container: end_node, offset: end_off });
+        }
+    }
+    for c in &b.children {
+        text_span(c, first, last);
+    }
+}
+
+/// Whether page point `(x, y)` lies on a line of an `InlineRun` under `b`.
+fn hit_text(b: &LayoutBox, x: f32, y: f32) -> bool {
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        let line_h = b.used_line_height;
+        if line_h > 0.0 && !lines.is_empty() {
+            let rel_y = y - b.rect.y;
+            if rel_y >= 0.0 && rel_y < line_h * lines.len() as f32 && x >= b.rect.x {
+                return true;
+            }
+        }
+    }
+    b.children.iter().any(|c| hit_text(c, x, y))
+}
+
 /// The `user-select: all` / `contain` scope under page point `(x, y)`, or
 /// `None` for ordinary (`auto`/`text`) text. The scope is the topmost box on
 /// the path to the hit text that declares the value (the property inherits, so
 /// every descendant computes to the same value), spanning all its text.
 pub fn select_scope_at_point(root: &LayoutBox, x: f32, y: f32) -> Option<SelectScope> {
-    fn text_span(b: &LayoutBox, first: &mut Option<DomPosition>, last: &mut Option<DomPosition>) {
-        if let BoxKind::InlineRun { lines, .. } = &b.kind {
-            for f in lines.iter().flatten() {
-                if f.text.is_empty() || f.img_src.is_some() {
-                    continue;
-                }
-                let (end_node, end_off) = match f.merged_sources.last() {
-                    Some(m) => (m.source_node, m.source_char_offset + (f.text.len() as u32 - m.text_byte)),
-                    None => (f.source_node, f.source_char_offset + f.text.len() as u32),
-                };
-                if first.is_none() {
-                    *first = Some(DomPosition { container: f.source_node, offset: f.source_char_offset });
-                }
-                *last = Some(DomPosition { container: end_node, offset: end_off });
-            }
-        }
-        for c in &b.children {
-            text_span(c, first, last);
-        }
-    }
-    fn hit_text(b: &LayoutBox, x: f32, y: f32) -> bool {
-        if let BoxKind::InlineRun { lines, .. } = &b.kind {
-            let line_h = b.used_line_height;
-            if line_h > 0.0 && !lines.is_empty() {
-                let rel_y = y - b.rect.y;
-                if rel_y >= 0.0 && rel_y < line_h * lines.len() as f32 && x >= b.rect.x {
-                    return true;
-                }
-            }
-        }
-        b.children.iter().any(|c| hit_text(c, x, y))
-    }
     fn walk(b: &LayoutBox, x: f32, y: f32, scope: Option<&LayoutBox>) -> Option<SelectScope> {
         let scope = scope.or_else(|| {
             matches!(b.style.user_select, UserSelect::All | UserSelect::Contain).then_some(b)
@@ -295,6 +299,21 @@ pub fn select_scope_at_point(root: &LayoutBox, x: f32, y: f32) -> Option<SelectS
         b.children.iter().find_map(|c| walk(c, x, y, scope))
     }
     walk(root, x, y, None)
+}
+
+/// The text of the paragraph (the whole `InlineRun`, i.e. everything between
+/// the block boundaries around it) under page point `(x, y)` — the triple-click
+/// selection. `None` over no text.
+pub fn paragraph_range_at_point(root: &LayoutBox, x: f32, y: f32) -> Option<Range> {
+    fn walk(b: &LayoutBox, x: f32, y: f32) -> Option<Range> {
+        if matches!(b.kind, BoxKind::InlineRun { .. }) && hit_text(b, x, y) {
+            let (mut first, mut last) = (None, None);
+            text_span(b, &mut first, &mut last);
+            return Some(Range { start: first?, end: last? });
+        }
+        b.children.iter().find_map(|c| walk(c, x, y))
+    }
+    walk(root, x, y)
 }
 
 /// Clamp `pos` into `scope` (arena order, then byte offset) — the
@@ -815,6 +834,15 @@ mod tests {
         st.user_select = UserSelect::Contain;
         b.style = std::sync::Arc::new(st);
         assert!(matches!(select_scope_at_point(&b, 5.0, 5.0), Some(SelectScope::Contain(_))));
+    }
+
+    #[test]
+    fn paragraph_range_spans_the_whole_inline_run() {
+        let b = two_frag_box(UserSelect::Auto);
+        let r = paragraph_range_at_point(&b, 5.0, 5.0).expect("text under the point");
+        assert_eq!(r.start, pos(2, 0));
+        assert_eq!(r.end, pos(3, 3));
+        assert_eq!(paragraph_range_at_point(&b, 5.0, 500.0), None);
     }
 
     #[test]

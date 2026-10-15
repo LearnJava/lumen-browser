@@ -42,8 +42,10 @@ pub struct OsParams {
     /// Longest gap between the two presses of a double click, ms
     /// (`GetDoubleClickTime`).
     pub double_click_ms: u32,
-    /// Pointer travel allowed between the two presses of a double click, per
-    /// axis, CSS px (`SM_CXDOUBLECLK`/`SM_CYDOUBLECLK`).
+    /// Size of the rectangle around the first press of a double click in which
+    /// the second must fall, per axis, CSS px (`SM_CXDOUBLECLK`/
+    /// `SM_CYDOUBLECLK`). The rectangle is centred on the first press, so the
+    /// allowed travel is half of it each way.
     pub double_click_slop: (f32, f32),
     /// Pointer travel after which a press becomes a drag, CSS px
     /// (`SM_CXDRAG`/`SM_CYDRAG` at 96 dpi, which is CSS px by definition).
@@ -119,12 +121,13 @@ impl OsParams {
     }
 
     /// Whether a press `gap_ms` after the previous one and `(dx, dy)` CSS px
-    /// away from it is the second half of a double click.
+    /// away from it is the second half of a double click: `abs(dx) <= cx / 2`
+    /// (and the same for `y`) — the OS metric is the width of the zone.
     #[must_use]
     pub fn is_double_click(&self, gap_ms: f64, dx: f32, dy: f32) -> bool {
         (0.0..=f64::from(self.double_click_ms)).contains(&gap_ms)
-            && dx.abs() <= self.double_click_slop.0
-            && dy.abs() <= self.double_click_slop.1
+            && dx.abs() <= self.double_click_slop.0 / 2.0
+            && dy.abs() <= self.double_click_slop.1 / 2.0
     }
 
     /// Whether a pointer that moved `(dx, dy)` CSS px since the press has left

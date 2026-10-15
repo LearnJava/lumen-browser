@@ -233,6 +233,14 @@ impl Lumen {
                     return;
                 }
             }
+            // UX-DBLCLICK: count this press within the OS double-click time
+            // and zone; the count is `detail` of mousedown/mouseup/click.
+            let clicks = self.click_streak.press(
+                &platform::os_params::current(),
+                self.epoch.elapsed().as_secs_f64() * 1000.0,
+                x_css,
+                y_css,
+            );
             // Fire mousedown + pointerdown on the hovered DOM element.
             // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
             // any default action (click). Only when cursor is over page content.
@@ -243,7 +251,7 @@ impl Lumen {
                 self.flush_pointer_moves();
                 let nid = hov.index() as u32;
                 self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
-                self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
+                self.js_click_event(nid, "mousedown", (x_css, y_css), (0, 1), clicks);
             }
             // BUG-480 срез 16: курсор над содержимым фрейма — нажатие
             // принадлежит под-документу. Ветка исключающая: пока `hovered_frame`
@@ -517,6 +525,16 @@ impl Lumen {
                     // CSS UI L4 §6.2: page-text drag selection with
                     // `user-select` enforced; a field drag armed above wins.
                     self.begin_doc_select(x_css, y_css);
+                    // UX-DBLCLICK: the second press of a streak fires
+                    // `dblclick` right after its `click`, the second and
+                    // third select a word and a paragraph.
+                    #[cfg(feature = "v8")]
+                    if clicks == 2
+                        && let Some(hov) = self.hovered_nid
+                    {
+                        self.js_click_event(hov.index() as u32, "dblclick", (x_css, y_css), (0, 0), 2);
+                    }
+                    self.select_by_click_count(x_css, y_css, clicks);
                 }
             }
         } else {

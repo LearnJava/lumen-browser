@@ -415,6 +415,7 @@ fn run_window_mode_inner(
         chrome_float_offsets: HashMap::new(),
         chrome_float_drag: None,
         chrome_float_last_press: None,
+        click_streak: Default::default(),
         chrome_prev_cascade_styles: lumen_layout::CascadeStyles::default(),
         chrome_restyle_indexes: lumen_layout::style::RestyleIndexCache::default(),
         chrome_prev_interactive: (None, None, None),

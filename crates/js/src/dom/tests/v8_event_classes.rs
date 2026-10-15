@@ -797,6 +797,21 @@ fn dispatch_mouse_event_modifier_flags() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// UX-DBLCLICK: the shell passes the click count as the 8th argument; it is
+/// `MouseEvent.detail`, `dblclick` reaches both `addEventListener` and the
+/// `ondblclick` handler, and movement events keep `detail` 0.
+#[test]
+fn dispatch_mouse_event_carries_click_count_and_dblclick() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var log = [];                  var el = document.getElementById('main');                  el.addEventListener('mousedown', function(e) { log.push('down' + e.detail); });                  el.addEventListener('click', function(e) { log.push('click' + e.detail); });                  el.addEventListener('dblclick', function(e) { log.push('dbl' + e.detail + e.type); });                  el.ondblclick = function(e) { log.push('on' + e.detail); };                  el.addEventListener('mouseover', function(e) { log.push('over' + e.detail); });                  _lumen_dispatch_mouse_event(el.__nid__, 'mouseover', 1, 1, 0, 0, 0);                  _lumen_dispatch_mouse_event(el.__nid__, 'mousedown', 1, 1, 0, 1, 0, 2);                  _lumen_dispatch_mouse_event(el.__nid__, 'click', 1, 1, 0, 1, 0, 2);                  _lumen_dispatch_mouse_event(el.__nid__, 'dblclick', 1, 1, 0, 0, 0, 2);                  log.join(',')"
+    ).unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String("over0,down2,click2,dbl2dblclick,on2".to_string())
+    );
+}
+
 #[test]
 fn window_exports_all_event_classes() {
     let rt = v8_runtime_with_dom(make_doc());

@@ -156,7 +156,7 @@ fn osparams_double_press_follows_os_time_and_slop() {
         at_ms: 1_000.0,
         pos: (100.0, 200.0),
     };
-    let slow = OsParams { double_click_ms: 2_000, double_click_slop: (10.0, 10.0), ..OsParams::DEFAULT };
+    let slow = OsParams { double_click_ms: 2_000, double_click_slop: (20.0, 20.0), ..OsParams::DEFAULT };
     // 1,5 с и 8 px: для настроек по умолчанию это два нажатия, для замедленных — дабл-клик.
     assert!(!is_double_press(&OsParams::DEFAULT, Some(&prev), lumen_chrome::ids::DEMO_BAR, 2_500.0, 108.0, 200.0));
     assert!(is_double_press(&slow, Some(&prev), lumen_chrome::ids::DEMO_BAR, 2_500.0, 108.0, 200.0));

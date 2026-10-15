@@ -221,6 +221,9 @@ pub(crate) struct Lumen {
     /// double-click detection (winit delivers raw press/release, there is no
     /// OS double-click event to read).
     pub(crate) chrome_float_last_press: Option<FloatingPanelPress>,
+    /// UX-DBLCLICK: left-press streak behind `MouseEvent.detail`, `dblclick`
+    /// and the word/paragraph selection ([`super::click_count`]).
+    pub(crate) click_streak: super::click_count::ClickStreak,
     /// BUG-341 S5: the per-node `ComputedStyle` cascade cache
     /// ([`lumen_layout::CounterMap::styles`]) from the previous pass —
     /// `RestyleDelta::prev_styles` for the next incremental cascade. Distinct
