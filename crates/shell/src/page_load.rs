@@ -2502,17 +2502,12 @@ impl Lumen {
 
         // Update permission panel origin on navigation.
         {
-            let origin = self.source.url_str().and_then(|u| {
-                // Build bare origin (scheme + host) for permission keying.
-                let scheme_end = u.find("://")?;
-                let scheme = &u[..scheme_end + 3];
-                let rest = &u[scheme_end + 3..];
-                let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-                let host = &rest[..host_end];
-                let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
-                if host.is_empty() { None } else { Some(format!("{}{}", scheme, host.to_ascii_lowercase())) }
-            });
+            // Bare origin (scheme + host) for permission keying.
+            let origin = self.source.url_str().and_then(crate::panels::permission_panel::permission_origin);
             self.permission.set_origin(origin);
+            // UX-USER-ACTIVATION: the blocked-popup indicator belongs to the
+            // document that was blocked, not to the one that replaces it.
+            self.blocked_popups.remove(&self.tab_strip.tabs[self.tab_strip.active].id);
             // UX-PERMISSIONS-3: a saved answer shows in `Notification.permission`
             // without the page having to call requestPermission().
             use crate::panels::permission_panel::{PermissionKind, PermissionState};

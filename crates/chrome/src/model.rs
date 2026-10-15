@@ -91,13 +91,13 @@ pub struct ChromeModel {
     /// trackers/ads/fingerprint breakdown would be fabricated), so this binds
     /// only the one real number rather than inventing the other two.
     pub blocked_total: u32,
-    /// Grant state for the four permission rows, in asset order (`Камера`,
-    /// `Микрофон`, `Уведомления`, `Буфер обмена`) — exactly
+    /// Grant state for the five permission rows, in asset order (`Камера`,
+    /// `Микрофон`, `Уведомления`, `Буфер обмена`, `Всплывающие окна`) — exactly
     /// `PermissionKind::ALL`. The last two rows were added to the design
     /// reference by [BUG-411](../../../bugs/BUG-411-FIXED.md); before that the
     /// asset had only the first two, which left `Notifications`/`Clipboard`
     /// unreachable from the UI.
-    pub permissions: [ChromePermState; 4],
+    pub permissions: [ChromePermState; 5],
     /// Host the popover applies to (`shieldSiteRow` + the `#permDomain` span in
     /// its `Разрешения — …` heading), or empty when no host-bearing page is
     /// loaded (`about:blank`, `file://`) — [BUG-411](../../../bugs/BUG-411-FIXED.md).
@@ -937,6 +937,10 @@ pub struct OmniboxModel {
     /// `Some(percent)` shows the `#zoomBtn` page-zoom indicator with this
     /// label (UX-ZOOM); `None` — zoom is 100 % and the button stays hidden.
     pub zoom_percent: Option<u32>,
+    /// `n > 0` shows the `#popupBtn` blocked-popup indicator with this count
+    /// (UX-USER-ACTIVATION): the page called `window.open()` without a user
+    /// gesture `n` times since it loaded.
+    pub popups_blocked: u32,
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
@@ -2594,6 +2598,12 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
         (doc.find_by_id(crate::ids::ZOOM_LABEL), omnibox.zoom_percent)
     {
         set_text(doc, label, &format!("{percent}%"));
+    }
+    if let Some(btn) = doc.find_by_id(crate::ids::POPUP_BTN) {
+        set_class_token(doc, btn, "show", omnibox.popups_blocked > 0);
+    }
+    if let Some(label) = doc.find_by_id(crate::ids::POPUP_LABEL) {
+        set_text(doc, label, &omnibox.popups_blocked.max(1).to_string());
     }
     let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
     set_class_token(doc, warn, "show", omnibox.warning.is_some());
@@ -4354,6 +4364,7 @@ mod tests {
                 ChromePermState::Deny,
                 ChromePermState::Deny,
                 ChromePermState::Allow,
+                ChromePermState::Allow,
             ],
             ..ChromeModel::default()
         };
@@ -4374,8 +4385,9 @@ mod tests {
 
         let rows: Vec<NodeId> =
             doc.get(popover).children.iter().copied().filter(|&c| has_class(&doc, c, "perm-row")).collect();
-        // BUG-411 added the Notifications/Clipboard rows the design was missing.
-        assert_eq!(rows.len(), 4);
+        // BUG-411 added the Notifications/Clipboard rows the design was missing;
+        // UX-USER-ACTIVATION added the pop-ups row.
+        assert_eq!(rows.len(), 5);
         let camera_actions = doc.get(rows[0]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
         let camera_allow = doc.get(camera_actions).children.iter().copied().find(|&c| has_class(&doc, c, "allow")).unwrap();
         assert!(has_class(&doc, camera_allow, "selected-allow"));
@@ -4419,6 +4431,27 @@ mod tests {
         assert_eq!(text_of(&doc, span), NO_DOMAIN_LABEL);
         assert!(has_class(&doc, toggle, "on"));
         assert_eq!(text_of(&doc, state), "Вкл");
+    }
+
+    /// UX-USER-ACTIVATION: `#popupBtn` shows the number of blocked popups and
+    /// hides again when there are none.
+    #[test]
+    fn blocked_popup_indicator_follows_the_count() {
+        let mut doc = parse_asset();
+        let btn = doc.find_by_id(crate::ids::POPUP_BTN).expect("asset has #popupBtn");
+        let label = doc.find_by_id(crate::ids::POPUP_LABEL).expect("asset has #popupLabel");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
+        let model = ChromeModel {
+            omnibox: OmniboxModel { popups_blocked: 3, ..Default::default() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, btn, "show"));
+        assert_eq!(text_of(&doc, label), "3");
+        assert_eq!(doc.get(btn).get_attr("data-action"), Some("toggle-shield-popover"));
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, btn, "show"));
     }
 
     #[test]

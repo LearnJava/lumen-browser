@@ -906,6 +906,10 @@ impl Lumen {
                 value: omnibox_value,
                 warning: omnibox_warning.map(str::to_owned),
                 zoom_percent: zoom::percent_label(self.zoom_factor),
+                popups_blocked: self
+                    .blocked_popups
+                    .get(&self.tab_strip.tabs[self.tab_strip.active].id)
+                    .map_or(0, |urls| u32::try_from(urls.len()).unwrap_or(u32::MAX)),
             },
             sidebar_collapsed: self.chrome_sidebar_collapsed,
             dropdown,
@@ -1163,6 +1167,12 @@ impl Lumen {
             Some(Arc::clone(&self.permissions_disk_store))
         };
         if let Some(store) = store {
+            // UX-USER-ACTIVATION: the JS gate asks this store whether the user
+            // allowed popups / clipboard writes for the document's site.
+            let gate_store = Arc::clone(&store);
+            lumen_js::popup_policy::set_site_resolver(Some(Arc::new(move |origin, kind| {
+                panels::permission_panel::site_allows(&gate_store, origin, kind)
+            })));
             self.permission.set_store(store);
         }
     }
@@ -1828,6 +1838,13 @@ impl Lumen {
                         _ => None,
                     };
                     if let Some(state) = state {
+                        if kind == panels::permission_panel::PermissionKind::Popups
+                            && state == panels::permission_panel::PermissionState::Allow
+                        {
+                            // The user answered the indicator: it has done its job.
+                            let tab_id = self.tab_strip.tabs[self.tab_strip.active].id;
+                            self.blocked_popups.remove(&tab_id);
+                        }
                         let waited = self.permission.answer(kind, state);
                         if waited {
                             self.settle_page_permission(kind, state);

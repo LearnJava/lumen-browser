@@ -703,6 +703,7 @@ fn run_window_mode_inner(
         control_panel_info_open: false,
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new().with_store(permissions_store.clone()),
+        blocked_popups: std::collections::HashMap::new(),
         permissions_disk_store: permissions_store,
         external_browser_rules,
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
@@ -833,6 +834,10 @@ fn run_window_mode_inner(
     };
     // UX-PERMISSIONS-3: a persisted Anonymous profile must not write decisions to disk.
     app.sync_permission_store();
+    // UX-USER-ACTIVATION: popups, clipboard writes and permission prompts need
+    // a user gesture in the interactive browser; `LUMEN_ALLOW_POPUPS=1` lifts
+    // the gate for automation that drives pages with `eval`.
+    lumen_js::popup_policy::set_gate_enabled(std::env::var_os("LUMEN_ALLOW_POPUPS").is_none());
     // BUG-411: seed the shields fallback from the persisted "Блокировать
     // рекламу" setting and push it at the process-global filter, which
     // `config::init_adblock` deliberately leaves off. Before this the setting
