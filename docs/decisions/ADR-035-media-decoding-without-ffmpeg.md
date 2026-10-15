@@ -77,6 +77,10 @@ of `lumen-image` for AVIF with a working `dav1d_open`/`dav1d_send_data` wrapper
 
 Замер 1080p/30 кадр/с, 10 с, ≈4,5 Мбит/с на машине разработчика (i5-10210U, 8 потоков): без `asm` декодер работает на ≈0,9× реального времени — не хватает; с `asm` (nasm) ≈3,3×, на одном потоке 2,25× ([docs/perf/av1-decode.md](../perf/av1-decode.md)). Решение: общий крейт `lumen-av1` держит `asm` за фичей (`lumen-shell --features av1-asm`), в default она выключена, чтобы `cargo build` не требовал nasm; **релизные сборки обязаны её включать**. Аппаратный AV1 через ОС остаётся быстрым путём там, где он есть.
 
+### Addendum 2026-10-15 (UX-VIDEO-NATIVE): реализация п.1
+
+Крейт `lumen-media-native` (`NativeVideoDecoder`, реестр бэкендов кодеков, `NativeSession` с общим курсором демуксера) подключён к `<video>` в штатной сборке: `lumen_js::set_video_decoder` ставит декодер до создания JS-контекстов, `canPlayType` отвечает по реестру, путь воспроизведения шелла нейтрален (`tick_video_sessions`, `pending_container_loads`). FFmpeg остался только за `--features ffmpeg-video` как dev-бэкенд на месте того же слота. Реализованы бэкенды AV1 (`lumen-av1`) и Vorbis (`lewton`); H.264/HEVC/AAC — задачи `COMPAT-MEDIA-OSDEC-*`, VP9/Opus — `UX-VIDEO-VP9`/`UX-VIDEO-OPUS`. Подробности — [subsystems/media-native.md](../../subsystems/media-native.md).
+
 ## Alternatives considered
 
 | Alternative | Why rejected |

@@ -1,0 +1,19 @@
+[package]
+name = "lumen-media-native"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: собственный VideoDecoder без FFmpeg — реестр декодеров кодеков поверх демуксеров (UX-VIDEO-NATIVE, ADR-035 п.1)"
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+lumen-core.workspace = true
+lumen-media-demux.workspace = true
+lumen-av1.workspace = true
+# Тот же lewton, что у lumen-media-demux (Ogg): декодирование Vorbis в PCM, чистый Rust.
+lewton = "0.10"
+
+[lints]
+workspace = true

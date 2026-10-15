@@ -1706,6 +1706,17 @@ pub trait VideoDecoder: Send + Sync {
     /// `HTMLMediaElement.canPlayType()` при подключённом декодере.
     fn mime_types(&self) -> &'static [&'static str];
 
+    /// Ответ `HTMLMediaElement.canPlayType(mime)` (HTML LS §4.8.11.7):
+    /// `"probably"`, `"maybe"` или `""`. По умолчанию — `"maybe"` для MIME из
+    /// [`Self::mime_types`] (параметр `codecs` игнорируется); реализации с
+    /// реестром кодеков переопределяют, чтобы не обещать то, чего не откроют
+    /// (ADR-034 п.2: feature detection не лжёт).
+    fn can_play_type(&self, mime: &str) -> &'static str {
+        let m = mime.trim().to_ascii_lowercase();
+        let base = m.split(';').next().unwrap_or("").trim();
+        if self.mime_types().contains(&base) { "maybe" } else { "" }
+    }
+
     /// Открыть контейнер и вернуть сессию декодирования, либо диагностику
     /// ошибки (аналог HTML LS «dedicated media source failure steps»).
     ///

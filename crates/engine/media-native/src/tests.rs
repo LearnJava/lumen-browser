@@ -1,0 +1,221 @@
+//! Тесты реестра, `canPlayType` и сессии на реальных файлах.
+//!
+//! `tests/data/av1-vorbis.webm` — 64×64, 25 кадр/с, 3 с, ключевой кадр каждые
+//! 10 кадров, звук Vorbis моно 44,1 кГц (ffmpeg 9: `testsrc2` + `sine=440`,
+//! libaom-av1 + libvorbis).
+
+use lumen_core::ext::{VideoDecodeSession, VideoDecoder};
+
+use super::*;
+
+const AV1_VORBIS: &[u8] = include_bytes!("../tests/data/av1-vorbis.webm");
+const AV1_MP4: &[u8] = include_bytes!("../../media-demux/tests/data/av1.mp4");
+const HEVC_MP4: &[u8] = include_bytes!("../../media-demux/tests/data/hevc.mp4");
+const VP9_WEBM: &[u8] = include_bytes!("../../../../tests/wpt/media/video.webm");
+
+fn open(bytes: &[u8]) -> Box<dyn VideoDecodeSession> {
+    NativeVideoDecoder::default().open(bytes).unwrap()
+}
+
+fn can_play(mime: &str) -> &'static str {
+    NativeVideoDecoder::default().can_play_type(mime)
+}
+
+#[test]
+fn can_play_type_av1_probably() {
+    assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08\""), "probably");
+    assert_eq!(can_play("video/mp4; codecs=\"av01.0.08M.10\""), "probably");
+    assert_eq!(can_play("VIDEO/WEBM; Codecs=\"av01.0.05M.08, vorbis\""), "probably");
+}
+
+#[test]
+fn can_play_type_unknown_or_unopenable_codec_is_empty() {
+    // Кодеки, которых в реестре нет (H.264/AAC придут от ОС, VP9/Opus — по замеру).
+    assert_eq!(can_play("video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\""), "");
+    assert_eq!(can_play("video/webm; codecs=\"vp09.00.10.08\""), "");
+    assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08, opus\""), "");
+    assert_eq!(can_play("video/webm; codecs=\"nonsense\""), "");
+    assert_eq!(can_play("video/webm; codecs=\"\""), "");
+    // Кодек не из этого контейнера.
+    assert_eq!(can_play("video/webm; codecs=\"avc1.42E01E\""), "");
+    assert_eq!(can_play("video/ogg; codecs=\"av01.0.05M.08\""), "");
+    // Неверный профиль/глубина AV1.
+    assert_eq!(can_play("video/webm; codecs=\"av01.3.05M.08\""), "");
+    assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.09\""), "");
+    assert_eq!(can_play("video/webm; codecs=\"av01.0.05X.08\""), "");
+}
+
+#[test]
+fn can_play_type_container_without_codecs_is_maybe() {
+    assert_eq!(can_play("video/webm"), "maybe");
+    assert_eq!(can_play("video/mp4"), "maybe");
+    assert_eq!(can_play("video/ogg"), "maybe");
+    assert_eq!(can_play("audio/ogg"), "maybe");
+    assert_eq!(can_play("video/x-matroska"), "");
+    assert_eq!(can_play("text/html"), "");
+    assert_eq!(can_play(""), "");
+}
+
+#[test]
+fn can_play_type_vorbis_in_ogg() {
+    assert_eq!(can_play("audio/ogg; codecs=vorbis"), "probably");
+    assert_eq!(can_play("audio/ogg; codecs=opus"), "");
+}
+
+#[test]
+fn empty_registry_plays_nothing() {
+    let reg = Box::leak(Box::new(registry::Registry::empty()));
+    let dec = NativeVideoDecoder::with_registry(reg);
+    assert_eq!(dec.can_play_type("video/webm"), "");
+    assert_eq!(dec.can_play_type("video/webm; codecs=\"av01.0.05M.08\""), "");
+    assert!(dec.open(AV1_VORBIS).is_err());
+}
+
+#[test]
+fn open_webm_reports_size_duration_and_audio() {
+    let s = open(AV1_VORBIS);
+    assert_eq!(s.dimensions(), (64, 64));
+    let d = s.duration_secs().unwrap();
+    assert!((2.9..3.1).contains(&d), "длительность {d}");
+    let a = s.audio_track().unwrap();
+    assert_eq!((a.sample_rate, a.channels), (44_100, 1));
+}
+
+#[test]
+fn frame_at_returns_rgba_of_frame_size_and_time_changes_it() {
+    let mut s = open(AV1_VORBIS);
+    let first = s.frame_at(0.0).unwrap();
+    assert_eq!(first.len(), 64 * 64 * 4);
+    assert!(first.chunks(4).all(|px| px[3] == 255));
+    let later = s.frame_at(1.0).unwrap();
+    assert_ne!(first, later, "testsrc2 меняется со временем");
+    // Повторный запрос той же позиции — тот же кадр.
+    assert_eq!(later, s.frame_at(1.0).unwrap());
+}
+
+#[test]
+fn sequential_playback_matches_fresh_seek() {
+    let mut playing = open(AV1_VORBIS);
+    let mut t = 0.0;
+    while t < 1.3 {
+        playing.frame_at(t).unwrap();
+        t += 0.033;
+    }
+    let sequential = playing.frame_at(1.3).unwrap();
+    let seeked = open(AV1_VORBIS).frame_at(1.3).unwrap();
+    assert_eq!(sequential, seeked);
+}
+
+#[test]
+fn backward_and_far_forward_seeks_land_on_the_same_frames() {
+    let reference = |t: f64| open(AV1_VORBIS).frame_at(t).unwrap();
+    let mut s = open(AV1_VORBIS);
+    let at_2 = s.frame_at(2.0).unwrap();
+    assert_eq!(at_2, reference(2.0));
+    // Назад — к ключевому кадру до цели.
+    assert_eq!(s.frame_at(0.5).unwrap(), reference(0.5));
+    // Далеко вперёд — перемоткой, а не декодированием подряд.
+    assert_eq!(s.frame_at(2.7).unwrap(), reference(2.7));
+    // Между ключевыми: 1,23 с — кадр 30 (пятый после ключевого на 1,2 с).
+    assert_eq!(s.frame_at(1.23).unwrap(), reference(1.23));
+}
+
+#[test]
+fn frame_at_past_the_end_shows_the_last_frame() {
+    let mut s = open(AV1_VORBIS);
+    let last = s.frame_at(2.96).unwrap();
+    assert_eq!(s.frame_at(10.0).unwrap(), last);
+    // После конца можно вернуться в начало.
+    assert_eq!(s.frame_at(0.0).unwrap(), open(AV1_VORBIS).frame_at(0.0).unwrap());
+}
+
+#[test]
+fn negative_and_nan_time_show_the_first_frame() {
+    let mut s = open(AV1_VORBIS);
+    let first = s.frame_at(0.0).unwrap();
+    assert_eq!(s.frame_at(-5.0).unwrap(), first);
+    assert_eq!(s.frame_at(f64::NAN).unwrap(), first);
+}
+
+#[test]
+fn audio_pcm_is_continuous_and_covers_the_file() {
+    let mut s = open(AV1_VORBIS);
+    s.frame_at(0.0).unwrap();
+    let mut total = 0usize;
+    let mut peak = 0i16;
+    // Тик за тиком, как в оболочке: кадр, затем кусок звука.
+    for step in 0..120 {
+        s.frame_at(f64::from(step) * 0.025).unwrap();
+        let pcm = s.decode_audio_pcm(1103).unwrap();
+        peak = peak.max(pcm.iter().map(|x| x.saturating_abs()).max().unwrap_or(0));
+        total += pcm.len();
+    }
+    // 120 запросов по 1103 сэмпла моно — файл хватает на ~2,99 с, но не на все 3 с.
+    assert!(total >= 120 * 1103 - 2048, "получено {total} сэмплов");
+    assert!(peak > 3000, "синус 440 Гц должен быть слышен, пик {peak}");
+}
+
+#[test]
+fn audio_pcm_after_seek_continues_from_the_new_position() {
+    let mut s = open(AV1_VORBIS);
+    s.frame_at(2.0).unwrap();
+    let pcm = s.decode_audio_pcm(4410).unwrap();
+    assert_eq!(pcm.len(), 4410);
+    assert!(pcm.iter().any(|&x| x.abs() > 3000));
+    // До конца файла звук заканчивается короткой порцией, а не ошибкой.
+    let mut left = 0;
+    loop {
+        let chunk = s.decode_audio_pcm(44_100).unwrap();
+        left += chunk.len();
+        if chunk.len() < 44_100 {
+            break;
+        }
+    }
+    assert!(left < 44_100 * 2, "после 2 с осталось {left} сэмплов");
+}
+
+#[test]
+fn mp4_with_av1_plays_from_a_late_keyframe_without_repeating_headers() {
+    let mut s = open(AV1_MP4);
+    assert_eq!(s.dimensions(), (64, 64));
+    assert!(s.audio_track().is_none());
+    let first = s.frame_at(0.0).unwrap();
+    let last = s.frame_at(100.0).unwrap();
+    assert_eq!(first.len(), last.len());
+    assert_ne!(first, last);
+    assert_eq!(s.frame_at(0.0).unwrap(), first);
+    assert!(s.decode_audio_pcm(100).is_err());
+}
+
+#[test]
+fn unsupported_video_codec_fails_to_open_with_a_reason() {
+    let hevc = NativeVideoDecoder::default().open(HEVC_MP4).err().unwrap();
+    assert!(hevc.contains("нет декодера"), "{hevc}");
+    assert!(hevc.contains("hev1"), "{hevc}");
+    let vp9 = NativeVideoDecoder::default().open(VP9_WEBM).err().unwrap();
+    assert!(vp9.contains("нет декодера"), "{vp9}");
+}
+
+#[test]
+fn garbage_does_not_open() {
+    let dec = NativeVideoDecoder::default();
+    assert!(dec.open(b"not a media file at all").is_err());
+    assert!(dec.open(&[]).is_err());
+    assert!(dec.open(&AV1_VORBIS[..40]).is_err());
+}
+
+#[test]
+fn truncated_file_still_opens_and_plays_what_is_there() {
+    let cut = &AV1_VORBIS[..AV1_VORBIS.len() / 2];
+    if let Ok(mut s) = NativeVideoDecoder::default().open(cut) {
+        s.frame_at(0.0).unwrap();
+        assert!(s.frame_at(0.4).is_ok());
+    }
+}
+
+#[test]
+fn decoder_identity() {
+    let d = NativeVideoDecoder::default();
+    assert_eq!(d.decoder_name(), "lumen-native");
+    assert!(d.mime_types().contains(&"video/webm"));
+}

@@ -21,14 +21,13 @@ impl Lumen {
         // GAP-MEDIADECODE срез 14: PCM audio sinks are not carried into the
         // snapshot — a backgrounded tab should not keep an audio device open
         // (mirrors real browsers muting/suspending hidden-tab media), and
-        // `video_ffmpeg_sessions`/`video_ffmpeg_last_ms` already restore the
+        // `video_sessions`/`video_last_ms` already restore the
         // visual side wholesale on `restore_page_snapshot` without needing
         // the audio timing to follow. Dropping here means it is always empty
         // by the time any `restore_page_snapshot` runs (the tab being
         // restored last left through this same method).
-        #[cfg(feature = "ffmpeg-video")]
-        self.video_ffmpeg_audio_sinks.clear();
-        self.video_ffmpeg_last_audio_ms.clear();
+        self.video_audio_sinks.clear();
+        self.video_last_audio_ms.clear();
         let snap = PageSnapshot {
             display_list: std::mem::take(&mut self.display_list),
             title: self.title.take(),
@@ -106,8 +105,8 @@ impl Lumen {
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
             video_gif_last_frame: std::mem::take(&mut self.video_gif_last_frame),
             video_gif_frames: std::mem::take(&mut self.video_gif_frames),
-            video_ffmpeg_sessions: std::mem::take(&mut self.video_ffmpeg_sessions),
-            video_ffmpeg_last_ms: std::mem::take(&mut self.video_ffmpeg_last_ms),
+            video_sessions: std::mem::take(&mut self.video_sessions),
+            video_last_ms: std::mem::take(&mut self.video_last_ms),
             image_cache: std::mem::replace(
                 &mut self.image_cache,
                 lumen_image::ImageDecodeCache::new(),
@@ -204,11 +203,11 @@ impl Lumen {
         self.gif_last_frame = snap.gif_last_frame;
         self.video_gif_last_frame = snap.video_gif_last_frame;
         self.video_gif_frames = snap.video_gif_frames;
-        self.video_ffmpeg_sessions = snap.video_ffmpeg_sessions;
-        self.video_ffmpeg_last_ms = snap.video_ffmpeg_last_ms;
+        self.video_sessions = snap.video_sessions;
+        self.video_last_ms = snap.video_last_ms;
         // Rebuild playback state from restored frames; JS re-queues loads on restore.
         self.video_gif_store.pending_loads.lock().unwrap().clear();
-        self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
+        self.video_gif_store.pending_container_loads.lock().unwrap().clear();
         {
             let mut pb = self.video_gif_store.playback.lock().unwrap();
             pb.clear();
@@ -228,11 +227,11 @@ impl Lumen {
                     height: gif.height,
                 });
             }
-            // GAP-MEDIADECODE срез 7: same rebuild for FFmpeg-backed sessions —
+            // GAP-MEDIADECODE срез 7: same rebuild for container-backed sessions —
             // `playback` is the shared map (comment on `VideoGifStore::playback`),
-            // so skipping this would silently drop ffmpeg-backed videos' playback
+            // so skipping this would silently drop container-backed videos' playback
             // state on every tab switch.
-            for (nid, session) in &self.video_ffmpeg_sessions {
+            for (nid, session) in &self.video_sessions {
                 let (width, height) = session.dimensions();
                 let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
                 pb.insert(*nid, lumen_js::video_gif_store::VideoPlaybackState {

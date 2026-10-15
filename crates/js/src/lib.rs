@@ -176,7 +176,7 @@ pub use screen_capture::set_screen_capture_provider;
 pub use audio_element::set_audio_playback_provider;
 pub use origin::set_public_suffix_list;
 pub use wake_lock::set_wake_lock_provider;
-pub use video_gif_store::{set_video_gif_store, VideoGifStore};
+pub use video_gif_store::{set_video_decoder, set_video_gif_store, VideoGifStore};
 pub use text_track_store::{set_text_track_store, CueData, TextTrackData, TextTrackStore};
 pub use css_properties_values_api::{RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::{PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
