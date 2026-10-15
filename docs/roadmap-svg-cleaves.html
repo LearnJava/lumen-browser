@@ -8518,9 +8518,9 @@
       {
        "id": "UX-OSPARAMS",
        "title": "Реестр системных параметров ОС вместо зашитых констант",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Параметры ввода не читаются из ОС: двойной клик 500 мс/4 px зашит (chrome_float.rs:38,43), порог DnD 4 CSS px (input/dnd.rs:11), щелчок колеса 40 CSS px (wheel_scroll.rs:31, mouse_wheel.rs:202) вместо 100×строки/3, WM_SETTINGCHANGE не ловится (нет with_msg_hook, window_mode.rs:34). Объём: platform/os_params — GetDoubleClickTime, SM_CXDOUBLECLK, SM_CXDRAG×DPI, WHEELSCROLLLINES, CARETWIDTH/CARETTIMEOUT, GetCaretBlinkTime, MOUSEHOVERTIME, CLIENTAREAANIMATION→reduced-motion; перечитывание по WM_SETTINGCHANGE; перевод потребителей. Приёмка: SM_CXDRAG=20 → сдвиг 15 px остаётся кликом; 6 строк → 200 CSS px за щелчок; смена в ОС без перезапуска. docs/research/browser-ux/report.md §9 №4, №7, §10.2 Исследование — docs/research/browser-ux/report.md."
+       "note": "**Сделано (2026-10-15, ветка `p6-ux-osparams`):** `crates/shell/src/platform/os_params/` — реестр `OsParams` (двойной клик: время и допуск, порог drag, строк за щелчок колеса, ширина/мигание/таймаут каретки, hover-время, «анимации выключены» → reduced-motion) с чистыми решениями `is_double_click`/`exceeds_drag`/`wheel_notch_px`; Windows-читатель (`GetDoubleClickTime`, `GetSystemMetricsForDpi(…, 96)`, `SystemParametersInfoW`) и наблюдатель — скрытое top-level окно на своём потоке, получающее broadcast `WM_SETTINGCHANGE` (это *sent*-сообщение, до `with_msg_hook` winit оно не доходит), поэтому msg hook не нужен. Потребители: `chrome_float::is_double_press`, DnD (`cursor_moved.rs`), колесо (`wheel_scroll::wheel_notch_px`, `mouse_wheel.rs`: 3 строки = 100 px, 6 = 200 px вместо 40), `Lumen::effective_reduced_motion`. Смена настройки в ОС применяется без перезапуска (перерисовка → `apply_os_params_change` → `relayout_chrome`). `--deterministic` замораживает реестр на умолчаниях. Поля каретки и hover-времени читаются, потребители — UX-CARET. Остаток: macOS/Linux-читатели. Исходная постановка: Параметры ввода не читаются из ОС: двойной клик 500 мс/4 px зашит (chrome_float.rs:38,43), порог DnD 4 CSS px (input/dnd.rs:11), щелчок колеса 40 CSS px (wheel_scroll.rs:31, mouse_wheel.rs:202) вместо 100×строки/3, WM_SETTINGCHANGE не ловится (нет with_msg_hook, window_mode.rs:34). Объём: platform/os_params — GetDoubleClickTime, SM_CXDOUBLECLK, SM_CXDRAG×DPI, WHEELSCROLLLINES, CARETWIDTH/CARETTIMEOUT, GetCaretBlinkTime, MOUSEHOVERTIME, CLIENTAREAANIMATION→reduced-motion; перечитывание по WM_SETTINGCHANGE; перевод потребителей. Приёмка: SM_CXDRAG=20 → сдвиг 15 px остаётся кликом; 6 строк → 200 CSS px за щелчок; смена в ОС без перезапуска. docs/research/browser-ux/report.md §9 №4, №7, §10.2 Исследование — docs/research/browser-ux/report.md."
       },
       {
        "id": "UX-DBLCLICK",
@@ -9105,6 +9105,56 @@
          "note": "Юридическая проверка медиа-решения ADR-035 (вместе с COMPAT-BIZ-ENTITY): декодеры ОС для H.264/HEVC/AAC (отчисления на стороне ОС), допустимость программного AAC через symphonia (UX-VIDEO-AAC-RUST), сроки истечения патентов H.264 (по исследованию: ЕС, Япония и Китай — 2025, США в основном 2027, последний в Бразилии — 2030; не проверено) для будущего встроенного запасного H.264. Владелец — пользователь. Приёмка: вывод записан в ADR-035 «Revisit when»."
         }
        ]
+      }
+     ]
+    },
+    {
+     "id": "TEXTQ",
+     "title": "Качество текста в живом окне",
+     "status": "planned",
+     "note": "Дорожка «Качество текста в живом окне» (владелец — P1, назначено 2026-10-15). Текст в wgpu-пути заметно мыльнее Chrome и нашего же `--screenshot`: глиф растрируется в одном из 8 bin-ов размера (CSS px) и масштабируется билинейно, DPR не учитывается, квады на дробных координатах, нет гаммы/контраста покрытия, нет шейпинга и синтетического bold/italic. Порядок: TEXTQ-1 (точный размер в device px + привязка к сетке) → TEXTQ-2 (гамма) → TEXTQ-3 (прокрутка) → TEXTQ-4 (шейпинг в отрисовке) → TEXTQ-5 (шейпинг в раскладке) → TEXTQ-6 (синтетический bold/italic). Вне дорожки пока: хинтинг, ClearType.",
+     "tasks": [
+      {
+       "id": "TEXTQ-1",
+       "title": "Глиф в точном размере в device px, тексель = пиксель",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-1.md](docs/tasks/TEXTQ-1.md). Убрать `SIZE_BINS`, растрировать в `font_size × scale_factor` (квант 1/4 px), baseline по Y — на целый device px, по X — 4 субпиксельные фазы в ключе атласа; страница качества текста в `GPU_CAPTURE` для замера до/после."
+      },
+      {
+       "id": "TEXTQ-2",
+       "title": "Гамма и контраст покрытия глифа",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-2.md](docs/tasks/TEXTQ-2.md). Зависит от TEXTQ-1. Гамма + контраст покрытия по яркости цвета текста (Skia/DirectWrite-стиль), одна функция для GPU и CPU."
+      },
+      {
+       "id": "TEXTQ-3",
+       "title": "Прокрутка без дробного сдвига полосы",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-3.md](docs/tasks/TEXTQ-3.md). Зависит от TEXTQ-1. Блит полосы прокрутки и слоёв со смещением скролла — на целые device px."
+      },
+      {
+       "id": "TEXTQ-4",
+       "title": "Шейпинг в GPU-пути отрисовки",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-4.md](docs/tasks/TEXTQ-4.md). Зависит от TEXTQ-1. rustybuzz в `push_text_glyphs`: кернинг, лигатуры, `font_features`; кэш шейпинга."
+      },
+      {
+       "id": "TEXTQ-5",
+       "title": "Шейпинг в измерении ширины текста",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. Измеритель ширин раскладки через шейпер, ширина run-а = нарисованной."
+      },
+      {
+       "id": "TEXTQ-6",
+       "title": "Синтетический жирный и курсив в GPU-пути",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-6.md](docs/tasks/TEXTQ-6.md). Зависит от TEXTQ-1. Синтетический bold (двойной квад) и italic (наклон вершин) в wgpu, как в CPU-пути."
       }
      ]
     }

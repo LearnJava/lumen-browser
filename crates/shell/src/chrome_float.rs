@@ -16,6 +16,7 @@
 //! `data-action="drag-panel"` (stamped by `scripts/gen_chrome_assets.py`'s
 //! `add_drag_handles`) can start a drag.
 
+use crate::platform::os_params::OsParams;
 use crate::*;
 
 /// BUG-1077: `LUMEN_NO_DEMO_PANEL=1` скрывает плавающую dev-панель `#demoBar`
@@ -30,17 +31,6 @@ pub(crate) fn demo_panel_hidden() -> bool {
 /// (`Math.max(4, Math.min(innerWidth - width - 4, …))`, `docs/design/
 /// lumen-v3_3.html`), so a panel can never be dragged fully off-screen.
 const DRAG_MARGIN: f32 = 4.0;
-
-/// CC-18 срез 3: longest gap between two presses on the same drag handle that
-/// still counts as a double-click, in milliseconds. Matches the Windows
-/// default double-click time; there is no winit/OS-level double-click event to
-/// read instead (winit reports raw press/release only).
-const DOUBLE_CLICK_MS: f64 = 500.0;
-
-/// CC-18 срез 3: how far the pointer may travel between the two presses of a
-/// double-click, in window CSS px. Without it the second press of a
-/// drag-then-press-again sequence would reset a position the user just chose.
-const DOUBLE_CLICK_SLOP: f32 = 4.0;
 
 /// BUG-1059: what [`take_floating_panel`] removed from a chrome box tree —
 /// enough for [`restore_floating_panel`] to put it back exactly, mirroring
@@ -90,9 +80,11 @@ pub(crate) struct FloatingPanelPress {
 /// [`Lumen::floating_panel_press`] so it is testable without a live shell.
 ///
 /// `prev` is the previous press on *any* drag handle; a press counts as the
-/// second half of a double-click only when it lands on the same panel, within
-/// [`DOUBLE_CLICK_MS`] and [`DOUBLE_CLICK_SLOP`] of it.
+/// second half of a double-click only when it lands on the same panel and
+/// within the OS double-click time and slop of it (UX-OSPARAMS: `os` carries
+/// them, so a raised system double-click time applies here too).
 pub(crate) fn is_double_press(
+    os: &OsParams,
     prev: Option<&FloatingPanelPress>,
     panel_id: &str,
     now_ms: f64,
@@ -101,10 +93,7 @@ pub(crate) fn is_double_press(
 ) -> bool {
     prev.is_some_and(|p| {
         p.panel_id == panel_id
-            && (now_ms - p.at_ms) <= DOUBLE_CLICK_MS
-            && (now_ms - p.at_ms) >= 0.0
-            && (p.pos.0 - x).abs() <= DOUBLE_CLICK_SLOP
-            && (p.pos.1 - y).abs() <= DOUBLE_CLICK_SLOP
+            && os.is_double_click(now_ms - p.at_ms, p.pos.0 - x, p.pos.1 - y)
     })
 }
 
@@ -309,7 +298,8 @@ impl Lumen {
         match self.chrome_action_at(&hit) {
             Some((_, lumen_chrome::ChromeAction::DragPanel)) => {
                 let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
-                if is_double_press(self.chrome_float_last_press.as_ref(), panel_id, now_ms, x_css, y_css)
+                let os = platform::os_params::current();
+                if is_double_press(&os, self.chrome_float_last_press.as_ref(), panel_id, now_ms, x_css, y_css)
                 {
                     // Дабл-клик по шапке — сброс позиции к дефолту текущей
                     // формы (CC-18's task line). Dropping the offset is the

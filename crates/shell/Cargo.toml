@@ -151,6 +151,13 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # creation time. Already a workspace dep (lumen-a11y) and a transitive one via
 # winit, so no new Cargo.lock entries.
 # Graduation: permanent while startup remains a tracked §4 score-table metric.
+#
+# Also UX-OSPARAMS (src/platform/os_params/windows.rs): the OS input settings
+# (double-click time, drag slop, wheel lines, animations) and the hidden window
+# that receives the broadcast `WM_SETTINGCHANGE` — the UI/HiDpi/KeyboardAndMouse/
+# WindowsAndMessaging/Gdi/LibraryLoader features. Permanent while the shell reads
+# system input parameters; no new Cargo.lock entries (all features are already
+# unified in workspace-hack through winit).
 # `Win32_Globalization` (GetUserPreferredUILanguages, src/os_locale.rs) feeds
 # `Accept-Language` / `navigator.languages` with the Windows language list; the
 # feature is already enabled workspace-wide through winit.
@@ -159,9 +166,14 @@ windows-sys = { version = "0.52", features = [
     "Win32_Globalization",
     "Win32_Security",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
 ] }
 
 [dev-dependencies]
