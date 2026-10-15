@@ -1294,6 +1294,9 @@ pub(crate) struct Lumen {
     /// UX-PASSWORDS: ожидающее предложение сохранить пароль (`#loginBar`);
     /// `None` — панель скрыта.
     pub(crate) login_offer: Option<password_store::LoginOffer>,
+    /// COMPAT-MEDIA-OSDEC-WIN-BAR: подсказка «для видео нужен компонент ОС»
+    /// (`#mediaBar`, `media_bar.rs`).
+    pub(crate) media_bar: crate::media_bar::MediaBar,
     /// UX-DIALOGS: открытый модальный диалог страницы (`#dialogBox`); пока он
     /// есть, страница и остальной хром не получают ввода.
     pub(crate) page_dialog: Option<super::dialogs::PageDialog>,

@@ -540,6 +540,12 @@ impl Lumen {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("video: ошибка декодирования {src}: {e}");
+                    // COMPAT-MEDIA-OSDEC-WIN-BAR: H.264/HEVC без декодера ОС.
+                    if let Some(what) = lumen_media_native::missing_os_codec(&bytes)
+                        && self.media_bar.note_missing(what)
+                    {
+                        self.relayout_chrome_host();
+                    }
                     self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
                     self.request_redraw();
                     continue;
@@ -2480,6 +2486,8 @@ impl Lumen {
         // GAP-MEDIADECODE срез 9: previous page's failure records must not leak
         // onto a same-index node in the new page.
         self.video_gif_store.load_failures.lock().unwrap().clear();
+        // COMPAT-MEDIA-OSDEC-WIN-BAR: подсказка относилась к прежней странице.
+        self.media_bar.reset_page();
         // Same reasoning for volume/muted — a same-index node on the new page
         // must start at the spec default, not the previous page's setting.
         self.video_gif_store.audio_levels.lock().unwrap().clear();

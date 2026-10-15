@@ -273,7 +273,7 @@ impl Lumen {
         let popover_nodes: Vec<_> =
             SALVAGED_POPOVER_IDS.iter().filter_map(|&id| doc.find_by_id(id).map(|n| (n, id))).collect();
         let mut floating_detached = Vec::new();
-        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
+        for id in [lumen_chrome::ids::DEMO_BAR, lumen_chrome::ids::INFO_PANEL, lumen_chrome::ids::UPDATE_BAR, lumen_chrome::ids::LOGIN_BAR, lumen_chrome::ids::MEDIA_BAR, lumen_chrome::ids::DIALOG_BOX, lumen_chrome::ids::SECURITY_BOX, lumen_chrome::ids::PROFILE_FRAME] {
             if let Some(node) = doc.find_by_id(id)
                 && let Some((_rect, detached)) = take_floating_panel(&mut layout, node, id)
             {
@@ -959,6 +959,7 @@ impl Lumen {
             right_sidebar,
             update: self.update_ui.chrome_model(),
             login_offer: self.login_offer_model(),
+            media_bar: self.media_bar.model(),
             dialog: self.page_dialog_model(),
             security: self.security_model(),
         }
@@ -1310,6 +1311,12 @@ impl Lumen {
                     crate::cert_cause::open_time_settings();
                 }
             }
+            ChromeAction::OpenMediaInstall => {
+                if let Some(uri) = self.media_bar.install_uri() {
+                    crate::media_bar::open_install_uri(uri);
+                }
+            }
+            ChromeAction::DismissMediaBar => self.media_bar.dismiss(),
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
             ChromeAction::NewTab => self.open_new_tab_for_typing(),

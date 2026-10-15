@@ -777,7 +777,7 @@
 
 ## Gotchas
 
-- **`LUMEN_NO_DEMO_PANEL=1` hides every floating chrome panel, not only `#demoBar`.** `rebuild_chrome_floating_dl` returns early on it, so `#dialogBox`, `#loginBar` and `#updateBar` are never painted (they still take clicks/keys). `graphic_tests/run.py`'s `LiveWindowClient` sets it; a live check of a page dialog has to drop it from the environment. Also `--deterministic` freezes the clock, so `setTimeout` never fires in such a window — open the dialog from a direct `eval`, not from a timer.
+- **`LUMEN_NO_DEMO_PANEL=1` hides every floating chrome panel, not only `#demoBar`.** `rebuild_chrome_floating_dl` returns early on it, so `#dialogBox`, `#loginBar`, `#mediaBar` and `#updateBar` are never painted (they still take clicks/keys). `graphic_tests/run.py`'s `LiveWindowClient` sets it; a live check of a page dialog has to drop it from the environment. Also `--deterministic` freezes the clock, so `setTimeout` never fires in such a window — open the dialog from a direct `eval`, not from a timer.
 
 - **Chrome content drawn over the page area must be a floating panel, not a `#contentArea` child (UPD-9, same root as [BUG-1059](../bugs/BUG-1059-FIXED.md)).** `build_chrome_overlay_strips` clips the whole chrome display list to the four strips *around* `chrome_page_host_rect`, so a box lying inside that rect paints nowhere. `#updateBar` is therefore a `position:fixed` child of `<body>` and is listed with `#demoBar`/`#infoPanel` in `relayout_chrome_host`'s `take_floating_panel` loop, which paints it unclipped via `chrome_floating_dl` and hit-tests it via `floating_panel_hit`. A new overlay goes into that list; a closed one (`display:none`) simply has no box to detach.
 

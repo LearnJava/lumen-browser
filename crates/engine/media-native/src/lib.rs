@@ -52,6 +52,51 @@ impl OsCodecStatus {
 /// Media Feature Pack).
 pub const WINDOWS_OPTIONAL_FEATURES_URI: &str = "ms-settings:optionalfeatures";
 
+/// Чего не хватает ОС, чтобы открыть видео (COMPAT-MEDIA-OSDEC-WIN-BAR).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MissingOsCodec {
+    /// H.264 без Media Feature Pack (Windows N/KN).
+    MediaFeaturePack,
+    /// HEVC без расширения «HEVC Video Extensions» (Microsoft Store).
+    HevcExtension,
+}
+
+impl MissingOsCodec {
+    /// Адрес, где недостающий компонент ставится.
+    #[must_use]
+    pub const fn install_uri(self) -> &'static str {
+        match self {
+            Self::MediaFeaturePack => WINDOWS_OPTIONAL_FEATURES_URI,
+            Self::HevcExtension => WINDOWS_STORE_HEVC_URI,
+        }
+    }
+}
+
+/// Поиск «HEVC Video Extensions» в Microsoft Store.
+pub const WINDOWS_STORE_HEVC_URI: &str = "ms-windows-store://search/?query=HEVC%20Video%20Extensions";
+
+/// Какой компонент ОС недостаёт видео с кодеком `video` при состоянии `status`.
+/// `None` — кодек не зависит от ОС или декодер есть.
+#[must_use]
+pub fn missing_for_video_codec(video: lumen_media_demux::Codec, status: OsCodecStatus) -> Option<MissingOsCodec> {
+    match video {
+        lumen_media_demux::Codec::H264 if !status.h264 => Some(MissingOsCodec::MediaFeaturePack),
+        lumen_media_demux::Codec::Hevc if !status.hevc => Some(MissingOsCodec::HevcExtension),
+        _ => None,
+    }
+}
+
+/// Причина, по которой `bytes` не открылись: первая видеодорожка зависит от
+/// декодера ОС, которого нет. `None` — причина другая (или на платформе нет
+/// бэкенда ОС). Зовётся только после сбоя `VideoDecoder::open`.
+#[must_use]
+pub fn missing_os_codec(bytes: &[u8]) -> Option<MissingOsCodec> {
+    let status = os_codec_status()?;
+    let demux = lumen_media_demux::Demuxer::open(bytes).ok()?;
+    let video = demux.tracks().iter().find(|t| t.kind == lumen_media_demux::TrackKind::Video)?;
+    missing_for_video_codec(video.codec, status)
+}
+
 /// Состояние декодеров ОС; `None` — на этой платформе бэкенда ОС нет.
 #[must_use]
 pub fn os_codec_status() -> Option<OsCodecStatus> {
