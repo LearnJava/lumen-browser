@@ -128,6 +128,7 @@ mod download;
 mod external_browser;
 mod handoff_page;
 mod compat_page;
+mod compat_indicator;
 mod import_manager;
 mod translate_manager;
 mod find;

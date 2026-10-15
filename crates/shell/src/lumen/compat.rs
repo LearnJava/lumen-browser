@@ -4,6 +4,7 @@
 
 use lumen_update_manifest::compat_pack::{CompatPack, CompatPolicy};
 
+use crate::compat_indicator;
 use crate::compat_page::{self, CompatAction, CompatView, PackSource};
 use crate::*;
 
@@ -27,6 +28,40 @@ impl Lumen {
         }
         let pack = CompatPack::base(&lumen_storage::PslProvider::new());
         pack.active_entries_for_host(host, &self.compat_policy()).into_iter().cloned().collect()
+    }
+
+    /// Пересчитать применённые к `host` записи пакета (при каждой загрузке страницы) и
+    /// написать в консоль по одному `console.info` на запись (COMPAT-PACK-IND). В отладочной
+    /// сборке пакет не применяется — список пуст.
+    pub(crate) fn refresh_compat_applied(&mut self, host: Option<&str>) {
+        self.compat_applied = match host {
+            Some(host) if !cfg!(debug_assertions) => {
+                let pack = CompatPack::base(&lumen_storage::PslProvider::new());
+                compat_indicator::applied_fixes(&pack, host, &self.compat_policy())
+            }
+            _ => Vec::new(),
+        };
+        if !self.compat_applied.is_empty() {
+            self.devtools_console.push_batch(compat_indicator::console_batch(&self.compat_applied));
+        }
+    }
+
+    /// «Выключить и перезагрузить»: выключить все записи, применённые к текущей странице,
+    /// записать это в журнал и перезагрузить — после загрузки счётчик индикатора 0.
+    pub(crate) fn compat_disable_applied_and_reload(&mut self) {
+        let now = super::handoff::now_unix();
+        let store = &self.settings_store;
+        for fix in &self.compat_applied {
+            match store.set_compat_entry_disabled(&fix.id, true) {
+                Ok(()) => {
+                    let note = format!("запись {} выключена из индикатора страницы", fix.id);
+                    let _ = store.append_compat_journal(now, &note);
+                    eprintln!("[compat] {note}");
+                }
+                Err(err) => eprintln!("[compat] выбор не сохранён: {err}"),
+            }
+        }
+        self.reload();
     }
 
     /// Страница `about:compat`.

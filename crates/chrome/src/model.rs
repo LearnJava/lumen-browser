@@ -116,6 +116,10 @@ pub struct ChromeModel {
     /// `ShieldsPanel::enabled_for_current`, which is also what the shell
     /// pushes into `lumen_network::set_global_adblock_enabled`.
     pub site_shields_on: bool,
+    /// Number of compatibility-list records applied to [`Self::popover_domain`]
+    /// (COMPAT-PACK-IND). `0` hides `#compatRow`; otherwise the row shows
+    /// [`compat_fixes_label`] with its «Подробнее» / «Выключить и перезагрузить» buttons.
+    pub compat_fixes: u32,
     /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
     pub palette: ChromePaletteModel,
     /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
@@ -2547,6 +2551,20 @@ fn build_arc_card(doc: &mut Document, e: &ChromeArchiveEntryModel) -> NodeId {
 /// screen and read as a real domain.
 pub const NO_DOMAIN_LABEL: &str = "этой странице";
 
+/// Text of `#compatText` for `n` applied compatibility fixes (COMPAT-PACK-IND):
+/// «К сайту применено N исправлений совместимости» with the Russian plural form
+/// of «исправление» (1 → исправление, 2–4 → исправления, otherwise исправлений).
+#[must_use]
+pub fn compat_fixes_label(n: u32) -> String {
+    let word = match (n % 100, n % 10) {
+        (11..=14, _) => "исправлений",
+        (_, 1) => "исправление",
+        (_, 2..=4) => "исправления",
+        _ => "исправлений",
+    };
+    format!("К сайту применено {n} {word} совместимости")
+}
+
 /// Toggles `#permPopover`'s `.open` class, writes `blocked_total` into
 /// `#statTrackers`, binds the per-site shields row (`#shieldSiteToggle`'s
 /// `.on` class + `#shieldSiteState`'s Вкл/Выкл text) and the popover's
@@ -2569,6 +2587,14 @@ fn bind_popover(doc: &mut Document, model: &ChromeModel) {
     }
     if let Some(state) = doc.find_by_id(crate::ids::SHIELD_SITE_STATE) {
         set_text(doc, state, if model.site_shields_on { "Вкл" } else { "Выкл" });
+    }
+    if let Some(row) = doc.find_by_id(crate::ids::COMPAT_ROW) {
+        set_class_token(doc, row, "show", model.compat_fixes > 0);
+    }
+    if model.compat_fixes > 0
+        && let Some(text) = doc.find_by_id(crate::ids::COMPAT_TEXT)
+    {
+        set_text(doc, text, &compat_fixes_label(model.compat_fixes));
     }
     let rows: Vec<NodeId> =
         doc.get(popover).children.iter().copied().filter(|&c| has_class(doc, c, "perm-row")).collect();
@@ -4361,6 +4387,41 @@ mod tests {
         let list = find_by_class(&doc, "arc-list").expect("asset has .arc-list");
         let cards = doc.get(list).children.iter().filter(|&&c| has_class(&doc, c, "arc-card")).count();
         assert_eq!(cards, 0);
+    }
+
+    #[test]
+    fn compat_label_uses_russian_plural_forms() {
+        assert_eq!(compat_fixes_label(1), "К сайту применено 1 исправление совместимости");
+        assert_eq!(compat_fixes_label(2), "К сайту применено 2 исправления совместимости");
+        assert_eq!(compat_fixes_label(5), "К сайту применено 5 исправлений совместимости");
+        assert_eq!(compat_fixes_label(11), "К сайту применено 11 исправлений совместимости");
+        assert_eq!(compat_fixes_label(21), "К сайту применено 21 исправление совместимости");
+    }
+
+    #[test]
+    fn popover_compat_row_shows_only_with_applied_fixes() {
+        let node_text = |doc: &Document, id: NodeId| -> String {
+            doc.get(id)
+                .children
+                .iter()
+                .filter_map(|&c| match &doc.get(c).data {
+                    NodeData::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let row = doc.find_by_id(crate::ids::COMPAT_ROW).expect("asset has #compatRow");
+        assert!(!has_class(&doc, row, "show"), "no fixes — row stays hidden");
+
+        bind_model(&mut doc, &ChromeModel { compat_fixes: 2, ..ChromeModel::default() });
+        assert!(has_class(&doc, row, "show"));
+        let text = doc.find_by_id(crate::ids::COMPAT_TEXT).expect("asset has #compatText");
+        assert_eq!(node_text(&doc, text), "К сайту применено 2 исправления совместимости");
+
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, row, "show"), "after the reload N=0 — row hidden again");
     }
 
     #[test]

@@ -347,6 +347,11 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .perm-btn.deny:hover{ border-color:var(--red-badge); color:var(--red-badge); }
 .perm-btn.selected-allow{ background:rgba(31,157,85,.12); border-color:var(--green); color:var(--green); }
 .perm-btn.selected-deny{ background:rgba(224,52,43,.12); border-color:var(--red-badge); color:var(--red-badge); }
+.popover .compat-row{ display:none; flex-wrap:wrap; }
+.popover .compat-row.show{ display:flex; }
+.popover .compat-row .st-text{ flex-basis:100%; }
+.popover .compat-row button{ font-size:11px; padding:3px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); }
+.popover .compat-row button:hover{ background:var(--surface-2); }
 .popover .fine-print{ font-size:10.5px; color:var(--text-secondary); margin-top:8px; }
 
 /* ============================================================
@@ -1320,6 +1325,13 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <div class="st-desc" id="shieldSiteState">Вкл</div>
               </div>
               <div class="toggle on" id="shieldSiteToggle" data-action="toggle-site-shields"><div class="thumb"></div></div>
+            </div>
+            <div class="set-row compat-row" id="compatRow">
+              <div class="st-text">
+                <div class="st-title" id="compatText">К сайту применено 0 исправлений совместимости</div>
+              </div>
+              <button data-action="compat-details">Подробнее</button>
+              <button data-action="compat-disable-reload">Выключить и перезагрузить</button>
             </div>
             <h4>Разрешения — <span id="permDomain">figma.com</span></h4>
             <div class="perm-row">
