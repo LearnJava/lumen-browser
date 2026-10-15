@@ -132,6 +132,59 @@ pub fn build_scrollbar_overlay_with_state(
     ]
 }
 
+/// Высота метки найденного совпадения на треке, CSS px.
+pub const FIND_MARK_HEIGHT: f32 = 3.0;
+
+/// Метка неактивного совпадения: жёлтая, как подсветка на странице.
+const FIND_MARK_COLOR: Color = Color { r: 255, g: 200, b: 0, a: 255 };
+
+/// Метка активного совпадения — оранжевая, как активная подсветка.
+const FIND_MARK_ACTIVE_COLOR: Color = Color { r: 255, g: 110, b: 0, a: 255 };
+
+/// Метки совпадений поиска по странице на треке вертикального scrollbar-а.
+///
+/// `match_ys` — верхние y совпадений в координатах документа, `active` — индекс
+/// активного (рисуется последним, поверх соседей). Одна метка на совпадение:
+/// 50 совпадений → 50 `FillRect`. Пусто, когда scrollbar не рисуется
+/// (контент помещается в viewport / вырожденный viewport) — метки живут на треке.
+pub fn build_find_marks(
+    match_ys: &[f32],
+    active: Option<usize>,
+    content_height: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> DisplayList {
+    if match_ys.is_empty()
+        || !content_height.is_finite()
+        || !viewport_width.is_finite()
+        || !viewport_height.is_finite()
+        || viewport_height <= 0.0
+        || viewport_width <= SCROLLBAR_WIDTH
+        || content_height <= viewport_height
+    {
+        return Vec::new();
+    }
+    let track_x = viewport_width - SCROLLBAR_WIDTH;
+    let mark = |y: f32, color: Color| {
+        let top = (y / content_height * viewport_height)
+            .clamp(0.0, viewport_height - FIND_MARK_HEIGHT);
+        DisplayCommand::FillRect {
+            rect: Rect::new(track_x, top, SCROLLBAR_WIDTH, FIND_MARK_HEIGHT),
+            color,
+        }
+    };
+    let mut out: DisplayList = match_ys
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != active)
+        .map(|(_, &y)| mark(y, FIND_MARK_COLOR))
+        .collect();
+    if let Some(&y) = active.and_then(|a| match_ys.get(a)) {
+        out.push(mark(y, FIND_MARK_ACTIVE_COLOR));
+    }
+    out
+}
+
 /// Длина горизонтальной дорожки: ширина viewport-а без уголка, который
 /// занимает вертикальная полоса (если она есть).
 fn hbar_track_len(viewport_width: f32, vertical_present: bool) -> f32 {
@@ -432,6 +485,38 @@ mod tests {
 
     fn approx_eq(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.01
+    }
+
+    #[test]
+    fn find_marks_one_per_match_active_last() {
+        let ys: Vec<f32> = (0..50).map(|i| i as f32 * 100.0).collect();
+        let cmds = build_find_marks(&ys, Some(7), 5000.0, 800.0, 600.0);
+        assert_eq!(cmds.len(), 50);
+        match cmds.last() {
+            Some(DisplayCommand::FillRect { rect, color }) => {
+                assert_eq!(*color, FIND_MARK_ACTIVE_COLOR);
+                assert!(approx_eq(rect.y, 700.0 / 5000.0 * 600.0));
+                assert!(approx_eq(rect.x, 800.0 - SCROLLBAR_WIDTH));
+            }
+            _ => panic!("expected FillRect"),
+        }
+    }
+
+    #[test]
+    fn find_marks_empty_without_scrollbar() {
+        assert!(build_find_marks(&[10.0], Some(0), 500.0, 800.0, 600.0).is_empty());
+        assert!(build_find_marks(&[], None, 5000.0, 800.0, 600.0).is_empty());
+    }
+
+    #[test]
+    fn find_marks_clamped_inside_track() {
+        let cmds = build_find_marks(&[4999.0], None, 5000.0, 800.0, 600.0);
+        match &cmds[0] {
+            DisplayCommand::FillRect { rect, .. } => {
+                assert!(rect.y + rect.height <= 600.0 + 1e-3);
+            }
+            _ => panic!("expected FillRect"),
+        }
     }
 
     #[test]

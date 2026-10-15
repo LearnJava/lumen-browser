@@ -537,9 +537,13 @@ impl Lumen {
         // `overlay_len` ниже) — то есть когда хром провably остаётся хвостом
         // финального буфера, а не где-то в середине.
         let mut chrome_tail_digests: Option<(usize, Vec<u64>)> = None;
+        // UX-FIND-ALL: верхние y совпадений (документные координаты) для меток
+        // на треке scrollbar-а — заполняется в ветке find ниже.
+        let mut find_mark_ys: Vec<f32> = Vec::new();
         let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
             if self.find.is_open() {
                 let matches = self.current_matches();
+                find_mark_ys = matches.iter().map(|m| m.rect.y).collect();
                 let page = find::build_page_with_highlights(
                     &self.display_list,
                     &self.find,
@@ -749,6 +753,14 @@ impl Lumen {
                 &self.frames,
                 self.scroll_x,
                 self.scroll_y,
+            ));
+            // UX-FIND-ALL: метки совпадений поиска поверх трека (после thumb-а).
+            scrollbar_cmds.extend(scrollbar::build_find_marks(
+                &find_mark_ys,
+                self.find.is_open().then(|| self.find.active_index()),
+                self.content_height,
+                self.viewport_width_css(),
+                self.viewport_height_css(),
             ));
             if !scrollbar_cmds.is_empty() {
                 let mut combined = scrollbar_cmds;
