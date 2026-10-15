@@ -1,0 +1,18 @@
+[package]
+name = "lumen-media-demux"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: демуксеры MP4/ISOBMFF, WebM/Matroska и Ogg без FFmpeg (UX-VIDEO-DEMUX, ADR-035 п.2)"
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+mp4parse = "0.17"
+ogg = "0.8"
+lewton = "0.10"
+matroska-demuxer = "0.8"
+
+[lints]
+workspace = true
