@@ -47,6 +47,7 @@ use lumen_core::url::Url;
 mod auth;
 mod bad_port;
 pub mod captive;
+pub mod connectivity;
 
 /// Биндит эфемерный TCP-порт, перебирая кандидатов у ОС, пока не получит
 /// порт вне списка «bad ports» Fetch §3.9 (`bad_port::is_bad_port`).
