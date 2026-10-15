@@ -57,12 +57,12 @@ ai = ["dep:lumen-ai", "lumen-ai/ollama"]
 # §14.3 for setup. `cargo run -p lumen-shell --features tracy`.
 tracy = ["dep:tracy-client", "lumen-layout/tracy"]
 
-# GAP-MEDIADECODE срез 7: shell-сторона FFmpeg-декодирования `<video>`.
-# Требует v8 (JS-путь `startFfmpegLoad`/`pending_ffmpeg_loads` заведён под
-# `lumen-js/ffmpeg-video`, срез 6) и `FFMPEG_DIR` в окружении сборки — см.
-# `crates/engine/media-ffmpeg/build.rs` и ADR-030. NOT в default: без неё
-# `cargo build --workspace` не трогает FFmpeg вовсе.
-ffmpeg-video = ["v8", "dep:lumen-media-ffmpeg", "lumen-media-ffmpeg/ffmpeg", "lumen-js/ffmpeg-video"]
+# GAP-MEDIADECODE срез 7: FFmpeg как dev-бэкенд `<video>` — подставляется вместо
+# штатного `lumen-media-native` (UX-VIDEO-NATIVE, ADR-035) и открывает форматы,
+# которых у собственного декодера нет (H.264/VP9 без декодера ОС). Требует
+# `FFMPEG_DIR` в окружении сборки — см. `crates/engine/media-ffmpeg/build.rs` и
+# ADR-030. NOT в default: без неё `cargo build --workspace` не трогает FFmpeg.
+ffmpeg-video = ["v8", "dep:lumen-media-ffmpeg", "lumen-media-ffmpeg/ffmpeg"]
 
 # UX-VIDEO-AV1: ассемблерные ядра AV1-декодера (AVIF и видео), ~3,5x быстрее портируемого
 # Rust-пути. Релизная сборка: `--features av1-asm`, на x86 нужен nasm в PATH. NOT в default:
@@ -105,6 +105,8 @@ lumen-font.workspace = true
 lumen-encoding.workspace = true
 # AVIF decodes by default in lumen-image (avif-parse + rav1d, pure Rust; UX-IMAGE-FORMATS).
 lumen-image.workspace = true
+# UX-VIDEO-NATIVE: собственный VideoDecoder `<video>` в штатной сборке (ADR-035 п.1).
+lumen-media-native.workspace = true
 # GAP-MEDIADECODE срез 7 (feature "ffmpeg-video"), see [features] above.
 lumen-media-ffmpeg = { workspace = true, optional = true }
 # cpu-render: DEVX-5 headless MCP (`--mcp`/`--mcp-port`) screenshots go through

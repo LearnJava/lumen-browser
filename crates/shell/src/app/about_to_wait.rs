@@ -321,9 +321,9 @@ impl Lumen {
         }
         // GAP-MEDIADECODE срез 10: a `<video>` resource-selection algorithm
         // (queued as a JS task, drained by `tick_timers()` above) enqueues a
-        // GIF- or FFmpeg-backed load into `pending_loads`/`pending_ffmpeg_loads`
+        // GIF- or container-backed load into `pending_loads`/`pending_container_loads`
         // without ever requesting a repaint — those queues are only drained by
-        // `RedrawRequested`'s `tick_video_gifs`/`tick_video_ffmpegs` (GAP-MEDIADECODE
+        // `RedrawRequested`'s `tick_video_gifs`/`tick_video_sessions` (GAP-MEDIADECODE
         // срез 7). Measured live (2026-09-20): a page whose only activity is
         // `<video autoplay>` parks in `ControlFlow::Wait` right after `loadstart`
         // — `networkState` stays `NETWORK_LOADING`/`readyState` stays `0` forever,
