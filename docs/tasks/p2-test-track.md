@@ -2795,3 +2795,15 @@ Baseline из среза 66 (198 `.ini`) доведён до гейта. `--chec
 **Ход.** Прогон 1 (до расширения): 2 регрессии (`navigate-related-page-by-name`, `fence-report-event-destination-url`, оба новые `TIMEOUT`). 2: 1 (`CRASH`). 3: 0. 4: 0 (после правки (4)). 5: 1 (`key-value-store`, `PASS`→`TIMEOUT`). **6: 0, 7: 0** — на неизменённом наборе `.ini`.
 
 Категорий с baseline: 266 (fenced-frame учтена в срезе 66). Дальше — S2 (`webrtc`), S3, S4, S6.
+
+### TEST-3: срез 70 (2026-10-15) — `webrtc` (266 → 267, WPT-RUN-7-S2): baseline есть, два чистых `--check` подряд получены
+
+`--update-expected --all --root webrtc --recursive --processes 7` на `dev-release` (бинарь `p2-work` от 15.10 17:56, позже в `main` влиты только правки UI оболочки), 13:54 мин. 258 инстансов, 223 `.ini`, **229/258 harness OK, 24/2184 подтестов**.
+
+**Причины провалов (по логу).** ~3,3 тыс. вхождений `ReferenceError: RTCPeerConnection is not defined` и 86 — `RTCIceCandidate is not defined`: WebRTC намеренно не объявляется (COMPAT-API-01-WEBRTC, ADR-034, `crates/js/src/v8_runtime.rs:1198`), поэтому счёт подтестов низкий не из-за дефекта; новых багов нет.
+
+**Сходимость `--check`.** Прогон 1: 80 регрессий (58 `PASS`→`FAIL` у подтестов файлов с внешним таймаутом, 22 `OK`→`TIMEOUT`), прогон 2: 99. Расширение `.ini` до объединения базовых и наблюдённых значений (скретч-скрипт, не закоммичен: разбор `REGRESSION:`/`info:` из логов `--check`, запись через `wptrunner.wptmanifest`): 137 записей в 58 файлах. Прогон 3: 5 (расширено ещё 6 записей в 5 файлах). **Прогоны 4 и 5: 0 регрессий** на неизменённом наборе `.ini` (в обоих по 1 «unexpected PASS» — предупреждение о слишком узком ожидании, не отказ), итого 250/258 harness OK, 24/2263 подтестов.
+
+**Окружение.** `LUMEN_PROFILE=dev-release`, `MSYS2_ARG_CONV_EXCL='/dom'`, `--processes 7`, Windows 10. Пересобрать `lumen.exe` в сессии не удалось: `rust-toolchain.toml` пинует 1.97.0, на машине его нет, `rustup` при автозагрузке падает (конфликт компонента `rustfmt-preview`, обрыв TLS), а `stable` 1.95.0 остался без rlib стандартной библиотеки.
+
+Категорий с baseline: 267. Дальше — S3 (`upgrade-insecure-requests`, `html-ruby-extensions`), S4 (`WebCryptoAPI`), S6.
