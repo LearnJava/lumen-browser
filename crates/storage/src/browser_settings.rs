@@ -38,6 +38,12 @@ const KEY_TAB_LAYOUT: &str = "tab_layout";
 const KEY_PANEL_LAYOUT: &str = "panel_layout";
 const KEY_TRANSLATE_LANGUAGE: &str = "translate_language";
 const KEY_TRANSLATE_MODEL: &str = "translate_model";
+const KEY_COMPAT_PACK_OFF: &str = "compat_pack_off";
+const KEY_COMPAT_DISABLED: &str = "compat_disabled_ids";
+const KEY_COMPAT_JOURNAL: &str = "compat_journal";
+
+/// The compat-pack change journal keeps only the newest this-many lines.
+pub const COMPAT_JOURNAL_MAX: usize = 50;
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
@@ -312,6 +318,61 @@ impl BrowserSettings {
         self.set_str(KEY_TRANSLATE_MODEL, model)
     }
 
+    /// «Do not use the Lumen list» (`about:compat`, COMPAT-PACK-PAGE): when set, no compat-pack
+    /// record applies on any host. Off by default.
+    pub fn compat_pack_off(&self) -> bool {
+        self.get_bool(KEY_COMPAT_PACK_OFF, false)
+    }
+
+    /// Set «do not use the Lumen list».
+    pub fn set_compat_pack_off(&self, off: bool) -> Result<()> {
+        self.set_bool(KEY_COMPAT_PACK_OFF, off)
+    }
+
+    /// Ids of compat-pack records the user switched off one by one (pack order is not kept).
+    pub fn compat_disabled_ids(&self) -> Vec<String> {
+        self.get_str(KEY_COMPAT_DISABLED, "")
+            .split(',')
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Switch one compat-pack record off (`disabled`) or back on. Ids are `[a-z0-9_-]`
+    /// (`CompatPack::validate`), so a comma-joined list is unambiguous; anything else is refused.
+    pub fn set_compat_entry_disabled(&self, id: &str, disabled: bool) -> Result<()> {
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_') {
+            return Err(Error::Storage(format!("compat record id {id:?} is not [a-z0-9_-]+")));
+        }
+        let mut ids = self.compat_disabled_ids();
+        ids.retain(|d| d != id);
+        if disabled {
+            ids.push(id.to_owned());
+        }
+        self.set_str(KEY_COMPAT_DISABLED, &ids.join(","))
+    }
+
+    /// Change journal of the compat pack, oldest first: `(unix seconds, text)`.
+    pub fn compat_journal(&self) -> Vec<(i64, String)> {
+        self.get_str(KEY_COMPAT_JOURNAL, "")
+            .lines()
+            .filter_map(|line| {
+                let (at, text) = line.split_once('\t')?;
+                Some((at.parse().ok()?, text.to_owned()))
+            })
+            .collect()
+    }
+
+    /// Append one line to the compat-pack journal, keeping the newest [`COMPAT_JOURNAL_MAX`].
+    pub fn append_compat_journal(&self, unix: i64, text: &str) -> Result<()> {
+        let mut lines = self.compat_journal();
+        let clean: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        lines.push((unix, clean));
+        let skip = lines.len().saturating_sub(COMPAT_JOURNAL_MAX);
+        let joined: Vec<String> = lines.iter().skip(skip).map(|(at, t)| format!("{at}\t{t}")).collect();
+        self.set_str(KEY_COMPAT_JOURNAL, &joined.join("\n"))
+    }
+
     /// Read all settings into a snapshot value.
     pub fn snapshot(&self) -> BrowserSettingsSnapshot {
         BrowserSettingsSnapshot {
@@ -352,6 +413,36 @@ mod tests {
 
     fn store() -> BrowserSettings {
         BrowserSettings::open_in_memory().expect("in-memory settings")
+    }
+
+    #[test]
+    fn compat_switches_persist_and_validate() {
+        let s = store();
+        assert!(!s.compat_pack_off());
+        assert!(s.compat_disabled_ids().is_empty());
+        s.set_compat_pack_off(true).unwrap();
+        s.set_compat_entry_disabled("a-css", true).unwrap();
+        s.set_compat_entry_disabled("b_flag", true).unwrap();
+        s.set_compat_entry_disabled("a-css", true).unwrap();
+        assert!(s.compat_pack_off());
+        assert_eq!(s.compat_disabled_ids(), ["b_flag", "a-css"]);
+        s.set_compat_entry_disabled("b_flag", false).unwrap();
+        assert_eq!(s.compat_disabled_ids(), ["a-css"]);
+        assert!(s.set_compat_entry_disabled("a,b", true).is_err());
+        assert!(s.set_compat_entry_disabled("", true).is_err());
+    }
+
+    #[test]
+    fn compat_journal_is_capped_and_single_line() {
+        let s = store();
+        for i in 0..(COMPAT_JOURNAL_MAX + 5) {
+            s.append_compat_journal(i as i64, &format!("запись {i}\nвторая строка")).unwrap();
+        }
+        let j = s.compat_journal();
+        assert_eq!(j.len(), COMPAT_JOURNAL_MAX);
+        assert_eq!(j[0].0, 5);
+        assert_eq!(j[0].1, "запись 5 вторая строка");
+        assert_eq!(j.last().unwrap().0, (COMPAT_JOURNAL_MAX + 4) as i64);
     }
 
     #[test]

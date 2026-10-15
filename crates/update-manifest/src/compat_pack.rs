@@ -385,10 +385,86 @@ impl CompatPack {
         }
     }
 
+    /// Records for `host` that the user's [`CompatPolicy`] leaves switched on — the only list a
+    /// consumer (CSS injection, identity switch, …) may act on. Empty while the whole pack is off.
+    #[must_use]
+    pub fn active_entries_for_host(&self, host: &str, policy: &CompatPolicy) -> Vec<&CompatEntry> {
+        if policy.pack_off {
+            return Vec::new();
+        }
+        let mut hits = self.entries_for_host(host);
+        hits.retain(|e| !policy.is_entry_off(&e.id));
+        hits
+    }
+
     /// Records whose `review_by` is before `today` (`YYYY-MM-DD`) — for the health metric and tooling.
     #[must_use]
     pub fn overdue(&self, today: &str) -> Vec<&CompatEntry> {
         self.entries.iter().filter(|e| e.review_by.as_str() < today).collect()
+    }
+}
+
+/// The user's choice over the pack (`about:compat`, ADR-034 §4): the whole list off, or single
+/// records off. Persisted by the shell; the pack itself stays read-only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompatPolicy {
+    /// «Do not use the Lumen list»: no record applies anywhere.
+    pub pack_off: bool,
+    /// Ids of records switched off one by one.
+    pub disabled: Vec<String>,
+}
+
+impl CompatPolicy {
+    /// `true` when the record `id` is switched off on its own.
+    #[must_use]
+    pub fn is_entry_off(&self, id: &str) -> bool {
+        self.disabled.iter().any(|d| d == id)
+    }
+
+    /// `true` when the record `id` would apply to its hosts (pack on, record on).
+    #[must_use]
+    pub fn is_entry_on(&self, id: &str) -> bool {
+        !self.pack_off && !self.is_entry_off(id)
+    }
+}
+
+impl Action {
+    /// Short machine name of the action, as it is written in the pack (`kind`).
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Css { .. } => "css",
+            Self::HideBanner { .. } => "hide_banner",
+            Self::EngineFlag { .. } => "engine_flag",
+            Self::Protection { .. } => "protection",
+            Self::Identity { .. } => "identity",
+            Self::JsTransform { .. } => "js_transform",
+            Self::KnownIssue { .. } => "known_issue",
+            Self::HandoffHint { .. } => "handoff_hint",
+        }
+    }
+
+    /// One-line human summary of what the action does, for the `about:compat` page.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Css { css } => format!("CSS: {} байт", css.len()),
+            Self::HideBanner { selector, text } => format!("скрыть {selector} с текстом «{text}»"),
+            Self::EngineFlag { flag } => format!("флаг движка {flag}"),
+            Self::Protection { name } => format!("исключение защиты {name}"),
+            Self::Identity { profile } => format!(
+                "идентичность {}",
+                match profile {
+                    IdentityProfile::ChromeLumen => "chrome_lumen",
+                    IdentityProfile::ChromeUnbranded => "chrome_unbranded",
+                    IdentityProfile::ChromeBrandGoogle => "chrome_brand_google",
+                    IdentityProfile::FirefoxWin => "firefox_win",
+                }
+            ),
+            Self::JsTransform { id } => format!("преобразование JS {id}"),
+            Self::KnownIssue { message } => message.clone(),
+            Self::HandoffHint { reason } => format!("лучше открыть в другом браузере: {reason}"),
+        }
     }
 }
 
