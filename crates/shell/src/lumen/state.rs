@@ -124,6 +124,10 @@ pub(crate) struct Lumen {
     /// `address_bar::AddressBarState`, no native caret exists for `<input>`
     /// yet). `None` off the flag or before the first chrome layout.
     pub(crate) chrome_omni_input_rect: Option<Rect>,
+    /// UX-OMNI-EDIT: computed `font-size` (CSS px) of `#omniInput`, from the
+    /// same layout pass as [`Self::chrome_omni_input_rect`] — the scale the
+    /// per-glyph caret/selection geometry measures the text at.
+    pub(crate) chrome_omni_font_size: f32,
     /// CC-8 (docs/tasks/p1-css-chrome.md): `true` collapses the vertical
     /// sidebar to its icon rail (`#sidebar.collapsed`, `--sidebar-w-collapsed`
     /// in the asset). Toggled by `ChromeAction::ToggleSidebar`
@@ -1324,6 +1328,11 @@ pub(crate) struct Lumen {
     ///
     /// `None` entry means the tab was opened but never loaded (blank new tab).
     pub(crate) bg_tabs: HashMap<usize, PageSnapshot>,
+    /// Фоновые вкладки, открытые ссылкой и ещё не загруженные (UX-LINK-CLICKS):
+    /// id вкладки → адрес. Сеть и движок не трогаются, пока вкладку не
+    /// выберут; `switch_tab` и закрытие активной вкладки запускают навигацию
+    /// по этому адресу ([`Lumen::load_lazy_tab`]).
+    pub(crate) lazy_tabs: HashMap<usize, String>,
     /// Lightweight identity for hibernated (T3) tabs — keyed by `TabEntry::id`.
     ///
     /// When a background tab is promoted to Hibernated its full `PageSnapshot`
@@ -1785,6 +1794,9 @@ pub(crate) struct Lumen {
     /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
     /// window / Close others / Close to the right. Hidden unless `open`.
     pub(crate) tab_context_menu: tabs::context_menu::TabContextMenu,
+    /// UX-TAB-CLOSE-FREEZE: pinned width of the horizontal tab strip after a
+    /// mouse close; `None` when the strip lays out freely.
+    pub(crate) hbar_freeze: Option<tabs::strip_freeze::HbarFreeze>,
     /// UX-REOPEN-TAB: stack of recently closed tabs (Ctrl+Shift+T).
     pub(crate) closed_tabs: tabs::closed::ClosedTabs,
     /// Page-level spell-check suggestion menu (P3-spell slice 3): opened by

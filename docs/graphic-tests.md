@@ -51,6 +51,7 @@ python graphic_tests/run.py --bisect 100             # run unit deps of an inter
 python graphic_tests/run.py --ipc                    # deterministic CPU snapshot over TCP (TAB-7); no window/gdigrab, no real JS
 python graphic_tests/run.py --per-test-process       # opt out of the live window: kill+relaunch lumen.exe per test (old default)
 python graphic_tests/run.py --paint-bisect 100        # DEVX-4: baseline + one run per LUMEN_NO_* paint flag; prints a diff% table
+python graphic_tests/run.py --self-test                # TEST-9: check the GPU_CAPTURE table (ids exist in TESTS, no duplicates); no browser started
 ```
 
 **Preflight (running from a fresh worktree).** `run.py` checks its external tools before the first test instead of failing one test at a time 20 minutes in:

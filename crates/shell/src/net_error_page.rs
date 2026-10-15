@@ -30,6 +30,16 @@ fn texts(code: NetErrorCode, host: &str) -> (String, String, &'static [&'static 
                 "Если сайт открывается в другом браузере на этом компьютере, откройте его там.",
             ],
         ),
+        // Уровень «установлено»: проба показала, что ни один из контрольных
+        // публичных адресов не отвечает, — поэтому вердикт «не сайт и не Lumen».
+        C::InternetDisconnected => (
+            "Нет подключения к интернету. Lumen и сайт тут ни при чём".to_owned(),
+            "Lumen проверил несколько независимых публичных адресов, и ни один не ответил: связи с интернетом у этого компьютера сейчас нет.".into(),
+            &[
+                "Проверьте кабель, Wi-Fi и режим «в самолёте».",
+                "Если вы используете VPN, проверьте, что он подключён.",
+            ],
+        ),
         C::ConnectionRefused => (
             format!("Сайт {host} отклонил подключение"),
             "Компьютер, на котором работает сайт, ответил отказом на попытку подключиться.".into(),
@@ -104,6 +114,31 @@ fn texts(code: NetErrorCode, host: &str) -> (String, String, &'static [&'static 
             "Lumen не стал загружать эту страницу: её заблокировала политика безопасности или защита от трекеров.".into(),
             &["Если страница нужна, отключите защиту для этого сайта на значке щита."],
         ),
+        C::Http2ProtocolError => (
+            format!("Соединение с сайтом {host} оборвано по ошибке протокола"),
+            "Сервер (или промежуточный узел) закрыл соединение HTTP/2 с кодом ошибки, а не штатно.".into(),
+            &[
+                "Повторите загрузку: сбой часто разовый.",
+                "Если вы используете антивирус, VPN или прокси, попробуйте открыть сайт без них.",
+                "Если ошибка постоянная, откройте сайт в другом браузере.",
+            ],
+        ),
+        C::TunnelConnectionFailed => (
+            format!("Прокси не открыл соединение с сайтом {host}"),
+            "Прокси-сервер отказался передавать защищённое соединение к сайту.".into(),
+            &[
+                "Проверьте настройки прокси.",
+                "Попробуйте открыть сайт без прокси или через другой.",
+            ],
+        ),
+        C::ContentDecodingFailed => (
+            format!("Страница сайта {host} пришла повреждённой"),
+            "Ответ сервера заявлен как сжатый, но распаковать его не удалось.".into(),
+            &[
+                "Повторите загрузку: возможно, ответ повредился в пути.",
+                "Если ошибка постоянная, откройте сайт в другом браузере.",
+            ],
+        ),
         C::HttpStatus(status) => (
             format!("Сайт {host} не отдал страницу (HTTP {status})"),
             format!("Сервер сайта ответил кодом {status} ({}) и не прислал ни одной страницы.", status_meaning(status)),
@@ -140,6 +175,12 @@ fn status_meaning(status: u16) -> &'static str {
 /// Паузы между автоповторами 5xx, секунды; после последней повтор останавливается.
 const AUTO_RETRY_DELAYS: [u32; 3] = [5, 15, 45];
 
+/// Паузы между автоповторами при отсутствии интернета: частые сначала (сеть
+/// часто возвращается через секунды), потом реже, всего около трёх минут. Каждый
+/// повтор — одна загрузка и при новой неудаче одна проба (до 2 с). Самая длинная
+/// пауза обязана быть меньше окна счёта в `lumen/net_error.rs`.
+const OFFLINE_RETRY_DELAYS: [u32; 8] = [5, 10, 10, 15, 20, 30, 30, 30];
+
 /// Автоповтор страницы ошибки.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoRetry {
@@ -153,12 +194,16 @@ pub(crate) enum AutoRetry {
 
 impl AutoRetry {
     /// Автоповтор для `attempt`-го показа (с нуля) страницы ошибки с кодом
-    /// `code`: только 502/503/504 — признак временного сбоя; прочие 5xx и
-    /// сетевые сбои повторять вслепую нельзя (POST, перегруженный сервер).
+    /// `code`: 502/503/504 — признак временного сбоя — и «нет интернета» (повтор
+    /// никому не вредит, а сеть возвращается сама); прочие 5xx и сетевые сбои
+    /// повторять вслепую нельзя (POST, перегруженный сервер).
     pub(crate) fn for_attempt(code: NetErrorCode, attempt: usize) -> Self {
         match code {
             NetErrorCode::HttpStatus(502..=504) => {
                 AUTO_RETRY_DELAYS.get(attempt).map_or(Self::Exhausted, |s| Self::In(*s))
+            }
+            NetErrorCode::InternetDisconnected => {
+                OFFLINE_RETRY_DELAYS.get(attempt).map_or(Self::Exhausted, |s| Self::In(*s))
             }
             _ => Self::Off,
         }
@@ -174,7 +219,8 @@ fn handoff_reason(code: NetErrorCode) -> Option<HandoffReason> {
     use NetErrorCode as C;
     match code {
         C::SslProtocolError => Some(HandoffReason::Crypto),
-        C::FileNotFound | C::InvalidUrl | C::UnknownUrlScheme | C::BlockedByClient => None,
+        // Без сети не откроет и другой браузер: кнопка только отвлекает от причины.
+        C::FileNotFound | C::InvalidUrl | C::UnknownUrlScheme | C::BlockedByClient | C::InternetDisconnected => None,
         _ => Some(HandoffReason::Other),
     }
 }
@@ -295,9 +341,13 @@ mod tests {
             NetErrorCode::ConnectionTimedOut,
             NetErrorCode::ConnectionReset,
             NetErrorCode::AddressUnreachable,
+            NetErrorCode::InternetDisconnected,
             NetErrorCode::TooManyRedirects,
             NetErrorCode::InvalidResponse,
             NetErrorCode::SslProtocolError,
+            NetErrorCode::Http2ProtocolError,
+            NetErrorCode::TunnelConnectionFailed,
+            NetErrorCode::ContentDecodingFailed,
             NetErrorCode::FileNotFound,
             NetErrorCode::InvalidUrl,
             NetErrorCode::UnknownUrlScheme,
@@ -381,6 +431,26 @@ mod tests {
         let html = build_net_error_html("https://a.example/", c, "", AutoRetry::Exhausted);
         assert!(!html.contains("http-equiv"));
         assert!(html.contains("Автоматические повторы закончились"));
+    }
+
+    #[test]
+    fn no_internet_page_blames_nobody_retries_itself_and_offers_no_other_browser() {
+        let c = NetErrorCode::InternetDisconnected;
+        let html = build_net_error_html("https://a.example/", c, "resolve a.example: x", AutoRetry::for_attempt(c, 0));
+        assert!(html.contains("Нет подключения к интернету. Lumen и сайт тут ни при чём"));
+        assert!(html.contains("ERR_INTERNET_DISCONNECTED"));
+        assert!(html.contains("<meta http-equiv=\"refresh\" content=\"5;url=https://a.example/\">"));
+        assert!(!html.contains("about:handoff"));
+        assert!(html.contains("resolve a.example: x"));
+    }
+
+    #[test]
+    fn offline_retry_runs_a_few_minutes_then_stops() {
+        let c = NetErrorCode::InternetDisconnected;
+        let total: u32 = OFFLINE_RETRY_DELAYS.iter().sum();
+        assert!((120..=300).contains(&total), "{total}");
+        assert!(OFFLINE_RETRY_DELAYS.iter().all(|s| *s < 60));
+        assert_eq!(AutoRetry::for_attempt(c, OFFLINE_RETRY_DELAYS.len()), AutoRetry::Exhausted);
     }
 
     #[test]

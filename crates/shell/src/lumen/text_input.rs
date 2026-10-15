@@ -786,7 +786,7 @@ impl Lumen {
         let dpr = self.renderer.as_ref().map_or(1.0_f64, |r| r.scale_factor()).max(1e-6);
         // CSS px, window coordinates.
         let rect = if self.address_bar.is_open() {
-            self.chrome_omni_input_rect.map(|f| (f.x + f.width - 8.0, f.y + 4.0, 2.0, (f.height - 8.0).max(1.0)))
+            self.omnibox_caret_rect().map(|r| (r.x, r.y, r.width, r.height.max(1.0)))
         } else if let Some(nid) = self.focused_node.filter(|_| self.focused_frame.is_none()) {
             self.page_caret_rect(nid).map(|r| {
                 let (ox, oy) = self.page_offset();
@@ -860,8 +860,7 @@ impl Lumen {
     }
 
     /// UX-IME-3: the in-progress composition in the open address bar — preedit
-    /// text with an underline, right-aligned to the field's caret edge (the
-    /// same simplified flush-right placement the omnibox caret uses). Window
+    /// text with an underline, starting at the omnibox caret. Window
     /// coordinates; `None` unless a non-empty preedit is live.
     pub(crate) fn ime_omnibox_preedit_overlay(&self, pal: &crate::panels::themes::Palette) -> Option<lumen_paint::DisplayList> {
         use lumen_layout::{FontStyle, FontWeight};
@@ -873,7 +872,10 @@ impl Lumen {
         let fs = (field.height * 0.5).clamp(10.0, 20.0);
         let width = text.chars().map(|c| if c.is_ascii() { fs * 0.5 } else { fs }).sum::<f32>();
         let width = width.min((field.width - 16.0).max(fs));
-        let x = (field.x + field.width - 8.0 - width).max(field.x + 4.0);
+        // UX-OMNI-EDIT: starts at the caret (committed text lands there), not
+        // at the right edge; shifted left only when it would overflow.
+        let caret_x = self.omnibox_caret_rect().map_or(field.x + field.width - 8.0, |r| r.x);
+        let x = caret_x.min(field.x + field.width - 4.0 - width).max(field.x + 4.0);
         let rect = lumen_core::geom::Rect::new(x, field.y + 4.0, width, (field.height - 8.0).max(fs));
         Some(vec![
             lumen_paint::DisplayCommand::PushClipRect { rect: field },

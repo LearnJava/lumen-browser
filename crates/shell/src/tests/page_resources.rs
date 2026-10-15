@@ -1578,6 +1578,14 @@ fn keybinding_f6_opens_address_bar() {
 }
 
 #[test]
+fn keybinding_alt_d_opens_address_bar() {
+    assert_eq!(
+        keybinding_for(KeyCode::KeyD, ModifiersState::ALT),
+        Some(KeyCommand::OpenAddressBar),
+    );
+}
+
+#[test]
 fn keybinding_plain_f_opens_hints() {
     // F без модификаторов открывает hint-режим kbd-навигации.
     assert_eq!(

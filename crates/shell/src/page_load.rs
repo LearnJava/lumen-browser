@@ -1253,7 +1253,7 @@ impl Lumen {
                 // Closing полностью сбрасывает query/active — пользователю
                 // нужно открыть find заново после reload, что естественно.
                 self.find.close();
-                self.address_bar.close();
+                self.address_bar.close_if_untouched();
                 // Новая страница — показываем сверху-слева (либо восстанавливаем
                 // offset из back/forward, как в `apply_loaded_page`).
                 let (rx, ry) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
@@ -1594,7 +1594,9 @@ impl Lumen {
                             }
                             _ => proxy.send_event(LoadEvent::LoadError(
                                 e.to_string(),
-                                lumen_core::net_error::NetErrorCode::of_error(&*e),
+                                // COMPAT-ERR-01: DNS/тишина/«нет маршрута» + ни один
+                                // контрольный адрес не ответил → «нет интернета».
+                                crate::net_probe::refine(lumen_core::net_error::NetErrorCode::of_error(&*e), url),
                                 tab_id,
                                 generation,
                             )),
@@ -1607,7 +1609,10 @@ impl Lumen {
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
-                        let code = lumen_core::net_error::NetErrorCode::of_error(&*e);
+                        let code = crate::net_probe::refine(
+                            lumen_core::net_error::NetErrorCode::of_error(&*e),
+                            source.url_str().unwrap_or(""),
+                        );
                         let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), code, tab_id, generation));
                         return;
                     }
@@ -2385,7 +2390,7 @@ impl Lumen {
         self.cert_info = page.cert_info.clone().map(crate::panels::cert_panel::PanelCertData::from);
         self.anim_frame = None;
         self.find.close();
-        self.address_bar.close();
+        self.address_bar.close_if_untouched();
         // U-1: новая страница встаёт сверху-слева; но back/forward (и bfcache)
         // просят восстановить прежний scroll-offset через `pending_restore_scroll`,
         // т.к. навигация теперь асинхронна и сброс происходит здесь, в LoadDone,

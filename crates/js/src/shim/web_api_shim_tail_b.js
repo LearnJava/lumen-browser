@@ -777,8 +777,10 @@ function _lumen_apply_ready_state(state) {
         }
         // HTML LS §6.6.6 «flush autofocus candidates» (BUG-381): once parsing is
         // done, focus the first `[autofocus]` element in the document — unless a
-        // DOMContentLoaded handler already moved focus itself.
-        if (_lumen_last_focused_nid === -1) {
+        // DOMContentLoaded handler already moved focus itself — or the user is
+        // typing in the address bar (UX-FOCUS-ARBITER).
+        if (_lumen_last_focused_nid === -1 &&
+            !_lumen_chrome_has_keyboard()) {
             var afNid = _lumen_find_autofocus_in(_lumen_root_nid);
             if (afNid !== -1 && _lumen_is_focusable(afNid)) {
                 var afEl = _lumen_make_element(afNid);
@@ -1122,6 +1124,12 @@ function _lumen_focus_fixup() {
 }
 __lumen_C._lumen_focus_fixup = _lumen_focus_fixup;
 
+// UX-FOCUS-ARBITER: `true` while the address bar owns the keyboard (the native
+// is absent in contexts that never install it).
+function _lumen_chrome_has_keyboard() {
+    return typeof _lumen_chrome_owns_keyboard === 'function' && _lumen_chrome_owns_keyboard();
+}
+
 // HTML LS §6.6.3 — `HTMLElement.focus(options)` / `HTMLElement.blur()`. The
 // shell is notified through the very `_lumen_request_focus`/`_lumen_request_blur`
 // pair `<dialog>.showModal()` already used, so `:focus`, keyboard routing and
@@ -1129,6 +1137,9 @@ __lumen_C._lumen_focus_fixup = _lumen_focus_fixup;
 HTMLElement.prototype.focus = function(options) {
     var nid = this.__nid__;
     if (nid === null || nid === undefined) return;
+    // UX-FOCUS-ARBITER: while the user types in the address bar a script cannot
+    // take the keyboard from it — the call is a silent no-op.
+    if (_lumen_chrome_has_keyboard()) return;
     var target = this;
     // BUG-951: a <label> that is not a focusable area itself (no `tabindex`
     // of its own) forwards focus to its associated control. BUG-621: the

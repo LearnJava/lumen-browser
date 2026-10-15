@@ -69,6 +69,17 @@ impl Lumen {
                     is_active: false,
                     dom_blob: dom_blob_of(snap.layout_source.as_ref()),
                 })
+            } else if let Some(url) = self.lazy_tabs.get(&entry.id) {
+                // UX-LINK-CLICKS: a never-loaded link tab keeps only its URL;
+                // the empty DOM blob makes restore park it as lazy again.
+                Some(lumen_storage::PersistedTab {
+                    url: url.clone(),
+                    title: entry.title.clone(),
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    is_active: false,
+                    dom_blob: Vec::new(),
+                })
             } else if self.hibernated_tabs.contains_key(&entry.id) {
                 // DOM blob already on disk in tab_snapshots — copy it over.
                 match self.tab_snapshots.fetch(entry.id as i64) {
@@ -146,6 +157,9 @@ impl Lumen {
                 self.scroll_y = tab.scroll_y;
                 self.issue_scroll_command();
                 self.title = Some(tab.title);
+            } else if tab.dom_blob.is_empty() {
+                // UX-LINK-CLICKS: saved without a page — load on first focus.
+                self.lazy_tabs.insert(id, tab.url);
             } else {
                 // Background tab: park as hibernated so switch_tab restores it
                 // from the DOM blob on demand.

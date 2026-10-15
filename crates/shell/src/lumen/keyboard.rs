@@ -796,7 +796,7 @@ impl Lumen {
                     self.scroll_active_pane_to(f32::INFINITY);
                 }
             }
-            KeyCommand::NewTab => self.open_new_tab(),
+            KeyCommand::NewTab => self.open_new_tab_for_typing(),
             KeyCommand::ReopenClosedTab => self.reopen_closed_tab(),
             KeyCommand::CloseTab => {
                 let idx = self.tab_strip.active;
