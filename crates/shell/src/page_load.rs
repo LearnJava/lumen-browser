@@ -1591,7 +1591,9 @@ impl Lumen {
                             }
                             _ => proxy.send_event(LoadEvent::LoadError(
                                 e.to_string(),
-                                lumen_core::net_error::NetErrorCode::of_error(&*e),
+                                // COMPAT-ERR-01: DNS/тишина/«нет маршрута» + ни один
+                                // контрольный адрес не ответил → «нет интернета».
+                                crate::net_probe::refine(lumen_core::net_error::NetErrorCode::of_error(&*e), url),
                                 tab_id,
                                 generation,
                             )),
@@ -1604,7 +1606,10 @@ impl Lumen {
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
-                        let code = lumen_core::net_error::NetErrorCode::of_error(&*e);
+                        let code = crate::net_probe::refine(
+                            lumen_core::net_error::NetErrorCode::of_error(&*e),
+                            source.url_str().unwrap_or(""),
+                        );
                         let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), code, tab_id, generation));
                         return;
                     }
