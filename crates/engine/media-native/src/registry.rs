@@ -3,8 +3,9 @@
 //! Для каждого кодека реестр выбирает первый бэкенд, который *на этой машине*
 //! умеет его открыть. Порядок в списке — приоритет: аппаратный декодер ОС →
 //! программный декодер ОС → встроенный свободный. Бэкенды ОС
-//! (`COMPAT-MEDIA-OSDEC-*`) добавляются в начало [`Registry::builtin`]; сейчас
-//! в нём только встроенные: AV1 (`rav1d`, [`lumen_av1`]) и Vorbis (`lewton`).
+//! (`COMPAT-MEDIA-OSDEC-*`) идут в [`Registry::builtin`] перед встроенными: на
+//! Windows — Media Foundation (H.264/HEVC/AAC), затем AV1 (`rav1d`,
+//! [`lumen_av1`]) и Vorbis (`lewton`) на всех платформах.
 //!
 //! От реестра зависят три вещи, которые не должны расходиться: что открывает
 //! [`crate::NativeVideoDecoder`], что отвечает `canPlayType` и что вернёт
@@ -104,13 +105,35 @@ impl std::fmt::Debug for Registry {
 }
 
 impl Registry {
-    /// Реестр штатной сборки.
+    /// Реестр штатной сборки: сначала декодеры ОС, затем встроенные.
     #[must_use]
     pub fn builtin() -> Self {
-        Self {
-            // Сюда, перед встроенными, встают бэкенды ОС: аппаратные, затем программные.
-            video: vec![Box::new(av1::Av1Backend)],
-            audio: vec![Box::new(vorbis::VorbisBackend)],
+        let mut registry = Self::os();
+        registry.video.extend(Self::bundled().video);
+        registry.audio.extend(Self::bundled().audio);
+        registry
+    }
+
+    /// Только встроенные свободные декодеры: AV1 (`rav1d`) и Vorbis (`lewton`),
+    /// одинаковые на всех платформах.
+    #[must_use]
+    pub fn bundled() -> Self {
+        Self { video: vec![Box::new(av1::Av1Backend)], audio: vec![Box::new(vorbis::VorbisBackend)] }
+    }
+
+    /// Только декодеры ОС (H.264/HEVC/AAC): аппаратные, затем программные.
+    #[must_use]
+    fn os() -> Self {
+        #[cfg(windows)]
+        {
+            Self {
+                video: vec![Box::new(crate::mf::MfVideoBackend)],
+                audio: vec![Box::new(crate::mf::MfAudioBackend)],
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Self::empty()
         }
     }
 

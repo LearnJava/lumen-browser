@@ -2623,6 +2623,7 @@ dependencies = [
  "lumen-av1",
  "lumen-core",
  "lumen-media-demux",
+ "windows 0.58.0",
  "workspace-hack",
 ]
 

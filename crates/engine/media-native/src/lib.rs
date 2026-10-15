@@ -16,13 +16,55 @@
 
 pub mod registry;
 
+mod annexb;
 mod av1;
+#[cfg(windows)]
+mod mf;
 mod session;
 mod vorbis;
+mod yuv;
 
 use lumen_core::ext::{VideoDecodeSession, VideoDecoder};
 
 use crate::registry::Registry;
+
+/// Какие патентованные кодеки есть у ОС (COMPAT-MEDIA-OSDEC-WIN).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OsCodecStatus {
+    /// Декодер H.264 найден.
+    pub h264: bool,
+    /// Декодер HEVC найден (на Windows — расширение «HEVC Video Extensions»).
+    pub hevc: bool,
+    /// Декодер AAC найден.
+    pub aac: bool,
+}
+
+impl OsCodecStatus {
+    /// На Windows N/KN без Media Feature Pack нет ни H.264, ни AAC: видео из
+    /// обычных сайтов не играет, и пользователю нужна подсказка об установке.
+    #[must_use]
+    pub fn media_feature_pack_missing(self) -> bool {
+        !self.h264 && !self.aac
+    }
+}
+
+/// Адрес страницы «Дополнительные компоненты» в Параметрах Windows (там ставится
+/// Media Feature Pack).
+pub const WINDOWS_OPTIONAL_FEATURES_URI: &str = "ms-settings:optionalfeatures";
+
+/// Состояние декодеров ОС; `None` — на этой платформе бэкенда ОС нет.
+#[must_use]
+pub fn os_codec_status() -> Option<OsCodecStatus> {
+    #[cfg(windows)]
+    {
+        let a = mf::availability();
+        Some(OsCodecStatus { h264: a.h264, hevc: a.hevc, aac: a.aac })
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
 
 /// `VideoDecoder` на встроенных декодерах и декодерах ОС (без FFmpeg).
 #[derive(Debug, Clone, Copy)]
