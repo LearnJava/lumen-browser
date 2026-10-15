@@ -322,7 +322,7 @@ impl FingerprintProfile {
     /// When `http_profile == TorBrowser`, screen is pinned to 1000×900 and
     /// `platform` to `"Win32"` to match the Tor Browser uniform fingerprint
     /// (anti-fingerprinting via population uniformity, TB §10.3).
-    #[cfg(feature = "v8")]
+    #[cfg(all(feature = "v8", test))]
     #[must_use]
     pub fn navigator_profile(&self) -> lumen_js::NavigatorProfile {
         self.navigator_profile_for(false)

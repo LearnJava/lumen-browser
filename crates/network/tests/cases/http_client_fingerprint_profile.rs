@@ -135,6 +135,9 @@ mod tests {
 
     #[test]
     fn firefox_accept_language_is_en_us() {
+        let _lock = crate::cases::accept_language::ACCEPT_LANGUAGE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let h = build_request_headers("example.com", "", "", HttpProfile::Firefox);
         assert!(h.contains("Accept-Language: en-US,en;q=0.9"),
             "Firefox profile must use en-US,en;q=0.9");
