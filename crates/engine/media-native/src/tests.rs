@@ -228,6 +228,33 @@ fn decoder_identity() {
     assert!(d.mime_types().contains(&"video/webm"));
 }
 
+/// COMPAT-MEDIA-OSDEC-WIN-BAR: какой компонент ОС назвать пользователю.
+#[test]
+fn missing_component_follows_codec_and_status() {
+    use lumen_media_demux::Codec;
+    let none = OsCodecStatus { h264: false, hevc: false, aac: false };
+    let all = OsCodecStatus { h264: true, hevc: true, aac: true };
+    assert_eq!(missing_for_video_codec(Codec::H264, none), Some(MissingOsCodec::MediaFeaturePack));
+    assert_eq!(missing_for_video_codec(Codec::Hevc, none), Some(MissingOsCodec::HevcExtension));
+    assert_eq!(missing_for_video_codec(Codec::H264, all), None);
+    assert_eq!(missing_for_video_codec(Codec::Hevc, all), None);
+    // Свободные кодеки от ОС не зависят.
+    assert_eq!(missing_for_video_codec(Codec::Av1, none), None);
+    assert_eq!(missing_for_video_codec(Codec::Vp9, none), None);
+    // H.264 есть, HEVC-расширения нет — называется только оно.
+    let h264_only = OsCodecStatus { h264: true, hevc: false, aac: true };
+    assert_eq!(missing_for_video_codec(Codec::Hevc, h264_only), Some(MissingOsCodec::HevcExtension));
+    assert_eq!(MissingOsCodec::MediaFeaturePack.install_uri(), "ms-settings:optionalfeatures");
+    assert!(MissingOsCodec::HevcExtension.install_uri().starts_with("ms-windows-store:"));
+}
+
+/// Файл на свободном кодеке никогда не «ждёт компонент ОС».
+#[test]
+fn free_codec_file_never_blames_the_os() {
+    assert_eq!(missing_os_codec(AV1_VORBIS), None);
+    assert_eq!(missing_os_codec(b"not a media file"), None);
+}
+
 /// Декодеры ОС (Windows, Media Foundation): H.264 + AAC из `tests/data/h264-aac.mp4`
 /// (320×180, 25 кадр/с, B-кадры, AAC-LC стерео). Если у машины нет декодера
 /// (Windows N без Media Feature Pack) или он отключён `LUMEN_OS_DECODERS=0`,
@@ -241,6 +268,15 @@ mod os_decoders {
     fn os_ready() -> bool {
         let s = os_codec_status().unwrap();
         s.h264 && s.aac
+    }
+
+    /// Сбой открытия H.264/HEVC-файла называет недостающий компонент ОС ровно
+    /// тогда, когда декодера нет (`LUMEN_OS_DECODERS=0` или Windows N/KN).
+    #[test]
+    fn open_failure_names_the_missing_component() {
+        let s = os_codec_status().unwrap();
+        assert_eq!(missing_os_codec(H264_AAC), (!s.h264).then_some(MissingOsCodec::MediaFeaturePack));
+        assert_eq!(missing_os_codec(HEVC_MP4), (!s.hevc).then_some(MissingOsCodec::HevcExtension));
     }
 
     #[test]

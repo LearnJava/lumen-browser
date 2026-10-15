@@ -672,6 +672,7 @@ fn run_window_mode_inner(
         translate_manager: translate_manager::TranslateManager::default(),
         update_ui: update_ui::UpdateUi::new(),
         login_offer: None,
+        media_bar: crate::media_bar::MediaBar::default(),
         page_dialog: None,
         page_dialog_wired: false,
         pending_leave: None,

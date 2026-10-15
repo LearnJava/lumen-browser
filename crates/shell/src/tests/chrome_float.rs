@@ -329,6 +329,61 @@ fn login_bar_detaches_and_routes_its_buttons() {
     assert_eq!(press(lumen_chrome::ids::LOGIN_SAVE_BTN), Some(lumen_chrome::ChromeAction::SaveLogin));
 }
 
+/// COMPAT-MEDIA-OSDEC-WIN-BAR: `#mediaBar` отцепляется, не налезает на
+/// `#updateBar`/`#loginBar`, обе кнопки разрешаются в свои действия.
+#[test]
+fn media_bar_detaches_and_routes_its_buttons() {
+    let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let hyp = KnuthLiangHyphenation::new();
+    let viewport = Size::new(1920.0, 1040.0);
+    let bar = doc.find_by_id(lumen_chrome::ids::MEDIA_BAR).expect("has #mediaBar");
+
+    let closed = lumen_chrome::ChromeModel::default();
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &closed);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    assert!(
+        take_floating_panel(&mut layout, bar, lumen_chrome::ids::MEDIA_BAR).is_none(),
+        "закрытая панель не отцепляется"
+    );
+
+    let mut state = crate::media_bar::MediaBar::default();
+    assert!(state.note_missing(lumen_media_native::MissingOsCodec::MediaFeaturePack));
+    let model = lumen_chrome::ChromeModel {
+        media_bar: state.model(),
+        login_offer: lumen_chrome::ChromeLoginOfferModel {
+            open: true,
+            title: "Сохранить пароль?".to_owned(),
+            meta: "example.com · anna".to_owned(),
+            save_label: "Сохранить".to_owned(),
+            ..Default::default()
+        },
+        update: lumen_chrome::ChromeUpdateModel { bar_open: true, ..Default::default() },
+        ..lumen_chrome::ChromeModel::default()
+    };
+    let _ = lumen_chrome::bind_model_tracked(&mut doc, &model);
+    let mut layout = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+    let login = doc.find_by_id(lumen_chrome::ids::LOGIN_BAR).expect("has #loginBar");
+    let (login_rect, _) = take_floating_panel(&mut layout, login, lumen_chrome::ids::LOGIN_BAR)
+        .expect("open #loginBar must be detachable");
+    let (rect, detached) = take_floating_panel(&mut layout, bar, lumen_chrome::ids::MEDIA_BAR)
+        .expect("open #mediaBar must be detachable");
+    assert!(rect.right() < 1920.0 - 18.0 - 340.0 + 0.5, "не должен перекрывать #updateBar: {rect:?}");
+    assert!(rect.y >= login_rect.bottom() - 0.5, "не должен перекрывать #loginBar: {rect:?} / {login_rect:?}");
+    assert!(fills_rect(&paint_ordered(&detached.removed), rect), "bar background must paint");
+
+    let press = |id| {
+        let node = doc.find_by_id(id).expect("button id");
+        let r = lumen_layout::find_box_by_node(&detached.removed, node).expect("button box").rect;
+        let hit = hit_test(Point::new(r.x + r.width / 2.0, r.y + r.height / 2.0), &detached.removed)
+            .expect("press hits the bar");
+        action_at(&doc, &hit)
+    };
+    assert_eq!(press(lumen_chrome::ids::MEDIA_INSTALL_BTN), Some(lumen_chrome::ChromeAction::OpenMediaInstall));
+    assert_eq!(press(lumen_chrome::ids::MEDIA_HIDE_BTN), Some(lumen_chrome::ChromeAction::DismissMediaBar));
+}
+
 /// UX-SECURITY-UI: `#securityBox` отцепляется как плавающая панель, обе кнопки
 /// разрешаются в свои действия.
 #[test]
