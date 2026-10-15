@@ -465,6 +465,68 @@ fn collect_text_filtered(doc: &Document, node: NodeId, skip: &dyn Fn(NodeId) -> 
     }
 }
 
+/// The word around byte `offset` of `text` — the double-click selection, as a
+/// byte range `(from, to)`.
+///
+/// A run of letters, digits, `_` and combining marks is one word; a run of
+/// whitespace is selected as a unit; any other character (punctuation) stands
+/// alone. At a boundary the character after `offset` decides, at the end of
+/// the text the one before it. `None` for empty text.
+pub fn word_bounds(text: &str, offset: usize) -> Option<(usize, usize)> {
+    #[derive(PartialEq, Clone, Copy)]
+    enum Class {
+        Word,
+        Space,
+        Other,
+    }
+    fn class(c: char) -> Class {
+        if c.is_alphanumeric() || c == '_' || is_combining_mark(c) {
+            Class::Word
+        } else if c.is_whitespace() {
+            Class::Space
+        } else {
+            Class::Other
+        }
+    }
+    /// Combining diacritics blocks (enough for a word not to split on `é`
+    /// written as `e` + U+0301).
+    fn is_combining_mark(c: char) -> bool {
+        matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF)
+    }
+    let at = utf8_floor(text, offset);
+    let seed = text[at..].chars().next().or_else(|| text[..at].chars().next_back())?;
+    let seed_start = if at < text.len() { at } else { at - seed.len_utf8() };
+    let kind = class(seed);
+    let (mut from, mut to) = (seed_start, seed_start + seed.len_utf8());
+    if kind != Class::Other {
+        while let Some(c) = text[..from].chars().next_back() {
+            if class(c) != kind {
+                break;
+            }
+            from -= c.len_utf8();
+        }
+        while let Some(c) = text[to..].chars().next() {
+            if class(c) != kind {
+                break;
+            }
+            to += c.len_utf8();
+        }
+    }
+    Some((from, to))
+}
+
+/// The word under a text position as a [`Range`] ([`word_bounds`] on the text
+/// node). `None` for a non-text container or empty text; the word never
+/// leaves its text node.
+pub fn word_range_at(doc: &Document, pos: DomPosition) -> Option<Range> {
+    let NodeData::Text(s) = &doc.get(pos.container).data else { return None };
+    let (from, to) = word_bounds(s, pos.offset as usize)?;
+    Some(Range {
+        start: DomPosition { container: pos.container, offset: from as u32 },
+        end: DomPosition { container: pos.container, offset: to as u32 },
+    })
+}
+
 fn utf8_floor(s: &str, mut off: usize) -> usize {
     off = off.min(s.len());
     while off > 0 && !s.is_char_boundary(off) {
@@ -477,6 +539,37 @@ fn utf8_floor(s: &str, mut off: usize) -> usize {
 mod tests {
     use super::*;
     use crate::QualName;
+
+    fn word_at(text: &str, offset: u32) -> Option<String> {
+        let mut doc = Document::new();
+        let root = doc.root();
+        let t = doc.create_text(text);
+        doc.append_child(root, t);
+        let r = word_range_at(&doc, DomPosition { container: t, offset })?;
+        Some(range_text(&doc, &r))
+    }
+
+    #[test]
+    fn word_range_picks_the_word_under_the_caret() {
+        assert_eq!(word_at("hello brave world", 1).as_deref(), Some("hello"));
+        assert_eq!(word_at("hello brave world", 8).as_deref(), Some("brave"));
+        // Boundary: the character after the caret decides.
+        assert_eq!(word_at("hello brave", 6).as_deref(), Some("brave"));
+        assert_eq!(word_at("hello brave", 5).as_deref(), Some(" "));
+        // End of text: the character before.
+        assert_eq!(word_at("hello brave", 11).as_deref(), Some("brave"));
+    }
+
+    #[test]
+    fn word_range_handles_punctuation_cyrillic_and_underscore() {
+        assert_eq!(word_at("a, b", 1).as_deref(), Some(","));
+        assert_eq!(word_at("привет, мир", 3).as_deref(), Some("привет"));
+        assert_eq!(word_at("snake_case x", 2).as_deref(), Some("snake_case"));
+        assert_eq!(word_at("a   b", 2).as_deref(), Some("   "));
+        assert_eq!(word_at("", 0), None);
+        // An offset inside a multi-byte char snaps back to its start.
+        assert_eq!(word_at("мир", 1).as_deref(), Some("мир"));
+    }
 
     // ── BUG-620: Element-container Range (selectAllChildren) must stringify ──
 

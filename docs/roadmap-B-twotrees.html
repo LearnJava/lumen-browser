@@ -8270,9 +8270,9 @@
         {
          "id": "UX-VIDEO-AV1",
          "title": "AV1-видео через rav1d (общая обёртка с AVIF)",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "AV1-видео через rav1d (ADR-035 п.2): обёртку dav1d_* из crates/engine/image/src/avif/mod.rs вынести в общий модуль для картинок и видео; последовательное декодирование кадров потока, 8/10 бит, вывод RGBA (позже — YUV для GPU), потоки по числу ядер. rav1d сейчас без asm (нужен nasm): если 1080p не успевает в реальном времени — решить, включать ли asm (nasm в сборке) или брать AV1 аппаратно через ОС (бэкенды COMPAT-MEDIA-OSDEC-*). Приёмка: 10-секундный AV1-ролик 1080p декодируется не медленнее реального времени на машине разработчика (замер записать), кадры совпадают с эталоном ±1 на канал; AVIF-тесты lumen-image зелёные."
+         "note": "**Сделано (2026-10-15, ветка `p1-ux-video-av1`):** новый крейт `crates/engine/av1` (`lumen-av1`): безопасный потоковый `Decoder` над rav1d (send(пакет, pts) → next_picture, drain/flush, 8/10/12 бит, 4:0:0–4:4:4, кадры в порядке показа с pts), `Picture::to_rgba8_into` (таблицы, фикс. точка, потоки) и `apply_alpha`; AVIF в `lumen-image` переведён на него. Кадры побитово как у ffmpeg/libdav1d (17 тестов). **Замер 1080p 10 с (i5-10210U, 8 потоков, [docs/perf/av1-decode.md](docs/perf/av1-decode.md)):** без asm ≈0,9× реального времени — не хватает; с asm ≈3,3× (на одном потоке 2,25×). **Решение:** asm — фичей `av1-asm` (lumen-shell → lumen-image → lumen-av1 → rav1d/asm), в default выключена (нужен nasm на x86); релизные сборки включают; сборку/упаковку релиза с `--features av1-asm` и nasm в CI делает задача релиз-сборки/UX-VIDEO-NATIVE. Исходная постановка: AV1-видео через rav1d (ADR-035 п.2): обёртку dav1d_* из crates/engine/image/src/avif/mod.rs вынести в общий модуль для картинок и видео; последовательное декодирование кадров потока, 8/10 бит, вывод RGBA (позже — YUV для GPU), потоки по числу ядер. rav1d сейчас без asm (нужен nasm): если 1080p не успевает в реальном времени — решить, включать ли asm (nasm в сборке) или брать AV1 аппаратно через ОС (бэкенды COMPAT-MEDIA-OSDEC-*). Приёмка: 10-секундный AV1-ролик 1080p декодируется не медленнее реального времени на машине разработчика (замер записать), кадры совпадают с эталоном ±1 на канал; AVIF-тесты lumen-image зелёные."
         },
         {
          "id": "UX-VIDEO-NATIVE",
@@ -8543,9 +8543,9 @@
       {
        "id": "UX-DBLCLICK",
        "title": "dblclick и счётчик кликов detail для страницы",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Странице не приходит dblclick вовсе (шелл его не шлёт, grep dblclick в *.rs пуст), MouseEvent.detail всегда 0 (_lumen_dispatch_mouse_event, web_api_shim_mid.js:1396, без detail); двойной/тройной клик не выделяет слово/абзац. Двойной клик есть только у плавающей панели хрома (chrome_float.rs:38). Объём: счётчик кликов по GetDoubleClickTime и зоне SM_CXDOUBLECLK (abs(dx) ≤ cx/2), detail 1/2/3 в mousedown/mouseup/click, dblclick после второго click, выделение слова на 2 и абзаца на 3. Приёмка: два клика с интервалом < GetDoubleClickTime в пределах зоны → detail=2 и один dblclick; интервал больше → два click с detail=1. docs/research/browser-ux/report.md §9 №4, №17 Исследование — docs/research/browser-ux/report.md."
+       "note": "**Сделано (2026-10-15, ветка `p6-ux-dblclick`):** `lumen/click_count.rs` — счётчик нажатий ЛКМ по `OsParams::is_double_click` (время `GetDoubleClickTime`, зона — половина `SM_CXDOUBLECLK` в каждую сторону; допуск раньше сравнивался с полным значением, исправлено вместе с chrome_float). Счёт идёт `MouseEvent.detail` в `mousedown`/`mouseup`/`click` (`_lumen_dispatch_mouse_event` получил 8-й аргумент `detail`), второе нажатие после `click` шлёт один `dblclick` (detail=2); интервал больше или вне зоны — новая серия с detail=1. Выделение: 2 — слово (`lumen_dom::word_bounds`/`word_range_at`: буквы/цифры/`_`, пробелы одним куском, пунктуация по одному символу), 3 и больше — абзац (`lumen_layout::paragraph_range_at_point` — весь `InlineRun`); в поле ввода — слово, затем всё значение (textarea — строка). Не сделано: `detail` и `dblclick` внутри `<iframe>`, пробел после слова не захватывается, drag после двойного клика идёт по символам, не по словам."
       },
       {
        "id": "UX-CARET",
