@@ -236,6 +236,9 @@ impl Lumen {
                 if self.beforeunload_gate(crate::lumen::PendingLeave::CloseWindow).is_none() {
                     return;
                 }
+                if !self.close_warning_gate() {
+                    return;
+                }
                 self.save_session_on_close();
                 self.save_full_session();
                 event_loop.exit();
