@@ -1328,6 +1328,11 @@ pub(crate) struct Lumen {
     ///
     /// `None` entry means the tab was opened but never loaded (blank new tab).
     pub(crate) bg_tabs: HashMap<usize, PageSnapshot>,
+    /// Фоновые вкладки, открытые ссылкой и ещё не загруженные (UX-LINK-CLICKS):
+    /// id вкладки → адрес. Сеть и движок не трогаются, пока вкладку не
+    /// выберут; `switch_tab` и закрытие активной вкладки запускают навигацию
+    /// по этому адресу ([`Lumen::load_lazy_tab`]).
+    pub(crate) lazy_tabs: HashMap<usize, String>,
     /// Lightweight identity for hibernated (T3) tabs — keyed by `TabEntry::id`.
     ///
     /// When a background tab is promoted to Hibernated its full `PageSnapshot`

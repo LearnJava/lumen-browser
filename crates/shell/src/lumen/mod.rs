@@ -60,6 +60,7 @@ mod session;
 mod smil;
 mod spell_menu;
 mod state;
+mod link_open;
 mod tabs_cmd;
 mod doc_select;
 mod text_drag_select;
