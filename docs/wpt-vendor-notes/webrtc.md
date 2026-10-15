@@ -55,3 +55,7 @@ guard-less-конструктора (`RTCPeerConnection()` без `new` корр
 `TypeError`) — заведён [BUG-1058](../bugs/BUG-1058-FIXED.md).
 
 **Обновление 2026-10-14 (COMPAT-API-01-WEBRTC):** `crates/js/src/webrtc_stub.rs` удалён — `RTCPeerConnection`, `RTCSessionDescription`, `RTCIceCandidate` больше не объявлены (ADR-034 п.2). Абзацы выше описывают состояние до этого среза; категория `webrtc*` в `docs/wpt/runs/` не пересъёмлялась, её baseline устарел (все тесты теперь падают быстро на `ReferenceError`, а не по TIMEOUT).
+
+## Baseline expectations (2026-10-15, WPT-RUN-7-S2)
+
+`tests/wpt/metadata/webrtc/` — 223 `.ini`, два `--check` подряд с exit 0. После COMPAT-API-01-WEBRTC (ADR-034) `RTCPeerConnection` не объявляется, поэтому замер выше устарел: **250/258 harness OK, 24/2263 подтестов**; почти все провалы — `RTCPeerConnection is not defined`. Файлы с внешним таймаутом помечены объединением значений (`[OK, TIMEOUT]`, `[PASS, FAIL]`): без этого `--check` флапал (80–99 регрессий на сыром baseline). Разбор — `docs/tasks/p2-test-track.md`, срез 70.
