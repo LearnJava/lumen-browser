@@ -9107,6 +9107,56 @@
        ]
       }
      ]
+    },
+    {
+     "id": "TEXTQ",
+     "title": "Качество текста в живом окне",
+     "status": "planned",
+     "note": "Дорожка «Качество текста в живом окне» (владелец — P1, назначено 2026-10-15). Текст в wgpu-пути заметно мыльнее Chrome и нашего же `--screenshot`: глиф растрируется в одном из 8 bin-ов размера (CSS px) и масштабируется билинейно, DPR не учитывается, квады на дробных координатах, нет гаммы/контраста покрытия, нет шейпинга и синтетического bold/italic. Порядок: TEXTQ-1 (точный размер в device px + привязка к сетке) → TEXTQ-2 (гамма) → TEXTQ-3 (прокрутка) → TEXTQ-4 (шейпинг в отрисовке) → TEXTQ-5 (шейпинг в раскладке) → TEXTQ-6 (синтетический bold/italic). Вне дорожки пока: хинтинг, ClearType.",
+     "tasks": [
+      {
+       "id": "TEXTQ-1",
+       "title": "Глиф в точном размере в device px, тексель = пиксель",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-1.md](docs/tasks/TEXTQ-1.md). Убрать `SIZE_BINS`, растрировать в `font_size × scale_factor` (квант 1/4 px), baseline по Y — на целый device px, по X — 4 субпиксельные фазы в ключе атласа; страница качества текста в `GPU_CAPTURE` для замера до/после."
+      },
+      {
+       "id": "TEXTQ-2",
+       "title": "Гамма и контраст покрытия глифа",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-2.md](docs/tasks/TEXTQ-2.md). Зависит от TEXTQ-1. Гамма + контраст покрытия по яркости цвета текста (Skia/DirectWrite-стиль), одна функция для GPU и CPU."
+      },
+      {
+       "id": "TEXTQ-3",
+       "title": "Прокрутка без дробного сдвига полосы",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-3.md](docs/tasks/TEXTQ-3.md). Зависит от TEXTQ-1. Блит полосы прокрутки и слоёв со смещением скролла — на целые device px."
+      },
+      {
+       "id": "TEXTQ-4",
+       "title": "Шейпинг в GPU-пути отрисовки",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-4.md](docs/tasks/TEXTQ-4.md). Зависит от TEXTQ-1. rustybuzz в `push_text_glyphs`: кернинг, лигатуры, `font_features`; кэш шейпинга."
+      },
+      {
+       "id": "TEXTQ-5",
+       "title": "Шейпинг в измерении ширины текста",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. Измеритель ширин раскладки через шейпер, ширина run-а = нарисованной."
+      },
+      {
+       "id": "TEXTQ-6",
+       "title": "Синтетический жирный и курсив в GPU-пути",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-6.md](docs/tasks/TEXTQ-6.md). Зависит от TEXTQ-1. Синтетический bold (двойной квад) и italic (наклон вершин) в wgpu, как в CPU-пути."
+      }
+     ]
     }
    ],
    "date": "36–48 мес"
