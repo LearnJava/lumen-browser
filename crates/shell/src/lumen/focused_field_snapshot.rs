@@ -35,6 +35,25 @@ pub(crate) struct FocusedFieldSnapshot {
     field: Option<(TypeableField, String)>,
     /// [`Lumen::spell_target`] of `nid`.
     spell: Option<SpellTarget>,
+    /// [`secret_field_in`] of `nid`.
+    secret: bool,
+}
+
+/// A field whose content is a secret typed blind: `<input type=password>` or
+/// an `<input autocomplete="one-time-code">` (the OTP boxes of banks and 2FA
+/// pages). Disabled and read-only fields take no typing, so they are not.
+pub(crate) fn secret_field_in(doc: &lumen_dom::Document, nid: NodeId) -> bool {
+    let Some(node) = doc.try_get(nid) else { return false };
+    if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
+        return false;
+    }
+    if !node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("input")) {
+        return false;
+    }
+    node.input_type() == Some(lumen_dom::InputType::Password)
+        || node.get_attr("autocomplete").is_some_and(|ac| {
+            ac.split_ascii_whitespace().any(|t| t.eq_ignore_ascii_case("one-time-code"))
+        })
 }
 
 impl FocusedFieldSnapshot {
@@ -54,6 +73,7 @@ impl FocusedFieldSnapshot {
                 nid: Some(nid),
                 field: typeable_field_in(&doc, nid),
                 spell: spell_target_in(&doc, nid),
+                secret: secret_field_in(&doc, nid),
             };
         } else if self.doc_key != key || self.nid != Some(nid) {
             *self = Self::default();
@@ -68,6 +88,12 @@ impl FocusedFieldSnapshot {
     /// The typeable-field reading for `nid`, if the snapshot describes it.
     pub(crate) fn field(&self, nid: NodeId) -> Option<(TypeableField, String)> {
         self.field.clone().filter(|_| self.nid == Some(nid))
+    }
+
+    /// `true` when the snapshot describes `nid` and it is a password / one-time
+    /// code field (UX-CAPSLOCK).
+    pub(crate) fn secret(&self, nid: NodeId) -> bool {
+        self.secret && self.nid == Some(nid)
     }
 
     /// The spell-check target for `nid`, if the snapshot describes it.
@@ -85,6 +111,29 @@ impl Lumen {
             None => self.focused_field_snapshot.clear(),
         }
         self.absorb_script_selection_nonblocking();
+    }
+
+    /// UX-CAPSLOCK: the badges to show over the focused password / one-time
+    /// code field — `⇪` while Caps Lock is on, the layout tag (`RU`) while the
+    /// keyboard is not Latin — with the field's document rect. `None` for any
+    /// other focus, a frame field (its own JS context) or an unfocused window.
+    /// Reads [`Self::focused_field_snapshot`], so call after
+    /// [`Self::refresh_focused_field_snapshot`].
+    pub(crate) fn secret_field_indicator(&self) -> Option<(Rect, Vec<&'static str>)> {
+        let nid = self.focused_node?;
+        if !self.window_focused || self.focused_frame.is_some() || !self.focused_field_snapshot.secret(nid) {
+            return None;
+        }
+        let mut labels = Vec::new();
+        if platform::keyboard_state::caps_lock_on() {
+            labels.push("\u{21ea}");
+        }
+        labels.extend(platform::keyboard_state::non_latin_layout_tag());
+        if labels.is_empty() {
+            return None;
+        }
+        let rect = forms::find_box_rect(self.layout_box.as_ref()?, nid)?;
+        Some((rect, labels))
     }
 }
 
@@ -160,5 +209,33 @@ mod tests {
         snap.refresh(&doc, None);
         assert_eq!(snap.field(nid), None);
         assert_eq!(snap.spell(nid), None);
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+
+    fn secret(html: &str) -> bool {
+        let doc = lumen_html_parser::parse(html);
+        let nid = doc.find_by_id("f").unwrap_or_else(|| unreachable!());
+        secret_field_in(&doc, nid)
+    }
+
+    #[test]
+    fn password_and_one_time_code_fields_are_secret() {
+        assert!(secret(r#"<input id="f" type="password">"#));
+        assert!(secret(r#"<input id="f" type="PASSWORD">"#));
+        assert!(secret(r#"<input id="f" type="text" autocomplete="one-time-code">"#));
+        assert!(secret(r#"<input id="f" autocomplete="section-x ONE-TIME-CODE">"#));
+    }
+
+    #[test]
+    fn ordinary_and_inert_fields_are_not() {
+        assert!(!secret(r#"<input id="f" type="text">"#));
+        assert!(!secret(r#"<input id="f" type="email" autocomplete="username">"#));
+        assert!(!secret(r#"<textarea id="f"></textarea>"#));
+        assert!(!secret(r#"<input id="f" type="password" disabled>"#));
+        assert!(!secret(r#"<input id="f" type="password" readonly>"#));
     }
 }

@@ -45,6 +45,17 @@ fn mouseevent_modifier_keys() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// UX-CAPSLOCK: `getModifierState('CapsLock')` follows the Caps Lock bit (16) of
+/// the shell's modifier mask, and the constructor's `modifierCapsLock` init.
+#[test]
+fn keyboardevent_caps_lock_modifier_state() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var plain = new KeyboardEvent('keydown', {key: 'a'});                  var caps = new KeyboardEvent('keydown', {key: 'a', modifierCapsLock: true});                  var seen = [];                  document.addEventListener('keydown', function(e) {                      seen.push(e.getModifierState('CapsLock') + '/' + e.getModifierState('Shift'));                  });                  _lumen_dispatch_key_event(_lumen_root_nid, 'keydown', 'a', 'KeyA', 65, 0, 16, false, false);                  _lumen_dispatch_key_event(_lumen_root_nid, 'keydown', 'a', 'KeyA', 65, 0, 2, false, false);                  !plain.getModifierState('CapsLock') && caps.getModifierState('CapsLock') &&                  seen.join(',') === 'true/false,false/true'"
+    ).unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
 /// BUG-596: DOM §2.5 / UI Events §3.6/§4.5 legacy `init*Event` methods --
 /// `document.createEvent()`-style objects (and any script that mutates an
 /// already-constructed event in place) must still be able to call these,

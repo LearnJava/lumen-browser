@@ -127,8 +127,8 @@ impl Lumen {
         // → `route_eval_js` no-op + `route_query_js` → `None`, как прежний early-`return`).
         for event_type in events {
             let script = format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
-                node_id, event_type, key, code,
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, {}, false)",
+                node_id, event_type, key, code, platform::keyboard_state::caps_lock_mask(),
             );
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }

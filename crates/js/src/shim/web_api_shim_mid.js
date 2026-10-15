@@ -120,6 +120,7 @@ function KeyboardEvent(type, init) {
     this.shiftKey    = !!(init && init.shiftKey);
     this.altKey      = !!(init && init.altKey);
     this.metaKey     = !!(init && init.metaKey);
+    Object.defineProperty(this, '_capsLock', { value: !!(init && init.modifierCapsLock), enumerable: false });
 }
 KeyboardEvent.prototype = Object.create(UIEvent.prototype);
 KeyboardEvent.prototype.constructor = KeyboardEvent;
@@ -128,6 +129,7 @@ KeyboardEvent.prototype.getModifierState = function(key) {
     if (key === 'Shift')   return this.shiftKey;
     if (key === 'Alt')     return this.altKey;
     if (key === 'Meta')    return this.metaKey;
+    if (key === 'CapsLock') return this._capsLock;
     return false;
 };
 KeyboardEvent.DOM_KEY_LOCATION_STANDARD = 0;
@@ -1715,7 +1717,8 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
         which: keyCode, location: location,
         repeat: !!repeat, isComposing: !!isComposing,
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
-        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+        modifierCapsLock: !!(mod & 16)
     });
     return _lumen_dispatch_rich(start_nid, ev);
 }

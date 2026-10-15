@@ -153,7 +153,7 @@ pub(crate) fn dispatch_script(nid: usize, event_type: &str, event: &KeyEvent, mo
         crate::js_escape::escape_js_string(&dom_key(&event.logical_key)),
         crate::js_escape::escape_js_string(&code),
         dom_location(event.location),
-        modifier_mask(mods),
+        modifier_mask(mods) | platform::keyboard_state::caps_lock_mask(),
         event.repeat,
     )
 }
