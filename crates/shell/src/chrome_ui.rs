@@ -1099,6 +1099,17 @@ impl Lumen {
             Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
     }
 
+    /// COMPAT-PRIVACY-UNBREAK-LOCALE: `Accept-Language` and `navigator.languages`
+    /// follow the active profile — the OS list in Personal/Work, `en-US` in
+    /// Anonymous. Call after the active profile changed and once at startup.
+    pub(crate) fn sync_profile_locale(&self) {
+        let anonymous = self.active_profile_is_anonymous();
+        #[cfg(feature = "v8")]
+        crate::config::global().install_navigator_for(anonymous);
+        #[cfg(not(feature = "v8"))]
+        crate::config::global().install_accept_language(anonymous);
+    }
+
     /// UX-PERMISSIONS-3: Anonymous decides into a fresh in-memory store (as
     /// with its cookie jar), every other profile into `permissions.db`.
     /// Call after the active profile changed and once at startup.
@@ -1947,6 +1958,7 @@ impl Lumen {
                         self.reset_anonymous_cookie_jar();
                     }
                     self.sync_permission_store();
+                    self.sync_profile_locale();
                     self.relayout_chrome_host();
                 }
             }

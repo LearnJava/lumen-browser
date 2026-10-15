@@ -67,7 +67,7 @@ Treat anti-detection capabilities as a **layered privacy stack**, delivered by d
 - HTTP/1.1 request line and header ordering mirrors current Chrome: `User-Agent`, `Accept`, `Accept-Encoding`, `Accept-Language`, etc. in Chrome's order, with Chrome's casing.
 - HTTP/2 SETTINGS frame values match Chrome (`SETTINGS_HEADER_TABLE_SIZE = 65536`, `SETTINGS_MAX_CONCURRENT_STREAMS = 1000`, `SETTINGS_INITIAL_WINDOW_SIZE = 6291456`, etc.).
 - HTTP/2 stream priority frames mirror Chrome's pattern (priority tree).
-- `Accept-Language` defaults to `en-US,en;q=0.9` unless the user overrides (does not silently expose the user's real locale).
+- `Accept-Language` is `en-US,en;q=0.9` for the Anonymous profile, Tor (`en-US,en;q=0.5`, pinned) and automation sessions; in the Personal and Work profiles it is the Windows language list in Chrome's weighting (`ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7`), one list shared with `navigator.languages` ([ADR-034](ADR-034-site-compatibility-strategy.md) §8, COMPAT-PRIVACY-UNBREAK-LOCALE). A `languages` key in `fingerprint.toml` overrides both layers at once (never Tor).
 - Client Hints (`Sec-CH-UA`, etc.) — Lumen advertises its own UA via Client Hints when asked, or returns nothing on Strict — same as Tor.
 
 ### Layer 4 — Rendering fingerprint (default = Brave-style; existing §9.5)

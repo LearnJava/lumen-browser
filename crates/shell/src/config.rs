@@ -21,7 +21,7 @@
 //! hardware_concurrency = 8
 //! device_memory       = 8
 //! platform            = "Win32"
-//! languages           = "en-US,en"      # comma-separated; first entry = navigator.language
+//! languages           = "en-US,en"      # comma-separated; first entry = navigator.language; also the Accept-Language list. Absent = OS language list (Anonymous and Tor: en-US,en)
 //! doh_url             = "https://cloudflare-dns.com/dns-query"  # DNS over HTTPS resolver (optional)
 //! http3               = true            # HTTP/3 (QUIC) via Alt-Svc discovery (default: false)
 //! identity            = "chrome_unbranded"  # chrome_unbranded|chrome_lumen (env LUMEN_IDENTITY wins)
@@ -197,6 +197,14 @@ pub struct FingerprintProfile {
     pub platform: String,
     /// `navigator.languages` (ordered); first entry is `navigator.language`.
     pub languages: Vec<String>,
+    /// `true` when `languages` was set by the `languages` key of
+    /// `fingerprint.toml`: an explicit choice wins over the OS list in every
+    /// profile except Tor.
+    pub languages_explicit: bool,
+    /// The OS language list (expanded, see [`lumen_network::http::expand_language_list`]),
+    /// filled once at startup by [`use_os_languages`](Self::use_os_languages).
+    /// Empty — the OS list is not in use and `languages` stays authoritative.
+    pub os_languages: Vec<String>,
     /// `screen.width` / `screen.availWidth` in CSS pixels.
     pub screen_width: u32,
     /// `screen.height` / `screen.availHeight` in CSS pixels.
@@ -248,6 +256,8 @@ impl Default for FingerprintProfile {
             device_memory: 8,
             platform: "Win32".to_string(),
             languages: vec!["en-US".to_string(), "en".to_string()],
+            languages_explicit: false,
+            os_languages: Vec::new(),
             screen_width: 1920,
             screen_height: 1080,
             color_depth: 24,
@@ -289,18 +299,59 @@ impl FingerprintProfile {
     #[cfg(feature = "v8")]
     #[must_use]
     pub fn navigator_profile(&self) -> lumen_js::NavigatorProfile {
+        self.navigator_profile_for(false)
+    }
+
+    /// Fill the OS language list. Skipped by the caller for automation and Tor
+    /// sessions, which keep the deterministic `en-US` default.
+    pub fn use_os_languages(&mut self) {
+        self.os_languages = lumen_network::http::expand_language_list(crate::os_locale::preferred_languages());
+    }
+
+    /// The one ordered language list behind both `Accept-Language` and
+    /// `navigator.languages`, so the two can never disagree:
+    /// - Tor Browser — `en-US, en`, always;
+    /// - an explicit `languages` key of `fingerprint.toml` — verbatim;
+    /// - the Anonymous profile — `en-US, en`, the shared "crowd" value;
+    /// - otherwise the OS list, falling back to the built-in default.
+    #[must_use]
+    pub fn effective_languages(&self, anonymous: bool) -> Vec<String> {
+        let crowd = || vec!["en-US".to_string(), "en".to_string()];
+        if self.http_profile == HttpProfile::TorBrowser {
+            return crowd();
+        }
+        if self.languages_explicit {
+            return self.languages.clone();
+        }
+        if anonymous {
+            return crowd();
+        }
+        if self.os_languages.is_empty() {
+            return self.languages.clone();
+        }
+        self.os_languages.clone()
+    }
+
+    /// Push the `Accept-Language` for the active browser profile into the
+    /// network layer (every protocol and every thread read the same value).
+    pub fn install_accept_language(&self, anonymous: bool) {
+        let header = lumen_network::http::accept_language_header(&self.effective_languages(anonymous));
+        lumen_network::http::set_global_accept_language(Some(header));
+    }
+
+    /// [`navigator_profile`](Self::navigator_profile) for the active browser
+    /// profile (`anonymous` — the Anonymous profile is selected).
+    #[cfg(feature = "v8")]
+    #[must_use]
+    pub fn navigator_profile_for(&self, anonymous: bool) -> lumen_js::NavigatorProfile {
         let is_tor = self.http_profile == HttpProfile::TorBrowser;
         lumen_js::NavigatorProfile {
             hardware_concurrency: self.hardware_concurrency,
             device_memory: self.device_memory,
             // Tor Browser always reports "Win32" regardless of actual OS.
             platform: if is_tor { "Win32".to_string() } else { self.platform.clone() },
-            // Tor Browser pins Accept-Language to en-US to avoid locale leakage.
-            languages: if is_tor {
-                vec!["en-US".to_string(), "en".to_string()]
-            } else {
-                self.languages.clone()
-            },
+            // Same list as `Accept-Language`; Tor Browser pins it to en-US.
+            languages: self.effective_languages(anonymous),
             // Tor Browser letterboxes viewport; screen reports 1000×900 default.
             screen_width: if is_tor { 1000 } else { self.screen_width },
             screen_height: if is_tor { 900 } else { self.screen_height },
@@ -319,7 +370,17 @@ impl FingerprintProfile {
     /// GPC is on exactly for `http_profile = "strict" | "lumen"`.
     #[cfg(feature = "v8")]
     pub fn install_navigator(&self) {
-        lumen_js::set_navigator_profile(self.navigator_profile());
+        self.install_navigator_for(false);
+    }
+
+    /// [`install_navigator`](Self::install_navigator) for the active browser
+    /// profile; also (re)installs `Accept-Language` from the same language
+    /// list. Called again when the active profile changes, so the next page
+    /// and the next request already carry the new locale.
+    #[cfg(feature = "v8")]
+    pub fn install_navigator_for(&self, anonymous: bool) {
+        self.install_accept_language(anonymous);
+        lumen_js::set_navigator_profile(self.navigator_profile_for(anonymous));
         // BUG-1614: the JS-visible name of the browser comes from the very
         // User-Agent the HTTP profile sends, so the layers cannot disagree.
         lumen_js::set_identity(lumen_core::Identity::from_user_agent(
@@ -611,6 +672,7 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
                 .collect();
             if !langs.is_empty() {
                 p.languages = langs;
+                p.languages_explicit = true;
             }
         }
         "screen_width" => {
@@ -930,6 +992,60 @@ mod tests {
     fn empty_languages_keeps_default() {
         let p = parse("languages = ,, ,");
         assert_eq!(p.languages, vec!["en-US".to_string(), "en".to_string()]);
+        assert!(!p.languages_explicit);
+    }
+
+    fn tags(v: &[&str]) -> Vec<String> {
+        v.iter().map(|t| (*t).to_string()).collect()
+    }
+
+    fn with_os_ru(mut p: FingerprintProfile) -> FingerprintProfile {
+        p.os_languages = lumen_network::http::expand_language_list(&tags(&["ru-RU", "en-US"]));
+        p
+    }
+
+    /// Personal/Work follow the OS list; Anonymous presents the shared en-US.
+    #[test]
+    fn languages_follow_the_os_except_in_anonymous() {
+        let p = with_os_ru(FingerprintProfile::default());
+        assert_eq!(p.effective_languages(false), tags(&["ru-RU", "ru", "en-US", "en"]));
+        assert_eq!(p.effective_languages(true), tags(&["en-US", "en"]));
+        assert_eq!(
+            lumen_network::http::accept_language_header(&p.effective_languages(false)),
+            "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+        );
+    }
+
+    /// Without the OS list (automation, unreadable system) nothing changes.
+    #[test]
+    fn languages_default_without_os_list() {
+        let p = FingerprintProfile::default();
+        assert_eq!(p.effective_languages(false), tags(&["en-US", "en"]));
+    }
+
+    /// `languages` in fingerprint.toml reaches both layers, in every profile
+    /// but Tor — one list feeds `navigator.languages` and `Accept-Language`.
+    #[test]
+    fn explicit_languages_win_over_os_and_anonymous_but_not_tor() {
+        let p = with_os_ru(parse("languages = de-DE, de"));
+        assert!(p.languages_explicit);
+        assert_eq!(p.effective_languages(false), tags(&["de-DE", "de"]));
+        assert_eq!(p.effective_languages(true), tags(&["de-DE", "de"]));
+        assert_eq!(
+            lumen_network::http::accept_language_header(&p.effective_languages(false)),
+            "de-DE,de;q=0.9"
+        );
+        let tor = with_os_ru(parse("languages = de-DE, de\nhttp_profile = tor"));
+        assert_eq!(tor.effective_languages(false), tags(&["en-US", "en"]));
+    }
+
+    #[cfg(feature = "v8")]
+    #[test]
+    fn navigator_languages_match_the_accept_language_list() {
+        let p = with_os_ru(FingerprintProfile::default());
+        assert_eq!(p.navigator_profile_for(false).languages, p.effective_languages(false));
+        assert_eq!(p.navigator_profile_for(true).languages, tags(&["en-US", "en"]));
+        assert_eq!(p.navigator_profile().languages, p.navigator_profile_for(false).languages);
     }
 
     #[test]

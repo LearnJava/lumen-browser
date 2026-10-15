@@ -830,6 +830,8 @@ fn run_window_mode_inner(
     };
     // UX-PERMISSIONS-3: a persisted Anonymous profile must not write decisions to disk.
     app.sync_permission_store();
+    // COMPAT-PRIVACY-UNBREAK-LOCALE: a persisted Anonymous profile starts with en-US.
+    app.sync_profile_locale();
     // BUG-411: seed the shields fallback from the persisted "Блокировать
     // рекламу" setting and push it at the process-global filter, which
     // `config::init_adblock` deliberately leaves off. Before this the setting

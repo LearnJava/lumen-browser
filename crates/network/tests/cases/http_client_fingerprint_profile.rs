@@ -108,6 +108,9 @@ mod tests {
 
     #[test]
     fn chrome_accept_language_is_en_us() {
+        let _lock = crate::cases::accept_language::ACCEPT_LANGUAGE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let h = build_request_headers("example.com", "", "", HttpProfile::Chrome);
         assert!(h.contains("Accept-Language: en-US,en;q=0.9"),
             "Chrome profile must use en-US,en;q=0.9, got: {h}");
@@ -115,6 +118,9 @@ mod tests {
 
     #[test]
     fn strict_accept_language_is_en_us() {
+        let _lock = crate::cases::accept_language::ACCEPT_LANGUAGE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let h = build_request_headers("example.com", "", "", HttpProfile::Strict);
         assert!(h.contains("Accept-Language: en-US,en;q=0.9"),
             "Strict profile must use en-US,en;q=0.9");

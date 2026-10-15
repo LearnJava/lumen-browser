@@ -749,6 +749,11 @@ pub(crate) fn run_cli() -> ExitCode {
             crate::update::cleanup_after_apply(&dir);
         }
     }
+    // COMPAT-PRIVACY-UNBREAK-LOCALE: interactive sessions present the OS
+    // language list; automation and Tor keep the deterministic en-US default.
+    if !startup_profile.no_persistent_state {
+        startup_profile.use_os_languages();
+    }
     config::init_global(startup_profile);
     drop(cfg_phase);
 
