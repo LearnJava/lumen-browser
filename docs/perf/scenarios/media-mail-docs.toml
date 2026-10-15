@@ -1,0 +1,274 @@
+# Видео, почта, документы, файлы (вес 2; файлы — 1). Видео: `readyState >= 1` (метаданные получены) — декодер
+# и сетевой слой отработали; автозапуск не требуется. Почта: страница входа, ввод логина. Сценарии с `account`
+# входят целиком (логин → пароль → ящик), без переменных <ACC>_USER / <ACC>_PASS получают skip no_account.
+
+[[scenario]]
+id = "video-youtube"
+title = "YouTube: страница ролика, видео получило метаданные"
+category = "video"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://www.youtube.com/watch?v=jNQXAC9IVRw" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Accept all|Принять все|Reject all)$", optional = true },
+  { do = "wait", cond = "visible", selector = "video", timeout_s = 30 },
+]
+oracle = [
+  { kind = "eval", value = "(() => { const v = document.querySelector('video'); return !!v && v.readyState >= 1; })()" },
+]
+oracle_wait_s = 25
+
+[[scenario]]
+id = "video-rutube"
+title = "Rutube: главная → первый ролик, видео получило метаданные"
+category = "video"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://rutube.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+  { do = "eval", code = "(() => { const a = document.querySelector('a[href*=\"/video/\"]'); if (!a) return false; location.href = a.href; return true; })()", expect = true },
+  { do = "wait", cond = "visible", selector = "video", timeout_s = 30 },
+]
+oracle = [
+  { kind = "eval", value = "(() => { const v = document.querySelector('video'); return !!v && v.readyState >= 1; })()" },
+]
+oracle_wait_s = 25
+
+# Эталон: документ не доходит до readyState complete за 30 с (долгие опросы), навигация считается зависшей.
+[[scenario]]
+id = "video-vkvideo"
+title = "VK Видео: главная → первый ролик, плеер открывается"
+category = "video"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://vkvideo.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+  { do = "eval", code = "(() => { const a = document.querySelector('a[href*=\"/video-\"], a[href*=\"/video\"]'); if (!a) return false; location.href = a.href; return true; })()", expect = true },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 4 },
+]
+oracle = [
+  { kind = "eval", value = "!!document.querySelector('video')" },
+]
+oracle_wait_s = 25
+
+# Эталон: ролик 76979871 в headless Chrome — «This video is processing», нужен другой ролик.
+[[scenario]]
+id = "video-vimeo"
+title = "Vimeo: страница ролика, видео получило метаданные"
+category = "video"
+mode = "manual"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://vimeo.com/76979871" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Accept|Accept all|Allow all)$", optional = true },
+  { do = "sleep", seconds = 4 },
+]
+oracle = [
+  { kind = "eval", value = "!!document.querySelector('video, iframe[src*=player]')" },
+]
+oracle_wait_s = 25
+
+[[scenario]]
+id = "video-mp4-h264"
+title = "Прямой MP4 (H.264/AAC): видео получило метаданные через декодер ОС"
+category = "video"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "eval", value = "(() => { const v = document.querySelector('video'); return !!v && v.readyState >= 1 && v.videoWidth > 0; })()" },
+]
+
+[[scenario]]
+id = "video-webm-vp8"
+title = "Прямой WebM: видео получило метаданные"
+category = "video"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "eval", value = "(() => { const v = document.querySelector('video'); return !!v && v.readyState >= 1 && v.videoWidth > 0; })()" },
+]
+
+# Не калибруется с точки 2026-10-15: Chrome получает ERR_CONNECTION_CLOSED на узле сайта (маршрут/блокировка); проверить с другой точки.
+[[scenario]]
+id = "video-dzen"
+title = "Дзен Видео: главная раздела, карточки роликов отрисованы"
+category = "video"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://dzen.ru/video" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 4 },
+]
+oracle = [
+  { kind = "text", value = "Видео|Дзен" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "mail-gmail"
+title = "Gmail: адрес ящика ведёт на вход Google, поле почты на месте"
+category = "mail"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://mail.google.com/" },
+  { do = "wait", cond = "visible", selector = "#identifierId, input[type=email]", timeout_s = 30 },
+]
+oracle = [
+  { kind = "url", value = "accounts\\.google\\.com|mail\\.google\\.com" },
+  { kind = "visible", value = "#identifierId, input[type=email]" },
+]
+
+# Не калибруется с точки 2026-10-15: Chrome получает ERR_CONNECTION_CLOSED на узле сайта (маршрут/блокировка); проверить с другой точки.
+[[scenario]]
+id = "mail-yandex"
+title = "Яндекс Почта: адрес ящика ведёт на вход, поле логина на месте"
+category = "mail"
+mode = "manual"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://mail.yandex.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Войти|Яндекс Почта|Создать ящик" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "mail-mailru"
+title = "Почта Mail.ru: главная, форма входа в ящик"
+category = "mail"
+lang = "ru"
+steps = [
+  { do = "navigate", url = "https://e.mail.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Почта|Войти|Введите" },
+  { kind = "not_text", value = "ERR_" },
+]
+
+[[scenario]]
+id = "mail-outlook"
+title = "Outlook.com: вход, поле почты принимает ввод"
+category = "mail"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://login.live.com/login.srf?wa=wsignin1.0&wreply=https%3A%2F%2Foutlook.live.com%2Fmail%2F" },
+  { do = "wait", cond = "visible", selector = "input[type=email]" },
+  { do = "type", selector = "input[type=email]", text = "lumen.compat.probe.7391@outlook.com" },
+]
+oracle = [
+  { kind = "eval", value = "document.querySelector('input[type=email]').value.length > 10" },
+]
+
+[[scenario]]
+id = "mail-proton"
+title = "Proton Mail: вход, поле имени принимает ввод"
+category = "mail"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://account.proton.me/login" },
+  { do = "wait", cond = "visible", selector = "#username", timeout_s = 30 },
+  { do = "type", selector = "#username", text = "lumen.compat.probe" },
+]
+oracle = [
+  { kind = "visible", value = "#password" },
+  { kind = "eval", value = "document.querySelector('#username').value.length > 0" },
+]
+
+[[scenario]]
+id = "mail-yandex-inbox"
+title = "Яндекс Почта: вход с учётной записью → список писем (нужен YANDEX_USER/YANDEX_PASS)"
+category = "mail"
+lang = "ru"
+mode = "manual"
+account = "YANDEX"
+steps = [
+  { do = "navigate", url = "https://passport.yandex.ru/auth?retpath=https%3A%2F%2Fmail.yandex.ru%2F" },
+  { do = "wait", cond = "visible", selector = "#passp-field-login" },
+  { do = "type", selector = "#passp-field-login", text = "{user}" },
+  { do = "click_text", text = "^Войти$" },
+  { do = "wait", cond = "visible", selector = "#passp-field-passwd" },
+  { do = "type", selector = "#passp-field-passwd", text = "{pass}" },
+  { do = "click_text", text = "^Войти$" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "url", value = "mail\\.yandex\\.ru" },
+  { kind = "text", value = "Входящие|Inbox" },
+]
+oracle_wait_s = 30
+
+[[scenario]]
+id = "docs-google-signin"
+title = "Google Docs: адрес документа ведёт на вход, поле почты на месте"
+category = "docs"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://docs.google.com/document/u/0/" },
+  { do = "wait", cond = "visible", selector = "#identifierId, input[type=email]", timeout_s = 30 },
+]
+oracle = [
+  { kind = "visible", value = "#identifierId, input[type=email]" },
+]
+
+[[scenario]]
+id = "docs-pdf-arxiv"
+title = "PDF во встроенном просмотрщике: документ открывается без ошибки"
+category = "docs"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://arxiv.org/pdf/1706.03762" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 5 },
+]
+oracle = [
+  { kind = "url", value = "arxiv\\.org/pdf/1706\\.03762" },
+  { kind = "not_text", value = "ERR_" },
+]
+oracle_wait_s = 20
+
+[[scenario]]
+id = "docs-github-readme"
+title = "GitHub: страница репозитория с README отрисовывается"
+category = "docs"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://github.com/rust-lang/rust" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "visible", value = "article.markdown-body" },
+  { kind = "text", value = "Rust" },
+]
+
+[[scenario]]
+id = "file-input-render"
+title = "Страница загрузки файла: поле выбора файла и зона перетаскивания отрисованы"
+category = "file"
+lang = "en"
+steps = [
+  { do = "navigate", url = "https://the-internet.herokuapp.com/upload" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "visible", value = "input[type=file]" },
+  { kind = "visible", value = "#drag-drop-upload" },
+]

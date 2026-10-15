@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Checkout</title>
+<style>body{font-family:sans-serif;margin:40px}input,select,button{font-size:16px;padding:8px;margin:6px 0;display:block}</style></head>
+<body>
+<h1>Checkout</h1>
+<form id="pay" action="checkout.html" method="get">
+  <input id="card" name="card" placeholder="Card number" inputmode="numeric" autocomplete="cc-number">
+  <input id="exp" name="exp" placeholder="MM/YY" autocomplete="cc-exp">
+  <input id="cvc" name="cvc" placeholder="CVC" autocomplete="cc-csc">
+  <button id="submit" type="submit">Pay</button>
+</form>
+<p id="result" hidden>Payment accepted</p>
+<script>
+var q = new URLSearchParams(location.search);
+if (q.get('card')) {
+  document.getElementById('pay').hidden = true;
+  var r = document.getElementById('result');
+  r.hidden = false;
+  r.textContent = 'Payment accepted: ' + q.get('card').slice(-4);
+}
+</script>
+</body></html>

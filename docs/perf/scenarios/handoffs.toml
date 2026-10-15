@@ -1,0 +1,77 @@
+# Плановые передачи (ADR-035): сценарии, которые Lumen до этапа 3 сознательно не проходит (DRM, ГОСТ-TLS,
+# электронная подпись, звонки). Раннер их не запускает (skip handoff:<вид>), в SPR-w они не входят; запись нужна,
+# чтобы список передач был виден в `--list` и менялся вместе с roadmap. Когда передача закрывается, строка
+# `handoff` снимается и сценарий входит в метрику — оракул к тому моменту должен быть откалиброван по Chrome.
+
+[[scenario]]
+id = "handoff-drm-widevine"
+title = "Widevine: демо-плеер DRM воспроизводит защищённый поток"
+category = "video"
+lang = "en"
+handoff = "drm"
+steps = [
+  { do = "navigate", url = "https://bitmovin.com/demos/drm" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 5 },
+]
+oracle = [
+  { kind = "eval", value = "(() => { const v = document.querySelector('video'); return !!v && v.readyState >= 2 && v.currentTime > 0; })()" },
+]
+
+[[scenario]]
+id = "handoff-gost-tls"
+title = "ГОСТ-TLS: страница тестового узла Минцифры/КриптоПро открывается"
+category = "gov"
+lang = "ru"
+handoff = "gost"
+steps = [
+  { do = "navigate", url = "https://www.cryptopro.ru/sites/default/files/products/cades/demopage/cades_bes_sample.html" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "text", value = "КриптоПро|CAdES" },
+]
+
+[[scenario]]
+id = "handoff-ep-sign"
+title = "Электронная подпись: плагин КриптоПро виден странице, список сертификатов читается"
+category = "gov"
+lang = "ru"
+handoff = "ep"
+steps = [
+  { do = "navigate", url = "https://www.cryptopro.ru/sites/default/files/products/cades/demopage/cades_bes_sample.html" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Плагин загружен|Plugin loaded" },
+]
+
+[[scenario]]
+id = "handoff-calls-telemost"
+title = "Яндекс Телемост: комната создаётся, камера и микрофон запрашиваются"
+category = "call"
+lang = "ru"
+handoff = "calls"
+steps = [
+  { do = "navigate", url = "https://telemost.yandex.ru/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 3 },
+]
+oracle = [
+  { kind = "text", value = "Телемост|Создать" },
+]
+
+[[scenario]]
+id = "handoff-calls-meet"
+title = "Google Meet: страница комнаты, предпросмотр камеры"
+category = "call"
+lang = "en"
+handoff = "calls"
+steps = [
+  { do = "navigate", url = "https://meet.google.com/landing" },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "text", value = "Meet|New meeting" },
+]
