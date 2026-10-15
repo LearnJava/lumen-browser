@@ -17,6 +17,10 @@ use super::text_input::{clipboard_op_for, history_op_for};
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn handle_key(&mut self, event_loop: &MainHandle<'_>, key_event: &KeyEvent) {
+        // UX-CARET: typing (or any key) restarts the visible blink phase.
+        if key_event.state == ElementState::Pressed {
+            self.caret_restart();
+        }
         if key_event.state != ElementState::Pressed {
             // UX-PAGE-KEYDOWN: a key the page saw go down owes it the `keyup`.
             if let PhysicalKey::Code(code) = key_event.physical_key {

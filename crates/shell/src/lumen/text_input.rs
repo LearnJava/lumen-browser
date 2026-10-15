@@ -728,6 +728,8 @@ impl Lumen {
     }
 
     pub(crate) fn handle_ime(&mut self, ime: &Ime) {
+        // UX-CARET: composition activity keeps the caret solid.
+        self.caret_restart();
         use lumen_core::event::{Event, TabId};
         let tab_id = TabId(0);
         match ime {

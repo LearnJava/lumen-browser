@@ -500,6 +500,12 @@ pub(crate) struct Lumen {
     /// A mismatch on redraw means the OS settings changed (the watcher thread
     /// woke the loop) and the media queries must be re-evaluated.
     pub(crate) os_params_gen: u64,
+    /// UX-CARET: blink phase of the text caret ([`crate::caret_blink`]).
+    pub(crate) caret_blink: crate::caret_blink::CaretBlink,
+    /// UX-CARET: the OS window is the active one (`WindowEvent::Focused`); a
+    /// background window draws no caret. Starts `true`: headless runs never
+    /// receive the event.
+    pub(crate) window_focused: bool,
     /// Per-tab user zoom factor (100% = 1.0). Changed via Ctrl+= / Ctrl+- / Ctrl+0.
     ///
     /// Combined with `<meta viewport initial-scale>` to compute the effective CSS

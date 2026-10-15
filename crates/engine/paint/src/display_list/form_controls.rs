@@ -118,7 +118,7 @@ fn emit_input_value_text(
 /// text, so a cursor past the field's (unscrolled) visible width is hidden
 /// rather than drawn outside the border — this engine has no horizontal
 /// scroll for overflowing input text at all yet.
-fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, out: &mut Vec<DisplayCommand>) {
+fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, width: f32, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     let bl = s.border_left_width;
     let bt = s.border_top_width;
@@ -143,7 +143,7 @@ fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, out: &mut Vec
         rect: Rect::new(content_x, content_y, content_w, content_h),
     });
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(caret_x, content_y, 1.0, content_h),
+        rect: Rect::new(caret_x, content_y, width, content_h),
         color,
     });
     out.push(DisplayCommand::PopClip);
@@ -386,7 +386,8 @@ pub(crate) fn emit_form_control_indicator(
                     if selection.is_none()
                         && let Some(idx) = ov.and_then(|o| o.caret)
                     {
-                        emit_input_caret(b, value_text, idx, out);
+                        let width = ov.and_then(|o| o.caret_width).unwrap_or(1.0);
+                        emit_input_caret(b, value_text, idx, width, out);
                     }
                     return;
                 }
