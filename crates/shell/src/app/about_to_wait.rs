@@ -552,6 +552,10 @@ impl Lumen {
         if let Some(blink) = self.caret_next_wakeup() {
             next_wakeup = Some(next_wakeup.map_or(blink, |t| t.min(blink)));
         }
+        // UX-STATUS-BUBBLE: delays and fades of the link-address bubble.
+        if let Some(bubble) = self.status_bubble_tick() {
+            next_wakeup = Some(next_wakeup.map_or(bubble, |t| t.min(bubble)));
+        }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
             // BUG-271: no pending deadline — park the loop for real. Without
@@ -1834,6 +1838,7 @@ impl Lumen {
                     let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
                     if new_nid != self.focused_node {
                         self.focused_node = new_nid;
+                        self.focus_from_keyboard = false;
                         // ADR-016 M2.2b-7: `focused_node` is set synchronously above,
                         // so `:focus`/`:focus-within` re-evaluates correctly on any
                         // later relayout (it feeds `set_interactive_state` at the top

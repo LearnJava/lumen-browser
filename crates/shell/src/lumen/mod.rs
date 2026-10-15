@@ -65,6 +65,7 @@ mod link_open;
 mod tabs_cmd;
 mod click_count;
 mod caret;
+mod status_bubble;
 mod doc_select;
 mod text_drag_select;
 mod text_input;
