@@ -26,6 +26,11 @@ pub enum NetErrorCode {
     ConnectionClosed,
     /// Сеть или хост недостижимы (нет маршрута).
     AddressUnreachable,
+    /// У компьютера нет интернета вовсе: после сетевого сбоя ни один из
+    /// контрольных публичных адресов не принял соединение. Сеть сама такого
+    /// кода не отдаёт — его ставит оболочка по результату пробы
+    /// (`lumen_network::connectivity`), поэтому `classify` его не возвращает.
+    InternetDisconnected,
     /// Цепочка перенаправлений слишком длинная или без `Location`.
     TooManyRedirects,
     /// Ответ не разобрался как HTTP.
@@ -64,6 +69,7 @@ impl NetErrorCode {
             Self::ConnectionReset => "ERR_CONNECTION_RESET",
             Self::ConnectionClosed => "ERR_CONNECTION_CLOSED",
             Self::AddressUnreachable => "ERR_ADDRESS_UNREACHABLE",
+            Self::InternetDisconnected => "ERR_INTERNET_DISCONNECTED",
             Self::TooManyRedirects => "ERR_TOO_MANY_REDIRECTS",
             Self::InvalidResponse => "ERR_INVALID_RESPONSE",
             Self::SslProtocolError => "ERR_SSL_PROTOCOL_ERROR",
@@ -77,6 +83,15 @@ impl NetErrorCode {
             Self::HttpStatus(_) => "ERR_HTTP_RESPONSE_CODE_FAILURE",
             Self::Failed => "ERR_FAILED",
         }
+    }
+
+    /// Мог ли сбой быть следствием отсутствия интернета: DNS не ответил,
+    /// ответ не пришёл или нет маршрута. Отказ в соединении, сброс и всё, что
+    /// случилось после установленного соединения, доказывают обратное — связь
+    /// была, и пробу запускать незачем.
+    #[must_use]
+    pub fn may_mean_offline(self) -> bool {
+        matches!(self, Self::NameNotResolved | Self::ConnectionTimedOut | Self::AddressUnreachable)
     }
 
     /// Код ошибки загрузки: типизированный `Error::NetFailure`, затем
@@ -230,6 +245,24 @@ mod tests {
     fn dns_failure_is_name_not_resolved() {
         assert_eq!(code("network error: resolve nope.invalid: failed (os error 11001)"), NetErrorCode::NameNotResolved);
         assert_eq!(code("resolve a.b: no addresses returned"), NetErrorCode::NameNotResolved);
+    }
+
+    #[test]
+    fn only_silent_failures_may_mean_no_internet() {
+        for c in [NetErrorCode::NameNotResolved, NetErrorCode::ConnectionTimedOut, NetErrorCode::AddressUnreachable] {
+            assert!(c.may_mean_offline(), "{c:?}");
+        }
+        for c in [
+            NetErrorCode::ConnectionRefused,
+            NetErrorCode::ConnectionReset,
+            NetErrorCode::SslProtocolError,
+            NetErrorCode::HttpStatus(503),
+            NetErrorCode::InternetDisconnected,
+            NetErrorCode::Failed,
+        ] {
+            assert!(!c.may_mean_offline(), "{c:?}");
+        }
+        assert_eq!(NetErrorCode::InternetDisconnected.name(), "ERR_INTERNET_DISCONNECTED");
     }
 
     #[test]
