@@ -28,6 +28,8 @@ pub mod json;
 pub mod memory_pressure;
 pub mod module;
 pub mod net_error;
+#[cfg(test)]
+mod net_error_corpus;
 pub mod pcs;
 pub mod profile;
 pub mod punycode;

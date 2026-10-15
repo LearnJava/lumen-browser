@@ -154,7 +154,7 @@ impl NetErrorCode {
         if lower.contains("connection reset") {
             return Self::ConnectionReset;
         }
-        if lower.contains("eof") || lower.contains("connection abort") || lower.contains("broken pipe") {
+        if CLOSED_MARKERS.iter().any(|m| lower.contains(m)) {
             return Self::ConnectionClosed;
         }
         if lower.contains("no such file") || lower.contains("not found") || lower.contains("cannot find the") {
@@ -163,12 +163,27 @@ impl NetErrorCode {
         if lower.starts_with("connect ") {
             return Self::AddressUnreachable;
         }
-        if lower.contains("malformed") || lower.contains("invalid status") || lower.contains("invalid http") {
+        if INVALID_RESPONSE_MARKERS.iter().any(|m| lower.contains(m)) {
             return Self::InvalidResponse;
         }
         Self::Failed
     }
 }
+
+/// Слова текстов, в которых соединение закрыли до конца ответа: `EOF …` сетевого
+/// слоя и `Display` `io::Error` (`UnexpectedEof` — «failed to fill whole buffer»).
+const CLOSED_MARKERS: &[&str] = &[
+    "eof",
+    "end of file",
+    "fill whole buffer",
+    "connection closed",
+    "connection abort",
+    "broken pipe",
+];
+
+/// Слова текстов, в которых байты пришли, но не сложились в HTTP-ответ.
+const INVALID_RESPONSE_MARKERS: &[&str] =
+    &["malformed", "invalid status", "invalid http", "bad status line", "invalid chunk size", "missing :status"];
 
 /// Начало сообщения о пустом ответе 5xx — см. [`http_status_message`].
 const HTTP_STATUS_PREFIX: &str = "http status ";
