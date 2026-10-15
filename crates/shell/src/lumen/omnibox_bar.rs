@@ -19,6 +19,8 @@
 
 use crate::*;
 
+use super::text_input::write_clipboard_nonempty;
+
 impl Lumen {
     pub(crate) fn handle_address_bar_key(
         &mut self,
@@ -89,6 +91,35 @@ impl Lumen {
             KeyCode::KeyD if self.modifiers == ModifiersState::ALT => {
                 self.address_bar.select_all();
                 self.request_redraw();
+            }
+            // UX-URL-COPY: Ctrl+C / Ctrl+X put the selection on the OS clipboard
+            // (whole address → full readable URL, part → the visible substring);
+            // Ctrl+V inserts clipboard text over the selection (line breaks dropped).
+            KeyCode::KeyC if self.modifiers == ModifiersState::CONTROL => {
+                if let Some(text) = self.address_bar.selected_text() {
+                    write_clipboard_nonempty(&text);
+                }
+            }
+            KeyCode::KeyX if self.modifiers == ModifiersState::CONTROL => {
+                if let Some(text) = self.address_bar.cut_selection() {
+                    write_clipboard_nonempty(&text);
+                    let sugg = self.query_omnibox_suggestions();
+                    self.address_bar.set_suggestions(sugg);
+                    self.request_redraw();
+                }
+            }
+            KeyCode::KeyV
+                if self.modifiers == ModifiersState::CONTROL
+                    || self.modifiers == (ModifiersState::CONTROL | ModifiersState::SHIFT) =>
+            {
+                use lumen_core::ext::ClipboardProvider;
+                let text = platform::clipboard::PlatformClipboard.read_text();
+                if !text.is_empty() {
+                    self.address_bar.append_str(&text);
+                    let sugg = self.query_omnibox_suggestions();
+                    self.address_bar.set_suggestions(sugg);
+                    self.request_redraw();
+                }
             }
             // Ctrl+T while typing still opens a new tab (with a fresh, empty bar).
             KeyCode::KeyT if self.modifiers == ModifiersState::CONTROL && !key_event.repeat => {
