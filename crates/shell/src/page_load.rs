@@ -1443,6 +1443,9 @@ impl Lumen {
     /// ещё активна, иначе `bg_tabs[tab_id]`) независимо от того, какая вкладка
     /// активна к моменту прихода события — см. [`Lumen::apply_load_event_for_tab`].
     pub(crate) fn start_streaming_load(&self, tab_id: usize, generation: u64) {
+        // Ctrl+F5: фиксируем режим кэша этой навигации до того, как стартуют
+        // клиенты документа и подресурсов.
+        crate::config::begin_navigation_cache_mode();
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
