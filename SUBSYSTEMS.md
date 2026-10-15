@@ -21,6 +21,7 @@ above both. When a row and its file disagree, the file wins and the row is the t
 | lumen-font | 🟡 TTF/OTF + WOFF2 + variable fonts + COLR/CPAL + rustybuzz shaping (LIB-2/LIB-3) | [subsystems/font.md](subsystems/font.md) |
 | lumen-encoding | ✅ detector + decoders + Unicode provider + hyphenation | [subsystems/encoding.md](subsystems/encoding.md) |
 | lumen-image | ✅ PNG + JPEG + WebP + GIF + AVIF + SVG (resvg, LIB-4) | [subsystems/image.md](subsystems/image.md) |
+| lumen-media-demux | ✅ Демуксеры MP4/fMP4, WebM/Matroska, Ogg без FFmpeg: дорожки, кодеки RFC 6381, пакеты с метками времени, перемотка (UX-VIDEO-DEMUX, ADR-035 п.2); не подключён к `crates/js` | [subsystems/media-demux.md](subsystems/media-demux.md) |
 | lumen-media-ffmpeg | 🟡 `VideoDecoder`/`VideoDecodeSession` через hand-rolled FFmpeg FFI, feature `ffmpeg` (off by default); не подключён к `crates/js` (GAP-MEDIADECODE, ADR-030) | [subsystems/media-ffmpeg.md](subsystems/media-ffmpeg.md) |
 | lumen-js | ✅ V8 (`rusty_v8` 150.1.0) — the only engine since S12b (2026-08-04) | [subsystems/js.md](subsystems/js.md) |
 | lumen-storage | ✅ SQLite + IndexedDB + cookies + history + profiles + HTTP cache + 15 further stores | [subsystems/storage.md](subsystems/storage.md) |

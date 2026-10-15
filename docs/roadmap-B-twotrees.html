@@ -8256,16 +8256,16 @@
       {
        "id": "UX-VIDEO",
        "title": "UX-VIDEO: видео в сборке по умолчанию",
-       "status": "planned",
+       "status": "active",
        "size": "M",
        "note": "Видео в штатной сборке — решение пользователя 2026-10-12: ADR-035, без FFmpeg (заменяет ADR-030 «FFmpeg целиком»). Сейчас по умолчанию играет только GIF; путь воспроизведения шелла уже есть (кадры по часам — Lumen::tick_video_ffmpegs в crates/shell/src/page_load.rs, звук — platform/video_audio_sink.rs), но кормится только FFmpeg за opt-in ffmpeg-video. План: UX-VIDEO-DEMUX (mp4parse, Matroska, Ogg) → UX-VIDEO-AV1 (rav1d) → UX-VIDEO-NATIVE (реестр декодеров, canPlayType по факту) → COMPAT-MEDIA-OSDEC-WIN/-MAC/-LINUX (H.264/HEVC/AAC от ОС) → COMPAT-MSE (YouTube, VK Видео, Rutube); позже UX-VIDEO-VP9, UX-VIDEO-OPUS, UX-VIDEO-AAC-RUST. Приёмка дорожки: на Windows, macOS и Linux в штатной сборке mp4 (H.264+AAC) и WebM/AV1 играют со звуком, canPlayType не обещает недоступного; с COMPAT-MSE — YouTube 1080p. Источник: docs/research/site-compat/areas/04-media-drm-codecs-rtc.md §3.",
        "tasks": [
         {
          "id": "UX-VIDEO-DEMUX",
          "title": "Демуксеры MP4, WebM/Matroska и Ogg без FFmpeg",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Демуксеры без FFmpeg (ADR-035 п.2): MP4/ISOBMFF через mp4parse (Mozilla, MPL-2.0, используется в Firefox) — дорожки, сэмплы, fMP4-фрагменты (понадобятся и для COMPAT-MSE); WebM/Matroska — Rust-демуксер (выбор и обоснование по ADR-027 — в коммите); Ogg — имеющийся крейт ogg. На выходе — пакеты кодека с метками времени в общем формате для бэкендов реестра. Приёмка: на тестовых файлах (tests/wpt/css/css-ui/support/test.mp4 и WebM/Ogg из tests/wpt/media) дорожки, коды кодеков (avc1, hev1, av01, mp4a, vorbis, opus, vp09) и длительность совпадают с ffprobe; фрагмент fMP4 разбирается."
+         "note": "**Сделано (2026-10-15, ветка `p1-ux-video-demux`):** крейт `crates/engine/media-demux` (mp4parse + свой разбор `moof/traf/trun` и `stsd` HEVC/VP9/AV1, matroska-demuxer со своим индексом ключевых кадров для перемотки, ogg + lewton); число/размер/ключевость пакетов совпадают с ffprobe на 30 файлах, `pts` — тоже (Opus: ffprobe вычитает pre-skip); [subsystems/media-demux.md](subsystems/media-demux.md). Демуксеры без FFmpeg (ADR-035 п.2): MP4/ISOBMFF через mp4parse (Mozilla, MPL-2.0, используется в Firefox) — дорожки, сэмплы, fMP4-фрагменты (понадобятся и для COMPAT-MSE); WebM/Matroska — Rust-демуксер (выбор и обоснование по ADR-027 — в коммите); Ogg — имеющийся крейт ogg. На выходе — пакеты кодека с метками времени в общем формате для бэкендов реестра. Приёмка: на тестовых файлах (tests/wpt/css/css-ui/support/test.mp4 и WebM/Ogg из tests/wpt/media) дорожки, коды кодеков (avc1, hev1, av01, mp4a, vorbis, opus, vp09) и длительность совпадают с ffprobe; фрагмент fMP4 разбирается."
         },
         {
          "id": "UX-VIDEO-AV1",
@@ -9123,6 +9123,56 @@
          "note": "Юридическая проверка медиа-решения ADR-035 (вместе с COMPAT-BIZ-ENTITY): декодеры ОС для H.264/HEVC/AAC (отчисления на стороне ОС), допустимость программного AAC через symphonia (UX-VIDEO-AAC-RUST), сроки истечения патентов H.264 (по исследованию: ЕС, Япония и Китай — 2025, США в основном 2027, последний в Бразилии — 2030; не проверено) для будущего встроенного запасного H.264. Владелец — пользователь. Приёмка: вывод записан в ADR-035 «Revisit when»."
         }
        ]
+      }
+     ]
+    },
+    {
+     "id": "TEXTQ",
+     "title": "Качество текста в живом окне",
+     "status": "planned",
+     "note": "Дорожка «Качество текста в живом окне» (владелец — P1, назначено 2026-10-15). Текст в wgpu-пути заметно мыльнее Chrome и нашего же `--screenshot`: глиф растрируется в одном из 8 bin-ов размера (CSS px) и масштабируется билинейно, DPR не учитывается, квады на дробных координатах, нет гаммы/контраста покрытия, нет шейпинга и синтетического bold/italic. Порядок: TEXTQ-1 (точный размер в device px + привязка к сетке) → TEXTQ-2 (гамма) → TEXTQ-3 (прокрутка) → TEXTQ-4 (шейпинг в отрисовке) → TEXTQ-5 (шейпинг в раскладке) → TEXTQ-6 (синтетический bold/italic). Вне дорожки пока: хинтинг, ClearType.",
+     "tasks": [
+      {
+       "id": "TEXTQ-1",
+       "title": "Глиф в точном размере в device px, тексель = пиксель",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-1.md](docs/tasks/TEXTQ-1.md). Убрать `SIZE_BINS`, растрировать в `font_size × scale_factor` (квант 1/4 px), baseline по Y — на целый device px, по X — 4 субпиксельные фазы в ключе атласа; страница качества текста в `GPU_CAPTURE` для замера до/после."
+      },
+      {
+       "id": "TEXTQ-2",
+       "title": "Гамма и контраст покрытия глифа",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-2.md](docs/tasks/TEXTQ-2.md). Зависит от TEXTQ-1. Гамма + контраст покрытия по яркости цвета текста (Skia/DirectWrite-стиль), одна функция для GPU и CPU."
+      },
+      {
+       "id": "TEXTQ-3",
+       "title": "Прокрутка без дробного сдвига полосы",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-3.md](docs/tasks/TEXTQ-3.md). Зависит от TEXTQ-1. Блит полосы прокрутки и слоёв со смещением скролла — на целые device px."
+      },
+      {
+       "id": "TEXTQ-4",
+       "title": "Шейпинг в GPU-пути отрисовки",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-4.md](docs/tasks/TEXTQ-4.md). Зависит от TEXTQ-1. rustybuzz в `push_text_glyphs`: кернинг, лигатуры, `font_features`; кэш шейпинга."
+      },
+      {
+       "id": "TEXTQ-5",
+       "title": "Шейпинг в измерении ширины текста",
+       "status": "planned",
+       "size": "M",
+       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. Измеритель ширин раскладки через шейпер, ширина run-а = нарисованной."
+      },
+      {
+       "id": "TEXTQ-6",
+       "title": "Синтетический жирный и курсив в GPU-пути",
+       "status": "planned",
+       "size": "S",
+       "note": "Бриф — [docs/tasks/TEXTQ-6.md](docs/tasks/TEXTQ-6.md). Зависит от TEXTQ-1. Синтетический bold (двойной квад) и italic (наклон вершин) в wgpu, как в CPU-пути."
       }
      ]
     }
