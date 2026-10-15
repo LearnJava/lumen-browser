@@ -38,6 +38,7 @@ mod health_log;
 mod backend_factory;
 mod bench_frames;
 mod caret_blink;
+mod close_warning;
 mod status_bubble;
 mod chrome_float;
 mod chrome_preview;

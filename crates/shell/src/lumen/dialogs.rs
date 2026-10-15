@@ -13,6 +13,10 @@ use lumen_js::dialog::{self, DialogKind, DialogReply, DialogRequest};
 pub(crate) struct PageDialog {
     pub(crate) req: DialogRequest,
     pub(crate) input: String,
+    /// UX-CLOSE-WARNINGS: это вопрос шелла «закрыть окно?» о невосстановимом,
+    /// а не `beforeunload` страницы; согласие закрывает окно без повторного
+    /// опроса страницы.
+    pub(crate) close_warning: bool,
 }
 
 /// Уход со страницы, отложенный до ответа на `beforeunload`-диалог.
@@ -48,7 +52,7 @@ impl Lumen {
         }
         if let Some(req) = dialog::take_pending() {
             let input = req.default_value.clone();
-            self.page_dialog = Some(PageDialog { req, input });
+            self.page_dialog = Some(PageDialog { req, input, close_warning: false });
             self.relayout_chrome_host();
             self.request_redraw();
         }
@@ -88,6 +92,15 @@ impl Lumen {
                 ok_label: "OK".into(),
                 cancel_label: "Отмена".into(),
             },
+            DialogKind::BeforeUnload if d.close_warning => lumen_chrome::ChromeDialogModel {
+                open: true,
+                title: "Закрыть Lumen?".into(),
+                message: d.req.message.clone(),
+                input: None,
+                show_cancel: true,
+                ok_label: "Закрыть".into(),
+                cancel_label: "Отмена".into(),
+            },
             DialogKind::BeforeUnload => lumen_chrome::ChromeDialogModel {
                 open: true,
                 title: "Покинуть сайт?".into(),
@@ -119,10 +132,12 @@ impl Lumen {
                     PendingLeave::Back => self.navigate_back(),
                     PendingLeave::Forward => self.navigate_forward(),
                     PendingLeave::CloseTab(idx) => self.close_tab(idx, event_loop),
+                    PendingLeave::CloseWindow if d.close_warning => self.exit_saving_session(event_loop),
                     PendingLeave::CloseWindow => {
-                        self.save_session_on_close();
-                        self.save_full_session();
-                        event_loop.exit();
+                        // `beforeunload` подтверждён; о невосстановимом спрашиваем после него.
+                        if self.close_warning_gate() {
+                            self.exit_saving_session(event_loop);
+                        }
                     }
                 }
                 self.leave_confirmed = false;
@@ -173,10 +188,49 @@ impl Lumen {
                 origin,
             },
             input: String::new(),
+            close_warning: false,
         });
         self.relayout_chrome_host();
         self.request_redraw();
         None
+    }
+
+    /// UX-CLOSE-WARNINGS: сколько всего потеряется при выходе прямо сейчас.
+    fn close_loss(&self) -> crate::close_warning::CloseLoss {
+        crate::close_warning::CloseLoss::new(
+            self.downloads.active_count(),
+            self.active_profile_is_anonymous(),
+            self.tab_strip.len(),
+        )
+    }
+
+    /// Шлюз выхода из приложения (после `beforeunload`): `true` — выходить
+    /// можно; `false` — открыт вопрос о невосстановимом (загрузки, вкладки
+    /// анонимного профиля), ответ продолжит выход. Обычные вкладки не считаются.
+    pub(crate) fn close_warning_gate(&mut self) -> bool {
+        let Some(message) = self.close_loss().message() else { return true };
+        self.pending_leave = Some(PendingLeave::CloseWindow);
+        self.page_dialog = Some(PageDialog {
+            req: DialogRequest {
+                id: LOCAL_REQUEST_ID,
+                kind: DialogKind::BeforeUnload,
+                message,
+                default_value: String::new(),
+                origin: String::new(),
+            },
+            input: String::new(),
+            close_warning: true,
+        });
+        self.relayout_chrome_host();
+        self.request_redraw();
+        false
+    }
+
+    /// Запись сессии и выход из цикла событий.
+    pub(crate) fn exit_saving_session(&mut self, event_loop: &crate::browser_thread::MainHandle<'_>) {
+        self.save_session_on_close();
+        self.save_full_session();
+        event_loop.exit();
     }
 
     /// Клавиши модального диалога: Enter — OK, Esc — отмена, текст — в поле
