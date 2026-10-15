@@ -17,6 +17,8 @@
 //! подсказку показать ([`crate::os_codec_status`]).
 
 mod audio;
+mod blocklist;
+mod d3d;
 mod video;
 
 use std::ffi::c_void;
@@ -25,7 +27,8 @@ use std::sync::OnceLock;
 use lumen_media_demux::{Codec, TrackInfo};
 use windows::core::{s, w, Interface, GUID, HRESULT, PCSTR};
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, MFAudioFormat_AAC, MFMediaType_Audio,
+    IMFActivate, IMFAttributes, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample,
+    IMFVideoSampleAllocatorEx, MFAudioFormat_AAC, MFMediaType_Audio,
     MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_HEVC, MFSTARTUP_LITE, MFT_CATEGORY_AUDIO_DECODER,
     MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO,
     MF_VERSION,
@@ -37,8 +40,16 @@ use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD
 use crate::registry::{AudioBackend, AudioPcmDecoder, VideoBackend, VideoFrameDecoder};
 
 /// Переменная окружения: `0` отключает декодеры ОС (поведение Windows N/KN без
-/// Media Feature Pack, отладка отката на встроенные кодеки).
+/// Media Feature Pack, отладка отката на встроенные кодеки); `sw` оставляет их,
+/// но заставляет видео идти только через программный MFT, без D3D11VA.
 pub(crate) const DISABLE_ENV: &str = "LUMEN_OS_DECODERS";
+
+/// `LUMEN_OS_DECODERS=sw`: не использовать аппаратное декодирование (D3D11VA).
+/// Читается один раз, как и [`DISABLE_ENV`].
+pub(crate) fn software_only() -> bool {
+    static SW: OnceLock<bool> = OnceLock::new();
+    *SW.get_or_init(|| std::env::var(DISABLE_ENV).is_ok_and(|v| v.eq_ignore_ascii_case("sw")))
+}
 
 type MfStartupFn = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type MftEnumExFn = unsafe extern "system" fn(
@@ -51,6 +62,9 @@ type MftEnumExFn = unsafe extern "system" fn(
 ) -> HRESULT;
 type MfCreateObjFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
 type MfCreateBufferFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> HRESULT;
+type MfCreateAttributesFn = unsafe extern "system" fn(*mut *mut c_void, u32) -> HRESULT;
+type MfCreateDxgiManagerFn = unsafe extern "system" fn(*mut u32, *mut *mut c_void) -> HRESULT;
+type MfCreateAllocatorExFn = unsafe extern "system" fn(*const GUID, *mut *mut c_void) -> HRESULT;
 
 /// Адрес экспорта `name` библиотеки `lib` как указателя на функцию типа `F`.
 ///
@@ -72,6 +86,11 @@ pub(crate) struct Api {
     create_media_type: MfCreateObjFn,
     create_sample: MfCreateObjFn,
     create_memory_buffer: MfCreateBufferFn,
+    create_attributes: MfCreateAttributesFn,
+    /// Нужны только D3D11VA: если их нет, видео идёт программным путём.
+    create_dxgi_manager: Option<MfCreateDxgiManagerFn>,
+    /// `MFCreateVideoSampleAllocatorEx` живёт в `evr.dll`.
+    create_allocator_ex: Option<MfCreateAllocatorExFn>,
 }
 
 impl Api {
@@ -96,6 +115,11 @@ impl Api {
                 create_media_type: symbol(lib, s!("MFCreateMediaType"))?,
                 create_sample: symbol(lib, s!("MFCreateSample"))?,
                 create_memory_buffer: symbol(lib, s!("MFCreateMemoryBuffer"))?,
+                create_attributes: symbol(lib, s!("MFCreateAttributes"))?,
+                create_dxgi_manager: symbol(lib, s!("MFCreateDXGIDeviceManager")),
+                create_allocator_ex: LoadLibraryExW(w!("evr.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
+                    .ok()
+                    .and_then(|evr| symbol(evr, s!("MFCreateVideoSampleAllocatorEx"))),
             };
             // Один раз на процесс, `MFShutdown` не нужен: библиотека живёт до выхода.
             start(MF_VERSION, MFSTARTUP_LITE).is_ok().then_some(api)
@@ -126,6 +150,38 @@ impl Api {
         unsafe {
             (self.create_memory_buffer)(len, &mut raw).ok().map_err(|e| format!("MFCreateMemoryBuffer: {e}"))?;
             Ok(IMFMediaBuffer::from_raw(raw))
+        }
+    }
+
+    pub(crate) fn new_attributes(&self, capacity: u32) -> Result<IMFAttributes, String> {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: как в `new_media_type`.
+        unsafe {
+            (self.create_attributes)(&mut raw, capacity).ok().map_err(|e| format!("MFCreateAttributes: {e}"))?;
+            Ok(IMFAttributes::from_raw(raw))
+        }
+    }
+
+    /// Менеджер устройств DXGI и токен, которым ему передаётся устройство.
+    pub(crate) fn new_dxgi_manager(&self) -> Result<(IMFDXGIDeviceManager, u32), String> {
+        let create = self.create_dxgi_manager.ok_or("MFCreateDXGIDeviceManager недоступна")?;
+        let (mut raw, mut token) = (std::ptr::null_mut(), 0u32);
+        // SAFETY: как в `new_media_type`.
+        unsafe {
+            create(&mut token, &mut raw).ok().map_err(|e| format!("MFCreateDXGIDeviceManager: {e}"))?;
+            Ok((IMFDXGIDeviceManager::from_raw(raw), token))
+        }
+    }
+
+    pub(crate) fn new_sample_allocator(&self) -> Result<IMFVideoSampleAllocatorEx, String> {
+        let create = self.create_allocator_ex.ok_or("MFCreateVideoSampleAllocatorEx недоступна")?;
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: `raw` — выходной параметр с владеющим указателем нужного интерфейса.
+        unsafe {
+            create(&IMFVideoSampleAllocatorEx::IID, &mut raw)
+                .ok()
+                .map_err(|e| format!("MFCreateVideoSampleAllocatorEx: {e}"))?;
+            Ok(IMFVideoSampleAllocatorEx::from_raw(raw))
         }
     }
 
