@@ -25,6 +25,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use lumen_core::ext::VideoDecoder;
+
 // ── Playback state ────────────────────────────────────────────────────────────
 
 /// Per-`<video>` playback timing, stored by the shell after a GIF is decoded.
@@ -104,19 +106,20 @@ impl VideoPlaybackState {
 pub struct VideoGifStore {
     /// Per-node playback timing.  Key = DOM node index (`el.__nid__`).
     /// Populated by the shell after decoding; read by JS native bindings.
-    /// Shared by GIF- and FFmpeg-backed entries alike (`VideoPlaybackState`
+    /// Shared by GIF- and container-backed entries alike (`VideoPlaybackState`
     /// carries no GIF-specific field), so both decode backends reuse the same
     /// `__lumen_video_play`/`pause`/`seek`/`current_time`/… natives.
     pub playback: Mutex<HashMap<u32, VideoPlaybackState>>,
     /// Pending GIF load requests: `(nid, src_url)` queued by `__lumen_video_load`.
     /// Drained by the shell's tick loop.
     pub pending_loads: Mutex<Vec<(u32, String)>>,
-    /// Pending FFmpeg-container load requests: `(nid, src_url)` queued by
-    /// `__lumen_video_ffmpeg_load` (GAP-MEDIADECODE срез 6, feature
-    /// `ffmpeg-video`). Drained by the shell's tick loop once it links
-    /// `lumen-media-ffmpeg` (срез 7, not yet wired).
-    pub pending_ffmpeg_loads: Mutex<Vec<(u32, String)>>,
-    /// Nodes whose FFmpeg-container load failed (fetch error, undecodable
+    /// Pending media-container load requests: `(nid, src_url)` queued by
+    /// `__lumen_video_container_load` (registered only when a [`VideoDecoder`]
+    /// is installed, see [`set_video_decoder`]). Drained by the shell's tick
+    /// loop (`tick_video_sessions`), which opens the container through that
+    /// decoder.
+    pub pending_container_loads: Mutex<Vec<(u32, String)>>,
+    /// Nodes whose media-container load failed (fetch error, undecodable
     /// container, or the first frame could not be produced) — GAP-MEDIADECODE
     /// срез 9. Without this, a corrupted `src` never reaches `playback` and
     /// the shim's poll loop (`__lumen_video_ready`) spins forever with no
@@ -128,7 +131,7 @@ pub struct VideoGifStore {
     /// `(volume, muted)` last set via JS `video.volume =`/`video.muted =`,
     /// keyed by node — GAP-MEDIADECODE remainder: routes those two JS-side
     /// properties (`crates/js/src/shim/video_element.js`'s `_volume`/`_muted`
-    /// closures) to the FFmpeg audio sink. Kept as its own map rather than a
+    /// closures) to the video audio sink. Kept as its own map rather than a
     /// field on `VideoPlaybackState` because that struct is wholesale
     /// reconstructed on every load/decode completion and on tab-switch
     /// restore (`page_snapshot.rs`) — a field there would silently reset to
@@ -148,10 +151,10 @@ pub struct VideoGifStore {
 }
 
 impl VideoGifStore {
-    /// Whether a GIF- or FFmpeg-backed `<video>` load is queued and not yet
+    /// Whether a GIF- or container-backed `<video>` load is queued and not yet
     /// drained — GAP-MEDIADECODE срез 10: this is the exact condition whose
     /// silence let a resource-selection load sit in `pending_loads`/
-    /// `pending_ffmpeg_loads` forever when nothing else happened to trigger a
+    /// `pending_container_loads` forever when nothing else happened to trigger a
     /// repaint (`on_about_to_wait`, `crates/shell/src/app/about_to_wait.rs`,
     /// needs a repaint request whenever this is `true`). Pulled out as its
     /// own predicate so the shell-side timer/redraw fix has a unit test —
@@ -160,7 +163,7 @@ impl VideoGifStore {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn has_pending_video_load(&self) -> bool {
         !self.pending_loads.lock().unwrap().is_empty()
-            || !self.pending_ffmpeg_loads.lock().unwrap().is_empty()
+            || !self.pending_container_loads.lock().unwrap().is_empty()
     }
 }
 
@@ -186,6 +189,42 @@ pub fn get_video_gif_store() -> Option<Arc<VideoGifStore>> {
     store_lock().read().unwrap().clone()
 }
 
+// ── Video decoder registry ────────────────────────────────────────────────────
+
+static DECODER: OnceLock<RwLock<Option<Arc<dyn VideoDecoder>>>> = OnceLock::new();
+
+fn decoder_lock() -> &'static RwLock<Option<Arc<dyn VideoDecoder>>> {
+    DECODER.get_or_init(|| RwLock::new(None))
+}
+
+/// Install the shell's container decoder (UX-VIDEO-NATIVE: `lumen-native`).
+///
+/// Must be called once before any JS context is created: `canPlayType` asks
+/// it what it can open, and `__lumen_video_container_load` is registered only
+/// when one is installed.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn set_video_decoder(d: Arc<dyn VideoDecoder>) {
+    *decoder_lock().write().unwrap() = Some(d);
+}
+
+/// Return a clone of the installed decoder, or `None` in headless/CI mode.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+pub fn get_video_decoder() -> Option<Arc<dyn VideoDecoder>> {
+    decoder_lock().read().unwrap().clone()
+}
+
+/// Drop the installed decoder — test-only: the registry is process-global.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+pub(crate) fn clear_video_decoder() {
+    *decoder_lock().write().unwrap() = None;
+}
+
+/// Serializes tests that depend on the process-global decoder being absent or
+/// being a specific one.
+#[cfg(test)]
+pub(crate) static DECODER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::VideoGifStore;
@@ -204,10 +243,10 @@ mod tests {
     }
 
     #[test]
-    fn has_pending_video_load_true_for_ffmpeg_queue() {
+    fn has_pending_video_load_true_for_container_queue() {
         let store = VideoGifStore::default();
         store
-            .pending_ffmpeg_loads
+            .pending_container_loads
             .lock()
             .unwrap()
             .push((1, "a.mp4".to_string()));

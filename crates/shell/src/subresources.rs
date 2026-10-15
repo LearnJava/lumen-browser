@@ -751,12 +751,10 @@ pub(crate) fn load_sheet_color_profiles(
     });
 }
 
-/// GAP-MEDIADECODE срез 7: fetch an FFmpeg-container `<video src>` body.
+/// GAP-MEDIADECODE срез 7: fetch a media-container `<video src>` body.
 /// `RequestDestination::Media` (not `Image`, unlike the GIF path — GIF-backed
-/// `<video>` reuses the image pipeline, an FFmpeg container is not an image).
-/// Only called from [`Lumen::tick_video_ffmpegs`], compiled under the
-/// `ffmpeg-video` feature.
-#[cfg(feature = "ffmpeg-video")]
+/// `<video>` reuses the image pipeline, a media container is not an image).
+/// Only called from [`Lumen::tick_video_sessions`].
 pub(crate) fn fetch_video_bytes(
     raw_src: &str,
     base: &ResourceBase,

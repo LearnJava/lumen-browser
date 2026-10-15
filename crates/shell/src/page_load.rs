@@ -456,25 +456,23 @@ impl Lumen {
         }
     }
 
-    /// Advance FFmpeg-container `<video>` playback: drain pending loads, open
+    /// Advance media-container `<video>` playback: drain pending loads, open
     /// decode sessions, register current frames, request redraws while playing.
     ///
-    /// GAP-MEDIADECODE срез 7 — the FFmpeg-backed counterpart of
-    /// [`Lumen::tick_video_gifs`]; compiled only under the `ffmpeg-video`
-    /// feature (`lumen-media-ffmpeg` is an optional dependency gated the same
-    /// way, see `crates/shell/Cargo.toml`). Without the feature
-    /// `pending_ffmpeg_loads` never receives an entry
-    /// (`__lumen_video_ffmpeg_load` itself is feature-gated, срез 6), so the
-    /// no-op stub below is unreachable in a default build, not merely inert.
-    #[cfg(feature = "ffmpeg-video")]
+    /// GAP-MEDIADECODE срез 7 / UX-VIDEO-NATIVE — the container-backed
+    /// counterpart of [`Lumen::tick_video_gifs`]. The container is opened
+    /// through the `VideoDecoder` installed in `window_mode.rs`
+    /// (`lumen-native` in the standard build, FFmpeg under `ffmpeg-video`);
+    /// with none installed `pending_container_loads` never receives an entry
+    /// (`__lumen_video_container_load` is registered only alongside a decoder).
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
-    pub(crate) fn tick_video_ffmpegs(&mut self, elapsed_ms: u64) {
-        use lumen_core::ext::VideoDecoder as _;
+    pub(crate) fn tick_video_sessions(&mut self, elapsed_ms: u64) {
+        let decoder = lumen_js::video_gif_store::get_video_decoder();
 
-        // Drain pending load requests queued by JS `__lumen_video_ffmpeg_load`.
+        // Drain pending load requests queued by JS `__lumen_video_container_load`.
         let loads: Vec<(u32, String)> = self
             .video_gif_store
-            .pending_ffmpeg_loads
+            .pending_container_loads
             .lock()
             .unwrap()
             .drain(..)
@@ -504,7 +502,7 @@ impl Lumen {
                 |ls| crate::resource_base::document_referrer_policy(&ls.document.lock().unwrap()),
             );
 
-            // BUG-692: FFmpeg-путь `<video src>` — та же перезапись схемы
+            // BUG-692: контейнерный путь `<video src>` — та же перезапись схемы
             // (`upgrade-insecure-requests`, Fetch §4.1 шаг 5), что у GIF-пути
             // выше; ключ `load_failures`/лог остаются на сыром `src`.
             let upgraded = self.layout_source.as_ref().and_then(|ls| {
@@ -524,18 +522,24 @@ impl Lumen {
             ) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("video FFmpeg: пропуск {src}: {e}");
+                    eprintln!("video: пропуск {src}: {e}");
                     self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
                     self.request_redraw();
                     continue;
                 }
             };
 
-            let decoder = lumen_media_ffmpeg::FfmpegVideoDecoder;
+            let Some(decoder) = decoder.as_ref() else {
+                let msg = "нет установленного VideoDecoder".to_string();
+                eprintln!("video: {msg}: {src}");
+                self.video_gif_store.load_failures.lock().unwrap().insert(nid, msg);
+                self.request_redraw();
+                continue;
+            };
             let mut session = match decoder.open(&bytes) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("video FFmpeg: ошибка декодирования {src}: {e}");
+                    eprintln!("video: ошибка декодирования {src}: {e}");
                     self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
                     self.request_redraw();
                     continue;
@@ -546,7 +550,7 @@ impl Lumen {
             let rgba = match session.frame_at(0.0) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("video FFmpeg: не декодирован первый кадр {src}: {e}");
+                    eprintln!("video: не декодирован первый кадр {src}: {e}");
                     self.video_gif_store.load_failures.lock().unwrap().insert(nid, e.to_string());
                     self.request_redraw();
                     continue;
@@ -562,7 +566,7 @@ impl Lumen {
             let key = format!("video:{nid}");
             if let Some(r) = self.renderer.as_mut() {
                 if let Err(e) = r.register_image(key.clone(), Arc::clone(&image)) {
-                    eprintln!("video FFmpeg: не зарегистрирован {key}: {e}");
+                    eprintln!("video: не зарегистрирован {key}: {e}");
                 }
             } else {
                 self.pending_images.push((key.clone(), image));
@@ -575,7 +579,7 @@ impl Lumen {
                 }
             }
             let cycle_ms = session.duration_secs().map_or(0, |s| (s * 1000.0) as u64);
-            eprintln!("video FFmpeg: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
+            eprintln!("video: загружен nid={nid} ({width}×{height}, {cycle_ms}мс)");
             self.video_gif_store.playback.lock().unwrap().insert(
                 nid,
                 lumen_js::video_gif_store::VideoPlaybackState {
@@ -588,17 +592,17 @@ impl Lumen {
                     height,
                 },
             );
-            self.video_ffmpeg_sessions.insert(nid, session);
-            self.video_ffmpeg_last_ms.remove(&nid);
+            self.video_sessions.insert(nid, session);
+            self.video_last_ms.remove(&nid);
             // GAP-MEDIADECODE срез 14: a reload of the same node (e.g. a new
             // `src`) must not keep feeding PCM decoded against the OLD
             // session into a sink still open from the previous one.
-            self.video_ffmpeg_audio_sinks.remove(&nid);
-            self.video_ffmpeg_last_audio_ms.remove(&nid);
+            self.video_audio_sinks.remove(&nid);
+            self.video_last_audio_ms.remove(&nid);
             self.request_redraw();
         }
 
-        // Advance frames for playing FFmpeg-backed videos. `playback` is the
+        // Advance frames for playing container-backed videos. `playback` is the
         // store shared with the GIF path (comment on `VideoGifStore::playback`),
         // so filter to nodes this map actually owns a session for.
         //
@@ -614,14 +618,14 @@ impl Lumen {
         let mut has_playing = false;
         let mut due: Vec<(u32, u64, bool)> = Vec::new();
         for (nid, state) in playback.iter() {
-            if !self.video_ffmpeg_sessions.contains_key(nid) {
+            if !self.video_sessions.contains_key(nid) {
                 continue;
             }
             // GAP-MEDIADECODE срез 14: mirror pause onto any already-open PCM
             // sink immediately, not just when this node happens to be `due`
             // below — otherwise pausing mid-playback would let whatever PCM
             // is still queued keep audibly playing until it drains.
-            if let Some(sink) = self.video_ffmpeg_audio_sinks.get(nid) {
+            if let Some(sink) = self.video_audio_sinks.get(nid) {
                 sink.set_paused(state.paused);
                 let (volume, muted) = self
                     .video_gif_store
@@ -642,7 +646,7 @@ impl Lumen {
                 .copied()
                 .unwrap_or(1.0);
             let cur_ms = state.current_ms(elapsed_ms, rate);
-            let last = self.video_ffmpeg_last_ms.get(nid).copied();
+            let last = self.video_last_ms.get(nid).copied();
             if state.paused {
                 if last != Some(cur_ms) {
                     due.push((*nid, cur_ms, false));
@@ -668,13 +672,13 @@ impl Lumen {
 
         let has_due = !due.is_empty();
         for (nid, cur_ms, is_playing) in due {
-            let Some(session) = self.video_ffmpeg_sessions.get_mut(&nid) else { continue };
+            let Some(session) = self.video_sessions.get_mut(&nid) else { continue };
             let secs = cur_ms as f64 / 1000.0;
             let frame_result = session.frame_at(secs);
             // GAP-MEDIADECODE срез 14: decode the audio track's next PCM
             // chunk right AFTER `frame_at`, not before. `frame_at` always
             // re-seeks the demuxer to `secs` and decodes forward
-            // (`crates/engine/media-ffmpeg/src/decoder.rs`); `decode_audio_pcm`
+            // (`VideoDecodeSession::frame_at`); `decode_audio_pcm`
             // has no seek of its own and just continues reading from wherever
             // that left the shared read cursor. Calling it right after keeps
             // the audio chunk anchored close to the position just shown,
@@ -686,7 +690,7 @@ impl Lumen {
                 .flatten()
                 .and_then(|track| {
                     let last_audio_ms = self
-                        .video_ffmpeg_last_audio_ms
+                        .video_last_audio_ms
                         .get(&nid)
                         .copied()
                         .unwrap_or_else(|| cur_ms.saturating_sub(33));
@@ -701,7 +705,7 @@ impl Lumen {
                     match session.decode_audio_pcm(samples_per_channel) {
                         Ok(samples) => Some((track, samples)),
                         Err(e) => {
-                            eprintln!("video FFmpeg аудио: ошибка декодирования nid={nid}: {e}");
+                            eprintln!("video аудио: ошибка декодирования nid={nid}: {e}");
                             None
                         }
                     }
@@ -723,11 +727,11 @@ impl Lumen {
                             }),
                         )
                     {
-                        eprintln!("video FFmpeg кадр {key}: {e}");
+                        eprintln!("video кадр {key}: {e}");
                     }
-                    self.video_ffmpeg_last_ms.insert(nid, cur_ms);
+                    self.video_last_ms.insert(nid, cur_ms);
                 }
-                Err(e) => eprintln!("video FFmpeg: ошибка кадра nid={nid}: {e}"),
+                Err(e) => eprintln!("video: ошибка кадра nid={nid}: {e}"),
             }
 
             if let Some((track, samples)) = pcm_chunk {
@@ -737,12 +741,12 @@ impl Lumen {
                 // above, and simpler than tracking a second failure set for
                 // a rare, non-fatal condition.
                 if let std::collections::hash_map::Entry::Vacant(e) =
-                    self.video_ffmpeg_audio_sinks.entry(nid)
+                    self.video_audio_sinks.entry(nid)
                 {
                     match crate::platform::video_audio_sink::VideoPcmAudioSink::new() {
                         Some(sink) => {
                             eprintln!(
-                                "video FFmpeg аудио: открыт вывод nid={nid} ({} Гц, {} кан.)",
+                                "video аудио: открыт вывод nid={nid} ({} Гц, {} кан.)",
                                 track.sample_rate, track.channels
                             );
                             // Apply whatever `volume`/`muted` the page had
@@ -760,13 +764,13 @@ impl Lumen {
                             sink.set_volume(if muted { 0.0 } else { volume });
                             e.insert(sink);
                         }
-                        None => eprintln!("video FFmpeg аудио: нет аудио-устройства nid={nid}"),
+                        None => eprintln!("video аудио: нет аудио-устройства nid={nid}"),
                     }
                 }
-                if let Some(sink) = self.video_ffmpeg_audio_sinks.get(&nid) {
+                if let Some(sink) = self.video_audio_sinks.get(&nid) {
                     sink.push_pcm(samples, track.sample_rate, track.channels);
                 }
-                self.video_ffmpeg_last_audio_ms.insert(nid, cur_ms);
+                self.video_last_audio_ms.insert(nid, cur_ms);
             }
         }
 
@@ -774,11 +778,6 @@ impl Lumen {
             self.request_redraw();
         }
     }
-
-    /// No-op counterpart of the `ffmpeg-video` version above — kept unconditional
-    /// at the call site so `redraw_requested.rs` does not need a feature gate.
-    #[cfg(not(feature = "ffmpeg-video"))]
-    pub(crate) fn tick_video_ffmpegs(&mut self, _elapsed_ms: u64) {}
 
     /// CSS Scroll Snap L2 §4 — применить `scroll-initial-target: nearest` к свежей
     /// странице: прокрутить контейнеры внутри `layout_box` и перерисовать display
@@ -2469,16 +2468,15 @@ impl Lumen {
         self.video_gif_store.pending_loads.lock().unwrap().clear();
         self.video_gif_last_frame.clear();
         self.video_gif_frames.clear();
-        // GAP-MEDIADECODE срез 7: clear FFmpeg-backed video state from previous page.
-        self.video_gif_store.pending_ffmpeg_loads.lock().unwrap().clear();
-        self.video_ffmpeg_sessions.clear();
-        self.video_ffmpeg_last_ms.clear();
+        // GAP-MEDIADECODE срез 7: clear container-backed video state from previous page.
+        self.video_gif_store.pending_container_loads.lock().unwrap().clear();
+        self.video_sessions.clear();
+        self.video_last_ms.clear();
         // GAP-MEDIADECODE срез 14: drop any open PCM audio sinks/timing from
         // the previous page's videos — a session-less sink playing on into
         // the new page would be audible with nothing on screen to match it.
-        #[cfg(feature = "ffmpeg-video")]
-        self.video_ffmpeg_audio_sinks.clear();
-        self.video_ffmpeg_last_audio_ms.clear();
+        self.video_audio_sinks.clear();
+        self.video_last_audio_ms.clear();
         // GAP-MEDIADECODE срез 9: previous page's failure records must not leak
         // onto a same-index node in the new page.
         self.video_gif_store.load_failures.lock().unwrap().clear();

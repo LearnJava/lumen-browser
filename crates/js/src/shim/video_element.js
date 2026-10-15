@@ -3,7 +3,7 @@
 
   // BUG-1033: shared synchronous pump registry — see the identical bootstrap
   // in `audio_element.rs`'s shim (defined once, whichever of the two shims
-  // loads first). GIF/FFmpeg load polling below registers on this instead of
+  // loads first). GIF/container load polling below registers on this instead of
   // an independent `setInterval`, so a page's `<audio>`/`<video>` elements
   // all resolve their load/error state in one fixed, deterministic order per
   // tick rather than racing each other's decoder thread's real response time.
@@ -34,15 +34,16 @@
     return base.endsWith('.gif');
   }
 
-  // GAP-MEDIADECODE срез 6: extension sniff for the containers
-  // `__lumen_video_ffmpeg_load` (feature `ffmpeg-video`) may decode. Same
-  // pre-fetch, extension-based limitation `isGifSrc` already accepts — the
-  // real gate is `HAS_FFMPEG_LOAD` (native only registered with the feature).
-  var HAS_FFMPEG_LOAD = (typeof __lumen_video_ffmpeg_load === 'function');
-  function isFfmpegSrc(src) {
+  // GAP-MEDIADECODE срез 6 / UX-VIDEO-NATIVE: extension sniff for the media
+  // containers `__lumen_video_container_load` may decode. Same pre-fetch,
+  // extension-based limitation `isGifSrc` already accepts — the real gate is
+  // `HAS_CONTAINER_LOAD` (the native is registered only when the shell has
+  // installed a `VideoDecoder`).
+  var HAS_CONTAINER_LOAD = (typeof __lumen_video_container_load === 'function');
+  function isContainerSrc(src) {
     if (!src) return false;
     var base = src.split('?')[0].split('#')[0].toLowerCase();
-    return base.endsWith('.mp4') || base.endsWith('.webm')
+    return base.endsWith('.mp4') || base.endsWith('.m4v') || base.endsWith('.webm')
       || base.endsWith('.ogg') || base.endsWith('.ogv');
   }
 
@@ -753,8 +754,8 @@
     var _generation   = 0;
     var _tupdateTimer = null;
     var _gifBacked = false;    // true once a GIF is successfully loaded
-    var _ffmpegBacked = false; // true once an FFmpeg container is successfully loaded (срез 6)
-    function decoded() { return (_gifBacked || _ffmpegBacked) && HAS_STORE; }
+    var _containerBacked = false; // true once a media container is successfully loaded (срез 6)
+    function decoded() { return (_gifBacked || _containerBacked) && HAS_STORE; }
 
     function attr(name) {
       var v = (el.getAttribute && el.getAttribute(name));
@@ -807,7 +808,7 @@
         if (!isPaused()) queueEvent('pause');
         if (decoded() && nid) __lumen_video_pause(nid, nowMs());
         _gifBacked    = false;
-        _ffmpegBacked = false;
+        _containerBacked = false;
         _paused      = true;
         _readyState  = HAVE_NOTHING;
         _currentSrc  = '';
@@ -946,7 +947,7 @@
         return;
       }
       if (startGifLoad(gen, url)) return;
-      if (startFfmpegLoad(gen, url)) return;
+      if (startContainerLoad(gen, url)) return;
       failResource(gen, candidate, 'unsupported media format');
     }
 
@@ -996,18 +997,17 @@
       return true;
     }
 
-    // ── FFmpeg-container load (GAP-MEDIADECODE срез 6) ──────────────────────
+    // ── Media-container load (GAP-MEDIADECODE срез 6) ──────────────────────
     //
     // Mirrors `startGifLoad` exactly, including the polling model: the shell
     // has no "decode this on the next tick" callback surface, so readiness is
     // observed by polling the same `__lumen_video_ready(nid)` the GIF path
-    // uses (the shell would insert into the same `playback` map — срез 7, not
-    // yet wired, so this currently polls forever for a real container, same
-    // as any other unsupported format did before this slice).
-    function startFfmpegLoad(gen, src) {
-      if (!HAS_FFMPEG_LOAD || !nid) return false;
-      if (!isFfmpegSrc(src)) return false;
-      __lumen_video_ffmpeg_load(nid, src);
+    // uses (the shell's `tick_video_sessions` inserts into the same `playback`
+    // map once the container is opened, or into `load_failures` when it is not).
+    function startContainerLoad(gen, src) {
+      if (!HAS_CONTAINER_LOAD || !nid) return false;
+      if (!isContainerSrc(src)) return false;
+      __lumen_video_container_load(nid, src);
       // BUG-1033: same shared-pump model as `startGifLoad` above.
       __lumen_C._lumen_media_pumps.push(function() {
         if (gen !== _generation) return false;
@@ -1023,7 +1023,7 @@
           return false;
         }
         if (!__lumen_video_ready(nid)) return true;
-        _ffmpegBacked = true;
+        _containerBacked = true;
         _readyState = HAVE_METADATA;
         fireEvent(el, 'durationchange');
         fireEvent(el, 'loadedmetadata');
@@ -1061,7 +1061,7 @@
             startTupdate();
           } else {
             // §4.8.11.8 "reaches the end": pause the native sink so the Rust
-            // tick loop (`tick_video_ffmpegs`) stops decoding past `duration` —
+            // tick loop (`tick_video_sessions`) stops decoding past `duration` —
             // otherwise it keeps calling `decode_audio_pcm` on an exhausted
             // demuxer and logs EOF errors every tick.
             if (!isPaused()) fireEvent(el, 'pause');
