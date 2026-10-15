@@ -33,6 +33,11 @@ pub enum SignalKind {
     ProtectionOffAgain,
     /// Страница передана во внешний браузер.
     OpenInOther,
+    /// Сайт трижды за минуту отдал антибот-стену (COMPAT-GATE-DETECT);
+    /// уточнение — код поставщика.
+    AntibotLoop,
+    /// Страница показала баннер «браузер не поддерживается».
+    UnsupportedBanner,
 }
 
 impl SignalKind {
@@ -40,7 +45,13 @@ impl SignalKind {
     /// версии) — `None`.
     #[must_use]
     pub fn from_code(code: &str) -> Option<Self> {
-        [Self::ReloadBurst, Self::ProtectionOffAgain, Self::OpenInOther]
+        [
+            Self::ReloadBurst,
+            Self::ProtectionOffAgain,
+            Self::OpenInOther,
+            Self::AntibotLoop,
+            Self::UnsupportedBanner,
+        ]
             .into_iter()
             .find(|k| k.code() == code)
     }
@@ -52,6 +63,8 @@ impl SignalKind {
             Self::ReloadBurst => "reload3",
             Self::ProtectionOffAgain => "protection_off_again",
             Self::OpenInOther => "open_in_other",
+            Self::AntibotLoop => "antibot_loop",
+            Self::UnsupportedBanner => "unsupported_banner",
         }
     }
 }
@@ -141,6 +154,20 @@ impl SignalLog {
         self.push(SignalKind::OpenInOther, site_of(url), now, reason_code)
     }
 
+    /// Сайт `url` в петле антибот-стены поставщика `vendor_code`.
+    pub fn record_antibot_loop(&mut self, url: &str, vendor_code: &str, now: i64) -> Signal {
+        self.push(SignalKind::AntibotLoop, site_of(url), now, vendor_code)
+    }
+
+    /// Страница `url` показала баннер «браузер не поддерживается». Один раз на
+    /// сайт, пока запись живёт в журнале: перезагрузки не размножают сигнал.
+    pub fn record_unsupported_banner(&mut self, url: &str, now: i64) -> Option<Signal> {
+        if self.count_for(SignalKind::UnsupportedBanner, url) > 0 {
+            return None;
+        }
+        Some(self.push(SignalKind::UnsupportedBanner, site_of(url), now, ""))
+    }
+
     /// Забыть всё («очистить историю»): журнал, счётчики перезагрузок и
     /// моменты выключения защиты.
     pub fn clear(&mut self) {
@@ -164,7 +191,6 @@ impl SignalLog {
 
     /// Сколько сигналов вида `kind` на сайте `url` есть в журнале.
     #[must_use]
-    #[allow(dead_code)] // потребитель — ограничитель чипов (COMPAT-SIG-04)
     pub fn count_for(&self, kind: SignalKind, url: &str) -> usize {
         let site = site_of(url);
         self.log.iter().filter(|s| s.kind == kind && s.site == site).count()
@@ -189,6 +215,17 @@ mod tests {
         // Счёт перезагрузок и момент выключения защиты начались заново.
         assert!(log.record_reload(URL, 102).is_none());
         assert!(log.record_protection_off(URL, 103).is_none());
+    }
+
+    #[test]
+    fn antibot_loop_is_logged_with_vendor_and_banner_once_per_site() {
+        let mut log = SignalLog::default();
+        let s = log.record_antibot_loop(URL, "cloudflare", 100);
+        assert_eq!((s.kind, s.site.as_str(), s.detail.as_str()), (SignalKind::AntibotLoop, "example.co.uk", "cloudflare"));
+        assert!(log.record_unsupported_banner(URL, 101).is_some());
+        assert!(log.record_unsupported_banner(URL, 102).is_none());
+        assert_eq!(SignalKind::from_code("antibot_loop"), Some(SignalKind::AntibotLoop));
+        assert_eq!(SignalKind::from_code("unsupported_banner"), Some(SignalKind::UnsupportedBanner));
     }
 
     #[test]

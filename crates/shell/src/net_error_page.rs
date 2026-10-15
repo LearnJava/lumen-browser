@@ -238,7 +238,7 @@ fn other_reasons(chosen: HandoffReason) -> String {
 
 /// Ссылка кнопки; принимается только пока на экране сама страница ошибки
 /// (`Lumen::apply_net_error_link`).
-fn handoff_link(reason: HandoffReason) -> String {
+pub(crate) fn handoff_link(reason: HandoffReason) -> String {
     format!("{HANDOFF_URL}?open={}", reason.code())
 }
 
