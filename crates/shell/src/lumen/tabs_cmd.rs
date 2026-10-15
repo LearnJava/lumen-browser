@@ -181,6 +181,46 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// Opens `url` in a new tab placed right of the active one (after tabs
+    /// already opened from it) — middle click / Ctrl+click on a link
+    /// (UX-LINK-CLICKS). `foreground = false` keeps the current tab active and
+    /// leaves the new one *lazy*: nothing is fetched until it is first selected
+    /// (see [`Self::load_lazy_tab`]). `foreground = true` (Ctrl+Shift/Shift+middle)
+    /// switches to it at once, which starts the load.
+    pub(crate) fn open_link_in_tab(&mut self, url: &str, foreground: bool) {
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let opener_id = self.tab_strip.tabs[self.tab_strip.active].id;
+        let idx = self.tab_strip.push_link_child(opener_id, now_ms);
+        let id = self.tab_strip.tabs[idx].id;
+        self.tab_strip.tabs[idx].title =
+            crate::zoom::host_of(url).unwrap_or_else(|| url.to_owned());
+        self.lifecycle_mgr.open_tab(id as u64);
+        self.lazy_tabs.insert(id, url.to_owned());
+        if foreground {
+            self.switch_tab(idx);
+        } else {
+            self.tab_strip.set_tab_state(idx, TabState::BackgroundRecent);
+            self.relayout_chrome_host();
+            self.request_redraw();
+        }
+    }
+
+    /// Starts the deferred load of a lazy tab that has just become active.
+    /// The tab's slot is already reset to blank; this is a normal navigation.
+    pub(crate) fn load_lazy_tab(&mut self, id: usize) {
+        if let Some(url) = self.lazy_tabs.remove(&id) {
+            self.navigate_to(PageSource::from_arg(Some(&url)));
+        }
+    }
+
+    /// Shift+click on a link: the page in a new OS window. Phase 0 starts a
+    /// fresh Lumen process for the URL, as «move tab to new window» does.
+    pub(crate) fn open_link_in_window(&self, url: &str) {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::process::Command::new(exe).arg(url).spawn();
+        }
+    }
+
     /// Open or toggle split view (Ctrl+\).
     ///
     /// Picks the next tab after the active one for the right pane. If no other
@@ -251,7 +291,17 @@ impl Lumen {
         if idx == self.tab_strip.active {
             // Closing the active tab: save nothing (it will be dropped),
             // restore the tab that will become active after removal.
-            let new_active = self.tab_strip.remove(idx);
+            // UX-LINK-CLICKS: преемник — ребёнок → сестра → родитель → правый
+            // → левый сосед, а не просто сосед по индексу.
+            let successor = self.tab_strip.successor_id(idx);
+            let mut new_active = self.tab_strip.remove(idx);
+            if let Some(pos) = successor
+                .and_then(|id| self.tab_strip.tabs.iter().position(|t| t.id == id))
+            {
+                self.tab_strip.active = pos;
+                new_active = pos;
+            }
+            self.tab_strip.link_chain = None;
             let new_id = self.tab_strip.tabs[new_active].id;
             // Mark the newly-activated tab as Active so its badge clears.
             self.tab_strip.set_tab_state(new_active, TabState::Active);
@@ -259,6 +309,8 @@ impl Lumen {
             self.reset_to_blank_tab();
             if let Some(snap) = self.bg_tabs.remove(&new_id) {
                 self.restore_page_snapshot(snap);
+            } else if self.lazy_tabs.contains_key(&new_id) {
+                self.load_lazy_tab(new_id);
             } else if self.hibernated_tabs.contains_key(&new_id) {
                 // Target tab is hibernated — restore from SQLite.
                 self.restore_hibernated_tab(new_id);
@@ -266,6 +318,7 @@ impl Lumen {
         } else {
             // Closing a background tab: drop snapshot and any hibernated/sleeping data.
             self.bg_tabs.remove(&closing_id);
+            self.lazy_tabs.remove(&closing_id);
             self.hibernated_tabs.remove(&closing_id);
             let _ = self.tab_snapshots.delete(closing_id as i64);
             let _ = self.t2_store.delete(closing_id as i64);
@@ -294,6 +347,8 @@ impl Lumen {
                 snap.scroll_x,
                 snap.scroll_y,
             )
+        } else if let Some(url) = self.lazy_tabs.get(&entry.id) {
+            (url.clone(), String::new(), 0.0, 0.0)
         } else {
             let meta = self.hibernated_tabs.get(&entry.id)?;
             (meta.url.clone(), meta.title.clone(), 0.0, 0.0)
@@ -480,6 +535,7 @@ impl Lumen {
         for &id in ids {
             self.lifecycle_mgr.close_tab(id as u64);
             self.bg_tabs.remove(&id);
+            self.lazy_tabs.remove(&id);
             self.hibernated_tabs.remove(&id);
             let _ = self.tab_snapshots.delete(id as i64);
             let _ = self.t2_store.delete(id as i64);
@@ -602,6 +658,8 @@ impl Lumen {
         // Sync lifecycle manager: deactivate old, activate new.
         let new_id = self.tab_strip.tabs[idx].id;
         self.lifecycle_mgr.activate_tab(new_id as u64);
+        // UX-LINK-CLICKS: switching tabs ends the «opened from one page» chain.
+        self.tab_strip.link_chain = None;
 
         // Restore new active tab, marking it Active so any badge clears.
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
@@ -670,6 +728,9 @@ impl Lumen {
             if self.pending_reload.take() {
                 self.reload();
             }
+        } else if self.lazy_tabs.contains_key(&new_id) {
+            // UX-LINK-CLICKS: a link-opened background tab loads on first focus.
+            self.load_lazy_tab(new_id);
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
             // checkpoint exists — restore scroll + form state from it.

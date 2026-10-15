@@ -664,6 +664,7 @@ fn run_window_mode_inner(
         tab_strip: tabs::strip::TabStrip::new(),
         container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),
+        lazy_tabs: HashMap::new(),
         hibernated_tabs: HashMap::new(),
         crashed: None,
         net_error_retries: None,
