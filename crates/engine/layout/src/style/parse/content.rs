@@ -24,17 +24,9 @@ pub(in crate::style) fn parse_content_items(s: &str) -> Vec<ContentItem> {
         }
         let c = bytes[i];
         if c == b'"' || c == b'\'' {
-            let quote = c;
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != quote {
-                i += 1;
-            }
-            let literal = &s[start..i];
-            out.push(ContentItem::String(literal.to_string()));
-            if i < bytes.len() {
-                i += 1; // closing quote
-            }
+            let (literal, next) = consume_css_string(s, i);
+            out.push(ContentItem::String(literal));
+            i = next;
         } else if c.is_ascii_alphabetic() || c == b'-' {
             // Ident, может быть keyword (open-quote/...) или function-call.
             let name_start = i;
@@ -53,6 +45,12 @@ pub(in crate::style) fn parse_content_items(s: &str) -> Vec<ContentItem> {
                     match bytes[i] {
                         b'(' => depth += 1,
                         b')' => depth -= 1,
+                        // Строка внутри аргументов (`attr("a)b")`, `counters(x, "\"")`)
+                        // пропускается целиком — скобка/кавычка в ней не структурна.
+                        b'"' | b'\'' => {
+                            i = consume_css_string(s, i).1;
+                            continue;
+                        }
                         _ => {}
                     }
                     i += 1;
@@ -78,18 +76,117 @@ pub(in crate::style) fn parse_content_items(s: &str) -> Vec<ContentItem> {
     out
 }
 
+/// CSS Syntax L3 §4.3.5 «consume a string token». `s[start]` — открывающая
+/// кавычка. Возвращает декодированное значение и индекс за закрывающей
+/// кавычкой (или `s.len()` для незакрытой строки — по спеке значение до EOF).
+/// `\`+newline — склейка строк (ничего не добавляет), `\`+1–6 hex (+ один
+/// пробельный) — кодпоинт (0, суррогат, >10FFFF → U+FFFD), `\`+другое — он сам.
+/// Неэкранированный перевод строки — bad-string: разбор обрывается на нём.
+pub(in crate::style) fn consume_css_string(s: &str, start: usize) -> (String, usize) {
+    let quote = s.as_bytes()[start] as char;
+    let mut out = String::new();
+    let mut it = s[start + 1..].char_indices().peekable();
+    let base = start + 1;
+    while let Some((off, c)) = it.next() {
+        if c == quote {
+            return (out, base + off + 1);
+        }
+        match c {
+            '\n' | '\r' | '\x0C' => return (out, base + off),
+            '\\' => match it.peek().copied() {
+                None => {} // `\` перед EOF — ничего не добавляет
+                Some((_, '\n' | '\x0C')) => {
+                    it.next();
+                }
+                Some((_, '\r')) => {
+                    it.next();
+                    if matches!(it.peek(), Some((_, '\n'))) {
+                        it.next();
+                    }
+                }
+                Some((_, h)) if h.is_ascii_hexdigit() => {
+                    let mut code = 0u32;
+                    let mut n = 0;
+                    while n < 6 {
+                        match it.peek().copied() {
+                            Some((_, d)) if d.is_ascii_hexdigit() => {
+                                code = code * 16 + d.to_digit(16).unwrap_or(0);
+                                it.next();
+                                n += 1;
+                            }
+                            _ => break,
+                        }
+                    }
+                    match it.peek().copied() {
+                        Some((_, '\r')) => {
+                            it.next();
+                            if matches!(it.peek(), Some((_, '\n'))) {
+                                it.next();
+                            }
+                        }
+                        Some((_, '\t' | '\n' | '\x0C' | ' ')) => {
+                            it.next();
+                        }
+                        _ => {}
+                    }
+                    out.push(char::from_u32(code).filter(|_| code != 0).unwrap_or('\u{FFFD}'));
+                }
+                Some((_, other)) => {
+                    it.next();
+                    out.push(other);
+                }
+            },
+            _ => out.push(c),
+        }
+    }
+    (out, s.len())
+}
+
+/// Значение строкового аргумента функции: `"a\"b"` → `a"b`; без кавычек —
+/// как есть (после `trim`).
+fn decode_string_arg(args: &str) -> String {
+    let t = args.trim();
+    if t.starts_with(['"', '\'']) {
+        consume_css_string(t, 0).0
+    } else {
+        t.to_string()
+    }
+}
+
+/// Делит аргументы по запятым вне строк (`counters(c, ",")`), обрезая пробелы.
+fn split_top_level_commas(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut seg = 0;
+    let mut i = 0;
+    while i < args.len() {
+        match args.as_bytes()[i] {
+            b'"' | b'\'' => {
+                i = consume_css_string(args, i).1;
+                continue;
+            }
+            b',' => {
+                parts.push(args[seg..i].trim());
+                seg = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    parts.push(args[seg..].trim());
+    parts
+}
+
 fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
     match name {
         "url" => {
-            let inner = args.trim().trim_matches(['"', '\''].as_ref());
-            Some(ContentItem::Url(inner.to_string()))
+            Some(ContentItem::Url(decode_string_arg(args)))
         }
         "attr" => {
-            let attr_name = args.trim().trim_matches(['"', '\''].as_ref());
+            let attr_name = decode_string_arg(args);
             if attr_name.is_empty() {
                 None
             } else {
-                Some(ContentItem::Attr(attr_name.to_string()))
+                Some(ContentItem::Attr(attr_name))
             }
         }
         "counter" => {
@@ -105,10 +202,10 @@ fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
             })
         }
         "counters" => {
-            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            let parts = split_top_level_commas(args);
             let counter_name = parts.first()?.to_string();
             let separator_raw = parts.get(1)?;
-            let separator = separator_raw.trim_matches(['"', '\''].as_ref()).to_string();
+            let separator = decode_string_arg(separator_raw);
             let style = parts.get(2).map(|s| s.to_string());
             Some(ContentItem::Counters {
                 name: counter_name,
@@ -117,5 +214,59 @@ fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
             })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(s: &str) -> Vec<String> {
+        parse_content_items(s)
+            .into_iter()
+            .filter_map(|i| match i {
+                ContentItem::String(t) => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hex_escape_decodes_with_optional_space() {
+        assert_eq!(strings(r#""x\41 y""#), ["xAy"]);
+        assert_eq!(strings(r#""x\0041y""#), ["xAy"]);
+        assert_eq!(strings(r#""x\f101y""#), ["x\u{F101}y"]);
+        assert_eq!(strings(r#""\201C""#), ["\u{201C}"]);
+    }
+
+    #[test]
+    fn escaped_newline_and_quote() {
+        assert_eq!(strings(r#""L1\A L2""#), ["L1\nL2"]);
+        assert_eq!(strings(r#""x\"y""#), [r#"x"y"#]);
+        assert_eq!(strings(r#"'it\'s'"#), ["it's"]);
+        assert_eq!(strings("\"a\\\nb\""), ["ab"]); // `\`+newline — склейка
+    }
+
+    #[test]
+    fn invalid_codepoints_become_replacement() {
+        assert_eq!(strings(r#""\0""#), ["\u{FFFD}"]);
+        assert_eq!(strings(r#""\D800 ""#), ["\u{FFFD}"]);
+        assert_eq!(strings(r#""\110000 ""#), ["\u{FFFD}"]);
+    }
+
+    #[test]
+    fn items_after_escaped_quote_survive() {
+        let items = parse_content_items(r#""\"" counter(c) "!""#);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(&items[0], ContentItem::String(t) if t == "\""));
+    }
+
+    #[test]
+    fn function_string_args_are_decoded() {
+        let items = parse_content_items(r#"counters(c, "\2C  ") attr("a)b")"#);
+        assert!(matches!(&items[0], ContentItem::Counters { separator, .. } if separator == ", "));
+        assert!(matches!(&items[1], ContentItem::Attr(n) if n == "a)b"));
+        let items = parse_content_items(r#"counters(c, ",")"#);
+        assert!(matches!(&items[0], ContentItem::Counters { separator, .. } if separator == ","));
     }
 }
