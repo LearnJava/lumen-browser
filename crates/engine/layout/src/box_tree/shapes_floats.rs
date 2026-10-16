@@ -300,6 +300,13 @@ pub(crate) struct FloatContext {
     /// Right floats: `(bottom_y, left_edge)` — left edge of the float margin
     /// box.  Active while `bottom_y > query_y`.
     pub(crate) right: Vec<(f32, f32)>,
+    /// Margin-box top of each entry of [`Self::left`] (parallel vector). Only
+    /// the normal-flow queries `*_edge_in_flow` read it: a float that was
+    /// pushed below the current line (`clear`, rule 8) does not affect
+    /// content that sits entirely above it.
+    left_tops: Vec<f32>,
+    /// Same as [`Self::left_tops`], for [`Self::right`].
+    right_tops: Vec<f32>,
     /// CSS Shapes L1 — `shape-outside: circle(r)` overrides.
     /// `(top_y, bottom_y, is_left, center_x, center_y, radius)`.
     /// `is_left=true` → left float, `false` → right float.
@@ -330,6 +337,8 @@ impl FloatContext {
         Self {
             left: Vec::new(),
             right: Vec::new(),
+            left_tops: Vec::new(),
+            right_tops: Vec::new(),
             shape_circles: Vec::new(),
             shape_polygons: Vec::new(),
             shape_ellipses: Vec::new(),
@@ -354,16 +363,27 @@ impl FloatContext {
     /// Left boundary of available inline space at `y` (= rightmost right-edge
     /// of all left floats whose `bottom_y > y`).  Falls back to `default_x`.
     pub(crate) fn left_edge_at(&self, y: f32, default_x: f32) -> f32 {
-        self.left_edge_impl(y, default_x, false)
+        self.left_edge_impl(y, default_x, false, false)
+    }
+
+    /// [`Self::left_edge_at`] for a normal-flow box whose top is `y`: floats
+    /// whose margin box starts below `y` are ignored (CSS 2.1 §9.5 — a box
+    /// is only displaced by floats it can actually meet).
+    pub(crate) fn left_edge_in_flow(&self, y: f32, default_x: f32) -> f32 {
+        self.left_edge_impl(y, default_x, false, true)
     }
 
     /// [`Self::left_edge_at`]; with `exact` a float that has a `shape-outside`
     /// contributes its contour only, not its rectangular margin box.
-    fn left_edge_impl(&self, y: f32, default_x: f32, exact: bool) -> f32 {
+    fn left_edge_impl(&self, y: f32, default_x: f32, exact: bool, in_flow: bool) -> f32 {
         let rect_edge = self.left
             .iter()
             .enumerate()
-            .filter(|(i, (bot, _))| *bot > y && !(exact && self.shaped_left.contains(i)))
+            .filter(|(i, (bot, _))| {
+                *bot > y
+                    && !(in_flow && self.left_tops.get(*i).is_some_and(|t| *t > y + 0.01))
+                    && !(exact && self.shaped_left.contains(i))
+            })
             .map(|(_, (_, r))| *r)
             .fold(default_x, f32::max);
         // CSS Shapes L1: circle boundary.
@@ -405,7 +425,7 @@ impl FloatContext {
             .fold(after_ellipses, f32::max);
         // CSS 2.1 §9.5: enclosing-context floats also push the left edge right.
         match &self.inherited {
-            Some(p) => p.left_edge_impl(y, own, exact),
+            Some(p) => p.left_edge_impl(y, own, exact, in_flow),
             None => own,
         }
     }
@@ -413,15 +433,24 @@ impl FloatContext {
     /// Right boundary of available inline space at `y` (= leftmost left-edge
     /// of all right floats whose `bottom_y > y`).  Falls back to `default_x`.
     pub(crate) fn right_edge_at(&self, y: f32, default_x: f32) -> f32 {
-        self.right_edge_impl(y, default_x, false)
+        self.right_edge_impl(y, default_x, false, false)
+    }
+
+    /// [`Self::right_edge_at`] for a normal-flow box: see [`Self::left_edge_in_flow`].
+    pub(crate) fn right_edge_in_flow(&self, y: f32, default_x: f32) -> f32 {
+        self.right_edge_impl(y, default_x, false, true)
     }
 
     /// [`Self::right_edge_at`]; `exact` as in [`Self::left_edge_impl`].
-    fn right_edge_impl(&self, y: f32, default_x: f32, exact: bool) -> f32 {
+    fn right_edge_impl(&self, y: f32, default_x: f32, exact: bool, in_flow: bool) -> f32 {
         let rect_edge = self.right
             .iter()
             .enumerate()
-            .filter(|(i, (bot, _))| *bot > y && !(exact && self.shaped_right.contains(i)))
+            .filter(|(i, (bot, _))| {
+                *bot > y
+                    && !(in_flow && self.right_tops.get(*i).is_some_and(|t| *t > y + 0.01))
+                    && !(exact && self.shaped_right.contains(i))
+            })
             .map(|(_, (_, l))| *l)
             .fold(default_x, f32::min);
         // CSS Shapes L1: circle boundary.
@@ -463,21 +492,23 @@ impl FloatContext {
             .fold(after_ellipses, f32::min);
         // CSS 2.1 §9.5: enclosing-context floats also pull the right edge left.
         match &self.inherited {
-            Some(p) => p.right_edge_impl(y, own, exact),
+            Some(p) => p.right_edge_impl(y, own, exact, in_flow),
             None => own,
         }
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
     /// edge at `right_edge`.
-    pub(crate) fn add_left(&mut self, bottom_y: f32, right_edge: f32) {
+    pub(crate) fn add_left(&mut self, top_y: f32, bottom_y: f32, right_edge: f32) {
         self.left.push((bottom_y, right_edge));
+        self.left_tops.push(top_y);
     }
 
     /// Record a right float occupying `[y_top, bottom_y)` with left margin
     /// edge at `left_edge`.
-    pub(crate) fn add_right(&mut self, bottom_y: f32, left_edge: f32) {
+    pub(crate) fn add_right(&mut self, top_y: f32, bottom_y: f32, left_edge: f32) {
         self.right.push((bottom_y, left_edge));
+        self.right_tops.push(top_y);
     }
 
     /// Marks the float just added with [`Self::add_left`] / [`Self::add_right`]
@@ -521,8 +552,8 @@ impl FloatContext {
         let last = (y_bot - 0.01).max(y_top);
         let mut y = y_top;
         loop {
-            left = left.max(self.left_edge_impl(y, left_default, true));
-            right = right.min(self.right_edge_impl(y, right_default, true));
+            left = left.max(self.left_edge_impl(y, left_default, true, false));
+            right = right.min(self.right_edge_impl(y, right_default, true, false));
             if y >= last {
                 break;
             }
@@ -555,6 +586,8 @@ impl FloatContext {
         let mut c = Self::new();
         c.left = self.left.iter().map(|&(bot, e)| (bot - db, e)).collect();
         c.right = self.right.iter().map(|&(bot, e)| (bot - db, e)).collect();
+        c.left_tops = self.left_tops.iter().map(|t| t - db).collect();
+        c.right_tops = self.right_tops.iter().map(|t| t - db).collect();
         c
     }
 
