@@ -81,7 +81,17 @@ fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
 /// containing-block width diverge from this module's own padding/border-only
 /// narrowing) falls back to a full recompute instead of returning a wrong
 /// value.
-pub(crate) type MarginCollapseCache = std::collections::HashMap<(NodeId, BoxRole), (f32, f32)>;
+///
+/// BUG-1365: the entry holds the chain's largest non-negative margin and its most
+/// negative one *separately* — `(cb, pos, neg)` with `pos >= 0 >= neg` — because
+/// §8.3.1 sums the two, and a single running scalar cannot be extended by an
+/// outer link once the sign information is gone.
+pub(crate) type MarginCollapseCache = std::collections::HashMap<(NodeId, BoxRole), (f32, f32, f32)>;
+
+/// Folds one more margin `own` (the outer link) into a chain's `(pos, neg)` pair.
+fn fold_margin((pos, neg): (f32, f32), own: f32) -> (f32, f32) {
+    (pos.max(own), neg.min(own))
+}
 
 /// CSS 2.1 §8.3.1 — the *collapsed* top margin of a block-level box (px).
 ///
@@ -90,8 +100,9 @@ pub(crate) type MarginCollapseCache = std::collections::HashMap<(NodeId, BoxRole
 /// top border, no top padding, establishes no BFC, and the first in-flow child
 /// is itself a plain block with no clearance. The collapse walks down the
 /// chain of first children. `cb` is the containing-block width used to resolve
-/// percentage margins. Only the common non-negative case is folded (parity with
-/// sibling collapse); negative margins fall through as the box's own margin.
+/// percentage margins. BUG-1365: the result is the largest non-negative margin of
+/// the chain plus its most negative one (§8.3.1), so a negative margin on a box
+/// with block children is no longer swallowed by a `0` child margin.
 ///
 /// LAYOUT-1: this used to recurse one call frame per link in the first-child
 /// chain — on a page whose markup is a straight run of single-child `<div>`s
@@ -116,10 +127,10 @@ pub(crate) fn collapsed_top_margin(
     viewport: Size,
     cache: &mut MarginCollapseCache,
 ) -> f32 {
-    if let Some(&(cached_cb, cached_val)) = cache.get(&(b.node, b.origin.role))
+    if let Some(&(cached_cb, pos, neg)) = cache.get(&(b.node, b.origin.role))
         && cached_cb == cb
     {
-        return cached_val;
+        return pos + neg;
     }
 
     // Walk down the first-child chain exactly as the pre-BUG-1026 loop did,
@@ -130,14 +141,14 @@ pub(crate) fn collapsed_top_margin(
     let mut chain: Vec<((NodeId, BoxRole), f32, f32)> = Vec::new(); // (key, own_margin, cb_used)
     let mut node = b;
     let mut cur_cb = cb;
-    let mut tail = f32::NEG_INFINITY;
+    let mut tail = (0.0_f32, 0.0_f32);
     loop {
         let key = (node.node, node.origin.role);
         if !std::ptr::eq(node, b)
-            && let Some(&(cached_cb, cached_val)) = cache.get(&key)
+            && let Some(&(cached_cb, pos, neg)) = cache.get(&key)
             && cached_cb == cur_cb
         {
-            tail = cached_val;
+            tail = (pos, neg);
             break;
         }
         let em = node.style.font_size;
@@ -167,10 +178,10 @@ pub(crate) fn collapsed_top_margin(
 
     let mut running = tail;
     for (key, own, cb_used) in chain.into_iter().rev() {
-        running = running.max(own);
-        cache.insert(key, (cb_used, running));
+        running = fold_margin(running, own);
+        cache.insert(key, (cb_used, running.0, running.1));
     }
-    running
+    running.0 + running.1
 }
 
 /// Returns the last in-flow `Block` child whose bottom margin collapses with the
@@ -208,9 +219,8 @@ pub(crate) fn last_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
 /// `auto` height, no bottom border, no bottom padding, establishes no BFC, and the
 /// last in-flow child is itself a plain block with no clearance. The collapse
 /// walks down the chain of last children. `cb` is the containing-block width
-/// used to resolve percentage margins. Only the common non-negative case is folded
-/// (parity with `collapsed_top_margin`); negative margins fall through as the box's
-/// own margin.
+/// used to resolve percentage margins. Folds like `collapsed_top_margin`: largest
+/// non-negative margin of the chain plus its most negative one (BUG-1365).
 ///
 /// LAYOUT-1: mirrors `collapsed_top_margin`'s conversion from per-link
 /// recursion to an O(1)-stack loop — see its doc comment for why the
@@ -225,23 +235,23 @@ pub(crate) fn collapsed_bottom_margin(
     viewport: Size,
     cache: &mut MarginCollapseCache,
 ) -> f32 {
-    if let Some(&(cached_cb, cached_val)) = cache.get(&(b.node, b.origin.role))
+    if let Some(&(cached_cb, pos, neg)) = cache.get(&(b.node, b.origin.role))
         && cached_cb == cb
     {
-        return cached_val;
+        return pos + neg;
     }
 
     let mut chain: Vec<((NodeId, BoxRole), f32, f32)> = Vec::new(); // (key, own_margin, cb_used)
     let mut node = b;
     let mut cur_cb = cb;
-    let mut tail = f32::NEG_INFINITY;
+    let mut tail = (0.0_f32, 0.0_f32);
     loop {
         let key = (node.node, node.origin.role);
         if !std::ptr::eq(node, b)
-            && let Some(&(cached_cb, cached_val)) = cache.get(&key)
+            && let Some(&(cached_cb, pos, neg)) = cache.get(&key)
             && cached_cb == cur_cb
         {
-            tail = cached_val;
+            tail = (pos, neg);
             break;
         }
         let em = node.style.font_size;
@@ -276,10 +286,10 @@ pub(crate) fn collapsed_bottom_margin(
 
     let mut running = tail;
     for (key, own, cb_used) in chain.into_iter().rev() {
-        running = running.max(own);
-        cache.insert(key, (cb_used, running));
+        running = fold_margin(running, own);
+        cache.insert(key, (cb_used, running.0, running.1));
     }
-    running
+    running.0 + running.1
 }
 
 /// CSS Box Sizing L4 §5 — content block-size contribution under size containment.

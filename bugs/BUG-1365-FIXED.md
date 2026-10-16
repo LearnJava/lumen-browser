@@ -1,6 +1,6 @@
 # BUG-1365 — Отрицательный `margin-top`/`margin-bottom` блока с блочными детьми теряется при схлопывании (CSS 2.1 §8.3.1)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/bfc.rs` — `collapsed_top_margin`, схлопывание поля блока с полем первого/последнего ребёнка)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 13: 28 id в `positioning/`, `abspos/`, `zindex/`, `stacking
 ## Как проверить
 
 `css/CSS2/positioning/top-019.xht`, `bottom-103.xht`.
+
+## Исправление
+
+`collapsed_top_margin`/`collapsed_bottom_margin` (`box_tree/bfc.rs`) сворачивали цепочку первых/последних детей через `max`, поэтому `-60` у обёртки и `0` у ребёнка давали `0`. Теперь по §8.3.1 результат — наибольшее неотрицательное поле цепочки плюс наименьшее отрицательное. Запись `MarginCollapseCache` хранит пару `(cb, pos, neg)` (а не готовую сумму), чтобы внешнее звено цепочки могло достроить её; вертикальные режимы письма (`vertical_margins.rs`) оставлены на прежнем `max` со своим алиасом `EdgeMarginCache`. В `finish_frame` (`block_flow_trampoline.rs`) вынос нижнего поля последнего ребёнка вычитается из высоты и когда оно отрицательное — иначе родитель с `margin-bottom:-60px` у последнего ребёнка схлопывался до нуля. Тесты: `box_tree/tests/negative_margin_collapse.rs` (7), `bfc_margin_collapse.rs`.

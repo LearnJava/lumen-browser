@@ -13,12 +13,17 @@
 use super::*;
 
 /// Per-`run` memo of [`collapsed_margin`] for the block-start and block-end side
-/// (see `bfc::MarginCollapseCache` for the keying).
+/// (keyed like `bfc::MarginCollapseCache`).
 #[derive(Default)]
 pub(super) struct MarginCaches {
-    pub(super) start: MarginCollapseCache,
-    pub(super) end: MarginCollapseCache,
+    pub(super) start: EdgeMarginCache,
+    pub(super) end: EdgeMarginCache,
 }
+
+/// `(cb, collapsed margin)` per node — the vertical-mode fold keeps a single
+/// running max, unlike `bfc::MarginCollapseCache` which splits positive and
+/// negative parts (BUG-1365).
+pub(super) type EdgeMarginCache = std::collections::HashMap<(NodeId, BoxRole), (f32, f32)>;
 
 /// Block-start and block-end margin of `b` (physical right/left for `rl`).
 pub(super) fn own_margins(b: &LayoutBox, rl: bool, cb: f32, viewport: Size) -> (f32, f32) {
@@ -90,7 +95,7 @@ pub(super) fn collapsed_margin(
     rl: bool,
     cb: f32,
     viewport: Size,
-    cache: &mut MarginCollapseCache,
+    cache: &mut EdgeMarginCache,
 ) -> f32 {
     if let Some(&(cached_cb, v)) = cache.get(&(b.node, b.origin.role))
         && cached_cb == cb
