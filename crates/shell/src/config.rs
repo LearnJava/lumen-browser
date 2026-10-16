@@ -227,6 +227,10 @@ pub struct FingerprintProfile {
     /// `fingerprint.toml`: an explicit choice wins over the OS list in every
     /// profile except Tor.
     pub languages_explicit: bool,
+    /// `noise_exceptions` of `fingerprint.toml`: extra hosts (and their
+    /// sub-domains) where canvas / audio fingerprint noise is switched off, on
+    /// top of the built-in checks / banks / state services list.
+    pub noise_exceptions: Vec<String>,
     /// The OS language list (expanded, see [`lumen_network::http::expand_language_list`]),
     /// filled once at startup by [`use_os_languages`](Self::use_os_languages).
     /// Empty — the OS list is not in use and `languages` stays authoritative.
@@ -283,6 +287,7 @@ impl Default for FingerprintProfile {
             platform: "Win32".to_string(),
             languages: vec!["en-US".to_string(), "en".to_string()],
             languages_explicit: false,
+            noise_exceptions: Vec::new(),
             os_languages: Vec::new(),
             screen_width: 1920,
             screen_height: 1080,
@@ -384,6 +389,26 @@ impl FingerprintProfile {
             color_depth: self.color_depth,
             timezone_offset: if is_tor { Some(0) } else { self.timezone_offset },
         }
+    }
+
+    /// Install the canvas / audio noise policy of the active browser profile
+    /// (COMPAT-PRIVACY-UNBREAK-NOISE): a stable secret derived from the
+    /// installation secret and `profile_id` for a persistent profile, none
+    /// (a fresh secret per run) for Anonymous, Tor and an unknown profile; plus
+    /// the `noise_exceptions` hosts. Call after the active profile changed and
+    /// once at startup.
+    #[cfg(feature = "v8")]
+    pub fn install_noise(&self, anonymous: bool, profile_id: Option<i64>) {
+        let stable = !anonymous && self.http_profile != HttpProfile::TorBrowser;
+        let secret = match profile_id {
+            Some(id) if stable => Some(crate::noise_secret::derive(
+                &crate::noise_secret::installation_secret(),
+                &id.to_string(),
+            )),
+            _ => None,
+        };
+        lumen_js::set_noise_secret(secret);
+        lumen_js::set_noise_exceptions(&self.noise_exceptions);
     }
 
     /// Install the navigator/screen/timezone values into the process-global JS
@@ -700,6 +725,14 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
                 p.languages = langs;
                 p.languages_explicit = true;
             }
+        }
+        "noise_exceptions" => {
+            p.noise_exceptions = value
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
         }
         "screen_width" => {
             if let Ok(v) = value.parse() {
@@ -1040,6 +1073,14 @@ mod tests {
             lumen_network::http::accept_language_header(&p.effective_languages(false)),
             "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
         );
+    }
+
+    /// COMPAT-PRIVACY-UNBREAK-NOISE: `noise_exceptions` is a comma list.
+    #[test]
+    fn noise_exceptions_are_parsed() {
+        assert!(FingerprintProfile::default().noise_exceptions.is_empty());
+        let p = parse("noise_exceptions = bank.example, *.shop.test ,");
+        assert_eq!(p.noise_exceptions, tags(&["bank.example", "*.shop.test"]));
     }
 
     /// Without the OS list (automation, unreadable system) nothing changes.

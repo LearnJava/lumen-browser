@@ -69,47 +69,22 @@ thread_local! {
     static TRANSFERRED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
-/// Per-process session seed (ADR-007 layer 4, docs/plan/privacy.md §9.5 layer 4):
-/// stable for the life of one browser run, different across restarts — "session"
-/// in the Brave-style sense the fingerprint-noise design calls for.
+/// The canvas-noise seed of a document of `origin`: «profile secret + eTLD+1»
+/// (see [`crate::noise_key`]), `None` for a site exempt from noise. Stable
+/// across restarts of one profile, different between sites and between
+/// profiles. Shared with [`crate::offscreen_canvas`], which has no document
+/// origin of its own to derive a seed from.
 #[cfg(feature = "v8-backend")]
-fn session_seed() -> u64 {
-    use std::sync::OnceLock;
-    static SEED: OnceLock<u64> = OnceLock::new();
-    *SEED.get_or_init(|| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        nanos ^ (std::process::id() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-    })
-}
-
-/// Mixes the per-process session seed with the document's origin (FNV-1a), so
-/// two different sites visited in the same session cannot correlate the same
-/// drawn scene through canvas noise, while re-reading a canvas on the SAME
-/// site keeps a stable fingerprint within one session — the Brave-style
-/// per-site+session canvas noise model docs/plan/privacy.md §9.5 layer 4 asks
-/// for. Shared with [`crate::offscreen_canvas`], which has no document origin
-/// of its own to derive a seed from.
-#[cfg(feature = "v8-backend")]
-pub(crate) fn document_noise_seed(origin: &str) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ session_seed();
-    for b in origin.bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0000_0100_0000_01B3);
-    }
-    h
+pub(crate) fn document_noise_seed(origin: &str) -> Option<u64> {
+    crate::noise_key::noise_key(origin)
 }
 
 /// Whether newly-created canvases should have fingerprint noise armed
-/// (BUG-1024/BUG-454-adjacent: `session_seed()` above mixes wall-clock time
-/// with the process ID, so it differs on every browser launch — correct for
-/// the anti-fingerprinting threat model, but it means `getImageData()` cannot
-/// be bit-exact across two separate runs of the same page. WPT canvas
-/// conformance (`html/canvas`, `canvas-tests.js`'s `_assertPixel`) requires
-/// exactly that, so `LUMEN_DISABLE_CANVAS_NOISE` (any value, checked once —
+/// (BUG-1024/BUG-454-adjacent: without a profile secret the seed mixes
+/// wall-clock time with the process ID, so it differs on every browser
+/// launch, and `getImageData()` cannot be bit-exact across two separate runs
+/// of the same page. WPT canvas conformance (`html/canvas`, `canvas-tests.js`'s
+/// `_assertPixel`) requires exactly that, so `LUMEN_DISABLE_CANVAS_NOISE` (any value, checked once —
 /// canvas construction is not hot enough to need caching beyond that) turns
 /// noise off for the life of the process; unset in every normal browsing
 /// session, so this changes nothing there. `docs/automation.md` §Flags.
@@ -559,8 +534,8 @@ pub(crate) fn install_canvas2d_bindings_v8(
                 if let Ok(mut map) = c.try_borrow_mut() {
                     map.entry(nid).or_insert_with(|| {
                         let mut ctx = Context2D::new(w, h);
-                        if canvas_noise_enabled() {
-                            ctx.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+                        if let Some(seed) = noise_seed.filter(|_| canvas_noise_enabled()) {
+                            ctx.set_noise_generator(CanvasNoiseGenerator::new(seed));
                         }
                         ctx
                     });
@@ -1440,7 +1415,9 @@ pub(crate) fn install_canvas2d_bindings_v8(
                 (ctx2d.width(), ctx2d.height(), ctx2d.pixels().to_vec())
             });
             let offscreen_id = crate::offscreen_canvas::create_offscreen_from_pixels(w, h, pixels);
-            crate::offscreen_canvas::arm_noise(offscreen_id, noise_seed);
+            if let Some(seed) = noise_seed {
+                crate::offscreen_canvas::arm_noise(offscreen_id, seed);
+            }
             TRANSFERRED.with(|t| {
                 t.borrow_mut().insert(nid);
             });

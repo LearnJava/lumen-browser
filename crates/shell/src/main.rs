@@ -58,6 +58,7 @@ mod layout_walk;
 mod media_bar;
 mod nav_history;
 mod no_paint_backend;
+mod noise_secret;
 mod os_locale;
 mod page_source;
 mod page_state;

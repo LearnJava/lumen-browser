@@ -66,7 +66,10 @@ fn install_web_audio_api_v8_inner(
     // round `lumen_canvas::fp_noise::CanvasNoiseGenerator` uses, so the two
     // layers share one noise *shape* without sharing one noise *value* (see
     // `audio_noise_seed`).
+    // An exempt site (`None`) gets no noise at all.
     let seed = audio_noise_seed(origin);
+    let noise_enabled = noise_enabled && seed.is_some();
+    let seed = seed.unwrap_or(0);
     let seed_hi = (seed >> 32) as u32;
     let seed_lo = (seed & 0xFFFF_FFFF) as u32;
     rt.register_native("_lumen_audio_noise_seed_hi", into_v8_fn0(move || seed_hi))?;
@@ -77,17 +80,16 @@ fn install_web_audio_api_v8_inner(
     Ok(())
 }
 
-/// Per-session+origin seed for the BUG-908 audio fingerprint noise.
+/// Profile+site seed for the BUG-908 audio fingerprint noise, `None` for an
+/// exempt site.
 ///
-/// Reuses [`crate::canvas2d::document_noise_seed`]'s per-process-session +
-/// per-origin derivation (same "session" lifetime the ADR-007 Layer 4 noise
-/// model calls for everywhere else) rather than growing a second wall-clock
-/// `OnceLock`, but XORs in a fixed tag so the two layers do not hand out the
-/// literal same seed value — a page that recovers one noise sample should not
-/// thereby know the other layer's noise for free.
+/// Reuses [`crate::canvas2d::document_noise_seed`]'s derivation (profile
+/// secret + eTLD+1, [`crate::noise_key`]) but XORs in a fixed tag so the two
+/// layers do not hand out the literal same seed value — a page that recovers
+/// one noise sample should not thereby know the other layer's noise for free.
 #[cfg(feature = "v8-backend")]
-fn audio_noise_seed(origin: &str) -> u64 {
-    crate::canvas2d::document_noise_seed(origin) ^ 0x4155_4449_4F5F_4E5A
+fn audio_noise_seed(origin: &str) -> Option<u64> {
+    crate::canvas2d::document_noise_seed(origin).map(|s| s ^ 0x4155_4449_4F5F_4E5A)
 }
 
 /// Whether a rendered `OfflineAudioContext` buffer and `AnalyserNode` reads
