@@ -75,8 +75,8 @@
 {
  "generated": "2026-10-16",
  "counts": {
-  "open": 399,
-  "fixed": 1168,
+  "open": 396,
+  "fixed": 1171,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -687,7 +687,7 @@
     {
      "id": "TABLE-ANON",
      "title": "TABLE-ANON: анонимные табличные боксы",
-     "status": "planned",
+     "status": "done",
      "size": "M",
      "note": "Анонимные табличные боксы (CSS 2.1 §17.2.1): сейчас не строятся вовсе — `grep -i anonymous crates/engine/layout/src/box_tree/table*.rs` пуст, в `build.rs:1011` лишь комментарий «Tables keep their own anonymous-box rules (text → anonymous cell)» без кода. Проба (`--dump-layout`): осиротевшие `display:table-cell` в `<div>` раскладываются блоками друг под другом (нужна анонимная таблица и строка), `display:table` с прямым текстом и `table-row` с прямым текстом — текст пропадает (`DrawText` нет), `table-cell` без строки внутри `display:table` — ячейки `w=0`; работает только полный `table > row > cell`. Нужно три стадии §17.2.1 в построении боксов: (1) удалить игнорируемые боксы (пробельный текст между табличными), (2) обернуть детей `table`/`row-group`/`row`, не подходящих по типу, в анонимные `row`/`cell`, (3) обернуть осиротевшие `table-cell`/`table-row`/`table-row-group`/`table-caption` и их соседей-табличные в одну анонимную таблицу (inline-вариант, если родитель строчный). Раскладка таблицы из корректного дерева уже есть. Найдено WPT-RUN-14 S13 (2026-10-07): 153 id `css/CSS2/tables/table-anonymous-objects-*` (все `thick`), 60 из них перестраивают DOM в `onload` — проверять отдельно; кластер в `docs/wpt-vendor-notes/css.md` §css/CSS2 tables/positioning/floats.",
      "bugs": [
@@ -8789,30 +8789,30 @@
       {
        "id": "COMPAT-GATE-DETECT",
        "title": "Детектор антибот-стен и баннеров «браузер не поддерживается»",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Распознавания нет: в crates нет cf-mitigated, challenges.cloudflare, ddos-guard, qrator, smartcaptcha, __wbaas, abt-challenge; 403/498/429 рисуются как обычная страница (BUG-1114), SITE_REFUSED есть только в тулинге (scripts/perf_audit.py:395). Статус и заголовки есть в shell (page_source.rs:276). Объём: классификатор по статусу, заголовкам, хостам iframe, тексту (Cloudflare, DDoS-Guard, Qrator, SmartCaptcha, Akamai, WB 498, Avito 429/439, Ozon 403), баннерам «браузер не поддерживается» RU/EN; типизированная панель с «Открыть в…» и ID проверки без IP. Приёмка: ≥15 ответов стенда — 100% верный тип, 0 ложных на 200 страницах корпуса. docs/research/site-compat/report.md §8.4 COMPAT-ERR-10…12"
+       "note": "**Сделано (2026-10-16, ветка `p1-compat-gate-detect`):** `gate_detect.rs` (чистая часть) — `classify(status, headers, body, url)` называет поставщика стены (Cloudflare: `cf-mitigated`, `cdn-cgi/challenge-platform`, «Just a moment», Ray ID; DDoS-Guard; Qrator: `/__qrator/`, `x-qrator-requestid`; Yandex SmartCaptcha: `/showcaptcha`, виджет на странице-стене; DataDome: `captcha-delivery.com`; Akamai: 403 «Reference #18.»; Wildberries: 498 и `/__wbaas/`; Авито: 403/429/439; Ozon: 403, `/abt-challenge/`, «Antibot Challenge Page»; общая стена «Доступ ограничен»/«verify you are human»), `unsupported_banner` ищет в видимом тексте (без комментариев, скриптов, `noscript`, скрытых поддеревьев) баннер «браузер не поддерживается» RU/EN в начале страницы или на короткой странице, `inspect` объединяет оба, `GateLoop` считает стены сайта за 60 с, `check_id` — ID проверки из сайта, поставщика и минуты (без IP). `RawPage::gate` заполняют оба сетевых конструктора; `lumen/gate.rs::intercept_gate` в `LoadDone`: 3-я стена за минуту — панель `gate_page.rs` («Защита сайта (Cloudflare) не пропускает Lumen», «Открыть в другом браузере», ID проверки, без «Повторить» и смены UA) через `show_static_error_page`; баннер пишется сигналом `unsupported_banner`, петля — `antibot_loop` (журнал `compat_signals.db`, в анонимном профиле не пишется, панель работает и там). Стенд — 19 ответов, каждый с верным типом; 0 ложных на 200+ локальных HTML-страницах. Не сделано: проба с Chrome-профилем для COMPAT-ERR-11/12 (баннер только логируется), кнопка «Сообщить» (нужен канал отчётов). Источник: docs/research/site-compat/report.md §8.4 COMPAT-ERR-10…12"
       },
       {
        "id": "COMPAT-PANEL",
        "title": "Панель «Сайт работает не так?» с лесенкой шагов и «Заработало?»",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Панели нет: щит открывает #permPopover (chrome.html:1266) со счётчиком блокировок, сессионными щитами сайта (shields_panel.rs:111) и разрешениями. Шаги: «без кэша» нет (COMPAT-PANEL-NOCACHE); «сброс сайта» есть (panel_data.rs:79), но только в настройках (chrome.html:1551), без подтверждения и перезагрузки; «без защит на вкладку» невозможен (COMPAT-PANEL-TAB-SHIELDS); «как Chrome» ждёт COMPAT-ID; «другой браузер» — COMPAT-HANDOFF. Объём v1: панель из значка сайта и ПКМ по «Обновить», шаги по цене, через 3 с «Заработало? Да/Нет», «Да» сохраняет правило и пишет fixed_by. Приёмка: любой шаг ≤2 клика; после сброса cookie, localStorage и SW сайта пусты. docs/research/site-compat/report.md §8.2"
+       "note": "**Сделано (2026-10-16, ветка `p1-compat-panel`):** секция «Сайт работает не так?» в `#permPopover` (щит и ПКМ по «Обновить»), шаги «без кэша», «сбросить данные сайта», «другой браузер», через 3 с «Заработало? Да/Нет», «Да» → `fixed_by` в журнале сигналов (`compat_panel.rs`, `lumen/fix_panel.rs`). **Не сделано:** шаг 0 «быстрая проверка», «без защит на вкладку» (COMPAT-PANEL-TAB-SHIELDS), «как Chrome» (COMPAT-ID), отчёт, правило защиты на 30 дней; живой прогон не выполнен (захват gdigrab недоступен вне foreground)."
       },
       {
        "id": "COMPAT-FRUSTRATION",
        "title": "Локальный детектор поломки по поведению с ограничителем подсказок",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Детектора нет. Перезагрузки не считаются (page_load.rs:1030); белый экран считается только для журнала при --health-log (page_load.rs:2112; dom≥20 и 0 отрисованных единиц, health_log.rs:128), в UI не выходит; повторный крах не считается (lumen/crash.rs:28); петля антибота не видна (COMPAT-GATE-DETECT). Объём: локальный детектор (2 перезагрузки URL за 30 с, белый экран через 3 с после загрузки, тот же challenge ≥3 раз за 60 с, повторный крах за 10 с) → чип у адресной строки, ведёт в COMPAT-PANEL; ограничитель ≤1 чип на сайт за 24 ч, ≤3 в день, «Не сейчас» = 7 дней, не во время ввода; 0 сетевых запросов. Приёмка: ≤1 ложное на 50 сессий корпуса. docs/research/site-compat/report.md §8.3"
+       "note": "**Сделано (2026-10-16, ветка `p1-compat-frustration`):** `compat_frustration.rs` (чистая часть, время аргументом): `Frustration` ловит 2 перезагрузки одного URL за 30 с, белый экран через 3 с после установки страницы (`is_blank`: DOM ≥20 узлов и 0 отрисованных единиц), антибот-петлю (`GateLoop`, 3-я стена за 60 с) и второе падение страницы сайта за 10 с; `Limiter`: ≤1 чип на сайт за 24 ч, ≤3 в сутки, «Не сейчас» = 7 суток тишины на сайте, 3 отказа подряд = автоматический чип выключен на 30 суток, клик по чипу обнуляет серию; чип откладывается, пока шла клавиша за последние 2 с, и гаснет на чужом сайте. Память ограничителя — ключ `compat_chip_limiter` в `settings.db` (`BrowserSettings`), стирается «очисткой истории» и «данных сайта». Подключение — `lumen/frustration.rs` (точки: `note_user_reload`, `record_render_health`-места установки страницы, `intercept_gate`, `on_page_crashed`, `handle_key`, `about_to_wait`). Чип `#helpChip` в `.omnibox-actions` (`OmniboxModel::help_chip`), действия `compat-chip-open` (открывает панель COMPAT-PANEL) и `compat-chip-dismiss`. 0 сетевых запросов, анонимный профиль не наблюдается. 20 юнит-тестов (в т. ч. синтетическая сессия из 50 загрузок без ложных чипов); приёмка «≤1 ложное на 50 сессий корпуса» на реальном корпусе не измерялась. Не сделано: слабые сигналы COMPAT-SIG-02 (мёртвые клики, >15 с без отрисовки, копирование URL), «повторное выключение защиты» и «Открыть в …» как триггеры чипа, плашка вместо чипа для COMPAT-SIG-03."
       },
       {
        "id": "COMPAT-REPORT",
        "title": "Отчёт о поломке сайта с предпросмотром, без телеметрии",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Отчёта о поломке нет (0 вхождений в shell и assets/chrome). Объём COMPAT-REP-01…07: явное разовое действие из меню и панели «Сайт работает не так?», работает из приватного окна; причины Firefox + российские (VPN, ГОСТ/ЭП, капча, 3-D Secure), «Другое» последним; обязательный предпросмотр; URL до scheme://host/path, вычистка e-mail, телефонов, токенов, карт; автополя (версии, профиль идентичности, блокировки, правки пакета, нереализованные API, JS-ошибки из health_log.rs, HTTP-коды, издатель TLS), без ID; до приёмника — экспорт в файл или буфер. Приёмка: автотесты REP-03…REP-06 из отчёта зелёные. Этап 1. docs/research/site-compat/report.md §8.6, §10 п.12; areas/07 §6"
+       "note": "**Сделано (2026-10-16, ветка `p1-compat-report`):** отчёт о поломке сайта без телеметрии. `compat_report.rs` (чистая часть): 16 причин (10 из Firefox + 5 российских — VPN, ГОСТ/ЭП, «другой браузер», капча, оплата/3-D Secure — и «Другое» последней, порядок перемешан по seed), `scrub` (e-mail, телефоны, карты, токены, пароли, bearer), `report_url` (`scheme://host/path`; полный адрес — тумблером, тоже вычищенный), `build_report` (версии, профиль идентичности, защиты, блокировки, правки пакета, `fixed_by`, нереализованные API, типы JS-ошибок из health_log, HTTP-коды, издатель TLS; без ID), `known_issue_text` (REP-02), `ReportedSites` (REP-06 дедуп «сайт+день», REP-07 «теперь работает», память в `settings.db`). `report_page.rs` — `about:report` (форма-GET), `about:report-preview` (обязательный предпросмотр), `about:report-done` («что дальше», позиция Chrome). `lumen/report.rs` — сбор автополей, экспорт в файл (Загрузки) или буфер; из приватного окна работает, в обычное не выходит. Вход: кнопка «Сообщить о проблеме…» в панели «Сайт работает не так?» и пункт палитры «Report a Site Problem». Приёмника нет: отчёт уходит только экспортом. Тесты REP-02…REP-07 (27 юнит-тестов) зелёные. **Не сделано:** скриншот в отчёте с маскированием области (тумблер), живой прогон."
       },
       {
        "id": "COMPAT-TRUST-CTLOGS",
@@ -10189,31 +10189,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1359": {
-   "status": "open",
-   "title": "Блок с `overflow:hidden` (BFC) рядом с float сдвигается вправо на ширину float, не пересекающегося с ним по вертикали; в сценарии «float A + float B ниже + BFC-…",
-   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — подбор позиции BFC-бокса среди float)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1360": {
    "status": "open",
    "title": "`position:absolute` с `left/right:auto` в контейнере `direction: rtl`: статическая позиция у левого края (`x=0`), а не у правого (`x=180` в контейнере 200 px, ш…",
    "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1361": {
-   "status": "open",
-   "title": "`position:absolute` внутри непозиционированного `overflow:scroll",
-   "component": "paint/layout (`crates/engine/layout/src/box_tree/`, `crates/engine/paint/src/display_list/` — `PushScrollLayer` охватывает abspos-потомка с containing block снаружи)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1362": {
-   "status": "open",
-   "title": "Анонимные табличные боксы (CSS 2.1 §17.2.1) не строятся: осиротевшие `table-cell`/`table-row` не получают таблицу-обёртку, текст непосредственно в `table`/`tabl…",
-   "component": "layout (`crates/engine/layout/src/box_tree/build.rs`, `table.rs` — анонимных табличных боксов нет: `grep -i anonymous table.rs` пуст)",
    "date": null,
    "debtor": false
   },
@@ -20218,6 +20197,27 @@
    "title": "нативные контролы без пропорции (checkbox/radio/range, `<button>`, текстовые поля, select/textarea) не растягивались в grid-области; UA-размер помечен `width_is…",
    "component": "layout (`grid_trampoline.rs` — `post_final_item`, `ua.rs` — `apply_ua_form_controls`)",
    "date": "2026-10-14",
+   "debtor": false
+  },
+  "BUG-1359": {
+   "status": "fixed",
+   "title": "Блок с `overflow:hidden` (BFC) рядом с float сдвигается вправо на ширину float, не пересекающегося с ним по вертикали; в сценарии «float A + float B ниже + BFC-…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — подбор позиции BFC-бокса среди float)",
+   "date": "2026-10-16",
+   "debtor": false
+  },
+  "BUG-1361": {
+   "status": "fixed",
+   "title": "`position:absolute` внутри непозиционированного `overflow:scroll",
+   "component": "paint/layout (`crates/engine/layout/src/box_tree/`, `crates/engine/paint/src/display_list/` — `PushScrollLayer` охватывает abspos-потомка с containing block снаружи)",
+   "date": "2026-10-16",
+   "debtor": false
+  },
+  "BUG-1362": {
+   "status": "fixed",
+   "title": "Анонимные табличные боксы (CSS 2.1 §17.2.1) не строятся: осиротевшие `table-cell`/`table-row` не получают таблицу-обёртку, текст непосредственно в `table`/`tabl…",
+   "component": "layout (`crates/engine/layout/src/box_tree/build.rs`, `table.rs` — анонимных табличных боксов нет: `grep -i anonymous table.rs` пуст)",
+   "date": "2026-10-16",
    "debtor": false
   }
  },

@@ -46,7 +46,7 @@ pub(crate) fn probe_display(
 /// одного и того же `ComputedStyle`, и повторный проход по каскаду на промахе
 /// кэша стоил бы ровно столько же, сколько первый.
 #[allow(clippy::too_many_arguments)]
-fn probe_display_and_flow(
+pub(super) fn probe_display_and_flow(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,

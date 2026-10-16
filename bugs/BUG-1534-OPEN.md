@@ -6,7 +6,7 @@
 
 ## Симптом
 
-В `display:table-row` с `height:100px` и ячейкой без `height` потомок `height:100%` — 0 (ожидается 100; по CSS Tables 3 §«Percentage heights» высота строки/таблицы, распределённая на ячейку, определена). Когда `height` задан на самой ячейке, потомок `height:50%` считается верно (50). 5 id (`percentage-sizing-of-table-cell-007`, `-children`, `percent-height-overflow-auto-in-*-block-size-cell`, `percent-height-table-cell-child`), ещё 11 id кластера по именам (`percentage-sizing-of-table-cell-children-002…006`, `percent-height-replaced-in-percent-cell-002…004`, `percentages-grandchildren-quirks-mode-*`) этой причиной не объяснены — они строят ячейку без строки (см. [BUG-1362](BUG-1362-OPEN.md)).
+В `display:table-row` с `height:100px` и ячейкой без `height` потомок `height:100%` — 0 (ожидается 100; по CSS Tables 3 §«Percentage heights» высота строки/таблицы, распределённая на ячейку, определена). Когда `height` задан на самой ячейке, потомок `height:50%` считается верно (50). 5 id (`percentage-sizing-of-table-cell-007`, `-children`, `percent-height-overflow-auto-in-*-block-size-cell`, `percent-height-table-cell-child`), ещё 11 id кластера по именам (`percentage-sizing-of-table-cell-children-002…006`, `percent-height-replaced-in-percent-cell-002…004`, `percentages-grandchildren-quirks-mode-*`) этой причиной не объяснены — они строят ячейку без строки (см. [BUG-1362](BUG-1362-FIXED.md)).
 
 ## Проба
 
