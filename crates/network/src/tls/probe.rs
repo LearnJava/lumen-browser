@@ -19,10 +19,10 @@
 //! probe, so the "last seen" slot the verifier docs warn about is never shared
 //! between connections.
 //!
-//! What is *not* measured: the number of SCTs from distinct **operators**.
-//! [`super::ct_logs::KNOWN_LOG_IDS`] is empty (no log → operator table yet), so
-//! the probe reports the distinct SCT **log ids** instead; once the list is
-//! vendored, the operator count is a lookup over [`TlsProbe::sct_log_ids`].
+//! CT is reported two ways: the distinct SCT **log ids** the leaf carries
+//! ([`TlsProbe::sct_log_ids`], whether or not the log is known) and the number
+//! of distinct **operators** whose SCT signature verifies against the bundled
+//! log table ([`TlsProbe::sct_operators`], see [`super::ct::evaluate_ct`]).
 
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
@@ -95,6 +95,9 @@ pub struct TlsProbe {
     pub anchor_name: String,
     /// Distinct embedded-SCT log ids of the leaf, lowercase hex, sorted.
     pub sct_log_ids: Vec<String>,
+    /// Distinct log operators with a valid SCT signature on the leaf (0 when the
+    /// issuer was not sent, so the signatures could not be checked).
+    pub sct_operators: usize,
     /// `good` (stapled, not revoked), `revoked`, or `no_staple`.
     pub revocation: &'static str,
     /// Wall time of the probe.
@@ -117,6 +120,7 @@ impl TlsProbe {
             root_kind: RootKind::Unknown,
             anchor_name: String::new(),
             sct_log_ids: Vec::new(),
+            sct_operators: 0,
             revocation: "no_staple",
             elapsed_ms: 0,
         }
@@ -156,6 +160,7 @@ impl TlsProbe {
         }
         out.push(']');
         out.push_str(&format!(",\"sct_logs\":{}", self.sct_log_ids.len()));
+        out.push_str(&format!(",\"sct_operators\":{}", self.sct_operators));
         out.push_str(",\"sct_log_ids\":[");
         for (i, id) in self.sct_log_ids.iter().enumerate() {
             if i > 0 {
@@ -323,6 +328,8 @@ fn fill_from_seen(p: &mut TlsProbe, seen: &Seen) {
         ids.sort_unstable();
         ids.dedup();
         p.sct_log_ids = ids;
+        p.sct_operators =
+            ct::evaluate_ct(leaf.as_ref(), seen.chain.get(1).map(|c| c.as_ref())).operators();
     }
     p.root_kind = classify_anchor(&seen.chain);
     if let Some(last) = p.chain.last() {
