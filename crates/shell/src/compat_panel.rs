@@ -195,6 +195,7 @@ impl CompatPanel {
     }
 
     /// Вопрос ждёт ответа?
+    #[cfg(test)]
     #[must_use]
     pub fn is_asking(&self) -> bool {
         self.asking.is_some()
