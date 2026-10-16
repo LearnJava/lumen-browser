@@ -58,6 +58,96 @@ fn half_leading_negative_when_line_height_below_font_size() {
     );
 }
 
+// BUG-1370: `vertical-align: <length>|<percentage>` растит строку (CSS 2.1 §10.8.1).
+
+fn va_run_lines(b: &LayoutBox) -> &Vec<Vec<InlineFrag>> {
+    let run = b
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+        .expect("expected InlineRun child");
+    match &run.kind {
+        BoxKind::InlineRun { lines, .. } => lines,
+        _ => unreachable!(),
+    }
+}
+
+/// `y_offset` первого фрагмента строки 0, у которого `vertical-align` удовлетворяет `pred`.
+fn va_y(div: &LayoutBox, pred: impl Fn(&VerticalAlign) -> bool) -> f32 {
+    va_run_lines(div)[0]
+        .iter()
+        .find(|f| pred(&f.style.vertical_align))
+        .map(|f| f.y_offset)
+        .expect("no frag with the requested vertical-align")
+}
+
+#[test]
+fn vertical_align_length_grows_line_box_upward() {
+    // 20px/1: поднятый на 96px бокс выше строки → div 20 + 96, поднятый X на y=0, обычный — на 96.
+    let root = lay_measured(
+        "<div><span style=\"vertical-align:96px\">X</span>X</div>",
+        "div { font-size: 20px; line-height: 1; margin: 0; }",
+        800.0,
+    );
+    let div = first_element_child(&root);
+    assert!((div.rect.height - 116.0).abs() < 0.1, "height {}", div.rect.height);
+    let raised = va_y(div, |v| matches!(v, VerticalAlign::Length(_)));
+    let plain = va_y(div, |v| matches!(v, VerticalAlign::Baseline));
+    assert!(raised.abs() < 0.1, "raised y_offset {raised}");
+    assert!((plain - 96.0).abs() < 0.1, "plain y_offset {plain}");
+}
+
+#[test]
+fn vertical_align_negative_length_grows_line_box_downward() {
+    let root = lay_measured(
+        "<div><span style=\"vertical-align:-30px\">X</span>X</div>",
+        "div { font-size: 20px; line-height: 1; margin: 0; }",
+        800.0,
+    );
+    let div = first_element_child(&root);
+    assert!((div.rect.height - 50.0).abs() < 0.1, "height {}", div.rect.height);
+    let lowered = va_y(div, |v| matches!(v, VerticalAlign::Length(_)));
+    let plain = va_y(div, |v| matches!(v, VerticalAlign::Baseline));
+    assert!((lowered - 30.0).abs() < 0.1, "lowered y_offset {lowered}");
+    assert!(plain.abs() < 0.1, "plain y_offset {plain}");
+}
+
+#[test]
+fn vertical_align_percent_grows_line_box() {
+    // 500 % от line-height (20px) = 100px.
+    let root = lay_measured(
+        "<div><span style=\"vertical-align:500%\">X</span>X</div>",
+        "div { font-size: 20px; line-height: 1; margin: 0; }",
+        800.0,
+    );
+    let div = first_element_child(&root);
+    assert!((div.rect.height - 120.0).abs() < 0.1, "height {}", div.rect.height);
+}
+
+#[test]
+fn vertical_align_top_sticks_to_grown_line_top() {
+    let root = lay_measured(
+        "<div><span style=\"vertical-align:96px\">X</span> <span style=\"vertical-align:top\">X</span>X</div>",
+        "div { font-size: 20px; line-height: 1; margin: 0; }",
+        800.0,
+    );
+    let div = first_element_child(&root);
+    let top = va_y(div, |v| matches!(v, VerticalAlign::Top));
+    assert!(top.abs() < 0.1, "top-aligned y_offset {top}");
+}
+
+#[test]
+fn vertical_align_inside_line_does_not_grow() {
+    // Мелкий бокс с line-height 2 (20px) поднят на 2px и целиком помещается в строку 40px.
+    let root = lay_measured(
+        "<div><span style=\"font-size:10px;vertical-align:2px\">X</span>X</div>",
+        "div { font-size: 20px; line-height: 2; margin: 0; }",
+        800.0,
+    );
+    let div = first_element_child(&root);
+    assert!((div.rect.height - 40.0).abs() < 0.1, "height {}", div.rect.height);
+}
+
 #[test]
 fn half_leading_line_box_height_correct() {
     // line-height: 1.5, font-size: 20px → line_h = 30px.
