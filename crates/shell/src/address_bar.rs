@@ -265,6 +265,15 @@ pub enum OmniboxSuggestion {
         /// enabled» под `#[cfg(not(feature = "ai"))]`.
         answer: String,
     },
+    /// Исправление неверной раскладки (UX-LAYOUT-FIX): ввод, набранный целиком
+    /// в другой раскладке, переведён и дал известный хост/слово. Набранное
+    /// в поле не заменяется; значение подсказки применяется только при выборе.
+    LayoutFix {
+        /// Переведённый текст (`привет`, `vk.com`) — значение при выборе.
+        corrected: String,
+        /// Подпись строки: `Исправлена раскладка: …`.
+        label: String,
+    },
 }
 
 impl OmniboxSuggestion {
@@ -281,6 +290,7 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::Tab { switch_value, .. } => switch_value,
             OmniboxSuggestion::Bookmark { url, .. } => url,
             OmniboxSuggestion::Ai { .. } => "ai-answer:noop",
+            OmniboxSuggestion::LayoutFix { corrected, .. } => corrected,
         }
     }
 
@@ -298,6 +308,7 @@ impl OmniboxSuggestion {
                 if title.is_empty() { url } else { title }
             }
             OmniboxSuggestion::Ai { answer } => answer,
+            OmniboxSuggestion::LayoutFix { label, .. } => label,
         }
     }
 
@@ -325,7 +336,7 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::Bookmark { snippet, url, .. } => {
                 if !snippet.is_empty() { snippet } else { url }
             }
-            OmniboxSuggestion::Ai { .. } => "",
+            OmniboxSuggestion::Ai { .. } | OmniboxSuggestion::LayoutFix { .. } => "",
         }
     }
 
@@ -345,6 +356,7 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::Tab { .. } => "вкладка".to_string(),
             OmniboxSuggestion::Bookmark { .. } => "закладка".to_string(),
             OmniboxSuggestion::Ai { .. } => "ai".to_string(),
+            OmniboxSuggestion::LayoutFix { .. } => "раскладка".to_string(),
         }
     }
 
@@ -359,6 +371,7 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::Tab { .. } => Color { r: 60, g: 150, b: 170, a: 255 },
             OmniboxSuggestion::Bookmark { .. } => Color { r: 200, g: 160, b: 40, a: 255 },
             OmniboxSuggestion::Ai { .. } => Color { r: 150, g: 70, b: 200, a: 255 },
+            OmniboxSuggestion::LayoutFix { .. } => Color { r: 90, g: 160, b: 90, a: 255 },
         }
     }
 }
@@ -1183,6 +1196,35 @@ mod tests {
         let (prefix, q) = parse_omnibox_prefix("@read-later ");
         assert_eq!(prefix, OmniboxPrefix::ReadLater);
         assert_eq!(q, "");
+    }
+
+    #[test]
+    fn layout_fix_does_not_replace_typed_text_and_commits_only_when_selected() {
+        let fix = OmniboxSuggestion::LayoutFix {
+            corrected: "привет".into(),
+            label: "Исправлена раскладка: привет".into(),
+        };
+        assert_eq!(fix.commit_value(), "привет");
+        assert_eq!(fix.label(), "Исправлена раскладка: привет");
+        assert_eq!(fix.sub_label(), "");
+        let mut s = AddressBarState::default();
+        s.open("");
+        s.append_str("ghbdtn");
+        s.set_suggestions(vec![fix]);
+        // Enter без выбора подсказки открывает набранное.
+        s.commit();
+        assert_eq!(s.take_commit(), Some("ghbdtn".to_owned()));
+        // Подсказка выбрана - уходит исправленное.
+        s.open("");
+        s.append_str("ghbdtn");
+        s.set_suggestions(vec![OmniboxSuggestion::LayoutFix {
+            corrected: "привет".into(),
+            label: "Исправлена раскладка: привет".into(),
+        }]);
+        s.select_next();
+        assert_eq!(chrome_omnibox_value(&s, "").0, "привет");
+        s.commit();
+        assert_eq!(s.take_commit(), Some("привет".to_owned()));
     }
 
     #[test]

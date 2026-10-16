@@ -469,6 +469,10 @@ pub struct ChromeFindModel {
     /// `true` when `count_label` is `"ERR"` (invalid regex pattern) — toggles
     /// `#findCount`'s `.error` class ([BUG-419](../../../bugs/BUG-419-FIXED.md)).
     pub error: bool,
+    /// UX-LAYOUT-FIX: запрос, найденный после перевода раскладки (`привет`);
+    /// пусто — перевод не применялся. Непустой показывает `#findFix` со ссылкой
+    /// «искать исходное» (`ChromeAction::FindUseOriginal`).
+    pub layout_fix: String,
 }
 
 /// One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9).
@@ -2404,6 +2408,18 @@ fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
         set_text(doc, count, &find.count_label);
         set_class_token(doc, count, "error", find.error);
     }
+    if let Some(fix) = doc.find_by_id(crate::ids::FIND_FIX) {
+        set_class_token(doc, fix, "open", find.open && !find.layout_fix.is_empty());
+    }
+    if let Some(text) = doc.find_by_id(crate::ids::FIND_FIX_TEXT) {
+        let label = if find.layout_fix.is_empty() { String::new() } else { format!("Показано: «{}»", find.layout_fix) };
+        // An empty `<span>` has no text node yet: `set_text` would append an
+        // empty one on every bind, which the incremental graft counts as a
+        // structural change (BUG-341 gates).
+        if !label.is_empty() || !doc.get(text).children.is_empty() {
+            set_text(doc, text, &label);
+        }
+    }
 }
 
 /// Toggles `#downloadsPanel`'s `.open` class and rebuilds `.dl-card` rows
@@ -4235,6 +4251,7 @@ mod tests {
                 value: "needle".to_owned(),
                 count_label: "2/5".to_owned(),
                 error: false,
+                layout_fix: String::new(),
             },
             ..ChromeModel::default()
         };
@@ -4258,6 +4275,35 @@ mod tests {
     }
 
     #[test]
+    fn find_bar_shows_layout_fix_note_only_when_applied() {
+        let bind = |layout_fix: &str| {
+            let mut doc = parse_asset();
+            let model = ChromeModel {
+                find: ChromeFindModel {
+                    open: true,
+                    value: "ghbdtn".to_owned(),
+                    count_label: "1/1".to_owned(),
+                    error: false,
+                    layout_fix: layout_fix.to_owned(),
+                },
+                ..ChromeModel::default()
+            };
+            bind_model(&mut doc, &model);
+            doc
+        };
+        let doc = bind("привет");
+        let fix = doc.find_by_id(crate::ids::FIND_FIX).expect("asset has #findFix");
+        assert!(has_class(&doc, fix, "open"));
+        let text = doc.find_by_id(crate::ids::FIND_FIX_TEXT).expect("asset has #findFixText");
+        assert_eq!(text_of(&doc, text), "Показано: «привет»");
+        let link = doc.find_by_id(crate::ids::FIND_FIX_ORIGINAL).expect("asset has #findFixOriginal");
+        assert_eq!(doc.get(link).get_attr("data-action"), Some("find-use-original"));
+        let doc = bind("");
+        let fix = doc.find_by_id(crate::ids::FIND_FIX).expect("asset has #findFix");
+        assert!(!has_class(&doc, fix, "open"));
+    }
+
+    #[test]
     fn find_bar_toggles_count_error_class() {
         let mut doc = parse_asset();
         let model = ChromeModel {
@@ -4266,6 +4312,7 @@ mod tests {
                 value: "(".to_owned(),
                 count_label: "ERR".to_owned(),
                 error: true,
+                layout_fix: String::new(),
             },
             ..ChromeModel::default()
         };

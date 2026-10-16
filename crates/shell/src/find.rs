@@ -34,6 +34,9 @@ pub struct FindState {
     active: usize,
     /// Если `true` — запрос интерпретируется как regex-паттерн.
     regex_mode: bool,
+    /// UX-LAYOUT-FIX: пользователь нажал «искать исходное» — перевод запроса в
+    /// другую раскладку больше не подставляется (до следующей правки запроса).
+    keep_original: bool,
 }
 
 impl FindState {
@@ -61,6 +64,17 @@ impl FindState {
         self.open = false;
         self.query.clear();
         self.active = 0;
+        self.keep_original = false;
+    }
+
+    /// «Искать исходное»: не подставлять перевод раскладки для текущего запроса.
+    pub fn keep_original(&self) -> bool {
+        self.keep_original
+    }
+
+    pub fn set_keep_original(&mut self) {
+        self.keep_original = true;
+        self.active = 0;
     }
 
     pub fn append_str(&mut self, s: &str) {
@@ -75,6 +89,7 @@ impl FindState {
         }
         if self.query.len() != before {
             self.active = 0;
+            self.keep_original = false;
         }
     }
 
@@ -84,6 +99,7 @@ impl FindState {
         }
         if self.query.pop().is_some() {
             self.active = 0;
+            self.keep_original = false;
         }
     }
 
@@ -742,6 +758,23 @@ mod tests {
         assert_eq!(s.active_index(), 2);
         s.append_str("c");
         assert_eq!(s.active_index(), 0);
+    }
+
+    #[test]
+    fn keep_original_resets_on_edit_and_close() {
+        let mut s = FindState::default();
+        s.open();
+        s.append_str("ab");
+        s.set_keep_original();
+        assert!(s.keep_original());
+        s.append_str("c");
+        assert!(!s.keep_original());
+        s.set_keep_original();
+        s.backspace();
+        assert!(!s.keep_original());
+        s.set_keep_original();
+        s.close();
+        assert!(!s.keep_original());
     }
 
     #[test]

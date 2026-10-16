@@ -471,6 +471,14 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::Plain => {
+                // UX-LAYOUT-FIX: ввод целиком в чужой раскладке, перевод которого
+                // известен, — первой строкой; набранное не заменяется.
+                if let Some(fix) = layout_fix::suggest(query, |t| self.layout_fix_known(t)) {
+                    suggestions.push(OmniboxSuggestion::LayoutFix {
+                        label: format!("Исправлена раскладка: {}", fix.corrected),
+                        corrected: fix.corrected,
+                    });
+                }
                 // prefix-match по search_history (до 4 строк).
                 if let Ok(queries) = self.search_history.prefix_match(query, 4) {
                     for q in queries {
@@ -510,6 +518,25 @@ impl Lumen {
         }
 
         suggestions
+    }
+
+    /// UX-LAYOUT-FIX: «этот текст пользователь уже встречал» — прошлый поисковый
+    /// запрос, посещённая страница или закладка. Проверка перевода ввода.
+    fn layout_fix_known(&self, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        if self.search_history.prefix_match(text, 1).is_ok_and(|v| !v.is_empty()) {
+            return true;
+        }
+        if self.history_store.search_prefix(text, 1).is_ok_and(|v| !v.is_empty()) {
+            return true;
+        }
+        let needle = text.to_lowercase();
+        self.bookmarks.list_all().is_ok_and(|all| {
+            all.iter().any(|b| b.title.to_lowercase().contains(&needle) || b.url.to_lowercase().contains(&needle))
+        })
     }
 }
 
