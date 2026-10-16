@@ -109,3 +109,16 @@ fn collapsed_margins_survive_a_very_deep_single_child_chain() {
     // so the tree can now drop for real instead of needing `mem::forget` to
     // dodge the (then still recursive) drop glue.
 }
+
+#[test]
+fn collapsed_margins_sum_largest_positive_and_most_negative() {
+    // BUG-1365: -60 / 0 / 20 / -10 along the chain -> 20 + (-60) = -40, both edges.
+    let c3 = block_with_margins(-10.0, -10.0, vec![]);
+    let c2 = block_with_margins(20.0, 20.0, vec![c3]);
+    let c1 = block_with_margins(0.0, 0.0, vec![c2]);
+    let root = block_with_margins(-60.0, -60.0, vec![c1]);
+    let top = collapsed_top_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
+    let bottom = collapsed_bottom_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
+    assert!((top + 40.0).abs() < 0.01, "top={top}");
+    assert!((bottom + 40.0).abs() < 0.01, "bottom={bottom}");
+}
