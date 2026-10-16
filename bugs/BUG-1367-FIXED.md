@@ -1,6 +1,6 @@
 # BUG-1367 — Строка в `content` не разбирается по CSS-экранированию: `\"`, `\A`, `\41` не декодируются, экранированная кавычка обрывает значение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 14, `css/CSS2` (text, linebox, fonts, generated-content, lists, bidi-text))
 **Область:** layout (`crates/engine/layout/src/style/parse/content.rs::parse_content_items` — литерал ищется до первой кавычки, без обработки `\`)
 
@@ -29,3 +29,7 @@ WPT-RUN-14 срез 14: после правки однодвоеточных с�
 ## Как проверить
 
 `css/CSS2/generated-content/content-171.xht`, `content-white-space-001.xht`, `after-content-display-015.xht`.
+
+## Исправление
+
+`content.rs::consume_css_string` — разбор по CSS Syntax L3 §4.3.5: `\`+hex (1–6, + один пробельный) → кодпоинт (0/суррогат/>10FFFF → U+FFFD), `\`+newline → склейка, `\`+символ → он сам; неэкранированный перевод строки обрывает литерал. Тем же разбором пропускаются строки внутри аргументов функций (`attr("a)b")`, `counters(c, ",")` — раньше разделитель с запятой ломался `split(',')`) и декодируются `url()`/`attr()`/разделитель `counters()`. `quotes` уже декодировал экранирование в `parse_css_string_sequence`. Дополнительно `inline_build.rs::push_content_text`: LF из `content` (`\A`) при `white-space: pre/pre-wrap/pre-line/break-spaces` теперь вынуждённый перенос строки, как у DOM-текста. Тесты `style::parse::content::tests::*` (5).
