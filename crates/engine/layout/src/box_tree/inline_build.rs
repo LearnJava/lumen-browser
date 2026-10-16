@@ -1295,7 +1295,7 @@ fn content_to_inline_segments(
         // segment (mirrors the inline-`<img>` path in `collect_inline_segments`).
         if let ContentItem::Url(url) = item {
             if !text.is_empty() {
-                out.push(make_content_text_segment(style, owner_id, std::mem::take(&mut text), kind));
+                push_content_text(&mut out, style, owner_id, std::mem::take(&mut text), kind);
             }
             if !url.is_empty() {
                 let em = style.font_size;
@@ -1358,9 +1358,36 @@ fn content_to_inline_segments(
         }
     }
     if !text.is_empty() {
-        out.push(make_content_text_segment(style, owner_id, text, kind));
+        push_content_text(&mut out, style, owner_id, text, kind);
     }
     out
+}
+
+/// Pushes generated (`content`) text. Under `white-space: pre`/`pre-wrap`/
+/// `pre-line`/`break-spaces` a LF (from `content: "a\A b"`) is a forced line
+/// break (CSS Text L3 §4.1), mirroring the DOM text path: the text is split on
+/// LF into segments separated by empty `forced_break` ones.
+fn push_content_text(
+    out: &mut Vec<InlineSegment>,
+    style: &ComputedStyle,
+    owner_id: NodeId,
+    text: String,
+    pseudo_kind: PseudoKind,
+) {
+    if !style.white_space.preserves_newlines() || !text.contains('\n') {
+        out.push(make_content_text_segment(style, owner_id, text, pseudo_kind));
+        return;
+    }
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            let mut br = make_content_text_segment(style, owner_id, String::new(), pseudo_kind);
+            br.forced_break = true;
+            out.push(br);
+        }
+        if !line.is_empty() {
+            out.push(make_content_text_segment(style, owner_id, line.to_string(), pseudo_kind));
+        }
+    }
 }
 
 /// Builds a plain-text `InlineSegment` for generated (`content`) text.
