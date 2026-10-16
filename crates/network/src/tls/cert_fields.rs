@@ -75,21 +75,26 @@ pub struct LeafFields {
 /// A minimal DER reader over a byte slice, walking tag-length-value triples
 /// left to right. Definite-length only (DER forbids the indefinite form) — a
 /// sibling of the readers in [`super::ct`] and [`super::ocsp`].
-struct Der<'a> {
+pub(super) struct Der<'a> {
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Der<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(super) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }
     }
 
-    fn peek_tag(&self) -> Option<u8> {
+    /// Bytes consumed so far; lets a caller slice out a whole TLV it just read.
+    pub(super) fn consumed(&self) -> usize {
+        self.pos
+    }
+
+    pub(super) fn peek_tag(&self) -> Option<u8> {
         self.bytes.get(self.pos).copied()
     }
 
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.pos >= self.bytes.len()
     }
 
@@ -111,7 +116,7 @@ impl<'a> Der<'a> {
         Some(len)
     }
 
-    fn read_tlv(&mut self) -> Option<(u8, &'a [u8])> {
+    pub(super) fn read_tlv(&mut self) -> Option<(u8, &'a [u8])> {
         let tag = *self.bytes.get(self.pos)?;
         self.pos += 1;
         let len = self.read_length()?;
@@ -123,7 +128,7 @@ impl<'a> Der<'a> {
         Some((tag, contents))
     }
 
-    fn read_tagged(&mut self, tag: u8) -> Option<&'a [u8]> {
+    pub(super) fn read_tagged(&mut self, tag: u8) -> Option<&'a [u8]> {
         let (t, contents) = self.read_tlv()?;
         (t == tag).then_some(contents)
     }
@@ -306,6 +311,22 @@ pub fn issuer_and_subject_der(cert_der: &[u8]) -> Option<(&[u8], &[u8])> {
     tbs.read_tagged(TAG_SEQUENCE)?; // validity
     let subject = tbs.read_tagged(TAG_SEQUENCE)?;
     Some((issuer, subject))
+}
+
+/// The `extnValue` contents of the extension `target_oid` (OID contents, no
+/// header) in a DER certificate — `None` if absent or the certificate is
+/// malformed. Used by [`super::aia`] for Authority Information Access.
+pub(super) fn extension_value<'a>(cert_der: &'a [u8], target_oid: &[u8]) -> Option<&'a [u8]> {
+    let certificate = Der::new(cert_der).read_tagged(TAG_SEQUENCE)?;
+    let tbs = Der::new(certificate).read_tagged(TAG_SEQUENCE)?;
+    let mut tbs = Der::new(tbs);
+    if tbs.peek_tag() == Some(TAG_CONTEXT_0) {
+        tbs.read_tlv()?;
+    }
+    for _ in 0..6 {
+        tbs.read_tlv()?; // serial, signature, issuer, validity, subject, SPKI
+    }
+    find_extension(&mut tbs, target_oid)
 }
 
 /// SHA-256 fingerprint of the whole DER-encoded certificate, formatted as

@@ -20,7 +20,9 @@
 //!   promoted to anchors would let any process add trust without the Windows
 //!   confirmation prompt that `CurrentUser\ROOT` triggers. A proxy that
 //!   re-signs with an intermediate absent from the chain it sends is still
-//!   `UnknownIssuer` — a known gap, solvable only by AIA chasing;
+//!   `UnknownIssuer` — solved by [`super::aia`], which offers the `CA` store's
+//!   certificates as candidate intermediates ([`os_intermediates`]) and, failing
+//!   that, downloads the missing one from the certificate's AIA URL;
 //! - the НУЦ (Russian Trusted Root/Sub CA) roots: a root with such a subject
 //!   found in the OS store is not trusted until COMPAT-TRUST-NUC (ADR-034 п.4,
 //!   a separate decision with CT requirement). See [`is_nuc_subject`].
@@ -162,6 +164,33 @@ pub fn local_root_name(chain: &[CertificateDer<'_>]) -> Option<String> {
     CACHE.get_or_init(|| LocalRoots::from_trust(os_trust())).name_for_chain(chain).map(str::to_owned)
 }
 
+/// Intermediate CA certificates of the OS `CA` store, read once per process
+/// (COMPAT-TRUST-AIA). Unlike [`merge_os_roots`] these are **not** trust
+/// anchors: they are only candidate intermediates [`super::aia`] offers to the
+/// chain builder when a server forgot to send its own, and each still has to
+/// chain to a trusted root — so a user-writable `CA` store grants no trust.
+/// Certificates the administrator put in `Disallowed` are left out.
+pub fn os_intermediates() -> &'static [CertificateDer<'static>] {
+    static CACHE: OnceLock<Vec<CertificateDer<'static>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut certs = read_os_intermediates();
+        let denied = &os_trust().disallowed;
+        certs.retain(|c| !denied.contains(c));
+        certs.dedup();
+        certs
+    })
+}
+
+#[cfg(not(windows))]
+fn read_os_intermediates() -> Vec<CertificateDer<'static>> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn read_os_intermediates() -> Vec<CertificateDer<'static>> {
+    win::read_intermediates()
+}
+
 #[cfg(not(windows))]
 fn read_os_trust() -> OsTrust {
     OsTrust::default()
@@ -200,6 +229,10 @@ mod win {
             trust.disallowed.extend(read_system_store(location, "Disallowed"));
         }
         trust
+    }
+
+    pub(super) fn read_intermediates() -> Vec<CertificateDer<'static>> {
+        LOCATIONS.iter().flat_map(|&location| read_system_store(location, "CA")).collect()
     }
 
     /// All certificates of the system store `name` at `location`; an absent
