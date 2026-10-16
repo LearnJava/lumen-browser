@@ -1636,6 +1636,7 @@ pub(super) fn dispatch_box(
                             used_line_height,
                             grid_baselines: None,
                             fieldset_legend: None,
+                            table_caption_inset: [0.0; 2],
                             subgrid_tracks: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {

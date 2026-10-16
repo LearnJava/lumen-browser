@@ -14,6 +14,9 @@ use lumen_layout::style::WritingMode;
 /// Border box у `<fieldset>` с rendered legend: граница блока-начала опущена на `border_inset`.
 /// `None` — legend не стоит на границе, рамка целая.
 fn shifted_border_rect(b: &LayoutBox) -> Option<Rect> {
+    if let Some(grid) = table_grid_rect(b) {
+        return Some(grid);
+    }
     let fl = b.fieldset_legend.filter(|l| l.placed)?;
     let (r, d) = (b.rect, fl.border_inset);
     Some(match b.style.writing_mode {
@@ -23,8 +26,19 @@ fn shifted_border_rect(b: &LayoutBox) -> Option<Rect> {
     })
 }
 
-/// Бокс для фона, теней и скруглений fieldset'а: тот же, но с опущенной границей блока-начала
-/// и без детей (они здесь не нужны, а клонировать поддерево на каждый кадр незачем).
+/// CSS 2.1 §17.4 — border box самой сетки таблицы: `rect` обёртки без подписей сверху и снизу.
+/// `None` — не таблица или подписей нет.
+fn table_grid_rect(b: &LayoutBox) -> Option<Rect> {
+    let [top, bottom] = b.table_caption_inset;
+    if !matches!(b.kind, BoxKind::Table) || (top <= 0.0 && bottom <= 0.0) {
+        return None;
+    }
+    let r = b.rect;
+    Some(Rect::new(r.x, r.y + top, r.width, (r.height - top - bottom).max(0.0)))
+}
+
+/// Бокс для фона, теней и скруглений fieldset'а (или сетки таблицы с подписями): тот же, но с опущенной
+/// границей блока-начала и без детей (они здесь не нужны, а клонировать поддерево на каждый кадр незачем).
 pub(crate) fn fieldset_decoration_box(b: &LayoutBox) -> Option<LayoutBox> {
     let rect = shifted_border_rect(b)?;
     Some(LayoutBox {
@@ -34,6 +48,7 @@ pub(crate) fn fieldset_decoration_box(b: &LayoutBox) -> Option<LayoutBox> {
         used_padding: None, used_line_height: b.used_line_height,
         grid_baselines: None,
         fieldset_legend: None,
+        table_caption_inset: [0.0; 2],
         subgrid_tracks: None,
         kind: b.kind.clone(),
         children: Vec::new(),
@@ -128,7 +143,7 @@ pub(crate) fn emit_box_border(b: &LayoutBox, radii: CornerRadii, out: &mut Vec<D
         radii,
     };
     let Some((rect, clips)) = legend_border_clips(b) else {
-        out.push(border(b.rect));
+        out.push(border(table_grid_rect(b).unwrap_or(b.rect)));
         return;
     };
     for clip in clips {

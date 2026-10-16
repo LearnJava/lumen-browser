@@ -68,6 +68,7 @@ fn box_self_paint_eq<'a>(
         dirty: _,
         grid_baselines: _,
         fieldset_legend,
+        table_caption_inset,
         subgrid_tracks,
         origin,
     } = a;
@@ -79,6 +80,7 @@ fn box_self_paint_eq<'a>(
         && used_padding.map(|p| p.map(f32::to_bits)) == b.used_padding.map(|p| p.map(f32::to_bits))
         && subgrid_tracks == &b.subgrid_tracks
         && fieldset_legend == &b.fieldset_legend
+        && table_caption_inset.map(f32::to_bits) == b.table_caption_inset.map(f32::to_bits)
         && col_span == &b.col_span
         && row_span == &b.row_span
         && svg_group_transform == &b.svg_group_transform

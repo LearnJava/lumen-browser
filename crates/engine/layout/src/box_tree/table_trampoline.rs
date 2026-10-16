@@ -73,6 +73,8 @@ pub(super) struct TableInit {
     /// Indices (into the table's `children`) of `caption-side: bottom` captions, placed by
     /// `finish_table` once the rows' extent is known.
     pub(super) bottom_captions: Vec<usize>,
+    /// Высота подписей `caption-side: top` (margin box), уже отложенная над сеткой.
+    pub(super) top_caption_h: f32,
     /// Сдвиг содержимого ячеек `middle`/`bottom` по их `vertical-align` — ключ как у
     /// `span_fixes`; `table_height::distribute` снимает его, когда ячейка вырастает.
     pub(super) cell_dy: Vec<(Option<usize>, usize, usize, f32)>,
@@ -525,25 +527,6 @@ fn finish_table(
 
     let s = Arc::clone(&frame.init.s);
 
-    // CSS Tables L2 §17.4 — `caption-side: bottom` captions stack below the last row. Collapse
-    // mode ends at the last row's bottom edge; separate mode at `cur_y` (which already includes
-    // the trailing `border-spacing` slot).
-    let mut bottom_caption_h = 0.0_f32;
-    if !frame.init.bottom_captions.is_empty() {
-        let grid_bottom = if frame.init.collapse {
-            frame.init.flat_row_rects.last().map_or(frame.init.cur_y, |&(y, h)| y + h)
-        } else {
-            frame.init.cur_y
-        };
-        let (x, w, pcb) = (frame.init.content_x, frame.init.content_width, frame.init.children_pcb);
-        for k in 0..frame.init.bottom_captions.len() {
-            let idx = frame.init.bottom_captions[k];
-            let y = grid_bottom + bottom_caption_h;
-            bottom_caption_h +=
-                super::table::lay_out_caption(&mut frame.b.children[idx], x, y, w, measurer, viewport, pcb, hp);
-        }
-    }
-
     if frame.init.collapse && s.width.is_none() && frame.init.n_cols > 0 {
         frame.b.rect.width = frame.init.collapse_width;
     }
@@ -551,6 +534,27 @@ fn finish_table(
     if frame.init.collapse && frame.init.n_cols > 0 {
         widen_for_outer_group_borders(frame);
     }
+
+    // CSS 2.1 §17.4 — `caption-side: bottom` captions stack below the table's border box, i.e.
+    // below the last row plus the table's bottom padding and border. Collapse mode ends at the
+    // last row's bottom edge (the border is shared with the cells, padding does not apply);
+    // separate mode at `cur_y` (which already includes the trailing `border-spacing` slot).
+    let mut bottom_caption_h = 0.0_f32;
+    if !frame.init.bottom_captions.is_empty() {
+        let grid_bottom = if frame.init.collapse {
+            frame.init.flat_row_rects.last().map_or(frame.init.cur_y, |&(y, h)| y + h)
+        } else {
+            frame.init.cur_y + frame.init.padding_bottom + s.border_bottom_width
+        };
+        let (x, w, pcb) = (frame.b.rect.x, frame.b.rect.width, frame.init.children_pcb);
+        for k in 0..frame.init.bottom_captions.len() {
+            let idx = frame.init.bottom_captions[k];
+            let y = grid_bottom + bottom_caption_h;
+            bottom_caption_h +=
+                super::table::lay_out_caption(&mut frame.b.children[idx], x, y, w, measurer, viewport, pcb, hp);
+        }
+    }
+    frame.b.table_caption_inset = [frame.init.top_caption_h, bottom_caption_h];
 
     place_column_boxes(frame);
 

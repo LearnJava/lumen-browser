@@ -53,6 +53,12 @@ pub struct LayoutBox {
     /// HTML Rendering §15.3.13 — у `<fieldset>` с «rendered legend»: какой из `children` им
     /// является и как он лёг. `None` — не fieldset или legend нет.
     pub fieldset_legend: Option<FieldsetLegend>,
+    /// CSS 2.1 §17.4 — у `display: table` с подписями: высота подписей `caption-side: top` и
+    /// `bottom` (margin box) в px. Блок таблицы здесь — обёртка и сетка в одном, подписи лежат
+    /// в его `rect`, а фон, тени и рамка принадлежат только сетке: `rect` минус эти отступы
+    /// сверху и снизу. `[0.0; 2]` — подписей нет. Относительная величина, при сдвиге поддерева
+    /// не меняется.
+    pub table_caption_inset: [f32; 2],
     /// Унаследованные дорожки `subgrid`-контейнера (Grid L2 §9) — для щелей `column-rule`/`row-rule`
     /// (CSS Gap Decorations L1), которые идут по дорожкам родителя. `None` — не subgrid.
     pub subgrid_tracks: Option<Box<crate::subgrid::SubgridTracks>>,
