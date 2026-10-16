@@ -387,7 +387,7 @@ impl BrowserSettings {
     }
 
     /// Sites the user sent a breakage report about (COMPAT-REPORT): an opaque line-based text
-    /// owned by the shell (`site	day	pack revision	notified`). Local only, no client id.
+    /// owned by the shell (`site day pack revision notified`). Local only, no client id.
     pub fn compat_reported_sites(&self) -> String {
         self.get_str(KEY_COMPAT_REPORTED, "")
     }

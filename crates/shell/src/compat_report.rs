@@ -7,11 +7,12 @@
 //! Отчёт — разовое действие пользователя: он не читает настроек телеметрии, не
 //! несёт стабильного идентификатора клиента и не попадает в контекст страницы.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
 use lumen_update_manifest::compat_pack::{Action, CompatEntry};
-use regex::{Captures, Regex};
+use regex::{Captures, Regex, Replacer};
 use serde_json::{json, Value};
 
 /// Версия формата отчёта (поле `format`).
@@ -156,8 +157,23 @@ pub fn shuffled_reasons(seed: u64) -> Vec<Reason> {
 
 // ── Очистка (REP-04) ─────────────────────────────────────────────────────────
 
-fn cached<'a>(cell: &'a OnceLock<Regex>, pattern: &str) -> &'a Regex {
-    cell.get_or_init(|| Regex::new(pattern).expect("шаблон очистки компилируется"))
+/// Регулярное выражение из статического шаблона; некомпилируемый шаблон даёт `None`
+/// (текст остаётся как есть), а не панику.
+fn cached<'a>(cell: &'a OnceLock<Option<Regex>>, pattern: &str) -> Option<&'a Regex> {
+    cell.get_or_init(|| Regex::new(pattern).ok()).as_ref()
+}
+
+/// `replace_all` по кэшированному шаблону.
+fn sub<'t, R: Replacer>(
+    cell: &OnceLock<Option<Regex>>,
+    pattern: &str,
+    text: &'t str,
+    rep: R,
+) -> Cow<'t, str> {
+    match cached(cell, pattern) {
+        Some(re) => re.replace_all(text, rep),
+        None => Cow::Borrowed(text),
+    }
 }
 
 fn digit_count(s: &str) -> usize {
@@ -168,21 +184,22 @@ fn digit_count(s: &str) -> usize {
 /// телефоны. Лишнее лучше вычистить, чем оставить: отчёт читает человек.
 #[must_use]
 pub fn scrub(text: &str) -> String {
-    static EMAIL: OnceLock<Regex> = OnceLock::new();
-    static SECRET: OnceLock<Regex> = OnceLock::new();
-    static BEARER: OnceLock<Regex> = OnceLock::new();
-    static TOKEN: OnceLock<Regex> = OnceLock::new();
-    static CARD: OnceLock<Regex> = OnceLock::new();
-    static PHONE: OnceLock<Regex> = OnceLock::new();
+    static EMAIL: OnceLock<Option<Regex>> = OnceLock::new();
+    static SECRET: OnceLock<Option<Regex>> = OnceLock::new();
+    static BEARER: OnceLock<Option<Regex>> = OnceLock::new();
+    static TOKEN: OnceLock<Option<Regex>> = OnceLock::new();
+    static CARD: OnceLock<Option<Regex>> = OnceLock::new();
+    static PHONE: OnceLock<Option<Regex>> = OnceLock::new();
 
-    let s = cached(&EMAIL, r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+").replace_all(text, "[e-mail]");
-    let s = cached(
+    let s = sub(&EMAIL, r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+", text, "[e-mail]");
+    let s = sub(
         &SECRET,
         r"(?i)\b(token|secret|password|passwd|pwd|api[_-]?key|access[_-]?token|auth|session|sid|пароль|токен|код)\s*[:=]\s*\S+",
-    )
-    .replace_all(&s, "$1=[скрыто]");
-    let s = cached(&BEARER, r"(?i)\bbearer\s+\S+").replace_all(&s, "bearer [скрыто]");
-    let s = cached(&TOKEN, r"[A-Za-z0-9_\-+=]{24,}").replace_all(&s, |c: &Captures<'_>| {
+        &s,
+        "$1=[скрыто]",
+    );
+    let s = sub(&BEARER, r"(?i)\bbearer\s+\S+", &s, "bearer [скрыто]");
+    let s = sub(&TOKEN, r"[A-Za-z0-9_\-+=]{24,}", &s, |c: &Captures<'_>| {
         let word = &c[0];
         let has_digit = word.bytes().any(|b| b.is_ascii_digit());
         let has_letter = word.bytes().any(|b| b.is_ascii_alphabetic());
@@ -192,14 +209,14 @@ pub fn scrub(text: &str) -> String {
             word.to_owned()
         }
     });
-    let s = cached(&CARD, r"(?:\d[ \-]?){12,18}\d").replace_all(&s, |c: &Captures<'_>| {
+    let s = sub(&CARD, r"(?:\d[ \-]?){12,18}\d", &s, |c: &Captures<'_>| {
         if (13..=19).contains(&digit_count(&c[0])) {
             "[карта]".to_owned()
         } else {
             c[0].to_owned()
         }
     });
-    let s = cached(&PHONE, r"\+?\d[\d\s().\-]{8,}\d").replace_all(&s, |c: &Captures<'_>| {
+    let s = sub(&PHONE, r"\+?\d[\d\s().\-]{8,}\d", &s, |c: &Captures<'_>| {
         if digit_count(&c[0]) >= 10 {
             "[телефон]".to_owned()
         } else {
@@ -388,8 +405,8 @@ pub fn count_names<I: IntoIterator<Item = String>>(names: I) -> Vec<Counted> {
 /// Тип исключения JS из текста консоли (`Uncaught TypeError: …` → `TypeError`).
 #[must_use]
 pub fn js_error_type(message: &str) -> Option<String> {
-    static TYPE: OnceLock<Regex> = OnceLock::new();
-    let re = cached(&TYPE, r"\b([A-Z][A-Za-z]*(?:Error|Exception))\b");
+    static TYPE: OnceLock<Option<Regex>> = OnceLock::new();
+    let re = cached(&TYPE, r"\b([A-Z][A-Za-z]*(?:Error|Exception))\b")?;
     re.captures(message).map(|c| c[1].to_owned())
 }
 
@@ -545,12 +562,6 @@ impl ReportedSites {
             }
         }
         fixed
-    }
-
-    /// Сколько сайтов запомнено.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.items.len()
     }
 
     /// Ничего не запомнено.
@@ -765,7 +776,7 @@ mod tests {
         assert!(!log.reported_on("other.ru", 100));
         // Повторная запись по сайту не плодит строк.
         log.record("bank.ru", 101, 4);
-        assert_eq!(log.len(), 1);
+        assert!(!log.is_empty());
     }
 
     #[test]

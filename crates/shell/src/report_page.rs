@@ -269,7 +269,8 @@ mod tests {
     #[test]
     fn known_issue_is_shown_above_the_form() {
         let order = shuffled_reasons(1);
-        let mut v = view(&order, &Draft::default());
+        let draft = Draft::default();
+        let mut v = view(&order, &draft);
         v.known = Some("Мы знаем об этой проблеме: капча зацикливается (BUG-1)");
         let html = build_form_html(&v);
         let known = html.find("Мы знаем об этой проблеме").expect("сообщение есть");
@@ -279,7 +280,8 @@ mod tests {
     #[test]
     fn non_site_page_has_no_form() {
         let order = shuffled_reasons(1);
-        let mut v = view(&order, &Draft::default());
+        let draft = Draft::default();
+        let mut v = view(&order, &draft);
         v.no_site = true;
         assert!(!build_form_html(&v).contains("<form"));
     }
