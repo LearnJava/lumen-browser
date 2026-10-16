@@ -1165,20 +1165,24 @@ impl Lumen {
             Arc::new(lumen_storage::CookieJar::open_in_memory().expect("anonymous_cookie_jar reset"));
     }
 
-    /// COMPAT-PRIVACY-UNBREAK-LOCALE: `Accept-Language` and `navigator.languages`
-    /// follow the active profile — the OS list in Personal/Work, `en-US` in
-    /// Anonymous. COMPAT-PRIVACY-UNBREAK-NOISE: the canvas / audio noise secret
-    /// follows it too. Call after the active profile changed and once at startup.
+    /// COMPAT-PRIVACY-UNBREAK-LOCALE / -PROFILE: `Accept-Language`,
+    /// `navigator.languages` and the time zone follow the active profile's
+    /// identity mode — the OS list and zone in Personal/Work, `en-US` and UTC
+    /// in Anonymous and Guest — from the next navigation (every page reads the
+    /// process-global values when its JS context starts).
+    /// COMPAT-PRIVACY-UNBREAK-NOISE: the canvas / audio noise secret follows the
+    /// profile too. Call after the active profile changed and once at startup.
     pub(crate) fn sync_profile_locale(&self) {
-        let anonymous = self.active_profile_is_anonymous();
+        let crowd = self.active_profile_is_crowd();
         #[cfg(feature = "v8")]
         {
-            crate::config::global().install_navigator_for(anonymous);
+            let anonymous = self.active_profile_is_anonymous();
+            crate::config::global().install_navigator_for(crowd);
             let id = self.profile_menu.active_entry().map(|e| e.id);
             crate::config::global().install_noise(anonymous, id);
         }
         #[cfg(not(feature = "v8"))]
-        crate::config::global().install_accept_language(anonymous);
+        crate::config::global().install_accept_language(crowd);
     }
 
     /// UX-PERMISSIONS-3: Anonymous decides into a fresh in-memory store (as

@@ -67,6 +67,32 @@ pub fn is_guest(name: &str) -> bool {
     name == DEFAULT_PROFILES[3].0
 }
 
+/// How a profile presents its locale to sites (COMPAT-PRIVACY-UNBREAK-PROFILE,
+/// COMPAT-ID-05): `Accept-Language`, `navigator.languages`, the time zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityMode {
+    /// The language list and the time zone of the operating system — what
+    /// Edge on the same machine sends. A bank or a mail service sees the
+    /// usual device.
+    System,
+    /// The shared "crowd" value: `en-US, en` and UTC — one value for everyone
+    /// in the mode, so it hides the user's region (Anonymous, Guest).
+    Crowd,
+}
+
+/// The identity mode of the profile called `name`: Anonymous and Guest are
+/// [`IdentityMode::Crowd`], Personal, Work and any other profile follow the
+/// system. Matched by name like [`is_anonymous`] — the seeded four have no
+/// rename UI.
+#[must_use]
+pub fn identity_mode(name: &str) -> IdentityMode {
+    if is_anonymous(name) || is_guest(name) {
+        IdentityMode::Crowd
+    } else {
+        IdentityMode::System
+    }
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// One profile row as rendered in the dropdown.
@@ -234,6 +260,30 @@ mod tests {
         assert!(is_guest("Гость"));
         assert!(!is_guest("Личный"));
         assert!(!is_guest("Анонимный"));
+    }
+
+    // ── COMPAT-PRIVACY-UNBREAK-PROFILE: identity mode ────────────────────────
+
+    #[test]
+    fn identity_mode_is_crowd_only_for_anonymous_and_guest() {
+        assert_eq!(identity_mode("Личный"), IdentityMode::System);
+        assert_eq!(identity_mode("Рабочий"), IdentityMode::System);
+        assert_eq!(identity_mode("Анонимный"), IdentityMode::Crowd);
+        assert_eq!(identity_mode("Гость"), IdentityMode::Crowd);
+        assert_eq!(identity_mode("Кастомный"), IdentityMode::System);
+    }
+
+    /// The one-line warning of the Anonymous and Guest profiles (COMPAT-CRIT-05).
+    /// It lives in `assets/chrome/chrome.html` as `.pm-note` in `#profileMenu`
+    /// and `#profileMenuH`; CSS shows it under `body[data-profile=anonymous|guest]`.
+    const CROWD_PROFILE_WARNING: &str =
+        "Банки и вход через Microsoft или Google могут просить дополнительное подтверждение";
+
+    #[test]
+    fn chrome_html_carries_the_crowd_warning_in_both_menus() {
+        let html = include_str!("../../../../assets/chrome/chrome.html");
+        let notes = html.matches(&format!(r#"<div class="pm-note">{CROWD_PROFILE_WARNING}</div>"#)).count();
+        assert_eq!(notes, 2, "`#profileMenu` and `#profileMenuH` each need the warning line");
     }
 
     // ── CC-6: `data-profile` slug lookup ─────────────────────────────────────
