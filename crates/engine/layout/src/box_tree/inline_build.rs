@@ -1281,7 +1281,7 @@ fn content_to_inline_segments(
         QuoteSlot::Before => PseudoKind::Before,
         QuoteSlot::After => PseudoKind::After,
     };
-    let snap = counters.counters(owner_id);
+    let snap = counters.counters_for(owner_id, slot);
     let qdepths = counters.quote_depths(owner_id, slot);
     let mut qi = 0usize;
     let mut out: Vec<InlineSegment> = Vec::new();
