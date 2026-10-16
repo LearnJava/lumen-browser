@@ -1,6 +1,6 @@
 # BUG-1362 — Анонимные табличные боксы (CSS 2.1 §17.2.1) не строятся: осиротевшие `table-cell`/`table-row` не получают таблицу-обёртку, текст внутри `table`/`row` пропадает
 
-**Статус:** OPEN (ДОРАБОТКА → TABLE-ANON)
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/build.rs`, `table.rs` — `grep -i anonymous table.rs` пуст; в `build.rs:1011` — «Tables keep their own anonymous-box rules (text → anonymous cell)», но кода нет)
 
@@ -35,3 +35,9 @@ WPT-RUN-14 срез 13: 153 id `tables/table-anonymous-objects-*` (все 153 `t
 ## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
 
 `css/css-tables`: 18 id строят ячейку без строки (`display:table-cell` прямо в `display:table`/`div`) — `absolute-tables-001`, `dynamic-table-cell-height`, `fixup-dynamic-anonymous-*`, `percentage-sizing-of-table-cell-children-002…006`, `percent-height-replaced-in-percent-cell-002…004`, `percentages-grandchildren-quirks-mode-*`, `subpixel-table-cell-width-*`. Проба (`--mcp`): `display:table` > `display:table-cell{width:50px;height:30px}` — таблица 1024×0, ячейка 0×0; через `table-row` — 50×30.
+
+## Исправление
+
+Новый проход `crates/engine/layout/src/box_tree/table_anon.rs::fix_children` (CSS 2.1 §17.2.1), вызывается из `build_box_inner` после сборки детей контейнера: (1) пробельный текст сюда не доходит — билдер его уже отбрасывает; (2) в `table`/`row-group`/`row` «чужие» дети (подряд идущие) оборачиваются в анонимные `row`/`cell`; (3) осиротевшие `table-cell`/`row`/`row-group`/`caption` в нетабличном родителе оборачиваются вместе с соседями в одну анонимную `table`. `build.rs`: `table`/`row-group`/`row` остаются item-контейнером, только пока все дети — правильные табличные дети; иначе идут блочным путём (текст/inline собираются в runs), затем `fix_children`. Исключены out-of-flow дети, `<legend>` fieldset, flex/grid-контейнеры и `colgroup`/`col`. Правильное дерево (любой настоящий `<table>`) проходит проход за один скан без изменений.
+
+Тесты: `box_tree::tests::table_anon::*` (6). `graphic_tests/dump_golden.py` — все 12 дампов без расхождений. Остаток WPT (`table-anonymous-objects-*`, 78 id с JS в `onload`) сверять отдельным срезом WPT-RUN.
