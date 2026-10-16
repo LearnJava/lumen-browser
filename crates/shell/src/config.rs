@@ -512,6 +512,14 @@ impl FingerprintProfile {
             client = client.with_socks5_proxy(std::sync::Arc::new(s5));
         }
 
+        // COMPAT-TRUST-AIA: downloading a missing intermediate is a direct
+        // connection, which a proxy or Tor user must not get behind their back.
+        // Only ever switched off here: a later client built without a proxy
+        // (another profile) must not turn it back on for this process.
+        if self.proxy.is_some() || self.effective_socks5_proxy().is_some() {
+            lumen_network::tls::aia::set_enabled(false);
+        }
+
         // Wire the shared cross-navigation HTTP cache (RFC 7234). One cache is
         // shared by every client via `Arc`, so subresources fetched on one
         // navigation are served from cache (or revalidated with 304) on the next

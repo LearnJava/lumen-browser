@@ -45,7 +45,7 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
-use super::{bypass, ct, failure};
+use super::{aia, bypass, ct, failure};
 use super::ocsp::{self, OcspVerdict};
 
 /// Render a rustls `ServerName` down to the plain hostname string
@@ -128,6 +128,43 @@ impl LumenVerifier {
     }
 }
 
+impl LumenVerifier {
+    /// Re-run the webpki verification after finding the issuers the server left out
+    /// (COMPAT-TRUST-AIA). Each round looks up the issuer of the chain's top certificate —
+    /// [`aia::Aia::issuers_of`] — and verifies again; it stops at the first outcome other
+    /// than `UnknownIssuer`. Returns that outcome with every certificate found, or `None`
+    /// when no issuer could be found at all (the caller keeps its `UnknownIssuer`).
+    fn verify_with_issuers(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Option<(Result<ServerCertVerified, RustlsError>, Vec<CertificateDer<'static>>)> {
+        let mut pool: Vec<CertificateDer<'_>> = intermediates.to_vec();
+        let mut found: Vec<CertificateDer<'static>> = Vec::new();
+        let mut result = None;
+        for _ in 0..aia::MAX_LOOKUPS {
+            let top = aia::chain_top(end_entity.as_ref(), &pool)?.to_vec();
+            let issuers: Vec<_> =
+                aia::global().issuers_of(&top).into_iter().filter(|c| !pool.contains(c)).collect();
+            if issuers.is_empty() {
+                break;
+            }
+            pool.extend(issuers.iter().cloned());
+            found.extend(issuers);
+            let attempt = self.inner.verify_server_cert(end_entity, &pool, server_name, ocsp_response, now);
+            let again = matches!(&attempt, Err(RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)));
+            result = Some(attempt);
+            if !again {
+                break;
+            }
+        }
+        result.map(|r| (r, found))
+    }
+}
+
 /// Combine webpki's chain verdict, the stapled-OCSP verdict and the user's
 /// "Proceed anyway" override into the handshake result.
 ///
@@ -175,9 +212,27 @@ impl ServerCertVerifier for LumenVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, RustlsError> {
-        let chain_result =
+        let mut chain_result =
             self.inner
                 .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
+        // COMPAT-TRUST-AIA: a server that did not send its intermediate. Look the missing
+        // certificates up (OS `CA` store, then the leaf's AIA URL) and verify again; the
+        // extended list also feeds the CT check below.
+        let mut found_intermediates = Vec::new();
+        let unknown_issuer =
+            matches!(&chain_result, Err(RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)));
+        if unknown_issuer
+            && aia::enabled()
+            && let Some((result, found)) =
+                self.verify_with_issuers(end_entity, intermediates, server_name, ocsp_response, now)
+        {
+            chain_result = result;
+            found_intermediates = found;
+        }
+        let sent_count = intermediates.len();
+        let full_chain: Vec<CertificateDer<'_>> =
+            intermediates.iter().cloned().chain(found_intermediates).collect();
+        let intermediates = full_chain.as_slice();
         // A3: layer the stapled-OCSP revocation check on top of webpki's chain trust.
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
         let ocsp_verdict = ocsp::parse_stapled_response(ocsp_response);
@@ -189,9 +244,10 @@ impl ServerCertVerifier for LumenVerifier {
         }
         if result.is_err() {
             // COMPAT-TRUST-CAUSES: the chain is gone once rustls reports the
-            // bare reason, so keep what the cause classifier needs.
+            // bare reason, so keep what the cause classifier needs — the chain
+            // as the server sent it, not as completed from AIA.
             let mut chain = vec![end_entity.clone()];
-            chain.extend(intermediates.iter().cloned());
+            chain.extend(intermediates.iter().take(sent_count).cloned());
             let now_unix = i64::try_from(now.as_secs()).unwrap_or(i64::MAX);
             failure::record(&server_name_host(server_name), failure::summarize(&chain, &self.anchor_subjects, now_unix));
         }
@@ -307,5 +363,64 @@ mod tests {
             panic!("expected CertError::Other");
         };
         assert!(text.contains("0 log operator(s), 2 required"), "{text}");
+    }
+
+    // ── COMPAT-TRUST-AIA ────────────────────────────────────────────────────
+
+    use super::super::aia::tests::{
+        pem_to_der, serve, INTERMEDIATE_DER, INTERMEDIATE_P7C, LEAF_P7C_PEM, LEAF_PEM, ROOT_PEM, TEST_ADDR,
+    };
+
+    /// A verifier that trusts the AIA fixtures' root and nothing else.
+    fn aia_verifier(trust_root: bool) -> Arc<LumenVerifier> {
+        let mut store = RootCertStore::empty();
+        if trust_root {
+            store.add(CertificateDer::from(pem_to_der(ROOT_PEM))).expect("fixture root");
+        } else {
+            store.roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().take(1).cloned());
+        }
+        LumenVerifier::new(store, &provider()).expect("verifier")
+    }
+
+    fn verify_leaf(verifier: &LumenVerifier, leaf_pem: &str, sent: &[CertificateDer<'_>]) -> Result<ServerCertVerified, RustlsError> {
+        let leaf = CertificateDer::from(pem_to_der(leaf_pem));
+        let name = ServerName::try_from("aia.test").expect("name");
+        verifier.verify_server_cert(&leaf, sent, &name, &[], UnixTime::now())
+    }
+
+    #[test]
+    fn aia_completes_a_chain_without_the_intermediate_and_caches_it() {
+        let (addr, hits) = serve("200 OK", INTERMEDIATE_DER.to_vec());
+        TEST_ADDR.with(|a| a.set(Some(addr)));
+        let verifier = aia_verifier(true);
+        assert!(verify_leaf(&verifier, LEAF_PEM, &[]).is_ok());
+        assert!(verify_leaf(&verifier, LEAF_PEM, &[]).is_ok(), "second visit");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "second visit must not download");
+    }
+
+    #[test]
+    fn aia_accepts_a_pkcs7_response() {
+        let (addr, hits) = serve("200 OK", INTERMEDIATE_P7C.to_vec());
+        TEST_ADDR.with(|a| a.set(Some(addr)));
+        assert!(verify_leaf(&aia_verifier(true), LEAF_P7C_PEM, &[]).is_ok());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn aia_does_not_trust_what_it_downloads() {
+        // The intermediate is found, but its root is not a trust anchor here.
+        let (addr, hits) = serve("200 OK", INTERMEDIATE_DER.to_vec());
+        TEST_ADDR.with(|a| a.set(Some(addr)));
+        let err = verify_leaf(&aia_verifier(false), include_str!("testdata/aia/leaf3.pem"), &[]).unwrap_err();
+        assert!(matches!(err, RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)), "{err:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_chain_the_server_sent_in_full_never_touches_the_network() {
+        // Nothing listens: a fetch would fail the test by timing out, not by an assert.
+        TEST_ADDR.with(|a| a.set(Some("127.0.0.1:1".parse().expect("addr"))));
+        let sent = [CertificateDer::from(INTERMEDIATE_DER.to_vec())];
+        assert!(verify_leaf(&aia_verifier(true), LEAF_PEM, &sent).is_ok());
     }
 }
