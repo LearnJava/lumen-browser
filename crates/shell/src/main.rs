@@ -132,6 +132,7 @@ mod compat_indicator;
 mod import_manager;
 mod translate_manager;
 mod find;
+mod layout_fix;
 mod frame_ancestry;
 mod frame_dynamic_load;
 mod frame_lazy;

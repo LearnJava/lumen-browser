@@ -806,6 +806,9 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 }
 .find-bar.open{ display:flex; }
 .find-bar input{ border:none; outline:none; background:none; width:150px; font-size:12px; }
+.find-fix{ display:none; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary); flex:none; }
+.find-fix.open{ display:flex; }
+.find-fix a{ color:var(--accent); text-decoration:underline; }
 .find-count{ font-size:11px; color:var(--text-secondary); flex:none; }
 .find-count.error{ color:var(--red-badge); }
 .find-bar button{ width:22px; height:22px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; }
@@ -1664,6 +1667,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <!-- Find bar -->
           <div class="find-bar" id="findBar">
             <input id="findInput" placeholder="Найти на странице">
+            <span class="find-fix" id="findFix"><span id="findFixText"></span><a id="findFixOriginal" data-action="find-use-original">искать исходное</a></span>
             <span class="find-count" id="findCount">0/0</span>
             <button title="Вверх">↑</button>
             <button title="Вниз">↓</button>
