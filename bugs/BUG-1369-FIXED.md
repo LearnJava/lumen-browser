@@ -1,6 +1,6 @@
 # BUG-1369 — `line-height` меньше высоты глифов: отрицательное полу-ведущее отбрасывается, глиф не поднимается над строкой
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 14, `css/CSS2` (text, linebox, fonts, generated-content, lists, bidi-text))
 **Область:** layout (`crates/engine/layout/src/box_tree/` — выбор базовой линии/вертикального положения сегмента в строке при `line-height` < content-area шрифта)
 
@@ -27,3 +27,7 @@ WPT-RUN-14 срез 14: `linebox/line-height-*` (41 id): тест — квадр
 ## Как проверить
 
 `css/CSS2/linebox/line-height-002.xht`, `line-height-003.xht`, `line-height-004.xht`.
+
+## Исправление
+
+`apply_inline_vertical_align` (`box_tree/inline_wrap.rs`) больше не зажимает half-leading снизу нулём: при `line-height` меньше content area оно отрицательное (`(line_h − font_size) / 2`), и `baseline`-фрагмент (а также `sub`/`super`/`<length>`/`<percentage>`, которые отсчитываются от него) поднимается над верхом строки. То же для маркера `text-overflow: <string>`. Зонд из «Симптома»: `y` `DrawText` = `-10.00` / `50.50` / `131.00`. `top`/`bottom`/`middle` по-прежнему прижимаются к краям строки. Тест: `half_leading_negative_when_line_height_below_font_size`.

@@ -1387,7 +1387,8 @@ pub(crate) fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h:
             // frag_h: content area height ≈ font-size (ascent + descent for normal line-height).
             let frag_h = frag.style.font_size;
             // CSS 2.1 §10.8.1: half-leading pushes content area away from line-box edges.
-            let half_leading = ((line_h - frag_h) / 2.0).max(0.0);
+            // Отрицательное при line-height < content area — глиф выступает над строкой.
+            let half_leading = (line_h - frag_h) / 2.0;
             frag.y_offset = match frag.style.vertical_align {
                 // Baseline: content area centred via half-leading (top = half_leading).
                 VerticalAlign::Baseline => half_leading,
@@ -1613,7 +1614,7 @@ pub(crate) fn apply_text_overflow_string(
         e.x = end_x;
         e.width = marker_w;
         // Same half-leading as `apply_inline_vertical_align` gives a baseline-aligned frag.
-        e.y_offset = ((line_h - block_style.font_size) / 2.0).max(0.0);
+        e.y_offset = (line_h - block_style.font_size) / 2.0;
         e.padding_left = 0.0;
         e.padding_right = 0.0;
         e.is_element_box = false;
