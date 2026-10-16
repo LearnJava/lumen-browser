@@ -219,6 +219,9 @@ const MEDIA_SOURCE_SHIM: &str = include_str!("shim/media_source.js");
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает только тело `#[test]`
+    // (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use std::sync::{Arc, Mutex};
 
     use lumen_core::JsValue;
@@ -264,6 +267,13 @@ mod tests {
         }
     }
 
+    /// Как оболочка: тик таймеров и насосы медиа-элементов.
+    fn pump(rt: &V8JsRuntime) {
+        for _ in 0..6 {
+            rt.eval("_lumen_tick_timers(); if (typeof _lumen_pump_media === 'function') _lumen_pump_media();").unwrap();
+        }
+    }
+
     fn frag_mp4_as_js() -> String {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/media-demux/tests/data/frag.mp4");
         let bytes = std::fs::read(path).unwrap();
@@ -305,6 +315,91 @@ mod tests {
         assert_eq!(rt.eval("MediaSource.isTypeSupported('')").unwrap(), JsValue::Bool(false));
         clear_video_decoder();
         assert_eq!(rt.eval("MediaSource.isTypeSupported('video/mp4')").unwrap(), JsValue::Bool(false));
+    }
+
+    /// Роль оболочки (`mse_sessions.rs`): завести `playback` для привязанного узла.
+    fn shell_attach(store: &crate::video_gif_store::VideoGifStore) -> (u32, u64) {
+        let (nid, id) = store
+            .mse_attached
+            .lock()
+            .unwrap()
+            .iter()
+            .next()
+            .map(|(n, i)| (*n, *i))
+            .expect("узел привязан к MediaSource");
+        let shared = lumen_media_mse::source(id).expect("источник в реестре");
+        let core = shared.lock().unwrap();
+        let tracks = core.tracks();
+        let t = tracks.iter().find(|t| t.width > 0).expect("видеодорожка");
+        store.playback.lock().unwrap().insert(
+            nid,
+            crate::video_gif_store::VideoPlaybackState {
+                paused: true,
+                position_ms: 0,
+                play_epoch_ms: None,
+                cycle_ms: u64::try_from(core.effective_duration_us() / 1000).unwrap_or(0),
+                loop_count: 1,
+                width: t.width,
+                height: t.height,
+            },
+        );
+        (nid, id)
+    }
+
+    #[test]
+    fn video_element_follows_media_source_buffer() {
+        use crate::video_bindings::tests_v8::STORE_GUARD;
+        use crate::video_gif_store::{VideoGifStore, set_video_gif_store};
+
+        let _s = STORE_GUARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = DECODER_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_video_decoder(Arc::new(Stub));
+        let store = Arc::new(VideoGifStore::default());
+        set_video_gif_store(store.clone());
+        let rt = rt_with_dom();
+        rt.eval(&format!(
+            "var log = []; var bytes = {}; var ms = new MediaSource(); \
+             var v = document.createElement('video'); document.body.appendChild(v); \
+             ['loadedmetadata','loadeddata','canplay','waiting','playing','seeked'].forEach(function (e) {{ \
+               v.addEventListener(e, function () {{ log.push(e); }}); }}); \
+             ms.addEventListener('sourceopen', function () {{ \
+               var sb = ms.addSourceBuffer('video/mp4'); sb.appendBuffer(bytes); }}); \
+             v.src = URL.createObjectURL(ms);",
+            frag_mp4_as_js()
+        ))
+        .unwrap();
+        pump(&rt);
+        assert_eq!(store.mse_attached.lock().unwrap().len(), 1, "узел привязан");
+        assert_eq!(rt.eval("ms.readyState").unwrap(), JsValue::String("open".to_string()));
+        assert_eq!(rt.eval("ms.sourceBuffers.length").unwrap(), JsValue::Number(1.0));
+
+        let (nid, _) = shell_attach(&store);
+        pump(&rt);
+        let log = rt.eval("log.join()").unwrap();
+        let JsValue::String(log) = log else { panic!("log не строка") };
+        assert!(log.contains("loadedmetadata"), "log = {log}");
+        assert!(log.contains("canplay"), "log = {log}");
+        assert_eq!(rt.eval("v.readyState >= 3").unwrap(), JsValue::Bool(true));
+        assert_eq!(rt.eval("v.buffered.length").unwrap(), JsValue::Number(1.0));
+
+        // play(): часы нативной сессии тикают, пока есть данные.
+        rt.eval("v.play()").unwrap();
+        pump(&rt);
+        assert!(!store.playback.lock().unwrap().get(&nid).unwrap().paused, "play() снимает паузу");
+
+        // Перемотка за буфер: waiting, часы встают.
+        rt.eval("v.currentTime = 100;").unwrap();
+        pump(&rt);
+        assert_eq!(rt.eval("v.readyState < 3").unwrap(), JsValue::Bool(true));
+        assert!(store.playback.lock().unwrap().get(&nid).unwrap().paused, "без данных часы стоят");
+        let JsValue::String(log) = rt.eval("log.join()").unwrap() else { panic!("log не строка") };
+        assert!(log.contains("waiting"), "log = {log}");
+
+        rt.eval("v.src = ''; v.load();").unwrap();
+        pump(&rt);
+        assert!(store.mse_attached.lock().unwrap().is_empty(), "отвязка при смене src");
+        assert_eq!(rt.eval("ms.readyState").unwrap(), JsValue::String("closed".to_string()));
+        clear_video_decoder();
     }
 
     #[test]
