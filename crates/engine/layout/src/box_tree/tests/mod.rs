@@ -507,6 +507,7 @@ mod vertical_float;
 mod vertical_margins;
 mod block_in_inline_slice;
 mod empty_block_collapse;
+mod negative_margin_collapse;
 mod shrink_to_fit_margins;
 mod flex_vwm3;
 mod flex_vwm4;

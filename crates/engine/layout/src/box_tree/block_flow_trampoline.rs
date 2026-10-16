@@ -877,8 +877,10 @@ fn finish_frame(
         .map(|(bot, _)| *bot)
         .fold(frame.init.child_y, f32::max);
     let base = (float_bottom - frame.init.content_y).max(0.0);
-    let content_height = if escaped_bottom > 0.0 && (float_bottom - frame.init.child_y).abs() < 0.01 {
-        (base - escaped_bottom).max(0.0)
+    // BUG-1365: a negative escaped margin was also added to `child_y`, so the
+    // raw (unclamped) flow height is taken before it is removed again.
+    let content_height = if escaped_bottom != 0.0 && (float_bottom - frame.init.child_y).abs() < 0.01 {
+        (float_bottom - frame.init.content_y - escaped_bottom).max(0.0)
     } else {
         base
     };
