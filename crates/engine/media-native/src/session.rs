@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use lumen_core::ext::{AudioTrackInfo, VideoDecodeSession};
 use lumen_media_demux::{Demuxer, Packet, TrackInfo, TrackKind};
+use lumen_media_mse::{MseReader, ReaderPoll};
 
 use crate::registry::{AudioPcmDecoder, DecodedFrame, Registry, VideoFrameDecoder};
 
@@ -18,8 +19,23 @@ use crate::registry::{AudioPcmDecoder, DecodedFrame, Registry, VideoFrameDecoder
 /// перемоткой к ключевому кадру, а не декодированием всех кадров подряд.
 const FORWARD_SEEK_THRESHOLD_US: i64 = 2_000_000;
 
+/// Откуда берутся пакеты: файл целиком или буфер `MediaSource` (MSE).
+enum Source {
+    File(FileSource),
+    Mse(MseReader),
+}
+
+/// Что вернул источник на запрос пакета.
+enum Poll {
+    Packet(Packet),
+    /// Данных больше нет и не будет.
+    Eof,
+    /// Данные кончились, но их ещё добавят (MSE до `endOfStream`).
+    Pending,
+}
+
 /// Демуксер вместе с байтами, на которые он ссылается.
-struct Source {
+struct FileSource {
     // Поле объявлено первым, чтобы демуксер уничтожался раньше байтов.
     demux: Demuxer<'static>,
     _bytes: Arc<[u8]>,
@@ -28,13 +44,52 @@ struct Source {
 impl Source {
     fn open(bytes: &[u8]) -> Result<Self, String> {
         let owned: Arc<[u8]> = Arc::from(bytes);
-        // SAFETY: срез указывает в кучу `Arc<[u8]>`, который лежит в `Source`
+        // SAFETY: срез указывает в кучу `Arc<[u8]>`, который лежит в `FileSource`
         // рядом с демуксером и не изменяется до его уничтожения; перемещение
         // `Arc` не двигает данные, а порядок полей гарантирует, что `demux`
         // (единственный держатель среза) освобождается раньше `_bytes`.
         let slice: &'static [u8] = unsafe { std::slice::from_raw_parts(owned.as_ptr(), owned.len()) };
         let demux = Demuxer::open(slice).map_err(|e| format!("контейнер: {e}"))?;
-        Ok(Self { demux, _bytes: owned })
+        Ok(Self::File(FileSource { demux, _bytes: owned }))
+    }
+
+    fn tracks(&self) -> Vec<TrackInfo> {
+        match self {
+            Self::File(f) => f.demux.tracks().to_vec(),
+            Self::Mse(r) => r.tracks(),
+        }
+    }
+
+    fn duration_us(&self) -> Option<i64> {
+        match self {
+            Self::File(f) => f.demux.duration_us(),
+            Self::Mse(r) => Some(r.duration_us()),
+        }
+    }
+
+    fn next_packet(&mut self) -> Result<Poll, String> {
+        match self {
+            Self::File(f) => match f.demux.next_packet() {
+                Ok(Some(p)) => Ok(Poll::Packet(p)),
+                Ok(None) => Ok(Poll::Eof),
+                Err(e) => Err(format!("контейнер: {e}")),
+            },
+            Self::Mse(r) => Ok(match r.next_packet() {
+                ReaderPoll::Packet(p) => Poll::Packet(p),
+                ReaderPoll::Pending => Poll::Pending,
+                ReaderPoll::End => Poll::Eof,
+            }),
+        }
+    }
+
+    fn seek_us(&mut self, target_us: i64) -> Result<(), String> {
+        match self {
+            Self::File(f) => f.demux.seek_us(target_us).map_err(|e| format!("перемотка: {e}")),
+            Self::Mse(r) => {
+                r.seek_us(target_us);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -75,14 +130,25 @@ pub(crate) struct NativeSession {
     restart: bool,
     demux_eof: bool,
     drained: bool,
+    /// Источник MSE пуст до новых `appendBuffer`: чтение остановлено без слива декодера.
+    starved: bool,
     /// Позиция последнего `frame_at`, мкс: по ней отсеивается устаревший звук.
     clock_us: i64,
 }
 
 impl NativeSession {
     pub(crate) fn open(registry: &'static Registry, bytes: &[u8]) -> Result<Self, String> {
-        let src = Source::open(bytes)?;
-        let tracks: Vec<TrackInfo> = src.demux.tracks().to_vec();
+        Self::with_source(registry, Source::open(bytes)?)
+    }
+
+    /// Сессия поверх буфера `MediaSource`: кадры берутся из `reader`, а когда они
+    /// кончаются раньше `endOfStream`, последний кадр остаётся на экране.
+    pub(crate) fn open_mse(registry: &'static Registry, reader: MseReader) -> Result<Self, String> {
+        Self::with_source(registry, Source::Mse(reader))
+    }
+
+    fn with_source(registry: &'static Registry, src: Source) -> Result<Self, String> {
+        let tracks: Vec<TrackInfo> = src.tracks();
 
         let mut unsupported: Option<&TrackInfo> = None;
         let mut picked = None;
@@ -121,7 +187,7 @@ impl NativeSession {
                 })
             });
 
-        let duration_us = src.demux.duration_us();
+        let duration_us = src.duration_us();
         let mut session = Self {
             src,
             video_track: vt.id,
@@ -138,6 +204,7 @@ impl NativeSession {
             restart: true,
             demux_eof: false,
             drained: false,
+            starved: false,
             clock_us: 0,
         };
         // Первый кадр читается сразу: размер картинки известен только по нему.
@@ -150,8 +217,8 @@ impl NativeSession {
 
     /// Прочитать один пакет контейнера и разложить по очередям дорожек.
     fn read_demux(&mut self) -> Result<(), String> {
-        match self.src.demux.next_packet() {
-            Ok(Some(p)) => {
+        match self.src.next_packet() {
+            Ok(Poll::Packet(p)) => {
                 if p.track == self.video_track {
                     self.vqueue.push_back(p);
                 } else if let Some(a) = self.audio.as_mut().filter(|a| a.track == p.track) {
@@ -159,14 +226,18 @@ impl NativeSession {
                 }
                 Ok(())
             }
-            Ok(None) => {
+            Ok(Poll::Eof) => {
                 self.demux_eof = true;
+                Ok(())
+            }
+            Ok(Poll::Pending) => {
+                self.starved = true;
                 Ok(())
             }
             Err(e) => {
                 // Повреждённый хвост файла не должен зацикливать чтение.
                 self.demux_eof = true;
-                Err(format!("контейнер: {e}"))
+                Err(e)
             }
         }
     }
@@ -189,6 +260,9 @@ impl NativeSession {
                 break None;
             }
             self.read_demux()?;
+            if self.starved {
+                return Ok(());
+            }
         };
         match packet {
             Some(p) => {
@@ -220,7 +294,7 @@ impl NativeSession {
     }
 
     fn seek(&mut self, target_us: i64) -> Result<(), String> {
-        self.src.demux.seek_us(target_us).map_err(|e| format!("перемотка: {e}"))?;
+        self.src.seek_us(target_us)?;
         self.vqueue.clear();
         self.pics.clear();
         self.current = None;
@@ -235,6 +309,7 @@ impl NativeSession {
         self.restart = true;
         self.demux_eof = false;
         self.drained = false;
+        self.starved = false;
         Ok(())
     }
 
@@ -259,6 +334,10 @@ impl NativeSession {
                 return Ok(());
             }
             self.pump_video()?;
+            if std::mem::take(&mut self.starved) {
+                // MSE: новых кадров пока нет — остаётся последний показанный.
+                return Ok(());
+            }
         }
     }
 
@@ -271,6 +350,9 @@ impl NativeSession {
                 return Ok(None);
             }
             self.read_demux()?;
+            if std::mem::take(&mut self.starved) {
+                return Ok(None);
+            }
         }
     }
 }

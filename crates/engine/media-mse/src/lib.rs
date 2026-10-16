@@ -19,7 +19,12 @@
 //! времени, признаки ключевых кадров и конфигурации кодеков, что и воспроизведение
 //! файла, без второго разборщика контейнеров. Время везде в микросекундах.
 
+mod media_source;
 mod units;
+
+pub use media_source::{
+    MediaSourceCore, MseReader, ReaderPoll, SharedMediaSource, TRACK_STRIDE, create_source, drop_source, source,
+};
 
 use std::fmt;
 use std::sync::Arc;

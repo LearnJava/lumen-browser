@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::units::{assemble, Splitter};
+use lumen_media_demux::{Packet, TrackKind};
 use std::path::PathBuf;
 
 fn read(rel: &str) -> Vec<u8> {
@@ -270,4 +271,112 @@ fn new_init_with_other_tracks_is_rejected() {
     m.append(&mp4.init).expect("init");
     // Тот же init ещё раз — допустим (смена качества тем же кодеком).
     assert!(m.append(&mp4.init).expect("again").init_received);
+}
+
+// ── MediaSource и читатель плеера ──────────────────────────────────────────────
+
+fn loaded_source(format: Format, mime: &str, file: &[u8]) -> (SharedMediaSource, Segments) {
+    let s = segments(format, file);
+    let shared = SharedMediaSource::default();
+    {
+        let mut core = shared.lock().expect("lock");
+        let i = core.add_buffer(mime).expect("add");
+        let b = core.buffer_mut(i).expect("buffer");
+        b.append(&s.init).expect("init");
+        for m in &s.media {
+            b.append(m).expect("media");
+        }
+    }
+    (shared, s)
+}
+
+fn drain(reader: &mut MseReader) -> (Vec<Packet>, bool) {
+    let mut out = Vec::new();
+    loop {
+        match reader.next_packet() {
+            ReaderPoll::Packet(p) => out.push(p),
+            ReaderPoll::Pending => return (out, false),
+            ReaderPoll::End => return (out, true),
+        }
+    }
+}
+
+#[test]
+fn reader_yields_every_packet_then_pends_until_end_of_stream() {
+    let file = frag_mp4();
+    let (shared, _) = loaded_source(Format::Mp4, "video/mp4", &file);
+    let mut reader = MseReader::new(Arc::clone(&shared));
+    let (packets, ended) = drain(&mut reader);
+    assert!(!ended, "поток не закрыт — читатель ждёт новых данных");
+    let mut d = Demuxer::open(&file).expect("open");
+    let mut expected = 0;
+    while d.next_packet().expect("packet").is_some() {
+        expected += 1;
+    }
+    assert_eq!(packets.len(), expected);
+    assert!(packets.windows(2).all(|w| w[0].dts_us <= w[1].dts_us || w[0].track != w[1].track));
+    shared.lock().expect("lock").set_ended(true);
+    assert!(matches!(reader.next_packet(), ReaderPoll::End));
+}
+
+#[test]
+fn reader_continues_after_late_append() {
+    let file = av_webm();
+    let s = segments(Format::WebM, &file);
+    assert!(s.media.len() >= 2, "нужно два media-сегмента");
+    let shared = SharedMediaSource::default();
+    let b = shared.lock().expect("lock").add_buffer("video/webm").expect("add");
+    {
+        let mut core = shared.lock().expect("lock");
+        let buf = core.buffer_mut(b).expect("buffer");
+        buf.append(&s.init).expect("init");
+        buf.append(&s.media[0]).expect("first");
+    }
+    let mut reader = MseReader::new(Arc::clone(&shared));
+    let (first, _) = drain(&mut reader);
+    assert!(!first.is_empty());
+    shared.lock().expect("lock").buffer_mut(b).expect("buffer").append(&s.media[1]).expect("second");
+    let (second, _) = drain(&mut reader);
+    assert!(!second.is_empty(), "кадры второго сегмента дочитаны с того же места");
+    assert!(second[0].dts_us > first.last().expect("last").dts_us - 1);
+}
+
+#[test]
+fn reader_seek_lands_on_key_frame() {
+    let (shared, _) = loaded_source(Format::WebM, "video/webm", &av_webm());
+    let mut reader = MseReader::new(shared);
+    let (all, _) = drain(&mut reader);
+    let video = reader.tracks().iter().find(|t| t.kind == TrackKind::Video).expect("video").id;
+    let target = all.iter().filter(|p| p.track == video).nth(7).expect("frame").pts_us;
+    reader.seek_us(target);
+    let ReaderPoll::Packet(p) = reader.next_packet() else { panic!("нет пакета после перемотки") };
+    assert!(p.keyframe || p.track != video);
+    assert!(p.pts_us <= target);
+}
+
+#[test]
+fn tracks_of_two_buffers_do_not_collide() {
+    let shared = SharedMediaSource::default();
+    {
+        let mut core = shared.lock().expect("lock");
+        core.add_buffer("video/webm").expect("a");
+        core.add_buffer("audio/webm").expect("b");
+    }
+    let s = segments(Format::WebM, &av_webm());
+    shared.lock().expect("lock").buffer_mut(0).expect("buffer").append(&s.init).expect("init");
+    shared.lock().expect("lock").buffer_mut(1).expect("buffer").append(&s.init).expect("init");
+    let ids: Vec<u32> = shared.lock().expect("lock").tracks().iter().map(|t| t.id).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), ids.len(), "{ids:?}");
+    assert!(ids.iter().any(|&i| i >= TRACK_STRIDE));
+}
+
+#[test]
+fn hub_creates_and_forgets_sources() {
+    let id = create_source();
+    assert!(source(id).is_some());
+    drop_source(id);
+    assert!(source(id).is_none());
 }
