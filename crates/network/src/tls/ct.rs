@@ -1,43 +1,35 @@
-//! Certificate Transparency: embedded-SCT extraction + distinct-logs policy check
-//! (RFC 6962) — ph3-tls-hardening, part A4.
+//! Certificate Transparency: embedded-SCT extraction, signature check and the
+//! distinct-operators policy (RFC 6962) — ph3-tls-hardening A4, COMPAT-TRUST-CTLOGS.
 //!
 //! Of the three places a certificate can carry Signed Certificate Timestamps (RFC 6962
 //! §3.3: the TLS `signed_certificate_timestamp` extension, a stapled-OCSP extension, or an
 //! extension embedded in the leaf certificate itself), this module reads only the third —
-//! the certificate's own `1.3.6.1.4.1.11129.2.4.2` extension. That is deliberate, not an
-//! oversight: rustls's [`ServerCertVerifier::verify_server_cert`]
+//! the certificate's own `1.3.6.1.4.1.11129.2.4.2` extension. That is deliberate:
+//! rustls's [`ServerCertVerifier::verify_server_cert`]
 //! (rustls::client::danger::ServerCertVerifier) hands the stapled OCSP response and the
-//! leaf `CertificateDer`, but **not** the raw TLS extension bytes — those are consumed
-//! internally during the handshake and never reach a custom verifier (same constraint
-//! [`super::ocsp`] and [`super::verifier`]'s module docs note for A3). The embedded-cert
-//! path is also the common case in practice: most CAs (Let's Encrypt included) embed SCTs
-//! directly rather than relying on the server to staple or negotiate them.
+//! leaf and intermediate `CertificateDer`s, but **not** the raw TLS extension bytes. The
+//! embedded path is also the common case: most CAs (Let's Encrypt, the Russian national CA)
+//! embed SCTs rather than rely on the server to staple them.
 //!
-//! ## Scope (soft-fail; data collection, not enforcement)
+//! ## What counts
 //!
-//! Per the task brief, this slice is soft-fail: it *counts* recognized SCTs, it does not
-//! reject a connection over an insufficient count. [`super::verifier::LumenVerifier`]'s
-//! module docs already flag why: unlike A3 (which returns its hard-fail decision directly
-//! from `verify_server_cert`, since the stapled OCSP bytes are a function parameter with no
-//! shared-state risk), CT evidence here doesn't need to influence a per-connection
-//! `Result` from *this* file. The consumer is a later slice ([`CertInfo`] population, A5)
-//! reading `ClientConnection::peer_certificates()` after a successful handshake — a
-//! per-connection source, not this verifier's shared, cached `ClientConfig`. Gating a hard
-//! failure behind `TlsProfile::Strict`, per the brief, additionally requires
-//! [`super::ct_logs::KNOWN_LOG_IDS`] to hold real data first — see that module's
-//! "why this starts empty" note. Until then, every real connection reports
-//! [`CtVerdict::Insufficient`] regardless of how many SCTs a certificate actually carries,
-//! which would make a hard-fail gate reject every TLS connection, not just the exceptional
-//! ones — enforcement is deferred, not implemented as a no-op flag.
+//! An SCT counts only if all of these hold:
+//! 1. its `log_id` is a log in [`super::ct_logs`] (a forged or foreign id counts for nothing);
+//! 2. the log's state still covers the SCT's timestamp ([`CtLog::accepts_sct_at`]);
+//! 3. the SCT's signature verifies under that log's key over the pre-certificate entry
+//!    ([`super::ct_sig`] — the leaf's `TBSCertificate` without the SCT extension, plus the
+//!    issuer key hash). A tampered SCT, a tampered certificate or the wrong issuer fail here.
 //!
-//! **Not verified**: an SCT's signature (RFC 6962 §3.2's `digitally-signed struct`) —
-//! checking it needs the issuing log's public key and a specific input reconstruction (the
-//! `TimestampedEntry` over the *pre-certificate*, not the final cert), well beyond a single
-//! slice. Only the `log_id` field is read and matched against
-//! [`super::ct_logs::KNOWN_LOG_IDS`], the same posture [`super::ocsp`] takes toward the
-//! `BasicOCSPResponse` signature: an unauthenticated `log_id` can only ever be *undercounted*
-//! (soft-fail scope, so this cannot cause a false accept), never let a forged log count
-//! toward the threshold in a way that matters, because nothing here hard-fails yet.
+//! The verdict counts distinct **operators**, not logs: two logs run by one operator are one
+//! point of failure, which is the reason the policy asks for several (Chrome's rule; the
+//! national-CA trust anchor asks for ≥2 operators of three, see the site-compat report §7.6).
+//! Without the issuer certificate the signature cannot be checked, so nothing counts.
+//!
+//! ## Scope
+//!
+//! This module only *measures*. Whether an insufficient verdict fails a connection is the
+//! caller's policy: [`super::verifier::LumenVerifier`] can require N operators (off by
+//! default), the cert panel only displays the number.
 //!
 //! ## Purity
 //!
@@ -46,51 +38,65 @@
 //! style for the X.509 layer; a flat big-endian reader for RFC 6962's TLS-wire-format
 //! `SignedCertificateTimestampList`, which is not DER).
 //!
-//! [`CertInfo`]: super::CertInfo
+//! [`CtLog::accepts_sct_at`]: super::ct_logs::CtLog::accepts_sct_at
 
-use super::ct_logs::KNOWN_LOG_IDS;
+use sha2::{Digest, Sha256};
+
+use super::ct_logs::{self, CtLog};
+use super::ct_sig;
 
 /// The DER tag for `SEQUENCE` (and `SEQUENCE OF`), constructed universal.
-const TAG_SEQUENCE: u8 = 0x30;
+pub(super) const TAG_SEQUENCE: u8 = 0x30;
 /// The DER tag for `INTEGER`.
-const TAG_INTEGER: u8 = 0x02;
+pub(super) const TAG_INTEGER: u8 = 0x02;
 /// The DER tag for `BOOLEAN`.
-const TAG_BOOLEAN: u8 = 0x01;
+pub(super) const TAG_BOOLEAN: u8 = 0x01;
 /// The DER tag for `OBJECT IDENTIFIER`.
-const TAG_OID: u8 = 0x06;
+pub(super) const TAG_OID: u8 = 0x06;
 /// The DER tag for `OCTET STRING`.
-const TAG_OCTET_STRING: u8 = 0x04;
+pub(super) const TAG_OCTET_STRING: u8 = 0x04;
 /// The DER tag for the optional `[0] EXPLICIT` `version` field of a `TBSCertificate`
 /// (context class, constructed, tag number 0).
-const TAG_CONTEXT_0: u8 = 0xA0;
+pub(super) const TAG_CONTEXT_0: u8 = 0xA0;
 /// The DER tag for the optional `[3] EXPLICIT` `extensions` field of a `TBSCertificate`
 /// (context class, constructed, tag number 3).
-const TAG_CONTEXT_3: u8 = 0xA3;
+pub(super) const TAG_CONTEXT_3: u8 = 0xA3;
 
 /// `id-ce-ctPrecertificateSCTs` (`1.3.6.1.4.1.11129.2.4.2`, RFC 6962 §3.3) — the X.509
 /// extension a CA embeds SCTs into when it logs the final certificate (as opposed to the
 /// pre-certificate poison extension, `...4.3`, which this module does not need).
-const OID_CT_SCT_LIST: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0xD6, 0x79, 0x02, 0x04, 0x02];
+pub(super) const OID_CT_SCT_LIST: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0xD6, 0x79, 0x02, 0x04, 0x02];
 
 /// The size in bytes of an RFC 6962 `LogID` (a SHA-256 hash).
-const LOG_ID_LEN: usize = 32;
+pub(super) const LOG_ID_LEN: usize = 32;
+
+/// How many distinct log operators must vouch for a certificate for [`CtVerdict::Sufficient`].
+pub const MIN_OPERATORS: usize = 2;
 
 /// What the embedded-SCT evidence on a leaf certificate says about CT log coverage.
+/// Both variants carry the number of distinct **operators** with a valid SCT (see module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CtVerdict {
-    /// At least two structurally valid SCTs from distinct logs in
-    /// [`super::ct_logs::KNOWN_LOG_IDS`] were found. Carries the distinct-log count.
+    /// SCTs from at least [`MIN_OPERATORS`] distinct operators passed every check.
     Sufficient(usize),
-    /// Fewer than two SCTs from distinct known logs were found — carries the count that
-    /// *was* found (0, or 1). Soft-fail per this module's scope: never blocks a connection.
+    /// Fewer operators than that — the count that *was* found (0, or 1).
     Insufficient(usize),
+}
+
+impl CtVerdict {
+    /// The number of distinct operators with a valid SCT.
+    pub fn operators(self) -> usize {
+        match self {
+            Self::Sufficient(n) | Self::Insufficient(n) => n,
+        }
+    }
 }
 
 /// A minimal reader over a DER-encoded byte slice, walking tag-length-value triples left to
 /// right. Definite-length only (DER forbids the indefinite form). A sibling of the readers
 /// in [`super::ocsp`] and the `h3::x509_*` family, specialised to this module's `Option`
 /// soft-fail style.
-struct Der<'a> {
+pub(super) struct Der<'a> {
     /// The bytes being read.
     bytes: &'a [u8],
     /// The offset of the next unread byte.
@@ -99,17 +105,17 @@ struct Der<'a> {
 
 impl<'a> Der<'a> {
     /// A reader positioned at the start of `bytes`.
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(super) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }
     }
 
     /// The tag of the next TLV without consuming it, or `None` at end of input.
-    fn peek_tag(&self) -> Option<u8> {
+    pub(super) fn peek_tag(&self) -> Option<u8> {
         self.bytes.get(self.pos).copied()
     }
 
     /// Whether any unread bytes remain.
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.pos >= self.bytes.len()
     }
 
@@ -117,7 +123,7 @@ impl<'a> Der<'a> {
     /// the length itself; a long form (`0x81..`) gives the count of big-endian length
     /// octets that follow. The indefinite form (`0x80`) and counts wider than four octets
     /// are rejected.
-    fn read_length(&mut self) -> Option<usize> {
+    pub(super) fn read_length(&mut self) -> Option<usize> {
         let first = *self.bytes.get(self.pos)?;
         self.pos += 1;
         if first < 0x80 {
@@ -137,7 +143,7 @@ impl<'a> Der<'a> {
 
     /// Read one TLV, returning its tag and a slice over its contents, and advance the
     /// cursor past it.
-    fn read_tlv(&mut self) -> Option<(u8, &'a [u8])> {
+    pub(super) fn read_tlv(&mut self) -> Option<(u8, &'a [u8])> {
         let tag = *self.bytes.get(self.pos)?;
         self.pos += 1;
         let len = self.read_length()?;
@@ -149,8 +155,16 @@ impl<'a> Der<'a> {
         Some((tag, contents))
     }
 
+    /// Read one TLV, returning its tag, its contents and the whole encoding (header
+    /// included) — for callers that re-assemble DER around a byte-exact piece.
+    pub(super) fn read_raw(&mut self) -> Option<(u8, &'a [u8], &'a [u8])> {
+        let start = self.pos;
+        let (tag, contents) = self.read_tlv()?;
+        Some((tag, contents, &self.bytes[start..self.pos]))
+    }
+
     /// Read one TLV and require it to carry `tag`, returning its contents.
-    fn read_tagged(&mut self, tag: u8) -> Option<&'a [u8]> {
+    pub(super) fn read_tagged(&mut self, tag: u8) -> Option<&'a [u8]> {
         let (t, contents) = self.read_tlv()?;
         (t == tag).then_some(contents)
     }
@@ -237,13 +251,31 @@ impl<'a> Wire<'a> {
     }
 }
 
+/// One `SignedCertificateTimestamp` (RFC 6962 §3.2) split into the fields the signature
+/// check needs.
+pub(super) struct Sct<'a> {
+    /// `sct_version` (0 = v1, the only defined value).
+    pub version: u8,
+    /// `LogID`: SHA-256 of the issuing log's public key.
+    pub log_id: [u8; LOG_ID_LEN],
+    /// Milliseconds since the Unix epoch at which the log accepted the entry.
+    pub timestamp_ms: u64,
+    /// `CtExtensions` bytes (without their length prefix) — part of the signed data.
+    pub extensions: &'a [u8],
+    /// `SignatureAndHashAlgorithm.hash`.
+    pub hash_algorithm: u8,
+    /// `SignatureAndHashAlgorithm.signature`.
+    pub signature_algorithm: u8,
+    /// The log's signature (DER for ECDSA).
+    pub signature: &'a [u8],
+}
+
 /// Parse the double-encoded `SignedCertificateTimestampList` extension value (RFC 6962
 /// §3.3: the X.509 `extnValue` OCTET STRING wraps another DER OCTET STRING, whose contents
-/// are the raw TLS-wire-format list) down to each entry's 32-byte `log_id` (RFC 6962 §3.2).
-/// A structurally invalid entry stops the walk (returning what was successfully read so
-/// far) rather than failing the whole extraction — one malformed SCT among several valid
-/// ones should not hide the valid evidence.
-fn parse_sct_list(extn_value: &[u8]) -> Vec<[u8; LOG_ID_LEN]> {
+/// are the raw TLS-wire-format list) into its SCTs. A structurally invalid entry stops the
+/// walk (returning what was successfully read so far) rather than failing the whole
+/// extraction — one malformed SCT among several valid ones should not hide the valid evidence.
+fn parse_sct_list(extn_value: &[u8]) -> Vec<Sct<'_>> {
     let Some(list_bytes) = Der::new(extn_value).read_tagged(TAG_OCTET_STRING) else {
         return Vec::new();
     };
@@ -256,34 +288,39 @@ fn parse_sct_list(extn_value: &[u8]) -> Vec<[u8; LOG_ID_LEN]> {
         return Vec::new();
     };
 
-    let mut log_ids = Vec::new();
+    let mut scts = Vec::new();
     let mut entries = Wire::new(entries);
     while !entries.is_empty() {
         let Some(sct_len) = entries.read_u16_len() else { break };
         let Some(sct) = entries.take(sct_len) else { break };
-        let Some(log_id) = parse_one_sct(sct) else { break };
-        log_ids.push(log_id);
+        let Some(sct) = parse_one_sct(sct) else { break };
+        scts.push(sct);
     }
-    log_ids
+    scts
 }
 
-/// Parse one `SerializedSCT` (RFC 6962 §3.2's `SignedCertificateTimestamp`, minus the
-/// reconstructed `digitally-signed` input) down to its `log_id`. Layout: `sct_version`(1) +
-/// `log_id`(32) + `timestamp`(8) + `extensions` (u16-len-prefixed) + `hash_algorithm`(1) +
-/// `signature_algorithm`(1) + `signature` (u16-len-prefixed). Every field but `log_id` is
-/// walked past unread — this module does not verify the signature (see module docs).
-fn parse_one_sct(sct: &[u8]) -> Option<[u8; LOG_ID_LEN]> {
+/// Parse one `SerializedSCT`. Layout: `sct_version`(1) + `log_id`(32) + `timestamp`(8) +
+/// `extensions` (u16-len-prefixed) + `hash_algorithm`(1) + `signature_algorithm`(1) +
+/// `signature` (u16-len-prefixed). Trailing bytes after the signature make it malformed.
+fn parse_one_sct(sct: &[u8]) -> Option<Sct<'_>> {
     let mut r = Wire::new(sct);
-    r.take(1)?; // sct_version
-    let log_id_bytes = r.take(LOG_ID_LEN)?;
-    let log_id: [u8; LOG_ID_LEN] = log_id_bytes.try_into().ok()?;
-    r.take(8)?; // timestamp
+    let version = r.take(1)?[0];
+    let log_id: [u8; LOG_ID_LEN] = r.take(LOG_ID_LEN)?.try_into().ok()?;
+    let timestamp_ms = u64::from_be_bytes(r.take(8)?.try_into().ok()?);
     let ext_len = r.read_u16_len()?;
-    r.take(ext_len)?; // extensions
-    r.take(2)?; // hash_algorithm + signature_algorithm
+    let extensions = r.take(ext_len)?;
+    let algorithms = r.take(2)?;
     let sig_len = r.read_u16_len()?;
-    r.take(sig_len)?; // signature
-    Some(log_id)
+    let signature = r.take(sig_len)?;
+    r.is_empty().then_some(Sct {
+        version,
+        log_id,
+        timestamp_ms,
+        extensions,
+        hash_algorithm: algorithms[0],
+        signature_algorithm: algorithms[1],
+        signature,
+    })
 }
 
 /// Extract the `log_id` of every structurally valid SCT embedded in `cert_der`'s
@@ -292,41 +329,68 @@ fn parse_one_sct(sct: &[u8]) -> Option<[u8; LOG_ID_LEN]> {
 /// both fold to "no evidence" per this module's soft-fail scope.
 pub fn extract_sct_log_ids(cert_der: &[u8]) -> Vec<[u8; LOG_ID_LEN]> {
     match find_extension(cert_der, OID_CT_SCT_LIST) {
-        Some(extn_value) => parse_sct_list(extn_value),
+        Some(extn_value) => parse_sct_list(extn_value).into_iter().map(|sct| sct.log_id).collect(),
         None => Vec::new(),
     }
 }
 
-/// Evaluate `cert_der`'s embedded-SCT evidence against a specific known-logs table —
-/// [`evaluate_ct`] calls this with [`super::ct_logs::KNOWN_LOG_IDS`]; split out so the
-/// distinct-logs threshold logic is testable independent of that table's (currently empty)
-/// real contents.
-fn evaluate_ct_against(cert_der: &[u8], known_logs: &[[u8; LOG_ID_LEN]]) -> CtVerdict {
-    let mut recognized: Vec<[u8; LOG_ID_LEN]> = extract_sct_log_ids(cert_der)
-        .into_iter()
-        .filter(|id| known_logs.contains(id))
-        .collect();
-    recognized.sort_unstable();
-    recognized.dedup();
+/// Operators of the logs whose SCT in `leaf_der` passes every check in the module docs,
+/// deduplicated. `lookup` resolves a `LogID` to a log — [`ct_logs::find`] in production, a
+/// test table in unit tests.
+fn valid_operators<'t>(
+    leaf_der: &[u8],
+    issuer_der: Option<&[u8]>,
+    lookup: impl Fn(&[u8; LOG_ID_LEN]) -> Option<&'t CtLog>,
+) -> Vec<&'t str> {
+    let mut operators = Vec::new();
+    let (Some(issuer_der), Some(extn_value)) = (issuer_der, find_extension(leaf_der, OID_CT_SCT_LIST)) else {
+        return operators;
+    };
+    let scts = parse_sct_list(extn_value);
+    let (Some(tbs), Some(issuer_spki)) =
+        (ct_sig::precert_tbs(leaf_der), ct_sig::subject_public_key_info(issuer_der))
+    else {
+        return operators;
+    };
+    let issuer_key_hash: [u8; 32] = Sha256::digest(issuer_spki).into();
+    for sct in &scts {
+        let Some(log) = lookup(&sct.log_id) else { continue };
+        if log.accepts_sct_at(sct.timestamp_ms) && ct_sig::verify(sct, log, &issuer_key_hash, &tbs) {
+            operators.push(log.operator);
+        }
+    }
+    operators.sort_unstable();
+    operators.dedup();
+    operators
+}
 
-    if recognized.len() >= 2 {
-        CtVerdict::Sufficient(recognized.len())
+/// Judge `leaf_der` against a specific log table; split out from [`evaluate_ct`] so the
+/// threshold logic is testable with synthetic logs.
+fn evaluate_ct_against<'t>(
+    leaf_der: &[u8],
+    issuer_der: Option<&[u8]>,
+    lookup: impl Fn(&[u8; LOG_ID_LEN]) -> Option<&'t CtLog>,
+) -> CtVerdict {
+    let n = valid_operators(leaf_der, issuer_der, lookup).len();
+    if n >= MIN_OPERATORS {
+        CtVerdict::Sufficient(n)
     } else {
-        CtVerdict::Insufficient(recognized.len())
+        CtVerdict::Insufficient(n)
     }
 }
 
-/// Evaluate a leaf certificate's embedded-SCT evidence against
-/// [`super::ct_logs::KNOWN_LOG_IDS`]: Chrome-style policy, at least two SCTs from distinct
-/// known logs required for [`CtVerdict::Sufficient`]. Soft-fail only — see module docs for
-/// why this does not yet gate the connection.
-pub fn evaluate_ct(cert_der: &[u8]) -> CtVerdict {
-    evaluate_ct_against(cert_der, KNOWN_LOG_IDS)
+/// Judge a leaf certificate's embedded SCTs against the bundled log table: at least
+/// [`MIN_OPERATORS`] distinct operators with a valid SCT for [`CtVerdict::Sufficient`].
+/// `issuer_der` is the certificate that signed the leaf (first intermediate); without it
+/// the signatures cannot be checked and nothing counts.
+pub fn evaluate_ct(leaf_der: &[u8], issuer_der: Option<&[u8]>) -> CtVerdict {
+    evaluate_ct_against(leaf_der, issuer_der, ct_logs::find)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tls::ct_logs::LogState;
 
     // ── DER + wire construction helpers (test-only certificate/SCT builder) ────
 
@@ -472,74 +536,156 @@ mod tests {
         assert!(extract_sct_log_ids(&not_a_cert).is_empty());
     }
 
-    // ── evaluate_ct_against: the policy threshold ───────────────────────
+    // ── precert_tbs ─────────────────────────────────────────────────────
 
     #[test]
-    fn two_recognized_distinct_logs_is_sufficient() {
-        let a = log_id(0x01);
-        let b = log_id(0x02);
-        let value = sct_list_extn_value(&[sct(a), sct(b)]);
+    fn precert_tbs_drops_only_the_sct_extension() {
+        let a = ext(&[0x55, 0x1D, 0x0F], &[1]);
+        let b = ext(&[0x55, 0x1D, 0x11], &[2]);
+        let sct_ext = ext(OID_CT_SCT_LIST, &sct_list_extn_value(&[sct(log_id(1))]));
+        let with = cert(Some(&[a.clone(), sct_ext, b.clone()]));
+        let without = cert(Some(&[a, b]));
+        assert_eq!(ct_sig::precert_tbs(&with), ct_sig::precert_tbs(&without));
+    }
+
+    // ── evaluate_ct on a real chain: sberbank.ru, SCTs from VK, Yandex and the Ministry ──
+
+    const SBERBANK_CHAIN: &str = include_str!("testdata/sberbank_chain.pem");
+
+    /// `(leaf, issuer)` of the captured chain.
+    fn sberbank_chain() -> (Vec<u8>, Vec<u8>) {
+        let mut pem = SBERBANK_CHAIN.as_bytes();
+        let mut certs = rustls_pemfile::certs(&mut pem).map(|c| c.expect("pem").to_vec());
+        (certs.next().expect("leaf"), certs.next().expect("issuer"))
+    }
+
+    /// The leaf's SCTs, in certificate order.
+    fn leaf_scts(leaf: &[u8]) -> Vec<Sct<'_>> {
+        parse_sct_list(find_extension(leaf, OID_CT_SCT_LIST).expect("sct extension"))
+    }
+
+    fn offset_in(whole: &[u8], part: &[u8]) -> usize {
+        part.as_ptr() as usize - whole.as_ptr() as usize
+    }
+
+    /// A table holding the leaf's three real logs (real keys) with the operator and state
+    /// the test chooses per SCT, in certificate order.
+    fn remapped(leaf: &[u8], over: [(&'static str, LogState); 3]) -> Vec<CtLog> {
+        leaf_scts(leaf)
+            .iter()
+            .zip(over)
+            .map(|(sct, (operator, state))| {
+                let real = ct_logs::find(&sct.log_id).expect("real log");
+                CtLog { operator, name: real.name, state, id: real.id, spki: real.spki.clone() }
+            })
+            .collect()
+    }
+
+    fn lookup_in<'t>(table: &'t [CtLog]) -> impl Fn(&[u8; LOG_ID_LEN]) -> Option<&'t CtLog> + 't {
+        move |id| table.iter().find(|log| &log.id == id)
+    }
+
+    #[test]
+    fn real_chain_has_three_valid_scts_from_three_operators() {
+        let (leaf, issuer) = sberbank_chain();
+        assert_eq!(leaf_scts(&leaf).len(), 3);
+        assert_eq!(evaluate_ct(&leaf, Some(&issuer)), CtVerdict::Sufficient(3));
+    }
+
+    #[test]
+    fn without_the_issuer_nothing_counts() {
+        let (leaf, _) = sberbank_chain();
+        assert_eq!(evaluate_ct(&leaf, None), CtVerdict::Insufficient(0));
+    }
+
+    #[test]
+    fn a_wrong_issuer_counts_nothing() {
+        let (leaf, _) = sberbank_chain();
+        assert_eq!(evaluate_ct(&leaf, Some(&leaf)), CtVerdict::Insufficient(0));
+    }
+
+    #[test]
+    fn a_tampered_certificate_counts_nothing() {
+        let (mut leaf, issuer) = sberbank_chain();
+        let at = leaf.windows(8).position(|w| w == b"Sberbank").expect("subject O");
+        leaf[at] ^= 0x01;
+        assert_eq!(evaluate_ct(&leaf, Some(&issuer)), CtVerdict::Insufficient(0));
+    }
+
+    #[test]
+    fn a_corrupted_signature_does_not_count() {
+        let (mut leaf, issuer) = sberbank_chain();
+        let last = {
+            let scts = leaf_scts(&leaf);
+            offset_in(&leaf, scts[0].signature) + scts[0].signature.len() - 1
+        };
+        leaf[last] ^= 0x01;
+        assert_eq!(evaluate_ct(&leaf, Some(&issuer)), CtVerdict::Sufficient(2));
+    }
+
+    #[test]
+    fn a_foreign_log_id_does_not_count() {
+        let (mut leaf, issuer) = sberbank_chain();
+        let at = {
+            let scts = leaf_scts(&leaf);
+            let base = offset_in(&leaf, scts[1].extensions) - 8 - 2 - LOG_ID_LEN;
+            // `extensions` is preceded by its u16 length and the 8-byte timestamp.
+            assert_eq!(&leaf[base..base + LOG_ID_LEN], &scts[1].log_id);
+            base
+        };
+        leaf[at] ^= 0x01;
+        assert_eq!(evaluate_ct(&leaf, Some(&issuer)), CtVerdict::Sufficient(2));
+    }
+
+    #[test]
+    fn logs_of_one_operator_count_once() {
+        let (leaf, issuer) = sberbank_chain();
+        let table = remapped(&leaf, [("A", LogState::Usable), ("A", LogState::ReadOnly), ("B", LogState::Usable)]);
+        assert_eq!(
+            evaluate_ct_against(&leaf, Some(&issuer), lookup_in(&table)),
+            CtVerdict::Sufficient(2)
+        );
+        let one = remapped(&leaf, [("A", LogState::Usable); 3]);
+        assert_eq!(
+            evaluate_ct_against(&leaf, Some(&issuer), lookup_in(&one)),
+            CtVerdict::Insufficient(1)
+        );
+    }
+
+    #[test]
+    fn a_log_retired_before_the_sct_does_not_count() {
+        let (leaf, issuer) = sberbank_chain();
+        let ts = leaf_scts(&leaf)[0].timestamp_ms;
+        let before = remapped(
+            &leaf,
+            [("A", LogState::Retired { at_ms: ts }), ("B", LogState::Usable), ("C", LogState::Usable)],
+        );
+        assert_eq!(evaluate_ct_against(&leaf, Some(&issuer), lookup_in(&before)), CtVerdict::Sufficient(2));
+        let after = remapped(
+            &leaf,
+            [("A", LogState::Retired { at_ms: ts + 1 }), ("B", LogState::Usable), ("C", LogState::Usable)],
+        );
+        assert_eq!(evaluate_ct_against(&leaf, Some(&issuer), lookup_in(&after)), CtVerdict::Sufficient(3));
+    }
+
+    #[test]
+    fn unknown_logs_do_not_count() {
+        let (leaf, issuer) = sberbank_chain();
+        assert_eq!(evaluate_ct_against(&leaf, Some(&issuer), |_| None), CtVerdict::Insufficient(0));
+    }
+
+    #[test]
+    fn certificate_without_scts_is_insufficient_zero() {
+        let (_, issuer) = sberbank_chain();
+        assert_eq!(evaluate_ct(&cert(None), Some(&issuer)), CtVerdict::Insufficient(0));
+        assert_eq!(evaluate_ct(&cert(None), None), CtVerdict::Insufficient(0));
+    }
+
+    #[test]
+    fn synthetic_sct_with_unknown_log_is_insufficient_zero() {
+        let value = sct_list_extn_value(&[sct(log_id(0x01)), sct(log_id(0x02))]);
         let c = cert(Some(&[ext(OID_CT_SCT_LIST, &value)]));
-        assert_eq!(evaluate_ct_against(&c, &[a, b]), CtVerdict::Sufficient(2));
-    }
-
-    #[test]
-    fn one_recognized_log_is_insufficient() {
-        let a = log_id(0x01);
-        let value = sct_list_extn_value(&[sct(a)]);
-        let c = cert(Some(&[ext(OID_CT_SCT_LIST, &value)]));
-        assert_eq!(evaluate_ct_against(&c, &[a]), CtVerdict::Insufficient(1));
-    }
-
-    #[test]
-    fn no_scts_at_all_is_insufficient_zero() {
-        let c = cert(None);
-        assert_eq!(evaluate_ct_against(&c, &[log_id(0x01)]), CtVerdict::Insufficient(0));
-    }
-
-    #[test]
-    fn unrecognized_logs_do_not_count() {
-        let a = log_id(0x01);
-        let b = log_id(0x02);
-        let value = sct_list_extn_value(&[sct(a), sct(b)]);
-        let c = cert(Some(&[ext(OID_CT_SCT_LIST, &value)]));
-        // Neither log_id is in the known-logs table passed here.
-        assert_eq!(evaluate_ct_against(&c, &[log_id(0x99)]), CtVerdict::Insufficient(0));
-    }
-
-    #[test]
-    fn duplicate_scts_from_the_same_log_count_once() {
-        let a = log_id(0x01);
-        let value = sct_list_extn_value(&[sct(a), sct(a)]);
-        let c = cert(Some(&[ext(OID_CT_SCT_LIST, &value)]));
-        assert_eq!(evaluate_ct_against(&c, &[a]), CtVerdict::Insufficient(1));
-    }
-
-    #[test]
-    fn three_distinct_recognized_logs_is_sufficient_with_full_count() {
-        let a = log_id(0x01);
-        let b = log_id(0x02);
-        let cc = log_id(0x03);
-        let value = sct_list_extn_value(&[sct(a), sct(b), sct(cc)]);
-        let c = cert(Some(&[ext(OID_CT_SCT_LIST, &value)]));
-        assert_eq!(evaluate_ct_against(&c, &[a, b, cc]), CtVerdict::Sufficient(3));
-    }
-
-    // ── evaluate_ct: the real (empty) log table ─────────────────────────
-
-    #[test]
-    fn evaluate_ct_is_insufficient_today_regardless_of_sct_count() {
-        // KNOWN_LOG_IDS is empty pending graduation (see ct_logs module docs) — even a
-        // certificate carrying plenty of SCTs cannot be judged sufficient yet.
-        let a = log_id(0x01);
-        let b = log_id(0x02);
-        let value = sct_list_extn_value(&[sct(a), sct(b)]);
-        let c = cert(Some(&[ext(OID_CT_SCT_LIST, &value)]));
-        assert_eq!(evaluate_ct(&c), CtVerdict::Insufficient(0));
-    }
-
-    #[test]
-    fn evaluate_ct_on_cert_without_scts_is_insufficient_zero() {
-        assert_eq!(evaluate_ct(&cert(None)), CtVerdict::Insufficient(0));
+        let (_, issuer) = sberbank_chain();
+        assert_eq!(evaluate_ct(&c, Some(&issuer)), CtVerdict::Insufficient(0));
     }
 }

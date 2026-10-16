@@ -45,7 +45,7 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
-use super::{bypass, failure};
+use super::{bypass, ct, failure};
 use super::ocsp::{self, OcspVerdict};
 
 /// Render a rustls `ServerName` down to the plain hostname string
@@ -73,7 +73,32 @@ pub struct LumenVerifier {
     inner: Arc<WebPkiServerVerifier>,
     /// `Name` contents of every trust anchor, for [`failure::summarize`].
     anchor_subjects: Vec<Vec<u8>>,
+    /// COMPAT-TRUST-CTLOGS: when `Some(n)`, a chain that webpki accepted is still rejected
+    /// unless SCTs of at least `n` distinct log operators verify ([`ct::evaluate_ct`]).
+    /// `None` (the default) leaves CT out of the handshake decision. The seam exists for
+    /// trust anchors that are acceptable only under CT (the national CA); no profile turns
+    /// it on yet.
+    ct_min_operators: Option<usize>,
 }
+
+/// The chain was valid but its SCTs did not reach the operator count the verifier requires.
+#[derive(Debug)]
+struct CtInsufficient {
+    found: usize,
+    required: usize,
+}
+
+impl std::fmt::Display for CtInsufficient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Certificate Transparency: valid SCTs from {} log operator(s), {} required",
+            self.found, self.required
+        )
+    }
+}
+
+impl std::error::Error for CtInsufficient {}
 
 impl LumenVerifier {
     /// Build a verifier trusting `root_store`, using `provider` for
@@ -85,11 +110,21 @@ impl LumenVerifier {
         root_store: RootCertStore,
         provider: &Arc<CryptoProvider>,
     ) -> Result<Arc<Self>, rustls::client::VerifierBuilderError> {
+        Self::with_ct_requirement(root_store, provider, None)
+    }
+
+    /// Like [`Self::new`], additionally requiring SCTs of `ct_min_operators` distinct log
+    /// operators on every accepted chain (`None` — no CT requirement).
+    pub fn with_ct_requirement(
+        root_store: RootCertStore,
+        provider: &Arc<CryptoProvider>,
+        ct_min_operators: Option<usize>,
+    ) -> Result<Arc<Self>, rustls::client::VerifierBuilderError> {
         let anchor_subjects = root_store.roots.iter().map(|a| a.subject.as_ref().to_vec()).collect();
         let inner =
             WebPkiServerVerifier::builder_with_provider(Arc::new(root_store), provider.clone())
                 .build()?;
-        Ok(Arc::new(Self { inner, anchor_subjects }))
+        Ok(Arc::new(Self { inner, anchor_subjects, ct_min_operators }))
     }
 }
 
@@ -114,6 +149,23 @@ fn apply_bypass_policy(
     }
 }
 
+/// COMPAT-TRUST-CTLOGS: turn a chain that passed webpki into a CT failure when the SCTs of
+/// `found` distinct operators fall short of `required`. A user's "Proceed anyway" for the
+/// host overrides it like any other chain failure.
+fn apply_ct_requirement(
+    result: Result<ServerCertVerified, RustlsError>,
+    found: usize,
+    required: Option<usize>,
+    bypassed: bool,
+) -> Result<ServerCertVerified, RustlsError> {
+    match (&result, required) {
+        (Ok(_), Some(required)) if found < required && !bypassed => Err(RustlsError::InvalidCertificate(
+            CertificateError::Other(rustls::OtherError(Arc::new(CtInsufficient { found, required }))),
+        )),
+        _ => result,
+    }
+}
+
 impl ServerCertVerifier for LumenVerifier {
     fn verify_server_cert(
         &self,
@@ -130,7 +182,11 @@ impl ServerCertVerifier for LumenVerifier {
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
         let ocsp_verdict = ocsp::parse_stapled_response(ocsp_response);
         let bypassed = bypass::is_allowed(&server_name_host(server_name));
-        let result = apply_bypass_policy(chain_result, ocsp_verdict, bypassed);
+        let mut result = apply_bypass_policy(chain_result, ocsp_verdict, bypassed);
+        if let Some(required) = self.ct_min_operators {
+            let found = ct::evaluate_ct(end_entity, intermediates.first().map(AsRef::as_ref)).operators();
+            result = apply_ct_requirement(result, found, Some(required), bypassed);
+        }
         if result.is_err() {
             // COMPAT-TRUST-CAUSES: the chain is gone once rustls reports the
             // bare reason, so keep what the cause classifier needs.
@@ -224,5 +280,32 @@ mod tests {
         assert!(apply_bypass_policy(bad(), OcspVerdict::Good, true).is_ok());
         assert!(apply_bypass_policy(bad(), OcspVerdict::Good, false).is_err());
         assert!(apply_bypass_policy(Ok(ServerCertVerified::assertion()), OcspVerdict::Good, false).is_ok());
+    }
+
+    #[test]
+    fn ct_requirement_rejects_a_chain_with_too_few_operators() {
+        let ok = || Ok(ServerCertVerified::assertion());
+        let err = apply_ct_requirement(ok(), 1, Some(2), false).unwrap_err();
+        assert!(matches!(&err, RustlsError::InvalidCertificate(CertificateError::Other(_))), "{err:?}");
+        assert!(apply_ct_requirement(ok(), 2, Some(2), false).is_ok());
+        assert!(apply_ct_requirement(ok(), 0, None, false).is_ok());
+    }
+
+    #[test]
+    fn ct_requirement_is_waived_by_a_bypass_and_never_hides_an_earlier_failure() {
+        assert!(apply_ct_requirement(Ok(ServerCertVerified::assertion()), 0, Some(2), true).is_ok());
+        let expired = Err(RustlsError::InvalidCertificate(CertificateError::Expired));
+        let kept = apply_ct_requirement(expired, 0, Some(2), false).unwrap_err();
+        assert!(matches!(kept, RustlsError::InvalidCertificate(CertificateError::Expired)));
+    }
+
+    #[test]
+    fn ct_failure_surfaces_as_a_cert_error_other() {
+        let err = apply_ct_requirement(Ok(ServerCertVerified::assertion()), 0, Some(2), false).unwrap_err();
+        let io = std::io::Error::new(std::io::ErrorKind::InvalidData, err);
+        let Some(lumen_core::error::CertError::Other(text)) = crate::tls::cert_error::from_io_error(&io) else {
+            panic!("expected CertError::Other");
+        };
+        assert!(text.contains("0 log operator(s), 2 required"), "{text}");
     }
 }

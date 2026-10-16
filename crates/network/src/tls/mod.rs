@@ -18,6 +18,8 @@ pub mod cert_fields;
 pub mod failure;
 pub mod ct;
 pub mod ct_logs;
+mod ct_logs_data;
+mod ct_sig;
 pub mod fingerprint;
 pub mod ocsp;
 pub mod os_roots;

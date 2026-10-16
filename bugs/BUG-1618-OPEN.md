@@ -26,3 +26,7 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Примечание (COMPAT-TRUST-CTLOGS, 2026-10-16)
+
+CT-часть закрыта задачей COMPAT-TRUST-CTLOGS: таблица журналов непуста, `evaluate_ct` проверяет подпись SCT и считает операторов; текст панели теперь «Valid SCTs from N distinct log operators» (`fingerprint.rs`). Остаётся OCSP-часть (`lib.rs` передаёт `OcspVerdict::Unknown`) и правка доков (CAPABILITIES.md:232, note P3-tlshard).

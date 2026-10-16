@@ -227,9 +227,9 @@ fn describe_ocsp_verdict(verdict: crate::tls::ocsp::OcspVerdict) -> String {
 fn describe_ct_verdict(verdict: crate::tls::ct::CtVerdict) -> String {
     use crate::tls::ct::CtVerdict;
     match verdict {
-        CtVerdict::Sufficient(n) => format!("{n} SCTs from distinct known logs"),
-        CtVerdict::Insufficient(0) => String::from("No CT evidence found"),
-        CtVerdict::Insufficient(n) => format!("Only {n} SCT(s) from distinct known logs"),
+        CtVerdict::Sufficient(n) => format!("Valid SCTs from {n} distinct log operators"),
+        CtVerdict::Insufficient(0) => String::from("No valid CT evidence found"),
+        CtVerdict::Insufficient(n) => format!("Valid SCTs from only {n} log operator(s)"),
     }
 }
 
