@@ -603,3 +603,26 @@ fn float_after_inline_content_sits_at_line_top() {
         assert!(y.abs() < 0.5, "float must sit at line top, got y={y} for {html}");
     }
 }
+
+/// BUG-1359: CSS 2.1 §9.5 — a BFC block is displaced only by floats it meets.
+/// Float B (`clear:left`) sits at y=75…150, below the BFC block C (y=0…50), so C
+/// stays beside A alone (x=50) instead of being pushed past B (x=100).
+#[test]
+fn bfc_block_ignores_cleared_float_below_it() {
+    let root = super::super::layout_measured(
+        &lumen_html_parser::parse("<div class=a></div><div class=b></div><div class=c></div>"),
+        &lumen_css_parser::parse(
+            "body{margin:0;width:500px}\
+             .a{float:left;width:50px;height:75px;background:#e53e3e}\
+             .b{float:left;clear:left;width:100px;height:75px;background:#22bb44}\
+             .c{overflow:hidden;width:200px;height:50px;background:#4299e1}",
+        ),
+        lumen_core::geom::Size::new(800.0, 600.0),
+        &Fixed10Float,
+    );
+    let b = find_one_bg(&root, 0x22bb44);
+    assert!((b.y - 75.0).abs() < 0.01, "B drops below A, got y={}", b.y);
+    let c = find_one_bg(&root, 0x4299e1);
+    assert!((c.x - 50.0).abs() < 0.01, "C sits beside A only (x=50), got x={} y={}", c.x, c.y);
+    assert!(c.y.abs() < 0.01, "C stays at y=0, got y={}", c.y);
+}

@@ -1,6 +1,6 @@
 # BUG-1359 — Блок, создающий BFC (`overflow:hidden`, `display:block` с `margin:auto`), рядом с float: сдвиг на ширину float, не пересекающегося с ним по вертикали
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/bfc.rs` / `float` — подбор позиции BFC-бокса среди float)
 
@@ -26,3 +26,12 @@ WPT-RUN-14 срез 13: серия `floats-wrap-bfc-*`, `floats-wrap-top-below-b
 ## Как проверить
 
 `css/CSS2/floats/floats-wrap-top-below-bfc-001l.xht`, `floats-wrap-bfc-004.xht`.
+
+## Исправление
+
+Корень — не подбор позиции BFC-бокса, а два дефекта потока float'ов:
+
+1. `block_flow_trampoline.rs` — `clear` на float'е сдвигал `frame.init.child_y` (позицию потока) до низа очищаемых float'ов и не возвращал назад: следующий in-flow сиблинг (C) считался стоящим на y=75 и сдвигался за B. Теперь после `place_float` позиция потока восстанавливается (CSS 2.1 §9.5.2 — `clear` сдвигает только сам float).
+2. `FloatContext` хранил для float'а только `bottom_y`, то есть float «действовал» и выше своей верхней кромки. Добавлены `left_tops`/`right_tops` (верх margin-box) и запросы `left_edge_in_flow`/`right_edge_in_flow`, которые игнорируют float'ы, начинающиеся ниже верха блока. Их использует только позиционирование in-flow детей; размещение float'ов и строки по-прежнему идут через `*_edge_at` (правило 5 §9.5.1 — float не выше более раннего float'а).
+
+Тест: `generated_float::bfc_block_ignores_cleared_float_below_it`.

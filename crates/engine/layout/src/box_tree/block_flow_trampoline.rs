@@ -335,6 +335,11 @@ fn step_child(
     // of scope for this slice, see LAYOUT-2's ROADMAP entry.
     if frame.b.children[i].style.float_side != FloatSide::None {
         place_float(frame, i, measurer, viewport, hp);
+        // `clear` moves only the float itself (CSS 2.1 §9.5.2); the in-flow
+        // position of the following siblings stays where it was (BUG-1359).
+        if let Some(pre_clear_y) = clearance_pre {
+            frame.init.child_y = pre_clear_y;
+        }
         return StepOutcome::Advance;
     }
 
@@ -374,8 +379,8 @@ fn step_child(
     }
     let child_y = frame.init.child_y;
     // Normal flow: narrow x/width for active floats.
-    let flow_left  = frame.init.fc.left_edge_at(child_y, content_x);
-    let flow_right = frame.init.fc.right_edge_at(child_y, container_right);
+    let flow_left  = frame.init.fc.left_edge_in_flow(child_y, content_x);
+    let flow_right = frame.init.fc.right_edge_in_flow(child_y, container_right);
     let (mut eff_left, mut eff_w) = {
         let l = flow_left + marker_shift;
         (l, (flow_right - l).max(0.0))
@@ -731,7 +736,7 @@ fn place_float(
             let top_y  = child_y + fmt;
             let bot_y  = top_y + fh + fmb;
             let right_edge = lx + fml + fw + fmr;
-            fc.add_left(bot_y, right_edge);
+            fc.add_left(child_y, bot_y, right_edge);
             wire_shape_outside(fc, child, true, ShapeBoxes {
                 child_y, top_y, bot_y, box_left: lx, box_right: right_edge,
             }, content_width, viewport);
@@ -743,7 +748,7 @@ fn place_float(
             let top_y  = child_y + fmt;
             let bot_y  = top_y + fh + fmb;
             let left_edge = rx - fmr - fw - fml;
-            fc.add_right(bot_y, left_edge);
+            fc.add_right(child_y, bot_y, left_edge);
             wire_shape_outside(fc, child, false, ShapeBoxes {
                 child_y, top_y, bot_y, box_left: left_edge, box_right: rx,
             }, content_width, viewport);

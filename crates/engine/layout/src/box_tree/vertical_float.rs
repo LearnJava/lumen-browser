@@ -207,9 +207,9 @@ pub(super) fn place_float(
         init.fc.right_edge_at(fb, content_inline) - ie
     };
     if is_left {
-        init.fc.add_left(fb + be, i0 + ie);
+        init.fc.add_left(fb, fb + be, i0 + ie);
     } else {
-        init.fc.add_right(fb + be, i0);
+        init.fc.add_right(fb, fb + be, i0);
     }
     let x0 = if init.is_rtl { block_start_x - fb - be } else { init.content_x_left + fb };
     let (target_x, target_y) = (x0 + ml, init.content_y + i0 + mt);
