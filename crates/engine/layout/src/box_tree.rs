@@ -77,6 +77,7 @@ mod multicol_span;
 use multicol_abspos::lay_out_abs_children;
 
 mod table;
+mod table_anon;
 use table::{lay_out_table_row, table_intrinsic_content_width};
 
 mod diagnostics;

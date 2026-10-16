@@ -1024,13 +1024,33 @@ fn build_box_inner(
         // CSS Grid L1 §6: all direct children of a grid/flex container are
         // "blockified" — they participate as individual items, not wrapped in
         // InlineRun. Skip the inline-collection logic for these containers.
+        //
+        // A table, row group or row is an item container only while every child
+        // is a proper table child; one stray text run or block sends it down
+        // the block-flow path below, and `table_anon::fix_children` wraps the
+        // strays in anonymous rows/cells (CSS 2.1 §17.2.1, BUG-1362).
         let is_item_container = matches!(
             style.display,
             Display::Grid | Display::InlineGrid | Display::Flex | Display::InlineFlex
-                | Display::TableRow
+        ) || (matches!(
+            style.display,
+            Display::TableRow
                 | Display::Table | Display::InlineTable
                 | Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup
-        );
+        ) && !dom_children.iter().any(|&cid| {
+            match &doc.get(cid).data {
+                NodeData::Text(s) => !is_discardable_text(s, style.white_space),
+                NodeData::Element { .. } => {
+                    let (d, out_of_flow) = super::inline_build::probe_display_and_flow(
+                        doc, sheet, cid, &style, viewport, dark_mode, counters,
+                    );
+                    !out_of_flow
+                        && !matches!(d, Display::None | Display::Contents)
+                        && super::table_anon::display_rejected_by(style.display, d)
+                }
+                _ => false,
+            }
+        }));
         if is_item_container {
             // CSS Flexbox §4 / Grid §6: text runs directly inside a flex/grid
             // container become anonymous items. Tables keep their own
@@ -1464,6 +1484,8 @@ fn build_box_inner(
         // because flex/grid/table children may include display:contents elements whose
         // Contents boxes must be unpacked before lay_out sees them.
         flatten_contents(&mut children);
+        // CSS 2.1 §17.2.1 — anonymous table boxes (BUG-1362).
+        children = super::table_anon::fix_children(doc, id, &kind, &style, children);
     }
 
     // SVG root: build SVG shape children (separate from HTML box-tree flow).
