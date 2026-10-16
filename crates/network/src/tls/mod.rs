@@ -22,6 +22,7 @@ pub mod ct_logs;
 mod ct_logs_data;
 mod ct_sig;
 pub mod fingerprint;
+pub mod nuc;
 pub mod ocsp;
 pub mod os_roots;
 pub mod probe;

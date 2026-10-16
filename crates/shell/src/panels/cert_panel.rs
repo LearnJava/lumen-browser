@@ -52,6 +52,9 @@ pub struct PanelCertData {
     /// Name of the root installed on this computer that anchors the chain
     /// (COMPAT-TRUST-OSROOTS); empty for a chain to a built-in root.
     pub local_root: String,
+    /// The chain is issued by the Russian state CA and was accepted under the user's consent
+    /// (COMPAT-TRUST-NUC): distinct CT log operators that vouched for it.
+    pub gov_ca_scts: Option<usize>,
     /// A6: human-readable reason the connection was rejected, when the page
     /// currently shown was reached only via "Proceed anyway" on the cert
     /// interstitial (`cert_interstitial.rs`). `None` for an ordinary,
@@ -92,6 +95,7 @@ impl From<lumen_network::CertInfo> for PanelCertData {
             revocation_status: info.revocation_status,
             ct_status: info.ct_status,
             local_root: info.local_root,
+            gov_ca_scts: info.gov_ca_scts,
             error: None,
         }
     }
@@ -208,6 +212,9 @@ fn build_rows(cert: &PanelCertData) -> Vec<(&'static str, String)> {
             format!("Проверено корнем, установленным на этом компьютере: {}", cert.local_root),
         ));
     }
+    if let Some(scts) = cert.gov_ca_scts {
+        rows.push(("Trust Root", format!("Российский госсертификат (CT: {scts} SCT)")));
+    }
     rows
 }
 
@@ -241,6 +248,7 @@ mod tests {
             revocation_status: String::from("good"),
             ct_status: String::from("2 SCTs (sufficient)"),
             local_root: String::new(),
+            gov_ca_scts: None,
             error: None,
         }
     }
@@ -339,6 +347,15 @@ mod tests {
         let (label, value) = rows.last().expect("row");
         assert_eq!(*label, "Trust Root");
         assert!(value.starts_with("Проверено корнем, установленным на этом компьютере: Kaspersky"));
+    }
+
+    #[test]
+    fn gov_ca_adds_an_indicator_row_with_the_ct_count() {
+        let mut cert = sample_cert();
+        cert.gov_ca_scts = Some(3);
+        let rows = build_rows(&cert);
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows.last(), Some(&("Trust Root", String::from("Российский госсертификат (CT: 3 SCT)"))));
     }
 
     #[test]

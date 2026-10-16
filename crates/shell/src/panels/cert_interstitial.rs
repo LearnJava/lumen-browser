@@ -93,6 +93,27 @@ impl CertInterstitial {
         !self.hsts_host && !matches!(self.error, Some(lumen_core::error::CertError::Revoked))
     }
 
+    /// Whether the primary button is the consent to the Russian state CA for this host
+    /// (COMPAT-TRUST-NUC) rather than a bypass: the chain leads to that CA and the user has
+    /// not agreed yet. Allowed on HSTS hosts too — the certificate is still fully verified and
+    /// must carry CT evidence, nothing is waived.
+    pub fn offers_nuc_consent(&self) -> bool {
+        self.visible
+            && self.threat.is_none()
+            && matches!(self.cause, crate::cert_cause::CertCause::GovCa)
+            && !lumen_network::tls::nuc::has_consent(&self.host)
+    }
+
+    /// The consent button was pressed: close the screen and return the host to trust the
+    /// national CA for. `None` when this screen does not offer it.
+    pub fn take_nuc_consent(&mut self) -> Option<String> {
+        if !self.offers_nuc_consent() {
+            return None;
+        }
+        self.visible = false;
+        Some(self.host.clone())
+    }
+
     /// Dismiss without proceeding ("Back" / navigate away).
     pub fn close(&mut self) {
         self.visible = false;
@@ -131,7 +152,14 @@ impl CertInterstitial {
         }
         // Unexplained errors keep the warning about interception; an explained
         // one (clock, antivirus, portal, ...) says what actually happened.
-        let (title, message) = self.cause.describe(&self.host).unwrap_or_else(|| {
+        let consent = self.offers_nuc_consent();
+        let gov_ca = matches!(self.cause, crate::cert_cause::CertCause::GovCa);
+        let described = if gov_ca {
+            Some(crate::cert_cause::gov_ca_text(&self.host, !consent))
+        } else {
+            self.cause.describe(&self.host)
+        };
+        let (title, message) = described.unwrap_or_else(|| {
             (
                 "Ваше подключение не защищено".to_owned(),
                 format!(
@@ -145,9 +173,10 @@ impl CertInterstitial {
             title,
             message,
             detail: self.detail_text(),
-            proceed_label: "Всё равно перейти".to_owned(),
+            proceed_label: if consent { "Доверять центру Минцифры для этого сайта" } else { "Всё равно перейти" }
+                .to_owned(),
             other_browser: self.handoff_reason().is_some(),
-            proceed_blocked: !self.can_proceed(),
+            proceed_blocked: !consent && !self.can_proceed(),
             time_settings: self.cause.offers_time_settings(),
         }
     }
@@ -259,6 +288,41 @@ mod tests {
             lumen_storage::ThreatType::SocialEngineering,
         );
         assert!(!i.chrome_model().other_browser);
+    }
+
+    #[test]
+    fn state_ca_error_offers_consent_instead_of_a_bypass() {
+        use crate::cert_cause::CertCause;
+        let host = "bank.interstitial-test.example";
+        lumen_network::tls::nuc::revoke_host(host);
+        let mut i = CertInterstitial::new();
+        let err = CertError::Untrusted("UnknownIssuer".to_owned());
+        // A Known HSTS Host cannot be bypassed, but the consent is not a bypass.
+        i.open_with_cause(format!("https://{host}/"), host.to_owned(), err, true, CertCause::GovCa);
+        assert!(!i.can_proceed());
+        assert!(i.offers_nuc_consent());
+        let m = i.chrome_model();
+        assert!(m.proceed_label.contains("Минцифры") && !m.proceed_blocked, "{m:?}");
+        assert_eq!(i.take_nuc_consent().as_deref(), Some(host));
+        assert!(!i.visible);
+    }
+
+    #[test]
+    fn state_ca_consent_is_not_offered_twice_or_for_other_causes() {
+        use crate::cert_cause::CertCause;
+        let host = "again.interstitial-test.example";
+        let err = || CertError::Untrusted("UnknownIssuer".to_owned());
+        let mut i = CertInterstitial::new();
+        i.open_with_cause(format!("https://{host}/"), host.to_owned(), err(), false, CertCause::IncompleteChain);
+        assert!(!i.offers_nuc_consent() && i.take_nuc_consent().is_none());
+        // Already consented but the chain still fails: the ordinary screen with its bypass.
+        lumen_network::tls::nuc::consent_host(host);
+        i.open_with_cause(format!("https://{host}/"), host.to_owned(), err(), false, CertCause::GovCa);
+        assert!(!i.offers_nuc_consent());
+        let m = i.chrome_model();
+        assert_eq!(m.proceed_label, "Всё равно перейти");
+        assert!(m.title.contains("не прошёл проверку"), "{}", m.title);
+        lumen_network::tls::nuc::revoke_host(host);
     }
 
     #[test]

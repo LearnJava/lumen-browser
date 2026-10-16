@@ -313,6 +313,23 @@ pub fn issuer_and_subject_der(cert_der: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((issuer, subject))
 }
 
+/// The whole `subjectPublicKeyInfo` TLV (header included) of a DER certificate — the
+/// byte form that `openssl ... | sha256` SPKI pins hash ([`super::nuc`]). `None` if malformed.
+pub(super) fn spki_der(cert_der: &[u8]) -> Option<&[u8]> {
+    let certificate = Der::new(cert_der).read_tagged(TAG_SEQUENCE)?;
+    let tbs_bytes = Der::new(certificate).read_tagged(TAG_SEQUENCE)?;
+    let mut tbs = Der::new(tbs_bytes);
+    if tbs.peek_tag() == Some(TAG_CONTEXT_0) {
+        tbs.read_tlv()?;
+    }
+    for _ in 0..5 {
+        tbs.read_tlv()?; // serial, signature, issuer, validity, subject
+    }
+    let start = tbs.consumed();
+    tbs.read_tagged(TAG_SEQUENCE)?;
+    tbs_bytes.get(start..tbs.consumed())
+}
+
 /// The `extnValue` contents of the extension `target_oid` (OID contents, no
 /// header) in a DER certificate — `None` if absent or the certificate is
 /// malformed. Used by [`super::aia`] for Authority Information Access.
