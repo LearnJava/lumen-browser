@@ -18,9 +18,14 @@
 //! The reset → increment → set order is normative (CSS Lists L3 §4).
 //!
 //! This gives correct resolution for `::before` pseudo-elements (which read the state
-//! after the element's own increment but before children). `::after` reads post-children
-//! state; for Phase 0 we use the same pre-children snapshot (sufficient for the common
-//! `counter-increment` on `li` + `::before { content: counter(x) }` pattern).
+//! after the element's own increment but before children).
+//!
+//! BUG-1368 — `::before` / `::after` carry their own `counter-reset` /
+//! `counter-increment` / `counter-set` (CSS Lists L3 §4.5): `::before` applies them
+//! right after its element's own, `::after` after the children. When a pseudo-element
+//! applies counters, or its `content` reads them after the children had their say
+//! (`::after`), the state is stored in `CounterMap::pseudo_counters` and
+//! `CounterMap::counters_for` serves it; otherwise the element's snapshot is used.
 //!
 //! # Custom counter styles
 //! `CounterStyleRegistry` maps counter style names to `CounterStyleDef` — parsed
@@ -440,6 +445,11 @@ impl<'a> PrevCascade<'a> {
 pub struct CounterMap {
     /// `NodeId` → counter snapshot used by `counter()` / `counters()`.
     nodes: HashMap<NodeId, CounterSnapshot>,
+    /// BUG-1368 — `(NodeId, slot)` → counter state as the `::before` / `::after`
+    /// pseudo-element sees it: after the pseudo-element's own counter properties
+    /// and, for `::after`, after the element's children. Absent when `nodes`
+    /// already is that state (see [`Self::counters_for`]).
+    pseudo_counters: HashMap<(NodeId, QuoteSlot), CounterSnapshot>,
     /// `(NodeId, slot)` → ordered list of quote-nesting depth indices, one per
     /// `open-quote` / `close-quote` item in that slot's `content` (in order).
     /// `no-open-quote` / `no-close-quote` adjust depth but emit no entry.
@@ -554,6 +564,12 @@ impl CounterMap {
         self.nodes.get(&id)
     }
 
+    /// BUG-1368 — the counter state `id`'s `::before` / `::after` (`slot`) reads
+    /// in its `content`.
+    pub fn counters_for(&self, id: NodeId, slot: QuoteSlot) -> Option<&CounterSnapshot> {
+        self.pseudo_counters.get(&(id, slot)).or_else(|| self.nodes.get(&id))
+    }
+
     /// Returns the ordered quote-depth indices for the given `(id, slot)`'s
     /// generated content. Empty slice when the slot has no quote items.
     pub fn quote_depths(&self, id: NodeId, slot: QuoteSlot) -> &[usize] {
@@ -591,14 +607,16 @@ impl CounterMap {
     /// path did not walk, so it has nothing new to say and must leave the fact
     /// exactly as the pass that did walk left it.
     fn record_generated_content(&mut self, doc: &Document, flat: &FlatTree) {
-        let any = !self.nodes.is_empty() || !self.quotes.is_empty();
+        let any = !self.nodes.is_empty() || !self.quotes.is_empty() || !self.pseudo_counters.is_empty();
         self.styles.note_generated_content(any);
         // BUG-935 срез 90: which parts of the document held counters, for the
         // spine's per-subtree licence. The climb stops at the first node already
         // in the set, so the chains share their tails.
-        self.styles.quotes_recorded = !self.quotes.is_empty();
+        // BUG-1368: pseudo-element counter state is recorded by the same probe as quotes,
+        // so it arms the same "walk everything" licence.
+        self.styles.quotes_recorded = !self.quotes.is_empty() || !self.pseudo_counters.is_empty();
         let mut scopes = IdSet::with_capacity_and_hasher(self.nodes.len() * 4, Default::default());
-        for &id in self.nodes.keys() {
+        for &id in self.nodes.keys().chain(self.pseudo_counters.keys().map(|(id, _)| id)) {
             let mut cur = Some(id);
             while let Some(n) = cur.filter(|n| scopes.insert(*n)) {
                 cur = flat.parent_of(doc, n);
@@ -678,9 +696,11 @@ struct CounterCtx {
     /// (`style::sheet_has_quote_content`, decided once per pass). When false,
     /// `walk` skips its per-node `::before`/`::after` probe: that probe exists
     /// only to advance `quote_depth`, and without a quote anywhere in the sheet
-    /// it can never record one. Lives here rather than as a `walk` parameter
+    /// it can never record one. BUG-1368: the probe also applies the pseudo-
+    /// elements' own counter properties, so a sheet that declares them on
+    /// `::before`/`::after` (`style::sheet_has_pseudo_counters`) arms it too. Lives here rather than as a `walk` parameter
     /// because it is per-pass state like the counter stacks themselves.
-    quotes_possible: bool,
+    pseudo_probe: bool,
 }
 
 impl CounterCtx {
@@ -721,6 +741,14 @@ impl CounterCtx {
         }
     }
 
+    /// BUG-1368 — apply a pseudo-element's own `counter-reset`, `counter-increment`
+    /// and `counter-set`, in that order (CSS Lists L3 §4).
+    fn apply_counter_props(&mut self, ps: &ComputedStyle) {
+        self.apply_reset(&ps.counter_reset);
+        self.apply_increment(&ps.counter_increment);
+        self.apply_set(&ps.counter_set);
+    }
+
     /// Snapshot the current stacks for this node.
     fn snapshot(&self) -> CounterSnapshot {
         self.stacks.clone()
@@ -737,6 +765,17 @@ impl CounterCtx {
             }
         }
     }
+}
+
+/// BUG-1368 — whether `ps` declares any of `counter-reset`/`-increment`/`-set`.
+fn has_counter_props(ps: &ComputedStyle) -> bool {
+    !ps.counter_reset.is_empty() || !ps.counter_increment.is_empty() || !ps.counter_set.is_empty()
+}
+
+/// BUG-1368 — whether a `content` value contains `counter()` / `counters()`.
+fn content_reads_counters(content: &Content) -> bool {
+    matches!(content, Content::Items(items)
+        if items.iter().any(|i| matches!(i, ContentItem::Counter { .. } | ContentItem::Counters { .. })))
 }
 
 /// Build a `CounterMap` by walking the DOM in pre-order.
@@ -756,7 +795,8 @@ pub fn precompute_counters(
 ) -> CounterMap {
     let root_style = ComputedStyle::root();
     let mut ctx = CounterCtx {
-        quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+        pseudo_probe: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode)
+            || crate::style::sheet_has_pseudo_counters(sheet, viewport, dark_mode),
         ..CounterCtx::default()
     };
     let mut map = CounterMap::with_capacity(doc.node_count());
@@ -986,7 +1026,8 @@ pub fn incremental_precompute_counters(
     let (mut ctx, mut map, incr) = {
         let _prof = lumen_core::profile::scope("cascade_prologue");
         let ctx = CounterCtx {
-            quotes_possible: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode),
+            pseudo_probe: crate::style::sheet_has_quote_content(sheet, viewport, dark_mode)
+            || crate::style::sheet_has_pseudo_counters(sheet, viewport, dark_mode),
             ..CounterCtx::default()
         };
         // BUG-341 S23: the previous pass's cache is the best available estimate of
@@ -1004,7 +1045,7 @@ pub fn incremental_precompute_counters(
             flat,
             dirty_roots.iter().chain(shallow_roots.iter()).chain(point_roots.iter()).copied(),
             &content_dirty,
-            ctx.quotes_possible,
+            ctx.pseudo_probe,
             prev_quotes,
         );
         let map = CounterMap::continuing(prev_styles, elements);
@@ -1098,10 +1139,10 @@ fn restyle_spine(
     flat: &FlatTree,
     roots: impl Iterator<Item = NodeId>,
     content_dirty: &ContentDirty<'_>,
-    quotes_possible: bool,
+    pseudo_probe: bool,
     prev_quotes: bool,
 ) -> Option<HashSet<NodeId>> {
-    if !content_dirty.tracked() || quotes_possible || prev_quotes {
+    if !content_dirty.tracked() || pseudo_probe || prev_quotes {
         return None;
     }
     let content: &[NodeId] = match content_dirty {
@@ -1448,6 +1489,49 @@ fn level_descent_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("LUMEN_NO_LEVEL_DESCENT").is_some_and(|v| v != "0"))
 }
 
+/// The `::before` / `::after` probe of [`walk`], out of line so the pseudo-element's
+/// `ComputedStyle` temporary stays out of the recursive frame (deep documents recurse
+/// through `walk` once per level).
+///
+/// Records the pseudo-element's quote depths (CSS Generated Content L3 §3.2) and, BUG-1368,
+/// applies its own counter properties and stores the counter state its `content` reads
+/// (`CounterMap::pseudo_counters`). `::after` stores that state when it reads counters at
+/// all: it sits after the children, so the element's own snapshot is stale for it.
+///
+/// Returns the pseudo-element's `counter-reset` list, which the caller pops once the
+/// element ends.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn probe_pseudo(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    style: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+    ctx: &mut CounterCtx,
+    map: &mut CounterMap,
+    slot: QuoteSlot,
+) -> Vec<(String, i32)> {
+    let _prof = lumen_core::profile::scope_detail("quote_pseudos");
+    let name = if slot == QuoteSlot::Before { "before" } else { "after" };
+    let Some(ps) = compute_pseudo_element_style(doc, id, name, sheet, style, viewport, dark_mode) else {
+        return Vec::new();
+    };
+    let depths = record_quote_depths(&ps.content, &mut ctx.quote_depth);
+    if !depths.is_empty() {
+        map.quotes.insert((id, slot), depths);
+    }
+    let own = has_counter_props(&ps);
+    if own {
+        ctx.apply_counter_props(&ps);
+    }
+    if own || (slot == QuoteSlot::After && content_reads_counters(&ps.content)) {
+        map.pseudo_counters.insert((id, slot), ctx.snapshot());
+    }
+    ps.counter_reset
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &Document,
@@ -1637,22 +1721,13 @@ fn walk(
     // Always run (even when `style` was reused) — `quote_depth` is a running
     // document-order counter that must stay continuous regardless of which
     // nodes recomputed their style.
-    // BUG-341 S10: `quotes_possible` is the sheet-wide "could any declaration
+    // BUG-341 S10: `pseudo_probe` is the sheet-wide "could any declaration
     // produce quote content" flag — when it is false this probe cannot record a
     // depth, and skipping it removes two pseudo-element cascades per node
     // (measured: 79% of `precompute_counters` on the CC12_KEY cycle, where only
     // a dozen nodes recompute their own style but all 828 were probed).
-    if ctx.quotes_possible {
-        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
-        if let Some(bps) =
-            compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
-        {
-            let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
-            if !depths.is_empty() {
-                map.quotes.insert((id, QuoteSlot::Before), depths);
-            }
-        }
-    }
+    let before_resets =
+        if ctx.pseudo_probe { probe_pseudo(doc, sheet, id, &style, viewport, dark_mode, ctx, map, QuoteSlot::Before) } else { Vec::new() };
 
     // BUG-935 срез 92: a *shallow* node (its own match is all the delta put in question) whose
     // style came out different no longer takes its subtree with it. A child's style is a
@@ -1679,18 +1754,11 @@ fn walk(
     }
 
     // ::after quotes come after all children in document order.
-    if ctx.quotes_possible {
-        let _prof = lumen_core::profile::scope_detail("quote_pseudos");
-        if let Some(aps) =
-            compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
-        {
-            let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
-            if !depths.is_empty() {
-                map.quotes.insert((id, QuoteSlot::After), depths);
-            }
-        }
-    }
+    let after_resets =
+        if ctx.pseudo_probe { probe_pseudo(doc, sheet, id, &style, viewport, dark_mode, ctx, map, QuoteSlot::After) } else { Vec::new() };
 
+    ctx.pop_reset(&after_resets);
+    ctx.pop_reset(&before_resets);
     ctx.pop_reset(&style.counter_reset);
 
     // BUG-341 S4/S16: this node's own style was reused (not recomputed), its
@@ -3472,4 +3540,67 @@ mod tests {
         assert_eq!(resolve_counter_value(&child, 2, &reg), "✗ ");
         assert_eq!(resolve_counter_value(&child, 3, &reg), "✓ ");
     }
+
+    // ── ::before / ::after counter properties (BUG-1368, CSS Lists L3 §4.5) ──
+
+    /// The innermost value of counter `name` as the `slot` pseudo-element of `#id` reads it.
+    fn pseudo_counter(html: &str, css: &str, id: &str, slot: QuoteSlot, name: &str) -> Option<i32> {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let map = precompute_counters(&doc, &sheet, Size::new(800.0, 600.0), &flat, false);
+        fn find(doc: &Document, n: NodeId, id: &str) -> Option<NodeId> {
+            if doc.get(n).get_attr("id") == Some(id) {
+                return Some(n);
+            }
+            doc.get(n).children.iter().find_map(|&c| find(doc, c, id))
+        }
+        let node = find(&doc, doc.root(), id).expect("element with the id");
+        map.counters_for(node, slot).and_then(|s| s.get(name)).and_then(|v| v.last()).copied()
+    }
+
+    #[test]
+    fn pseudo_before_increment_applies() {
+        let css = "#b::before{counter-increment:zb 3;content:counter(zb)}";
+        assert_eq!(pseudo_counter(r#"<div id="b"></div>"#, css, "b", QuoteSlot::Before, "zb"), Some(3));
+    }
+
+    #[test]
+    fn pseudo_before_reset_and_increment() {
+        let css = "#d::before{counter-reset:zd 7;counter-increment:zd;content:counter(zd)}";
+        assert_eq!(pseudo_counter(r#"<div id="d"></div>"#, css, "d", QuoteSlot::Before, "zd"), Some(8));
+    }
+
+    #[test]
+    fn pseudo_after_sees_element_and_own_increment() {
+        let css = "#g{counter-increment:zg}#g::after{counter-increment:zg 5;content:counter(zg)}";
+        assert_eq!(pseudo_counter(r#"<div id="g"></div>"#, css, "g", QuoteSlot::After, "zg"), Some(6));
+    }
+
+    #[test]
+    fn pseudo_after_reads_state_after_children() {
+        let css = "p{counter-increment:c}#a::after{content:counter(c)}";
+        let html = r#"<div id="a"><p></p><p></p></div>"#;
+        assert_eq!(pseudo_counter(html, css, "a", QuoteSlot::After, "c"), Some(2));
+    }
+
+    #[test]
+    fn pseudo_before_does_not_see_children() {
+        let css = "p{counter-increment:c}#a::before{counter-increment:c 0;content:counter(c)}";
+        let html = r#"<div id="a"><p></p></div>"#;
+        assert_eq!(pseudo_counter(html, css, "a", QuoteSlot::Before, "c"), Some(0));
+    }
+
+    #[test]
+    fn pseudo_before_reset_is_visible_to_children_not_siblings() {
+        // The ::before scope reaches the element's children…
+        let css = "#a::before{counter-reset:k 9;content:\"\"}p{counter-increment:k}#a::after{content:counter(k)}";
+        let html = r#"<div id="a"><p></p></div>"#;
+        assert_eq!(pseudo_counter(html, css, "a", QuoteSlot::After, "k"), Some(10));
+        // …and is gone once the element ends.
+        let css = "#a::before{counter-reset:k 9;content:\"\"}#z::before{content:counter(k)}";
+        let html = r#"<div id="a"></div><div id="z"></div>"#;
+        assert_eq!(pseudo_counter(html, css, "z", QuoteSlot::Before, "k"), None);
+    }
+
 }

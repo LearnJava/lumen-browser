@@ -1,6 +1,6 @@
 # BUG-1368 — `counter-reset` / `counter-increment` на самом `::before` / `::after` не применяются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 14, `css/CSS2` (text, linebox, fonts, generated-content, lists, bidi-text))
 **Область:** layout (`crates/engine/layout/src/counters.rs::precompute_counters` ~1562 — `apply_reset`/`apply_increment` берут стиль элемента, стиль его `::before`/`::after` не читается)
 
@@ -33,3 +33,7 @@ WPT-RUN-14 срез 14: 35 id после правки однодвоеточны
 ## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 
 `css/css-lists`: 19 reftest `thick` (`counter-001`, `counter-004`, `counters-001/004/006`, `counters-scope-001…004`, `counter-set-001`, `marker-counter`, `*-display-contents`, `*-display-none`, `counter-reset-increment-overflow-underflow`, `pseudo-element-remove-update`, `deep-pseudo-element-remove-update`). Проба: `.b::before{counter-increment:x;content:counter(x)}` при `counter-reset:x 5` — `5`, `5` (ожидается `6`, `7`); `.b::before{counter-reset:y 3;content:counter(y)}` — `0`. См. также BUG-1568 (неявный `list-item`, `reversed()`, `display:none`).
+
+## Исправление
+
+`counters.rs::walk` применяет `counter-reset`/`-increment`/`-set` стилей `::before` (сразу после счётчиков самого элемента, до детей) и `::after` (после детей) к тем же стекам; сброс `::before`/`::after` снимается вместе с элементом. Снимок для `content` псевдоэлемента лежит в `CounterMap::pseudo_counters[(id, slot)]` и читается через `CounterMap::counters_for` (для `::after` это состояние после детей, а не «до детей»; без своих счётчиков и без `counter()` в `content` берётся снимок элемента). Зонд псевдоэлементов, прежде включавшийся только кавычками, теперь включается и правилом `::before`/`::after` с `counter-*`/`content: counter…` (`style::sheet_has_pseudo_counters`, `CascadeIndex::has_pseudo_counters`). Тесты: `counters::tests::pseudo_*` (6).
