@@ -45,6 +45,9 @@ impl Lumen {
                     let signal = self.compat_signals.record_antibot_loop(url, vendor.code(), now);
                     self.persist_signal(&signal);
                 }
+                if count == crate::gate_detect::LOOP_COUNT {
+                    self.frustration_antibot_loop(url);
+                }
                 let shown = self.source.url_str().unwrap_or(url).to_owned();
                 let page = gate_page::gate_source(&shown, vendor, &check_id(&site, vendor, now));
                 self.nav_start = None;

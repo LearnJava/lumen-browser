@@ -560,6 +560,10 @@ impl Lumen {
         if let Some(ask) = self.fix_panel_tick() {
             next_wakeup = Some(next_wakeup.map_or(ask, |t| t.min(ask)));
         }
+        // COMPAT-FRUSTRATION: белый экран через 3 с, чип после паузы в наборе.
+        if let Some(at) = self.frustration_tick() {
+            next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+        }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
             // BUG-271: no pending deadline — park the loop for real. Without

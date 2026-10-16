@@ -20,6 +20,7 @@ impl Lumen {
         // UX-CARET: typing (or any key) restarts the visible blink phase.
         if key_event.state == ElementState::Pressed {
             self.caret_restart();
+            self.frustration_key();
         }
         // UX-CAPSLOCK: a Caps Lock press or an Alt+Shift layout switch changes the
         // badges over a focused password field; repaint now, not at the next blink.
