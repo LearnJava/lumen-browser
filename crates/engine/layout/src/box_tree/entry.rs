@@ -801,21 +801,30 @@ pub fn build_iframe_document(srcdoc: &str) -> Document {
 /// BUG-1103, narrow edge case: `<html>` box taller than `<body>`'s with no
 /// own background of its own).
 pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> {
-    let html = root
-        .children
-        .iter()
-        .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?;
+    let html = root.children.iter().find(|c| is_element_box_kind(&c.kind))?;
     let html_has_bg =
         html.style.background_color.is_some() || !html.style.background_layers.is_empty();
-    let source = if html_has_bg {
-        html
-    } else {
-        html.children
-            .iter()
-            .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?
-    };
+    let source = if html_has_bg { html } else { first_child_element_box(html, html.node)? };
     let color = source.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
+}
+
+/// Boxes an element can generate as its principal box — `html` / `body` may carry
+/// `display: table` / `flow-root` besides plain `block` (BUG-1363).
+fn is_element_box_kind(kind: &BoxKind) -> bool {
+    matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table)
+}
+
+/// First child element box under `parent`, looking through the anonymous wrappers that
+/// share `owner`'s node (CSS 2.1 §17.2.1 table wrappers under `display: table`).
+fn first_child_element_box(parent: &LayoutBox, owner: NodeId) -> Option<&LayoutBox> {
+    parent.children.iter().find_map(|child| {
+        if child.node != owner {
+            is_element_box_kind(&child.kind).then_some(child)
+        } else {
+            first_child_element_box(child, owner)
+        }
+    })
 }
 
 /// CSS Writing Modes L3 §8 (Principal Writing Mode): when `<html>` has a `<body>` child, the

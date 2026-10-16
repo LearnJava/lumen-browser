@@ -1,6 +1,6 @@
 # BUG-1363 — Фон корневого `<html>` не распространяется на canvas, если у `<html>` есть `position: absolute` / `display: table`: закрашивается только его бокс
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout/paint (`crates/engine/layout/src/box_tree/entry.rs::canvas_background_color`, `:801` — берёт первый `Block|FlowRoot` потомок корня; у `html` с `position:absolute`/`display:table` бокс другого вида или иной порядок)
 
@@ -25,3 +25,7 @@ WPT-RUN-14 срез 13: `abspos/abspos-containing-block-initial-004a…004f.xht`
 ## Как проверить
 
 `css/CSS2/abspos/abspos-containing-block-initial-004c.xht`.
+
+## Исправление
+
+Корень — `html { display: table }`: бокс корня имеет вид `Table`, а `canvas_background_color` искала только `Block|FlowRoot`, поэтому отдавала `None` (канва остаётся белой, закрашен лишь бокс `html`). `position:absolute` сам по себе дефектом не был — пробой показал верный результат. Теперь корень ищется среди `Block|FlowRoot|Table`, а `<body>` (источник фона, если у `html` его нет) — сквозь анонимные табличные обёртки, делящие узел с `html` (BUG-1362). Тесты: `table_grid_presentational::canvas_bg_from_*`. Проверка: 8 id `abspos-containing-block-initial-004*/005*` дают 475 600 жёлтых пикселей, как эталон.

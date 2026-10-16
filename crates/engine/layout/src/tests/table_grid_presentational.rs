@@ -2305,3 +2305,45 @@ fn body_vertical_rl_is_principal_mode_and_starts_at_right_edge() {
     assert_eq!(body.rect.x, 700.0, "блочный поток вертикального документа идёт от правого края");
     assert_eq!(html.rect.x + html.rect.width, 800.0);
 }
+
+// ── BUG-1363: canvas background from a root with position/display other than block ──
+
+/// CSS Backgrounds 3 §2.11.2: the root element's background paints the whole canvas
+/// whatever the root's own `position`/`display` (WPT `abspos-containing-block-initial-004*`).
+#[test]
+fn canvas_bg_from_abspos_root() {
+    let root = lay_full(
+        "<html><body><p>x</p></body></html>",
+        "html { position: absolute; left: 100px; top: 100px; width: 100px; height: 100px; \
+         background: yellow; border: 10px solid black; }",
+    );
+    assert_eq!(
+        canvas_background_color(&root),
+        Some(Color { r: 255, g: 255, b: 0, a: 255 }),
+    );
+}
+
+#[test]
+fn canvas_bg_from_abspos_table_root() {
+    let root = lay_full(
+        "<html><body><p>x</p></body></html>",
+        "html { position: absolute; display: table; left: 100px; top: 100px; \
+         background: yellow; border: 10px solid black; }",
+    );
+    assert_eq!(
+        canvas_background_color(&root),
+        Some(Color { r: 255, g: 255, b: 0, a: 255 }),
+    );
+}
+
+#[test]
+fn canvas_bg_from_table_root_with_body_bg() {
+    let root = lay_full(
+        "<html><body><p>x</p></body></html>",
+        "html { display: table; } body { background: lime; }",
+    );
+    assert_eq!(
+        canvas_background_color(&root),
+        Some(Color { r: 0, g: 255, b: 0, a: 255 }),
+    );
+}
