@@ -880,6 +880,8 @@ pub(super) fn dispatch_box(
     if let BoxKind::InlineRun { segments, lines, first_line_style, row_continuation_width, first_line_inset } = &mut b.kind {
         let row_continuation_width = *row_continuation_width;
         let first_line_inset = *first_line_inset;
+        // CSS 2.1 §10.8.1: рост блока из-за боксов, вынесенных `vertical-align` за строку.
+        let mut line_growth = super::inline_wrap::LineGrowth::default();
         if let Some(m) = measurer {
             // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
             // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
@@ -1082,7 +1084,7 @@ pub(super) fn dispatch_box(
             }
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
             let line_h = step_line_height(b.used_line_height, s.line_height_step);
-            apply_inline_vertical_align(lines, line_h);
+            line_growth = apply_inline_vertical_align(lines, line_h, !was_shaped);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
             // container flow (`line_clamp_flow`), not run by run; here it only takes priority
             // over text-overflow:ellipsis (both cannot apply simultaneously).
@@ -1133,7 +1135,7 @@ pub(super) fn dispatch_box(
                     + (line_count - 1) as f32 * step_line_height(b.used_line_height, step)
             }
             _ => line_count as f32 * step_line_height(b.used_line_height, step),
-        };
+        } + line_growth.top + line_growth.bottom;
         return DispatchOutcome::Done;
     }
 

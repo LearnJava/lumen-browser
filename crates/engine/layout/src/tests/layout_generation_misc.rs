@@ -1204,8 +1204,9 @@ fn vertical_align_bottom_y_offset() {
 
 #[test]
 fn vertical_align_length_shifts_up() {
-    // vertical-align: 8px → y_offset = half_leading - 8px
-    // (позитивная длина CSS = вверх от baseline = half_leading - 8).
+    // vertical-align: 8px → до сдвига y_offset = half_leading - 8px (позитивная длина CSS =
+    // вверх от baseline). Бокс вышел над строкой, поэтому строка выросла на недостающую часть
+    // (BUG-1370, §10.8.1) и поднятый фрагмент встал на верх выросшей строки.
     let root = lay_measured(
         "<p><span>Hi</span></p>",
         "span { vertical-align: 8px; }",
@@ -1216,12 +1217,18 @@ fn vertical_align_length_shifts_up() {
     let fs = frag.style.font_size;
     let line_h = fs * frag.style.line_height;
     let half_leading = ((line_h - fs) / 2.0).max(0.0);
-    let expected = half_leading - 8.0;
+    let growth = (8.0 - half_leading).max(0.0);
+    let expected = half_leading - 8.0 + growth;
     assert!(
         (frag.y_offset - expected).abs() < 0.01,
         "length 8px y_offset: expected {}, got {}",
         expected,
         frag.y_offset
+    );
+    assert!(
+        (p.rect.height - (line_h + growth)).abs() < 0.01,
+        "line grows by {growth}: height {}",
+        p.rect.height
     );
 }
 
