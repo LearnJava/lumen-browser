@@ -1,6 +1,6 @@
 # BUG-1364 — Фон `display:table` закрашивает и `table-caption`: подпись внутри фона таблицы, а не снаружи (CSS 2.1 §17.4)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout/paint (`crates/engine/layout/src/box_tree/table.rs` — рамка/фон таблицы включает подпись)
 
@@ -26,3 +26,7 @@ WPT-RUN-14 срез 13: `tables/caption-side-applies-to-*` — 11 id: `caption-s
 ## Как проверить
 
 `css/CSS2/tables/caption-side-applies-to-006.xht`.
+
+## Исправление
+
+Блок таблицы в Lumen — обёртка и сетка в одном боксе, подпись лежала внутри его content box (между рамкой/паддингом и строками), поэтому фон и рамка охватывали и её. Теперь подпись `caption-side: top` ставится на `rect.y` таблицы (над рамкой и паддингом), `bottom` — под нижней рамкой и паддингом, шириной в border box таблицы; позиции строк и полная высота `rect` не изменились. Высоту подписей `finish_table` кладёт в `LayoutBox::table_caption_inset`, а paint (`table_grid_rect` в `display_list/fieldset.rs`) красит фон, тени и рамку по `rect` без этих отступов. Остаточное: `outline` и hit-test таблицы по-прежнему берут обёртку целиком.

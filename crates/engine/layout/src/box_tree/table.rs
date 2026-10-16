@@ -301,26 +301,6 @@ pub(crate) fn build_table_init(
 
     let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
 
-    // CSS Tables L2 §17.4 — `display: table-caption` boxes. The table box here is wrapper and
-    // grid in one, so a caption sits inside the table's content box (above the rows for
-    // `caption-side: top`, below them for `bottom`) rather than outside the table border as in
-    // a browser that keeps two boxes. Top captions are placed now; bottom ones in `finish_table`.
-    let mut top_caption_h = 0.0_f32;
-    let mut bottom_captions: Vec<usize> = Vec::new();
-    for i in 0..b.children.len() {
-        if !is_table_caption(&b.children[i]) {
-            continue;
-        }
-        if b.children[i].style.caption_side == CaptionSide::Bottom {
-            bottom_captions.push(i);
-        } else {
-            let y = content_y + top_caption_h;
-            top_caption_h += lay_out_caption(
-                &mut b.children[i], content_x, y, content_width, measurer, viewport, children_pcb, hp,
-            );
-        }
-    }
-
     // CSS 2.1 §17.6.2 — collapsing border model. Adjacent cell borders (and the table's own
     // border with the outer cells) share a single grid line whose width is the larger of the
     // two meeting borders. We model this by positioning columns so neighbouring cells overlap
@@ -343,6 +323,26 @@ pub(crate) fn build_table_init(
     } else {
         (None, 0.0, 0.0)
     };
+
+    // CSS 2.1 §17.4 — `display: table-caption` boxes. The table box here is wrapper and grid in
+    // one: its `rect` spans the captions too, while background, shadow and border belong to the
+    // grid alone (`table_caption_inset`). A top caption sits above the table's border box, a
+    // bottom one (placed in `finish_table`) below it; both are as wide as the table border box.
+    let mut top_caption_h = 0.0_f32;
+    let mut bottom_captions: Vec<usize> = Vec::new();
+    let caption_w = if collapse && b.style.width.is_none() && n_cols > 0 { collapse_width } else { b.rect.width };
+    for i in 0..b.children.len() {
+        if !is_table_caption(&b.children[i]) {
+            continue;
+        }
+        if b.children[i].style.caption_side == CaptionSide::Bottom {
+            bottom_captions.push(i);
+        } else {
+            let (x, y) = (b.rect.x, b.rect.y + top_caption_h);
+            top_caption_h +=
+                lay_out_caption(&mut b.children[i], x, y, caption_w, measurer, viewport, children_pcb, hp);
+        }
+    }
 
     let mut rowspan_map: Vec<u32> = Vec::new();
     let mut top_level: Vec<TopEntry> = Vec::with_capacity(b.children.len());
@@ -398,6 +398,7 @@ pub(crate) fn build_table_init(
         padding_top,
         padding_bottom,
         bottom_captions,
+        top_caption_h,
         cell_dy: Vec::new(),
     })
 }

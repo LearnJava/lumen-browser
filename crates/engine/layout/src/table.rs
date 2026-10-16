@@ -618,6 +618,7 @@ mod tests {
             used_padding: None, used_line_height: 16.0 * 1.2,
             grid_baselines: None,
             fieldset_legend: None,
+            table_caption_inset: [0.0; 2],
             subgrid_tracks: None,
             style: std::sync::Arc::new(crate::style::ComputedStyle::root()),
             kind,

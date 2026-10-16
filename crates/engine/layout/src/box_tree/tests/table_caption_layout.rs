@@ -153,3 +153,26 @@ fn row_group_and_row_ignore_margin_and_padding() {
     let row = first_row(t);
     assert!((row.rect.y - t.rect.y).abs() < 0.5, "row {:?} table {:?}", row.rect, t.rect);
 }
+
+/// BUG-1364: подписи лежат снаружи border box'а сетки — над рамкой/паддингом и под ними; ширина
+/// подписи — border box таблицы; `table_caption_inset` хранит высоту подписей для фона и рамки.
+#[test]
+fn captions_sit_outside_table_border_and_padding() {
+    let root = lay(
+        &format!(
+            "<table style=\"border:5px solid;padding:3px;border-spacing:0\"><caption style=\"height:20px\">c</caption>             {CELL}<caption style=\"height:12px;caption-side:bottom\">d</caption></table>"
+        ),
+        "body{margin:0}caption{padding:0}td{padding:0}",
+    );
+    let t = table(&root);
+    let caps: Vec<&LayoutBox> =
+        t.children.iter().filter(|c| matches!(c.style.display, crate::style::Display::TableCaption)).collect();
+    let row = first_row(t);
+    assert_eq!(t.table_caption_inset, [20.0, 12.0]);
+    assert!((caps[0].rect.y - t.rect.y).abs() < 0.5, "top caption {:?} table {:?}", caps[0].rect, t.rect);
+    assert!((caps[0].rect.width - t.rect.width).abs() < 0.5);
+    // Строки начинаются под подписью, рамкой и паддингом сетки.
+    assert!((row.rect.y - (t.rect.y + 20.0 + 5.0 + 3.0)).abs() < 0.5, "row {:?} table {:?}", row.rect, t.rect);
+    assert!((caps[1].rect.y + caps[1].rect.height - (t.rect.y + t.rect.height)).abs() < 0.5);
+    assert!(caps[1].rect.y >= row.rect.y + row.rect.height + 3.0 + 5.0 - 0.5, "bottom caption {:?}", caps[1].rect);
+}

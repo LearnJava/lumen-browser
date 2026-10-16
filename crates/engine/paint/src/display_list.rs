@@ -351,6 +351,10 @@ mod flex_grid_order_paint;
 mod fieldset_legend;
 
 #[cfg(test)]
+#[path = "display_list/tests/table_caption_decoration.rs"]
+mod table_caption_decoration;
+
+#[cfg(test)]
 #[path = "display_list/tests/shadows_and_transforms.rs"]
 mod shadows_and_transforms;
 
