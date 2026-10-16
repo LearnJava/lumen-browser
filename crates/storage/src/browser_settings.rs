@@ -42,6 +42,7 @@ const KEY_COMPAT_PACK_OFF: &str = "compat_pack_off";
 const KEY_COMPAT_DISABLED: &str = "compat_disabled_ids";
 const KEY_COMPAT_JOURNAL: &str = "compat_journal";
 const KEY_COMPAT_CHIP: &str = "compat_chip_limiter";
+const KEY_COMPAT_REPORTED: &str = "compat_reported_sites";
 
 /// The compat-pack change journal keeps only the newest this-many lines.
 pub const COMPAT_JOURNAL_MAX: usize = 50;
@@ -383,6 +384,17 @@ impl BrowserSettings {
     /// Persist the help-chip limiter memory.
     pub fn set_compat_chip_limiter(&self, text: &str) -> Result<()> {
         self.set_str(KEY_COMPAT_CHIP, text)
+    }
+
+    /// Sites the user sent a breakage report about (COMPAT-REPORT): an opaque line-based text
+    /// owned by the shell (`site	day	pack revision	notified`). Local only, no client id.
+    pub fn compat_reported_sites(&self) -> String {
+        self.get_str(KEY_COMPAT_REPORTED, "")
+    }
+
+    /// Persist the reported-sites memory.
+    pub fn set_compat_reported_sites(&self, text: &str) -> Result<()> {
+        self.set_str(KEY_COMPAT_REPORTED, text)
     }
 
     /// Read all settings into a snapshot value.

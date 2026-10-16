@@ -89,6 +89,8 @@ pub enum PaletteAction {
     RememberOtherBrowser(HandoffReason),
     /// Open `about:handoff`: sites currently handed to another browser.
     ShowHandoffSites,
+    /// Open the breakage-report form for the current page (COMPAT-REPORT).
+    ReportSiteProblem,
 }
 
 impl PaletteAction {
@@ -134,6 +136,7 @@ impl PaletteAction {
                 "Always Open This Site in Another Browser (30 days, video calls)"
             }
             PaletteAction::ShowHandoffSites => "Sites Opened in Another Browser",
+            PaletteAction::ReportSiteProblem => "Report a Site Problem",
         }
     }
 
@@ -158,7 +161,8 @@ impl PaletteAction {
             | PaletteAction::TranslatePage
             | PaletteAction::OpenInOtherBrowser(_)
             | PaletteAction::RememberOtherBrowser(_)
-            | PaletteAction::ShowHandoffSites => "",
+            | PaletteAction::ShowHandoffSites
+            | PaletteAction::ReportSiteProblem => "",
         }
     }
 
@@ -191,6 +195,7 @@ impl PaletteAction {
             PaletteAction::RememberOtherBrowser(HandoffReason::Drm),
             PaletteAction::RememberOtherBrowser(HandoffReason::Calls),
             PaletteAction::ShowHandoffSites,
+            PaletteAction::ReportSiteProblem,
         ]
     }
 }

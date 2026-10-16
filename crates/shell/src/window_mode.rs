@@ -851,6 +851,7 @@ fn run_window_mode_inner(
         compat_signals,
         gate_loop: gate_detect::GateLoop::default(),
         fix_panel: compat_panel::CompatPanel::default(),
+        report: Default::default(),
         frustration: compat_frustration::Frustration::default(),
         compat_signal_store,
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
@@ -865,6 +866,8 @@ fn run_window_mode_inner(
     app.sync_permission_store();
     // COMPAT-PRIVACY-UNBREAK-LOCALE: a persisted Anonymous profile starts with en-US.
     app.sync_profile_locale();
+    // COMPAT-REPORT: «сайт, о котором вы сообщали, теперь работает».
+    app.announce_fixed_reports();
     // UX-USER-ACTIVATION: popups, clipboard writes and permission prompts need
     // a user gesture in the interactive browser; `LUMEN_ALLOW_POPUPS=1` lifts
     // the gate for automation that drives pages with `eval`.

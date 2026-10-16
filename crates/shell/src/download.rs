@@ -614,7 +614,7 @@ fn now_unix() -> i64 {
 ///
 /// Windows: `%USERPROFILE%\Downloads`. Unix: `$HOME/Downloads`. Falls back to
 /// the system temp dir when neither environment variable is set.
-fn default_download_dir() -> PathBuf {
+pub(crate) fn default_download_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     let home = std::env::var_os("USERPROFILE");
     #[cfg(not(target_os = "windows"))]

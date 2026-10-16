@@ -172,6 +172,10 @@ impl Lumen {
                             let url_body = forms::encode_form_fields(&fields);
                             let get_url = forms::make_get_url(&action, &url_body);
                             let resolved = self.source.resolve_href(&get_url);
+                            // COMPAT-REPORT: the report form is answered in-shell.
+                            if self.apply_report_form(&resolved) {
+                                return;
+                            }
                             let resolved = crate::csp_enforce::upgrade_navigation_url(csp_gate.as_ref(), &resolved);
                             if self.form_action_navigation_blocked(csp_gate.as_ref(), &resolved) {
                                 return;
