@@ -478,7 +478,9 @@ impl Lumen {
         // cheap relative to a full relayout, and this snapshot only runs on
         // explicit chrome-relayout triggers (resize/click/key), not every
         // `RedrawRequested` frame (see `Self::relayout_chrome_host`'s doc).
-        let find_matches_len = if self.find.is_open() { self.current_matches().len() } else { 0 };
+        let (find_matches, find_layout_fix) =
+            if self.find.is_open() { self.current_matches_with_fix() } else { (Vec::new(), None) };
+        let find_matches_len = find_matches.len();
         // CC-15-6/BUG-419: the "ERR" state is carried over from the deleted
         // legacy bar (`find::append_bar`) — without it an invalid regex is
         // indistinguishable from "no matches" (`0/0`). The legacy bar also
@@ -498,6 +500,7 @@ impl Lumen {
                 format!("{}/{}", self.find.active_index() + 1, find_matches_len)
             },
             error: find_is_error,
+            layout_fix: find_layout_fix.unwrap_or_default(),
         };
         let downloads: Vec<lumen_chrome::ChromeDownloadModel> = self
             .downloads
@@ -1341,6 +1344,12 @@ impl Lumen {
                 // `chrome_layout` at `relayout_chrome_host` time, same gap
                 // CC-7 found for `#omniInput` — without this the popover
                 // wouldn't show until some other trigger relayouts chrome.
+                self.relayout_chrome_host();
+            }
+            // UX-LAYOUT-FIX: «искать исходное» — отказ от переведённого запроса.
+            ChromeAction::FindUseOriginal => {
+                self.find.set_keep_original();
+                self.request_redraw();
                 self.relayout_chrome_host();
             }
             ChromeAction::ToggleFind => {

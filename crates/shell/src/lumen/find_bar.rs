@@ -106,7 +106,27 @@ impl Lumen {
     ///   из [`collect_visible_text`][lumen_layout::collect_visible_text]; позиции
     ///   берутся из `TextFragment.rect`, `dl_index` — lookup по (x, y, text) в DL.
     pub(crate) fn current_matches(&self) -> Vec<find::FindMatch> {
-        if !self.find.is_open() || self.find.query().is_empty() {
+        self.current_matches_with_fix().0
+    }
+
+    /// То же, что [`Self::current_matches`], плюс исправление раскладки
+    /// (UX-LAYOUT-FIX): если по набранному совпадений нет, а перевод запроса
+    /// в соседнюю раскладку находит текст, возвращаются его совпадения и сам
+    /// переведённый запрос. «Искать исходное» и regex-режим перевод отключают.
+    pub(crate) fn current_matches_with_fix(&self) -> (Vec<find::FindMatch>, Option<String>) {
+        let matches = self.matches_for(self.find.query());
+        if !matches.is_empty() || self.find.keep_original() || self.find.is_regex_mode() {
+            return (matches, None);
+        }
+        let Some(fixed) = layout_fix::convert(self.find.query()) else {
+            return (matches, None);
+        };
+        let fixed_matches = self.matches_for(&fixed);
+        if fixed_matches.is_empty() { (matches, None) } else { (fixed_matches, Some(fixed)) }
+    }
+
+    fn matches_for(&self, query: &str) -> Vec<find::FindMatch> {
+        if !self.find.is_open() || query.is_empty() {
             return Vec::new();
         }
         let Ok(font) = lumen_font::Font::parse(INTER_FONT) else {
@@ -119,9 +139,9 @@ impl Lumen {
             let frags = self.layout_box.as_ref().map_or_else(Vec::new, |lb| {
                 lumen_layout::collect_visible_text(lb)
             });
-            find::find_matches_regex(&frags, &self.display_list, self.find.query(), &measurer)
+            find::find_matches_regex(&frags, &self.display_list, query, &measurer)
         } else {
-            find::find_matches(&self.display_list, self.find.query(), &measurer)
+            find::find_matches(&self.display_list, query, &measurer)
         }
     }
 }
