@@ -41,6 +41,24 @@ fn half_leading_zero_when_line_height_equals_font_size() {
 }
 
 #[test]
+fn half_leading_negative_when_line_height_below_font_size() {
+    // BUG-1369: line-height: 0 при шрифте 20px → half-leading (0 - 20) / 2 = -10px,
+    // глиф выступает над строкой, а не прижат к её верху.
+    let root = lay_measured(
+        "<p>Hello</p>",
+        "p { line-height: 0; font-size: 20px; margin: 0; }",
+        800.0,
+    );
+    let p = first_element_child(&root);
+    let frag = first_inline_run_frag(p);
+    assert!(
+        (frag.y_offset + 10.0).abs() < 0.1,
+        "line-height:0 font-size:20px → y_offset=-10, got {}",
+        frag.y_offset
+    );
+}
+
+#[test]
 fn half_leading_line_box_height_correct() {
     // line-height: 1.5, font-size: 20px → line_h = 30px.
     // Высота InlineRun должна быть 30px.
