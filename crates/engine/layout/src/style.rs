@@ -94,7 +94,7 @@ pub(crate) use share_cache::ShareCache;
 pub use cascade_index::{
     add_cascade_index_stats, add_pseudo_cascade_sites, add_pseudo_cascade_stats,
     clear_rule_idx_cache, clear_shadow_sheets, set_pseudo_cascade_diagnostics, set_shadow_sheets,
-    sheet_has_quote_content, sheet_targets_pseudo, take_cascade_index_stats,
+    sheet_has_pseudo_counters, sheet_has_quote_content, sheet_targets_pseudo, take_cascade_index_stats,
     take_pseudo_cascade_sites, take_pseudo_cascade_stats, CascadeIndexStats, PseudoCascadeStats,
 };
 // Видны только сиблингам `style::cascade_index` — `style::cascade`/

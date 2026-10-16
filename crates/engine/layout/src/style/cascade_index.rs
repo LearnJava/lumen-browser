@@ -86,6 +86,15 @@ pub(in crate::style) struct CascadeIndex {
     /// url(quote.svg)` armed lenta.ru's probe on all ~1 900 elements), and so
     /// is `attr()` — it resolves to the attribute's text, never a keyword.
     has_quote_content: bool,
+    /// BUG-1368 — whether the sheet can make a `::before`/`::after` pseudo-element
+    /// take part in counter bookkeeping: a rule whose subject is one of them
+    /// declares `counter-reset`/`-increment`/`-set` (their effect lands at the
+    /// pseudo-element's position, CSS Lists L3 §4.5) or, for `::after`, `content`
+    /// that mentions `counter` (it reads the counters as the element's children
+    /// left them), or a custom property mentions `counter` (a `var()` can carry it
+    /// into `content`). Like [`Self::has_quote_content`] it arms the per-node
+    /// pseudo probe in `counters::walk` and is a substring over-approximation.
+    has_pseudo_counters: bool,
     /// BUG-341 S23 — every pseudo-element name the sheet uses as the **subject**
     /// of a selector, lowercased and deduplicated.
     ///
@@ -149,6 +158,7 @@ impl CascadeIndex {
             active_supports: Vec::new(),
             has_webkit_scrollbar_rules: false,
             has_quote_content: false,
+            has_pseudo_counters: false,
             pseudo_subjects: Vec::new(),
             pseudo_rules: RuleIndex::empty(),
             pseudo_media: Vec::new(),
@@ -211,6 +221,7 @@ impl CascadeIndex {
             all_rules(sheet).any(|r| r.selectors.iter().any(selector_targets_webkit_scrollbar));
         let has_quote_content =
             all_rules(sheet).any(|r| r.declarations.iter().any(declaration_can_yield_quote));
+        let has_pseudo_counters = all_rules(sheet).any(rule_can_count_in_pseudo);
         let mut pseudo_subjects: Vec<Box<str>> = Vec::new();
         for rule in all_rules(sheet) {
             for selector in &rule.selectors {
@@ -260,6 +271,7 @@ impl CascadeIndex {
             active_supports,
             has_webkit_scrollbar_rules,
             has_quote_content,
+            has_pseudo_counters,
             pseudo_subjects,
             pseudo_rules,
             pseudo_media,
@@ -330,13 +342,39 @@ fn declaration_can_yield_quote(decl: &lumen_css_parser::Declaration) -> bool {
         && value_mentions_quote(&decl.value)
 }
 
+/// Whether `rule` can feed a `::before`/`::after` pseudo-element's counter state —
+/// see [`CascadeIndex::has_pseudo_counters`].
+fn rule_can_count_in_pseudo(rule: &Rule) -> bool {
+    let subjects_any = |names: &[&str]| {
+        rule.selectors
+            .iter()
+            .any(|s| selector_pseudo_subjects(s).any(|n| names.iter().any(|w| n.eq_ignore_ascii_case(w))))
+    };
+    let on_generated = subjects_any(&["before", "after"]);
+    // `::before` reads its element's own snapshot, so only `::after` needs a probe for `content`.
+    let on_after = subjects_any(&["after"]);
+    rule.declarations.iter().any(|d| {
+        let p = d.property.as_str();
+        if p.starts_with("--") {
+            return value_mentions(&d.value, b"counter");
+        }
+        (on_generated
+            && (p.eq_ignore_ascii_case("counter-reset")
+                || p.eq_ignore_ascii_case("counter-increment")
+                || p.eq_ignore_ascii_case("counter-set")))
+            || (on_after && p.eq_ignore_ascii_case("content") && value_mentions(&d.value, b"counter"))
+    })
+}
+
+/// Case-insensitive substring test over a raw declaration value, no allocation.
+fn value_mentions(value: &str, needle: &[u8]) -> bool {
+    value.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 /// Case-insensitive `value.contains("quote")` without allocating — see
 /// [`CascadeIndex::has_quote_content`].
 fn value_mentions_quote(value: &str) -> bool {
-    value
-        .as_bytes()
-        .windows(5)
-        .any(|w| w.eq_ignore_ascii_case(b"quote"))
+    value_mentions(value, b"quote")
 }
 
 /// Perf cache key fields beyond (sheet pointer, rules count) that affect
@@ -718,6 +756,13 @@ pub(in crate::style) fn with_cascade_index<R>(
 /// yield a quote depth. See [`CascadeIndex::has_quote_content`].
 pub fn sheet_has_quote_content(sheet: &Stylesheet, viewport: Size, dark_mode: bool) -> bool {
     with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_quote_content)
+}
+
+/// BUG-1368 — whether `sheet` can make a `::before`/`::after` pseudo-element touch
+/// counters, i.e. whether the probe in `counters::walk` has anything to record
+/// besides quotes. See [`CascadeIndex::has_pseudo_counters`].
+pub fn sheet_has_pseudo_counters(sheet: &Stylesheet, viewport: Size, dark_mode: bool) -> bool {
+    with_cascade_index(sheet, viewport, dark_mode, |idx| idx.has_pseudo_counters)
 }
 
 /// BUG-341 S23 — whether `sheet` uses `pseudo` (name without the `::`) as the
