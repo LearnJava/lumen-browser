@@ -1,6 +1,6 @@
 # BUG-1366 — Однодвоеточные `:before` / `:after` / `:first-line` / `:first-letter` не распознаются как псевдоэлементы (CSS 2.1 §5.12.3)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 14, `css/CSS2` (text, linebox, fonts, generated-content, lists, bidi-text))
 **Область:** css-parser (`crates/engine/css-parser/src/parser/selectors.rs::parse_pseudo` — `is_element` истинно только при `::`; имена `before`/`after`/`first-line`/`first-letter` ищутся лишь в ветке `is_element`)
 
@@ -33,3 +33,7 @@ WPT-RUN-14 срез 14: из 820 упавших reftest `CSS2/{text,linebox,font
 ## Срез 15 (2026-10-07, P2, WPT-RUN-14 `css/CSS2` selectors/css1/syntax/…)
 
 Тот же дефект в остальных каталогах `css/CSS2`: 412 из 849 упавших reftest содержат однодвоеточный псевдоэлемент в `<style>`; **339 из них — `selectors/first-letter-punctuation-*`** (`div:first-letter`). A/B (`.tmp/ab15.py`, копии с `::`): **30 → `identical`** вне `first-letter-punctuation` (22 `selectors/first-letter-*`/`first-line-*`, 5 `cascade/*`, 3 `syntax/*`); у `first-letter-punctuation-*` ни один не стал `identical` — им мешают ещё [BUG-1373](BUG-1373-OPEN.md) (пунктуация после буквы) и [BUG-1374](BUG-1374-OPEN.md) (не-ASCII пунктуация). Закрытие — 30 id сразу и до 339 вместе с этими двумя.
+
+## Исправление
+
+`parse_pseudo` (`css-parser/src/parser/selectors.rs`): ветка псевдоэлемента срабатывает не только при `::`, но и при одном `:`, если имя — `before`/`after`/`first-line`/`first-letter` (без `(`). `is_valid_selector_list` и сериализация идут через тот же `SimpleSelector::PseudoElement`, поэтому форма допустима там же, где `::`; остальные имена с одним двоеточием остаются `PseudoClass::Unsupported`. Тест `pseudo_element_single_colon_legacy_four`.

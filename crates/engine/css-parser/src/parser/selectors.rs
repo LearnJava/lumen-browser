@@ -1392,7 +1392,11 @@ impl<'a> Parser<'a> {
                 })));
             }
         }
-        if is_element {
+        // CSS 2.1 §5.12.3: четыре унаследованных псевдоэлемента допускают и
+        // однодвоеточную запись (`a:before`).
+        let legacy_single_colon =
+            matches!(lower.as_str(), "before" | "after" | "first-line" | "first-letter");
+        if is_element || legacy_single_colon {
             let pe = match lower.as_str() {
                 "before" => PseudoElementKind::Before,
                 "after" => PseudoElementKind::After,
