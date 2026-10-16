@@ -143,6 +143,9 @@ mod v8_worker1_exposed;
 mod v8_fullscreen_locks;
 
 #[cfg(feature = "v8-backend")]
+mod v8_compat_webkit_aliases;
+
+#[cfg(feature = "v8-backend")]
 mod v8_generic_sensor;
 
 #[cfg(feature = "v8-backend")]
