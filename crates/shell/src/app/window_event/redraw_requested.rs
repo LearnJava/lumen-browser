@@ -1020,6 +1020,13 @@ impl Lumen {
             let mut hint_cmds = hints::build_hints_overlay(&self.hint, scroll_x, scroll_y);
             overlay_buf.append(&mut hint_cmds);
         }
+        // UX-STATUS-BUBBLE: link-address bubble over the page; a drawing only,
+        // never a hit target, so the mouse passes through it. It is appended
+        // after the prepend phase: put in front of the buffer a frame did not
+        // draw it in the live window (cause not found).
+        if let Some(mut bubble) = self.status_bubble_overlay(&pal) {
+            overlay_buf.append(&mut bubble);
+        }
 
         // CC-10/CC-15-6: the legacy download-panel overlay lived here,
         // gated off the rollback flag — `#downloadsPanel` in the engine

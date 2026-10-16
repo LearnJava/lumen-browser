@@ -502,15 +502,16 @@ pub(crate) struct Lumen {
     pub(crate) os_params_gen: u64,
     /// UX-CARET: blink phase of the text caret ([`crate::caret_blink`]).
     pub(crate) caret_blink: crate::caret_blink::CaretBlink,
-    /// UX-STATUS-BUBBLE: show/hide timeline of the link-address bubble
+    /// UX-STATUS-BUBBLE: show/hide clock of the link-address bubble
     /// ([`crate::status_bubble`]).
     pub(crate) status_bubble: crate::status_bubble::StatusBubble,
-    /// UX-STATUS-BUBBLE: what `#statusBubble` was last bound to; the chrome is
-    /// relaid out only when this changes.
-    pub(crate) status_bubble_pushed: lumen_chrome::ChromeStatusBubbleModel,
-    /// UX-STATUS-BUBBLE: pointer position the timeline last saw (any change
-    /// restarts the pre-show delay).
-    pub(crate) status_bubble_cursor: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// UX-STATUS-BUBBLE: hit source node under the pointer, from which the
+    /// bubble looks for a link. Not [`Self::hovered_nid`]: for the text of a link
+    /// inside a paragraph `hovered_nid` is the paragraph (the owner of the inline
+    /// content) while the `<a>` sits above the text source node, and it does not
+    /// change when the pointer moves from a link to plain text beside it.
+    /// Updated on every `CursorMoved`; `None` over the chrome and a frame.
+    pub(crate) status_hover_source: Option<NodeId>,
     /// UX-STATUS-BUBBLE: the page focus was put on its node by the keyboard
     /// (Tab, `accesskey`), not by a click — only then does a focused link
     /// show its address.

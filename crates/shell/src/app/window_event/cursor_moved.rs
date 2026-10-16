@@ -300,6 +300,14 @@ impl Lumen {
             } else {
                 self.pointer_target(x_css, y_css)
             };
+            // UX-STATUS-BUBBLE: ссылка ищется от узла-источника попадания (как
+            // при клике), а не от `hovered_nid`; над фреймом пузыря нет.
+            self.status_hover_source = if target.frame.is_none() {
+                target.page.as_ref().map(|r| r.source_node)
+            } else {
+                None
+            };
+            self.status_bubble_sync(true);
             let frame_target = target.frame;
             let new_hovered_frame =
                 frame_target.as_ref().and_then(|t| t.hit.as_ref().map(|h| (t.frame, h.node)));

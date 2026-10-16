@@ -332,6 +332,8 @@ impl Lumen {
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
+                self.status_hover_source = None;
+                self.status_bubble_sync(false);
                 self.resize_active = None; // Clear resize when cursor leaves window
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
