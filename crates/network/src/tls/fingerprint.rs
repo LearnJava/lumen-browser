@@ -145,6 +145,10 @@ pub struct CertInfo {
     /// Mozilla list) that anchors the chain — e.g. an antivirus's HTTPS
     /// inspection root (COMPAT-TRUST-OSROOTS). Empty for an ordinary chain.
     pub local_root: String,
+    /// The chain is issued by the Russian state CA (НУЦ Минцифры) and was accepted under the
+    /// user's consent for the host (COMPAT-TRUST-NUC): the number of distinct CT log operators
+    /// whose SCTs verified. `None` for every other chain.
+    pub gov_ca_scts: Option<usize>,
 }
 
 impl CertInfo {
@@ -170,6 +174,7 @@ impl CertInfo {
             revocation_status: String::new(),
             ct_status: String::new(),
             local_root: String::new(),
+            gov_ca_scts: None,
         }
     }
 
@@ -206,6 +211,7 @@ impl CertInfo {
             revocation_status: describe_ocsp_verdict(ocsp_verdict),
             ct_status: describe_ct_verdict(ct_verdict),
             local_root: String::new(),
+            gov_ca_scts: None,
         }
     }
 }

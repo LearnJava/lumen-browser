@@ -20,10 +20,13 @@
 //!   promoted to anchors would let any process add trust without the Windows
 //!   confirmation prompt that `CurrentUser\ROOT` triggers. A proxy that
 //!   re-signs with an intermediate absent from the chain it sends is still
-//!   `UnknownIssuer` — a known gap, solvable only by AIA chasing;
+//!   `UnknownIssuer` — solved by [`super::aia`], which offers the `CA` store's
+//!   certificates as candidate intermediates ([`os_intermediates`]) and, failing
+//!   that, downloads the missing one from the certificate's AIA URL;
 //! - the НУЦ (Russian Trusted Root/Sub CA) roots: a root with such a subject
-//!   found in the OS store is not trusted until COMPAT-TRUST-NUC (ADR-034 п.4,
-//!   a separate decision with CT requirement). See [`is_nuc_subject`].
+//!   found in the OS store is never a general trust anchor. The national CA is
+//!   trusted only per host, with the user's consent and CT evidence, through the
+//!   pinned root of [`super::nuc`] (COMPAT-TRUST-NUC). See [`is_nuc_subject`].
 //!
 //! The OS store is read **once per process** (cached): a root installed while
 //! the browser runs is picked up after restart, the same as `LUMEN_EXTRA_CA_CERT`.
@@ -39,7 +42,8 @@ use super::cert_fields;
 
 /// Subject markers of the Russian state CA roots (НУЦ Минцифры). Matched as a
 /// byte substring of the DER `Name`, which stores `commonName` as plain ASCII.
-/// COMPAT-TRUST-NUC replaces this with the SPKI list once the keys are pinned.
+/// An OS root with such a name but another key is an impostor; the real root is recognised
+/// by its pinned SPKI in [`super::nuc`].
 const NUC_SUBJECT_MARKERS: [&[u8]; 2] = [b"Russian Trusted Root CA", b"Russian Trusted Sub CA"];
 
 /// Raw OS trust data: certificates as read, before any policy is applied.
@@ -162,6 +166,33 @@ pub fn local_root_name(chain: &[CertificateDer<'_>]) -> Option<String> {
     CACHE.get_or_init(|| LocalRoots::from_trust(os_trust())).name_for_chain(chain).map(str::to_owned)
 }
 
+/// Intermediate CA certificates of the OS `CA` store, read once per process
+/// (COMPAT-TRUST-AIA). Unlike [`merge_os_roots`] these are **not** trust
+/// anchors: they are only candidate intermediates [`super::aia`] offers to the
+/// chain builder when a server forgot to send its own, and each still has to
+/// chain to a trusted root — so a user-writable `CA` store grants no trust.
+/// Certificates the administrator put in `Disallowed` are left out.
+pub fn os_intermediates() -> &'static [CertificateDer<'static>] {
+    static CACHE: OnceLock<Vec<CertificateDer<'static>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut certs = read_os_intermediates();
+        let denied = &os_trust().disallowed;
+        certs.retain(|c| !denied.contains(c));
+        certs.dedup();
+        certs
+    })
+}
+
+#[cfg(not(windows))]
+fn read_os_intermediates() -> Vec<CertificateDer<'static>> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn read_os_intermediates() -> Vec<CertificateDer<'static>> {
+    win::read_intermediates()
+}
+
 #[cfg(not(windows))]
 fn read_os_trust() -> OsTrust {
     OsTrust::default()
@@ -200,6 +231,10 @@ mod win {
             trust.disallowed.extend(read_system_store(location, "Disallowed"));
         }
         trust
+    }
+
+    pub(super) fn read_intermediates() -> Vec<CertificateDer<'static>> {
+        LOCATIONS.iter().flat_map(|&location| read_system_store(location, "CA")).collect()
     }
 
     /// All certificates of the system store `name` at `location`; an absent

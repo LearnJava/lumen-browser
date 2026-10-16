@@ -37,6 +37,9 @@ pub enum CertCause {
     CaptivePortal,
     /// The chain leads to the Russian state CA (НУЦ Минцифры).
     GovCa,
+    /// The user trusts the Russian state CA for this host, but the certificate lacks the
+    /// Certificate Transparency evidence (two log operators) that trust is conditional on.
+    GovCaCt,
     /// The server did not send the intermediate certificate (or the chain
     /// ends at a CA this client does not know).
     IncompleteChain,
@@ -134,7 +137,9 @@ pub fn classify(err: &CertError, inputs: &CauseInputs) -> CertCause {
             };
         }
         CertError::Untrusted(_) | CertError::SelfSigned | CertError::NameMismatch | CertError::Other(_) => {}
-        CertError::CtInsufficient => return CertCause::Unexplained,
+        CertError::CtInsufficient => {
+            return if inputs.chain.as_ref().is_some_and(|c| c.nuc) { CertCause::GovCaCt } else { CertCause::Unexplained };
+        }
     }
     if inputs.probe.is_some_and(|p| p.captive) {
         return CertCause::CaptivePortal;
@@ -184,6 +189,27 @@ pub fn format_date(unix: i64) -> String {
     format!("{day:02}.{month:02}.{year}")
 }
 
+/// Screen text for a chain that ends at the Russian state CA (НУЦ Минцифры). `consented`: the
+/// user already agreed to that CA for `host`, so the chain failed the check against its root.
+#[must_use]
+pub fn gov_ca_text(host: &str, consented: bool) -> (String, String) {
+    if consented {
+        (
+            "Сертификат Минцифры не прошёл проверку".to_owned(),
+            format!(
+                "Вы разрешили доверять удостоверяющему центру Минцифры для {host}, но цепочка сертификатов не ведёт к его корню или повреждена. Это может быть подмена."
+            ),
+        )
+    } else {
+        (
+            "Сайт использует российский госсертификат".to_owned(),
+            format!(
+                "Сертификат {host} выдан удостоверяющим центром Минцифры. Так работают многие российские банки и госсервисы. Этого центра нет в списках браузеров, поэтому Lumen не доверяет ему сам. Вы можете разрешить его для {host}: сертификат будет принят, только если его подтвердят журналы прозрачности двух независимых операторов. Корень в Windows не устанавливается."
+            ),
+        )
+    }
+}
+
 impl CertCause {
     /// Headline and body of the error screen for `host`; `None` keeps the
     /// generic warning. No class but [`Self::Unexplained`] talks about
@@ -212,10 +238,11 @@ impl CertCause {
                     "Эта сеть (Wi-Fi в кафе, отеле или аэропорту) не пускает в интернет, пока вы не войдёте. Поэтому вместо {host} отвечает страница сети. Войдите в сеть и обновите страницу."
                 ),
             ),
-            Self::GovCa => (
-                "Сайт использует российский госсертификат".to_owned(),
+            Self::GovCa => gov_ca_text(host, false),
+            Self::GovCaCt => (
+                "Нет подтверждения прозрачности сертификата".to_owned(),
                 format!(
-                    "Сертификат {host} выдан удостоверяющим центром Минцифры. Так работают многие российские банки и госсервисы, но Lumen этому центру пока не доверяет. Откройте сайт в браузере, где корень установлен."
+                    "Вы разрешили доверять удостоверяющему центру Минцифры для {host}, но сертификат не подтверждён журналами прозрачности (нужны два независимых оператора). Так бывает, когда центр выдал сертификат втайне от журналов. Не вводите здесь пароли и данные карты; откройте сайт в другом браузере."
                 ),
             ),
             Self::IncompleteChain => (
@@ -345,6 +372,22 @@ mod tests {
     }
 
     #[test]
+    fn missing_ct_evidence_on_a_state_ca_chain_has_its_own_cause() {
+        let nuc = chain(vec![cert("Russian Trusted Sub CA", "")], false, false, true);
+        assert_eq!(classify(&CertError::CtInsufficient, &inputs(Some(nuc), None)), CertCause::GovCaCt);
+        let other = chain(vec![cert("Some CA", "")], false, false, false);
+        assert_eq!(classify(&CertError::CtInsufficient, &inputs(Some(other), None)), CertCause::Unexplained);
+    }
+
+    #[test]
+    fn state_ca_text_differs_before_and_after_the_users_consent() {
+        let (_, offer) = gov_ca_text("sberbank.ru", false);
+        let (_, failed) = gov_ca_text("sberbank.ru", true);
+        assert!(offer.contains("разрешить") && offer.contains("журналы прозрачности"), "{offer}");
+        assert!(failed.contains("не ведёт к его корню"), "{failed}");
+    }
+
+    #[test]
     fn leaf_without_intermediate_is_an_incomplete_chain() {
         let c = chain(vec![cert("Example Issuing CA 1", "Example Trust")], false, false, false);
         assert_eq!(classify(&untrusted(), &inputs(Some(c), ok_probe(None))), CertCause::IncompleteChain);
@@ -376,6 +419,7 @@ mod tests {
             CertCause::Antivirus { product: "Avast" },
             CertCause::CaptivePortal,
             CertCause::GovCa,
+            CertCause::GovCaCt,
             CertCause::IncompleteChain,
             CertCause::Revoked,
         ];

@@ -43,6 +43,7 @@ fn map_certificate_error(err: &rustls::CertificateError) -> CertError {
         CE::UnknownIssuer | CE::BadSignature => CertError::Untrusted(format!("{err:?}")),
         // A cause a custom verifier attached itself (CT shortfall): its own sentence reads
         // better in the panel than the `Other(OtherError(..))` debug form.
+        CE::Other(inner) if inner.0.is::<super::verifier::CtInsufficient>() => CertError::CtInsufficient,
         CE::Other(inner) => CertError::Other(inner.to_string()),
         other => CertError::Other(format!("{other:?}")),
     }

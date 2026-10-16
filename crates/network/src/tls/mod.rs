@@ -12,6 +12,7 @@
 //! - `Strict`: TLS 1.3 only, same cipher preference order.
 //! - `Tor`: TLS 1.3 only, X25519-only, no h2 ALPN.
 
+pub mod aia;
 pub mod bypass;
 pub mod cert_error;
 pub mod cert_fields;
@@ -21,6 +22,7 @@ pub mod ct_logs;
 mod ct_logs_data;
 mod ct_sig;
 pub mod fingerprint;
+pub mod nuc;
 pub mod ocsp;
 pub mod os_roots;
 pub mod probe;
