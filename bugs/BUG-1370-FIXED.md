@@ -1,6 +1,6 @@
 # BUG-1370 — `vertical-align: <length>|<percentage>` не растягивает строку: поднятый/опущенный inline-бокс вылезает за неё
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-17 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 14, `css/CSS2` (text, linebox, fonts, generated-content, lists, bidi-text))
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — вычисление высоты строки по `vertical-align`)
 
@@ -19,3 +19,7 @@ WPT-RUN-14 срез 14: `linebox/vertical-align-007.xht` … `-080.xht` — 33 i
 ## Как проверить
 
 `css/CSS2/linebox/vertical-align-007.xht`, `-008.xht`, `-019.xht`.
+
+## Исправление
+
+`inline_wrap.rs::apply_inline_vertical_align` возвращает `LineGrowth { top, bottom }`: верх — по строке 0, низ — по последней, учитываются фрагменты с `vertical-align: <length>|<percentage>` (бокс = content area ± половина собственного leading). `layout_dispatch.rs` добавляет рост к высоте блока; все строки сдвигаются вниз на `top` (модель раскладки — равномерные строки), `top`/`bottom`/`middle` выравниваются по выросшему краю. Рост в середине многострочного абзаца по-прежнему наезжает на соседние строки; `sub`/`super` и картинки строку не растят; при раскладке вокруг float-ов (`shape-outside`) рост не считается. Сопутствующая правка: `ComputedStyle::text_rendering_eq` теперь сравнивает `vertical_align` — раньше `<span style="vertical-align:96px">X</span>X` сливался в один фрагмент «XX».

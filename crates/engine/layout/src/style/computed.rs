@@ -1235,6 +1235,9 @@ impl ComputedStyle {
             // highlight, copy), so `user-select: none` text must not be glued
             // to a selectable neighbour.
             && self.user_select == other.user_select
+            // CSS 2.1 §10.8: каждый фрагмент встаёт по своему `vertical-align`,
+            // слитый с соседом остался бы на уровне первого.
+            && self.vertical_align == other.vertical_align
     }
 
     /// Стартовые значения для корня документа.
