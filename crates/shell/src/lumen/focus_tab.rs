@@ -52,6 +52,7 @@ impl Lumen {
         }
         self.focused_node = Some(next);
         self.focus_from_keyboard = true;
+        self.status_bubble_sync(false);
         let before_frame = self.focused_frame.take();
         if before_frame.is_some() {
             self.notify_frame_focus(before_frame, None);

@@ -553,7 +553,7 @@ impl Lumen {
             next_wakeup = Some(next_wakeup.map_or(blink, |t| t.min(blink)));
         }
         // UX-STATUS-BUBBLE: delays and fades of the link-address bubble.
-        if let Some(bubble) = self.status_bubble_tick() {
+        if let Some(bubble) = self.status_bubble_next_wakeup() {
             next_wakeup = Some(next_wakeup.map_or(bubble, |t| t.min(bubble)));
         }
         // COMPAT-PANEL: вопрос «Заработало?» через 3 с после шага панели.

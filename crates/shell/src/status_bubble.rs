@@ -1,549 +1,600 @@
-//! UX-STATUS-BUBBLE: the link-address bubble in the lower corner of the page.
+//! UX-STATUS-BUBBLE: пузырь с адресом ссылки у нижнего левого угла страницы
+//! (docs/research/browser-ux/report.md §4.3 LINK-07…LINK-11).
 //!
-//! Three pure pieces, all taking `now`/geometry as parameters so the rules are
-//! unit-tested without a window (docs/research/browser-ux/report.md §4.3,
-//! LINK-07…LINK-11):
+//! Модуль чистый — время (`now`, миллисекунды) и мерка ширины символа
+//! параметры, окна нет, поэтому правила проверяются юнит-тестами:
 //!
-//! - [`StatusBubble`] — the show/hide timeline: 80 ms before the first
-//!   appearance (restarted by every pointer movement, so a fast fly-over does
-//!   not flash it), 120 ms fade-in; on leaving the link 250 ms of grace, then a
-//!   200 ms fade-out; moving to a neighbouring link swaps the text at once;
-//! - [`elide_middle`] — fits the address into the bubble's width: the scheme
-//!   and host are never cut, the middle of the path becomes «…», the tail (file
-//!   name, extension, query, fragment) stays visible;
-//! - [`avoid_mouse`] — keeps the bubble out of the cursor's way: it slides down
-//!   when the cursor comes closer than 20 px and jumps to the opposite corner
-//!   when there is no room below.
+//! * [`StatusBubble`] — часы показа: 80 мс до появления (перезапуск на каждое
+//!   движение мыши), fade-in 120 мс, 250 мс до ухода, fade-out 200 мс; смена
+//!   ссылки при видимом пузыре подменяет текст сразу, без fade (LINK-07).
+//! * [`elide_middle`] — сокращение середины пути: схема и хост не режутся
+//!   никогда, хвост (имя файла, запрос, якорь) остаётся (LINK-08).
+//! * [`layout`] — рамка пузыря: до половины ширины страницы, над горизонтальной
+//!   полосой прокрутки, не ближе [`MOUSE_PAD`] к курсору (LINK-08, LINK-10).
+//! * [`build_overlay`] — команды отрисовки. Пузырь — только рисунок поверх
+//!   страницы, не узел и не хит-цель, поэтому мышь для него прозрачна.
 //!
-//! The glue that feeds the model from hover/focus and hands the result to the
-//! chrome document is `lumen/status_bubble.rs`.
+//! Склейка с окном (откуда берётся адрес, кто будит цикл) — `lumen/status_bubble.rs`.
 
-use std::time::{Duration, Instant};
+use lumen_core::geom::Rect;
+use lumen_layout::{BorderStyle, Color, FontStretch, FontStyle, FontWeight};
+use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
-/// The cursor closer than this to the bubble pushes it away (Chromium `kMousePadding`).
-pub(crate) const MOUSE_PADDING: f32 = 20.0;
+use crate::panels::themes::Palette;
 
-/// Animation frame step while a fade runs.
-const FRAME: Duration = Duration::from_millis(16);
+/// Задержка перед появлением (Chromium `kShowDelay`, Firefox — 80 мс).
+const SHOW_DELAY_MS: f64 = 80.0;
+/// Длительность появления (`kShowFadeDuration`).
+const FADE_IN_MS: f64 = 120.0;
+/// Задержка перед уходом (`kHideDelay`).
+const HIDE_DELAY_MS: f64 = 250.0;
+/// Длительность ухода (`kHideFadeDuration`).
+const FADE_OUT_MS: f64 = 200.0;
+/// Шаг кадра, пока идёт fade.
+const FRAME_MS: f64 = 16.0;
 
-/// Timeline lengths; [`Timing::REDUCED`] drops the fades (the OS turned UI
-/// animation off) but keeps the delays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Timing {
-    pub(crate) show_delay: Duration,
-    pub(crate) fade_in: Duration,
-    pub(crate) hide_delay: Duration,
-    pub(crate) fade_out: Duration,
-}
+/// Зазор до курсора, ближе которого пузырь уезжает (Chromium `kMousePadding`).
+pub(crate) const MOUSE_PAD: f32 = 20.0;
+/// Доля ширины страницы, которую пузырь занимает сразу (LINK-08).
+const MAX_WIDTH_FRACTION: f32 = 0.5;
+const FONT_SIZE: f32 = 12.0;
+const PAD_X: f32 = 8.0;
+const PAD_Y: f32 = 4.0;
+/// Радиус внутреннего верхнего угла; внешние углы стоят вплотную к краю страницы.
+const CORNER_RADIUS: f32 = 6.0;
+/// Доля бюджета, которую хвост не превышает, если не помещается целиком.
+const TAIL_SHARE: f32 = 0.65;
+const ELLIPSIS: char = '…';
 
-impl Timing {
-    /// Chromium `status_bubble_views.cc` / Firefox: 80 / 120 / 250 / 200 ms.
-    pub(crate) const STANDARD: Self = Self {
-        show_delay: Duration::from_millis(80),
-        fade_in: Duration::from_millis(120),
-        hide_delay: Duration::from_millis(250),
-        fade_out: Duration::from_millis(200),
-    };
-    pub(crate) const REDUCED: Self = Self {
-        show_delay: Duration::from_millis(80),
-        fade_in: Duration::ZERO,
-        hide_delay: Duration::from_millis(250),
-        fade_out: Duration::ZERO,
-    };
-}
-
+/// Линейный переход непрозрачности.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Phase {
-    Hidden,
-    /// A target appeared; waits `show_delay` after the last pointer movement.
-    ShowDelay { since: Instant },
-    FadeIn { from: f32, since: Instant },
-    Shown,
-    /// The target is gone; the bubble holds `level` for `hide_delay`.
-    HideDelay { since: Instant, level: f32 },
-    FadeOut { from: f32, since: Instant },
+struct Fade {
+    from: f32,
+    to: f32,
+    start: f64,
+    dur: f64,
 }
 
-/// Show/hide timeline of the bubble. `text` is what the bubble currently says;
-/// it survives the hide delay and the fade-out and is dropped once hidden.
-#[derive(Debug, Clone)]
+impl Fade {
+    fn at(&self, now: f64) -> f32 {
+        if self.dur <= 0.0 {
+            return self.to;
+        }
+        let t = ((now - self.start) / self.dur).clamp(0.0, 1.0) as f32;
+        self.from + (self.to - self.from) * t
+    }
+
+    fn done(&self, now: f64) -> bool {
+        now >= self.start + self.dur
+    }
+}
+
+/// Что вернул [`StatusBubble::tick`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct Tick {
+    /// Кадр изменился (идёт fade, фаза сменилась) — нужна перерисовка.
+    pub(crate) repaint: bool,
+    /// Когда цикл должен проснуться снова (мс той же шкалы, что `now`).
+    pub(crate) wake: Option<f64>,
+}
+
+/// Часы пузыря: какой текст показан и с какой непрозрачностью.
+#[derive(Debug, Default)]
 pub(crate) struct StatusBubble {
-    phase: Phase,
     text: String,
-    timing: Timing,
-}
-
-impl Default for StatusBubble {
-    fn default() -> Self {
-        Self { phase: Phase::Hidden, text: String::new(), timing: Timing::STANDARD }
-    }
-}
-
-fn since(now: Instant, t: Instant) -> Duration {
-    now.saturating_duration_since(t)
-}
-
-/// `elapsed / len` clamped to `0..=1`; a zero-length stage is already over.
-fn progress(elapsed: Duration, len: Duration) -> f32 {
-    if len.is_zero() {
-        1.0
-    } else {
-        (elapsed.as_secs_f32() / len.as_secs_f32()).clamp(0.0, 1.0)
-    }
+    /// Непрозрачность вне перехода.
+    level: f32,
+    fade: Option<Fade>,
+    show_at: Option<f64>,
+    hide_at: Option<f64>,
+    /// Ширина, ниже которой пузырь не сужается, пока виден: между соседними
+    /// ссылками он не прыгает (LINK-08).
+    min_width: f32,
+    /// «Анимации выключены» в ОС: задержки остаются, плавных переходов нет.
+    reduced_motion: bool,
 }
 
 impl StatusBubble {
-    /// Switches between the standard timeline and the reduced-motion one.
-    pub(crate) fn set_timing(&mut self, timing: Timing) {
-        self.timing = timing;
+    /// Непрозрачность в момент `now`.
+    pub(crate) fn alpha(&self, now: f64) -> f32 {
+        self.fade.map_or(self.level, |f| f.at(now))
     }
 
-    /// The text to show (empty while hidden).
-    pub(crate) fn text(&self) -> &str {
-        &self.text
+    /// Нечего ни рисовать, ни ждать — цикл можно не будить.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.text.is_empty() && self.fade.is_none() && self.show_at.is_none() && self.hide_at.is_none()
     }
 
-    /// Feeds the address under the pointer / on the focused link (`None` — no
-    /// link). Call [`Self::advance`] first so a stage that already ended is
-    /// not mistaken for the current one.
-    pub(crate) fn set_target(&mut self, target: Option<&str>, now: Instant) {
+    /// Показанный текст и непрозрачность, если пузырь сейчас виден.
+    pub(crate) fn visible(&self, now: f64) -> Option<(&str, f32)> {
+        let a = self.alpha(now);
+        (a > 0.0 && !self.text.is_empty()).then_some((self.text.as_str(), a))
+    }
+
+    /// Включить или выключить режим «без анимаций» (`prefers-reduced-motion`).
+    pub(crate) fn set_reduced_motion(&mut self, reduced: bool) {
+        self.reduced_motion = reduced;
+    }
+
+    fn fade_ms(&self, ms: f64) -> f64 {
+        if self.reduced_motion { 0.0 } else { ms }
+    }
+
+    /// Ширина-«пол» для [`layout`].
+    pub(crate) fn min_width(&self) -> f32 {
+        self.min_width
+    }
+
+    /// Запомнить ширину нарисованного пузыря (только растёт, пока пузырь виден).
+    pub(crate) fn note_width(&mut self, width: f32) {
+        self.min_width = self.min_width.max(width);
+    }
+
+    /// Подвести к тому, на что сейчас указывает пользователь: `Some(текст)` —
+    /// наведение или Tab на ссылке, `None` — ссылки нет. `moved` — это новое
+    /// движение мыши: оно перезапускает 80 мс, пока пузырь ещё не виден.
+    pub(crate) fn set_target(&mut self, target: Option<&str>, now: f64, moved: bool) {
+        let alpha = self.alpha(now);
+        let heading_in = match self.fade {
+            Some(f) => f.to >= 1.0,
+            None => self.level >= 1.0,
+        };
         match target {
-            Some(t) => {
-                if self.text != t {
-                    t.clone_into(&mut self.text);
+            Some(text) => {
+                self.hide_at = None;
+                if alpha > 0.0 || heading_in {
+                    // Уже виден (или появляется): текст меняется мгновенно;
+                    // уходящий пузырь возвращается к полной непрозрачности.
+                    self.show_at = None;
+                    if self.text != text {
+                        self.text = text.to_owned();
+                    }
+                    if !heading_in {
+                        self.fade = Some(Fade {
+                            from: alpha,
+                            to: 1.0,
+                            start: now,
+                            dur: self.fade_ms(FADE_IN_MS) * f64::from(1.0 - alpha),
+                        });
+                    }
+                } else {
+                    let changed = self.text != text;
+                    if changed {
+                        self.text = text.to_owned();
+                    }
+                    if changed || moved || self.show_at.is_none() {
+                        self.show_at = Some(now + SHOW_DELAY_MS);
+                    }
                 }
-                self.phase = match self.phase {
-                    Phase::Hidden => Phase::ShowDelay { since: now },
-                    Phase::HideDelay { level, .. } if level >= 1.0 => Phase::Shown,
-                    Phase::HideDelay { level, .. } => Phase::FadeIn { from: level, since: now },
-                    Phase::FadeOut { .. } => Phase::FadeIn { from: self.opacity(now), since: now },
-                    keep => keep,
-                };
             }
             None => {
-                self.phase = match self.phase {
-                    Phase::ShowDelay { .. } => {
-                        self.text.clear();
-                        Phase::Hidden
+                self.show_at = None;
+                let leaving = self.fade.is_some_and(|f| f.to <= 0.0);
+                if alpha > 0.0 || heading_in {
+                    if !leaving && self.hide_at.is_none() {
+                        self.hide_at = Some(now + HIDE_DELAY_MS);
                     }
-                    Phase::FadeIn { .. } => Phase::HideDelay { since: now, level: self.opacity(now) },
-                    Phase::Shown => Phase::HideDelay { since: now, level: 1.0 },
-                    keep => keep,
-                };
+                } else if self.fade.is_none() {
+                    self.text.clear();
+                    self.min_width = 0.0;
+                }
             }
         }
     }
 
-    /// Any pointer movement restarts the pre-show delay (Firefox model).
-    pub(crate) fn pointer_moved(&mut self, now: Instant) {
-        if let Phase::ShowDelay { .. } = self.phase {
-            self.phase = Phase::ShowDelay { since: now };
+    /// Продвинуть часы до `now`.
+    pub(crate) fn tick(&mut self, now: f64) -> Tick {
+        let mut repaint = false;
+        if let Some(t) = self.show_at.filter(|&t| now >= t) {
+            self.show_at = None;
+            self.fade = Some(Fade { from: 0.0, to: 1.0, start: t, dur: self.fade_ms(FADE_IN_MS) });
+            repaint = true;
         }
-    }
-
-    /// Moves the timeline to `now`, crossing every stage boundary on the way.
-    pub(crate) fn advance(&mut self, now: Instant) {
-        let t = self.timing;
-        loop {
-            let next = match self.phase {
-                Phase::ShowDelay { since: s } if since(now, s) >= t.show_delay => {
-                    Phase::FadeIn { from: 0.0, since: s + t.show_delay }
-                }
-                Phase::FadeIn { since: s, from } if since(now, s) >= t.fade_in || from >= 1.0 => Phase::Shown,
-                Phase::HideDelay { since: s, level } if since(now, s) >= t.hide_delay => {
-                    Phase::FadeOut { from: level, since: s + t.hide_delay }
-                }
-                Phase::FadeOut { since: s, .. } if since(now, s) >= t.fade_out => {
-                    self.text.clear();
-                    Phase::Hidden
-                }
-                _ => return,
-            };
-            self.phase = next;
+        if let Some(t) = self.hide_at.filter(|&t| now >= t) {
+            self.hide_at = None;
+            let a = self.alpha(t);
+            self.fade = Some(Fade { from: a, to: 0.0, start: t, dur: self.fade_ms(FADE_OUT_MS) * f64::from(a) });
+            repaint = true;
         }
-    }
-
-    /// Opacity at `now`, `0.0..=1.0`.
-    pub(crate) fn opacity(&self, now: Instant) -> f32 {
-        let t = self.timing;
-        match self.phase {
-            Phase::Hidden | Phase::ShowDelay { .. } => 0.0,
-            Phase::Shown => 1.0,
-            Phase::FadeIn { from, since: s } => from + (1.0 - from) * progress(since(now, s), t.fade_in),
-            Phase::HideDelay { level, .. } => level,
-            Phase::FadeOut { from, since: s } => from * (1.0 - progress(since(now, s), t.fade_out)),
+        if let Some(f) = self.fade.filter(|f| f.done(now)) {
+            self.level = f.to;
+            self.fade = None;
+            if f.to <= 0.0 {
+                self.text.clear();
+                self.min_width = 0.0;
+            }
+            repaint = true;
         }
-    }
-
-    /// Whether the bubble occupies the screen at all (a fully faded one does not).
-    pub(crate) fn is_drawn(&self, now: Instant) -> bool {
-        !self.text.is_empty() && self.opacity(now) > 0.0
-    }
-
-    /// The next instant the timeline needs a look at; `None` while it rests
-    /// (hidden, or fully shown).
-    pub(crate) fn next_wakeup(&self, now: Instant) -> Option<Instant> {
-        let t = self.timing;
-        match self.phase {
-            Phase::Hidden | Phase::Shown => None,
-            Phase::ShowDelay { since: s } => Some(s + t.show_delay),
-            Phase::HideDelay { since: s, .. } => Some(s + t.hide_delay),
-            Phase::FadeIn { since: s, .. } => Some((now + FRAME).min(s + t.fade_in).max(now)),
-            Phase::FadeOut { since: s, .. } => Some((now + FRAME).min(s + t.fade_out).max(now)),
+        let mut wake = [self.show_at, self.hide_at].into_iter().flatten().reduce(f64::min);
+        if self.fade.is_some() {
+            repaint = true;
+            let frame = now + FRAME_MS;
+            wake = Some(wake.map_or(frame, |w| w.min(frame)));
         }
+        Tick { repaint, wake }
     }
 }
 
-/// Fits `url` into `budget` px of text width. `char_w` is the glyph advance.
-///
-/// The prefix up to the end of the authority (`https://host:port`) is never
-/// cut. Of the rest (path, query, fragment) the last path segment is kept
-/// whole when it can be — shortened from its start otherwise — and the room
-/// left goes to the beginning of the path; the gap becomes «…». Without
-/// `scheme://` (a `javascript:` or `mailto:` address) only the scheme and its
-/// colon are fixed.
-pub(crate) fn elide_middle(url: &str, budget: f32, char_w: &dyn Fn(char) -> f32) -> String {
-    let widths: Vec<f32> = url.chars().map(char_w).collect();
-    if widths.iter().sum::<f32>() <= budget {
-        return url.to_owned();
+/// Сократить `text` до `max_w`: схема и хост остаются целиком, из пути уходит
+/// середина (`…`), хвост — имя файла, запрос, якорь — виден. Если не помещается
+/// даже хост, от пути остаётся одно `…`: хост не режется никогда.
+pub(crate) fn elide_middle(text: &str, max_w: f32, char_w: &dyn Fn(char) -> f32) -> String {
+    let width = |s: &str| s.chars().map(char_w).sum::<f32>();
+    if width(text) <= max_w {
+        return text.to_owned();
     }
-    let chars: Vec<char> = url.chars().collect();
-    let fixed = fixed_prefix_len(url);
-    let ellipsis = char_w('…');
-    let base: f32 = widths[..fixed].iter().sum::<f32>() + ellipsis;
-    let tail = &chars[fixed..];
-    let tail_w = &widths[fixed..];
-    let n = tail.len();
-    // The last segment: after the final `/` that is not the very last char.
-    let seg_start = tail[..n.saturating_sub(1)].iter().rposition(|&c| c == '/').map_or(0, |p| p + 1);
-    let seg_len = n - seg_start;
-    // Width of the kept head `tail[..h]` and kept end `tail[n - t..]`, by prefix sums.
-    let mut pre = vec![0.0_f32; n + 1];
-    for (i, w) in tail_w.iter().enumerate() {
-        pre[i + 1] = pre[i] + w;
+    let prefix_len = text.find("://").map_or(0, |i| {
+        let auth = i + 3;
+        text[auth..].find(['/', '?', '#']).map_or(text.len(), |p| auth + p)
+    });
+    let (prefix, rest) = text.split_at(prefix_len);
+    let ellipsis_w = char_w(ELLIPSIS);
+    let budget = max_w - width(prefix) - ellipsis_w;
+    if rest.is_empty() {
+        return text.to_owned();
     }
-    let end_w = |t: usize| pre[n] - pre[n - t];
-    // Largest head that still fits next to an end of `t` chars (head and end must not overlap).
-    let head_for = |t: usize| -> usize {
-        let room = budget - base - end_w(t);
-        (0..=n - t).rev().find(|&h| pre[h] <= room).unwrap_or(0)
-    };
-    let mut best_t = 0;
-    let mut best_h = 0;
-    for t in (0..=seg_len).rev() {
-        let h = head_for(t);
-        if h >= 1 || t == 0 {
-            best_t = t;
-            best_h = h;
+    if budget <= 0.0 {
+        return format!("{prefix}{ELLIPSIS}");
+    }
+    // Хвост — от последнего «/» (без учёта завершающих), там имя файла.
+    let tail_start = rest.trim_end_matches('/').rfind('/').unwrap_or(0);
+    let (head, tail) = rest.split_at(tail_start);
+    let tail_w = width(tail);
+    let tail_budget = if tail_w <= TAIL_SHARE * budget { tail_w } else { TAIL_SHARE * budget };
+    let head_budget = budget - tail_budget;
+    let mut kept_head = String::new();
+    let mut used = 0.0;
+    for c in head.chars() {
+        let w = char_w(c);
+        if used + w > head_budget {
             break;
         }
+        used += w;
+        kept_head.push(c);
     }
-    if best_h + best_t >= n {
-        return url.to_owned();
+    let mut kept_tail: Vec<char> = Vec::new();
+    let mut used = 0.0;
+    for c in tail.chars().rev() {
+        let w = char_w(c);
+        if used + w > tail_budget {
+            break;
+        }
+        used += w;
+        kept_tail.push(c);
     }
-    let mut out: String = chars[..fixed].iter().collect();
-    out.extend(&tail[..best_h]);
-    out.push('…');
-    out.extend(&tail[n - best_t..]);
+    kept_tail.reverse();
+    let tail: String = kept_tail.into_iter().collect();
+    format!("{prefix}{kept_head}{ELLIPSIS}{tail}")
+}
+
+/// Рамка и текст пузыря.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BubbleLayout {
+    pub(crate) rect: Rect,
+    /// Текст после [`elide_middle`].
+    pub(crate) text: String,
+    /// Пузырь стоит у правого края (уступил курсору): скруглён левый верхний угол.
+    pub(crate) at_right: bool,
+}
+
+fn near(r: Rect, p: (f32, f32)) -> bool {
+    p.0 >= r.x - MOUSE_PAD && p.0 < r.right() + MOUSE_PAD && p.1 >= r.y - MOUSE_PAD && p.1 < r.bottom() + MOUSE_PAD
+}
+
+/// Рассчитать пузырь для `text` на странице `host` (окно, CSS px).
+/// `bottom_inset` — высота горизонтальной полосы прокрутки, `pointer` —
+/// курсор в тех же координатах, `min_width` — [`StatusBubble::min_width`].
+///
+/// Курсор ближе [`MOUSE_PAD`]: пузырь съезжает вниз на свою высоту, если ниже
+/// есть место, иначе перескакивает в противоположный угол (LINK-10).
+pub(crate) fn layout(
+    text: &str,
+    host: Rect,
+    bottom_inset: f32,
+    pointer: Option<(f32, f32)>,
+    min_width: f32,
+    char_w: &dyn Fn(char) -> f32,
+) -> BubbleLayout {
+    let max_w = (host.width * MAX_WIDTH_FRACTION).max(0.0);
+    let elided = elide_middle(text, (max_w - 2.0 * PAD_X).max(0.0), char_w);
+    let text_w: f32 = elided.chars().map(char_w).sum();
+    // Хост не режется: пузырь шире половины, но не шире страницы.
+    let w = (text_w + 2.0 * PAD_X).max(min_width).min(host.width);
+    let h = FONT_SIZE + 2.0 * PAD_Y;
+    let y = host.bottom() - bottom_inset - h;
+    let left = Rect::new(host.x, y, w, h);
+    let mut out = BubbleLayout { rect: left, text: elided, at_right: false };
+    let Some(p) = pointer.filter(|&p| near(left, p)) else { return out };
+    if host.bottom() - left.bottom() >= h {
+        out.rect = Rect::new(left.x, left.y + h, w, h);
+        return out;
+    }
+    let right = Rect::new(host.right() - w, y, w, h);
+    if !near(right, p) {
+        out.rect = right;
+        out.at_right = true;
+    }
     out
 }
 
-/// Number of leading chars that must never be elided: through the authority
-/// (`scheme://host:port`), or through `scheme:` for an authority-less address.
-fn fixed_prefix_len(url: &str) -> usize {
-    let byte_end = match url.find("://") {
-        Some(sep) => {
-            let start = sep + 3;
-            url[start..].find(['/', '?', '#']).map_or(url.len(), |p| start + p)
-        }
-        None => url.find(':').map_or(0, |p| p + 1),
+fn scaled(c: Color, alpha: f32) -> Color {
+    Color { a: (f32::from(c.a) * alpha.clamp(0.0, 1.0)).round() as u8, ..c }
+}
+
+/// Команды отрисовки пузыря с непрозрачностью `alpha`.
+pub(crate) fn build_overlay(lay: &BubbleLayout, alpha: f32, pal: &Palette) -> DisplayList {
+    let r = lay.rect;
+    let radius = CORNER_RADIUS.min(r.height / 2.0);
+    let radii = if lay.at_right {
+        CornerRadii { tl: radius, tl_y: radius, ..CornerRadii::default() }
+    } else {
+        CornerRadii { tr: radius, tr_y: radius, ..CornerRadii::default() }
     };
-    url[..byte_end].chars().count()
-}
-
-/// Which lower corner the bubble sits in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Corner {
-    #[default]
-    Left,
-    Right,
-}
-
-/// Where the bubble stands: its corner and how far it has slid down (CSS px).
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub(crate) struct Placement {
-    pub(crate) corner: Corner,
-    pub(crate) slide: f32,
-}
-
-/// A point/rect pair in the page-host coordinates.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BubbleBox {
-    /// Width and height of the bubble.
-    pub(crate) w: f32,
-    pub(crate) h: f32,
-    /// Width and height of the area the bubble lives in.
-    pub(crate) host_w: f32,
-    pub(crate) host_h: f32,
-    /// Distance from the bottom of the host to the bottom of the monitor
-    /// (how far the bubble can slide down before it leaves the screen).
-    pub(crate) room_below: f32,
-    /// What the horizontal scrollbar of the page takes at the bottom.
-    pub(crate) bottom_inset: f32,
-}
-
-/// Chromium `AvoidMouse`: the cursor within [`MOUSE_PADDING`] of the bubble
-/// pushes it down by `(20 + y)² / 20`, `y` being the cursor's depth below the
-/// bubble's top edge, but by no more than its own height; when the screen has
-/// no room below, the bubble crosses to the opposite corner instead.
-/// `cursor` is relative to the host's top-left; `None` — no cursor over the page.
-pub(crate) fn avoid_mouse(b: &BubbleBox, cursor: Option<(f32, f32)>) -> Placement {
-    let Some((cx, cy)) = cursor else { return Placement::default() };
-    let top = b.host_h - b.bottom_inset - b.h;
-    let near = |left: f32| {
-        cx >= left - MOUSE_PADDING
-            && cx <= left + b.w + MOUSE_PADDING
-            && cy >= top - MOUSE_PADDING
-            && cy <= top + b.h + MOUSE_PADDING
-    };
-    if !near(0.0) {
-        return Placement::default();
-    }
-    let right_left = (b.host_w - b.w).max(0.0);
-    if b.room_below < b.h && !near(right_left) {
-        return Placement { corner: Corner::Right, slide: 0.0 };
-    }
-    let y = cy - top;
-    let slide = ((MOUSE_PADDING + y).powi(2) / MOUSE_PADDING).min(b.h).min(b.room_below.max(0.0));
-    Placement { corner: Corner::Left, slide }
+    vec![
+        DisplayCommand::FillRoundedRect { rect: r, color: scaled(pal.overlay_bg, alpha), radii },
+        DisplayCommand::DrawBorder {
+            rect: r,
+            widths: [1.0; 4],
+            colors: [scaled(pal.overlay_border, alpha); 4],
+            styles: [BorderStyle::Solid; 4],
+            radii,
+        },
+        DisplayCommand::PushClipRect { rect: r },
+        DisplayCommand::DrawText {
+            font_stretch: FontStretch::NORMAL,
+            rect: Rect::new(r.x + PAD_X, r.y + PAD_Y, (r.width - 2.0 * PAD_X).max(0.0), FONT_SIZE),
+            text: lay.text.clone(),
+            font_size: FONT_SIZE,
+            color: scaled(pal.text, alpha),
+            // Тот же Inter, которым меряется ширина (`lumen/status_bubble.rs`).
+            font_family: vec!["Inter".to_string()],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
+            highlight_name: None,
+            text_orientation: None,
+        },
+        DisplayCommand::PopClip,
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn ms(n: u64) -> Duration {
-        Duration::from_millis(n)
-    }
-
-    fn at(t0: Instant, n: u64) -> Instant {
-        t0 + ms(n)
-    }
-
-    /// Drives the model to `now` the way the event loop does.
-    fn step(b: &mut StatusBubble, target: Option<&str>, now: Instant) {
-        b.advance(now);
-        b.set_target(target, now);
-        b.advance(now);
-    }
-
-    #[test]
-    fn appears_after_80ms_and_fades_in_over_120() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("https://a.ru/"), t0);
-        assert_eq!(b.opacity(at(t0, 79)), 0.0);
-        b.advance(at(t0, 80));
-        assert!(b.opacity(at(t0, 80)).abs() < 1e-6);
-        assert!((b.opacity(at(t0, 140)) - 0.5).abs() < 1e-3);
-        b.advance(at(t0, 200));
-        assert_eq!(b.opacity(at(t0, 200)), 1.0);
-        assert_eq!(b.next_wakeup(at(t0, 200)), None);
-    }
-
-    #[test]
-    fn pointer_movement_restarts_the_show_delay() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("https://a.ru/"), t0);
-        b.pointer_moved(at(t0, 60));
-        b.advance(at(t0, 100));
-        assert!(!b.is_drawn(at(t0, 100)), "40 ms after the last move the bubble must still wait");
-        assert_eq!(b.next_wakeup(at(t0, 100)), Some(at(t0, 140)));
-        b.advance(at(t0, 200));
-        assert!(b.is_drawn(at(t0, 200)));
-    }
-
-    #[test]
-    fn leaving_the_link_waits_250ms_then_fades_over_200() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("u"), t0);
-        step(&mut b, Some("u"), at(t0, 500));
-        assert_eq!(b.opacity(at(t0, 500)), 1.0);
-        step(&mut b, None, at(t0, 600));
-        assert_eq!(b.opacity(at(t0, 849)), 1.0, "grace period keeps the bubble");
-        assert_eq!(b.text(), "u");
-        b.advance(at(t0, 950));
-        assert!((b.opacity(at(t0, 950)) - 0.5).abs() < 1e-3);
-        b.advance(at(t0, 1050));
-        assert_eq!(b.opacity(at(t0, 1050)), 0.0);
-        assert_eq!(b.text(), "");
-        assert!(!b.is_drawn(at(t0, 1050)));
-    }
-
-    #[test]
-    fn neighbouring_link_swaps_text_without_fade() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("one"), t0);
-        step(&mut b, Some("one"), at(t0, 500));
-        step(&mut b, Some("two"), at(t0, 510));
-        assert_eq!(b.text(), "two");
-        assert_eq!(b.opacity(at(t0, 510)), 1.0);
-    }
-
-    #[test]
-    fn returning_during_the_grace_period_cancels_the_hide() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("one"), t0);
-        step(&mut b, Some("one"), at(t0, 500));
-        step(&mut b, None, at(t0, 600));
-        step(&mut b, Some("two"), at(t0, 700));
-        assert_eq!(b.next_wakeup(at(t0, 700)), None);
-        step(&mut b, Some("two"), at(t0, 2000));
-        assert_eq!(b.opacity(at(t0, 2000)), 1.0);
-    }
-
-    #[test]
-    fn returning_mid_fade_out_resumes_from_the_current_opacity() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("one"), t0);
-        step(&mut b, Some("one"), at(t0, 500));
-        step(&mut b, None, at(t0, 600));
-        b.advance(at(t0, 950));
-        let mid = b.opacity(at(t0, 950));
-        step(&mut b, Some("two"), at(t0, 950));
-        assert!((b.opacity(at(t0, 950)) - mid).abs() < 1e-3);
-        assert!(b.opacity(at(t0, 1000)) > mid);
-    }
-
-    #[test]
-    fn leaving_before_the_first_show_never_flashes() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("u"), t0);
-        step(&mut b, None, at(t0, 50));
-        step(&mut b, None, at(t0, 400));
-        assert!(!b.is_drawn(at(t0, 400)));
-        assert_eq!(b.next_wakeup(at(t0, 400)), None);
-    }
-
-    #[test]
-    fn late_tick_crosses_all_stages() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        step(&mut b, Some("u"), t0);
-        b.advance(at(t0, 5000));
-        assert_eq!(b.opacity(at(t0, 5000)), 1.0);
-    }
-
-    #[test]
-    fn reduced_motion_has_no_fades() {
-        let t0 = Instant::now();
-        let mut b = StatusBubble::default();
-        b.set_timing(Timing::REDUCED);
-        step(&mut b, Some("u"), t0);
-        b.advance(at(t0, 80));
-        assert_eq!(b.opacity(at(t0, 80)), 1.0);
-        step(&mut b, None, at(t0, 100));
-        b.advance(at(t0, 350));
-        assert_eq!(b.opacity(at(t0, 350)), 0.0);
-    }
-
-    fn mono(_: char) -> f32 {
+    /// Ширина символа 1 для всех — длину строки можно считать в уме.
+    fn unit(_: char) -> f32 {
         1.0
     }
 
     #[test]
-    fn short_address_is_untouched() {
-        assert_eq!(elide_middle("https://a.ru/x", 40.0, &mono), "https://a.ru/x");
+    fn appears_after_80ms_and_fades_in_over_120() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        assert_eq!(b.visible(0.0), None, "до 80 мс пузыря нет");
+        let t = b.tick(79.0);
+        assert_eq!(b.visible(79.0), None);
+        assert_eq!(t.wake, Some(80.0), "будить ровно на показе");
+        b.tick(80.0);
+        assert!(b.visible(80.0).is_none(), "в момент старта fade прозрачность 0");
+        let (_, a) = b.visible(140.0).expect("виден на полпути");
+        assert!((a - 0.5).abs() < 1e-4, "{a}");
+        b.tick(200.0);
+        assert_eq!(b.visible(200.0), Some(("https://a.ru/", 1.0)));
+        assert_eq!(b.tick(300.0).wake, None, "устоявшийся пузырь не будит цикл");
     }
 
     #[test]
-    fn long_path_is_cut_in_the_middle_and_keeps_host_and_file() {
-        let url = "https://example.com/aaaa/bbbb/cccc/dddd/report-2026.pdf#page=3";
-        let out = elide_middle(url, 40.0, &mono);
-        assert!(out.starts_with("https://example.com/"), "{out}");
-        assert!(out.ends_with("report-2026.pdf#page=3") || out.ends_with("2026.pdf#page=3"), "{out}");
-        assert!(out.contains('…'));
-        assert!(out.chars().count() <= 40, "{out}");
+    fn reduced_motion_keeps_the_delays_but_drops_the_fades() {
+        let mut b = StatusBubble::default();
+        b.set_reduced_motion(true);
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.tick(79.0);
+        assert_eq!(b.visible(79.0), None, "задержка 80 мс остаётся");
+        b.tick(80.0);
+        assert_eq!(b.visible(80.0).map(|v| v.1), Some(1.0), "без fade-in сразу полная непрозрачность");
+        b.set_target(None, 1000.0, true);
+        b.tick(1249.0);
+        assert!(b.visible(1249.0).is_some());
+        b.tick(1250.0);
+        assert_eq!(b.visible(1250.0), None, "без fade-out пузырь пропадает сразу");
+        assert!(b.is_idle());
     }
 
     #[test]
-    fn host_is_never_cut() {
-        let url = "https://very-long-host-name.example.org/a/b/c";
-        let out = elide_middle(url, 10.0, &mono);
-        assert!(out.starts_with("https://very-long-host-name.example.org"), "{out}");
+    fn every_mouse_move_restarts_the_show_timer() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.set_target(Some("https://a.ru/"), 60.0, true);
+        b.tick(100.0);
+        assert!(b.visible(150.0).is_none(), "80 мс отсчитываются от последнего движения");
+        b.tick(140.0);
+        assert!(b.visible(200.0).is_some());
     }
 
     #[test]
-    fn overlong_last_segment_keeps_its_end() {
-        let url = "https://a.ru/dir/file-name-that-is-really-long.tar.gz";
-        let out = elide_middle(url, 30.0, &mono);
-        assert!(out.ends_with(".tar.gz"), "{out}");
+    fn a_non_move_resync_does_not_restart_the_timer() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.set_target(Some("https://a.ru/"), 60.0, false);
+        b.tick(80.0);
+        assert!(b.visible(140.0).is_some());
+    }
+
+    #[test]
+    fn hides_after_250ms_then_fades_out_over_200() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.tick(80.0);
+        b.tick(200.0);
+        b.set_target(None, 1000.0, true);
+        b.tick(1249.0);
+        assert_eq!(b.visible(1249.0).map(|v| v.1), Some(1.0), "до 250 мс не гаснет");
+        b.tick(1250.0);
+        let (_, a) = b.visible(1350.0).expect("ещё виден");
+        assert!((a - 0.5).abs() < 1e-4, "{a}");
+        b.tick(1450.0);
+        assert_eq!(b.visible(1450.0), None);
+        assert!(b.is_idle(), "после ухода часы пусты");
+    }
+
+    #[test]
+    fn leaving_and_returning_before_the_delay_keeps_it_solid() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.tick(80.0);
+        b.tick(200.0);
+        b.set_target(None, 1000.0, true);
+        b.set_target(Some("https://a.ru/"), 1100.0, true);
+        b.tick(1300.0);
+        assert_eq!(b.visible(1300.0).map(|v| v.1), Some(1.0));
+    }
+
+    #[test]
+    fn switching_links_swaps_text_without_fade() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.tick(80.0);
+        b.tick(200.0);
+        b.set_target(Some("https://b.ru/"), 500.0, true);
+        assert_eq!(b.visible(500.0), Some(("https://b.ru/", 1.0)), "текст сменился сразу, без fade");
+    }
+
+    #[test]
+    fn switching_links_during_fade_out_brings_it_back() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.tick(80.0);
+        b.tick(200.0);
+        b.set_target(None, 1000.0, true);
+        b.tick(1350.0);
+        let (_, mid) = b.visible(1350.0).expect("в середине ухода");
+        b.set_target(Some("https://b.ru/"), 1350.0, true);
+        let (t, a) = b.visible(1350.0).expect("виден");
+        assert_eq!(t, "https://b.ru/");
+        assert!((a - mid).abs() < 1e-4, "возврат стартует с текущей прозрачности");
+        b.tick(1500.0);
+        assert_eq!(b.visible(1500.0).map(|v| v.1), Some(1.0));
+    }
+
+    #[test]
+    fn leaving_before_it_shows_never_shows() {
+        let mut b = StatusBubble::default();
+        b.set_target(Some("https://a.ru/"), 0.0, true);
+        b.set_target(None, 40.0, true);
+        b.tick(500.0);
+        assert_eq!(b.visible(500.0), None);
+        assert!(b.is_idle());
+    }
+
+    #[test]
+    fn width_only_grows_while_visible() {
+        let mut b = StatusBubble::default();
+        b.note_width(100.0);
+        b.note_width(60.0);
+        assert_eq!(b.min_width(), 100.0);
+    }
+
+    #[test]
+    fn short_text_is_not_elided() {
+        assert_eq!(elide_middle("https://a.ru/x", 100.0, &unit), "https://a.ru/x");
+    }
+
+    #[test]
+    fn elision_keeps_host_and_file_name_and_drops_the_middle() {
+        let url = "https://example.org/aaaa/bbbb/cccc/dddd/report-final.pdf?v=2#p3";
+        let out = elide_middle(url, 40.0, &unit);
+        assert!(out.starts_with("https://example.org/"), "{out}");
+        assert!(out.contains('…'), "{out}");
+        assert!(out.ends_with("pdf?v=2#p3"), "{out}");
+        assert!(out.chars().count() <= 40, "{out} ({})", out.chars().count());
+    }
+
+    #[test]
+    fn host_is_never_cut_even_when_alone_it_overflows() {
+        let url = "https://very-long-subdomain.example-hosting.org/path/to/file.html";
+        let out = elide_middle(url, 10.0, &unit);
+        assert_eq!(out, "https://very-long-subdomain.example-hosting.org…");
+    }
+
+    #[test]
+    fn elision_with_no_scheme_cuts_the_middle() {
+        let out = elide_middle("mailto:someone.with.a.long.address@example.org", 20.0, &unit);
+        assert!(out.contains('…') && out.chars().count() <= 20, "{out}");
+    }
+
+    #[test]
+    fn query_less_url_with_long_tail_keeps_some_head_and_tail() {
+        let url = "https://h.ru/a/b/c/d/e/f/g/h/i/j/k/l/m/nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn";
+        let out = elide_middle(url, 30.0, &unit);
+        assert!(out.starts_with("https://h.ru/"), "{out}");
+        assert!(out.ends_with('n'), "{out}");
         assert!(out.chars().count() <= 30, "{out}");
-        assert!(out.starts_with("https://a.ru/"), "{out}");
+    }
+
+    fn host() -> Rect {
+        Rect::new(200.0, 100.0, 1000.0, 700.0)
     }
 
     #[test]
-    fn authority_less_address_fixes_only_the_scheme() {
-        let out = elide_middle("javascript:doSomethingVeryLongAndVerboseHere()", 20.0, &mono);
-        assert!(out.starts_with("javascript:"), "{out}");
-        assert!(out.ends_with(')'), "{out}");
+    fn sits_bottom_left_above_the_scrollbar_and_within_half_width() {
+        let lay = layout("https://a.ru/x", host(), 8.0, None, 0.0, &unit);
+        assert_eq!(lay.rect.x, 200.0);
+        assert!((lay.rect.bottom() - (800.0 - 8.0)).abs() < 1e-3);
+        assert!(lay.rect.width <= 500.0 + 1e-3);
+        let long = "https://a.ru/".to_owned() + &"p".repeat(2000);
+        let lay = layout(&long, host(), 0.0, None, 0.0, &unit);
+        assert!(lay.rect.width <= 500.0 + 1e-3, "{}", lay.rect.width);
     }
 
     #[test]
-    fn cyrillic_path_is_cut_on_char_boundaries() {
-        let url = "https://сайт.рф/новости/сегодня/очень-длинный-заголовок-статьи.html";
-        let out = elide_middle(url, 36.0, &mono);
-        assert!(out.contains('…'));
-        assert!(out.ends_with(".html"), "{out}");
-    }
-
-    fn geometry(room_below: f32) -> BubbleBox {
-        BubbleBox { w: 200.0, h: 24.0, host_w: 1000.0, host_h: 600.0, room_below, bottom_inset: 0.0 }
+    fn width_does_not_shrink_between_links() {
+        let wide = layout("https://a.ru/a-rather-long-path", host(), 0.0, None, 0.0, &unit);
+        let next = layout("https://a.ru/x", host(), 0.0, None, wide.rect.width, &unit);
+        assert_eq!(next.rect.width, wide.rect.width);
     }
 
     #[test]
-    fn far_cursor_leaves_the_bubble_alone() {
-        assert_eq!(avoid_mouse(&geometry(500.0), Some((500.0, 300.0))), Placement::default());
-        assert_eq!(avoid_mouse(&geometry(500.0), None), Placement::default());
+    fn pointer_near_the_bubble_pushes_it_to_the_opposite_corner() {
+        let calm = layout("https://a.ru/x", host(), 0.0, None, 0.0, &unit);
+        let p = (calm.rect.x + 5.0, calm.rect.y - 10.0);
+        let lay = layout("https://a.ru/x", host(), 0.0, Some(p), 0.0, &unit);
+        assert!(lay.at_right, "внизу места нет — угол напротив");
+        assert!(!near(lay.rect, p), "рамка дальше {MOUSE_PAD} px от курсора");
+        assert!((lay.rect.right() - host().right()).abs() < 1e-3);
     }
 
     #[test]
-    fn near_cursor_slides_the_bubble_down_nonlinearly_up_to_its_height() {
-        // top = 576. A cursor 10 px above the bubble: y = -10 → (20-10)²/20 = 5.
-        let p = avoid_mouse(&geometry(500.0), Some((50.0, 566.0)));
-        assert_eq!(p.corner, Corner::Left);
-        assert!((p.slide - 5.0).abs() < 1e-3, "{p:?}");
-        // Cursor on the bubble: y = 12 → 51 px, capped to the height 24.
-        let p = avoid_mouse(&geometry(500.0), Some((50.0, 588.0)));
-        assert_eq!(p.slide, 24.0);
+    fn pointer_far_from_the_bubble_changes_nothing() {
+        let calm = layout("https://a.ru/x", host(), 0.0, None, 0.0, &unit);
+        let lay = layout("https://a.ru/x", host(), 0.0, Some((600.0, 300.0)), 0.0, &unit);
+        assert_eq!(lay, calm);
     }
 
     #[test]
-    fn no_room_below_sends_the_bubble_to_the_opposite_corner() {
-        let p = avoid_mouse(&geometry(0.0), Some((50.0, 588.0)));
-        assert_eq!(p, Placement { corner: Corner::Right, slide: 0.0 });
+    fn room_below_slides_it_down_instead_of_flipping() {
+        let lay = layout("https://a.ru/x", host(), 40.0, Some((205.0, 770.0)), 0.0, &unit);
+        assert!(!lay.at_right);
+        assert!(lay.rect.y > 800.0 - 40.0 - lay.rect.height - 0.5);
     }
 
     #[test]
-    fn cursor_near_both_corners_slides_within_the_room_there_is() {
-        let narrow = BubbleBox { host_w: 220.0, ..geometry(0.0) };
-        let p = avoid_mouse(&narrow, Some((110.0, 588.0)));
-        assert_eq!(p, Placement { corner: Corner::Left, slide: 0.0 });
-    }
-
-    #[test]
-    fn scrollbar_inset_lifts_the_bubble_zone() {
-        let g = BubbleBox { bottom_inset: 8.0, ..geometry(500.0) };
-        // The bubble's top is 568 now; the cursor at 590 is on it.
-        assert!(avoid_mouse(&g, Some((50.0, 590.0))).slide > 0.0);
-        // The cursor at 560 is 8 px above the top: inside the padding.
-        assert!(avoid_mouse(&g, Some((50.0, 560.0))).slide > 0.0);
-        assert_eq!(avoid_mouse(&g, Some((50.0, 540.0))), Placement::default());
+    fn overlay_fades_with_alpha() {
+        let lay = layout("https://a.ru/x", host(), 0.0, None, 0.0, &unit);
+        let pal = Palette::DARK;
+        let full = build_overlay(&lay, 1.0, &pal);
+        let half = build_overlay(&lay, 0.5, &pal);
+        let alpha = |dl: &DisplayList| match &dl[0] {
+            DisplayCommand::FillRoundedRect { color, .. } => color.a,
+            other => panic!("первой идёт заливка, а не {other:?}"),
+        };
+        assert_eq!(alpha(&full), pal.overlay_bg.a);
+        assert_eq!(alpha(&half), (f32::from(pal.overlay_bg.a) * 0.5).round() as u8);
+        assert!(full.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "https://a.ru/x")));
     }
 }

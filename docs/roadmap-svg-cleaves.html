@@ -57,8 +57,8 @@
 {
  "generated": "2026-10-16",
  "counts": {
-  "open": 396,
-  "fixed": 1171,
+  "open": 394,
+  "fixed": 1173,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -8548,7 +8548,7 @@
        "title": "Пузырь URL при наведении на ссылку",
        "status": "done",
        "size": "M",
-       "note": "**Сделано (2026-10-15, ветка `p6-ux-status-bubble`):** `#statusBubble` в `assets/chrome/chrome.html`, таймлайн/усечение/уход от курсора — `crates/shell/src/status_bubble.rs`, клей — `lumen/status_bubble.rs` (hover и Tab-фокус, адрес через `url_display::display_url`), привязка — `lumen_chrome::ChromeStatusBubbleModel`. Не сделано: ссылки внутри `<iframe>`; живая проверка окном не выполнена (экран заблокирован), только модульные тесты. Исходная постановка: Пузыря URL при наведении на ссылку нет: HitTarget::status_url (surface/types.rs:340) никто не читает, в chrome.html элемента нет, cursor_moved.rs:343-376 только обновляет hover. Объём: #statusBubble в движковом хроме у нижнего левого угла; источник — hovered_nid → links::find_link (links.rs:25) и фокус Tab на ссылке; формат — форматтер из UX-URL-COPY (idn::display_host, путь раскодирован); ширина до 50% контента, хост не режется, сокращается середина пути; прозрачен для мыши. Приёмка: показ через 80 мс + fade 120 мс, скрытие через 250 + 200 мс, смена между ссылками без fade, рамка не ближе 20 px к курсору, омоглиф → punycode. docs/research/browser-ux/report.md §4.3 LINK-07…LINK-11, §9 №8 Исследование — docs/research/browser-ux/report.md."
+       "note": "**Сделано (2026-10-16, ветка `p6-ux-status-bubble-overlay`; первая попытка 2026-10-15 — `#statusBubble` в chrome.html — заменена):** `crates/shell/src/status_bubble.rs` — чистая модель (время и мерка символа параметры): `StatusBubble` — часы показа (80 мс до появления с перезапуском на каждое движение мыши, fade-in 120 мс, уход через 250 мс, fade-out 200 мс; смена ссылки при видимом пузыре — мгновенная замена текста; «анимации выключены» убирают fade, не задержки), `elide_middle` (схема и хост целы, из пути уходит середина, хвост от последнего `/` виден), `layout` (до 50% страницы, над горизонтальной полосой, ширина не сужается между ссылками; курсор ближе 20 px — вниз, если есть место, иначе в противоположный угол), `build_overlay`. Склейка — `lumen/status_bubble.rs`: адрес от узла-источника попадания (`status_hover_source`, обновляется на каждое `CursorMoved`) или от узла в фокусе после Tab (`focus_from_keyboard`), `display_url` от `resolve_href`; пересчёт на движение мыши, Tab и пробуждение цикла, пока пузырь жив; пузырь — команды в `overlay_buf` после фазы префиксов, не узел и не хит-цель. Почему не chrome-узел: первая версия на живой проверке показывала «https:…» (ширина shrink-to-fit) и не перерисовывала пузырь после смены текста, а `hovered_nid` у текста ссылки в абзаце — сам абзац, ссылка от него не находилась, поэтому пузырь не появлялся вовсе. Проверено живым окном (ссылка, длинный путь, относительная кириллическая, исчезновение). Не сделано: ссылки внутри `<iframe>`, пересчёт при прокрутке колесом без движения мыши."
       },
       {
        "id": "UX-CLOSE-WARNINGS",
@@ -8669,7 +8669,7 @@
       {
        "id": "COMPAT-PRIVACY-UNBREAK",
        "title": "Приватность без поломок: язык, пояс, шум, профили",
-       "status": "active",
+       "status": "done",
        "size": "L",
        "note": "Родитель срезов -LOCALE, -TZ, -NOISE, -PROFILE; SameSite — отдельный баг, окно активации 5 с уже есть (platform.rs:154). Сейчас идентичность одна на процесс (shell/src/config.rs:45): en-US в HTTP (http/mod.rs:71) и JS, getTimezoneOffset=0 при хостовых getHours/Intl (navigator_bindings.rs:372), шум канвы/аудио с ключом «запуск+origin» без исключений (canvas2d.rs:76-121). Приёмка: на RU-Windows в «Личном»/«Рабочем» Accept-Language, navigator.languages, Intl timeZone и getTimezoneOffset совпадают с Edge; в «Анонимном»/Tor — en-US и UTC во всех API; хеш toDataURL стабилен между 2 перезапусками. Источник: docs/research/site-compat/report.md §7.7 этап 1 п.9, §8.1 COMPAT-ID-05/06.",
        "tasks": [
@@ -8683,16 +8683,16 @@
         {
          "id": "COMPAT-PRIVACY-UNBREAK-NOISE",
          "title": "Ключ шума «профиль+сайт» и исключения доменов",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Шум канвы и аудио включён по умолчанию (crates/js/src/canvas2d.rs:117, web_audio.rs:104), ключ — время запуска^pid + полный origin (canvas2d.rs:76-104): отпечаток меняется при каждом перезапуске (антифрод видит новое устройство), поддомены сайта различаются, исключений нет (Shields — только адблок, shields_panel.rs:174); CAPABILITIES.md:154 устарел. Объём: секрет на профиль, ключ профиль+eTLD+1, исключения (проверки, банки, госсайты). Приёмка: хеш toDataURL одной сцены совпадает между 2 перезапусками на одном сайте, различается между 2 сайтами и профилями; на домене-исключении равен выводу без шума. Источник: docs/research/site-compat/report.md §8.1 COMPAT-ID-06, §8.8 COMPAT-CRIT-03."
+         "note": "**Сделано (2026-10-16, ветка `p1-compat-privacy-unbreak-noise`):** `crates/js/src/noise_key.rs` — сид шума канвы (2D, OffscreenCanvas, transferControlToOffscreen) и аудио = секрет профиля + eTLD+1 вместо «запуск^pid + полный origin»; секрет профиля ставит оболочка (`noise_secret.rs`: мастер в `<data>/fp_noise_secret`, на профиль `derive(master, id)`, `config::install_noise` из `sync_profile_locale`), Анонимный и Tor — случайный на запуск; исключения `BUILTIN_EXEMPT` (капчи, госсервисы, банки, `gov`/`gov.ru`) + ключ `noise_exceptions` в `fingerprint.toml` — шума нет. Тесты: одна сцена совпадает между «перезапусками», различается между сайтами и профилями, на `sberbank.ru` равна выводу без шума. Не сделано: WebGL-путь по-прежнему без шума. Шум канвы и аудио и аудио включён по умолчанию (crates/js/src/canvas2d.rs:117, web_audio.rs:104), ключ — время запуска^pid + полный origin (canvas2d.rs:76-104): отпечаток меняется при каждом перезапуске (антифрод видит новое устройство), поддомены сайта различаются, исключений нет (Shields — только адблок, shields_panel.rs:174); CAPABILITIES.md:154 устарел. Объём: секрет на профиль, ключ профиль+eTLD+1, исключения (проверки, банки, госсайты). Приёмка: хеш toDataURL одной сцены совпадает между 2 перезапусками на одном сайте, различается между 2 сайтами и профилями; на домене-исключении равен выводу без шума. Источник: docs/research/site-compat/report.md §8.1 COMPAT-ID-06, §8.8 COMPAT-CRIT-03."
         },
         {
          "id": "COMPAT-PRIVACY-UNBREAK-PROFILE",
          "title": "Идентичность сайта по профилю (Личный/Анонимный)",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Профили Личный/Рабочий/Анонимный/Гость есть (crates/shell/src/panels/profile_menu.rs:23), но Личный и Рабочий делят все данные (ADR-020), Анонимный — эфемерный cookie jar без истории (lumen/panel_data.rs:69), Гость — монохромный хром. Идентичность (язык, пояс, шум) одна на процесс: OnceLock из fingerprint.toml (shell/src/config.rs:45, window_mode.rs:258). Объём: режим идентичности на профиль (система / en-US+UTC), применение со следующей навигации, предупреждение в Анонимном и Гостевом. Приёмка: переход Личный→Анонимный без перезапуска меняет Accept-Language и getTimezoneOffset на следующей навигации. Источник: docs/research/site-compat/report.md §8.1 COMPAT-ID-05, §8.8 COMPAT-CRIT-05."
+         "note": "**Сделано (2026-10-16, ветка `p1-compat-privacy-unbreak-profile`):** `panels::profile_menu::IdentityMode` (`System` — Личный/Рабочий/иной, `Crowd` — Анонимный и Гость), `Lumen::active_profile_is_crowd`; `FingerprintProfile::{effective_languages,navigator_profile_for,install_*}` принимают флаг режима толпы: язык `en-US,en` и часовой пояс UTC (`timezone_offset = Some(0)` → весь `Date`/`Intl`), явный `timezone_offset` сильнее; `sync_profile_locale` и поля отчёта берут режим, а не «анонимный». Предупреждение COMPAT-CRIT-05 — `.pm-note` в `#profileMenu`/`#profileMenuH` (`assets/chrome/chrome.html`), видна под `body[data-profile=anonymous|guest]`. Тесты: `identity_mode_…`, `crowd_mode_switches_the_time_zone_to_utc`, `chrome_html_carries_the_crowd_warning_in_both_menus`. Не сделано: выбор режима пользователем на профиль; изоляция данных Личный/Рабочий (ADR-020). Исходная постановка: Профили Личный/Рабочий/Анонимный/Гость есть (crates/shell/src/panels/profile_menu.rs:23), но Личный и Рабочий делят все данные (ADR-020), Анонимный — эфемерный cookie jar без истории (lumen/panel_data.rs:69), Гость — монохромный хром. Идентичность (язык, пояс, шум) одна на процесс: OnceLock из fingerprint.toml (shell/src/config.rs:45, window_mode.rs:258). Объём: режим идентичности на профиль (система / en-US+UTC), применение со следующей навигации, предупреждение в Анонимном и Гостевом. Приёмка: переход Личный→Анонимный без перезапуска меняет Accept-Language и getTimezoneOffset на следующей навигации. Источник: docs/research/site-compat/report.md §8.1 COMPAT-ID-05, §8.8 COMPAT-CRIT-05."
         }
        ]
       },
@@ -10175,20 +10175,6 @@
    "status": "open",
    "title": "`position:absolute` с `left/right:auto` в контейнере `direction: rtl`: статическая позиция у левого края (`x=0`), а не у правого (`x=180` в контейнере 200 px, ш…",
    "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1363": {
-   "status": "open",
-   "title": "Фон корневого `<html>` не распространяется на canvas, если у `<html>` `position:absolute`/`display:table`: закрашивается только его бокс (`FillRect (100,100,120…",
-   "component": "layout/paint (`crates/engine/layout/src/box_tree/entry.rs:801` `canvas_background_color`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1364": {
-   "status": "open",
-   "title": "Фон `display:table`/`<table>` закрашивает и `table-caption`: `FillRect (0,0,100,70)` вместо сетки 100×50, подпись внутри фона (CSS 2.1 §17.4). 11 id `caption-si…",
-   "component": "layout/paint (`crates/engine/layout/src/box_tree/table.rs` — рамка/фон таблицы включает подпись)",
    "date": null,
    "debtor": false
   },
@@ -20199,6 +20185,20 @@
    "status": "fixed",
    "title": "Анонимные табличные боксы (CSS 2.1 §17.2.1) не строятся: осиротевшие `table-cell`/`table-row` не получают таблицу-обёртку, текст непосредственно в `table`/`tabl…",
    "component": "layout (`crates/engine/layout/src/box_tree/build.rs`, `table.rs` — анонимных табличных боксов нет: `grep -i anonymous table.rs` пуст)",
+   "date": "2026-10-16",
+   "debtor": false
+  },
+  "BUG-1363": {
+   "status": "fixed",
+   "title": "Фон корневого `<html>` не распространяется на canvas, если у `<html>` `position:absolute`/`display:table`: закрашивается только его бокс (`FillRect (100,100,120…",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/entry.rs:801` `canvas_background_color`)",
+   "date": "2026-10-16",
+   "debtor": false
+  },
+  "BUG-1364": {
+   "status": "fixed",
+   "title": "Фон `display:table`/`<table>` закрашивает и `table-caption`: `FillRect (0,0,100,70)` вместо сетки 100×50, подпись внутри фона (CSS 2.1 §17.4). 11 id `caption-si…",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/table.rs` — рамка/фон таблицы включает подпись)",
    "date": "2026-10-16",
    "debtor": false
   }

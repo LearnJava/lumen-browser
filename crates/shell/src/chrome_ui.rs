@@ -966,7 +966,6 @@ impl Lumen {
             update: self.update_ui.chrome_model(),
             login_offer: self.login_offer_model(),
             media_bar: self.media_bar.model(),
-            status_bubble: self.status_bubble_pushed.clone(),
             dialog: self.page_dialog_model(),
             security: self.security_model(),
         }
@@ -2420,9 +2419,8 @@ pub(crate) fn chrome_node_changes(
 /// `#contentArea` children that [`take_content_area`] keeps in the chrome tree
 /// (hit-testing reads them there) and that [`Lumen::relayout_chrome_host`]
 /// paints separately, unclipped — BUG-1605.
-pub(crate) const SALVAGED_POPOVER_IDS: [&str; 18] = [
+pub(crate) const SALVAGED_POPOVER_IDS: [&str; 17] = [
     lumen_chrome::ids::FIND_BAR,
-    lumen_chrome::ids::STATUS_BUBBLE,
     lumen_chrome::ids::DOWNLOADS_PANEL,
     lumen_chrome::ids::CP_OVERLAY,
     lumen_chrome::ids::CERT_OVERLAY,
