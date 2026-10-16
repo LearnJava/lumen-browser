@@ -62,6 +62,15 @@ impl Lumen {
             .is_some_and(|e| panels::profile_menu::is_anonymous(&e.name))
     }
 
+    /// `true` while the active profile presents the shared crowd identity
+    /// (`en-US` + UTC): the Anonymous and the Guest profile
+    /// (COMPAT-PRIVACY-UNBREAK-PROFILE, [`panels::profile_menu::IdentityMode`]).
+    pub(crate) fn active_profile_is_crowd(&self) -> bool {
+        self.profile_menu.active_entry().is_some_and(|e| {
+            panels::profile_menu::identity_mode(&e.name) == panels::profile_menu::IdentityMode::Crowd
+        })
+    }
+
     /// Cookie jar used for outgoing HTTP requests on the active tab: the
     /// shared jar for every profile except Anonymous, which gets its own
     /// ephemeral jar (DS-16) so its cookies never leak into — or persist

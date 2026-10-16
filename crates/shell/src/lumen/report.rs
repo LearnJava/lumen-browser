@@ -68,13 +68,13 @@ impl Lumen {
     /// Поля отчёта, которые окно знает о текущей странице без участия пользователя.
     fn collect_report_fields(&mut self, site: &str, host: &str) -> (AutoFields, Vec<String>) {
         self.shields.refresh();
-        let anonymous = self.active_profile_is_anonymous();
+        let crowd = self.active_profile_is_crowd();
         let pack = CompatPack::base(&lumen_storage::PslProvider::new());
         let profile_kind = self.profile_menu.active_entry().map_or_else(
             || "unknown".to_owned(),
             |e| panels::profile_menu::slug_for_profile(&e.name).unwrap_or("custom").to_owned(),
         );
-        let languages = crate::config::global().effective_languages(anonymous).join(",");
+        let languages = crate::config::global().effective_languages(crowd).join(",");
         let entries = self.network_panel.entries_clone();
         let blocked_hosts: Vec<String> = entries.iter().filter(|e| e.blocked).map(|e| host_of(&e.url)).collect();
         let http_errors = count_names(entries.iter().filter_map(|e| match (e.status, e.failed) {

@@ -343,19 +343,20 @@ impl FingerprintProfile {
     /// `navigator.languages`, so the two can never disagree:
     /// - Tor Browser — `en-US, en`, always;
     /// - an explicit `languages` key of `fingerprint.toml` — verbatim;
-    /// - the Anonymous profile — `en-US, en`, the shared "crowd" value;
+    /// - a profile in crowd-identity mode (Anonymous, Guest) — `en-US, en`, the
+    ///   shared "crowd" value;
     /// - otherwise the OS list, falling back to the built-in default.
     #[must_use]
-    pub fn effective_languages(&self, anonymous: bool) -> Vec<String> {
-        let crowd = || vec!["en-US".to_string(), "en".to_string()];
+    pub fn effective_languages(&self, crowd: bool) -> Vec<String> {
+        let crowd_languages = || vec!["en-US".to_string(), "en".to_string()];
         if self.http_profile == HttpProfile::TorBrowser {
-            return crowd();
+            return crowd_languages();
         }
         if self.languages_explicit {
             return self.languages.clone();
         }
-        if anonymous {
-            return crowd();
+        if crowd {
+            return crowd_languages();
         }
         if self.os_languages.is_empty() {
             return self.languages.clone();
@@ -365,16 +366,17 @@ impl FingerprintProfile {
 
     /// Push the `Accept-Language` for the active browser profile into the
     /// network layer (every protocol and every thread read the same value).
-    pub fn install_accept_language(&self, anonymous: bool) {
-        let header = lumen_network::http::accept_language_header(&self.effective_languages(anonymous));
+    pub fn install_accept_language(&self, crowd: bool) {
+        let header = lumen_network::http::accept_language_header(&self.effective_languages(crowd));
         lumen_network::http::set_global_accept_language(Some(header));
     }
 
     /// [`navigator_profile`](Self::navigator_profile) for the active browser
-    /// profile (`anonymous` — the Anonymous profile is selected).
+    /// profile (`crowd` — the profile's identity mode is "crowd":
+    /// `en-US` + UTC, see `panels::profile_menu::IdentityMode`).
     #[cfg(feature = "v8")]
     #[must_use]
-    pub fn navigator_profile_for(&self, anonymous: bool) -> lumen_js::NavigatorProfile {
+    pub fn navigator_profile_for(&self, crowd: bool) -> lumen_js::NavigatorProfile {
         let is_tor = self.http_profile == HttpProfile::TorBrowser;
         lumen_js::NavigatorProfile {
             hardware_concurrency: self.hardware_concurrency,
@@ -382,12 +384,14 @@ impl FingerprintProfile {
             // Tor Browser always reports "Win32" regardless of actual OS.
             platform: if is_tor { "Win32".to_string() } else { self.platform.clone() },
             // Same list as `Accept-Language`; Tor Browser pins it to en-US.
-            languages: self.effective_languages(anonymous),
+            languages: self.effective_languages(crowd),
             // Tor Browser letterboxes viewport; screen reports 1000×900 default.
             screen_width: if is_tor { 1000 } else { self.screen_width },
             screen_height: if is_tor { 900 } else { self.screen_height },
             color_depth: self.color_depth,
-            timezone_offset: if is_tor { Some(0) } else { self.timezone_offset },
+            // COMPAT-PRIVACY-UNBREAK-PROFILE: UTC in the crowd mode, like the
+            // language an explicit `timezone_offset` key of `fingerprint.toml` wins.
+            timezone_offset: if is_tor { Some(0) } else { self.timezone_offset.or(crowd.then_some(0)) },
         }
     }
 
@@ -427,11 +431,11 @@ impl FingerprintProfile {
     /// [`install_navigator`](Self::install_navigator) for the active browser
     /// profile; also (re)installs `Accept-Language` from the same language
     /// list. Called again when the active profile changes, so the next page
-    /// and the next request already carry the new locale.
+    /// and the next request already carry the new locale and time zone.
     #[cfg(feature = "v8")]
-    pub fn install_navigator_for(&self, anonymous: bool) {
-        self.install_accept_language(anonymous);
-        lumen_js::set_navigator_profile(self.navigator_profile_for(anonymous));
+    pub fn install_navigator_for(&self, crowd: bool) {
+        self.install_accept_language(crowd);
+        lumen_js::set_navigator_profile(self.navigator_profile_for(crowd));
         // BUG-1614: the JS-visible name of the browser comes from the very
         // User-Agent the HTTP profile sends, so the layers cannot disagree.
         lumen_js::set_identity(lumen_core::Identity::from_user_agent(
@@ -1113,6 +1117,20 @@ mod tests {
         assert_eq!(p.navigator_profile_for(false).languages, p.effective_languages(false));
         assert_eq!(p.navigator_profile_for(true).languages, tags(&["en-US", "en"]));
         assert_eq!(p.navigator_profile().languages, p.navigator_profile_for(false).languages);
+    }
+
+    /// COMPAT-PRIVACY-UNBREAK-PROFILE: the time zone follows the identity mode
+    /// like the language list — host zone in the system mode, UTC in the crowd
+    /// mode — and an explicit `timezone_offset` key wins over the mode.
+    #[cfg(feature = "v8")]
+    #[test]
+    fn crowd_mode_switches_the_time_zone_to_utc() {
+        let p = with_os_ru(FingerprintProfile::default());
+        assert_eq!(p.navigator_profile_for(false).timezone_offset, None);
+        assert_eq!(p.navigator_profile_for(true).timezone_offset, Some(0));
+        let explicit = with_os_ru(parse("timezone_offset = -120"));
+        assert_eq!(explicit.navigator_profile_for(false).timezone_offset, Some(-120));
+        assert_eq!(explicit.navigator_profile_for(true).timezone_offset, Some(-120));
     }
 
     #[test]

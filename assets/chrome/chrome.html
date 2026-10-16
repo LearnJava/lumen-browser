@@ -202,6 +202,8 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 }
 .profile-menu .pm-item:hover{ background:var(--surface-2); }
 .profile-menu .pm-item.active{ background:var(--surface-2); font-weight:700; }
+.profile-menu .pm-note{ display:none; padding:6px 8px 2px; color:var(--text-secondary); font-size:11px; }
+body[data-profile="anonymous"] .profile-menu .pm-note, body[data-profile="guest"] .profile-menu .pm-note{ display:block; }
 .hbar-profile-wrap{ position:relative; display:flex; align-items:center; }
 .hbar-profile-wrap .profile-menu{ top:30px; left:0; }
 .pm-dot{ width:9px; height:9px; border-radius:50%; flex:none; }
@@ -1148,6 +1150,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <button class="pm-item" data-action="set-profile" data-profile="work"><span class="pm-dot" style="background:#8B5CF6"></span>Рабочий</button>
           <button class="pm-item" data-action="set-profile" data-profile="anonymous"><span class="pm-dot" style="background:#FF3B30"></span>Анонимный</button>
           <button class="pm-item" data-action="set-profile" data-profile="guest"><span class="pm-dot" style="background:#8E8E93"></span>Гость</button>
+          <div class="pm-note">Банки и вход через Microsoft или Google могут просить дополнительное подтверждение</div>
         </div>
       </div>
       <div class="sb-divider"></div>
@@ -1265,6 +1268,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
             <button class="pm-item" data-action="set-profile" data-profile="work"><span class="pm-dot" style="background:#8B5CF6"></span>Рабочий</button>
             <button class="pm-item" data-action="set-profile" data-profile="anonymous"><span class="pm-dot" style="background:#FF3B30"></span>Анонимный</button>
             <button class="pm-item" data-action="set-profile" data-profile="guest"><span class="pm-dot" style="background:#8E8E93"></span>Гость</button>
+            <div class="pm-note">Банки и вход через Microsoft или Google могут просить дополнительное подтверждение</div>
           </div>
         </div>
         <div class="hbar-divider"></div>
