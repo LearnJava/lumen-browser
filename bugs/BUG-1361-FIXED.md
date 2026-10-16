@@ -1,6 +1,6 @@
 # BUG-1361 — `position:absolute` вне непозиционированного `overflow:scroll|hidden` предка обрезается его клипом, хотя containing block — снаружи
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-16 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** paint/layout (`crates/engine/layout/src/box_tree/`, `crates/engine/paint/src/display_list/` — `PushScrollLayer` охватывает abspos-потомка, чей containing block не внутри скролл-контейнера)
 
@@ -27,3 +27,11 @@ WPT-RUN-14 срез 13: `positioning/abspos-overflow-001…010.xht` — 10 id: �
 ## Как проверить
 
 `css/CSS2/positioning/abspos-overflow-001.xht`.
+
+## Исправление
+
+`display_list/box_layer.rs` (порядковая сборка): клипы non-SC предков (`PushClipRect`/`PushScrollLayer`) переустанавливаются как внешний слой каждого дочернего слоя (BUG-131/BUG-159) — `position:absolute` получал и клипы боксов между собой и своим containing block. В `ContinueFrame`/`FillFrame::Enter` добавлено `abs_cb_clips`: сколько первых записей цепочки `child_clips` принадлежат containing block'у abspos-потомков (ближайший позиционированный/transform/filter/contain предок, включая сам бокс) или боксам выше; `position:absolute` ребёнок наследует только их (CSS 2.1 §11.1.1). Реальный SC-корень цепочку обнуляет (его скобка и так охватывает вложенных).
+
+Известное ограничение: не-позиционированный предок, сам создающий stacking context (`opacity` + `overflow:hidden`), по-прежнему клипует abspos-потомка — он вложен в скобку SC.
+
+Тесты: `display_list::abspos_clip_escape::*` (4). Все 10 `positioning/abspos-overflow-001…010.xht` совпадают с эталонами побайтно (`--screenshot`).

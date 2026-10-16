@@ -295,6 +295,8 @@ enum FillFrame<'a> {
         inherited_clips: Vec<DisplayCommand>,
         /// See [`ContinueFrame::fixed_cb_clips`] — the parent's value.
         fixed_cb_clips: Option<usize>,
+        /// See [`ContinueFrame::abs_cb_clips`] — the parent's value.
+        abs_cb_clips: usize,
     },
     /// Dispatch the next not-yet-visited child of `b` (or, once `next_idx`
     /// reaches the end, push `b`'s own [`FillFrame::Leave`]). Split out from
@@ -337,6 +339,13 @@ struct ContinueFrame<'a> {
     /// from boxes between the containing block and the child, which a `fixed`
     /// box escapes. `None` — the viewport is the containing block.
     fixed_cb_clips: Option<usize>,
+    /// BUG-1361: the first `n` entries of `child_clips` belong to the containing
+    /// block of `position: absolute` descendants (the nearest positioned or
+    /// transformed/filtered ancestor, `b` included) or to boxes above it. An
+    /// `absolute` child drops the entries past `n` — CSS 2.1 §11.1.1: an
+    /// `overflow` clip does not apply to a box whose containing block is an
+    /// ancestor of the clipping element. `0` — the initial containing block.
+    abs_cb_clips: usize,
     /// Closing-time state captured back when `b` itself was entered,
     /// carried untouched through every `Continue` visit until the last
     /// child is done and it moves into `b`'s own [`LeaveFill`].
@@ -438,12 +447,13 @@ pub(crate) fn fill_buckets_cached(
         is_sc_root,
         inherited_clips: inherited_clips.to_vec(),
         fixed_cb_clips: None,
+        abs_cb_clips: inherited_clips.len(),
     }];
     while let Some(frame) = stack.pop() {
         match frame {
-            FillFrame::Enter { b, current_sc, is_sc_root, inherited_clips, fixed_cb_clips } => {
+            FillFrame::Enter { b, current_sc, is_sc_root, inherited_clips, fixed_cb_clips, abs_cb_clips } => {
                 enter_fill(
-                    b, current_sc, is_sc_root, &inherited_clips, fixed_cb_clips, anim, dpr, buckets,
+                    b, current_sc, is_sc_root, &inherited_clips, fixed_cb_clips, abs_cb_clips, anim, dpr, buckets,
                     split, raw_spans, &mut stack,
                 );
             }
@@ -470,6 +480,7 @@ fn enter_fill<'a>(
     is_sc_root: bool,
     inherited_clips: &[DisplayCommand],
     fixed_cb_clips: Option<usize>,
+    abs_cb_clips: usize,
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
     buckets: &mut [ScBucket],
@@ -571,6 +582,9 @@ fn enter_fill<'a>(
             } else {
                 None
             },
+            // A real stacking context restarts the chain (its bracket holds every
+            // wrapper); a positioned-auto layer root is itself the containing block.
+            abs_cb_clips: layer_child_clips.len(),
             child_clips: layer_child_clips,
             leave_payload: LeavePayload::ScRoot,
         }));
@@ -626,6 +640,11 @@ fn enter_fill<'a>(
             next_idx: 0,
             child_order: lumen_layout::paint_child_order(b).map(std::rc::Rc::new),
             fixed_cb_clips: if own_fixed_cb { Some(child_clips.len()) } else { fixed_cb_clips },
+            abs_cb_clips: if own_fixed_cb || b.style.position != Position::Static {
+                child_clips.len()
+            } else {
+                abs_cb_clips
+            },
             child_clips,
             leave_payload: LeavePayload::NonSc {
                 overflow_post: ops.overflow_post,
@@ -650,7 +669,9 @@ fn continue_fill<'a>(
     cache: Option<&mut SubtreeEmitCache>,
     stack: &mut Vec<FillFrame<'a>>,
 ) {
-    let ContinueFrame { b, current_sc, is_sc_root, next_idx, child_order, child_clips, fixed_cb_clips, leave_payload } = cf;
+    let ContinueFrame {
+        b, current_sc, is_sc_root, next_idx, child_order, child_clips, fixed_cb_clips, abs_cb_clips, leave_payload,
+    } = cf;
     if next_idx >= b.children.len() {
         stack.push(FillFrame::Leave(LeaveFill { b, current_sc, payload: leave_payload }));
         return;
@@ -675,7 +696,11 @@ fn continue_fill<'a>(
             Position::Fixed => fixed_cb_clips.unwrap_or(0),
             _ => 0,
         };
-        let inherited = if matches!(child.style.position, Position::Fixed | Position::Sticky) {
+        let inherited = if child.style.position == Position::Absolute {
+            // BUG-1361: clips of boxes between the containing block and the child
+            // (rect clips and scroll layers alike) do not reach it.
+            child_clips[..abs_cb_clips.min(child_clips.len())].to_vec()
+        } else if matches!(child.style.position, Position::Fixed | Position::Sticky) {
             child_clips
                 .iter()
                 .enumerate()
@@ -717,6 +742,7 @@ fn continue_fill<'a>(
         child_order,
         child_clips,
         fixed_cb_clips,
+        abs_cb_clips,
         leave_payload,
     }));
     if replayed {
@@ -731,6 +757,7 @@ fn continue_fill<'a>(
         is_sc_root: child_is_sc_root,
         inherited_clips: child_inherited,
         fixed_cb_clips,
+        abs_cb_clips,
     });
 }
 
