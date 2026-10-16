@@ -54,6 +54,19 @@ fn site_of(host: &str, is_domain: bool) -> String {
         .to_owned()
 }
 
+/// `(site, host)` of a document origin string (`scheme://host[:port]`) for the
+/// fingerprint-noise key: the registrable domain and the lower-case host. An
+/// opaque or unparseable origin is its own site and host.
+pub(crate) fn site_and_host_of_origin(origin: &str) -> (String, String) {
+    match Url::parse(origin).ok().and_then(|u| u.tuple_origin()) {
+        Some(t) => {
+            let host = t.host.to_ascii_lowercase();
+            (site_of(&host, t.is_domain), host)
+        }
+        None => (origin.to_owned(), origin.to_owned()),
+    }
+}
+
 /// BUG-1208: the ASCII serialization of `url`'s origin (HTML LS §7.1.1
 /// «ascii serialization of an origin») — `"null"` for an opaque origin or an
 /// unparseable `url`, `scheme://host[:port]` (default port omitted) for a

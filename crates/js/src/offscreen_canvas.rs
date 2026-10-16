@@ -288,9 +288,9 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         "_lumen_offscreen_canvas_new",
         into_v8_fn2(move |w: u32, h: u32| -> String {
             let canvas = OffscreenCanvas::new(w, h);
-            if crate::canvas2d::canvas_noise_enabled() {
+            if let Some(seed) = noise_seed.filter(|_| crate::canvas2d::canvas_noise_enabled()) {
                 with_offscreen_canvas(canvas.id, |c| {
-                    c.set_noise_generator(CanvasNoiseGenerator::new(noise_seed));
+                    c.set_noise_generator(CanvasNoiseGenerator::new(seed));
                 });
             }
             format!(

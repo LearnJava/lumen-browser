@@ -478,3 +478,47 @@ fn js_present_rgba_resizes_existing_canvas() {
     assert_eq!((*w, *h), (2, 1), "canvas resized to the presented frame");
     assert_eq!(pixels, &frame);
 }
+
+// ── COMPAT-PRIVACY-UNBREAK-NOISE: the noise key is «profile + eTLD+1» ──────────
+
+/// One scene drawn on a document of `origin` under profile secret `secret`,
+/// read back as RGBA bytes. Each call is a fresh runtime — a «restart».
+fn noisy_scene(origin: &str, secret: Option<u64>) -> Vec<u8> {
+    crate::noise_key::set_noise_secret(secret);
+    let rt = V8JsRuntime::new().unwrap();
+    super::install_canvas2d_bindings_v8(&rt, origin).unwrap();
+    rt.eval(
+        "_lumen_canvas2d_create(1, 48, 48);\
+         _lumen_canvas2d_set_fill_style(1, '#7a5c33');\
+         _lumen_canvas2d_fill_rect(1, 0, 0, 48, 48);",
+    )
+    .unwrap();
+    bytes_eval(&rt, "_lumen_canvas2d_get_image_data(1, 0, 0, 48, 48)")
+}
+
+#[test]
+fn noise_is_stable_per_profile_and_site_and_off_on_exempt_hosts() {
+    // The secret is process-global: one test owns it for the whole scenario.
+    let _g = crate::noise_key::TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+
+    let personal = Some(0x1111_2222_3333_4444);
+    let work = Some(0x5555_6666_7777_8888);
+
+    let a1 = noisy_scene("https://example.test", personal);
+    let a2 = noisy_scene("https://example.test", personal);
+    assert_eq!(a1, a2, "same profile + site: the same pixels after a restart");
+
+    let other_site = noisy_scene("https://other.test", personal);
+    assert_ne!(a1, other_site, "two sites must not share a fingerprint");
+
+    let other_profile = noisy_scene("https://example.test", work);
+    assert_ne!(a1, other_profile, "two profiles must not share a fingerprint");
+
+    // An exempt site reads the canvas back untouched.
+    let plain: Vec<u8> = [0x7a, 0x5c, 0x33, 0xff].repeat(48 * 48);
+    let bank = noisy_scene("https://online.sberbank.ru", personal);
+    assert_eq!(bank, plain, "exempt host: output equals the no-noise output");
+    assert_ne!(a1, plain, "an ordinary host is noised");
+
+    crate::noise_key::set_noise_secret(None);
+}

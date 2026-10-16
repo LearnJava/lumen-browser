@@ -2130,6 +2130,7 @@ the time — read dates.
     `getEntries*` sorted by `startTime` (§5.5); `this` is the observer.
   - `long_tasks.rs`/`long_animation_frames.rs` carry their own tiny synchronous
     `PerformanceObserver` in `PERF_STUB` for their own unit tests only; the live page never sees it.
+- **Ключ шума канвы и аудио (COMPAT-PRIVACY-UNBREAK-NOISE, 2026-10-16).** `noise_key.rs`: сид = секрет профиля + eTLD+1 (`origin::site_and_host_of_origin`, PSL ставит оболочка), а не «время запуска ^ pid + полный origin». Секрет профиля ставит оболочка (`lumen_js::set_noise_secret`; `shell/noise_secret.rs` — мастер-секрет в `<data>/fp_noise_secret`, на профиль `derive(master, id профиля)`): хеш `toDataURL` одной сцены совпадает между перезапусками профиля и различается между сайтами и профилями. Анонимный и Tor — без стабильного секрета (случайный на запуск). Исключения (`BUILTIN_EXEMPT`: капчи, госсервисы, крупные банки, зоны `gov`/`gov.ru` + `noise_exceptions` из `fingerprint.toml`, `set_noise_exceptions`) — `document_noise_seed` даёт `None`, шума нет ни в 2D/Offscreen-канве, ни в Web Audio. Секрет и список — процесс-глобальные: тест, который их трогает, держит `noise_key::TEST_GUARD`. `LUMEN_DISABLE_CANVAS_NOISE`/`LUMEN_DISABLE_AUDIO_NOISE` по-прежнему выключают шум целиком.
 
 ## Deferred
 
