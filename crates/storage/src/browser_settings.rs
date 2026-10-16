@@ -41,6 +41,7 @@ const KEY_TRANSLATE_MODEL: &str = "translate_model";
 const KEY_COMPAT_PACK_OFF: &str = "compat_pack_off";
 const KEY_COMPAT_DISABLED: &str = "compat_disabled_ids";
 const KEY_COMPAT_JOURNAL: &str = "compat_journal";
+const KEY_COMPAT_CHIP: &str = "compat_chip_limiter";
 
 /// The compat-pack change journal keeps only the newest this-many lines.
 pub const COMPAT_JOURNAL_MAX: usize = 50;
@@ -371,6 +372,17 @@ impl BrowserSettings {
         let skip = lines.len().saturating_sub(COMPAT_JOURNAL_MAX);
         let joined: Vec<String> = lines.iter().skip(skip).map(|(at, t)| format!("{at}\t{t}")).collect();
         self.set_str(KEY_COMPAT_JOURNAL, &joined.join("\n"))
+    }
+
+    /// Memory of the help-chip limiter (COMPAT-FRUSTRATION): when and where a chip was
+    /// shown, snoozes, dismissal streak. An opaque line-based text owned by the shell.
+    pub fn compat_chip_limiter(&self) -> String {
+        self.get_str(KEY_COMPAT_CHIP, "")
+    }
+
+    /// Persist the help-chip limiter memory.
+    pub fn set_compat_chip_limiter(&self, text: &str) -> Result<()> {
+        self.set_str(KEY_COMPAT_CHIP, text)
     }
 
     /// Read all settings into a snapshot value.

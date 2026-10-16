@@ -913,6 +913,7 @@ impl Lumen {
                     .blocked_popups
                     .get(&self.tab_strip.tabs[self.tab_strip.active].id)
                     .map_or(0, |urls| u32::try_from(urls.len()).unwrap_or(u32::MAX)),
+                help_chip: self.help_chip_label(),
             },
             sidebar_collapsed: self.chrome_sidebar_collapsed,
             dropdown,
@@ -2038,6 +2039,8 @@ impl Lumen {
             ChromeAction::CompatResetConfirm => self.fix_reset_confirm(),
             ChromeAction::CompatResetCancel => self.fix_reset_cancel(),
             ChromeAction::CompatHandoff => self.fix_handoff(),
+            ChromeAction::CompatChipOpen => self.help_chip_open(),
+            ChromeAction::CompatChipDismiss => self.help_chip_dismiss(),
             ChromeAction::CompatWorkedYes => self.fix_answer(true),
             ChromeAction::CompatWorkedNo => self.fix_answer(false),
             ChromeAction::CompatDisableReload => {

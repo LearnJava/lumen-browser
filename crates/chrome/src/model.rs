@@ -977,6 +977,10 @@ pub struct OmniboxModel {
     /// (UX-USER-ACTIVATION): the page called `window.open()` without a user
     /// gesture `n` times since it loaded.
     pub popups_blocked: u32,
+    /// `Some(text)` shows the `#helpChip` next to the address bar with this question
+    /// (COMPAT-FRUSTRATION); `None` hides it. A click on the text opens the «Сайт
+    /// работает не так?» panel, «Не сейчас» silences the site.
+    pub help_chip: Option<String>,
 }
 
 /// One tab row for the sidebar tab list (`#sbTabs`).
@@ -2707,6 +2711,12 @@ fn bind_omnibox(doc: &mut Document, omnibox: &OmniboxModel) {
     if let Some(label) = doc.find_by_id(crate::ids::POPUP_LABEL) {
         set_text(doc, label, &omnibox.popups_blocked.max(1).to_string());
     }
+    if let Some(chip) = doc.find_by_id(crate::ids::HELP_CHIP) {
+        set_class_token(doc, chip, "show", omnibox.help_chip.is_some());
+    }
+    if let (Some(text), Some(question)) = (doc.find_by_id(crate::ids::HELP_CHIP_TEXT), &omnibox.help_chip) {
+        set_text(doc, text, question);
+    }
     let Some(warn) = doc.find_by_id(crate::ids::OMNI_WARN) else { return };
     set_class_token(doc, warn, "show", omnibox.warning.is_some());
     if let Some(message) = &omnibox.warning {
@@ -4218,6 +4228,28 @@ mod tests {
         assert_eq!(text, "150%");
         bind_model(&mut doc, &ChromeModel::default());
         assert!(!has_class(&doc, btn, "show"));
+    }
+
+    #[test]
+    fn omnibox_help_chip_follows_the_model() {
+        let mut doc = parse_asset();
+        let chip = doc.find_by_id(crate::ids::HELP_CHIP).expect("asset has #helpChip");
+        let text = doc.find_by_id(crate::ids::HELP_CHIP_TEXT).expect("asset has #helpChipText");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, chip, "show"));
+        let model = ChromeModel {
+            omnibox: OmniboxModel { help_chip: Some("Пустая страница?".to_owned()), ..Default::default() },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        assert!(has_class(&doc, chip, "show"));
+        let shown = match &doc.get(doc.get(text).children[0]).data {
+            NodeData::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(shown, "Пустая страница?");
+        bind_model(&mut doc, &ChromeModel::default());
+        assert!(!has_class(&doc, chip, "show"));
     }
 
     #[test]

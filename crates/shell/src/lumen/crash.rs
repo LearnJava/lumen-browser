@@ -35,6 +35,7 @@ impl Lumen {
             return;
         }
         let url = self.current_display_url().to_owned();
+        self.frustration_crash(&url);
         let original = self.source.clone();
         let crash = crash_page::crash_source(&url, detail);
         let PageSource::Static { html, .. } = &crash else { return };

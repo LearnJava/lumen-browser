@@ -54,6 +54,7 @@ impl Lumen {
     /// подряд за 30 с — сильный сигнал. Перезагрузки из JS и восстановление
     /// фоновой вкладки сюда не попадают.
     pub(crate) fn note_user_reload(&mut self) {
+        self.frustration_reload();
         let Some(url) = self.signal_url() else { return };
         if let Some(signal) = self.compat_signals.record_reload(&url, now_unix()) {
             self.persist_signal(&signal);
@@ -85,6 +86,8 @@ impl Lumen {
     pub(crate) fn forget_all_signals(&mut self) {
         self.compat_signals.clear();
         self.gate_loop.clear();
+        self.frustration.clear();
+        let _ = self.settings_store.set_compat_chip_limiter("");
         let _ = self.compat_signal_store.clear();
     }
 
@@ -92,6 +95,7 @@ impl Lumen {
     pub(crate) fn forget_site_signals(&mut self, site: &lumen_storage::PartitionKey) {
         self.compat_signals.clear_site(site.site());
         self.gate_loop.forget(site.site());
+        self.frustration.forget_site(site.site());
         let _ = self.compat_signal_store.clear_site(site.site());
     }
 
