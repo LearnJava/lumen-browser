@@ -1476,7 +1476,7 @@ fn connect_inner(
         let _ = tcp.set_read_timeout(None);
     }
     let is_h2 = check_negotiated_alpn(conn.alpn_protocol())?;
-    let cert_info = cert_info_from_completed_handshake(&conn);
+    let cert_info = cert_info_from_completed_handshake(&conn, host);
 
     let mut c = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))));
     c.is_h2 = is_h2;
@@ -1501,7 +1501,7 @@ fn connect_inner(
 /// this point are "good" and "no staple", and this collapses both to the
 /// same "no revocation info" line rather than guessing. Threading the real
 /// verdict through is left to a follow-up slice.
-fn cert_info_from_completed_handshake(conn: &ClientConnection) -> Option<tls::CertInfo> {
+fn cert_info_from_completed_handshake(conn: &ClientConnection, host: &str) -> Option<tls::CertInfo> {
     let chain = conn.peer_certificates()?;
     let cert_der = chain.first()?;
     let tls_version = protocol_version_label(conn.protocol_version());
@@ -1513,6 +1513,11 @@ fn cert_info_from_completed_handshake(conn: &ClientConnection) -> Option<tls::Ce
         ct_verdict,
     );
     info.local_root = tls::os_roots::local_root_name(chain).unwrap_or_default();
+    // COMPAT-TRUST-NUC: a chain issued by the national CA that got through only because the user
+    // consented for this host and Certificate Transparency vouched for it.
+    if tls::nuc::chain_names_root(chain) && tls::nuc::has_consent(host) {
+        info.gov_ca_scts = Some(ct_verdict.operators());
+    }
     Some(info)
 }
 
@@ -1966,7 +1971,7 @@ fn fetch_single(
                     .map_err(|e| handshake_io_error("TLS handshake over tunnel", e))?;
 
                 let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
-                let cert_info = cert_info_from_completed_handshake(&tls_conn);
+                let cert_info = cert_info_from_completed_handshake(&tls_conn, host);
 
                 conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
                 conn.is_h2 = is_h2;

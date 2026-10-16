@@ -88,6 +88,9 @@ impl Lumen {
         self.gate_loop.clear();
         self.frustration.clear();
         let _ = self.settings_store.set_compat_chip_limiter("");
+        // COMPAT-TRUST-NUC: the consent list names the banks the user visited.
+        lumen_network::tls::nuc::revoke_all();
+        self.save_nuc_consents();
         let _ = self.compat_signal_store.clear();
     }
 
@@ -97,6 +100,16 @@ impl Lumen {
         self.gate_loop.forget(site.site());
         self.frustration.forget_site(site.site());
         let _ = self.compat_signal_store.clear_site(site.site());
+        lumen_network::tls::nuc::revoke_site(site.site());
+        self.save_nuc_consents();
+    }
+
+    /// COMPAT-TRUST-NUC: write the national-CA consent list to the profile. The anonymous
+    /// profile keeps it for the session only.
+    pub(crate) fn save_nuc_consents(&self) {
+        if !self.active_profile_is_anonymous() {
+            let _ = self.settings_store.set_nuc_consent_hosts(&lumen_network::tls::nuc::consents_to_text());
+        }
     }
 
     /// Показать сигнал в stderr и дописать его в журнал на диске.

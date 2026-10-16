@@ -811,14 +811,17 @@ fn run_window_mode_inner(
         print_panel: panels::print_panel::PrintPanel::new(),
         settings_store: {
             let path = adblock::browser_data_dir().join("settings.db");
-            lumen_storage::BrowserSettings::open(&path).unwrap_or_else(|e| {
+            let store = lumen_storage::BrowserSettings::open(&path).unwrap_or_else(|e| {
                 eprintln!(
                     "settings: cannot open {} ({e}); using in-memory store",
                     path.display()
                 );
                 lumen_storage::BrowserSettings::open_in_memory()
                     .expect("in-memory settings always opens")
-            })
+            });
+            // COMPAT-TRUST-NUC: hosts the user agreed to open under the Russian state CA.
+            lumen_network::tls::nuc::load_consents(&store.nuc_consent_hosts());
+            store
         },
         settings_panel: panels::settings_panel::SettingsPanel::new(),
         adblock_store: std::sync::Arc::clone(&adblock_store),

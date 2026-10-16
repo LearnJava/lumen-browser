@@ -45,7 +45,7 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme};
 
-use super::{aia, bypass, ct, failure};
+use super::{aia, bypass, cert_fields, ct, failure, nuc};
 use super::ocsp::{self, OcspVerdict};
 
 /// Render a rustls `ServerName` down to the plain hostname string
@@ -79,11 +79,27 @@ pub struct LumenVerifier {
     /// trust anchors that are acceptable only under CT (the national CA); no profile turns
     /// it on yet.
     ct_min_operators: Option<usize>,
+    /// COMPAT-TRUST-NUC: the second pass against the national CA root. `None` only if the
+    /// embedded root fails its pin (then nothing is ever accepted through it).
+    nuc: Option<NucPolicy>,
+}
+
+/// The second verification pass for chains that end at the Russian state CA ([`nuc`]).
+#[derive(Debug)]
+struct NucPolicy {
+    /// webpki verifier whose only anchor is the pinned national root.
+    verifier: Arc<WebPkiServerVerifier>,
+    /// Distinct log operators with a valid SCT for `(leaf, direct issuer)`; replaceable in tests.
+    operators: fn(&[u8], Option<&[u8]>) -> usize,
+}
+
+fn operators_of(leaf: &[u8], issuer: Option<&[u8]>) -> usize {
+    ct::evaluate_ct(leaf, issuer).operators()
 }
 
 /// The chain was valid but its SCTs did not reach the operator count the verifier requires.
 #[derive(Debug)]
-struct CtInsufficient {
+pub(super) struct CtInsufficient {
     found: usize,
     required: usize,
 }
@@ -124,7 +140,11 @@ impl LumenVerifier {
         let inner =
             WebPkiServerVerifier::builder_with_provider(Arc::new(root_store), provider.clone())
                 .build()?;
-        Ok(Arc::new(Self { inner, anchor_subjects, ct_min_operators }))
+        let nuc = WebPkiServerVerifier::builder_with_provider(Arc::new(nuc::root_store()), provider.clone())
+            .build()
+            .ok()
+            .map(|verifier| NucPolicy { verifier, operators: operators_of });
+        Ok(Arc::new(Self { inner, anchor_subjects, ct_min_operators, nuc }))
     }
 }
 
@@ -162,6 +182,35 @@ impl LumenVerifier {
             }
         }
         result.map(|r| (r, found))
+    }
+}
+
+/// The certificate in `intermediates` that issued `leaf` (by name), else the first one — the
+/// issuer a SCT signature is checked against.
+fn direct_issuer<'a>(leaf: &[u8], intermediates: &'a [CertificateDer<'_>]) -> Option<&'a [u8]> {
+    let wanted = cert_fields::issuer_and_subject_der(leaf).map(|(issuer, _)| issuer);
+    intermediates
+        .iter()
+        .map(AsRef::as_ref)
+        .find(|c| wanted.is_some() && cert_fields::issuer_and_subject_der(c).map(|(_, subject)| subject) == wanted)
+        .or_else(|| intermediates.first().map(AsRef::as_ref))
+}
+
+/// Verdict of the national-CA pass. `None` — the chain does not lead to that root either, the
+/// ordinary `UnknownIssuer` stands; a chain that does but fails for another reason (expired, wrong
+/// name) reports that reason; a chain that verifies is accepted only with SCTs of
+/// [`nuc::MIN_OPERATORS`] distinct operators.
+fn decide_nuc(
+    attempt: Result<ServerCertVerified, RustlsError>,
+    operators: impl FnOnce() -> usize,
+) -> Option<Result<ServerCertVerified, RustlsError>> {
+    match attempt {
+        Err(RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)) => None,
+        Err(other) => Some(Err(other)),
+        Ok(ok) => {
+            let found = operators();
+            Some(apply_ct_requirement(Ok(ok), found, Some(nuc::MIN_OPERATORS), false))
+        }
     }
 }
 
@@ -233,6 +282,21 @@ impl ServerCertVerifier for LumenVerifier {
         let full_chain: Vec<CertificateDer<'_>> =
             intermediates.iter().cloned().chain(found_intermediates).collect();
         let intermediates = full_chain.as_slice();
+        // COMPAT-TRUST-NUC: still no known issuer — try the national CA, but only for a host the
+        // user agreed to and only with Certificate Transparency evidence.
+        let still_unknown =
+            matches!(&chain_result, Err(RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)));
+        if still_unknown
+            && let Some(nuc) = &self.nuc
+            && nuc::has_consent(&server_name_host(server_name))
+        {
+            let attempt =
+                nuc.verifier.verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
+            let count = || (nuc.operators)(end_entity, direct_issuer(end_entity, intermediates));
+            if let Some(verdict) = decide_nuc(attempt, count) {
+                chain_result = verdict;
+            }
+        }
         // A3: layer the stapled-OCSP revocation check on top of webpki's chain trust.
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
         let ocsp_verdict = ocsp::parse_stapled_response(ocsp_response);
@@ -356,13 +420,14 @@ mod tests {
     }
 
     #[test]
-    fn ct_failure_surfaces_as_a_cert_error_other() {
+    fn ct_failure_surfaces_as_cert_error_ct_insufficient() {
         let err = apply_ct_requirement(Ok(ServerCertVerified::assertion()), 0, Some(2), false).unwrap_err();
         let io = std::io::Error::new(std::io::ErrorKind::InvalidData, err);
-        let Some(lumen_core::error::CertError::Other(text)) = crate::tls::cert_error::from_io_error(&io) else {
-            panic!("expected CertError::Other");
-        };
-        assert!(text.contains("0 log operator(s), 2 required"), "{text}");
+        assert_eq!(crate::tls::cert_error::from_io_error(&io), Some(lumen_core::error::CertError::CtInsufficient));
+        assert_eq!(
+            CtInsufficient { found: 0, required: 2 }.to_string(),
+            "Certificate Transparency: valid SCTs from 0 log operator(s), 2 required"
+        );
     }
 
     // ── COMPAT-TRUST-AIA ────────────────────────────────────────────────────
@@ -422,5 +487,100 @@ mod tests {
         TEST_ADDR.with(|a| a.set(Some("127.0.0.1:1".parse().expect("addr"))));
         let sent = [CertificateDer::from(INTERMEDIATE_DER.to_vec())];
         assert!(verify_leaf(&aia_verifier(true), LEAF_PEM, &sent).is_ok());
+    }
+
+    // ── COMPAT-TRUST-NUC ────────────────────────────────────────────────────
+
+    /// 2026-10-14: inside the captured sberbank.ru leaf (2026-07-27 … 2027-07-27) and sub CA.
+    const NUC_NOW_SECS: u64 = 1_791_979_200;
+
+    fn sber_chain() -> Vec<CertificateDer<'static>> {
+        rustls_pemfile::certs(&mut include_str!("testdata/sberbank_chain.pem").as_bytes())
+            .map(|c| c.expect("pem"))
+            .collect()
+    }
+
+    /// Verify the captured chain for `host`; nothing may listen where AIA would fetch from.
+    fn verify_sber(verifier: &LumenVerifier, host: &str, sent: &[CertificateDer<'_>]) -> Result<ServerCertVerified, RustlsError> {
+        TEST_ADDR.with(|a| a.set(Some("127.0.0.1:1".parse().expect("addr"))));
+        let chain = sber_chain();
+        let name = ServerName::try_from(host).expect("name");
+        let now = UnixTime::since_unix_epoch(std::time::Duration::from_secs(NUC_NOW_SECS));
+        verifier.verify_server_cert(&chain[0], sent, &name, &[], now)
+    }
+
+    fn nuc_verifier(operators: fn(&[u8], Option<&[u8]>) -> usize) -> Arc<LumenVerifier> {
+        let mut verifier = LumenVerifier::new(crate::tls::trusted_root_store(), &provider()).expect("verifier");
+        Arc::get_mut(&mut verifier).expect("unique").nuc.as_mut().expect("embedded root is pinned").operators =
+            operators;
+        verifier
+    }
+
+    #[test]
+    fn nuc_chain_needs_the_users_consent_then_ct_from_two_operators() {
+        // sberbank.ru (the captured leaf's name); one test owns the host so parallel tests cannot interfere.
+        let host = "sberbank.ru";
+        nuc::revoke_host(host);
+        let sent = &sber_chain()[1..];
+        let real = nuc_verifier(operators_of);
+
+        // No consent: the ordinary verdict stands, the error screen can offer the consent.
+        let err = verify_sber(&real, host, sent).unwrap_err();
+        assert!(matches!(err, RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)), "{err:?}");
+
+        // Consent and the real SCTs (three operators): accepted.
+        nuc::consent_host(host);
+        assert!(verify_sber(&real, host, sent).is_ok());
+
+        // One operator is not enough, two is.
+        let one = nuc_verifier(|_, _| 1);
+        let err = verify_sber(&one, host, sent).unwrap_err();
+        assert_eq!(
+            crate::tls::cert_error::from_io_error(&std::io::Error::new(std::io::ErrorKind::InvalidData, err)),
+            Some(lumen_core::error::CertError::CtInsufficient)
+        );
+        assert!(verify_sber(&nuc_verifier(|_, _| 2), host, sent).is_ok());
+
+        // Consent is withdrawn: refused again.
+        nuc::revoke_host(host);
+        assert!(verify_sber(&real, host, sent).is_err());
+    }
+
+    #[test]
+    fn nuc_consent_for_one_host_does_not_open_another() {
+        nuc::consent_host("other-bank.nuc-test.example");
+        let err = verify_sber(&nuc_verifier(operators_of), "www.sberbank.ru", &sber_chain()[1..]).unwrap_err();
+        assert!(matches!(err, RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)), "{err:?}");
+        nuc::revoke_host("other-bank.nuc-test.example");
+    }
+
+    #[test]
+    fn nuc_consent_does_not_hide_a_wrong_name() {
+        let host = "wrong-name.nuc-test.example";
+        nuc::consent_host(host);
+        let err = verify_sber(&nuc_verifier(operators_of), host, &sber_chain()[1..]).unwrap_err();
+        assert!(
+            matches!(err, RustlsError::InvalidCertificate(CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. })),
+            "{err:?}"
+        );
+        nuc::revoke_host(host);
+    }
+
+    #[test]
+    fn nuc_consent_does_not_trust_an_unrelated_chain() {
+        // The AIA fixtures' root is not the national CA: consent changes nothing for its chain.
+        nuc::consent_host("aia.test");
+        let err = verify_leaf(&aia_verifier(false), LEAF_PEM, &[]).unwrap_err();
+        assert!(matches!(err, RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)), "{err:?}");
+        nuc::revoke_host("aia.test");
+    }
+
+    #[test]
+    fn direct_issuer_prefers_the_certificate_that_issued_the_leaf() {
+        let chain = sber_chain();
+        let reversed = [chain[1].clone(), chain[1].clone()];
+        assert_eq!(direct_issuer(chain[0].as_ref(), &chain[1..]), Some(chain[1].as_ref()));
+        assert!(direct_issuer(chain[0].as_ref(), &reversed).is_some());
+        assert_eq!(direct_issuer(chain[0].as_ref(), &[]), None);
     }
 }

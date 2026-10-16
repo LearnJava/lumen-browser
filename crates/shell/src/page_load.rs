@@ -1004,6 +1004,15 @@ impl Lumen {
     /// `load_failed`/`load_error_message` — so `reload()` retries the exact
     /// URL the interstitial was blocking.
     pub(crate) fn proceed_cert_interstitial(&mut self) {
+        // COMPAT-TRUST-NUC: on a Russian state CA error the button is not a bypass but the
+        // consent to that CA for this host; the verifier still demands CT evidence.
+        if let Some(host) = self.cert_interstitial.take_nuc_consent() {
+            lumen_network::tls::nuc::consent_host(&host);
+            self.save_nuc_consents();
+            self.relayout_chrome_host();
+            self.reload();
+            return;
+        }
         let is_threat = self.cert_interstitial.threat.is_some();
         let Some((_url, host)) = self.cert_interstitial.proceed() else {
             return;

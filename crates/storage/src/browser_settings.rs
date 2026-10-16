@@ -43,6 +43,7 @@ const KEY_COMPAT_DISABLED: &str = "compat_disabled_ids";
 const KEY_COMPAT_JOURNAL: &str = "compat_journal";
 const KEY_COMPAT_CHIP: &str = "compat_chip_limiter";
 const KEY_COMPAT_REPORTED: &str = "compat_reported_sites";
+const KEY_NUC_CONSENT: &str = "nuc_consent_hosts";
 
 /// The compat-pack change journal keeps only the newest this-many lines.
 pub const COMPAT_JOURNAL_MAX: usize = 50;
@@ -395,6 +396,17 @@ impl BrowserSettings {
     /// Persist the reported-sites memory.
     pub fn set_compat_reported_sites(&self, text: &str) -> Result<()> {
         self.set_str(KEY_COMPAT_REPORTED, text)
+    }
+
+    /// Hosts the user agreed to open under the Russian state CA (COMPAT-TRUST-NUC), one per
+    /// line. Empty by default: the national CA is trusted nowhere until the user says so.
+    pub fn nuc_consent_hosts(&self) -> String {
+        self.get_str(KEY_NUC_CONSENT, "")
+    }
+
+    /// Persist the national-CA consent list.
+    pub fn set_nuc_consent_hosts(&self, text: &str) -> Result<()> {
+        self.set_str(KEY_NUC_CONSENT, text)
     }
 
     /// Read all settings into a snapshot value.
