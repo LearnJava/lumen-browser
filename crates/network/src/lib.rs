@@ -1489,7 +1489,7 @@ fn connect_inner(
 /// `LumenVerifier`/`CertInfo::from_peer_cert`/`ct::evaluate_ct` but nothing
 /// called them yet).
 ///
-/// CT (A4) is a pure function of the leaf cert bytes, so it's safely
+/// CT (A4) is a pure function of the leaf and issuer cert bytes, so it's safely
 /// recomputable here. OCSP (A3) is not: the stapled response is only ever
 /// handed to [`tls::verifier::LumenVerifier::verify_server_cert`], and
 /// per that module's docs a shared, cached `ClientConfig`/verifier must stay
@@ -1505,7 +1505,7 @@ fn cert_info_from_completed_handshake(conn: &ClientConnection) -> Option<tls::Ce
     let chain = conn.peer_certificates()?;
     let cert_der = chain.first()?;
     let tls_version = protocol_version_label(conn.protocol_version());
-    let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref());
+    let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref(), chain.get(1).map(AsRef::as_ref));
     let mut info = tls::CertInfo::from_peer_cert(
         cert_der.as_ref(),
         &tls_version,

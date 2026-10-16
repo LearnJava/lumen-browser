@@ -41,6 +41,9 @@ fn map_certificate_error(err: &rustls::CertificateError) -> CertError {
         // `CertificateError::SelfSigned`. `CertError::SelfSigned` stays
         // reserved for A5's leaf-cert parsing (issuer == subject check).
         CE::UnknownIssuer | CE::BadSignature => CertError::Untrusted(format!("{err:?}")),
+        // A cause a custom verifier attached itself (CT shortfall): its own sentence reads
+        // better in the panel than the `Other(OtherError(..))` debug form.
+        CE::Other(inner) => CertError::Other(inner.to_string()),
         other => CertError::Other(format!("{other:?}")),
     }
 }
