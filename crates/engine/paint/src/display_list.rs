@@ -367,6 +367,10 @@ mod ordered_build_scroll;
 mod fixed_cb_scroll;
 
 #[cfg(test)]
+#[path = "display_list/tests/abspos_clip_escape.rs"]
+mod abspos_clip_escape;
+
+#[cfg(test)]
 #[path = "display_list/tests/form_controls_caret.rs"]
 mod form_controls_caret;
 
