@@ -220,6 +220,12 @@ impl Lumen {
             return;
         }
 
+        // `about:report` — breakage report form for the current page (COMPAT-REPORT).
+        if crate::report_page::is_report_url(value.trim()) {
+            self.open_report_form();
+            return;
+        }
+
         // `about:newtab` — internal start page with a speed dial of pinned +
         // most-visited sites (task CC-5, DS-11).
         if value.trim() == newtab::NEWTAB_URL {

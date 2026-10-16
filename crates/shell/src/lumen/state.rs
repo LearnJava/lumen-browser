@@ -1844,6 +1844,8 @@ pub(crate) struct Lumen {
     pub(crate) gate_loop: gate_detect::GateLoop,
     /// COMPAT-PANEL: секция «Сайт работает не так?» в окне сайта.
     pub(crate) fix_panel: compat_panel::CompatPanel,
+    /// COMPAT-REPORT: отчёт о поломке сайта (форма, предпросмотр, экспорт).
+    pub(crate) report: super::report::ReportState,
     /// COMPAT-FRUSTRATION: детектор поломки по поведению и чип у адресной строки.
     pub(crate) frustration: compat_frustration::Frustration,
     /// Его копия на диске, `compat_signals.db`: окно «повторное выключение

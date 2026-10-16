@@ -132,6 +132,8 @@ mod handoff_page;
 mod compat_page;
 mod compat_indicator;
 mod compat_panel;
+mod compat_report;
+mod report_page;
 mod compat_frustration;
 mod import_manager;
 mod translate_manager;

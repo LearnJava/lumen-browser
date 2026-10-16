@@ -1149,6 +1149,8 @@ impl Lumen {
                             // `about:handoff?...` on the handoff page itself.
                         } else if self.apply_compat_link(&resolved) {
                             // `about:compat?...` on the compat-pack page itself.
+                        } else if self.apply_report_link(&resolved) {
+                            // `about:report-preview?do=...` on the report preview page.
                         } else if let Some(frag) =
                             links::same_document_fragment(self.current_display_url(), &resolved)
                         {

@@ -36,6 +36,7 @@ mod compat;
 mod handoff;
 pub(crate) mod signals;
 mod fix_panel;
+mod report;
 pub(crate) mod frustration;
 mod hibernation;
 mod hint_mode;

@@ -2039,6 +2039,7 @@ impl Lumen {
             ChromeAction::CompatResetConfirm => self.fix_reset_confirm(),
             ChromeAction::CompatResetCancel => self.fix_reset_cancel(),
             ChromeAction::CompatHandoff => self.fix_handoff(),
+            ChromeAction::CompatReport => self.open_report_form(),
             ChromeAction::CompatChipOpen => self.help_chip_open(),
             ChromeAction::CompatChipDismiss => self.help_chip_dismiss(),
             ChromeAction::CompatWorkedYes => self.fix_answer(true),

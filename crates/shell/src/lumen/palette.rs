@@ -159,6 +159,7 @@ impl Lumen {
                 PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason, false),
                 PaletteAction::RememberOtherBrowser(reason) => self.open_in_other_browser(*reason, true),
                 PaletteAction::ShowHandoffSites => self.show_handoff_sites(),
+                PaletteAction::ReportSiteProblem => self.open_report_form(),
                 PaletteAction::ToggleVimMode => {
                     if self.vim_mode.is_some() {
                         self.vim_mode = None;
