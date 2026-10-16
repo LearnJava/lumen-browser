@@ -7108,3 +7108,82 @@ Object.defineProperty(window, 'origin', {
             { value: names[i], writable: false, enumerable: false, configurable: true });
     }
 })();
+
+// COMPAT-CSS-JS (Mozilla 1170774, desktop Chrome): `webkit*` aliases that live
+// on `Element`/`Document`/`Window` in Chrome. Pages written against Chrome
+// feature-detect them (`el.webkitRequestFullscreen`, `window.webkitURL`) and
+// take a dead branch when they are missing. Each alias is the same function
+// object as its unprefixed twin.
+(function() {
+    function def(target, name, desc) {
+        if (!target || Object.prototype.hasOwnProperty.call(target, name)) return;
+        desc.enumerable = false; desc.configurable = true;
+        Object.defineProperty(target, name, desc);
+    }
+    function alias(target, name, from) {
+        var fn = target && target[from];
+        if (typeof fn === 'function') def(target, name, { value: fn, writable: true });
+    }
+    function owner(obj, prop) {
+        for (var o = obj; o; o = Object.getPrototypeOf(o)) {
+            if (Object.prototype.hasOwnProperty.call(o, prop)) return o;
+        }
+        return null;
+    }
+    var ep = (typeof Element === 'function') ? Element.prototype : null;
+    alias(ep, 'webkitMatchesSelector', 'matches');
+    alias(ep, 'webkitRequestFullscreen', 'requestFullscreen');
+    alias(ep, 'webkitRequestFullScreen', 'requestFullscreen');
+
+    var dp = owner(document, 'fullscreenElement') || document;
+    alias(dp, 'webkitExitFullscreen', 'exitFullscreen');
+    alias(dp, 'webkitCancelFullScreen', 'exitFullscreen');
+    var getters = {
+        webkitFullscreenElement: function() { return this.fullscreenElement; },
+        webkitCurrentFullScreenElement: function() { return this.fullscreenElement; },
+        webkitFullscreenEnabled: function() { return this.fullscreenEnabled; },
+        webkitIsFullScreen: function() { return this.fullscreenElement !== null; },
+    };
+    for (var g in getters) def(dp, g, { get: getters[g] });
+    def(dp, 'onwebkitfullscreenchange', { get: function() { return null; }, set: function() {} });
+    def(dp, 'onwebkitfullscreenerror', { get: function() { return null; }, set: function() {} });
+
+    var w = globalThis;
+    def(w, 'webkitURL', { value: w.URL, writable: true });
+    def(w, 'webkitRequestAnimationFrame', { value: w.requestAnimationFrame, writable: true });
+    def(w, 'webkitCancelAnimationFrame', { value: w.cancelAnimationFrame, writable: true });
+    def(w, 'webkitCancelRequestAnimationFrame', { value: w.cancelAnimationFrame, writable: true });
+
+    // Blink's legacy-prefixed event aliases (`EventTarget::FireEventListeners`
+    // + `LegacyTypeName`): the event is dispatched once under its standard
+    // name; listeners registered under the prefixed name run only on a target
+    // that has no listener for the standard name, so the common
+    // `'webkitTransitionEnd transitionend'` double-binding fires once.
+    // `event.type` stays the standard name.
+    var LEGACY = {
+        transitionend: 'webkitTransitionEnd',
+        animationstart: 'webkitAnimationStart',
+        animationend: 'webkitAnimationEnd',
+        animationiteration: 'webkitAnimationIteration',
+        fullscreenchange: 'webkitfullscreenchange',
+        fullscreenerror: 'webkitfullscreenerror',
+    };
+    var orig = _lumen_invoke_at;
+    _lumen_invoke_at = function(nid, event, capture) {
+        var legacy = LEGACY[event.type];
+        if (legacy === undefined || nid === _LUMEN_WIN_LISTENER_NID) {
+            return orig(nid, event, capture);
+        }
+        var store = capture ? _lumen_capture_listeners : _lumen_listeners;
+        var std = store[String(nid) + ':' + event.type];
+        var old = store[String(nid) + ':' + legacy];
+        if ((std && std.length) || !old || !old.length) return orig(nid, event, capture);
+        // Reuse the generic invoker: it keys the registry by `event.type`.
+        var std_type = event.type;
+        try { store[String(nid) + ':' + std_type] = old; return orig(nid, event, capture); }
+        finally {
+            if (std) store[String(nid) + ':' + std_type] = std;
+            else delete store[String(nid) + ':' + std_type];
+        }
+    };
+})();
