@@ -1840,6 +1840,8 @@ pub(crate) struct Lumen {
     /// COMPAT-SIG-01: локальный журнал сильных сигналов «сайт не работает»
     /// (в памяти окна, наружу не уходит).
     pub(crate) compat_signals: compat_signals::SignalLog,
+    /// COMPAT-GATE-DETECT: сколько раз подряд сайт отдал антибот-стену.
+    pub(crate) gate_loop: gate_detect::GateLoop,
     /// Его копия на диске, `compat_signals.db`: окно «повторное выключение
     /// защиты за 7 суток» и прошлые сигналы переживают перезапуск.
     pub(crate) compat_signal_store: Arc<lumen_storage::CompatSignalStore>,

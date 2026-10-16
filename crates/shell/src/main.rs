@@ -122,6 +122,8 @@ mod engine_bridge;
 mod crash_page;
 mod cert_cause;
 mod net_error_page;
+mod gate_detect;
+mod gate_page;
 mod net_probe;
 mod engine_thread;
 mod download;
