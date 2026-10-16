@@ -68,6 +68,7 @@ impl Lumen {
         self.close_site_popover();
         crate::config::request_hard_reload();
         self.note_user_reload();
+        self.frustration_panel_used();
         self.reload();
     }
 

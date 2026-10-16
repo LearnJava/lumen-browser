@@ -1328,6 +1328,7 @@ impl Lumen {
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                 self.record_render_health();
+                self.frustration_page_installed();
             }
             Err(err) => {
                 self.nav_start = None;

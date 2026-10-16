@@ -851,6 +851,7 @@ fn run_window_mode_inner(
         compat_signals,
         gate_loop: gate_detect::GateLoop::default(),
         fix_panel: compat_panel::CompatPanel::default(),
+        frustration: compat_frustration::Frustration::default(),
         compat_signal_store,
         spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
         spell_ignored: std::collections::HashSet::new(),
@@ -886,6 +887,7 @@ fn run_window_mode_inner(
         let no_adblock = std::env::var_os("LUMEN_NO_ADBLOCK").is_some();
         let on = !no_adblock && app.settings_store.shields_enabled();
         app.shields.set_default_enabled(on);
+        app.frustration = lumen::frustration::load_frustration(&app.settings_store);
         app.sync_adblock_filter();
     }
     // PH3-20: install the session-global Service Worker fetch interceptor.
