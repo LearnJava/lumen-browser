@@ -1374,6 +1374,14 @@ pub(crate) fn step_line_height(raw: f32, step: f32) -> f32 {
     }
 }
 
+/// Прирост блока из-за боксов, вынесенных `vertical-align` за строку (CSS 2.1 §10.8.1):
+/// `top` — выше строки 0, `bottom` — ниже последней строки.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct LineGrowth {
+    pub top: f32,
+    pub bottom: f32,
+}
+
 /// CSS 2.1 §10.8 — применяет вертикальное выравнивание к inline-фрагментам.
 /// Записывает `y_offset` (смещение от верхнего края line-box, вниз — положительное).
 /// `line_h` = font_size * line_height контейнера.
@@ -1381,14 +1389,32 @@ pub(crate) fn step_line_height(raw: f32, step: f32) -> f32 {
 /// Half-leading (§10.8.1): когда line-height > content-area, разница делится пополам
 /// и добавляется выше и ниже content-area. Для `baseline` — фрагмент сдвигается вниз
 /// на `half_leading = (line_h - frag_h) / 2`, чтобы content-area была центрирована.
-pub(crate) fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h: f32) {
-    for line in lines.iter_mut() {
+///
+/// Рост строки (§10.8.1: line box доходит до верха самого высокого и низа самого низкого
+/// inline-бокса): модель раскладки — равномерные строки по `line_h`, поэтому растёт
+/// блок целиком. `top` берётся по строке 0, `bottom` — по последней строке; все строки
+/// сдвигаются вниз на `top`, `top`/`bottom`-выровненные фрагменты липнут к выросшему
+/// краю своей строки. Рост в середине абзаца по-прежнему наезжает на соседние строки.
+/// `grow = false` (строки уложены вокруг float-ов) рост не считает.
+pub(crate) fn apply_inline_vertical_align(
+    lines: &mut [Vec<InlineFrag>],
+    line_h: f32,
+    grow: bool,
+) -> LineGrowth {
+    let mut growth = LineGrowth::default();
+    let last = lines.len().saturating_sub(1);
+    for (idx, line) in lines.iter_mut().enumerate() {
         for frag in line.iter_mut() {
             // frag_h: content area height ≈ font-size (ascent + descent for normal line-height).
             let frag_h = frag.style.font_size;
             // CSS 2.1 §10.8.1: half-leading pushes content area away from line-box edges.
             // Отрицательное при line-height < content area — глиф выступает над строкой.
             let half_leading = (line_h - frag_h) / 2.0;
+            // sub/super не растят строку: их сдвиг — эвристика от кегля, а не метрика шрифта.
+            let displaced = matches!(
+                frag.style.vertical_align,
+                VerticalAlign::Length(_) | VerticalAlign::Percent(_)
+            );
             frag.y_offset = match frag.style.vertical_align {
                 // Baseline: content area centred via half-leading (top = half_leading).
                 VerticalAlign::Baseline => half_leading,
@@ -1405,8 +1431,47 @@ pub(crate) fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h:
                 VerticalAlign::Length(px) => half_leading - px,
                 VerticalAlign::Percent(p) => half_leading - (p / 100.0 * line_h),
             };
+            // Картинки и пустые куски боксов: высота inline-бокса неизвестна (frag_h —
+            // приближение по кеглю), поэтому рост строки они не вызывают.
+            if grow && displaced && frag.img_src.is_none() && !frag.text.is_empty() {
+                // Inline-бокс фрагмента — его собственный line-height вокруг content area.
+                let lead = if frag.style.line_height_is_normal {
+                    0.0
+                } else {
+                    (frag_h * frag.style.line_height - frag_h) / 2.0
+                };
+                if idx == 0 {
+                    growth.top = growth.top.max(lead - frag.y_offset);
+                }
+                if idx == last {
+                    growth.bottom = growth.bottom.max(frag.y_offset + frag_h + lead - line_h);
+                }
+            }
         }
     }
+    if growth.top == 0.0 && growth.bottom == 0.0 {
+        return growth;
+    }
+    for (idx, line) in lines.iter_mut().enumerate() {
+        // Верх строки idx после сдвига всех строк на `top`; строка 0 выросла вверх на `top`.
+        let grown_top = if idx == 0 { growth.top } else { 0.0 };
+        let grown_h = line_h + grown_top + if idx == last { growth.bottom } else { 0.0 };
+        for frag in line.iter_mut() {
+            let frag_h = frag.style.font_size;
+            frag.y_offset += growth.top;
+            match frag.style.vertical_align {
+                VerticalAlign::Top | VerticalAlign::TextTop => frag.y_offset -= grown_top,
+                VerticalAlign::Bottom | VerticalAlign::TextBottom => {
+                    frag.y_offset = growth.top - grown_top + (grown_h - frag_h).max(0.0);
+                }
+                VerticalAlign::Middle => {
+                    frag.y_offset = growth.top - grown_top + ((grown_h - frag_h) / 2.0).max(0.0);
+                }
+                _ => {}
+            }
+        }
+    }
+    growth
 }
 
 /// Без измерителя: помещаем всё в одну строку. Ширина каждого фрагмента
