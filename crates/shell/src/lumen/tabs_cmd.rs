@@ -108,6 +108,7 @@ impl Lumen {
         self.video_gif_last_frame = HashMap::new();
         self.video_gif_frames = HashMap::new();
         self.video_gif_store.pending_container_loads.lock().unwrap().clear();
+        self.clear_mse_sessions();
         self.video_gif_store.audio_levels.lock().unwrap().clear();
         self.video_gif_store.playback_rates.lock().unwrap().clear();
         self.video_sessions = HashMap::new();

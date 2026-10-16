@@ -119,6 +119,14 @@ pub struct VideoGifStore {
     /// loop (`tick_video_sessions`), which opens the container through that
     /// decoder.
     pub pending_container_loads: Mutex<Vec<(u32, String)>>,
+    /// `<video>` nodes attached to a `MediaSource` (COMPAT-MSE): `nid → source id`.
+    /// Set by `__lumen_mse_attach` when `<video src=blob:MediaSource>` starts
+    /// loading, removed by `__lumen_mse_detach`. Unlike a container load there are
+    /// no bytes to fetch — the frames arrive through `appendBuffer` into the shared
+    /// `lumen_media_mse` registry — so the shell's `tick_video_sessions` reconciles
+    /// this map with its sessions: it creates `playback` once the buffers hold
+    /// tracks and opens the session once they hold video frames.
+    pub mse_attached: Mutex<HashMap<u32, u64>>,
     /// Nodes whose media-container load failed (fetch error, undecodable
     /// container, or the first frame could not be produced) — GAP-MEDIADECODE
     /// срез 9. Without this, a corrupted `src` never reaches `playback` and

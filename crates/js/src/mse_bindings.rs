@@ -17,6 +17,7 @@
 //! | `__lumen_mse_set_*` | `timestampOffset`, `mode`, окно добавления, `duration` |
 //! | `__lumen_mse_end_of_stream(id, ended)` | `endOfStream()` |
 //! | `__lumen_mse_attach(nid, id)` | привязать `MediaSource` к `<video>` (оболочка откроет сессию) |
+//! | `__lumen_mse_detach(nid)` | отвязать (оболочка закроет сессию) |
 //! | `__lumen_mse_is_type_supported(mime)` | `MediaSource.isTypeSupported` по реестру декодеров |
 //! | `__lumen_mse_release(id)` | страница отпустила объект |
 
@@ -189,10 +190,21 @@ pub(crate) fn install_mse_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
             "__lumen_mse_attach",
             into_v8_fn2(move |nid: f64, id: f64| {
                 if let Some(s) = &store {
-                    s.pending_mse_attach
+                    s.mse_attached
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push((nid as u32, id as u64));
+                        .insert(nid as u32, id as u64);
+                }
+            }),
+        )?;
+    }
+    {
+        let store = get_video_gif_store();
+        rt.register_native(
+            "__lumen_mse_detach",
+            into_v8_fn1(move |nid: f64| {
+                if let Some(s) = &store {
+                    s.mse_attached.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(nid as u32));
                 }
             }),
         )?;
@@ -204,3 +216,112 @@ pub(crate) fn install_mse_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
 /// Шим `MediaSource` / `SourceBuffer` / `SourceBufferList`, как есть из `shim/media_source.js`.
 #[cfg(feature = "v8-backend")]
 const MEDIA_SOURCE_SHIM: &str = include_str!("shim/media_source.js");
+
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use lumen_core::JsValue;
+    use lumen_core::ext::{JsRuntime as _, VideoDecodeSession, VideoDecoder};
+    use lumen_dom::{Document, QualName};
+
+    use crate::v8_runtime::V8JsRuntime;
+    use crate::video_gif_store::{DECODER_TEST_LOCK, clear_video_decoder, set_video_decoder};
+
+    /// Декодер-пустышка: отвечает на `canPlayType`, открывать ему нечего.
+    struct Stub;
+
+    impl VideoDecoder for Stub {
+        fn decoder_name(&self) -> &'static str {
+            "stub"
+        }
+        fn mime_types(&self) -> &'static [&'static str] {
+            &["video/mp4", "video/webm"]
+        }
+        fn can_play_type(&self, mime: &str) -> &'static str {
+            if mime.contains("video/mp4") || mime.contains("video/webm") { "probably" } else { "" }
+        }
+        fn open(&self, _bytes: &[u8]) -> Result<Box<dyn VideoDecodeSession>, String> {
+            Err("stub".to_string())
+        }
+    }
+
+    fn rt_with_dom() -> V8JsRuntime {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        let rt = V8JsRuntime::new().unwrap();
+        rt.install_dom(Arc::new(Mutex::new(doc)), "", None, None, None, None, None, None, None, None, None, false, None)
+            .unwrap();
+        rt
+    }
+
+    fn settle(rt: &V8JsRuntime) {
+        for _ in 0..8 {
+            rt.eval("_lumen_tick_timers()").unwrap();
+        }
+    }
+
+    fn frag_mp4_as_js() -> String {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/media-demux/tests/data/frag.mp4");
+        let bytes = std::fs::read(path).unwrap();
+        let list: Vec<String> = bytes.iter().map(u8::to_string).collect();
+        format!("new Uint8Array([{}])", list.join(","))
+    }
+
+    #[test]
+    fn append_buffer_fills_buffered_and_fires_events() {
+        let _g = DECODER_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_video_decoder(Arc::new(Stub));
+        let rt = rt_with_dom();
+        rt.eval(&format!(
+            "var log = []; var bytes = {}; var ms = new MediaSource(); \
+             ms.addEventListener('sourceopen', function () {{ log.push('open'); }}); \
+             _lumen_mse_attach_element(ms, {{}}); \
+             var sb = ms.addSourceBuffer('video/mp4'); \
+             sb.addEventListener('updateend', function () {{ log.push('updateend'); }}); \
+             sb.appendBuffer(bytes); var updatingNow = sb.updating;",
+            frag_mp4_as_js()
+        ))
+        .unwrap();
+        settle(&rt);
+        assert_eq!(rt.eval("updatingNow").unwrap(), JsValue::Bool(true));
+        assert_eq!(rt.eval("sb.updating").unwrap(), JsValue::Bool(false));
+        assert_eq!(rt.eval("sb.buffered.length").unwrap(), JsValue::Number(1.0));
+        assert_eq!(rt.eval("sb.buffered.start(0) < sb.buffered.end(0)").unwrap(), JsValue::Bool(true));
+        assert_eq!(rt.eval("log.join()").unwrap(), JsValue::String("open,updateend".to_string()));
+        clear_video_decoder();
+    }
+
+    #[test]
+    fn is_type_supported_follows_the_decoder() {
+        let _g = DECODER_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_video_decoder(Arc::new(Stub));
+        let rt = rt_with_dom();
+        assert_eq!(rt.eval("MediaSource.isTypeSupported('video/mp4')").unwrap(), JsValue::Bool(true));
+        assert_eq!(rt.eval("MediaSource.isTypeSupported('video/x-unknown')").unwrap(), JsValue::Bool(false));
+        assert_eq!(rt.eval("MediaSource.isTypeSupported('')").unwrap(), JsValue::Bool(false));
+        clear_video_decoder();
+        assert_eq!(rt.eval("MediaSource.isTypeSupported('video/mp4')").unwrap(), JsValue::Bool(false));
+    }
+
+    #[test]
+    fn garbage_append_is_a_decode_error() {
+        let _g = DECODER_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_video_decoder(Arc::new(Stub));
+        let rt = rt_with_dom();
+        rt.eval(
+            "var errs = []; var ms = new MediaSource(); _lumen_mse_attach_element(ms, {}); \
+             ms.addEventListener('sourceended', function () { errs.push('ended'); }); \
+             var sb = ms.addSourceBuffer('video/mp4'); \
+             sb.addEventListener('error', function () { errs.push('error'); }); \
+             sb.appendBuffer(new Uint8Array(64));",
+        )
+        .unwrap();
+        settle(&rt);
+        assert_eq!(rt.eval("errs.indexOf('error') >= 0").unwrap(), JsValue::Bool(true));
+        clear_video_decoder();
+    }
+}

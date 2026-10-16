@@ -1119,6 +1119,10 @@ pub(crate) struct Lumen {
     /// re-decode caps at ~30fps; audio must not skip a tick's worth of
     /// samples or it audibly stutters).
     pub(crate) video_last_audio_ms: HashMap<u32, u64>,
+    /// COMPAT-MSE: узлы `<video>`, для которых уже заведён `playback` поверх `MediaSource`
+    /// (`nid -> номер источника`); сверяется с `VideoGifStore::mse_attached` в
+    /// `Lumen::tick_mse_sessions`. Сами сессии лежат в `video_sessions`.
+    pub(crate) mse_sessions: HashMap<u32, u64>,
     /// BUG-480 срез 1: живые sub-документы `<iframe>` текущей страницы.
     /// Держат DOM+JS детей; заменяется целиком в [`Lumen::apply_loaded_page`].
     /// В PageSnapshot не попадает — после bfcache-восстановления фреймы без

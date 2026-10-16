@@ -208,6 +208,7 @@ impl Lumen {
         // Rebuild playback state from restored frames; JS re-queues loads on restore.
         self.video_gif_store.pending_loads.lock().unwrap().clear();
         self.video_gif_store.pending_container_loads.lock().unwrap().clear();
+        self.clear_mse_sessions();
         {
             let mut pb = self.video_gif_store.playback.lock().unwrap();
             pb.clear();

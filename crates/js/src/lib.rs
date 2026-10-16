@@ -61,6 +61,7 @@ pub mod speech;
 pub mod surface_api;
 pub mod img_bitmap_store;
 pub mod text_track_store;
+pub mod mse_bindings;
 pub mod video_bindings;
 pub mod video_gif_store;
 pub mod view_transitions;
