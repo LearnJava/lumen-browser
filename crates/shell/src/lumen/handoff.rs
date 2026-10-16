@@ -60,9 +60,17 @@ impl Lumen {
 
     /// То же для заданного адреса: экран ошибки сертификата передаёт адрес,
     /// на который навигация не состоялась, а не адрес показанной страницы.
-    pub(crate) fn open_url_in_other_browser(&mut self, url: &str, reason: HandoffReason, remember: bool) {
+    /// Вернёт идентификатор запущенного браузера (панель «Сайт работает не так?»
+    /// по нему позже создаёт правило), `None` — страница никуда не ушла.
+    pub(crate) fn open_url_in_other_browser(
+        &mut self,
+        url: &str,
+        reason: HandoffReason,
+        remember: bool,
+    ) -> Option<String> {
         let browsers = enumerate();
         let own = std::env::current_exe().ok();
+        let mut launched = None;
         let body = if !is_handoff_url(url) {
             "Во внешний браузер передаются только http(s)-страницы.".to_owned()
         } else if remember && self.active_profile_is_anonymous() {
@@ -77,6 +85,7 @@ impl Lumen {
                         if remember {
                             self.remember_handoff(url, &b.id, reason);
                         }
+                        launched = Some(b.id.clone());
                         handoff_notice(&b.name, take_first_handoff())
                     }
                     Err(err) => format!("Не удалось запустить {}: {err}", b.name),
@@ -84,6 +93,7 @@ impl Lumen {
             }
         };
         notification::show_os_notification("Lumen", &body);
+        launched
     }
 
     /// Страница `about:handoff`: живые правила со сведёнными именами браузеров.
@@ -144,7 +154,7 @@ impl Lumen {
         true
     }
 
-    fn remember_handoff(&self, url: &str, browser_id: &str, reason: HandoffReason) {
+    pub(super) fn remember_handoff(&self, url: &str, browser_id: &str, reason: HandoffReason) {
         let version = env!("CARGO_PKG_VERSION");
         if let Err(err) =
             self.external_browser_rules.grant(url, browser_id, reason.code(), version, now_unix())

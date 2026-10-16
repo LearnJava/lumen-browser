@@ -38,6 +38,9 @@ pub enum SignalKind {
     AntibotLoop,
     /// Страница показала баннер «браузер не поддерживается».
     UnsupportedBanner,
+    /// Пользователь ответил «Заработало» на шаге панели «Сайт работает не так?»;
+    /// уточнение — код шага (`fixed_by`).
+    FixedBy,
 }
 
 impl SignalKind {
@@ -51,6 +54,7 @@ impl SignalKind {
             Self::OpenInOther,
             Self::AntibotLoop,
             Self::UnsupportedBanner,
+            Self::FixedBy,
         ]
             .into_iter()
             .find(|k| k.code() == code)
@@ -65,6 +69,7 @@ impl SignalKind {
             Self::OpenInOther => "open_in_other",
             Self::AntibotLoop => "antibot_loop",
             Self::UnsupportedBanner => "unsupported_banner",
+            Self::FixedBy => "fixed_by",
         }
     }
 }
@@ -159,6 +164,11 @@ impl SignalLog {
         self.push(SignalKind::AntibotLoop, site_of(url), now, vendor_code)
     }
 
+    /// Шаг `step_code` панели «Сайт работает не так?» помог на сайте `url`.
+    pub fn record_fixed_by(&mut self, url: &str, step_code: &str, now: i64) -> Signal {
+        self.push(SignalKind::FixedBy, site_of(url), now, step_code)
+    }
+
     /// Страница `url` показала баннер «браузер не поддерживается». Один раз на
     /// сайт, пока запись живёт в журнале: перезагрузки не размножают сигнал.
     pub fn record_unsupported_banner(&mut self, url: &str, now: i64) -> Option<Signal> {
@@ -226,6 +236,14 @@ mod tests {
         assert!(log.record_unsupported_banner(URL, 102).is_none());
         assert_eq!(SignalKind::from_code("antibot_loop"), Some(SignalKind::AntibotLoop));
         assert_eq!(SignalKind::from_code("unsupported_banner"), Some(SignalKind::UnsupportedBanner));
+    }
+
+    #[test]
+    fn fixed_by_carries_the_step_code() {
+        let mut log = SignalLog::default();
+        let s = log.record_fixed_by(URL, "nocache", 100);
+        assert_eq!((s.kind, s.site.as_str(), s.detail.as_str()), (SignalKind::FixedBy, "example.co.uk", "nocache"));
+        assert_eq!(SignalKind::from_code("fixed_by"), Some(SignalKind::FixedBy));
     }
 
     #[test]

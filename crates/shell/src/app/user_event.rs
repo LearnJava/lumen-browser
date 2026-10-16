@@ -237,6 +237,8 @@ impl Lumen {
                 // U-1: drop a superseded navigation's final pipeline — otherwise a
                 // slow earlier load would render its page over the newer one.
                 if generation != self.load_generation { return; }
+                // COMPAT-PANEL: конец загрузки после шага панели — старт отсчёта 3 с.
+                self.fix_panel_load_done(&raw);
                 // COMPAT-GATE-DETECT: третья антибот-стена за минуту — вместо
                 // ещё одного прохода пайплайна панель «защита не пропускает».
                 if self.intercept_gate(&raw) { return; }

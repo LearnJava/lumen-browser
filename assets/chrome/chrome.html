@@ -352,6 +352,19 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .popover .compat-row .st-text{ flex-basis:100%; }
 .popover .compat-row button{ font-size:11px; padding:3px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); }
 .popover .compat-row button:hover{ background:var(--surface-2); }
+.popover .fix-panel{ margin-top:8px; padding-top:8px; border-top:1px solid var(--stroke); }
+.popover .fix-panel h4{ margin-bottom:6px; }
+.popover .fix-step{ display:block; width:100%; margin:0 0 4px; padding:5px 8px; text-align:left; border:1px solid var(--stroke); border-radius:var(--radius-sm); background:var(--surface-0); color:var(--text-primary); }
+.popover .fix-step:hover{ background:var(--surface-2); }
+.popover .fix-step b{ display:block; font-size:12px; font-weight:600; }
+.popover .fix-step span{ display:block; font-size:10.5px; color:var(--text-secondary); }
+.popover .fix-step.tried b{ color:var(--text-secondary); }
+.popover .fix-box{ display:none; font-size:11.5px; }
+.popover .fix-box.show{ display:block; }
+.popover .fix-box .fix-text{ margin-bottom:6px; }
+.popover .fix-box button{ font-size:11px; padding:3px 10px; margin-right:4px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); color:var(--text-primary); }
+.popover .fix-box button:hover{ background:var(--surface-2); }
+.popover .fix-steps.hide{ display:none; }
 .popover .fine-print{ font-size:10.5px; color:var(--text-secondary); margin-top:8px; }
 
 /* ============================================================
@@ -1335,6 +1348,23 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               </div>
               <button data-action="compat-details">Подробнее</button>
               <button data-action="compat-disable-reload">Выключить и перезагрузить</button>
+            </div>
+            <div class="fix-panel" id="fixPanel">
+              <h4>Сайт работает не так?</h4>
+              <div class="fix-steps" id="fixSteps">
+                <button class="fix-step" id="fixNoCache" data-action="compat-nocache"><b>Обновить без кэша</b><span>Страница и её ресурсы загрузятся заново</span></button>
+                <button class="fix-step" id="fixReset" data-action="compat-reset"><b>Сбросить данные сайта…</b><span>Кэш, cookie, хранилища, service worker, разрешения</span></button>
+                <button class="fix-step" id="fixHandoff" data-action="compat-handoff"><b>Открыть в другом браузере</b><span>Один раз, уходит только адрес страницы</span></button>
+              </div>
+              <div class="fix-box" id="fixConfirm">
+                <div class="fix-text">Вы выйдете из аккаунта на этом сайте: cookie, localStorage, кэш, service worker и разрешения сайта и его поддоменов будут удалены, затем страница перезагрузится.</div>
+                <button data-action="compat-reset-confirm">Сбросить и перезагрузить</button><button data-action="compat-reset-cancel">Отмена</button>
+              </div>
+              <div class="fix-box" id="fixAsk">
+                <div class="fix-text" id="fixAskText">Заработало?</div>
+                <button data-action="compat-worked-yes">Да</button><button data-action="compat-worked-no">Нет</button>
+              </div>
+              <div class="fine-print" id="fixNote"></div>
             </div>
             <h4>Разрешения — <span id="permDomain">figma.com</span></h4>
             <div class="perm-row">

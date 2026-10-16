@@ -873,7 +873,7 @@ impl Lumen {
                 self.request_redraw();
             }
             KeyCommand::ToggleShields => {
-                self.shields.toggle();
+                self.toggle_site_popover();
                 self.request_redraw();
             }
             KeyCommand::TogglePermissions => {
