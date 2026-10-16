@@ -1234,6 +1234,33 @@ use super::*;
         assert!(matches!(&head.parts[1], SimpleSelector::PseudoElement(PseudoElementKind::Before)));
     }
 
+    #[test]
+    fn pseudo_element_single_colon_legacy_four() {
+        // BUG-1366 / CSS 2.1 §5.12.3: `:before`/`:after`/`:first-line`/`:first-letter`.
+        for (src, want) in [
+            ("p:before", PseudoElementKind::Before),
+            ("p:after", PseudoElementKind::After),
+            ("p:first-line", PseudoElementKind::FirstLine),
+            ("p:FIRST-LETTER", PseudoElementKind::FirstLetter),
+        ] {
+            let s = parse(&format!("{src} {{ color: red; }}"));
+            let head = &s.rules[0].selectors[0].head;
+            assert!(
+                matches!(&head.parts[1], SimpleSelector::PseudoElement(k) if *k == want),
+                "{src}"
+            );
+            assert!(crate::is_valid_selector_list(src), "{src}");
+        }
+        // Остальные псевдоэлементы с одним двоеточием остаются псевдоклассами.
+        let s = parse("p:marker { color: red; }");
+        assert!(matches!(
+            &s.rules[0].selectors[0].head.parts[1],
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(_))
+        ));
+        // Комбинатор после псевдоэлемента по-прежнему запрещён.
+        assert!(!crate::is_valid_selector_list("p:before span"));
+    }
+
     // ──────────────── specificity ────────────────
 
     #[test]
