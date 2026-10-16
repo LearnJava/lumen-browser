@@ -556,6 +556,10 @@ impl Lumen {
         if let Some(bubble) = self.status_bubble_tick() {
             next_wakeup = Some(next_wakeup.map_or(bubble, |t| t.min(bubble)));
         }
+        // COMPAT-PANEL: вопрос «Заработало?» через 3 с после шага панели.
+        if let Some(ask) = self.fix_panel_tick() {
+            next_wakeup = Some(next_wakeup.map_or(ask, |t| t.min(ask)));
+        }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
             // BUG-271: no pending deadline — park the loop for real. Without

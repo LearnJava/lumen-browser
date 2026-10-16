@@ -120,6 +120,8 @@ pub struct ChromeModel {
     /// (COMPAT-PACK-IND). `0` hides `#compatRow`; otherwise the row shows
     /// [`compat_fixes_label`] with its «Подробнее» / «Выключить и перезагрузить» buttons.
     pub compat_fixes: u32,
+    /// «Сайт работает не так?» section of `#permPopover` (COMPAT-PANEL).
+    pub fix: ChromeFixPanelModel,
     /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
     pub palette: ChromePaletteModel,
     /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
@@ -751,6 +753,24 @@ pub struct ChromeTabCtxModel {
     pub pinned: bool,
     /// Target tab's group is collapsed — the row reads «Развернуть группу».
     pub collapsed: bool,
+}
+
+/// «Сайт работает не так?» section of `#permPopover` (COMPAT-PANEL): the ladder
+/// of steps, the reset confirmation and the «Заработало?» question. Exactly one
+/// of the three blocks is visible at a time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChromeFixPanelModel {
+    /// The page is an http(s) one, so the steps apply; `false` hides the ladder.
+    pub steps_enabled: bool,
+    /// Show the «you will be signed out» confirmation instead of the ladder.
+    pub confirm_reset: bool,
+    /// The question text («Заработало?» with the step name) while one is pending.
+    pub asking: Option<String>,
+    /// Steps already tried on this site, in ladder order: no cache, reset,
+    /// other browser — their titles are dimmed.
+    pub tried: [bool; 3],
+    /// Line under the section: a step's result or why there are no steps.
+    pub note: String,
 }
 
 /// `#pageCtxMenu` snapshot (UX-CHROME-PANELS) — mirrors `PageContextMenu`.
@@ -2065,6 +2085,35 @@ fn bind_tab_ctx(doc: &mut Document, menu: &ChromeTabCtxModel) {
     }
 }
 
+/// Binds the «Сайт работает не так?» section of `#permPopover` (COMPAT-PANEL).
+fn bind_fix_panel(doc: &mut Document, fix: &ChromeFixPanelModel) {
+    let asking = fix.asking.is_some();
+    if let Some(steps) = doc.find_by_id(crate::ids::FIX_STEPS) {
+        set_class_token(doc, steps, "hide", !fix.steps_enabled || fix.confirm_reset || asking);
+    }
+    for (id, tried) in [
+        (crate::ids::FIX_NO_CACHE, fix.tried[0]),
+        (crate::ids::FIX_RESET, fix.tried[1]),
+        (crate::ids::FIX_HANDOFF, fix.tried[2]),
+    ] {
+        if let Some(btn) = doc.find_by_id(id) {
+            set_class_token(doc, btn, "tried", tried);
+        }
+    }
+    if let Some(confirm) = doc.find_by_id(crate::ids::FIX_CONFIRM) {
+        set_class_token(doc, confirm, "show", fix.confirm_reset && !asking);
+    }
+    if let Some(ask) = doc.find_by_id(crate::ids::FIX_ASK) {
+        set_class_token(doc, ask, "show", asking);
+    }
+    if let (Some(text), Some(question)) = (doc.find_by_id(crate::ids::FIX_ASK_TEXT), &fix.asking) {
+        set_text(doc, text, question);
+    }
+    if let Some(note) = doc.find_by_id(crate::ids::FIX_NOTE) {
+        set_text(doc, note, &fix.note);
+    }
+}
+
 /// Toggles `#pageCtxMenu`'s `.open` class, places it and rebuilds its rows:
 /// one `use:<i>` button per suggestion, then optionally «Добавить в словарь» /
 /// «Пропустить» behind a separator and the model's `extra_rows` behind another
@@ -2612,6 +2661,7 @@ fn bind_popover(doc: &mut Document, model: &ChromeModel) {
     {
         set_text(doc, text, &compat_fixes_label(model.compat_fixes));
     }
+    bind_fix_panel(doc, &model.fix);
     let rows: Vec<NodeId> =
         doc.get(popover).children.iter().copied().filter(|&c| has_class(doc, c, "perm-row")).collect();
     for (row, state) in rows.into_iter().zip(model.permissions.iter()) {
@@ -4469,6 +4519,56 @@ mod tests {
 
         bind_model(&mut doc, &ChromeModel::default());
         assert!(!has_class(&doc, row, "show"), "after the reload N=0 — row hidden again");
+    }
+
+    #[test]
+    fn fix_panel_shows_exactly_one_block_at_a_time() {
+        let node_text = |doc: &Document, id: NodeId| -> String {
+            doc.get(id)
+                .children
+                .iter()
+                .filter_map(|&c| match &doc.get(c).data {
+                    NodeData::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut doc = parse_asset();
+        let steps = doc.find_by_id(crate::ids::FIX_STEPS).expect("asset has #fixSteps");
+        let confirm = doc.find_by_id(crate::ids::FIX_CONFIRM).expect("asset has #fixConfirm");
+        let ask = doc.find_by_id(crate::ids::FIX_ASK).expect("asset has #fixAsk");
+        let fix = |f: ChromeFixPanelModel| ChromeModel { fix: f, ..ChromeModel::default() };
+
+        bind_model(&mut doc, &fix(ChromeFixPanelModel { steps_enabled: true, ..Default::default() }));
+        assert!(!has_class(&doc, steps, "hide"));
+        assert!(!has_class(&doc, confirm, "show") && !has_class(&doc, ask, "show"));
+
+        bind_model(
+            &mut doc,
+            &fix(ChromeFixPanelModel { steps_enabled: true, confirm_reset: true, ..Default::default() }),
+        );
+        assert!(has_class(&doc, steps, "hide") && has_class(&doc, confirm, "show"));
+
+        bind_model(
+            &mut doc,
+            &fix(ChromeFixPanelModel {
+                steps_enabled: true,
+                asking: Some("Заработало после шага «Обновить без кэша»?".into()),
+                tried: [true, false, false],
+                ..Default::default()
+            }),
+        );
+        assert!(has_class(&doc, steps, "hide") && has_class(&doc, ask, "show"));
+        assert!(!has_class(&doc, confirm, "show"));
+        let text = doc.find_by_id(crate::ids::FIX_ASK_TEXT).expect("asset has #fixAskText");
+        assert!(node_text(&doc, text).contains("Обновить без кэша"));
+        let no_cache = doc.find_by_id(crate::ids::FIX_NO_CACHE).expect("asset has #fixNoCache");
+        assert!(has_class(&doc, no_cache, "tried"));
+
+        bind_model(&mut doc, &fix(ChromeFixPanelModel { note: "Для этой страницы шагов нет".into(), ..Default::default() }));
+        assert!(has_class(&doc, steps, "hide"), "not an http(s) page — no ladder");
+        let note = doc.find_by_id(crate::ids::FIX_NOTE).expect("asset has #fixNote");
+        assert_eq!(node_text(&doc, note), "Для этой страницы шагов нет");
     }
 
     #[test]

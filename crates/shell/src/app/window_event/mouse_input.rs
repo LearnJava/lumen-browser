@@ -65,6 +65,17 @@ impl Lumen {
                     return;
                 }
             }
+            // COMPAT-PANEL: правый клик по «Обновить» открывает окно сайта с
+            // секцией «Сайт работает не так?» вместо жеста мыши.
+            if state == ElementState::Pressed && !self.focus.active {
+                let on_reload = self.chrome_hit_test(x_css, y_css).is_some_and(|hit| {
+                    hit.path.iter().any(|&nid| self.chrome_data_attr(nid, "data-action").as_deref() == Some("reload"))
+                });
+                if on_reload {
+                    self.open_fix_panel();
+                    return;
+                }
+            }
             // P3-spell срез 3: right-click on a misspelled word in a
             // focused text input opens the spell suggestion menu instead
             // of starting a mouse gesture.

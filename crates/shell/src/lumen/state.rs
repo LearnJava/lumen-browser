@@ -1842,6 +1842,8 @@ pub(crate) struct Lumen {
     pub(crate) compat_signals: compat_signals::SignalLog,
     /// COMPAT-GATE-DETECT: сколько раз подряд сайт отдал антибот-стену.
     pub(crate) gate_loop: gate_detect::GateLoop,
+    /// COMPAT-PANEL: секция «Сайт работает не так?» в окне сайта.
+    pub(crate) fix_panel: compat_panel::CompatPanel,
     /// Его копия на диске, `compat_signals.db`: окно «повторное выключение
     /// защиты за 7 суток» и прошлые сигналы переживают перезапуск.
     pub(crate) compat_signal_store: Arc<lumen_storage::CompatSignalStore>,

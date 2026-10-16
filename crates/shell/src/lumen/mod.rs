@@ -35,6 +35,7 @@ mod gestures;
 mod compat;
 mod handoff;
 pub(crate) mod signals;
+mod fix_panel;
 mod hibernation;
 mod hint_mode;
 mod keyboard;

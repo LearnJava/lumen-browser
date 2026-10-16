@@ -155,7 +155,7 @@ impl Lumen {
                     self.devtools_console.toggle();
                     self.relayout_chrome_host();
                 }
-                PaletteAction::ToggleShields => self.shields.toggle(),
+                PaletteAction::ToggleShields => self.toggle_site_popover(),
                 PaletteAction::OpenInOtherBrowser(reason) => self.open_in_other_browser(*reason, false),
                 PaletteAction::RememberOtherBrowser(reason) => self.open_in_other_browser(*reason, true),
                 PaletteAction::ShowHandoffSites => self.show_handoff_sites(),
