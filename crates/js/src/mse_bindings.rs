@@ -13,6 +13,7 @@
 //! | `__lumen_mse_append(id, index, Uint8Array) → string` | `""` — принято; `"init:<сек>"` — принято с init-сегментом (после `:` длительность из него, пусто — нет); `"error:…"` — ошибка разбора |
 //! | `__lumen_mse_buffered(id, index) → json` | `[[start, end], …]` в секундах |
 //! | `__lumen_mse_remove(id, index, start, end)` | `remove()` |
+//! | `__lumen_mse_make_room(id, index, байт, currentTime) → bool` | вытеснение воспроизведённого перед `appendBuffer`; `false` — буфер полон (`QuotaExceededError`) |
 //! | `__lumen_mse_abort(id, index)` | `abort()` |
 //! | `__lumen_mse_change_type(id, index, mime) → bool` | `changeType()`; `false` — тип не разобран |
 //! | `__lumen_mse_set_*` | `timestampOffset`, `mode`, окно добавления, `duration` |
@@ -142,6 +143,15 @@ pub(crate) fn install_mse_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
             if let Some(b) = core.buffer_mut(index as usize) {
                 b.remove(s, e);
             }
+        }),
+    )?;
+    rt.register_native(
+        "__lumen_mse_make_room",
+        into_v8_fn4(|id: f64, index: f64, incoming: f64, current: f64| -> bool {
+            let Some(shared) = source(id as u64) else { return true };
+            let mut core = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cur = secs_to_us(current).unwrap_or(0);
+            core.buffer_mut(index as usize).is_none_or(|b| b.make_room(incoming.max(0.0) as usize, cur))
         }),
     )?;
     rt.register_native(

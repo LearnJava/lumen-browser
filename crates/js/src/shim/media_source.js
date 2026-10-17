@@ -17,6 +17,24 @@
     if (typeof DOMException === 'function') return new DOMException(message, name);
     var e = new Error(message); e.name = name; return e;
   }
+  // `QuotaExceededError` is its own DOMException subclass (WebIDL: `quota`, `requested`).
+  if (typeof DOMException === 'function' && typeof globalThis.QuotaExceededError !== 'function') {
+    var QuotaExceededError = function QuotaExceededError(message, options) {
+      var e = new DOMException(message === undefined ? '' : String(message), 'QuotaExceededError');
+      Object.setPrototypeOf(e, QuotaExceededError.prototype);
+      var o = options || {};
+      Object.defineProperty(e, '_quota', { value: o.quota === undefined ? null : o.quota });
+      Object.defineProperty(e, '_requested', { value: o.requested === undefined ? null : o.requested });
+      return e;
+    };
+    QuotaExceededError.prototype = Object.create(DOMException.prototype, {
+      constructor: { value: QuotaExceededError, writable: true, configurable: true },
+      quota: { get: function () { return this._quota; }, enumerable: true, configurable: true },
+      requested: { get: function () { return this._requested; }, enumerable: true, configurable: true },
+    });
+    Object.defineProperty(QuotaExceededError.prototype, Symbol.toStringTag, { value: 'QuotaExceededError', configurable: true });
+    Object.defineProperty(globalThis, 'QuotaExceededError', { value: QuotaExceededError, writable: true, configurable: true });
+  }
   function task(fn) {
     if (typeof setTimeout === 'function') setTimeout(fn, 0); else fn();
   }
@@ -210,12 +228,18 @@
     if (st.removed) throw domException('This SourceBuffer has been removed from the parent media source.', 'InvalidStateError');
     if (st.updating) throw domException('This SourceBuffer is still processing an append or remove operation.', 'InvalidStateError');
     var ms = _state.get(st.ms);
+    // §3.5.1 step 5 «prepare append»: evict what was played; if the data still does not fit,
+    // the buffer is full.
+    var cur = ms.element && typeof ms.element.currentTime === 'number' ? ms.element.currentTime : 0;
+    if (!__lumen_mse_make_room(ms.id, st.index, bytes.byteLength, cur)) throw new QuotaExceededError('The SourceBuffer is full, and cannot free space to append additional buffers.');
     if (ms.readyState === 'ended') _lumen_mse_open(st.ms);
     st.updating = true;
     var token = ++st.token;
     var self = this;
-    task(function () { fire(self, 'updatestart'); });
+    // One task for `updatestart` and the append itself: a timer hop costs a whole event-loop
+    // tick, and the quota test needs hundreds of appends.
     task(function () {
+      fire(self, 'updatestart');
       if (st.token !== token || !st.updating) return; // aborted
       var res = __lumen_mse_append(ms.id, st.index, bytes);
       st.updating = false;
@@ -262,8 +286,8 @@
     st.updating = true;
     var token = ++st.token;
     var self = this;
-    task(function () { fire(self, 'updatestart'); });
     task(function () {
+      fire(self, 'updatestart');
       if (st.token !== token || !st.updating) return;
       __lumen_mse_remove(ms.id, st.index, start, end);
       st.updating = false;

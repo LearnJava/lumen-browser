@@ -157,6 +157,8 @@ struct TrackBuf {
     frames: Vec<Frame>,
     /// Ждём ключевой кадр: до него кадры отбрасываются.
     need_rap: bool,
+    /// Метка декодирования последнего принятого кадра до сдвига (разрыв — новая группа в `Sequence`).
+    last_dts_us: Option<i64>,
 }
 
 /// Итог одного `append`.
@@ -171,6 +173,9 @@ pub struct AppendOutcome {
     /// Сколько кадров добавлено в буфер (после окна добавления и вытеснения).
     pub frames_added: usize,
 }
+
+/// Диапазоны `[начало, конец)` в микросекундах.
+type Ranges = Vec<(i64, i64)>;
 
 /// Состояние одного `SourceBuffer`: разбор, дорожки и кадры.
 pub struct SourceBufferModel {
@@ -188,6 +193,8 @@ pub struct SourceBufferModel {
     /// Конец последнего принятого кадра: сюда встаёт следующая группа в `Sequence`.
     group_end_us: i64,
     generation: u64,
+    /// `buffered_us` для `generation`: страница и оболочка читают его каждый тик, а пересчёт — сортировка всех кадров.
+    ranges_cache: std::cell::RefCell<Option<(u64, Ranges)>>,
     /// После `change_type`: ближайший init-сегмент может принести другой набор дорожек.
     change_pending: bool,
 }
@@ -218,6 +225,7 @@ impl SourceBufferModel {
             group_start: true,
             group_end_us: 0,
             generation: 0,
+            ranges_cache: std::cell::RefCell::new(None),
             change_pending: false,
         }
     }
@@ -256,6 +264,35 @@ impl SourceBufferModel {
     #[must_use]
     pub fn buffered_bytes(&self) -> usize {
         self.tracks.iter().flat_map(|t| &t.frames).map(|f| f.data.len()).sum()
+    }
+
+    /// Предел байт кадров в буфере (как у Chrome: 150 МБ с видео, 12 МБ только звук).
+    #[must_use]
+    pub fn quota_bytes(&self) -> usize {
+        if self.tracks.iter().any(|t| t.info.kind == lumen_media_demux::TrackKind::Video) {
+            150 << 20
+        } else {
+            12 << 20
+        }
+    }
+
+    /// Вытеснение кадров (MSE §3.5.13 «coded frame eviction»): освободить место под
+    /// `incoming` байт, убрав воспроизведённое — всё, что раньше последнего ключевого
+    /// кадра не позже `current_us` на каждой дорожке. `true` — место нашлось.
+    pub fn make_room(&mut self, incoming: usize, current_us: i64) -> bool {
+        let quota = self.quota_bytes();
+        if self.buffered_bytes().saturating_add(incoming) <= quota {
+            return true;
+        }
+        for t in &mut self.tracks {
+            let Some(key_pts) = t.frames.iter().filter(|f| f.key && f.pts_us <= current_us).map(|f| f.pts_us).max()
+            else {
+                continue;
+            };
+            t.frames.retain(|f| f.pts_us >= key_pts);
+        }
+        self.generation += 1;
+        self.buffered_bytes().saturating_add(incoming) <= quota
     }
 
     /// Режим вставки.
@@ -324,6 +361,7 @@ impl SourceBufferModel {
         self.group_start = true;
         for t in &mut self.tracks {
             t.need_rap = true;
+            t.last_dts_us = None;
         }
     }
 
@@ -363,7 +401,7 @@ impl SourceBufferModel {
         out.duration_us = demux.duration_us().filter(|d| *d > 0);
         let infos: Vec<TrackInfo> = demux.tracks().to_vec();
         if self.tracks.is_empty() {
-            self.tracks = infos.into_iter().map(|info| TrackBuf { info, frames: Vec::new(), need_rap: true }).collect();
+            self.tracks = infos.into_iter().map(|info| TrackBuf { info, frames: Vec::new(), need_rap: true, last_dts_us: None }).collect();
         } else if self.change_pending && !infos_match(&infos, &self.tracks) {
             // Другой набор дорожек: новая дорожка наследует кадры старой того же вида.
             let mut old: Vec<Option<TrackBuf>> = std::mem::take(&mut self.tracks).into_iter().map(Some).collect();
@@ -372,7 +410,7 @@ impl SourceBufferModel {
                 .map(|info| {
                     let slot = old.iter_mut().find(|o| o.as_ref().is_some_and(|t| t.info.kind == info.kind));
                     let frames = slot.and_then(Option::take).map(|t| t.frames).unwrap_or_default();
-                    TrackBuf { info, frames, need_rap: true }
+                    TrackBuf { info, frames, need_rap: true, last_dts_us: None }
                 })
                 .collect();
         } else {
@@ -386,6 +424,7 @@ impl SourceBufferModel {
         }
         self.init = Some(init);
         self.change_pending = false;
+        self.generation += 1;
         out.init_received = true;
         Ok(())
     }
@@ -408,6 +447,21 @@ impl SourceBufferModel {
         for frames in &mut per_track {
             frames.sort_by_key(|f| f.dts_us);
             fill_durations(frames);
+        }
+        // MSE §3.5.? «coded frame processing»: метка декодирования идёт назад — разрыв;
+        // в `Sequence` это начало новой группы (тот же файл, добавленный повторно, встаёт следом).
+        let discontinuity = self
+            .tracks
+            .iter()
+            .zip(&per_track)
+            .any(|(t, f)| matches!((t.last_dts_us, f.first()), (Some(last), Some(fr)) if fr.dts_us < last));
+        if self.mode == AppendMode::Sequence && discontinuity {
+            self.group_start = true;
+        }
+        for (t, f) in self.tracks.iter_mut().zip(&per_track) {
+            if let Some(last) = f.last() {
+                t.last_dts_us = Some(last.dts_us);
+            }
         }
         if let (AppendMode::Sequence, true, Some(first)) =
             (self.mode, self.group_start, per_track.iter().flatten().map(|f| f.pts_us).min())
@@ -449,6 +503,17 @@ impl SourceBufferModel {
     /// буфера (пересечение), мкс. Пустой, пока нет init-сегмента.
     #[must_use]
     pub fn buffered_us(&self) -> Vec<(i64, i64)> {
+        if let Some((generation, ranges)) = &*self.ranges_cache.borrow()
+            && *generation == self.generation
+        {
+            return ranges.clone();
+        }
+        let ranges = self.compute_buffered_us();
+        *self.ranges_cache.borrow_mut() = Some((self.generation, ranges.clone()));
+        ranges
+    }
+
+    fn compute_buffered_us(&self) -> Vec<(i64, i64)> {
         let mut acc: Option<Vec<(i64, i64)>> = None;
         for t in &self.tracks {
             let r = track_ranges(&t.frames);
@@ -511,9 +576,17 @@ fn absorb(track: &mut TrackBuf, frames: Vec<Frame>, offset: i64, window: (i64, i
     let (Some(lo), Some(hi)) = (fresh.iter().map(|f| f.pts_us).min(), fresh.iter().map(Frame::end_us).max()) else {
         return 0;
     };
-    remove_range(&mut track.frames, lo, hi);
     *group_end = (*group_end).max(hi);
     let added = fresh.len();
+    // Частый случай — продолжение буфера: ни перекрытия, ни пересортировки.
+    let appended_in_order = track.frames.last().is_none_or(|l| {
+        l.end_us() <= lo && l.dts_us <= fresh.iter().map(|f| f.dts_us).min().unwrap_or(i64::MAX)
+    });
+    if appended_in_order {
+        track.frames.extend(fresh);
+        return added;
+    }
+    remove_range(&mut track.frames, lo, hi);
     track.frames.extend(fresh);
     track.frames.sort_by_key(|f| f.dts_us);
     added

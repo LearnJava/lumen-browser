@@ -406,3 +406,36 @@ fn b_frame_durations_do_not_split_buffered() {
     assert_eq!(r.len(), 1, "{r:?}");
     assert!(r[0].1 > 990_000, "{r:?}");
 }
+
+#[test]
+fn make_room_evicts_played_frames_only() {
+    let mut m = SourceBufferModel::new("video/webm").expect("model");
+    m.append(&av_webm()).expect("append");
+    // Места хватает — ничего не трогаем.
+    let before = m.buffered_bytes();
+    assert!(m.make_room(1, 0));
+    assert_eq!(m.buffered_bytes(), before);
+    // Не влезает и нечего вытеснять (воспроизведение в начале) — отказ.
+    assert!(!m.make_room(m.quota_bytes(), 0));
+    assert_eq!(m.buffered_bytes(), before);
+    // После воспроизведения часть кадров уходит, но ключевой кадр под курсором остаётся.
+    let cur = m.highest_end_us() / 2;
+    m.make_room(m.quota_bytes() - before / 2, cur);
+    assert!(m.buffered_bytes() < before);
+    let r = m.buffered_us();
+    assert!(r[0].0 <= cur && r[0].0 > 0, "{r:?}");
+}
+
+#[test]
+fn sequence_mode_places_a_repeated_file_after_the_first() {
+    let data = read("../../../tests/wpt/media-source/mp4/test-a-128k-44100Hz-1ch.mp4");
+    let mut m = SourceBufferModel::new("audio/mp4").expect("model");
+    m.set_mode(AppendMode::Sequence);
+    m.append(&data).expect("append");
+    let one = m.highest_end_us();
+    let bytes = m.buffered_bytes();
+    m.append(&data).expect("append");
+    assert_eq!(m.buffered_bytes(), bytes * 2, "второй файл не затёр первый");
+    assert!((m.highest_end_us() - 2 * one).abs() < 50_000, "{} vs {one}", m.highest_end_us());
+    assert_eq!(m.buffered_us().len(), 1);
+}
