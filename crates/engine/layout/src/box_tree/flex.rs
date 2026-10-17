@@ -255,6 +255,65 @@ pub(crate) fn subtree_has_percent_height(b: &LayoutBox) -> bool {
     false
 }
 
+/// BUG-1264: a row flex item whose block axis lies along the main axis (an
+/// orthogonal vertical box with `width: auto` and an `auto`/`content` basis) —
+/// its content-based width is the number of columns its text wraps into, which
+/// only a layout can tell.
+fn is_block_axis_probe_item(item: &LayoutBox) -> bool {
+    !matches!(item.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && item.style.width.is_none()
+        && matches!(item.style.flex_basis, FlexBasis::Auto | FlexBasis::Content)
+}
+
+/// FLEX-VWM-6: shrink-to-fit border-box width of an `inline-flex` row container
+/// that holds orthogonal items (see [`is_block_axis_probe_item`]). The intrinsic
+/// functions count such an item as one column of text, while the number of columns
+/// depends on the container's height — so each is laid out here, against the
+/// container's definite content height (`content_height`, else the viewport's),
+/// and the container is as wide as the widths that came out. `None` — no such item,
+/// the ordinary intrinsic width applies. The probe leaves the items laid out at a
+/// provisional place; the real pass places them again.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn inline_flex_orthogonal_pref_width(
+    b: &mut LayoutBox,
+    content_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) -> Option<f32> {
+    let s = Arc::clone(&b.style);
+    if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || flex_axes(&s).main_vertical
+        || !b.children.iter().any(is_block_axis_probe_item)
+    {
+        return None;
+    }
+    let em = s.font_size;
+    let frame = s.padding_left.resolve_or_zero(em, 0.0, viewport)
+        + s.padding_right.resolve_or_zero(em, 0.0, viewport)
+        + s.border_left_width
+        + s.border_right_width;
+    let content_x = b.rect.x + s.padding_left.resolve_or_zero(em, 0.0, viewport) + s.border_left_width;
+    let content_y = b.rect.y + s.padding_top.resolve_or_zero(em, 0.0, viewport) + s.border_top_width;
+    let content_width = (b.rect.width - frame).max(0.0);
+    let mut probed: Vec<(usize, f32)> = Vec::new();
+    for i in 0..b.children.len() {
+        if !is_block_axis_probe_item(&b.children[i]) {
+            continue;
+        }
+        let is = Arc::clone(&b.children[i].style);
+        let iem = is.font_size;
+        let m_v = is.margin_top.resolve_or_zero(iem, content_width, viewport)
+            + is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
+        let avail_inline = (content_height.unwrap_or(viewport.height) - m_v).max(0.0);
+        lay_out(&mut b.children[i], content_x, content_y, content_width, Some(avail_inline), measurer, viewport, pcb, hp, false);
+        probed.push((i, b.children[i].rect.width));
+    }
+    super::intrinsic::row_flex_preferred_width_with_probes(b, &probed, content_height, measurer, viewport)
+}
+
 /// CSS Flexbox L1 §9 — multi-line flex layout, Steps 1–3/justify precompute.
 ///
 /// Алгоритм (LAYOUT-2 срез 3 — item-placement пасс вынесен в
@@ -494,13 +553,7 @@ pub(crate) fn build_flex_init(
     // BUG-1264 — per item: the width a block-axis item (see
     // `is_block_axis_probe`) measured when laid out at its inline size.
     let mut block_axis_width: Vec<Option<f32>> = vec![None; item_idxs.len()];
-    let is_block_axis_probe = |item: &LayoutBox| {
-        !is_column
-            && !matches!(item.style.writing_mode, crate::style::WritingMode::HorizontalTb)
-            && matches!(item.kind, BoxKind::Block | BoxKind::FlowRoot)
-            && item.style.width.is_none()
-            && matches!(item.style.flex_basis, FlexBasis::Auto | FlexBasis::Content)
-    };
+    let is_block_axis_probe = |item: &LayoutBox| !is_column && is_block_axis_probe_item(item);
     for (k, &i) in item_idxs.iter().enumerate() {
         let needs_prelayout = {
             let is = &children[i].style;
@@ -739,7 +792,14 @@ pub(crate) fn build_flex_init(
                         } else if let Some(bw) = block_axis_width[k] {
                             flex_auto_base_main_width_from(item, bw, cb, measurer, viewport)
                         } else if is.width.is_none() {
-                            flex_auto_base_main_width(item, cb, measurer, viewport)
+                            // FLEX-VWM-6: a stretched item is definite, so a percentage
+                            // block size below it (`<canvas height="100%">`) resolves.
+                            let stretched_h = explicit_cross
+                                .filter(|_| super::stretch_basis::item_stretches(s, item))
+                                .map(|cross| (cross - m_t - m_b).max(0.0));
+                            super::stretch_basis::with_stretched_item(stretched_h, || {
+                                flex_auto_base_main_width(item, cb, measurer, viewport)
+                            })
                         } else {
                             item.rect.width
                         };
@@ -842,8 +902,8 @@ pub(crate) fn build_flex_init(
         Vec::new()
     };
     let line_inits = build_line_inits(
-        &lines, &item_idxs, children, &all_hyp, &col_auto_mins, s, container_main, main_definite,
-        item_gap, content_width, measurer, viewport, axes,
+        &lines, &item_idxs, children, &all_hyp, &col_auto_mins, &block_axis_width, s, container_main,
+        main_definite, item_gap, content_width, measurer, viewport, axes,
     );
 
     Box::new(FlexInit {
@@ -900,6 +960,7 @@ fn build_line_inits(
     children: &[LayoutBox],
     all_hyp: &[f32],
     col_auto_mins: &[f32],
+    block_axis_width: &[Option<f32>],
     s: &ComputedStyle,
     container_main: f32,
     main_definite: Option<f32>,
@@ -923,7 +984,15 @@ fn build_line_inits(
         let iem = is.font_size;
         let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
         let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
-        flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
+        // FLEX-VWM-6: the content size suggestion of an orthogonal item is the width
+        // its probe laid out to (all its columns), not the one column the intrinsic
+        // functions count. `min-width` and a scroll container keep their own rules.
+        let probed = block_axis_width.get(k).copied().flatten().filter(|_| {
+            is.min_width.is_none() && is.overflow_x == Overflow::Visible
+        });
+        // (the probe already honoured `max-width`).
+        let floor = probed.unwrap_or_else(|| flex_item_min_main_width(item, cb, measurer, viewport));
+        floor + m_l + m_r
     };
 
     lines

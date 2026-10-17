@@ -1924,6 +1924,11 @@ impl Renderer {
                             draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                         }
                     } else {
+                        // FLEX-VWM-6: `<canvas>` без единой отрисовки прозрачен
+                        // (HTML LS §4.12.5.1) — серый placeholder только для <img>.
+                        if src.starts_with("canvas:") {
+                            continue;
+                        }
                         // Картинку никто не зарегистрировал (fetch не сделан /
                         // декодер упал / неизвестный формат) — fallback на
                         // серый placeholder, чтобы место в layout-е было видно.

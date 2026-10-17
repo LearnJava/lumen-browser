@@ -474,6 +474,8 @@ pub(crate) fn rasterize_cpu_with_fonts(
                     Some(img) => {
                         rasterize_image(&mut layer.pm, &snap_border_box(*rect), img, *object_fit, *object_position, c)?;
                     }
+                    // FLEX-VWM-6: an undrawn `<canvas>` is transparent, not a grey box.
+                    None if src.starts_with("canvas:") => {}
                     None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
                 layer.mark(b);
@@ -5478,6 +5480,22 @@ mod tests {
         }];
         let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 30, 30), (217, 217, 217, 255), "missing image → grey placeholder");
+    }
+
+    /// FLEX-VWM-6: a `<canvas>` JS never drew into (`canvas:{nid}` unregistered) is
+    /// transparent, not the `<img>` grey placeholder.
+    #[test]
+    fn draw_image_unregistered_canvas_is_transparent() {
+        let cmds = vec![DisplayCommand::DrawImage {
+            rect: rect(10.0, 10.0, 40.0, 40.0),
+            src: "canvas:7".to_string(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 30, 30), (255, 255, 255, 255), "undrawn canvas shows what is behind it");
     }
 
     /// BUG-221: the radial gradient is an isotropic **circle** (mirrors femtovg),
