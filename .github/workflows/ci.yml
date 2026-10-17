@@ -169,6 +169,17 @@ jobs:
           cargo test -p lumen-ipc
           cargo test -p lumen-knowledge
 
+      # COMPAT-MEDIA-OSDEC-LINUX: H.264/AAC из системного GStreamer (программный
+      # gst-libav; аппаратного VA-API на раннере нет). Без пакетов раннер проверил бы
+      # только ветку «кодеков нет»; LUMEN_EXPECT_GSTREAMER=1 делает их отсутствие ошибкой.
+      - name: Unit tests — media (Linux OS decoders)
+        env:
+          LUMEN_EXPECT_GSTREAMER: "1"
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends gstreamer1.0-plugins-base gstreamer1.0-libav
+          cargo test -p lumen-media-native
+
   artifact:
     # CI-5 (docs/ci-offload.md §6). Not a merge gate, not a replacement for
     # local iteration (incremental dev-release rebuild is 3.8-8.6s locally vs.

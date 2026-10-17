@@ -160,7 +160,8 @@ gst_api! {
     gst => gst_element_factory_can_sink_any_caps(Obj, Obj) -> c_int;
     gst => gst_plugin_feature_list_free(*mut GList);
     gst => gst_plugin_feature_set_rank(Obj, c_uint);
-    gst => gst_plugin_feature_get_name(Obj) -> *const c_char;
+    // `gst_plugin_feature_get_name` в GStreamer 1.22 — макрос, а не функция.
+    gst => gst_object_get_name(Obj) -> *mut c_char;
     app => gst_app_src_set_caps(Obj, Obj);
     app => gst_app_src_push_buffer(Obj, Obj) -> c_int;
     app => gst_app_src_end_of_stream(Obj) -> c_int;
@@ -201,11 +202,10 @@ pub(super) fn take_error(api: &Api, err: *mut GError) -> String {
         return "неизвестная ошибка".to_string();
     }
     // SAFETY: `err` выдан GLib и не освобождён; `message` — NUL-терминированная строка или NULL.
-    let text = unsafe {
+    unsafe {
         let msg = (*err).message;
         let text = if msg.is_null() { "без текста".to_string() } else { CStr::from_ptr(msg).to_string_lossy().into_owned() };
         (api.g_error_free)(err);
         text
-    };
-    text
+    }
 }

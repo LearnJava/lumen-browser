@@ -47,7 +47,7 @@ pub(crate) fn pack_rgba(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>,
         return Ok(data.to_vec());
     }
     let stride = data.len() / h;
-    if data.len() % h != 0 || stride < row {
+    if !data.len().is_multiple_of(h) || stride < row {
         return Err(format!("кадр {width}×{height} не помещается в буфер из {} байт", data.len()));
     }
     let mut out = Vec::with_capacity(total);

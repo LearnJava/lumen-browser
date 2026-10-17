@@ -1329,6 +1329,9 @@ impl Lumen {
             ChromeAction::OpenMediaInstall => {
                 if let Some(uri) = self.media_bar.install_uri() {
                     crate::media_bar::open_install_uri(uri);
+                } else if let Some(command) = self.media_bar.install_command() {
+                    use lumen_core::ext::ClipboardProvider;
+                    platform::clipboard::PlatformClipboard.write_text(command);
                 }
             }
             ChromeAction::DismissMediaBar => self.media_bar.dismiss(),

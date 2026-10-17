@@ -77,7 +77,7 @@ impl VideoFrameDecoder for GstVideoDecoder {
         let wait = match self.pts.in_flight() {
             0 => return None,
             1..=NO_WAIT_IN_FLIGHT => Duration::ZERO,
-            ..=BLOCK_IN_FLIGHT => SHORT_WAIT,
+            n if n <= BLOCK_IN_FLIGHT => SHORT_WAIT,
             _ => LONG_WAIT,
         };
         let sample = self.pipe.as_ref()?.pull(wait)?;

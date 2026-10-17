@@ -49,7 +49,12 @@ impl MediaBar {
 
     /// Адрес установки для показанной панели.
     pub(crate) fn install_uri(&self) -> Option<&'static str> {
-        self.missing.map(MissingOsCodec::install_uri)
+        self.missing.and_then(MissingOsCodec::install_uri)
+    }
+
+    /// Команда установки для показанной панели (Linux): кнопка кладёт её в буфер обмена.
+    pub(crate) fn install_command(&self) -> Option<&'static str> {
+        self.missing.and_then(MissingOsCodec::install_command)
     }
 
     /// Данные для `#mediaBar`.
@@ -58,19 +63,28 @@ impl MediaBar {
         let (title, meta, install_label) = match what {
             MissingOsCodec::MediaFeaturePack => (
                 "Для воспроизведения этого видео нужен пакет мультимедиа Windows",
-                "В этой редакции Windows нет Media Feature Pack: он ставится в «Дополнительных компонентах».",
+                "В этой редакции Windows нет Media Feature Pack: он ставится в «Дополнительных компонентах».".to_owned(),
                 "Открыть параметры",
             ),
             MissingOsCodec::HevcExtension => (
                 "Для воспроизведения этого видео нужно расширение HEVC",
-                "Установите «HEVC Video Extensions» из Microsoft Store.",
+                "Установите «HEVC Video Extensions» из Microsoft Store.".to_owned(),
                 "Открыть Microsoft Store",
             ),
+            MissingOsCodec::LinuxCodecs(distro) => {
+                let note = distro.repository_note();
+                let separator = if note.is_empty() { "" } else { " " };
+                (
+                    "Для воспроизведения этого видео нужны кодеки H.264/AAC",
+                    format!("{note}{separator}Выполните в терминале: {}", distro.install_command()),
+                    "Скопировать команду",
+                )
+            }
         };
         ChromeMediaBarModel {
             open: true,
             title: title.to_owned(),
-            meta: meta.to_owned(),
+            meta,
             install_label: install_label.to_owned(),
         }
     }
@@ -113,6 +127,20 @@ mod tests {
         assert!(!bar.note_missing(MissingOsCodec::MediaFeaturePack));
         assert!(bar.note_missing(MissingOsCodec::HevcExtension));
         assert!(bar.install_uri().is_some_and(|u| u.starts_with("ms-windows-store:")));
+    }
+
+    #[test]
+    fn linux_bar_shows_the_distribution_command_instead_of_a_link() {
+        use lumen_media_native::distro::LinuxDistro;
+        let mut bar = MediaBar::default();
+        assert!(bar.note_missing(MissingOsCodec::LinuxCodecs(LinuxDistro::Fedora)));
+        let m = bar.model();
+        assert!(m.open);
+        assert!(m.meta.contains("RPM Fusion"), "{}", m.meta);
+        assert!(m.meta.contains("sudo dnf install"), "{}", m.meta);
+        assert_eq!(m.install_label, "Скопировать команду");
+        assert_eq!(bar.install_uri(), None);
+        assert!(bar.install_command().is_some_and(|c| c.starts_with("sudo dnf install")));
     }
 
     #[test]

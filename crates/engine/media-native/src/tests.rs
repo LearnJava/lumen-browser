@@ -244,8 +244,13 @@ fn missing_component_follows_codec_and_status() {
     // H.264 есть, HEVC-расширения нет — называется только оно.
     let h264_only = OsCodecStatus { h264: true, hevc: false, aac: true };
     assert_eq!(missing_for_video_codec(Codec::Hevc, h264_only), Some(MissingOsCodec::HevcExtension));
-    assert_eq!(MissingOsCodec::MediaFeaturePack.install_uri(), "ms-settings:optionalfeatures");
-    assert!(MissingOsCodec::HevcExtension.install_uri().starts_with("ms-windows-store:"));
+    assert_eq!(MissingOsCodec::MediaFeaturePack.install_uri(), Some("ms-settings:optionalfeatures"));
+    assert!(MissingOsCodec::HevcExtension.install_uri().is_some_and(|u| u.starts_with("ms-windows-store:")));
+    // Linux: ссылки нет, есть команда дистрибутива.
+    let linux = MissingOsCodec::LinuxCodecs(crate::distro::LinuxDistro::Debian);
+    assert_eq!(linux.install_uri(), None);
+    assert!(linux.install_command().is_some_and(|c| c.starts_with("sudo apt install")));
+    assert_eq!(MissingOsCodec::HevcExtension.install_command(), None);
 }
 
 /// Файл на свободном кодеке никогда не «ждёт компонент ОС».
@@ -479,6 +484,141 @@ mod os_decoders_mac {
 
     #[test]
     fn hevc_decodes_a_frame_when_the_os_offers_it() {
+        if !hevc_ready() {
+            return;
+        }
+        let mut s = open(HEVC_MP4);
+        let (w, h) = s.dimensions();
+        let frame = s.frame_at(0.0).unwrap();
+        assert_eq!(frame.len(), w as usize * h as usize * 4);
+        assert!(frame.chunks(4).any(|px| px[0] != frame[0] || px[1] != frame[1]));
+    }
+}
+
+/// Декодеры ОС (Linux, GStreamer): те же `h264-aac.mp4` и `hevc.mp4`. Что видно
+/// по `canPlayType`, зависит от установленных плагинов, поэтому проверки декодирования
+/// пропускаются без них, а ветка «кодеков нет» проверяется отдельно. CI ставит
+/// плагины и задаёт `LUMEN_EXPECT_GSTREAMER=1` — тогда их отсутствие считается ошибкой.
+#[cfg(target_os = "linux")]
+mod os_decoders_linux {
+    use super::*;
+
+    const H264_AAC: &[u8] = include_bytes!("../tests/data/h264-aac.mp4");
+
+    fn os_ready() -> bool {
+        can_play("video/mp4; codecs=\"avc1.64001F, mp4a.40.2\"") == "probably"
+    }
+
+    fn hevc_ready() -> bool {
+        can_play("video/mp4; codecs=\"hvc1.1.6.L93.B0\"") == "probably"
+    }
+
+    #[test]
+    fn ci_has_the_system_decoders() {
+        if std::env::var_os("LUMEN_EXPECT_GSTREAMER").is_some() {
+            assert!(os_ready(), "GStreamer с декодерами H.264/AAC не найден: {:?}", os_codec_status());
+        }
+    }
+
+    #[test]
+    fn status_agrees_with_can_play_type() {
+        let s = os_codec_status().expect("на Linux состояние декодеров известно");
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.64001F\"") == "probably", s.h264);
+        assert_eq!(can_play("audio/mp4; codecs=\"mp4a.40.2\"") == "probably", s.aac);
+        assert_eq!(can_play("video/mp4; codecs=\"hvc1.1.6.L93.B0\"") == "probably", s.hevc);
+    }
+
+    #[test]
+    fn without_decoders_the_page_gets_an_empty_answer_and_a_hint() {
+        let s = os_codec_status().unwrap();
+        if s.h264 {
+            assert_eq!(missing_os_codec(H264_AAC), None);
+            return;
+        }
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.64001F\""), "");
+        match missing_os_codec(H264_AAC) {
+            Some(MissingOsCodec::LinuxCodecs(distro)) => assert!(!distro.install_command().is_empty()),
+            other => panic!("ожидалась подсказка с командой, получено {other:?}"),
+        }
+        // Файл на встроенных кодеках подсказки не вызывает.
+        assert_eq!(missing_os_codec(AV1_VORBIS), None);
+    }
+
+    #[test]
+    fn can_play_type_rejects_profiles_the_decoders_lack() {
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.6e0028\""), "");
+        assert_eq!(can_play("video/mp4; codecs=\"mp4a.40.34\""), "");
+        assert_eq!(can_play("video/mp4; codecs=\"vp09.00.10.08\""), "");
+        assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08\""), "probably");
+    }
+
+    #[test]
+    fn h264_aac_opens_and_decodes_frames() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        assert_eq!(s.dimensions(), (320, 180));
+        let a = s.audio_track().expect("звуковая дорожка AAC");
+        assert_eq!(a.channels, 2);
+        let first = s.frame_at(0.0).unwrap();
+        assert_eq!(first.len(), 320 * 180 * 4);
+        assert!(first.chunks(4).all(|px| px[3] == 255));
+        assert!(first.chunks(4).any(|px| px[0] != first[0] || px[1] != first[1]));
+        let later = s.frame_at(0.8).unwrap();
+        assert_ne!(first, later, "картинка меняется со временем");
+        assert_eq!(later, s.frame_at(0.8).unwrap());
+    }
+
+    #[test]
+    fn h264_seek_back_matches_fresh_open() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        let at_half = s.frame_at(0.5).unwrap();
+        s.frame_at(1.2).unwrap();
+        assert_eq!(s.frame_at(0.5).unwrap(), at_half);
+        assert_eq!(open(H264_AAC).frame_at(0.5).unwrap(), at_half);
+    }
+
+    #[test]
+    fn h264_sequential_playback_matches_seek() {
+        if !os_ready() {
+            return;
+        }
+        let mut playing = open(H264_AAC);
+        let mut t = 0.0;
+        while t < 0.9 {
+            playing.frame_at(t).unwrap();
+            t += 0.04;
+        }
+        assert_eq!(playing.frame_at(0.9).unwrap(), open(H264_AAC).frame_at(0.9).unwrap());
+    }
+
+    #[test]
+    fn aac_pcm_is_audible_and_covers_the_file() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        s.frame_at(0.0).unwrap();
+        let first = s.decode_audio_pcm(4410).unwrap();
+        assert_eq!(first.len(), 4410 * 2);
+        assert!(first.iter().any(|&x| x.abs() > 1000), "звук должен быть слышен");
+        let mut total = first.len();
+        loop {
+            let chunk = s.decode_audio_pcm(4410).unwrap();
+            total += chunk.len();
+            if chunk.len() < 4410 * 2 {
+                break;
+            }
+        }
+        assert!(total.abs_diff(2 * 44_100 * 2) <= 2 * 2048 * 2, "получено {total} значений");
+    }
+
+    #[test]
+    fn hevc_decodes_a_frame_when_the_system_offers_it() {
         if !hevc_ready() {
             return;
         }

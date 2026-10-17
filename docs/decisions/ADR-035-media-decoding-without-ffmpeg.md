@@ -59,7 +59,8 @@ of `lumen-image` for AVIF with a working `dav1d_open`/`dav1d_send_data` wrapper
    - **macOS** — VideoToolbox (H.264/HEVC) and AudioToolbox (AAC); always present.
    - **Linux** — VA-API (hardware) first; software fallback only through codecs the distribution
      already ships, loaded at runtime and never bundled (the mechanism — GStreamer or the system
-     libavcodec — is decided in `COMPAT-MEDIA-OSDEC-LINUX`). Missing codecs → a distribution-specific
+     libavcodec — is decided in `COMPAT-MEDIA-OSDEC-LINUX`: **GStreamer through `dlopen`**, see
+     `subsystems/media-native.md`; `decodebin` picks the VA-API decoder by rank). Missing codecs → a distribution-specific
      hint (Ubuntu/Debian, Fedora + RPM Fusion, openSUSE + Packman, Flatpak `ffmpeg-full` extension).
    - **AAC in pure Rust** (`symphonia`) as a fallback only after the owner's legal check
      (`COMPAT-BIZ-CODECS-LEGAL`).

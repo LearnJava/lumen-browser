@@ -99,7 +99,8 @@ impl Pipeline {
         let ns = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
         // SAFETY: `sink` — живой `GstAppSink`.
         let raw = unsafe { (self.api.gst_app_sink_try_pull_sample)(self.sink, ns) };
-        (!raw.is_null()).then_some(Sample { api: self.api, raw })
+        // Лениво: `then_some` собрал бы `Sample` и при NULL, а его `Drop` освободил бы пустой указатель.
+        (!raw.is_null()).then(|| Sample { api: self.api, raw })
     }
 
     /// Поток закончился (после `end_of_stream` все результаты выбраны).

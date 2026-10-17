@@ -32,7 +32,7 @@ mod ffi;
 mod pipeline;
 mod video;
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 
 use lumen_media_demux::{Codec, TrackInfo};
@@ -154,13 +154,16 @@ fn scan_decoders(api: &Api, caps_text: &str, lower_hardware_rank: bool) -> Scan 
 }
 
 fn factory_name(api: &Api, factory: Obj) -> String {
-    // SAFETY: имя принадлежит фабрике и живёт вместе с ней; копируем сразу.
-    let p: *const c_char = unsafe { (api.gst_plugin_feature_get_name)(factory) };
+    // SAFETY: фабрика жива; имя — копия в памяти GLib, освобождаем `g_free` сразу после копирования.
+    let p = unsafe { (api.gst_object_get_name)(factory) };
     if p.is_null() {
         return String::new();
     }
-    // SAFETY: непустой указатель — NUL-терминированная строка.
-    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    // SAFETY: непустой указатель — NUL-терминированная строка GLib.
+    let name = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+    // SAFETY: строку выдал `gst_object_get_name`, больше она не нужна.
+    unsafe { (api.g_free)(p.cast::<std::ffi::c_void>()) };
+    name
 }
 
 /// Видеобэкенд GStreamer.
