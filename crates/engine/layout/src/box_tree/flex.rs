@@ -286,7 +286,7 @@ pub(super) fn inline_flex_orthogonal_pref_width(
     let s = Arc::clone(&b.style);
     if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
         || flex_axes(&s).main_vertical
-        || !b.children.iter().any(|c| is_block_axis_probe_item(c))
+        || !b.children.iter().any(is_block_axis_probe_item)
     {
         return None;
     }
@@ -902,8 +902,8 @@ pub(crate) fn build_flex_init(
         Vec::new()
     };
     let line_inits = build_line_inits(
-        &lines, &item_idxs, children, &all_hyp, &col_auto_mins, s, container_main, main_definite,
-        item_gap, content_width, measurer, viewport, axes,
+        &lines, &item_idxs, children, &all_hyp, &col_auto_mins, &block_axis_width, s, container_main,
+        main_definite, item_gap, content_width, measurer, viewport, axes,
     );
 
     Box::new(FlexInit {
@@ -960,6 +960,7 @@ fn build_line_inits(
     children: &[LayoutBox],
     all_hyp: &[f32],
     col_auto_mins: &[f32],
+    block_axis_width: &[Option<f32>],
     s: &ComputedStyle,
     container_main: f32,
     main_definite: Option<f32>,
@@ -983,7 +984,15 @@ fn build_line_inits(
         let iem = is.font_size;
         let m_l = is.margin_left.resolve_or_zero(iem, cb, viewport);
         let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
-        flex_item_min_main_width(item, cb, measurer, viewport) + m_l + m_r
+        // FLEX-VWM-6: the content size suggestion of an orthogonal item is the width
+        // its probe laid out to (all its columns), not the one column the intrinsic
+        // functions count. `min-width` and a scroll container keep their own rules.
+        let probed = block_axis_width.get(k).copied().flatten().filter(|_| {
+            is.min_width.is_none() && is.overflow_x == Overflow::Visible
+        });
+        // (the probe already honoured `max-width`).
+        let floor = probed.unwrap_or_else(|| flex_item_min_main_width(item, cb, measurer, viewport));
+        floor + m_l + m_r
     };
 
     lines
