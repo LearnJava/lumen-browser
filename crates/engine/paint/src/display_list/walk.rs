@@ -861,6 +861,8 @@ struct BlockEpilogue {
     has_opacity: bool,
     has_blend: bool,
     mask_clip_is_some: bool,
+    /// A float that reaches past the `line-clamp` content edge: clip pushed after the mask clip.
+    has_clamp_clip: bool,
     mask_groups: usize,
 }
 
@@ -1005,6 +1007,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     if e.has_blend {
         out.push(DisplayCommand::PopBlendMode);
     }
+    if e.has_clamp_clip {
+        out.push(DisplayCommand::PopClip);
+    }
     if e.mask_clip_is_some {
         out.push(DisplayCommand::PopClip);
     }
@@ -1092,6 +1097,11 @@ fn dispatch<'a>(
             let mask_clip = if has_mask { mask_clip_paint_rect(b) } else { None };
             if let Some(clip) = mask_clip {
                 out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            // CSS Overflow L4 §line-clamp: a float the cut left reaching past the content edge.
+            let clamp_clip = clamp_clip_rect(b);
+            if let Some(rect) = clamp_clip {
+                out.push(DisplayCommand::PushClipRect { rect });
             }
             // CSS Masking L1 §9: clip-path clips the fully composited element;
             // эмитится ниже — ВНУТРИ PushTransform (BUG-140).
@@ -1318,6 +1328,7 @@ fn dispatch<'a>(
                 has_opacity,
                 has_blend,
                 mask_clip_is_some: mask_clip.is_some(),
+                has_clamp_clip: clamp_clip.is_some(),
                 mask_groups,
             });
             if matches!(b.kind, BoxKind::Table) {

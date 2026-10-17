@@ -10,8 +10,9 @@ use super::*;
 /// parent and is signalled separately via `lay_out`'s `in_block_flow` flag.)
 pub(crate) fn establishes_bfc(b: &LayoutBox) -> bool {
     matches!(b.kind, BoxKind::FlowRoot)
-        || b.style.overflow_x != Overflow::Visible
-        || b.style.overflow_y != Overflow::Visible
+        // CSS Overflow L3 §3.1: `clip`, unlike `hidden`, does not establish a formatting context.
+        || !matches!(b.style.overflow_x, Overflow::Visible | Overflow::Clip)
+        || !matches!(b.style.overflow_y, Overflow::Visible | Overflow::Clip)
         || b.style.float_side != FloatSide::None
         || matches!(b.style.position, Position::Absolute | Position::Fixed)
         // Flexbox §3 / Grid §3: a flex/grid container is an independent

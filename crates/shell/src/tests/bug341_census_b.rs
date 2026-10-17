@@ -823,6 +823,7 @@ fn bug341_s4_incremental_box_build_share() {
         grid_baselines: None,
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
+        clamp_clip: None,
         subgrid_tracks: None,
         style: std::sync::Arc::new(root_style.clone()),
         kind: lumen_layout::BoxKind::Skip,

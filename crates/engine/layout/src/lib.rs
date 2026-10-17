@@ -1583,9 +1583,15 @@ fn transformed_aabb(rect: &lumen_core::geom::Rect, m: &Mat4) -> lumen_core::geom
 /// child's flow position and size are unaffected. Returns `c.rect` itself
 /// when the child carries no transform (the common case, zero-cost).
 fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
+    // CSS Overflow L4 §line-clamp: the part of a float below the clamp container's content edge
+    // is clipped away and is not scrollable overflow either.
+    let mut rect = c.rect;
+    if let Some(clip) = c.clamp_clip {
+        rect.height = rect.height.min(clip.y + clip.height).max(0.0);
+    }
     match forward_box_transform(c) {
-        Some(m) => transformed_aabb(&c.rect, &m),
-        None => c.rect,
+        Some(m) => transformed_aabb(&rect, &m),
+        None => rect,
     }
 }
 

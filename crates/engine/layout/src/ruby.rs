@@ -753,6 +753,7 @@ fn make_anonymous_box_with_style(style: std::sync::Arc<crate::style::ComputedSty
         grid_baselines: None,
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
+        clamp_clip: None,
         subgrid_tracks: None,
         style,
         kind: BoxKind::Block,

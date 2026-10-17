@@ -108,7 +108,7 @@ use print::ELLIPSIS_EM;
 // Used by `display_list/{box_layer,walk,background_mask}.rs` (via `super::*`).
 use print::map_blend_mode;
 // Used by `display_list/{box_layer,scrollbars,text_run,walk}.rs` (via `super::*`).
-use print::overflow_clips;
+use print::{clamp_clip_rect, overflow_clips};
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use print::{record_span, BucketField, RawSpan, ScBucket};
 // Used by `clip_path_to_shape`, still in this file just below the DL-15 region.

@@ -347,7 +347,7 @@ pub(super) fn find_cut(b: &LayoutBox, viewport: Size, auto_bound: Option<f32>) -
 /// приходится, и дописывает на его последней строке многоточие.
 pub(super) fn apply_cut(b: &mut LayoutBox, cut: Cut, viewport: Size, measurer: Option<&dyn TextMeasurer>) {
     let cut_abs = b.rect.y + cut.line_bottom;
-    truncate_flow(b, cut_abs, viewport, measurer);
+    truncate_flow(b, cut_abs, b.rect.y + cut.line_bottom + cut.extra, viewport, measurer);
 }
 
 /// Поплавок, чья margin-кромка целиком ниже линии отсечки: он принадлежит скрытой строке
@@ -361,7 +361,22 @@ fn is_hidden_float(c: &LayoutBox, cut_abs: f32, parent_width: f32, viewport: Siz
     c.rect.y - mt >= cut_abs - EPS
 }
 
-fn truncate_flow(b: &mut LayoutBox, cut_abs: f32, viewport: Size, measurer: Option<&dyn TextMeasurer>) {
+/// A float the cut left: its part below the container's content edge (`clip_bottom`) is clipped
+/// away (CSS Overflow L4 §line-clamp), so the float gets a clip ending there. Relative to the
+/// float's border box, unbounded on the other sides.
+fn clip_float_at(c: &mut LayoutBox, clip_bottom: f32) {
+    const BIG: f32 = 1_000_000.0;
+    c.clamp_clip = (c.rect.y + c.rect.height > clip_bottom + EPS)
+        .then(|| Rect::new(-BIG, -BIG, 2.0 * BIG, clip_bottom - c.rect.y + BIG));
+}
+
+fn truncate_flow(
+    b: &mut LayoutBox,
+    cut_abs: f32,
+    clip_bottom: f32,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) {
     let width = b.rect.width;
     // Everything from the first in-flow box that has height below the cut — or that follows a box
     // the cut runs through — is hidden. A box without height standing before that point (an empty
@@ -407,13 +422,18 @@ fn truncate_flow(b: &mut LayoutBox, cut_abs: f32, viewport: Size, measurer: Opti
         let precedes = i < hidden_from && c.rect.y <= cut_abs + EPS;
         !(is_in_flow_baseline_source(c) && c.rect.y >= cut_abs - EPS && !precedes)
     });
+    for c in b.children.iter_mut().filter(|c| c.style.float_side != FloatSide::None) {
+        if !matches!(c.style.position, Position::Absolute | Position::Fixed) {
+            clip_float_at(c, clip_bottom);
+        }
+    }
     for c in b.children.iter_mut().filter(|c| is_in_flow_baseline_source(c)) {
         let bottom = c.rect.y + c.rect.height;
         if bottom < cut_abs - EPS {
             continue;
         }
         if is_transparent_block(c) {
-            truncate_flow(c, cut_abs, viewport, measurer);
+            truncate_flow(c, cut_abs, clip_bottom, viewport, measurer);
             let kept = (cut_abs - c.rect.y).max(0.0) + bottom_frame(c, width, viewport);
             c.rect.height = kept.min(c.rect.height);
         } else if matches!(c.kind, BoxKind::InlineBlockRow) {

@@ -74,6 +74,11 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
             overflow_pre.push(DisplayCommand::PushClipRect { rect: Rect::new(px, py, pw, ph) });
             overflow_post.push(DisplayCommand::PopClip);
         }
+        // CSS Overflow L4 §line-clamp: a float the cut left reaching past the content edge.
+        if let Some(rect) = clamp_clip_rect(b) {
+            pre.push(DisplayCommand::PushClipRect { rect });
+            post.push(DisplayCommand::PopClip);
+        }
         return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
     let s = &b.style;
@@ -102,6 +107,12 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
             pre.push(DisplayCommand::PushClipRect { rect: clip });
             post.push(DisplayCommand::PopClip);
         }
+    }
+
+    // Same clip as in `walk`: pushed after the mask clip, popped before it.
+    if let Some(rect) = clamp_clip_rect(b) {
+        pre.push(DisplayCommand::PushClipRect { rect });
+        post.push(DisplayCommand::PopClip);
     }
 
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained

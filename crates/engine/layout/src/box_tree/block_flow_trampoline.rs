@@ -129,6 +129,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         grid_baselines: None,
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
+        clamp_clip: None,
         subgrid_tracks: None,
         kind: BoxKind::Skip,
         children: Vec::new(),
@@ -903,8 +904,13 @@ fn finish_frame(
         0.0
     };
     // CSS 2.1 §9.5: the container height must also enclose all floats.
+    // `overflow: clip` is no BFC root (CSS Overflow L3 §3.1): floats stick out of it.
+    let encloses_floats = !(matches!(frame.init.s.overflow_x, Overflow::Clip)
+        || matches!(frame.init.s.overflow_y, Overflow::Clip))
+        || establishes_bfc(&frame.b);
     let float_bottom = frame.init.fc.left.iter().chain(frame.init.fc.right.iter())
         .map(|(bot, _)| *bot)
+        .filter(|_| encloses_floats)
         .fold(frame.init.child_y, f32::max);
     let base = (float_bottom - frame.init.content_y).max(0.0);
     // BUG-1365: a negative escaped margin was also added to `child_y`, so the
