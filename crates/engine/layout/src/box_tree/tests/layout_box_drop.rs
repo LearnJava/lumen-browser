@@ -23,6 +23,7 @@ fn block(children: Vec<LayoutBox>) -> LayoutBox {
         grid_baselines: None,
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
+        clamp_clip: None,
         subgrid_tracks: None,
         style: std::sync::Arc::new(style),
         kind: BoxKind::Block,
@@ -55,6 +56,7 @@ fn svg_shape_with_mask(mask_content: Vec<LayoutBox>) -> LayoutBox {
         grid_baselines: None,
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
+        clamp_clip: None,
         subgrid_tracks: None,
         style: std::sync::Arc::new(style),
         kind: BoxKind::SvgShape {

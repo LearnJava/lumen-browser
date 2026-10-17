@@ -247,6 +247,12 @@ pub(crate) fn overflow_clips(o: Overflow) -> bool {
     )
 }
 
+/// CSS Overflow L4 §line-clamp: the content box a clamped container clips its descendants to
+/// (`LayoutBox::clamp_clip`, relative to the border box), in absolute coordinates.
+pub(crate) fn clamp_clip_rect(b: &LayoutBox) -> Option<Rect> {
+    b.clamp_clip.map(|r| Rect::new(b.rect.x + r.x, b.rect.y + r.y, r.width, r.height))
+}
+
 /// Em-fraction for approximating U+2026 HORIZONTAL ELLIPSIS advance width.
 /// Empirically derived from Inter Regular; the outer overflow:hidden clip
 /// prevents pixel bleed if the renderer's actual advance differs slightly.

@@ -69,6 +69,7 @@ fn box_self_paint_eq<'a>(
         grid_baselines: _,
         fieldset_legend,
         table_caption_inset,
+        clamp_clip,
         subgrid_tracks,
         origin,
     } = a;
@@ -81,6 +82,8 @@ fn box_self_paint_eq<'a>(
         && subgrid_tracks == &b.subgrid_tracks
         && fieldset_legend == &b.fieldset_legend
         && table_caption_inset.map(f32::to_bits) == b.table_caption_inset.map(f32::to_bits)
+        && clamp_clip.map(|r| [r.x, r.y, r.width, r.height].map(f32::to_bits))
+            == b.clamp_clip.map(|r| [r.x, r.y, r.width, r.height].map(f32::to_bits))
         && col_span == &b.col_span
         && row_span == &b.row_span
         && svg_group_transform == &b.svg_group_transform

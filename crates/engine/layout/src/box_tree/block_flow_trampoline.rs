@@ -129,6 +129,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         grid_baselines: None,
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
+        clamp_clip: None,
         subgrid_tracks: None,
         kind: BoxKind::Skip,
         children: Vec::new(),
