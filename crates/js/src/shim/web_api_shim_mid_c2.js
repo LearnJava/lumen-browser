@@ -16,6 +16,10 @@ function _lumen_blob_url_uuid() {
     });
 }
 URL.createObjectURL = function(blob) {
+    // WebIDL overload (Blob or MediaSource): null and primitives are not either.
+    if (blob === null || (typeof blob !== 'object' && typeof blob !== 'function')) {
+        throw new TypeError("Failed to execute 'createObjectURL' on 'URL': Overload resolution failed.");
+    }
     var origin = (typeof location !== 'undefined' && location) ? String(location.origin || '') : '';
     var key = 'blob:' + (origin || 'null') + '/' + _lumen_blob_url_uuid();
     _object_url_store[key] = blob;

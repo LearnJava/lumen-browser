@@ -128,7 +128,10 @@
       get: function () {
         var st = sbState(this);
         if (st.removed) throw domException('This SourceBuffer has been removed from the parent media source.', 'InvalidStateError');
-        return makeRanges(readRanges(msId(st), st.index));
+        var list = readRanges(msId(st), st.index);
+        var key = JSON.stringify(list);
+        if (!st.rangesCache || st.rangesCache.key !== key) st.rangesCache = { key: key, obj: makeRanges(list) };
+        return st.rangesCache.obj;
       }, enumerable: true, configurable: true,
     },
     mode: {
@@ -211,7 +214,7 @@
     st.updating = true;
     var token = ++st.token;
     var self = this;
-    fire(self, 'updatestart');
+    task(function () { fire(self, 'updatestart'); });
     task(function () {
       if (st.token !== token || !st.updating) return; // aborted
       var res = __lumen_mse_append(ms.id, st.index, bytes);
@@ -222,7 +225,24 @@
         _lumen_mse_end_of_stream(st.ms, 'decode');
         return;
       }
-      if (res === 'init') ms.initReceived = true;
+      if (res.indexOf('init') === 0) {
+        ms.initReceived = true;
+        // §3.5.8 «initialization segment received»: the buffer becomes active, and a NaN
+        // duration is taken from the segment (+Infinity when it carries none).
+        var activeList = ms.active;
+        var activeItems = _state.get(activeList).items;
+        if (activeItems.indexOf(self) < 0) {
+          // `activeSourceBuffers` keeps the order of `sourceBuffers`.
+          activeItems.push(self);
+          activeItems.sort(function (x, y) { return ms.buffers.indexOf(x) - ms.buffers.indexOf(y); });
+          listSync(activeList);
+          task(function () { fire(activeList, 'addsourcebuffer'); });
+        }
+        if (ms.duration !== ms.duration) {
+          var secs = res.length > 5 ? Number(res.slice(5)) : Infinity;
+          _lumen_mse_set_duration(st.ms, secs === secs ? secs : Infinity);
+        }
+      }
       fire(self, 'update');
       fire(self, 'updateend');
     });
@@ -242,7 +262,7 @@
     st.updating = true;
     var token = ++st.token;
     var self = this;
-    fire(self, 'updatestart');
+    task(function () { fire(self, 'updatestart'); });
     task(function () {
       if (st.token !== token || !st.updating) return;
       __lumen_mse_remove(ms.id, st.index, start, end);
@@ -270,19 +290,18 @@
     }
   };
 
-  // §3.5.8 «change type» — the byte-stream parser here is picked by container, so only a
-  // type of the same container family is accepted.
+  // §3.5.8 «change type»: the container may change; the next init segment replaces the tracks.
   SourceBuffer.prototype.changeType = function (type) {
     var st = sbState(this);
-    if (type === undefined || type === null || String(type) === '') throw new TypeError('The type provided is empty.');
+    if (arguments.length < 1) throw new TypeError('1 argument required, but only 0 present.');
     type = String(type);
+    if (type === '') throw new TypeError('The type provided is empty.');
     if (st.removed) throw domException('This SourceBuffer has been removed from the parent media source.', 'InvalidStateError');
     if (st.updating) throw domException('This SourceBuffer is still processing an append or remove operation.', 'InvalidStateError');
     if (!__lumen_mse_is_type_supported(type)) throw domException('The type provided (\'' + type + '\') is not supported.', 'NotSupportedError');
-    var oldBase = String(st.type).split(';')[0].trim().toLowerCase().split('/')[1];
-    var newBase = type.split(';')[0].trim().toLowerCase().split('/')[1];
-    if (oldBase !== newBase) throw domException('Changing the container of a SourceBuffer is not supported.', 'NotSupportedError');
     var ms = _state.get(st.ms);
+    if (ms.readyState !== 'open' && ms.readyState !== 'ended') throw domException('The MediaSource\'s readyState is not \'open\'.', 'InvalidStateError');
+    if (!__lumen_mse_change_type(ms.id, st.index, type)) throw domException('The type provided (\'' + type + '\') is not supported.', 'NotSupportedError');
     if (ms.readyState === 'ended') _lumen_mse_open(st.ms);
     st.type = type;
   };
@@ -345,8 +364,9 @@
 
   MediaSource.prototype.addSourceBuffer = function (type) {
     var st = msState(this);
-    if (type === undefined || type === null || String(type) === '') throw new TypeError('The type provided is empty.');
+    if (arguments.length < 1) throw new TypeError('1 argument required, but only 0 present.');
     type = String(type);
+    if (type === '') throw new TypeError('The type provided is empty.');
     if (!__lumen_mse_is_type_supported(type)) throw domException('The type provided (\'' + type + '\') is unsupported.', 'NotSupportedError');
     if (st.readyState !== 'open') throw domException('The MediaSource\'s readyState is not \'open\'.', 'InvalidStateError');
     var index = __lumen_mse_add_buffer(st.id, type);
@@ -354,7 +374,6 @@
     var sb = makeBuffer(this, index, type);
     st.buffers.push(sb);
     listAdd(st.list, sb);
-    listAdd(st.active, sb);
     var list = st.list;
     task(function () { fire(list, 'addsourcebuffer'); });
     return sb;
@@ -425,6 +444,15 @@
   }
   function _lumen_mse_end_of_stream(ms, error) {
     var st = _state.get(ms);
+    if (!error) {
+      // §2.4.7 «end of stream» step 1: the duration becomes the largest buffered end time.
+      var hi = 0;
+      for (var i = 0; i < st.buffers.length; i++) {
+        var rr = readRanges(st.id, _state.get(st.buffers[i]).index);
+        if (rr.length) hi = Math.max(hi, rr[rr.length - 1][1]);
+      }
+      if (st.buffers.length && hi !== st.duration) _lumen_mse_set_duration(ms, hi);
+    }
     st.readyState = 'ended';
     __lumen_mse_end_of_stream(st.id, true);
     task(function () { fire(ms, 'sourceended'); });

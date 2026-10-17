@@ -51,7 +51,7 @@ def run_one(rel, timeout):
                 except Exception as e:
                     res = {"s": "BADJSON", "m": str(e), "t": []}
                 return
-            tail.append(line.rstrip()[:160]); del tail[:-12]
+            tail.append(line.rstrip()[:200]); del tail[:-int(os.environ.get("TAILN","12"))]
             if "JS error" in line or "script error" in line:
                 errs.append(line.strip()[:200])
     th = threading.Thread(target=reader, daemon=True); th.start()
@@ -62,7 +62,7 @@ def run_one(rel, timeout):
             try: poke.poke(p.pid)
             except Exception: pass
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
-    if res['s'] == 'TIMEOUT' and os.environ.get('TAIL'): print(chr(10).join(tail))
+    if os.environ.get('TAIL'): print(chr(10).join(tail))
     return rel, res, errs, time.time() - t0
 
 

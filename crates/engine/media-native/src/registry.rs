@@ -286,6 +286,7 @@ fn classify_codec(token: &str) -> (Codec, String) {
         "mp3" => Codec::Mp3,
         "mp4a" => match t.as_str() {
             "mp4a.69" | "mp4a.6b" | "mp4a.40.34" => Codec::Mp3,
+            "mp4a.67" => Codec::Aac,
             _ if t.starts_with("mp4a.40.") => Codec::Aac,
             _ => Codec::Other,
         },

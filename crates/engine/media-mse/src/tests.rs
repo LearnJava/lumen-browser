@@ -62,6 +62,14 @@ fn mime_codecs_are_parsed() {
     assert!(parse_mime("video/mp4").expect("no codecs").codecs.is_empty());
     assert!(matches!(parse_mime("video/ogg"), Err(MseError::Unsupported(_))));
     assert!(matches!(parse_mime("text/html"), Err(MseError::Unsupported(_))));
+    assert!(parse_mime("audio/webm;codecs=vorbis;test=\"6\"").is_ok());
+}
+
+#[test]
+fn malformed_mime_parameters_are_rejected() {
+    for bad in ["video/webm;", "video/webm;codecs", "video/webm;codecs=\"", "video/webm;codecs=\"\"", "video/webm;codecs=\",\"", "video/webm;codecs="] {
+        assert!(matches!(parse_mime(bad), Err(MseError::Unsupported(_))), "{bad}");
+    }
 }
 
 #[test]

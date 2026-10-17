@@ -10,10 +10,11 @@
 //! |---|---|
 //! | `__lumen_mse_create() → id` | новый `MediaSource` |
 //! | `__lumen_mse_add_buffer(id, mime) → index` | `addSourceBuffer`; `-1` — тип не поддержан |
-//! | `__lumen_mse_append(id, index, Uint8Array) → string` | `""` — принято; `"init"` — принято с init-сегментом; `"error:…"` — ошибка разбора |
+//! | `__lumen_mse_append(id, index, Uint8Array) → string` | `""` — принято; `"init:<сек>"` — принято с init-сегментом (после `:` длительность из него, пусто — нет); `"error:…"` — ошибка разбора |
 //! | `__lumen_mse_buffered(id, index) → json` | `[[start, end], …]` в секундах |
 //! | `__lumen_mse_remove(id, index, start, end)` | `remove()` |
 //! | `__lumen_mse_abort(id, index)` | `abort()` |
+//! | `__lumen_mse_change_type(id, index, mime) → bool` | `changeType()`; `false` — тип не разобран |
 //! | `__lumen_mse_set_*` | `timestampOffset`, `mode`, окно добавления, `duration` |
 //! | `__lumen_mse_end_of_stream(id, ended)` | `endOfStream()` |
 //! | `__lumen_mse_attach(nid, id)` | привязать `MediaSource` к `<video>` (оболочка откроет сессию) |
@@ -38,6 +39,14 @@ fn secs_to_us(secs: f64) -> Option<i64> {
 #[cfg(feature = "v8-backend")]
 fn type_supported(mime: &str) -> bool {
     let Ok(parsed) = parse_mime(mime) else { return false };
+    // `audio/*` не несёт видеокодек (`audio/mp4; codecs="avc1.4d001e"`).
+    let video_codec = |c: &String| {
+        let head = c.split('.').next().unwrap_or("").to_ascii_lowercase();
+        matches!(head.as_str(), "avc1" | "avc3" | "hvc1" | "hev1" | "av01" | "vp8" | "vp9" | "vp09" | "theora")
+    };
+    if !parsed.is_video && parsed.codecs.iter().any(video_codec) {
+        return false;
+    }
     let Some(decoder) = get_video_decoder() else { return false };
     let answer = decoder.can_play_type(mime);
     if parsed.codecs.is_empty() { !answer.is_empty() } else { answer == "probably" }
@@ -68,7 +77,10 @@ fn append_bytes(id: f64, index: f64, bytes: &[u8]) -> String {
     let mut core = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(buffer) = core.buffer_mut(index as usize) else { return "error:no-buffer".to_string() };
     match buffer.append(bytes) {
-        Ok(outcome) if outcome.init_received => "init".to_string(),
+        Ok(outcome) if outcome.init_received => match outcome.duration_us {
+            Some(us) => format!("init:{}", us as f64 / 1_000_000.0),
+            None => "init:".to_string(),
+        },
         Ok(_) => String::new(),
         Err(e) => format!("error:{e}"),
     }
@@ -105,7 +117,15 @@ pub(crate) fn install_mse_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
             let spans = source(id as u64)
                 .and_then(|s| {
                     let core = s.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    core.buffer(index as usize).map(lumen_media_mse::SourceBufferModel::buffered_us)
+                    let ended = core.ended();
+                    core.buffer(index as usize).map(|b| {
+                        let mut spans = b.buffered_us();
+                        // MSE §3.1 `buffered`: в `ended` последний диапазон тянется до конца самой дальней дорожки.
+                        if let (true, Some(last)) = (ended, spans.last_mut()) {
+                            last.1 = last.1.max(b.highest_end_us());
+                        }
+                        spans
+                    })
                 })
                 .unwrap_or_default();
             let json: Vec<String> =
@@ -132,6 +152,14 @@ pub(crate) fn install_mse_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
             if let Some(b) = core.buffer_mut(index as usize) {
                 b.abort();
             }
+        }),
+    )?;
+    rt.register_native(
+        "__lumen_mse_change_type",
+        into_v8_fn3(|id: f64, index: f64, mime: String| -> bool {
+            let Some(shared) = source(id as u64) else { return false };
+            let mut core = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            core.buffer_mut(index as usize).is_some_and(|b| b.change_type(&mime).is_ok())
         }),
     )?;
     rt.register_native(
@@ -292,12 +320,17 @@ mod tests {
              _lumen_mse_attach_element(ms, {{}}); \
              var sb = ms.addSourceBuffer('video/mp4'); \
              sb.addEventListener('updateend', function () {{ log.push('updateend'); }}); \
-             sb.appendBuffer(bytes); var updatingNow = sb.updating;",
+             var activeBefore = ms.activeSourceBuffers.length;              sb.appendBuffer(bytes); var updatingNow = sb.updating;",
             frag_mp4_as_js()
         ))
         .unwrap();
         settle(&rt);
         assert_eq!(rt.eval("updatingNow").unwrap(), JsValue::Bool(true));
+        // §3.5.8: активным буфер становится после init-сегмента, duration берётся из него.
+        assert_eq!(rt.eval("activeBefore").unwrap(), JsValue::Number(0.0));
+        assert_eq!(rt.eval("ms.sourceBuffers.length").unwrap(), JsValue::Number(1.0));
+        assert_eq!(rt.eval("ms.activeSourceBuffers.length").unwrap(), JsValue::Number(1.0));
+        assert_eq!(rt.eval("ms.duration === ms.duration").unwrap(), JsValue::Bool(true));
         assert_eq!(rt.eval("sb.updating").unwrap(), JsValue::Bool(false));
         assert_eq!(rt.eval("sb.buffered.length").unwrap(), JsValue::Number(1.0));
         assert_eq!(rt.eval("sb.buffered.start(0) < sb.buffered.end(0)").unwrap(), JsValue::Bool(true));

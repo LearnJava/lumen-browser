@@ -100,13 +100,32 @@ pub fn parse_mime(mime: &str) -> Result<MimeType, MseError> {
     };
     let mut codecs = Vec::new();
     for param in parts {
-        let Some((name, value)) = param.split_once('=') else { continue };
+        // Параметр без `=` и пустой (`video/webm;`) — повреждённый MIME-тип.
+        let Some((name, value)) = param.split_once('=') else {
+            return Err(MseError::Unsupported(format!("параметр «{}» без значения", param.trim())));
+        };
         if name.trim().eq_ignore_ascii_case("codecs") {
-            let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
-            codecs.extend(value.split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_owned));
+            let value = value.trim();
+            let value = match value.strip_prefix('"') {
+                Some(rest) => rest
+                    .strip_suffix('"')
+                    .ok_or_else(|| MseError::Unsupported("кавычка в codecs не закрыта".into()))?,
+                None => value,
+            };
+            let list: Vec<String> =
+                value.split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_owned).collect();
+            if list.is_empty() {
+                return Err(MseError::Unsupported("пустой параметр codecs".into()));
+            }
+            codecs.extend(list);
         }
     }
     Ok(MimeType { format, is_video, codecs })
+}
+
+/// Тот же набор дорожек (номера и виды), что уже лежит в буфере.
+fn infos_match(infos: &[TrackInfo], tracks: &[TrackBuf]) -> bool {
+    infos.len() == tracks.len() && infos.iter().zip(tracks).all(|(n, t)| n.id == t.info.id && n.kind == t.info.kind)
 }
 
 /// Закодированный кадр в буфере.
@@ -146,6 +165,9 @@ pub struct AppendOutcome {
     /// В этой порции пришёл init-сегмент (страница ждёт `loadedmetadata` /
     /// `sourceopen`-цепочку и `duration`).
     pub init_received: bool,
+    /// Длительность из init-сегмента (`mvhd`/`mehd`, `Info.Duration`), если она есть и
+    /// положительна; иначе `None` (живой поток — `MediaSource.duration = +Infinity`).
+    pub duration_us: Option<i64>,
     /// Сколько кадров добавлено в буфер (после окна добавления и вытеснения).
     pub frames_added: usize,
 }
@@ -166,6 +188,8 @@ pub struct SourceBufferModel {
     /// Конец последнего принятого кадра: сюда встаёт следующая группа в `Sequence`.
     group_end_us: i64,
     generation: u64,
+    /// После `change_type`: ближайший init-сегмент может принести другой набор дорожек.
+    change_pending: bool,
 }
 
 impl SourceBufferModel {
@@ -194,6 +218,7 @@ impl SourceBufferModel {
             group_start: true,
             group_end_us: 0,
             generation: 0,
+            change_pending: false,
         }
     }
 
@@ -271,6 +296,27 @@ impl SourceBufferModel {
         self.window_end_us = end;
     }
 
+    /// `changeType()`: дальше идут сегменты другого типа. Контейнер может смениться;
+    /// ближайший init-сегмент заменяет описание дорожек, уже лежащие кадры остаются.
+    ///
+    /// # Errors
+    /// [`MseError::Unsupported`] — см. [`parse_mime`].
+    pub fn change_type(&mut self, mime: &str) -> Result<(), MseError> {
+        let parsed = parse_mime(mime)?;
+        if parsed.format != self.format {
+            self.format = parsed.format;
+            self.splitter = units::Splitter::new(parsed.format);
+            self.init = None;
+        }
+        self.pending.clear();
+        self.group_start = true;
+        self.change_pending = true;
+        for t in &mut self.tracks {
+            t.need_rap = true;
+        }
+        Ok(())
+    }
+
     /// `abort()`: выбросить недоразобранный сегмент, следующая группа кадров
     /// начинается с ключевого кадра. Принятый init-сегмент остаётся.
     pub fn abort(&mut self) {
@@ -314,13 +360,23 @@ impl SourceBufferModel {
     fn on_init(&mut self, init: Init, out: &mut AppendOutcome) -> Result<(), MseError> {
         let file = units::assemble(self.format, &init, &[]);
         let demux = Demuxer::open(&file).map_err(|e| MseError::Decode(e.to_string()))?;
+        out.duration_us = demux.duration_us().filter(|d| *d > 0);
         let infos: Vec<TrackInfo> = demux.tracks().to_vec();
         if self.tracks.is_empty() {
             self.tracks = infos.into_iter().map(|info| TrackBuf { info, frames: Vec::new(), need_rap: true }).collect();
+        } else if self.change_pending && !infos_match(&infos, &self.tracks) {
+            // Другой набор дорожек: новая дорожка наследует кадры старой того же вида.
+            let mut old: Vec<Option<TrackBuf>> = std::mem::take(&mut self.tracks).into_iter().map(Some).collect();
+            self.tracks = infos
+                .into_iter()
+                .map(|info| {
+                    let slot = old.iter_mut().find(|o| o.as_ref().is_some_and(|t| t.info.kind == info.kind));
+                    let frames = slot.and_then(Option::take).map(|t| t.frames).unwrap_or_default();
+                    TrackBuf { info, frames, need_rap: true }
+                })
+                .collect();
         } else {
-            let same = infos.len() == self.tracks.len()
-                && infos.iter().zip(&self.tracks).all(|(n, t)| n.id == t.info.id && n.kind == t.info.kind);
-            if !same {
+            if !infos_match(&infos, &self.tracks) {
                 return Err(MseError::Decode("новый init-сегмент меняет набор дорожек".into()));
             }
             for (t, n) in self.tracks.iter_mut().zip(infos) {
@@ -329,6 +385,7 @@ impl SourceBufferModel {
             }
         }
         self.init = Some(init);
+        self.change_pending = false;
         out.init_received = true;
         Ok(())
     }
