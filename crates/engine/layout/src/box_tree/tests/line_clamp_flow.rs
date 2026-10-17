@@ -252,3 +252,53 @@ fn auto_clamp_balances_after_clamping_by_height() {
     let css = "#c{line-clamp:auto;width:65px;max-height:40px;text-wrap:balance}";
     assert_eq!(run_lines(html, css, "c"), ["1 2 3 4", "5 6 7 8…"]);
 }
+
+#[test]
+fn float_past_the_content_edge_is_clipped_there() {
+    // Contents of #c: a float 30 high at the top, then 4 rows of 10; clamp 2 → content edge y=20.
+    let html = format!(
+        r#"<div id="c"><div id="f" style="float:left;width:10px;height:30px"></div>{}</div>"#,
+        rows(4)
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse("body{margin:0}#c{line-height:0;line-clamp:2}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let f = super::find_by_id_all(&root, &doc, "f").expect("поплавок видимой строки пропал");
+    let clip = f.clamp_clip.expect("поплавок, вылезающий за content edge, не обрезан");
+    assert_eq!(clip.y + clip.height, 20.0, "{clip:?}");
+}
+
+#[test]
+fn float_inside_the_content_edge_is_not_clipped() {
+    let html = format!(
+        r#"<div id="c"><div id="f" style="float:left;width:10px;height:10px"></div>{}</div>"#,
+        rows(4)
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse("body{margin:0}#c{line-height:0;line-clamp:2}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let f = super::find_by_id_all(&root, &doc, "f").expect("поплавок видимой строки пропал");
+    assert!(f.clamp_clip.is_none());
+}
+
+#[test]
+fn overflow_clip_container_does_not_enclose_its_float() {
+    // `overflow: clip` is no BFC root (CSS Overflow L3 §3.1): the float sticks out of #c.
+    let html = r#"<div id="c"><div style="float:left;width:10px;height:50px"></div><span style="display:inline-block;width:10px;height:10px"></span></div>"#;
+    let clip = rects(html, "#c{overflow:clip}", &["c"]);
+    let hidden = rects(html, "#c{overflow:hidden}", &["c"]);
+    assert_eq!((clip[0].height, hidden[0].height), (10.0, 50.0), "{clip:?} {hidden:?}");
+}
+
+#[test]
+fn clipped_part_of_a_float_is_not_scrollable_overflow() {
+    let html = format!(
+        r#"<div id="s" style="overflow:hidden;height:20px"><div id="c"><div style="float:left;width:10px;height:30px"></div>{}</div></div>"#,
+        rows(4)
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse("body{margin:0}#c{line-height:0;line-clamp:2}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let s = super::find_by_id_all(&root, &doc, "s").expect("нет #s");
+    assert_eq!(crate::content_height(s), 20.0);
+}
