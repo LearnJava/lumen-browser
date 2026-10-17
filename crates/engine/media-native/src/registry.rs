@@ -139,7 +139,14 @@ impl Registry {
                 audio: vec![Box::new(crate::apple::AtAudioBackend)],
             }
         }
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(target_os = "linux")]
+        {
+            Self {
+                video: vec![Box::new(crate::linux::GstVideoBackend)],
+                audio: vec![Box::new(crate::linux::GstAudioBackend)],
+            }
+        }
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
             Self::empty()
         }

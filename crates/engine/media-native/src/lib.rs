@@ -20,10 +20,16 @@ pub mod registry;
 mod apple;
 mod annexb;
 mod av1;
+pub mod distro;
 mod esds;
+mod gst_caps;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 mod mf;
 mod profile;
+mod reorder;
+mod rgba;
 mod session;
 mod vorbis;
 mod yuv;
@@ -63,15 +69,29 @@ pub enum MissingOsCodec {
     MediaFeaturePack,
     /// HEVC без расширения «HEVC Video Extensions» (Microsoft Store).
     HevcExtension,
+    /// Linux: нет GStreamer или его плагинов с декодерами H.264/HEVC/AAC
+    /// (COMPAT-MEDIA-OSDEC-LINUX); команда установки зависит от дистрибутива.
+    LinuxCodecs(distro::LinuxDistro),
 }
 
 impl MissingOsCodec {
-    /// Адрес, где недостающий компонент ставится.
+    /// Адрес, где недостающий компонент ставится; `None` — компонент ставится
+    /// командой ([`install_command`](Self::install_command)), а не по ссылке.
     #[must_use]
-    pub const fn install_uri(self) -> &'static str {
+    pub const fn install_uri(self) -> Option<&'static str> {
         match self {
-            Self::MediaFeaturePack => WINDOWS_OPTIONAL_FEATURES_URI,
-            Self::HevcExtension => WINDOWS_STORE_HEVC_URI,
+            Self::MediaFeaturePack => Some(WINDOWS_OPTIONAL_FEATURES_URI),
+            Self::HevcExtension => Some(WINDOWS_STORE_HEVC_URI),
+            Self::LinuxCodecs(_) => None,
+        }
+    }
+
+    /// Команда терминала, которой ставится недостающий компонент (Linux).
+    #[must_use]
+    pub const fn install_command(self) -> Option<&'static str> {
+        match self {
+            Self::LinuxCodecs(distro) => Some(distro.install_command()),
+            Self::MediaFeaturePack | Self::HevcExtension => None,
         }
     }
 }
@@ -98,13 +118,21 @@ pub fn missing_os_codec(bytes: &[u8]) -> Option<MissingOsCodec> {
     let status = os_codec_status()?;
     let demux = lumen_media_demux::Demuxer::open(bytes).ok()?;
     let video = demux.tracks().iter().find(|t| t.kind == lumen_media_demux::TrackKind::Video)?;
-    missing_for_video_codec(video.codec, status)
+    let missing = missing_for_video_codec(video.codec, status)?;
+    // На Linux «нет декодера» лечится пакетами дистрибутива, а не компонентами Windows.
+    #[cfg(target_os = "linux")]
+    let missing = {
+        let _ = missing;
+        MissingOsCodec::LinuxCodecs(distro::current())
+    };
+    Some(missing)
 }
 
 /// Состояние декодеров ОС; `None` — на этой платформе бэкенда ОС нет или он не
 /// требует от пользователя ставить компоненты. На macOS H.264/AAC входят в систему,
 /// поэтому плашка «нужен компонент ОС» не нужна и подсказок об установке нет
-/// (бэкенд VideoToolbox/AudioToolbox — `apple/`).
+/// (бэкенд VideoToolbox/AudioToolbox — `apple/`). На Linux кодеки берутся у
+/// GStreamer (`linux/`) и могут быть не установлены.
 #[must_use]
 pub fn os_codec_status() -> Option<OsCodecStatus> {
     #[cfg(windows)]
@@ -112,7 +140,12 @@ pub fn os_codec_status() -> Option<OsCodecStatus> {
         let a = mf::availability();
         Some(OsCodecStatus { h264: a.h264, hevc: a.hevc, aac: a.aac })
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let a = linux::availability();
+        Some(OsCodecStatus { h264: a.h264, hevc: a.hevc, aac: a.aac })
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         None
     }
