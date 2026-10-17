@@ -1,6 +1,8 @@
 //! Полупланарные кадры YUV 4:2:0 (NV12, P010), которые отдают декодеры ОС → RGBA8.
 
-#![cfg_attr(not(windows), allow(dead_code))]
+#![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+
+use crate::registry::DecodedFrame;
 
 /// Матрица преобразования цвета (Rec. 601 или Rec. 709).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +33,32 @@ pub(crate) struct Layout {
     pub matrix: Matrix,
     /// Полный диапазон 0–255 (иначе «ТВ»: Y 16–235, C 16–240).
     pub full_range: bool,
+}
+
+/// Кадр NV12/P010, скопированный из памяти декодера ОС; в RGBA переводится по
+/// требованию ([`DecodedFrame::to_rgba8`]).
+pub(crate) struct SemiplanarFrame {
+    pub pts_us: i64,
+    pub layout: Layout,
+    pub data: Vec<u8>,
+}
+
+impl DecodedFrame for SemiplanarFrame {
+    fn pts_us(&self) -> i64 {
+        self.pts_us
+    }
+
+    fn width(&self) -> u32 {
+        self.layout.width
+    }
+
+    fn height(&self) -> u32 {
+        self.layout.height
+    }
+
+    fn to_rgba8(&self) -> Result<Vec<u8>, String> {
+        semiplanar_to_rgba(&self.data, &self.layout)
+    }
 }
 
 /// Коэффициенты Q8: `(масштаб яркости, V→R, U→G, V→G, U→B)`.

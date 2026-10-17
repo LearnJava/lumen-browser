@@ -4,7 +4,8 @@
 //! умеет его открыть. Порядок в списке — приоритет: аппаратный декодер ОС →
 //! программный декодер ОС → встроенный свободный. Бэкенды ОС
 //! (`COMPAT-MEDIA-OSDEC-*`) идут в [`Registry::builtin`] перед встроенными: на
-//! Windows — Media Foundation (H.264/HEVC/AAC), затем AV1 (`rav1d`,
+//! Windows — Media Foundation (H.264/HEVC/AAC), на macOS — VideoToolbox и
+//! AudioToolbox (те же кодеки), затем AV1 (`rav1d`,
 //! [`lumen_av1`]) и Vorbis (`lewton`) на всех платформах.
 //!
 //! От реестра зависят три вещи, которые не должны расходиться: что открывает
@@ -131,7 +132,14 @@ impl Registry {
                 audio: vec![Box::new(crate::mf::MfAudioBackend)],
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                video: vec![Box::new(crate::apple::VtVideoBackend)],
+                audio: vec![Box::new(crate::apple::AtAudioBackend)],
+            }
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             Self::empty()
         }

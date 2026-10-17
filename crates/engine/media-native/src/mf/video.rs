@@ -29,7 +29,7 @@ use super::d3d::Gpu;
 use super::{ensure_com, Api};
 use crate::annexb::{self, ParameterSets};
 use crate::registry::{DecodedFrame, VideoFrameDecoder};
-use crate::yuv::{self, Layout, Matrix};
+use crate::yuv::{Layout, Matrix, SemiplanarFrame};
 
 /// `MFVideoInterlace_Progressive`.
 const INTERLACE_PROGRESSIVE: u32 = 2;
@@ -279,7 +279,7 @@ impl MftDecoder {
             let pts_us = unsafe { sample.GetSampleTime() }.map_or(self.last_pts_us, |t| t / 10);
             self.last_pts_us = pts_us;
             let frame = gpu.read_frame(sample)?;
-            self.ready.push_back(Box::new(MfFrame {
+            self.ready.push_back(Box::new(SemiplanarFrame {
                 pts_us,
                 layout: Layout {
                     width: fmt.width,
@@ -309,7 +309,7 @@ impl MftDecoder {
         // Высота буфера (с выравниванием по 16/32) — из его реальной длины.
         let buf_rows = bytes.len().saturating_mul(2) / (3 * fmt.stride.max(1));
         let rows = buf_rows.max(fmt.coded_height as usize);
-        self.ready.push_back(Box::new(MfFrame {
+        self.ready.push_back(Box::new(SemiplanarFrame {
             pts_us,
             layout: Layout {
                 width: fmt.width,
@@ -484,31 +484,6 @@ impl VideoFrameDecoder for MfVideoDecoder {
             history.clear();
         }
         self.inner.flush();
-    }
-}
-
-/// Кадр, скопированный из образца MFT.
-struct MfFrame {
-    pts_us: i64,
-    layout: Layout,
-    data: Vec<u8>,
-}
-
-impl DecodedFrame for MfFrame {
-    fn pts_us(&self) -> i64 {
-        self.pts_us
-    }
-
-    fn width(&self) -> u32 {
-        self.layout.width
-    }
-
-    fn height(&self) -> u32 {
-        self.layout.height
-    }
-
-    fn to_rgba8(&self) -> Result<Vec<u8>, String> {
-        yuv::semiplanar_to_rgba(&self.data, &self.layout)
     }
 }
 
