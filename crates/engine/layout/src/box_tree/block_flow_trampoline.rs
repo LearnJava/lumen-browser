@@ -62,6 +62,7 @@ pub(super) enum DispatchOutcome {
 /// its post-loop epilogue. `fc`/`child_y`/`prev_block_mb`/`seen_inflow_child`/
 /// `inside_marker_w`/`abs_deferred` mutate per child inside `run`; the rest are
 /// read-only invariants for this box's whole loop.
+#[derive(Clone)]
 pub(super) struct BlockFlowInit {
     pub(super) fc: FloatContext,
     pub(super) container_right: f32,
@@ -157,6 +158,28 @@ pub(super) fn run(
     viewport: Size,
     hp: &dyn HyphenationProvider,
 ) {
+    if !line_clamp_flow::wants_balance_pass(b) {
+        run_pass(b, init, measurer, viewport, hp);
+        return;
+    }
+    // `line-clamp` + `text-wrap: balance` inside: the visible lines of each balanced run are
+    // known only after a layout without balancing, so the container is laid out twice.
+    let (pristine, pristine_init) = (b.clone(), init.clone());
+    let saved = line_clamp_flow::begin_greedy_pass();
+    run_pass(b, init, measurer, viewport, hp);
+    line_clamp_flow::begin_budget_pass(b);
+    *b = pristine;
+    run_pass(b, pristine_init, measurer, viewport, hp);
+    line_clamp_flow::end_pass(saved);
+}
+
+fn run_pass(
+    b: &mut LayoutBox,
+    init: Box<BlockFlowInit>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
     let mut current = Frame {
         b: take_box(b),
         init,
@@ -193,6 +216,13 @@ pub(super) fn run(
         let i = current.next_child_idx;
         match step_child(&mut current, i, measurer, viewport, hp, &mut top_cache, &mut bottom_cache) {
             StepOutcome::Advance => {
+                current.next_child_idx += 1;
+            }
+            StepOutcome::Descend(child_init) if line_clamp_flow::wants_balance_pass(&current.b.children[i]) => {
+                // A clamp container with balanced runs is laid out twice: `run` does that for a
+                // whole box, so it is driven recursively instead of as a frame of this stack.
+                run(&mut current.b.children[i], child_init, measurer, viewport, hp);
+                post_child_bookkeeping(&mut current, i, viewport, &mut bottom_cache);
                 current.next_child_idx += 1;
             }
             StepOutcome::Descend(child_init) => {

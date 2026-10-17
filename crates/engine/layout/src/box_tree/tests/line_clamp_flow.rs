@@ -201,3 +201,54 @@ fn inline_table_shares_a_line_with_its_siblings() {
     assert_eq!(r[0].width, 10.0, "{r:?}");
     assert!(r[1].x >= r[0].x + 10.0, "{r:?}");
 }
+
+// ── text-wrap: balance после отсечки (LINE-CLAMP-BOX-2e) ──
+
+/// Ширина символа — половина кегля (8 px при 16 px).
+struct Fixed8;
+impl crate::TextMeasurer for Fixed8 {
+    fn char_width(&self, _: char, font_size_px: f32) -> f32 {
+        font_size_px / 2.0
+    }
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
+
+/// Тексты строк прогона внутри элемента `id` после раскладки.
+fn run_lines(html: &str, css: &str, id: &str) -> Vec<String> {
+    fn runs(b: &super::super::LayoutBox, out: &mut Vec<Vec<String>>) {
+        if let super::super::BoxKind::InlineRun { lines, .. } = &b.kind {
+            out.push(lines.iter().map(|l| l.iter().map(|f| f.text.as_str()).collect::<String>()).collect());
+        }
+        b.children.iter().for_each(|c| runs(c, out));
+    }
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(&format!("body{{margin:0}}div{{font-size:16px;line-height:20px}}{css}"));
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+    let node = super::find_by_id_all(&root, &doc, id).expect("нет элемента");
+    let mut out = Vec::new();
+    runs(node, &mut out);
+    out.concat().into_iter().map(|l| l.trim().to_string()).collect()
+}
+
+#[test]
+fn nested_balance_works_on_the_visible_lines_only() {
+    // Ширина 8 символов. Жадно блок даёт «1 2 3 4», «5 6 7 8», «9»; до отсечки на
+    // третьей строке контейнера ему остаются две — их и балансируем, а не три.
+    let html = r#"<div id="c">0<div id="b">1 2 3 4 5 6 7 8 9</div>10</div>"#;
+    let css = "#c{line-clamp:3;width:65px}#b{text-wrap:balance}";
+    assert_eq!(run_lines(html, css, "b"), ["1 2 3 4", "5 6 7 8…"]);
+    // Без `line-clamp` те же девять чисел балансируются по всем трём строкам.
+    let css = "#c{width:65px}#b{text-wrap:balance}";
+    assert_eq!(run_lines(html, css, "b"), ["1 2 3", "4 5 6", "7 8 9"]);
+}
+
+#[test]
+fn auto_clamp_balances_after_clamping_by_height() {
+    // Высота 40 при строке 20 — помещаются две строки из трёх. Жадно: «1 2 3 4», «5 6 7 8»,
+    // «9»; балансировка по всем трём дала бы «1 2 3», «4 5 6», «7 8 9».
+    let html = r#"<div id="c">1 2 3 4 5 6 7 8 9</div>"#;
+    let css = "#c{line-clamp:auto;width:65px;max-height:40px;text-wrap:balance}";
+    assert_eq!(run_lines(html, css, "c"), ["1 2 3 4", "5 6 7 8…"]);
+}
