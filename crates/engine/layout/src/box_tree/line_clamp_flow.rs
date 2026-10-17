@@ -13,6 +13,16 @@
 //!
 //! `line-clamp: auto` берёт число строк из высоты: помещаются те строки, чей низ не
 //! ниже границы `height`/`max-height` ([`auto_bound`]).
+//!
+//! `text-wrap: balance` балансирует только видимые строки (CSS Overflow L4: балансировка
+//! идёт после отсечки), а число видимых строк прогона известно лишь после раскладки
+//! контейнера. Поэтому контейнер с балансируемым прогоном внутри раскладывается дважды
+//! ([`wants_balance_pass`]): первый проход — «жадный», без балансировки, из него берутся
+//! числа видимых строк каждого прогона ([`collect_budgets`]); второй раскладывает тот же
+//! контейнер, балансируя у каждого прогона ровно столько строк ([`balance_limit`]).
+
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use super::baseline::is_in_flow_baseline_source;
 use super::diagnostics::resolve_block_size;
@@ -67,7 +77,10 @@ fn clamp_mode(b: &LayoutBox) -> Option<Mode> {
 /// has to balance them *after* clamping: the `line-clamp: <n>` of the run's own style, when the
 /// run has more lines than that. `None` — balance the whole run. The count is per run, so a run
 /// that follows other lines of the same container is still given the whole `n`.
-pub(super) fn balance_limit(s: &ComputedStyle, lines: usize) -> Option<usize> {
+pub(super) fn balance_limit(s: &ComputedStyle, lines: usize, key: Option<NodeId>) -> Option<usize> {
+    if let Some(n) = key.and_then(budget_of) {
+        return (lines > n).then_some(n);
+    }
     let n = s.line_clamp.filter(|&n| n > 0)? as usize;
     if is_vertical_flow(s) || lines <= n {
         return None;
@@ -79,6 +92,81 @@ pub(super) fn balance_limit(s: &ComputedStyle, lines: usize) -> Option<usize> {
         return None;
     }
     Some(n)
+}
+
+/// State of the two-pass layout of a clamp container with balanced runs.
+#[derive(Default)]
+pub(super) struct PassState {
+    /// First pass: `text-wrap: balance` is not applied, runs wrap greedily.
+    greedy: bool,
+    /// Second pass: visible line count per run, keyed by [`run_key`].
+    budgets: Option<HashMap<NodeId, usize>>,
+}
+
+thread_local! {
+    static PASS: RefCell<PassState> = RefCell::new(PassState::default());
+}
+
+/// Identity of an inline run across the two passes: the DOM text node of its first segment.
+/// Generated content has no node (`NodeId(0)`) — such runs are never limited.
+pub(super) fn run_key(segments: &[InlineSegment]) -> Option<NodeId> {
+    segments.first().map(|g| g.source_node).filter(|&n| n != NodeId::from_index(0))
+}
+
+fn budget_of(key: NodeId) -> Option<usize> {
+    PASS.with(|p| p.borrow().budgets.as_ref()?.get(&key).copied())
+}
+
+/// `true` during the first (greedy) pass: balancing is deferred until the visible lines are known.
+pub(super) fn greedy_pass() -> bool {
+    PASS.with(|p| p.borrow().greedy)
+}
+
+fn has_balance_run(b: &LayoutBox) -> bool {
+    b.children.iter().any(|c| match &c.kind {
+        BoxKind::InlineRun { .. } => c.style.text_wrap_style == TextWrapStyle::Balance,
+        _ => has_balance_run(c),
+    })
+}
+
+/// Whether the clamp container `b` has to be laid out twice (module docs).
+pub(super) fn wants_balance_pass(b: &LayoutBox) -> bool {
+    clamp_mode(b).is_some() && has_balance_run(b)
+}
+
+/// Enters the greedy first pass; returns the state to give back to [`end_pass`].
+pub(super) fn begin_greedy_pass() -> PassState {
+    PASS.with(|p| std::mem::replace(&mut *p.borrow_mut(), PassState { greedy: true, budgets: None }))
+}
+
+/// Enters the second pass with the visible line counts of the first one.
+pub(super) fn begin_budget_pass(b: &LayoutBox) {
+    let mut budgets = HashMap::new();
+    collect_budgets(b, &mut budgets);
+    PASS.with(|p| *p.borrow_mut() = PassState { greedy: false, budgets: Some(budgets) });
+}
+
+pub(super) fn end_pass(saved: PassState) {
+    PASS.with(|p| *p.borrow_mut() = saved);
+}
+
+/// Lines that stay visible per balanced run of the laid-out (and clamped) container. A run
+/// seen twice under one key (a text node split by an inline element) is left unlimited.
+fn collect_budgets(b: &LayoutBox, out: &mut HashMap<NodeId, usize>) {
+    for c in &b.children {
+        match &c.kind {
+            BoxKind::InlineRun { segments, lines, .. } => {
+                if c.style.text_wrap_style != TextWrapStyle::Balance || lines.is_empty() {
+                    continue;
+                }
+                if let Some(key) = run_key(segments) {
+                    let n = if out.contains_key(&key) { usize::MAX } else { lines.len() };
+                    out.insert(key, n);
+                }
+            }
+            _ => collect_budgets(c, out),
+        }
+    }
 }
 
 fn is_vertical_flow(s: &ComputedStyle) -> bool {
