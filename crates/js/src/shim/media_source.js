@@ -484,7 +484,7 @@
     else if (st.element && typeof st.element.__lumen_mse_ended === 'function') st.element.__lumen_mse_ended();
   }
   // Called by the media element: attach (`el` set) or detach (`el` null).
-  globalThis._lumen_mse_attach_element = function (ms, el) {
+  _lumen_mse_attach_element = function (ms, el) {
     var st = _state.get(ms);
     if (!st) return false;
     if (el) {
@@ -509,7 +509,7 @@
     return true;
   };
   // Intersection of the buffered ranges of all buffers (element `buffered`, §2.4.8 «HTMLMediaElement.buffered»).
-  globalThis._lumen_mse_element_ranges = function (ms) {
+  _lumen_mse_element_ranges = function (ms) {
     var st = _state.get(ms);
     if (!st || st.buffers.length === 0) return [];
     var acc = null;
@@ -534,7 +534,7 @@
     }
     return acc || [];
   };
-  globalThis._lumen_mse_info = function (ms) {
+  _lumen_mse_info = function (ms) {
     var st = _state.get(ms);
     return st ? { id: st.id, readyState: st.readyState, duration: st.duration, initReceived: st.initReceived, liveSeekableRange: st.liveSeekableRange } : null;
   };
