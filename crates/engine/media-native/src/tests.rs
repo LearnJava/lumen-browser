@@ -373,6 +373,123 @@ mod os_decoders {
     }
 }
 
+/// Декодеры ОС (macOS, VideoToolbox + AudioToolbox): те же `h264-aac.mp4` и `hevc.mp4`.
+/// H.264 и AAC есть в каждой macOS, поэтому проверяются безусловно (кроме
+/// `LUMEN_OS_DECODERS=0`); HEVC — только если `canPlayType` его обещает.
+/// Прогоняются в CI на `macos-latest`.
+#[cfg(target_os = "macos")]
+mod os_decoders_mac {
+    use super::*;
+
+    const H264_AAC: &[u8] = include_bytes!("../tests/data/h264-aac.mp4");
+
+    fn os_ready() -> bool {
+        can_play("video/mp4; codecs=\"avc1.64001F, mp4a.40.2\"") == "probably"
+    }
+
+    fn hevc_ready() -> bool {
+        can_play("video/mp4; codecs=\"hvc1.1.6.L93.B0\"") == "probably"
+    }
+
+    #[test]
+    fn no_install_hint_is_needed_on_macos() {
+        assert_eq!(os_codec_status(), None);
+        assert_eq!(missing_os_codec(H264_AAC), None);
+    }
+
+    #[test]
+    fn can_play_type_follows_the_os() {
+        if os_ready() {
+            assert_eq!(can_play("video/mp4; codecs=\"avc1.42E01E\""), "probably");
+            assert_eq!(can_play("audio/mp4; codecs=\"mp4a.40.2\""), "probably");
+        }
+        // Профили, которых у декодера нет, не обещаются.
+        assert_eq!(can_play("video/mp4; codecs=\"avc1.6e0028\""), "");
+        assert_eq!(can_play("video/mp4; codecs=\"mp4a.40.34\""), "");
+        // VP9/Opus ОС не даёт.
+        assert_eq!(can_play("video/mp4; codecs=\"vp09.00.10.08\""), "");
+        // Встроенные кодеки остаются.
+        assert_eq!(can_play("video/webm; codecs=\"av01.0.05M.08\""), "probably");
+    }
+
+    #[test]
+    fn h264_aac_opens_and_decodes_frames() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        assert_eq!(s.dimensions(), (320, 180));
+        let a = s.audio_track().expect("звуковая дорожка AAC");
+        assert_eq!(a.channels, 2);
+        let first = s.frame_at(0.0).unwrap();
+        assert_eq!(first.len(), 320 * 180 * 4);
+        assert!(first.chunks(4).all(|px| px[3] == 255));
+        assert!(first.chunks(4).any(|px| px[0] != first[0] || px[1] != first[1]));
+        let later = s.frame_at(0.8).unwrap();
+        assert_ne!(first, later, "картинка меняется со временем");
+        assert_eq!(later, s.frame_at(0.8).unwrap());
+    }
+
+    #[test]
+    fn h264_seek_back_matches_fresh_open() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        let at_half = s.frame_at(0.5).unwrap();
+        s.frame_at(1.2).unwrap();
+        assert_eq!(s.frame_at(0.5).unwrap(), at_half);
+        assert_eq!(open(H264_AAC).frame_at(0.5).unwrap(), at_half);
+    }
+
+    #[test]
+    fn h264_sequential_playback_matches_seek() {
+        if !os_ready() {
+            return;
+        }
+        let mut playing = open(H264_AAC);
+        let mut t = 0.0;
+        while t < 0.9 {
+            playing.frame_at(t).unwrap();
+            t += 0.04;
+        }
+        assert_eq!(playing.frame_at(0.9).unwrap(), open(H264_AAC).frame_at(0.9).unwrap());
+    }
+
+    #[test]
+    fn aac_pcm_is_audible_and_covers_the_file() {
+        if !os_ready() {
+            return;
+        }
+        let mut s = open(H264_AAC);
+        s.frame_at(0.0).unwrap();
+        let first = s.decode_audio_pcm(4410).unwrap();
+        assert_eq!(first.len(), 4410 * 2);
+        assert!(first.iter().any(|&x| x.abs() > 1000), "звук должен быть слышен");
+        let mut total = first.len();
+        loop {
+            let chunk = s.decode_audio_pcm(4410).unwrap();
+            total += chunk.len();
+            if chunk.len() < 4410 * 2 {
+                break;
+            }
+        }
+        assert!(total.abs_diff(2 * 44_100 * 2) <= 2 * 2048 * 2, "получено {total} значений");
+    }
+
+    #[test]
+    fn hevc_decodes_a_frame_when_the_os_offers_it() {
+        if !hevc_ready() {
+            return;
+        }
+        let mut s = open(HEVC_MP4);
+        let (w, h) = s.dimensions();
+        let frame = s.frame_at(0.0).unwrap();
+        assert_eq!(frame.len(), w as usize * h as usize * 4);
+        assert!(frame.chunks(4).any(|px| px[0] != frame[0] || px[1] != frame[1]));
+    }
+}
+
 // ── Воспроизведение из буфера MediaSource (COMPAT-MSE) ─────────────────────────
 
 mod mse {

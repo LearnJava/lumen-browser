@@ -520,3 +520,9 @@ jobs:
           cargo test -p lumen-storage
           cargo test -p lumen-ipc
           cargo test -p lumen-knowledge
+
+      # COMPAT-MEDIA-OSDEC-MAC: декодеры ОС (VideoToolbox/AudioToolbox) проверяются
+      # только здесь — на Windows-машине разработчика модуль apple/ не собирается.
+      - name: Unit tests — media (macOS OS decoders)
+        if: runner.os == 'macOS'
+        run: cargo test -p lumen-media-native
