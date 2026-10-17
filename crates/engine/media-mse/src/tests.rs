@@ -89,7 +89,8 @@ fn mp4_whole_file_gives_every_frame() {
     let first_pts = track_ids(&m).iter().filter_map(|&i| m.frames(i).iter().map(|f| f.pts_us).min()).max();
     assert_eq!(Some(r[0].0), first_pts, "начало = самый поздний старт дорожек");
     assert!(r[0].1 > 1_000_000, "{r:?}");
-    assert_eq!(r[0].1, m.highest_end_us());
+    // Конец буфера — конец самой короткой дорожки; самая длинная может выступать на пару кадров.
+    assert!(r[0].1 <= m.highest_end_us() && r[0].1 + 50_000 >= m.highest_end_us(), "{r:?} {}", m.highest_end_us());
 }
 
 #[test]
@@ -387,4 +388,21 @@ fn hub_creates_and_forgets_sources() {
     assert!(source(id).is_some());
     drop_source(id);
     assert!(source(id).is_none());
+}
+
+/// B-кадры: длительности `trun` считаются по декодированию (11 мкс / 66 мс), но
+/// интервал показа сплошной — буфер не должен рваться на 33-мс «дырки».
+#[test]
+fn b_frame_durations_do_not_split_buffered() {
+    let file = read("../../../tests/wpt/media-source/mp4/test.mp4");
+    let seg = segments(Format::Mp4, &file);
+    let mut m = SourceBufferModel::new("video/mp4").expect("model");
+    m.append(&seg.init).unwrap();
+    for s in &seg.media {
+        m.append(s).unwrap();
+    }
+    m.remove(1_000_000, i64::MAX);
+    let r = m.buffered_us();
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(r[0].1 > 990_000, "{r:?}");
 }

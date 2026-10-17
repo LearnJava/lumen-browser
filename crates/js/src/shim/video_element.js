@@ -766,6 +766,10 @@
     var _mseSeeking = false;
     var _mseLoadedData = false;
     var _mseResumePending = false;  // `playing` is owed once data covers currentTime again
+    var _mseSeekTarget = null;      // while `seeking`, currentTime reads as the requested position
+    var _mseSeekEventPending = false; // a queued `seeking` absorbs further seeks until it is dispatched
+    var _mseCaptured = null;        // MediaSource resolved from `src` at assignment time
+    var _mseStartPos = null;        // currentTime assigned before metadata: applied once the session is up
     function decoded() { return (_gifBacked || _containerBacked || _mseBacked) && HAS_STORE; }
 
     function attr(name) {
@@ -836,6 +840,14 @@
         __lumen_video_set_playback_rate(nid, _rate, nowMs());
       }
       _error = null;
+      // A MediaSource object URL is resolved when `src` is assigned: revoking it right
+      // after (before the resource selection task runs) must not detach the source.
+      _mseCaptured = null;
+      if (hasAttr('src')) {
+        var capSrc = attr('src') || '';
+        var capMs = capSrc === '' ? null : mediaSourceForUrl(resolveUrl(capSrc));
+        if (capMs) _mseCaptured = { src: capSrc, ms: capMs };
+      }
       resourceSelection(gen);
     }
 
@@ -959,7 +971,7 @@
         failResource(gen, candidate, 'blocked by Content Security Policy');
         return;
       }
-      var mseObj = mediaSourceForUrl(abs);
+      var mseObj = (_mseCaptured && _mseCaptured.src === url && _mseCaptured.ms) || mediaSourceForUrl(abs);
       if (mseObj) {
         if (startMseLoad(gen, mseObj)) return;
         failResource(gen, candidate, 'MediaSource is not available');
@@ -1124,18 +1136,38 @@
     }
     // The native clock mirrors «actually playing»: JS owns `paused`, the clock stops
     // while the buffer is starved so `currentTime` does not run ahead of the data.
+    function mseClampSeek(secs) {
+      var d = mseDuration();
+      return (!isNaN(d) && secs > d) ? d : secs;   // §4.8.11.9: a position past the end clamps to it
+    }
+    function mseSeek(secs) {
+      secs = mseClampSeek(secs);
+      __lumen_video_seek(nid, secs, nowMs());
+      _mseSeeking = true;
+      _mseSeekTarget = secs;
+      if (!_mseSeekEventPending) {
+        _mseSeekEventPending = true;
+        queueTask(function () { _mseSeekEventPending = false; fireEvent(el, 'seeking'); });
+      }
+      mseUpdate();
+    }
     function mseSyncClock() {
-      var run = !_paused && _readyState >= HAVE_FUTURE_DATA && !mseEnded();
+      var run = !_paused && !_mseSeeking && _readyState >= HAVE_FUTURE_DATA && !mseEnded();
       if (run && !_mseClockRunning) { __lumen_video_play(nid, nowMs()); _mseClockRunning = true; }
       else if (!run && _mseClockRunning) { __lumen_video_pause(nid, nowMs()); _mseClockRunning = false; }
     }
     function mseUpdate() {
+      if (_mseSeeking && _mseSeekTarget !== null) {
+        var clamped = mseClampSeek(_mseSeekTarget);
+        if (clamped !== _mseSeekTarget) { _mseSeekTarget = clamped; __lumen_video_seek(nid, clamped, nowMs()); }
+      }
       var prev = _readyState;
       var next = mseComputeReady();
       _readyState = next;
       if (next >= HAVE_CURRENT_DATA && !_mseLoadedData) { _mseLoadedData = true; fireEvent(el, 'loadeddata'); }
-      if (_mseSeeking && next >= HAVE_CURRENT_DATA) {
+      if (_mseSeeking && next >= HAVE_CURRENT_DATA && !_mseSeekEventPending) {
         _mseSeeking = false;
+        _mseSeekTarget = null;
         fireEvent(el, 'timeupdate');
         fireEvent(el, 'seeked');
       }
@@ -1155,7 +1187,8 @@
       var ms = _mse;
       _mse = null;
       _mseBacked = false; _mseClockRunning = false; _mseSeeking = false;
-      _mseLoadedData = false; _mseResumePending = false;
+      _mseLoadedData = false; _mseResumePending = false; _mseStartPos = null;
+      _mseSeekTarget = null; _mseSeekEventPending = false;
       if (typeof __lumen_mse_detach === 'function') __lumen_mse_detach(nid);
       _lumen_mse_attach_element(ms, null);
     }
@@ -1195,6 +1228,9 @@
           _networkState = NETWORK_IDLE;
           fireEvent(el, 'durationchange');
           fireEvent(el, 'loadedmetadata');
+          // §4.8.11.9 default playback start position, and a play() that came first.
+          if (_mseStartPos !== null) { __lumen_video_seek(nid, _mseStartPos, nowMs()); _mseStartPos = null; }
+          if (!_paused) { _mseResumePending = true; startTupdate(); }
         }
         mseUpdate();
         return true;
@@ -1211,16 +1247,15 @@
         if (!decoded() || isPaused()) {
           clearInterval(_tupdateTimer); _tupdateTimer = null; return;
         }
-        fireEvent(el, 'timeupdate');
+        if (!_mseSeeking) fireEvent(el, 'timeupdate');   // the seek's own timeupdate follows `seeking`
         checkCueChanges(el);
         var ended = _mseBacked ? mseEnded() : __lumen_video_ended(nid, nowMs());
         if (ended) {
           clearInterval(_tupdateTimer); _tupdateTimer = null;
           if (hasAttr('loop')) {
             fireEvent(el, 'ended');
-            __lumen_video_seek(nid, 0, nowMs());
-            if (_mseBacked) { _mseSeeking = true; mseSyncClock(); }
-            else __lumen_video_play(nid, nowMs());
+            if (_mseBacked) mseSeek(0);
+            else { __lumen_video_seek(nid, 0, nowMs()); __lumen_video_play(nid, nowMs()); }
             startTupdate();
           } else {
             // §4.8.11.8 "reaches the end": pause the native sink so the Rust
@@ -1294,19 +1329,18 @@
 
     Object.defineProperty(el, 'currentTime', {
       get: function() {
+        if (_mseBacked && _mseSeekTarget !== null) return _mseSeekTarget;
         if (decoded() && nid) return __lumen_video_current_time(nid, nowMs());
         return 0;
       },
       set: function(v) {
         var secs = Number(v) || 0;
+        if (_mseBacked) { mseSeek(secs); checkCueChanges(el); return; }
         if (decoded() && nid) __lumen_video_seek(nid, secs, nowMs());
+        else if (_mse) { _mseStartPos = secs; return; }
         // With no media resource there is nothing to seek in: §4.8.11.9 stores
         // the value as the default playback start position and fires nothing.
-        if (_mseBacked) {
-          // MSE: `seeked` waits until the target is buffered (`mseUpdate`).
-          _mseSeeking = true;
-          queueEvent('seeking');
-        } else if (_readyState !== HAVE_NOTHING) { queueEvent('seeking'); queueEvent('seeked'); }
+        if (_readyState !== HAVE_NOTHING) { queueEvent('seeking'); queueEvent('seeked'); }
         checkCueChanges(el);
       },
       configurable: true,
@@ -1314,7 +1348,12 @@
 
     Object.defineProperty(el, 'duration', {
       get: function() {
-        if (_mseBacked) return mseDuration();
+        if (_mse) {
+          // The init segment's duration is known before the first frame is decoded.
+          var info = _lumen_mse_info(_mse);
+          if (info && !isNaN(info.duration)) return info.duration;
+          return _mseBacked ? mseDuration() : NaN;
+        }
         if (decoded() && nid) return __lumen_video_duration(nid);
         return NaN;  // §4.8.11.6: NaN while readyState is HAVE_NOTHING
       },
@@ -1448,9 +1487,16 @@
     Object.defineProperty(el, 'seekable', {
       get: function () {
         if (_mse) {
-          var d = mseDuration();
-          if (isFinite(d) && d > 0) return mseTimeRanges([[0, d]]);
-          return mseTimeRanges(mseRanges());
+          // MSE §2.4.2 `seekable`: [0, duration) for a finite duration, empty for NaN,
+          // and for a live stream the live range joined with what is buffered.
+          var info = _lumen_mse_info(_mse);
+          var d = info ? info.duration : NaN;
+          if (isNaN(d)) return mseTimeRanges([]);
+          if (isFinite(d)) return mseTimeRanges([[0, d]]);
+          var buf = mseRanges(), live = info.liveSeekableRange;
+          var last = buf.length ? buf[buf.length - 1][1] : null;
+          if (live) return mseTimeRanges([[live[0], last === null ? live[1] : Math.max(live[1], last)]]);
+          return mseTimeRanges(last === null ? [] : [[0, last]]);
         }
         return ranges();
       },
@@ -1470,6 +1516,7 @@
       if (_mseBacked) {
         // §4.8.11.8: `playing` only once the data at currentTime allows it, else `waiting`.
         var wasPaused = _paused;
+        if (mseEnded()) mseSeek(0);   // §4.8.11.8 step: ended playback restarts from the start
         _paused = false;
         if (wasPaused) {
           queueEvent('play');
@@ -1496,6 +1543,23 @@
       queueEvent('play');
       queueEvent('waiting');
       return Promise.resolve();
+    };
+
+    // Media Playback Quality §3: the native sink does not count presented frames,
+    // so `totalVideoFrames` is the time shown × a nominal 30 fps and nothing is
+    // reported as dropped or corrupted (a lie in the optimistic direction only for
+    // pages that read the counters; none gates playback on them).
+    el.getVideoPlaybackQuality = function() {
+      var t = 0;
+      try { t = Number(el.currentTime) || 0; } catch (e) {}
+      var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : nowMs();
+      return {
+        creationTime: now,
+        totalVideoFrames: decoded() ? Math.floor(t * 30) : 0,
+        droppedVideoFrames: 0,
+        corruptedVideoFrames: 0,
+        totalFrameDelay: 0,
+      };
     };
 
     el.pause = function() {

@@ -451,7 +451,7 @@
         var rr = readRanges(st.id, _state.get(st.buffers[i]).index);
         if (rr.length) hi = Math.max(hi, rr[rr.length - 1][1]);
       }
-      if (st.buffers.length && hi !== st.duration) _lumen_mse_set_duration(ms, hi);
+      if (hi !== st.duration) _lumen_mse_set_duration(ms, hi);
     }
     st.readyState = 'ended';
     __lumen_mse_end_of_stream(st.id, true);
@@ -512,7 +512,7 @@
   };
   globalThis._lumen_mse_info = function (ms) {
     var st = _state.get(ms);
-    return st ? { id: st.id, readyState: st.readyState, duration: st.duration, initReceived: st.initReceived } : null;
+    return st ? { id: st.id, readyState: st.readyState, duration: st.duration, initReceived: st.initReceived, liveSeekableRange: st.liveSeekableRange } : null;
   };
 
   [['MediaSource', MediaSource], ['SourceBuffer', SourceBuffer], ['SourceBufferList', SourceBufferList]].forEach(function (p) {

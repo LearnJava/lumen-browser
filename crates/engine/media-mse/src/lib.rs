@@ -461,19 +461,33 @@ impl SourceBufferModel {
     }
 }
 
-/// Кадры без длительности (WebM без `Duration`) получают её по соседу: разность
-/// меток показа; у последнего — как у предыдущего.
+/// Длительности кадров сегмента приводятся к интервалу показа. Контейнер даёт
+/// длительность по декодированию (`trun`: 11 мкс и 66 мс у соседних B-кадров) или
+/// не даёт вовсе (WebM без `Duration`); буфер же описывает показ, поэтому кадр
+/// длится до следующего по метке показа, если зазор не больше трёх типичных
+/// шагов (иначе остаётся собственная длительность — настоящая дыра); у последнего
+/// кадра сегмента нелепая собственная длительность (меньше половины или больше
+/// двух шагов) заменяется типичным шагом.
 fn fill_durations(frames: &mut [Frame]) {
     let mut by_pts: Vec<usize> = (0..frames.len()).collect();
     by_pts.sort_by_key(|&i| frames[i].pts_us);
-    let mut last = 0;
+    let mut deltas: Vec<i64> =
+        by_pts.windows(2).map(|w| frames[w[1]].pts_us - frames[w[0]].pts_us).filter(|&d| d > 0).collect();
+    deltas.sort_unstable();
+    let typical = deltas.get(deltas.len() / 2).copied().unwrap_or(0);
     for w in 0..by_pts.len() {
         let i = by_pts[w];
-        if frames[i].dur_us == 0 {
-            let next = by_pts.get(w + 1).map_or(0, |&j| frames[j].pts_us - frames[i].pts_us);
-            frames[i].dur_us = if next > 0 { next } else { last };
-        }
-        last = frames[i].dur_us;
+        let next = by_pts.get(w + 1).map_or(0, |&j| frames[j].pts_us - frames[i].pts_us);
+        let own = frames[i].dur_us;
+        frames[i].dur_us = if next > 0 && (typical == 0 || next <= 3 * typical) {
+            next
+        } else if next == 0 && typical > 0 && (own * 2 < typical || own > 2 * typical) {
+            typical
+        } else if own > 0 {
+            own
+        } else {
+            typical
+        };
     }
 }
 
@@ -523,18 +537,19 @@ fn remove_range(frames: &mut Vec<Frame>, start: i64, end: i64) {
 }
 
 /// Диапазоны показа одной дорожки: соседние кадры склеиваются, если зазор не
-/// больше длительности предыдущего кадра (округление меток в контейнере).
+/// больше удвоенной наибольшей длительности кадра дорожки (так же поступает
+/// Chrome: длительности из `trun` считаются по декодированию и при B-кадрах не
+/// совпадают с интервалом показа, а метки округляет контейнер).
 fn track_ranges(frames: &[Frame]) -> Vec<(i64, i64)> {
     let mut spans: Vec<(i64, i64)> = frames.iter().map(|f| (f.pts_us, f.end_us())).collect();
     spans.sort_unstable();
+    let tolerance = 2 * frames.iter().map(|f| f.dur_us).max().unwrap_or(0).max(1_000);
     let mut out: Vec<(i64, i64)> = Vec::new();
-    let mut tolerance = 0;
     for (s, e) in spans {
         match out.last_mut() {
             Some(cur) if s <= cur.1 + tolerance => cur.1 = cur.1.max(e),
             _ => out.push((s, e)),
         }
-        tolerance = (e - s).max(1_000);
     }
     out
 }
