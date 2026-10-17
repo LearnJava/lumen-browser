@@ -572,13 +572,22 @@ pub(super) fn dispatch_box(
     } else {
         None
     };
+    // FLEX-VWM-6: a `<canvas>` width is never authored by its attributes — the bitmap
+    // size is only the intrinsic one (HTML Rendering §15.4.1), so the hint `build_box`
+    // stored is `auto` once the height is authored and definite: the width is the
+    // height run through the ratio.
+    let canvas_width_is_auto = matches!(b.kind, BoxKind::Canvas { .. })
+        && s.width_is_intrinsic_hint
+        && !s.height_is_intrinsic_hint
+        && s.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0)
+        && s.height.as_ref().is_some_and(|h| resolve_block_size(h, em, available_height, viewport).is_some());
     b.rect.width = if is_replaced {
         if let Some((pw, _)) = field_intrinsic {
             pw + s.border_left_width + s.border_right_width
         } else if let Some((aw, ah)) = s.aspect_ratio
             && aw > 0.0
             && ah > 0.0
-            && s.width.is_none()
+            && (s.width.is_none() || canvas_width_is_auto)
             && let Some(h_len) = &s.height
             && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
         {
@@ -613,7 +622,7 @@ pub(super) fn dispatch_box(
     // box-sizing определяет, к какой части бокса относится `width`:
     //   - content-box: width — это размер контента, padding+border прибавляются;
     //   - border-box: width — общий размер вместе с padding+border.
-    if let Some(w_len) = &s.width {
+    if let Some(w_len) = s.width.as_ref().filter(|_| !canvas_width_is_auto) {
         if matches!(w_len, Length::Stretch) {
             // CSS Sizing L4 §4.1 — `stretch`: the margin box fills the containing
             // block, so the border box is `containing block − margins` whatever
@@ -722,8 +731,32 @@ pub(super) fn dispatch_box(
             b.rect.width = (cw + padding_left + padding_right
                 + s.border_left_width + s.border_right_width)
                 .min(b.rect.width);
-        } else if let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport) {
-            b.rect.width = pref_w.min(b.rect.width);
+        } else {
+            // FLEX-VWM-6: a row flex container's cross size is the basis its stretched
+            // items resolve percentage block sizes against; orthogonal items of an
+            // `inline-flex` are as wide as their columns, which depends on it.
+            let row_flex_height = (matches!(s.display, Display::InlineFlex)
+                && !flex::flex_axes(&s).main_vertical)
+                .then(|| {
+                    let frame_v = padding_top + padding_bottom + s.border_top_width + s.border_bottom_width;
+                    s.height
+                        .as_ref()
+                        .and_then(|h| resolve_block_size(h, em, available_height, viewport))
+                        .map(|h| match s.box_sizing {
+                            BoxSizing::ContentBox => h,
+                            BoxSizing::BorderBox => (h - frame_v).max(0.0),
+                        })
+                })
+                .flatten();
+            let pref = if s.display == Display::InlineFlex {
+                flex::inline_flex_orthogonal_pref_width(b, row_flex_height, measurer, viewport, pcb, hp)
+                    .or_else(|| preferred_inline_block_width_in_height(b, row_flex_height, measurer, viewport))
+            } else {
+                preferred_inline_block_width(b, measurer, viewport)
+            };
+            if let Some(pref_w) = pref {
+                b.rect.width = pref_w.min(b.rect.width);
+            }
         }
     }
 

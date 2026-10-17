@@ -474,10 +474,50 @@ fn flex_row_intrinsic_sum(
         let cem = c.style.font_size;
         let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
         let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
-        sum += per_item(c) + ml + mr;
+        // FLEX-VWM-6: a stretched item of a container with a definite cross size is
+        // itself definite, so a percentage block size below it resolves.
+        let stretched = super::stretch_basis::current()
+            .filter(|_| super::stretch_basis::item_stretches(&b.style, c))
+            .map(|h| {
+                let mv = c.style.margin_top.resolve_or_zero(cem, 0.0, viewport)
+                    + c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
+                (h - mv).max(0.0)
+            });
+        sum += super::stretch_basis::with_stretched_item(stretched, || per_item(c)) + ml + mr;
         n_items += 1;
     }
     sum + gap * n_items.saturating_sub(1) as f32
+}
+
+/// FLEX-VWM-6: [`preferred_inline_block_width`] of a row flex container `b` where
+/// the items listed in `probed` (child index → border-box width) already know their
+/// width from a layout; the others are measured as usual, against the container's
+/// definite content height (`None` — indefinite).
+pub(crate) fn row_flex_preferred_width_with_probes(
+    b: &LayoutBox,
+    probed: &[(usize, f32)],
+    content_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
+    let s = &b.style;
+    let em = s.font_size;
+    let frame = s.padding_left.resolve_or_zero(em, 0.0, viewport)
+        + s.padding_right.resolve_or_zero(em, 0.0, viewport)
+        + s.border_left_width
+        + s.border_right_width;
+    let content_w = super::stretch_basis::with_container_height(content_height, || {
+        flex_row_intrinsic_sum(b, viewport, &|c| {
+            probed
+                .iter()
+                .find(|&&(i, _)| std::ptr::eq(&b.children[i], c))
+                .map_or_else(
+                    || preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0),
+                    |&(_, w)| w,
+                )
+        })
+    });
+    (content_w > 0.0).then(|| (content_w + frame).max(0.0))
 }
 
 /// Блок, в поддереве которого нет ни текста, ни replaced-содержимого, ни явных
@@ -498,6 +538,31 @@ fn is_content_free(b: &LayoutBox) -> bool {
 /// Для typed-Length полей используем em = font_size, cb_width = 0 как
 /// аппроксимацию (shrink-to-fit не знает cb_width заранее).
 pub(crate) fn preferred_inline_block_width(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
+    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+        return Some(w.max(0.0));
+    }
+    super::stretch_basis::scoped_for_children(b, viewport, || preferred_inline_block_width_impl(b, measurer, viewport))
+}
+
+/// [`preferred_inline_block_width`] of a container whose own content height is
+/// the definite `content_height` (a row flex container's cross size): its
+/// stretched items resolve percentage block sizes against it (FLEX-VWM-6).
+pub(crate) fn preferred_inline_block_width_in_height(
+    b: &LayoutBox,
+    content_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
+    super::stretch_basis::with_container_height(content_height, || {
+        preferred_inline_block_width_impl(b, measurer, viewport)
+    })
+}
+
+fn preferred_inline_block_width_impl(
     b: &LayoutBox,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
@@ -646,6 +711,17 @@ pub(crate) fn preferred_inline_block_width(
 /// available; inter-word spacing is included, but features like ligatures or
 /// kerning are not. Word-break is not applied — text is treated as one run.
 pub(crate) fn max_content_outer_width(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+        return w.max(0.0);
+    }
+    super::stretch_basis::scoped_for_children(b, viewport, || max_content_outer_width_impl(b, measurer, viewport))
+}
+
+fn max_content_outer_width_impl(
     b: &LayoutBox,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
