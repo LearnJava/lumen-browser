@@ -16,10 +16,14 @@
 
 pub mod registry;
 
+#[cfg(target_os = "macos")]
+mod apple;
 mod annexb;
 mod av1;
+mod esds;
 #[cfg(windows)]
 mod mf;
+mod profile;
 mod session;
 mod vorbis;
 mod yuv;
@@ -97,7 +101,10 @@ pub fn missing_os_codec(bytes: &[u8]) -> Option<MissingOsCodec> {
     missing_for_video_codec(video.codec, status)
 }
 
-/// Состояние декодеров ОС; `None` — на этой платформе бэкенда ОС нет.
+/// Состояние декодеров ОС; `None` — на этой платформе бэкенда ОС нет или он не
+/// требует от пользователя ставить компоненты. На macOS H.264/AAC входят в систему,
+/// поэтому плашка «нужен компонент ОС» не нужна и подсказок об установке нет
+/// (бэкенд VideoToolbox/AudioToolbox — `apple/`).
 #[must_use]
 pub fn os_codec_status() -> Option<OsCodecStatus> {
     #[cfg(windows)]
