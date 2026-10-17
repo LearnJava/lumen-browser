@@ -46,10 +46,18 @@ FLEX-VWM, остаток `flexbox-writing-mode-*`: 010–016 не совпада
 - Ортогональный блок в in-flow родителе с неопределённой высотой (`block_flow_trampoline`) и вертикальный flex-контейнер блочного уровня (`flex_trampoline`, высота = размер содержимого по главной оси) обтягивают содержимое по inline-оси вместо заполнения вьюпорта (Writing Modes L3 §7.3.1); корневой элемент по-прежнему заполняет ICB. `flex-direction-row-vertical`, `webkit-box-vertical-writing-mode` (паритет с `display:flex`), `flex-aspect-ratio-img-vert-lr` (остались AA-линии картинки на дробном `y`).
 - A/B reftest: css-flexbox identical 463 → 472 (16 лучше, 2 хуже — `aspect-ratio-intrinsic-size-001/002`, оба и раньше не совпадали), css-writing-modes identical 94 → 97; A/B `--dump-display-list` по 182 страницам корпуса — без изменений.
 
+## Сделано в FLEX-VWM-6 (2026-10-17)
+
+- `flex::inline_flex_orthogonal_pref_width` + `intrinsic::row_flex_preferred_width_with_probes`: ширина shrink-to-fit `inline-flex` с вертикальным элементом берётся из пробной раскладки элемента против высоты контейнера, а не из одной колонки (`dynamic-orthogonal-flex-item`).
+- Авто-минимум ортогонального элемента (`flex::build_line_inits`) — ширина по пробе (`block_axis_width`), а не одна колонка: `flex-shrink` не ужимает его ниже всех колонок.
+- `box_tree/stretch_basis.rs`: база процентной высоты в intrinsic-обходе (растянутый flex-элемент определён, §9.8) — `canvas {height:100%}` отдаёт `height × ratio`, а не ширину битмапа (`aspect-ratio-intrinsic-size-001/002`).
+- `<canvas>` с авторской высотой: ширина = высота × ratio, `width` от битмапа — это auto (`canvas {height:100px}` было 10×100). Не отрисованный `<canvas>` прозрачен во всех трёх рендерерах (cpu_raster, wgpu, femtovg) — раньше рисовался серым placeholder как `<img>`.
+
+Все три теста совпадают с эталоном (identical).
+
 ## Остаток
 
-- `dynamic-orthogonal-flex-item` (→ FLEX-VWM-6): ширина shrink-to-fit `inline-flex` считается до раскладки из intrinsic-функций, `vertical_block_extent` берёт ряд `InlineBlockRow` за одну колонку, а flex-проба элемента (`block_axis_width`) число колонок знает — контейнер 50 вместо 100, `flex-shrink` ужимает элемент до min-content одной колонки.
-- `aspect-ratio-intrinsic-size-001/002` (→ FLEX-VWM-6): `canvas` с `height:100%` в растянутом элементе — ширина элемента должна браться из растянутой высоты.
+
 - `grid-flex-item-001`: закрыт GRID-VWM (2026-10-05) — grid в вертикальном `writing-mode` раскладывается по осям режима; reftest identical.
 - `flexbox-writing-mode-011/012`: эталон держится на `float: left` в вертикальном потоке (линейный «левый» край — верх). Float в вертикальном потоке сделан (LAYOUT-VFLOAT, 2026-10-05) и строки эталона совпадают с тестом по геометрии первых четырёх элементов, но тест остаётся красным: элементы параллельного режима (`vl`/`vr` в `vl`/`vr`-контейнере) должны растянуться по физической ширине (`align-items: stretch`, 126px у эталона), а flex оставляет им `40px` — это FLEX-VWM-5 (ROADMAP:1017). `shape-outside` в вертикальных режимах (`css-shapes`, ~100 тестов) — LAYOUT-VFLOAT-2.
 - Схлопывание margin предка с первым/последним ребёнком по block-оси вертикального потока (`css-writing-modes/margin-collapse-vlr-*`, `-vrl-*`).
