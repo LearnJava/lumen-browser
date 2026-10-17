@@ -299,9 +299,9 @@ fn hevc_profile_supported(codec_string: &str) -> bool {
     }
 }
 
-/// `mp4a.40.2` (LC), `.5` (HE-AAC), `.29` (HE-AAC v2).
+/// `mp4a.40.2` (LC), `.5` (HE-AAC), `.29` (HE-AAC v2), `mp4a.67` (MPEG-2 AAC LC).
 fn aac_object_supported(codec_string: &str) -> bool {
-    matches!(codec_string.trim().to_ascii_lowercase().as_str(), "mp4a.40.2" | "mp4a.40.5" | "mp4a.40.29")
+    matches!(codec_string.trim().to_ascii_lowercase().as_str(), "mp4a.40.2" | "mp4a.40.5" | "mp4a.40.29" | "mp4a.67")
 }
 
 /// Видеобэкенд Media Foundation.

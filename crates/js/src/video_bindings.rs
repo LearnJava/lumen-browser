@@ -431,7 +431,7 @@ const VIDEO_SHIM: &str = include_str!("shim/video_element.js");
 /// V8 test coverage for the `HTMLVideoElement` shim (the rquickjs twin was
 /// removed in S12b-B22; this module ports its 12 tests to V8 verbatim).
 #[cfg(all(test, feature = "v8-backend"))]
-mod tests_v8 {
+pub(crate) mod tests_v8 {
     // Хелперы тестового модуля: исключение из clippy.toml покрывает
     // только тело `#[test]` (docs/lint-policy.md §10).
     #![allow(clippy::unwrap_used)]
@@ -450,7 +450,7 @@ mod tests_v8 {
     /// overwrites the global between another test's own `set` and the
     /// `install`/`load` that captures it, so the load lands in the wrong
     /// store (BUG-166).
-    static STORE_GUARD: Mutex<()> = Mutex::new(());
+    pub(crate) static STORE_GUARD: Mutex<()> = Mutex::new(());
 
     /// Serializes tests around the process-global `VideoDecoder` and clears
     /// it on both ends, so a test that assumes "no decoder" never sees one

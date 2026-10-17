@@ -1,0 +1,15 @@
+[package]
+name = "lumen-media-mse"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: модель SourceBuffer для Media Source Extensions — разбор init/media-сегментов fMP4 и WebM, хранилище кадров, buffered (COMPAT-MSE)"
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+lumen-media-demux.workspace = true
+
+[lints]
+workspace = true

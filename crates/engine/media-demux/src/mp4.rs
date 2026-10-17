@@ -160,7 +160,7 @@ impl<'a> Mp4<'a> {
         }
         samples.sort_by_key(|s| s.offset);
         let duration_us = if fragmented || table_end_us == 0 {
-            Some(fragment_end_us.max(table_end_us))
+            Some(fragment_end_us.max(table_end_us).max(header_duration_us(moov)))
         } else {
             Some(table_end_us)
         };
@@ -377,6 +377,37 @@ fn track_id_of(trak: &BoxRef<'_>) -> Option<u32> {
     r.skip(3)?;
     r.skip(if version == 1 { 16 } else { 8 })?;
     r.u32()
+}
+
+/// Длительность фильма из заголовков: `mvex/mehd` (фрагментированный файл), иначе
+/// `mvhd`. Нужна, пока кадров ещё нет (MSE: init-сегмент без `moof`). `0` — не задана.
+fn header_duration_us(moov: &BoxRef<'_>) -> i64 {
+    let Some(mvhd) = bytes::find(moov.payload, moov.payload_start, b"mvhd") else { return 0 };
+    // mvhd: v0 — ctime, mtime (по 4), timescale (4), duration (4); v1 — 8, 8, 4, 8.
+    let mut r = Be::new(mvhd.payload);
+    let parsed = (|| {
+        let version = r.u8()?;
+        r.skip(3)?;
+        r.skip(if version == 1 { 16 } else { 8 })?;
+        let timescale = r.u32()?;
+        let duration = if version == 1 { r.u64()? } else { u64::from(r.u32()?) };
+        Some((timescale, duration))
+    })();
+    let Some((timescale, mvhd_duration)) = parsed.filter(|(ts, _)| *ts > 0) else { return 0 };
+    let mehd_duration = bytes::find(moov.payload, moov.payload_start, b"mvex")
+        .and_then(|mvex| bytes::find(mvex.payload, mvex.payload_start, b"mehd"))
+        .and_then(|mehd| {
+            let mut r = Be::new(mehd.payload);
+            let version = r.u8()?;
+            r.skip(3)?;
+            if version == 1 { r.u64() } else { r.u32().map(u64::from) }
+        })
+        .unwrap_or(0);
+    let d = if mehd_duration > 0 { mehd_duration } else { mvhd_duration };
+    if d == 0 || d == u64::from(u32::MAX) || d == u64::MAX {
+        return 0;
+    }
+    ticks_to_us(i64::try_from(d).unwrap_or(0), u64::from(timescale))
 }
 
 fn read_trex(moov: &BoxRef<'_>) -> HashMap<u32, Trex> {

@@ -608,6 +608,9 @@ impl Lumen {
             self.request_redraw();
         }
 
+        // COMPAT-MSE: сессии поверх `MediaSource` заводятся здесь же, до цикла выдачи кадров.
+        self.tick_mse_sessions();
+
         // Advance frames for playing container-backed videos. `playback` is the
         // store shared with the GIF path (comment on `VideoGifStore::playback`),
         // so filter to nodes this map actually owns a session for.
@@ -2486,6 +2489,7 @@ impl Lumen {
         self.video_gif_frames.clear();
         // GAP-MEDIADECODE срез 7: clear container-backed video state from previous page.
         self.video_gif_store.pending_container_loads.lock().unwrap().clear();
+        self.clear_mse_sessions();
         self.video_sessions.clear();
         self.video_last_ms.clear();
         // GAP-MEDIADECODE срез 14: drop any open PCM audio sinks/timing from

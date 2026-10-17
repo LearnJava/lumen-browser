@@ -1175,6 +1175,7 @@ impl V8JsRuntime {
         install_v8!(typed_om_api::install_typed_om_api_v8);
         install_v8!(ua_client_hints::install_ua_client_hints_bindings_v8);
         install_v8!(url_pattern::install_url_pattern_api_v8);
+        install_v8!(mse_bindings::install_mse_bindings_v8);
         install_v8!(video_bindings::install_video_bindings_v8);
         install_v8!(video_pip::install_video_pip_api_v8);
         // CSS View Transitions L1 (BUG-545): takes `view_transition_events` by ref since

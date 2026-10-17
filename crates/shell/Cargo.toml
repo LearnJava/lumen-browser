@@ -107,6 +107,9 @@ lumen-encoding.workspace = true
 lumen-image.workspace = true
 # UX-VIDEO-NATIVE: собственный VideoDecoder `<video>` в штатной сборке (ADR-035 п.1).
 lumen-media-native.workspace = true
+# COMPAT-MSE: реестр MediaSource, к которому оболочка открывает сессию воспроизведения.
+# Внутренний крейт, новых внешних зависимостей нет.
+lumen-media-mse.workspace = true
 # GAP-MEDIADECODE срез 7 (feature "ffmpeg-video"), see [features] above.
 lumen-media-ffmpeg = { workspace = true, optional = true }
 # cpu-render: DEVX-5 headless MCP (`--mcp`/`--mcp-port`) screenshots go through

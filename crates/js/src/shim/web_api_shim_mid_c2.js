@@ -1,5 +1,9 @@
 // WHATWG File API §24.9 — URL.createObjectURL / revokeObjectURL
 var _object_url_store = Object.create(null);
+// Hooks that media_source.js fills in (declared here so the container exports them, BUG-753).
+var _lumen_mse_attach_element;
+var _lumen_mse_element_ranges;
+var _lumen_mse_info;
 // File API §8.3 «generate a new blob URL» (BUG-1197): `blob:` + the serialized
 // origin of the creating document + `/` + a UUID. The origin travels inside the
 // URL — the URL Standard derives a blob: URL's origin from the URL in its path,
@@ -16,6 +20,10 @@ function _lumen_blob_url_uuid() {
     });
 }
 URL.createObjectURL = function(blob) {
+    // WebIDL overload (Blob or MediaSource): null and primitives are not either.
+    if (blob === null || (typeof blob !== 'object' && typeof blob !== 'function')) {
+        throw new TypeError("Failed to execute 'createObjectURL' on 'URL': Overload resolution failed.");
+    }
     var origin = (typeof location !== 'undefined' && location) ? String(location.origin || '') : '';
     var key = 'blob:' + (origin || 'null') + '/' + _lumen_blob_url_uuid();
     _object_url_store[key] = blob;

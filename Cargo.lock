@@ -2545,6 +2545,7 @@ dependencies = [
  "lumen-html-parser",
  "lumen-image",
  "lumen-layout",
+ "lumen-media-mse",
  "lumen-paint",
  "lumen-storage",
  "p256",
@@ -2616,6 +2617,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-media-mse"
+version = "0.5.0"
+dependencies = [
+ "lumen-media-demux",
+ "workspace-hack",
+]
+
+[[package]]
 name = "lumen-media-native"
 version = "0.5.0"
 dependencies = [
@@ -2623,6 +2632,7 @@ dependencies = [
  "lumen-av1",
  "lumen-core",
  "lumen-media-demux",
+ "lumen-media-mse",
  "windows 0.58.0",
  "workspace-hack",
 ]
@@ -2717,6 +2727,7 @@ dependencies = [
  "lumen-layout",
  "lumen-mcp",
  "lumen-media-ffmpeg",
+ "lumen-media-mse",
  "lumen-media-native",
  "lumen-network",
  "lumen-paint",

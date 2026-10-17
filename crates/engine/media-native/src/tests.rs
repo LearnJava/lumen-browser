@@ -372,3 +372,67 @@ mod os_decoders {
         assert_eq!(s.media_feature_pack_missing(), !s.h264 && !s.aac);
     }
 }
+
+// ── Воспроизведение из буфера MediaSource (COMPAT-MSE) ─────────────────────────
+
+mod mse {
+    use lumen_media_mse::SharedMediaSource;
+
+    use super::*;
+
+    fn source_with(bytes: &[u8]) -> SharedMediaSource {
+        let shared = SharedMediaSource::default();
+        append(&shared, bytes);
+        shared
+    }
+
+    /// Файл целиком кусками по 3000 байт, как его скармливает страница.
+    fn append(shared: &SharedMediaSource, bytes: &[u8]) {
+        let mut core = shared.lock().unwrap();
+        if core.buffer_count() == 0 {
+            core.add_buffer("video/webm").unwrap();
+        }
+        for chunk in bytes.chunks(3000) {
+            core.buffer_mut(0).unwrap().append(chunk).unwrap();
+        }
+    }
+
+    #[test]
+    fn plays_the_same_frames_as_the_file() {
+        let shared = source_with(AV1_VORBIS);
+        shared.lock().unwrap().set_ended(true);
+        let mut mse = open_mse(shared).unwrap();
+        let mut file = open(AV1_VORBIS);
+        assert_eq!(mse.dimensions(), file.dimensions());
+        for t in [0.0, 0.5, 1.0, 2.2, 0.4] {
+            assert_eq!(mse.frame_at(t).unwrap(), file.frame_at(t).unwrap(), "t={t}");
+        }
+        assert!(mse.audio_track().is_some());
+        assert!(!mse.decode_audio_pcm(1000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn holds_last_frame_when_buffer_runs_dry_and_resumes_after_append() {
+        let (head, _) = AV1_VORBIS.split_at(AV1_VORBIS.len() * 2 / 3);
+        let shared = source_with(head);
+        let mut mse = open_mse(std::sync::Arc::clone(&shared)).unwrap();
+        // Позиция за границей буфера: ошибки нет, показан последний кадр.
+        let held = mse.frame_at(2.5).unwrap();
+        assert_eq!(held.len(), 64 * 64 * 4);
+        assert_eq!(mse.frame_at(2.6).unwrap(), held);
+        // Остальное доехало — в конец файла сессия доходит без перемотки с нуля.
+        append(&shared, &AV1_VORBIS[head.len()..]);
+        shared.lock().unwrap().set_ended(true);
+        let late = mse.frame_at(2.5).unwrap();
+        assert_ne!(late, held, "после дозагрузки показан настоящий кадр 2.5 с");
+        let mut file = open(AV1_VORBIS);
+        assert_eq!(late, file.frame_at(2.5).unwrap());
+    }
+
+    #[test]
+    fn empty_buffer_does_not_open() {
+        let shared = SharedMediaSource::default();
+        shared.lock().unwrap().add_buffer("video/webm").unwrap();
+        assert!(open_mse(shared).is_err());
+    }
+}

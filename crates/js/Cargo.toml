@@ -49,6 +49,9 @@ lumen-html-parser = { workspace = true }
 # `encoding_rs` in favor of this crate's own tables); no cycle (lumen-encoding
 # depends only on lumen-core, not on lumen-js).
 lumen-encoding = { workspace = true }
+# lumen-media-mse: Media Source Extensions (COMPAT-MSE) — реестр MediaSource и модель SourceBuffer,
+# к которой обращаются нативы `__lumen_mse_*`. Внутренний крейт, не зависит от lumen-js.
+lumen-media-mse = { workspace = true }
 # Permanent: OS CSPRNG bytes for Web Crypto API (getRandomValues/randomUUID).
 # Minimal dep — delegates directly to OS (CryptGenRandom/getrandom syscall).
 getrandom = "0.2"

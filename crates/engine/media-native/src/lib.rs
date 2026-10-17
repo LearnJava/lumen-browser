@@ -149,5 +149,16 @@ impl VideoDecoder for NativeVideoDecoder {
     }
 }
 
+/// Сессия воспроизведения поверх буфера `MediaSource` (COMPAT-MSE): кадры берутся из
+/// `source`, пока страница их добавляет; когда они кончаются раньше `endOfStream()`,
+/// на экране остаётся последний кадр.
+///
+/// # Errors
+/// Диагностика: в буфере нет видеокадров или для видео нет декодера.
+pub fn open_mse(source: lumen_media_mse::SharedMediaSource) -> Result<Box<dyn VideoDecodeSession>, String> {
+    let reader = lumen_media_mse::MseReader::new(source);
+    Ok(Box::new(session::NativeSession::open_mse(registry::builtin(), reader)?))
+}
+
 #[cfg(test)]
 mod tests;
