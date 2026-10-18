@@ -27,7 +27,7 @@
 
 | id | результат | строка CSS-SPECS / BUG |
 |---|---|---|
-| `css-style-declaration-alias-enumeration` | 0/51 | CSS-SPECS.md:781 (`-webkit-*` алиасы) |
+| `css-style-declaration-alias-enumeration` | 51/51 | CSS-SPECS.md:781 (`-webkit-*` алиасы, COMPAT-CSS-ALIAS) |
 | `webkit-mask-box-enumeration` | 0/6 | [BUG-1631](../../bugs/BUG-1631-OPEN.md) (`webkitMaskBoxImage*`) |
 | `idlharness.window` | 23/29 (`window.orientation`, `onorientationchange` у Window и HTMLBodyElement) | [BUG-1632](../../bugs/BUG-1632-OPEN.md) |
 | `webkit-box-blockify`, `-horizontal-reverse-variants`, `-horizontal-rtl-variants`, `-ignores-flex-wrap.tentative`, `-rtl-flex` (reftest FAIL); `webkit-box-item-shrink-001` 12/20, `-002` 5/18; `webkit-box-vertically-centered` 0/1 | | CSS-SPECS.md:785 (legacy flexbox) |
