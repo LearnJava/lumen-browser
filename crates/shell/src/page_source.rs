@@ -124,7 +124,7 @@ impl PageSource {
 
     pub(crate) fn from_arg(arg: Option<&str>) -> Self {
         match arg {
-            Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
+            Some(s) if s.starts_with("http://") || s.starts_with("https://") || is_data_url(s) => {
                 PageSource::url(s)
             }
             Some("about:blank") => PageSource::AboutBlank,
@@ -779,6 +779,14 @@ pub(crate) fn permissions_policy_sync_xhr_disposition(
     None
 }
 
+/// BUG-1636: `data:` is resolved in-process by the fetcher
+/// (`fetch_with_redirect`, DATAURL-1), so a CLI / automation argument with it
+/// must become a `PageSource::Url`, not a file path (`os error 123` on Windows).
+/// The scheme is ASCII case-insensitive (RFC 3986 §3.1).
+fn is_data_url(s: &str) -> bool {
+    s.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("data:"))
+}
+
 /// Resolve an `AutomationCommand::Navigate` URL string to a `PageSource` (SDC-2/SDC-3).
 ///
 /// Mirrors `PageSource::from_arg`'s http(s)/`about:blank` cases, but also
@@ -791,7 +799,7 @@ pub(crate) fn permissions_policy_sync_xhr_disposition(
 /// doesn't resolve; this strips that slash only when a drive letter follows,
 /// so `file:///home/x` (POSIX, where the slash IS the root) is untouched).
 pub(crate) fn page_source_for_automation_url(url: &str) -> PageSource {
-    if url.starts_with("http://") || url.starts_with("https://") {
+    if url.starts_with("http://") || url.starts_with("https://") || is_data_url(url) {
         return PageSource::url(url);
     }
     if url == "about:blank" {
