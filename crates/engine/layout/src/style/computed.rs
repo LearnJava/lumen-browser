@@ -92,6 +92,15 @@ pub struct ComputedStyle {
     /// Задаёт paragraph embedding level для UBA и разрешает логические
     /// `text-align: start|end`. См. [`Direction`] для подробностей.
     pub direction: Direction,
+    /// CSS Logical L1 §3.2 — `direction` ближайшего предка-блочного контейнера (включая сам бокс, если он
+    /// блочный контейнер): относительно него `float`/`clear: inline-start|inline-end` раскрываются в
+    /// физические стороны. Inherited; пересчитывается каскадом после применения деклараций.
+    pub block_container_direction: Direction,
+    /// `float: inline-start` (`Some(true)`) / `inline-end` (`Some(false)`) до раскрытия в `float_side`.
+    /// NOT inherited; сбрасывается физическим значением. Каскад раскрывает его по `block_container_direction`.
+    pub float_logical: Option<bool>,
+    /// То же для `clear: inline-start|inline-end`.
+    pub clear_logical: Option<bool>,
     /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
     /// Initial: `Normal`. См. [`UnicodeBidi`].
     pub unicode_bidi: UnicodeBidi,
@@ -1247,6 +1256,7 @@ impl ComputedStyle {
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             direction: Direction::Ltr,
+            block_container_direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
@@ -1332,6 +1342,8 @@ impl ComputedStyle {
             z_index: None,
             is_flex_grid_item: false,
             float_side: FloatSide::None,
+            float_logical: None,
+            clear_logical: None,
             clear: ClearSide::None,
             initial_letter_size: 1.0,
             initial_letter_sink: 0,
@@ -1627,6 +1639,7 @@ impl ComputedStyle {
             color_space: inherited.color_space,
             text_align: inherited.text_align,
             direction: inherited.direction,
+            block_container_direction: inherited.block_container_direction,
             // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
             unicode_bidi: UnicodeBidi::Normal,
             font_size: inherited.font_size,
@@ -1724,6 +1737,8 @@ impl ComputedStyle {
             z_index: None,
             is_flex_grid_item: false,
             float_side: FloatSide::None,
+            float_logical: None,
+            clear_logical: None,
             clear: ClearSide::None,
             initial_letter_size: 1.0,
             initial_letter_sink: 0,

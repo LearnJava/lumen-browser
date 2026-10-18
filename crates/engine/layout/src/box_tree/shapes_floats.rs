@@ -588,7 +588,49 @@ impl FloatContext {
         c.right = self.right.iter().map(|&(bot, e)| (bot - db, e)).collect();
         c.left_tops = self.left_tops.iter().map(|t| t - db).collect();
         c.right_tops = self.right_tops.iter().map(|t| t - db).collect();
+        c.inherited = self.inherited.as_ref().map(|p| Box::new(p.rebased_block(db)));
         c
+    }
+
+    /// The rectangular floats of this context (owned and inherited) seen from a
+    /// frame whose origin sits at `(db, di)` of this one — block coordinates
+    /// move by `-db`, inline ones by `-di`. `shape-outside` contours are dropped.
+    fn translated(&self, db: f32, di: f32) -> FloatContext {
+        let mut c = Self::new();
+        c.left = self.left.iter().map(|&(bot, e)| (bot - db, e - di)).collect();
+        c.right = self.right.iter().map(|&(bot, e)| (bot - db, e - di)).collect();
+        c.left_tops = self.left_tops.iter().map(|t| t - db).collect();
+        c.right_tops = self.right_tops.iter().map(|t| t - db).collect();
+        c.inherited = self.inherited.as_ref().map(|p| Box::new(p.translated(db, di)));
+        c
+    }
+
+    /// CSS 2.1 §9.5 in a vertical writing mode: the context of a non-BFC block
+    /// whose own logical frame starts at `(db, di)` of this one. It sees every
+    /// float of the enclosing context (so its line boxes and floats are
+    /// displaced by them) and keeps its own in the owned buckets.
+    pub(crate) fn inheriting_vertical(&self, db: f32, di: f32) -> FloatContext {
+        if self.is_empty() {
+            return Self::new();
+        }
+        let mut c = Self::new();
+        c.inherited = Some(Box::new(self.translated(db, di)));
+        c
+    }
+
+    /// Takes over the floats `child` placed itself (its frame starts at
+    /// `(db, di)` of this one): a float belongs to its block formatting context
+    /// whichever non-BFC block it sits in, so the siblings that follow the
+    /// child must meet it too.
+    pub(crate) fn absorb_vertical(&mut self, child: &FloatContext, db: f32, di: f32) {
+        for (i, &(bot, e)) in child.left.iter().enumerate() {
+            self.left.push((bot + db, e + di));
+            self.left_tops.push(child.left_tops[i] + db);
+        }
+        for (i, &(bot, e)) in child.right.iter().enumerate() {
+            self.right.push((bot + db, e + di));
+            self.right_tops.push(child.right_tops[i] + db);
+        }
     }
 
     /// True when there are no active floats at all (owned or inherited).

@@ -1183,9 +1183,11 @@ fn apply_css_wide_keyword_with(
         }
         "float" => {
             style.float_side = if inh_only_inherit { inherited.float_side } else { init.float_side };
+            style.float_logical = if inh_only_inherit { inherited.float_logical } else { None };
         }
         "clear" => {
             style.clear = if inh_only_inherit { inherited.clear } else { init.clear };
+            style.clear_logical = if inh_only_inherit { inherited.clear_logical } else { None };
         }
         "isolation" => {
             style.isolation = if inh_only_inherit { inherited.isolation } else { init.isolation };

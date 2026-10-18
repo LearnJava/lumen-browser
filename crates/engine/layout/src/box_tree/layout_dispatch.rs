@@ -1807,6 +1807,39 @@ pub(super) fn dispatch_box(
                     }
                 }
             }
+            // CSS Writing Modes L3 §2.1 / UAX #9: under `direction: rtl` atomic inlines
+            // run right to left, so a row of them (no text, which would need a real
+            // bidi pass) is mirrored within its own extent. The `text-align` shift
+            // below then places the mirrored row as a unit.
+            if b.style.direction == Direction::Rtl {
+                for (_, _, _, child_idxs) in &rows {
+                    if child_idxs.iter().any(|&i| matches!(b.children[i].kind, BoxKind::InlineRun { .. })) {
+                        continue;
+                    }
+                    let margins = |c: &LayoutBox| {
+                        let em = c.style.font_size;
+                        (
+                            c.style.margin_left.resolve_or_zero(em, content_width, viewport),
+                            c.style.margin_right.resolve_or_zero(em, content_width, viewport),
+                        )
+                    };
+                    let (mut left, mut right) = (f32::MAX, f32::MIN);
+                    for &idx in child_idxs {
+                        let c = &b.children[idx];
+                        let (ml, mr) = margins(c);
+                        left = left.min(c.rect.x - ml);
+                        right = right.max(c.rect.x + c.rect.width + mr);
+                    }
+                    for &idx in child_idxs {
+                        let (ml, mr) = margins(&b.children[idx]);
+                        let x = b.children[idx].rect.x;
+                        let dx = left + right - (x + b.children[idx].rect.width + mr) + ml - x;
+                        if dx.abs() > 0.001 {
+                            shift_tree(&mut b.children[idx], dx, 0.0);
+                        }
+                    }
+                }
+            }
             if let Some(align) = row_align {
                 for (_, _, _, child_idxs) in &rows {
                     let mut left = f32::MAX;

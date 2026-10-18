@@ -17,6 +17,10 @@ struct Frame {
     /// containing block once this box's size is final (`finish_frame`):
     /// `(child index, static margin-box x, static margin-box y)`.
     abs_deferred: Vec<(usize, f32, f32)>,
+    /// Where this frame's float frame starts in its parent's — `(block, inline)` —
+    /// when it shares the parent's block formatting context: its floats are
+    /// handed back to the parent once it is done (`FloatContext::absorb_vertical`).
+    float_origin: Option<(f32, f32)>,
 }
 
 /// Drives a vertical writing-mode Block/FlowRoot container's per-child
@@ -38,7 +42,7 @@ pub(super) fn run(
     let mut init = init;
     let mut first = block_flow_trampoline::take_box(b);
     super::fieldset::place_rendered_legend_vertical(&mut first, &mut init, measurer, viewport, hp);
-    let mut current = Frame { b: first, init, next_child_idx: 0, abs_deferred: Vec::new() };
+    let mut current = Frame { b: first, init, next_child_idx: 0, abs_deferred: Vec::new(), float_origin: None };
     let mut stack: Vec<Frame> = Vec::new();
     let mut caches = MarginCaches::default();
 
@@ -53,6 +57,9 @@ pub(super) fn run(
                 Some(mut parent) => {
                     let idx = parent.next_child_idx;
                     parent.b.children[idx] = current.b;
+                    if let Some((db, di)) = current.float_origin {
+                        parent.init.fc.absorb_vertical(&current.init.fc, db, di);
+                    }
                     finish_child(&mut parent, idx, viewport, &mut caches);
                     parent.next_child_idx += 1;
                     current = parent;
@@ -66,12 +73,13 @@ pub(super) fn run(
             StepOutcome::Advance => {
                 current.next_child_idx += 1;
             }
-            StepOutcome::Descend(mut child_init) => {
+            StepOutcome::Descend(mut child_init, float_origin) => {
                 let mut child_box = block_flow_trampoline::take_box(&mut current.b.children[i]);
                 super::fieldset::place_rendered_legend_vertical(
                     &mut child_box, &mut child_init, measurer, viewport, hp,
                 );
-                let child_frame = Frame { b: child_box, init: child_init, next_child_idx: 0, abs_deferred: Vec::new() };
+                let child_frame =
+                    Frame { b: child_box, init: child_init, next_child_idx: 0, abs_deferred: Vec::new(), float_origin };
                 stack.push(current);
                 current = child_frame;
             }
@@ -85,7 +93,7 @@ enum StepOutcome {
     /// This child is itself a vertical writing-mode container with its own
     /// children to process — push the current frame and continue processing
     /// this one.
-    Descend(Box<VerticalInit>),
+    Descend(Box<VerticalInit>, Option<(f32, f32)>),
 }
 
 /// Handles exactly one child of `frame.b` at `i` — a zero-height `Skip` box
@@ -155,7 +163,9 @@ fn step_child(
 
     // CSS 2.1 §8.3.1: a child of the same writing mode is a normal in-flow block,
     // its margins collapse with its own children's; an orthogonal one is not.
-    let same_mode = frame.b.children[i].style.writing_mode == frame.b.style.writing_mode;
+    // The root element is never one (its margins stay inside it).
+    let same_mode = frame.b.children[i].style.writing_mode == frame.b.style.writing_mode
+        && !frame.init.is_document;
     let child = &mut frame.b.children[i];
     match dispatch_box(
         child, content_x_left, content_y, remaining_block, Some(content_inline),
@@ -200,7 +210,23 @@ fn step_child(
             finish_child(frame, i, viewport, caches);
             StepOutcome::Advance
         }
-        DispatchOutcome::NeedsVerticalLoop(ci) => StepOutcome::Descend(ci),
+        DispatchOutcome::NeedsVerticalLoop(mut ci) => {
+            // CSS 2.1 §9.5: a non-BFC block shares its parent's floats — it sees them
+            // and, once done, leaves its own to the parent (`float_origin`).
+            let mut float_origin = None;
+            if !ci.encloses_floats {
+                let child = &frame.b.children[i];
+                let (gap, _) = vfloat::block_gap(&frame.init, child, viewport, caches);
+                let border_start = child.rect.x;
+                let start_edge = ci.content_x_left - border_start;
+                let content_start = if frame.init.is_rtl { ci.frame_horiz - start_edge } else { start_edge };
+                let block = (cursor_block_consumed + gap).max(clear_floor.unwrap_or(f32::NEG_INFINITY));
+                let origin = (block + content_start, ci.content_y - content_y);
+                ci.fc = frame.init.fc.inheriting_vertical(origin.0, origin.1);
+                float_origin = Some(origin);
+            }
+            StepOutcome::Descend(ci, float_origin)
+        }
     }
 }
 
@@ -240,12 +266,19 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     // CSS 2.1 §8.3.1: an empty block's margins collapse through it, joining those
     // already pending and the next sibling's.
     let through = collapses_through(&frame.b.children[i]);
+    // Where a through box itself sits: after the margins pending before it and its
+    // own block-start one (its block-end margin adjoins what follows, not it).
+    let mut through_at = 0.0;
+    // The first child of a box whose margin it collapses with: the whole chain
+    // already sits in the parent's margin, nothing is left pending after it.
+    let absorbed = frame.init.collapses_start && !frame.init.seen_inflow;
     if through {
         let m_start = collapsed_margin(
             &frame.b.children[i], true, is_rtl, content_inline, viewport, &mut caches.start,
         );
-        let m_start = if frame.init.collapses_start && !frame.init.seen_inflow { 0.0 } else { m_start };
-        gap = adjoin(adjoin(frame.init.pending_end_margin, m_start), m_end);
+        let m_start = if absorbed { 0.0 } else { m_start };
+        through_at = adjoin(frame.init.pending_end_margin, m_start);
+        gap = if absorbed { through_at } else { adjoin(through_at, m_end) };
     }
     frame.init.cursor_block_consumed += if through { 0.0 } else { gap };
     // CSS 2.1 §9.5.2: clearance — the border edge sits at the larger of its
@@ -253,7 +286,7 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     if let Some(floor) = frame.init.pending_clear.take() {
         frame.init.cursor_block_consumed = frame.init.cursor_block_consumed.max(floor);
     }
-    let cursor_block_consumed = frame.init.cursor_block_consumed + if through { gap } else { 0.0 };
+    let cursor_block_consumed = frame.init.cursor_block_consumed + if through { through_at } else { 0.0 };
     let child = &mut frame.b.children[i];
     // `position: relative` was applied by the child's own layout; re-placing the
     // child on the block axis must carry the offset, the cursor does not (§9.4.3).

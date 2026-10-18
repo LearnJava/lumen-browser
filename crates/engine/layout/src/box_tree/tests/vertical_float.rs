@@ -151,3 +151,54 @@ fn vertical_left_float_after_text_pushes_the_text_past_itself() {
     assert_eq!(xy(&f), (0.0, 0.0), "{f:?}");
     assert_eq!(frag.x, 50.0, "{frag:?}");
 }
+
+#[test]
+fn vertical_nested_float_displaces_the_following_sibling() {
+    // LAYOUT-VFLOAT-2: float внутри non-BFC блока принадлежит общему BFC — текст
+    // соседа, идущего после блока, стоит под ним (inline-ось = y).
+    let html = r#"<div id="w"><div><div class="l" style="height:50px;width:40px"></div></div><div id="q">A</div></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        "body{margin:0}#w{font:50px/50px X;writing-mode:vertical-lr;width:100px;height:100px}.l{float:left}",
+    );
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Em);
+    let q = super::find_by_id_all(&root, &doc, "q").expect("нет #q").clone();
+    let run = q.children.iter().find(|c| matches!(c.kind, crate::box_tree::BoxKind::InlineRun { .. }))
+        .expect("нет InlineRun");
+    let crate::box_tree::BoxKind::InlineRun { lines, .. } = &run.kind else { unreachable!() };
+    let frag = lines.iter().flatten().find(|f| f.text == "A").expect("нет «A»");
+    assert_eq!(frag.x, 50.0, "«A» под float-ом: {frag:?}");
+}
+
+#[test]
+fn horizontal_float_inline_start_follows_direction() {
+    let r = rects(
+        "horizontal-tb",
+        r#"<div id="f" class="s">S</div><div id="g" class="e">E</div>"#,
+        "#w{direction:rtl}.s{float:inline-start}.e{float:inline-end}",
+        &["f", "g"],
+    );
+    assert_eq!(r[0].x, 50.0, "inline-start в rtl — справа: {:?}", r[0]);
+    assert_eq!(r[1].x, 0.0, "inline-end в rtl — слева: {:?}", r[1]);
+}
+
+#[test]
+fn vertical_ua_paragraph_margins_are_logical() {
+    // HTML Rendering §15.3: `p { margin-block: 1em }` — в vertical-lr это левое/правое поле,
+    // а верхнего и нижнего (inline-ось) нет.
+    let r = rects("vertical-lr", r#"<p id="p" style="width:20px;height:30px"></p>"#, "", &["p"]);
+    assert_eq!(r[0].y, 0.0, "{:?}", r[0]);
+    assert_eq!(r[0].x, 50.0, "{:?}", r[0]);
+}
+
+#[test]
+fn rtl_row_of_atomic_inlines_is_mirrored() {
+    let r = rects(
+        "horizontal-tb",
+        r#"<div id="a" class="ib"></div><div id="b" class="ib"></div>"#,
+        "#w{direction:rtl}.ib{display:inline-block;width:30px;height:20px}",
+        &["a", "b"],
+    );
+    assert_eq!(r[0].x, 70.0, "первый inline-block — у правого края: {:?}", r[0]);
+    assert_eq!(r[1].x, 40.0, "{:?}", r[1]);
+}

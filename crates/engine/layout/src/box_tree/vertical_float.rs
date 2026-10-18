@@ -30,6 +30,11 @@ pub(super) fn block_gap(
         let (m_start, m_end) = own_margins(child, init.is_rtl, cb, viewport);
         return (init.pending_end_margin + m_start, m_end);
     }
+    // CSS 2.1 §8.3.1: the root element's margins do not collapse with its children's.
+    if init.is_document {
+        let (m_start, m_end) = own_margins(child, init.is_rtl, cb, viewport);
+        return (adjoin(init.pending_end_margin, m_start), m_end);
+    }
     let m_end = collapsed_margin(child, false, init.is_rtl, cb, viewport, &mut caches.end);
     let m_start = if init.collapses_start && !init.seen_inflow {
         0.0
