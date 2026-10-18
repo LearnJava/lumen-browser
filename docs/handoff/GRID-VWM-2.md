@@ -1,60 +1,43 @@
-# Заметка передачи: GRID-VWM-2 (ветка `p1-grid-vwm-2`, слот `p1-work`)
+# Заметка передачи: GRID-VWM-2 (ветка `p1-grid-vwm-2`)
 
-Кода задачи ещё нет — сессия ушла на разведку и на стенд проверки. Ниже то, что уже измерено.
+## Сделано (закоммичено в ветке, в main НЕ влито)
 
-## Стенд проверки WPT (работает, 20 с на 31 тест)
+Базовая линия WPT (31 файл задачи): 118 / 687 сабтестов → **437 / 687**.
 
-На `main` testharness по BiDi стоит в TIMEOUT: BUG-1597 / BUG-1630 (`loading` в модели вкладки хрома).
-Обход **только локально, не коммитить**: в `crates/shell/src/chrome_ui.rs:410` заменить
-`loading: Some(t.id) == active_id && self.nav_start.is_some(),` на `loading: false,`,
-`cargo build -p lumen-shell`, скопировать `target/debug/lumen.exe` в `.tmp/lumen-wpt.exe`, затем вернуть файл
-(`git checkout crates/shell/src/chrome_ui.rs`). Для правок движка: собрать **без** обхода нельзя гонять WPT,
-поэтому держать обход применённым при замерах и снимать перед коммитом (`git diff --stat` перед `git add`).
+1. `grid_trampoline.rs`: строки `minmax(...)` растут по содержимому (`row_grows_with_content`, `maximize_bounded_rows`:
+   Grid L1 §11.5–11.6; `minmax(_, fr)` не трогаем — GRID-FR-ROWS). Тесты `minmax_rows_*` в `tests/grid_vwm.rs`.
+2. `grid_trampoline.rs`: `aspect-ratio` + определённая высота + не растягиваемый `justify-self` → ширина из пропорции
+   (`ratio_width_for_height`). Тест `aspect_ratio_gives_width_to_a_non_stretched_item`.
+3. `grid_vertical.rs` + `intrinsic.rs`: ортогональный item горизонтальной сетки — при замере обтягивает содержимое даже при
+   `stretch` (`orthogonal_fit_height(.., probe)`); `orthogonal_fit_content_height(.., add_margins)` — для grid без полей
+   (в flex/block поведение прежнее); `final_args` вычитает поля из `cell_block` ортогонального item'а.
+   `grid-items-minimum-height-orthogonal-001` 46/46.
 
-Скрипты лежат в `.tmp/` рабочего дерева (не в git, при потере — пересоздать):
-- `.tmp/wpt_run.sh <файл-со-списком-id> <out.json> [бинарь]` — `MSYS_NO_PATHCONV=1` (иначе `/css/...` превращается в путь Git),
-  `tests/wpt/.venv/Scripts/python.exe tests/wpt/run_smoke.py --binary B --log-wptreport=OUT --no-manifest-update --processes 4 <ids>`;
-  python venv — в основном чекауте `tests/wpt/.venv`. Флаг `--log-wptreport=` только со знаком `=`.
-- `.tmp/ids_all.txt` — 31 id задачи (`/css/css-grid/...`); `.tmp/wpt_sum.py` — сводка; `.tmp/wpt_msg.py <json> <подстрока> <n>` — сообщения упавших сабтестов.
+Проверено: `cargo clippy -p lumen-layout --all-targets -- -D warnings` чисто; `cargo test -p lumen-layout -- --skip deep_` зелёный
+(`deep_*` падают STACK_OVERFLOW и на чистом main — BUG-1266); `graphic_tests/dump_golden.py` 12/12; `--dump-layout` всех 170
+`graphic_tests/*.html` старым и новым бинарём идентичен (пиксели не двигаются). Живой `graphic_tests/run.py` в этой среде не
+работает (TEST-00: «automation command timed out», захват экрана) — пиксельный прогон не выполнен.
 
-Базовая линия (бинарь с обходом, HEAD `df9b4b13e`): **118 / 687** сабтестов по 31 файлу
-(зелёные: `grid-items-minimum-width-orthogonal-001` 46/46, `grid-item-alignment-with-orthogonal-flows-vertical-lr/rl` 4/4;
-частично: `grid-align-baseline-vertical` 5/11, `grid-item-alignment-with-orthogonal-flows` 3/7, `grid-minimum-size-grid-items-022..025` 12–16 из 45–60).
+## Осталось (перед слиянием)
 
-Все 31 теста — testharness (`check-layout-th.js`), reftest нет. Тесты с `font: Ahem` + `document.fonts.ready.then(checkLayout)`
-упираются в BUG-1306 (синхронная геометрия читает оценщик шрифта, `X` = 6,82 вместо 10): `grid-items-percentage-*-vertical-*`,
-`grid-minimum-size-grid-items-02x` (часть), `grid-align-justify-stretch-with-orthogonal-flows`. Для проверки раскладки без BUG-1306
-можно временно (локально) обернуть тело `window.checkLayout` в `tests/wpt/resources/check-layout-th.js:211` двумя вложенными
-`requestAnimationFrame` — через кадр шрифт уже Ahem (верно по BUG-1306 §Симптом); файл вернуть `git checkout`.
+- Документы в том же коммите слияния: `CAPABILITIES.md:77` (строки «Not done» — убрать minmax-строки/ортогональные
+  min-height, оставить остаток), `ROADMAP.md:1042` (GRID-VWM-2 → done; остаток → новая строка GRID-VWM-3, затем
+  `python scripts/gen_roadmap.py`), `docs/wpt-vendor-notes/css.md` (строки 318/374/379/2138: ссылки на GRID-VWM-2),
+  убрать указатель `ROADMAP.md:1042` из `STATUS-P1.md`, удалить этот файл при слиянии.
+- Остаток для GRID-VWM-3 (измерено):
+  a) `min-width`/`max-width` не входят в `max_content_outer_width` (`intrinsic.rs:730`): inline-grid/auto-столбец с
+     `min-width:60px` item'ом даёт 10 вместо 70 (`grid-items-minimum-width-orthogonal-002`, 0/44 + в харнессе ширина 1008);
+  b) автоминимум столбца `minmax(auto, 0px|25px)` не зажимается максимумом (`grid-minimum-size-grid-items-022/024`);
+  c) `grid-intrinsic-size-with-orthogonal-items` (0/7), `grid-align-justify-stretch-with-orthogonal-flows` (0/8, Ahem/BUG-1306),
+     `grid-item-aspect-ratio-justify-self-001` ортогональная группа (ширина 396), `normal`/`stretch` + ratio (transferred min-height);
+  d) `column-rule` в вертикальной сетке: `grid_vertical.rs` `b.subgrid_tracks = None` — нужен физический разворот дорожек и
+     правка paint;
+  e) baseline `text-orientation: sideways` (`grid-align-baseline-vertical` 5/11, `grid-minimum-contribution-baseline-shim-vertical-*` 0/6);
+  f) `%`-поля/padding (`grid-items-percentage-*-vertical-*`, упирается в BUG-1306), `margin:auto` в авто-колонках вертикали (0/4×2).
 
-## Найденные причины (проверено `--dump-layout`)
+## Стенд WPT
 
-1. **Строки `minmax(...)` не растут по содержимому** — и в горизонтальной, и в вертикальной сетке.
-   `grid_trampoline.rs::post_probe_item` (~строка 392) учитывает вклад item'а только для `Auto|MinContent|MaxContent|Fr`,
-   `Minmax` пропущен; `grid.rs` (~589) задаёт строке `Minmax(min,_)` только `min.resolve_fixed`. Проба `.tmp/p1.html`:
-   `grid-template-rows: minmax(auto,0px)` с item `height:60px` даёт строку 0; `minmax(10px,50px)` — 10 (по спеке при
-   неопределённой высоте 50, §12.6 maximize tracks: свободное место бесконечно); `minmax(10px,auto)` с item 30 — 10 (надо 30).
-   Это причина «expected 60 but got 0» во всех `grid-items-minimum-width-vertical-*` (4 файла × 44 сабтеста),
-   `grid-items-minimum-height-orthogonal-001` (46), вероятно `grid-minimum-size-grid-items-024/025` (строки).
-   План: в `post_probe_item` пускать `Minmax(min, _)` с содержимым в `min` (auto/min-content/max-content) и `Minmax(_, max)` с
-   `max` auto/max-content; в `finish_probe_pass` — предел роста = `max(L, base)` для `max = Length`, при неопределённой
-   высоте строка = предел, при определённой — раздача свободного места поровну с заморозкой на пределах. `minmax(_, fr)` не трогать
-   (это GRID-FR-ROWS).
-2. **Автоматический минимум столбцов не зажимается максимумом дорожки**: `grid-minimum-size-grid-items-022`:
-   `grid-template-columns: minmax(auto, 0px)` с текстом `XXXXXXXXXX` даёт ширину 68,2 (ожидается 0), `minmax(auto, 25px)` — 68,2 (ожидается 25).
-   Столбец `auto` с несокращаемым словом должен быть ≥ min-content (100 при Ahem), а у нас обрезается до ширины контейнера (50).
-   Искать в `grid.rs` расчёт `col_widths` (до ~560) и `grid_auto_cols.rs`.
-3. `grid-items-minimum-width-orthogonal-002`: ширина контейнера 1008 вместо 70 (shrink-to-fit grid с ортогональными items).
-4. `grid-item-aspect-ratio-justify-self-001/002`: ширина item'а 0 вместо 16 (aspect-ratio + `justify-self: start|end` не даёт ширину).
-5. `grid-align-baseline-vertical` (4,5 …), `grid-minimum-contribution-baseline-shim-vertical-*` (0/6) — не разбирались.
-6. Пункт (4) задачи (`column-rule`/`row-rule` в вертикальной сетке): `grid_vertical.rs:492` — `b.subgrid_tracks = None`, `record_own_tracks` не вызывается.
-
-## Порядок работы дальше
-
-1. Пункт 1 выше (общий для горизонтали и вертикали, самый большой выигрыш ≈ 250 сабтестов) + тест в
-   `crates/engine/layout/src/box_tree/tests/grid_vwm.rs`.
-2. Пункты 2–4, потом (3) ортогональные items из задачи, (4) `column-rule`, (5) baseline, (6) `%`/auto-margin/aspect-ratio.
-3. Перед коммитом: `cargo clippy -p lumen-layout --all-targets -- -D warnings`, `scripts/scoped-test.sh`, пиксели могут двигаться →
-   `python graphic_tests/run.py --continue-on-fail` и голдены в том же коммите (docs/graphic-tests.md);
-   документы: CAPABILITIES.md (строка «CSS Grid in a vertical writing-mode»), ROADMAP.md (строка GRID-VWM-2, остаток → новая задача),
-   wpt-vendor-notes/css.md; убрать указатель из `STATUS-P1.md` строка `ROADMAP.md:1042`.
+В `.tmp/` основного чекаута: `wpt_run.sh <ids> <out.json> [бинарь]`, `ids_all.txt`, `wpt_sum.py <json> [v]`, `wpt_msg.py <json> <подстрока> <n>`.
+Бинарь собирать с локальным обходом BUG-1597: в `crates/shell/src/chrome_ui.rs:410` `loading: false,`
+(`cargo build -p lumen-shell`, копия в `.tmp/lumen-wpt.exe`), перед коммитом `git checkout crates/shell/src/chrome_ui.rs`.
+Python venv: `tests/wpt/.venv/Scripts/python.exe`. Пробы: `.tmp/p2..p6.html`, `lumen-wpt.exe --dump-layout file:///...`.

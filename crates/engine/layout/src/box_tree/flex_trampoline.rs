@@ -405,7 +405,7 @@ fn step_item(
         // With a definite cross size the item fills it only when it is stretched.
         let explicit_cross = {
             let item = &frame.b.children[pos.i];
-            let fit = super::intrinsic::orthogonal_fit_content_height(item, content_width, measurer, viewport);
+            let fit = super::intrinsic::orthogonal_fit_content_height(item, content_width, measurer, viewport, true);
             let stretched = matches!(
                 frame_align(&item.style, &frame.init.s, frame.init.wrap_reverse, false, frame.init.cross_rev),
                 AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal

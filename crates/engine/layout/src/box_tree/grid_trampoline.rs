@@ -170,7 +170,7 @@ pub(super) fn run(
         match current.pass {
             Pass::Probe => {
                 if current.k >= current.init.item_idxs.len() {
-                    finish_probe_pass(&mut current.init);
+                    finish_probe_pass(&mut current.init, viewport);
                     current.pass = Pass::Final;
                     current.k = 0;
                     continue;
@@ -393,10 +393,7 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
     let r0 = (rs - 1) as usize;
     if r0 < frame.init.row_heights.len()
         && frame.init.inherited_rows.is_none()
-        && matches!(
-            grid_track(r0 as u32, &frame.init.eff_row_template, &frame.init.s.grid_auto_rows),
-            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
-        )
+        && row_grows_with_content(grid_track(r0 as u32, &frame.init.eff_row_template, &frame.init.s.grid_auto_rows))
     {
         let item_h = frame.init.item_block_size(&frame.b.children[i], viewport);
         if item_h > frame.init.row_heights[r0] {
@@ -520,12 +517,76 @@ fn record_item_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn TextM
     group.1 = group.1.max(descent);
 }
 
+/// Is a track sizing function content-based in the sense of CSS Grid L1 §11.5: `min-content`,
+/// `max-content` and `auto`.
+fn is_content_sized(t: &GridTrackSize) -> bool {
+    matches!(t, GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent)
+}
+
+/// Does the row track grow with its items' contribution (CSS Grid L1 §11.5)? `auto`, `min-content`,
+/// `max-content`, `<flex>` and a `minmax(min, max)` with a content-based min or max. `minmax(_, <flex>)`
+/// is excluded — it is a flexible track, resolved by the fr-pass, not by the items.
+fn row_grows_with_content(t: &GridTrackSize) -> bool {
+    match t {
+        GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_) => true,
+        GridTrackSize::Minmax(min, max) => !max.is_fr() && (is_content_sized(min) || is_content_sized(max)),
+        _ => false,
+    }
+}
+
+/// CSS Grid L1 §11.6 «Maximize Tracks»: `minmax(<min>, <length>)` rows grow from their base size to
+/// the growth limit `max(<length>, base)`. With an indefinite container block size the free space is
+/// infinite, so every such row reaches its limit; with a definite one the leftover space is shared
+/// equally and a row that hits its limit is frozen.
+#[inline(never)]
+fn maximize_bounded_rows(init: &mut GridInit, viewport: Size) {
+    let n_rows = init.n_rows as usize;
+    let mut limits: Vec<(usize, f32)> = Vec::new();
+    for r in 0..n_rows {
+        if let GridTrackSize::Minmax(_, max) = grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows)
+            && let GridTrackSize::Length(l) = &**max
+            && let Some(v) = l.resolve(init.em, init.definite_content_height, viewport)
+        {
+            limits.push((r, v.max(init.row_heights[r])));
+        }
+    }
+    if limits.is_empty() {
+        return;
+    }
+    let Some(total) = init.definite_content_height else {
+        for (r, lim) in limits {
+            init.row_heights[r] = lim;
+        }
+        return;
+    };
+    let gaps = init.row_gap * super::grid::gutter_count(&init.row_collapsed, n_rows) as f32;
+    let mut free = total - init.row_heights.iter().sum::<f32>() - gaps;
+    while free > 0.0 && !limits.is_empty() {
+        let share = free / limits.len() as f32;
+        let mut used = 0.0;
+        let mut next = Vec::with_capacity(limits.len());
+        for (r, lim) in limits {
+            let add = share.min(lim - init.row_heights[r]);
+            init.row_heights[r] += add;
+            used += add;
+            if init.row_heights[r] + 1e-4 < lim {
+                next.push((r, lim));
+            }
+        }
+        if used <= 1e-4 {
+            break;
+        }
+        free -= used;
+        limits = next;
+    }
+}
+
 /// Runs once every item has been probed — CSS Grid L1 §11.7 fr-track
 /// resolution and §12.3 `align-content` auto-row stretch (both skipped when
 /// the row axis is subgridded — sizes are then fixed), and the row top
 /// offsets the Final phase positions cells against. Copied verbatim from the
 /// removed code's tail between the two loops.
-fn finish_probe_pass(init: &mut GridInit) {
+fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
     let n_rows = init.n_rows;
     let row_gap = init.row_gap;
     let total_row_gap = row_gap * super::grid::gutter_count(&init.row_collapsed, n_rows as usize) as f32;
@@ -534,10 +595,7 @@ fn finish_probe_pass(init: &mut GridInit) {
         // «наибольший подъём + наибольший спуск»; растут только строки, размер
         // которых зависит от содержимого.
         for r in 0..n_rows as usize {
-            if !matches!(
-                grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows),
-                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
-            ) {
+            if !row_grows_with_content(grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows)) {
                 continue;
             }
             for (asc, desc) in [init.row_first_group[r], init.row_last_group[r]] {
@@ -546,6 +604,7 @@ fn finish_probe_pass(init: &mut GridInit) {
                 }
             }
         }
+        maximize_bounded_rows(init, viewport);
         // CSS Grid L1 §11.7 — the free space available to flexible (`fr`) tracks is
         // the container's content size minus the base sizes of the OTHER tracks
         // only. `row_heights[r]` for an `fr` track was seeded from its content's
@@ -952,6 +1011,15 @@ fn post_final_item(
         s.writing_mode,
         false,
     );
+    // CSS Sizing L4 §5.1: у не растягиваемого по inline-оси item'а с `aspect-ratio` и определённой
+    // высотой ширина `auto` берётся из пропорции, а не из содержимого.
+    if !replaced_ratio && !form_ctl && w_auto && !h_auto && !matches!(justify, AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
+        && let Some(w) = ratio_width_for_height(is, item.rect.height, content_width, viewport)
+    {
+        item.rect.width = w;
+        stretch_w = Some(w);
+        stretch_h = stretch_h.or(Some(item.rect.height));
+    }
     let item_outer_w = item.rect.width + m_l + m_r;
     let justify_safe = if matches!(is.justify_self, AlignValue::Auto) {
         s.content_align_extra.justify_items_safe
@@ -1064,6 +1132,30 @@ fn post_final_item(
     }
     let item = &mut frame.b.children[i];
     crate::incremental::translate_subtree(item, new_x - item.rect.x, new_y - item.rect.y);
+}
+
+/// Border-box ширина по `aspect-ratio` (физическая `ширина / высота`) и border-box высоте `height`;
+/// `None` без пропорции. Пропорция относится к box-sizing-боксу: у `content-box` рамка и поля
+/// вычитаются из высоты и добавляются к ширине.
+#[inline(never)]
+fn ratio_width_for_height(is: &ComputedStyle, height: f32, pct_base: f32, viewport: Size) -> Option<f32> {
+    let (aw, ah) = is.aspect_ratio?;
+    if aw <= 0.0 || ah <= 0.0 {
+        return None;
+    }
+    if matches!(is.box_sizing, BoxSizing::BorderBox) {
+        return Some((height * aw / ah).max(0.0));
+    }
+    let em = is.font_size;
+    let pad_w = is.border_left_width
+        + is.border_right_width
+        + is.padding_left.resolve_or_zero(em, pct_base, viewport)
+        + is.padding_right.resolve_or_zero(em, pct_base, viewport);
+    let pad_h = is.border_top_width
+        + is.border_bottom_width
+        + is.padding_top.resolve_or_zero(em, pct_base, viewport)
+        + is.padding_bottom.resolve_or_zero(em, pct_base, viewport);
+    Some(((height - pad_h).max(0.0) * aw / ah + pad_w).max(0.0))
 }
 
 /// Явный `align-self: stretch` у replaced с пропорцией (Box Alignment L3 §6.2): высота = область,
