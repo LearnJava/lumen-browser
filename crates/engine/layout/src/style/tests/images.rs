@@ -727,17 +727,17 @@ use super::*;
         // The legacy three-argument webkit form WITHOUT the -webkit- prefix is
         // invalid per CSS Images L4 (trailing bare `<percentage>` is not an
         // `<image>`). Edge/Chromium drop the declaration; Lumen must too —
-        // BUG-101 / TEST-59. The cell stays empty (BackgroundImage::None).
+        // BUG-101 / TEST-59, BUG-1625: it is discarded whole, so with no earlier
+        // declaration no layer is created at all.
         let s = cascade_at(
             "<div></div>",
             r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
             &[0],
         );
-        assert_eq!(s.background_layers.len(), 1);
         assert!(
-            matches!(&s.background_layers[0].image, BackgroundImage::None),
-            "unprefixed legacy 3-arg cross-fade() must be invalid → None, got {:?}",
-            s.background_layers[0].image
+            s.background_layers.is_empty(),
+            "unprefixed legacy 3-arg cross-fade() must be invalid → dropped, got {:?}",
+            s.background_layers
         );
     }
 
@@ -1274,4 +1274,53 @@ use super::*;
         assert!(s.background_layers.is_empty());
         let s = cascade_at("<div></div>", "div { background-image: url(x.png); }", &[0]);
         assert_eq!(s.background_layers.len(), 1);
+    }
+
+    // -------- BUG-1625: невалидное значение не затирает прежнее --------
+
+    #[test]
+    fn background_shorthand_invalid_keeps_previous_declaration() {
+        // `background: foo(1)` — не `<bg-layer>`: объявление отбрасывается, красный остаётся.
+        let s = cascade_at("<div></div>", "div { background: red; background: foo(1); }", &[0]);
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
+        assert_eq!(s.background_layers.len(), 1);
+    }
+
+    #[test]
+    fn background_shorthand_prefixed_gradient_chain_keeps_fallback() {
+        // Цепочка запасных строк старых сайтов: последняя с `-o-` не стирает рабочую.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: #1e5799; background: linear-gradient(red, blue); \
+             background: -o-linear-gradient(top, red, blue); }",
+            &[0],
+        );
+        assert!(matches!(s.background_layers[0].image, BackgroundImage::Gradient(_)));
+    }
+
+    #[test]
+    fn background_image_unknown_function_keeps_previous() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: linear-gradient(red, blue); background-image: foo(1); }",
+            &[0],
+        );
+        assert!(matches!(s.background_layers[0].image, BackgroundImage::Gradient(_)));
+        // `none` остаётся допустимым значением.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: linear-gradient(red, blue); background-image: none; }",
+            &[0],
+        );
+        assert!(matches!(s.background_layers[0].image, BackgroundImage::None));
+    }
+
+    #[test]
+    fn mask_image_unknown_function_keeps_previous() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { mask-image: linear-gradient(red, blue); mask-image: foo(1); }",
+            &[0],
+        );
+        assert!(matches!(s.mask_layers[0].image, BackgroundImage::Gradient(_)));
     }

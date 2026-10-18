@@ -1,6 +1,6 @@
 # BUG-1625 — Невалидный background/background-image затирает прежнее значение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** layout (`crates/engine/layout/src/style/apply/paint.rs:147`, `:357`, `:582`)
 
@@ -23,3 +23,7 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление (2026-10-18)
+
+`parse_single_bg_layer` (`style/parse/image.rs`) возвращает `None` на токен вне грамматики `<bg-layer>` (`-o-linear-gradient(…)`, `foo(1)`, `ff4444` без `#`), а не пропускает его. Шортхенд `background` разбирает все слои до очистки и при `None` отбрасывает объявление целиком (`style/apply/paint.rs`); `background-image` и `mask-image` при неизвестной функции тоже возвращаются, не трогая прежние слои. `none`, `url()`, градиенты, `image-set()`, `cross-fade()`, `paint()` по-прежнему допустимы. Побочное следствие: BUG-101 (`cross-fade()` с тремя аргументами без префикса) теперь отбрасывается без создания слоя, тест обновлён. Тесты — `style/tests/images.rs` (`background_shorthand_*`, `background_image_unknown_function_keeps_previous`, `mask_image_unknown_function_keeps_previous`). Display-list всех 170 страниц graphic_tests до/после совпадает, `dump_golden.py` 12/12. Шортхенд `mask` не менялся: неизвестные токены в нём по-прежнему пропускаются.

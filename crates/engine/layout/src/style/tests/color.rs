@@ -370,12 +370,15 @@ use crate::style::values::named_colors::NAMED_COLORS;
         // `background`. Edge в quirks-mode сбрасывает `background: ff4444` как
         // невалидный → фон отсутствует.
         let vp = Size { width: 1024.0, height: 768.0 };
-        let (_, color) = parse_single_bg_layer("ff4444", 16.0, vp, true);
-        assert_eq!(color, None, "hashless hex недопустим в шортхенде background");
+        assert_eq!(
+            parse_single_bg_layer("ff4444", 16.0, vp, true),
+            None,
+            "hashless hex недопустим в шортхенде background"
+        );
         // Контроль: валидные формы цвета по-прежнему работают в шортхенде.
-        let (_, named) = parse_single_bg_layer("red", 16.0, vp, true);
+        let (_, named) = parse_single_bg_layer("red", 16.0, vp, true).unwrap();
         assert_eq!(named, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
-        let (_, hexed) = parse_single_bg_layer("#3366cc", 16.0, vp, true);
+        let (_, hexed) = parse_single_bg_layer("#3366cc", 16.0, vp, true).unwrap();
         assert_eq!(hexed, Some(CssColor::Rgba(rgba(0x33, 0x66, 0xcc, 255))));
     }
 
