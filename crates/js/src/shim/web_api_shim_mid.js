@@ -2177,6 +2177,7 @@ function _lumen_expand_overflow_shorthand(strVal) {
     for (var i = 0; i < tokens.length; i++) {
         var c = _lumen_css_canonical_keyword(tokens[i], _LUMEN_KEYWORD_PROPERTIES['overflow-x']);
         if (c === null || c === undefined) return null;
+        if (c === 'overlay') c = 'auto';
         canon.push(c);
     }
     return { x: canon[0], y: canon.length > 1 ? canon[1] : canon[0] };
@@ -2700,7 +2701,7 @@ var _LUMEN_GRID_PROPERTIES = {
 // (`style/parse/box_sides.rs`) accepts `none`/`solid`/`dashed`/`dotted`/`double`
 // and, since the volumetric-border slice, `groove`/`ridge`/`inset`/`outset`.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
-// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
+// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` + legacy alias `overlay`, read back as `auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
 // rejected same as any other unrecognized keyword). The `overflow` shorthand
 // itself is NOT in this table — it is a 1-or-2-token grammar, wired through
@@ -2737,14 +2738,14 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'block-step-insert': ['margin-box', 'padding-box', 'content-box'],
     'block-step-align':  ['auto', 'center', 'start', 'end'],
     'block-step-round':  ['up', 'down', 'nearest'],
-    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
-    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
+    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
     // BUG-505 срез 3: `overflow-block`/`overflow-inline` (CSS Overflow L3
     // §logical) landed in the Rust cascade this slice
     // (`crates/engine/layout/src/style/apply/layout.rs`) — same grammar as
     // their physical `overflow-x`/`overflow-y` counterparts above.
-    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
-    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
+    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
     // WHATWG Compat §2.1 (BUG-505 срез 5) — feeds the `display: -webkit-box`
     // computed-value quirk (`webkit_box_computed_display`, `selector_query.rs`).
     '-webkit-box-orient': ['horizontal', 'vertical'],
@@ -3366,7 +3367,10 @@ function _lumen_canonicalize_longhand(key, strVal) {
         return _lumen_css_canonical_text(key, strVal);
     }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
-        return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+        var kw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+        // CSS Overflow L3 legacy value alias: `overlay` parses as `auto`
+        // (Chrome 114+), so CSSOM read-back is `auto`.
+        return kw === 'overlay' ? 'auto' : kw;
     }
     if (key === 'scrollbar-color') {
         return _lumen_css_canonical_scrollbar_color(strVal);

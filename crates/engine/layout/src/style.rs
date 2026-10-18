@@ -584,7 +584,9 @@ fn parse_overflow_kw(s: &str) -> Option<Overflow> {
         "hidden" => Some(Overflow::Hidden),
         "clip" => Some(Overflow::Clip),
         "scroll" => Some(Overflow::Scroll),
-        "auto" => Some(Overflow::Auto),
+        // Legacy value alias (CSS Overflow L3 §3.1): `overlay` ≡ `auto`;
+        // computed value is `auto`. Lumen's scrollbars are overlay anyway.
+        "auto" | "overlay" => Some(Overflow::Auto),
         _ => None,
     }
 }
