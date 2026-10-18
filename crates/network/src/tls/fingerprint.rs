@@ -209,7 +209,7 @@ impl CertInfo {
             san_list: fields.san_list,
             tls_version: tls_version.to_owned(),
             revocation_status: describe_ocsp_verdict(ocsp_verdict),
-            ct_status: describe_ct_verdict(ct_verdict),
+            ct_status: describe_ct_verdict(ct_verdict, crate::tls::ct::extract_sct_log_ids(cert_der).len()),
             local_root: String::new(),
             gov_ca_scts: None,
         }
@@ -225,17 +225,58 @@ fn describe_ocsp_verdict(verdict: crate::tls::ocsp::OcspVerdict) -> String {
         // `LumenVerifier` — the verifier already hard-fails `Revoked` before
         // a connection with this cert reaches here.
         OcspVerdict::Revoked => String::from("Revoked (OCSP stapled)"),
-        OcspVerdict::Unknown => String::from("No revocation info (no stapled OCSP)"),
+        // `Unknown` also covers an unparseable staple or `certStatus: unknown`, so don't claim
+        // the server sent none; say only that nothing vouched for the certificate.
+        OcspVerdict::Unknown => String::from("Not checked (no usable OCSP staple)"),
     }
 }
 
-/// Render a [`crate::tls::ct::CtVerdict`] for display in the cert panel.
-fn describe_ct_verdict(verdict: crate::tls::ct::CtVerdict) -> String {
+/// Render a [`crate::tls::ct::CtVerdict`] for display in the cert panel. `embedded` is the
+/// number of SCTs in the certificate, valid or not: a certificate whose SCTs come from logs
+/// outside the bundled table must not read as "no CT evidence".
+fn describe_ct_verdict(verdict: crate::tls::ct::CtVerdict, embedded: usize) -> String {
     use crate::tls::ct::CtVerdict;
     match verdict {
-        CtVerdict::Sufficient(n) => format!("Valid SCTs from {n} distinct log operators"),
-        CtVerdict::Insufficient(0) => String::from("No valid CT evidence found"),
-        CtVerdict::Insufficient(n) => format!("Valid SCTs from only {n} log operator(s)"),
+        CtVerdict::Sufficient(n) => format!("Valid SCTs from {n} distinct log operators ({embedded} in certificate)"),
+        CtVerdict::Insufficient(0) if embedded == 0 => String::from("No SCTs in the certificate"),
+        CtVerdict::Insufficient(0) => {
+            format!("{embedded} SCTs in the certificate, none verified (log not in the bundled table or signature not matching)")
+        }
+        CtVerdict::Insufficient(n) => {
+            format!("Valid SCTs from only {n} log operator(s) ({embedded} in certificate)")
+        }
+    }
+}
+
+#[cfg(test)]
+mod cert_info_tests {
+    use super::*;
+    use crate::tls::ct::CtVerdict;
+    use crate::tls::ocsp::OcspVerdict;
+
+    #[test]
+    fn unverified_scts_are_counted_not_denied() {
+        let text = describe_ct_verdict(CtVerdict::Insufficient(0), 3);
+        assert!(text.contains('3'), "{text}");
+        assert!(!text.contains("No valid CT") && !text.contains("No SCTs"), "{text}");
+    }
+
+    #[test]
+    fn certificate_without_scts_says_so() {
+        assert_eq!(describe_ct_verdict(CtVerdict::Insufficient(0), 0), "No SCTs in the certificate");
+    }
+
+    #[test]
+    fn verified_scts_show_operators_and_total() {
+        let text = describe_ct_verdict(CtVerdict::Sufficient(2), 3);
+        assert!(text.contains("2 distinct") && text.contains('3'), "{text}");
+    }
+
+    #[test]
+    fn unknown_ocsp_does_not_claim_the_server_sent_nothing() {
+        let text = describe_ocsp_verdict(OcspVerdict::Unknown);
+        assert!(!text.contains("no stapled"), "{text}");
+        assert_eq!(describe_ocsp_verdict(OcspVerdict::Good), "Good (OCSP stapled)");
     }
 }
 

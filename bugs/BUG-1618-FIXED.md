@@ -1,6 +1,6 @@
 # BUG-1618 — Панель сертификата всегда пишет «нет CT» и «нет OCSP»
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** network/shell (`tls/ct_logs.rs:33`, `tls/ct.rs:303`, `network/src/lib.rs:1492`)
 
@@ -30,3 +30,13 @@
 ## Примечание (COMPAT-TRUST-CTLOGS, 2026-10-16)
 
 CT-часть закрыта задачей COMPAT-TRUST-CTLOGS: таблица журналов непуста, `evaluate_ct` проверяет подпись SCT и считает операторов; текст панели теперь «Valid SCTs from N distinct log operators» (`fingerprint.rs`). Остаётся OCSP-часть (`lib.rs` передаёт `OcspVerdict::Unknown`) и правка доков (CAPABILITIES.md:232, note P3-tlshard).
+
+## Исправлено (2026-10-18, P3)
+
+CT-часть закрыта раньше (COMPAT-TRUST-CTLOGS). Остаток:
+
+- OCSP: `LumenVerifier` кладёт вердикт стейпла в таблицу по хосту (`tls::ocsp::record_stapled`), `cert_info_from_completed_handshake` читает его обратно (`ocsp::stapled_verdict`) вместо жёсткого `Unknown`. Per-connection поля в общем верификаторе по-прежнему нет. Возобновлённая сессия верификацию не проходит — хост без записи показывает «Not checked (no certificate verification in this session)».
+- Текст `Unknown`: «Not checked (no usable OCSP staple)» вместо «No revocation info (no stapled OCSP)» (под `Unknown` попадают и нечитаемый стейпл, и `certStatus: unknown`).
+- CT: строка считает SCT, вшитые в лист (`extract_sct_log_ids`): «3 SCTs in the certificate, none verified …» вместо «No valid CT evidence found», когда журналы не из таблицы; при проверенных — «Valid SCTs from N distinct log operators (M in certificate)».
+- Доки: CAPABILITIES.md (строка UI panels), ROADMAP.md (P3-tlshard), docs/plan/phases.md.
+- Тесты: `fingerprint::cert_info_tests` (3 неизвестных SCT → строка содержит «3»), `ocsp::tests::recorded_verdict_is_read_back_case_insensitively`.
