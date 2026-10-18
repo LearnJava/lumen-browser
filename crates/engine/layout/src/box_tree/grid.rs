@@ -671,6 +671,7 @@ pub(crate) fn build_grid_init(
         row_first_group: row_groups.clone(),
         row_last_group: row_groups,
         item_col_baselines,
+        flex_contribs: Vec::new(),
         col_first_group: col_groups.clone(),
         col_last_group: col_groups,
         vertical,
@@ -1233,7 +1234,7 @@ fn resolve_grid_axis_unclamped(start: &GridLine, end: &GridLine, axis: &GridAxis
 /// (`minmax(<min>, Nfr)`) and redistributing until stable. Returns the size and the frozen set.
 /// Kept out of line: inlined into `lay_out_grid` it deepens the frame of a deep grid chain.
 #[inline(never)]
-fn find_fr_size(flex: &[Option<f32>], base: &[f32], content_width: f32, total_gap: f32) -> (f32, Vec<bool>) {
+pub(super) fn find_fr_size(flex: &[Option<f32>], base: &[f32], content_width: f32, total_gap: f32) -> (f32, Vec<bool>) {
     let mut frozen = vec![false; flex.len()];
     let nonflex_total: f32 =
         base.iter().zip(flex).filter(|(_, f)| f.is_none()).map(|(w, _)| *w).sum::<f32>() + total_gap;
@@ -1244,7 +1245,8 @@ fn find_fr_size(flex: &[Option<f32>], base: &[f32], content_width: f32, total_ga
         if live_fr <= 0.0 {
             break;
         }
-        fr = (content_width - nonflex_total - frozen_total).max(0.0) / live_fr;
+        // §11.7.1: сумма коэффициентов меньше единицы считается единицей.
+        fr = (content_width - nonflex_total - frozen_total).max(0.0) / live_fr.max(1.0);
         let mut changed = false;
         for c in 0..flex.len() {
             if let Some(f) = flex[c]

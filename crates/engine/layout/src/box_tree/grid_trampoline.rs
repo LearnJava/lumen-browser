@@ -86,6 +86,10 @@ pub(super) struct GridInit {
     /// (вертикального) режима в горизонтальной сетке — у параллельных линии вдоль inline-оси
     /// нет, они прижимаются к краю (Align L3 §9.1). Индекс как у `item_idxs`.
     pub(super) item_col_baselines: Vec<Option<ItemBaseline>>,
+    /// CSS Grid L1 §11.7.1: вклад items, чей диапазон строк содержит гибкую дорожку (`Nfr` или
+    /// `minmax(_, Nfr)`), при неопределённой высоте контейнера — `(первая строка, за последней,
+    /// внешняя высота item'а)`. Из них `finish_probe_pass` ищет гипотетический размер `fr`.
+    pub(super) flex_contribs: Vec<(usize, usize, f32)>,
     /// По столбцам: `(подъём, спуск)` группы у левого края (`First`) и у правого (`Last`).
     pub(super) col_first_group: Vec<(f32, f32)>,
     pub(super) col_last_group: Vec<(f32, f32)>,
@@ -407,8 +411,31 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
             frame.init.row_heights[r0] = item_h;
         }
     }
+    record_flex_contrib(frame, i, viewport);
     record_item_baseline(frame, i, measurer, viewport);
     record_item_col_baseline(frame, i, measurer, viewport);
+}
+
+/// CSS Grid L1 §11.7.1: item, пересекающий гибкую строку, при неопределённой высоте контейнера
+/// вносит свою внешнюю высоту в поиск размера `fr` (`minmax(0, Nfr)` содержимым не растёт —
+/// вклад единственный способ повлиять на неё).
+fn record_flex_contrib(frame: &mut Frame, i: usize, viewport: Size) {
+    let k = frame.k;
+    let (_, _, rs, re) = frame.init.placements[k];
+    let init = &frame.init;
+    if rs == 0 || init.inherited_rows.is_some() || init.definite_content_height.is_some() {
+        return;
+    }
+    let n_rows = init.n_rows as usize;
+    let r0 = ((rs - 1) as usize).min(n_rows.saturating_sub(1));
+    let r1 = ((re - 1) as usize).min(n_rows).max(r0 + 1);
+    let flexible = (r0..r1.min(n_rows))
+        .any(|r| grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows).flex_factor().is_some());
+    if !flexible {
+        return;
+    }
+    let h = frame.init.item_block_size(&frame.b.children[i], viewport);
+    frame.init.flex_contribs.push((r0, r1, h));
 }
 
 /// CSS Grid L1 §6.2, ось столбцов: item с `justify-self: [first|last] baseline` входит в
@@ -541,6 +568,51 @@ fn row_grows_with_content(t: &GridTrackSize) -> bool {
     }
 }
 
+/// CSS Grid L1 §11.7 «Expand Flexible Tracks» при неопределённой высоте контейнера: размер `fr` —
+/// наибольшее из «база гибкой строки / коэффициент (если он больше 1)» и вкладов items, чьи
+/// диапазоны пересекают гибкие строки (§11.7.1). Полученная высота сетки затем считается
+/// определённой, и размер `fr` ищется заново по ней (второй проход, Grid L2 §11.7.1): коэффициенты
+/// с суммой меньше единицы тогда сжимают строки (`0.4fr` ×2 при вкладе 100 — 32px, не 40px).
+#[inline(never)]
+fn expand_flexible_rows(init: &mut GridInit) {
+    let n_rows = init.n_rows as usize;
+    let flex: Vec<Option<f32>> = (0..n_rows)
+        .map(|r| grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows).flex_factor())
+        .collect();
+    if flex.iter().all(Option::is_none) {
+        return;
+    }
+    let base = init.row_heights.clone();
+    let total_gap = init.row_gap * super::grid::gutter_count(&init.row_collapsed, n_rows) as f32;
+    let mut fr = 0.0_f32;
+    for r in 0..n_rows {
+        if let Some(f) = flex[r] {
+            fr = fr.max(base[r] / f.max(1.0));
+        }
+    }
+    for &(r0, r1, h) in &init.flex_contribs {
+        let span = r0..r1.min(n_rows);
+        let fixed: f32 = span.clone().filter(|&r| flex[r].is_none()).map(|r| base[r]).sum();
+        let gaps = init.row_gap * span.len().saturating_sub(1) as f32;
+        let sum_f: f32 = span.filter_map(|r| flex[r]).sum();
+        fr = fr.max((h - fixed - gaps).max(0.0) / sum_f.max(1.0));
+    }
+    for r in 0..n_rows {
+        if let Some(f) = flex[r] {
+            init.row_heights[r] = base[r].max(f * fr);
+        }
+    }
+    let first_pass_total = init.row_heights.iter().sum::<f32>() + total_gap;
+    let (fr, frozen) = super::grid::find_fr_size(&flex, &base, first_pass_total, total_gap);
+    for r in 0..n_rows {
+        if let Some(f) = flex[r]
+            && !frozen[r]
+        {
+            init.row_heights[r] = base[r].max(f * fr);
+        }
+    }
+}
+
 /// CSS Grid L1 §11.6 «Maximize Tracks»: `minmax(<min>, <length>)` rows grow from their base size to
 /// the growth limit `max(<length>, base)`. With an indefinite container block size the free space is
 /// infinite, so every such row reaches its limit; with a definite one the leftover space is shared
@@ -612,6 +684,9 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
             }
         }
         maximize_bounded_rows(init, viewport);
+        if init.definite_content_height.is_none() {
+            expand_flexible_rows(init);
+        }
         // CSS Grid L1 §11.7 — the free space available to flexible (`fr`) tracks is
         // the container's content size minus the base sizes of the OTHER tracks
         // only. `row_heights[r]` for an `fr` track was seeded from its content's
@@ -634,7 +709,8 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
             .map(|r| grid_track(r, &init.eff_row_template, &init.s.grid_auto_rows).fr().unwrap_or(0.0))
             .sum();
         if total_row_fr > 0.0 && free_row > 0.0 {
-            let fr_h = free_row / total_row_fr;
+            // §11.7.1: сумма коэффициентов меньше единицы считается единицей.
+            let fr_h = free_row / total_row_fr.max(1.0);
             for r in 0..n_rows {
                 if let Some(f) = grid_track(r, &init.eff_row_template, &init.s.grid_auto_rows).fr() {
                     init.row_heights[r as usize] = (f * fr_h).max(init.row_heights[r as usize]);
