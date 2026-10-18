@@ -81,3 +81,40 @@ BUG-1207, затем сравнить с Chrome.
    youtube `k6E`) — проверить `navigator.serviceWorker.register` заглушку.
 2. `FontFace`: `TypeError: self._rejectLoaded is not a function` как `unhandledrejection`, десятки раз за загрузку
    youtube (`_lumen_font_face_try_sources`, `web_api_shim_*`) — вероятно связано с BUG-1634.
+
+## Ход работы P6, сессия 2 (2026-10-18, WIP)
+
+**Причины найдены и исправлены (youtube теперь строит `ytd-browse`/`ytd-rich-grid-renderer`, как Chrome):**
+1. Апгрейд custom element создавал вторую обёртку для того же nid → `app.$['page-manager']` (Polymer взял её до
+   апгрейда) оставался неапгрейженным, `lazyPrepareCriticalPages` падал. Теперь `_lumen_ce_build_wrapper`
+   переустанавливает прототип существующей обёртки (на месте, HTML LS §4.13.5). Тест
+   `custom_element_upgrade_keeps_pre_upgrade_reference_identity`.
+2. Обёртка `DocumentFragment` была литералом с собственными `childNodes/firstChild/appendChild…` и без прототипа:
+   ShadyDOM (`attachShadow({shadyUpgradeFragment})` делает `frag.__proto__ = ShadowRoot.prototype`) не мог их
+   перекрыть, логические дети shadow root'а были пусты (`sr.childNodes.length === 0`, `querySelector('#guide-button')`
+   → null, `@query`-декораторы YT возвращали null → `appendChild of null`, `Invalid value used as weak map key`).
+   Теперь члены лежат на общем объекте `_lumen_document_fragment_members` (цепочка → `DocumentFragment.prototype`),
+   методы читают `this.__nid__`. Заодно `frag instanceof DocumentFragment/Node` стал `true` — на этом держится
+   патч `appendChild` у YT (`r instanceof DocumentFragment` → `H4` → `connectedCallback` у `ytd-rich-grid-renderer`).
+   Тест `document_fragment_is_instance_of_document_fragment_and_node`. Мини-повтор `.tmp/yt/repro.html`
+   (в p6-work) в Lumen теперь совпадает с Chrome построчно.
+3. Результат в живом окне (`--maximized`, прокси, 50 с): `ytd-page-manager` → `ytd-browse`, `ytd-rich-grid-renderer`
+   с 6 детьми, `[JS error]` только `ServiceWorker statechange` (побочный дефект ниже). `ytd-rich-item-renderer` = 0 —
+   **так же в Chrome** (headless через тот же прокси: 0 `ytd-rich-item-renderer`, в сетке `ytd-feed-nudge-renderer`
+   «history is off»; без куков главная отдаёт одну `richSectionRenderer`). Значит, пустая лента без превью —
+   ответ сервера для сеанса без куков, а не дефект движка; для проверки превью нужен залогиненный профиль или
+   страница с видео (`/results?search_query=`, `/watch?v=`).
+
+**Осталось до закрытия (следующая сессия):**
+- Прогнать `cargo test -p lumen-js --features v8-backend --lib` (в полном прогоне 4771 ok; падали
+  `v8_gap_uashadowslot::{closed_details…,details_takes_first_summary…}` — падают и без моей правки шима, это отдельный
+  дефект, завести `BUG-NNN`; `navigator_clipboard_read_asks…` и `v8_worker_end_to_end_top_level_throw…` — флейки).
+- `cargo clippy -p lumen-js --all-targets -- -D warnings`; `scripts/scoped-test.sh` + `python graphic_tests/dump_golden.py`
+  (шим документ-фрагмента мог сдвинуть пиксели — если голдены изменятся, перегенерировать в этом же коммите).
+- Проверить живьём `/results?search_query=test` (карточки `ytd-video-renderer`, превью `i.ytimg.com`), т.к. главная без
+  куков пуста и в Chrome. Если превью не грузятся — это уже отдельный дефект, завести строку в `BUGS.md`.
+- Завести в `BUGS.md` побочные дефекты: `ServiceWorker` `statechange` без `target`; `FontFace._rejectLoaded is not a
+  function` (см. выше); падение двух `v8_gap_uashadowslot`-тестов.
+- Закрыть BUG-1239: переименовать `bugs/BUG-1239-OPEN.md` → `-FIXED.md`, строка в `BUGS.md` → `BUGS-FIXED.md`,
+  `subsystems/js.md` (обёртка фрагмента, апгрейд на месте), удалить указатель `BUGS.md:159` из `STATUS-P6.md`
+  (номера строк ниже сместятся — перепроверить), merge `--no-ff` в `main`, push.

@@ -698,3 +698,24 @@ fn tree_walker_next_node_from_current_outside_root() {
     let prev = rt.eval("_prev === null").unwrap();
     assert_eq!(prev, lumen_core::JsValue::Bool(true));
 }
+
+/// BUG-1239: a `DocumentFragment` wrapper is a real `Node`/`DocumentFragment`
+/// instance — youtube's patched `appendChild` takes `r instanceof
+/// DocumentFragment` to find the custom elements a fragment brings in, and
+/// ShadyDOM swaps the fragment's prototype, which an own-property wrapper
+/// would keep shadowing.
+#[test]
+fn document_fragment_is_instance_of_document_fragment_and_node() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _df = document.createDocumentFragment();
+                var _c = document.createElement('p');
+                _df.appendChild(_c);
+                var _nat = Object.getOwnPropertyDescriptor(Node.prototype, 'firstChild').get;
+                (_df instanceof DocumentFragment) && (_df instanceof Node) &&
+                    (_df.nodeType === 11) && (_df.firstChild === _c) &&
+                    (_df.childNodes.length === 1) && !Object.prototype.hasOwnProperty.call(_df, 'childNodes') &&
+                    (_nat.call(_df) === _c)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
