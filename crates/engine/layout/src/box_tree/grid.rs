@@ -1150,8 +1150,13 @@ pub(super) fn resolve_abs_axis(
     axis: &GridAxis,
     n_tracks: u32,
 ) -> (Option<u32>, Option<u32>) {
-    let s = resolve_edge(start, axis, true);
-    let mut e = resolve_edge(end, axis, false);
+    // Отрицательная линия левее первой линии явной сетки — это `auto`, а не линия 1.
+    let edge = |line: &GridLine, is_start: bool| match line {
+        GridLine::Line(n) if *n < 0 && axis.last_line() as i32 + 1 + n < 1 => Edge::Auto,
+        _ => resolve_edge(line, axis, is_start),
+    };
+    let s = edge(start, true);
+    let mut e = edge(end, false);
     if matches!(s, Edge::Span(..)) && matches!(e, Edge::Span(..)) {
         e = Edge::Auto;
     }

@@ -66,6 +66,14 @@ fn nonexistent_line_is_auto() {
     assert_rect(r[0], 60.0, 0.0, 70.0, 20.0);
 }
 
+/// Отрицательная линия левее явной сетки (`-5` при трёх линиях) — `auto`, а не линия 1.
+#[test]
+fn negative_line_before_grid_is_auto() {
+    let css = format!("{BASE}#p{{grid-column:-5 / -6;width:100%;height:20px}}");
+    let r = rects(HTML, &css, &["p"]);
+    assert_rect(r[0], 0.0, 0.0, 130.0, 20.0);
+}
+
 /// `justify-self` / `align-self` выравнивают статическую позицию внутри области.
 #[test]
 fn static_position_aligned_in_area() {

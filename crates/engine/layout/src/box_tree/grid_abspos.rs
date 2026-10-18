@@ -140,6 +140,7 @@ impl PhysAxis<'_> {
 /// окончателен. `init` — `None`, если у сетки нет items (дорожек нет: единственная линия `1` —
 /// начало content box). `content` — физический content box контейнера.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)] // не раздувать кадр рекурсивного dispatch_box (тест глубокой цепочки сеток)
 pub(super) fn lay_out_abs(
     b: &mut LayoutBox,
     s: &ComputedStyle,
