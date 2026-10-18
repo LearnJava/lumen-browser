@@ -503,6 +503,7 @@ mod baseline_containers;
 mod grid_baseline2;
 mod grid_replaced_stretch;
 mod line_clamp_flow;
+mod webkit_box_legacy;
 mod multicol_trampoline;
 mod multicol_span;
 mod vertical_trampoline;

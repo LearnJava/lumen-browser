@@ -332,6 +332,39 @@ pub enum WebkitBoxOrient {
     Vertical,
 }
 
+/// WHATWG Compat §2.1 — `-webkit-box-pack`: распределение свободного места по главной оси
+/// legacy-бокса. Не наследуется, initial `Start`. Читается пост-проходом каскада
+/// (`justify-content`), только когда `display: -webkit-box` разложен flex-алгоритмом.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WebkitBoxPack {
+    #[default]
+    Start,
+    Center,
+    End,
+    Justify,
+}
+
+/// WHATWG Compat §2.1 — `-webkit-box-align`: выравнивание по поперечной оси legacy-бокса
+/// (`align-items`). Не наследуется, initial `Stretch`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WebkitBoxAlign {
+    Start,
+    Center,
+    End,
+    Baseline,
+    #[default]
+    Stretch,
+}
+
+/// WHATWG Compat §2.1 — `-webkit-box-direction`: `reverse` разворачивает главную ось
+/// legacy-бокса (`row-reverse`/`column-reverse`). Не наследуется, initial `Normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WebkitBoxDirection {
+    #[default]
+    Normal,
+    Reverse,
+}
+
 /// CSS Overflow L4 §continue — the `continue` property. Not inherited,
 /// initial `Normal`. Phase 0: parsed/stored for the `display: -webkit-box`
 /// computed-value quirk (`discard` case) and CSSOM round-tripping; the

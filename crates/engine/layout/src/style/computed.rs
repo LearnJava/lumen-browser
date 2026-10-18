@@ -54,7 +54,7 @@ use crate::style::{
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
-    VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace, WhiteSpaceCollapse, WordBreak,
+    VerticalAlign, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace, WhiteSpaceCollapse, WordBreak,
     WritingMode,
 };
 
@@ -934,6 +934,18 @@ pub struct ComputedStyle {
     /// `display: -webkit-box`/`-webkit-inline-box` (см. `webkit_box_computed_
     /// display`, `selector_query.rs`) — реального legacy-flexbox layout нет.
     pub box_orient: WebkitBoxOrient,
+    /// WHATWG Compat §2.1 — `-webkit-box-pack` / `-webkit-box-align` / `-webkit-box-direction`:
+    /// читаются пост-проходом каскада для `display: -webkit-box` (→ `justify-content`,
+    /// `align-items`, `flex-direction`). Не наследуются.
+    pub box_pack: WebkitBoxPack,
+    pub box_align: WebkitBoxAlign,
+    pub box_direction: WebkitBoxDirection,
+    /// WHATWG Compat §2.1 — `-webkit-box-flex` (≥ 0, initial 0): flex-grow и flex-shrink
+    /// элемента legacy-бокса. Не наследуется.
+    pub box_flex: f32,
+    /// WHATWG Compat §2.1 — `-webkit-box-ordinal-group` (≥ 1, initial 1): порядок элемента
+    /// legacy-бокса (`order = group - 1`). Не наследуется.
+    pub box_ordinal_group: u32,
     /// WHATWG Compat §2.1 — исходное значение `display: -webkit-box`/`-webkit-inline-box`,
     /// когда пост-проход каскада заменил его на `Flex`/`InlineFlex`, чтобы бокс раскладывался
     /// flex-алгоритмом (ось — из `-webkit-box-orient`), а `getComputedStyle` по-прежнему
@@ -1546,6 +1558,11 @@ impl ComputedStyle {
             line_clamp_auto: false,
             line_clamp_legacy: false,
             box_orient: WebkitBoxOrient::Horizontal,
+            box_pack: WebkitBoxPack::Start,
+            box_align: WebkitBoxAlign::Stretch,
+            box_direction: WebkitBoxDirection::Normal,
+            box_flex: 0.0,
+            box_ordinal_group: 1,
             legacy_box_display: None,
             continue_value: CssContinue::Normal,
             orphans: 2,
@@ -1969,6 +1986,11 @@ impl ComputedStyle {
             line_clamp_legacy: false,
             // WHATWG Compat / CSS Overflow L4 §continue — оба не наследуются.
             box_orient: WebkitBoxOrient::Horizontal,
+            box_pack: WebkitBoxPack::Start,
+            box_align: WebkitBoxAlign::Stretch,
+            box_direction: WebkitBoxDirection::Normal,
+            box_flex: 0.0,
+            box_ordinal_group: 1,
             legacy_box_display: None,
             continue_value: CssContinue::Normal,
             // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
