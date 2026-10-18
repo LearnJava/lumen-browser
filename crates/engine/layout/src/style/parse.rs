@@ -10,3 +10,4 @@ pub mod image;
 pub mod shape;
 pub mod timeline;
 pub mod transform;
+pub mod webkit_gradient;
