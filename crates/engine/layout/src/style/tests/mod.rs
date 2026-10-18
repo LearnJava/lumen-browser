@@ -66,6 +66,7 @@
     mod anchor_positioning_tests;
     mod block_step_tests;
     mod compat_alias_tests;
+    mod webkit_gradient_tests;
     mod dynamic_range_limit_tests;
     mod gap_rule_tests;
     mod grid_cssom_tests;

@@ -63,7 +63,7 @@ Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--
 
 | Port | Token line | How to send it |
 |---|---|---|
-| `--mcp-port` / `--mcp-live-port` | stderr: `MCP token: <token>` / `[mcp] token: <token>` | `initialize` request params: `{"token": "<token>"}`. Rejected with JSON-RPC error `-32001` until a matching `initialize` succeeds; every other method is rejected the same way in the meantime. |
+| `--mcp-port` / `--mcp-live-port` | stderr: `[mcp] token: <token>` (both) | `initialize` request params: `{"token": "<token>"}`. Rejected with JSON-RPC error `-32001` until a matching `initialize` succeeds; every other method is rejected the same way in the meantime. |
 | `--bidi-port` | stderr: `[bidi] token: <token>` | `session.new` params: `capabilities.alwaysMatch.token`. No session (and so no browsing context) is created on mismatch — `session not created` error. |
 | `--ipc-server` | stdout: `LUMEN_IPC_TOKEN=<token>` (next to `LUMEN_IPC_PORT=<port>`) | First message on the connection must be `IpcRequest::Auth{token}` → `IpcResponse::AuthOk`/`AuthErr`. Any other request before a successful `Auth` gets `AuthErr`. |
 

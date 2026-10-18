@@ -497,28 +497,7 @@ impl FingerprintProfile {
             client = client.with_dns_resolver(cached);
         }
 
-        // Wire HTTP proxy if configured
-        if let Some(proxy_str) = &self.proxy
-            && let Some(proxy) = parse_http_proxy(proxy_str)
-        {
-            client = client.with_proxy(std::sync::Arc::new(proxy));
-        }
-
-        // Wire SOCKS5 proxy.
-        // Explicit `socks5_proxy` field takes precedence; otherwise, when the
-        // TorBrowser HTTP profile is active, auto-wire to the local Tor daemon
-        // at 127.0.0.1:9050 (the standard Tor socks5 port).
-        if let Some(s5) = self.effective_socks5_proxy() {
-            client = client.with_socks5_proxy(std::sync::Arc::new(s5));
-        }
-
-        // COMPAT-TRUST-AIA: downloading a missing intermediate is a direct
-        // connection, which a proxy or Tor user must not get behind their back.
-        // Only ever switched off here: a later client built without a proxy
-        // (another profile) must not turn it back on for this process.
-        if self.proxy.is_some() || self.effective_socks5_proxy().is_some() {
-            lumen_network::tls::aia::set_enabled(false);
-        }
+        client = self.apply_proxies(client);
 
         // Wire the shared cross-navigation HTTP cache (RFC 7234). One cache is
         // shared by every client via `Arc`, so subresources fetched on one
@@ -548,6 +527,36 @@ impl FingerprintProfile {
             client = client.with_shared_connection_pools(&route);
         }
 
+        client
+    }
+
+    /// Wire only the configured HTTP / SOCKS5 proxies into `client` (and switch off
+    /// AIA downloads when one is set). Used by [`apply_http`](Self::apply_http) and by
+    /// headless sessions that build their own client (BUG-1635).
+    #[must_use]
+    pub fn apply_proxies(&self, mut client: HttpClient) -> HttpClient {
+        // Wire HTTP proxy if configured
+        if let Some(proxy_str) = &self.proxy
+            && let Some(proxy) = parse_http_proxy(proxy_str)
+        {
+            client = client.with_proxy(std::sync::Arc::new(proxy));
+        }
+
+        // Wire SOCKS5 proxy.
+        // Explicit `socks5_proxy` field takes precedence; otherwise, when the
+        // TorBrowser HTTP profile is active, auto-wire to the local Tor daemon
+        // at 127.0.0.1:9050 (the standard Tor socks5 port).
+        if let Some(s5) = self.effective_socks5_proxy() {
+            client = client.with_socks5_proxy(std::sync::Arc::new(s5));
+        }
+
+        // COMPAT-TRUST-AIA: downloading a missing intermediate is a direct
+        // connection, which a proxy or Tor user must not get behind their back.
+        // Only ever switched off here: a later client built without a proxy
+        // (another profile) must not turn it back on for this process.
+        if self.proxy.is_some() || self.effective_socks5_proxy().is_some() {
+            lumen_network::tls::aia::set_enabled(false);
+        }
         client
     }
 

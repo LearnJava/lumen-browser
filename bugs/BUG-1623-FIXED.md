@@ -1,6 +1,6 @@
 # BUG-1623 — Конец загрузки закрывает адресную строку с набранным текстом
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** shell (`crates/shell/src/page_load.rs:2363`, `:1253`)
 
@@ -21,3 +21,7 @@ apply_loaded_page (crates/shell/src/page_load.rs:2171, закрытие на :23
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление (2026-10-18)
+
+Адресную строку уже чинил UX-FOCUS-ARBITER: `address_bar.close_if_untouched()` в `apply_loaded_page` и `reload` закрывает только строку, в которую ничего не набрали. Оставался поиск по странице: `find.close()` звался безусловно. Добавлен `FindState::close_if_untouched` (`crates/shell/src/find.rs`): пустая панель закрывается, панель с запросом остаётся открытой (совпадения и так пересчитываются по новому display list), активное совпадение сбрасывается на первое. Оба места в `page_load.rs` переведены на него. Тест `close_if_untouched_keeps_typed_query_across_page_load`.

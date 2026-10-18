@@ -23,6 +23,11 @@
 `-box-clamp-visibility-change`, `-box-fieldset`, `-box-z-index`, `-linear-gradient-diff-unprefixed`,
 `-text-fill-color-property-003`, `-005`.
 
+**Обновление 2026-10-18 (CSS-WEBKIT-GRADIENT):** `-webkit-linear/radial/repeating-*-gradient()` и `-webkit-gradient()` реализованы
+(`style/parse/webkit_gradient.rs`); `webkit-linear-gradient-line-{top,right,bottom,left}`, `-diff-unprefixed`,
+`webkit-gradient-comma` 2/2, `webkit-radial-gradient-radii` 3/3, `-gradient-sign` — зелёные, `.ini` этих id сняты.
+По шкале wpt.fyi **22 из 38 (57,03 %)**, подтестов 103 из 138 (прогон `run_corpus.py --prefixes compat`, dev-release).
+
 ## Провалы и привязка
 
 | id | результат | строка CSS-SPECS / BUG |
@@ -31,7 +36,6 @@
 | `webkit-mask-box-enumeration` | 0/6 | [BUG-1631](../../bugs/BUG-1631-OPEN.md) (`webkitMaskBoxImage*`) |
 | `idlharness.window` | 23/29 (`window.orientation`, `onorientationchange` у Window и HTMLBodyElement) | [BUG-1632](../../bugs/BUG-1632-OPEN.md) |
 | `webkit-box-blockify`, `-horizontal-reverse-variants`, `-horizontal-rtl-variants`, `-ignores-flex-wrap.tentative`, `-rtl-flex` (reftest FAIL); `webkit-box-item-shrink-001` 12/20, `-002` 5/18; `webkit-box-vertically-centered` 0/1 | | CSS-SPECS.md:785 (legacy flexbox) |
-| `webkit-linear-gradient-line-{top,right,bottom,left}` (reftest FAIL); `webkit-gradient-comma` 1/2; `webkit-radial-gradient-radii` 2/3 | | CSS-SPECS.md:784 (`-webkit-*-gradient`) |
 | `webkit-text-fill-color-property-001a/b/c/d, 002, 004, 006` (reftest FAIL); `webkit-text-fill-color-currentColor` 0/1 | | CSS-SPECS.md:786 (`-webkit-text-fill-color`) |
 
 Каждый провал привязан к строке CSS-SPECS или к BUG; непривязанных нет.
