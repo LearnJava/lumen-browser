@@ -504,6 +504,7 @@ mod multicol_span;
 mod vertical_trampoline;
 mod vertical_row;
 mod vertical_float;
+mod vertical_shapes;
 mod vertical_margins;
 mod block_in_inline_slice;
 mod empty_block_collapse;

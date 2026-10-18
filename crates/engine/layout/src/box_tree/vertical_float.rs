@@ -9,6 +9,7 @@
 
 use super::*;
 use super::layout_dispatch::lay_out;
+use super::shape_resolve::{resolve_shape, FloatBoxes};
 use super::vertical_margins::{adjoin, collapsed_margin, own_margins, MarginCaches};
 use crate::vertical::VerticalInit;
 
@@ -215,6 +216,24 @@ pub(super) fn place_float(
         init.fc.add_left(fb, fb + be, i0 + ie);
     } else {
         init.fc.add_right(fb, fb + be, i0);
+    }
+    if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
+        // CSS Shapes L1 in a vertical mode: the contour is resolved against the
+        // float's physical boxes, then turned into the context's logical frame.
+        let (ml, mr, mt, mb) = margins(child);
+        let boxes = FloatBoxes::of(child, [mt, mr, mb, ml], content_inline, viewport);
+        if let Some(prims) = resolve_shape(sv, &boxes) {
+            let margin = child.style.shape_margin.resolve_or_zero(cem, content_inline, viewport).max(0.0);
+            let prims = prims
+                .iter()
+                .map(|p| {
+                    let mut q = p.rotate(be, init.is_rtl);
+                    q.translate(i0, fb);
+                    q
+                })
+                .collect();
+            init.fc.add_shape_prims(prims, is_left, (fb, fb + be), (i0, i0 + ie), margin);
+        }
     }
     let x0 = if init.is_rtl { block_start_x - fb - be } else { init.content_x_left + fb };
     let (target_x, target_y) = (x0 + ml, init.content_y + i0 + mt);

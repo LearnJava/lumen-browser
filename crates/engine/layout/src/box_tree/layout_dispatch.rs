@@ -905,6 +905,7 @@ pub(super) fn dispatch_box(
         INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
         super::vertical_row::lay_out_vertical_inline_block_row(
             b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+            outer_floats,
         );
         return DispatchOutcome::Done;
     }
