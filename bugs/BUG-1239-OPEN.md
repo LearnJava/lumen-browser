@@ -33,9 +33,9 @@ BUG-1207, затем сравнить с Chrome.
   в `crates/js/src/shim/web_api_shim_mid.js`) зовёт `connectedCallback` в момент, когда DOM ещё не тот,
   что видит Chrome (порядок реакций CE, HTML §4.13.6 «custom element reactions»), и `insertBefore`
   Polymer/Lit получает устаревший `refNode`. Не подтверждено: DOM посмотреть не удалось — живой
-  `eval` не отвечает ([BUG-1633](BUG-1633-OPEN.md)).
+  `eval` не отвечает ([BUG-1633](BUG-1633-FIXED.md)).
 - Лог прогона и проба: `.tmp/yt-live.log`, `.tmp/yt_probe.py` в основной копии (не в git) — проба
   считает `ytd-*`, `img` (src/complete), `ytInitialData…richGridRenderer.contents.length`.
 
-Порядок работы: сначала [BUG-1633](BUG-1633-OPEN.md) (без живого `eval` обрыв не локализовать), затем
+Порядок работы: сначала [BUG-1633](BUG-1633-FIXED.md) (без живого `eval` обрыв не локализовать), затем
 поймать стек `insertBefore` (кто вставляет, какой `refNode`, чей он ребёнок) и сравнить с Chrome.
