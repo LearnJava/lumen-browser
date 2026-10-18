@@ -13721,7 +13721,10 @@ var document = {
             if (options && options.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
             }
-            return _lumen_make_element(clone_nid);
+            // BUG-1239: a `<template>.content` clone is a DocumentFragment —
+            // `_lumen_make_element` would mint an Element for it, and the
+            // fragment would then be inserted as a child, not unpacked.
+            return _lumen_make_node_by_nid(clone_nid);
         }
         // BUG-1107: `node` came from DOMParser()/DOMImplementation — a virtual
         // (non-arena) tree, see `_lumen_materialize_virtual_subtree` above.

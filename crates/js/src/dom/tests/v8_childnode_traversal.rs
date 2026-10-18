@@ -618,6 +618,27 @@ fn document_import_node_materializes_dom_parser_svg_node() {
     assert_eq!(symbol_children, lumen_core::JsValue::Number(1.0));
 }
 
+/// BUG-1239: `document.importNode(template.content, true)` returned an Element
+/// wrapper (nodeType 1) around the cloned fragment, so a native `appendChild`
+/// of it put the fragment itself under the parent instead of its children —
+/// ShadyDOM's `attachShadow({shadyUpgradeFragment})` does exactly that, and
+/// youtube's `ytd-app` root ended up as one nested fragment.
+#[test]
+fn document_import_node_of_template_content_is_a_fragment() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _t = document.createElement('template');
+                _t.innerHTML = '<div id="a"></div><i></i>';
+                var _imp = document.importNode(_t.content, true);
+                var _host = document.createElement('x-host');
+                Node.prototype.appendChild.call(_host, _imp);
+            "#).unwrap();
+    assert_eq!(rt.eval("_imp.nodeType").unwrap(), lumen_core::JsValue::Number(11.0));
+    assert_eq!(rt.eval("_host.childNodes.length").unwrap(), lumen_core::JsValue::Number(2.0));
+    assert_eq!(rt.eval("_host.firstChild.nodeName").unwrap(), lumen_core::JsValue::String("DIV".into()));
+    assert_eq!(rt.eval("_imp.childNodes.length").unwrap(), lumen_core::JsValue::Number(0.0));
+}
+
 #[test]
 fn get_bounding_rect_returns_values_from_runtime() {
     let rt = v8_runtime_with_dom(make_doc());
