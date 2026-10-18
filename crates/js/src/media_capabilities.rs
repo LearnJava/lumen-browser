@@ -1,8 +1,9 @@
 //! Media Capabilities API (W3C Media Capabilities §5)
 //!
-//! Phase 0: `navigator.mediaCapabilities` singleton.
-//! `decodingInfo(config)` -> `Promise<{supported:true, smooth:true, powerEfficient:false}>`.
-//! `encodingInfo(config)` -> `Promise<{supported:true, smooth:true, powerEfficient:false}>`.
+//! `navigator.mediaCapabilities` singleton. Ответы согласованы с реальными
+//! декодерами (BUG-1619, ADR-034 п.2): `decodingInfo` — `supported:false` для
+//! `media-source` (MSE нет), `keySystemConfiguration` (EME нет) и контейнеров без
+//! декодера; `encodingInfo` — всегда `supported:false` (кодировщиков нет).
 
 /// V8 port of the former rquickjs `install_media_capabilities_bindings` (Ph3 V8 migration
 /// S5-S7, rquickjs side removed in S12b-11): identical JS shim, evaluated via
@@ -10,6 +11,12 @@
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_media_capabilities_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
+    rt.register_native(
+        "__lumen_media_audio_can_play",
+        crate::v8_compat::into_v8_fn1(|mime: String| -> String {
+            lumen_core::ext::audio_can_play_type(&mime).to_owned()
+        }),
+    )?;
     rt.eval(MEDIA_CAPABILITIES_SHIM)?;
     Ok(())
 }
@@ -26,30 +33,55 @@ const MEDIA_CAPABILITIES_SHIM: &str = r#"
     }
   }
 
+  // Нет ни MSE, ни EME, ни кодировщика: честные ответы вместо Phase 0 «всё supported».
+  // Аудио — таблица декодеров Rust (__lumen_media_audio_can_play), видео — реальный
+  // декодер за __lumen_video_can_play_type; нет привязки — нет декодера.
+  function canDecode(kind, contentType) {
+    if (typeof contentType !== 'string') return false;
+    if (kind === 'audio') {
+      return typeof __lumen_media_audio_can_play === 'function' &&
+             __lumen_media_audio_can_play(contentType) !== '';
+    }
+    return typeof __lumen_video_can_play_type === 'function' &&
+           __lumen_video_can_play_type(contentType) !== '';
+  }
+
+  function checkConfig(method, config, types) {
+    if (!config || typeof config !== 'object') {
+      throw new TypeError(method + ': config must be an object');
+    }
+    if (types.indexOf(config.type) < 0) {
+      throw new TypeError(method + ': config.type must be one of ' + types.join(', '));
+    }
+    if (!config.audio && !config.video) {
+      throw new TypeError(method + ': config needs an audio or video configuration');
+    }
+  }
+
   // MediaCapabilities singleton — navigator.mediaCapabilities
   class MediaCapabilities {
     // W3C Media Capabilities §5.2: decodingInfo
-    // Phase 0: any valid config returns supported=true, smooth=true, powerEfficient=false.
     decodingInfo(config) {
-      if (!config || typeof config !== 'object') {
-        return Promise.reject(new TypeError('decodingInfo: config must be an object'));
+      try {
+        checkConfig('decodingInfo', config, ['file', 'media-source', 'webrtc']);
+      } catch (e) {
+        return Promise.reject(e);
       }
-      if (typeof config.type !== 'string') {
-        return Promise.reject(new TypeError('decodingInfo: config.type must be a string'));
-      }
-      return Promise.resolve(new MediaCapabilitiesInfo(true, true, false));
+      var supported = config.type !== 'media-source' && !config.keySystemConfiguration;
+      if (supported && config.audio) supported = canDecode('audio', config.audio.contentType);
+      if (supported && config.video) supported = canDecode('video', config.video.contentType);
+      return Promise.resolve(new MediaCapabilitiesInfo(supported, supported, false));
     }
 
-    // W3C Media Capabilities §5.3: encodingInfo
-    // Phase 0: any valid config returns supported=true, smooth=true, powerEfficient=false.
+    // W3C Media Capabilities §5.3: encodingInfo — кодировщиков нет
+    // (MediaRecorder.isTypeSupported и WebCodecs isConfigSupported тоже false).
     encodingInfo(config) {
-      if (!config || typeof config !== 'object') {
-        return Promise.reject(new TypeError('encodingInfo: config must be an object'));
+      try {
+        checkConfig('encodingInfo', config, ['record', 'webrtc']);
+      } catch (e) {
+        return Promise.reject(e);
       }
-      if (typeof config.type !== 'string') {
-        return Promise.reject(new TypeError('encodingInfo: config.type must be a string'));
-      }
-      return Promise.resolve(new MediaCapabilitiesInfo(true, true, false));
+      return Promise.resolve(new MediaCapabilitiesInfo(false, false, false));
     }
   }
 
@@ -173,6 +205,88 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// Результат `decodingInfo`/`encodingInfo` как строка "supported" или "TypeError: …".
+    /// Промис разрешается микротаском — читаем второй `eval`.
+    fn settle(rt: &V8JsRuntime, call: &str) -> String {
+        rt.eval(&format!(
+            "globalThis.__r = 'pending'; {call}.then(function(i) {{ globalThis.__r = 'supported=' + i.supported + ',smooth=' + i.smooth; }}, function(e) {{ globalThis.__r = e.name + ': rejected'; }}); 0"
+        ))
+        .unwrap();
+        match rt.eval("globalThis.__r").unwrap() {
+            JsValue::String(s) => s,
+            other => format!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn decoding_info_media_source_unsupported() {
+        with_media_capabilities(|rt| {
+            let r = settle(
+                rt,
+                "navigator.mediaCapabilities.decodingInfo({type:'media-source', audio:{contentType:'audio/mpeg'}})",
+            );
+            assert_eq!(r, "supported=false,smooth=false");
+        });
+    }
+
+    #[test]
+    fn decoding_info_follows_audio_table() {
+        with_media_capabilities(|rt| {
+            let mp3 = settle(
+                rt,
+                "navigator.mediaCapabilities.decodingInfo({type:'file', audio:{contentType:'audio/mpeg'}})",
+            );
+            assert_eq!(mp3, "supported=true,smooth=true");
+            let opus = settle(
+                rt,
+                "navigator.mediaCapabilities.decodingInfo({type:'file', audio:{contentType:'audio/ogg; codecs=opus'}})",
+            );
+            assert_eq!(opus, "supported=false,smooth=false");
+        });
+    }
+
+    #[test]
+    fn decoding_info_drm_and_missing_video_decoder_unsupported() {
+        with_media_capabilities(|rt| {
+            let drm = settle(
+                rt,
+                "navigator.mediaCapabilities.decodingInfo({type:'file', audio:{contentType:'audio/mpeg'}, keySystemConfiguration:{keySystem:'com.widevine.alpha'}})",
+            );
+            assert_eq!(drm, "supported=false,smooth=false");
+            // Нативного видео-декодера в тестовом рантайме нет.
+            let video = settle(
+                rt,
+                "navigator.mediaCapabilities.decodingInfo({type:'file', video:{contentType:'video/mp4; codecs=avc1.42E01E'}})",
+            );
+            assert_eq!(video, "supported=false,smooth=false");
+        });
+    }
+
+    #[test]
+    fn info_without_audio_or_video_rejects() {
+        with_media_capabilities(|rt| {
+            assert_eq!(
+                settle(rt, "navigator.mediaCapabilities.decodingInfo({type:'file'})"),
+                "TypeError: rejected"
+            );
+            assert_eq!(
+                settle(rt, "navigator.mediaCapabilities.encodingInfo({type:'bogus', audio:{}})"),
+                "TypeError: rejected"
+            );
+        });
+    }
+
+    #[test]
+    fn encoding_info_unsupported_without_encoder() {
+        with_media_capabilities(|rt| {
+            let r = settle(
+                rt,
+                "navigator.mediaCapabilities.encodingInfo({type:'record', video:{contentType:'video/webm; codecs=vp8'}})",
+            );
+            assert_eq!(r, "supported=false,smooth=false");
         });
     }
 }

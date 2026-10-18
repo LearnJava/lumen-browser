@@ -217,7 +217,11 @@ pub(crate) fn install_audio_element_bindings_v8(
     {
         let p = get_provider();
         let can_play_type = into_v8_fn1(move |mime: String| -> String {
-            p.as_ref().map_or("", |p| p.can_play_type(&mime)).to_owned()
+            match p.as_ref() {
+                Some(p) => p.can_play_type(&mime),
+                None => lumen_core::ext::audio_can_play_type(&mime),
+            }
+            .to_owned()
         });
         rt.register_native("__lumen_audio_can_play_type", can_play_type)?;
     }
@@ -712,12 +716,10 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 
     el.canPlayType = function(mime) {
       if (!mime) return '';
-      if (HAS_PROVIDER && typeof __lumen_audio_can_play_type === 'function')
+      // Таблица декодеров живёт в Rust (lumen_core::ext::audio_can_play_type);
+      // без нативной функции (JS-тесты без привязок) обещать нечего.
+      if (typeof __lumen_audio_can_play_type === 'function')
         return __lumen_audio_can_play_type(String(mime));
-      var t = String(mime).split(';')[0].trim().toLowerCase();
-      if (t === 'audio/mpeg' || t === 'audio/mp3' || t === 'audio/ogg' ||
-          t === 'audio/wav'  || t === 'audio/wave' || t === 'audio/flac') return 'probably';
-      if (t === 'audio/webm' || t === 'audio/aac' || t === 'audio/mp4') return 'maybe';
       return '';
     };
 
