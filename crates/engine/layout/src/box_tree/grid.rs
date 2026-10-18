@@ -279,6 +279,8 @@ pub(crate) fn build_grid_init(
     skip_idx: Option<usize>,
 ) -> Option<Box<super::grid_trampoline::GridInit>> {
     use super::grid_trampoline::GridInit;
+    // GRID-RTL: столбцы горизонтальной сетки идут справа налево.
+    let rtl = vertical.is_none() && s.direction == crate::style::Direction::Rtl;
 
     // CSS Grid L2 §9: If this grid was set up as a subgrid by its parent, read
     // the inherited track contexts that the parent set in the thread-locals.
@@ -568,8 +570,13 @@ pub(crate) fn build_grid_init(
         // space the tracks left over. `fr` / `auto` tracks already absorb it during
         // sizing above, so this only ever fires for a fixed-size track list.
         let used_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+        // `left`/`right` — физические стороны: при `direction: rtl` начало оси справа.
+        let jc = match s.content_align_extra.justify_side {
+            Some(side) if rtl => super::grid_vertical::resolve_side(s.justify_content, Some(side), s.writing_mode, true),
+            _ => s.justify_content,
+        };
         let (jc_start, jc_extra) = grid_content_distribution(
-            s.justify_content,
+            jc,
             content_width - used_col_total,
             col_gutters + 1,
             s.content_align_extra.justify_safe,
@@ -665,6 +672,7 @@ pub(crate) fn build_grid_init(
         col_first_group: col_groups.clone(),
         col_last_group: col_groups,
         vertical,
+        rtl,
     }))
 }
 

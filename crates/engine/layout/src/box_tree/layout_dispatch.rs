@@ -1306,7 +1306,7 @@ pub(super) fn dispatch_box(
                         );
                         // All children may be abs-positioned (not grid items).
                         super::grid_trampoline::lay_out_abs(
-                            b, &s, is_positioned, pcb, content_x, content_y, measurer, viewport, hp,
+                            b, &s, is_positioned, pcb, content_x, content_y, content_width, measurer, viewport, hp,
                         );
                         return DispatchOutcome::Done;
                     }
