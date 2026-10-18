@@ -181,6 +181,7 @@ pub use parse::color::{canonical_specified_color, parse_color, parse_color_funct
 // Реэкспорт со старого пути: этих троих зовут `lib.rs` и `animation.rs`, то есть
 // потребитель вне `crate::style` (правило §2.1 очереди SPLIT).
 pub use parse::image::{parse_background_gradient, parse_gradient_stops};
+pub use parse::webkit_gradient::{parse_webkit_gradient, webkit_gradient_value_valid};
 pub use parse::transform::parse_transform_list;
 use parse::color::{named_color, parse_color_legacy};
 // SPLIT-ST9. `CalcNode`/`MathFn`/`RoundStrategy`/`Length`/`LengthOrAuto`/
