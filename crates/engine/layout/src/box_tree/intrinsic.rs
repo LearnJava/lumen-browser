@@ -376,7 +376,7 @@ fn grid_col_sum_by_tracks(
     if matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
         return None;
     }
-    let item_idxs = grid_item_indices(&b.children);
+    let item_idxs = grid_item_indices(&b.children, super::fieldset::rendered_legend_idx_of(b));
     let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
     // `minmax(auto, <length>)` (BUG-1313): the track is as wide as its items' minimum
     // contribution when that exceeds the length, which only the track pass knows.
@@ -467,7 +467,11 @@ fn flex_row_intrinsic_sum(
         .max(0.0);
     let mut sum = 0.0_f32;
     let mut n_items = 0_usize;
-    for c in &b.children {
+    // HTML Rendering §15.3.13: legend flex-fieldset'а — не элемент, он стоит на границе; в
+    // ширину fieldset он входит как отдельный блок (наибольшее из legend и содержимого).
+    let legend_idx = super::fieldset::rendered_legend_idx_of(b);
+    let mut legend_w = 0.0_f32;
+    for (i, c) in b.children.iter().enumerate() {
         if !contributes_to_intrinsic_width(c) {
             continue;
         }
@@ -483,10 +487,15 @@ fn flex_row_intrinsic_sum(
                     + c.style.margin_bottom.resolve_or_zero(cem, 0.0, viewport);
                 (h - mv).max(0.0)
             });
-        sum += super::stretch_basis::with_stretched_item(stretched, || per_item(c)) + ml + mr;
+        let w = super::stretch_basis::with_stretched_item(stretched, || per_item(c)) + ml + mr;
+        if Some(i) == legend_idx {
+            legend_w = w;
+            continue;
+        }
+        sum += w;
         n_items += 1;
     }
-    sum + gap * n_items.saturating_sub(1) as f32
+    (sum + gap * n_items.saturating_sub(1) as f32).max(legend_w)
 }
 
 /// FLEX-VWM-6: [`preferred_inline_block_width`] of a row flex container `b` where
