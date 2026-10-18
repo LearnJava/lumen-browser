@@ -1,7 +1,8 @@
 //! WebGPU API stub (W3C WebGPU spec).
 //!
 //! Exposes `navigator.gpu` as a `GPU` object:
-//! - `navigator.gpu.requestAdapter(opts?)` → `Promise<GPUAdapter>`
+//! - `navigator.gpu.requestAdapter(opts?)` → `Promise<GPUAdapter | null>` (`null` without
+//!   a real wgpu adapter, see BUG-1620)
 //! - `adapter.requestDevice(desc?)` → `Promise<GPUDevice>`
 //! - `GPUDevice`: `createBuffer`, `createTexture`, `createRenderPipeline`,
 //!   `createCommandEncoder`, `createShaderModule`, `createSampler`,
@@ -822,8 +823,17 @@ const WEBGPU_SHIM: &str = r#"(function() {
   // — navigator.gpu must be an instance of a real GPU constructor, matching every
   // other interface in this file (GPUAdapter/GPUDevice/GPUCanvasContext/...).
   function GPU() {}
+  // Per spec `requestAdapter()` resolves `null` when no adapter is available (what Chrome
+  // does on an unsupported GPU). The in-memory shim has no GPU behind it — submit/draw/
+  // dispatch are no-ops — so a fake adapter would make a page pick the WebGPU branch and
+  // paint an empty canvas (BUG-1620). An adapter exists only when the `webgpu` feature
+  // registered the `_lumen_webgpu_*` natives and wgpu found a real device.
   GPU.prototype.requestAdapter = function(opts) {
-    return Promise.resolve(new GPUAdapter());
+    var real = false;
+    if (typeof _lumen_webgpu_adapter_info === 'function') {
+      try { real = !!_lumen_webgpu_adapter_info(); } catch (_e) { real = false; }
+    }
+    return Promise.resolve(real ? new GPUAdapter() : null);
   };
   GPU.prototype.getPreferredCanvasFormat = function() {
     return 'bgra8unorm';
@@ -1343,6 +1353,17 @@ mod tests_v8 {
     fn v8_request_adapter_returns_promise() {
         let rt = with_gpu();
         assert!(bool_eval(&rt, "navigator.gpu.requestAdapter() instanceof Promise"));
+    }
+
+    /// BUG-1620: without the native `webgpu` backend there is no adapter — the shim must
+    /// say so (`null`), not hand out a fake `GPUAdapter` whose draws are no-ops.
+    #[cfg(not(feature = "webgpu"))]
+    #[test]
+    fn v8_request_adapter_resolves_null_without_backend() {
+        let rt = with_gpu();
+        rt.eval("globalThis.__adapter = 'pending'; navigator.gpu.requestAdapter().then(function(a) { globalThis.__adapter = a; });")
+            .unwrap();
+        assert!(bool_eval(&rt, "globalThis.__adapter === null"));
     }
 
     #[test]
