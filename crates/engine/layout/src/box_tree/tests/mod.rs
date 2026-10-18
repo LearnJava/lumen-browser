@@ -448,6 +448,7 @@ mod intrinsic_and_wrap;
 mod flow_modes;
 mod object_embed;
 mod inline_absolute;
+mod inline_line_growth;
 mod pseudo_first_line;
 
 mod generated_float;

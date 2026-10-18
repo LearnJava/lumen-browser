@@ -1131,8 +1131,10 @@ pub(super) fn dispatch_box(
                 align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             }
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
+            line_growth = super::inline_wrap::align_run_vertically(
+                lines, &s, &mut b.used_line_height, m, !was_shaped, first_line_style.is_none(),
+            );
             let line_h = step_line_height(b.used_line_height, s.line_height_step);
-            line_growth = apply_inline_vertical_align(lines, line_h, !was_shaped);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
             // container flow (`line_clamp_flow`), not run by run; here it only takes priority
             // over text-overflow:ellipsis (both cannot apply simultaneously).
