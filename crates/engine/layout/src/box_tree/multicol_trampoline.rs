@@ -75,6 +75,10 @@ pub(super) struct MulticolInit {
     pub(super) limit_shared: bool,
     /// `Some` when overflow columns wrap into rows (see [`ColRows`]).
     pub(super) col_rows: Option<ColRows>,
+    /// `column-wrap: wrap` with an `auto` `column-height` (Multicol L2 §4.4): the row-gap. The
+    /// container has no column height to wrap at, so a row opens only where forced column
+    /// breaks need more than `column-count` columns; its height is its tallest column.
+    pub(super) wrap_auto: Option<f32>,
     pub(super) segments: Vec<SegmentInit>,
     pub(super) children_pcb: Rect,
     // Phase-epilogue inputs (`finish_frame` only) — ride along unchanged from
@@ -144,6 +148,9 @@ struct Frame {
     /// Atomic-path scratch — running content-bottom per column, indexed by
     /// column number (not by item).
     col_y: Vec<f32>,
+    /// With [`MulticolInit::wrap_auto`] and more forced columns than `column-count`: the
+    /// content-box `y` just past the last row, set by `compute_col_assignment`.
+    wrap_end: Option<f32>,
 }
 
 enum StepOutcome {
@@ -165,6 +172,7 @@ fn new_frame(b: LayoutBox, init: Box<MulticolInit>) -> Frame {
         outer_hs: Vec::new(),
         col_assignment: Vec::new(),
         col_y: Vec::new(),
+        wrap_end: None,
     };
     enter_segment(&mut frame);
     frame
@@ -179,6 +187,7 @@ fn enter_segment(frame: &mut Frame) {
     frame.outer_hs = Vec::new();
     frame.col_assignment = Vec::new();
     frame.col_y = Vec::new();
+    frame.wrap_end = None;
     frame.k = 0;
     if frame.seg_i >= frame.init.segments.len() {
         return;
@@ -341,7 +350,11 @@ pub(super) fn run(
                 let col = current.col_assignment[current.k];
                 let col_w = current.init.col_w;
                 // With rows the fragment number counts across rows; its column is the remainder.
-                let col_in_row = if current.init.col_rows.is_some() { col % current.init.n_cols as usize } else { col };
+                let col_in_row = if current.init.col_rows.is_some() || current.wrap_end.is_some() {
+                    col % current.init.n_cols as usize
+                } else {
+                    col
+                };
                 let col_x = current.init.content_x + col_in_row as f32 * (col_w + current.init.col_gap);
                 let col_y = current.col_y[col];
                 let pcb = current.init.children_pcb;
@@ -1183,6 +1196,13 @@ fn compute_col_assignment(frame: &mut Frame) {
         .collect();
     let forced = forced_breaks(&items);
     let (orphans, widows) = (frame.init.s.orphans, frame.init.s.widows);
+    if let Some(row_gap) = frame.init.wrap_auto {
+        let chunks = forced.iter().filter(|f| **f).count() + 1;
+        if chunks > n_cols {
+            assign_forced_rows(frame, &forced, row_gap);
+            return;
+        }
+    }
     let target_h = if let Some(r) = frame.init.col_rows {
         r.col_h.max(1.0)
     } else if balance {
@@ -1204,6 +1224,38 @@ fn compute_col_assignment(frame: &mut Frame) {
         None => vec![cur_y; col_count],
     };
     frame.col_assignment = col_assignment;
+}
+
+/// `column-wrap: wrap` without a `column-height` (Multicol L2 §4.4), forced column breaks
+/// asking for more than `column-count` columns: every run of items between two forced breaks is
+/// one column, `column-count` columns make a row, and a row is as tall as its tallest column.
+/// Fills `col_assignment` (a column number counted across rows), `col_y` (each column's row top)
+/// and `wrap_end`.
+fn assign_forced_rows(frame: &mut Frame, forced: &[bool], row_gap: f32) {
+    let n_cols = frame.init.n_cols as usize;
+    let mut col = 0usize;
+    let mut assignment = Vec::with_capacity(forced.len());
+    let mut heights: Vec<f32> = vec![0.0];
+    for (j, f) in forced.iter().enumerate() {
+        if *f {
+            col += 1;
+            heights.push(0.0);
+        }
+        assignment.push(col);
+        heights[col] += frame.outer_hs[j];
+    }
+    let rows = heights.len().div_ceil(n_cols);
+    let mut y = frame.init.cur_y;
+    let mut col_y = Vec::with_capacity(rows * n_cols);
+    for r in 0..rows {
+        let row_h = heights[r * n_cols..((r + 1) * n_cols).min(heights.len())].iter().copied().fold(0.0, f32::max);
+        col_y.extend(std::iter::repeat_n(y, n_cols));
+        y += row_h + if r + 1 < rows { row_gap } else { 0.0 };
+    }
+    col_y.truncate(heights.len().max(n_cols));
+    frame.col_assignment = assignment;
+    frame.col_y = col_y;
+    frame.wrap_end = Some(y);
 }
 
 /// Runs right after an item finishes its Place-phase dispatch — per-column
@@ -1232,7 +1284,7 @@ fn finish_place_phase(frame: &mut Frame) {
             let rows = frame.col_y.len().div_ceil(frame.init.n_cols as usize).max(1);
             frame.init.cur_y + r.extent(rows)
         }
-        None => frame.col_y.iter().copied().fold(frame.init.cur_y, f32::max),
+        None => frame.wrap_end.unwrap_or_else(|| frame.col_y.iter().copied().fold(frame.init.cur_y, f32::max)),
     };
     enter_span_phase(frame);
 }

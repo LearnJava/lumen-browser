@@ -603,8 +603,18 @@ pub(in crate::style) fn apply_decl_layout(
         "column-wrap" => {
             // CSS Multi-column L2 §4.4: auto | nowrap | wrap.
             match val.trim().to_ascii_lowercase().as_str() {
-                "auto" | "wrap" => style.column_wrap_nowrap = false,
-                "nowrap" => style.column_wrap_nowrap = true,
+                "auto" => {
+                    style.column_wrap_nowrap = false;
+                    style.column_wrap_explicit = false;
+                }
+                "wrap" => {
+                    style.column_wrap_nowrap = false;
+                    style.column_wrap_explicit = true;
+                }
+                "nowrap" => {
+                    style.column_wrap_nowrap = true;
+                    style.column_wrap_explicit = false;
+                }
                 _ => {}
             }
         }

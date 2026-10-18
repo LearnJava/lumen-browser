@@ -459,6 +459,8 @@ mod multicol_rows;
 mod multicol_break_inside;
 mod multicol_grid_fragments;
 mod multicol_forced_break;
+mod multicol_nested_break;
+mod multicol_wrap_margin;
 mod multicol_orphans;
 mod flex_axes;
 

@@ -203,10 +203,17 @@ pub(crate) fn build_multicol_init(
         }
     });
 
+    // CSS Multicol L2 §4.4: an explicit `column-wrap: wrap` rows up forced breaks without a
+    // `column-height` too.
+    let wrap_auto = (s.column_wrap_explicit && !s.column_wrap_nowrap && col_rows.is_none())
+        .then(|| s.row_gap.resolve_or_zero(em, container_h.unwrap_or(0.0), viewport).max(0.0));
+
     // CSS Multicol §6.1: a `column-span: all` descendant reached through plain
     // block wrappers spans the container too — split those wrappers around it so
     // the spanner becomes a direct child (see `multicol_span`).
     super::multicol_span::hoist_nested_spanners(children);
+    // CSS Fragmentation L3 §4.1: a forced column break inside a wrapper cuts the wrapper.
+    super::multicol_break::hoist_nested_breaks(children);
 
     // Collect flow (non-abs, non-skip) child indices, without moving `children`
     // yet — the empty case below must leave it completely untouched.
@@ -262,6 +269,7 @@ pub(crate) fn build_multicol_init(
         container_h,
         limit_shared,
         col_rows,
+        wrap_auto,
         segments,
         children_pcb,
         s: Arc::clone(s),
