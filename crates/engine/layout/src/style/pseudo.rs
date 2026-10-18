@@ -14,6 +14,7 @@ use crate::style::PSEUDO_BASE_BUILDS;
 use crate::style::{
     apply_declaration, apply_font_size, ensure_cascade_index, expand_attr_val, matches_complex,
     note_pseudo_cascade, sheet_targets_pseudo, with_front_cascade_index, ComputedStyle, Content,
+    ContentItem,
     Display, PSEUDO_STATS_ON,
 };
 use lumen_core::geom::Size;
@@ -372,6 +373,22 @@ pub fn compute_pseudo_element_style(
     out
 }
 
+/// UA-sheet `content` of `q::before` / `q::after` (HTML rendering §15.3.7). Author rules
+/// override it through the ordinary cascade, so it only seeds the pseudo-element's style.
+pub fn ua_quote_content(doc: &Document, node: NodeId, pseudo: &str) -> Option<ContentItem> {
+    let is_q = doc.get(node).element_name().is_some_and(|q| q.local.as_str() == "q");
+    if !is_q {
+        return None;
+    }
+    if pseudo.eq_ignore_ascii_case("before") {
+        Some(ContentItem::OpenQuote)
+    } else if pseudo.eq_ignore_ascii_case("after") {
+        Some(ContentItem::CloseQuote)
+    } else {
+        None
+    }
+}
+
 /// The body of [`compute_pseudo_element_style`] — split out so the census hook
 /// above covers every exit path.
 #[allow(clippy::too_many_arguments)]
@@ -394,7 +411,11 @@ fn compute_pseudo_element_style_inner(
     // synthesizes a style out of `list-style-type` with no rule at all (CSS
     // Lists L3 §2.1, the `matched.is_empty()` branch), so it must never be
     // short-circuited here.
+    // HTML rendering §15.3.7: `q::before`/`q::after` get `open-quote`/`close-quote` from the UA
+    // sheet (BUG-1598) — no author rule needed, so the sheet-level gate does not apply.
+    let ua_quote = ua_quote_content(doc, node, pseudo);
     if !pseudo.eq_ignore_ascii_case("marker")
+        && ua_quote.is_none()
         && !sheet_targets_pseudo(sheet, viewport, dark_mode, split_pseudo_request(pseudo).0)
     {
         return None;
@@ -494,12 +515,21 @@ fn compute_pseudo_element_style_inner(
             let _prof_init = lumen_core::profile::scope_detail("ps_init");
             return Some(pseudo_inherited_style(parent));
         }
+        if let Some(item) = ua_quote {
+            let mut style = pseudo_inherited_style(parent);
+            style.content = Content::Items(vec![item]);
+            return Some(style);
+        }
         return None;
     }
     drop(prof_match);
     let mut style = {
         let _prof_init = lumen_core::profile::scope_detail("ps_init");
-        pseudo_inherited_style(parent)
+        let mut style = pseudo_inherited_style(parent);
+        if let Some(item) = ua_quote {
+            style.content = Content::Items(vec![item]);
+        }
+        style
     };
     let _prof_apply = lumen_core::profile::scope_detail("ps_apply");
 
