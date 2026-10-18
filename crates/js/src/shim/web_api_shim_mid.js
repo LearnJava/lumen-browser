@@ -15511,6 +15511,17 @@ var _lumen_ce_failed = {};
 // and the upgrade path (срез 2, `_lumen_ce_upgrade_element`) agree that the
 // node went through its real constructor.
 function _lumen_ce_build_wrapper(nid, ctor) {
+    // BUG-1239: an upgrade is in place (HTML LS §4.13.5) — a wrapper script
+    // already holds (youtube's Polymer `this.$['page-manager']`, taken while
+    // the stamped template was still un-upgraded) must become the custom
+    // element, not be orphaned by a second object for the same node.
+    var existing = _lumen_wrapper_cache_get(nid);
+    if (existing !== undefined && ctor.prototype !== undefined
+        && Object.getPrototypeOf(existing) !== ctor.prototype) {
+        Object.setPrototypeOf(existing, ctor.prototype);
+        _lumen_ce_elements[nid] = existing;
+        return existing;
+    }
     var built = _lumen_build_element(nid, ctor.prototype);
     _lumen_ce_elements[nid] = built;
     return _lumen_wrapper_cache_set(nid, built);
@@ -15703,12 +15714,9 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
 // makes `HTMLElement`'s constructor (top of this file) consume it instead of
 // minting a new node, and hand back a wrapper built off `entry.ctor.prototype`;
 // `_lumen_ce_build_wrapper` interns it via `_lumen_wrapper_cache_set`,
-// REPLACING whatever wrapper `nid` had (a plain pre-upgrade one, or none).
-// Any JS reference obtained before the upgrade keeps pointing at the
-// pre-upgrade object — the same wrapper-identity limitation every other
-// `_lumen_wrapper_cache_set` call in this file already has (subsystems/js.md,
-// BUG-732 et al.); the reactions below and in `_lumen_ce_maybe_*` always call
-// back on the constructed element, never on such a stale one. A `ctor` that
+// reusing the wrapper `nid` already had (BUG-1239: re-prototyped in place, so
+// a reference obtained before the upgrade stays the same, now custom, object)
+// or building one when there is none. A `ctor` that
 // never calls `super()` (most of the pre-срез-1 test suite still registers a
 // bare `function Foo() {}`) leaves the pushed `nid` unconsumed — harmless,
 // since it is popped unconditionally and the pre-existing wrapper stands in.
