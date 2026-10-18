@@ -326,7 +326,30 @@
             "div { overflow: auto; } div::-webkit-scrollbar { width: 0; }",
         );
         let st = compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+        // `width: 0` hides the vertical bar only (CSS-WEBKIT-SCROLLBAR).
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Auto);
+        assert!(st.scrollbar_hidden_y && !st.scrollbar_hidden_x);
+    }
+
+    #[test]
+    fn webkit_scrollbar_display_none_and_height_zero_hide_bars() {
+        // CSS-WEBKIT-SCROLLBAR: the standard way to hide a carousel's bar.
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let did = doc.get(doc.body().unwrap()).children[0];
+        let style_of = |css: &str| {
+            let sheet = lumen_css_parser::parse(&format!("div {{ overflow: auto; }} {css}"));
+            compute_style(&doc, did, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false)
+        };
+        let st = style_of("div::-webkit-scrollbar { display: none; }");
         assert_eq!(st.scrollbar_width, ScrollbarWidth::None);
+        let st = style_of("div::-webkit-scrollbar { height: 0; }");
+        assert!(st.scrollbar_hidden_x && !st.scrollbar_hidden_y);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Auto);
+        let st = style_of("div::-webkit-scrollbar { width: 0; height: 0; }");
+        assert!(st.scrollbar_hidden_x && st.scrollbar_hidden_y);
+        let st = style_of("div::-webkit-scrollbar { height: 8px; }");
+        assert!(!st.scrollbar_hidden_x && !st.scrollbar_hidden_y);
+        assert_eq!(st.scrollbar_width, ScrollbarWidth::Auto);
     }
 
     #[test]

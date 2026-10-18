@@ -182,8 +182,8 @@ pub(crate) fn emit_scrollbars(
         scroll_y: b.scroll_y,
         content_w,
         content_h,
-        need_v: is_scroll_y,
-        need_h: is_scroll_x,
+        need_v: is_scroll_y && !b.style.scrollbar_hidden_y,
+        need_h: is_scroll_x && !b.style.scrollbar_hidden_x,
         gutter_px,
     });
     if let Some((track, thumb)) = v_bars {
