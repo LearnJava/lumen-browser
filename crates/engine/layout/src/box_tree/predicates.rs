@@ -45,7 +45,7 @@ pub(crate) fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
         s.overflow_y,
         Overflow::Scroll | Overflow::Auto | Overflow::Hidden
     );
-    if !can_scroll_y {
+    if !can_scroll_y || s.scrollbar_hidden_y {
         return 0.0;
     }
     let unit = match s.scrollbar_width {
@@ -122,7 +122,7 @@ pub(crate) fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
         s.overflow_x,
         Overflow::Scroll | Overflow::Auto | Overflow::Hidden
     );
-    if !can_scroll_x {
+    if !can_scroll_x || s.scrollbar_hidden_x {
         return 0.0;
     }
     let unit = match s.scrollbar_width {
