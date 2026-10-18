@@ -6,6 +6,9 @@
 
 use crate::*;
 
+/// BUG-1630: шаг между кадрами живой CSS-анимации хрома (≈ 60 Гц).
+const CHROME_ANIM_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_redraw_requested(&mut self) {
@@ -280,9 +283,11 @@ impl Lumen {
             let now_s = (timestamp_ms / 1000.0) as f32;
             let (c_trans_frame, _c_trans_events) = self.chrome_transition_scheduler.tick(now_s);
             c_frame.merge_from(c_trans_frame);
-            if c_frame.has_active {
-                self.request_redraw();
-            }
+            // BUG-1630: следующий кадр хрома — по таймеру из `about_to_wait`
+            // (кадр ≈ 60 Гц), а не немедленным `request_redraw`.
+            self.chrome_anim_redraw_at = c_frame
+                .has_active
+                .then(|| std::time::Instant::now() + CHROME_ANIM_FRAME_INTERVAL);
             self.chrome_anim_frame =
                 if c_frame.overrides.is_empty() { None } else { Some(c_frame) };
         }
