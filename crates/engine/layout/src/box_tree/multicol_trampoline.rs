@@ -562,6 +562,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
                 lo,
                 hi,
                 last: c + 1 == windows.len(),
+                extent: h_of(c),
                 col_top: cur_y + row_y,
                 dx: content_x + col_in_row as f32 * (col_w + col_gap),
             };
