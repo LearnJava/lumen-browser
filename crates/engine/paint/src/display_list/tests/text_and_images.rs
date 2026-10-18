@@ -274,7 +274,7 @@
     }
 }
 
-    fn build_wrapped(html: &str, css: &str, width: f32) -> DisplayList {
+    pub(crate) fn build_wrapped(html: &str, css: &str, width: f32) -> DisplayList {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8);

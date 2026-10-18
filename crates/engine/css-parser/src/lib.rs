@@ -427,6 +427,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "text-overflow",
     "text-shadow",
     "text-size-adjust",
+    "-webkit-text-fill-color",
     "-webkit-text-size-adjust",
     "text-transform",
     "text-underline-offset",

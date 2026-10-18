@@ -919,6 +919,12 @@ pub(in crate::style) fn apply_decl_text(
                 style.text_emphasis_style = s;
             }
         }
+        "-webkit-text-fill-color" => {
+            // WHATWG Compat §3.1: `<color>`; initial `currentcolor`.
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.text_fill_color = c;
+            }
+        }
         "text-emphasis-color" => {
             if let Some(c) = parse_css_color_legacy(val, is_quirks) {
                 style.text_emphasis_color = c;

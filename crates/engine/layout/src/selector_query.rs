@@ -1576,7 +1576,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextDecorationStyle::Dashed => "dashed",
         TextDecorationStyle::Wavy => "wavy",
     }.into());
-    m.insert("text-decoration-color".into(), css_color_to_css(&style.text_decoration_color));
+    // `currentcolor` сериализуется в used-значение, как в Chrome.
+    m.insert("text-decoration-color".into(),
+        color_to_css(style.text_decoration_color.resolve(style.color)));
+    m.insert("-webkit-text-fill-color".into(), color_to_css(style.used_text_fill_color()));
     m.insert("text-overflow".into(), if style.text_overflow == style.text_overflow_right {
         style.text_overflow.to_css()
     } else {
