@@ -389,7 +389,7 @@ impl Lumen {
         #[cfg(feature = "v8")]
         if let Some(js) = self.frames.get(idx).and_then(|h| h.js.as_ref()) {
             js.eval_js(&format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                "_lumen_dispatch_synth_key({}, '{}', '{}', '{}', 0)",
                 node_id, event_type, key, key,
             ));
         }

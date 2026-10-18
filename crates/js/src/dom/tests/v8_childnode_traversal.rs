@@ -618,6 +618,27 @@ fn document_import_node_materializes_dom_parser_svg_node() {
     assert_eq!(symbol_children, lumen_core::JsValue::Number(1.0));
 }
 
+/// BUG-1239: `document.importNode(template.content, true)` returned an Element
+/// wrapper (nodeType 1) around the cloned fragment, so a native `appendChild`
+/// of it put the fragment itself under the parent instead of its children —
+/// ShadyDOM's `attachShadow({shadyUpgradeFragment})` does exactly that, and
+/// youtube's `ytd-app` root ended up as one nested fragment.
+#[test]
+fn document_import_node_of_template_content_is_a_fragment() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _t = document.createElement('template');
+                _t.innerHTML = '<div id="a"></div><i></i>';
+                var _imp = document.importNode(_t.content, true);
+                var _host = document.createElement('x-host');
+                Node.prototype.appendChild.call(_host, _imp);
+            "#).unwrap();
+    assert_eq!(rt.eval("_imp.nodeType").unwrap(), lumen_core::JsValue::Number(11.0));
+    assert_eq!(rt.eval("_host.childNodes.length").unwrap(), lumen_core::JsValue::Number(2.0));
+    assert_eq!(rt.eval("_host.firstChild.nodeName").unwrap(), lumen_core::JsValue::String("DIV".into()));
+    assert_eq!(rt.eval("_imp.childNodes.length").unwrap(), lumen_core::JsValue::Number(0.0));
+}
+
 #[test]
 fn get_bounding_rect_returns_values_from_runtime() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -676,4 +697,25 @@ fn tree_walker_next_node_from_current_outside_root() {
     assert_eq!(seen, lumen_core::JsValue::String("1|DIV,1|SPAN,8|#comment".into()));
     let prev = rt.eval("_prev === null").unwrap();
     assert_eq!(prev, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1239: a `DocumentFragment` wrapper is a real `Node`/`DocumentFragment`
+/// instance — youtube's patched `appendChild` takes `r instanceof
+/// DocumentFragment` to find the custom elements a fragment brings in, and
+/// ShadyDOM swaps the fragment's prototype, which an own-property wrapper
+/// would keep shadowing.
+#[test]
+fn document_fragment_is_instance_of_document_fragment_and_node() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _df = document.createDocumentFragment();
+                var _c = document.createElement('p');
+                _df.appendChild(_c);
+                var _nat = Object.getOwnPropertyDescriptor(Node.prototype, 'firstChild').get;
+                (_df instanceof DocumentFragment) && (_df instanceof Node) &&
+                    (_df.nodeType === 11) && (_df.firstChild === _c) &&
+                    (_df.childNodes.length === 1) && !Object.prototype.hasOwnProperty.call(_df, 'childNodes') &&
+                    (_nat.call(_df) === _c)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
