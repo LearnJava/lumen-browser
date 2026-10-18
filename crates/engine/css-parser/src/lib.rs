@@ -129,9 +129,15 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "bottom",
     "box-shadow",
     "box-sizing",
-    // WHATWG Compat §2.1 — only for the `display: -webkit-box` computed-
-    // value quirk (BUG-505 срез 5), matches `apply_decl_text`.
+    // WHATWG Compat §2.1 — legacy flexbox: the orient/pack/align/direction group feeds the
+    // flex container of `display: -webkit-box`, flex/ordinal-group its items; matches
+    // `apply_decl_text`.
     "-webkit-box-orient",
+    "-webkit-box-pack",
+    "-webkit-box-align",
+    "-webkit-box-direction",
+    "-webkit-box-flex",
+    "-webkit-box-ordinal-group",
     "break-after",
     "break-before",
     "break-inside",

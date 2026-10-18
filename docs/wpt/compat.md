@@ -28,6 +28,8 @@
 `webkit-gradient-comma` 2/2, `webkit-radial-gradient-radii` 3/3, `-gradient-sign` — зелёные, `.ini` этих id сняты.
 По шкале wpt.fyi **22 из 38 (57,03 %)**, подтестов 103 из 138 (прогон `run_corpus.py --prefixes compat`, dev-release).
 
+**Обновление 2026-10-18 (CSS-WEBKIT-BOX-LEGACY):** `-webkit-box-pack/-align/-flex/-direction/-ordinal-group` реализованы поверх flex (`style/cascade.rs`); `webkit-box-align-001`, `-vertically-centered`, `-horizontal-reverse-variants`, `-horizontal-rtl-variants`, `-rtl-flex`, `-ignores-flex-wrap.tentative`, `-blockify` — зелёные, их `.ini` сняты; `-item-shrink-001/002` сократили провалы до 5 и 2 подтестов. По шкале wpt.fyi **28 из 38 (74,82 %)**, подтестов 118 из 138 (прогон `run_corpus.py --prefixes compat`, dev-release).
+
 ## Провалы и привязка
 
 | id | результат | строка CSS-SPECS / BUG |
@@ -35,7 +37,7 @@
 | `css-style-declaration-alias-enumeration` | 51/51 | CSS-SPECS.md:781 (`-webkit-*` алиасы, COMPAT-CSS-ALIAS) |
 | `webkit-mask-box-enumeration` | 0/6 | [BUG-1631](../../bugs/BUG-1631-OPEN.md) (`webkitMaskBoxImage*`) |
 | `idlharness.window` | 23/29 (`window.orientation`, `onorientationchange` у Window и HTMLBodyElement) | [BUG-1632](../../bugs/BUG-1632-OPEN.md) |
-| `webkit-box-blockify`, `-horizontal-reverse-variants`, `-horizontal-rtl-variants`, `-ignores-flex-wrap.tentative`, `-rtl-flex` (reftest FAIL); `webkit-box-item-shrink-001` 12/20, `-002` 5/18; `webkit-box-vertically-centered` 0/1 | | CSS-SPECS.md:785 (legacy flexbox) |
+| `webkit-box-item-shrink-001` 15/20 (подтесты 3, 9, 11, 13, 20), `-002` 16/18 (3, 11) | | CSS-SPECS.md:785 (legacy flexbox: нет «no automatic minimum size» у `input`/`textarea`/`select`/`iframe`/`video`) |
 | `webkit-text-fill-color-property-001a/b/c/d, 002, 004, 006` (reftest FAIL); `webkit-text-fill-color-currentColor` 0/1 | | CSS-SPECS.md:786 (`-webkit-text-fill-color`) |
 
 Каждый провал привязан к строке CSS-SPECS или к BUG; непривязанных нет.
