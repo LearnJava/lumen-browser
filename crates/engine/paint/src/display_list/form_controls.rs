@@ -84,7 +84,7 @@ fn emit_input_value_text(
         rect: Rect::new(text_x, text_y, content_w, font_size),
         text,
         font_size,
-        color: s.color,
+        color: s.used_text_fill_color(),
         font_family: s.font_family.clone(),
         font_weight: s.font_weight,
         font_style: s.font_style,

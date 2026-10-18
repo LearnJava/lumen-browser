@@ -328,6 +328,9 @@ fn apply_css_wide_keyword_with(
                 };
             }
         }
+        "-webkit-text-fill-color" => {
+            style.text_fill_color = if inh { inherited.text_fill_color } else { init.text_fill_color };
+        }
         "text-emphasis-color" => {
             style.text_emphasis_color = if inh {
                 inherited.text_emphasis_color

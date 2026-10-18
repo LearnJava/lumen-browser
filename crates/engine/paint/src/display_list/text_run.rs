@@ -145,7 +145,7 @@ fn emit_text_frags(
             if hi.is_some() { s.fg_color } else { None }
         });
 
-        let text_color = sel_fg.unwrap_or(frag.style.color);
+        let text_color = sel_fg.unwrap_or_else(|| frag.style.used_text_fill_color());
         let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
         emit_text_shadows(out, base_rect, line_h, frag);
         out.push(DisplayCommand::DrawText {
@@ -302,7 +302,7 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
                 rect,
                 text: frag.text.clone(),
                 font_size: frag.style.font_size,
-                color: frag.style.color,
+                color: frag.style.used_text_fill_color(),
                 font_family: frag.style.font_family.clone(),
                 font_weight: frag.style.font_weight,
                 font_style: frag.style.font_style,
@@ -407,7 +407,7 @@ pub(crate) fn emit_inline_run(
                 rect: Rect::new(b.rect.x + clip_w, line_y, ew, line_h),
                 text: "\u{2026}".to_string(),
                 font_size: ef.style.font_size,
-                color: ef.style.color,
+                color: ef.style.used_text_fill_color(),
                 font_family: ef.style.font_family.clone(),
                 font_weight: ef.style.font_weight,
                 font_style: ef.style.font_style,
