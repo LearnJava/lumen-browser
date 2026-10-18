@@ -16,7 +16,8 @@ use super::*;
 /// Раскладывает `InlineBlockRow` `b`, у которого вертикальный `writing-mode`.
 ///
 /// `available_width` — остаток по block-оси (физическая ширина),
-/// `available_height` — inline-размер строки (физическая высота).
+/// `available_height` — inline-размер строки (физическая высота), `outer_floats` —
+/// float-ы контейнера в системе координат ряда (его первая колонка — block `0`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lay_out_vertical_inline_block_row(
     b: &mut LayoutBox,
@@ -28,6 +29,7 @@ pub(super) fn lay_out_vertical_inline_block_row(
     viewport: Size,
     pcb: Rect,
     hp: &dyn HyphenationProvider,
+    outer_floats: Option<&FloatContext>,
 ) {
     let s = b.style.clone();
     let rl = matches!(
@@ -41,17 +43,49 @@ pub(super) fn lay_out_vertical_inline_block_row(
     struct Column {
         idxs: Vec<usize>,
         has_baseline: bool,
+        /// Занятая inline-длина, считая от `inline_start`.
         extent: f32,
+        /// Block-позиция начала колонки (от начала block-оси ряда) и её block-размер.
+        start: f32,
+        width: f32,
+        /// Левый край полосы между float-ами, с которого колонка начинается по inline-оси.
+        inline_start: f32,
     }
+    let new_column = |start: f32| Column {
+        idxs: Vec::new(),
+        has_baseline: false,
+        extent: 0.0,
+        start,
+        width: 0.0,
+        inline_start: 0.0,
+    };
+
+    // CSS 2.1 §9.5: float-ы контейнера (в системе координат ряда) сужают колонку —
+    // её inline-полоса берётся по `line_band` на всю block-ширину колонки.
+    let floats = outer_floats.filter(|fc| !fc.is_empty());
+    let band = |start: f32, width: f32| match floats {
+        Some(fc) => fc.line_band(start, start + width.max(0.01), 0.0, content_inline),
+        None => (0.0, content_inline),
+    };
+    let strut = b.used_line_height;
+    let margin_box_w = |c: &LayoutBox| -> (f32, f32, f32) {
+        let em = c.style.font_size;
+        let ml = c.style.margin_left.resolve_or_zero(em, available_width, viewport);
+        let mr = c.style.margin_right.resolve_or_zero(em, available_width, viewport);
+        (ml, mr, ml + c.rect.width + mr)
+    };
 
     let orig_children = std::mem::take(&mut b.children);
     let mut children: Vec<LayoutBox> = Vec::with_capacity(orig_children.len());
     let mut columns: Vec<Column> = Vec::new();
-    let mut cur = Column { idxs: Vec::new(), has_baseline: false, extent: 0.0 };
+    let mut cur = new_column(0.0);
 
     for mut child in orig_children {
         if matches!(child.kind, BoxKind::InlineSpace) {
-            cur.extent += space_h;
+            // Пробел в начале колонки рядом с float-ом схлопывается, как в начале строки.
+            if !(floats.is_some() && cur.idxs.is_empty()) {
+                cur.extent += space_h;
+            }
             children.push(child);
             continue;
         }
@@ -59,36 +93,70 @@ pub(super) fn lay_out_vertical_inline_block_row(
         let c_em = child.style.font_size;
         let mt = child.style.margin_top.resolve_or_zero(c_em, available_width, viewport);
         let mb = child.style.margin_bottom.resolve_or_zero(c_em, available_width, viewport);
-        let place_y = start_y + cur.extent;
-        // Прогон переносится по оставшейся части колонки, атомарный бокс — по всей.
-        let child_inline = if is_run {
-            (content_inline - cur.extent).max(0.0)
-        } else {
-            content_inline
-        };
+        let baseline = is_run || matches!(inline_v_align(&child), VerticalAlign::Baseline);
+        let laid_extent = cur.extent;
+        if is_run {
+            // Прогон переносится по оставшейся части колонки (между float-ами).
+            let (l, r) = band(cur.start, cur.width.max(strut));
+            let l = if cur.idxs.is_empty() { l } else { cur.inline_start };
+            lay_out(
+                &mut child, start_x, start_y + l + cur.extent, available_width,
+                Some((r - l - cur.extent).max(0.0)), measurer, viewport, pcb, hp, false,
+            );
+            if matches!(child.kind, BoxKind::Skip) {
+                children.push(child);
+                continue;
+            }
+            if cur.idxs.is_empty() {
+                cur.inline_start = l;
+            }
+            cur.has_baseline = true;
+            cur.width = cur.width.max(margin_box_w(&child).2).max(strut);
+            cur.idxs.push(children.len());
+            cur.extent += mt + child.rect.height + mb;
+            children.push(child);
+            continue;
+        }
+        // Атомарный бокс — по всей длине колонки.
         lay_out(
-            &mut child, start_x, place_y, available_width, Some(child_inline),
+            &mut child, start_x, start_y + laid_extent, available_width, Some(content_inline),
             measurer, viewport, pcb, hp, false,
         );
         if matches!(child.kind, BoxKind::Skip) {
             children.push(child);
             continue;
         }
-        let mut size = mt + child.rect.height + mb;
-        if !is_run && cur.extent > 0.0 && cur.extent + size > content_inline {
-            columns.push(std::mem::replace(
-                &mut cur,
-                Column { idxs: Vec::new(), has_baseline: false, extent: 0.0 },
-            ));
-            lay_out(
-                &mut child, start_x, start_y, available_width, Some(content_inline),
-                measurer, viewport, pcb, hp, false,
-            );
-            size = mt + child.rect.height + mb;
-        }
-        if is_run || matches!(inline_v_align(&child), VerticalAlign::Baseline) {
+        let size = mt + child.rect.height + mb;
+        let bs = margin_box_w(&child).2;
+        let l = loop {
+            let width = cur.width.max(bs).max(if cur.has_baseline || baseline { strut } else { 0.0 });
+            let (l, r) = band(cur.start, width);
+            if cur.extent + size <= r - l {
+                break l;
+            }
+            if cur.extent > 0.0 {
+                // Не влез в колонку — новая колонка сразу за этой.
+                let next = cur.start + cur.width;
+                columns.push(std::mem::replace(&mut cur, new_column(next)));
+                continue;
+            }
+            // Пустая колонка, а бокс не влез рядом с float-ами: ниже по block-оси, где
+            // полоса шире (CSS 2.1 §9.5.1 п.8); если полоса уже полная — берём как есть.
+            let narrowed = l > 0.0 || r < content_inline;
+            match floats.filter(|_| narrowed && cur.idxs.is_empty()).and_then(|fc| fc.next_float_bottom(cur.start)) {
+                Some(nb) => cur.start = nb,
+                None => break l,
+            }
+        };
+        if baseline {
             cur.has_baseline = true;
         }
+        cur.width = cur.width.max(bs).max(if cur.has_baseline { strut } else { 0.0 });
+        if cur.idxs.is_empty() {
+            cur.inline_start = l;
+        }
+        let dy = cur.inline_start + cur.extent - laid_extent;
+        crate::box_tree::shift_tree(&mut child, 0.0, dy);
         cur.idxs.push(children.len());
         cur.extent += size;
         children.push(child);
@@ -99,29 +167,15 @@ pub(super) fn lay_out_vertical_inline_block_row(
 
     // Block-размер колонки — самый широкий margin box участника; strut
     // (высота строки ряда) входит, когда в колонке есть участник по baseline.
-    let margin_box_w = |c: &LayoutBox| -> (f32, f32, f32) {
-        let em = c.style.font_size;
-        let ml = c.style.margin_left.resolve_or_zero(em, available_width, viewport);
-        let mr = c.style.margin_right.resolve_or_zero(em, available_width, viewport);
-        (ml, mr, ml + c.rect.width + mr)
-    };
-    let col_sizes: Vec<f32> = columns
-        .iter()
-        .map(|col| {
-            let widest = col.idxs.iter().map(|&i| margin_box_w(&children[i]).2).fold(0.0_f32, f32::max);
-            if col.has_baseline { widest.max(b.used_line_height) } else { widest }
-        })
-        .collect();
-    let total_block: f32 = col_sizes.iter().sum();
-
-    let mut taken = 0.0_f32;
-    for (col, &col_w) in columns.iter().zip(&col_sizes) {
-        let col_left = if rl { start_x + total_block - taken - col_w } else { start_x + taken };
-        taken += col_w;
+    // Колонки идут вдоль block-оси; после float-а колонка может начаться дальше
+    // конца предыдущей, поэтому ряд кончается там, где кончается последняя.
+    let total_block = columns.last().map_or(0.0, |c| c.start + c.width);
+    for col in &columns {
+        let col_left = if rl { start_x + total_block - col.start - col.width } else { start_x + col.start };
         for &i in &col.idxs {
             let (ml, _mr, mbox_w) = margin_box_w(&children[i]);
             // Начало block-оси: правая кромка для `rl`, левая для `lr`.
-            let slack = col_w - mbox_w;
+            let slack = col.width - mbox_w;
             let offset = match inline_v_align(&children[i]) {
                 VerticalAlign::Top | VerticalAlign::TextTop => if rl { slack } else { 0.0 },
                 VerticalAlign::Bottom | VerticalAlign::TextBottom => if rl { 0.0 } else { slack },
@@ -133,10 +187,10 @@ pub(super) fn lay_out_vertical_inline_block_row(
             }
         }
     }
-    // Колонки идут одна под другой начиная с `start_y`: inline-координаты
-    // детей уже абсолютные, сдвигать по `y` нечего.
+    // Inline-координаты детей уже абсолютные (колонка начинается на `start_y` плюс
+    // левый край её полосы между float-ами), сдвигать по `y` нечего.
 
-    let longest = columns.iter().map(|c| c.extent).fold(0.0_f32, f32::max);
+    let longest = columns.iter().map(|c| c.inline_start + c.extent).fold(0.0_f32, f32::max);
     b.children = children;
     b.rect.x = start_x;
     b.rect.y = start_y;

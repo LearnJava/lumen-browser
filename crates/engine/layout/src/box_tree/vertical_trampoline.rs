@@ -151,9 +151,12 @@ fn step_child(
     let remaining_block = (content_block_avail - cursor_block_consumed).max(0.0);
     let pcb = frame.init.pcb;
 
-    // CSS 2.1 §9.5: an inline run beside floats gets each of its columns
-    // shortened by them — the floats are handed down in the run's own frame.
-    let run_floats = if matches!(frame.b.children[i].kind, BoxKind::InlineRun { .. }) {
+    // CSS 2.1 §9.5: an inline run (or a row of atomic inlines) beside floats gets each
+    // of its columns shortened by them — the floats are handed down in the run's own frame.
+    let run_floats = if matches!(frame.b.children[i].kind, BoxKind::InlineRun { .. })
+        || (matches!(frame.b.children[i].kind, BoxKind::InlineBlockRow)
+            && frame.b.children[i].style.writing_mode != crate::style::WritingMode::HorizontalTb)
+    {
         let (gap, _) = vfloat::block_gap(&frame.init, &frame.b.children[i], viewport, caches);
         let b_start = (cursor_block_consumed + gap).max(clear_floor.unwrap_or(f32::NEG_INFINITY));
         vfloat::floats_for_run(&frame.init, b_start)
