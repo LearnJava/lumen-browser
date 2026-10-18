@@ -1,6 +1,6 @@
 # BUG-1622 — KeyboardEvent странице: keyCode 0, без модификаторов, code=символ
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** shell/js (`lumen/text_input.rs:130`, `frame_text_input.rs:392`, `shim/web_api_shim_mid.js:1703`)
 
@@ -24,3 +24,7 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление (2026-10-18)
+
+Реальные нажатия клавиш уже шли через `page_keys::dispatch_script` с корректными `code`/`keyCode`/`location`/маской модификаторов. Ломались синтетические пути (WebDriver-действия `inject_key_events`, `type_text`, символы, вводимые оболочкой в поле, поля во фреймах, `driver/session.rs`): они вызывали `_lumen_dispatch_key_event` по старой схеме из 8 аргументов. Добавлена `_lumen_dispatch_synth_key(nid, type, key, code, extra_mod)` в `web_api_shim_mid.js`: по `key` выводит `code` («KeyC»), `keyCode`/`which` (67), `location` и `shiftKey` (заглавная буква, символ верхнего регистра цифрового ряда; кириллица — по физической клавише ЙЦУКЕН), затем вызывает штатную `_lumen_dispatch_key_event`. Все четыре вызывающих переведены на неё. Тест: `v8_event_classes::synth_key_derives_code_keycode_and_shift`.

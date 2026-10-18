@@ -794,6 +794,40 @@ fn dispatch_key_event_delivers_properties() {
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-1622: synthetic key input (`_lumen_dispatch_synth_key`) derives
+/// `code` / `keyCode` / `which` / `shiftKey` / `location` from the `key`.
+#[test]
+fn synth_key_derives_code_keycode_and_shift() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let r = rt.eval(
+        "var got = []; \
+         var el = document.getElementById('main'); \
+         el.addEventListener('keydown', function(e) { \
+             got.push([e.key, e.code, e.keyCode, e.which, e.shiftKey, e.ctrlKey, e.location].join('|')); }); \
+         var n = el.__nid__; \
+         _lumen_dispatch_synth_key(n, 'keydown', '\\u0421', '\\u0421', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', 'c', 'c', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', 'C', 'C', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', '7', '7', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', '!', '!', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', ' ', '', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', 'Enter', 'Enter', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', 'Shift', 'ShiftLeft', 0); \
+         _lumen_dispatch_synth_key(n, 'keydown', 'a', 'KeyA', 1); \
+         got.join(',')"
+    ).unwrap();
+    assert_eq!(
+        r,
+        lumen_core::JsValue::String(
+            "\u{421}|KeyC|67|67|true|false|0,c|KeyC|67|67|false|false|0,C|KeyC|67|67|true|false|0,\
+             7|Digit7|55|55|false|false|0,!|Digit1|49|49|true|false|0, |Space|32|32|false|false|0,\
+             Enter|Enter|13|13|false|false|0,Shift|ShiftLeft|16|16|false|false|1,\
+             a|KeyA|65|65|false|true|0"
+                .into()
+        )
+    );
+}
+
 #[test]
 fn dispatch_mouse_event_modifier_flags() {
     let rt = v8_runtime_with_dom(make_doc());

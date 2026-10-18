@@ -2033,6 +2033,7 @@ var window = {
     _lumen_dispatch_pointer_move_coalesced: _lumen_dispatch_pointer_move_coalesced,
     _lumen_dispatch_capture_event:      _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
+    _lumen_dispatch_synth_key:     _lumen_dispatch_synth_key,
     _lumen_set_field_value:        _lumen_set_field_value,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
