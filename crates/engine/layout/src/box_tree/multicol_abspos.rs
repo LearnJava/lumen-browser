@@ -261,6 +261,9 @@ pub(crate) fn build_multicol_init(
         out: Vec::with_capacity(0),
         cur_y: content_y,
         row_used: None,
+        oof_out: Vec::new(),
+        frag_cols: None,
+        frag_segments: 0,
     }))
 }
 
