@@ -1326,6 +1326,17 @@ impl Lumen {
                 }
             }
             self.pending_waits = still_pending;
+            // BUG-1633: срок `wait` будит цикл не сам — иначе на тихой странице
+            // `ControlFlow::Wait` держит ответ «wait timeout» до ближайшего события.
+            if let Some(deadline) = self.pending_waits.iter().map(|w| w.deadline).min() {
+                match event_loop.control_flow() {
+                    ControlFlow::Poll => {}
+                    ControlFlow::WaitUntil(t) => {
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(t.min(deadline)));
+                    }
+                    ControlFlow::Wait => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+                }
+            }
         }
 
         // UX-LOADING: спиннер вкладки и кнопка «Остановить» следуют за `nav_start`.

@@ -163,7 +163,7 @@ def main() -> int:
         t_scroll_start = time.time()
         for direction in (+1, -1):
             for _ in range(args.ticks):
-                c.call('scroll', {'target': {'css': 'body'},
+                c.call('scroll', {'target': 'body',
                                   'delta': {'x': 0, 'y': direction * args.delta}})
                 time.sleep(0.03)  # ~33 щелчка/с — быстрая ручная прокрутка
         t_scroll = time.time() - t_scroll_start
@@ -196,7 +196,7 @@ def main() -> int:
     pt = [p[0] for p in paints]
     content = [p[1] for p in paints]
     flush = [p[5] for p in paints]
-    cmds = [int(p[2]) for p in paints]
+    cmds = [int(p[2]) for p in paints] or [t[2] for t in totals]  # строка «paint» в логе кадра изменилась
 
     def stats(name: str, xs: list[float]) -> None:
         print(f'  {name:<10} avg {statistics.mean(xs):7.2f}ms   '
