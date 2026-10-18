@@ -204,10 +204,12 @@ pub(super) fn lay_out_vertical_inline_block_row(
         }
     }
     // Inline-координаты детей уже абсолютные (колонка начинается на `start_y` плюс
-    // левый край её полосы между float-ами). Под `direction: rtl` inline-старт —
+    // левый край её полосы между float-ами). Под `direction: rtl` (и в `sideways-lr`) inline-старт —
     // нижний край полосы: колонка из одних атомарных боксов зеркалится к нему
     // (UAX #9, как горизонтальный ряд в `layout_dispatch`).
-    if b.style.direction == Direction::Rtl {
+    let inline_reversed = (b.style.direction == Direction::Rtl)
+        != (s.writing_mode == crate::style::WritingMode::SidewaysLr);
+    if inline_reversed {
         for col in columns.iter().filter(|c| !c.has_run) {
             let (_, r) = band(col.start, col.width);
             for &i in &col.idxs {
