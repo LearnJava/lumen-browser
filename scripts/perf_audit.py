@@ -1155,9 +1155,9 @@ def audit_site_live(
                 time.sleep(0.15)
 
         contents = br.mcp.resource("resource://screenshot")
-        if contents and contents[0].get("data"):
+        if contents and contents[0].get("blob"):
             png = out_dir / f"{slug}.png"
-            png_bytes = base64.b64decode(contents[0]["data"])
+            png_bytes = base64.b64decode(contents[0]["blob"])
             png.write_bytes(png_bytes)
             rec["png_size"] = png_size(png)
             rec.update(frame_analysis(png_bytes))

@@ -387,8 +387,8 @@ class LiveDriver:
             shot = self.br.mcp.resource("resource://screenshot")
         except (RuntimeError, OSError, socket.timeout):
             return False
-        if shot and shot[0].get("data"):
-            path.write_bytes(base64.b64decode(shot[0]["data"]))
+        if shot and shot[0].get("blob"):
+            path.write_bytes(base64.b64decode(shot[0]["blob"]))
             return True
         return False
 
