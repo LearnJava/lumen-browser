@@ -212,7 +212,7 @@ pub use values::typography::{
     FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, CaseLang, resolve_match_parent,
-    TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxOrient, WhiteSpace,
+    TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
     WhiteSpaceCollapse, BoxShadow, text_font_features,
 };
 pub use values::color::{Color, ColorFloat, CssColor, SystemColor};

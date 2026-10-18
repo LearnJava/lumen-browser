@@ -15,6 +15,27 @@ fn page_source_from_arg_url() {
     ));
 }
 
+/// BUG-1636: a `data:` argument is a URL, not a path (`os error 123`).
+#[test]
+fn page_source_from_arg_data_url_is_url_not_path() {
+    for arg in ["data:text/html,<p>hi</p>", "DATA:text/html;base64,PHA+aGk8L3A+"] {
+        assert!(
+            matches!(PageSource::from_arg(Some(arg)), PageSource::Url { url: ref u, .. } if u == arg),
+            "{arg}"
+        );
+        assert!(
+            matches!(
+                page_source_for_automation_url(arg),
+                PageSource::Url { url: ref u, .. } if u == arg
+            ),
+            "automation: {arg}"
+        );
+    }
+    // A relative file whose name merely starts like the scheme stays a path.
+    assert!(matches!(PageSource::from_arg(Some("dat.html")), PageSource::File(_)));
+    assert!(matches!(PageSource::from_arg(Some("data")), PageSource::File(_)));
+}
+
 #[test]
 fn page_source_from_arg_file() {
     let s = PageSource::from_arg(Some("samples/page.html"));
