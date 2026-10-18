@@ -169,6 +169,15 @@ pub(crate) fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) 
     }
 }
 
+/// Headless-сессия ходит в сеть через те же `--proxy`/`--tor`, что и окно
+/// (BUG-1635): драйвер профиль shell не видит, поэтому прокси ему вешает хук.
+fn install_profile_proxies(
+    session: &mut lumen_driver::InProcessSession,
+    profile: &'static config::FingerprintProfile,
+) {
+    session.set_http_client_hook(move |client| profile.apply_proxies(client));
+}
+
 /// Запустить MCP-сервер в headless-режиме.
 ///
 /// Создаёт `InProcessSession`, опционально загружает URL, затем запускает
@@ -179,6 +188,7 @@ pub(crate) fn run_mcp_mode(mcp: McpMode) -> ExitCode {
     use std::net::TcpListener;
 
     let mut session = InProcessSession::new();
+    install_profile_proxies(&mut session, config::global());
     if let Some(ref url) = mcp.url
         && let Err(e) = session.navigate(url)
     {
@@ -195,7 +205,7 @@ pub(crate) fn run_mcp_mode(mcp: McpMode) -> ExitCode {
         };
         let token = lumen_core::auth::generate_token();
         eprintln!("MCP listening on 127.0.0.1:{port}");
-        eprintln!("MCP token: {token}");
+        eprintln!("[mcp] token: {token}");
         match listener.accept() {
             Ok((stream, addr)) => {
                 eprintln!("MCP connection from {addr}");
@@ -223,4 +233,56 @@ pub(crate) fn run_mcp_mode(mcp: McpMode) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    /// BUG-1635: запрос страницы headless-сессией идёт через HTTP-прокси профиля.
+    #[test]
+    fn headless_session_fetches_through_profile_proxy() {
+        use lumen_driver::{BrowserSession, InProcessSession};
+
+        let stub = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = stub.local_addr().expect("addr").port();
+        let seen = std::thread::spawn(move || {
+            let (mut conn, _) = stub.accept().expect("accept");
+            let mut buf = [0u8; 2048];
+            let n = conn.read(&mut buf).unwrap_or(0);
+            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = "<html><body>via proxy</body></html>";
+            let _ = std::io::Write::write_all(
+                &mut conn,
+                format!(
+                    "HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: {}
+Connection: close
+
+{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            head
+        });
+
+        let profile: &'static config::FingerprintProfile = Box::leak(Box::new(
+            config::parse(&format!("proxy = \"http://127.0.0.1:{port}\"
+")),
+        ));
+        let mut session = InProcessSession::new();
+        install_profile_proxies(&mut session, profile);
+        // Хост нерезолвимый: прямое соединение упало бы, а через прокси запрос
+        // уходит абсолютным URL на заглушку.
+        session.navigate("http://lumen-proxy-test.invalid/page").expect("navigate via proxy");
+
+        let head = seen.join().expect("stub thread");
+        assert!(
+            head.starts_with("GET http://lumen-proxy-test.invalid:80/page "),
+            "прокси должен получить абсолютный URL, а получил: {head:?}"
+        );
+    }
 }
