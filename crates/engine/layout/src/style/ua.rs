@@ -447,6 +447,57 @@ pub(in crate::style) fn apply_ua_block_margins(doc: &Document, node: NodeId, sty
         style.padding_left = Length::Px(40.0);
     }
 }
+/// UA-поля блока в горизонтальной интерпретации: `(margin-top, margin-right, margin-bottom,
+/// margin-left, padding-left)` после UA-фазы — до того, как author-каскад мог их тронуть.
+pub(in crate::style) type UaBlockBox = (LengthOrAuto, LengthOrAuto, LengthOrAuto, LengthOrAuto, Length);
+
+/// HTML Rendering §15.3 задаёт эти поля логическими (`margin-block: 1em`, `margin-inline: 40px`,
+/// `padding-inline-start: 40px`), а UA-фаза пишет физические стороны. Снимок нужен, чтобы после
+/// author-каскада перенести нетронутые UA-значения на стороны вертикального режима
+/// ([`swap_ua_block_box_for_vertical`]). `None` для элементов без таких полей.
+pub(in crate::style) fn snapshot_ua_block_box(doc: &Document, node: NodeId, style: &ComputedStyle) -> Option<UaBlockBox> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    matches!(
+        name.local.as_str(),
+        "p" | "pre" | "dl" | "menu" | "ul" | "ol" | "blockquote" | "figure" | "dd"
+            | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+    )
+    .then(|| {
+        (
+            style.margin_top.clone(),
+            style.margin_right.clone(),
+            style.margin_bottom.clone(),
+            style.margin_left.clone(),
+            style.padding_left.clone(),
+        )
+    })
+}
+
+/// CSS Logical L1 + HTML Rendering §15.3: в `vertical-*`/`sideways-*` UA-поля блока лежат на осях
+/// режима — блочные (`margin-block`) на левой/правой стороне, строчные (`margin-inline`,
+/// `padding-inline-start`) на верхней/нижней. Пара сторон, которую author-CSS не менял, переезжает;
+/// тронутая автором остаётся как есть.
+pub(in crate::style) fn swap_ua_block_box_for_vertical(style: &mut ComputedStyle, ua: &UaBlockBox) {
+    if style.writing_mode == WritingMode::HorizontalTb {
+        return;
+    }
+    let (top, right, bottom, left, pad_left) = ua;
+    let block_untouched = style.margin_top == *top && style.margin_bottom == *bottom;
+    let inline_untouched = style.margin_left == *left && style.margin_right == *right;
+    if !(block_untouched && inline_untouched) {
+        return;
+    }
+    style.margin_top = left.clone();
+    style.margin_bottom = right.clone();
+    style.margin_left = top.clone();
+    style.margin_right = bottom.clone();
+    if style.padding_left == *pad_left && *pad_left != Length::Px(0.0) {
+        style.padding_top = pad_left.clone();
+        style.padding_left = Length::Px(0.0);
+    }
+}
 /// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
 ///
 /// Returns UA colors `(border, background, foreground)` for form controls.

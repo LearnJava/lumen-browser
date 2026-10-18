@@ -29,7 +29,7 @@ use crate::style::{
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
     apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
-    apply_ua_block_margins, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
@@ -396,6 +396,7 @@ pub(crate) fn compute_style_shareable(
     apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
     apply_ua_block_margins(doc, node, &mut style);
+    let ua_block_box = snapshot_ua_block_box(doc, node, &style);
     // UA stylesheet: <fieldset> / <legend>. HTML Rendering §15.3.13. Author CSS перекроет.
     apply_ua_fieldset_style(doc, node, &mut style);
     // UA stylesheet: <body> → margin: 8px. HTML Rendering §14.3.3. Author CSS перекроет.
@@ -1468,6 +1469,13 @@ pub(crate) fn compute_style_shareable(
     // block`/`-inline` to `overscroll_behavior_x`/`_y`, same writing-mode
     // axis swap as `overflow-block`/`-inline` above.
     resolve_overscroll_behavior_logical_properties(&mut style);
+
+    // HTML Rendering §15.3 — UA margins/padding of `p`, lists, headings … are logical: in a
+    // vertical writing mode the ones the author left alone move onto the mode's axes. Before
+    // `resolve_logical_properties`, so an author's logical declaration still wins.
+    if let Some(ua) = &ua_block_box {
+        swap_ua_block_box_for_vertical(&mut style, ua);
+    }
 
     // CSS Logical Properties L1 — resolve logical properties to physical.
     resolve_logical_properties(&mut style);
