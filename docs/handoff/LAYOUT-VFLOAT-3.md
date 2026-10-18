@@ -4,7 +4,20 @@
 
 ## Состояние
 
-Кода ещё нет — сессия ушла на разведку. Ниже — результат разведки и принятый дизайн.
+**Сессия 2 (работа в основном чекауте, не в слоте):** написан `crates/engine/layout/src/box_tree/shape_resolve.rs`
+(`Prim` + `rotate/translate/extent_at`, `FloatBoxes::of`, `resolve_shape` с circle/ellipse/inset/polygon/path/linear-gradient/shape-box,
+`parse_position`). Файл **ещё не подключён** (`mod shape_resolve;` в `box_tree.rs` нет) и **не компилировался** — первым делом
+подключить, собрать `cargo check -p lumen-layout`, поправить ошибки. Дальше по плану ниже: п.2 (`GenShape` + `shape_prims` в
+`FloatContext`: left/right_edge_impl, shapes_bottom, rebased_block/translated/absorb_vertical, индексы `shaped_*`), п.3 (`place_float`:
+`FloatBoxes::of(child,[mt,mr,mb,ml],content_inline,viewport)` -> `resolve_shape` -> `rotate(be, init.is_rtl)` -> `translate(i0, fb)`,
+`bound = is_left ? i0+ie : i0`, окно `[fb, fb+be]`, `shape-margin` от `content_inline`), п.4 (ряд). Алгоритм колонки ряда с float-ами:
+для каждого ребёнка кандидат-ширина колонки `max(cur.w, bs)` -> `fc.line_band(taken, taken+w, 0, content_inline)`; влезает
+`cur.extent+size <= r-l` -> принять; не влезает и колонка непуста -> закрыть (`taken += w`); пуста -> `taken = fc.next_float_bottom(taken)`
+(нет — принять). Дети колонки сдвигаются по y на `l` в финальном проходе; `total_block = last.taken + last.w`.
+Пробелы `InlineSpace` в начале колонки при float-ах не учитывать (проверить). `.tmp/vab.py` — харнес (запуск с
+`MSYS_NO_PATHCONV=1`, путь вида `/css/css-shapes/...html`, бинарь `target/dev-release/lumen.exe`), `.tmp/lumen-base.exe` — бинарь до правок.
+
+Исторически: кода не было — сессия ушла на разведку. Ниже — результат разведки и принятый дизайн.
 Бинарь базового состояния: `.tmp/lumen-base.exe` (в слоте; `.tmp/` не коммитится), сборка слота:
 `cargo build --profile dev-release -p lumen-shell` (~4,5 мин холодная).
 
