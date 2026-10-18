@@ -597,9 +597,9 @@
     {
      "id": "GRID-RTL",
      "title": "GRID-RTL: direction rtl в grid",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "`direction: rtl` в горизонтальной сетке не зеркалит столбцы: первый столбец остаётся слева, `justify-self: start/end/left/right` и `justify-content` не переворачиваются (проба против Edge: 8 % расхождения). Нужны: зеркало ячейки по inline-оси в `GridInit::cell_origin` (механизм `inline_rev` вертикальной сетки уже есть), разворот start/end в `place_item`/`post_final_item`, `column-rule`/`record_own_tracks`, смещения subgrid, статическая позиция abspos. Критерий готовности: WPT `css-grid/alignment/*rtl*`, `grid-items-relative-offsets-001/002`, `grid-align.html`, `grid-align-justify-stretch.html`"
+     "note": "СДЕЛАНО 2026-10-18 (ветка `p1-grid-rtl`): `GridInit.rtl` зеркалит ячейку по x в `cell_origin`; `justify-self`/`justify-content` start/end/left/right, авто-поля, `relative`-смещения (`right` побеждает, `top%` от высоты области), статическая позиция abspos у правого края; WPT `grid-align`, `grid-align-justify-stretch`, `grid-items-relative-offsets-001/002`, `grid-item-direction-rtl-001`, `staticpos-justify-self-rtl-003/004` зелёные; `column-rule` в paint уже зеркалил (`column_reversed`). Исходная постановка: `direction: rtl` в горизонтальной сетке не зеркалит столбцы: первый столбец остаётся слева, `justify-self: start/end/left/right` и `justify-content` не переворачиваются (проба против Edge: 8 % расхождения). Нужны: зеркало ячейки по inline-оси в `GridInit::cell_origin` (механизм `inline_rev` вертикальной сетки уже есть), разворот start/end в `place_item`/`post_final_item`, `column-rule`/`record_own_tracks`, смещения subgrid, статическая позиция abspos. Критерий готовности: WPT `css-grid/alignment/*rtl*`, `grid-items-relative-offsets-001/002`, `grid-align.html`, `grid-align-justify-stretch.html`"
     },
     {
      "id": "GRID-ABSPOS",
