@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<!-- HTML Rendering §15.3.13 — `<fieldset>` с `display: flex` / `grid`: legend стоит на границе, а
+     flex/grid-раскладка идёт в анонимном контейнере содержимого ниже него (legend не элемент).
+     A: flex row, legend выше рамки · B: flex row, legend ниже рамки (по центру 24px-рамки) ·
+     C: flex column с flex-grow при явной высоте (контейнер содержимого = высота − legend) ·
+     D: grid 2 колонки, legend выше рамки · E: grid без явной высоты (высота по содержимому +
+     legend) · F: flex-wrap с legend справа (margin-left:auto). Только цветные боксы, без текста. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; }
+  .s { margin: 0; padding: 12px; border: solid 8px #2b6cb0; width: 280px; height: 200px; box-sizing: border-box; }
+  .s legend { width: 90px; height: 26px; padding: 0; background: #ed8936; }
+  .blk { background: #a8c8ec; }
+  .blk2 { background: #8ab4e0; }
+
+  .a .s { display: flex; gap: 10px; }
+  .a .blk { width: 60px; height: 50px; }
+  .a .blk2 { width: 80px; height: 90px; }
+
+  .b .s { display: flex; border-width: 24px; align-items: center; }
+  .b .s legend { height: 12px; width: 70px; }
+  .b .blk { width: 50px; height: 40px; }
+  .b .blk2 { width: 50px; height: 70px; }
+
+  .c .s { display: flex; flex-direction: column; }
+  .c .blk { flex: 1; }
+  .c .blk2 { height: 30px; }
+
+  .d .s { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+  .d .blk, .d .blk2 { height: 40px; }
+
+  .e .s { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; height: auto; }
+  .e .blk, .e .blk2 { height: 36px; }
+
+  .f .s { display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
+  .f .s legend { margin-left: auto; }
+  .f .blk, .f .blk2 { width: 100px; height: 40px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell a"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell b"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell c"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell d"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell e"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk2"></div><div class="blk"></div></fieldset></div>
+  <div class="cell f"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk"></div></fieldset></div>
+</div>
+</body>
+</html>

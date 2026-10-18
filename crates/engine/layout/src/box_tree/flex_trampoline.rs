@@ -1373,7 +1373,7 @@ fn finish_frame(
             .fold(0.0_f32, f32::max)
     } else {
         total_cross
-    };
+    } + super::fieldset::placed_content_offset(&frame.b);
 
     // `layout_dispatch.rs`'s former post-`lay_out_flex` code: container
     // height (CSS 2.1 §10.6.3/§10.6.7, CSS Box Sizing L4 §5) and CSS Flexbox

@@ -495,7 +495,7 @@ pub(super) fn dispatch(
     match super::grid::build_grid_init(
         &b.children, s, content_x, content_y, content_inline, definite_block, viewport, children_pcb,
         em, available_height, padding_top, padding_bottom, size_contained, is_positioned, pcb,
-        measurer, Some(geom),
+        measurer, Some(geom), None,
     ) {
         Some(init) => DispatchOutcome::NeedsGridLoop(init),
         None => {

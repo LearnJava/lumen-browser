@@ -1538,6 +1538,7 @@ fn build_box_inner(
             node: children[idx].node,
             placed: false,
             border_inset: 0.0,
+            content_offset: 0.0,
         })
     } else {
         None

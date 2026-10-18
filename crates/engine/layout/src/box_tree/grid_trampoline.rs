@@ -1125,7 +1125,7 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
         );
         return;
     }
-    let content_height = frame.init.y_off;
+    let content_height = frame.init.y_off + super::fieldset::placed_content_offset(&frame.b);
     finish_container_height(
         &mut frame.b,
         &frame.init.s,

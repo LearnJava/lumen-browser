@@ -1195,6 +1195,17 @@ pub(super) fn dispatch_box(
                 // width) is content-sized unless `width` is explicit.
                 let main_vertical = flex::flex_axes(&s).main_vertical;
                 let vertical_flex = !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb);
+                // HTML Rendering §15.3.13: у flex-fieldset legend стоит на границе, а flex-раскладка
+                // идёт в анонимном контейнере содержимого ниже него.
+                let legend_extra = if vertical_flex {
+                    0.0
+                } else {
+                    super::fieldset::place_rendered_legend(
+                        b, content_x, content_width, None, measurer, viewport, children_pcb, hp,
+                    )
+                };
+                let legend_idx = super::fieldset::placed_legend_idx(b);
+                let content_y = content_y + legend_extra;
                 let frame_vert = padding_top + padding_bottom
                     + s.border_top_width + s.border_bottom_width;
                 let explicit_height = s.height.as_ref()
@@ -1203,6 +1214,7 @@ pub(super) fn dispatch_box(
                         BoxSizing::ContentBox => h,
                         BoxSizing::BorderBox => (h - frame_vert).max(0.0),
                     })
+                    .map(|h| (h - legend_extra).max(0.0))
                     .or_else(|| {
                         (vertical_flex && s.display == Display::Flex).then(|| {
                             (available_height.unwrap_or(viewport.height) - frame_vert).max(0.0)
@@ -1232,12 +1244,22 @@ pub(super) fn dispatch_box(
                     &mut b.children, &s, content_x, content_y, content_width,
                     flex_explicit_cross, flex_explicit_main, measurer, viewport, children_pcb, hp,
                     em, available_height, padding_top, padding_bottom, size_contained, is_positioned, pcb,
-                    vertical,
+                    vertical, legend_idx,
                 );
                 return DispatchOutcome::NeedsFlexLoop(init);
             }
             // Grid containers dispatch to lay_out_grid before block-flow.
             if matches!(s.display, Display::Grid | Display::InlineGrid) {
+                // HTML Rendering §15.3.13: legend на границе, сетка — в анонимном контейнере ниже.
+                let legend_extra = if matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb) {
+                    super::fieldset::place_rendered_legend(
+                        b, content_x, content_width, None, measurer, viewport, children_pcb, hp,
+                    )
+                } else {
+                    0.0
+                };
+                let legend_idx = super::fieldset::placed_legend_idx(b);
+                let content_y = content_y + legend_extra;
                 // CSS Box Alignment L3 §5: `align-content` distributes the block-axis
                 // free space of the grid container, so the row-axis pass needs the
                 // container's *definite* content-box height (None when the height is
@@ -1249,7 +1271,8 @@ pub(super) fn dispatch_box(
                         BoxSizing::BorderBox => (h - padding_top - padding_bottom
                             - s.border_top_width - s.border_bottom_width)
                             .max(0.0),
-                    });
+                    })
+                    .map(|h| (h - legend_extra).max(0.0));
                 // LAYOUT-2 срез 4: Steps 1–3 (native — see `build_grid_init`'s
                 // doc comment) run here, but the per-item probe and final-
                 // placement passes (and this container's own height, formerly
@@ -1271,7 +1294,7 @@ pub(super) fn dispatch_box(
                 match grid::build_grid_init(
                     &b.children, &s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
-                    size_contained, is_positioned, pcb, measurer, None,
+                    size_contained, is_positioned, pcb, measurer, None, legend_idx,
                 ) {
                     Some(init) => return DispatchOutcome::NeedsGridLoop(init),
                     None => {
@@ -1279,7 +1302,7 @@ pub(super) fn dispatch_box(
                         // finish_frame` uses for a populated container.
                         super::grid_trampoline::finish_container_height(
                             b, &s, em, available_height, padding_top, padding_bottom,
-                            size_contained, viewport, 0.0,
+                            size_contained, viewport, legend_extra,
                         );
                         // All children may be abs-positioned (not grid items).
                         super::grid_trampoline::lay_out_abs(

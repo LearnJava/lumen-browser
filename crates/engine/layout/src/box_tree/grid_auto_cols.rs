@@ -119,7 +119,7 @@ pub(super) fn collect_col_contributions(
         let es = if local_start == 0 { edge_start } else { 0.0 };
         let ee = if local_end >= n_cols { edge_end } else { 0.0 };
         if is_col_subgrid(item) {
-            let sub_idxs = grid_item_indices(&item.children);
+            let sub_idxs = grid_item_indices(&item.children, super::fieldset::rendered_legend_idx_of(item));
             let st = &item.style;
             let rows_len = st.grid_template_rows.len();
             let sub_names = super::grid::subgrid_line_names(

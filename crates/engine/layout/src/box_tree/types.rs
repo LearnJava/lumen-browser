@@ -137,6 +137,9 @@ pub struct FieldsetLegend {
     /// На сколько рамка опущена от верхней кромки border box: середина `border-top` лежит на
     /// середине legend, и когда legend выше рамки, она уходит вниз на `(legend − border-top) / 2`.
     pub border_inset: f32,
+    /// На сколько содержимое fieldset опущено ниже `border-top + padding-top`: `max(margin box
+    /// legend − border-top, 0)`. Flex/grid-раскладка добавляет его к высоте контейнера.
+    pub content_offset: f32,
 }
 
 /// Where a layout box came from — the identity of a box for all

@@ -359,6 +359,7 @@ pub(crate) fn build_flex_init(
     is_positioned: bool,
     own_pcb: Rect,
     vertical: Option<VerticalFlex>,
+    skip_idx: Option<usize>,
 ) -> Box<super::flex_trampoline::FlexInit> {
     use super::flex_trampoline::FlexInit;
     // FLEX-VWM: the physical axes, not the raw `flex-direction` keyword —
@@ -380,7 +381,8 @@ pub(crate) fn build_flex_init(
     let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
-        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip)
+        .filter(|(i, c)| !matches!(c.kind, BoxKind::Skip)
+            && Some(*i) != skip_idx
             && !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .map(|(i, _)| i)
         .collect();

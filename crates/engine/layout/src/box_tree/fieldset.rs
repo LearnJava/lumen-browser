@@ -69,6 +69,25 @@ fn restore_display(child: &mut LayoutBox, author: Display) {
     }
 }
 
+/// Индекс поставленного на границу legend у `b` (flex/grid-fieldset): контейнер не считает его
+/// элементом, а его раскладка идёт ниже (`content_offset`).
+pub(super) fn placed_legend_idx(b: &LayoutBox) -> Option<usize> {
+    b.fieldset_legend.filter(|l| l.placed).map(|l| l.idx)
+}
+
+/// Индекс rendered legend у flex/grid-контейнера до раскладки (интринсики): горизонтальный
+/// fieldset ставит legend на границу, и контейнер его элементом не считает.
+pub(super) fn rendered_legend_idx_of(b: &LayoutBox) -> Option<usize> {
+    b.fieldset_legend
+        .filter(|_| b.style.writing_mode == WritingMode::HorizontalTb)
+        .map(|l| l.idx)
+}
+
+/// На сколько legend сдвинул содержимое fieldset вниз (0 без поставленного legend).
+pub(super) fn placed_content_offset(b: &LayoutBox) -> f32 {
+    b.fieldset_legend.filter(|l| l.placed).map_or(0.0, |l| l.content_offset)
+}
+
 /// Раскладывает rendered legend `b` на верхней границе и возвращает, на сколько содержимое
 /// fieldset опускается ниже `border-top + padding-top` (`max(legend − border-top, 0)`).
 ///
@@ -127,8 +146,9 @@ pub(super) fn place_rendered_legend(
     restore_display(child, author_display);
 
     let inset = ((margin_box_h - border_top) / 2.0).max(0.0);
-    b.fieldset_legend = Some(FieldsetLegend { placed: true, border_inset: inset, ..fl });
-    (margin_box_h - border_top).max(0.0)
+    let extra = (margin_box_h - border_top).max(0.0);
+    b.fieldset_legend = Some(FieldsetLegend { placed: true, border_inset: inset, content_offset: extra, ..fl });
+    extra
 }
 
 /// То же для вертикального режима записи: legend встаёт на border блока-начала (`border-right`
@@ -196,7 +216,8 @@ pub(super) fn place_rendered_legend_vertical(
     shift_tree(child, dx, dy);
     restore_display(child, author_display);
 
-    init.cursor_block_consumed += (margin_box_block - border_start).max(0.0);
+    let extra = (margin_box_block - border_start).max(0.0);
+    init.cursor_block_consumed += extra;
     let inset = ((margin_box_block - border_start) / 2.0).max(0.0);
-    b.fieldset_legend = Some(FieldsetLegend { placed: true, border_inset: inset, ..fl });
+    b.fieldset_legend = Some(FieldsetLegend { placed: true, border_inset: inset, content_offset: extra, ..fl });
 }

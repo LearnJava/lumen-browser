@@ -276,6 +276,7 @@ pub(crate) fn build_grid_init(
     own_pcb: Rect,
     measurer: Option<&dyn TextMeasurer>,
     vertical: Option<super::grid_vertical::VGridGeom>,
+    skip_idx: Option<usize>,
 ) -> Option<Box<super::grid_trampoline::GridInit>> {
     use super::grid_trampoline::GridInit;
 
@@ -285,7 +286,7 @@ pub(crate) fn build_grid_init(
     let inherited_cols: Option<SubgridContext> = SUBGRID_COL_CTX.with(|c| c.borrow_mut().take());
     let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
 
-    let item_idxs = grid_item_indices(children);
+    let item_idxs = grid_item_indices(children, skip_idx);
 
     // CSS Grid L1 §7.1: a grid container with no items still has its explicit
     // tracks (`grid-template-*` of fixed lengths) — they give it a size and
@@ -673,11 +674,12 @@ pub(crate) fn build_grid_init(
 /// (`grid_trampoline::lay_out_abs`). CSS Grid §6: items are placed in "modified
 /// document order" — source order reordered by `order`; a stable sort keeps source
 /// order among equal `order`, so auto-placement honours `order` like Edge does.
-pub(super) fn grid_item_indices(children: &[LayoutBox]) -> Vec<usize> {
+pub(super) fn grid_item_indices(children: &[LayoutBox], skip_idx: Option<usize>) -> Vec<usize> {
     let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
-        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip)
+        .filter(|(i, c)| !matches!(c.kind, BoxKind::Skip)
+            && Some(*i) != skip_idx
             && !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .map(|(i, _)| i)
         .collect();

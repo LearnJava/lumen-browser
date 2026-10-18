@@ -211,3 +211,77 @@ fn vertical_lr_legend_on_left_border() {
     assert_eq!(c.x - f.x, 40.0, "{c:?}");
     assert_eq!(f.width, 100.0);
 }
+
+// ── FIELDSET-LEGEND-2: flex/grid-fieldset — legend на границе, раскладка в контейнере ниже ──
+
+const LG: &str = "legend{height:30px;width:50px;padding:0}";
+
+/// Flex row: legend не элемент (стоит на границе), элементы начинаются ниже него, а высота
+/// fieldset включает смещение содержимого.
+#[test]
+fn flex_row_fieldset_items_start_below_legend() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div><div id="b"></div></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{display:flex}}#a{{width:40px;height:20px}}#b{{width:40px;height:60px}}"),
+    );
+    let l = rect_of(&root, &doc, "l");
+    assert_eq!((l.x, l.y, l.width, l.height), (20.0, 0.0, 50.0, 30.0), "{l:?}");
+    let (a, b) = (rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"));
+    assert_eq!((a.x, a.y), (20.0, 40.0), "{a:?}");
+    assert_eq!((b.x, b.y), (60.0, 40.0), "legend не сдвигает элементы вправо: {b:?}");
+    let f = rect_of(&root, &doc, "f");
+    assert_eq!(f.height, 10.0 + 10.0 + 20.0 + 60.0 + 10.0 + 10.0, "{f:?}");
+    let fl = super::find_by_id_all(&root, &doc, "f").unwrap().fieldset_legend.unwrap();
+    assert!(fl.placed);
+    assert_eq!((fl.border_inset, fl.content_offset), (10.0, 20.0));
+}
+
+/// `min-width: min-content` fieldset'а с `gap`: legend не берёт место элемента и не добавляет
+/// промежуток (иначе рамка шире явной `width`).
+#[test]
+fn flex_fieldset_min_content_ignores_legend_as_item() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div><div id="b"></div></fieldset>"#,
+        "fieldset{margin:0;padding:10px;border:solid 10px;width:100px;box-sizing:border-box;display:flex;gap:10px}\
+         legend{height:30px;width:50px;padding:0}#a,#b{width:20px;height:20px}",
+    );
+    assert_eq!(rect_of(&root, &doc, "f").width, 100.0);
+}
+
+/// Column flex с явной высотой: `flex-grow` делит высоту контейнера содержимого — за вычетом
+/// того, что занял legend.
+#[test]
+fn flex_column_fieldset_grow_excludes_legend_offset() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div><div id="b"></div></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{display:flex;flex-direction:column;height:150px}}#a{{flex:1}}#b{{height:30px}}"),
+    );
+    let (a, b) = (rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"));
+    assert_eq!((a.y, a.height), (40.0, 100.0), "{a:?}");
+    assert_eq!(b.y, 140.0, "{b:?}");
+    assert_eq!(rect_of(&root, &doc, "f").height, 150.0 + 40.0);
+}
+
+/// Grid: строки идут ниже legend, legend не занимает ячейку.
+#[test]
+fn grid_fieldset_rows_start_below_legend() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div><div id="b"></div><div id="c"></div></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{display:grid;grid-template-columns:60px 1fr}}#a{{height:20px}}#b{{height:30px}}#c{{height:25px}}"),
+    );
+    let (a, b, c) = (rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"), rect_of(&root, &doc, "c"));
+    assert_eq!((a.x, a.y), (20.0, 40.0), "{a:?}");
+    assert_eq!((b.x, b.y), (80.0, 40.0), "{b:?}");
+    assert_eq!((c.x, c.y), (20.0, 70.0), "{c:?}");
+    assert_eq!(rect_of(&root, &doc, "f").height, 10.0 + 10.0 + 20.0 + 30.0 + 25.0 + 10.0 + 10.0);
+}
+
+/// Flex-fieldset без элементов: высота всё равно включает смещение от legend.
+#[test]
+fn empty_flex_fieldset_keeps_legend_offset() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{display:flex}}"),
+    );
+    assert_eq!(rect_of(&root, &doc, "f").height, 10.0 + 10.0 + 20.0 + 10.0 + 10.0);
+}
