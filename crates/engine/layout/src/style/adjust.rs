@@ -8,8 +8,8 @@
 #[cfg(test)]
 use crate::style::SCROLLBAR_PSEUDO_CASCADES;
 use crate::style::{
-    compute_pseudo_element_style, with_cascade_index, BackgroundImage, ComputedStyle, CssColor,
-    FontVariantEmoji, ForcedColorAdjust, OutlineColor, Overflow, RuleList, ScrollbarWidth,
+    compute_pseudo_element_style, with_cascade_index, BackgroundImage, ComputedStyle, CssColor, Display,
+    FontVariantEmoji, ForcedColorAdjust, Length, OutlineColor, Overflow, RuleList, ScrollbarWidth,
     SvgPaint, SystemColor,
 };
 use lumen_core::geom::Size;
@@ -89,17 +89,28 @@ pub(in crate::style) fn apply_webkit_scrollbar_pseudos(
     // pixel width into the closest of the two sized keywords. 9px is the midpoint
     // between `thin`'s 6px and `auto`'s 12px used-width (`display_list.rs`), and
     // matches Lumen's own chrome reference (`docs/design/lumen-v3_3.html`).
+    //
+    // Chrome's legacy box model for the bar: `display: none` removes both bars;
+    // `width: 0` removes the vertical one, `height: 0` the horizontal one (how a
+    // horizontal carousel hides its bar). `scrollbar-width` has one value for both
+    // axes, so the per-axis zeros go into `scrollbar_hidden_{x,y}`; only
+    // `display: none` maps onto `scrollbar-width: none`.
     if let Some(bar) =
         compute_pseudo_element_style(doc, node, "-webkit-scrollbar", sheet, style, viewport, dark_mode)
-        && let Some(w) = bar.width.as_ref().and_then(|l| l.resolve(bar.font_size, None, viewport))
     {
-        style.scrollbar_width = if w <= 0.0 {
-            ScrollbarWidth::None
-        } else if w <= 9.0 {
-            ScrollbarWidth::Thin
-        } else {
-            ScrollbarWidth::Auto
-        };
+        let px = |l: &Option<Length>| l.as_ref().and_then(|l| l.resolve(bar.font_size, None, viewport));
+        if bar.display == Display::None {
+            style.scrollbar_width = ScrollbarWidth::None;
+        } else if let Some(w) = px(&bar.width) {
+            if w <= 0.0 {
+                style.scrollbar_hidden_y = true;
+            } else {
+                style.scrollbar_width = if w <= 9.0 { ScrollbarWidth::Thin } else { ScrollbarWidth::Auto };
+            }
+        }
+        if px(&bar.height).is_some_and(|h| h <= 0.0) {
+            style.scrollbar_hidden_x = true;
+        }
     }
     let webkit_thumb = compute_pseudo_element_style(
         doc, node, "-webkit-scrollbar-thumb", sheet, style, viewport, dark_mode,

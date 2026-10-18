@@ -69,7 +69,7 @@ use super::*;
         reset_scrollbar_pseudo_cascades();
         let styles = cascade_all(
             "<div class='sc'>a</div><section><p>b</p></section>",
-            ".sc::-webkit-scrollbar { width: 0; } .sc { overflow-y: auto; }",
+            ".sc::-webkit-scrollbar { display: none; } .sc { overflow-y: auto; }",
         );
         assert_eq!(
             only(&styles, "div").scrollbar_width,
@@ -99,7 +99,7 @@ use super::*;
         reset_scrollbar_pseudo_cascades();
         let styles = cascade_all(
             "<div class='plain'><p class='sc'>a</p></div>",
-            ".plain::-webkit-scrollbar { width: 0; } .sc { overflow: auto; }",
+            ".plain::-webkit-scrollbar { display: none; } .sc { overflow: auto; }",
         );
         assert_eq!(
             only(&styles, "div").scrollbar_width,
@@ -133,7 +133,7 @@ use super::*;
         reset_scrollbar_pseudo_cascades();
         let styles = cascade_all(
             "<div class='clip'>a</div>",
-            ".clip::-webkit-scrollbar { width: 0; } .clip { overflow: hidden; }",
+            ".clip::-webkit-scrollbar { display: none; } .clip { overflow: hidden; }",
         );
         // `overflow: hidden` scrolls programmatically but draws no bar — the
         // same condition paint's `emit_scrollbars` uses.
@@ -155,12 +155,12 @@ use super::*;
         reset_scrollbar_pseudo_cascades();
         let styles = cascade_all(
             "<div class='sb'><p>a</p></div>",
-            ".sb::-webkit-scrollbar { width: 0; } .sb { overflow: scroll; }",
+            ".sb::-webkit-scrollbar { display: none; } .sb { overflow: scroll; }",
         );
         assert_eq!(
             only(&styles, "div").scrollbar_width,
             ScrollbarWidth::None,
-            "`.sb::-webkit-scrollbar {{ width: 0 }}` must still suppress the bar"
+            "`.sb::-webkit-scrollbar {{ display: none }}` must still suppress the bar"
         );
         assert_eq!(scrollbar_pseudo_cascades(), 3, "html, body and .sb");
     }
