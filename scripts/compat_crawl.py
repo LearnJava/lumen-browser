@@ -516,8 +516,8 @@ def lumen_snapshot(br: "pa.LiveBrowser", url: str, args, out_png: Path) -> dict:
             probe = parse_probe(br.mcp.tool("eval", {"code": PAGE_JS}).get("result"))
             snap.update(probe)
             shot = br.mcp.resource("resource://screenshot")
-            if shot and shot[0].get("data"):
-                out_png.write_bytes(base64.b64decode(shot[0]["data"]))
+            if shot and shot[0].get("blob"):
+                out_png.write_bytes(base64.b64decode(shot[0]["blob"]))
                 snap["png"] = str(out_png)
             console = br.mcp.resource("resource://console")
             entries = json.loads(console[0].get("text", "[]")) if console else []
