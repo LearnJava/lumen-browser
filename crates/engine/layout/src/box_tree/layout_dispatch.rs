@@ -1305,8 +1305,15 @@ pub(super) fn dispatch_box(
                             size_contained, viewport, legend_extra,
                         );
                         // All children may be abs-positioned (not grid items).
-                        super::grid_trampoline::lay_out_abs(
-                            b, &s, is_positioned, pcb, content_x, content_y, content_width, measurer, viewport, hp,
+                        let content_bottom = b.rect.y + b.rect.height - s.border_bottom_width - padding_bottom;
+                        let content = Rect::new(
+                            content_x,
+                            content_y,
+                            content_width,
+                            (content_bottom - content_y).max(0.0),
+                        );
+                        super::grid_abspos::lay_out_abs(
+                            b, &s, None, is_positioned, pcb, content, measurer, viewport, hp,
                         );
                         return DispatchOutcome::Done;
                     }

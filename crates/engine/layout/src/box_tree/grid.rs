@@ -639,6 +639,8 @@ pub(crate) fn build_grid_init(
         placements,
         n_cols,
         n_rows,
+        col_explicit: col_axis.n_tracks,
+        row_explicit: row_axis.n_tracks,
         col_widths,
         col_offsets,
         col_names,
@@ -1136,6 +1138,49 @@ pub(super) fn resolve_grid_axis(start: &GridLine, end: &GridLine, axis: &GridAxi
     }
     let a = a.min(n);
     (a, b.clamp(a + 1, n + 1))
+}
+
+/// CSS Grid L1 §9.2 — линии области абсолютно позиционированного ребёнка по одной оси:
+/// `(начало, конец)`, 1-based. `None` — край `auto` (padding box контейнера): так считаются
+/// `auto`, `span` без противоположной линии и линия за неявной сеткой (`1..=n_tracks + 1`).
+/// От разбора item'а отличается тем, что `auto / N` не превращается в `N-1 / N`.
+pub(super) fn resolve_abs_axis(
+    start: &GridLine,
+    end: &GridLine,
+    axis: &GridAxis,
+    n_tracks: u32,
+) -> (Option<u32>, Option<u32>) {
+    let s = resolve_edge(start, axis, true);
+    let mut e = resolve_edge(end, axis, false);
+    if matches!(s, Edge::Span(..)) && matches!(e, Edge::Span(..)) {
+        e = Edge::Auto;
+    }
+    let (a, b) = match (s, e) {
+        (Edge::Line(a), Edge::Line(b)) => match a.cmp(&b) {
+            std::cmp::Ordering::Less => (Some(a), Some(b)),
+            std::cmp::Ordering::Greater => (Some(b), Some(a)),
+            std::cmp::Ordering::Equal => (Some(a), Some(a + 1)),
+        },
+        (Edge::Line(a), Edge::Span(n, name)) => {
+            let b = match name {
+                Some(name) => axis.span_forward(&name, a, n),
+                None => a + n,
+            };
+            (Some(a), Some(b))
+        }
+        (Edge::Line(a), Edge::Auto) => (Some(a), None),
+        (Edge::Span(n, name), Edge::Line(b)) => {
+            let a = match name {
+                Some(name) => Some(axis.span_backward(&name, b, n)),
+                None => b.checked_sub(n).filter(|&a| a >= 1),
+            };
+            (a, Some(b))
+        }
+        (Edge::Auto, Edge::Line(b)) => (None, Some(b)),
+        _ => (None, None),
+    };
+    let existing = |l: Option<u32>| l.filter(|l| (1..=n_tracks + 1).contains(l));
+    (existing(a), existing(b))
 }
 
 fn resolve_grid_axis_unclamped(start: &GridLine, end: &GridLine, axis: &GridAxis) -> (u32, u32) {

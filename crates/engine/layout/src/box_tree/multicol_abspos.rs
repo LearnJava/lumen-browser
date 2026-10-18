@@ -337,6 +337,21 @@ pub(crate) fn lay_out_abs_children(
     my_pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) {
+    let with_cb: Vec<(usize, f32, f32, Option<Rect>)> =
+        deferred.iter().map(|&(i, x, y)| (i, x, y, None)).collect();
+    lay_out_abs_children_with(parent, &with_cb, measurer, viewport, my_pcb, hp);
+}
+
+/// [`lay_out_abs_children`] with a per-child containing-block override: `Some(cb)` replaces the
+/// containing block of that child (a grid area, CSS Grid L1 §9.2) for both `absolute` and `fixed`.
+pub(super) fn lay_out_abs_children_with(
+    parent: &mut LayoutBox,
+    deferred: &[(usize, f32, f32, Option<Rect>)],
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    my_pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
     // CSS Anchor Positioning L1: collect all elements with `anchor-name` in the tree.
     // This registry is used to resolve `position-anchor` and `anchor()` function calls below.
     // CSS: anchor-name, position-anchor, anchor()
@@ -345,8 +360,10 @@ pub(crate) fn lay_out_abs_children(
     // carries a transform/filter/…; otherwise they resolve against the viewport.
     let fixed_cb = fixed_cb_rect(parent);
 
-    for &(idx, static_x, static_y) in deferred {
-        let cb = if matches!(parent.children[idx].style.position, Position::Fixed) {
+    for &(idx, static_x, static_y, cb_override) in deferred {
+        let cb = if let Some(cb) = cb_override {
+            cb
+        } else if matches!(parent.children[idx].style.position, Position::Fixed) {
             fixed_cb.unwrap_or_else(|| Rect::new(0.0, 0.0, viewport.width, viewport.height))
         } else {
             my_pcb
@@ -564,7 +581,7 @@ fn auto_margin_shift(free: f32, start_auto: bool, end_auto: bool) -> f32 {
 }
 
 /// Padding box of `b` — the containing block it provides to positioned descendants.
-fn padding_box_rect(b: &LayoutBox) -> Rect {
+pub(super) fn padding_box_rect(b: &LayoutBox) -> Rect {
     let s = &b.style;
     Rect::new(
         b.rect.x + s.border_left_width,
@@ -583,13 +600,13 @@ pub(crate) fn establishes_abs_cb(s: &ComputedStyle) -> bool {
 
 /// `Some(padding box)` when `b` is the containing block of `position: fixed`
 /// descendants instead of the viewport (css-transforms-1 §2).
-fn fixed_cb_rect(b: &LayoutBox) -> Option<Rect> {
+pub(super) fn fixed_cb_rect(b: &LayoutBox) -> Option<Rect> {
     contains_fixed_descendants(&b.style).then(|| padding_box_rect(b))
 }
 
 /// An anchor-positioned box is placed by `container_anchor`'s post-pass, which
 /// reads the final anchor rects — nothing to correct here.
-fn uses_anchor_positioning(s: &ComputedStyle) -> bool {
+pub(super) fn uses_anchor_positioning(s: &ComputedStyle) -> bool {
     s.position_anchor.is_some()
         || s.anchor_left.is_some()
         || s.anchor_right.is_some()
