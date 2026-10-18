@@ -419,7 +419,7 @@ fn post_measure_item(frame: &mut Frame, i: usize, viewport: Size) {
 fn finish_measure_phase(frame: &mut Frame, viewport: Size) {
     if frame.init.segments[frame.seg_i].grid_frag && emit_grid_fragments(frame) {
         enter_span_phase(frame);
-    } else if frame.init.segments[frame.seg_i].sliceable {
+    } else if frame.init.segments[frame.seg_i].sliceable && !forced_rows_wanted(frame) {
         emit_sliced_fragments(frame, viewport);
         enter_span_phase(frame);
     } else {
@@ -427,6 +427,18 @@ fn finish_measure_phase(frame: &mut Frame, viewport: Size) {
         frame.phase = Phase::Place;
         frame.k = 0;
     }
+}
+
+/// `column-wrap: wrap` without a `column-height` rows up the runs between forced breaks when
+/// they ask for more than `column-count` columns (`assign_forced_rows`) — a path of the atomic
+/// placement, so a segment of that kind is not sliced.
+fn forced_rows_wanted(frame: &Frame) -> bool {
+    if frame.init.wrap_auto.is_none() {
+        return false;
+    }
+    let items: Vec<&LayoutBox> =
+        frame.init.segments[frame.seg_i].item_idxs.iter().map(|&i| &frame.init.work[i]).collect();
+    forced_breaks(&items).iter().filter(|f| **f).count() + 1 > frame.init.n_cols as usize
 }
 
 /// Column height limit of the current segment (see [`MulticolInit::limit_shared`]).
@@ -455,6 +467,85 @@ fn column_height(balance: bool, limit: Option<f32>, total_h: f32, n_cols: usize)
         limit.unwrap_or(total_h)
     };
     h.max(1.0)
+}
+
+/// Offsets of the items in the virtual single-column stack of a sliced segment, margins
+/// included, and the stack's length. A `forced` item starts at the next column boundary
+/// (the first column is `first_h` tall, the later ones `later_h`) unless it is already on one.
+fn stack_with_breaks(outer_hs: &[f32], forced: &[bool], first_h: f32, later_h: f32) -> (Vec<f32>, f32) {
+    const EPS: f32 = 0.01;
+    let later_h = later_h.max(1.0);
+    let mut starts = Vec::with_capacity(outer_hs.len());
+    let mut v = 0.0f32;
+    for (&oh, &f) in outer_hs.iter().zip(forced) {
+        if f && v > EPS {
+            v = if v <= first_h + EPS {
+                if (first_h - v).abs() <= EPS { v } else { first_h }
+            } else {
+                first_h + ((v - first_h) / later_h - EPS).ceil() * later_h
+            };
+        }
+        starts.push(v);
+        v += oh;
+    }
+    (starts, v)
+}
+
+/// [`column_height`] for a segment with forced breaks: `column-fill: auto` without a limit
+/// takes the tallest run between two breaks, `balance` the smallest height at which the stack
+/// (`stack_with_breaks`) fits `n_cols` columns, capped by the limit.
+fn forced_column_height(balance: bool, limit: Option<f32>, outer_hs: &[f32], forced: &[bool], n_cols: usize) -> f32 {
+    let total: f32 = outer_hs.iter().sum();
+    let mut run = 0.0f32;
+    let mut tallest = 0.0f32;
+    for (&oh, &f) in outer_hs.iter().zip(forced) {
+        if f {
+            run = 0.0;
+        }
+        run += oh;
+        tallest = tallest.max(run);
+    }
+    let h = if !balance {
+        limit.unwrap_or(tallest)
+    } else {
+        let mut lo = (total / n_cols as f32).max(1.0);
+        let mut hi = total.max(lo);
+        for _ in 0..40 {
+            if hi - lo <= 0.25 {
+                break;
+            }
+            let mid = (lo + hi) * 0.5;
+            if stack_with_breaks(outer_hs, forced, mid, mid).1 <= n_cols as f32 * mid + 0.01 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        limit.map_or(hi.ceil(), |l| hi.ceil().min(l))
+    };
+    h.max(1.0)
+}
+
+/// The part of the chain box `src` (see `multicol_abspos::box_is_slice_chain`) that falls into
+/// the column window `[col_lo, col_hi)` of the virtual stack, where its border box starts at
+/// `top`. `dx` moves it into the column, `dy` maps the virtual offset to the page.
+fn cut_chain(src: &LayoutBox, top: f32, col_lo: f32, col_hi: f32, dx: f32, dy: f32) -> LayoutBox {
+    let lo = top.max(col_lo);
+    let hi = (top + src.rect.height).min(col_hi);
+    let mut frag = src.clone();
+    frag.rect.x = src.rect.x + dx;
+    frag.rect.y = dy + lo;
+    frag.rect.height = (hi - lo).max(0.0);
+    for (slot, child) in frag.children.iter_mut().zip(&src.children) {
+        if matches!(child.kind, BoxKind::Skip) {
+            continue;
+        }
+        let ctop = top + (child.rect.y - src.rect.y);
+        if ctop < col_hi && ctop + child.rect.height > col_lo {
+            *slot = cut_chain(child, ctop, col_lo, col_hi, dx, dy);
+        }
+    }
+    frag
 }
 
 /// Number of columns needed for `total_h` of content at column height
@@ -493,36 +584,46 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
     let item_idxs = frame.init.segments[seg_i].item_idxs.clone();
     let outer_hs = frame.outer_hs.clone();
 
-    let total_h: f32 = outer_hs.iter().sum();
+    let plain_h: f32 = outer_hs.iter().sum();
     let n = n_cols as usize;
     let followed_by_span = frame.init.segments[seg_i].span_idx.is_some();
+    // Fragmentation L3 §3.1: a forced break moves the box behind it to the top of the next column.
+    let forced = {
+        let items: Vec<&LayoutBox> = item_idxs.iter().map(|&i| &frame.init.work[i]).collect();
+        forced_breaks(&items)
+    };
+    let any_forced = forced.iter().any(|f| *f);
     // Height of the first row of the segment and of the later ones. A segment that continues a
     // row cut by a spanner starts with the rest of that row; a segment closed by a spanner whose
     // content fits one row is balanced (Multicol L1 §7: columns before a spanner are balanced).
     let (first_h, later_h) = match rows_cfg {
         Some(r) => {
             let avail = row_rest.map_or(r.col_h, |rest| rest.min(r.col_h)).max(1.0);
-            if followed_by_span && total_h <= n as f32 * avail + 0.01 {
-                (((total_h / n as f32).ceil()).clamp(1.0, avail), r.col_h.max(1.0))
+            if followed_by_span && !any_forced && plain_h <= n as f32 * avail + 0.01 {
+                (((plain_h / n as f32).ceil()).clamp(1.0, avail), r.col_h.max(1.0))
             } else {
                 (avail, r.col_h.max(1.0))
             }
         }
+        None if any_forced => {
+            let h = forced_column_height(balance, container_h, &outer_hs, &forced, n);
+            (h, h)
+        }
         None => {
-            let h = column_height(balance, container_h, total_h, n);
+            let h = column_height(balance, container_h, plain_h, n);
             (h, h)
         }
     };
 
     // Virtual single-column stack: each box's border-box occupies
-    // [virtual_top, virtual_top + height), with margins as gaps.
+    // [virtual_top, virtual_top + height), with margins as gaps; a forced break skips the rest
+    // of the column.
+    let (starts, total_h) = stack_with_breaks(&outer_hs, &forced, first_h, later_h);
     let mut stack: Vec<(usize, f32, f32)> = Vec::with_capacity(item_idxs.len());
-    let mut v = 0.0f32;
-    for (&i, &oh) in item_idxs.iter().zip(outer_hs.iter()) {
+    for (&i, &top) in item_idxs.iter().zip(starts.iter()) {
         let c = &frame.init.work[i];
         let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
-        stack.push((i, v + mt, c.rect.height));
-        v += oh;
+        stack.push((i, top + mt, c.rect.height));
     }
 
     // Emit one clipped fragment per (column, box) overlap. Content that does
@@ -563,11 +664,9 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) {
             let ov_lo = bt.max(col_lo);
             let ov_hi = bb.min(col_hi);
             if ov_hi > ov_lo {
-                let mut frag = frame.init.work[i].clone();
-                frag.rect.x = col_x;
-                frag.rect.y = cur_y + row_y + (ov_lo - col_lo);
+                let src = &frame.init.work[i];
+                let mut frag = cut_chain(src, bt, col_lo, col_hi, col_x - src.rect.x, cur_y + row_y - col_lo);
                 frag.rect.width = col_w;
-                frag.rect.height = ov_hi - ov_lo;
                 seg_extent = seg_extent.max(ov_hi - col_lo);
                 frame.init.out.push(frag);
             }

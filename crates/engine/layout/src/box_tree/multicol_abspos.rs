@@ -27,7 +27,33 @@ use crate::resolved_geometry::contains_fixed_descendants;
 /// border whose cut edge would show. Anything else keeps the atomic
 /// one-box-per-column placement.
 fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
-    !super::multicol_fragmentation::has_forced_break(&b.style) && box_is_leaf_block(b, container)
+    box_is_slice_chain(b, container, 0)
+}
+
+/// A leaf block, or a plain wrapper (`multicol_span::is_span_transparent`) without vertical
+/// border/padding around exactly one such box — what `multicol_break::hoist_nested_breaks` leaves
+/// of a wrapper cut at a forced break. A column window cuts the chain box by box, each fragment
+/// keeping its part (`multicol_trampoline::cut_chain`). A forced break on the item only moves
+/// where it starts.
+fn box_is_slice_chain(b: &LayoutBox, container: &ComputedStyle, depth: usize) -> bool {
+    if box_is_leaf_block(b, container) {
+        return true;
+    }
+    let mut flow = b.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip));
+    let (Some(only), None) = (flow.next(), flow.next()) else {
+        return false;
+    };
+    let zero = |l: &Length| matches!(l, Length::Px(v) if *v == 0.0);
+    depth < 8
+        && super::multicol_span::is_span_transparent(b)
+        && b.style.break_inside != crate::style::BreakValue::Avoid
+        && [b.style.border_top_width, b.style.border_bottom_width, b.style.border_left_width, b.style.border_right_width]
+            .iter()
+            .all(|w| *w == 0.0)
+        && zero(&b.style.padding_top)
+        && zero(&b.style.padding_bottom)
+        && !matches!(only.style.position, Position::Absolute | Position::Fixed)
+        && box_is_slice_chain(only, container, depth + 1)
 }
 
 /// [`box_is_column_sliceable`] without the forced-break condition: a leaf block that a column
