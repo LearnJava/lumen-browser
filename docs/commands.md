@@ -14,7 +14,7 @@ cargo test -p lumen-font
 # Integration tests on bundled Inter.
 cargo test -p lumen-font --test inter_real_font
 
-# Strict clippy (warnings = errors). Required before every commit.
+# Strict clippy (warnings = errors). Required once, before the closing commit (not WIP).
 cargo clippy -p lumen-layout --all-targets -- -D warnings
 
 # Run browser with test page.
@@ -84,7 +84,7 @@ tail -5 .tmp/clippy.log
 grep -E "^error" .tmp/clippy.log      # re-filter for free
 ```
 
-**Gate discipline — when to run what.** During iteration: `cargo check -p <crate>` only. Right before the commit: one `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests (`cargo test -p <crate> -- <module>`). Full gates — workspace clippy + `scripts/scoped-test.sh` — run exactly **once**, inside `/lumen-task-finish`; don't run them manually before or after it. Run gates **synchronously in the foreground** (Bash `timeout: 600000`), never as background tasks: background output files buffer through pipes, look empty for the whole run, and provoke minutes of polling plus a duplicate run of the same command.
+**Gate discipline — when to run what.** During iteration: `cargo check -p <crate>` only. Right before the closing commit (a WIP commit to the task branch needs `cargo check` only): one `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests (`cargo test -p <crate> -- <module>`). Full gates — workspace clippy + `scripts/scoped-test.sh` — run exactly **once**, inside `/lumen-task-finish`; don't run them manually before or after it. Run gates **synchronously in the foreground** (Bash `timeout: 600000`), never as background tasks: background output files buffer through pipes, look empty for the whole run, and provoke minutes of polling plus a duplicate run of the same command.
 
 **Long *iteration* runs are the opposite case — background them.** A gate blocks: you cannot proceed without its verdict, so you wait for it in the foreground. A long build/test you don't need the answer to *right now* (a baseline build, a `--no-run` test build, a full graphic pipeline) should go to the background with the Bash tool's `run_in_background: true`, so the harness notifies you on exit and you keep working meanwhile.
 
@@ -175,3 +175,12 @@ export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 Not needed in cmd / PowerShell — PATH is correct there.
+
+## Build cost
+
+Measured 2026-10-14..18 from the S1 session logs (721 cargo/test calls, ~17 h of build time; method and the rest — [`build-speed.md`](build-speed.md) §7).
+
+- **Gate once, at the closing commit.** A WIP commit (task unfinished, pushed to the task branch for a handoff) needs `cargo check -p <crate>` and, if useful, `cargo test -p <crate> -- <module>` — no clippy, no `scripts/scoped-test.sh`. Measured: `scoped-test.sh` averaged 226 s over 52 calls, `clippy -p lumen-shell --all-targets` 197 s over 16.
+- **One compiling session at a time.** With a second session building, the median clippy went 23 s → 76 s and the mean test run 81 s → 165 s. Don't run two cargo-heavy sessions together. Splitting the 8 cores with `CARGO_BUILD_JOBS` (for example 5 + 3) is an untested alternative and is not set in `.cargo/config.toml`.
+- **`dev-release` only for a binary** you need (A/B comparison, `--screenshot`, `--dump-layout`). 32 `dev-release` builds of `lumen-shell` averaged 190 s. A pure layout check is `cargo test -p lumen-layout -- <module>`.
+- **Over ~2 minutes → `run_in_background: true`, never `sleep` polling** (rule above). 45 calls hit the 600 s tool ceiling; sleep-polling took 72–177 min per night.

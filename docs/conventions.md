@@ -12,7 +12,7 @@
 ## Style
 
 - `dev` profile uses `opt-level = 1` for own code (10% slower build, 5-10× faster layout/paint) and `opt-level = 3` for deps via `[profile.dev.package."*"]` (wgpu/winit/rustls are unusable in pure debug; rationale in [DECISIONS.md](../DECISIONS.md)).
-- `clippy::all` + `clippy::pedantic` not yet enabled globally, but `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit.
+- `clippy::all` + `clippy::pedantic` not yet enabled globally, but `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before the closing commit (a WIP commit needs `cargo check` only).
 - No unnecessary comments — only when explaining *why*, not *what*.
 - Names: `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants.
 - **`///` doc comments on all public structs, fields, and functions are mandatory.** Parallel sessions rely on these to understand semantics without reading the full implementation. At minimum: what the value represents, what coordinate system or box model it uses, what units, what it includes/excludes. Example: `/// Border-box rectangle: includes padding + border, excludes margin.` Machine-checked since 2026-08-18 (`missing_docs = "deny"` in `[workspace.lints.rust]`); the pre-existing debt (1866 items) is held behind **file-scoped** `#![allow(missing_docs)]`, so a *new* file must document its public API even in a crate that still owes docs.
