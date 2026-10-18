@@ -61,6 +61,8 @@ pub(super) struct Model {
     free: Vec<Free>,
     /// Bottom of the last item (the stack without the last margin).
     pub(super) end: f32,
+    /// `end` of the last forced break (0 when there is none).
+    last_forced: f32,
 }
 
 /// The measured items of a segment with their position in the virtual stack.
@@ -90,6 +92,7 @@ impl<'a> Flow<'a> {
         walk_list(&mut model, &list, false, 0, viewport);
         model.cands.sort_by(|a, b| a.end.total_cmp(&b.end).then(a.resume.total_cmp(&b.resume)));
         model.free.sort_by(|a, b| a.lo.total_cmp(&b.lo));
+        model.last_forced = model.cands.iter().filter(|c| c.forced).map(|c| c.end).fold(0.0, f32::max);
         Flow { items: placed, model }
     }
 }
@@ -275,11 +278,6 @@ impl Model {
         self.free[..k].iter().rev().take(4).find(|f| x <= f.hi + EPS && x >= f.lo - EPS).map(|f| f.tier)
     }
 
-    /// Does the stack hold a forced break?
-    pub(super) fn has_forced(&self) -> bool {
-        self.cands.iter().any(|c| c.forced)
-    }
-
     /// Column windows `[start, end)` of the stack; `h_of(k)` is the height of column `k`
     /// (infinite for `column-fill: auto` without a height). With `strict` any break that
     /// violates a rule — or a column that cannot hold its content — makes the result `None`.
@@ -289,12 +287,13 @@ impl Model {
         loop {
             let k = out.len();
             let h = h_of(k);
-            if self.end - lo <= h + EPS || k + 1 >= MAX_WINDOWS {
+            let a = self.cands.partition_point(|c| c.end <= lo + EPS);
+            let forced_ahead = self.last_forced > lo + EPS;
+            if (self.end - lo <= h + EPS && !forced_ahead) || k + 1 >= MAX_WINDOWS {
                 out.push((lo, self.end.max(lo)));
                 return Some(out);
             }
             let reach = lo + h + EPS;
-            let a = self.cands.partition_point(|c| c.end <= lo + EPS);
             let b = self.cands.partition_point(|c| c.end <= reach);
             let range = &self.cands[a..b];
             let mut pick: Option<(f32, f32, u8)> = None;
@@ -397,7 +396,7 @@ fn shell(b: &LayoutBox) -> LayoutBox {
         scroll_x: b.scroll_x,
         scroll_y: b.scroll_y,
         dirty: b.dirty,
-        origin: b.origin.clone(),
+        origin: b.origin,
     }
 }
 
@@ -433,6 +432,9 @@ pub(super) fn cut(d: &LayoutBox, off: f32, w: &Window, depth: usize) -> Option<L
     let vt = d.rect.y + off;
     let vb = vt + d.rect.height;
     let starts_here = vt >= w.lo - EPS && (vt < w.hi - EPS || (w.last && vt <= w.hi + EPS));
+    if !starts_here && (vb <= w.lo + EPS || vt >= w.hi - EPS) {
+        return None;
+    }
     let is_run = matches!(d.kind, BoxKind::InlineRun { .. });
     let fragmentable = is_run || is_fragmentable(d, depth);
     if starts_here && (vb <= w.hi + EPS || !fragmentable) {
@@ -440,7 +442,7 @@ pub(super) fn cut(d: &LayoutBox, off: f32, w: &Window, depth: usize) -> Option<L
         super::shift_tree(&mut whole, w.dx, w.col_top - w.lo + off);
         return Some(whole);
     }
-    if !fragmentable || vb <= w.lo + EPS || vt >= w.hi - EPS {
+    if !fragmentable {
         return None;
     }
     let top_cut = vt < w.lo - EPS;
