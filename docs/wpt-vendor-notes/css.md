@@ -171,7 +171,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 
 | Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
 |---|---|---|---|---|---|---|---|
-| flex во фрагментации | 268 | — | 268 thick | `flexbox/single-line-column-flex-fragmentation-001.html`, `flexbox/multi-line-row-flex-fragmentation-013.html` | flex-контейнер в multicol атомарен | P1 | `FLEX-FRAG` (`ROADMAP.md`) |
+| flex во фрагментации | 268 | — | 268 thick | `flexbox/single-line-column-flex-fragmentation-001.html`, `flexbox/multi-line-row-flex-fragmentation-013.html` | flex-контейнер в multicol атомарен (до FLEX-FRAG 2026-10-18; после — 124 из 330 id `css-break/flexbox` PASS, остаток — abspos/MULTICOL-FRAG-OOF, переполнение, `contain: size`) | P1 | `FLEX-FRAG` (`ROADMAP.md`, done) |
 | блоки и строки не режутся | 176 | 3 | 168 thick, 4 thin, 1 identical | `widows-orphans-001.html`, `float-001.html`, `overflow-clip-001.html`, `borders-006.html` | режется только лист без детей и рамок; текст — никогда | P1 | `MULTICOL-FRAG` |
 | abspos во фрагментированном потоке | 156 | 4 | 152 thick, 2 thin | `out-of-flow-in-multicolumn-001.html`, `abspos-in-opacity-001.html`, `transform-013.html` | CB и `top` abspos считаются по нефрагментированному потоку, abspos не режется | P1 | `MULTICOL-FRAG-OOF` |
 | таблицы | 123 | 59 | 118 thick | `table/break-before-second-row.html`, `table/table-parts-offsets.tentative.html` | таблица атомарна; `offsetTop` частей таблицы в multicol неверен | P1 | `TABLE-FRAG` |
@@ -2119,7 +2119,7 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 | 5 | `WPT-RUN-15` (`ROADMAP.md`) | planned | 423 | S17, S18, S19, S20, S21, S22, S26 | P2 | рендер перехода: reftest-снимки, *-while-render-blocked,…; reftest-wait: скрипт снимает класс, раннер не ждёт |
 | 6 | `LINEBREAK-UAX14` (`ROADMAP.md`) | planned | 335 | S9 | P1 | i18n/opclns: OP-символ отрывается от следующей буквы; i18n/baspglwj: нет возможности переноса после дефиса,… |
 | 7 | [BUG-1306](../../bugs/BUG-1306-OPEN.md) | OPEN | 334 | S7, S8, S9, S16 | P3 | Ahem: fonts.ready → измерение читает устаревший снимок…; i18n/{ja,zh,other-lang,unknown-lang}: измерение после… |
-| 8 | `FLEX-FRAG` (`ROADMAP.md`) | planned | 278 | S4, S23 | P1 | flex во фрагментации; css-gaps во фрагментированном контейнере |
+| 8 | `FLEX-FRAG` (`ROADMAP.md`) | done 2026-10-18 | 278 | S4, S23 | P1 | flex во фрагментации; css-gaps во фрагментированном контейнере |
 | 9 | [BUG-1563](../../bugs/BUG-1563-OPEN.md) | OPEN | 263 | S25 | P3 | Typed OM: new CSSMathSum(a, b) и др. принимают массив, а… |
 | 10 | [BUG-779](../../bugs/BUG-779-OPEN.md) | OPEN | 236 | S27 | P1 (`ROADMAP.md:1121` PAINT-WORKLET, добавлено) | css-layout-api (Houdini Layout); css-paint-api (Houdini Paint) |
 | 11 | `MULTICOL-FRAG-OOF` (`ROADMAP.md`) | planned | 181 | S4, S17 | P1 | abspos во фрагментированном потоке; multicol: abspos / fixed / clip / transform |
