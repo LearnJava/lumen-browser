@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-18",
  "counts": {
-  "open": 388,
-  "fixed": 1179,
+  "open": 379,
+  "fixed": 1195,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1570,
+ "total_bugs": 1577,
  "phases": [
   {
    "id": "P0",
@@ -611,37 +611,46 @@
     {
      "id": "GRID-FR-ROWS",
      "title": "GRID-FR-ROWS: fr-строки при неопределённой высоте",
-     "status": "planned",
+     "status": "done",
      "size": "S",
-     "note": "Строка `minmax(0, <flex>)` (и `fr` вообще) при неопределённой высоте контейнера не растёт по содержимому items: в `finish_probe_pass` рост ограничен треками `auto`/`min-content`/`max-content`/`Fr`, а `Minmax` пропускается; нужен поиск размера `fr` в два прохода (CSS Grid L1 §11.7: гипотетический fr-размер от max-content items, затем от высоты контейнера). Критерий готовности: WPT `css-grid/layout-algorithm/flex-sizing-rows-indefinite-height-*` (до GRID-VWM `-002` совпадал случайно: `top: -32px` терялся при выравнивании)"
+     "note": "Сделано (2026-10-18, ветка `p1-grid-fr-rows`): (1) гибкие строки (`Nfr`, `minmax(_, Nfr)`) при неопределённой высоте: размер `fr` — наибольшее из «база / коэффициент» и вкладов items, пересекающих гибкие строки (`GridInit::flex_contribs`, `expand_flexible_rows`, Grid L1 §11.7.1), затем второй проход по получившейся высоте как по определённой (`find_fr_size`); (2) сумма коэффициентов < 1 считается единицей (`find_fr_size`, определённая высота строк); (3) max-content ширина `inline-grid` масштабирует гибкие колонки (`expand_flexible_columns`: `minmax(0, .5fr)` над 200px — 100px, `1fr 2fr` над двумя 100px — 100+200); одиночная колонка с коэффициентом < 1 больше не берёт полную ширину item'а. Тесты `box_tree/tests/grid_fr_rows.rs`. Не сделано: `minmax(_, Nfr)` при определённой высоте контейнера и min/max-height контейнера в расчёте `fr` (`flex-sizing-rows-min-max-height-001`)"
     },
     {
      "id": "MULTICOL-BREAKS-2",
      "title": "MULTICOL-BREAKS-2: nested breaks, vertical multicol",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Остаток MULTICOL-BREAKS: (1) разрыв внутри вложенного блока (`break-before` на потомке дочернего блока multicol, WPT `column-height-024`, `spanner-fragmentation-*`) — должен подниматься к multicol и резать блок; (2) сегмент из режущегося листа и блока с разрывом — Edge режет лист по сбалансированным колонкам, Lumen кладёт целиком; (3) `column-wrap: wrap` без `column-height` — строки по принудительным разрывам (`column-wrap-no-constraints-002`); (4) multicol в вертикальном `writing-mode`: колонки идут по inline-оси (вниз), сейчас стопкой по block-оси (`flex-align-baseline-multicol-002/003`, `grid-align-baseline-multicol-002/003`: offsetLeft 105 против 195); (5) `margin-top` первого ребёнка схлопывается сквозь multicol-контейнер, хотя он BFC (рамка и фон контейнера съезжают вниз). Критерий готовности: перечисленные WPT, графтест"
+     "note": "СДЕЛАНО 2026-10-18 (ветка `p1-multicol-breaks-2`): (1) разрыв внутри вложенного блока — `multicol_break::hoist_nested_breaks` режет прозрачные обёртки по принудительным разрывам (`break-before`/`break-after` первого/последнего ребёнка считаются разрывом самой обёртки); (2) лист (и цепочка простых обёрток вокруг него) за принудительным разрывом режется колонками (`stack_with_breaks`, `cut_chain`); (3) `column-wrap: wrap` без `column-height` — ряды по принудительным разрывам; (5) multicol-контейнер — BFC, `margin-top` первого ребёнка не схлопывается сквозь него. Тесты `box_tree/tests/multicol_nested_break.rs`, `multicol_mixed_break.rs`, `multicol_wrap_margin.rs`; графтесты 33/161/162 зелёные. Не сделано: пункт (4) — multicol в вертикальном `writing-mode` (вынесен в MULTICOL-VERTICAL), `spanner-fragmentation-*` с текстом. Исходная постановка: Остаток MULTICOL-BREAKS: (1) разрыв внутри вложенного блока (`break-before` на потомке дочернего блока multicol, WPT `column-height-024`, `spanner-fragmentation-*`) — должен подниматься к multicol и резать блок; (2) сегмент из режущегося листа и блока с разрывом — Edge режет лист по сбалансированным колонкам, Lumen кладёт целиком; (3) `column-wrap: wrap` без `column-height` — строки по принудительным разрывам (`column-wrap-no-constraints-002`); (4) multicol в вертикальном `writing-mode`: колонки идут по inline-оси (вниз), сейчас стопкой по block-оси (`flex-align-baseline-multicol-002/003`, `grid-align-baseline-multicol-002/003`: offsetLeft 105 против 195); (5) `margin-top` первого ребёнка схлопывается сквозь multicol-контейнер, хотя он BFC (рамка и фон контейнера съезжают вниз). Критерий готовности: перечисленные WPT, графтест"
     },
     {
      "id": "TABLE-VWM",
      "title": "TABLE-VWM: таблицы в вертикальном writing-mode",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Таблицы в вертикальном `writing-mode` раскладываются горизонтально: `table*.rs` не читает `writing_mode` вовсе (`grep` пуст), строки `<table style=\"writing-mode:vertical-lr\">` стекаются по физической `y`, ячейки — по `x`, как в `horizontal-tb`. Нужно по CSS Writing Modes L3 §7 и CSS Tables L3: строки идут по блочной оси (физическая `x`, справа налево у `vertical-rl`), столбцы — по inline-оси, `border-spacing`/`caption-side`/`vertical-align` ячеек — в логических осях, `direction: rtl` разворачивает порядок столбцов. Найдено WPT-RUN-14 S2 (2026-10-05): в `css/css-writing-modes` таблицы использует 117 провалившихся id (`table-progression-*`, `row-progression-*`, `table-column-order-*`, `table-cell-*`, `border-conflict-element-*`, `contiguous-floated-table-*`, часть `block-flow-direction-*`) — кластер в `docs/wpt-vendor-notes/css.md` §css-writing-modes."
+     "note": "**СДЕЛАНО 2026-10-18 (ветка `p1-table-vwm`):** (1) `box_tree/table_vertical.rs` — раскладка таблицы в вертикальном `writing-mode` в логических осях (строки по физической `x`, у `*-rl` справа налево; столбцы по `y`, `direction: rtl`/`sideways-lr` обращают; `border-spacing` физический; `vertical-align` ячейки по block-оси; `table-layout: fixed`, `rowspan`/`colspan`, `thead`/`tfoot`, collapse-перекрытие рамок), ранняя арка в `layout_dispatch::dispatch_box`; `text-orientation: upright` принуждает `ltr`. (2) `table_trampoline::mirror_columns_rtl` — **горизонтальная** таблица с `direction: rtl` теперь обращает столбцы (раньше не обращала вовсе); `step_cell` — ортогональная ячейка получает физическую `width` столбца. (3) `html-parser`: пробелы/комментарии между `<colgroup>` и `<col>` остаются в группе. (4) Кластер `css-writing-modes` (64 id без `-ref`): падало 117 → 44; из них 26 — тесты с Ahem-текстом (стенд меряет текст оценщиком, не Ahem, `docs/probe-method.md`), остаток — `TABLE-VWM-2`. Исходное описание: Таблицы в вертикальном `writing-mode` раскладываются горизонтально: `table*.rs` не читает `writing_mode` вовсе (`grep` пуст), строки `<table style=\"writing-mode:vertical-lr\">` стекаются по физической `y`, ячейки — по `x`, как в `horizontal-tb`. Нужно по CSS Writing Modes L3 §7 и CSS Tables L3: строки идут по блочной оси (физическая `x`, справа налево у `vertical-rl`), столбцы — по inline-оси, `border-spacing`/`caption-side`/`vertical-align` ячеек — в логических осях, `direction: rtl` разворачивает порядок столбцов. Найдено WPT-RUN-14 S2 (2026-10-05): в `css/css-writing-modes` таблицы использует 117 провалившихся id (`table-progression-*`, `row-progression-*`, `table-column-order-*`, `table-cell-*`, `border-conflict-element-*`, `contiguous-floated-table-*`, часть `block-flow-direction-*`) — кластер в `docs/wpt-vendor-notes/css.md` §css-writing-modes.",
+     "tasks": [
+      {
+       "id": "TABLE-VWM-2",
+       "title": "TABLE-VWM-2: конфликт рамок collapse, float под блоком, caption",
+       "status": "planned",
+       "size": "M",
+       "note": "Остаток TABLE-VWM (кластер `css/css-writing-modes`, `tests/wpt/css/css-writing-modes`). (1) Конфликт рамок `border-collapse: collapse` по элементам (CSS 2.1 §17.6.2.1: ширина, стиль, затем ячейка > строка > группа строк > столбец > группа столбцов > таблица, при полной ничьей побеждает более ранняя по inline-оси — для `ltr` вертикальной таблицы верхняя): paint сейчас не разрешает конфликт, а рисует рамки ячеек в порядке документа тремя проходами (`display_list/table.rs::emit_table_cell_border`), поэтому `border-conflict-element-vlr-003/005/007/009/011`, `vrl-002/004/006/008/010` (10 id) выигрывает красная рамка поздней ячейки; то же верно для горизонтальной таблицы. Нужно: слой разрешённых рамок линий сетки (layout → paint) с рамками строк/групп/`<col>`, а не только ячеек. (2) Блок с явной `width` рядом с float сдвигается за float вместо того, чтобы лечь под него (`block_flow_trampoline.rs` ~440, «Lumen paints floats in source order»; проба: `.f{float:left;width:50px;height:100px}` ×2 и следом `div{width:100px;height:100px;background:red}` — div стоит на `x=100`, должен на `x=0` под float-ами) — из-за этого падают `contiguous-floated-table-vlr-003/005/007/009`, `vrl-002/004/006/008` (8 id; сами таблицы встают верно). Нужно: float-ы красятся поверх следующих за ними in-flow блоков (порядок §E.2: float после блочных фонов), блок с `width` не сдвигается. (3) `<caption>` вертикальной таблицы (не раскладывается; `table_caption_inset` читает paint по `y`), `vertical-align: baseline` по общей линии, abspos-потомки ячейки с containing block вне ячейки (ячейки раскладываются не на финальной `x`). (4) Ahem-тесты кластера (`row-progression-*`, `table-cell-*`, `table-column-order-*`, 26 id) — проверять после появления Ahem-метрик в стенде, не раньше."
+      }
+     ]
     },
     {
      "id": "MULTICOL-FRAG",
      "title": "MULTICOL-FRAG: фрагментация блоков и строк по колонкам",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Фрагментация блочного и строчного содержимого по колонкам multicol (CSS Fragmentation L3, CSS Multicol L1). Сейчас режется только лист — `Block` без детей и рамок (`box_is_column_sliceable`, `box_tree/multicol_abspos.rs:29`) — и простая сетка (`is_fragmentable_grid`); всё прочее ставится в одну колонку целиком и вылезает за её низ. Пробы (`column-fill: auto`, высота 100px, `--dump-layout` + `--screenshot`): блок с двумя детьми 150+50px — внешний бокс 50×200 в первой колонке; текст из 6 строк при высоте 40px (прямой ребёнок `InlineRun` или внутри `<p>`) — одна колонка 120px, и при `column-fill: balance` тоже (две колонки текста не получаются вообще); лист с `border-top/bottom` — целиком. Нужно: разрыв между строками и между детьми на любой глубине; `box-decoration-break: slice` для рамок/padding/фона у разрыва (уже есть у `multicol_span`); усечение margin у разрыва; monolithic-содержимое (замещаемые, `overflow` ≠ `visible`, `contain: size`) — целиком с переполнением; floats; `break-inside: avoid` и `break-before/after: avoid` на вложенных; `orphans`/`widows` внутри блока. Пересекается с MULTICOL-BREAKS-2 (1) — разрыв из вложенного блока. WPT `css/css-break`: 176 id (`widows-orphans-*`, `float-*`, `overflow-clip-*`, `break-between-avoid-*`, `borders-*`, `fieldset-*`, `margin-at-break-*`, `monolithic-overflow-*` …) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). От неё зависят FLEX-FRAG, GRID-FRAG, TABLE-FRAG, MULTICOL-FRAG-OOF. WPT `css/css-multicol` (WPT-RUN-14 S17, 2026-10-07): ещё около 300 id — текст и блоки с детьми в колонках 148, вложенный multicol 48, `column-span: all` без текста 24, `column-height`/`column-wrap` 19, `getClientRects`/`offsetTop` по фрагментам 19, `balance` с `check-layout` 9, `contain-style-breaks` 4; проба: текст из 6 строк в `columns:2` — одна колонка 120 px, ребёнок 250 px при `column-fill:auto; height:100px` — один бокс, `getClientRects().length` равно 1; кластеры в `docs/wpt-vendor-notes/css.md` §css-multicol + css-contain."
+     "note": "Фрагментация блочного и строчного содержимого по колонкам multicol (CSS Fragmentation L3, CSS Multicol L1). Сейчас режется только лист — `Block` без детей и рамок (`box_is_column_sliceable`, `box_tree/multicol_abspos.rs:29`) — и простая сетка (`is_fragmentable_grid`); всё прочее ставится в одну колонку целиком и вылезает за её низ. Пробы (`column-fill: auto`, высота 100px, `--dump-layout` + `--screenshot`): блок с двумя детьми 150+50px — внешний бокс 50×200 в первой колонке; текст из 6 строк при высоте 40px (прямой ребёнок `InlineRun` или внутри `<p>`) — одна колонка 120px, и при `column-fill: balance` тоже (две колонки текста не получаются вообще); лист с `border-top/bottom` — целиком. Нужно: разрыв между строками и между детьми на любой глубине; `box-decoration-break: slice` для рамок/padding/фона у разрыва (уже есть у `multicol_span`); усечение margin у разрыва; monolithic-содержимое (замещаемые, `overflow` ≠ `visible`, `contain: size`) — целиком с переполнением; floats; `break-inside: avoid` и `break-before/after: avoid` на вложенных; `orphans`/`widows` внутри блока. Пересекается с MULTICOL-BREAKS-2 (1) — разрыв из вложенного блока. WPT `css/css-break`: 176 id (`widows-orphans-*`, `float-*`, `overflow-clip-*`, `break-between-avoid-*`, `borders-*`, `fieldset-*`, `margin-at-break-*`, `monolithic-overflow-*` …) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). От неё зависят FLEX-FRAG, GRID-FRAG, TABLE-FRAG, MULTICOL-FRAG-OOF. WPT `css/css-multicol` (WPT-RUN-14 S17, 2026-10-07): ещё около 300 id — текст и блоки с детьми в колонках 148, вложенный multicol 48, `column-span: all` без текста 24, `column-height`/`column-wrap` 19, `getClientRects`/`offsetTop` по фрагментам 19, `balance` с `check-layout` 9, `contain-style-breaks` 4; проба: текст из 6 строк в `columns:2` — одна колонка 120 px, ребёнок 250 px при `column-fill:auto; height:100px` — один бокс, `getClientRects().length` равно 1; кластеры в `docs/wpt-vendor-notes/css.md` §css-multicol + css-contain. СДЕЛАНО 2026-10-18 (ветка `p1-multicol-frag`): `box_tree/multicol_flow.rs` — модель разрывов, пагинация, баланс, нарезка с slice-кромками; подробности и оставшиеся пробелы — `subsystems/layout.md`. Не закрыто: abspos внутри item (откат на атомарный путь), монолитные flex/grid/table (FLEX-FRAG/GRID-FRAG/TABLE-FRAG), схлопывание margin между top-level items, вложенный multicol."
     },
     {
      "id": "FLEX-FRAG",
      "title": "FLEX-FRAG: фрагментация flex-контейнера",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Фрагментация flex-контейнера (CSS Flexbox L1 «Fragmenting Flex Layout», CSS Fragmentation L3 — параллельные потоки). Flex-контейнер в multicol ставится в колонку атомарно, кроме `row wrap` с элементами-листьями при definite height — его с BUG-553 среза 69 режет по flex-строкам путь `is_fragmentable_grid` (после прогона S4). Проба: `column-count: 4; column-fill: auto; height: 100px`, внутри `display: flex; flex-direction: column; height: 400px` с элементами 50+350px — бокс 25×400 в первой колонке, остальные три пусты. Нужно: single-line column — разрыв между элементами и внутри элемента; row — разрыв между flex-линиями и внутри элементов одной линии (каждый — свой параллельный поток), `break-*` на элементах, высота контейнера по фрагментам. WPT `css/css-break/flexbox/*` и flex в корне: 268 id — крупнейший кластер, кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+     "note": "Сделано (2026-10-18, ветка `p1-flex-frag`): flex-контейнер — фрагментируемый блок `multicol_flow` (`is_fragmentable` принимает `Display::Flex`): элементы собираются в flex-линии по перекрытию блочных протяжённостей (`walk_flex_lines`; `order`/`*-reverse` — в визуальном порядке), между линиями — кандидат разрыва (`break-*` любого элемента линии), внутри элементов линии — их собственные кандидаты (параллельные потоки: разрыв режет все элементы по геометрии); фрагмент контейнера с разрывом внизу достаёт до низа колонки (`Window.extent`, Flexbox L1 §12); верхнее поле первого элемента выше колонки режется первым разрывом (`Free.resume`). WPT `css/css-break/flexbox` (330 id, `run_corpus.py`, dev-release): 90 → 124 PASS. Тесты — `box_tree/tests/multicol_flex.rs`. Не закрыто: ~110 id с `position: absolute` внутри multicol (MULTICOL-FRAG-OOF); элементы с `contain: size` и переполнением содержимого за высоту элемента (`is_fragmentable` требует, чтобы дети лежали внутри бокса); inline-block в строках разной высоты (`ItemLines`); проценты высоты от фрагментированного размера; vertical `writing-mode`; `break-before/after` первого/последнего элемента не пробрасывается контейнеру; multi-line flex идёт путём `emit_grid_fragments`. Исходная постановка: Фрагментация flex-контейнера (CSS Flexbox L1 «Fragmenting Flex Layout», CSS Fragmentation L3 — параллельные потоки). Flex-контейнер в multicol ставится в колонку атомарно, кроме `row wrap` с элементами-листьями при definite height — его с BUG-553 среза 69 режет по flex-строкам путь `is_fragmentable_grid` (после прогона S4). Проба: `column-count: 4; column-fill: auto; height: 100px`, внутри `display: flex; flex-direction: column; height: 400px` с элементами 50+350px — бокс 25×400 в первой колонке, остальные три пусты. Нужно: single-line column — разрыв между элементами и внутри элемента; row — разрыв между flex-линиями и внутри элементов одной линии (каждый — свой параллельный поток), `break-*` на элементах, высота контейнера по фрагментам. WPT `css/css-break/flexbox/*` и flex в корне: 268 id — крупнейший кластер, кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
     },
     {
      "id": "MULTICOL-FRAG-OOF",
@@ -876,6 +885,13 @@
      "bugs": [
       "BUG-1264"
      ]
+    },
+    {
+     "id": "MULTICOL-VERTICAL",
+     "title": "MULTICOL-VERTICAL: multicol в вертикальном writing-mode",
+     "status": "planned",
+     "size": "M",
+     "note": "Multicol в вертикальном `writing-mode` (Multicol L1 §3 + Writing Modes L3): колонки идут по inline-оси (физически вниз), у `vertical-rl` содержимое колонки течёт справа налево, высота колонки по блочной оси — физическая ширина контейнера. Сейчас `layout_dispatch` отправляет вертикальный блок в `vertical_trampoline` раньше multicol-ветки (`layout_dispatch.rs`, «CSS Writing Modes L3 §3»), колонки не строятся, дети стопкой по блочной оси. Нужно: ветка multicol для вертикального контейнера (по образцу `grid_vertical`) — число/ширина колонок по физической высоте, раскладка детей по inline-размеру колонки, нарезка по блочным экстентам, `column-span: all`, `column-fill`, принудительные разрывы; baseline multicol-контейнера во flex/grid. WPT: `css-flexbox/alignment/flex-align-baseline-multicol-002/003`, `css-grid/alignment/grid-align-baseline-multicol-002/003` (offsetLeft 105 против 195), `css-multicol/multicol-span-auto-size-in-vertical-writing-mode-*`. Выделено из MULTICOL-BREAKS-2 (пункт 4)."
     }
    ],
    "date": "2026-06"
@@ -2450,7 +2466,7 @@
      "title": "TLS hardening: OCSP + CT + invalid-cert UI",
      "status": "done",
      "size": "M",
-     "note": "Срезы 1-6 (CertInvalid/LumenVerifier/OCSP/CT/реальный CertInfo/live-wiring) + срез A6 (2026-09-22): блокирующий CertInterstitial (Back/Proceed anyway), session-scoped tls::bypass реестр, PanelCertData revocation/ct_status/error-строки с красным заголовком. Part A (OCSP stapling + CT log enforcement + invalid-cert UI) завершена. Negotiate/NTLM + client-cert mTLS (Part B) отложены — отдельная задача. Бриф docs/tasks/ph3-tls-security-hardening.md"
+     "note": "Срезы 1-6 (CertInvalid/LumenVerifier/OCSP/CT/реальный CertInfo/live-wiring) + срез A6 (2026-09-22): блокирующий CertInterstitial (Back/Proceed anyway), session-scoped tls::bypass реестр, PanelCertData revocation/ct_status/error-строки с красным заголовком. Part A (OCSP stapling + CT + invalid-cert UI) завершена; строки панели исправлены в BUG-1618 (OCSP-вердикт по хосту, счёт SCT, «Not checked» вместо «no stapled OCSP»). Negotiate/NTLM + client-cert mTLS (Part B) отложены — отдельная задача. Бриф docs/tasks/ph3-tls-security-hardening.md"
     },
     {
      "id": "P3-gpusandbox",
@@ -8893,7 +8909,7 @@
         {
          "id": "COMPAT-CORPUS-1-BASE",
          "title": "Краулер паритета: живой прогон на corpus.txt+top100",
-         "status": "planned",
+         "status": "done",
          "size": "S",
          "note": "Краулер scripts/compat_crawl.py (COMPAT-CORPUS-1) не прогнан вживую. Объём: `python scripts/compat_crawl.py` на corpus.txt+top100 с плечом Lumen и эталоном Chrome; проверить обработку http_status=None при повторной навигации в той же вкладке; CPR и долю флапов записать в docs/perf/journal.md. Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`). Приёмка: 5 проверок посчитаны у ≥95% сайтов, флапы ≤5%, CPR в отчёте. Источник: docs/research/site-compat/report.md §7.6 п.9.",
          "bugs": [
@@ -8910,7 +8926,7 @@
         {
          "id": "COMPAT-CORPUS-4-BASE",
          "title": "Стенд G: база GPR Lumen, A/B 2×2, ночной прогон",
-         "status": "planned",
+         "status": "done",
          "size": "S",
          "note": "Стенд G (COMPAT-CORPUS-4) снят только на Chrome. Объём: `python scripts/captcha_stand.py --arm lumen --route home-direct` на том же корпусе, `--compare docs/perf/runs/2026-10-14-captcha-chrome.json`, базу GPR Lumen и балл v3 записать в docs/perf/runs/ и docs/perf/journal.md; затем A/B 2×2 идентичности через `--env LUMEN_IDENTITY=chrome_lumen\\|chrome_unbranded` (COMPAT-AB-IDENTITY-KNOB); ночной прогон с `--baseline` и блокировкой релиза при падении «пройдено» — на машине владельца (COMPAT-BIZ). Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`, `navigate` на example.com 47 с). Приёмка: GPR Lumen на ≥15 страницах и балл v3 записаны.",
          "bugs": [
@@ -9957,13 +9973,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1239": {
-   "status": "open",
-   "title": "youtube после BUG-1207: `[JS error]` нет, `ytd-page-manager` апгрейднут, но без детей, `innerText` пуст, ошибок в логе нет.",
-   "component": "js — не локализовано (youtube не строит `ytd-browse`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1248": {
    "status": "open",
    "title": "Анимированное значение SMIL (`<animate attributeName=\"fill\">`/`<set>`/`class`) видно только через `animVal`, но не через `getComputedStyle`/отрисовку презентаци…",
@@ -10381,13 +10390,6 @@
    "status": "open",
    "title": "`el.style.webkitLineClamp = 2` пишет в атрибут `webkit-line-clamp` без ведущего дефиса, `'webkitTransform' in el.style` — `false`; `WebkitX` работает. 5 id `lin…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — camelCase → kebab у `element.style`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1393": {
-   "status": "open",
-   "title": "`-webkit-transform`, `-webkit-box-shadow`, `-webkit-border-radius`, `-webkit-transition`, `-webkit-box-sizing`, `-webkit-animation`, `-webkit-flex` в таблице ст…",
-   "component": "layout (`crates/engine/layout/src/style/apply/*.rs` — таблица имён)",
    "date": null,
    "debtor": false
   },
@@ -11882,62 +11884,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1618": {
-   "status": "open",
-   "title": "Панель сертификата на каждом сайте пишет «No CT evidence» и «no stapled OCSP»: список журналов CT пуст, OCSP-вердикт передаётся как Unknown; CAPABILITIES.md:232…",
-   "component": "network/shell (`tls/ct_logs.rs:33`, `tls/ct.rs:303`, `network/src/lib.rs:1492`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1619": {
-   "status": "open",
-   "title": "`mediaCapabilities.decodingInfo` всегда `{supported:true}` (в т.ч. `media-source` без MSE), аудио `canPlayType` обещает aac/webm/opus без декодера — feature det…",
-   "component": "js/core (`crates/js/src/media_capabilities.rs:33`, `core/src/ext.rs:5227`, `audio_element.rs:713`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1620": {
-   "status": "open",
-   "title": "В штатной сборке `navigator.gpu.requestAdapter()` отдаёт фиктивный адаптер, draw/submit — no-op: сайт выбирает WebGPU и рисует пустой холст; CAPABILITIES.md:179…",
-   "component": "js (`crates/js/src/webgpu.rs:825`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1621": {
-   "status": "open",
-   "title": "`MediaRecorder` принимает любой mimeType, «записывает» и отдаёт пустой Blob: запись голоса молча даёт файл 0 байт",
-   "component": "js (`crates/js/src/media_stream_recording.rs:82`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1622": {
-   "status": "open",
-   "title": "`KeyboardEvent` странице: аргументы `_lumen_dispatch_key_event` не совпадают с шимом — `keyCode`/`which` = 0, `ctrlKey`/`shiftKey`/`altKey` всегда false, `code`…",
-   "component": "shell/js (`lumen/text_input.rs:130`, `frame_text_input.rs:392`, `shim/web_api_shim_mid.js:1703`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1623": {
-   "status": "open",
-   "title": "Окончание загрузки закрывает открытую адресную строку и поиск: набранный во время загрузки адрес стирается, следующие буквы уходят в горячие клавиши страницы",
-   "component": "shell (`crates/shell/src/page_load.rs:2363`, `:1253`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1624": {
-   "status": "open",
-   "title": "Клик в поле страницы не снимает фокус с адресной строки: на экране две каретки, набор уходит в URL",
-   "component": "shell (`lumen/click.rs`, `lumen/keyboard.rs:47`, `lumen/text_input.rs:185`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1625": {
-   "status": "open",
-   "title": "Невалидное значение `background`/`background-image`/`mask-image` не отбрасывается, а затирает предыдущее: цепочка запасных `background:` старых сайтов даёт проз…",
-   "component": "layout (`crates/engine/layout/src/style/apply/paint.rs:147`, `:357`, `:582`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1626": {
    "status": "open",
    "title": "При Chrome-UA принимаются Firefox-префиксы (`-moz-appearance`, `-moz-available`): `CSS.supports('-moz-appearance','none')` = true, Firefox-хаки применяются, в C…",
@@ -11952,20 +11898,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1629": {
-   "status": "open",
-   "title": "Первый кадр в живом окне приходит через 32–131 с (ровно по истечении таймаута `wait document_ready`), `perf_audit.py` даёт HUNG/TIMEOUT на `main` 71cf66b5d; сбо…",
-   "component": "shell/mcp (живое окно `--mcp-live-port`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1630": {
-   "status": "open",
-   "title": "testharness по BiDi стоит в TIMEOUT на `main`: `loading: Some(t.id) == active_id && self.nav_start.is_some()` (UX-LOADING, коммит 27e264dc5) не даёт навигации д…",
-   "component": "shell (`crates/shell/src/chrome_ui.rs:~404`, модель вкладки хрома)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1631": {
    "status": "open",
    "title": "Нет `webkitMaskBoxImage`, `-Outset`, `-Repeat`, `-Slice`, `-Source`, `-Width` (`-webkit-mask-box-image*`, Compat Standard): `compat/webkit-mask-box-enumeration`…",
@@ -11977,6 +11909,27 @@
    "status": "open",
    "title": "Нет `window.orientation` и `onorientationchange` (Window, HTMLBodyElement): `compat/idlharness.window` 23/29, 6 подтестов FAIL",
    "component": "js/dom (WebIDL Window, HTMLBodyElement)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1634": {
+   "status": "open",
+   "title": "Google Fonts на youtube: 271 запрос, 208 разных `.woff2` (все поднаборы `unicode-range`, CSS Fonts 4 §4.5), повторы до 8×, `FontLoaded «YouTube Sans» 300` ×99",
+   "component": "font/shell (загрузка `@font-face`, `unicode-range`) — не локализовано",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1638": {
+   "status": "open",
+   "title": "Событие `statechange` ServiceWorker приходит без `target`: youtube `Cannot read properties of null (reading 'state')`",
+   "component": "js (`navigator.serviceWorker`, `statechange`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1639": {
+   "status": "open",
+   "title": "`FontFace`: `TypeError: self._rejectLoaded is not a function` как `unhandledrejection`, десятки раз за загрузку youtube (вероятно связано с BUG-1634)",
+   "component": "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)",
    "date": null,
    "debtor": false
   },
@@ -20253,6 +20206,118 @@
    "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — высота строки)",
    "date": "2026-10-17",
    "debtor": false
+  },
+  "BUG-1630": {
+   "status": "fixed",
+   "title": "testharness по BiDi стоит в TIMEOUT на `main`: `loading: Some(t.id) == active_id && self.nav_start.is_some()` (UX-LOADING, коммит 27e264dc5) не даёт навигации д…",
+   "component": "shell (`crates/shell/src/chrome_ui.rs:~404`, модель вкладки хрома)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1629": {
+   "status": "fixed",
+   "title": "Живое окно (`--mcp-live-port`): `wait document_ready` истекал по таймауту (исправлено вместе с BUG-1630), а `resource://screenshot` «не возвращал кадр» — `perf_…",
+   "component": "scripts/MCP (`resources/read` отдаёт PNG в поле `blob`, скрипты читали `data`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1618": {
+   "status": "fixed",
+   "title": "Панель сертификата на каждом сайте писала «No CT evidence» и «no stapled OCSP»: CT-журналы закрыты COMPAT-TRUST-CTLOGS, OCSP-вердикт передавался как `Unknown`.…",
+   "component": "network/shell (`tls/ocsp.rs`, `tls/fingerprint.rs`, `network/src/lib.rs`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1633": {
+   "status": "fixed",
+   "title": "`--mcp-live-port`: `wait`/`eval` молчали на странице с непрерывными перерисовками (youtube). **Исправлено 2026-10-18 (P6):** цикл потока браузера разбирал канал…",
+   "component": "shell/поток браузера (`browser_thread.rs`, `about_to_wait.rs`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1619": {
+   "status": "fixed",
+   "title": "`mediaCapabilities.decodingInfo` всегда `{supported:true}` (в т.ч. `media-source` без MSE), аудио `canPlayType` обещает aac/webm/opus без декодера — feature det…",
+   "component": "js/core (`crates/js/src/media_capabilities.rs:33`, `core/src/ext.rs:5227`, `audio_element.rs:713`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1620": {
+   "status": "fixed",
+   "title": "В штатной сборке `navigator.gpu.requestAdapter()` отдаёт фиктивный адаптер, draw/submit — no-op: сайт выбирает WebGPU и рисует пустой холст; CAPABILITIES.md:179…",
+   "component": "js (`crates/js/src/webgpu.rs:825`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1393": {
+   "status": "fixed",
+   "title": "`-webkit-transform`, `-webkit-box-shadow`, `-webkit-border-radius`, `-webkit-transition`, `-webkit-box-sizing`, `-webkit-animation`, `-webkit-flex` в таблице ст…",
+   "component": "layout (`crates/engine/layout/src/style/apply/*.rs` — таблица имён)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1621": {
+   "status": "fixed",
+   "title": "`MediaRecorder` принимает любой mimeType, «записывает» и отдаёт пустой Blob: запись голоса молча даёт файл 0 байт Исправлено: без кодировщиков (`SUPPORTED_TYPES…",
+   "component": "js (`crates/js/src/media_stream_recording.rs:82`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1239": {
+   "status": "fixed",
+   "title": "youtube не строил `ytd-browse`: `importNode(template.content)` отдавал Element вместо фрагмента (ShadyDOM вставлял фрагмент как узел → `insertBefore NotFoundErr…",
+   "component": "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1622": {
+   "status": "fixed",
+   "title": "`KeyboardEvent` странице: аргументы `_lumen_dispatch_key_event` не совпадают с шимом — `keyCode`/`which` = 0, `ctrlKey`/`shiftKey`/`altKey` всегда false, `code`…",
+   "component": "shell/js (`lumen/text_input.rs:130`, `frame_text_input.rs:392`, `shim/web_api_shim_mid.js:1703`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1635": {
+   "status": "fixed",
+   "title": "Headless `--mcp`/`--mcp-port` шёл мимо `--proxy`/`--tor`: `InProcessSession` собирал `HttpClient` без прокси профиля → TLS-обрыв там, где окно грузит. Теперь sh…",
+   "component": "shell/driver (`automation_server.rs`, `InProcessSession::set_http_client_hook`, `config::apply_proxies`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1623": {
+   "status": "fixed",
+   "title": "Окончание загрузки закрывает открытую адресную строку и поиск: набранный во время загрузки адрес стирается, следующие буквы уходят в горячие клавиши страницы",
+   "component": "shell (`crates/shell/src/page_load.rs:2363`, `:1253`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1624": {
+   "status": "fixed",
+   "title": "Клик в поле страницы не снимает фокус с адресной строки: на экране две каретки, набор уходит в URL",
+   "component": "shell (`lumen/click.rs`, `lumen/keyboard.rs:47`, `lumen/text_input.rs:185`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1636": {
+   "status": "fixed",
+   "title": "`data:`-URL из командной строки открывается как путь к файлу (`os error 123`)",
+   "component": "shell (`PageSource::from_arg`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1625": {
+   "status": "fixed",
+   "title": "Невалидное значение `background`/`background-image`/`mask-image` не отбрасывается, а затирает предыдущее: цепочка запасных `background:` старых сайтов даёт проз…",
+   "component": "layout (`crates/engine/layout/src/style/apply/paint.rs:147`, `:357`, `:582`)",
+   "date": "2026-10-18",
+   "debtor": false
+  },
+  "BUG-1637": {
+   "status": "fixed",
+   "title": "youtube: ≈ 400 кадров/с `delta Identical` без остановки — живая CSS-анимация страницы просила следующий кадр немедленным `request_redraw`",
+   "component": "shell (`redraw_requested.rs`, `about_to_wait.rs`)",
+   "date": "2026-10-18",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -20615,6 +20680,9 @@
   ],
   "font (`system_fonts.rs`)": [
    "BUG-329"
+  ],
+  "font/shell (загрузка `@font-face`, `unicode-range`) — не локализовано": [
+   "BUG-1634"
   ],
   "graphic_tests": [
    "BUG-199"
@@ -21479,8 +21547,17 @@
   "js (`grep -rn wholeText crates/js/src` — ноль совпадений)": [
    "BUG-1163"
   ],
+  "js (`navigator.serviceWorker`, `statechange`)": [
+   "BUG-1638"
+  ],
   "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
    "BUG-964"
+  ],
+  "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)": [
+   "BUG-1639"
+  ],
+  "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)": [
+   "BUG-1239"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -21514,9 +21591,6 @@
   ],
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
-  ],
-  "js — не локализовано (youtube не строит `ytd-browse`)": [
-   "BUG-1239"
   ],
   "js — не локализовано (оркестратор челленджа Cloudflare `cdn-cgi/challenge-platform/.../orchestrate/chl_page/v1`, падение на тике таймера; кандидат — `iframe.contentWindow === null` синхронно после `appendChild`, BUG-480)": [
    "BUG-1176"
@@ -22650,7 +22724,7 @@
   "network/shell (`crates/network/src/lib.rs:4326` `HttpClient::fetch_page` не читает `document_context`; `crates/shell/src/page_source.rs:240` — клиент навигации без документа-инициатора; `_lumen_document_referrer` в `web_api_shim_mid_b.js` всегда `''`)": [
    "BUG-1156"
   ],
-  "network/shell (`tls/ct_logs.rs:33`, `tls/ct.rs:303`, `network/src/lib.rs:1492`)": [
+  "network/shell (`tls/ocsp.rs`, `tls/fingerprint.rs`, `network/src/lib.rs`)": [
    "BUG-1618"
   ],
   "network/shell (`tls/verifier.rs:107`, `page_load.rs:999`, `panels/cert_interstitial.rs:98`)": [
@@ -22911,6 +22985,9 @@
   "shell (90 файлов под `crates/shell/`)": [
    "BUG-942"
   ],
+  "shell (`PageSource::from_arg`)": [
+   "BUG-1636"
+  ],
   "shell (`chrome_ui.rs:365` `loading: …nav_start.is_some()` + спиннер вкладки, UX-LOADING)": [
    "BUG-1597"
   ],
@@ -23118,6 +23195,9 @@
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
   ],
+  "shell (`redraw_requested.rs`, `about_to_wait.rs`)": [
+   "BUG-1637"
+  ],
   "shell (`window_mode.rs`: `open_persistent` и прямые открытия хранилищ; `page_load.rs` запись визита)": [
    "BUG-1596"
   ],
@@ -23144,6 +23224,9 @@
   ],
   "shell/chrome (`tests/chrome_incremental.rs:549`)": [
    "BUG-1608"
+  ],
+  "shell/driver (`automation_server.rs`, `InProcessSession::set_http_client_hook`, `config::apply_proxies`)": [
+   "BUG-1635"
   ],
   "shell/encoding (`crates/shell/src/stylesheets.rs::document_encoding`, `crates/engine/encoding/src/lib.rs::Encoding::from_label`)": [
    "BUG-1375"
@@ -23178,6 +23261,9 @@
   ],
   "shell/storage": [
    "BUG-238"
+  ],
+  "shell/поток браузера (`browser_thread.rs`, `about_to_wait.rs`)": [
+   "BUG-1633"
   ],
   "shields/adblock (EasyList-мэтчер, конкретное правило не локализовано)": [
    "BUG-1035"
