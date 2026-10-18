@@ -2,24 +2,36 @@
 
 Задача: `ROADMAP.md:1039` (строка LAYOUT-VFLOAT-3). Файл удалить при закрытии задачи.
 
-## Состояние
+## Состояние (сессия 3, работа в основном чекауте на ветке `p1-layout-vfloat-3`)
 
-**Сессия 2 (работа в основном чекауте, не в слоте):** написан `crates/engine/layout/src/box_tree/shape_resolve.rs`
-(`Prim` + `rotate/translate/extent_at`, `FloatBoxes::of`, `resolve_shape` с circle/ellipse/inset/polygon/path/linear-gradient/shape-box,
-`parse_position`). Файл **ещё не подключён** (`mod shape_resolve;` в `box_tree.rs` нет) и **не компилировался** — первым делом
-подключить, собрать `cargo check -p lumen-layout`, поправить ошибки. Дальше по плану ниже: п.2 (`GenShape` + `shape_prims` в
-`FloatContext`: left/right_edge_impl, shapes_bottom, rebased_block/translated/absorb_vertical, индексы `shaped_*`), п.3 (`place_float`:
-`FloatBoxes::of(child,[mt,mr,mb,ml],content_inline,viewport)` -> `resolve_shape` -> `rotate(be, init.is_rtl)` -> `translate(i0, fb)`,
-`bound = is_left ? i0+ie : i0`, окно `[fb, fb+be]`, `shape-margin` от `content_inline`), п.4 (ряд). Алгоритм колонки ряда с float-ами:
-для каждого ребёнка кандидат-ширина колонки `max(cur.w, bs)` -> `fc.line_band(taken, taken+w, 0, content_inline)`; влезает
-`cur.extent+size <= r-l` -> принять; не влезает и колонка непуста -> закрыть (`taken += w`); пуста -> `taken = fc.next_float_bottom(taken)`
-(нет — принять). Дети колонки сдвигаются по y на `l` в финальном проходе; `total_block = last.taken + last.w`.
-Пробелы `InlineSpace` в начале колонки при float-ах не учитывать (проверить). `.tmp/vab.py` — харнес (запуск с
-`MSYS_NO_PATHCONV=1`, путь вида `/css/css-shapes/...html`, бинарь `target/dev-release/lumen.exe`), `.tmp/lumen-base.exe` — бинарь до правок.
+Сделано и закоммичено (WIP-коммиты): `shape_resolve.rs` подключён и собирается; `GenShape`/`shape_prims`/`gen_left/right`
+в `FloatContext` (`shapes_floats.rs`: рёбра, `shapes_bottom`, `rebased_block/translated/absorb_vertical`, `add_shape_prims`);
+`vertical_float::place_float` резолвит и регистрирует контуры; `vertical_trampoline::step_child` отдаёт `run_floats` и
+вертикальному `InlineBlockRow`; `vertical_row.rs` — колонки по `line_band`, перескок за контур 1px-шагом, зеркало колонки
+к нижнему краю полосы при `direction: rtl` XOR `sideways-lr`; `Prim::RRect::extent_at` полуоткрыт по `y1`.
 
-Исторически: кода не было — сессия ушла на разведку. Ниже — результат разведки и принятый дизайн.
-Бинарь базового состояния: `.tmp/lumen-base.exe` (в слоте; `.tmp/` не коммитится), сборка слота:
-`cargo build --profile dev-release -p lumen-shell` (~4,5 мин холодная).
+Результат `python .tmp/vrun.py v` (45 вертикальных reftest css-shapes, `MSYS_NO_PATHCONV=1`, бинарь
+`target/dev-release/lumen.exe`): **identical 33 из 45** (было 0). Done-критерий выполнен: circle-048, border-radius 005–012,
+gradients 005–016. Остаются `thick`: circle-049…053, inset-022…027 — раскладка верна, расходятся пиксели **из-за
+`clip-path`** (`style/parse/shape.rs` не понимает позиционные ключевые слова `at left 40px bottom 40px`, `round a b / c d`):
+float с неверным клипом закрашивает соседние боксы; shape-image-029 — `url()`-контур (не реализован). Это отдельная задача
+(clip-path basic-shape: позиция-ключевые слова, эллиптические радиусы inset) — вынести в LAYOUT-VFLOAT-4 / CSS-строку.
+
+## Что осталось до закрытия
+
+1. Регрессия: `LBIN=.tmp/lumen-base.exe TAG=base python .tmp/vrun.py g '/css/css-writing-modes/*.html' '/css/css-shapes/**/*.html'
+   '/css/css-floats/*.html'` против `TAG=new` (режим `g` = glob-шаблоны) — сравнить json `.tmp/vrun-base.json`/`vrun-new.json`,
+   регрессий быть не должно (особенно ряды с `direction: rtl` в вертикальном режиме — зеркалирование теперь всегда).
+2. `cargo clippy -p lumen-layout --all-targets -- -D warnings`; юнит-тесты: `shape_resolve` (rotate/extent_at/resolve_shape:
+   circle at keywords, inset round эллиптические, shape-box, gradient) + `FloatContext` (shape_prims переживают
+   `rebased_block/translated/absorb_vertical`) + раскладка ряда с контуром; `scripts/scoped-test.sh`.
+3. `python graphic_tests/run.py --continue-on-fail` (пиксели двигаются) + голдены в том же коммите.
+4. Документы: `subsystems/layout.md` (Done-запись), `CAPABILITIES.md`, строка LAYOUT-VFLOAT-3 в `ROADMAP.md` → done с
+   остатком (пп.(2) float посреди абзаца в горизонтальном потоке, (3) зеркало колонок `InlineRun` sideways-lr, (4)
+   `contiguous-floated-table-*`, clip-path-хвост) в новую строку LAYOUT-VFLOAT-4; удалить этот файл; удалить указатель из STATUS-P1.md.
+5. Не сделаны из первоначального плана: пп.(2),(3),(4) задачи — в остаток.
+
+Скрипты в `.tmp/` (не в git): `vrun.py` (режимы `v` и glob), `shot2.sh <rel> <name>` (скриншот), `sbs.py`, `dimg.py`, `prof.py`.
 
 ## Как проверять (A/B reftest)
 
