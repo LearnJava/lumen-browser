@@ -207,6 +207,7 @@ use intrinsic::{
 
 mod shapes_floats;
 mod inline_shape_wrap;
+mod shape_resolve;
 // `shift_tree` is also `incremental::translate_subtree`: one relocation, one implementation
 // (rect + `svg_paint_matrix` + `<mask>` content move together).
 pub(crate) use shapes_floats::shift_tree;

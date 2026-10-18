@@ -442,17 +442,21 @@ fn parse_position(toks: &[&str], rect: Rect4, em: f32) -> Option<(f32, f32)> {
             _ => o,
         }
     };
-    let item = |t: &'_ str| -> Option<Item<'_>> {
-        if is_kw(t) { Some((Some(t), None)) } else { Lp::parse(t, em).map(|lp| (None, Some(lp))) }
-    };
+    fn item(t: &str, em: f32) -> Option<Item<'_>> {
+        if matches!(t, "left" | "right" | "top" | "bottom" | "center") {
+            Some((Some(t), None))
+        } else {
+            Lp::parse(t, em).map(|lp| (None, Some(lp)))
+        }
+    }
     let (x, y) = match toks {
         [] => (w / 2.0, h / 2.0),
         [a] => {
-            let a = item(a)?;
+            let a = item(a, em)?;
             if axis(a.0) == 'y' { (w / 2.0, along(a, h)) } else { (along(a, w), h / 2.0) }
         }
         [a, b] => {
-            let (a, b) = (item(a)?, item(b)?);
+            let (a, b) = (item(a, em)?, item(b, em)?);
             let (first, second) = if axis(a.0) == 'y' || axis(b.0) == 'x' { (b, a) } else { (a, b) };
             if axis(first.0) == 'y' || axis(second.0) == 'x' {
                 return None;

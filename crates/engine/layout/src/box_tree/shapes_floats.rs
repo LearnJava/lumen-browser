@@ -7,6 +7,7 @@
 //! без правок тел.
 
 use super::*;
+use super::shape_resolve::Prim;
 
 /// Смещает rect.y всего поддерева на dy (для vertical-align) — explicit
 /// heap-stack pre-order walk (LAYOUT-2 срез 2), not native recursion: nothing
@@ -288,6 +289,35 @@ pub(crate) fn inset_corner_inward(y: f32, top_y: f32, bottom_y: f32, radius: f32
     radius - (radius * radius - dy * dy).max(0.0).sqrt()
 }
 
+/// One piece of a vertical-mode float's `shape-outside` contour in the float
+/// context's frame (`x` = inline axis, `y` = block axis), see [`super::shape_resolve`].
+#[derive(Clone)]
+pub(crate) struct GenShape {
+    pub(crate) prim: Prim,
+    /// `true` = left (line-left) float, `false` = right.
+    pub(crate) is_left: bool,
+    /// Block range of the float's margin box: the contour acts only inside it.
+    pub(crate) top_y: f32,
+    pub(crate) bottom_y: f32,
+    /// Inline range of the margin box: the wrap edge is clamped to it.
+    pub(crate) bound_lo: f32,
+    pub(crate) bound_hi: f32,
+    /// `shape-margin` in px.
+    pub(crate) margin: f32,
+}
+
+impl GenShape {
+    fn moved(&self, dx: f32, dy: f32) -> GenShape {
+        let mut g = self.clone();
+        g.prim.translate(dx, dy);
+        g.top_y += dy;
+        g.bottom_y += dy;
+        g.bound_lo += dx;
+        g.bound_hi += dx;
+        g
+    }
+}
+
 /// CSS 2.1 §9.5 — tracks float placements within a single block formatting
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
@@ -324,6 +354,14 @@ pub(crate) struct FloatContext {
     shaped_left: Vec<usize>,
     /// Same as [`Self::shaped_left`], for [`Self::right`].
     shaped_right: Vec<usize>,
+    /// Contours of floats in a vertical writing mode (LAYOUT-VFLOAT-3), already in
+    /// this context's logical frame. Unlike the horizontal-only buckets above they
+    /// survive a change of frame ([`Self::rebased_block`] and friends).
+    shape_prims: Vec<GenShape>,
+    /// Indices into [`Self::left`] / [`Self::right`] of floats whose contour is in
+    /// [`Self::shape_prims`] (same role as [`Self::shaped_left`]).
+    gen_left: Vec<usize>,
+    gen_right: Vec<usize>,
     /// CSS 2.1 §9.5 — floats belonging to an *enclosing* block formatting
     /// context, inherited by a non-BFC child so its line boxes are shortened by
     /// the parent's floats (the child does not own them: they are excluded from
@@ -345,6 +383,9 @@ impl FloatContext {
             shape_insets: Vec::new(),
             shaped_left: Vec::new(),
             shaped_right: Vec::new(),
+            shape_prims: Vec::new(),
+            gen_left: Vec::new(),
+            gen_right: Vec::new(),
             inherited: None,
         }
     }
@@ -382,7 +423,7 @@ impl FloatContext {
             .filter(|(i, (bot, _))| {
                 *bot > y
                     && !(in_flow && self.left_tops.get(*i).is_some_and(|t| *t > y + 0.01))
-                    && !(exact && self.shaped_left.contains(i))
+                    && !(exact && (self.shaped_left.contains(i) || self.gen_left.contains(i)))
             })
             .map(|(_, (_, r))| *r)
             .fold(default_x, f32::max);
@@ -415,7 +456,7 @@ impl FloatContext {
             })
             .fold(after_polygons, f32::max);
         // CSS Shapes L1: inset() boundary (right edge at y, minus rounded corner).
-        let own = self.shape_insets
+        let after_insets = self.shape_insets
             .iter()
             .filter(|s| s.is_left && s.top_y <= y && s.bottom_y > y)
             .map(|s| {
@@ -423,6 +464,12 @@ impl FloatContext {
                     .min(s.bound_x)
             })
             .fold(after_ellipses, f32::max);
+        // Vertical-mode contours (LAYOUT-VFLOAT-3).
+        let own = self.shape_prims
+            .iter()
+            .filter(|g| g.is_left && g.top_y <= y && g.bottom_y > y)
+            .filter_map(|g| g.prim.extent_at(y, g.margin).map(|(_, r)| r.min(g.bound_hi)))
+            .fold(after_insets, f32::max);
         // CSS 2.1 §9.5: enclosing-context floats also push the left edge right.
         match &self.inherited {
             Some(p) => p.left_edge_impl(y, own, exact, in_flow),
@@ -449,7 +496,7 @@ impl FloatContext {
             .filter(|(i, (bot, _))| {
                 *bot > y
                     && !(in_flow && self.right_tops.get(*i).is_some_and(|t| *t > y + 0.01))
-                    && !(exact && self.shaped_right.contains(i))
+                    && !(exact && (self.shaped_right.contains(i) || self.gen_right.contains(i)))
             })
             .map(|(_, (_, l))| *l)
             .fold(default_x, f32::min);
@@ -482,7 +529,7 @@ impl FloatContext {
             })
             .fold(after_polygons, f32::min);
         // CSS Shapes L1: inset() boundary (left edge at y, plus rounded corner).
-        let own = self.shape_insets
+        let after_insets = self.shape_insets
             .iter()
             .filter(|s| !s.is_left && s.top_y <= y && s.bottom_y > y)
             .map(|s| {
@@ -490,6 +537,12 @@ impl FloatContext {
                     .max(s.bound_x)
             })
             .fold(after_ellipses, f32::min);
+        // Vertical-mode contours (LAYOUT-VFLOAT-3).
+        let own = self.shape_prims
+            .iter()
+            .filter(|g| !g.is_left && g.top_y <= y && g.bottom_y > y)
+            .filter_map(|g| g.prim.extent_at(y, g.margin).map(|(l, _)| l.max(g.bound_lo)))
+            .fold(after_insets, f32::min);
         // CSS 2.1 §9.5: enclosing-context floats also pull the right edge left.
         match &self.inherited {
             Some(p) => p.right_edge_impl(y, own, exact, in_flow),
@@ -523,6 +576,36 @@ impl FloatContext {
         }
     }
 
+    /// Attaches `prims` (already in this context's frame) as the contour of the float
+    /// just added with [`Self::add_left`] / [`Self::add_right`]. `window` is the
+    /// float's margin-box block range, `bound` its inline range — the contour never
+    /// reaches beyond them (CSS Shapes L1 §6.3) — and `margin` the `shape-margin`.
+    pub(crate) fn add_shape_prims(
+        &mut self,
+        prims: Vec<Prim>,
+        is_left: bool,
+        window: (f32, f32),
+        bound: (f32, f32),
+        margin: f32,
+    ) {
+        let list_len = if is_left { self.left.len() } else { self.right.len() };
+        let slot = if is_left { &mut self.gen_left } else { &mut self.gen_right };
+        if let Some(i) = list_len.checked_sub(1) {
+            slot.push(i);
+        }
+        for prim in prims {
+            self.shape_prims.push(GenShape {
+                prim,
+                is_left,
+                top_y: window.0,
+                bottom_y: window.1,
+                bound_lo: bound.0,
+                bound_hi: bound.1,
+                margin,
+            });
+        }
+    }
+
     /// Lowest `bottom_y` of any recorded `shape-outside` visible here (owned or
     /// inherited), `f32::NEG_INFINITY` when there is none. A line box that
     /// starts at or below it cannot be affected by a contour, so such a run
@@ -532,6 +615,7 @@ impl FloatContext {
             .chain(self.shape_polygons.iter().map(|p| p.bottom_y))
             .chain(self.shape_ellipses.iter().map(|e| e.bottom_y))
             .chain(self.shape_insets.iter().map(|i| i.bottom_y))
+            .chain(self.shape_prims.iter().map(|g| g.bottom_y))
             .fold(f32::NEG_INFINITY, f32::max);
         self.inherited.as_ref().map_or(own, |p| own.max(p.shapes_bottom()))
     }
@@ -581,26 +665,32 @@ impl FloatContext {
     /// by `-db` (so a box starting at `db` in this context sees itself at `0`);
     /// the inline-axis edges are kept. Used to hand a vertical `InlineRun` the
     /// floats of its container in the run's own frame (CSS Writing Modes L3 §7.1).
-    /// `shape-outside` geometry is not carried over.
+    /// Only contours of vertical-mode floats ([`Self::shape_prims`]) are carried over.
     pub(crate) fn rebased_block(&self, db: f32) -> FloatContext {
         let mut c = Self::new();
         c.left = self.left.iter().map(|&(bot, e)| (bot - db, e)).collect();
         c.right = self.right.iter().map(|&(bot, e)| (bot - db, e)).collect();
         c.left_tops = self.left_tops.iter().map(|t| t - db).collect();
         c.right_tops = self.right_tops.iter().map(|t| t - db).collect();
+        c.shape_prims = self.shape_prims.iter().map(|g| g.moved(0.0, -db)).collect();
+        c.gen_left = self.gen_left.clone();
+        c.gen_right = self.gen_right.clone();
         c.inherited = self.inherited.as_ref().map(|p| Box::new(p.rebased_block(db)));
         c
     }
 
     /// The rectangular floats of this context (owned and inherited) seen from a
     /// frame whose origin sits at `(db, di)` of this one — block coordinates
-    /// move by `-db`, inline ones by `-di`. `shape-outside` contours are dropped.
+    /// move by `-db`, inline ones by `-di`. Only the vertical-mode contours ([`Self::shape_prims`]) are kept.
     fn translated(&self, db: f32, di: f32) -> FloatContext {
         let mut c = Self::new();
         c.left = self.left.iter().map(|&(bot, e)| (bot - db, e - di)).collect();
         c.right = self.right.iter().map(|&(bot, e)| (bot - db, e - di)).collect();
         c.left_tops = self.left_tops.iter().map(|t| t - db).collect();
         c.right_tops = self.right_tops.iter().map(|t| t - db).collect();
+        c.shape_prims = self.shape_prims.iter().map(|g| g.moved(-di, -db)).collect();
+        c.gen_left = self.gen_left.clone();
+        c.gen_right = self.gen_right.clone();
         c.inherited = self.inherited.as_ref().map(|p| Box::new(p.translated(db, di)));
         c
     }
@@ -623,6 +713,10 @@ impl FloatContext {
     /// whichever non-BFC block it sits in, so the siblings that follow the
     /// child must meet it too.
     pub(crate) fn absorb_vertical(&mut self, child: &FloatContext, db: f32, di: f32) {
+        let (left_base, right_base) = (self.left.len(), self.right.len());
+        self.gen_left.extend(child.gen_left.iter().map(|i| i + left_base));
+        self.gen_right.extend(child.gen_right.iter().map(|i| i + right_base));
+        self.shape_prims.extend(child.shape_prims.iter().map(|g| g.moved(di, db)));
         for (i, &(bot, e)) in child.left.iter().enumerate() {
             self.left.push((bot + db, e + di));
             self.left_tops.push(child.left_tops[i] + db);
