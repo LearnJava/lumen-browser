@@ -1,6 +1,6 @@
 # BUG-1393 — `-webkit-transform`, `-webkit-box-shadow`, `-webkit-border-radius`, `-webkit-transition`, `-webkit-box-sizing`, `-webkit-animation`, `-webkit-flex` не распознаются в таблице стилей
 
-**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md: строка «`-webkit-*` алиасы Compat Standard»)
+**Статус:** FIXED 2026-10-18 (P4, COMPAT-CSS-ALIAS, CSS-SPECS.md:781)
 **Тип:** нет таблицы алиасов `-webkit-*` — недостающая функциональность, строка в CSS-SPECS.md (подсекция «[T1] WHATWG Compat / Chrome-измы»), владелец P4 (2026-10-12).
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 16, `css/css-overflow` + `css/css-sizing`)
 **Область:** layout (`crates/engine/layout/src/style/apply/*.rs` — таблица имён свойств)
@@ -22,3 +22,7 @@ Compatibility Standard §3 требует псевдонимов именно д
 ## Как проверить
 
 Страница выше; `css/css-transforms/` и `css/css-backgrounds/` — прогон без изменений числа, пока в наборе нет тестов с этими алиасами.
+
+## Исправление
+
+Таблица `COMPAT_CSS_ALIASES` (51 имя Compat §3) в `crates/engine/css-parser/src/compat_alias.rs`; `parse_declaration` разрешает алиас в каноническое имя, то же — `transition-property` и шортхенд `transition`, JS-шим `element.style`, `SUPPORTED_PROPERTIES`. Тесты: `style/tests/compat_alias_tests.rs`, `dom/tests/compat_css_alias.rs`.

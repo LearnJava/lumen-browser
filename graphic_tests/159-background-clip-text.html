@@ -14,10 +14,11 @@
        against Edge stay small. */
     .t { position: absolute; font: 700 60px/60px sans-serif; color: transparent; }
 
-    /* Row 1: linear gradient through 4 glyph squares. */
+    /* Row 1: linear gradient through 4 glyph squares. Only the prefixed spelling —
+       the pre-2024 idiom: Compat §3 `-webkit-background-clip` is an alias. */
     .a { left: 40px; top: 30px; width: 240px; height: 60px;
          background: linear-gradient(to right, #e53e3e, #d69e2e, #38a169, #3182ce);
-         background-clip: text; -webkit-background-clip: text; }
+         -webkit-background-clip: text; }
     /* Row 1: solid colour through the glyphs, no box fill. */
     .b { left: 340px; top: 30px; width: 240px; height: 60px;
          background-color: #ed64a6; background-clip: text; -webkit-background-clip: text; }
