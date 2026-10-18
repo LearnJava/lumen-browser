@@ -800,7 +800,7 @@ impl InProcessSession {
         })?;
         let dispatch_key = |event_type: &str, key: &str| -> Result<()> {
             let script = format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                "_lumen_dispatch_synth_key({}, '{}', '{}', '{}', 0)",
                 node.index(), event_type, key, key,
             );
             rt.eval(&script)

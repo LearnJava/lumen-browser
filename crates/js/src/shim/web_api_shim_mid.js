@@ -1723,6 +1723,76 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// BUG-1622: synthetic keyboard input (WebDriver key actions, `type_text`, the
+// shell's injected characters) knows only the `key` string — and sometimes a
+// `code` — not the physical key. Derive the rest the way a US/RU keyboard
+// reports it: `code` ('KeyC'), legacy `keyCode`/`which` (67), `location` and
+// `shiftKey` (an upper-case letter or a shifted symbol). `extra_mod` carries
+// modifiers the caller already knows (Caps Lock bit 16, Alt 4 ...).
+var _lumen_synth_keys = (function() {
+    var named = {
+        Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34,
+        End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+        Insert: 45, Delete: 46, CapsLock: 20, Shift: 16, Control: 17, Alt: 18, Meta: 91
+    };
+    var modifier_codes = { Shift: 'ShiftLeft', Control: 'ControlLeft', Alt: 'AltLeft', Meta: 'MetaLeft' };
+    // Unshifted US character -> [code, keyCode]; the shifted partner is below.
+    var punct = {
+        '`': ['Backquote', 192], '-': ['Minus', 189], '=': ['Equal', 187],
+        '[': ['BracketLeft', 219], ']': ['BracketRight', 221], '\\': ['Backslash', 220],
+        ';': ['Semicolon', 186], "'": ['Quote', 222], ',': ['Comma', 188],
+        '.': ['Period', 190], '/': ['Slash', 191]
+    };
+    var shifted = {
+        '~': '`', '_': '-', '+': '=', '{': '[', '}': ']', '|': '\\', ':': ';',
+        '"': "'", '<': ',', '>': '.', '?': '/',
+        '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0'
+    };
+    // RU (ЙЦУКЕН) letter -> the Latin letter on the same physical key.
+    var ru_row = 'йцукенгшщзхъфывапролджэячсмитьбюё';
+    var ru_key = 'qwertyuiop[]asdfghjkl;\'zxcvbnm,.`';
+    function from_physical(ch) {
+        if (ch >= 'a' && ch <= 'z') return ['Key' + ch.toUpperCase(), ch.toUpperCase().charCodeAt(0)];
+        if (ch >= '0' && ch <= '9') return ['Digit' + ch, ch.charCodeAt(0)];
+        return punct[ch] || null;
+    }
+    function lookup(key) {
+        if (key.length === 0) return null;
+        var lower = key.toLowerCase();
+        var is_upper = key !== lower && key.length === 1;
+        var phys = lower.length === 1 ? lower : null;
+        var ru = phys === null ? -1 : ru_row.indexOf(phys);
+        if (ru >= 0) phys = ru_key.charAt(ru);
+        else if (shifted.hasOwnProperty(key)) { phys = shifted[key]; is_upper = true; }
+        var hit = phys === null ? null : from_physical(phys);
+        return hit === null ? null : { code: hit[0], keyCode: hit[1], shift: is_upper };
+    }
+    return function(key, code) {
+        var info = { code: code || '', keyCode: 0, location: 0, shift: false };
+        if (key.length > 1 || key === ' ') {
+            if (named.hasOwnProperty(key)) info.keyCode = named[key];
+            else if (/^F([1-9]|1[0-2])$/.test(key)) info.keyCode = 111 + parseInt(key.slice(1), 10);
+            if (modifier_codes.hasOwnProperty(key)) info.location = 1;
+            if (!info.code) info.code = key === ' ' ? 'Space' : (modifier_codes[key] || key);
+            return info;
+        }
+        var hit = lookup(key);
+        if (hit !== null) {
+            info.keyCode = hit.keyCode;
+            info.shift = hit.shift;
+            if (!info.code || info.code === key) info.code = hit.code;
+        }
+        return info;
+    };
+})();
+
+function _lumen_dispatch_synth_key(start_nid, type, key, code, extra_mod) {
+    var info = _lumen_synth_keys(String(key), code ? String(code) : '');
+    var mod = (extra_mod | 0) | (info.shift ? 2 : 0);
+    return _lumen_dispatch_key_event(start_nid, type, key, info.code, info.keyCode,
+        info.location, mod, false, false);
+}
+
 // UX-CLIPBOARD: trusted copy/cut/paste on a focused text field. `text` seeds
 // `clipboardData` only for `paste` (copy/cut handlers fill it themselves via
 // `setData`). Reply: 'N' = not cancelled (shell runs the default action);
