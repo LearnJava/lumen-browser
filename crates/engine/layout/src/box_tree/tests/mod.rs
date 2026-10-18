@@ -519,6 +519,7 @@ mod abs_auto_margins;
 mod relative_offset_flow;
 mod vertical_positioned;
 mod grid_vwm;
+mod grid_abspos;
 mod grid_rtl;
 mod fieldset_legend;
 mod ruby_pipeline;

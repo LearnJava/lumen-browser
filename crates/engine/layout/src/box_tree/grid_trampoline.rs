@@ -19,6 +19,10 @@ pub(super) struct GridInit {
     pub(super) placements: Vec<(u32, u32, u32, u32)>,
     pub(super) n_cols: u32,
     pub(super) n_rows: u32,
+    /// Число дорожек явной сетки по осям (линий — на одну больше): `GridAxis::n_tracks`,
+    /// нужно для разбора линий абсолютно позиционированных детей (`grid_abspos`).
+    pub(super) col_explicit: u32,
+    pub(super) row_explicit: u32,
     pub(super) col_widths: Vec<f32>,
     pub(super) col_offsets: Vec<f32>,
     /// Names of the container's lines per axis (own, with `repeat()` expanded and, for a subgrid,
@@ -61,7 +65,7 @@ pub(super) struct GridInit {
     pub(super) padding_bottom: f32,
     pub(super) size_contained: bool,
     /// Own `position != static` and the CB inherited from the parent — pick the
-    /// containing block of absolutely-positioned children (see `lay_out_abs`).
+    /// containing block of absolutely-positioned children (see `grid_abspos::lay_out_abs`).
     pub(super) is_positioned: bool,
     pub(super) own_pcb: Rect,
     /// BUG-341 S33 probe-reuse cache — see `build_grid_init`'s doc comment.
@@ -1213,14 +1217,20 @@ fn stretch_replaced_inline(
 /// Runs once every item is placed — (moved in from `layout_dispatch.rs`'s
 /// former post-`lay_out_grid` code) the container's own `b.rect.height`.
 /// Copied from the removed code's dispatch-arm tail, plus the deferred
-/// absolutely-positioned children pass (`lay_out_abs`).
+/// absolutely-positioned children pass (`grid_abspos::lay_out_abs`).
 fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: Size, hp: &dyn HyphenationProvider) {
     if let Some(geom) = frame.init.vertical {
         super::grid_vertical::finish_container(&mut frame.b, &frame.init, geom);
         frame.b.grid_baselines = super::grid_vertical::container_baselines(&frame.b, &frame.init, geom, measurer);
-        lay_out_abs(
-            &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
-            frame.init.content_x, frame.init.content_y, frame.init.content_width, measurer, viewport, hp,
+        let init = &*frame.init;
+        let content = Rect::new(
+            init.content_x,
+            init.content_y,
+            (frame.b.rect.width - geom.frame_horiz).max(0.0),
+            init.content_width,
+        );
+        super::grid_abspos::lay_out_abs(
+            &mut frame.b, &init.s, Some(init), init.is_positioned, init.own_pcb, content, measurer, viewport, hp,
         );
         return;
     }
@@ -1238,9 +1248,16 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
     );
     frame.b.grid_baselines = container_baselines(frame, measurer);
     record_own_tracks(frame);
-    lay_out_abs(
-        &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
-        frame.init.content_x, frame.init.content_y, frame.init.content_width, measurer, viewport, hp,
+    let init = &*frame.init;
+    let content_bottom = frame.b.rect.y + frame.b.rect.height - init.s.border_bottom_width - init.padding_bottom;
+    let content = Rect::new(
+        init.content_x,
+        init.content_y,
+        init.content_width,
+        (content_bottom - init.content_y).max(0.0),
+    );
+    super::grid_abspos::lay_out_abs(
+        &mut frame.b, &init.s, Some(init), init.is_positioned, init.own_pcb, content, measurer, viewport, hp,
     );
 }
 
@@ -1330,87 +1347,6 @@ fn container_baselines(frame: &Frame, measurer: Option<&dyn TextMeasurer>) -> Op
     }
 }
 
-/// CSS Grid L1 §9.1 / CSS Position L3 §4 — lay out the absolutely-positioned
-/// children of a grid container after its own size is final. They are not grid
-/// items (filtered in `build_grid_init`); the static position is the content-box
-/// origin, the CB is the padding box when the container is positioned, else the
-/// inherited `own_pcb` (same rule as `flex_trampoline::finish_frame`).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn lay_out_abs(
-    b: &mut LayoutBox,
-    s: &ComputedStyle,
-    is_positioned: bool,
-    own_pcb: Rect,
-    content_x: f32,
-    content_y: f32,
-    content_width: f32,
-    measurer: Option<&dyn TextMeasurer>,
-    viewport: Size,
-    hp: &dyn HyphenationProvider,
-) {
-    let abs: Vec<(usize, f32, f32)> = b
-        .children
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
-        .map(|(i, _)| (i, content_x, content_y))
-        .collect();
-    if !abs.is_empty() {
-        let my_pcb = if is_positioned {
-            Rect::new(
-                b.rect.x + s.border_left_width,
-                b.rect.y + s.border_top_width,
-                (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
-                (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
-            )
-        } else {
-            own_pcb
-        };
-        lay_out_abs_children(b, &abs, measurer, viewport, my_pcb, hp);
-        // Статическая позиция в сетке `direction: rtl`: область — весь content box, а начало
-        // inline-оси у правого края; `justify-self` выравнивает бокс внутри неё (Grid L1 §9.1).
-        if s.direction == Direction::Rtl && s.writing_mode == crate::style::WritingMode::HorizontalTb {
-            for &(i, _, _) in &abs {
-                let c = &mut b.children[i];
-                let st = &c.style;
-                if !(st.left.is_auto() && st.right.is_auto() && st.anchor_left.is_none() && st.anchor_right.is_none()) {
-                    continue;
-                }
-                let own_auto = matches!(st.justify_self, AlignValue::Auto);
-                let x = &st.content_align_extra;
-                let justify = if own_auto { s.justify_items } else { st.justify_self };
-                let justify = super::grid_vertical::resolve_own(
-                    justify,
-                    if own_auto { s.content_align_extra.justify_items_own } else { x.justify_self_own },
-                    st,
-                    true,
-                    false,
-                );
-                let justify = super::grid_vertical::resolve_side(
-                    justify,
-                    if own_auto { s.content_align_extra.justify_items_side } else { x.justify_self_side },
-                    s.writing_mode,
-                    true,
-                );
-                let (ml, mr) = (
-                    st.margin_left.resolve_or_zero(st.font_size, content_width, viewport),
-                    st.margin_right.resolve_or_zero(st.font_size, content_width, viewport),
-                );
-                let w = c.rect.width;
-                let nx = match justify {
-                    AlignValue::End | AlignValue::LastBaseline => content_x + ml,
-                    AlignValue::Center => content_x + (content_width - w - ml - mr) / 2.0 + ml,
-                    _ => content_x + content_width - mr - w,
-                };
-                crate::incremental::translate_subtree(c, nx - c.rect.x, 0.0);
-            }
-        }
-    }
-    if is_positioned {
-        super::multicol_abspos::fix_out_of_flow_descendants(b, measurer, viewport, hp);
-    }
-}
-
 /// CSS 2.1 §10.6.3/§10.6.7, CSS Box Sizing L4 §5 — resolve a grid container's
 /// own border-box `height` from its content height. Shared by `finish_frame`
 /// (populated container) and `layout_dispatch.rs`'s grid dispatch arm (the
@@ -1418,7 +1354,7 @@ pub(super) fn lay_out_abs(
 /// early exit does not need its own copy of this logic — both feed it
 /// `content_height == 0.0` in that case, matching the removed `lay_out_grid`'s
 /// `return 0.0` early exit exactly. Absolutely-positioned children are not
-/// grid items and are laid out separately (`lay_out_abs`).
+/// grid items and are laid out separately (`grid_abspos::lay_out_abs`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn finish_container_height(
     b: &mut LayoutBox,

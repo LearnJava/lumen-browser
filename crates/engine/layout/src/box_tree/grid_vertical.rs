@@ -524,9 +524,8 @@ pub(super) fn dispatch(
         None => {
             // Нет элементов: ширина — явная или только рамка.
             b.rect.width = explicit_width.unwrap_or(frame_horiz).min(max_block).max(min_block);
-            super::grid_trampoline::lay_out_abs(
-                b, s, is_positioned, pcb, content_x, content_y, content_inline, measurer, viewport, hp,
-            );
+            let content = Rect::new(content_x, content_y, (b.rect.width - frame_horiz).max(0.0), content_inline);
+            super::grid_abspos::lay_out_abs(b, s, None, is_positioned, pcb, content, measurer, viewport, hp);
             DispatchOutcome::Done
         }
     }
