@@ -533,3 +533,4 @@ mod segment_break;
 mod ws_only_text;
 mod nbsp_no_wrap;
 mod svg_inline_replaced;
+mod table_vwm;

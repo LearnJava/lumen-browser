@@ -507,6 +507,22 @@ use super::*;
     }
 
     #[test]
+    fn overflow_overlay_is_legacy_alias_of_auto() {
+        let root = lay("<p>x</p>", "p { overflow: overlay; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Auto);
+        assert_eq!(p.style.overflow_y, Overflow::Auto);
+        let root = lay("<p>x</p>", "p { overflow-x: hidden; overflow-y: overlay; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Hidden);
+        assert_eq!(p.style.overflow_y, Overflow::Auto);
+        let root = lay("<p>x</p>", "p { overflow: overlay scroll; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Auto);
+        assert_eq!(p.style.overflow_y, Overflow::Scroll);
+    }
+
+    #[test]
     fn overflow_not_inherited() {
         let root = lay(
             "<div><p>x</p></div>",

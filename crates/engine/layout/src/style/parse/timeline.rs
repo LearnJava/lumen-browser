@@ -414,7 +414,9 @@ fn parse_single_transition(s: &str) -> SingleTransition {
             continue;
         }
         if !property_set && !tok.is_empty() {
-            out.property = tok;
+            // WHATWG Compat §3: `-webkit-transform` etc. name the unprefixed property.
+            out.property = lumen_css_parser::canonical_property_name(&tok)
+                .map_or(tok, str::to_string);
             property_set = true;
         }
     }

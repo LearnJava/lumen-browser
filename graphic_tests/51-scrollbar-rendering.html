@@ -68,6 +68,13 @@
   .cc-css-1-webkit-sb::-webkit-scrollbar-thumb { background: #e94560; }
   .cc-css-1-webkit-sb::-webkit-scrollbar-track { background: #0f3460; }
 
+  /* CSS-WEBKIT-SCROLLBAR: the usual way to hide a horizontal carousel's bar —
+     `display: none` and `height: 0` — no overlay bar, no gutter, in Edge too. */
+  .wk-hide-dn::-webkit-scrollbar { display: none; }
+  .wk-hide-h0::-webkit-scrollbar { height: 0; }
+  .wk-carousel { float:left; width:180px; height:70px; overflow-x:scroll; overflow-y:hidden; display:flex; background:#16213e; border:2px solid #0f3460; margin-top:20px; margin-left:24px; }
+  .wk-carousel > i { flex:none; width:100px; height:100%; background:#533483; border-right:4px solid #e94560; }
+
   /* No-overflow: overflow:scroll but content fits → no scrollbar visible */
   .scroll-nooverflow {
     width: 200px; height: 120px;
@@ -133,6 +140,9 @@
     <div style="width:100%; height:80px; background:#e94560; margin-bottom:4px;"></div>
     <div style="width:100%; height:80px; background:#0f3460;"></div>
   </div>
+  <!-- CSS-WEBKIT-SCROLLBAR: carousels with the bar hidden via ::-webkit-scrollbar -->
+  <div class="wk-carousel wk-hide-dn"><i></i><i></i><i></i></div>
+  <div class="wk-carousel wk-hide-h0"><i></i><i></i><i></i></div>
 </div>
 </body>
 </html>

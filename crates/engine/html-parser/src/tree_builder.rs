@@ -2003,6 +2003,24 @@ impl IncrementalTreeBuilder {
     /// §13.2.6.4.12 «The in column group insertion mode».
     fn mode_in_column_group(&mut self, token: Token) {
         match token {
+            // Пробельные символы и комментарии остаются внутри `<colgroup>`; без этого пробел между
+            // `<colgroup>` и `<col>` закрывал группу, и каждый `<col>` получал свою неявную.
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => self.insert_text(s),
+            Token::Text(s) => {
+                let (ws, rest) = split_leading_ws(&s);
+                if !ws.is_empty() {
+                    self.insert_text(ws);
+                }
+                if !rest.is_empty()
+                    && let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "colgroup"
+                {
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTable;
+                    self.dispatch(Token::Text(rest.to_string()));
+                }
+            }
+            Token::Comment(s) => self.insert_comment(s),
             Token::StartTag {
                 ref name, ref attrs, ..
             } if name == "col" => {

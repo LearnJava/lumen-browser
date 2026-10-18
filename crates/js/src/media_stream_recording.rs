@@ -1,10 +1,10 @@
 //! MediaRecorder API stub (W3C MediaStream Recording L2).
 //!
-//! Phase 0: `new MediaRecorder(stream, opts?)`, state machine
-//! (inactive/recording/paused), `mimeType` reflection, events
-//! `onstart`/`onstop`/`onpause`/`onresume`/`onerror`/`ondataavailable`
-//! (fires empty Blob on stop). `BlobEvent` class.
-//! `MediaRecorder.isTypeSupported()` → false.
+//! Phase 0: state machine (inactive/recording/paused), `mimeType` reflection,
+//! events `onstart`/`onstop`/`onpause`/`onresume`/`onerror`/`ondataavailable`,
+//! `BlobEvent` class. No encoder exists, so `SUPPORTED_TYPES` is empty:
+//! `MediaRecorder.isTypeSupported()` → false and `new MediaRecorder()` throws
+//! `NotSupportedError` instead of recording empty Blobs (BUG-1621).
 
 /// V8 port of the former rquickjs `init_media_stream_recording` (Ph3 V8
 /// migration S12b-G4, rquickjs side removed in the same batch): identical JS
@@ -78,6 +78,13 @@ const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
   BlobEvent.prototype.constructor = BlobEvent;
 
   // ── MediaRecorder ──────────────────────────────────────────────────────────
+  // Container/codec types an encoder can produce. Empty: Lumen has none.
+  var SUPPORTED_TYPES = [];
+  function isTypeSupported(mimeType) {
+    var t = String(mimeType).toLowerCase().replace(/\s+/g, '');
+    return SUPPORTED_TYPES.some(function(s) { return s === t; });
+  }
+
   // W3C MediaStream Recording §4.1
   function MediaRecorder(stream, options) {
     if (!stream) {
@@ -85,8 +92,21 @@ const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
     }
     options = options || {};
 
+    // §4.1 constructor steps: an unsupported mimeType — and, for an empty
+    // one, the absence of any default container/codec — throws
+    // NotSupportedError. Lumen has no encoder, so a recorder that could only
+    // emit empty Blobs is never constructed (BUG-1621).
+    var requested = (typeof options.mimeType === 'string') ? options.mimeType : '';
+    if (requested === '' ? SUPPORTED_TYPES.length === 0 : !isTypeSupported(requested)) {
+      throw new DOMException(
+        requested === ''
+          ? "Failed to construct 'MediaRecorder': No supported MIME type is available."
+          : "Failed to construct 'MediaRecorder': The MIME type '" + requested + "' is not supported.",
+        'NotSupportedError');
+    }
+
     // §4.1.1 mimeType
-    this.mimeType = (typeof options.mimeType === 'string') ? options.mimeType : '';
+    this.mimeType = requested !== '' ? requested : SUPPORTED_TYPES[0];
 
     // §4.1.2 state — inactive | recording | paused
     this.state = 'inactive';
@@ -183,9 +203,10 @@ const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
     this._dispatch(dataEvt);
   };
 
-  // §4.1.3 static isTypeSupported(mimeType) → false (Phase 0: no codec support)
+  // §4.1.3 static isTypeSupported(mimeType): true only for a type listed in
+  // SUPPORTED_TYPES (no encoder exists yet, so the list is empty).
   MediaRecorder.isTypeSupported = function(mimeType) {
-    return false;
+    return isTypeSupported(mimeType);
   };
 
   // Export to global scope
@@ -203,7 +224,18 @@ mod tests {
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 
+    /// Среда без кодировщиков — как в реальном браузере сейчас.
     fn with_media_recorder(f: impl FnOnce(&V8JsRuntime)) {
+        with_media_recorder_types("[]", f);
+    }
+
+    /// Среда с подставным кодировщиком `video/webm`: машина состояний
+    /// недостижима иначе, пока настоящих кодировщиков нет.
+    fn with_fake_encoder(f: impl FnOnce(&V8JsRuntime)) {
+        with_media_recorder_types("['video/webm']", f);
+    }
+
+    fn with_media_recorder_types(types: &str, f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval(
             "globalThis.Blob = function(parts, opts) { \
@@ -217,7 +249,11 @@ mod tests {
              globalThis.Date = { now: function() { return 0; } };",
         )
         .unwrap();
-        install_media_stream_recording_v8(&rt).unwrap();
+        let shim = MEDIA_STREAM_RECORDING_SHIM.replace(
+            "var SUPPORTED_TYPES = [];",
+            &format!("var SUPPORTED_TYPES = {types};"),
+        );
+        rt.eval(&shim).unwrap();
         f(&rt);
     }
 
@@ -280,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn is_type_supported_returns_false() {
+    fn is_type_supported_returns_false_without_encoder() {
         with_media_recorder(|rt| {
             let res = rt
                 .eval("MediaRecorder.isTypeSupported('video/webm')")
@@ -291,7 +327,7 @@ mod tests {
 
     #[test]
     fn initial_state_is_inactive() {
-        with_media_recorder(|rt| {
+        with_fake_encoder(|rt| {
             let res = rt.eval("var r = new MediaRecorder({}); r.state").unwrap();
             assert_eq!(res, JsValue::String("inactive".to_string()));
         });
@@ -299,7 +335,7 @@ mod tests {
 
     #[test]
     fn start_changes_state_to_recording() {
-        with_media_recorder(|rt| {
+        with_fake_encoder(|rt| {
             let res = rt
                 .eval("var r = new MediaRecorder({}); r.start(); r.state")
                 .unwrap();
@@ -309,7 +345,7 @@ mod tests {
 
     #[test]
     fn stop_fires_dataavailable_and_stop_events() {
-        with_media_recorder(|rt| {
+        with_fake_encoder(|rt| {
             let res = rt
                 .eval(
                     "var r = new MediaRecorder({}); \
@@ -325,7 +361,7 @@ mod tests {
 
     #[test]
     fn pause_and_resume_state_transitions() {
-        with_media_recorder(|rt| {
+        with_fake_encoder(|rt| {
             let res = rt
                 .eval(
                     "var r = new MediaRecorder({}); \
@@ -343,11 +379,48 @@ mod tests {
 
     #[test]
     fn mime_type_reflected_from_options() {
-        with_media_recorder(|rt| {
+        with_fake_encoder(|rt| {
             let res = rt
                 .eval("var r = new MediaRecorder({}, {mimeType: 'video/webm'}); r.mimeType")
                 .unwrap();
             assert_eq!(res, JsValue::String("video/webm".to_string()));
+        });
+    }
+
+    /// BUG-1621: без кодировщика конструктор не создаёт «записывающий»
+    /// объект, который отдаст пустой Blob, — NotSupportedError для любого
+    /// mimeType, в том числе пустого.
+    #[test]
+    fn constructor_throws_not_supported_without_encoder() {
+        with_media_recorder(|rt| {
+            let res = rt
+                .eval(
+                    "function nameOf(f) { try { f(); return 'ok'; } catch (e) { return e.name; } }                      [ nameOf(function() { new MediaRecorder({}); }),                        nameOf(function() { new MediaRecorder({}, {mimeType: 'video/webm'}); }),                        nameOf(function() { new MediaRecorder({}, {mimeType: 'audio/ogg;codecs=opus'}); }),                        MediaRecorder.isTypeSupported('audio/webm')                      ].join(',')",
+                )
+                .unwrap();
+            assert_eq!(
+                res,
+                JsValue::String(
+                    "NotSupportedError,NotSupportedError,NotSupportedError,false".to_string()
+                )
+            );
+        });
+    }
+
+    /// С кодировщиком: неподдержанный тип отклоняется, поддержанный
+    /// принимается, пустой берёт тип по умолчанию.
+    #[test]
+    fn constructor_checks_mime_type_against_encoders() {
+        with_fake_encoder(|rt| {
+            let res = rt
+                .eval(
+                    "function nameOf(f) { try { f(); return 'ok'; } catch (e) { return e.name; } }                      [ nameOf(function() { new MediaRecorder({}, {mimeType: 'audio/ogg'}); }),                        nameOf(function() { new MediaRecorder({}, {mimeType: 'Video/WebM'}); }),                        new MediaRecorder({}).mimeType,                        MediaRecorder.isTypeSupported('video/webm'),                        MediaRecorder.isTypeSupported('audio/ogg')                      ].join(',')",
+                )
+                .unwrap();
+            assert_eq!(
+                res,
+                JsValue::String("NotSupportedError,ok,video/webm,true,false".to_string())
+            );
         });
     }
 }

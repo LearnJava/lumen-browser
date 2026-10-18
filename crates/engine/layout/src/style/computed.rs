@@ -804,6 +804,13 @@ pub struct ComputedStyle {
     pub mask_layers: Vec<MaskLayer>,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
+    /// `::-webkit-scrollbar { height: 0 }` — горизонтальная полоса скрыта (gutter 0,
+    /// оверлей не рисуется), вертикальная живёт по `scrollbar_width`. У стандартного
+    /// `scrollbar-width` одно значение на обе оси, поэтому ось-ноль из legacy-
+    /// псевдоэлемента хранится отдельно. Не наследуется.
+    pub scrollbar_hidden_x: bool,
+    /// То же для вертикальной полосы: `::-webkit-scrollbar { width: 0 }`. Не наследуется.
+    pub scrollbar_hidden_y: bool,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
     /// (thumb-color + track-color).
     pub scrollbar_color: Option<(Color, Color)>,
@@ -1500,6 +1507,8 @@ impl ComputedStyle {
             view_timeline_axis: ScrollAxis::Block,
             mask_layers: Vec::new(),
             scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_hidden_x: false,
+            scrollbar_hidden_y: false,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
             overflow_anchor: OverflowAnchor::Auto,
@@ -1911,6 +1920,8 @@ impl ComputedStyle {
             // CSS Scrollbars — scrollbar-width/-color inherited;
             // scrollbar-gutter не наследуется.
             scrollbar_width: inherited.scrollbar_width,
+            scrollbar_hidden_x: false,
+            scrollbar_hidden_y: false,
             scrollbar_color: inherited.scrollbar_color,
             scrollbar_gutter: ScrollbarGutter::Auto,
             // CSS Scroll Anchoring 1 — `overflow-anchor` не наследуется.

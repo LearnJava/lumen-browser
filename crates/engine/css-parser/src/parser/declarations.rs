@@ -96,6 +96,10 @@ impl<'a> Parser<'a> {
         self.consume();
         let value = self.parse_value_until_terminator();
         let (value, important) = extract_important(value.trim());
+        // WHATWG Compat §3: `-webkit-*` simple aliases resolve to the
+        // unprefixed property here, once, for the whole cascade.
+        let property = crate::compat_alias::canonical_property_name(&property)
+            .map_or(property, str::to_string);
         Some(Declaration {
             property,
             value,

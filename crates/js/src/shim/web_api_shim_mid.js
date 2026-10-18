@@ -1994,6 +1994,7 @@ function _lumen_parse_style(s) {
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
         if (prop === 'word-wrap') prop = 'overflow-wrap';
+        prop = _lumen_compat_alias(prop);
         if (_lumen_gap_rule_key_re.test(prop)) {
             // `!important` is not part of the value (the priority is not tracked here).
             var gapVal = _lumen_close_open_parens(val.replace(/\s*!\s*important\s*$/i, ''));
@@ -2176,6 +2177,7 @@ function _lumen_expand_overflow_shorthand(strVal) {
     for (var i = 0; i < tokens.length; i++) {
         var c = _lumen_css_canonical_keyword(tokens[i], _LUMEN_KEYWORD_PROPERTIES['overflow-x']);
         if (c === null || c === undefined) return null;
+        if (c === 'overlay') c = 'auto';
         canon.push(c);
     }
     return { x: canon[0], y: canon.length > 1 ? canon[1] : canon[0] };
@@ -2424,10 +2426,40 @@ function _lumen_serialize_style(obj) {
     });
     return parts.length ? parts.join('; ') + ';' : '';
 }
+// WHATWG Compat §3 simple aliases (COMPAT-CSS-ALIAS): the 51 `-webkit-<name>` spellings resolve
+// to `<name>`. Mirror of `lumen_css_parser::COMPAT_CSS_ALIASES` (the Rust parser applies the same
+// table to stylesheets and native inline styles).
+var _LUMEN_COMPAT_ALIASES = {};
+(
+    'align-content align-items align-self animation animation-delay animation-direction '+
+    'animation-duration animation-fill-mode animation-iteration-count animation-name '+
+    'animation-play-state animation-timing-function backface-visibility background-clip '+
+    'background-origin background-size border-bottom-left-radius border-bottom-right-radius '+
+    'border-radius border-top-left-radius border-top-right-radius box-shadow box-sizing filter '+
+    'flex flex-basis flex-direction flex-flow flex-grow flex-shrink flex-wrap justify-content '+
+    'mask mask-clip mask-composite mask-image mask-origin mask-position mask-repeat mask-size '+
+    'order perspective perspective-origin transform transform-origin transform-style transition '+
+    'transition-delay transition-duration transition-property transition-timing-function'
+).split(' ').forEach(function(n) { _LUMEN_COMPAT_ALIASES['-webkit-' + n] = n; });
+function _lumen_compat_alias(key) {
+    var k = key.toLowerCase();
+    return Object.prototype.hasOwnProperty.call(_LUMEN_COMPAT_ALIASES, k) ? _LUMEN_COMPAT_ALIASES[k] : key;
+}
+// IDL attribute `webkitTransform` / `WebkitTransform` / `WebKitTransform` of an aliased property
+// (the enumeration test in `compat/css-style-declaration-alias-enumeration.html` spells one with a
+// capital K): true for the 51 Compat §3 names, so `'webkitTransform' in el.style` holds.
+function _lumen_is_compat_alias_attr(prop) {
+    if (typeof prop !== 'string' || !/^[Ww]eb[Kk]it[A-Z]/.test(prop)) return false;
+    // An alias resolves to its unprefixed name; any other `webkitFoo` stays `-webkit-foo`.
+    return _lumen_camel_to_kebab(prop).indexOf('-webkit-') !== 0;
+}
 function _lumen_camel_to_kebab(prop) {
+    prop = prop.replace(/^[Ww]eb[Kk]it(?=[A-Z])/, 'webkit');
     var key = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+    // `webkitTransform` (lower-case vendor prefix) is the same IDL attribute as `WebkitTransform`.
+    if (key.indexOf('webkit-') === 0) key = '-' + key;
     // CSS Text L3 §5.5: `word-wrap` is a legacy alias of `overflow-wrap` (BUG-1325).
-    return key === 'word-wrap' ? 'overflow-wrap' : key;
+    return key === 'word-wrap' ? 'overflow-wrap' : _lumen_compat_alias(key);
 }
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
@@ -2669,7 +2701,7 @@ var _LUMEN_GRID_PROPERTIES = {
 // (`style/parse/box_sides.rs`) accepts `none`/`solid`/`dashed`/`dotted`/`double`
 // and, since the volumetric-border slice, `groove`/`ridge`/`inset`/`outset`.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
-// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
+// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` + legacy alias `overlay`, read back as `auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
 // rejected same as any other unrecognized keyword). The `overflow` shorthand
 // itself is NOT in this table — it is a 1-or-2-token grammar, wired through
@@ -2706,14 +2738,14 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'block-step-insert': ['margin-box', 'padding-box', 'content-box'],
     'block-step-align':  ['auto', 'center', 'start', 'end'],
     'block-step-round':  ['up', 'down', 'nearest'],
-    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
-    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
+    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
     // BUG-505 срез 3: `overflow-block`/`overflow-inline` (CSS Overflow L3
     // §logical) landed in the Rust cascade this slice
     // (`crates/engine/layout/src/style/apply/layout.rs`) — same grammar as
     // their physical `overflow-x`/`overflow-y` counterparts above.
-    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
-    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
+    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
     // WHATWG Compat §2.1 (BUG-505 срез 5) — feeds the `display: -webkit-box`
     // computed-value quirk (`webkit_box_computed_display`, `selector_query.rs`).
     '-webkit-box-orient': ['horizontal', 'vertical'],
@@ -3335,7 +3367,10 @@ function _lumen_canonicalize_longhand(key, strVal) {
         return _lumen_css_canonical_text(key, strVal);
     }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
-        return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+        var kw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+        // CSS Overflow L3 legacy value alias: `overlay` parses as `auto`
+        // (Chrome 114+), so CSSOM read-back is `auto`.
+        return kw === 'overlay' ? 'auto' : kw;
     }
     if (key === 'scrollbar-color') {
         return _lumen_css_canonical_scrollbar_color(strVal);
@@ -3674,6 +3709,9 @@ function _lumen_make_style(nid, fbid) {
             if (prop in t) return Reflect.get(t, prop, receiver);
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
+        has: function(t, prop) {
+            return prop in t || _lumen_is_compat_alias_attr(prop);
+        },
         set: function(t, prop, value, receiver) {
             if (prop in t) return Reflect.set(t, prop, value, receiver);
             t.setProperty(_lumen_camel_to_kebab(String(prop)), value);
@@ -3704,6 +3742,9 @@ function _lumen_make_rule_style(loc) {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
+        },
+        has: function(t, prop) {
+            return prop in t || _lumen_is_compat_alias_attr(prop);
         },
         set: function(t, prop, value, receiver) {
             if (prop in t) return Reflect.set(t, prop, value, receiver);

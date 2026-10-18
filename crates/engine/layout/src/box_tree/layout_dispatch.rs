@@ -448,6 +448,18 @@ pub(super) fn dispatch_box(
         );
     }
 
+    // A vertical-writing-mode table is laid out in logical axes by its own module (TABLE-VWM):
+    // rows run along the block axis (physical x), columns along the inline axis (y).
+    if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::Table)
+    {
+        INDEFINITE_HEIGHT_CONSULTED.with(|c| c.set(true));
+        let vs = style_with_used_size(&b.style, used_size_override);
+        return super::table_vertical::dispatch(
+            b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+        );
+    }
+
     // CSS Writing Modes L3 §3: vertical writing modes swap the block/inline axes.
     // Vertical block stacking and InlineRun flow (below, `lay_out_vertical_inline_run`)
     // are both implemented in the `vertical` module. FormControl and other box
