@@ -1,6 +1,6 @@
 # BUG-1621 — MediaRecorder изображает запись и отдаёт пустой Blob
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** js (`crates/js/src/media_stream_recording.rs:82`)
 
@@ -20,6 +20,10 @@
 ## Объём и приёмка
 
 Баг (сверх исследования). Сейчас MediaRecorder.isTypeSupported всегда false (crates/js/src/media_stream_recording.rs:187), но конструктор принимает любой mimeType (:82-89), start() переводит в 'recording' и шлёт start (:129-137), а stop() отдаёт dataavailable с пустым Blob (:147): запись голоса с рабочего getUserMedia({audio}) молча даёт файл 0 байт. Объём: неподдержанный mimeType в конструкторе и start() без кодировщика → NotSupportedError (или не объявлять MediaRecorder — отмена BUG-549, тогда срез COMPAT-API-01). Приёмка: после start/stop нет dataavailable с size 0; baseline WPT mediacapture-record. Источник: docs/research/site-compat/report.md §8.1 (класс), §11 п.4
+
+## Исправление
+
+Конструктор `MediaRecorder` бросает `NotSupportedError`, если mimeType не входит в `SUPPORTED_TYPES` (сейчас пуст — кодировщиков нет), а при пустом mimeType — если нет ни одного типа по умолчанию. Поэтому «записывающий» объект с пустым Blob создать нельзя. `isTypeSupported` читает тот же список. Объявление `MediaRecorder` сохранено (проверки наличия, BUG-549). Тесты: `media_stream_recording::tests::constructor_*`.
 
 ## Источник
 
