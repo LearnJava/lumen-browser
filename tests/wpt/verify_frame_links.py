@@ -411,7 +411,7 @@ def variant_links(args) -> int:
 
             shot = lambda: base64.b64decode(  # noqa: E731
                 client._raw_call("resources/read", {"uri": "resource://screenshot"})
-                ["contents"][0]["data"]
+                ["contents"][0]["blob"]
             )
 
             start = _markers(log_path)
@@ -537,7 +537,7 @@ def variant_deep(args) -> int:
 
             shot = lambda: base64.b64decode(  # noqa: E731
                 client._raw_call("resources/read", {"uri": "resource://screenshot"})
-                ["contents"][0]["data"]
+                ["contents"][0]["blob"]
             )
 
             start = _markers(log_path)

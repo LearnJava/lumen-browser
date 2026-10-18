@@ -464,7 +464,7 @@ def variant_submit(args) -> int:
 
             shot = lambda: base64.b64decode(  # noqa: E731
                 client._raw_call("resources/read", {"uri": "resource://screenshot"})
-                ["contents"][0]["data"]
+                ["contents"][0]["blob"]
             )
 
             start = _markers(log_path)
@@ -623,7 +623,7 @@ def variant_script(args) -> int:
             time.sleep(6.0)
             shot = lambda: base64.b64decode(  # noqa: E731
                 client._raw_call("resources/read", {"uri": "resource://screenshot"})
-                ["contents"][0]["data"]
+                ["contents"][0]["blob"]
             )
             markers = _markers(log_path)
             pr = _rects(markers, "parent-rects ")

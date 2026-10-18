@@ -1,6 +1,6 @@
 # BUG-1629 — Живое окно (`--mcp-live-port`): первый кадр приходит через 32–131 с, `wait document_ready` истекает по таймауту
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-14 (P2, при проверке краулера COMPAT-CORPUS-1)
 **Область:** shell/mcp (живое окно, обработка автоматизационных команд; точное место не найдено)
 
@@ -48,3 +48,14 @@ COMPAT-CORPUS-1 (`scripts/compat_crawl.py`, ветка `p2-compat-corpus-1`): п
 **Остаток:** `resource://screenshot` не возвращает кадр — статус `DEGRADED`, `no_png_reason: resource://screenshot не вернул кадр`.
 Критерий «PNG есть» этой записи пока не выполнен.
 
+
+## Исправление остатка (2026-10-18, P3)
+
+Кадр живое окно отдавало всегда: `resources/read resource://screenshot` отвечает за 0,14–0,18 с и возвращает ~260 КБ PNG.
+Ошибка была в читателях. `McpServer::on_resources_read` (`crates/mcp/src/server.rs:516`) приводит ответ к виду MCP-спецификации
+(`uri` + `blob` + `mimeType`, поле `type` убирается, `data` переименовывается в `blob`), а `scripts/perf_audit.py`,
+`scripts/compat_crawl.py`, `scripts/compat_scenarios.py` и `tests/wpt/verify_frame_*.py` искали base64 в `contents[0]["data"]`.
+Пустой результат читался как «кадра нет» → `DEGRADED` с `no_png_reason`. Все читатели переведены на `blob`.
+
+Проверка: `perf_audit.py --only example --only hn --only ya --exe target/dev-release/lumen.exe` — `OK`, готовность
+0,85 / 2,69 / 2,85 с, `example.png`, `hn.png`, `ya.png` записаны.

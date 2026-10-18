@@ -260,7 +260,7 @@ def main() -> int:
 
             shot = lambda: base64.b64decode(  # noqa: E731
                 client._raw_call("resources/read", {"uri": "resource://screenshot"})
-                ["contents"][0]["data"]
+                ["contents"][0]["blob"]
             )
             before = count_colors(shot())
             if pr:

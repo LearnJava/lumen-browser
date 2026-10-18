@@ -202,7 +202,7 @@ def main() -> int:
             time.sleep(1.0)
             shot = lambda: base64.b64decode(  # noqa: E731
                 client._raw_call("resources/read", {"uri": "resource://screenshot"})
-                ["contents"][0]["data"]
+                ["contents"][0]["blob"]
             )
             before = count_colors(shot())
             # Контроль ДО скролла: клик в точку фрейма попадает в первую полосу.
