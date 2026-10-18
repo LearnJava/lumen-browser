@@ -19,8 +19,13 @@
 //!    padding, margin and corner radii), the lines of an `InlineRun` are dealt out by position.
 //!
 //! Monolithic boxes (replaced elements, scroll containers, `contain: size|layout|paint`,
-//! floats, flex/grid/table, nested multicol, transformed boxes — [`is_fragmentable`]) are never
+//! floats, grid/table, nested multicol, transformed boxes — [`is_fragmentable`]) are never
 //! cut: they go whole into the window their top edge falls in and overflow it.
+//!
+//! A flex container is cut like a block whose children are the flex items (Flexbox L1 §12): the
+//! items are told into lines by their position ([`walk_flex_lines`]) — a column container has one
+//! item per line, a row container breaks between its lines and, inside a line, through every
+//! item at once (each item is its own flow, the window edge cuts all of them).
 
 use super::multicol_break::{breaks_after, breaks_before};
 use super::multicol_fragmentation::{item_lines, ItemLines};
@@ -52,6 +57,9 @@ struct Free {
     lo: f32,
     hi: f32,
     tier: u8,
+    /// Where the next column starts after a break in the run (`None` — at the break itself); a
+    /// margin run resumes after the margin, which a break truncates (Fragmentation L3 §5.2).
+    resume: Option<f32>,
 }
 
 /// Break points of one segment, in virtual coordinates.
@@ -89,6 +97,13 @@ impl<'a> Flow<'a> {
             v = end + mb;
         }
         let mut model = Model { end, ..Model::default() };
+        // A margin above the first item that is taller than a column is cut by the first break.
+        if let Some(&(first, mt, _)) = items.first()
+            && mt > EPS
+            && participates(first)
+        {
+            model.free.push(Free { lo: 0.0, hi: mt, tier: 0, resume: Some(mt) });
+        }
         walk_list(&mut model, &list, false, 0, viewport);
         model.cands.sort_by(|a, b| a.end.total_cmp(&b.end).then(a.resume.total_cmp(&b.resume)));
         model.free.sort_by(|a, b| a.lo.total_cmp(&b.lo));
@@ -110,7 +125,7 @@ pub(super) fn is_fragmentable(b: &LayoutBox, depth: usize) -> bool {
     let barred = ContainFlags::SIZE.0 | ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0;
     depth < MAX_DEPTH
         && matches!(b.kind, BoxKind::Block)
-        && matches!(s.display, Display::Block | Display::ListItem | Display::FlowRoot)
+        && matches!(s.display, Display::Block | Display::ListItem | Display::FlowRoot | Display::Flex)
         && s.float_side == FloatSide::None
         && !matches!(s.position, Position::Absolute | Position::Fixed | Position::Sticky)
         && matches!(s.overflow_x, Overflow::Visible | Overflow::Clip)
@@ -228,6 +243,49 @@ fn walk_list(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, depth:
     }
 }
 
+/// Break points of the items of a flex container, `list` in visual (top-to-bottom) order. The
+/// items whose block extents overlap form a line (a column container: every item is a line of
+/// its own). A break falls between two lines (`break-*` of any item of the lines counts) and
+/// inside the items — those of one line side by side, so the break inside one of them cuts them all.
+fn walk_flex_lines(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, depth: usize, vp: Size) {
+    type Entry<'a, 'b> = &'b (&'a LayoutBox, f32, f32);
+    let top_of = |e: Entry| e.0.rect.y + e.1;
+    let bottom_of = |e: Entry| e.0.rect.y + e.1 + e.0.rect.height;
+    let mut lines: Vec<Vec<Entry>> = Vec::new();
+    let mut bottom = f32::NEG_INFINITY;
+    for e in list.iter().filter(|e| participates(e.0)) {
+        match lines.last_mut() {
+            Some(line) if top_of(e) < bottom - EPS => {
+                line.push(e);
+                bottom = bottom.max(bottom_of(e));
+            }
+            _ => {
+                lines.push(vec![e]);
+                bottom = bottom_of(e);
+            }
+        }
+    }
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            let prev = &lines[i - 1];
+            let end = prev.iter().map(|e| bottom_of(e)).fold(f32::NEG_INFINITY, f32::max);
+            let start = line.iter().map(|e| top_of(e)).fold(f32::INFINITY, f32::min);
+            let forced = prev.iter().any(|e| breaks_after(e.0, 0)) || line.iter().any(|e| breaks_before(e.0, 0));
+            let avoided = avoid
+                || prev.iter().any(|e| e.0.style.break_after == BreakValue::Avoid)
+                || line.iter().any(|e| e.0.style.break_before == BreakValue::Avoid);
+            m.cands.push(Cand { end, resume: start.max(end), forced, tier: tier(avoided, false) });
+        }
+        for &&(c, off, _) in line {
+            let run = match item_lines(c) {
+                ItemLines::Lines(n) => Some((0, n, 0)),
+                _ => None,
+            };
+            walk_item(m, c, off, run, avoid, depth, vp);
+        }
+    }
+}
+
 /// Break points inside one in-flow box.
 fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usize)>, avoid: bool, depth: usize, vp: Size) {
     let vt = b.rect.y + off;
@@ -249,21 +307,30 @@ fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usiz
                 let pad = s.padding_bottom.resolve_or_zero(s.font_size, w, vp);
                 vb - s.border_bottom_width - pad
             };
-            let kids: Vec<(&LayoutBox, f32, f32)> = b.children.iter().map(|c| (c, off, 0.0)).collect();
+            let mut kids: Vec<(&LayoutBox, f32, f32)> = b.children.iter().map(|c| (c, off, 0.0)).collect();
+            // `order` / `*-reverse` put the items out of tree order: break in visual order.
+            let flex = matches!(s.display, Display::Flex);
+            if flex {
+                kids.sort_by(|a, b| a.0.rect.y.total_cmp(&b.0.rect.y));
+            }
             let last = b.children.iter().filter(|c| participates(c)).map(|c| c.rect.y + off + c.rect.height).reduce(f32::max);
             match last {
                 None => {
                     let lo = vt + s.border_top_width;
                     let hi = bottom_edge(b.rect.width);
                     if hi > lo + EPS {
-                        m.free.push(Free { lo, hi, tier: tier(avoid, false) });
+                        m.free.push(Free { lo, hi, tier: tier(avoid, false), resume: None });
                     }
                 }
                 Some(last) => {
-                    walk_list(m, &kids, avoid, depth + 1, vp);
+                    if flex {
+                        walk_flex_lines(m, &kids, avoid, depth + 1, vp);
+                    } else {
+                        walk_list(m, &kids, avoid, depth + 1, vp);
+                    }
                     let hi = bottom_edge(b.rect.width);
                     if hi > last + EPS {
-                        m.free.push(Free { lo: last, hi, tier: tier(avoid, false) });
+                        m.free.push(Free { lo: last, hi, tier: tier(avoid, false), resume: None });
                     }
                 }
             }
@@ -273,9 +340,9 @@ fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usiz
 }
 
 impl Model {
-    fn free_tier_at(&self, x: f32) -> Option<u8> {
+    fn free_at(&self, x: f32) -> Option<&Free> {
         let k = self.free.partition_point(|f| f.lo <= x + EPS);
-        self.free[..k].iter().rev().take(4).find(|f| x <= f.hi + EPS && x >= f.lo - EPS).map(|f| f.tier)
+        self.free[..k].iter().rev().take(4).find(|f| x <= f.hi + EPS && x >= f.lo - EPS)
     }
 
     /// Column windows `[start, end)` of the stack; `h_of(k)` is the height of column `k`
@@ -306,10 +373,10 @@ impl Model {
                     }
                 }
                 if h.is_finite()
-                    && let Some(t) = self.free_tier_at(lo + h)
-                    && pick.is_none_or(|(e, _, pt)| t < pt || (t == pt && lo + h >= e))
+                    && let Some(f) = self.free_at(lo + h)
+                    && pick.is_none_or(|(e, _, pt)| f.tier < pt || (f.tier == pt && lo + h >= e))
                 {
-                    pick = Some((lo + h, lo + h, t));
+                    pick = Some((lo + h, f.resume.unwrap_or(lo + h), f.tier));
                 }
             }
             match pick {
@@ -369,6 +436,9 @@ pub(super) struct Window {
     pub(super) hi: f32,
     /// The last window also takes what starts exactly at its end.
     pub(super) last: bool,
+    /// Block size of the column (`INFINITY` for `column-fill: auto` without a height): a flex
+    /// container that continues in the next column fills this one up to its bottom.
+    pub(super) extent: f32,
     /// Page `y` of the window's top edge.
     pub(super) col_top: f32,
     /// Shift of the item's `x` from its measured position into the column.
@@ -470,6 +540,10 @@ pub(super) fn cut(d: &LayoutBox, off: f32, w: &Window, depth: usize) -> Option<L
     frag.rect.y = w.col_top + (from - w.lo);
     frag.rect.height = (to - from).max(0.0);
     slice_edges(&mut frag, top_cut, bottom_cut);
+    // Flexbox L1 §12: a flex container that breaks consumes the rest of the fragmentainer.
+    if bottom_cut && w.extent.is_finite() && matches!(d.style.display, Display::Flex) {
+        frag.rect.height = frag.rect.height.max(w.lo + w.extent - from);
+    }
     for c in &d.children {
         if matches!(c.kind, BoxKind::Skip) {
             if !top_cut {
