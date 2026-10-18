@@ -531,6 +531,9 @@ pub struct ComputedStyle {
     /// CSS Multi-column L2 §4.4 — `column-wrap: nowrap`. `false` = `auto`/`wrap`: with a
     /// non-auto `column-height`, overflow columns open a new row in the block direction.
     pub column_wrap_nowrap: bool,
+    /// `column-wrap: wrap` written explicitly: rows open on forced breaks even with an `auto`
+    /// `column-height` (Multicol L2 §4.4), where `auto` stays a single row.
+    pub column_wrap_explicit: bool,
     /// CSS Multi-column L1 §4.1 / CSS Gap Decorations L1 §4.5 — `column-rule-width`: список
     /// px-значений по щелям (`repeat()` сохранён). Default `[3]` (`medium`).
     pub column_rule_width: RuleList<f32>,
@@ -1398,6 +1401,7 @@ impl ComputedStyle {
             column_width: None,
             column_height: None,
             column_wrap_nowrap: false,
+            column_wrap_explicit: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),
@@ -1796,6 +1800,7 @@ impl ComputedStyle {
             column_width: None,
             column_height: None,
             column_wrap_nowrap: false,
+            column_wrap_explicit: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),

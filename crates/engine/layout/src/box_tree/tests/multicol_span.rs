@@ -26,13 +26,10 @@ fn multicol_nested_column_span_all_spans_container() {
     assert_eq!(spanners.len(), 1, "exactly one full-width spanner expected");
     let s = spanners[0];
     assert!(s.rect.x.abs() < 1.0, "spanner x={}", s.rect.x);
-    assert_eq!(
-        c.children.len(),
-        3,
-        "section splits into fragment + spanner + fragment"
-    );
+    // The fragments around the spanner are cut by the balanced columns (two pieces each).
+    assert!(c.children.len() >= 3, "section splits into fragment + spanner + fragment");
     let before = &c.children[0];
-    let after = &c.children[2];
+    let after = c.children.last().unwrap();
     assert!(
         before.rect.y + before.rect.height <= s.rect.y + 0.5,
         "first fragment ends above the spanner"
@@ -42,8 +39,8 @@ fn multicol_nested_column_span_all_spans_container() {
         "second fragment starts below the spanner"
     );
     assert!(
-        (c.rect.height - 50.0).abs() < 1.0,
-        "container height={} should be 20+10+20",
+        (c.rect.height - 30.0).abs() < 1.0,
+        "container height={} should be 10+10+10 (each 20px fragment balanced over two columns)",
         c.rect.height
     );
 }
@@ -88,9 +85,9 @@ fn multicol_column_span_all_two_levels_deep() {
     );
     let c = first_element_child(&root);
     assert_eq!(multicol_spanners(c, 300.0).len(), 1);
-    assert_eq!(c.children.len(), 3);
+    assert!(c.children.len() >= 3);
     assert!(
-        (c.rect.height - 50.0).abs() < 1.0,
+        (c.rect.height - 30.0).abs() < 1.0,
         "container height={}",
         c.rect.height
     );

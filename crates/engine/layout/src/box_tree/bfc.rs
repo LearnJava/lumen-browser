@@ -15,6 +15,10 @@ pub(crate) fn establishes_bfc(b: &LayoutBox) -> bool {
         || !matches!(b.style.overflow_y, Overflow::Visible | Overflow::Clip)
         || b.style.float_side != FloatSide::None
         || matches!(b.style.position, Position::Absolute | Position::Fixed)
+        // CSS Multicol L1 §2: a multicol container establishes a new block formatting context, so
+        // its first child's margin-top stays inside it.
+        || b.style.column_count.is_some()
+        || b.style.column_width.is_some()
         // Flexbox §3 / Grid §3: a flex/grid container is an independent
         // formatting context, so its items' margins never reach its ancestors.
         || matches!(
