@@ -546,7 +546,7 @@ pub(in crate::style) fn apply_decl_paint(
                 style.pointer_events = v;
             }
         }
-        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+        "appearance" | "-webkit-appearance" => {
             style.appearance = match val.trim() {
                 "auto" => Appearance::Auto,
                 "none" => Appearance::None,

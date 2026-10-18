@@ -542,7 +542,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `min-content` | ✅ | Length::MinContent; phase-0 approx = longest-word width 2026-05-24 |
 | `max-content` | ✅ | Length::MaxContent; max_content_outer_width() measures text 2026-05-24 |
 | `fit-content` / `fit-content(L)` | ✅ | Length::FitContent(Option<Box<Length>>); capped at available 2026-05-24 |
-| `stretch` / `-webkit-fill-available` / `-moz-available` | ✅ | `Length::Stretch` (CSS Sizing L4 §4.1): border box = containing block − margins on `width`/`min-width`/`max-width` (also for inline-block/replaced, where `auto` shrinks), and `height`/`min-height`/`max-height` against a definite containing-block height (indefinite → `auto`); no longer aliased to `fit-content`. ⬜ `inline-size`/`block-size` logical mapping, flex-item main-size use, abspos |
+| `stretch` / `-webkit-fill-available` (`-moz-available` is rejected, as in Chrome) | ✅ | `Length::Stretch` (CSS Sizing L4 §4.1): border box = containing block − margins on `width`/`min-width`/`max-width` (also for inline-block/replaced, where `auto` shrinks), and `height`/`min-height`/`max-height` against a definite containing-block height (indefinite → `auto`); no longer aliased to `fit-content`. ⬜ `inline-size`/`block-size` logical mapping, flex-item main-size use, abspos |
 
 ### [T2] Transforms L2 / 3D
 

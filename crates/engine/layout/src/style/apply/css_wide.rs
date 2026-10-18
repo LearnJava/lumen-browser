@@ -431,7 +431,7 @@ fn apply_css_wide_keyword_with(
         "touch-action" => {
             style.touch_action = if inh_only_inherit { inherited.touch_action } else { init.touch_action };
         }
-        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+        "appearance" | "-webkit-appearance" => {
             style.appearance = if inh_only_inherit { inherited.appearance } else { init.appearance };
         }
         "contain" => {

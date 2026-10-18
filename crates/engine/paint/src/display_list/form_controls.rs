@@ -299,8 +299,8 @@ pub(crate) fn emit_form_control_indicator(
     ov: Option<&CompositorOverride>,
     out: &mut Vec<DisplayCommand>,
 ) {
-    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
-    // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
+    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`
+    // alias, normalised to `Appearance::None` at parse time) removes
     // the native "primitive appearance" of a form control: the checkbox tick,
     // radio dot, range slider, progress bar, meter bar and select arrow. The box
     // (border/padding/background) is already stripped in
