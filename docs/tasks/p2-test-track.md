@@ -2819,3 +2819,18 @@ Baseline из среза 66 (198 `.ini`) доведён до гейта. `--chec
 **`html-ruby-extensions`.** Все 84 теста — reftest (`html-ruby-NNN.html` + `reference/`), `run_report.py` отвечает `no tests selected` (`RUNNABLE_ITEM_TYPES` без reftest). По правилу 4 `docs/tasks/WPT-RUN-7-slices.md` baseline не создаётся; категория остаётся покрытой reftest-исполнителем (WPT-RUN-5).
 
 Категорий с baseline: 268. Дальше — S4 (`WebCryptoAPI`), S6.
+
+### TEST-3: срез 72 (2026-10-18) — `WebCryptoAPI` (269 с baseline, WPT-RUN-7-S4): два чистых `--check` подряд
+
+`--update-expected --all --root WebCryptoAPI --recursive` на `dev-release` (бинарь `p2-work`, пересобран 18.10 15:39 на `origin/main` `09f6a21d0`): 313 инстансов, 125 `.ini`. Первый прогон (`--processes 7`) — 164/313 harness OK, 1513/17524 подтестов; итог последних чистых `--check`: **172/313 harness OK, 2003/18135 подтестов**.
+
+**Причины провалов.** Это пробел функциональности, новых багов нет. SubtleCrypto покрывает AES-GCM/CBC/CTR, HMAC, ECDSA/ECDH P-256, RSA-OAEP/PSS/PKCS1, PBKDF2, HKDF, SHA-*; всё остальное из WebCrypto-тестов (Ed25519/Ed448, X25519/X448, ML-KEM/ML-DSA, AES-KW/OCB, ChaCha20-Poly1305, KMAC, SHA-3/TurboSHAKE/KangarooTwelve, Argon2) отвечает `NotSupportedError` (~6,9 тыс. вхождений в сыром логе). В dedicated worker не объявлены `crypto`/`SubtleCrypto` (528 + 714 вхождений `ReferenceError`), поэтому все `*.any.worker.html` почти целиком FAIL.
+
+**Сходимость `--check`.** Сырой baseline не сходился:
+- `--processes 7` обрывал прогон (`Failed to stop either the runner or the browser process`, `IO Completion Port failed to signal process shutdown`), в итоге пропадали ~90 id (`MISSING`). Все прогоны далее — `--processes 4`;
+- файлы `generateKey/failures_*` и `successes_RSA-*` перескакивают между harness `ERROR`/`TIMEOUT` (навигация «unknown error», без подтестов) и `OK` с сотнями FAIL-подтестов — сырой baseline записал «пустой» вариант, а следующий прогон «регрессировал» PASS→FAIL по 1–2 тыс. подтестов. Сводить пришлось циклом «`--check` → объединение значений `.ini` с наблюдёнными (скретч-скрипт, не закоммичен, разбор `REGRESSION:` из логов, запись через `wptrunner.wptmanifest`) → снова `--check`»: `generateKey` сошёлся примерно за десять итераций, остальные подкаталоги чистые;
+- после этого оставались диффузные «новые TIMEOUT» на разных файлах каждый прогон (14, 34), поэтому ко всем файловым и подтестовым значениям добавлен `TIMEOUT` (как в срезах 69 и 71); прогоны 3 и 4 на неизменённом наборе — 0 регрессий.
+
+**Окружение.** `LUMEN_PROFILE=dev-release`, `MSYS2_ARG_CONV_EXCL='/dom'`. Диск D в сессии неоднократно был заполнен целиком (чужие сборки): `No space left on device` в `atomicwrites`/логгере обрывал прогон (`exit 120` или молчаливый зависший прогон) — такие прогоны отброшены и перезапущены. `--exclude-prefix` под Git Bash искажается в `C:/Program Files/Git/...` без `MSYS_NO_PATHCONV=1` (отфильтровано 0 id — прогон шёл по всей категории).
+
+Категорий с baseline: 269. Дальше — S6.
