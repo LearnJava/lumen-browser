@@ -24,13 +24,18 @@ fn linear_start_side_is_opposite_of_standard_end() {
 #[test]
 fn linear_corner_start_maps_to_opposite_corner() {
     let (_, c, _, _) = linear("-webkit-linear-gradient(top left, red, blue)");
-    assert_eq!(c, Some(GradientCorner::BottomRight));
+    assert_eq!(c, Some(GradientCorner::DiagBottomRight));
     let (_, c, _, _) = linear("-webkit-linear-gradient(right top, red, blue)");
-    assert_eq!(c, Some(GradientCorner::BottomLeft));
+    assert_eq!(c, Some(GradientCorner::DiagBottomLeft));
     let (_, c, _, _) = linear("-webkit-linear-gradient(bottom right, red, blue)");
-    assert_eq!(c, Some(GradientCorner::TopLeft));
+    assert_eq!(c, Some(GradientCorner::DiagTopLeft));
     let (_, c, _, _) = linear("-webkit-linear-gradient(left bottom, red, blue)");
-    assert_eq!(c, Some(GradientCorner::TopRight));
+    assert_eq!(c, Some(GradientCorner::DiagTopRight));
+    // Линия идёт вдоль диагонали 180×80: вектор (180, 80) → ≈ 114° по CSS.
+    let ang = GradientCorner::DiagBottomRight.angle_deg(180.0, 80.0);
+    assert!((ang - 113.96).abs() < 0.05, "{ang}");
+    let sq = GradientCorner::DiagTopLeft.angle_deg(100.0, 100.0);
+    assert!((sq - 315.0).abs() < 0.01, "{sq}");
 }
 
 #[test]
@@ -116,7 +121,7 @@ fn old_gradient_axis_aligned_uses_edge_coordinates() {
 #[test]
 fn old_gradient_diagonal_corners_use_corner_form() {
     let (_, c, stops, _) = linear("-webkit-gradient(linear, left top, right bottom, from(red), to(blue))");
-    assert_eq!(c, Some(GradientCorner::BottomRight));
+    assert_eq!(c, Some(GradientCorner::DiagBottomRight));
     assert_eq!(stops[1].position, Some(Length::Percent(100.0)));
 }
 

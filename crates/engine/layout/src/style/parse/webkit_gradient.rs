@@ -116,10 +116,10 @@ fn legacy_linear_direction(seg: &str) -> Option<(f32, Option<GradientCorner>)> {
         (None, Some(_)) => (0.0, None),
         (Some("left"), None) => (90.0, None),
         (Some(_), None) => (270.0, None),
-        (Some("left"), Some("top")) => (135.0, Some(GradientCorner::BottomRight)),
-        (Some("right"), Some("top")) => (225.0, Some(GradientCorner::BottomLeft)),
-        (Some("left"), Some(_)) => (45.0, Some(GradientCorner::TopRight)),
-        (Some(_), Some(_)) => (315.0, Some(GradientCorner::TopLeft)),
+        (Some("left"), Some("top")) => (135.0, Some(GradientCorner::DiagBottomRight)),
+        (Some("right"), Some("top")) => (225.0, Some(GradientCorner::DiagBottomLeft)),
+        (Some("left"), Some(_)) => (45.0, Some(GradientCorner::DiagTopRight)),
+        (Some(_), Some(_)) => (315.0, Some(GradientCorner::DiagTopLeft)),
     })
 }
 
@@ -348,12 +348,10 @@ fn old_stop(seg: &str) -> Option<(f32, GradientStop)> {
         (0.0, c)
     } else if let Some(c) = arg("to(") {
         (1.0, c)
-    } else if let Some(a) = arg("color-stop(") {
-        let parts = split_top_level_commas(a);
+    } else {
+        let parts = split_top_level_commas(arg("color-stop(")?);
         let [off, col] = parts.as_slice() else { return None };
         (old_offset(off)?, *col)
-    } else {
-        return None;
     };
     let color = parse_color(color.trim())?;
     Some((offset, GradientStop { color, position: None, ..Default::default() }))
@@ -449,18 +447,17 @@ fn old_linear(a: (Coord, Coord), b: (Coord, Coord), stops: Vec<(f32, GradientSto
     if dy == 0.0 {
         return axis(a.0, b.0, 90.0);
     }
-    // Диагональ: стандартный градиент строго перпендикулярен линии A→B только
-    // для квадратного бокса, поэтому для угловых точек берём `to <corner>`,
-    // для прочих — угол вектора. Позиции — доли отрезка (приближение).
+    // Диагональ: для угловых точек линия градиента идёт вдоль диагонали бокса
+    // (Diag-варианты), для прочих — угол вектора. Позиции — доли отрезка (приближение).
     let corner = match (a, b) {
         ((Coord::Pct(ax), Coord::Pct(ay)), (Coord::Pct(bx), Coord::Pct(by)))
             if [ax, ay, bx, by].iter().all(|v| *v == 0.0 || *v == 100.0) =>
         {
             Some(match (bx > ax, by > ay) {
-                (true, true) => (135.0, GradientCorner::BottomRight),
-                (false, true) => (225.0, GradientCorner::BottomLeft),
-                (true, false) => (45.0, GradientCorner::TopRight),
-                (false, false) => (315.0, GradientCorner::TopLeft),
+                (true, true) => (135.0, GradientCorner::DiagBottomRight),
+                (false, true) => (225.0, GradientCorner::DiagBottomLeft),
+                (true, false) => (45.0, GradientCorner::DiagTopRight),
+                (false, false) => (315.0, GradientCorner::DiagTopLeft),
             })
         }
         _ => None,
