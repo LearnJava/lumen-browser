@@ -463,6 +463,7 @@ mod multicol_nested_break;
 mod multicol_mixed_break;
 mod multicol_wrap_margin;
 mod multicol_orphans;
+mod multicol_flow;
 mod flex_axes;
 
 mod svg_transform_and_misc;

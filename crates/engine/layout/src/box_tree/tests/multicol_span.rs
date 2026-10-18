@@ -48,7 +48,8 @@ fn multicol_nested_column_span_all_spans_container() {
 #[test]
 fn multicol_nested_column_span_all_slices_decoration() {
     // box-decoration-break: slice — padding-top stays on the first fragment,
-    // padding-bottom on the last; the cut edges carry none.
+    // padding-bottom on the last; the cut edges carry none. Each piece around the spanner is
+    // balanced over the two columns, so it is cut into two fragments.
     let root = lay_measured(
         "<div id='c'><section><div id='a'></div><div id='s'></div><div id='b'></div></section></div>",
         "#c { width: 300px; column-count: 2; column-gap: 10px; } \
@@ -57,20 +58,15 @@ fn multicol_nested_column_span_all_slices_decoration() {
         800.0,
     );
     let c = first_element_child(&root);
-    assert_eq!(c.children.len(), 3);
+    assert_eq!(c.children.len(), 5, "two fragments, the spanner, two fragments");
+    let pad = |b: &LayoutBox| (b.style.padding_top.clone(), b.style.padding_bottom.clone());
+    assert_eq!(pad(&c.children[0]).0, crate::style::Length::Px(5.0), "padding-top stays on the first fragment");
+    assert_eq!(pad(&c.children[1]).0, crate::style::Length::Px(0.0));
+    assert_eq!(pad(&c.children[3]).1, crate::style::Length::Px(0.0));
+    assert_eq!(pad(&c.children[4]).1, crate::style::Length::Px(5.0), "padding-bottom stays on the last fragment");
     assert!(
-        (c.children[0].rect.height - 25.0).abs() < 1.0,
-        "first={}",
-        c.children[0].rect.height
-    );
-    assert!(
-        (c.children[2].rect.height - 25.0).abs() < 1.0,
-        "last={}",
-        c.children[2].rect.height
-    );
-    assert!(
-        (c.rect.height - 60.0).abs() < 1.0,
-        "container height={}",
+        (c.rect.height - 36.0).abs() < 1.0,
+        "container height={}: 13 + 10 + 13",
         c.rect.height
     );
 }

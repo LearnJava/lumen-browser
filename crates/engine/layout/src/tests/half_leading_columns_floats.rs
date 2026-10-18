@@ -1168,8 +1168,9 @@ fn multicol_column_fill_balance_is_capped_by_max_height() {
 
 #[test]
 fn multicol_column_fill_auto_atomic_items_fill_to_height() {
-    // Atomic (bordered) items with `column-fill: auto; height: 100px`: the
-    // first column takes as many whole items as fit (3 × 30px = 90px).
+    // Bordered items with `column-fill: auto; height: 100px`: the first column takes the whole
+    // items that fit (3 × 32px = 96px) and the top 4px of the next one (Fragmentation L3 §4: a
+    // block is cut at the column edge; `box-decoration-break: slice` drops its bottom border).
     let root = lay_measured(
         "<div id='c'><div></div><div></div><div></div><div></div><div></div></div>",
         "#c { width: 300px; column-count: 3; column-gap: 0px; column-fill: auto; height: 100px; } \
@@ -1177,6 +1178,8 @@ fn multicol_column_fill_auto_atomic_items_fill_to_height() {
         800.0,
     );
     let c = first_element_child(&root);
-    let col0 = c.children.iter().filter(|f| f.rect.x < 1.0).count();
-    assert_eq!(col0, 3, "column 0 holds 3 atomic items");
+    let col0: Vec<f32> = c.children.iter().filter(|f| f.rect.x < 1.0).map(|f| f.rect.height).collect();
+    assert_eq!(col0.len(), 4, "column 0 holds 3 whole items and the head of the 4th: {col0:?}");
+    assert!(col0[..3].iter().all(|h| (h - 32.0).abs() < 0.5), "{col0:?}");
+    assert!((col0[3] - 4.0).abs() < 0.5, "{col0:?}");
 }
