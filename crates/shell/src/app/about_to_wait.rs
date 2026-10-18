@@ -566,6 +566,15 @@ impl Lumen {
         }
         // BUG-1630: кадр живой анимации хрома — по таймеру, чтобы между кадрами
         // цикл доходил до `about_to_wait` (см. `chrome_anim_redraw_at`).
+        // BUG-1637: то же для живой анимации/перехода страницы.
+        if let Some(at) = self.page_anim_redraw_at {
+            if std::time::Instant::now() >= at {
+                self.page_anim_redraw_at = None;
+                self.request_redraw();
+            } else {
+                next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+            }
+        }
         if let Some(at) = self.chrome_anim_redraw_at {
             if std::time::Instant::now() >= at {
                 self.chrome_anim_redraw_at = None;

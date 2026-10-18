@@ -6,8 +6,10 @@
 
 use crate::*;
 
-/// BUG-1630: шаг между кадрами живой CSS-анимации хрома (≈ 60 Гц).
-const CHROME_ANIM_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+/// BUG-1630/1637: минимальный шаг между кадрами живой CSS-анимации хрома и страницы.
+/// 12 мс, а не 16: таймер Windows грубее (≈ 15,6 мс), и с 16 кадры выходили
+/// по ≈ 30 Гц; с 12 — ≈ 60 Гц, а на точном таймере — не выше ≈ 80 Гц.
+const ANIM_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
 
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
@@ -228,9 +230,12 @@ impl Lumen {
             let (trans_frame, trans_events) = self.transition_scheduler.tick(now_s);
             self.transition_events.extend(trans_events);
             frame.merge_from(trans_frame);
-            if frame.has_active {
-                self.request_redraw();
-            }
+            // BUG-1637: следующий кадр живой анимации страницы — по таймеру из
+            // `about_to_wait` (≈ 60 Гц), как у хрома (BUG-1630), а не
+            // немедленным `request_redraw`.
+            self.page_anim_redraw_at = frame
+                .has_active
+                .then(|| std::time::Instant::now() + ANIM_FRAME_INTERVAL);
             self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
             // GAP-SMIL: SVG SMIL timing model tick (begin/dur/repeatCount,
             // beginEvent/repeatEvent/endEvent) — owned entirely by the JS
@@ -287,7 +292,7 @@ impl Lumen {
             // (кадр ≈ 60 Гц), а не немедленным `request_redraw`.
             self.chrome_anim_redraw_at = c_frame
                 .has_active
-                .then(|| std::time::Instant::now() + CHROME_ANIM_FRAME_INTERVAL);
+                .then(|| std::time::Instant::now() + ANIM_FRAME_INTERVAL);
             self.chrome_anim_frame =
                 if c_frame.overrides.is_empty() { None } else { Some(c_frame) };
         }
