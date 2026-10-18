@@ -27,7 +27,33 @@ use crate::resolved_geometry::contains_fixed_descendants;
 /// border whose cut edge would show. Anything else keeps the atomic
 /// one-box-per-column placement.
 fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
-    !super::multicol_fragmentation::has_forced_break(&b.style) && box_is_leaf_block(b, container)
+    box_is_slice_chain(b, container, 0)
+}
+
+/// A leaf block, or a plain wrapper (`multicol_span::is_span_transparent`) without vertical
+/// border/padding around exactly one such box — what `multicol_break::hoist_nested_breaks` leaves
+/// of a wrapper cut at a forced break. A column window cuts the chain box by box, each fragment
+/// keeping its part (`multicol_trampoline::cut_chain`). A forced break on the item only moves
+/// where it starts.
+fn box_is_slice_chain(b: &LayoutBox, container: &ComputedStyle, depth: usize) -> bool {
+    if box_is_leaf_block(b, container) {
+        return true;
+    }
+    let mut flow = b.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip));
+    let (Some(only), None) = (flow.next(), flow.next()) else {
+        return false;
+    };
+    let zero = |l: &Length| matches!(l, Length::Px(v) if *v == 0.0);
+    depth < 8
+        && super::multicol_span::is_span_transparent(b)
+        && b.style.break_inside != crate::style::BreakValue::Avoid
+        && [b.style.border_top_width, b.style.border_bottom_width, b.style.border_left_width, b.style.border_right_width]
+            .iter()
+            .all(|w| *w == 0.0)
+        && zero(&b.style.padding_top)
+        && zero(&b.style.padding_bottom)
+        && !matches!(only.style.position, Position::Absolute | Position::Fixed)
+        && box_is_slice_chain(only, container, depth + 1)
 }
 
 /// [`box_is_column_sliceable`] without the forced-break condition: a leaf block that a column
@@ -203,10 +229,17 @@ pub(crate) fn build_multicol_init(
         }
     });
 
+    // CSS Multicol L2 §4.4: an explicit `column-wrap: wrap` rows up forced breaks without a
+    // `column-height` too.
+    let wrap_auto = (s.column_wrap_explicit && !s.column_wrap_nowrap && col_rows.is_none())
+        .then(|| s.row_gap.resolve_or_zero(em, container_h.unwrap_or(0.0), viewport).max(0.0));
+
     // CSS Multicol §6.1: a `column-span: all` descendant reached through plain
     // block wrappers spans the container too — split those wrappers around it so
     // the spanner becomes a direct child (see `multicol_span`).
     super::multicol_span::hoist_nested_spanners(children);
+    // CSS Fragmentation L3 §4.1: a forced column break inside a wrapper cuts the wrapper.
+    super::multicol_break::hoist_nested_breaks(children);
 
     // Collect flow (non-abs, non-skip) child indices, without moving `children`
     // yet — the empty case below must leave it completely untouched.
@@ -262,6 +295,7 @@ pub(crate) fn build_multicol_init(
         container_h,
         limit_shared,
         col_rows,
+        wrap_auto,
         segments,
         children_pcb,
         s: Arc::clone(s),

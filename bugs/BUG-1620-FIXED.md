@@ -1,6 +1,6 @@
 # BUG-1620 — navigator.gpu в штатной сборке отдаёт фиктивный адаптер
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** js (`crates/js/src/webgpu.rs:825`)
 
@@ -25,3 +25,7 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление
+
+`GPU.prototype.requestAdapter` (`crates/js/src/webgpu.rs`) резолвит `null`, если нет нативов `_lumen_webgpu_*` (штатная сборка без `lumen-js/webgpu`) либо `_lumen_webgpu_adapter_info()` вернул пустую строку (wgpu не нашёл адаптер); иначе — `GPUAdapter`. Страница получает «адаптера нет» и уходит в запасную ветку, а не рисует пустой холст. Тест `v8_request_adapter_resolves_null_without_backend`. `CAPABILITIES.md` (строка WebGPU) говорит, что в поставке фича выключена. Включение реального бэкенда в shell — отдельное решение (P3-gpusandbox).
