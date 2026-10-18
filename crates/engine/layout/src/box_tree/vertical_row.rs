@@ -43,6 +43,8 @@ pub(super) fn lay_out_vertical_inline_block_row(
     struct Column {
         idxs: Vec<usize>,
         has_baseline: bool,
+        /// В колонке есть прогон текста (его не зеркалим при `direction: rtl`).
+        has_run: bool,
         /// Занятая inline-длина, считая от `inline_start`.
         extent: f32,
         /// Block-позиция начала колонки (от начала block-оси ряда) и её block-размер.
@@ -54,6 +56,7 @@ pub(super) fn lay_out_vertical_inline_block_row(
     let new_column = |start: f32| Column {
         idxs: Vec::new(),
         has_baseline: false,
+        has_run: false,
         extent: 0.0,
         start,
         width: 0.0,
@@ -111,6 +114,7 @@ pub(super) fn lay_out_vertical_inline_block_row(
                 cur.inline_start = l;
             }
             cur.has_baseline = true;
+            cur.has_run = true;
             cur.width = cur.width.max(margin_box_w(&child).2).max(strut);
             cur.idxs.push(children.len());
             cur.extent += mt + child.rect.height + mb;
@@ -200,7 +204,24 @@ pub(super) fn lay_out_vertical_inline_block_row(
         }
     }
     // Inline-координаты детей уже абсолютные (колонка начинается на `start_y` плюс
-    // левый край её полосы между float-ами), сдвигать по `y` нечего.
+    // левый край её полосы между float-ами). Под `direction: rtl` inline-старт —
+    // нижний край полосы: колонка из одних атомарных боксов зеркалится к нему
+    // (UAX #9, как горизонтальный ряд в `layout_dispatch`).
+    if b.style.direction == Direction::Rtl {
+        for col in columns.iter().filter(|c| !c.has_run) {
+            let (_, r) = band(col.start, col.width);
+            for &i in &col.idxs {
+                let c = &mut children[i];
+                let c_em = c.style.font_size;
+                let mt = c.style.margin_top.resolve_or_zero(c_em, available_width, viewport);
+                let mb = c.style.margin_bottom.resolve_or_zero(c_em, available_width, viewport);
+                let top = c.rect.y - mt;
+                let offset = top - start_y - col.inline_start;
+                let dy = (start_y + r - offset - (mt + c.rect.height + mb)) - top;
+                shift_tree(c, 0.0, dy);
+            }
+        }
+    }
 
     let longest = columns.iter().map(|c| c.inline_start + c.extent).fold(0.0_f32, f32::max);
     b.children = children;
