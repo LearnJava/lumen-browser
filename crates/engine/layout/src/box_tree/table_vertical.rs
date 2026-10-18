@@ -41,14 +41,14 @@ struct Slot {
     cell: usize,
 }
 
-fn row_ref<'a>(b: &'a LayoutBox, r: RowRef) -> &'a LayoutBox {
+fn row_ref(b: &LayoutBox, r: RowRef) -> &LayoutBox {
     match r.group {
         Some(g) => &b.children[g].children[r.row],
         None => &b.children[r.row],
     }
 }
 
-fn row_mut<'a>(b: &'a mut LayoutBox, r: RowRef) -> &'a mut LayoutBox {
+fn row_mut(b: &mut LayoutBox, r: RowRef) -> &mut LayoutBox {
     match r.group {
         Some(g) => &mut b.children[g].children[r.row],
         None => &mut b.children[r.row],
@@ -416,8 +416,8 @@ pub(super) fn dispatch(
         if fixed_layout {
             // `table-layout: fixed`: размеры столбцов задаёт только первая строка.
             if sl.row == 0 && let Some(e) = ex {
-                for c in sl.col..sl.col + sl.cs {
-                    col_exp[c] = Some(col_exp[c].unwrap_or(0.0).max(e / per));
+                for slot in &mut col_exp[sl.col..sl.col + sl.cs] {
+                    *slot = Some(slot.unwrap_or(0.0).max(e / per));
                 }
             }
             continue;

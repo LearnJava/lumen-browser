@@ -130,3 +130,27 @@ fn horizontal_table_is_unchanged() {
     assert_eq!(xywh(&r[3]), (0.0, 0.0, 20.0, 10.0), "a");
     assert_eq!(xywh(&r[4]), (20.0, 0.0, 20.0, 10.0), "b");
 }
+
+// ── горизонтальная таблица: rtl и ортогональная ячейка ──
+
+#[test]
+fn horizontal_rtl_table_reverses_columns() {
+    let r = grid("horizontal-tb", "direction:rtl");
+    assert_eq!(xywh(&r[0]), (0.0, 0.0, 60.0, 20.0), "table");
+    assert_eq!(xywh(&r[3]), (40.0, 0.0, 20.0, 10.0), "a — крайний справа");
+    assert_eq!(xywh(&r[4]), (20.0, 0.0, 20.0, 10.0), "b");
+    assert_eq!(xywh(&r[5]), (0.0, 0.0, 20.0, 10.0), "c — крайний слева");
+    assert_eq!(xywh(&r[6]), (40.0, 10.0, 20.0, 10.0), "d во второй строке");
+}
+
+#[test]
+fn orthogonal_cell_keeps_explicit_column_width() {
+    let r = rects(
+        r#"<table id="t"><tr><td id="a">x</td><td id="b"></td></tr></table>"#,
+        "#a{writing-mode:vertical-lr;width:30px;height:10px}#b{width:20px;height:10px}",
+        &["t", "a", "b"],
+    );
+    assert_eq!(r[1].width, 30.0, "ширина ячейки — по `width`, не по содержимому");
+    assert_eq!(r[2].x, 30.0, "вторая ячейка сдвинута на ширину первого столбца");
+    assert_eq!(r[0].width, 50.0, "table");
+}
