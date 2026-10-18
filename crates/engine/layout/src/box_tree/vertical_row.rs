@@ -144,7 +144,19 @@ pub(super) fn lay_out_vertical_inline_block_row(
             // полоса шире (CSS 2.1 §9.5.1 п.8); если полоса уже полная — берём как есть.
             let narrowed = l > 0.0 || r < content_inline;
             match floats.filter(|_| narrowed && cur.idxs.is_empty()).and_then(|fc| fc.next_float_bottom(cur.start)) {
-                Some(nb) => cur.start = nb,
+                Some(nb) => {
+                    // The first block position (1px steps, as `line_band` samples) where the
+                    // band is wide enough: a contour releases the band before its margin box ends.
+                    let mut y = cur.start + 1.0;
+                    while y < nb {
+                        let (l2, r2) = band(y, width);
+                        if size <= r2 - l2 {
+                            break;
+                        }
+                        y += 1.0;
+                    }
+                    cur.start = y.min(nb);
+                }
                 None => break l,
             }
         };

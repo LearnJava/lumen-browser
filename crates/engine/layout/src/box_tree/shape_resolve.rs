@@ -103,7 +103,7 @@ impl Prim {
             }
             Prim::RRect { x0, y0, x1, y1, radii } => {
                 let (x0, y0, x1, y1) = (x0 - m, y0 - m, x1 + m, y1 + m);
-                if y < y0 || y > y1 || x1 <= x0 {
+                if y < y0 || y >= y1 || x1 <= x0 {
                     return None;
                 }
                 // A sharp corner grown by `m` becomes a quarter circle of radius `m`.
