@@ -886,13 +886,25 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "float" => {
+            // CSS Logical L1 §3.2 — `inline-start|inline-end` раскрывает каскад по
+            // `direction` блока-контейнера; пока что временно `Left`/`Right`.
             if let Some(v) = FloatSide::parse(val) {
                 style.float_side = v;
+                style.float_logical = match val.trim().to_ascii_lowercase().as_str() {
+                    "inline-start" => Some(true),
+                    "inline-end" => Some(false),
+                    _ => None,
+                };
             }
         }
         "clear" => {
             if let Some(v) = ClearSide::parse(val) {
                 style.clear = v;
+                style.clear_logical = match val.trim().to_ascii_lowercase().as_str() {
+                    "inline-start" => Some(true),
+                    "inline-end" => Some(false),
+                    _ => None,
+                };
             }
         }
         "field-sizing" => {

@@ -1338,6 +1338,30 @@ pub(crate) fn compute_style_shareable(
         };
     }
 
+    // CSS Logical L1 §3.2 — `float`/`clear: inline-start|inline-end` раскрываются относительно
+    // `direction` containing block (ближайшего блочного контейнера-предка, не самого элемента).
+    {
+        let cb_rtl = inherited.block_container_direction == crate::style::Direction::Rtl;
+        let physical = |start: bool| start != cb_rtl;
+        if let Some(start) = style.float_logical.take() {
+            style.float_side =
+                if physical(start) { crate::style::FloatSide::Left } else { crate::style::FloatSide::Right };
+        }
+        if let Some(start) = style.clear_logical.take() {
+            style.clear =
+                if physical(start) { crate::style::ClearSide::Left } else { crate::style::ClearSide::Right };
+        }
+        // Сам бокс — блочный контейнер для своих детей, если он не `inline`/`contents`.
+        // Float и абсолютно позиционированный `inline` блокифицируются.
+        let blockified = style.float_side != crate::style::FloatSide::None
+            || matches!(style.position, crate::style::Position::Absolute | crate::style::Position::Fixed);
+        style.block_container_direction = if matches!(style.display, Display::Inline | Display::Contents) && !blockified {
+            inherited.block_container_direction
+        } else {
+            style.direction
+        };
+    }
+
     // CSS Display L3 §2.7 — blockification: the root element's own box can
     // never be eliminated (there is nothing above it to splice its children
     // into), so a `display: contents` document element computes to `block`
