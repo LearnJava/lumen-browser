@@ -1244,3 +1244,4 @@
 | [BUG-1623](bugs/BUG-1623-FIXED.md) | FIXED 2026-10-18 (P3) | shell (`crates/shell/src/page_load.rs:2363`, `:1253`) | Окончание загрузки закрывает открытую адресную строку и поиск: набранный во время загрузки адрес стирается, следующие буквы уходят в горячие клавиши страницы |
 | [BUG-1624](bugs/BUG-1624-FIXED.md) | FIXED 2026-10-18 (P3) | shell (`lumen/click.rs`, `lumen/keyboard.rs:47`, `lumen/text_input.rs:185`) | Клик в поле страницы не снимает фокус с адресной строки: на экране две каретки, набор уходит в URL |
 | [BUG-1636](bugs/BUG-1636-FIXED.md) | FIXED 2026-10-18 (P6) | shell (`PageSource::from_arg`) | `data:`-URL из командной строки открывается как путь к файлу (`os error 123`) |
+| [BUG-1637](bugs/BUG-1637-FIXED.md) | FIXED 2026-10-18 (P6) | shell (`redraw_requested.rs`, `about_to_wait.rs`) | youtube: ≈ 400 кадров/с `delta Identical` без остановки — живая CSS-анимация страницы просила следующий кадр немедленным `request_redraw` |
