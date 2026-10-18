@@ -78,22 +78,25 @@ pub(super) fn axis_offset(
 }
 
 /// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` (`left`/`right`/`top`/`bottom`),
-/// как его применяет `dispatch_box`; проценты — от размера области по inline-оси `basis`.
-/// Выравнивание в ячейке переставляет бокс заново и без этого теряло бы смещение.
-pub(super) fn relative_shift(item: &LayoutBox, basis: f32, viewport: Size) -> (f32, f32) {
+/// как его применяет `dispatch_box`; проценты `left`/`right` — от физической ширины области
+/// `basis_w`, `top`/`bottom` — от её высоты `basis_h`. Выравнивание в ячейке переставляет бокс
+/// заново и без этого теряло бы смещение.
+pub(super) fn relative_shift(item: &LayoutBox, basis_w: f32, basis_h: f32, viewport: Size, rtl: bool) -> (f32, f32) {
     let s = &item.style;
     if !matches!(s.position, Position::Relative) {
         return (0.0, 0.0);
     }
     let em = s.font_size;
-    let pick = |near: &LengthOrAuto, far: &LengthOrAuto| match near {
+    let pick = |near: &LengthOrAuto, far: &LengthOrAuto, basis: f32| match near {
         LengthOrAuto::Length(l) => l.resolve(em, Some(basis), viewport).unwrap_or(0.0),
         LengthOrAuto::Auto => match far {
             LengthOrAuto::Length(r) => -(r.resolve(em, Some(basis), viewport).unwrap_or(0.0)),
             LengthOrAuto::Auto => 0.0,
         },
     };
-    (pick(&s.left, &s.right), pick(&s.top, &s.bottom))
+    // CSS 2.1 §9.4.3: при заданных `left` и `right` побеждает `left`, а при `direction: rtl` — `right`.
+    let x = if rtl { -pick(&s.right, &s.left, basis_w) } else { pick(&s.left, &s.right, basis_w) };
+    (x, pick(&s.top, &s.bottom, basis_h))
 }
 
 /// `self-start` / `self-end` (`own`): начало и конец считаются по собственному режиму письма
@@ -194,6 +197,9 @@ impl GridInit {
         let col_off = self.col_offsets.get(c0).copied().unwrap_or(0.0);
         let row_off = self.row_offsets.get(r0).copied().unwrap_or(0.0);
         match self.vertical {
+            None if self.rtl => {
+                (self.content_x + self.content_width - col_off - col_span, self.content_y + row_off)
+            }
             None => (self.content_x + col_off, self.content_y + row_off),
             Some(g) => {
                 let x = if g.rl {
@@ -517,7 +523,7 @@ pub(super) fn dispatch(
             // Нет элементов: ширина — явная или только рамка.
             b.rect.width = explicit_width.unwrap_or(frame_horiz).min(max_block).max(min_block);
             super::grid_trampoline::lay_out_abs(
-                b, s, is_positioned, pcb, content_x, content_y, measurer, viewport, hp,
+                b, s, is_positioned, pcb, content_x, content_y, content_inline, measurer, viewport, hp,
             );
             DispatchOutcome::Done
         }
@@ -795,6 +801,6 @@ pub(super) fn place_item(
         cell_x + off_bl
     };
     let y = if geom.inline_rev { cell_y + cell_in - off_in - item.rect.height } else { cell_y + off_in };
-    let (rel_x, rel_y) = relative_shift(item, cell_bl, viewport);
+    let (rel_x, rel_y) = relative_shift(item, cell_bl, cell_in, viewport, false);
     crate::incremental::translate_subtree(item, x + rel_x - item.rect.x, y + rel_y - item.rect.y);
 }

@@ -89,6 +89,9 @@ pub(super) struct GridInit {
     /// оси `y`, строки по `x`. Все размеры и смещения дорожек остаются логическими
     /// (inline / block), в физические координаты их переводят `grid_vertical`-хелперы.
     pub(super) vertical: Option<super::grid_vertical::VGridGeom>,
+    /// GRID-RTL: горизонтальный контейнер с `direction: rtl` — столбцы считаются от правого
+    /// края content box (смещения `col_offsets` остаются логическими, зеркалит `cell_origin`).
+    pub(super) rtl: bool,
 }
 
 /// Базовая линия item'а, участвующего в baseline-группе строки.
@@ -877,10 +880,10 @@ fn post_final_item(
     let c1 = (ce - 1).min(n_cols) as usize;
     let r0 = (rs - 1).min(n_rows.saturating_sub(1)) as usize;
     let r1 = (re - 1).min(n_rows) as usize;
-    let cell_x = frame.init.content_x + frame.init.col_offsets.get(c0).copied().unwrap_or(0.0);
-    let cell_y = frame.init.content_y + frame.init.row_offsets.get(r0).copied().unwrap_or(0.0);
     let cell_w = grid_track_span(&frame.init.col_offsets, &frame.init.col_widths, c0, c1);
     let cell_h = grid_track_span(&frame.init.row_offsets, &frame.init.row_heights, r0, r1);
+    let (cell_x, cell_y) = frame.init.cell_origin(c0, r0, cell_h, cell_w);
+    let rtl = frame.init.rtl;
     let content_width = frame.init.content_width;
     let pcb = frame.init.children_pcb;
     let s = Arc::clone(&frame.init.s);
@@ -1003,13 +1006,13 @@ fn post_final_item(
         if justify_auto { s.content_align_extra.justify_items_own } else { is.content_align_extra.justify_self_own },
         is,
         true,
-        true,
+        !rtl,
     );
     let justify = super::grid_vertical::resolve_side(
         justify,
         if justify_auto { s.content_align_extra.justify_items_side } else { is.content_align_extra.justify_self_side },
         s.writing_mode,
-        false,
+        rtl,
     );
     // CSS Sizing L4 §5.1: у не растягиваемого по inline-оси item'а с `aspect-ratio` и определённой
     // высотой ширина `auto` берётся из пропорции, а не из содержимого.
@@ -1031,13 +1034,17 @@ fn post_final_item(
     } else {
         justify
     };
+    // Кромка начала по inline-оси: слева, а при `direction: rtl` — справа.
+    let (m_is, m_ie, auto_is, auto_ie) = if rtl { (m_r, m_l, auto_r, auto_l) } else { (m_l, m_r, auto_l, auto_r) };
+    let at_start = |w: f32| if rtl { cell_x + cell_w - w - m_is } else { cell_x + m_is };
+    let at_end = |w: f32| if rtl { cell_x + m_ie } else { cell_x + cell_w - w - m_ie };
     match justify {
         _ if auto_l || auto_r => {
-            item.rect.x = cell_x
-                + super::grid_vertical::axis_offset(justify, cell_w, item.rect.width, m_l, m_r, auto_l, auto_r);
+            let off = super::grid_vertical::axis_offset(justify, cell_w, item.rect.width, m_is, m_ie, auto_is, auto_ie);
+            item.rect.x = if rtl { cell_x + cell_w - off - item.rect.width } else { cell_x + off };
         }
         AlignValue::End => {
-            item.rect.x = cell_x + cell_w - item.rect.width - m_r;
+            item.rect.x = at_end(item.rect.width);
         }
         AlignValue::Center => {
             item.rect.x = cell_x + (cell_w - item_outer_w) / 2.0 + m_l;
@@ -1058,31 +1065,31 @@ fn post_final_item(
         // Линии вдоль inline-оси у параллельного item'а нет: `first` — к началу, `last` — к
         // концу (Align L3 §9.1, запасное выравнивание).
         AlignValue::LastBaseline => {
-            item.rect.x = cell_x + cell_w - item.rect.width - m_r;
+            item.rect.x = at_end(item.rect.width);
         }
         AlignValue::Stretch if replaced_ratio && w_auto => {
             // Явный `justify-self: stretch` у replaced: ширина = область; высота по пропорции,
             // если её не растянул `align-self`.
             (stretch_h, stretch_w) = stretch_replaced_inline(is, &mut item.rect, cell_w - m_l - m_r, stretch_h, stretch_w);
-            item.rect.x = cell_x + m_l;
+            item.rect.x = at_start(item.rect.width);
         }
         AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal if form_w_auto && cell_w - m_l - m_r > 0.0 => {
             let w = cell_w - m_l - m_r;
             item.rect.width = w;
             stretch_w = Some(w);
-            item.rect.x = cell_x + m_l;
+            item.rect.x = at_start(item.rect.width);
         }
         AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-            item.rect.x = cell_x + m_l;
+            item.rect.x = at_start(item.rect.width);
         }
         _ => {
-            item.rect.x = cell_x + m_l;
+            item.rect.x = at_start(item.rect.width);
         }
     }
 
     // Выравнивание сдвигало только сам бокс: потомки оставались там, где их раскладка поставила
     // в начале области (`align-items: end` рисовал бокс внизу, а его содержимое — вверху).
-    let (rel_x, rel_y) = super::grid_vertical::relative_shift(item, cell_w, viewport);
+    let (rel_x, rel_y) = super::grid_vertical::relative_shift(item, cell_w, cell_h, viewport, rtl);
     let (new_x, new_y) = (item.rect.x + rel_x, item.rect.y + rel_y);
     item.rect.x = orig_x;
     item.rect.y = orig_y;
@@ -1213,7 +1220,7 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
         frame.b.grid_baselines = super::grid_vertical::container_baselines(&frame.b, &frame.init, geom, measurer);
         lay_out_abs(
             &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
-            frame.init.content_x, frame.init.content_y, measurer, viewport, hp,
+            frame.init.content_x, frame.init.content_y, frame.init.content_width, measurer, viewport, hp,
         );
         return;
     }
@@ -1233,7 +1240,7 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
     record_own_tracks(frame);
     lay_out_abs(
         &mut frame.b, &frame.init.s, frame.init.is_positioned, frame.init.own_pcb,
-        frame.init.content_x, frame.init.content_y, measurer, viewport, hp,
+        frame.init.content_x, frame.init.content_y, frame.init.content_width, measurer, viewport, hp,
     );
 }
 
@@ -1336,6 +1343,7 @@ pub(super) fn lay_out_abs(
     own_pcb: Rect,
     content_x: f32,
     content_y: f32,
+    content_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
@@ -1359,6 +1367,44 @@ pub(super) fn lay_out_abs(
             own_pcb
         };
         lay_out_abs_children(b, &abs, measurer, viewport, my_pcb, hp);
+        // Статическая позиция в сетке `direction: rtl`: область — весь content box, а начало
+        // inline-оси у правого края; `justify-self` выравнивает бокс внутри неё (Grid L1 §9.1).
+        if s.direction == Direction::Rtl && s.writing_mode == crate::style::WritingMode::HorizontalTb {
+            for &(i, _, _) in &abs {
+                let c = &mut b.children[i];
+                let st = &c.style;
+                if !(st.left.is_auto() && st.right.is_auto() && st.anchor_left.is_none() && st.anchor_right.is_none()) {
+                    continue;
+                }
+                let own_auto = matches!(st.justify_self, AlignValue::Auto);
+                let x = &st.content_align_extra;
+                let justify = if own_auto { s.justify_items } else { st.justify_self };
+                let justify = super::grid_vertical::resolve_own(
+                    justify,
+                    if own_auto { s.content_align_extra.justify_items_own } else { x.justify_self_own },
+                    st,
+                    true,
+                    false,
+                );
+                let justify = super::grid_vertical::resolve_side(
+                    justify,
+                    if own_auto { s.content_align_extra.justify_items_side } else { x.justify_self_side },
+                    s.writing_mode,
+                    true,
+                );
+                let (ml, mr) = (
+                    st.margin_left.resolve_or_zero(st.font_size, content_width, viewport),
+                    st.margin_right.resolve_or_zero(st.font_size, content_width, viewport),
+                );
+                let w = c.rect.width;
+                let nx = match justify {
+                    AlignValue::End | AlignValue::LastBaseline => content_x + ml,
+                    AlignValue::Center => content_x + (content_width - w - ml - mr) / 2.0 + ml,
+                    _ => content_x + content_width - mr - w,
+                };
+                crate::incremental::translate_subtree(c, nx - c.rect.x, 0.0);
+            }
+        }
     }
     if is_positioned {
         super::multicol_abspos::fix_out_of_flow_descendants(b, measurer, viewport, hp);
