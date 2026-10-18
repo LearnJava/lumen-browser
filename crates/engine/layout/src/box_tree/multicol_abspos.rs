@@ -19,38 +19,12 @@ use crate::resolved_geometry::contains_fixed_descendants;
 /// `container_h` is the resolved content-box height of the multi-column container, used
 /// by `column-fill: auto` to fill columns sequentially up to that height instead of
 /// balancing content equally across all columns.
-/// CSS Multi-column L1 §3.4 — true column fragmentation breaks block content
-/// across columns. Lumen approximates this by geometrically slicing a box into
-/// per-column pieces (see `lay_out_multicol_children`). That is only visually
-/// faithful for a "simple" box: a leaf block whose paint is a flat fill
-/// (background-color) — no children or text that a slice would duplicate, no
-/// border whose cut edge would show. Anything else keeps the atomic
-/// one-box-per-column placement.
-fn box_is_column_sliceable(b: &LayoutBox, container: &ComputedStyle) -> bool {
-    !super::multicol_fragmentation::has_forced_break(&b.style) && box_is_leaf_block(b, container)
-}
-
-/// [`box_is_column_sliceable`] without the forced-break condition: a leaf block that a column
-/// window can cut. The items of a grid cut by `emit_grid_fragments` may carry a forced break —
-/// the grid is cut at their track.
-fn box_is_leaf_block(b: &LayoutBox, container: &ComputedStyle) -> bool {
-    // A whitespace-only text node leaves a `Skip` placeholder child (`<div style=…>\n</div>`) —
-    // it has no paint, so it does not make the box unsliceable.
-    // CSS Writing Modes L3 §7.3 / Multicol L1 §8: a box in an orthogonal flow (its block axis is
-    // the container's inline axis) is monolithic — it is never cut across columns.
-    let vertical = |m: crate::style::WritingMode| !matches!(m, crate::style::WritingMode::HorizontalTb);
-    // CSS Fragmentation L3 §3.1: `break-inside: avoid` keeps the box whole in one column. The
-    // value does not tell `avoid-page` from `avoid-column` (`BreakValue::Avoid` covers both). A
-    // box with a forced column break of its own is placed as a unit too: the break needs the
-    // atomic path's per-item column assignment.
-    matches!(b.kind, BoxKind::Block)
-        && b.style.break_inside != crate::style::BreakValue::Avoid
-        && vertical(b.style.writing_mode) == vertical(container.writing_mode)
-        && b.children.iter().all(|c| matches!(c.kind, BoxKind::Skip))
-        && b.style.border_top_width == 0.0
-        && b.style.border_bottom_width == 0.0
-        && b.style.border_left_width == 0.0
-        && b.style.border_right_width == 0.0
+/// CSS Multi-column L1 §3.4 — a segment is cut across the columns (`multicol_flow`) when the
+/// container has more than one column (or wraps into rows) and flows horizontally; what inside
+/// an item may be cut is decided there box by box. A vertical container keeps the atomic
+/// placement.
+fn segment_is_sliceable(n_cols: u32, col_rows: bool, container: &ComputedStyle) -> bool {
+    (n_cols > 1 || col_rows) && matches!(container.writing_mode, crate::style::WritingMode::HorizontalTb)
 }
 
 /// An in-flow item of a grid cut by `emit_grid_fragments`: a border-less block that may hold
@@ -111,7 +85,7 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
 /// slice-vs-atomic decision. None of this ever calls `lay_out` on a child —
 /// unlike `flex::build_flex_init`'s Step 1 probe, whether a segment is
 /// "sliceable" is a pure function of each item's `style`/`kind`
-/// ([`box_is_column_sliceable`]), not of anything a layout pass would
+/// ([`segment_is_sliceable`]), not of anything a layout pass would
 /// produce — so, mirroring `grid::build_grid_init`/`table::build_table_init`,
 /// the whole precompute runs natively here and only the per-item dispatch
 /// (measure pass + atomic segments' real placement pass + `column-span: all`
@@ -203,10 +177,17 @@ pub(crate) fn build_multicol_init(
         }
     });
 
+    // CSS Multicol L2 §4.4: an explicit `column-wrap: wrap` rows up forced breaks without a
+    // `column-height` too.
+    let wrap_auto = (s.column_wrap_explicit && !s.column_wrap_nowrap && col_rows.is_none())
+        .then(|| s.row_gap.resolve_or_zero(em, container_h.unwrap_or(0.0), viewport).max(0.0));
+
     // CSS Multicol §6.1: a `column-span: all` descendant reached through plain
     // block wrappers spans the container too — split those wrappers around it so
     // the spanner becomes a direct child (see `multicol_span`).
     super::multicol_span::hoist_nested_spanners(children);
+    // CSS Fragmentation L3 §4.1: a forced column break inside a wrapper cuts the wrapper.
+    super::multicol_break::hoist_nested_breaks(children);
 
     // Collect flow (non-abs, non-skip) child indices, without moving `children`
     // yet — the empty case below must leave it completely untouched.
@@ -228,13 +209,13 @@ pub(crate) fn build_multicol_init(
 
     // Split flow children into segments separated by column-span:all elements,
     // deciding slice-vs-atomic per segment up front (CSS Multicol §3.4) — a
-    // pure function of `box_is_column_sliceable`, never of a laid-out `.rect`.
+    // pure function of the container's style, never of a laid-out `.rect`.
     let mut segments: Vec<SegmentInit> = Vec::new();
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
         if super::multicol_span::is_column_spanner(&work[i]) {
             let grid_frag = n_cols > 1 && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
-            let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
+            let sliceable = segment_is_sliceable(n_cols, col_rows.is_some(), s);
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
                 span_idx: Some(i),
@@ -246,7 +227,7 @@ pub(crate) fn build_multicol_init(
         }
     }
     let grid_frag = n_cols > 1 && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
-    let sliceable = (n_cols > 1 || col_rows.is_some()) && seg.iter().all(|&j| box_is_column_sliceable(&work[j], s));
+    let sliceable = segment_is_sliceable(n_cols, col_rows.is_some(), s);
     segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable, grid_frag });
 
     let consumed = vec![false; work.len()];
@@ -262,6 +243,7 @@ pub(crate) fn build_multicol_init(
         container_h,
         limit_shared,
         col_rows,
+        wrap_auto,
         segments,
         children_pcb,
         s: Arc::clone(s),

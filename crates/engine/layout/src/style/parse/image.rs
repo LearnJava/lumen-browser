@@ -14,6 +14,7 @@ use crate::color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors_hue};
 use crate::style::parse::box_sides::resolve_box_length;
 use crate::style::parse::color::{parse_color, parse_css_color_legacy};
 use crate::style::parse::transform::parse_angle_to_radians;
+use crate::style::parse::webkit_gradient::{is_webkit_gradient_function, parse_webkit_gradient};
 use crate::style::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
     BackgroundRepeat, BackgroundSize, BgSizeAxis, Color, ComputedStyle, CssColor, GradientCorner,
@@ -40,6 +41,8 @@ pub(in crate::style) fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-linear-gradient(")
         || s.starts_with("repeating-radial-gradient(")
         || s.starts_with("repeating-conic-gradient(")
+        // Compat Standard §3: легаси-имена с `-webkit-` (см. `webkit_gradient`).
+        || is_webkit_gradient_function(&s)
 }
 
 /// CSS Images L4 §5 — is `s` an `image-set()` / `-webkit-image-set()` expression?
@@ -371,12 +374,16 @@ pub(in crate::style) fn parse_background_size_value(s: &str, em_basis: f32, view
 /// Возвращает `(BackgroundLayer, Option<CssColor>)` — цвет есть только
 /// у последнего слоя, но мы не знаем последний ли этот слой, поэтому
 /// caller сам решает, использовать ли цвет.
+///
+/// `None` — в слое есть токен, не входящий в грамматику `<bg-layer>` (например
+/// `-o-linear-gradient(…)` или `ff4444` без `#`): по CSS Syntax такое объявление
+/// отбрасывается целиком, а не применяется «частично».
 pub(in crate::style) fn parse_single_bg_layer(
     layer_str: &str,
     em_basis: f32,
     viewport: Size,
     is_quirks: bool,
-) -> (BackgroundLayer, Option<CssColor>) {
+) -> Option<(BackgroundLayer, Option<CssColor>)> {
     let mut layer = BackgroundLayer::default();
     let mut color: Option<CssColor> = None;
     let tokens = tokenize_bg_layer(layer_str);
@@ -530,10 +537,10 @@ pub(in crate::style) fn parse_single_bg_layer(
             continue;
         }
 
-        idx += 1; // неизвестный токен — пропустить
+        return None; // неизвестный токен — слой, а с ним декларация, невалидны
     }
 
-    (layer, color)
+    Some((layer, color))
 }
 
 /// CSS Masking L1 §4.9 — раскладывает значения одного mask-longhand-а по
@@ -729,7 +736,7 @@ pub(in crate::style) fn parse_single_mask_layer(
 /// Used to split a gradient color-stop segment into `<color>` and
 /// optional `<length-percentage>` parts without breaking color functions
 /// like `rgba(0, 128, 0, 0.5)`.
-fn paren_whitespace_tokens(s: &str) -> Vec<String> {
+pub(in crate::style) fn paren_whitespace_tokens(s: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut buf = String::new();
     let mut depth = 0i32;
@@ -774,6 +781,10 @@ fn paren_whitespace_tokens(s: &str) -> Vec<String> {
 pub fn parse_background_gradient(s: &str) -> ParsedGradient {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();
+
+    if is_webkit_gradient_function(s) {
+        return parse_webkit_gradient(s).unwrap_or_else(|| ParsedGradient::Unknown(s.to_string()));
+    }
 
     let repeating_linear = lower.starts_with("repeating-linear-gradient");
     let repeating_radial = lower.starts_with("repeating-radial-gradient");

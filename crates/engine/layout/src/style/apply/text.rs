@@ -49,7 +49,10 @@ use crate::style::{
     TextWrapStyle,
     UserSelect,
     VerticalAlign,
+    WebkitBoxAlign,
+    WebkitBoxDirection,
     WebkitBoxOrient,
+    WebkitBoxPack,
     WhiteSpace,
     WhiteSpaceCollapse,
     WordBreak,
@@ -510,6 +513,47 @@ pub(in crate::style) fn apply_decl_text(
                 _ => style.box_orient,
             };
         }
+        "-webkit-box-pack" => {
+            // WHATWG Compat §2.1: `start | center | end | justify`.
+            style.box_pack = match val.trim() {
+                "start" => WebkitBoxPack::Start,
+                "center" => WebkitBoxPack::Center,
+                "end" => WebkitBoxPack::End,
+                "justify" => WebkitBoxPack::Justify,
+                _ => style.box_pack,
+            };
+        }
+        "-webkit-box-align" => {
+            // WHATWG Compat §2.1: `start | center | end | baseline | stretch`.
+            style.box_align = match val.trim() {
+                "start" => WebkitBoxAlign::Start,
+                "center" => WebkitBoxAlign::Center,
+                "end" => WebkitBoxAlign::End,
+                "baseline" => WebkitBoxAlign::Baseline,
+                "stretch" => WebkitBoxAlign::Stretch,
+                _ => style.box_align,
+            };
+        }
+        "-webkit-box-direction" => {
+            // WHATWG Compat §2.1: `normal | reverse`.
+            style.box_direction = match val.trim() {
+                "normal" => WebkitBoxDirection::Normal,
+                "reverse" => WebkitBoxDirection::Reverse,
+                _ => style.box_direction,
+            };
+        }
+        "-webkit-box-flex" => {
+            // WHATWG Compat §2.1: `<number>`; a negative value is invalid.
+            if let Some(n) = val.trim().parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) {
+                style.box_flex = n;
+            }
+        }
+        "-webkit-box-ordinal-group" => {
+            // WHATWG Compat §2.1: `<integer>`, ≥ 1 (0 and negatives are invalid).
+            if let Some(n) = val.trim().parse::<u32>().ok().filter(|n| *n >= 1) {
+                style.box_ordinal_group = n;
+            }
+        }
         "continue" => {
             // CSS Overflow L4 §continue: `normal | discard | collapse |
             // -webkit-legacy`, один токен (BUG-505 срез 2 нашёл грамматику,
@@ -873,6 +917,12 @@ pub(in crate::style) fn apply_decl_text(
             // [ dot | circle | double-circle | triangle | sesame ] | <string>`.
             if let Some(s) = parse_text_emphasis_style(val) {
                 style.text_emphasis_style = s;
+            }
+        }
+        "-webkit-text-fill-color" => {
+            // WHATWG Compat §3.1: `<color>`; initial `currentcolor`.
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.text_fill_color = c;
             }
         }
         "text-emphasis-color" => {

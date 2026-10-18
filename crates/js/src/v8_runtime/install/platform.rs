@@ -547,6 +547,11 @@ pub(crate) fn install_css_supports_and_lazy_images(
             if value_has_empty_env_call(&value) {
                 return false;
             }
+            // Compat Standard §3: невалидный `-webkit-linear/radial-gradient()`
+            // (отрицательные радиусы, пропущенная запятая) — не поддерживается.
+            if !lumen_layout::style::webkit_gradient_value_valid(&value) {
+                return false;
+            }
             lumen_css_parser::SUPPORTED_PROPERTIES
                 .iter()
                 .any(|p| p.eq_ignore_ascii_case(&prop))

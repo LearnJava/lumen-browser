@@ -272,6 +272,18 @@ pub(crate) struct Lumen {
     /// UX-LOADING: `nav_start.is_some()` as last bound into the chrome
     /// (spinner / stop button); a flip re-binds the chrome.
     pub(crate) chrome_loading_shown: bool,
+    /// BUG-1630: когда перерисовать хром ради его живой CSS-анимации/перехода
+    /// (спиннер загрузки). Раньше `RedrawRequested` просил следующий кадр
+    /// сразу, и у окна без vsync-throttle (накрыто, свёрнуто) цепочка
+    /// `WM_PAINT` не прерывалась: `about_to_wait` не вызывался секундами, а
+    /// вместе с ним — автоматизация (BiDi `navigate` ждал по 8–20 с).
+    pub(crate) chrome_anim_redraw_at: Option<std::time::Instant>,
+    /// BUG-1637: то же для CSS-анимации/перехода страницы. Немедленный
+    /// `request_redraw` из `RedrawRequested` гнал кадры без пауз (youtube:
+    /// ≈ 400 кадров/с `delta Identical`, мимо vsync, потому что кадр без
+    /// изменений ничего не презентует); теперь следующий кадр — по таймеру из
+    /// `about_to_wait`, ≈ 60 Гц.
+    pub(crate) page_anim_redraw_at: Option<std::time::Instant>,
     /// PERF-16 срез 2: кэш emit display list по поддереву для хрома — между проходами
     /// [`Self::relayout_chrome_host`] неизменившиеся куски воспроизводятся копированием
     /// (`LUMEN_NO_EMIT_CACHE=1` выключает).

@@ -220,6 +220,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.text_decoration_thickness = parent.text_decoration_thickness;
     style.text_emphasis_style = parent.text_emphasis_style.clone();
     style.text_emphasis_color = parent.text_emphasis_color;
+    style.text_fill_color = parent.text_fill_color;
     style.text_emphasis_position = parent.text_emphasis_position;
     style.text_underline_position = parent.text_underline_position;
     style.text_underline_offset = parent.text_underline_offset;
@@ -335,6 +336,7 @@ pub fn merge_pseudo_inherited(
         text_decoration_color,
         text_emphasis_style,
         text_emphasis_color,
+        text_fill_color,
         text_shadow,
     );
     out

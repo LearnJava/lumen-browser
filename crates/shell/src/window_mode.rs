@@ -434,6 +434,8 @@ fn run_window_mode_inner(
         chrome_dl_content_hash: None,
         chrome_layout_generation: 0,
         chrome_loading_shown: false,
+        chrome_anim_redraw_at: None,
+        page_anim_redraw_at: None,
         chrome_emit_cache: lumen_paint::SubtreeEmitCache::new(),
         chrome_overlay_frame_cache: None,
         chrome_anim_frame: None,

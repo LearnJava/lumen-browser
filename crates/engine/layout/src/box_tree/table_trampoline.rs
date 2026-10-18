@@ -315,6 +315,21 @@ fn step_cell(
     let row_content_y = row.rect.y;
     let cell_box = &mut row.children[cell_local_idx];
     let saved_width = Arc::make_mut(&mut cell_box.style).width.take();
+    // Ячейка с вертикальным `writing-mode` (ортогональный поток в горизонтальной таблице): её
+    // физическая ширина — размер по блочной оси, `auto` дал бы ширину по содержимому, а ячейка
+    // обязана занять свой столбец целиком.
+    if !matches!(cell_box.style.writing_mode, crate::style::WritingMode::HorizontalTb) {
+        let st = Arc::make_mut(&mut cell_box.style);
+        let em = st.font_size;
+        let frame = st.padding_left.resolve_or_zero(em, avail, viewport)
+            + st.padding_right.resolve_or_zero(em, avail, viewport)
+            + st.border_left_width
+            + st.border_right_width;
+        st.width = Some(Length::Px(match st.box_sizing {
+            BoxSizing::ContentBox => (avail - frame).max(0.0),
+            BoxSizing::BorderBox => avail,
+        }));
+    }
     let outcome = dispatch_box(
         cell_box, cell_x, row_content_y, avail, None, measurer, viewport, pcb, hp,
         false, None, AlignValue::Auto, None,
@@ -557,6 +572,7 @@ fn finish_table(
     frame.b.table_caption_inset = [frame.init.top_caption_h, bottom_caption_h];
 
     place_column_boxes(frame);
+    mirror_columns_rtl(frame);
 
     // Естественная высота (border box) — по строкам и подписям; `height`/`min-height` её
     // только поднимают (CSS 2.1 §17.5.3), а излишек делится между строками.
@@ -602,6 +618,71 @@ fn finish_table(
         };
         super::multicol_abspos::lay_out_abs_children(&mut frame.b, &abs, measurer, viewport, my_pcb, hp);
     }
+}
+
+/// CSS 2.1 §17.5.1 / Writing Modes L3 §7: у горизонтальной таблицы с `direction: rtl` колонки идут
+/// справа налево. Сетка колонок посчитана слева направо, поэтому готовые ячейки (вместе с
+/// потомками) и боксы колонок зеркалятся внутри полосы столбцов; рамки ячеек остаются физическими.
+fn mirror_columns_rtl(frame: &mut Frame) {
+    if frame.init.s.direction != crate::style::Direction::Rtl
+        || !matches!(frame.init.s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        || frame.init.n_cols == 0
+    {
+        return;
+    }
+    let init = &frame.init;
+    let (lo, hi) = if init.collapse {
+        let mut ext: Option<(f32, f32)> = None;
+        for_each_cell(&frame.b, &mut |c| {
+            let (l, r) = (c.rect.x, c.rect.x + c.rect.width);
+            ext = Some(ext.map_or((l, r), |(a, b)| (a.min(l), b.max(r))));
+        });
+        match ext {
+            Some(e) => e,
+            None => return,
+        }
+    } else {
+        let lo = init.content_x + init.h_spacing;
+        let n = init.col_widths.len();
+        (lo, lo + init.col_widths.iter().sum::<f32>() + n.saturating_sub(1) as f32 * init.h_spacing)
+    };
+    let mirror = |x: f32, w: f32| lo + hi - x - w;
+    for_each_cell_mut(&mut frame.b, &mut |c| {
+        let dx = mirror(c.rect.x, c.rect.width) - c.rect.x;
+        super::shift_tree(c, dx, 0.0);
+    });
+    for child in &mut frame.b.children {
+        if matches!(child.style.display, Display::TableColumn | Display::TableColumnGroup) {
+            child.rect.x = mirror(child.rect.x, child.rect.width);
+            for col in &mut child.children {
+                col.rect.x = mirror(col.rect.x, col.rect.width);
+            }
+        }
+    }
+}
+
+fn for_each_cell(b: &LayoutBox, f: &mut dyn FnMut(&LayoutBox)) {
+    for child in &b.children {
+        match child.kind {
+            BoxKind::TableRow => child.children.iter().filter(|c| is_cell(c)).for_each(&mut *f),
+            BoxKind::TableRowGroup => for_each_cell(child, f),
+            _ => {}
+        }
+    }
+}
+
+fn for_each_cell_mut(b: &mut LayoutBox, f: &mut dyn FnMut(&mut LayoutBox)) {
+    for child in &mut b.children {
+        match child.kind {
+            BoxKind::TableRow => child.children.iter_mut().filter(|c| is_cell(c)).for_each(&mut *f),
+            BoxKind::TableRowGroup => for_each_cell_mut(child, f),
+            _ => {}
+        }
+    }
+}
+
+fn is_cell(b: &LayoutBox) -> bool {
+    b.style.display == Display::TableCell
 }
 
 /// CSS 2.1 §17.5.1 — `display: table-column(-group)` не раскладываются как блоки: их прямоугольник —

@@ -73,7 +73,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 |---|---|---|---|---|---|---|---|
 | позиционированные боксы в вертикальном CB | 259 | — | 259 thick | `abs-pos-non-replaced-vlr-003.xht`, `box-offsets-rel-pos-vlr-005.xht` | инсеты `absolute` и сдвиг `relative` в CB `vertical-*` не применяются — вертикальная ветка не зовёт `finish_after_match` | P3 | [BUG-1276](../../bugs/BUG-1276-OPEN.md) |
 | ортогональные потоки | 173 | 14 | 159 thick | `sizing-orthog-vlr-in-htb-001.xht`, `orthogonal-parent-shrink-to-fit-001a.html`, `available-size-*` | inline-размер ортогонального бокса при неопределённом CB берётся из вьюпорта не так, как в §7.3 (`sizing-orthog-*`: колонка 600px вместо высоты ICB), shrink-to-fit родителя не знает числа колонок (тот же механизм, что FLEX-VWM-6); у части эталонов те же блоки стоят `position: absolute` в вертикальном корне и сдвинутся после BUG-1276 | P1 | [BUG-1264](../../bugs/BUG-1264-OPEN.md), `FLEX-VWM-6`; **отдельной записи нет** — сначала перепрогон после BUG-1276 |
-| таблицы | 117 | 28 | 106 thick | `table-progression-vlr-003.html`, `row-progression-vlr-003.xht`, `table-column-order-*` | `table*.rs` не читает `writing_mode`: строки стекаются по `y` и в `vertical-lr` | P1 | `TABLE-VWM` (`ROADMAP.md`, `STATUS-P1.md`) |
+| таблицы | 117 → 44 | 28 | 106 thick | `table-progression-vlr-003.html`, `row-progression-vlr-003.xht`, `table-column-order-*` | **TABLE-VWM (2026-10-18)**: раскладка в логических осях (`table_vertical.rs`), `table-progression-*` проходят. Остаток 44 из 64 id без `-ref`: 26 с Ahem-текстом (стенд меряет текст оценщиком), 10 `border-conflict-element-*` (конфликт рамок collapse не разрешается), 8 `contiguous-floated-table-*` (блок с `width` не ложится под float) | P1 | `TABLE-VWM-2` (`ROADMAP.md`, `STATUS-P1.md`) |
 | bidi | 94 | — | 94 thick | `bidi-override-001.html`, `bidi-isolate-*`, `block-plaintext-*` | RTL-фрагмент с ивритом и латиницей CPU-растр разворачивает обратно (`rustybuzz` угадывает скрипт Hebrew) | P3 | [BUG-1272](../../bugs/BUG-1272-FIXED.md) |
 | блочный/строчный поток (Ahem) | 71 | — | 70 thick | `block-flow-direction-vlr-003.xht`, `line-box-direction-*` | раскладка верна (`--dump-layout`: блоки по `x`, колонки нужной ширины), рисунок букв из Ahem-квадратов расходится — без Ahem они не складываются; с Ahem через `LUMEN_CPU_SYSTEM_FONTS` часть остаётся thick — не разобрано | P3 | [BUG-1273](../../bugs/BUG-1273-FIXED.md) (первым), остаток — не разобрано |
 | инлайн/baseline в вертикальной строке | 64 | — | 58 thick | `vertical-alignment-vlr-023.xht`, `line-box-height-vlr-003.xht`, `inline-block-alignment-*` | `line-box-height`: бордер инлайн-элемента не входит в колонку (`12<span border-left>` переносит «34» в новую колонку); `vertical-alignment`: выравнивание в колонке — не разобрано | P1 | **не разобрано** — без записи |
@@ -171,7 +171,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 
 | Кластер | id | сабтестов | пиксели | Пример | Причина | Владелец | Куда заведено |
 |---|---|---|---|---|---|---|---|
-| flex во фрагментации | 268 | — | 268 thick | `flexbox/single-line-column-flex-fragmentation-001.html`, `flexbox/multi-line-row-flex-fragmentation-013.html` | flex-контейнер в multicol атомарен | P1 | `FLEX-FRAG` (`ROADMAP.md`) |
+| flex во фрагментации | 268 | — | 268 thick | `flexbox/single-line-column-flex-fragmentation-001.html`, `flexbox/multi-line-row-flex-fragmentation-013.html` | flex-контейнер в multicol атомарен (до FLEX-FRAG 2026-10-18; после — 124 из 330 id `css-break/flexbox` PASS, остаток — abspos/MULTICOL-FRAG-OOF, переполнение, `contain: size`) | P1 | `FLEX-FRAG` (`ROADMAP.md`, done) |
 | блоки и строки не режутся | 176 | 3 | 168 thick, 4 thin, 1 identical | `widows-orphans-001.html`, `float-001.html`, `overflow-clip-001.html`, `borders-006.html` | режется только лист без детей и рамок; текст — никогда | P1 | `MULTICOL-FRAG` |
 | abspos во фрагментированном потоке | 156 | 4 | 152 thick, 2 thin | `out-of-flow-in-multicolumn-001.html`, `abspos-in-opacity-001.html`, `transform-013.html` | CB и `top` abspos считаются по нефрагментированному потоку, abspos не режется | P1 | `MULTICOL-FRAG-OOF` |
 | таблицы | 123 | 59 | 118 thick | `table/break-before-second-row.html`, `table/table-parts-offsets.tentative.html` | таблица атомарна; `offsetTop` частей таблицы в multicol неверен | P1 | `TABLE-FRAG` |
@@ -2119,7 +2119,7 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 | 5 | `WPT-RUN-15` (`ROADMAP.md`) | planned | 423 | S17, S18, S19, S20, S21, S22, S26 | P2 | рендер перехода: reftest-снимки, *-while-render-blocked,…; reftest-wait: скрипт снимает класс, раннер не ждёт |
 | 6 | `LINEBREAK-UAX14` (`ROADMAP.md`) | planned | 335 | S9 | P1 | i18n/opclns: OP-символ отрывается от следующей буквы; i18n/baspglwj: нет возможности переноса после дефиса,… |
 | 7 | [BUG-1306](../../bugs/BUG-1306-OPEN.md) | OPEN | 334 | S7, S8, S9, S16 | P3 | Ahem: fonts.ready → измерение читает устаревший снимок…; i18n/{ja,zh,other-lang,unknown-lang}: измерение после… |
-| 8 | `FLEX-FRAG` (`ROADMAP.md`) | planned | 278 | S4, S23 | P1 | flex во фрагментации; css-gaps во фрагментированном контейнере |
+| 8 | `FLEX-FRAG` (`ROADMAP.md`) | done 2026-10-18 | 278 | S4, S23 | P1 | flex во фрагментации; css-gaps во фрагментированном контейнере |
 | 9 | [BUG-1563](../../bugs/BUG-1563-OPEN.md) | OPEN | 263 | S25 | P3 | Typed OM: new CSSMathSum(a, b) и др. принимают массив, а… |
 | 10 | [BUG-779](../../bugs/BUG-779-OPEN.md) | OPEN | 236 | S27 | P1 (`ROADMAP.md:1121` PAINT-WORKLET, добавлено) | css-layout-api (Houdini Layout); css-paint-api (Houdini Paint) |
 | 11 | `MULTICOL-FRAG-OOF` (`ROADMAP.md`) | planned | 181 | S4, S17 | P1 | abspos во фрагментированном потоке; multicol: abspos / fixed / clip / transform |
@@ -2137,7 +2137,7 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 | 23 | [BUG-1520](../../bugs/BUG-1520-OPEN.md) | OPEN | 131 | S23 | P3 | text-emphasis: reftest с эталоном на <ruby> и… |
 | 24 | `GRID-VWM-3` (`ROADMAP.md`) | planned | 126 | S7, S8 | P1 | writing-mode / orthogonal; subgrid: writing-mode / orthogonal |
 | 25 | [BUG-1234](../../bugs/BUG-1234-OPEN.md) | OPEN | 123 | S3, S16, S17, S18, S24, S26, S27 | P3 (`BUGS.md:156`, добавлено) | Значение свойства не интерполируется в…; анимация размеров |
-| 26 | `TABLE-VWM` (`ROADMAP.md`) | planned | 117 | S2 | P1 | таблицы |
+| 26 | `TABLE-VWM` (`ROADMAP.md`) | done (остаток — `TABLE-VWM-2`) | 117 | S2 | P1 | таблицы |
 | 27 | `SVG-CLIPPATH` (`ROADMAP.md`) | planned | 114 | S18 | P1 | mask rt: clip-path на SVG-содержимом; mask rt: clip-path: url() / ссылки |
 | 28 | [BUG-1455](../../bugs/BUG-1455-OPEN.md) | OPEN | 114 | S20, S22, S25, S26 | P1 | CSSOM: правила кроме @media/стиля (@font-face,…; CSSCounterStyleRule и дескрипторы @counter-style в CSSOM |
 | 29 | [BUG-1518](../../bugs/BUG-1518-OPEN.md) | OPEN | 111 | S23 | P1 | shape-outside: <shape-box> и <basic-shape> <shape-box> |

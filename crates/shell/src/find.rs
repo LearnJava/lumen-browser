@@ -67,6 +67,18 @@ impl FindState {
         self.keep_original = false;
     }
 
+    /// Конец загрузки страницы: нетронутую панель (запрос пуст) закрываем, а
+    /// панель с набранным запросом оставляем открытой — иначе набранное стирается,
+    /// а следующие буквы уходят в горячие клавиши страницы (BUG-1623). Совпадения
+    /// считаются заново по новому display list, активное сбрасываем на первое.
+    pub fn close_if_untouched(&mut self) {
+        if self.query.is_empty() {
+            self.close();
+        } else {
+            self.active = 0;
+        }
+    }
+
     /// «Искать исходное»: не подставлять перевод раскладки для текущего запроса.
     pub fn keep_original(&self) -> bool {
         self.keep_original
@@ -694,6 +706,21 @@ mod tests {
         s.close();
         assert!(!s.is_open());
         assert_eq!(s.query(), "");
+        assert_eq!(s.active_index(), 0);
+    }
+
+    #[test]
+    fn close_if_untouched_keeps_typed_query_across_page_load() {
+        let mut s = FindState::default();
+        s.open();
+        s.close_if_untouched();
+        assert!(!s.is_open(), "пустая панель закрывается");
+        s.open();
+        s.append_str("ab");
+        s.next(3);
+        s.close_if_untouched();
+        assert!(s.is_open(), "панель с запросом переживает конец загрузки");
+        assert_eq!(s.query(), "ab");
         assert_eq!(s.active_index(), 0);
     }
 

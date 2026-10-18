@@ -181,6 +181,7 @@ pub use parse::color::{canonical_specified_color, parse_color, parse_color_funct
 // Реэкспорт со старого пути: этих троих зовут `lib.rs` и `animation.rs`, то есть
 // потребитель вне `crate::style` (правило §2.1 очереди SPLIT).
 pub use parse::image::{parse_background_gradient, parse_gradient_stops};
+pub use parse::webkit_gradient::{parse_webkit_gradient, webkit_gradient_value_valid};
 pub use parse::transform::parse_transform_list;
 use parse::color::{named_color, parse_color_legacy};
 // SPLIT-ST9. `CalcNode`/`MathFn`/`RoundStrategy`/`Length`/`LengthOrAuto`/
@@ -211,7 +212,7 @@ pub use values::typography::{
     FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, CaseLang, resolve_match_parent,
-    TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxOrient, WhiteSpace,
+    TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
     WhiteSpaceCollapse, BoxShadow, text_font_features,
 };
 pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
@@ -584,7 +585,9 @@ fn parse_overflow_kw(s: &str) -> Option<Overflow> {
         "hidden" => Some(Overflow::Hidden),
         "clip" => Some(Overflow::Clip),
         "scroll" => Some(Overflow::Scroll),
-        "auto" => Some(Overflow::Auto),
+        // Legacy value alias (CSS Overflow L3 §3.1): `overlay` ≡ `auto`;
+        // computed value is `auto`. Lumen's scrollbars are overlay anyway.
+        "auto" | "overlay" => Some(Overflow::Auto),
         _ => None,
     }
 }
@@ -653,6 +656,8 @@ pub fn canonical_specified_keyword(s: &str, allowed: &[String]) -> Option<String
 
 
 fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
+    // WHATWG Compat §3: `transition-property: -webkit-transform` names `transform`.
+    let prop = lumen_css_parser::canonical_property_name(prop).unwrap_or(prop);
     let lower = prop.to_ascii_lowercase();
     match lower.as_str() {
         "margin" => vec!["margin-top", "margin-right", "margin-bottom", "margin-left"]

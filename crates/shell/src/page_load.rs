@@ -1266,10 +1266,9 @@ impl Lumen {
                 // ph3-tls-hardening, live-wiring slice: same as `apply_loaded_page`.
                 self.cert_info = page.cert_info.map(crate::panels::cert_panel::PanelCertData::from);
                 self.anim_frame = None;
-                // Display list другой → старые match-rect-ы невалидны.
-                // Closing полностью сбрасывает query/active — пользователю
-                // нужно открыть find заново после reload, что естественно.
-                self.find.close();
+                // Display list другой → совпадения пересчитаются; панель с набранным
+                // запросом остаётся (BUG-1623), пустая закрывается.
+                self.find.close_if_untouched();
                 self.address_bar.close_if_untouched();
                 // Новая страница — показываем сверху-слева (либо восстанавливаем
                 // offset из back/forward, как в `apply_loaded_page`).
@@ -2407,7 +2406,7 @@ impl Lumen {
         // top-level document, or `None` for plain HTTP / non-network sources.
         self.cert_info = page.cert_info.clone().map(crate::panels::cert_panel::PanelCertData::from);
         self.anim_frame = None;
-        self.find.close();
+        self.find.close_if_untouched();
         self.address_bar.close_if_untouched();
         // U-1: новая страница встаёт сверху-слева; но back/forward (и bfcache)
         // просят восстановить прежний scroll-offset через `pending_restore_scroll`,

@@ -52,7 +52,7 @@ pub(super) fn is_column_spanner(b: &LayoutBox) -> bool {
 /// block flow — a plain, non-floated, non-positioned-out, non-scrolling block
 /// that is not itself a multicol container (a nested one owns its spanners) and
 /// does not establish layout/paint/size containment.
-fn is_span_transparent(b: &LayoutBox) -> bool {
+pub(super) fn is_span_transparent(b: &LayoutBox) -> bool {
     matches!(b.kind, BoxKind::Block)
         && !b.children.is_empty()
         && b.style.display == Display::Block
@@ -79,7 +79,7 @@ fn contains_spanner(b: &LayoutBox, depth: usize) -> bool {
 }
 
 /// Zeroes the decoration on one edge of a fragment (`slice`).
-fn trim_edge(piece: &mut LayoutBox, top: bool) {
+pub(super) fn trim_edge(piece: &mut LayoutBox, top: bool) {
     let st = Arc::make_mut(&mut piece.style);
     if top {
         st.margin_top = LengthOrAuto::ZERO;

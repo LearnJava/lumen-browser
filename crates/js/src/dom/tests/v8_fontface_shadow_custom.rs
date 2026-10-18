@@ -1300,6 +1300,25 @@ fn custom_element_upgrade_via_define_runs_constructor() {
     assert_eq!(result, lumen_core::JsValue::Bool(true));
 }
 
+/// BUG-1239: the upgrade is in place — a reference taken before `define()`
+/// (Polymer's `this.$['page-manager']`) is the very object that becomes the
+/// custom element, with its constructor-installed members.
+#[test]
+fn custom_element_upgrade_keeps_pre_upgrade_reference_identity() {
+    let rt = v8_runtime_with_dom(make_doc());
+    let result = rt.eval(r#"
+                var _pre = document.createElement('x-inplace-el');
+                document.body.appendChild(_pre);
+                class XInplaceEl extends HTMLElement {
+                    constructor() { super(); this.marker = 42; }
+                }
+                customElements.define('x-inplace-el', XInplaceEl);
+                (_pre === document.querySelector('x-inplace-el')) &&
+                    (_pre instanceof XInplaceEl) && (_pre.marker === 42)
+            "#).unwrap();
+    assert_eq!(result, lumen_core::JsValue::Bool(true));
+}
+
 // The same upgrade, but `createElement` itself already ran the real
 // constructor synchronously (CE-1 срез 3 — the tag is defined *before*
 // `createElement` is called), so `connectedCallback` on `appendChild` fires

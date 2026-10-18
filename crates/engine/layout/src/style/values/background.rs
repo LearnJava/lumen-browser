@@ -86,6 +86,16 @@ pub enum GradientCorner {
     BottomLeft,
     /// `to top left` / `to left top`.
     TopLeft,
+    /// Легаси `-webkit-*-gradient` (`bottom left` → …): линия градиента идёт
+    /// вдоль диагонали бокса от начального угла к этому углу, а не
+    /// перпендикулярно «магической» диагонали (угол `90 - atan2(h, w)`).
+    DiagTopRight,
+    /// То же к нижнему правому углу (`90 + atan2(h, w)`).
+    DiagBottomRight,
+    /// То же к нижнему левому углу (`270 - atan2(h, w)`).
+    DiagBottomLeft,
+    /// То же к верхнему левому углу (`270 + atan2(h, w)`).
+    DiagTopLeft,
 }
 
 impl GradientCorner {
@@ -111,6 +121,10 @@ impl GradientCorner {
             GradientCorner::BottomRight => 180.0 - base,
             GradientCorner::BottomLeft => 180.0 + base,
             GradientCorner::TopLeft => 360.0 - base,
+            GradientCorner::DiagTopRight => 90.0 - base,
+            GradientCorner::DiagBottomRight => 90.0 + base,
+            GradientCorner::DiagBottomLeft => 270.0 - base,
+            GradientCorner::DiagTopLeft => 270.0 + base,
         }
     }
 }

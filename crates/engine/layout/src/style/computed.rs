@@ -54,7 +54,7 @@ use crate::style::{
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
-    VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace, WhiteSpaceCollapse, WordBreak,
+    VerticalAlign, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace, WhiteSpaceCollapse, WordBreak,
     WritingMode,
 };
 
@@ -249,6 +249,10 @@ pub struct ComputedStyle {
     /// CSS Text Decoration L4 §5.4 — `text-emphasis-color`. Inherited.
     /// Initial: `CurrentColor` — разрешается в `style.color` при рендере.
     pub text_emphasis_color: CssColor,
+    /// WHATWG Compat §3.1 — `-webkit-text-fill-color`. Inherited.
+    /// Initial: `CurrentColor` (глиф красится `color`); хранится как задано,
+    /// `currentcolor` резолвится в `color` самого фрагмента (`used_text_fill_color`).
+    pub text_fill_color: CssColor,
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
@@ -531,6 +535,9 @@ pub struct ComputedStyle {
     /// CSS Multi-column L2 §4.4 — `column-wrap: nowrap`. `false` = `auto`/`wrap`: with a
     /// non-auto `column-height`, overflow columns open a new row in the block direction.
     pub column_wrap_nowrap: bool,
+    /// `column-wrap: wrap` written explicitly: rows open on forced breaks even with an `auto`
+    /// `column-height` (Multicol L2 §4.4), where `auto` stays a single row.
+    pub column_wrap_explicit: bool,
     /// CSS Multi-column L1 §4.1 / CSS Gap Decorations L1 §4.5 — `column-rule-width`: список
     /// px-значений по щелям (`repeat()` сохранён). Default `[3]` (`medium`).
     pub column_rule_width: RuleList<f32>,
@@ -801,6 +808,13 @@ pub struct ComputedStyle {
     pub mask_layers: Vec<MaskLayer>,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
+    /// `::-webkit-scrollbar { height: 0 }` — горизонтальная полоса скрыта (gutter 0,
+    /// оверлей не рисуется), вертикальная живёт по `scrollbar_width`. У стандартного
+    /// `scrollbar-width` одно значение на обе оси, поэтому ось-ноль из legacy-
+    /// псевдоэлемента хранится отдельно. Не наследуется.
+    pub scrollbar_hidden_x: bool,
+    /// То же для вертикальной полосы: `::-webkit-scrollbar { width: 0 }`. Не наследуется.
+    pub scrollbar_hidden_y: bool,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
     /// (thumb-color + track-color).
     pub scrollbar_color: Option<(Color, Color)>,
@@ -924,6 +938,18 @@ pub struct ComputedStyle {
     /// `display: -webkit-box`/`-webkit-inline-box` (см. `webkit_box_computed_
     /// display`, `selector_query.rs`) — реального legacy-flexbox layout нет.
     pub box_orient: WebkitBoxOrient,
+    /// WHATWG Compat §2.1 — `-webkit-box-pack` / `-webkit-box-align` / `-webkit-box-direction`:
+    /// читаются пост-проходом каскада для `display: -webkit-box` (→ `justify-content`,
+    /// `align-items`, `flex-direction`). Не наследуются.
+    pub box_pack: WebkitBoxPack,
+    pub box_align: WebkitBoxAlign,
+    pub box_direction: WebkitBoxDirection,
+    /// WHATWG Compat §2.1 — `-webkit-box-flex` (≥ 0, initial 0): flex-grow и flex-shrink
+    /// элемента legacy-бокса. Не наследуется.
+    pub box_flex: f32,
+    /// WHATWG Compat §2.1 — `-webkit-box-ordinal-group` (≥ 1, initial 1): порядок элемента
+    /// legacy-бокса (`order = group - 1`). Не наследуется.
+    pub box_ordinal_group: u32,
     /// WHATWG Compat §2.1 — исходное значение `display: -webkit-box`/`-webkit-inline-box`,
     /// когда пост-проход каскада заменил его на `Flex`/`InlineFlex`, чтобы бокс раскладывался
     /// flex-алгоритмом (ось — из `-webkit-box-orient`), а `getComputedStyle` по-прежнему
@@ -1199,6 +1225,13 @@ impl ComputedStyle {
         !self.column_wrap_nowrap && self.column_height_px(em, viewport).is_some_and(|h| h > 0.0)
     }
 
+    /// Used value `-webkit-text-fill-color` (WHATWG Compat §3.1): цвет заливки
+    /// глифов; `currentcolor` (initial) — это `color`. Декорации, тень и
+    /// emphasis-marks остаются на `color`.
+    pub fn used_text_fill_color(&self) -> Color {
+        self.text_fill_color.resolve(self.color)
+    }
+
     /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`
     /// дают `color` элемента, остальное — явный цвет в sRGB.
     pub fn used_caret_color(&self) -> Color {
@@ -1299,6 +1332,7 @@ impl ComputedStyle {
             text_decoration_thickness: TextDecorationThickness::Auto,
             text_emphasis_style: TextEmphasisStyle::None,
             text_emphasis_color: CssColor::CurrentColor,
+            text_fill_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
             text_underline_position: TextUnderlinePosition::Auto,
             text_underline_offset: None,
@@ -1398,6 +1432,7 @@ impl ComputedStyle {
             column_width: None,
             column_height: None,
             column_wrap_nowrap: false,
+            column_wrap_explicit: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),
@@ -1496,6 +1531,8 @@ impl ComputedStyle {
             view_timeline_axis: ScrollAxis::Block,
             mask_layers: Vec::new(),
             scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_hidden_x: false,
+            scrollbar_hidden_y: false,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
             overflow_anchor: OverflowAnchor::Auto,
@@ -1533,6 +1570,11 @@ impl ComputedStyle {
             line_clamp_auto: false,
             line_clamp_legacy: false,
             box_orient: WebkitBoxOrient::Horizontal,
+            box_pack: WebkitBoxPack::Start,
+            box_align: WebkitBoxAlign::Stretch,
+            box_direction: WebkitBoxDirection::Normal,
+            box_flex: 0.0,
+            box_ordinal_group: 1,
             legacy_box_display: None,
             continue_value: CssContinue::Normal,
             orphans: 2,
@@ -1680,6 +1722,7 @@ impl ComputedStyle {
             text_decoration_thickness: inherited.text_decoration_thickness,
             text_emphasis_style: inherited.text_emphasis_style.clone(),
             text_emphasis_color: inherited.text_emphasis_color,
+            text_fill_color: inherited.text_fill_color,
             text_emphasis_position: inherited.text_emphasis_position,
             text_underline_position: inherited.text_underline_position,
             text_underline_offset: inherited.text_underline_offset,
@@ -1796,6 +1839,7 @@ impl ComputedStyle {
             column_width: None,
             column_height: None,
             column_wrap_nowrap: false,
+            column_wrap_explicit: false,
             column_rule_width: RuleList::single(3.0),
             column_rule_style: RuleList::single(BorderStyle::None),
             column_rule_color: RuleList::single(CssColor::CurrentColor),
@@ -1906,6 +1950,8 @@ impl ComputedStyle {
             // CSS Scrollbars — scrollbar-width/-color inherited;
             // scrollbar-gutter не наследуется.
             scrollbar_width: inherited.scrollbar_width,
+            scrollbar_hidden_x: false,
+            scrollbar_hidden_y: false,
             scrollbar_color: inherited.scrollbar_color,
             scrollbar_gutter: ScrollbarGutter::Auto,
             // CSS Scroll Anchoring 1 — `overflow-anchor` не наследуется.
@@ -1953,6 +1999,11 @@ impl ComputedStyle {
             line_clamp_legacy: false,
             // WHATWG Compat / CSS Overflow L4 §continue — оба не наследуются.
             box_orient: WebkitBoxOrient::Horizontal,
+            box_pack: WebkitBoxPack::Start,
+            box_align: WebkitBoxAlign::Stretch,
+            box_direction: WebkitBoxDirection::Normal,
+            box_flex: 0.0,
+            box_ordinal_group: 1,
             legacy_box_display: None,
             continue_value: CssContinue::Normal,
             // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.

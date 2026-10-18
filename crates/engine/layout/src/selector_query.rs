@@ -36,7 +36,7 @@ use crate::style::{
     TextAlignLast, TextDecorationLine, TextDecorationStyle, TextWrapMode, TextWrapStyle,
     Hyphens, LineBreak, OverflowWrap, WordBreak,
     TextEmphasisStyle, TextOrientation, TextShadow, TextTransform, TimingFunction,
-    TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxOrient, WhiteSpace,
+    TransformFn, UnicodeBidi, VerticalAlign, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
     WhiteSpaceCollapse, WritingMode,
     ComputedStyle,
 };
@@ -1576,7 +1576,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextDecorationStyle::Dashed => "dashed",
         TextDecorationStyle::Wavy => "wavy",
     }.into());
-    m.insert("text-decoration-color".into(), css_color_to_css(&style.text_decoration_color));
+    // `currentcolor` сериализуется в used-значение, как в Chrome.
+    m.insert("text-decoration-color".into(),
+        color_to_css(style.text_decoration_color.resolve(style.color)));
+    m.insert("-webkit-text-fill-color".into(), color_to_css(style.used_text_fill_color()));
     m.insert("text-overflow".into(), if style.text_overflow == style.text_overflow_right {
         style.text_overflow.to_css()
     } else {
@@ -1606,6 +1609,25 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         WebkitBoxOrient::Horizontal => "horizontal",
         WebkitBoxOrient::Vertical => "vertical",
     }.into());
+    m.insert("-webkit-box-pack".into(), match style.box_pack {
+        WebkitBoxPack::Start => "start",
+        WebkitBoxPack::Center => "center",
+        WebkitBoxPack::End => "end",
+        WebkitBoxPack::Justify => "justify",
+    }.into());
+    m.insert("-webkit-box-align".into(), match style.box_align {
+        WebkitBoxAlign::Start => "start",
+        WebkitBoxAlign::Center => "center",
+        WebkitBoxAlign::End => "end",
+        WebkitBoxAlign::Baseline => "baseline",
+        WebkitBoxAlign::Stretch => "stretch",
+    }.into());
+    m.insert("-webkit-box-direction".into(), match style.box_direction {
+        WebkitBoxDirection::Normal => "normal",
+        WebkitBoxDirection::Reverse => "reverse",
+    }.into());
+    m.insert("-webkit-box-flex".into(), style.box_flex.to_string());
+    m.insert("-webkit-box-ordinal-group".into(), style.box_ordinal_group.to_string());
     m.insert("continue".into(), match style.continue_value {
         CssContinue::Normal => "normal",
         CssContinue::Discard => "discard",

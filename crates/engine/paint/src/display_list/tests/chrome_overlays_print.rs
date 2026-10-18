@@ -313,6 +313,30 @@ use super::text_and_images::build;
         assert_eq!(bars, 0, "нет переполнения → нет DrawScrollbar");
     }
 
+    /// CSS-WEBKIT-SCROLLBAR: `::-webkit-scrollbar { display: none }` / `height: 0`
+    /// / `width: 0` hide the overlay bars of a carousel; the other axis survives.
+    #[test]
+    fn webkit_scrollbar_display_none_and_axis_zero_suppress_draw_scrollbar() {
+        // 100×50 box, child 300×200 → both axes overflow.
+        let html = r#"<div class="c" style="overflow:scroll;width:100px;height:50px"><div style="width:300px;height:200px"></div></div>"#;
+        let bars = |css: &str| -> Vec<bool> {
+            build(html, css)
+                .iter()
+                .filter_map(|c| match c {
+                    DisplayCommand::DrawScrollbar { vertical, .. } => Some(*vertical),
+                    _ => None,
+                })
+                .collect()
+        };
+        let base = bars("");
+        assert!(base.contains(&true) && base.contains(&false), "без правил — обе полосы");
+        assert!(bars(".c::-webkit-scrollbar { display: none }").is_empty(), "display:none — ни одной");
+        let h0 = bars(".c::-webkit-scrollbar { height: 0 }");
+        assert!(h0.contains(&true) && !h0.contains(&false), "height:0 прячет только горизонтальную");
+        let w0 = bars(".c::-webkit-scrollbar { width: 0 }");
+        assert!(w0.contains(&false) && !w0.contains(&true), "width:0 прячет только вертикальную");
+    }
+
     /// DrawScrollbar thumb_rect is inside track_rect.
     #[test]
     fn draw_scrollbar_thumb_inside_track() {

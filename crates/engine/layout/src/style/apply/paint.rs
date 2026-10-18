@@ -143,15 +143,25 @@ pub(in crate::style) fn apply_decl_paint(
             let layer_strs = split_top_level_commas(trimmed);
             if layer_strs.is_empty() { return true; }
 
+            // Невалидный слой отбрасывает объявление целиком (CSS Syntax): прежние
+            // слои и цвет (цепочка запасных `background:` старых сайтов) остаются.
+            let Some(parsed) = layer_strs
+                .iter()
+                .map(|ls| parse_single_bg_layer(ls.trim(), em_basis, viewport, is_quirks))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return true;
+            };
+
             // Сбрасываем текущие слои — shorthand всегда переписывает полностью.
             style.background_layers.clear();
             style.background_color = None;
 
-            for (i, ls) in layer_strs.iter().enumerate() {
-                let (layer, maybe_color) = parse_single_bg_layer(ls.trim(), em_basis, viewport, is_quirks);
+            let last = parsed.len() - 1;
+            for (i, (layer, maybe_color)) in parsed.into_iter().enumerate() {
                 style.background_layers.push(layer);
                 // Цвет допустим только в последнем слое.
-                if i == layer_strs.len() - 1 && let Some(c) = maybe_color {
+                if i == last && let Some(c) = maybe_color {
                     style.background_color = Some(c);
                 }
             }
@@ -335,11 +345,11 @@ pub(in crate::style) fn apply_decl_paint(
             if pieces.iter().any(|s| image_has_trailing_tokens(s.trim())) {
                 return true;
             }
-            // Сохраняем текущие per-layer данные для cycling после изменения размера.
-            let old_layers = std::mem::take(&mut style.background_layers);
-            style.background_layers = pieces.iter().enumerate().map(|(i, s)| {
+            // Неизвестная функция (`-o-linear-gradient(…)`) делает объявление
+            // недопустимым — прежнее значение остаётся.
+            let Some(images) = pieces.iter().map(|s| {
                 let s = s.trim();
-                let image = if s.eq_ignore_ascii_case("none") {
+                Some(if s.eq_ignore_ascii_case("none") {
                     BackgroundImage::None
                 } else if is_image_set_value(s) {
                     // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
@@ -354,8 +364,14 @@ pub(in crate::style) fn apply_decl_paint(
                 } else if is_gradient_function(s) {
                     BackgroundImage::Gradient(parse_background_gradient(s))
                 } else {
-                    BackgroundImage::None
-                };
+                    return None;
+                })
+            }).collect::<Option<Vec<_>>>() else {
+                return true;
+            };
+            // Сохраняем текущие per-layer данные для cycling после изменения размера.
+            let old_layers = std::mem::take(&mut style.background_layers);
+            style.background_layers = images.into_iter().enumerate().map(|(i, image)| {
                 // Прочие свойства берём из старого слоя (cycling) или defaults.
                 let old = old_layers.get(i % old_layers.len().max(1)).cloned().unwrap_or_default();
                 BackgroundLayer { image, ..old }
@@ -572,21 +588,30 @@ pub(in crate::style) fn apply_decl_paint(
             // количество слоёв. Прочие per-layer свойства переносятся из
             // прежних слоёв циклически (как у `background-image`).
             let pieces = split_top_level_commas(val.trim());
-            let old_layers = std::mem::take(&mut style.mask_layers);
-            style.mask_layers = pieces
+            // Неизвестная функция делает объявление недопустимым — прежнее значение остаётся.
+            let Some(images) = pieces
                 .iter()
-                .enumerate()
-                .map(|(i, s)| {
+                .map(|s| {
                     let s = s.trim();
-                    let image = if s.eq_ignore_ascii_case("none") {
+                    Some(if s.eq_ignore_ascii_case("none") {
                         BackgroundImage::None
                     } else if let Some(u) = parse_url_value(s) {
                         BackgroundImage::Url(u)
                     } else if is_gradient_function(s) {
                         BackgroundImage::Gradient(parse_background_gradient(s))
                     } else {
-                        BackgroundImage::None
-                    };
+                        return None;
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return true;
+            };
+            let old_layers = std::mem::take(&mut style.mask_layers);
+            style.mask_layers = images
+                .into_iter()
+                .enumerate()
+                .map(|(i, image)| {
                     let old = old_layers
                         .get(i % old_layers.len().max(1))
                         .cloned()

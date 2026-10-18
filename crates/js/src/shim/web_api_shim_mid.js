@@ -1723,6 +1723,76 @@ function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// BUG-1622: synthetic keyboard input (WebDriver key actions, `type_text`, the
+// shell's injected characters) knows only the `key` string — and sometimes a
+// `code` — not the physical key. Derive the rest the way a US/RU keyboard
+// reports it: `code` ('KeyC'), legacy `keyCode`/`which` (67), `location` and
+// `shiftKey` (an upper-case letter or a shifted symbol). `extra_mod` carries
+// modifiers the caller already knows (Caps Lock bit 16, Alt 4 ...).
+var _lumen_synth_keys = (function() {
+    var named = {
+        Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34,
+        End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+        Insert: 45, Delete: 46, CapsLock: 20, Shift: 16, Control: 17, Alt: 18, Meta: 91
+    };
+    var modifier_codes = { Shift: 'ShiftLeft', Control: 'ControlLeft', Alt: 'AltLeft', Meta: 'MetaLeft' };
+    // Unshifted US character -> [code, keyCode]; the shifted partner is below.
+    var punct = {
+        '`': ['Backquote', 192], '-': ['Minus', 189], '=': ['Equal', 187],
+        '[': ['BracketLeft', 219], ']': ['BracketRight', 221], '\\': ['Backslash', 220],
+        ';': ['Semicolon', 186], "'": ['Quote', 222], ',': ['Comma', 188],
+        '.': ['Period', 190], '/': ['Slash', 191]
+    };
+    var shifted = {
+        '~': '`', '_': '-', '+': '=', '{': '[', '}': ']', '|': '\\', ':': ';',
+        '"': "'", '<': ',', '>': '.', '?': '/',
+        '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0'
+    };
+    // RU (ЙЦУКЕН) letter -> the Latin letter on the same physical key.
+    var ru_row = 'йцукенгшщзхъфывапролджэячсмитьбюё';
+    var ru_key = 'qwertyuiop[]asdfghjkl;\'zxcvbnm,.`';
+    function from_physical(ch) {
+        if (ch >= 'a' && ch <= 'z') return ['Key' + ch.toUpperCase(), ch.toUpperCase().charCodeAt(0)];
+        if (ch >= '0' && ch <= '9') return ['Digit' + ch, ch.charCodeAt(0)];
+        return punct[ch] || null;
+    }
+    function lookup(key) {
+        if (key.length === 0) return null;
+        var lower = key.toLowerCase();
+        var is_upper = key !== lower && key.length === 1;
+        var phys = lower.length === 1 ? lower : null;
+        var ru = phys === null ? -1 : ru_row.indexOf(phys);
+        if (ru >= 0) phys = ru_key.charAt(ru);
+        else if (shifted.hasOwnProperty(key)) { phys = shifted[key]; is_upper = true; }
+        var hit = phys === null ? null : from_physical(phys);
+        return hit === null ? null : { code: hit[0], keyCode: hit[1], shift: is_upper };
+    }
+    return function(key, code) {
+        var info = { code: code || '', keyCode: 0, location: 0, shift: false };
+        if (key.length > 1 || key === ' ') {
+            if (named.hasOwnProperty(key)) info.keyCode = named[key];
+            else if (/^F([1-9]|1[0-2])$/.test(key)) info.keyCode = 111 + parseInt(key.slice(1), 10);
+            if (modifier_codes.hasOwnProperty(key)) info.location = 1;
+            if (!info.code) info.code = key === ' ' ? 'Space' : (modifier_codes[key] || key);
+            return info;
+        }
+        var hit = lookup(key);
+        if (hit !== null) {
+            info.keyCode = hit.keyCode;
+            info.shift = hit.shift;
+            if (!info.code || info.code === key) info.code = hit.code;
+        }
+        return info;
+    };
+})();
+
+function _lumen_dispatch_synth_key(start_nid, type, key, code, extra_mod) {
+    var info = _lumen_synth_keys(String(key), code ? String(code) : '');
+    var mod = (extra_mod | 0) | (info.shift ? 2 : 0);
+    return _lumen_dispatch_key_event(start_nid, type, key, info.code, info.keyCode,
+        info.location, mod, false, false);
+}
+
 // UX-CLIPBOARD: trusted copy/cut/paste on a focused text field. `text` seeds
 // `clipboardData` only for `paste` (copy/cut handlers fill it themselves via
 // `setData`). Reply: 'N' = not cancelled (shell runs the default action);
@@ -1994,6 +2064,7 @@ function _lumen_parse_style(s) {
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
         if (prop === 'word-wrap') prop = 'overflow-wrap';
+        prop = _lumen_compat_alias(prop);
         if (_lumen_gap_rule_key_re.test(prop)) {
             // `!important` is not part of the value (the priority is not tracked here).
             var gapVal = _lumen_close_open_parens(val.replace(/\s*!\s*important\s*$/i, ''));
@@ -2176,6 +2247,7 @@ function _lumen_expand_overflow_shorthand(strVal) {
     for (var i = 0; i < tokens.length; i++) {
         var c = _lumen_css_canonical_keyword(tokens[i], _LUMEN_KEYWORD_PROPERTIES['overflow-x']);
         if (c === null || c === undefined) return null;
+        if (c === 'overlay') c = 'auto';
         canon.push(c);
     }
     return { x: canon[0], y: canon.length > 1 ? canon[1] : canon[0] };
@@ -2424,10 +2496,40 @@ function _lumen_serialize_style(obj) {
     });
     return parts.length ? parts.join('; ') + ';' : '';
 }
+// WHATWG Compat §3 simple aliases (COMPAT-CSS-ALIAS): the 51 `-webkit-<name>` spellings resolve
+// to `<name>`. Mirror of `lumen_css_parser::COMPAT_CSS_ALIASES` (the Rust parser applies the same
+// table to stylesheets and native inline styles).
+var _LUMEN_COMPAT_ALIASES = {};
+(
+    'align-content align-items align-self animation animation-delay animation-direction '+
+    'animation-duration animation-fill-mode animation-iteration-count animation-name '+
+    'animation-play-state animation-timing-function backface-visibility background-clip '+
+    'background-origin background-size border-bottom-left-radius border-bottom-right-radius '+
+    'border-radius border-top-left-radius border-top-right-radius box-shadow box-sizing filter '+
+    'flex flex-basis flex-direction flex-flow flex-grow flex-shrink flex-wrap justify-content '+
+    'mask mask-clip mask-composite mask-image mask-origin mask-position mask-repeat mask-size '+
+    'order perspective perspective-origin transform transform-origin transform-style transition '+
+    'transition-delay transition-duration transition-property transition-timing-function'
+).split(' ').forEach(function(n) { _LUMEN_COMPAT_ALIASES['-webkit-' + n] = n; });
+function _lumen_compat_alias(key) {
+    var k = key.toLowerCase();
+    return Object.prototype.hasOwnProperty.call(_LUMEN_COMPAT_ALIASES, k) ? _LUMEN_COMPAT_ALIASES[k] : key;
+}
+// IDL attribute `webkitTransform` / `WebkitTransform` / `WebKitTransform` of an aliased property
+// (the enumeration test in `compat/css-style-declaration-alias-enumeration.html` spells one with a
+// capital K): true for the 51 Compat §3 names, so `'webkitTransform' in el.style` holds.
+function _lumen_is_compat_alias_attr(prop) {
+    if (typeof prop !== 'string' || !/^[Ww]eb[Kk]it[A-Z]/.test(prop)) return false;
+    // An alias resolves to its unprefixed name; any other `webkitFoo` stays `-webkit-foo`.
+    return _lumen_camel_to_kebab(prop).indexOf('-webkit-') !== 0;
+}
 function _lumen_camel_to_kebab(prop) {
+    prop = prop.replace(/^[Ww]eb[Kk]it(?=[A-Z])/, 'webkit');
     var key = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+    // `webkitTransform` (lower-case vendor prefix) is the same IDL attribute as `WebkitTransform`.
+    if (key.indexOf('webkit-') === 0) key = '-' + key;
     // CSS Text L3 §5.5: `word-wrap` is a legacy alias of `overflow-wrap` (BUG-1325).
-    return key === 'word-wrap' ? 'overflow-wrap' : key;
+    return key === 'word-wrap' ? 'overflow-wrap' : _lumen_compat_alias(key);
 }
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
@@ -2669,7 +2771,7 @@ var _LUMEN_GRID_PROPERTIES = {
 // (`style/parse/box_sides.rs`) accepts `none`/`solid`/`dashed`/`dotted`/`double`
 // and, since the volumetric-border slice, `groove`/`ridge`/`inset`/`outset`.
 // `overflow-x`/`overflow-y` (срез 9) list matches `style.rs::parse_overflow_kw`
-// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` — CSS Overflow L3's
+// exactly (`visible`/`hidden`/`clip`/`scroll`/`auto` + legacy alias `overlay`, read back as `auto` — CSS Overflow L3's
 // `no-display`/`no-content` are unimplemented by the engine, so they stay
 // rejected same as any other unrecognized keyword). The `overflow` shorthand
 // itself is NOT in this table — it is a 1-or-2-token grammar, wired through
@@ -2706,14 +2808,14 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'block-step-insert': ['margin-box', 'padding-box', 'content-box'],
     'block-step-align':  ['auto', 'center', 'start', 'end'],
     'block-step-round':  ['up', 'down', 'nearest'],
-    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
-    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-x':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
+    'overflow-y':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
     // BUG-505 срез 3: `overflow-block`/`overflow-inline` (CSS Overflow L3
     // §logical) landed in the Rust cascade this slice
     // (`crates/engine/layout/src/style/apply/layout.rs`) — same grammar as
     // their physical `overflow-x`/`overflow-y` counterparts above.
-    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto'],
-    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto'],
+    'overflow-block':  ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
+    'overflow-inline': ['visible', 'hidden', 'clip', 'scroll', 'auto', 'overlay'],
     // WHATWG Compat §2.1 (BUG-505 срез 5) — feeds the `display: -webkit-box`
     // computed-value quirk (`webkit_box_computed_display`, `selector_query.rs`).
     '-webkit-box-orient': ['horizontal', 'vertical'],
@@ -3335,7 +3437,10 @@ function _lumen_canonicalize_longhand(key, strVal) {
         return _lumen_css_canonical_text(key, strVal);
     }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
-        return _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+        var kw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
+        // CSS Overflow L3 legacy value alias: `overlay` parses as `auto`
+        // (Chrome 114+), so CSSOM read-back is `auto`.
+        return kw === 'overlay' ? 'auto' : kw;
     }
     if (key === 'scrollbar-color') {
         return _lumen_css_canonical_scrollbar_color(strVal);
@@ -3674,6 +3779,9 @@ function _lumen_make_style(nid, fbid) {
             if (prop in t) return Reflect.get(t, prop, receiver);
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
+        has: function(t, prop) {
+            return prop in t || _lumen_is_compat_alias_attr(prop);
+        },
         set: function(t, prop, value, receiver) {
             if (prop in t) return Reflect.set(t, prop, value, receiver);
             t.setProperty(_lumen_camel_to_kebab(String(prop)), value);
@@ -3704,6 +3812,9 @@ function _lumen_make_rule_style(loc) {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
+        },
+        has: function(t, prop) {
+            return prop in t || _lumen_is_compat_alias_attr(prop);
         },
         set: function(t, prop, value, receiver) {
             if (prop in t) return Reflect.set(t, prop, value, receiver);
@@ -3810,10 +3921,12 @@ function _lumen_node_or_text_nid(arg) {
     return _lumen_create_text_node(String(arg));
 }
 
-function _lumen_make_document_fragment(nid) {
-    var frag = {
-        __nid__:              nid,
-        __isDocumentFragment__: true,
+// BUG-1239: the members live on a shared prototype object and read `this.__nid__`,
+// not on every wrapper as own properties: ShadyDOM (youtube) swaps a fragment's
+// [[Prototype]] for its own ShadowRoot one (`attachShadow({shadyUpgradeFragment})`),
+// and an own `childNodes`/`firstChild`/`appendChild` would keep shadowing the
+// replacement's logical-tree accessors.
+var _lumen_document_fragment_members = {
         get nodeType()        { return 11; }, // Node.DOCUMENT_FRAGMENT_NODE
         get nodeName()        { return '#document-fragment'; },
         // BUG-314: `new DocumentFragment()` is owned by the current document;
@@ -3824,36 +3937,36 @@ function _lumen_make_document_fragment(nid) {
         // literal with no [[Prototype]], so the shared `Node.prototype`
         // accessor never reaches it. Its node document is the live one above.
         get baseURI()         { return _lumen_document_base_url(); },
-        get firstChild()      {
+        get firstChild()      { var nid = this.__nid__;
             var ch = _lumen_get_children(nid);
             return ch.length ? _lumen_make_element(ch[0]) : null;
         },
-        get textContent()     { return _lumen_get_text_content(nid); },
-        set textContent(v)    { _lumen_set_text_content(nid, String(v)); },
-        get innerHTML()       { return _lumen_get_inner_html(nid); },
-        set innerHTML(v)      { _lumen_set_inner_html(nid, String(v)); },
+        get textContent()     { var nid = this.__nid__; return _lumen_get_text_content(nid); },
+        set textContent(v)    { var nid = this.__nid__; _lumen_set_text_content(nid, String(v)); },
+        get innerHTML()       { var nid = this.__nid__; return _lumen_get_inner_html(nid); },
+        set innerHTML(v)      { var nid = this.__nid__; _lumen_set_inner_html(nid, String(v)); },
         // Scoped to this fragment's descendants — see BUG-291.
-        querySelector:        function(sel) {
+        querySelector:        function(sel) { var nid = this.__nid__;
             var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
-        querySelectorAll:     function(sel) {
+        querySelectorAll:     function(sel) { var nid = this.__nid__;
             return _lumen_static_node_list(_lumen_query_selector_all_scoped(nid, _lumen_sel(sel)));
         },
-        appendChild:          function(c) {
+        appendChild:          function(c) { var nid = this.__nid__;
             if (c && c.__nid__ !== undefined) {
                 _lumen_append_child(nid, c.__nid__);
             }
             return c;
         },
-        removeChild:          function(c) {
+        removeChild:          function(c) { var nid = this.__nid__;
             if (c && c.__nid__ !== undefined) {
                 _lumen_remove_child(nid, c.__nid__);
             }
             return c;
         },
         // cloneNode: returns a new fragment with deep-cloned children (always deep for fragments).
-        cloneNode:            function(deep) {
+        cloneNode:            function(deep) { var nid = this.__nid__;
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
             _lumen_track_cloned_style_blocks(clone_nid);
             return _lumen_make_document_fragment(clone_nid);
@@ -3865,22 +3978,22 @@ function _lumen_make_document_fragment(nid) {
         // dispatch on `nodeType` and return `null` immediately for `11`
         // (DocumentFragment per spec has no namespace context of its own), so
         // these delegate to the exact same functions Node.prototype uses.
-        lookupNamespaceURI:   function(prefix) {
+        lookupNamespaceURI:   function(prefix) { 
             var p = (prefix === undefined || prefix === null || prefix === '') ? null : String(prefix);
-            return _lumen_locate_namespace(frag, p);
+            return _lumen_locate_namespace(this, p);
         },
-        lookupPrefix:         function(namespace) {
+        lookupPrefix:         function(namespace) { 
             if (namespace === undefined || namespace === null || namespace === '') return null;
-            return _lumen_locate_prefix(frag, String(namespace));
+            return _lumen_locate_prefix(this, String(namespace));
         },
-        isDefaultNamespace:   function(namespace) {
+        isDefaultNamespace:   function(namespace) { 
             var ns = (namespace === undefined || namespace === null || namespace === '') ? null : String(namespace);
-            return _lumen_locate_namespace(frag, null) === ns;
+            return _lumen_locate_namespace(this, null) === ns;
         },
         // Ниже — узловые операции, которых у фрагмента не было вовсе, хотя
         // именно во фрагмент (`template.content`) реактивные библиотеки
         // собирают разметку перед вставкой в документ.
-        get lastChild()       {
+        get lastChild()       { var nid = this.__nid__;
             var ch = _lumen_get_children(nid);
             return ch.length ? _lumen_make_element(ch[ch.length - 1]) : null;
         },
@@ -3889,7 +4002,7 @@ function _lumen_make_document_fragment(nid) {
         get parentElement()   { return null; },
         get nextSibling()     { return null; },
         get previousSibling() { return null; },
-        insertBefore:         function(newNode, refNode) {
+        insertBefore:         function(newNode, refNode) { var nid = this.__nid__;
             _lumen_adopt_detached(newNode);
             _lumen_adopt_detached(refNode);
             if (!newNode || newNode.__nid__ === undefined) {
@@ -3902,7 +4015,7 @@ function _lumen_make_document_fragment(nid) {
             }
             return newNode;
         },
-        replaceChild:         function(newChild, oldChild) {
+        replaceChild:         function(newChild, oldChild) { var nid = this.__nid__;
             _lumen_adopt_detached(newChild);
             if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
                 throw new TypeError('replaceChild: both arguments must be nodes');
@@ -3911,19 +4024,19 @@ function _lumen_make_document_fragment(nid) {
             _lumen_remove_child(nid, oldChild.__nid__);
             return oldChild;
         },
-        hasChildNodes:        function() { return _lumen_get_children(nid).length > 0; },
+        hasChildNodes:        function() { var nid = this.__nid__; return _lumen_get_children(nid).length > 0; },
         contains:             function(other) { return _lumen_node_contains(this, other); },
         compareDocumentPosition: function(other) { return _lumen_node_compare_position(this, other); },
-        isSameNode:           function(other) { return !!other && _lumen_tree_nid(other) === nid; },
+        isSameNode:           function(other) { var nid = this.__nid__; return !!other && _lumen_tree_nid(other) === nid; },
         getRootNode:          function() { return this; },
         // DOM §4.2.6 ParentNode.append/prepend/replaceChildren — принимают узлы
         // и строки (строка становится текстовым узлом).
-        append:               function() {
+        append:               function() { var nid = this.__nid__;
             for (var i = 0; i < arguments.length; i++) {
                 _lumen_append_child(nid, _lumen_node_or_text_nid(arguments[i]));
             }
         },
-        prepend:              function() {
+        prepend:              function() { var nid = this.__nid__;
             var first = _lumen_get_children(nid)[0];
             for (var i = 0; i < arguments.length; i++) {
                 var cnid = _lumen_node_or_text_nid(arguments[i]);
@@ -3934,7 +4047,7 @@ function _lumen_make_document_fragment(nid) {
                 }
             }
         },
-        replaceChildren:      function() {
+        replaceChildren:      function() { var nid = this.__nid__;
             var kids = _lumen_get_children(nid);
             for (var i = 0; i < kids.length; i++) {
                 _lumen_remove_child(nid, kids[i]);
@@ -3943,19 +4056,25 @@ function _lumen_make_document_fragment(nid) {
                 _lumen_append_child(nid, _lumen_node_or_text_nid(arguments[j]));
             }
         },
-    };
-    // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
-    Object.defineProperty(frag, 'children', {
-        get: function() { return _lumen_make_html_collection(nid); },
-        enumerable: false, configurable: true,
-    });
-    Object.defineProperty(frag, 'childNodes', {
-        get: function() {
-            var nids = _lumen_get_children(nid);
-            return _lumen_make_nid_collection(function() { return nids; }, NodeList.prototype, true);
-        },
-        enumerable: false, configurable: true,
-    });
+};
+// DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
+Object.defineProperty(_lumen_document_fragment_members, 'children', {
+    get: function() { return _lumen_make_html_collection(this.__nid__); },
+    enumerable: false, configurable: true,
+});
+Object.defineProperty(_lumen_document_fragment_members, 'childNodes', {
+    get: function() {
+        var nids = _lumen_get_children(this.__nid__);
+        return _lumen_make_nid_collection(function() { return nids; }, NodeList.prototype, true);
+    },
+    enumerable: false, configurable: true,
+});
+function _lumen_make_document_fragment(nid) {
+    var frag = Object.create(_lumen_document_fragment_members);
+    Object.defineProperty(frag, '__nid__',
+        { value: nid, enumerable: false, writable: false, configurable: false });
+    Object.defineProperty(frag, '__isDocumentFragment__',
+        { value: true, enumerable: false, writable: false, configurable: false });
     return frag;
 }
 
@@ -4739,12 +4858,15 @@ function _lumen_create_cdata_section_checked(isHtmlDocument, data) {
 }
 
 // DOM §4.7 DocumentFragment() — a native (arena-backed) empty fragment, so it
-// can hold real inserted children. The wrapper is a plain native-backed object,
-// so it is NOT a `DocumentFragment` instanceof; the interface global still
-// resolves for reference checks.
+// can hold real inserted children. BUG-1239: the wrapper's members live on
+// `_lumen_document_fragment_members`, which chains to `DocumentFragment
+// .prototype` (wired right below), so `frag instanceof DocumentFragment`/`Node`
+// hold — youtube's patched `appendChild` tests exactly that to find the custom
+// elements a fragment brings in.
 function DocumentFragment() { return _lumen_make_document_fragment(_lumen_create_fragment()); }
 DocumentFragment.prototype = Object.create(Node.prototype);
 DocumentFragment.prototype.constructor = DocumentFragment;
+Object.setPrototypeOf(_lumen_document_fragment_members, DocumentFragment.prototype);
 // DOM §4.4: a fragment's (and so a ShadowRoot's) `nodeType`/`nodeName`. The
 // arena-backed ShadowRoot wrapper has no own copy of either, and since BUG-1122
 // it would otherwise inherit `Node.prototype`'s element-oriented getters and
@@ -10312,8 +10434,7 @@ function _lumen_install_node_members(proto, descs, names) {
 // and document are object literals whose own methods the shim itself calls
 // before their prototype chains exist, so they keep them until the end of
 // `web_api_shim_tail_b.js`, which moves them here. Any object with an
-// `__nid__` is a node, whether or not it inherits `Node.prototype` (the plain
-// `new DocumentFragment()` literal does not). A `null`/`undefined` receiver
+// `__nid__` is a node, whether or not it inherits `Node.prototype`. A `null`/`undefined` receiver
 // is the global object (WebIDL §3.7.5.1 operation steps).
 var _lumen_window_et = null, _lumen_document_et = null;
 Object.setPrototypeOf(Node.prototype, EventTarget.prototype);
@@ -10335,8 +10456,8 @@ _lumen_et_platform_impl = function(target, name) {
 // `ShadowRoot`'s own attributes did not exist — `sr.firstElementChild` was
 // `undefined` and Lit-based pages that read these failed. The element's
 // descriptors are reused as-is: each reads only `this.__nid__`, which a shadow
-// root has. The plain `new DocumentFragment()` literal does not inherit
-// `DocumentFragment.prototype`, so this reaches shadow roots only.
+// root has; a plain fragment (BUG-1239: it inherits `DocumentFragment.prototype`
+// too) gets them as well.
 _lumen_install_node_members(DocumentFragment.prototype, _LUMEN_WRAPPER_DESCRIPTORS,
     ['firstElementChild', 'lastElementChild', 'childElementCount', 'moveBefore']);
 
@@ -13721,7 +13842,10 @@ var document = {
             if (options && options.customElements instanceof CustomElementRegistry) {
                 _lumen_ce_scope_by_nid[clone_nid] = { registry: options.customElements._registry, pending: options.customElements._pending };
             }
-            return _lumen_make_element(clone_nid);
+            // BUG-1239: a `<template>.content` clone is a DocumentFragment —
+            // `_lumen_make_element` would mint an Element for it, and the
+            // fragment would then be inserted as a child, not unpacked.
+            return _lumen_make_node_by_nid(clone_nid);
         }
         // BUG-1107: `node` came from DOMParser()/DOMImplementation — a virtual
         // (non-arena) tree, see `_lumen_materialize_virtual_subtree` above.
@@ -15508,6 +15632,17 @@ var _lumen_ce_failed = {};
 // and the upgrade path (срез 2, `_lumen_ce_upgrade_element`) agree that the
 // node went through its real constructor.
 function _lumen_ce_build_wrapper(nid, ctor) {
+    // BUG-1239: an upgrade is in place (HTML LS §4.13.5) — a wrapper script
+    // already holds (youtube's Polymer `this.$['page-manager']`, taken while
+    // the stamped template was still un-upgraded) must become the custom
+    // element, not be orphaned by a second object for the same node.
+    var existing = _lumen_wrapper_cache_get(nid);
+    if (existing !== undefined && ctor.prototype !== undefined
+        && Object.getPrototypeOf(existing) !== ctor.prototype) {
+        Object.setPrototypeOf(existing, ctor.prototype);
+        _lumen_ce_elements[nid] = existing;
+        return existing;
+    }
     var built = _lumen_build_element(nid, ctor.prototype);
     _lumen_ce_elements[nid] = built;
     return _lumen_wrapper_cache_set(nid, built);
@@ -15700,12 +15835,9 @@ function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
 // makes `HTMLElement`'s constructor (top of this file) consume it instead of
 // minting a new node, and hand back a wrapper built off `entry.ctor.prototype`;
 // `_lumen_ce_build_wrapper` interns it via `_lumen_wrapper_cache_set`,
-// REPLACING whatever wrapper `nid` had (a plain pre-upgrade one, or none).
-// Any JS reference obtained before the upgrade keeps pointing at the
-// pre-upgrade object — the same wrapper-identity limitation every other
-// `_lumen_wrapper_cache_set` call in this file already has (subsystems/js.md,
-// BUG-732 et al.); the reactions below and in `_lumen_ce_maybe_*` always call
-// back on the constructed element, never on such a stale one. A `ctor` that
+// reusing the wrapper `nid` already had (BUG-1239: re-prototyped in place, so
+// a reference obtained before the upgrade stays the same, now custom, object)
+// or building one when there is none. A `ctor` that
 // never calls `super()` (most of the pre-срез-1 test suite still registers a
 // bare `function Foo() {}`) leaves the pushed `nid` unconsumed — harmless,
 // since it is popped unconditionally and the pre-existing wrapper stands in.

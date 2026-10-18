@@ -72,6 +72,8 @@ mod flex;
 use flex::UsedSizeOverride;
 
 mod multicol_abspos;
+mod multicol_break;
+mod multicol_flow;
 mod multicol_fragmentation;
 mod multicol_span;
 use multicol_abspos::lay_out_abs_children;
@@ -241,6 +243,7 @@ mod grid_vertical;
 mod table_height;
 mod table_trampoline;
 mod table_valign;
+mod table_vertical;
 mod multicol_trampoline;
 mod vertical_trampoline;
 mod vertical_row;

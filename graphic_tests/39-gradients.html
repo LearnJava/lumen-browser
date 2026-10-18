@@ -26,6 +26,14 @@
   .rep-linear   { width: 180px; height: 80px; background: repeating-linear-gradient(45deg, #333 0px, #333 10px, #666 10px, #666 20px); }
   .rep-radial   { width: 180px; height: 80px; background: repeating-radial-gradient(circle, #fff 0%, #fff 5%, #88c 5%, #88c 10%); }
 
+  /* Legacy -webkit-* gradients (Compat Standard §3) */
+  .wk-left      { width: 180px; height: 80px; background: -webkit-linear-gradient(left, #e63946, #457b9d); }
+  .wk-angle     { width: 180px; height: 80px; background: -webkit-linear-gradient(45deg, #6a0dad, #ff6b6b); }
+  .wk-corner    { width: 180px; height: 80px; background: -webkit-linear-gradient(top left, #2ec4b6, #ff9f1c); }
+  .wk-old       { width: 180px; height: 80px; background: -webkit-gradient(linear, left top, left bottom, from(#f72585), color-stop(0.5, #7209b7), to(#4cc9f0)); }
+  .wk-radial    { width: 180px; height: 80px; background: -webkit-radial-gradient(30% 50%, circle closest-side, #fff9c4, #f06292); }
+  .wk-rep       { width: 180px; height: 80px; background: -webkit-repeating-linear-gradient(left, #333 0px, #333 10px, #666 10px, #666 20px); }
+
   /* Stacked / overlay */
   .stacked      { width: 180px; height: 80px; background: linear-gradient(to right, #0f2027, #203a43, #2c5364); }
 </style>
@@ -49,6 +57,16 @@
     <div class="rep-linear"></div>
     <div class="rep-radial"></div>
     <div class="stacked"></div>
+  </div>
+  <div class="row">
+    <div class="wk-left"></div>
+    <div class="wk-angle"></div>
+    <div class="wk-corner"></div>
+    <div class="wk-old"></div>
+    <div class="wk-radial"></div>
+  </div>
+  <div class="row">
+    <div class="wk-rep"></div>
   </div>
 </div>
 </body>

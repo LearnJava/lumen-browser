@@ -42,6 +42,11 @@ impl Lumen {
     /// проверка в одном из них молча не покрывала бы второй. Страница платит
     /// за смену `:focus` тем же самым (`relayout_chrome` в теле ниже).
     pub(crate) fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
+        // BUG-1624: a click on the page takes focus away from the address bar
+        // (as in every browser: the omnibox blurs and reverts). Left open it
+        // kept swallowing keys first (`handle_key`) while the page field the
+        // click focused painted its own caret — two carets, typing in the URL.
+        self.address_bar.close();
         let before = self.focused_frame;
         self.handle_click_at_inner(x_css, y_css);
         if self.focused_frame != before {

@@ -39,7 +39,8 @@ use crate::style::{
     ua_font_family,
     ua_font_size_factor, ua_font_style, ua_font_weight, ua_link_color, ua_vertical_align,
     parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
-    ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, WebkitBoxOrient,
+    AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
+    WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack,
     FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
     SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
@@ -1401,11 +1402,42 @@ pub(crate) fn compute_style_shareable(
     {
         style.legacy_box_display = Some(style.display);
         style.display = if style.display == Display::WebkitBox { Display::Flex } else { Display::InlineFlex };
-        style.flex_direction = if style.box_orient == WebkitBoxOrient::Vertical {
-            FlexDirection::Column
-        } else {
-            FlexDirection::Row
+        // `-webkit-box-direction: reverse` flips the main axis; `-webkit-box-pack` and
+        // `-webkit-box-align` replace `justify-content` / `align-items`, and `flex-wrap` is
+        // ignored (WPT `compat/webkit-box-ignores-flex-wrap.tentative`).
+        let vertical = style.box_orient == WebkitBoxOrient::Vertical;
+        let reverse = style.box_direction == WebkitBoxDirection::Reverse;
+        style.flex_direction = match (vertical, reverse) {
+            (false, false) => FlexDirection::Row,
+            (false, true) => FlexDirection::RowReverse,
+            (true, false) => FlexDirection::Column,
+            (true, true) => FlexDirection::ColumnReverse,
         };
+        style.flex_wrap = FlexWrap::Nowrap;
+        style.justify_content = match style.box_pack {
+            WebkitBoxPack::Start => AlignValue::Start,
+            WebkitBoxPack::Center => AlignValue::Center,
+            WebkitBoxPack::End => AlignValue::End,
+            WebkitBoxPack::Justify => AlignValue::SpaceBetween,
+        };
+        style.align_items = match style.box_align {
+            WebkitBoxAlign::Start => AlignValue::Start,
+            WebkitBoxAlign::Center => AlignValue::Center,
+            WebkitBoxAlign::End => AlignValue::End,
+            WebkitBoxAlign::Baseline => AlignValue::Baseline,
+            WebkitBoxAlign::Stretch => AlignValue::Stretch,
+        };
+    }
+
+    // WHATWG Compat §2.1 — an item of a legacy box takes `flex-grow`/`flex-shrink` from
+    // `-webkit-box-flex` (initial 0: it neither grows nor shrinks) and its order from
+    // `-webkit-box-ordinal-group` (a non-initial group wins over `order`).
+    if inherited.legacy_box_display.is_some() {
+        style.flex_grow = style.box_flex;
+        style.flex_shrink = style.box_flex;
+        if style.box_ordinal_group != 1 {
+            style.order = i32::try_from(style.box_ordinal_group - 1).unwrap_or(i32::MAX);
+        }
     }
 
     // CSS Align L3 §vertical-align / Flexbox §4, Grid §6 — an in-flow child of a

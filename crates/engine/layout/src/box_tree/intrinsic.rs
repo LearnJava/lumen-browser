@@ -326,7 +326,10 @@ pub(super) fn grid_col_intrinsic_sum(
     if n_cols >= 1 && !b.children.iter().any(contributes_to_intrinsic_width) {
         return None;
     }
-    if n_cols <= 1 || matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
+    // A lone column is as wide as its widest item — except a flexible one with a factor below
+    // one, which takes only that share of it (§11.7.1: `minmax(0, .5fr)` of a 200px item is 100px).
+    let lone_fraction = n_cols == 1 && template[0].flex_factor().is_some_and(|f| f < 1.0);
+    if (n_cols <= 1 && !lone_fraction) || matches!(template.first(), Some(GridTrackSize::Subgrid) | Some(GridTrackSize::Masonry)) {
         return None;
     }
 
@@ -362,7 +365,31 @@ pub(super) fn grid_col_intrinsic_sum(
         col_widths[col] = col_widths[col].max(per_item(c) + ml + mr);
     }
 
+    expand_flexible_columns(template, s.font_size, viewport, &mut col_widths);
     Some(col_widths.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
+}
+
+/// CSS Grid L1 §11.7.1 «Expand Flexible Tracks» against an infinite width: the size of an `fr` is
+/// the largest of every flexible track's content width divided by its factor (when above one), and
+/// each flexible column becomes `max(its minimum, factor × that size)`. So `minmax(0, .5fr)` over
+/// a 200px item is 100px wide, and `1fr 2fr` over two 100px items is 100px + 200px, not 100 + 100.
+/// `widths` holds the columns' max-content widths on entry.
+fn expand_flexible_columns(template: &[GridTrackSize], em: f32, viewport: Size, widths: &mut [f32]) {
+    let flex: Vec<Option<f32>> = template.iter().map(GridTrackSize::flex_factor).collect();
+    let min_of = |t: &GridTrackSize| match t {
+        GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, 0.0, viewport).unwrap_or(0.0).max(0.0),
+        _ => 0.0,
+    };
+    let fr = flex
+        .iter()
+        .zip(widths.iter())
+        .filter_map(|(f, w)| f.map(|f| w / f.max(1.0)))
+        .fold(0.0_f32, f32::max);
+    for ((t, f), w) in template.iter().zip(&flex).zip(widths.iter_mut()) {
+        if let Some(f) = f {
+            *w = (f * fr).max(min_of(t));
+        }
+    }
 }
 
 /// CSS Grid L1 §11.5 / L2 §9 — the column sum of a grid whose items are placed

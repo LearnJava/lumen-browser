@@ -127,7 +127,7 @@ impl Lumen {
         // → `route_eval_js` no-op + `route_query_js` → `None`, как прежний early-`return`).
         for event_type in events {
             let script = format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, {}, false)",
+                "_lumen_dispatch_synth_key({}, '{}', '{}', '{}', {})",
                 node_id, event_type, key, code, platform::keyboard_state::caps_lock_mask(),
             );
             route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
@@ -646,8 +646,8 @@ impl Lumen {
     /// ([`escape_js_string_char`]).
     fn dispatch_injected_key(&mut self, node_id: usize, event_type: &str, key: &str) {
         let script = format!(
-            "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
-            node_id, event_type, key, key,
+            "_lumen_dispatch_synth_key({}, '{}', '{}', '', {})",
+            node_id, event_type, key, platform::keyboard_state::caps_lock_mask(),
         );
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
@@ -659,7 +659,8 @@ impl Lumen {
     /// `key` must already be escaped for a single-quoted JS literal.
     fn injected_keydown_allowed(&self, node_id: usize, key: &str) -> bool {
         let script = format!(
-            "_lumen_dispatch_key_event({node_id}, 'keydown', '{key}', '{key}', false, false, false, false)",
+            "_lumen_dispatch_synth_key({node_id}, 'keydown', '{key}', '', {})",
+            platform::keyboard_state::caps_lock_mask(),
         );
         self.eval_key_script(script)
     }

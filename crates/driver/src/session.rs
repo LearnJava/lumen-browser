@@ -48,6 +48,9 @@ struct SessionState {
     layout_pass_count: u64,
 }
 
+/// Доводка `HttpClient`, собранного сессией (см. [`InProcessSession::set_http_client_hook`]).
+type HttpClientHook = Arc<dyn Fn(lumen_network::HttpClient) -> lumen_network::HttpClient + Send + Sync>;
+
 /// Headless in-process сессия браузера.
 ///
 /// Запускает полный pipeline движка (HTML parse → CSS cascade → layout) без GPU.
@@ -90,6 +93,9 @@ pub struct InProcessSession {
     /// В headless-режиме без JS-движка всегда 0.
     /// Shell-интеграция: вызывать `set_pending_js_tasks()` при изменении очереди.
     pending_js_microtasks: usize,
+    /// Доводка `HttpClient` оболочкой (BUG-1635): прокси из `--proxy`/`--tor` живут
+    /// в профиле shell, драйвер о них не знает. `None` — прямое соединение.
+    http_client_hook: Option<HttpClientHook>,
     /// In-process compositor: two-buffer (pending/active) model for property trees.
     ///
     /// `run_pipeline()` commits new `PropertyTrees` + `BasicLayerTree` after each
@@ -148,6 +154,7 @@ impl InProcessSession {
             isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            http_client_hook: None,
             compositor: InProcessCompositor::new(),
             #[cfg(feature = "v8")]
             js_runtime: None,
@@ -170,6 +177,7 @@ impl InProcessSession {
             isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            http_client_hook: None,
             compositor: InProcessCompositor::new(),
             #[cfg(feature = "v8")]
             js_runtime: None,
@@ -208,6 +216,7 @@ impl InProcessSession {
             isolation: Some(OriginIsolationContext::new(origin)),
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            http_client_hook: None,
             compositor: InProcessCompositor::new(),
             #[cfg(feature = "v8")]
             js_runtime: None,
@@ -241,6 +250,19 @@ impl InProcessSession {
         self.pending_js_microtasks = count;
     }
 
+    /// Задать доводку `HttpClient` сессии (BUG-1635).
+    ///
+    /// Хук вызывается над клиентом, который сессия собирает на каждый
+    /// `http(s)`-`navigate`, после fingerprint-профиля и HSTS. Нужен оболочке,
+    /// чтобы headless-режимы `--mcp`/`--mcp-port` ходили через `--proxy`/`--tor`
+    /// из своего профиля, как это делает окно: драйвер конфигурации shell не знает.
+    pub fn set_http_client_hook(
+        &mut self,
+        hook: impl Fn(lumen_network::HttpClient) -> lumen_network::HttpClient + Send + Sync + 'static,
+    ) {
+        self.http_client_hook = Some(Arc::new(hook));
+    }
+
     /// Build an [`HttpClient`] configured with this session's per-context
     /// fingerprint profile (task 9F.2).
     ///
@@ -260,6 +282,9 @@ impl InProcessSession {
             .with_content_decoder(Arc::new(lumen_network::DeflateContentDecoder::new()))
             .with_fingerprint_profile(profile.to_http_profile());
         client = crate::types::with_shared_hsts(client, profile);
+        if let Some(hook) = &self.http_client_hook {
+            client = hook(client);
+        }
         client
     }
 
@@ -800,7 +825,7 @@ impl InProcessSession {
         })?;
         let dispatch_key = |event_type: &str, key: &str| -> Result<()> {
             let script = format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                "_lumen_dispatch_synth_key({}, '{}', '{}', '{}', 0)",
                 node.index(), event_type, key, key,
             );
             rt.eval(&script)

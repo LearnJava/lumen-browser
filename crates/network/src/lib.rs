@@ -1494,24 +1494,28 @@ fn connect_inner(
 /// handed to [`tls::verifier::LumenVerifier::verify_server_cert`], and
 /// per that module's docs a shared, cached `ClientConfig`/verifier must stay
 /// side-effect-free per call (a "last seen" `Mutex<Option<_>>` slot would
-/// race across concurrent connections on the same profile) — so the real
-/// verdict genuinely cannot be read back here yet. `Unknown` is always a
-/// safe under-statement: a `Revoked` staple already hard-fails the
-/// handshake before this function runs, so the only verdicts reachable at
-/// this point are "good" and "no staple", and this collapses both to the
-/// same "no revocation info" line rather than guessing. Threading the real
-/// verdict through is left to a follow-up slice.
+/// race across concurrent connections on the same profile). The verifier
+/// therefore leaves the verdict in a host-keyed table
+/// ([`tls::ocsp::record_stapled`]) and this reads it back. A resumed session
+/// skips certificate verification, so a host with no entry keeps the previous
+/// full handshake's line when there is one and otherwise reports "not
+/// checked" rather than guessing. A `Revoked` staple hard-fails the handshake
+/// before this function runs.
 fn cert_info_from_completed_handshake(conn: &ClientConnection, host: &str) -> Option<tls::CertInfo> {
     let chain = conn.peer_certificates()?;
     let cert_der = chain.first()?;
     let tls_version = protocol_version_label(conn.protocol_version());
     let ct_verdict = tls::ct::evaluate_ct(cert_der.as_ref(), chain.get(1).map(AsRef::as_ref));
+    let stapled = tls::ocsp::stapled_verdict(host);
     let mut info = tls::CertInfo::from_peer_cert(
         cert_der.as_ref(),
         &tls_version,
-        tls::ocsp::OcspVerdict::Unknown,
+        stapled.unwrap_or(tls::ocsp::OcspVerdict::Unknown),
         ct_verdict,
     );
+    if stapled.is_none() {
+        info.revocation_status = String::from("Not checked (no certificate verification in this session)");
+    }
     info.local_root = tls::os_roots::local_root_name(chain).unwrap_or_default();
     // COMPAT-TRUST-NUC: a chain issued by the national CA that got through only because the user
     // consented for this host and Certificate Transparency vouched for it.

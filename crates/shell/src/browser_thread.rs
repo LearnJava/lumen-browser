@@ -159,12 +159,7 @@ impl Lumen {
                 ControlFlow::Poll => rx.try_recv().ok(),
             };
             if let Some(m) = first {
-                self.dispatch_ui_msg(h, m);
-                while !h.exit_requested()
-                    && let Ok(m) = rx.try_recv()
-                {
-                    self.dispatch_ui_msg(h, m);
-                }
+                drain_batch(rx, m, MAX_BATCH, || h.exit_requested(), |m| self.dispatch_ui_msg(h, m));
             }
             if h.exit_requested() {
                 break;
@@ -176,6 +171,36 @@ impl Lumen {
             }
         }
     }
+}
+
+/// Сколько сообщений поток браузера разбирает подряд, прежде чем дойти до
+/// `on_about_to_wait`.
+const MAX_BATCH: usize = 64;
+
+/// Разобрать `first` и всё, что уже лежит в канале, но не больше `limit`
+/// сообщений подряд. winit зовёт `about_to_wait` после каждой пачки событий,
+/// а запрос перерисовки, сделанный обработчиком, попадает уже в следующую.
+/// Без предела непрерывный поток `RedrawRequested` (SMIL-анимация, каждый
+/// обработчик просит следующий кадр) никогда не опустошил бы канал, и
+/// `about_to_wait` — а с ним команды автоматизации, сроки `wait`/`eval` и
+/// таймеры — не выполнялся бы вовсе (BUG-1633).
+fn drain_batch<T>(
+    rx: &Receiver<T>,
+    first: T,
+    limit: usize,
+    stop: impl Fn() -> bool,
+    mut handle: impl FnMut(T),
+) -> usize {
+    handle(first);
+    let mut handled = 1;
+    while handled < limit
+        && !stop()
+        && let Ok(m) = rx.try_recv()
+    {
+        handle(m);
+        handled += 1;
+    }
+    handled
 }
 
 /// Главный поток: только пересылка. Любое событие, которому нужен
@@ -233,5 +258,35 @@ pub(crate) struct ExitMainOnDrop(pub(crate) EventLoopProxy<LoadEvent>);
 impl Drop for ExitMainOnDrop {
     fn drop(&mut self) {
         let _ = self.0.send_event(LoadEvent::MainExit);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_batch_stops_at_limit_and_leaves_rest_queued() {
+        let (tx, rx) = mpsc::channel();
+        for i in 1..=10 {
+            tx.send(i).unwrap();
+        }
+        let mut seen = Vec::new();
+        let n = drain_batch(&rx, 0, 4, || false, |m| seen.push(m));
+        assert_eq!(n, 4);
+        assert_eq!(seen, [0, 1, 2, 3]);
+        assert_eq!(rx.try_recv(), Ok(4));
+    }
+
+    #[test]
+    fn drain_batch_empties_short_queue_and_honours_stop() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(1).unwrap();
+        let mut seen = Vec::new();
+        assert_eq!(drain_batch(&rx, 0, 64, || false, |m| seen.push(m)), 2);
+        tx.send(2).unwrap();
+        assert_eq!(drain_batch(&rx, 9, 64, || true, |m| seen.push(m)), 1);
+        assert_eq!(seen, [0, 1, 9]);
+        assert_eq!(rx.try_recv(), Ok(2));
     }
 }
