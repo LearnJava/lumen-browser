@@ -163,7 +163,9 @@ fn step_child(
 
     // CSS 2.1 §8.3.1: a child of the same writing mode is a normal in-flow block,
     // its margins collapse with its own children's; an orthogonal one is not.
-    let same_mode = frame.b.children[i].style.writing_mode == frame.b.style.writing_mode;
+    // The root element is never one (its margins stay inside it).
+    let same_mode = frame.b.children[i].style.writing_mode == frame.b.style.writing_mode
+        && !frame.init.is_document;
     let child = &mut frame.b.children[i];
     match dispatch_box(
         child, content_x_left, content_y, remaining_block, Some(content_inline),
@@ -264,12 +266,19 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     // CSS 2.1 §8.3.1: an empty block's margins collapse through it, joining those
     // already pending and the next sibling's.
     let through = collapses_through(&frame.b.children[i]);
+    // Where a through box itself sits: after the margins pending before it and its
+    // own block-start one (its block-end margin adjoins what follows, not it).
+    let mut through_at = 0.0;
+    // The first child of a box whose margin it collapses with: the whole chain
+    // already sits in the parent's margin, nothing is left pending after it.
+    let absorbed = frame.init.collapses_start && !frame.init.seen_inflow;
     if through {
         let m_start = collapsed_margin(
             &frame.b.children[i], true, is_rtl, content_inline, viewport, &mut caches.start,
         );
-        let m_start = if frame.init.collapses_start && !frame.init.seen_inflow { 0.0 } else { m_start };
-        gap = adjoin(adjoin(frame.init.pending_end_margin, m_start), m_end);
+        let m_start = if absorbed { 0.0 } else { m_start };
+        through_at = adjoin(frame.init.pending_end_margin, m_start);
+        gap = if absorbed { through_at } else { adjoin(through_at, m_end) };
     }
     frame.init.cursor_block_consumed += if through { 0.0 } else { gap };
     // CSS 2.1 §9.5.2: clearance — the border edge sits at the larger of its
@@ -277,7 +286,7 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     if let Some(floor) = frame.init.pending_clear.take() {
         frame.init.cursor_block_consumed = frame.init.cursor_block_consumed.max(floor);
     }
-    let cursor_block_consumed = frame.init.cursor_block_consumed + if through { gap } else { 0.0 };
+    let cursor_block_consumed = frame.init.cursor_block_consumed + if through { through_at } else { 0.0 };
     let child = &mut frame.b.children[i];
     // `position: relative` was applied by the child's own layout; re-placing the
     // child on the block axis must carry the offset, the cursor does not (§9.4.3).

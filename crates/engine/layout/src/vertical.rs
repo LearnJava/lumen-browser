@@ -110,6 +110,10 @@ pub(crate) struct VerticalInit {
     /// establishes a block formatting context (or is an independent flow: the
     /// root, an orthogonal child, a flex/grid item).
     pub(crate) encloses_floats: bool,
+    /// `b` is the document box: its first child is the root element, whose margins
+    /// do not collapse with its descendants' (CSS 2.1 §8.3.1) — mirrors the
+    /// `child_is_root_element` rule of the horizontal flow.
+    pub(crate) is_document: bool,
 }
 
 /// Precomputes the loop-entry state for laying out a Block/FlowRoot box in
@@ -344,6 +348,7 @@ pub(crate) fn build_vertical_init(
             && crate::box_tree::escapes_end(b, is_rtl, cb_for_percents, viewport),
         seen_inflow: false,
         encloses_floats: !in_block_flow || crate::box_tree::establishes_bfc(b),
+        is_document: b.node.index() == 0,
     }
 }
 
