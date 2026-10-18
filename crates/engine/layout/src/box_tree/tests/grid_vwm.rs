@@ -189,3 +189,65 @@ fn min_width_keeps_rows_at_the_right_edge() {
     assert_rect(r[1], 250.0, 0.0, 50.0, 40.0);
     assert_rect(r[2], 200.0, 0.0, 50.0, 40.0);
 }
+
+// ── GRID-VWM-2: строки `minmax()` растут по содержимому items (Grid L1 §11.5–11.6) ──
+
+/// Высота контейнера не задана: `minmax(auto, 0px)` не меньше вклада item'а, `minmax(10px, auto)`
+/// растёт до item'а, `minmax(10px, 50px)` доходит до предела роста.
+#[test]
+fn minmax_rows_grow_by_content_in_horizontal_grid() {
+    let r = rects(
+        THREE,
+        "#g{display:grid;grid-template-rows:minmax(auto,0px) minmax(10px,auto) minmax(10px,50px)}\
+         #a{height:60px}#b{height:30px}#c{height:5px}",
+        &["g", "a", "b", "c"],
+    );
+    assert_eq!(r[0].height, 60.0 + 30.0 + 50.0, "{:?}", r[0]);
+    assert_eq!((r[1].y, r[2].y, r[3].y), (0.0, 60.0, 90.0));
+}
+
+/// Определённая высота: свободное место делится между `minmax(_, <length>)`-строками поровну
+/// до их пределов, остаток отдаёт `fr`.
+#[test]
+fn minmax_rows_share_free_space_up_to_their_limits() {
+    let r = rects(
+        THREE,
+        "#g{display:grid;height:200px;align-content:start;\
+         grid-template-rows:minmax(10px,30px) minmax(10px,100px) 1fr}",
+        &["a", "b", "c"],
+    );
+    // Свободно 200 − 30 = 170: первой строке хватает 20 до предела 30, остальное — второй.
+    assert_eq!(r[0].height, 30.0);
+    assert_eq!(r[1].height, 100.0);
+    assert_eq!(r[2].height, 70.0);
+}
+
+/// Вертикальная сетка: строки — физические столбцы, их ширина растёт по ширине item'а.
+#[test]
+fn minmax_rows_grow_by_content_in_vertical_grid() {
+    let r = rects(
+        r#"<div id="g"><div id="a"></div></div>"#,
+        "#g{display:grid;writing-mode:vertical-lr;grid-template-rows:minmax(auto,0px);height:100px}\
+         #a{width:60px}",
+        &["g", "a"],
+    );
+    assert_eq!(r[0].width, 60.0, "{:?}", r[0]);
+    assert_eq!(r[1].width, 60.0, "{:?}", r[1]);
+}
+
+/// `aspect-ratio` + определённая высота + не растягиваемый `justify-self`: ширина из пропорции
+/// (WPT `grid-item-aspect-ratio-justify-self-001`), у `content-box` — с учётом рамки и полей.
+#[test]
+fn aspect_ratio_gives_width_to_a_non_stretched_item() {
+    let r = rects(
+        r#"<div id="g"><div id="a"></div></div><div id="h"><div id="b"></div></div>"#,
+        "#g,#h{display:grid;height:32px;width:24px}\
+         #a{height:100%;aspect-ratio:1/2;justify-self:start;box-sizing:border-box}\
+         #b{height:32px;aspect-ratio:1/2;justify-self:end;padding:2px;border:1px solid}",
+        &["a", "b"],
+    );
+    assert_eq!((r[0].width, r[0].height), (16.0, 32.0), "{:?}", r[0]);
+    // content-box: высота 32 + 6 рамки/полей, содержимое 32 → ширина 16 + 6.
+    assert_eq!((r[1].width, r[1].height), (22.0, 38.0), "{:?}", r[1]);
+    assert_eq!(r[1].x, 24.0 - 22.0, "{:?}", r[1]);
+}

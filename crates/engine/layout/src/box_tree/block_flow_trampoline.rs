@@ -545,7 +545,7 @@ fn step_child(
     // block. The root element is not one: its containing block is the ICB itself.
     // A vertical flex container sizes itself from its items (`flex_trampoline`).
     let children_available_height = if children_available_height.is_none() && !child_is_root_element && is_block {
-        super::intrinsic::orthogonal_fit_content_height(child, eff_w, measurer, viewport)
+        super::intrinsic::orthogonal_fit_content_height(child, eff_w, measurer, viewport, true)
     } else {
         children_available_height
     };

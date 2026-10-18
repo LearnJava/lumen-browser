@@ -267,7 +267,7 @@ impl GridInit {
         let (x, y) = self.probe_origin(c0);
         let offer = self.inline_offer(item, cell_in, viewport, measurer);
         match self.vertical {
-            None => (x, y, offer, self.orthogonal_fit_height(item, cell_in, None, viewport, measurer)),
+            None => (x, y, offer, self.orthogonal_fit_height(item, cell_in, None, viewport, measurer, true)),
             Some(g) => {
                 // Элемент ортогонального (горизонтального) режима: физическая ширина — его
                 // inline-размер, и размер строки неизвестен, пока строки не разрешены, поэтому
@@ -297,12 +297,25 @@ impl GridInit {
     ) -> (f32, f32, f32, Option<f32>) {
         let offer = self.inline_offer(item, cell_in, viewport, measurer);
         match self.vertical {
-            None => (
-                origin.0,
-                origin.1,
-                offer,
-                self.orthogonal_fit_height(item, cell_in, cell_block, viewport, measurer).or(cell_block),
-            ),
+            None => {
+                // Ортогональному item'у отдают всю область, а его поля по inline-оси (физическая
+                // высота) алгоритм сетки вычитает сам — в `build_vertical_init` их никто не снимает.
+                let cell_block = cell_block.map(|c| {
+                    if item.style.writing_mode == WritingMode::HorizontalTb {
+                        return c;
+                    }
+                    let em = item.style.font_size;
+                    let m = item.style.margin_top.resolve_or_zero(em, self.content_width, viewport)
+                        + item.style.margin_bottom.resolve_or_zero(em, self.content_width, viewport);
+                    (c - m).max(0.0)
+                });
+                (
+                    origin.0,
+                    origin.1,
+                    offer,
+                    self.orthogonal_fit_height(item, cell_in, cell_block, viewport, measurer, false).or(cell_block),
+                )
+            }
             Some(g) => (origin.0, origin.1, cell_block.unwrap_or(g.block_avail), Some(offer)),
         }
     }
@@ -311,7 +324,8 @@ impl GridInit {
     /// выравниванием не `stretch` (baseline, `start`, `center`…) обтягивает содержимое по своему
     /// inline-размеру — физической высоте — вместо того чтобы занять всю область (Grid L1 §11.2,
     /// Writing Modes L3 §7.3.1; WPT `grid-align-baseline-003`). `cell_block` ограничивает
-    /// результат. `None` — item не такой.
+    /// результат. `None` — item не такой. При замере (`probe`) растягиваемый item тоже обтягивает
+    /// содержимое: его вклад в размер строки — inline-размер по содержимому, а не вся область.
     fn orthogonal_fit_height(
         &self,
         item: &LayoutBox,
@@ -319,11 +333,12 @@ impl GridInit {
         cell_block: Option<f32>,
         viewport: Size,
         measurer: Option<&dyn TextMeasurer>,
+        probe: bool,
     ) -> Option<f32> {
-        if self.vertical.is_some() || is_stretch(super::baseline::resolved_align(&item.style, &self.s)) {
+        if self.vertical.is_some() || (!probe && is_stretch(super::baseline::resolved_align(&item.style, &self.s))) {
             return None;
         }
-        let fit = super::intrinsic::orthogonal_fit_content_height(item, cell_in, measurer, viewport)?;
+        let fit = super::intrinsic::orthogonal_fit_content_height(item, cell_in, measurer, viewport, false)?;
         Some(cell_block.map_or(fit, |c| fit.min(c)))
     }
 

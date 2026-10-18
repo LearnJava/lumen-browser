@@ -29,11 +29,15 @@ fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasur
 /// initial containing block. `None` — `child` is not such a box (horizontal,
 /// authored `height`, not a plain block, or a flex container, which sizes
 /// itself from its items). `eff_w` is the base of the child's percentage margins.
+/// `add_margins`: the caller lays the child out in block flow, where the room it is
+/// given has the margins taken off again; a flex/grid algorithm hands the whole room
+/// to the box (`build_vertical_init`'s `in_block_flow == false`), so it asks for none.
 pub(crate) fn orthogonal_fit_content_height(
     child: &LayoutBox,
     eff_w: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
+    add_margins: bool,
 ) -> Option<f32> {
     if matches!(child.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         || child.style.height.is_some()
@@ -45,8 +49,12 @@ pub(crate) fn orthogonal_fit_content_height(
     // `max_content_outer_height` leaves out the box's own inline-axis margins,
     // which `build_vertical_init` takes off the room it is given.
     let cem = child.style.font_size;
-    let m_v = child.style.margin_top.resolve_or_zero(cem, eff_w, viewport)
-        + child.style.margin_bottom.resolve_or_zero(cem, eff_w, viewport);
+    let m_v = if add_margins {
+        child.style.margin_top.resolve_or_zero(cem, eff_w, viewport)
+            + child.style.margin_bottom.resolve_or_zero(cem, eff_w, viewport)
+    } else {
+        0.0
+    };
     Some(viewport.height.max(0.0).min(max_content_outer_height(child, measurer, viewport) + m_v))
 }
 
