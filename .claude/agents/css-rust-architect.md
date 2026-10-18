@@ -56,7 +56,7 @@ Always check: Does the spec define **initial value**? **Inherited or not**? **Co
 - No `panic!` / `unwrap()` in production code
 - `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants
 - Every new dependency needs a justification comment in the commit body
-- `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit
+- `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before the closing commit (a WIP commit needs `cargo check` only)
 
 ### Graphic Tests Rule
 When implementing a CSS property, **in the same commit**:

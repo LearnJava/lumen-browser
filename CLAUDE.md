@@ -32,12 +32,12 @@ Protocol — [`docs/git-workflow.md`](docs/git-workflow.md). Closing a task — 
 1. `git pull -q origin main` first, before reading STATUS files or branching.
 2. "You are developer N" → continue your existing `p<N>-…` branch if there is one, else take the **first** line of `STATUS-PN.md`. Strictly top-down: the order encodes dependencies. If line 1 cannot start, say why and ask.
 3. Take the task: `cd "$(bash scripts/task-claim.sh <N> <task-id> | tail -1)"` — fetches origin, refuses if any unmerged branch carries the task id, occupies the pool slot and pushes the branch. Only a branch **on origin** reserves.
-4. Every commit: gate → commit → `merge --no-ff` into `main` → push. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify` (also enforced by `.claude/settings.json`). CI is not awaited — watch `main` after the push.
+4. Closing commit: gate → commit → `merge --no-ff` into `main` → push; a WIP commit (task unfinished) goes to the task branch only, `cargo check` instead of the gate. Never commit on `main`; no force-push, history rewrite, `git config`, `--no-verify` (also enforced by `.claude/settings.json`). CI is not awaited — watch `main` after the push.
 5. Commit message in Russian, subject under 80 chars, body says *why*. Stage explicit paths, never `git add -A`.
 
 ## Gates
 
-- Before every commit: `cargo clippy -p <crate> --all-targets -- -D warnings`. Lints live in `[workspace.lints]`, rules in [`docs/conventions.md`](docs/conventions.md); a new crate needs `[lints] workspace = true`.
+- Gate once, before the closing commit (not WIP): `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests; while iterating `cargo check` only, `dev-release` only for a binary you need ([`docs/commands.md`](docs/commands.md) §Build cost). Lints live in `[workspace.lints]`, rules in [`docs/conventions.md`](docs/conventions.md); a new crate needs `[lints] workspace = true`.
 - Anything that can move pixels → full `python graphic_tests/run.py --continue-on-fail` and regenerated goldens **in the same commit** ([`docs/graphic-tests.md`](docs/graphic-tests.md)). Anything else → `scripts/scoped-test.sh` + `python graphic_tests/dump_golden.py`.
 - A new dependency needs `**Why this dependency:** <permanent/provisional, trait-anchor, graduation criterion>` in the commit body ([ADR-027](docs/decisions/ADR-027-own-vs-vendored-boundary.md)).
 - Live real-site testing runs `--maximized` with the ad-block off (`LUMEN_NO_ADBLOCK=1`) — [`docs/automation.md`](docs/automation.md) §Flags.
