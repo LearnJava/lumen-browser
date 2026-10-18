@@ -371,12 +371,16 @@ pub(in crate::style) fn parse_background_size_value(s: &str, em_basis: f32, view
 /// Возвращает `(BackgroundLayer, Option<CssColor>)` — цвет есть только
 /// у последнего слоя, но мы не знаем последний ли этот слой, поэтому
 /// caller сам решает, использовать ли цвет.
+///
+/// `None` — в слое есть токен, не входящий в грамматику `<bg-layer>` (например
+/// `-o-linear-gradient(…)` или `ff4444` без `#`): по CSS Syntax такое объявление
+/// отбрасывается целиком, а не применяется «частично».
 pub(in crate::style) fn parse_single_bg_layer(
     layer_str: &str,
     em_basis: f32,
     viewport: Size,
     is_quirks: bool,
-) -> (BackgroundLayer, Option<CssColor>) {
+) -> Option<(BackgroundLayer, Option<CssColor>)> {
     let mut layer = BackgroundLayer::default();
     let mut color: Option<CssColor> = None;
     let tokens = tokenize_bg_layer(layer_str);
@@ -530,10 +534,10 @@ pub(in crate::style) fn parse_single_bg_layer(
             continue;
         }
 
-        idx += 1; // неизвестный токен — пропустить
+        return None; // неизвестный токен — слой, а с ним декларация, невалидны
     }
 
-    (layer, color)
+    Some((layer, color))
 }
 
 /// CSS Masking L1 §4.9 — раскладывает значения одного mask-longhand-а по
