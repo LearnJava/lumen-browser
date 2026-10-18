@@ -94,10 +94,13 @@ fn line_count(kinds: &[ItemLines]) -> u32 {
 /// to other fragmentation contexts; a multicol container does not force them.) `forced[j]` is
 /// set when item `j` must start a new column; the first item never does.
 pub(super) fn forced_breaks(items: &[&LayoutBox]) -> Vec<bool> {
-    let forces = |v: BreakValue| matches!(v, BreakValue::Column | BreakValue::Always);
+    // A break before the first child of a box (after the last) is a break before (after) the box
+    // itself (Fragmentation L3 §4.1), see `multicol_break`.
     (0..items.len())
         .map(|j| {
-            j > 0 && (forces(items[j - 1].style.break_after) || forces(items[j].style.break_before))
+            j > 0
+                && (super::multicol_break::breaks_after(items[j - 1], 0)
+                    || super::multicol_break::breaks_before(items[j], 0))
         })
         .collect()
 }

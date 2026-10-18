@@ -238,6 +238,34 @@ fn decode_basic_response(bytes: &[u8]) -> Option<OcspVerdict> {
     })
 }
 
+/// Hosts remembered by [`record_stapled`] before the table is reset.
+const MAX_HOSTS: usize = 512;
+
+fn staple_registry() -> &'static std::sync::Mutex<std::collections::HashMap<String, OcspVerdict>> {
+    static REG: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, OcspVerdict>>> =
+        std::sync::OnceLock::new();
+    REG.get_or_init(Default::default)
+}
+
+/// BUG-1618: remember what the last full handshake with `host` stapled. rustls hands the
+/// staple only to the verifier and never back out through `ClientConnection`, so the cert panel
+/// would otherwise have nothing but `Unknown` to show. Keyed by host rather than held in a
+/// per-verifier slot: the verifier is shared by concurrent connections and must stay
+/// side-effect-free per call (see `verifier` module docs).
+pub fn record_stapled(host: &str, verdict: OcspVerdict) {
+    let Ok(mut map) = staple_registry().lock() else { return };
+    if map.len() >= MAX_HOSTS && !map.contains_key(host) {
+        map.clear();
+    }
+    map.insert(host.to_ascii_lowercase(), verdict);
+}
+
+/// The verdict recorded by the last full handshake with `host`; `None` when no handshake
+/// verified it in this process (a resumed session skips certificate verification).
+pub fn stapled_verdict(host: &str) -> Option<OcspVerdict> {
+    staple_registry().lock().ok()?.get(&host.to_ascii_lowercase()).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +440,19 @@ mod tests {
     fn non_sequence_top_level_is_unknown() {
         let not_a_response = tlv(TAG_ENUMERATED, &[0]);
         assert_eq!(parse_stapled_response(&not_a_response), OcspVerdict::Unknown);
+    }
+
+    #[test]
+    fn recorded_verdict_is_read_back_case_insensitively() {
+        assert_eq!(stapled_verdict("never-seen.example"), None);
+        record_stapled("Staple.Example", OcspVerdict::Good);
+        assert_eq!(stapled_verdict("staple.example"), Some(OcspVerdict::Good));
+        record_stapled("staple.example", OcspVerdict::Unknown);
+        assert_eq!(stapled_verdict("STAPLE.example"), Some(OcspVerdict::Unknown));
+        // Same test: the bound resets the shared table, which would race a parallel reader.
+        for i in 0..(MAX_HOSTS * 2) {
+            record_stapled(&format!("bounded{i}.example"), OcspVerdict::Good);
+        }
+        assert!(staple_registry().lock().unwrap().len() <= MAX_HOSTS);
     }
 }

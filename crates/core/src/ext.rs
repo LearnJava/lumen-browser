@@ -5202,6 +5202,45 @@ mod screen_capture_tests {
 
 // ── Audio playback (HTMLAudioElement Phase 1) ────────────────────────────────
 
+/// Ответ `canPlayType` для аудио-MIME по таблице реально собранных декодеров
+/// (rodio: wav, mp3, flac, vorbis — `crates/shell/Cargo.toml`).
+///
+/// Единый источник для `<audio>.canPlayType` и `navigator.mediaCapabilities`
+/// (ADR-034 п.2: feature detection не обещает того, что нечем декодировать).
+/// Параметр `codecs` учитывается: все перечисленные кодеки должны быть
+/// известны контейнеру. `"probably"` — кодеки названы и декодируются, либо
+/// контейнер однозначно задаёт кодек (mpeg, wav, flac); `"maybe"` — контейнер
+/// ogg без `codecs` (внутри может быть Opus); `""` — декодировать нечем.
+#[must_use]
+pub fn audio_can_play_type(mime: &str) -> &'static str {
+    let lower = mime.trim().to_ascii_lowercase();
+    let mut parts = lower.split(';');
+    let base = parts.next().unwrap_or("").trim();
+    let mut codecs: Vec<&str> = Vec::new();
+    for param in parts {
+        if let Some((name, value)) = param.split_once('=')
+            && name.trim() == "codecs"
+        {
+            let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+            codecs.extend(value.split(',').map(str::trim).filter(|c| !c.is_empty()));
+        }
+    }
+    let (known, bare): (&[&str], &'static str) = match base {
+        "audio/mpeg" | "audio/mp3" => (&["mp3"], "probably"),
+        "audio/wav" | "audio/wave" | "audio/x-wav" | "audio/vnd.wave" => (&["1"], "probably"),
+        "audio/flac" | "audio/x-flac" => (&["flac"], "probably"),
+        "audio/ogg" => (&["vorbis"], "maybe"),
+        _ => return "",
+    };
+    if codecs.is_empty() {
+        bare
+    } else if codecs.iter().all(|c| known.contains(c)) {
+        "probably"
+    } else {
+        ""
+    }
+}
+
 /// Platform audio playback backend backing `HTMLAudioElement` (PH3-11).
 ///
 /// Installed process-globally by the shell via `lumen_js::set_audio_playback_provider`
@@ -5266,15 +5305,9 @@ pub trait AudioPlaybackProvider: Send + Sync {
 
     /// Returns `""`, `"maybe"`, or `"probably"` for `canPlayType` per W3C §4.8.11.
     ///
-    /// Default: `"probably"` for widely-supported formats; `"maybe"` for optionally
-    /// supported formats; `""` for everything else.
+    /// Default: [`audio_can_play_type`] — таблица реально собранных декодеров.
     fn can_play_type(&self, mime: &str) -> &'static str {
-        match mime.split(';').next().unwrap_or("").trim() {
-            "audio/mpeg" | "audio/mp3" | "audio/ogg" | "audio/wav"
-            | "audio/wave" | "audio/x-wav" | "audio/flac" | "audio/x-flac" => "probably",
-            "audio/webm" | "audio/aac" | "audio/mp4" => "maybe",
-            _ => "",
-        }
+        audio_can_play_type(mime)
     }
 }
 
@@ -5428,7 +5461,10 @@ mod audio_playback_tests {
     #[test]
     fn default_can_play_type_ogg() {
         let p = NullAudioPlaybackProvider;
-        assert_eq!(p.can_play_type("audio/ogg"), "probably");
+        // Контейнер без codecs: внутри может быть Opus — только "maybe".
+        assert_eq!(p.can_play_type("audio/ogg"), "maybe");
+        assert_eq!(p.can_play_type("audio/ogg; codecs=vorbis"), "probably");
+        assert_eq!(p.can_play_type("audio/ogg; codecs=opus"), "");
     }
 
     #[test]
@@ -5438,9 +5474,13 @@ mod audio_playback_tests {
     }
 
     #[test]
-    fn default_can_play_type_webm_maybe() {
+    fn default_can_play_type_undecodable_empty() {
+        // rodio собран только с wav/mp3/flac/vorbis (BUG-1619).
         let p = NullAudioPlaybackProvider;
-        assert_eq!(p.can_play_type("audio/webm"), "maybe");
+        assert_eq!(p.can_play_type("audio/webm"), "");
+        assert_eq!(p.can_play_type("audio/aac"), "");
+        assert_eq!(p.can_play_type("audio/mp4"), "");
+        assert_eq!(p.can_play_type("audio/mp4; codecs=\"mp4a.40.2\""), "");
     }
 
     #[test]

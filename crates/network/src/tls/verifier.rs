@@ -300,7 +300,10 @@ impl ServerCertVerifier for LumenVerifier {
         // A3: layer the stapled-OCSP revocation check on top of webpki's chain trust.
         // Soft-fail everywhere but `Revoked` — see `ocsp` module docs for the full policy.
         let ocsp_verdict = ocsp::parse_stapled_response(ocsp_response);
-        let bypassed = bypass::is_allowed(&server_name_host(server_name));
+        let host = server_name_host(server_name);
+        // BUG-1618: the cert panel reads the verdict back by host; the connection never sees the staple.
+        ocsp::record_stapled(&host, ocsp_verdict);
+        let bypassed = bypass::is_allowed(&host);
         let mut result = apply_bypass_policy(chain_result, ocsp_verdict, bypassed);
         if let Some(required) = self.ct_min_operators {
             let found = ct::evaluate_ct(end_entity, intermediates.first().map(AsRef::as_ref)).operators();

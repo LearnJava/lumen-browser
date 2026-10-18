@@ -1,6 +1,6 @@
 # BUG-1619 — Медиа-запросы возможностей отвечают «да» без декодера
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** js/core (`crates/js/src/media_capabilities.rs:33`, `core/src/ext.rs:5227`, `audio_element.rs:713`)
 
@@ -26,3 +26,7 @@ navigator.mediaCapabilities.decodingInfo/encodingInfo на любой конфи
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление
+
+Единая таблица декодеров — `lumen_core::ext::audio_can_play_type` (wav/mp3/flac/vorbis, как собран rodio; учитывает `codecs`). Её используют дефолт `AudioPlaybackProvider::can_play_type`, нативный `__lumen_audio_can_play_type` (без провайдера тоже) и новый `__lumen_media_audio_can_play` для `navigator.mediaCapabilities`. JS-дубль в `audio_element.rs` удалён. `decodingInfo`: `media-source`, `keySystemConfiguration` и контейнеры без декодера (аудио — таблица, видео — `__lumen_video_can_play_type`) → `supported:false`; `encodingInfo` → `supported:false` (кодировщиков нет); конфиг без `audio`/`video` или с неизвестным `type` → `TypeError`. Тесты: `crates/core/src/ext.rs` (`default_can_play_type_*`), `crates/js/src/media_capabilities.rs`.
