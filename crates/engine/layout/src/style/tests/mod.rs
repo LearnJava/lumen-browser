@@ -65,6 +65,7 @@
     // авторское имя, поэтому они не сведены к темам будущих ST-3…ST-18, как выше.
     mod anchor_positioning_tests;
     mod block_step_tests;
+    mod compat_alias_tests;
     mod dynamic_range_limit_tests;
     mod gap_rule_tests;
     mod grid_cssom_tests;

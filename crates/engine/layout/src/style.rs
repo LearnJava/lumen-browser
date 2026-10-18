@@ -653,6 +653,8 @@ pub fn canonical_specified_keyword(s: &str, allowed: &[String]) -> Option<String
 
 
 fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
+    // WHATWG Compat §3: `transition-property: -webkit-transform` names `transform`.
+    let prop = lumen_css_parser::canonical_property_name(prop).unwrap_or(prop);
     let lower = prop.to_ascii_lowercase();
     match lower.as_str() {
         "margin" => vec!["margin-top", "margin-right", "margin-bottom", "margin-left"]
