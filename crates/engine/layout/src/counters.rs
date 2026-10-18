@@ -1727,7 +1727,7 @@ fn walk(
     // (measured: 79% of `precompute_counters` on the CC12_KEY cycle, where only
     // a dozen nodes recompute their own style but all 828 were probed).
     let before_resets =
-        if ctx.pseudo_probe { probe_pseudo(doc, sheet, id, &style, viewport, dark_mode, ctx, map, QuoteSlot::Before) } else { Vec::new() };
+        if ctx.pseudo_probe || crate::style::ua_quote_content(doc, id, "before").is_some() { probe_pseudo(doc, sheet, id, &style, viewport, dark_mode, ctx, map, QuoteSlot::Before) } else { Vec::new() };
 
     // BUG-935 срез 92: a *shallow* node (its own match is all the delta put in question) whose
     // style came out different no longer takes its subtree with it. A child's style is a
@@ -1755,7 +1755,7 @@ fn walk(
 
     // ::after quotes come after all children in document order.
     let after_resets =
-        if ctx.pseudo_probe { probe_pseudo(doc, sheet, id, &style, viewport, dark_mode, ctx, map, QuoteSlot::After) } else { Vec::new() };
+        if ctx.pseudo_probe || crate::style::ua_quote_content(doc, id, "after").is_some() { probe_pseudo(doc, sheet, id, &style, viewport, dark_mode, ctx, map, QuoteSlot::After) } else { Vec::new() };
 
     ctx.pop_reset(&after_resets);
     ctx.pop_reset(&before_resets);
