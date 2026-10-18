@@ -156,12 +156,12 @@ pub enum UnicodeBidi {
 /// Разбирает значение `unicode-bidi` (CSS Writing Modes L4 §2.2).
 ///
 /// Ключевые слова CSS ASCII-case-insensitive (CSS Values L4 §2.4).
-/// Legacy-префиксы `-webkit-`/`-moz-` у трёх изолирующих значений принимаются
-/// как алиасы — так их до сих пор пишут в CSS локализованных страниц.
+/// Legacy-префикс `-webkit-` у трёх изолирующих значений принимается
+/// как алиас (Chrome, `-moz-` в нём нет) — так его до сих пор пишут в CSS страниц.
 /// `None` — значение не распознано, объявление игнорируется.
 pub(in crate::style) fn match_unicode_bidi(val: &str) -> Option<UnicodeBidi> {
     let v = val.trim().to_ascii_lowercase();
-    let v = v.strip_prefix("-webkit-").or_else(|| v.strip_prefix("-moz-")).unwrap_or(&v);
+    let v = v.strip_prefix("-webkit-").unwrap_or(&v);
     match v {
         "normal" => Some(UnicodeBidi::Normal),
         "embed" => Some(UnicodeBidi::Embed),

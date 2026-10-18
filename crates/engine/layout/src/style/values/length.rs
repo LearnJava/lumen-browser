@@ -142,8 +142,8 @@ pub enum Length {
     /// Bare `fit-content` = `min(available, max-content)`. With argument =
     /// `min(available, max(min-content, arg))`. Needs layout context.
     FitContent(Option<Box<Length>>),
-    /// CSS Sizing L4 §4.1 — `stretch` (and the legacy `-webkit-fill-available` /
-    /// `-moz-available` aliases): the margin box fills the containing block
+    /// CSS Sizing L4 §4.1 — `stretch` (and the legacy `-webkit-fill-available`
+    /// alias): the margin box fills the containing block
     /// along the axis, so the border box is `containing block − margins`.
     /// Needs layout context; `resolve()` returns `None`, and it is *not*
     /// `is_intrinsic()` — it does not depend on content, so the intrinsic
@@ -248,7 +248,7 @@ pub(in crate::style) fn is_negative_literal(s: &str) -> bool {
 /// - `auto` → `None`
 /// - `min-content` / `max-content` → `Some(Length::MinContent/MaxContent)`
 /// - `fit-content` → `Some(Length::FitContent(None))`
-/// - `stretch` / `-webkit-fill-available` / `-moz-available` → `Some(Length::Stretch)`
+/// - `stretch` / `-webkit-fill-available` → `Some(Length::Stretch)`
 /// - `fit-content(<length>)` → `Some(Length::FitContent(Some(l)))`
 /// - всё остальное → `parse_length_q()`
 pub(in crate::style) fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<Length> {
@@ -263,9 +263,9 @@ pub(in crate::style) fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<
         "max-content" => Some(Length::MaxContent),
         "fit-content" => Some(Length::FitContent(None)),
         // CSS Sizing L4 §4.1: `stretch` fills the containing block minus margins;
-        // Chrome/Safari `-webkit-fill-available` and Firefox `-moz-available`
-        // are the same keyword under legacy names.
-        "stretch" | "-webkit-fill-available" | "-moz-available" => Some(Length::Stretch),
+        // Chrome/Safari `-webkit-fill-available` is the same keyword under
+        // a legacy name (Chrome has no `-moz-available`).
+        "stretch" | "-webkit-fill-available" => Some(Length::Stretch),
         _ if v.starts_with("fit-content(") && v.ends_with(')') => {
             let inner = &v["fit-content(".len()..v.len() - 1];
             Some(Length::FitContent(parse_length_q(inner, is_quirks).map(Box::new)))

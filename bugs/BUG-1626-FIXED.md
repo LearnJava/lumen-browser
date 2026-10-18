@@ -1,6 +1,6 @@
 # BUG-1626 — Lumen с Chrome-UA принимает -moz-appearance и другие -moz-префиксы
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-18 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** css-parser/layout (`crates/engine/css-parser/src/lib.rs:68`, `values/length.rs:268`)
 
@@ -24,3 +24,7 @@
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление (2026-10-18)
+
+Убраны Firefox-префиксы, которых нет в Chrome: `-moz-appearance` — из `SUPPORTED_PROPERTIES` и arm-ов `appearance` (css_wide.rs, apply/paint.rs, cascade.rs); `-moz-available` — из `parse_sizing_length`; `-moz-` у `unicode-bidi` (`match_unicode_bidi`). `-webkit-` алиасы оставлены (Chrome их принимает). Теперь `CSS.supports('-moz-appearance','none')` = false, `@supports (-moz-appearance:none)` не срабатывает. Тест — `moz_prefixes_are_not_supported` (style/tests/compat_alias_tests.rs).

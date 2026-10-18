@@ -1127,7 +1127,7 @@ pub(crate) fn compute_style_shareable(
     let mut appearance_none = false;
     for (_, _, _, _, _, _, decl, _) in &matched {
         match decl.property.as_str() {
-            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+            "appearance" | "-webkit-appearance" => {
                 appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
             }
             _ => {}
@@ -1139,7 +1139,7 @@ pub(crate) fn compute_style_shareable(
     // `matched`), so any such declaration here is the author's.
     let mut appearance_auto = true;
     for (_, _, _, _, _, _, decl, _) in &matched {
-        if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance" | "-moz-appearance") {
+        if matches!(decl.property.as_str(), "appearance" | "-webkit-appearance") {
             appearance_auto = decl.value.trim().eq_ignore_ascii_case("auto");
         }
     }
