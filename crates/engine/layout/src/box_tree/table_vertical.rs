@@ -340,7 +340,9 @@ pub(super) fn dispatch(
     // `border-spacing` физический: первая длина — по x (block-ось), вторая — по y (inline-ось).
     let (sp_b, sp_i) = if collapse { (0.0, 0.0) } else { (s.border_spacing_h, s.border_spacing_v) };
     let rl = matches!(s.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl);
-    let rev = (s.direction == Direction::Rtl) != (s.writing_mode == WritingMode::SidewaysLr);
+    // `text-orientation: upright` принуждает используемое `direction` к `ltr` (Writing Modes L3 §5.1).
+    let rtl = s.direction == Direction::Rtl && s.text_orientation != crate::style::TextOrientation::Upright;
+    let rev = rtl != (s.writing_mode == WritingMode::SidewaysLr);
 
     b.rect.x = start_x + margin_left;
     b.rect.y = start_y + margin_top;
