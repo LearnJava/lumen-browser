@@ -73,6 +73,7 @@ use flex::UsedSizeOverride;
 
 mod multicol_abspos;
 mod multicol_break;
+mod multicol_flow;
 mod multicol_fragmentation;
 mod multicol_span;
 use multicol_abspos::lay_out_abs_children;
