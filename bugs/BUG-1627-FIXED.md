@@ -1,6 +1,6 @@
 # BUG-1627 — WM_GETOBJECT не доходит до моста MSAA, CAPABILITIES обещает обратное
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-12 (координационная сессия: сверка задач по `docs/research/` с кодом на `main`)
 **Область:** a11y/shell (`a11y/platform/windows.rs:159`, `window_mode.rs:34`)
 
@@ -22,3 +22,7 @@ CAPABILITIES.md:269 утверждает, что WM_GETOBJECT отдаёт ко�
 ## Источник
 
 Найдено при сверке задач по исследованиям [`docs/research/`](../docs/research/README.md) (уровень 0 «сайт работает» и UX-мелочи), решение — [ADR-034](../docs/decisions/ADR-034-site-compatibility-strategy.md). Номера строк сняты на `main` 2026-10-12 — перед правкой перепроверить.
+
+## Исправление (2026-10-19)
+
+Предложенный в записи `with_msg_hook` не годится: `WM_GETOBJECT` (как и `WM_SETTINGCHANGE`, см. `shell/platform/os_params/windows.rs`) клиент **посылает** (`SendMessage`), а hook winit видит только очередь `PeekMessageW`. Поэтому перед оконной процедурой winit ставится своя (`SetWindowLongPtrW(GWLP_WNDPROC)`, `crates/shell/src/platform/msaa_wndproc.rs`, вызов из `app/resumed.rs`): `WM_GETOBJECT` с `OBJID_CLIENT` отвечается корнем MSAA, остальное уходит прежней процедуре. Логика корня вынесена из `WinUiaBridge::handle_wm_get_object` в свободную `lumen_a11y::platform::windows::msaa_client_root` (мосту на потоке браузера окно не нужно), отрицательный `LresultFromObject` (HRESULT-ошибка) теперь даёт `None`. Регрессионный тест `sent_wm_get_object_returns_msaa_root`: посланное `WM_GETOBJECT` на окне `STATIC` до установки даёт 0, после — положительный LRESULT; другой object id проваливается дальше. `SetWindowSubclass` не взят: в процессе без манифеста грузится comctl32 v5, где он экспортируется по ординалу.
