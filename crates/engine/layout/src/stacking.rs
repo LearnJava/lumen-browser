@@ -275,7 +275,7 @@ fn is_stacking_will_change(ident: &str) -> bool {
 /// порождал бы фантомный SC. Замечание: реальный DOM-элемент над таким
 /// InlineRun-ом уже создаёт SC.
 pub fn box_can_own_stacking_context(b: &LayoutBox) -> bool {
-    matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::FormControl { .. })
+    matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table | BoxKind::Image { .. } | BoxKind::FormControl { .. })
 }
 
 /// CSS 2.1 Appendix E, step 8: a `position: relative | absolute` element with
