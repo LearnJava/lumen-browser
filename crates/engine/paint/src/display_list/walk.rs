@@ -48,6 +48,7 @@ pub(crate) fn emit_box_self(
             let radii = CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height);
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
+                && !local_bg_color(b)
             {
                 let clip = background_clip_rect(db, background_color_clip(db));
                 if clip.width > 0.0 && clip.height > 0.0 {
@@ -1177,6 +1178,7 @@ fn dispatch<'a>(
                 emit_box_shadows(db, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
+                    && !local_bg_color(b)
                 {
                     let clip = background_clip_rect(db, background_color_clip(db));
                     if clip.width > 0.0 && clip.height > 0.0 {
@@ -1283,6 +1285,9 @@ fn dispatch<'a>(
                         });
                     }
                 }
+                // CSS Backgrounds L3 §3.6: `local` layers move with the content, so they
+                // go inside the scroll layer, under the children.
+                emit_local_background(out, b, dpr);
             }
             // CSS Transforms L2 §4 — `perspective` projects the box's children
             // (not the box itself): wrap only the descendants, inside the

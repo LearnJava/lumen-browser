@@ -54,7 +54,7 @@ struct BoxLayerOps {
 /// переносится его transform-ом (CSS Masking L1 §9, BUG-140), при этом
 /// transform преобразует всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
-fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps {
+fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> BoxLayerOps {
     let mut pre = Vec::new();
     let mut post = Vec::new();
     let mut overflow_pre = Vec::new();
@@ -194,6 +194,11 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
                 overflow_post.push(DisplayCommand::PopScrollLayer);
             }
             overflow_post.push(DisplayCommand::PopClip);
+        }
+        // CSS Backgrounds L3 §3.6: `local` layers sit inside the scroll layer / clip, under the
+        // children (the background pass skipped them).
+        if is_paint_visible(b) && !is_hidden_empty_cell(b) {
+            emit_local_background(&mut overflow_pre, b, dpr);
         }
     }
     // CSS Transforms L2 §4 — `perspective` projects the children only, so it
@@ -505,7 +510,7 @@ fn enter_fill<'a>(
     stack: &mut Vec<FillFrame<'a>>,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
-    let ops = box_layer_ops(b, ov);
+    let ops = box_layer_ops(b, ov, dpr);
     let own_fixed_cb = contains_fixed_descendants(&b.style);
 
     if is_sc_root {

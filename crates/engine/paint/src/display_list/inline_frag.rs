@@ -216,21 +216,37 @@ fn snap_box_rect(r: Rect) -> Rect {
 }
 
 fn background_clip_rect_exact(b: &LayoutBox, clip: BackgroundClip) -> Rect {
+    clip_rect_in(b, b.rect, clip)
+}
+
+/// [`background_clip_rect`] for a border box other than `b.rect` — the border-box
+/// analogue of a scrollable area (`background-attachment: local`), whose padding
+/// edge is the whole scrollable overflow rect while borders and padding keep `b`'s widths.
+pub(crate) fn background_clip_rect_in(b: &LayoutBox, border_box: Rect, clip: BackgroundClip) -> Rect {
+    snap_box_rect(clip_rect_in(b, border_box, clip))
+}
+
+/// [`background_origin_rect`] for a border box other than `b.rect`; see [`background_clip_rect_in`].
+pub(crate) fn background_origin_rect_in(b: &LayoutBox, border_box: Rect, origin: BackgroundOrigin) -> Rect {
+    background_clip_rect_in(b, border_box, origin_to_clip(origin))
+}
+
+fn clip_rect_in(b: &LayoutBox, rect: Rect, clip: BackgroundClip) -> Rect {
     let s = &b.style;
     match clip {
-        BackgroundClip::BorderBox => b.rect,
+        BackgroundClip::BorderBox => rect,
         // CSS Backgrounds L4 §3.8 `text`: there is no box painting area — the
         // background shows only through the glyphs. An empty rect makes every
         // solid-`background-color` call site skip its box fill; the glyph-masked
         // paint is emitted by `emit_background_image` / `emit_text_clipped`.
-        BackgroundClip::Text => Rect::new(b.rect.x, b.rect.y, 0.0, 0.0),
+        BackgroundClip::Text => Rect::new(rect.x, rect.y, 0.0, 0.0),
         BackgroundClip::PaddingBox => Rect::new(
-            b.rect.x + s.border_left_width,
-            b.rect.y + s.border_top_width,
-            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
-            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            rect.x + s.border_left_width,
+            rect.y + s.border_top_width,
+            (rect.width - s.border_left_width - s.border_right_width).max(0.0),
+            (rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
         ),
-        BackgroundClip::ContentBox => content_box_rect(b),
+        BackgroundClip::ContentBox => content_box_rect_in(b, rect),
     }
 }
 
@@ -240,15 +256,19 @@ fn background_clip_rect_exact(b: &LayoutBox, clip: BackgroundClip) -> Rect {
 /// painted, so this is the destination rect for `<canvas>` (BUG-099) as well as
 /// the `content-box` arm of [`background_clip_rect`].
 pub(crate) fn content_box_rect(b: &LayoutBox) -> Rect {
+    content_box_rect_in(b, b.rect)
+}
+
+fn content_box_rect_in(b: &LayoutBox, rect: Rect) -> Rect {
     let s = &b.style;
     let [pt, pr, pb, pl] = b.used_padding.unwrap_or_else(|| {
         [s.padding_top.px(), s.padding_right.px(), s.padding_bottom.px(), s.padding_left.px()]
     });
     Rect::new(
-        b.rect.x + s.border_left_width + pl,
-        b.rect.y + s.border_top_width + pt,
-        (b.rect.width - s.border_left_width - s.border_right_width - pl - pr).max(0.0),
-        (b.rect.height - s.border_top_width - s.border_bottom_width - pt - pb).max(0.0),
+        rect.x + s.border_left_width + pl,
+        rect.y + s.border_top_width + pt,
+        (rect.width - s.border_left_width - s.border_right_width - pl - pr).max(0.0),
+        (rect.height - s.border_top_width - s.border_bottom_width - pt - pb).max(0.0),
     )
 }
 

@@ -636,6 +636,84 @@ use super::text_and_images::build;
         assert!(text.contains("EndFixedBackground\n"), "{text}");
     }
 
+    // ── background-attachment: local (CSS Backgrounds L3 §3.6, BG-ATTACH-LOCAL) ──
+
+    const LOCAL_GRADIENT: &str = "linear-gradient(red 0, red 100px, blue 100px, blue 300px)";
+
+    fn pos(dl: &DisplayList, f: impl Fn(&DisplayCommand) -> bool) -> usize {
+        dl.iter().position(f).expect("command present")
+    }
+
+    /// The layer of a scroll container moves with the content: it sits between
+    /// `PushScrollLayer` and `PopScrollLayer` and is positioned against the whole
+    /// scrollable area (100×400), not the 100×100 window.
+    fn assert_local_gradient_inside_scroll_layer(dl: &DisplayList) {
+        let push = pos(dl, |c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        let pop = pos(dl, |c| matches!(c, DisplayCommand::PopScrollLayer));
+        let grad = pos(dl, |c| matches!(c, DisplayCommand::DrawLinearGradient { .. }));
+        assert!(push < grad && grad < pop, "gradient must be inside the scroll layer: {push} {grad} {pop}");
+        let DisplayCommand::DrawLinearGradient { rect, .. } = &dl[grad] else { unreachable!() };
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (0.0, 0.0, 100.0, 400.0));
+    }
+
+    fn local_scroller_css(extra: &str) -> String {
+        format!(
+            "body {{ margin: 0; }} #s {{ width: 100px; height: 100px; overflow: scroll;              background: {LOCAL_GRADIENT} local; {extra} }} #t {{ height: 400px; }}"
+        )
+    }
+
+    #[test]
+    fn background_attachment_local_scrolls_with_the_content_walk() {
+        let dl = build("<div id=s><div id=t></div></div>", &local_scroller_css(""));
+        assert_local_gradient_inside_scroll_layer(&dl);
+    }
+
+    #[test]
+    fn background_attachment_local_scrolls_with_the_content_ordered() {
+        let doc = lumen_html_parser::parse("<div id=s><div id=t></div></div>");
+        let sheet = lumen_css_parser::parse(&local_scroller_css(""));
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let st = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&st);
+        let dl = build_display_list_ordered(&tree, &st, &order).0;
+        assert_local_gradient_inside_scroll_layer(&dl);
+    }
+
+    /// Without a scrolling mechanism `local` is `scroll`: the layer stays outside any clip.
+    #[test]
+    fn background_attachment_local_without_overflow_paints_like_scroll() {
+        let dl = build(
+            "<div id=s><div id=t></div></div>",
+            &format!(
+                "body {{ margin: 0; }} #s {{ width: 100px; height: 100px;                  background: {LOCAL_GRADIENT} local; }} #t {{ height: 400px; }}"
+            ),
+        );
+        assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. })));
+        let DisplayCommand::DrawLinearGradient { rect, .. } =
+            &dl[pos(&dl, |c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))]
+        else {
+            unreachable!()
+        };
+        assert_eq!((rect.width, rect.height), (100.0, 100.0));
+    }
+
+    /// `attachment-local-clipping-color-1`: the colour follows the `local` bottom layer into the
+    /// clip, so the border area (the dashed gaps) stays unpainted.
+    #[test]
+    fn background_attachment_local_colour_is_clipped_to_the_padding_box() {
+        let dl = build(
+            "<div id=s><div id=t></div></div>",
+            "body { margin: 0; } #s { width: 100px; height: 100px; overflow: hidden;              border: 10px dashed black; background: green local border-box; } #t { height: 50px; }",
+        );
+        let clip = pos(&dl, |c| matches!(c, DisplayCommand::PushClipRect { .. }));
+        let fill = pos(&dl, |c| matches!(c, DisplayCommand::FillRect { color, .. } if color.g == 128));
+        assert!(clip < fill, "colour must be emitted after the padding-box clip opens");
+        let DisplayCommand::PushClipRect { rect } = &dl[clip] else { unreachable!() };
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (10.0, 10.0, 100.0, 100.0));
+        let pop = pos(&dl, |c| matches!(c, DisplayCommand::PopClip));
+        assert!(fill < pop);
+    }
+
     // ── Тесты background-origin ────────────────────────────────────────────────
 
     #[test]
