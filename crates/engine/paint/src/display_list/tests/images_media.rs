@@ -81,6 +81,7 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
                 DisplayCommand::DrawSvgFill { .. } => "DrawSvgFill",
                 DisplayCommand::DrawSvgStroke { .. } => "DrawSvgStroke",
+                DisplayCommand::DrawTextStroke { .. } => "DrawTextStroke",
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",

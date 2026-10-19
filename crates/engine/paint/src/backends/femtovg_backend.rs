@@ -4341,7 +4341,7 @@ impl FemtovgBackend {
             // 0.9 has no native dash, so dash-split first with the same routine
             // the tessellating fallback uses (`apply_dash_pattern`), then stroke
             // each resulting open sub-path with butt-cap/round-cap as requested.
-            // TODO(text-stroke): выражается через `crate::text_stroke::expand` → DrawSvgStroke.
+            // `DrawTextStroke` заменён на `DrawSvgStroke` в `render` (`text_stroke::expand_all`).
             DisplayCommand::DrawTextStroke { .. } => {}
             DisplayCommand::DrawSvgStroke { contours, color, params } => {
                 if params.half_width <= 0.0 {
@@ -5089,6 +5089,9 @@ impl RenderBackend for FemtovgBackend {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<(), RenderError> {
+        // `-webkit-text-stroke`: `DrawTextStroke` → `DrawSvgStroke` с контурами глифов.
+        let content = &*crate::text_stroke::expand_all(content, self.font_provider.as_deref());
+        let overlay = &*crate::text_stroke::expand_all(overlay, self.font_provider.as_deref());
         // Диагностика производительности кадра (LUMEN_FRAME_LOG=1): время
         // paint-фазы и размер display list. Флаг читается один раз за процесс.
         let frame_log = crate::frame_log_enabled();

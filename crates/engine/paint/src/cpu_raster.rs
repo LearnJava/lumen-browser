@@ -19,6 +19,8 @@ use lumen_core::geom::Rect;
 use lumen_core::FontProvider;
 use crate::cpu_font_resolve::resolve_face_candidates;
 
+pub(crate) mod text_stroke;
+
 /// How a pushed off-screen layer is composited back onto the layer below when
 /// its group closes (`PopOpacity` / `PopTransform`).
 ///
@@ -261,6 +263,8 @@ fn rasterize_cpu_pixmap(
     clear: Option<Color>,
 ) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
+    // `-webkit-text-stroke`: обводка глифов штрихуется как `DrawSvgStroke`.
+    let commands = &*crate::text_stroke::expand_all(commands, font_provider);
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
@@ -3866,6 +3870,63 @@ mod tests {
         let a = rasterize_cpu(64, 64, &stroke_cmd, &[], 0.0, 0.0).expect("stroke");
         let b = rasterize_cpu(64, 64, &path_cmd, &[], 0.0, 0.0).expect("path");
         assert_eq!(a.data, b.data, "CPU DrawSvgStroke must be byte-identical to the old triangle soup");
+    }
+
+    fn stroke_cmd(text: &str, width: f32, color: Color) -> DisplayCommand {
+        stroke_cmd_sized(text, 32.0, width, color)
+    }
+
+    fn stroke_cmd_sized(text: &str, font_size: f32, width: f32, color: Color) -> DisplayCommand {
+        DisplayCommand::DrawTextStroke {
+            rect: Rect::new(10.0 - width / 2.0, 10.0 - width / 2.0, 100.0 + width, 40.0 + width),
+            text: text.into(),
+            font_size,
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight(400),
+            font_style: lumen_layout::FontStyle::Normal,
+            font_features: Vec::new(),
+            tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
+            width,
+            color,
+        }
+    }
+
+    /// `-webkit-text-stroke`: `expand` отдаёт контуры глифов как `DrawSvgStroke` с
+    /// половиной ширины в `half_width`; пробел контуров не имеет.
+    #[test]
+    fn text_stroke_expands_to_glyph_contours() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let Some(DisplayCommand::DrawSvgStroke { contours, params, color }) =
+            text_stroke::expand(&stroke_cmd("H", 4.0, blue), None)
+        else {
+            panic!("DrawTextStroke must expand to DrawSvgStroke");
+        };
+        assert_eq!(color, blue);
+        assert!((params.half_width - 2.0).abs() < 1e-6);
+        // «H» — один замкнутый контур.
+        assert_eq!(contours.len(), 1);
+        assert_eq!(contours[0].first(), contours[0].last());
+        assert!(text_stroke::expand(&stroke_cmd(" ", 4.0, blue), None).is_none());
+        assert!(text_stroke::expand(&stroke_cmd("", 4.0, blue), None).is_none());
+    }
+
+    /// Пиксели обводки: у «O» на средней строке четыре штриха (оба края обоих
+    /// стволов), между ними — фон: заливка не рисуется.
+    #[test]
+    fn text_stroke_paints_outline_not_fill() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let img = rasterize_cpu(160, 128, &[stroke_cmd_sized("O", 96.0, 2.0, blue)], &[], 0.0, 0.0).expect("raster");
+        let is_ink = |x: u32, y: u32| px(&img, x, y) == (0, 0, 255, 255);
+        let ink = (0..128u32).flat_map(|y| (0..160u32).map(move |x| (x, y))).filter(|&(x, y)| is_ink(x, y)).count();
+        assert!(ink > 200, "обводка нарисована: {ink} px");
+        // Строка по высоте середины «O»: baseline ≈ 10 + 96·0.97, x-height-середина выше на ~35.
+        let y = (10.0 + 96.0 * 0.97 - 35.0) as u32;
+        let cols: Vec<u32> = (0..160).filter(|&x| is_ink(x, y)).collect();
+        let groups = 1 + cols.windows(2).filter(|w| w[1] > w[0] + 1).count();
+        assert!(groups >= 4, "четыре края ствола, а не сплошная заливка: {cols:?}");
+        assert_eq!(px(&img, 155, 125), (255, 255, 255, 255));
     }
 
     /// `DrawImage` fills its box with the light-grey placeholder quad

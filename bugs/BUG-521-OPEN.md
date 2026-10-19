@@ -74,3 +74,5 @@ glyph-outline stroking in both backends independently — the same shape as
 ## Повторный замер 2026-10-11 (WPT-RUN-14 срез 28, P2)
 
 `css/fill-stroke`: 11 id, зелёных 2, не зелёных 9 (348 из 395 подтестов): `animation/fill-interpolation` 145 из 192, `animation/stroke-color-interpolation` 172 из 172, `text-decoration-{fill,stroke}/*` 24 из 24, `webkit-text-stroke-computed` 3 из 3, `paint-order-001` reftest `thick`. `CSS.supports("text-decoration-fill","red")` и `("-webkit-text-stroke","1px red")` — `false`. Бинарь от 2026-10-08.
+
+**2026-10-19:** легаси `-webkit-text-stroke` / `-width` / `-color` реализован (COMPAT-CSS-TEXT-STROKE, см. CSS-SPECS.md: строка в подсекции Compat); багом остаются `text-decoration-fill` / `text-decoration-stroke`.
