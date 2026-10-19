@@ -598,6 +598,7 @@ impl InProcessSession {
                 format: lumen_image::PixelFormat::Rgba8,
                 data,
                 icc_profile: None,
+                vector_source: None,
             };
             map.insert(nid, Arc::new(image));
         }

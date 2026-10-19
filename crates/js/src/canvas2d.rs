@@ -1204,6 +1204,7 @@ pub(crate) fn install_canvas2d_bindings_v8(
                     format: lumen_image::PixelFormat::Rgba8,
                     data: ctx.get_image_data(),
                     icc_profile: None,
+                    vector_source: None,
                 };
                 lumen_image::encode_png_rgba8(&img).ok()
             });

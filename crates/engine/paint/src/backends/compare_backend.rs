@@ -387,6 +387,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: vec![255, 0, 0, 255],
             icc_profile: None,
+            vector_source: None,
         };
         assert!(cmp.register_image("test.png".into(), Arc::new(img)).is_ok());
     }

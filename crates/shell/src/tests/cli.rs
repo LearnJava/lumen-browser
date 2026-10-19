@@ -390,6 +390,7 @@ fn encode_images_as_pdf_single_page() {
         format: lumen_image::PixelFormat::Rgba8,
         data: vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255],
         icc_profile: None,
+        vector_source: None,
     };
     let pdf = encode_images_as_pdf(&[img], 2, 2);
     assert!(pdf.starts_with(b"%PDF-"));

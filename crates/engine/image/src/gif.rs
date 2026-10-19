@@ -586,6 +586,7 @@ impl AnimatedGif {
             format: PixelFormat::Rgba8,
             data: cursor.canvas.clone(),
             icc_profile: None,
+            vector_source: None,
         };
         cursor.last = Some((idx, image.clone()));
         Ok(image)

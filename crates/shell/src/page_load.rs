@@ -568,6 +568,7 @@ impl Lumen {
                 format: lumen_image::PixelFormat::Rgba8,
                 data: rgba,
                 icc_profile: None,
+                vector_source: None,
             });
             let key = format!("video:{nid}");
             if let Some(r) = self.renderer.as_mut() {
@@ -733,6 +734,7 @@ impl Lumen {
                                 format: lumen_image::PixelFormat::Rgba8,
                                 data: rgba,
                                 icc_profile: None,
+                                vector_source: None,
                             }),
                         )
                     {

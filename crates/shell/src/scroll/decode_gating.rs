@@ -67,6 +67,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![0u8; w as usize * h as usize * 4],
             icc_profile: None,
+            vector_source: None,
         }
     }
 

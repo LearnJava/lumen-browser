@@ -25,6 +25,7 @@ fn write_png(path: &Path, w: u32, h: u32, rgba: [u8; 4]) {
         format: lumen_image::PixelFormat::Rgba8,
         data: rgba.iter().copied().cycle().take((w * h * 4) as usize).collect(),
         icc_profile: None,
+        vector_source: None,
     };
     let png = lumen_image::encode_png_rgba8(&image).expect("encode fixture png");
     std::fs::write(path, png).expect("write fixture png");

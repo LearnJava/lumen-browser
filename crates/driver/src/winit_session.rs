@@ -311,6 +311,7 @@ fn walk_collect_images(
                 format: lumen_image::PixelFormat::Rgba8,
                 data: vec![0, 0, 0, 255], // 1x1 transparent pixel
                 icc_profile: None,
+                vector_source: None,
             };
             images.push((src, placeholder));
         }

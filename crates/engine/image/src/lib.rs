@@ -23,7 +23,7 @@ pub use gif::{decode_gif, decode_gif_animated, AnimatedGif, GifError, GifLoopCou
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 pub use jxl::{JxlError, JxlImageDecoder, decode_jxl, is_jxl};
 pub use heic::{HeicError, decode_heic, is_heic};
-pub use svg::{decode_svg, SvgError};
+pub use svg::{decode_svg, rasterize_svg, SvgError, VectorSource};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -159,18 +159,18 @@ fn decode_raw(bytes: &[u8]) -> Result<Image, ImageError> {
     }
     if is_webp(bytes) {
         let (width, height, data) = decode_webp(bytes).map_err(ImageError::Webp)?;
-        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None });
     }
     if is_avif(bytes) {
         let (width, height, data) = decode_avif(bytes).map_err(ImageError::Avif)?;
-        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None });
     }
     if is_svg(bytes) {
         return decode_svg(bytes).map_err(ImageError::Svg);
     }
     if is_jxl(bytes) {
         let (width, height, data) = decode_jxl(bytes).map_err(ImageError::Jxl)?;
-        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None });
     }
     if is_heic(bytes) {
         return Err(ImageError::Heic(decode_heic(bytes).unwrap_err()));
@@ -497,6 +497,10 @@ pub struct Image {
     pub data: Vec<u8>,
     /// Опциональный ICC профиль изображения.
     pub icc_profile: Option<IccProfile>,
+    /// Векторный источник (SVG), из которого получен растр: фон с `background-size`
+    /// перерастеризуется им в целевой размер плитки, а не растягивает `data`
+    /// билинейно (BUG-1296). `None` для растровых форматов.
+    pub vector_source: Option<std::sync::Arc<VectorSource>>,
 }
 
 impl Image {
@@ -755,7 +759,7 @@ pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image {
         }
     }
 
-    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None, vector_source: None }
 }
 
 /// Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter).
@@ -835,7 +839,7 @@ pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image {
         }
     }
 
-    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None, vector_source: None }
 }
 
 /// Предвычисленные span-ы box-фильтра одной оси: для каждого выходного
@@ -1118,7 +1122,7 @@ mod tests {
 
     fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Image {
         let data = vec![r, g, b, a].into_iter().cycle().take((w * h * 4) as usize).collect();
-        Image { width: w, height: h, format: PixelFormat::Rgba8, data, icc_profile: None }
+        Image { width: w, height: h, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None }
     }
 
     #[test]
@@ -1141,7 +1145,7 @@ mod tests {
     fn area_avg_2x1_downscale_averages_correctly() {
         // 2×1 → 1×1: два горизонтальных пикселя, разный цвет.
         let data = vec![100, 0, 0, 255, 200, 0, 0, 255];
-        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data, icc_profile: None };
+        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None };
         let dst = resize_area_avg(&src, 1, 1);
         assert_eq!(dst.data[0], 150); // (100+200)/2
     }
@@ -1436,6 +1440,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![255; 100 * 100 * 4],
             icc_profile: None,
+            vector_source: None,
         };
         assert_eq!(
             img.detect_color_space(),
@@ -1459,6 +1464,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![128; 10 * 10 * 4],
             icc_profile: Some(IccProfile { data: profile_data }),
+            vector_source: None,
         };
         assert_eq!(
             img.detect_color_space(),
@@ -1492,6 +1498,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![200; 10 * 10 * 4],
             icc_profile: Some(IccProfile { data: profile_data }),
+            vector_source: None,
         };
         assert_eq!(
             img.detect_color_space(),
@@ -1646,6 +1653,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![128, 128, 128, 255],
             icc_profile: Some(IccProfile { data: profile }),
+            vector_source: None,
         };
         let out = img.to_rgba8();
         // Within a few 8-bit levels of the input grey.
@@ -1671,6 +1679,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![255, 0, 0, 200],
             icc_profile: Some(IccProfile { data: profile }),
+            vector_source: None,
         };
         let out = img.to_rgba8();
         assert!(out[0] > out[1] && out[0] > out[2], "red-dominant: {out:?}");
@@ -1690,6 +1699,7 @@ mod tests {
                     2.2,
                 ),
             }),
+            vector_source: None,
         };
         let wout = white.to_rgba8();
         assert!(wout[0] >= 250 && wout[1] >= 250 && wout[2] >= 250, "white: {wout:?}");
@@ -1703,6 +1713,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![10, 20, 30, 255],
             icc_profile: None,
+            vector_source: None,
         };
         assert_eq!(img.to_rgba8(), vec![10, 20, 30, 255]);
     }
@@ -1729,6 +1740,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![255, 0, 0, 200],
             icc_profile: Some(IccProfile { data: profile.clone() }),
+            vector_source: None,
         }
         .to_rgba8();
 
@@ -1739,6 +1751,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![255, 0, 0, 200],
             icc_profile: Some(IccProfile { data: profile }),
+            vector_source: None,
         };
         color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert!(img.icc_profile.is_none(), "profile cleared after decode-time management");
@@ -1757,6 +1770,7 @@ mod tests {
             format: PixelFormat::Rgb8,
             data: vec![255, 0, 0],
             icc_profile: Some(IccProfile { data: profile.clone() }),
+            vector_source: None,
         }
         .to_rgba8();
 
@@ -1766,6 +1780,7 @@ mod tests {
             format: PixelFormat::Rgb8,
             data: vec![255, 0, 0],
             icc_profile: Some(IccProfile { data: profile }),
+            vector_source: None,
         };
         color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert!(img.icc_profile.is_none());
@@ -1784,6 +1799,7 @@ mod tests {
             format: PixelFormat::Gray8,
             data: vec![128],
             icc_profile: Some(IccProfile { data: p3_profile() }),
+            vector_source: None,
         };
         color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert!(img.icc_profile.is_some(), "grayscale keeps its profile for to_rgba8");
@@ -1797,6 +1813,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![10, 20, 30, 255],
             icc_profile: None,
+            vector_source: None,
         };
         color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert_eq!(img.data, vec![10, 20, 30, 255]);

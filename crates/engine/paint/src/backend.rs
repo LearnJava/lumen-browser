@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn null_backend_register_image_ok() {
         use lumen_image::{Image, PixelFormat};
-        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None };
+        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None, vector_source: None };
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(b.register_image("test".into(), Arc::new(img)).is_ok());
     }
@@ -495,7 +495,7 @@ mod tests {
         use lumen_image::{Image, PixelFormat};
         // Default trait impl accepts any snapshot and reports success; backends
         // without snapshot support silently ignore it (View Transitions L1).
-        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None };
+        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None, vector_source: None };
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(b.register_snapshot(7, &img).is_ok());
         b.clear_snapshots(); // no-op, must not panic

@@ -15,6 +15,8 @@
 //! design, matching every other decoder here (pure bytes-to-pixels). Such an
 //! SVG still renders, just without that one embedded image.
 
+use std::sync::Arc;
+
 use resvg::tiny_skia;
 use resvg::usvg;
 
@@ -51,6 +53,34 @@ impl core::fmt::Display for SvgError {
 /// [`SvgError::Parse`] if `usvg` rejects the document; [`SvgError::ZeroSize`]
 /// if the resulting raster would have a zero-length dimension.
 pub fn decode_svg(bytes: &[u8]) -> Result<Image, SvgError> {
+    let (tree, width, height) = parse_with_intrinsic_size(bytes)?;
+    let mut image = render_tree(&tree, width, height)?;
+    image.vector_source = Some(Arc::new(VectorSource { bytes: Arc::from(bytes) }));
+    Ok(image)
+}
+
+/// The SVG document an [`Image`] was rasterized from — lets a consumer that
+/// knows the final drawn size (a `background-size` tile) call [`rasterize_svg`]
+/// instead of stretching the intrinsic-size raster (BUG-1296).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSource {
+    bytes: Arc<[u8]>,
+}
+
+/// Re-rasterizes `source` to exactly `width`×`height` pixels (each clamped to
+/// `1..=4096`). The intrinsic size is the one [`decode_svg`] resolved, so the
+/// document is scaled by `width / intrinsic_width` and `height / intrinsic_height`.
+///
+/// # Errors
+/// As [`decode_svg`].
+pub fn rasterize_svg(source: &VectorSource, width: u32, height: u32) -> Result<Image, SvgError> {
+    let (tree, _, _) = parse_with_intrinsic_size(&source.bytes)?;
+    render_tree(&tree, width.clamp(1, 4096), height.clamp(1, 4096))
+}
+
+/// Parses `bytes` and resolves the CSS intrinsic size (rounded, clamped to
+/// `1..=4096`) per [`decode_svg`]'s rules.
+fn parse_with_intrinsic_size(bytes: &[u8]) -> Result<(usvg::Tree, u32, u32), SvgError> {
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_data(bytes, &opt).map_err(|e| SvgError::Parse(e.to_string()))?;
 
@@ -62,11 +92,17 @@ pub fn decode_svg(bytes: &[u8]) -> Result<Image, SvgError> {
     };
     let width = width.round().clamp(1.0, 4096.0) as u32;
     let height = height.round().clamp(1.0, 4096.0) as u32;
+    Ok((tree, width, height))
+}
 
+/// Renders `tree` stretched to `width`×`height` (the tree's own size maps onto
+/// the whole raster) into straight-alpha RGBA8.
+fn render_tree(tree: &usvg::Tree, width: u32, height: u32) -> Result<Image, SvgError> {
+    let size = tree.size();
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(SvgError::ZeroSize)?;
     let transform =
         tiny_skia::Transform::from_scale(width as f32 / size.width(), height as f32 / size.height());
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    resvg::render(tree, transform, &mut pixmap.as_mut());
 
     Ok(Image {
         width,
@@ -74,6 +110,7 @@ pub fn decode_svg(bytes: &[u8]) -> Result<Image, SvgError> {
         format: PixelFormat::Rgba8,
         data: unpremultiply(pixmap.data()),
         icc_profile: None,
+        vector_source: None,
     })
 }
 
@@ -183,6 +220,19 @@ mod tests {
         let first_px = &image.data[0..4];
         let last_px = &image.data[image.data.len() - 4..];
         assert_ne!(first_px, last_px, "gradient endpoints must differ in colour");
+    }
+
+    #[test]
+    fn rasterize_svg_redraws_at_requested_size() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+            <rect width="1" height="2" fill="red"/><rect x="1" width="1" height="2" fill="blue"/></svg>"#;
+        let image = decode_svg(svg).unwrap();
+        let source = image.vector_source.as_ref().expect("svg keeps its source");
+        let big = rasterize_svg(source, 20, 10).unwrap();
+        assert_eq!((big.width, big.height), (20, 10));
+        // Hard edge at x = 10: no blended column between red and blue.
+        assert_eq!(big.data[9 * 4..9 * 4 + 4], [255, 0, 0, 255]);
+        assert_eq!(big.data[10 * 4..10 * 4 + 4], [0, 0, 255, 255]);
     }
 
     #[test]
