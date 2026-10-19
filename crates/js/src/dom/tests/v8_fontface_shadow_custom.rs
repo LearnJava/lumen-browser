@@ -176,8 +176,47 @@ fn css_connected_load_completing_pairs_off_pending_and_resolves_ready() {
     assert_eq!(rt.eval("_readyResolved").unwrap(), lumen_core::JsValue::Bool(true));
 }
 
+// BUG-1639: `face.load()` on a CSS-connected face whose native fetch settles
+// first — `_lumen_notify_css_font_loaded` nulls the stored resolvers, and the
+// script fetch that failed afterwards used to call `self._rejectLoaded(err)`
+// (`TypeError: ... is not a function`) and flip the loaded face to 'error'.
+#[test]
+fn bug1639_late_script_fetch_failure_after_native_settle_is_harmless() {
+    let doc = make_doc();
+    add_css_font_face(&doc, "WebFont", lumen_dom::FontFaceStatus::Loading);
+    let rt = v8_runtime_with_dom(doc.clone());
+    rt.eval(
+        r#"
+                var _rejectFetch;
+                globalThis.fetch = function() {
+                    return new Promise(function(_res, rej) { _rejectFetch = rej; });
+                };
+                var _unhandled = 0;
+                window.addEventListener('unhandledrejection', function() { _unhandled++; });
+                var _face = null;
+                document.fonts.forEach(function(f) { _face = f; });
+                var _loadSettled = 'pending';
+                _face.load().then(function() { _loadSettled = 'resolved'; },
+                                  function() { _loadSettled = 'rejected'; });
+            "#,
+    )
+    .unwrap();
+    {
+        let mut d = doc.lock().unwrap();
+        d.fonts_mut().mark_loaded(|f| f.family == "WebFont");
+    }
+    rt.eval("_lumen_notify_css_font_loaded('WebFont'); _rejectFetch(new Error('late'));")
+        .unwrap();
+    for _ in 0..4 {
+        let _ = rt.eval("_lumen_drain_microtasks();");
+    }
+    assert_eq!(rt.eval("_face.status").unwrap(), lumen_core::JsValue::String("loaded".into()));
+    assert_eq!(rt.eval("_loadSettled").unwrap(), lumen_core::JsValue::String("resolved".into()));
+    assert_eq!(rt.eval("_unhandled").unwrap(), lumen_core::JsValue::Number(0.0));
+}
+
 // FONTLOAD-8 (`bugs/BUG-467-OPEN.md`): the CSS-side `@font-face` descriptor
-// grammar — `FontFaceRule` (`crates/engine/css-parser`) now carries
+// grammar —`FontFaceRule` (`crates/engine/css-parser`) now carries
 // `font-feature-settings`/`font-variation-settings`/the four metrics-override
 // descriptors, threaded through `lumen_dom::FontFace::with_extended_descriptors`
 // into the native JSON `_lumen_wrap_css_font_face` reads. These exercise that
