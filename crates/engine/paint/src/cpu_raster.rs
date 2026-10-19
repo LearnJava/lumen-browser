@@ -2180,11 +2180,13 @@ fn rasterize_draw_outline(
         blend_mode: tiny_skia::BlendMode::SourceOver,
     };
 
-    // Expand rect by offset.
-    let x = rect.x - offset;
-    let y = rect.y - offset;
-    let w = rect.width + 2.0 * offset;
-    let h = rect.height + 2.0 * offset;
+    // The outline's inner edge is `rect ± offset`. A tiny-skia stroke is centred on
+    // its path, so the path sits half a stroke width further out (BUG-1279).
+    let grow = offset + width / 2.0;
+    let x = rect.x - grow;
+    let y = rect.y - grow;
+    let w = rect.width + 2.0 * grow;
+    let h = rect.height + 2.0 * grow;
 
     // Draw outline as a stroked rectangle.
     let mut pb = tiny_skia::PathBuilder::new();
@@ -3515,6 +3517,35 @@ mod tests {
     fn px(img: &Image, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * img.width + x) * 4) as usize;
         (img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3])
+    }
+
+    /// BUG-1279: an outline lies entirely outside `rect ± offset`. A 20×20 box at
+    /// (30,30) with `outline: 10px` covers x = 20..60, not 25..55.
+    #[test]
+    fn outline_is_drawn_outside_the_box_edge() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let white = (255, 255, 255, 255);
+        let mk = |offset: f32| {
+            let cmds = vec![DisplayCommand::DrawOutline {
+                rect: rect(30.0, 30.0, 20.0, 20.0),
+                width: 10.0,
+                style: lumen_layout::style::OutlineStyle::Solid,
+                color: blue,
+                offset,
+            }];
+            rasterize_cpu(80, 80, &cmds, &[], 0.0, 0.0).expect("rasterize")
+        };
+        let img = mk(0.0);
+        assert_eq!(px(&img, 21, 40), (0, 0, 255, 255), "outer band starts at x=20");
+        assert_eq!(px(&img, 29, 40), (0, 0, 255, 255), "band reaches the box edge");
+        assert_eq!(px(&img, 40, 40), white, "box interior untouched");
+        assert_eq!(px(&img, 18, 40), white, "nothing beyond 10px");
+        assert_eq!(px(&img, 21, 21), (0, 0, 255, 255), "mitred corner is filled");
+        // Positive offset moves the whole band away from the box.
+        let img = mk(5.0);
+        assert_eq!(px(&img, 27, 40), white, "gap between box and outline");
+        assert_eq!(px(&img, 19, 40), (0, 0, 255, 255), "band spans x=15..25");
+        assert_eq!(px(&img, 16, 40), (0, 0, 255, 255));
     }
 
     /// `PushScrollLayer` with a non-zero offset shifts the content up by

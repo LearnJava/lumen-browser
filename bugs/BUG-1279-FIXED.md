@@ -1,6 +1,6 @@
 # BUG-1279 — CPU-растр рисует `outline` штрихом по краю бокса: половина ширины уходит внутрь, снаружи только половина
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 3, `css/css-ui`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_draw_outline`)
 
@@ -35,3 +35,10 @@ WPT `css/css-ui/outline-0NN.html`, `outline-color-*`, `outline-style-*`, `outlin
 `outline-with-padding-001.html`, `negative-outline-offset.html`, `translucent-outline.html`,
 `subpixel-outline-width.tentative.html` — 33 reftest (все `thick` в `reftest_pixdiff.py`; без `outline-offset-inset-*`,
 это нереализованное значение `inset`).
+
+## Исправление
+
+`rasterize_draw_outline` строит путь по `rect ± (offset + width/2)`: внутренний край штриха теперь лежит ровно на
+`rect ± offset`, как у wgpu и femtovg. Тест `cpu_raster::tests::outline_is_drawn_outside_the_box_edge`. CPU-эталоны
+`16-outline`, `34-forms` (focus ring), `1000000-final`, `57-canvas-2d` регенерированы; Edge-прогон `run.py` (wgpu) эту
+ветку не затрагивает.
