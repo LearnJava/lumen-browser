@@ -2544,6 +2544,17 @@ function _lumen_camel_to_kebab(prop) {
     return key === 'word-wrap' ? 'overflow-wrap' : _lumen_compat_alias(key);
 }
 
+// CSS Backgrounds longhands validated by the native `_lumen_css_canonical_background`
+// (engine `style::values::background_cssom`): per-layer lists, `box-shadow`, `border-radius`
+// and its four longhands (BUG-1297).
+var _LUMEN_BACKGROUND_PROPERTIES = {
+    'background-image': 1, 'background-size': 1, 'background-repeat': 1, 'background-attachment': 1,
+    'background-clip': 1, 'background-origin': 1, 'background-position': 1,
+    'background-position-x': 1, 'background-position-y': 1, 'box-shadow': 1, 'border-radius': 1,
+    'border-top-left-radius': 1, 'border-top-right-radius': 1, 'border-bottom-right-radius': 1,
+    'border-bottom-left-radius': 1,
+};
+
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native
 // `_lumen_css_canonical_text` (engine `style::values::text_cssom`) validates the value and
 // returns its canonical serialization (BUG-1325).
@@ -2887,19 +2898,19 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // logical ones resolve through the same `parse_border_style_kw` as their
     // physical counterparts, `crates/engine/layout/src/style/apply/paint.rs`
     // — identical grammar, same pattern as the border-*-width logical
-    // longhands, срез 2/4). List is the nine keywords the engine's own
+    // longhands, срез 2/4). List is the ten keywords the engine's own
     // parser accepts (`BorderStyle` has `groove`/`ridge`/`inset`/`outset` since
-    // the gap-rule slices; `hidden` stays unreachable from `border-style`). The `border-style`
+    // the gap-rule slices; `hidden` is accepted, BUG-1297). The `border-style`
     // shorthand itself is wired separately, through
     // `_LUMEN_TRBL_SHORTHAND_CANON` (it reuses `border-top-style`'s list).
-    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
-    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'],
+    'border-top-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-right-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-bottom-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-left-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-start-style': ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-inline-end-style':   ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-start-style':  ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
+    'border-block-end-style':    ['none', 'solid', 'dashed', 'dotted', 'double', 'hidden', 'groove', 'ridge', 'inset', 'outset'],
     // CSS Box Alignment L3 (срез 15): all six align-/justify- longhands
     // share ONE list, mirroring `AlignValue::parse`
     // (`crates/engine/layout/src/style/values/flexgrid.rs`) — the engine
@@ -3448,6 +3459,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_TEXT_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_text(key, strVal);
     }
+    if (_LUMEN_BACKGROUND_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_background(key, strVal);
+    }
     if (_LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key)) {
         var kw = _lumen_css_canonical_keyword(strVal, _LUMEN_KEYWORD_PROPERTIES[key]);
         // CSS Overflow L3 legacy value alias: `overlay` parses as `auto`
@@ -3631,7 +3645,11 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     if (_lumen_gap_rule_key_re.test(key)) strVal = _lumen_close_open_parens(strVal);
     var obj = _lumen_style_get_parsed(nid);
     if (strVal === '') {
-        // CSSOM §6.7.4: setProperty(prop, "") removes the property.
+        // CSSOM §6.7.4: setProperty(prop, "") removes the property; a TRBL shorthand is stored
+        // as its four longhands, so those go too (BUG-1297: `border-style = ''` between WPT cases).
+        if (_LUMEN_TRBL_SHORTHANDS.hasOwnProperty(key)) {
+            _LUMEN_TRBL_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+        }
         if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
             _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
         }
@@ -3713,6 +3731,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _LUMEN_GRID_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_TEXT_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_BACKGROUND_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_KEYWORD_PROPERTIES.hasOwnProperty(key) ||
         key === 'scrollbar-color' ||
         key === 'scroll-snap-type' ||

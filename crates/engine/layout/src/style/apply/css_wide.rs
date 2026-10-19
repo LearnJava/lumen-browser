@@ -579,6 +579,8 @@ fn apply_css_wide_keyword_with(
             } else {
                 Vec::new()
             };
+            style.background_specified =
+                if inh_only_inherit { inherited.background_specified.clone() } else { None };
         }
         "width" => {
             style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() };
@@ -1235,6 +1237,8 @@ fn apply_css_wide_keyword_with(
             } else {
                 Vec::new()
             };
+            style.background_specified =
+                if inh_only_inherit { inherited.background_specified.clone() } else { None };
         }
         // CSS Images L3 §6.1 — image-rendering inherited. inh — общий
         // алиас «брать inherited.value» (для inherited работает и при

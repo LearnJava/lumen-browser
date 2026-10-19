@@ -196,6 +196,7 @@ pub(in crate::style) fn parse_border_style_kw(s: &str) -> BorderStyle {
         "ridge" => BorderStyle::Ridge,
         "inset" => BorderStyle::Inset,
         "outset" => BorderStyle::Outset,
+        "hidden" => BorderStyle::Hidden,
         _ => BorderStyle::None,
     }
 }
@@ -638,7 +639,7 @@ pub(in crate::style) fn apply_border_side_shorthand(
 /// 3 → (T, R=L, B)
 /// 4 → (T, R, B, L)
 pub(in crate::style) fn expand_border_4(val: &str) -> [&str; 4] {
-    let parts: Vec<&str> = val.split_whitespace().collect();
+    let parts: Vec<&str> = split_top_level_ws(val);
     match parts.len() {
         // Пустое (или состоящее из одних пробелов) значение — невалидное
         // объявление вида `border-radius: ;`. React-приложения пишут такие
@@ -689,7 +690,7 @@ pub(in crate::style) fn split_border_radius_slash(val: &str) -> (&str, Option<&s
 /// one or two `<length-percentage>` values: `rx [ry]`. Returns `(rx, Some(ry))`
 /// or `(rx, None)` when only one value.
 pub(in crate::style) fn split_radius_pair(val: &str) -> (&str, Option<&str>) {
-    let mut parts = val.split_whitespace();
+    let mut parts = split_top_level_ws(val).into_iter();
     let rx = parts.next().unwrap_or(val);
     let ry = parts.next();
     (rx, ry)

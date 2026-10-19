@@ -246,6 +246,7 @@ pub use values::timing::{
 pub(crate) use values::rule_computed::insert_gap_rule_computed;
 pub use values::grid_cssom::canonical_specified_grid;
 pub use values::text_cssom::{canonical_specified_text, transform_text_by_value};
+pub use values::background_cssom::{canonical_specified_background, serialize_border_radius};
 pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
 pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
 pub use values::rule_anim::{
@@ -272,7 +273,7 @@ pub use values::scroll::{
 };
 pub use values::background::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
-    BackgroundRepeat, BackgroundSize, BgSizeAxis, GradientCorner, ImageRendering, MaskClip,
+    BackgroundRepeat, BackgroundSize, BackgroundSpecified, BgSizeAxis, GradientCorner, ImageRendering, MaskClip,
     ObjectFit, ParsedGradient, RadialShape, RadialSize, radial_gradient_radii,
 };
 pub use values::flexgrid::{

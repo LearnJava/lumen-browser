@@ -66,9 +66,10 @@ use super::*;
         assert_eq!(s.border_left_style, BorderStyle::Outset);
         let s = style_for("border-block-start-style: groove");
         assert_eq!(s.border_top_style, BorderStyle::Groove);
-        // `hidden` у `border-style` по-прежнему не разбирается.
+        // `hidden` — отдельное значение (BUG-1297): рамки нет, но `getComputedStyle` отдаёт `hidden`.
         let s = style_for("border-style: hidden");
-        assert_eq!(s.border_top_style, BorderStyle::None);
+        assert_eq!(s.border_top_style, BorderStyle::Hidden);
+        assert_eq!(s.border_top_width, 0.0);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! батчами SPLIT-ST3/ST9/ST16/ST17.
 
 pub mod background;
+pub mod background_cssom;
 pub mod box_model;
 pub mod color;
 pub mod dynamic_range_limit;

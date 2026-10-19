@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::style::values::box_model::MixBlendMode;
-use crate::style::values::flexgrid::ObjectPosition;
+use crate::style::values::flexgrid::{ObjectPosition, PositionComponent};
 use crate::style::values::transform::GradientStop;
 
 /// CSS Images L3/L4 §3.3/§3.7 — parsed linear / radial / conic gradient.
@@ -289,6 +289,21 @@ pub enum BackgroundSize {
     /// Explicit width / height, each `auto` | `<length>` | `<percentage>`.
     /// Percentages resolve against the positioning area at paint time.
     Length(BgSizeAxis, BgSizeAxis),
+}
+
+/// Списки значений per-layer-свойств так, как их записал автор (BUG-1297): computed-значение
+/// `background-repeat: repeat-x` при двух слоях остаётся `repeat-x`, а три значения при одном
+/// слое — тремя. `background_layers` циклически растягивает/обрезает списки под число
+/// изображений и этого не помнит; пустой список = свойство не задано (читаются слои).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BackgroundSpecified {
+    pub repeat: Vec<BackgroundRepeat>,
+    pub size: Vec<BackgroundSize>,
+    pub attachment: Vec<BackgroundAttachment>,
+    pub origin: Vec<BackgroundOrigin>,
+    pub clip: Vec<BackgroundClip>,
+    pub position_x: Vec<PositionComponent>,
+    pub position_y: Vec<PositionComponent>,
 }
 
 /// CSS Backgrounds L3 §3.6 — `background-attachment`.
