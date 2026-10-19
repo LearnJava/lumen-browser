@@ -38,6 +38,12 @@ enum LayerComposite {
     /// page coordinates composited through it lands exactly where the GPU
     /// vertex transform would place it.
     Transform(tiny_skia::Transform),
+    /// BUG-1290 — `Transform` для проективной матрицы (`perspective`,
+    /// `rotateX/Y`): tiny-skia умеет только аффинное, поэтому слой уходит на
+    /// родителя обратным выборщиком по гомографии ([`crate::cpu_projective`]).
+    /// `clip` — внешний клип в координатах родителя: внутри слоя он сброшен
+    /// (обратной проекцией его не вернуть), поэтому режет сам композит.
+    Projective { h: crate::cpu_projective::Homography, clip: Option<Rect> },
     /// CSS Compositing & Blending L1 §5 `mix-blend-mode` — composite the layer
     /// onto the backdrop below with this separable/non-separable blend formula
     /// instead of plain `SourceOver`. The subtree renders into a transparent
@@ -301,6 +307,15 @@ fn rasterize_cpu_pixmap(
     let mut clip_saves: Vec<Vec<Rect>> = Vec::new();
     // One flag per open `PushScrollLayer`: did it open a translated layer (non-zero scroll).
     let mut scroll_layer_shifted: Vec<bool> = Vec::new();
+    // BUG-1290: матрица `A`, действующая на прямых потомков открытой группы
+    // `PushTransform`. Слой потомка композитится в слой родителя матрицей
+    // `H(A)⁻¹·H(A·M)`, чтобы после композита родителя (`H(A)`) вышло
+    // `H(A·M)`. Ненулевая `A` — только у обёртки `perspective` (она на
+    // плоскости z = 0 тождественна, но перспектива должна дойти до
+    // `translateZ`/`rotateX` ребёнка); у остальных групп `A` — единичная:
+    // без `preserve-3d` потомки плоские и проецируются каждый в плоскость
+    // своего родителя (CSS Transforms L2 §6), цепочка не перемножается.
+    let mut xf_acc: Vec<lumen_layout::Mat4> = Vec::new();
 
     // BUG-1288: индекс команды, до которой цикл пропускает уже отрисованное
     // содержимое группы `PushTransform` (включая её `PopTransform`).
@@ -602,6 +617,53 @@ fn rasterize_cpu_pixmap(
             // full-size layer; the affine maps page coordinates and is applied at
             // composite time so geometry need not be transformed per-draw.
             DisplayCommand::PushTransform { matrix } => {
+                let acc = xf_acc.last().copied().unwrap_or(lumen_layout::Mat4::IDENTITY);
+                // BUG-1290: для 3D-матрицы — композит слоя как гомография.
+                let projective = if matrix.is_2d_affine() {
+                    None
+                } else {
+                    Some(crate::cpu_projective::homography(matrix))
+                };
+                // Обёртка `perspective` (тождество на z = 0) передаёт `P` детям;
+                // иная группа плоская.
+                let acc_next = if projective
+                    .and_then(|h| crate::cpu_projective::as_affine(&h))
+                    .is_some_and(|a| a == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+                {
+                    acc.multiply(matrix)
+                } else {
+                    lumen_layout::Mat4::IDENTITY
+                };
+                let layer_h = projective.map(|own| {
+                    use crate::cpu_projective::{homography, invert, mul};
+                    let parent = homography(&acc);
+                    let total = homography(&acc.multiply(matrix));
+                    invert(&parent).map_or(own, |inv| mul(&inv, &total))
+                });
+                if let Some(h) = layer_h
+                    && crate::cpu_projective::as_affine(&h).is_none()
+                {
+                    let layer = tiny_skia::Pixmap::new(width, height)
+                        .ok_or("Failed to create transform layer")?;
+                    layers.push(CpuLayer::new(layer));
+                    layer_ops.push(LayerComposite::Projective { h, clip: clip_rect });
+                    xf_acc.push(acc_next);
+                    clip_saves.push(clip_stack.clone());
+                    clip_stack.clear();
+                    clip_rect = None;
+                    clip_mask = None;
+                    continue;
+                }
+                // Аффинный образ (в т.ч. `perspective` на плоскости z = 0
+                // и `translateZ` под `perspective`) — обычный путь.
+                let matrix_2d;
+                let matrix = match layer_h.and_then(|h| crate::cpu_projective::as_affine(&h)) {
+                    Some([a, b, c, d, e, f]) => {
+                        matrix_2d = lumen_layout::Mat4::from_2d_affine(a, b, c, d, e, f);
+                        &matrix_2d
+                    }
+                    None => matrix,
+                };
                 let [a, b, c, d, e, f] = mat4_to_2d_affine(matrix);
                 let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
                 // BUG-1288: содержимое, лежащее до трансформации вне полотна
@@ -629,6 +691,7 @@ fn rasterize_cpu_pixmap(
                     .ok_or("Failed to create transform layer")?;
                 layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Transform(t));
+                xf_acc.push(acc_next);
                 // BUG-424: draws inside this layer use pre-transform coordinates,
                 // so an ambient clip expressed in document space must be mapped
                 // back through the inverse before it can gate them. Without this
@@ -752,9 +815,10 @@ fn rasterize_cpu_pixmap(
                 if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop()) {
                     // BUG-424: restore the document-space clip the matching
                     // `PushTransform` swapped for its local-space image.
-                    if matches!(op, LayerComposite::Transform(_))
+                    if matches!(op, LayerComposite::Transform(_) | LayerComposite::Projective { .. })
                         && let Some(saved) = clip_saves.pop()
                     {
+                        xf_acc.pop();
                         clip_stack = saved;
                         clip_rect = clip_intersection(&clip_stack);
                         clip_mask = build_clip_mask(width, height, clip_rect);
@@ -862,6 +926,13 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
         LayerComposite::Transform(t) => {
             composite_transform_layer(&mut dst.pm, &src.pm, *t);
             dst.mark(transform_bounds(*t, src_dirty));
+        }
+        LayerComposite::Projective { h, clip } => {
+            if let Some(written) =
+                crate::cpu_projective::composite(&mut dst.pm, &src.pm, h, *clip, src_dirty)
+            {
+                dst.mark(written);
+            }
         }
         LayerComposite::Blend(mode) => {
             composite_blend_layer(&mut dst.pm, &src.pm, *mode, src_dirty);
@@ -4727,6 +4798,52 @@ mod tests {
         assert_eq!(px(&img, 25, 15), (0, 0, 255, 255), "fill moved by (20,10)");
         // The untranslated origin is now empty → background white.
         assert_eq!(px(&img, 5, 5), (255, 255, 255, 255), "origin cleared by translate");
+    }
+
+    /// BUG-1290: `perspective(100px)` на родителе + `translateZ(50px)` у ребёнка —
+    /// квадрат 20×20 вокруг центра перспективы растёт вдвое (40×40).
+    #[test]
+    fn perspective_translate_z_scales_child() {
+        use lumen_layout::Mat4;
+        let lime = Color { r: 0, g: 255, b: 0, a: 255 };
+        let around = |m: Mat4| {
+            Mat4::translation_2d(32.0, 32.0).multiply(&m).multiply(&Mat4::translation_2d(-32.0, -32.0))
+        };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: around(Mat4::perspective(100.0)) },
+            DisplayCommand::PushTransform { matrix: Mat4::translate_3d(0.0, 0.0, 50.0) },
+            DisplayCommand::FillRect { rect: rect(22.0, 22.0, 20.0, 20.0), color: lime },
+            DisplayCommand::PopTransform,
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 14, 32), (0, 255, 0, 255), "вдвое шире исходных 22…42 → 12…52");
+        assert_eq!(px(&img, 50, 32), (0, 255, 0, 255));
+        assert_eq!(px(&img, 8, 32), (255, 255, 255, 255));
+    }
+
+    /// BUG-1290: `perspective · rotateY` — не аффинное: ближняя половина
+    /// квадрата выше дальней, а сам квадрат не плоский прямоугольник.
+    #[test]
+    fn perspective_rotate_y_draws_trapezoid() {
+        use lumen_layout::Mat4;
+        let lime = Color { r: 0, g: 255, b: 0, a: 255 };
+        let m = Mat4::translation_2d(32.0, 32.0)
+            .multiply(&Mat4::perspective(60.0))
+            .multiply(&Mat4::rotate_y(1.0))
+            .multiply(&Mat4::translation_2d(-32.0, -32.0));
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: m },
+            DisplayCommand::FillRect { rect: rect(12.0, 12.0, 40.0, 40.0), color: lime },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let col = |x: u32| (0..64).filter(|&y| px(&img, x, y) == (0, 255, 0, 255)).count();
+        let widths: Vec<usize> = (0..64).map(col).filter(|&h| h > 0).collect();
+        assert!(widths.len() > 8, "что-то нарисовано");
+        let (a, b) = (widths[0], widths[widths.len() - 1]);
+        assert!(a.abs_diff(b) > 6, "края трапеции разной высоты: {a} vs {b}");
+        assert_eq!(px(&img, 2, 2), (255, 255, 255, 255));
     }
 
     /// BUG-1288: блок, лежащий до трансформации за правым краем полотна
