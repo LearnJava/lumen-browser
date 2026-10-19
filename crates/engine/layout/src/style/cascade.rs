@@ -222,6 +222,24 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: 
     style.border_left_width *= z;
 }
 
+/// CSS Overflow L3 §3.5 — whether `node`'s `overflow` is propagated to the viewport: the root
+/// element always, a `<body>` child of the root only when the root's own `overflow` is `visible`
+/// (`parent` is the root's computed style in that case).
+fn overflow_goes_to_viewport(doc: &Document, node: NodeId, parent: &ComputedStyle) -> bool {
+    let nr = doc.get(node);
+    let NodeData::Element { name, .. } = &nr.data else { return false };
+    let Some(parent_id) = nr.parent else { return false };
+    let parent_is_doc = !matches!(doc.get(parent_id).data, NodeData::Element { .. });
+    if parent_is_doc {
+        return name.local.eq_ignore_ascii_case("html");
+    }
+    name.local.eq_ignore_ascii_case("body")
+        && doc.get(parent_id).parent.is_some_and(|g| !matches!(doc.get(g).data, NodeData::Element { .. }))
+        && matches!(&doc.get(parent_id).data, NodeData::Element { name: p, .. } if p.local.eq_ignore_ascii_case("html"))
+        && parent.overflow_x == Overflow::Visible
+        && parent.overflow_y == Overflow::Visible
+}
+
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
 ///
 /// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching.
@@ -1484,6 +1502,10 @@ pub(crate) fn compute_style_shareable(
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
+
+    // CSS Overflow L3 §3.5: `<html>`'s `overflow` (or `<body>`'s, when `<html>`'s is `visible`) is
+    // propagated to the viewport; the element itself behaves as `overflow: visible`.
+    style.overflow_to_viewport = overflow_goes_to_viewport(doc, node, inherited);
 
     // HTML LS §obsolete (BUG-605): `<marquee>` forces `overflow: hidden` in
     // the UA stylesheet as `!important`, unconditionally overriding any

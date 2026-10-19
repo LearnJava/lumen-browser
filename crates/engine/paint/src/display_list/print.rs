@@ -247,6 +247,13 @@ pub(crate) fn overflow_clips(o: Overflow) -> bool {
     )
 }
 
+/// [`overflow_clips`] for one axis of box style `s`: `<html>`/`<body>` whose `overflow: hidden|clip`
+/// was propagated to the viewport (CSS Overflow L3 §3.5, `ComputedStyle::overflow_to_viewport`) behave
+/// as `visible` and do not clip to their own box. `scroll`/`auto` keep their existing handling.
+pub(crate) fn style_overflow_clips(s: &ComputedStyle, o: Overflow) -> bool {
+    overflow_clips(o) && !(s.overflow_to_viewport && matches!(o, Overflow::Hidden | Overflow::Clip))
+}
+
 /// CSS Overflow L4 §line-clamp: the content box a clamped container clips its descendants to
 /// (`LayoutBox::clamp_clip`, relative to the border box), in absolute coordinates.
 pub(crate) fn clamp_clip_rect(b: &LayoutBox) -> Option<Rect> {
