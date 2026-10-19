@@ -86,7 +86,7 @@ pub use mvar::{Mvar, ValueRecord};
 pub use name::Name;
 pub use os2::Os2;
 pub use post::Post;
-pub use rasterizer::{Bitmap, Rasterizer};
+pub use rasterizer::{outline_polylines, Bitmap, Rasterizer};
 pub use font_registry::FontRegistry;
 pub use unicode_range::{UnicodeRange, parse_unicode_ranges, codepoint_in_ranges};
 pub use system_fonts::{SystemFontIndex, shared_system_index};

@@ -126,6 +126,38 @@ impl Rasterizer {
     }
 }
 
+/// Контуры глифа как замкнутые ломаные (`first == last`) в пикселях страницы:
+/// квадратичные Безье развёрнуты тем же `flatten_quad`, что и у растеризатора.
+/// `origin = (pen_x, baseline_y)`; Y инвертирован (font-units растут вверх, страница —
+/// вниз). Нужны обводке текста (`-webkit-text-stroke`): её штрихует бэкенд, а не
+/// атлас покрытия. Composite-глиф и пустой outline дают пустой список.
+#[must_use]
+pub fn outline_polylines(glyph: &Glyph, pixel_size: f32, units_per_em: u16, origin: (f32, f32)) -> Vec<Vec<[f32; 2]>> {
+    let Outline::Simple(contours) = &glyph.outline else {
+        return Vec::new();
+    };
+    if units_per_em == 0 {
+        return Vec::new();
+    }
+    let scale = pixel_size / f32::from(units_per_em);
+    let mut out = Vec::with_capacity(contours.len());
+    let mut edges: Vec<Edge> = Vec::new();
+    for contour in contours {
+        edges.clear();
+        // `walk_contour` вычитает `bitmap_x_min` и вычитает из `bitmap_y_max`:
+        // подставив `-origin.0` и `origin.1`, получаем координаты страницы.
+        walk_contour(contour, scale, -origin.0, origin.1, &mut edges);
+        let Some(&(x0, y0, _, _)) = edges.first() else {
+            continue;
+        };
+        let mut line = Vec::with_capacity(edges.len() + 1);
+        line.push([x0, y0]);
+        line.extend(edges.iter().map(|&(_, _, x, y)| [x, y]));
+        out.push(line);
+    }
+    out
+}
+
 type Point = (f32, f32);
 type Edge = (f32, f32, f32, f32); // (x1, y1, x2, y2) в pixel space (Y вниз)
 

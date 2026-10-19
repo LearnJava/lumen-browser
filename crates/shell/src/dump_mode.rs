@@ -471,6 +471,7 @@ pub(crate) fn canvas_updates_as_images(
                 format: lumen_image::PixelFormat::Rgba8,
                 data: rgba,
                 icc_profile: None,
+                vector_source: None,
             };
             (format!("canvas:{nid}"), Arc::new(image))
         })

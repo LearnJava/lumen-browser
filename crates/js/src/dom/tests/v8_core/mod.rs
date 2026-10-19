@@ -47,6 +47,7 @@ fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::I
         format: lumen_image::PixelFormat::Rgba8,
         data,
         icc_profile: None,
+        vector_source: None,
     })
 }
 

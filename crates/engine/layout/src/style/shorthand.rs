@@ -167,6 +167,50 @@ pub(in crate::style) fn parse_text_decoration_thickness(
     Some(TextDecorationThickness::Length(px))
 }
 
+/// WHATWG Compat §3.2 — `-webkit-text-stroke-width: <'border-width'>`:
+/// `thin | medium | thick | <length [0,∞]>`; `thin`/`medium`/`thick` = 1/3/5 px
+/// (как border-width в Chrome). Отрицательная длина невалидна. Результат — px.
+pub(in crate::style) fn parse_text_stroke_width(val: &str, em_basis: f32, viewport: Size) -> Option<f32> {
+    let trimmed = val.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "thin" => return Some(1.0),
+        "medium" => return Some(3.0),
+        "thick" => return Some(5.0),
+        _ => {}
+    }
+    let px = parse_length(trimmed)?.resolve(em_basis, None, viewport)?;
+    (px >= 0.0).then_some(px)
+}
+
+/// WHATWG Compat §3.2 — `-webkit-text-stroke: <'-webkit-text-stroke-width'> ||
+/// <'-webkit-text-stroke-color'>`. Токены в любом порядке, по одному на
+/// компоненту; пропущенная — initial (`0`, `currentcolor`). `None` — значение
+/// невалидно (декларация игнорируется целиком).
+pub(in crate::style) fn parse_text_stroke_shorthand(
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> Option<(f32, CssColor)> {
+    let mut width: Option<f32> = None;
+    let mut color: Option<CssColor> = None;
+    let mut n = 0;
+    for tok in crate::style::values::length::split_top_level_ws(val.trim()) {
+        n += 1;
+        if let Some(w) = parse_text_stroke_width(tok, em_basis, viewport) {
+            if width.replace(w).is_some() {
+                return None;
+            }
+        } else {
+            let c = parse_css_color_legacy(tok, is_quirks)?;
+            if color.replace(c).is_some() {
+                return None;
+            }
+        }
+    }
+    (n > 0).then_some((width.unwrap_or(0.0), color.unwrap_or(CssColor::CurrentColor)))
+}
+
 fn parse_text_emphasis_shape(s: &str) -> Option<TextEmphasisShape> {
     match s.to_ascii_lowercase().as_str() {
         "dot" => Some(TextEmphasisShape::Dot),

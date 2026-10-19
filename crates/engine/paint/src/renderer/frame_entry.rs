@@ -488,6 +488,7 @@ impl Renderer {
             format: lumen_image::PixelFormat::Rgba8,
             data: pixels,
             icc_profile: None,
+            vector_source: None,
         })
     }
 

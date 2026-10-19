@@ -81,6 +81,8 @@ use crate::style::shorthand::{
     apply_text_wrap_shorthand,
     parse_text_decoration_shorthand_q,
     parse_text_decoration_thickness,
+    parse_text_stroke_shorthand,
+    parse_text_stroke_width,
     parse_text_emphasis_position,
     parse_text_emphasis_style,
 };
@@ -923,6 +925,25 @@ pub(in crate::style) fn apply_decl_text(
             // WHATWG Compat §3.1: `<color>`; initial `currentcolor`.
             if let Some(c) = parse_css_color_legacy(val, is_quirks) {
                 style.text_fill_color = c;
+            }
+        }
+        "-webkit-text-stroke-width" => {
+            // WHATWG Compat §3.2: `<'border-width'>`; initial `0`.
+            if let Some(w) = parse_text_stroke_width(val, em_basis, viewport) {
+                style.text_stroke_width = w;
+            }
+        }
+        "-webkit-text-stroke-color" => {
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.text_stroke_color = c;
+            }
+        }
+        "-webkit-text-stroke" => {
+            // Shorthand `<width> || <color>`: невалидное значение — ignored
+            // целиком, валидное сбрасывает пропущенную компоненту в initial.
+            if let Some((w, c)) = parse_text_stroke_shorthand(val, em_basis, viewport, is_quirks) {
+                style.text_stroke_width = w;
+                style.text_stroke_color = c;
             }
         }
         "text-emphasis-color" => {

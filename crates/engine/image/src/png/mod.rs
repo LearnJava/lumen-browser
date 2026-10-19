@@ -96,7 +96,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
 
     let icc_profile = parse_png_icc_profile(bytes);
 
-    Ok(Image { width: width as u32, height: height as u32, format, data: pixels, icc_profile })
+    Ok(Image { width: width as u32, height: height as u32, format, data: pixels, icc_profile, vector_source: None })
 }
 
 /// Кодирует RGBA8 изображение в PNG формат.

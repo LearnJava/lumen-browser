@@ -511,6 +511,36 @@ use lumen_dom::NodeId;
         assert!(texts.iter().all(|(_, c)| c.a == 0), "{texts:?}");
     }
 
+    fn text_strokes(dl: &[DisplayCommand]) -> Vec<(f32, Color)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawTextStroke { width, color, .. } => Some((*width, *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn webkit_text_stroke_emits_stroke_after_fill() {
+        let dl = build("<p>ab</p>", "p { color: red; -webkit-text-stroke: 2px blue; }");
+        assert_eq!(text_strokes(&dl), vec![(2.0, Color { r: 0, g: 0, b: 255, a: 255 })]);
+        let fill = dl.iter().position(|c| matches!(c, DisplayCommand::DrawText { .. })).expect("fill");
+        let stroke = dl.iter().position(|c| matches!(c, DisplayCommand::DrawTextStroke { .. })).expect("stroke");
+        assert!(stroke > fill, "обводка поверх заливки");
+    }
+
+    #[test]
+    fn webkit_text_stroke_color_defaults_to_current_color() {
+        let dl = build("<p>ab</p>", "p { color: green; -webkit-text-stroke-width: 3px; }");
+        assert_eq!(text_strokes(&dl), vec![(3.0, Color { r: 0, g: 128, b: 0, a: 255 })]);
+    }
+
+    #[test]
+    fn webkit_text_stroke_absent_by_default_and_for_zero_width() {
+        assert!(text_strokes(&build("<p>ab</p>", "p { color: red; }")).is_empty());
+        assert!(text_strokes(&build("<p>ab</p>", "p { -webkit-text-stroke: 0 red; }")).is_empty());
+    }
+
     #[test]
     fn webkit_text_fill_color_initial_follows_color() {
         let dl = build("<p>a<span>b</span></p>", "p { color: red; } span { color: blue; }");

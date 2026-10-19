@@ -775,6 +775,7 @@ pub(crate) fn tiny_png(w: u32, h: u32) -> Vec<u8> {
         format: lumen_image::PixelFormat::Rgba8,
         data: vec![255u8; (w * h * 4) as usize],
         icc_profile: None,
+        vector_source: None,
     };
     lumen_image::encode_png_rgba8(&img).unwrap()
 }

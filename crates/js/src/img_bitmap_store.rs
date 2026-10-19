@@ -91,7 +91,7 @@ mod tests {
     use lumen_image::{Image, PixelFormat};
 
     fn rgba8_img(width: u32, height: u32, data: Vec<u8>) -> Arc<Image> {
-        Arc::new(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None })
+        Arc::new(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None })
     }
 
     #[test]
@@ -146,6 +146,7 @@ mod tests {
             format: PixelFormat::Rgb8,
             data: rgb,
             icc_profile: None,
+            vector_source: None,
         });
         set_img_bitmap(5, img, false);
         let got = with_img_bitmap(5, |w, h, pixels, _| (w, h, pixels.to_vec()));

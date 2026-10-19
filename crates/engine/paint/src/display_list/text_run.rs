@@ -188,9 +188,41 @@ fn emit_text_frags(
                 None
             },
         });
+        emit_text_stroke(out, base_rect, frag);
         push_text_decoration(out, container_x, frag_y, frag);
         emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
     }
+}
+
+/// WHATWG Compat §3.2 — `-webkit-text-stroke`: обводка глифов поверх заливки
+/// (штрих центрирован на контуре, поэтому половина ширины перекрывает заливку).
+/// Вертикальные режимы письма не поддержаны — обводка не рисуется.
+fn emit_text_stroke(out: &mut Vec<DisplayCommand>, base_rect: Rect, frag: &InlineFrag) {
+    let style = &frag.style;
+    let width = style.text_stroke_width;
+    let color = style.used_text_stroke_color();
+    if width <= 0.0
+        || color.a == 0
+        || style.font_size <= 0.0
+        || style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb
+    {
+        return;
+    }
+    let half = width / 2.0;
+    out.push(DisplayCommand::DrawTextStroke {
+        rect: Rect::new(base_rect.x - half, base_rect.y - half, base_rect.width + width, base_rect.height + width),
+        text: lumen_layout::bidi::visual_text(&frag.text, frag.bidi_level).into_owned(),
+        font_size: style.font_size,
+        font_family: style.font_family.clone(),
+        font_weight: style.font_weight,
+        font_style: style.font_style,
+        font_features: lumen_layout::style::text_font_features(style),
+        tab_size: style.tab_size,
+        letter_spacing: super::spacing_to_fixed(style.letter_spacing),
+        word_spacing: super::spacing_to_fixed(style.word_spacing + style.word_spacing_pct * 0.25 * style.font_size),
+        width,
+        color,
+    });
 }
 
 /// Compute the (frag-relative x, width) pixel span that is covered by the

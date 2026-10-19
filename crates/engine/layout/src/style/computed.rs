@@ -253,6 +253,12 @@ pub struct ComputedStyle {
     /// Initial: `CurrentColor` (глиф красится `color`); хранится как задано,
     /// `currentcolor` резолвится в `color` самого фрагмента (`used_text_fill_color`).
     pub text_fill_color: CssColor,
+    /// WHATWG Compat §3.2 — `-webkit-text-stroke-width`, px (≥ 0). Inherited.
+    /// Initial `0` (обводки нет); `thin`/`medium`/`thick` = 1/3/5 px.
+    pub text_stroke_width: f32,
+    /// WHATWG Compat §3.2 — `-webkit-text-stroke-color`. Inherited.
+    /// Initial `currentcolor`, резолвится в `color` фрагмента (`used_text_stroke_color`).
+    pub text_stroke_color: CssColor,
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
@@ -1226,6 +1232,13 @@ impl ComputedStyle {
         !self.column_wrap_nowrap && self.column_height_px(em, viewport).is_some_and(|h| h > 0.0)
     }
 
+    /// Used value `-webkit-text-stroke-color` (WHATWG Compat §3.2): цвет
+    /// обводки глифов; `currentcolor` (initial) — это `color`.
+    #[must_use]
+    pub fn used_text_stroke_color(&self) -> Color {
+        self.text_stroke_color.resolve(self.color)
+    }
+
     /// Used value `-webkit-text-fill-color` (WHATWG Compat §3.1): цвет заливки
     /// глифов; `currentcolor` (initial) — это `color`. Декорации, тень и
     /// emphasis-marks остаются на `color`.
@@ -1334,6 +1347,8 @@ impl ComputedStyle {
             text_emphasis_style: TextEmphasisStyle::None,
             text_emphasis_color: CssColor::CurrentColor,
             text_fill_color: CssColor::CurrentColor,
+            text_stroke_width: 0.0,
+            text_stroke_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
             text_underline_position: TextUnderlinePosition::Auto,
             text_underline_offset: None,
@@ -1724,6 +1739,8 @@ impl ComputedStyle {
             text_emphasis_style: inherited.text_emphasis_style.clone(),
             text_emphasis_color: inherited.text_emphasis_color,
             text_fill_color: inherited.text_fill_color,
+            text_stroke_width: inherited.text_stroke_width,
+            text_stroke_color: inherited.text_stroke_color,
             text_emphasis_position: inherited.text_emphasis_position,
             text_underline_position: inherited.text_underline_position,
             text_underline_offset: inherited.text_underline_offset,

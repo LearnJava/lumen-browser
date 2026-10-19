@@ -132,7 +132,7 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, JpegError> {
     let format = if is_gray { PixelFormat::Gray8 } else { PixelFormat::Rgb8 };
     let icc_profile = parse_jpeg_icc_profile(bytes);
 
-    Ok(Image { width: width as u32, height: height as u32, format, data: pixels, icc_profile })
+    Ok(Image { width: width as u32, height: height as u32, format, data: pixels, icc_profile, vector_source: None })
 }
 
 /// Colour-manages a CMYK/YCCK JPEG through its embedded CMYK ICC profile (ICC-4).
@@ -195,6 +195,7 @@ fn try_decode_cmyk_icc(
         format: PixelFormat::Rgb8,
         data: out,
         icc_profile: None,
+        vector_source: None,
     })
 }
 

@@ -149,6 +149,7 @@ pub fn crop_screenshot(png: &[u8], border_box: Rect) -> Result<Vec<u8>> {
         format: lumen_image::PixelFormat::Rgba8,
         data: cropped,
         icc_profile: None,
+        vector_source: None,
     };
     lumen_image::encode_png_rgba8(&cropped_image)
         .map_err(|e| Error::Other(format!("crop_screenshot: PNG encode: {e}")))
@@ -168,6 +169,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: [255, 0, 0, 255].repeat(16),
             icc_profile: None,
+            vector_source: None,
         };
         let png = lumen_image::encode_png_rgba8(&image).expect("encode");
 
@@ -186,6 +188,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: [0, 0, 0, 255].repeat(16),
             icc_profile: None,
+            vector_source: None,
         };
         let png = lumen_image::encode_png_rgba8(&image).expect("encode");
 

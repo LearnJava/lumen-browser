@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-19",
  "counts": {
-  "open": 370,
-  "fixed": 1213,
+  "open": 369,
+  "fixed": 1215,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1586,
+ "total_bugs": 1587,
  "phases": [
   {
    "id": "P0",
@@ -10040,13 +10040,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1296": {
-   "status": "open",
-   "title": "Растр SVG-фона растягивается билинейно, а не растеризуется в целевой размер: между `lime` и `aqua` 4 строки промежуточных цветов. WPT `css/css-backgrounds/backg…",
-   "component": "paint/image (`crates/engine/image/src/svg.rs` → `DrawBackgroundImage` в `cpu_raster.rs`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1297": {
    "status": "open",
    "title": "CSSOM `background-*`/`border-*`/`box-shadow`/`border-radius`: `element.style` принимает невалидное (`-1px`, `left right`, `auto`), не канонизирует; `getComputed…",
@@ -11797,13 +11790,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1638": {
-   "status": "open",
-   "title": "Событие `statechange` ServiceWorker приходит без `target`: youtube `Cannot read properties of null (reading 'state')`",
-   "component": "js (`navigator.serviceWorker`, `statechange`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1640": {
    "status": "open",
    "title": "`perspective: inherit` не даёт обёртку проекции; `perspective-origin: 0 0` даёт иной результат, чем `top left`; перспектива контейнера доходит до внука через in…",
@@ -11864,6 +11850,13 @@
    "status": "open",
    "title": "Оверлей не знает каскадного происхождения значения: `!important` в таблице стилей должен перебивать `@keyframes`, а он перебивается (`css-animations/important-r…",
    "component": "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1649": {
+   "status": "open",
+   "title": "Остаток BUG-1296: GPU-бэкенды растягивают растр SVG-фона текстурным фильтром, а не перерисовывают SVG в размер плитки (CPU-путь исправлен). Вживую не проверено.",
+   "component": "paint (`backends/femtovg_backend.rs`, wgpu `renderer/` — `DrawBackgroundImage`)",
    "date": null,
    "debtor": false
   },
@@ -20358,6 +20351,13 @@
    "date": "2026-10-19",
    "debtor": false
   },
+  "BUG-1638": {
+   "status": "fixed",
+   "title": "Событие `statechange` ServiceWorker приходило без `target`: youtube `Cannot read properties of null (reading 'state')`; `dispatchEvent` теперь выставляет `targe…",
+   "component": "js (`web_api_shim_mid_b.js` `_sw_make_event_target`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
   "BUG-1639": {
    "status": "fixed",
    "title": "`FontFace`: `TypeError: self._rejectLoaded is not a function` как `unhandledrejection`, десятки раз за загрузку youtube (вероятно связано с BUG-1634)",
@@ -20376,6 +20376,13 @@
    "status": "fixed",
    "title": "CSS-переход/анимация создаётся на следующем кадре: синхронное `getComputedStyle()` после смены стиля с `transition-delay:-50s` отдаёт конечное значение, `getAni…",
    "component": "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1296": {
+   "status": "fixed",
+   "title": "Растр SVG-фона растягивался билинейно, а не растеризовался в целевой размер: между `lime` и `aqua` 4 строки градиента. Исправлено перерисовкой SVG в размер плит…",
+   "component": "paint/image (`Image::vector_source`, `lumen_image::rasterize_svg`, `cpu_raster.rs::vector_tile`)",
    "date": "2026-10-19",
    "debtor": false
   }
@@ -21604,9 +21611,6 @@
   "js (`grep -rn wholeText crates/js/src` — ноль совпадений)": [
    "BUG-1163"
   ],
-  "js (`navigator.serviceWorker`, `statechange`)": [
-   "BUG-1638"
-  ],
   "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
    "BUG-964"
   ],
@@ -21615,6 +21619,9 @@
   ],
   "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)": [
    "BUG-1239"
+  ],
+  "js (`web_api_shim_mid_b.js` `_sw_make_event_target`)": [
+   "BUG-1638"
   ],
   "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)": [
    "BUG-1648"
@@ -22883,6 +22890,9 @@
   "paint (`atlas.rs` — `try_insert`/`exhausted`/`reset`; `renderer.rs` — `ensure_glyph`, `rasterize_and_insert`, `recover_exhausted_atlas`, `atlas_on_memory_pressure`)": [
    "BUG-435"
   ],
+  "paint (`backends/femtovg_backend.rs`, wgpu `renderer/` — `DrawBackgroundImage`)": [
+   "BUG-1649"
+  ],
   "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
    "BUG-784"
   ],
@@ -23013,7 +23023,7 @@
   "paint/image": [
    "BUG-032"
   ],
-  "paint/image (`crates/engine/image/src/svg.rs` → `DrawBackgroundImage` в `cpu_raster.rs`)": [
+  "paint/image (`Image::vector_source`, `lumen_image::rasterize_svg`, `cpu_raster.rs::vector_tile`)": [
    "BUG-1296"
   ],
   "paint/layout": [

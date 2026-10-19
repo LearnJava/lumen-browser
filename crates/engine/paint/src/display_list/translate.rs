@@ -41,6 +41,7 @@ impl DisplayCommand {
             | Self::DrawBorder { rect, .. }
             | Self::DrawOutline { rect, .. }
             | Self::DrawText { rect, .. }
+            | Self::DrawTextStroke { rect, .. }
             | Self::DrawImage { rect, .. }
             | Self::LazyImageSlot { rect, .. }
             | Self::DrawLinearGradient { rect, .. }

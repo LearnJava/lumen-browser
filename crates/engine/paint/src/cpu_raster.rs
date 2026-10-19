@@ -19,6 +19,8 @@ use lumen_core::geom::Rect;
 use lumen_core::FontProvider;
 use crate::cpu_font_resolve::resolve_face_candidates;
 
+pub(crate) mod text_stroke;
+
 /// How a pushed off-screen layer is composited back onto the layer below when
 /// its group closes (`PopOpacity` / `PopTransform`).
 ///
@@ -245,6 +247,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
         format: lumen_image::PixelFormat::Rgba8,
         data,
         icc_profile: None,
+        vector_source: None,
     })
 }
 
@@ -261,6 +264,8 @@ fn rasterize_cpu_pixmap(
     clear: Option<Color>,
 ) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
+    // `-webkit-text-stroke`: обводка глифов штрихуется как `DrawSvgStroke`.
+    let commands = &*crate::text_stroke::expand_all(commands, font_provider);
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
@@ -2975,6 +2980,7 @@ fn rasterize_background_image(
 
     let x_end = rect.x + rect.width;
     let y_end = rect.y + rect.height;
+    let mut vector_cache: Option<Image> = None;
     let mut ty = tile_y_start;
     loop {
         if ty >= y_end {
@@ -3003,7 +3009,10 @@ fn rasterize_background_image(
                         let (vy0, vy1) = (vy0.round().max(sy0), vy1.round().min(sy1));
                         if vx1 > vx0 && vy1 > vy0 {
                             let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
-                            blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                            // SVG: redraw at the tile's device size instead of
+                            // stretching the intrinsic raster (BUG-1296).
+                            let tile = vector_tile(img, placed.width, placed.height, &mut vector_cache);
+                            blit_image_into_rect(pixmap, placed, visible, tile.unwrap_or(img), 1.0, clip)?;
                         }
                     }
                 }
@@ -3019,6 +3028,22 @@ fn rasterize_background_image(
         ty += step_y;
     }
     Ok(())
+}
+
+/// Raster of `img`'s vector source ([`Image::vector_source`]) at exactly the
+/// `w`×`h` device pixels a tile occupies, or `None` when `img` is not vector or
+/// already has that size. Tiles of one background share a size, so the last
+/// render is kept in `cache` and reused.
+fn vector_tile<'a>(img: &Image, w: f32, h: f32, cache: &'a mut Option<Image>) -> Option<&'a Image> {
+    let source = img.vector_source.as_ref()?;
+    let (tw, th) = (w.round().max(1.0) as u32, h.round().max(1.0) as u32);
+    if (tw, th) == (img.width, img.height) {
+        return None;
+    }
+    if cache.as_ref().is_none_or(|c| (c.width, c.height) != (tw.min(4096), th.min(4096))) {
+        *cache = lumen_image::rasterize_svg(source, tw, th).ok();
+    }
+    cache.as_ref()
 }
 
 /// Convert a decoded [`Image`] (straight RGBA8) into a premultiplied tiny-skia
@@ -3866,6 +3891,63 @@ mod tests {
         let a = rasterize_cpu(64, 64, &stroke_cmd, &[], 0.0, 0.0).expect("stroke");
         let b = rasterize_cpu(64, 64, &path_cmd, &[], 0.0, 0.0).expect("path");
         assert_eq!(a.data, b.data, "CPU DrawSvgStroke must be byte-identical to the old triangle soup");
+    }
+
+    fn stroke_cmd(text: &str, width: f32, color: Color) -> DisplayCommand {
+        stroke_cmd_sized(text, 32.0, width, color)
+    }
+
+    fn stroke_cmd_sized(text: &str, font_size: f32, width: f32, color: Color) -> DisplayCommand {
+        DisplayCommand::DrawTextStroke {
+            rect: Rect::new(10.0 - width / 2.0, 10.0 - width / 2.0, 100.0 + width, 40.0 + width),
+            text: text.into(),
+            font_size,
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight(400),
+            font_style: lumen_layout::FontStyle::Normal,
+            font_features: Vec::new(),
+            tab_size: 0.0,
+            letter_spacing: 0,
+            word_spacing: 0,
+            width,
+            color,
+        }
+    }
+
+    /// `-webkit-text-stroke`: `expand` отдаёт контуры глифов как `DrawSvgStroke` с
+    /// половиной ширины в `half_width`; пробел контуров не имеет.
+    #[test]
+    fn text_stroke_expands_to_glyph_contours() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let Some(DisplayCommand::DrawSvgStroke { contours, params, color }) =
+            text_stroke::expand(&stroke_cmd("H", 4.0, blue), None)
+        else {
+            panic!("DrawTextStroke must expand to DrawSvgStroke");
+        };
+        assert_eq!(color, blue);
+        assert!((params.half_width - 2.0).abs() < 1e-6);
+        // «H» — один замкнутый контур.
+        assert_eq!(contours.len(), 1);
+        assert_eq!(contours[0].first(), contours[0].last());
+        assert!(text_stroke::expand(&stroke_cmd(" ", 4.0, blue), None).is_none());
+        assert!(text_stroke::expand(&stroke_cmd("", 4.0, blue), None).is_none());
+    }
+
+    /// Пиксели обводки: у «O» на средней строке четыре штриха (оба края обоих
+    /// стволов), между ними — фон: заливка не рисуется.
+    #[test]
+    fn text_stroke_paints_outline_not_fill() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let img = rasterize_cpu(160, 128, &[stroke_cmd_sized("O", 96.0, 2.0, blue)], &[], 0.0, 0.0).expect("raster");
+        let is_ink = |x: u32, y: u32| px(&img, x, y) == (0, 0, 255, 255);
+        let ink = (0..128u32).flat_map(|y| (0..160u32).map(move |x| (x, y))).filter(|&(x, y)| is_ink(x, y)).count();
+        assert!(ink > 200, "обводка нарисована: {ink} px");
+        // Строка по высоте середины «O»: baseline ≈ 10 + 96·0.97, x-height-середина выше на ~35.
+        let y = (10.0 + 96.0 * 0.97 - 35.0) as u32;
+        let cols: Vec<u32> = (0..160).filter(|&x| is_ink(x, y)).collect();
+        let groups = 1 + cols.windows(2).filter(|w| w[1] > w[0] + 1).count();
+        assert!(groups >= 4, "четыре края ствола, а не сплошная заливка: {cols:?}");
+        assert_eq!(px(&img, 155, 125), (255, 255, 255, 255));
     }
 
     /// `DrawImage` fills its box with the light-grey placeholder quad
@@ -5791,6 +5873,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: [255u8, 0, 0, 255].repeat(4),
             icc_profile: None,
+            vector_source: None,
         };
         let images = vec![("red.png".to_string(), std::sync::Arc::new(red_2x2))];
         let cmds = vec![DisplayCommand::DrawImage {
@@ -5816,6 +5899,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: vec![0, 0, 255, 255],
             icc_profile: None,
+            vector_source: None,
         };
         let images = vec![("b.png".to_string(), std::sync::Arc::new(blue))];
         let cmds = vec![DisplayCommand::DrawImage {
@@ -5905,6 +5989,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: rgba.repeat(4),
             icc_profile: None,
+            vector_source: None,
         }
     }
 
@@ -5929,6 +6014,35 @@ mod tests {
         assert!(b > 230 && r < 25 && g < 25 && a == 255, "bg centre is blue, got ({r},{g},{b},{a})");
         // The single `cover` tile is clipped to the painting area — outside stays white.
         assert_eq!(px(&img, 55, 55), (255, 255, 255, 255), "outside painting area is white");
+    }
+
+    /// BUG-1296: an SVG background is redrawn at the tile's device size, so the
+    /// boundary between two stacked rects stays a hard edge instead of the
+    /// bilinear gradient band a stretched 8×32 raster gives.
+    #[test]
+    fn draw_background_image_svg_is_rerasterized_at_tile_size() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="32">
+            <rect width="8" height="16" fill="lime"/><rect y="16" width="8" height="16" fill="aqua"/></svg>"#;
+        let decoded = lumen_image::decode_svg(svg).expect("svg");
+        let images = vec![("a.svg".to_string(), std::sync::Arc::new(decoded))];
+        let area = rect(0.0, 0.0, 100.0, 100.0);
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: area,
+            origin_rect: area,
+            src: "a.svg".to_string(),
+            size: BackgroundSize::Contain,
+            position: ObjectPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(100, 100, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        // contain → 25×100 tile at x 37.5..62.5; the lime/aqua edge is at y = 50.
+        for y in [0, 25, 49] {
+            assert_eq!(px(&img, 50, y), (0, 255, 0, 255), "lime row {y}");
+        }
+        for y in [50, 75, 99] {
+            assert_eq!(px(&img, 50, y), (0, 255, 255, 255), "aqua row {y}");
+        }
     }
 
     /// `DrawBackgroundImage` with `repeat` tiles a small image across the whole

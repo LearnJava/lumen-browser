@@ -24,6 +24,7 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::FillRoundedRect { rect, .. }
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
+            | DisplayCommand::DrawTextStroke { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
             | DisplayCommand::LazyImageSlot { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
@@ -88,6 +89,7 @@ pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::FillRoundedRect { rect, .. }
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
+            | DisplayCommand::DrawTextStroke { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
             | DisplayCommand::LazyImageSlot { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
