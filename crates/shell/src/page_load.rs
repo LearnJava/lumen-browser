@@ -2555,6 +2555,7 @@ impl Lumen {
         self.web_fonts.clear();
         self.requested_web_fonts.clear();
         self.deferred_web_fonts.clear();
+        self.web_font_fetches.clear();
 
         // PH3-19: spawn one background thread per pending @font-face url() source.
         // Each thread fetch+decodes the font and sends FontLoaded; the handler
@@ -2829,26 +2830,35 @@ impl Lumen {
                     let sink = Arc::clone(&self.event_sink);
                     let cookie_jar = self.active_cookie_jar();
                     let proxy = self.load_proxy.clone();
+                    let fetches = self.web_font_fetches.clone();
                     std::thread::spawn(move || {
-                        let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(cookie_jar), referrer_policy) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                eprintln!("@font-face «{}»: не загружен {}: {e}", pf.family, pf.url);
-                                return;
+                        // BUG-1650: вариативный шрифт приходит несколькими блоками
+                        // `@font-face` на один URL — сеть и декод один раз на URL.
+                        let family = pf.family.clone();
+                        let bytes = fetches.get_or_fetch(&gate_url, || {
+                            let raw = match fetch_font_bytes(&gate_url, &base, &sink, Some(cookie_jar), referrer_policy) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    eprintln!("@font-face «{family}»: не загружен {}: {e}", pf.url);
+                                    return None;
+                                }
+                            };
+                            let bytes = match lumen_font::maybe_decode_font(&raw) {
+                                Ok(Some(d)) => d,
+                                Ok(None) => raw,
+                                Err(e) => {
+                                    eprintln!("@font-face «{family}»: WOFF-декод провалился: {e}");
+                                    return None;
+                                }
+                            };
+                            if lumen_font::Font::parse(&bytes).is_err() {
+                                eprintln!("@font-face «{family}»: невалидный sfnt {}", pf.url);
+                                return None;
                             }
-                        };
-                        let bytes = match lumen_font::maybe_decode_font(&raw) {
-                            Ok(Some(d)) => d,
-                            Ok(None) => raw,
-                            Err(e) => {
-                                eprintln!("@font-face «{}»: WOFF-декод провалился: {e}", pf.family);
-                                return;
-                            }
-                        };
-                        if lumen_font::Font::parse(&bytes).is_err() {
-                            eprintln!("@font-face «{}»: невалидный sfnt {}", pf.family, pf.url);
-                            return;
-                        }
+                            Some(bytes)
+                        });
+                        let Some(bytes) = bytes else { return };
+                        let bytes = bytes.as_ref().clone();
                         eprintln!("@font-face async загружен: «{}» weight={}", pf.family, pf.weight);
                         let unicode_range = pf.unicode_range_str
                             .as_deref()

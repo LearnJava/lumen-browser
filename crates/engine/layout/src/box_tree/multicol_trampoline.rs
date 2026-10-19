@@ -1126,12 +1126,28 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     // An item that is a grid itself (a subgrid spanning the container's rows) is cut
                     // like the container: its row tracks are clipped to this window, so the gaps a
                     // break splits are not painted (`subgrid-gap-decorations-fragmentation-001`).
-                    // The part of one of the item's own row gaps that the window starts in is not                    // drawn at its top: the first track moves up to the fragment's edge and the                    // item is that much shorter (`subgrid-gap-decorations-fragmentation-015`).
+                    // The part of one of the item's own row gaps that the window starts in is not
+                    // drawn at its top: the first track moves up to the fragment's edge and the
+                    // item is that much shorter (`subgrid-gap-decorations-fragmentation-015`). When a
+                    // child of the item spans that gap (a spanner over several rows) the gap stays
+                    // inside it: the first track grows upwards over the gap instead and the children
+                    // that start in it grow with it (`subgrid-gap-decorations-fragmentation-021`).
                     let mut dropped = 0.0f32;
+                    let mut grown = None;
                     if top < ws - 0.01 || bot > we + 0.01 {
-                        let cut = c.subgrid_tracks.as_ref().and_then(|t| item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi));
-                        if let Some((tracks, d)) = cut {
+                        let spans: Vec<(f32, f32)> = c
+                            .children
+                            .iter()
+                            .filter(|g| !matches!(g.kind, BoxKind::Skip))
+                            .map(|g| (g.rect.y - gy, g.rect.y - gy + g.rect.height))
+                            .collect();
+                        let cut = c
+                            .subgrid_tracks
+                            .as_ref()
+                            .and_then(|t| item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi, &spans));
+                        if let Some((tracks, d, g)) = cut {
                             dropped = d;
+                            grown = g;
                             k.subgrid_tracks = Some(tracks);
                         }
                     }
@@ -1143,7 +1159,10 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                         .iter()
                         .filter_map(|g| {
                             let (t, b) = (g.rect.y - gy, g.rect.y - gy + g.rect.height);
-                            let up = if dropped > 0.0 && t >= lo + dropped - 0.01 { dropped } else { 0.0 };
+                            let mut up = if dropped > 0.0 && t >= lo + dropped - 0.01 { dropped } else { 0.0 };
+                            // A child that starts in the track that grew over the gap grows with it.
+                            let grow = grown.filter(|&(at, _)| (t - at).abs() <= 0.01).map_or(0.0, |(_, gap)| gap);
+                            up += grow;
                             // A childless block (an empty subgrid cell) that a window edge runs
                             // through is cut like the item: each window keeps its part
                             // (`subgrid-gap-decorations-fragmentation-007`).
@@ -1160,6 +1179,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                             (matches!(g.kind, BoxKind::Skip) || (t >= ws - 0.01 && t < we - 0.01)).then(|| {
                                 let mut g = g.clone();
                                 super::shift_tree(&mut g, dx, dy - up);
+                                g.rect.height += grow;
                                 g
                             })
                         })
@@ -1229,13 +1249,18 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
 /// `lo..hi` of itself. `None` when the item has no row tracks to clip (the item keeps its own).
 /// The second value is the block size of the item's own row gap that the window starts in (a
 /// window edge on the leading edge of the gap or inside it): that gap is dropped, the first
-/// visible track moves up to the fragment's top edge by this amount.
+/// visible track moves up to the fragment's top edge by this amount. When a child of the item
+/// (`spans`, container coordinates) crosses that gap the gap is kept inside the item instead: the
+/// second value is 0 and the third is `(top of the first track, gap size)`, the track grows
+/// upwards over the gap.
+#[allow(clippy::type_complexity)]
 fn item_fragment_tracks(
     t: &crate::subgrid::SubgridTracks,
     content_top: f32,
     lo: f32,
     hi: f32,
-) -> Option<(Box<crate::subgrid::SubgridTracks>, f32)> {
+    spans: &[(f32, f32)],
+) -> Option<(Box<crate::subgrid::SubgridTracks>, f32, Option<(f32, f32)>)> {
     let rows = t.rows.as_ref()?;
     let visible: Vec<(usize, (f32, f32))> = rows
         .iter()
@@ -1247,16 +1272,25 @@ fn item_fragment_tracks(
         .collect();
     // A first visible track that is not the item's first and starts below the window edge: the
     // edge is in the gap before it.
-    let dropped = visible.first().filter(|v| v.0 > 0 && v.1.0 > 0.01).map_or(0.0, |v| v.1.0);
+    let gap = visible.first().filter(|v| v.0 > 0 && v.1.0 > 0.01).map_or(0.0, |v| v.1.0);
+    let bridged = gap > 0.0 && spans.iter().any(|&(a, b)| a <= lo + 0.01 && b >= lo + gap - 0.01);
+    let (dropped, grown) = if bridged { (0.0, Some((lo + gap, gap))) } else { (gap, None) };
     Some((
         Box::new(crate::subgrid::SubgridTracks {
             cols: t.cols.clone(),
-            rows: Some(visible.iter().map(|v| (v.1.0 - dropped, v.1.1 - dropped)).collect()),
+            rows: Some(
+                visible
+                    .iter()
+                    .enumerate()
+                    .map(|(n, v)| if bridged { (if n == 0 { 0.0 } else { v.1.0 }, v.1.1) } else { (v.1.0 - dropped, v.1.1 - dropped) })
+                    .collect(),
+            ),
             fragment: true,
             row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
             line_gaps: None,
         }),
         dropped,
+        grown,
     ))
 }
 

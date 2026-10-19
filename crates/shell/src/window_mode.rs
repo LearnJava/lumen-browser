@@ -400,6 +400,7 @@ fn run_window_mode_inner(
         web_fonts: Vec::new(),
         requested_web_fonts: std::collections::HashSet::new(),
         deferred_web_fonts: Vec::new(),
+        web_font_fetches: crate::web_font_usage::FontUrlFetches::default(),
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
