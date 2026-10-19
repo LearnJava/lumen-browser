@@ -381,6 +381,70 @@ use super::*;
         );
     }
 
+    // ── Legacy WebKit-prefixed: -webkit-*-device-pixel-ratio / -webkit-transform-3d ──
+
+    #[test]
+    fn media_query_webkit_device_pixel_ratio_matches_context() {
+        let min2 = parse_media_query("(-webkit-min-device-pixel-ratio: 2)");
+        let min1 = parse_media_query("(-webkit-min-device-pixel-ratio:1)");
+        let max15 = parse_media_query("(-webkit-max-device-pixel-ratio: 1.5)");
+        let exact = parse_media_query("(-webkit-device-pixel-ratio: 2)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.resolution_dppx = 1.0;
+        assert!(min1.matches(&ctx));
+        assert!(!min2.matches(&ctx));
+        assert!(max15.matches(&ctx));
+        assert!(!exact.matches(&ctx));
+        ctx.resolution_dppx = 2.0;
+        assert!(min2.matches(&ctx));
+        assert!(!max15.matches(&ctx));
+        assert!(exact.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_webkit_device_pixel_ratio_serializes_like_chrome() {
+        assert_eq!(
+            parse_media_query("(-webkit-min-device-pixel-ratio:2)").serialize(),
+            "(-webkit-min-device-pixel-ratio: 2)"
+        );
+        assert_eq!(
+            parse_media_query("(-WEBKIT-MAX-device-pixel-ratio: 1.5)").serialize(),
+            "(-webkit-max-device-pixel-ratio: 1.5)"
+        );
+        assert_eq!(
+            parse_media_query("(-webkit-device-pixel-ratio: 3)").serialize(),
+            "(-webkit-device-pixel-ratio: 3)"
+        );
+    }
+
+    #[test]
+    fn media_query_webkit_device_pixel_ratio_rejects_bad_values() {
+        for bad in [
+            "(-webkit-min-device-pixel-ratio: 2dppx)",
+            "(-webkit-min-device-pixel-ratio: -1)",
+            "(-webkit-min-device-pixel-ratio: foo)",
+            "(-webkit-min-device-pixel-ratio)",
+        ] {
+            assert_eq!(parse_media_query(bad).serialize(), "not all", "{bad}");
+        }
+    }
+
+    #[test]
+    fn media_query_webkit_transform_3d() {
+        let ctx = screen_ctx(1024.0);
+        assert!(parse_media_query("(-webkit-transform-3d)").matches(&ctx));
+        assert!(parse_media_query("(-webkit-transform-3d: 1)").matches(&ctx));
+        assert!(!parse_media_query("(-webkit-transform-3d: 0)").matches(&ctx));
+        assert_eq!(
+            parse_media_query("(-webkit-transform-3d)").serialize(),
+            "(-webkit-transform-3d)"
+        );
+        assert_eq!(
+            parse_media_query("(-webkit-transform-3d: 1)").serialize(),
+            "(-webkit-transform-3d: 1)"
+        );
+    }
+
     #[test]
     fn media_query_resolution_matches_context() {
         let q = parse_media_query("(min-resolution: 2dppx)");

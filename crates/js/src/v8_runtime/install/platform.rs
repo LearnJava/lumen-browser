@@ -462,11 +462,11 @@ pub(crate) fn install_match_media(
     // ── window.matchMedia (CSS Media Queries L4 §4.2) ────────────────────────
     // Parses `query` as a media query and evaluates it against an ad-hoc
     // MediaContext built from the supplied viewport size + user-preference
-    // flags (dark, reduced-motion, forced-colors). Pure function — no captures: parse_media_query and MediaQuery::matches
+    // flags (dark, reduced-motion, forced-colors) + device pixel ratio. Pure function — no captures: parse_media_query and MediaQuery::matches
     // are stateless. Returns `true` when the query currently matches.
     reg!(scope, ctx, store, 
         "_lumen_match_media",
-        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool, forced_colors: bool| -> bool {
+        |query: String, w: f64, h: f64, dark: bool, reduced_motion: bool, forced_colors: bool, dpr: f64| -> bool {
             let mq = lumen_css_parser::parse_media_query(&query);
             let ctx = lumen_css_parser::MediaContext {
                 media_type: "screen".to_owned(),
@@ -475,6 +475,7 @@ pub(crate) fn install_match_media(
                 prefers_dark: dark,
                 prefers_reduced_motion: reduced_motion,
                 forced_colors,
+                resolution_dppx: if dpr.is_finite() && dpr > 0.0 { dpr as f32 } else { 1.0 },
                 ..Default::default()
             };
             mq.matches(&ctx)
