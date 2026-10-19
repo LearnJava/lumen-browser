@@ -407,20 +407,7 @@ pub(crate) fn build_grid_init(
         && inherited_rows.is_none()
         && !subgrid_cols
         && super::grid_lanes::lanes_axis(s) == crate::style::LanesAxis::Column)
-        .then(|| {
-            item_idxs
-                .iter()
-                .map(|&i| {
-                    let is = &children[i].style;
-                    let (cs, ce) = resolve_grid_axis(&is.grid_column_start, &is.grid_column_end, &col_axis);
-                    if cs != 0 {
-                        super::grid_lanes::LaneItem { def: Some(cs as usize - 1), span: (ce.saturating_sub(cs)).max(1) as usize }
-                    } else {
-                        super::grid_lanes::LaneItem { def: None, span: ce.max(1) as usize }
-                    }
-                })
-                .collect()
-        });
+        .then(|| super::grid_lanes::lane_items(children, &item_idxs, &col_axis));
     if lane_items.is_some() {
         for (k, p) in placements.iter_mut().enumerate() {
             p.2 = k as u32 + 1;
@@ -497,10 +484,17 @@ pub(crate) fn build_grid_init(
             && s.grid_template_col_auto_repeat.is_none()
             && !col_collapsed.iter().any(|&c| c)
         {
+            let lane_sizing = lane_items
+                .as_ref()
+                .map(|l| super::grid_lanes::sizing_items(&item_idxs, &placements, l, n_cols as usize));
+            let (size_idxs, size_places) = match &lane_sizing {
+                Some((i, p)) => (i.as_slice(), p.as_slice()),
+                None => (item_idxs.as_slice(), placements.as_slice()),
+            };
             super::grid_auto_cols::content_sized_col_widths(
                 children,
-                &item_idxs,
-                &placements,
+                size_idxs,
+                size_places,
                 &col_names,
                 s,
                 eff_col_template,

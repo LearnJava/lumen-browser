@@ -5,12 +5,12 @@
 //! This is the "greedy" variant of the spec; the optional optimizing variant
 //! (`masonry-auto-flow: ordered`) is a future extension.
 //!
-//! Integration: currently **unwired, on purpose**. No stable browser ships masonry,
-//! and Edge drops `masonry` as an invalid track value, so `box_tree/grid.rs` strips
-//! the `GridTrackSize::Masonry` sentinel and lays the axis out as a regular grid
-//! (BUG-105/BUG-143, TEST-63/75). `masonry-auto-flow` is parsed and stored but has
-//! no layout effect for the same reason. This module keeps the standalone algorithm
-//! for the day a stable engine ships masonry and the ground truth changes.
+//! Integration: currently **unwired, on purpose**. `display: grid-lanes` (the renamed spec
+//! feature) has its own implementation in `box_tree/grid_lanes.rs`, built on the grid
+//! measuring pass; this module is the older standalone `masonry` algorithm. `display: masonry`
+//! and `grid-template-*: masonry` stay invalid: `box_tree/grid.rs` strips the
+//! `GridTrackSize::Masonry` sentinel and lays the axis out as a regular grid (Edge parity,
+//! BUG-105/BUG-143, TEST-27/63/75). `masonry-auto-flow` is parsed and stored, no layout effect.
 
 use crate::box_tree::LayoutBox;
 

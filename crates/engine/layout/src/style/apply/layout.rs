@@ -109,6 +109,13 @@ pub(in crate::style) fn apply_decl_layout(
             // CSS Grid L3 §2: `grid-lanes` / `inline-grid-lanes` — не отдельные варианты `Display`,
             // контейнер остаётся `Grid`/`InlineGrid`, а `grid_lanes.enabled` переключает раскладку.
             let mut valid = true;
+            // Двухсловная форма (`<display-outside> <display-inside>`) — только с `grid-lanes`
+            // внутри; остальные многословные значения — BUG-1476.
+            let val = match val.split_ascii_whitespace().collect::<Vec<_>>()[..] {
+                ["inline", "grid-lanes"] | ["grid-lanes", "inline"] => "inline-grid-lanes",
+                ["block", "grid-lanes"] | ["grid-lanes", "block"] => "grid-lanes",
+                _ => val,
+            };
             let lanes = matches!(val, "grid-lanes" | "inline-grid-lanes");
             style.display = match val {
                 "grid-lanes" => Display::Grid,
