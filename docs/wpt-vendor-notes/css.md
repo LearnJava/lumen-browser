@@ -180,14 +180,14 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | hit-test во фрагментах | 9 | 71 | — | `hit-test-transformed.html`, `relpos-inline-hit-testing.html` | `elementFromPoint` по нефрагментированной геометрии — следствие кластеров выше; `hit-test-inline-fragmentation-with-border-radius.html` (28 сабтестов) без multicol — не разобрано | P1 | **без записи** (< 20 id; ждёт `MULTICOL-FRAG`) |
 | парсинг: `*-invalid`, `page-break-*` | 8 | 26 | — | `parsing/break-after-invalid.html`, `page-break-legacy-shorthands.html` | `element.style` принимает `none`/`avoid region`/`1 234`; legacy `page-break-*` не отображаются на `break-*`, `!important` попадает в значение | P4 | **без записи** (< 20 id) |
 | `getComputedStyle` `break-*`/`orphans`/`widows` | 7 | 49 | — | `parsing/break-before-computed.html`, `inheritance.html` | в `computed_style_to_map` нет строк — механизм [BUG-1278](../../bugs/BUG-1278-OPEN.md)/[BUG-472](../../bugs/BUG-472-OPEN.md) | P3 | **без записи** (< 20 id) |
-| crashtest TIMEOUT | 3 | — | — | `nested-float-in-multicol-crash.html`, `grid/grid-large-end-border-crash.html` | оконный shell зависает на содержимом высотой ~10¹⁰ px; CLI-снимок того же файла — 0,4 с | P3 | [BUG-1283](../../bugs/BUG-1283-OPEN.md) |
+| crashtest TIMEOUT | 3 | — | — | `nested-float-in-multicol-crash.html`, `grid/grid-large-end-border-crash.html` | оконный shell зависает на содержимом высотой ~10¹⁰ px; CLI-снимок того же файла — 0,4 с | P3 | [BUG-1283](../../bugs/BUG-1283-FIXED.md) (исправлен 2026-10-19: `TileGrid::mark_all_dirty`; третий crashtest — ещё и `border_bevel`) |
 
 ### Что остаётся неизвестным
 
 - Насколько каждый кластер «грязный»: пробы подтверждают атомарность для каждого вида содержимого, но тесты, проходящие после `MULTICOL-FRAG`, могут упасть на следующем слое (повтор `thead`, `orphans`/`widows`, усечение margin). Пересчитать после неё.
 - 30 flex, 10 grid, 16 abspos и 4 table reftest уже зелёные — содержимое помещается в одну колонку или тест проверяет только отсутствие красного.
 - `text-indent-and-wide-float.html` — identical в `--screenshot` 800×600, но FAIL в wptrunner; reftest-ы снимаются в 1024×720 (`Unexpected viewport size`, как в срезе 1).
-- BUG-1283: шаг оконного конвейера, который растёт с высотой содержимого, не найден — исключены только растр и layout.
+- BUG-1283: шаг оконного конвейера — `TileGrid::mark_all_dirty` (запись на каждый тайл страницы); исправлен 2026-10-19.
 
 ## css-transforms — вердикт и кластеры (WPT-RUN-14 срез 5, 2026-10-06)
 
@@ -1030,10 +1030,10 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | multicol: `column-wrap:wrap` без `column-height` | 3 | — | 3 thick | `column-height-003.html`, `column-height-004.html`, `column-wrap-no-constraints-002.html` | `column-height:auto` берёт высоту контейнера, `wrap` открывает следующий ряд; проба: `columns:2; height:50px; column-wrap:wrap; gap:10px 0`, контент 180 px — четыре колонки в одном ряду, ряд 50 px, второго ряда нет | P3 | [BUG-1399](../../bugs/BUG-1399-OPEN.md) |
 | multicol: `column-rule-color: inherit` | 2 | — | 2 thick | `multicol-rule-color-inherit-001.xht`, `-002.xht` | не разобрано; пробы нет | — | без записи (2 id) |
 | multicol: анимации `column-*` | 2 | 35 / 316 | — | `column-rule-width-interpolation.html`, `discrete-no-interpolation.html` | `@keyframes`/`el.animate()` по `column-rule-width`/`column-rule-style` не доходят до `getComputedStyle` (`expected "8.1px" but got "8px"`, `"none" … "dashed"`) — тот же механизм, что BUG-1234 | P3 | [BUG-1234](../../bugs/BUG-1234-OPEN.md) (дополнен) |
-| crashtest TIMEOUT | 1 | — | — | `file-control-crash.html` | проба `--dump-layout`: страница отвечает за 4 с, документ высотой 3,07·10⁹ px; под `wptrunner` — TIMEOUT. Тот же класс, что [BUG-1283](../../bugs/BUG-1283-OPEN.md) (содержимое высотой порядка 10⁹…10¹⁰ px) | P3 | [BUG-1283](../../bugs/BUG-1283-OPEN.md) (класс; без дополнения) |
+| crashtest TIMEOUT | 1 | — | — | `file-control-crash.html` | проба `--dump-layout`: страница отвечает за 4 с, документ высотой 3,07·10⁹ px; под `wptrunner` — TIMEOUT. Тот же класс, что [BUG-1283](../../bugs/BUG-1283-FIXED.md) (содержимое высотой порядка 10⁹…10¹⁰ px) | P3 | [BUG-1283](../../bugs/BUG-1283-FIXED.md) (класс; без дополнения) |
 | contain: прочее | 1 | — | 1 thick | `contain-strict-011.html` | не разобрано | — | без записи (1 id) |
 
-Побочное, не из таблицы: 23 thin-only — [BUG-1337](../../bugs/BUG-1337-FIXED.md)/[BUG-1372](../../bugs/BUG-1372-OPEN.md) (кромка `DrawImage`, 1-px строка глифа Ahem) и 4 `change-transform-*` (`thin-only 100`); 1 no-match-ref (`column-count-used-001.html`); `file-control-crash.html` — TIMEOUT, проба `--dump-layout` отвечает за 4 с и отдаёт документ высотой 3,07·10⁹ px, тот же класс, что [BUG-1283](../../bugs/BUG-1283-OPEN.md) (заново не заводился).
+Побочное, не из таблицы: 23 thin-only — [BUG-1337](../../bugs/BUG-1337-FIXED.md)/[BUG-1372](../../bugs/BUG-1372-OPEN.md) (кромка `DrawImage`, 1-px строка глифа Ahem) и 4 `change-transform-*` (`thin-only 100`); 1 no-match-ref (`column-count-used-001.html`); `file-control-crash.html` — TIMEOUT, проба `--dump-layout` отвечает за 4 с и отдаёт документ высотой 3,07·10⁹ px, тот же класс, что [BUG-1283](../../bugs/BUG-1283-FIXED.md) (заново не заводился).
 
 ### Что остаётся неизвестным
 

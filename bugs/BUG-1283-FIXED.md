@@ -1,8 +1,8 @@
 # BUG-1283 — оконный shell зависает на документе высотой порядка 10¹⁰ px, хотя layout и display list строятся за 0,4 с
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 4, `css/css-break`)
-**Область:** shell (оконный конвейер после layout — не локализовано; не растр и не layout, см. «Что исключено»)
+**Область:** paint (`crates/engine/paint/src/tile_grid.rs::TileGrid::mark_all_dirty`; попутно `border_bevel.rs::side_pieces`)
 
 ## Симптом
 
@@ -64,3 +64,25 @@ TIMEOUT в прогоне и при повторном отдельном про
 Три crashtest выше — PASS под
 `run_corpus.py --prefixes css/css-break/nested-float-in-multicol-crash.html,css/css-break/grid/grid-large-end-border-crash.html,css/css-break/flexbox/flexbox-fragmentation-layout-001-crash.html`;
 страница из «Симптома» отвечает на BiDi быстрее секунды.
+
+## Причина и исправление (2026-10-19, P3)
+
+Стек зависшего потока `lumen-browser` (сэмплирование `RIP`/стека через `GetThreadContext` + dbghelp,
+сборка `dev-release` с `debug = line-tables-only`) — `Lumen::apply_loaded_page` → `TileGrid::mark_all_dirty`.
+Метод заводил запись `HashMap` на каждый тайл `256×256` страницы: бокс 10¹⁰ px — 3,9·10⁷ рядов × 5 столбцов
+(сотни миллионов вставок и гигабайты карты). Не растр и не layout, а отметка «весь холст грязный»,
+у которой читателей нет (`relayout.rs:1276`). Порог около 2·10⁹ px в таблице выше — время вставок, а не
+граница типа.
+
+- `mark_all_dirty`, `mark_rect_dirty` и `update_from_diff` пишут запись на тайл только для промежутка
+  до `MAX_ENUMERATED_TILES` (65 536). Больший промежуток не перечисляется: отсутствующий тайл и так
+  «грязный», а уже отслеживаемые внутри промежутка переводятся в `Dirty` обходом самой карты.
+  `tiles_for_rect` (вектор всех тайлов) заменён на `tile_span` (только границы).
+- `border_bevel::side_pieces`: если любая сторона толще `MAX_DIAGONAL_WIDTH` (256 px), диагональ стыка
+  не считается попиксельно — `coarse_side_pieces` даёт одну-две полосы на сторону с прямым стыком
+  (угол у горизонтальной стороны, как и при диагонали). Закрывает «Попутно»: `ridge 1e10px` в CLI —
+  0,58 с вместо > 40 с. `band_color` больше не переполняется на `i32::MAX`.
+
+Проверка: три crashtest из «Как проверить» открываются в окне без нагрузки на поток (CPU 0 при замере
+2 с через 9 с после запуска); тесты `tile_grid::*huge*`, `border_bevel::{wide_ridge_covers_the_ring_without_overlap,
+huge_ridge_is_a_handful_of_rects}`.

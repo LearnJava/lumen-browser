@@ -65,7 +65,7 @@ fn band_color(
             if thickness < 2 {
                 return color;
             }
-            let first = (thickness + 1) / 2;
+            let first = thickness / 2 + thickness % 2; // без переполнения у i32::MAX
             let (a, b) = if style == BorderStyle::Groove {
                 (dark, light)
             } else {
@@ -136,6 +136,69 @@ struct Geom {
     w: [i32; 4],
 }
 
+/// Толщина стороны (px), начиная с которой диагональ стыка не считается попиксельно.
+/// Обход стыка стоит `O(h·v·16)`; рамка `ridge 3289332275mm` (WPT crashtest) повесила бы
+/// его на минуты и выдала бы миллиарды прямоугольников (BUG-1283). Диагональ такой
+/// толщины не отличить на глаз от прямого стыка, так что дальше стык прямой.
+const MAX_DIAGONAL_WIDTH: i32 = 256;
+
+/// Полосы одной стороны без диагонального стыка: одна-две полосы на всю длину стороны,
+/// угол отдаёт горизонтальная сторона (как и при диагональном стыке — её пиксели). Размеры
+/// считаются в `i64` и обрезаются по боксу: толщина может быть порядка `i32::MAX`.
+fn coarse_side_pieces(
+    side: BevelSide,
+    g: &Geom,
+    colors: [Color; 4],
+    styles: [BorderStyle; 4],
+) -> Vec<(Rect, Color)> {
+    let idx = |s: BevelSide| s as usize;
+    let joins = |s: BevelSide| is_bevel(styles[idx(s)]) && g.w[idx(s)] > 0;
+    let (x0, y0, x1, y1) = (
+        i64::from(g.x0),
+        i64::from(g.y0),
+        i64::from(g.x1),
+        i64::from(g.y1),
+    );
+    let t = i64::from(g.w[idx(side)]);
+    let first = (t + 1) / 2;
+    let bands: &[(i64, i64)] = if matches!(styles[idx(side)], BorderStyle::Groove | BorderStyle::Ridge) && t >= 2 {
+        &[(0, first), (first, t - first)]
+    } else {
+        &[(0, t)]
+    };
+    let horizontal = matches!(side, BevelSide::Top | BevelSide::Bottom);
+    // Протяжённость стороны вдоль и поперёк толщины.
+    let (along_from, along_to, across_lo, across_hi) = if horizontal {
+        (x0, x1, y0, y1)
+    } else {
+        let cut = |s: BevelSide| if joins(s) { i64::from(g.w[idx(s)]) } else { 0 };
+        (
+            y0 + cut(BevelSide::Top),
+            y1 - cut(BevelSide::Bottom),
+            x0,
+            x1,
+        )
+    };
+    let near_start = matches!(side, BevelSide::Top | BevelSide::Left);
+    let origin = if near_start { across_lo } else { across_hi - t };
+    let mut out = Vec::with_capacity(2);
+    for &(off, len) in bands {
+        let from = (origin + off).max(across_lo);
+        let to = (origin + off + len).min(across_hi);
+        if to <= from || along_to <= along_from {
+            continue;
+        }
+        let color = band_color(side, g.w[idx(side)], off.min(i64::from(i32::MAX)) as i32, colors[idx(side)], styles[idx(side)]);
+        let rect = if horizontal {
+            Rect::new(along_from as f32, from as f32, (along_to - along_from) as f32, (to - from) as f32)
+        } else {
+            Rect::new(from as f32, along_from as f32, (to - from) as f32, (along_to - along_from) as f32)
+        };
+        out.push((rect, color));
+    }
+    out
+}
+
 /// Прямоугольники одной стороны объёмной рамки. Пиксели стыка со смежной объёмной
 /// стороной принадлежат горизонтальной стороне (`Top`/`Bottom`): вертикальная их не рисует.
 fn side_pieces(
@@ -144,6 +207,9 @@ fn side_pieces(
     colors: [Color; 4],
     styles: [BorderStyle; 4],
 ) -> Vec<(Rect, Color)> {
+    if g.w.iter().any(|&w| w > MAX_DIAGONAL_WIDTH) {
+        return coarse_side_pieces(side, g, colors, styles);
+    }
     let idx = |s: BevelSide| s as usize;
     let thickness = g.w[idx(side)];
     let joins = |s: BevelSide| is_bevel(styles[idx(s)]) && g.w[idx(s)] > 0;
@@ -464,5 +530,39 @@ mod tests {
             |_, _| panic!("solid is not a bevel"),
         );
         assert_eq!(untouched, [BorderStyle::Solid; 4]);
+    }
+
+    #[test]
+    fn wide_ridge_covers_the_ring_without_overlap() {
+        // Толще MAX_DIAGONAL_WIDTH: стык прямой, но кольцо закрашено целиком и без наложений.
+        let (w, h) = (1000, 900);
+        let px = paint(w, h, [300.0; 4], BorderStyle::Ridge, GREY);
+        for (y, row) in px.iter().enumerate() {
+            for (x, cell) in row.iter().enumerate() {
+                let inner = (300..w - 300).contains(&x) && (300..h - 300).contains(&y);
+                assert_eq!(cell.is_some(), !inner, "({x}, {y})");
+            }
+        }
+        // Две полосы по 150 px: светлая снаружи, тёмная внутри.
+        assert_eq!(px[0][500], Some(LIGHT));
+        assert_eq!(px[299][500], Some(DARK));
+    }
+
+    #[test]
+    fn huge_ridge_is_a_handful_of_rects() {
+        // BUG-1283: `ridge 3289332275mm` (flexbox-fragmentation-layout-001-crash) висел минутами.
+        let mut pieces = 0;
+        let rest = paint_bevel_sides(
+            Rect::new(8.0, 8.0, 1000.0, 1.0e10),
+            [1.0e10, 3.0, 1.0e10, 1.0e10],
+            [GREY; 4],
+            [BorderStyle::Ridge; 4],
+            |r, _| {
+                pieces += 1;
+                assert!(r.width >= 0.0 && r.height >= 0.0);
+            },
+        );
+        assert!(rest.iter().all(|s| *s == BorderStyle::None));
+        assert!(pieces <= 8, "{pieces}");
     }
 }
