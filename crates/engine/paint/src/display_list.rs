@@ -55,6 +55,9 @@ pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClip
 mod commands;
 pub use commands::{spacing_px, spacing_to_fixed, DisplayCommand, DisplayList};
 
+#[cfg(feature = "cpu-render")]
+mod translate;
+
 mod geometry;
 pub use geometry::{contains_backdrop_filter, cull_display_list, fit_image_quad, fit_image_rect, ProvenanceIndex, ProvenanceSpan};
 #[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
