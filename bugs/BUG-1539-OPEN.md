@@ -25,7 +25,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 24: `css/filter-effects/backdrop-filter-*` (`-3d-transform-perspective`, `-backdrop-root-*`, `-nested-border-radius-clip*`, `-clip-*`, `-transform`, `-scale-transform`, `-isolation-*`, `-with-mix-blend-mode-same-element`, `-basic-opacity-2`, `-plus-filter`, `-edge-*`, `-boundary`, `-svg*`), `backdrop-filters-opacity`, `repaint-added-backdrop-filter`. Измерено только в `--screenshot` (CPU, `cpu_raster.rs`); живое окно (wgpu) не проверялось (`crates/engine/paint/CLAUDE.md`: независимая реализация). Причина по `edge-*`/`boundary`/`svg*` — по именам. `box-shadow` под прозрачным фоном рисуется поверх (проба: `backdrop-filter:invert(1);box-shadow:0 0 10px black` → центр `(0,0,0)`) — [BUG-1302](BUG-1302-OPEN.md).
+WPT-RUN-14 срез 24: `css/filter-effects/backdrop-filter-*` (`-3d-transform-perspective`, `-backdrop-root-*`, `-nested-border-radius-clip*`, `-clip-*`, `-transform`, `-scale-transform`, `-isolation-*`, `-with-mix-blend-mode-same-element`, `-basic-opacity-2`, `-plus-filter`, `-edge-*`, `-boundary`, `-svg*`), `backdrop-filters-opacity`, `repaint-added-backdrop-filter`. Измерено только в `--screenshot` (CPU, `cpu_raster.rs`); живое окно (wgpu) не проверялось (`crates/engine/paint/CLAUDE.md`: независимая реализация). Причина по `edge-*`/`boundary`/`svg*` — по именам. `box-shadow` под прозрачным фоном рисуется поверх (проба: `backdrop-filter:invert(1);box-shadow:0 0 10px black` → центр `(0,0,0)`) — [BUG-1302](BUG-1302-FIXED.md).
 
 ## Что делать
 
