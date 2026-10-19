@@ -73,6 +73,31 @@ use super::*;
     }
 
     #[test]
+    fn border_width_keywords_and_medium_default() {
+        // BUG-1298: <line-width> keywords in every border width spelling.
+        let w = |css: &str| style_for(css).border_left_width;
+        assert_eq!(w("border: thin solid red"), 1.0);
+        assert_eq!(w("border: medium solid red"), 3.0);
+        assert_eq!(w("border: thick solid red"), 5.0);
+        assert_eq!(w("border-left: thick solid red"), 5.0);
+        assert_eq!(w("border-width: thick; border-style: solid"), 5.0);
+        assert_eq!(w("border-left-width: thick; border-left-style: solid"), 5.0);
+        assert_eq!(w("border-inline-start-width: thin; border-style: solid"), 1.0);
+        let s = style_for("border-width: thin thick; border-style: solid");
+        assert_eq!((s.border_top_width, s.border_right_width), (1.0, 5.0));
+        // The initial width is `medium`: a style alone draws 3px, `none` still computes to 0.
+        assert_eq!(w("border: solid red"), 3.0);
+        assert_eq!(w("border-style: solid; border-color: red"), 3.0);
+        assert_eq!(w("border-left-style: solid"), 3.0);
+        assert_eq!(w("border-width: 5px"), 0.0);
+        assert_eq!(w("border-width: 5px; border-style: solid; border-width: initial"), 3.0);
+        // Negative widths are invalid and dropped.
+        assert_eq!(w("border-style: solid; border-width: -10px"), 3.0);
+        assert_eq!(w("border-style: solid; border-left-width: -4px"), 3.0);
+        assert_eq!(w("border-style: solid; border-width: 2px -1px"), 3.0);
+    }
+
+    #[test]
     fn border_color_shorthand() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let s = style_for("border-color: blue");
@@ -133,7 +158,8 @@ use super::*;
         let s = style_for("border-left-width: 4px; border-right-width: 6px; border-style: solid");
         assert!((s.border_left_width - 4.0).abs() < 0.01);
         assert!((s.border_right_width - 6.0).abs() < 0.01);
-        assert!((s.border_top_width - 0.0).abs() < 0.01);
+        // Unset side with a visible style: initial `medium` (BUG-1298).
+        assert!((s.border_top_width - 3.0).abs() < 0.01);
     }
 
     #[test]

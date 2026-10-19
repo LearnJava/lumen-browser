@@ -76,12 +76,24 @@ pub(in crate::style) fn apply_all_shorthand(
         CssWideKeyword::Unset => ComputedStyle::inheriting(inherited),
         CssWideKeyword::Revert => ua_baseline.clone(),
     };
+    if matches!(kw, CssWideKeyword::Initial | CssWideKeyword::Unset) {
+        let medium = crate::style::cascade::INITIAL_BORDER_WIDTH;
+        next.border_top_width = medium;
+        next.border_right_width = medium;
+        next.border_bottom_width = medium;
+        next.border_left_width = medium;
+    }
     next.direction = style.direction;
     next.unicode_bidi = style.unicode_bidi;
     next.custom_props = std::mem::take(&mut style.custom_props);
     next.font_size = style.font_size;
     next.effective_zoom = style.effective_zoom;
     *style = next;
+}
+
+/// `initial`/`unset` of `border-*-width` is `medium`; `revert` takes the UA baseline value.
+fn init_border_width(kw: CssWideKeyword, reverted: f32) -> f32 {
+    if kw == CssWideKeyword::Revert { reverted } else { crate::style::cascade::INITIAL_BORDER_WIDTH }
 }
 
 fn apply_css_wide_keyword_with(
@@ -906,10 +918,10 @@ fn apply_css_wide_keyword_with(
             }
         }
         // border-* per-side individual + shorthands
-        "border-top-width" => style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width },
-        "border-right-width" => style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width },
-        "border-bottom-width" => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width },
-        "border-left-width" => style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width },
+        "border-top-width" => style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init_border_width(kw, init.border_top_width) },
+        "border-right-width" => style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init_border_width(kw, init.border_right_width) },
+        "border-bottom-width" => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init_border_width(kw, init.border_bottom_width) },
+        "border-left-width" => style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init_border_width(kw, init.border_left_width) },
         "border-top-style" => style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style },
         "border-right-style" => style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style },
         "border-bottom-style" => style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style },
@@ -923,7 +935,7 @@ fn apply_css_wide_keyword_with(
             let v = if inh_only_inherit {
                 (inherited.border_top_width, inherited.border_right_width, inherited.border_bottom_width, inherited.border_left_width)
             } else {
-                (init.border_top_width, init.border_right_width, init.border_bottom_width, init.border_left_width)
+                (init_border_width(kw, init.border_top_width), init_border_width(kw, init.border_right_width), init_border_width(kw, init.border_bottom_width), init_border_width(kw, init.border_left_width))
             };
             style.border_top_width = v.0;
             style.border_right_width = v.1;
@@ -973,7 +985,7 @@ fn apply_css_wide_keyword_with(
             let (w, s, c) = if inh_only_inherit {
                 (inherited.border_top_width, inherited.border_top_style, inherited.border_top_color)
             } else {
-                (init.border_top_width, init.border_top_style, init.border_top_color)
+                (init_border_width(kw, init.border_top_width), init.border_top_style, init.border_top_color)
             };
             for (sw, ss, sc) in [
                 (&mut style.border_top_width, &mut style.border_top_style, &mut style.border_top_color),
@@ -987,66 +999,66 @@ fn apply_css_wide_keyword_with(
             }
         }
         "border-top" => {
-            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width };
+            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init_border_width(kw, init.border_top_width) };
             style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style };
             style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color };
         }
         "border-right" => {
-            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init_border_width(kw, init.border_right_width) };
             style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
             style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
         }
         "border-bottom" => {
-            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init_border_width(kw, init.border_bottom_width) };
             style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
             style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
         }
         "border-left" => {
-            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width };
+            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init_border_width(kw, init.border_left_width) };
             style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style };
             style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color };
         }
         // CSS Logical Properties L1 §6.3 — border-inline-* / border-block-* CSS-wide.
         "border-inline-start" => {
-            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width };
+            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init_border_width(kw, init.border_left_width) };
             style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style };
             style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color };
         }
         "border-inline-end" => {
-            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init_border_width(kw, init.border_right_width) };
             style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
             style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
         }
         "border-block-start" => {
-            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width };
+            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init_border_width(kw, init.border_top_width) };
             style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style };
             style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color };
         }
         "border-block-end" => {
-            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init_border_width(kw, init.border_bottom_width) };
             style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
             style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
         }
         "border-inline" => {
-            style.border_left_width  = if inh_only_inherit { inherited.border_left_width  } else { init.border_left_width  };
+            style.border_left_width  = if inh_only_inherit { inherited.border_left_width  } else { init_border_width(kw, init.border_left_width)  };
             style.border_left_style  = if inh_only_inherit { inherited.border_left_style  } else { init.border_left_style  };
             style.border_left_color  = if inh_only_inherit { inherited.border_left_color  } else { init.border_left_color  };
-            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init_border_width(kw, init.border_right_width) };
             style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
             style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
         }
         "border-block" => {
-            style.border_top_width    = if inh_only_inherit { inherited.border_top_width    } else { init.border_top_width    };
+            style.border_top_width    = if inh_only_inherit { inherited.border_top_width    } else { init_border_width(kw, init.border_top_width)    };
             style.border_top_style    = if inh_only_inherit { inherited.border_top_style    } else { init.border_top_style    };
             style.border_top_color    = if inh_only_inherit { inherited.border_top_color    } else { init.border_top_color    };
-            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init_border_width(kw, init.border_bottom_width) };
             style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
             style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
         }
-        "border-inline-start-width" => style.border_left_width   = if inh_only_inherit { inherited.border_left_width   } else { init.border_left_width   },
-        "border-inline-end-width"   => style.border_right_width  = if inh_only_inherit { inherited.border_right_width  } else { init.border_right_width  },
-        "border-block-start-width"  => style.border_top_width    = if inh_only_inherit { inherited.border_top_width    } else { init.border_top_width    },
-        "border-block-end-width"    => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width },
+        "border-inline-start-width" => style.border_left_width   = if inh_only_inherit { inherited.border_left_width   } else { init_border_width(kw, init.border_left_width)   },
+        "border-inline-end-width"   => style.border_right_width  = if inh_only_inherit { inherited.border_right_width  } else { init_border_width(kw, init.border_right_width)  },
+        "border-block-start-width"  => style.border_top_width    = if inh_only_inherit { inherited.border_top_width    } else { init_border_width(kw, init.border_top_width)    },
+        "border-block-end-width"    => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init_border_width(kw, init.border_bottom_width) },
         "border-inline-start-style" => style.border_left_style   = if inh_only_inherit { inherited.border_left_style   } else { init.border_left_style   },
         "border-inline-end-style"   => style.border_right_style  = if inh_only_inherit { inherited.border_right_style  } else { init.border_right_style  },
         "border-block-start-style"  => style.border_top_style    = if inh_only_inherit { inherited.border_top_style    } else { init.border_top_style    },
