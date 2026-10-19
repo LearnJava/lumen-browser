@@ -58,6 +58,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+import captcha_stand as cs  # noqa: E402  (NET_ERROR_RE — страница сетевой ошибки самого браузера)
 import chrome_interaction_baseline as cib  # noqa: E402
 import perf_audit as pa  # noqa: E402
 import wall_signatures as ws  # noqa: E402
@@ -531,9 +532,11 @@ def lumen_snapshot(br: "pa.LiveBrowser", url: str, args, out_png: Path) -> dict:
     except RuntimeError as e:
         snap["error"] = str(e)[:200]
     chunk = br.stderr_since(log_pos)
-    snap["http_status"] = pa.main_http_status(chunk, url)
+    snap["http_status"] = lumen_final_status(chunk, url, snap.get("href"))
     snap["net_failures"] = pa.network_failures(chunk, url)
-    net_failure = bool(snap["net_failures"])
+    # страница сетевой ошибки Lumen (net_error_page.rs) — «готова», с текстом и кадром, но это NET_FAIL, а не OK
+    net_page = bool(cs.NET_ERROR_RE.search((snap.get("title") or "") + "\n" + (snap.get("text") or "")[:400]))
+    net_failure = bool(snap["net_failures"]) or net_page
     stderr_errors, snap["stderr_error_sigs"], _ = br.stderr_errors_since(log_pos)
     snap["engine_counters"] = {k: v for k, v in pa.stderr_telemetry(chunk).items()
                                if k in ("se_net_fail", "se_panics", "se_warnings", "se_stack_overflow")}
@@ -542,11 +545,25 @@ def lumen_snapshot(br: "pa.LiveBrowser", url: str, args, out_png: Path) -> dict:
         dead=dead, hung=hung, http_status=snap["http_status"], net_failure=net_failure, ready=ready,
         broken_render=any(e.get("kind") == "broken_render" for e in health),
         have_png=bool(snap.get("png")), js_error_count=len(snap.get("exceptions") or []))
+    if net_page and snap["status"] in ("OK", "DEGRADED", "BROKEN_RENDER"):
+        snap["status"] = "NET_FAIL"
     snap["ok"] = ready and not dead and not hung
     if dead or hung or br.proc.poll() is not None:
         br.restart()
         snap["restarted"] = True
     return snap
+
+
+def lumen_final_status(chunk: str, url: str, href: str | None) -> int | None:
+    """Итоговый статус главного документа Lumen (проверка 1: «итоговый», не промежуточный).
+
+    `pa.main_http_status(chunk, url)` берёт последний статус *запрошенного* URL, то есть 301/302
+    редиректа на себя (http→https, `/` → `/int/`, cookie-редирект), а не конечной страницы; ищем
+    по адресу, на котором страница остановилась. 304 (повторный прогон ревалидирует кэш главного
+    документа) для Chrome выглядит как 200 из кэша — приводим к 200.
+    """
+    status = pa.main_http_status(chunk, href or url)
+    return 200 if status == 304 else status
 
 
 # ── PNG -> блоки ─────────────────────────────────────────────────────────────
@@ -635,6 +652,17 @@ def measure_site(br, ref, slug: str, url: str, args, out_dir: Path) -> dict:
         rec["parity"] = all(c["ok"] for c in rec["checks"].values())
     rec["finished_at"] = datetime.now().isoformat(timespec="seconds")
     return rec
+
+
+def verdict_of(rec: dict) -> str:
+    """Короткий вердикт сайта для строки прогресса."""
+    if rec.get("ref_failed"):
+        return "REF-FAIL"
+    if not rec["computed"]:
+        return "NOT-COMPUTED"  # эталон не открыл сайт при повторе: проверки не сведены
+    if rec["parity"]:
+        return "PARITY"
+    return "DIFF[" + ",".join(k for k in CHECKS if not rec["checks"][k]["ok"]) + "]"
 
 
 # ── Отчёт ────────────────────────────────────────────────────────────────────
@@ -761,8 +789,7 @@ def main() -> None:
             done.add(slug)
             with results_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            verdict = "REF-FAIL" if rec.get("ref_failed") else ("PARITY" if rec.get("parity") else
-                      "DIFF[" + ",".join(k for k in CHECKS if not rec["checks"][k]["ok"]) + "]")
+            verdict = verdict_of(rec)
             print(f"[{i}/{len(sites)}] {slug}: {verdict} lumen={rec.get('lumen_status')}", flush=True)
     finally:
         br.close()
