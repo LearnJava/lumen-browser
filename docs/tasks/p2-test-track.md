@@ -2834,3 +2834,31 @@ Baseline из среза 66 (198 `.ini`) доведён до гейта. `--chec
 **Окружение.** `LUMEN_PROFILE=dev-release`, `MSYS2_ARG_CONV_EXCL='/dom'`. Диск D в сессии неоднократно был заполнен целиком (чужие сборки): `No space left on device` в `atomicwrites`/логгере обрывал прогон (`exit 120` или молчаливый зависший прогон) — такие прогоны отброшены и перезапущены. `--exclude-prefix` под Git Bash искажается в `C:/Program Files/Git/...` без `MSYS_NO_PATHCONV=1` (отфильтровано 0 id — прогон шёл по всей категории).
 
 Категорий с baseline: 269. Дальше — S6.
+
+
+### TEST-3: срез 73 (2026-10-19) — `html/anonymous-iframe`, `html/capability-delegation`, `html/user-activation`, `html/cross-origin-embedder-policy`, `html/cross-origin-opener-policy` (269 → 274 с baseline, WPT-RUN-7-S6): два чистых `--check` подряд по каждой
+
+`--update-expected --all --root html/<cat> --recursive --processes 4` на `dev-release` (бинарь `p2-work`, пересобран 18.10 на `main` `4645640ab`; `.venv` слота пришлось скопировать из корня — в свежем worktree его нет). Итог последних чистых `--check`:
+
+| Категория | Инстансов | `.ini` | Harness OK | Подтестов PASS |
+|---|---|---|---|---|
+| `html/anonymous-iframe` | 35 | 19 | 28/35 | 6/49 |
+| `html/capability-delegation` | 6 | 6 | 0/6 | 0/16 |
+| `html/user-activation` | 21 | 16 | 8/21 | 16/37 |
+| `html/cross-origin-embedder-policy` | 103 | 69 | 42/103 | 101/522 |
+| `html/cross-origin-opener-policy` | 160 | 114 | 3/160 | 10/643 |
+
+**Причины провалов (по логу).** Пробелы функциональности, новых багов не заведено. COOP (3/160 harness OK): `window.open()` в тестах возвращает `null` (`Cannot read properties of null (reading 'closed'/'close')`), popup- и `reporting/`-тесты уходят в `TIMEOUT`/`ERROR`. COEP: `crossOriginEmbedderPolicy is not defined` (24 в сыром логе), `Cannot read properties of undefined (reading 'createElement')` (30), `Cannot read properties of null (reading 'close')` (25), `cannot create dedicated worker` (14). `anonymous-iframe`: `Cannot set properties of null (setting 'modified')` (6), `reading 'opener'`/`'localStorage'` у `null` (по 4). `user-activation`: `frames[1].frames[0].postMessage is not a function` (3), `reading 'body'` у `undefined` (4). `capability-delegation`: 0/6 — все шесть файлов целиком `TIMEOUT` без сообщений об ошибках в логе.
+
+**Сходимость `--check`.**
+- `anonymous-iframe`, `capability-delegation`, `user-activation`: сырой baseline чистый с первого раза; у `anonymous-iframe` один раз `embedding.tentative…?4-4` дал `OK`→`TIMEOUT` — `.ini` расширены до `TIMEOUT` ко всем значениям (как в срезах 69/71/72), затем два чистых подряд.
+- `cross-origin-embedder-policy`: в прогоне 1 — 16 регрессий (`TIMEOUT`/`FAIL` у подтестов `cross-origin-isolated-permission-worker`), в прогоне 2 — ещё одна (`require-corp… CORP: same-site` `PASS`→`FAIL`); `.ini` объединены с наблюдёнными значениями, ко всем файловым и подтестовым значениям добавлен `TIMEOUT`; два чистых подряд.
+- `cross-origin-opener-policy` — самая нестабильная: 14 регрессий в прогоне 3 (`OK`→`ERROR`, один `CRASH`) и 6 `MISSING` (id без результата: мозилловский `mozprocess` не смог остановить браузер — `Failed to stop either the runner or the browser process`, `IO Completion Port failed to signal process shutdown`, то же, что в срезе 72). `MISSING` в `.ini` не выражается — такой прогон просто отбрасывался и повторялся. К файловым значениям добавлены `OK`/`TIMEOUT`/`ERROR`/`CRASH`; подтестам, которые проходят (в `.ini` их нет — действует умолчание `PASS`), дописаны секции `[PASS, TIMEOUT, NOTRUN]` (шаблон: подтесты `coop-coep-sandbox`/`coop-sandbox` в прогоне 4 дали `PASS`→`TIMEOUT`). Прогоны 5 и 6 — 0 регрессий на неизменённом наборе. Один прогон COOP — ~35–45 минут.
+
+**Окружение и ловушки.**
+- Диск D в сессии много раз был заполнен целиком чужими сборками (`target/` соседних слотов, десятки ГБ): `OSError: [Errno 28] No space left on device` из `mozlog` обрывал прогон, при этом `check:` печатался с «0 регрессий», а процесс `run_report.py` зависал на выходе без `exit`. Такие прогоны недействительны — проверять `grep -c "Errno 28"` в логе и не засчитывать; скретч-обёртка перезапускала категорию (до 4 раз). Освободил свой слот: `target/dev-release/incremental`.
+- Зависший после `check:` `run_report.py` (процесс-родитель и `lumen.exe`) надо убивать вручную — иначе цепочка прогонов не двигается.
+- `--exclude-prefix`/пути в Git Bash — `MSYS2_ARG_CONV_EXCL='*'` и `MSYS_NO_PATHCONV=1`.
+- Скретч-скрипты расширения (`expand.py`: разбор `REGRESSION:` из логов `--check`, добавление значений через `wptrunner.wptmanifest`, запись в CRLF; `passwiden.py`: секции для проходящих подтестов из HTML-отчёта) не закоммичены — те же ловушки, что в срезах 67/68 (`expected` в логе бывает списком; `.ini` в CRLF).
+
+Категорий с baseline: 274. Срезы S1…S6 закрыты; дальше — решение владельца WPT-RUN-7: охват 274 из 289 `done`-категорий, оставшиеся (в т. ч. заведомо исключённые в `docs/tasks/WPT-RUN-7-slices.md` §«Не брать») требуют отдельных срезов.
