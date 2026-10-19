@@ -295,7 +295,7 @@ mod tests {
 
     fn make_image(w: u32, h: u32) -> Image {
         let data = vec![255u8; w as usize * h as usize * 4];
-        Image { width: w, height: h, format: PixelFormat::Rgba8, data, icc_profile: None }
+        Image { width: w, height: h, format: PixelFormat::Rgba8, data, icc_profile: None, vector_source: None }
     }
 
     fn key(s: &str) -> ImageKey {

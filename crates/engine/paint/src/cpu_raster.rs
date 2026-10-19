@@ -247,6 +247,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
         format: lumen_image::PixelFormat::Rgba8,
         data,
         icc_profile: None,
+        vector_source: None,
     })
 }
 
@@ -2979,6 +2980,7 @@ fn rasterize_background_image(
 
     let x_end = rect.x + rect.width;
     let y_end = rect.y + rect.height;
+    let mut vector_cache: Option<Image> = None;
     let mut ty = tile_y_start;
     loop {
         if ty >= y_end {
@@ -3007,7 +3009,10 @@ fn rasterize_background_image(
                         let (vy0, vy1) = (vy0.round().max(sy0), vy1.round().min(sy1));
                         if vx1 > vx0 && vy1 > vy0 {
                             let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
-                            blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                            // SVG: redraw at the tile's device size instead of
+                            // stretching the intrinsic raster (BUG-1296).
+                            let tile = vector_tile(img, placed.width, placed.height, &mut vector_cache);
+                            blit_image_into_rect(pixmap, placed, visible, tile.unwrap_or(img), 1.0, clip)?;
                         }
                     }
                 }
@@ -3023,6 +3028,22 @@ fn rasterize_background_image(
         ty += step_y;
     }
     Ok(())
+}
+
+/// Raster of `img`'s vector source ([`Image::vector_source`]) at exactly the
+/// `w`×`h` device pixels a tile occupies, or `None` when `img` is not vector or
+/// already has that size. Tiles of one background share a size, so the last
+/// render is kept in `cache` and reused.
+fn vector_tile<'a>(img: &Image, w: f32, h: f32, cache: &'a mut Option<Image>) -> Option<&'a Image> {
+    let source = img.vector_source.as_ref()?;
+    let (tw, th) = (w.round().max(1.0) as u32, h.round().max(1.0) as u32);
+    if (tw, th) == (img.width, img.height) {
+        return None;
+    }
+    if cache.as_ref().is_none_or(|c| (c.width, c.height) != (tw.min(4096), th.min(4096))) {
+        *cache = lumen_image::rasterize_svg(source, tw, th).ok();
+    }
+    cache.as_ref()
 }
 
 /// Convert a decoded [`Image`] (straight RGBA8) into a premultiplied tiny-skia
@@ -5852,6 +5873,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: [255u8, 0, 0, 255].repeat(4),
             icc_profile: None,
+            vector_source: None,
         };
         let images = vec![("red.png".to_string(), std::sync::Arc::new(red_2x2))];
         let cmds = vec![DisplayCommand::DrawImage {
@@ -5877,6 +5899,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: vec![0, 0, 255, 255],
             icc_profile: None,
+            vector_source: None,
         };
         let images = vec![("b.png".to_string(), std::sync::Arc::new(blue))];
         let cmds = vec![DisplayCommand::DrawImage {
@@ -5966,6 +5989,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: rgba.repeat(4),
             icc_profile: None,
+            vector_source: None,
         }
     }
 
@@ -5990,6 +6014,35 @@ mod tests {
         assert!(b > 230 && r < 25 && g < 25 && a == 255, "bg centre is blue, got ({r},{g},{b},{a})");
         // The single `cover` tile is clipped to the painting area — outside stays white.
         assert_eq!(px(&img, 55, 55), (255, 255, 255, 255), "outside painting area is white");
+    }
+
+    /// BUG-1296: an SVG background is redrawn at the tile's device size, so the
+    /// boundary between two stacked rects stays a hard edge instead of the
+    /// bilinear gradient band a stretched 8×32 raster gives.
+    #[test]
+    fn draw_background_image_svg_is_rerasterized_at_tile_size() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="32">
+            <rect width="8" height="16" fill="lime"/><rect y="16" width="8" height="16" fill="aqua"/></svg>"#;
+        let decoded = lumen_image::decode_svg(svg).expect("svg");
+        let images = vec![("a.svg".to_string(), std::sync::Arc::new(decoded))];
+        let area = rect(0.0, 0.0, 100.0, 100.0);
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: area,
+            origin_rect: area,
+            src: "a.svg".to_string(),
+            size: BackgroundSize::Contain,
+            position: ObjectPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(100, 100, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        // contain → 25×100 tile at x 37.5..62.5; the lime/aqua edge is at y = 50.
+        for y in [0, 25, 49] {
+            assert_eq!(px(&img, 50, y), (0, 255, 0, 255), "lime row {y}");
+        }
+        for y in [50, 75, 99] {
+            assert_eq!(px(&img, 50, y), (0, 255, 255, 255), "aqua row {y}");
+        }
     }
 
     /// `DrawBackgroundImage` with `repeat` tiles a small image across the whole

@@ -207,6 +207,7 @@ mod tests {
             format: PixelFormat::Rgba8,
             data: vec![0u8; 16],
             icc_profile: None,
+            vector_source: None,
         };
         assert!(b.register_image("test.png".into(), Arc::new(img)).is_ok());
     }

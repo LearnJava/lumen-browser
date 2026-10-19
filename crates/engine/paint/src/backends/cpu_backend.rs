@@ -57,6 +57,7 @@ impl CpuBackend {
             format: lumen_image::PixelFormat::Rgba8,
             data: pixels.clone(),
             icc_profile: None,
+            vector_source: None,
         })
     }
 }
@@ -256,6 +257,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: vec![255, 0, 0, 255],
             icc_profile: None,
+            vector_source: None,
         };
         assert!(b.register_image("test.png".into(), Arc::new(img)).is_ok());
     }

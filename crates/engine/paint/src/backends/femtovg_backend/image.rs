@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn image_to_rgba8_vec_passthrough_rgba() {
         use lumen_image::{Image, PixelFormat};
-        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![10, 20, 30, 200], icc_profile: None };
+        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![10, 20, 30, 200], icc_profile: None, vector_source: None };
         let out = image_to_rgba8_vec(&img);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].r, 10);
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn image_to_rgba8_vec_expands_rgb() {
         use lumen_image::{Image, PixelFormat};
-        let img = Image { width: 1, height: 1, format: PixelFormat::Rgb8, data: vec![10, 20, 30], icc_profile: None };
+        let img = Image { width: 1, height: 1, format: PixelFormat::Rgb8, data: vec![10, 20, 30], icc_profile: None, vector_source: None };
         let out = image_to_rgba8_vec(&img);
         assert_eq!(out[0].a, 255);
     }
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn image_to_rgba8_vec_expands_gray8() {
         use lumen_image::{Image, PixelFormat};
-        let img = Image { width: 1, height: 1, format: PixelFormat::Gray8, data: vec![128], icc_profile: None };
+        let img = Image { width: 1, height: 1, format: PixelFormat::Gray8, data: vec![128], icc_profile: None, vector_source: None };
         let out = image_to_rgba8_vec(&img);
         assert_eq!(out[0].r, 128);
         assert_eq!(out[0].g, 128);
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn image_to_rgba8_vec_expands_gray_alpha() {
         use lumen_image::{Image, PixelFormat};
-        let img = Image { width: 1, height: 1, format: PixelFormat::GrayAlpha8, data: vec![100, 200], icc_profile: None };
+        let img = Image { width: 1, height: 1, format: PixelFormat::GrayAlpha8, data: vec![100, 200], icc_profile: None, vector_source: None };
         let out = image_to_rgba8_vec(&img);
         assert_eq!(out[0].r, 100);
         assert_eq!(out[0].a, 200);

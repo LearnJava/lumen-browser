@@ -220,6 +220,7 @@ mod tests {
             format: lumen_image::PixelFormat::Rgba8,
             data: vec![0; (w * 4) as usize],
             icc_profile: None,
+            vector_source: None,
         }))
     }
 

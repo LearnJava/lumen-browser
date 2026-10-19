@@ -50,7 +50,7 @@ pub fn decode_bmp(bytes: &[u8]) -> Result<Image, BmpError> {
     if data.len() != expected {
         return Err(BmpError(format!("размер буфера {} вместо {expected}", data.len())));
     }
-    Ok(Image { width: width as u32, height: height as u32, format, data, icc_profile: None })
+    Ok(Image { width: width as u32, height: height as u32, format, data, icc_profile: None, vector_source: None })
 }
 
 #[cfg(test)]

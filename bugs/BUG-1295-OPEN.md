@@ -26,7 +26,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 6: `css/css-backgrounds/background-size/vector/*` — 206 reftest, 171 FAIL, 35 PASS. По типу корня упавших SVG (`.tmp/wpt-run14/backgrounds-vector-classes.json`): 87 — `width`/`height` в `%`, 50 — один из двух опущен, 24 — оба опущены, 12 — абсолютные `width`+`height` (там причина другая — [BUG-1296](BUG-1296-OPEN.md)). Из них с разницей > 8 000 пикселей (то есть геометрия, а не шов): 69 id.
+WPT-RUN-14 срез 6: `css/css-backgrounds/background-size/vector/*` — 206 reftest, 171 FAIL, 35 PASS. По типу корня упавших SVG (`.tmp/wpt-run14/backgrounds-vector-classes.json`): 87 — `width`/`height` в `%`, 50 — один из двух опущен, 24 — оба опущены, 12 — абсолютные `width`+`height` (там причина другая — [BUG-1296](BUG-1296-FIXED.md)). Из них с разницей > 8 000 пикселей (то есть геометрия, а не шов): 69 id.
 
 ## Что делать
 
