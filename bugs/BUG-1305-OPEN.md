@@ -22,7 +22,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 6: режим `Web Animations` — 266 упавших сабтестов в `css/css-backgrounds/animations/*-interpolation.html`: `box-shadow` 59, `border-width` 45, `background-size` 30, `border-radius` 28 (шорткод `border-radius` в тестах — сложная форма с `/`; проба выше — простая, верная), `background-color` 27 («from neutral to [green]»), `background-position-x/y` по 23, `border-color` 21, `discrete` 7, `background-image` 3. Режимы `CSS Transitions`/`CSS Animations` у тех же файлов падают ещё и по [BUG-1293](BUG-1293-OPEN.md) (старт на следующем кадре) — отделить вклад BUG-1305 можно только после его исправления.
+WPT-RUN-14 срез 6: режим `Web Animations` — 266 упавших сабтестов в `css/css-backgrounds/animations/*-interpolation.html`: `box-shadow` 59, `border-width` 45, `background-size` 30, `border-radius` 28 (шорткод `border-radius` в тестах — сложная форма с `/`; проба выше — простая, верная), `background-color` 27 («from neutral to [green]»), `background-position-x/y` по 23, `border-color` 21, `discrete` 7, `background-image` 3. Режимы `CSS Transitions`/`CSS Animations` у тех же файлов падают ещё и по [BUG-1293](BUG-1293-FIXED.md) (старт на следующем кадре) — отделить вклад BUG-1305 можно только после его исправления.
 
 ## Что делать
 
