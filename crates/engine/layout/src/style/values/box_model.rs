@@ -36,6 +36,8 @@ pub enum SvgPaint {
     Url(String),
     /// A `url(#id)` reference resolved to a concrete gradient definition.
     Gradient(Arc<SvgGradientDef>),
+    /// BUG-1294: a `url(#id)` reference resolved to a `<pattern>` tile.
+    Pattern(Arc<SvgPatternDef>),
 }
 
 impl Default for SvgPaint {
@@ -56,7 +58,7 @@ impl SvgPaint {
     /// can only paint a flat color.
     pub fn resolve(&self, current_color: Color) -> Option<Color> {
         match self {
-            SvgPaint::None | SvgPaint::Url(_) => None,
+            SvgPaint::None | SvgPaint::Url(_) | SvgPaint::Pattern(_) => None,
             SvgPaint::CurrentColor => Some(current_color),
             SvgPaint::Color(c) => Some(*c),
             SvgPaint::Gradient(g) => g.stops().first().map(|s| s.color),
@@ -129,6 +131,51 @@ impl SvgGradientDef {
         match self {
             SvgGradientDef::Linear { stops, .. } | SvgGradientDef::Radial { stops, .. } => stops,
         }
+    }
+}
+
+/// BUG-1294 — an SVG `<pattern>` paint server (SVG 1.1 §13.3), resolved from
+/// the DOM at box-tree build time. The tile content is a set of ordinary SVG
+/// layout boxes laid out in the pattern's own content space (identity
+/// viewport, origin = tile top-left); paint replays them once per tile under
+/// a `PushTransform`. Lives in `SvgPaint` (not `BoxKind`) so inherited
+/// `fill: url(#p)` reaches descendants like a resolved gradient does.
+#[derive(Debug, Clone)]
+pub struct SvgPatternDef {
+    /// Tile origin x, in `units` (a fraction of the bbox for `ObjectBoundingBox`).
+    pub x: f32,
+    /// Tile origin y, in `units`.
+    pub y: f32,
+    /// Tile width, in `units`.
+    pub width: f32,
+    /// Tile height, in `units`.
+    pub height: f32,
+    /// `patternUnits` — coordinate system of `x`/`y`/`width`/`height`.
+    pub units: SvgGradientUnits,
+    /// `patternContentUnits` — coordinate system of the tile content (ignored with a `viewBox`).
+    pub content_units: SvgGradientUnits,
+    /// `patternTransform` as `[a, b, c, d, e, f]`.
+    pub transform: [f32; 6],
+    /// `viewBox` of the tile, when present.
+    pub view_box: Option<crate::box_tree::ViewBox>,
+    /// `preserveAspectRatio` applied to `view_box`.
+    pub preserve_aspect_ratio: crate::box_tree::PreserveAspectRatio,
+    /// Tile content, positioned in content space (see the type docs).
+    pub content: Arc<Vec<crate::box_tree::LayoutBox>>,
+}
+
+impl PartialEq for SvgPatternDef {
+    fn eq(&self, o: &Self) -> bool {
+        self.x == o.x
+            && self.y == o.y
+            && self.width == o.width
+            && self.height == o.height
+            && self.units == o.units
+            && self.content_units == o.content_units
+            && self.transform == o.transform
+            && self.view_box == o.view_box
+            && self.preserve_aspect_ratio == o.preserve_aspect_ratio
+            && Arc::ptr_eq(&self.content, &o.content)
     }
 }
 

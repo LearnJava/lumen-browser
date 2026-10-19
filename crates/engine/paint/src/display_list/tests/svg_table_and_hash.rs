@@ -1000,6 +1000,95 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
         assert!(has_text, "ordered path must emit DrawText for SVG <text>");
     }
 
+    /// BUG-1294: `fill: url(#pattern)` replays the tile content once per tile.
+    #[test]
+    fn svg_pattern_fill_replays_tile_content_per_tile() {
+        let dl = build_ordered(
+            "<svg width='100' height='100'><defs>\
+                <pattern id='p' patternUnits='userSpaceOnUse' width='20' height='20'>\
+                    <rect width='10' height='10' fill='#ff0000'/>\
+                </pattern></defs>\
+                <rect width='100' height='100' fill='url(#p)'/>\
+             </svg>",
+            "",
+        );
+        let red = dl.iter().filter(|c| matches!(c,
+            DisplayCommand::FillRect { color, .. } if color.r == 255 && color.g == 0 && color.b == 0)).count();
+        assert_eq!(red, 25, "100×100 shape / 20×20 tile = 25 tiles, got {dl:?}");
+        let pushes = dl.iter().filter(|c| matches!(c, DisplayCommand::PushTransform { .. })).count();
+        let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
+        assert_eq!(pushes, pops, "PushTransform/PopTransform must balance");
+    }
+
+    /// BUG-1294: `patternUnits` defaults to `objectBoundingBox`, `patternTransform` rotates the grid.
+    #[test]
+    fn svg_pattern_bbox_units_and_transform() {
+        // 0.5×0.5 of a 100×100 box = 50×50 tiles → 4 tiles.
+        let dl = build_ordered(
+            "<svg width='100' height='100'><defs>\
+                <pattern id='p' width='0.5' height='0.5'><rect width='10' height='10' fill='#00ff00'/></pattern></defs>\
+                <rect width='100' height='100' fill='url(#p)'/>\
+             </svg>",
+            "",
+        );
+        let green = |dl: &Vec<DisplayCommand>| dl.iter().filter(|c| matches!(c,
+            DisplayCommand::FillRect { color, .. } if color.g == 255 && color.r == 0)).count();
+        assert_eq!(green(&dl), 4, "got {dl:?}");
+        // A rotated grid still covers the shape (more tiles than the unrotated 4).
+        let rot = build_ordered(
+            "<svg width='100' height='100'><defs>\
+                <pattern id='p' width='0.5' height='0.5' patternTransform='rotate(45)'>\
+                <rect width='10' height='10' fill='#00ff00'/></pattern></defs>\
+                <rect width='100' height='100' fill='url(#p)'/>\
+             </svg>",
+            "",
+        );
+        assert!(green(&rot) > 4, "rotated grid needs extra tiles, got {rot:?}");
+    }
+
+    /// BUG-1294: an axis-aligned (here mirrored) pattern bakes its matrix into the
+    /// tile content — no bitmap `PushTransform`, content mirrored inside the shape.
+    #[test]
+    fn svg_pattern_mirrored_scale_is_baked_without_transform_layer() {
+        let dl = build_ordered(
+            "<svg width='200' height='200'><defs>\
+                <pattern id='p' patternUnits='userSpaceOnUse' width='50' height='50'>\
+                    <rect width='10' height='10' fill='#ff0000'/></pattern></defs>\
+                <rect width='50' height='50' fill='url(#p)' transform='matrix(-2 0 0 1 100 0)'/>\
+             </svg>",
+            "",
+        );
+        assert!(
+            !dl.iter().any(|c| matches!(c, DisplayCommand::PushTransform { .. })),
+            "mirrored axis-aligned pattern must not need a transform layer, got {dl:?}",
+        );
+        let red: Vec<&Rect> = dl.iter().filter_map(|c| match c {
+            DisplayCommand::FillRect { rect, color } if color.r == 255 && color.g == 0 => Some(rect),
+            _ => None,
+        }).collect();
+        assert_eq!(red.len(), 1, "one 50×50 tile → one red square, got {dl:?}");
+        // x: tile origin maps to the right edge (100 − 0·2 + svg origin 0) and extends left by 20.
+        assert!(red[0].width > 0.0 && red[0].height > 0.0, "mirrored rect must be normalized: {:?}", red[0]);
+        assert!((red[0].width - 20.0).abs() < 0.5, "10 user units × |−2| = 20 px wide, got {:?}", red[0]);
+    }
+
+    /// BUG-1294: `href` inherits geometry and content from another pattern.
+    #[test]
+    fn svg_pattern_href_inherits_content() {
+        let dl = build_ordered(
+            "<svg width='100' height='100'><defs>\
+                <pattern id='base' patternUnits='userSpaceOnUse' width='50' height='50'>\
+                    <rect width='5' height='5' fill='#0000ff'/></pattern>\
+                <pattern id='p' href='#base'/></defs>\
+                <rect width='100' height='100' fill='url(#p)'/>\
+             </svg>",
+            "",
+        );
+        let blue = dl.iter().filter(|c| matches!(c,
+            DisplayCommand::FillRect { color, .. } if color.b == 255 && color.r == 0 && color.g == 0)).count();
+        assert_eq!(blue, 4, "got {dl:?}");
+    }
+
     #[test]
     fn ordered_svg_path_stroke_emits_drawsvgstroke() {
         // BUG-096: an SVG <path> has a zero-size layout rect (path bbox is deferred

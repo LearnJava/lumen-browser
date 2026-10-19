@@ -512,3 +512,27 @@ fn by_width(b: &LayoutBox, w: f32) -> Option<&LayoutBox> {
     }
     b.children.iter().find_map(|c| by_width(c, w))
 }
+
+#[test]
+fn a_subgrid_reaching_below_the_break_by_the_gap_it_dropped_stays_in_its_window() {
+    // `subgrid-gap-decorations-fragmentation-012`: five 20px rows with 10px gaps in 50px columns.
+    // The break at 50 is the leading edge of the gap that the subgrid (rows 2-4) runs across and
+    // that is also a gap of its own, so it is dropped at the top of the second column: the
+    // nested subgrid (60..110) moves up by 10px and fits the column that ends at 100 nominally.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"><div id=\"i\"><div></div><div></div><div></div><div></div></div></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;width:280px;height:50px;column-gap:0}          #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);gap:10px;height:140px;         row-rule:blue solid 10px}          #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-2;grid-row:2/-2;         row-rule:blue solid 10px}          #i{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-1;grid-row:2/-1}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let cols: Vec<_> = v.iter().filter(|b| b.rect.width == 140.0).collect();
+    let rows = |b: &LayoutBox| b.subgrid_tracks.as_ref().unwrap().rows.clone().unwrap();
+    assert_eq!(cols.len(), 3, "three column fragments: {:?}", cols.iter().map(|b| b.rect).collect::<Vec<_>>());
+    assert_eq!(cols.iter().map(|b| b.rect.height).collect::<Vec<_>>(), vec![50.0, 50.0, 40.0]);
+    assert_eq!(rows(cols[1]), vec![(0.0, 30.0), (40.0, 50.0)], "the track after the dropped gap grows over it");
+    assert_eq!(rows(cols[2]), vec![(0.0, 10.0), (20.0, 40.0)]);
+    let subgrids = |b: &LayoutBox| b.children.iter().filter(|c| c.subgrid_tracks.is_some()).map(|c| (c.rect.y, c.rect.height)).collect::<Vec<_>>();
+    assert_eq!(subgrids(cols[0]), vec![(30.0, 20.0)]);
+    assert_eq!(subgrids(cols[1]), vec![(0.0, 50.0)], "the subgrid keeps the rows below the nominal break");
+    assert!(subgrids(cols[2]).is_empty(), "nothing of it is left for the third column");
+}

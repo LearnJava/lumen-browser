@@ -126,19 +126,177 @@ fn svg_gradient_command(
 /// the gradient across `geom`, release the clip. Reused by every fill arm
 /// (`Rect`/`Circle`/`Ellipse`/`Path`) — only the clip shape and `geom`
 /// differ per shape kind.
+#[allow(clippy::too_many_arguments)]
 fn emit_svg_gradient_fill(
     cmds: &mut DisplayList,
     clip_push: DisplayCommand,
-    def: &SvgGradientDef,
+    server: SvgFillServer<'_>,
     opacity: f32,
     geom: Rect,
     xmat: [f32; 6],
     needs_ctm: bool,
+    ug: [f32; 6],
 ) {
-    let stops = apply_opacity_to_stops(def.stops(), opacity);
     cmds.push(clip_push);
-    cmds.push(svg_gradient_command(def, stops, geom, xmat, needs_ctm));
+    match server {
+        SvgFillServer::Gradient(def) => {
+            let stops = apply_opacity_to_stops(def.stops(), opacity);
+            cmds.push(svg_gradient_command(def, stops, geom, xmat, needs_ctm));
+        }
+        SvgFillServer::Pattern(pat) => emit_svg_pattern_tiles(cmds, pat, opacity, geom, ug),
+    }
     cmds.push(DisplayCommand::PopClip);
+}
+
+/// BUG-1294 — the paint server a shape's `fill` resolved to.
+#[derive(Clone, Copy)]
+enum SvgFillServer<'a> {
+    Gradient(&'a SvgGradientDef),
+    Pattern(&'a SvgPatternDef),
+}
+
+/// `a ∘ b` for `[a, b, c, d, e, f]` 2D affines: applies `b` first, then `a`.
+fn affine_mul(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {
+    [
+        a[0] * b[0] + a[2] * b[1],
+        a[1] * b[0] + a[3] * b[1],
+        a[0] * b[2] + a[2] * b[3],
+        a[1] * b[2] + a[3] * b[3],
+        a[0] * b[4] + a[2] * b[5] + a[4],
+        a[1] * b[4] + a[3] * b[5] + a[5],
+    ]
+}
+
+/// Inverse of a 2D affine; `None` when singular.
+fn affine_inverse(m: [f32; 6]) -> Option<[f32; 6]> {
+    let det = m[0] * m[3] - m[1] * m[2];
+    if det.abs() < 1e-12 || !det.is_finite() {
+        return None;
+    }
+    let (a, b, c, d) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det);
+    Some([a, b, c, d, -(a * m[4] + c * m[5]), -(b * m[4] + d * m[5])])
+}
+
+/// Axis-aligned bounds of `r` after mapping its corners through `m`.
+fn affine_rect_bounds(m: [f32; 6], r: Rect) -> Rect {
+    let pts = [(r.x, r.y), (r.x + r.width, r.y), (r.x, r.y + r.height), (r.x + r.width, r.y + r.height)]
+        .map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+    let min_x = pts.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+    let min_y = pts.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+    let max_x = pts.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+    let max_y = pts.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+    Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// Whether every box in `boxes` (positioned SVG content) is known to paint
+/// inside `bounds`: plain shapes by rect (grown by half the stroke width), groups
+/// by their children. Paths, text and anything else are unknown → `false`.
+fn boxes_fit_in(boxes: &[LayoutBox], bounds: Rect) -> bool {
+    const EPS: f32 = 0.01;
+    boxes.iter().all(|b| match &b.kind {
+        BoxKind::SvgShape { shape, .. } if !matches!(shape, SvgShapeKind::Path { .. }) => {
+            let pad = if matches!(b.style.svg_stroke, SvgPaint::None) { 0.0 } else { b.style.svg_stroke_width * 0.5 };
+            b.rect.x - pad >= bounds.x - EPS
+                && b.rect.y - pad >= bounds.y - EPS
+                && b.rect.x + b.rect.width + pad <= bounds.x + bounds.width + EPS
+                && b.rect.y + b.rect.height + pad <= bounds.y + bounds.height + EPS
+        }
+        BoxKind::Block if b.svg_group_transform.is_some() || !b.children.is_empty() => {
+            boxes_fit_in(&b.children, bounds)
+        }
+        _ => false,
+    })
+}
+
+/// Upper bound on tiles replayed for one fill: a degenerate tiny tile over a
+/// large shape would otherwise emit millions of commands.
+const MAX_PATTERN_TILES: i64 = 4096;
+
+/// BUG-1294 — replays a `<pattern>`'s content once per tile covering `geom`
+/// (the shape's bounds in the current paint space; `ug` maps the shape's user
+/// space to that space — identity under a `PushTransform` CTM). Each tile is
+/// `PushTransform(ug · patternTransform · translate(tile)) → PushClipRect(tile
+/// size) → [PushTransform(viewBox/content-units fit)] → content`. Only
+/// existing commands, so both raster backends already handle it. The caller
+/// has already clipped to the shape's outline.
+fn emit_svg_pattern_tiles(cmds: &mut DisplayList, pat: &SvgPatternDef, opacity: f32, geom: Rect, ug: [f32; 6]) {
+    let Some(ug_inv) = affine_inverse(ug) else { return };
+    let bbox_user = affine_rect_bounds(ug_inv, geom);
+    let Some(tile) = pat.tile_rect(bbox_user) else { return };
+    let Some(p_inv) = affine_inverse(pat.transform) else { return };
+    // The tile grid lives in pattern space (user space ∘ `patternTransform`).
+    let area = affine_rect_bounds(p_inv, bbox_user);
+    let first_i = ((area.x - tile.x) / tile.width).floor() as i64;
+    let last_i = ((area.x + area.width - tile.x) / tile.width).ceil() as i64;
+    let first_j = ((area.y - tile.y) / tile.height).floor() as i64;
+    let last_j = ((area.y + area.height - tile.y) / tile.height).ceil() as i64;
+    if (last_i - first_i).saturating_mul(last_j - first_j) > MAX_PATTERN_TILES
+        || last_i <= first_i
+        || last_j <= first_j
+    {
+        return;
+    }
+    let content_m = pat.content_matrix(tile, bbox_user);
+    let identity = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let base = affine_mul(ug, pat.transform);
+    let m4 = |m: [f32; 6]| Mat4::from_2d_affine(m[0], m[1], m[2], m[3], m[4], m[5]);
+    // Axis-aligned grids (no rotation/skew in `ug · patternTransform` or the
+    // content fit) bake their matrix — a mirror (negative scale) included — into
+    // the content's rects, like a `viewBox` scale, so edges stay crisp: a
+    // `PushTransform` layer is resampled as a bitmap and blurs a scaled tile.
+    let axis_aligned = base[1].abs() < 1e-6
+        && base[2].abs() < 1e-6
+        && base[0].abs() > 1e-6
+        && base[3].abs() > 1e-6
+        && content_m[1].abs() < 1e-6
+        && content_m[2].abs() < 1e-6
+        && content_m[0] > 0.0
+        && content_m[3] > 0.0;
+    let grouped = opacity < 1.0;
+    if grouped {
+        cmds.push(DisplayCommand::PushOpacity { alpha: opacity.clamp(0.0, 1.0), bounds: None });
+    }
+    for j in first_j..last_j {
+        for i in first_i..last_i {
+            let tx = tile.x + i as f32 * tile.width;
+            let ty = tile.y + j as f32 * tile.height;
+            let tile_m = affine_mul(base, [1.0, 0.0, 0.0, 1.0, tx, ty]);
+            if axis_aligned {
+                let clip = affine_rect_bounds(tile_m, Rect::new(0.0, 0.0, tile.width, tile.height));
+                let content = pat.content_positioned(affine_mul(tile_m, content_m));
+                // Content that provably stays inside the tile needs no clip — and
+                // a fractional clip edge would anti-alias what is otherwise snapped.
+                let clipped = !boxes_fit_in(&content, clip);
+                if clipped {
+                    cmds.push(DisplayCommand::PushClipRect { rect: clip });
+                }
+                for content_box in &content {
+                    walk(content_box, cmds, 1.0, None);
+                }
+                if clipped {
+                    cmds.push(DisplayCommand::PopClip);
+                }
+                continue;
+            }
+            cmds.push(DisplayCommand::PushTransform { matrix: m4(tile_m) });
+            cmds.push(DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, tile.width, tile.height) });
+            let fitted = content_m != identity;
+            if fitted {
+                cmds.push(DisplayCommand::PushTransform { matrix: m4(content_m) });
+            }
+            for content_box in pat.content.iter() {
+                walk(content_box, cmds, 1.0, None);
+            }
+            if fitted {
+                cmds.push(DisplayCommand::PopTransform);
+            }
+            cmds.push(DisplayCommand::PopClip);
+            cmds.push(DisplayCommand::PopTransform);
+        }
+    }
+    if grouped {
+        cmds.push(DisplayCommand::PopOpacity);
+    }
 }
 
 /// LIB-9 — emits `shape`'s own paint, then applies `mask` (a resolved SVG
@@ -212,7 +370,11 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
     // above already carries a sensible fallback for it: `SvgPaint::resolve`
     // returns the gradient's first stop as a flat color.
     let fill_gradient = match &b.style.svg_fill {
-        SvgPaint::Gradient(g) => Some(g.as_ref()),
+        SvgPaint::Gradient(g) => Some(SvgFillServer::Gradient(g.as_ref())),
+        // BUG-1294: a `<pattern>` fill is tiled through the same
+        // clip-and-fill path. A pattern `stroke` is not painted (no flat
+        // fallback colour exists for it).
+        SvgPaint::Pattern(p) => Some(SvgFillServer::Pattern(p.as_ref())),
         _ => None,
     };
 
@@ -267,6 +429,14 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
     } else {
         (b.rect, (b.rect.x, b.rect.y))
     };
+    // BUG-1294: user space → the space `geom` is in (`<pattern>` tiling).
+    let ug: [f32; 6] = if needs_ctm {
+        [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    } else if matches!(shape, SvgShapeKind::Path { .. }) {
+        [1.0, 0.0, 0.0, 1.0, path_shift.0, path_shift.1]
+    } else {
+        xmat
+    };
     if needs_ctm {
         out.push(DisplayCommand::PushTransform {
             matrix: Mat4::from_2d_affine(xmat[0], xmat[1], xmat[2], xmat[3], xmat[4], xmat[5]),
@@ -285,7 +455,7 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
                 } else {
                     DisplayCommand::PushClipRect { rect: geom }
                 };
-                emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, geom, xmat, needs_ctm);
+                emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, geom, xmat, needs_ctm, ug);
             } else if let Some(fc) = fill_color {
                 if has_radius {
                     fill_cmds.push(DisplayCommand::FillRoundedRect { rect: geom, color: fc, radii });
@@ -335,7 +505,7 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
                         ry: ry_px,
                     },
                 };
-                emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, geom, xmat, needs_ctm);
+                emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, geom, xmat, needs_ctm, ug);
             } else if let Some(fc) = fill_color {
                 fill_cmds.push(DisplayCommand::FillRoundedRect { rect: geom, color: fc, radii });
             }
@@ -423,7 +593,7 @@ pub(crate) fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut Disp
                                 even_odd: matches!(b.style.svg_fill_rule, FillRule::EvenOdd),
                             },
                         };
-                        emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, bbox, xmat, needs_ctm);
+                        emit_svg_gradient_fill(&mut fill_cmds, clip, g, b.style.svg_fill_opacity, bbox, xmat, needs_ctm, ug);
                     }
                 } else if let Some(fc) = fill_color {
                     match b.style.svg_fill_rule {
