@@ -7,6 +7,7 @@ pub mod color;
 pub mod dynamic_range_limit;
 pub mod flexgrid;
 pub mod grid_cssom;
+pub mod grid_lanes;
 pub mod length;
 pub mod misc;
 pub mod named_colors;

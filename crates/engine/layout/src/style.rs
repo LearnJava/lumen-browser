@@ -275,6 +275,7 @@ pub use values::background::{
     BackgroundRepeat, BackgroundSize, BgSizeAxis, GradientCorner, ImageRendering, MaskClip,
     ObjectFit, ParsedGradient, RadialShape, RadialSize, radial_gradient_radii,
 };
+pub use values::grid_lanes::{FlowTolerance, GridLanes, LanesAxis, LanesDirection};
 pub use values::flexgrid::{
     AlignValue, ContentAlignExtra, ContentSide, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow,
     GridLine, GridRepeat, GridTrackSize, MasonryAutoFlow, NameFill, ObjectPosition, PositionComponent,
