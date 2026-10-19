@@ -102,3 +102,40 @@ fn a_fixed_box_keeps_the_atomic_placement() {
     assert_eq!(fixed.len(), 1);
     assert!((fixed[0].rect.y - 5.0).abs() < 0.5, "viewport-relative: {}", fixed[0].rect.y);
 }
+
+/// Number of absolutely positioned direct children of the container: boxes the stack lifted out
+/// of their item; an atomic placement leaves them inside it.
+fn lifted(css: &str, abs_inner: &str) -> usize {
+    let root = lay_measured(
+        &format!("<div id='c'><div id='r'><div id='a'>{abs_inner}</div></div></div>"),
+        &format!(
+            "{MULTICOL} #r {{ position: relative; height: 150px; {css} }} \
+             #a {{ position: absolute; top: 0; left: 0; width: 10px; height: 150px; }}"
+        ),
+        800.0,
+    );
+    abs_pieces(&root).len()
+}
+
+#[test]
+fn an_abspos_inside_an_overflow_clip_box_is_still_cut() {
+    assert_eq!(lifted("overflow: clip;", ""), 2);
+}
+
+#[test]
+fn an_abspos_that_sticks_out_of_an_overflow_clip_box_keeps_the_atomic_placement() {
+    let root = lay_measured(
+        "<div id='c'><div id='r'><div id='a'></div></div></div>",
+        &format!(
+            "{MULTICOL} #r {{ position: relative; height: 150px; overflow: clip; }} \
+             #a {{ position: absolute; top: 0; left: 0; width: 500px; height: 150px; }}"
+        ),
+        800.0,
+    );
+    assert!(abs_pieces(&root).is_empty());
+}
+
+#[test]
+fn an_abspos_with_break_inside_avoid_keeps_the_atomic_placement() {
+    assert_eq!(lifted("", "<div style='break-inside: avoid; height: 150px'></div>"), 0);
+}

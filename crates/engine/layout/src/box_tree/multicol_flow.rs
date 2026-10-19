@@ -174,10 +174,21 @@ pub(super) enum OofScan {
 pub(super) fn scan_oof(items: &[&LayoutBox]) -> OofScan {
     use super::multicol_abspos::{establishes_abs_cb, uses_anchor_positioning};
     // (box, a box at or above it inside the item is the containing block of absolute children,
-    // a box at or above it clips with `overflow: clip` — [`take_oof`] would lift out of the clip)
-    let clips = |b: &LayoutBox| b.style.overflow_x == Overflow::Clip || b.style.overflow_y == Overflow::Clip;
-    let mut stack: Vec<(&LayoutBox, bool, bool)> =
-        items.iter().map(|b| (*b, establishes_abs_cb(&b.style), clips(b))).collect();
+    // the extents `overflow: clip` ancestors cut the content to, per axis — [`take_oof`] would
+    // lift an absolute box out of the clip, so one that sticks out of it stays atomic)
+    type Span = Option<(f32, f32)>;
+    type ClipBox = (Span, Span);
+    let narrow = |outer: Span, lo: f32, hi: f32| -> Span {
+        Some(outer.map_or((lo, hi), |(a, b)| (lo.max(a), hi.min(b))))
+    };
+    let clip_of = |b: &LayoutBox, outer: ClipBox| -> ClipBox {
+        let r = &b.rect;
+        let x = if b.style.overflow_x == Overflow::Clip { narrow(outer.0, r.x, r.x + r.width) } else { outer.0 };
+        let y = if b.style.overflow_y == Overflow::Clip { narrow(outer.1, r.y, r.y + r.height) } else { outer.1 };
+        (x, y)
+    };
+    let mut stack: Vec<(&LayoutBox, bool, ClipBox)> =
+        items.iter().map(|b| (*b, establishes_abs_cb(&b.style), clip_of(b, (None, None)))).collect();
     let mut found = OofScan::None;
     while let Some((x, cb_in, clip)) = stack.pop() {
         for c in &x.children {
@@ -187,17 +198,27 @@ pub(super) fn scan_oof(items: &[&LayoutBox]) -> OofScan {
             match c.style.position {
                 Position::Fixed | Position::Sticky => return OofScan::Unsupported,
                 Position::Absolute => {
-                    if !cb_in || clip || uses_anchor_positioning(&c.style) {
+                    let r = &c.rect;
+                    let out = |span: Span, lo: f32, hi: f32| span.is_some_and(|(a, b)| lo < a - EPS || hi > b + EPS);
+                    let escapes = out(clip.0, r.x, r.x + r.width) || out(clip.1, r.y, r.y + r.height);
+                    if !cb_in || escapes || uses_anchor_positioning(&c.style) || holds_avoid(c) {
                         return OofScan::Unsupported;
                     }
                     found = OofScan::Inside;
-                    stack.push((c, true, clip));
+                    stack.push((c, true, clip_of(c, clip)));
                 }
-                _ => stack.push((c, cb_in || establishes_abs_cb(&c.style), clip || clips(c))),
+                _ => stack.push((c, cb_in || establishes_abs_cb(&c.style), clip_of(c, clip))),
             }
         }
     }
     found
+}
+
+/// `break-inside: avoid` inside an absolute box: [`cut_oof`] slices it by the column windows
+/// alone and cannot push the unbreakable part into the next column (nor stretch the fragment
+/// that is left behind), so such a box keeps the atomic placement.
+fn holds_avoid(b: &LayoutBox) -> bool {
+    b.style.break_inside == BreakValue::Avoid || b.children.iter().any(holds_avoid)
 }
 
 /// Lifts the absolutely positioned descendants of `b` out of the part of the tree that [`cut`]
