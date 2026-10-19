@@ -28,7 +28,7 @@ use lumen_layout::{
     owns_paint_layer, perspective_matrix,
     transform_fns_to_matrix, TransformRef, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPatternDef,
@@ -62,6 +62,8 @@ mod geometry;
 pub use geometry::{contains_backdrop_filter, cull_display_list, fit_image_quad, fit_image_rect, ProvenanceIndex, ProvenanceSpan};
 #[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
 pub(crate) use geometry::{split_mixed_runs, MixedSegment};
+pub(crate) use geometry::repeat_axis_geometry;
+#[cfg(test)]
 pub(crate) use geometry::space_axis_geometry;
 #[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
 pub(crate) use geometry::bg_tile_geometry;

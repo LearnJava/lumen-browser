@@ -171,7 +171,7 @@ use super::*;
             &[0],
         );
         assert_eq!(s.background_layers[0].size, BackgroundSize::Auto);
-        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NO_REPEAT);
     }
 
     #[test]
@@ -658,6 +658,49 @@ use super::*;
     }
 
     #[test]
+    fn background_repeat_two_values_per_axis() {
+        // BUG-1299: `<repeat-style>{2}` sets each axis separately.
+        use crate::style::RepeatStyle::{NoRepeat, Repeat, Round, Space};
+        for (css, x, y) in [
+            ("repeat no-repeat", Repeat, NoRepeat),
+            ("no-repeat repeat", NoRepeat, Repeat),
+            ("space no-repeat", Space, NoRepeat),
+            ("round repeat", Round, Repeat),
+            ("repeat space", Repeat, Space),
+            ("space space", Space, Space),
+            ("ROUND   no-repeat", Round, NoRepeat),
+        ] {
+            let s = cascade_at(
+                "<div></div>",
+                &format!("div {{ background-image: url(a.png); background-repeat: {css}; }}"),
+                &[0],
+            );
+            assert_eq!(s.background_layers[0].repeat, BackgroundRepeat { x, y }, "{css}");
+        }
+        // Single keywords keep their meaning; `repeat-x` / `repeat-y` are sugar.
+        assert_eq!(BackgroundRepeat::parse("repeat no-repeat"), Some(BackgroundRepeat::REPEAT_X));
+        assert_eq!(BackgroundRepeat::parse("no-repeat repeat"), Some(BackgroundRepeat::REPEAT_Y));
+        assert_eq!(BackgroundRepeat::parse("round round"), Some(BackgroundRepeat::ROUND));
+        assert_eq!(BackgroundRepeat::parse("space"), Some(BackgroundRepeat::SPACE));
+        // Invalid: `repeat-x` takes no second value, no third value.
+        assert_eq!(BackgroundRepeat::parse("repeat-x repeat"), None);
+        assert_eq!(BackgroundRepeat::parse("repeat repeat repeat"), None);
+        assert_eq!(BackgroundRepeat::parse("repeat foo"), None);
+    }
+
+    #[test]
+    fn background_shorthand_repeat_two_values() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url(a.png) space no-repeat 10px 20px / 30px; }",
+            &[0],
+        );
+        let l = &s.background_layers[0];
+        assert_eq!(l.repeat, BackgroundRepeat { x: RepeatStyle::Space, y: RepeatStyle::NoRepeat });
+        assert_eq!(l.size, BackgroundSize::Length(BgSizeAxis::Px(30.0), BgSizeAxis::Auto));
+    }
+
+    #[test]
     fn multiple_backgrounds_color_only_in_last_layer() {
         // background shorthand: color applies only from last layer's declaration.
         let s = cascade_at(
@@ -666,7 +709,7 @@ use super::*;
             &[0],
         );
         assert_eq!(s.background_layers.len(), 2);
-        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NO_REPEAT);
         // Last layer had the color "red"
         assert!(s.background_color.is_some());
     }
@@ -685,7 +728,7 @@ use super::*;
         assert_eq!(layer.position.x, PositionComponent::Percent(0.5));
         assert_eq!(layer.position.y, PositionComponent::Percent(0.5));
         assert_eq!(layer.size, BackgroundSize::Cover);
-        assert_eq!(layer.repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(layer.repeat, BackgroundRepeat::NO_REPEAT);
     }
 
     #[test]
@@ -698,9 +741,9 @@ use super::*;
             &[0],
         );
         assert_eq!(s.background_layers.len(), 3);
-        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
-        assert_eq!(s.background_layers[1].repeat, BackgroundRepeat::RepeatX);
-        assert_eq!(s.background_layers[2].repeat, BackgroundRepeat::NoRepeat); // cycles
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NO_REPEAT);
+        assert_eq!(s.background_layers[1].repeat, BackgroundRepeat::REPEAT_X);
+        assert_eq!(s.background_layers[2].repeat, BackgroundRepeat::NO_REPEAT); // cycles
     }
 
     #[test]

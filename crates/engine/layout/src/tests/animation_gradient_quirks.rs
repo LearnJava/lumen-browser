@@ -1270,12 +1270,12 @@ fn background_image_gradient_parsed_conic_keyword_position() {
 #[test]
 fn background_repeat_values() {
     for (s, expected) in [
-        ("repeat", BackgroundRepeat::Repeat),
-        ("no-repeat", BackgroundRepeat::NoRepeat),
-        ("repeat-x", BackgroundRepeat::RepeatX),
-        ("repeat-y", BackgroundRepeat::RepeatY),
-        ("round", BackgroundRepeat::Round),
-        ("space", BackgroundRepeat::Space),
+        ("repeat", BackgroundRepeat::REPEAT),
+        ("no-repeat", BackgroundRepeat::NO_REPEAT),
+        ("repeat-x", BackgroundRepeat::REPEAT_X),
+        ("repeat-y", BackgroundRepeat::REPEAT_Y),
+        ("round", BackgroundRepeat::ROUND),
+        ("space", BackgroundRepeat::SPACE),
     ] {
         let css = format!("p {{ background-repeat: {s}; }}");
         let root = lay("<p>x</p>", &css);

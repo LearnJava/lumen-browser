@@ -89,41 +89,9 @@ pub(crate) fn gradient_tile_rects(
     }
     let off_x = position.x.resolve(origin.width - tile_w);
     let off_y = position.y.resolve(origin.height - tile_h);
-    let tile_x0 = origin.x + off_x;
-    let tile_y0 = origin.y + off_y;
 
-    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
-        BackgroundRepeat::RepeatX => (
-            tile_x0 - (off_x / tile_w).ceil() * tile_w,
-            tile_w,
-            true,
-            tile_y0,
-            tile_h,
-            false,
-        ),
-        BackgroundRepeat::RepeatY => (
-            tile_x0,
-            tile_w,
-            false,
-            tile_y0 - (off_y / tile_h).ceil() * tile_h,
-            tile_h,
-            true,
-        ),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
-            tile_x0 - (off_x / tile_w).ceil() * tile_w,
-            tile_w,
-            true,
-            tile_y0 - (off_y / tile_h).ceil() * tile_h,
-            tile_h,
-            true,
-        ),
-        BackgroundRepeat::Space => {
-            let (sx, step_x, rx) = space_axis_geometry(origin.x, origin.width, tile_w, off_x);
-            let (sy, step_y, ry) = space_axis_geometry(origin.y, origin.height, tile_h, off_y);
-            (sx, step_x, rx, sy, step_y, ry)
-        }
-    };
+    let (tile_x_start, step_x, repeat_x) = repeat_axis_geometry(repeat.x, origin.x, origin.width, tile_w, off_x);
+    let (tile_y_start, step_y, repeat_y) = repeat_axis_geometry(repeat.y, origin.y, origin.height, tile_h, off_y);
 
     // Cap, чтобы крошечная плитка с repeat не породила взрывное число команд.
     const MAX_TILES: usize = 4096;

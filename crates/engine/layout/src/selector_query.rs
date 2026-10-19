@@ -18,7 +18,7 @@ use crate::style::{
     SvgColorInterpolation,
     matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
-    BackgroundRepeat, BackgroundSize, BgSizeAxis, BlockStepAlign, BlockStepInsert, BlockStepRound,
+    BackgroundRepeat, BackgroundSize, BgSizeAxis, RepeatStyle, BlockStepAlign, BlockStepInsert, BlockStepRound,
     BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
     FlexBasis, FlexDirection, FlexWrap,
@@ -962,14 +962,20 @@ fn mix_blend_mode_to_css(v: MixBlendMode) -> &'static str {
     }
 }
 
-fn background_repeat_to_css(r: BackgroundRepeat) -> &'static str {
+fn background_repeat_to_css(r: BackgroundRepeat) -> String {
+    fn axis(s: RepeatStyle) -> &'static str {
+        match s {
+            RepeatStyle::Repeat => "repeat",
+            RepeatStyle::NoRepeat => "no-repeat",
+            RepeatStyle::Round => "round",
+            RepeatStyle::Space => "space",
+        }
+    }
     match r {
-        BackgroundRepeat::Repeat => "repeat",
-        BackgroundRepeat::NoRepeat => "no-repeat",
-        BackgroundRepeat::RepeatX => "repeat-x",
-        BackgroundRepeat::RepeatY => "repeat-y",
-        BackgroundRepeat::Round => "round",
-        BackgroundRepeat::Space => "space",
+        BackgroundRepeat::REPEAT_X => "repeat-x".into(),
+        BackgroundRepeat::REPEAT_Y => "repeat-y".into(),
+        BackgroundRepeat { x, y } if x == y => axis(x).into(),
+        BackgroundRepeat { x, y } => format!("{} {}", axis(x), axis(y)),
     }
 }
 
@@ -1025,21 +1031,21 @@ fn background_size_to_css(s: BackgroundSize) -> String {
 /// An empty layer list (no `background-*` declared at all) falls back to the
 /// property's own initial keyword, matching [`background_position_axis_to_css`]'s
 /// empty-layers handling.
-fn background_layer_field_to_css<T: Copy>(
+fn background_layer_field_to_css<T: Copy, S: Into<String>>(
     layers: &[BackgroundLayer],
     specified: &[T],
     initial: T,
     extract: impl Fn(&BackgroundLayer) -> T,
-    to_css: impl Fn(T) -> &'static str,
+    to_css: impl Fn(T) -> S,
 ) -> String {
     // The author's own list wins: its length is not the layer count (BUG-1297).
     if !specified.is_empty() {
-        return specified.iter().map(|v| to_css(*v)).collect::<Vec<_>>().join(", ");
+        return specified.iter().map(|v| to_css(*v).into()).collect::<Vec<String>>().join(", ");
     }
     if layers.is_empty() {
         return to_css(initial).into();
     }
-    layers.iter().map(|l| to_css(extract(l)).to_string()).collect::<Vec<_>>().join(", ")
+    layers.iter().map(|l| to_css(extract(l)).into()).collect::<Vec<String>>().join(", ")
 }
 
 fn fill_rule_to_css(r: FillRule) -> &'static str {

@@ -930,7 +930,7 @@ mod tests {
                 src: "bg.png".to_string(),
                 size: BackgroundSize::Cover,
                 position: ObjectPosition::default(),
-                repeat: BackgroundRepeat::RepeatX,
+                repeat: BackgroundRepeat::REPEAT_X,
                 image_rendering: ImageRendering::Auto,
             },
             DisplayCommand::DrawLinearGradient {
@@ -970,7 +970,7 @@ mod tests {
                 src: "mask.png".to_string(),
                 size: BackgroundSize::Contain,
                 position: ObjectPosition::default(),
-                repeat: BackgroundRepeat::NoRepeat,
+                repeat: BackgroundRepeat::NO_REPEAT,
                 image_rendering: ImageRendering::Smooth,
             },
             DisplayCommand::PushMaskLinearGradient {

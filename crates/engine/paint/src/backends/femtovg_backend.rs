@@ -5601,6 +5601,7 @@ impl RenderBackend for FemtovgBackend {
 mod tests {
     use super::*;
     use lumen_layout::BgSizeAxis;
+    use lumen_layout::RepeatStyle;
     use lumen_layout::PositionComponent;
     use lumen_layout::Length;
 
@@ -6034,7 +6035,7 @@ mod tests {
         let (tw, th, x0, y0, rx, ry, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
-            BackgroundRepeat::NoRepeat,
+            BackgroundRepeat::NO_REPEAT,
             100.0,
             100.0,
             180.0,
@@ -6058,7 +6059,7 @@ mod tests {
         let (tw, th, x0, y0, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
-            BackgroundRepeat::NoRepeat,
+            BackgroundRepeat::NO_REPEAT,
             100.0,
             100.0,
             180.0,
@@ -6079,7 +6080,7 @@ mod tests {
         let (tw, th, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Percent(0.4), BgSizeAxis::Percent(0.6)),
             &pos,
-            BackgroundRepeat::NoRepeat,
+            BackgroundRepeat::NO_REPEAT,
             100.0,
             100.0,
             180.0,
@@ -6099,7 +6100,7 @@ mod tests {
         let (tw, th, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(20.0), BgSizeAxis::Percent(1.0)),
             &pos,
-            BackgroundRepeat::RepeatX,
+            BackgroundRepeat::REPEAT_X,
             100.0,
             100.0,
             180.0,
@@ -6118,7 +6119,7 @@ mod tests {
         let (tw, th, ..) = bg_tile_geometry(
             BackgroundSize::Cover,
             &pos,
-            BackgroundRepeat::NoRepeat,
+            BackgroundRepeat::NO_REPEAT,
             100.0,
             100.0,
             180.0,
@@ -6131,6 +6132,29 @@ mod tests {
     }
 
     #[test]
+    fn bg_tile_geometry_repeat_styles_are_per_axis() {
+        // BUG-1299: `space no-repeat` spaces along x only; `round repeat` rounds x only.
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(0.0),
+            y: PositionComponent::Percent(0.0),
+        };
+        let size = BackgroundSize::Length(BgSizeAxis::Px(30.0), BgSizeAxis::Px(30.0));
+        let space_x = BackgroundRepeat { x: RepeatStyle::Space, y: RepeatStyle::NoRepeat };
+        let (tw, th, x0, y0, rx, ry, sx, sy) =
+            bg_tile_geometry(size, &pos, space_x, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0);
+        // floor(100/30) = 3 tiles, gap = (100 - 90) / 2 = 5 → step 35.
+        assert_eq!((tw, th, x0, y0, rx, ry), (30.0, 30.0, 0.0, 0.0, true, false));
+        assert_eq!((sx, sy), (35.0, 30.0));
+        let round_x = BackgroundRepeat { x: RepeatStyle::Round, y: RepeatStyle::Repeat };
+        let (tw, th, _, _, rx, ry, ..) =
+            bg_tile_geometry(size, &pos, round_x, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0);
+        // round(100/30) = 3 → 33.33 along x; y keeps 30.
+        assert!((tw - 100.0 / 3.0).abs() < 1e-3);
+        assert_eq!(th, 30.0);
+        assert!(rx && ry);
+    }
+
+    #[test]
     fn bg_tile_geometry_repeat_sets_flags() {
         // Repeat with position 0% 0% → both axes repeat; start aligned to origin.
         let pos = ObjectPosition {
@@ -6140,7 +6164,7 @@ mod tests {
         let (tw, th, x0, y0, rx, ry, ..) = bg_tile_geometry(
             BackgroundSize::Length(BgSizeAxis::Px(40.0), BgSizeAxis::Px(40.0)),
             &pos,
-            BackgroundRepeat::Repeat,
+            BackgroundRepeat::REPEAT,
             100.0,
             100.0,
             200.0,

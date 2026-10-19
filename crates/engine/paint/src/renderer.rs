@@ -43,7 +43,7 @@ use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterF
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry, InsertOutcome};
 use crate::display_list::{
-    fit_image_quad, fit_image_rect, space_axis_geometry, BlendMode, CornerRadii, MaskMode,
+    fit_image_quad, fit_image_rect, repeat_axis_geometry, BlendMode, CornerRadii, MaskMode,
     ResolvedClipShape,
 };
 use crate::fingerprint::GpuFingerprint;
@@ -2505,29 +2505,9 @@ impl Renderer {
                     // Compute first tile origin from background-position relative to positioning area.
                     let off_x = position.x.resolve(oarea.width - tile_w);
                     let off_y = position.y.resolve(oarea.height - tile_h);
-                    let tile_x0 = oarea.x + off_x;
-                    let tile_y0 = oarea.y + off_y;
 
-                    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
-                        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
-                        BackgroundRepeat::RepeatX => (
-                            tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
-                            tile_y0, tile_h, false,
-                        ),
-                        BackgroundRepeat::RepeatY => (
-                            tile_x0, tile_w, false,
-                            tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
-                        ),
-                        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
-                            tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
-                            tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
-                        ),
-                        BackgroundRepeat::Space => {
-                            let (sx, step_x, rx) = space_axis_geometry(oarea.x, oarea.width, tile_w, off_x);
-                            let (sy, step_y, ry) = space_axis_geometry(oarea.y, oarea.height, tile_h, off_y);
-                            (sx, step_x, rx, sy, step_y, ry)
-                        }
-                    };
+                    let (tile_x_start, step_x, repeat_x) = repeat_axis_geometry(repeat.x, oarea.x, oarea.width, tile_w, off_x);
+                    let (tile_y_start, step_y, repeat_y) = repeat_axis_geometry(repeat.y, oarea.y, oarea.height, tile_h, off_y);
 
                     let v_start = image_vertices.len() as u32;
                     let image_batch_idx = image_bind_groups.len() as u32;
@@ -2769,7 +2749,7 @@ impl Renderer {
                         gradient: Some(MaskGradientSpec::Linear { params, quad }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
-                        repeat: BackgroundRepeat::NoRepeat,
+                        repeat: BackgroundRepeat::NO_REPEAT,
                         rect: scrolled,
                         transform,
                     });
@@ -2803,7 +2783,7 @@ impl Renderer {
                         gradient: Some(MaskGradientSpec::Radial { params, quad }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
-                        repeat: BackgroundRepeat::NoRepeat,
+                        repeat: BackgroundRepeat::NO_REPEAT,
                         rect: scrolled,
                         transform,
                     });
@@ -2832,7 +2812,7 @@ impl Renderer {
                         gradient: Some(MaskGradientSpec::Conic { params, quad }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
-                        repeat: BackgroundRepeat::NoRepeat,
+                        repeat: BackgroundRepeat::NO_REPEAT,
                         rect: scrolled,
                         transform,
                     });
@@ -2886,28 +2866,8 @@ impl Renderer {
                                 };
                                 let off_x = info.position.x.resolve(area.width - tile_w);
                                 let off_y = info.position.y.resolve(area.height - tile_h);
-                                let tile_x0 = area.x + off_x;
-                                let tile_y0 = area.y + off_y;
-                                let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match info.repeat {
-                                    BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
-                                    BackgroundRepeat::RepeatX => (
-                                        tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
-                                        tile_y0, tile_h, false,
-                                    ),
-                                    BackgroundRepeat::RepeatY => (
-                                        tile_x0, tile_w, false,
-                                        tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
-                                    ),
-                                    BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
-                                        tile_x0 - (off_x / tile_w).ceil() * tile_w, tile_w, true,
-                                        tile_y0 - (off_y / tile_h).ceil() * tile_h, tile_h, true,
-                                    ),
-                                    BackgroundRepeat::Space => {
-                                        let (sx, step_x, rx) = space_axis_geometry(area.x, area.width, tile_w, off_x);
-                                        let (sy, step_y, ry) = space_axis_geometry(area.y, area.height, tile_h, off_y);
-                                        (sx, step_x, rx, sy, step_y, ry)
-                                    }
-                                };
+                                let (tile_x_start, step_x, repeat_x) = repeat_axis_geometry(info.repeat.x, area.x, area.width, tile_w, off_x);
+                                let (tile_y_start, step_y, repeat_y) = repeat_axis_geometry(info.repeat.y, area.y, area.height, tile_h, off_y);
                                 let x_end = area.x + area.width;
                                 let y_end = area.y + area.height;
                                 let mut ty = tile_y_start;

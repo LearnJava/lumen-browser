@@ -224,28 +224,88 @@ pub enum BackgroundImage {
     Paint(String),
 }
 
-/// CSS Backgrounds L3 §3.4 — `background-repeat`.
+/// CSS Backgrounds L3 §3.4 — `<repeat-style>` value of one axis.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BackgroundRepeat {
+pub enum RepeatStyle {
     #[default]
     Repeat,
     NoRepeat,
-    RepeatX,
-    RepeatY,
     Round,
     Space,
 }
 
-impl BackgroundRepeat {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
+impl RepeatStyle {
+    fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
             "repeat" => Some(Self::Repeat),
             "no-repeat" => Some(Self::NoRepeat),
-            "repeat-x" => Some(Self::RepeatX),
-            "repeat-y" => Some(Self::RepeatY),
             "round" => Some(Self::Round),
             "space" => Some(Self::Space),
             _ => None,
+        }
+    }
+}
+
+/// CSS Backgrounds L3 §3.4 — `background-repeat` of one layer: a style per axis.
+///
+/// `repeat-x` / `repeat-y` are sugar for `repeat no-repeat` / `no-repeat repeat`;
+/// a single `round` / `space` / `repeat` / `no-repeat` sets both axes.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundRepeat {
+    pub x: RepeatStyle,
+    pub y: RepeatStyle,
+}
+
+impl BackgroundRepeat {
+    pub const REPEAT: Self = Self { x: RepeatStyle::Repeat, y: RepeatStyle::Repeat };
+    pub const NO_REPEAT: Self = Self { x: RepeatStyle::NoRepeat, y: RepeatStyle::NoRepeat };
+    pub const REPEAT_X: Self = Self { x: RepeatStyle::Repeat, y: RepeatStyle::NoRepeat };
+    pub const REPEAT_Y: Self = Self { x: RepeatStyle::NoRepeat, y: RepeatStyle::Repeat };
+    pub const ROUND: Self = Self { x: RepeatStyle::Round, y: RepeatStyle::Round };
+    pub const SPACE: Self = Self { x: RepeatStyle::Space, y: RepeatStyle::Space };
+
+    /// Parses a whole `<repeat-style>` value: `repeat-x | repeat-y | <style>{1,2}`.
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut it = s.split_ascii_whitespace();
+        let first = it.next()?;
+        let second = it.next();
+        if it.next().is_some() {
+            return None;
+        }
+        let (r, used) = Self::parse_prefix(first, second)?;
+        (used == 1 + usize::from(second.is_some())).then_some(r)
+    }
+
+    /// Parses `first` plus an optional following token. Returns the value and
+    /// how many tokens it consumed (1 or 2); for the shorthand parsers, where
+    /// the next token may belong to another layer component.
+    pub fn parse_prefix(first: &str, next: Option<&str>) -> Option<(Self, usize)> {
+        if first.eq_ignore_ascii_case("repeat-x") {
+            return Some((Self::REPEAT_X, 1));
+        }
+        if first.eq_ignore_ascii_case("repeat-y") {
+            return Some((Self::REPEAT_Y, 1));
+        }
+        let x = RepeatStyle::parse(first)?;
+        match next.and_then(RepeatStyle::parse) {
+            Some(y) => Some((Self { x, y }, 2)),
+            None => Some((Self { x, y: x }, 1)),
+        }
+    }
+}
+
+impl std::fmt::Debug for BackgroundRepeat {
+    /// Keeps the one-word names of the single-keyword forms so display-list
+    /// dumps and goldens stay byte-identical; per-axis mixes print `X/Y`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::REPEAT => f.write_str("Repeat"),
+            Self::NO_REPEAT => f.write_str("NoRepeat"),
+            Self::REPEAT_X => f.write_str("RepeatX"),
+            Self::REPEAT_Y => f.write_str("RepeatY"),
+            Self::ROUND => f.write_str("Round"),
+            Self::SPACE => f.write_str("Space"),
+            Self { x, y } => write!(f, "{x:?}/{y:?}"),
         }
     }
 }
@@ -471,7 +531,7 @@ impl Default for BackgroundLayer {
     fn default() -> Self {
         Self {
             image: BackgroundImage::None,
-            repeat: BackgroundRepeat::Repeat,
+            repeat: BackgroundRepeat::REPEAT,
             size: BackgroundSize::Auto,
             position: ObjectPosition::background_initial(),
             attachment: BackgroundAttachment::Scroll,
