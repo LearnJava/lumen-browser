@@ -117,6 +117,32 @@ pub enum DisplayCommand {
         /// Phase 2+; Phase 1 treats `Mixed` as `Sideways`).
         text_orientation: Option<TextOrientation>,
     },
+    /// WHATWG Compat §3.2 — `-webkit-text-stroke`: обводка глифов того же прогона,
+    /// что и непосредственно предшествующий `DrawText` (поля шрифта и раскладки
+    /// те же). Бэкенд раскладывает прогон тем же шейпером, снимает контуры
+    /// глифов и штрихует их как `DrawSvgStroke` (центрированная обводка,
+    /// miter-join, лимит 4) — см. [`crate::text_stroke::expand`]. `rect` уже
+    /// раздут на `width / 2` со всех сторон (рамка для тайлов и отсечения), а
+    /// позиция глифов считается от `rect` минус этот вылет.
+    ///
+    /// Не передаются: `font-variation-settings` (обводка — контур
+    /// default-instance), `font-stretch`, вертикальные режимы письма.
+    DrawTextStroke {
+        rect: Rect,
+        text: String,
+        font_size: f32,
+        font_family: Vec<String>,
+        font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: Vec<([u8; 4], u32)>,
+        tab_size: f32,
+        /// Фиксированная точка 1/64 px, как у `DrawText`.
+        letter_spacing: i16,
+        word_spacing: i16,
+        /// Ширина штриха в px (> 0).
+        width: f32,
+        color: Color,
+    },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
     /// строка ссылки на ресурс из исходного атрибута (декодирование и
@@ -683,6 +709,7 @@ impl DisplayCommand {
             Self::DrawBorder { .. } => "DrawBorder",
             Self::DrawOutline { .. } => "DrawOutline",
             Self::DrawText { .. } => "DrawText",
+            Self::DrawTextStroke { .. } => "DrawTextStroke",
             Self::DrawImage { .. } => "DrawImage",
             Self::LazyImageSlot { .. } => "LazyImageSlot",
             Self::DrawBackgroundImage { .. } => "DrawBackgroundImage",

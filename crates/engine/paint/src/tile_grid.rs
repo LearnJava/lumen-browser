@@ -220,6 +220,7 @@ fn cmd_rect(cmd: &DisplayCommand) -> Option<Rect> {
         | DisplayCommand::DrawBorder { rect, .. }
         | DisplayCommand::DrawOutline { rect, .. }
         | DisplayCommand::DrawText { rect, .. }
+        | DisplayCommand::DrawTextStroke { rect, .. }
         | DisplayCommand::DrawImage { rect, .. }
         | DisplayCommand::LazyImageSlot { rect, .. }
         | DisplayCommand::DrawBackgroundImage { rect, .. }

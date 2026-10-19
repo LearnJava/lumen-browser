@@ -123,6 +123,53 @@ use super::*;
     }
 
     #[test]
+    fn webkit_text_stroke_shorthand_longhands_and_keywords() {
+        let s = style_for("color: lime");
+        assert_eq!(s.text_stroke_width, 0.0);
+        assert_eq!(s.used_text_stroke_color(), Color { r: 0, g: 255, b: 0, a: 255 });
+        // Шортхенд: ширина и цвет в любом порядке, пропущенная — initial.
+        let s = style_for("color: lime; -webkit-text-stroke: 1px red");
+        assert_eq!(s.text_stroke_width, 1.0);
+        assert_eq!(s.used_text_stroke_color(), Color { r: 255, g: 0, b: 0, a: 255 });
+        let s = style_for("color: lime; -webkit-text-stroke: green");
+        assert_eq!(s.text_stroke_width, 0.0);
+        assert_eq!(s.used_text_stroke_color(), Color { r: 0, g: 128, b: 0, a: 255 });
+        let s = style_for("color: lime; -webkit-text-stroke: 3px");
+        assert_eq!((s.text_stroke_width, s.text_stroke_color), (3.0, CssColor::CurrentColor));
+        let s = style_for("-webkit-text-stroke: rgb(0 0 255) thick");
+        assert_eq!(s.text_stroke_width, 5.0);
+        // Ключевые слова border-width: thin/medium/thick = 1/3/5 px.
+        assert_eq!(style_for("-webkit-text-stroke-width: thin").text_stroke_width, 1.0);
+        assert_eq!(style_for("-webkit-text-stroke-width: medium").text_stroke_width, 3.0);
+        assert_eq!(style_for("-webkit-text-stroke-width: 2em; font-size: 10px").text_stroke_width, 20.0);
+        // Невалидное игнорируется целиком: прежнее значение остаётся.
+        assert_eq!(style_for("-webkit-text-stroke-width: 2px; -webkit-text-stroke-width: -1px").text_stroke_width, 2.0);
+        assert_eq!(style_for("-webkit-text-stroke: 2px; -webkit-text-stroke: 1px 2px").text_stroke_width, 2.0);
+        assert_eq!(style_for("-webkit-text-stroke: 2px; -webkit-text-stroke: foo").text_stroke_width, 2.0);
+        // Шортхенд сбрасывает пропущенную компоненту.
+        let s = style_for("-webkit-text-stroke-color: red; -webkit-text-stroke: 2px");
+        assert_eq!(s.text_stroke_color, CssColor::CurrentColor);
+    }
+
+    #[test]
+    fn webkit_text_stroke_inherits_and_css_wide() {
+        let doc = lumen_html_parser::parse("<div><p>x</p><i>y</i></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { -webkit-text-stroke: 2px green; } i { -webkit-text-stroke: initial; }",
+        );
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p = doc.get(div).children[0];
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(p_style.text_stroke_width, 2.0);
+        assert_eq!(p_style.used_text_stroke_color(), Color { r: 0, g: 128, b: 0, a: 255 });
+        let i = doc.get(div).children[1];
+        let i_style = compute_style(&doc, i, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(i_style.text_stroke_width, 0.0);
+    }
+
+    #[test]
     fn text_decoration_color_property_named() {
         // Отдельное свойство text-decoration-color.
         let s = style_for("text-decoration-color: blue");

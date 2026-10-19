@@ -56,6 +56,14 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
+            DisplayCommand::DrawTextStroke { rect, text, width, color, .. } => {
+                out.push_str(&format!(
+                    "DrawTextStroke ({:.2}, {:.2}, {:.2}, {:.2}) {:?} w={:.2} #{:02x}{:02x}{:02x}{:02x}
+",
+                    rect.x, rect.y, rect.width, rect.height, text, width,
+                    color.r, color.g, color.b, color.a,
+                ));
+            }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
                 font_stretch, font_variation_axes, font_features, font_palette, tab_size: _, letter_spacing: _, word_spacing: _,

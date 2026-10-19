@@ -4341,6 +4341,8 @@ impl FemtovgBackend {
             // 0.9 has no native dash, so dash-split first with the same routine
             // the tessellating fallback uses (`apply_dash_pattern`), then stroke
             // each resulting open sub-path with butt-cap/round-cap as requested.
+            // TODO(text-stroke): выражается через `crate::text_stroke::expand` → DrawSvgStroke.
+            DisplayCommand::DrawTextStroke { .. } => {}
             DisplayCommand::DrawSvgStroke { contours, color, params } => {
                 if params.half_width <= 0.0 {
                     return;
