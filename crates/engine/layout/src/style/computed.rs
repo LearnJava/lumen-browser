@@ -493,9 +493,10 @@ pub struct ComputedStyle {
     /// наследуется.
     pub transform: Vec<TransformFn>,
     /// CSS Transforms L2 §2 — `translate: none | <tx> [<ty>]`.
-    /// Individual translate in px; composed BEFORE `transform` in the final matrix.
+    /// Individual translate (`<length-percentage>` по X и Y; процент — от border
+    /// box, BUG-1292); composed BEFORE `transform` in the final matrix.
     /// `None` = `none` (identity). Not inherited.
-    pub translate: Option<(f32, f32)>,
+    pub translate: Option<(Length, Length)>,
     /// CSS Transforms L2 §2 — `rotate: none | <angle>`.
     /// Individual 2D rotation in radians; composed BEFORE `transform`.
     /// `None` = `none` (identity). Not inherited.

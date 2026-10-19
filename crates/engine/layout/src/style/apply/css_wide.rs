@@ -1108,7 +1108,7 @@ fn apply_css_wide_keyword_with(
             style.transform = if inh_only_inherit { inherited.transform.clone() } else { init.transform.clone() };
         }
         "translate" => {
-            style.translate = if inh_only_inherit { inherited.translate } else { init.translate };
+            style.translate = if inh_only_inherit { inherited.translate.clone() } else { init.translate.clone() };
         }
         "rotate" => {
             style.rotate = if inh_only_inherit { inherited.rotate } else { init.rotate };

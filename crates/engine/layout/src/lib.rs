@@ -118,6 +118,7 @@ pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxT
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
     compute_local_transform, forward_box_transform, perspective_matrix, transform_fns_to_matrix,
+    translate_lp_matrix, TransformRef,
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
