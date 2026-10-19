@@ -39,3 +39,24 @@ WPT-RUN-14 срез 6: `css/css-backgrounds/parsing/*` и `inheritance.sub.html`
 ## Повторное измерение: WPT-RUN-14 срез 23 (2026-10-08)
 
 Тот же класс «`element.style` не валидирует и не канонизирует» — для `shape-outside`/`shape-margin`/`shape-image-threshold`, `clip-path: <basic-shape>` и свойств Text Decoration: BUG-1516 (74 id, 972 из 1 157 сабтестов).
+
+## Срез 1 (P3, 2026-10-19)
+
+Закрыто: валидаторы и канонизаторы по грамматике — новый модуль `crates/engine/layout/src/style/values/background_cssom.rs` (`canonical_specified_background`), в JS подключён через `_LUMEN_BACKGROUND_PROPERTIES` → `_lumen_css_canonical_background`: `background-{image,size,repeat,attachment,origin,clip,position,position-x,position-y}`, `box-shadow`, `border-radius` и четыре `border-*-radius`. В computed:
+
+- `ComputedStyle::background_specified` хранит списки per-layer-свойств как заданы автором — их длина больше не равна числу слоёв (`background-repeat: repeat-x` при двух изображениях остаётся `repeat-x`);
+- каскад отбрасывает весь список `background-{repeat,attachment,origin,clip}` при одном недопустимом элементе (раньше недопустимый элемент молча выпадал);
+- в карте computed: `background-position`, `border-radius` (с эллиптическими углами), `border-*-radius` с двумя осями, `box-shadow` и `border-*-color` с `currentcolor` → используемый цвет, шортхенды `border-color`/`border-style` в кратчайшей форме;
+- `expand_border_4`/`split_radius_pair` делят значение по пробелам верхнего уровня (`border-color: rgb(1, 2, 3) rgb(4, 5, 6)` и `calc(… + …)` раньше ломались и объявление выпадало); `border-style: hidden` разбирается; ширина рамки из `calc()` не бывает отрицательной;
+- JS: `style.<шортхенд TRBL> = ''` снимает четыре лонгхенда, `hidden` допустим в `border-*-style`; `calc` в канонической записи — по порядку единиц, вычитание записывается ` - `.
+
+WPT `css/css-backgrounds/parsing`: 370 → 629 из 916 сабтестов, регрессий нет. Регрессионные тесты: `v8_bug1297_background_cssom.rs`, `background_cssom::tests`, `selector_query::tests::computed_map_*`.
+
+### Остаток
+
+- шортхенды `background` / `border` / `border-image` (`background-valid` 40, `background-shorthand-serialization` 10, `border-shorthand` 31, `background-invalid`, `border-invalid`): разбор и сериализация шортхенда из лонгхендов;
+- `background-image` computed: `radial-gradient()`/`conic-gradient()` не разбираются (45 сабтестов `background-image-computed`), отрицательные радиусы радиального градиента и `cross-fade()` процентами в `background-image-invalid`;
+- `background-repeat: space/round` двумя значениями и `background-clip: border-area` — в движке нет значений;
+- `background-position-x/-y: x-start|x-end` и `right -10px` в computed; `calc()` в `background-size` (`calc(10px + 0.5em)` → `auto`);
+- `border-width` computed — четыре значения без свёртки (`2px 0px 0px 0px`), WPT ждёт именно её;
+- `-webkit-border-radius` и `border-radius` как пара шортхендов (`Serialize … style is not iterable`).

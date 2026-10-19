@@ -51,7 +51,7 @@ pub fn transform_text_by_value(value: &str, lang: &str, text: &str) -> String {
 /// проценты, затем единицы по алфавиту; одинаковые единицы сложены, вычитание записано как
 /// сложение отрицательного (`calc(2ch - 30%)` → `calc(-30% + 2ch)`). Любое выражение, кроме
 /// чистой суммы длин (`*`, `/`, `min()`, вложенные скобки), остаётся как есть.
-fn canonical_length_sorted(v: &str, auto: bool, non_negative: bool) -> Option<String> {
+pub(super) fn canonical_length_sorted(v: &str, auto: bool, non_negative: bool) -> Option<String> {
     let c = canonical_length(v, auto, non_negative)?;
     Some(sort_calc_sum(&c).unwrap_or(c))
 }
@@ -88,8 +88,16 @@ fn sort_calc_sum(css: &str) -> Option<String> {
     }
     // `%` сортируется раньше букв.
     terms.sort_by(|a, b| (a.0 != "%", &a.0).cmp(&(b.0 != "%", &b.0)));
-    let body: Vec<String> = terms.iter().map(|(u, v)| format!("{v}{u}")).collect();
-    Some(format!("calc({})", body.join(" + ")))
+    // Слагаемое после первого — `+ x`, а отрицательное записано вычитанием (`calc(1em - 2px)`).
+    let mut body = String::new();
+    for (i, (u, v)) in terms.iter().enumerate() {
+        match (i, *v < 0.0) {
+            (0, _) => body.push_str(&format!("{v}{u}")),
+            (_, true) => body.push_str(&format!(" - {}{u}", -v)),
+            (_, false) => body.push_str(&format!(" + {v}{u}")),
+        }
+    }
+    Some(format!("calc({body})"))
 }
 
 /// CSS Text L3 §10.1: `<number [0,∞]> | <length [0,∞]>`. Процент невалиден.

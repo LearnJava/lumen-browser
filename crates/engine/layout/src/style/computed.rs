@@ -33,7 +33,7 @@ use lumen_core::ColorSpace;
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
-    Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
+    Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
@@ -655,6 +655,8 @@ pub struct ComputedStyle {
     /// CSS Backgrounds L3 §3 — стек фоновых слоёв. Первый элемент = верхний (рендерится поверх).
     /// Пустой Vec соответствует `background-image: none` без слоёв. `background-color` отдельно.
     pub background_layers: Vec<BackgroundLayer>,
+    /// Списки per-layer-свойств как заданы автором — для `getComputedStyle` (BUG-1297).
+    pub background_specified: Option<Box<BackgroundSpecified>>,
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
@@ -1486,6 +1488,7 @@ impl ComputedStyle {
             justify_content: AlignValue::Auto,
             content_align_extra: ContentAlignExtra::default(),
             background_layers: Vec::new(),
+            background_specified: None,
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
@@ -1891,6 +1894,7 @@ impl ComputedStyle {
             content_align_extra: ContentAlignExtra::default(),
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
+            background_specified: None,
             // Will Change — не наследуется; Pointer Events — наследуется.
             will_change: Vec::new(),
             pointer_events: inherited.pointer_events,

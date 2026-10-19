@@ -554,6 +554,15 @@ pub(crate) fn color_to_css(c: Color) -> String {
 }
 
 /// Serialises a [`CssColor`] — `CurrentColor` becomes `"currentcolor"`.
+/// [`css_color_to_css`], but `currentcolor` is the used colour `current`, as `getComputedStyle`
+/// reports it (BUG-1297, `border-color-computed`).
+fn used_css_color(c: &CssColor, current: Color) -> String {
+    match c {
+        CssColor::CurrentColor => color_to_css(current),
+        other => css_color_to_css(other),
+    }
+}
+
 fn css_color_to_css(c: &CssColor) -> String {
     match c {
         CssColor::Rgba(col) => color_to_css(*col),
@@ -642,8 +651,12 @@ fn vertical_align_to_css(va: &VerticalAlign) -> String {
 /// multi-layer longhand's serialization order.
 fn background_position_axis_to_css(
     layers: &[BackgroundLayer],
+    specified: &[PositionComponent],
     axis: impl Fn(&BackgroundLayer) -> PositionComponent,
 ) -> String {
+    if !specified.is_empty() {
+        return specified.iter().map(|c| position_component_to_css(*c)).collect::<Vec<_>>().join(", ");
+    }
     if layers.is_empty() {
         return position_component_to_css(ObjectPosition::background_initial().x);
     }
@@ -1014,10 +1027,15 @@ fn background_size_to_css(s: BackgroundSize) -> String {
 /// empty-layers handling.
 fn background_layer_field_to_css<T: Copy>(
     layers: &[BackgroundLayer],
+    specified: &[T],
     initial: T,
     extract: impl Fn(&BackgroundLayer) -> T,
     to_css: impl Fn(T) -> &'static str,
 ) -> String {
+    // The author's own list wins: its length is not the layer count (BUG-1297).
+    if !specified.is_empty() {
+        return specified.iter().map(|v| to_css(*v)).collect::<Vec<_>>().join(", ");
+    }
     if layers.is_empty() {
         return to_css(initial).into();
     }
@@ -1130,13 +1148,14 @@ fn box_sides_shorthand(t: &str, r: &str, b: &str, l: &str) -> String {
     }
 }
 
-fn box_shadow_list_to_css(v: &[BoxShadow]) -> String {
+fn box_shadow_list_to_css(v: &[BoxShadow], current: Color) -> String {
     if v.is_empty() {
         return "none".into();
     }
     v.iter()
         .map(|s| {
-            let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
+            // `currentcolor` serialises as the used colour, like Chrome (BUG-1297).
+            let color = color_to_css(s.color.unwrap_or(current));
             // CSSOM: the colour serialises first (BUG-1050).
             let mut out = format!(
                 "{color} {} {} {} {}",
@@ -1357,15 +1376,34 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("border-bottom-style".into(), border_style_to_css(style.border_bottom_style).into());
     m.insert("border-left-style".into(), border_style_to_css(style.border_left_style).into());
 
-    m.insert("border-top-color".into(), css_color_to_css(&style.border_top_color));
-    m.insert("border-right-color".into(), css_color_to_css(&style.border_right_color));
-    m.insert("border-bottom-color".into(), css_color_to_css(&style.border_bottom_color));
-    m.insert("border-left-color".into(), css_color_to_css(&style.border_left_color));
+    m.insert("border-top-color".into(), used_css_color(&style.border_top_color, style.color));
+    m.insert("border-right-color".into(), used_css_color(&style.border_right_color, style.color));
+    m.insert("border-bottom-color".into(), used_css_color(&style.border_bottom_color, style.color));
+    m.insert("border-left-color".into(), used_css_color(&style.border_left_color, style.color));
 
-    m.insert("border-top-left-radius".into(), length_to_css(&style.border_top_left_radius));
-    m.insert("border-top-right-radius".into(), length_to_css(&style.border_top_right_radius));
-    m.insert("border-bottom-right-radius".into(), length_to_css(&style.border_bottom_right_radius));
-    m.insert("border-bottom-left-radius".into(), length_to_css(&style.border_bottom_left_radius));
+    // Each corner is `rx` or `rx ry` (the latter only when the radii differ, CSS Backgrounds L3 §5.5);
+    // the shorthand lists the four horizontal radii, then the four vertical ones after `/`.
+    let hr = [
+        length_to_css(&style.border_top_left_radius),
+        length_to_css(&style.border_top_right_radius),
+        length_to_css(&style.border_bottom_right_radius),
+        length_to_css(&style.border_bottom_left_radius),
+    ];
+    let vr = [
+        length_to_css(&style.border_top_left_radius_y),
+        length_to_css(&style.border_top_right_radius_y),
+        length_to_css(&style.border_bottom_right_radius_y),
+        length_to_css(&style.border_bottom_left_radius_y),
+    ];
+    let corner = |i: usize| if hr[i] == vr[i] { hr[i].clone() } else { format!("{} {}", hr[i], vr[i]) };
+    m.insert("border-top-left-radius".into(), corner(0));
+    m.insert("border-top-right-radius".into(), corner(1));
+    m.insert("border-bottom-right-radius".into(), corner(2));
+    m.insert("border-bottom-left-radius".into(), corner(3));
+    m.insert("border-radius".into(), crate::style::serialize_border_radius(
+        [hr[0].as_str(), hr[1].as_str(), hr[2].as_str(), hr[3].as_str()],
+        [vr[0].as_str(), vr[1].as_str(), vr[2].as_str(), vr[3].as_str()],
+    ));
 
     // ── Inset (positioned elements) ───────────────────────────────
     m.insert("top".into(), length_or_auto_to_css(&style.top));
@@ -1378,10 +1416,22 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("background-color".into(), style.background_color.as_ref()
         .map_or_else(|| "rgba(0, 0, 0, 0)".into(), css_color_to_css));
     m.insert("background-image".into(), background_layers_to_css(&style.background_layers));
+    let pos_spec = style.background_specified.as_deref();
+    let pos_x = pos_spec.map_or(&[][..], |s| s.position_x.as_slice());
+    let pos_y = pos_spec.map_or(&[][..], |s| s.position_y.as_slice());
     m.insert("background-position-x".into(),
-        background_position_axis_to_css(&style.background_layers, |l| l.position.x));
+        background_position_axis_to_css(&style.background_layers, pos_x, |l| l.position.x));
     m.insert("background-position-y".into(),
-        background_position_axis_to_css(&style.background_layers, |l| l.position.y));
+        background_position_axis_to_css(&style.background_layers, pos_y, |l| l.position.y));
+    // CSS Backgrounds L3 §3.6: `<x> <y>` per layer, the longer of the two lists sets the count.
+    m.insert("background-position".into(), {
+        let xs = m["background-position-x"].split(", ").map(String::from).collect::<Vec<_>>();
+        let ys = m["background-position-y"].split(", ").map(String::from).collect::<Vec<_>>();
+        (0..xs.len().max(ys.len()))
+            .map(|i| format!("{} {}", xs[i % xs.len()], ys[i % ys.len()]))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
 
     // ── Replaced elements (CSS Images L3) ──────────────────────────
     m.insert("object-fit".into(), match style.object_fit {
@@ -1408,18 +1458,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         None => "auto".into(),
     });
 
-    // `border-color` shorthand — CSSOM `getPropertyValue` on a shorthand only
-    // resolves when every longhand it covers serializes to the same value
-    // (matches real UA behaviour: differing per-side colors read back as "").
-    m.insert("border-color".into(), {
-        let (t, r, b, l) = (
-            css_color_to_css(&style.border_top_color),
-            css_color_to_css(&style.border_right_color),
-            css_color_to_css(&style.border_bottom_color),
-            css_color_to_css(&style.border_left_color),
-        );
-        if t == r && r == b && b == l { t } else { String::new() }
-    });
+    // `border-color` shorthand — the four sides serialise in the shortest margin-style form
+    // (CSSOM §6.7.2), like `border-width`/`border-style` below.
+    m.insert("border-color".into(), box_sides_shorthand(
+        &used_css_color(&style.border_top_color, style.color),
+        &used_css_color(&style.border_right_color, style.color),
+        &used_css_color(&style.border_bottom_color, style.color),
+        &used_css_color(&style.border_left_color, style.color),
+    ));
 
     // CSS 2.1 §17.6 `border-spacing` — one value when horizontal/vertical
     // components are equal (the common case, including every legacy
@@ -1937,35 +1983,33 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("contain-intrinsic-height".into(), cis_h);
 
     // ── Border shorthands (CSSOM-3 срез 1) ──────────────────────────
-    // `border-width`/`border-style` mirror `border-color` above: a shorthand
-    // resolves only when all four sides agree, otherwise `""` — matches real
-    // UA `getPropertyValue` behaviour on a per-side-differing shorthand.
+    // `border-width`/`border-style` mirror `border-color` above.
     m.insert("border-width".into(), box_sides_shorthand(
         &px_str(style.border_top_width / z), &px_str(style.border_right_width / z),
         &px_str(style.border_bottom_width / z), &px_str(style.border_left_width / z),
     ));
-    m.insert("border-style".into(), {
-        let (t, r, b, l) = (
-            border_style_to_css(style.border_top_style), border_style_to_css(style.border_right_style),
-            border_style_to_css(style.border_bottom_style), border_style_to_css(style.border_left_style),
-        );
-        if t == r && r == b && b == l { t.to_string() } else { String::new() }
-    });
+    m.insert("border-style".into(), box_sides_shorthand(
+        border_style_to_css(style.border_top_style), border_style_to_css(style.border_right_style),
+        border_style_to_css(style.border_bottom_style), border_style_to_css(style.border_left_style),
+    ));
 
     // ── Background per-layer longhands (CSS Backgrounds L3 §3.5-3.8) ────
+    let spec = style.background_specified.as_deref().cloned().unwrap_or_default();
     m.insert("background-attachment".into(), background_layer_field_to_css(
-        &style.background_layers, BackgroundAttachment::default(), |l| l.attachment, background_attachment_to_css,
+        &style.background_layers, spec.attachment.as_slice(), BackgroundAttachment::default(), |l| l.attachment, background_attachment_to_css,
     ));
     m.insert("background-origin".into(), background_layer_field_to_css(
-        &style.background_layers, BackgroundOrigin::default(), |l| l.origin, background_origin_to_css,
+        &style.background_layers, spec.origin.as_slice(), BackgroundOrigin::default(), |l| l.origin, background_origin_to_css,
     ));
     m.insert("background-clip".into(), background_layer_field_to_css(
-        &style.background_layers, BackgroundClip::default(), |l| l.clip, background_clip_to_css,
+        &style.background_layers, spec.clip.as_slice(), BackgroundClip::default(), |l| l.clip, background_clip_to_css,
     ));
     m.insert("background-repeat".into(), background_layer_field_to_css(
-        &style.background_layers, BackgroundRepeat::default(), |l| l.repeat, background_repeat_to_css,
+        &style.background_layers, spec.repeat.as_slice(), BackgroundRepeat::default(), |l| l.repeat, background_repeat_to_css,
     ));
-    m.insert("background-size".into(), if style.background_layers.is_empty() {
+    m.insert("background-size".into(), if !spec.size.is_empty() {
+        spec.size.iter().map(|s| background_size_to_css(*s)).collect::<Vec<_>>().join(", ")
+    } else if style.background_layers.is_empty() {
         background_size_to_css(BackgroundSize::default())
     } else {
         style.background_layers.iter().map(|l| background_size_to_css(l.size)).collect::<Vec<_>>().join(", ")
@@ -1973,11 +2017,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // CSS Compositing L1 §3 — per-layer, unlike top-level `mix-blend-mode`
     // (compositing of the element as a whole against its backdrop).
     m.insert("background-blend-mode".into(), background_layer_field_to_css(
-        &style.background_layers, MixBlendMode::Normal, |l| l.blend_mode, mix_blend_mode_to_css,
+        &style.background_layers, &[], MixBlendMode::Normal, |l| l.blend_mode, mix_blend_mode_to_css,
     ));
 
     // ── Shadows (CSS Backgrounds L3 §7.1, CSS Text Decoration L3 §2.5) ──
-    m.insert("box-shadow".into(), box_shadow_list_to_css(&style.box_shadow));
+    m.insert("box-shadow".into(), box_shadow_list_to_css(&style.box_shadow, style.color));
     m.insert("text-shadow".into(), text_shadow_list_to_css(&style.text_shadow));
 
     // CSS Text Decoration L4 §3.3/§3.7 (BUG-1050) — `auto`/`from-font`/`<length>`.
@@ -3381,13 +3425,74 @@ mod tests {
     }
 
     #[test]
-    fn computed_map_border_color_empty_when_sides_differ() {
+    fn computed_map_border_color_shortest_form_when_sides_differ() {
         let m = div_computed_map(
             "<div>x</div>",
             "div { border-top-color: red; border-right-color: blue; \
              border-bottom-color: red; border-left-color: red; }",
         );
-        assert_eq!(m.get("border-color").map(String::as_str), Some(""));
+        assert_eq!(
+            m.get("border-color").map(String::as_str),
+            Some("rgb(255, 0, 0) rgb(0, 0, 255) rgb(255, 0, 0) rgb(255, 0, 0)")
+        );
+        let m = div_computed_map("<div>x</div>", "div { color: lime; border-color: red currentcolor; }");
+        assert_eq!(m.get("border-color").map(String::as_str), Some("rgb(255, 0, 0) rgb(0, 255, 0)"));
+    }
+
+    /// BUG-1297: the computed lists keep the author's length, independent of the layer count.
+    #[test]
+    fn computed_map_background_lists_keep_specified_length() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-image: none, none; background-repeat: repeat-x; \
+             background-clip: border-box, padding-box, content-box; background-size: 100%; \
+             background-position: center, left; }",
+        );
+        assert_eq!(m.get("background-repeat").map(String::as_str), Some("repeat-x"));
+        assert_eq!(
+            m.get("background-clip").map(String::as_str),
+            Some("border-box, padding-box, content-box")
+        );
+        assert_eq!(m.get("background-size").map(String::as_str), Some("100% auto"));
+        assert_eq!(m.get("background-position").map(String::as_str), Some("50% 50%, 0% 50%"));
+    }
+
+    #[test]
+    fn computed_map_background_invalid_keyword_list_is_dropped() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { background-attachment: fixed; background-attachment: local, none; }",
+        );
+        assert_eq!(m.get("background-attachment").map(String::as_str), Some("fixed"));
+    }
+
+    /// BUG-1297: `currentcolor` of `box-shadow` serialises as the used colour; `border-radius`
+    /// composes the four circular radii.
+    #[test]
+    fn computed_map_box_shadow_color_and_border_radius() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { color: blue; box-shadow: 1px 2px; border-radius: 1px 2px 3px 2px; }",
+        );
+        assert_eq!(m.get("box-shadow").map(String::as_str), Some("rgb(0, 0, 255) 1px 2px 0px 0px"));
+        assert_eq!(m.get("border-radius").map(String::as_str), Some("1px 2px 3px"));
+    }
+
+    /// BUG-1297: a shorthand whose values are functions (`rgb(…, …)`) splits at top-level
+    /// whitespace only; `hidden` is a style of its own; elliptical radii keep both axes.
+    #[test]
+    fn computed_map_border_shorthands_with_functions_and_ellipses() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { border-color: rgb(255, 0, 0) rgb(0, 0, 255); border-style: hidden dotted;              border-radius: calc(0.5em + 4px) 10% / 3px; border-bottom-left-radius: 5px 7px;              border-top-width: calc(-1px); }",
+        );
+        assert_eq!(m.get("border-top-color").map(String::as_str), Some("rgb(255, 0, 0)"));
+        assert_eq!(m.get("border-right-color").map(String::as_str), Some("rgb(0, 0, 255)"));
+        assert_eq!(m.get("border-style").map(String::as_str), Some("hidden dotted"));
+        assert_eq!(m.get("border-top-width").map(String::as_str), Some("0px"));
+        assert_eq!(m.get("border-top-left-radius").map(String::as_str), Some("12px 3px"));
+        assert_eq!(m.get("border-top-right-radius").map(String::as_str), Some("10% 3px"));
+        assert_eq!(m.get("border-bottom-left-radius").map(String::as_str), Some("5px 7px"));
     }
 
     #[test]
