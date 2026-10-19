@@ -11,3 +11,7 @@
 ## Как проверить
 
 `git stash` (или чистый `origin/main`) → `cargo test -p lumen-layout deep_grid_chain`: тот же отказ, то есть дефект не от правок multicol. Соседние `deep_subgrid_chain_*`, `deep_flex_*`, `deep_multicol_*` зелёные.
+
+## Дополнение (P1, 2026-10-19)
+
+Та же симптоматика у `table_trampoline::deep_table_chain_lays_out_without_overflowing_the_stack` — переполнение стека на чистом `origin/main` (проверено с `multicol_flow.rs` из main; гейт задачи GRID-FRAG, не от её правок). Остальные `deep_*` проходят.
