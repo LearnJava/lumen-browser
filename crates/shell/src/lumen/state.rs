@@ -53,6 +53,11 @@ pub(crate) struct Lumen {
     /// дедупликация между первичной сборкой и `refresh_dynamic_css`. Очищается
     /// на навигации вместе с `web_fonts`.
     pub(crate) requested_web_fonts: std::collections::HashSet<String>,
+    /// BUG-1634: `@font-face url()`-блоки с `unicode-range`, чьи символы страница пока
+    /// не показывает (CSS Fonts 4 §4.5). Перепроверяются после каждого relayout и
+    /// уходят в загрузку, когда в документе появляется символ из диапазона.
+    /// Очищается на навигации вместе с `requested_web_fonts`.
+    pub(crate) deferred_web_fonts: Vec<crate::subresources::PendingWebFont>,
     pub(crate) source: PageSource,
     pub(crate) event_sink: Arc<dyn EventSink>,
     pub(crate) modifiers: ModifiersState,

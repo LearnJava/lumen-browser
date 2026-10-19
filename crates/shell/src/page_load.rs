@@ -2552,6 +2552,7 @@ impl Lumen {
         self.page_font_registry = page.font_registry.clone();
         self.web_fonts.clear();
         self.requested_web_fonts.clear();
+        self.deferred_web_fonts.clear();
 
         // PH3-19: spawn one background thread per pending @font-face url() source.
         // Each thread fetch+decodes the font and sends FontLoaded; the handler
@@ -2715,12 +2716,50 @@ impl Lumen {
         }
     }
 
+    /// BUG-1634 (CSS Fonts 4 §4.5): из `incoming` и ранее отложенных блоков оставляет
+    /// те, чей `unicode-range` пересекается с символами документа; остальные
+    /// возвращаются в `deferred_web_fonts` и ждут, пока такой символ появится
+    /// (проверка идёт на каждом relayout). Блоки без `unicode-range` нужны всегда.
+    /// Уже запрошенные и уже отложенные источники отсеиваются здесь же, поэтому
+    /// повторная сборка листа (`spawn_dynamic_web_fonts`) не плодит дубликатов.
+    pub(crate) fn take_needed_web_fonts(&mut self, incoming: Vec<PendingWebFont>) -> Vec<PendingWebFont> {
+        let key_of = |pf: &PendingWebFont| format!("{}|{}|{:?}|{}", pf.family, pf.weight, pf.style, pf.url);
+        let mut all = std::mem::take(&mut self.deferred_web_fonts);
+        if all.is_empty() && incoming.is_empty() {
+            return Vec::new();
+        }
+        let mut seen: std::collections::HashSet<String> = all.iter().map(key_of).collect();
+        for pf in incoming {
+            let key = key_of(&pf);
+            if !self.requested_web_fonts.contains(&key) && seen.insert(key) {
+                all.push(pf);
+            }
+        }
+        // Нет документа — нечего сверять, грузим всё, как до BUG-1634.
+        let Some(doc) = self.layout_source.as_ref().map(|src| std::sync::Arc::clone(&src.document)) else {
+            return all;
+        };
+        let codepoints = match doc.try_lock() {
+            Ok(d) => crate::web_font_usage::document_codepoints(&d),
+            Err(std::sync::TryLockError::Poisoned(e)) => crate::web_font_usage::document_codepoints(&e.into_inner()),
+            // Документ занят другим потоком: перепроверим на следующем relayout.
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.deferred_web_fonts = all;
+                return Vec::new();
+            }
+        };
+        let (needed, deferred) = crate::web_font_usage::partition_by_usage(all, &codepoints);
+        self.deferred_web_fonts = deferred;
+        needed
+    }
+
     /// PH3-19 / BUG-1154: запускает фоновую загрузку `@font-face url()`-источников
     /// (CSP `font-src`-гейт, `upgrade-insecure-requests`, результат —
     /// `LoadEvent::FontLoaded`). Зовётся из `apply_loaded_page` для первичной
     /// сборки и из `refresh_dynamic_css` для правил, появившихся после загрузки
     /// (поздно вставленный `<style>`); уже запрошенные источники пропускаются.
     pub(crate) fn spawn_web_font_fetches(&mut self, pending: Vec<PendingWebFont>) {
+        let pending = self.take_needed_web_fonts(pending);
         if !pending.is_empty() {
             let base_opt = self.document_resource_base();
             // GAP-CSPENF срез 19: `font-src`/`default-src` против `@font-face
