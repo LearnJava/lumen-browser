@@ -154,7 +154,7 @@ impl AnimationFrame {
                 let css = if transform.is_empty() {
                     "none".to_string()
                 } else {
-                    crate::resolved_geometry::resolved_transform(transform, 1.0)
+                    crate::resolved_geometry::resolved_transform(transform, 1.0, crate::property_trees::TransformRef::default())
                 };
                 props.insert("transform".to_string(), css);
             }
@@ -532,6 +532,20 @@ fn interpolate_length(from: &Length, to: &Length, t: f32) -> Option<Length> {
     }
 }
 
+/// Интерполяция `<length-percentage>` в `translate*()`: одноимённые единицы —
+/// покомпонентно, разные (`50%` ↔ `10px`) — через `calc(a·(1−t) + b·t)`,
+/// который резолвится против reference box при построении матрицы.
+fn blend_length(from: &Length, to: &Length, t: f32) -> Length {
+    use crate::style::CalcNode;
+    if let Some(l) = interpolate_length(from, to, t) {
+        return l;
+    }
+    let scaled = |l: &Length, k: f32| {
+        CalcNode::Mul(Box::new(CalcNode::Length(l.clone())), Box::new(CalcNode::Number(k)))
+    };
+    Length::Calc(Box::new(CalcNode::Add(Box::new(scaled(from, 1.0 - t)), Box::new(scaled(to, t)))))
+}
+
 fn interpolate_color(from: Color, to: Color, t: f32) -> Color {
     Color {
         r: lerp_u8(from.r, to.r, t),
@@ -762,6 +776,7 @@ fn same_transform_kind(a: &TransformFn, b: &TransformFn) -> bool {
     matches!(
         (a, b),
         (Translate(..), Translate(..))
+            | (TranslateLp(..), TranslateLp(..))
             | (TranslateX(_), TranslateX(_))
             | (TranslateY(_), TranslateY(_))
             | (Rotate(_), Rotate(_))
@@ -784,6 +799,9 @@ fn interpolate_transform_fn_same_kind(a: &TransformFn, b: &TransformFn, t: f32) 
     match (a, b) {
         (Translate(ax, ay), Translate(bx, by)) => {
             Translate(lerp_f32(*ax, *bx, t), lerp_f32(*ay, *by, t))
+        }
+        (TranslateLp(ax, ay, az), TranslateLp(bx, by, bz)) => {
+            TranslateLp(blend_length(ax, bx, t), blend_length(ay, by, t), lerp_f32(*az, *bz, t))
         }
         (TranslateX(a), TranslateX(b)) => TranslateX(lerp_f32(*a, *b, t)),
         (TranslateY(a), TranslateY(b)) => TranslateY(lerp_f32(*a, *b, t)),

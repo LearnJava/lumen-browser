@@ -253,7 +253,12 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     // Transform: animation override wins over style value.
     let transform = if let Some(fns) = ov.and_then(|o| o.transform.as_deref()) {
         let (ox, oy, _) = s.transform_origin;
-        transform_fns_to_matrix(fns, b.rect.x + ox.resolve(b.rect.width), b.rect.y + oy.resolve(b.rect.height))
+        transform_fns_to_matrix(
+            fns,
+            b.rect.x + ox.resolve(b.rect.width),
+            b.rect.y + oy.resolve(b.rect.height),
+            TransformRef::of_box(b),
+        )
     } else {
         forward_box_transform(b)
     };

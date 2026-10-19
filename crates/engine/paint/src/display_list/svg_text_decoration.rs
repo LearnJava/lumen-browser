@@ -986,7 +986,12 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
             // Determine effective transform: animated override wins over style.
             let transform = if let Some(fns) = ov.and_then(|o| o.transform.as_deref()) {
                 let (ox, oy, _) = b.style.transform_origin;
-                transform_fns_to_matrix(fns, b.rect.x + ox.resolve(b.rect.width), b.rect.y + oy.resolve(b.rect.height))
+                transform_fns_to_matrix(
+                    fns,
+                    b.rect.x + ox.resolve(b.rect.width),
+                    b.rect.y + oy.resolve(b.rect.height),
+                    TransformRef::of_box(b),
+                )
             } else {
                 forward_box_transform(b)
             };

@@ -661,7 +661,7 @@ pub(in crate::style) fn apply_grid_area_shorthand(val: &str, style: &mut Compute
 }
 
 /// Делит строку по пробелам на глубине скобок 0, не разрывая кавычки.
-fn split_top_level_ws(s: &str) -> Vec<&str> {
+pub(in crate::style) fn split_top_level_ws(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     let mut depth = 0i32;

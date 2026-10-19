@@ -352,7 +352,12 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
     }
 
     if !s.transform.is_empty() {
-        set_used(m, "transform", resolved_transform(&s.transform, z));
+        set_used(m, "transform", resolved_transform(
+                &s.transform,
+                z,
+                crate::property_trees::TransformRef { width: r.width, height: r.height, em: s.font_size },
+            ),
+        );
     }
 }
 
@@ -360,8 +365,12 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
 /// one is the list collapsed into a single `matrix()` (or `matrix3d()` when
 /// any 3D component is non-trivial), with translations in CSS px (`zoom`
 /// undone). The origin does not enter — it is applied at paint time.
-pub(crate) fn resolved_transform(fns: &[crate::style::TransformFn], zoom: f32) -> String {
-    let mut a = crate::property_trees::compute_local_transform(fns, (0.0, 0.0, 0.0)).0;
+pub(crate) fn resolved_transform(
+    fns: &[crate::style::TransformFn],
+    zoom: f32,
+    r: crate::property_trees::TransformRef,
+) -> String {
+    let mut a = crate::property_trees::compute_local_transform(fns, (0.0, 0.0, 0.0), r).0;
     a[12] /= zoom;
     a[13] /= zoom;
     a[14] /= zoom;
@@ -383,8 +392,13 @@ pub(crate) fn resolved_transform(fns: &[crate::style::TransformFn], zoom: f32) -
 
 #[cfg(test)]
 mod tests {
-    use super::resolved_transform;
+    use super::resolved_transform as resolved_transform_in;
+    use crate::property_trees::TransformRef;
     use crate::style::TransformFn;
+
+    fn resolved_transform(fns: &[TransformFn], zoom: f32) -> String {
+        resolved_transform_in(fns, zoom, TransformRef::default())
+    }
 
     #[test]
     fn transform_collapses_to_2d_matrix() {

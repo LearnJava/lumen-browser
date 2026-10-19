@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::motion_path::resolve_motion_transform;
-use crate::style::{ComputedStyle, FilterFn, Isolation, MixBlendMode, Overflow, TransformFn};
+use crate::style::{ComputedStyle, FilterFn, Isolation, Length, MixBlendMode, Overflow, TransformFn};
 
 /// Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
 /// дерева (в TransformTree свой набор id, в ScrollTree свой, и т.д.).
@@ -638,6 +638,37 @@ fn box_can_own_property_node(b: &LayoutBox) -> bool {
     matches!(b.kind, BoxKind::Block | BoxKind::Table | BoxKind::Image { .. } | BoxKind::FormControl { .. })
 }
 
+/// Reference box для процентов и относительных длин в `translate*()` /
+/// свойстве `translate`: размер border box элемента и `font-size` (CSS
+/// Transforms L1 §3, «percentages refer to the size of the reference box»).
+/// `Default` (нули) = «бокса нет»: процент даёт 0, как раньше.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TransformRef {
+    /// Ширина border box, px.
+    pub width: f32,
+    /// Высота border box, px.
+    pub height: f32,
+    /// `font-size` элемента — база для `em` внутри `calc()`.
+    pub em: f32,
+}
+
+impl TransformRef {
+    /// Reference box бокса — его border box (`b.rect`).
+    #[must_use]
+    pub fn of_box(b: &LayoutBox) -> Self {
+        Self { width: b.rect.width, height: b.rect.height, em: b.style.font_size }
+    }
+}
+
+/// Матрица `translate(x, y)` / `translate3d(x, y, z)` с `<length-percentage>`
+/// по X (против ширины) и Y (против высоты). Нерезолвимое значение — 0.
+#[must_use]
+pub fn translate_lp_matrix(x: &Length, y: &Length, z: f32, r: TransformRef) -> Mat4 {
+    let tx = x.resolve(r.em, Some(r.width), Size::default()).unwrap_or(0.0);
+    let ty = y.resolve(r.em, Some(r.height), Size::default()).unwrap_or(0.0);
+    if z == 0.0 { Mat4::translation_2d(tx, ty) } else { Mat4::translate_3d(tx, ty, z) }
+}
+
 /// Вычислить локальную transform-матрицу элемента. CSS Transforms L1 §13:
 /// итог = T(origin) · M · T(-origin), где `M` — произведение функций
 /// `transform` слева направо. `origin` — локальные координаты pivot-а в
@@ -646,7 +677,7 @@ fn box_can_own_property_node(b: &LayoutBox) -> bool {
 /// Используется property tree builder-ом (`walk`), а также paint-стороной
 /// для эмиссии `DisplayCommand::PushTransform` и hit-тестом (косвенно через
 /// `forward_box_transform`).
-pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> Mat4 {
+pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32), r: TransformRef) -> Mat4 {
     let mut m = Mat4::IDENTITY;
     for f in fns {
         let step = match *f {
@@ -655,6 +686,7 @@ pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> 
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
             TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
             TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
+            TransformFn::TranslateLp(ref x, ref y, tz) => translate_lp_matrix(x, y, tz, r),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
             TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
             TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
@@ -726,8 +758,9 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
 
     // CSS Transforms L2 §2.4: individual properties compose before `transform`,
     // in order: translate → rotate → scale → transform.
-    if let Some((tx, ty)) = b.style.translate {
-        m = m.multiply(&Mat4::translation_2d(tx, ty));
+    let r = TransformRef::of_box(b);
+    if let Some((tx, ty)) = &b.style.translate {
+        m = m.multiply(&translate_lp_matrix(tx, ty, 0.0, r));
     }
     if let Some(angle) = b.style.rotate {
         m = m.multiply(&Mat4::rotate_2d(angle));
@@ -743,6 +776,7 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
             TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
             TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
+            TransformFn::TranslateLp(ref x, ref y, tz) => translate_lp_matrix(x, y, tz, r),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
             TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
             TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
@@ -838,7 +872,7 @@ pub fn perspective_matrix(b: &LayoutBox) -> Option<Mat4> {
 /// into a `Mat4` with the same pivot semantics as `forward_box_transform`.
 /// Returns `None` for an empty list (no transform needed).
 #[must_use]
-pub fn transform_fns_to_matrix(fns: &[TransformFn], pivot_x: f32, pivot_y: f32) -> Option<Mat4> {
+pub fn transform_fns_to_matrix(fns: &[TransformFn], pivot_x: f32, pivot_y: f32, r: TransformRef) -> Option<Mat4> {
     if fns.is_empty() {
         return None;
     }
@@ -850,6 +884,7 @@ pub fn transform_fns_to_matrix(fns: &[TransformFn], pivot_x: f32, pivot_y: f32) 
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
             TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
             TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
+            TransformFn::TranslateLp(ref x, ref y, tz) => translate_lp_matrix(x, y, tz, r),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
             TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
             TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
@@ -946,7 +981,7 @@ fn walk(
             let id = PropertyTreeNodeId(trees.transform.nodes.len() as u32);
             let (raw_ox, raw_oy, oz) = style.transform_origin;
             let resolved_origin = (raw_ox.resolve(b.rect.width), raw_oy.resolve(b.rect.height), oz);
-            let mut local = compute_local_transform(&style.transform, resolved_origin);
+            let mut local = compute_local_transform(&style.transform, resolved_origin, TransformRef::of_box(b));
             // CSS Motion Path L1 (offset-path / offset-distance / offset-rotate).
             // Place the `offset-anchor` (default = transform-origin = centre) onto
             // the path point and rotate around it; the `T(-anchor)` term keeps the
