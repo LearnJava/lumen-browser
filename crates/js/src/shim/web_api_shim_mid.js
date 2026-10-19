@@ -11173,13 +11173,21 @@ var FontFace = (function() {
         var self = this;
         var descriptorError = _lumen_font_face_validate_descriptors(this);
         this._status = 'loading';
+        // BUG-1639: settle through resolvers captured here, not through
+        // `self._resolveLoaded`/`_rejectLoaded` — `_lumen_notify_css_font_loaded`
+        // nulls those fields when the shell's own @font-face fetch settles the
+        // CSS-connected face first, and the async script fetch then finishes
+        // into `null(...)` (`TypeError: self._rejectLoaded is not a function`).
+        var resolveLoaded, rejectLoaded;
         this._loadedPromise = new Promise(function(resolve, reject) {
+            resolveLoaded = resolve;
+            rejectLoaded = reject;
             self._resolveLoaded = resolve;
             self._rejectLoaded = reject;
         });
         if (descriptorError) {
             self._status = 'error';
-            self._rejectLoaded(descriptorError);
+            rejectLoaded(descriptorError);
             return this._loadedPromise;
         }
         _lumen_font_face_load_start(self);
@@ -11189,11 +11197,15 @@ var FontFace = (function() {
                 self._loadedBytes = bytes || null;
                 _lumen_font_face_load_end(self, true);
                 _lumen_maybe_register_scripted_font_face(self);
-                self._resolveLoaded(self);
+                resolveLoaded(self);
             } else {
-                self._status = 'error';
-                _lumen_font_face_load_end(self, false);
-                self._rejectLoaded(err);
+                // Already settled as loaded by the native path: keep that
+                // outcome, a late script-fetch failure must not flip it.
+                if (self._status !== 'loaded') {
+                    self._status = 'error';
+                    _lumen_font_face_load_end(self, false);
+                }
+                rejectLoaded(err);
             }
         });
         return this._loadedPromise;
