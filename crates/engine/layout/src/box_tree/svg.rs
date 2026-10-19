@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::style::{Color, GradientStop, SvgGradientDef, SvgGradientUnits, SvgPaint, parse_color};
+use crate::style::{Color, GradientStop, SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPatternDef, parse_color};
 use lumen_core::ColorSpace;
 
 /// SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
@@ -653,13 +653,166 @@ fn resolve_svg_gradient(doc: &Document, id: &str) -> Option<SvgGradientDef> {
     })
 }
 
+/// BUG-1294 — resolves `fill: url(#id)` naming a `<pattern>` (SVG 1.1 §13.3)
+/// into an [`SvgPatternDef`]. `None` when `id` doesn't resolve, isn't a
+/// `<pattern>`, is already being expanded (`use_stack` cycle guard, shared with
+/// `<use>`/`<mask>`) or has no renderable content — all "not painted".
+///
+/// `href` chains (up to 8 hops, cycle-safe) inherit every attribute the
+/// pattern doesn't set itself, and the content from the first pattern in the
+/// chain that has element children. Tile content is cascaded from the pattern
+/// element's own style (not the referencing shape's, which would feed
+/// `fill: url(#p)` back into the tile) and laid out with an identity viewport,
+/// so its rects live in content space; paint places it per tile.
+#[allow(clippy::too_many_arguments)]
+fn resolve_svg_pattern(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: &str,
+    viewport: Size,
+    own_svg_size: Size,
+    flat: &FlatTree,
+    dark_mode: bool,
+    use_stack: &[NodeId],
+) -> Option<SvgPatternDef> {
+    let node_id = doc.find_by_id(id)?;
+    if use_stack.contains(&node_id) {
+        return None;
+    }
+    let is_pattern = |n: NodeId| doc.get(n).element_name().is_some_and(|e| e.local.eq_ignore_ascii_case("pattern"));
+    if !is_pattern(node_id) {
+        return None;
+    }
+    let mut chain = vec![node_id];
+    while chain.len() < 8 {
+        let cur = *chain.last()?;
+        let Some(href) = doc.get(cur).get_attr("href").or_else(|| doc.get(cur).get_attr("xlink:href")) else { break };
+        let Some(next) = doc.find_by_id(href.trim().trim_start_matches('#')) else { break };
+        if chain.contains(&next) || !is_pattern(next) {
+            break;
+        }
+        chain.push(next);
+    }
+    let attr_node = |name: &str| chain.iter().copied().find(|&n| doc.get(n).get_attr(name).is_some());
+    let attr = |name: &str| attr_node(name).and_then(|n| doc.get(n).get_attr(name));
+    let units_of = |name: &str, default: SvgGradientUnits| match attr(name) {
+        Some(v) if v.trim().eq_ignore_ascii_case("userSpaceOnUse") => SvgGradientUnits::UserSpaceOnUse,
+        Some(v) if v.trim().eq_ignore_ascii_case("objectBoundingBox") => SvgGradientUnits::ObjectBoundingBox,
+        _ => default,
+    };
+    let units = units_of("patternUnits", SvgGradientUnits::ObjectBoundingBox);
+    let content_units = units_of("patternContentUnits", SvgGradientUnits::UserSpaceOnUse);
+    let len = |name: &str, axis: SvgAxis| -> f32 {
+        let Some(n) = attr_node(name) else { return 0.0 };
+        match units {
+            SvgGradientUnits::ObjectBoundingBox => svg_gradient_coord(doc, n, name, 0.0),
+            SvgGradientUnits::UserSpaceOnUse => {
+                SvgLenCtx { doc, id: n, em: 16.0, viewport, own_svg_size }.len(name, axis)
+            }
+        }
+    };
+    let (x, y) = (len("x", SvgAxis::X), len("y", SvgAxis::Y));
+    let (width, height) = (len("width", SvgAxis::X), len("height", SvgAxis::Y));
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let transform = parse_svg_transform(attr("patternTransform")).matrix;
+    let view_box = attr_node("viewBox").and_then(|n| parse_view_box(doc, n));
+    let preserve_aspect_ratio = parse_preserve_aspect_ratio(doc, attr_node("preserveAspectRatio").unwrap_or(node_id));
+
+    let content_node = chain
+        .iter()
+        .copied()
+        .find(|&n| doc.get(n).children.iter().any(|&c| doc.get(c).element_name().is_some()))?;
+    let mut new_stack = use_stack.to_vec();
+    new_stack.push(node_id);
+    new_stack.push(content_node);
+    let pattern_style =
+        crate::style::compute_style(doc, content_node, sheet, &ComputedStyle::root(), viewport, dark_mode);
+    let mut content = Vec::new();
+    collect_svg_shapes_impl(doc, sheet, content_node, &pattern_style, viewport, own_svg_size, flat, &mut content, dark_mode, &new_stack);
+    if content.is_empty() {
+        return None;
+    }
+    lay_out_svg_children_positions(&mut content, 0.0, 0.0, 1.0, 1.0, &SvgTransform::identity());
+    Some(SvgPatternDef {
+        x,
+        y,
+        width,
+        height,
+        units,
+        content_units,
+        transform,
+        view_box,
+        preserve_aspect_ratio,
+        content: Arc::new(content),
+    })
+}
+
+impl SvgPatternDef {
+    /// Tile rectangle in the painted shape's user space; `bbox` is the shape's
+    /// bounding box in the same space (used by `ObjectBoundingBox` units).
+    /// `None` for a degenerate tile.
+    pub fn tile_rect(&self, bbox: Rect) -> Option<Rect> {
+        let (x, y, w, h) = match self.units {
+            SvgGradientUnits::ObjectBoundingBox => (
+                bbox.x + self.x * bbox.width,
+                bbox.y + self.y * bbox.height,
+                self.width * bbox.width,
+                self.height * bbox.height,
+            ),
+            SvgGradientUnits::UserSpaceOnUse => (self.x, self.y, self.width, self.height),
+        };
+        (w > 0.0 && h > 0.0 && [x, y, w, h].iter().all(|v| v.is_finite())).then(|| Rect::new(x, y, w, h))
+    }
+
+    /// A copy of the tile content positioned for the axis-aligned content-space
+    /// → paint-space matrix `m` (`m[0]`/`m[3]` scale, `m[4]`/`m[5]` offset), i.e.
+    /// with `m` baked into the rects like a `viewBox` scale. Painting this
+    /// directly keeps edges crisp where a bitmap `PushTransform` would resample.
+    pub fn content_positioned(&self, m: [f32; 6]) -> Vec<LayoutBox> {
+        let mut boxes = (*self.content).clone();
+        lay_out_svg_children_positions(&mut boxes, m[4], m[5], m[0], m[3], &SvgTransform::identity());
+        boxes
+    }
+
+    /// Matrix `[a, b, c, d, e, f]` taking tile content space to the tile's own
+    /// space (origin at the tile's top-left): the `viewBox` fit when there is
+    /// one, else the bbox scale for `patternContentUnits="objectBoundingBox"`.
+    pub fn content_matrix(&self, tile: Rect, bbox: Rect) -> [f32; 6] {
+        if let Some(vb) = &self.view_box {
+            let (sx, sy, dx, dy) =
+                compute_preserve_aspect_ratio_transform(vb, tile.width, tile.height, &self.preserve_aspect_ratio);
+            [sx, 0.0, 0.0, sy, dx, dy]
+        } else if self.content_units == SvgGradientUnits::ObjectBoundingBox {
+            [bbox.width, 0.0, 0.0, bbox.height, 0.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        }
+    }
+}
+
 /// Resolves a `SvgPaint::Url` in place against the DOM, replacing it with
-/// `Gradient` (found) or `None` (unresolvable — SVG L1 §13.2.1 fallback).
-/// No-op for every other `SvgPaint` variant.
-fn resolve_svg_paint_url(doc: &Document, paint: &mut SvgPaint) {
+/// `Gradient`/`Pattern` (found) or `None` (unresolvable — SVG L1 §13.2.1
+/// fallback). No-op for every other `SvgPaint` variant.
+#[allow(clippy::too_many_arguments)]
+fn resolve_svg_paint_url(
+    doc: &Document,
+    sheet: &Stylesheet,
+    paint: &mut SvgPaint,
+    viewport: Size,
+    own_svg_size: Size,
+    flat: &FlatTree,
+    dark_mode: bool,
+    use_stack: &[NodeId],
+) {
     let SvgPaint::Url(id) = paint else { return };
     *paint = resolve_svg_gradient(doc, id)
         .map(|g| SvgPaint::Gradient(Arc::new(g)))
+        .or_else(|| {
+            resolve_svg_pattern(doc, sheet, id, viewport, own_svg_size, flat, dark_mode, use_stack)
+                .map(|p| SvgPaint::Pattern(Arc::new(p)))
+        })
         .unwrap_or(SvgPaint::None);
 }
 
@@ -1190,8 +1343,8 @@ fn process_svg_node(
     // created above and has no other references yet, so this never clones.
     if matches!(style.svg_fill, SvgPaint::Url(_)) || matches!(style.svg_stroke, SvgPaint::Url(_)) {
         let s = Arc::make_mut(&mut style);
-        resolve_svg_paint_url(doc, &mut s.svg_fill);
-        resolve_svg_paint_url(doc, &mut s.svg_stroke);
+        resolve_svg_paint_url(doc, sheet, &mut s.svg_fill, viewport, own_svg_size, flat, dark_mode, use_stack);
+        resolve_svg_paint_url(doc, sheet, &mut s.svg_stroke, viewport, own_svg_size, flat, dark_mode, use_stack);
     }
     let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
     let lc = SvgLenCtx { doc, id: child_id, em: style.font_size, viewport, own_svg_size };
@@ -1444,7 +1597,7 @@ fn process_svg_node(
             // Mis-nested siblings (HTML5 parser wraps them inside the self-closed shape).
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
-        "defs" | "symbol" => {
+        "defs" | "symbol" | "pattern" => {
             // `<defs>` (SVG 2 §5.5) and `<symbol>` (§5.7) are never rendered
             // directly when encountered as a direct child — their content is
             // painted only when instantiated through `<use>`. (The `<use>` arm
@@ -1553,6 +1706,16 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         bbox.y = oy + bbox.y * sy;
         bbox.width *= sx;
         bbox.height *= sy;
+        // A mirrored viewport (negative `sx`/`sy`, only `<pattern>` tiles use one)
+        // yields a negative extent: normalize it so `rect` stays a valid box.
+        if bbox.width < 0.0 {
+            bbox.x += bbox.width;
+            bbox.width = -bbox.width;
+        }
+        if bbox.height < 0.0 {
+            bbox.y += bbox.height;
+            bbox.height = -bbox.height;
+        }
         b.rect = bbox;
         // BUG-174: `<path>` has a ZERO bbox here (its document-space bounds are
         // computed at paint time from the `d` data). `apply_transform_to_bbox`

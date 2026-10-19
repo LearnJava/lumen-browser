@@ -1059,7 +1059,7 @@ fn svg_paint_to_css(p: &SvgPaint) -> String {
         // Computed-value serialization for an SVG paint server reference has
         // no source text to reconstruct from (same "computed, not stored
         // verbatim" gap as `background_layers_to_css`'s non-Url image variants).
-        SvgPaint::Gradient(_) => "none".into(),
+        SvgPaint::Gradient(_) | SvgPaint::Pattern(_) => "none".into(),
     }
 }
 

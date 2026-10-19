@@ -226,7 +226,7 @@ pub use values::text_size_adjust::TextSizeAdjust;
 pub use values::box_model::{
     BorderCollapse, BorderStyle, BoxSizing, BreakValue, CaptionSide, ClearSide, EmptyCells, FillRule, TableLayout,
     FloatSide, Isolation, MixBlendMode, OutlineColor, OutlineStyle, PaintOrderSlot, Position,
-    StrokeLinecap, StrokeLinejoin, SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPaintOrder,
+    StrokeLinecap, StrokeLinejoin, SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPaintOrder, SvgPatternDef,
     VerticalAlign,
 };
 pub use values::timing::{
