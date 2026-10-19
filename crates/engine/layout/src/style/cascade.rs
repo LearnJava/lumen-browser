@@ -342,11 +342,12 @@ pub(crate) fn compute_style_shareable(
                 })
         })
     };
-    if !registry.is_empty()
-        && style
-            .custom_props
-            .iter()
-            .any(|(key, value)| resets_inherited(key, value))
+    // Walk the registry (a handful of `@property` rules), not the inherited map
+    // (youtube: ~1800 custom properties): a key is dropped only if it names a
+    // registered `inherits: false` property, so every candidate is a registry key.
+    if registry
+        .keys()
+        .any(|key| style.custom_props.get(*key).is_some_and(|value| resets_inherited(key, value)))
     {
         style
             .custom_props
