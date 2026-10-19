@@ -1035,8 +1035,9 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     let windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
     let all_line_gaps = flex_line_gaps(grid, gy0, &rows);
     // An item with children is cut between them, never through one: a break inside a line box or
-    // a nested block would need real fragmentation of the item, so such a grid stays atomic.
-    let edges: Vec<f32> = windows.iter().flat_map(|w| [w.0, w.1]).collect();
+    // a nested block would need real fragmentation of the item, so such a grid stays atomic. A
+    // subgrid item that drops its own row gap at the top of a window has that much more room at the
+    // bottom of it (`drop_at`), so a child that ends within it is not cut.
     let straddles = grid.children.iter().any(|c| {
         !matches!(c.kind, BoxKind::Skip)
             && !matches!(c.style.position, Position::Absolute | Position::Fixed)
@@ -1045,7 +1046,11 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                 let (top, bot) = (k.rect.y - gy0, k.rect.y - gy0 + k.rect.height);
                 !matches!(k.kind, BoxKind::Skip)
                     && !is_clippable_leaf(k)
-                    && edges.iter().any(|&e| top < e - 0.01 && bot > e + 0.01)
+                    && windows.iter().enumerate().any(|(f, &(ws, we, _))| {
+                        let room = room_at(c, gy0, ws, we);
+                        (top < we - 0.01 && bot > we + room + 0.01)
+                            || (f > 0 && ws > windows[f - 1].1 + 0.01 && top < ws - 0.01 && bot > ws + 0.01)
+                    })
             })
     });
     if straddles {
@@ -1115,9 +1120,15 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                         k
                     });
                 }
-                let (lo, hi) = (top.max(ws), bot.min(we));
-                // A zero-height item at the very start of a window belongs to it too.
-                let inside = hi > lo || (c.rect.height == 0.0 && top >= ws && top < we);
+                // A subgrid item that drops its own row gap at the top of the window reaches that
+                // much further down (`drop_at`); the part it took there is not drawn again in the
+                // next window.
+                let room = if f > 0 { room_at(c, gy, ws, we) } else { 0.0 };
+                let taken = if f > 0 { windows[f - 1].1 + room_at(c, gy, windows[f - 1].0, windows[f - 1].1) } else { 0.0 };
+                let (lo, hi) = (top.max(ws), bot.min(we + room));
+                // A zero-height item at the very start of a window belongs to it too; one that the
+                // room of the window before it took whole is not drawn again.
+                let inside = (hi > lo && bot > taken + 0.01) || (c.rect.height == 0.0 && top >= ws && top < we);
                 inside.then(|| {
                     let mut k = c.clone();
                     k.rect.x = col_x + (c.rect.x - gx);
@@ -1134,7 +1145,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     // that start in it grow with it (`subgrid-gap-decorations-fragmentation-021`).
                     let mut dropped = 0.0f32;
                     let mut grown = None;
-                    if top < ws - 0.01 || bot > we + 0.01 {
+                    if top < ws - 0.01 || bot > we + room + 0.01 {
                         let spans: Vec<(f32, f32)> = c
                             .children
                             .iter()
@@ -1166,8 +1177,8 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                             // A childless block (an empty subgrid cell) that a window edge runs
                             // through is cut like the item: each window keeps its part
                             // (`subgrid-gap-decorations-fragmentation-007`).
-                            if is_clippable_leaf(g) && (t < ws - 0.01 || b > we + 0.01) {
-                                let (glo, ghi) = (t.max(ws), b.min(we));
+                            if is_clippable_leaf(g) && (t < ws - 0.01 || b > we + room + 0.01) {
+                                let (glo, ghi) = (t.max(ws), b.min(we + room));
                                 return (ghi > glo).then(|| {
                                     let mut g = g.clone();
                                     super::shift_tree(&mut g, dx, dy - up);
@@ -1176,7 +1187,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                                     g
                                 });
                             }
-                            (matches!(g.kind, BoxKind::Skip) || (t >= ws - 0.01 && t < we - 0.01)).then(|| {
+                            (matches!(g.kind, BoxKind::Skip) || (t >= ws.max(taken) - 0.01 && t < we + room - 0.01)).then(|| {
                                 let mut g = g.clone();
                                 super::shift_tree(&mut g, dx, dy - up);
                                 g.rect.height += grow;
@@ -1242,6 +1253,39 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     frame.init.consumed[i] = true;
     frame.init.cur_y += seg_extent;
     true
+}
+
+/// The block size of the row gap of a grid item (a subgrid) that a window starting at `ws` drops at
+/// its top edge, container coordinates from `gy`: the item's content moves up by this much. 0 for
+/// an item that starts in the window or has no row tracks of its own.
+fn drop_at(c: &LayoutBox, gy: f32, ws: f32) -> f32 {
+    let top = c.rect.y - gy;
+    if top >= ws - 0.01 || matches!(c.kind, BoxKind::Skip) {
+        return 0.0;
+    }
+    let spans: Vec<(f32, f32)> = c
+        .children
+        .iter()
+        .filter(|g| !matches!(g.kind, BoxKind::Skip))
+        .map(|g| (g.rect.y - gy, g.rect.y - gy + g.rect.height))
+        .collect();
+    c.subgrid_tracks
+        .as_ref()
+        .and_then(|t| item_fragment_tracks(t, top + c.style.border_top_width, ws, top + c.rect.height, &spans))
+        .map_or(0.0, |r| r.1)
+}
+
+/// How far below the end `we` of a window `[ws, we)` the item `c` reaches: the item's content moved
+/// up by the gap it dropped at the top (`drop_at`), so a child that crosses `we` and ends within
+/// that distance still fits the window (`subgrid-gap-decorations-fragmentation-012`: the nested
+/// subgrid ends 10px below the break). 0 when no child needs it.
+fn room_at(c: &LayoutBox, gy: f32, ws: f32, we: f32) -> f32 {
+    let drop = drop_at(c, gy, ws);
+    let needed = drop > 0.0
+        && c.children.iter().any(|g| {
+            !matches!(g.kind, BoxKind::Skip) && g.rect.y - gy < we + drop - 0.01 && g.rect.y - gy + g.rect.height > we + 0.01
+        });
+    if needed { drop } else { 0.0 }
 }
 
 /// The row tracks of a grid item cut by a column window, as the fragment of that item: `t.rows`
