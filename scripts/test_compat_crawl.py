@@ -189,6 +189,15 @@ class Aggregation(unittest.TestCase):
         self.assertEqual(cc.lumen_final_status("← 304 https://lenta.ru/\n", "https://lenta.ru/", None), 200)
         self.assertIsNone(cc.lumen_final_status("", "https://x.test/", None))
 
+    def test_net_error_page_is_a_wall(self):
+        # страница сетевой ошибки Lumen: текста ≥200 знаков, но это не «страница загрузилась»
+        err = {"title": "Сайт www.bbc.com слишком долго не отвечает", "text": "Сайт не отвечает. " * 40}
+        r = cc.check_walls({"text": "Welcome " * 300}, err)
+        self.assertFalse(r["ok"])
+        self.assertIn("net-error", r["extra"])
+        # у обоих плеч одна и та же страница ошибки — расхождения нет
+        self.assertTrue(cc.check_walls(err, err)["ok"])
+
     def test_evaluate_end_to_end(self):
         snap = {"text": "hello " * 400, "http_status": 200, "exceptions": [], "ax": [("link", "a")],
                 "frame": None, "masks": []}

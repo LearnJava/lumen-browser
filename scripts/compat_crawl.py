@@ -142,10 +142,20 @@ def wall_hits(snap: dict) -> set[str]:
     return {f"{r['kind']}:{sid}" for sid in r["signals"]}
 
 
+def is_net_error_page(snap: dict) -> bool:
+    """Снимок — страница сетевой ошибки самого браузера (у Lumen — net_error_page.rs)."""
+    return bool(cs.NET_ERROR_RE.search((snap.get("title") or "") + "\n" + (snap.get("text") or "")[:400]))
+
+
 def check_walls(chrome: dict, lumen: dict) -> dict:
     ch, lu = wall_hits(chrome), wall_hits(lumen)
-    if len((lumen.get("text") or "").strip()) < NEAR_EMPTY_LUMEN             and len((chrome.get("text") or "").strip()) >= NEAR_EMPTY_CHROME:
+    lumen_blank = len((lumen.get("text") or "").strip()) < NEAR_EMPTY_LUMEN
+    if lumen_blank and len((chrome.get("text") or "").strip()) >= NEAR_EMPTY_CHROME:
         lu.add("blank:near-empty")
+    if is_net_error_page(lumen) and not is_net_error_page(chrome):
+        # Страница ошибки Lumen — 650 знаков текста, «пустым экраном» не считается; без этой стены
+        # первый прогон проходил проверку, а повтор (таймаут `wait`, текста нет) проваливал — ложный флап.
+        lu.add("net-error")
     extra = sorted(lu - ch)
     return {"ok": not extra, "detail": ", ".join(extra) if extra else "", "extra": extra,
             "chrome_hits": sorted(ch), "lumen_hits": sorted(lu)}
@@ -535,7 +545,7 @@ def lumen_snapshot(br: "pa.LiveBrowser", url: str, args, out_png: Path) -> dict:
     snap["http_status"] = lumen_final_status(chunk, url, snap.get("href"))
     snap["net_failures"] = pa.network_failures(chunk, url)
     # страница сетевой ошибки Lumen (net_error_page.rs) — «готова», с текстом и кадром, но это NET_FAIL, а не OK
-    net_page = bool(cs.NET_ERROR_RE.search((snap.get("title") or "") + "\n" + (snap.get("text") or "")[:400]))
+    net_page = is_net_error_page(snap)
     net_failure = bool(snap["net_failures"]) or net_page
     stderr_errors, snap["stderr_error_sigs"], _ = br.stderr_errors_since(log_pos)
     snap["engine_counters"] = {k: v for k, v in pa.stderr_telemetry(chunk).items()

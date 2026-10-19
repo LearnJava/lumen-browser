@@ -1053,6 +1053,9 @@ class LiveBrowser:
         try:
             self.proc.kill()
             self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # kill() не снял процесс (зависший в ядре/GPU-драйвере lumen.exe): добиваем деревом
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.proc.pid)], capture_output=True)
         except OSError:
             pass
         self._spawn()
