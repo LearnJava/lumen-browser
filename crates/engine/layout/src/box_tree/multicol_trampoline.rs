@@ -600,11 +600,13 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
             }
         }
         let h_of = |k: usize| if k < n { first_h } else { later_h };
-        let windows = model.paginate(&h_of, false).unwrap_or_else(|| vec![(0.0, model.end)]);
+        let pages = model.paginate_ex(&h_of, false).unwrap_or_else(|| vec![multicol_flow::Pg { lo: 0.0, hi: model.end, lead: 0.0, tail: 0.0 }]);
+        let windows: Vec<(f32, f32)> = pages.iter().map(|p| (p.lo, p.hi)).collect();
         if rows_cfg.is_some() {
             rows_used = windows.len().max(1).div_ceil(n);
         }
-        for (c, &(lo, hi)) in windows.iter().enumerate() {
+        for (c, pg) in pages.iter().enumerate() {
+            let (lo, hi) = (pg.lo, pg.hi);
             let (col_in_row, row) = match rows_cfg {
                 Some(_) => (c % n, c / n),
                 None => (c, 0),
@@ -616,6 +618,8 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
             let win = Window {
                 lo,
                 hi,
+                lead: pg.lead,
+                tail: pg.tail,
                 last: c + 1 == windows.len(),
                 extent: h_of(c),
                 col_top: cur_y + row_y,
@@ -629,7 +633,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
                     frags.push(frag);
                 }
             }
-            seg_extent = seg_extent.max(hi - lo);
+            seg_extent = seg_extent.max(hi - lo + pg.lead + pg.tail);
         }
         let ow = oof_windows(&windows, &h_of, n, lifted.iter().map(|(k, b)| b.rect.y + flow.items[*k].1 + b.rect.height).fold(0.0, f32::max));
         oof_first = frags.len();
@@ -638,6 +642,8 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
                 let win = Window {
                     lo,
                     hi,
+                    lead: 0.0,
+                    tail: 0.0,
                     last: c + 1 == ow.len(),
                     extent: h_of(c),
                     col_top: cur_y,
@@ -1477,7 +1483,7 @@ fn cut_own_abspos(frame: &mut Frame, own_start: usize, viewport: Size) {
         }
         let mut pieces = Vec::new();
         for (k, &(lo, hi)) in ow.iter().enumerate() {
-            let win = Window { lo, hi, last: k + 1 == ow.len(), extent: h_of(k), col_top: origin, dx: ox + k as f32 * pitch };
+            let win = Window { lo, hi, lead: 0.0, tail: 0.0, last: k + 1 == ow.len(), extent: h_of(k), col_top: origin, dx: ox + k as f32 * pitch };
             pieces.extend(multicol_flow::cut_oof(&c, -origin, &win));
         }
         if pieces.is_empty() {

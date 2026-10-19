@@ -31,21 +31,49 @@ fn is_flow(b: &LayoutBox) -> bool {
     !matches!(b.kind, BoxKind::Skip) && !matches!(b.style.position, Position::Absolute | Position::Fixed)
 }
 
+/// A cell is a block container whose first/last child edge is the cell's (Fragmentation L3 §4.1),
+/// so a forced break inside it reaches the row.
+fn is_cell(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Block) && b.style.display == Display::TableCell && !b.children.is_empty()
+}
+
+/// Table-grid children that carry the breaks of a table or a row group (captions and column
+/// boxes do not).
+fn is_grid_part(b: &LayoutBox) -> bool {
+    is_flow(b) && matches!(b.kind, BoxKind::TableRowGroup | BoxKind::TableRow)
+}
+
 /// Fragmentation L3 §4.1: a forced break before the first child of a box is a break before the
-/// box itself.
+/// box itself. A table row takes the break of any of its cells (they sit side by side).
 pub(super) fn breaks_before(b: &LayoutBox, depth: usize) -> bool {
     forces(b.style.break_before)
         || (depth < MAX_DEPTH
-            && is_span_transparent(b)
-            && b.children.iter().find(|c| is_flow(c)).is_some_and(|c| breaks_before(c, depth + 1)))
+            && match b.kind {
+                BoxKind::Table | BoxKind::TableRowGroup => {
+                    b.children.iter().find(|c| is_grid_part(c)).is_some_and(|c| breaks_before(c, depth + 1))
+                }
+                BoxKind::TableRow => b.children.iter().any(|c| is_flow(c) && breaks_before(c, depth + 1)),
+                _ if is_span_transparent(b) || is_cell(b) => {
+                    b.children.iter().find(|c| is_flow(c)).is_some_and(|c| breaks_before(c, depth + 1))
+                }
+                _ => false,
+            })
 }
 
 /// The same for a break after the last child.
 pub(super) fn breaks_after(b: &LayoutBox, depth: usize) -> bool {
     forces(b.style.break_after)
         || (depth < MAX_DEPTH
-            && is_span_transparent(b)
-            && b.children.iter().rev().find(|c| is_flow(c)).is_some_and(|c| breaks_after(c, depth + 1)))
+            && match b.kind {
+                BoxKind::Table | BoxKind::TableRowGroup => {
+                    b.children.iter().rev().find(|c| is_grid_part(c)).is_some_and(|c| breaks_after(c, depth + 1))
+                }
+                BoxKind::TableRow => b.children.iter().any(|c| is_flow(c) && breaks_after(c, depth + 1)),
+                _ if is_span_transparent(b) || is_cell(b) => {
+                    b.children.iter().rev().find(|c| is_flow(c)).is_some_and(|c| breaks_after(c, depth + 1))
+                }
+                _ => false,
+            })
 }
 
 /// Does the transparent wrapper `b` hold a forced break strictly *inside* it — between two of

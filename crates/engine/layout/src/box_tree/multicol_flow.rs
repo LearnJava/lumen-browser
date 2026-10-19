@@ -30,10 +30,11 @@
 use super::multicol_break::{breaks_after, breaks_before};
 use super::multicol_fragmentation::{item_lines, ItemLines};
 use super::multicol_span::trim_edge;
+use super::multicol_table;
 use super::*;
 use crate::style::{BreakValue, ContainFlags};
 
-const EPS: f32 = 0.01;
+pub(super) const EPS: f32 = 0.01;
 /// Boxes nested deeper than this are monolithic (the walks are native-recursive).
 const MAX_DEPTH: usize = 48;
 /// A column height of a pixel or two would otherwise cut a long document into endless columns.
@@ -42,31 +43,50 @@ const MAX_WINDOWS: usize = 4000;
 /// A place where a column may end: the column holds the stack up to `end`, the next one starts
 /// at `resume` (the part between is a dropped margin, Fragmentation L3 §5.2).
 #[derive(Clone, Copy, Debug)]
-struct Cand {
-    end: f32,
-    resume: f32,
-    forced: bool,
+pub(super) struct Cand {
+    pub(super) end: f32,
+    pub(super) resume: f32,
+    pub(super) forced: bool,
     /// 0 — no rule broken, 1 — `orphans`/`widows`, 2 — a `break-*: avoid` rule.
-    tier: u8,
+    pub(super) tier: u8,
+    /// Block size the repeated table header takes at the top of the next column, and the footer
+    /// at the bottom of this one ([`super::multicol_table`]); 0 outside a table with such sections.
+    pub(super) lead: f32,
+    pub(super) tail: f32,
+}
+
+impl Cand {
+    fn new(end: f32, resume: f32, forced: bool, tier: u8) -> Self {
+        Cand { end, resume, forced, tier, lead: 0.0, tail: 0.0 }
+    }
 }
 
 /// A run of the stack where a break may fall at any height (a block without in-flow children,
 /// the empty space below the last child).
 #[derive(Clone, Copy, Debug)]
-struct Free {
-    lo: f32,
-    hi: f32,
-    tier: u8,
+pub(super) struct Free {
+    pub(super) lo: f32,
+    pub(super) hi: f32,
+    pub(super) tier: u8,
     /// Where the next column starts after a break in the run (`None` — at the break itself); a
     /// margin run resumes after the margin, which a break truncates (Fragmentation L3 §5.2).
-    resume: Option<f32>,
+    pub(super) resume: Option<f32>,
+    /// As [`Cand::lead`] / [`Cand::tail`].
+    pub(super) lead: f32,
+    pub(super) tail: f32,
+}
+
+impl Free {
+    fn new(lo: f32, hi: f32, tier: u8, resume: Option<f32>) -> Self {
+        Free { lo, hi, tier, resume, lead: 0.0, tail: 0.0 }
+    }
 }
 
 /// Break points of one segment, in virtual coordinates.
 #[derive(Default, Debug)]
 pub(super) struct Model {
-    cands: Vec<Cand>,
-    free: Vec<Free>,
+    pub(super) cands: Vec<Cand>,
+    pub(super) free: Vec<Free>,
     /// Bottom of the last item (the stack without the last margin).
     pub(super) end: f32,
     /// `end` of the last forced break (0 when there is none).
@@ -102,7 +122,7 @@ impl<'a> Flow<'a> {
             && mt > EPS
             && participates(first)
         {
-            model.free.push(Free { lo: 0.0, hi: mt, tier: 0, resume: Some(mt) });
+            model.free.push(Free::new(0.0, mt, 0, Some(mt)));
         }
         walk_list(&mut model, &list, false, 0, viewport);
         model.cands.sort_by(|a, b| a.end.total_cmp(&b.end).then(a.resume.total_cmp(&b.resume)));
@@ -112,7 +132,7 @@ impl<'a> Flow<'a> {
     }
 }
 
-fn participates(b: &LayoutBox) -> bool {
+pub(super) fn participates(b: &LayoutBox) -> bool {
     !matches!(b.kind, BoxKind::Skip)
         && !matches!(b.style.position, Position::Absolute | Position::Fixed)
         && b.style.float_side == FloatSide::None
@@ -130,8 +150,21 @@ fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
     let s = &b.style;
     let barred = ContainFlags::SIZE.0 | ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0;
     depth < MAX_DEPTH
-        && matches!(b.kind, BoxKind::Block)
-        && matches!(s.display, Display::Block | Display::ListItem | Display::FlowRoot | Display::Flex)
+        && matches!(b.kind, BoxKind::Block | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::TableRow)
+        && matches!(
+            s.display,
+            Display::Block
+                | Display::ListItem
+                | Display::FlowRoot
+                | Display::Flex
+                | Display::Table
+                | Display::TableRowGroup
+                | Display::TableHeaderGroup
+                | Display::TableFooterGroup
+                | Display::TableRow
+                | Display::TableCell
+                | Display::TableCaption
+        )
         && s.float_side == FloatSide::None
         && !matches!(s.position, Position::Fixed | Position::Sticky)
         && (oof || s.position != Position::Absolute)
@@ -151,6 +184,7 @@ fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
         // Content that sticks out of the box would be lost in a window the box has no part in.
         && b.children.iter().all(|c| {
             matches!(c.kind, BoxKind::Skip)
+                || multicol_table::is_col(c)
                 || matches!(c.style.position, Position::Absolute | Position::Fixed)
                 || (c.rect.y >= b.rect.y - EPS && c.rect.y + c.rect.height <= b.rect.y + b.rect.height + EPS)
         })
@@ -314,7 +348,7 @@ fn walk_list(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, depth:
             let avoided = avoid
                 || p.style.break_after == BreakValue::Avoid
                 || c.style.break_before == BreakValue::Avoid;
-            m.cands.push(Cand { end, resume, forced, tier: tier(avoided, owid) });
+            m.cands.push(Cand::new(end, resume, forced, tier(avoided, owid)));
         }
         walk_item(m, c, off, runs[j], avoid, depth, vp);
     }
@@ -351,7 +385,7 @@ fn walk_flex_lines(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, 
             let avoided = avoid
                 || prev.iter().any(|e| e.0.style.break_after == BreakValue::Avoid)
                 || line.iter().any(|e| e.0.style.break_before == BreakValue::Avoid);
-            m.cands.push(Cand { end, resume: start.max(end), forced, tier: tier(avoided, false) });
+            m.cands.push(Cand::new(end, start.max(end), forced, tier(avoided, false)));
         }
         for &&(c, off, _) in line {
             let run = match item_lines(c) {
@@ -374,42 +408,49 @@ fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usiz
             for t in 1..l {
                 let pos = vt + t as f32 * lh;
                 let owid = run.is_some_and(|(before, total, _)| breaks_orphans_widows(&b.style, before + t, total));
-                m.cands.push(Cand { end: pos, resume: pos, forced: false, tier: tier(avoid, owid) });
+                m.cands.push(Cand::new(pos, pos, false, tier(avoid, owid)));
             }
         }
-        BoxKind::Block if is_fragmentable(b, depth) => {
+        BoxKind::Block | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::TableRow if is_fragmentable(b, depth) => {
             let avoid = avoid || b.style.break_inside == BreakValue::Avoid;
+            let (n_cands, n_free) = (m.cands.len(), m.free.len());
+            let row = matches!(b.kind, BoxKind::TableRow);
             let s = &b.style;
             let bottom_edge = |w: f32| -> f32 {
                 let pad = s.padding_bottom.resolve_or_zero(s.font_size, w, vp);
                 vb - s.border_bottom_width - pad
             };
-            let mut kids: Vec<(&LayoutBox, f32, f32)> = b.children.iter().map(|c| (c, off, 0.0)).collect();
+            let mut kids: Vec<(&LayoutBox, f32, f32)> =
+                b.children.iter().filter(|c| !multicol_table::is_col(c)).map(|c| (c, off, 0.0)).collect();
             // `order` / `*-reverse` put the items out of tree order: break in visual order.
             let flex = matches!(s.display, Display::Flex);
             if flex {
                 kids.sort_by(|a, b| a.0.rect.y.total_cmp(&b.0.rect.y));
             }
-            let last = b.children.iter().filter(|c| participates(c)).map(|c| c.rect.y + off + c.rect.height).reduce(f32::max);
+            let last = kids.iter().filter(|c| participates(c.0)).map(|c| c.0.rect.y + off + c.0.rect.height).reduce(f32::max);
             match last {
                 None => {
                     let lo = vt + s.border_top_width;
                     let hi = bottom_edge(b.rect.width);
                     if hi > lo + EPS {
-                        m.free.push(Free { lo, hi, tier: tier(avoid, false), resume: None });
+                        m.free.push(Free::new(lo, hi, tier(avoid, false), None));
                     }
                 }
                 Some(last) => {
-                    if flex {
+                    // The cells of a row sit side by side like the items of a flex line.
+                    if flex || row {
                         walk_flex_lines(m, &kids, avoid, depth + 1, vp);
                     } else {
                         walk_list(m, &kids, avoid, depth + 1, vp);
                     }
                     let hi = bottom_edge(b.rect.width);
                     if hi > last + EPS {
-                        m.free.push(Free { lo: last, hi, tier: tier(avoid, false), resume: None });
+                        m.free.push(Free::new(last, hi, tier(avoid, false), None));
                     }
                 }
+            }
+            if matches!(b.kind, BoxKind::Table) {
+                multicol_table::finish_walk(m, b, off, n_cands, n_free);
             }
         }
         _ => {}
@@ -426,56 +467,83 @@ impl Model {
     /// (infinite for `column-fill: auto` without a height). With `strict` any break that
     /// violates a rule — or a column that cannot hold its content — makes the result `None`.
     pub(super) fn paginate(&self, h_of: &dyn Fn(usize) -> f32, strict: bool) -> Option<Vec<(f32, f32)>> {
-        let mut out: Vec<(f32, f32)> = Vec::new();
+        self.paginate_ex(h_of, strict).map(|w| w.into_iter().map(|p| (p.lo, p.hi)).collect())
+    }
+
+    /// [`Model::paginate`] with the table sections each window carries.
+    pub(super) fn paginate_ex(&self, h_of: &dyn Fn(usize) -> f32, strict: bool) -> Option<Vec<Pg>> {
+        // A repeated header/footer that takes half the column or more is not repeated.
+        let sections = |lead: f32, tail: f32, h: f32| if lead + tail > h * 0.5 { (0.0, 0.0) } else { (lead, tail) };
+        let mut out: Vec<Pg> = Vec::new();
         let mut lo = 0.0f32;
+        let mut lead = 0.0f32;
         loop {
             let k = out.len();
             let h = h_of(k);
+            // Block size of the column left for the content after the repeated header.
+            let cap = h - lead;
             let a = self.cands.partition_point(|c| c.end <= lo + EPS);
             let forced_ahead = self.last_forced > lo + EPS;
-            if (self.end - lo <= h + EPS && !forced_ahead) || k + 1 >= MAX_WINDOWS {
-                out.push((lo, self.end.max(lo)));
+            if (self.end - lo <= cap + EPS && !forced_ahead) || k + 1 >= MAX_WINDOWS {
+                out.push(Pg { lo, hi: self.end.max(lo), lead, tail: 0.0 });
                 return Some(out);
             }
-            let reach = lo + h + EPS;
+            let reach = lo + cap + EPS;
             let b = self.cands.partition_point(|c| c.end <= reach);
             let range = &self.cands[a..b];
-            let mut pick: Option<(f32, f32, u8)> = None;
+            // `(end, resume, tier, lead, tail)`
+            let mut pick: Option<(f32, f32, u8, f32, f32)> = None;
             if let Some(f) = range.iter().find(|c| c.forced) {
-                pick = Some((f.end, f.resume, 0));
+                let (l, t) = sections(f.lead, f.tail, h);
+                pick = Some((f.end, f.resume, 0, l, t));
             } else {
                 for c in range {
-                    if pick.is_none_or(|(e, _, t)| c.tier < t || (c.tier == t && c.end > e)) {
-                        pick = Some((c.end, c.resume, c.tier));
+                    let (l, t) = sections(c.lead, c.tail, h);
+                    // The footer repeated below the content takes room of this column.
+                    if c.end + t > reach {
+                        continue;
+                    }
+                    if pick.is_none_or(|(e, _, pt, _, _)| c.tier < pt || (c.tier == pt && c.end > e)) {
+                        pick = Some((c.end, c.resume, c.tier, l, t));
                     }
                 }
                 if h.is_finite()
-                    && let Some(f) = self.free_at(lo + h)
-                    && pick.is_none_or(|(e, _, pt)| f.tier < pt || (f.tier == pt && lo + h >= e))
+                    && let Some(f) = self.free_at(lo + cap)
                 {
-                    pick = Some((lo + h, f.resume.unwrap_or(lo + h), f.tier));
+                    let (l, t) = sections(f.lead, f.tail, h);
+                    let x = lo + cap - t;
+                    if x > lo + EPS
+                        && let Some(f) = self.free_at(x)
+                        && pick.is_none_or(|(e, _, pt, _, _)| f.tier < pt || (f.tier == pt && x >= e))
+                    {
+                        pick = Some((x, f.resume.unwrap_or(x), f.tier, l, t));
+                    }
                 }
             }
             match pick {
-                Some((e, r, t)) => {
+                Some((e, r, t, l, tl)) => {
                     if strict && t > 0 {
                         return None;
                     }
-                    out.push((lo, e));
+                    out.push(Pg { lo, hi: e, lead, tail: tl });
                     lo = r.max(e);
+                    lead = l;
                 }
                 None => {
                     if strict {
                         return None;
                     }
                     // Nothing fits: the column overflows up to the next possible break.
-                    match self.cands.get(b) {
+                    let next = self.cands[a..].iter().find(|c| c.end + sections(c.lead, c.tail, h).1 > reach);
+                    match next {
                         Some(c) => {
-                            out.push((lo, c.end));
+                            let (l, t) = sections(c.lead, c.tail, h);
+                            out.push(Pg { lo, hi: c.end, lead, tail: t });
                             lo = c.resume.max(c.end);
+                            lead = l;
                         }
                         None => {
-                            out.push((lo, self.end.max(lo)));
+                            out.push(Pg { lo, hi: self.end.max(lo), lead, tail: 0.0 });
                             return Some(out);
                         }
                     }
@@ -507,10 +575,25 @@ impl Model {
     }
 }
 
+/// A column window of the stack with the table sections repeated in it ([`Model::paginate_ex`]).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Pg {
+    pub(super) lo: f32,
+    pub(super) hi: f32,
+    /// Block size of the repeated table header at the top of the window.
+    pub(super) lead: f32,
+    /// Block size of the repeated table footer at the bottom of the window.
+    pub(super) tail: f32,
+}
+
 /// One column window and where it lands.
 pub(super) struct Window {
     pub(super) lo: f32,
     pub(super) hi: f32,
+    /// Block sizes of the table header repeated at the top of the window (the stack from `lo` on
+    /// starts below it) and of the footer repeated at its bottom.
+    pub(super) lead: f32,
+    pub(super) tail: f32,
     /// The last window also takes what starts exactly at its end.
     pub(super) last: bool,
     /// Block size of the column (`INFINITY` for `column-fill: auto` without a height): a flex
@@ -520,6 +603,13 @@ pub(super) struct Window {
     pub(super) col_top: f32,
     /// Shift of the item's `x` from its measured position into the column.
     pub(super) dx: f32,
+}
+
+impl Window {
+    /// Page `y` where the stack position `lo` lands (below the repeated header).
+    pub(super) fn top(&self) -> f32 {
+        self.col_top + self.lead
+    }
 }
 
 /// A copy of `b` without its children.
@@ -595,7 +685,7 @@ fn cut_at(d: &LayoutBox, off: f32, w: &Window, depth: usize, oof: bool) -> Optio
     let fragmentable = is_run || fragmentable(d, depth, oof);
     if starts_here && (vb <= w.hi + EPS || !fragmentable) {
         let mut whole = d.clone();
-        super::shift_tree(&mut whole, w.dx, w.col_top - w.lo + off);
+        super::shift_tree(&mut whole, w.dx, w.top() - w.lo + off);
         return Some(whole);
     }
     if !fragmentable {
@@ -619,25 +709,37 @@ fn cut_at(d: &LayoutBox, off: f32, w: &Window, depth: usize, oof: bool) -> Optio
             return None;
         }
         *lines = lines.drain(a..b).collect();
-        frag.rect.y = w.col_top + (vt + a as f32 * lh - w.lo);
+        frag.rect.y = w.top() + (vt + a as f32 * lh - w.lo);
         frag.rect.height = (b - a) as f32 * lh;
         return Some(frag);
     }
-    frag.rect.y = w.col_top + (from - w.lo);
-    frag.rect.height = (to - from).max(0.0);
+    // The boxes that hold the table cut at the top of the window start at its edge and take in
+    // the repeated header (the stack below `lo` starts under it); those cut at the bottom take in
+    // the repeated footer.
+    let lead = if top_cut { w.lead } else { 0.0 };
+    let tail = if bottom_cut { w.tail } else { 0.0 };
+    frag.rect.y = w.top() - lead + (from - w.lo);
+    frag.rect.height = (to - from).max(0.0) + lead + tail;
     slice_edges(&mut frag, top_cut, bottom_cut);
     // Flexbox L1 §12: a flex container that breaks consumes the rest of the fragmentainer.
     if bottom_cut && w.extent.is_finite() && matches!(d.style.display, Display::Flex) {
         frag.rect.height = frag.rect.height.max(w.lo + w.extent - from);
     }
+    let table = matches!(d.kind, BoxKind::Table);
     for c in &d.children {
         if matches!(c.kind, BoxKind::Skip) {
             if !top_cut {
                 frag.children.push(c.clone());
             }
+        } else if table && multicol_table::is_col(c) {
+            // Column boxes follow the rows of the fragment, below.
+            frag.children.push(c.clone());
         } else if let Some(piece) = cut_at(c, off, w, depth + 1, false) {
             frag.children.push(piece);
         }
+    }
+    if table {
+        multicol_table::finish_cut(&mut frag, d, w, to, top_cut, bottom_cut);
     }
     Some(frag)
 }
