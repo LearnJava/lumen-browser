@@ -982,6 +982,21 @@ impl V8JsRuntime {
             .take()
     }
 
+    /// Сдвинуть часы детерминированного режима вперёд до `ms` (не назад).
+    ///
+    /// Часы `--deterministic` без `--monotonic-clock` стоят на 0, поэтому `setTimeout`
+    /// с ненулевой задержкой в них никогда не наступает. Headless-снимок страницы с
+    /// `class=reftest-wait` (WPT-RUN-15) прыгает по виртуальному времени до ближайшего
+    /// таймера, не ожидая его в реальности. `false` — режим не детерминированный
+    /// (часы реальные, сдвигать нечего).
+    pub fn advance_deterministic_clock(&self, ms: f64) -> bool {
+        if !self.deterministic.load(Ordering::Relaxed) || !ms.is_finite() || ms < 0.0 {
+            return self.deterministic.load(Ordering::Relaxed);
+        }
+        self.deterministic_clock_ms.fetch_max(ms as u64, Ordering::Relaxed);
+        true
+    }
+
     /// Take the next timer wakeup as Unix epoch ms, clearing the stored value.
     /// Returns `None` when no timers are pending.
     pub fn take_timer_wakeup(&self) -> Option<f64> {

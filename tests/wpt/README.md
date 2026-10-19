@@ -318,6 +318,11 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   out the full timeout — 6.1 s (12.1 s two-deep) on ~1 restart in 5.
   `LUMEN_WPT_SPAWN_LOCK=off` — old behaviour. §одновременный запуск
   браузеров; pinned by `verify_spawn_lock.py`.
+  `class=reftest-wait` (WPT-RUN-15): the reftest executor cannot poll (IPC has no
+  `script.evaluate`), so the wait is inside `lumen --ipc-server`'s `Screenshot`
+  (`dump_mode::settle_after_load`): `TestRendered`, then timers + rAF on virtual
+  time until `<html>` loses the class (cap 5 s real / 10 s virtual). The
+  crashtest executor sends `TestRendered` once when it first sees `test-wait`.
   And in the reftest executor: a render that overruns its timeout drops the
   `--ipc-server` socket (`LumenIpcProtocol.drop`) and reports
   EXTERNAL-TIMEOUT (shown as TIMEOUT) so the browser is restarted. The IPC

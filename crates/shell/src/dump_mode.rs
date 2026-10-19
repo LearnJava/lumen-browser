@@ -363,6 +363,7 @@ pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, v
         ts += 16.0;
         js.run_animation_frame(ts);
     }
+    settle_reftest_wait(js.as_ref(), ts);
     if !js.take_dom_dirty() {
         return;
     }
@@ -373,6 +374,77 @@ pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, v
         )
     };
     parsed.layout = layout;
+}
+
+/// Потолок ожидания снятия `class=reftest-wait` с `<html>`, секунды. Меньше, чем таймаут
+/// reftest-теста WPT (10 с), чтобы медленный тест давал снимок, а не `TIMEOUT` исполнителя.
+#[cfg(feature = "v8")]
+const REFTEST_WAIT_BUDGET_S: u64 = 5;
+
+/// Потолок виртуального времени ожидания `reftest-wait`, мс (десять секунд — таймаут
+/// reftest-теста WPT): бесконечный `setInterval` при неснятом классе не должен
+/// молотить все [`REFTEST_WAIT_BUDGET_S`] секунд реального времени.
+#[cfg(feature = "v8")]
+const REFTEST_WAIT_VIRTUAL_MS: f64 = 10_000.0;
+
+/// Шаг ожидания между проходами очереди таймеров / rAF, пока `reftest-wait` на месте.
+#[cfg(feature = "v8")]
+const REFTEST_WAIT_STEP_MS: u64 = 2;
+
+/// WPT-RUN-15: `<html class="reftest-wait">` — страница сама скажет, когда готова
+/// (снимет класс из `rAF`/`setTimeout`/`load`/`TestRendered`), и снимок до этого
+/// момента бессмысленен. Однократный headless-путь не крутит цикл событий, поэтому
+/// ожидание повторяет `test-wait.js` из wptrunner: сразу шлётся `TestRendered`
+/// (`bubbles`, один раз — как после первой пары rAF у `screenshot_if_ready`), затем
+/// по очереди прогоняются просроченные таймеры и кадры rAF, пока класс не снят или не
+/// вышел [`REFTEST_WAIT_BUDGET_S`] (тогда снимок берётся как есть, как и раньше).
+#[cfg(feature = "v8")]
+fn settle_reftest_wait(js: &dyn crate::persistent_js::PersistentJs, mut ts: f64) {
+    const HAS_WAIT: &str = "(function(){var r=document.documentElement;        return !!r&&r.classList.contains('reftest-wait');})()";
+    let has_wait = || matches!(js.eval_js_value(HAS_WAIT).as_deref(), Ok("true"));
+    if !has_wait() {
+        return;
+    }
+    js.eval_js(
+        "document.documentElement.dispatchEvent(new Event('TestRendered',{bubbles:true}));",
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(REFTEST_WAIT_BUDGET_S);
+    // Часы детерминированного режима стоят на 0 — ждать таймер в реальности нельзя
+    // (он не наступит никогда), поэтому прыгаем по виртуальному времени к ближайшему
+    // событию: следующему кадру rAF (каждые 16 мс) или дедлайну таймера. Часы реальные —
+    // крутим цикл с короткими паузами.
+    let virtual_time = js.advance_deterministic_clock(0.0);
+    let (mut now, mut next_frame) = (0.0_f64, 16.0_f64);
+    while has_wait() && std::time::Instant::now() < deadline && now <= REFTEST_WAIT_VIRTUAL_MS {
+        js.tick_timers();
+        let raf = js.has_raf_pending();
+        let wake = js.take_timer_wakeup();
+        if virtual_time {
+            let target = match (raf, wake) {
+                (true, Some(w)) => Some(next_frame.min(w)),
+                (true, None) => Some(next_frame),
+                (false, w) => w,
+            };
+            let Some(t) = target else {
+                // Ни кадров, ни таймеров: ждать можно только ответа сети — тик опроса.
+                std::thread::sleep(std::time::Duration::from_millis(REFTEST_WAIT_STEP_MS));
+                continue;
+            };
+            now = now.max(t);
+            js.advance_deterministic_clock(now);
+            if raf && now >= next_frame {
+                ts += 16.0;
+                js.run_animation_frame(ts);
+                next_frame = now + 16.0;
+            }
+        } else {
+            if raf {
+                ts += 16.0;
+                js.run_animation_frame(ts);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(REFTEST_WAIT_STEP_MS));
+        }
+    }
 }
 
 #[cfg(not(feature = "v8"))]
