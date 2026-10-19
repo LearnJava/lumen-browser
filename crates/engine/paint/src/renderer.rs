@@ -509,6 +509,9 @@ impl Renderer {
         scroll_x: f32,
         mode: RenderPassMode,
     ) -> Result<(), wgpu::SurfaceError> {
+        // `-webkit-text-stroke`: `DrawTextStroke` → `DrawSvgStroke` с контурами глифов.
+        let content = &*crate::text_stroke::expand_all(content, self.font_provider.as_deref());
+        let overlay = &*crate::text_stroke::expand_all(overlay, self.font_provider.as_deref());
         // BUG-453: устройство потеряно (TDR, сон, отключение монитора,
         // обновление драйвера — коллбэк из `init_pipelines`) — дальше по
         // функции идут вызовы `self.device`/`self.queue`, а в конце —
@@ -3359,6 +3362,9 @@ impl Renderer {
                 // BUG-247 / BUG-173: the GPU pipeline has no native path fill, so
                 // tessellate the nonzero outline contours into a triangle soup —
                 // identical to the old `DrawSvgPath` fill the emitter produced.
+                // Заменён на `DrawSvgStroke` в голове `render_impl` (`text_stroke::expand_all`);
+                // сюда попадает только без фичи `cpu-render` — обводка не рисуется.
+                DisplayCommand::DrawTextStroke { .. } => {}
                 DisplayCommand::DrawSvgFill { contours, color } => {
                     let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
                     let t_sciss = cmd_log.then(std::time::Instant::now);

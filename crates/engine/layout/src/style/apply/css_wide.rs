@@ -328,6 +328,14 @@ fn apply_css_wide_keyword_with(
                 };
             }
         }
+        "-webkit-text-stroke-width" | "-webkit-text-stroke-color" | "-webkit-text-stroke" => {
+            if prop != "-webkit-text-stroke-color" {
+                style.text_stroke_width = if inh { inherited.text_stroke_width } else { init.text_stroke_width };
+            }
+            if prop != "-webkit-text-stroke-width" {
+                style.text_stroke_color = if inh { inherited.text_stroke_color } else { init.text_stroke_color };
+            }
+        }
         "-webkit-text-fill-color" => {
             style.text_fill_color = if inh { inherited.text_fill_color } else { init.text_fill_color };
         }

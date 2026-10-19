@@ -56,6 +56,7 @@ pub mod renderer;
 pub mod scroll_cache;
 pub mod scroll_snap;
 pub mod svg_path;
+pub(crate) mod text_stroke;
 pub mod varied_text;
 #[cfg(feature = "backend-wgpu")]
 pub mod texture_pool;

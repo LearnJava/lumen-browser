@@ -1633,6 +1633,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("text-decoration-color".into(),
         color_to_css(style.text_decoration_color.resolve(style.color)));
     m.insert("-webkit-text-fill-color".into(), color_to_css(style.used_text_fill_color()));
+    // WHATWG Compat §3.2: `currentcolor` сериализуется в used-значение; шортхенд —
+    // `<width> <color>` (WPT `webkit-text-stroke-computed`).
+    let stroke_width = px_str(style.text_stroke_width);
+    let stroke_color = color_to_css(style.used_text_stroke_color());
+    m.insert("-webkit-text-stroke".into(), format!("{stroke_width} {stroke_color}"));
+    m.insert("-webkit-text-stroke-width".into(), stroke_width);
+    m.insert("-webkit-text-stroke-color".into(), stroke_color);
     m.insert("text-overflow".into(), if style.text_overflow == style.text_overflow_right {
         style.text_overflow.to_css()
     } else {
