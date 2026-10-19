@@ -9,7 +9,7 @@
 На загрузке youtube десятки раз `unhandledrejection` с `TypeError: self._rejectLoaded is not a function`.
 `_rejectLoaded` инициализируется `null` и присваивается внутри executor'а промиса `loaded`; вызов
 происходит раньше, чем он выставлен, или на объекте, у которого `loaded` создаётся лениво/иначе.
-Вероятно связано с [BUG-1634](BUG-1634-OPEN.md) (загрузка `@font-face`).
+Вероятно связано с [BUG-1634](BUG-1634-FIXED.md) (загрузка `@font-face`).
 
 ## Что сделать
 

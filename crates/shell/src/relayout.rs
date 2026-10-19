@@ -1232,6 +1232,11 @@ impl Lumen {
         defer_js_push: bool,
         #[cfg(feature = "v8")] precollected: Option<PrecollectedJsData>,
     ) {
+        // BUG-1634: текст страницы мог измениться — отложенные поднаборы `unicode-range`
+        // с появившимися символами уходят в загрузку.
+        if !self.deferred_web_fonts.is_empty() {
+            self.spawn_web_font_fetches(Vec::new());
+        }
         // BUG-935 S37: per-phase timing across the whole function, gated by the
         // same `LUMEN_FRAME_LOG` flag as `apply_ms` (the caller-side aggregate
         // S15/S36 already log). S36 found `apply_ms` alone accounts for 65-93ms
