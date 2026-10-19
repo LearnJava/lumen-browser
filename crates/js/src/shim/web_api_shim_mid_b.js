@@ -450,10 +450,16 @@ function _sw_make_event_target() {
             _listeners[type] = _listeners[type].filter(function(f) { return f !== fn; });
         },
         dispatchEvent: function(evt) {
-            var handlers = _listeners[evt.type] || [];
+            var handlers = (_listeners[evt.type] || []).slice();
+            // DOM LS §2.9 dispatch: `target` is the dispatched-on object, and
+            // `currentTarget` is it while listeners run, null afterwards (BUG-1638:
+            // youtube reads `event.target.state` in a `statechange` listener).
+            evt.target = this;
+            evt.currentTarget = this;
             var cb = this['on' + evt.type];
             if (typeof cb === 'function') cb.call(this, evt);
             for (var i = 0; i < handlers.length; i++) { handlers[i].call(this, evt); }
+            evt.currentTarget = null;
             return !evt.defaultPrevented;
         },
     };
