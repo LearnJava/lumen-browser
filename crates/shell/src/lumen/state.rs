@@ -58,6 +58,10 @@ pub(crate) struct Lumen {
     /// уходят в загрузку, когда в документе появляется символ из диапазона.
     /// Очищается на навигации вместе с `requested_web_fonts`.
     pub(crate) deferred_web_fonts: Vec<crate::subresources::PendingWebFont>,
+    /// BUG-1650: общий на страницу результат сетевой загрузки по URL шрифта —
+    /// блоки `@font-face` с разными весами одного файла не качают его повторно.
+    /// Очищается на навигации вместе с `requested_web_fonts`.
+    pub(crate) web_font_fetches: crate::web_font_usage::FontUrlFetches,
     pub(crate) source: PageSource,
     pub(crate) event_sink: Arc<dyn EventSink>,
     pub(crate) modifiers: ModifiersState,

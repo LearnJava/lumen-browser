@@ -64,6 +64,40 @@ pub(crate) fn face_needed(unicode_range: Option<&str>, codepoints: &[u32]) -> bo
     })
 }
 
+/// BUG-1650: один сетевой запрос на URL шрифта. Google Fonts отдаёт вариативный
+/// Roboto четырьмя блоками `@font-face` (wght 300/400/500/700) на один и тот же
+/// файл; каждый блок остаётся отдельным дескриптором (свой вес), но байты качаются
+/// и декодируются один раз. Потоки загрузки приходят за результатом через
+/// [`OnceLock`]: первый грузит, остальные ждут его же итог (в том числе неудачу —
+/// повторять упавший запрос на каждый вес незачем).
+#[derive(Clone, Default)]
+pub(crate) struct FontUrlFetches(
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<FontFetchCell>>>>,
+);
+
+type FontFetchCell = std::sync::OnceLock<Option<std::sync::Arc<Vec<u8>>>>;
+
+impl FontUrlFetches {
+    /// Байты шрифта по `url`: `fetch` вызывается не более одного раза на URL
+    /// (до [`Self::clear`]); параллельные вызовы с тем же URL ждут его результата.
+    pub(crate) fn get_or_fetch(
+        &self,
+        url: &str,
+        fetch: impl FnOnce() -> Option<Vec<u8>>,
+    ) -> Option<std::sync::Arc<Vec<u8>>> {
+        let cell = {
+            let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            std::sync::Arc::clone(map.entry(url.to_owned()).or_default())
+        };
+        cell.get_or_init(|| fetch().map(std::sync::Arc::new)).clone()
+    }
+
+    /// Навигация / смена вкладки: прежние результаты принадлежали другой странице.
+    pub(crate) fn clear(&self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
 /// Делит блоки на «нужны странице сейчас» и «отложены» (порядок внутри групп сохраняется).
 pub(crate) fn partition_by_usage(
     all: Vec<PendingWebFont>,
@@ -167,5 +201,75 @@ mod tests {
         assert!(!c.contains(&u32::from('щ')));
         assert!(!c.contains(&u32::from('ю')));
         assert!(!c.contains(&u32::from('З')));
+    }
+
+    #[test]
+    fn concurrent_blocks_of_one_url_fetch_once() {
+        let fetches = FontUrlFetches::default();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    let got = fetches.get_or_fetch("https://f.test/roboto.woff2", || {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        Some(vec![1, 2, 3])
+                    });
+                    assert_eq!(got.as_deref().map(Vec::as_slice), Some(&[1u8, 2, 3][..]));
+                });
+            }
+        });
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Другой URL — отдельный запрос; после `clear` тот же URL качается заново.
+        assert!(fetches.get_or_fetch("https://f.test/other.woff2", || None).is_none());
+        fetches.clear();
+        let again = fetches.get_or_fetch("https://f.test/roboto.woff2", || Some(vec![9]));
+        assert_eq!(again.as_deref().map(Vec::as_slice), Some(&[9u8][..]));
+    }
+
+    /// BUG-1650: четыре `@font-face` (веса 300/400/500/700) на один `src` —
+    /// ровно один HTTP-запрос.
+    #[test]
+    fn four_weights_of_one_file_make_one_http_request() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits_srv = std::sync::Arc::clone(&hits);
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut c) = conn else { break };
+                hits_srv.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buf = [0u8; 2048];
+                let _ = c.read(&mut buf);
+                // Не sfnt: файл отбрасывается после загрузки, но запрос уже учтён.
+                let _ = c.write_all(
+                    b"HTTP/1.1 200 OK
+Content-Type: font/woff2
+Content-Length: 4
+Connection: close
+
+xxxx",
+                );
+            }
+        });
+        let css: String = [300, 400, 500, 700]
+            .iter()
+            .map(|w| format!("@font-face {{ font-family: 'R'; font-weight: {w}; src: url(r.woff2); }}"))
+            .collect();
+        let sheet = lumen_css_parser::parse(&css);
+        struct NullSink;
+        impl lumen_core::ext::EventSink for NullSink {
+            fn emit(&self, _event: &lumen_core::event::Event) {}
+        }
+        let base = crate::ResourceBase::Url(format!("http://127.0.0.1:{port}/index.html"));
+        let sink: std::sync::Arc<dyn lumen_core::ext::EventSink> = std::sync::Arc::new(NullSink);
+        let (_registry, pending) = crate::subresources::load_font_faces(&sheet.font_faces, &base, &sink, None);
+        assert_eq!(pending.len(), 4);
+        let _ = crate::frames::fetch_web_fonts_blocking(
+            pending, &base, &sink, None, None, None,
+            lumen_network::ReferrerPolicy::default_policy(), None,
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
