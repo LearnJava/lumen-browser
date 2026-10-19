@@ -46,6 +46,7 @@ mod chrome_ui;
 mod cli_args;
 mod diag_stderr;
 mod doc_extract;
+mod web_font_usage;
 mod display_list_metrics;
 mod dump_mode;
 mod dump_tls;

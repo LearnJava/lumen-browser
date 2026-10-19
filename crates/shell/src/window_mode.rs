@@ -399,6 +399,7 @@ fn run_window_mode_inner(
         page_font_registry: Arc::new(lumen_font::FontRegistry::new()),
         web_fonts: Vec::new(),
         requested_web_fonts: std::collections::HashSet::new(),
+        deferred_web_fonts: Vec::new(),
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
