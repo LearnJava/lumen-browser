@@ -111,7 +111,7 @@ use print::ELLIPSIS_EM;
 // Used by `display_list/{box_layer,walk,background_mask}.rs` (via `super::*`).
 use print::map_blend_mode;
 // Used by `display_list/{box_layer,scrollbars,text_run,walk}.rs` (via `super::*`).
-use print::{clamp_clip_rect, overflow_clips};
+use print::{clamp_clip_rect, style_overflow_clips};
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use print::{record_span, BucketField, RawSpan, ScBucket};
 // Used by `clip_path_to_shape`, still in this file just below the DL-15 region.
@@ -376,6 +376,10 @@ mod fixed_cb_scroll;
 #[cfg(test)]
 #[path = "display_list/tests/abspos_clip_escape.rs"]
 mod abspos_clip_escape;
+
+#[cfg(test)]
+#[path = "display_list/tests/viewport_overflow.rs"]
+mod viewport_overflow;
 
 #[cfg(test)]
 #[path = "display_list/tests/form_controls_caret.rs"]

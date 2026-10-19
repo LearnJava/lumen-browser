@@ -409,6 +409,11 @@ pub struct ComputedStyle {
     /// означает явную установку», что у остальных логических свойств в
     /// этом файле (см. `margin_inline_start` и соседей).
     pub overflow_block: Overflow,
+    /// CSS Overflow L3 §3.5 — `overflow` of `<html>` (or of `<body>` when `<html>`'s is `visible`)
+    /// goes to the viewport and the element's *used* value is `visible`: paint must not clip to the
+    /// element's own box. Not inherited; the computed `overflow_x/y` stay as authored (the page-scroll
+    /// filter reads them). Set by the cascade.
+    pub overflow_to_viewport: bool,
     pub overflow_inline: Overflow,
     /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при
     /// overflow:clip. `(box, length)`, default `(padding-box, 0px)`
@@ -1414,6 +1419,7 @@ impl ComputedStyle {
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             overflow_block: Overflow::Visible,
+            overflow_to_viewport: false,
             overflow_inline: Overflow::Visible,
             overflow_clip_margin: None,
             scroll_marker_group: None,
@@ -1825,6 +1831,7 @@ impl ComputedStyle {
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             overflow_block: Overflow::Visible,
+            overflow_to_viewport: false,
             overflow_inline: Overflow::Visible,
             overflow_clip_margin: None,
             scroll_marker_group: None,
