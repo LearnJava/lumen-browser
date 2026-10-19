@@ -312,6 +312,9 @@ fn load_web_fonts_before_snapshot(
     let _s = lumen_core::trace::span("web-fonts", "font");
     let (loaded, _blocked) = crate::frames::fetch_web_fonts_blocking(
         pending, base, sink, None, csp_gate.as_ref(), self_origin.as_ref(), referrer_policy,
+        // Без отбора по `unicode-range`: снимок идёт до `load`/rAF (`settle_after_load`),
+        // скрипт может добавить текст из отложенного поднабора, а догрузки здесь нет.
+        None,
     );
     if loaded.is_empty() {
         return;

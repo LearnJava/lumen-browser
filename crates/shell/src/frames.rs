@@ -1072,6 +1072,7 @@ type VariationSettings = Vec<([u8; 4], f32)>;
 /// Каждый источник идёт через `font-src`-гейт и `upgrade-insecure-requests`;
 /// возвращает загруженные шрифты вместе с их `font-variation-settings`
 /// дескриптора и URL-ы, заблокированные CSP.
+#[allow(clippy::too_many_arguments)] // BUG-1650: общее ядро фрейма и снимка, параметры — контекст запроса
 pub(crate) fn fetch_web_fonts_blocking(
     pending: Vec<crate::subresources::PendingWebFont>,
     base: &ResourceBase,
@@ -1080,7 +1081,16 @@ pub(crate) fn fetch_web_fonts_blocking(
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
+    codepoints: Option<&[u32]>,
 ) -> (Vec<(LoadedWebFont, VariationSettings)>, Vec<String>) {
+    // BUG-1650 (из BUG-1634): как у страницы, поднаборы `unicode-range`, чьих
+    // символов в документе нет, не качаются. Фрейм/снимок собираются один раз,
+    // дозагрузки по появлению текста нет — отложенные блоки отбрасываются.
+    let pending = match codepoints {
+        Some(cps) => crate::web_font_usage::partition_by_usage(pending, cps).0,
+        None => pending,
+    };
+    let fetches = crate::web_font_usage::FontUrlFetches::default();
     let mut blocked_by_font_src = Vec::new();
     let mut web_fonts = Vec::with_capacity(pending.len());
     for pf in pending {
@@ -1097,21 +1107,28 @@ pub(crate) fn fetch_web_fonts_blocking(
             blocked_by_font_src.push(gate_url);
             continue;
         }
-        let Ok(raw) = fetch_font_bytes(&gate_url, base, sink, cookie_jar.clone(), referrer_policy) else {
-            continue;
-        };
-        let bytes = match lumen_font::maybe_decode_font(&raw) {
-            Ok(Some(d)) => d,
-            Ok(None) => raw,
-            Err(e) => {
-                eprintln!("iframe @font-face «{}»: WOFF-декод провалился: {e}", pf.family);
-                continue;
+        // BUG-1650: блоки `@font-face` одного файла (вариативный шрифт × веса)
+        // делят один fetch и один декод.
+        let family = &pf.family;
+        let Some(bytes) = fetches.get_or_fetch(&gate_url, || {
+            let raw = fetch_font_bytes(&gate_url, base, sink, cookie_jar.clone(), referrer_policy).ok()?;
+            let bytes = match lumen_font::maybe_decode_font(&raw) {
+                Ok(Some(d)) => d,
+                Ok(None) => raw,
+                Err(e) => {
+                    eprintln!("iframe @font-face «{family}»: WOFF-декод провалился: {e}");
+                    return None;
+                }
+            };
+            if lumen_font::Font::parse(&bytes).is_err() {
+                eprintln!("iframe @font-face «{family}»: невалидный sfnt {}", pf.url);
+                return None;
             }
-        };
-        if lumen_font::Font::parse(&bytes).is_err() {
-            eprintln!("iframe @font-face «{}»: невалидный sfnt {}", pf.family, pf.url);
+            Some(bytes)
+        }) else {
             continue;
-        }
+        };
+        let bytes = bytes.as_ref().clone();
         let unicode_range = pf
             .unicode_range_str
             .as_deref()
@@ -1162,6 +1179,7 @@ pub(crate) fn fetch_web_fonts_blocking(
 /// the caller can dispatch `securitypolicyviolation` once its JS runtime
 /// exists (this function runs before that, same ordering constraint as
 /// `fetch_frame_subresources`'s `blocked_by_img_src`).
+#[allow(clippy::too_many_arguments)] // BUG-1650: см. fetch_web_fonts_blocking
 pub(crate) fn load_frame_fonts(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,
@@ -1170,10 +1188,11 @@ pub(crate) fn load_frame_fonts(
     csp_gate: Option<&(Vec<lumen_network::csp::CspPolicy>, String)>,
     self_origin: Option<&lumen_network::Origin>,
     referrer_policy: lumen_network::ReferrerPolicy,
+    codepoints: Option<&[u32]>,
 ) -> (lumen_font::FontRegistry, Vec<LoadedWebFont>, Vec<String>) {
     let (registry, pending) = load_font_faces(font_faces, base, sink, cookie_jar.clone());
     let (loaded, blocked_by_font_src) = fetch_web_fonts_blocking(
-        pending, base, sink, cookie_jar, csp_gate, self_origin, referrer_policy,
+        pending, base, sink, cookie_jar, csp_gate, self_origin, referrer_policy, codepoints,
     );
     let web_fonts = loaded.into_iter().map(|(wf, _)| wf).collect();
     (registry, web_fonts, blocked_by_font_src)
@@ -2609,6 +2628,7 @@ pub(crate) fn spawn_frame(
     // приёмом, что срез 11 уже применяет к картинкам и таблицам стилей
     // ребёнка выше в этой функции.
     let _fonts_span = lumen_core::trace::span("frame-fonts", "font");
+    let child_codepoints = crate::web_font_usage::document_codepoints(&child_doc_arc.lock().unwrap());
     let (font_registry, web_fonts, blocked_by_font_src) = load_frame_fonts(
         &frame_sheet.font_faces,
         &child_base,
@@ -2617,6 +2637,7 @@ pub(crate) fn spawn_frame(
         child_csp_gate.as_ref(),
         child_self_origin.as_ref(),
         child_referrer_policy,
+        Some(&child_codepoints),
     );
     drop(_fonts_span);
     let _layout_span = lumen_core::trace::span("frame-layout", "layout");

@@ -647,6 +647,7 @@ fn frame_fonts_reports_csp_blocked_font_src() {
         csp_gate.as_ref(),
         self_origin.as_ref(),
         lumen_network::ReferrerPolicy::default_policy(),
+        None,
     );
 
     assert!(web_fonts.is_empty(), "font-src 'none' must block the fetch, not just report it");
@@ -677,6 +678,7 @@ fn frame_fonts_no_policy_does_not_report_blocked() {
         None,
         self_origin.as_ref(),
         lumen_network::ReferrerPolicy::default_policy(),
+        None,
     );
 
     assert!(blocked.is_empty(), "no policy must never report a font-src block");
