@@ -691,6 +691,77 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
     }
 
     #[test]
+    fn box_shadow_under_translucent_bg_is_cut_out_of_border_box() {
+        // BUG-1302: внешняя тень рисуется только снаружи border box — иначе она
+        // просвечивает сквозь rgba-фон. 40×40 + тень (30,0): под боксом
+        // остаётся только полоса x ∈ [40, 70) вне бокса.
+        let dl = build(
+            "<div></div>",
+            "div { width: 40px; height: 40px; background: rgba(0,0,255,0.5);              box-shadow: 30px 0 rgb(255,165,0); }",
+        );
+        let fills = fills_with_color(&dl);
+        let shadow: Vec<_> = fills.iter().filter(|(_, c)| c[0] == 255).collect();
+        assert_eq!(shadow.len(), 1, "одна полоса справа от бокса: {fills:?}");
+        let bg = fills.iter().find(|(_, c)| c[2] == 255 && c[0] == 0).unwrap().0;
+        let r = shadow[0].0;
+        assert!((r.x - (bg.x + bg.width)).abs() < 0.01, "полоса начинается у правого края бокса");
+        assert!((r.width - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_without_bg_spread_ring_is_four_pieces() {
+        // Тень `0 0 0 4px` у бокса без фона — кольцо, а не залитый квадрат.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 100px; box-shadow: 0 0 0 4px red; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 4, "{fills:?}");
+        let area: f32 = fills.iter().map(|(r, _)| r.width * r.height).sum();
+        assert!((area - (108.0 * 108.0 - 100.0 * 100.0)).abs() < 0.5, "площадь кольца {area}");
+    }
+
+    #[test]
+    fn box_shadow_rounded_translucent_uses_even_odd_clip() {
+        // Со скруглением тень клипуется even-odd многоугольником «рамка минус бокс».
+        let dl = build(
+            "<div></div>",
+            "div { width: 40px; height: 40px; border-radius: 8px; background: rgba(0,0,255,0.5); box-shadow: 10px 0 red; }",
+        );
+        assert!(
+            dl.iter().any(|c| matches!(c, DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Polygon { even_odd: true, .. } })),
+            "ожидался even-odd PushClipPath"
+        );
+        let push = dl.iter().position(|c| matches!(c, DisplayCommand::PushClipPath { .. })).unwrap();
+        assert!(matches!(dl[push + 1], DisplayCommand::FillRoundedRect { .. }));
+        assert!(matches!(dl[push + 2], DisplayCommand::PopClip));
+    }
+
+    /// BUG-1302 end-to-end: CPU-растеризатор по even-odd клипу вырезает бокс со
+    /// скруглением из тени — внутри бокса виден чистый полупрозрачный синий, а
+    /// не фиолетовый от просвечивающей тени; снаружи тень на месте.
+    #[test]
+    #[cfg(feature = "cpu-render")]
+    fn box_shadow_cutout_rasterizes_clean_inside_rounded_box() {
+        let dl = build(
+            "<div></div>",
+            "body { margin: 0; } div { width: 40px; height: 40px; border-radius: 8px; background: rgba(0,0,255,0.5); box-shadow: 30px 0 rgb(255,0,0); }",
+        );
+        let cmds: Vec<DisplayCommand> = dl.to_vec();
+        let img = crate::cpu_raster::rasterize_cpu(100, 60, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let px = |x: u32, y: u32| {
+            let i = ((y * img.width + x) * 4) as usize;
+            (img.data[i], img.data[i + 1], img.data[i + 2])
+        };
+        assert_eq!(px(20, 20), (127, 127, 255), "внутри бокса — только фон, без тени");
+        assert_eq!(px(25, 20), (127, 127, 255), "тень под боксом не просвечивает");
+        let out = px(55, 20);
+        assert_eq!(out, (255, 0, 0), "вне бокса тень на месте: {out:?}");
+        assert_eq!(px(90, 20), (255, 255, 255), "за тенью — белый");
+    }
+
+    #[test]
     fn box_shadow_multiple_reverse_order() {
         // Spec: «first shadow is on top». Painter's order: последняя
         // shadow рисуется первой (ниже всех), первая — последней-перед-bg.
