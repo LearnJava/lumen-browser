@@ -31,21 +31,74 @@ fn is_flow(b: &LayoutBox) -> bool {
     !matches!(b.kind, BoxKind::Skip) && !matches!(b.style.position, Position::Absolute | Position::Fixed)
 }
 
-/// Fragmentation L3 §4.1: a forced break before the first child of a box is a break before the
-/// box itself.
-pub(super) fn breaks_before(b: &LayoutBox, depth: usize) -> bool {
-    forces(b.style.break_before)
+/// A cell is a block container whose first/last child edge is the cell's (Fragmentation L3 §4.1),
+/// so a forced break inside it reaches the row.
+fn is_cell(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Block) && b.style.display == Display::TableCell && !b.children.is_empty()
+}
+
+/// Table-grid children that carry the breaks of a table or a row group (captions and column
+/// boxes do not).
+fn is_grid_part(b: &LayoutBox) -> bool {
+    is_flow(b) && matches!(b.kind, BoxKind::TableRowGroup | BoxKind::TableRow)
+}
+
+/// Fragmentation L3 §4.1: the value `want` on the edge of `b` before its first child counts for
+/// the box itself (`break-before` of a box and of the first child of a block container, a row
+/// group and a table, any cell of a row — the cells sit side by side).
+fn edge_before(b: &LayoutBox, depth: usize, want: fn(BreakValue) -> bool) -> bool {
+    want(b.style.break_before)
         || (depth < MAX_DEPTH
-            && is_span_transparent(b)
-            && b.children.iter().find(|c| is_flow(c)).is_some_and(|c| breaks_before(c, depth + 1)))
+            && match b.kind {
+                BoxKind::Table | BoxKind::TableRowGroup => {
+                    b.children.iter().find(|c| is_grid_part(c)).is_some_and(|c| edge_before(c, depth + 1, want))
+                }
+                BoxKind::TableRow => b.children.iter().any(|c| is_flow(c) && edge_before(c, depth + 1, want)),
+                _ if is_span_transparent(b) || is_cell(b) => {
+                    b.children.iter().find(|c| is_flow(c)).is_some_and(|c| edge_before(c, depth + 1, want))
+                }
+                _ => false,
+            })
 }
 
 /// The same for a break after the last child.
-pub(super) fn breaks_after(b: &LayoutBox, depth: usize) -> bool {
-    forces(b.style.break_after)
+fn edge_after(b: &LayoutBox, depth: usize, want: fn(BreakValue) -> bool) -> bool {
+    want(b.style.break_after)
         || (depth < MAX_DEPTH
-            && is_span_transparent(b)
-            && b.children.iter().rev().find(|c| is_flow(c)).is_some_and(|c| breaks_after(c, depth + 1)))
+            && match b.kind {
+                BoxKind::Table | BoxKind::TableRowGroup => {
+                    b.children.iter().rev().find(|c| is_grid_part(c)).is_some_and(|c| edge_after(c, depth + 1, want))
+                }
+                BoxKind::TableRow => b.children.iter().any(|c| is_flow(c) && edge_after(c, depth + 1, want)),
+                _ if is_span_transparent(b) || is_cell(b) => {
+                    b.children.iter().rev().find(|c| is_flow(c)).is_some_and(|c| edge_after(c, depth + 1, want))
+                }
+                _ => false,
+            })
+}
+
+fn avoids(v: BreakValue) -> bool {
+    v == BreakValue::Avoid
+}
+
+/// A forced break before `b` (at its own edge or one that propagates to it).
+pub(super) fn breaks_before(b: &LayoutBox, depth: usize) -> bool {
+    edge_before(b, depth, forces)
+}
+
+/// A forced break after `b`.
+pub(super) fn breaks_after(b: &LayoutBox, depth: usize) -> bool {
+    edge_after(b, depth, forces)
+}
+
+/// `break-before: avoid` on `b`'s own edge or one that propagates to it.
+pub(super) fn avoids_before(b: &LayoutBox) -> bool {
+    edge_before(b, 0, avoids)
+}
+
+/// `break-after: avoid` on `b`'s own edge or one that propagates to it.
+pub(super) fn avoids_after(b: &LayoutBox) -> bool {
+    edge_after(b, 0, avoids)
 }
 
 /// Does the transparent wrapper `b` hold a forced break strictly *inside* it — between two of
