@@ -477,6 +477,7 @@ mod bug935_shallow_roots;
 mod bug935_cascade_bench;
 mod bug935_svg_root_children;
 mod bug1287_svg_percent_lengths;
+mod bug1291_relative_inline_block;
 mod perf16_shadow_sheets;
 mod bfc_margin_collapse;
 mod layout_box_drop;

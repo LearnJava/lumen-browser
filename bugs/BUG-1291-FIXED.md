@@ -1,6 +1,6 @@
 # BUG-1291 — `position: relative` со `top`/`bottom` не сдвигает `inline-block` и поля формы по вертикали (`left` работает)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 5, `css/css-transforms`)
 **Область:** layout (`crates/engine/layout/src/box_tree/` — относительное смещение боксов внутри `InlineBlockRow`)
 
@@ -35,3 +35,12 @@ WPT-RUN-14 срез 5: 19 упавших reftest `transform-input-*` (`css/css-t
 
 `css/css-transforms/transform-input-0{01…19}.html` (wptrunner `--prefixes css/css-transforms`) и `tests/wpt/reftest_pixdiff.py`
 на них; плюс `css/CSS2/positioning/relpos-*`, не прогонялись.
+
+## Исправление
+
+Причина: потомок `InlineBlockRow` сам применял `position: relative` (`finish_after_match` → `shift_tree`), после чего фаза 2
+(vertical-align) выставляла его `rect.y` на линию строки и гасила `top`/`bottom`; `left` оставался и заодно утекал в поток соседей
+(продвижение `cur_x` считалось от сдвинутого бокса). Теперь `layout_dispatch.rs` (`BoxKind::InlineBlockRow`) снимает смещение
+сразу после раскладки ребёнка (`unshift_relative`), раскладывает строку от несмещённых боксов и возвращает смещение после
+vertical-align / mirror / text-align. Тесты — `box_tree/tests/bug1291_relative_inline_block.rs`. Проверка WPT-reftest
+`transform-input-*` — за P2 при следующем прогоне `css/css-transforms`.
