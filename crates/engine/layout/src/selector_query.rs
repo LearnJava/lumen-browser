@@ -821,10 +821,14 @@ pub(crate) fn opacity_to_css(v: f32) -> String {
     if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
 }
 
-/// Serialize one CSS `transform` function to its computed-style text —
-/// shared with `AnimationFrame::to_computed_style_patches` (GAP-CSSANIM
-/// срез 3) so a live interpolated `transform` reads back identically to a
-/// static one.
+/// Key marking `prop` of a snapshot entry as written by the frame loop's scheduler
+/// (`patch_animated_computed_styles`) rather than produced by a cascade: the JS
+/// read-time transition overlay must not take such a value for a style change. A
+/// full snapshot replaces the entry, which drops the marker with it.
+pub fn animated_marker_key(prop: &str) -> String {
+    format!("{}-lumen-animated:{prop}", crate::resolved_geometry::COMPUTED_VALUE_KEY_PREFIX)
+}
+
 /// Key under which the snapshot keeps a box's `transform` as a function list
 /// (`translate(200px, 0px) rotate(12.566371rad)`) next to the resolved `matrix()` —
 /// under [`COMPUTED_VALUE_KEY_PREFIX`](crate::resolved_geometry::COMPUTED_VALUE_KEY_PREFIX),
@@ -870,6 +874,10 @@ pub(crate) fn transform_fns_to_list_css(list: &[TransformFn]) -> String {
         .join(" ")
 }
 
+/// Serialize one CSS `transform` function to its computed-style text —
+/// shared with `AnimationFrame::to_computed_style_patches` (GAP-CSSANIM
+/// срез 3) so a live interpolated `transform` reads back identically to a
+/// static one.
 pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
     if list.is_empty() {
         return "none".into();
@@ -1803,11 +1811,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Transform / filter ───────────────────────────────────────
     m.insert("transform".into(), transform_list_to_css(&style.transform));
-    // BUG-1293: the function list itself (the matrix above is the resolved value and loses
-    // `rotate(720deg)`, `translateY(70%)`): CSS Transitions/Animations interpolate lists.
-    if !style.transform.is_empty() {
-        m.insert(TRANSFORM_LIST_KEY.into(), transform_fns_to_list_css(&style.transform));
-    }
+
     m.insert("filter".into(), if style.filter.is_empty() {
         "none".into()
     } else {

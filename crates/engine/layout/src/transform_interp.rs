@@ -140,7 +140,8 @@ fn blend_pair(a: Option<&TransformFn>, b: Option<&TransformFn>, t: f32, r: Trans
                 _ => 0.0,
             };
             let p = lerp(inv(a), inv(b), t);
-            Some(Mat4::perspective(if p > 0.0 { 1.0 / p } else { 0.0 }))
+            // No perspective (`none`, or an overshoot below zero): the identity, not 1/0.
+            Some(if p > 0.0 { Mat4::perspective(1.0 / p) } else { Mat4::IDENTITY })
         }
         Family::Rotate => {
             let ((axa, aa), (axb, ab)) = (rotate_parts(a), rotate_parts(b));
@@ -462,8 +463,10 @@ fn parse(s: &str) -> Option<Vec<TransformFn>> {
 
 /// Resolved value матрицы, как её отдаёт `getComputedStyle()`.
 fn format_matrix(m: &Mat4) -> String {
-    let a = &m.0;
-    let num = |v: f32| (if v.abs() < 1e-6 { 0.0 } else { v }).to_string();
+    // Шум округления f64 (1e-9 у `x`/`y` кватерниона 2D-поворота) не должен превращать
+    // плоскую матрицу в `matrix3d()`: привязка к нулю идёт до проверки плоскости.
+    let a = m.0.map(|v| if v.abs() < 1e-6 { 0.0 } else { v });
+    let num = |v: f32| v.to_string();
     let flat = a[2] == 0.0
         && a[3] == 0.0
         && a[6] == 0.0
@@ -576,6 +579,22 @@ mod tests {
         let r = interpolate_transform_value("none", &text, 0.25, 0.0, 100.0).unwrap();
         // rotate(180deg) after translate(50px); the 70% of a 100px box moves with it.
         assert!(close(&nums(&r), &[-1.0, 0.0, 0.0, -1.0, 50.0, -17.5]), "{r}");
+    }
+
+    #[test]
+    fn a_planar_pair_across_families_stays_a_2d_matrix() {
+        let r = interpolate_transform_value("translateX(10px)", "rotate(90deg)", 0.5, 0.0, 0.0).unwrap();
+        assert!(r.starts_with("matrix("), "{r}");
+    }
+
+    #[test]
+    fn perspective_shrinking_to_none_never_prints_infinity() {
+        for t in [0.0, 1.0, 1.5, -0.5] {
+            let r = interpolate_transform_value("none", "perspective(500px)", t, 0.0, 0.0).unwrap();
+            assert!(!r.contains("inf") && !r.contains("NaN"), "t={t}: {r}");
+            let r = interpolate_transform_value("perspective(500px)", "none", t, 0.0, 0.0).unwrap();
+            assert!(!r.contains("inf") && !r.contains("NaN"), "t={t}: {r}");
+        }
     }
 
     #[test]

@@ -401,6 +401,7 @@ function AnimationEvent(type, init) {
     this.animationName = (init && init.animationName != null) ? String(init.animationName) : '';
     this.elapsedTime   = (init && init.elapsedTime   != null) ? +init.elapsedTime   : 0;
     this.pseudoElement = (init && init.pseudoElement != null) ? String(init.pseudoElement) : '';
+    this.animation     = (init && init.animation     != null) ? init.animation               : null;
 }
 AnimationEvent.prototype = Object.create(Event.prototype);
 AnimationEvent.prototype.constructor = AnimationEvent;
@@ -411,6 +412,7 @@ function TransitionEvent(type, init) {
     this.propertyName  = (init && init.propertyName  != null) ? String(init.propertyName)  : '';
     this.elapsedTime   = (init && init.elapsedTime   != null) ? +init.elapsedTime   : 0;
     this.pseudoElement = (init && init.pseudoElement != null) ? String(init.pseudoElement) : '';
+    this.animation     = (init && init.animation     != null) ? init.animation               : null;
 }
 TransitionEvent.prototype = Object.create(Event.prototype);
 TransitionEvent.prototype.constructor = TransitionEvent;

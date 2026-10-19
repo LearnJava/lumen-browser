@@ -1570,6 +1570,15 @@ pub(crate) fn install_crypto_and_typed_om(
                     .unwrap_or_default()
             });
         }
+        // BUG-1293: whether the frame loop's scheduler wrote this property's value (a live
+        // CSS transition/animation the Rust side drives) — the JS overlay then stands aside.
+        {
+            let cs = Arc::clone(&computed_styles);
+            reg!(scope, ctx, store, "_lumen_computed_is_animated", move |nid: u32, prop: String| -> bool {
+                let map = cs.lock().unwrap_or_else(|e| e.into_inner());
+                map.get(&nid).is_some_and(|m| m.get(&lumen_layout::animated_marker_key(&prop)).is_some())
+            });
+        }
         // Iteration source of both `getComputedStyle()` (`computed == false`:
         // resolved values) and `computedStyleMap()` (`computed == true`:
         // computed values, CSSOM-9) — standard properties plus this node's

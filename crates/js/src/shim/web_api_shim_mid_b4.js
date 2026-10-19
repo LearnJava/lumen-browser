@@ -777,6 +777,11 @@ function _lumen_deliver_cv_state_changes(changes) {
 // one `CSSTransition`/`CSSAnimation` per (target, property) per spec.
 var _lumen_css_anim_registry = {};
 
+function _lumen_css_anim_pending_finished(anim) {
+    anim.finished = new Promise(function(res, rej) { anim._finishRes = res; anim._finishRej = rej; });
+    anim.finished.catch(function() {});   // an AbortError nobody awaited is not an error
+}
+
 function _lumen_css_anim_key(prefix, nid, name) { return prefix + nid + ':' + name; }
 
 // CSS Transitions L1 §3 "creation" happens at the same time as `transitionrun`;
@@ -790,6 +795,13 @@ function _lumen_css_anim_register(prefix, nid, name) {
     anim = new Animation(eff, _wa_doc_timeline);
     anim.id = name;
     anim._state = 'running';
+    // Web Animations §4.4.1: cancelling rejects `finished` with an AbortError (a CSS
+    // animation/transition is cancelled by removing its `animation-name`/property), and
+    // a fresh pending promise replaces it. Settling goes through `_onFinish`, which
+    // drops the reject handle.
+    _lumen_css_anim_pending_finished(anim);
+    var onFinish = anim._onFinish;
+    anim._onFinish = function() { anim._finishRej = null; return onFinish.apply(anim, arguments); };
     _lumen_css_anim_registry[key] = anim;
     _wa_animations.push(anim);
     return anim;
@@ -809,6 +821,13 @@ function _lumen_css_anim_unregister(prefix, nid, name, finalState) {
     if (finalState === 'idle') {
         var idx = _wa_animations.indexOf(anim);
         if (idx >= 0) _wa_animations.splice(idx, 1);
+        if (anim._cancelRaf) anim._cancelRaf();
+        if (anim._finishRej) {
+            var rej = anim._finishRej;
+            _lumen_css_anim_pending_finished(anim);
+            rej(new DOMException('The animation was aborted', 'AbortError'));
+        }
+        anim._state = 'idle';
     } else {
         anim._state = finalState;
     }

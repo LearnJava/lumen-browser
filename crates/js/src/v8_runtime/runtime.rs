@@ -1518,6 +1518,9 @@ impl V8JsRuntime {
             let entry = styles.entry(*node).or_default();
             for (prop, value) in props {
                 entry.insert(prop.clone(), value.clone());
+                // BUG-1293: tell the JS read-time transition overlay this value is the
+                // scheduler's, not a style change (see `animated_marker_key`).
+                entry.insert(lumen_layout::animated_marker_key(prop), "1".to_string());
             }
         }
     }
