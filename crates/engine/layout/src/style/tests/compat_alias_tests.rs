@@ -58,3 +58,18 @@
             assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&alias), "{alias} missing");
         }
     }
+
+    /// BUG-1626: с Chrome-идентичностью `-moz-` префиксов нет — Firefox-детекторы
+    /// (`CSS.supports('-moz-appearance','none')`, `@supports (-moz-appearance:none)`)
+    /// должны давать false, а сами декларации не применяются.
+    #[test]
+    fn moz_prefixes_are_not_supported() {
+        assert!(!lumen_css_parser::SUPPORTED_PROPERTIES.contains(&"-moz-appearance"));
+        assert!(lumen_css_parser::SUPPORTED_PROPERTIES.contains(&"-webkit-appearance"));
+        assert_eq!(style_of("-moz-appearance: none").appearance, style_of("").appearance);
+        assert_ne!(style_of("-webkit-appearance: none").appearance, style_of("").appearance);
+        assert_eq!(style_of("width: -moz-available").width, style_of("").width);
+        assert_ne!(style_of("width: -webkit-fill-available").width, style_of("").width);
+        assert_eq!(style_of("unicode-bidi: -moz-isolate").unicode_bidi, UnicodeBidi::Normal);
+        assert_eq!(style_of("unicode-bidi: -webkit-isolate").unicode_bidi, UnicodeBidi::Isolate);
+    }

@@ -7,6 +7,8 @@ pub mod dark_mode;
 pub mod display_color_profile;
 pub mod file_dialog;
 pub mod keyboard_state;
+#[cfg(target_os = "windows")]
+pub mod msaa_wndproc;
 pub mod os_params;
 pub mod screen_capture;
 pub mod video_audio_sink;

@@ -1,6 +1,6 @@
 # BUG-1598 — `<q>` не получает кавычек: в UA-таблице нет `q::before`/`q::after { content: open-quote/close-quote }`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-11 (P2, WPT-RUN-14 срез 28, 30 малых модулей `css`: `css-logical`, `compositing`, `css-scroll-anchoring`, `css-content`, `css-scrollbars`, `css-will-change`, `css-syntax`, `css-color-adjust`, `css-rhythm`, `geometry` и др.)
 **Область:** layout (`crates/engine/layout/src/style/ua.rs`, `style/pseudo.rs` — UA-правила генерируемого содержимого; `box_tree/inline_build.rs:1259` — `open-quote`/`close-quote` уже работают)
 
@@ -21,3 +21,7 @@ WPT-RUN-14 S28: 45 reftest `thick` в `css/css-content` — `quotes-001…034` (
 ## Как проверить
 
 `css/css-content/quotes-001.html`, `quotes-002.html`, `quotes-003.html`, `quotes-020.html`.
+
+## Исправление
+
+`style/pseudo.rs`: `ua_quote_content` даёт `q::before` — `open-quote`, `q::after` — `close-quote` (HTML rendering §15.3.7) как базовое значение `content` псевдоэлемента; авторское правило перекрывает его обычным каскадом (`content:none`, `quotes:none` работают). Фильтр «таблица стилей не адресует псевдоэлемент» (`sheet_targets_pseudo`) для `q` обходится. `counters.rs`: проба `::before`/`::after`, двигающая глубину кавычек, включается для `<q>` и без листовых кавычек в таблице — иначе вложенный `<q>` брал бы первичную пару. Тест `bug1598_q_gets_ua_quotes_without_author_rule`. Остаток по WPT (`quotes-009/013/030`, `quotes-first-letter-*`) — другие причины, в этот баг не входят.

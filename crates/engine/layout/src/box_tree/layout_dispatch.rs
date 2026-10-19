@@ -245,6 +245,101 @@ fn lay_out_inner_impl(
     }
 }
 
+/// Border-box width of a replaced box from its content/border-box height `h` and ratio —
+/// the mirror of `layout_cache::ratio_height` (BUG-1280). Out of line for the frame size.
+#[inline(never)]
+fn ratio_width(s: &ComputedStyle, h: f32, (aw, ah): (f32, f32), [padding_left, padding_right]: [f32; 2]) -> f32 {
+    match s.box_sizing {
+        BoxSizing::ContentBox => {
+            (h * aw / ah + padding_left + padding_right + s.border_left_width + s.border_right_width).max(0.0)
+        }
+        BoxSizing::BorderBox => (h * aw / ah).max(0.0),
+    }
+}
+
+/// BUG-1280: the border-box width of an image whose only width is its natural size
+/// (`build_box` stored it as an intrinsic hint, both axes `auto`), run through the
+/// §10.4 table. Kept out of line: `lay_out` recurses per nesting level, and its frame
+/// must not grow (`deep_grid_chain_lays_out_without_overflowing_the_stack`).
+#[inline(never)]
+fn natural_replaced_border_width(
+    s: &ComputedStyle,
+    em: f32,
+    cb: f32,
+    available_height: Option<f32>,
+    viewport: Size,
+    [padding_left, padding_right, padding_top, padding_bottom]: [f32; 4],
+) -> Option<f32> {
+    if !s.width_is_intrinsic_hint || s.height.is_some() {
+        return None;
+    }
+    let (aw, ah) = s.aspect_ratio.filter(|&(aw, ah)| aw > 0.0 && ah > 0.0)?;
+    let Some(Length::Px(w_nat)) = s.width else {
+        return None;
+    };
+    let frame_h = padding_left + padding_right + s.border_left_width + s.border_right_width;
+    let frame_v = padding_top + padding_bottom + s.border_top_width + s.border_bottom_width;
+    let content_w = |l: &Option<Length>| {
+        l.as_ref().and_then(|l| l.resolve(em, Some(cb), viewport)).map(|v| match s.box_sizing {
+            BoxSizing::ContentBox => v,
+            BoxSizing::BorderBox => (v - frame_h).max(0.0),
+        })
+    };
+    let content_h = |l: &Option<Length>| {
+        l.as_ref().and_then(|l| resolve_block_size(l, em, available_height, viewport)).map(|v| match s.box_sizing {
+            BoxSizing::ContentBox => v,
+            BoxSizing::BorderBox => (v - frame_v).max(0.0),
+        })
+    };
+    let w = natural_width_constrained(
+        w_nat,
+        w_nat * ah / aw,
+        content_w(&s.min_width),
+        content_w(&s.max_width),
+        content_h(&s.min_height),
+        content_h(&s.max_height),
+    );
+    Some(w + frame_h)
+}
+
+/// CSS 2.1 §10.4 — the used content width of a replaced element with an intrinsic
+/// ratio whose width and height are both `auto`: the natural `w`×`h` pushed through
+/// the min-/max- constraint table. `None` bounds are unconstrained. A `min` above its
+/// `max` wins (the caller clamps `max` first, then `min`, like the rest of the file).
+fn natural_width_constrained(
+    w: f32,
+    h: f32,
+    min_w: Option<f32>,
+    max_w: Option<f32>,
+    min_h: Option<f32>,
+    max_h: Option<f32>,
+) -> f32 {
+    if w <= 0.0 || h <= 0.0 {
+        return w.max(0.0);
+    }
+    let min_w = min_w.unwrap_or(0.0).max(0.0);
+    let min_h = min_h.unwrap_or(0.0).max(0.0);
+    let max_w = max_w.map_or(f32::INFINITY, |v| v.max(min_w));
+    let max_h = max_h.map_or(f32::INFINITY, |v| v.max(min_h));
+    let (wide, narrow) = (w > max_w, w < min_w);
+    let (tall, short) = (h > max_h, h < min_h);
+    match (wide, narrow, tall, short) {
+        (true, _, true, _) => {
+            if max_w / w <= max_h / h { max_w } else { (max_h * w / h).max(min_w) }
+        }
+        (_, true, _, true) => {
+            if min_w / w <= min_h / h { (min_h * w / h).min(max_w) } else { min_w }
+        }
+        (_, true, true, _) => min_w,
+        (true, _, _, true) => max_w,
+        (true, ..) => max_w,
+        (_, true, ..) => min_w,
+        (_, _, true, _) => (max_h * w / h).max(min_w),
+        (_, _, _, true) => (min_h * w / h).min(max_w),
+        _ => w,
+    }
+}
+
 /// The style a box is laid out with: its own `Arc` when there is no
 /// [`UsedSizeOverride`] (the overwhelming majority — an `Arc` bump, not a deep
 /// copy, see BUG-341 S12), otherwise a locally cloned `ComputedStyle` with the
@@ -604,16 +699,10 @@ pub(super) fn dispatch_box(
             && let Some(h) = resolve_block_size(h_len, em, available_height, viewport)
         {
             // BUG-734 / CSS 2.1 §10.6.2: `width: auto` + definite height +
-            // известное соотношение → ширина выводится из высоты. Симметрично
-            // ratio-ветке высоты ниже, поэтому считается в border-box
-            // пространстве (у картинок padding/border почти всегда нулевые).
-            let h_bb = match s.box_sizing {
-                BoxSizing::ContentBox => {
-                    h + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
-                }
-                BoxSizing::BorderBox => h,
-            };
-            (h_bb * aw / ah).max(0.0)
+            // известное соотношение → ширина выводится из высоты. Соотношение
+            // относится к рамке по `box-sizing` (BUG-1280): у content-box
+            // padding/border прибавляются к уже выведенному content-размеру.
+            ratio_width(&s, h, (aw, ah), [padding_left, padding_right])
         } else if s.width.is_none()
             && let Some(fit) = form_control_fit_content_width(b, measurer, viewport)
         {
@@ -677,6 +766,23 @@ pub(super) fn dispatch_box(
                 BoxSizing::BorderBox => w.max(padding_left + padding_right + s.border_left_width + s.border_right_width),
             };
         }
+    }
+    // BUG-1280 / CSS 2.1 §10.4: an image whose only width is its natural size (both
+    // axes `auto`, `build_box` stored it as an intrinsic hint) runs through the
+    // min-/max- constraint table — a `max-height` smaller than the natural height must
+    // shrink the width along the ratio, not leave it at the natural pixels. Everything
+    // is content-box here: the natural size is a content size whatever `box-sizing` says.
+    if is_replaced
+        && let Some(w) = natural_replaced_border_width(
+            &s,
+            em,
+            cb,
+            available_height,
+            viewport,
+            [padding_left, padding_right, padding_top, padding_bottom],
+        )
+    {
+        b.rect.width = w;
     }
     // CSS 2.1 §10.4: tentative width → clamp в [min-width, max-width].
     // Intrinsic keywords in min-/max- also resolve to intrinsic values here.
@@ -1131,8 +1237,10 @@ pub(super) fn dispatch_box(
                 align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             }
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
+            line_growth = super::inline_wrap::align_run_vertically(
+                lines, &s, &mut b.used_line_height, m, !was_shaped, first_line_style.is_none(),
+            );
             let line_h = step_line_height(b.used_line_height, s.line_height_step);
-            line_growth = apply_inline_vertical_align(lines, line_h, !was_shaped);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp cuts lines across the whole
             // container flow (`line_clamp_flow`), not run by run; here it only takes priority
             // over text-overflow:ellipsis (both cannot apply simultaneously).
@@ -1542,6 +1650,9 @@ pub(super) fn dispatch_box(
             });
             let mut children: Vec<LayoutBox> = Vec::with_capacity(orig_children.len());
             let mut metrics: Vec<(f32, f32)> = Vec::with_capacity(orig_children.len());
+            // (child index, dx, dy): `position: relative` offsets taken off the
+            // children while the row is laid out, re-applied after phase 2.
+            let mut rel_offsets: Vec<(usize, f32, f32)> = Vec::new();
             // rows: (row_y, above, below, Vec<child_index>)
             let mut rows: Vec<(f32, f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
@@ -1648,6 +1759,11 @@ pub(super) fn dispatch_box(
                     metrics.push((0.0, 0.0));
                     continue;
                 }
+                // CSS Positioned Layout L3 §9.4.3: the child's own layout already
+                // applied its `position: relative` offset, but the row must flow
+                // from the unshifted box (neighbours, line height) and phase 2
+                // re-places it on y; the offset is put back after phase 2.
+                let mut rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
 
                 // IFC-4: split a run that wrapped past line 0 while sharing its
                 // row with preceding content — everything after line 0 forms
@@ -1778,7 +1894,11 @@ pub(super) fn dispatch_box(
                 };
                 let child_right = child.rect.x + advance + child_mr;
 
-                if !is_run && child_right > content_x + content_width && cur_x > content_x {
+                // CSS Text L3 §5.1: `white-space: nowrap` / `text-wrap-mode: nowrap`
+                // forbid soft breaks between atomic inlines as well (BUG-1284).
+                let row_nowrap = b.style.white_space.is_nowrap()
+                    || b.style.text_wrap_mode == TextWrapMode::Nowrap;
+                if !is_run && !row_nowrap && child_right > content_x + content_width && cur_x > content_x {
                     let (above, below) =
                         line_metrics(&children, &metrics, &cur_row, row_has_baseline);
                     rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
@@ -1794,9 +1914,13 @@ pub(super) fn dispatch_box(
                     cur_x = content_x;
                     row_has_baseline = false;
                     lay_out(&mut child, cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
+                    rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
                     advance = child.rect.width;
                 }
                 let idx = children.len();
+                if rel != (0.0, 0.0) {
+                    rel_offsets.push((idx, rel.0, rel.1));
+                }
                 let child_x = child.rect.x;
                 children.push(child);
                 cur_row.push(idx);
@@ -1917,6 +2041,9 @@ pub(super) fn dispatch_box(
                 // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
                 // above. Fractional dy causes 0.99% deviation vs Edge (BUG-081).
                 shift_y_box(&mut b.children[idx], dy.round());
+            }
+            for (idx, dx, dy) in rel_offsets {
+                shift_tree(&mut b.children[idx], dx, dy);
             }
         }
         // GAP-RUBYBOX: base/annotation sub-boxes were already laid out (as
@@ -2093,6 +2220,17 @@ pub(super) fn finish_after_match(
     // bottom/left) are resolved from ComputedStyle in lib.rs::collect_sticky_rec()
     // after this pass. P3 calls collect_sticky_boxes() + compute_sticky_offset() to
     // apply scroll-driven paint transforms at render time.
+}
+
+/// Takes the `position: relative` offset that `finish_after_match` applied off
+/// `child` again and returns it, so a line-box layout can flow from the
+/// unshifted position (§9.4.3) and re-apply the offset once the box is placed.
+fn unshift_relative(child: &mut LayoutBox, cb: f32, viewport: Size) -> (f32, f32) {
+    let (dx, dy) = relative_offset(&child.style, child.style.font_size, cb, viewport);
+    if dx != 0.0 || dy != 0.0 {
+        shift_tree(child, -dx, -dy);
+    }
+    (dx, dy)
 }
 
 /// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` от `left/right/top/bottom`.

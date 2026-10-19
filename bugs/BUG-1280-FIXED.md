@@ -1,6 +1,6 @@
 # BUG-1280 — у `<img>` с размером из CSS декодированный размер пишется в оба атрибута `width`/`height` и ломает пропорции
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-05 (P2, WPT-RUN-14 срез 3, `css/css-ui`)
 **Область:** layout (`crates/engine/layout/src/box_tree/image_requests.rs::apply_intrinsic_size`)
 
@@ -46,3 +46,25 @@ WPT `css/css-ui/box-sizing-007…025.html` (19 reftest, все `<img>` с `box-s
 Тот же корень у `<canvas>`: размеры атрибутов `width`/`height` (по умолчанию 300×150) подставляются в оба измерения, и сторона из CSS не масштабирует вторую. `--dump-layout`: `<canvas width=15 height=15 style="width:20px;height:auto">` → 20×**15** (ожидается 20×20); `<canvas width=15 height=15 style="aspect-ratio:2;width:20px">` → 20×15 (20×10); `<canvas width=10 height=10 style="height:100%">` в `height:100px` → 10×100 (100×100); `<img style="height:20px">` → 60×20 (20×20). `<img style="aspect-ratio:2;width:20px;height:auto">` — 20×10, верно.
 
 WPT: `css-sizing/aspect-ratio/replaced-element-0*` (44 id, 156 из 189 сабтестов), `intrinsic-percent-replaced-0*` (30 id, 29 thick), `replaced-aspect-ratio-*`, `image-min-max-content-intrinsic-size-change-*` (8), `box-sizing-replaced-*` (3), `svg-intrinsic-size-*` — всего кластер «замещаемые» среза: 72 + 44 = 116 id.
+
+## Исправление (2026-10-19)
+
+Корень был двойной.
+
+1. `apply_intrinsic_size` писал декодированный размер в атрибуты `width`/`height` даже когда автор не задал ни одного, —
+   они становились презентационным hint-ом `width: Npx; height: Npx`, и CSS на одной стороне не масштабировал вторую.
+   Теперь при пустых обоих слотах размер уходит в боковую таблицу документа (`Document::set_embedded_image`, как у
+   `<object>`/`<embed>`), а `resolve_image_source` отдаёт его layout как intrinsic-размер (устаревшая запись по другому
+   URL игнорируется). Атрибуты `getAttribute('width')` больше не показывают размер декодера. Остальные ветки BUG-269
+   (автор дал одну сторону) не менялись.
+2. Дальше работал уже готовый механизм BUG-734 (ratio в `aspect_ratio`, ширина-hint только при обеих `auto`), но
+   доделаны три места: (a) `box_tree/layout_dispatch.rs::natural_replaced_border_width` — натуральная ширина проходит
+   таблицу CSS 2.1 §10.4 (`min-/max-width/height`), поэтому `max-height: 20px` сжимает и ширину; (b) соотношение у
+   content-box считается по content-размеру: `padding-right: 30px; width: 70px` → 100×70 (`layout_cache::ratio_height`,
+   `layout_dispatch::ratio_width`); border-box ведёт себя как раньше; (c) у `<canvas>` (срез 16) bitmap-размер
+   подставляется как hint только когда обе стороны `auto` — сторона из CSS (определённая, не `%`) выводит вторую по
+   ratio (`build.rs`).
+
+Тесты: `box_tree/tests/intrinsic_and_wrap.rs` (`bug1280_*`, 8 штук). Остаток: если у `<img>` автор задал одну сторону
+атрибутом, вторая по-прежнему дописывается атрибутом из ratio (BUG-269) — CSS на второй стороне её перебивает, это
+верно. Кластер WPT `css-sizing/aspect-ratio/replaced-element-0*`, `box-sizing-007…025` не перепрогонялся.

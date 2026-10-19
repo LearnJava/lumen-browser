@@ -38,6 +38,12 @@ enum LayerComposite {
     /// page coordinates composited through it lands exactly where the GPU
     /// vertex transform would place it.
     Transform(tiny_skia::Transform),
+    /// BUG-1290 — `Transform` для проективной матрицы (`perspective`,
+    /// `rotateX/Y`): tiny-skia умеет только аффинное, поэтому слой уходит на
+    /// родителя обратным выборщиком по гомографии ([`crate::cpu_projective`]).
+    /// `clip` — внешний клип в координатах родителя: внутри слоя он сброшен
+    /// (обратной проекцией его не вернуть), поэтому режет сам композит.
+    Projective { h: crate::cpu_projective::Homography, clip: Option<Rect> },
     /// CSS Compositing & Blending L1 §5 `mix-blend-mode` — composite the layer
     /// onto the backdrop below with this separable/non-separable blend formula
     /// instead of plain `SourceOver`. The subtree renders into a transparent
@@ -223,7 +229,6 @@ pub(crate) fn rasterize_cpu_with_fonts(
     font_provider: Option<&dyn FontProvider>,
     canvas_background: Option<Color>,
 ) -> Result<Image, Box<dyn std::error::Error>> {
-    use tiny_skia::Pixmap;
     // Decoded `<img>` pixels keyed by `src`, supplied by the shell's headless
     // render pass (`render_source_to_png`). Lets `DrawImage`/`LazyImageSlot`
     // paint the real picture instead of a grey placeholder (BUG-221, TEST-18).
@@ -231,11 +236,37 @@ pub(crate) fn rasterize_cpu_with_fonts(
     let image_map: std::collections::HashMap<&str, &Image> =
         images.iter().map(|(s, img)| (s.as_str(), img.as_ref())).collect();
 
+    let clear = canvas_background.unwrap_or(Color::WHITE);
+    let pixmap = rasterize_cpu_pixmap(width, height, commands, &image_map, font_provider, Some(clear))?;
+    let data = pixmap.data().to_vec();
+    Ok(Image {
+        width,
+        height,
+        format: lumen_image::PixelFormat::Rgba8,
+        data,
+        icc_profile: None,
+    })
+}
+
+/// Тело растеризатора: рисует `commands` на полотно `width`×`height` и отдаёт
+/// пиксели. `clear == None` — прозрачное полотно (слой группы `PushTransform`,
+/// BUG-1288), иначе заливка этим цветом.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+fn rasterize_cpu_pixmap(
+    width: u32,
+    height: u32,
+    commands: &[DisplayCommand],
+    image_map: &std::collections::HashMap<&str, &Image>,
+    font_provider: Option<&dyn FontProvider>,
+    clear: Option<Color>,
+) -> Result<tiny_skia::Pixmap, Box<dyn std::error::Error>> {
+    use tiny_skia::Pixmap;
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
-    let clear = canvas_background.unwrap_or(Color::WHITE);
-    base.fill(tiny_skia::Color::from_rgba8(clear.r, clear.g, clear.b, clear.a));
+    if let Some(clear) = clear {
+        base.fill(tiny_skia::Color::from_rgba8(clear.r, clear.g, clear.b, clear.a));
+    }
 
     // Off-screen layer stack for group effects: group opacity (`PushOpacity` /
     // `PopOpacity`, emitted for `opacity < 1`) and 2D transforms (`PushTransform`
@@ -276,8 +307,23 @@ pub(crate) fn rasterize_cpu_with_fonts(
     let mut clip_saves: Vec<Vec<Rect>> = Vec::new();
     // One flag per open `PushScrollLayer`: did it open a translated layer (non-zero scroll).
     let mut scroll_layer_shifted: Vec<bool> = Vec::new();
+    // BUG-1290: матрица `A`, действующая на прямых потомков открытой группы
+    // `PushTransform`. Слой потомка композитится в слой родителя матрицей
+    // `H(A)⁻¹·H(A·M)`, чтобы после композита родителя (`H(A)`) вышло
+    // `H(A·M)`. Ненулевая `A` — только у обёртки `perspective` (она на
+    // плоскости z = 0 тождественна, но перспектива должна дойти до
+    // `translateZ`/`rotateX` ребёнка); у остальных групп `A` — единичная:
+    // без `preserve-3d` потомки плоские и проецируются каждый в плоскость
+    // своего родителя (CSS Transforms L2 §6), цепочка не перемножается.
+    let mut xf_acc: Vec<lumen_layout::Mat4> = Vec::new();
 
-    for cmd in commands {
+    // BUG-1288: индекс команды, до которой цикл пропускает уже отрисованное
+    // содержимое группы `PushTransform` (включая её `PopTransform`).
+    let mut skip_until = 0usize;
+    for (cmd_idx, cmd) in commands.iter().enumerate() {
+        if cmd_idx < skip_until {
+            continue;
+        }
         match cmd {
             DisplayCommand::FillRect { rect, color } => {
                 let b = rect_bounds(rect);
@@ -571,12 +617,81 @@ pub(crate) fn rasterize_cpu_with_fonts(
             // full-size layer; the affine maps page coordinates and is applied at
             // composite time so geometry need not be transformed per-draw.
             DisplayCommand::PushTransform { matrix } => {
+                let acc = xf_acc.last().copied().unwrap_or(lumen_layout::Mat4::IDENTITY);
+                // BUG-1290: для 3D-матрицы — композит слоя как гомография.
+                let projective = if matrix.is_2d_affine() {
+                    None
+                } else {
+                    Some(crate::cpu_projective::homography(matrix))
+                };
+                // Обёртка `perspective` (тождество на z = 0) передаёт `P` детям;
+                // иная группа плоская.
+                let acc_next = if projective
+                    .and_then(|h| crate::cpu_projective::as_affine(&h))
+                    .is_some_and(|a| a == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+                {
+                    acc.multiply(matrix)
+                } else {
+                    lumen_layout::Mat4::IDENTITY
+                };
+                let layer_h = projective.map(|own| {
+                    use crate::cpu_projective::{homography, invert, mul};
+                    let parent = homography(&acc);
+                    let total = homography(&acc.multiply(matrix));
+                    invert(&parent).map_or(own, |inv| mul(&inv, &total))
+                });
+                if let Some(h) = layer_h
+                    && crate::cpu_projective::as_affine(&h).is_none()
+                {
+                    let layer = tiny_skia::Pixmap::new(width, height)
+                        .ok_or("Failed to create transform layer")?;
+                    layers.push(CpuLayer::new(layer));
+                    layer_ops.push(LayerComposite::Projective { h, clip: clip_rect });
+                    xf_acc.push(acc_next);
+                    clip_saves.push(clip_stack.clone());
+                    clip_stack.clear();
+                    clip_rect = None;
+                    clip_mask = None;
+                    continue;
+                }
+                // Аффинный образ (в т.ч. `perspective` на плоскости z = 0
+                // и `translateZ` под `perspective`) — обычный путь.
+                let matrix_2d;
+                let matrix = match layer_h.and_then(|h| crate::cpu_projective::as_affine(&h)) {
+                    Some([a, b, c, d, e, f]) => {
+                        matrix_2d = lumen_layout::Mat4::from_2d_affine(a, b, c, d, e, f);
+                        &matrix_2d
+                    }
+                    None => matrix,
+                };
                 let [a, b, c, d, e, f] = mat4_to_2d_affine(matrix);
                 let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
+                // BUG-1288: содержимое, лежащее до трансформации вне полотна
+                // (`left:900px` + `translate(-700px)`, повёрнутый блок с
+                // `left:-50px`), в слой размером с полотно не помещается —
+                // такую группу рисуем в отдельный слой по её собственному
+                // габариту и композитим целиком.
+                if let Some(end) = matching_pop_transform(commands, cmd_idx)
+                    && let GroupLayer::Rendered(group, group_t) = render_offcanvas_transform_group(
+                        width, height, matrix, &commands[cmd_idx + 1..end], clip_rect,
+                        image_map, font_provider,
+                    )?
+                {
+                    skip_until = end + 1;
+                    if let Some(group) = group
+                        && let Some(dst) = layers.last_mut()
+                    {
+                        let (gw, gh) = (group.width() as f32, group.height() as f32);
+                        let src = CpuLayer { pm: group, dirty: Some((0.0, 0.0, gw, gh)) };
+                        close_layer(dst, &src, &LayerComposite::Transform(group_t));
+                    }
+                    continue;
+                }
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create transform layer")?;
                 layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Transform(t));
+                xf_acc.push(acc_next);
                 // BUG-424: draws inside this layer use pre-transform coordinates,
                 // so an ambient clip expressed in document space must be mapped
                 // back through the inverse before it can gate them. Without this
@@ -700,9 +815,10 @@ pub(crate) fn rasterize_cpu_with_fonts(
                 if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop()) {
                     // BUG-424: restore the document-space clip the matching
                     // `PushTransform` swapped for its local-space image.
-                    if matches!(op, LayerComposite::Transform(_))
+                    if matches!(op, LayerComposite::Transform(_) | LayerComposite::Projective { .. })
                         && let Some(saved) = clip_saves.pop()
                     {
+                        xf_acc.pop();
                         clip_stack = saved;
                         clip_rect = clip_intersection(&clip_stack);
                         clip_mask = build_clip_mask(width, height, clip_rect);
@@ -744,15 +860,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
             close_layer(dst, &top, &op);
         }
     }
-    let pixmap = layers.pop().expect("base layer").pm;
-    let data = pixmap.data().to_vec();
-    Ok(Image {
-        width,
-        height,
-        format: lumen_image::PixelFormat::Rgba8,
-        data,
-        icc_profile: None,
-    })
+    Ok(layers.pop().expect("base layer").pm)
 }
 
 /// Composite an off-screen opacity layer `src` onto `dst` with group `alpha`.
@@ -818,6 +926,13 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
         LayerComposite::Transform(t) => {
             composite_transform_layer(&mut dst.pm, &src.pm, *t);
             dst.mark(transform_bounds(*t, src_dirty));
+        }
+        LayerComposite::Projective { h, clip } => {
+            if let Some(written) =
+                crate::cpu_projective::composite(&mut dst.pm, &src.pm, h, *clip, src_dirty)
+            {
+                dst.mark(written);
+            }
         }
         LayerComposite::Blend(mode) => {
             composite_blend_layer(&mut dst.pm, &src.pm, *mode, src_dirty);
@@ -1696,6 +1811,127 @@ fn composite_transform_layer(
     dst.draw_pixmap(0, 0, src.as_ref(), &paint, transform, None);
 }
 
+/// Результат [`render_offcanvas_transform_group`].
+enum GroupLayer {
+    /// Группа целиком в полотне в локальных координатах — рисуется обычным
+    /// слоем размером с полотно.
+    Legacy,
+    /// Группа отрисована в собственный слой: пиксели (`None` — в видимой
+    /// области ничего нет) и аффинное преобразование слоя на полотно.
+    Rendered(Option<tiny_skia::Pixmap>, tiny_skia::Transform),
+}
+
+/// Индекс `PopTransform`, закрывающего `PushTransform` в `commands[start]`.
+fn matching_pop_transform(commands: &[DisplayCommand], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, cmd) in commands.iter().enumerate().skip(start) {
+        match cmd {
+            DisplayCommand::PushTransform { .. } => depth += 1,
+            DisplayCommand::PopTransform => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Объединённый габарит рисуемой геометрии `body` в системе координат группы
+/// (вложенные `PushTransform` проецируются своей матрицей).
+fn group_ink_bbox(body: &[DisplayCommand]) -> Option<Rect> {
+    fn union(acc: &mut Option<Rect>, r: Rect) {
+        *acc = Some(match *acc {
+            None => r,
+            Some(a) => {
+                let x0 = a.x.min(r.x);
+                let y0 = a.y.min(r.y);
+                let x1 = (a.x + a.width).max(r.x + r.width);
+                let y1 = (a.y + a.height).max(r.y + r.height);
+                Rect::new(x0, y0, x1 - x0, y1 - y0)
+            }
+        });
+    }
+    let mut acc = None;
+    let mut i = 0;
+    while i < body.len() {
+        if let DisplayCommand::PushTransform { matrix } = &body[i] {
+            let Some(end) = matching_pop_transform(body, i) else { break };
+            if let Some(inner) = group_ink_bbox(&body[i + 1..end]) {
+                union(&mut acc, transform_rect_bbox(inner, matrix));
+            }
+            i = end + 1;
+            continue;
+        }
+        if let Some(r) = body[i].cull_rect() {
+            union(&mut acc, r);
+        }
+        i += 1;
+    }
+    acc
+}
+
+/// BUG-1288: рисует группу `PushTransform` в слой по её габариту, а не по
+/// размеру полотна. Слой размером с полотно держит только локальные
+/// координаты `0..W × 0..H`: блок, лежащий до трансформации левее/выше нуля
+/// или за краем полотна, отбрасывался, хотя после трансформации попадает в
+/// кадр. Слой берётся как видимая часть полотна, пересчитанная обратной
+/// матрицей и пересечённая с габаритом содержимого; команды сдвигаются на
+/// целое смещение его начала (текст остаётся на целых пикселях), а на
+/// композите это смещение возвращается в матрицу.
+///
+/// [`GroupLayer::Legacy`] — когда содержимое и так внутри полотна (картинка
+/// остаётся побитово прежней), матрица необратима или слой получился бы
+/// непомерным.
+fn render_offcanvas_transform_group(
+    width: u32,
+    height: u32,
+    matrix: &lumen_layout::Mat4,
+    body: &[DisplayCommand],
+    ambient_clip: Option<Rect>,
+    image_map: &std::collections::HashMap<&str, &Image>,
+    font_provider: Option<&dyn FontProvider>,
+) -> Result<GroupLayer, Box<dyn std::error::Error>> {
+    /// Потолок площади слоя группы (px²) — как у полотна 8192×8192.
+    const MAX_GROUP_AREA: f64 = 64.0 * 1024.0 * 1024.0;
+    let Some(ink) = group_ink_bbox(body) else { return Ok(GroupLayer::Legacy) };
+    let (w, h) = (width as f32, height as f32);
+    if ink.x >= 0.0 && ink.y >= 0.0 && ink.x + ink.width <= w && ink.y + ink.height <= h {
+        return Ok(GroupLayer::Legacy);
+    }
+    let Some(inv) = matrix.invert_2d_affine() else { return Ok(GroupLayer::Legacy) };
+    // Видимая часть полотна в локальных координатах (+2 px на билинейный
+    // выход за край) ∩ габарит содержимого (+64 px на размытие/обводку).
+    let visible = transform_rect_bbox(Rect::new(-2.0, -2.0, w + 4.0, h + 4.0), &inv);
+    let x0 = visible.x.max(ink.x - 64.0).floor();
+    let y0 = visible.y.max(ink.y - 64.0).floor();
+    let x1 = (visible.x + visible.width).min(ink.x + ink.width + 64.0).ceil();
+    let y1 = (visible.y + visible.height).min(ink.y + ink.height + 64.0).ceil();
+    let (a, b, c, d, e, f) = {
+        let [a, b, c, d, e, f] = mat4_to_2d_affine(matrix);
+        (a, b, c, d, e, f)
+    };
+    let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
+    if !(x1 > x0 && y1 > y0) {
+        return Ok(GroupLayer::Rendered(None, t));
+    }
+    if f64::from(x1 - x0) * f64::from(y1 - y0) > MAX_GROUP_AREA {
+        return Ok(GroupLayer::Legacy);
+    }
+    let (gw, gh) = ((x1 - x0) as u32, (y1 - y0) as u32);
+
+    let mut cmds: Vec<DisplayCommand> = Vec::with_capacity(body.len() + 1);
+    if let Some(clip) = ambient_clip {
+        let local = transform_rect_bbox(clip, &inv);
+        cmds.push(DisplayCommand::PushClipRect { rect: Rect::new(local.x - x0, local.y - y0, local.width, local.height) });
+    }
+    cmds.extend(body.iter().map(|cmd| cmd.translated(-x0, -y0)));
+    let pm = rasterize_cpu_pixmap(gw, gh, &cmds, image_map, font_provider, None)?;
+    Ok(GroupLayer::Rendered(Some(pm), t.pre_translate(x0, y0)))
+}
+
 /// Axis-aligned bounding box of `rect` mapped through the 2D affine `m`.
 ///
 /// BUG-424: used to carry an ambient clip across a `PushTransform` boundary.
@@ -2180,11 +2416,13 @@ fn rasterize_draw_outline(
         blend_mode: tiny_skia::BlendMode::SourceOver,
     };
 
-    // Expand rect by offset.
-    let x = rect.x - offset;
-    let y = rect.y - offset;
-    let w = rect.width + 2.0 * offset;
-    let h = rect.height + 2.0 * offset;
+    // The outline's inner edge is `rect ± offset`. A tiny-skia stroke is centred on
+    // its path, so the path sits half a stroke width further out (BUG-1279).
+    let grow = offset + width / 2.0;
+    let x = rect.x - grow;
+    let y = rect.y - grow;
+    let w = rect.width + 2.0 * grow;
+    let h = rect.height + 2.0 * grow;
 
     // Draw outline as a stroked rectangle.
     let mut pb = tiny_skia::PathBuilder::new();
@@ -3517,6 +3755,35 @@ mod tests {
         (img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3])
     }
 
+    /// BUG-1279: an outline lies entirely outside `rect ± offset`. A 20×20 box at
+    /// (30,30) with `outline: 10px` covers x = 20..60, not 25..55.
+    #[test]
+    fn outline_is_drawn_outside_the_box_edge() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let white = (255, 255, 255, 255);
+        let mk = |offset: f32| {
+            let cmds = vec![DisplayCommand::DrawOutline {
+                rect: rect(30.0, 30.0, 20.0, 20.0),
+                width: 10.0,
+                style: lumen_layout::style::OutlineStyle::Solid,
+                color: blue,
+                offset,
+            }];
+            rasterize_cpu(80, 80, &cmds, &[], 0.0, 0.0).expect("rasterize")
+        };
+        let img = mk(0.0);
+        assert_eq!(px(&img, 21, 40), (0, 0, 255, 255), "outer band starts at x=20");
+        assert_eq!(px(&img, 29, 40), (0, 0, 255, 255), "band reaches the box edge");
+        assert_eq!(px(&img, 40, 40), white, "box interior untouched");
+        assert_eq!(px(&img, 18, 40), white, "nothing beyond 10px");
+        assert_eq!(px(&img, 21, 21), (0, 0, 255, 255), "mitred corner is filled");
+        // Positive offset moves the whole band away from the box.
+        let img = mk(5.0);
+        assert_eq!(px(&img, 27, 40), white, "gap between box and outline");
+        assert_eq!(px(&img, 19, 40), (0, 0, 255, 255), "band spans x=15..25");
+        assert_eq!(px(&img, 16, 40), (0, 0, 255, 255));
+    }
+
     /// `PushScrollLayer` with a non-zero offset shifts the content up by
     /// `scroll_y` inside the clip: a 100px-tall grey block above a green one
     /// ends at y=90 after a 10px scroll, and nothing leaks outside the clip.
@@ -4531,6 +4798,105 @@ mod tests {
         assert_eq!(px(&img, 25, 15), (0, 0, 255, 255), "fill moved by (20,10)");
         // The untranslated origin is now empty → background white.
         assert_eq!(px(&img, 5, 5), (255, 255, 255, 255), "origin cleared by translate");
+    }
+
+    /// BUG-1290: `perspective(100px)` на родителе + `translateZ(50px)` у ребёнка —
+    /// квадрат 20×20 вокруг центра перспективы растёт вдвое (40×40).
+    #[test]
+    fn perspective_translate_z_scales_child() {
+        use lumen_layout::Mat4;
+        let lime = Color { r: 0, g: 255, b: 0, a: 255 };
+        let around = |m: Mat4| {
+            Mat4::translation_2d(32.0, 32.0).multiply(&m).multiply(&Mat4::translation_2d(-32.0, -32.0))
+        };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: around(Mat4::perspective(100.0)) },
+            DisplayCommand::PushTransform { matrix: Mat4::translate_3d(0.0, 0.0, 50.0) },
+            DisplayCommand::FillRect { rect: rect(22.0, 22.0, 20.0, 20.0), color: lime },
+            DisplayCommand::PopTransform,
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 14, 32), (0, 255, 0, 255), "вдвое шире исходных 22…42 → 12…52");
+        assert_eq!(px(&img, 50, 32), (0, 255, 0, 255));
+        assert_eq!(px(&img, 8, 32), (255, 255, 255, 255));
+    }
+
+    /// BUG-1290: `perspective · rotateY` — не аффинное: ближняя половина
+    /// квадрата выше дальней, а сам квадрат не плоский прямоугольник.
+    #[test]
+    fn perspective_rotate_y_draws_trapezoid() {
+        use lumen_layout::Mat4;
+        let lime = Color { r: 0, g: 255, b: 0, a: 255 };
+        let m = Mat4::translation_2d(32.0, 32.0)
+            .multiply(&Mat4::perspective(60.0))
+            .multiply(&Mat4::rotate_y(1.0))
+            .multiply(&Mat4::translation_2d(-32.0, -32.0));
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: m },
+            DisplayCommand::FillRect { rect: rect(12.0, 12.0, 40.0, 40.0), color: lime },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let col = |x: u32| (0..64).filter(|&y| px(&img, x, y) == (0, 255, 0, 255)).count();
+        let widths: Vec<usize> = (0..64).map(col).filter(|&h| h > 0).collect();
+        assert!(widths.len() > 8, "что-то нарисовано");
+        let (a, b) = (widths[0], widths[widths.len() - 1]);
+        assert!(a.abs_diff(b) > 6, "края трапеции разной высоты: {a} vs {b}");
+        assert_eq!(px(&img, 2, 2), (255, 255, 255, 255));
+    }
+
+    /// BUG-1288: блок, лежащий до трансформации за правым краем полотна
+    /// (`left:900px` на полотне 64), после `translate(-40)` попадает в кадр.
+    #[test]
+    fn transform_group_beyond_canvas_right_edge_is_drawn() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(-90.0, 0.0) },
+            DisplayCommand::FillRect { rect: rect(100.0, 10.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 15, 20), (0, 0, 255, 255), "block at 100 moved to x=10..30");
+        assert_eq!(px(&img, 35, 20), (255, 255, 255, 255), "right of the block stays white");
+        assert_eq!(px(&img, 5, 20), (255, 255, 255, 255), "left of the block stays white");
+    }
+
+    /// BUG-1288: отрицательные локальные координаты — блок `left:-100px`
+    /// с `translate(+120)` лежит на x = 20…40.
+    #[test]
+    fn transform_group_with_negative_local_coords_is_drawn() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(120.0, 0.0) },
+            DisplayCommand::FillRect { rect: rect(-100.0, 10.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 30, 20), (0, 0, 255, 255), "block at -100 moved to x=20..40");
+        assert_eq!(px(&img, 10, 20), (255, 255, 255, 255), "left of the block stays white");
+    }
+
+    /// BUG-1288: поворот на 90° вокруг точки блока, чьи локальные координаты
+    /// частично отрицательны — видна вся фигура, а не её половина.
+    #[test]
+    fn rotated_group_with_partly_negative_local_coords_is_whole() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        // Блок 20×40 в локальных (-10..10, 0..40); поворот 90° вокруг (0,0)
+        // + сдвиг (40,0): (x,y) → (40 - y, x) — блок займёт x 0..40, y -10..10;
+        // видимая нижняя часть y 0..10.
+        let m = lumen_layout::Mat4::translation_2d(40.0, 0.0)
+            .multiply(&lumen_layout::Mat4::rotate_2d(std::f32::consts::FRAC_PI_2));
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: m },
+            DisplayCommand::FillRect { rect: rect(-10.0, 0.0, 20.0, 40.0), color: blue },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        // Локальная точка (-5, 20) (отрицательная x) → (40-20, -5): вне кадра;
+        // локальная (5, 20) → (20, 5): внутри.
+        assert_eq!(px(&img, 20, 5), (0, 0, 255, 255), "local x>0 half is drawn");
+        assert_eq!(px(&img, 20, 15), (255, 255, 255, 255), "below the block stays white");
     }
 
     /// BUG-424: an ambient clip must survive a `PushTransform` boundary by being

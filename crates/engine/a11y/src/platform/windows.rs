@@ -163,53 +163,69 @@ impl PlatformBridge for WinUiaBridge {
     /// Returns `None` for all other object IDs.
     #[cfg(target_os = "windows")]
     fn handle_wm_get_object(&mut self, wparam: usize, lparam: isize) -> Option<isize> {
-        if lparam != OBJID_CLIENT as isize || self.hwnd == 0 {
-            return None;
-        }
-
-        // SAFETY: hwnd is valid (set by init_hwnd from winit's raw_window_handle).
-        // CreateStdAccessibleObject is safe for any valid HWND + OBJID_CLIENT.
-        // LresultFromObject adds a reference, so we Release our local ref.
-        unsafe {
-            use windows_sys::Win32::UI::Accessibility::{
-                CreateStdAccessibleObject, LresultFromObject,
-            };
-            use windows_sys::Win32::Foundation::HWND;
-            use windows_sys::core::GUID;
-
-            // IID_IAccessible = {618736E0-3C3D-11CF-810C-00AA00389B71}
-            let iid_iaccessible = GUID {
-                data1: 0x618736E0,
-                data2: 0x3C3D,
-                data3: 0x11CF,
-                data4: [0x81, 0x0C, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71],
-            };
-
-            let mut punk: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hr = CreateStdAccessibleObject(
-                self.hwnd as HWND,
-                OBJID_CLIENT,
-                &iid_iaccessible,
-                &mut punk,
-            );
-
-            if hr != 0 || punk.is_null() {
-                return None;
-            }
-
-            let lr = LresultFromObject(&iid_iaccessible, wparam, punk as *mut _);
-
-            // Release our reference; LresultFromObject holds its own.
-            let vtable = *(punk as *mut *mut IUnknownVtbl);
-            ((*vtable).release)(punk);
-
-            Some(lr)
-        }
+        msaa_client_root(self.hwnd, wparam, lparam)
     }
 
     #[cfg(not(target_os = "windows"))]
     fn handle_wm_get_object(&mut self, _wparam: usize, _lparam: isize) -> Option<isize> {
         None
+    }
+}
+
+/// MSAA root for `WM_GETOBJECT` with `OBJID_CLIENT` on `hwnd`.
+///
+/// Returns the `LresultFromObject` value the window procedure must return, or
+/// `None` for any other object ID / a zero `hwnd` / a failed COM call (the
+/// caller then falls through to the default handling). Needs no bridge state,
+/// so a window procedure on the UI thread can call it directly — a screen
+/// reader *sends* `WM_GETOBJECT`, which never goes through the message queue
+/// winit's `with_msg_hook` sees (BUG-1627).
+#[cfg(target_os = "windows")]
+pub fn msaa_client_root(hwnd: isize, wparam: usize, lparam: isize) -> Option<isize> {
+    if lparam != OBJID_CLIENT as isize || hwnd == 0 {
+        return None;
+    }
+
+    // SAFETY: `hwnd` is a window handle the shell got from winit's
+    // raw_window_handle. CreateStdAccessibleObject is safe for any valid HWND +
+    // OBJID_CLIENT (it fails with an HRESULT otherwise). LresultFromObject adds
+    // its own reference, so we Release ours.
+    unsafe {
+        use windows_sys::Win32::UI::Accessibility::{
+            CreateStdAccessibleObject, LresultFromObject,
+        };
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::core::GUID;
+
+        // IID_IAccessible = {618736E0-3C3D-11CF-810C-00AA00389B71}
+        let iid_iaccessible = GUID {
+            data1: 0x618736E0,
+            data2: 0x3C3D,
+            data3: 0x11CF,
+            data4: [0x81, 0x0C, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71],
+        };
+
+        let mut punk: *mut std::ffi::c_void = std::ptr::null_mut();
+        let hr = CreateStdAccessibleObject(
+            hwnd as HWND,
+            OBJID_CLIENT,
+            &iid_iaccessible,
+            &mut punk,
+        );
+
+        if hr != 0 || punk.is_null() {
+            return None;
+        }
+
+        let lr = LresultFromObject(&iid_iaccessible, wparam, punk as *mut _);
+
+        // Release our reference; LresultFromObject holds its own.
+        let vtable = *(punk as *mut *mut IUnknownVtbl);
+        ((*vtable).release)(punk);
+
+        // A negative value is a failure HRESULT (e.g. COM not initialised on
+        // this thread), not an object reference: let the default handling run.
+        (lr > 0).then_some(lr)
     }
 }
 

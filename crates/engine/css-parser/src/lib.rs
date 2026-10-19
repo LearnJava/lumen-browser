@@ -68,7 +68,6 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "animation-timing-function",
     "appearance",
     "-webkit-appearance",
-    "-moz-appearance",
     "aspect-ratio",
     "backdrop-filter",
     "backface-visibility",

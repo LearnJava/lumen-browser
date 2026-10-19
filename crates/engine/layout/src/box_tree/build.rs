@@ -736,12 +736,24 @@ fn build_box_inner(
                 };
                 // Это intrinsic-подсказка, а не авторский размер (grid `stretch` у replaced
                 // растягивает именно такую ось, BUG-1311); пропорция — из размера bitmap.
-                if style.width.is_none() {
+                //
+                // BUG-1280: only when BOTH sides are `auto` — a side the author sized in CSS
+                // scales the other one along the ratio (CSS 2.1 §10.3.2/§10.6.2); pinning it
+                // to the bitmap size gave `width: 20px` on a 15×15 canvas a 20×15 box.
+                // A percentage / `calc()` with a percent can be indefinite (`height: 100%` in an
+                // auto-height parent behaves as `auto`) — those keep the bitmap-size hint.
+                let em = style.font_size;
+                let definite = |l: &Option<Length>, hint: bool| {
+                    !hint && l.as_ref().is_some_and(|l| l.resolve(em, None, viewport).is_some())
+                };
+                let width_authored = definite(&style.width, style.width_is_intrinsic_hint);
+                let height_authored = definite(&style.height, style.height_is_intrinsic_hint);
+                if style.width.is_none() && !height_authored {
                     let st = Arc::make_mut(&mut style);
                     st.width = Some(Length::Px(cw as f32 + fill_extra_w));
                     st.width_is_intrinsic_hint = true;
                 }
-                if style.height.is_none() {
+                if style.height.is_none() && !width_authored {
                     let st = Arc::make_mut(&mut style);
                     st.height = Some(Length::Px(ch as f32 + fill_extra_h));
                     st.height_is_intrinsic_hint = true;

@@ -287,9 +287,10 @@ pub(super) fn finalize_block_height(
     } else if let Some((aw, ah)) = s.aspect_ratio
         && aw > 0.0 && ah > 0.0
     {
-        // CSS Sizing L4 §6.1: height auto + aspect-ratio → derive from width.
-        // Phase 0: ratio applied in border-box space.
-        (b.rect.width * ah / aw).max(0.0)
+        // CSS Sizing L4 §6.1: height auto + aspect-ratio → derive from width. The ratio
+        // is that of the `box-sizing` box (BUG-1280: a content-box image with
+        // `padding-right: 30px; width: 70px` is 100×70, not 100×100).
+        ratio_height(s, b.rect.width, (aw, ah), em, cb, viewport, padding_top + padding_bottom)
     } else {
         // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
         // suppresses children's contribution to auto height — the box uses
@@ -306,6 +307,34 @@ pub(super) fn finalize_block_height(
         b.rect.height = ph + s.border_top_width + s.border_bottom_width;
     }
     clamp_min_max_height(b, s, em, available_height, viewport, padding_top, padding_bottom, cb);
+}
+
+/// Border-box height of a box with a preferred aspect ratio and `height: auto`, from its
+/// border-box width. The ratio relates the `box-sizing` boxes (CSS Sizing L4 §5.1), so a
+/// content-box element subtracts its horizontal frame first and adds the vertical one back
+/// (BUG-1280: `padding-right: 30px; width: 70px` on a 1:1 image is 100×70, not 100×100).
+/// Out of line to keep the `finalize_block_height` frame small (deep box chains).
+#[inline(never)]
+fn ratio_height(
+    s: &ComputedStyle,
+    border_box_width: f32,
+    (aw, ah): (f32, f32),
+    em: f32,
+    cb: f32,
+    viewport: Size,
+    padding_v: f32,
+) -> f32 {
+    let (frame_h, frame_v) = match s.box_sizing {
+        BoxSizing::ContentBox => (
+            s.padding_left.resolve_or_zero(em, cb, viewport)
+                + s.padding_right.resolve_or_zero(em, cb, viewport)
+                + s.border_left_width
+                + s.border_right_width,
+            padding_v + s.border_top_width + s.border_bottom_width,
+        ),
+        BoxSizing::BorderBox => (0.0, 0.0),
+    };
+    ((border_box_width - frame_h).max(0.0) * ah / aw + frame_v).max(0.0)
 }
 
 /// CSS 2.1 §10.4: clamp the border-box height to [min-height, max-height]. Симметрия с width:

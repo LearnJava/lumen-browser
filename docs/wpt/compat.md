@@ -35,7 +35,7 @@
 | id | результат | строка CSS-SPECS / BUG |
 |---|---|---|
 | `css-style-declaration-alias-enumeration` | 51/51 | CSS-SPECS.md:781 (`-webkit-*` алиасы, COMPAT-CSS-ALIAS) |
-| `webkit-mask-box-enumeration` | 0/6 | [BUG-1631](../../bugs/BUG-1631-OPEN.md) (`webkitMaskBoxImage*`) |
+| `webkit-mask-box-enumeration` | 6/6 | [BUG-1631](../../bugs/BUG-1631-FIXED.md) (`webkitMaskBoxImage*`, 2026-10-19) |
 | `idlharness.window` | 23/29 (`window.orientation`, `onorientationchange` у Window и HTMLBodyElement) | [BUG-1632](../../bugs/BUG-1632-OPEN.md) |
 | `webkit-box-item-shrink-001` 15/20 (подтесты 3, 9, 11, 13, 20), `-002` 16/18 (3, 11) | | CSS-SPECS.md:785 (legacy flexbox: нет «no automatic minimum size» у `input`/`textarea`/`select`/`iframe`/`video`) |
 | `webkit-text-fill-color-property-001a/b/c/d, 002, 004, 006` (reftest FAIL); `webkit-text-fill-color-currentColor` 0/1 | | CSS-SPECS.md:786 (`-webkit-text-fill-color`) |

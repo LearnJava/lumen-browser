@@ -1,6 +1,6 @@
 # BUG-1288 — CPU-растр отбрасывает содержимое `PushTransform`, лежащее до трансформации вне полотна (отрицательные и слишком большие локальные координаты)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 5, `css/css-transforms`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs`, ветка `DisplayCommand::PushTransform` — слой того же размера, что полотно, в локальных координатах)
 
@@ -40,3 +40,20 @@ WPT-RUN-14 срез 5: 41 упавший reftest `css/css-transforms` содер
 
 `css/css-transforms/group/svg-transform-group-007.html`, `svg-transform-nested-0{15,17,26,27,29}.html`,
 `rotate/svg-rotate-3args-002.html`; плюс графический тест на `translate` блока, чья позиция до трансформации вне полотна.
+
+## Исправление
+
+`cpu_raster.rs::render_offcanvas_transform_group`: если габарит содержимого группы `PushTransform` (`group_ink_bbox`)
+не лежит целиком в `0..W × 0..H`, группа рисуется отдельным вызовом растеризатора (`rasterize_cpu_pixmap`) в
+прозрачный слой по её собственному габариту — видимая часть полотна, пересчитанная обратной матрицей, ∩ габарит
+содержимого (+64 px на размытие). Команды сдвигаются на целое смещение начала слоя (`DisplayCommand::translated`,
+`display_list/translate.rs`; матрицы вложенных `PushTransform` сопрягаются сдвигом), внешний clip передаётся
+префиксным `PushClipRect`, а на композите смещение возвращается в матрицу (`t.pre_translate`). Группа целиком в
+полотне идёт прежним путём — картинка побитово та же. Необратимая матрица и слой больше 64 Мпикс — тоже прежний путь.
+
+Не затронуто: `PushScrollLayer` со сдвигом рисует так же в слой размером с полотно (тот же класс дефекта, но другой
+путь кода); живое окно (wgpu) не проверялось.
+
+Тесты: `cpu_raster::tests::transform_group_beyond_canvas_right_edge_is_drawn`,
+`transform_group_with_negative_local_coords_is_drawn`, `rotated_group_with_partly_negative_local_coords_is_whole`,
+`display_list::translate::tests::rect_and_nested_matrix_shift`.

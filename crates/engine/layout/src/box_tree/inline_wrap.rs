@@ -1382,9 +1382,117 @@ pub(crate) struct LineGrowth {
     pub bottom: f32,
 }
 
+/// CSS 2.1 §10.8.1 — высота и baseline строк текстового рана по их фрагментам (BUG-1281).
+///
+/// Inline-бокс фрагмента с `vertical-align: baseline` тянется от baseline вверх на
+/// `ascent + half-leading` и вниз на `descent + half-leading` СВОЕГО шрифта; line box доходит
+/// до самого высокого верха и самого низкого низа среди них и strut-а блока. Раскладка у
+/// рана остаётся равномерной (paint, selection и hit-test умножают индекс строки на
+/// `used_line_height`), поэтому общая высота строки — максимум по строкам рана, а строка
+/// короче максимума получает запас снизу. Ascent берётся тем же способом, каким paint ставит
+/// baseline в прямоугольнике текста (`ascent_px_with_families`), так что фрагменты разных
+/// кеглей садятся на одну базовую линию.
+pub(crate) struct BaselineFit<'a> {
+    m: &'a dyn TextMeasurer,
+    strut: &'a ComputedStyle,
+    strut_ascent: f32,
+    /// `used_line_height` блока без роста — от него отсчитывается `grow`.
+    pub(crate) base: f32,
+    /// Насколько самая высокая строка рана выше `base` (0.0 — строки не выросли).
+    pub(crate) grow: f32,
+    /// Опускание baseline строки относительно baseline strut-а блока.
+    shifts: Vec<f32>,
+}
+
+impl<'a> BaselineFit<'a> {
+    pub(crate) fn new(
+        lines: &[Vec<InlineFrag>],
+        strut: &'a ComputedStyle,
+        base: f32,
+        m: &'a dyn TextMeasurer,
+    ) -> Self {
+        let fs = strut.font_size;
+        let strut_ascent = m.ascent_px_with_families(fs, &strut.font_family);
+        let strut_lead = (base - fs) / 2.0;
+        let strut_top = strut_ascent + strut_lead;
+        let strut_bottom = fs - strut_ascent + strut_lead;
+        let mut fit = Self { m, strut, strut_ascent, base, grow: 0.0, shifts: Vec::new() };
+        let mut tallest = 0.0_f32;
+        for line in lines {
+            let (mut top, mut bottom) = (strut_top, strut_bottom);
+            for frag in line {
+                // Картинки и пустые куски боксов — высота неизвестна; не-baseline
+                // выравнивание от baseline не зависит.
+                if frag.img_src.is_some()
+                    || frag.text.is_empty()
+                    || frag.style.vertical_align != VerticalAlign::Baseline
+                    || fit.same_font_as_strut(&frag.style)
+                {
+                    continue;
+                }
+                let ffs = frag.style.font_size;
+                let ascent = fit.ascent_of(&frag.style);
+                let lead = (super::entry::used_line_height_px(&frag.style, m) - ffs) / 2.0;
+                top = top.max(ascent + lead);
+                bottom = bottom.max(ffs - ascent + lead);
+            }
+            fit.shifts.push(top - strut_top);
+            tallest = tallest.max(top + bottom);
+        }
+        // Погрешность суммы `ascent + descent` против `base` не должна растить блок.
+        if tallest > base + 0.01 {
+            fit.grow = tallest - base;
+        }
+        fit
+    }
+
+    fn same_font_as_strut(&self, st: &ComputedStyle) -> bool {
+        st.font_size == self.strut.font_size
+            && st.line_height == self.strut.line_height
+            && st.line_height_is_normal == self.strut.line_height_is_normal
+            && st.font_family == self.strut.font_family
+    }
+
+    fn ascent_of(&self, st: &ComputedStyle) -> f32 {
+        if self.same_font_as_strut(st) {
+            self.strut_ascent
+        } else {
+            self.m.ascent_px_with_families(st.font_size, &st.font_family)
+        }
+    }
+}
+
+/// Вертикальная раскладка строк текстового рана целиком (CSS Rhythmic Sizing L1 §2 для шага
+/// строки + CSS 2.1 §10.8.1 для роста по фрагментам, BUG-1281). Вынесена из `lay_out` в
+/// отдельную функцию, чтобы не раздувать её кадр: глубокие цепочки боксов упираются в стек.
+///
+/// При `fit_fragments` строки подгоняются под фрагменты других кеглей, а `used_line_height`
+/// рана перезаписывается высотой самой высокой строки; база берётся свежей из стиля, а не из
+/// `used_line_height` — тот мог вырасти в прошлом проходе раскладки этого же бокса.
+#[inline(never)]
+pub(crate) fn align_run_vertically(
+    lines: &mut [Vec<InlineFrag>],
+    s: &ComputedStyle,
+    used_line_height: &mut f32,
+    m: &dyn TextMeasurer,
+    grow: bool,
+    fit_fragments: bool,
+) -> LineGrowth {
+    let fit = (grow && fit_fragments)
+        .then(|| BaselineFit::new(lines, s, super::entry::used_line_height_px(s, m), m));
+    if let Some(f) = &fit {
+        *used_line_height = f.base + f.grow;
+    }
+    let line_h = step_line_height(*used_line_height, s.line_height_step);
+    apply_inline_vertical_align(lines, line_h, grow, fit.as_ref())
+}
+
 /// CSS 2.1 §10.8 — применяет вертикальное выравнивание к inline-фрагментам.
 /// Записывает `y_offset` (смещение от верхнего края line-box, вниз — положительное).
-/// `line_h` = font_size * line_height контейнера.
+/// `line_h` = font_size * line_height контейнера (при `fit` — с учётом роста строк).
+///
+/// `fit` (BUG-1281): baseline-фрагменты садятся на общую базовую линию строки, а не
+/// центрируются; сдвиг строки из-за более высокого соседа получают и displaced-фрагменты.
 ///
 /// Half-leading (§10.8.1): когда line-height > content-area, разница делится пополам
 /// и добавляется выше и ниже content-area. Для `baseline` — фрагмент сдвигается вниз
@@ -1400,6 +1508,7 @@ pub(crate) fn apply_inline_vertical_align(
     lines: &mut [Vec<InlineFrag>],
     line_h: f32,
     grow: bool,
+    fit: Option<&BaselineFit<'_>>,
 ) -> LineGrowth {
     let mut growth = LineGrowth::default();
     let last = lines.len().saturating_sub(1);
@@ -1409,7 +1518,15 @@ pub(crate) fn apply_inline_vertical_align(
             let frag_h = frag.style.font_size;
             // CSS 2.1 §10.8.1: half-leading pushes content area away from line-box edges.
             // Отрицательное при line-height < content area — глиф выступает над строкой.
-            let half_leading = (line_h - frag_h) / 2.0;
+            let mut half_leading = (line_h - frag_h) / 2.0;
+            let mut baseline_y = half_leading;
+            if let Some(f) = fit {
+                // Строка опущена из-за более высокого соседа; запас роста — снизу строки.
+                let adj = f.shifts[idx] - f.grow / 2.0;
+                half_leading += adj;
+                baseline_y = (line_h - f.strut.font_size) / 2.0 + adj
+                    + (f.strut_ascent - f.ascent_of(&frag.style));
+            }
             // sub/super не растят строку: их сдвиг — эвристика от кегля, а не метрика шрифта.
             let displaced = matches!(
                 frag.style.vertical_align,
@@ -1417,7 +1534,7 @@ pub(crate) fn apply_inline_vertical_align(
             );
             frag.y_offset = match frag.style.vertical_align {
                 // Baseline: content area centred via half-leading (top = half_leading).
-                VerticalAlign::Baseline => half_leading,
+                VerticalAlign::Baseline => baseline_y,
                 // Top/TextTop: fragment top-aligned to line-box top edge.
                 VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
                 // Bottom/TextBottom: fragment bottom-aligned to line-box bottom edge.

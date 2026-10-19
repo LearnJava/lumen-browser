@@ -148,8 +148,8 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "unicode-bidi" => {
-            // CSS Writing Modes L4 §2.2. Legacy `-webkit-`/`-moz-` префиксы
-            // изолятов принимаются как алиасы — их до сих пор пишут в CSS
+            // CSS Writing Modes L4 §2.2. Legacy `-webkit-` префикс
+            // изолятов принимается как алиас — его до сих пор пишут в CSS
             // локализованных страниц. Невалидное значение оставляет прежнее.
             let v = val.trim();
             if let Some(parsed) = match_unicode_bidi(v) {

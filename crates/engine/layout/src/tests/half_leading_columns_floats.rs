@@ -1044,7 +1044,7 @@ fn min_fit_content_keywords_parsed() {
 fn stretch_keywords_parse_to_stretch() {
     use crate::style::Length;
     let vp = Size { width: 800.0, height: 600.0 };
-    for kw in ["stretch", "-webkit-fill-available", "-moz-available"] {
+    for kw in ["stretch", "-webkit-fill-available"] {
         let sheet = lumen_css_parser::parse(&format!(".x {{ width: {kw}; height: {kw}; }}"));
         let doc = lumen_html_parser::parse("<div class='x'>a</div>");
         let children = doc.get(doc.body().unwrap()).children.clone();

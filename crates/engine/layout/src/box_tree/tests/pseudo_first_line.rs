@@ -1519,6 +1519,34 @@ fn quotes_none_suppresses_marks() {
     );
 }
 
+/// BUG-1598 — HTML rendering §15.3.7: `q` gets its marks from the UA sheet, with no author rule.
+#[test]
+fn bug1598_q_gets_ua_quotes_without_author_rule() {
+    let layout_text = |html: &str, css: &str| {
+        let root = super::super::layout(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        super::collect_seg_text(&root, &mut text);
+        text
+    };
+    let plain = layout_text("<p>A <q>x</q></p>", "");
+    assert!(plain.contains('\u{201C}') && plain.contains('\u{201D}'), "UA q marks: {plain:?}");
+    // Nesting depth is tracked with no sheet-level quote content at all.
+    let nested = layout_text("<p><q>a <q>b</q></q></p>", "p{color:red}");
+    assert!(nested.contains('\u{2018}') && nested.contains('\u{2019}'), "nested q: {nested:?}");
+    // Author rules still win: `content:none` removes the mark, `quotes:none` empties it.
+    let none = layout_text("<p>A <q>x</q></p>", "q::before,q::after{content:none}");
+    assert!(!none.contains('\u{201C}'), "content:none: {none:?}");
+    let no_quotes = layout_text("<p>A <q>x</q></p>", "q{quotes:none}");
+    assert!(!no_quotes.contains('\u{201C}'), "quotes:none: {no_quotes:?}");
+    // Other elements get nothing.
+    let span = layout_text("<p>A <span>x</span></p>", "");
+    assert!(!span.contains('\u{201C}'), "span: {span:?}");
+}
+
 /// Concatenates the post-`wrap_inline_run` fragment text of every InlineRun
 /// in document order. Unlike `collect_seg_text` (pre-wrap segments), this
 /// reflects how adjacent inline boxes were joined — tightly or with a single

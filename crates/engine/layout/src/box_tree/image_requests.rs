@@ -301,13 +301,27 @@ pub fn apply_intrinsic_size(
         ),
         _ => (width, height),
     };
-    let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
+    let NodeData::Element { attrs, .. } = &doc.get(node_id).data else {
         return false;
     };
     // Presence of the author's width/height content attributes (any value —
     // including percentages — counts as "set" and must never be duplicated).
     let has_w = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
     let has_h = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
+    // BUG-1280: no author attribute at all — the decoded size is the image's
+    // *natural* size, not a `width`/`height` hint. As attributes it became a
+    // presentational `width: Npx; height: Npx` pair, so authored CSS on one
+    // side (`height: 50px`) left the other pinned at the raw pixels instead of
+    // following the ratio (CSS 2.1 §10.3.2, §10.6.2). Keep it in the document
+    // side table (as for `<object>`/`<embed>`); `resolve_image_source` hands it
+    // to layout as the intrinsic size.
+    if !has_w && !has_h {
+        let url = resolve_image_source(doc, node_id, viewport).url;
+        return doc.set_embedded_image(node_id, &url, width, height);
+    }
+    let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
+        return false;
+    };
     // Author values parsed as non-negative integer px (HTML dimension-attr
     // grammar). `None` when absent OR non-integer (e.g. `width="50%"`).
     let attr_w = attrs
@@ -477,6 +491,21 @@ fn image_subresource_url(node: &lumen_dom::Node) -> Option<String> {
 /// picker пропускает `<source type="image/webp">` и аналогичные пока
 /// неподдерживаемые форматы вместо того чтобы выбирать их и показывать пустую коробку.
 pub(crate) fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> ImageSource {
+    let mut src = pick_image_source(doc, img_id, viewport);
+    // BUG-1280: the decoded size of an `<img>` without `width`/`height`
+    // attributes lives in the document side table (`apply_intrinsic_size`).
+    // Entries keyed by another URL are stale and ignored.
+    if src.intrinsic_width.is_none()
+        && src.intrinsic_height.is_none()
+        && let Some((_, w, h)) = doc.embedded_image(img_id, &src.url)
+    {
+        src.intrinsic_width = Some(w);
+        src.intrinsic_height = Some(h);
+    }
+    src
+}
+
+fn pick_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> ImageSource {
     // OBJECT-1: `<object>`/`<embed>` без srcset/picture — URL из `data`/`src`,
     // intrinsic-размер из декодированной картинки.
     if let Some((url, w, h)) = embedded_image(doc, img_id) {
