@@ -446,12 +446,68 @@ pub(crate) fn is_closed_popover(doc: &Document, id: NodeId) -> bool {
     node.get_attr("popover").is_some() && node.get_attr("data-lumen-popover-open").is_none()
 }
 
-/// Parses a float attribute from the given element; returns 0.0 if absent or non-numeric.
-fn svg_attr_f32(doc: &Document, id: NodeId, attr: &str) -> f32 {
-    doc.get(id)
-        .get_attr(attr)
-        .and_then(|v| v.trim().parse::<f32>().ok())
-        .unwrap_or(0.0)
+/// Which reference extent a `%` in an SVG geometry attribute resolves against (SVG 2 §8.9).
+#[derive(Clone, Copy)]
+enum SvgAxis {
+    /// `x`, `cx`, `x1`, `x2`, `width`, `rx` — the viewport width.
+    X,
+    /// `y`, `cy`, `y1`, `y2`, `height`, `ry` — the viewport height.
+    Y,
+    /// `r` — the normalized diagonal `sqrt((w² + h²) / 2)`.
+    Diagonal,
+}
+
+/// Context for reading `<length-percentage>` geometry attributes of one SVG element:
+/// `em` from the element's own font size, `%` against the nearest viewport.
+#[derive(Clone, Copy)]
+struct SvgLenCtx<'a> {
+    doc: &'a Document,
+    id: NodeId,
+    em: f32,
+    viewport: Size,
+    /// CSS-px size of the root `<svg>` — the `%` basis when no ancestor `<svg>` has a `viewBox`.
+    own_svg_size: Size,
+}
+
+impl SvgLenCtx<'_> {
+    /// Parses a geometry attribute; returns 0.0 if absent or invalid. A bare number (and `px`)
+    /// is a user unit; `%`, `em`, `rem` and the other CSS units resolve through the CSS
+    /// `<length>` parser. BUG-1287: a suffixed value used to fail `f32::parse` and become 0.
+    fn len(&self, attr: &str, axis: SvgAxis) -> f32 {
+        let Some(raw) = self.doc.get(self.id).get_attr(attr) else { return 0.0 };
+        let raw = raw.trim();
+        if let Ok(v) = raw.parse::<f32>() {
+            return v;
+        }
+        let Some(len) = crate::style::parse_length(raw) else { return 0.0 };
+        let basis = if matches!(len, crate::style::Length::Percent(_)) {
+            let vp = self.percent_basis();
+            Some(match axis {
+                SvgAxis::X => vp.width,
+                SvgAxis::Y => vp.height,
+                SvgAxis::Diagonal => ((vp.width * vp.width + vp.height * vp.height) * 0.5).sqrt(),
+            })
+        } else {
+            None
+        };
+        len.resolve(self.em, basis, self.viewport).unwrap_or(0.0)
+    }
+
+    /// The viewport `%` resolves against: the `viewBox` of the nearest ancestor `<svg>` that has
+    /// one (user units), else the root `<svg>`'s CSS size.
+    fn percent_basis(&self) -> Size {
+        let mut cur = self.doc.get(self.id).parent;
+        while let Some(pid) = cur {
+            let node = self.doc.get(pid);
+            if node.element_name().is_some_and(|n| n.local.as_str() == "svg")
+                && let Some(vb) = parse_view_box(self.doc, pid)
+            {
+                return Size { width: vb.width, height: vb.height };
+            }
+            cur = node.parent;
+        }
+        self.own_svg_size
+    }
 }
 
 // ─── SVG paint servers (LIB-5) ─────────────────────────────────────────────
@@ -1138,6 +1194,7 @@ fn process_svg_node(
         resolve_svg_paint_url(doc, &mut s.svg_stroke);
     }
     let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+    let lc = SvgLenCtx { doc, id: child_id, em: style.font_size, viewport, own_svg_size };
 
     match name.local.as_str() {
         "rect" => {
@@ -1146,12 +1203,12 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Rect {
-                        x: svg_attr_f32(doc, child_id, "x"),
-                        y: svg_attr_f32(doc, child_id, "y"),
-                        width: svg_attr_f32(doc, child_id, "width"),
-                        height: svg_attr_f32(doc, child_id, "height"),
-                        rx: svg_attr_f32(doc, child_id, "rx"),
-                        ry: svg_attr_f32(doc, child_id, "ry"),
+                        x: lc.len("x", SvgAxis::X),
+                        y: lc.len("y", SvgAxis::Y),
+                        width: lc.len("width", SvgAxis::X),
+                        height: lc.len("height", SvgAxis::Y),
+                        rx: lc.len("rx", SvgAxis::X),
+                        ry: lc.len("ry", SvgAxis::Y),
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
@@ -1169,9 +1226,9 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Circle {
-                        cx: svg_attr_f32(doc, child_id, "cx"),
-                        cy: svg_attr_f32(doc, child_id, "cy"),
-                        r: svg_attr_f32(doc, child_id, "r"),
+                        cx: lc.len("cx", SvgAxis::X),
+                        cy: lc.len("cy", SvgAxis::Y),
+                        r: lc.len("r", SvgAxis::Diagonal),
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
@@ -1188,10 +1245,10 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Ellipse {
-                        cx: svg_attr_f32(doc, child_id, "cx"),
-                        cy: svg_attr_f32(doc, child_id, "cy"),
-                        rx: svg_attr_f32(doc, child_id, "rx"),
-                        ry: svg_attr_f32(doc, child_id, "ry"),
+                        cx: lc.len("cx", SvgAxis::X),
+                        cy: lc.len("cy", SvgAxis::Y),
+                        rx: lc.len("rx", SvgAxis::X),
+                        ry: lc.len("ry", SvgAxis::Y),
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
@@ -1208,10 +1265,10 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Line {
-                        x1: svg_attr_f32(doc, child_id, "x1"),
-                        y1: svg_attr_f32(doc, child_id, "y1"),
-                        x2: svg_attr_f32(doc, child_id, "x2"),
-                        y2: svg_attr_f32(doc, child_id, "y2"),
+                        x1: lc.len("x1", SvgAxis::X),
+                        y1: lc.len("y1", SvgAxis::Y),
+                        x2: lc.len("x2", SvgAxis::X),
+                        y2: lc.len("y2", SvgAxis::Y),
                     },
                     svg_transform: svg_transform.clone(),
                     svg_paint_matrix: SvgTransform::identity(),
@@ -1250,10 +1307,10 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, style,
                 kind: BoxKind::SvgText {
                     text,
-                    x: svg_attr_f32(doc, child_id, "x"),
-                    y: svg_attr_f32(doc, child_id, "y"),
-                    dx: svg_attr_f32(doc, child_id, "dx"),
-                    dy: svg_attr_f32(doc, child_id, "dy"),
+                    x: lc.len("x", SvgAxis::X),
+                    y: lc.len("y", SvgAxis::Y),
+                    dx: lc.len("dx", SvgAxis::X),
+                    dy: lc.len("dy", SvgAxis::Y),
                     text_anchor,
                     dominant_baseline,
                     baseline_shift,
@@ -1295,8 +1352,8 @@ fn process_svg_node(
             }
 
             // Build the combined transform: <use transform="..."> then translate(x, y).
-            let use_x = svg_attr_f32(doc, child_id, "x");
-            let use_y = svg_attr_f32(doc, child_id, "y");
+            let use_x = lc.len("x", SvgAxis::X);
+            let use_y = lc.len("y", SvgAxis::Y);
             let mut combined = svg_transform.clone();
             if use_x != 0.0 || use_y != 0.0 {
                 combined.compose(&SvgTransform::translate(use_x, use_y));
@@ -1328,9 +1385,9 @@ fn process_svg_node(
                 // CSS-resolved viewport (SVG 2 §5.7/§7.10 "100% of current viewport"),
                 // not the target's viewBox dims (that was the BUG-246-era identity bug).
                 let attr_dim = |id: NodeId, attr: &str| -> Option<f32> {
-                    doc.get(id).get_attr(attr)
-                        .and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok())
-                        .filter(|d| *d > 0.0)
+                    let axis = if attr == "width" { SvgAxis::X } else { SvgAxis::Y };
+                    doc.get(id).get_attr(attr)?;
+                    Some(SvgLenCtx { id, ..lc }.len(attr, axis)).filter(|d| *d > 0.0)
                 };
                 let vp_w = attr_dim(child_id, "width")
                     .or_else(|| attr_dim(target_id, "width"))
