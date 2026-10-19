@@ -1650,6 +1650,9 @@ pub(super) fn dispatch_box(
             });
             let mut children: Vec<LayoutBox> = Vec::with_capacity(orig_children.len());
             let mut metrics: Vec<(f32, f32)> = Vec::with_capacity(orig_children.len());
+            // (child index, dx, dy): `position: relative` offsets taken off the
+            // children while the row is laid out, re-applied after phase 2.
+            let mut rel_offsets: Vec<(usize, f32, f32)> = Vec::new();
             // rows: (row_y, above, below, Vec<child_index>)
             let mut rows: Vec<(f32, f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
@@ -1756,6 +1759,11 @@ pub(super) fn dispatch_box(
                     metrics.push((0.0, 0.0));
                     continue;
                 }
+                // CSS Positioned Layout L3 §9.4.3: the child's own layout already
+                // applied its `position: relative` offset, but the row must flow
+                // from the unshifted box (neighbours, line height) and phase 2
+                // re-places it on y; the offset is put back after phase 2.
+                let mut rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
 
                 // IFC-4: split a run that wrapped past line 0 while sharing its
                 // row with preceding content — everything after line 0 forms
@@ -1906,9 +1914,13 @@ pub(super) fn dispatch_box(
                     cur_x = content_x;
                     row_has_baseline = false;
                     lay_out(&mut child, cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
+                    rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
                     advance = child.rect.width;
                 }
                 let idx = children.len();
+                if rel != (0.0, 0.0) {
+                    rel_offsets.push((idx, rel.0, rel.1));
+                }
                 let child_x = child.rect.x;
                 children.push(child);
                 cur_row.push(idx);
@@ -2029,6 +2041,9 @@ pub(super) fn dispatch_box(
                 // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
                 // above. Fractional dy causes 0.99% deviation vs Edge (BUG-081).
                 shift_y_box(&mut b.children[idx], dy.round());
+            }
+            for (idx, dx, dy) in rel_offsets {
+                shift_tree(&mut b.children[idx], dx, dy);
             }
         }
         // GAP-RUBYBOX: base/annotation sub-boxes were already laid out (as
@@ -2205,6 +2220,17 @@ pub(super) fn finish_after_match(
     // bottom/left) are resolved from ComputedStyle in lib.rs::collect_sticky_rec()
     // after this pass. P3 calls collect_sticky_boxes() + compute_sticky_offset() to
     // apply scroll-driven paint transforms at render time.
+}
+
+/// Takes the `position: relative` offset that `finish_after_match` applied off
+/// `child` again and returns it, so a line-box layout can flow from the
+/// unshifted position (§9.4.3) and re-apply the offset once the box is placed.
+fn unshift_relative(child: &mut LayoutBox, cb: f32, viewport: Size) -> (f32, f32) {
+    let (dx, dy) = relative_offset(&child.style, child.style.font_size, cb, viewport);
+    if dx != 0.0 || dy != 0.0 {
+        shift_tree(child, -dx, -dy);
+    }
+    (dx, dy)
 }
 
 /// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` от `left/right/top/bottom`.
