@@ -498,6 +498,7 @@ mod table_height;
 mod table_shrink_to_fit;
 mod table_valign;
 mod atomic_text_align;
+mod nowrap_atomic_inline;
 mod table_blockify;
 mod table_anon;
 mod table_collapse_fixed;

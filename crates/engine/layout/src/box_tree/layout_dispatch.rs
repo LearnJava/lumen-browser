@@ -1886,7 +1886,11 @@ pub(super) fn dispatch_box(
                 };
                 let child_right = child.rect.x + advance + child_mr;
 
-                if !is_run && child_right > content_x + content_width && cur_x > content_x {
+                // CSS Text L3 §5.1: `white-space: nowrap` / `text-wrap-mode: nowrap`
+                // forbid soft breaks between atomic inlines as well (BUG-1284).
+                let row_nowrap = b.style.white_space.is_nowrap()
+                    || b.style.text_wrap_mode == TextWrapMode::Nowrap;
+                if !is_run && !row_nowrap && child_right > content_x + content_width && cur_x > content_x {
                     let (above, below) =
                         line_metrics(&children, &metrics, &cur_row, row_has_baseline);
                     rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
