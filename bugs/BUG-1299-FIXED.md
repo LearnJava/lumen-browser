@@ -23,7 +23,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 6: `background-repeat-space-*.html`, `background-repeat-round-*.html`, `background-repeat/*.xht` — 23 reftest, 14 из них с двухзначным значением в исходнике (остальные — округление `round`, пересекается с [BUG-1303](BUG-1303-OPEN.md)). Тест 147 (`space`) зелёный; `parsing/background-repeat-*` — в [BUG-1297](BUG-1297-OPEN.md); `round` с `origin` ≠ `border-box` — [BUG-1303](BUG-1303-OPEN.md).
+WPT-RUN-14 срез 6: `background-repeat-space-*.html`, `background-repeat-round-*.html`, `background-repeat/*.xht` — 23 reftest, 14 из них с двухзначным значением в исходнике (остальные — округление `round`, пересекается с [BUG-1303](BUG-1303-FIXED.md)). Тест 147 (`space`) зелёный; `parsing/background-repeat-*` — в [BUG-1297](BUG-1297-OPEN.md); `round` с `origin` ≠ `border-box` — [BUG-1303](BUG-1303-FIXED.md).
 
 ## Что делать
 

@@ -146,6 +146,9 @@ impl FemtovgBackend {
         if tile_w <= 0.0 || tile_h <= 0.0 {
             return;
         }
+        // BUG-1303: сетка покрывает и полосу painting area перед origin box.
+        let tile_x_start = extend_start_to_paint_area(tile_x_start, step_x, repeat_x, rect.x);
+        let tile_y_start = extend_start_to_paint_area(tile_y_start, step_y, repeat_y, rect.y);
 
         // Разрешаем текстуру под размер плитки (area-averaged downscale при
         // уменьшении, как в draw_image_in_rect — BUG-077).

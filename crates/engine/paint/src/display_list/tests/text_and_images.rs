@@ -77,6 +77,18 @@
         assert!(split_mixed_runs("").is_empty());
     }
 
+    // BUG-1303: the repeating grid is extended back over the painting area.
+    #[test]
+    fn extend_start_to_paint_area_steps_back_to_cover_area() {
+        use crate::display_list::extend_start_to_paint_area as ext;
+        // Origin box starts at 40, painting area at 0, tile step 15 → 40-3*15 = -5.
+        assert!((ext(40.0, 15.0, true, 0.0) - -5.0).abs() < 1e-3);
+        // Already at/before the painting edge, or non-repeating: unchanged.
+        assert!((ext(0.0, 15.0, true, 0.0)).abs() < 1e-3);
+        assert!((ext(-5.0, 15.0, true, 0.0) - -5.0).abs() < 1e-3);
+        assert!((ext(40.0, 15.0, false, 0.0) - 40.0).abs() < 1e-3);
+    }
+
     // ── CSS Backgrounds L3 §3.4: `background-repeat: round` tile rescale ────
     #[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
     #[test]

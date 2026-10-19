@@ -56,7 +56,7 @@ use lumen_core::geom::Rect;
 use crate::backend::{RenderBackend, RenderError};
 use crate::blend_modes::mix_blend_rgba;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
-use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, bg_tile_geometry, fit_image_rect};
+use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, bg_tile_geometry, extend_start_to_paint_area, fit_image_rect};
 use crate::gradient_math::{conic_sample_t, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 
