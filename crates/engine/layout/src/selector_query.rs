@@ -825,6 +825,51 @@ pub(crate) fn opacity_to_css(v: f32) -> String {
 /// shared with `AnimationFrame::to_computed_style_patches` (GAP-CSSANIM
 /// срез 3) so a live interpolated `transform` reads back identically to a
 /// static one.
+/// Key under which the snapshot keeps a box's `transform` as a function list
+/// (`translate(200px, 0px) rotate(12.566371rad)`) next to the resolved `matrix()` —
+/// under [`COMPUTED_VALUE_KEY_PREFIX`](crate::resolved_geometry::COMPUTED_VALUE_KEY_PREFIX),
+/// so it is not a property to any reader.
+pub const TRANSFORM_LIST_KEY: &str = "computed:-lumen-transform-list";
+
+/// A transform list as text `parse_transform_list` reads back exactly: angles stay in
+/// radians (the parser's unit, an f32 round-trip), lengths keep their units.
+pub(crate) fn transform_fns_to_list_css(list: &[TransformFn]) -> String {
+    let px = |v: f32| px_str(v);
+    let rad = |v: f32| format!("{v}rad");
+    list.iter()
+        .map(|f| match f {
+            TransformFn::Translate(x, y) => format!("translate({}, {})", px(*x), px(*y)),
+            TransformFn::TranslateX(x) => format!("translateX({})", px(*x)),
+            TransformFn::TranslateY(y) => format!("translateY({})", px(*y)),
+            TransformFn::TranslateZ(z) => format!("translateZ({})", px(*z)),
+            TransformFn::Translate3d(x, y, z) => format!("translate3d({}, {}, {})", px(*x), px(*y), px(*z)),
+            TransformFn::TranslateLp(x, y, z) => {
+                format!("translate3d({}, {}, {})", length_to_css(x), length_to_css(y), px(*z))
+            }
+            TransformFn::Rotate(a) => format!("rotate({})", rad(*a)),
+            TransformFn::RotateX(a) => format!("rotateX({})", rad(*a)),
+            TransformFn::RotateY(a) => format!("rotateY({})", rad(*a)),
+            TransformFn::RotateZ(a) => format!("rotateZ({})", rad(*a)),
+            TransformFn::Rotate3d(x, y, z, a) => format!("rotate3d({x}, {y}, {z}, {})", rad(*a)),
+            TransformFn::Scale(x, y) => format!("scale({x}, {y})"),
+            TransformFn::ScaleX(x) => format!("scaleX({x})"),
+            TransformFn::ScaleY(y) => format!("scaleY({y})"),
+            TransformFn::ScaleZ(z) => format!("scaleZ({z})"),
+            TransformFn::Scale3d(x, y, z) => format!("scale3d({x}, {y}, {z})"),
+            TransformFn::SkewX(a) => format!("skewX({})", rad(*a)),
+            TransformFn::SkewY(a) => format!("skewY({})", rad(*a)),
+            TransformFn::Matrix(v) => {
+                format!("matrix({})", v.iter().map(f32::to_string).collect::<Vec<_>>().join(", "))
+            }
+            TransformFn::Matrix3d(v) => {
+                format!("matrix3d({})", v.iter().map(f32::to_string).collect::<Vec<_>>().join(", "))
+            }
+            TransformFn::Perspective(d) => format!("perspective({})", px(*d)),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
     if list.is_empty() {
         return "none".into();
@@ -1758,6 +1803,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Transform / filter ───────────────────────────────────────
     m.insert("transform".into(), transform_list_to_css(&style.transform));
+    // BUG-1293: the function list itself (the matrix above is the resolved value and loses
+    // `rotate(720deg)`, `translateY(70%)`): CSS Transitions/Animations interpolate lists.
+    if !style.transform.is_empty() {
+        m.insert(TRANSFORM_LIST_KEY.into(), transform_fns_to_list_css(&style.transform));
+    }
     m.insert("filter".into(), if style.filter.is_empty() {
         "none".into()
     } else {

@@ -535,7 +535,7 @@ fn interpolate_length(from: &Length, to: &Length, t: f32) -> Option<Length> {
 /// Интерполяция `<length-percentage>` в `translate*()`: одноимённые единицы —
 /// покомпонентно, разные (`50%` ↔ `10px`) — через `calc(a·(1−t) + b·t)`,
 /// который резолвится против reference box при построении матрицы.
-fn blend_length(from: &Length, to: &Length, t: f32) -> Length {
+pub(crate) fn blend_length(from: &Length, to: &Length, t: f32) -> Length {
     use crate::style::CalcNode;
     if let Some(l) = interpolate_length(from, to, t) {
         return l;
