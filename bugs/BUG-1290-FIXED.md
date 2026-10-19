@@ -1,6 +1,6 @@
 # BUG-1290 — CPU-растр сплющивает 3D-матрицу `PushTransform` до 2D-аффинной: `perspective`, `translateZ`, `rotateX/Y` рисуются неверно
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 5, `css/css-transforms`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs`, `PushTransform` → `matrix_util::mat4_to_2d_affine` отбрасывает z-строку и деление на w)
 
@@ -35,3 +35,21 @@ tiny-skia умеет только аффинные `Transform`, нужен св�
 
 `css/css-transforms/transform3d-perspective-006.html` (50×50 в `padding:25px`, ожидается `lime`-квадрат 100×100),
 `transform3d-preserve3d-009.html`, `perspective-origin-004.html`; `run_corpus.py --prefixes css/css-transforms`.
+
+## Исправление (2026-10-19)
+
+`PushTransform` с не-2D-аффинной матрицей композитится как гомография плоскости `z = 0`
+(`crates/engine/paint/src/cpu_projective.rs`: матрица 3×3 из столбцов/строк 0, 1, 3 `Mat4`, обратный выборщик
+с билинейной фильтрацией, внешний клип режет сам композит). Если гомография сводится к аффинной
+(`perspective` на плоскости z = 0, `translateZ` под `perspective`, `rotateZ` в 3D-матрице) — прежний путь tiny-skia.
+
+Обёртка `perspective` (тождество на z = 0) передаёт `P` прямым потомкам: слой потомка уходит на родителя матрицей
+`H(P)⁻¹·H(P·M)`. Остальные группы плоские — цепочка вложенных матриц не перемножается (иначе
+`rotatex(45deg)` → вложенный `rotatex(-45deg)` без `preserve-3d` рисовался бы 100×200, а ожидается плоский 100×100,
+`transform3d-preserve3d-007`). Настоящий `preserve-3d` (перемножение цепочки) не реализован: в display list нет
+признака `transform-style`.
+
+Замер по 119 reftest `css/css-transforms` (`transform3d-*`, `perspective-*`, `preserve3d-*`, `3d-*`, `backface-*`,
+порог 55/255 и `totalPixels` из `fuzzy`): 66 → 71. Исправлены `transform3d-perspective-001/006`,
+`perspective-translateZ-*`, `perspective-origin-x/xy`, `transform3d-backface-visibility-003`. Три прежних «прохода»
+теперь красные, потому что раньше совпадали две одинаково неверные картинки: см. [BUG-1640](BUG-1640-OPEN.md).
