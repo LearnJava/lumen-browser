@@ -60,12 +60,12 @@ use crate::style::parse::box_sides::{
     apply_border_shorthand,
     apply_border_side_shorthand,
     expand_border_4,
+    parse_border_width,
     parse_border_style_kw,
     parse_line_width,
     parse_outline_color_opt,
     parse_outline_style_opt,
     parse_radius_length,
-    resolve_box_length,
     resolve_svg_length,
     split_border_radius_slash,
     split_radius_pair,
@@ -991,10 +991,10 @@ pub(in crate::style) fn apply_decl_paint(
         }
         // CSS Logical Properties L1 — border-inline-*-width / border-block-*-width.
         // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
-        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_start_width = v; } }
-        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_end_width = v; } }
-        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_start_width = v; } }
-        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_end_width = v; } }
+        "border-inline-start-width" => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_inline_start_width = Some(v); } }
+        "border-inline-end-width"   => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_inline_end_width = Some(v); } }
+        "border-block-start-width"  => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_block_start_width = Some(v); } }
+        "border-block-end-width"    => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_block_end_width = Some(v); } }
         "border-inline-start-style" => style.border_left_style = parse_border_style_kw(val),
         "border-inline-end-style"   => style.border_right_style = parse_border_style_kw(val),
         "border-block-start-style"  => style.border_top_style = parse_border_style_kw(val),
@@ -1005,10 +1005,14 @@ pub(in crate::style) fn apply_decl_paint(
         "border-block-end-color"    => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_bottom_color = c; } }
         "border-width" => {
             let sides = expand_border_4(val);
-            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport, is_quirks) { style.border_top_width = v.max(0.0); }
-            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport, is_quirks) { style.border_right_width = v.max(0.0); }
-            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport, is_quirks) { style.border_bottom_width = v.max(0.0); }
-            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport, is_quirks) { style.border_left_width = v.max(0.0); }
+            let w = sides.map(|t| parse_border_width(t, em_basis, viewport, is_quirks));
+            // One invalid component drops the whole declaration.
+            if let [Some(t), Some(r), Some(b), Some(l)] = w {
+                style.border_top_width = t;
+                style.border_right_width = r;
+                style.border_bottom_width = b;
+                style.border_left_width = l;
+            }
         }
         "border-style" => {
             let sides = expand_border_4(val);
@@ -1098,23 +1102,23 @@ pub(in crate::style) fn apply_decl_paint(
             }
         }
         "border-top-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.border_top_width = v.max(0.0);
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
+                style.border_top_width = v;
             }
         }
         "border-right-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.border_right_width = v.max(0.0);
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
+                style.border_right_width = v;
             }
         }
         "border-bottom-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.border_bottom_width = v.max(0.0);
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
+                style.border_bottom_width = v;
             }
         }
         "border-left-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.border_left_width = v.max(0.0);
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
+                style.border_left_width = v;
             }
         }
         "border-top-style" => style.border_top_style = parse_border_style_kw(val),

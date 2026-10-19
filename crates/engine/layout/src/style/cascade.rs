@@ -380,6 +380,13 @@ pub(crate) fn compute_style_shareable(
         return (style, false);
     }
     drop(prof_init);
+    // CSS Backgrounds L3 §4.2: the initial `border-width` is `medium`; the `none`/`hidden` case
+    // is zeroed after the cascade (`zero_unstyled_border_widths`), so a lone `border-style: solid`
+    // draws a 3px border.
+    style.border_top_width = INITIAL_BORDER_WIDTH;
+    style.border_right_width = INITIAL_BORDER_WIDTH;
+    style.border_bottom_width = INITIAL_BORDER_WIDTH;
+    style.border_left_width = INITIAL_BORDER_WIDTH;
     let prof_ua = lumen_core::profile::scope_detail("cs_ua_hints");
 
     // UA stylesheet: семантические элементы получают italic / bold по
@@ -1580,6 +1587,9 @@ pub(crate) fn compute_style_shareable(
 
     (style, shareable)
 }
+
+/// `medium` (CSS Backgrounds L3 §4.2) in px.
+pub(in crate::style) const INITIAL_BORDER_WIDTH: f32 = 3.0;
 
 /// CSS Backgrounds L3 §4.2: a side whose `border-style` is `none`/`hidden` has a computed
 /// width of `0` whatever `border-width` says.

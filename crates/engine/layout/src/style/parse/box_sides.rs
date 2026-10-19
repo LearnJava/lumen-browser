@@ -237,6 +237,11 @@ pub(in crate::style) fn parse_line_width(val: &str, em_basis: f32, viewport: Siz
     }
 }
 
+/// CSS Backgrounds L3 §4.2 — `border-*-width` = `<line-width>`; a negative length is invalid.
+pub(in crate::style) fn parse_border_width(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<f32> {
+    parse_line_width(val, em_basis, viewport, is_quirks).filter(|v| *v >= 0.0)
+}
+
 /// CSS Basic UI L4 §5.3 — `outline-style: auto | <'border-style'>`. Возвращает
 /// `None` для невалидного токена, чтобы caller мог попробовать его как
 /// width/color в shorthand.
@@ -572,7 +577,7 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
     let mut invisible = true;
     reset_border_sides(style);
     for tok in &tokens {
-        if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
+        if let Some(v) = parse_border_width(tok, em_basis, viewport, is_quirks) {
             style.border_top_width = v;
             style.border_right_width = v;
             style.border_bottom_width = v;
@@ -618,7 +623,7 @@ pub(in crate::style) fn apply_border_side_shorthand(
     *bstyle = BorderStyle::None;
     *color = CssColor::CurrentColor;
     for tok in split_top_level_ws(val) {
-        if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
+        if let Some(v) = parse_border_width(tok, em_basis, viewport, is_quirks) {
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);

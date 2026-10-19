@@ -1170,13 +1170,13 @@ pub struct ComputedStyle {
     /// CSS Logical Properties L1 — `padding-block-end`.
     pub padding_block_end: Length,
     /// CSS Logical Properties L1 — `border-inline-start-width`.
-    pub border_inline_start_width: f32,
+    pub border_inline_start_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-inline-end-width`.
-    pub border_inline_end_width: f32,
+    pub border_inline_end_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-block-start-width`.
-    pub border_block_start_width: f32,
+    pub border_block_start_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-block-end-width`.
-    pub border_block_end_width: f32,
+    pub border_block_end_width: Option<f32>,
     /// CSS Anchor Positioning L1 §2 — `anchor-name`. Custom-ident with `--` prefix.
     /// Non-inherited. When set, this element is registered as an anchor for positioned elements.
     pub anchor_name: Option<Box<str>>,
@@ -1674,10 +1674,10 @@ impl ComputedStyle {
             padding_inline_end: Length::Px(0.0),
             padding_block_start: Length::Px(0.0),
             padding_block_end: Length::Px(0.0),
-            border_inline_start_width: 0.0,
-            border_inline_end_width: 0.0,
-            border_block_start_width: 0.0,
-            border_block_end_width: 0.0,
+            border_inline_start_width: None,
+            border_inline_end_width: None,
+            border_block_start_width: None,
+            border_block_end_width: None,
             anchor_name: None,
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
@@ -2120,10 +2120,10 @@ impl ComputedStyle {
             padding_inline_end: Length::Px(0.0),
             padding_block_start: Length::Px(0.0),
             padding_block_end: Length::Px(0.0),
-            border_inline_start_width: 0.0,
-            border_inline_end_width: 0.0,
-            border_block_start_width: 0.0,
-            border_block_end_width: 0.0,
+            border_inline_start_width: None,
+            border_inline_end_width: None,
+            border_block_start_width: None,
+            border_block_end_width: None,
             anchor_name: None,
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,

@@ -1,6 +1,6 @@
 # BUG-1298 — `border-width: thin|medium|thick` в шортхендах и `border-*-width` не разбирается; `border-style` без ширины даёт 0 вместо `medium` (3px)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 6, `css/css-backgrounds`)
 **Область:** layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` — `"border-width"`, `"border-top-width"`… — зовут `resolve_box_length`, а не `parse_line_width`)
 
@@ -38,3 +38,7 @@ WPT-RUN-14 срез 6: `border-{top,right,bottom,left}-width-{thin,medium,thick}
 ## Дополнение: WPT-RUN-14 срез 11 (2026-10-06, `css/CSS2`: backgrounds + borders)
 
 `css/CSS2/{backgrounds,borders}`: **18 id.** (а) `border: solid lime`/`border-style: solid` без ширины: 12 id (`*-applies-to-*`, `background-root-005…018`); `borders/border-dynamic-001/002.xht` — после `x.style.border = "solid lime"` `getComputedStyle().borderTopWidth` = `0px`. (б) Родственное: ширина рамки не обнуляется при `border-style: none` — `border-left: blue; border-left-style: solid; border-width: 5px` даёт верхнюю/правую/нижнюю ширину 5 при `style: none` (в computed должно быть 0); `border-width: -10px` принимается (`borderTopWidth` = `-10px`, `offsetHeight` отрицательный; должно отбрасываться как невалидное); `border-width: inherit` от родителя с `border-style: none` даёт ширину родителя (6 id: `border-left-003.xht`, `border-right-003.xht`, `border-width-009…012.xht`).
+
+## Исправление (2026-10-19, P3)
+
+`parse_border_width` (`<line-width>` без отрицательных) во всех формах (`border`, `border-<side>`, `border-width`, `border-*-width`, логические); начальная ширина — `medium` (3px) задаётся в начале каскада (`INITIAL_BORDER_WIDTH`), `none|hidden` обнуляется постпроходом `zero_unstyled_border_widths`; `initial`/`unset`/`all` возвращают 3px; `border-width` с одним невалидным компонентом отбрасывается целиком. Логические `border-inline/block-*-width` стали `Option<f32>` (эвристика «физическая == 0» не работала при ненулевом начальном значении). Тест: `border_width_keywords_and_medium_default`. Остаток из «Дополнения» (`border-width: inherit` от родителя со стилем none) не воспроизводился отдельно.
