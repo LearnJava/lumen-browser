@@ -98,6 +98,105 @@ fn bug734_unknown_intrinsic_size_stays_collapsed() {
     assert_eq!((w, h), (0.0, 0.0));
 }
 
+// ── BUG-1280: the decoded size of an attribute-less `<img>` is a natural size ──
+
+/// Border box of the `<img>` after the shell reported a `iw`×`ih` decode
+/// through `apply_intrinsic_size` (no `width`/`height` attributes in `html`).
+fn decoded_img_box(html: &str, css: &str, iw: u32, ih: u32) -> (f32, f32) {
+    let vp = Size::new(800.0, 600.0);
+    let mut doc = lumen_html_parser::parse(html);
+    let img = (0..doc.len())
+        .map(lumen_dom::NodeId::from_index)
+        .find(|&id| doc.get(id).element_name().is_some_and(|n| n.local.as_str() == "img"))
+        .expect("<img> not found");
+    assert!(super::super::apply_intrinsic_size(&mut doc, img, iw, ih, vp));
+    assert!(
+        doc.get(img).get_attr("width").is_none() && doc.get(img).get_attr("height").is_none(),
+        "the decoded size must not leak into the width/height attributes"
+    );
+    assert!(!super::super::apply_intrinsic_size(&mut doc, img, iw, ih, vp), "second report is a no-op");
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, vp);
+    fn find(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+        if matches!(b.kind, super::super::BoxKind::Image { .. }) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find)
+    }
+    let b = find(&root).expect("Image box not found");
+    (b.rect.width, b.rect.height)
+}
+
+#[test]
+fn bug1280_decoded_size_without_css_is_natural_size() {
+    assert_eq!(decoded_img_box(r#"<img src="x.png">"#, "", 100, 100), (100.0, 100.0));
+}
+
+/// `<img style="height:50px">` 100×100 → 50×50 (was 100×50).
+#[test]
+fn bug1280_css_height_scales_width_by_ratio() {
+    assert_eq!(decoded_img_box(r#"<img src="x.png">"#, "img { height: 50px }", 100, 100), (50.0, 50.0));
+}
+
+/// `<img style="width:50px">` 100×100 → 50×50 (was 50×100).
+#[test]
+fn bug1280_css_width_scales_height_by_ratio() {
+    assert_eq!(decoded_img_box(r#"<img src="x.png">"#, "img { width: 50px }", 100, 100), (50.0, 50.0));
+}
+
+/// `max-height` clamps the natural height; the width follows the ratio
+/// (CSS 2.1 §10.4 constraint table: 100×100, max-height 20 → 20×20).
+#[test]
+fn bug1280_max_height_scales_width_by_ratio() {
+    assert_eq!(decoded_img_box(r#"<img src="x.png">"#, "img { max-height: 20px }", 100, 100), (20.0, 20.0));
+}
+
+/// Content-box `width: 70px` + `padding-right: 30px` → border box 100×70: the
+/// ratio applies to the content box (was 100×100).
+#[test]
+fn bug1280_padding_with_css_width_keeps_ratio_on_content_box() {
+    let (w, h) = decoded_img_box(
+        r#"<img src="x.png">"#,
+        "img { padding-right: 30px; width: 70px }",
+        100,
+        100,
+    );
+    assert_eq!((w, h), (100.0, 70.0));
+}
+
+/// Border box of the `<canvas>` in `html` laid out with `css`.
+fn canvas_box(html: &str, css: &str) -> (f32, f32) {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    fn find(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+        if matches!(b.kind, super::super::BoxKind::Canvas { .. }) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find)
+    }
+    let b = find(&root).expect("Canvas box not found");
+    (b.rect.width, b.rect.height)
+}
+
+/// `<canvas width=15 height=15 style="width:20px;height:auto">` → 20×20 (was 20×15).
+#[test]
+fn bug1280_canvas_css_width_scales_height_by_ratio() {
+    assert_eq!(canvas_box(r#"<canvas width="15" height="15"></canvas>"#, "canvas { width: 20px; height: auto }"), (20.0, 20.0));
+}
+
+/// The mirror: only the height authored, the width follows the bitmap ratio.
+#[test]
+fn bug1280_canvas_css_height_scales_width_by_ratio() {
+    assert_eq!(canvas_box(r#"<canvas width="30" height="15"></canvas>"#, "canvas { height: 20px }"), (40.0, 20.0));
+}
+
+/// Nothing authored: the bitmap size.
+#[test]
+fn bug1280_canvas_without_css_keeps_bitmap_size() {
+    assert_eq!(canvas_box(r#"<canvas width="30" height="15"></canvas>"#, ""), (30.0, 15.0));
+}
+
 // ── BUG-736: a replaced flex item must size via its aspect ratio ──────────
 
 /// Row flex container with a definite cross size (`height`): the `<img>`'s
