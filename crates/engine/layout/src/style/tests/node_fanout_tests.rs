@@ -235,6 +235,27 @@
     }
 
     #[test]
+    fn a_descendant_has_argument_does_not_reach_previous_siblings_of_ancestors() {
+        // BUG-1651: another rule's `:has(+ …)` turns sibling reach on for the sheet, but
+        // `:not(.x):has(i)` reads only its own subtree — `<head>`, a previous sibling of `<body>`,
+        // is no candidate for a change under `<body>`, while the forward-sibling subject still is.
+        let doc = parse_html(
+            r#"<div id="wrap"><p id="a" class="a"></p><p id="b" class="b"></p></div><i class="q" id="q"></i>"#,
+        );
+        let sheet = parse_css(".a:has(+ .b) { color: red; } :not(.x):has(.y) { color: blue; }");
+        let a = doc.find_by_id("a").expect("#a");
+        let b = doc.find_by_id("b").expect("#b");
+        let q = doc.find_by_id("q").expect("#q");
+        let wrap = doc.find_by_id("wrap").expect("#wrap");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_root_set_for_node_change(&doc, [(q, NodeChange::Attr("class"))], &index);
+        assert!(!got.contains(&wrap), "{got:?}");
+        assert!(!got.contains(&a), "{got:?}");
+        let got = restyle_root_set_for_node_change(&doc, [(b, NodeChange::Attr("class"))], &index);
+        assert!(got.contains(&a), "{got:?}");
+    }
+
+    #[test]
     fn has_with_a_shadow_root_in_the_document_still_widens_to_the_whole_document() {
         let mut doc = fixture();
         let host = doc.find_by_id("a").expect("#a");

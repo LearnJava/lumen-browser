@@ -32,7 +32,7 @@ j.pump_media(); j.pump_workers(); … })`. Одна такая задача ид
 
 Связано: [BUG-935](BUG-935-OPEN.md) (долгие задачи `about_to_wait` на rAF-мутациях) — проверить, не тот ли путь.
 
-## Handoff (P6, 2026-10-19) — диагноз сделан, исправление в работе
+## Срез 1 (P6, 2026-10-19) — причина найдена, задача 15–18 с → ≤ 2 с
 
 **Стенд.** `scripts/probe_yt_stall.py <lumen.exe> <сек> <url> <тег>` (копия `.tmp/yt_probe.py`): запускает
 `--mcp-live-port`, открывает страницу, каждые 3 с шлёт `eval` и пишет `.tmp/yt.<тег>.stderr.log`.
@@ -41,31 +41,46 @@ j.pump_media(); j.pump_workers(); … })`. Одна такая задача ид
 (скрипт ставит сам), для разбивки — `LUMEN_PROFILE_TREE=1 LUMEN_PROFILE_DETAIL=1`. Воспроизводится стабильно:
 одна задача `about_to_wait.rs:287` 15–18 с.
 
-**Причина.** Не pump и не таймер: JS плеера youtube (`getPlayerSize` → `element.clientWidth/clientHeight`)
-в одной задаче вызывает ≈44 принудительных `maybe_flush` (по 0,3–1 с), между ними DOM меняется (`style`/`class`/
-ChildList у `ytd-*`) → каждый флаш `path=incremental`, но с глубокими корнями и **~1300 пересчитанных элементов**
-(`forced_same` ≈ 96 %). Это путь BUG-935 (флаши под JS-циклом). Расклад `cascade_walk` ≈ 300–390 мс на флаш:
-1. `cs_init` ≈ 80 мкс/узел — `compute_style_shareable` обходил **всю** унаследованную карту custom properties
-   (youtube: ≈1200–1800 имён) при непустом реестре `@property` (там 1 правило). **Исправлено** в этой ветке
-   (`style/cascade.rs`: обход реестра вместо карты): `cs_init` 102 → 6 мс на флаш.
-2. `w_eq` ≈ 150–175 мс из ~300 — **главный остаток**: в `counters.rs::walk` (ветка `(None, None)`) сравнение
-   `**prev == *style` (и `*prev != *style` в shallow-ветке) делает глубокое `HashMap == HashMap` для
-   `custom_props` (≈1200 строк), потому что карта у узла другой `Arc`, хотя содержимое то же (`CustomProps::eq`
-   → `ptr_eq || ==`). Замерено временными `scope_detail("w_share"/"w_write"/"w_eq"/"w_repl")` (в коммит не вошли).
-3. `cs_match` ≈ 85 мс/1280 узлов (≈65 мкс/узел; youtube CSS 3,2 МБ) и `w_share` сверх `compute_style` ≈ 28 мкс/узел
-   (Arc::new большого `ComputedStyle`).
+**Причина.** Не pump и не таймер: JS плеера youtube (`getPlayerSize` → `element.clientWidth/clientHeight`) в одной
+задаче вызывает ≈ 40 принудительных `maybe_flush`, между ними DOM меняется → каждый флаш `path=incremental`, но каждый
+пересчитывал 1300–2000 элементов (это путь BUG-935). Три независимые причины тяжёлого флаша:
+1. `cs_init` ≈ 80 мкс/узел — `compute_style_shareable` обходил всю унаследованную карту custom properties (youtube
+   ≈ 1200–1800 имён) при непустом реестре `@property`. Теперь обход реестра (`style/cascade.rs`): 102 → 6 мс на флаш.
+2. Сравнение `prev == style` в `counters.rs::walk` делало глубокое `HashMap == HashMap` по `custom_props` (≈ 1200 строк):
+   карта у узла другой `Arc` при том же содержимом (узел, объявивший `--x`, копирует унаследованную карту; потомки наследуют
+   копию). Теперь после `share_cache.compute` пересчитанный стиль забирает `Arc` карты вытесненного, если содержимое равно
+   (`incr` и тот же родитель) — потомки наследуют ptr-равную карту, сравнения идут по указателю.
+3. **Главное.** `has_reach_roots` (`style/restyle.rs`): любая запись под `<body>` делала корнем `<head>` и `<html>` (весь
+   документ, 1300–2000 элементов): (а) предыдущие сиблинги предков перебирались при любом `:has(+ …)`/`:has(~ …)` в листе, хотя
+   достаёт до них только субъект с вперёд-смотрящим аргументом, — `<head>` как сиблинг `<body>` попадал под любой
+   `:not(.x):has(…)`; теперь `HasSubject::sibling_reach` по субъектам; (б) `html:has(…)`/`body:has(…)` в позиции ключевого
+   компаунда (`HasSubject::local`: последний в селекторе, не вложен, без sibling-комбинатора после) меняет только стиль
+   самого элемента — теперь shallow-корень (элемент и дети, глубже — только если стиль сдвинулся), а не глубокий.
 
-**План (следующая сессия).**
-- В `counters.rs`: пер-проходная память сравнений `PropsMemo` в `CounterMap` (ключ — пара указателей двух
-  `CustomProps`, значение — keep-alive клоны + результат), после `share_cache.compute` — канонизация: если у
-  вытесненного (`prev`) стиля `custom_props` не ptr-равна, но равна по содержимому — подставить `prev`-овый `Arc`
-  (`Arc::make_mut(&mut style).custom_props = prev`), чтобы потомки наследовали ptr-равную карту; сравнения
-  `prev == style` делать как `memo.equal(prev.custom_props, style.custom_props) && **prev == *style`.
-  Нужен `CascadeStyles::prev_custom_props(id)` (без перештамповки). Это снимает ≈ половину флаша.
-- Затем смотреть `cs_match` (индекс правил под 3,2 МБ CSS) и число пересчитываемых при `style`-записи на `ytd-*`.
-- Цель «Готово, когда»: за 90 с нет задачи > ~1 с; при 44 флашах за задачу нужно ≲ 20 мс на флаш — одной
-  канонизацией не достичь; если после п.1–2 задача остаётся > 5 с, рассмотреть бюджет/коалесцирование
-  принудительных флашей чтения геометрии (`clientWidth` при ≥N флашей подряд в одной задаче) — отдельным решением.
-- Проверка: тот же стенд, `grep "\[engine\] task [0-9]{4,}"` и `w_eq`/`cascade_walk` в профиле; `cargo test -p lumen-layout`
-  (restyle/counters/cascade), clippy `-D warnings`, затем `graphic_tests` не нужен (пиксели не двигаются) —
-  `scripts/scoped-test.sh` + `python graphic_tests/dump_golden.py`.
+**Замер** (тот же стенд, `dev-release`, 70–90 с): задача `about_to_wait.rs:287` 15–18 с → максимум 1,9–2,8 с; `eval` с
+`timeout_ms: 5000` — ни одного `engine thread busy`; максимум пересчитанных за флаш 2022 → 134–161; `cascade_walk` на флаш
+300–390 → 20–30 мс. Тесты: `node_fanout_tests::a_descendant_has_argument_does_not_reach_previous_siblings_of_ancestors`,
+`bug935_attr_local_roots::a_key_position_has_flip_does_not_recascade_the_subtree` (сверка с полным каскадом внутри `drive`).
+
+**Что осталось (задач > 1 с по-прежнему 3–5 за прогон, до ≈ 1,9 с).**
+- JS страницы без флашей: `readBytes ← consume ← eval` (<no-script>:22140) 1,5–1,9 с — выяснить, что это за скрипт и
+  почему V8 тратит столько (в Chrome такой длинной задачи на главной нет).
+- `incr.sheet_delta` ≈ 350 мс на один флаш (вставка большого `<style>` — разбор/индексация листа).
+- Шторм принудительных флашей в одной задаче: 37 флашей по 20–50 мс = 0,8–2,2 с; `cs_match` ≈ 65 мкс/узел (CSS 3,2 МБ).
+  Если не снижать цену флаша — бюджет/коалесцирование чтений геометрии (`clientWidth`) в одной задаче: отдельное решение.
+- `_lumen_deliver_intersection_observers`/`_lumen_deliver_resize_observers` в `_lumen_tick_timers`/rAF — ≈ 0,5–1,1 с (шим).
+
+## Handoff (P6, 2026-10-19, конец сессии) — гейт не закрыт
+
+Код среза 1 готов (counters.rs, restyle.rs, 2 теста), `cargo clippy -p lumen-layout --all-targets -D warnings` чист, layout `has_`/`bug935`/`node_fanout` зелёные.
+`scripts/scoped-test.sh` (лог был в `.tmp/scoped.log`) показал падения, **базу `main` не сверяли**:
+- `lumen-layout --lib`: stack overflow `grid_trampoline::deep_grid_chain…` — известный BUG-1266 (`--skip grid_trampoline`).
+- `lumen-shell --bin lumen`: `chrome_incremental::bug341_s13_hover_flip…` (412/419 reused), `bug341_s20…` (1 rayon fan-out), `bug341_s21…`
+  (3 переиндексации листа) — **могут быть от среза** (chrome.html: ~30 custom properties, канонизация `Arc` в `walk`, `:has`) —
+  проверить первыми: `git stash`-free способ — собрать `main` в отдельном worktree и прогнать те же 3 теста.
+  Ещё в shell: `page_pipeline::bug269…/bug969…`, `page_resources::frame_subresources…` (похоже на окружение/сеть).
+- `lumen-paint`: `display_list::text_and_images::*` (y-смещения текста), `snapshot_tests::*`, `hit_test::…` — слой paint срез не трогает, вероятно окружение (шрифты).
+- `lumen-js --lib`: `v8_gap_uashadowslot::*` (details), `v8_idle_message_clipboard::…` — сверить с `main`.
+Дальше: сверить падения с `main`; если s13/s20/s21 — от среза, найти причину (подозрение: канонизация `custom_props` в `walk` или
+shallow-корень `:has` в `has_reach_roots`); затем закрыть гейт, влить в `main`, удалить указатель из `STATUS-P6.md`,
+оставив BUG-1651 OPEN с остатком (см. «Что осталось»).
