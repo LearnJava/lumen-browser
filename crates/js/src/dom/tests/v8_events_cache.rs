@@ -661,6 +661,65 @@ fn sw_worker_has_state_installing() {
     assert_eq!(result, lumen_core::JsValue::String("installing".into()));
 }
 
+/// BUG-1638: `statechange` listeners read `event.target.state` (youtube
+/// `kevlar_base`); the event must carry the worker as `target`/`currentTarget`
+/// while listeners run, and `currentTarget` is reset afterwards.
+#[test]
+fn sw_statechange_event_has_target() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        r#"
+                var reg = null, seen = null, seenCur = null, last = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                "#,
+    )
+    .unwrap();
+    let result = rt
+        .eval(
+            r#"
+                var w = reg.installing;
+                w.addEventListener('statechange', function(e) {
+                    last = e;
+                    seen = e.target === w ? e.target.state : 'bad-target';
+                    seenCur = e.currentTarget === w;
+                });
+                w._setState('installed');
+                seen + '|' + seenCur + '|' + (last.currentTarget === null)
+                "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("installed|true|true".into()));
+}
+
+/// BUG-1638: the same dispatch path serves `onstatechange` handlers and the
+/// registration's `updatefound`.
+#[test]
+fn sw_onstatechange_and_updatefound_have_target() {
+    let rt = v8_runtime_with_url("https://example.com/");
+    rt.eval(
+        r#"
+                var reg = null, out = [];
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                "#,
+    )
+    .unwrap();
+    let result = rt
+        .eval(
+            r#"
+                var w = reg.installing;
+                w.onstatechange = function(e) { out.push(e.target === w); };
+                w._setState('installed');
+                reg.addEventListener('updatefound', function(e) { out.push(e.target === reg); });
+                reg.dispatchEvent(new Event('updatefound'));
+                out.join(',')
+                "#,
+        )
+        .unwrap();
+    assert_eq!(result, lumen_core::JsValue::String("true,true".into()));
+}
+
 /// BUG-657: a real `register()` result inherits from the production
 /// `ServiceWorkerRegistration` interface, so the members the per-API modules
 /// hang on its prototype (`pushManager`, `sync`, `periodicSync`,
