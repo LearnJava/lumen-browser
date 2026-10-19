@@ -246,13 +246,13 @@ fn transform_none_clears() {
 #[test]
 fn translate_prop_xy() {
     let root = lay("<p>x</p>", "p { translate: 10px 20px; }");
-    assert_eq!(first_p_style(&root).translate, Some((10.0, 20.0)));
+    assert_eq!(first_p_style(&root).translate, Some((Length::Px(10.0), Length::Px(20.0))));
 }
 
 #[test]
 fn translate_prop_single_value_defaults_y_to_zero() {
     let root = lay("<p>x</p>", "p { translate: 5px; }");
-    assert_eq!(first_p_style(&root).translate, Some((5.0, 0.0)));
+    assert_eq!(first_p_style(&root).translate, Some((Length::Px(5.0), Length::Px(0.0))));
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn individual_transforms_not_inherited() {
     // first_p_style returns the first Block child = the div wrapper
     // then its child = the p block. We need the p inside div.
     let div_box = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).expect("div");
-    assert_eq!(div_box.style.translate, Some((10.0, 0.0)));
+    assert_eq!(div_box.style.translate, Some((Length::Px(10.0), Length::Px(0.0))));
     let p_box = div_box.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).expect("p");
     assert_eq!(p_box.style.translate, None, "translate must not be inherited");
     assert_eq!(p_box.style.rotate, None, "rotate must not be inherited");
@@ -1064,4 +1064,53 @@ fn env_calls_well_formed_grammar() {
     ] {
         assert!(!ok(bad), "{bad} must be rejected");
     }
+}
+
+/// Сдвиг центра бокса `.t` матрицей `forward_box_transform` (viewport px).
+fn translated_by(css: &str) -> (f32, f32) {
+    let root = lay("<div class=t>x</div>", css);
+    let div = root
+        .children
+        .iter()
+        .find(|c| matches!(&c.kind, BoxKind::Block))
+        .expect("div box");
+    let m = forward_box_transform(div).expect("transformed box has a matrix");
+    let (cx, cy) = (div.rect.x + div.rect.width / 2.0, div.rect.y + div.rect.height / 2.0);
+    let (mx, my) = m.transform_point_2d(cx, cy);
+    (mx - cx, my - cy)
+}
+
+/// BUG-1292: процент в `translate*()` — от border box самого элемента
+/// (X — от ширины, Y — от высоты); раньше давал 0 / отбрасывал функцию.
+#[test]
+fn transform_translate_percent_uses_own_border_box() {
+    let base = "div.t { width: 100px; height: 50px; position: absolute; ";
+    let (dx, dy) = translated_by(&format!("{base} transform: translateX(50%); }}"));
+    assert!((dx - 50.0).abs() < 0.01 && dy.abs() < 0.01, "translateX(50%) -> ({dx}, {dy})");
+    let (dx, dy) = translated_by(&format!("{base} transform: translate(50%, 100%); }}"));
+    assert!((dx - 50.0).abs() < 0.01 && (dy - 50.0).abs() < 0.01, "translate(50%,100%) -> ({dx}, {dy})");
+    let (dx, dy) = translated_by(&format!("{base} transform: translate(50px, 10%); }}"));
+    assert!((dx - 50.0).abs() < 0.01 && (dy - 5.0).abs() < 0.01, "translate(50px,10%) -> ({dx}, {dy})");
+    let (dx, dy) = translated_by(&format!("{base} transform: translateY(-20%); }}"));
+    assert!(dx.abs() < 0.01 && (dy + 10.0).abs() < 0.01, "translateY(-20%) -> ({dx}, {dy})");
+    let (dx, _) = translated_by(&format!("{base} transform: translate3d(50%, 0, 0); }}"));
+    assert!((dx - 50.0).abs() < 0.01, "translate3d(50%,0,0) -> {dx}");
+}
+
+#[test]
+fn transform_translate_calc_mixes_percent_and_px() {
+    let base = "div.t { width: 100px; height: 50px; position: absolute; ";
+    let (dx, _) = translated_by(&format!("{base} transform: translateX(calc(50% + 10px)); }}"));
+    assert!((dx - 60.0).abs() < 0.01, "calc(50% + 10px) -> {dx}");
+    let (dx, dy) = translated_by(&format!("{base} transform: translate(calc(30px + 20%), calc(-20px + 100%)); }}"));
+    assert!((dx - 50.0).abs() < 0.01 && (dy - 30.0).abs() < 0.01, "-> ({dx}, {dy})");
+}
+
+#[test]
+fn translate_property_percent_and_calc() {
+    let base = "div.t { width: 100px; height: 50px; position: absolute; ";
+    let (dx, dy) = translated_by(&format!("{base} translate: 50% 0; }}"));
+    assert!((dx - 50.0).abs() < 0.01 && dy.abs() < 0.01, "translate: 50% 0 -> ({dx}, {dy})");
+    let (dx, dy) = translated_by(&format!("{base} translate: calc(10% + 5px) 100%; }}"));
+    assert!((dx - 15.0).abs() < 0.01 && (dy - 50.0).abs() < 0.01, "-> ({dx}, {dy})");
 }

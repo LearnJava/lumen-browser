@@ -100,6 +100,29 @@ use super::*;
     }
 
     #[test]
+    fn webkit_text_fill_color_parsed_and_initial_currentcolor() {
+        let s = style_for("color: red");
+        assert_eq!(s.text_fill_color, CssColor::CurrentColor);
+        assert_eq!(s.used_text_fill_color(), Color { r: 255, g: 0, b: 0, a: 255 });
+        let s = style_for("color: red; -webkit-text-fill-color: transparent");
+        assert_eq!(s.used_text_fill_color().a, 0);
+        let s = style_for("-webkit-text-fill-color: green; -webkit-text-fill-color: currentcolor; color: blue");
+        assert_eq!(s.used_text_fill_color(), Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn webkit_text_fill_color_inherits_to_child() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { -webkit-text-fill-color: green; } p { color: red; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p = doc.get(div).children[0];
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(p_style.used_text_fill_color(), Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
     fn text_decoration_color_property_named() {
         // Отдельное свойство text-decoration-color.
         let s = style_for("text-decoration-color: blue");

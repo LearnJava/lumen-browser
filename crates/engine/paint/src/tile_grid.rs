@@ -14,6 +14,10 @@ use crate::display_list::DisplayCommand;
 /// Default tile size in CSS pixels.
 pub const DEFAULT_TILE_SIZE: u32 = 256;
 
+/// Largest tile span that is written entry by entry; a bigger one relies on
+/// missing tiles being implicitly dirty (see `TileGrid::mark_span_dirty`).
+const MAX_ENUMERATED_TILES: i64 = 1 << 16;
+
 /// Dirty state of a single tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileDirty {
@@ -73,11 +77,10 @@ impl TileGrid {
         let ts = self.tile_size as f32;
         let cols = (page_width / ts).ceil() as i32 + 1;
         let rows = (page_height / ts).ceil() as i32 + 1;
-        for ty in 0..rows {
-            for tx in 0..cols {
-                self.tiles.insert((tx, ty), TileDirty::Dirty);
-            }
-        }
+        // `clear` already made every tile implicitly dirty; the explicit
+        // entries only serve `dirty_tiles` and are skipped for a page whose
+        // grid is too large to enumerate (a 1e10 px box is 4e7 rows).
+        self.mark_span_dirty(0, 0, cols - 1, rows - 1);
     }
 
     /// Mark all tiles intersecting `rect` (document-space CSS px) dirty.
@@ -93,11 +96,7 @@ impl TileGrid {
         let y0 = (rect.y / ts).floor() as i32;
         let x1 = ((rect.x + rect.width) / ts).ceil() as i32;
         let y1 = ((rect.y + rect.height) / ts).ceil() as i32;
-        for ty in y0..y1 {
-            for tx in x0..x1 {
-                self.tiles.insert((tx, ty), TileDirty::Dirty);
-            }
-        }
+        self.mark_span_dirty(x0, y0, x1.saturating_sub(1), y1.saturating_sub(1));
     }
 
     /// Return all tiles currently marked dirty.
@@ -160,9 +159,33 @@ impl TileGrid {
     /// State commands (no rect) are ignored — they affect all tiles via the
     /// surrounding rect-commands that were already marked dirty.
     fn mark_tiles_for_cmd(&mut self, cmd: &DisplayCommand) {
-        if let Some(rect) = cmd_rect(cmd) {
-            for tile in self.tiles_for_rect(rect) {
-                self.mark_dirty(tile);
+        if let Some((x0, y0, x1, y1)) = cmd_rect(cmd).and_then(|r| self.tile_span(r)) {
+            self.mark_span_dirty(x0, y0, x1, y1);
+        }
+    }
+
+    /// Mark every tile of the inclusive span `[x0, x1] × [y0, y1]` dirty.
+    ///
+    /// A span larger than [`MAX_ENUMERATED_TILES`] is not enumerated (a box
+    /// 1e10 px tall is 4e7 tile rows — seconds of hash inserts and gigabytes
+    /// of map, BUG-1283). Missing tiles are implicitly dirty, so only the
+    /// tiles already tracked inside the span need to change.
+    fn mark_span_dirty(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) {
+        if x1 < x0 || y1 < y0 {
+            return;
+        }
+        let count = (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1);
+        if count <= MAX_ENUMERATED_TILES {
+            for ty in y0..=y1 {
+                for tx in x0..=x1 {
+                    self.tiles.insert((tx, ty), TileDirty::Dirty);
+                }
+            }
+        } else {
+            for (&(tx, ty), state) in self.tiles.iter_mut() {
+                if (x0..=x1).contains(&tx) && (y0..=y1).contains(&ty) {
+                    *state = TileDirty::Dirty;
+                }
             }
         }
     }
@@ -173,33 +196,18 @@ impl TileGrid {
         (x.div_euclid(ts) as i32, y.div_euclid(ts) as i32)
     }
 
-    /// Return all tiles overlapping the given CSS rect.
-    fn tiles_for_rect(&self, rect: Rect) -> Vec<(i32, i32)> {
+    /// Inclusive tile span `(x0, y0, x1, y1)` overlapping the given CSS rect,
+    /// or `None` for an empty rect.
+    fn tile_span(&self, rect: Rect) -> Option<(i32, i32, i32, i32)> {
         if rect.width <= 0.0 || rect.height <= 0.0 {
-            return Vec::new();
+            return None;
         }
-        let ts = self.tile_size as f32;
         let (x0, y0) = self.tile_for_point(rect.x, rect.y);
         let (x1, y1) = self.tile_for_point(
             (rect.x + rect.width - 0.001).max(rect.x),
             (rect.y + rect.height - 0.001).max(rect.y),
         );
-        let mut out = Vec::with_capacity(((x1 - x0 + 1) * (y1 - y0 + 1)) as usize);
-        for ty in y0..=y1 {
-            for tx in x0..=x1 {
-                // Guard: only include tiles that actually overlap.
-                let tile_x = tx as f32 * ts;
-                let tile_y = ty as f32 * ts;
-                if rect.x < tile_x + ts
-                    && rect.x + rect.width > tile_x
-                    && rect.y < tile_y + ts
-                    && rect.y + rect.height > tile_y
-                {
-                    out.push((tx, ty));
-                }
-            }
-        }
-        out
+        Some((x0, y0, x1, y1))
     }
 }
 
@@ -335,8 +343,39 @@ mod tests {
         let g = TileGrid::new(256);
         // Rect spanning tiles (0,0) and (1,0): x=200..300
         let rect = Rect::new(200.0, 0.0, 100.0, 10.0);
-        let tiles = g.tiles_for_rect(rect);
-        assert!(tiles.contains(&(0, 0)));
-        assert!(tiles.contains(&(1, 0)));
+        assert_eq!(g.tile_span(rect), Some((0, 0, 1, 0)));
+    }
+
+    #[test]
+    fn mark_all_dirty_huge_page_does_not_enumerate_tiles() {
+        // BUG-1283: a 1e10 px box is 4e7 tile rows; the map must stay small.
+        let mut g = TileGrid::new(256);
+        g.mark_clean((0, 0));
+        g.mark_all_dirty(1024.0, 1.0e10);
+        assert!(g.tiles.len() < 1 << 17);
+        assert!(g.is_dirty((0, 0)));
+        assert!(g.is_dirty((3, 30_000_000)));
+    }
+
+    #[test]
+    fn huge_rect_dirties_tracked_tiles_inside_span_only() {
+        let mut g = TileGrid::new(256);
+        g.mark_clean((0, 5));
+        g.mark_clean((9, 5));
+        g.mark_rect_dirty(Rect::new(0.0, 0.0, 512.0, 1.0e10));
+        assert!(g.is_dirty((0, 5)));
+        assert!(!g.is_dirty((9, 5)));
+        assert!(g.tiles.len() < 1 << 17);
+    }
+
+    #[test]
+    fn diff_of_huge_fill_does_not_enumerate_tiles() {
+        let mut g = TileGrid::new(256);
+        g.mark_clean((0, 7));
+        let old: Vec<DisplayCommand> = vec![];
+        let new = vec![fill(0.0, 0.0, 800.0, 1.0e10)];
+        g.update_from_diff(&old, &new);
+        assert!(g.is_dirty((0, 7)));
+        assert!(g.tiles.len() < 1 << 17);
     }
 }

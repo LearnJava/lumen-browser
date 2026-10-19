@@ -7,7 +7,7 @@
 //! видимость тех items, которые продолжают звать `style.rs`, его тест-модули
 //! и соседние модули `style::parse`.
 
-use crate::style::{FilterFn, TransformFn};
+use crate::style::{parse_length, FilterFn, Length, TransformFn};
 
 /// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
 /// `100grad`. Без единицы — number-as-radians (для совместимости).
@@ -54,6 +54,37 @@ pub(in crate::style) fn parse_length_px(s: &str) -> Option<f32> {
     }
     // Без единицы — допустимо для 0.
     s.parse::<f32>().ok()
+}
+
+/// `<length-percentage>` аргумента `translate*()` / свойства `translate`.
+/// Длина без контекста (`px`/`em`/`rem`/`0`) — `Length::Px`, как и раньше;
+/// процент и `calc()`/`min()`/… остаются `Length` и разрешаются против
+/// border box при построении матрицы (CSS Transforms L1 §3).
+pub(in crate::style) fn parse_translate_lp(s: &str) -> Option<Length> {
+    match parse_length_px(s) {
+        Some(px) => Some(Length::Px(px)),
+        None => parse_length(s),
+    }
+}
+
+/// Делит список аргументов по запятым верхнего уровня: запятые внутри
+/// `calc()`/`min()`/`clamp()` разделителями не считаются.
+fn split_top_level_commas(args: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in args.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(args[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(args[start..].trim());
+    out
 }
 
 /// Парсит `<transform-list>` — последовательность `func(args)` через
@@ -108,21 +139,42 @@ pub fn parse_transform_list(s: &str) -> Vec<TransformFn> {
 /// `parse_transform_list` above — needs the per-function `None` to reject
 /// the *whole* value rather than silently skip one function.
 pub(in crate::style) fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
-    let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+    let parts = split_top_level_commas(args);
     match name {
         "translate" => {
-            let x = parse_length_px(parts.first()?)?;
-            let y = parts.get(1).and_then(|s| parse_length_px(s)).unwrap_or(0.0);
-            Some(TransformFn::Translate(x, y))
+            let x = parse_translate_lp(parts.first()?)?;
+            let y = match parts.get(1) {
+                Some(s) => parse_translate_lp(s)?,
+                None => Length::Px(0.0),
+            };
+            Some(match (&x, &y) {
+                (Length::Px(px), Length::Px(py)) => TransformFn::Translate(*px, *py),
+                _ => TransformFn::TranslateLp(x, y, 0.0),
+            })
         }
-        "translatex" => parse_length_px(parts.first()?).map(TransformFn::TranslateX),
-        "translatey" => parse_length_px(parts.first()?).map(TransformFn::TranslateY),
+        "translatex" => {
+            let x = parse_translate_lp(parts.first()?)?;
+            Some(match x {
+                Length::Px(px) => TransformFn::TranslateX(px),
+                x => TransformFn::TranslateLp(x, Length::Px(0.0), 0.0),
+            })
+        }
+        "translatey" => {
+            let y = parse_translate_lp(parts.first()?)?;
+            Some(match y {
+                Length::Px(py) => TransformFn::TranslateY(py),
+                y => TransformFn::TranslateLp(Length::Px(0.0), y, 0.0),
+            })
+        }
         "translatez" => parse_length_px(parts.first()?).map(TransformFn::TranslateZ),
         "translate3d" => {
-            let x = parse_length_px(parts.first()?)?;
-            let y = parse_length_px(parts.get(1)?)?;
+            let x = parse_translate_lp(parts.first()?)?;
+            let y = parse_translate_lp(parts.get(1)?)?;
             let z = parts.get(2).and_then(|s| parse_length_px(s)).unwrap_or(0.0);
-            Some(TransformFn::Translate3d(x, y, z))
+            Some(match (&x, &y) {
+                (Length::Px(px), Length::Px(py)) => TransformFn::Translate3d(*px, *py, z),
+                _ => TransformFn::TranslateLp(x, y, z),
+            })
         }
         "rotate" => parse_angle_to_radians(parts.first()?).map(TransformFn::Rotate),
         "rotatex" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateX),

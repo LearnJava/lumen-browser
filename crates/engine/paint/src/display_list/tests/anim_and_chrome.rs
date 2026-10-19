@@ -13,7 +13,7 @@ use super::*;
 // этого файла (батч DL-3).
 use super::svg_table_and_hash::{debug_hash_one, hash_corpus, red_fill};
 // build уехал в display_list/tests/text_and_images.rs (батч DL-6).
-use super::text_and_images::build;
+use super::text_and_images::{build, build_wrapped};
 // build_ordered уехал в display_list/tests/ordered_build_scroll.rs (батч DL-5).
 use super::ordered_build_scroll::build_ordered;
 // find_bg_node уехал в display_list/tests/shadows_and_transforms.rs (батч DL-4).
@@ -472,6 +472,51 @@ use lumen_dom::NodeId;
             anim_split_compose_plan(&content_hit, std::slice::from_ref(&(0usize..3)))
                 .expect("конфликт решается tail-split-ом");
         assert_eq!(eff_hit, vec![0usize..3, 3usize..4]);
+    }
+
+    // ── -webkit-text-fill-color ───────────────────────────────────────────────
+
+    fn text_colors(dl: &[DisplayCommand]) -> Vec<(String, Color)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { text, color, .. } => Some((text.clone(), *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn webkit_text_fill_color_overrides_glyph_color_only() {
+        let dl = build_wrapped(
+            "<p><a>ab</a></p>",
+            "a { color: red; -webkit-text-fill-color: green; text-decoration: underline; }",
+            800.0,
+        );
+        let texts = text_colors(&dl);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].1, Color { r: 0, g: 128, b: 0, a: 255 });
+        // Подчёркивание остаётся цветом `color`, а не заливки.
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        assert!(dl.iter().any(|c| matches!(c, DisplayCommand::FillRect { color, .. } if *color == red)));
+    }
+
+    #[test]
+    fn webkit_text_fill_color_transparent_and_inherited() {
+        let dl = build(
+            "<p>a<span>b</span></p>",
+            "p { color: red; -webkit-text-fill-color: transparent; } span { color: blue; }",
+        );
+        let texts = text_colors(&dl);
+        assert!(!texts.is_empty());
+        assert!(texts.iter().all(|(_, c)| c.a == 0), "{texts:?}");
+    }
+
+    #[test]
+    fn webkit_text_fill_color_initial_follows_color() {
+        let dl = build("<p>a<span>b</span></p>", "p { color: red; } span { color: blue; }");
+        let texts = text_colors(&dl);
+        assert_eq!(texts[0].1, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(texts[1].1, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 
     // ── text-emphasis rendering ───────────────────────────────────────────────

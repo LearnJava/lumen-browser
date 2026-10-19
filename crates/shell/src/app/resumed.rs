@@ -68,6 +68,9 @@ impl Lumen {
                 && let RawWindowHandle::Win32(h) = handle.as_raw()
             {
                 self.platform_bridge.init_hwnd(h.hwnd.get());
+                // BUG-1627: WM_GETOBJECT is a sent message — answer it in a window
+                // procedure in front of winit's, not via the event loop's msg hook.
+                platform::msaa_wndproc::install(h.hwnd.get());
             }
         }
 

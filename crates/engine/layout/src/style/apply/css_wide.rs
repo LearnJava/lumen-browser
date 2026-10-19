@@ -328,6 +328,9 @@ fn apply_css_wide_keyword_with(
                 };
             }
         }
+        "-webkit-text-fill-color" => {
+            style.text_fill_color = if inh { inherited.text_fill_color } else { init.text_fill_color };
+        }
         "text-emphasis-color" => {
             style.text_emphasis_color = if inh {
                 inherited.text_emphasis_color
@@ -431,7 +434,7 @@ fn apply_css_wide_keyword_with(
         "touch-action" => {
             style.touch_action = if inh_only_inherit { inherited.touch_action } else { init.touch_action };
         }
-        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+        "appearance" | "-webkit-appearance" => {
             style.appearance = if inh_only_inherit { inherited.appearance } else { init.appearance };
         }
         "contain" => {
@@ -1105,7 +1108,7 @@ fn apply_css_wide_keyword_with(
             style.transform = if inh_only_inherit { inherited.transform.clone() } else { init.transform.clone() };
         }
         "translate" => {
-            style.translate = if inh_only_inherit { inherited.translate } else { init.translate };
+            style.translate = if inh_only_inherit { inherited.translate.clone() } else { init.translate.clone() };
         }
         "rotate" => {
             style.rotate = if inh_only_inherit { inherited.rotate } else { init.rotate };

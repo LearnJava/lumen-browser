@@ -26,7 +26,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, contains_fixed_descendants, forward_box_transform, is_positioned_layer_auto,
     owns_paint_layer, perspective_matrix,
-    transform_fns_to_matrix, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
+    transform_fns_to_matrix, TransformRef, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
@@ -54,6 +54,9 @@ pub use paint_types::{BlendMode, CornerRadii, FilterMode, MaskMode, ResolvedClip
 
 mod commands;
 pub use commands::{spacing_px, spacing_to_fixed, DisplayCommand, DisplayList};
+
+#[cfg(feature = "cpu-render")]
+mod translate;
 
 mod geometry;
 pub use geometry::{contains_backdrop_filter, cull_display_list, fit_image_quad, fit_image_rect, ProvenanceIndex, ProvenanceSpan};

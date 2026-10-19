@@ -49,7 +49,8 @@ use crate::style::parse::timeline::{
     parse_interest_delay,
     parse_time_list,
 };
-use crate::style::parse::transform::{parse_angle_to_radians, parse_length_px, parse_transform_list};
+use crate::style::parse::transform::{parse_angle_to_radians, parse_transform_list, parse_translate_lp};
+use crate::style::shorthand::split_top_level_ws;
 use lumen_core::geom::Size;
 
 /// Разбор `offset-rotate`: `auto | reverse | <angle> | [auto | reverse] <angle>`
@@ -237,15 +238,26 @@ pub(in crate::style) fn apply_decl_motion(
             }
         }
         "translate" => {
-            // CSS Transforms L2 §2 — `none | <tx> [<ty>]`. px values; % deferred.
+            // CSS Transforms L2 §2 — `none | <length-percentage> [<length-percentage>]`.
+            // Процент хранится как `Length` и резолвится против border box в
+            // `forward_box_transform` (BUG-1292).
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") {
                 style.translate = None;
             } else {
-                let mut it = trimmed.split_whitespace();
-                if let Some(tx) = it.next().and_then(parse_length_px) {
-                    let ty = it.next().and_then(parse_length_px).unwrap_or(0.0);
-                    style.translate = Some((tx, ty));
+                let parts = split_top_level_ws(trimmed);
+                // Третий компонент (Z) принимается и отбрасывается: 3D-часть
+                // `translate` пока не моделируется.
+                if (1..=3).contains(&parts.len())
+                    && let Some(tx) = parse_translate_lp(parts[0])
+                {
+                    let ty = match parts.get(1) {
+                        Some(s) => parse_translate_lp(s),
+                        None => Some(Length::Px(0.0)),
+                    };
+                    if let Some(ty) = ty {
+                        style.translate = Some((tx, ty));
+                    }
                 }
             }
         }

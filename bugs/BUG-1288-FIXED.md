@@ -1,0 +1,59 @@
+# BUG-1288 — CPU-растр отбрасывает содержимое `PushTransform`, лежащее до трансформации вне полотна (отрицательные и слишком большие локальные координаты)
+
+**Статус:** FIXED 2026-10-19 (P3)
+**Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 5, `css/css-transforms`)
+**Область:** paint (`crates/engine/paint/src/cpu_raster.rs`, ветка `DisplayCommand::PushTransform` — слой того же размера, что полотно, в локальных координатах)
+
+## Симптом
+
+`--screenshot` 800×600, абсолютные блоки с `transform` (смещение/поворот не важно — важна позиция до трансформации):
+
+| разметка | получено | ожидается |
+|---|---|---|
+| `left:900px; transform:translate(-700px,0)` | блок не нарисован | блок на x = 200 |
+| `left:-100px; transform:translate(300px,0)` | блок не нарисован | блок на x = 200 |
+| `top:700px; transform:translate(0,-400px)` | блок не нарисован | блок на y = 300 |
+| `left:-50px; width:100px; transform-origin:50px 25px; transform:translate(400px,0) rotate(90deg)` | видна половина (50×50 из 50×100) | 50×100 |
+| то же с `left:0` | 50×100 | 50×100 — верно |
+| SVG `<rect x=40 y=-300 width=80 height=80 transform="rotate(90)">` | пропал | (220…300, 40…120) |
+
+`PushTransform` открывает слой размером с полотно и рисует в нём в **локальных** (до-трансформных) координатах, поэтому всё,
+что до трансформации лежит левее/выше нуля или правее/ниже края полотна, в слой не попадает; потом слой переносят матрицей.
+Для `translate` в пределах полотна это не видно, поэтому дефект проходит мимо большинства тестов.
+
+## Как найдено
+
+WPT-RUN-14 срез 5: 41 упавший reftest `css/css-transforms` содержит повёрнутый `PushTransform` с отрицательными
+локальными координатами в display list (`svg-transform-group-007`, `svg-transform-nested-*`, `svg-rotate-*`, `rotate`
+вокруг угла); 16 из них не объясняются ничем другим. Wptrunner снимает reftest через тот же CPU-растр
+(`lumen --ipc-server`).
+
+## Что делать
+
+Слой `PushTransform` — по габариту содержимого (bbox команд в локальных координатах, объединённый с образом полотна под
+обратной матрицей), а не по размеру полотна; либо рисовать содержимое прямо в полотно под `Transform` tiny-skia, где это
+допустимо. Проверить `PushOpacity`/`PushFilter` внутри трансформа и клип-стек (`clip_saves`).
+
+Живое окно (wgpu) не проверялось — дефект подтверждён только в CPU-растре.
+
+## Как проверить
+
+`css/css-transforms/group/svg-transform-group-007.html`, `svg-transform-nested-0{15,17,26,27,29}.html`,
+`rotate/svg-rotate-3args-002.html`; плюс графический тест на `translate` блока, чья позиция до трансформации вне полотна.
+
+## Исправление
+
+`cpu_raster.rs::render_offcanvas_transform_group`: если габарит содержимого группы `PushTransform` (`group_ink_bbox`)
+не лежит целиком в `0..W × 0..H`, группа рисуется отдельным вызовом растеризатора (`rasterize_cpu_pixmap`) в
+прозрачный слой по её собственному габариту — видимая часть полотна, пересчитанная обратной матрицей, ∩ габарит
+содержимого (+64 px на размытие). Команды сдвигаются на целое смещение начала слоя (`DisplayCommand::translated`,
+`display_list/translate.rs`; матрицы вложенных `PushTransform` сопрягаются сдвигом), внешний clip передаётся
+префиксным `PushClipRect`, а на композите смещение возвращается в матрицу (`t.pre_translate`). Группа целиком в
+полотне идёт прежним путём — картинка побитово та же. Необратимая матрица и слой больше 64 Мпикс — тоже прежний путь.
+
+Не затронуто: `PushScrollLayer` со сдвигом рисует так же в слой размером с полотно (тот же класс дефекта, но другой
+путь кода); живое окно (wgpu) не проверялось.
+
+Тесты: `cpu_raster::tests::transform_group_beyond_canvas_right_edge_is_drawn`,
+`transform_group_with_negative_local_coords_is_drawn`, `rotated_group_with_partly_negative_local_coords_is_whole`,
+`display_list::translate::tests::rect_and_nested_matrix_shift`.

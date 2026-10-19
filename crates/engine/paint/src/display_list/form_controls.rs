@@ -84,7 +84,7 @@ fn emit_input_value_text(
         rect: Rect::new(text_x, text_y, content_w, font_size),
         text,
         font_size,
-        color: s.color,
+        color: s.used_text_fill_color(),
         font_family: s.font_family.clone(),
         font_weight: s.font_weight,
         font_style: s.font_style,
@@ -299,8 +299,8 @@ pub(crate) fn emit_form_control_indicator(
     ov: Option<&CompositorOverride>,
     out: &mut Vec<DisplayCommand>,
 ) {
-    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
-    // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
+    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`
+    // alias, normalised to `Appearance::None` at parse time) removes
     // the native "primitive appearance" of a form control: the checkbox tick,
     // radio dot, range slider, progress bar, meter bar and select arrow. The box
     // (border/padding/background) is already stripped in

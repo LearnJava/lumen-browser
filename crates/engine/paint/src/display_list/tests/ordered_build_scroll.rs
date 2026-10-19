@@ -854,6 +854,60 @@ use super::text_and_images::Fixed8;
     }
 
     #[test]
+    fn ordered_table_with_caption_transform_equals_wrapper_div() {
+        // BUG-1289 (WPT transform-table-001): трансформ таблицы с `<caption>` —
+        // та же матрица, что у обёртки-`div` вокруг неё (бокс-обёртка включает caption).
+        let matrix = |html: &str| {
+            build_ordered(html, "")
+                .iter()
+                .find_map(|c| match c {
+                    DisplayCommand::PushTransform { matrix } => Some(*matrix),
+                    _ => None,
+                })
+                .expect("PushTransform")
+        };
+        let tf = "transform: translate(200px) rotate(180deg); transform-origin: left";
+        let inner = "<caption>Hello</caption><tr><td>there!</td></tr>";
+        assert_eq!(
+            matrix(&format!(r#"<table style="{tf}">{inner}</table>"#)),
+            matrix(&format!(r#"<div style="{tf}"><table>{inner}</table></div>"#)),
+        );
+    }
+
+    #[test]
+    fn ordered_table_transform_wraps_table_content() {
+        // BUG-1289: `Table` не был владельцем stacking context → `transform` на
+        // `<table>` / `display: table` / abs-pos таблице не эмитился вовсе
+        // (на `inline-block` — работал). Трансформ обязан обернуть и фон
+        // таблицы, и содержимое её ячеек.
+        for html in [
+            r#"<table style="background: blue; transform: translate(300px, 0);"><tr><td>x</td></tr></table>"#,
+            r#"<table style="position: absolute; background: blue; transform: translate(300px, 0);"><tr><td>x</td></tr></table>"#,
+            r#"<div style="display: table; background: blue; transform: translate(300px, 0);">x</div>"#,
+        ] {
+            let dl = build_ordered(html, "");
+            let cmds: Vec<&DisplayCommand> = dl.iter().collect();
+            let push = cmds
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::PushTransform { .. }))
+                .unwrap_or_else(|| panic!("нет PushTransform: {html}"));
+            let pop = cmds
+                .iter()
+                .position(|c| matches!(c, DisplayCommand::PopTransform))
+                .unwrap_or_else(|| panic!("нет PopTransform: {html}"));
+            let inside = &cmds[push..pop];
+            assert!(
+                inside.iter().any(|c| matches!(c, DisplayCommand::FillRect { .. })),
+                "фон таблицы вне трансформа: {html}"
+            );
+            assert!(
+                inside.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. })),
+                "текст ячейки вне трансформа: {html}"
+            );
+        }
+    }
+
+    #[test]
     fn ordered_nested_transforms_emit_two_pairs() {
         // BUG-139 регрессия: внешний div с transform, внутренний div с transform.
         // Каждый создаёт свой SC; должно быть ровно 2 пары PushTransform/PopTransform.

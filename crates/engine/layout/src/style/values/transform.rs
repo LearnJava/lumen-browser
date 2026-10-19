@@ -116,6 +116,13 @@ pub enum TransformFn {
     TranslateZ(f32),
     /// `translate3d(<tx>, <ty>, <tz>)` — all three axes in px.
     Translate3d(f32, f32, f32),
+    /// `translate*()` с `<length-percentage>` по X/Y (`translateX(50%)`,
+    /// `translate(10%, calc(100% - 4px))`, `translate3d(50%, 0, 5px)`) и Z в px.
+    /// Процент ссылается на border box самого элемента (CSS Transforms L1 §3),
+    /// поэтому разрешается при построении матрицы
+    /// (`property_trees::translate_lp_matrix`), а не при разборе.
+    /// Чисто px-значения остаются в `Translate`/`TranslateX`/… .
+    TranslateLp(Length, Length, f32),
     /// Угол в радианах (нормализован парсером из deg/rad/turn/grad).
     Rotate(f32),
     /// `rotateX(<angle>)` — angle in radians.

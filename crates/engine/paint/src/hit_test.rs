@@ -40,8 +40,8 @@
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
-    owns_paint_layer, paint_child_order, BoxKind, Cursor, Display, LayoutBox,
-    Mat4, PointerEvents, TransformFn, UserSelect,
+    forward_box_transform, owns_paint_layer, paint_child_order, BoxKind, Cursor, Display, LayoutBox,
+    Mat4, PointerEvents, UserSelect,
 };
 
 /// Результат hit-теста.
@@ -329,50 +329,9 @@ fn rect_contains(r: Rect, p: Point) -> bool {
 /// оригинальную точку», не «промахнуться») или если матрица сингулярна
 /// (caller интерпретирует как «бокс не существует визуально»).
 fn invert_box_transform(b: &LayoutBox) -> Option<Mat4> {
-    if b.style.transform.is_empty() {
-        return None;
-    }
-    let (ox, oy, _) = b.style.transform_origin;
-    let pivot_x = b.rect.x + ox.resolve(b.rect.width);
-    let pivot_y = b.rect.y + oy.resolve(b.rect.height);
-    let mut m = Mat4::IDENTITY;
-    for f in &b.style.transform {
-        let step = transform_fn_to_mat4(f);
-        m = m.multiply(&step);
-    }
-    let forward = if pivot_x == 0.0 && pivot_y == 0.0 {
-        m
-    } else {
-        Mat4::translation_2d(pivot_x, pivot_y)
-            .multiply(&m)
-            .multiply(&Mat4::translation_2d(-pivot_x, -pivot_y))
-    };
-    forward.invert_2d_affine()
-}
-
-fn transform_fn_to_mat4(f: &TransformFn) -> Mat4 {
-    match *f {
-        TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
-        TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
-        TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
-        TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
-        TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
-        TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
-        TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
-        TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
-        TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
-        TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
-        TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
-        TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
-        TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
-        TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
-        TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
-        TransformFn::SkewX(a) => Mat4::skew_x(a),
-        TransformFn::SkewY(a) => Mat4::skew_y(a),
-        TransformFn::Matrix([a, b, c, d, e, f]) => Mat4::from_2d_affine(a, b, c, d, e, f),
-        TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
-        TransformFn::Perspective(d) => Mat4::perspective(d),
-    }
+    // Тот же путь, что и у отрисовки: `translate`/`rotate`/`scale`, `transform`
+    // (в т. ч. `translate*()` с процентами от border box) и motion path.
+    forward_box_transform(b)?.invert_2d_affine()
 }
 
 #[cfg(test)]
@@ -634,6 +593,22 @@ mod tests {
         assert_eq!(r.node, div);
         assert!((r.local_point.x - 50.0).abs() < 1e-3);
         assert!((r.local_point.y - 30.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn local_point_after_percent_translate_and_translate_property() {
+        // BUG-1292: `translateX(50%)` и свойство `translate: 50% 0` сдвигают
+        // бокс 200×100 на 100 px; hit-тест видит тот же сдвиг, что и отрисовка.
+        for decl in ["transform: translateX(50%)", "translate: 50% 0"] {
+            let (doc, root) = build(
+                r#"<div class="t"></div>"#,
+                &format!(".t {{ width: 200px; height: 100px; {decl}; }}"),
+            );
+            let div = by_class(&doc, "t");
+            let r = hit_test(Point::new(250.0, 50.0), &root).expect("hit");
+            assert_eq!(r.node, div, "{decl}");
+            assert!((r.local_point.x - 150.0).abs() < 1e-3, "{decl}: {:?}", r.local_point);
+        }
     }
 
     #[test]

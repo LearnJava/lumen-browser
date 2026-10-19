@@ -831,7 +831,7 @@ pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
     }
     // CSSOM §9 / Transforms L1 §18: resolved value — `matrix()` для 2D,
     // иначе `matrix3d()`, а не заданный список функций (BUG-1157).
-    let m = crate::property_trees::compute_local_transform(list, (0.0, 0.0, 0.0));
+    let m = crate::property_trees::compute_local_transform(list, (0.0, 0.0, 0.0), crate::property_trees::TransformRef::default());
     let v = &m.0;
     if m.is_2d_affine() {
         let parts = [v[0], v[1], v[4], v[5], v[12], v[13]].map(matrix_num);
@@ -1576,7 +1576,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextDecorationStyle::Dashed => "dashed",
         TextDecorationStyle::Wavy => "wavy",
     }.into());
-    m.insert("text-decoration-color".into(), css_color_to_css(&style.text_decoration_color));
+    // `currentcolor` сериализуется в used-значение, как в Chrome.
+    m.insert("text-decoration-color".into(),
+        color_to_css(style.text_decoration_color.resolve(style.color)));
+    m.insert("-webkit-text-fill-color".into(), color_to_css(style.used_text_fill_color()));
     m.insert("text-overflow".into(), if style.text_overflow == style.text_overflow_right {
         style.text_overflow.to_css()
     } else {

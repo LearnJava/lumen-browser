@@ -2518,8 +2518,18 @@ function _lumen_compat_alias(key) {
 // IDL attribute `webkitTransform` / `WebkitTransform` / `WebKitTransform` of an aliased property
 // (the enumeration test in `compat/css-style-declaration-alias-enumeration.html` spells one with a
 // capital K): true for the 51 Compat §3 names, so `'webkitTransform' in el.style` holds.
+//
+// `-webkit-mask-box-image*` (Compat §3, `compat/webkit-mask-box-enumeration.html`, BUG-1631) are IDL
+// attributes too, but their `mask-border*` target is not implemented, so they are not in the alias
+// table: enumerated here, stored as raw text, no painting.
+var _LUMEN_WEBKIT_MASK_BOX_IMAGE_ATTRS = {};
+('webkitMaskBoxImage webkitMaskBoxImageOutset webkitMaskBoxImageRepeat webkitMaskBoxImageSlice ' +
+ 'webkitMaskBoxImageSource webkitMaskBoxImageWidth').split(' ').forEach(function(n) {
+    _LUMEN_WEBKIT_MASK_BOX_IMAGE_ATTRS[n] = true;
+});
 function _lumen_is_compat_alias_attr(prop) {
     if (typeof prop !== 'string' || !/^[Ww]eb[Kk]it[A-Z]/.test(prop)) return false;
+    if (Object.prototype.hasOwnProperty.call(_LUMEN_WEBKIT_MASK_BOX_IMAGE_ATTRS, prop)) return true;
     // An alias resolves to its unprefixed name; any other `webkitFoo` stays `-webkit-foo`.
     return _lumen_camel_to_kebab(prop).indexOf('-webkit-') !== 0;
 }

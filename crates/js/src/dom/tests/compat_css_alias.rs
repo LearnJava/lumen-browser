@@ -64,3 +64,18 @@ fn alias_attributes_are_in_style_and_css_supports_holds() {
         "true,true,true,true|false|true|true"
     );
 }
+
+#[test]
+fn webkit_mask_box_image_attributes_are_enumerated_but_not_supported_in_css() {
+    let rt = rt();
+    assert_eq!(
+        eval_str(
+            &rt,
+            "var s = document.createElement('div').style; \
+             ['webkitMaskBoxImage','webkitMaskBoxImageOutset','webkitMaskBoxImageRepeat','webkitMaskBoxImageSlice',\
+              'webkitMaskBoxImageSource','webkitMaskBoxImageWidth'].map(function(n){return n in s}).join() \
+             + '|' + ('webkitMaskBoxImageBogus' in s) + '|' + CSS.supports('-webkit-mask-box-image', 'none')"
+        ),
+        "true,true,true,true,true,true|false|false"
+    );
+}

@@ -148,8 +148,8 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "unicode-bidi" => {
-            // CSS Writing Modes L4 §2.2. Legacy `-webkit-`/`-moz-` префиксы
-            // изолятов принимаются как алиасы — их до сих пор пишут в CSS
+            // CSS Writing Modes L4 §2.2. Legacy `-webkit-` префикс
+            // изолятов принимается как алиас — его до сих пор пишут в CSS
             // локализованных страниц. Невалидное значение оставляет прежнее.
             let v = val.trim();
             if let Some(parsed) = match_unicode_bidi(v) {
@@ -917,6 +917,12 @@ pub(in crate::style) fn apply_decl_text(
             // [ dot | circle | double-circle | triangle | sesame ] | <string>`.
             if let Some(s) = parse_text_emphasis_style(val) {
                 style.text_emphasis_style = s;
+            }
+        }
+        "-webkit-text-fill-color" => {
+            // WHATWG Compat §3.1: `<color>`; initial `currentcolor`.
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.text_fill_color = c;
             }
         }
         "text-emphasis-color" => {

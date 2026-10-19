@@ -649,6 +649,9 @@ pub fn graft_geometry_with_cascade(
         // post-layout payload e.g. InlineRun's laid-out `lines`, absent on the
         // freshly-built `new` side).
         new.rect = prev.rect;
+        // Раскладка InlineRun могла увеличить высоту строки против стиля (BUG-1281): paint
+        // умножает индекс строки на это значение, а `lines` взяты из `prev`.
+        new.used_line_height = prev.used_line_height;
         let fresh_kind = std::mem::replace(&mut new.kind, prev.kind.clone());
         if run_change == RunStyleChange::PaintOnly {
             adopt_fresh_segment_styles(&mut new.kind, fresh_kind);

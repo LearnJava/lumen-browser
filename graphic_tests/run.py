@@ -10,26 +10,34 @@
     LUMEN_PROFILE=dev-release python graphic_tests/run.py --build  # быстрая сборка (2–3× быстрее)
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
-    python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
+    python graphic_tests/run.py --ipc               # ВСЕ тесты по IPC (CPU-снимок), без gdigrab (TAB-7)
+    python graphic_tests/run.py --gdigrab           # ВСЕ тесты через gdigrab (поведение до TEST-9)
     python graphic_tests/run.py --per-test-process  # opt-out из живого окна: kill+relaunch на каждый тест
     python graphic_tests/run.py --paint-bisect 100  # DEVX-4: diff% при отключении каждого LUMEN_NO_* флага
     python graphic_tests/run.py --self-test         # TEST-9: проверка GPU_CAPTURE без запуска браузера
 
+Гибридный захват (TEST-9): по умолчанию большинство тестов снимается через IPC (headless,
+детерминированный CPU-снимок, ~4 мин на полный прогон), а через gdigrab живого окна идут
+только тесты из GPU_CAPTURE (трансформы/clip-path, фильтры, AA-края — там CPU-растеризатор и
+wgpu расходятся). У каждого способа своя таблица должников: KNOWN_DEBTORS (gdigrab) и
+KNOWN_DEBTORS_IPC — baseline, снятый одним способом, к другому неприменим. Полный прогон по
+умолчанию всё равно требует foreground-окна: gdigrab-подмножество — его живое окно.
+
 Workflow:
-  1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
-  2. TEST-00 calibration: ищем магента-маркеры → определяем crop offset.
+  1. Снимаем Edge headless + Lumen (IPC или gdigrab, см. выше) для каждого теста по порядку.
+  2. TEST-00 calibration (если в прогоне есть gdigrab-тесты): ищем магента-маркеры → crop offset.
   3. Каждый следующий тест: кропаем Lumen по offset из калибровки, считаем diff с Edge.
   4. Первый тест с diff% > threshold останавливает пайплайн (если не --continue-on-fail).
 
-Режим --ipc (TAB-7): вместо окна Lumen + gdigrab контроллер один раз поднимает
+Режим --ipc (TAB-7, с TEST-9 — «всё через IPC»): вместо окна Lumen + gdigrab контроллер один раз поднимает
 `lumen.exe --ipc-server` (TCP-сервер таб-команд), держит одну вкладку и шлёт на каждый
 тест NavigateTab + Screenshot — обратно приходит детерминированный CPU-снимок (PNG),
 который уже от (0,0), поэтому магента-калибровка/crop offset не нужны. Протокол —
 length-prefixed bincode (см. секцию «IPC client» ниже и crates/ipc/src/lib.rs).
 Edge-эталон, ffmpeg-crop и diff-метрика — те же. BUG-221 закрыт: CPU-снимок исполняет
-скрипты страницы (dump_mode.rs), поэтому JS-тесты в --ipc проходят. Дефолтным
-остаётся gdigrab — CPU-снимок расходится с реальным окном на GPU-чувствительных
-тестах (трансформы, clip-path, фильтры, AA-края; GPU_CAPTURE); им нужен gdigrab.
+скрипты страницы (dump_mode.rs), поэтому JS-тесты в --ipc проходят. Для
+GPU-чувствительных тестов (трансформы, clip-path, фильтры, AA-края; GPU_CAPTURE)
+CPU-снимок расходится с реальным окном — им нужен gdigrab (по умолчанию так и есть).
 
 Живое окно — режим по умолчанию (SDC-4, ранее SDC-3 за флагом --live): один
 процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест (то был
@@ -304,16 +312,16 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('125', '125-media-scripting.html', 0.5, 'Media Queries L5 §6.2: scripting — Lumen с QuickJS по умолчанию scripting:enabled matched (зелёный a), none/initial-only не матчат (красные b/c), невалидное sometimes → Unsupported (красный d); Edge тоже scripting enabled'),
     ('126', '126-media-inverted-colors.html', 0.5, 'Media Queries L5 §5.8: inverted-colors — без инверсии цветов none matched (зелёный a), inverted не матчит (красный b), невалидное maybe → Unsupported (красный c); Edge тоже по умолчанию inverted-colors:none'),
     ('128', '128-icc-color-management.html', 0.5, 'ICC colour management (ICC-6): Display P3 PNG (iCCP matrix-shaper). Свотчи закодированы так, что корректный P3→sRGB matrix-shaper трансформ восстанавливает известные in-gamut sRGB-цвета; Edge и Lumen, оба управляя цветом, дают идентичные пиксели. CMYK-ICC (A2B0 LUT) не в графтесте — Edge не применяет встроенный CMYK-профиль (свой SWOP), поэтому покрыт детерминированным Rust-тестом icc_color_management.rs'),
-    ('129', '129-svg-dynamic-createelementns.html', 0.5, 'BUG-243: динамический SVG, построенный на клиенте через document.createElementNS + setAttribute + appendChild/append (как docs/roadmap-*.html), без текста — только solid-фигуры (rect/circle/path/g+transform). Узлы должны попасть в нативную арену и отрисоваться как в Edge. ТРЕБУЕТ JS-пути захвата (gdigrab по умолчанию), не --ipc/CPU (детерминированный снимок не исполняет скрипты)'),
-    ('130', '130-svg-dynamic-nested-transforms.html', 0.5, 'BUG-243 (dynamic SVG, без текста): глубоко вложенные <g>-трансформы — кумулятивная композиция translate/rotate/scale (спираль из 16 вложенных квадратов) + каталог независимых translate()+scale() мотивов. Проверяет parse_svg_transform.compose на глубине. ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('131', '131-svg-dynamic-opacity-layering.html', 0.5, 'BUG-243 (dynamic SVG, без текста): alpha-композитинг через fill-opacity/stroke-opacity — Venn из полупрозрачных дисков, рампа fill-opacity, стопка одноцветных квадратов, полупрозрачные обводки. Смешанные области должны совпасть с Edge (прямая sRGB-альфа). ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('132', '132-svg-dynamic-use-symbol.html', 0.5, 'BUG-243 (dynamic SVG, без текста): инстансинг <defs>/<symbol>/<use> — мульти-фигурный символ, инстанцированный сеткой и кольцом с per-instance translate/scale/rotate. Путь shadow-clone, построенный из JS. ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('133', '133-svg-dynamic-fill-rule.html', 0.5, 'BUG-243 (dynamic SVG, без текста): fill-rule nonzero vs evenodd на самопересекающихся <path>/<polygon> (пентаграммы, концентрические квадраты-кольца) — evenodd-колонка показывает дырки, которые nonzero заливает. ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('134', '134-svg-dynamic-stroke-styles.html', 0.5, 'BUG-243 (dynamic SVG, без текста): обводки — stroke-width/linecap/linejoin/dasharray/dashoffset на <rect>/<line>/<polyline>/<path> (концентрические рамки, пунктиры с разными капами, ступенчатые полилинии с разными join). ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('135', '135-svg-dynamic-paint-order.html', 0.5, 'BUG-243 (dynamic SVG, без текста): порядок отрисовки по document order (z-stack) — каскад перекрытых квадратов/кругов, плетёная сетка баров, веер повёрнутых карт. Геометрия перекрытий должна совпасть с Edge. ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('136', '136-svg-dynamic-ellipse-radial.html', 0.5, 'BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('137', '137-svg-dynamic-transform-pinwheel.html', 0.5, 'BUG-243 (dynamic SVG, без текста): presentation-трансформы rotate(angle cx cy)/scale/matrix()/skewX — вертушки из лепестков-треугольников, кольцо повёрнутых прямоугольников, зеркальные matrix()-шевроны, skewX-сетка. Покрывает все ветки parse_svg_transform. ТРЕБУЕТ JS-захвата (gdigrab)'),
-    ('138', '138-svg-dynamic-dashboard.html', 0.5, 'BUG-243 (dynamic SVG, без текста): kitchen-sink «дашборд» — вложенные <g>, <defs>/<use>, fill-opacity, <path>-«пирог» из полигональных секторов, bar-chart, area+line-chart (polyline stroke + полупрозрачная заливка), <circle>/<ellipse>. Самая сложная композиция, всё solid/детерминировано. ТРЕБУЕТ JS-захвата (gdigrab)'),
+    ('129', '129-svg-dynamic-createelementns.html', 0.5, 'BUG-243: динамический SVG, построенный на клиенте через document.createElementNS + setAttribute + appendChild/append (как docs/roadmap-*.html), без текста — только solid-фигуры (rect/circle/path/g+transform). Узлы должны попасть в нативную арену и отрисоваться как в Edge.'),
+    ('130', '130-svg-dynamic-nested-transforms.html', 0.5, 'BUG-243 (dynamic SVG, без текста): глубоко вложенные <g>-трансформы — кумулятивная композиция translate/rotate/scale (спираль из 16 вложенных квадратов) + каталог независимых translate()+scale() мотивов. Проверяет parse_svg_transform.compose на глубине. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)'),
+    ('131', '131-svg-dynamic-opacity-layering.html', 0.5, 'BUG-243 (dynamic SVG, без текста): alpha-композитинг через fill-opacity/stroke-opacity — Venn из полупрозрачных дисков, рампа fill-opacity, стопка одноцветных квадратов, полупрозрачные обводки. Смешанные области должны совпасть с Edge (прямая sRGB-альфа).'),
+    ('132', '132-svg-dynamic-use-symbol.html', 0.5, 'BUG-243 (dynamic SVG, без текста): инстансинг <defs>/<symbol>/<use> — мульти-фигурный символ, инстанцированный сеткой и кольцом с per-instance translate/scale/rotate. Путь shadow-clone, построенный из JS.'),
+    ('133', '133-svg-dynamic-fill-rule.html', 0.5, 'BUG-243 (dynamic SVG, без текста): fill-rule nonzero vs evenodd на самопересекающихся <path>/<polygon> (пентаграммы, концентрические квадраты-кольца) — evenodd-колонка показывает дырки, которые nonzero заливает.'),
+    ('134', '134-svg-dynamic-stroke-styles.html', 0.5, 'BUG-243 (dynamic SVG, без текста): обводки — stroke-width/linecap/linejoin/dasharray/dashoffset на <rect>/<line>/<polyline>/<path> (концентрические рамки, пунктиры с разными капами, ступенчатые полилинии с разными join).'),
+    ('135', '135-svg-dynamic-paint-order.html', 0.5, 'BUG-243 (dynamic SVG, без текста): порядок отрисовки по document order (z-stack) — каскад перекрытых квадратов/кругов, плетёная сетка баров, веер повёрнутых карт. Геометрия перекрытий должна совпасть с Edge. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)'),
+    ('136', '136-svg-dynamic-ellipse-radial.html', 0.5, 'BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)'),
+    ('137', '137-svg-dynamic-transform-pinwheel.html', 0.5, 'BUG-243 (dynamic SVG, без текста): presentation-трансформы rotate(angle cx cy)/scale/matrix()/skewX — вертушки из лепестков-треугольников, кольцо повёрнутых прямоугольников, зеркальные matrix()-шевроны, skewX-сетка. Покрывает все ветки parse_svg_transform.'),
+    ('138', '138-svg-dynamic-dashboard.html', 0.5, 'BUG-243 (dynamic SVG, без текста): kitchen-sink «дашборд» — вложенные <g>, <defs>/<use>, fill-opacity, <path>-«пирог» из полигональных секторов, bar-chart, area+line-chart (polyline stroke + полупрозрачная заливка), <circle>/<ellipse>. Самая сложная композиция, всё solid/детерминировано.'),
     ('139', '139-float-flow.html', 0.5, 'RP-4 общий float-поток (CSS 2.1 §9.5): (1) clear:left во вложенном НЕ-BFC обёртке клирит float родителя — синий блок падает под красный float на полную ширину; (2) overflow:hidden BFC-блок рядом с float сдвигается за его правый край, не лезет под; (3) float внутри не-BFC обёртки стыкуется справа от внешнего float (наследуется float-контекст). Только solid-боксы без перекрытий (текст игнорируется, rule 3)'),
     ('140', '140-placeholder-pseudo.html', 0.5, 'P4 ::placeholder pseudo-element (CSS Pseudo-Elements L4 §4.10): input::placeholder { color } без правила и с правилом(-ями), опционально opacity. Swatch-боксы показывают резолвленный цвет (как в 66-selection-pseudo — реальный текст не сравнивается, только solid-цвет)'),
     ('141', '141-backface-visibility.html', 0.5, 'P4 backface-visibility culling (CSS Transforms L2 §5.1): rotateY(180deg)/rotateX(180deg) + backface-visibility:hidden прячет бокс (виден фон контейнера); rotateY(0deg) или backface-visibility:visible (default) — бокс остаётся виден. Только solid-боксы, без перекрытий'),
@@ -332,7 +340,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('154', '154-svg-external-image-gradients.html', 0.5, 'LIB-4 (ADR-027): внешний SVG через resvg вместо своего SVG-движка — <img src=local.svg> с linearGradient+clipPath и background-image: url(local.svg) с radialGradient+pattern. Свой SVG-to-DisplayList путь (lumen-layout/lumen-paint) рисует ноль linearGradient/radialGradient/clipPath/mask/filter/pattern/marker; эталон подтверждает не плоские/пустые боксы, а настоящие градиенты и повторяющийся паттерн'),
     ('155', '155-svg-inline-gradients.html', 0.5, 'LIB-5: inline <linearGradient>/<radialGradient> для fill="url(#id)" на живых DOM-элементах (rect/circle/path), не внешний файл (LIB-4) — дерево/каскад/хит-тест остаются свои, ADR-027 требует «модель путей/красок/градиентов» у usvg, не рендерер целиком. 6 панелей: горизонтальный linearGradient на rect, radialGradient на circle, вертикальный 3-стопный linearGradient на path (через ResolvedClipShape::Polygon клип), gradientUnits=userSpaceOnUse на скруглённом rect, stop-opacity (затухание поверх синего фона), наследование fill:url() через <g> с rotate(). Реализация: SvgPaint::Url резолвится в SvgPaint::Gradient в box_tree/svg.rs (доступ к Document есть только там, не в каскаде); paint клипует PushClipPath/PushClipRect(RoundedRect) по форме и рисует DrawLinearGradient/DrawRadialGradient внутри — без нового рендер-бэкенда. mask/clipPath/pattern/marker и мультиконтурный (дырчатый) путь под градиентом — вне этого среза'),
     ('156', '156-svg-mask.html', 0.5, 'LIB-9 (остаток LIB-5): SVG <mask> элемент через PushMaskLayer/PopMaskLayer (CSS Masking L1 §5) — инфраструктура уже была реализована во всех трёх бэкендах, но её не строил ни один emit-путь. 6 панелей: rect замаскирован в левую половину, circle замаскирован меньшим circle, составная маска из трёх rect ("H"), luminance (по умолчанию) — серый #808080 даёт полупрозрачность, mask-type="alpha" — тот же серый даёт полную видимость (та же заливка маски, два разных результата — прямое сравнение режимов), путь замаскирован через CSS `mask:` (не только presentation-атрибут). Реализация: mask="url(#id)"/CSS mask резолвится в BoxKind::SvgShape::svg_mask (box_tree/svg.rs::resolve_svg_mask, тот же паттерн, что LIB-5 для градиентов — доступ к Document есть только на этапе построения box tree); paint эмитит изолирующий PushOpacity{1.0} + собственную заливку формы + PushMaskLayer + контент маски + PopMaskLayer + PopOpacity (svg_text_decoration.rs::emit_svg_shape_masked). cpu_raster.rs получил настоящую (не заглушку) реализацию PushMaskLayer/PopMaskLayer — LayerComposite::MaskLayer читает alpha/luminance напрямую из отрендеренного слоя маски, без MaskSpec-заглушки. Область: только SvgShape-элементы (rect/circle/ellipse/line/path/polygon/polyline) — mask на <g>-группах вне этого среза (падает на прежнее, до-LIB-9, поведение). femtovg-бэкенд остаётся scissor-заглушкой (ADR-017: фолбэк, wgpu — дефолт, где маска полностью работает)'),
-    ('157', '157-webgl2.html', 0.5, 'P3-webgl2 срез 6 (docs/tasks/ph3-webgl2.md): getContext(\'webgl2\') реального software-растеризатора, presented на страничный <canvas> (срез 5). 5 канвасов, все full-viewport quad (clip [-1,1]x[-1,1], без частичного покрытия — ни один пиксель не AA-граница, чтобы software- и Edge GPU-путь не разошлись на сглаживании): drawArrays ES 1.0 (зелёный поверх красного clear) · drawElements с Uint16Array ELEMENT_ARRAY_BUFFER (синий) · createVertexArray/bindVertexArray(null)/rebind (оранжевый — виден только если VAO реально восстанавливает attrib state) · GLSL ES 3.00 in/out + texture() сэмплит 1×1 текстуру (голубой, texture() возвращает усреднённый цвет текстуры независимо от UV) · uniformMatrix3fv нулевой матрицей вырождает треугольники в точку — видим только clear-цвет (не золотой цвет quad), что доказывает, что юниформ реально доходит до вершинного шейдера, а не тихо игнорируется. ТРЕБУЕТ JS-захвата (gdigrab) — как 57/129-138, cpu_raster не исполняет JS'),
+    ('157', '157-webgl2.html', 0.5, 'P3-webgl2 срез 6 (docs/tasks/ph3-webgl2.md): getContext(\'webgl2\') реального software-растеризатора, presented на страничный <canvas> (срез 5). 5 канвасов, все full-viewport quad (clip [-1,1]x[-1,1], без частичного покрытия — ни один пиксель не AA-граница, чтобы software- и Edge GPU-путь не разошлись на сглаживании): drawArrays ES 1.0 (зелёный поверх красного clear) · drawElements с Uint16Array ELEMENT_ARRAY_BUFFER (синий) · createVertexArray/bindVertexArray(null)/rebind (оранжевый — виден только если VAO реально восстанавливает attrib state) · GLSL ES 3.00 in/out + texture() сэмплит 1×1 текстуру (голубой, texture() возвращает усреднённый цвет текстуры независимо от UV) · uniformMatrix3fv нулевой матрицей вырождает треугольники в точку — видим только clear-цвет (не золотой цвет quad), что доказывает, что юниформ реально доходит до вершинного шейдера, а не тихо игнорируется.'),
     ('158', '158-background-attachment.html', 0.5, 'P4-background-attachment CSS Backgrounds L3 §3.6: fixed-слой позиционируется от вьюпорта (1024×720), элемент — окно на него. Ряд 1: одна горизонтальная полоса 0..1024 из 4 цветов в трёх боксах — каждый показывает свою часть. Ряд 2: та же полоса scroll (все 4 цвета в боксе) · вертикальный split по 360px вьюпорта в двух боксах на разных x. Ряд 3: fixed-сетка поверх scroll-градиента (слои по отдельности) · repeat fixed-картинка 320×200 от центра вьюпорта (шов тайла y=660) · background-clip: content-box — область рисования сжата, позиционирование по-прежнему от вьюпорта. Статичный кадр (scroll 0): закрепление при прокрутке проверено живым окном'),
     ('159', '159-background-clip-text.html', 0.5, 'P4-background-clip-text CSS Backgrounds L4 §3.8: фон виден только сквозь глифы — linear/radial/цвет, потомки, padding+border, border-box как эталон'),
     ('160', '160-fieldset-legend.html', 0.5, 'FIELDSET-LEGEND HTML Rendering §15.3.13: rendered legend на верхней границе fieldset — середина border-top на середине legend, позади legend рамка не рисуется, содержимое ниже max(border-top, legend). A: legend выше рамки (рамка опущена на полразницы) · B: ниже рамки (по центру 24px-рамки) · C: margin-left:auto · D: margin:0 auto · E: UA-значения без автор-стилей (groove 2px, padding .35/.75/.625em, margin-inline 2px) · F: vertical-rl — legend на правой границе блока-начала. Только цветные боксы, без текста'),
@@ -509,8 +517,6 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #   0.23%. Остаток среза 10 назван верно — отсутствие AA у треугольного супа.
     #   Прежний комментарий:
     # '54': ('BUG-277', 1.22),    # Ратчет 2.32→1.22 (BUG-277 срез 10, 2026-08-05): нонзеро-заливка в wgpu перешла с ear-clipping на scanline-свип. Ear-clipping определён только для простых многоугольников — у «песочных часов» (самопересекающийся контур, ряд 3) уха нет вовсе, тесселятор возвращал НОЛЬ треугольников и фигура не рисовалась (одна она давала 1.18 п.п. из 2.32). A/B на этой машине: main 2.32 / фикс 1.22, оба замера повторены — улучшение не gdigrab-шум. Остаток = отсутствие AA у треугольного супа в wgpu (пиксель кромки либо полный цвет штриха, либо чистый фон, тогда как cpu_raster/Edge дают дробное покрытие) — класс BUG-247, отдельный долг, не геометрия. femtovg-baseline была 0.26% (BUG-173 FIXED, нативный DrawSvgStroke — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 2.32% (совпадает с BUG-277 рядом «54»)
-    '55': ('BUG-192', 0.54),    # <video> placeholder: фича корректна. Edge рисует `<video src="nonexistent.mp4">` БЕЗ серого placeholder (прозрачный, виден только фон) — Lumen рендерит так же (BUG-097: пустое <video> без poster/кадра не рисует ничего). Бокс с border (200×120, 3px solid #4299e1) совпадает с Edge по размеру/цвету. Декомпозиция diff (0.54%): 90% (0.48%) = font-parity 6 меток .label (11px sans, Inter vs Edge) — rule 3; остаток 0.05% = бордер-бокс на 1px ниже (y=212 vs 211), причина — line-height «normal» метки в ряду 1 (Inter ≈1.2 vs Edge sans → row1_height 171 vs 170), тоже font-parity. Реального дефекта плейсхолдера нет. Класс BUG-128. Ревизия P3 (2026-08-31): живой прогон дважды подряд стабильно даёт 0.54%, совпадает с baseline, ратчет не требуется
-    '57': ('BUG-099', 0.88),    # <canvas> getContext("2d") — Phase 2. Ратчет вниз 4.14→2.96 (прогон 2026-06-23)→0.91 (2026-07-29)→**0.88** (ревизия P3 2026-08-31). IPC даёт 27.96% (режим-зависимый артефакт захвата); нормальный gdigrab = 0.88%. Ратчет 2.96→0.91 (2026-07-29): BUG-099 — размеры битмапа `<canvas>` это intrinsic (content-box) размер, а не значение `width`/`height` (HTML Rendering §15.4.1 не маппит dimension-атрибуты canvas на свойства), поэтому `box-sizing:border-box` вычитал из битмапа рамку (c3 был 180×150 вместо 186×156 у Edge) и весь ряд 2 стоял на 5px выше; плюс битмап красился в border-box вместо content-box. Canvas-AA и lineCap/lineJoin/miterLimit закрыты тем же днём (rasterize.rs) — диф от этого почти не сдвинулся (0.91→0.700% по CPU-метрике, в пределах допуска ратчета). **Ревизия P3 2026-08-31:** live-прогон дважды подряд даёт стабильные 0.88% (проверено на воспроизводимость — повторный запуск без `--no-cache` подтвердил то же число; один запуск с `--no-cache` дал ложные 100% — фокус рабочего стола увели во время gdigrab-захвата, известная ловушка, не регрессия). Комментарий про «неприменяемый lineJoin» устарел — closed тем же 2026-07-29 (см. bugs/BUG-099-OPEN.md «третий заход»), убран. Небольшое улучшение 0.91→0.88 правдоподобно от BUG-451/452 (парсинг цвета/размера `<canvas>`, слиты в main тем же днём) — diff-картинка структурных отличий не показывает, только фоновый шум кромок/подписей. Остаток = 1px сдвиг ряда 2 (класс PS-1/BUG-124) + font-parity меток (BUG-128), оба домена P1, точечного P3-дефекта не осталось
     # '60' убран (BUG-277 срез 12, 2026-08-05): 0.74% → 0.15%, цель ≤0.5%
     #   достигнута тем же покрытием кромки штриха. Прежний комментарий:
     # '60': ('BUG-277', 0.74),    # SVG dash/curve stroke: femtovg-baseline была 0.40% (BUG-173 FIXED, нативный DrawSvgStroke — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 0.74% (совпадает с BUG-277 рядом «60»)
@@ -591,7 +597,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #   каскадно сместил sub-pixel snapping (класс BUG-124/PS-1), не новый дефект. BUG-335 (2026-07-24,
     #   P1, CC-CSS-2): ратчет 25.78%→8.01% — `PushScrollLayer` в wgpu не применял `apply_transform_to_clip()`
     '77': ('BUG-126', 12.94),   # anchor-positioning: corner/edge placement фикснут BUG-126 (53.45% → 12.94%); 3×3 сетка container 1 совпадает с Edge(position-area) пиксель-в-пиксель (diff). Остаток = (1) тест использует устаревшее имя `inset-area`, которое текущий Edge игнорирует (Edge поддерживает только `position-area`); (2) span-ряд container 2 — Lumen по спеку растягивает auto-width элементы на position-area band, Edge не отрисовывает span-* вовсе. Lumen спек-корректнее Edge; расхождение в reference-браузере, не дефект движка
-    '80': ('BUG-128', 9.91),    # border-collapse: collapse varied-width-border erasure фикснут BUG-200 (тонкая ячейка затирала толстую общую границу — границы ряда 3 теперь совпадают с Edge пиксель-в-пиксель); остаток = font-parity вертикальный дрейф (line-height «normal» Inter ≈1.2 vs Edge ≈1.06 → ячейки на ~2px выше, накапливается вниз по 4 таблицам)
+    '80': ('BUG-128', 2.28),    # Ратчет 9.91→2.28 (TEST-9-S2, 2026-10-19; стабильно, 09-19 тоже 2.28). Прежний комментарий: border-collapse: collapse varied-width-border erasure фикснут BUG-200 (тонкая ячейка затирала толстую общую границу — границы ряда 3 теперь совпадают с Edge пиксель-в-пиксель); остаток = font-parity вертикальный дрейф (line-height «normal» Inter ≈1.2 vs Edge ≈1.06 → ячейки на ~2px выше, накапливается вниз по 4 таблицам)
     '78': ('BUG-127', 3.60),   # scroll-driven animations: feature wired (F2-2) — animation-timeline: scroll()/view()/named драйвит прогресс анимации от позиции скролла, а не от часов (shell/animation_scheduler.rs). 12.02%→10.07%→9.54%: scroll()/named-боксы садятся в from-state как у Edge, view()-бокс едет по view-прогрессу (позиция совпадает); с D2-2 (BUG-231 FIXED) фон view-бокса композится (интерполированный оранжевый вместо teal). Остаток = font-parity текста (заголовок + метки + 5-строчный .info моноблок, Inter vs Edge, класс BUG-128, доминирует) — закроется только с FP-1. --ipc 2026-06-26: 10.07→5.76. Ратчет 2026-07-04 (ревизия P3): 5.76→4.64. Ратчет 2026-08-31 (ревизия P3): 4.64→3.60 — стабильно на двух прогонах, diff = чистый font-parity (заголовок/метки/.info моноблок), from-state рамки и view()-бокс совпадают пиксель-в-пиксель, новых дефектов нет
     '70': ('BUG-176', 1.63),    # object-fit SVG: inline <svg> игнорирует CSS object-fit/-position — viewBox маппится через preserveAspectRatio (BUG-198, 7.82% → 1.63%); все 5 режимов + эллипсы теперь совпадают по геометрии/заливке с Edge (раньше object-fit растягивал/кропал viewBox, эллипсы рисовались «стадионами»). Остаток = kappa-безье эллиптических дуг SVG <ellipse>/<circle> vs точная дуга Edge + sub-pixel AA по периметру/внутреннему rect (тот же корень, что BUG-176)
     # '71' убран (P3 2026-08-31, BUG-199): корень «дрейфа» — не движок, а сам тест.
@@ -658,8 +664,48 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 
-# TEST-9: тесты, которым нужен gdigrab (реальное GPU-окно); остальные могут идти
-# через --ipc (CPU-снимок). S1 только вводит таблицу — дефолтный захват не меняется.
+# TEST-9-S2: должники, которых снимают через IPC (CPU-снимок, не в GPU_CAPTURE).
+# Та же форма, что у KNOWN_DEBTORS, но baseline снят именно IPC-путём: CPU-растеризатор
+# и wgpu — независимые реализации, число «gdigrab-должника» к нему неприменимо.
+# Детерминированный снимок не шумит от прогона к прогону, поэтому допуск уже.
+KNOWN_DEBTORS_IPC: dict[str, tuple[str, float]] = {
+    '18': ('BUG-219', 6.09),  # gdigrab-baseline 2.11
+    '32': ('BUG-128', 3.70),  # gdigrab-baseline 3.75
+    '34': ('BUG-128', 3.10),  # gdigrab-baseline 3.02
+    '46': ('BUG-128', 1.35),  # gdigrab-baseline 1.96
+    '58': ('BUG-100', 2.47),  # gdigrab-baseline 2.41
+    '61': ('BUG-103', 3.26),  # gdigrab-baseline 10.59
+    '63': ('BUG-128', 1.40),  # gdigrab-baseline 1.81
+    '64': ('BUG-128', 7.58),  # gdigrab-baseline 8.99
+    '65': ('BUG-128', 0.50),  # gdigrab-baseline 1.69
+    '66': ('BUG-128', 1.01),  # gdigrab-baseline 1.07
+    '67': ('BUG-128', 1.36),  # gdigrab-baseline 1.36
+    '70': ('BUG-176', 1.19),  # gdigrab-baseline 1.63
+    '77': ('BUG-126', 12.94),  # gdigrab-baseline 12.94
+    '82': ('BUG-128', 1.68),  # gdigrab-baseline 2.38
+    '83': ('BUG-128', 8.19),  # gdigrab-baseline 3.87
+    '84': ('BUG-128', 5.96),  # gdigrab-baseline 6.02
+    '90': ('BUG-209', 0.91),  # gdigrab-baseline 1.29
+    '93': ('BUG-225', 3.02),  # gdigrab-baseline 3.54
+    '95': ('BUG-128', 2.95),  # gdigrab-baseline 3.00
+    '110': ('BUG-214', 1.40),  # gdigrab-baseline 1.42
+    '113': ('BUG-215', 1.36),  # gdigrab-baseline 1.30
+    '120': ('BUG-217', 3.26),  # gdigrab-baseline 3.26
+    '122': ('BUG-237', 9.58),  # gdigrab-baseline 9.69
+    '126': ('BUG-126', 3.26),  # gdigrab-baseline 3.26
+    '132': ('BUG-246', 1.83),  # gdigrab-baseline 2.67
+    '134': ('BUG-247', 3.37),  # gdigrab-baseline 2.99
+    '137': ('BUG-247', 1.01),  # gdigrab-baseline 1.36
+    '140': ('BUG-128', 1.29),  # gdigrab-baseline 1.27
+    '141': ('BUG-128', 1.46),  # gdigrab-baseline 1.44
+    '145': ('BUG-290', 3.77),  # gdigrab-baseline 3.39
+    '149': ('BUG-288', 1.02),  # gdigrab-baseline 4.00
+    '156': ('BUG-936', 1.97),  # gdigrab-baseline 2.46
+}
+_DEBTOR_TOL_IPC = 0.5
+
+# TEST-9: тесты, которым нужен gdigrab (реальное GPU-окно); остальные идут
+# через IPC (CPU-снимок), см. resolve_mode.
 GPU_CAPTURE: frozenset[str] = frozenset({
     '100', '109', '130', '135', '136',                  # трансформы, clip-path
     '30', '52', '56',                                   # фильтры, блюр, blend
@@ -671,6 +717,29 @@ GPU_CAPTURE: frozenset[str] = frozenset({
 def capture_mode_for(tid: str) -> str:
     """Способ захвата Lumen для теста: 'gdigrab' (GPU-подмножество) или 'ipc'."""
     return 'gdigrab' if tid in GPU_CAPTURE else 'ipc'
+
+
+def resolve_mode(tid: str, plan: str, calibrate: bool) -> str:
+    """Способ захвата теста при плане прогона `plan`.
+
+    plan: 'hybrid' (по умолчанию: GPU_CAPTURE через gdigrab, остальные через IPC),
+    'ipc' (--ipc: всё через IPC) или 'gdigrab' (--gdigrab/--per-test-process: всё
+    через окно). TEST-00 — магента-калибровка crop offset для gdigrab: в гибриде он
+    идёт через gdigrab, только если в прогоне есть хоть один gdigrab-тест (calibrate).
+    """
+    if plan == 'ipc':
+        return 'ipc'
+    if plan == 'gdigrab':
+        return 'gdigrab'
+    if tid == '00':
+        return 'gdigrab' if calibrate else 'ipc'
+    return capture_mode_for(tid)
+
+
+def wants_gdigrab(ids, plan: str) -> bool:
+    """Есть ли среди `ids` тест, который при плане `plan` снимается через gdigrab
+    (не считая калибровочного TEST-00)."""
+    return any(resolve_mode(t, plan, False) == 'gdigrab' for t in ids if t != '00')
 
 
 def self_test() -> int:
@@ -686,14 +755,40 @@ def self_test() -> int:
         got = capture_mode_for(tid)
         if got != want:
             errors.append(f'capture_mode_for({tid!r}) = {got!r}, ожидалось {want!r}')
+    # TEST-9-S2: план прогона. (tid, plan, calibrate) → способ.
+    for (tid, plan, cal), want in (
+        (('03', 'hybrid', False), 'ipc'), (('100', 'hybrid', False), 'gdigrab'),
+        (('00', 'hybrid', False), 'ipc'), (('00', 'hybrid', True), 'gdigrab'),
+        (('03', 'ipc', True), 'ipc'), (('100', 'ipc', True), 'ipc'),
+        (('03', 'gdigrab', False), 'gdigrab'), (('00', 'gdigrab', False), 'gdigrab'),
+    ):
+        got = resolve_mode(tid, plan, cal)
+        if got != want:
+            errors.append(f'resolve_mode({tid!r}, {plan!r}, {cal}) = {got!r}, ожидалось {want!r}')
+    if wants_gdigrab(['00', '03'], 'hybrid') or not wants_gdigrab(['03', '57'], 'hybrid'):
+        errors.append('wants_gdigrab: гибрид неверно определяет нужду в gdigrab')
+    # Таблица IPC-должников: id известны, и ни один не в GPU_CAPTURE (их снимают gdigrab-ом).
+    for tid in sorted(KNOWN_DEBTORS_IPC, key=int):
+        if tid not in known:
+            errors.append(f'KNOWN_DEBTORS_IPC: id {tid} нет в TESTS')
+        if tid in GPU_CAPTURE:
+            errors.append(f'KNOWN_DEBTORS_IPC: {tid} в GPU_CAPTURE — его снимает gdigrab, '
+                          'baseline живёт в KNOWN_DEBTORS')
     for e in errors:
         print(f'--self-test: {e}')
     print('--self-test: ' + ('FAIL' if errors else f'ok ({len(GPU_CAPTURE)} id в GPU_CAPTURE, {len(known)} тестов)'))
     return 1 if errors else 0
 
 
-def check_debtor(tid: str, pct: float) -> tuple[str | None, str]:
-    """Проверяет тест против KNOWN_DEBTORS.
+def debtors_for(mode: str) -> tuple[dict[str, tuple[str, float]], float, str]:
+    """(таблица, допуск, имя таблицы) должников для способа захвата."""
+    if mode == 'ipc':
+        return KNOWN_DEBTORS_IPC, _DEBTOR_TOL_IPC, 'KNOWN_DEBTORS_IPC'
+    return KNOWN_DEBTORS, _DEBTOR_TOL, 'KNOWN_DEBTORS'
+
+
+def check_debtor(tid: str, pct: float, mode: str = 'gdigrab') -> tuple[str | None, str]:
+    """Проверяет тест против таблицы должников своего способа захвата (TEST-9-S2).
 
     Возвращает (verdict, message):
       None     — не должник, обычная логика
@@ -702,17 +797,18 @@ def check_debtor(tid: str, pct: float) -> tuple[str | None, str]:
       'RATCHET'— должник ниже baseline (нужно обновить запись)
       'REMOVE' — достиг 0.5% (нужно удалить запись)
     """
-    if tid not in KNOWN_DEBTORS:
+    table, tol, name = debtors_for(mode)
+    if tid not in table:
         return None, ''
-    bug, baseline = KNOWN_DEBTORS[tid]
+    bug, baseline = table[tid]
     if pct <= 0.5:
-        return 'REMOVE', f'  → KNOWN_DEBTORS: цель 0.5% достигнута! Удали запись «{tid}» ({bug}).'
-    if pct < baseline - _DEBTOR_TOL:
-        return 'RATCHET', (f'  → KNOWN_DEBTORS: прогресс! Снизь baseline {baseline:.2f}% → {pct:.2f}%'
-                           f' для «{tid}» ({bug}) в KNOWN_DEBTORS.')
-    if pct > baseline + _DEBTOR_TOL:
-        return 'REGRESS', (f'  → KNOWN_DEBTORS РЕГРЕССИЯ: {pct:.2f}% > baseline {baseline:.2f}%'
-                           f' + {_DEBTOR_TOL}% допуск для «{tid}» ({bug}).')
+        return 'REMOVE', f'  → {name}: цель 0.5% достигнута! Удали запись «{tid}» ({bug}).'
+    if pct < baseline - tol:
+        return 'RATCHET', (f'  → {name}: прогресс! Снизь baseline {baseline:.2f}% → {pct:.2f}%'
+                           f' для «{tid}» ({bug}) в {name}.')
+    if pct > baseline + tol:
+        return 'REGRESS', (f'  → {name} РЕГРЕССИЯ: {pct:.2f}% > baseline {baseline:.2f}%'
+                           f' + {tol}% допуск для «{tid}» ({bug}).')
     return 'OK', f'  ⚠ KNOWN DEBTOR {bug}: {pct:.2f}% (baseline {baseline:.2f}%)'
 
 
@@ -1596,6 +1692,7 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             crop_offset: tuple[int, int] | None,
             no_cache: bool = False,
             extra_env: dict[str, str] | None = None,
+            mode: str = 'gdigrab',
             ) -> tuple[bool, tuple[int, int] | None, float, dict | None, list[str]]:
     """Запускает один тест.
 
@@ -1605,6 +1702,10 @@ def run_one(tid: str, html: str, threshold: float, label: str,
     непустой список FAIL'ит тест независимо от diff_pct (баг, невидимый на скриншоте).
     extra_env применяется только в дефолтном режиме захвата (не --ipc/--live,
     DEVX-4: LUMEN_NO_* paint-бисект).
+    mode (TEST-9-S2): 'ipc' — CPU-снимок по TCP, 'gdigrab' — окно (живое или
+    per-test-process, смотря что поднято в main). crop_offset при 'ipc' возвращается
+    без изменений: (0,0) относится только к этому снимку, а gdigrab-тестам нужна
+    калибровка TEST-00.
     """
     test_path = os.path.join(TESTS_DIR, html)
     if not os.path.exists(test_path):
@@ -1624,7 +1725,8 @@ def run_one(tid: str, html: str, threshold: float, label: str,
 
     rel_html = os.path.relpath(test_path, REPO).replace('\\', '/')
     console_errors: list[str] = []
-    if _IPC_CLIENT is not None:
+    ipc_mode = mode == 'ipc'
+    if ipc_mode:
         # IPC-режим (TAB-7): детерминированный CPU-снимок по TCP, без gdigrab.
         try:
             ipc_capture_lumen(test_path, lumen_raw)
@@ -1635,7 +1737,6 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             print(f'TEST-{tid}: FAIL (IPC screenshot missing)')
             return False, crop_offset, -1.0, None, []
         # CPU-снимок уже от (0,0): магента-калибровка/crop offset не нужны.
-        crop_offset = (0, 0)
     elif _LIVE_CLIENT is not None:
         # Live-window режим (SDC-3): один процесс/окно на весь прогон, но
         # снимок всё ещё через gdigrab — та же магента-калибровка, что и в
@@ -1692,7 +1793,8 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
             return False, None, -1.0, None, []
 
-    ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
+    crop_xy = (0, 0) if ipc_mode else crop_offset
+    ffmpeg_crop(lumen_raw, lumen_crop, crop_xy[0], crop_xy[1])
     if os.path.exists(lumen_raw):
         os.remove(lumen_raw)
     if not os.path.exists(lumen_crop):
@@ -1704,7 +1806,7 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         return False, crop_offset, -1.0, None, console_errors
 
     pct, region = diff_stats(diff_png)
-    debtor_verdict, debtor_msg = check_debtor(tid, pct)
+    debtor_verdict, debtor_msg = check_debtor(tid, pct, mode)
     if debtor_verdict == 'OK':
         passed = True
         region_str = _fmt_region(region) if region else ''
@@ -2049,8 +2151,13 @@ def main() -> int:
     parser.add_argument('--no-cache', action='store_true',
                         help='Принудительная пересъёмка Edge-скриншотов (игнорировать кэш)')
     parser.add_argument('--ipc', action='store_true',
-                        help='Захват Lumen через `--ipc-server` (детерминированный CPU-снимок по TCP) '
-                             'вместо gdigrab — без окна/ffmpeg-grab/магента-калибровки (TAB-7)')
+                        help='ВСЕ тесты через `--ipc-server` (детерминированный CPU-снимок по TCP) '
+                             'вместо gdigrab — без окна/ffmpeg-grab/магента-калибровки (TAB-7). '
+                             'По умолчанию (TEST-9) IPC уже захват большинства тестов; gdigrab '
+                             'остаётся только для GPU_CAPTURE')
+    parser.add_argument('--gdigrab', action='store_true',
+                        help='TEST-9: ВСЕ тесты через gdigrab живого окна (старое поведение до TEST-9); '
+                             'по умолчанию через gdigrab идут только тесты из GPU_CAPTURE')
     parser.add_argument('--live', action='store_true',
                         help='Не-op: --live — режим по умолчанию с SDC-4, флаг оставлен для '
                              'обратной совместимости старых команд/скриптов.')
@@ -2074,16 +2181,18 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
-    if args.ipc and args.per_test_process:
-        print('--ipc и --per-test-process взаимоисключающие (--ipc уже держит один процесс '
-              'на весь прогон, TAB-7).')
+    if args.ipc and (args.per_test_process or args.gdigrab):
+        print('--ipc несовместим с --per-test-process и --gdigrab: --ipc снимает ВСЕ тесты '
+              'CPU-снимком по одному IPC-процессу (TAB-7).')
         return 2
     if args.paint_bisect and args.ipc:
         print('--paint-bisect несовместим с --ipc: нужен свежий процесс Lumen на '
               'каждый LUMEN_NO_* флаг, чтобы переменная окружения гарантированно применилась '
               '(--paint-bisect использует kill+relaunch сам, --ipc для него бессмыслен).')
         return 2
-    use_live = not args.ipc and not args.per_test_process
+    # TEST-9-S2: план захвата. По умолчанию гибрид (GPU_CAPTURE через gdigrab, остальное
+    # через IPC); --ipc / --gdigrab / --per-test-process сводят его к одному способу.
+    plan = 'ipc' if args.ipc else 'gdigrab' if (args.gdigrab or args.per_test_process) else 'hybrid'
 
     os.makedirs(SHOTS, exist_ok=True)
     preflight()
@@ -2091,39 +2200,6 @@ def main() -> int:
 
     if args.paint_bisect:
         return run_paint_bisect(args.paint_bisect, no_cache=args.no_cache)
-
-    # IPC-режим (TAB-7): один раз поднимаем lumen --ipc-server, держим одну
-    # вкладку, навигируем её на каждый тест. Завершение — через atexit.
-    if args.ipc:
-        global _IPC_CLIENT, _IPC_TAB
-        print('IPC-режим: запуск lumen --ipc-server...')
-        try:
-            _IPC_CLIENT = LumenIpcClient(LUMEN, REPO)
-            _IPC_TAB = _IPC_CLIENT.create_tab()
-        except (IpcError, OSError) as e:
-            print(f'Не удалось запустить IPC-сервер: {e}')
-            return 2
-        import atexit
-        atexit.register(_IPC_CLIENT.shutdown)
-        print(f'IPC-сервер готов (вкладка {_IPC_TAB}); gdigrab/магента-калибровка отключены.')
-
-    # Live-window режим (SDC-3, дефолт с SDC-4): один раз поднимаем настоящее
-    # окно lumen (--mcp-live-port) и держим его на весь прогон вместо
-    # kill+relaunch на каждый тест. gdigrab/магента-калибровка остаются (см.
-    # capture_lumen_live). --per-test-process (opt-out) или --ipc пропускают
-    # этот блок и используют свои стратегии захвата ниже/в run_one.
-    if use_live:
-        global _LIVE_CLIENT
-        port = _free_tcp_port()
-        print(f'Live-режим: запуск lumen --mcp-live-port {port}...')
-        try:
-            _LIVE_CLIENT = LiveWindowClient(LUMEN, REPO, port)
-        except McpLiveError as e:
-            print(f'Не удалось запустить живое окно: {e}')
-            return 2
-        import atexit
-        atexit.register(_LIVE_CLIENT.shutdown)
-        print('Живое окно готово; один процесс на весь прогон.')
 
     crop_offset: tuple[int, int] | None = None
     results: list[dict] = []
@@ -2138,7 +2214,7 @@ def main() -> int:
             return 1
         run_filter = set(DEPS[args.bisect]) | {args.bisect}
         crop_offset = _load_crop_offset()
-        if crop_offset is None:
+        if crop_offset is None and wants_gdigrab(run_filter, plan):
             run_filter.add('00')
         # внутри бисекта первый провал не должен останавливать прогон
         args.continue_on_fail = True
@@ -2149,9 +2225,10 @@ def main() -> int:
         # screenshots/crop_offset.txt, а каталог gitignored — в свежем worktree
         # кэша нет, и `--only NN` падал с «no crop offset — run TEST-00 first»,
         # выталкивая в полный 20-минутный прогон. Дотягиваем TEST-00 сами, как
-        # это уже делают --bisect и --recheck. В --ipc offset не нужен вовсе
-        # (CPU-снимок от (0,0)).
-        if not args.ipc and args.only != '00' and _load_crop_offset() is None:
+        # это уже делают --bisect и --recheck. Тесту, который снимается через IPC,
+        # offset не нужен вовсе (CPU-снимок от (0,0)).
+        if (args.only != '00' and wants_gdigrab(run_filter, plan)
+                and _load_crop_offset() is None):
             run_filter.add('00')
             print('Нет кэша crop offset — добавляю TEST-00 (калибровка) перед '
                   f'TEST-{args.only}.')
@@ -2170,10 +2247,52 @@ def main() -> int:
             crop_offset = _load_crop_offset()
             if crop_offset:
                 print(f'Калибровка пропущена (crop_offset={crop_offset} из кэша).')
-            else:
+            elif wants_gdigrab(fail_ids, plan):
                 fail_ids.add('00')  # нет кэша — нужно перекалибровать
         run_filter = fail_ids
         print(f'--recheck: {len(fail_ids)} тест(ов) из последнего прогона')
+
+    # --- Способ захвата каждого теста прогона и клиенты под него (TEST-9-S2) ---
+    selected = [t[0] for t in TESTS if run_filter is None or t[0] in run_filter]
+    # `--only 00` — явная просьба прогнать калибровку, а она нужна только gdigrab-пути.
+    calibrate = wants_gdigrab(selected, plan) or (run_filter == {'00'} and plan != 'ipc')
+    modes = {tid: resolve_mode(tid, plan, calibrate) for tid in selected}
+    n_ipc = sum(1 for m in modes.values() if m == 'ipc')
+    print(f'Захват: {n_ipc} через IPC (CPU-снимок), {len(modes) - n_ipc} через gdigrab '
+          f'(план: {plan}).', flush=True)
+
+    # IPC-режим (TAB-7): один раз поднимаем lumen --ipc-server, держим одну
+    # вкладку, навигируем её на каждый IPC-тест. Завершение — через atexit.
+    if n_ipc:
+        global _IPC_CLIENT, _IPC_TAB
+        print('IPC-режим: запуск lumen --ipc-server...')
+        try:
+            _IPC_CLIENT = LumenIpcClient(LUMEN, REPO)
+            _IPC_TAB = _IPC_CLIENT.create_tab()
+        except (IpcError, OSError) as e:
+            print(f'Не удалось запустить IPC-сервер: {e}')
+            return 2
+        import atexit
+        atexit.register(_IPC_CLIENT.shutdown)
+        print(f'IPC-сервер готов (вкладка {_IPC_TAB}).')
+
+    # Live-window режим (SDC-3, дефолт с SDC-4): один раз поднимаем настоящее
+    # окно lumen (--mcp-live-port) и держим его на весь прогон вместо
+    # kill+relaunch на каждый тест. gdigrab/магента-калибровка остаются (см.
+    # capture_lumen_live). Окно нужно только если в прогоне есть gdigrab-тест;
+    # --per-test-process (opt-out) пропускает этот блок и снимает kill+relaunch-ом.
+    if len(modes) > n_ipc and not args.per_test_process:
+        global _LIVE_CLIENT
+        port = _free_tcp_port()
+        print(f'Live-режим: запуск lumen --mcp-live-port {port}...')
+        try:
+            _LIVE_CLIENT = LiveWindowClient(LUMEN, REPO, port)
+        except McpLiveError as e:
+            print(f'Не удалось запустить живое окно: {e}')
+            return 2
+        import atexit
+        atexit.register(_LIVE_CLIENT.shutdown)
+        print('Живое окно готово; один процесс на весь прогон.')
 
     # --- Прогон ---
     # BUG-1062: серия подряд идущих диффов > ~90% почти наверняка означает
@@ -2188,9 +2307,9 @@ def main() -> int:
             continue
         passed, crop_offset, pct, region, console_errors = run_one(
             tid, html, threshold, label, crop_offset,
-            no_cache=args.no_cache,
+            no_cache=args.no_cache, mode=modes[tid],
         )
-        debtor_verdict, debtor_msg = check_debtor(tid, pct)
+        debtor_verdict, debtor_msg = check_debtor(tid, pct, modes[tid])
         if pct < 0:
             status = 'ERROR'
         elif console_errors:
@@ -2212,11 +2331,12 @@ def main() -> int:
             'status': status,
             'diff_pct': round(pct, 4),
             'diff_region': region,
+            'capture': modes[tid],
         }
         if console_errors:
             entry['console_errors'] = console_errors
         if debtor_verdict is not None:
-            bug, baseline = KNOWN_DEBTORS[tid]
+            bug, baseline = debtors_for(modes[tid])[0][tid]
             entry['debtor'] = {'bug': bug, 'baseline': baseline, 'verdict': debtor_verdict}
         if tid in DEPS:
             entry['deps'] = DEPS[tid]

@@ -249,6 +249,10 @@ pub struct ComputedStyle {
     /// CSS Text Decoration L4 §5.4 — `text-emphasis-color`. Inherited.
     /// Initial: `CurrentColor` — разрешается в `style.color` при рендере.
     pub text_emphasis_color: CssColor,
+    /// WHATWG Compat §3.1 — `-webkit-text-fill-color`. Inherited.
+    /// Initial: `CurrentColor` (глиф красится `color`); хранится как задано,
+    /// `currentcolor` резолвится в `color` самого фрагмента (`used_text_fill_color`).
+    pub text_fill_color: CssColor,
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
@@ -489,9 +493,10 @@ pub struct ComputedStyle {
     /// наследуется.
     pub transform: Vec<TransformFn>,
     /// CSS Transforms L2 §2 — `translate: none | <tx> [<ty>]`.
-    /// Individual translate in px; composed BEFORE `transform` in the final matrix.
+    /// Individual translate (`<length-percentage>` по X и Y; процент — от border
+    /// box, BUG-1292); composed BEFORE `transform` in the final matrix.
     /// `None` = `none` (identity). Not inherited.
-    pub translate: Option<(f32, f32)>,
+    pub translate: Option<(Length, Length)>,
     /// CSS Transforms L2 §2 — `rotate: none | <angle>`.
     /// Individual 2D rotation in radians; composed BEFORE `transform`.
     /// `None` = `none` (identity). Not inherited.
@@ -1221,6 +1226,13 @@ impl ComputedStyle {
         !self.column_wrap_nowrap && self.column_height_px(em, viewport).is_some_and(|h| h > 0.0)
     }
 
+    /// Used value `-webkit-text-fill-color` (WHATWG Compat §3.1): цвет заливки
+    /// глифов; `currentcolor` (initial) — это `color`. Декорации, тень и
+    /// emphasis-marks остаются на `color`.
+    pub fn used_text_fill_color(&self) -> Color {
+        self.text_fill_color.resolve(self.color)
+    }
+
     /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`
     /// дают `color` элемента, остальное — явный цвет в sRGB.
     pub fn used_caret_color(&self) -> Color {
@@ -1321,6 +1333,7 @@ impl ComputedStyle {
             text_decoration_thickness: TextDecorationThickness::Auto,
             text_emphasis_style: TextEmphasisStyle::None,
             text_emphasis_color: CssColor::CurrentColor,
+            text_fill_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
             text_underline_position: TextUnderlinePosition::Auto,
             text_underline_offset: None,
@@ -1710,6 +1723,7 @@ impl ComputedStyle {
             text_decoration_thickness: inherited.text_decoration_thickness,
             text_emphasis_style: inherited.text_emphasis_style.clone(),
             text_emphasis_color: inherited.text_emphasis_color,
+            text_fill_color: inherited.text_fill_color,
             text_emphasis_position: inherited.text_emphasis_position,
             text_underline_position: inherited.text_underline_position,
             text_underline_offset: inherited.text_underline_offset,
