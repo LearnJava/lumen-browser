@@ -179,7 +179,7 @@ pub use style::{
     AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
     AnimationFillMode, AnimationPlayState, TransitionBehavior,
-    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,

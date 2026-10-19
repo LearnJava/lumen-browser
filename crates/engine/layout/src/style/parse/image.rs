@@ -432,9 +432,9 @@ pub(in crate::style) fn parse_single_bg_layer(
         }
 
         // background-repeat keywords
-        if let Some(r) = BackgroundRepeat::parse(t) {
+        if let Some((r, used)) = BackgroundRepeat::parse_prefix(t, tokens.get(idx + 1).copied()) {
             layer.repeat = r;
-            idx += 1;
+            idx += used;
             continue;
         }
 
@@ -644,9 +644,9 @@ pub(in crate::style) fn parse_single_mask_layer(
         }
 
         // <repeat-style>
-        if let Some(r) = BackgroundRepeat::parse(t) {
+        if let Some((r, used)) = BackgroundRepeat::parse_prefix(t, tokens.get(idx + 1).copied()) {
             layer.repeat = r;
-            idx += 1;
+            idx += used;
             continue;
         }
 

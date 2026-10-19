@@ -241,7 +241,7 @@ use super::text_and_images::build;
             80.0,
             80.0,
             ObjectPosition { x: PositionComponent::Percent(0.5), y: PositionComponent::Percent(0.5) },
-            BackgroundRepeat::NoRepeat,
+            BackgroundRepeat::NO_REPEAT,
             origin,
             origin,
         );
@@ -261,7 +261,7 @@ use super::text_and_images::build;
             20.0,
             100.0,
             ObjectPosition { x: PositionComponent::Percent(0.0), y: PositionComponent::Percent(0.0) },
-            BackgroundRepeat::RepeatX,
+            BackgroundRepeat::REPEAT_X,
             origin,
             origin,
         );

@@ -363,7 +363,7 @@ fn mask_image_none_clears() {
 #[test]
 fn mask_repeat_no_repeat() {
     let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
-    assert_eq!(first_p_mask(&root).repeat, BackgroundRepeat::NoRepeat);
+    assert_eq!(first_p_mask(&root).repeat, BackgroundRepeat::NO_REPEAT);
 }
 
 #[test]
@@ -452,9 +452,9 @@ fn mask_longhands_cycle_over_layers() {
     );
     let layers = &first_p_style(&root).mask_layers;
     assert_eq!(layers.len(), 3);
-    assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
-    assert_eq!(layers[1].repeat, BackgroundRepeat::RepeatX);
-    assert_eq!(layers[2].repeat, BackgroundRepeat::NoRepeat);
+    assert_eq!(layers[0].repeat, BackgroundRepeat::NO_REPEAT);
+    assert_eq!(layers[1].repeat, BackgroundRepeat::REPEAT_X);
+    assert_eq!(layers[2].repeat, BackgroundRepeat::NO_REPEAT);
 }
 
 #[test]
@@ -498,7 +498,7 @@ fn mask_longhand_without_image_creates_a_layer() {
     let layers = &first_p_style(&root).mask_layers;
     assert_eq!(layers.len(), 1);
     assert_eq!(layers[0].image, BackgroundImage::None);
-    assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+    assert_eq!(layers[0].repeat, BackgroundRepeat::NO_REPEAT);
 }
 
 #[test]
@@ -510,7 +510,7 @@ fn mask_shorthand_single_layer() {
     let m = first_p_mask(&root);
     assert_eq!(m.image, BackgroundImage::Url("m.png".into()));
     assert_eq!(m.size, BackgroundSize::Cover);
-    assert_eq!(m.repeat, BackgroundRepeat::NoRepeat);
+    assert_eq!(m.repeat, BackgroundRepeat::NO_REPEAT);
     assert_eq!(m.origin, BackgroundOrigin::ContentBox);
     // Один <geometry-box> задаёт и origin, и clip.
     assert_eq!(m.clip, MaskClip::ContentBox);
@@ -551,7 +551,7 @@ fn mask_shorthand_resets_unspecified_longhands() {
         "p { mask-repeat: no-repeat; mask-mode: luminance; mask: url(m.png); }",
     );
     let m = first_p_mask(&root);
-    assert_eq!(m.repeat, BackgroundRepeat::Repeat, "reset to initial");
+    assert_eq!(m.repeat, BackgroundRepeat::REPEAT, "reset to initial");
     assert_eq!(m.mode, MaskMode::Alpha, "reset to initial");
 }
 
@@ -564,7 +564,7 @@ fn mask_shorthand_multi_layer() {
     let layers = &first_p_style(&root).mask_layers;
     assert_eq!(layers.len(), 2);
     assert_eq!(layers[0].image, BackgroundImage::Url("a.png".into()));
-    assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+    assert_eq!(layers[0].repeat, BackgroundRepeat::NO_REPEAT);
     assert_eq!(layers[0].composite, MaskComposite::Add);
     assert!(matches!(layers[1].image, BackgroundImage::Gradient(_)));
     assert_eq!(layers[1].composite, MaskComposite::Subtract);

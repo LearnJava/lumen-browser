@@ -273,7 +273,7 @@ pub use values::scroll::{
 };
 pub use values::background::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
-    BackgroundRepeat, BackgroundSize, BackgroundSpecified, BgSizeAxis, GradientCorner, ImageRendering, MaskClip,
+    BackgroundRepeat, RepeatStyle, BackgroundSize, BackgroundSpecified, BgSizeAxis, GradientCorner, ImageRendering, MaskClip,
     ObjectFit, ParsedGradient, RadialShape, RadialSize, radial_gradient_radii,
 };
 pub use values::flexgrid::{

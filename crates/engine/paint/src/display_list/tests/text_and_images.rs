@@ -87,7 +87,7 @@
         let (tw, th, x0, y0, rx, ry, sx, sy) = bg_tile_geometry(
             BackgroundSize::Auto,
             &pos,
-            BackgroundRepeat::Round,
+            BackgroundRepeat::ROUND,
             30.0,
             30.0,
             100.0,
@@ -114,7 +114,7 @@
         let (tw, th, ..) = bg_tile_geometry(
             BackgroundSize::Auto,
             &pos,
-            BackgroundRepeat::Round,
+            BackgroundRepeat::ROUND,
             25.0,
             50.0,
             100.0,

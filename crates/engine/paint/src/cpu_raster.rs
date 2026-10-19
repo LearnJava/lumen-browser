@@ -5828,7 +5828,7 @@ mod tests {
                 src: "missing.png".to_string(),
                 size: lumen_layout::BackgroundSize::Auto,
                 position: lumen_layout::ObjectPosition::background_initial(),
-                repeat: lumen_layout::BackgroundRepeat::NoRepeat,
+                repeat: lumen_layout::BackgroundRepeat::NO_REPEAT,
                 image_rendering: lumen_layout::ImageRendering::Auto,
             },
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
@@ -6006,7 +6006,7 @@ mod tests {
             src: "blue.png".to_string(),
             size: BackgroundSize::Cover,
             position: ObjectPosition::default(),
-            repeat: BackgroundRepeat::NoRepeat,
+            repeat: BackgroundRepeat::NO_REPEAT,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
@@ -6032,7 +6032,7 @@ mod tests {
             src: "a.svg".to_string(),
             size: BackgroundSize::Contain,
             position: ObjectPosition::default(),
-            repeat: BackgroundRepeat::NoRepeat,
+            repeat: BackgroundRepeat::NO_REPEAT,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(100, 100, &cmds, &images, 0.0, 0.0).expect("rasterize");
@@ -6058,7 +6058,7 @@ mod tests {
             // Auto size = 2×2 intrinsic; Repeat fills the box with tiles.
             size: BackgroundSize::Auto,
             position: ObjectPosition::default(),
-            repeat: BackgroundRepeat::Repeat,
+            repeat: BackgroundRepeat::REPEAT,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
@@ -6080,7 +6080,7 @@ mod tests {
             src: "b.png".to_string(),
             size: BackgroundSize::Length(lumen_layout::BgSizeAxis::Px(15.0), lumen_layout::BgSizeAxis::Px(8.0)),
             position: ObjectPosition { x: lumen_layout::PositionComponent::Px(2.5), y: lumen_layout::PositionComponent::Px(0.0) },
-            repeat: BackgroundRepeat::RepeatX,
+            repeat: BackgroundRepeat::REPEAT_X,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(64, 8, &cmds, &images, 0.0, 0.0).expect("rasterize");
