@@ -199,6 +199,27 @@ pub fn print_media_active() -> bool {
 }
 
 thread_local! {
+    /// Device pixel ratio for `@media (resolution)` / `(-webkit-*-device-pixel-ratio)`
+    /// — the value `window.devicePixelRatio` reports (the page zoom factor).
+    /// Set by the shell via [`set_device_pixel_ratio`] before a layout pass;
+    /// read by `media_context_from_viewport`. Sticky UA-wide state like
+    /// forced colors; default 1.0.
+    static DEVICE_PIXEL_RATIO: Cell<f32> = const { Cell::new(1.0) };
+}
+
+/// Sets the device pixel ratio seen by resolution media features for all
+/// subsequent layout passes on the current thread. Non-finite or non-positive
+/// values fall back to 1.0.
+pub fn set_device_pixel_ratio(dpr: f32) {
+    DEVICE_PIXEL_RATIO.with(|d| d.set(if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 }));
+}
+
+/// The device pixel ratio set on the current thread (1.0 by default).
+pub fn device_pixel_ratio() -> f32 {
+    DEVICE_PIXEL_RATIO.with(|d| d.get())
+}
+
+thread_local! {
     /// GAP-CSSANIM срез 9: this frame's live `height` overrides from the
     /// active `AnimationScheduler`/`TransitionScheduler` tick, keyed by node.
     /// Set by the shell via [`set_animated_heights`] right before the one
@@ -271,6 +292,7 @@ pub struct StyleEnvSnapshot {
     active_nid: u32,
     forced_colors: bool,
     print_media: bool,
+    device_pixel_ratio: f32,
     shadow_sheets: std::collections::HashMap<NodeId, lumen_css_parser::Stylesheet>,
 }
 
@@ -283,6 +305,7 @@ impl StyleEnvSnapshot {
             active_nid:    ACTIVE_NID.with(Cell::get),
             forced_colors: FORCED_COLORS.with(Cell::get),
             print_media:   PRINT_MEDIA.with(Cell::get),
+            device_pixel_ratio: DEVICE_PIXEL_RATIO.with(Cell::get),
             shadow_sheets: SHADOW_SHEETS.with(|m| m.borrow().clone()),
         }
     }
@@ -294,6 +317,7 @@ impl StyleEnvSnapshot {
         ACTIVE_NID.with(|a| a.set(self.active_nid));
         FORCED_COLORS.with(|f| f.set(self.forced_colors));
         PRINT_MEDIA.with(|p| p.set(self.print_media));
+        DEVICE_PIXEL_RATIO.with(|d| d.set(self.device_pixel_ratio));
         SHADOW_SHEETS.with(|m| *m.borrow_mut() = self.shadow_sheets.clone());
     }
 }
@@ -365,6 +389,7 @@ pub(in crate::style) fn media_context_from_viewport(viewport: Size, dark_mode: b
         prefers_dark: dark_mode,
         prefers_reduced_motion: false,
         forced_colors: forced_colors_active(),
+        resolution_dppx: device_pixel_ratio(),
         ..Default::default()
     }
 }
