@@ -2,7 +2,7 @@ use super::*;
 use super::layout_cache::finalize_block_height;
 use super::layout_dispatch::{dispatch_box, finish_after_match};
 use super::block_flow_trampoline::{self, DispatchOutcome};
-use super::multicol_flow;
+use super::multicol_flow::{self, Window};
 use super::multicol_fragmentation::{balanced_height, forced_breaks, item_lines, pack, ItemLines};
 
 /// One segment of flow children between `column-span: all` boundaries — CSS
@@ -110,6 +110,26 @@ pub(super) struct MulticolInit {
     /// of `column-height` (Multicol L2 §4.4: a spanner splits the row, the columns after it fill
     /// what is left, and a spanner that uses the whole row starts a new one).
     pub(super) row_used: Option<f32>,
+    /// Indices into `out` of the absolutely positioned boxes lifted out of the items and cut
+    /// across the columns on their own (`multicol_flow::take_oof`): placed already, so
+    /// `finish_frame` does not hand them to `lay_out_abs_children` as the container's own.
+    pub(super) oof_out: Vec<usize>,
+    /// Column windows of the last segment cut by [`emit_sliced_fragments`], for the container's own
+    /// absolutely positioned children (cut in `finish_frame`).
+    pub(super) frag_cols: Option<FragCols>,
+    /// How many segments were cut by [`emit_sliced_fragments`]; `frag_cols` stands for the
+    /// whole container only when it is one.
+    pub(super) frag_segments: u32,
+}
+
+/// Column geometry of a segment cut by [`emit_sliced_fragments`] without rows of columns.
+pub(super) struct FragCols {
+    /// `(lo, hi)` of every column in the segment's virtual coordinates.
+    windows: Vec<(f32, f32)>,
+    first_h: f32,
+    later_h: f32,
+    /// Page `y` of the segment's top edge.
+    origin: f32,
 }
 
 /// Which per-segment sub-loop a [`Frame`] is currently driving. `Frame::k`
@@ -471,21 +491,55 @@ fn column_height(balance: bool, limit: Option<f32>, total_h: f32, n_cols: usize)
     h.max(1.0)
 }
 
+/// Column windows `(lo, hi)` for out-of-flow pieces (Fragmentation L3 §4.4): the content windows
+/// with the last one stretched to its column's full block size, then empty columns of that size
+/// up to `bottom` (virtual coordinates). Columns of unbounded size (`column-fill: auto` without
+/// a height) are one and the same, so nothing is added.
+fn oof_windows(windows: &[(f32, f32)], h_of: &dyn Fn(usize) -> f32, n: usize, bottom: f32) -> Vec<(f32, f32)> {
+    let mut out = windows.to_vec();
+    let k = out.len() - 1;
+    let h = h_of(k);
+    if !h.is_finite() {
+        return out;
+    }
+    out[k].1 = out[k].1.max(out[k].0 + h);
+    while out.last().is_some_and(|w| w.1 < bottom - 0.01) && out.len() < n.max(1) + 200 {
+        let lo = out.last().map_or(0.0, |w| w.1);
+        out.push((lo, lo + h_of(out.len())));
+    }
+    out
+}
+
 /// CSS Multicol §3.4 / Fragmentation L3 — cuts a segment across its columns at the break points
 /// of the box tree ([`multicol_flow`]): between the children of a block on any depth, between
 /// the lines of a text run, at forced breaks; boxes that cannot be cut go whole into one
 /// column. A pure post-processing of the Measure pass's results — nothing is dispatched again.
 ///
+/// Absolutely positioned boxes whose containing block is inside the cut part are lifted out of it
+/// and cut on their own against the column windows, plus empty columns up to their bottom edge
+/// (Fragmentation L3 §4.4: their offset is measured in the stack of the fragmentainers).
+///
 /// Returns `false`, before anything is consumed, when an item holds an out-of-flow box that the
 /// virtual stack cannot move (the caller takes the atomic placement then).
 fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
-    use multicol_flow::{has_out_of_flow, Flow, Window};
+    use multicol_flow::{scan_oof, take_oof, Flow, OofScan};
     let seg_i = frame.seg_i;
     let item_idxs = frame.init.segments[seg_i].item_idxs.clone();
-    {
+    let scan = {
         let items: Vec<&LayoutBox> = item_idxs.iter().map(|&i| &frame.init.work[i]).collect();
-        if has_out_of_flow(&items) {
-            return false;
+        scan_oof(&items)
+    };
+    if scan == OofScan::Unsupported || (scan == OofScan::Inside && frame.init.col_rows.is_some()) {
+        return false;
+    }
+    // Absolute boxes of the cut part: their containing block is a fragmented box, so they are cut
+    // across the columns on their own, below (`(index of the item, box)`).
+    let mut lifted: Vec<(usize, LayoutBox)> = Vec::new();
+    if scan == OofScan::Inside {
+        for (k, &i) in item_idxs.iter().enumerate() {
+            let mut taken = Vec::new();
+            take_oof(&mut frame.init.work[i], 0, &mut taken);
+            lifted.extend(taken.into_iter().map(|b| (k, b)));
         }
     }
     let n = frame.init.n_cols as usize;
@@ -513,6 +567,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
     let first_h: f32;
     let later_h: f32;
     let mut rows_used = 1usize;
+    let oof_first: usize;
     {
         let items: Vec<multicol_flow::Item> = item_idxs
             .iter()
@@ -576,7 +631,30 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
             }
             seg_extent = seg_extent.max(hi - lo);
         }
+        let ow = oof_windows(&windows, &h_of, n, lifted.iter().map(|(k, b)| b.rect.y + flow.items[*k].1 + b.rect.height).fold(0.0, f32::max));
+        oof_first = frags.len();
+        if rows_cfg.is_none() {
+            for (c, &(lo, hi)) in ow.iter().enumerate() {
+                let win = Window {
+                    lo,
+                    hi,
+                    last: c + 1 == ow.len(),
+                    extent: h_of(c),
+                    col_top: cur_y,
+                    dx: content_x + c as f32 * (col_w + col_gap),
+                };
+                for (k, b) in &lifted {
+                    if let Some(piece) = multicol_flow::cut_oof(b, flow.items[*k].1, &win) {
+                        frags.push(piece);
+                    }
+                }
+            }
+            frame.init.frag_cols = Some(FragCols { windows, first_h, later_h, origin: cur_y });
+            frame.init.frag_segments += 1;
+        }
     }
+    let base = frame.init.out.len();
+    frame.init.oof_out.extend(base + oof_first..base + frags.len());
     frame.init.out.extend(frags);
     for &i in &item_idxs {
         frame.init.consumed[i] = true;
@@ -1330,6 +1408,7 @@ fn finish_frame(
 ) {
     let work = std::mem::take(&mut frame.init.work);
     let mut out = std::mem::take(&mut frame.init.out);
+    let own_start = out.len();
     for (i, b) in work.into_iter().enumerate() {
         if !frame.init.consumed[i] {
             out.push(b);
@@ -1350,11 +1429,61 @@ fn finish_frame(
         .children
         .iter()
         .enumerate()
-        .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .filter(|(i, c)| {
+            matches!(c.style.position, Position::Absolute | Position::Fixed) && !frame.init.oof_out.contains(i)
+        })
         .map(|(i, _)| (i, frame.init.content_x, frame.init.content_y))
         .collect();
     finish_after_match(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
         frame.init.own_pcb, &abs_deferred, measurer, viewport, hp,
     );
+    cut_own_abspos(frame, own_start, viewport);
+}
+
+/// Fragmentation L3 §4.4 — the container's own absolutely positioned children (placed against its
+/// padding box by `finish_after_match`) are cut across its columns: their `top` is an offset in the
+/// stack of the columns, so a box at `top: 150px` in a 100px high container starts 50px down the
+/// second column. Only when the container is one cut segment (no spanners, no rows of columns).
+fn cut_own_abspos(frame: &mut Frame, own_start: usize, viewport: Size) {
+    let Some(fc) = frame.init.frag_cols.take() else { return };
+    if frame.init.segments.len() != 1 || frame.init.frag_segments != 1 || frame.init.col_rows.is_some() {
+        return;
+    }
+    let s = &frame.init.s;
+    let (ox, oy) = super::layout_dispatch::relative_offset(s, frame.init.em, frame.init.cb, viewport);
+    let n = frame.init.n_cols as usize;
+    let (first_h, later_h) = (fc.first_h, fc.later_h);
+    let h_of = |k: usize| if k < n { first_h } else { later_h };
+    let origin = fc.origin + oy;
+    let is_own = |i: usize, c: &LayoutBox| {
+        i >= own_start && !matches!(c.kind, BoxKind::Skip) && c.style.position == Position::Absolute
+    };
+    let bottom = frame
+        .b
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| is_own(*i, c))
+        .map(|(_, c)| c.rect.y - origin + c.rect.height)
+        .fold(0.0, f32::max);
+    let ow = oof_windows(&fc.windows, &h_of, n, bottom);
+    let pitch = frame.init.col_w + frame.init.col_gap;
+    let children = std::mem::take(&mut frame.b.children);
+    for (i, c) in children.into_iter().enumerate() {
+        if !is_own(i, &c) {
+            frame.b.children.push(c);
+            continue;
+        }
+        let mut pieces = Vec::new();
+        for (k, &(lo, hi)) in ow.iter().enumerate() {
+            let win = Window { lo, hi, last: k + 1 == ow.len(), extent: h_of(k), col_top: origin, dx: ox + k as f32 * pitch };
+            pieces.extend(multicol_flow::cut_oof(&c, -origin, &win));
+        }
+        if pieces.is_empty() {
+            frame.b.children.push(c);
+        } else {
+            frame.b.children.extend(pieces);
+        }
+    }
 }

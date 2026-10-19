@@ -121,13 +121,20 @@ fn participates(b: &LayoutBox) -> bool {
 /// Can a column break fall inside this block (between its children, or through its box)?
 /// Everything else is monolithic.
 pub(super) fn is_fragmentable(b: &LayoutBox, depth: usize) -> bool {
+    fragmentable(b, depth, false)
+}
+
+/// [`is_fragmentable`]; with `oof` an absolutely positioned `b` qualifies as well (an extracted
+/// out-of-flow box is cut across the columns by [`cut_oof`]).
+fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
     let s = &b.style;
     let barred = ContainFlags::SIZE.0 | ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0;
     depth < MAX_DEPTH
         && matches!(b.kind, BoxKind::Block)
         && matches!(s.display, Display::Block | Display::ListItem | Display::FlowRoot | Display::Flex)
         && s.float_side == FloatSide::None
-        && !matches!(s.position, Position::Absolute | Position::Fixed | Position::Sticky)
+        && !matches!(s.position, Position::Fixed | Position::Sticky)
+        && (oof || s.position != Position::Absolute)
         && matches!(s.overflow_x, Overflow::Visible | Overflow::Clip)
         && matches!(s.overflow_y, Overflow::Visible | Overflow::Clip)
         && s.contain.0 & barred == 0
@@ -149,19 +156,89 @@ pub(super) fn is_fragmentable(b: &LayoutBox, depth: usize) -> bool {
         })
 }
 
-/// Anything that the stack cannot reproduce by a plain shift: out-of-flow or sticky boxes
-/// resolve against a containing block outside the item.
-pub(super) fn has_out_of_flow(items: &[&LayoutBox]) -> bool {
-    let mut stack: Vec<&LayoutBox> = items.to_vec();
-    while let Some(b) = stack.pop() {
-        if !matches!(b.kind, BoxKind::Skip)
-            && matches!(b.style.position, Position::Absolute | Position::Fixed | Position::Sticky)
-        {
-            return true;
+/// What the items hold of out-of-flow boxes, as [`scan_oof`] found it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum OofScan {
+    /// Nothing out of flow: the stack reproduces the items by a plain shift.
+    None,
+    /// Absolutely positioned boxes whose containing block lies inside their item — [`take_oof`]
+    /// lifts the ones in the cut part out, the rest travels with its monolithic box.
+    Inside,
+    /// A `fixed`/`sticky`/anchor-positioned box, or an absolute one resolving against a block
+    /// outside its item (its position was measured against a different origin): the stack
+    /// cannot move it.
+    Unsupported,
+}
+
+/// CSS Position L3 §3 / Fragmentation L3 §4.4 — classifies the out-of-flow boxes of `items`.
+pub(super) fn scan_oof(items: &[&LayoutBox]) -> OofScan {
+    use super::multicol_abspos::{establishes_abs_cb, uses_anchor_positioning};
+    // (box, a box at or above it inside the item is the containing block of absolute children,
+    // the extents `overflow: clip` ancestors cut the content to, per axis — [`take_oof`] would
+    // lift an absolute box out of the clip, so one that sticks out of it stays atomic)
+    type Span = Option<(f32, f32)>;
+    type ClipBox = (Span, Span);
+    let narrow = |outer: Span, lo: f32, hi: f32| -> Span {
+        Some(outer.map_or((lo, hi), |(a, b)| (lo.max(a), hi.min(b))))
+    };
+    let clip_of = |b: &LayoutBox, outer: ClipBox| -> ClipBox {
+        let r = &b.rect;
+        let x = if b.style.overflow_x == Overflow::Clip { narrow(outer.0, r.x, r.x + r.width) } else { outer.0 };
+        let y = if b.style.overflow_y == Overflow::Clip { narrow(outer.1, r.y, r.y + r.height) } else { outer.1 };
+        (x, y)
+    };
+    let mut stack: Vec<(&LayoutBox, bool, ClipBox)> =
+        items.iter().map(|b| (*b, establishes_abs_cb(&b.style), clip_of(b, (None, None)))).collect();
+    let mut found = OofScan::None;
+    while let Some((x, cb_in, clip)) = stack.pop() {
+        for c in &x.children {
+            if matches!(c.kind, BoxKind::Skip) {
+                continue;
+            }
+            match c.style.position {
+                Position::Fixed | Position::Sticky => return OofScan::Unsupported,
+                Position::Absolute => {
+                    let r = &c.rect;
+                    let out = |span: Span, lo: f32, hi: f32| span.is_some_and(|(a, b)| lo < a - EPS || hi > b + EPS);
+                    let escapes = out(clip.0, r.x, r.x + r.width) || out(clip.1, r.y, r.y + r.height);
+                    if !cb_in || escapes || uses_anchor_positioning(&c.style) || holds_avoid(c) {
+                        return OofScan::Unsupported;
+                    }
+                    found = OofScan::Inside;
+                    stack.push((c, true, clip_of(c, clip)));
+                }
+                _ => stack.push((c, cb_in || establishes_abs_cb(&c.style), clip_of(c, clip))),
+            }
         }
-        stack.extend(b.children.iter());
     }
-    false
+    found
+}
+
+/// `break-inside: avoid` inside an absolute box: [`cut_oof`] slices it by the column windows
+/// alone and cannot push the unbreakable part into the next column (nor stretch the fragment
+/// that is left behind), so such a box keeps the atomic placement.
+fn holds_avoid(b: &LayoutBox) -> bool {
+    b.style.break_inside == BreakValue::Avoid || b.children.iter().any(holds_avoid)
+}
+
+/// Lifts the absolutely positioned descendants of `b` out of the part of the tree that [`cut`]
+/// slices (fragmentable boxes only; a monolithic box keeps its own). They are cut across the
+/// columns on their own ([`cut_oof`]): their containing block is a fragmented box, so they have
+/// a block extent of their own that can fall into a window the containing block has no part in.
+pub(super) fn take_oof(b: &mut LayoutBox, depth: usize, out: &mut Vec<LayoutBox>) {
+    if !is_fragmentable(b, depth) {
+        return;
+    }
+    let mut i = 0;
+    while i < b.children.len() {
+        let c = &b.children[i];
+        if !matches!(c.kind, BoxKind::Skip) && c.style.position == Position::Absolute {
+            out.push(b.children.remove(i));
+            continue;
+        }
+        take_oof(&mut b.children[i], depth + 1, out);
+        i += 1;
+    }
 }
 
 /// `(lines before the item inside its run, lines of the whole run, run number)` for every
@@ -499,6 +576,15 @@ fn slice_edges(frag: &mut LayoutBox, top: bool, bottom: bool) {
 /// The part of `d` that falls into window `w`, placed in its column; `None` when it has none.
 /// `off` maps `d.rect.y` to its virtual position.
 pub(super) fn cut(d: &LayoutBox, off: f32, w: &Window, depth: usize) -> Option<LayoutBox> {
+    cut_at(d, off, w, depth, false)
+}
+
+/// [`cut`] for an absolutely positioned box lifted out by [`take_oof`]: it is sliced like a block.
+pub(super) fn cut_oof(d: &LayoutBox, off: f32, w: &Window) -> Option<LayoutBox> {
+    cut_at(d, off, w, 0, true)
+}
+
+fn cut_at(d: &LayoutBox, off: f32, w: &Window, depth: usize, oof: bool) -> Option<LayoutBox> {
     let vt = d.rect.y + off;
     let vb = vt + d.rect.height;
     let starts_here = vt >= w.lo - EPS && (vt < w.hi - EPS || (w.last && vt <= w.hi + EPS));
@@ -506,7 +592,7 @@ pub(super) fn cut(d: &LayoutBox, off: f32, w: &Window, depth: usize) -> Option<L
         return None;
     }
     let is_run = matches!(d.kind, BoxKind::InlineRun { .. });
-    let fragmentable = is_run || is_fragmentable(d, depth);
+    let fragmentable = is_run || fragmentable(d, depth, oof);
     if starts_here && (vb <= w.hi + EPS || !fragmentable) {
         let mut whole = d.clone();
         super::shift_tree(&mut whole, w.dx, w.col_top - w.lo + off);
@@ -549,7 +635,7 @@ pub(super) fn cut(d: &LayoutBox, off: f32, w: &Window, depth: usize) -> Option<L
             if !top_cut {
                 frag.children.push(c.clone());
             }
-        } else if let Some(piece) = cut(c, off, w, depth + 1) {
+        } else if let Some(piece) = cut_at(c, off, w, depth + 1, false) {
             frag.children.push(piece);
         }
     }
