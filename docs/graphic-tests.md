@@ -48,7 +48,8 @@ python graphic_tests/run.py --recheck                # re-run only FAIL tests fr
 python graphic_tests/run.py --build                  # cargo build --release first, then run
 python graphic_tests/run.py --no-cache               # force re-capture Edge screenshots
 python graphic_tests/run.py --bisect 100             # run unit deps of an interaction test, then the test; prints verdict
-python graphic_tests/run.py --ipc                    # deterministic CPU snapshot over TCP (TAB-7); no window/gdigrab, no real JS
+python graphic_tests/run.py --ipc                    # ALL tests as a deterministic CPU snapshot over TCP (TAB-7); no window/gdigrab
+python graphic_tests/run.py --gdigrab                # ALL tests through the live window + gdigrab (the behaviour before TEST-9)
 python graphic_tests/run.py --per-test-process       # opt out of the live window: kill+relaunch lumen.exe per test (old default)
 python graphic_tests/run.py --paint-bisect 100        # DEVX-4: baseline + one run per LUMEN_NO_* paint flag; prints a diff% table
 python graphic_tests/run.py --self-test                # TEST-9: check the GPU_CAPTURE table (ids exist in TESTS, no duplicates); no browser started
@@ -59,6 +60,7 @@ python graphic_tests/run.py --self-test                # TEST-9: check the GPU_C
 - `utils/ffmpeg.exe` and `graphic_tests/screenshots/` are **gitignored**, so a fresh worktree has neither. `ffmpeg.exe` is now resolved from the main working tree automatically (the worktree's `.git` file points at it); if it is missing there too, the run aborts in a second with a copy-paste `cp` line.
 - A missing `msedge.exe` aborts the same way — without it every test would fail with "Edge screenshot missing".
 - `LUMEN_PROFILE` defaults to `release`, while iteration builds are usually `dev-release`. If the requested profile has no `lumen.exe` but another profile does, the run aborts and prints the `LUMEN_PROFILE=<built> …` line instead of silently starting a ~10-minute cold build of the wrong profile. Passing `--build` still builds explicitly; if *no* profile is built, the cold build happens as before, with a warning up front.
+- **Hybrid capture is the default (TEST-9).** Most tests are captured over IPC (`lumen --ipc-server`, headless deterministic CPU snapshot, no focus needed); only the `GPU_CAPTURE` set in `run.py` (transforms/clip-path, filters/blur/blend, AA-edge tests — where the CPU rasterizer and wgpu legitimately differ) goes through the live window + gdigrab. `capture_mode_for(tid)` / `resolve_mode(...)` pick the way; each result row carries `capture`. The whole default run is ~2.5 min with Edge screenshots cached (was ~20 min); the live window is only started when the run contains a `GPU_CAPTURE` test, and TEST-00 (magenta calibration) runs through gdigrab only then. **Each capture way has its own debtor table** — `KNOWN_DEBTORS` (gdigrab, ±2 %) and `KNOWN_DEBTORS_IPC` (CPU snapshot, deterministic, ±0.5 %): a baseline measured one way is meaningless for the other. `--ipc` / `--gdigrab` / `--per-test-process` collapse the plan to one way and use the matching table.
 - `--only NN` with no cached crop offset pulls in TEST-00 (calibration) automatically, like `--bisect`/`--recheck` already did — a single test no longer forces a full run.
 
 **Live window is the default (SDC-4, formerly opt-in `--live` from SDC-3).** `run.py` keeps a single `lumen.exe --mcp-live-port N` window open for the entire run instead of killing and relaunching a process per test — the process-per-test model was the main source of wall-clock cost and focus-race flakiness ("magenta marker not found"). Navigation is driven through MCP (`LiveWindowSession`, SDC-2): `tools/call navigate` + `tools/call wait{condition:document_ready}` give a real load-complete signal instead of a blind `time.sleep`. The pixel capture itself is still gdigrab against the real GPU-rendered window (wgpu by default; not MCP's `resource://screenshot`, which renders through the CPU path and isn't at parity with the GPU renderer — same gap as `--ipc`), so the live-window default is safe for real-JS tests (57, 129–138) unlike `--ipc`. TEST-00 magenta calibration still runs once and the offset is reused for the rest of the run. `--live` is kept as a no-op alias for old commands/scripts.
@@ -74,7 +76,7 @@ Results are saved to `graphic_tests/results/`:
 
 Edge screenshots are cached: re-captured only when the HTML source is newer than the PNG.
 
-Pipeline: build Lumen release (if needed), then for each test — Edge headless + Lumen gdigrab + crop by magenta marker + pixel diff + % threshold. First test exceeding threshold stops the pipeline.
+Pipeline: build Lumen release (if needed), then for each test — Edge headless + Lumen (IPC snapshot or, for `GPU_CAPTURE`, gdigrab + crop by magenta marker) + pixel diff + % threshold. First test exceeding threshold stops the pipeline.
 
 Output is one line per test:
 ```
@@ -107,7 +109,7 @@ So a paint-affecting change has three independent golden sets to keep honest: th
 
 ## When the full run is required
 
-The full `--continue-on-fail` pipeline costs ~20 min, needs a focused window (gdigrab captures the desktop — never background it) and carries gdigrab noise. It is **mandatory** whenever the change can move pixels:
+The full `--continue-on-fail` pipeline costs ~2.5 min with cached Edge screenshots (~10 min on a fresh checkout, which must capture all of them), still needs a focused window for its gdigrab subset (`GPU_CAPTURE`; gdigrab captures the desktop — never background it) and carries gdigrab noise on that subset. It is **mandatory** whenever the change can move pixels:
 
 - paint / rasterization, display-list construction, compositing;
 - layout geometry, inline/flow/flex/grid/table algorithms;
@@ -150,5 +152,5 @@ Diff each against Edge with the same metric `run.py` uses (share of pixels where
 3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
 4. **Never rewrite test pages to work around engine limitations.** Test pages are the ground truth — they represent correct CSS as Edge renders it. If a test fails, fix the engine, not the test. Simplifying HTML to make a test pass is a false positive: the engine didn't improve, the bar was lowered. The only valid reason to edit a test page is a bug in the test itself (wrong expected output).
 4a. **Never change test thresholds. The diff threshold is 0.5% for every test** — in `graphic_tests/run.py` and `crates/driver/tests/cases/snapshot_vs_edge.rs`. Raising a threshold to make a test pass is forbidden (user rule, 2026-06-11): it masks real defects. Precedent: BUG-093 was "closed" by calibrating TEST-51 to 2.0% — the actual cause was BUG-123, a scroll-clip defect eating the container's border. If a test exceeds 0.5%, file a BUG-NNN and fix the engine.
-4b. **Known-debtors ratchet.** For pages that can't reach 0.5% because a feature is deferred: add `test_id → ("BUG-NNN", baseline_pct)` to `KNOWN_DEBTORS` in `run.py`. Ratchet (±2% gdigrab noise): regression if actual > baseline+2; ratchet down if actual < baseline-2; remove entry if ≤ 0.5%. Each entry requires an OPEN BUG-NNN. Full semantics in `run.py` comments and `docs/plans/cpu-vs-edge-gate.md`.
+4b. **Known-debtors ratchet.** For pages that can't reach 0.5% because a feature is deferred: add `test_id → ("BUG-NNN", baseline_pct)` to `KNOWN_DEBTORS` in `run.py` (gdigrab-captured tests, `GPU_CAPTURE`) or `KNOWN_DEBTORS_IPC` (everything else — baseline measured over IPC; deterministic, tolerance ±0.5). Ratchet (±2% gdigrab noise): regression if actual > baseline+2; ratchet down if actual < baseline-2; remove entry if ≤ 0.5%. Each entry requires an OPEN BUG-NNN. Full semantics in `run.py` comments and `docs/plans/cpu-vs-edge-gate.md`.
 5. **Single tracker — `BUGS.md` in the repo root.** New bug: an `OPEN` row with the next `BUG-NNN`. How a fixed bug moves to `BUGS-FIXED.md` — [`doc-sync.md`](doc-sync.md).
