@@ -135,7 +135,9 @@ pub(crate) fn install_performance_now(
             if monotonic_clock {
                 deterministic_clock_ms.fetch_add(1, Ordering::Relaxed) as f64
             } else {
-                0.0
+                // Замороженные часы стоят на 0, пока headless-снимок не сдвинет их
+                // `advance_deterministic_clock` (WPT-RUN-15, ожидание `reftest-wait`).
+                deterministic_clock_ms.load(Ordering::Relaxed) as f64
             }
         } else {
             std::time::SystemTime::now()

@@ -102,6 +102,11 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Called each `about_to_wait`. Timer callbacks run synchronously inside
     /// the JS context and may themselves schedule further timers or navigation.
     fn tick_timers(&self);
+    /// WPT-RUN-15: сдвинуть детерминированные часы до `ms` (виртуальное время
+    /// headless-снимка); `false`, если часы реальные. По умолчанию — нет часов.
+    fn advance_deterministic_clock(&self, _ms: f64) -> bool {
+        false
+    }
     /// PERF-14: settle in-flight `fetch()` requests for a runtime with no
     /// event loop behind it (headless one-shot modes) — see
     /// `lumen_js::v8_runtime::V8JsRuntime::settle_pending_fetches`. Returns
@@ -1064,6 +1069,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn tick_timers(&self) {
         self.eval_js("_lumen_tick_timers()");
+    }
+    fn advance_deterministic_clock(&self, ms: f64) -> bool {
+        self.rt.advance_deterministic_clock(ms)
     }
     fn settle_pending_fetches(&self, budget: std::time::Duration) -> usize {
         self.rt.settle_pending_fetches(budget)

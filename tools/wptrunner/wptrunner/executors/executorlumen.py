@@ -907,13 +907,13 @@ class LumenIpcProtocol(Protocol):
 class LumenRefTestExecutor(RefTestExecutor):
     """reftest executor for Lumen, driven over `lumen --ipc-server` (TEST-4).
 
-    Scope cut (smoke pass, see `docs/tasks/p2-test-track.md#test-4`):
-    `class=reftest-wait` is not supported — `NavigateTab`/`Screenshot` run the
-    same single-shot, non-interactive pipeline as `--screenshot`/`--dump-layout`
-    (initial `<script>`s execute once during parse, but nothing pumps a later
-    JS-driven `reftest-wait` class removal before the render), and the IPC
-    protocol has no `script.evaluate`-equivalent to poll for one even if it
-    did. Pick reftest fixtures that render correctly on the first pass.
+    `class=reftest-wait` is handled inside the browser (WPT-RUN-15): `Screenshot`
+    runs the same single-shot pipeline as `--screenshot`, whose
+    `settle_after_load` (`crates/shell/src/dump_mode.rs`) sends `load`, a few rAF
+    frames, and — while `<html>` still carries `reftest-wait` — a `TestRendered`
+    event, then pumps timers and rAF on virtual time until the page removes the
+    class (5 s real / 10 s virtual cap, then the frame is taken as is). The IPC
+    protocol has no `script.evaluate`, so the wait cannot live in this executor.
     """
 
     protocol_cls = LumenIpcProtocol
@@ -977,6 +977,18 @@ CRASHTEST_POLL_EXPRESSION = f"""(() => {{
   const root = document.documentElement;
   return root && root.classList.contains("test-wait") ? "w" : "d";
 }})()"""
+
+#: Sent once, the first time the poll sees `test-wait`: upstream `test-wait.js`
+#: (`screenshot_if_ready`) dispatches a bubbling `TestRendered` on `<html>` as soon
+#: as the page is rendered with the class still on, and pages such as
+#: `css-anchor-position/long-anchor-chain-crash.html` only remove `test-wait` from
+#: that handler (WPT-RUN-15). No `<html>` yet is harmless: the next poll retries.
+CRASHTEST_RENDERED_EXPRESSION = """(() => {
+  const root = document.documentElement;
+  if (!root) return false;
+  root.dispatchEvent(new Event("TestRendered", {bubbles: true}));
+  return true;
+})()"""
 
 #: Consecutive `"d"` polls required before a crashtest is called finished. A
 #: page may add `test-wait` from its own `load` handler, which runs *after*
@@ -1042,6 +1054,7 @@ class LumenCrashtestExecutor(CrashtestExecutor):
         settle_deadline = loop.time() + NAV_SETTLE_S
         done_polls = 0
         no_context_since = None
+        rendered_sent = False
         while True:
             try:
                 value = await session.script.evaluate(
@@ -1075,6 +1088,12 @@ class LumenCrashtestExecutor(CrashtestExecutor):
                 done_polls = done_polls + 1 if state == "d" else 0
                 if done_polls >= CRASHTEST_DONE_POLLS:
                     return
+                if state == "w" and not rendered_sent:
+                    sent = await session.script.evaluate(
+                        expression=CRASHTEST_RENDERED_EXPRESSION,
+                        target=ContextTarget(context),
+                        await_promise=False)
+                    rendered_sent = sent.get("value") is True
             if deadline is not None and loop.time() > deadline:
                 raise ExecutorException(
                     "TIMEOUT", f"Timed out waiting for test-wait to clear: {url}")
