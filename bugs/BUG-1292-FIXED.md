@@ -54,4 +54,4 @@ WPT-RUN-14 срез 5: 35 id `css/css-transforms`, содержащих проц
 Проверка: `--screenshot` `css/css-transforms/transform-percent-001…008.html` совпадают с `transform-percent-ref.html`
 пиксель в пиксель (до правки — нет); юнит-тесты `filter_transform_snap_mask::{transform_translate_percent_*,
 translate_property_percent_and_calc}`, `hit_test::local_point_after_percent_translate_and_translate_property`.
-Остаток (SVG-элементы, сериализация `translate`, `calc()` в `rotate`/`scale`) — [BUG-1641](BUG-1641-OPEN.md).
+Остаток (SVG-элементы, сериализация `translate`, `calc()` в `rotate`/`scale`) — [BUG-1645](BUG-1645-OPEN.md).

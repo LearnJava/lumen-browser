@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-10-18T22:24:17",
+  "timestamp": "2026-10-19T14:29:30",
   "git": {
-    "commit": "6de9d906a",
-    "branch": "p1-flex-frag",
-    "subject": "Merge branch 'main' of github.com:LearnJava/lumen-browser into p1-flex-frag"
+    "commit": "5f160a4bb",
+    "branch": "p2-test-9-s2",
+    "subject": "Влить ветку p2-wpt-run-7-close: WPT-RUN-7 закрыта"
   },
   "crop_offset": [
-    1928,
+    8,
     99
   ],
   "halted_at": null,
   "summary": {
     "total": 164,
-    "passed": 106,
-    "failed": 16,
+    "passed": 111,
+    "failed": 6,
     "errors": 0,
-    "debtors": 42,
+    "debtors": 47,
     "skipped": 0
   },
   "tests": [
@@ -27,7 +27,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "gdigrab"
     },
     {
       "id": "01",
@@ -37,7 +38,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "02",
@@ -47,7 +49,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "03",
@@ -57,7 +60,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "04",
@@ -67,7 +71,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "05",
@@ -77,7 +82,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "06",
@@ -92,7 +98,8 @@
         "left": 25,
         "bottom": 240,
         "right": 904
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "07",
@@ -102,7 +109,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "08",
@@ -112,7 +120,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "09",
@@ -122,7 +131,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "10",
@@ -132,7 +142,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "11",
@@ -147,7 +158,8 @@
         "left": 201,
         "bottom": 144,
         "right": 864
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "12",
@@ -157,7 +169,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "13",
@@ -167,7 +180,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "14",
@@ -176,13 +190,9 @@
       "html": "14-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2029,
-      "diff_region": {
-        "top": 165,
-        "left": 175,
-        "bottom": 262,
-        "right": 604
-      }
+      "diff_pct": 0.0,
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "15",
@@ -192,7 +202,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "16",
@@ -202,7 +213,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "gdigrab"
     },
     {
       "id": "17",
@@ -212,7 +224,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "18",
@@ -220,18 +233,19 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 6.3432,
+      "status": "DEBTOR",
+      "diff_pct": 6.0928,
       "diff_region": {
         "top": 28,
         "left": 28,
         "bottom": 718,
         "right": 905
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-219",
-        "baseline": 2.11,
-        "verdict": "REGRESS"
+        "baseline": 6.09,
+        "verdict": "OK"
       }
     },
     {
@@ -241,13 +255,14 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.7667,
+      "diff_pct": 9.7907,
       "diff_region": {
         "top": 26,
         "left": 26,
         "bottom": 449,
         "right": 805
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-219",
         "baseline": 9.05,
@@ -262,7 +277,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "21",
@@ -270,14 +286,15 @@
       "label": "border-style dashed/dotted/double",
       "html": "21-border-style.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4635,
+      "status": "FAIL",
+      "diff_pct": 1.5356,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 452,
-        "right": 800
-      }
+        "right": 804
+      },
+      "capture": "ipc"
     },
     {
       "id": "22",
@@ -286,13 +303,14 @@
       "html": "22-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0011,
+      "diff_pct": 0.1632,
       "diff_region": {
-        "top": 474,
+        "top": 287,
         "left": 149,
         "bottom": 692,
         "right": 792
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "23",
@@ -307,7 +325,8 @@
         "left": 291,
         "bottom": 205,
         "right": 378
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "24",
@@ -316,13 +335,14 @@
       "html": "24-vertical-align.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4697,
+      "diff_pct": 0.4682,
       "diff_region": {
         "top": 172,
         "left": 20,
         "bottom": 227,
-        "right": 103
-      }
+        "right": 104
+      },
+      "capture": "ipc"
     },
     {
       "id": "25",
@@ -332,7 +352,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "26",
@@ -342,7 +363,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "27",
@@ -351,13 +373,14 @@
       "html": "27-direction-rtl.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2197,
+      "diff_pct": 0.2584,
       "diff_region": {
-        "top": 191,
+        "top": 190,
         "left": 143,
         "bottom": 203,
-        "right": 828
-      }
+        "right": 835
+      },
+      "capture": "ipc"
     },
     {
       "id": "28",
@@ -367,7 +390,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "29",
@@ -377,7 +401,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "30",
@@ -392,7 +417,8 @@
         "left": 31,
         "bottom": 540,
         "right": 767
-      }
+      },
+      "capture": "gdigrab"
     },
     {
       "id": "31",
@@ -401,13 +427,14 @@
       "html": "31-clip-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1607,
+      "diff_pct": 0.0623,
       "diff_region": {
         "top": 181,
-        "left": 41,
-        "bottom": 620,
+        "left": 61,
+        "bottom": 610,
         "right": 635
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "32",
@@ -416,16 +443,17 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2784,
+      "diff_pct": 3.6985,
       "diff_region": {
-        "top": 32,
+        "top": 33,
         "left": 60,
         "bottom": 495,
         "right": 922
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 3.75,
+        "baseline": 3.7,
         "verdict": "OK"
       }
     },
@@ -436,13 +464,14 @@
       "html": "33-multi-column.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0697,
+      "diff_pct": 0.051,
       "diff_region": {
-        "top": 172,
-        "left": 195,
+        "top": 181,
+        "left": 196,
         "bottom": 482,
         "right": 578
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "34",
@@ -451,16 +480,17 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.0813,
+      "diff_pct": 3.096,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 320,
         "right": 590
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 3.02,
+        "baseline": 3.1,
         "verdict": "OK"
       }
     },
@@ -472,7 +502,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "36",
@@ -481,13 +512,14 @@
       "html": "36-border-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3632,
+      "diff_pct": 0.2077,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 594,
+        "bottom": 592,
         "right": 774
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "37",
@@ -497,7 +529,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "38",
@@ -507,7 +540,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "39",
@@ -517,7 +551,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "40",
@@ -526,13 +561,14 @@
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.038,
+      "diff_pct": 0.0543,
       "diff_region": {
         "top": 217,
-        "left": 413,
+        "left": 414,
         "bottom": 396,
         "right": 788
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "41",
@@ -542,7 +578,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "42",
@@ -557,7 +594,8 @@
         "left": 1,
         "bottom": 300,
         "right": 130
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "43",
@@ -567,7 +605,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "44",
@@ -582,7 +621,8 @@
         "left": 0,
         "bottom": 0,
         "right": 1023
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "45",
@@ -591,13 +631,14 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5051,
+      "diff_pct": 1.5024,
       "diff_region": {
         "top": 0,
         "left": 0,
         "bottom": 460,
         "right": 1023
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-128",
         "baseline": 0.87,
@@ -611,16 +652,17 @@
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1898,
+      "diff_pct": 1.3463,
       "diff_region": {
-        "top": 74,
-        "left": 25,
+        "top": 75,
+        "left": 16,
         "bottom": 576,
         "right": 680
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 1.96,
+        "baseline": 1.35,
         "verdict": "OK"
       }
     },
@@ -630,19 +672,15 @@
       "label": "SVG basic shapes — rect/circle/ellipse/line in document flow, viewBox scale",
       "html": "47-svg-basic.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.4424,
+      "status": "PASS",
+      "diff_pct": 0.1023,
       "diff_region": {
-        "top": 26,
+        "top": 38,
         "left": 51,
         "bottom": 646,
         "right": 987
       },
-      "debtor": {
-        "bug": "BUG-176",
-        "baseline": 1.2,
-        "verdict": "REMOVE"
-      }
+      "capture": "ipc"
     },
     {
       "id": "48",
@@ -652,7 +690,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "49",
@@ -667,7 +706,8 @@
         "left": 0,
         "bottom": 0,
         "right": 1023
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "50",
@@ -677,7 +717,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "51",
@@ -693,6 +734,7 @@
         "bottom": 452,
         "right": 402
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-124",
         "baseline": 1.67,
@@ -706,13 +748,14 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3379,
+      "diff_pct": 1.3388,
       "diff_region": {
         "top": 67,
         "left": 111,
         "bottom": 295,
         "right": 911
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.36,
@@ -726,13 +769,14 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1437,
+      "diff_pct": 1.1443,
       "diff_region": {
         "top": 36,
         "left": 33,
         "bottom": 515,
         "right": 761
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-219",
         "baseline": 1.16,
@@ -746,13 +790,14 @@
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3121,
+      "diff_pct": 0.2493,
       "diff_region": {
         "top": 26,
         "left": 27,
-        "bottom": 677,
+        "bottom": 681,
         "right": 976
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "55",
@@ -760,7 +805,7 @@
       "label": "<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius",
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
-      "status": "FAIL",
+      "status": "PASS",
       "diff_pct": 0.403,
       "diff_region": {
         "top": 124,
@@ -768,11 +813,7 @@
         "bottom": 411,
         "right": 711
       },
-      "debtor": {
-        "bug": "BUG-192",
-        "baseline": 0.54,
-        "verdict": "REMOVE"
-      }
+      "capture": "gdigrab"
     },
     {
       "id": "56",
@@ -787,7 +828,8 @@
         "left": 60,
         "bottom": 518,
         "right": 821
-      }
+      },
+      "capture": "gdigrab"
     },
     {
       "id": "57",
@@ -795,19 +837,15 @@
       "label": "HTML LS §4.12.4 — <canvas> getContext(\"2d\"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box",
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.3832,
+      "status": "PASS",
+      "diff_pct": 0.3829,
       "diff_region": {
         "top": 184,
         "left": 94,
         "bottom": 401,
         "right": 701
       },
-      "debtor": {
-        "bug": "BUG-099",
-        "baseline": 0.88,
-        "verdict": "REMOVE"
-      }
+      "capture": "gdigrab"
     },
     {
       "id": "58",
@@ -816,16 +854,17 @@
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2203,
+      "diff_pct": 2.4695,
       "diff_region": {
         "top": 37,
         "left": 33,
-        "bottom": 184,
-        "right": 1007
+        "bottom": 185,
+        "right": 1002
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-100",
-        "baseline": 2.41,
+        "baseline": 2.47,
         "verdict": "OK"
       }
     },
@@ -836,13 +875,14 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0486,
+      "diff_pct": 10.0491,
       "diff_region": {
         "top": 28,
         "left": 25,
         "bottom": 395,
         "right": 1022
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-219",
         "baseline": 10.03,
@@ -856,13 +896,14 @@
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2592,
+      "diff_pct": 0.2045,
       "diff_region": {
-        "top": 19,
+        "top": 20,
         "left": 28,
-        "bottom": 649,
-        "right": 988
-      }
+        "bottom": 650,
+        "right": 989
+      },
+      "capture": "ipc"
     },
     {
       "id": "61",
@@ -870,18 +911,19 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 3.0256,
+      "status": "DEBTOR",
+      "diff_pct": 3.2597,
       "diff_region": {
         "top": 32,
         "left": 40,
         "bottom": 273,
         "right": 982
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-103",
-        "baseline": 10.59,
-        "verdict": "RATCHET"
+        "baseline": 3.26,
+        "verdict": "OK"
       }
     },
     {
@@ -891,13 +933,14 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5535,
+      "diff_pct": 0.5534,
       "diff_region": {
         "top": 0,
         "left": 0,
         "bottom": 710,
         "right": 1023
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-644",
         "baseline": 0.75,
@@ -911,16 +954,17 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0935,
+      "diff_pct": 1.3966,
       "diff_region": {
-        "top": 34,
+        "top": 31,
         "left": 11,
         "bottom": 437,
         "right": 1023
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 1.81,
+        "baseline": 1.4,
         "verdict": "OK"
       }
     },
@@ -931,16 +975,17 @@
       "html": "64-table.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.3706,
+      "diff_pct": 7.5806,
       "diff_region": {
-        "top": 42,
+        "top": 41,
         "left": 21,
         "bottom": 406,
         "right": 1023
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 8.99,
+        "baseline": 7.58,
         "verdict": "OK"
       }
     },
@@ -951,16 +996,17 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3066,
+      "diff_pct": 0.5013,
       "diff_region": {
-        "top": 29,
-        "left": 1,
-        "bottom": 695,
-        "right": 989
+        "top": 30,
+        "left": 2,
+        "bottom": 583,
+        "right": 806
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 1.69,
+        "baseline": 0.5,
         "verdict": "OK"
       }
     },
@@ -971,16 +1017,17 @@
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9178,
+      "diff_pct": 1.0088,
       "diff_region": {
-        "top": 42,
+        "top": 41,
         "left": 41,
         "bottom": 349,
-        "right": 301
+        "right": 315
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 1.07,
+        "baseline": 1.01,
         "verdict": "OK"
       }
     },
@@ -991,13 +1038,14 @@
       "html": "67-attr-typed.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2946,
+      "diff_pct": 1.3569,
       "diff_region": {
-        "top": 62,
+        "top": 61,
         "left": 41,
         "bottom": 446,
         "right": 690
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
         "baseline": 1.36,
@@ -1011,13 +1059,14 @@
       "html": "68-font-variation-settings.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0152,
+      "diff_pct": 0.0022,
       "diff_region": {
         "top": 21,
-        "left": 21,
+        "left": 24,
         "bottom": 232,
         "right": 768
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "69",
@@ -1027,7 +1076,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "70",
@@ -1036,16 +1086,17 @@
       "html": "70-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1764,
+      "diff_pct": 1.1941,
       "diff_region": {
         "top": 26,
         "left": 20,
         "bottom": 718,
         "right": 192
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-176",
-        "baseline": 1.63,
+        "baseline": 1.19,
         "verdict": "OK"
       }
     },
@@ -1056,13 +1107,14 @@
       "html": "71-starting-style.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0033,
+      "diff_pct": 0.0027,
       "diff_region": {
         "top": 260,
         "left": 292,
         "bottom": 459,
         "right": 491
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "72",
@@ -1071,13 +1123,14 @@
       "html": "72-host-slotted.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0054,
+      "diff_pct": 0.0019,
       "diff_region": {
         "top": 41,
-        "left": 31,
+        "left": 32,
         "bottom": 300,
         "right": 330
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "73",
@@ -1086,13 +1139,14 @@
       "html": "73-gap-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2184,
+      "diff_pct": 0.1412,
       "diff_region": {
-        "top": 181,
-        "left": 51,
-        "bottom": 316,
-        "right": 550
-      }
+        "top": 190,
+        "left": 60,
+        "bottom": 307,
+        "right": 541
+      },
+      "capture": "ipc"
     },
     {
       "id": "74",
@@ -1101,13 +1155,14 @@
       "html": "74-font-stretch.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0087,
+      "diff_pct": 0.0064,
       "diff_region": {
         "top": 25,
-        "left": 25,
+        "left": 27,
         "bottom": 220,
         "right": 924
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "75",
@@ -1117,7 +1172,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "76",
@@ -1126,13 +1182,14 @@
       "html": "76-motion-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0172,
+      "diff_pct": 0.0194,
       "diff_region": {
-        "top": 315,
+        "top": 305,
         "left": 102,
         "bottom": 525,
         "right": 999
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "77",
@@ -1148,6 +1205,7 @@
         "bottom": 505,
         "right": 940
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-126",
         "baseline": 12.94,
@@ -1161,13 +1219,14 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.8197,
+      "diff_pct": 2.8196,
       "diff_region": {
         "top": 28,
         "left": 25,
         "bottom": 522,
         "right": 904
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-127",
         "baseline": 3.6,
@@ -1181,13 +1240,14 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.7507,
+      "diff_pct": 5.7524,
       "diff_region": {
         "top": 45,
         "left": 60,
         "bottom": 477,
         "right": 600
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-128",
         "baseline": 5.65,
@@ -1200,18 +1260,19 @@
       "label": "CSS Tables L2 §17.6: border-collapse separate (4px spacing) vs collapse (no spacing) + mixed border widths + cell backgrounds",
       "html": "80-border-collapse.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 2.272,
+      "status": "DEBTOR",
+      "diff_pct": 2.2721,
       "diff_region": {
         "top": 22,
         "left": 21,
         "bottom": 483,
         "right": 658
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 9.91,
-        "verdict": "RATCHET"
+        "baseline": 2.28,
+        "verdict": "OK"
       }
     },
     {
@@ -1221,13 +1282,14 @@
       "html": "81-view-transition-name.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0033,
+      "diff_pct": 0.0027,
       "diff_region": {
         "top": 260,
         "left": 152,
         "bottom": 459,
         "right": 351
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "82",
@@ -1236,16 +1298,17 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5735,
+      "diff_pct": 1.6812,
       "diff_region": {
         "top": 35,
         "left": 20,
         "bottom": 633,
-        "right": 601
+        "right": 609
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 2.38,
+        "baseline": 1.68,
         "verdict": "OK"
       }
     },
@@ -1255,18 +1318,19 @@
       "label": "scroll-behavior: smooth/auto — overflow scroll containers + page-level scroll (CSS Scroll Behavior L1 §3)",
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 8.001,
+      "status": "DEBTOR",
+      "diff_pct": 8.1936,
       "diff_region": {
-        "top": 34,
+        "top": 31,
         "left": 51,
         "bottom": 516,
         "right": 972
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 3.87,
-        "verdict": "REGRESS"
+        "baseline": 8.19,
+        "verdict": "OK"
       }
     },
     {
@@ -1276,16 +1340,17 @@
       "html": "84-text-decoration-skip-ink.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.5414,
+      "diff_pct": 5.9638,
       "diff_region": {
-        "top": 32,
+        "top": 33,
         "left": 41,
         "bottom": 417,
-        "right": 433
+        "right": 451
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 6.02,
+        "baseline": 5.96,
         "verdict": "OK"
       }
     },
@@ -1303,6 +1368,7 @@
         "bottom": 601,
         "right": 1009
       },
+      "capture": "gdigrab",
       "deps": [
         "22",
         "14"
@@ -1315,13 +1381,14 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2525,
+      "diff_pct": 0.1763,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 674,
         "right": 1004
       },
+      "capture": "ipc",
       "deps": [
         "36",
         "14"
@@ -1336,6 +1403,7 @@
       "status": "PASS",
       "diff_pct": 0.0,
       "diff_region": null,
+      "capture": "ipc",
       "deps": [
         "13",
         "38"
@@ -1348,13 +1416,14 @@
       "html": "103-filter-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2394,
+      "diff_pct": 0.2597,
       "diff_region": {
-        "top": 35,
-        "left": 46,
-        "bottom": 652,
-        "right": 983
+        "top": 256,
+        "left": 394,
+        "bottom": 645,
+        "right": 783
       },
+      "capture": "ipc",
       "deps": [
         "30",
         "22"
@@ -1367,13 +1436,14 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0449,
+      "diff_pct": 0.0726,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 674,
         "right": 1004
       },
+      "capture": "ipc",
       "deps": [
         "26",
         "39",
@@ -1390,6 +1460,7 @@
       "status": "PASS",
       "diff_pct": 0.0,
       "diff_region": null,
+      "capture": "ipc",
       "deps": [
         "37",
         "09"
@@ -1402,13 +1473,14 @@
       "html": "106-transform-zindex.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0014,
+      "diff_pct": 0.2752,
       "diff_region": {
-        "top": 28,
+        "top": 81,
         "left": 70,
         "bottom": 638,
-        "right": 921
+        "right": 620
       },
+      "capture": "ipc",
       "deps": [
         "22",
         "38"
@@ -1421,13 +1493,14 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0431,
+      "diff_pct": 0.0258,
       "diff_region": {
         "top": 65,
         "left": 65,
         "bottom": 599,
         "right": 929
       },
+      "capture": "ipc",
       "deps": [
         "15",
         "36",
@@ -1441,13 +1514,14 @@
       "html": "108-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0011,
+      "diff_pct": 0.3711,
       "diff_region": {
-        "top": 429,
-        "left": 419,
+        "top": 94,
+        "left": 94,
         "bottom": 620,
         "right": 950
       },
+      "capture": "ipc",
       "deps": [
         "22"
       ]
@@ -1459,13 +1533,14 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2079,
+      "diff_pct": 0.185,
       "diff_region": {
         "top": 85,
         "left": 87,
         "bottom": 671,
         "right": 1001
       },
+      "capture": "gdigrab",
       "deps": [
         "31",
         "22",
@@ -1480,7 +1555,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "86",
@@ -1489,13 +1565,14 @@
       "html": "86-position-anchor-fallback.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1077,
+      "diff_pct": 0.1459,
       "diff_region": {
-        "top": 202,
+        "top": 201,
         "left": 299,
         "bottom": 217,
-        "right": 405
-      }
+        "right": 422
+      },
+      "capture": "ipc"
     },
     {
       "id": "87",
@@ -1505,7 +1582,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "88",
@@ -1515,7 +1593,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "89",
@@ -1525,7 +1604,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "90",
@@ -1534,16 +1614,17 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.9375,
+      "diff_pct": 0.9082,
       "diff_region": {
-        "top": 22,
-        "left": 22,
+        "top": 23,
+        "left": 126,
         "bottom": 590,
-        "right": 919
+        "right": 925
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-209",
-        "baseline": 1.29,
+        "baseline": 0.91,
         "verdict": "OK"
       }
     },
@@ -1555,7 +1636,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "92",
@@ -1565,7 +1647,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "93",
@@ -1574,16 +1657,17 @@
       "html": "93-field-sizing.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.0653,
+      "diff_pct": 3.0202,
       "diff_region": {
         "top": 13,
         "left": 13,
         "bottom": 285,
         "right": 245
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-225",
-        "baseline": 3.54,
+        "baseline": 3.02,
         "verdict": "OK"
       }
     },
@@ -1595,7 +1679,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "95",
@@ -1604,16 +1689,17 @@
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.434,
+      "diff_pct": 2.9473,
       "diff_region": {
-        "top": 52,
+        "top": 50,
         "left": 40,
         "bottom": 521,
-        "right": 484
+        "right": 485
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 3.0,
+        "baseline": 2.95,
         "verdict": "OK"
       }
     },
@@ -1625,7 +1711,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "97",
@@ -1634,13 +1721,14 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3413,
+      "diff_pct": 1.3384,
       "diff_region": {
         "top": 55,
         "left": 46,
         "bottom": 632,
         "right": 315
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-128",
         "baseline": 2.78,
@@ -1655,7 +1743,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "99",
@@ -1670,7 +1759,8 @@
         "left": 667,
         "bottom": 194,
         "right": 707
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "110",
@@ -1679,16 +1769,17 @@
       "html": "110-accent-color.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3889,
+      "diff_pct": 1.3988,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 194,
         "right": 521
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-214",
-        "baseline": 1.42,
+        "baseline": 1.4,
         "verdict": "OK"
       }
     },
@@ -1705,7 +1796,8 @@
         "left": 35,
         "bottom": 268,
         "right": 122
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "112",
@@ -1714,13 +1806,14 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0872,
+      "diff_pct": 0.0003,
       "diff_region": {
-        "top": 48,
-        "left": 44,
-        "bottom": 450,
-        "right": 346
-      }
+        "top": 137,
+        "left": 280,
+        "bottom": 137,
+        "right": 281
+      },
+      "capture": "ipc"
     },
     {
       "id": "113",
@@ -1729,16 +1822,17 @@
       "html": "113-shape-outside-path.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3021,
+      "diff_pct": 1.3563,
       "diff_region": {
-        "top": 67,
-        "left": 171,
-        "bottom": 134,
+        "top": 41,
+        "left": 41,
+        "bottom": 240,
         "right": 958
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-215",
-        "baseline": 1.3,
+        "baseline": 1.36,
         "verdict": "OK"
       }
     },
@@ -1750,7 +1844,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "115",
@@ -1760,7 +1855,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "116",
@@ -1769,13 +1865,14 @@
       "html": "116-gradient-interpolation.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.37,
+      "diff_pct": 0.3768,
       "diff_region": {
         "top": 147,
-        "left": 29,
+        "left": 27,
         "bottom": 560,
         "right": 1006
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "117",
@@ -1784,13 +1881,14 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1287,
+      "diff_pct": 1.1285,
       "diff_region": {
         "top": 57,
         "left": 41,
         "bottom": 277,
         "right": 385
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-216",
         "baseline": 1.13,
@@ -1805,7 +1903,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "119",
@@ -1815,7 +1914,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "120",
@@ -1831,6 +1931,7 @@
         "bottom": 174,
         "right": 458
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-217",
         "baseline": 3.26,
@@ -1845,7 +1946,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "122",
@@ -1854,16 +1956,17 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.6202,
+      "diff_pct": 9.5775,
       "diff_region": {
-        "top": 33,
+        "top": 32,
         "left": 41,
         "bottom": 295,
         "right": 627
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-237",
-        "baseline": 9.69,
+        "baseline": 9.58,
         "verdict": "OK"
       }
     },
@@ -1875,7 +1978,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "124",
@@ -1885,7 +1989,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "125",
@@ -1895,7 +2000,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "126",
@@ -1911,6 +2017,7 @@
         "bottom": 174,
         "right": 234
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-126",
         "baseline": 3.26,
@@ -1925,27 +2032,29 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "129",
       "stem": "129-svg-dynamic-createelementns",
-      "label": "BUG-243: динамический SVG, построенный на клиенте через document.createElementNS + setAttribute + appendChild/append (как docs/roadmap-*.html), без текста — только solid-фигуры (rect/circle/path/g+transform). Узлы должны попасть в нативную арену и отрисоваться как в Edge. ТРЕБУЕТ JS-пути захвата (gdigrab по умолчанию), не --ipc/CPU (детерминированный снимок не исполняет скрипты)",
+      "label": "BUG-243: динамический SVG, построенный на клиенте через document.createElementNS + setAttribute + appendChild/append (как docs/roadmap-*.html), без текста — только solid-фигуры (rect/circle/path/g+transform). Узлы должны попасть в нативную арену и отрисоваться как в Edge.",
       "html": "129-svg-dynamic-createelementns.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0184,
+      "diff_pct": 0.051,
       "diff_region": {
         "top": 99,
-        "left": 139,
-        "bottom": 122,
+        "left": 52,
+        "bottom": 648,
         "right": 522
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "130",
       "stem": "130-svg-dynamic-nested-transforms",
-      "label": "BUG-243 (dynamic SVG, без текста): глубоко вложенные <g>-трансформы — кумулятивная композиция translate/rotate/scale (спираль из 16 вложенных квадратов) + каталог независимых translate()+scale() мотивов. Проверяет parse_svg_transform.compose на глубине. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): глубоко вложенные <g>-трансформы — кумулятивная композиция translate/rotate/scale (спираль из 16 вложенных квадратов) + каталог независимых translate()+scale() мотивов. Проверяет parse_svg_transform.compose на глубине. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
@@ -1955,12 +2064,13 @@
         "left": 202,
         "bottom": 604,
         "right": 945
-      }
+      },
+      "capture": "gdigrab"
     },
     {
       "id": "131",
       "stem": "131-svg-dynamic-opacity-layering",
-      "label": "BUG-243 (dynamic SVG, без текста): alpha-композитинг через fill-opacity/stroke-opacity — Venn из полупрозрачных дисков, рампа fill-opacity, стопка одноцветных квадратов, полупрозрачные обводки. Смешанные области должны совпасть с Edge (прямая sRGB-альфа). ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): alpha-композитинг через fill-opacity/stroke-opacity — Venn из полупрозрачных дисков, рампа fill-opacity, стопка одноцветных квадратов, полупрозрачные обводки. Смешанные области должны совпасть с Edge (прямая sRGB-альфа).",
       "html": "131-svg-dynamic-opacity-layering.html",
       "threshold": 0.5,
       "status": "PASS",
@@ -1970,67 +2080,71 @@
         "left": 637,
         "bottom": 664,
         "right": 964
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "132",
       "stem": "132-svg-dynamic-use-symbol",
-      "label": "BUG-243 (dynamic SVG, без текста): инстансинг <defs>/<symbol>/<use> — мульти-фигурный символ, инстанцированный сеткой и кольцом с per-instance translate/scale/rotate. Путь shadow-clone, построенный из JS. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): инстансинг <defs>/<symbol>/<use> — мульти-фигурный символ, инстанцированный сеткой и кольцом с per-instance translate/scale/rotate. Путь shadow-clone, построенный из JS.",
       "html": "132-svg-dynamic-use-symbol.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2392,
+      "diff_pct": 1.8258,
       "diff_region": {
-        "top": 84,
-        "left": 64,
-        "bottom": 706,
-        "right": 677
+        "top": 69,
+        "left": 49,
+        "bottom": 700,
+        "right": 679
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-246",
-        "baseline": 2.67,
+        "baseline": 1.83,
         "verdict": "OK"
       }
     },
     {
       "id": "133",
       "stem": "133-svg-dynamic-fill-rule",
-      "label": "BUG-243 (dynamic SVG, без текста): fill-rule nonzero vs evenodd на самопересекающихся <path>/<polygon> (пентаграммы, концентрические квадраты-кольца) — evenodd-колонка показывает дырки, которые nonzero заливает. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): fill-rule nonzero vs evenodd на самопересекающихся <path>/<polygon> (пентаграммы, концентрические квадраты-кольца) — evenodd-колонка показывает дырки, которые nonzero заливает.",
       "html": "133-svg-dynamic-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3357,
+      "diff_pct": 0.042,
       "diff_region": {
-        "top": 56,
-        "left": 145,
+        "top": 104,
+        "left": 140,
         "bottom": 689,
         "right": 1000
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "134",
       "stem": "134-svg-dynamic-stroke-styles",
-      "label": "BUG-243 (dynamic SVG, без текста): обводки — stroke-width/linecap/linejoin/dasharray/dashoffset на <rect>/<line>/<polyline>/<path> (концентрические рамки, пунктиры с разными капами, ступенчатые полилинии с разными join). ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): обводки — stroke-width/linecap/linejoin/dasharray/dashoffset на <rect>/<line>/<polyline>/<path> (концентрические рамки, пунктиры с разными капами, ступенчатые полилинии с разными join).",
       "html": "134-svg-dynamic-stroke-styles.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9804,
+      "diff_pct": 3.3652,
       "diff_region": {
-        "top": 21,
+        "top": 20,
         "left": 56,
         "bottom": 684,
         "right": 974
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-247",
-        "baseline": 2.99,
+        "baseline": 3.37,
         "verdict": "OK"
       }
     },
     {
       "id": "135",
       "stem": "135-svg-dynamic-paint-order",
-      "label": "BUG-243 (dynamic SVG, без текста): порядок отрисовки по document order (z-stack) — каскад перекрытых квадратов/кругов, плетёная сетка баров, веер повёрнутых карт. Геометрия перекрытий должна совпасть с Edge. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): порядок отрисовки по document order (z-stack) — каскад перекрытых квадратов/кругов, плетёная сетка баров, веер повёрнутых карт. Геометрия перекрытий должна совпасть с Edge. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
@@ -2041,6 +2155,7 @@
         "bottom": 623,
         "right": 874
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.54,
@@ -2050,17 +2165,18 @@
     {
       "id": "136",
       "stem": "136-svg-dynamic-ellipse-radial",
-      "label": "BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5012,
+      "diff_pct": 0.5016,
       "diff_region": {
         "top": 91,
         "left": 81,
         "bottom": 709,
         "right": 955
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.55,
@@ -2070,37 +2186,39 @@
     {
       "id": "137",
       "stem": "137-svg-dynamic-transform-pinwheel",
-      "label": "BUG-243 (dynamic SVG, без текста): presentation-трансформы rotate(angle cx cy)/scale/matrix()/skewX — вертушки из лепестков-треугольников, кольцо повёрнутых прямоугольников, зеркальные matrix()-шевроны, skewX-сетка. Покрывает все ветки parse_svg_transform. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): presentation-трансформы rotate(angle cx cy)/scale/matrix()/skewX — вертушки из лепестков-треугольников, кольцо повёрнутых прямоугольников, зеркальные matrix()-шевроны, skewX-сетка. Покрывает все ветки parse_svg_transform.",
       "html": "137-svg-dynamic-transform-pinwheel.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3775,
+      "diff_pct": 1.0091,
       "diff_region": {
         "top": 69,
         "left": 115,
         "bottom": 716,
         "right": 910
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-247",
-        "baseline": 1.36,
+        "baseline": 1.01,
         "verdict": "OK"
       }
     },
     {
       "id": "138",
       "stem": "138-svg-dynamic-dashboard",
-      "label": "BUG-243 (dynamic SVG, без текста): kitchen-sink «дашборд» — вложенные <g>, <defs>/<use>, fill-opacity, <path>-«пирог» из полигональных секторов, bar-chart, area+line-chart (polyline stroke + полупрозрачная заливка), <circle>/<ellipse>. Самая сложная композиция, всё solid/детерминировано. ТРЕБУЕТ JS-захвата (gdigrab)",
+      "label": "BUG-243 (dynamic SVG, без текста): kitchen-sink «дашборд» — вложенные <g>, <defs>/<use>, fill-opacity, <path>-«пирог» из полигональных секторов, bar-chart, area+line-chart (polyline stroke + полупрозрачная заливка), <circle>/<ellipse>. Самая сложная композиция, всё solid/детерминировано.",
       "html": "138-svg-dynamic-dashboard.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1218,
+      "diff_pct": 0.1066,
       "diff_region": {
         "top": 30,
         "left": 21,
-        "bottom": 650,
+        "bottom": 640,
         "right": 1006
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "139",
@@ -2110,7 +2228,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "140",
@@ -2119,16 +2238,17 @@
       "html": "140-placeholder-pseudo.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1758,
+      "diff_pct": 1.2876,
       "diff_region": {
-        "top": 42,
+        "top": 41,
         "left": 41,
         "bottom": 462,
-        "right": 358
+        "right": 386
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 1.27,
+        "baseline": 1.29,
         "verdict": "OK"
       }
     },
@@ -2139,16 +2259,17 @@
       "html": "141-backface-visibility.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.44,
+      "diff_pct": 1.4563,
       "diff_region": {
         "top": 74,
         "left": 141,
         "bottom": 418,
         "right": 612
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 1.44,
+        "baseline": 1.46,
         "verdict": "OK"
       }
     },
@@ -2160,7 +2281,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "143",
@@ -2170,7 +2292,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "144",
@@ -2180,7 +2303,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "145",
@@ -2189,16 +2313,17 @@
       "html": "145-writing-mode.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.6644,
+      "diff_pct": 3.7679,
       "diff_region": {
-        "top": 28,
+        "top": 27,
         "left": 24,
         "bottom": 339,
         "right": 1023
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-290",
-        "baseline": 3.39,
+        "baseline": 3.77,
         "verdict": "OK"
       }
     },
@@ -2210,7 +2335,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "147",
@@ -2219,13 +2345,14 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9085,
+      "diff_pct": 2.9088,
       "diff_region": {
         "top": 41,
         "left": 49,
         "bottom": 440,
         "right": 982
       },
+      "capture": "gdigrab",
       "debtor": {
         "bug": "BUG-330",
         "baseline": 2.91,
@@ -2238,14 +2365,10 @@
       "label": "P4-isolation CSS Compositing & Blending L1 §2.1 isolation: isolate — изолированная группа: mix-blend-mode детей композитится с прозрачным фоном группы, а не с фоном страницы; слева блендинг с amber-фоном, справа изоляция (чистый цвет квадрата). Multiply/difference + вложенные квадраты. Только solid-боксы, без текста",
       "html": "148-isolation.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 3.1467,
-      "diff_region": {
-        "top": 65,
-        "left": 55,
-        "bottom": 326,
-        "right": 613
-      }
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "149",
@@ -2253,18 +2376,19 @@
       "label": "CC-CSS-2 CSS Overflow L3 overflow:auto — вложенные scroll-контейнеры: outer+inner overflow:auto (независимые скроллбары), nested border-radius clip (16px/10px, BUG-132/249 класс), z-index бейдж внутри вложенного скролл-слоя (BUG-159 класс). Проверяет визуальный рендер; роутинг wheel-события к innermost-контейнеру покрыт unit-тестами find_scroll_container_at_innermost_wins/find_scroll_container_at_only_outer_when_point_outside_inner (lumen-layout). Только solid-боксы/градиенты, без текста в скролл-боксах",
       "html": "149-nested-overflow-scroll.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 1.8068,
+      "status": "DEBTOR",
+      "diff_pct": 1.0177,
       "diff_region": {
-        "top": 23,
+        "top": 22,
         "left": 21,
-        "bottom": 527,
-        "right": 664
+        "bottom": 526,
+        "right": 648
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-288",
-        "baseline": 4.0,
-        "verdict": "RATCHET"
+        "baseline": 1.02,
+        "verdict": "OK"
       }
     },
     {
@@ -2274,13 +2398,14 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.1107,
+      "diff_pct": 7.4881,
       "diff_region": {
-        "top": 47,
-        "left": 36,
+        "top": 46,
+        "left": 37,
         "bottom": 686,
         "right": 704
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "151",
@@ -2289,13 +2414,14 @@
       "html": "151-unicode-bidi.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 6.4712,
+      "diff_pct": 6.2122,
       "diff_region": {
         "top": 44,
         "left": 29,
         "bottom": 639,
-        "right": 994
-      }
+        "right": 996
+      },
+      "capture": "ipc"
     },
     {
       "id": "152",
@@ -2305,7 +2431,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "153",
@@ -2314,8 +2441,14 @@
       "html": "153-zoom.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0939,
+      "diff_region": {
+        "top": 11,
+        "left": 522,
+        "bottom": 103,
+        "right": 849
+      },
+      "capture": "ipc"
     },
     {
       "id": "154",
@@ -2324,13 +2457,14 @@
       "html": "154-svg-external-image-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2068,
+      "diff_pct": 0.262,
       "diff_region": {
         "top": 32,
         "left": 21,
         "bottom": 166,
-        "right": 385
-      }
+        "right": 412
+      },
+      "capture": "ipc"
     },
     {
       "id": "155",
@@ -2339,13 +2473,14 @@
       "html": "155-svg-inline-gradients.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.1829,
+      "diff_pct": 1.3192,
       "diff_region": {
         "top": 26,
         "left": 20,
         "bottom": 329,
-        "right": 654
-      }
+        "right": 681
+      },
+      "capture": "ipc"
     },
     {
       "id": "156",
@@ -2354,33 +2489,30 @@
       "html": "156-svg-mask.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.854,
+      "diff_pct": 1.9702,
       "diff_region": {
         "top": 46,
         "left": 20,
         "bottom": 341,
         "right": 650
       },
+      "capture": "ipc",
       "debtor": {
         "bug": "BUG-936",
-        "baseline": 2.46,
+        "baseline": 1.97,
         "verdict": "OK"
       }
     },
     {
       "id": "157",
       "stem": "157-webgl2",
-      "label": "P3-webgl2 срез 6 (docs/tasks/ph3-webgl2.md): getContext('webgl2') реального software-растеризатора, presented на страничный <canvas> (срез 5). 5 канвасов, все full-viewport quad (clip [-1,1]x[-1,1], без частичного покрытия — ни один пиксель не AA-граница, чтобы software- и Edge GPU-путь не разошлись на сглаживании): drawArrays ES 1.0 (зелёный поверх красного clear) · drawElements с Uint16Array ELEMENT_ARRAY_BUFFER (синий) · createVertexArray/bindVertexArray(null)/rebind (оранжевый — виден только если VAO реально восстанавливает attrib state) · GLSL ES 3.00 in/out + texture() сэмплит 1×1 текстуру (голубой, texture() возвращает усреднённый цвет текстуры независимо от UV) · uniformMatrix3fv нулевой матрицей вырождает треугольники в точку — видим только clear-цвет (не золотой цвет quad), что доказывает, что юниформ реально доходит до вершинного шейдера, а не тихо игнорируется. ТРЕБУЕТ JS-захвата (gdigrab) — как 57/129-138, cpu_raster не исполняет JS",
+      "label": "P3-webgl2 срез 6 (docs/tasks/ph3-webgl2.md): getContext('webgl2') реального software-растеризатора, presented на страничный <canvas> (срез 5). 5 канвасов, все full-viewport quad (clip [-1,1]x[-1,1], без частичного покрытия — ни один пиксель не AA-граница, чтобы software- и Edge GPU-путь не разошлись на сглаживании): drawArrays ES 1.0 (зелёный поверх красного clear) · drawElements с Uint16Array ELEMENT_ARRAY_BUFFER (синий) · createVertexArray/bindVertexArray(null)/rebind (оранжевый — виден только если VAO реально восстанавливает attrib state) · GLSL ES 3.00 in/out + texture() сэмплит 1×1 текстуру (голубой, texture() возвращает усреднённый цвет текстуры независимо от UV) · uniformMatrix3fv нулевой матрицей вырождает треугольники в точку — видим только clear-цвет (не золотой цвет quad), что доказывает, что юниформ реально доходит до вершинного шейдера, а не тихо игнорируется.",
       "html": "157-webgl2.html",
       "threshold": 0.5,
-      "status": "FAIL",
+      "status": "PASS",
       "diff_pct": 0.0,
       "diff_region": null,
-      "debtor": {
-        "bug": "BUG-1077",
-        "baseline": 5.06,
-        "verdict": "REMOVE"
-      }
+      "capture": "ipc"
     },
     {
       "id": "158",
@@ -2388,14 +2520,15 @@
       "label": "P4-background-attachment CSS Backgrounds L3 §3.6: fixed-слой позиционируется от вьюпорта (1024×720), элемент — окно на него. Ряд 1: одна горизонтальная полоса 0..1024 из 4 цветов в трёх боксах — каждый показывает свою часть. Ряд 2: та же полоса scroll (все 4 цвета в боксе) · вертикальный split по 360px вьюпорта в двух боксах на разных x. Ряд 3: fixed-сетка поверх scroll-градиента (слои по отдельности) · repeat fixed-картинка 320×200 от центра вьюпорта (шов тайла y=660) · background-clip: content-box — область рисования сжата, позиционирование по-прежнему от вьюпорта. Статичный кадр (scroll 0): закрепление при прокрутке проверено живым окном",
       "html": "158-background-attachment.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 2.9184,
+      "status": "PASS",
+      "diff_pct": 0.2717,
       "diff_region": {
         "top": 277,
         "left": 99,
-        "bottom": 680,
-        "right": 986
-      }
+        "bottom": 674,
+        "right": 626
+      },
+      "capture": "ipc"
     },
     {
       "id": "159",
@@ -2404,13 +2537,14 @@
       "html": "159-background-clip-text.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.2056,
+      "diff_pct": 2.5066,
       "diff_region": {
-        "top": 35,
+        "top": 34,
         "left": 41,
         "bottom": 530,
         "right": 811
-      }
+      },
+      "capture": "ipc"
     },
     {
       "id": "160",
@@ -2419,13 +2553,9 @@
       "html": "160-fieldset-legend.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1134,
-      "diff_region": {
-        "top": 357,
-        "left": 343,
-        "bottom": 544,
-        "right": 622
-      }
+      "diff_pct": 0.0,
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "161",
@@ -2435,7 +2565,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "162",
@@ -2445,7 +2576,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "163",
@@ -2455,7 +2587,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     },
     {
       "id": "164",
@@ -2465,7 +2598,8 @@
       "threshold": 0.5,
       "status": "PASS",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "capture": "ipc"
     }
   ]
 }
