@@ -736,8 +736,15 @@ fn grid_gap_segments_logical(
         .zip(&ys)
         .map(|(&(x0, x1), &(y0, y1))| {
             let (c0, c1) = track_span(x0, x1, &col_tops, p.col_gap);
-            let (r0, r1) = track_span(y0, y1, &row_tops, p.row_gap);
-            (c0, c1, r0, r1)
+            let (mut r0, r1) = track_span(y0, y1, &row_tops, p.row_gap);
+            // An item that starts exactly at the leading edge of a row gap of a fragment was
+            // pulled up over that gap (`multicol_trampoline`: no item starts in the track after a
+            // bridged gap, so the next track grows upwards): it begins in the track after the
+            // gap and leaves the gap's rule visible beneath it.
+            if fragment && row_tracks.is_some() && p.row_gap > TRACK_TOL && r0 < row_tops.len() && (y0 - row_tops[r0]).abs() <= TRACK_TOL {
+                r0 += 1;
+            }
+            (c0, c1, r0, r1.max(r0))
         })
         .collect();
     let mut out = GridGapGeometry {
