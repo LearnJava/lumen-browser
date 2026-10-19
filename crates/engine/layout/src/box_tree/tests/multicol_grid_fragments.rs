@@ -430,6 +430,30 @@ fn a_subgrid_fragment_starting_in_its_own_row_gap_drops_the_gap_at_its_top() {
 }
 
 #[test]
+fn a_subgrid_row_gap_crossed_by_a_spanner_stays_inside_the_cut_item() {
+    // subgrid-gap-decorations-fragmentation-021: the spanner covers all three subgrid rows, so the
+    // gap the second window starts in is inside it and is not dropped: the fragment keeps its 30px
+    // and the third-row item grows upwards over the gap to the top of the column (without the
+    // spanner the same fragment is 20px, see the test above).
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"><div id=\"p\"></div><div id=\"i\"></div></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;column-gap:0;width:280px;height:80px}          #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);         gap:10px;height:140px}          #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;         grid-column:2/-2;grid-row:2/-2;row-rule:blue solid 10px}          #p{grid-column:1;grid-row:1/-1} #i{grid-column:2;grid-row:3}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let sub = v
+        .iter()
+        .flat_map(|g| g.children.iter())
+        .rfind(|c| c.subgrid_tracks.as_ref().is_some_and(|t| t.fragment))
+        .expect("subgrid fragment of the second window");
+    assert!((sub.rect.height - 30.0).abs() < 0.01, "subgrid fragment {}", sub.rect.height);
+    let heights: Vec<f32> = sub.children.iter().map(|k| k.rect.height).collect();
+    assert!(heights.iter().all(|h| (h - 30.0).abs() < 0.01), "{heights:?}");
+    let first = sub.subgrid_tracks.as_ref().and_then(|t| t.rows.as_ref()).and_then(|r| r.first()).expect("track");
+    assert!(first.0.abs() < 0.01, "{first:?}");
+}
+
+#[test]
 fn an_empty_child_of_an_item_that_a_break_runs_through_is_cut_with_the_item() {
     // An item on all three 60px rows holds an empty 150px block (an empty subgrid cell in
     // `subgrid-gap-decorations-fragmentation-007`). The break at 100px runs through the block:
