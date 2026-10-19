@@ -1,6 +1,6 @@
 # BUG-1304 — `background-attachment: local` ≡ `scroll`: фон не прокручивается вместе с содержимым прокручиваемого бокса и не режется по padding-box контента
 
-**Статус:** OPEN (ДОРАБОТКА → [BG-ATTACH-LOCAL](../ROADMAP.md))
+**Статус:** FIXED 2026-10-19 (P1; задача `BG-ATTACH-LOCAL`); остаток — [BUG-1653](BUG-1653-OPEN.md)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 6, `css/css-backgrounds`)
 **Область:** layout/paint (`crates/engine/layout/src/style/values/background.rs` разбирает `local`, но `CSS-SPECS.md`: «`local` = `scroll`»; `PushScrollLayer` не покрывает слои фона)
 
@@ -27,3 +27,7 @@ WPT-RUN-14 срез 6: 26 reftest — `background-attachment-local/*` (14), `loc
 ## Как проверить
 
 `css/css-backgrounds/background-attachment-local/*.html`, `local-attachment-*.html`, `table-cell-background-local*.html`.
+
+## Исправлено
+
+`background_mask.rs`: `local_bg_scroller` (блок-скроллер `overflow: hidden|scroll|auto` с `local`-слоем) выводит слои и `background-color` под `local`-нижним слоем из обычного прохода и рисует их в `emit_local_background` сразу после `PushScrollLayer`/`PushClipRect` (оба пути — `walk` и `box_layer_ops`). Область позиционирования — `local_scroll_area` (padding-box, разросшийся до прямоугольников всех детей, в том числе влево/вверх для `rtl` и `*-reverse`), клип — padding-box окна. Скруглённый скроллер — неподвижный `PushClipRoundedRect` по внутренним радиусам (`local_round_clip`) вокруг скролл-слоя. Тесты `background_attachment_local_*` (5) в `paint/src/display_list/tests/background_and_layers.rs`. Прогон 30 рефтестов (`--screenshot` + попиксельное сравнение): совпадают 8 → 18 из 30 (clipping-color-1/2/3/6, clipping-image-1/2/3/6, positioning-2/3/5, 350, flex-column-reverse, rtl+row-reverse, …); clipping-color-4/5 расходятся на 1 уровень канала по дуге (сглаживание клипа против `FillRoundedRect`).

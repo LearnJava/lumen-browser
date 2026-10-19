@@ -142,6 +142,11 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
         let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
         let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
         if (is_scroll_x || is_scroll_y) && !paint_contain {
+            // `local` background of a rounded scroller: stationary rounded padding-box clip.
+            let local_round = local_round_clip(b);
+            if let Some(c) = &local_round {
+                overflow_pre.push(c.clone());
+            }
             overflow_pre.push(DisplayCommand::PushScrollLayer {
                 id: b.node.index() as u32,
                 clip_rect: cr,
@@ -155,6 +160,9 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
             // after children, so the bars render at a fixed position over the
             // scrolled content). Same helper as `walk` for pixel parity.
             emit_scrollbars(b, (px, py, pw, ph), is_scroll_x, is_scroll_y, &mut overflow_post);
+            if local_round.is_some() {
+                overflow_post.push(DisplayCommand::PopClip);
+            }
         } else {
             // BUG-132: скруглённый клип для border-radius + overflow:hidden
             // Разрешаем border-radius значения используя padding-box width как basis

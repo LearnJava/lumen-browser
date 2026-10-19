@@ -266,7 +266,7 @@ use inline_frag::{background_clip_rect_in, background_origin_rect, background_or
 use inline_frag::content_box_rect;
 
 mod background_mask;
-use background_mask::{emit_background_image, emit_local_background, local_bg_color, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
+use background_mask::{emit_background_image, emit_local_background, local_bg_color, local_round_clip, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
 pub use background_mask::with_fixed_background_viewport;
 // Used only by `display_list/tests/background_and_layers.rs` (via `super::*`).
 #[cfg(test)]

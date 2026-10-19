@@ -631,15 +631,44 @@ fn is_local_layer(l: &BackgroundLayer) -> bool {
 /// The box scrolls its own `background-attachment: local` layers: a block-level scroll container
 /// (`overflow: hidden|scroll|auto` in some axis — `hidden` is a scroll container too) with a
 /// square border box and a `local` layer or a `background-color` under a `local` bottom layer.
-/// Anything else paints `local` like `scroll`: with no scrolling mechanism the spec says so, and a
-/// rounded box keeps the rounded fills of the box itself (the scroll layer clips to a rectangle).
+/// Anything else paints `local` like `scroll`: with no scrolling mechanism the spec says so.
+/// A rounded box clips the moving layers with a stationary rounded padding box
+/// ([`local_round_clip`]).
 pub(crate) fn local_bg_scroller(b: &LayoutBox) -> bool {
     let s = &b.style;
     let scrolls = |o: Overflow| matches!(o, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
     matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
         && (scrolls(s.overflow_x) || scrolls(s.overflow_y))
         && s.background_layers.iter().any(is_local_layer)
-        && CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height).all_zero()
+}
+
+/// Rounded padding-box clip of a `local`-background scroller with `border-radius`: it stays put
+/// while the layers move, so the corners cut the scrolled background (§5.3 inner radii). The
+/// caller pushes it before the scroll layer / clip and pops it after the matching pop.
+pub(crate) fn local_round_clip(b: &LayoutBox) -> Option<DisplayCommand> {
+    if !local_bg_scroller(b) {
+        return None;
+    }
+    let s = &b.style;
+    let outer = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
+    if outer.all_zero() {
+        return None;
+    }
+    let r = outer.inner_for_border([
+        s.border_top_width,
+        s.border_right_width,
+        s.border_bottom_width,
+        s.border_left_width,
+    ]);
+    Some(DisplayCommand::PushClipRoundedRect {
+        rect: Rect::new(
+            b.rect.x + s.border_left_width,
+            b.rect.y + s.border_top_width,
+            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+        ),
+        radii: [r.tl, r.tr, r.br, r.bl],
+    })
 }
 
 /// The solid `background-color` scrolls too when the bottom layer (the one the colour follows,

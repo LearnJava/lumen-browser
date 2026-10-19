@@ -849,6 +849,8 @@ struct BlockEpilogue {
     use_scroll_layer: bool,
     /// `overflow: hidden` box scrolled by script: a `PushScrollLayer` sits inside its clip.
     hidden_scrolled: bool,
+    /// A stationary rounded clip for a `local` background wraps the overflow clip.
+    local_round: bool,
     scroll_padding_box: Option<(f32, f32, f32, f32)>,
     is_scroll_x: bool,
     is_scroll_y: bool,
@@ -981,6 +983,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
             if e.hidden_scrolled {
                 out.push(DisplayCommand::PopScrollLayer);
             }
+            out.push(DisplayCommand::PopClip);
+        }
+        if e.local_round {
             out.push(DisplayCommand::PopClip);
         }
     }
@@ -1224,6 +1229,12 @@ fn dispatch<'a>(
             } else {
                 None
             };
+            // `local` background of a rounded scroller: stationary rounded padding-box clip
+            // around the scroll layer, popped after it in `finish_block_epilogue`.
+            let local_round = has_overflow_clip && local_round_clip(b).is_some_and(|c| {
+                out.push(c);
+                true
+            });
             if has_overflow_clip {
                 const BIG: f32 = 1_000_000.0;
                 let s = &b.style;
@@ -1322,6 +1333,7 @@ fn dispatch<'a>(
                 has_overflow_clip,
                 use_scroll_layer,
                 hidden_scrolled,
+                local_round,
                 scroll_padding_box,
                 is_scroll_x,
                 is_scroll_y,

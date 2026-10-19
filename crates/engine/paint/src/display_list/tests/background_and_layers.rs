@@ -714,6 +714,25 @@ use super::text_and_images::build;
         assert!(fill < pop);
     }
 
+    /// `attachment-local-clipping-color-4`: a rounded scroller keeps `local` — the moving fill
+    /// sits inside a stationary rounded padding-box clip (inner radii), opened before the scroll
+    /// layer and closed after it.
+    #[test]
+    fn background_attachment_local_rounded_scroller_uses_a_stationary_rounded_clip() {
+        let dl = build(
+            "<div id=s><div id=t></div></div>",
+            "body { margin: 0; } #s { width: 100px; height: 100px; overflow: auto; border: 10px solid black;              border-radius: 30px; background: green local; } #t { height: 400px; }",
+        );
+        let round = pos(&dl, |c| matches!(c, DisplayCommand::PushClipRoundedRect { .. }));
+        let scroll = pos(&dl, |c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        let fill = pos(&dl, |c| matches!(c, DisplayCommand::FillRect { color, .. } if color.g == 128));
+        let pop_scroll = pos(&dl, |c| matches!(c, DisplayCommand::PopScrollLayer));
+        assert!(round < scroll && scroll < fill && fill < pop_scroll);
+        let DisplayCommand::PushClipRoundedRect { rect, radii } = &dl[round] else { unreachable!() };
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (10.0, 10.0, 100.0, 100.0));
+        assert_eq!(*radii, [20.0; 4]);
+    }
+
     // ── Тесты background-origin ────────────────────────────────────────────────
 
     #[test]
