@@ -157,6 +157,7 @@ fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
                 | Display::ListItem
                 | Display::FlowRoot
                 | Display::Flex
+                | Display::Grid
                 | Display::Table
                 | Display::TableRowGroup
                 | Display::TableHeaderGroup
@@ -180,7 +181,8 @@ fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
         && s.mask_layers.is_empty()
         && b.fieldset_legend.is_none()
         && b.svg_group_transform.is_none()
-        && b.subgrid_tracks.is_none()
+        // A grid keeps the tracks it recorded for the gap painter; they are clipped per fragment ([`grid_fragment_tracks`]).
+        && (b.subgrid_tracks.is_none() || is_own_track_grid(b))
         // Content that sticks out of the box would be lost in a window the box has no part in.
         && b.children.iter().all(|c| {
             matches!(c.kind, BoxKind::Skip)
@@ -188,6 +190,16 @@ fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
                 || matches!(c.style.position, Position::Absolute | Position::Fixed)
                 || (c.rect.y >= b.rect.y - EPS && c.rect.y + c.rect.height <= b.rect.y + b.rect.height + EPS)
         })
+}
+
+/// A `display: grid` box whose axes are laid out by itself (no `subgrid`): its row tracks are cut
+/// by the column windows.
+fn is_own_track_grid(b: &LayoutBox) -> bool {
+    use crate::style::GridTrackSize::Subgrid;
+    let s = &b.style;
+    matches!(s.display, Display::Grid)
+        && s.grid_template_columns.first() != Some(&Subgrid)
+        && s.grid_template_rows.first() != Some(&Subgrid)
 }
 
 /// What the items hold of out-of-flow boxes, as [`scan_oof`] found it.
@@ -395,6 +407,36 @@ fn walk_flex_lines(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, 
     }
 }
 
+/// Break points of the items of a grid container, `list` in visual order, `off` and `vt` — the
+/// container's own shift and virtual top. A break falls in a row gap (`rows`: the row tracks as
+/// `(top, bottom)` in virtual coordinates; the gap is dropped, Fragmentation L3 §5.1) unless an item
+/// spans it, and inside the items — those of one row side by side, so a break inside one of them cuts them all.
+fn walk_grid_rows(m: &mut Model, list: &[(&LayoutBox, f32, f32)], rows: &[(f32, f32)], avoid: bool, depth: usize, vp: Size) {
+    let flow: Vec<&(&LayoutBox, f32, f32)> = list.iter().filter(|e| participates(e.0)).collect();
+    let top_of = |e: &(&LayoutBox, f32, f32)| e.0.rect.y + e.1;
+    let bottom_of = |e: &(&LayoutBox, f32, f32)| e.0.rect.y + e.1 + e.0.rect.height;
+    for k in 1..rows.len() {
+        let (end, start) = (rows[k - 1].1, rows[k].0.max(rows[k - 1].1));
+        if flow.iter().any(|e| top_of(e) < end - EPS && bottom_of(e) > start + EPS) {
+            continue;
+        }
+        let before = |e: &&&(&LayoutBox, f32, f32)| top_of(e) >= start - EPS && top_of(e) < rows[k].1 - EPS;
+        let after = |e: &&&(&LayoutBox, f32, f32)| bottom_of(e) > rows[k - 1].0 + EPS && bottom_of(e) <= end + EPS;
+        let forced = flow.iter().filter(after).any(|e| breaks_after(e.0, 0)) || flow.iter().filter(before).any(|e| breaks_before(e.0, 0));
+        let avoided = avoid
+            || flow.iter().filter(after).any(|e| avoids_after(e.0))
+            || flow.iter().filter(before).any(|e| avoids_before(e.0));
+        m.cands.push(Cand::new(end, start, forced, tier(avoided, false)));
+    }
+    for e in &flow {
+        let run = match item_lines(e.0) {
+            ItemLines::Lines(n) => Some((0, n, 0)),
+            _ => None,
+        };
+        walk_item(m, e.0, e.1, run, avoid, depth, vp);
+    }
+}
+
 /// Break points inside one in-flow box.
 fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usize)>, avoid: bool, depth: usize, vp: Size) {
     let vt = b.rect.y + off;
@@ -422,10 +464,17 @@ fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usiz
                 b.children.iter().filter(|c| !multicol_table::is_col(c)).map(|c| (c, off, 0.0)).collect();
             // `order` / `*-reverse` put the items out of tree order: break in visual order.
             let flex = matches!(s.display, Display::Flex);
-            if flex {
+            let grid = matches!(s.display, Display::Grid);
+            if flex || grid {
                 kids.sort_by(|a, b| a.0.rect.y.total_cmp(&b.0.rect.y));
             }
+            // The row tracks of a grid (virtual coordinates), when it recorded them.
+            let rows: Option<Vec<(f32, f32)>> = b.subgrid_tracks.as_ref().filter(|_| grid).and_then(|t| t.rows.as_ref()).map(|r| {
+                let top = grid_content_top(b, vp) + off;
+                r.iter().map(|&(a, z)| (top + a, top + z)).collect()
+            });
             let last = kids.iter().filter(|c| participates(c.0)).map(|c| c.0.rect.y + off + c.0.rect.height).reduce(f32::max);
+            let last = last.map(|l| rows.iter().flatten().map(|r| r.1).fold(l, f32::max));
             match last {
                 None => {
                     let lo = vt + s.border_top_width;
@@ -436,7 +485,9 @@ fn walk_item(m: &mut Model, b: &LayoutBox, off: f32, run: Option<(u32, u32, usiz
                 }
                 Some(last) => {
                     // The cells of a row sit side by side like the items of a flex line.
-                    if flex || row {
+                    if let Some(rows) = rows.as_deref().filter(|r| r.len() > 1) {
+                        walk_grid_rows(m, &kids, rows, avoid, depth + 1, vp);
+                    } else if flex || row || grid {
                         walk_flex_lines(m, &kids, avoid, depth + 1, vp);
                     } else {
                         walk_list(m, &kids, avoid, depth + 1, vp);
@@ -635,6 +686,35 @@ fn shell(b: &LayoutBox) -> LayoutBox {
     }
 }
 
+/// Page-independent `y` of the content box top of a grid box (its row tracks start there).
+fn grid_content_top(b: &LayoutBox, vp: Size) -> f32 {
+    let s = &b.style;
+    b.rect.y + s.border_top_width + s.padding_top.resolve_or_zero(s.font_size, b.rect.width, vp)
+}
+
+/// The row tracks of grid `d` that the window part `from..to` of it shows, as the painter reads them
+/// from a fragment (`SubgridTracks::fragment`): clipped to the part, measured from the fragment's
+/// content top (`content` — its virtual `y`), so a row gap that a break splits is not drawn.
+fn grid_fragment_tracks(d: &LayoutBox, track_top: f32, content: f32, from: f32, to: f32) -> Option<Box<crate::subgrid::SubgridTracks>> {
+    let t = d.subgrid_tracks.as_ref()?;
+    let rows = t.rows.as_ref()?;
+    let visible: Vec<(usize, (f32, f32))> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(k, &(a, b))| {
+            let (lo, hi) = ((track_top + a).max(from), (track_top + b).min(to));
+            (hi > lo + EPS).then_some((k, (lo - content, hi - content)))
+        })
+        .collect();
+    Some(Box::new(crate::subgrid::SubgridTracks {
+        cols: t.cols.clone(),
+        rows: Some(visible.iter().map(|v| v.1).collect()),
+        fragment: true,
+        row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
+        line_gaps: None,
+    }))
+}
+
 /// `box-decoration-break: slice` on the edges a break cut.
 fn slice_edges(frag: &mut LayoutBox, top: bool, bottom: bool) {
     if top {
@@ -719,6 +799,11 @@ fn cut_at(d: &LayoutBox, off: f32, w: &Window, depth: usize, oof: bool) -> Optio
     frag.rect.y = w.top() - lead + (from - w.lo);
     frag.rect.height = (to - from).max(0.0) + lead + tail;
     slice_edges(&mut frag, top_cut, bottom_cut);
+    if matches!(d.style.display, Display::Grid) && d.subgrid_tracks.is_some() {
+        let vp = Size::new(d.rect.width, d.rect.height);
+        let content = if top_cut { from } else { grid_content_top(d, vp) + off };
+        frag.subgrid_tracks = grid_fragment_tracks(d, grid_content_top(d, vp) + off, content, from, to);
+    }
     // Flexbox L1 §12: a flex container that breaks consumes the rest of the fragmentainer.
     if bottom_cut && w.extent.is_finite() && matches!(d.style.display, Display::Flex) {
         frag.rect.height = frag.rect.height.max(w.lo + w.extent - from);

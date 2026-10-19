@@ -110,9 +110,11 @@ fn a_forced_column_break_inside_a_grid_cuts_at_the_item_and_keeps_the_column_hei
 }
 
 #[test]
-fn a_forced_break_in_a_balanced_multicol_keeps_the_grid_atomic() {
+fn a_forced_break_in_a_balanced_multicol_is_cut_at_the_tracks() {
+    // Three 20px rows balance to one row per column; the forced break before the third item
+    // agrees with that, so each column holds a single track.
     let v = forced_break_frags("", "style=\"break-before:column\"");
-    assert!(v.is_empty(), "{v:?}");
+    assert_eq!(v, vec![(0.0, 20.0, 1), (100.0, 20.0, 1), (200.0, 20.0, 1)], "{v:?}");
 }
 
 #[test]
