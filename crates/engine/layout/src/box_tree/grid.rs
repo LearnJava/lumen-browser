@@ -395,7 +395,38 @@ pub(crate) fn build_grid_init(
     };
 
     // --- Step 1: Resolve placements for every item ---
-    let placements = place_grid_items(children, &item_idxs, s, n_explicit_cols, eff_row_template.len(), &col_axis, &row_axis);
+    let mut placements = place_grid_items(children, &item_idxs, s, n_explicit_cols, eff_row_template.len(), &col_axis, &row_axis);
+
+    // CSS Grid L3 §2: `display: grid-lanes` с полосами-столбцами. Строки шаблона там не участвуют
+    // (`grid_lanes::lanes_axis` выбирает ось, `layout_dispatch` убирает строки из стиля); элемент
+    // `k` занимает собственную строку `k`, а полосу выбирает проход замера. Столбцы авто-элементов
+    // остаются как их разложила сетка — они задают вклад в размер полос.
+    let lane_items: Option<Vec<super::grid_lanes::LaneItem>> = (s.grid_lanes.enabled
+        && vertical.is_none()
+        && inherited_cols.is_none()
+        && inherited_rows.is_none()
+        && !subgrid_cols
+        && super::grid_lanes::lanes_axis(s) == crate::style::LanesAxis::Column)
+        .then(|| {
+            item_idxs
+                .iter()
+                .map(|&i| {
+                    let is = &children[i].style;
+                    let (cs, ce) = resolve_grid_axis(&is.grid_column_start, &is.grid_column_end, &col_axis);
+                    if cs != 0 {
+                        super::grid_lanes::LaneItem { def: Some(cs as usize - 1), span: (ce.saturating_sub(cs)).max(1) as usize }
+                    } else {
+                        super::grid_lanes::LaneItem { def: None, span: ce.max(1) as usize }
+                    }
+                })
+                .collect()
+        });
+    if lane_items.is_some() {
+        for (k, p) in placements.iter_mut().enumerate() {
+            p.2 = k as u32 + 1;
+            p.3 = k as u32 + 2;
+        }
+    }
 
     // --- Step 2: Determine total grid dimensions ---
     let n_cols = placements.iter().map(|&(_, ce, _, _)| ce.saturating_sub(1)).max().unwrap_or(1)
@@ -628,6 +659,23 @@ pub(crate) fn build_grid_init(
     // thread-local track context (`SubgridContextGuard`, set in both phases)
     // that genuinely differs between this estimated-tracks probe and the
     // final pass's resolved-tracks pass.
+    let lanes = lane_items.map(|items| {
+        // Grid L3 §3.4: `normal` = 1em; `%` считается от определённой высоты контейнера (иначе 0).
+        let tolerance = match &s.grid_lanes.tolerance {
+            crate::style::FlowTolerance::Normal => em,
+            crate::style::FlowTolerance::Infinite => f32::INFINITY,
+            crate::style::FlowTolerance::Length(l) => {
+                l.resolve(em, definite_content_height, viewport).unwrap_or(em).max(0.0)
+            }
+        };
+        super::grid_lanes::LanesState::new(
+            items,
+            n_cols as usize,
+            tolerance,
+            row_gap,
+            s.grid_lanes.direction.track_reverse,
+        )
+    });
     let probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
     let item_baselines = vec![None; item_idxs.len()];
     let row_groups = vec![(0.0_f32, 0.0_f32); n_rows as usize];
@@ -676,6 +724,7 @@ pub(crate) fn build_grid_init(
         col_last_group: col_groups,
         vertical,
         rtl,
+        lanes,
     }))
 }
 

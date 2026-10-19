@@ -488,6 +488,7 @@ mod block_flow_trampoline;
 mod flex_trampoline;
 mod grid_trampoline;
 mod grid_empty_tracks;
+mod grid_lanes;
 mod grid_subgrid_contribution;
 mod grid_subgrid_line_names;
 mod grid_track_limit;

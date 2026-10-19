@@ -10,6 +10,7 @@
 //! группу не входит по алфавиту, а по смыслу — порядок веток внутри `match`
 //! семантики не несёт, потому что все метки уникальны.
 
+use crate::style::values::grid_lanes::parse_lanes_pack;
 use crate::style::{
     AlignValue, ContentSide,
     BlockStepAlign,
@@ -28,6 +29,8 @@ use crate::style::{
     EmptyCells,
     FieldSizing,
     FlexBasis,
+    FlowTolerance,
+    LanesDirection,
     FlexDirection,
     FlexWrap,
     FloatSide,
@@ -103,7 +106,13 @@ pub(in crate::style) fn apply_decl_layout(
 ) -> bool {
     match prop {
         "display" => {
+            // CSS Grid L3 §2: `grid-lanes` / `inline-grid-lanes` — не отдельные варианты `Display`,
+            // контейнер остаётся `Grid`/`InlineGrid`, а `grid_lanes.enabled` переключает раскладку.
+            let mut valid = true;
+            let lanes = matches!(val, "grid-lanes" | "inline-grid-lanes");
             style.display = match val {
+                "grid-lanes" => Display::Grid,
+                "inline-grid-lanes" => Display::InlineGrid,
                 "block" => Display::Block,
                 "inline" => Display::Inline,
                 "none" => Display::None,
@@ -136,8 +145,30 @@ pub(in crate::style) fn apply_decl_layout(
                 "-webkit-inline-box" => Display::WebkitInlineBox,
                 "-webkit-flex" => Display::Flex,
                 "-webkit-inline-flex" => Display::InlineFlex,
-                _ => style.display,
+                _ => {
+                    valid = false;
+                    style.display
+                }
             };
+            // Любое распознанное значение `display` перезаписывает прежний `grid-lanes`.
+            if valid {
+                style.grid_lanes.enabled = lanes;
+            }
+        }
+        "flow-tolerance" => {
+            if let Some(v) = FlowTolerance::parse(val, is_quirks) {
+                style.grid_lanes.tolerance = v;
+            }
+        }
+        "grid-lanes-direction" => {
+            if let Some(v) = LanesDirection::parse(val) {
+                style.grid_lanes.direction = v;
+            }
+        }
+        "grid-lanes-pack" => {
+            if let Some(v) = parse_lanes_pack(val) {
+                style.grid_lanes.dense = v;
+            }
         }
         "object-fit" => {
             if let Some(of) = ObjectFit::parse(val) {
