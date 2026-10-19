@@ -46,6 +46,73 @@ pub(in crate::style) fn apply_css_wide_keyword(
     });
 }
 
+/// CSS-wide keyword на одном `background-*` longhand'е: меняется только это поле
+/// слоёв, число слоёв задаёт `background-image` (Backgrounds L3 §3.1, список
+/// повторяется/обрезается). `parent` = `Some` — `inherit` (поле берётся из слоёв
+/// родителя), `None` — `initial`/`unset`/`revert` (значение по умолчанию).
+fn apply_background_longhand_wide(style: &mut ComputedStyle, prop: &str, parent: Option<&ComputedStyle>) {
+    use crate::style::values::background::BackgroundLayer;
+    let src: Vec<BackgroundLayer> = match parent {
+        Some(p) if !p.background_layers.is_empty() => p.background_layers.clone(),
+        _ => vec![BackgroundLayer::default()],
+    };
+    if prop == "background-image" {
+        let old = std::mem::take(&mut style.background_layers);
+        style.background_layers = src
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let base = old.get(i % old.len().max(1)).cloned().unwrap_or_default();
+                BackgroundLayer { image: s.image, ..base }
+            })
+            .collect();
+        return;
+    }
+    // Список, как его задал автор (BUG-1297): наследуется вместе с полем, при сбросе очищается.
+    let parent_spec = parent.and_then(|p| p.background_specified.as_deref().cloned());
+    if style.background_layers.is_empty() {
+        style.background_layers.push(BackgroundLayer::default());
+    }
+    let n = src.len();
+    macro_rules! field {
+        ($f:ident) => {
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.$f = src[i % n].$f;
+            }
+        };
+    }
+    macro_rules! spec {
+        ($($f:ident),+) => {
+            if style.background_specified.is_some() || parent_spec.is_some() {
+                let spec = style.background_specified.get_or_insert_with(Default::default);
+                $(spec.$f = parent_spec.as_ref().map(|p| p.$f.clone()).unwrap_or_default();)+
+            }
+        };
+    }
+    match prop {
+        "background-repeat" => { field!(repeat); spec!(repeat); }
+        "background-size" => { field!(size); spec!(size); }
+        "background-attachment" => { field!(attachment); spec!(attachment); }
+        "background-origin" => { field!(origin); spec!(origin); }
+        "background-clip" => { field!(clip); spec!(clip); }
+        "background-blend-mode" => field!(blend_mode),
+        "background-position" => { field!(position); spec!(position_x, position_y); }
+        "background-position-x" => {
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.position.x = src[i % n].position.x;
+            }
+            spec!(position_x);
+        }
+        "background-position-y" => {
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.position.y = src[i % n].position.y;
+            }
+            spec!(position_y);
+        }
+        _ => {}
+    }
+}
+
 /// CSS Cascade L4 §3.2 — шортхенд `all`: CSS-wide keyword применяется ко всем
 /// свойствам сразу, кроме `direction`, `unicode-bidi` и custom properties.
 ///
@@ -1240,17 +1307,10 @@ fn apply_css_wide_keyword_with(
             };
         }
         // CSS Backgrounds L3 §3 + CSS Compositing L1 §8.3 — background-* non-inherited.
-        "background-position" | "background-origin" | "background-clip"
-        | "background-size" | "background-repeat" | "background-attachment"
-        | "background-image" | "background-blend-mode" => {
-            // Все background-* не наследуются: initial = пустые слои.
-            style.background_layers = if inh_only_inherit {
-                inherited.background_layers.clone()
-            } else {
-                Vec::new()
-            };
-            style.background_specified =
-                if inh_only_inherit { inherited.background_specified.clone() } else { None };
+        "background-position" | "background-position-x" | "background-position-y"
+        | "background-origin" | "background-clip" | "background-size" | "background-repeat"
+        | "background-attachment" | "background-image" | "background-blend-mode" => {
+            apply_background_longhand_wide(style, prop, inh_only_inherit.then_some(inherited));
         }
         // CSS Images L3 §6.1 — image-rendering inherited. inh — общий
         // алиас «брать inherited.value» (для inherited работает и при
