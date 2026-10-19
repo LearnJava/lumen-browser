@@ -27,7 +27,7 @@
 //! item per line, a row container breaks between its lines and, inside a line, through every
 //! item at once (each item is its own flow, the window edge cuts all of them).
 
-use super::multicol_break::{breaks_after, breaks_before};
+use super::multicol_break::{avoids_after, avoids_before, breaks_after, breaks_before};
 use super::multicol_fragmentation::{item_lines, ItemLines};
 use super::multicol_span::trim_edge;
 use super::multicol_table;
@@ -345,9 +345,7 @@ fn walk_list(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, depth:
                 (Some((_, _, a)), Some((before, total, b))) if a == b => breaks_orphans_widows(&c.style, before, total),
                 _ => false,
             };
-            let avoided = avoid
-                || p.style.break_after == BreakValue::Avoid
-                || c.style.break_before == BreakValue::Avoid;
+            let avoided = avoid || avoids_after(p) || avoids_before(c);
             m.cands.push(Cand::new(end, resume, forced, tier(avoided, owid)));
         }
         walk_item(m, c, off, runs[j], avoid, depth, vp);
@@ -383,8 +381,8 @@ fn walk_flex_lines(m: &mut Model, list: &[(&LayoutBox, f32, f32)], avoid: bool, 
             let start = line.iter().map(|e| top_of(e)).fold(f32::INFINITY, f32::min);
             let forced = prev.iter().any(|e| breaks_after(e.0, 0)) || line.iter().any(|e| breaks_before(e.0, 0));
             let avoided = avoid
-                || prev.iter().any(|e| e.0.style.break_after == BreakValue::Avoid)
-                || line.iter().any(|e| e.0.style.break_before == BreakValue::Avoid);
+                || prev.iter().any(|e| avoids_after(e.0))
+                || line.iter().any(|e| avoids_before(e.0));
             m.cands.push(Cand::new(end, start.max(end), forced, tier(avoided, false)));
         }
         for &&(c, off, _) in line {
@@ -724,6 +722,13 @@ fn cut_at(d: &LayoutBox, off: f32, w: &Window, depth: usize, oof: bool) -> Optio
     // Flexbox L1 §12: a flex container that breaks consumes the rest of the fragmentainer.
     if bottom_cut && w.extent.is_finite() && matches!(d.style.display, Display::Flex) {
         frag.rect.height = frag.rect.height.max(w.lo + w.extent - from);
+    }
+    // CSS Tables L3 §fragmentation: a table box, row group, row and cell that continue in the
+    // next column reach the bottom of this one (the cells of a row stretch with it); the repeated
+    // footer keeps its room.
+    if bottom_cut && w.extent.is_finite() && multicol_table::is_table_part(d) {
+        let room = w.col_top + w.extent - if matches!(d.kind, BoxKind::Table) { 0.0 } else { w.tail };
+        frag.rect.height = frag.rect.height.max(room - frag.rect.y);
     }
     let table = matches!(d.kind, BoxKind::Table);
     for c in &d.children {

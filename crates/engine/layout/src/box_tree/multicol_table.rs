@@ -22,6 +22,12 @@ pub(super) fn is_col(b: &LayoutBox) -> bool {
     matches!(b.style.display, Display::TableColumn | Display::TableColumnGroup)
 }
 
+/// A table box, row group, row or cell: the boxes that fill the column they break out of.
+pub(super) fn is_table_part(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Table | BoxKind::TableRowGroup | BoxKind::TableRow)
+        || matches!(b.style.display, Display::TableCell)
+}
+
 fn is_grid_part(b: &LayoutBox) -> bool {
     participates(b) && matches!(b.kind, BoxKind::TableRowGroup | BoxKind::TableRow)
 }
