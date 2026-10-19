@@ -1,6 +1,6 @@
 # BUG-1293 — CSS-переходы и анимации стартуют на следующем кадре: синхронное чтение `getComputedStyle()`/`getAnimations()` видит конечное значение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 5, `css/css-transforms`)
 **Область:** layout/shell (`TransitionScheduler`/`AnimationScheduler` создают переход/анимацию при тике кадра, а не при пересчёте стиля); связано с [BUG-536](BUG-536-FIXED.md), [GAP-CSSANIM](../ROADMAP.md)
 
@@ -66,3 +66,30 @@ WPT-RUN-14 срез 5: `css/css-transforms/animation/*` — 15 файлов, 168
 | изменение в скрипте до `load` | 0 | 1 | 2 из 2 |
 
 То есть кроме «`getAnimations()` пуст сразу» (основная запись) есть второй симптом: объект перехода создан, а значение уже конечное. Первый переход на странице через `el.style.cssText += ';transition:background-color 0.2s;background-color:#fff'` не присылает `transitionrun`/`transitionend` (`css-transitions/crashtests/clear-duration-in-transitionend.html` — TIMEOUT), а тот же приём на втором–четвёртом элементе той же страницы присылает (2 прогона по 4 элемента, 1 из 4 без событий в каждом). Влияет на `css-transitions/changing-while-transition-*`, `starting-of-transitions-001`, `shadow-root-insertion`, `transitions-retarget` (`Transition should be initially N% complete`), `events-001…006`.
+
+## Исправление (P3, 2026-10-19)
+
+**Корень.** Rust-планировщики (`TransitionScheduler::sync` в `relayout`, `AnimationScheduler::tick` в кадре) создают переход/анимацию на следующем кадре, а `getComputedStyle()`/`getAnimations()` читают снимок, который до того момента хранит установившееся значение. Единственный синхронный наблюдатель — само чтение, поэтому ту же схему, что у `*-rule-*` (GAP-DECOR), обобщили на все свойства: `web_api_shim_tail_b.js::_wa_motion_read`. Первое чтение запоминает установившееся (before-change) значение; чтение, нашедшее другое, запускает переход, если `transition-*` элемента его покрывают (`_wa_motion_cover`: `all`, longhand и его шорткоды); `animation-name` вычисляет `@keyframes` на тех же часах (`performance.now()`, один на задачу). `getAnimations()` пересчитывает переходы и регистрирует тени `Animation` (с таймингом, `finished`, `startTime`, отмена по `AbortError`).
+
+**Что обязательно для остальных читателей снимка** (ловушки — в `subsystems/js.md`, последняя запись):
+- смена обнаруживается по *computed*-значению (`_lumen_get_computed_value`; для `transform` — список функций `TRANSFORM_LIST_KEY` рядом с resolved `matrix()`, иначе `rotate(720deg)` и `translateY(70%)` теряются);
+- свойства, которые ведёт кадровый цикл (`opacity`/`transform`/цвета/`height`), оверлей не трогает, пока планировщик пишет их в снимок (`animated_marker_key`, `_lumen_computed_is_animated`) — иначе значение планировщика принимается за смену стиля и переход перезапускается на каждом чтении;
+- свойство, которого нет в снимке (`rotate`/`scale`/`translate`/`transform-origin` — BUG-1435), не анимируется;
+- нерисуемый элемент (`display: none`) переходов не запускает.
+
+**Интерполяция.** `transform` — нативно (`crates/engine/layout/src/transform_interp.rs`, Transforms L2 §15: общий префикс функций одного семейства, единичные функции вместо недостающих, 3D-unmatrix + slerp кватернионов, вырожденная пара → перелом); остальное — в JS (`_wa_motion_try`: цвета в premultiplied sRGB, списки длин по компонентам, целые свойства округляются, диапазоны `opacity`/размеров зажимаются, `display` видим весь прогон, `animation-composition: add|accumulate` в ключевых кадрах).
+
+**Измерено** (`run_report.py`, ту же сборку без правки как база):
+
+| Категория | До | После |
+|---|---|---|
+| `css/css-transforms/animation` | 2819 / 4926 | 4256 / 4926 |
+| `css/css-transitions` | 379 / 3298 | 619 / 3298 |
+| `css/css-animations` | 489 / 1403 | 580 / 1403 |
+| `css/css-backgrounds/animations` | 1482 / 5129 | 1807 / 5129 |
+| `css/css-color` | 5179 / 11338 | 5228 / 11338 |
+| `css/cssom`, `web-animations` | 2063 / 4002, 1938 / 4381 | 2063, 1939 |
+
+**Остаток** (в записи не закрыт, вынесен): `!important` в таблице стилей должен перебивать `@keyframes`, и четыре теста перешли OK → TIMEOUT — [BUG-1648](BUG-1648-OPEN.md); классы `CSSAnimation`/`CSSTransition` — [BUG-1581](BUG-1581-OPEN.md); `rotate`/`scale`/`translate` в снимке — [BUG-1435](BUG-1435-OPEN.md); `em` внутри `calc()` в `translate*()` при интерполяции берёт 16px (а не `font-size` элемента) — в `transform_interp.rs::interpolate_transform_value`; 3D-пары, где Rust-парсер `parse_transform_list` не знает функцию, не интерполируются.
+
+**Тесты:** `crates/js/src/dom/tests/v8_bug1293_motion_overlay.rs` (13), `transform_interp::tests` (10).

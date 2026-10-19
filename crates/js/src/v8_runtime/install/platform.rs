@@ -614,6 +614,27 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // CSS Transforms L2 §15 — interpolation of two `transform` values given as text
+    // (BUG-1293, the JS read-time transition/animation overlay). `w`/`h` are the
+    // element's border box, the base of `translate*()` percentages. Answers the resolved
+    // value (`matrix()`); `None` = an end does not parse or the matrices do not
+    // decompose, the caller flips at 50%.
+    reg!(scope, ctx, store,
+        "_lumen_css_interpolate_transform",
+        |from: String, to: String, t: f64, w: f64, h: f64| -> Option<String> {
+            lumen_layout::interpolate_transform_value(&from, &to, t, w as f32, h as f32)
+        }
+    );
+
+    // The resolved value of one `transform` value (`rotate(30deg)` -> `matrix(...)`), for
+    // the end a discrete flip lands on.
+    reg!(scope, ctx, store,
+        "_lumen_css_resolve_transform",
+        |value: String, w: f64, h: f64| -> Option<String> {
+            lumen_layout::resolve_transform_value(&value, w as f32, h as f32)
+        }
+    );
+
     // CSS Gap Decorations L1 §4.7 — computed-form serialization of one specified
     // value (`red` → `rgb(255, 0, 0)`, `thin` → `1px`, `repeat()` form kept), used
     // where an animation/transition flips discretely and no arithmetic runs.
@@ -1534,6 +1555,31 @@ pub(crate) fn install_crypto_and_typed_om(
                     .or_else(|| m.get(&prop))
                     .cloned()
                     .unwrap_or_default()
+            });
+        }
+        // BUG-1293: the `transform` function list a box carries next to its resolved
+        // `matrix()` (`TRANSFORM_LIST_KEY`), the value CSS Transitions/Animations interpolate.
+        {
+            let cs = Arc::clone(&computed_styles);
+            let flush = flush.clone();
+            let needed = Arc::clone(&flush.computed_styles_needed);
+            reg!(scope, ctx, store, "_lumen_get_transform_list", move |nid: u32| -> String {
+                needed.store(true, Ordering::Relaxed);
+                flush.maybe_flush();
+                let map = cs.lock().unwrap_or_else(|e| e.into_inner());
+                map.get(&nid)
+                    .and_then(|m| m.get(lumen_layout::TRANSFORM_LIST_KEY))
+                    .cloned()
+                    .unwrap_or_default()
+            });
+        }
+        // BUG-1293: whether the frame loop's scheduler wrote this property's value (a live
+        // CSS transition/animation the Rust side drives) — the JS overlay then stands aside.
+        {
+            let cs = Arc::clone(&computed_styles);
+            reg!(scope, ctx, store, "_lumen_computed_is_animated", move |nid: u32, prop: String| -> bool {
+                let map = cs.lock().unwrap_or_else(|e| e.into_inner());
+                map.get(&nid).is_some_and(|m| m.get(&lumen_layout::animated_marker_key(&prop)).is_some())
             });
         }
         // Iteration source of both `getComputedStyle()` (`computed == false`:

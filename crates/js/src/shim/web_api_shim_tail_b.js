@@ -34,6 +34,7 @@ function _lumen_normalize_pseudo_elt(pseudoElt) {
 }
 window.getComputedStyle = function(element, pseudoElt) {
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
+    if (nid != null && _wa_gap_an[nid]) _wa_motion_prune(nid);
     var pseudo = _lumen_normalize_pseudo_elt(pseudoElt);
     // Cache: keyed by nid, invalidated on next call (live object semantics).
     // BUG-483 ч.2: `length`/`item(i)`/`Symbol.iterator` used to be hardcoded
@@ -66,6 +67,9 @@ window.getComputedStyle = function(element, pseudoElt) {
             }
             return _wa_gap_an_value(nid, name, base, _wa_gap_tr_value(nid, name, base));
         }
+        // BUG-1293: every other animatable property gets the same read-time overlay,
+        // so a transition/animation exists as soon as the style it reacts to is read.
+        if (_wa_motion_eligible(name)) return _wa_motion_read(nid, name, base);
         return base;
     }
     var handler = {
@@ -5334,6 +5338,7 @@ function _wa_gap_flip(kebab, v) {
 // painted rules are not animated frame by frame (only the computed value is).
 var _wa_gap_tr_name_re = /^(column|row)-rule-(width|color|inset-(cap|junction)-(start|end))$/;
 var _wa_gap_tr = {};
+var _wa_gap_tr_count = 0;
 var _wa_gap_tr_clock_ms = null;
 
 // One `performance.now()` per task: every read of one script turn sees one time.
@@ -5384,7 +5389,7 @@ function _wa_gap_tr_seconds(tok) {
 // Timing of the transition for `kebab` from the element's computed lists, or null.
 function _wa_gap_tr_timing(nid, kebab) {
     var props = _wa_gap_tr_split(_lumen_computed_property(nid, 'transition-property').toLowerCase());
-    var cover = _wa_gap_tr_tokens(kebab), idx = -1;
+    var cover = _wa_motion_cover(kebab), idx = -1;
     for (var i = 0; i < props.length; i++) {
         if (cover.indexOf(props[i]) >= 0) idx = i;   // the last match wins
     }
@@ -5402,7 +5407,21 @@ function _wa_gap_tr_timing(nid, kebab) {
 
 function _wa_gap_tr_value(nid, kebab, base) {
     var key = nid + ':' + kebab, rec = _wa_gap_tr[key];
-    if (!rec) { _wa_gap_tr[key] = { seen: base, run: null }; return base; }
+    // CSS Transitions L1 §3: an element that is not rendered (`display: none`, no box) has no
+    // before-change style, so it never starts a transition — nor does one that just became
+    // rendered.
+    var boxlessNow = function() {
+        return _lumen_get_computed_style(nid, 'computed:-lumen-boxless') !== ''
+            || _lumen_get_computed_style(nid, 'display') === 'none';
+    };
+    if (!rec) {
+        // A page that reads many properties of many nodes would otherwise keep one record per
+        // pair for good; forgetting them costs one missed before-change style, not a wrong value.
+        if (++_wa_gap_tr_count > 50000) { _wa_gap_tr = {}; _wa_motion_by_nid = {}; _wa_gap_tr_count = 1; }
+        _wa_gap_tr[key] = { seen: base, run: null, boxless: boxlessNow() };
+        (_wa_motion_by_nid[nid] || (_wa_motion_by_nid[nid] = {}))[kebab] = 1;
+        return base;
+    }
     var now = _wa_gap_tr_clock();
     var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
     if (base !== rec.seen) {
@@ -5412,10 +5431,15 @@ function _wa_gap_tr_value(nid, kebab, base) {
         // discrete and transition (flipping at 50%) only with
         // `transition-behavior: allow-discrete`.
         if (from !== base) {
-            var flip = _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) == null;
+            var flip = _wa_gap_tr_name_re.test(kebab)
+                ? _lumen_css_interpolate_gap_rule(kebab, String(from), String(base), 0.5) == null
+                : !_wa_motion_interpolable(camel, kebab, from, base);
             timing = _wa_gap_tr_timing(nid, kebab);
             if (timing && flip && !timing.discrete) timing = null;
         }
+        var boxless = boxlessNow();
+        if (boxless || rec.boxless) timing = null;
+        rec.boxless = boxless;
         rec.seen = base;
         rec.run = timing ? { from: from, to: base, start: now, dur: timing.dur * 1000,
                              delay: timing.delay * 1000, easing: timing.easing } : null;
@@ -5434,7 +5458,7 @@ function _wa_gap_tr_current(rec, now, camel) {
     // The Rust side serialises `cubic-bezier()` through f32 (0.23333333 for 0.2333...), so
     // the eased progress is off by up to ~1e-6; snap it before the width is floored to a pixel.
     var eased = Math.round(_wa_ease(raw, r.easing) * 1e5) / 1e5;
-    return _wa_gap_interp(camel, r.from, r.to, eased);
+    return _wa_motion_interp(camel, r.from, r.to, eased);
 }
 
 // CSS Animations L1 for the gap-decoration properties. The Rust `AnimationScheduler`
@@ -5468,12 +5492,13 @@ function _wa_gap_an_frames(kebab, name) {
     accept[kebab.replace(/^(column|row)-/, '')] = 1;   // `rule-width` sets both axes
     var out = [];
     for (var i = 0; i < frames.length; i++) {
-        var val = null, easing = null, decls = frames[i].decls;
+        var val = null, easing = null, comp = null, decls = frames[i].decls;
         for (var j = 0; j < decls.length; j++) {
             if (accept[decls[j][0]]) val = decls[j][1];
             else if (decls[j][0] === 'animation-timing-function') easing = decls[j][1];
+            else if (decls[j][0] === 'animation-composition') comp = decls[j][1];
         }
-        if (val !== null) out.push({ offset: frames[i].offset, value: val, easing: easing });
+        if (val !== null) out.push({ offset: frames[i].offset, value: val, easing: easing, composite: comp });
     }
     out.sort(function(a, b) { return a.offset - b.offset; });
     var uniq = [];
@@ -5517,7 +5542,7 @@ function _wa_gap_an_value(nid, kebab, base, value) {
     var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
     var recs = _wa_gap_an[nid];
     if (names.length === 1 && (names[0] === 'none' || names[0] === '')) {
-        if (recs) delete _wa_gap_an[nid];
+        if (recs) { _wa_motion_cancel_stale(nid, recs, null); delete _wa_gap_an[nid]; }
         return value;
     }
     var lists = {};
@@ -5554,13 +5579,22 @@ function _wa_gap_an_value(nid, kebab, base, value) {
         var a = 0;
         for (var f = 0; f < frames.length - 1; f++) { if (frames[f].offset <= p) a = f; }
         var from = frames[a], to = frames[a + 1];
+        // `animation-composition` of a keyframe (CSS Animations L2 §3): `add`/`accumulate`
+        // combine its value with the underlying one instead of replacing it.
+        var comped = function(f) {
+            if (!f.composite || f.composite === 'replace' || f.value == null) return f.value;
+            return _wa_composite_value(camel, base, f.value, f.composite);
+        };
+        from = { offset: from.offset, value: comped(from), easing: from.easing };
+        to = { offset: to.offset, value: comped(to), easing: to.easing };
         var local = (p - from.offset) / (to.offset - from.offset);
         // `animation-timing-function` shapes every keyframe interval (a keyframe's own
         // declaration wins); snapped like the transitions' eased progress.
         local = Math.round(_wa_ease(local, from.easing || pick('timing-function', i)) * 1e5) / 1e5;
-        result = _wa_interp_prop(camel, _wa_gap_resolve(eff, camel, from.value),
-                                 _wa_gap_resolve(eff, camel, to.value), local);
+        result = _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
+                                   _wa_motion_resolve(eff, camel, to.value), local);
     }
+    _wa_motion_cancel_stale(nid, recs, live);
     if (Object.keys(live).length) _wa_gap_an[nid] = live; else delete _wa_gap_an[nid];
     return result;
 }
@@ -5590,15 +5624,39 @@ function _wa_gap_an_has_gap_frames(name) {
     return false;
 }
 
+// Cancels the shadow `Animation`s of the records `live` no longer names: an `animation-name`
+// that left the list (or was replaced) cancels its animation — `finished` rejects with an
+// AbortError (CSS Animations L2 §3.2) — and the record goes with it.
+function _wa_motion_cancel_stale(nid, recs, live) {
+    if (!recs) return;
+    for (var k in recs) {
+        if (live && live[k]) continue;
+        _lumen_css_anim_unregister('a:', nid, k.slice(k.indexOf(':') + 1), 'idle');
+        delete recs[k];
+    }
+}
+
+// `getComputedStyle(el)` is a style recalc: an element whose `animation-name` dropped a
+// running animation has it cancelled there, whichever property is read next.
+function _wa_motion_prune(nid) {
+    var recs = _wa_gap_an[nid];
+    if (!recs) return;
+    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name')), live = {};
+    for (var i = 0; i < names.length; i++) live[i + ':' + names[i]] = 1;
+    _wa_motion_cancel_stale(nid, recs, live);
+    if (!Object.keys(recs).length) delete _wa_gap_an[nid];
+}
+
 function _wa_gap_an_sync(target) {
     var nid = target && target.__nid__;
     if (nid == null) return;
     var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
     var lists = null;
     var ms = _wa_gap_tr_clock();
+    _wa_motion_prune(nid);
     for (var i = 0; i < names.length; i++) {
         var name = names[i];
-        if (name === 'none' || name === '' || !_wa_gap_an_has_gap_frames(name)) continue;
+        if (name === 'none' || name === '' || !_wa_motion_has_frames(name)) continue;
         if (!lists) {
             lists = {};
             ['duration', 'delay', 'iteration-count', 'direction', 'fill-mode', 'play-state']
@@ -5620,6 +5678,7 @@ function _wa_gap_an_sync(target) {
         var fwd = fill === 'forwards' || fill === 'both';
         if (finished && !fwd) {
             _lumen_css_anim_unregister('a:', nid, name, 'idle');
+            if (rec.anim) rec.anim = null;
             continue;
         }
         // The scheduler's `animationend` drops the registry key but leaves a finished
@@ -5632,6 +5691,7 @@ function _wa_gap_an_sync(target) {
             iterationStart: 0, iterations: iters, easing: 'linear', direction: pick('direction')
         };
         anim._state = finished ? 'finished' : (paused ? 'paused' : 'running');
+        var startClock = !anim._wa_gap_an_bound && !finished && !paused;
         if (!anim._wa_gap_an_bound) {
             anim._wa_gap_an_bound = true;
             (function(anim, nid, key, rec0) {
@@ -5648,9 +5708,286 @@ function _wa_gap_an_sync(target) {
                     },
                     configurable: true
                 });
+                // `startTime` is the same instant on the document timeline's clock.
+                Object.defineProperty(anim, 'startTime', {
+                    get: function() {
+                        var r = (_wa_gap_an[nid] || {})[key] || rec0, tl = _wa_doc_timeline.currentTime || 0;
+                        return tl - (_wa_gap_tr_clock() - r.start);
+                    },
+                    set: function(v) {
+                        var r = (_wa_gap_an[nid] || {})[key] || rec0, tl = _wa_doc_timeline.currentTime || 0;
+                        r.start = _wa_gap_tr_clock() - (tl - (+v || 0));
+                    },
+                    configurable: true
+                });
             })(anim, nid, key, rec);
         }
+        // The shadow animation runs on the same clock (its effect has no keyframes, so it
+        // never writes a style): `finished`, the `finish` event and `playState` follow it.
+        if (startClock) anim.play();
     }
+}
+
+// ── BUG-1293: read-time CSS Transitions / Animations for every property ──────
+// The gap-decoration machinery above is the pattern: the Rust schedulers start a
+// transition or animation on the next frame, so a script that changes a style and
+// reads it back in the same task (`getComputedStyle()`, `getAnimations()`) saw the
+// settled value and an empty animation list. `getComputedStyle()` is the one place that
+// observes the value synchronously, so the overlay lives there for every animatable
+// property: the first read records the settled (before-change) value, a later read that
+// finds a different one starts a transition when the element's `transition-*` lists ask
+// for it, a read that finds an `animation-name` evaluates the `@keyframes` on the same
+// clock. The change is detected on the *computed* value (`_lumen_get_computed_value`)
+// for the properties layout replaces by used px (`width`, `margin-*`, ...), so an
+// `auto` that resolves to another size is not mistaken for a style change.
+var _wa_motion_used_re = /^(width|height|top|right|bottom|left|padding-(top|right|bottom|left)|margin-(top|right|bottom|left))$/;
+var _wa_motion_by_nid = {};
+var _wa_motion_native_re = /^(opacity|transform|color|background-color|height)$/;
+// Properties the overlay never touches: custom and vendor-prefixed ones, and the
+// `transition-*`/`animation-*` longhands that drive it.
+function _wa_motion_eligible(kebab) {
+    return kebab.charCodeAt(0) !== 45 && kebab.indexOf('transition') !== 0 && kebab.indexOf('animation') !== 0;
+}
+
+// The element the interpolation in flight belongs to: `translate*()` percentages need its box.
+var _wa_motion_nid = null;
+function _wa_motion_box() {
+    var w = 0, h = 0;
+    if (_wa_motion_nid != null) {
+        try {
+            var el = _lumen_make_element(_wa_motion_nid);
+            w = el.offsetWidth || 0; h = el.offsetHeight || 0;
+        } catch (e) {}
+    }
+    return [w, h];
+}
+
+function _wa_motion_read(nid, kebab, resolved) {
+    // A property the snapshot does not carry is not computed here, so nothing animates it.
+    if (resolved === '') return resolved;
+    // The frame loop's scheduler drives opacity/transform/colours/height itself and writes
+    // the live value into the snapshot: that value is not a style change.
+    var rec = _wa_gap_tr[nid + ':' + kebab];
+    if (_wa_motion_native_re.test(kebab) && _lumen_computed_is_animated(nid, kebab)) {
+        if (rec) { rec.run = null; rec.native = true; }
+        return resolved;
+    }
+    var computed = kebab === 'transform' ? (_lumen_get_transform_list(nid) || resolved)
+                 : _wa_motion_used_re.test(kebab) ? (_lumen_get_computed_value(nid, kebab) || resolved) : resolved;
+    // The scheduler is done with it: the settled value is the new baseline, not a change.
+    if (rec && rec.native) { rec.native = false; rec.seen = computed; }
+    _wa_motion_nid = nid;
+    var v = _wa_gap_an_value(nid, kebab, computed, _wa_gap_tr_value(nid, kebab, computed));
+    _wa_motion_nid = null;
+    // Nothing in flight: the resolved view (a used px, a `matrix()`) stands.
+    return v === computed ? resolved : v;
+}
+
+// Every `transition-property` token that covers `kebab`: `all`, the longhand, and the
+// shorthands it belongs to (`margin-left` <- `margin`, `border-top-color` <- `border-top`,
+// `border-color`, `border`, ...).
+var _wa_motion_shorthands = {
+    'margin': 1, 'padding': 1, 'border': 1, 'border-top': 1, 'border-right': 1, 'border-bottom': 1,
+    'border-left': 1, 'border-width': 1, 'border-style': 1, 'border-color': 1, 'border-radius': 1,
+    'border-image': 1, 'outline': 1, 'background': 1, 'background-position': 1, 'font': 1, 'flex': 1,
+    'gap': 1, 'grid-gap': 1, 'text-decoration': 1, 'overflow': 1, 'inset': 1, 'scroll-margin': 1,
+    'scroll-padding': 1, 'mask': 1, 'columns': 1, 'column-rule': 1, 'list-style': 1, 'grid-area': 1,
+    'grid-row': 1, 'grid-column': 1, 'place-content': 1, 'place-items': 1, 'place-self': 1,
+    'text-emphasis': 1, 'offset': 1, 'border-block': 1, 'border-inline': 1, 'margin-block': 1,
+    'margin-inline': 1, 'padding-block': 1, 'padding-inline': 1, 'inset-block': 1, 'inset-inline': 1
+};
+function _wa_motion_cover(kebab) {
+    if (_wa_gap_tr_name_re.test(kebab)) return _wa_gap_tr_tokens(kebab);
+    var out = ['all', kebab], p = kebab.split('-');
+    var corner = /^border-(top|bottom)-(left|right)-radius$/.test(kebab);
+    for (var n = p.length - 1; n > 0 && !corner; n--) {
+        var pre = p.slice(0, n).join('-');
+        if (_wa_motion_shorthands[pre]) out.push(pre);
+    }
+    var side = /^border-(top|right|bottom|left)-(width|style|color)$/.exec(kebab);
+    if (side) out.push('border-' + side[2]);
+    if (/^border-(top|bottom)-(left|right)-radius$/.test(kebab)) out.push('border-radius');
+    if (/^(row|column)-gap$/.test(kebab)) out.push('gap', 'grid-gap');
+    if (/^(top|right|bottom|left)$/.test(kebab)) out.push('inset');
+    if (/^background-position-[xy]$/.test(kebab)) out.push('background-position', 'background');
+    if (/^(overflow)-[xy]$/.test(kebab)) out.push('overflow');
+    // Longest first would not matter: the last match in the list wins, `all` is first.
+    return out.reverse();
+}
+
+// Number+unit of one token, or null.
+function _wa_motion_num(tok) {
+    var m = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$/i.exec(tok);
+    return m ? { n: parseFloat(m[1]), unit: m[2].toLowerCase() } : null;
+}
+
+function _wa_motion_fmt(n) {
+    return String(+n.toFixed(6));
+}
+
+// Component-wise interpolation of a whitespace-separated list of numbers with units, or
+// null when the shapes differ (token counts, a non-numeric token that is not equal on
+// both sides, units that do not mix).
+var _wa_motion_integer_re = /^(zIndex|order|columnCount|orphans|widows)$/;
+function _wa_motion_lerp_tokens(a, b, t, integer) {
+    var ta = String(a).trim().split(/\s+/), tb = String(b).trim().split(/\s+/);
+    if (ta.length !== tb.length) return null;
+    var out = [];
+    for (var i = 0; i < ta.length; i++) {
+        if (ta[i] === tb[i]) { out.push(ta[i]); continue; }
+        var x = _wa_motion_num(ta[i]), y = _wa_motion_num(tb[i]);
+        if (!x || !y) return null;
+        if (x.unit === y.unit) {
+            var v = x.n + (y.n - x.n) * t;
+            out.push((integer ? String(Math.floor(v + 0.5)) : _wa_motion_fmt(v)) + x.unit);
+            continue;
+        }
+        var sx = _wa_unit_scale[x.unit], sy = _wa_unit_scale[y.unit];
+        if (x.n === 0 && !x.unit) { sx = sy; }
+        else if (y.n === 0 && !y.unit) { sy = sx; }
+        if (!sx || !sy || sx[0] !== sy[0]) return null;
+        out.push(_wa_motion_fmt(x.n * sx[1] + (y.n * sy[1] - x.n * sx[1]) * t) + sx[0]);
+    }
+    return out.join(' ');
+}
+
+// CSS Color 4 §12.3: interpolate in premultiplied sRGB.
+function _wa_motion_lerp_color(a, b, t) {
+    var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
+    if (!ca || !cb) return null;
+    var aa = ca[3] / 255, ab = cb[3] / 255;
+    var al = Math.max(0, Math.min(1, aa + (ab - aa) * t));
+    var ch = function(i) {
+        if (al === 0) return 0;
+        var v = (ca[i] * aa + (cb[i] * ab - ca[i] * aa) * t) / al;
+        return Math.max(0, Math.min(255, Math.round(v)));
+    };
+    if (al === 1) return 'rgb(' + ch(0) + ', ' + ch(1) + ', ' + ch(2) + ')';
+    return 'rgba(' + ch(0) + ', ' + ch(1) + ', ' + ch(2) + ', ' + _wa_motion_fmt(al) + ')';
+}
+
+function _wa_motion_is_color(camel) {
+    return /Color$/.test(camel) || camel === 'color' || camel === 'fill' || camel === 'stroke';
+}
+
+// The interpolated value, or null when the pair does not interpolate (the caller flips
+// discretely at 50%, CSS Values 4 §4.4).
+function _wa_motion_try(camel, from, to, t) {
+    from = String(from); to = String(to);
+    if (_wa_gap_prop_re.test(camel)) {
+        var kebab = camel.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
+        return _lumen_css_interpolate_gap_rule(kebab, from, to, t);
+    }
+    if (camel === 'transform') {
+        var box = /[%(]/.test(from + to) ? _wa_motion_box() : [0, 0];
+        return _lumen_css_interpolate_transform(from, to, t, box[0], box[1]);
+    }
+    if (_wa_motion_is_color(camel)) return _wa_motion_lerp_color(from, to, t);
+    var r = _wa_motion_lerp_tokens(from, to, t, _wa_motion_integer_re.test(camel));
+    return r == null ? null : _wa_motion_clamp(camel, r);
+}
+
+// Value ranges: an overshooting timing function (`cubic-bezier(.., 2, ..)`, `at (1.5)`) may not
+// carry an opacity outside [0, 1] or a size below 0 (CSS Values 4 §4.5.3 "range clamping").
+var _wa_motion_unit_range_re = /^(opacity|fillOpacity|strokeOpacity|floodOpacity|stopOpacity|shapeImageThreshold)$/;
+var _wa_motion_nonneg_re = /^(width|height|(min|max)(Width|Height)|padding(Top|Right|Bottom|Left)?|border(Top|Right|Bottom|Left)?Width|border(Top|Bottom)?(Left|Right)?Radius|outlineWidth|fontSize|flexGrow|flexShrink|columnWidth|gap|rowGap|columnGap|strokeWidth|scrollPadding.*)$/;
+function _wa_motion_clamp(camel, v) {
+    var lo, hi = Infinity;
+    if (_wa_motion_unit_range_re.test(camel)) { lo = 0; hi = 1; }
+    else if (_wa_motion_nonneg_re.test(camel)) lo = 0;
+    else return v;
+    return v.split(' ').map(function(tok) {
+        var n = _wa_motion_num(tok);
+        if (!n) return tok;
+        var c = Math.min(hi, Math.max(lo, n.n));
+        return c === n.n ? tok : _wa_motion_fmt(c) + n.unit;
+    }).join(' ');
+}
+
+function _wa_motion_interp(camel, from, to, t) {
+    if (_wa_gap_prop_re.test(camel)) return _wa_gap_interp(camel, from, to, t);
+    var r = _wa_motion_try(camel, from, to, t);
+    if (r != null) return r;
+    var end = t < 0.5 ? from : to;
+    // CSS Display 4 §2.1: `display` animates discretely but is the visible end for the whole
+    // run when only one end is `none` (it flips at 50% only between two visible values).
+    if (camel === 'display') {
+        if (String(from) === 'none') return to;
+        if (String(to) === 'none') return from;
+    }
+    if (camel === 'transform') {
+        // The end a flip lands on is a computed value too: `rotate(30deg)` -> `matrix(...)`.
+        var box = _wa_motion_box();
+        var res = _lumen_css_resolve_transform(String(end), box[0], box[1]);
+        return res == null ? end : res;
+    }
+    return end;
+}
+
+function _wa_motion_interpolable(camel, kebab, from, to) {
+    return _wa_motion_try(camel, from, to, 0.5) != null;
+}
+
+// A keyframe's specified value as something `_wa_motion_try` reads: colours in their
+// canonical `rgb()` form (`currentcolor` is the element's own colour).
+function _wa_motion_resolve(eff, camel, v) {
+    if (_wa_gap_prop_re.test(camel)) return _wa_gap_resolve(eff, camel, v);
+    if (v == null) return v;
+    v = String(v).trim();
+    if (_wa_motion_is_color(camel)) {
+        if (/^currentcolor$/i.test(v)) {
+            try { return getComputedStyle(eff.target).color || v; } catch (e) { return v; }
+        }
+        var c = _lumen_css_canonical_color(v);
+        return c == null ? v : c;
+    }
+    return v;
+}
+
+// `element.getAnimations()` for the transitions the overlay started: re-read every property
+// of the element the overlay has a settled value for (the read is what notices the change),
+// then list each running transition under the registry key the scheduler's `transitionrun`
+// uses and give its effect the computed timing.
+function _wa_motion_tr_sync(target) {
+    var nid = target && target.__nid__;
+    if (nid == null) return;
+    var props = _wa_motion_by_nid[nid];
+    if (!props) return;
+    for (var kebab in props) {
+        if (_wa_motion_eligible(kebab)) {
+            var resolved = _lumen_computed_property(nid, kebab);
+            if (resolved !== '') _wa_motion_read(nid, kebab, resolved);
+        }
+        var rec = _wa_gap_tr[nid + ':' + kebab];
+        var run = rec && rec.run;
+        if (!run || run.done) {
+            // Ended or superseded: stop the shadow animation's own clock too.
+            var old = _lumen_css_anim_registry['t:' + nid + ':' + kebab];
+            if (old) old._cancelRaf();
+            _lumen_css_anim_unregister('t:', nid, kebab, 'idle');
+            continue;
+        }
+        var anim = _lumen_css_anim_register('t:', nid, kebab);
+        if (anim._wa_motion_run !== run) {
+            // A new transition (or the first sight of one): give the shadow `Animation` the
+            // computed timing and let it play — its effect has no keyframes, so the clock
+            // only drives `finished`/`currentTime`, never a style write.
+            anim._wa_motion_run = run;
+            anim._cancelRaf();
+            anim.effect._timing = {
+                duration: run.dur, delay: run.delay, endDelay: 0, fill: 'backwards',
+                iterationStart: 0, iterations: 1, easing: 'linear', direction: 'normal'
+            };
+            anim.transitionProperty = kebab;
+            anim._startTime = null;
+            anim._holdTime = null;
+            anim.play();
+        }
+    }
+}
+
+function _wa_motion_has_frames(name) {
+    return _wa_gap_keyframes_json(name) != null;
 }
 
 // Interpolate a single CSS property value between two string values.
@@ -6411,14 +6748,27 @@ function _wa_element_animate(target, keyframes, options) {
 
 // element.getAnimations() — all non-idle animations targeting this element.
 function _wa_get_animations_for(target) {
+    _wa_motion_tr_sync(target);
     _wa_gap_an_sync(target);
-    return _wa_animations.filter(function(a) {
+    return _wa_motion_order(_wa_animations.filter(function(a) {
         return a._state !== 'idle' && a.effect && a.effect.target === target;
-    });
+    }));
+}
+
+// Transitions of one element sort by property name (CSS Transitions L2 §animation-composite-order);
+// everything else keeps the order it was created in.
+function _wa_motion_order(list) {
+    var trs = list.filter(function(a) { return a.transitionProperty !== undefined; });
+    if (trs.length < 2) return list;
+    trs.sort(function(a, b) { return a.transitionProperty < b.transitionProperty ? -1 : (a.transitionProperty > b.transitionProperty ? 1 : 0); });
+    var i = 0;
+    return list.map(function(a) { return a.transitionProperty !== undefined ? trs[i++] : a; });
 }
 
 // document.getAnimations() — all non-idle animations on this document.
 function _wa_doc_get_animations() {
+    // A style change nobody read since is a transition too (see `_wa_motion_tr_sync`).
+    for (var nid in _wa_motion_by_nid) _wa_motion_tr_sync({ __nid__: +nid });
     return _wa_animations.filter(function(a) { return a._state !== 'idle'; });
 }
 

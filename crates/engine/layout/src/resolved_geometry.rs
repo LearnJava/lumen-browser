@@ -352,6 +352,13 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
     }
 
     if !s.transform.is_empty() {
+        // BUG-1293: the function list next to the resolved `matrix()` below — the matrix
+        // loses `rotate(720deg)` and `translateY(70%)`, which CSS Transitions/Animations
+        // interpolate. Boxes only: pseudo-element and `computed_style_json` maps never get it.
+        m.insert(
+            crate::selector_query::TRANSFORM_LIST_KEY,
+            crate::selector_query::transform_fns_to_list_css(&s.transform),
+        );
         set_used(m, "transform", resolved_transform(
                 &s.transform,
                 z,

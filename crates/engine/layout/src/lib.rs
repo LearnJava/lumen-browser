@@ -43,6 +43,7 @@ pub mod property_trees;
 pub mod ruby;
 pub mod rule_index;
 mod resolved_geometry;
+mod transform_interp;
 pub mod selection;
 pub mod selector_query;
 pub mod style_map;
@@ -95,6 +96,8 @@ pub use ruby::{
     RubySegmentShape, RubyShape, RubySide, lay_out_ruby, lay_out_ruby_segments,
     resolve_level_sides,
 };
+pub use selector_query::{animated_marker_key, TRANSFORM_LIST_KEY};
+pub use transform_interp::{interpolate_transform_value, resolve_transform_value};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator, interpolate_gap_rules,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,

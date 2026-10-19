@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-19",
  "counts": {
-  "open": 367,
-  "fixed": 1209,
+  "open": 370,
+  "fixed": 1213,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1579,
+ "total_bugs": 1586,
  "phases": [
   {
    "id": "P0",
@@ -8910,10 +8910,7 @@
          "title": "Стенд G: база GPR Lumen, A/B 2×2, ночной прогон",
          "status": "done",
          "size": "S",
-         "note": "Стенд G (COMPAT-CORPUS-4) снят только на Chrome. Объём: `python scripts/captcha_stand.py --arm lumen --route home-direct` на том же корпусе, `--compare docs/perf/runs/2026-10-14-captcha-chrome.json`, базу GPR Lumen и балл v3 записать в docs/perf/runs/ и docs/perf/journal.md; затем A/B 2×2 идентичности через `--env LUMEN_IDENTITY=chrome_lumen\\|chrome_unbranded` (COMPAT-AB-IDENTITY-KNOB); ночной прогон с `--baseline` и блокировкой релиза при падении «пройдено» — на машине владельца (COMPAT-BIZ). Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`, `navigate` на example.com 47 с). Приёмка: GPR Lumen на ≥15 страницах и балл v3 записаны.",
-         "bugs": [
-          "BUG-1629"
-         ]
+         "note": "ЗАКРЫТ 2026-10-19 (ветка p2-compat-corpus-4-base): GPR Lumen 7/20 = 0.35 (Chrome 0.70), A/B 2×2 по `LUMEN_IDENTITY` — 0.35 / 0.30, балл v3 у Lumen нет (BUG-1647); запись — docs/perf/journal.md, runs/2026-10-19-captcha-lumen*.json; главная причина «завис» — BUG-1646 (H2 PING); ночной прогон — на машине владельца (COMPAT-BIZ). Исходная постановка: Стенд G (COMPAT-CORPUS-4) снят только на Chrome. Объём: `python scripts/captcha_stand.py --arm lumen --route home-direct` на том же корпусе, `--compare docs/perf/runs/2026-10-14-captcha-chrome.json`, базу GPR Lumen и балл v3 записать в docs/perf/runs/ и docs/perf/journal.md; затем A/B 2×2 идентичности через `--env LUMEN_IDENTITY=chrome_lumen\\|chrome_unbranded` (COMPAT-AB-IDENTITY-KNOB); ночной прогон с `--baseline` и блокировкой релиза при падении «пройдено» — на машине владельца (COMPAT-BIZ). Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`, `navigate` на example.com 47 с). Приёмка: GPR Lumen на ≥15 страницах и балл v3 записаны."
         },
         {
          "id": "COMPAT-CORPUS-2",
@@ -10008,20 +10005,6 @@
    "status": "open",
    "title": "SVG-фигуры (`rect`/`circle`/`path`…) читают только атрибут `transform`: CSS `transform`/`translate`/`rotate`/`scale` в `style` и таблицах стилей, `transform-ori…",
    "component": "layout (`crates/engine/layout/src/box_tree/svg.rs` — `parse_svg_transform(get_attr(\"transform\"))`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1292": {
-   "status": "open",
-   "title": "Проценты в `translate()`/`translateX/Y/3d()`/свойстве `translate` вычисляются как 0 (`TransformFn` хранит только px; `translateX(50%)` — нет `PushTransform` воо…",
-   "component": "layout (`crates/engine/layout/src/style/parse/transform.rs::parse_transform_fn`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1293": {
-   "status": "open",
-   "title": "CSS-переход/анимация создаётся на следующем кадре: синхронное `getComputedStyle()` после смены стиля с `transition-delay:-50s` отдаёт конечное значение, `getAni…",
-   "component": "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)",
    "date": null,
    "debtor": false
   },
@@ -11796,24 +11779,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1634": {
-   "status": "open",
-   "title": "Google Fonts на youtube: 271 запрос, 208 разных `.woff2` (все поднаборы `unicode-range`, CSS Fonts 4 §4.5), повторы до 8×, `FontLoaded «YouTube Sans» 300` ×99",
-   "component": "font/shell (загрузка `@font-face`, `unicode-range`) — не локализовано",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1638": {
    "status": "open",
    "title": "Событие `statechange` ServiceWorker приходит без `target`: youtube `Cannot read properties of null (reading 'state')`",
    "component": "js (`navigator.serviceWorker`, `statechange`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1639": {
-   "status": "open",
-   "title": "`FontFace`: `TypeError: self._rejectLoaded is not a function` как `unhandledrejection`, десятки раз за загрузку youtube (вероятно связано с BUG-1634)",
-   "component": "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)",
    "date": null,
    "debtor": false
   },
@@ -11828,6 +11797,55 @@
    "status": "open",
    "title": "В живом wgpu-окне `mix-blend-mode` не применяется: все 16 панелей TEST-56 нарисованы как `normal` (gdigrab 14.13% против 1.355% на 2026-09-19; CPU-растеризатор…",
    "component": "paint (wgpu-исполнение плана рендера — группа `mix-blend-mode`, `renderer.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1642": {
+   "status": "open",
+   "title": "Лишняя горизонтальная полоса прокрутки страницы: ширина контента из display list-а без учёта `overflow:hidden` (подложка `left:-50vw; width:150vw` на otpravka.p…",
+   "component": "shell (`display_list_metrics.rs::content_width_of`, `scrollbar.rs::build_hscrollbar_overlay`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1643": {
+   "status": "open",
+   "title": "Из дочернего iframe `parent.document.getElementById(id).contentWindow` — `undefined` (из верхнего документа — объект): OIDC session-check otpravka.pochta.ru бро…",
+   "component": "js (фреймы, `frame_bridge.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1644": {
+   "status": "open",
+   "title": "`documentElement.clientWidth` = 2216 и `scrollWidth` = 2256 при `innerWidth` = 1920; `scrollWidth` включает переполнение, обрезанное `overflow:hidden` (otpravka…",
+   "component": "layout/js (CSSOM View, корень)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1645": {
+   "status": "open",
+   "title": "Остаток BUG-1292: процент в `translate()` у **SVG-элементов** (`transform-box: fill-box/view-box`, WPT `transform-percent-009/010`) не разрешается; `getComputed…",
+   "component": "layout (`crates/engine/layout/src/box_tree/svg.rs`, `style/parse/transform.rs`, `selector_query.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1646": {
+   "status": "open",
+   "title": "`H2 connection lost … no response to PING for 5000 ms` на anubis.techaro.lol, zillow, leboncoin (первый кадр 29–74 с): страницы стоят на «Loading…» либо показыв…",
+   "component": "network (`crates/network/src/h2/mux.rs`, PING-проверка простоя)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1647": {
+   "status": "open",
+   "title": "`grecaptcha.execute` не возвращает токен: `TypeError: Cannot read properties of undefined (reading 'length')` в `filter` и `reCAPTCHA Timeout`; балла v3 нет (Ch…",
+   "component": "js (reCAPTCHA v3, anchor-кадр)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1648": {
+   "status": "open",
+   "title": "Оверлей не знает каскадного происхождения значения: `!important` в таблице стилей должен перебивать `@keyframes`, а он перебивается (`css-animations/important-r…",
+   "component": "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)",
    "date": null,
    "debtor": false
   },
@@ -20314,6 +20332,34 @@
    "component": "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)",
    "date": "2026-10-19",
    "debtor": false
+  },
+  "BUG-1292": {
+   "status": "fixed",
+   "title": "Проценты в `translate()`/`translateX/Y/3d()`/свойстве `translate` вычисляются как 0 (`TransformFn` хранит только px; `translateX(50%)` — нет `PushTransform` воо…",
+   "component": "layout (`crates/engine/layout/src/style/parse/transform.rs::parse_transform_fn`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1639": {
+   "status": "fixed",
+   "title": "`FontFace`: `TypeError: self._rejectLoaded is not a function` как `unhandledrejection`, десятки раз за загрузку youtube (вероятно связано с BUG-1634)",
+   "component": "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1634": {
+   "status": "fixed",
+   "title": "Google Fonts: качались все поднаборы `unicode-range`; теперь блок грузится, только когда в документе есть символ из диапазона",
+   "component": "shell (`page_load.rs::take_needed_web_fonts`, `web_font_usage.rs`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1293": {
+   "status": "fixed",
+   "title": "CSS-переход/анимация создаётся на следующем кадре: синхронное `getComputedStyle()` после смены стиля с `transition-delay:-50s` отдаёт конечное значение, `getAni…",
+   "component": "layout/shell (`TransitionScheduler`/`AnimationScheduler` — старт на тике кадра, не на пересчёте стиля)",
+   "date": "2026-10-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -20673,9 +20719,6 @@
   ],
   "font (`system_fonts.rs`)": [
    "BUG-329"
-  ],
-  "font/shell (загрузка `@font-face`, `unicode-range`) — не локализовано": [
-   "BUG-1634"
   ],
   "graphic_tests": [
    "BUG-199"
@@ -21555,8 +21598,14 @@
   "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)": [
    "BUG-1239"
   ],
+  "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)": [
+   "BUG-1648"
+  ],
   "js (live DOM bindings)": [
    "BUG-279"
+  ],
+  "js (reCAPTCHA v3, anchor-кадр)": [
+   "BUG-1647"
   ],
   "js (shell)": [
    "BUG-233"
@@ -21572,6 +21621,9 @@
   ],
   "js (тесты `crates/js/src/dom/tests/v8_webworker.rs`, `crates/js/src/worker.rs::tests_v8` — фиксированный `sleep` вместо опроса с дедлайном)": [
    "BUG-1111"
+  ],
+  "js (фреймы, `frame_bridge.rs`)": [
+   "BUG-1643"
   ],
   "js (шим `TextDecoderStream`, `crates/js/src/shim/web_api_shim_*.js`)": [
    "BUG-1084"
@@ -22128,6 +22180,9 @@
   "layout (`crates/engine/layout/src/box_tree/svg.rs`, `inline_build.rs` — встроенный `<svg>` в потоке)": [
    "BUG-1354"
   ],
+  "layout (`crates/engine/layout/src/box_tree/svg.rs`, `style/parse/transform.rs`, `selector_query.rs`)": [
+   "BUG-1645"
+  ],
   "layout (`crates/engine/layout/src/box_tree/table.rs:616` `table_intrinsic_content_width`, `layout_dispatch.rs:1778`)": [
    "BUG-1335"
   ],
@@ -22462,6 +22517,9 @@
   "layout/grid": [
    "BUG-1102"
   ],
+  "layout/js (CSSOM View, корень)": [
+   "BUG-1644"
+  ],
   "layout/js (`build_ruby_group_box`: блочное содержимое `<rt>`; инлайнизация; `CSS.supports` для `ruby-*`)": [
    "BUG-1591"
   ],
@@ -22638,6 +22696,9 @@
   ],
   "network (`crates/network/src/h2/mux.rs` — `STREAM_TIMEOUT = 60 s`, нет PING-проверки живости)": [
    "BUG-1205"
+  ],
+  "network (`crates/network/src/h2/mux.rs`, PING-проверка простоя)": [
+   "BUG-1646"
   ],
   "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)": [
    "BUG-805"
@@ -23170,6 +23231,9 @@
   "shell (`crates/shell/src/window_mode.rs` — `a11y_store` init), CLI (`crates/shell/src/cli_args.rs`), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-755"
   ],
+  "shell (`display_list_metrics.rs::content_width_of`, `scrollbar.rs::build_hscrollbar_overlay`)": [
+   "BUG-1642"
+  ],
   "shell (`lumen/click.rs`, `lumen/keyboard.rs:47`, `lumen/text_input.rs:185`)": [
    "BUG-1624"
   ],
@@ -23199,6 +23263,9 @@
   ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
+  ],
+  "shell (`page_load.rs::take_needed_web_fonts`, `web_font_usage.rs`)": [
+   "BUG-1634"
   ],
   "shell (`redraw_requested.rs`, `about_to_wait.rs`)": [
    "BUG-1637"
