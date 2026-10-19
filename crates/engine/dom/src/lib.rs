@@ -655,12 +655,14 @@ pub struct Document {
     /// element then *represents* that image (a replaced box, fallback children
     /// not rendered); without an entry it represents its fallback content.
     ///
-    /// A side table and not the `width`/`height` attributes `<img>` gets its
-    /// decoded size through: on these two tags the attributes are reflected
-    /// by `object.width`/`embed.width` verbatim, so writing them would leak
-    /// into script. The URL is kept so a later `data`/`src` change makes the
-    /// entry stale instead of painting the old image — see
-    /// [`Self::embedded_image`].
+    /// A side table and not the `width`/`height` attributes: on these two tags
+    /// the attributes are reflected by `object.width`/`embed.width` verbatim,
+    /// so writing them would leak into script. The same table carries the
+    /// natural size of an `<img>` that has no `width`/`height` attribute at
+    /// all (BUG-1280 — as attributes it became a `width`+`height` hint pair
+    /// that authored CSS on one side could not rescale by the ratio). The URL
+    /// is kept so a later `data`/`src` change makes the entry stale instead
+    /// of painting the old image — see [`Self::embedded_image`].
     #[serde(default)]
     embedded_images: HashMap<u32, (String, u32, u32)>,
     /// `<object>`/`<embed>` whose fetched resource the shell already classified
