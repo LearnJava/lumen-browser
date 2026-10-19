@@ -139,7 +139,53 @@ use super::*;
             "div { background-position: 80% 90%; background-position: initial; }",
             &[0],
         );
-        assert!(s.background_layers.is_empty());
+        // BUG-1301: сбрасывается только поле, слой остаётся (с позицией 0% 0%).
+        assert!(s.background_layers.iter().all(|l| l.position == ObjectPosition::background_initial()));
+    }
+
+    #[test]
+    fn background_size_css_wide_keeps_image_layer() {
+        // BUG-1301: `initial`/`inherit`/`unset`/`revert` на одном longhand'е не стирают слой
+        // с картинкой — меняется только его поле.
+        for kw in ["initial", "inherit", "unset", "revert"] {
+            for prop in [
+                "background-size", "background-repeat", "background-position", "background-origin",
+                "background-clip", "background-attachment", "background-position-x",
+            ] {
+                let css = format!("div {{ background-image: url(a.png); {prop}: {kw}; }}");
+                let s = cascade_at("<div></div>", &css, &[0]);
+                assert_eq!(s.background_layers.len(), 1, "{prop}: {kw}");
+                assert!(
+                    matches!(s.background_layers[0].image, BackgroundImage::Url(_)),
+                    "{prop}: {kw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn background_size_initial_resets_only_size() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png); background-size: 10px 20px;                    background-repeat: no-repeat; background-size: initial; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].size, BackgroundSize::Auto);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn background_size_inherit_takes_parent_field_per_layer() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-image: url(a.png), url(b.png); background-size: contain, cover; }              p { background-image: url(c.png), url(d.png), url(e.png); background-size: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_layers.len(), 3);
+        assert_eq!(s.background_layers[0].size, BackgroundSize::Contain);
+        assert_eq!(s.background_layers[1].size, BackgroundSize::Cover);
+        assert_eq!(s.background_layers[2].size, BackgroundSize::Contain);
+        assert!(matches!(s.background_layers[2].image, BackgroundImage::Url(_)));
     }
 
     // -------- background-position-x / -y (CSS Backgrounds L4 §3.5, BUG-495) --------
@@ -496,24 +542,24 @@ use super::*;
 
     #[test]
     fn background_origin_initial_keyword_resets() {
-        // `initial` clears layers → empty Vec.
+        // BUG-1301: `initial` сбрасывает только поле слоя.
         let s = cascade_at(
             "<div></div>",
             "div { background-origin: content-box; } div { background-origin: initial; }",
             &[0],
         );
-        assert!(s.background_layers.is_empty());
+        assert!(s.background_layers.iter().all(|l| l.origin == BackgroundOrigin::PaddingBox));
     }
 
     #[test]
     fn background_origin_unset_for_non_inherited_is_initial() {
-        // CSS Cascade L4 §7: `unset` для non-inherited == `initial` → empty layers.
+        // CSS Cascade L4 §7: `unset` для non-inherited == `initial` → поле по умолчанию.
         let s = cascade_at(
             "<div><p></p></div>",
             "div { background-origin: content-box; } p { background-origin: unset; }",
             &[0, 0],
         );
-        assert!(s.background_layers.is_empty());
+        assert!(s.background_layers.iter().all(|l| l.origin == BackgroundOrigin::PaddingBox));
     }
 
     #[test]
@@ -575,13 +621,13 @@ use super::*;
 
     #[test]
     fn background_clip_initial_keyword_resets() {
-        // `initial` clears layers → empty Vec.
+        // BUG-1301: `initial` сбрасывает только поле слоя.
         let s = cascade_at(
             "<div></div>",
             "div { background-clip: text; } div { background-clip: initial; }",
             &[0],
         );
-        assert!(s.background_layers.is_empty());
+        assert!(s.background_layers.iter().all(|l| l.clip == BackgroundClip::BorderBox));
     }
 
     // ── CSS Backgrounds L3 §3 — multiple backgrounds ──
