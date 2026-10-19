@@ -1,6 +1,6 @@
 # BUG-1287 — процентные длины в SVG (`width="100%"`, `cx="50%"`, `x="10%"`) вычисляются в 0
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-19 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 5, `css/css-transforms`)
 **Область:** layout (`crates/engine/layout/src/box_tree/svg.rs::svg_attr_f32` и разбор атрибутов фигур)
 
