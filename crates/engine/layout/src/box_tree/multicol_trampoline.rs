@@ -1096,7 +1096,32 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             .then(|| rows.windows(2).find(|w| (ws - w[0].1).abs() <= 0.01 && ws < w[1].0 - 0.01))
             .flatten()
             .map(|w| w[1].0);
+        // When no item starts in that track (only spanners that began above the break run through
+        // it) the gap is not absorbed there: the first later track an item starts in grows upwards
+        // by the gap instead, the tracks between keep their place (Chrome,
+        // `subgrid-gap-decorations-fragmentation-017`: the item below the cut subgrid starts 10px
+        // above its track). The painted gaps keep using `pulled_track`.
+        let late_track = pulled_track.filter(|_| !col_flex).and_then(|t| {
+            let starts = |a: f32, b: f32| {
+                grid.children.iter().any(|c| {
+                    let y = c.rect.y - gy;
+                    !matches!(c.kind, BoxKind::Skip)
+                        && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+                        && y >= a - 0.01
+                        && y < b - 0.01
+                })
+            };
+            let k = rows.iter().position(|r| (r.0 - t).abs() <= 0.01)?;
+            if starts(rows[k].0, rows[k].1) {
+                return None;
+            }
+            rows[k + 1..].iter().find(|r| starts(r.0, r.1)).map(|r| (r.0, t - ws))
+        });
         let pull = |y: f32| if pulled_track.is_some_and(|t| (y - t).abs() <= 0.01) { ws } else { y };
+        let pull_item = |y: f32| match late_track {
+            Some((t, d)) if (y - t).abs() <= 0.01 => y - d,
+            _ => pull(y),
+        };
         frag.children = grid
             .children
             .iter()
@@ -1110,7 +1135,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                         k
                     });
                 }
-                let (top, bot) = (pull(c.rect.y - gy), c.rect.y - gy + c.rect.height);
+                let (top, bot) = (pull_item(c.rect.y - gy), c.rect.y - gy + c.rect.height);
                 // A monolithic item is not cut: it stays whole in the fragment its top edge falls
                 // in and overflows that column (`contain: size`).
                 if is_monolithic(c) {

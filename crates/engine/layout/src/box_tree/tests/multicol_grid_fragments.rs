@@ -454,6 +454,29 @@ fn a_subgrid_row_gap_crossed_by_a_spanner_stays_inside_the_cut_item() {
 }
 
 #[test]
+fn an_item_below_a_bridged_gap_with_no_item_in_the_next_track_starts_a_gap_higher() {
+    // subgrid-gap-decorations-fragmentation-017: the subgrid bridges the row gap at the break (80px),
+    // no item starts in row 4, so the item of row 5 (the spanner) is not at its own track top
+    // (40px of the second column) but 10px higher, and keeps its bottom edge (60px).
+    let html = "<div id=\"m\"><div id=\"g\"><div id=\"s\"></div>{x}<div id=\"p\"></div></div></div>";
+    let css = "body{margin:0} #m{columns:2;column-fill:auto;column-gap:0;width:280px;height:80px}          #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);         gap:10px;height:140px}          #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;         grid-column:2/-2;grid-row:2/-2}          #p{grid-column:2/-2;grid-row:5} #r{grid-column:1;grid-row:4}";
+    let spanner = |extra: &str| {
+        let root = lay(&html.replace("{x}", extra), css);
+        let mut v = Vec::new();
+        fragments(&root, &mut v);
+        let second = v.iter().rfind(|g| !g.children.is_empty()).expect("second window");
+        let p = second.children.last().expect("spanner");
+        (p.rect.y - second.rect.y, p.rect.height)
+    };
+    let (top, h) = spanner("");
+    assert!((top - 30.0).abs() < 0.01 && (h - 30.0).abs() < 0.01, "top {top} height {h}");
+    // An item that starts in row 4 takes the gap there (the row grows upwards over it): the item
+    // of row 5 stays on its own track.
+    let (top, h) = spanner("<div id=\"r\"></div>");
+    assert!((top - 40.0).abs() < 0.01 && (h - 20.0).abs() < 0.01, "top {top} height {h}");
+}
+
+#[test]
 fn an_empty_child_of_an_item_that_a_break_runs_through_is_cut_with_the_item() {
     // An item on all three 60px rows holds an empty 150px block (an empty subgrid cell in
     // `subgrid-gap-decorations-fragmentation-007`). The break at 100px runs through the block:
