@@ -43,7 +43,7 @@ use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterF
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry, InsertOutcome};
 use crate::display_list::{
-    fit_image_quad, fit_image_rect, repeat_axis_geometry, BlendMode, CornerRadii, MaskMode,
+    fit_image_quad, fit_image_rect, extend_start_to_paint_area, repeat_axis_geometry, BlendMode, CornerRadii, MaskMode,
     ResolvedClipShape,
 };
 use crate::fingerprint::GpuFingerprint;
@@ -2508,6 +2508,9 @@ impl Renderer {
 
                     let (tile_x_start, step_x, repeat_x) = repeat_axis_geometry(repeat.x, oarea.x, oarea.width, tile_w, off_x);
                     let (tile_y_start, step_y, repeat_y) = repeat_axis_geometry(repeat.y, oarea.y, oarea.height, tile_h, off_y);
+                    // BUG-1303: the grid also covers the clip-area strip before the origin box.
+                    let tile_x_start = extend_start_to_paint_area(tile_x_start, step_x, repeat_x, area.x);
+                    let tile_y_start = extend_start_to_paint_area(tile_y_start, step_y, repeat_y, area.y);
 
                     let v_start = image_vertices.len() as u32;
                     let image_batch_idx = image_bind_groups.len() as u32;

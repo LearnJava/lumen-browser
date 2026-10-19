@@ -219,6 +219,24 @@ pub(crate) fn repeat_axis_geometry(
     }
 }
 
+/// Moves the first tile of a repeating axis back to cover the painting area.
+///
+/// [`repeat_axis_geometry`] anchors the grid to the positioning area
+/// (`background-origin`), but the pattern repeats in both directions for the
+/// whole painting area (`background-clip`, CSS Backgrounds L3 §3.4): with
+/// `origin: padding-box|content-box` the painting area starts before the
+/// positioning area, and the strip between them must be tiled too (BUG-1303).
+/// Returns the latest tile start `<= paint_origin` on the grid
+/// `start + k·step`; a non-repeating axis keeps its single tile.
+#[must_use]
+pub(crate) fn extend_start_to_paint_area(start: f32, step: f32, repeats: bool, paint_origin: f32) -> f32 {
+    if repeats && step > 0.0 && start > paint_origin {
+        start - ((start - paint_origin) / step).ceil() * step
+    } else {
+        start
+    }
+}
+
 /// Tile geometry for a background image from `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
