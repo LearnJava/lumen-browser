@@ -54,7 +54,7 @@ struct BoxLayerOps {
 /// переносится его transform-ом (CSS Masking L1 §9, BUG-140), при этом
 /// transform преобразует всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
-fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps {
+fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> BoxLayerOps {
     let mut pre = Vec::new();
     let mut post = Vec::new();
     let mut overflow_pre = Vec::new();
@@ -142,6 +142,11 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
         let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
         if (is_scroll_x || is_scroll_y) && !paint_contain {
+            // `local` background of a rounded scroller: stationary rounded padding-box clip.
+            let local_round = local_round_clip(b);
+            if let Some(c) = &local_round {
+                overflow_pre.push(c.clone());
+            }
             overflow_pre.push(DisplayCommand::PushScrollLayer {
                 id: b.node.index() as u32,
                 clip_rect: cr,
@@ -155,6 +160,9 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
             // after children, so the bars render at a fixed position over the
             // scrolled content). Same helper as `walk` for pixel parity.
             emit_scrollbars(b, (px, py, pw, ph), is_scroll_x, is_scroll_y, &mut overflow_post);
+            if local_round.is_some() {
+                overflow_post.push(DisplayCommand::PopClip);
+            }
         } else {
             // BUG-132: скруглённый клип для border-radius + overflow:hidden
             // Разрешаем border-radius значения используя padding-box width как basis
@@ -194,6 +202,11 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
                 overflow_post.push(DisplayCommand::PopScrollLayer);
             }
             overflow_post.push(DisplayCommand::PopClip);
+        }
+        // CSS Backgrounds L3 §3.6: `local` layers sit inside the scroll layer / clip, under the
+        // children (the background pass skipped them).
+        if is_paint_visible(b) && !is_hidden_empty_cell(b) {
+            emit_local_background(&mut overflow_pre, b, dpr);
         }
     }
     // CSS Transforms L2 §4 — `perspective` projects the children only, so it
@@ -505,7 +518,7 @@ fn enter_fill<'a>(
     stack: &mut Vec<FillFrame<'a>>,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
-    let ops = box_layer_ops(b, ov);
+    let ops = box_layer_ops(b, ov, dpr);
     let own_fixed_cb = contains_fixed_descendants(&b.style);
 
     if is_sc_root {

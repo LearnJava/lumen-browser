@@ -223,6 +223,10 @@ fn emit_background_layer(
     // simplification the solid-color path already makes at the `FillRoundedRect`
     // call site above).
     radii: CornerRadii,
+    // CSS Backgrounds L3 §3.6 `background-attachment: local`: the border-box analogue of the
+    // scrollable area (see [`local_scroll_area`]) the layer is positioned and clipped against
+    // instead of `b.rect`; `None` — the box itself.
+    area: Option<Rect>,
 ) {
     // CSS Backgrounds L4 §3.8 `background-clip: text` — paint the layer as for
     // `border-box`, then keep only what lies under the glyphs.
@@ -230,11 +234,14 @@ fn emit_background_layer(
         let mut plain = layer.clone();
         plain.clip = BackgroundClip::BorderBox;
         emit_text_clipped(out, b, dpr, |inner| {
-            emit_background_layer(inner, b, &plain, dpr, suppress_blend, radii);
+            emit_background_layer(inner, b, &plain, dpr, suppress_blend, radii, area);
         });
         return;
     }
-    let clip = background_clip_rect(b, layer.clip);
+    let clip = match area {
+        Some(r) => background_clip_rect_in(b, r, layer.clip),
+        None => background_clip_rect(b, layer.clip),
+    };
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
     }
@@ -255,10 +262,10 @@ fn emit_background_layer(
         let mut side = layer.clone();
         side.blend_mode = LayoutBlendMode::Normal;
         side.image = (**a).clone();
-        emit_background_layer(out, b, &side, dpr, true, radii);
+        emit_background_layer(out, b, &side, dpr, true, radii, area);
         side.image = (**side_b).clone();
         out.push(DisplayCommand::PushOpacity { alpha: t.clamp(0.0, 1.0), bounds: Some(clip) });
-        emit_background_layer(out, b, &side, dpr, true, radii);
+        emit_background_layer(out, b, &side, dpr, true, radii, area);
         out.push(DisplayCommand::PopOpacity);
         if use_blend {
             out.push(DisplayCommand::PopBlendMode);
@@ -274,15 +281,18 @@ fn emit_background_layer(
     // scrolls. The list is scroll-independent, so the layer's draw commands are
     // bracketed by `BeginFixedBackground`/`EndFixedBackground` and the renderer
     // cancels the page scroll for their positioning geometry (not for the
-    // painting-area clip). `local` still paints like `scroll`: the element's
-    // own scrolled content isn't threaded into the background yet.
+    // painting-area clip). `local` layers of a scroll container are emitted by
+    // `emit_local_background` inside the container's scroll layer, with `area`.
     let fixed_vp = if layer.attachment == BackgroundAttachment::Fixed {
         fixed_bg_viewport()
     } else {
         None
     };
     let fixed = fixed_vp.is_some();
-    let origin = fixed_vp.unwrap_or_else(|| background_origin_rect(b, layer.origin));
+    let origin = fixed_vp.unwrap_or_else(|| match area {
+        Some(r) => background_origin_rect_in(b, r, layer.origin),
+        None => background_origin_rect(b, layer.origin),
+    });
     let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
         out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode), bounds: clip });
@@ -570,11 +580,16 @@ fn emit_text_clipped(
 /// canvas already contains only this box's own painted content at this point) and
 /// the CSS spec's "background forms an isolated group" semantics.
 pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) {
-    // Isolation is needed only if some non-bottom layer actually blends (i == 0 is
-    // always suppressed, see `emit_background_layer`'s `suppress_blend`).
-    let needs_isolation = b
+    let scroller = local_bg_scroller(b);
+    let layers: Vec<&BackgroundLayer> = b
         .style
         .background_layers
+        .iter()
+        .filter(|l| !(scroller && is_local_layer(l)))
+        .collect();
+    // Isolation is needed only if some non-bottom layer actually blends (i == 0 is
+    // always suppressed, see `emit_background_layer`'s `suppress_blend`).
+    let needs_isolation = layers
         .iter()
         .rev()
         .enumerate()
@@ -598,9 +613,129 @@ pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox
         });
     }
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
-    for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
+    for (i, layer) in layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
-        emit_background_layer(out, b, layer, dpr, i == 0, radii);
+        emit_background_layer(out, b, layer, dpr, i == 0, radii, None);
+    }
+    if needs_isolation {
+        out.push(DisplayCommand::PopOpacity);
+    }
+}
+
+/// A layer that scrolls with its box's contents (CSS Backgrounds L3 §3.6). `background-clip: text`
+/// stays with the box: its glyph mask is laid out against the unscrolled content.
+fn is_local_layer(l: &BackgroundLayer) -> bool {
+    l.attachment == BackgroundAttachment::Local && l.clip != BackgroundClip::Text
+}
+
+/// The box scrolls its own `background-attachment: local` layers: a block-level scroll container
+/// (`overflow: hidden|scroll|auto` in some axis — `hidden` is a scroll container too) with a
+/// square border box and a `local` layer or a `background-color` under a `local` bottom layer.
+/// Anything else paints `local` like `scroll`: with no scrolling mechanism the spec says so.
+/// A rounded box clips the moving layers with a stationary rounded padding box
+/// ([`local_round_clip`]).
+pub(crate) fn local_bg_scroller(b: &LayoutBox) -> bool {
+    let s = &b.style;
+    let scrolls = |o: Overflow| matches!(o, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
+    matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && (scrolls(s.overflow_x) || scrolls(s.overflow_y))
+        && s.background_layers.iter().any(is_local_layer)
+}
+
+/// Rounded padding-box clip of a `local`-background scroller with `border-radius`: it stays put
+/// while the layers move, so the corners cut the scrolled background (§5.3 inner radii). The
+/// caller pushes it before the scroll layer / clip and pops it after the matching pop.
+pub(crate) fn local_round_clip(b: &LayoutBox) -> Option<DisplayCommand> {
+    if !local_bg_scroller(b) {
+        return None;
+    }
+    let s = &b.style;
+    let outer = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
+    if outer.all_zero() {
+        return None;
+    }
+    let r = outer.inner_for_border([
+        s.border_top_width,
+        s.border_right_width,
+        s.border_bottom_width,
+        s.border_left_width,
+    ]);
+    Some(DisplayCommand::PushClipRoundedRect {
+        rect: Rect::new(
+            b.rect.x + s.border_left_width,
+            b.rect.y + s.border_top_width,
+            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+        ),
+        radii: [r.tl, r.tr, r.br, r.bl],
+    })
+}
+
+/// The solid `background-color` scrolls too when the bottom layer (the one the colour follows,
+/// §3.10) is `local` — it then fills the scrollable area, not the box.
+pub(crate) fn local_bg_color(b: &LayoutBox) -> bool {
+    local_bg_scroller(b) && b.style.background_layers.last().is_some_and(is_local_layer)
+}
+
+/// Border box whose padding box is the scrollable area of `b` (the padding box grown to every
+/// child's rect, also towards the start edges: `rtl` and `*-reverse` content overflows to the
+/// left/top) — what a `local` layer is positioned and painted against. Borders and padding keep
+/// their widths, so `background-origin`/`-clip` resolve exactly as for the box itself.
+fn local_scroll_area(b: &LayoutBox) -> Rect {
+    let s = &b.style;
+    let px = b.rect.x + s.border_left_width;
+    let py = b.rect.y + s.border_top_width;
+    let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+    let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+    let (mut x0, mut y0, mut x1, mut y1) = (px, py, px + pw, py + ph);
+    for c in &b.children {
+        x0 = x0.min(c.rect.x);
+        y0 = y0.min(c.rect.y);
+        x1 = x1.max(c.rect.x + c.rect.width);
+        y1 = y1.max(c.rect.y + c.rect.height);
+    }
+    Rect::new(
+        b.rect.x - (px - x0),
+        b.rect.y - (py - y0),
+        b.rect.width + (x1 - x0) - pw,
+        b.rect.height + (y1 - y0) - ph,
+    )
+}
+
+/// CSS Backgrounds L3 §3.6 `background-attachment: local` — the layers (and the colour) of a
+/// scroll container that move with its content. The caller emits them right after opening the
+/// container's clip / `PushScrollLayer`, so the scroll offset translates them and the padding box
+/// clips them: the border area stays unpainted.
+pub(crate) fn emit_local_background(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) {
+    if !local_bg_scroller(b) || !is_paint_visible(b) || is_hidden_empty_cell(b) {
+        return;
+    }
+    let area = local_scroll_area(b);
+    if local_bg_color(b)
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        let clip = background_clip_rect_in(b, area, background_color_clip(b));
+        if clip.width > 0.0 && clip.height > 0.0 {
+            out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+        }
+    }
+    // Bottom-most first, like `emit_background_image`; a blend mode is a no-op on the very
+    // bottom layer, and a blending local layer gets its own isolated group.
+    let all = &b.style.background_layers;
+    let needs_isolation = all
+        .iter()
+        .rev()
+        .enumerate()
+        .any(|(i, l)| i > 0 && is_local_layer(l) && l.blend_mode != LayoutBlendMode::Normal);
+    if needs_isolation {
+        out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(area) });
+    }
+    let radii = CornerRadii::default();
+    for (i, layer) in all.iter().rev().enumerate() {
+        if is_local_layer(layer) {
+            emit_background_layer(out, b, layer, dpr, i == 0, radii, Some(area));
+        }
     }
     if needs_isolation {
         out.push(DisplayCommand::PopOpacity);

@@ -48,6 +48,7 @@ pub(crate) fn emit_box_self(
             let radii = CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height);
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
+                && !local_bg_color(b)
             {
                 let clip = background_clip_rect(db, background_color_clip(db));
                 if clip.width > 0.0 && clip.height > 0.0 {
@@ -848,6 +849,8 @@ struct BlockEpilogue {
     use_scroll_layer: bool,
     /// `overflow: hidden` box scrolled by script: a `PushScrollLayer` sits inside its clip.
     hidden_scrolled: bool,
+    /// A stationary rounded clip for a `local` background wraps the overflow clip.
+    local_round: bool,
     scroll_padding_box: Option<(f32, f32, f32, f32)>,
     is_scroll_x: bool,
     is_scroll_y: bool,
@@ -980,6 +983,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
             if e.hidden_scrolled {
                 out.push(DisplayCommand::PopScrollLayer);
             }
+            out.push(DisplayCommand::PopClip);
+        }
+        if e.local_round {
             out.push(DisplayCommand::PopClip);
         }
     }
@@ -1177,6 +1183,7 @@ fn dispatch<'a>(
                 emit_box_shadows(db, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
+                    && !local_bg_color(b)
                 {
                     let clip = background_clip_rect(db, background_color_clip(db));
                     if clip.width > 0.0 && clip.height > 0.0 {
@@ -1222,6 +1229,12 @@ fn dispatch<'a>(
             } else {
                 None
             };
+            // `local` background of a rounded scroller: stationary rounded padding-box clip
+            // around the scroll layer, popped after it in `finish_block_epilogue`.
+            let local_round = has_overflow_clip && local_round_clip(b).is_some_and(|c| {
+                out.push(c);
+                true
+            });
             if has_overflow_clip {
                 const BIG: f32 = 1_000_000.0;
                 let s = &b.style;
@@ -1283,6 +1296,9 @@ fn dispatch<'a>(
                         });
                     }
                 }
+                // CSS Backgrounds L3 §3.6: `local` layers move with the content, so they
+                // go inside the scroll layer, under the children.
+                emit_local_background(out, b, dpr);
             }
             // CSS Transforms L2 §4 — `perspective` projects the box's children
             // (not the box itself): wrap only the descendants, inside the
@@ -1317,6 +1333,7 @@ fn dispatch<'a>(
                 has_overflow_clip,
                 use_scroll_layer,
                 hidden_scrolled,
+                local_round,
                 scroll_padding_box,
                 is_scroll_x,
                 is_scroll_y,

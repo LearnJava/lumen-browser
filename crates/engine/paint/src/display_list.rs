@@ -261,12 +261,12 @@ use inline_frag::{
 pub use inline_frag::is_image_set;
 pub(crate) use inline_frag::{background_clip_rect, background_color_clip};
 // Used only by `display_list/background_mask.rs` (via `super::*`).
-use inline_frag::background_origin_rect;
+use inline_frag::{background_clip_rect_in, background_origin_rect, background_origin_rect_in};
 // Used only by `display_list/walk.rs` (via `super::*`).
 use inline_frag::content_box_rect;
 
 mod background_mask;
-use background_mask::{emit_background_image, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
+use background_mask::{emit_background_image, emit_local_background, local_bg_color, local_round_clip, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
 pub use background_mask::with_fixed_background_viewport;
 // Used only by `display_list/tests/background_and_layers.rs` (via `super::*`).
 #[cfg(test)]
