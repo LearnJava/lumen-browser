@@ -155,7 +155,7 @@ pub(super) fn finish_cut(frag: &mut LayoutBox, d: &LayoutBox, w: &Window, to: f3
     if top_cut && w.lead > 0.0 && let Some(h) = sec.head {
         let mut head = h.clone();
         super::shift_tree(&mut head, w.dx, w.col_top - h.rect.y);
-        let at = frag.children.iter().position(|c| is_grid_part(c)).unwrap_or(frag.children.len());
+        let at = frag.children.iter().position(is_grid_part).unwrap_or(frag.children.len());
         frag.children.insert(at, head);
     }
     if bottom_cut && w.tail > 0.0 && let Some(f) = sec.foot {

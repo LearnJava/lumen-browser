@@ -16,7 +16,9 @@ fn rows_of(b: &LayoutBox, out: &mut Vec<(f32, f32)>) {
 }
 
 /// Per table fragment: its `x`, height and the `(y, height)` of its rows.
-fn fragments(c: &LayoutBox) -> Vec<(f32, f32, Vec<(f32, f32)>)> {
+type Fragment = (f32, f32, Vec<(f32, f32)>);
+
+fn fragments(c: &LayoutBox) -> Vec<Fragment> {
     c.children
         .iter()
         .filter(|f| matches!(f.kind, BoxKind::Table))
