@@ -1862,6 +1862,12 @@ var _mqlRegistry = [];
 // evaluates against it, so `matchMedia('(forced-colors: active)')` created after
 // the a11y toggle agrees with the cascade instead of assuming all-false.
 var _mqlPrefs = { dark: false, reducedMotion: false, forcedColors: false };
+// Device pixel ratio for `(resolution)` / `(-webkit-*-device-pixel-ratio)`:
+// the native zoom factor (what `window.devicePixelRatio` reports by default),
+// not the page-overridable global, so it agrees with the cascade's value.
+function _mqlDpr() {
+    return (typeof _lumen_get_zoom_factor === 'function') ? _lumen_get_zoom_factor() : 1;
+}
 
 function MediaQueryListEvent(type, init) {
     Event.call(this, type, init || {});
@@ -1879,7 +1885,7 @@ function MediaQueryList(media) {
     // canonical serialization (whitespace collapsed, invalid clauses folded
     // into `not all`), not an echo of the constructor argument.
     this.media       = _lumen_serialize_media_query(raw);
-    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], _mqlPrefs.dark, _mqlPrefs.reducedMotion, _mqlPrefs.forcedColors);
+    this.matches     = !!_lumen_match_media(raw, vp[0], vp[1], _mqlPrefs.dark, _mqlPrefs.reducedMotion, _mqlPrefs.forcedColors, _mqlDpr());
     this.onchange    = null;
     this._listeners  = [];
 }
@@ -1934,7 +1940,7 @@ function _lumen_deliver_media_changes(w, h, dark, reducedMotion, forcedColors) {
     for (var i = 0; i < _mqlRegistry.length; i++) {
         var mql = _mqlRegistry[i];
         if (!mql) continue;
-        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB, fcB);
+        var newM = !!_lumen_match_media(mql.media, w, h, darkB, rmB, fcB, _mqlDpr());
         if (mql.matches !== newM) mql._fire(newM);
     }
 }

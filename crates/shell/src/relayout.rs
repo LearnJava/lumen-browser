@@ -349,6 +349,7 @@ impl Lumen {
         // the forced system palette and the `(forced-colors: active)` media
         // feature for this layout pass.
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
+        lumen_layout::set_device_pixel_ratio(self.zoom_factor);
         // content-visibility: auto (BB-4) — relevance-проверка против текущего
         // scroll-положения + ratchet-набора. Сброс к дефолтам после прохода,
         // чтобы layout других документов (sidebar, фоновый парс) не унаследовал
@@ -535,6 +536,7 @@ impl Lumen {
         self.engine_applied_generation = self.engine_job_generation;
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
         lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
+        lumen_layout::set_device_pixel_ratio(self.zoom_factor);
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         let new_interactive = (self.hovered_nid, self.focused_node, self.active_nid);
@@ -1230,6 +1232,11 @@ impl Lumen {
         defer_js_push: bool,
         #[cfg(feature = "v8")] precollected: Option<PrecollectedJsData>,
     ) {
+        // BUG-1634: текст страницы мог измениться — отложенные поднаборы `unicode-range`
+        // с появившимися символами уходят в загрузку.
+        if !self.deferred_web_fonts.is_empty() {
+            self.spawn_web_font_fetches(Vec::new());
+        }
         // BUG-935 S37: per-phase timing across the whole function, gated by the
         // same `LUMEN_FRAME_LOG` flag as `apply_ms` (the caller-side aggregate
         // S15/S36 already log). S36 found `apply_ms` alone accounts for 65-93ms
@@ -1765,6 +1772,7 @@ impl Lumen {
         let focused = self.focused_node;
         let active = self.active_nid;
         let forced_colors = self.a11y_store.forced_colors();
+        let device_pixel_ratio = self.zoom_factor;
         let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
         let cv_relevant = self.cv_relevant.clone();
         // BUG-935 S80: стили каскада нужны только свопу — без него
@@ -1813,6 +1821,7 @@ impl Lumen {
             // Interactive state is thread-local — set it on THIS (engine) thread.
             lumen_layout::set_interactive_state(hovered, focused, active);
             lumen_layout::set_forced_colors(forced_colors);
+            lumen_layout::set_device_pixel_ratio(device_pixel_ratio);
             lumen_layout::set_cv_scroll(cv_x, cv_y);
             lumen_layout::set_cv_relevant(cv_relevant);
             lumen_layout::set_animated_heights(animated_heights);

@@ -172,6 +172,7 @@ pub use style::{
     set_animated_heights, clear_animated_heights,
     set_forced_colors, forced_colors_active,
     set_print_media, print_media_active,
+    set_device_pixel_ratio, device_pixel_ratio,
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,

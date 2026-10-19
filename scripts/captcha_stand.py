@@ -84,6 +84,14 @@ DENY_RE = re.compile(
     r"|ваш браузер не поддерживается|incident id|reference #",
     re.I,
 )
+# страница сетевой ошибки самого браузера (net_error_page.rs у Lumen, neterror у Chromium): не «пройдено»,
+# хотя текста на ней ≥200 символов и нет ни challenge, ни отказа сайта
+NET_ERROR_RE = re.compile(
+    r"слишком долго не отвечает|отклонил подключение|соединение с сайтом .{0,80} прервано|не удаётся добраться до сайта"
+    r"|зациклил перенаправления|прислал непонятный ответ|не удалось установить защищённое соединение"
+    r"|this site can.t be reached|err_[a-z_]{6,}|took too long to respond",
+    re.I,
+)
 SCORE_RE = re.compile(r'"score"\s*:\s*"?([01](?:\.\d+)?)', re.I)
 VENDOR_COOKIE_RE = re.compile(
     r"^(datadome|_abck|bm_sz|ak_bmsc|incap_ses_|visid_incap_|__ddg|qrator_jsid|techaro\.lol-anubis|_px|cf_clearance|__cf_bm)",
@@ -157,6 +165,10 @@ def is_denied(p: dict) -> bool:
     return bool(DENY_RE.search(p.get("title", "") + "\n" + p.get("text", "")[:600]))
 
 
+def is_net_error(p: dict) -> bool:
+    return bool(NET_ERROR_RE.search(p.get("title", "") + "\n" + p.get("text", "")[:400]))
+
+
 def widget_frames(page: dict, p: dict) -> list[dict]:
     rx = FRAME_RE.get(page["vendor"])
     if rx is None:
@@ -177,7 +189,7 @@ def oracle_met(page: dict, p: dict) -> tuple[bool, dict]:
         m = SCORE_RE.search(p.get("v3", "")) or SCORE_RE.search(p.get("text", ""))
         return (m is not None), ({"v3_score": float(m.group(1))} if m else {})
     # unblocked: итоговая страница не challenge, не отказ и не пустая
-    ok = p.get("rs") == "complete" and p.get("text_len", 0) >= 200 and not is_challenge(p) and not is_denied(p)
+    ok = p.get("rs") == "complete" and p.get("text_len", 0) >= 200 and not is_challenge(p) and not is_denied(p) and not is_net_error(p)
     return ok, {}
 
 
@@ -233,6 +245,8 @@ def observe(page: dict, probe, observe_s: float, poll_s: float, settle_s: float)
         verdict, reason = "отказ", "страница не отвечает на зонд (навигация не удалась или окно умерло)"
     elif loads >= LOOP_LOADS:
         verdict, reason = "петля", f"{loads} загрузок документа за {elapsed} с"
+    elif is_net_error(last):
+        verdict, reason = "отказ", "страница сетевой ошибки браузера: " + last.get("title", "")[:60]
     elif is_denied(last):
         verdict, reason = "отказ", "страница показала отказ: " + last.get("title", "")[:60]
     elif is_challenge(last):

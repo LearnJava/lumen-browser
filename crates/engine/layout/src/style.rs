@@ -318,7 +318,7 @@ pub use env::{
     clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active,
     forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
     set_animated_heights, set_cq_context, set_forced_colors, set_interactive_state,
-    set_print_media, StyleEnvSnapshot,
+    set_print_media, StyleEnvSnapshot, set_device_pixel_ratio, device_pixel_ratio,
 };
 pub(crate) use env::{animated_height_for, animated_heights_active};
 pub use rule_roots::restyle_roots_for_rule_changes;

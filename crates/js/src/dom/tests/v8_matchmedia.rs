@@ -300,3 +300,25 @@ fn match_media_created_after_delivery_uses_delivered_prefs() {
         lumen_core::JsValue::Bool(true)
     );
 }
+
+/// `-webkit-min-device-pixel-ratio` / `(min-resolution)` follow the page
+/// zoom factor — the same value `window.devicePixelRatio` reports — so
+/// retina branches fire when the page is zoomed to 200 %.
+#[test]
+fn match_media_webkit_device_pixel_ratio_follows_zoom() {
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.update_viewport_size(800.0, 600.0);
+    let q = |q: &str| rt.eval(&format!("matchMedia('{q}').matches")).unwrap();
+    assert_eq!(q("(-webkit-min-device-pixel-ratio: 1)"), lumen_core::JsValue::Bool(true));
+    assert_eq!(q("(-webkit-min-device-pixel-ratio: 2)"), lumen_core::JsValue::Bool(false));
+    assert_eq!(q("(min-resolution: 2dppx)"), lumen_core::JsValue::Bool(false));
+    assert_eq!(q("(-webkit-transform-3d)"), lumen_core::JsValue::Bool(true));
+    rt.update_zoom_factor(2.0);
+    assert_eq!(q("(-webkit-min-device-pixel-ratio: 2)"), lumen_core::JsValue::Bool(true));
+    assert_eq!(q("(-webkit-max-device-pixel-ratio: 1.5)"), lumen_core::JsValue::Bool(false));
+    assert_eq!(q("(min-resolution: 2dppx)"), lumen_core::JsValue::Bool(true));
+    assert_eq!(
+        rt.eval("matchMedia('(-webkit-min-device-pixel-ratio:2)').media").unwrap(),
+        lumen_core::JsValue::String("(-webkit-min-device-pixel-ratio: 2)".into())
+    );
+}

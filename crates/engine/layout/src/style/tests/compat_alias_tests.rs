@@ -73,3 +73,28 @@
         assert_eq!(style_of("unicode-bidi: -moz-isolate").unicode_bidi, UnicodeBidi::Normal);
         assert_eq!(style_of("unicode-bidi: -webkit-isolate").unicode_bidi, UnicodeBidi::Isolate);
     }
+
+    /// `@media (-webkit-min-device-pixel-ratio: 2)` срабатывает, когда DPR
+    /// страницы (зум) ≥ 2; `(-webkit-transform-3d)` — всегда.
+    #[test]
+    fn webkit_device_pixel_ratio_media_follows_dpr() {
+        let style_at = |dpr: f32| {
+            set_device_pixel_ratio(dpr);
+            let doc = lumen_html_parser::parse(r#"<div></div>"#);
+            let sheet = lumen_css_parser::parse(
+                "div { width: 10px } \
+                 @media (-webkit-min-device-pixel-ratio: 2) { div { width: 20px } } \
+                 @media (-webkit-transform-3d) { div { height: 7px } }",
+            );
+            let root = ComputedStyle::root();
+            let body = doc.body().expect("body");
+            let div = doc.get(body).children.first().copied().expect("div");
+            let s = compute_style(&doc, div, &sheet, &root, VP, false);
+            set_device_pixel_ratio(1.0);
+            s
+        };
+        let at1 = style_at(1.0);
+        assert_eq!(at1.width, Some(Length::Px(10.0)));
+        assert_eq!(at1.height, Some(Length::Px(7.0)));
+        assert_eq!(style_at(2.0).width, Some(Length::Px(20.0)));
+    }

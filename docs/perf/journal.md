@@ -753,6 +753,41 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
   зонд один раз повторяет её вызовы `grecaptcha.execute` + verify; старт Chrome изредка не открывает CDP-цель
   (в длинном прогоне одна страница из 20), стенд делает 4 попытки, упавшая страница перезапускается отдельно (`rerun` в JSON).
 
+## 2026-10-19 — COMPAT-CORPUS-4-BASE — стенд G, плечо Lumen и A/B 2×2 идентичности — Windows 10, маршрут home-direct
+
+Тот же прибор и корпус (20 страниц, 12 вендоров), что в записи 2026-10-14; `target/dev-release/lumen.exe` от 2026-10-19 15:35
+(после исправления BUG-1629/1630), живое окно `--maximized`, блокировщик рекламы выключен, `--observe-s 60`. Сырые результаты:
+`runs/2026-10-19-captcha-lumen.json` (идентичность по умолчанию), `…-lumen-chrome_unbranded.json`, `…-lumen-chrome_lumen.json`.
+Эталон Chrome — `runs/2026-10-14-captcha-chrome.json` (не перемерялся).
+
+| Плечо | пройдено | GPR | не_отрисован | отказ | завис |
+|---|---|---|---|---|---|
+| Chrome 148 (2026-10-14) | 14 | 0.70 | 5 | 0 | 1 |
+| Lumen, идентичность по умолчанию | 7 | **0.35** | 7 | 1 | 5 |
+| Lumen, `LUMEN_IDENTITY=chrome_unbranded` | 7 | 0.35 | 7 | 0 | 6 |
+| Lumen, `LUMEN_IDENTITY=chrome_lumen` | 6 | 0.30 | 7 | 1 | 6 |
+
+**Балл reCAPTCHA v3 у Lumen: нет** (у Chrome 0.9) — `grecaptcha.execute` не возвращает токен, BUG-1647.
+
+**Сравнение с прошлым прогоном:** первый прогон плеча Lumen; база для `--baseline` — `runs/2026-10-19-captcha-lumen.json`.
+**Находки:**
+- Где Lumen проходит, как Chrome: reCAPTCHA v2 ×3, hCaptcha demo, Akamai, Imperva, Qrator. Расхождения с Chrome (6): turnstile-nonint,
+  cf-managed-challenge, recaptcha-v3-score, ddosguard-site, anubis-gnome-gitlab, human-zillow. Turnstile ×4: `TurnstileError 300030`,
+  iframe не создаётся — BUG-1595 (OPEN). 2captcha-демо (hCaptcha/SmartCaptcha) не рисуются и в Chrome — эталон.
+- A/B 2×2: токен `Lumen/x.y` против «безымянного» Chrome-UA — одно расхождение, `imperva-incapsula` («Pardon Our Interruption»
+  при `chrome_lumen`, пройдено при `chrome_unbranded` и по умолчанию), по одному прогону на ячейку — **не вывод, а гипотеза**
+  (флап Imperva на одном прогоне не исключён); `anubis-techaro` отличается шумом (см. ниже). Порог Р1 не пересматривается.
+- **Прибор:** первый прогон засчитал `anubis-techaro` как «пройдено» по странице сетевой ошибки Lumen («Сайт … слишком долго не
+  отвечает», текст ≥200 символов, без challenge). Добавлен `NET_ERROR_RE` в `captcha_stand.py`; запись в
+  `2026-10-19-captcha-lumen.json` исправлена на «отказ» (GPR 8/20 → 7/20 = 0.35), повтор страницы даёт «завис».
+- **H2 PING-разрывы (BUG-1646):** `no response to PING for 5000 ms` на anubis-techaro (9), human-zillow (11), datadome-leboncoin (5),
+  akamai-nike (1); первый кадр там 29–74 с против единиц секунд на остальных. Это главная причина «завис» у anubis/zillow/leboncoin.
+- `anubis-gnome-gitlab`, `ddosguard-site`, `cf-managed-challenge` — «завис» без PING-разрывов (gitlab: `rs=complete`, текст 0 симв.;
+  ddosguard: `rs=interactive`) — причины не разобраны, отдельные срезы.
+**Заведённые баги:** [BUG-1646](../../bugs/BUG-1646-OPEN.md) (H2 PING), [BUG-1647](../../bugs/BUG-1647-OPEN.md) (reCAPTCHA v3).
+Ночной прогон с `--baseline` и блокировкой релиза — на машине владельца (COMPAT-BIZ): `python scripts/captcha_stand.py --arm lumen
+--route home-direct --baseline docs/perf/runs/2026-10-19-captcha-lumen.json`.
+
 ## 2026-10-15 — COMPAT-CORPUS-3 срез 2 — корпус S: 58 сценариев, калибровка по Chrome — Windows 10, маршрут home-direct
 
 Корпус `docs/perf/scenarios/*.toml` (формат — `docs/compat-scenarios.md`): 58 сценариев в SPR-w на живых сайтах (3 стенда

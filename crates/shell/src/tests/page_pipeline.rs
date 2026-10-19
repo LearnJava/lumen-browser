@@ -1479,6 +1479,42 @@ fn screenshot_settle_runs_load_and_raf_then_relayouts() {
     assert_eq!(before, after);
 }
 
+/// WPT-RUN-15: `<html class="reftest-wait">` держит снимок, пока страница сама не снимет
+/// класс — из `setTimeout`, цепочки rAF, обработчика `TestRendered` или вложенной
+/// комбинации. Без класса таймер не ждётся (снимок «как есть», как и раньше).
+#[cfg(feature = "v8")]
+#[test]
+fn screenshot_settle_waits_for_reftest_wait_class() {
+    let height = |attrs: &str, script: &str| {
+        let mut page = parse_and_layout_for_test(&format!(
+            "<!DOCTYPE html><html {attrs}><body style='margin:0'>\
+             <div id=a style='height:10px'></div><script>{script}</script></body></html>"
+        ));
+        crate::dump_mode::settle_after_load(&mut page, Size::new(1024.0, 20.0));
+        page.layout.rect.height
+    };
+    let grow_done = "document.getElementById('a').style.height='500px';\
+                     document.documentElement.classList.remove('reftest-wait');";
+    let wait = "class=reftest-wait";
+    assert!(height(wait, &format!("setTimeout(()=>{{{grow_done}}},60)")) >= 500.0, "setTimeout");
+    assert!(
+        height(
+            wait,
+            &format!("requestAnimationFrame(()=>setTimeout(()=>requestAnimationFrame(()=>{{{grow_done}}}),30))")
+        ) >= 500.0,
+        "rAF + setTimeout + rAF"
+    );
+    assert!(
+        height(
+            wait,
+            &format!("document.documentElement.addEventListener('TestRendered',()=>{{{grow_done}}})")
+        ) >= 500.0,
+        "TestRendered"
+    );
+    // Без класса таймер не ждётся.
+    assert!(height("", &format!("setTimeout(()=>{{{grow_done}}},60)")) < 500.0);
+}
+
 /// BUG-1120: внешний `<script defer src>` исполняется после конца разбора —
 /// после инлайнового скрипта из конца `<body>` и до `DOMContentLoaded`, в
 /// порядке документа вместе с модулями (HTML LS §4.12.1.1 шаг 31, §13.2.7

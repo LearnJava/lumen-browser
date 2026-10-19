@@ -144,6 +144,7 @@ impl Lumen {
         self.web_fonts = snap.web_fonts;
         // BUG-1154: набор запрошенных источников принадлежал другой вкладке.
         self.requested_web_fonts.clear();
+        self.deferred_web_fonts.clear();
         self.source = snap.source;
         self.runtime = snap.runtime;
         self.animation_scheduler = snap.animation_scheduler;
