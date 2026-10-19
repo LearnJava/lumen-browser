@@ -91,6 +91,18 @@ pub enum MediaFeature {
     MinResolution(ResolutionValue),
     /// `(max-resolution: <resolution>)`.
     MaxResolution(ResolutionValue),
+    // Legacy WebKit-prefixed (Chrome-compatible) `<number>` features: retina-
+    // ветки `@media (-webkit-min-device-pixel-ratio: 2)` на сайтах. Число
+    // хранится как написано, чтобы mediaText совпадал с Chrome.
+    /// `(-webkit-device-pixel-ratio: <number>)` — точное совпадение DPR.
+    WebkitDevicePixelRatio(f32),
+    /// `(-webkit-min-device-pixel-ratio: <number>)`.
+    WebkitMinDevicePixelRatio(f32),
+    /// `(-webkit-max-device-pixel-ratio: <number>)`.
+    WebkitMaxDevicePixelRatio(f32),
+    /// `(-webkit-transform-3d[: <integer>])` — поддержка 3D-трансформаций
+    /// (в Lumen всегда есть); `true` — значение `!= 0`/boolean-форма.
+    WebkitTransform3d(bool),
     // User preferences (MQ L5, commonly used)
     PrefersColorScheme(ColorScheme),
     PrefersReducedMotion(bool),
@@ -196,6 +208,8 @@ pub enum BooleanFeature {
     NavigationControls,
     OverflowInline,
     OverflowBlock,
+    WebkitDevicePixelRatio,
+    WebkitTransform3d,
 }
 
 impl BooleanFeature {
@@ -226,6 +240,8 @@ impl BooleanFeature {
             Self::NavigationControls => ctx.navigation_controls != MediaNavigationControls::None,
             Self::OverflowInline => ctx.overflow_inline != MediaOverflowInline::None,
             Self::OverflowBlock => ctx.overflow_block != MediaOverflowBlock::None,
+            Self::WebkitDevicePixelRatio => ctx.resolution_dppx != 0.0,
+            Self::WebkitTransform3d => true,
         }
     }
 
@@ -253,6 +269,8 @@ impl BooleanFeature {
             Self::NavigationControls => "navigation-controls",
             Self::OverflowInline => "overflow-inline",
             Self::OverflowBlock => "overflow-block",
+            Self::WebkitDevicePixelRatio => "-webkit-device-pixel-ratio",
+            Self::WebkitTransform3d => "-webkit-transform-3d",
         }
     }
 
@@ -284,6 +302,8 @@ impl BooleanFeature {
             "navigation-controls" => Self::NavigationControls,
             "overflow-inline" => Self::OverflowInline,
             "overflow-block" => Self::OverflowBlock,
+            "-webkit-device-pixel-ratio" => Self::WebkitDevicePixelRatio,
+            "-webkit-transform-3d" => Self::WebkitTransform3d,
             _ => return None,
         })
     }
@@ -665,6 +685,10 @@ impl MediaFeature {
             Self::Resolution(v) => (ctx.resolution_dppx - v.dppx()).abs() < 0.001,
             Self::MinResolution(v) => ctx.resolution_dppx >= v.dppx(),
             Self::MaxResolution(v) => ctx.resolution_dppx <= v.dppx(),
+            Self::WebkitDevicePixelRatio(n) => (ctx.resolution_dppx - n).abs() < 0.001,
+            Self::WebkitMinDevicePixelRatio(n) => ctx.resolution_dppx >= *n,
+            Self::WebkitMaxDevicePixelRatio(n) => ctx.resolution_dppx <= *n,
+            Self::WebkitTransform3d(on) => *on,
             Self::PrefersColorScheme(scheme) => match scheme {
                 ColorScheme::Dark => ctx.prefers_dark,
                 ColorScheme::Light => !ctx.prefers_dark,
@@ -775,6 +799,10 @@ impl MediaFeature {
             Self::Resolution(v) => format!("resolution: {}", v.serialize()),
             Self::MinResolution(v) => format!("min-resolution: {}", v.serialize()),
             Self::MaxResolution(v) => format!("max-resolution: {}", v.serialize()),
+            Self::WebkitDevicePixelRatio(n) => format!("-webkit-device-pixel-ratio: {n}"),
+            Self::WebkitMinDevicePixelRatio(n) => format!("-webkit-min-device-pixel-ratio: {n}"),
+            Self::WebkitMaxDevicePixelRatio(n) => format!("-webkit-max-device-pixel-ratio: {n}"),
+            Self::WebkitTransform3d(on) => format!("-webkit-transform-3d: {}", u8::from(*on)),
             Self::PrefersColorScheme(s) => format!(
                 "prefers-color-scheme: {}",
                 match s {
@@ -1277,6 +1305,21 @@ pub(crate) fn parse_media_feature(s: &str) -> MediaCondition {
             };
             MediaCondition::Feature(feature)
         }
+        "-webkit-device-pixel-ratio" | "-webkit-min-device-pixel-ratio" | "-webkit-max-device-pixel-ratio" => {
+            // Chrome: только неотрицательное `<number>` (без единиц).
+            let Some(n) = val.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) else {
+                return MediaCondition::Unsupported;
+            };
+            MediaCondition::Feature(match key.as_str() {
+                "-webkit-device-pixel-ratio" => MediaFeature::WebkitDevicePixelRatio(n),
+                "-webkit-min-device-pixel-ratio" => MediaFeature::WebkitMinDevicePixelRatio(n),
+                _ => MediaFeature::WebkitMaxDevicePixelRatio(n),
+            })
+        }
+        "-webkit-transform-3d" => match val.parse::<i32>() {
+            Ok(n) => MediaCondition::Feature(MediaFeature::WebkitTransform3d(n != 0)),
+            Err(_) => MediaCondition::Unsupported,
+        },
         "orientation" => match val.to_ascii_lowercase().as_str() {
             "portrait" => MediaCondition::Feature(MediaFeature::Orientation(MediaOrientation::Portrait)),
             "landscape" => MediaCondition::Feature(MediaFeature::Orientation(MediaOrientation::Landscape)),

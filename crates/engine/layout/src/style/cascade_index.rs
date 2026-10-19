@@ -20,7 +20,7 @@ use lumen_css_parser::{
 use lumen_dom::NodeId;
 
 use crate::style::env::media_context_from_viewport;
-use crate::style::{forced_colors_active, print_media_active, pseudo_element_name};
+use crate::style::{device_pixel_ratio, forced_colors_active, print_media_active, pseudo_element_name};
 
 /// BUG-284: cascade-wide rule index — the top-level [`RuleIndex`] plus one
 /// per-block index for every `@layer`/`@media`/`@supports` block, in the same
@@ -389,6 +389,7 @@ struct CascadeMediaKey {
     dark_mode: bool,
     print_active: bool,
     forced_colors: bool,
+    dpr_bits: u32,
 }
 
 impl CascadeMediaKey {
@@ -399,6 +400,7 @@ impl CascadeMediaKey {
             dark_mode,
             print_active: print_media_active(),
             forced_colors: forced_colors_active(),
+            dpr_bits: device_pixel_ratio().to_bits(),
         }
     }
 }
