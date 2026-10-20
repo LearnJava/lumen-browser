@@ -654,3 +654,33 @@ fn a_balanced_column_flex_with_an_item_taller_than_the_limit_balances_to_total_o
     let first = v[0].rect.height;
     assert!(first > 100.3 && first < 100.5, "balanced to total / columns, not the 101px limit: {first}");
 }
+
+#[test]
+fn a_nested_subgrid_cut_between_tracks_gives_each_column_its_own_row_of_items() {
+    // `subgrid-gap-decorations-fragmentation-013` without the gaps: a subgrid in rows 2-4 of a
+    // 5×20px grid holds a nested subgrid on its rows 2-3 (grid rows 3 and 4). The 20px columns cut
+    // both between tracks, so the nested subgrid is not kept whole in the first column it starts
+    // in: the third column gets its first row of items and the fourth the second one.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"><div id=\"i\"><div></div><div></div><div></div><div></div></div></div></div></div>",
+        "body{margin:0} #m{columns:5;column-fill:auto;width:500px;height:20px;column-gap:0} \
+         #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);gap:0;height:100px} \
+         #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-2;grid-row:2/-2} \
+         #i{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-1;grid-row:2/-1}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let cols: Vec<_> = v.iter().filter(|b| b.rect.width == 100.0).collect();
+    assert_eq!(cols.len(), 5, "{:?}", cols.iter().map(|b| b.rect).collect::<Vec<_>>());
+    let items = |b: &LayoutBox| -> Vec<(f32, f32)> {
+        b.children
+            .iter()
+            .flat_map(|s| s.children.iter())
+            .flat_map(|i| i.children.iter())
+            .map(|c| (c.rect.y - b.rect.y, c.rect.height))
+            .collect()
+    };
+    let per_column: Vec<usize> = cols.iter().map(|b| items(b).len()).collect();
+    assert_eq!(per_column, vec![0, 0, 2, 2, 0], "{per_column:?}");
+    assert!(cols.iter().flat_map(|b| items(b)).all(|(y, h)| y == 0.0 && h == 20.0));
+}
