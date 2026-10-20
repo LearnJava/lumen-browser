@@ -229,3 +229,38 @@ use super::*;
         assert_eq!(d[0].value, "\"a\\\"/*x*/;b\"");
         assert_eq!(d[1].value, "red");
     }
+
+    // --- BUG-1380: escape в значении раскрывается, структурные остаются ---
+
+    #[test]
+    fn escape_in_value_ident_is_expanded() {
+        let s = parse(r"p{color:\67 \72 \65 \65 \6E ;background:\75rl(x.png) green;font-family:\41hem}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "green");
+        assert_eq!(d[1].value, "url(x.png) green");
+        assert_eq!(d[2].value, "Ahem");
+    }
+
+    #[test]
+    fn escape_in_unquoted_url_is_expanded() {
+        let s = parse(r"p{background:url(support/\'green\ block.png)}");
+        assert_eq!(s.rules[0].declarations[0].value, "url(support/'green block.png)");
+    }
+
+    #[test]
+    fn structural_escape_in_value_stays_escaped() {
+        let s = parse(r"p{content:a\3b b;margin:\31 0px;color:red}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d.len(), 3);
+        assert_eq!(d[0].value, r"a\3b b");
+        assert_eq!(d[1].value, r"\31 0px");
+        assert_eq!(d[2].value, "red");
+    }
+
+    #[test]
+    fn escape_in_string_and_custom_property_is_untouched() {
+        let s = parse(r#"p{content:"\67";--x:\67 reen}"#);
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, r#""\67""#);
+        assert_eq!(d[1].value, r"\67 reen");
+    }

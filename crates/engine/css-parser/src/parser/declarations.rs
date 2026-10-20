@@ -99,7 +99,8 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.consume();
-        let value = self.parse_value_until_terminator();
+        // Custom properties keep their source text (CSS Variables L1 §2).
+        let value = self.parse_value_until_terminator(!property.starts_with("--"));
         let (value, important) = extract_important(value.trim());
         // WHATWG Compat §3: `-webkit-*` simple aliases resolve to the
         // unprefixed property here, once, for the whole cascade.
@@ -120,7 +121,7 @@ impl<'a> Parser<'a> {
     /// grammar uses `;` *inside* its parens to separate branches) gets
     /// truncated at the first branch's `;`, leaving the rest of the `if()`
     /// call to be misparsed as a bogus second declaration (BUG-519).
-    pub(crate) fn parse_value_until_terminator(&mut self) -> String {
+    pub(crate) fn parse_value_until_terminator(&mut self, decode_escapes: bool) -> String {
         let mut s = String::new();
         let mut in_string: Option<char> = None;
         let mut depth: u32 = 0;
@@ -132,6 +133,23 @@ impl<'a> Parser<'a> {
                 (None, ';') | (None, '}') if depth == 0 => break,
                 // CSS Syntax §4.3.2: `\` escapes the next code point, so
                 // `\"` does not close a string and `\/*` is not a comment.
+                // BUG-1380: outside strings a valid escape is expanded so the
+                // later keyword/function matching sees `green` in `\67 reen`
+                // and `url(` in `\75rl(`.
+                (None, '\\') if decode_escapes && self.at_escape_start() => {
+                    let start = self.pos;
+                    self.consume();
+                    let Some(d) = self.consume_escaped_code_point() else {
+                        continue;
+                    };
+                    if in_url || escape_decodes_to_plain_ident_char(d, s.chars().next_back()) {
+                        s.push(d);
+                    } else {
+                        // Structural or token-initial: keep the source form
+                        // (`\3b `, `\31 0px`) so it cannot change tokenisation.
+                        s.push_str(&self.input[start..self.pos]);
+                    }
+                }
                 (_, '\\') => {
                     self.consume();
                     s.push(c);
@@ -189,6 +207,18 @@ impl<'a> Parser<'a> {
         }
         s
     }
+}
+
+/// Whether an expanded escape `d` can be spliced into the value text as
+/// itself: a letter, `_` or non-ASCII code point always continues/starts an
+/// ident; a digit or `-` only when it follows an ident character (at a token
+/// start it would turn the ident into a number or a dashed ident).
+fn escape_decodes_to_plain_ident_char(d: char, prev: Option<char>) -> bool {
+    if d.is_ascii_alphabetic() || d == '_' || !d.is_ascii() {
+        return true;
+    }
+    (d.is_ascii_digit() || d == '-')
+        && prev.is_some_and(|p| p.is_ascii_alphanumeric() || p == '-' || p == '_' || !p.is_ascii())
 }
 
 /// CSS Cascade L4 §8.1: если значение оканчивается на `!important` (с
