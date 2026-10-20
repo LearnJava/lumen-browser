@@ -77,6 +77,7 @@ use flex::UsedSizeOverride;
 mod multicol_abspos;
 mod multicol_break;
 mod multicol_flow;
+mod multicol_nested;
 mod multicol_table;
 mod multicol_fragmentation;
 mod multicol_span;
