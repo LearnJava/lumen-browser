@@ -634,3 +634,17 @@ fn svg_mask_content_is_laid_out_in_document_coordinates() {
         "mask content laid out at document coords, got {:?}", mask_rect,
     );
 }
+
+#[test]
+fn svg_under_zoom_scales_root_and_shapes() {
+    // CSS Viewport L1 §5: `zoom: 2` doubles the `<svg>` viewport and, with no viewBox,
+    // the user units inside it (BUG-1592).
+    let tree = do_layout(r#"<div style="zoom:2"><svg width="50" height="50"><rect x="5" y="10" width="20" height="30"/></svg></div>"#);
+    let svg = first_svg_root(&tree).expect("SvgRoot not found");
+    assert_eq!((svg.rect.width, svg.rect.height), (100.0, 100.0));
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert!((shape.rect.x - svg.rect.x - 10.0).abs() < 0.01, "x = {}", shape.rect.x - svg.rect.x);
+    assert!((shape.rect.y - svg.rect.y - 20.0).abs() < 0.01, "y");
+    assert!((shape.rect.width - 40.0).abs() < 0.01, "width = {}", shape.rect.width);
+    assert!((shape.rect.height - 60.0).abs() < 0.01, "height = {}", shape.rect.height);
+}

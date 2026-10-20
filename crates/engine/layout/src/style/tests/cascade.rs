@@ -792,6 +792,55 @@ use super::*;
         assert_eq!(s.perspective, Some(200.0));
     }
 
+    /// BUG-1592: inherited lengths take the factor only on the element that declares them;
+    /// a descendant inheriting the already-zoomed value must not scale it again.
+    #[test]
+    fn zoom_scales_declared_inherited_lengths_once() {
+        let doc = lumen_html_parser::parse(
+            "<div style=\"zoom: 2; text-shadow: 3px 4px 5px red; letter-spacing: 1px;              text-indent: 10px; text-decoration-thickness: 2px; text-underline-offset: 3px;              -webkit-text-stroke-width: 1px\"><span style=\"font-size: 20px\"></span>             <table style=\"border-spacing: 6px 2px\"></table></div>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let size = Size::new(800.0, 600.0);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let d = compute_style(&doc, div, &sheet, &root, size, false);
+        let ts = d.text_shadow[0];
+        assert_eq!((ts.offset_x, ts.offset_y, ts.blur), (6.0, 8.0, 10.0));
+        assert_eq!(d.letter_spacing, 2.0);
+        assert_eq!(d.text_indent, Length::Px(20.0));
+        assert_eq!(d.text_decoration_thickness, TextDecorationThickness::Length(4.0));
+        assert_eq!(d.text_underline_offset, Some(6.0));
+        assert_eq!(d.text_stroke_width, 2.0);
+        let kids = &doc.get(div).children;
+        let span = compute_style(&doc, kids[0], &sheet, &d, size, false);
+        assert_eq!(span.text_shadow[0].offset_x, 6.0, "inherited value is not scaled again");
+        assert_eq!(span.letter_spacing, 2.0);
+        // `border-spacing` is declared on the table itself, which sits in the zoomed div.
+        let table = kids.iter().copied().find(|&k| matches!(&doc.get(k).data, NodeData::Element { name, .. } if name.local == "table")).unwrap();
+        let t = compute_style(&doc, table, &sheet, &d, size, false);
+        assert_eq!((t.border_spacing_h, t.border_spacing_v), (12.0, 4.0));
+    }
+
+    /// `em` in an inherited baked length meets the factor once, as for `box-shadow`.
+    #[test]
+    fn zoom_em_text_shadow_is_scaled_once() {
+        let s = zoom_test_style("<div style=\"zoom: 2; font-size: 10px; text-shadow: 1em 0 red; letter-spacing: 0.5em\"></div>");
+        assert!((s.text_shadow[0].offset_x - 20.0).abs() < 0.01, "{}", s.text_shadow[0].offset_x);
+        assert!((s.letter_spacing - 10.0).abs() < 0.01, "{}", s.letter_spacing);
+    }
+
+    /// An `inherit`ed value comes from the parent, already zoomed.
+    #[test]
+    fn zoom_explicit_inherit_is_not_scaled() {
+        let doc = lumen_html_parser::parse("<div style=\"letter-spacing: 3px\"><p style=\"zoom: 2; letter-spacing: inherit\"></p></div>");
+        let sheet = lumen_css_parser::parse("");
+        let size = Size::new(800.0, 600.0);
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let d = compute_style(&doc, div, &sheet, &ComputedStyle::root(), size, false);
+        let p = compute_style(&doc, doc.get(div).children[0], &sheet, &d, size, false);
+        assert_eq!(p.letter_spacing, 3.0);
+    }
+
     /// An `em` outline width is baked to px: it must meet the zoom factor once, not twice
     /// (`font-size: 10px` under `zoom: 2` is 20px, so `0.5em` is 10px of the unzoomed 5px × 2).
     #[test]
