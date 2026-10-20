@@ -71,7 +71,9 @@ struct Opp {
 /// Растягивает строку `line` до `content_width`. Ничего не делает, если места нет, у строки нет
 /// возможностей растяжения или `text-justify: none`.
 pub(crate) fn justify_line(line: &mut [InlineFrag], content_width: f32) {
-    let Some(last) = line.last() else { return };
+    // Висящие пробелы в конце строки (`pre-wrap`) не входят ни в ширину, ни в возможности растяжения.
+    let end = line.iter().rposition(|f| f.text.is_empty() || !f.text.bytes().all(|b| b == b' ')).map_or(0, |i| i + 1);
+    let Some(last) = line[..end].last() else { return };
     let slack = content_width - (last.x + last.width);
     if slack.is_nan() || slack < 0.01 {
         return;
@@ -81,12 +83,15 @@ pub(crate) fn justify_line(line: &mut [InlineFrag], content_width: f32) {
         return;
     }
     let mode = |f: &InlineFrag| f.style.text_extra.justify;
-    let n = line.len();
+    let n = end;
+    // Позиции табуляции задаёт раскладка до растяжения: растянуть можно только то, что стоит
+    // после последней табуляции строки, иначе следующие за табами слова съедут с позиций.
+    let first = line.iter().rposition(|f| f.text == "	").map_or(0, |i| i + 1);
 
     // Проход 1: пробелы и стыки в режимах `auto`/`inter-word`.
-    let mut opps = vec![Opp::default(); n];
+    let mut opps = vec![Opp::default(); line.len()];
     let mut words = 0u32;
-    for (i, f) in line.iter().enumerate() {
+    for (i, f) in line[..n].iter().enumerate().skip(first) {
         if matches!(mode(f), TextJustify::Auto | TextJustify::InterWord) && f.img_src.is_none() {
             opps[i].spaces = spaces(&f.text);
             words += opps[i].spaces;
@@ -104,7 +109,7 @@ pub(crate) fn justify_line(line: &mut [InlineFrag], content_width: f32) {
 
     // Проход 2: пары символов — для `inter-character` и для `auto` в строке без пробелов.
     let mut chars = 0u32;
-    for (i, f) in line.iter().enumerate() {
+    for (i, f) in line[..n].iter().enumerate().skip(first) {
         let m = mode(f);
         let char_mode = m == TextJustify::InterCharacter
             || (m == TextJustify::Auto && words == 0 && f.text.chars().any(is_ideographic));

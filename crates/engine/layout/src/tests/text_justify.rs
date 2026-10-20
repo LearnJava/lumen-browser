@@ -146,3 +146,32 @@ fn pre_wrap_newline_line_uses_text_align_last() {
     let lines = runs_lines_of("<p>aa bb\ncc dd</p>", "p { white-space: pre-wrap; text-align: justify; }", 100.0);
     assert!((right_edge(&lines[0]) - 40.0).abs() < 0.01, "{}", right_edge(&lines[0]));
 }
+
+/// `pre-wrap`: висящий пробел в конце мягко перенесённой строки не растягивается и не входит в
+/// ширину — до края доходит последнее слово.
+#[test]
+fn pre_wrap_hanging_space_is_not_stretched() {
+    let lines = lines_of("<p>aa bb cc dd ee ff</p>", "p { text-align: justify; white-space: pre-wrap; }", 80.0);
+    let first = &lines[0];
+    assert_eq!(first.last().unwrap().text, " ", "{first:?}");
+    let body = &first[first.len() - 2];
+    assert!((right_edge(std::slice::from_ref(body)) - 80.0).abs() < 0.01, "{first:?}");
+    assert!((body.style.word_spacing - 8.0).abs() < 0.01, "{first:?}");
+}
+
+/// Табуляция: растягивается только то, что после последней табуляции, иначе позиции табуляции
+/// съезжают (WPT `text-align-justify-tabs-*`).
+#[test]
+fn justify_stretches_only_after_last_tab() {
+    let lines = lines_of(
+        "<p>a b\tc d e</p>",
+        "p { text-align: justify; text-align-last: justify; white-space: pre-wrap; }",
+        120.0,
+    );
+    let line = &lines[0];
+    assert_eq!(line.len(), 3, "{line:?}");
+    assert_eq!(line[0].style.word_spacing, 0.0, "до табуляции растяжения нет");
+    assert_eq!(line[1].x, 24.0, "табуляция остаётся на своём месте");
+    assert!((line[2].style.word_spacing - 8.0).abs() < 0.01, "{line:?}");
+    assert!((right_edge(line) - 120.0).abs() < 0.01, "{line:?}");
+}
