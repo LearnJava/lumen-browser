@@ -3558,22 +3558,19 @@ function CSSStyleDeclaration() { throw new TypeError('Illegal constructor'); }
 // `target` is a `CSSStyleDeclaration` instance: either an element's live
 // style (carries `__nid__`, backed by the `style=""` attribute — of a
 // cross-frame sub-document when it also carries `__fbid__`, BUG-1147) or a
-// CSSOM-8 rule style (carries `__loc__`, backed by
-// `_lumen_stylesheet_rule_(set_)style`/`_lumen_stylesheet_media_child_
-// (set_)style` — `document.styleSheets`'s OWN, not constructed, sheets
-// only). Every prototype method below passes `this` through unchanged, so
+// CSSOM-8/10 rule style (carries `__loc__`, backed by the Rust CSSOM tree
+// natives `_lumen_cssom_rule_json`/`_lumen_cssom_set_style`, or — inside a
+// `@mixin`'s `@result` — by `_lumen_stylesheet_mixin_node_json`). Every prototype method below passes `this` through unchanged, so
 // this pair is the only place that needs to know which backing a given
 // instance uses.
 function _lumen_style_get_parsed(target) {
     var loc = target.__loc__;
     if (loc) {
         var raw;
-        if (loc.mixinPath !== undefined) {
-            raw = _lumen_stylesheet_mixin_node_json(loc.sheet, loc.rule, loc.mixinPath);
-        } else if (loc.child !== undefined) {
-            raw = _lumen_stylesheet_media_child_json(loc.sheet, loc.rule, loc.child);
+        if (loc.tree) {
+            raw = _lumen_css_json(loc.be, loc.id);
         } else {
-            raw = _lumen_stylesheet_rule_json(loc.sheet, loc.rule);
+            raw = _lumen_stylesheet_mixin_node_json(loc.sheet, loc.rule, loc.mixinPath);
         }
         var t = raw ? JSON.parse(raw).styleCssText : '';
         return _lumen_parse_style(t !== undefined && t !== null ? t : '');
@@ -3585,12 +3582,10 @@ function _lumen_style_set_parsed(target, obj) {
     var loc = target.__loc__;
     if (loc) {
         var text = _lumen_serialize_style(obj);
-        if (loc.mixinPath !== undefined) {
-            _lumen_stylesheet_mixin_set_node_style(loc.sheet, loc.rule, loc.mixinPath, text);
-        } else if (loc.child !== undefined) {
-            _lumen_stylesheet_media_child_set_style(loc.sheet, loc.rule, loc.child, text);
+        if (loc.tree) {
+            _lumen_css_set_style(loc.be, loc.id, text);
         } else {
-            _lumen_stylesheet_rule_set_style(loc.sheet, loc.rule, text);
+            _lumen_stylesheet_mixin_set_node_style(loc.sheet, loc.rule, loc.mixinPath, text);
         }
         return;
     }
@@ -3850,20 +3845,14 @@ function _lumen_make_style(nid, fbid) {
     });
 }
 
-// CSSOM-8 (BUG-518 срез 9) — `CSSStyleRule.style`'s live, writable half for
-// a rule of an OWN (`document.styleSheets`, not constructed) sheet. Same
-// `CSSStyleDeclaration.prototype` as `_lumen_make_style` above (so
-// `instanceof`/every getter/setter/shorthand-expansion behaves identically —
-// `_lumen_style_get_parsed`/`_lumen_style_set_parsed` branch on `__loc__`
-// vs `__nid__`), just backed by `_lumen_stylesheet_rule_json`/
-// `_lumen_stylesheet_rule_set_style` (top-level) or their `_media_child_`
-// siblings (nested inside `@media`) instead of the `style=""` attribute.
-// `loc`: `{sheet, rule}` for a top-level rule, `{sheet, rule, child}` for
-// one nested inside `@media` (`rule` is that block's own top-level index),
-// or `{sheet, rule, mixinPath}` for a node inside a top-level `@mixin`'s
-// `@result` tree (CSSOM-8, вложенные правила — `rule` is the `@mixin`'s own
-// top-level index, `mixinPath` the node's path from `@result`'s own
-// children, see `_lumen_stylesheet_mixin_node_json`).
+// CSSOM-8/10 — a rule's live, writable `style` (`CSSStyleRule`, `CSSNestedDeclarations`,
+// `CSSKeyframeRule`, `CSSPageRule`, `CSSFontFaceRule`). Same `CSSStyleDeclaration.prototype`
+// as `_lumen_make_style` above; `_lumen_style_get_parsed`/`_lumen_style_set_parsed`
+// branch on `__loc__` vs `__nid__`. `loc`: `{tree: true, be, id}` — a node of the
+// sheet `be` (see `_lumen_css_backend`) in the Rust CSSOM tree — or
+// `{sheet, rule, mixinPath}` for a node inside a top-level `@mixin`'s `@result` tree
+// (`rule` is the `@mixin`'s `mixinIndex`, `mixinPath` the node's path from
+// `@result`'s own children, see `_lumen_stylesheet_mixin_node_json`).
 function _lumen_make_rule_style(loc) {
     var target = Object.create(CSSStyleDeclaration.prototype);
     Object.defineProperty(target, '__loc__',
@@ -12087,37 +12076,20 @@ Object.defineProperty(StaticRange.prototype, 'collapsed', {
 });
 Object.defineProperty(StaticRange.prototype, Symbol.toStringTag, { value: 'StaticRange', configurable: true });
 
-// ── CSSOM (CSSOM-1 срез 3, read-only; CSSOM-5 срез 1 adds the write half) ──
+// ── CSSOM (CSSOM-1/5/10) ──
 // `document.styleSheets`, `<style>`/`<link>.sheet` (getter added on
 // `HTMLStyleElement`/`HTMLLinkElement`.prototype in web_api_shim_tail_b.js),
-// `CSSStyleSheet.cssRules`, `CSSStyleRule.selectorText`/`style.cssText`,
-// `CSSMediaRule.media.mediaText`. Every object below addresses Rust-side
-// state by index (sheet index in the registry, rule index within
-// `cssom_rules()`) and re-reads it on every property access — the same
-// "class-object with state" pattern `_lumen_make_range` above uses, per
-// `docs/tasks/p1-cssom-1-stylesheets.md`. Rule/sheet identity is NOT
-// preserved across repeated reads (`sheet.cssRules[0] !== sheet.cssRules[0]`)
-// since nothing here is cached. `insertRule`/`deleteRule` on THIS read half
-// (BUG-518 срез 7) mutate the registry entry's own `Stylesheet` — visible to
-// further CSSOM reads, but NOT wired into the page cascade (that registry is
-// rebuilt wholesale from DOM text on every relayout, so the mutation is
-// discarded on the next one — see `stylesheets.rs`'s doc comment on the two
-// natives); a constructed sheet has had both since CSSOM-5 срез 3, see below.
-//
-// `new CSSStyleSheet()`/`.replaceSync()`/`.replace()`/`document.
-// adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets` (CSSOM-5 срез 1,
-// BUG-897) are the write half, built further below
-// (`_lumen_make_constructed_style_sheet`) over a SEPARATE Rust-side registry
-// (`crates/js/src/v8_runtime/install/constructed_stylesheets.rs`) — a
-// constructed sheet has no owning DOM node, so it cannot share the
-// `stylesheet_nodes` index space this file's read half addresses.
-// `document.adoptedStyleSheets` feeds the layout cascade since CSSOM-5 срез
-// 2 (same BUG-897) — assigning it or calling `replaceSync` on a member sheet
-// now changes what is painted, not just what CSSOM reports. `insertRule`/
-// `deleteRule` on a constructed sheet (CSSOM-5 срез 3) do too, through that
-// same fingerprint/revision path — no extra wiring needed here.
-// `shadowRoot.adoptedStyleSheets` does not yet: Lumen has no shadow-scoped
-// cascade at all, see that Rust module's doc comment for why.
+// `new CSSStyleSheet()`/`replaceSync`/`adoptedStyleSheets`. Since CSSOM-10 both kinds of
+// sheet (owned: `stylesheet_nodes` registry; constructed: its own registry in
+// `install/constructed_stylesheets.rs`) share one model: the Rust-side CSSOM tree
+// (`lumen_css_parser::cssom_tree`, natives in `install/cssom_tree_natives.rs`), addressed by
+// a backend `be` (`_lumen_css_backend`) and a global node `id`. Wrappers are cached per
+// `(be, id)` in a `Map` of `WeakRef`s, so `cssRules[0] === cssRules[0]` and
+// `child.parentRule === parent`. Every accessor sits on a prototype and re-reads the node
+// on each access; a rule removed from its sheet answers from its last snapshot, with
+// `parentRule`/`parentStyleSheet` null. Edits go through the tree (`insertRule`,
+// `deleteRule`, `selectorText`, `style`, …) and reach the cascade via `CssomOp::TreeEdit`
+// (owned) or the sheet revision (constructed).
 
 function CSSStyleSheet(options) {
     if (!new.target) throw new TypeError("Constructor CSSStyleSheet requires 'new'");
@@ -12128,23 +12100,63 @@ function CSSStyleSheet(options) {
 globalThis.CSSStyleSheet = CSSStyleSheet;
 function CSSRuleList() { throw new TypeError('Illegal constructor'); }
 globalThis.CSSRuleList = CSSRuleList;
+CSSRuleList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+Object.defineProperty(CSSRuleList.prototype, Symbol.toStringTag, { value: 'CSSRuleList', configurable: true });
 function StyleSheetList() { throw new TypeError('Illegal constructor'); }
 globalThis.StyleSheetList = StyleSheetList;
+StyleSheetList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
 function MediaList() { throw new TypeError('Illegal constructor'); }
 globalThis.MediaList = MediaList;
+
+// CSSOM-10: the rule interfaces. A rule wrapper is `Object.create(<class>.prototype)`
+// plus a hidden `__r = {be, id, last, …}` (see `_lumen_css_wrap`); every accessor
+// below lives on the prototype and re-reads the Rust-side tree node by `id`.
 function CSSRule() { throw new TypeError('Illegal constructor'); }
-CSSRule.STYLE_RULE = 1; CSSRule.prototype.STYLE_RULE = 1;
-CSSRule.MEDIA_RULE = 4; CSSRule.prototype.MEDIA_RULE = 4;
+CSSRule.STYLE_RULE = 1; CSSRule.CHARSET_RULE = 2; CSSRule.IMPORT_RULE = 3; CSSRule.MEDIA_RULE = 4;
+CSSRule.FONT_FACE_RULE = 5; CSSRule.PAGE_RULE = 6; CSSRule.KEYFRAMES_RULE = 7; CSSRule.KEYFRAME_RULE = 8;
+CSSRule.MARGIN_RULE = 9; CSSRule.NAMESPACE_RULE = 10; CSSRule.COUNTER_STYLE_RULE = 11;
+CSSRule.SUPPORTS_RULE = 12; CSSRule.FONT_FEATURE_VALUES_RULE = 14;
+(function() {
+    var names = ['STYLE_RULE', 'CHARSET_RULE', 'IMPORT_RULE', 'MEDIA_RULE', 'FONT_FACE_RULE', 'PAGE_RULE',
+        'KEYFRAMES_RULE', 'KEYFRAME_RULE', 'MARGIN_RULE', 'NAMESPACE_RULE', 'COUNTER_STYLE_RULE',
+        'SUPPORTS_RULE', 'FONT_FEATURE_VALUES_RULE'];
+    for (var i = 0; i < names.length; i++) CSSRule.prototype[names[i]] = CSSRule[names[i]];
+    CSSRule.prototype.FONT_FEATURE_VALUES_RULE = 14;
+})();
 globalThis.CSSRule = CSSRule;
-function CSSStyleRule() { throw new TypeError('Illegal constructor'); }
-Object.setPrototypeOf(CSSStyleRule.prototype, CSSRule.prototype);
-globalThis.CSSStyleRule = CSSStyleRule;
-function CSSMediaRule() { throw new TypeError('Illegal constructor'); }
-Object.setPrototypeOf(CSSMediaRule.prototype, CSSRule.prototype);
-globalThis.CSSMediaRule = CSSMediaRule;
-function CSSMixinRule() { throw new TypeError('Illegal constructor'); }
-Object.setPrototypeOf(CSSMixinRule.prototype, CSSRule.prototype);
-globalThis.CSSMixinRule = CSSMixinRule;
+Object.defineProperty(CSSRule.prototype, Symbol.toStringTag, { value: 'CSSRule', configurable: true });
+var _LUMEN_CSS_CLASSES = { CSSRule: CSSRule };
+function _lumen_css_class(name, parent) {
+    var C = function() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(C, 'name', { value: name, configurable: true });
+    Object.setPrototypeOf(C, parent);
+    Object.setPrototypeOf(C.prototype, parent.prototype);
+    Object.defineProperty(C.prototype, Symbol.toStringTag, { value: name, configurable: true });
+    globalThis[name] = C;
+    _LUMEN_CSS_CLASSES[name] = C;
+    return C;
+}
+var CSSGroupingRule = _lumen_css_class('CSSGroupingRule', CSSRule);
+var CSSStyleRule = _lumen_css_class('CSSStyleRule', CSSGroupingRule);
+var CSSConditionRule = _lumen_css_class('CSSConditionRule', CSSGroupingRule);
+var CSSMediaRule = _lumen_css_class('CSSMediaRule', CSSConditionRule);
+var CSSSupportsRule = _lumen_css_class('CSSSupportsRule', CSSConditionRule);
+var CSSContainerRule = _lumen_css_class('CSSContainerRule', CSSConditionRule);
+var CSSLayerBlockRule = _lumen_css_class('CSSLayerBlockRule', CSSGroupingRule);
+var CSSLayerStatementRule = _lumen_css_class('CSSLayerStatementRule', CSSRule);
+var CSSScopeRule = _lumen_css_class('CSSScopeRule', CSSGroupingRule);
+var CSSStartingStyleRule = _lumen_css_class('CSSStartingStyleRule', CSSGroupingRule);
+var CSSNestedDeclarations = _lumen_css_class('CSSNestedDeclarations', CSSRule);
+var CSSImportRule = _lumen_css_class('CSSImportRule', CSSRule);
+var CSSNamespaceRule = _lumen_css_class('CSSNamespaceRule', CSSRule);
+var CSSFontFaceRule = _lumen_css_class('CSSFontFaceRule', CSSRule);
+var CSSKeyframesRule = _lumen_css_class('CSSKeyframesRule', CSSRule);
+var CSSKeyframeRule = _lumen_css_class('CSSKeyframeRule', CSSRule);
+var CSSPageRule = _lumen_css_class('CSSPageRule', CSSGroupingRule);
+var CSSPropertyRule = _lumen_css_class('CSSPropertyRule', CSSRule);
+var CSSCounterStyleRule = _lumen_css_class('CSSCounterStyleRule', CSSRule);
+var CSSFontFeatureValuesRule = _lumen_css_class('CSSFontFeatureValuesRule', CSSRule);
+var CSSMixinRule = _lumen_css_class('CSSMixinRule', CSSRule);
 
 // Generic index-only live-list Proxy: `itemsFn()` returns the current array
 // of already-built member objects, `protoObj` decides which interface the
@@ -12207,101 +12219,429 @@ function _lumen_make_media_list(text) {
     return m;
 }
 
-// A read-only `CSSStyleDeclaration`-shaped object for `CSSStyleRule.style`
-// (CSSOM §7.3) — `cssText` only for now; indexed/named property access and
-// mutation are CSSOM-2's `crates/js/src/dom.rs::_lumen_make_style`, not this.
-function _lumen_make_css_style_declaration_readonly(cssText) {
-    var d = {};
-    Object.defineProperty(d, 'cssText', {
-        get: function() { return cssText; }, enumerable: true, configurable: true,
-    });
-    return d;
+// ── CSSOM-10: backends, wrappers and rule prototypes over the Rust tree ───────
+// A "backend" `be` names one stylesheet for the natives: `c` — constructed
+// registry (`key` = construction index) or owned one (`key` = owner node id, the
+// registry position is looked up per call because `<style>` siblings shift it).
+var _lumen_css_be_owned = new Map();
+var _lumen_css_be_ctor = new Map();
+function _lumen_css_weak(v) {
+    return typeof WeakRef === 'function' ? new WeakRef(v) : { deref: function() { return v; } };
 }
-
+function _lumen_css_backend(constructed, key) {
+    var m = constructed ? _lumen_css_be_ctor : _lumen_css_be_owned;
+    var be = m.get(key);
+    if (be) return be;
+    be = { c: constructed, key: key, rules: new Map(), sweepAt: 256, sheetRef: null, list: null };
+    be.idx = constructed
+        ? function() { return key; }
+        : function() { return key === undefined ? -1 : _lumen_stylesheet_index_for(key); };
+    m.set(key, be);
+    return be;
+}
+function _lumen_css_ids(be, parentId) {
+    var i = be.idx();
+    return i < 0 ? [] : _lumen_cssom_children(be.c, i, parentId);
+}
+function _lumen_css_json(be, id) {
+    var i = be.idx();
+    return i < 0 ? null : _lumen_cssom_rule_json(be.c, i, id);
+}
+function _lumen_css_wrap(be, id) {
+    var ref = be.rules.get(id);
+    var cached = ref && ref.deref();
+    if (cached) return cached;
+    var raw = _lumen_css_json(be, id);
+    if (raw === null || raw === undefined) return null;
+    var data = JSON.parse(raw);
+    var ctor = _LUMEN_CSS_CLASSES[data.cls] || CSSRule;
+    var w = Object.create(ctor.prototype);
+    Object.defineProperty(w, '__r', {
+        value: { be: be, id: id, last: data, gone: false, style: null, list: null, media: null },
+        enumerable: false, writable: false, configurable: false,
+    });
+    if (data.cls === 'CSSKeyframesRule') {
+        w = new Proxy(w, {
+            get: function(t, p, recv) {
+                if (typeof p === 'string' && /^[0-9]+$/.test(p)) {
+                    var ids = _lumen_css_ids(be, id), k = parseInt(p, 10);
+                    return k < ids.length ? _lumen_css_wrap(be, ids[k]) : undefined;
+                }
+                return Reflect.get(t, p, recv);
+            },
+        });
+    }
+    be.rules.set(id, _lumen_css_weak(w));
+    if (be.rules.size > be.sweepAt) {
+        be.rules.forEach(function(r, k) { if (!r.deref()) be.rules.delete(k); });
+        be.sweepAt = Math.max(256, be.rules.size * 2);
+    }
+    return w;
+}
+// Fresh data of the wrapped rule; a removed rule keeps answering from its last snapshot.
+function _lumen_css_data(self) {
+    var r = self === null || self === undefined ? undefined : self.__r;
+    if (!r) throw new TypeError('Illegal invocation');
+    var raw = _lumen_css_json(r.be, r.id);
+    if (raw === null || raw === undefined) { r.gone = true; return r.last; }
+    r.gone = false;
+    r.last = JSON.parse(raw);
+    return r.last;
+}
+function _lumen_css_make_list(be, parentId) {
+    var proto = Object.create(CSSRuleList.prototype);
+    function ids() { return _lumen_css_ids(be, parentId); }
+    return new Proxy(proto, {
+        get: function(t, p) {
+            if (p === 'length') return ids().length;
+            if (p === 'item') return function(i) {
+                var a = ids(); i = i >>> 0;
+                return i < a.length ? _lumen_css_wrap(be, a[i]) : null;
+            };
+            if (typeof p === 'string' && /^[0-9]+$/.test(p)) {
+                var a = ids(), k = parseInt(p, 10);
+                return k < a.length ? _lumen_css_wrap(be, a[k]) : undefined;
+            }
+            return t[p];
+        },
+        has: function(t, p) {
+            if (p === 'length' || p === 'item') return true;
+            if (typeof p === 'string' && /^[0-9]+$/.test(p)) return parseInt(p, 10) < ids().length;
+            return p in t;
+        },
+        ownKeys: function() {
+            var keys = [], n = ids().length;
+            for (var i = 0; i < n; i++) keys.push(String(i));
+            keys.push('length');
+            return keys;
+        },
+        getOwnPropertyDescriptor: function(t, p) {
+            if (p === 'length') return { value: ids().length, writable: false, enumerable: false, configurable: true };
+            if (typeof p === 'string' && /^[0-9]+$/.test(p)) {
+                var a = ids(), k = parseInt(p, 10);
+                if (k < a.length) return { value: _lumen_css_wrap(be, a[k]), writable: false, enumerable: true, configurable: true };
+            }
+            return undefined;
+        },
+    });
+}
 function _lumen_make_css_rule_list(itemsFn) {
     return _lumen_make_indexed_list(itemsFn, CSSRuleList.prototype);
 }
-
-// A style rule (`CSSStyleRule`), built from the JSON `_lumen_stylesheet_rule_json`/
-// `_lumen_stylesheet_media_child_json` return — `{selectorText, styleCssText,
-// cssText}`. `parentRule` is `null` for a top-level rule, the enclosing
-// `CSSMediaRule` wrapper for a rule nested inside `@media`. `cssText` is
-// read from the Rust-computed field rather than reassembled here (`data.
-// selectorText + ' { ' + data.styleCssText + ' }'`) since CSS Mixins L1's
-// `@apply` needs a different, multi-line serialization once present among
-// this rule's declarations — see `Rule::css_text` (css-parser).
-// `loc` is this rule's `_lumen_make_rule_style` address (CSSOM-8) —
-// `{sheet, rule}` for a top-level rule, `{sheet, rule, child}` nested inside
-// `@media`; `loc.sheet` doubles as the owning sheet index for `parentStyleSheet`.
-function _lumen_build_css_style_rule(data, loc, parentRule) {
-    var r = Object.create(CSSStyleRule.prototype);
-    Object.defineProperties(r, {
-        type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
-        selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
-        cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
-        style:        { get: function() { return _lumen_make_rule_style(loc); }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(loc.sheet); }, enumerable: true, configurable: true },
-        parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
+function _lumen_css_throw(code, method, iface) {
+    var pre = "Failed to execute '" + method + "' on '" + iface + "': ";
+    if (code === -2) throw new DOMException(pre + 'the supplied text is not a valid rule.', 'SyntaxError');
+    if (code === -3) throw new DOMException(pre + 'the rule cannot be inserted at this position.', 'HierarchyRequestError');
+    throw new DOMException(pre + 'the index provided is larger than the maximum index.', 'IndexSizeError');
+}
+function _lumen_css_insert_into(be, parentId, iface, text, index) {
+    var i = be.idx();
+    var code = i < 0 ? -1 : _lumen_cssom_insert(be.c, i, parentId, String(text), index === undefined ? 0 : (index >>> 0));
+    if (code < 0) _lumen_css_throw(code, 'insertRule', iface);
+    return code;
+}
+function _lumen_css_delete_from(be, parentId, iface, index) {
+    var i = be.idx();
+    var code = i < 0 ? -1 : _lumen_cssom_delete(be.c, i, parentId, index >>> 0);
+    if (code < 0) _lumen_css_throw(code, 'deleteRule', iface);
+}
+function _lumen_css_set_style(be, id, text) {
+    var i = be.idx();
+    if (i >= 0) _lumen_cssom_set_style(be.c, i, id, text);
+}
+function _lumen_css_set_prelude(self, text) {
+    var r = self.__r;
+    if (!r) throw new TypeError('Illegal invocation');
+    var i = r.be.idx();
+    if (i >= 0) _lumen_cssom_set_prelude(r.be.c, i, r.id, String(text));
+}
+function _lumen_css_acc(proto, name, get, set) {
+    Object.defineProperty(proto, name, { get: get, set: set, enumerable: true, configurable: true });
+}
+function _lumen_css_fn(proto, name, fn) {
+    Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: true, configurable: true });
+}
+// `.style` of a rule: one cached live declaration block per wrapper; assigning it
+// forwards to `cssText` ([PutForwards]).
+function _lumen_css_style_of(self) {
+    _lumen_css_data(self);
+    var r = self.__r;
+    if (!r.style) r.style = _lumen_make_rule_style({ tree: true, be: r.be, id: r.id });
+    return r.style;
+}
+function _lumen_css_style_acc(proto) {
+    _lumen_css_acc(proto, 'style', function() { return _lumen_css_style_of(this); }, function(v) {
+        var r = this.__r;
+        if (!r) throw new TypeError('Illegal invocation');
+        _lumen_css_set_style(r.be, r.id, String(v));
     });
-    // `CSSGroupingRule.insertRule` (CSS Nesting's own CSSOM extension of a
-    // style rule), restricted to a TOP-LEVEL rule (`loc.child === undefined`
-    // — a rule nested inside `@media` is out of this slice's scope, same
-    // boundary `_lumen_stylesheet_media_child_set_style` already draws) and
-    // to inserting an `@apply` statement (CSS Mixins L1) — CSSOM-8's third
-    // and last nested-rule shape (`mixin-invalidation.tentative.html`'s
-    // "invalidation on adding @apply rule"). A general nested-style-rule
-    // insertion is not implemented — see `Rule::insert_apply_marker`'s doc
-    // comment (css-parser) for why.
-    if (loc.child === undefined) {
-        r.insertRule = function(ruleText, index) {
-            index = (index === undefined) ? 0 : (index >>> 0);
-            var result = _lumen_stylesheet_rule_insert_apply(loc.sheet, loc.rule, String(ruleText), index);
-            if (result === -2) {
-                throw new DOMException(
-                    "Failed to execute 'insertRule' on 'CSSStyleRule': the supplied text is not a valid rule.",
-                    'SyntaxError');
-            }
-            if (result < 0) {
-                throw new DOMException(
-                    "Failed to execute 'insertRule' on 'CSSStyleRule': the index provided is larger than the maximum index.",
-                    'IndexSizeError');
-            }
-            return result;
-        };
+}
+function _lumen_css_prelude_acc(proto, name, writable) {
+    _lumen_css_acc(proto, name, function() { return _lumen_css_data(this).prelude; },
+        writable ? function(v) { _lumen_css_set_prelude(this, v); } : undefined);
+}
+function _lumen_css_desc(self, prop) {
+    var v = _lumen_parse_style(_lumen_css_data(self).styleCssText || '')[prop];
+    return v === undefined ? null : v;
+}
+function _lumen_css_desc_set(self, prop, value) {
+    var r = self.__r;
+    var obj = _lumen_parse_style(_lumen_css_data(self).styleCssText || '');
+    obj[prop] = String(value);
+    _lumen_css_set_style(r.be, r.id, _lumen_serialize_style(obj));
+}
+// Balanced `( … )` starting at `s[at]`: returns [inner, indexAfter] or null.
+function _lumen_css_paren(s, at) {
+    if (s.charAt(at) !== '(') return null;
+    var depth = 0, q = '';
+    for (var i = at; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (q) { if (ch === '\\') i++; else if (ch === q) q = ''; continue; }
+        if (ch === '"' || ch === "'") q = ch;
+        else if (ch === '(') depth++;
+        else if (ch === ')') { depth--; if (depth === 0) return [s.slice(at + 1, i).trim(), i + 1]; }
     }
-    return r;
+    return null;
 }
 
-// A top-level `@mixin` rule (`CSSMixinRule` — CSS Mixins L1 §cssom), built
-// from `mixin_rule_json`'s `{name, cssText}`. `type` follows every other
-// newer CSSOM rule kind's legacy-attribute convention of `0` (CSSOM §6.5.1 —
-// the numeric constants stop at rules old enough to have needed one).
-// `.cssRules` (CSSOM-8, вложенные правила) is always length 0 or 1 — the
-// sole child is `@result` itself if present (`mixin-invalidation.
-// tentative.html`'s first two subtests: `ss.cssRules[0].cssRules.length ===
-// 1`), addressed as the empty `mixinPath` (`_lumen_stylesheet_mixin_node_
-// json`'s "path = []" case, `Stylesheet::mixin_result_child_count`'s doc
-// comment) — `@result` itself has no `.style` (see
-// `mixins::result_cssom_children`'s doc comment), so its wrapper below
-// exposes only `cssText`/`cssRules`, never `style`.
-function _lumen_build_css_mixin_rule(data, sheetIdx, ruleIdx, parentRule) {
-    var r = Object.create(CSSMixinRule.prototype);
-    Object.defineProperties(r, {
-        type:    { get: function() { return 0; }, enumerable: true, configurable: true },
-        name:    { get: function() { return data.name; }, enumerable: true, configurable: true },
-        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
-        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
-        cssRules: { get: function() {
-            return _lumen_make_css_rule_list(function() {
-                return _lumen_stylesheet_mixin_has_result(sheetIdx, ruleIdx)
-                    ? [_lumen_make_mixin_result_wrapper(sheetIdx, ruleIdx, r)]
-                    : [];
-            });
-        }, enumerable: true, configurable: true },
+// ── CSSRule / CSSGroupingRule / CSSConditionRule ──
+var _LUMEN_CSS_TYPES = {
+    CSSStyleRule: 1, CSSImportRule: 3, CSSMediaRule: 4, CSSFontFaceRule: 5, CSSPageRule: 6,
+    CSSKeyframesRule: 7, CSSKeyframeRule: 8, CSSNamespaceRule: 10, CSSCounterStyleRule: 11,
+    CSSSupportsRule: 12, CSSFontFeatureValuesRule: 14,
+};
+_lumen_css_acc(CSSRule.prototype, 'type', function() { return _LUMEN_CSS_TYPES[_lumen_css_data(this).cls] || 0; });
+_lumen_css_acc(CSSRule.prototype, 'cssText', function() { return _lumen_css_data(this).cssText; }, function() {});
+_lumen_css_acc(CSSRule.prototype, 'parentRule', function() {
+    var d = _lumen_css_data(this), r = this.__r;
+    return (r.gone || !d.parent) ? null : _lumen_css_wrap(r.be, d.parent);
+});
+_lumen_css_acc(CSSRule.prototype, 'parentStyleSheet', function() {
+    _lumen_css_data(this);
+    return this.__r.gone ? null : _lumen_css_sheet_for(this.__r.be);
+});
+_lumen_css_acc(CSSGroupingRule.prototype, 'cssRules', function() {
+    _lumen_css_data(this);
+    var r = this.__r;
+    return r.list || (r.list = _lumen_css_make_list(r.be, r.id));
+});
+_lumen_css_fn(CSSGroupingRule.prototype, 'insertRule', function(rule, index) {
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'insertRule' on 'CSSGroupingRule': 1 argument required, but only 0 present.");
+    _lumen_css_data(this);
+    return _lumen_css_insert_into(this.__r.be, this.__r.id, 'CSSGroupingRule', rule, index);
+});
+_lumen_css_fn(CSSGroupingRule.prototype, 'deleteRule', function(index) {
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'deleteRule' on 'CSSGroupingRule': 1 argument required, but only 0 present.");
+    _lumen_css_data(this);
+    _lumen_css_delete_from(this.__r.be, this.__r.id, 'CSSGroupingRule', index);
+});
+_lumen_css_prelude_acc(CSSConditionRule.prototype, 'conditionText', true);
+
+// ── CSSStyleRule / CSSNestedDeclarations / decl-bodied rules ──
+_lumen_css_prelude_acc(CSSStyleRule.prototype, 'selectorText', true);
+_lumen_css_style_acc(CSSStyleRule.prototype);
+_lumen_css_style_acc(CSSNestedDeclarations.prototype);
+_lumen_css_style_acc(CSSFontFaceRule.prototype);
+_lumen_css_style_acc(CSSKeyframeRule.prototype);
+_lumen_css_style_acc(CSSPageRule.prototype);
+_lumen_css_prelude_acc(CSSPageRule.prototype, 'selectorText', true);
+_lumen_css_prelude_acc(CSSKeyframeRule.prototype, 'keyText', true);
+
+// ── CSSMediaRule / MediaList ──
+function _lumen_css_media_list(self, read, write) {
+    var m = Object.create(MediaList.prototype);
+    function items() {
+        var t = read().trim();
+        return t === '' ? [] : t.split(',').map(function(s) { return s.trim(); });
+    }
+    Object.defineProperties(m, {
+        mediaText: {
+            get: function() { return read(); },
+            set: write ? function(v) { write(String(v)); } : function() {},
+            enumerable: true, configurable: true,
+        },
+        length: { get: function() { return items().length; }, enumerable: true, configurable: true },
     });
-    return r;
+    m.item = function(i) { var a = items(); i = i >>> 0; return i < a.length ? a[i] : null; };
+    m.appendMedium = function(medium) {
+        medium = String(medium);
+        var a = items();
+        if (write && a.indexOf(medium) < 0) { a.push(medium); write(a.join(', ')); }
+    };
+    m.deleteMedium = function(medium) {
+        medium = String(medium);
+        var a = items(), k = a.indexOf(medium);
+        if (k < 0) throw new DOMException("Failed to execute 'deleteMedium' on 'MediaList': The medium provided ('" + medium + "') is not in the list.", 'NotFoundError');
+        a.splice(k, 1);
+        if (write) write(a.join(', '));
+    };
+    m.toString = function() { return read(); };
+    return m;
 }
+_lumen_css_acc(CSSMediaRule.prototype, 'media', function() {
+    var self = this;
+    _lumen_css_data(self);
+    var r = self.__r;
+    return r.media || (r.media = _lumen_css_media_list(self,
+        function() { return _lumen_css_data(self).prelude; },
+        function(v) { _lumen_css_set_prelude(self, v); }));
+}, function(v) { _lumen_css_set_prelude(this, v); });
+_lumen_css_acc(CSSMediaRule.prototype, 'rules', function() { return this.cssRules; });
+
+// ── CSSContainerRule ──
+function _lumen_css_container_parts(p) {
+    var m = /^([^\s(]+)\s+(\S[\s\S]*)$/.exec(p);
+    if (m && !/^(not|and|or)$/i.test(m[1])) return [m[1], m[2]];
+    var m2 = /^([^\s(]+)(\([\s\S]*)$/.exec(p);
+    if (m2 && !/^(style|scroll-state|not|and|or)$/i.test(m2[1])) return [m2[1], m2[2]];
+    return ['', p];
+}
+_lumen_css_acc(CSSContainerRule.prototype, 'containerName', function() {
+    return _lumen_css_container_parts(_lumen_css_data(this).prelude)[0];
+});
+_lumen_css_acc(CSSContainerRule.prototype, 'containerQuery', function() {
+    return _lumen_css_container_parts(_lumen_css_data(this).prelude)[1];
+});
+
+// ── @layer / @scope ──
+_lumen_css_prelude_acc(CSSLayerBlockRule.prototype, 'name', false);
+_lumen_css_acc(CSSLayerStatementRule.prototype, 'nameList', function() {
+    var p = _lumen_css_data(this).prelude;
+    return p === '' ? [] : p.split(',').map(function(s) { return s.trim(); });
+});
+function _lumen_css_scope_parts(p) {
+    var start = null, end = null, s = p.trim(), at = 0;
+    if (s.charAt(0) === '(') {
+        var a = _lumen_css_paren(s, 0);
+        if (a) { start = a[0]; at = a[1]; }
+    }
+    var rest = s.slice(at).replace(/^\s+/, '');
+    var m = /^to\s*/i.exec(rest);
+    if (m) {
+        var b = _lumen_css_paren(rest, m[0].length);
+        if (b) end = b[0];
+    }
+    return [start, end];
+}
+_lumen_css_acc(CSSScopeRule.prototype, 'start', function() { return _lumen_css_scope_parts(_lumen_css_data(this).prelude)[0]; });
+_lumen_css_acc(CSSScopeRule.prototype, 'end', function() { return _lumen_css_scope_parts(_lumen_css_data(this).prelude)[1]; });
+
+// ── @import / @namespace ──
+function _lumen_css_import_parts(p) {
+    var out = { href: '', layerName: null, supportsText: null, media: '' };
+    var m = /^(?:url\(\s*(?:"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)'|([^)]*?))\s*\)|"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)')\s*/.exec(p);
+    if (!m) return out;
+    var href = [m[1], m[2], m[3], m[4], m[5]].filter(function(x) { return x !== undefined; })[0] || '';
+    try { href = new URL(href, document.baseURI).href; } catch (e) { /* keep as written */ }
+    out.href = href;
+    var rest = p.slice(m[0].length), k;
+    for (;;) {
+        if ((k = /^layer(?=\s|$)\s*/i.exec(rest))) { out.layerName = ''; rest = rest.slice(k[0].length); continue; }
+        if ((k = /^layer(?=\()/i.exec(rest))) {
+            var a = _lumen_css_paren(rest, k[0].length);
+            if (!a) break;
+            out.layerName = a[0]; rest = rest.slice(a[1]).replace(/^\s+/, ''); continue;
+        }
+        if ((k = /^supports(?=\()/i.exec(rest))) {
+            var b = _lumen_css_paren(rest, k[0].length);
+            if (!b) break;
+            out.supportsText = b[0]; rest = rest.slice(b[1]).replace(/^\s+/, ''); continue;
+        }
+        break;
+    }
+    out.media = rest.trim();
+    return out;
+}
+_lumen_css_acc(CSSImportRule.prototype, 'href', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).href; });
+_lumen_css_acc(CSSImportRule.prototype, 'layerName', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).layerName; });
+_lumen_css_acc(CSSImportRule.prototype, 'supportsText', function() { return _lumen_css_import_parts(_lumen_css_data(this).prelude).supportsText; });
+_lumen_css_acc(CSSImportRule.prototype, 'media', function() {
+    var self = this;
+    _lumen_css_data(self);
+    var r = self.__r;
+    return r.media || (r.media = _lumen_css_media_list(self,
+        function() { return _lumen_css_import_parts(_lumen_css_data(self).prelude).media; }, null));
+});
+_lumen_css_acc(CSSImportRule.prototype, 'styleSheet', function() { _lumen_css_data(this); return null; });
+function _lumen_css_namespace_parts(p) {
+    var prefix = '', rest = p;
+    var m = /^([^\s"'(]+)\s+(?=url\(|["'])/.exec(p);
+    if (m) { prefix = m[1]; rest = p.slice(m[0].length); }
+    var u = /^url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)$/.exec(rest) || /^(?:"([^"]*)"|'([^']*)')$/.exec(rest);
+    var uri = '';
+    if (u) uri = [u[1], u[2], u[3]].filter(function(x) { return x !== undefined; })[0] || '';
+    return [prefix, uri];
+}
+_lumen_css_acc(CSSNamespaceRule.prototype, 'prefix', function() { return _lumen_css_namespace_parts(_lumen_css_data(this).prelude)[0]; });
+_lumen_css_acc(CSSNamespaceRule.prototype, 'namespaceURI', function() { return _lumen_css_namespace_parts(_lumen_css_data(this).prelude)[1]; });
+
+// ── @keyframes ──
+function _lumen_css_key_norm(s) {
+    return String(s).split(',').map(function(k) {
+        k = k.trim().toLowerCase();
+        return k === 'from' ? '0%' : (k === 'to' ? '100%' : k);
+    }).join(', ');
+}
+function _lumen_css_keyframe_index(self, select) {
+    var r = self.__r, ids = _lumen_css_ids(r.be, r.id), want = _lumen_css_key_norm(select);
+    for (var i = ids.length - 1; i >= 0; i--) {
+        var raw = _lumen_css_json(r.be, ids[i]);
+        if (raw && _lumen_css_key_norm(JSON.parse(raw).prelude) === want) return i;
+    }
+    return -1;
+}
+_lumen_css_prelude_acc(CSSKeyframesRule.prototype, 'name', true);
+_lumen_css_acc(CSSKeyframesRule.prototype, 'cssRules', function() {
+    _lumen_css_data(this);
+    var r = this.__r;
+    return r.list || (r.list = _lumen_css_make_list(r.be, r.id));
+});
+_lumen_css_acc(CSSKeyframesRule.prototype, 'length', function() { return _lumen_css_ids(this.__r.be, this.__r.id).length; });
+_lumen_css_fn(CSSKeyframesRule.prototype, 'appendRule', function(rule) {
+    _lumen_css_data(this);
+    var r = this.__r, i = r.be.idx();
+    if (i >= 0) _lumen_cssom_insert(r.be.c, i, r.id, String(rule), _lumen_css_ids(r.be, r.id).length);
+});
+_lumen_css_fn(CSSKeyframesRule.prototype, 'deleteRule', function(select) {
+    _lumen_css_data(this);
+    var r = this.__r, k = _lumen_css_keyframe_index(this, select);
+    if (k >= 0) _lumen_cssom_delete(r.be.c, r.be.idx(), r.id, k);
+});
+_lumen_css_fn(CSSKeyframesRule.prototype, 'findRule', function(select) {
+    _lumen_css_data(this);
+    var r = this.__r, k = _lumen_css_keyframe_index(this, select);
+    return k < 0 ? null : _lumen_css_wrap(r.be, _lumen_css_ids(r.be, r.id)[k]);
+});
+
+// ── @property / @counter-style / @font-feature-values ──
+_lumen_css_prelude_acc(CSSPropertyRule.prototype, 'name', false);
+_lumen_css_acc(CSSPropertyRule.prototype, 'syntax', function() { return _lumen_css_desc(this, 'syntax') || ''; });
+_lumen_css_acc(CSSPropertyRule.prototype, 'inherits', function() { return _lumen_css_desc(this, 'inherits') === 'true'; });
+_lumen_css_acc(CSSPropertyRule.prototype, 'initialValue', function() { return _lumen_css_desc(this, 'initial-value'); });
+_lumen_css_prelude_acc(CSSCounterStyleRule.prototype, 'name', true);
+[['system', 'system'], ['symbols', 'symbols'], ['additiveSymbols', 'additive-symbols'], ['negative', 'negative'],
+ ['prefix', 'prefix'], ['suffix', 'suffix'], ['range', 'range'], ['pad', 'pad'], ['speakAs', 'speak-as'],
+ ['fallback', 'fallback']].forEach(function(pair) {
+    _lumen_css_acc(CSSCounterStyleRule.prototype, pair[0],
+        function() { return _lumen_css_desc(this, pair[1]) || ''; },
+        function(v) { _lumen_css_desc_set(this, pair[1], v); });
+});
+_lumen_css_prelude_acc(CSSFontFeatureValuesRule.prototype, 'fontFamily', true);
+
+// ── @mixin (CSS Mixins L1) — owned sheets only, via the legacy mixin natives ──
+_lumen_css_acc(CSSMixinRule.prototype, 'name', function() { return _lumen_css_data(this).name; });
+_lumen_css_acc(CSSMixinRule.prototype, 'cssRules', function() {
+    var self = this;
+    _lumen_css_data(self);
+    var r = self.__r;
+    return _lumen_make_css_rule_list(function() {
+        var d = _lumen_css_data(self), i = r.be.idx();
+        if (r.be.c || i < 0 || d.mixinIndex === undefined) return [];
+        return _lumen_stylesheet_mixin_has_result(i, d.mixinIndex)
+            ? [_lumen_make_mixin_result_wrapper(i, d.mixinIndex, self)]
+            : [];
+    });
+});
 
 // `@result`'s own CSSOM wrapper (`path = []`) — not a real `CSSRule`
 // subtype (CSS Mixins L1 defines no public interface for it; nothing here
@@ -12361,126 +12701,99 @@ function _lumen_make_mixin_result_node(sheetIdx, ruleIdx, path) {
     return n;
 }
 
-// One nested style rule inside a `@media` block (`sheetIdx`'s top-level rule
-// `ruleIdx`, child `childIdx`) — `parentRule` is that block's own
-// `CSSMediaRule` wrapper, rebuilt fresh (matches the "no identity across
-// reads" simplification documented at the top of this section).
-function _lumen_make_css_media_child_rule(sheetIdx, ruleIdx, childIdx) {
-    var raw = _lumen_stylesheet_media_child_json(sheetIdx, ruleIdx, childIdx);
-    if (raw === null || raw === undefined) return null;
-    return _lumen_build_css_style_rule(
-        JSON.parse(raw), { sheet: sheetIdx, rule: ruleIdx, child: childIdx },
-        _lumen_make_css_rule(sheetIdx, ruleIdx));
+// ── CSSStyleSheet over a backend ──
+function _lumen_css_sheet_for(be) {
+    var w = be.sheetRef && be.sheetRef.deref();
+    if (w) return w;
+    w = Object.create(CSSStyleSheet.prototype);
+    Object.defineProperty(w, '__be__', { value: be, enumerable: false, writable: false, configurable: false });
+    // `document.adoptedStyleSheets` reads a constructed sheet's identity back through this tag.
+    if (be.c) Object.defineProperty(w, '_lumenSheetIdx', { value: be.key, enumerable: false, writable: false, configurable: false });
+    be.sheetRef = _lumen_css_weak(w);
+    return w;
 }
-
-// One top-level rule of sheet `sheetIdx` (`CSSStyleRule` or `CSSMediaRule`,
-// per the JSON payload's `kind`).
-function _lumen_make_css_rule(sheetIdx, ruleIdx) {
-    var raw = _lumen_stylesheet_rule_json(sheetIdx, ruleIdx);
-    if (raw === null || raw === undefined) return null;
-    var data = JSON.parse(raw);
-    if (data.kind === 'mixin') return _lumen_build_css_mixin_rule(data, sheetIdx, ruleIdx, null);
-    if (data.kind !== 'media') return _lumen_build_css_style_rule(data, { sheet: sheetIdx, rule: ruleIdx }, null);
-    var mr = Object.create(CSSMediaRule.prototype);
-    function childRules() {
-        var n = _lumen_stylesheet_media_child_count(sheetIdx, ruleIdx);
-        var out = [];
-        for (var i = 0; i < n; i++) out.push(_lumen_make_css_media_child_rule(sheetIdx, ruleIdx, i));
-        return out;
+function _lumen_css_be(self) {
+    var be = self === null || self === undefined ? undefined : self.__be__;
+    if (!be) throw new TypeError('Illegal invocation');
+    return be;
+}
+function _lumen_css_owner(be) {
+    return (be.c || be.idx() < 0) ? null : _lumen_make_element(be.key);
+}
+var _lumen_css_sheet_proto = CSSStyleSheet.prototype;
+_lumen_css_acc(_lumen_css_sheet_proto, 'type', function() { _lumen_css_be(this); return 'text/css'; });
+_lumen_css_acc(_lumen_css_sheet_proto, 'disabled', function() {
+    var be = _lumen_css_be(this), i = be.idx();
+    if (be.c) return _lumen_constructed_disabled(i);
+    return i >= 0 && _lumen_stylesheet_disabled(i);
+}, function(v) {
+    var be = _lumen_css_be(this);
+    if (be.c) _lumen_constructed_set_disabled(be.key, !!v);
+});
+_lumen_css_acc(_lumen_css_sheet_proto, 'ownerNode', function() { return _lumen_css_owner(_lumen_css_be(this)); });
+_lumen_css_acc(_lumen_css_sheet_proto, 'href', function() {
+    var el = _lumen_css_owner(_lumen_css_be(this));
+    return (el && el.tagName === 'LINK') ? el.href : null;
+});
+_lumen_css_acc(_lumen_css_sheet_proto, 'title', function() {
+    var el = _lumen_css_owner(_lumen_css_be(this));
+    return el ? (el.getAttribute('title') || null) : null;
+});
+_lumen_css_acc(_lumen_css_sheet_proto, 'media', function() {
+    var el = _lumen_css_owner(_lumen_css_be(this));
+    return _lumen_make_media_list(el ? (el.getAttribute('media') || '') : '');
+});
+_lumen_css_acc(_lumen_css_sheet_proto, 'parentStyleSheet', function() { _lumen_css_be(this); return null; });
+_lumen_css_acc(_lumen_css_sheet_proto, 'ownerRule', function() { _lumen_css_be(this); return null; });
+_lumen_css_acc(_lumen_css_sheet_proto, 'cssRules', function() {
+    var be = _lumen_css_be(this);
+    return be.list || (be.list = _lumen_css_make_list(be, 0));
+});
+_lumen_css_acc(_lumen_css_sheet_proto, 'rules', function() { return this.cssRules; });
+_lumen_css_fn(_lumen_css_sheet_proto, 'insertRule', function(rule, index) {
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'insertRule' on 'CSSStyleSheet': 1 argument required, but only 0 present.");
+    var be = _lumen_css_be(this);
+    if (be.c && /^\s*@import\b/i.test(String(rule))) {
+        throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': Can't insert @import rules into a constructed stylesheet.", 'SyntaxError');
     }
-    Object.defineProperties(mr, {
-        type:     { get: function() { return CSSRule.MEDIA_RULE; }, enumerable: true, configurable: true },
-        media:    { get: function() { return _lumen_make_media_list(data.mediaText); }, enumerable: true, configurable: true },
-        cssRules: { get: function() { return _lumen_make_css_rule_list(childRules); }, enumerable: true, configurable: true },
-        rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
-        cssText:  { get: function() {
-            var body = childRules().map(function(r) { return r.cssText; }).join(' ');
-            return '@media ' + data.mediaText + ' { ' + body + ' }';
-        }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_css_style_sheet(sheetIdx); }, enumerable: true, configurable: true },
-        parentRule: { get: function() { return null; }, enumerable: true, configurable: true },
-    });
-    return mr;
-}
+    return _lumen_css_insert_into(be, 0, 'CSSStyleSheet', rule, index);
+});
+_lumen_css_fn(_lumen_css_sheet_proto, 'deleteRule', function(index) {
+    if (arguments.length < 1) throw new TypeError("Failed to execute 'deleteRule' on 'CSSStyleSheet': 1 argument required, but only 0 present.");
+    _lumen_css_delete_from(_lumen_css_be(this), 0, 'CSSStyleSheet', index);
+});
+_lumen_css_fn(_lumen_css_sheet_proto, 'addRule', function(selector, style, index) {
+    var be = _lumen_css_be(this);
+    var n = _lumen_css_ids(be, 0).length;
+    _lumen_css_insert_into(be, 0, 'CSSStyleSheet', String(selector) + ' { ' + (style === undefined ? '' : String(style)) + ' }',
+        index === undefined ? n : index);
+    return -1;
+});
+_lumen_css_fn(_lumen_css_sheet_proto, 'removeRule', function(index) {
+    _lumen_css_delete_from(_lumen_css_be(this), 0, 'CSSStyleSheet', index === undefined ? 0 : index);
+});
+_lumen_css_fn(_lumen_css_sheet_proto, 'replaceSync', function(text) {
+    var be = _lumen_css_be(this);
+    if (!be.c) {
+        throw new DOMException("Failed to execute 'replaceSync' on 'CSSStyleSheet': Can't call replaceSync on non-constructed CSSStyleSheets.", 'NotAllowedError');
+    }
+    _lumen_constructed_replace_sync(be.key, text === undefined || text === null ? '' : String(text));
+});
+_lumen_css_fn(_lumen_css_sheet_proto, 'replace', function(text) {
+    try {
+        this.replaceSync(text);
+        return Promise.resolve(this);
+    } catch (e) {
+        return Promise.reject(e);
+    }
+});
 
 // A `CSSStyleSheet` addressing registry index `sheetIdx` (see
-// `_lumen_stylesheet_owner_nids`/`V8JsRuntime::stylesheet_nodes`).
+// `_lumen_stylesheet_owner_nids`/`V8JsRuntime::stylesheet_nodes`). BUG-493: the
+// sheet is bound to its owner node, not to the position it had when this wrapper
+// was made — one wrapper per owner, so `style.sheet`/`document.styleSheets[i]` keep identity.
 function _lumen_make_css_style_sheet(sheetIdx) {
-    var s = Object.create(CSSStyleSheet.prototype);
-    // BUG-493: the sheet is bound to its owner node, not to the position it
-    // had when this wrapper was made — a `<style>` inserted earlier in the
-    // document shifts every later registry index, and CSS-in-JS libraries
-    // keep `tag.sheet` for the page's whole lifetime. `-1` once the owner
-    // lost its sheet (removed from the tree, or its text was replaced).
-    var ownerNid = _lumen_stylesheet_owner_nids()[sheetIdx];
-    function cur() {
-        return ownerNid === undefined ? -1 : _lumen_stylesheet_index_for(ownerNid);
-    }
-    function ownerNode() {
-        return cur() < 0 ? null : _lumen_make_element(ownerNid);
-    }
-    function cssRuleList() {
-        return _lumen_make_css_rule_list(function() {
-            var idx = cur();
-            var out = [];
-            if (idx < 0) return out;
-            var n = _lumen_stylesheet_rule_count(idx);
-            for (var i = 0; i < n; i++) out.push(_lumen_make_css_rule(idx, i));
-            return out;
-        });
-    }
-    Object.defineProperties(s, {
-        type:     { get: function() { return 'text/css'; }, enumerable: true, configurable: true },
-        disabled: { get: function() { var idx = cur(); return idx >= 0 && _lumen_stylesheet_disabled(idx); }, enumerable: true, configurable: true },
-        ownerNode: { get: ownerNode, enumerable: true, configurable: true },
-        href: { get: function() {
-            var el = ownerNode();
-            return (el && el.tagName === 'LINK') ? el.href : null;
-        }, enumerable: true, configurable: true },
-        title: { get: function() {
-            var el = ownerNode();
-            return el ? (el.getAttribute('title') || null) : null;
-        }, enumerable: true, configurable: true },
-        media: { get: function() {
-            var el = ownerNode();
-            return _lumen_make_media_list(el ? (el.getAttribute('media') || '') : '');
-        }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return null; }, enumerable: true, configurable: true },
-        ownerRule:        { get: function() { return null; }, enumerable: true, configurable: true },
-        cssRules: { get: cssRuleList, enumerable: true, configurable: true },
-        rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
-    });
-    // `CSSStyleSheet.insertRule`/`.deleteRule` on an owned sheet (BUG-518
-    // срез 7) — the constructed-sheet twin below (`_lumen_make_constructed_style_sheet`)
-    // has the same two methods over a different registry; kept as separate
-    // copies rather than factored out since the two wrappers' `idx` spaces
-    // and native function names are already distinct per-registry pairs.
-    s.insertRule = function(ruleText, index) {
-        index = (index === undefined) ? 0 : (index >>> 0);
-        var idx = cur();
-        var result = idx < 0 ? -1 : _lumen_stylesheet_insert_rule(idx, String(ruleText), index);
-        if (result === -2) {
-            throw new DOMException(
-                "Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.",
-                'SyntaxError');
-        }
-        if (result < 0) {
-            throw new DOMException(
-                "Failed to execute 'insertRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
-                'IndexSizeError');
-        }
-        return result;
-    };
-    s.deleteRule = function(index) {
-        index = index >>> 0;
-        var idx = cur();
-        if (idx < 0 || _lumen_stylesheet_delete_rule(idx, index) < 0) {
-            throw new DOMException(
-                "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
-                'IndexSizeError');
-        }
-    };
-    return s;
+    return _lumen_css_sheet_for(_lumen_css_backend(false, _lumen_stylesheet_owner_nids()[sheetIdx]));
 }
 
 // `document.styleSheets` — a live `StyleSheetList` over the registry.
@@ -12495,147 +12808,10 @@ function _lumen_make_style_sheet_list() {
     }, StyleSheetList.prototype);
 }
 
-// ── CSSOM-5 срез 1: constructed stylesheets + adoptedStyleSheets ──────────
-// Mirrors the `_lumen_build_css_style_rule`/`_lumen_make_css_rule` family
-// above, but reads the separate constructed-sheet registry (`idx` here is a
-// construction-order index, not a `stylesheet_nodes` position) and its
-// `parentStyleSheet` always builds a constructed sheet, never an owned one.
-
-function _lumen_build_constructed_css_style_rule(data, idx, parentRule) {
-    var r = Object.create(CSSStyleRule.prototype);
-    Object.defineProperties(r, {
-        type:         { get: function() { return CSSRule.STYLE_RULE; }, enumerable: true, configurable: true },
-        selectorText: { get: function() { return data.selectorText; }, enumerable: true, configurable: true },
-        cssText:      { get: function() { return data.cssText; }, enumerable: true, configurable: true },
-        style:        { get: function() { return _lumen_make_css_style_declaration_readonly(data.styleCssText); }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
-        parentRule:   { get: function() { return parentRule; }, enumerable: true, configurable: true },
-    });
-    return r;
-}
-
-// Constructed-sheet twin of `_lumen_build_css_mixin_rule` — see that
-// function's doc comment.
-function _lumen_build_constructed_css_mixin_rule(data, idx, parentRule) {
-    var r = Object.create(CSSMixinRule.prototype);
-    Object.defineProperties(r, {
-        type:    { get: function() { return 0; }, enumerable: true, configurable: true },
-        name:    { get: function() { return data.name; }, enumerable: true, configurable: true },
-        cssText: { get: function() { return data.cssText; }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
-        parentRule: { get: function() { return parentRule; }, enumerable: true, configurable: true },
-    });
-    return r;
-}
-
-function _lumen_make_constructed_css_media_child_rule(idx, ruleIdx, childIdx) {
-    var raw = _lumen_constructed_media_child_json(idx, ruleIdx, childIdx);
-    if (raw === null || raw === undefined) return null;
-    return _lumen_build_constructed_css_style_rule(JSON.parse(raw), idx, _lumen_make_constructed_css_rule(idx, ruleIdx));
-}
-
-function _lumen_make_constructed_css_rule(idx, ruleIdx) {
-    var raw = _lumen_constructed_rule_json(idx, ruleIdx);
-    if (raw === null || raw === undefined) return null;
-    var data = JSON.parse(raw);
-    if (data.kind === 'mixin') return _lumen_build_constructed_css_mixin_rule(data, idx, null);
-    if (data.kind !== 'media') return _lumen_build_constructed_css_style_rule(data, idx, null);
-    var mr = Object.create(CSSMediaRule.prototype);
-    function childRules() {
-        var n = _lumen_constructed_media_child_count(idx, ruleIdx);
-        var out = [];
-        for (var i = 0; i < n; i++) out.push(_lumen_make_constructed_css_media_child_rule(idx, ruleIdx, i));
-        return out;
-    }
-    Object.defineProperties(mr, {
-        type:     { get: function() { return CSSRule.MEDIA_RULE; }, enumerable: true, configurable: true },
-        media:    { get: function() { return _lumen_make_media_list(data.mediaText); }, enumerable: true, configurable: true },
-        cssRules: { get: function() { return _lumen_make_css_rule_list(childRules); }, enumerable: true, configurable: true },
-        rules:    { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
-        cssText:  { get: function() {
-            var body = childRules().map(function(r) { return r.cssText; }).join(' ');
-            return '@media ' + data.mediaText + ' { ' + body + ' }';
-        }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return _lumen_make_constructed_style_sheet(idx); }, enumerable: true, configurable: true },
-        parentRule: { get: function() { return null; }, enumerable: true, configurable: true },
-    });
-    return mr;
-}
-
 // A constructed `CSSStyleSheet` (`new CSSStyleSheet()`), addressing registry
-// index `idx` — the JS-only twin of `_lumen_make_css_style_sheet` above.
-// `ownerNode`/`href`/`title` are always `null`: a constructed sheet is never
-// associated with a `<style>`/`<link>` element (CSSOM §2.1). `_lumenSheetIdx`
-// is a non-enumerable own property, not a closure variable, because
-// `document.adoptedStyleSheets`'s setter (below) needs to read a sheet's
-// identity back out of an arbitrary value handed to it.
+// index `idx`; `ownerNode`/`href`/`title` are always `null` (CSSOM §2.1).
 function _lumen_make_constructed_style_sheet(idx) {
-    var s = Object.create(CSSStyleSheet.prototype);
-    Object.defineProperty(s, '_lumenSheetIdx', { value: idx, enumerable: false, configurable: false, writable: false });
-    function cssRuleList() {
-        return _lumen_make_css_rule_list(function() {
-            var n = _lumen_constructed_rule_count(idx);
-            var out = [];
-            for (var i = 0; i < n; i++) out.push(_lumen_make_constructed_css_rule(idx, i));
-            return out;
-        });
-    }
-    Object.defineProperties(s, {
-        type: { get: function() { return 'text/css'; }, enumerable: true, configurable: true },
-        disabled: {
-            get: function() { return _lumen_constructed_disabled(idx); },
-            set: function(v) { _lumen_constructed_set_disabled(idx, !!v); },
-            enumerable: true, configurable: true,
-        },
-        ownerNode:        { get: function() { return null; }, enumerable: true, configurable: true },
-        href:             { get: function() { return null; }, enumerable: true, configurable: true },
-        title:            { get: function() { return null; }, enumerable: true, configurable: true },
-        media:            { get: function() { return _lumen_make_media_list(''); }, enumerable: true, configurable: true },
-        parentStyleSheet: { get: function() { return null; }, enumerable: true, configurable: true },
-        ownerRule:        { get: function() { return null; }, enumerable: true, configurable: true },
-        cssRules:         { get: cssRuleList, enumerable: true, configurable: true },
-        rules:            { get: function() { return this.cssRules; }, enumerable: true, configurable: true },
-    });
-    s.replaceSync = function(text) {
-        _lumen_constructed_replace_sync(idx, text === undefined || text === null ? '' : String(text));
-    };
-    s.replace = function(text) {
-        try {
-            s.replaceSync(text);
-            return Promise.resolve(s);
-        } catch (e) {
-            return Promise.reject(e);
-        }
-    };
-    // CSSOM-5 срез 3 (BUG-897): `insertRule`/`deleteRule` on a constructed
-    // sheet. The native does the actual parse+splice (`lumen_css_parser::
-    // Stylesheet::insert_rule`/`delete_rule`) and reports failure as a
-    // negative sentinel (see `constructed_stylesheets.rs`'s doc comment);
-    // this wrapper only turns that into the DOMException CSSOM §6.5 names.
-    s.insertRule = function(ruleText, index) {
-        index = (index === undefined) ? 0 : (index >>> 0);
-        var result = _lumen_constructed_insert_rule(idx, String(ruleText), index);
-        if (result === -2) {
-            throw new DOMException(
-                "Failed to execute 'insertRule' on 'CSSStyleSheet': the supplied text is not a valid rule.",
-                'SyntaxError');
-        }
-        if (result < 0) {
-            throw new DOMException(
-                "Failed to execute 'insertRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
-                'IndexSizeError');
-        }
-        return result;
-    };
-    s.deleteRule = function(index) {
-        index = index >>> 0;
-        if (_lumen_constructed_delete_rule(idx, index) < 0) {
-            throw new DOMException(
-                "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index provided is larger than the maximum index.",
-                'IndexSizeError');
-        }
-    };
-    return s;
+    return _lumen_css_sheet_for(_lumen_css_backend(true, idx));
 }
 
 // Sentinel scope key for `document.adoptedStyleSheets`

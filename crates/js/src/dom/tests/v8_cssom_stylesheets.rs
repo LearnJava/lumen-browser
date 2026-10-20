@@ -381,19 +381,22 @@ fn top_level_rule_insert_rule_accepts_an_apply_statement() {
 }
 
 #[test]
-fn top_level_rule_insert_rule_rejects_a_non_apply_rule_text() {
+fn top_level_rule_insert_rule_adds_a_nested_rule_and_rejects_garbage() {
     let (doc, style_nid) = make_doc_with_style();
     let rt = v8_runtime_with_dom(doc);
     rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "p { color: red; }"));
     let r = rt.eval(
         "(function() {
+            var rule = document.styleSheets[0].cssRules[0];
+            rule.insertRule('b { color: red; }', 0);
+            var nested = rule.cssRules.length + ':' + rule.cssRules[0].cssText + ':' + (rule.cssRules[0].parentRule === rule);
             try {
-                document.styleSheets[0].cssRules[0].insertRule('b { color: red; }', 0);
-                return 'no-throw';
+                rule.insertRule('% {}', 0);
+                return nested + ':no-throw';
             } catch (e) {
-                return e.name;
+                return nested + ':' + e.name;
             }
         })()",
     ).unwrap();
-    assert_eq!(r, lumen_core::JsValue::String("SyntaxError".to_string()));
+    assert_eq!(r, lumen_core::JsValue::String("1:b { color: red; }:true:SyntaxError".to_string()));
 }

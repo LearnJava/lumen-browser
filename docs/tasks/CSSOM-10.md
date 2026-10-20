@@ -223,3 +223,25 @@ insert/delete — по ВИДИМЫМ детям. `Mixin` — видимый у�
 3. Юнит-тест на `patched_cascade` с `TreeEdit` (замена диапазона, пустой `<style>` с `@layer`), `cargo test -p lumen-css-parser`, `cargo test -p lumen-js --features v8-backend cssom`, clippy.
 4. WPT: `css-cascade/layer-cssom-order-reverse.html`, `css-nesting/cssom.html`, `css-cascade/scope-cssom.html` (+ `nested-declarations-cssom*`, `serialize-group-rules-with-decls`, `layer-rules-cssom`, `idlharness`).
 5. Доки (`CAPABILITIES.md`, `ROADMAP.md` CSSOM-10 → done, `BUGS.md`/`BUGS-FIXED.md` BUG-1455, `subsystems/css-parser.md`/`js.md`), `/lumen-task-finish`. Сборка: `cargo check -p lumen-js --features v8-backend` работает в основном каталоге (холодный слот не нужен).
+
+## Сессия 6 — что сделано и что дальше
+
+**Сделано (WIP).** Шаг 4-JS: `web_api_shim_mid.js` (~12090–13000) переписан на дерево — бэкенд листа `be` (`_lumen_css_backend`),
+кэш обёрток `Map<id, WeakRef>` (`_lumen_css_wrap`), иерархия `CSSRule → CSSGroupingRule → CSSConditionRule/…`, `CSSStyleRule extends
+CSSGroupingRule`, все at-правила (`CSSLayer*`, `CSSScopeRule`, `CSSImportRule`, `CSSNamespaceRule`, `CSSKeyframes*`, `CSSPropertyRule`, …),
+методы листа на `CSSStyleSheet.prototype` (общие для владельческих и конструируемых), `_lumen_style_get/set_parsed` с веткой `loc.tree`.
+`mixin`-нативы оставлены (`CSSMixinRule.cssRules` только для владельческих листов). Новый файл тестов
+`crates/js/src/dom/tests/v8_cssom10_tree.rs` (7 тестов; один ожидал неверную строку — исправлено, перепроверить).
+`cargo test -p lumen-js --features v8-backend --lib cssom` — зелёный кроме правленого теста `v8_cssom_stylesheets::
+top_level_rule_insert_rule_adds_a_nested_rule_and_rejects_garbage` (теперь вложенное правило вставляется).
+
+**Дальше.**
+1. Перегнать `cargo test -p lumen-js --features v8-backend --lib cssom` и `--test all bug518` (интеграционный `crates/js/tests/cases/bug518_mixin_cssom.rs`,
+   `mixin-invalidation`), `v8_bug493`, `v8_bug1130`; чинить ожидания осознанно (по Chrome/WPT).
+2. Юнит-тест на `patched_cascade` с `TreeEdit` (замена диапазона, пустой `<style>` с `@layer`).
+3. WPT: `css-cascade/layer-cssom-order-reverse.html`, `css-nesting/cssom.html`, `css-cascade/scope-cssom.html` (+ `nested-declarations-cssom*`,
+   `serialize-group-rules-with-decls`, `layer-rules-cssom`, `idlharness`, `cssom/*`). Не забыть: `.style` на `CSSStyleRule` — PutForwards (сеттер есть).
+4. `cargo clippy -p lumen-css-parser -p lumen-js --features lumen-js/v8-backend --all-targets -- -D warnings`; доки (`CAPABILITIES.md`, `ROADMAP.md`
+   CSSOM-10 → done, `BUGS.md`/`BUGS-FIXED.md` BUG-1455, `subsystems/css-parser.md`/`js.md`), `/lumen-task-finish`. Сборка идёт в основном каталоге; sccache
+   иногда падает «io error» — повторить.
+
