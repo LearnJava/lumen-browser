@@ -1515,3 +1515,33 @@ fn block_child_margin_does_not_join_scrollable_overflow() {
     );
     assert!((w - 300.0).abs() < 0.5, "scrollWidth {w}");
 }
+
+// ─── BUG-1415: scrollable overflow of a grid whose tracks are shifted by content alignment ───
+
+/// `scrollWidth`/`scrollHeight` of `grid-content-alignment-overflow-002.html`: a 60 × 300
+/// (or 200 × 150) border-box grid with 30px padding, `overflow: hidden`, tracks 50px 50px / 100px 100px.
+fn grid_align_scroll(content: &str, w: u32, h: u32) -> (f32, f32) {
+    scroll_size(
+        &format!(
+            "body {{ margin: 0 }} #g {{ display: grid; padding: 30px; box-sizing: border-box; overflow: hidden; \
+             grid-template-columns: 50px 50px; grid-template-rows: 100px 100px; \
+             width: {w}px; height: {h}px; align-content: {content}; justify-content: {content}; }}"
+        ),
+        "<div id=\"g\"><div></div><div></div><div></div><div></div></div>",
+    )
+}
+
+#[test]
+fn grid_center_overflow_keeps_end_padding_after_the_tracks() {
+    assert_eq!(grid_align_scroll("center", 60, 300).0, 110.0);
+    assert_eq!(grid_align_scroll("center", 200, 150).1, 205.0);
+    assert_eq!(grid_align_scroll("safe center", 60, 300).0, 160.0);
+    assert_eq!(grid_align_scroll("safe center", 200, 150).1, 260.0);
+}
+
+#[test]
+fn grid_end_overflow_scroll_extent() {
+    assert_eq!(grid_align_scroll("end", 60, 300).0, 60.0);
+    assert_eq!(grid_align_scroll("safe end", 60, 300).0, 160.0);
+    assert_eq!(grid_align_scroll("safe end", 200, 150).1, 260.0);
+}

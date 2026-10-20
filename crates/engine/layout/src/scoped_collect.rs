@@ -1073,8 +1073,9 @@ mod tests {
             let walk_all = plan.scroll_containers();
             assert_eq!(key(&cached), key(&walk_all), "step {step}");
             let pc = cached.iter().find(|c| c.node == p).expect("p is a scroll container");
-            // 20 px more: the box in `b` sticks out to the left of the padding box.
-            let want = if step < 2 { 320.0 } else { 520.0 };
+            // The box in `b` sticks out to the left of the padding box: that start side is
+            // unreachable, so it adds nothing to the scroll width (BUG-1415).
+            let want = if step < 2 { 300.0 } else { 500.0 };
             assert_eq!(pc.scroll_width, want, "step {step}");
             match step {
                 // Nothing cached yet: `a1`, the box inside `b` (their parents are re-cascaded with

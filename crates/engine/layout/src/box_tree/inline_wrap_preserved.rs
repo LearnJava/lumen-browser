@@ -41,7 +41,6 @@ fn is_preserved_space(c: char) -> bool {
 /// and `text.len()`), in ascending order.
 fn break_offsets(text: &str, p: &PreservedWrap<'_>, style: &ComputedStyle) -> Vec<usize> {
     let break_spaces = p.white_space == crate::style::WhiteSpace::BreakSpaces;
-    let lb_allowed = p.word_break != WordBreak::KeepAll || p.line_break == LineBreak::Anywhere;
     let ow_chars = p.word_break == WordBreak::BreakWord
         || matches!(p.overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere);
     let ls = style.letter_spacing;
@@ -72,11 +71,7 @@ fn break_offsets(text: &str, p: &PreservedWrap<'_>, style: &ComputedStyle) -> Ve
             // CSS Text L3 §5.1: a break between any two characters.
             word.char_indices().skip(1).map(|(o, _)| o).collect()
         } else {
-            let mut opps = if lb_allowed {
-                crate::line_break::break_opportunities(word, p.line_break)
-            } else {
-                Vec::new()
-            };
+            let mut opps = crate::line_break::break_opportunities(word, p.line_break, p.word_break);
             if ow_chars && opps.is_empty() {
                 // CSS Text L3 §8.1: a word wider than the line breaks anywhere —
                 // the other opportunities are tried first, so only an unbroken
