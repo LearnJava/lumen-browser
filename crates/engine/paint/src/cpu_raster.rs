@@ -3847,6 +3847,46 @@ mod tests {
         assert_eq!(px(&img, 30, 30), (255, 255, 255, 255));
     }
 
+    /// BUG-1427 — a one-stop gradient reaches the backend as two equal stops
+    /// (`linear-gradient(green)`); it must paint solid, also when repeating
+    /// (zero period) and for the radial shape.
+    #[test]
+    fn single_colour_gradients_paint_solid() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let stop = |position| GradientStop {
+            color: green,
+            color_space: lumen_layout::ColorSpace::Srgb,
+            position,
+        };
+        for (stops, repeating) in [
+            (vec![stop(None), stop(None)], false),
+            (vec![stop(Some(lumen_layout::Length::Percent(50.0))), stop(Some(lumen_layout::Length::Percent(50.0)))], false),
+            (vec![stop(Some(lumen_layout::Length::Px(50.0))), stop(Some(lumen_layout::Length::Px(50.0)))], true),
+        ] {
+            let cmds = vec![
+                DisplayCommand::DrawLinearGradient {
+                    rect: rect(0.0, 0.0, 40.0, 10.0),
+                    angle_deg: 180.0,
+                    stops: stops.clone(),
+                    repeating,
+                },
+                DisplayCommand::DrawRadialGradient {
+                    rect: rect(0.0, 20.0, 40.0, 10.0),
+                    center_x_pct: 0.5,
+                    center_y_pct: 0.5,
+                    radius_x: 30.0,
+                    radius_y: 30.0,
+                    stops,
+                    repeating,
+                },
+            ];
+            let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+            for (x, y) in [(5, 5), (35, 8), (5, 25), (35, 28)] {
+                assert_eq!(px(&img, x, y), (0, 128, 0, 255), "({x},{y}) repeating={repeating}");
+            }
+        }
+    }
+
     /// `DrawSvgPath` fills the tessellated triangle interior with the solid
     /// colour and leaves the background white outside it.
     #[test]

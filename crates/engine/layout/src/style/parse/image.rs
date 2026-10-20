@@ -825,16 +825,26 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
         }
     };
 
+    // CSS Images L3 §3.4.3 — a list with a single colour stop paints that colour
+    // everywhere. The renderers need a ramp of two stops, so the stop is doubled
+    // (conic backends already accept one stop and are left untouched).
+    let solid_if_single = |mut stops: Vec<GradientStop>| -> Vec<GradientStop> {
+        if let [only] = stops.as_slice() {
+            stops.push(only.clone());
+        }
+        stops
+    };
+
     if is_linear {
         // The first segment may be an angle / "to <side>" direction.
         let (angle_deg, corner) = parse_linear_gradient_angle(&clean_first);
-        let stops = interp(parse_gradient_stops(s));
+        let stops = interp(solid_if_single(parse_gradient_stops(s)));
         ParsedGradient::Linear { angle_deg, corner, stops, repeating: repeating_linear }
     } else if is_radial {
         // Radial: look for `[<shape> || <size>]? [at <x> <y>]?` in the first segment.
         let (cx, cy) = parse_radial_gradient_center(&clean_first);
         let (shape, size) = parse_radial_gradient_shape_size(&clean_first);
-        let stops = interp(parse_gradient_stops(s));
+        let stops = interp(solid_if_single(parse_gradient_stops(s)));
         ParsedGradient::Radial {
             center_x_pct: cx,
             center_y_pct: cy,

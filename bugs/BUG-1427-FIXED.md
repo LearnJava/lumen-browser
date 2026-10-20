@@ -1,6 +1,6 @@
 # BUG-1427 — Градиент с одной цветовой остановкой (`linear-gradient(green)`, `radial-gradient(green)`, `repeating-linear-gradient(green)`) не рисуется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout/paint (разбор градиентов с одной остановкой)
 
@@ -31,3 +31,15 @@ WPT-RUN-14 срез 19: `gradient-single-stop-001…005.html` — FAIL (`thick`)
 ## Как проверить
 
 `css/css-images/gradient/gradient-single-stop-001.html` … `005.html`.
+
+## Исправление
+
+Разбор градиента отдавал один `GradientStop`, а бэкенды (femtovg `resolved.len() < 2`, tiny-skia `skia_gradient_stops`) отказываются рисовать рампу короче двух остановок — слой молча пропускался. Конический работал, потому что его пути одну остановку принимают.
+
+`parse_background_gradient` ([`image.rs`](../crates/engine/layout/src/style/parse/image.rs)) для линейного и радиального (в том числе `repeating-*`) дублирует единственную остановку (CSS Images 3 §3.4.3: одна остановка = заливка её цветом). Дубликат с одинаковой позицией даёт нулевой период у `repeating-*` — все три бэкенда (CPU, femtovg, wgpu) в этом случае рисуют сплошной цвет последней остановки. Дублирование — в одном месте, поэтому покрыты и `mask-image`, и `shape-outside`.
+
+Тесты: `gradient_single_stop_is_solid_two_stops` (layout), `single_colour_gradients_paint_solid` (cpu_raster).
+
+## Остаток
+
+`getComputedStyle().backgroundImage` для градиентов по-прежнему не сериализуется (вне этой заявки, отдельная область CSSOM).
