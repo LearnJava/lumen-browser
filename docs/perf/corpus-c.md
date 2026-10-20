@@ -27,7 +27,7 @@
 - **Остальные 300** — ротацией: сайт с номером `i` идёт в ночь, когда `date.toordinal() % 7 == i % 7`, то есть ровно раз за любые 7 ночей (`plan --coverage` проверяет 500/500).
 - `run --point ru|abroad` запускает план через `perf_audit.py --mode compat`. Точка только подписывает прогон: **машина и IP — решение владельца (COMPAT-BIZ)**. Живой прогон требует окна на переднем плане (`docs/ci-offload.md` §10).
 
-Первая база CPR-RU / CPR-Global с двух точек — COMPAT-CORPUS-2-BASE.
+Первая база CPR-RU / CPR-Global с двух точек — COMPAT-CORPUS-2-BASE (снята 2026-10-20, [журнал](journal.md)): abroad 5,9 % (RU 11,8 %, global 2,0 %), ru 15,2 % (RU 12,8 %, global 17,2 %). CPR-Global точки ru завышен симметричной гео-блокировкой — для global брать точку abroad.
 
 ## Пересборка
 

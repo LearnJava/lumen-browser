@@ -379,8 +379,9 @@ def chrome_exception_text(params: dict) -> str:
 class ChromeRef:
     """Один процесс Chrome for Testing на прогон; на сайт — свой изолированный контекст."""
 
-    def __init__(self, binary: str, headless: bool, work: Path) -> None:
+    def __init__(self, binary: str, headless: bool, work: Path, extra_args: list[str] | None = None) -> None:
         self.binary, self.headless, self.work = binary, headless, work
+        self.extra_args = extra_args or []
         self.proc = None
         self.port = 0
         self.browser = None
@@ -394,7 +395,7 @@ class ChromeRef:
             self.port = free_port()
             cmd = [self.binary, f"--remote-debugging-port={self.port}", f"--user-data-dir={profile}",
                    "--no-first-run", "--no-default-browser-check", "--disable-backgrounding-occluded-windows",
-                   "--disable-renderer-backgrounding", "--lang=ru-RU", "about:blank"]
+                   "--disable-renderer-backgrounding", "--lang=ru-RU", *self.extra_args, "about:blank"]
             cmd.insert(1, "--headless=new" if self.headless else "--start-maximized")
             self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
@@ -747,6 +748,8 @@ def main() -> None:
     ap.add_argument("--viewport-h", type=int, default=900)
     ap.add_argument("--no-rerun", action="store_true", help="не перезапускать при расхождении")
     ap.add_argument("--restart-every", type=int, default=15, help="перезапуск окна Lumen каждые N сайтов")
+    ap.add_argument("--chrome-arg", action="append", default=[], metavar="FLAG",
+                    help="доп. флаг для Chrome (напр. --no-proxy-server: точка ru мимо системного прокси VPN)")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VAL", help="доп. окружение для lumen")
     args = ap.parse_args()
     for kv in args.env:
@@ -786,7 +789,7 @@ def main() -> None:
             "px_threshold": args.px_threshold, "px_tolerance": args.px_tolerance, "ax_threshold": args.ax_threshold}
     print(f"[compat-crawl] {len(sites)} сайтов, уже готово {len(done)}, вывод {out_dir}", flush=True)
 
-    ref = ChromeRef(chrome_bin, args.headless, out_dir)
+    ref = ChromeRef(chrome_bin, args.headless, out_dir, args.chrome_arg)
     br = pa.LiveBrowser(exe, out_dir, args.timeout)
     try:
         for i, (slug, url) in enumerate(sites, 1):

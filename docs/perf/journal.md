@@ -817,6 +817,52 @@ Akamai-reference 5 (все global), «blocked-generic» 2 (RU 1, EN 1), «unsupp
 **Заведённые баги:** нет — наблюдения. Сырьё (`results.jsonl`, 3 МБ, кадры) не коммитится (`.tmp/compat-crawl-abroad/`).
 **Остаток задачи:** точка `ru` — отдельный запуск без VPN (`python scripts/compat_crawl.py --corpus … --out .tmp/compat-crawl-ru`), после него — таблица разрыва ru/abroad.
 
+## 2026-10-20 (2) — COMPAT-CORPUS-2-BASE — база CPR корпуса C, точка ru — Windows 10, маршрут home-direct (МТС, Санкт-Петербург, AS8359)
+
+Те же 500 главных страниц и те же флаги, что у точки abroad: `python scripts/compat_crawl.py --corpus <главные страницы 500 сайтов корпуса C> --env LUMEN_NO_ADBLOCK=1 --no-rerun --timeout 40`,
+`dev-release` от `8778cac44` (тот же `lumen.exe`, не пересобирался), Chrome for Testing 153.0.8010.12, живое окно, вьюпорт по окну Lumen. Выходной IP — `81.201.16.3` (RU, резидентный).
+**Системный прокси VPN (`127.0.0.1:12334`) остался включён в реестре** — он не трогался: Chrome запускался с `--no-proxy-server` (новый флаг краулера `--chrome-arg`), процесс — без `HTTP(S)_PROXY`;
+Lumen ходит напрямую, пока нет `proxy =` в `data/fingerprint.toml` (его нет). Проверка до прогона: `api.ipify.org` через оба плеча даёт 11 знаков (`81.201.16.3`), у точки abroad было бы 13.
+Свод — [runs/2026-10-20-compat-crawl-corpus-c-ru-summary.md](runs/2026-10-20-compat-crawl-corpus-c-ru-summary.md).
+
+| сегмент | сайтов | посчитано | **CPR** | status | walls | exceptions | pixels | a11y |
+|---|---|---|---|---|---|---|---|---|
+| RU (CPR-RU) | 200 | 195 | **12,8 %** (25) | 138 | 105 | 175 | 96 | 32 |
+| global (CPR-Global) | 300 | 239 | **17,2 %** (41) | 123 | 125 | 204 | 90 | 55 |
+| всего | 500 | 434 | **15,2 %** (66) | 261 | 230 | 379 | 186 | 87 |
+
+Эталон не открыл **66** сайтов (61 global + 5 RU: aniwaves, imgsrc, lenreg, cikrf, leroymerlin), 55 из 66 — `TimeoutError` Chrome при навигации (среди них youtube, instagram, linkedin, x, discord, medium,
+bbc, nytimes; причина — вероятно, недоступность с РФ-IP, не проверялась): они вне CPR, поэтому **CPR-Global точки ru нельзя читать как «стало лучше»**.
+**Статусы Lumen (посчитанные):** RU — OK 80, DEGRADED 54, TIMEOUT 23, HUNG 12, BROKEN_RENDER 10, NET_FAIL 8, SITE_REFUSED 6, DEAD 2; global — TIMEOUT 65, OK 41, DEGRADED 35, SITE_REFUSED 34, NET_FAIL 32,
+BROKEN_RENDER 18, HUNG 14. Флапы 0 (повторов не было, `--no-rerun`).
+
+**Разрыв ru ↔ abroad (одни и те же 500 сайтов, одна сборка Lumen):**
+
+| | abroad (VPN, Таллин) | ru (резидентный IP РФ) |
+|---|---|---|
+| CPR-RU | 11,8 % (23 из 195) | 12,8 % (25 из 195); на пересечении 194 сайтов 11,9 % против 12,4 % |
+| CPR-Global | 2,0 % (6 из 299) | 17,2 % (41 из 239); на пересечении 239 сайтов 2,5 % против 17,2 % |
+| эталон не открыл | 6 | 66 (61 global) |
+| лишние стены `blank:near-empty` RU / global | 77 / 162 | 90 / 79 |
+| лишние стены `net-error` global | 37 | 31 |
+| антибот-стены Lumen сверх Chrome (Cloudflare / DataDome / Akamai), global | 4 / 4 / 5 | 2 / 1 / 1 |
+| TIMEOUT Lumen, RU / global (из всех 200 / 300) | 21 / 107 | 24 / 105 |
+
+**Что показал разрыв:**
+- **CPR-RU от точки не зависит** (11,8 % → 12,8 %, на общих сайтах 11,9 % → 12,4 %); 4 сайта в паритете только на ru, 3 только на abroad, 65 из 200 меняют статус Lumen между проходами
+  (OK↔DEGRADED 33, HUNG→DEGRADED 12) — это разброс между двумя одиночными проходами, он порядка ±1 п. п. на CPR-RU.
+- **CPR-Global 2,0 % → 17,2 % — артефакт симметричной гео-блокировки, а не улучшение Lumen:** 35 из 41 паритетных global-сайтов точки ru не были паритетными на abroad (обратного нет), и 22 из них — `SITE_REFUSED`:
+  Chrome и Lumen получают одну и ту же страницу отказа (netflix 403/403, chatgpt 403/403, intuit 403/403; google 185 против 225 знаков текста). Для global брать **точку abroad**, для RU — любую.
+- **Гипотеза про TIMEOUT в global не подтверждена:** маршрут VPN не причина — 105 из 300 на прямом маршруте против 107 из 300 через VPN. Причина на стороне Lumen (загрузка не доходит до готовности за 40 с у крупных
+  зарубежных сайтов), нужен срез по 3–4 сайтам (например cnn-com, washingtonpost-com, samsung-com, zoom-us) — отдельной задачей, баг не заводился.
+- Антибот-стены (Cloudflare/DataDome/Akamai) с RU-IP у Lumen сверх Chrome реже (4 против 13), но у эталона на этом IP 61 сайт вообще не открылся, поэтому сравнение по ним нечестное.
+- `blank:near-empty` — главная лишняя стена на обеих точках (RU 77–90 сайтов, т.е. каждый второй RU-сайт), та же причина, что в COMPAT-CORPUS-1-BASE: страница отрисована почти пустой.
+
+**Отступления от протокола и что с ними делать:** (1) только главные страницы, без внутренних; (2) `--no-rerun` на всех 500 (на abroad первые 7 перепроверялись), **порог флапов ≤5 % не проверен** — CPR по одному проходу;
+(3) прогон прерывался один раз на 494 сайте (сессия закрыта, процессы Chrome/Lumen остались сиротами; убиты, `--resume`, записи не потеряны); (4) на пересечении 66 сайтов, где эталон не открылся на ru, CPR не
+определён — как и 6 сайтов на abroad.
+**Заведённые баги:** нет — наблюдения. Сырьё (`results.jsonl`, кадры) не коммитится (`.tmp/compat-crawl-ru/`).
+
 ## 2026-10-19 — COMPAT-CORPUS-1-BASE — первый живой прогон краулера паритета `compat_crawl.py` — Windows 10, маршрут home-direct
 
 `python scripts/compat_crawl.py` на `corpus.txt` + `corpus-top100-foreign.txt` (112 уникальных сайтов), `target/dev-release/lumen.exe` от `main` 76e0522b2
