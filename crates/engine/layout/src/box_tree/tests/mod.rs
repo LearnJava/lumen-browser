@@ -513,6 +513,7 @@ mod baseline_containers;
 mod grid_baseline2;
 mod grid_intrinsic_ratio;
 mod aspect_ratio_from_height;
+mod grid_stretch_keeps_padding;
 mod grid_replaced_stretch;
 mod line_clamp_flow;
 mod webkit_box_legacy;
