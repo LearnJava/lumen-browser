@@ -245,3 +245,20 @@ fn parent_lookup() {
     assert_eq!(t.parent_of(b), Some(Some(a)));
     assert_eq!(t.parent_of(u32::MAX), None);
 }
+
+#[test]
+fn selector_text_setter_ignores_invalid_selectors() {
+    for bad in ["", " ", "!!", "123", "-", "$", ":", "::", ":::", "::gibberish", ":gibberish", ".", "#", "[]", "[", "()", "(", "{}", "{"] {
+        let mut t = tree(".style0 { color: red }");
+        let id = t.rules[0].id;
+        assert_eq!(t.set_prelude(id, bad), Ok(false), "{bad:?}");
+        assert_eq!(texts(&t), [".style0 { color: red; }"], "{bad:?}");
+    }
+}
+
+#[test]
+fn constructed_replace_drops_imports_but_keeps_other_rules() {
+    let mut sheet = crate::parse("@import url('a.css'); .x { color: blue } @import 'b.css';");
+    sheet.cssom_drop_imports();
+    assert_eq!(texts(sheet.cssom_tree()), [".x { color: blue; }"]);
+}

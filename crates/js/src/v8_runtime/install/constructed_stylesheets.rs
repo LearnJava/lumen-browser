@@ -168,7 +168,9 @@ pub(crate) fn install_constructed_stylesheets(
         let s = Arc::clone(&sheets);
         reg!(scope, ctx, store, "_lumen_constructed_replace_sync", move |idx: u32, text: String| {
             if let Some(entry) = s.lock().unwrap_or_else(|e| e.into_inner()).get_mut(idx as usize) {
-                entry.sheet = Arc::new(lumen_css_parser::parse(&text));
+                let mut sheet = lumen_css_parser::parse(&text);
+                sheet.cssom_drop_imports();
+                entry.sheet = Arc::new(sheet);
             }
         });
     }

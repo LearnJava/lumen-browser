@@ -68,6 +68,21 @@ impl Stylesheet {
         outcome
     }
 
+    /// `CSSStyleSheet.replace()/replaceSync()` (CSSOM §4.6): `@import` rules of the new text
+    /// are parsed but dropped — a constructed sheet never loads anything.
+    pub fn cssom_drop_imports(&mut self) {
+        let imports: Vec<usize> = self
+            .cssom_tree()
+            .visible_children_of(None)
+            .map(|rules| {
+                rules.iter().enumerate().filter(|(_, r)| r.kind == RuleKind::Import).map(|(i, _)| i).collect()
+            })
+            .unwrap_or_default();
+        for index in imports.into_iter().rev() {
+            let _ = self.cssom_delete_rule(None, index);
+        }
+    }
+
     /// Сеттер прелюдии (`selectorText`, `conditionText`, `name`, …).
     /// `Ok(false)` — текст невалиден и по спецификации игнорируется.
     pub fn cssom_set_prelude(&mut self, id: u32, text: &str) -> Result<bool, CssomTreeError> {

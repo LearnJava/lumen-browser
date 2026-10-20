@@ -2093,6 +2093,11 @@ impl<'a> Parser<'a> {
         if !is_ident_start(first) && !self.at_escape_start() {
             return None;
         }
+        // CSS Syntax L3 §4.3.9: a lone `-` (or `-` + digit) does not start an ident.
+        let escape_after_dash = self.peek_at(1) == Some('\\') && !matches!(self.peek_at(2), None | Some('\n'));
+        if first == '-' && !matches!(self.peek_at(1), Some(c) if is_ident_start(c)) && !escape_after_dash {
+            return None;
+        }
         let mut s = String::new();
         loop {
             match self.peek() {
