@@ -34,3 +34,32 @@ fn no_auto_margin_stays_at_start() {
     let r = rect_of("left:0;right:0;margin-left:3px");
     assert_eq!(r.x, 3.0, "{r:?}");
 }
+
+// ── BUG-1360: статическая позиция abspos при `direction: rtl` ──
+
+fn rtl_rect_of(css: &str) -> Rect {
+    let doc = lumen_html_parser::parse(r#"<div id="p"><div id="c"></div></div>"#);
+    let sheet = lumen_css_parser::parse(&format!(
+        "body{{margin:0}}#p{{direction:rtl;position:relative;width:200px;height:100px}}#c{{position:absolute;width:20px;height:20px;{css}}}"
+    ));
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    super::find_by_id_all(&root, &doc, "c").expect("нет #c").rect
+}
+
+#[test]
+fn rtl_static_position_is_at_right_edge() {
+    let r = rtl_rect_of("");
+    assert_eq!((r.x, r.y), (180.0, 0.0), "{r:?}");
+}
+
+#[test]
+fn rtl_static_position_respects_margin_right() {
+    let r = rtl_rect_of("margin:0 5px 0 30px");
+    assert_eq!(r.x, 175.0, "{r:?}");
+}
+
+#[test]
+fn rtl_explicit_left_still_wins() {
+    let r = rtl_rect_of("left:10px");
+    assert_eq!(r.x, 10.0, "{r:?}");
+}
