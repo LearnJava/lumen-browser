@@ -1241,13 +1241,17 @@ pub(crate) fn compute_preserve_aspect_ratio_transform(
 /// is 100% of the current viewport), not the target's own viewBox dimensions.
 pub(crate) fn svg_root_own_size(style: &ComputedStyle, view_box: Option<&ViewBox>, viewport: Size) -> Size {
     let em = style.font_size;
+    // Without a viewBox the `%` basis is in user units, and `zoom` made each one `effective_zoom` px.
+    let unit = if view_box.is_none() && style.effective_zoom > 0.0 { style.effective_zoom } else { 1.0 };
     let width = style.width.as_ref()
         .and_then(|l| l.resolve(em, None, viewport))
+        .map(|w| w / unit)
         .or_else(|| view_box.map(|vb| vb.width))
         .unwrap_or(300.0)
         .max(0.0);
     let height = style.height.as_ref()
         .and_then(|l| l.resolve(em, None, viewport))
+        .map(|h| h / unit)
         .or_else(|| view_box.map(|vb| vb.height))
         .unwrap_or(150.0)
         .max(0.0);
@@ -1663,7 +1667,8 @@ pub(crate) fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, av
                 compute_preserve_aspect_ratio_transform(vb, svg_w, svg_h, &preserve_aspect_ratio);
             (sx, sy, b.rect.x + ox_delta, b.rect.y + oy_delta)
         }
-        _ => (1.0, 1.0, b.rect.x, b.rect.y),
+        // No viewBox: a user unit is one CSS px, which `zoom` makes `effective_zoom` device px.
+        _ => (b.style.effective_zoom, b.style.effective_zoom, b.rect.x, b.rect.y),
     };
     let root_transform = SvgTransform::identity();
     lay_out_svg_children_positions(&mut b.children, origin_x, origin_y, scale_x, scale_y, &root_transform);

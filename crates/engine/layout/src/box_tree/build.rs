@@ -920,12 +920,15 @@ fn build_box_inner(
                 if style.width.is_none()
                     && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
                 {
-                    Arc::make_mut(&mut style).width = Some(crate::style::Length::Px(w));
+                    // The attribute is an author length, so `zoom` scales it like `width: Npx`.
+                    let z = style.effective_zoom;
+                    Arc::make_mut(&mut style).width = Some(crate::style::Length::Px(w * z));
                 }
                 if style.height.is_none()
                     && let Some(h) = doc.get(id).get_attr("height").and_then(|v| v.trim().parse::<f32>().ok())
                 {
-                    Arc::make_mut(&mut style).height = Some(crate::style::Length::Px(h));
+                    let z = style.effective_zoom;
+                    Arc::make_mut(&mut style).height = Some(crate::style::Length::Px(h * z));
                 }
                 BoxKind::SvgRoot {
                     view_box: parse_view_box(doc, id),
