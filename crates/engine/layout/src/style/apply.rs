@@ -147,6 +147,14 @@ pub(in crate::style) fn apply_declaration(
     if prop == "all" {
         return;
     }
+    // `zoom` scales these after the cascade (`apply_zoom_to_lengths`), but an `em`
+    // length is baked to px right here against the already-zoomed `font_size` —
+    // resolve it against the unzoomed one so the later multiply applies the factor once.
+    let em_basis = if baked_then_zoomed(prop) && style.effective_zoom > 0.0 {
+        em_basis / style.effective_zoom
+    } else {
+        em_basis
+    };
     if layout::apply_decl_layout(style, prop, val, em_basis, viewport, is_quirks) {
         return;
     }
@@ -177,4 +185,17 @@ pub(in crate::style) fn apply_declaration(
     // Последнее звено цепочки вызывается без `if`: его `false` — это исходный
     // `_ => {}`, то есть «свойство неизвестно, декларация игнорируется».
     motion::apply_decl_motion(style, prop, val, em_basis, viewport, is_quirks);
+}
+
+/// Properties whose lengths are resolved to px at parse time and then multiplied by
+/// the element's `zoom` in `cascade::apply_zoom_to_lengths` (border/outline widths,
+/// shadows, scroll-margin/padding). Logical and image variants are not scaled there.
+fn baked_then_zoomed(prop: &str) -> bool {
+    matches!(
+        prop,
+        "box-shadow" | "border" | "border-width" | "border-top" | "border-right" | "border-bottom" | "border-left"
+            | "border-top-width" | "border-right-width" | "border-bottom-width" | "border-left-width"
+    ) || prop.starts_with("outline")
+        || prop.starts_with("scroll-margin")
+        || prop.starts_with("scroll-padding")
 }

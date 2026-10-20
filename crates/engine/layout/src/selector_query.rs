@@ -1320,6 +1320,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // the *used* value (already zoom-scaled on the real UA too), not the computed
     // one.
     let z = style.effective_zoom;
+    // BUG-1592: radii, shadows, outline, flex-basis, transform offsets etc. are scaled
+    // by `scale_visual_lengths`; report them as if `zoom` were not applied.
+    let unzoomed;
+    let style = if z > 0.0 && (z - 1.0).abs() > f32::EPSILON {
+        let mut u = style.clone();
+        crate::style::scale_visual_lengths(&mut u, 1.0 / z, 1.0, 1.0);
+        unzoomed = u;
+        &unzoomed
+    } else {
+        style
+    };
 
     // ── Display / layout mode ─────────────────────────────────────
     m.insert("display".into(), webkit_box_computed_display(style).into());
