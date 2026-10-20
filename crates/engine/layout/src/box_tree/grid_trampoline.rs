@@ -1128,6 +1128,21 @@ fn post_final_item(
         stretch_w = Some(w);
         stretch_h = stretch_h.or(Some(item.rect.height));
     }
+    // BUG-1385: `lay_out` gives a ratio'd block with a definite height the ratio width; an
+    // explicit `justify-self: stretch` (not `normal`, which is `start` for such an item) fills the area.
+    if !replaced_ratio
+        && !form_ctl
+        && w_auto
+        && (!h_auto || stretch_h.is_some())
+        && matches!(justify, AlignValue::Stretch)
+        && is.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0)
+        && cell_w - m_l - m_r > 0.0
+    {
+        let w = cell_w - m_l - m_r;
+        item.rect.width = w;
+        stretch_w = Some(w);
+        stretch_h = stretch_h.or(Some(item.rect.height));
+    }
     let item_outer_w = item.rect.width + m_l + m_r;
     let justify_safe = if matches!(is.justify_self, AlignValue::Auto) {
         s.content_align_extra.justify_items_safe

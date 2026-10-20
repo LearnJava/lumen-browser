@@ -257,6 +257,37 @@ fn ratio_width(s: &ComputedStyle, h: f32, (aw, ah): (f32, f32), [padding_left, p
     }
 }
 
+/// BUG-1385: the border-box width of a non-replaced block-level box (block, float, flex/grid
+/// container) whose `width` is `auto`, whose `height` is definite and which has a
+/// `aspect-ratio`. Inline-level boxes shrink-to-fit elsewhere; tables size by their columns.
+///
+/// Sizing L4 §5.1: the automatic minimum size (`min-width: auto`) of a box that is not a scroll
+/// container still applies, so wider contents make the box wider than the ratio says.
+#[inline(never)]
+fn block_ratio_width(
+    b: &LayoutBox,
+    s: &ComputedStyle,
+    em: f32,
+    available_height: Option<f32>,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+    paddings: [f32; 2],
+) -> Option<f32> {
+    if s.width.is_some()
+        || !matches!(s.display, Display::Block | Display::FlowRoot | Display::Flex | Display::Grid)
+    {
+        return None;
+    }
+    let (aw, ah) = s.aspect_ratio.filter(|&(aw, ah)| aw > 0.0 && ah > 0.0)?;
+    let h = resolve_block_size(s.height.as_ref()?, em, available_height, viewport)?;
+    let w = ratio_width(s, h, (aw, ah), paddings);
+    if s.min_width.is_none() && matches!(s.overflow_x, Overflow::Visible | Overflow::Clip) {
+        Some(w.max(min_content_outer_width_of_contents(b, measurer, viewport)))
+    } else {
+        Some(w)
+    }
+}
+
 /// BUG-1280: the border-box width of an image whose only width is its natural size
 /// (`build_box` stored it as an intrinsic hint, both axes `auto`), run through the
 /// §10.4 table. Kept out of line: `lay_out` recurses per nesting level, and its frame
@@ -716,6 +747,10 @@ pub(super) fn dispatch_box(
         } else {
             0.0
         }
+    } else if let Some(w) = block_ratio_width(b, &s, em, available_height, viewport, measurer, [padding_left, padding_right]) {
+        // BUG-1385 / Sizing L4 §4.1: a block-level box with a ratio, `width: auto` and a
+        // definite height is as wide as the height run through the ratio — not stretched.
+        w
     } else {
         (available_width - margin_left - margin_right).max(0.0)
     };

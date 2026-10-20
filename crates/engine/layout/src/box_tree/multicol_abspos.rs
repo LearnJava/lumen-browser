@@ -463,16 +463,24 @@ fn place_abs_child(
     // the `avail_w` width-from-insets path above. The gap is a containing-block
     // used value, so the box is laid out with it as a definite height — a
     // percentage height inside it must see that size, not the content-driven one.
-    let stretched_h = (top.is_some() && bottom.is_some() && cs.height.is_none())
+    // BUG-1385 / Sizing L4 §4.1: with a ratio and `height: auto`, the block size follows the
+    // inline size instead of stretching between the block insets — when `width` is authored, or
+    // when the two inline insets stretch it (then the box keeps that stretched width). With an
+    // authored `height` and `width: auto`, the ratio gives the width (`block_ratio_width`).
+    let ratio = cs.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0);
+    let ratio_stretched_w = ratio && left.is_some() && right.is_some() && cs.width.is_none() && cs.height.is_none();
+    let ratio_sized_h = ratio && cs.height.is_none() && (cs.width.is_some() || ratio_stretched_w);
+    let stretched_h = (top.is_some() && bottom.is_some() && cs.height.is_none() && !ratio_sized_h)
         .then(|| (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0));
+    let stretched_w = ratio_stretched_w.then(|| (avail_w - c_ml - c_mr).max(0.0));
     // CSS 2.1 §10.5: a percentage `height` of an out-of-flow box resolves against
     // the padding box of its containing block, whose height is always definite.
-    match stretched_h {
-        Some(h) => lay_out_with_used_size(
+    match (stretched_h, stretched_w) {
+        (None, None) => lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false),
+        (h, w) => lay_out_with_used_size(
             child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false,
-            UsedSizeOverride { height: Some(h), box_sizing: Some(BoxSizing::BorderBox), ..Default::default() },
+            UsedSizeOverride { width: w, height: h, box_sizing: Some(BoxSizing::BorderBox), ..Default::default() },
         ),
-        None => lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false),
     }
     if let Some(h) = stretched_h {
         child.rect.height = h;

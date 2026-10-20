@@ -1639,13 +1639,18 @@ pub(crate) fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, av
     };
 
     // SVG intrinsic size: CSS width/height wins, then viewBox dimensions, then SVG defaults.
-    let svg_w = s.width.as_ref()
-        .and_then(|l| l.resolve(em, Some(cb), viewport))
+    // With a viewBox, an `auto` axis next to a definite one follows the viewBox ratio
+    // (CSS 2.1 §10.3.2 / §10.6.2 for a replaced element with an intrinsic ratio, BUG-1385).
+    let css_w = s.width.as_ref().and_then(|l| l.resolve(em, Some(cb), viewport));
+    let css_h = s.height.as_ref().and_then(|l| super::resolve_block_size(l, em, avail_h, viewport));
+    let vb_ratio = view_box.as_ref().filter(|vb| vb.width > 0.0 && vb.height > 0.0).map(|vb| vb.width / vb.height);
+    let svg_w = css_w
+        .or_else(|| css_h.zip(vb_ratio).map(|(h, r)| h * r))
         .or_else(|| view_box.as_ref().map(|vb| vb.width))
         .unwrap_or(300.0)
         .max(0.0);
-    let svg_h = s.height.as_ref()
-        .and_then(|l| super::resolve_block_size(l, em, avail_h, viewport))
+    let svg_h = css_h
+        .or_else(|| css_w.zip(vb_ratio).map(|(w, r)| w / r))
         .or_else(|| view_box.as_ref().map(|vb| vb.height))
         .unwrap_or(150.0)
         .max(0.0);

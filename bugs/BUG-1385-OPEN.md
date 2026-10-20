@@ -33,3 +33,17 @@ WPT-RUN-14 срез 16: 150 id `css-sizing/aspect-ratio/{block,flex,grid,abspos}
 ## Как проверить
 
 `css/css-sizing/aspect-ratio/block-aspect-ratio-002.html`, `flex-aspect-ratio-005.html`, `grid-aspect-ratio-003.html`, `intrinsic-size-003.html`, `abspos-003.html`, `abspos-004.html`, `css/css-sizing/svg-intrinsic-size-004.html`.
+
+## Срез 1 (2026-10-20, P3)
+
+Исправлено (ветка `p3-bug-1385`, тесты — `box_tree/tests/aspect_ratio_from_height.rs`, 15 штук):
+
+- **block / float / flex- и grid-контейнер**: `width: auto` + определённая высота + соотношение → ширина = высота по соотношению (`layout_dispatch.rs` `block_ratio_width`); автоматический минимум (`min-width: auto` = min-content содержимого, если не scroll container) тоже применяется — и в `lay_out`, и в `max-/min-content` родителя (`intrinsic.rs` `transferred_width`); `invariants.rs` не считает такой бокс «ушедшим из родителя».
+- **grid-элемент**: явный `justify-self: stretch` заполняет область (в т.ч. при `align-self: stretch`), `normal` берёт ширину по соотношению (`grid_trampoline.rs`).
+- **abspos** (`multicol_abspos.rs`): обе inline-инсеты + `height: auto` → ширина растягивается, высота по соотношению; одна block-инсета/заданная `width` → высота по соотношению, а не растяжение; заданная `height` + `width: auto` → ширина по соотношению.
+- **`<svg viewBox>`**: `auto`-ось рядом с заданной берётся по соотношению viewBox (`svg.rs`).
+- **`aspect-ratio: auto <ratio>` / `<ratio> auto`** парсится (`parse_auto_aspect_ratio_value`, поле `ComputedStyle::aspect_ratio_auto`): у бокса без естественной пропорции это обычное соотношение, у картинки/canvas с декодированной пропорцией побеждает естественная.
+
+Замер (`lumen --screenshot`, 800×600, база — `main` на ~03:30 20.10, пиксель-дифф с эталоном): `css/css-sizing/aspect-ratio` identical 110 → 146 из 266, регрессий 0; остальные 190 тестов `css/**`, где встречается `aspect-ratio`: identical +16, регрессий 0; `--dump-display-list` по 187 страницам `graphic_tests`/`samples` байт-в-байт; `dump_golden.py` 12/12.
+
+Остаток (120 thick в `css-sizing/aspect-ratio`): `flex-aspect-ratio-*` (23), `grid-aspect-ratio-*` (20), `replaced-element-*` (26, смежно с BUG-1280), `intrinsic-size-*` (17), `block-aspect-ratio-*` (16, часть — `writing-mode: vertical-*`), `abspos-*` (10), `percentage-resolution-*`, `fieldset-element-*`. Причины по одному не отделены.

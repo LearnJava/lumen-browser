@@ -626,6 +626,10 @@ pub struct ComputedStyle {
     /// Phase 0: parsing — real intrinsic-aspect-ratio enforcement
     /// требует layout-time pass.
     pub aspect_ratio: Option<(f32, f32)>,
+    /// `aspect-ratio: auto <ratio>` / `<ratio> auto`: `aspect_ratio` is only the fallback for a
+    /// box without a natural ratio — a replaced element with one (decoded image, canvas) keeps
+    /// the natural ratio instead.
+    pub aspect_ratio_auto: bool,
     /// Не CSS-свойство — внутренняя пометка `box_tree::build`: `true`, если
     /// `width` заполнен не автором, а presentational-hint'ом из декодированных
     /// intrinsic-пикселей `<img>` (оба `width`/`height` были `auto` — см. ветку
@@ -1492,6 +1496,7 @@ impl ComputedStyle {
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
             aspect_ratio: None,
+            aspect_ratio_auto: false,
             width_is_intrinsic_hint: false,
             height_is_intrinsic_hint: false,
             width_is_ua_default: false,
@@ -1900,6 +1905,7 @@ impl ComputedStyle {
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
             aspect_ratio: None,
+            aspect_ratio_auto: false,
             width_is_intrinsic_hint: false,
             height_is_intrinsic_hint: false,
             width_is_ua_default: false,
