@@ -746,16 +746,19 @@ fn build_box_inner(
                 let definite = |l: &Option<Length>, hint: bool| {
                     !hint && l.as_ref().is_some_and(|l| l.resolve(em, None, viewport).is_some())
                 };
+                // CSS Viewport L1 §5: the bitmap size is an author length, so `zoom` scales the
+                // box (`zoom: 2` on a 300×150 canvas is 600×300 CSS px); the bitmap itself does not.
+                let zoom = style.effective_zoom;
                 let width_authored = definite(&style.width, style.width_is_intrinsic_hint);
                 let height_authored = definite(&style.height, style.height_is_intrinsic_hint);
                 if style.width.is_none() && !height_authored {
                     let st = Arc::make_mut(&mut style);
-                    st.width = Some(Length::Px(cw as f32 + fill_extra_w));
+                    st.width = Some(Length::Px(cw as f32 * zoom + fill_extra_w));
                     st.width_is_intrinsic_hint = true;
                 }
                 if style.height.is_none() && !width_authored {
                     let st = Arc::make_mut(&mut style);
-                    st.height = Some(Length::Px(ch as f32 + fill_extra_h));
+                    st.height = Some(Length::Px(ch as f32 * zoom + fill_extra_h));
                     st.height_is_intrinsic_hint = true;
                 }
                 if style.aspect_ratio.is_none() && cw > 0 && ch > 0 {

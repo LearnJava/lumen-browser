@@ -829,16 +829,43 @@ use super::*;
         assert!((s.letter_spacing - 10.0).abs() < 0.01, "{}", s.letter_spacing);
     }
 
-    /// An `inherit`ed value comes from the parent, already zoomed.
+    /// An `inherit`ed value comes from the parent, which already carries the ancestors' zoom;
+    /// the element's own `zoom` still applies on top (CSS Viewport L1 §5: the same `3px` is used
+    /// at every element's effective zoom), so an ancestor's factor is not applied twice.
     #[test]
-    fn zoom_explicit_inherit_is_not_scaled() {
+    fn zoom_explicit_inherit_takes_only_the_own_factor() {
         let doc = lumen_html_parser::parse("<div style=\"letter-spacing: 3px\"><p style=\"zoom: 2; letter-spacing: inherit\"></p></div>");
         let sheet = lumen_css_parser::parse("");
         let size = Size::new(800.0, 600.0);
         let div = doc.get(doc.body().unwrap()).children[0];
         let d = compute_style(&doc, div, &sheet, &ComputedStyle::root(), size, false);
         let p = compute_style(&doc, doc.get(div).children[0], &sheet, &d, size, false);
-        assert_eq!(p.letter_spacing, 3.0);
+        assert_eq!(p.letter_spacing, 6.0);
+        assert_eq!(crate::selector_query::computed_style_to_map(&p)["letter-spacing"], "3px");
+    }
+
+    /// WPT `length-implicit-and-explicit-inheritance.html`: a `word-spacing` set on a zoomed
+    /// parent and inherited (implicitly or by keyword) by a deeper zoomed child reports the
+    /// same value at both levels, and is drawn at the child's effective zoom.
+    #[test]
+    fn zoom_inherited_length_reports_the_same_value_at_every_depth() {
+        for child in ["", "word-spacing: inherit", "word-spacing: unset"] {
+            let doc = lumen_html_parser::parse(&format!(
+                "<div style=\"zoom: 2\"><div style=\"zoom: 2; word-spacing: 100px\"><div style=\"zoom: 2; {child}\"></div></div></div>"
+            ));
+            let sheet = lumen_css_parser::parse("");
+            let size = Size::new(800.0, 600.0);
+            let a = doc.get(doc.body().unwrap()).children[0];
+            let a_style = compute_style(&doc, a, &sheet, &ComputedStyle::root(), size, false);
+            let b = doc.get(a).children[0];
+            let b_style = compute_style(&doc, b, &sheet, &a_style, size, false);
+            let c_style = compute_style(&doc, doc.get(b).children[0], &sheet, &b_style, size, false);
+            assert_eq!(b_style.word_spacing, 400.0, "{child}");
+            assert_eq!(c_style.word_spacing, 800.0, "{child}");
+            for st in [&b_style, &c_style] {
+                assert_eq!(crate::selector_query::computed_style_to_map(st)["word-spacing"], "100px", "{child}");
+            }
+        }
     }
 
     /// An `em` outline width is baked to px: it must meet the zoom factor once, not twice

@@ -197,6 +197,15 @@ fn bug1280_canvas_without_css_keeps_bitmap_size() {
     assert_eq!(canvas_box(r#"<canvas width="30" height="15"></canvas>"#, ""), (30.0, 15.0));
 }
 
+/// BUG-1592: `zoom` scales the bitmap-size intrinsic box (300×100 → 600×200 under `zoom: 2`),
+/// and a CSS size the author gave wins over it as before.
+#[test]
+fn canvas_intrinsic_size_follows_zoom() {
+    let html = r#"<canvas width="300" height="100"></canvas>"#;
+    assert_eq!(canvas_box(html, "canvas { zoom: 2 }"), (600.0, 200.0));
+    assert_eq!(canvas_box(html, "canvas { zoom: 2; width: 100px }"), (200.0, 66.666664));
+}
+
 // ── BUG-736: a replaced flex item must size via its aspect ratio ──────────
 
 /// Row flex container with a definite cross size (`height`): the `<img>`'s

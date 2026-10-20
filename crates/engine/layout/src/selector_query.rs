@@ -1493,6 +1493,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         if h == v { px_str(h) } else { format!("{} {}", px_str(h), px_str(v)) }
     });
     m.insert("opacity".into(), opacity_to_css(style.opacity));
+    // CSS Viewport L1 §5: Blink reports the compounded factor, which is also what
+    // `Element.currentCSSZoom` (CSSOM View) answers.
+    m.insert("zoom".into(), opacity_to_css(style.effective_zoom));
 
     // ── Typography ────────────────────────────────────────────────
     m.insert("font-size".into(), px_str(style.font_size / z));

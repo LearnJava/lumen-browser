@@ -178,7 +178,11 @@ fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32, rem_k: f32, root_k: f32) 
 /// value whose correct factor depends on whether the element specified it (see
 /// the call site).
 fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: f32, declared: ZoomDeclared) {
-    if (z - 1.0).abs() < f32::EPSILON && (rem_k - 1.0).abs() < f32::EPSILON && (root_k - 1.0).abs() < f32::EPSILON {
+    if (z - 1.0).abs() < f32::EPSILON
+        && (rem_k - 1.0).abs() < f32::EPSILON
+        && (root_k - 1.0).abs() < f32::EPSILON
+        && (declared.own - 1.0).abs() < f32::EPSILON
+    {
         return;
     }
     for len in [
@@ -227,8 +231,12 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: 
 /// Which of the inherited length properties `scale_inherited_lengths` touches were set
 /// by a winning declaration on the element itself (as opposed to inherited, `unset`,
 /// `initial` or never specified).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct ZoomDeclared {
+    /// The element's own `zoom` factor (not the compounded one). An inherited length carries
+    /// the ancestors' zoom already, but is used at this element's *effective* zoom
+    /// (CSS Viewport L1 §5), so a value not declared here is rescaled by this factor only.
+    own: f32,
     text_shadow: bool,
     border_spacing: bool,
     text_indent: bool,
@@ -239,10 +247,27 @@ pub(crate) struct ZoomDeclared {
     text_stroke: bool,
 }
 
+impl Default for ZoomDeclared {
+    fn default() -> Self {
+        Self {
+            own: 1.0,
+            text_shadow: false,
+            border_spacing: false,
+            text_indent: false,
+            letter_spacing: false,
+            word_spacing: false,
+            decoration_thickness: false,
+            underline_offset: false,
+            text_stroke: false,
+        }
+    }
+}
+
 impl ZoomDeclared {
     /// Every property marked declared: `getComputedStyle()` divides all of them by the
     /// element's `effective_zoom`, inherited or not, because each already carries it.
     pub(crate) const ALL: Self = Self {
+        own: 1.0,
         text_shadow: true,
         border_spacing: true,
         text_indent: true,
@@ -279,42 +304,36 @@ impl ZoomDeclared {
 /// The *inherited* lengths `zoom` scales (BUG-1592): `text-shadow`, `border-spacing`,
 /// `text-indent`, `letter-spacing`, `word-spacing`, `text-decoration-thickness`,
 /// `text-underline-offset`, `-webkit-text-stroke-width`. A value inherited from the
-/// parent already carries every ancestor's zoom, so only a property `declared` on this
-/// element takes the element's `effective_zoom` (`z`) — the same rule `font-size` follows.
+/// parent already carries every ancestor's zoom, so a property `declared` on this element
+/// takes the element's `effective_zoom` (`z`) and an inherited one only the element's own
+/// factor (`declared.own`) — the same rule `font-size` follows. That keeps the length
+/// `zoom`-independent as a CSS value: it is reported as the same `100px` at every depth
+/// and drawn at each element's effective zoom.
 pub(crate) fn scale_inherited_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: f32, declared: ZoomDeclared) {
-    if declared.text_shadow {
-        for shadow in &mut style.text_shadow {
-            shadow.offset_x *= z;
-            shadow.offset_y *= z;
-            shadow.blur *= z;
-        }
+    let k = |set: bool| if set { z } else { declared.own };
+    let kx = k(declared.text_shadow);
+    for shadow in &mut style.text_shadow {
+        shadow.offset_x *= kx;
+        shadow.offset_y *= kx;
+        shadow.blur *= kx;
     }
-    if declared.border_spacing {
-        style.border_spacing_h *= z;
-        style.border_spacing_v *= z;
-    }
+    let k = k(declared.border_spacing);
+    style.border_spacing_h *= k;
+    style.border_spacing_v *= k;
     if declared.text_indent {
         zoom_length(&mut style.text_indent, z, rem_k, root_k);
+    } else {
+        zoom_length(&mut style.text_indent, declared.own, 1.0, 1.0);
     }
-    if declared.letter_spacing {
-        style.letter_spacing *= z;
+    style.letter_spacing *= if declared.letter_spacing { z } else { declared.own };
+    style.word_spacing *= if declared.word_spacing { z } else { declared.own };
+    if let TextDecorationThickness::Length(v) = &mut style.text_decoration_thickness {
+        *v *= if declared.decoration_thickness { z } else { declared.own };
     }
-    if declared.word_spacing {
-        style.word_spacing *= z;
+    if let Some(v) = style.text_underline_offset.as_mut() {
+        *v *= if declared.underline_offset { z } else { declared.own };
     }
-    if declared.decoration_thickness
-        && let TextDecorationThickness::Length(v) = &mut style.text_decoration_thickness
-    {
-        *v *= z;
-    }
-    if declared.underline_offset
-        && let Some(v) = style.text_underline_offset.as_mut()
-    {
-        *v *= z;
-    }
-    if declared.text_stroke {
-        style.text_stroke_width *= z;
-    }
+    style.text_stroke_width *= if declared.text_stroke { z } else { declared.own };
 }
 
 /// The non-inherited paint/transform lengths `zoom` scales on top of the box model:
@@ -1777,10 +1796,10 @@ pub(crate) fn compute_style_shareable(
         style.root_font_size / crate::style::ROOT_FONT_SIZE * (z / style.root_zoom)
     };
     let root_k = z / style.root_zoom;
-    let declared = if (z - 1.0).abs() < f32::EPSILON {
+    let declared = if (z - 1.0).abs() < f32::EPSILON && (own_zoom - 1.0).abs() < f32::EPSILON {
         ZoomDeclared::default()
     } else {
-        ZoomDeclared::of(matched.iter().map(|m| m.6))
+        ZoomDeclared { own: own_zoom, ..ZoomDeclared::of(matched.iter().map(|m| m.6)) }
     };
     apply_zoom_to_lengths(&mut style, z, rem_k, root_k, declared);
 

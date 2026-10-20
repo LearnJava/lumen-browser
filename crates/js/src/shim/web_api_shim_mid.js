@@ -9367,6 +9367,20 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         get clientWidth()  { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get clientHeight() { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
+        // CSSOM View §Element.currentCSSZoom (BUG-943): effective `zoom` (own * every ancestor's),
+        // 1 for an element that is not rendered (no entry yet, or in a `display: none` subtree). An
+        // inline element owns no box here yet is rendered, so a missing box alone does not give 1.
+        get currentCSSZoom() { var nid = this.__nid__;
+            if (nid == null || _lumen_get_computed_style(nid, 'visibility') === '') return 1;
+            if (_lumen_get_computed_style(nid, 'display') === 'none') return 1;
+            if (_lumen_get_computed_style(nid, 'computed:-lumen-boxless') !== '') {
+                for (var a = this.parentElement; a; a = a.parentElement) {
+                    if (_lumen_get_computed_style(a.__nid__, 'display') === 'none') return 1;
+                }
+            }
+            var z = parseFloat(_lumen_get_computed_style(nid, 'zoom'));
+            return z > 0 ? z : 1;
+        },
         get scrollLeft() { var nid = this.__nid__;
             var s = _lumen_get_scroll_state(nid); return s ? s[0] : 0;
         },
