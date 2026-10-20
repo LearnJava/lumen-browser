@@ -1922,7 +1922,7 @@ fn finish_frame(
         .map(|(i, _)| (i, frame.init.content_x, frame.init.content_y))
         .collect();
     finish_after_match(
-        &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
+        &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.available_height, frame.init.is_positioned,
         frame.init.own_pcb, &abs_deferred, measurer, viewport, hp,
     );
     cut_own_abspos(frame, own_start, viewport);
@@ -1938,7 +1938,7 @@ fn cut_own_abspos(frame: &mut Frame, own_start: usize, viewport: Size) {
         return;
     }
     let s = &frame.init.s;
-    let (ox, oy) = super::layout_dispatch::relative_offset(s, frame.init.em, frame.init.cb, viewport);
+    let (ox, oy) = super::layout_dispatch::relative_offset(s, frame.init.em, frame.init.cb, frame.init.available_height, viewport);
     let n = frame.init.n_cols as usize;
     let (first_h, later_h) = (fc.first_h, fc.later_h);
     let h_of = |k: usize| if k < n { first_h } else { later_h };
