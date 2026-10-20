@@ -167,3 +167,22 @@ use super::*;
         let s = parse("p{color:red;<!--}q{color:green}");
         assert_eq!(s.rules.last().unwrap().declarations[0].value, "green");
     }
+
+    // --- BUG-1378: имена свойств ASCII-регистронезависимы (CSS 2.1 §4.1.3) ---
+
+    #[test]
+    fn property_name_is_case_insensitive() {
+        let s = parse("p{COLOR:green;bACkGRounD:red}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].property, "color");
+        assert_eq!(d[0].value, "green");
+        assert_eq!(d[1].property, "background");
+    }
+
+    #[test]
+    fn custom_property_name_stays_case_sensitive() {
+        let s = parse("p{--Foo:1;--foo:2}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].property, "--Foo");
+        assert_eq!(d[1].property, "--foo");
+    }
