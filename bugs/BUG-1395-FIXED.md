@@ -1,6 +1,6 @@
 # BUG-1395 — `contain: style` не действует: счётчики и кавычки внутри поддерева выходят наружу
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 17, `css/css-multicol` + `css/css-contain`)
 **Область:** layout (`crates/engine/layout/src/counters.rs::precompute_counters`, разбор кавычек; флаг `ContainFlags::STYLE` читается только в `selector_query.rs:2080`)
 
@@ -27,3 +27,9 @@ WPT-RUN-14 срез 17: `css-contain/counter-scoping-001…004.html`, `quote-sco
 ## Как проверить
 
 `css/css-contain/counter-scoping-002.html`, `quote-scoping-001.html`, `contain-style-counters-003.html`.
+
+## Исправление (2026-10-20, P6)
+
+`CounterCtx` (`counters.rs`) знает границу `contain: style`: `enter_style_boundary` запоминает глубину стека каждого счётчика (после собственного `counter-reset` элемента) и `quote_depth`; `counter-increment`/`counter-set` ниже границы через `ensure_instance` заводят новый экземпляр вместо внешнего, `pop_fresh` снимает экземпляры при выходе из родителя; на выходе из границы `quote_depth` возвращается. Тесты: `contain_style_*` в `counters.rs`.
+
+Не проверено прогоном WPT (на момент слияния): `counter-scoping-002` (`1 1.2` — `counter-set` на `::after` внутри границы), `contain-style-counters-005` (см. [BUG-1658](BUG-1658-OPEN.md)), `contain-style-dynamic-001`, `contain-style-ol-ordinal-pseudo*`, `quote-scoping-invalidation-*`.
