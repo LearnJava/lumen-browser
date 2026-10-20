@@ -254,8 +254,8 @@ impl GridInit {
             )
         } else {
             (
-                is.margin_left.resolve_or_zero(em, self.content_width, viewport)
-                    + is.margin_right.resolve_or_zero(em, self.content_width, viewport),
+                is.margin_left.resolve_or_zero(em, cell_in, viewport)
+                    + is.margin_right.resolve_or_zero(em, cell_in, viewport),
                 max_content_outer_width(item, measurer, viewport),
             )
         };
@@ -360,14 +360,28 @@ impl GridInit {
         }
     }
 
+    /// База процентов `margin`/`padding` элемента `k` (CSS Grid L1 §6.2): inline-размер его
+    /// grid-области — ширина охваченных столбцов в горизонтальной сетке. Без размещения и в
+    /// вертикальной сетке (там её даёт `grid_vertical::place_item`) — ширина контейнера.
+    pub(super) fn item_pct_base(&self, k: usize) -> f32 {
+        let (cs, ce, _, _) = self.placements[k];
+        if self.vertical.is_some() || cs == 0 || self.n_cols == 0 {
+            return self.content_width;
+        }
+        let c0 = (cs - 1).min(self.n_cols - 1) as usize;
+        let c1 = (ce - 1).min(self.n_cols) as usize;
+        grid_track_span(&self.col_offsets, &self.col_widths, c0, c1)
+    }
+
     /// Вклад элемента в размер строки (block-ось): высота margin box в обоих режимах
     /// (CSS Grid L1 §11.5 — вклад item'а считается по внешнему размеру).
-    pub(super) fn item_block_size(&self, item: &LayoutBox, viewport: Size) -> f32 {
+    pub(super) fn item_block_size(&self, k: usize, item: &LayoutBox, viewport: Size) -> f32 {
         let em = item.style.font_size;
         if self.vertical.is_none() {
+            let base = self.item_pct_base(k);
             return item.rect.height
-                + item.style.margin_top.resolve_or_zero(em, self.content_width, viewport)
-                + item.style.margin_bottom.resolve_or_zero(em, self.content_width, viewport);
+                + item.style.margin_top.resolve_or_zero(em, base, viewport)
+                + item.style.margin_bottom.resolve_or_zero(em, base, viewport);
         }
         item.rect.width
             + item.style.margin_left.resolve_or_zero(em, self.content_width, viewport)

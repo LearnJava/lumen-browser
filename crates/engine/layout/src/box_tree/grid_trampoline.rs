@@ -408,7 +408,7 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         && frame.init.inherited_rows.is_none()
         && row_grows_with_content(grid_track(r0 as u32, &frame.init.eff_row_template, &frame.init.auto_row))
     {
-        let item_h = frame.init.item_block_size(&frame.b.children[i], viewport);
+        let item_h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
         if item_h > frame.init.row_heights[r0] {
             frame.init.row_heights[r0] = item_h;
         }
@@ -436,7 +436,7 @@ fn record_flex_contrib(frame: &mut Frame, i: usize, viewport: Size) {
     if !flexible {
         return;
     }
-    let h = frame.init.item_block_size(&frame.b.children[i], viewport);
+    let h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
     frame.init.flex_contribs.push((r0, r1, h));
 }
 
@@ -469,7 +469,7 @@ fn record_item_col_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn T
     let first_col = (cs - 1).min(n_cols.saturating_sub(1)) as usize;
     let last_col = ((ce - 1).min(n_cols) as usize).saturating_sub(1).max(first_col);
     let em = item.style.font_size;
-    let cw = frame.init.content_width;
+    let cw = frame.init.item_pct_base(k);
     let (m_l, m_r) = (
         item.style.margin_left.resolve_or_zero(em, cw, viewport),
         item.style.margin_right.resolve_or_zero(em, cw, viewport),
@@ -527,8 +527,9 @@ fn record_item_baseline(frame: &mut Frame, i: usize, measurer: Option<&dyn TextM
     let last_row = ((re - 1).min(n_rows) as usize).saturating_sub(1).max(first_row);
     let st = &item.style;
     let em = st.font_size;
-    let m_t = st.margin_top.resolve_or_zero(em, frame.init.content_width, viewport);
-    let m_b = st.margin_bottom.resolve_or_zero(em, frame.init.content_width, viewport);
+    let pct_base = frame.init.item_pct_base(k);
+    let m_t = st.margin_top.resolve_or_zero(em, pct_base, viewport);
+    let m_b = st.margin_bottom.resolve_or_zero(em, pct_base, viewport);
     // Вертикальная сетка: линия вертикальна, подъём считается по block-оси (физический `x`).
     let (ascent, outer) = match frame.init.vertical {
         None => (
@@ -947,7 +948,7 @@ fn post_final_item(
     let k = frame.k;
     let (cs, ce, rs, re) = frame.init.placements[k];
     if cs == 0 || rs == 0 {
-        frame.init.y_off += frame.init.item_block_size(&frame.b.children[i], viewport);
+        frame.init.y_off += frame.init.item_block_size(k, &frame.b.children[i], viewport);
         return;
     }
 
@@ -975,10 +976,10 @@ fn post_final_item(
     let (orig_x, orig_y) = (item.rect.x, item.rect.y);
     let is = &item.style;
     let iem = is.font_size;
-    let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
-    let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
-    let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
-    let m_r = is.margin_right.resolve_or_zero(iem, content_width, viewport);
+    let m_t = is.margin_top.resolve_or_zero(iem, cell_w, viewport);
+    let m_b = is.margin_bottom.resolve_or_zero(iem, cell_w, viewport);
+    let m_l = is.margin_left.resolve_or_zero(iem, cell_w, viewport);
+    let m_r = is.margin_right.resolve_or_zero(iem, cell_w, viewport);
 
     // align-items (cross / block axis within cell). `stretch_h` records a
     // grown height for the relayout below — deferred until `item.rect.x` has
