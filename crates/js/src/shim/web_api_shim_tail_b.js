@@ -5039,7 +5039,7 @@ function _wa_normalize_keyframes(keyframes) {
         for (var i = 0; i < n; i++) {
             var src = keyframes[i] || {};
             var kf = {};
-            kf.offset = (src.offset != null) ? +src.offset : (n <= 1 ? 0 : i / (n - 1));
+            kf.offset = (src.offset != null) ? +src.offset : (n <= 1 ? 1 : i / (n - 1));
             kf.easing = src.easing || 'linear';
             kf.composite = src.composite || 'auto';
             for (var p in src) {
@@ -5060,7 +5060,7 @@ function _wa_normalize_keyframes(keyframes) {
         }
         for (var j = 0; j < len; j++) {
             var kf2 = {};
-            kf2.offset = (offsets && offsets[j] != null) ? +offsets[j] : (len <= 1 ? 0 : j / (len - 1));
+            kf2.offset = (offsets && offsets[j] != null) ? +offsets[j] : (len <= 1 ? 1 : j / (len - 1));
             kf2.easing = (Array.isArray(keyframes.easing) ? keyframes.easing[j] : keyframes.easing) || 'linear';
             kf2.composite = (Array.isArray(keyframes.composite) ? keyframes.composite[j] : keyframes.composite) || 'auto';
             for (var k = 0; k < propNames.length; k++) {
@@ -5156,9 +5156,23 @@ function _wa_parse_color(str) {
     return null;
 }
 
+// `_wa_parse_color` plus the colour forms only the engine's own parser knows
+// (named colours, `hsl()`, ...): the engine answers them as `rgb()`/`rgba()` text.
+function _wa_color_rgba(s) {
+    var c = _wa_parse_color(s);
+    if (c) return c;
+    if (typeof _lumen_css_color_rgba === 'function') {
+        try {
+            var k = _lumen_css_color_rgba(String(s));
+            if (k) return _wa_parse_color(k);
+        } catch (e) {}
+    }
+    return null;
+}
+
 // Lerp a CSS color.
 function _wa_lerp_color(a, b, t) {
-    var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
+    var ca = _wa_color_rgba(a), cb = _wa_color_rgba(b);
     if (!ca || !cb) return t < 0.5 ? a : b;
     function lr(x, y) { return Math.max(0, Math.min(255, Math.round(x + (y-x)*t))); }
     var al = lr(ca[3], cb[3]);
@@ -5853,8 +5867,12 @@ function _wa_motion_lerp_tokens(a, b, t, integer) {
 
 // CSS Color 4 §12.3: interpolate in premultiplied sRGB.
 function _wa_motion_lerp_color(a, b, t) {
-    var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
+    var ca = _wa_color_rgba(a), cb = _wa_color_rgba(b);
     if (!ca || !cb) return null;
+    return _wa_mix_rgba(ca, cb, t);
+}
+
+function _wa_mix_rgba(ca, cb, t) {
     var aa = ca[3] / 255, ab = cb[3] / 255;
     var al = Math.max(0, Math.min(1, aa + (ab - aa) * t));
     var ch = function(i) {
@@ -5883,6 +5901,8 @@ function _wa_motion_try(camel, from, to, t) {
         return _lumen_css_interpolate_transform(from, to, t, box[0], box[1]);
     }
     if (_wa_motion_is_color(camel)) return _wa_motion_lerp_color(from, to, t);
+    var seq = _wa_motion_seq_try(camel, from, to, t);
+    if (seq !== undefined) return seq;
     var r = _wa_motion_lerp_tokens(from, to, t, _wa_motion_integer_re.test(camel));
     return r == null ? null : _wa_motion_clamp(camel, r);
 }
@@ -5990,9 +6010,183 @@ function _wa_motion_has_frames(name) {
     return _wa_gap_keyframes_json(name) != null;
 }
 
+// ── BUG-1305: shorthands, `<bg-size>` and `<shadow>` lists in Web Animations ──
+
+// Splits on top-level whitespace, `,` or `/` — `rgb(0, 0, 0)` and `calc(1px + 2px)`
+// stay in one piece. Whitespace mode drops empty pieces.
+function _wa_split_top(s, sep) {
+    var out = [], depth = 0, cur = '';
+    s = String(s);
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        if (depth === 0 && (sep === ' ' ? /\s/.test(c) : c === sep)) {
+            out.push(cur.trim());
+            cur = '';
+        } else {
+            cur += c;
+        }
+    }
+    out.push(cur.trim());
+    return sep === ' ' ? out.filter(function(x) { return x !== ''; }) : out;
+}
+
+// Shorthands whose value is a 1-4 token box (CSS 2.1 §8.3) or corner list. A keyframe naming
+// one animates its longhands (Web Animations 1 §5.3 "shorthand → longhands").
+var _wa_sh_sides = ['Top', 'Right', 'Bottom', 'Left'];
+var _wa_sh_corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'];
+var _wa_shorthands = {
+    borderWidth:  { pre: 'border', post: 'Width',  parts: _wa_sh_sides },
+    borderColor:  { pre: 'border', post: 'Color',  parts: _wa_sh_sides },
+    borderStyle:  { pre: 'border', post: 'Style',  parts: _wa_sh_sides },
+    borderRadius: { pre: 'border', post: 'Radius', parts: _wa_sh_corners },
+    margin:       { pre: 'margin', post: '',       parts: _wa_sh_sides },
+    padding:      { pre: 'padding', post: '',      parts: _wa_sh_sides }
+};
+
+function _wa_box4(tok) {
+    var n = tok.length;
+    if (n < 1 || n > 4) return null;
+    return [tok[0], tok[n > 1 ? 1 : 0], tok[n > 2 ? 2 : 0], tok[n > 3 ? 3 : (n > 1 ? 1 : 0)]];
+}
+
+// {longhand: value} for a shorthand keyframe value, or null when `prop` is no such shorthand
+// or the value cannot be split (CSS-wide keywords, `var()`).
+function _wa_expand_shorthand(prop, v) {
+    var sh = _wa_shorthands[prop];
+    if (!sh || v == null) return null;
+    v = String(v).trim();
+    if (!v || /^(inherit|initial|unset|revert|revert-layer)$/i.test(v) || /var\(/i.test(v)) return null;
+    var out = {}, i;
+    if (prop === 'borderRadius' && v.indexOf('/') >= 0) {
+        var hv = _wa_split_top(v, '/');
+        if (hv.length !== 2) return null;
+        var h = _wa_box4(_wa_split_top(hv[0], ' ')), w = _wa_box4(_wa_split_top(hv[1], ' '));
+        if (!h || !w) return null;
+        for (i = 0; i < 4; i++) {
+            out[sh.pre + sh.parts[i] + sh.post] = h[i] === w[i] ? h[i] : h[i] + ' ' + w[i];
+        }
+        return out;
+    }
+    var b = _wa_box4(_wa_split_top(v, ' '));
+    if (!b) return null;
+    for (i = 0; i < 4; i++) out[sh.pre + sh.parts[i] + sh.post] = b[i];
+    return out;
+}
+
+// The effect's keyframes with every shorthand replaced by its longhands.
+function _wa_expanded_kfs(effect) {
+    var src = (effect && effect._keyframes) || [], out = [];
+    for (var i = 0; i < src.length; i++) {
+        var o = {};
+        for (var k in src[i]) {
+            var ex = (k === 'offset' || k === 'easing' || k === 'composite') ? null : _wa_expand_shorthand(k, src[i][k]);
+            if (ex) { for (var l in ex) o[l] = ex[l]; } else { o[k] = src[i][k]; }
+        }
+        out.push(o);
+    }
+    return out;
+}
+
+function _wa_gcd(a, b) { return b ? _wa_gcd(b, a % b) : a; }
+
+// CSS Backgrounds 3 §3.9 `<bg-size>`: the lists repeat to their least common multiple, a layer
+// is `cover | contain | <w> [<h>]`, a missing height is `auto`; `auto` against a length (and
+// a keyword against anything else) does not interpolate. null = not interpolable.
+function _wa_lerp_bg_size(from, to, t) {
+    var la = _wa_split_top(from, ','), lb = _wa_split_top(to, ',');
+    var n = la.length * lb.length / _wa_gcd(la.length, lb.length), out = [];
+    function layer(s) {
+        var tk = _wa_split_top(s, ' ');
+        if (tk.length === 1 && tk[0] !== 'cover' && tk[0] !== 'contain') tk.push('auto');
+        return tk;
+    }
+    for (var i = 0; i < n; i++) {
+        var a = layer(la[i % la.length]), b = layer(lb[i % lb.length]);
+        if (a.length !== 2 || b.length !== 2) {
+            if (a.join(' ') !== b.join(' ')) return null;
+            out.push(a.join(' '));
+            continue;
+        }
+        var r = _wa_motion_lerp_tokens(a.join(' '), b.join(' '), t, false);
+        if (r == null) return null;
+        out.push(r);
+    }
+    return out.join(', ');
+}
+
+// One `<shadow>`: {inset, color (string|null), len[]}; null when it is not plain enough to
+// interpolate (`calc()` lengths, two colours, too few/many lengths).
+function _wa_parse_shadow(s, maxLen) {
+    var inset = false, color = null, len = [], tk = _wa_split_top(s, ' ');
+    for (var i = 0; i < tk.length; i++) {
+        if (tk[i].toLowerCase() === 'inset') inset = true;
+        else if (_wa_motion_num(tk[i])) len.push(tk[i]);
+        else if (/^calc\(/i.test(tk[i]) || color !== null) return null;
+        else color = tk[i];
+    }
+    if (len.length < 2 || len.length > maxLen) return null;
+    return { inset: inset, color: color, len: len };
+}
+
+// CSS Backgrounds 3 §7.2: a shorter list is padded with transparent, zero-length shadows of the
+// other side's `inset`-ness; every pair must agree on `inset`; a missing colour is
+// `currentcolor` and only meets another missing one.
+function _wa_lerp_shadow_list(prop, from, to, t) {
+    var maxLen = prop === 'textShadow' ? 3 : 4;
+    function list(v) {
+        v = String(v).trim();
+        if (v === 'none') return [];
+        var parts = _wa_split_top(v, ','), out = [];
+        for (var i = 0; i < parts.length; i++) {
+            var sh = _wa_parse_shadow(parts[i], maxLen);
+            if (!sh) return null;
+            out.push(sh);
+        }
+        return out;
+    }
+    var fa = list(from), fb = list(to);
+    if (!fa || !fb) return null;
+    var n = Math.max(fa.length, fb.length), out = [];
+    function zero(like) { return { inset: like.inset, color: 'rgba(0, 0, 0, 0)', len: [] }; }
+    for (var i = 0; i < n; i++) {
+        var a = fa[i] || zero(fb[i]), b = fb[i] || zero(fa[i]);
+        if (a.inset !== b.inset) return null;
+        var col = '';
+        if (a.color !== null || b.color !== null) {
+            if (a.color === null || b.color === null) return null;
+            col = _wa_motion_lerp_color(a.color, b.color, t);
+            if (col == null) return null;
+        }
+        var lens = [];
+        for (var j = 0; j < maxLen; j++) {
+            var l = _wa_motion_lerp_tokens(a.len[j] || '0px', b.len[j] || '0px', t, false);
+            if (l == null) return null;
+            lens.push(l);
+        }
+        out.push((col ? col + ' ' : '') + lens.join(' ') + (a.inset ? ' inset' : ''));
+    }
+    return out.length ? out.join(', ') : 'none';
+}
+
+// The interpolation of the properties whose value is a list (`background-size`, shadows): the
+// value, null when the pair does not interpolate, undefined when `prop` is no such property.
+function _wa_motion_seq_try(prop, from, to, t) {
+    from = String(from).trim(); to = String(to).trim();
+    if (prop === 'backgroundSize') return _wa_lerp_bg_size(from, to, t);
+    if (prop === 'boxShadow' || prop === 'textShadow') return _wa_lerp_shadow_list(prop, from, to, t);
+    return undefined;
+}
+
 // Interpolate a single CSS property value between two string values.
 function _wa_interp_prop(prop, from, to, t) {
     if (from === to) return from;
+    // `normal` spacing is 0 for interpolation (CSS Text 3 §8.1, §8.2).
+    if (prop === 'letterSpacing' || prop === 'wordSpacing') {
+        if (from === 'normal') from = '0px';
+        if (to === 'normal') to = '0px';
+    }
     if (_wa_gap_prop_re.test(prop)) return _wa_gap_interp(prop, from, to, t);
     if (_wa_color_props[prop]) return _wa_lerp_color(from, to, t);
     if (prop === 'opacity') {
@@ -6001,6 +6195,13 @@ function _wa_interp_prop(prop, from, to, t) {
     }
     if (prop === 'transform') return _wa_lerp_transform(from, to, t);
     if (prop === 'dynamicRangeLimit') return _wa_lerp_dynamic_range_limit(from, to, t);
+    var seq = _wa_motion_seq_try(prop, from, to, t);
+    if (seq !== undefined) return seq == null ? (t < 0.5 ? from : to) : seq;
+    // `10px 20px` (an elliptical radius, a position pair): component-wise.
+    if (/\s/.test(String(from).trim()) && /\s/.test(String(to).trim()) && !/[(,]/.test(from + to)) {
+        var tk = _wa_motion_lerp_tokens(from, to, t, false);
+        return tk == null ? (t < 0.5 ? from : to) : tk;
+    }
     return _wa_lerp_scalar(from, to, t);
 }
 
@@ -6075,66 +6276,92 @@ function _wa_composite_value(prop, under, v, mode) {
     return _wa_composite_scalar(under, v);
 }
 
-// Compute the per-property interpolated styles for a KeyframeEffect at progress p.
+// Properties that never take part in an implicit ("neutral") keyframe: the transform
+// interpolator has no form for the computed `matrix()` the element would offer as underlying
+// value, so their missing end keeps the old behaviour (hold the specified keyframe).
+var _wa_no_neutral_re = /^(transform|translate|rotate|scale)$/;
+
+// Web Animations 1 §5.4.4 "neutral keyframe": the properties whose own keyframes miss the 0%
+// or the 100% end, so that end takes the element's underlying value. Gap-decoration
+// properties already read the computed value; they are not excluded.
+function _wa_neutral_props(effect) {
+    var kfs = _wa_expanded_kfs(effect), props = _wa_effect_props(effect), out = {};
+    for (var pr in props) {
+        if (_wa_no_neutral_re.test(pr)) continue;
+        var has0 = false, has1 = false;
+        for (var i = 0; i < kfs.length; i++) {
+            if (!(pr in kfs[i])) continue;
+            if (kfs[i].offset <= 0) has0 = true;
+            if (kfs[i].offset >= 1) has1 = true;
+        }
+        if (!has0 || !has1) out[pr] = true;
+    }
+    return out;
+}
+
+// Compute the per-property interpolated styles for a KeyframeEffect at progress p. Every
+// property runs along its own keyframes — the ones that name it (Web Animations 1 §5.4.3) —
+// and a missing 0%/100% keyframe is the underlying value.
 function _wa_compute_at_p(effect, p) {
-    var kfs = effect._keyframes;
-    if (!kfs || !kfs.length) return {};
-    // §5.3 implicit 0%/100% keyframes (the "neutral keyframe"): a gap-decoration
-    // property with no keyframe at an end interpolates to/from the underlying value.
-    var hasGap = false;
-    for (var gi = 0; gi < kfs.length && !hasGap; gi++) {
-        for (var gk in kfs[gi]) { if (_wa_gap_prop_re.test(gk)) { hasGap = true; break; } }
+    var kfs = _wa_expanded_kfs(effect);
+    if (!kfs.length) return {};
+    var props = {}, ki, k;
+    for (ki = 0; ki < kfs.length; ki++) {
+        for (k in kfs[ki]) {
+            if (k !== 'offset' && k !== 'easing' && k !== 'composite') props[k] = true;
+        }
     }
-    if (hasGap) {
-        if (kfs[0].offset > 0) kfs = [{ offset: 0, easing: 'linear', composite: 'auto' }].concat(kfs);
-        if (kfs[kfs.length - 1].offset < 1) kfs = kfs.concat([{ offset: 1, easing: 'linear', composite: 'auto' }]);
-    }
-    // Find surrounding keyframe pair.
-    var from = kfs[0], to = kfs[kfs.length - 1];
-    for (var i = 0; i < kfs.length - 1; i++) {
-        if (kfs[i].offset <= p && kfs[i+1].offset >= p) { from = kfs[i]; to = kfs[i+1]; break; }
-    }
-    var span = to.offset - from.offset;
-    // Outside [0,1] (an overshooting timing easing) the first/last interval
-    // extrapolates (Web Animations §5.3.3); a non-linear keyframe easing is
-    // only defined on [0,1], so it still sees a clamped input.
-    var lt = span < 1e-7 ? 1 : (p - from.offset) / span;
-    var kfe = from.easing || 'linear';
-    if (kfe !== 'linear' && !/^cubic-bezier\(/.test(kfe)) lt = Math.max(0, Math.min(1, lt));
-    lt = _wa_ease(lt, kfe);
     var result = {};
     var under = effect._underlying || {};
-    function comp(kf, prop) {
-        var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
-        return _wa_composite_value(prop, under[prop], kf[prop], mode);
-    }
     // Gap-decoration values are resolved (keywords, currentcolor) before they meet
-    // the interpolator; an end without the property takes the underlying value.
+    // the interpolator.
     function val(kf, prop) {
-        var v = comp(kf, prop);
+        var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
+        var v = _wa_composite_value(prop, under[prop], kf[prop], mode);
         return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : v;
     }
-    function under_val(prop) {
-        return _wa_gap_resolve(effect, prop, under[prop]);
-    }
-    for (var fp in from) {
-        if (fp === 'offset' || fp === 'easing' || fp === 'composite') continue;
-        if (fp in to) {
-            result[fp] = _wa_interp_prop(fp, val(from, fp), val(to, fp), lt);
-        } else if (_wa_gap_prop_re.test(fp) && under[fp]) {
-            result[fp] = _wa_interp_prop(fp, val(from, fp), under_val(fp), lt);
-        } else {
-            result[fp] = comp(from, fp);
+    for (var prop in props) {
+        var list = [];
+        for (ki = 0; ki < kfs.length; ki++) { if (prop in kfs[ki]) list.push(kfs[ki]); }
+        var base = under[prop];
+        if (_wa_no_neutral_re.test(prop)) base = '';
+        else if (_wa_gap_prop_re.test(prop) && base) base = _wa_gap_resolve(effect, prop, base);
+        if (base != null && base !== '') {
+            var imp;
+            if (list[0].offset > 0) {
+                imp = { offset: 0, easing: 'linear', composite: 'replace' };
+                imp[prop] = base;
+                list.unshift(imp);
+            }
+            if (list[list.length - 1].offset < 1) {
+                imp = { offset: 1, easing: 'linear', composite: 'replace' };
+                imp[prop] = base;
+                list.push(imp);
+            }
         }
-    }
-    for (var tp in to) {
-        if (tp === 'offset' || tp === 'easing' || tp === 'composite') continue;
-        if (tp in result) continue;
-        if (_wa_gap_prop_re.test(tp) && under[tp]) {
-            result[tp] = _wa_interp_prop(tp, under_val(tp), val(to, tp), lt);
-        } else {
-            result[tp] = comp(to, tp);
+        var n = list.length, from = list[0], to = list[n - 1];
+        // Before the first / after the last keyframe the value holds, except where that
+        // keyframe sits on the 0%/100% edge and an overshooting timing easing extrapolates
+        // the first/last interval (Web Animations §5.3.3).
+        if (n > 1) {
+            if (p < list[0].offset) {
+                if (list[0].offset <= 0) to = list[1]; else to = from;
+            } else if (p > list[n - 1].offset) {
+                if (list[n - 1].offset >= 1) from = list[n - 2]; else from = to;
+            } else {
+                for (var i = 0; i < n - 1; i++) {
+                    if (list[i].offset <= p && list[i + 1].offset >= p) { from = list[i]; to = list[i + 1]; break; }
+                }
+            }
         }
+        if (from === to) { result[prop] = val(from, prop); continue; }
+        var span = to.offset - from.offset;
+        // A non-linear keyframe easing is only defined on [0,1], so it still sees a clamped input.
+        var lt = span < 1e-7 ? 1 : (p - from.offset) / span;
+        var kfe = from.easing || 'linear';
+        if (kfe !== 'linear' && !/^cubic-bezier\(/.test(kfe)) lt = Math.max(0, Math.min(1, lt));
+        lt = _wa_ease(lt, kfe);
+        result[prop] = _wa_interp_prop(prop, val(from, prop), val(to, prop), lt);
     }
     return result;
 }
@@ -6629,15 +6856,18 @@ function _wa_capture_underlying(anim, eff) {
     var composites = eff.composite === 'add' || eff.composite === 'accumulate' ||
         eff._keyframes.some(function(k) { return k.composite === 'add' || k.composite === 'accumulate'; });
     var u = {}, tgt = eff.target, props = _wa_effect_props(eff), cs = null;
+    var neutral = _wa_neutral_props(eff);
     for (var pr in props) {
         var iv = '';
-        try { iv = tgt.style[pr]; } catch (e) {}
-        if (!iv && (composites || _wa_gap_prop_re.test(pr))) {
+        // A neutral keyframe is the computed value, not the author's inline text.
+        if (!neutral[pr]) { try { iv = tgt.style[pr]; } catch (e) {} }
+        if (!iv && (composites || neutral[pr] || _wa_gap_prop_re.test(pr))) {
             try {
                 if (!cs) cs = getComputedStyle(tgt);
                 iv = cs[pr];
             } catch (e) {}
         }
+        if (!iv && neutral[pr]) { try { iv = tgt.style[pr]; } catch (e) {} }
         u[pr] = iv;
     }
     eff._underlying = u;
@@ -6688,8 +6918,9 @@ Object.defineProperty(Animation.prototype, '_onRemove', {
 function _wa_effect_props(effect) {
     var props = {};
     if (!effect || !effect._keyframes) return props;
-    for (var i = 0; i < effect._keyframes.length; i++) {
-        var kf = effect._keyframes[i];
+    var kfs = _wa_expanded_kfs(effect);
+    for (var i = 0; i < kfs.length; i++) {
+        var kf = kfs[i];
         for (var p in kf) {
             if (p !== 'offset' && p !== 'easing' && p !== 'composite') props[p] = true;
         }

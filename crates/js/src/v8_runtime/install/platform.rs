@@ -603,6 +603,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // A `<color>` the Web Animations shim cannot parse itself (named colours, `hsl()`, `oklch()`,
+    // ...) as `rgb()`/`rgba()` text, so shadow and border colours interpolate (BUG-1305).
+    // `None` = not a plain colour (`currentcolor`, a system colour, junk).
+    reg!(scope, ctx, store,
+        "_lumen_css_color_rgba",
+        |value: String| -> Option<String> {
+            let c = lumen_layout::parse_color(&value)?;
+            Some(if c.a == 255 {
+                format!("rgb({},{},{})", c.r, c.g, c.b)
+            } else {
+                format!("rgba({},{},{},{:.4})", c.r, c.g, c.b, f32::from(c.a) / 255.0)
+            })
+        }
+    );
+
     // CSS Gap Decorations L1 §4.7 — interpolation of `*-rule-width`/`-color`/
     // `-inset-*` between two specified values (Web Animations shim,
     // `_wa_gap_compute`). `None` = the pair does not interpolate (the caller
