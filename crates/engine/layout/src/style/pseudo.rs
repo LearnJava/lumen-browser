@@ -555,6 +555,9 @@ fn compute_pseudo_element_style_inner(
         if is_scroll_group {
             style.display = Display::Block;
         }
+        if split_pseudo_request(pseudo).0.eq_ignore_ascii_case("scroll-button") {
+            super::ua::apply_ua_scroll_button(&mut style, dark_mode);
+        }
         style
     };
     let _prof_apply = lumen_core::profile::scope_detail("ps_apply");

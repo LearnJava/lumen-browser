@@ -55,6 +55,16 @@ impl Anc {
     }
 }
 
+/// Both passes for one finished child list. Out of line on purpose: `build_box_inner` recurses once
+/// per tree level, so code that only matters for a few boxes stays out of its stack frame.
+#[inline(never)]
+pub(super) fn inject_all_scroll_pseudos(cx: &ScrollPseudoCx, style: &ComputedStyle, children: &mut Vec<LayoutBox>) {
+    inject_scroll_pseudos(cx, style, children);
+    if cx.doc.document_element() == Some(cx.host) {
+        inject_root_scroll_pseudos(cx, style, children);
+    }
+}
+
 /// Inserts `::scroll-marker-group` and `::scroll-button()` siblings around the element boxes of
 /// `children` that have them. `parent_style` is the style of the box owning `children`.
 pub(super) fn inject_scroll_pseudos(

@@ -91,12 +91,20 @@ fn scroll_button_physical_alias() {
         "<div></div>",
         "div::scroll-button(down){content:'';display:flex;height:10px;width:20px}",
     );
-    assert_eq!(boxes_of(&root, PseudoKind::ScrollButtonBlockEnd), vec![(20.0, 10.0, 0)]);
+    assert_eq!(boxes_of(&root, PseudoKind::ScrollButtonBlockEnd), vec![(22.0, 12.0, 0)]);
     let root = lay(
         "<div style=\"writing-mode:vertical-rl\"></div>",
         "div::scroll-button(down){content:'';display:flex;height:10px;width:20px}",
     );
-    assert_eq!(boxes_of(&root, PseudoKind::ScrollButtonInlineEnd), vec![(20.0, 10.0, 0)]);
+    assert_eq!(boxes_of(&root, PseudoKind::ScrollButtonInlineEnd), vec![(22.0, 12.0, 0)]);
+}
+
+/// WPT `root-scroll-button.html`: with no author box styling the button looks like Lumen's
+/// `<button>` — 1px border and 21px content height around the text.
+#[test]
+fn scroll_button_has_the_ua_button_look() {
+    let root = lay("<div></div>", "div::scroll-button(down){content:'x';width:30px}");
+    assert_eq!(boxes_of(&root, PseudoKind::ScrollButtonBlockEnd), vec![(32.0, 23.0, 1)]);
 }
 
 /// The group of WPT `scroll-marker-group-003.html`: no rendered box while empty and unstyled (a

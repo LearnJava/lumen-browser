@@ -1515,10 +1515,7 @@ fn build_box_inner(
         // originating element, so they are injected into the parent's finished child list.
         if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
             let cx = ScrollPseudoCx { host: id, doc, sheet, viewport, dark_mode, counters, registry };
-            inject_scroll_pseudos(&cx, &style, &mut children);
-            if doc.document_element() == Some(id) {
-                inject_root_scroll_pseudos(&cx, &style, &mut children);
-            }
+            inject_all_scroll_pseudos(&cx, &style, &mut children);
         }
         // CSS 2.1 §17.2.1 — anonymous table boxes (BUG-1362).
         children = super::table_anon::fix_children(doc, id, &kind, &style, children);
