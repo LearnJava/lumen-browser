@@ -328,7 +328,7 @@ pub(crate) fn emit_box_self(
                 rect: content_box_rect(b),
                 src: format!("canvas:{nid}"),
                 alt: String::new(),
-                object_fit: ObjectFit::Fill,
+                object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
@@ -1669,7 +1669,7 @@ fn dispatch<'a>(
                 rect: content_box_rect(b),
                 src: format!("canvas:{nid}"),
                 alt: String::new(),
-                object_fit: ObjectFit::Fill,
+                object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
