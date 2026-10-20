@@ -1,5 +1,4 @@
 FillRect (0.00, 0.00, 1024.00, 720.00) #f0f4f8ff
-PushClipRect (0.00, 0.00, 1024.00, 720.00)
 FillRect (0.00, 0.00, 1024.00, 36.00) #1e3a5fff
 DrawBorder (0.00, 0.00, 1024.00, 36.00) w=[0.00,0.00,3.00,0.00] c=[#e2e8f0ff,#e2e8f0ff,#e94560ff,#e2e8f0ff]
 DrawText (16.00, 12.00, 992.00, 36.00) "LUMEN BROWSER" 12.00 #e2e8f0ff family=["serif"] w=700 var=["opsz"=12]
@@ -104,4 +103,3 @@ FillRect (30.00, 743.00, 472.00, 59.00) #38a169ff
 DrawText (35.00, 752.33, 462.00, 18.20) "Уровень 3 — зелёный" 11.00 #ffffffff family=["serif"] var=["opsz"=11]
 FillRect (35.00, 770.00, 462.00, 27.00) #fefcbfff
 DrawText (39.00, 778.53, 454.00, 18.20) "Уровень 4 — жёлтый (контент)" 11.00 #744210ff family=["serif"] var=["opsz"=11]
-PopClip

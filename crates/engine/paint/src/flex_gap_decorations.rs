@@ -192,6 +192,19 @@ pub fn flex_gap_segments(children: &[&LayoutBox], p: &GridGapParams<'_>) -> Grid
     let (main_ax, cross_ax) = if row_dir { (col, row) } else { (row, col) };
 
     let mut lines = collect_lines(children, hmain, wrap, main_gap, cw, vp);
+    // A fragment of a wrapped column flex container cut by a multicol break: layout gave every
+    // line of the container (a line with no item in this fragment keeps its column rule) and the
+    // gaps along the block axis, so an item that stayed in an earlier column does not lose the gap
+    // next to it. The lines are the items' extents and are stretched below like any other.
+    let column_fragment = p
+        .fragment
+        .then_some(p.subgrid_col_tracks.as_ref())
+        .flatten()
+        .zip(p.fragment_line_gaps.as_ref())
+        .filter(|(t, g)| !hmain && t.len() == g.len());
+    if let Some((t, g)) = column_fragment {
+        lines = t.iter().zip(g).map(|(&(lo, hi), gaps)| FlexLine { lo, hi, gaps: gaps.clone(), ids: Vec::new() }).collect();
+    }
     let n = lines.len();
     // A fragment of a wrapped row flex container cut by a multicol break: layout left the lines
     // (after `align-content`, clipped to the fragment) as the row tracks, and the items are
