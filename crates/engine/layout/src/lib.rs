@@ -1636,6 +1636,13 @@ fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let u = UnreachableSides::of(&b.style);
     let mut inflow = (f32::INFINITY, f32::NEG_INFINITY);
     scrollable_extent_x_rec(b, &pb, u, &mut min_x, &mut max_x, &mut inflow);
+    // CSS Overflow L3 §3.3: overflow past an unreachable (start) side never joins the scrollable
+    // area, so it cannot widen `scrollWidth` either (BUG-1415, `justify-content: center` tracks).
+    if u.left {
+        min_x = min_x.max(0.0);
+    } else if u.right {
+        max_x = max_x.min(pb.width);
+    }
     // CSS Overflow L3 §2.2: the padding at the reachable end of the inline
     // axis follows the in-flow content, so a scroller whose content overflows
     // keeps its end padding visible (BUG-1389). `abspos` boxes are placed
@@ -1748,6 +1755,11 @@ fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let u = UnreachableSides::of(&b.style);
     let mut inflow = (f32::INFINITY, f32::NEG_INFINITY);
     scrollable_extent_y_rec(b, &pb, u, &mut min_y, &mut max_y, &mut inflow);
+    if u.top {
+        min_y = min_y.max(0.0);
+    } else if u.bottom {
+        max_y = max_y.min(pb.height);
+    }
     let [pad_t, _, pad_b, _] = box_padding(b);
     if u.top && inflow.1.is_finite() {
         max_y = max_y.max(inflow.1 + pad_b);
