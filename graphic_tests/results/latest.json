@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-10-20T14:50:35",
+  "timestamp": "2026-10-20T20:02:44",
   "git": {
-    "commit": "57d93d3b9",
-    "branch": "p1-linebreak-uax14",
-    "subject": "Merge remote-tracking branch 'origin/main' into p1-linebreak-uax14"
+    "commit": "5b8345773",
+    "branch": "p1-svg-clippath",
+    "subject": "WIP SVG-CLIPPATH: paint-часть — url(#id) клипует HTML-боксы, <g> и SVG-фигуры"
   },
   "crop_offset": [
     1928,
@@ -11,11 +11,11 @@
   ],
   "halted_at": null,
   "summary": {
-    "total": 164,
-    "passed": 111,
-    "failed": 7,
+    "total": 165,
+    "passed": 112,
+    "failed": 6,
     "errors": 0,
-    "debtors": 46,
+    "debtors": 47,
     "skipped": 0
   },
   "tests": [
@@ -233,8 +233,8 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 2.0798,
+      "status": "DEBTOR",
+      "diff_pct": 6.0905,
       "diff_region": {
         "top": 28,
         "left": 28,
@@ -245,7 +245,7 @@
       "debtor": {
         "bug": "BUG-219",
         "baseline": 6.09,
-        "verdict": "RATCHET"
+        "verdict": "OK"
       }
     },
     {
@@ -912,7 +912,7 @@
       "html": "61-view-transitions.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2597,
+      "diff_pct": 3.3252,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -2599,6 +2599,22 @@
       "status": "PASS",
       "diff_pct": 0.0,
       "diff_region": null,
+      "capture": "ipc"
+    },
+    {
+      "id": "165",
+      "stem": "165-svg-clip-path",
+      "label": "SVG-CLIPPATH CSS Masking L1 §3.1 / SVG 1.1 §14.3: clip-path: url(#id) на <clipPath>. Строка 1 (HTML-боксы): objectBoundingBox-круг · userSpaceOnUse-квадрат · два rect в objectBoundingBox (объединение). Строка 2 (SVG): атрибут clip-path на rect · <g> с вложенным clip-path на <clipPath> (круг ∩ левая половина) · clip-rule nonzero vs evenodd (пентаграмма с дырой) · transform на <clipPath>. Только цветные боксы, без текста",
+      "html": "165-svg-clip-path.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0355,
+      "diff_region": {
+        "top": 55,
+        "left": 55,
+        "bottom": 350,
+        "right": 654
+      },
       "capture": "ipc"
     }
   ]

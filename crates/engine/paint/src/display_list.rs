@@ -339,6 +339,10 @@ mod highlight;
 mod svg_table_and_hash;
 
 #[cfg(test)]
+#[path = "display_list/tests/svg_clip_url.rs"]
+mod svg_clip_url;
+
+#[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]
 mod anim_and_chrome;
 

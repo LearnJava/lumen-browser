@@ -577,8 +577,7 @@ pub fn flatten_path_to_subpaths(d: &str) -> Vec<Vec<(f32, f32)>> {
         if subs.is_empty() {
             subs.push(Vec::new());
         }
-        let pts = subs.last_mut().expect("just ensured non-empty");
-        if pts.last().is_none_or(|&l| l != p) {
+        if let Some(pts) = subs.last_mut().filter(|pts| pts.last().is_none_or(|&l| l != p)) {
             pts.push(p);
         }
     };
