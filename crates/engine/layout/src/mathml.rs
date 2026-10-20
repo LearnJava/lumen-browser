@@ -430,7 +430,7 @@ fn make_anonymous_box_with_style(style: std::sync::Arc<ComputedStyle>) -> Layout
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
         clamp_clip: None,
-        subgrid_tracks: None,
+        subgrid_tracks: None, used_grid_tracks: None,
         style,
         kind: BoxKind::Block,
         children: vec![],

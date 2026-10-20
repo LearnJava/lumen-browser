@@ -1834,7 +1834,7 @@ pub(super) fn dispatch_box(
                             fieldset_legend: None,
                             table_caption_inset: [0.0; 2],
                             clamp_clip: None,
-                            subgrid_tracks: None,
+                            subgrid_tracks: None, used_grid_tracks: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {
                                 segments: Vec::new(),

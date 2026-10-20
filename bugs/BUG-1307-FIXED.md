@@ -1,6 +1,6 @@
 # BUG-1307 — `getComputedStyle()` не отдаёт ни одного grid-лонгхенда: `grid-template-*`, `grid-auto-*`, `grid-column/row/area`, `row-gap`/`column-gap`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3); остаток — [BUG-1655](BUG-1655-OPEN.md)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 7, `css/css-grid`)
 **Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — там `grid` встречается только в `display`; тот же класс, что [BUG-1254](BUG-1254-FIXED.md) для flex)
 
@@ -33,3 +33,11 @@ WPT-RUN-14 срез 7: 29 id / 974 сабтеста `css/css-grid` (`grid-layout
 ## Дополнение: WPT-RUN-14 срез 8 (2026-10-06, `css/css-grid`, часть 2)
 
 Вторая половина `css-grid` добавляет 46 id / 1 005 сабтестов с тем же симптомом (`gridTemplateColumns value "" not in array ["Npx Npx"]`, `grid-template-columns doesn't seem to be supported in the computed style`, `… should be canonical`): `parsing/grid-template-columns-computed.html` (140), `parsing/grid-shorthand-serialization.html` (89), `subgrid/grid-template-computed-nogrid.html` (50), `parsing/grid-area-computed.html` (35), `layout-algorithm/grid-flex-track-intrinsic-sizes-001/002/003` (30 + 5 + 102), `layout-algorithm/grid-automatic-minimum-for-auto-columns-001.html`. Для `subgrid` ожидается значение вида `subgrid [] [] [] [] [x]` (разрешённые имена линий), для `grid-template-areas` — сериализация строк. В `grid-lanes/` та же причина у 50 id / 765 сабтестов (в том числе `grid-lanes-grid-template-columns-computed-withcontent.html`, `flow-tolerance-interpolation.html` — 240 сабтестов `'from' value should be supported`); они учтены в `GRID-LANES`, но не закроются до него. Итого по `css-grid` — 75 id и около 2 000 сабтестов в обеих половинах без `grid-lanes`.
+
+## Исправление (2026-10-20, P3)
+
+- `computed_style_to_map` вызывает новый `grid_computed::insert_grid_computed`: `grid-template-columns/rows` (вычисленное значение: длины в px, имена линий, `repeat(auto-fill|auto-fit, …)` как написан, `subgrid [a] []`), `grid-template-areas` (`"a b" "c d"`), `grid-auto-columns/rows/flow` (`row dense` → `dense`), `grid-{row,column}-{start,end}`, `grid-row`/`grid-column`/`grid-area` в кратчайшей форме (конец, который шорткод достроит сам, опускается), `row-gap`/`column-gap`/`gap` и алиасы `grid-*-gap` (`normal` или px/%).
+- У grid-контейнера `grid-template-columns/rows` — **разрешённое** значение (Grid L1 §7.2.6): grid-раскладка пишет в `LayoutBox::used_grid_tracks` размеры всех дорожек (явных, неявных; опустевшая `auto-fit` — `0px`) и имена линий (`grid_trampoline::record_used_tracks`), `resolved_geometry::apply_used_geometry` подставляет их вместо вычисленного значения. Ось `subgrid` отдаёт `subgrid` и имена пересекаемых линий.
+- Тесты: `crates/engine/layout/src/tests/grid_computed_style.rs`.
+
+**Остаток** — [BUG-1655](BUG-1655-OPEN.md). WPT-прогон `css/css-grid` не делался.

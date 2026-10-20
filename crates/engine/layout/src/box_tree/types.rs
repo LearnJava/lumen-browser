@@ -1,5 +1,15 @@
 use super::*;
 
+/// Used track sizes (px, in layout space) and line names of both axes of a grid container; see
+/// [`LayoutBox::used_grid_tracks`]. `*_names` has `tracks + 1` groups, or is empty when the axis has no names.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UsedGridTracks {
+    pub cols: Vec<f32>,
+    pub rows: Vec<f32>,
+    pub col_names: Vec<Vec<String>>,
+    pub row_names: Vec<Vec<String>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
     pub node: NodeId,
@@ -69,6 +79,12 @@ pub struct LayoutBox {
     /// Унаследованные дорожки `subgrid`-контейнера (Grid L2 §9) — для щелей `column-rule`/`row-rule`
     /// (CSS Gap Decorations L1), которые идут по дорожкам родителя. `None` — не subgrid.
     pub subgrid_tracks: Option<Box<crate::subgrid::SubgridTracks>>,
+    /// CSSOM resolved value of `grid-template-columns`/`-rows` (Grid L1 §7.2.6) — used track sizes and line
+    /// names of a grid container, as the layout placed them. Written by `grid_trampoline::finish_frame`;
+    /// read by `resolved_geometry` for `getComputedStyle()`. `None` — not a grid container, or an
+    /// orientation the grid trampoline does not record (vertical writing mode). Lives here, not in
+    /// `style`: `style` is `Arc`-shared (see `used_line_height`).
+    pub used_grid_tracks: Option<Box<UsedGridTracks>>,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
     /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.

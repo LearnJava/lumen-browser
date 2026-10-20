@@ -161,7 +161,7 @@ pub use image_requests::{
 use image_requests::resolve_image_source;
 
 mod types;
-pub use types::{BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, SvgMaskContent};
+pub use types::{BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, UsedGridTracks, SvgMaskContent};
 
 mod pseudo_text;
 use pseudo_text::{

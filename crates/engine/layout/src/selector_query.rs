@@ -1918,6 +1918,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("flex-basis".into(), fb);
     m.insert("order".into(), style.order.to_string());
 
+    // ── Grid (CSS Grid L1/L2) and gaps (Box Alignment L3 §8) ─────────
+    crate::grid_computed::insert_grid_computed(style, &mut m);
+
     // ── Cursor / pointer ─────────────────────────────────────────
     m.insert("cursor".into(), match style.cursor {
         Cursor::Auto => "auto",

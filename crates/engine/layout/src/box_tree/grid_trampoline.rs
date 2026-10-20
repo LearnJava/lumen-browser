@@ -1324,6 +1324,7 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
     );
     frame.b.grid_baselines = container_baselines(frame, measurer);
     record_own_tracks(frame);
+    record_used_tracks(frame);
     let init = &*frame.init;
     let content_bottom = frame.b.rect.y + frame.b.rect.height - init.s.border_bottom_width - init.padding_bottom;
     let content = Rect::new(
@@ -1358,6 +1359,21 @@ fn record_own_tracks(frame: &mut Frame) {
         tracks.rows = spans(&init.row_offsets, &init.row_heights, init.n_rows);
     }
     frame.b.subgrid_tracks = (tracks.cols.is_some() || tracks.rows.is_some()).then(|| Box::new(tracks));
+}
+
+/// CSSOM resolved value of `grid-template-columns`/`-rows` (Grid L1 §7.2.6): every track of the grid —
+/// explicit and implicit, an emptied `auto-fit` track as `0` — with the line names the layout used.
+#[inline(never)]
+fn record_used_tracks(frame: &mut Frame) {
+    let init = &frame.init;
+    let (n_cols, n_rows) = (init.n_cols as usize, init.n_rows as usize);
+    let sizes = |v: &[f32], n: usize| v[..n.min(v.len())].to_vec();
+    frame.b.used_grid_tracks = Some(Box::new(UsedGridTracks {
+        cols: sizes(&init.col_widths, n_cols),
+        rows: sizes(&init.row_heights, n_rows),
+        col_names: init.col_names.clone(),
+        row_names: init.row_names.clone(),
+    }));
 }
 
 /// CSS Grid L1 §6.1 — первая и последняя базовая линия контейнера, от верхней
