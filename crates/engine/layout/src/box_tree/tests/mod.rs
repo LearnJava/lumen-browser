@@ -494,6 +494,7 @@ mod grid_track_limit;
 mod container_min_max_height;
 mod grid_overflow_align;
 mod grid_item_percent_height;
+mod grid_item_percent_inset;
 mod flex_column_percent_height;
 mod flex_auto_min_size;
 mod flex_factor_below_one;
