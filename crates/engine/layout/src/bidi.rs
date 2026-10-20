@@ -24,7 +24,10 @@
 //! produces two isolates (`abc `, ` ghi`) around a bare `def` instead of one
 //! isolate around all three: `unicode-bidi` does not inherit, so the `<b>`
 //! segment carries `normal` and breaks the group. Single-text-node cases —
-//! `<bdo>`, `<bdi>`, `<span dir=rtl>` — are exact.
+//! `<bdo>`, `<bdi>`, `<span dir=rtl>` — are exact. The one exception is the
+//! `*-override` family: `ComputedStyle::bidi_override` carries the context down
+//! to `normal` descendants, so they are overridden and grouped with the owner
+//! (BUG-1371).
 
 use std::borrow::Cow;
 
@@ -73,6 +76,16 @@ fn wrapping(bidi: UnicodeBidi, dir: Direction) -> (&'static [char], &'static [ch
     }
 }
 
+/// `unicode-bidi` and `direction` that wrap the segment. A `normal` segment
+/// nested in a `bidi-override` box is overridden too (CSS Writing Modes L4
+/// §2.4.2), with the box's own direction — see `ComputedStyle::bidi_override`.
+fn effective(seg: &InlineSegment) -> (UnicodeBidi, Direction) {
+    match seg.style.bidi_override {
+        Some(ctx) if seg.style.unicode_bidi == UnicodeBidi::Normal => ctx,
+        _ => (seg.style.unicode_bidi, seg.style.direction),
+    }
+}
+
 /// True when `text` can possibly carry a non-zero embedding level: it holds a
 /// right-to-left character, an Arabic number, or an explicit bidi control.
 ///
@@ -104,7 +117,7 @@ fn has_bidi_relevant_char(text: &str) -> bool {
 pub(crate) fn needs_resolution(segments: &[InlineSegment], base: Direction) -> bool {
     base == Direction::Rtl
         || segments.iter().any(|s| {
-            s.style.unicode_bidi != UnicodeBidi::Normal
+            effective(s).0 != UnicodeBidi::Normal
                 || s.style.direction == Direction::Rtl
                 || has_bidi_relevant_char(&s.text)
         })
@@ -131,13 +144,11 @@ pub(crate) fn resolve(segments: &[InlineSegment], base: Direction) -> Vec<Inline
         // Adjacent segments sharing the same non-`normal` `unicode-bidi` are
         // wrapped once, as a group: a `<span dir=rtl>` split into several
         // segments by whitespace handling must stay a single embedding.
-        let group_bidi = segments[i].style.unicode_bidi;
-        let group_dir = segments[i].style.direction;
+        let (group_bidi, group_dir) = effective(&segments[i]);
         let mut j = i + 1;
         if group_bidi != UnicodeBidi::Normal {
             while j < segments.len()
-                && segments[j].style.unicode_bidi == group_bidi
-                && segments[j].style.direction == group_dir
+                && effective(&segments[j]) == (group_bidi, group_dir)
             {
                 j += 1;
             }
@@ -484,6 +495,40 @@ mod tests {
         let out = resolve(&segs, Direction::Ltr);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].bidi_level, 1);
+    }
+
+    fn seg_in_override(text: &str, bidi: UnicodeBidi) -> InlineSegment {
+        let mut s = seg(text, Direction::Rtl, UnicodeBidi::Normal);
+        let mut style = (*s.style).clone();
+        style.bidi_override = Some((bidi, Direction::Rtl));
+        s.style = std::sync::Arc::new(style);
+        s
+    }
+
+    #[test]
+    fn normal_descendant_of_an_override_is_overridden_too() {
+        // BUG-1371: `<p style="direction:rtl;unicode-bidi:bidi-override"><span>abc</span> def</p>`
+        let segs = [
+            seg_in_override("abc", UnicodeBidi::BidiOverride),
+            seg("def", Direction::Rtl, UnicodeBidi::BidiOverride),
+        ];
+        assert!(needs_resolution(&segs[..1], Direction::Ltr));
+        let out = resolve(&segs, Direction::Ltr);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|p| p.bidi_level == 1), "both words are forced RTL");
+    }
+
+    #[test]
+    fn override_context_groups_with_its_owner_into_one_wrapper() {
+        // The nested `normal` segment must not break the owner's `isolate-override`.
+        let segs = [
+            seg("ab", Direction::Rtl, UnicodeBidi::IsolateOverride),
+            seg_in_override("cd", UnicodeBidi::IsolateOverride),
+        ];
+        let out = resolve(&segs, Direction::Ltr);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|p| p.bidi_level % 2 == 1), "{:?}", out.iter().map(|p| p.bidi_level).collect::<Vec<_>>());
+        assert_eq!(out[0].bidi_level, out[1].bidi_level, "one wrapper, one level");
     }
 
     #[test]
