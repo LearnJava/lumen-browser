@@ -1594,7 +1594,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextAlign::MatchParent => "start",
     }.into());
     // BUG-1325: остальные свойства CSS Text, которых раньше не было в карте.
-    m.insert("text-align-last".into(), match style.text_align_last {
+    m.insert("text-align-last".into(), if style.text_extra.align_last_match_parent { "match-parent" } else { match style.text_align_last {
         TextAlignLast::Auto => "auto",
         TextAlignLast::Start => "start",
         TextAlignLast::End => "end",
@@ -1602,8 +1602,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         TextAlignLast::Right => "right",
         TextAlignLast::Center => "center",
         TextAlignLast::Justify => "justify",
-        TextAlignLast::MatchParent => "match-parent",
-    }.into());
+        // Не резолвлен каскадом (стиль собран в обход `compute_style`): ведёт себя как `start`.
+        TextAlignLast::MatchParent => "start",
+    } }.into());
+    m.insert("text-justify".into(), style.text_extra.justify.serialize().into());
     m.insert("tab-size".into(), match style.text_extra.tab_size_number {
         Some(n) => number_str(n),
         None => px_str(style.tab_size),
@@ -2581,7 +2583,7 @@ mod tests {
     fn css_text_longhands_are_serialised() {
         let (doc, tree) = layout_tree(
             r#"<div id="d">x</div><div id="v"><p id="m">y</p><p id="r">z</p></div>"#,
-            "#v { tab-size: 4; text-wrap: nowrap balance; line-break: strict; word-break: auto-phrase;                word-wrap: anywhere; hyphens: auto; text-align: center; text-align-last: match-parent;                text-transform: full-width capitalize; white-space: preserve-breaks nowrap;                font-size: 20px; text-indent: each-line calc(10px + 0.5em) hanging }              #m { text-align: match-parent } #r { tab-size: 10px; letter-spacing: 0px }",
+            "#v { tab-size: 4; text-wrap: nowrap balance; line-break: strict; word-break: auto-phrase;                word-wrap: anywhere; hyphens: auto; text-align: center; text-align-last: match-parent; text-justify: distribute;                text-transform: full-width capitalize; white-space: preserve-breaks nowrap;                font-size: 20px; text-indent: each-line calc(10px + 0.5em) hanging }              #m { text-align: match-parent } #r { tab-size: 10px; letter-spacing: 0px }",
         );
         let get = |sel: &str, prop: &str| {
             let b = find_box_by_selector(&tree, &doc, sel).expect("box");
@@ -2601,6 +2603,8 @@ mod tests {
         assert_eq!(get("#v", "word-wrap").as_deref(), Some("anywhere"));
         assert_eq!(get("#v", "hyphens").as_deref(), Some("auto"));
         assert_eq!(get("#v", "text-align-last").as_deref(), Some("match-parent"));
+        assert_eq!(get("#v", "text-justify").as_deref(), Some("inter-character"));
+        assert_eq!(get("#d", "text-justify").as_deref(), Some("auto"));
         assert_eq!(get("#v", "text-transform").as_deref(), Some("capitalize full-width"));
         assert_eq!(get("#v", "white-space").as_deref(), Some("preserve-breaks nowrap"));
         assert_eq!(get("#v", "text-indent").as_deref(), Some("20px hanging each-line"));

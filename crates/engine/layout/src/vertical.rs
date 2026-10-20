@@ -553,6 +553,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     source_char_offset: seg.source_char_offset,
                     bidi_level: seg.bidi_level,
                     merged_sources: Vec::new(),
+                    forced_end: false,
                 });
             }
             current_y = line_start;
@@ -591,6 +592,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
             current_y += frag_h;
             continue;
@@ -621,6 +623,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
             current_y += img_advance;
             prev_trailing_ws = seg_trail_ws;
@@ -709,6 +712,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     source_char_offset: frag_source_offset,
                     bidi_level: seg.bidi_level,
                     merged_sources: Vec::new(),
+                    forced_end: false,
                 });
                 let next_col = result.len();
                 result.push(Vec::new());
@@ -741,6 +745,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 source_char_offset: frag_source_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
             current_y += word_h + post;
             prev_trailing_ws = seg_trail_ws;

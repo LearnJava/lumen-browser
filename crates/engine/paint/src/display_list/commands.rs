@@ -104,7 +104,7 @@ pub enum DisplayCommand {
         tab_size: f32,
         /// CSS Text L3 §8.2 — `letter-spacing`: добавляется после каждого
         /// символа (layout уже учёл его в ширине фрагмента). 0 = `normal`.
-        /// Фиксированная точка 1/64 px (`spacing_to_fixed`/`spacing_px`): `i16`
+        /// Фиксированная точка (`spacing_to_fixed`/`spacing_px`): `i16`
         /// вместо `f32`, чтобы `DisplayCommand` не вырос (тест размера 192).
         letter_spacing: i16,
         /// CSS Text L3 §8.1 — `word-spacing` (процент приближён от font-size),
@@ -688,15 +688,34 @@ pub enum DisplayCommand {
     },
 }
 
-/// px → фиксированная точка 1/64 px для `DrawText::{letter,word}_spacing`
-/// (насыщение по границам `i16`, ±511 px).
+/// px → фиксированная точка для `DrawText::{letter,word}_spacing`: до ±128 px — 1/64 px, дальше
+/// шаг 1/2 px до ±12 415 px, затем насыщение. Широкий диапазон нужен `text-align: justify`: запас
+/// строки с одним-двумя пробелами целиком ложится в `word-spacing`.
 pub fn spacing_to_fixed(px: f32) -> i16 {
-    (px * 64.0).round().clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+    let a = px.abs();
+    let v = if a <= SPACING_LINEAR_PX {
+        (a * 64.0).round()
+    } else {
+        SPACING_LINEAR_STEPS + ((a - SPACING_LINEAR_PX) * 2.0).round()
+    };
+    let v = v.min(f32::from(i16::MAX)) as i16;
+    if px < 0.0 { -v } else { v }
 }
+
+/// Граница линейного участка кодирования [`spacing_to_fixed`], px.
+const SPACING_LINEAR_PX: f32 = 128.0;
+/// Она же в шагах 1/64 px.
+const SPACING_LINEAR_STEPS: f32 = SPACING_LINEAR_PX * 64.0;
 
 /// Обратное к [`spacing_to_fixed`].
 pub fn spacing_px(fixed: i16) -> f32 {
-    f32::from(fixed) / 64.0
+    let a = f32::from(fixed).abs();
+    let px = if a <= SPACING_LINEAR_STEPS {
+        a / 64.0
+    } else {
+        SPACING_LINEAR_PX + (a - SPACING_LINEAR_STEPS) / 2.0
+    };
+    if fixed < 0 { -px } else { px }
 }
 
 impl DisplayCommand {
@@ -1072,5 +1091,22 @@ mod tests {
         for name in expected {
             assert!(names.contains(name), "missing sample for variant {name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod spacing_fixed_tests {
+    use super::{spacing_px, spacing_to_fixed};
+
+    #[test]
+    fn spacing_roundtrips_small_values_exactly_and_large_ones_to_half_a_pixel() {
+        for px in [0.0, 0.5, -2.25, 1.0 / 64.0, 127.0, -128.0] {
+            assert_eq!(spacing_px(spacing_to_fixed(px)), px);
+        }
+        for px in [129.0, 500.0, 686.3, -3000.0, 12000.0] {
+            assert!((spacing_px(spacing_to_fixed(px)) - px).abs() <= 0.25, "{px}");
+        }
+        assert!(spacing_px(spacing_to_fixed(1e9)) > 12000.0);
+        assert!(spacing_px(spacing_to_fixed(-1e9)) < -12000.0);
     }
 }

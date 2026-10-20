@@ -151,6 +151,9 @@ pub(crate) fn wrap_preserved_segment(
                 pad_l, pad_r, p.m, current_line, current_x,
             );
             first_piece &= piece_start == s;
+            if style.text_align == crate::style::TextAlign::Justify {
+                split_hanging_spaces(current_line, p.m);
+            }
             result.push(std::mem::take(current_line));
             *current_x = p.soft_x;
             piece_start = s;
@@ -165,6 +168,32 @@ pub(crate) fn wrap_preserved_segment(
         pad_l, pad_r, p.m, current_line, current_x,
     );
     *current_x += seg.post_space;
+}
+
+/// Отделяет висящие пробелы конца мягко перенесённой строки в собственный фрагмент: растяжение
+/// `text-align: justify` их не считает ни местом, ни шириной строки (CSS Text L3 §4.1.3, §7.1).
+fn split_hanging_spaces(line: &mut Vec<InlineFrag>, m: &dyn TextMeasurer) {
+    let Some(f) = line.last_mut() else { return };
+    if f.img_src.is_some() || f.text.is_empty() {
+        return;
+    }
+    let head_len = f.text.trim_end_matches(' ').len();
+    if head_len == 0 || head_len == f.text.len() {
+        return;
+    }
+    let tabs = TabStops::of(&f.style, m);
+    let ls = f.style.letter_spacing;
+    let head_w = measure_text_tabbed(&f.text[..head_len], f.x, &f.style, tabs, m) + ls;
+    let mut tail = f.clone();
+    tail.text = f.text[head_len..].to_string();
+    tail.x = f.x + head_w;
+    tail.width = (f.width - head_w).max(0.0);
+    tail.padding_left = 0.0;
+    tail.source_char_offset = f.source_char_offset.saturating_add(head_len as u32);
+    f.text.truncate(head_len);
+    f.width = head_w;
+    f.padding_right = 0.0;
+    line.push(tail);
 }
 
 /// Pushes `piece` as fragments of the current line (one per tab, see

@@ -2878,6 +2878,7 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // are values of `text-align`; `text-align-last` takes the same set minus `justify-all`.
     'text-align':     ['start', 'end', 'left', 'center', 'right', 'justify', 'match-parent', 'justify-all'],
     'text-align-last': ['auto', 'start', 'end', 'left', 'right', 'center', 'justify', 'match-parent'],
+    'text-justify':   ['auto', 'none', 'inter-word', 'inter-character', 'distribute'],
     'direction':      ['ltr', 'rtl'],
     // CSS Text L3/L4 line-breaking and wrapping keywords (BUG-1325). `word-wrap` is an alias of
     // `overflow-wrap` and is folded into it by `_lumen_camel_to_kebab`. `text-transform`,
