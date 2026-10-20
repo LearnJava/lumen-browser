@@ -448,7 +448,7 @@ pub(crate) fn is_closed_popover(doc: &Document, id: NodeId) -> bool {
 
 /// Which reference extent a `%` in an SVG geometry attribute resolves against (SVG 2 §8.9).
 #[derive(Clone, Copy)]
-enum SvgAxis {
+pub(super) enum SvgAxis {
     /// `x`, `cx`, `x1`, `x2`, `width`, `rx` — the viewport width.
     X,
     /// `y`, `cy`, `y1`, `y2`, `height`, `ry` — the viewport height.
@@ -460,20 +460,20 @@ enum SvgAxis {
 /// Context for reading `<length-percentage>` geometry attributes of one SVG element:
 /// `em` from the element's own font size, `%` against the nearest viewport.
 #[derive(Clone, Copy)]
-struct SvgLenCtx<'a> {
-    doc: &'a Document,
-    id: NodeId,
-    em: f32,
-    viewport: Size,
+pub(super) struct SvgLenCtx<'a> {
+    pub(super) doc: &'a Document,
+    pub(super) id: NodeId,
+    pub(super) em: f32,
+    pub(super) viewport: Size,
     /// CSS-px size of the root `<svg>` — the `%` basis when no ancestor `<svg>` has a `viewBox`.
-    own_svg_size: Size,
+    pub(super) own_svg_size: Size,
 }
 
 impl SvgLenCtx<'_> {
     /// Parses a geometry attribute; returns 0.0 if absent or invalid. A bare number (and `px`)
     /// is a user unit; `%`, `em`, `rem` and the other CSS units resolve through the CSS
     /// `<length>` parser. BUG-1287: a suffixed value used to fail `f32::parse` and become 0.
-    fn len(&self, attr: &str, axis: SvgAxis) -> f32 {
+    pub(super) fn len(&self, attr: &str, axis: SvgAxis) -> f32 {
         let Some(raw) = self.doc.get(self.id).get_attr(attr) else { return 0.0 };
         let raw = raw.trim();
         if let Ok(v) = raw.parse::<f32>() {
@@ -1782,6 +1782,14 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
             lay_out_svg_children_positions(&mut mask.content, ox, oy, sx, sy, &composed);
         }
     }
+
+    // CSS Masking L1 §3.1 — a resolved `clip-path: url(#id)` lives in the user space
+    // of the element it is set on (the element's own `transform` included).
+    if matches!(b.style.clip_path, Some(crate::style::ClipPath::Svg(_))) {
+        let mut m_doc = SvgTransform { matrix: [sx, 0.0, 0.0, sy, ox, oy] };
+        m_doc.compose(&composed);
+        super::svg_clip::place_clip_path(b, &m_doc);
+    }
 }
 
 /// Applies an SVG transform matrix to a bounding box by transforming all 4 corners
@@ -1809,7 +1817,7 @@ fn apply_transform_to_bbox(bbox: &Rect, transform: &SvgTransform) -> Rect {
 /// Bounding box of an SVG shape in document coordinates.
 /// `ox`/`oy` — document-space origin of the SVG viewport (after viewBox min_x/min_y offset).
 /// `sx`/`sy` — CSS-px / SVG-user-unit scale factors.
-fn svg_shape_bbox(shape: &SvgShapeKind, ox: f32, oy: f32, sx: f32, sy: f32) -> Rect {
+pub(super) fn svg_shape_bbox(shape: &SvgShapeKind, ox: f32, oy: f32, sx: f32, sy: f32) -> Rect {
     match *shape {
         SvgShapeKind::Rect { x, y, width, height, .. } =>
             Rect::new(ox + x * sx, oy + y * sy, width * sx, height * sy),
