@@ -439,5 +439,5 @@ fn top_level_rule_insert_rule_adds_a_nested_rule_and_rejects_garbage() {
             }
         })()",
     ).unwrap();
-    assert_eq!(r, lumen_core::JsValue::String("1:b { color: red; }:true:SyntaxError".to_string()));
+    assert_eq!(r, lumen_core::JsValue::String("1:& b { color: red; }:true:SyntaxError".to_string()));
 }

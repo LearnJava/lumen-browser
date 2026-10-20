@@ -336,7 +336,9 @@ pub(crate) fn patched_cascade(
             }
             None => {
                 let wanted = if needle.is_empty() {
-                    !entry.sheet.cssom_rules().is_empty()
+                    // `@layer`/`@scope`/… не входят в `cssom_rules()` — у правленого листа
+                    // смотрим на дерево.
+                    !entry.sheet.cssom_rules().is_empty() || (tree_edited && !entry.sheet.cssom_tree().rules.is_empty())
                 } else {
                     merge_unlocated_text
                 };
@@ -468,5 +470,49 @@ fn is_connected(doc: &Document, id: NodeId) -> bool {
                 None => return false,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tree_edit_tests {
+    use super::*;
+
+    fn entry(node: u32, sheet: Stylesheet) -> StylesheetNodeEntry {
+        StylesheetNodeEntry { node, sheet: Arc::new(sheet), disabled: false }
+    }
+
+    /// Правка дерева листа подменяет его кусок текста каскада; соседний лист не трогается.
+    #[test]
+    fn tree_edit_replaces_the_located_sheet_text_only() {
+        let first = "a { color: red; }";
+        let second = "p { color: blue; }";
+        let cascade = lumen_css_parser::parse(&format!("{first}\n{second}"));
+        let mut edited = lumen_css_parser::parse(first);
+        edited.cssom_insert_rule(None, "@media print { a { color: green; } }", 1).unwrap();
+        let nodes = [entry(1, edited), entry(2, lumen_css_parser::parse(second))];
+        let deltas = [(1u32, CssomOp::TreeEdit)];
+
+        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), false).unwrap();
+        let text = patched.source().unwrap();
+        assert!(text.contains("@media print"), "{text}");
+        assert!(text.contains(second), "{text}");
+        assert_eq!(patched.media_rules.len(), 1);
+    }
+
+    /// `@layer`, вставленный в пустой `<style>`, встаёт на место этого `<style>` в тексте
+    /// (порядок слоёв зависит от места объявления), а не в конец каскада.
+    #[test]
+    fn layer_inserted_into_an_empty_style_lands_at_its_document_position() {
+        let cascade = lumen_css_parser::parse("@layer second { p { color: red; } }");
+        let mut empty = lumen_css_parser::parse("");
+        empty.cssom_insert_rule(None, "@layer first {}", 0).unwrap();
+        assert_eq!(empty.source(), Some(""), "source() must stay the DOM text");
+        let nodes = [entry(1, empty), entry(2, lumen_css_parser::parse("@layer second { p { color: red; } }"))];
+        let deltas = [(1u32, CssomOp::TreeEdit)];
+
+        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), false).unwrap();
+        let text = patched.source().unwrap();
+        assert!(text.contains("first") && text.contains("second"), "{text:?}");
+        assert!(text.find("first").unwrap() < text.find("second").unwrap(), "{text:?}");
     }
 }
