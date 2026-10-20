@@ -320,6 +320,7 @@ mod v8_gap_rule_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1293_motion_overlay;
 mod v8_gap_rule_interp;
+mod v8_bug1305_wa_neutral;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s61_positioned_skip;
 #[cfg(feature = "v8-backend")]

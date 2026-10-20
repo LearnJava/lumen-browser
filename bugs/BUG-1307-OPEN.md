@@ -24,7 +24,7 @@ WPT-RUN-14 срез 7: 29 id / 974 сабтеста `css/css-grid` (`grid-layout
 
 ## Что делать
 
-Строки для перечисленных свойств в `computed_style_to_map` (указанные значения для `grid-auto-*`, `gap`, line-based placement; для `grid-template-columns/rows` — разрешённые размеры треков из раскладки, `none` для не-grid). `animation/grid-template-columns-*` ждёт ещё [BUG-1305](BUG-1305-OPEN.md) (неявный кадр).
+Строки для перечисленных свойств в `computed_style_to_map` (указанные значения для `grid-auto-*`, `gap`, line-based placement; для `grid-template-columns/rows` — разрешённые размеры треков из раскладки, `none` для не-grid). `animation/grid-template-columns-*` ждёт ещё [BUG-1305](BUG-1305-FIXED.md) (неявный кадр).
 
 ## Как проверить
 
