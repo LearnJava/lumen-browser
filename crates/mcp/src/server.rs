@@ -31,7 +31,7 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
 }
 
 /// Инструкция для ИИ-агента, отдаётся в `initialize` (MCP §Lifecycle, `instructions`).
-const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
+const SERVER_INSTRUCTIONS: &str = "Lumen is a browser you drive and inspect. Workflow: (1) `navigate` (current tab) or `new_tab` with a URL; (2) `wait` with condition document_ready, or network_idle for script-heavy pages — navigation returns before the page has finished loading; (3) read the page with `query` (CSS selector -> nodes with node_id, text, rect) or `eval` (JavaScript; the result is a string, so use JSON.stringify for structured data); (4) interact with `click` / `type` / `scroll`, then `wait` again. A popup (`window.open`, `target=_blank`) opens as a new tab but does not take over the tools: `list_tabs`, then `switch_tab` to it, and `close_tab` / `switch_tab` back when done. `target` of click/type/scroll is a CSS selector string, {selector}, {node_id} or {point: {x, y}}. `screenshot` and the accessibility, layout, console and network resources help to verify what is shown. `eval` may time out on a busy page: raise `timeout_ms`. Tools prefixed `x-` are experimental (ADR-024): causal explanation of styles and layout (`x-computed-style`, `x-explain-element`, `x-explain-page`, `x-scope-layout`), their output format may change. Errors come back as JSON-RPC errors with a message; a failed tool does not close the session.";
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
@@ -225,6 +225,42 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         "url": {
                             "type": "string",
                             "description": "URL to load in the new tab"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "list_tabs".to_string(),
+                description: "List the open tabs of the live window in strip order. Returns {tabs: [{id, url, title, active}]}. `id` is stable for the session and is what `switch_tab` / `close_tab` take. A popup opened by `window.open()` or a `target=_blank` link shows up here as a new tab; the opener stays the target of the tools until you `switch_tab`.".to_string(),
+                input_schema: json!({ "type": "object", "properties": {} }),
+                experimental: false,
+            },
+            McpTool {
+                name: "switch_tab".to_string(),
+                description: "Make a tab the active one and the target of every following tool (`navigate`, `click`, `eval`, `query`, `wait`, ...). Returns {success, id}. Errors if no tab has that id.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Tab id from `list_tabs`"
+                        }
+                    }
+                }),
+                experimental: false,
+            },
+            McpTool {
+                name: "close_tab".to_string(),
+                description: "Close a tab. Returns {success, id}. The tab that takes the foreground (the opener of a closed popup) becomes the target. Errors if no tab has that id or it is the last tab (closing it would exit the browser).".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Tab id from `list_tabs`"
                         }
                     }
                 }),
@@ -663,6 +699,32 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("NewTab error: {e}")),
                 }
             }
+            "list_tabs" => match self.session.list_tabs() {
+                Ok(tabs) => json!({
+                    "tabs": tabs.iter().map(|t| json!({
+                        "id": t.id, "url": t.url, "title": t.title, "active": t.active,
+                    })).collect::<Vec<_>>()
+                }),
+                Err(e) => return McpResponse::err(id.clone(), -32603, format!("ListTabs error: {e}")),
+            },
+            "switch_tab" => {
+                let Some(tab_id) = args.get("id").and_then(|v| v.as_u64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing id argument");
+                };
+                match self.session.switch_tab(tab_id as usize) {
+                    Ok(()) => json!({ "success": true, "id": tab_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("SwitchTab error: {e}")),
+                }
+            }
+            "close_tab" => {
+                let Some(tab_id) = args.get("id").and_then(|v| v.as_u64()) else {
+                    return McpResponse::err(id.clone(), -32602, "Missing id argument");
+                };
+                match self.session.close_tab(tab_id as usize) {
+                    Ok(()) => json!({ "success": true, "id": tab_id }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("CloseTab error: {e}")),
+                }
+            }
             "click" => {
                 let target_obj = match args.get("target") {
                     Some(t) => t,
@@ -1029,6 +1091,24 @@ mod tests {
             Ok(())
         }
 
+        fn list_tabs(&self) -> lumen_core::error::Result<Vec<lumen_driver::TabInfo>> {
+            Ok(vec![
+                lumen_driver::TabInfo { id: 1, url: "https://a.test/".into(), title: "A".into(), active: false },
+                lumen_driver::TabInfo { id: 2, url: "https://b.test/popup".into(), title: "B".into(), active: true },
+            ])
+        }
+
+        fn switch_tab(&mut self, id: usize) -> lumen_core::error::Result<()> {
+            if id > 2 {
+                return Err(lumen_core::error::Error::Other(format!("нет вкладки {id}")));
+            }
+            Ok(())
+        }
+
+        fn close_tab(&mut self, id: usize) -> lumen_core::error::Result<()> {
+            self.switch_tab(id)
+        }
+
         fn click(&mut self, _t: &lumen_driver::Target) -> lumen_core::error::Result<()> {
             Ok(())
         }
@@ -1198,16 +1278,19 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_seventeen_tools() {
+    fn tools_list_returns_twenty_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 20);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
+        assert!(names.contains(&"list_tabs"));
+        assert!(names.contains(&"switch_tab"));
+        assert!(names.contains(&"close_tab"));
         assert!(names.contains(&"click"));
         assert!(names.contains(&"type"));
         assert!(names.contains(&"scroll"));
@@ -1572,6 +1655,36 @@ mod tests {
         assert_eq!(result["isError"], true);
         assert_eq!(result["content"][0]["type"], "text");
         assert!(result["content"][0]["text"].as_str().unwrap().contains("boom"));
+    }
+
+    #[test]
+    fn tool_list_tabs_returns_id_url_title_active() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("tools/call", serde_json::json!({ "name": "list_tabs", "arguments": {} }));
+        let result = run_one(&mut server, &req).result.unwrap();
+        let tabs = result["tabs"].as_array().unwrap();
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[1]["id"], 2);
+        assert_eq!(tabs[1]["url"], "https://b.test/popup");
+        assert_eq!(tabs[1]["title"], "B");
+        assert_eq!(tabs[1]["active"], true);
+        assert_eq!(tabs[0]["active"], false);
+    }
+
+    #[test]
+    fn tool_switch_and_close_tab_take_id() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        for name in ["switch_tab", "close_tab"] {
+            let ok = make_request("tools/call", serde_json::json!({ "name": name, "arguments": { "id": 2 } }));
+            let result = run_one(&mut server, &ok).result.unwrap();
+            assert_eq!(result["success"], true, "{name}");
+            assert_eq!(result["id"], 2, "{name}");
+            let missing = make_request("tools/call", serde_json::json!({ "name": name, "arguments": {} }));
+            assert!(run_one(&mut server, &missing).error.is_some(), "{name}: id обязателен");
+            let unknown = make_request("tools/call", serde_json::json!({ "name": name, "arguments": { "id": 9 } }));
+            let result = run_one(&mut server, &unknown).result.unwrap();
+            assert_eq!(result["isError"], true, "{name}: неизвестный id — isError");
+        }
     }
 
     #[test]

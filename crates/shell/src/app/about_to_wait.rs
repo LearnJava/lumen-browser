@@ -902,6 +902,47 @@ impl Lumen {
                     self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::ListTabs => {
+                    let _ = reply_tx.send(AutomationReply::Tabs(self.automation_tab_list()));
+                }
+                AutomationCommand::SwitchTab(id) => {
+                    // The chosen tab becomes the automation target: `Navigate`
+                    // and a background-aware `Eval` follow `automation_tab`,
+                    // which would otherwise pull the foreground back to the
+                    // tab the popup was opened from (BUG-1199).
+                    let reply = match self.tab_strip.tabs.iter().position(|t| t.id == id) {
+                        Some(idx) => {
+                            self.switch_tab(idx);
+                            self.devtools_console.clear();
+                            self.automation_tab = Some(id);
+                            AutomationReply::Ack
+                        }
+                        None => AutomationReply::Error(format!("switch_tab: нет вкладки с id {id}")),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
+                AutomationCommand::CloseTab(id) => {
+                    let reply = match self.tab_strip.tabs.iter().position(|t| t.id == id) {
+                        None => AutomationReply::Error(format!("close_tab: нет вкладки с id {id}")),
+                        Some(_) if self.tab_strip.len() == 1 => AutomationReply::Error(
+                            "close_tab: последняя вкладка не закрывается (это завершило бы браузер)".to_owned(),
+                        ),
+                        Some(idx) => {
+                            self.close_tab(idx, event_loop);
+                            let target_open = self
+                                .automation_tab
+                                .is_some_and(|t| self.tab_strip.tabs.iter().any(|e| e.id == t));
+                            if !target_open {
+                                // The closed tab was the target: follow the tab
+                                // that took the foreground.
+                                self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
+                            }
+                            self.devtools_console.clear();
+                            AutomationReply::Ack
+                        }
+                    };
+                    let _ = reply_tx.send(reply);
+                }
                 AutomationCommand::Click(target) => {
                     match self.resolve_automation_target(&target) {
                         // BUG-934: a raw `Target::Point` may land on engine

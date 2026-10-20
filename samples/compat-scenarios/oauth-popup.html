@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>OAuth popup stand</title>
+<style>body{font-family:sans-serif;margin:40px}button{font-size:16px;padding:8px}</style></head>
+<body>
+<h1>Welcome</h1>
+<button id="signin" type="button">Sign in with IdP</button>
+<p id="result" hidden></p>
+<script>
+// Вход через внешнего поставщика (Google/VK): кнопка открывает попап `window.open`, поставщик
+// возвращает результат в страницу сайта через postMessage на window.opener.
+document.getElementById('signin').addEventListener('click', function () {
+  window.open('oauth-idp.html?client=stand', 'idp', 'width=480,height=560');
+});
+window.addEventListener('message', function (e) {
+  if (!e.data || e.data.type !== 'idp-done') return;
+  var r = document.getElementById('result');
+  r.hidden = false;
+  r.textContent = 'Signed in as ' + e.data.user;
+});
+</script>
+</body></html>
