@@ -179,9 +179,11 @@ def load_scenarios(paths: list[Path] | None = None) -> tuple[list[dict], list[st
     return scenarios, errors
 
 
-def select(scenarios: list[dict], only: list[str], nightly: bool, with_stands: bool) -> list[dict]:
+def select(scenarios: list[dict], only: list[str], nightly: bool, with_stands: bool, lang: str = "") -> list[dict]:
     out = []
     for sc in scenarios:
+        if lang and sc.get("lang", "en") != lang:
+            continue
         if only and not any(o in sc["id"] for o in only):
             continue
         if nightly and sc.get("mode", "nightly") != "nightly":
@@ -204,11 +206,12 @@ LUMEN_ERR_RE = re.compile(r"\bERR_[A-Z0-9_]{3,}\b")
 BLANK_TEXT_MAX = 20
 EXCERPT_MAX = 240
 
-SCREEN_CLASSES = ("crash", "hang", "lumen_error", "wall", "captcha", "consent", "blank", "content")
+SCREEN_CLASSES = ("crash", "hang", "cert_error", "lumen_error", "wall", "captcha", "consent", "blank", "content")
+CERT_ERR_RE = re.compile(r"untrusted certificate|certificate (chain|verif)|invalid certificate|ERR_CERT_", re.IGNORECASE)
 
 
 def classify_screen(state: dict | None, status: int | None = None, dead: bool = False,
-                    hung: bool = False) -> dict:
+                    hung: bool = False, error: str = "") -> dict:
     """Распознать экран, на котором встал сценарий.
 
     state — {href, title, text} (видимый текст страницы); status — HTTP-статус главного
@@ -223,6 +226,9 @@ def classify_screen(state: dict | None, status: int | None = None, dead: bool = 
         return out
     if hung:
         out["class"] = "hang"
+        return out
+    if CERT_ERR_RE.search(error):  # навигация отвергнута проверкой сертификата (например, цепочка НУЦ без согласия)
+        out.update({"class": "cert_error", "signals": [CERT_ERR_RE.search(error).group(0)]})
         return out
     err = LUMEN_ERR_RE.search(text)
     if err:
@@ -348,7 +354,7 @@ class LiveDriver:
         try:
             return self.br.mcp.tool(name, args)
         except RuntimeError as e:
-            if "command timed out" in str(e):
+            if "command timed out" in str(e) or "engine thread busy" in str(e):
                 raise DriverHung(str(e)[:160]) from e
             raise StepFailed(str(e)[:200]) from e
         except (OSError, socket.timeout) as e:
@@ -559,11 +565,17 @@ def check_oracle(drv, oracle: dict) -> tuple[bool, str]:
     """Одна проверка оракула: (выполнена, пояснение)."""
     kind, value = oracle["kind"], oracle["value"]
     if kind == "visible":
-        ok = drv.eval("(() => { const e = document.querySelector(%s); if (!e) return false; "
-                      "const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()" % jsq(value))
+        try:
+            ok = drv.eval("(() => { const e = document.querySelector(%s); if (!e) return false; "
+                          "const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()" % jsq(value))
+        except StepFailed as e:
+            return False, f"visible {value}: {e}"
         return ok is True, f"visible {value}"
     if kind == "eval":
-        return bool(drv.eval(value)), "eval"
+        try:
+            return bool(drv.eval(value)), "eval"
+        except StepFailed as e:  # страница без ожидаемых узлов: оракул «не выполнен», а не падение прогона
+            return False, f"eval: {e}"
     st = drv.state()
     if kind == "url":
         return bool(re.search(value, st.get("href", ""))), f"url ~ /{value}/ (сейчас {st.get('href', '')[:80]})"
@@ -627,9 +639,15 @@ def attempt(drv, sc: dict, ctx: dict, out_dir: Path, tag: str) -> dict:
         rec["outcome"] = "crash"
     rec["seconds"] = round(time.monotonic() - t0, 1)
     if rec["outcome"] != "pass":
-        state = {} if (dead or hung) else drv.state()
+        state = {}
+        if not (dead or hung):
+            try:
+                state = drv.state()
+            except DriverHung:  # окно перестало отвечать уже после шагов — это тоже зависание
+                hung = True
         status = None if (dead or hung or not last_url) else drv.main_status(mark, last_url)
-        rec["screen"] = classify_screen(state, status=status, dead=dead, hung=hung)
+        err_text = " ".join(str(v) for v in ((rec.get("failed_step") or {}).get("error"), rec.get("failed_oracle")) if v)
+        rec["screen"] = classify_screen(state, status=status, dead=dead, hung=hung, error=err_text)
         rec["http_status"] = status
         if not (dead or hung):
             png = out_dir / f"{sc['id']}{tag}.png"
@@ -751,6 +769,10 @@ def main() -> int:
                     help="калибровка оракулов: прогнать только в Chrome, без окна Lumen (результат — как у Lumen, с пометкой chrome_only)")
     ap.add_argument("--chrome", help="путь к chrome.exe (по умолчанию Chrome for Testing из ms-playwright)")
     ap.add_argument("--headless", action="store_true", help="Chrome без окна")
+    ap.add_argument("--lang", choices=("ru", "en"), default="",
+                    help="только сценарии этого языка: RU-сайты идут напрямую, EN — через --lumen-arg=--proxy (маршрут иностранных сайтов)")
+    ap.add_argument("--lumen-arg", action="append", default=[], metavar="ARG",
+                    help="доп. аргумент командной строки lumen.exe (повторяемый; значение с дефисом — через =)")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VAL", help="доп. окружение для lumen")
     args = ap.parse_args()
 
@@ -763,7 +785,7 @@ def main() -> int:
         if args.validate or not args.list:
             return 1
     only = [o for o in args.only.split(",") if o]
-    chosen = select(scenarios, only, args.nightly, args.with_stands)
+    chosen = select(scenarios, only, args.nightly, args.with_stands, args.lang)
     if args.validate:
         print(f"[scenarios] {len(scenarios)} сценариев, формат верен")
         return 0
@@ -783,6 +805,7 @@ def main() -> int:
     for kv in args.env:
         k, _, v = kv.partition("=")
         pa.EXTRA_ENV[k] = v
+    pa.EXTRA_ARGS[:] = args.lumen_arg
     out_dir = (args.resume or args.out or OUT_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     (out_dir / "chrome").mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"
