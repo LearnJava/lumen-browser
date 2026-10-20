@@ -1697,6 +1697,7 @@ pub(crate) fn rekey_frame_images(dl: &mut DisplayList, frames: &[FrameHandle], i
                     h.parent_doc
                         .as_ref()
                         .is_some_and(|pd| Arc::ptr_eq(pd, &frames[idx].doc))
+                        && h.paints_in_host()
                         && &h.host_src == src
                 }) {
                     continue;
@@ -1846,7 +1847,7 @@ pub(crate) fn pointer_target(
 /// Идемпотентна: заглушка ищется по своей команде, а после вклейки её там
 /// больше нет — повторный проход по уже склеенному списку ничего не делает.
 pub(crate) fn splice_frame_content(dl: &mut DisplayList, frames: &[FrameHandle]) {
-    for h in frames.iter().filter(|h| h.parent_doc.is_none()) {
+    for h in frames.iter().filter(|h| h.parent_doc.is_none() && h.paints_in_host()) {
         splice_one_frame(dl, h);
     }
 }
@@ -1858,6 +1859,7 @@ fn splice_children_of(dl: &mut DisplayList, frames: &[FrameHandle], parent: usiz
         h.parent_doc
             .as_ref()
             .is_some_and(|pd| Arc::ptr_eq(pd, &frames[parent].doc))
+            && h.paints_in_host()
     }) {
         splice_one_frame(dl, h);
     }
@@ -2836,6 +2838,7 @@ pub(crate) fn spawn_frame(
         interactive: FrameNodeState::default(),
         host_rect: None,
         host_src: info.src.clone().unwrap_or_default(),
+        is_svg_embed: child_is_svg,
         images: {
             let mut images = subresources.decoded_images;
             images.extend(bg_images);
@@ -3167,6 +3170,10 @@ pub(crate) struct FrameHandle {
     /// Значение атрибута `src` host-элемента — половина ключа, по которому
     /// [`splice_one_frame`] узнаёт команду-заглушку в display list родителя.
     pub(crate) host_src: String,
+    /// Под-документ — SVG из `<object data>`/`<embed src>` (OBJECT-1 срез 5):
+    /// он нужен скриптам, а рисует его хозяин как картинку — см.
+    /// [`FrameHandle::paints_in_host`].
+    pub(crate) is_svg_embed: bool,
     /// Декодированные картинки под-документа (BUG-480 срез 15) — `<img>` плюс,
     /// с FRAME-5, `background-image`/`cross-fade()` ([`fetch_frame_background_images`]).
     ///
@@ -3233,6 +3240,17 @@ pub(crate) struct FrameHandle {
     /// drained it — harvested by [`harvest_frame_lazy_requests`] inside
     /// [`sync_frame_viewports`]/[`relayout_frame_content`].
     pub(crate) pending_lazy: Vec<(u32, String)>,
+}
+
+impl FrameHandle {
+    /// Содержимое фрейма вклеивается в display list хозяина. SVG-документ
+    /// `<object>`/`<embed>` — нет: хозяин рисует его как картинку (OBJECT-1
+    /// срез 5, `object-fit`/`object-position` по viewBox), а `DrawImage` с тем
+    /// же `src` и прямоугольником, что искал бы [`splice_one_frame`], — это
+    /// именно она, не заглушка (BUG-1420).
+    fn paints_in_host(&self) -> bool {
+        !self.is_svg_embed
+    }
 }
 
 // ── скролл под-документа (BUG-480 срез 17) ──────────────────────────────────
