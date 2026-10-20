@@ -1175,6 +1175,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                 let (top, bot) = (k.rect.y - gy0, k.rect.y - gy0 + k.rect.height);
                 !matches!(k.kind, BoxKind::Skip)
                     && !is_clippable_leaf(k)
+                    && !nested_cuttable(k, gy0, windows)
                     && windows.iter().enumerate().any(|(f, &(ws, we, _))| {
                         let room = room_at(c, gy0, ws, we);
                         (top < we - 0.01 && bot > we + room + 0.01)
@@ -1356,6 +1357,9 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                             // A childless block (an empty subgrid cell) that a window edge runs
                             // through is cut like the item: each window keeps its part
                             // (`subgrid-gap-decorations-fragmentation-007`).
+                            if nested_cuttable(g, gy, &windows) && (t < ws - 0.01 || b > we + room + 0.01) {
+                                return nested_fragment(g, gy, ws, we + room, dx, dy - up);
+                            }
                             if is_clippable_leaf(g) && (t < ws - 0.01 || b > we + room + 0.01) {
                                 let (glo, ghi) = (t.max(ws), b.min(we + room));
                                 return (ghi > glo).then(|| {
@@ -1444,6 +1448,87 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     frame.init.consumed[i] = true;
     frame.init.cur_y += seg_extent;
     true
+}
+
+/// A subgrid inside a subgrid item that the container's windows cut like the item itself: its rows
+/// are tracks of the outer grid, so every window edge that runs through it falls between two of
+/// them (no gap of its own is dropped) and none of its children straddles an edge
+/// (`subgrid/fragmentation/013`: two nested subgrids, every row gap suppressed).
+fn nested_cuttable(g: &LayoutBox, gy: f32, windows: &[(f32, f32, bool)]) -> bool {
+    let Some(t) = g.subgrid_tracks.as_ref().filter(|t| t.rows.is_some()) else { return false };
+    if matches!(g.kind, BoxKind::Skip) || is_monolithic(g) {
+        return false;
+    }
+    let (top, bot) = (g.rect.y - gy, g.rect.y - gy + g.rect.height);
+    let spans: Vec<(f32, f32)> = g
+        .children
+        .iter()
+        .filter(|h| !matches!(h.kind, BoxKind::Skip) && !is_clippable_leaf(h))
+        .map(|h| (h.rect.y - gy, h.rect.y - gy + h.rect.height))
+        .collect();
+    windows.iter().all(|&(ws, we, _)| {
+        let (lo, hi) = (top.max(ws), bot.min(we));
+        if hi <= lo + 0.01 {
+            return true;
+        }
+        let whole = spans.iter().all(|&(a, b)| !(a < we - 0.01 && b > we + 0.01) && !(a < ws - 0.01 && b > ws + 0.01));
+        whole && item_fragment_tracks(t, top + g.style.border_top_width, lo, hi, &spans, None).is_some_and(|r| r.1 == 0.0 && r.2.is_none())
+    })
+}
+
+/// The part `[ws, we)` of a nested subgrid (see [`nested_cuttable`]) as its fragment: it keeps the
+/// children that start in the window (a childless cell is cut) and the row tracks clipped to it. `dx`/`dy` move it into the
+/// fragment, as for the other children of the item.
+fn nested_fragment(g: &LayoutBox, gy: f32, ws: f32, we: f32, dx: f32, dy: f32) -> Option<LayoutBox> {
+    let (t, b) = (g.rect.y - gy, g.rect.y - gy + g.rect.height);
+    let (lo, hi) = (t.max(ws), b.min(we));
+    if hi <= lo {
+        return None;
+    }
+    let spans: Vec<(f32, f32)> = g
+        .children
+        .iter()
+        .filter(|h| !matches!(h.kind, BoxKind::Skip))
+        .map(|h| (h.rect.y - gy, h.rect.y - gy + h.rect.height))
+        .collect();
+    let mut k = g.clone();
+    k.rect.x += dx;
+    k.rect.y += dy + (lo - t);
+    k.rect.height = hi - lo;
+    if let Some((tracks, _, _)) = g
+        .subgrid_tracks
+        .as_ref()
+        .and_then(|tr| item_fragment_tracks(tr, t + g.style.border_top_width, lo, hi, &spans, None))
+    {
+        k.subgrid_tracks = Some(tracks);
+    }
+    k.children = g
+        .children
+        .iter()
+        .filter_map(|h| {
+            let (ht, hb) = (h.rect.y - gy, h.rect.y - gy + h.rect.height);
+            let mut h = h.clone();
+            if matches!(h.kind, BoxKind::Skip) {
+                super::shift_tree(&mut h, dx, dy);
+                return Some(h);
+            }
+            // A childless cell that the window edge runs through keeps its part in each window.
+            if is_clippable_leaf(&h) && (ht < lo - 0.01 || hb > hi + 0.01) {
+                let (hlo, hhi) = (ht.max(lo), hb.min(hi));
+                return (hhi > hlo).then(|| {
+                    super::shift_tree(&mut h, dx, dy);
+                    h.rect.y += hlo - ht;
+                    h.rect.height = hhi - hlo;
+                    h
+                });
+            }
+            (ht >= lo - 0.01 && ht < hi - 0.01).then(|| {
+                super::shift_tree(&mut h, dx, dy);
+                h
+            })
+        })
+        .collect();
+    Some(k)
 }
 
 /// The block size of the row gap of a grid item (a subgrid) that a window starting at `ws` drops at
