@@ -126,7 +126,7 @@ use print::resolve_shape_center;
 /// CSS Shapes L1 §5: x/width, y/height, радиус circle — `sqrt(w²+h²)/√2`.
 fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
     match clip {
-        ClipPath::Inset(_) => None,
+        ClipPath::Inset(_) | ClipPath::Url(_) | ClipPath::Svg(_) => None,
         ClipPath::Circle { radius, center } => {
             let (cx, cy) = resolve_shape_center(*center, r);
             let diag = ((r.width * r.width + r.height * r.height) * 0.5).sqrt();
@@ -252,6 +252,9 @@ pub fn select_image_set_url(value: &str, dpr: f32) -> &str {
 mod text_run;
 use text_run::emit_inline_run;
 
+mod clip_url;
+use clip_url::{clip_path_commands, pop_clip_layers, push_shape_clip_path};
+
 mod box_layer;
 use box_layer::{fill_buckets, fill_buckets_cached};
 
@@ -334,6 +337,10 @@ mod highlight;
 #[cfg(test)]
 #[path = "display_list/tests/svg_table_and_hash.rs"]
 mod svg_table_and_hash;
+
+#[cfg(test)]
+#[path = "display_list/tests/svg_clip_url.rs"]
+mod svg_clip_url;
 
 #[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]

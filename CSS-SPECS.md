@@ -471,8 +471,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `clip-path` | ✅ | inset/circle/ellipse/polygon/path() rendered; `<fill-rule>` (nonzero/evenodd) in path()/polygon() ✅ 2026-06-14 |
-| `clip-rule` | 🟡 | evenodd/nonzero parsed + inherited + cascaded (`svg_clip_rule`, SVG §14.3.4) 2026-07-12; rendering deferred to SVG `clip-path: url(#id)` refs. CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14 |
+| `clip-path` | ✅ | inset/circle/ellipse/polygon/path() rendered; `url(#id)` → `<clipPath>` on HTML boxes, `<g>` and SVG shapes (SVG-CLIPPATH 2026-10-20); `<fill-rule>` (nonzero/evenodd) in path()/polygon() ✅ 2026-06-14 |
+| `clip-rule` | ✅ | evenodd/nonzero parsed + inherited + cascaded (`svg_clip_rule`, SVG §14.3.4) 2026-07-12; rendered inside `<clipPath>` content for `clip-path: url(#id)` (SVG-CLIPPATH 2026-10-20; one `evenodd` child keeps its hole, several children are unioned as nonzero). CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14 |
 | `mask` (shorthand) | 🟡 | full `<mask-layer>#` grammar parsed 2026-07-29 (`parse_single_mask_layer`): `<mask-reference> \|\| <position> [/ <bg-size>] \|\| <repeat-style> \|\| <geometry-box> \|\| [<geometry-box> \| no-clip] \|\| <compositing-operator> \|\| <masking-mode>`; один `<geometry-box>` задаёт origin+clip, второй — только clip; незаданные компоненты сбрасываются к initial. Render: только верхний слой (см. `mask-composite`) |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tile geometry: `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round`/`space` ✅ (shared `bg_tile_geometry` + `space_axis_geometry`, §3.4 round rescale 2026-07-12, `space` gap distribution 2026-07-18); femtovg url image-mask **render** still deferred (backend, scissor no-op) — round/space are visible via the wgpu mask path + background-image |

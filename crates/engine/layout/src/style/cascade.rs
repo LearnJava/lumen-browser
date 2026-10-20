@@ -1774,6 +1774,13 @@ pub(crate) fn compute_style_shareable(
         _ => None,
     };
 
+    // CSS Masking L1 §3.1 — `clip-path: url(#id)` names a `<clipPath>` element, which
+    // paint (no `Document`) cannot look up: resolve it into polygons here. A reference
+    // to nothing / to a non-`<clipPath>` makes the property behave as if unset.
+    if let Some(crate::style::ClipPath::Url(id)) = &style.clip_path {
+        style.clip_path = crate::box_tree::resolve_clip_path_url(doc, sheet, id, viewport, dark_mode);
+    }
+
     apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
 
     // Last, so every earlier pass has already written its box-model lengths and
