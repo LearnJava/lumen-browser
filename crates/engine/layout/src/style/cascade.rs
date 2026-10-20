@@ -1551,6 +1551,16 @@ pub(crate) fn compute_style_shareable(
         };
     }
 
+    // CSS Text L3 §7.2 — `text-align-last: match-parent`.
+    style.text_extra.align_last_match_parent = style.text_align_last == crate::style::TextAlignLast::MatchParent;
+    if style.text_extra.align_last_match_parent {
+        style.text_align_last = if doc.document_element() == Some(node) {
+            crate::style::TextAlignLast::Start
+        } else {
+            crate::style::resolve_match_parent_last(inherited.text_align_last, inherited.direction)
+        };
+    }
+
     // CSS Writing Modes L4 §2.4.2 — контекст `bidi-override` для потомков.
     style.bidi_override = match style.unicode_bidi {
         crate::style::UnicodeBidi::BidiOverride | crate::style::UnicodeBidi::IsolateOverride => {

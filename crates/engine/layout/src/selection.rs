@@ -407,6 +407,7 @@ mod tests {
             source_char_offset,
             bidi_level: 0,
             merged_sources: Vec::new(),
+            forced_end: false,
         }
     }
 

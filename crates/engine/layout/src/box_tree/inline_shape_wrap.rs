@@ -112,7 +112,8 @@ pub(crate) fn wrap_around_shapes(
                 break;
             }
             rest = split_segments_at_first_line(&rest, &line, false).1;
-            align_one_line(&mut line, j + 1 == n, width, s.text_align, s.text_align_last, s.direction);
+            let is_last = j + 1 == n || line.last().is_some_and(|f| f.forced_end);
+            align_one_line(&mut line, is_last, width, s.text_align, s.text_align_last, s.direction);
             let shift = band.0 - run.left;
             if shift != 0.0 {
                 for f in &mut line {

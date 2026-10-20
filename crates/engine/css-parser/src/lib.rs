@@ -423,6 +423,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "text-emphasis-position",
     "text-emphasis-style",
     "text-indent",
+    "text-justify",
     "text-orientation",
     "text-overflow",
     "text-shadow",

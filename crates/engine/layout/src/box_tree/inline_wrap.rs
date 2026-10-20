@@ -229,6 +229,7 @@ pub(crate) fn push_tabbed_frags(
             source_char_offset: seg.source_char_offset.saturating_add((src_off + s) as u32),
             bidi_level: seg.bidi_level,
             merged_sources: Vec::new(),
+            forced_end: false,
         });
         *x += width;
     }
@@ -799,6 +800,9 @@ pub(crate) fn wrap_inline_run_indented(
         let no_break_before = caps_no_break.get(seg_idx).copied().unwrap_or(false);
         // Forced line break from \n in white-space: pre/pre-wrap text.
         if seg.forced_break {
+            if let Some(last) = current_line.last_mut() {
+                last.forced_end = true;
+            }
             result.push(std::mem::take(&mut current_line));
             current_x = indent.after_forced;
             prev_trailing_ws = false;
@@ -875,6 +879,7 @@ pub(crate) fn wrap_inline_run_indented(
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
             current_x += img_w + seg.post_space;
             // Trailing whitespace after the image (a collapsed ws-only node) is
@@ -905,6 +910,7 @@ pub(crate) fn wrap_inline_run_indented(
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
             current_x += seg.post_space;
             prev_trailing_ws = false;
@@ -1067,6 +1073,7 @@ pub(crate) fn wrap_inline_run_indented(
                         source_char_offset: frag_source_offset.saturating_add(start as u32),
                         bidi_level: seg.bidi_level,
                         merged_sources: Vec::new(),
+                        forced_end: false,
                     });
                     current_x += chunk_w;
                     first_chunk = false;
@@ -1117,6 +1124,7 @@ pub(crate) fn wrap_inline_run_indented(
                         source_char_offset: frag_source_offset,
                         bidi_level: seg.bidi_level,
                         merged_sources: Vec::new(),
+                        forced_end: false,
                     });
                     result.push(std::mem::take(&mut current_line));
                     current_x = indent.soft;
@@ -1138,6 +1146,7 @@ pub(crate) fn wrap_inline_run_indented(
                         source_char_offset: frag_source_offset,
                         bidi_level: seg.bidi_level,
                         merged_sources: Vec::new(),
+                        forced_end: false,
                     });
                     current_x += sfx_w + post;
                     continue;
@@ -1173,6 +1182,7 @@ pub(crate) fn wrap_inline_run_indented(
                                 source_char_offset: frag_source_offset,
                                 bidi_level: seg.bidi_level,
                                 merged_sources: Vec::new(),
+                                forced_end: false,
                             });
                             current_x += head_w;
                             first_chunk = false;
@@ -1228,6 +1238,7 @@ pub(crate) fn wrap_inline_run_indented(
                             source_char_offset: frag_source_offset,
                             bidi_level: seg.bidi_level,
                             merged_sources: Vec::new(),
+                            forced_end: false,
                         });
                         current_x += head_w;
                         first_chunk = false;
@@ -1312,6 +1323,7 @@ pub(crate) fn wrap_inline_run_indented(
                     source_char_offset: frag_source_offset,
                     bidi_level: seg.bidi_level,
                     merged_sources: Vec::new(),
+                    forced_end: false,
                 });
                 current_x += word_w;
             }
@@ -1338,8 +1350,8 @@ pub(crate) fn wrap_inline_run_indented(
 /// смешанного текста — вложенные развороты по embedding level.
 /// Затем `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3
 /// §7.1) и строка сдвигается как блок.
-/// Последняя строка выравнивается по `text_align_last` (CSS Text L3 §7.2):
-/// `Auto` на justify-блоке → Start; иначе → как text_align.
+/// Последняя строка блока и строка перед принудительным переносом (`<br>`) выравниваются
+/// по `text_align_last` (CSS Text L3 §7.2): `Auto` на justify-блоке → Start; иначе → как text_align.
 pub(crate) fn align_lines(
     lines: &mut [Vec<InlineFrag>],
     content_width: f32,
@@ -1349,7 +1361,8 @@ pub(crate) fn align_lines(
 ) {
     let total = lines.len();
     for (idx, line) in lines.iter_mut().enumerate() {
-        align_one_line(line, idx + 1 == total, content_width, text_align, text_align_last, direction);
+        let is_last = idx + 1 == total || line.last().is_some_and(|f| f.forced_end);
+        align_one_line(line, is_last, content_width, text_align, text_align_last, direction);
     }
 }
 
@@ -1367,17 +1380,17 @@ pub(crate) fn align_one_line(
     let is_rtl = direction == Direction::Rtl;
     {
         // CSS Text L3 §7.2: last line uses text-align-last.
-        // Auto → same as text-align (justify not yet in TextAlign, so no special case).
-        // TextAlignLast::Justify → Start (word-spacing justification not yet implemented).
+        // Auto → text-align, но `justify` последней строки — это `start` (§7.1).
         let effective = if is_last {
             match text_align_last {
-                TextAlignLast::Auto    => text_align,
+                TextAlignLast::Auto    => if text_align == TextAlign::Justify { TextAlign::Start } else { text_align },
                 TextAlignLast::Left    => TextAlign::Left,
                 TextAlignLast::Right   => TextAlign::Right,
                 TextAlignLast::Center  => TextAlign::Center,
                 TextAlignLast::Start   => TextAlign::Start,
                 TextAlignLast::End     => TextAlign::End,
-                TextAlignLast::Justify | TextAlignLast::MatchParent => TextAlign::Start,
+                TextAlignLast::Justify => TextAlign::Justify,
+                TextAlignLast::MatchParent => TextAlign::Start,
             }
         } else {
             text_align
@@ -1387,6 +1400,13 @@ pub(crate) fn align_one_line(
             TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
             TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
             other => other,
+        };
+        // `justify` без возможностей растяжения (одно слово, `text-justify: none`) ведёт себя как `start`.
+        let physical = if physical == TextAlign::Justify {
+            super::inline_justify::justify_line(line, content_width);
+            if is_rtl { TextAlign::Right } else { TextAlign::Left }
+        } else {
+            physical
         };
         // Measured before reordering, while `wrap_inline_run`'s ascending-x
         // order still holds, so the last frag is the rightmost one.
@@ -1674,6 +1694,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
             prev_trailing_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
             continue;
@@ -1722,6 +1743,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
                 merged_sources: Vec::new(),
+                forced_end: false,
             });
         }
         prev_trailing_ws = seg_trail_ws;

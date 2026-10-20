@@ -77,8 +77,8 @@ pub enum TextAlign {
     Left,
     Center,
     Right,
-    /// CSS Text L3 §7.1 `justify`. Хранится ради computed-значения и наследования;
-    /// межсловное выравнивание строк ещё не реализовано — layout ведёт себя как `start`.
+    /// CSS Text L3 §7.1 `justify` (и `justify-all`, которое ещё ставит `text-align-last: justify`):
+    /// строка растягивается до ширины контейнера по `text-justify` (`align_one_line`).
     Justify,
     /// `match-parent`: промежуточное значение каскада. `compute_style` заменяет его значением
     /// родителя (`start`/`end` пересчитываются по `direction` родителя) либо `start` для корня
@@ -87,8 +87,7 @@ pub enum TextAlign {
 }
 
 /// CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`.
-/// Выравнивание последней (или единственной) строки блока.
-/// Phase 0: parse + store; применение при line layout — деferred.
+/// Выравнивание последней строки блока и строки перед принудительным переносом (`<br>`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TextAlignLast {
     #[default]
@@ -99,9 +98,48 @@ pub enum TextAlignLast {
     Right,
     Center,
     Justify,
-    /// `match-parent`: `start`/`end` родителя пересчитываются по его `direction`.
-    /// Хранится как есть; layout ведёт себя как `start`.
+    /// `match-parent`: промежуточное значение каскада. `compute_style` заменяет его значением
+    /// родителя (`start`/`end` пересчитываются по `direction` родителя); в обход каскада layout
+    /// ведёт себя как `start`.
     MatchParent,
+}
+
+/// CSS Text L3 §7.3 — `text-justify`. Inherited. Initial: `Auto`.
+/// Какие промежутки `text-align: justify` вправе растягивать.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextJustify {
+    /// Выбор браузера: межсловные пробелы, а в строке без пробелов — промежутки между символами.
+    #[default]
+    Auto,
+    /// Выключено: в тексте нет возможностей для растяжения.
+    None,
+    /// Только пробелы между словами.
+    InterWord,
+    /// Любая пара соседних символов (`distribute` — устаревший псевдоним).
+    InterCharacter,
+}
+
+impl TextJustify {
+    /// Разбор значения (без CSS-wide ключевых слов); регистр не различается.
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "none" => Self::None,
+            "inter-word" => Self::InterWord,
+            "inter-character" | "distribute" => Self::InterCharacter,
+            _ => return None,
+        })
+    }
+
+    /// Computed-запись для CSSOM: `distribute` вычисляется в `inter-character`.
+    pub fn serialize(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+            Self::InterWord => "inter-word",
+            Self::InterCharacter => "inter-character",
+        }
+    }
 }
 
 /// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
@@ -659,7 +697,7 @@ pub fn resolve_match_parent(parent: TextAlign, parent_direction: Direction) -> T
 }
 
 /// Компоненты наследуемых свойств CSS Text, которые движок хранит ради computed-значения
-/// (CSSOM, BUG-1325); layout читает только `indent_*`. Всё поле наследуется целиком —
+/// (CSSOM, BUG-1325); layout читает `indent_*` и `justify`. Всё поле наследуется целиком —
 /// `text-transform`, `text-indent` и `tab-size` наследуются все.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TextCssomExtra {
@@ -678,6 +716,11 @@ pub struct TextCssomExtra {
     /// `tab-size: <number>` — число пробелов, как записано. `None` — задана `<length>`
     /// (тогда ширина табуляции — `ComputedStyle::tab_size` в px).
     pub tab_size_number: Option<f32>,
+    /// `text-align-last` был заявлен как `match-parent`: `compute_style` подставил значение родителя
+    /// для layout, а getComputedStyle по-прежнему отдаёт `match-parent` (CSS Text L3 §7.2).
+    pub align_last_match_parent: bool,
+    /// `text-justify` (CSS Text L3 §7.3): читает `align_one_line` для `text-align: justify`.
+    pub justify: TextJustify,
 }
 
 impl TextCssomExtra {
@@ -1714,3 +1757,14 @@ impl ColorScheme {
     }
 }
 
+
+/// То же для `text-align-last: match-parent` (CSS Text L3 §7.2): значение родителя, `start`/`end`
+/// пересчитаны по `direction` родителя. У корня документа — `start`.
+pub fn resolve_match_parent_last(parent: TextAlignLast, parent_direction: Direction) -> TextAlignLast {
+    match (parent, parent_direction) {
+        (TextAlignLast::Start, Direction::Ltr) | (TextAlignLast::End, Direction::Rtl) => TextAlignLast::Left,
+        (TextAlignLast::Start, Direction::Rtl) | (TextAlignLast::End, Direction::Ltr) => TextAlignLast::Right,
+        (TextAlignLast::MatchParent, _) => TextAlignLast::Start,
+        (other, _) => other,
+    }
+}

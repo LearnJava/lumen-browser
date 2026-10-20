@@ -213,7 +213,7 @@ pub use values::typography::{
     FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
     FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
-    TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, CaseLang, resolve_match_parent,
+    TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, TextJustify, CaseLang, resolve_match_parent, resolve_match_parent_last,
     TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
     WhiteSpaceCollapse, BoxShadow, text_font_features,
 };

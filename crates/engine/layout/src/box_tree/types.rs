@@ -342,6 +342,10 @@ pub struct InlineFrag {
     /// common single-source fragment. Read through
     /// [`crate::text_geometry::frag_source_spans`].
     pub merged_sources: Vec<MergedSource>,
+    /// Последний фрагмент строки, оборванной принудительным переносом (`<br>`, перевод строки в
+    /// `pre`/`pre-wrap`). Такая строка выравнивается по `text-align-last`, как и последняя в блоке
+    /// (CSS Text L3 §7.2). Выставляет `wrap_inline_run`.
+    pub forced_end: bool,
 }
 
 /// Равенство по значению, но стиль сначала по указателю: фрагменты строки делят `Arc` с сегментом и
@@ -365,6 +369,7 @@ impl PartialEq for InlineFrag {
             source_char_offset,
             bidi_level,
             merged_sources,
+            forced_end,
         } = self;
         x == &other.x
             && width == &other.width
@@ -381,6 +386,7 @@ impl PartialEq for InlineFrag {
             && source_char_offset == &other.source_char_offset
             && bidi_level == &other.bidi_level
             && merged_sources == &other.merged_sources
+            && forced_end == &other.forced_end
     }
 }
 
