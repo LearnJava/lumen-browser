@@ -324,6 +324,9 @@ fn apply_css_wide_keyword_with(
                 init.unicode_bidi
             };
         }
+        "text-justify" => {
+            style.text_extra.justify = if inh { inherited.text_extra.justify } else { init.text_extra.justify };
+        }
         "text-transform" => {
             style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
         }

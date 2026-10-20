@@ -138,6 +138,11 @@ pub(in crate::style) fn apply_decl_text(
                 _ => style.text_align_last,
             };
         }
+        "text-justify" => {
+            if let Some(v) = crate::style::TextJustify::parse(val) {
+                style.text_extra.justify = v;
+            }
+        }
         "direction" => {
             // CSS Writing Modes L3 §2.1. Keyword-ы case-insensitive по
             // правилам CSS («property keyword values are ASCII case-

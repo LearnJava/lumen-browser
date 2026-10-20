@@ -2926,6 +2926,9 @@ mod state_pseudo_classes;
 pub(crate) use state_pseudo_classes::element_color;
 
 #[cfg(test)]
+#[path = "tests/text_justify.rs"]
+mod text_justify;
+#[cfg(test)]
 #[path = "tests/box_sizing_text_props.rs"]
 mod box_sizing_text_props;
 #[cfg(test)]
