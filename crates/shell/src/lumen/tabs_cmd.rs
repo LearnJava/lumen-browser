@@ -333,7 +333,7 @@ impl Lumen {
 
     /// Describe the tab at `idx` for the closed-tabs stack. `None` for a tab
     /// without a real URL (blank / never loaded).
-    fn closed_tab_record(&self, idx: usize) -> Option<tabs::closed::ClosedTab> {
+    pub(crate) fn closed_tab_record(&self, idx: usize) -> Option<tabs::closed::ClosedTab> {
         let entry = self.tab_strip.tabs.get(idx)?;
         let (url, title, scroll_x, scroll_y) = if idx == self.tab_strip.active {
             (
