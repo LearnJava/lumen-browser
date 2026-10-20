@@ -1239,3 +1239,24 @@ use super::*;
         assert_eq!(m.get("flex-flow").map(String::as_str), Some("row nowrap"));
         assert_eq!(m.get("order").map(String::as_str), Some("0"));
     }
+
+    // ── BUG-1377: невалидный width/height отбрасывается ───────────────────
+
+    #[test]
+    fn invalid_width_height_keeps_previous_declaration() {
+        for bad in ["foo", "1 0px", "+ 10px", "-5px"] {
+            let s = style_for(&format!("width: 20px; height: 20px; width: {bad}; height: {bad}"));
+            assert_eq!(s.width, Some(Length::Px(20.0)), "width: {bad}");
+            assert_eq!(s.height, Some(Length::Px(20.0)), "height: {bad}");
+        }
+        let s = style_for("height: 20px; height: +20px; width: 20px; width: auto");
+        assert_eq!(s.height, Some(Length::Px(20.0)));
+        assert_eq!(s.width, None);
+    }
+
+    #[test]
+    fn invalid_inline_block_size_keeps_previous_declaration() {
+        let s = style_for("inline-size: 20px; block-size: 30px; inline-size: foo; block-size: -1px");
+        assert_eq!(s.inline_size, Some(Length::Px(20.0)));
+        assert_eq!(s.block_size, Some(Length::Px(30.0)));
+    }

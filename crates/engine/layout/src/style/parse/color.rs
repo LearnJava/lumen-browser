@@ -609,6 +609,14 @@ fn parse_function_color(s: &str) -> Option<Color> {
     };
     match kind {
         ColorFn::Rgb => {
+            // CSS Color 4 §5.1: legacy comma syntax takes three numbers or three
+            // percentages, never a mix (the space syntax does allow mixing).
+            if body.contains(',') {
+                let pct = |p: &String| p.trim().ends_with('%');
+                if pct(&parts[0]) != pct(&parts[1]) || pct(&parts[1]) != pct(&parts[2]) {
+                    return None;
+                }
+            }
             let r = parse_rgb_component(&parts[0])?;
             let g = parse_rgb_component(&parts[1])?;
             let b = parse_rgb_component(&parts[2])?;

@@ -1566,3 +1566,11 @@ fn canonical_specified_color_rejects_invalid_syntax() {
     assert_eq!(canonical_specified_color("#0000fg"), None);
     assert_eq!(canonical_specified_color("invalidValue"), None);
 }
+
+#[test]
+fn legacy_rgb_rejects_mixed_percent_and_number() {
+    // CSS Color 4 §5.1: the comma syntax is either three percentages or three numbers.
+    assert_eq!(parse_color("rgb(100%, 0, 0)"), None);
+    assert_eq!(parse_color("rgb(255, 0%, 0)"), None);
+    assert_eq!(parse_color("rgb(100%, 0%, 0%)"), Some(rgba(255, 0, 0, 255)));
+}
