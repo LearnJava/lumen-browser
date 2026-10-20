@@ -387,6 +387,24 @@ impl Lumen {
             lumen_image::encode_png_rgba8(&image).map_err(|e| format!("PNG encoding: {e}"))
         }
 
+        /// Open tabs in strip order for `list_tabs` (COMPAT-CORPUS-3-TABS).
+        ///
+        /// The address is the tab's page source (the requested URL; a server
+        /// redirect is not reflected until the page itself navigates), the
+        /// title is the page title once loaded, the strip title before that.
+        pub(crate) fn automation_tab_list(&self) -> Vec<lumen_driver::TabInfo> {
+            (0..self.tab_strip.len())
+                .map(|idx| {
+                    let entry = &self.tab_strip.tabs[idx];
+                    let (url, title) = match self.closed_tab_record(idx) {
+                        Some(rec) => (rec.url, rec.title),
+                        None => ("about:blank".to_owned(), entry.title.clone()),
+                    };
+                    lumen_driver::TabInfo { id: entry.id, url, title, active: idx == self.tab_strip.active }
+                })
+                .collect()
+        }
+
         /// Stable id of [`Self::automation_tab`] while a page-driven tab
         /// switch (`window.open()`, `target=_blank`) keeps it parked in
         /// `bg_tabs`; `None` when it is the active tab or no longer open

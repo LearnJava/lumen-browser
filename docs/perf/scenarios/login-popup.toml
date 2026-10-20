@@ -1,0 +1,102 @@
+# Вход через Google во всплывающем окне (вес 3): кнопка сайта открывает попап `window.open` на accounts.google.com
+# (Google Identity Services, режим popup) — сайт ждёт ответ в `window.opener`. Сценарий проверяет, что Lumen
+# открывает попап, держит его в таб-стрипе и показывает форму Google. Шаги `switch_tab`/`close_tab`
+# (docs/compat-scenarios.md). Реальных учётных записей нет — до ввода почты сценарий не доходит.
+# Калибровка по Chrome (`--chrome-only`): 2026-10-20, все пять — попап с accounts.google.com.
+# Для вторых кнопок «Google» на странице `click_text` берёт первую видимую.
+
+[[scenario]]
+id = "login-popup-google-disqus"
+title = "Disqus: «Google» на странице входа → попап accounts.google.com с формой почты"
+category = "login"
+lang = "en"
+oracle_wait_s = 20
+steps = [
+  { do = "navigate", url = "https://disqus.com/profile/login/" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 2 },
+  { do = "click_text", text = "Google" },
+  { do = "switch_tab", url = "accounts\\.google\\.com", wait_s = 20 },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "url", value = "accounts\\.google\\.com" },
+  { kind = "visible", value = "input[type=email], #identifierId" },
+]
+
+[[scenario]]
+id = "login-popup-google-imgur"
+title = "Imgur: «Google» на странице входа → попап accounts.google.com с формой почты"
+category = "login"
+lang = "en"
+oracle_wait_s = 20
+steps = [
+  { do = "navigate", url = "https://imgur.com/signin" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 2 },
+  { do = "click_text", text = "Google" },
+  { do = "switch_tab", url = "accounts\\.google\\.com", wait_s = 20 },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "url", value = "accounts\\.google\\.com" },
+  { kind = "visible", value = "input[type=email], #identifierId" },
+]
+
+[[scenario]]
+id = "login-popup-google-wattpad"
+title = "Wattpad: «Google» на странице входа → попап accounts.google.com с формой почты"
+category = "login"
+lang = "en"
+oracle_wait_s = 20
+steps = [
+  { do = "navigate", url = "https://www.wattpad.com/login" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 2 },
+  { do = "click_text", text = "Google" },
+  { do = "switch_tab", url = "accounts\\.google\\.com", wait_s = 20 },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "url", value = "accounts\\.google\\.com" },
+  { kind = "visible", value = "input[type=email], #identifierId" },
+]
+
+[[scenario]]
+id = "login-popup-google-webflow"
+title = "Webflow: «Google» на странице входа → попап accounts.google.com с формой почты"
+category = "login"
+lang = "en"
+oracle_wait_s = 20
+steps = [
+  { do = "navigate", url = "https://webflow.com/dashboard/login" },
+  { do = "wait", cond = "document_ready" },
+  { do = "sleep", seconds = 2 },
+  { do = "click_text", text = "Google" },
+  { do = "switch_tab", url = "accounts\\.google\\.com", wait_s = 20 },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "url", value = "accounts\\.google\\.com" },
+  { kind = "visible", value = "input[type=email], #identifierId" },
+]
+
+[[scenario]]
+id = "login-popup-google-glassdoor"
+title = "Glassdoor: «Google» на странице входа → попап accounts.google.com с формой почты"
+category = "login"
+lang = "en"
+oracle_wait_s = 20
+steps = [
+  { do = "navigate", url = "https://www.glassdoor.com/profile/login_input.htm" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click_text", text = "^(Accept All|Accept all|Accept)$", optional = true },
+  { do = "sleep", seconds = 2 },
+  { do = "click_text", text = "Google" },
+  { do = "switch_tab", url = "accounts\\.google\\.com", wait_s = 20 },
+  { do = "wait", cond = "document_ready" },
+]
+oracle = [
+  { kind = "url", value = "accounts\\.google\\.com" },
+  { kind = "visible", value = "input[type=email], #identifierId" },
+]

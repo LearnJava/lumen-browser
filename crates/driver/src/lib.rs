@@ -40,7 +40,7 @@ pub mod gpu_session;
 pub use types::{
     A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
-    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -207,6 +207,33 @@ pub trait BrowserSession {
     /// откатываются к обычному [`BrowserSession::navigate`] в текущем документе.
     fn new_tab(&mut self, url: &str) -> Result<()> {
         self.navigate(url)
+    }
+
+    /// Открытые вкладки в порядке таб-стрипа (COMPAT-CORPUS-3-TABS).
+    ///
+    /// Сессии без таб-стрипа вкладок не различают — по умолчанию `Err`.
+    fn list_tabs(&self) -> Result<Vec<TabInfo>> {
+        Err(lumen_core::error::Error::Other("list_tabs: сессия без вкладок".into()))
+    }
+
+    /// Сделать активной вкладку со стабильным id `id` (из [`BrowserSession::list_tabs`]):
+    /// все следующие команды действуют на неё (COMPAT-CORPUS-3-TABS).
+    ///
+    /// # Errors
+    /// `Err`, если вкладки с таким id нет или сессия без вкладок.
+    fn switch_tab(&mut self, id: usize) -> Result<()> {
+        let _ = id;
+        Err(lumen_core::error::Error::Other("switch_tab: сессия без вкладок".into()))
+    }
+
+    /// Закрыть вкладку `id` (COMPAT-CORPUS-3-TABS). Последняя вкладка не
+    /// закрывается — это завершило бы браузер.
+    ///
+    /// # Errors
+    /// `Err`, если вкладки нет, она последняя или сессия без вкладок.
+    fn close_tab(&mut self, id: usize) -> Result<()> {
+        let _ = id;
+        Err(lumen_core::error::Error::Other("close_tab: сессия без вкладок".into()))
     }
 
     /// Кликнуть по цели. Для `Target::Selector` берётся центр первого

@@ -78,6 +78,8 @@ STEP_KINDS = {
     "wait": ("cond",),
     "sleep": ("seconds",),
     "eval": ("code",),
+    "switch_tab": (),
+    "close_tab": (),
 }
 WAIT_CONDS = ("document_ready", "visible", "stable", "network_idle", "js_idle")
 ORACLE_KINDS = ("visible", "url", "text", "not_text", "eval")
@@ -135,6 +137,16 @@ def validate_scenario(sc: dict) -> list[str]:
         for key in STEP_KINDS[kind]:
             if key not in st:
                 bad(f"шаг {i} ({kind}): нет поля {key}")
+        if kind == "switch_tab" and not ("url" in st or "index" in st):
+            bad(f"шаг {i}: switch_tab требует url (регулярка по адресу) или index")
+        if kind in ("switch_tab", "close_tab"):
+            if "url" in st:
+                try:
+                    re.compile(st["url"])
+                except re.error as e:
+                    bad(f"шаг {i}: плохая регулярка url: {e}")
+            if "index" in st and not isinstance(st["index"], int):
+                bad(f"шаг {i}: index — целое число")
         if kind == "wait" and st.get("cond") not in WAIT_CONDS:
             bad(f"шаг {i}: cond не из {WAIT_CONDS}")
         if kind == "wait" and st.get("cond") in ("visible", "stable") and not st.get("selector"):
@@ -365,6 +377,15 @@ class LiveDriver:
     def navigate(self, url: str) -> None:
         self._tool("navigate", {"url": url})
 
+    def list_tabs(self) -> list[dict]:
+        return list(self._tool("list_tabs", {}).get("tabs") or [])
+
+    def switch_tab(self, tab_id) -> None:
+        self._tool("switch_tab", {"id": tab_id})
+
+    def close_tab(self, tab_id) -> None:
+        self._tool("close_tab", {"id": tab_id})
+
     def click(self, selector: str) -> None:
         self._tool("click", {"target": {"selector": selector}})
 
@@ -420,19 +441,80 @@ class ChromeDriver:
     """
 
     def __init__(self, ref, timeout_s: int) -> None:
-        import chrome_interaction_baseline as cib
-        from bench_chromium import WS
         self.ref, self.timeout_s = ref, timeout_s
         self.ctx = ref.browser.call("Target.createBrowserContext")["browserContextId"]
         self.tid = ref.browser.call("Target.createTarget", {"url": "about:blank", "browserContextId": self.ctx})["targetId"]
-        self.cdp = cib.Cdp(WS(f"ws://127.0.0.1:{ref.port}/devtools/page/{self.tid}"))
+        self.cdp = None
+        self._order: list[str] = [self.tid]
+        self._attach(self.tid)
+
+    def _attach(self, tid: str) -> None:
+        """Подключиться к вкладке `tid`: свой CDP-сокет, окно 1600×900, UA без «Headless».
+
+        Журнал событий общий для всех вкладок сценария — `stderr_mark` остаётся действительным после смены вкладки.
+        """
+        import chrome_interaction_baseline as cib
+        from bench_chromium import WS
+        events = self.cdp.events if self.cdp else []
+        cdp = cib.Cdp(WS(f"ws://127.0.0.1:{self.ref.port}/devtools/page/{tid}"))
+        cdp.events = events
         for dom in ("Page", "Network", "Runtime"):
-            self.cdp.call(f"{dom}.enable")
-        self.cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1600, "height": 900, "deviceScaleFactor": 1,
-                                                             "mobile": False})
-        if ref.headless:
-            ua = self.cdp.eval("navigator.userAgent") or ""
-            self.cdp.call("Network.setUserAgentOverride", {"userAgent": ua.replace("HeadlessChrome", "Chrome")})
+            cdp.call(f"{dom}.enable")
+        cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1600, "height": 900, "deviceScaleFactor": 1,
+                                                        "mobile": False})
+        if self.ref.headless:
+            ua = cdp.eval("navigator.userAgent") or ""
+            cdp.call("Network.setUserAgentOverride", {"userAgent": ua.replace("HeadlessChrome", "Chrome")})
+        if self.cdp:
+            try:
+                self.cdp.ws.sock.close()
+            except OSError:
+                pass
+        self.cdp, self.tid = cdp, tid
+
+    def _targets(self) -> list[dict]:
+        """Вкладки своего контекста в порядке создания (CDP `Target.getTargets`)."""
+        try:
+            infos = self.ref.browser.call("Target.getTargets").get("targetInfos", [])
+        except RuntimeError as e:
+            raise StepFailed(str(e)[:200]) from e
+        except (OSError, ConnectionError) as e:
+            raise DriverDead(str(e)[:160]) from e
+        mine = [t for t in infos if t.get("type") == "page" and t.get("browserContextId") == self.ctx]
+        # CDP отдаёт вкладки в произвольном порядке — порядок таб-стрипа ведём сами: по первому появлению
+        for t in mine:
+            if t["targetId"] not in self._order:
+                self._order.append(t["targetId"])
+        return sorted(mine, key=lambda t: self._order.index(t["targetId"]))
+
+    def list_tabs(self) -> list[dict]:
+        return [{"id": t["targetId"], "url": t.get("url", ""), "title": t.get("title", ""),
+                 "active": t["targetId"] == self.tid} for t in self._targets()]
+
+    def switch_tab(self, tab_id) -> None:
+        if tab_id == self.tid:
+            return
+        if tab_id not in {t["targetId"] for t in self._targets()}:
+            raise StepFailed(f"нет вкладки {tab_id}")
+        self._attach(tab_id)
+        self._call("Page.bringToFront")
+
+    def close_tab(self, tab_id) -> None:
+        targets = self._targets()
+        if len(targets) <= 1:
+            raise StepFailed("последняя вкладка не закрывается")
+        victim = next((t for t in targets if t["targetId"] == tab_id), None)
+        if victim is None:
+            raise StepFailed(f"нет вкладки {tab_id}")
+        # как в Lumen: после закрытия активной вкладки в фокусе её открыватель, иначе первая из оставшихся
+        rest = [t for t in targets if t["targetId"] != tab_id]
+        heir = next((t for t in rest if t["targetId"] == victim.get("openerId")), rest[0])
+        try:
+            self.ref.browser.call("Target.closeTarget", {"targetId": tab_id})
+        except RuntimeError as e:
+            raise StepFailed(str(e)[:200]) from e
+        if tab_id == self.tid:
+            self._attach(heir["targetId"])
 
     def close(self) -> None:
         for fn in (lambda: self.cdp.ws.sock.close(),
@@ -538,6 +620,54 @@ def subst(value, ctx: dict):
     return value
 
 
+TAB_WAIT_S = 10.0
+
+
+def pick_tab(tabs: list[dict], step: dict) -> dict | None:
+    """Вкладка, которую назвал шаг: `url` — регулярка по адресу (из подходящих берётся самая новая),
+    `index` — номер в таб-стрипе (с 0, отрицательный — с конца); без обоих — активная."""
+    if "url" in step:
+        hits = [t for t in tabs if re.search(step["url"], t.get("url", ""))]
+        return hits[-1] if hits else None
+    if "index" in step:
+        idx = step["index"]
+        return tabs[idx] if -len(tabs) <= idx < len(tabs) else None
+    return next((t for t in tabs if t.get("active")), None)
+
+
+def tab_step(drv, step: dict, default_wait_s: float) -> None:
+    """`switch_tab` / `close_tab`: попап открывается не мгновенно — вкладку ждут до `wait_s` (по умолчанию 10 с)."""
+    named = "url" in step or "index" in step
+    deadline = time.monotonic() + (float(step.get("wait_s", min(TAB_WAIT_S, default_wait_s))) if named else 0.0)
+    while True:
+        tabs = drv.list_tabs()
+        tab = pick_tab(tabs, step)
+        if tab or time.monotonic() >= deadline:
+            break
+        time.sleep(0.3)
+    if tab is None:
+        want = f"адрес /{step['url']}/" if "url" in step else f"номер {step['index']}" if "index" in step else "активная"
+        have = ", ".join(t.get("url", "")[:60] for t in tabs) or "нет"
+        raise StepFailed(f"нет вкладки: {want} (есть: {have})")
+    if step["do"] == "switch_tab":
+        drv.switch_tab(tab["id"])
+    else:
+        drv.close_tab(tab["id"])
+
+
+def reset_tabs(drv) -> None:
+    """Оставить одну вкладку — самую старую: попапы прошлого сценария не должны достаться следующему."""
+    try:
+        tabs = drv.list_tabs()
+        if len(tabs) <= 1:
+            return
+        drv.switch_tab(tabs[0]["id"])
+        for tab in tabs[1:]:
+            drv.close_tab(tab["id"])
+    except StepFailed:
+        pass
+
+
 def run_step(drv, step: dict, ctx: dict, default_wait_s: float) -> None:
     kind = step["do"]
     if kind == "navigate":
@@ -555,6 +685,8 @@ def run_step(drv, step: dict, ctx: dict, default_wait_s: float) -> None:
         drv.wait(step["cond"], step.get("selector"), float(step.get("timeout_s", default_wait_s)))
     elif kind == "sleep":
         time.sleep(float(step["seconds"]))
+    elif kind in ("switch_tab", "close_tab"):
+        tab_step(drv, step, default_wait_s)
     elif kind == "eval":
         val = drv.eval(subst(step["code"], ctx))
         if step.get("expect", False) and not val:
@@ -656,6 +788,11 @@ def attempt(drv, sc: dict, ctx: dict, out_dir: Path, tag: str) -> dict:
         if dead or hung or not drv.alive():
             drv.restart()
             rec["restarted"] = True
+    if not (dead or hung):
+        try:
+            reset_tabs(drv)
+        except (DriverDead, DriverHung):  # следующий сценарий сам наткнётся на то же и классифицирует
+            pass
     return rec
 
 

@@ -7,6 +7,7 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 - `BrowserSession` trait: 6 resources (screenshot, a11y_tree, layout_snapshot, computed_style,
   network_log, console_log) + 8 tools (navigate, new_tab, click, type_text, scroll, wait, eval, query). `new_tab` (2026-07-17, live perf audit): `AutomationCommand::NewTab` -> shell `open_new_tab()` + `navigate_to`; trait default falls back to plain `navigate` for tab-less sessions (`InProcessSession`).
+- **Done (tabs — COMPAT-CORPUS-3-TABS, [P2], 2026-10-20):** `BrowserSession::{list_tabs, switch_tab, close_tab}` (default `Err` for sessions without a tab strip); `LiveWindowSession` round-trips `AutomationCommand::{ListTabs, SwitchTab(id), CloseTab(id)}` / `AutomationReply::Tabs(Vec<TabInfo>)`. `id` is the stable `TabEntry::id`, not the strip position. **Invariant:** the shell's `SwitchTab` sets `Lumen::automation_tab` to the chosen tab (`Navigate` and the background-aware `Eval` follow it, BUG-1199) — switching without it makes the next `navigate` pull the foreground back to the opener; `CloseTab` refuses the last tab and re-points `automation_tab` at the tab that took the focus when the target itself was closed. `TabInfo::url` is the tab's page source (requested URL), not `location.href`.
 - `InProcessSession`: full headless pipeline (encoding → HTML parse → CSS cascade → layout)
   using bundled Inter-Regular. Shares engine crates directly, no IPC.
 - Simple CSS selector engine: tag, `#id`, `.class`, `tag.class`, multi-class combinations.

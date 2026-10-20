@@ -60,3 +60,48 @@ oracle = [
   { kind = "visible", value = "#result" },
   { kind = "text", value = "3DS passed: 3220" },
 ]
+
+[[scenario]]
+id = "stand-oauth-popup"
+title = "Вход через внешнего поставщика: попап window.open → ввод → postMessage в страницу сайта → закрытие попапа"
+category = "login"
+lang = "en"
+stand = true
+steps = [
+  { do = "navigate", url = "{stand}/oauth-popup.html" },
+  { do = "wait", cond = "document_ready" },
+  { do = "click", selector = "#signin" },
+  { do = "switch_tab", url = "oauth-idp\\.html" },
+  { do = "wait", cond = "visible", selector = "#user", timeout_s = 10 },
+  { do = "type", selector = "#user", text = "tester@example.com" },
+  { do = "click", selector = "#allow" },
+  { do = "wait", cond = "visible", selector = "#done", timeout_s = 10 },
+  { do = "close_tab" },
+  { do = "wait", cond = "visible", selector = "#result", timeout_s = 10 },
+]
+oracle = [
+  { kind = "url", value = "oauth-popup\\.html" },
+  { kind = "text", value = "Signed in as tester@example\\.com" },
+]
+
+[[scenario]]
+id = "stand-3ds-newtab"
+title = "3DS-имитация: страница банка (ACS) открывается во второй вкладке, подтверждение возвращается postMessage на opener"
+category = "payment"
+lang = "en"
+stand = true
+steps = [
+  { do = "navigate", url = "{stand}/3ds-pay-tab.html" },
+  { do = "wait", cond = "document_ready" },
+  { do = "type", selector = "#card", text = "4000000000003220" },
+  { do = "click", selector = "#submit" },
+  { do = "switch_tab", url = "3ds-acs-tab\\.html\\?card=4000000000003220" },
+  { do = "wait", cond = "visible", selector = "#confirm", timeout_s = 10 },
+  { do = "click", selector = "#confirm" },
+  { do = "switch_tab", index = 0 },
+  { do = "wait", cond = "visible", selector = "#result", timeout_s = 10 },
+]
+oracle = [
+  { kind = "url", value = "3ds-pay-tab\\.html" },
+  { kind = "text", value = "3DS passed: 3220" },
+]

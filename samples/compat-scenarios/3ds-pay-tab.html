@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>3DS checkout stand (new tab)</title>
+<style>body{font-family:sans-serif;margin:40px}input,button{font-size:16px;padding:8px;margin:6px 0;display:block}</style></head>
+<body>
+<h1>Pay with 3-D Secure in a separate window</h1>
+<form id="pay">
+  <input id="card" placeholder="Card number" inputmode="numeric" autocomplete="cc-number">
+  <button id="submit" type="submit">Pay</button>
+</form>
+<p id="waiting" hidden>Waiting for the bank window...</p>
+<p id="result" hidden></p>
+<script>
+// Эквайер, открывающий страницу банка (ACS) в отдельном окне; итог возвращается postMessage на opener.
+document.getElementById('pay').addEventListener('submit', function (e) {
+  e.preventDefault();
+  document.getElementById('pay').hidden = true;
+  document.getElementById('waiting').hidden = false;
+  window.open('3ds-acs-tab.html?card=' + encodeURIComponent(document.getElementById('card').value), 'acs');
+});
+window.addEventListener('message', function (e) {
+  if (!e.data || e.data.type !== '3ds-done') return;
+  document.getElementById('waiting').hidden = true;
+  var r = document.getElementById('result');
+  r.hidden = false;
+  r.textContent = e.data.status === 'Y' ? '3DS passed: ' + e.data.card.slice(-4) : '3DS failed';
+});
+</script>
+</body></html>

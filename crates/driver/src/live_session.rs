@@ -28,8 +28,8 @@ use lumen_core::error::{Error, Result};
 use crate::{
     A11yNode, AutomationCommand, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
-    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, Target,
-    WaitCondition,
+    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
+    Target, WaitCondition,
 };
 
 /// Default timeout for a single automation round-trip to the live window.
@@ -257,6 +257,23 @@ impl BrowserSession for LiveWindowSession {
         if let Ok(mut cur) = self.current_url.lock() {
             *cur = url.to_owned();
         }
+        Ok(())
+    }
+
+    fn list_tabs(&self) -> Result<Vec<TabInfo>> {
+        match self.execute(AutomationCommand::ListTabs)? {
+            AutomationReply::Tabs(tabs) => Ok(tabs),
+            other => Err(unexpected_reply("Tabs", &other)),
+        }
+    }
+
+    fn switch_tab(&mut self, id: usize) -> Result<()> {
+        self.execute(AutomationCommand::SwitchTab(id))?;
+        Ok(())
+    }
+
+    fn close_tab(&mut self, id: usize) -> Result<()> {
+        self.execute(AutomationCommand::CloseTab(id))?;
         Ok(())
     }
 
