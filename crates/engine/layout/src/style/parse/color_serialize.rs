@@ -16,6 +16,7 @@ type Chan = Option<f32>;
 /// Что хранить в `ComputedStyle::color_css` для объявления `color: <val>`: `Some(строка)` для
 /// форм, чьё пространство нельзя восстановить из `rgb()`, иначе `None`.
 pub fn computed_color_css(val: &str) -> Option<String> {
+    let val = super::color::strip_comments(val);
     let s = val.trim();
     let lower = s.to_ascii_lowercase();
     if let Some(css) = super::color::relative_color_css(&lower) {
