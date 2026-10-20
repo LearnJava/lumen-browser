@@ -390,7 +390,6 @@ fn step_probe_item(
 /// beyond `probe_outer_cv`, already on the frame.
 fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasurer>, viewport: Size) {
     let k = frame.k;
-    let (_, _, rs, _) = frame.init.placements[k];
     let child_col_subgrid = frame.b.children[i].style.grid_template_columns.first()
         == Some(&GridTrackSize::Subgrid);
     let child_row_subgrid = frame.b.children[i].style.grid_template_rows.first()
@@ -411,16 +410,7 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         }
     }
 
-    let r0 = (rs - 1) as usize;
-    if r0 < frame.init.row_heights.len()
-        && frame.init.inherited_rows.is_none()
-        && row_grows_with_content(grid_track(r0 as u32, &frame.init.eff_row_template, &frame.init.auto_row))
-    {
-        let item_h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
-        if item_h > frame.init.row_heights[r0] {
-            frame.init.row_heights[r0] = item_h;
-        }
-    }
+    grow_rows_for_item(frame, k, i, viewport);
     if frame.init.lanes.is_some() {
         let h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
         frame.init.row_heights[k] = h;
@@ -431,6 +421,50 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
     record_flex_contrib(frame, i, viewport);
     record_item_baseline(frame, i, measurer, viewport);
     record_item_col_baseline(frame, i, measurer, viewport);
+}
+
+/// Item `i` (placement `k`) grows the content-sized row it starts in to its outer block size. A
+/// row `subgrid` is not one item: each of its own items asks for the parent's row it sits in
+/// (Grid L2 §9, `grid_row_subgrid`), otherwise the whole subgrid height lands on its first row.
+#[inline(never)]
+fn grow_rows_for_item(frame: &mut Frame, k: usize, i: usize, viewport: Size) {
+    if frame.init.inherited_rows.is_some() {
+        return;
+    }
+    let (_, _, rs, re) = frame.init.placements[k];
+    let r0 = (rs - 1) as usize;
+    let grow = |frame: &mut Frame, row: usize, h: f32| {
+        if row < frame.init.row_heights.len()
+            && row_grows_with_content(grid_track(row as u32, &frame.init.eff_row_template, &frame.init.auto_row))
+            && h > frame.init.row_heights[row]
+        {
+            frame.init.row_heights[row] = h;
+        }
+    };
+    if super::grid_row_subgrid::is_row_subgrid(&frame.b.children[i]) {
+        let mut contribs = Vec::new();
+        let n_rows = frame.init.n_rows;
+        let end = (re.max(rs + 1) - 1).min(n_rows) as usize;
+        let ok = super::grid_row_subgrid::collect_row_contributions(
+            &frame.b.children[i],
+            r0,
+            frame.init.row_gap,
+            (0.0, 0.0),
+            viewport,
+            frame.init.definite_content_height,
+            &mut contribs,
+        );
+        if ok.is_some() {
+            for c in contribs {
+                if c.row < end.max(r0 + 1) {
+                    grow(frame, c.row, c.size);
+                }
+            }
+            return;
+        }
+    }
+    let item_h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
+    grow(frame, r0, item_h);
 }
 
 /// CSS Grid L1 §11.7.1: item, пересекающий гибкую строку, при неопределённой высоте контейнера
