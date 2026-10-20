@@ -679,11 +679,13 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
 
 /// `true` when a flow item of the grid runs across the whole row gap `[gap_lo, gap_hi)` (its block
 /// extent starts before the gap and ends after it), measured from the grid's top edge `gy`. A row
-/// subgrid that spans the gap does not bridge it by itself: for the subgrid the gap is one of its
-/// own row gaps, and Chrome breaks there like in the parent unless an item of the subgrid (or of
-/// a subgrid nested in it) runs through it (`subgrid/fragmentation/013`).
-fn gap_is_bridged(grid: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
-    fn bridges(c: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
+/// subgrid does not bridge the gap by itself when it already is cut: it starts at the top of the
+/// window `from`, or an earlier window of `done` ended inside it. For the subgrid the gap is then
+/// one of its own row gaps, and Chrome breaks there like in the parent unless an item of the
+/// subgrid (or of a subgrid nested in it) runs through it (`subgrid/fragmentation/013`). The first
+/// cut through a subgrid that began in the middle of a window keeps the gap (`012`).
+fn gap_is_bridged(grid: &LayoutBox, gy: f32, from: f32, done: &[(f32, f32, bool)], gap_lo: f32, gap_hi: f32) -> bool {
+    fn bridges(c: &LayoutBox, gy: f32, cut: bool, gap_lo: f32, gap_hi: f32) -> bool {
         if matches!(c.kind, BoxKind::Skip)
             || matches!(c.style.position, Position::Absolute | Position::Fixed)
             || c.rect.y - gy >= gap_lo - 0.01
@@ -691,9 +693,13 @@ fn gap_is_bridged(grid: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
         {
             return false;
         }
-        !super::grid_row_subgrid::is_row_subgrid(c) || c.children.iter().any(|k| bridges(k, gy, gap_lo, gap_hi))
+        !(cut && super::grid_row_subgrid::is_row_subgrid(c)) || c.children.iter().any(|k| bridges(k, gy, true, gap_lo, gap_hi))
     }
-    grid.children.iter().any(|c| bridges(c, gy, gap_lo, gap_hi))
+    grid.children.iter().any(|c| {
+        let top = c.rect.y - gy;
+        let cut = (top - from).abs() < 0.01 || done.iter().any(|w| w.1 > top + 0.01 && w.1 < gap_lo - 0.01);
+        bridges(c, gy, cut, gap_lo, gap_hi)
+    })
 }
 
 /// Block offsets (from the grid's top edge) of the row tracks that a forced column break
@@ -808,7 +814,7 @@ fn grid_windows(
         let in_gap = rows.windows(2).find(|w| {
             let inside = end > w[0].1 + 0.01 && end < w[1].0 - 0.01;
             let at_start = (end - w[0].1).abs() <= 0.01 && end < w[1].0 - 0.01;
-            inside || (at_start && !gap_is_bridged(grid, gy, w[0].1, w[1].0))
+            inside || (at_start && !gap_is_bridged(grid, gy, start, &windows, w[0].1, w[1].0))
         });
         // A wrapped column flex container keeps a gap whose leading edge the break falls on
         // (`flex/fragmentation/014`); a break inside the gap still drops the rest of it (`006`).
@@ -1133,9 +1139,12 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     // A grid with a definite `height` is fragmented over all of it: the row gaps the breaks dropped
     // do not shorten the container, so empty fragments (the background and the rules) follow the
     // last window, as many as the height still needs (Edge: `height: 140px` over five 20px rows
-    // and four 10px gaps gives seven 20px columns, `subgrid/fragmentation/013`).
+    // and four 10px gaps gives seven 20px columns, `subgrid/fragmentation/013`). Only a grid with
+    // a row subgrid is padded: without one the dropped gaps do shorten the container
+    // (`grid/fragmentation/022`).
     if !col_flex
         && forced.is_empty()
+        && grid.children.iter().any(|c| !matches!(c.kind, BoxKind::Skip) && super::grid_row_subgrid::is_row_subgrid(c))
         && !frame.init.balance
         && grid.style.height.as_ref().is_some_and(|h| !matches!(h, Length::Percent(_)))
     {
