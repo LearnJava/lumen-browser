@@ -114,6 +114,10 @@ pub struct ComputedStyle {
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
     pub color_space: ColorSpace,
+    /// CSSOM-запись computed `color`, когда её нельзя восстановить из `color: Color`
+    /// (`lab()`/`oklch()`/`color(display-p3 …)`/`color-mix()`/относительные цвета, BUG-1425).
+    /// `None` — `getComputedStyle` печатает `rgb()` из `color`. Наследуется вместе с `color`.
+    pub color_css: Option<std::sync::Arc<str>>,
     pub background_color: Option<CssColor>,
     pub font_size: f32,
     /// CSS Viewport L1 §5 — the element's *effective* `zoom`: its own declared
@@ -1335,6 +1339,7 @@ impl ComputedStyle {
             bidi_override: None,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
+            color_css: None,
             background_color: None,
             font_size: 16.0,
             // No ancestor and no declaration yet — `zoom` starts neutral.
@@ -1728,6 +1733,7 @@ impl ComputedStyle {
             // Наследуемые свойства (CSS inherited properties).
             color: inherited.color,
             color_space: inherited.color_space,
+            color_css: inherited.color_css.clone(),
             text_align: inherited.text_align,
             direction: inherited.direction,
             block_container_direction: inherited.block_container_direction,

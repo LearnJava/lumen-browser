@@ -1457,7 +1457,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("left".into(), length_or_auto_to_css(&style.left));
 
     // ── Colors ────────────────────────────────────────────────────
-    m.insert("color".into(), color_to_css(style.color));
+    // BUG-1425: lab()/oklch()/color()/color-mix() сохраняют своё пространство в computed-значении.
+    m.insert(
+        "color".into(),
+        style.color_css.as_deref().map_or_else(|| color_to_css(style.color), str::to_owned),
+    );
     m.insert("background-color".into(), style.background_color.as_ref()
         .map_or_else(|| "rgba(0, 0, 0, 0)".into(), css_color_to_css));
     m.insert("background-image".into(), background_layers_to_css(&style.background_layers));
@@ -3333,6 +3337,30 @@ mod tests {
         assert_eq!(m.get("color-scheme").map(String::as_str), Some("light dark"));
         assert_eq!(m.get("forced-color-adjust").map(String::as_str), Some("none"));
         assert_eq!(m.get("print-color-adjust").map(String::as_str), Some("exact"));
+    }
+
+    #[test]
+    fn computed_map_color_keeps_lab_and_wide_gamut_spaces() {
+        // BUG-1425: `color` не схлопывается в rgb() для lab()/oklch()/color()/color-mix().
+        let color_of = |decl: &str| {
+            let m = div_computed_map("<div>x</div>", &format!("div {{ color: {decl}; }}"));
+            m.get("color").cloned().unwrap_or_default()
+        };
+        assert_eq!(color_of("lab(46 -50 50)"), "lab(46 -50 50)");
+        assert_eq!(color_of("oklch(0.5 0.1 90)"), "oklch(0.5 0.1 90)");
+        assert_eq!(color_of("color(srgb 0 0.5 0)"), "color(srgb 0 0.5 0)");
+        assert_eq!(color_of("lab(20 0 10/50%)"), "lab(20 0 10 / 0.5)");
+        assert_eq!(color_of("lab(none 0 0)"), "lab(none 0 0)");
+        assert_eq!(color_of("color-mix(in srgb, red, blue)"), "color(srgb 0.5 0 0.5)");
+        assert_eq!(color_of("rgb(from rebeccapurple r g b)"), "color(srgb 0.4 0.2 0.6)");
+        assert_eq!(color_of("hwb(120 0% 50%)"), "rgb(0, 128, 0)");
+        // Наследование и перекрытие обычным цветом.
+        let m = div_computed_map(
+            "<section><div>x</div></section>",
+            "section { color: lab(46 -50 50); }",
+        );
+        assert_eq!(m.get("color").map(String::as_str), Some("lab(46 -50 50)"));
+        assert_eq!(color_of("red"), "rgb(255, 0, 0)");
     }
 
     #[test]

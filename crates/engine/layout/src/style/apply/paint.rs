@@ -71,6 +71,7 @@ use crate::style::parse::box_sides::{
     split_radius_pair,
 };
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
+use crate::style::parse::color_serialize::{computed_color_css, none_to_zero};
 use crate::style::parse::counters::is_css_ident;
 use crate::style::parse::image::{
     apply_mask_longhand,
@@ -112,7 +113,15 @@ pub(in crate::style) fn apply_decl_paint(
 ) -> bool {
     match prop {
         "color" => {
-            match parse_css_color_legacy(val, is_quirks) {
+            // BUG-1425: lab()/oklch()/color()/color-mix()/относительные цвета хранят запись computed
+            // `color` отдельно — `color: Color` теряет пространство. Формы с calc()/`none`, которые
+            // sRGB-разбор не берёт, получают байты из канонической записи.
+            let css = computed_color_css(val);
+            let parsed = parse_css_color_legacy(val, is_quirks).or_else(|| {
+                parse_css_color_legacy(&none_to_zero(css.as_deref()?), is_quirks)
+            });
+            let prev_css = std::mem::replace(&mut style.color_css, css.map(Into::into));
+            match parsed {
                 Some(CssColor::Rgba(c)) => {
                     style.color = c;
                     style.color_space = ColorSpace::Srgb;
@@ -120,6 +129,7 @@ pub(in crate::style) fn apply_decl_paint(
                 Some(CssColor::CurrentColor) => {
                     style.color = inherited.color;
                     style.color_space = inherited.color_space;
+                    style.color_css = inherited.color_css.clone();
                 }
                 Some(CssColor::Wide(f)) => {
                     style.color = f.to_srgb_color();
@@ -133,7 +143,7 @@ pub(in crate::style) fn apply_decl_paint(
                     style.color = sc.resolve_color(dark);
                     style.color_space = ColorSpace::Srgb;
                 }
-                None => {}
+                None => style.color_css = prev_css,
             }
         }
         "background-color" => {

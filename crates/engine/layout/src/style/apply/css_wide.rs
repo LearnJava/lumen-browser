@@ -185,7 +185,11 @@ fn apply_css_wide_keyword_with(
 
     match prop {
         // ──────── Inherited properties ────────
-        "color" => style.color = if inh { inherited.color } else { init.color },
+        "color" => {
+            let src = if inh { inherited } else { init };
+            style.color = src.color;
+            style.color_css = src.color_css.clone();
+        }
         "caret-color" => {
             style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
         }

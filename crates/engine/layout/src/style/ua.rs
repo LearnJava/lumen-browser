@@ -616,6 +616,7 @@ pub(in crate::style) fn apply_ua_form_controls(doc: &Document, node: NodeId, sty
     style.border_left_color = border;
     style.background_color = Some(bg);
     style.color = fg;
+    style.color_css = None;
 }
 /// CSS Overflow L5 §scroll-buttons: `::scroll-button()` is a button-like box, so it starts with the
 /// `<button>` look (1px border, face colours, 21px content height, centred text, `inline-block`; like Lumen's
@@ -645,6 +646,7 @@ pub(in crate::style) fn apply_ua_scroll_button(style: &mut ComputedStyle, dark_m
     style.height_is_ua_default = true;
     style.background_color = Some(bg);
     style.color = fg;
+    style.color_css = None;
 }
 /// CSS Basic UI L4 §4.4 — post-cascade pass: when `field-sizing: content` was set
 /// by the author stylesheet, clears any UA-supplied `width`/`height` on text-entry

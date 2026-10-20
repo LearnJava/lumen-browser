@@ -1589,6 +1589,23 @@ fn canonical_specified_color_hex_and_functional_forms_become_rgb() {
 }
 
 #[test]
+fn canonical_specified_color_keeps_color_space_forms() {
+    // BUG-1425: lab()/oklch()/color() не схлопываются в rgb(), color-mix()/относительные — как записаны.
+    assert_eq!(canonical_specified_color("lab(46 -50 50)"), Some("lab(46 -50 50)".to_string()));
+    assert_eq!(canonical_specified_color("OKLCH(0.5 0.1 90)"), Some("oklch(0.5 0.1 90)".to_string()));
+    assert_eq!(canonical_specified_color("color(srgb 0 0.5 0)"), Some("color(srgb 0 0.5 0)".to_string()));
+    assert_eq!(
+        canonical_specified_color("color-mix(in srgb, red, blue)"),
+        Some("color-mix(in srgb, red, blue)".to_string())
+    );
+    assert_eq!(
+        canonical_specified_color("rgb(from rebeccapurple r g b)"),
+        Some("rgb(from rebeccapurple r g b)".to_string())
+    );
+    assert_eq!(canonical_specified_color("lab(1 2)"), None);
+}
+
+#[test]
 fn canonical_specified_color_keeps_keyword_syntax_as_keyword() {
     assert_eq!(canonical_specified_color("red"), Some("red".to_string()));
     assert_eq!(canonical_specified_color("AQUA"), Some("aqua".to_string()));

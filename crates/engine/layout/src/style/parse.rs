@@ -2,6 +2,7 @@
 
 pub mod box_sides;
 pub mod color;
+pub mod color_serialize;
 pub mod content;
 pub mod counters;
 pub mod font;
