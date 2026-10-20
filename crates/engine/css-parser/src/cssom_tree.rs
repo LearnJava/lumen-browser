@@ -256,6 +256,11 @@ impl CssomTree {
         self.get(id).map(serialize::css_text)
     }
 
+    /// `style.cssText` узла — его собственные декларации одной строкой.
+    pub fn decls_text(&self, id: u32) -> Option<String> {
+        self.get(id).map(serialize::decls_text)
+    }
+
     /// Вставляет правило из текста; `parent = None` — корень листа.
     /// Возвращает индекс вставки среди видимых детей.
     pub fn insert_rule(

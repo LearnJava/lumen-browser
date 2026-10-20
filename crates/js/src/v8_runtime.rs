@@ -606,6 +606,14 @@ impl V8JsRuntime {
                 Arc::clone(&computed_styles_needed),
             )?;
 
+            install::install_cssom_tree_natives(
+                scope,
+                ctx,
+                store,
+                sheet_sync.clone(),
+                Arc::clone(&constructed_stylesheets),
+            )?;
+
             install::install_stylesheets(
                 scope,
                 ctx,

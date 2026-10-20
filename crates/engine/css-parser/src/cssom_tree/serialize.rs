@@ -70,6 +70,11 @@ fn normalize_url(prelude: &str) -> String {
     format!("{prefix}url(\"{}\"){tail}", inner.replace('"', "\\\""))
 }
 
+/// `style.cssText` узла: собственные декларации одной строкой (`@apply` — как вызов).
+pub(super) fn decls_text(n: &CssomNode) -> String {
+    n.decls.iter().map(decl_text).collect::<Vec<_>>().join(" ")
+}
+
 /// `CSSRule.cssText`.
 pub(super) fn css_text(n: &CssomNode) -> String {
     match n.kind {

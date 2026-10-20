@@ -110,6 +110,19 @@ impl Stylesheet {
             .map(|(i, _)| i)
     }
 
+    /// Обратное к [`Self::mixin_cssom_index`]: id узла дерева для `@mixin` с
+    /// индексом `cssom_idx` в [`Self::cssom_rules`].
+    pub fn mixin_tree_id(&self, cssom_idx: usize) -> Option<u32> {
+        let ordinal = self.top_level_order[..cssom_idx.min(self.top_level_order.len())]
+            .iter()
+            .filter(|k| matches!(k, TopLevelRuleKind::Mixin(_)))
+            .count();
+        if !matches!(self.top_level_order.get(cssom_idx), Some(TopLevelRuleKind::Mixin(_))) {
+            return None;
+        }
+        self.cssom_tree().rules.iter().filter(|n| n.kind == RuleKind::Mixin).nth(ordinal).map(|n| n.id)
+    }
+
     /// После правки результата `@mixin` старыми нативами обновляет исходный
     /// текст его узла в дереве, чтобы каскад получил актуальный `@mixin`.
     pub fn sync_mixin_node(&mut self, tree_id: u32) -> bool {

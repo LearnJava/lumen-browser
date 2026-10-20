@@ -187,3 +187,39 @@ insert/delete — по ВИДИМЫМ детям. `Mixin` — видимый у�
 2. Нативы (новый файл `install/cssom_tree_natives.rs`, подключить в `install/mod.rs`, вызвать там же, где `install_stylesheets`/`install_constructed_stylesheets`): общие для владельческих и конструируемых листов, первые аргументы `constructed: bool, idx: u32`: `_lumen_cssom_children(…, parent|0=root) -> Vec<u32>`, `_lumen_cssom_rule_json(…, id)` (поля: id, parent(0=корень), cls=`RuleKind::js_class()`, prelude, cssText, styleCssText, childCount; для Mixin — name/cssText из `mixin_rule_json`), `_lumen_cssom_insert(…, parent, text, index) -> i32` (≥0 индекс; -1 IndexSize, -2 Syntax, -3 HierarchyRequest, -4 NotFound), `_lumen_cssom_delete`, `_lumen_cssom_set_style(…, id, text)` (через `parse_inline_style` + `cssom_set_decls`), `_lumen_cssom_set_prelude(…) -> i32`. Для владельческих листов после успеха `sync.record(node, CssomOp::TreeEdit)`; для конструируемых достаточно новой ревизии. Старые `_lumen_stylesheet_{rule_json,media_child_*,insert_rule,delete_rule,rule_set_style,rule_insert_apply}` и `_lumen_constructed_{rule_json,media_child_*,insert_rule,delete_rule}` заменить; mixin-нативы (`_lumen_stylesheet_mixin_*`) оставить, но принимать id узла дерева → `mixin_cssom_index`, после правки `sync_mixin_node(id)` + `TreeEdit`. Нужен `CssomTree::decls_text(id)` (строка деклараций через `serialize::decls_line`, `@apply` как маркер).
 3. JS (`crates/js/src/shim/web_api_shim_mid.js` 12090–12680 + `_lumen_make_rule_style` ~3867 и ветка `__loc__` в `_lumen_style_get_parsed/set_parsed` ~3561): переписать на дерево (иерархия классов и кэш обёрток `Map<id, WeakRef>` на лист — см. п.5 «Проект»); `loc` для `.style` → `{tree:true, constructed, sheet, id}`; `CSSStyleRule.insertRule('@apply …')` идёт обычным `insertRule` дерева (проверить `mixin-invalidation.tentative.html`).
 4. Тесты, которые нельзя сломать, и проверка — раздел «Как устроено сейчас» выше; затем WPT для трёх файлов критерия, доки (`CAPABILITIES.md`, `ROADMAP.md` CSSOM-10 → done, `BUGS.md`/`BUGS-FIXED.md` BUG-1455, `docs/subsystems/css-parser.md`/`js.md`), `/lumen-task-finish`.
+
+## Сессия 5 — что сделано и что дальше
+
+**Сделано (WIP, `cargo check -p lumen-js --features v8-backend` зелёный; JS ещё НЕ переписан — рантайм сейчас сломан, пока не сделан шаг 4-JS).**
+- Шаг 3b: `crates/js/src/v8_runtime/sheet_sync.rs::patched_cascade` — для узла с `CssomOp::TreeEdit` текст `[start,end)` в `source()` каскада
+  заменяется на `entry.sheet.cssom_source_text()` (с конца к началу, один `parse`, `carry_color_profile_data`); пустой `<style>` с `@layer`
+  в дереве (`declares_layers`) вставляется в `cursor`; остальные пустые — прежний `merge_from`. Старый replay-путь (`bases`) оставлен только
+  для листов без `TreeEdit` (после замены нативов он не используется).
+- Нативы: новый `install/cssom_tree_natives.rs` (подключён в `install/mod.rs` и `v8_runtime.rs` перед `install_stylesheets`):
+  `_lumen_cssom_children(c,idx,parent)->Vec<u32>`, `_lumen_cssom_rule_json(c,idx,id)->Option<String>` (поля `id,parent,cls,prelude,cssText,styleCssText,childCount`, у
+  Mixin ещё `name,mixinIndex`), `_lumen_cssom_insert(c,idx,parent,text,index)->i32` (≥0 индекс; -1 IndexSize, -2 Syntax, -3 HierarchyRequest, -4 нет узла),
+  `_lumen_cssom_delete(c,idx,parent,index)->i32`, `_lumen_cssom_set_style(c,idx,id,text)->i32`, `_lumen_cssom_set_prelude(c,idx,id,text)->i32` (1 применено, 0 игнор, <0 ошибка).
+  `c: bool` = конструируемый лист; `parent/id = 0` — корень. Старые `_lumen_stylesheet_{rule_count,rule_json,media_child_*,insert_rule,delete_rule,rule_set_style,rule_insert_apply}`
+  и `_lumen_constructed_{rule_count,rule_json,media_child_*,insert_rule,delete_rule}` УДАЛЕНЫ из Rust (JS их ещё вызывает!). Остались `_lumen_stylesheet_{owner_nids,document_indices,index_for,disabled,mixin_*}`
+  и `_lumen_constructed_{replace_sync,disabled,set_disabled}`; `_lumen_stylesheet_mixin_set_node_style` теперь после успеха делает `sync_mixin_node` + `TreeEdit`
+  (`rule_idx` = индекс в `cssom_rules()` = `mixinIndex` из rule_json).
+- css-parser: `CssomTree::decls_text(id)`, `Stylesheet::mixin_tree_id(cssom_idx)`.
+
+**Дальше (шаг 4-JS, затем 5).**
+1. `crates/js/src/shim/web_api_shim_mid.js` ~12110–12640 (от `function CSSStyleSheet(options)` до `// Sentinel scope key for document.adoptedStyleSheets`) переписать на дерево.
+   Проект: объект-«бэкенд» листа `be={c: constructed, idx: ()=>текущий индекс реестра или -1 (для владельческого — через ownerNid/_lumen_stylesheet_index_for), rules: Map<id,WeakRef>, sheet}`;
+   кэш обёрток листов (`Map ownerNid|constructedIdx -> WeakRef`) и правил (`_lumen_css_rule_for(be,id)`: JSON → `Object.create(класс.prototype)` + скрытое `__r={be,id,last}`),
+   чтобы `cssRules[0]===cssRules[0]` и `parentRule===cssRules[0]`. Геттеры на ПРОТОТИПАХ (idlharness), живые (каждый раз `_lumen_cssom_rule_json`), удалённое правило → `parentStyleSheet/parentRule = null`, `cssText` из `last`.
+   Иерархия: `CSSRule → CSSGroupingRule(cssRules,insertRule(text,index=0),deleteRule) → CSSConditionRule(conditionText) → CSSMediaRule(media)/CSSSupportsRule/CSSContainerRule(containerName,containerQuery)`;
+   `CSSStyleRule extends CSSGroupingRule` (`CSSStyleRule.__proto__===CSSGroupingRule`; selectorText get/set через `_lumen_cssom_set_prelude`, style); `CSSLayerBlockRule(name)`, `CSSLayerStatementRule(nameList)`,
+   `CSSScopeRule extends CSSGroupingRule` (start/end: `null` если нет; из prelude `(.a) to (.b)`), `CSSStartingStyleRule`, `CSSNestedDeclarations(style)`, `CSSImportRule(href,media,layerName,supportsText,styleSheet=null)`,
+   `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSKeyframesRule(name,cssRules,appendRule,deleteRule,findRule)`, `CSSKeyframeRule(keyText,style)`, `CSSPageRule`, `CSSPropertyRule`, `CSSCounterStyleRule`, `CSSFontFeatureValuesRule`,
+   `CSSMixinRule` (cssRules/@result через старые `_lumen_stylesheet_mixin_*` с `rule_idx = data.mixinIndex`; только владельческие листы). Константы `CSSRule.*_RULE`, `type` по классу.
+   `.style` — `_lumen_make_rule_style({tree:true, be, id})`; в `_lumen_style_get_parsed/set_parsed` (~3561) ветка `loc.tree` (get — `styleCssText` из `_lumen_cssom_rule_json`, set — `_lumen_cssom_set_style`), ветки `loc.child`/старого `rule` удалить, `mixinPath` оставить.
+   Сообщения DOMException — как в старом коде («Failed to execute 'insertRule' on 'CSSStyleSheet': …», SyntaxError/IndexSizeError/HierarchyRequestError).
+   Другие вызовы: `web_api_shim_mid.js:10608` (`ShadowRoot.styleSheets`) и `web_api_shim_tail_b.js:2268` используют `_lumen_make_css_style_sheet(idx)` — сигнатуру сохранить.
+2. Починить тесты (`crates/js/src/dom/tests/v8_cssom_stylesheets.rs`, `v8_bug493_sheet_registry.rs`, `v8_cssom5_constructed_stylesheets.rs`, `v8_bug1130_shadow_root_members.rs`, `crates/js/tests/cases/bug518_mixin_cssom.rs`): формат `@media` cssText теперь многострочный, пустое правило `sel { }`; ожидания менять осознанно (по Chrome/WPT).
+   Проверить `mixin-invalidation.tentative.html`: `insertRule('@apply --m3;')` в стилевое правило идёт обычным деревом (старый `insert_rule_body_apply` не вызывается).
+3. Юнит-тест на `patched_cascade` с `TreeEdit` (замена диапазона, пустой `<style>` с `@layer`), `cargo test -p lumen-css-parser`, `cargo test -p lumen-js --features v8-backend cssom`, clippy.
+4. WPT: `css-cascade/layer-cssom-order-reverse.html`, `css-nesting/cssom.html`, `css-cascade/scope-cssom.html` (+ `nested-declarations-cssom*`, `serialize-group-rules-with-decls`, `layer-rules-cssom`, `idlharness`).
+5. Доки (`CAPABILITIES.md`, `ROADMAP.md` CSSOM-10 → done, `BUGS.md`/`BUGS-FIXED.md` BUG-1455, `subsystems/css-parser.md`/`js.md`), `/lumen-task-finish`. Сборка: `cargo check -p lumen-js --features v8-backend` работает в основном каталоге (холодный слот не нужен).
