@@ -119,8 +119,32 @@ pub struct SubgridTracks {
 
 /// Names of the lines `first..=end` (0-based track indices: the lines around tracks `first..end`)
 /// of a list that holds one group per line; lines the list does not reach have no names.
+///
+/// An implicit `<area>-start` / `<area>-end` pair (CSS Grid L1 §7.3) that only partly lies in the
+/// span is clipped to it: the edge outside lands on the nearest span line, so `grid-column: a`
+/// in a subgrid takes the part of the parent's area `a` the subgrid covers.
 pub(crate) fn line_names_between(names: &[Vec<String>], first: usize, end: usize) -> Vec<Vec<String>> {
-    (first..=end).map(|line| names.get(line).cloned().unwrap_or_default()).collect()
+    let mut out: Vec<Vec<String>> = (first..=end).map(|line| names.get(line).cloned().unwrap_or_default()).collect();
+    for (start_line, group) in names.iter().enumerate() {
+        for name in group {
+            let Some(area) = name.strip_suffix("-start") else { continue };
+            let end_name = format!("{area}-end");
+            let Some(end_line) = (start_line + 1..names.len()).find(|&l| names[l].contains(&end_name)) else { continue };
+            if start_line >= end || end_line <= first {
+                continue;
+            }
+            if start_line < first && !out[0].contains(name) {
+                out[0].push(name.clone());
+            }
+            if end_line > end {
+                let last = out.len() - 1;
+                if !out[last].contains(&end_name) {
+                    out[last].push(end_name);
+                }
+            }
+        }
+    }
+    out
 }
 
 // ── Thread-local subgrid context ─────────────────────────────────────────────
@@ -303,5 +327,24 @@ mod tests {
         // After guard drops, context is cleared.
         SUBGRID_COL_CTX.with(|c| assert!(c.borrow().is_none()));
         SUBGRID_ROW_CTX.with(|c| assert!(c.borrow().is_none()));
+    }
+
+    #[test]
+    fn area_names_are_clipped_to_the_span() {
+        let g = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut names = vec![Vec::new(); 11];
+        names[0] = g(&["a-start"]);
+        names[10] = g(&["a-end"]);
+        let sub = line_names_between(&names, 5, 10);
+        assert_eq!(sub[0], g(&["a-start"]));
+        assert_eq!(sub[5], g(&["a-end"]));
+        // A span inside the area sees the whole span as the area.
+        let inner = line_names_between(&names, 2, 4);
+        assert_eq!((inner[0].clone(), inner[2].clone()), (g(&["a-start"]), g(&["a-end"])));
+        // An area that ends before the span is not inherited.
+        let mut early = vec![Vec::new(); 11];
+        early[0] = g(&["b-start"]);
+        early[2] = g(&["b-end"]);
+        assert!(line_names_between(&early, 5, 10).iter().all(Vec::is_empty));
     }
 }
