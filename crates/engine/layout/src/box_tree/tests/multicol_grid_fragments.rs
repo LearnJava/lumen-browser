@@ -610,3 +610,20 @@ fn a_subgrid_with_a_forced_break_in_a_later_row_lays_its_gaps_out_from_that_row(
     assert!(shifts.iter().any(|&s| s > 0.0), "no shifted subgrid fragment: {shifts:?}");
     assert!(shifts.contains(&0.0), "{shifts:?}");
 }
+
+#[test]
+fn a_balanced_column_flex_with_an_item_taller_than_the_limit_balances_to_total_over_columns() {
+    // flex/fragmentation/020: a 502px bordered column flex in five columns under a 101px limit; the
+    // 400px item is taller than the limit and is cut anyway, so it does not lift the balanced height
+    // to the limit: Chrome balances to 502 / 5 = 100.4px.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div style=\"height:100px\"></div><div style=\"height:50px\"></div>\
+         <div style=\"height:50px\"></div><div style=\"height:250px\"></div><div style=\"height:400px\"></div></div></div>",
+        "body{margin:0} #m{columns:5;column-gap:1px;width:600px;height:101px} \
+         #f{display:flex;flex-direction:column;flex-wrap:wrap;height:500px;border:1px solid black;row-gap:3px;column-gap:3px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let first = v[0].rect.height;
+    assert!(first > 100.3 && first < 100.5, "balanced to total / columns, not the 101px limit: {first}");
+}
