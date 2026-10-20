@@ -1,6 +1,7 @@
 # BUG-1360 — `position:absolute` с `left/right:auto` в контейнере `direction: rtl`: статическая позиция у левого края, а не у правого
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** `static_x_is_right_edge` (`multicol_abspos.rs`): block-flow родитель с `direction: rtl` отдаёт `container_right` как static_x, `place_abs_child` вычитает ширину бокса и `margin-right`. Тесты: `abs_auto_margins::rtl_*`.
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 13, `css/CSS2` (tables, positioning, floats, floats-clear, abspos, stacking-context, zindex, zorder))
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)
 
