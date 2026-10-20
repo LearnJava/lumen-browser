@@ -139,7 +139,53 @@ use super::*;
             "div { background-position: 80% 90%; background-position: initial; }",
             &[0],
         );
-        assert!(s.background_layers.is_empty());
+        // BUG-1301: сбрасывается только поле, слой остаётся (с позицией 0% 0%).
+        assert!(s.background_layers.iter().all(|l| l.position == ObjectPosition::background_initial()));
+    }
+
+    #[test]
+    fn background_size_css_wide_keeps_image_layer() {
+        // BUG-1301: `initial`/`inherit`/`unset`/`revert` на одном longhand'е не стирают слой
+        // с картинкой — меняется только его поле.
+        for kw in ["initial", "inherit", "unset", "revert"] {
+            for prop in [
+                "background-size", "background-repeat", "background-position", "background-origin",
+                "background-clip", "background-attachment", "background-position-x",
+            ] {
+                let css = format!("div {{ background-image: url(a.png); {prop}: {kw}; }}");
+                let s = cascade_at("<div></div>", &css, &[0]);
+                assert_eq!(s.background_layers.len(), 1, "{prop}: {kw}");
+                assert!(
+                    matches!(s.background_layers[0].image, BackgroundImage::Url(_)),
+                    "{prop}: {kw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn background_size_initial_resets_only_size() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png); background-size: 10px 20px;                    background-repeat: no-repeat; background-size: initial; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].size, BackgroundSize::Auto);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NO_REPEAT);
+    }
+
+    #[test]
+    fn background_size_inherit_takes_parent_field_per_layer() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-image: url(a.png), url(b.png); background-size: contain, cover; }              p { background-image: url(c.png), url(d.png), url(e.png); background-size: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_layers.len(), 3);
+        assert_eq!(s.background_layers[0].size, BackgroundSize::Contain);
+        assert_eq!(s.background_layers[1].size, BackgroundSize::Cover);
+        assert_eq!(s.background_layers[2].size, BackgroundSize::Contain);
+        assert!(matches!(s.background_layers[2].image, BackgroundImage::Url(_)));
     }
 
     // -------- background-position-x / -y (CSS Backgrounds L4 §3.5, BUG-495) --------
@@ -496,24 +542,24 @@ use super::*;
 
     #[test]
     fn background_origin_initial_keyword_resets() {
-        // `initial` clears layers → empty Vec.
+        // BUG-1301: `initial` сбрасывает только поле слоя.
         let s = cascade_at(
             "<div></div>",
             "div { background-origin: content-box; } div { background-origin: initial; }",
             &[0],
         );
-        assert!(s.background_layers.is_empty());
+        assert!(s.background_layers.iter().all(|l| l.origin == BackgroundOrigin::PaddingBox));
     }
 
     #[test]
     fn background_origin_unset_for_non_inherited_is_initial() {
-        // CSS Cascade L4 §7: `unset` для non-inherited == `initial` → empty layers.
+        // CSS Cascade L4 §7: `unset` для non-inherited == `initial` → поле по умолчанию.
         let s = cascade_at(
             "<div><p></p></div>",
             "div { background-origin: content-box; } p { background-origin: unset; }",
             &[0, 0],
         );
-        assert!(s.background_layers.is_empty());
+        assert!(s.background_layers.iter().all(|l| l.origin == BackgroundOrigin::PaddingBox));
     }
 
     #[test]
@@ -575,13 +621,13 @@ use super::*;
 
     #[test]
     fn background_clip_initial_keyword_resets() {
-        // `initial` clears layers → empty Vec.
+        // BUG-1301: `initial` сбрасывает только поле слоя.
         let s = cascade_at(
             "<div></div>",
             "div { background-clip: text; } div { background-clip: initial; }",
             &[0],
         );
-        assert!(s.background_layers.is_empty());
+        assert!(s.background_layers.iter().all(|l| l.clip == BackgroundClip::BorderBox));
     }
 
     // ── CSS Backgrounds L3 §3 — multiple backgrounds ──
@@ -612,6 +658,49 @@ use super::*;
     }
 
     #[test]
+    fn background_repeat_two_values_per_axis() {
+        // BUG-1299: `<repeat-style>{2}` sets each axis separately.
+        use crate::style::RepeatStyle::{NoRepeat, Repeat, Round, Space};
+        for (css, x, y) in [
+            ("repeat no-repeat", Repeat, NoRepeat),
+            ("no-repeat repeat", NoRepeat, Repeat),
+            ("space no-repeat", Space, NoRepeat),
+            ("round repeat", Round, Repeat),
+            ("repeat space", Repeat, Space),
+            ("space space", Space, Space),
+            ("ROUND   no-repeat", Round, NoRepeat),
+        ] {
+            let s = cascade_at(
+                "<div></div>",
+                &format!("div {{ background-image: url(a.png); background-repeat: {css}; }}"),
+                &[0],
+            );
+            assert_eq!(s.background_layers[0].repeat, BackgroundRepeat { x, y }, "{css}");
+        }
+        // Single keywords keep their meaning; `repeat-x` / `repeat-y` are sugar.
+        assert_eq!(BackgroundRepeat::parse("repeat no-repeat"), Some(BackgroundRepeat::REPEAT_X));
+        assert_eq!(BackgroundRepeat::parse("no-repeat repeat"), Some(BackgroundRepeat::REPEAT_Y));
+        assert_eq!(BackgroundRepeat::parse("round round"), Some(BackgroundRepeat::ROUND));
+        assert_eq!(BackgroundRepeat::parse("space"), Some(BackgroundRepeat::SPACE));
+        // Invalid: `repeat-x` takes no second value, no third value.
+        assert_eq!(BackgroundRepeat::parse("repeat-x repeat"), None);
+        assert_eq!(BackgroundRepeat::parse("repeat repeat repeat"), None);
+        assert_eq!(BackgroundRepeat::parse("repeat foo"), None);
+    }
+
+    #[test]
+    fn background_shorthand_repeat_two_values() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url(a.png) space no-repeat 10px 20px / 30px; }",
+            &[0],
+        );
+        let l = &s.background_layers[0];
+        assert_eq!(l.repeat, BackgroundRepeat { x: RepeatStyle::Space, y: RepeatStyle::NoRepeat });
+        assert_eq!(l.size, BackgroundSize::Length(BgSizeAxis::Px(30.0), BgSizeAxis::Auto));
+    }
+
+    #[test]
     fn multiple_backgrounds_color_only_in_last_layer() {
         // background shorthand: color applies only from last layer's declaration.
         let s = cascade_at(
@@ -620,7 +709,7 @@ use super::*;
             &[0],
         );
         assert_eq!(s.background_layers.len(), 2);
-        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NO_REPEAT);
         // Last layer had the color "red"
         assert!(s.background_color.is_some());
     }
@@ -639,7 +728,7 @@ use super::*;
         assert_eq!(layer.position.x, PositionComponent::Percent(0.5));
         assert_eq!(layer.position.y, PositionComponent::Percent(0.5));
         assert_eq!(layer.size, BackgroundSize::Cover);
-        assert_eq!(layer.repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(layer.repeat, BackgroundRepeat::NO_REPEAT);
     }
 
     #[test]
@@ -652,9 +741,9 @@ use super::*;
             &[0],
         );
         assert_eq!(s.background_layers.len(), 3);
-        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
-        assert_eq!(s.background_layers[1].repeat, BackgroundRepeat::RepeatX);
-        assert_eq!(s.background_layers[2].repeat, BackgroundRepeat::NoRepeat); // cycles
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NO_REPEAT);
+        assert_eq!(s.background_layers[1].repeat, BackgroundRepeat::REPEAT_X);
+        assert_eq!(s.background_layers[2].repeat, BackgroundRepeat::NO_REPEAT); // cycles
     }
 
     #[test]

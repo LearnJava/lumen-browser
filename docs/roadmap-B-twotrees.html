@@ -76,11 +76,11 @@
  "generated": "2026-10-19",
  "counts": {
   "open": 369,
-  "fixed": 1215,
+  "fixed": 1219,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1587,
+ "total_bugs": 1591,
  "phases": [
   {
    "id": "P0",
@@ -655,28 +655,28 @@
     {
      "id": "MULTICOL-FRAG-OOF",
      "title": "MULTICOL-FRAG-OOF: abspos в multicol по фрагментам",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Позиционированные боксы во фрагментированном потоке (CSS Fragmentation L3, CSS Position L3): containing block из фрагментов, abspos режется по колонкам, `top` отсчитывается по фрагментированному потоку. Проба: multicol `position: relative; column-fill: auto; height: 100px`, abspos `top: 150px` — стоит на y = 150 первой колонки (ниже контейнера), а должен во второй на y = 50; `out-of-flow-in-multicolumn-001`: abspos `width: 100%` в relpos-обёртке на стыке колонок не делится. WPT `css/css-break`: 156 id (`out-of-flow-in-multicolumn-*` 113, `transform-*`, `abspos-in-opacity-*`, `overflow-clip-*`) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG. WPT `css/css-multicol` (S17): ещё 25 id (`abspos-after-spanner*`, `abspos-autopos-contained-by-viewport-*`, `abspos-multicol-in-second-outer-clipped`); проба: abspos после спаннера стоит на `y=0`, а не под спаннером."
+     "note": "Сделано (2026-10-19, ветка `p1-multicol-frag-oof`): abspos с CB внутри item и abspos самого контейнера режутся по колонкам, `top` отсчитывается по стопке колонок (`scan_oof`/`take_oof`/`cut_oof`/`cut_own_abspos`, `subsystems/layout.md`); WPT `out-of-flow-in-multicolumn-*` + `css-multicol/abspos*` 12 → 24 из 134. Остаток (110 id, в атомарном пути): спаннеры (`abspos-after-spanner*`, статическая позиция после `column-span: all` на `y=0`), CB вне item, `column-height` rows, клип кусков под `overflow: clip` (114, 115), `break-inside: avoid` внутри abspos и подъём высоты баланса от неразрывного OOF (099), fixed/sticky, transform/opacity-обёртки. Исходная постановка: Позиционированные боксы во фрагментированном потоке (CSS Fragmentation L3, CSS Position L3): containing block из фрагментов, abspos режется по колонкам, `top` отсчитывается по фрагментированному потоку. Проба: multicol `position: relative; column-fill: auto; height: 100px`, abspos `top: 150px` — стоит на y = 150 первой колонки (ниже контейнера), а должен во второй на y = 50; `out-of-flow-in-multicolumn-001`: abspos `width: 100%` в relpos-обёртке на стыке колонок не делится. WPT `css/css-break`: 156 id (`out-of-flow-in-multicolumn-*` 113, `transform-*`, `abspos-in-opacity-*`, `overflow-clip-*`) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG. WPT `css/css-multicol` (S17): ещё 25 id (`abspos-after-spanner*`, `abspos-autopos-contained-by-viewport-*`, `abspos-multicol-in-second-outer-clipped`); проба: abspos после спаннера стоит на `y=0`, а не под спаннером."
     },
     {
      "id": "TABLE-FRAG",
      "title": "TABLE-FRAG: фрагментация таблиц",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Фрагментация таблиц (CSS Fragmentation L3, CSS Tables L3). Таблица в multicol ставится атомарно: две строки по 100px в колонке высотой 100px — `Table` 50×200 в первой колонке. Нужно: разрыв между строками, `break-*` на строках, повтор `thead`/`tfoot` в каждом фрагменте, ячейка, растянутая разрывом, `border-spacing`/`border-collapse` у разрыва, `caption`; `offsetTop`/`offsetHeight` частей таблицы (`table-parts-offsets*.tentative`: `colgroup` offsetTop −8 вместо 18). WPT `css/css-break/table/*` и таблицы в корне: 123 id (5 testharness, 59 сабтестов) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG. WPT `css/css-multicol/table` (S17): ещё 10 id (`multicol-table-cell-*`, `table-cell-multicol-nested-*`)."
+     "note": "Фрагментация таблиц (CSS Fragmentation L3, CSS Tables L3). Таблица в multicol ставится атомарно: две строки по 100px в колонке высотой 100px — `Table` 50×200 в первой колонке. Нужно: разрыв между строками, `break-*` на строках, повтор `thead`/`tfoot` в каждом фрагменте, ячейка, растянутая разрывом, `border-spacing`/`border-collapse` у разрыва, `caption`; `offsetTop`/`offsetHeight` частей таблицы (`table-parts-offsets*.tentative`: `colgroup` offsetTop −8 вместо 18). WPT `css/css-break/table/*` и таблицы в корне: 123 id (5 testharness, 59 сабтестов) — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG. WPT `css/css-multicol/table` (S17): ещё 10 id (`multicol-table-cell-*`, `table-cell-multicol-nested-*`). СДЕЛАНО 2026-10-19 (ветка `p1-table-frag`): таблица — фрагментируемый блок `multicol_flow` (`box_tree/multicol_table.rs`): разрыв между строками, `break-*`/`break-inside: avoid` на строке/группе/ячейке, строка с текстом режется внутри ячеек, повтор `thead`/`tfoot`, растяжка фрагмента до низа колонки, `<col>`-боксы; WPT `css-break/table` + `css-multicol/table` 37 → 78 из 177 id (`subsystems/layout.md`). Не закрыто: `border-collapse: collapse` режется атомарно; `rowspan`-ячейка держит строки вместе; `caption` + рамка (`table-border-001`, `caption-margin-*`); `tfoot` перед `tbody` не переставляется; BUG-1411 (пустой `<br>` высотой 0) валит `break-inside-cell-*`; `border: 10px green; border-style: solid none` теряет рамку; `offsetTop` частей таблицы (`table-parts-offsets*`); print-reftest `table-fragmentation-*` без исполнителя."
     },
     {
      "id": "GRID-FRAG",
      "title": "GRID-FRAG: фрагментация grid в общем случае",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Остаток фрагментации grid: `is_fragmentable_grid` (`box_tree/multicol_abspos.rs:57`) режет только сетку без рамок, с элементами-листьями, в multicol с definite height (`balance` допускается с BUG-553 среза 69, после прогона S4); иначе сетка ставится атомарно. Проба: ряды 100px + 100px, один элемент с `border` или с ребёнком — сетка 50×200 в первой колонке. Нужно: разрыв между рядами в общем случае (рамки/padding сетки, элементы с содержимым, `balance`), разрыв внутри элемента (параллельные потоки), abspos-элементы сетки, subgrid. WPT `css/css-break/grid/*`: 89 id — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG."
+     "note": "Остаток фрагментации grid: `is_fragmentable_grid` (`box_tree/multicol_abspos.rs:57`) режет только сетку без рамок, с элементами-листьями, в multicol с definite height (`balance` допускается с BUG-553 среза 69, после прогона S4); иначе сетка ставится атомарно. Проба: ряды 100px + 100px, один элемент с `border` или с ребёнком — сетка 50×200 в первой колонке. Нужно: разрыв между рядами в общем случае (рамки/padding сетки, элементы с содержимым, `balance`), разрыв внутри элемента (параллельные потоки), abspos-элементы сетки, subgrid. WPT `css/css-break/grid/*`: 89 id — кластер в `docs/wpt-vendor-notes/css.md` §css-break (WPT-RUN-14 S4, 2026-10-05). Зависит от MULTICOL-FRAG. Сделано (2026-10-19, ветка `p1-grid-frag`): `multicol_flow::is_fragmentable` принимает `Display::Grid` без `subgrid` по оси (`is_own_track_grid`); `walk_grid_rows` ставит кандидаты разрыва в щелях между дорожками строк (щель отбрасывается; элемент, перекрывающий щель, запрещает разрыв; `break-*` элементов соседних дорожек), внутри элементов — их собственные кандидаты, элементы одной дорожки режутся параллельными потоками; `grid_fragment_tracks` обрезает записанные дорожки под окно (`SubgridTracks.fragment`), чтобы painter не рисовал разрезанную щель. Рамки/padding сетки, `balance` и элементы с содержимым теперь режутся (прежние атомарные случаи); тесты `box_tree/tests/multicol_grid_flow.rs`. Reftest-счёт (скриншоты 800×600, `css-break/grid` + subgrid + `css-multicol`, 640 id): identical 167 → 183, регрессий 0. Не закрыто: `css-break/grid/container-fragmentation-005..011` (005 — abspos `bottom:0` в relative multicol, остаток MULTICOL-FRAG-OOF; 006/007 — `overflow: clip` на сетке/предке); `item-fragmentation-002` (порядок `grid-row-start`), `-010` (min-content дорожка растёт от фрагментации), `item-oof-*`, `monolithic-overflow-*`; сетка с `subgrid` по оси режется прежним `emit_grid_fragments`."
     },
     {
      "id": "SVG-PATTERN",
      "title": "SVG-PATTERN: SVG `<pattern>`",
-     "status": "planned",
+     "status": "done",
      "size": "M",
      "note": "SVG `<pattern>` (SVG 1.1 §13.3, SVG 2 §13.8): элемента нет вовсе — `fill=\"url(#p)\"` на `rect`/`circle`/`path` ничего не рисует (`grep -i pattern crates/engine/layout/src/box_tree/svg*.rs` пуст), `SvgPaint` знает `Color`/`Gradient`/`Url`, не `Pattern`. Нужно: разбор `<pattern>` (`patternUnits`, `patternContentUnits`, `patternTransform`, `x`/`y`/`width`/`height`, `viewBox`/`preserveAspectRatio`, `href`-наследование), тип паттерна рядом с `SvgGradientDef` (LIB-5), заливка плиткой через клип и `PushTransform` (фигура + `stroke`), обе ветки растра (CPU и wgpu). Проба (`--screenshot`): прямоугольник с `fill=\"url(#p)\"` — белый, градиент в тех же условиях рисуется. WPT `css/css-transforms`: 71 reftest (`matrix/svg-matrix-*` 69, `patternTransform/*` 2) — красный «якорь» остаётся на снимке у 58 из 71; плюс `svg/painting`, `svg/pservers`. Кластер — `docs/wpt-vendor-notes/css.md` §css-transforms (WPT-RUN-14 S5, 2026-10-06).",
      "bugs": [
@@ -686,9 +686,9 @@
     {
      "id": "BG-ATTACH-LOCAL",
      "title": "BG-ATTACH-LOCAL: background-attachment: local **Связь:** THREAD-13-S4 меняет опознание скролл-слоёв (id вместо `clip_rect`) — кто второй, тот переносит.",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "`background-attachment: local` (CSS Backgrounds 3 §3.6): режим разбирается (`BackgroundAttachment::Local`), но paint трактует его как `scroll` (`CSS-SPECS.md`: «local = scroll»). Нужно: слои фона `local` идут внутри `PushScrollLayer` своего прокручиваемого бокса и сдвигаются с содержимым; позиционирующая область — padding-box по размеру всего прокручиваемого содержимого, область рисования — padding-box «окна» (клип не под рамку); `rtl`/`*-reverse` — начало отсчёта с правого/нижнего края; ячейка таблицы (`table-cell-background-local*`). Проба: `<div id=s style=\"width:100px;height:100px;overflow:scroll;background:linear-gradient(red 0,red 100px,blue 100px,blue 300px) local\"><div style=\"height:400px\"></div></div>`, `s.scrollTop=100` — пиксель (20,20) красный, ожидается синий; `attachment-local-clipping-color-1.html` — промежутки штриховой рамки залиты зелёным. WPT `css/css-backgrounds`: 26 reftest (`background-attachment-local/*` 14, `local-attachment-*` 5, `table-cell-background-local*` 3, прочие 4). Обе ветки растра (CPU и wgpu). Кластер — `docs/wpt-vendor-notes/css.md` §css-backgrounds (WPT-RUN-14 S6, 2026-10-06).",
+     "note": "Сделано (2026-10-19, ветка `p1-bg-attach-local`): блок-скроллер (`overflow: hidden|scroll|auto`) рисует `local`-слои и цвет под `local`-нижним слоем внутри `PushScrollLayer` (`local_bg_scroller`/`emit_local_background`/`local_round_clip`, `display_list/background_mask.rs`; пути `walk` и `box_layer_ops`), область позиционирования — вся прокручиваемая площадь (`local_scroll_area`), клип — padding-box окна, при `border-radius` — неподвижный скруглённый клип; 18 из 30 рефтестов совпадают (было 8). Остаток (ячейка таблицы, `rtl` `scrollLeft`<0, скруглённый `url()`-фон) — [BUG-1653](bugs/BUG-1653-OPEN.md). Исходная постановка: `background-attachment: local` (CSS Backgrounds 3 §3.6): режим разбирается (`BackgroundAttachment::Local`), но paint трактует его как `scroll` (`CSS-SPECS.md`: «local = scroll»). Нужно: слои фона `local` идут внутри `PushScrollLayer` своего прокручиваемого бокса и сдвигаются с содержимым; позиционирующая область — padding-box по размеру всего прокручиваемого содержимого, область рисования — padding-box «окна» (клип не под рамку); `rtl`/`*-reverse` — начало отсчёта с правого/нижнего края; ячейка таблицы (`table-cell-background-local*`). Проба: `<div id=s style=\"width:100px;height:100px;overflow:scroll;background:linear-gradient(red 0,red 100px,blue 100px,blue 300px) local\"><div style=\"height:400px\"></div></div>`, `s.scrollTop=100` — пиксель (20,20) красный, ожидается синий; `attachment-local-clipping-color-1.html` — промежутки штриховой рамки залиты зелёным. WPT `css/css-backgrounds`: 26 reftest (`background-attachment-local/*` 14, `local-attachment-*` 5, `table-cell-background-local*` 3, прочие 4). Обе ветки растра (CPU и wgpu). Кластер — `docs/wpt-vendor-notes/css.md` §css-backgrounds (WPT-RUN-14 S6, 2026-10-06).",
      "bugs": [
       "BUG-1304"
      ]
@@ -8911,10 +8911,7 @@
          "title": "Краулер паритета: живой прогон на corpus.txt+top100",
          "status": "done",
          "size": "S",
-         "note": "Краулер scripts/compat_crawl.py (COMPAT-CORPUS-1) не прогнан вживую. Объём: `python scripts/compat_crawl.py` на corpus.txt+top100 с плечом Lumen и эталоном Chrome; проверить обработку http_status=None при повторной навигации в той же вкладке; CPR и долю флапов записать в docs/perf/journal.md. Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`). Приёмка: 5 проверок посчитаны у ≥95% сайтов, флапы ≤5%, CPR в отчёте. Источник: docs/research/site-compat/report.md §7.6 п.9.",
-         "bugs": [
-          "BUG-1629"
-         ]
+         "note": "ЗАКРЫТ 2026-10-19 (ветка p2-compat-corpus-1-base): живой прогон на 112 сайтах, проверки посчитаны у 111 (99,1 %), CPR 4,5 % (5/111), флапы 43,2 % — порог ≤5 % НЕ выполнен: прогон нашёл и исправил в приборе итоговый статус (редирект/304), страницу сетевой ошибки Lumen и падения на длинном прогоне, остаток флапов — нестабильность Lumen между проходами; a11y 11/111 (у 37 из 61 сайтов с деревом совпало <50 % — причина не разобрана), 14 сайтов недоступны по TLS на маршруте home-direct (нужен прогон с VPN); запись — docs/perf/journal.md, runs/2026-10-19-compat-crawl-summary.md. Исходная постановка: Краулер scripts/compat_crawl.py (COMPAT-CORPUS-1) не прогнан вживую. Объём: `python scripts/compat_crawl.py` на corpus.txt+top100 с плечом Lumen и эталоном Chrome; проверить обработку http_status=None при повторной навигации в той же вкладке; CPR и долю флапов записать в docs/perf/journal.md. Блокер: BUG-1629 (первый кадр в живом окне приходит по истечении таймаута `wait`). Приёмка: 5 проверок посчитаны у ≥95% сайтов, флапы ≤5%, CPR в отчёте. Источник: docs/research/site-compat/report.md §7.6 п.9."
         },
         {
          "id": "COMPAT-CORPUS-4",
@@ -10026,13 +10023,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1294": {
-   "status": "open",
-   "title": "SVG `<pattern>` (`fill=\"url(#p)\"`, `patternTransform`) не реализован: заливка не рисуется. WPT `css/css-transforms`: 71 reftest (`matrix/svg-matrix-*`). OPEN (Д…",
-   "component": "layout/paint (`box_tree/svg.rs`, `SvgPaint`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1295": {
    "status": "open",
    "title": "SVG как `background-image`: корень с `width`/`height` в `%`, с одним из двух или без обоих получает неверный внутренний размер (25×50 вместо «нет размера»), `ba…",
@@ -10044,13 +10034,6 @@
    "status": "open",
    "title": "CSSOM `background-*`/`border-*`/`box-shadow`/`border-radius`: `element.style` принимает невалидное (`-1px`, `left right`, `auto`), не канонизирует; `getComputed…",
    "component": "js + layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1298": {
-   "status": "open",
-   "title": "`thin`/`medium`/`thick` в `border`, `border-<side>`, `border-width`, `border-*-width` не разбираются (`resolve_box_length` вместо `parse_line_width`) — ширина 0…",
-   "component": "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` `border-*-width`)",
    "date": null,
    "debtor": false
   },
@@ -10086,13 +10069,6 @@
    "status": "open",
    "title": "Плитки `background-image` не выходят за позиционирующую область: при `background-origin: padding-box",
    "component": "paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, сетка плиток; wgpu не проверялось)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1304": {
-   "status": "open",
-   "title": "`background-attachment: local` ≡ `scroll`: фон не едет вместе с содержимым прокручиваемого бокса и не режется по padding-box. WPT `css/css-backgrounds/backgroun…",
-   "component": "layout/paint (`crates/engine/layout/src/style/values/background.rs` разбирает `local`, paint = `scroll`)",
    "date": null,
    "debtor": false
   },
@@ -11857,6 +11833,27 @@
    "status": "open",
    "title": "Остаток BUG-1296: GPU-бэкенды растягивают растр SVG-фона текстурным фильтром, а не перерисовывают SVG в размер плитки (CPU-путь исправлен). Вживую не проверено.",
    "component": "paint (`backends/femtovg_backend.rs`, wgpu `renderer/` — `DrawBackgroundImage`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1651": {
+   "status": "open",
+   "title": "youtube главная: одна задача таймеров/pump держит engine-поток ≥ 8,7 с (живой `eval` — `engine thread busy`), страница не отвечает на ввод",
+   "component": "shell/js (`app/about_to_wait.rs:287` — `route_task_js`: `tick_timers`/`pump_*`) — не локализовано",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1652": {
+   "status": "open",
+   "title": "`clip-path: url(#clip)` / атрибут `clip-path` со ссылкой на `<clipPath>` не применяется к SVG-группам и фигурам: отсечение не происходит. WPT `css/css-transform…",
+   "component": "layout/paint (`box_tree/svg.rs`, `style/apply/paint.rs` — `clip-path: url(#id)` на SVG-элементе или `<g>`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1653": {
+   "status": "open",
+   "title": "Остаток `background-attachment: local`: ячейка таблицы, `rtl` с отрицательным `scrollLeft`; попутно `url()`-фон не режется по `border-radius`. WPT `table-cell-b…",
+   "component": "paint/layout (`display_list/background_mask.rs::local_bg_scroller`, `emit_background_layer` `BackgroundImage::Url`)",
    "date": null,
    "debtor": false
   },
@@ -20385,6 +20382,34 @@
    "component": "paint/image (`Image::vector_source`, `lumen_image::rasterize_svg`, `cpu_raster.rs::vector_tile`)",
    "date": "2026-10-19",
    "debtor": false
+  },
+  "BUG-1650": {
+   "status": "fixed",
+   "title": "Google Fonts: один `.woff2` запрашивался на каждый вес вариативного шрифта (×4); теперь один fetch на URL, блоки делят байты; фреймы отбирают поднаборы `unicode…",
+   "component": "shell (`page_load.rs::spawn_web_font_fetches`, `web_font_usage.rs::FontUrlFetches`, `frames.rs`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1294": {
+   "status": "fixed",
+   "title": "SVG `<pattern>` (`fill=\"url(#p)\"`, `patternUnits`/`patternContentUnits`/`patternTransform`/`viewBox`/`href`) не рисовался. Теперь содержимое плитки раскладывает…",
+   "component": "layout/paint (`box_tree/svg.rs::resolve_svg_pattern`, `SvgPaint::Pattern`, `display_list/svg_text_decoration.rs::emit_svg_pattern_tiles`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1304": {
+   "status": "fixed",
+   "title": "`background-attachment: local` ≡ `scroll`: фон не ехал вместе с содержимым прокручиваемого бокса и не резался по padding-box. Теперь `local`-слои и цвет рисуютс…",
+   "component": "paint (`display_list/background_mask.rs::local_bg_scroller`/`emit_local_background`/`local_round_clip`, `walk.rs`, `box_layer.rs`)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1298": {
+   "status": "fixed",
+   "title": "`thin`/`medium`/`thick` в `border`, `border-<side>`, `border-width`, `border-*-width` не разбираются (`resolve_box_length` вместо `parse_line_width`) — ширина 0…",
+   "component": "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` `border-*-width`)",
+   "date": "2026-10-19",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -22614,6 +22639,9 @@
   "layout/paint (`<canvas>` как replaced-элемент, `object-fit`/`object-position`)": [
    "BUG-1421"
   ],
+  "layout/paint (`box_tree/svg.rs`, `style/apply/paint.rs` — `clip-path: url(#id)` на SVG-элементе или `<g>`)": [
+   "BUG-1652"
+  ],
   "layout/paint (`color-scheme`: холст и `color: initial`)": [
    "BUG-1603"
   ],
@@ -23036,6 +23064,9 @@
   "paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`)": [
    "BUG-1339"
   ],
+  "paint/layout (`display_list/background_mask.rs::local_bg_scroller`, `emit_background_layer` `BackgroundImage::Url`)": [
+   "BUG-1653"
+  ],
   "paint/layout (`style/apply/paint.rs` — `mask_layers`; `display_list`, `cpu_raster.rs` — маски)": [
    "BUG-1406"
   ],
@@ -23063,6 +23094,9 @@
   ],
   "paint/test-harness (`background-repeat: space`)": [
    "BUG-330"
+  ],
+  "scripts/MCP (`resources/read` отдаёт PNG в поле `blob`, скрипты читали `data`)": [
+   "BUG-1629"
   ],
   "shell": [
    "BUG-028",
@@ -23292,6 +23326,9 @@
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
   ],
+  "shell (`page_load.rs::spawn_web_font_fetches`, `web_font_usage.rs::FontUrlFetches`, `frames.rs`)": [
+   "BUG-1650"
+  ],
   "shell (`page_load.rs::take_needed_web_fonts`, `web_font_usage.rs`)": [
    "BUG-1634"
   ],
@@ -23331,6 +23368,9 @@
   "shell/js": [
    "BUG-164",
    "BUG-345"
+  ],
+  "shell/js (`app/about_to_wait.rs:287` — `route_task_js`: `tick_timers`/`pump_*`) — не локализовано": [
+   "BUG-1651"
   ],
   "shell/js (`crates/shell/src/app/about_to_wait.rs` — `opener_tab_id` теперь читается один раз до цикла (P3, 2026-09-29); `lumen_js::window_messaging` — доставка попап → опенер)": [
    "BUG-1212"

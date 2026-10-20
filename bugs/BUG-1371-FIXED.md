@@ -1,6 +1,7 @@
 # BUG-1371 — `unicode-bidi: bidi-override` / `<bdo>` не действуют на вложенные строчные элементы
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** `ComputedStyle::bidi_override` (наследуемый контекст ближайшего `bidi-override`/`isolate-override`, `cascade.rs`) раскрывается в `bidi::effective`: сегмент с `unicode-bidi: normal` внутри override-бокса оборачивается теми же `LRO/RLO` и группируется с владельцем. `<bdo dir=rtl>` на проверке давал нечётный уровень и без правки (UA-хинт `isolate-override`). Тесты: `bug1371_bidi_override_nested`, `bidi::tests::*override*`.
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 14, `css/CSS2` (text, linebox, fonts, generated-content, lists, bidi-text))
 **Область:** layout (`crates/engine/layout/src/bidi.rs` — переопределение направления не передаётся детям `span`/`b`/`bdo`)
 

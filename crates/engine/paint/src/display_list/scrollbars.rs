@@ -123,6 +123,7 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
 /// without scrollbars. `scroll`/`auto` boxes take the scroll-layer path anyway.
 pub(crate) fn scrolled_hidden(b: &LayoutBox) -> bool {
     (b.scroll_x != 0.0 || b.scroll_y != 0.0)
+        && !b.style.overflow_to_viewport
         && (matches!(b.style.overflow_x, Overflow::Hidden) || matches!(b.style.overflow_y, Overflow::Hidden))
 }
 
@@ -227,8 +228,8 @@ fn scroll_layer_geometry(b: &LayoutBox) -> Option<ScrollLayerGeometry> {
     }
     let s = &b.style;
     let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
-    let clip_x = overflow_clips(s.overflow_x) || paint_contain;
-    let clip_y = overflow_clips(s.overflow_y) || paint_contain;
+    let clip_x = style_overflow_clips(s, s.overflow_x) || paint_contain;
+    let clip_y = style_overflow_clips(s, s.overflow_y) || paint_contain;
     if !(clip_x || clip_y) {
         return None;
     }

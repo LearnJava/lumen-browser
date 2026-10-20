@@ -89,7 +89,7 @@ fn auto_repeat_count(rep: &GridRepeat, avail: Option<f32>, gap: f32, em: f32, vi
 
 /// The track list with the auto `repeat()` expanded `count` times between the tracks
 /// written around it.
-fn expand_auto_repeat(rep: &GridRepeat, count: usize) -> Vec<GridTrackSize> {
+pub(super) fn expand_auto_repeat(rep: &GridRepeat, count: usize) -> Vec<GridTrackSize> {
     let mut out = Vec::with_capacity(rep.before.len() + rep.after.len() + count * rep.tracks.len());
     out.extend_from_slice(&rep.before);
     for _ in 0..count {
@@ -314,7 +314,9 @@ pub(crate) fn build_grid_init(
         .unwrap_or_else(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
     let row_gap = inherited_rows.as_ref()
         .map(|ctx| ctx.gap)
-        .unwrap_or_else(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
+        // CSS Grid L1 §8.3: a percentage row gap resolves against the container's block size and
+        // is 0 while that is indefinite.
+        .unwrap_or_else(|| s.row_gap.resolve(em, definite_content_height, viewport).unwrap_or(0.0).max(0.0));
 
     // CSS Grid L1 §7.2.3.4 — Phase 2: expand repeat(auto-fill|auto-fit, ...) at layout time.
     // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
@@ -444,6 +446,15 @@ pub(crate) fn build_grid_init(
         row_repeat_count.unwrap_or(0),
         |t| covers(t, false),
     );
+    // CSS Grid L1 §7.2.1: `%` row tracks are `auto` while the block size is indefinite.
+    let (row_tracks_collapsed, auto_row) = if definite_content_height.is_none() {
+        (
+            row_tracks_collapsed.iter().map(GridTrackSize::percent_as_auto).collect::<Vec<_>>(),
+            s.grid_auto_rows.percent_as_auto(),
+        )
+    } else {
+        (row_tracks_collapsed, s.grid_auto_rows.clone())
+    };
     let eff_row_template: &[GridTrackSize] = &row_tracks_collapsed;
     // Collapsed tracks have no gutters: `col_gutters` / `row_gutters` count the real ones.
     let col_gutters = gutter_count(&col_collapsed, n_cols as usize);
@@ -623,9 +634,9 @@ pub(crate) fn build_grid_init(
     } else {
         (0..n_rows)
             .map(|r| {
-                match grid_track(r, eff_row_template, &s.grid_auto_rows) {
-                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                match grid_track(r, eff_row_template, &auto_row) {
+                    GridTrackSize::Length(l) => l.resolve(em, definite_content_height, viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, definite_content_height.unwrap_or(0.0), viewport).unwrap_or(0.0),
                     GridTrackSize::Subgrid => 0.0,
                     _ => 0.0,
                 }
@@ -688,6 +699,7 @@ pub(crate) fn build_grid_init(
         col_names,
         row_names,
         eff_row_template: eff_row_template.to_vec(),
+        auto_row,
         row_collapsed,
         inherited_rows,
         row_heights,

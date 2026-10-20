@@ -345,6 +345,7 @@ pub(super) fn lay_out_abs_children_with(
     // carries a transform/filter/…; otherwise they resolve against the viewport.
     let fixed_cb = fixed_cb_rect(parent);
 
+    let static_rtl = static_x_is_right_edge(parent);
     for &(idx, static_x, static_y, cb_override) in deferred {
         let cb = if let Some(cb) = cb_override {
             cb
@@ -353,8 +354,23 @@ pub(super) fn lay_out_abs_children_with(
         } else {
             my_pcb
         };
-        place_abs_child(&mut parent.children[idx], static_x, static_y, cb, &anchors, measurer, viewport, my_pcb, hp);
+        let rtl = static_rtl && cb_override.is_none();
+        place_abs_child(&mut parent.children[idx], static_x, rtl, static_y, cb, &anchors, measurer, viewport, my_pcb, hp);
     }
+}
+
+/// CSS 2.1 §10.3.7: the static position of an abs-pos box in a block-flow parent whose
+/// `direction` is `rtl` is its *right* edge (the box's margin edge sits at the parent's content
+/// right edge), not the left one. For such a parent the block-flow loop hands
+/// `container_right` over as `static_x` and [`place_abs_child`] subtracts the box width.
+pub(super) fn static_x_is_right_edge(parent: &LayoutBox) -> bool {
+    let s = &parent.style;
+    s.direction == crate::style::Direction::Rtl
+        && matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(parent.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && matches!(s.display, Display::Block | Display::FlowRoot)
+        && s.column_count.is_none()
+        && s.column_width.is_none()
 }
 
 /// Lays out one absolutely/fixed-positioned `child` against its containing
@@ -366,6 +382,7 @@ pub(super) fn lay_out_abs_children_with(
 fn place_abs_child(
     child: &mut LayoutBox,
     static_x: f32,
+    static_x_is_right: bool,
     static_y: f32,
     cb: Rect,
     anchors: &crate::anchor::AnchorRegistry,
@@ -530,6 +547,7 @@ fn place_abs_child(
             }
             (Some(l), _)    => cb.x + l + c_ml,
             (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
+            (None, None) if static_x_is_right => static_x - c_mr - child.rect.width,
             (None, None)    => static_x + c_ml,
         };
         let ny = match (top, bottom) {
@@ -721,5 +739,5 @@ fn refit_out_of_flow_child(
     let ml = child.style.margin_left.resolve_or_zero(em, cb.width, viewport);
     let mt = child.style.margin_top.resolve_or_zero(em, cb.height, viewport);
     let (static_x, static_y) = (child.rect.x - ml, child.rect.y - mt);
-    place_abs_child(child, static_x, static_y, cb, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
+    place_abs_child(child, static_x, false, static_y, cb, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
 }

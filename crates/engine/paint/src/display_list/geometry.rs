@@ -199,6 +199,44 @@ pub(crate) fn space_axis_geometry(
     (area_origin + pos_off, tile, false)
 }
 
+/// One axis of the tile grid for a `<repeat-style>`: `(first tile start, step,
+/// repeats)`. `off` is the resolved `background-position` offset inside the
+/// positioning area (`area_origin`, `area`). `round` tiles like `repeat` — the
+/// caller has already rescaled the tile for it.
+#[must_use]
+pub(crate) fn repeat_axis_geometry(
+    style: RepeatStyle,
+    area_origin: f32,
+    area: f32,
+    tile: f32,
+    off: f32,
+) -> (f32, f32, bool) {
+    let tile0 = area_origin + off;
+    match style {
+        RepeatStyle::NoRepeat => (tile0, tile, false),
+        RepeatStyle::Repeat | RepeatStyle::Round => (tile0 - (off / tile).ceil() * tile, tile, true),
+        RepeatStyle::Space => space_axis_geometry(area_origin, area, tile, off),
+    }
+}
+
+/// Moves the first tile of a repeating axis back to cover the painting area.
+///
+/// [`repeat_axis_geometry`] anchors the grid to the positioning area
+/// (`background-origin`), but the pattern repeats in both directions for the
+/// whole painting area (`background-clip`, CSS Backgrounds L3 §3.4): with
+/// `origin: padding-box|content-box` the painting area starts before the
+/// positioning area, and the strip between them must be tiled too (BUG-1303).
+/// Returns the latest tile start `<= paint_origin` on the grid
+/// `start + k·step`; a non-repeating axis keeps its single tile.
+#[must_use]
+pub(crate) fn extend_start_to_paint_area(start: f32, step: f32, repeats: bool, paint_origin: f32) -> f32 {
+    if repeats && step > 0.0 && start > paint_origin {
+        start - ((start - paint_origin) / step).ceil() * step
+    } else {
+        start
+    }
+}
+
 /// Tile geometry for a background image from `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
@@ -268,57 +306,22 @@ pub(crate) fn bg_tile_geometry(
     // "note" explicitly permits distortion when only one axis, or a size-auto
     // axis, is involved). Applied before offset resolution so percentage
     // positions resolve against the rounded tile size.
-    let (tile_w, tile_h) = if repeat == BackgroundRepeat::Round {
-        let round_axis = |area: f32, tile: f32| -> f32 {
-            if tile > 0.0 && area > 0.0 {
-                let n = (area / tile).round().max(1.0);
-                area / n
-            } else {
-                tile
-            }
-        };
-        (round_axis(oarea_w, tile_w), round_axis(oarea_h, tile_h))
-    } else {
-        (tile_w, tile_h)
+    let round_axis = |style: RepeatStyle, area: f32, tile: f32| -> f32 {
+        if style == RepeatStyle::Round && tile > 0.0 && area > 0.0 {
+            let n = (area / tile).round().max(1.0);
+            area / n
+        } else {
+            tile
+        }
     };
+    let tile_w = round_axis(repeat.x, oarea_w, tile_w);
+    let tile_h = round_axis(repeat.y, oarea_h, tile_h);
 
     let off_x = position.x.resolve(oarea_w - tile_w);
     let off_y = position.y.resolve(oarea_h - tile_h);
-    let tile_x0 = oarea_x + off_x;
-    let tile_y0 = oarea_y + off_y;
 
-    let (tile_x_start, step_x, repeat_x, tile_y_start, step_y, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, tile_w, false, tile_y0, tile_h, false),
-        BackgroundRepeat::RepeatX => (
-            tile_x0 - (off_x / tile_w).ceil() * tile_w,
-            tile_w,
-            true,
-            tile_y0,
-            tile_h,
-            false,
-        ),
-        BackgroundRepeat::RepeatY => (
-            tile_x0,
-            tile_w,
-            false,
-            tile_y0 - (off_y / tile_h).ceil() * tile_h,
-            tile_h,
-            true,
-        ),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round => (
-            tile_x0 - (off_x / tile_w).ceil() * tile_w,
-            tile_w,
-            true,
-            tile_y0 - (off_y / tile_h).ceil() * tile_h,
-            tile_h,
-            true,
-        ),
-        BackgroundRepeat::Space => {
-            let (sx, step_x, rx) = space_axis_geometry(oarea_x, oarea_w, tile_w, off_x);
-            let (sy, step_y, ry) = space_axis_geometry(oarea_y, oarea_h, tile_h, off_y);
-            (sx, step_x, rx, sy, step_y, ry)
-        }
-    };
+    let (tile_x_start, step_x, repeat_x) = repeat_axis_geometry(repeat.x, oarea_x, oarea_w, tile_w, off_x);
+    let (tile_y_start, step_y, repeat_y) = repeat_axis_geometry(repeat.y, oarea_y, oarea_h, tile_h, off_y);
 
     (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y, step_x, step_y)
 }

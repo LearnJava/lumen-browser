@@ -130,7 +130,7 @@ pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
         clamp_clip: None,
-        subgrid_tracks: None,
+        subgrid_tracks: None, used_grid_tracks: None,
         kind: BoxKind::Skip,
         children: Vec::new(),
         col_span: 1,
@@ -283,7 +283,8 @@ fn step_child(
 
     if matches!(frame.b.children[i].style.position, Position::Absolute | Position::Fixed) {
         let child_y = frame.init.child_y;
-        frame.init.abs_deferred.push((i, content_x, child_y));
+        let static_x = if super::multicol_abspos::static_x_is_right_edge(&frame.b) { container_right } else { content_x };
+        frame.init.abs_deferred.push((i, static_x, child_y));
         return StepOutcome::Advance;
     }
 

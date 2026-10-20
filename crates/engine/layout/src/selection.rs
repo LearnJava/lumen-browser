@@ -421,7 +421,7 @@ mod tests {
             fieldset_legend: None,
             table_caption_inset: [0.0; 2],
             clamp_clip: None,
-            subgrid_tracks: None,
+            subgrid_tracks: None, used_grid_tracks: None,
             style,
             kind: BoxKind::InlineRun {
                 segments: vec![],

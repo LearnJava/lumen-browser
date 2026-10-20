@@ -1,6 +1,7 @@
 # BUG-1376 — CSS Syntax §5.3.1: `<!--` и `-->` между правилами должны игнорироваться
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** в цикле верхнего уровня `parse_stylesheet` после пропуска пробелов/комментариев пропускаются токены `<!--` и `-->` (CSS Syntax §5.4.1); внутри блоков не трогаются. Тесты: `recovery.rs::cdo_*`/`cdc_*`/`style_wrapped_in_sgml_comment_*`.
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 15, `css/CSS2` (остальные каталоги: selectors, css1, syntax, box-display, visufx, visudet, …))
 **Область:** css-parser (`crates/engine/css-parser/src/parser.rs::parse_stylesheet` — токены `<!--` и `-->` вне правил не пропускаются)
 

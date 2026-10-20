@@ -400,7 +400,7 @@ pub(crate) fn emit_inline_run(
         raw_line_h
     };
     let wants_ellipsis = matches!(b.style.text_overflow_right, TextOverflow::Ellipsis)
-        && overflow_clips(b.style.overflow_x);
+        && style_overflow_clips(&b.style, b.style.overflow_x);
 
     emit_first_line_background(b, lines, line_h, dpr, out);
 

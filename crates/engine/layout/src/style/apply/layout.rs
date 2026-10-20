@@ -338,7 +338,11 @@ pub(in crate::style) fn apply_decl_layout(
                 style.anchor_size_w = Some(func);
             } else {
                 // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
-                style.width = parse_sizing_length(val, is_quirks);
+                // BUG-1377: an invalid value drops the declaration (CSS Syntax §2.2).
+                let Some(parsed) = parse_size_or_auto(val, is_quirks) else {
+                    return true;
+                };
+                style.width = parsed;
                 style.anchor_size_w = None;
                 // BUG-736: an authored `width` declaration always wins over
                 // (and cancels) the presentational-hint marker a `width`
@@ -353,7 +357,10 @@ pub(in crate::style) fn apply_decl_layout(
             if let Some(func) = parse_anchor_size_func(val, is_quirks) {
                 style.anchor_size_h = Some(func);
             } else {
-                style.height = parse_sizing_length(val, is_quirks);
+                let Some(parsed) = parse_size_or_auto(val, is_quirks) else {
+                    return true;
+                };
+                style.height = parsed;
                 style.anchor_size_h = None;
                 // BUG-736: see the `"width"` arm above.
                 style.height_is_intrinsic_hint = false;
@@ -362,10 +369,14 @@ pub(in crate::style) fn apply_decl_layout(
         }
         // CSS Logical Properties L1 §2.1 — inline-size / block-size.
         "inline-size" => {
-            style.inline_size = parse_sizing_length(val, is_quirks);
+            if let Some(parsed) = parse_size_or_auto(val, is_quirks) {
+                style.inline_size = parsed;
+            }
         }
         "block-size" => {
-            style.block_size = parse_sizing_length(val, is_quirks);
+            if let Some(parsed) = parse_size_or_auto(val, is_quirks) {
+                style.block_size = parsed;
+            }
         }
         // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные `<length>`
         // запрещены — сохраняем typed, фильтрация при resolve в box_tree.
@@ -1208,6 +1219,15 @@ struct RuleTriplet {
 /// `safe` overflow position and the writing-mode relativity of `start`/`end`/
 /// `self-start`/`self-end` to [`ContentAlignExtra`] (shared by the longhands
 /// and the `place-*` shorthands).
+/// `width`/`height`/`inline-size`/`block-size`: `Some(None)` is `auto`, `Some(Some(len))` a size,
+/// `None` an invalid value that the caller must drop (CSS Syntax §2.2, BUG-1377).
+fn parse_size_or_auto(val: &str, is_quirks: bool) -> Option<Option<Length>> {
+    if val.trim().eq_ignore_ascii_case("auto") {
+        return Some(None);
+    }
+    parse_sizing_length(val, is_quirks).map(Some)
+}
+
 /// CSS Box Alignment L3 §8.1 — `<length-percentage [0,∞)> | normal`. `Some(None)` is `normal`,
 /// `Some(Some(len))` a length (negative ones clamp to 0), `None` an invalid value.
 fn parse_gap_value(val: &str, is_quirks: bool) -> Option<Option<Length>> {

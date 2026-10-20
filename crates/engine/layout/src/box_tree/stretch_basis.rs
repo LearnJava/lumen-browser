@@ -21,6 +21,10 @@ thread_local! {
     /// The next measured box is a stretched flex item of this definite border-box
     /// height — its `height` is `auto`, but its children resolve against it.
     static STRETCHED_ITEM: Cell<Option<f32>> = const { Cell::new(None) };
+    /// The basis that was active when the box being measured was entered — its own
+    /// percentage block sizes resolve against it, while `HEIGHT_BASIS` already holds the
+    /// one for its children.
+    static OUTER_BASIS: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
 /// The basis the percentage block sizes of `container`'s children resolve against.
@@ -63,16 +67,19 @@ pub(super) fn item_stretches(container: &ComputedStyle, item: &LayoutBox) -> boo
         && !matches!(is.margin_bottom, LengthOrAuto::Auto)
 }
 
-/// Border-box width of a `<canvas>` whose `width` is only the bitmap's intrinsic
+/// Border-box width of a `<canvas>` (or a ratio'd block, see below) whose `width` is only the bitmap's intrinsic
 /// one and whose `height` is authored: the height run through the ratio
 /// (CSS 2.1 §10.3.2, Sizing L4 §4.1). `None` — `b` is not such a canvas, or its
 /// height does not resolve against the current basis.
 pub(super) fn canvas_transferred_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
     let s = &b.style;
-    if !matches!(b.kind, BoxKind::Canvas { .. })
-        || !s.width_is_intrinsic_hint
-        || s.height_is_intrinsic_hint
-    {
+    let canvas = matches!(b.kind, BoxKind::Canvas { .. });
+    // BUG-1309: a block with `aspect-ratio`, `width: auto` and a definite `height` is as wide as
+    // the height run through the ratio (Sizing L4 §4.1) — an `inline-grid` around it follows.
+    let block = matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && s.width.is_none()
+        && s.height.as_ref().is_some_and(|h| !h.is_intrinsic());
+    if !(canvas && s.width_is_intrinsic_hint && !s.height_is_intrinsic_hint) && !block {
         return None;
     }
     let (aw, ah) = s.aspect_ratio?;
@@ -92,11 +99,48 @@ pub(super) fn canvas_transferred_width(b: &LayoutBox, viewport: Size) -> Option<
     Some(content_h.max(0.0) * aw / ah + frame_h)
 }
 
+/// BUG-1309: a box with `aspect-ratio`, `width: auto` and a definite `min-height` is at least as
+/// wide as that minimum run through the ratio (Sizing L4 §4.1: the minimum block size transfers to
+/// the inline axis) — `aspect-ratio: 1/1; min-height: 60px` is 60px wide even when its contents
+/// ask for less. `None` when it does not apply.
+pub(super) fn min_height_transferred_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
+    min_height_transferred_width_against(b, viewport, current())
+}
+
+/// [`min_height_transferred_width`] for a call made while `b`'s own contents are being measured
+/// (inside [`scoped_for_children`]): `min-height: 60%` still resolves against `b`'s parent.
+pub(super) fn min_height_transferred_width_in_scope(b: &LayoutBox, viewport: Size) -> Option<f32> {
+    min_height_transferred_width_against(b, viewport, OUTER_BASIS.with(Cell::get))
+}
+
+fn min_height_transferred_width_against(b: &LayoutBox, viewport: Size, basis: Option<f32>) -> Option<f32> {
+    let s = &b.style;
+    if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) || s.width.is_some() {
+        return None;
+    }
+    let (aw, ah) = s.aspect_ratio.filter(|&(aw, ah)| aw > 0.0 && ah > 0.0)?;
+    let em = s.font_size;
+    let min_h = s.min_height.as_ref().filter(|l| !l.is_intrinsic())?.resolve(em, basis, viewport)?;
+    if min_h <= 0.0 {
+        return None;
+    }
+    Some(match s.box_sizing {
+        BoxSizing::ContentBox => {
+            min_h * aw / ah
+                + s.padding_left.resolve_or_zero(em, 0.0, viewport)
+                + s.padding_right.resolve_or_zero(em, 0.0, viewport)
+                + s.border_left_width
+                + s.border_right_width
+        }
+        BoxSizing::BorderBox => min_h * aw / ah,
+    })
+}
+
 /// Runs `f` — the measurement of `b` — with the basis its children resolve
 /// against: a stretched item's own height, else `b`'s resolved `height`, else
-/// none. Does nothing when no basis is active.
+/// none. A definite non-percentage `height` makes the basis even when none is active (BUG-1309).
 pub(super) fn scoped_for_children<R>(b: &LayoutBox, viewport: Size, f: impl FnOnce() -> R) -> R {
-    let Some(basis) = current() else { return f() };
+    let basis = current();
     // An anonymous line wrapper has no `height` of its own: it passes its parent's
     // content height on to the atomic inlines it holds.
     if matches!(b.kind, BoxKind::InlineBlockRow) {
@@ -107,13 +151,16 @@ pub(super) fn scoped_for_children<R>(b: &LayoutBox, viewport: Size, f: impl FnOn
     let content = stretched
         .map(|h| (h - frame_vertical(s, viewport)).max(0.0))
         .or_else(|| {
-            let h = s.height.as_ref().filter(|l| !l.is_intrinsic())?.resolve(s.font_size, Some(basis), viewport)?;
+            let h = s.height.as_ref().filter(|l| !l.is_intrinsic())?.resolve(s.font_size, basis, viewport)?;
             Some(match s.box_sizing {
                 BoxSizing::ContentBox => h,
                 BoxSizing::BorderBox => (h - frame_vertical(s, viewport)).max(0.0),
             })
         });
-    with_container_height(content, f)
+    let prev = OUTER_BASIS.with(|c| c.replace(basis));
+    let r = with_container_height(content, f);
+    OUTER_BASIS.with(|c| c.set(prev));
+    r
 }
 
 fn frame_vertical(s: &ComputedStyle, viewport: Size) -> f32 {

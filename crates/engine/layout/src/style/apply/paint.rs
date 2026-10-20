@@ -19,6 +19,7 @@ use crate::style::{
     BackgroundOrigin,
     BackgroundRepeat,
     BackgroundSize,
+    BackgroundSpecified,
     ColorScheme,
     ComputedStyle,
     CssColor,
@@ -59,12 +60,12 @@ use crate::style::parse::box_sides::{
     apply_border_shorthand,
     apply_border_side_shorthand,
     expand_border_4,
+    parse_border_width,
     parse_border_style_kw,
     parse_line_width,
     parse_outline_color_opt,
     parse_outline_style_opt,
     parse_radius_length,
-    resolve_box_length,
     resolve_svg_length,
     split_border_radius_slash,
     split_radius_pair,
@@ -87,6 +88,11 @@ use crate::style::parse::shape::parse_clip_path;
 use crate::style::parse::transform::parse_filter_list;
 use lumen_core::ColorSpace;
 use lumen_core::geom::Size;
+
+/// Списки per-layer-свойств, как их задал автор (BUG-1297) — создаётся при первом обращении.
+fn background_spec(style: &mut ComputedStyle) -> &mut BackgroundSpecified {
+    style.background_specified.get_or_insert_with(Default::default)
+}
 
 /// Применить одну декларацию из группы «отрисовка».
 ///
@@ -155,6 +161,7 @@ pub(in crate::style) fn apply_decl_paint(
 
             // Сбрасываем текущие слои — shorthand всегда переписывает полностью.
             style.background_layers.clear();
+            style.background_specified = None;
             style.background_color = None;
 
             let last = parsed.len() - 1;
@@ -380,10 +387,12 @@ pub(in crate::style) fn apply_decl_paint(
         "background-repeat" => {
             // CSS Backgrounds L3 §3.4 — comma-separated list (cycling).
             let pieces = split_top_level_commas(val.trim());
-            let repeats: Vec<BackgroundRepeat> = pieces.iter()
-                .filter_map(|s| BackgroundRepeat::parse(s.trim()))
-                .collect();
+            let Some(repeats) = pieces.iter()
+                .map(|s| BackgroundRepeat::parse(s.trim()))
+                .collect::<Option<Vec<BackgroundRepeat>>>()
+            else { return true; };
             if repeats.is_empty() { return true; }
+            background_spec(style).repeat = repeats.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -399,6 +408,7 @@ pub(in crate::style) fn apply_decl_paint(
                 .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
                 .collect();
             if sizes.is_empty() { return true; }
+            background_spec(style).size = sizes.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -410,10 +420,12 @@ pub(in crate::style) fn apply_decl_paint(
         "background-attachment" => {
             // CSS Backgrounds L3 §3.6 — comma-separated list (cycling).
             let pieces = split_top_level_commas(val.trim());
-            let atts: Vec<BackgroundAttachment> = pieces.iter()
-                .filter_map(|s| BackgroundAttachment::parse(s.trim()))
-                .collect();
+            let Some(atts) = pieces.iter()
+                .map(|s| BackgroundAttachment::parse(s.trim()))
+                .collect::<Option<Vec<BackgroundAttachment>>>()
+            else { return true; };
             if atts.is_empty() { return true; }
+            background_spec(style).attachment = atts.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -425,10 +437,12 @@ pub(in crate::style) fn apply_decl_paint(
         "background-origin" => {
             // CSS Backgrounds L3 §3.7: border-box | padding-box | content-box.
             let pieces = split_top_level_commas(val.trim());
-            let origins: Vec<BackgroundOrigin> = pieces.iter()
-                .filter_map(|s| BackgroundOrigin::parse(s.trim()))
-                .collect();
+            let Some(origins) = pieces.iter()
+                .map(|s| BackgroundOrigin::parse(s.trim()))
+                .collect::<Option<Vec<BackgroundOrigin>>>()
+            else { return true; };
             if origins.is_empty() { return true; }
+            background_spec(style).origin = origins.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -440,10 +454,12 @@ pub(in crate::style) fn apply_decl_paint(
         "background-clip" => {
             // CSS Backgrounds L3 §3.8 + L4 (`text`): comma-separated list.
             let pieces = split_top_level_commas(val.trim());
-            let clips: Vec<BackgroundClip> = pieces.iter()
-                .filter_map(|s| BackgroundClip::parse(s.trim()))
-                .collect();
+            let Some(clips) = pieces.iter()
+                .map(|s| BackgroundClip::parse(s.trim()))
+                .collect::<Option<Vec<BackgroundClip>>>()
+            else { return true; };
             if clips.is_empty() { return true; }
+            background_spec(style).clip = clips.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -476,6 +492,11 @@ pub(in crate::style) fn apply_decl_paint(
                 .filter_map(|s| ObjectPosition::parse(s.trim(), em_basis, viewport))
                 .collect();
             if positions.is_empty() { return true; }
+            {
+                let spec = background_spec(style);
+                spec.position_x = positions.iter().map(|p| p.x).collect();
+                spec.position_y = positions.iter().map(|p| p.y).collect();
+            }
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -493,6 +514,7 @@ pub(in crate::style) fn apply_decl_paint(
                 .filter_map(|s| parse_position_axis(s.trim(), em_basis, viewport, false))
                 .collect();
             if xs.is_empty() { return true; }
+            background_spec(style).position_x = xs.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -509,6 +531,7 @@ pub(in crate::style) fn apply_decl_paint(
                 .filter_map(|s| parse_position_axis(s.trim(), em_basis, viewport, true))
                 .collect();
             if ys.is_empty() { return true; }
+            background_spec(style).position_y = ys.clone();
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
             }
@@ -968,10 +991,10 @@ pub(in crate::style) fn apply_decl_paint(
         }
         // CSS Logical Properties L1 — border-inline-*-width / border-block-*-width.
         // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
-        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_start_width = v; } }
-        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_end_width = v; } }
-        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_start_width = v; } }
-        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_end_width = v; } }
+        "border-inline-start-width" => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_inline_start_width = Some(v); } }
+        "border-inline-end-width"   => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_inline_end_width = Some(v); } }
+        "border-block-start-width"  => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_block_start_width = Some(v); } }
+        "border-block-end-width"    => { if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) { style.border_block_end_width = Some(v); } }
         "border-inline-start-style" => style.border_left_style = parse_border_style_kw(val),
         "border-inline-end-style"   => style.border_right_style = parse_border_style_kw(val),
         "border-block-start-style"  => style.border_top_style = parse_border_style_kw(val),
@@ -982,10 +1005,14 @@ pub(in crate::style) fn apply_decl_paint(
         "border-block-end-color"    => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_bottom_color = c; } }
         "border-width" => {
             let sides = expand_border_4(val);
-            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport, is_quirks) { style.border_top_width = v; }
-            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport, is_quirks) { style.border_right_width = v; }
-            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport, is_quirks) { style.border_bottom_width = v; }
-            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport, is_quirks) { style.border_left_width = v; }
+            let w = sides.map(|t| parse_border_width(t, em_basis, viewport, is_quirks));
+            // One invalid component drops the whole declaration.
+            if let [Some(t), Some(r), Some(b), Some(l)] = w {
+                style.border_top_width = t;
+                style.border_right_width = r;
+                style.border_bottom_width = b;
+                style.border_left_width = l;
+            }
         }
         "border-style" => {
             let sides = expand_border_4(val);
@@ -1075,22 +1102,22 @@ pub(in crate::style) fn apply_decl_paint(
             }
         }
         "border-top-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
                 style.border_top_width = v;
             }
         }
         "border-right-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
                 style.border_right_width = v;
             }
         }
         "border-bottom-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
                 style.border_bottom_width = v;
             }
         }
         "border-left-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+            if let Some(v) = parse_border_width(val, em_basis, viewport, is_quirks) {
                 style.border_left_width = v;
             }
         }

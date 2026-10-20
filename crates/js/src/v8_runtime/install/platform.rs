@@ -603,6 +603,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // A `<color>` the Web Animations shim cannot parse itself (named colours, `hsl()`, `oklch()`,
+    // ...) as `rgb()`/`rgba()` text, so shadow and border colours interpolate (BUG-1305).
+    // `None` = not a plain colour (`currentcolor`, a system colour, junk).
+    reg!(scope, ctx, store,
+        "_lumen_css_color_rgba",
+        |value: String| -> Option<String> {
+            let c = lumen_layout::parse_color(&value)?;
+            Some(if c.a == 255 {
+                format!("rgb({},{},{})", c.r, c.g, c.b)
+            } else {
+                format!("rgba({},{},{},{:.4})", c.r, c.g, c.b, f32::from(c.a) / 255.0)
+            })
+        }
+    );
+
     // CSS Gap Decorations L1 §4.7 — interpolation of `*-rule-width`/`-color`/
     // `-inset-*` between two specified values (Web Animations shim,
     // `_wa_gap_compute`). `None` = the pair does not interpolate (the caller
@@ -725,6 +740,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         "_lumen_css_canonical_text",
         |prop: String, value: String| -> Option<String> {
             lumen_layout::style::canonical_specified_text(&prop, &value)
+        }
+    );
+
+    // Grammar + canonical form of the CSS Backgrounds properties in inline-`style`
+    // (`background-{image,size,repeat,attachment,clip,origin,position*}`, `box-shadow`,
+    // `border-radius` and its four longhands; BUG-1297). `None` — the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_background",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_background(&prop, &value)
         }
     );
 

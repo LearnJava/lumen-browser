@@ -1,6 +1,6 @@
 # BUG-1310 — процентные `margin`/`padding` grid-item считаются от ширины контейнера, а не grid-области
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 7, `css/css-grid`)
 **Область:** layout (`crates/engine/layout/src/box_tree/grid.rs` — база для `%` у item'а)
 
@@ -27,3 +27,9 @@ WPT-RUN-14 срез 7: `alignment/grid-calc-margins-explicit-row.html`, `grid-it
 ## Как проверить
 
 `css/css-grid/alignment/grid-calc-margins-explicit-row.html`.
+
+## Исправление (2026-10-20, P3)
+
+- Поля item'а в `post_final_item` (позиция по осям выравнивания), вклад в высоту строки (`item_block_size`), baseline-группы строк и столбцов и `inline_offer` (fit-content) резолвят `%` от inline-размера области (`GridInit::item_pct_base` — ширина охваченных столбцов) вместо ширины контейнера. Собственный padding item'а и так считался от предложенной ширины области.
+- Вертикальные режимы (`grid_vertical::place_item`) не менялись — GRID-VWM. WPT-прогон `css/css-grid` не делался.
+- Тесты: `crates/engine/layout/src/box_tree/tests/grid_item_percent_inset.rs`.

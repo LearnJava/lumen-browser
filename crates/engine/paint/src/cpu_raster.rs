@@ -14,7 +14,7 @@ use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 use crate::{DisplayCommand, CornerRadii};
-use crate::display_list::{ResolvedClipShape, bg_tile_geometry};
+use crate::display_list::{ResolvedClipShape, bg_tile_geometry, extend_start_to_paint_area};
 use lumen_core::geom::Rect;
 use lumen_core::FontProvider;
 use crate::cpu_font_resolve::resolve_face_candidates;
@@ -2977,6 +2977,9 @@ fn rasterize_background_image(
     if tile_w <= 0.0 || tile_h <= 0.0 {
         return Ok(());
     }
+    // BUG-1303: the grid also covers the clip-area strip before the origin box.
+    let tile_x_start = extend_start_to_paint_area(tile_x_start, step_x, repeat_x, rect.x);
+    let tile_y_start = extend_start_to_paint_area(tile_y_start, step_y, repeat_y, rect.y);
 
     let x_end = rect.x + rect.width;
     let y_end = rect.y + rect.height;
@@ -5828,7 +5831,7 @@ mod tests {
                 src: "missing.png".to_string(),
                 size: lumen_layout::BackgroundSize::Auto,
                 position: lumen_layout::ObjectPosition::background_initial(),
-                repeat: lumen_layout::BackgroundRepeat::NoRepeat,
+                repeat: lumen_layout::BackgroundRepeat::NO_REPEAT,
                 image_rendering: lumen_layout::ImageRendering::Auto,
             },
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
@@ -6006,7 +6009,7 @@ mod tests {
             src: "blue.png".to_string(),
             size: BackgroundSize::Cover,
             position: ObjectPosition::default(),
-            repeat: BackgroundRepeat::NoRepeat,
+            repeat: BackgroundRepeat::NO_REPEAT,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
@@ -6032,7 +6035,7 @@ mod tests {
             src: "a.svg".to_string(),
             size: BackgroundSize::Contain,
             position: ObjectPosition::default(),
-            repeat: BackgroundRepeat::NoRepeat,
+            repeat: BackgroundRepeat::NO_REPEAT,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(100, 100, &cmds, &images, 0.0, 0.0).expect("rasterize");
@@ -6058,12 +6061,34 @@ mod tests {
             // Auto size = 2×2 intrinsic; Repeat fills the box with tiles.
             size: BackgroundSize::Auto,
             position: ObjectPosition::default(),
-            repeat: BackgroundRepeat::Repeat,
+            repeat: BackgroundRepeat::REPEAT,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
         // Both a near-origin and a far corner pixel are painted green (tiled).
         for (x, y) in [(3u32, 3u32), (60, 60)] {
+            let (r, g, b, _) = px(&img, x, y);
+            assert!(g > 150 && r < 60 && b < 60, "tile at ({x},{y}) green, got ({r},{g},{b})");
+        }
+    }
+
+    /// BUG-1303: with a positioning area smaller than the painting area
+    /// (`background-origin: padding-box` under a border), the repeating grid
+    /// still covers the strip before the origin box.
+    #[test]
+    fn background_repeat_covers_strip_before_origin_box() {
+        let images = vec![("g.png".to_string(), std::sync::Arc::new(solid_2x2([0, 200, 0, 255])))];
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: rect(0.0, 0.0, 64.0, 64.0),
+            origin_rect: rect(10.0, 10.0, 44.0, 44.0),
+            src: "g.png".to_string(),
+            size: BackgroundSize::Auto,
+            position: ObjectPosition::default(),
+            repeat: BackgroundRepeat::REPEAT,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        for (x, y) in [(3u32, 3u32), (3, 30), (30, 3), (60, 60)] {
             let (r, g, b, _) = px(&img, x, y);
             assert!(g > 150 && r < 60 && b < 60, "tile at ({x},{y}) green, got ({r},{g},{b})");
         }
@@ -6080,7 +6105,7 @@ mod tests {
             src: "b.png".to_string(),
             size: BackgroundSize::Length(lumen_layout::BgSizeAxis::Px(15.0), lumen_layout::BgSizeAxis::Px(8.0)),
             position: ObjectPosition { x: lumen_layout::PositionComponent::Px(2.5), y: lumen_layout::PositionComponent::Px(0.0) },
-            repeat: BackgroundRepeat::RepeatX,
+            repeat: BackgroundRepeat::REPEAT_X,
             image_rendering: lumen_layout::ImageRendering::Auto,
         }];
         let img = rasterize_cpu(64, 8, &cmds, &images, 0.0, 0.0).expect("rasterize");

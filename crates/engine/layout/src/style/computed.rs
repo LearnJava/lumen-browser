@@ -33,7 +33,7 @@ use lumen_core::ColorSpace;
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
-    Appearance, BackfaceVisibility, BackgroundLayer, BlockStepAlign, BlockStepInsert,
+    Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
@@ -104,6 +104,12 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
     /// Initial: `Normal`. См. [`UnicodeBidi`].
     pub unicode_bidi: UnicodeBidi,
+    /// CSS Writing Modes L4 §2.4.2 — `bidi-override` действует на весь текст внутри
+    /// бокса, включая вложенные inline. Наследуется: `Some((bidi, dir))` — ближайший
+    /// предок-или-сам с `bidi-override`/`isolate-override` и его `direction`;
+    /// вложенный `embed`/`isolate`/`plaintext` сбрасывает в `None`. Раскрывается в
+    /// [`crate::bidi`] для сегментов с `unicode-bidi: normal`.
+    pub bidi_override: Option<(UnicodeBidi, Direction)>,
     pub color: Color,
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
@@ -409,6 +415,11 @@ pub struct ComputedStyle {
     /// означает явную установку», что у остальных логических свойств в
     /// этом файле (см. `margin_inline_start` и соседей).
     pub overflow_block: Overflow,
+    /// CSS Overflow L3 §3.5 — `overflow` of `<html>` (or of `<body>` when `<html>`'s is `visible`)
+    /// goes to the viewport and the element's *used* value is `visible`: paint must not clip to the
+    /// element's own box. Not inherited; the computed `overflow_x/y` stay as authored (the page-scroll
+    /// filter reads them). Set by the cascade.
+    pub overflow_to_viewport: bool,
     pub overflow_inline: Overflow,
     /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при
     /// overflow:clip. `(box, length)`, default `(padding-box, 0px)`
@@ -655,6 +666,8 @@ pub struct ComputedStyle {
     /// CSS Backgrounds L3 §3 — стек фоновых слоёв. Первый элемент = верхний (рендерится поверх).
     /// Пустой Vec соответствует `background-image: none` без слоёв. `background-color` отдельно.
     pub background_layers: Vec<BackgroundLayer>,
+    /// Списки per-layer-свойств как заданы автором — для `getComputedStyle` (BUG-1297).
+    pub background_specified: Option<Box<BackgroundSpecified>>,
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
@@ -1166,13 +1179,13 @@ pub struct ComputedStyle {
     /// CSS Logical Properties L1 — `padding-block-end`.
     pub padding_block_end: Length,
     /// CSS Logical Properties L1 — `border-inline-start-width`.
-    pub border_inline_start_width: f32,
+    pub border_inline_start_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-inline-end-width`.
-    pub border_inline_end_width: f32,
+    pub border_inline_end_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-block-start-width`.
-    pub border_block_start_width: f32,
+    pub border_block_start_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-block-end-width`.
-    pub border_block_end_width: f32,
+    pub border_block_end_width: Option<f32>,
     /// CSS Anchor Positioning L1 §2 — `anchor-name`. Custom-ident with `--` prefix.
     /// Non-inherited. When set, this element is registered as an anchor for positioned elements.
     pub anchor_name: Option<Box<str>>,
@@ -1308,6 +1321,7 @@ impl ComputedStyle {
             direction: Direction::Ltr,
             block_container_direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
+            bidi_override: None,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
             background_color: None,
@@ -1417,6 +1431,7 @@ impl ComputedStyle {
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             overflow_block: Overflow::Visible,
+            overflow_to_viewport: false,
             overflow_inline: Overflow::Visible,
             overflow_clip_margin: None,
             scroll_marker_group: None,
@@ -1489,6 +1504,7 @@ impl ComputedStyle {
             justify_content: AlignValue::Auto,
             content_align_extra: ContentAlignExtra::default(),
             background_layers: Vec::new(),
+            background_specified: None,
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
@@ -1669,10 +1685,10 @@ impl ComputedStyle {
             padding_inline_end: Length::Px(0.0),
             padding_block_start: Length::Px(0.0),
             padding_block_end: Length::Px(0.0),
-            border_inline_start_width: 0.0,
-            border_inline_end_width: 0.0,
-            border_block_start_width: 0.0,
-            border_block_end_width: 0.0,
+            border_inline_start_width: None,
+            border_inline_end_width: None,
+            border_block_start_width: None,
+            border_block_end_width: None,
             anchor_name: None,
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
@@ -1704,6 +1720,8 @@ impl ComputedStyle {
             block_container_direction: inherited.block_container_direction,
             // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
             unicode_bidi: UnicodeBidi::Normal,
+            // Но `bidi-override` предка продолжает действовать на потомков.
+            bidi_override: inherited.bidi_override,
             font_size: inherited.font_size,
             // Seeded from the parent so the value compounds; the element's own
             // `zoom` declaration is folded in by the pre-pass below.
@@ -1829,6 +1847,7 @@ impl ComputedStyle {
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             overflow_block: Overflow::Visible,
+            overflow_to_viewport: false,
             overflow_inline: Overflow::Visible,
             overflow_clip_margin: None,
             scroll_marker_group: None,
@@ -1895,6 +1914,7 @@ impl ComputedStyle {
             content_align_extra: ContentAlignExtra::default(),
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
+            background_specified: None,
             // Will Change — не наследуется; Pointer Events — наследуется.
             will_change: Vec::new(),
             pointer_events: inherited.pointer_events,
@@ -2114,10 +2134,10 @@ impl ComputedStyle {
             padding_inline_end: Length::Px(0.0),
             padding_block_start: Length::Px(0.0),
             padding_block_end: Length::Px(0.0),
-            border_inline_start_width: 0.0,
-            border_inline_end_width: 0.0,
-            border_block_start_width: 0.0,
-            border_block_end_width: 0.0,
+            border_inline_start_width: None,
+            border_inline_end_width: None,
+            border_block_start_width: None,
+            border_block_end_width: None,
             anchor_name: None,
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,

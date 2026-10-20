@@ -121,8 +121,8 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // CSS: overflow — P4 wires: once overflow:scroll/auto are parsed, the
     // PushScrollLayer branch below automatically picks them up.
     let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
-    let clip_x = overflow_clips(s.overflow_x) || paint_contain;
-    let clip_y = overflow_clips(s.overflow_y) || paint_contain;
+    let clip_x = style_overflow_clips(s, s.overflow_x) || paint_contain;
+    let clip_y = style_overflow_clips(s, s.overflow_y) || paint_contain;
     if clip_x || clip_y {
         const BIG: f32 = 1_000_000.0;
         let px = b.rect.x + s.border_left_width;

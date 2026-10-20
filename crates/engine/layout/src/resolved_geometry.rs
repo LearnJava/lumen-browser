@@ -351,6 +351,29 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
         }
     }
 
+    // Grid L1 §7.2.6: a grid container reports the used size of every track; a `subgrid` axis (Grid L2
+    // §9) reports the names of the lines it spans.
+    if matches!(s.display, Display::Grid | Display::InlineGrid)
+        && let Some(u) = &b.used_grid_tracks
+    {
+        let subgrid = |t: &[crate::style::GridTrackSize]| matches!(t, [crate::style::GridTrackSize::Subgrid]);
+        let axes = [
+            ("grid-template-columns", subgrid(&s.grid_template_columns), &u.cols, &u.col_names),
+            ("grid-template-rows", subgrid(&s.grid_template_rows), &u.rows, &u.row_names),
+        ];
+        for (name, is_subgrid, sizes, names) in axes {
+            set_used(
+                m,
+                name,
+                if is_subgrid {
+                    crate::grid_computed::resolved_subgrid_list(sizes.len(), names)
+                } else {
+                    crate::grid_computed::resolved_track_list(sizes, names, z)
+                },
+            );
+        }
+    }
+
     if !s.transform.is_empty() {
         // BUG-1293: the function list next to the resolved `matrix()` below — the matrix
         // loses `rotate(720deg)` and `translateY(70%)`, which CSS Transitions/Animations

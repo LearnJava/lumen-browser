@@ -1,6 +1,6 @@
 # BUG-1303 — Плитки `background-image` рисуются только внутри позиционирующей области: при `background-origin: padding-box`/`content-box` полоса между ней и областью рисования (`border-box`) остаётся пустой
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 6, `css/css-backgrounds`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, расчёт сетки плиток; отдельно проверена только CPU-ветка)
 
@@ -28,3 +28,10 @@ WPT-RUN-14 срез 6: `background-origin/origin-{border,content,padding}-box*.h
 ## Как проверить
 
 `css/css-backgrounds/background-origin/origin-content-box.html`, `origin-padding-box_with_size.html`, `css3-background-origin-content-box.html`.
+
+
+## Исправление (2026-10-20, P3)
+
+Сетка плиток якорится к позиционирующей области (`background-origin`), а `repeat_axis_geometry` отдавала первую плитку не левее её края; полоса painting area до origin box оставалась пустой. Новый помощник `extend_start_to_paint_area` (`display_list/geometry.rs`) сдвигает старт повторяющейся оси назад на целое число шагов до края painting area. Применён во всех трёх независимых реализациях: CPU (`cpu_raster::rasterize_background_image`), wgpu (`renderer.rs`, `DrawBackgroundImage`) и femtovg (`image.rs::draw_background_image`). Не повторяющиеся оси не затрагиваются; `space` — тоже периодичен, продолжается тем же шагом.
+
+Тесты: `cpu_raster::tests::background_repeat_covers_strip_before_origin_box`, `display_list::text_and_images::extend_start_to_paint_area_steps_back_to_cover_area`. Эталоны `cpu/*.png` не менялись (страницы с `background-origin` в корпусе — `no-repeat`). Живое окно (wgpu) глазом не проверялось.

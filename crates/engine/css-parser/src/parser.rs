@@ -1172,6 +1172,18 @@ impl<'a> Parser<'a> {
         let mut top_level_spans: Vec<usize> = Vec::new();
         loop {
             self.skip_ws_and_comments();
+            // CSS Syntax §5.4.1 «consume a list of rules» (top-level): CDO/CDC
+            // токены пропускаются (старые страницы оборачивали `<style>` в
+            // `<!-- … -->`, BUG-1376). Только здесь — внутри блоков они обычные
+            // токены.
+            if self.rest().starts_with("<!--") {
+                self.pos += 4;
+                continue;
+            }
+            if self.rest().starts_with("-->") {
+                self.pos += 3;
+                continue;
+            }
             // CSSOM-8 вариант C: one `rule_start` per top-level construct,
             // stamped onto every tag that construct produced once the arms
             // below are done. Recorded here rather than at each

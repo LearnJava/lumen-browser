@@ -35,7 +35,7 @@ fn wrapper(node_index: usize, style: ComputedStyle, kind: BoxKind, children: Vec
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
         clamp_clip: None,
-        subgrid_tracks: None,
+        subgrid_tracks: None, used_grid_tracks: None,
         style: Arc::new(style),
         kind,
         children,

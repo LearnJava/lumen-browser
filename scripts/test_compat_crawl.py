@@ -171,6 +171,33 @@ class Aggregation(unittest.TestCase):
         self.assertEqual((s["flapped"], s["flap_pct"], s["reran"]), (1, 33.3, 1))
         self.assertEqual(s["per_check_pass"]["a11y"], 2)
 
+    def test_verdict_not_computed_after_rerun(self):
+        # эталон открыл сайт в первом прогоне, а при повторе — нет: checks нет, ref_failed нет
+        self.assertEqual(cc.verdict_of({"computed": False}), "NOT-COMPUTED")
+        self.assertEqual(cc.verdict_of({"computed": False, "ref_failed": True}), "REF-FAIL")
+        self.assertEqual(cc.verdict_of({"computed": True, "parity": True, "checks": self.checks()}), "PARITY")
+        rec = {"computed": True, "parity": False, "checks": self.checks(walls=1, a11y=1)}
+        self.assertEqual(cc.verdict_of(rec), "DIFF[walls,a11y]")
+
+    def test_lumen_final_status(self):
+        log = "← 302 https://ya.ru/\n← 200 https://ya.ru/\n"
+        self.assertEqual(cc.lumen_final_status(log, "https://ya.ru/", "https://ya.ru/"), 200)
+        # редирект на другую страницу сайта: статус берётся у конечного адреса
+        log = "← 301 https://www.spotify.com/\n← 200 https://www.spotify.com/int/why/\n"
+        self.assertEqual(cc.lumen_final_status(log, "https://www.spotify.com/", "https://www.spotify.com/int/why/"), 200)
+        # ревалидация кэша = 200; нет лога вовсе = None, а не исключение
+        self.assertEqual(cc.lumen_final_status("← 304 https://lenta.ru/\n", "https://lenta.ru/", None), 200)
+        self.assertIsNone(cc.lumen_final_status("", "https://x.test/", None))
+
+    def test_net_error_page_is_a_wall(self):
+        # страница сетевой ошибки Lumen: текста ≥200 знаков, но это не «страница загрузилась»
+        err = {"title": "Сайт www.bbc.com слишком долго не отвечает", "text": "Сайт не отвечает. " * 40}
+        r = cc.check_walls({"text": "Welcome " * 300}, err)
+        self.assertFalse(r["ok"])
+        self.assertIn("net-error", r["extra"])
+        # у обоих плеч одна и та же страница ошибки — расхождения нет
+        self.assertTrue(cc.check_walls(err, err)["ok"])
+
     def test_evaluate_end_to_end(self):
         snap = {"text": "hello " * 400, "http_status": 200, "exceptions": [], "ax": [("link", "a")],
                 "frame": None, "masks": []}

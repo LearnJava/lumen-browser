@@ -1211,8 +1211,8 @@ fn dispatch<'a>(
             // direction (the renderer clamps to surface bounds automatically).
             // scroll/auto → PushScrollLayer (clip + scroll translate).
             // hidden/clip/paint-contain → PushClipRect (clip only).
-            let clip_x = overflow_clips(b.style.overflow_x);
-            let clip_y = overflow_clips(b.style.overflow_y);
+            let clip_x = style_overflow_clips(&b.style, b.style.overflow_x);
+            let clip_y = style_overflow_clips(&b.style, b.style.overflow_y);
             let has_overflow_clip = clip_x || clip_y;
             let is_scroll_x = matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto);
             let is_scroll_y = matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto);

@@ -1,6 +1,6 @@
 # BUG-1299 — `background-repeat` с двумя значениями (`repeat no-repeat`, `space no-repeat`, `round repeat`…) и `space`/`round` на одной оси не разбираются: слой получает `repeat`
 
-**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Статус:** FIXED 2026-10-20
 **Тип:** нереализованная функциональность — двухзначный синтаксис `<repeat-style>` (CSS Backgrounds 3 §3.4) не разбирается; свойство относится к P4 (`CSS-SPECS.md`, строка `background-repeat`).
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 6, `css/css-backgrounds`)
 **Область:** layout (`crates/engine/layout/src/style/values/background.rs::BackgroundRepeat` — один enum на обе оси; парсер принимает только одно ключевое слово)
@@ -23,7 +23,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 6: `background-repeat-space-*.html`, `background-repeat-round-*.html`, `background-repeat/*.xht` — 23 reftest, 14 из них с двухзначным значением в исходнике (остальные — округление `round`, пересекается с [BUG-1303](BUG-1303-OPEN.md)). Тест 147 (`space`) зелёный; `parsing/background-repeat-*` — в [BUG-1297](BUG-1297-OPEN.md); `round` с `origin` ≠ `border-box` — [BUG-1303](BUG-1303-OPEN.md).
+WPT-RUN-14 срез 6: `background-repeat-space-*.html`, `background-repeat-round-*.html`, `background-repeat/*.xht` — 23 reftest, 14 из них с двухзначным значением в исходнике (остальные — округление `round`, пересекается с [BUG-1303](BUG-1303-FIXED.md)). Тест 147 (`space`) зелёный; `parsing/background-repeat-*` — в [BUG-1297](BUG-1297-OPEN.md); `round` с `origin` ≠ `border-box` — [BUG-1303](BUG-1303-FIXED.md).
 
 ## Что делать
 
@@ -32,3 +32,9 @@ WPT-RUN-14 срез 6: `background-repeat-space-*.html`, `background-repeat-roun
 ## Как проверить
 
 `css/css-backgrounds/background-repeat-space-{3,4,5,6,7,1c}.html`, `background-repeat-round-{1a,1b,1d,1e,2,3,4}.html`, `background-repeat/gradient-repeat-spaced-with-borders.html`.
+
+## Исправление (2026-10-20, P3)
+
+`background.rs`: `BackgroundRepeat` стал парой `{ x, y }` из `RepeatStyle { Repeat, NoRepeat, Round, Space }`; `repeat-x`/`repeat-y` — константы `REPEAT_X`/`REPEAT_Y`, одно ключевое слово задаёт обе оси. `BackgroundRepeat::parse` принимает `<repeat-style>{1,2}`, `parse_prefix` — для шорткатов `background`/`mask` (второе слово забирается, только если оно тоже `<repeat-style>`). Paint: общий `geometry.rs::repeat_axis_geometry` по оси вместо четырёх копий `match` (`bg_tile_geometry`, градиентные плитки, `renderer.rs` фон и маска); `round` теперь пересчитывает плитку только по оси со `round`. `Debug` сохраняет прежние имена (`Repeat`, `RepeatX`, `Space`…) для однословных форм, поэтому дампы display list не изменились; смешанные пары печатаются как `Space/NoRepeat`. Тесты: `background_repeat_two_values_per_axis`, `background_shorthand_repeat_two_values`, `bg_tile_geometry_repeat_styles_are_per_axis`.
+
+Не охвачено: GPU-путь `renderer.rs` по-прежнему не пересчитывает плитку для `round` (только `bg_tile_geometry` — CPU/femtovg).

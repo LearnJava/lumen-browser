@@ -35,3 +35,7 @@ WPT-RUN-14 срез 27: `css/css-viewport/zoom/*`: `box-shadow`, `text-shadow`, 
 ## Как проверить
 
 `css/css-viewport/zoom/box-shadow.html`, `border-spacing.html`, `matrix-zoom.html`, `explicit-inherit/flex-basis.html`.
+
+## Срез 1 (P4, 2026-10-20)
+
+Закрыто: `box-shadow`, `outline-width`/`-offset`, `border-*-radius`, `flex-basis`, `contain-intrinsic-width/height`, `scroll-margin-*`/`scroll-padding-*`, `perspective`, `translate` и смещения `transform` (`cascade.rs::scale_visual_lengths`; `getComputedStyle()` разворачивает обратно). `em`-длины в `border-width`/`outline`/`box-shadow` теперь разрешаются от незумленного `font-size` (`apply.rs::baked_then_zoomed`). **Остаётся:** `text-shadow`, `border-spacing` (inherited — масштабировать только заданное на самом элементе), размеры SVG, `text-decoration-thickness`/`text-underline-offset`/`-webkit-text-stroke-width`, `filter: drop-shadow`, `canvas`. Баг остаётся OPEN.

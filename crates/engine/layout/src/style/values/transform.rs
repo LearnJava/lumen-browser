@@ -280,7 +280,7 @@ impl Default for MaskLayer {
     fn default() -> Self {
         Self {
             image: BackgroundImage::None,
-            repeat: BackgroundRepeat::Repeat,
+            repeat: BackgroundRepeat::REPEAT,
             size: BackgroundSize::Auto,
             position: ObjectPosition::default(),
             origin: BackgroundOrigin::BorderBox,

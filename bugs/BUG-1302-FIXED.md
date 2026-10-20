@@ -1,6 +1,6 @@
 # BUG-1302 — Внешняя `box-shadow` рисуется под прозрачным фоном: тень не вырезается по границе бокса (`rgba`-фон просвечивает цвет тени)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-06 (P2, WPT-RUN-14 срез 6, `css/css-backgrounds`)
 **Область:** paint (`crates/engine/paint/src/display_list/box_shadow.rs::emit_box_shadows` — внешняя тень рисуется целиком, без клипа «снаружи бордер-бокса»)
 
@@ -22,3 +22,15 @@ WPT-RUN-14 срез 6: `box-shadow-039…042.html`, `box-shadow-body.html`, `box
 ## Как проверить
 
 `css/css-backgrounds/box-shadow-{039,040,body,multiple-001,radius-001,overlapping-001}.html`.
+
+
+## Исправление (2026-10-20, P3)
+
+`emit_box_shadows` вырезает border box из внешней тени:
+- без размытия и без скруглений — тень = до четырёх `FillRect` («прямоугольник минус прямоугольник»);
+- иначе — `PushClipPath` с even-odd многоугольником «рамка минус контур бокса (со скруглениями)» вокруг `FillRect`/`FillRoundedRect` (+ `PushFilter Blur`) и `PopClip`; тень размывается целиком и клипуется после, как требует спека;
+- вырез пропускается, если тень не заходит под бокс или бокс закрыт непрозрачным фоном по border-box (вырез невиден).
+
+Тесты: `box_shadow_under_translucent_bg_is_cut_out_of_border_box`, `box_shadow_without_bg_spread_ring_is_four_pieces`, `box_shadow_rounded_translucent_uses_even_odd_clip`, `box_shadow_cutout_rasterizes_clean_inside_rounded_box` (CPU-пиксели) в `display_list/tests/shadows_and_transforms.rs`. Эталон `graphic_tests/snapshots/cpu/1000000-final.png` — 220 байт у скруглённой карточки с изображением.
+
+Кластер `<span>` выделен в BUG-1654.

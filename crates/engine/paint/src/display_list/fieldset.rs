@@ -50,7 +50,7 @@ pub(crate) fn fieldset_decoration_box(b: &LayoutBox) -> Option<LayoutBox> {
         fieldset_legend: None,
         table_caption_inset: [0.0; 2],
         clamp_clip: None,
-        subgrid_tracks: None,
+        subgrid_tracks: None, used_grid_tracks: None,
         kind: b.kind.clone(),
         children: Vec::new(),
         col_span: b.col_span,

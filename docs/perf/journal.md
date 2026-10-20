@@ -788,6 +788,73 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
 Ночной прогон с `--baseline` и блокировкой релиза — на машине владельца (COMPAT-BIZ): `python scripts/captcha_stand.py --arm lumen
 --route home-direct --baseline docs/perf/runs/2026-10-19-captcha-lumen.json`.
 
+## 2026-10-20 — COMPAT-CORPUS-2-BASE — первая база CPR корпуса C, точка abroad — Windows 10, маршрут VPN (Таллин, AS209693)
+
+`python scripts/compat_crawl.py --corpus <главные страницы 500 сайтов корпуса C> --env LUMEN_NO_ADBLOCK=1 --no-rerun --timeout 40`, `dev-release` от `8778cac44`, Chrome for Testing 153.0.8010.12,
+живое окно, вьюпорт 1920×945. Выходной IP — Таллин (EE), VPN включён: **это точка `abroad`; точка `ru` (резидентный IP РФ) не снята** — нужен отдельный запуск с отключённым VPN
+(решение владельца, COMPAT-BIZ). Свод — [runs/2026-10-20-compat-crawl-corpus-c-abroad-summary.md](runs/2026-10-20-compat-crawl-corpus-c-abroad-summary.md).
+
+| сегмент | сайтов | посчитано | **CPR** | status | walls | exceptions | pixels | a11y |
+|---|---|---|---|---|---|---|---|---|
+| RU (CPR-RU) | 200 | 195 | **11,8 %** (23) | 146 | 116 | 164 | 104 | 32 |
+| global (CPR-Global) | 300 | 299 | **2,0 %** (6) | 109 | 90 | 268 | 60 | 12 |
+| всего | 500 | 494 | **5,9 %** (29) | 255 | 206 | 432 | 164 | 44 |
+
+Эталон не открыл 6 сайтов (imgsrc, litmarket, lenreg, cikrf, leroymerlin, konami) — вне CPR.
+**Статусы Lumen (итог):** RU — OK 82, DEGRADED 55, TIMEOUT 21, HUNG 14, NET_FAIL 10, BROKEN_RENDER 8, SITE_REFUSED 6, DEAD 4; global — TIMEOUT 107, DEGRADED 41, OK 40, NET_FAIL 38,
+SITE_REFUSED 33, HUNG 26, BROKEN_RENDER 12, DEAD 3.
+**Разрыв по отказам (лишние стены Lumen относительно Chrome, сайтов):** `blank:near-empty` — RU 77, global 162; `net-error` — global 37, RU 0; антибот: Cloudflare-challenge 4, DataDome 4,
+Akamai-reference 5 (все global), «blocked-generic» 2 (RU 1, EN 1), «unsupported-browser-ru» 1 (RU); у Chrome жёсткая стена на 6 сайтах (global). SITE_REFUSED: RU 6 из 195, global 33 из 299;
+антибот-стены (Cloudflare/DataDome/Akamai/generic): RU 2, global 14.
+
+**Отступления от протокола и что с ними делать:**
+- Только главные страницы (500 URL, без внутренних): внутренние страницы удвоили бы время (≈50 с на сайт, весь прогон ≈ 7 ч).
+- `--no-rerun` с сайта 8 (первые 7 перепроверены): флапы 0,6 % (3 из 494) относятся только к ним — **порог флапов ≤5 % на этом прогоне не проверен**, CPR — по одному проходу. Причина: повтор удваивает время на каждый
+  проваленный сайт, а проваливается почти каждый.
+- Прогон дважды перезапускался: перезапуск с `--resume` на сайте 8 (смена флагов) и на сайте 325 (`ENOSPC`, диск D 100 % — чужие `target/`); записи не потеряны (500 из 500 в `results.jsonl`).
+- Доля TIMEOUT в global (107 из 300, 36 %) против RU (21 из 200, 10 %) — первая гипотеза: маршрут VPN до зарубежных CDN плюс таймаут 40 с на плечо; **не проверена**, нужна точка `ru` для сравнения и
+  срез по 3–4 сайтам. CPR ниже порога 5 % для global и a11y 44 из 494 (9 %) — те же причины, что в COMPAT-CORPUS-1-BASE (расхождение дерева a11y, не разобрано).
+**Заведённые баги:** нет — наблюдения. Сырьё (`results.jsonl`, 3 МБ, кадры) не коммитится (`.tmp/compat-crawl-abroad/`).
+**Остаток задачи:** точка `ru` — отдельный запуск без VPN (`python scripts/compat_crawl.py --corpus … --out .tmp/compat-crawl-ru`), после него — таблица разрыва ru/abroad.
+
+## 2026-10-19 — COMPAT-CORPUS-1-BASE — первый живой прогон краулера паритета `compat_crawl.py` — Windows 10, маршрут home-direct
+
+`python scripts/compat_crawl.py` на `corpus.txt` + `corpus-top100-foreign.txt` (112 уникальных сайтов), `target/dev-release/lumen.exe` от `main` 76e0522b2
+(после BUG-1629/1630), живое окно `--maximized`, блокировщик рекламы выключен, Chrome for Testing 153.0.8010.12 с окном, вьюпорт 1920×945 по окну Lumen.
+Прогон шёл с коммита `f3c79fa42` (правки №1 и №3 ниже уже внутри; №2 — после прогона). Свод — [runs/2026-10-19-compat-crawl-summary.md](runs/2026-10-19-compat-crawl-summary.md).
+
+| | значение |
+|---|---|
+| проверки посчитаны | 111 из 112 (99,1 %); эталон не открыл `bilibili` |
+| **CPR** | **4,5 %** (5 из 111) |
+| флапы | 48 из 111 (43,2 %); все 106 неудачных сайтов перезапускались |
+| прошло проверку: status / walls / exceptions / pixels / a11y | 76 / 74 / 100 / 52 / 11 из 111 |
+| статусы Lumen (итог) | OK 25, NET_FAIL 22, TIMEOUT 19, SITE_REFUSED 15, DEGRADED 12, BROKEN_RENDER 11, HUNG 8 |
+
+**Приёмка:** «5 проверок у ≥95 % сайтов» — выполнено (99,1 %). «Флапы ≤5 %» — **не выполнено** (43,2 %), и это не шум прибора, см. ниже. CPR записан.
+**Сравнение с прошлым прогоном:** первый прогон краулера. Первый проход этого же дня (до правки №1, коммит `76e0522b2`, `results.jsonl` потерян при `ENOSPC`, цифры из консоли): CPR 4,5 % (5/111), флапы 49,5 %, status 68/111.
+**Что нашёл прогон в самом приборе (исправлено в этой же ветке):**
+1. `http_status` Lumen брался у *запрошенного* URL — это 301/302 редиректа на себя (ya, spotify, mozilla, theguardian) или 304 ревалидации кэша при повторе
+   (wikipedia, lenta, duckduckgo); проверка status сравнивает класс с Chrome (200) и флапала 19 раз. Теперь статус ищется у адреса, на котором остановилась страница, 304 → 200
+   (`lumen_final_status`): флапы status 19 → 10.
+2. Страница сетевой ошибки Lumen («Сайт … слишком долго не отвечает», 650 знаков) считалась `OK` и проходила проверку walls, а повтор (таймаут `wait`, текста нет) её проваливал.
+   Теперь такая страница — статус `NET_FAIL` и стена `net-error` (`is_net_error_page`, `NET_ERROR_RE` из `captcha_stand.py`); по записям прогона (оффлайн-оценка) флапы 48 → 39 (36,8 %). **Прогон со стеной `net-error` не перемерялся.**
+3. Падения прибора на длинном прогоне: сводка падала на сайте, где эталон открылся в первом проходе, а при повторе нет (`KeyError: 'checks'`); `LiveBrowser.restart()` падала на
+   `TimeoutExpired`, если `kill()` не снял `lumen.exe` (теперь добивается `taskkill /F /T`); прогон трижды обрывался на `ENOSPC` (диск D 100 % — чужие `target/`), `--resume` дочитывает.
+**Находки (про Lumen):**
+- **Флапы — в основном нестабильность Lumen, а не пороги.** Статус Lumen между двумя проходами меняется на 25 из 106 сайтов (OK↔NET_FAIL/TIMEOUT/HUNG/BROKEN_RENDER); после правки №2 остаётся
+  39 сайтов с флапом: 18 — разный статус Lumen, 21 — тот же статус, но расходятся pixels (12), walls, exceptions, status. По пикселям 52 сайта под порогом 35 %, 2 в 35–60 %, 9 выше 60 %, у 35 кадра нет.
+- **a11y — главный убийца CPR (11/111).** У 50 сайтов дерева нет (страница не загрузилась), из 61 с деревом ≥95 % совпало у 11, 80–95 % у 6, 50–80 % у 7, **<50 % у 37**. Lumen отдаёт больше узлов, чем Chrome
+  (rust-lang: Chrome 57, Lumen 309; совпало 52/57), поэтому «<50 %» — вероятно расхождение имён/ролей узлов, а не нехватка узлов; **не разобрано**, нужен срез по 3–4 сайтам.
+- **NET_FAIL 22 из 112: 14 — TLS-рукопожатие, `os error 10060` (≈40–45 с):** youtube, whatsapp, canva, quora, bbc, webmd, coursera, udemy, medium, soundcloud, snapchat, facebook, linkedin, discord.
+  Это маршрут, не стек Lumen: сырой `ssl.wrap_socket` из Python к facebook/discord/bbc/linkedin/medium даёт `TimeoutError` 3 из 3, к example.com — `ok 0,4 с` (то же, что в записи 2026-10-06
+  о режущем ClientHello прямом пути). Chrome те же сайты открывает; почему — не выяснено (гипотеза: системный прокси/QUIC/ECH). Для этих 14 сайтов CPR на home-direct не измерим — нужен прогон
+  на маршруте с VPN. Остальные NET_FAIL — H2 PING ([BUG-1646](../../bugs/BUG-1646-OPEN.md), uol, cricbuzz) и прочее.
+- Ответ на «обработку `http_status=None` при повторной навигации»: `None` (22 сайта) не роняет прибор, класс `none` ≠ `2xx` даёт честное расхождение status; повторный проход открывает `new_tab`,
+  а не навигацию в той же вкладке; при `HUNG` окно перезапускается между проходами.
+**Заведённые баги:** нет новых — наблюдения или маршрутные (TLS 10060), или уже заведённые (BUG-1646).
+Сырые результаты прогона (`results.jsonl`, кадры) не коммитятся (`.tmp/compat-crawl-base2/`).
+
 ## 2026-10-15 — COMPAT-CORPUS-3 срез 2 — корпус S: 58 сценариев, калибровка по Chrome — Windows 10, маршрут home-direct
 
 Корпус `docs/perf/scenarios/*.toml` (формат — `docs/compat-scenarios.md`): 58 сценариев в SPR-w на живых сайтах (3 стенда

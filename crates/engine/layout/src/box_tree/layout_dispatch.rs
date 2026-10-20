@@ -1408,7 +1408,7 @@ pub(super) fn dispatch_box(
                     (!s.column_gap_normal)
                         .then(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
                     (!s.row_gap_normal)
-                        .then(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
+                        .then(|| s.row_gap.resolve(em, grid_definite_height, viewport).unwrap_or(0.0).max(0.0)),
                 );
                 b.subgrid_tracks = crate::subgrid::peek_tracks();
                 // CSS Grid L3 §2: у `grid-lanes` с полосами-столбцами шаблон строк игнорируется —
@@ -1838,7 +1838,7 @@ pub(super) fn dispatch_box(
                             fieldset_legend: None,
                             table_caption_inset: [0.0; 2],
                             clamp_clip: None,
-                            subgrid_tracks: None,
+                            subgrid_tracks: None, used_grid_tracks: None,
                             style: style.clone(),
                             kind: BoxKind::InlineRun {
                                 segments: Vec::new(),

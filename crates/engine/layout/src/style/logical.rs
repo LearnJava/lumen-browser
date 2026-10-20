@@ -193,7 +193,7 @@ pub(in crate::style) fn resolve_logical_properties(style: &mut ComputedStyle) {
             Side::Bottom => &mut style.border_bottom_width,
             Side::Left => &mut style.border_left_width,
         };
-        if v > 0.0 && *slot == 0.0 {
+        if let Some(v) = v {
             *slot = v;
         }
     }

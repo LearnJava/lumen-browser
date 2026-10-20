@@ -28,7 +28,7 @@ use lumen_layout::{
     owns_paint_layer, perspective_matrix,
     transform_fns_to_matrix, TransformRef, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
-    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPatternDef,
@@ -62,6 +62,8 @@ mod geometry;
 pub use geometry::{contains_backdrop_filter, cull_display_list, fit_image_quad, fit_image_rect, ProvenanceIndex, ProvenanceSpan};
 #[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
 pub(crate) use geometry::{split_mixed_runs, MixedSegment};
+pub(crate) use geometry::{extend_start_to_paint_area, repeat_axis_geometry};
+#[cfg(test)]
 pub(crate) use geometry::space_axis_geometry;
 #[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
 pub(crate) use geometry::bg_tile_geometry;
@@ -111,7 +113,7 @@ use print::ELLIPSIS_EM;
 // Used by `display_list/{box_layer,walk,background_mask}.rs` (via `super::*`).
 use print::map_blend_mode;
 // Used by `display_list/{box_layer,scrollbars,text_run,walk}.rs` (via `super::*`).
-use print::{clamp_clip_rect, overflow_clips};
+use print::{clamp_clip_rect, style_overflow_clips};
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use print::{record_span, BucketField, RawSpan, ScBucket};
 // Used by `clip_path_to_shape`, still in this file just below the DL-15 region.
@@ -376,6 +378,10 @@ mod fixed_cb_scroll;
 #[cfg(test)]
 #[path = "display_list/tests/abspos_clip_escape.rs"]
 mod abspos_clip_escape;
+
+#[cfg(test)]
+#[path = "display_list/tests/viewport_overflow.rs"]
+mod viewport_overflow;
 
 #[cfg(test)]
 #[path = "display_list/tests/form_controls_caret.rs"]

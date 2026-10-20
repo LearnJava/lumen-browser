@@ -29,6 +29,9 @@ pub(super) enum Sizing {
     MinContent,
     /// `max-content`.
     MaxContent,
+    /// `fit-content(<length>)` (Grid L1 §7.2.3.3), max side only: the items' max-content, at most the
+    /// length; like `minmax(auto, <length>)` it is not stretched past it.
+    Fit(f32),
 }
 
 /// Sizing function of one column track on this path: `min` gives the base size, `max` the
@@ -112,6 +115,10 @@ pub(super) fn classify_all_col_tracks(
                 TrackKind { min: sizing_of(min, resolve)?, max: sizing_of(max, resolve)? }
             }
             GridTrackSize::Length(l) => TrackKind::fixed(resolve(l)?.max(0.0)),
+            GridTrackSize::FitContent(limit) => match &**limit {
+                GridTrackSize::Length(l) => TrackKind { min: Sizing::Auto, max: Sizing::Fit(resolve(l)?.max(0.0)) },
+                _ => return None,
+            },
             t => {
                 let z = sizing_of(t, resolve)?;
                 TrackKind { min: z, max: z }
@@ -246,6 +253,7 @@ pub(super) fn base_and_limit(
         Sizing::Fixed(_) => None,
         Sizing::MinContent => Some(c.min),
         Sizing::MaxContent => Some(c.max),
+        Sizing::Fit(l) => Some(c.max.min(l)),
         Sizing::Auto => Some(if is_base { c.min } else { c.max }),
     };
     for c in contribs.iter().filter(|c| c.span == 1 && c.start < kinds.len()) {
@@ -335,7 +343,7 @@ pub(super) fn distribute_free_space(
 
 /// Border-box width of a definite `min-width` of `b` (`None` for `auto`, a percentage or an
 /// intrinsic keyword, none of which has a floor to offer before layout).
-fn min_width_floor(b: &LayoutBox, viewport: Size) -> Option<f32> {
+pub(super) fn min_width_floor(b: &LayoutBox, viewport: Size) -> Option<f32> {
     let s = &b.style;
     let em = s.font_size;
     let len = s.min_width.as_ref().filter(|l| !l.is_intrinsic())?;

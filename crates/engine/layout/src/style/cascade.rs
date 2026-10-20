@@ -41,8 +41,8 @@ use crate::style::{
     parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
     AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
     WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack,
-    FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
-    SHADOW_HOST_SCOPE, SHADOW_SHEETS,
+    FieldSizing, FlexBasis, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
+    TransformFn, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
 
 /// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
@@ -220,6 +220,110 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: 
     style.border_right_width *= z;
     style.border_bottom_width *= z;
     style.border_left_width *= z;
+    scale_visual_lengths(style, z, rem_k, root_k);
+}
+
+/// The non-inherited paint/transform lengths `zoom` scales on top of the box model:
+/// border radii, `box-shadow`, `outline-width`/`-offset`, `flex-basis`,
+/// `contain-intrinsic-*`, `scroll-margin`/`-padding`, `perspective`, `translate`
+/// and the offsets inside `transform` (BUG-1592). `getComputedStyle()` calls it
+/// with `1 / z` to report the unzoomed computed value (CSS Viewport L1 §5).
+pub(crate) fn scale_visual_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: f32) {
+    for len in [
+        &mut style.border_top_left_radius,
+        &mut style.border_top_right_radius,
+        &mut style.border_bottom_right_radius,
+        &mut style.border_bottom_left_radius,
+        &mut style.border_top_left_radius_y,
+        &mut style.border_top_right_radius_y,
+        &mut style.border_bottom_right_radius_y,
+        &mut style.border_bottom_left_radius_y,
+        &mut style.outline_offset,
+    ] {
+        zoom_length(len, z, rem_k, root_k);
+    }
+    for shadow in &mut style.box_shadow {
+        shadow.offset_x *= z;
+        shadow.offset_y *= z;
+        shadow.blur *= z;
+        shadow.spread *= z;
+    }
+    style.outline_width *= z;
+    if let FlexBasis::Length(l) = &mut style.flex_basis {
+        zoom_length(l, z, rem_k, root_k);
+    }
+    for len in [&mut style.contain_intrinsic_width, &mut style.contain_intrinsic_height] {
+        if let Some(l) = len.as_mut() {
+            zoom_length(l, z, rem_k, root_k);
+        }
+    }
+    for v in [
+        &mut style.scroll_margin_top,
+        &mut style.scroll_margin_right,
+        &mut style.scroll_margin_bottom,
+        &mut style.scroll_margin_left,
+        &mut style.scroll_padding_top,
+        &mut style.scroll_padding_right,
+        &mut style.scroll_padding_bottom,
+        &mut style.scroll_padding_left,
+    ] {
+        *v *= z;
+    }
+    if let Some(p) = style.perspective.as_mut() {
+        *p *= z;
+    }
+    if let Some((x, y)) = style.translate.as_mut() {
+        zoom_length(x, z, rem_k, root_k);
+        zoom_length(y, z, rem_k, root_k);
+    }
+    for f in &mut style.transform {
+        match f {
+            TransformFn::Translate(x, y) => {
+                *x *= z;
+                *y *= z;
+            }
+            TransformFn::TranslateX(v) | TransformFn::TranslateY(v) | TransformFn::TranslateZ(v) | TransformFn::Perspective(v) => *v *= z,
+            TransformFn::Translate3d(x, y, w) => {
+                *x *= z;
+                *y *= z;
+                *w *= z;
+            }
+            TransformFn::TranslateLp(x, y, w) => {
+                zoom_length(x, z, rem_k, root_k);
+                zoom_length(y, z, rem_k, root_k);
+                *w *= z;
+            }
+            // `matrix(a b c d e f)` / `matrix3d`: only the translation column carries a length.
+            TransformFn::Matrix(m) => {
+                m[4] *= z;
+                m[5] *= z;
+            }
+            TransformFn::Matrix3d(m) => {
+                m[12] *= z;
+                m[13] *= z;
+                m[14] *= z;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// CSS Overflow L3 §3.5 — whether `node`'s `overflow` is propagated to the viewport: the root
+/// element always, a `<body>` child of the root only when the root's own `overflow` is `visible`
+/// (`parent` is the root's computed style in that case).
+fn overflow_goes_to_viewport(doc: &Document, node: NodeId, parent: &ComputedStyle) -> bool {
+    let nr = doc.get(node);
+    let NodeData::Element { name, .. } = &nr.data else { return false };
+    let Some(parent_id) = nr.parent else { return false };
+    let parent_is_doc = !matches!(doc.get(parent_id).data, NodeData::Element { .. });
+    if parent_is_doc {
+        return name.local.eq_ignore_ascii_case("html");
+    }
+    name.local.eq_ignore_ascii_case("body")
+        && doc.get(parent_id).parent.is_some_and(|g| !matches!(doc.get(g).data, NodeData::Element { .. }))
+        && matches!(&doc.get(parent_id).data, NodeData::Element { name: p, .. } if p.local.eq_ignore_ascii_case("html"))
+        && parent.overflow_x == Overflow::Visible
+        && parent.overflow_y == Overflow::Visible
 }
 
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
@@ -362,6 +466,13 @@ pub(crate) fn compute_style_shareable(
         return (style, false);
     }
     drop(prof_init);
+    // CSS Backgrounds L3 §4.2: the initial `border-width` is `medium`; the `none`/`hidden` case
+    // is zeroed after the cascade (`zero_unstyled_border_widths`), so a lone `border-style: solid`
+    // draws a 3px border.
+    style.border_top_width = INITIAL_BORDER_WIDTH;
+    style.border_right_width = INITIAL_BORDER_WIDTH;
+    style.border_bottom_width = INITIAL_BORDER_WIDTH;
+    style.border_left_width = INITIAL_BORDER_WIDTH;
     let prof_ua = lumen_core::profile::scope_detail("cs_ua_hints");
 
     // UA stylesheet: семантические элементы получают italic / bold по
@@ -1340,6 +1451,15 @@ pub(crate) fn compute_style_shareable(
         };
     }
 
+    // CSS Writing Modes L4 §2.4.2 — контекст `bidi-override` для потомков.
+    style.bidi_override = match style.unicode_bidi {
+        crate::style::UnicodeBidi::BidiOverride | crate::style::UnicodeBidi::IsolateOverride => {
+            Some((style.unicode_bidi, style.direction))
+        }
+        crate::style::UnicodeBidi::Normal => style.bidi_override,
+        _ => None,
+    };
+
     // CSS Logical L1 §3.2 — `float`/`clear: inline-start|inline-end` раскрываются относительно
     // `direction` containing block (ближайшего блочного контейнера-предка, не самого элемента).
     {
@@ -1485,6 +1605,10 @@ pub(crate) fn compute_style_shareable(
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
 
+    // CSS Overflow L3 §3.5: `<html>`'s `overflow` (or `<body>`'s, when `<html>`'s is `visible`) is
+    // propagated to the viewport; the element itself behaves as `overflow: visible`.
+    style.overflow_to_viewport = overflow_goes_to_viewport(doc, node, inherited);
+
     // HTML LS §obsolete (BUG-605): `<marquee>` forces `overflow: hidden` in
     // the UA stylesheet as `!important`, unconditionally overriding any
     // author `overflow` (even inline `style=""`) — a pre-cascade UA hint
@@ -1558,6 +1682,9 @@ pub(crate) fn compute_style_shareable(
 
     (style, shareable)
 }
+
+/// `medium` (CSS Backgrounds L3 §4.2) in px.
+pub(in crate::style) const INITIAL_BORDER_WIDTH: f32 = 3.0;
 
 /// CSS Backgrounds L3 §4.2: a side whose `border-style` is `none`/`hidden` has a computed
 /// width of `0` whatever `border-width` says.
