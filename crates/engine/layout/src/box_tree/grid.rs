@@ -89,7 +89,7 @@ fn auto_repeat_count(rep: &GridRepeat, avail: Option<f32>, gap: f32, em: f32, vi
 
 /// The track list with the auto `repeat()` expanded `count` times between the tracks
 /// written around it.
-fn expand_auto_repeat(rep: &GridRepeat, count: usize) -> Vec<GridTrackSize> {
+pub(super) fn expand_auto_repeat(rep: &GridRepeat, count: usize) -> Vec<GridTrackSize> {
     let mut out = Vec::with_capacity(rep.before.len() + rep.after.len() + count * rep.tracks.len());
     out.extend_from_slice(&rep.before);
     for _ in 0..count {

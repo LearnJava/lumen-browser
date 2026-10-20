@@ -272,8 +272,8 @@ pub(super) fn grid_col_intrinsic_sum(
     per_item: &dyn Fn(&LayoutBox) -> f32,
 ) -> Option<f32> {
     let s = &b.style;
-    if s.grid_template_col_auto_repeat.is_some() {
-        return None;
+    if let Some(rep) = &s.grid_template_col_auto_repeat {
+        return auto_fill_fixed_sum(b, rep, viewport, vertical);
     }
     // `grid-auto-flow: column` — items fill columns, not rows: the round-robin rule below
     // does not apply and only the placement pass (`grid_col_sum_by_tracks`) can size it.
@@ -369,6 +369,62 @@ pub(super) fn grid_col_intrinsic_sum(
     Some(col_widths.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
 }
 
+/// Grid L1 §7.2.3.2 — `repeat(auto-fill, <fixed lengths>)` in a container whose width is not
+/// definite repeats once (BUG-1309): its columns are the written tracks plus one repetition. Only
+/// the shape whose width does not depend on the items is answered — row flow, every track a
+/// length, no item placed on a column of its own; `None` otherwise.
+fn auto_fill_fixed_sum(b: &LayoutBox, rep: &crate::style::GridRepeat, viewport: Size, vertical: bool) -> Option<f32> {
+    let s = &b.style;
+    let column_flow = matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+    if vertical || column_flow || !matches!(rep.count, crate::style::RepeatCount::AutoFill) {
+        return None;
+    }
+    let auto_col = |l: &GridLine| matches!(l, GridLine::Auto);
+    if b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).any(|c| {
+        !auto_col(&c.style.grid_column_start) || !auto_col(&c.style.grid_column_end)
+    }) {
+        return None;
+    }
+    let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+    let em = s.font_size;
+    let len_px = |t: &GridTrackSize| match t {
+        GridTrackSize::Length(l) => l.resolve(em, None, viewport).map(|v| v.max(0.0)),
+        _ => None,
+    };
+    // A definite minimum width (authored, or transferred from `min-height` through the ratio)
+    // makes the repeat run the smallest number of times that reaches it, not once.
+    let min_border = [
+        super::grid_auto_cols::min_width_floor(b, viewport),
+        super::stretch_basis::min_height_transferred_width_in_scope(b, viewport),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(0.0_f32, f32::max);
+    let frame = s.padding_left.resolve_or_zero(em, 0.0, viewport)
+        + s.padding_right.resolve_or_zero(em, 0.0, viewport)
+        + s.border_left_width
+        + s.border_right_width;
+    let min_content = (min_border - frame).max(0.0);
+    let unit = rep.tracks.iter().map(len_px).sum::<Option<f32>>()?;
+    let around = rep.before.iter().chain(&rep.after).map(len_px).sum::<Option<f32>>()?;
+    let n_around = rep.before.len() + rep.after.len();
+    let unit_n = rep.tracks.len();
+    let per_rep = unit + unit_n as f32 * gap;
+    let mut count = 1;
+    if min_content > 0.0 && per_rep > 0.0 {
+        // `around + reps·unit + (n_around + reps·unit_n − 1)·gap ≥ min_content`
+        let rest = min_content - around - (n_around as f32 - 1.0) * gap;
+        count = ((rest / per_rep).ceil().max(1.0)) as usize;
+    }
+    let tracks = super::grid::expand_auto_repeat(rep, count);
+    let mut sum = gap * tracks.len().saturating_sub(1) as f32;
+    for t in &tracks {
+        let GridTrackSize::Length(l) = t else { return None };
+        sum += l.resolve(s.font_size, None, viewport)?.max(0.0);
+    }
+    Some(sum)
+}
+
 /// CSS Grid L1 §11.7.1 «Expand Flexible Tracks» against an infinite width: the size of an `fr` is
 /// the largest of every flexible track's content width divided by its factor (when above one), and
 /// each flexible column becomes `max(its minimum, factor × that size)`. So `minmax(0, .5fr)` over
@@ -416,8 +472,9 @@ fn grid_col_sum_by_tracks(
     // `minmax(auto, <length>)` (BUG-1313): the track is as wide as its items' minimum
     // contribution when that exceeds the length, which only the track pass knows.
     let has_bounded_track = template.iter().any(|t| {
-        matches!(t, GridTrackSize::Minmax(min, max)
-            if matches!(**min, GridTrackSize::Auto) && matches!(**max, GridTrackSize::Length(_)))
+        matches!(t, GridTrackSize::FitContent(_))
+            || matches!(t, GridTrackSize::Minmax(min, max)
+                if matches!(**min, GridTrackSize::Auto) && matches!(**max, GridTrackSize::Length(_)))
     });
     let needs_tracks = column_flow
         || has_bounded_track
@@ -453,7 +510,13 @@ fn grid_col_sum_by_tracks(
         .max()
         .unwrap_or(1)
         .max(n_explicit);
-    let kinds = gac::classify_col_tracks(template, &s.grid_auto_columns, n_cols, &|l| {
+    // A flexible track (`1fr`, `minmax(0, 2fr)`) contributes its items' max-content like an
+    // `auto` one; the `fr` expansion against an infinite width is applied to the limits below.
+    let tracks: Vec<GridTrackSize> =
+        (0..n_cols).map(|c| super::grid::grid_track(c as u32, template, &s.grid_auto_columns).clone()).collect();
+    let as_auto: Vec<GridTrackSize> =
+        tracks.iter().map(|t| if t.flex_factor().is_some() { GridTrackSize::Auto } else { t.clone() }).collect();
+    let kinds = gac::classify_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &|l| {
         l.resolve(s.font_size, None, viewport)
     })?;
     let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
@@ -466,8 +529,114 @@ fn grid_col_sum_by_tracks(
         &b.children, &item_idxs, &placements, &s.grid_template_col_line_names, n_cols, 0, 0.0, 0.0, viewport,
         &measure, &mut contribs,
     );
-    let (_, limit) = gac::base_and_limit(&kinds, &contribs, gap);
+    let (_, mut limit) = gac::base_and_limit(&kinds, &contribs, gap);
+    expand_flexible_columns(&tracks, s.font_size, viewport, &mut limit);
     Some(limit.iter().sum::<f32>() + gap * (n_cols - 1) as f32)
+}
+
+/// BUG-1309: the definite height of the grid area of every item of a grid container whose rows
+/// are all fixed lengths (`grid-template-rows: 100px`), indexed like `b.children`; `None` when
+/// that does not apply or no item has a percentage block size to resolve.
+/// An item's `height: 100%` resolves against its area (Grid L1 §6.2), so the width its
+/// `aspect-ratio` transfers (Sizing L4 §4.1) is known before layout.
+#[inline(never)]
+fn grid_item_area_heights(b: &LayoutBox, viewport: Size) -> Option<Vec<Option<f32>>> {
+    use super::grid::{grid_item_indices, place_grid_items};
+    let s = &b.style;
+    let wants = |c: &LayoutBox| c.style.height.as_ref().is_some_and(|h| h.contains_percent());
+    if s.grid_template_rows.is_empty()
+        || s.grid_template_col_auto_repeat.is_some()
+        || !b.children.iter().any(wants)
+    {
+        return None;
+    }
+    let rows: Vec<f32> = s
+        .grid_template_rows
+        .iter()
+        .map(|t| match t {
+            GridTrackSize::Length(l) => l.resolve(s.font_size, None, viewport).map(|v| v.max(0.0)),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let gap = s.row_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+    let col_axis = GridAxis {
+        n_tracks: s.grid_template_columns.len() as u32,
+        names: &s.grid_template_col_line_names,
+        areas: &s.grid_template_areas,
+        is_col: true,
+        clamp: false,
+    };
+    let row_axis = GridAxis {
+        n_tracks: rows.len().max(s.grid_template_areas.len()) as u32,
+        names: &s.grid_template_row_line_names,
+        areas: &s.grid_template_areas,
+        is_col: false,
+        clamp: false,
+    };
+    let item_idxs = grid_item_indices(&b.children, super::fieldset::rendered_legend_idx_of(b));
+    let placements = place_grid_items(
+        &b.children,
+        &item_idxs,
+        s,
+        s.grid_template_columns.len().max(1),
+        rows.len(),
+        &col_axis,
+        &row_axis,
+    );
+    let mut out = vec![None; b.children.len()];
+    for (k, &i) in item_idxs.iter().enumerate() {
+        let (_, _, rs, re) = placements[k];
+        let (rs, re) = (rs as usize, re as usize);
+        if rs == 0 || re <= rs || re - 1 > rows.len() {
+            continue;
+        }
+        let span = &rows[rs - 1..re - 1];
+        out[i] = Some(span.iter().sum::<f32>() + gap * (span.len() - 1) as f32);
+    }
+    Some(out)
+}
+
+/// The intrinsic width a grid container reports for `per_item` (BUG-740 column sum, else the
+/// widest item) with every item measured against the height of its own grid area when
+/// [`grid_item_area_heights`] knows it. `fallback` is the pre-existing widest-child rule.
+#[inline(never)]
+fn grid_intrinsic_width(
+    b: &LayoutBox,
+    viewport: Size,
+    per_item: &dyn Fn(&LayoutBox) -> f32,
+    fallback: &dyn Fn() -> f32,
+) -> f32 {
+    match grid_item_area_heights(b, viewport) {
+        None => grid_col_intrinsic_sum(b, viewport, false, per_item).unwrap_or_else(fallback),
+        Some(areas) => grid_width_in_areas(b, viewport, per_item, &areas),
+    }
+}
+
+/// [`grid_intrinsic_width`] when every item has a known area height: `per_item` runs with it as
+/// the basis percentage block sizes resolve against. Out of line — the intrinsic-width recursion
+/// of a deep grid chain must keep its frames small.
+#[inline(never)]
+fn grid_width_in_areas(
+    b: &LayoutBox,
+    viewport: Size,
+    per_item: &dyn Fn(&LayoutBox) -> f32,
+    areas: &[Option<f32>],
+) -> f32 {
+    let in_area = |c: &LayoutBox| {
+        let i = b.children.iter().position(|x| std::ptr::eq(x, c));
+        super::stretch_basis::with_container_height(i.and_then(|i| areas[i]), || per_item(c))
+    };
+    grid_col_intrinsic_sum(b, viewport, false, &in_area).unwrap_or_else(|| {
+        b.children
+            .iter()
+            .filter(|c| contributes_to_intrinsic_width(c))
+            .map(|c| {
+                let cem = c.style.font_size;
+                in_area(c) + c.style.margin_left.resolve_or_zero(cem, 0.0, viewport)
+                    + c.style.margin_right.resolve_or_zero(cem, 0.0, viewport)
+            })
+            .fold(0.0_f32, f32::max)
+    })
 }
 
 /// CSS Flexbox L1 §9.9 — intrinsic width contribution of a **row-direction**
@@ -589,7 +758,13 @@ pub(crate) fn preferred_inline_block_width(
     if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
         return Some(w.max(0.0));
     }
-    super::stretch_basis::scoped_for_children(b, viewport, || preferred_inline_block_width_impl(b, measurer, viewport))
+    let w = super::stretch_basis::scoped_for_children(b, viewport, || {
+        preferred_inline_block_width_impl(b, measurer, viewport)
+    });
+    match super::stretch_basis::min_height_transferred_width(b, viewport) {
+        Some(floor) => Some(w.map_or(floor, |w| w.max(floor))),
+        None => w,
+    }
 }
 
 /// [`preferred_inline_block_width`] of a container whose own content height is
@@ -721,10 +896,12 @@ fn preferred_inline_block_width_impl(
         }).sum();
         sum
     } else if is_grid_container(b) {
-        grid_col_intrinsic_sum(b, viewport, false, &|c| {
-            preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
-        })
-        .unwrap_or_else(block_flow)
+        grid_intrinsic_width(
+            b,
+            viewport,
+            &|c| preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0),
+            &block_flow,
+        )
     } else {
         block_flow()
     };
@@ -762,7 +939,10 @@ pub(crate) fn max_content_outer_width(
     if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
         return w.max(0.0);
     }
-    super::stretch_basis::scoped_for_children(b, viewport, || max_content_outer_width_impl(b, measurer, viewport))
+    let w = super::stretch_basis::scoped_for_children(b, viewport, || {
+        max_content_outer_width_impl(b, measurer, viewport)
+    });
+    w.max(super::stretch_basis::min_height_transferred_width(b, viewport).unwrap_or(0.0))
 }
 
 fn max_content_outer_width_impl(
@@ -837,8 +1017,7 @@ fn max_content_outer_width_impl(
         // Grid container: max-content is the sum of column max-content widths
         // + gaps (CSS Grid L1 §11.5), not the widest item — see BUG-740.
         _ if is_grid_container(b) => {
-            grid_col_intrinsic_sum(b, viewport, false, &|c| max_content_outer_width(c, measurer, viewport))
-                .unwrap_or_else(block_flow)
+            grid_intrinsic_width(b, viewport, &|c| max_content_outer_width(c, measurer, viewport), &block_flow)
         }
         _ if is_vertical_block(b) => {
             vertical_block_extent(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
@@ -861,6 +1040,9 @@ pub(crate) fn min_content_outer_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
+    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+        return w.max(0.0);
+    }
     let s = &b.style;
     let em = s.font_size;
     let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
@@ -877,7 +1059,8 @@ pub(crate) fn min_content_outer_width(
         };
         return outer.max(0.0);
     }
-    min_content_outer_width_of_contents(b, measurer, viewport)
+    super::stretch_basis::scoped_for_children(b, viewport, || min_content_outer_width_of_contents(b, measurer, viewport))
+        .max(super::stretch_basis::min_height_transferred_width(b, viewport).unwrap_or(0.0))
 }
 
 /// Same as [`min_content_outer_width`] but ignoring `b`'s own definite `width`:
@@ -977,13 +1160,12 @@ pub(crate) fn min_content_outer_width_of_contents(
         // Grid container: columns can't share space, so min-content is the sum
         // of column min-content widths + gaps, not the widest item (BUG-740).
         _ if is_grid_container(b) => {
-            grid_col_intrinsic_sum(b, viewport, false, &|c| min_content_outer_width(c, measurer, viewport))
-                .unwrap_or_else(|| {
-                    b.children.iter()
-                        .filter(|c| contributes_to_intrinsic_width(c))
-                        .map(|c| min_content_outer_width(c, measurer, viewport))
-                        .fold(0.0_f32, f32::max)
-                })
+            grid_intrinsic_width(b, viewport, &|c| min_content_outer_width(c, measurer, viewport), &|| {
+                b.children.iter()
+                    .filter(|c| contributes_to_intrinsic_width(c))
+                    .map(|c| min_content_outer_width(c, measurer, viewport))
+                    .fold(0.0_f32, f32::max)
+            })
         }
         _ if is_vertical_block(b) => {
             vertical_block_extent(b, viewport, &|c| min_content_outer_width(c, measurer, viewport))

@@ -29,6 +29,10 @@ pub(super) enum TrackKind {
     /// the growth limit is the length (never below the base, Grid L1 §11.5 step 5); the
     /// track grows towards it but is not stretched past it.
     Bounded(f32),
+    /// `fit-content(<length>)` (Grid L1 §7.2.3.3): `minmax(auto, max-content)` whose growth limit
+    /// is clamped to the length — the track is its items' max-content, at most the length, never
+    /// below their minimum contribution; like `Bounded` it is not stretched.
+    Fit(f32),
 }
 
 /// What one item (outer margin box, plus the subgrid edge it sits on) asks of
@@ -58,6 +62,10 @@ pub(super) fn classify_col_tracks(
             GridTrackSize::Length(l) => TrackKind::Fixed(resolve(l)?.max(0.0)),
             GridTrackSize::Minmax(min, max) => match (&**min, &**max) {
                 (GridTrackSize::Auto, GridTrackSize::Length(l)) => TrackKind::Bounded(resolve(l)?.max(0.0)),
+                _ => return None,
+            },
+            GridTrackSize::FitContent(limit) => match &**limit {
+                GridTrackSize::Length(l) => TrackKind::Fit(resolve(l)?.max(0.0)),
                 _ => return None,
             },
             _ => return None,
@@ -193,6 +201,10 @@ pub(super) fn base_and_limit(
                 limit[c.start] = limit[c.start].max(c.max);
             }
             TrackKind::Bounded(_) => base[c.start] = base[c.start].max(c.min),
+            TrackKind::Fit(l) => {
+                base[c.start] = base[c.start].max(c.min);
+                limit[c.start] = limit[c.start].max(c.max.min(l));
+            }
             TrackKind::Fixed(_) => {}
         }
     }
@@ -203,7 +215,9 @@ pub(super) fn base_and_limit(
         let end = (c.start + c.span).min(kinds.len());
         let autos: Vec<usize> = (c.start..end).filter(|&t| kinds[t] == TrackKind::Auto).collect();
         let growable: Vec<usize> =
-            (c.start..end).filter(|&t| matches!(kinds[t], TrackKind::Auto | TrackKind::Bounded(_))).collect();
+            (c.start..end)
+            .filter(|&t| matches!(kinds[t], TrackKind::Auto | TrackKind::Bounded(_) | TrackKind::Fit(_)))
+            .collect();
         if growable.is_empty() {
             continue;
         }
@@ -274,7 +288,7 @@ pub(super) fn distribute_free_space(
 
 /// Border-box width of a definite `min-width` of `b` (`None` for `auto`, a percentage or an
 /// intrinsic keyword, none of which has a floor to offer before layout).
-fn min_width_floor(b: &LayoutBox, viewport: Size) -> Option<f32> {
+pub(super) fn min_width_floor(b: &LayoutBox, viewport: Size) -> Option<f32> {
     let s = &b.style;
     let em = s.font_size;
     let len = s.min_width.as_ref().filter(|l| !l.is_intrinsic())?;
@@ -329,7 +343,7 @@ pub(super) fn content_sized_col_widths(
     let kinds = classify_col_tracks(eff_col_template, &s.grid_auto_columns, n_cols, &|l| {
         l.resolve(em, Some(content_width), viewport)
     })?;
-    if n_cols < 2 && !kinds.iter().any(|k| matches!(k, TrackKind::Bounded(_))) {
+    if n_cols < 2 && !kinds.iter().any(|k| matches!(k, TrackKind::Bounded(_) | TrackKind::Fit(_))) {
         return None;
     }
     let mut contribs = Vec::new();
