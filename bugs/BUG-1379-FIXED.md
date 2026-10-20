@@ -1,6 +1,7 @@
 # BUG-1379 — `/* … */` внутри значения объявления делает значение невалидным
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** `parse_value_until_terminator` заменяет `/* … */` одним пробелом (комментарий разделяет токены), не трогает строки и тело неэкранированного `url(`; `` экранирует следующий символ. Тесты: `parser/tests/recovery.rs` (`comment_*`, `escaped_quote_*`).
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 15, `css/CSS2` (остальные каталоги: selectors, css1, syntax, box-display, visufx, visudet, …))
 **Область:** css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_value_until_terminator` — комментарий `/* */` внутри значения не вырезается)
 
