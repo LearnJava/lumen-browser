@@ -452,6 +452,7 @@ mod inline_line_growth;
 mod pseudo_first_line;
 
 mod generated_float;
+mod scroll_markers;
 mod shapes_and_contain;
 mod flex_align_content;
 mod flex_baseline;

@@ -184,12 +184,13 @@ pub(super) fn collect_col_contributions(
             let sub_idxs = grid_item_indices(&item.children, super::fieldset::rendered_legend_idx_of(item));
             let st = &item.style;
             let rows_len = st.grid_template_rows.len();
-            let sub_names = super::grid::subgrid_line_names(
+            let mut sub_names = super::grid::subgrid_line_names(
                 &st.grid_template_col_line_names,
                 st.grid_template_col_subgrid_fill,
                 &crate::subgrid::line_names_between(col_names, local_start, local_end),
                 span,
             );
+            super::grid::add_area_line_names(&mut sub_names, &st.grid_template_areas, true);
             let col_axis = GridAxis {
                 n_tracks: span as u32,
                 names: &sub_names,

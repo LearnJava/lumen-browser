@@ -57,6 +57,7 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::PickerIcon => "picker-icon",
         PseudoElementKind::ScrollMarker => "scroll-marker",
         PseudoElementKind::ScrollMarkerGroup => "scroll-marker-group",
+        PseudoElementKind::Column => "column",
         PseudoElementKind::ScrollButton(_) => "scroll-button",
         PseudoElementKind::ViewTransition => "view-transition",
         PseudoElementKind::ViewTransitionGroup(_) => "view-transition-group",
@@ -88,6 +89,15 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
     let (base, wanted) = split_pseudo_request(name);
     if !pseudo_element_name(kind).eq_ignore_ascii_case(base) {
         return false;
+    }
+    // `::scroll-button(<dir>)`: the request lists every spelling the box answers to,
+    // `"scroll-button(block-end|down)"` (logical + physical for the originating element's
+    // writing mode); the selector's argument is matched against any of them, `*` against all.
+    if let PseudoElementKind::ScrollButton(dir) = kind {
+        return match wanted {
+            None => true,
+            Some(w) => dir == "*" || w.split('|').any(|alias| alias == dir),
+        };
     }
     let own = match kind {
         PseudoElementKind::ViewTransitionGroup(a)
@@ -418,7 +428,9 @@ fn compute_pseudo_element_style_inner(
     // HTML rendering §15.3.7: `q::before`/`q::after` get `open-quote`/`close-quote` from the UA
     // sheet (BUG-1598) — no author rule needed, so the sheet-level gate does not apply.
     let ua_quote = ua_quote_content(doc, node, pseudo);
+    let is_scroll_group = pseudo.eq_ignore_ascii_case("scroll-marker-group");
     if !pseudo.eq_ignore_ascii_case("marker")
+        && !is_scroll_group
         && ua_quote.is_none()
         && !sheet_targets_pseudo(sheet, viewport, dark_mode, split_pseudo_request(pseudo).0)
     {
@@ -524,6 +536,13 @@ fn compute_pseudo_element_style_inner(
             style.content = Content::Items(vec![item]);
             return Some(style);
         }
+        // CSS Overflow L5 §scroll-marker-group: an originating element whose
+        // `scroll-marker-group` is not `none` gets the group box even with no author rule.
+        if is_scroll_group {
+            let mut style = pseudo_inherited_style(parent);
+            style.display = Display::Block;
+            return Some(style);
+        }
         return None;
     }
     drop(prof_match);
@@ -532,6 +551,12 @@ fn compute_pseudo_element_style_inner(
         let mut style = pseudo_inherited_style(parent);
         if let Some(item) = ua_quote {
             style.content = Content::Items(vec![item]);
+        }
+        if is_scroll_group {
+            style.display = Display::Block;
+        }
+        if split_pseudo_request(pseudo).0.eq_ignore_ascii_case("scroll-button") {
+            super::ua::apply_ua_scroll_button(&mut style, dark_mode);
         }
         style
     };
@@ -576,7 +601,10 @@ fn compute_pseudo_element_style_inner(
     // CC-CSS-1: `::-webkit-scrollbar`/`-thumb`/`-track` are legacy scrollbar-styling
     // pseudo-elements (translated onto `scrollbar-width`/`scrollbar-color` by
     // `apply_webkit_scrollbar_pseudos`) — no `content:` required either.
+    // CSS Overflow L5 §scroll-marker-group: the group box needs no `content` (it is a container
+    // for the markers, not generated content); `::scroll-marker`/`::scroll-button()` do.
     if pseudo.eq_ignore_ascii_case("first-letter")
+        || pseudo.eq_ignore_ascii_case("scroll-marker-group")
         || pseudo.eq_ignore_ascii_case("first-line")
         || pseudo.eq_ignore_ascii_case("selection")
         || pseudo.eq_ignore_ascii_case("target-text")

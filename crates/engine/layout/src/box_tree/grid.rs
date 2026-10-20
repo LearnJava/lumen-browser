@@ -141,15 +141,37 @@ fn axis_line_names(
         } else {
             (&s.grid_template_row_line_names, s.grid_template_row_subgrid_fill, &s.grid_template_row_auto_repeat)
         };
-        if subgrid {
+        let mut names = if subgrid {
             subgrid_line_names(written, fill, inherited.map_or(&[][..], |ctx| &ctx.names), tracks)
         } else if let (Some(rep), Some(count)) = (repeat, count) {
             rep.names.expand(count)
         } else {
             written.clone()
-        }
+        };
+        add_area_line_names(&mut names, &s.grid_template_areas, col);
+        names
     };
     (one(true, axes[0]), one(false, axes[1]))
+}
+
+/// CSS Grid L1 §7.3 — the implicit `<area>-start` / `<area>-end` lines of `grid-template-areas`
+/// recorded among the line names of one axis, so a subgrid inherits them with the parent lines it
+/// spans (CSS Grid L2 §9): an item of the subgrid placed by `a` finds the parent's area edge.
+pub(super) fn add_area_line_names(names: &mut Vec<Vec<String>>, areas: &[Vec<String>], col: bool) {
+    let mut seen: Vec<&str> = Vec::new();
+    for cell in areas.iter().flatten() {
+        if cell == "." || seen.contains(&cell.as_str()) {
+            continue;
+        }
+        seen.push(cell);
+        let Some((rs, re, cs, ce)) = find_named_area(areas, cell) else { continue };
+        let (start, end) = if col { (cs, ce) } else { (rs, re) };
+        if names.len() < end as usize {
+            names.resize(end as usize, Vec::new());
+        }
+        names[start as usize - 1].push(format!("{cell}-start"));
+        names[end as usize - 1].push(format!("{cell}-end"));
+    }
 }
 
 /// CSS Grid L2 §9 — names of the `tracks + 1` lines of a subgrid axis: the subgrid's own
@@ -491,10 +513,10 @@ pub(crate) fn build_grid_init(
         // — `fr`, `minmax()`, content keywords, `repeat(auto-*)`, a vertical
         // writing mode, a single column — keeps the older path below. Out of line:
         // this frame sits on the deep-chain stack the grid trampoline measures.
-        let content_sized = if vertical.is_none()
-            && s.grid_template_col_auto_repeat.is_none()
-            && !col_collapsed.iter().any(|&c| c)
-        {
+        // `repeat(auto-fill | auto-fit, …)` is already expanded in `eff_col_template` (a collapsed
+        // `auto-fit` track is a 0px one); the sizing assumes a gutter between every pair of tracks,
+        // which only holds with no collapsed track or no gap at all.
+        let content_sized = if vertical.is_none() && (col_gap == 0.0 || !col_collapsed.iter().any(|&c| c)) {
             let lane_sizing = lane_items
                 .as_ref()
                 .map(|l| super::grid_lanes::sizing_items(&item_idxs, &placements, l, n_cols as usize));

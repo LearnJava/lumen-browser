@@ -24,12 +24,18 @@ function _lumen_computed_property(nid, name) {
 // resolution) is out of scope for this slice.
 function _lumen_normalize_pseudo_elt(pseudoElt) {
     if (typeof pseudoElt !== 'string' || pseudoElt.length === 0) return null;
-    switch (pseudoElt.replace(/^::?/, '').toLowerCase()) {
+    var name = pseudoElt.replace(/^::?/, '').toLowerCase();
+    switch (name) {
         case 'before': return 'before';
         case 'after': return 'after';
         case 'first-line': return 'first-line';
         case 'first-letter': return 'first-letter';
-        default: return null;
+        // CSS Overflow L5 scroll pseudo-elements.
+        case 'scroll-marker': return 'scroll-marker';
+        case 'scroll-marker-group': return 'scroll-marker-group';
+        default:
+            return /^scroll-button\((block-start|block-end|inline-start|inline-end|up|down|left|right)\)$/.test(name)
+                ? name : null;
     }
 }
 window.getComputedStyle = function(element, pseudoElt) {

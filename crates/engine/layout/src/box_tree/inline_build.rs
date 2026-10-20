@@ -1318,9 +1318,6 @@ fn content_to_inline_segments(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) -> Vec<InlineSegment> {
-    let Content::Items(items) = &style.content else {
-        return vec![];
-    };
     // CSSOM-6 (BUG-490): tags every generated-content segment with its
     // pseudo-element so `collect_pseudo_computed_styles` can find it even
     // when `inject_pseudo` merges it into a sibling `InlineRun` instead of
@@ -1328,6 +1325,26 @@ fn content_to_inline_segments(
     let kind = match slot {
         QuoteSlot::Before => PseudoKind::Before,
         QuoteSlot::After => PseudoKind::After,
+    };
+    content_to_inline_segments_as(style, doc, owner_id, slot, kind, viewport, counters, registry)
+}
+
+/// [`content_to_inline_segments`] with an explicit `kind` for the segment tag — for pseudo-elements
+/// that are neither `::before` nor `::after` (`::scroll-marker`, `::scroll-button()`), whose
+/// segments must not overwrite `getComputedStyle(owner, '::before')`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn content_to_inline_segments_as(
+    style: &ComputedStyle,
+    doc: &Document,
+    owner_id: NodeId,
+    slot: QuoteSlot,
+    kind: PseudoKind,
+    viewport: Size,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+) -> Vec<InlineSegment> {
+    let Content::Items(items) = &style.content else {
+        return vec![];
     };
     let snap = counters.counters_for(owner_id, slot);
     let qdepths = counters.quote_depths(owner_id, slot);

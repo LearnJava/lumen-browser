@@ -130,6 +130,16 @@ fn subgrid_names_parse_with_fixed_and_auto_fill_repeats() {
 }
 
 #[test]
+fn track_list_names_need_no_whitespace() {
+    // BUG-1394: `repeat(5, [a]30px)` — the bracket pair is its own token even when glued to a track.
+    let t = GridTrackSize::parse_track_list("repeat(5,[a]30px) repeat(5,30px)", false);
+    assert_eq!(t.len(), 10);
+    let names = parse_track_line_names("repeat(5,[a]30px) [b][c] 30px[d]", false);
+    let flat: Vec<String> = names.iter().map(|g| g.join(",")).collect();
+    assert_eq!(flat, ["a", "a", "a", "a", "a", "b,c", "d"]);
+}
+
+#[test]
 fn name_fill_repeats_as_often_as_fits() {
     let names: Vec<Vec<String>> = ["x", "y", "z", "z"].iter().map(|n| vec![n.to_string()]).collect();
     let fill = NameFill { at: 1, len: 1 };

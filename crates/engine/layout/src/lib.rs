@@ -2008,6 +2008,12 @@ fn pseudo_kind_name(kind: PseudoKind) -> Option<&'static str> {
         PseudoKind::After => Some("after"),
         PseudoKind::FirstLine => Some("first-line"),
         PseudoKind::FirstLetter => Some("first-letter"),
+        PseudoKind::ScrollMarker => Some("scroll-marker"),
+        PseudoKind::ScrollMarkerGroup => Some("scroll-marker-group"),
+        PseudoKind::ScrollButtonBlockStart => Some("scroll-button(block-start)"),
+        PseudoKind::ScrollButtonInlineStart => Some("scroll-button(inline-start)"),
+        PseudoKind::ScrollButtonInlineEnd => Some("scroll-button(inline-end)"),
+        PseudoKind::ScrollButtonBlockEnd => Some("scroll-button(block-end)"),
         PseudoKind::None | PseudoKind::Marker => None,
     }
 }
@@ -2022,7 +2028,16 @@ fn pseudo_used_display(kind: PseudoKind, style: &ComputedStyle) -> Option<&'stat
                 style.float_side != FloatSide::None || matches!(style.position, Position::Absolute | Position::Fixed);
             Some(if out_of_flow { "block" } else { "inline" })
         }
-        PseudoKind::None | PseudoKind::Before | PseudoKind::After | PseudoKind::Marker => None,
+        PseudoKind::None
+        | PseudoKind::Before
+        | PseudoKind::After
+        | PseudoKind::Marker
+        | PseudoKind::ScrollMarker
+        | PseudoKind::ScrollMarkerGroup
+        | PseudoKind::ScrollButtonBlockStart
+        | PseudoKind::ScrollButtonInlineStart
+        | PseudoKind::ScrollButtonInlineEnd
+        | PseudoKind::ScrollButtonBlockEnd => None,
     }
 }
 
@@ -2087,6 +2102,21 @@ pub(crate) fn collect_pseudo_computed_styles_box(
         if !held.is_some_and(|h| h.contains_key(&key)) {
             out.entry(key).or_insert_with(|| pseudo_style_map(&b.style, kind));
         }
+        // `::scroll-button(down)` etc.: the physical spelling is the same box (the writing mode
+        // of its originating element, which the button inherits, picks the keyword).
+        if matches!(
+            kind,
+            PseudoKind::ScrollButtonBlockStart
+                | PseudoKind::ScrollButtonInlineStart
+                | PseudoKind::ScrollButtonInlineEnd
+                | PseudoKind::ScrollButtonBlockEnd
+        ) {
+            let (_, physical) = box_tree::button_keywords(kind, &b.style);
+            let key = (owner.index() as u32, format!("scroll-button({physical})"));
+            if !held.is_some_and(|h| h.contains_key(&key)) {
+                out.entry(key).or_insert_with(|| pseudo_style_map(&b.style, kind));
+            }
+        }
     }
     if let box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
         for seg in segments {
@@ -2112,7 +2142,22 @@ pub(crate) fn collect_pseudo_computed_styles_box(
 }
 
 /// The pseudo-element names [`collect_pseudo_computed_styles`] keys by.
-const PSEUDO_NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
+const PSEUDO_NAMES: [&str; 14] = [
+    "before",
+    "after",
+    "first-line",
+    "first-letter",
+    "scroll-marker",
+    "scroll-marker-group",
+    "scroll-button(block-start)",
+    "scroll-button(inline-start)",
+    "scroll-button(inline-end)",
+    "scroll-button(block-end)",
+    "scroll-button(up)",
+    "scroll-button(down)",
+    "scroll-button(left)",
+    "scroll-button(right)",
+];
 
 /// Drops every pseudo-element entry owned by the node with `NodeId::index` `node`
 /// (BUG-935 срез 95: the scoped flush evicts the entries of what it rebuilds).
