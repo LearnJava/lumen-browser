@@ -1328,44 +1328,7 @@ fn dispatch<'a>(
                 true
             });
             if has_overflow_clip {
-                const BIG: f32 = 1_000_000.0;
-                let s = &b.style;
-                let px = b.rect.x + s.border_left_width;
-                let py = b.rect.y + s.border_top_width;
-                let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
-                let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
-                let mut cr = Rect::new(
-                    if clip_x { px } else { -BIG },
-                    if clip_y { py } else { -BIG },
-                    if clip_x { pw } else { 2.0 * BIG },
-                    if clip_y { ph } else { 2.0 * BIG },
-                );
-
-                // CSS Overflow L3: overflow-clip-margin расширяет clip region для overflow:clip.
-                let is_overflow_clip_x = matches!(b.style.overflow_x, Overflow::Clip);
-                let is_overflow_clip_y = matches!(b.style.overflow_y, Overflow::Clip);
-                // BUG-505 срез 4: `overflow_clip_margin` now also carries a
-                // `<visual-box>` component (`content-box`/`padding-box`/
-                // `border-box`) alongside the length — box-relative clip-edge
-                // placement is left for a follow-up (this margin expansion
-                // has always measured from the padding edge, `cr`'s own
-                // starting point above; the box keyword's effect on *where*
-                // the base clip edge sits is untouched by this slice, same
-                // "parsing/computed-style only" scoping the property's other
-                // Phase 0 gaps use).
-                if (is_overflow_clip_x || is_overflow_clip_y)
-                    && let Some((_box_kw, margin)) = &s.overflow_clip_margin
-                    && let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph))
-                {
-                    if is_overflow_clip_x {
-                        cr.x -= margin_px;
-                        cr.width += 2.0 * margin_px;
-                    }
-                    if is_overflow_clip_y {
-                        cr.y -= margin_px;
-                        cr.height += 2.0 * margin_px;
-                    }
-                }
+                let cr = overflow_clip_rect(b, clip_x, clip_y);
 
                 if use_scroll_layer {
                     out.push(DisplayCommand::PushScrollLayer {

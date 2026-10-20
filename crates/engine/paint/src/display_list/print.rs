@@ -254,6 +254,51 @@ pub(crate) fn style_overflow_clips(s: &ComputedStyle, o: Overflow) -> bool {
     overflow_clips(o) && !(s.overflow_to_viewport && matches!(o, Overflow::Hidden | Overflow::Clip))
 }
 
+/// The rectangle an `overflow: hidden|scroll|auto|clip` box clips its content to (CSS Overflow L3
+/// §3.2): the padding box on each clipping axis, a `BIG` sentinel on the other. `overflow-clip-margin`
+/// (CSS Overflow L3 §overflow-clip-margin) moves the base edge to the `<visual-box>` and grows it by
+/// the margin — on the axes whose overflow is `clip` only; `hidden`/`scroll`/`auto` ignore it
+/// (BUG-1390). One function for the `walk` and the ordered `box_layer` paths, which both used to
+/// build this rectangle themselves — and only one of them knew the margin.
+pub(crate) fn overflow_clip_rect(b: &LayoutBox, clip_x: bool, clip_y: bool) -> Rect {
+    use lumen_layout::style::OverflowClipMarginBox as Vb;
+    const BIG: f32 = 1_000_000.0;
+    let s = &b.style;
+    let (bl, bt, br, bb) = (s.border_left_width, s.border_top_width, s.border_right_width, s.border_bottom_width);
+    // Base edge: [left, top, right, bottom] offsets from the border box inwards.
+    let mut inset = [bl, bt, br, bb];
+    let mut margin = 0.0_f32;
+    if let Some((vb, len)) = &s.overflow_clip_margin
+        && (matches!(s.overflow_x, Overflow::Clip) || matches!(s.overflow_y, Overflow::Clip))
+    {
+        match vb {
+            Vb::BorderBox => inset = [0.0; 4],
+            Vb::ContentBox => {
+                let [pt, pr, pb, pl] = b.used_padding.unwrap_or([
+                    s.padding_top.px(),
+                    s.padding_right.px(),
+                    s.padding_bottom.px(),
+                    s.padding_left.px(),
+                ]);
+                inset = [bl + pl, bt + pt, br + pr, bb + pb];
+            }
+            Vb::PaddingBox => {}
+        }
+        let (pw, ph) = ((b.rect.width - bl - br).max(0.0), (b.rect.height - bt - bb).max(0.0));
+        margin = len.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph)).unwrap_or(0.0).max(0.0);
+    }
+    let w = (b.rect.width - inset[0] - inset[2]).max(0.0);
+    let h = (b.rect.height - inset[1] - inset[3]).max(0.0);
+    let mx = if matches!(s.overflow_x, Overflow::Clip) { margin } else { 0.0 };
+    let my = if matches!(s.overflow_y, Overflow::Clip) { margin } else { 0.0 };
+    Rect::new(
+        if clip_x { b.rect.x + inset[0] - mx } else { -BIG },
+        if clip_y { b.rect.y + inset[1] - my } else { -BIG },
+        if clip_x { w + 2.0 * mx } else { 2.0 * BIG },
+        if clip_y { h + 2.0 * my } else { 2.0 * BIG },
+    )
+}
+
 /// CSS Overflow L4 §line-clamp: the content box a clamped container clips its descendants to
 /// (`LayoutBox::clamp_clip`, relative to the border box), in absolute coordinates.
 pub(crate) fn clamp_clip_rect(b: &LayoutBox) -> Option<Rect> {
