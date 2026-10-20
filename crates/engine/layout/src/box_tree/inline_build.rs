@@ -534,6 +534,50 @@ pub(crate) fn inline_run_lead_space(b: &LayoutBox, measurer: Option<&dyn TextMea
     if starts_ws { inline_space_width(b, measurer) } else { 0.0 }
 }
 
+/// CSS Text L3 §5.1: текстовый прогон заканчивается символом класса GL/WJ/ZWJ
+/// (кроме U+00A0), так что между ним и следующим atomic inline переноса нет.
+pub(crate) fn inline_run_ends_with_glue(b: &LayoutBox) -> bool {
+    let BoxKind::InlineRun { segments, .. } = &b.kind else {
+        return false;
+    };
+    segments
+        .iter()
+        .rev()
+        .find(|seg| !seg.text.is_empty())
+        .and_then(|seg| seg.text.chars().next_back())
+        .is_some_and(crate::line_break::glues_to_atomic)
+}
+
+/// Первый неразрывный отрезок текстового прогона: ширина текста до первой
+/// возможности переноса (UAX #14) и склеен ли он с предшествующим atomic inline
+/// (первый символ класса GL/WJ/ZWJ — CSS Text L3 §5.1).
+///
+/// `None`, когда прогон пуст, сохраняет пробелы или измерителя нет — тогда
+/// решение о переносе остаётся за самим прогоном.
+pub(crate) fn inline_run_first_unit(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Option<(f32, bool)> {
+    let (m, BoxKind::InlineRun { segments, .. }) = (measurer?, &b.kind) else {
+        return None;
+    };
+    if b.style.white_space.preserves_whitespace() {
+        return None;
+    }
+    let seg = segments.iter().find(|seg| !seg.text.trim_start_matches(is_wrap_whitespace).is_empty())?;
+    let text = seg.text.trim_start_matches(is_wrap_whitespace);
+    let word = text.split(is_wrap_whitespace).next()?;
+    let glued = word.chars().next().is_some_and(crate::line_break::glues_to_atomic);
+    let (strip, _) = strip_soft_hyphens(word);
+    let end = crate::line_break::break_opportunities(&strip, seg.style.line_break, seg.style.word_break)
+        .first()
+        .copied()
+        .unwrap_or(strip.len());
+    let st = &seg.style;
+    let w = measure_text_w_families(&strip[..end], st.font_size, st.letter_spacing, 0.0, &st.font_family, m);
+    Some((w + seg.pre_space, glued))
+}
+
 /// Насколько текстовый прогон продвигает inline formatting context — ширина его
 /// ПОСЛЕДНЕЙ строки плюс схлопнутый пробел, которым он заканчивается.
 ///

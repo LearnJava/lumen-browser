@@ -1762,6 +1762,31 @@ pub(super) fn dispatch_box(
                     st.text_align = TextAlign::Left;
                     st.text_align_last = TextAlignLast::Auto;
                 }
+                // CSS Text L3 §5.1: a soft wrap opportunity follows an atomic
+                // inline, so text whose first unbreakable piece does not fit in
+                // what is left of the row starts the next one (GL/WJ/ZWJ keep it
+                // glued to the atomic).
+                if is_run
+                    && !cur_row.is_empty()
+                    && !(b.style.white_space.is_nowrap() || b.style.text_wrap_mode == TextWrapMode::Nowrap)
+                    && children
+                        .iter()
+                        .rev()
+                        .find(|c| !matches!(c.kind, BoxKind::Skip))
+                        .is_some_and(|c| !matches!(c.kind, BoxKind::InlineRun { .. } | BoxKind::InlineSpace))
+                    && let Some((unit_w, glued)) = crate::box_tree::inline_build::inline_run_first_unit(&child, measurer)
+                    && !glued
+                    && cur_x + inline_run_lead_space(&child, measurer) + unit_w > content_x + content_width
+                {
+                    let (above, below) = line_metrics(&children, &metrics, &cur_row, row_has_baseline);
+                    rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
+                    let new_y = (cur_y + above + below).round();
+                    total_h += new_y - cur_y;
+                    cur_y = new_y;
+                    row_y = cur_y;
+                    cur_x = content_x;
+                    row_has_baseline = false;
+                }
                 // Схлопнутый пробел в начале текста существует только пока текст
                 // не первый на строке: `wrap_inline_run` срезает его как пробел в
                 // начале строки, поэтому зазор после atomic inline даёт этот сдвиг.
@@ -1937,7 +1962,15 @@ pub(super) fn dispatch_box(
                 // forbid soft breaks between atomic inlines as well (BUG-1284).
                 let row_nowrap = b.style.white_space.is_nowrap()
                     || b.style.text_wrap_mode == TextWrapMode::Nowrap;
-                if !is_run && !row_nowrap && child_right > content_x + content_width && cur_x > content_x {
+                // …and between an atomic inline and a glued neighbour (GL/WJ/ZWJ,
+                // not NBSP): `A&#8288;<span>B</span>` stays on one line.
+                let glued_to_prev = !is_run
+                    && children
+                        .iter()
+                        .rev()
+                        .find(|c| !matches!(c.kind, BoxKind::Skip))
+                        .is_some_and(crate::box_tree::inline_build::inline_run_ends_with_glue);
+                if !is_run && !row_nowrap && !glued_to_prev && child_right > content_x + content_width && cur_x > content_x {
                     let (above, below) =
                         line_metrics(&children, &metrics, &cur_row, row_has_baseline);
                     rows.push((row_y, above, below, std::mem::take(&mut cur_row)));
