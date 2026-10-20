@@ -582,3 +582,31 @@ fn a_subgrid_reaching_below_the_break_by_the_gap_it_dropped_stays_in_its_window(
     assert_eq!(subgrids(cols[1]), vec![(0.0, 50.0)], "the subgrid keeps the rows below the nominal break");
     assert!(subgrids(cols[2]).is_empty(), "nothing of it is left for the third column");
 }
+
+#[test]
+fn a_subgrid_with_a_forced_break_in_a_later_row_lays_its_gaps_out_from_that_row() {
+    // subgrid-gap-decorations-fragmentation-011: `break-before: column` on a child of the subgrid's
+    // second row does not cut the layout, but the gaps are laid out as if the column ended where
+    // that row starts: the first fragment loses the tracks from that row on, the next one is
+    // shifted down by what the cut-off part of the column left (`rule_shift`).
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"><div></div><div></div><div></div><div></div>\
+         <div></div><div id=\"b\"></div><div></div></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;column-gap:0;width:280px;height:72px} \
+         #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);\
+         gap:10px;height:140px} \
+         #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;\
+         grid-column:2/-2;grid-row:2/-2;row-rule:blue solid 10px} \
+         #b{break-before:column}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let shifts: Vec<f32> = v
+        .iter()
+        .flat_map(|g| g.children.iter())
+        .filter_map(|c| c.subgrid_tracks.as_ref().filter(|t| t.fragment))
+        .map(|t| t.rule_shift)
+        .collect();
+    assert!(shifts.iter().any(|&s| s > 0.0), "no shifted subgrid fragment: {shifts:?}");
+    assert!(shifts.contains(&0.0), "{shifts:?}");
+}

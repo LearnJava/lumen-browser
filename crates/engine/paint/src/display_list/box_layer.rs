@@ -217,6 +217,8 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // children — exactly where `walk` emits them.
     if is_paint_visible(b) && !is_hidden_empty_cell(b) {
         overflow_pre.extend(gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())));
+        // A box that paints its gaps over the children closes them just before its clips.
+        overflow_post.splice(0..0, late_gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())));
     }
     let mut perspective_pre = Vec::new();
     if emit_push_perspective(b, &mut perspective_pre) {
