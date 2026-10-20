@@ -1408,7 +1408,7 @@ pub(super) fn dispatch_box(
                     (!s.column_gap_normal)
                         .then(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
                     (!s.row_gap_normal)
-                        .then(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)),
+                        .then(|| s.row_gap.resolve(em, grid_definite_height, viewport).unwrap_or(0.0).max(0.0)),
                 );
                 b.subgrid_tracks = crate::subgrid::peek_tracks();
                 match grid::build_grid_init(

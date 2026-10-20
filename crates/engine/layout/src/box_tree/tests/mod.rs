@@ -533,6 +533,7 @@ mod relative_offset_flow;
 mod vertical_positioned;
 mod grid_vwm;
 mod grid_fr_rows;
+mod grid_percent_rows;
 mod grid_abspos;
 mod grid_rtl;
 mod fieldset_legend;

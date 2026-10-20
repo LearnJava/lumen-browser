@@ -296,6 +296,16 @@ impl GridTrackSize {
         }
     }
 
+    /// CSS Grid L1 §7.2.1: a percentage track size behaves as `auto` while the container's size in
+    /// that axis is indefinite (the row axis of an auto-height grid). Applies inside `minmax()`.
+    pub fn percent_as_auto(&self) -> Self {
+        match self {
+            Self::Length(l) if l.contains_percent() => Self::Auto,
+            Self::Minmax(min, max) => Self::Minmax(Box::new(min.percent_as_auto()), Box::new(max.percent_as_auto())),
+            other => other.clone(),
+        }
+    }
+
     /// True for fractional tracks.
     pub fn is_fr(&self) -> bool {
         matches!(self, Self::Fr(_))

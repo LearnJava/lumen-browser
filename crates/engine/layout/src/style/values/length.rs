@@ -152,6 +152,15 @@ pub enum Length {
 }
 
 impl Length {
+    /// `true` для `%` и для `calc()` с процентом внутри — значения, которым нужна база процентов.
+    pub fn contains_percent(&self) -> bool {
+        match self {
+            Length::Percent(_) => true,
+            Length::Calc(node) => calc_node_contains_percent(node),
+            _ => false,
+        }
+    }
+
     /// Возвращает длину в пикселях. `em_basis` — fs, относительно которого
     /// считать `em` (родителя для font-size; текущего элемента для остального).
     /// `percent_basis` — длина, относительно которой считать `%` (None если

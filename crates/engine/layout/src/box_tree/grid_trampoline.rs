@@ -34,6 +34,8 @@ pub(super) struct GridInit {
     /// resolution/align-content), both of which outlive `build_grid_init`'s
     /// own borrow of `s.grid_template_rows`.
     pub(super) eff_row_template: Vec<GridTrackSize>,
+    /// `grid-auto-rows` with `%` sizes read as `auto` when the container height is indefinite.
+    pub(super) auto_row: GridTrackSize,
     /// Row tracks of a `repeat(auto-fit, …)` that hold no item (CSS Grid L1 §7.2.3.2): sized
     /// `0` and without gutters. Same length as `eff_row_template`.
     pub(super) row_collapsed: Vec<bool>,
@@ -404,7 +406,7 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
     let r0 = (rs - 1) as usize;
     if r0 < frame.init.row_heights.len()
         && frame.init.inherited_rows.is_none()
-        && row_grows_with_content(grid_track(r0 as u32, &frame.init.eff_row_template, &frame.init.s.grid_auto_rows))
+        && row_grows_with_content(grid_track(r0 as u32, &frame.init.eff_row_template, &frame.init.auto_row))
     {
         let item_h = frame.init.item_block_size(&frame.b.children[i], viewport);
         if item_h > frame.init.row_heights[r0] {
@@ -430,7 +432,7 @@ fn record_flex_contrib(frame: &mut Frame, i: usize, viewport: Size) {
     let r0 = ((rs - 1) as usize).min(n_rows.saturating_sub(1));
     let r1 = ((re - 1) as usize).min(n_rows).max(r0 + 1);
     let flexible = (r0..r1.min(n_rows))
-        .any(|r| grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows).flex_factor().is_some());
+        .any(|r| grid_track(r as u32, &init.eff_row_template, &init.auto_row).flex_factor().is_some());
     if !flexible {
         return;
     }
@@ -577,7 +579,7 @@ fn row_grows_with_content(t: &GridTrackSize) -> bool {
 fn expand_flexible_rows(init: &mut GridInit) {
     let n_rows = init.n_rows as usize;
     let flex: Vec<Option<f32>> = (0..n_rows)
-        .map(|r| grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows).flex_factor())
+        .map(|r| grid_track(r as u32, &init.eff_row_template, &init.auto_row).flex_factor())
         .collect();
     if flex.iter().all(Option::is_none) {
         return;
@@ -622,7 +624,7 @@ fn maximize_bounded_rows(init: &mut GridInit, viewport: Size) {
     let n_rows = init.n_rows as usize;
     let mut limits: Vec<(usize, f32)> = Vec::new();
     for r in 0..n_rows {
-        if let GridTrackSize::Minmax(_, max) = grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows)
+        if let GridTrackSize::Minmax(_, max) = grid_track(r as u32, &init.eff_row_template, &init.auto_row)
             && let GridTrackSize::Length(l) = &**max
             && let Some(v) = l.resolve(init.em, init.definite_content_height, viewport)
         {
@@ -674,7 +676,7 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
         // «наибольший подъём + наибольший спуск»; растут только строки, размер
         // которых зависит от содержимого.
         for r in 0..n_rows as usize {
-            if !row_grows_with_content(grid_track(r as u32, &init.eff_row_template, &init.s.grid_auto_rows)) {
+            if !row_grows_with_content(grid_track(r as u32, &init.eff_row_template, &init.auto_row)) {
                 continue;
             }
             for (asc, desc) in [init.row_first_group[r], init.row_last_group[r]] {
@@ -696,7 +698,7 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
         // `definite_content_height` double-dips (BUG-277).
         let fixed_row_total: f32 = (0..n_rows)
             .map(|r| {
-                if grid_track(r, &init.eff_row_template, &init.s.grid_auto_rows).fr().is_some() {
+                if grid_track(r, &init.eff_row_template, &init.auto_row).fr().is_some() {
                     0.0
                 } else {
                     init.row_heights[r as usize]
@@ -706,13 +708,13 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
             + total_row_gap;
         let free_row = init.definite_content_height.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
         let total_row_fr: f32 = (0..n_rows)
-            .map(|r| grid_track(r, &init.eff_row_template, &init.s.grid_auto_rows).fr().unwrap_or(0.0))
+            .map(|r| grid_track(r, &init.eff_row_template, &init.auto_row).fr().unwrap_or(0.0))
             .sum();
         if total_row_fr > 0.0 && free_row > 0.0 {
             // §11.7.1: сумма коэффициентов меньше единицы считается единицей.
             let fr_h = free_row / total_row_fr.max(1.0);
             for r in 0..n_rows {
-                if let Some(f) = grid_track(r, &init.eff_row_template, &init.s.grid_auto_rows).fr() {
+                if let Some(f) = grid_track(r, &init.eff_row_template, &init.auto_row).fr() {
                     init.row_heights[r as usize] = (f * fr_h).max(init.row_heights[r as usize]);
                 }
             }
@@ -724,7 +726,7 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
         // track-sizing pass resolves them from their min side, not as auto.
         if matches!(init.s.align_content, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch) {
             let auto_rows: Vec<u32> = (0..n_rows)
-                .filter(|&r| matches!(grid_track(r, &init.eff_row_template, &init.s.grid_auto_rows), GridTrackSize::Auto))
+                .filter(|&r| matches!(grid_track(r, &init.eff_row_template, &init.auto_row), GridTrackSize::Auto))
                 .collect();
             let used: f32 = init.row_heights.iter().sum::<f32>() + total_row_gap;
             let free = init.definite_content_height.map(|h| h - used).unwrap_or(0.0);
