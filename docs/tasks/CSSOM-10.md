@@ -1,13 +1,12 @@
 # CSSOM-10 — CSSOM для at-правил и вложенных правил (заметка передачи, P1)
 
-Ветка `p1-cssom-10`, слот `p1-work`. Строка задачи — `ROADMAP.md` (CSSOM-10), дефект — `bugs/BUG-1455-OPEN.md`.
+Ветка `p1-cssom-10`, слот `p1-work`. Строка задачи — `ROADMAP.md` (CSSOM-10), дефект — `bugs/BUG-1455-FIXED.md`.
 Критерий готовности: `tests/wpt/css/css-cascade/layer-cssom-order-reverse.html`, `css-nesting/cssom.html`,
 `css-cascade/scope-cssom.html` зелёные (+ таблица проб из BUG-1455: `insertRule` для всех at-правил, `cssRules` их видит).
 
 ## Состояние
 
-Сессия 3: шаги 1–2 готовы и закоммичены (0232f9fcb): `crates/engine/css-parser/src/cssom_tree.rs` + подмодули
-`parse/serialize/mutate/tests` (25 юнит-тестов зелёные, clippy чистый). Следующая сессия начинает с шага 3 (см. «Сессия 3» внизу).
+**Закрыта 2026-10-21 (сессия 9, ветка `p1-cssom-10`).** Критерий готовности выполнен (`css-nesting/cssom.html`, `css-cascade/layer-cssom-order-reverse.html`, `scope-cssom.html` зелёные). Описание того, что сделано, — `subsystems/js.md` и `subsystems/css-parser.md` (CSSOM-10); файл ниже — журнал проектных решений сессий 1–8.
 
 ## Как устроено сейчас (разведка)
 
