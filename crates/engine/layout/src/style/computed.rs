@@ -104,6 +104,12 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
     /// Initial: `Normal`. См. [`UnicodeBidi`].
     pub unicode_bidi: UnicodeBidi,
+    /// CSS Writing Modes L4 §2.4.2 — `bidi-override` действует на весь текст внутри
+    /// бокса, включая вложенные inline. Наследуется: `Some((bidi, dir))` — ближайший
+    /// предок-или-сам с `bidi-override`/`isolate-override` и его `direction`;
+    /// вложенный `embed`/`isolate`/`plaintext` сбрасывает в `None`. Раскрывается в
+    /// [`crate::bidi`] для сегментов с `unicode-bidi: normal`.
+    pub bidi_override: Option<(UnicodeBidi, Direction)>,
     pub color: Color,
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
@@ -1312,6 +1318,7 @@ impl ComputedStyle {
             direction: Direction::Ltr,
             block_container_direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
+            bidi_override: None,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
             background_color: None,
@@ -1709,6 +1716,8 @@ impl ComputedStyle {
             block_container_direction: inherited.block_container_direction,
             // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
             unicode_bidi: UnicodeBidi::Normal,
+            // Но `bidi-override` предка продолжает действовать на потомков.
+            bidi_override: inherited.bidi_override,
             font_size: inherited.font_size,
             // Seeded from the parent so the value compounds; the element's own
             // `zoom` declaration is folded in by the pre-pass below.

@@ -749,7 +749,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 3. **Escape в строке `content` не декодируется** ([BUG-1367](../../bugs/BUG-1367-OPEN.md)): `\A`, `\41`, `\"`. Экранированная кавычка хуже остального — остаток правила выводится на страницу как текст.
 4. **`counter-reset`/`counter-increment` на `::before`/`::after` не применяются** ([BUG-1368](../../bugs/BUG-1368-OPEN.md)): 35 id после правки BUG-1366.
 5. **`line-height` меньше глифа** ([BUG-1369](../../bugs/BUG-1369-OPEN.md), 41 id) и **`vertical-align: <length>|%`** ([BUG-1370](../../bugs/BUG-1370-OPEN.md), 33 id) — две отдельные вертикальные ошибки строки.
-6. **`unicode-bidi: bidi-override` не доходит до вложенных inline и `<bdo>`** ([BUG-1371](../../bugs/BUG-1371-OPEN.md)): 44 id.
+6. **`unicode-bidi: bidi-override` не доходит до вложенных inline и `<bdo>`** ([BUG-1371](../../bugs/BUG-1371-FIXED.md)): 44 id.
 7. **Ahem 16 px: глиф `X` на 17 строк, а не на 16** ([BUG-1372](../../bugs/BUG-1372-OPEN.md)): 51 id `thin-only` без `<img>` в эталоне — самый крупный остаток «тонких» провалов после BUG-1337.
 
 ### Кластеры
@@ -763,7 +763,7 @@ Test category, added 2026-07-26 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | `text`: не разобрано | 55 | 55 thick | `text/white-space-processing-013.xht`, `white-space-normal-001.xht`, `white-space-pre-001.xht` | `white-space-*` (около 40: `table` с `td{font:20px/1 Ahem}` и `div`/`pre` внутри), `text-transform-bicameral`, `bidi-flag-emoji`; отдельных проб нет | — | без записи |
 | `letter-spacing`/`word-spacing` | 54 | 54 thick | `text/letter-spacing-007.xht`, `word-spacing-019.xht`, `letter-spacing-applies-to-001.xht` | один `DrawText` без поля интервала; раскладка ширину учитывает | P3 | [BUG-1339](../../bugs/BUG-1339-OPEN.md) (дополнен) |
 | thin-only: Ahem 16 px | 51 | 51 thin-only | `text/white-space-processing-001.xht`, `fonts/font-size-121.xht` | у `X` 16 px верхняя строка `64`, нижняя `192` из 255 (17 строк вместо 16); при 10/20/25/30/40 px — чисто | P3 | [BUG-1372](../../bugs/BUG-1372-OPEN.md) |
-| `bidi-override` и `<bdo>` | 44 | 44 thick | `bidi-text/bidi-001.xht`, `bidi-box-model-003.xht`, `unicode-bidi-applies-to-001.xht` | `<p class=o><span>abc</span> def</p>` → `abc fed` вместо `fed cba`; `<bdo dir=rtl>` — без эффекта | P3 | [BUG-1371](../../bugs/BUG-1371-OPEN.md) |
+| `bidi-override` и `<bdo>` | 44 | 44 thick | `bidi-text/bidi-001.xht`, `bidi-box-model-003.xht`, `unicode-bidi-applies-to-001.xht` | `<p class=o><span>abc</span> def</p>` → `abc fed` вместо `fed cba`; `<bdo dir=rtl>` — без эффекта | P3 | [BUG-1371](../../bugs/BUG-1371-FIXED.md) |
 | `line-height` меньше глифа | 41 | 41 thick | `linebox/line-height-002.xht`, `-004.xht`, `-005.xht` | отрицательное полу-ведущее зажато в 0 | P3 | [BUG-1369](../../bugs/BUG-1369-OPEN.md) |
 | счётчик на `::before`/`::after` | 35 | 35 thick (после правки «:») | `generated-content/content-011.xht`, `counters-order-000.xht`, `lists/counter-reset-increment-002.xht` | `counter-increment:zb 3` в `::before` → `P:0`; на самом элементе работает | P3 | [BUG-1368](../../bugs/BUG-1368-OPEN.md) |
 | `vertical-align: <length>|%` | 33 | 33 thick | `linebox/vertical-align-007.xht`, `-008.xht`, `-019.xht` | строка не растёт под поднятый бокс (`div` 20 px вместо 116, `DrawText y=-96`) | P3 | [BUG-1370](../../bugs/BUG-1370-OPEN.md) |
