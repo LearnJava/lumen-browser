@@ -93,6 +93,8 @@ fn check_containment(b: &LayoutBox) {
             && parent_unclipped_x
             && child.style.position == Position::Static
             && child.style.width.is_none()
+            // A ratio'd block with a definite height takes its width from the height (BUG-1385)
+            && child.style.aspect_ratio.is_none()
             && child.svg_group_transform.is_none()
             && matches!(child.kind, BoxKind::Block)
         {
@@ -166,6 +168,8 @@ fn count_containment(b: &LayoutBox, counts: &mut GeometryViolationCounts) {
             && parent_unclipped_x
             && child.style.position == Position::Static
             && child.style.width.is_none()
+            // A ratio'd block with a definite height takes its width from the height (BUG-1385)
+            && child.style.aspect_ratio.is_none()
             && child.svg_group_transform.is_none()
             && matches!(child.kind, BoxKind::Block)
             && !(child.rect.x + GEOMETRY_EPSILON >= b.rect.x

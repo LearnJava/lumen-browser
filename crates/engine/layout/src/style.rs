@@ -777,5 +777,23 @@ fn parse_aspect_ratio_value(s: &str) -> Option<(f32, f32)> {
     }
 }
 
+/// CSS Sizing L4 §6.1 — the `auto && <ratio>` form (`auto 3 / 1`, `3 / 1 auto`): the
+/// `<ratio>` part, or `None` when `s` is not that form.
+fn parse_auto_aspect_ratio_value(s: &str) -> Option<(f32, f32)> {
+    let s = s.trim();
+    let rest = match (s.get(..4), s.len().checked_sub(4).and_then(|i| s.get(i..))) {
+        (Some(head), _) if head.eq_ignore_ascii_case("auto") => &s[4..],
+        (_, Some(tail)) if tail.eq_ignore_ascii_case("auto") => &s[..s.len() - 4],
+        _ => return None,
+    };
+    // `auto3/1` is not a valid token sequence — a separator must follow/precede `auto`.
+    let separated = if s.len() > rest.len() && s[..4].eq_ignore_ascii_case("auto") {
+        rest.starts_with(char::is_whitespace)
+    } else {
+        rest.ends_with(char::is_whitespace)
+    };
+    separated.then(|| parse_aspect_ratio_value(rest)).flatten()
+}
+
 #[cfg(test)]
 mod tests;

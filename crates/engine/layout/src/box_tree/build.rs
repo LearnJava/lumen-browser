@@ -652,7 +652,7 @@ fn build_box_inner(
                 };
                 if let Some((iw, ih)) = intrinsic_ratio {
                     let st = Arc::make_mut(&mut style);
-                    if st.aspect_ratio.is_none() {
+                    if st.aspect_ratio.is_none() || st.aspect_ratio_auto {
                         st.aspect_ratio = Some((iw, ih));
                     }
                     if st.width.is_none() && st.height.is_none() {
@@ -758,7 +758,7 @@ fn build_box_inner(
                     st.height = Some(Length::Px(ch as f32 + fill_extra_h));
                     st.height_is_intrinsic_hint = true;
                 }
-                if style.aspect_ratio.is_none() && cw > 0 && ch > 0 {
+                if (style.aspect_ratio.is_none() || style.aspect_ratio_auto) && cw > 0 && ch > 0 {
                     Arc::make_mut(&mut style).aspect_ratio = Some((cw as f32, ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }

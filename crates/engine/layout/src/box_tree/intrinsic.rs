@@ -769,7 +769,7 @@ pub(crate) fn preferred_inline_block_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> Option<f32> {
-    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+    if let Some(w) = transferred_width(b, measurer, viewport) {
         return Some(w.max(0.0));
     }
     let w = super::stretch_basis::scoped_for_children(b, viewport, || {
@@ -950,7 +950,7 @@ pub(crate) fn max_content_outer_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
-    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+    if let Some(w) = transferred_width(b, measurer, viewport) {
         return w.max(0.0);
     }
     let w = super::stretch_basis::scoped_for_children(b, viewport, || {
@@ -1041,6 +1041,22 @@ fn max_content_outer_width_impl(
     (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
 }
 
+/// [`super::stretch_basis::canvas_transferred_width`] plus, for a block, the automatic minimum
+/// size of Sizing L4 §5.1 (BUG-1385): the contents can make a ratio'd box wider than the height
+/// run through the ratio unless it is a scroll container or has an authored `min-width`.
+fn transferred_width(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>, viewport: Size) -> Option<f32> {
+    let w = super::stretch_basis::canvas_transferred_width(b, viewport)?;
+    let s = &b.style;
+    if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && s.min_width.is_none()
+        && matches!(s.overflow_x, Overflow::Visible | Overflow::Clip)
+    {
+        Some(w.max(min_content_outer_width_of_contents(b, measurer, viewport)))
+    } else {
+        Some(w)
+    }
+}
+
 /// CSS Intrinsic Sizing L3 §4 — min-content border-box width of `b`.
 ///
 /// The min-content width is the narrowest a box can be without overflowing:
@@ -1054,7 +1070,7 @@ pub(crate) fn min_content_outer_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
-    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+    if let Some(w) = transferred_width(b, measurer, viewport) {
         return w.max(0.0);
     }
     let s = &b.style;
