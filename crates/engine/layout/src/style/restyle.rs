@@ -503,6 +503,15 @@ struct HasSubject<'a> {
     /// or the `:has()` sits inside a nested selector list whose own combinators
     /// are not analysed: a flip then restyles the parent's subtree, not only `E`'s.
     fanout: bool,
+    /// BUG-1651: one of this compound's own `:has()` arguments looks *forward* along siblings
+    /// (`E:has(+ x)`, `E:has(~ x)`) — only then can a change after `E` flip it, so only then is a
+    /// previous sibling of the changed node's ancestors a candidate.
+    sibling_reach: bool,
+    /// BUG-1651: the compound is the key (rightmost) one of its selector and nothing reaches past
+    /// the matched element (`fanout` is off): a flip of the `:has()` changes that element's own
+    /// style and nothing it matches elsewhere, so the element is a shallow root — its children
+    /// follow only if its style moved — rather than a whole recascaded subtree.
+    local: bool,
 }
 
 /// Visits the argument list of every `:has()` in `compound`: a direct part, or one
@@ -565,7 +574,7 @@ fn complex_has_sibling_reach(complex: &ComplexSelector) -> bool {
 }
 
 /// Registers every compound of `complex` that carries a `:has()` — see [`HasSubject`].
-fn collect_has_subjects<'s>(complex: &'s ComplexSelector, out: &mut Vec<(&'s CompoundSelector, bool)>) {
+fn collect_has_subjects<'s>(complex: &'s ComplexSelector, out: &mut Vec<(&'s CompoundSelector, bool, bool, bool)>) {
     let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
     compounds.push(&complex.head);
     let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
@@ -576,13 +585,18 @@ fn collect_has_subjects<'s>(complex: &'s ComplexSelector, out: &mut Vec<(&'s Com
     for (i, compound) in compounds.iter().enumerate() {
         let mut has_any = false;
         let mut nested_any = false;
-        for_each_has_arg(compound, false, &mut |_, nested| {
+        let mut sibling_any = false;
+        for_each_has_arg(compound, false, &mut |rels, nested| {
             has_any = true;
             nested_any |= nested;
+            sibling_any |= rels.iter().any(|r| {
+                r.combinator.is_some_and(is_sibling_combinator)
+                    || r.selector.tail.iter().any(|(c, _)| is_sibling_combinator(*c))
+            });
         });
         if has_any {
             let fanout = nested_any || combinators[i..].iter().copied().any(is_sibling_combinator);
-            out.push((*compound, fanout));
+            out.push((*compound, fanout, sibling_any, !fanout && i + 1 == compounds.len()));
         }
     }
 }
@@ -1236,23 +1250,27 @@ impl<'a> NodeRestyleIndex<'a> {
     /// one of those. Of those, only an element that could match a compound carrying
     /// a `:has()` can have a result to flip, which is decided structurally: its other
     /// parts must match, while every pseudo-class is taken as possible.
-    fn has_reach_roots(&self, doc: &Document, node: NodeId, out: &mut HashSet<NodeId>) {
-        let mut consider = |a: NodeId| {
+    fn has_reach_roots(&self, doc: &Document, node: NodeId, roots: &mut RestyleRoots, shallow_ok: bool) {
+        let mut consider = |a: NodeId, sibling: bool| {
             for subject in &self.has_subjects {
-                if compound_could_match_after_attr_change(&subject.compound, doc, a, "") {
-                    out.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
+                if (!sibling || subject.sibling_reach) && compound_could_match_after_attr_change(&subject.compound, doc, a, "") {
+                    if subject.local && shallow_ok && self.attr_narrowing {
+                        roots.shallow.insert(a);
+                    } else {
+                        roots.deep.insert(if subject.fanout { doc.get(a).parent.unwrap_or(a) } else { a });
+                    }
                 }
             }
         };
         let mut cur = Some(node);
         while let Some(a) = cur {
-            consider(a);
+            consider(a, false);
             let parent = doc.get(a).parent;
             if self.has_sibling_reach
                 && let Some(p) = parent
             {
                 for &sib in doc.get(p).children.iter().take_while(|&&c| c != a) {
-                    consider(sib);
+                    consider(sib, true);
                 }
             }
             cur = parent;
@@ -1606,7 +1624,7 @@ fn build_node_index<'a, 's>(
     let mut has_dependent = false;
     let mut has_sibling_reach = false;
     let mut sibling_sources: Vec<&CompoundSelector> = Vec::new();
-    let mut has_subjects: Vec<(&CompoundSelector, bool)> = Vec::new();
+    let mut has_subjects: Vec<(&CompoundSelector, bool, bool, bool)> = Vec::new();
     let mut structure_sensitive: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
     let mut structure_ends: Vec<(&CompoundSelector, &CompoundSelector)> = Vec::new();
     let mut ancestor_deps =
@@ -1673,7 +1691,7 @@ fn build_node_index<'a, 's>(
         has_dependent,
         has_subjects: has_subjects
             .into_iter()
-            .map(|(compound, fanout)| HasSubject { compound: wrap(compound), fanout })
+            .map(|(compound, fanout, sibling_reach, local)| HasSubject { compound: wrap(compound), fanout, sibling_reach, local })
             .collect(),
         has_sibling_reach,
         has_deps,
@@ -1939,7 +1957,7 @@ fn root_set_impl<'a>(
             && fresh_node_change_is_covered(doc, n, &change)
         {
             if index.has_dependent && index.change_can_flip_has(doc, n, change_written(&change)) {
-                index.has_reach_roots(doc, n, &mut roots.deep);
+                index.has_reach_roots(doc, n, &mut roots, shallow_ok);
             }
             continue;
         }
@@ -2017,7 +2035,7 @@ fn root_set_impl<'a>(
                 {
                     roots.deep.insert(doc.get(n).parent.unwrap_or(n));
                     if index.has_dependent && index.change_can_flip_has(doc, n, written) {
-                        index.has_reach_roots(doc, n, &mut roots.deep);
+                        index.has_reach_roots(doc, n, &mut roots, shallow_ok);
                     }
                     continue;
                 }
@@ -2052,7 +2070,7 @@ fn root_set_impl<'a>(
             }
         }
         if index.has_dependent && index.change_can_flip_has(doc, n, change_written(&change)) {
-            index.has_reach_roots(doc, n, &mut roots.deep);
+            index.has_reach_roots(doc, n, &mut roots, shallow_ok);
         }
     }
     roots
