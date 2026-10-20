@@ -1,121 +1,105 @@
-//! CSS Text L3 §5.5 `line-break` — soft wrap opportunities *inside* a run of
-//! text that carries no whitespace.
+//! CSS Text L3 §5.1/§5.5 — soft wrap opportunities *inside* a run of text that
+//! carries no collapsible whitespace.
 //!
-//! The inline line-breaker splits text on whitespace, which is enough for
-//! space-separated scripts but leaves CJK text as a single giant "word": a
-//! Japanese or Chinese paragraph has no spaces at all. UAX #14 allows a break
-//! between two ideographs, and `line-break` picks how strictly the rules around
-//! kana and punctuation are applied:
+//! The inline line-breaker splits text on document white space. What is left
+//! is a "word" in the CSS sense: it may still hold break opportunities — after
+//! a hyphen or dash, around a zero-width space, between two ideographs, inside
+//! a Thai phrase — and must *not* break where UAX #14 forbids it (NBSP, WORD
+//! JOINER, a non-breaking hyphen, a line starting with a closing bracket).
 //!
-//! | value     | line may start with                                     |
-//! |-----------|---------------------------------------------------------|
-//! | `strict`  | neither iteration marks nor small kana                   |
-//! | `normal`  | iteration marks (`々ゝヽ`), `〜`, `゠`                     |
-//! | `loose`   | the above + small kana, `ー`, `・`, `：`, `；`, `‐`, `–`   |
-//! | `anywhere`| any typographic character unit (CSS Text L4 §5.3)        |
+//! The classes and pair rules of UAX #14 come from `icu_segmenter` (Unicode
+//! `LineBreak` data for every code point, the dictionary/LSTM models for
+//! the SA scripts), tailored by `line-break` and `word-break`:
+//!
+//! | `line-break` | ICU strictness | line may start with                    |
+//! |--------------|----------------|----------------------------------------|
+//! | `strict`     | `Strict`       | neither iteration marks nor small kana |
+//! | `normal`     | `Normal`       | iteration marks, `〜`, `゠`             |
+//! | `loose`      | `Loose`        | the above + small kana, `ー`, `・` …    |
+//! | `anywhere`   | —              | any typographic character unit (L4 §5.3)|
 //!
 //! `auto` is UA-defined; Lumen resolves it to `normal`, matching the other
-//! engines.
+//! engines. `word-break: break-all` / `keep-all` select ICU's word option.
 //!
 //! This module is a table lookup only — it never measures text. The greedy
 //! "how much fits on this line" decision lives in `box_tree::wrap_inline_run`.
 
-use crate::style::LineBreak;
+use crate::style::{LineBreak, WordBreak};
+use icu_segmenter::options::{LineBreakOptions, LineBreakStrictness, LineBreakWordOption};
 
 /// Byte offsets inside `text` at which a soft wrap is allowed.
 ///
-/// Offsets are strictly between `0` and `text.len()` and always fall on a
-/// `char` boundary. The result is empty for text that carries no CJK character
-/// (unless `strictness` is [`LineBreak::Anywhere`], which breaks any script).
-pub fn break_opportunities(text: &str, strictness: LineBreak) -> Vec<usize> {
+/// `text` is one white-space-delimited word; offsets are strictly between `0`
+/// and `text.len()` and always fall on a `char` boundary. `line-break:
+/// anywhere` breaks any script around every grapheme cluster and ignores
+/// `word-break`.
+pub fn break_opportunities(text: &str, strictness: LineBreak, word_break: WordBreak) -> Vec<usize> {
     if strictness == LineBreak::Anywhere {
         return anywhere_opportunities(text);
     }
-    let mut out = Vec::new();
-    if text.chars().any(is_complex_script) {
-        out = complex_script_opportunities(text);
-    }
-    let mut prev: Option<(char, Class)> = None;
-    for (off, ch) in text.char_indices() {
-        let cls = classify(ch);
-        if let Some((prev_ch, prev_cls)) = prev
-            && allows_break(prev_ch, prev_cls, ch, cls, strictness)
-        {
-            out.push(off);
-        }
-        prev = Some((ch, cls));
-    }
-    out.sort_unstable();
-    out.dedup();
-    out
+    provider().opportunities(text, strictness, word_break)
 }
 
-/// Dictionary segmentation of the UAX #14 class SA scripts (Thai, Lao, Khmer,
-/// Myanmar), which write words without spaces. Trait-anchor (ADR-027): the
+/// Dictionary and rule based UAX #14 segmentation. Trait-anchor (ADR-027): the
 /// provisional implementation is `icu_segmenter`; layout only sees this trait.
-pub trait ComplexScriptSegmenter: Send + Sync {
-    /// Byte offsets strictly inside `run` (a maximal SA-script run) where a
-    /// line may break.
-    fn opportunities(&self, run: &str) -> Vec<usize>;
+pub trait LineBreakProvider: Send + Sync {
+    /// Byte offsets strictly inside `text` where a line may break, under the
+    /// given `line-break` strictness (never `Anywhere`) and `word-break`.
+    fn opportunities(&self, text: &str, strictness: LineBreak, word_break: WordBreak) -> Vec<usize>;
 }
 
-/// `icu_segmenter` with compiled LSTM/dictionary data.
-struct IcuSegmenter(icu_segmenter::LineSegmenterBorrowed<'static>);
+/// `icu_segmenter` with compiled rule and LSTM/dictionary data: one segmenter
+/// per (strictness, word option) pair, built on first use.
+struct IcuLineBreaker {
+    segmenters: [std::sync::OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>>; 9],
+}
 
-impl ComplexScriptSegmenter for IcuSegmenter {
-    fn opportunities(&self, run: &str) -> Vec<usize> {
-        self.0
-            .segment_str(run)
-            .filter(|&p| p > 0 && p < run.len())
-            .collect()
+impl IcuLineBreaker {
+    fn slot(strictness: LineBreakStrictness, word: LineBreakWordOption) -> usize {
+        let s = match strictness {
+            LineBreakStrictness::Loose => 0,
+            LineBreakStrictness::Normal => 1,
+            _ => 2,
+        };
+        let w = match word {
+            LineBreakWordOption::BreakAll => 1,
+            LineBreakWordOption::KeepAll => 2,
+            _ => 0,
+        };
+        s * 3 + w
     }
 }
 
-fn complex_segmenter() -> &'static dyn ComplexScriptSegmenter {
-    static SEG: std::sync::OnceLock<IcuSegmenter> = std::sync::OnceLock::new();
-    SEG.get_or_init(|| {
-        IcuSegmenter(icu_segmenter::LineSegmenter::new_auto(
-            icu_segmenter::options::LineBreakOptions::default(),
-        ))
-    })
-}
-
-/// Thai, Lao, Myanmar, Khmer (incl. Khmer symbols) and their combining marks.
-fn is_complex_script(ch: char) -> bool {
-    matches!(ch,
-        '\u{0E01}'..='\u{0E5B}' | '\u{0E81}'..='\u{0EDF}'
-        | '\u{1000}'..='\u{109F}' | '\u{1780}'..='\u{17FF}' | '\u{19E0}'..='\u{19FF}'
-        | '\u{A9E0}'..='\u{A9FF}' | '\u{AA60}'..='\u{AA7F}')
-}
-
-/// Opportunities inside each maximal SA-script run of `text`, in `text` offsets.
-fn complex_script_opportunities(text: &str) -> Vec<usize> {
-    let mut out = Vec::new();
-    let flush = |start: usize, end: usize, out: &mut Vec<usize>| {
-        out.extend(
-            complex_segmenter()
-                .opportunities(&text[start..end])
-                .into_iter()
-                .map(|o| o + start),
-        );
-    };
-    let mut run_start: Option<usize> = None;
-    for (off, ch) in text.char_indices() {
-        match (is_complex_script(ch), run_start) {
-            (true, None) => run_start = Some(off),
-            (false, Some(s)) => {
-                flush(s, off, &mut out);
-                run_start = None;
-            }
-            _ => {}
-        }
+impl LineBreakProvider for IcuLineBreaker {
+    fn opportunities(&self, text: &str, strictness: LineBreak, word_break: WordBreak) -> Vec<usize> {
+        let strictness = match strictness {
+            LineBreak::Strict => LineBreakStrictness::Strict,
+            LineBreak::Loose => LineBreakStrictness::Loose,
+            _ => LineBreakStrictness::Normal,
+        };
+        let word = match word_break {
+            WordBreak::BreakAll => LineBreakWordOption::BreakAll,
+            WordBreak::KeepAll => LineBreakWordOption::KeepAll,
+            _ => LineBreakWordOption::Normal,
+        };
+        let seg = self.segmenters[Self::slot(strictness, word)].get_or_init(|| {
+            let mut options = LineBreakOptions::default();
+            options.strictness = Some(strictness);
+            options.word_option = Some(word);
+            icu_segmenter::LineSegmenter::new_auto(options)
+        });
+        seg.segment_str(text).filter(|&p| p > 0 && p < text.len()).collect()
     }
-    if let Some(s) = run_start {
-        flush(s, text.len(), &mut out);
-    }
-    out
 }
 
+fn provider() -> &'static dyn LineBreakProvider {
+    static P: std::sync::OnceLock<IcuLineBreaker> = std::sync::OnceLock::new();
+    P.get_or_init(|| IcuLineBreaker { segmenters: Default::default() })
+}
+
+/// `line-break: anywhere` — a soft wrap opportunity around every typographic
+/// character unit (CSS Text L4 §5.3).
+///
 /// `line-break: anywhere` — a soft wrap opportunity around every typographic
 /// character unit (CSS Text L4 §5.3).
 ///
@@ -138,137 +122,6 @@ fn anywhere_opportunities(text: &str) -> Vec<usize> {
 
 /// U+200D ZERO WIDTH JOINER.
 const ZWJ: char = '\u{200D}';
-
-/// UAX #14 line-break class, reduced to what CJK wrapping needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Class {
-    /// Opening bracket / quote (`OP`) — a line must not start after it.
-    Open,
-    /// Closing bracket, ideographic comma and full stop (`CL`, `CP`, `IS`) —
-    /// a line must not start with it.
-    Close,
-    /// Exclamation and question marks (`EX`) — a line must not start with it.
-    Exclamation,
-    /// Non-starter (`NS`) — small kana, iteration marks and friends. Whether a
-    /// line may start with it depends on `line-break`.
-    NonStarter(NonStarter),
-    /// Currency and other prefixes (`PR`) — a line must not start after it.
-    Prefix,
-    /// Percent, degree and other postfixes (`PO`) — a line must not start with it.
-    Postfix,
-    /// Everything else, including plain ideographs.
-    Other,
-}
-
-/// Non-starter sub-classes, named after the least permissive `line-break`
-/// value that still lets a line start with the character.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NonStarter {
-    /// Small kana, `ー`, `・`, `：`, `；`, `‐`, `–` — only `loose` allows it.
-    LooseOnly,
-    /// Iteration marks (`々〻ゝゞヽヾ`), `〜`, `゠` — `normal` (hence `auto`)
-    /// already allows it; only `strict` forbids it.
-    NormalOk,
-}
-
-/// Is a break allowed between `before` and `after`?
-fn allows_break(
-    before: char,
-    before_cls: Class,
-    after: char,
-    after_cls: Class,
-    strictness: LineBreak,
-) -> bool {
-    // At least one side must be CJK. In pure Latin text whitespace, hyphenation
-    // and `overflow-wrap` already decide where the breaks are — adding UAX #14
-    // opportunities there would break words nobody asked to break.
-    if !is_cjk(before) && !is_cjk(after) {
-        return false;
-    }
-    !no_break_after(before_cls, strictness) && !no_break_before(after_cls, strictness)
-}
-
-/// Classes a line must not start *after*.
-fn no_break_after(cls: Class, strictness: LineBreak) -> bool {
-    match cls {
-        Class::Open => true,
-        // `loose` breaks the number away from its currency sign.
-        Class::Prefix => strictness != LineBreak::Loose,
-        _ => false,
-    }
-}
-
-/// Classes a line must not start *with*.
-fn no_break_before(cls: Class, strictness: LineBreak) -> bool {
-    match cls {
-        Class::Close | Class::Exclamation => true,
-        Class::Postfix => strictness != LineBreak::Loose,
-        Class::NonStarter(NonStarter::LooseOnly) => strictness != LineBreak::Loose,
-        Class::NonStarter(NonStarter::NormalOk) => strictness == LineBreak::Strict,
-        _ => false,
-    }
-}
-
-/// UAX #14 class of a single character (only the CJK-relevant subset).
-fn classify(ch: char) -> Class {
-    match ch {
-        // OP — opening brackets and quotes, halfwidth and fullwidth.
-        '(' | '[' | '{' | '‘' | '“' | '⦅' | '｟' | '｢' | '（' | '［' | '｛' | '〔' | '〈'
-        | '《' | '「' | '『' | '【' | '〖' | '〘' | '〚' | '〝' => Class::Open,
-        // CL / CP / IS — closing brackets, ideographic comma and full stop.
-        ')' | ']' | '}' | '’' | '”' | '⦆' | '｠' | '｣' | '）' | '］' | '｝' | '〕' | '〉'
-        | '》' | '」' | '』' | '】' | '〗' | '〙' | '〛' | '〞' | '、' | '。' | '，' | '．'
-        | '､' | '｡' | ',' | '.' => Class::Close,
-        // EX — exclamation and question marks.
-        '!' | '?' | '！' | '？' | '‼' | '⁇' | '⁈' | '⁉' => Class::Exclamation,
-        // NS — small kana and the prolonged sound mark stay with the previous
-        // syllable unless the author asked for `loose`.
-        'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ' | 'ゃ' | 'ゅ' | 'ょ' | 'ゎ' | 'ゕ' | 'ゖ'
-        | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ' | 'ッ' | 'ャ' | 'ュ' | 'ョ' | 'ヮ' | 'ヵ' | 'ヶ'
-        | 'ー' | '・' | '：' | '；' | ':' | ';' | '‐' | '–' => {
-            Class::NonStarter(NonStarter::LooseOnly)
-        }
-        // NS — iteration marks and wave-dash-like connectors.
-        '々' | '〻' | 'ゝ' | 'ゞ' | 'ヽ' | 'ヾ' | '〜' | '～' | '゠' => {
-            Class::NonStarter(NonStarter::NormalOk)
-        }
-        // Small katakana phonetic extensions (U+31F0…U+31FF).
-        '\u{31F0}'..='\u{31FF}' => Class::NonStarter(NonStarter::LooseOnly),
-        // PR — currency and other prefixes.
-        '$' | '£' | '€' | '¥' | '＄' | '￥' | '￡' | '￠' | '＃' => Class::Prefix,
-        // PO — percent, degree and other postfixes.
-        '%' | '‰' | '°' | '′' | '″' | '％' | '℃' | '℉' => Class::Postfix,
-        _ => Class::Other,
-    }
-}
-
-/// Does the character belong to a CJK / kana / hangul block?
-///
-/// Used as the gate for the whole module: a break opportunity is only produced
-/// when at least one of the two neighbouring characters is CJK, so Latin text
-/// keeps wrapping exactly as before.
-fn is_cjk(ch: char) -> bool {
-    matches!(ch as u32,
-        0x1100..=0x11FF   // Hangul Jamo
-        | 0x2E80..=0x2EFF // CJK Radicals Supplement
-        | 0x2F00..=0x2FDF // Kangxi Radicals
-        | 0x3000..=0x303F // CJK Symbols and Punctuation
-        | 0x3040..=0x30FF // Hiragana + Katakana
-        | 0x3130..=0x318F // Hangul Compatibility Jamo
-        | 0x31F0..=0x31FF // Katakana Phonetic Extensions
-        | 0x3200..=0x32FF // Enclosed CJK Letters and Months
-        | 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
-        | 0x4E00..=0x9FFF // CJK Unified Ideographs
-        | 0xA000..=0xA4CF // Yi Syllables
-        | 0xAC00..=0xD7AF // Hangul Syllables
-        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
-        | 0xFE30..=0xFE4F // CJK Compatibility Forms
-        | 0xFF00..=0xFF60 // Halfwidth and Fullwidth Forms (fullwidth ASCII)
-        | 0xFF61..=0xFFDC // Halfwidth kana and jamo
-        | 0xFFE0..=0xFFE6 // Fullwidth signs
-        | 0x20000..=0x2FA1F // CJK Unified Ideographs Extension B…F
-    )
-}
 
 /// Combining marks and variation selectors that must not be split from the
 /// base character. Covers the common ranges, not the full Unicode property.
@@ -297,7 +150,7 @@ mod tests {
     /// Byte offsets → char indices, so the assertions stay readable for
     /// multi-byte CJK text.
     fn char_breaks(text: &str, strictness: LineBreak) -> Vec<usize> {
-        let opps = break_opportunities(text, strictness);
+        let opps = break_opportunities(text, strictness, WordBreak::Normal);
         text.char_indices()
             .enumerate()
             .filter(|(_, (off, _))| opps.contains(off))
@@ -307,16 +160,16 @@ mod tests {
 
     #[test]
     fn latin_text_has_no_opportunities() {
-        assert!(break_opportunities("Hello", LineBreak::Auto).is_empty());
-        assert!(break_opportunities("longwordwithout", LineBreak::Strict).is_empty());
+        assert!(break_opportunities("Hello", LineBreak::Auto, WordBreak::Normal).is_empty());
+        assert!(break_opportunities("longwordwithout", LineBreak::Strict, WordBreak::Normal).is_empty());
         // Latin punctuation must not open a break either.
-        assert!(break_opportunities("f(x)=y!", LineBreak::Normal).is_empty());
+        assert!(break_opportunities("f(x)=y!", LineBreak::Normal, WordBreak::Normal).is_empty());
     }
 
     #[test]
     fn thai_run_breaks_at_dictionary_words() {
         let text = "สวัสดีครับผมชื่อสมชายยินดีที่ได้รู้จัก";
-        let opps = break_opportunities(text, LineBreak::Auto);
+        let opps = break_opportunities(text, LineBreak::Auto, WordBreak::Normal);
         assert!(opps.len() >= 3, "{opps:?}");
         assert!(opps.iter().all(|&o| text.is_char_boundary(o)));
     }
@@ -324,13 +177,13 @@ mod tests {
     #[test]
     fn khmer_run_breaks() {
         let text = "ខ្ញុំចូលចិត្តរៀនភាសាខ្មែរណាស់";
-        assert!(!break_opportunities(text, LineBreak::Auto).is_empty());
+        assert!(!break_opportunities(text, LineBreak::Auto, WordBreak::Normal).is_empty());
     }
 
     #[test]
     fn empty_and_single_char() {
-        assert!(break_opportunities("", LineBreak::Auto).is_empty());
-        assert!(break_opportunities("漢", LineBreak::Auto).is_empty());
+        assert!(break_opportunities("", LineBreak::Auto, WordBreak::Normal).is_empty());
+        assert!(break_opportunities("漢", LineBreak::Auto, WordBreak::Normal).is_empty());
     }
 
     #[test]
@@ -342,7 +195,7 @@ mod tests {
     #[test]
     fn opportunities_are_char_boundaries() {
         let text = "日本語版";
-        for off in break_opportunities(text, LineBreak::Auto) {
+        for off in break_opportunities(text, LineBreak::Auto, WordBreak::Normal) {
             assert!(text.is_char_boundary(off), "offset {off} splits a char");
             assert!(off > 0 && off < text.len());
         }
@@ -362,25 +215,27 @@ mod tests {
     }
 
     #[test]
-    fn small_kana_starts_a_line_only_in_loose() {
-        // きゃく — ゃ is a small kana, so `strict`/`normal` keep it glued.
+    fn small_kana_starts_a_line_unless_strict() {
+        // きゃく — ゃ is a small kana: `strict` keeps it glued to the previous
+        // syllable, `normal` (hence `auto`) and `loose` break before it
+        // (css/css-text/line-break/line-break-normal-011).
         assert_eq!(char_breaks("きゃく", LineBreak::Strict), vec![2]);
-        assert_eq!(char_breaks("きゃく", LineBreak::Normal), vec![2]);
-        assert_eq!(char_breaks("きゃく", LineBreak::Auto), vec![2]);
+        assert_eq!(char_breaks("きゃく", LineBreak::Normal), vec![1, 2]);
+        assert_eq!(char_breaks("きゃく", LineBreak::Auto), vec![1, 2]);
         assert_eq!(char_breaks("きゃく", LineBreak::Loose), vec![1, 2]);
     }
 
     #[test]
     fn prolonged_sound_mark_follows_small_kana_rule() {
-        assert_eq!(char_breaks("カード", LineBreak::Normal), vec![2]);
-        assert_eq!(char_breaks("カード", LineBreak::Loose), vec![1, 2]);
+        assert_eq!(char_breaks("カード", LineBreak::Strict), vec![2]);
+        assert_eq!(char_breaks("カード", LineBreak::Normal), vec![1, 2]);
     }
 
     #[test]
-    fn iteration_mark_starts_a_line_unless_strict() {
+    fn iteration_mark_starts_a_line_only_in_loose() {
         // 人々 — 々 repeats the previous ideograph.
         assert_eq!(char_breaks("人々人", LineBreak::Strict), vec![2]);
-        assert_eq!(char_breaks("人々人", LineBreak::Normal), vec![1, 2]);
+        assert_eq!(char_breaks("人々人", LineBreak::Normal), vec![2]);
         assert_eq!(char_breaks("人々人", LineBreak::Loose), vec![1, 2]);
     }
 
@@ -392,13 +247,10 @@ mod tests {
     }
 
     #[test]
-    fn postfix_and_prefix_relax_in_loose() {
-        // 「50％」 — % must not start a line unless `loose`.
+    fn postfix_and_prefix_stay_attached() {
+        // 「50％」 — % must not start a line, ￥ must not end one.
         assert_eq!(char_breaks("五％五", LineBreak::Normal), vec![2]);
-        assert_eq!(char_breaks("五％五", LineBreak::Loose), vec![1, 2]);
-        // ￥ must not end a line unless `loose`.
         assert_eq!(char_breaks("五￥五", LineBreak::Normal), vec![1]);
-        assert_eq!(char_breaks("五￥五", LineBreak::Loose), vec![1, 2]);
     }
 
     #[test]
@@ -431,5 +283,51 @@ mod tests {
     fn hangul_and_kana_are_cjk() {
         assert_eq!(char_breaks("한국어", LineBreak::Auto), vec![1, 2]);
         assert_eq!(char_breaks("カタカナ", LineBreak::Auto), vec![1, 2, 3]);
+    }
+
+    fn chars_at(text: &str, word_break: WordBreak) -> Vec<usize> {
+        let opps = break_opportunities(text, LineBreak::Auto, word_break);
+        text.char_indices()
+            .enumerate()
+            .filter(|(_, (off, _))| opps.contains(off))
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    #[test]
+    fn breaks_after_hyphens_and_dashes_in_latin_words() {
+        // Hyphen-minus, HYPHEN (U+2010), EN DASH, VERTICAL LINE and ZWSP end a line.
+        assert_eq!(char_breaks("ab-cd", LineBreak::Auto), vec![3]);
+        assert_eq!(char_breaks("ab\u{2010}cd", LineBreak::Auto), vec![3]);
+        assert_eq!(char_breaks("ab\u{2013}cd", LineBreak::Auto), vec![3]);
+        assert_eq!(char_breaks("ab|cd", LineBreak::Auto), vec![3]);
+        assert_eq!(char_breaks("ab\u{200B}cd", LineBreak::Auto), vec![3]);
+    }
+
+    #[test]
+    fn glue_and_joiners_forbid_a_break() {
+        for glue in [
+            '\u{00A0}', '\u{202F}', '\u{2007}', '\u{2011}', '\u{2060}', '\u{FEFF}', '\u{180E}',
+            '\u{034F}', '\u{0F08}',
+        ] {
+            let text = format!("ab{glue}cd");
+            assert!(
+                break_opportunities(&text, LineBreak::Auto, WordBreak::Normal).is_empty(),
+                "U+{:04X}",
+                glue as u32
+            );
+        }
+    }
+
+    #[test]
+    fn keep_all_removes_ideograph_breaks() {
+        assert_eq!(chars_at("日本語版", WordBreak::Normal), vec![1, 2, 3]);
+        assert!(chars_at("日本語版", WordBreak::KeepAll).is_empty());
+    }
+
+    #[test]
+    fn break_all_breaks_between_letters() {
+        assert_eq!(chars_at("abc", WordBreak::BreakAll), vec![1, 2]);
+        assert!(chars_at("abc", WordBreak::Normal).is_empty());
     }
 }

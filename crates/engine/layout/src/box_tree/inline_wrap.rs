@@ -962,13 +962,14 @@ pub(crate) fn wrap_inline_run_indented(
             // the word. CJK text carries no spaces, so `split_css_whitespace` hands
             // us whole paragraphs here; without this the run would either
             // overflow the container or be pushed onto a line of its own.
-            // Only relevant when the word does not fit as-is; `word-break:
-            // keep-all` suppresses CJK breaking entirely, except under
-            // `line-break: anywhere`, which overrides every prohibition.
+            // Only relevant when the word does not fit as-is. The opportunities
+            // are UAX #14's (hyphens, dashes, ZWSP, ideographs, SA scripts),
+            // tailored by `line-break` and `word-break`.
             let lb_avail = max_width - current_x - gap - pre;
-            let lb_allowed = word_break != WordBreak::KeepAll || line_break == LineBreak::Anywhere;
-            let lb_opps = if breakable && lb_allowed && word_w > lb_avail {
-                crate::line_break::break_opportunities(&display_word, line_break)
+            let ow_chars = word_break == WordBreak::BreakWord
+                || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere);
+            let lb_opps = if breakable && word_w > lb_avail {
+                crate::line_break::break_opportunities(&display_word, line_break, word_break)
             } else {
                 Vec::new()
             };
@@ -1000,6 +1001,16 @@ pub(crate) fn wrap_inline_run_indented(
                             .copied()
                             .find(|&o| o > start)
                             .unwrap_or(display_word.len());
+                        // CSS Text L3 §8.1: the other opportunities are used
+                        // first; a chunk still wider than the line is cut by
+                        // characters under `overflow-wrap: break-word|anywhere`.
+                        if ow_chars {
+                            let whole = &display_word[start..end];
+                            let w = measure_text_w_varied(whole, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                            if w > avail {
+                                end = start + char_break_offset(whole, avail, style.font_size, ls, &style.font_family, m);
+                            }
+                        }
                     }
                     let chunk = &display_word[start..end];
                     let chunk_w = measure_text_w_varied(chunk, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
@@ -1152,9 +1163,7 @@ pub(crate) fn wrap_inline_run_indented(
             // CSS Text L3 §8.1: overflow-wrap: break-word / anywhere — char-break
             // words that are wider than the container (won't fit on any line).
             // word-break: break-word is a legacy alias for overflow-wrap: break-word.
-            let ow_char_break = (word_break == WordBreak::BreakWord
-                || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere))
-                && word_w > max_width;
+            let ow_char_break = ow_chars && word_w > max_width;
             if ow_char_break {
                 let line_gap_ow = if current_line.is_empty() { 0.0 } else { word_inter };
                 current_x += line_gap_ow + pre;
