@@ -1411,8 +1411,12 @@ pub(super) fn dispatch_box(
                         .then(|| s.row_gap.resolve(em, grid_definite_height, viewport).unwrap_or(0.0).max(0.0)),
                 );
                 b.subgrid_tracks = crate::subgrid::peek_tracks();
+                // CSS Grid L3 §2: у `grid-lanes` с полосами-столбцами шаблон строк игнорируется —
+                // строки здесь по одной на элемент, высоту им даёт содержимое.
+                let lanes_s = super::grid_lanes::lanes_style(&s);
+                let grid_s = lanes_s.as_ref().unwrap_or(&s);
                 match grid::build_grid_init(
-                    &b.children, &s, content_x, content_y, content_width, grid_definite_height,
+                    &b.children, grid_s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
                     size_contained, is_positioned, pcb, measurer, None, legend_idx,
                 ) {

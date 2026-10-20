@@ -102,6 +102,9 @@ pub(super) struct GridInit {
     /// GRID-RTL: горизонтальный контейнер с `direction: rtl` — столбцы считаются от правого
     /// края content box (смещения `col_offsets` остаются логическими, зеркалит `cell_origin`).
     pub(super) rtl: bool,
+    /// `display: grid-lanes` с полосами-столбцами: выбор полосы и позиции элементов вдоль потока
+    /// (`grid_lanes`). Строка `k` здесь — это элемент `k`, а не дорожка шаблона.
+    pub(super) lanes: Option<super::grid_lanes::LanesState>,
 }
 
 /// Базовая линия item'а, участвующего в baseline-группе строки.
@@ -263,6 +266,11 @@ fn step_probe_item(
 ) -> StepOutcome {
     let k = frame.k;
     let i = frame.init.item_idxs[k];
+    if let Some(lanes) = frame.init.lanes.as_mut() {
+        // Grid L3 §3.1: полоса зависит от высот уже уложенных элементов — выбор прямо перед замером.
+        let (first, span) = lanes.choose(k);
+        frame.init.placements[k] = (first as u32 + 1, (first + span) as u32 + 1, k as u32 + 1, k as u32 + 2);
+    }
     let (cs, ce, rs, re) = frame.init.placements[k];
     let n_cols = frame.init.n_cols;
     let n_rows = frame.init.n_rows;
@@ -411,6 +419,13 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         let item_h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
         if item_h > frame.init.row_heights[r0] {
             frame.init.row_heights[r0] = item_h;
+        }
+    }
+    if frame.init.lanes.is_some() {
+        let h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
+        frame.init.row_heights[k] = h;
+        if let Some(lanes) = frame.init.lanes.as_mut() {
+            lanes.settle(k, h);
         }
     }
     record_flex_contrib(frame, i, viewport);
@@ -669,6 +684,13 @@ fn maximize_bounded_rows(init: &mut GridInit, viewport: Size) {
 /// offsets the Final phase positions cells against. Copied verbatim from the
 /// removed code's tail between the two loops.
 fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
+    if let Some(lanes) = &init.lanes {
+        // Строка `k` — элемент `k`: смещение — его позиция в полосе, высота содержимого — самый
+        // длинный поток (без промежутка после последнего элемента).
+        init.row_offsets = lanes.pos.clone();
+        init.y_off = lanes.extent;
+        return;
+    }
     let n_rows = init.n_rows;
     let row_gap = init.row_gap;
     let total_row_gap = row_gap * super::grid::gutter_count(&init.row_collapsed, n_rows as usize) as f32;
@@ -1358,7 +1380,7 @@ fn record_own_tracks(frame: &mut Frame) {
     if tracks.cols.is_none() && init.s.grid_template_col_auto_repeat.is_none() {
         tracks.cols = spans(&init.col_offsets, &init.col_widths, init.n_cols);
     }
-    if tracks.rows.is_none() && init.s.grid_template_row_auto_repeat.is_none() {
+    if tracks.rows.is_none() && init.s.grid_template_row_auto_repeat.is_none() && init.lanes.is_none() {
         tracks.rows = spans(&init.row_offsets, &init.row_heights, init.n_rows);
     }
     frame.b.subgrid_tracks = (tracks.cols.is_some() || tracks.rows.is_some()).then(|| Box::new(tracks));

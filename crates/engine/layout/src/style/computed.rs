@@ -42,7 +42,7 @@ use crate::style::{
     FlexWrap, FloatSide, FontFeatureSetting, FontOpticalSizing, FontPalette, FontSizeAdjust,
     FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
     FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
-    ForcedColorAdjust, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, NameFill, Hyphens, ImageRendering,
+    ForcedColorAdjust, GridAutoFlow, GridLanes, GridLine, GridRepeat, GridTrackSize, NameFill, Hyphens, ImageRendering,
     InterpolateSizeMode, Isolation, IterationCount, Length, LengthOrAuto, LineBreak,
     ListStylePosition, ListStyleType, MaskLayer, MasonryAutoFlow, MixBlendMode, ObjectFit,
     ObjectPosition, OffsetRotate, OutlineColor, OutlineStyle, Overflow, OverflowAnchor, OverflowClipMarginBox, OverflowWrap,
@@ -917,6 +917,9 @@ pub struct ComputedStyle {
     /// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls placement order in
     /// masonry containers. Non-inherited. Default `DefiniteFirst`.
     pub masonry_auto_flow: MasonryAutoFlow,
+    /// CSS Grid Layout L3 §2–3 — `display: grid-lanes` и его `flow-tolerance`,
+    /// `grid-lanes-direction`, `grid-lanes-pack`. Non-inherited.
+    pub grid_lanes: GridLanes,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
     pub grid_auto_columns: GridTrackSize,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-rows`. Non-inherited. Default `Auto`.
@@ -1590,6 +1593,7 @@ impl ComputedStyle {
             grid_template_row_subgrid_fill: None,
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
+            grid_lanes: GridLanes::default(),
             grid_auto_columns: GridTrackSize::Auto,
             grid_auto_rows: GridTrackSize::Auto,
             grid_column_start: GridLine::Auto,
@@ -2022,6 +2026,7 @@ impl ComputedStyle {
             grid_template_row_subgrid_fill: None,
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
+            grid_lanes: GridLanes::default(),
             grid_auto_columns: GridTrackSize::Auto,
             grid_auto_rows: GridTrackSize::Auto,
             grid_column_start: GridLine::Auto,

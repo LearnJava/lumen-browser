@@ -476,7 +476,9 @@ fn grid_col_sum_by_tracks(
             || matches!(t, GridTrackSize::Minmax(min, max)
                 if matches!(**min, GridTrackSize::Auto) && matches!(**max, GridTrackSize::Length(_)))
     });
+    let lanes = s.grid_lanes.enabled && super::grid_lanes::lanes_axis(s) == crate::style::LanesAxis::Column;
     let needs_tracks = column_flow
+        || lanes
         || has_bounded_track
         || item_idxs.iter().any(|&i| {
             let st = &b.children[i].style;
@@ -516,17 +518,29 @@ fn grid_col_sum_by_tracks(
         (0..n_cols).map(|c| super::grid::grid_track(c as u32, template, &s.grid_auto_columns).clone()).collect();
     let as_auto: Vec<GridTrackSize> =
         tracks.iter().map(|t| if t.flex_factor().is_some() { GridTrackSize::Auto } else { t.clone() }).collect();
-    let kinds = gac::classify_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &|l| {
-        l.resolve(s.font_size, None, viewport)
-    })?;
+    let resolve = |l: &Length| l.resolve(s.font_size, None, viewport);
+    let kinds = if lanes {
+        gac::classify_all_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &resolve)?
+    } else {
+        gac::classify_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &resolve)?
+    };
     let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
     let mut contribs = Vec::new();
     let measure = |c: &LayoutBox| {
         let w = per_item(c);
         (w, w)
     };
+    // Grid L3 §3.4: a lanes item with no definite lane counts in every lane it could take.
+    let lane_sizing = lanes.then(|| {
+        let items = super::grid_lanes::lane_items(&b.children, &item_idxs, col_axis);
+        super::grid_lanes::sizing_items(&item_idxs, &placements, &items, n_cols)
+    });
+    let (size_idxs, size_places) = match &lane_sizing {
+        Some((i, p)) => (i.as_slice(), p.as_slice()),
+        None => (item_idxs.as_slice(), placements.as_slice()),
+    };
     gac::collect_col_contributions(
-        &b.children, &item_idxs, &placements, &s.grid_template_col_line_names, n_cols, 0, 0.0, 0.0, viewport,
+        &b.children, size_idxs, size_places, &s.grid_template_col_line_names, n_cols, 0, 0.0, 0.0, viewport,
         &measure, &mut contribs,
     );
     let (_, mut limit) = gac::base_and_limit(&kinds, &contribs, gap);

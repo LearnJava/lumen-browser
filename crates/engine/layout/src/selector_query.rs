@@ -1284,6 +1284,8 @@ fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
         Display::InlineBlock => "inline-block",
         Display::Flex => "flex",
         Display::InlineFlex => "inline-flex",
+        Display::Grid if style.grid_lanes.enabled => "grid-lanes",
+        Display::InlineGrid if style.grid_lanes.enabled => "inline-grid-lanes",
         Display::Grid => "grid",
         Display::InlineGrid => "inline-grid",
         Display::Table => "table",
