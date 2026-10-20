@@ -214,8 +214,8 @@ use crate::display_list_metrics::{
 };
 use crate::app::about_to_wait::{PendingEval, PendingWait};
 use crate::doc_extract::{
-    DynamicCssBase, collect_style_attr_csp_blocked, extract_style_blocks, extract_title,
-    inline_style_fingerprint, stylesheet_link_fingerprint, window_title,
+    DynamicCssBase, collect_style_attr_csp_blocked, extract_style_blocks, extract_style_chunks,
+    extract_title, inline_style_fingerprint, merge_sheet_chunks, stylesheet_link_fingerprint, window_title,
 };
 use crate::input::dnd::DndState;
 use crate::page_pipeline::{
@@ -277,11 +277,11 @@ use crate::window_metrics::{FullscreenPoll, content_layout_viewport, decide_full
 use crate::page_state::{PARKED_PAGES_MAX, PageSnapshot, ParkedPage};
 use crate::subresources::{decode_image, fetch_and_decode_images, fetch_font_bytes, fetch_image_bytes};
 use crate::stylesheets::{
-    StylesheetNodeEntry, build_stylesheet_node_registry, inline_css_imports, link_media_matches,
-    load_linked_stylesheets, print_media_context, screen_media_context,
+    StylesheetNodeEntry, build_stylesheet_node_registry, link_media_matches,
+    load_linked_stylesheets, print_media_context, resolve_inline_style_imports, screen_media_context,
 };
 #[cfg(test)]
-use crate::stylesheets::{collect_link_hrefs, contains_ignore_ascii_case};
+use crate::stylesheets::{collect_link_hrefs, contains_ignore_ascii_case, inline_css_imports};
 use crate::parallel_fetch::parallel_map;
 use crate::resource_base::{ResolvedResource, ResourceBase, SW_FETCH_INTERCEPTOR, path_to_file_url};
 use crate::input::keybindings::{KeyCommand, TypeableField, keybinding_for};

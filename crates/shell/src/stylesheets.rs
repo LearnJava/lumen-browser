@@ -94,7 +94,11 @@ pub(crate) fn document_encoding(doc: &Document) -> lumen_encoding::Encoding {
 /// [`inline_css_imports`] делает саму проверку; этот проход лишь передаёт ей
 /// уже посчитанные `csp_gate`/`self_origin` и подмешивает возвращённый
 /// список в общий `blocked_by_style_src`.
-pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (String, Vec<(NodeId, bool)>, Vec<String>) {
+///
+/// BUG-1413: тексты листов возвращаются кусками по узлам `<link>` (с переводом строки
+/// в конце каждого), а не одной строкой — порядок относительно инлайновых
+/// `<style>` выбирает `doc_extract::merge_sheet_chunks`.
+pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> (SheetChunks, Vec<(NodeId, bool)>, Vec<String>) {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
     let doc_encoding = document_encoding(doc);
@@ -167,15 +171,18 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
         ))
     });
 
-    let mut css = String::new();
+    let mut css = Vec::with_capacity(parts.len());
     let mut outcomes = Vec::with_capacity(parts.len());
     let mut blocked_by_style_src = Vec::new();
     for ((node, _, _, _), part) in hrefs.iter().zip(parts) {
         match part {
             Ok((text, blocked_imports)) => {
                 outcomes.push((*node, true));
-                css.push_str(&text);
-                css.push('\n');
+                // BUG-1413: кусок по узлу — склейка с инлайновыми `<style>` идёт
+                // в порядке документа (`doc_extract::merge_sheet_chunks`).
+                let mut text = text;
+                text.push('\n');
+                css.push((*node, text));
                 blocked_by_style_src.extend(blocked_imports);
             }
             Err(blocked_url) => {
@@ -187,6 +194,54 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
         }
     }
     (css, outcomes, blocked_by_style_src)
+}
+
+/// Тексты листов по узлам-владельцам в порядке документа (BUG-1413).
+pub(crate) type SheetChunks = Vec<(NodeId, String)>;
+
+/// BUG-1413: разворачивает `@import` каждого инлайнового `<style>` отдельно.
+///
+/// `@import` действует только в начале СВОЕГО листа, поэтому импорты кладутся
+/// перед текстом именно этого `<style>`, а не одним префиксом на весь документ
+/// (иначе импортированный лист обгонял бы `<link>`, стоящий выше `<style>`).
+/// Возвращает листы с уже подставленными импортами, префикс каждого (его
+/// хранит `DynamicCssBase`, чтобы пересборка после поздней вставки `<style>`
+/// шла без сети) и общий список URL, заблокированных `style-src`.
+#[allow(clippy::too_many_arguments)] // fetch context threaded through, same shape as `inline_css_imports`
+pub(crate) fn resolve_inline_style_imports(
+    chunks: &[(NodeId, String)],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
+    referring_encoding: lumen_encoding::Encoding,
+    csp_gate: Option<(&[CspPolicy], Option<&Origin>)>,
+    referrer_policy: lumen_network::ReferrerPolicy,
+) -> (SheetChunks, std::collections::HashMap<NodeId, String>, Vec<String>) {
+    let mut resolved = Vec::with_capacity(chunks.len());
+    let mut prefixes = std::collections::HashMap::new();
+    let mut blocked = Vec::new();
+    for (id, text) in chunks {
+        let (full, blocked_imports) = inline_css_imports(
+            text,
+            base,
+            sink,
+            cookie_jar.clone(),
+            media_ctx,
+            &mut std::collections::HashSet::new(),
+            0,
+            referring_encoding,
+            csp_gate,
+            referrer_policy,
+        );
+        blocked.extend(blocked_imports);
+        // `inline_css_imports` возвращает `<импорты> + <исходный текст>`.
+        if full.len() > text.len() {
+            prefixes.insert(*id, full[..full.len() - text.len()].to_owned());
+        }
+        resolved.push((*id, full));
+    }
+    (resolved, prefixes, blocked)
 }
 
 /// Загружает текст одной таблицы стилей, разрешённой относительно `base`.
