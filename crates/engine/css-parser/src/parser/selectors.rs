@@ -1952,7 +1952,7 @@ fn canonical_selector_list_with(input: &str, nested: bool, implicit_amp: bool) -
         };
         // Верхнеуровневый `&` — это `:scope` (CSS Nesting 1 §3.1): допустим и вне вложенности.
         let substituted = replace_outside_strings(rest, '&', NESTING_MARKER);
-        let parsed = if rest.is_empty() || !is_valid_selector_list(&substituted) {
+        let parsed = if rest.is_empty() || type_selector_after_nesting(&substituted) || !is_valid_selector_list(&substituted) {
             None
         } else {
             Parser::new(&substituted).parse_selector_list_strict()
@@ -1975,6 +1975,13 @@ fn canonical_selector_list_with(input: &str, nested: bool, implicit_amp: bool) -
         }
     }
     if out.is_empty() { None } else { Some(out.join(", ")) }
+}
+
+/// `&div` / `&*`: тип-селектор не может следовать за `&` в одном compound (CSS Nesting 1 §3.1).
+fn type_selector_after_nesting(substituted: &str) -> bool {
+    substituted
+        .match_indices(NESTING_MARKER)
+        .any(|(at, m)| matches!(substituted[at + m.len()..].chars().next(), Some(c) if c.is_ascii_alphabetic() || c == '*'))
 }
 
 fn collapse_selector_ws(s: &str) -> String {

@@ -294,3 +294,10 @@ fn top_level_ampersand_rule_is_visible_in_css_rules() {
     assert_eq!(t.rules.len(), 2);
     assert_eq!(t.rules[1].prelude, "&");
 }
+
+#[test]
+fn nested_selector_with_type_after_ampersand_is_dropped() {
+    let t = tree(".foo { &div { color: green } &.ok { color: red } & div { color: blue } }");
+    let kids: Vec<_> = t.rules[0].children.iter().map(|c| c.prelude.as_str()).collect();
+    assert_eq!(kids, ["&.ok", "& div"]);
+}
