@@ -373,6 +373,26 @@ impl GridTrackSize {
         parse_length_q(s.trim(), is_quirks).map(Self::Length)
     }
 
+    /// Parse the `<track-size>+` value of `grid-auto-columns` / `grid-auto-rows` (CSS Grid L1 §7.6).
+    /// `None` (declaration ignored) for an empty value or any token that is not a `<track-size>`:
+    /// `repeat()`, `subgrid`, `masonry` and line names are not allowed here.
+    pub(in crate::style) fn parse_auto_list(s: &str, is_quirks: bool) -> Option<Vec<Self>> {
+        let tokens = split_track_list_tokens(s.trim());
+        if tokens.is_empty() {
+            return None;
+        }
+        tokens
+            .into_iter()
+            .map(|t| {
+                let lc = t.trim().to_ascii_lowercase();
+                if lc == "subgrid" || lc == "masonry" || lc.starts_with("repeat(") || lc.starts_with('[') {
+                    return None;
+                }
+                Self::parse_single(t, is_quirks)
+            })
+            .collect()
+    }
+
     /// Parse a track-list value string into a Vec of GridTrackSize.
     /// Handles `repeat(N, <track-list>)` by expanding.
     /// `subgrid` as the entire value returns `vec![Subgrid]` (sentinel for the whole axis).

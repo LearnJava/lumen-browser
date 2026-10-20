@@ -2003,8 +2003,8 @@ fn grid_shorthand_auto_flow_columns_form() {
     assert_eq!(s.grid_template_rows.len(), 2);
     assert!(s.grid_template_columns.is_empty());
     assert_eq!(s.grid_auto_flow, GridAutoFlow::ColumnDense);
-    assert_eq!(s.grid_auto_columns, GridTrackSize::Length(Length::Px(40.0)));
-    assert_eq!(s.grid_auto_rows, GridTrackSize::Auto);
+    assert_eq!(s.grid_auto_columns, vec![GridTrackSize::Length(Length::Px(40.0))]);
+    assert_eq!(s.grid_auto_rows, Vec::<GridTrackSize>::new());
 }
 
 /// `grid: auto-flow <auto-rows> / <columns>` — рядный поток.
@@ -2012,7 +2012,7 @@ fn grid_shorthand_auto_flow_columns_form() {
 fn grid_shorthand_auto_flow_rows_form() {
     let s = grid_div_style("div { display: grid; grid: auto-flow 60px / 1fr 1fr 1fr; }");
     assert_eq!(s.grid_auto_flow, GridAutoFlow::Row);
-    assert_eq!(s.grid_auto_rows, GridTrackSize::Length(Length::Px(60.0)));
+    assert_eq!(s.grid_auto_rows, vec![GridTrackSize::Length(Length::Px(60.0))]);
     assert_eq!(s.grid_template_columns.len(), 3);
     assert!(s.grid_template_rows.is_empty());
 }
@@ -2022,7 +2022,7 @@ fn grid_shorthand_auto_flow_rows_form() {
 fn grid_shorthand_auto_flow_dense_any_order() {
     let s = grid_div_style("div { display: grid; grid: dense auto-flow / 1fr; }");
     assert_eq!(s.grid_auto_flow, GridAutoFlow::RowDense);
-    assert_eq!(s.grid_auto_rows, GridTrackSize::Auto);
+    assert_eq!(s.grid_auto_rows, Vec::<GridTrackSize>::new());
 }
 
 /// `grid: <template>` форма сбрасывает `grid-auto-*`.
@@ -2033,8 +2033,8 @@ fn grid_shorthand_template_form_resets_auto() {
                  grid-auto-columns: 8px; grid: "a b" 20px / 1fr 1fr; }"#,
     );
     assert_eq!(s.grid_auto_flow, GridAutoFlow::Row);
-    assert_eq!(s.grid_auto_rows, GridTrackSize::Auto);
-    assert_eq!(s.grid_auto_columns, GridTrackSize::Auto);
+    assert_eq!(s.grid_auto_rows, Vec::<GridTrackSize>::new());
+    assert_eq!(s.grid_auto_columns, Vec::<GridTrackSize>::new());
     assert_eq!(s.grid_template_areas, vec![vec!["a", "b"]]);
     assert_eq!(s.grid_template_columns.len(), 2);
 }
@@ -2045,7 +2045,7 @@ fn grid_shorthand_auto_flow_both_sides_ignored() {
     let s = grid_div_style(
         "div { display: grid; grid-auto-rows: 7px; grid: auto-flow / auto-flow; }",
     );
-    assert_eq!(s.grid_auto_rows, GridTrackSize::Length(Length::Px(7.0)));
+    assert_eq!(s.grid_auto_rows, vec![GridTrackSize::Length(Length::Px(7.0))]);
 }
 
 /// `grid: none` сбрасывает всё.
@@ -2346,4 +2346,73 @@ fn canvas_bg_from_table_root_with_body_bg() {
         canvas_background_color(&root),
         Some(Color { r: 0, g: 255, b: 0, a: 255 }),
     );
+}
+
+/// CSS Grid L1 §7.6: `grid-auto-rows: <track-size>+` — the list repeats over the implicit rows
+/// (20px 40px 20px 40px …).
+#[test]
+fn grid_auto_rows_list_repeats_over_implicit_rows() {
+    let root = lay(
+        "<body><div id='g'>\
+           <span id='a'></span><span id='b'></span><span id='c'></span><span id='d'></span><span id='e'></span>\
+         </div></body>",
+        "#g { display: grid; grid-template-columns: 100px; grid-auto-rows: 20px 40px; width: 100px; }",
+    );
+    let grid = first_element_child(&root);
+    let ys: Vec<f32> = grid.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).map(|c| c.rect.y).collect();
+    assert_eq!(ys.len(), 5);
+    for (y, want) in ys.iter().zip([0.0, 20.0, 60.0, 80.0, 120.0]) {
+        assert!((y - want).abs() < 1.0, "ys={ys:?}");
+    }
+}
+
+/// The pattern starts after the explicit tracks: one explicit row, then `10px 30px` repeating.
+#[test]
+fn grid_auto_rows_list_starts_after_explicit_rows() {
+    let root = lay(
+        "<body><div id='g'>\
+           <span id='a'></span><span id='b'></span><span id='c'></span><span id='d'></span>\
+         </div></body>",
+        "#g { display: grid; grid-template-columns: 100px; grid-template-rows: 50px; grid-auto-rows: 10px 30px; width: 100px; }",
+    );
+    let grid = first_element_child(&root);
+    let ys: Vec<f32> = grid.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).map(|c| c.rect.y).collect();
+    for (y, want) in ys.iter().zip([0.0, 50.0, 60.0, 90.0]) {
+        assert!((y - want).abs() < 1.0, "ys={ys:?}");
+    }
+}
+
+/// `grid-auto-columns: 30px 60px` with `grid-auto-flow: column` repeats over the implicit columns.
+#[test]
+fn grid_auto_columns_list_repeats_over_implicit_columns() {
+    let root = lay(
+        "<body><div id='g'>\
+           <span id='a'></span><span id='b'></span><span id='c'></span><span id='d'></span>\
+         </div></body>",
+        "#g { display: grid; grid-template-rows: 20px; grid-auto-flow: column; grid-auto-columns: 30px 60px; width: 300px; }",
+    );
+    let grid = first_element_child(&root);
+    let xs: Vec<f32> = grid.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).map(|c| c.rect.x).collect();
+    let base = xs[0];
+    for (x, want) in xs.iter().zip([0.0, 30.0, 90.0, 120.0]) {
+        assert!((x - base - want).abs() < 1.0, "xs={xs:?}");
+    }
+}
+
+/// An invalid token (`repeat()`, a line name, `subgrid`) drops the whole declaration.
+#[test]
+fn grid_auto_list_rejects_non_track_sizes() {
+    let s = grid_div_style("div { display: grid; grid-auto-rows: 20px repeat(2, 10px); }");
+    assert!(s.grid_auto_rows.is_empty());
+    let s = grid_div_style("div { display: grid; grid-auto-rows: [a] 20px; }");
+    assert!(s.grid_auto_rows.is_empty());
+    let s = grid_div_style("div { display: grid; grid-auto-rows: 20px 30px; }");
+    assert_eq!(s.grid_auto_rows.len(), 2);
+}
+
+/// `grid: auto-flow <track-size>* / …` — the shorthand takes the whole `<track-size>+` list too.
+#[test]
+fn grid_shorthand_auto_flow_takes_track_size_list() {
+    let s = grid_div_style("div { display: grid; grid: auto-flow 10px 20px / 100px; }");
+    assert_eq!(s.grid_auto_rows.len(), 2);
 }

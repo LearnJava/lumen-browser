@@ -450,7 +450,7 @@ pub(crate) fn build_grid_init(
     let (row_tracks_collapsed, auto_row) = if definite_content_height.is_none() {
         (
             row_tracks_collapsed.iter().map(GridTrackSize::percent_as_auto).collect::<Vec<_>>(),
-            s.grid_auto_rows.percent_as_auto(),
+            s.grid_auto_rows.iter().map(GridTrackSize::percent_as_auto).collect::<Vec<_>>(),
         )
     } else {
         (row_tracks_collapsed, s.grid_auto_rows.clone())
@@ -1023,9 +1023,15 @@ pub fn resolve_auto_fill_fit_count(
 }
 
 /// Return the track size for track index `idx` (0-based) from a template list,
-/// falling back to `auto_track` for implicit tracks beyond the template.
-pub(super) fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track: &'a GridTrackSize) -> &'a GridTrackSize {
-    template.get(idx as usize).unwrap_or(auto_track)
+/// falling back to the repeating `auto_tracks` list for implicit tracks beyond the template.
+pub(super) fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_tracks: &'a [GridTrackSize]) -> &'a GridTrackSize {
+    static AUTO: GridTrackSize = GridTrackSize::Auto;
+    match template.get(idx as usize) {
+        Some(t) => t,
+        // CSS Grid L1 §7.6: the `grid-auto-*` list repeats over the implicit tracks.
+        None if auto_tracks.is_empty() => &AUTO,
+        None => &auto_tracks[(idx as usize - template.len()) % auto_tracks.len()],
+    }
 }
 
 /// CSS Grid L1 §7.3 — locate a named area in `grid-template-areas`.

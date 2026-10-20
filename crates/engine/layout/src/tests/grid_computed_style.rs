@@ -41,6 +41,16 @@ fn initial_values_of_a_plain_element() {
 }
 
 #[test]
+fn auto_track_list_is_serialised_space_separated() {
+    let s = grid_style_of(
+        "<html><body><div id=a></div></body></html>",
+        "#a{display:grid;grid-auto-rows:10px auto 2fr}",
+        "#a",
+    );
+    assert_eq!(val(&s, "grid-auto-rows"), "10px auto 2fr");
+}
+
+#[test]
 fn gaps_and_auto_tracks_are_serialised_in_px() {
     let s = grid_style_of(
         "<html><body><div id=a></div></body></html>",

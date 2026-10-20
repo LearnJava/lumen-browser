@@ -31,8 +31,8 @@ pub(crate) fn insert_grid_computed(style: &ComputedStyle, m: &mut HashMap<String
         template_list(&style.grid_template_rows, &style.grid_template_row_line_names, style.grid_template_row_auto_repeat.as_ref(), em, z),
     );
     m.insert("grid-template-areas".into(), template_areas(&style.grid_template_areas));
-    m.insert("grid-auto-columns".into(), track_size(&style.grid_auto_columns, em, z));
-    m.insert("grid-auto-rows".into(), track_size(&style.grid_auto_rows, em, z));
+    m.insert("grid-auto-columns".into(), auto_track_list(&style.grid_auto_columns, em, z));
+    m.insert("grid-auto-rows".into(), auto_track_list(&style.grid_auto_rows, em, z));
     m.insert(
         "grid-auto-flow".into(),
         match style.grid_auto_flow {
@@ -80,6 +80,14 @@ fn absolute_length(l: &Length, em: f32, zoom: f32) -> String {
 }
 
 /// One track sizing function in its computed form (`minmax(30px, max-content)`, `fit-content(4%)`, `1fr`).
+/// `grid-auto-columns` / `grid-auto-rows`: the `<track-size>+` list; empty is the initial `auto`.
+fn auto_track_list(list: &[GridTrackSize], em: f32, zoom: f32) -> String {
+    if list.is_empty() {
+        return "auto".into();
+    }
+    list.iter().map(|t| track_size(t, em, zoom)).collect::<Vec<_>>().join(" ")
+}
+
 fn track_size(t: &GridTrackSize, em: f32, zoom: f32) -> String {
     match t {
         GridTrackSize::Auto => "auto".into(),

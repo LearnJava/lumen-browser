@@ -35,7 +35,7 @@ pub(super) struct GridInit {
     /// own borrow of `s.grid_template_rows`.
     pub(super) eff_row_template: Vec<GridTrackSize>,
     /// `grid-auto-rows` with `%` sizes read as `auto` when the container height is indefinite.
-    pub(super) auto_row: GridTrackSize,
+    pub(super) auto_row: Vec<GridTrackSize>,
     /// Row tracks of a `repeat(auto-fit, …)` that hold no item (CSS Grid L1 §7.2.3.2): sized
     /// `0` and without gutters. Same length as `eff_row_template`.
     pub(super) row_collapsed: Vec<bool>,
