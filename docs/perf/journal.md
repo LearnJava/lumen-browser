@@ -788,6 +788,35 @@ wgpu-дефолт окна (CPU-путь скриншотов не измени�
 Ночной прогон с `--baseline` и блокировкой релиза — на машине владельца (COMPAT-BIZ): `python scripts/captcha_stand.py --arm lumen
 --route home-direct --baseline docs/perf/runs/2026-10-19-captcha-lumen.json`.
 
+## 2026-10-20 — COMPAT-CORPUS-2-BASE — первая база CPR корпуса C, точка abroad — Windows 10, маршрут VPN (Таллин, AS209693)
+
+`python scripts/compat_crawl.py --corpus <главные страницы 500 сайтов корпуса C> --env LUMEN_NO_ADBLOCK=1 --no-rerun --timeout 40`, `dev-release` от `8778cac44`, Chrome for Testing 153.0.8010.12,
+живое окно, вьюпорт 1920×945. Выходной IP — Таллин (EE), VPN включён: **это точка `abroad`; точка `ru` (резидентный IP РФ) не снята** — нужен отдельный запуск с отключённым VPN
+(решение владельца, COMPAT-BIZ). Свод — [runs/2026-10-20-compat-crawl-corpus-c-abroad-summary.md](runs/2026-10-20-compat-crawl-corpus-c-abroad-summary.md).
+
+| сегмент | сайтов | посчитано | **CPR** | status | walls | exceptions | pixels | a11y |
+|---|---|---|---|---|---|---|---|---|
+| RU (CPR-RU) | 200 | 195 | **11,8 %** (23) | 146 | 116 | 164 | 104 | 32 |
+| global (CPR-Global) | 300 | 299 | **2,0 %** (6) | 109 | 90 | 268 | 60 | 12 |
+| всего | 500 | 494 | **5,9 %** (29) | 255 | 206 | 432 | 164 | 44 |
+
+Эталон не открыл 6 сайтов (imgsrc, litmarket, lenreg, cikrf, leroymerlin, konami) — вне CPR.
+**Статусы Lumen (итог):** RU — OK 82, DEGRADED 55, TIMEOUT 21, HUNG 14, NET_FAIL 10, BROKEN_RENDER 8, SITE_REFUSED 6, DEAD 4; global — TIMEOUT 107, DEGRADED 41, OK 40, NET_FAIL 38,
+SITE_REFUSED 33, HUNG 26, BROKEN_RENDER 12, DEAD 3.
+**Разрыв по отказам (лишние стены Lumen относительно Chrome, сайтов):** `blank:near-empty` — RU 77, global 162; `net-error` — global 37, RU 0; антибот: Cloudflare-challenge 4, DataDome 4,
+Akamai-reference 5 (все global), «blocked-generic» 2 (RU 1, EN 1), «unsupported-browser-ru» 1 (RU); у Chrome жёсткая стена на 6 сайтах (global). SITE_REFUSED: RU 6 из 195, global 33 из 299;
+антибот-стены (Cloudflare/DataDome/Akamai/generic): RU 2, global 14.
+
+**Отступления от протокола и что с ними делать:**
+- Только главные страницы (500 URL, без внутренних): внутренние страницы удвоили бы время (≈50 с на сайт, весь прогон ≈ 7 ч).
+- `--no-rerun` с сайта 8 (первые 7 перепроверены): флапы 0,6 % (3 из 494) относятся только к ним — **порог флапов ≤5 % на этом прогоне не проверен**, CPR — по одному проходу. Причина: повтор удваивает время на каждый
+  проваленный сайт, а проваливается почти каждый.
+- Прогон дважды перезапускался: перезапуск с `--resume` на сайте 8 (смена флагов) и на сайте 325 (`ENOSPC`, диск D 100 % — чужие `target/`); записи не потеряны (500 из 500 в `results.jsonl`).
+- Доля TIMEOUT в global (107 из 300, 36 %) против RU (21 из 200, 10 %) — первая гипотеза: маршрут VPN до зарубежных CDN плюс таймаут 40 с на плечо; **не проверена**, нужна точка `ru` для сравнения и
+  срез по 3–4 сайтам. CPR ниже порога 5 % для global и a11y 44 из 494 (9 %) — те же причины, что в COMPAT-CORPUS-1-BASE (расхождение дерева a11y, не разобрано).
+**Заведённые баги:** нет — наблюдения. Сырьё (`results.jsonl`, 3 МБ, кадры) не коммитится (`.tmp/compat-crawl-abroad/`).
+**Остаток задачи:** точка `ru` — отдельный запуск без VPN (`python scripts/compat_crawl.py --corpus … --out .tmp/compat-crawl-ru`), после него — таблица разрыва ru/abroad.
+
 ## 2026-10-19 — COMPAT-CORPUS-1-BASE — первый живой прогон краулера паритета `compat_crawl.py` — Windows 10, маршрут home-direct
 
 `python scripts/compat_crawl.py` на `corpus.txt` + `corpus-top100-foreign.txt` (112 уникальных сайтов), `target/dev-release/lumen.exe` от `main` 76e0522b2
