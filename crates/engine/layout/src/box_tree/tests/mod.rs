@@ -490,6 +490,7 @@ mod grid_trampoline;
 mod grid_empty_tracks;
 mod grid_lanes;
 mod grid_subgrid_contribution;
+mod grid_subgrid_rows;
 mod grid_subgrid_line_names;
 mod grid_track_limit;
 mod container_min_max_height;
