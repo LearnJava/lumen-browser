@@ -8,9 +8,11 @@
 //! nearest element with `scroll-marker-group` other than `none`). The pass therefore runs over
 //! the finished `children` list of a parent, where every child's own subtree already exists.
 //!
+//! The root element has no parent to be a sibling in: its group and buttons are the first/last
+//! children of its own box ([`inject_root_scroll_pseudos`]).
+//!
 //! Gaps: targets that are inline-level (`InlineRun` segments, boxes inside an `InlineBlockRow`)
-//! and `scroll-target-group: auto` implicit targets generate no marker; the root element's own
-//! group/buttons are not injected (it has no parent list).
+//! and `scroll-target-group: auto` implicit targets generate no marker.
 
 use super::*;
 
@@ -60,7 +62,9 @@ pub(super) fn inject_scroll_pseudos(
     parent_style: &ComputedStyle,
     children: &mut Vec<LayoutBox>,
 ) {
-    let any_group = children.iter().any(|c| is_target_box(c) && c.style.scroll_marker_group.is_some());
+    let root = cx.doc.document_element();
+    let is_target = |c: &LayoutBox| is_target_box(c) && c.origin.node != root;
+    let any_group = children.iter().any(|c| is_target(c) && c.style.scroll_marker_group.is_some());
     let buttons = crate::style::sheet_targets_pseudo(cx.sheet, cx.viewport, cx.dark_mode, "scroll-button");
     if !any_group && !buttons {
         return;
@@ -73,7 +77,7 @@ pub(super) fn inject_scroll_pseudos(
     let old = std::mem::take(children);
     let mut out: Vec<LayoutBox> = Vec::with_capacity(old.len() + 2);
     for child in old {
-        if !is_target_box(&child) {
+        if !is_target(&child) {
             out.push(child);
             continue;
         }
@@ -83,7 +87,9 @@ pub(super) fn inject_scroll_pseudos(
         let group = child
             .style
             .scroll_marker_group
-            .and_then(|g| build_group(cx, node, &child, markers_styled).map(|b| (g.placement, b)));
+            .and_then(|g| {
+                build_group(cx, node, &child.style, &child.children, markers_styled).map(|b| (g.placement, b))
+            });
         if let Some((ScrollMarkerGroupPlacement::Before, g)) = group {
             before.push(g);
         } else if let Some((ScrollMarkerGroupPlacement::After, g)) = group {
@@ -101,6 +107,44 @@ pub(super) fn inject_scroll_pseudos(
         out.extend(group_inline_levels(cx.host, parent_style, after, blockify));
     }
     *children = out;
+}
+
+/// The root element's own group and buttons (CSS Overflow L5 §scroll-marker-group: «the root
+/// element has no parent to be a sibling in»): the group becomes the first (`before`) or last
+/// (`after`) child of the root box, the buttons the first children behind a `before` group.
+/// `children` is the finished child list of the root element's box.
+pub(super) fn inject_root_scroll_pseudos(cx: &ScrollPseudoCx, style: &ComputedStyle, children: &mut Vec<LayoutBox>) {
+    let buttons = crate::style::sheet_targets_pseudo(cx.sheet, cx.viewport, cx.dark_mode, "scroll-button");
+    if style.scroll_marker_group.is_none() && !buttons {
+        return;
+    }
+    let markers_styled = crate::style::sheet_targets_pseudo(cx.sheet, cx.viewport, cx.dark_mode, "scroll-marker");
+    let blockify = matches!(
+        style.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    );
+    let mut before: Vec<LayoutBox> = Vec::new();
+    let mut after: Vec<LayoutBox> = Vec::new();
+    if let Some(g) = style.scroll_marker_group
+        && let Some(b) = build_group(cx, cx.host, style, children, markers_styled)
+    {
+        if g.placement == ScrollMarkerGroupPlacement::Before {
+            before.push(b);
+        } else {
+            after.push(b);
+        }
+    }
+    if buttons {
+        for kind in BUTTONS {
+            if let Some(b) = build_button(cx, cx.host, style, kind) {
+                before.push(b);
+            }
+        }
+    }
+    let before = group_inline_levels(cx.host, style, before, blockify);
+    let after = group_inline_levels(cx.host, style, after, blockify);
+    children.splice(0..0, before);
+    children.extend(after);
 }
 
 const BUTTONS: [PseudoKind; 4] = [
@@ -169,12 +213,18 @@ fn build_button(cx: &ScrollPseudoCx, node: NodeId, style: &ComputedStyle, kind: 
 /// The `::scroll-marker-group` of `container` with its markers. A group that is `display: none`,
 /// or empty and unstyled, is a `BoxKind::Skip` box: nothing renders, but `getComputedStyle` still
 /// finds its computed values (CSSOM: an ungenerated pseudo-element resolves to the computed value).
-fn build_group(cx: &ScrollPseudoCx, node: NodeId, container: &LayoutBox, markers_styled: bool) -> Option<LayoutBox> {
+fn build_group(
+    cx: &ScrollPseudoCx,
+    node: NodeId,
+    cstyle: &ComputedStyle,
+    cchildren: &[LayoutBox],
+    markers_styled: bool,
+) -> Option<LayoutBox> {
     let ps = compute_pseudo_element_style(
-        cx.doc, node, "scroll-marker-group", cx.sheet, &container.style, cx.viewport, cx.dark_mode,
+        cx.doc, node, "scroll-marker-group", cx.sheet, cstyle, cx.viewport, cx.dark_mode,
     )?;
     let markers = if markers_styled && ps.display != Display::None {
-        collect_markers(cx, node, container)
+        collect_markers(cx, node, cstyle, cchildren)
     } else {
         vec![]
     };
@@ -197,12 +247,12 @@ fn build_group(cx: &ScrollPseudoCx, node: NodeId, container: &LayoutBox, markers
 /// ancestor, absolutely positioned ones to the nearest container at their containing block's level
 /// or above, fixed ones likewise relative to their (transform/filter/containment) containing
 /// block — a fixed box without such an ancestor belongs to no group.
-fn collect_markers(cx: &ScrollPseudoCx, node: NodeId, container: &LayoutBox) -> Vec<LayoutBox> {
+fn collect_markers(cx: &ScrollPseudoCx, node: NodeId, cstyle: &ComputedStyle, cchildren: &[LayoutBox]) -> Vec<LayoutBox> {
     let mut out = Vec::new();
     // `chain[0]` is the container itself; `chain[i]` the element ancestors below it.
-    let mut chain: Vec<Anc> = vec![Anc::of(&container.style)];
+    let mut chain: Vec<Anc> = vec![Anc::of(cstyle)];
     // Pre-order walk; `depth` is the number of `chain` entries valid for the box.
-    let mut stack: Vec<(&LayoutBox, usize)> = container.children.iter().rev().map(|c| (c, 1)).collect();
+    let mut stack: Vec<(&LayoutBox, usize)> = cchildren.iter().rev().map(|c| (c, 1)).collect();
     while let Some((b, depth)) = stack.pop() {
         if matches!(b.origin.role, BoxRole::Pseudo(_) | BoxRole::ListMarker) {
             continue;
@@ -290,6 +340,17 @@ fn group_inline_levels(
     let mut out = Vec::with_capacity(boxes.len());
     let mut row: Vec<LayoutBox> = Vec::new();
     for mut b in boxes {
+        // CSS 2.1 §9.7: an out-of-flow box is blockified and takes no part in a line.
+        if matches!(b.style.position, Position::Absolute | Position::Fixed) && b.style.float_side == FloatSide::None {
+            if matches!(b.style.display, Display::Inline | Display::InlineBlock) {
+                Arc::make_mut(&mut b.style).display = Display::Block;
+            }
+            if !row.is_empty() {
+                out.push(anon_inline_block_row(host, container_style, std::mem::take(&mut row)));
+            }
+            out.push(b);
+            continue;
+        }
         if matches!(
             b.style.display,
             Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid

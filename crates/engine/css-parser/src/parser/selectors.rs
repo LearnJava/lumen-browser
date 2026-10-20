@@ -403,6 +403,10 @@ pub enum PseudoElementKind {
     /// `ComputedStyle` field, `style/apply/layout.rs`) that places this
     /// pseudo-element `before`/`after` its originating element.
     ScrollMarkerGroup,
+    /// `::column` (CSS Multi-column L2 §column-pseudo) — one fragmentation column of a multicol
+    /// container, a target for `::scroll-marker`. Grammar only: no `::column` box is generated yet,
+    /// and `background`/`border` have no effect on it, so the cascade finds nothing to apply.
+    Column,
     /// `::scroll-button(<direction>)` (CSS Overflow L5 §scroll-buttons) — a
     /// scroll container's directional scroll-by-one-page button. Argument is
     /// one of `up`/`down`/`left`/`right`/`block-start`/`inline-start`/
@@ -775,6 +779,7 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::PickerIcon => "::picker-icon".into(),
         PseudoElementKind::ScrollMarker => "::scroll-marker".into(),
         PseudoElementKind::ScrollMarkerGroup => "::scroll-marker-group".into(),
+        PseudoElementKind::Column => "::column".into(),
         PseudoElementKind::ScrollButton(dir) => format!("::scroll-button({dir})"),
         PseudoElementKind::ViewTransition => "::view-transition".into(),
         PseudoElementKind::ViewTransitionGroup(n) => format!("::view-transition-group({n})"),
@@ -1000,15 +1005,17 @@ pub(crate) fn compound_selector_is_valid(compound: &CompoundSelector) -> bool {
 }
 
 /// Разрешена ли пара «pseudo-element сразу за pseudo-element-ом».
-/// Спека допускает только маркер сгенерированного контента
-/// (`::before::marker`, `::after::marker`, CSS Pseudo-Elements L4 §2.4).
+/// Спека допускает маркер сгенерированного контента (`::before::marker`,
+/// `::after::marker`, CSS Pseudo-Elements L4 §2.4) и колонку multicol с её
+/// маркером (`::before::column`, `::column::scroll-marker`, CSS Multi-column L2
+/// §column-pseudo).
 pub(crate) fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &PseudoElementKind) -> bool {
     matches!(
         (first, second),
         (
             PseudoElementKind::Before | PseudoElementKind::After,
-            PseudoElementKind::Marker
-        )
+            PseudoElementKind::Marker | PseudoElementKind::Column
+        ) | (PseudoElementKind::Column, PseudoElementKind::ScrollMarker)
     )
 }
 
@@ -1018,7 +1025,10 @@ pub(crate) fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &Ps
 pub(crate) fn pseudo_element_allows_user_action(pe: &PseudoElementKind) -> bool {
     !matches!(
         pe,
-        PseudoElementKind::Selection | PseudoElementKind::TargetText | PseudoElementKind::Highlight(_)
+        PseudoElementKind::Selection
+            | PseudoElementKind::TargetText
+            | PseudoElementKind::Highlight(_)
+            | PseudoElementKind::Column
     )
 }
 
@@ -1410,6 +1420,7 @@ impl<'a> Parser<'a> {
                 "picker-icon" => PseudoElementKind::PickerIcon,
                 "scroll-marker" => PseudoElementKind::ScrollMarker,
                 "scroll-marker-group" => PseudoElementKind::ScrollMarkerGroup,
+                "column" => PseudoElementKind::Column,
                 "view-transition" => PseudoElementKind::ViewTransition,
                 _ => PseudoElementKind::Unknown(name),
             };

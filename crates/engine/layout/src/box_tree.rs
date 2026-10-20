@@ -198,7 +198,7 @@ use inline_build::{
 
 mod scroll_pseudos;
 pub(crate) use scroll_pseudos::button_keywords;
-use scroll_pseudos::{inject_scroll_pseudos, ScrollPseudoCx};
+use scroll_pseudos::{inject_root_scroll_pseudos, inject_scroll_pseudos, ScrollPseudoCx};
 
 mod build;
 use build::{build_box, build_box_or_reuse};

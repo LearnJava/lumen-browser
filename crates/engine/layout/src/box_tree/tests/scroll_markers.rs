@@ -109,3 +109,20 @@ fn empty_unstyled_group_has_no_box() {
     let root = lay(html, "div{scroll-marker-group:after} div::scroll-marker-group{display:flex;height:20px;width:100px}");
     assert_eq!(boxes_of(&root, PseudoKind::ScrollMarkerGroup), vec![(100.0, 20.0, 0)]);
 }
+
+/// WPT `root-scroll-marker.html` / `root-scroll-button.html`: the root element has no parent to be
+/// a sibling in — its group and buttons are children of its own box.
+#[test]
+fn root_element_owns_its_group_and_buttons() {
+    let root = lay(
+        "<div></div><div></div>",
+        ":root{scroll-marker-group:before}
+         :root::scroll-marker-group{display:block;height:20px}
+         :root::scroll-button(block-end){content:'down';position:absolute;top:0}
+         div::scroll-marker{content:'';display:block;width:10px;height:10px}",
+    );
+    let groups = boxes_of(&root, PseudoKind::ScrollMarkerGroup);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].2, 2, "one marker per <div>");
+    assert_eq!(boxes_of(&root, PseudoKind::ScrollButtonBlockEnd).len(), 1);
+}

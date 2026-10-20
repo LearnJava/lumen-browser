@@ -1514,11 +1514,11 @@ fn build_box_inner(
         // CSS Overflow L5 — `::scroll-marker-group` / `::scroll-button()` are siblings of their
         // originating element, so they are injected into the parent's finished child list.
         if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
-            inject_scroll_pseudos(
-                &ScrollPseudoCx { host: id, doc, sheet, viewport, dark_mode, counters, registry },
-                &style,
-                &mut children,
-            );
+            let cx = ScrollPseudoCx { host: id, doc, sheet, viewport, dark_mode, counters, registry };
+            inject_scroll_pseudos(&cx, &style, &mut children);
+            if doc.document_element() == Some(id) {
+                inject_root_scroll_pseudos(&cx, &style, &mut children);
+            }
         }
         // CSS 2.1 §17.2.1 — anonymous table boxes (BUG-1362).
         children = super::table_anon::fix_children(doc, id, &kind, &style, children);
