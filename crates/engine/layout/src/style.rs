@@ -196,7 +196,8 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 pub(crate) use calc::calc_node_to_css;
 pub use parse::box_sides::canonical_specified_anchor;
 pub use values::length::{
-    canonical_specified_length, canonical_specified_line_width, canonical_specified_sizing_length,
+    canonical_specified_contain_intrinsic, canonical_specified_length, canonical_specified_line_width,
+    canonical_specified_min_max_size, canonical_specified_sizing_length,
     canonical_specified_block_step_size, canonical_specified_overflow_clip_margin,
     overflow_clip_margin_serialize, parse_length, parse_overflow_clip_margin,
     resolve_block_step_size, Length, LengthOrAuto,

@@ -774,6 +774,22 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical `min-/max-width|height` (`auto`/`none` side-specific keyword
+    // plus the sizing grammar, BUG-1391) and `contain-intrinsic-*`
+    // (`auto? [none | <length>]`, shorthand `{1,2}` axes, BUG-1391).
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_min_max_size",
+        |value: String, is_max: bool| -> Option<String> {
+            lumen_layout::style::canonical_specified_min_max_size(&value, is_max)
+        }
+    );
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_contain_intrinsic",
+        |key: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_contain_intrinsic(&key, &value)
+        }
+    );
+
     // Canonical top-level `anchor()` / `anchor-size()` serialization for
     // inline-`style` inset/margin/sizing properties (CSS Anchor Positioning L1
     // §3.1/§4, BUG-563, GAP-ANCHORCSSOM-S2). `allow_anchor` — `anchor()` is

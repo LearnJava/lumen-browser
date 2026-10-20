@@ -1500,3 +1500,56 @@ use super::*;
             assert_eq!(canonical_specified_overflow_clip_margin(v), None, "input: {v}");
         }
     }
+
+    // ── BUG-1391: min-/max-* и contain-intrinsic-* в CSSOM ────────────────
+
+    #[test]
+    fn min_max_size_canonical_keywords_are_side_specific() {
+        assert_eq!(canonical_specified_min_max_size("auto", false).as_deref(), Some("auto"));
+        assert_eq!(canonical_specified_min_max_size("none", false), None);
+        assert_eq!(canonical_specified_min_max_size("none", true).as_deref(), Some("none"));
+        assert_eq!(canonical_specified_min_max_size("auto", true), None);
+        assert_eq!(canonical_specified_min_max_size("0", true).as_deref(), Some("0px"));
+        assert_eq!(
+            canonical_specified_min_max_size("fit-content(10%)", false).as_deref(),
+            Some("fit-content(10%)")
+        );
+        for v in ["min-content max-content", "-10%", "-0.5em"] {
+            assert_eq!(canonical_specified_min_max_size(v, true), None, "input: {v}");
+        }
+    }
+
+    #[test]
+    fn contain_intrinsic_canonical_shorthand_collapses_equal_axes() {
+        let ok = [
+            ("none", "none"),
+            ("2em 3px", "2em 3px"),
+            ("5px 5px", "5px"),
+            ("none none", "none"),
+            ("auto 1px 1px", "auto 1px 1px"),
+            ("1px auto 1px", "1px auto 1px"),
+            ("auto 1px auto 1px", "auto 1px"),
+        ];
+        for (input, expected) in ok {
+            assert_eq!(
+                canonical_specified_contain_intrinsic("contain-intrinsic-size", input).as_deref(),
+                Some(expected),
+                "input: {input}"
+            );
+        }
+        for v in ["legacy", "auto legacy", "10%", "2em 3px 5px", "1px 1%", "1px auto auto", "-1px", "auto",
+                  "auto 1px 1px auto", "1px 1px auto"] {
+            assert_eq!(canonical_specified_contain_intrinsic("contain-intrinsic-size", v), None, "input: {v}");
+        }
+    }
+
+    #[test]
+    fn contain_intrinsic_canonical_longhand_takes_one_axis() {
+        assert_eq!(
+            canonical_specified_contain_intrinsic("contain-intrinsic-block-size", "auto none").as_deref(),
+            Some("auto none")
+        );
+        for v in ["1px 1px", "1px none", "auto 1px auto", "20%", "1px auto", "none auto", "-1px"] {
+            assert_eq!(canonical_specified_contain_intrinsic("contain-intrinsic-width", v), None, "input: {v}");
+        }
+    }
