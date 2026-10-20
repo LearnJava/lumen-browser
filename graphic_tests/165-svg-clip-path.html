@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 165 clip-path: url(#id) на &lt;clipPath&gt;</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    overflow: hidden;
+  }
+  .row { display: flex; gap: 30px; margin-bottom: 40px; }
+  .cell { width: 140px; height: 140px; flex-shrink: 0; }
+  svg.cell { display: block; }
+
+  /* CSS Masking L1 §3.1: clip-path: url(#id) ссылается на <clipPath>. */
+  .a { background: #e63946; clip-path: url(#obb-circle); }
+  .b { background: #457b9d; clip-path: url(#user-rect); }
+  .c { background: #2a9d8f; clip-path: url(#obb-two); }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <!-- objectBoundingBox: круг в долях бокса элемента -->
+      <clipPath id="obb-circle" clipPathUnits="objectBoundingBox">
+        <circle cx="0.5" cy="0.5" r="0.4" />
+      </clipPath>
+      <!-- userSpaceOnUse: квадрат 20..120 -->
+      <clipPath id="user-rect">
+        <rect x="20" y="20" width="100" height="100" />
+      </clipPath>
+      <!-- objectBoundingBox: два прямоугольника — объединение -->
+      <clipPath id="obb-two" clipPathUnits="objectBoundingBox">
+        <rect x="0.05" y="0.05" width="0.5" height="0.5" />
+        <rect x="0.45" y="0.45" width="0.5" height="0.5" />
+      </clipPath>
+      <!-- clip-rule: evenodd — дыра в пентаграмме -->
+      <clipPath id="eo">
+        <path clip-rule="evenodd" d="M 70 7 L 29 126 L 137 49 L 3 49 L 111 126 Z" />
+      </clipPath>
+      <clipPath id="nz">
+        <path d="M 70 7 L 29 126 L 137 49 L 3 49 L 111 126 Z" />
+      </clipPath>
+      <!-- transform на самом <clipPath> -->
+      <clipPath id="moved" transform="translate(30 30)">
+        <rect x="0" y="0" width="80" height="80" />
+      </clipPath>
+      <!-- вложенный clip-path на <clipPath>: пересечение -->
+      <clipPath id="half">
+        <rect x="0" y="0" width="70" height="140" />
+      </clipPath>
+      <clipPath id="circle-half" clip-path="url(#half)">
+        <circle cx="70" cy="70" r="60" />
+      </clipPath>
+    </defs>
+  </svg>
+
+  <!-- Row 1: HTML-боксы -->
+  <div class="row">
+    <div class="cell a"></div>
+    <div class="cell b"></div>
+    <div class="cell c"></div>
+  </div>
+
+  <!-- Row 2: SVG-фигуры и <g>, clip-rule -->
+  <div class="row">
+    <svg class="cell" viewBox="0 0 140 140">
+      <rect width="140" height="140" fill="#e63946" clip-path="url(#user-rect)" />
+    </svg>
+    <svg class="cell" viewBox="0 0 140 140">
+      <g clip-path="url(#circle-half)">
+        <rect width="70" height="140" fill="#f4a261" />
+        <rect x="70" width="70" height="140" fill="#e9c46a" />
+      </g>
+    </svg>
+    <svg class="cell" viewBox="0 0 140 140">
+      <rect width="140" height="140" fill="#457b9d" clip-path="url(#nz)" />
+    </svg>
+    <svg class="cell" viewBox="0 0 140 140">
+      <rect width="140" height="140" fill="#457b9d" clip-path="url(#eo)" />
+    </svg>
+    <svg class="cell" viewBox="0 0 140 140">
+      <rect width="140" height="140" fill="#2a9d8f" clip-path="url(#moved)" />
+    </svg>
+  </div>
+
+</div>
+</body>
+</html>

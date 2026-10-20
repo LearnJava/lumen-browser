@@ -11,4 +11,5 @@
 
 mod root_height;
 mod snapshot_tests;
+mod svg_clip_path;
 mod svg_layout;

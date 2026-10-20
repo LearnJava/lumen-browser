@@ -6,6 +6,8 @@
 //! Перенесено батчем SPLIT-ST17 из `crates/engine/layout/src/style.rs`
 //! (анкер `enum ShapeValue` до конца `impl Default` для `MaskLayer`) без правок тел.
 
+use std::sync::Arc;
+
 use lumen_core::ColorSpace;
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +81,54 @@ pub enum ClipPath {
     /// `FillRule` (default `NonZero`); `EvenOdd` делает дырки в
     /// самопересекающихся путях (звёзды-пентаграммы и т. п.).
     Path(Vec<(f32, f32)>, FillRule),
+    /// `url(#id)` — CSS Masking L1 §3.1: ссылка на `<clipPath>` в том же
+    /// документе. Только результат парсинга: `compute_style` (там есть
+    /// `Document`) подменяет её на [`ClipPath::Svg`] либо на `None`, если
+    /// элемент не найден или это не `<clipPath>` (спека: свойство тогда
+    /// считается не заданным). Не разрешённая ссылка ничего не клипует.
+    Url(String),
+    /// Разрешённая ссылка на `<clipPath>` (SVG 1.1 §14.3, CSS Masking L1
+    /// §3.1): содержимое элемента уже сведено к полигонам.
+    Svg(Arc<SvgClipPath>),
+}
+
+/// Содержимое `<clipPath>`, сведённое к полигонам в его системе координат
+/// (`transform` самого `<clipPath>` и его детей уже учтены). Объединение
+/// подпутей — область, которую клип оставляет видимой.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgClipPath {
+    /// `clipPathUnits="objectBoundingBox"`: координаты полигонов — доли
+    /// bounding box ссылающегося элемента (0..1), а не user units.
+    pub object_bbox_units: bool,
+    /// Фигуры содержимого; пустой список клипует всё (нет видимых детей).
+    pub subpaths: Vec<SvgClipSubpath>,
+    /// `clip-path` на самом `<clipPath>`: пересекается с этим клипом.
+    pub nested: Option<Box<ClipPath>>,
+    /// Где ссылающийся SVG-элемент стоит в документе; `None` — HTML-бокс,
+    /// у которого user space — левый верхний угол border-box.
+    pub placement: Option<SvgClipPlacement>,
+}
+
+/// Одна фигура `<clipPath>` в виде замкнутого полигона.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgClipSubpath {
+    /// Вершины.
+    pub pts: Vec<(f32, f32)>,
+    /// `clip-rule: evenodd` (иначе nonzero).
+    pub even_odd: bool,
+}
+
+/// Положение ссылающегося SVG-элемента, выставляется layout-ом SVG
+/// (`lay_out_svg_element_position`). Сдвиг матрицы хранится относительно
+/// `LayoutBox::rect.x/y`, поэтому `shift_tree` (abs-pos, scroll) его не ломает.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SvgClipPlacement {
+    /// user space элемента → документ, `[a, b, c, d, e, f]`; `e`/`f` — смещение
+    /// относительно левого верхнего угла `rect` бокса.
+    pub matrix: [f32; 6],
+    /// bounding box элемента в его user space `(x, y, w, h)` — для
+    /// `clipPathUnits="objectBoundingBox"`.
+    pub user_bbox: (f32, f32, f32, f32),
 }
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
