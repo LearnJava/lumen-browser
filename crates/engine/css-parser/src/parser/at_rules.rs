@@ -542,7 +542,14 @@ impl<'a> Parser<'a> {
             return self.parse_media_rule().map_or(AtRuleOutcome::None, AtRuleOutcome::Media);
         }
         if name.eq_ignore_ascii_case("import") {
-            return self.parse_import_body().map_or(AtRuleOutcome::None, AtRuleOutcome::Import);
+            let import = self.parse_import_body();
+            // An invalid `@import` is still an at-rule: it ends at its own `;`
+            // (unless the body already consumed it), it does not leak into the
+            // next qualified rule's prelude.
+            if import.is_none() && !self.input[..self.pos].ends_with(';') {
+                self.skip_until_block_end();
+            }
+            return import.map_or(AtRuleOutcome::None, AtRuleOutcome::Import);
         }
         if name.eq_ignore_ascii_case("font-face") {
             return self
@@ -1060,16 +1067,20 @@ impl<'a> Parser<'a> {
                 let quote = self.consume()?;
                 let start = self.pos;
                 while let Some(c) = self.peek() {
-                    if c == quote {
+                    if c == quote || c == '\n' {
                         break;
                     }
                     self.consume();
                 }
-                if self.peek() != Some(quote) {
-                    return None;
-                }
+                // EOF closes an open string (CSS Syntax §5.3); a newline does not.
                 let url = self.input[start..self.pos].to_string();
-                self.consume();
+                match self.peek() {
+                    Some(c) if c == quote => {
+                        self.consume();
+                    }
+                    Some(_) => return None,
+                    None => {}
+                }
                 Some(url)
             }
             _ => None,
@@ -1576,60 +1587,12 @@ impl<'a> Parser<'a> {
     /// Используется при синтаксической ошибке внутри @property — потребитель
     /// не должен ловить declarations этого правила.
     pub(crate) fn skip_until_block_end(&mut self) {
-        while let Some(c) = self.peek() {
-            if c == '{' {
-                self.consume();
-                self.skip_block();
-                return;
-            }
-            if c == ';' {
-                self.consume();
-                return;
-            }
-            self.consume();
-        }
+        self.scan_component_values(Vec::new(), ScanEnd::SEMI | ScanEnd::OPEN_BRACE);
     }
 
     pub(crate) fn skip_at_rule(&mut self) {
         self.consume(); // '@'
-        while let Some(c) = self.peek() {
-            match c {
-                ';' => {
-                    self.consume();
-                    return;
-                }
-                '{' => {
-                    self.consume();
-                    self.skip_block();
-                    return;
-                }
-                _ => {
-                    self.consume();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn skip_block(&mut self) {
-        let mut depth = 1;
-        while let Some(c) = self.peek() {
-            match c {
-                '{' => {
-                    self.consume();
-                    depth += 1;
-                }
-                '}' => {
-                    self.consume();
-                    depth -= 1;
-                    if depth == 0 {
-                        return;
-                    }
-                }
-                _ => {
-                    self.consume();
-                }
-            }
-        }
+        self.scan_component_values(Vec::new(), ScanEnd::SEMI | ScanEnd::OPEN_BRACE);
     }
 
 }
