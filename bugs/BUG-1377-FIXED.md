@@ -1,6 +1,7 @@
 # BUG-1377 — невалидное объявление `width`/`height` заменяет предыдущее вместо того, чтобы быть отброшенным (CSS Syntax §2.2, CSS 2.1 §4.2)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** `width`/`height`/`inline-size`/`block-size` через `parse_size_or_auto` (`apply/layout.rs`): невалидное значение отбрасывает декларацию, `auto` остаётся явным сбросом. `rgb()` с запятыми отвергает смесь процентов и чисел (`parse/color.rs`, CSS Color 4 §5.1). Тесты: `layout_props.rs::invalid_*`, `color.rs::legacy_rgb_rejects_mixed_percent_and_number`.
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 15, `css/CSS2` (остальные каталоги: selectors, css1, syntax, box-display, visufx, visudet, …))
 **Область:** css-parser/layout (`crates/engine/layout/src/style/apply/layout.rs:293` — `width`/`height` с невалидным значением; `color` с `rgb(100%, 0, 0)`)
 
