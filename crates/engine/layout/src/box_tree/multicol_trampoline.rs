@@ -1085,19 +1085,23 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         }
         let mut tallest = mono.iter().map(|m| m.1 - m.0).fold(0.0f32, f32::max);
         // Items of a column flex line are not cut by the balancing: a column is never shorter than
-        // the tallest of them (capped by the height limit, `flex/fragmentation/005`).
+        // the tallest of them; an item taller than the limit is cut anyway and lifts nothing
+        // (`flex/fragmentation/005`, `020`).
         if col_flex {
             let item_h = grid
                 .children
                 .iter()
                 .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
                 .map(|c| c.rect.height)
+                .filter(|&h| h <= limit)
                 .fold(0.0f32, f32::max);
             tallest = tallest.max(item_h);
         }
+        // Chrome balances in `LayoutUnit`s (1/64 px): the height rounds up to the next one.
+        let snap = |h: f32| ((h * 64.0).ceil() / 64.0).min(limit);
         let mut lo = (total_h / n_cols as f32).max(tallest).max(1.0).min(limit);
         if fits(lo) {
-            lo
+            if fits(snap(lo)) { snap(lo) } else { lo }
         } else {
             // Bisect between a height that does not fit and the limit that does.
             let mut hi = limit;
@@ -1109,7 +1113,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                     lo = mid;
                 }
             }
-            hi
+            if fits(snap(hi)) { snap(hi) } else { hi }
         }
     } else {
         limit
