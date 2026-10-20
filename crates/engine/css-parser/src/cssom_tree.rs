@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::Declaration;
 
 pub use mutate::CssomTreeError;
+pub use parse::{set_property_rule_validator, PropertyRuleValidator};
 
 /// Процесс-уникальный id узла: устаревшая JS-обёртка никогда не совпадёт с
 /// узлом, созданным после неё (даже в другом листе).

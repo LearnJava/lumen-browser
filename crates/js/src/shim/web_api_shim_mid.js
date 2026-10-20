@@ -3816,9 +3816,31 @@ Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
     set: function(v) { _lumen_style_set_parsed(this, _lumen_parse_style(String(v))); },
     enumerable: true, configurable: true,
 });
+// CSSOM §6.7.1: `length`, `item(index)` and the indexed getter enumerate the
+// declared (longhand) property names in declaration order.
+Object.defineProperty(CSSStyleDeclaration.prototype, 'length', {
+    get: function() { return Object.keys(_lumen_style_get_parsed(this)).length; },
+    enumerable: true, configurable: true,
+});
+CSSStyleDeclaration.prototype.item = function item(index) {
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to execute 'item' on 'CSSStyleDeclaration': 1 argument required, but only 0 present.");
+    }
+    var keys = Object.keys(_lumen_style_get_parsed(this)), i = index >>> 0;
+    return i < keys.length ? keys[i] : '';
+};
 Object.defineProperty(CSSStyleDeclaration.prototype, Symbol.toStringTag,
     { value: 'CSSStyleDeclaration', configurable: true });
 globalThis.CSSStyleDeclaration = CSSStyleDeclaration;
+
+// CSS Fonts 4 §4.1: `CSSFontFaceRule.style` is a `CSSFontFaceDescriptors` (a CSSStyleDeclaration).
+function CSSFontFaceDescriptors() { throw new TypeError('Illegal constructor'); }
+CSSFontFaceDescriptors.prototype = Object.create(CSSStyleDeclaration.prototype,
+    { constructor: { value: CSSFontFaceDescriptors, writable: true, configurable: true } });
+Object.defineProperty(CSSFontFaceDescriptors.prototype, Symbol.toStringTag,
+    { value: 'CSSFontFaceDescriptors', configurable: true });
+Object.setPrototypeOf(CSSFontFaceDescriptors, CSSStyleDeclaration);
+globalThis.CSSFontFaceDescriptors = CSSFontFaceDescriptors;
 
 // `fbid` — optional cross-frame binding (BUG-1147, see `_lumen_backing_fbid`).
 function _lumen_make_style(nid, fbid) {
@@ -3832,6 +3854,10 @@ function _lumen_make_style(nid, fbid) {
     return new Proxy(target, {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
+            if (typeof prop === 'string' && /^(0|[1-9][0-9]*)$/.test(prop)) {
+                var named = t.item(+prop);
+                return named === '' ? undefined : named;
+            }
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
         has: function(t, prop) {
@@ -3853,13 +3879,17 @@ function _lumen_make_style(nid, fbid) {
 // `{sheet, rule, mixinPath}` for a node inside a top-level `@mixin`'s `@result` tree
 // (`rule` is the `@mixin`'s `mixinIndex`, `mixinPath` the node's path from
 // `@result`'s own children, see `_lumen_stylesheet_mixin_node_json`).
-function _lumen_make_rule_style(loc) {
-    var target = Object.create(CSSStyleDeclaration.prototype);
+function _lumen_make_rule_style(loc, proto) {
+    var target = Object.create(proto || CSSStyleDeclaration.prototype);
     Object.defineProperty(target, '__loc__',
         { value: loc, enumerable: false, writable: false, configurable: false });
     return new Proxy(target, {
         get: function(t, prop, receiver) {
             if (prop in t) return Reflect.get(t, prop, receiver);
+            if (typeof prop === 'string' && /^(0|[1-9][0-9]*)$/.test(prop)) {
+                var named = t.item(+prop);
+                return named === '' ? undefined : named;
+            }
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
         has: function(t, prop) {
@@ -12312,11 +12342,9 @@ function _lumen_css_make_list(be, parentId) {
         ownKeys: function() {
             var keys = [], n = ids().length;
             for (var i = 0; i < n; i++) keys.push(String(i));
-            keys.push('length');
             return keys;
         },
         getOwnPropertyDescriptor: function(t, p) {
-            if (p === 'length') return { value: ids().length, writable: false, enumerable: false, configurable: true };
             if (typeof p === 'string' && /^[0-9]+$/.test(p)) {
                 var a = ids(), k = parseInt(p, 10);
                 if (k < a.length) return { value: _lumen_css_wrap(be, a[k]), writable: false, enumerable: true, configurable: true };
@@ -12366,7 +12394,10 @@ function _lumen_css_fn(proto, name, fn) {
 function _lumen_css_style_of(self) {
     _lumen_css_data(self);
     var r = self.__r;
-    if (!r.style) r.style = _lumen_make_rule_style({ tree: true, be: r.be, id: r.id });
+    if (!r.style) {
+        r.style = _lumen_make_rule_style({ tree: true, be: r.be, id: r.id },
+            self instanceof CSSFontFaceRule ? CSSFontFaceDescriptors.prototype : undefined);
+    }
     return r.style;
 }
 function _lumen_css_style_acc(proto) {

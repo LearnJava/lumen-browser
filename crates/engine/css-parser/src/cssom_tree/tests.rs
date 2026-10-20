@@ -67,6 +67,24 @@ fn empty_group_serializes_with_empty_body() {
 }
 
 #[test]
+fn scope_prelude_is_validated_and_normalized() {
+    for (src, want) in [
+        ("@scope (.a)to (.b) {}", "(.a) to (.b)"),
+        ("@scope to (.a) {}", "to (.a)"),
+        ("@scope (.a) to (> .b) {}", "(.a) to (> .b)"),
+        ("@scope (.a:hover, #b, div) {}", "(.a:hover, #b, div)"),
+    ] {
+        assert_eq!(tree(src).rules[0].prelude, want, "{src}");
+    }
+    for bad in [
+        "@scope () {}", "@scope to () {}", "@scope (.c <> .d) {}", "@scope (div::before) {}", "@scope div {}",
+        "@scope (.a) unknown (.c) {}", "@scope creep {}", "@scope to {}", "@scope (.a) from (.c) {}",
+    ] {
+        assert!(tree(bad).rules.is_empty(), "{bad}");
+    }
+}
+
+#[test]
 fn media_condition_gets_space_after_colon() {
     assert_eq!(tree("@media (min-width:100px) { a{x:y} }").rules[0].prelude, "(min-width: 100px)");
 }

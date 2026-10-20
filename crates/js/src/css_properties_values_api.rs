@@ -84,6 +84,11 @@ pub(crate) fn install_css_properties_values_api_v8(rt: &crate::v8_runtime::V8JsR
             lumen_layout::style::validate_registered_property(&syntax, initial).err()
         }),
     )?;
+    // CSSOM-10: the same check decides whether an `@property` rule is valid enough
+    // to appear in `cssRules` (the CSSOM tree lives below layout and cannot call it).
+    lumen_css_parser::cssom_tree::set_property_rule_validator(|syntax, initial| {
+        lumen_layout::style::validate_registered_property(syntax, initial).is_ok()
+    });
     rt.eval(CSS_PROPERTIES_VALUES_SHIM)?;
     Ok(())
 }

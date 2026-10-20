@@ -457,8 +457,12 @@ fn build_at_rule(
         }
         RuleKind::Media | RuleKind::Supports | RuleKind::Container | RuleKind::Scope | RuleKind::StartingStyle => {
             let (inner, closed) = block?;
+            if kind == RuleKind::Container && !container_prelude_is_valid(&params_c) {
+                return None;
+            }
             let prelude = match kind {
                 RuleKind::Media | RuleKind::Supports | RuleKind::Container => space_after_colons(&params_c),
+                RuleKind::Scope => scope_prelude(&params_c)?,
                 _ => params_c,
             };
             Some(group_node(src, e, kind, prelude, inner, closed, ctx))
@@ -486,6 +490,9 @@ fn build_at_rule(
             }
             let mut n = CssomNode::new(kind, params_c);
             n.decls = parse_inline_style(&src[inner.0..inner.1]);
+            if kind == RuleKind::Property && !property_descriptors_are_valid(&n.decls) {
+                return None;
+            }
             n.raw = closed.then(|| src[e.start..e.end].to_string());
             Some(n)
         }
@@ -498,6 +505,210 @@ fn build_at_rule(
         }
         _ => None,
     }
+}
+
+/// Проверка `syntax`/`initial-value` дескрипторов `@property`, которую css-parser
+/// выполнить не может сам: грамматика syntax-строк и сопоставление значения живут в
+/// `lumen-layout` (выше по слоям). Устанавливается один раз при старте рантайма;
+/// без неё проверяются только форма дескрипторов и обязательность `initial-value`.
+pub type PropertyRuleValidator = fn(syntax: &str, initial_value: Option<&str>) -> bool;
+
+static PROPERTY_RULE_VALIDATOR: std::sync::OnceLock<PropertyRuleValidator> = std::sync::OnceLock::new();
+
+/// Регистрирует [`PropertyRuleValidator`]; повторный вызов игнорируется.
+pub fn set_property_rule_validator(validator: PropertyRuleValidator) {
+    let _ = PROPERTY_RULE_VALIDATOR.set(validator);
+}
+
+/// CSS Properties and Values 1 §2.1: `syntax` — строка, `inherits` — `true|false`,
+/// `initial-value` обязателен при неуниверсальном `syntax`; иначе правило отбрасывается.
+fn property_descriptors_are_valid(decls: &[Declaration]) -> bool {
+    let find = |name: &str| decls.iter().rev().find(|d| d.property.eq_ignore_ascii_case(name)).map(|d| d.value.trim());
+    let Some(syntax) = find("syntax").and_then(crate::parser::strip_css_string) else {
+        return false;
+    };
+    if !find("inherits").is_some_and(|v| v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false")) {
+        return false;
+    }
+    let initial = find("initial-value");
+    match PROPERTY_RULE_VALIDATOR.get() {
+        Some(validate) => validate(syntax.trim(), initial),
+        None => syntax.trim() == "*" || initial.is_some(),
+    }
+}
+
+/// Прелюдия `@container` — `<container-condition>#`, где условие — `<name>? <query>?`
+/// (хотя бы одно; CSS Conditional 5 §«container-rule»). Содержимое скобок не
+/// проверяется: неизвестное условие — `<general-enclosed>`, правило остаётся валидным.
+fn container_prelude_is_valid(prelude: &str) -> bool {
+    !prelude.trim().is_empty() && split_selector_commas(prelude).into_iter().all(container_entry_is_valid)
+}
+
+fn container_entry_is_valid(entry: &str) -> bool {
+    let entry = entry.trim();
+    let Some((ident, rest)) = take_ident(entry) else {
+        return container_query_is_valid(entry);
+    };
+    if rest.starts_with('(') {
+        return container_query_is_valid(entry);
+    }
+    let lower = ident.to_ascii_lowercase();
+    if matches!(lower.as_str(), "not" | "and" | "or") {
+        return container_query_is_valid(entry);
+    }
+    if matches!(
+        lower.as_str(),
+        "none" | "default" | "initial" | "inherit" | "unset" | "revert" | "revert-layer"
+    ) {
+        return false;
+    }
+    let rest = rest.trim();
+    rest.is_empty() || container_query_is_valid(rest)
+}
+
+/// `not <in-parens>` | `<in-parens> [and <in-parens>]*` | `<in-parens> [or <in-parens>]*`.
+fn container_query_is_valid(query: &str) -> bool {
+    let query = query.trim();
+    if let Some((word, rest)) = take_ident(query)
+        && word.eq_ignore_ascii_case("not")
+        && rest.starts_with(char::is_whitespace)
+    {
+        return matches!(take_in_parens(rest.trim_start()), Some(tail) if tail.trim().is_empty());
+    }
+    let Some(mut rest) = take_in_parens(query) else {
+        return false;
+    };
+    let mut op: Option<String> = None;
+    while !rest.trim().is_empty() {
+        let Some((word, tail)) = take_ident(rest.trim_start()) else {
+            return false;
+        };
+        let word = word.to_ascii_lowercase();
+        if !(word == "and" || word == "or")
+            || op.as_ref().is_some_and(|o| *o != word)
+            || !tail.starts_with(char::is_whitespace)
+            || !rest.starts_with(char::is_whitespace)
+        {
+            return false;
+        }
+        op = Some(word);
+        let Some(next) = take_in_parens(tail.trim_start()) else {
+            return false;
+        };
+        rest = next;
+    }
+    true
+}
+
+/// Идентификатор в начале строки: `(ident, остаток)`.
+fn take_ident(s: &str) -> Option<(&str, &str)> {
+    let first = s.chars().next()?;
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '-' || !first.is_ascii()) {
+        return None;
+    }
+    let end = s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii())).unwrap_or(s.len());
+    Some((&s[..end], &s[end..]))
+}
+
+/// `( … )` либо `ident( … )` в начале строки (скобки сбалансированы, строки учтены):
+/// остаток после закрывающей скобки.
+fn take_in_parens(s: &str) -> Option<&str> {
+    let body_start = if s.starts_with('(') {
+        1
+    } else {
+        let (ident, rest) = take_ident(s)?;
+        if !rest.starts_with('(') {
+            return None;
+        }
+        ident.len() + 1
+    };
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in s[body_start..].char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[body_start + i + 1..]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Прелюдия `@scope` — `[(<scope-start>)]? [to (<scope-end>)]?` (CSS Cascade 6 §2.4):
+/// каноническая запись (`(.a) to (.b)`) или `None`, если прелюдия невалидна
+/// (пустые скобки, псевдоэлементы, лишние токены). Списки селекторов внутри
+/// скобок допускают ведущий комбинатор и `&`.
+fn scope_prelude(params: &str) -> Option<String> {
+    fn group(text: &str) -> Option<(String, &str)> {
+        let text = text.trim_start();
+        let body = text.strip_prefix('(')?;
+        let mut depth = 1usize;
+        let mut quote: Option<char> = None;
+        for (i, c) in body.char_indices() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'') =>quote = Some(c),
+                (None, '(') => depth += 1,
+                (None, ')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((selector_list(&body[..i])?, &body[i + 1..]));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    fn selector_list(text: &str) -> Option<String> {
+        let mut out = Vec::new();
+        for item in split_selector_commas(text) {
+            let item = item.trim();
+            let canon = canonical_selector_list(item, true)?;
+            let lower = canon.to_ascii_lowercase();
+            if lower.contains("::")
+                || [":before", ":after", ":first-line", ":first-letter"].iter().any(|p| lower.contains(p))
+            {
+                return None;
+            }
+            // Неявный `& ` канонизатора не принадлежит записи, как написана.
+            let written = if !item.starts_with('&') { canon.strip_prefix("& ").unwrap_or(&canon) } else { &canon };
+            out.push(written.to_string());
+        }
+        (!out.is_empty()).then(|| out.join(", "))
+    }
+    let mut rest = params.trim();
+    let mut out = String::new();
+    if rest.starts_with('(') {
+        let (start, tail) = group(rest)?;
+        out.push_str(&format!("({start})"));
+        rest = tail.trim_start();
+    }
+    if !rest.is_empty() {
+        let after = rest.get(..2).filter(|w| w.eq_ignore_ascii_case("to"))?;
+        let tail = &rest[after.len()..];
+        if !(tail.starts_with(char::is_whitespace) || tail.starts_with('(')) {
+            return None;
+        }
+        let (end, tail) = group(tail)?;
+        if !tail.trim().is_empty() {
+            return None;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("to ({end})"));
+    }
+    Some(out)
 }
 
 fn opaque_kind(src: &str, e: &Elem, kind: RuleKind) -> CssomNode {
