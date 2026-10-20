@@ -1390,3 +1390,13 @@ use super::*;
         assert_eq!(s.rules[1].declarations[0].value, "200px");
     }
 
+
+    #[test]
+    fn overflow_clip_margin_is_a_supported_property() {
+        // BUG-1390: `CSS.supports('overflow-clip-margin', '20px')` and
+        // `@supports (overflow-clip-margin: 20px)` read this list.
+        assert!(crate::SUPPORTED_PROPERTIES.contains(&"overflow-clip-margin"));
+        let s = parse("@supports (overflow-clip-margin: 20px) { p { color: green } }");
+        assert_eq!(s.supports_rules.len(), 1);
+        assert!(s.supports_rules[0].condition.evaluate(crate::SUPPORTED_PROPERTIES));
+    }

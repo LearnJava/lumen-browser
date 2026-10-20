@@ -1751,6 +1751,71 @@ use super::table::{BorderPrecedence, CollapsedBorder, TableContext};
         }
     }
 
+
+    // BUG-1390: both emit paths (plain `walk` and the ordered stacking-context
+    // path) must build the clip through `overflow_clip_rect`.
+    fn first_clip(dl: &DisplayList) -> Rect {
+        match find_push_clip_rects(dl).first() {
+            Some(DisplayCommand::PushClipRect { rect }) => *rect,
+            other => panic!("no PushClipRect: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn overflow_clip_margin_expands_clip_in_stacking_context_path() {
+        let css = "body{margin:0}";
+        let plain = first_clip(&build(
+            r#"<div style="position:relative;z-index:1;overflow:clip;width:100px;height:50px"></div>"#,
+            css,
+        ));
+        let grown = first_clip(&build(
+            r#"<div style="position:relative;z-index:1;overflow:clip;overflow-clip-margin:20px;width:100px;height:50px"></div>"#,
+            css,
+        ));
+        assert_eq!((plain.x, plain.y, plain.width, plain.height), (0.0, 0.0, 100.0, 50.0));
+        assert_eq!((grown.x, grown.y, grown.width, grown.height), (-20.0, -20.0, 140.0, 90.0));
+    }
+
+    #[test]
+    fn overflow_clip_margin_content_box_measures_from_the_content_edge() {
+        let css = "body{margin:0}";
+        let r = first_clip(&build(
+            r#"<div style="overflow:clip;overflow-clip-margin:content-box 5px;padding:10px;width:100px;height:50px"></div>"#,
+            css,
+        ));
+        // Border box 120×70; content box inset by 10 → (10,10,100,50), then ±5.
+        assert_eq!((r.x, r.y, r.width, r.height), (5.0, 5.0, 110.0, 60.0));
+    }
+
+    #[test]
+    fn overflow_clip_margin_border_box_measures_from_the_border_edge() {
+        let css = "body{margin:0}";
+        let r = first_clip(&build(
+            r#"<div style="overflow:clip;overflow-clip-margin:border-box;border:4px solid;width:100px;height:50px"></div>"#,
+            css,
+        ));
+        assert_eq!((r.x, r.y, r.width, r.height), (0.0, 0.0, 108.0, 58.0));
+    }
+
+    #[test]
+    fn overflow_clip_margin_applies_only_to_the_clip_axes() {
+        let css = "body{margin:0}";
+        let r = first_clip(&build(
+            r#"<div style="overflow-x:clip;overflow-y:hidden;overflow-clip-margin:10px;width:100px;height:50px"></div>"#,
+            css,
+        ));
+        assert_eq!((r.x, r.y, r.width, r.height), (-10.0, 0.0, 120.0, 50.0));
+    }
+
+    #[test]
+    fn overflow_clip_margin_is_ignored_for_overflow_hidden() {
+        let css = "body{margin:0}";
+        let r = first_clip(&build(
+            r#"<div style="overflow:hidden;overflow-clip-margin:10px;width:100px;height:50px"></div>"#,
+            css,
+        ));
+        assert_eq!((r.x, r.y, r.width, r.height), (0.0, 0.0, 100.0, 50.0));
+    }
     #[test]
     fn overflow_hidden_and_clip_both_emit_clip() {
         let dl_hidden = build(

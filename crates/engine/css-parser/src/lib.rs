@@ -313,6 +313,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "outline-width",
     "overflow",
     "overflow-anchor",
+    "overflow-clip-margin",
     "overflow-x",
     "overflow-y",
     "overflow-wrap",
