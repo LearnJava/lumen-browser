@@ -8,7 +8,8 @@
 
 use super::grid::{resolve_grid_axis, GridAxis};
 use super::LayoutBox;
-use crate::style::{ComputedStyle, LanesAxis};
+use crate::style::{ComputedStyle, GridTrackSize, LanesAxis};
+use std::sync::Arc;
 
 /// Ось, вдоль которой идут полосы (`grid-lanes-direction: normal` берёт её из шаблона).
 pub(super) fn lanes_axis(s: &ComputedStyle) -> LanesAxis {
@@ -25,6 +26,24 @@ pub(super) fn lanes_axis(s: &ComputedStyle) -> LanesAxis {
         explicit => explicit,
     }
 }
+
+/// Стиль для сетки `grid-lanes` с полосами-столбцами: шаблон строк игнорируется (строки здесь по одной на
+/// элемент, высоту даёт содержимое). `None` — стиль не меняется. Вынесено из `dispatch_box`: копия
+/// `ComputedStyle` в его кадре раздувает стек на каждом уровне вложенности.
+#[inline(never)]
+pub(super) fn lanes_style(s: &Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> {
+    if !s.grid_lanes.enabled || lanes_axis(s) != LanesAxis::Column {
+        return None;
+    }
+    let mut ls = (**s).clone();
+    ls.grid_template_rows.clear();
+    ls.grid_template_row_auto_repeat = None;
+    ls.grid_auto_rows = GridTrackSize::Auto;
+    Some(Arc::new(ls))
+}
+
+/// Размещение элемента в сетке: `(начало, конец столбца, начало, конец строки)`, номера линий с 1.
+pub(super) type Placement = (u32, u32, u32, u32);
 
 /// Сколько полос и где занимает элемент: `def` — определённая первая полоса (0-based).
 #[derive(Clone, Copy, Debug)]
@@ -77,13 +96,11 @@ impl LanesState {
         let span = item.span.clamp(1, n);
         let first = match item.def {
             Some(d) => d.min(n - span),
-            None => {
-                let first =
-                    pick_window(&self.ends, self.gap, span, self.tolerance, self.track_reverse, self.cursor);
-                self.cursor = if self.track_reverse { n - first } else { first + span };
-                first
-            }
+            None => pick_window(&self.ends, self.gap, span, self.tolerance, self.track_reverse, self.cursor),
         };
+        // Курсор сдвигается и от элементов с определённой полосой (item-placement-004: после
+        // `grid-column: 2 / span 2` равные пустые полосы берутся с четвёртой, не с первой).
+        self.cursor = if self.track_reverse { n - first } else { first + span };
         self.window[k] = (first, span);
         (first, span)
     }
@@ -123,10 +140,10 @@ pub(super) fn lane_items(children: &[LayoutBox], item_idxs: &[usize], col_axis: 
 /// начало окна из `n_cols` полос.
 pub(super) fn sizing_items(
     item_idxs: &[usize],
-    placements: &[(u32, u32, u32, u32)],
+    placements: &[Placement],
     lanes: &[LaneItem],
     n_cols: usize,
-) -> (Vec<usize>, Vec<(u32, u32, u32, u32)>) {
+) -> (Vec<usize>, Vec<Placement>) {
     let mut idxs = Vec::with_capacity(item_idxs.len());
     let mut places = Vec::with_capacity(item_idxs.len());
     for ((&i, &p), item) in item_idxs.iter().zip(placements).zip(lanes) {
@@ -242,11 +259,27 @@ mod tests {
     }
 
     #[test]
+    fn definite_item_moves_the_cursor() {
+        // item-placement-004: `grid-column: 2 / span 2` из четырёх пустых полос — следующий
+        // автоэлемент берёт из равных полос 0 и 3 ту, что после курсора (3), затем снова 0.
+        let items = vec![LaneItem { def: Some(1), span: 2 }, auto(1), auto(1)];
+        let mut st = LanesState::new(items, 4, 0.0, 0.0, false);
+        let lanes: Vec<usize> = (0..3)
+            .map(|k| {
+                let l = st.choose(k).0;
+                st.settle(k, 10.0);
+                l
+            })
+            .collect();
+        assert_eq!(lanes, vec![1, 3, 0]);
+    }
+
+    #[test]
     fn definite_lane_and_track_reverse() {
         let mut st = LanesState::new(vec![LaneItem { def: Some(1), span: 1 }, auto(1)], 3, 0.0, 0.0, true);
         assert_eq!(st.choose(0).0, 1);
         st.settle(0, 10.0);
-        // свободны полосы 0 и 2; при track-reverse первой считается последняя.
-        assert_eq!(st.choose(1).0, 2);
+        // свободны полосы 0 и 2; при track-reverse порядок 2, 1, 0, курсор после полосы 1 — это полоса 0.
+        assert_eq!(st.choose(1).0, 0);
     }
 }

@@ -94,6 +94,17 @@ pub(super) fn classify_col_tracks(
     n_cols: usize,
     resolve: &dyn Fn(&Length) -> Option<f32>,
 ) -> Option<Vec<TrackKind>> {
+    classify_all_col_tracks(template, auto_track, n_cols, resolve).filter(|k| k.iter().any(|k| !k.is_fixed()))
+}
+
+/// [`classify_col_tracks`] без отбраковки сетки, где все дорожки фиксированы: `grid-lanes` без шаблона
+/// (одни `grid-auto-columns: 80px`) всё равно считается по дорожкам — число полос задают элементы.
+pub(super) fn classify_all_col_tracks(
+    template: &[GridTrackSize],
+    auto_track: &GridTrackSize,
+    n_cols: usize,
+    resolve: &dyn Fn(&Length) -> Option<f32>,
+) -> Option<Vec<TrackKind>> {
     let mut kinds = Vec::with_capacity(n_cols);
     for c in 0..n_cols {
         kinds.push(match grid_track(c as u32, template, auto_track) {
@@ -107,7 +118,7 @@ pub(super) fn classify_col_tracks(
             }
         });
     }
-    kinds.iter().any(|k| !k.is_fixed()).then_some(kinds)
+    Some(kinds)
 }
 
 /// Is `b` a grid container whose column axis is `subgrid`?

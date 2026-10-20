@@ -455,9 +455,12 @@ fn grid_col_sum_by_tracks(
         .max()
         .unwrap_or(1)
         .max(n_explicit);
-    let kinds = gac::classify_col_tracks(template, &s.grid_auto_columns, n_cols, &|l| {
-        l.resolve(s.font_size, None, viewport)
-    })?;
+    let resolve = |l: &Length| l.resolve(s.font_size, None, viewport);
+    let kinds = if lanes {
+        gac::classify_all_col_tracks(template, &s.grid_auto_columns, n_cols, &resolve)?
+    } else {
+        gac::classify_col_tracks(template, &s.grid_auto_columns, n_cols, &resolve)?
+    };
     let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
     let mut contribs = Vec::new();
     let measure = |c: &LayoutBox| {

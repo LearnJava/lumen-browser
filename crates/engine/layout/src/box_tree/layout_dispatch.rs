@@ -1413,19 +1413,8 @@ pub(super) fn dispatch_box(
                 b.subgrid_tracks = crate::subgrid::peek_tracks();
                 // CSS Grid L3 §2: у `grid-lanes` с полосами-столбцами шаблон строк игнорируется —
                 // строки здесь по одной на элемент, высоту им даёт содержимое.
-                let lanes_s;
-                let grid_s = if s.grid_lanes.enabled
-                    && super::grid_lanes::lanes_axis(&s) == crate::style::LanesAxis::Column
-                {
-                    let mut ls = (*s).clone();
-                    ls.grid_template_rows.clear();
-                    ls.grid_template_row_auto_repeat = None;
-                    ls.grid_auto_rows = GridTrackSize::Auto;
-                    lanes_s = Arc::new(ls);
-                    &lanes_s
-                } else {
-                    &s
-                };
+                let lanes_s = super::grid_lanes::lanes_style(&s);
+                let grid_s = lanes_s.as_ref().unwrap_or(&s);
                 match grid::build_grid_init(
                     &b.children, grid_s, content_x, content_y, content_width, grid_definite_height,
                     viewport, children_pcb, em, available_height, padding_top, padding_bottom,
