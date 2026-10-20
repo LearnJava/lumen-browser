@@ -55,6 +55,13 @@ struct IcuLineBreaker {
 }
 
 impl IcuLineBreaker {
+    fn build(strictness: LineBreakStrictness, word: LineBreakWordOption) -> icu_segmenter::LineSegmenterBorrowed<'static> {
+        let mut options = LineBreakOptions::default();
+        options.strictness = Some(strictness);
+        options.word_option = Some(word);
+        icu_segmenter::LineSegmenter::new_auto(options)
+    }
+
     fn slot(strictness: LineBreakStrictness, word: LineBreakWordOption) -> usize {
         let s = match strictness {
             LineBreakStrictness::Loose => 0,
@@ -82,13 +89,30 @@ impl LineBreakProvider for IcuLineBreaker {
             WordBreak::KeepAll => LineBreakWordOption::KeepAll,
             _ => LineBreakWordOption::Normal,
         };
-        let seg = self.segmenters[Self::slot(strictness, word)].get_or_init(|| {
-            let mut options = LineBreakOptions::default();
-            options.strictness = Some(strictness);
-            options.word_option = Some(word);
-            icu_segmenter::LineSegmenter::new_auto(options)
-        });
-        seg.segment_str(text).filter(|&p| p > 0 && p < text.len()).collect()
+        let seg = self.segmenters[Self::slot(strictness, word)].get_or_init(|| Self::build(strictness, word));
+        let mut out: Vec<usize> = seg.segment_str(text).filter(|&p| p > 0 && p < text.len()).collect();
+        match word {
+            // ICU's keep-all drops the break after a hyphen-minus too; CSS Text
+            // L3 §5.2 only forbids breaks between letters, so restore it
+            // wherever `normal` has it (word-break-keep-all-u002d).
+            LineBreakWordOption::KeepAll => {
+                let normal = self.segmenters[Self::slot(strictness, LineBreakWordOption::Normal)]
+                    .get_or_init(|| Self::build(strictness, LineBreakWordOption::Normal));
+                let hyphens = normal
+                    .segment_str(text)
+                    .filter(|&p| p > 0 && p < text.len() && text[..p].ends_with('-'));
+                out.extend(hyphens);
+                out.sort_unstable();
+                out.dedup();
+            }
+            // A syllable cluster is one typographic letter unit: never cut
+            // after a virama, ICU's `break-all` does (word-break-break-all-008).
+            LineBreakWordOption::BreakAll => {
+                out.retain(|&p| !text[..p].chars().next_back().is_some_and(is_virama));
+            }
+            _ => {}
+        }
+        out
     }
 }
 
@@ -97,9 +121,39 @@ fn provider() -> &'static dyn LineBreakProvider {
     P.get_or_init(|| IcuLineBreaker { segmenters: Default::default() })
 }
 
-/// `line-break: anywhere` — a soft wrap opportunity around every typographic
-/// character unit (CSS Text L4 §5.3).
+/// CSS Text L3 §5.1: a soft wrap opportunity exists before and after an atomic
+/// inline even next to characters that normally suppress one — except that
+/// "there must be no soft wrap opportunity between atomic inlines and adjacent
+/// characters belonging to the Unicode GL, WJ, or ZWJ line breaking classes",
+/// with U+00A0 NO-BREAK SPACE singled out as the one that does not glue.
 ///
+/// ICU's segmenter only answers for text, so the three classes are listed here
+/// (Unicode `LineBreak.txt`: GL, WJ, ZWJ; U+034F is GL there).
+pub fn glues_to_atomic(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x034F | 0x035C..=0x0362 | 0x0F08 | 0x0F0C | 0x0F12 | 0x0FD9 | 0x0FDA | 0x180E | 0x2007 | 0x2011
+            | 0x202F // GL
+            | 0x2060 | 0xFEFF // WJ
+            | 0x200D // ZWJ
+    )
+}
+
+/// Indic viramas (Canonical_Combining_Class 9): the consonant after one joins
+/// the conjunct, so the syllable is not a place to wrap.
+fn is_virama(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x094D | 0x09CD | 0x0A4D | 0x0ACD | 0x0B4D | 0x0BCD | 0x0C4D | 0x0CCD | 0x0D3B | 0x0D3C | 0x0D4D
+            | 0x0DCA | 0x0E3A | 0x0EBA | 0x0F84 | 0x1039 | 0x103A | 0x1714 | 0x1734 | 0x17D2 | 0x1A60
+            | 0x1B44 | 0x1BAA | 0x1BAB | 0x1BF2 | 0x1BF3 | 0x2D7F | 0xA806 | 0xA82C | 0xA8C4 | 0xA953
+            | 0xA9C0 | 0xAAF6 | 0xABED | 0x10A3F | 0x11046 | 0x1107F | 0x110B9 | 0x11133 | 0x11134
+            | 0x111C0 | 0x11235 | 0x112EA | 0x1134D | 0x11442 | 0x114C2 | 0x115BF | 0x1163F | 0x116B6
+            | 0x1172B | 0x11839 | 0x1193D | 0x1193E | 0x119E0 | 0x11A34 | 0x11A47 | 0x11A99 | 0x11C3F
+            | 0x11D44 | 0x11D45 | 0x11D97
+    )
+}
+
 /// `line-break: anywhere` — a soft wrap opportunity around every typographic
 /// character unit (CSS Text L4 §5.3).
 ///
@@ -323,6 +377,24 @@ mod tests {
     fn keep_all_removes_ideograph_breaks() {
         assert_eq!(chars_at("日本語版", WordBreak::Normal), vec![1, 2, 3]);
         assert!(chars_at("日本語版", WordBreak::KeepAll).is_empty());
+    }
+
+    #[test]
+    fn keep_all_still_breaks_after_hyphens() {
+        // word-break-keep-all-u002d: keep-all only suppresses letter/ideograph
+        // breaks; a hyphen-minus still ends a line.
+        assert_eq!(chars_at("AB-CD-EF", WordBreak::KeepAll), vec![3, 6]);
+        assert!(chars_at("12-34-56", WordBreak::KeepAll).is_empty()); // LB25: HY × NU
+        assert!(chars_at("日-本", WordBreak::KeepAll).len() <= 1);
+    }
+
+    #[test]
+    fn break_all_keeps_indic_syllable_together() {
+        // word-break-break-all-008: हिन्दी is one syllable cluster of
+        // 3 grapheme clusters (हि, न्दी); never cut inside a conjunct.
+        let word = "हिन्दी";
+        let opps = break_opportunities(word, LineBreak::Auto, WordBreak::BreakAll);
+        assert_eq!(opps, vec!["हि".len()]);
     }
 
     #[test]

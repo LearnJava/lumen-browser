@@ -704,6 +704,27 @@ impl LineIndent {
 
 /// Отступ только у первой строки; см. [`wrap_inline_run_indented`].
 #[allow(clippy::too_many_arguments)]
+/// Does UAX #14 (tailored by `line-break`/`word-break`) allow a soft wrap
+/// between the end of the segments before `seg_idx` and the start of `word`?
+fn tight_boundary_breaks(
+    segments: &[InlineSegment],
+    seg_idx: usize,
+    word: &str,
+    line_break: LineBreak,
+    word_break: WordBreak,
+) -> bool {
+    let Some(prev) = segments[..seg_idx].iter().rev().find_map(|s| s.text.chars().next_back()) else {
+        return true;
+    };
+    let Some(next) = word.chars().next() else {
+        return true;
+    };
+    let mut pair = String::with_capacity(8);
+    pair.push(prev);
+    pair.push(next);
+    crate::line_break::break_opportunities(&pair, line_break, word_break).contains(&prev.len_utf8())
+}
+
 pub(crate) fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
@@ -952,7 +973,14 @@ pub(crate) fn wrap_inline_run_indented(
 
             // Перенос перед этим словом разрешён? Запрещён он только на стыке
             // подсегментов, разрезанных капителью внутри слова.
-            let breakable = !is_seg_first || !no_break_before;
+            // Segments joined without white space (`<a>A</a>B`, `<b>x</b>-`) form
+            // one word for UAX #14: the boundary breaks only where the pair of
+            // characters around it does.
+            let tight_join = is_seg_first && word_inter == 0.0 && !current_line.is_empty();
+            let base_breakable = !is_seg_first || !no_break_before;
+            let glued_boundary =
+                tight_join && !tight_boundary_breaks(segments, seg_idx, &display_word, line_break, word_break);
+            let breakable = base_breakable && !glued_boundary;
             // Слово не влезает в остаток строки. Для мягкого переноса и
             // `word-break: break-all` это достаточное условие, в том числе когда
             // слово начинает строку и переполняет контейнер в одиночку
@@ -971,7 +999,7 @@ pub(crate) fn wrap_inline_run_indented(
             let lb_avail = max_width - current_x - gap - pre;
             let ow_chars = word_break == WordBreak::BreakWord
                 || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere);
-            let lb_opps = if breakable && word_w > lb_avail {
+            let lb_opps = if base_breakable && word_w > lb_avail {
                 crate::line_break::break_opportunities(&display_word, line_break, word_break)
             } else {
                 Vec::new()
@@ -990,7 +1018,7 @@ pub(crate) fn wrap_inline_run_indented(
                         style.font_size, ls, &style.font_family, m,
                     );
                     if end == start {
-                        if !current_line.is_empty() {
+                        if !current_line.is_empty() && !(glued_boundary && first_chunk) {
                             // Nothing fits in what is left of this line — wrap
                             // and measure again against the full width.
                             result.push(std::mem::take(&mut current_line));
