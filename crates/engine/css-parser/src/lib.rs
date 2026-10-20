@@ -15,6 +15,7 @@
 //! Не поддерживается (отложено): namespace prefix в селекторах.
 
 mod compat_alias;
+pub mod cssom_tree;
 pub mod parser;
 
 pub use compat_alias::{canonical_property_name, COMPAT_CSS_ALIASES};

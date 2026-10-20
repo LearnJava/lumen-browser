@@ -1920,3 +1920,89 @@ pub(crate) fn parse_nth_spec_str(s: &str) -> Option<NthSpec> {
         Some(NthSpec { a: 0, b: s.parse().ok()? })
     }
 }
+
+/// Маркер, которым [`canonical_selector_list`] подменяет `&` на время разбора:
+/// селекторный парсер `&` не знает (вложенность разворачивается текстом), а
+/// `:is(.x)` допустим в любой позиции compound-селектора.
+const NESTING_MARKER: &str = ":is(.lumen-nesting-amp)";
+
+/// Каноническая запись списка селекторов для CSSOM (`selectorText`) или `None`,
+/// если список невалиден. `nested` — тело стилевого правила: допускается
+/// ведущий комбинатор (`> .a`) и `&` в любой позиции (CSS Nesting 1 §3).
+pub(crate) fn canonical_selector_list(input: &str, nested: bool) -> Option<String> {
+    let mut out = Vec::new();
+    for item in split_selector_commas(input) {
+        let item = item.trim();
+        if item.is_empty() {
+            return None;
+        }
+        let (prefix, rest) = match item.chars().next() {
+            Some(c @ ('>' | '+' | '~')) if nested => (format!("{c} "), item[1..].trim_start()),
+            _ => (String::new(), item),
+        };
+        let substituted = if nested { replace_outside_strings(rest, '&', NESTING_MARKER) } else { rest.to_string() };
+        if rest.is_empty() || !is_valid_selector_list(&substituted) {
+            return None;
+        }
+        let sels = Parser::new(&substituted).parse_selector_list_strict()?;
+        out.push(format!("{prefix}{}", sels_to_css_str(&sels).replace(NESTING_MARKER, "&")));
+    }
+    if out.is_empty() { None } else { Some(out.join(", ")) }
+}
+
+/// Делит по запятым нулевой глубины (вне скобок и строк).
+pub(crate) fn split_selector_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    let mut quote: Option<char> = None;
+    let mut chars = input.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match (quote, c) {
+            (Some(_), '\\') => {
+                chars.next();
+            }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '\\') => {
+                chars.next();
+            }
+            (None, '(' | '[') => depth += 1,
+            (None, ')' | ']') => depth -= 1,
+            (None, ',') if depth == 0 => {
+                parts.push(&input[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&input[start..]);
+    parts
+}
+
+fn replace_outside_strings(input: &str, from: char, to: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut quote: Option<char> = None;
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(_), '\\') | (None, '\\') => {
+                out.push(c);
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            }
+            (Some(q), c) if c == q => {
+                quote = None;
+                out.push(c);
+            }
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                out.push(c);
+            }
+            (None, c) if c == from => out.push_str(to),
+            _ => out.push(c),
+        }
+    }
+    out
+}
