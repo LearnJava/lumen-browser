@@ -2529,9 +2529,17 @@ var _LUMEN_WEBKIT_MASK_BOX_IMAGE_ATTRS = {};
  'webkitMaskBoxImageSource webkitMaskBoxImageWidth').split(' ').forEach(function(n) {
     _LUMEN_WEBKIT_MASK_BOX_IMAGE_ATTRS[n] = true;
 });
+// Implemented `-webkit-` properties that are not Compat §3 aliases (`-webkit-line-clamp`, the legacy
+// `-webkit-box-*` family, `-webkit-text-fill-color`): their `webkitFoo` IDL attribute exists too (BUG-1392).
+var _LUMEN_WEBKIT_NATIVE_ATTRS = {};
+('webkitLineClamp webkitBoxOrient webkitBoxAlign webkitBoxPack webkitBoxFlex webkitBoxDirection ' +
+ 'webkitBoxOrdinalGroup webkitTextFillColor').split(' ').forEach(function(n) {
+    _LUMEN_WEBKIT_NATIVE_ATTRS[n] = true;
+});
 function _lumen_is_compat_alias_attr(prop) {
     if (typeof prop !== 'string' || !/^[Ww]eb[Kk]it[A-Z]/.test(prop)) return false;
     if (Object.prototype.hasOwnProperty.call(_LUMEN_WEBKIT_MASK_BOX_IMAGE_ATTRS, prop)) return true;
+    if (Object.prototype.hasOwnProperty.call(_LUMEN_WEBKIT_NATIVE_ATTRS, prop)) return true;
     // An alias resolves to its unprefixed name; any other `webkitFoo` stays `-webkit-foo`.
     return _lumen_camel_to_kebab(prop).indexOf('-webkit-') !== 0;
 }

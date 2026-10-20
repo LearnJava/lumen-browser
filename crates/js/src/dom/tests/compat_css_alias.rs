@@ -79,3 +79,20 @@ fn webkit_mask_box_image_attributes_are_enumerated_but_not_supported_in_css() {
         "true,true,true,true,true,true|false|false"
     );
 }
+
+/// BUG-1392: the lower-case `webkitFoo` spelling of a non-alias `-webkit-` property keeps the
+/// leading dash in the stored declaration and is an IDL attribute (`in style`).
+#[test]
+fn lowercase_webkit_attribute_of_native_property_keeps_leading_dash() {
+    let rt = rt();
+    assert_eq!(
+        eval_str(
+            &rt,
+            "var d = document.createElement('div'); d.style.webkitLineClamp = 2; \
+             d.style.webkitTransform = 'translateX(50px)'; \
+             d.getAttribute('style') + '|' + ('webkitLineClamp' in d.style) + '|' + ('webkitTransform' in d.style) \
+             + '|' + ('webkitBogus' in d.style) + '|' + d.style.webkitLineClamp"
+        ),
+        "-webkit-line-clamp: 2; transform: translateX(50px);|true|true|false|2"
+    );
+}
