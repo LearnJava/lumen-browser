@@ -70,17 +70,11 @@ j.pump_media(); j.pump_workers(); … })`. Одна такая задача ид
   Если не снижать цену флаша — бюджет/коалесцирование чтений геометрии (`clientWidth`) в одной задаче: отдельное решение.
 - `_lumen_deliver_intersection_observers`/`_lumen_deliver_resize_observers` в `_lumen_tick_timers`/rAF — ≈ 0,5–1,1 с (шим).
 
-## Handoff (P6, 2026-10-19, конец сессии) — гейт не закрыт
+## Гейт среза 1 (P6, 2026-10-20) — закрыт, влит
 
-Код среза 1 готов (counters.rs, restyle.rs, 2 теста), `cargo clippy -p lumen-layout --all-targets -D warnings` чист, layout `has_`/`bug935`/`node_fanout` зелёные.
-`scripts/scoped-test.sh` (лог был в `.tmp/scoped.log`) показал падения, **базу `main` не сверяли**:
-- `lumen-layout --lib`: stack overflow `grid_trampoline::deep_grid_chain…` — известный BUG-1266 (`--skip grid_trampoline`).
-- `lumen-shell --bin lumen`: `chrome_incremental::bug341_s13_hover_flip…` (412/419 reused), `bug341_s20…` (1 rayon fan-out), `bug341_s21…`
-  (3 переиндексации листа) — **могут быть от среза** (chrome.html: ~30 custom properties, канонизация `Arc` в `walk`, `:has`) —
-  проверить первыми: `git stash`-free способ — собрать `main` в отдельном worktree и прогнать те же 3 теста.
-  Ещё в shell: `page_pipeline::bug269…/bug969…`, `page_resources::frame_subresources…` (похоже на окружение/сеть).
-- `lumen-paint`: `display_list::text_and_images::*` (y-смещения текста), `snapshot_tests::*`, `hit_test::…` — слой paint срез не трогает, вероятно окружение (шрифты).
-- `lumen-js --lib`: `v8_gap_uashadowslot::*` (details), `v8_idle_message_clipboard::…` — сверить с `main`.
-Дальше: сверить падения с `main`; если s13/s20/s21 — от среза, найти причину (подозрение: канонизация `custom_props` в `walk` или
-shallow-корень `:has` в `has_reach_roots`); затем закрыть гейт, влить в `main`, удалить указатель из `STATUS-P6.md`,
-оставив BUG-1651 OPEN с остатком (см. «Что осталось»).
+`clippy -p lumen-layout --all-targets -D warnings` чист; layout `has_`/`bug935`/`node_fanout` — 112 зелёных. Падения, замеченные
+в первом прогоне `scoped-test.sh`, сверены с `main` (файлы среза временно откачены на `main`): `chrome_incremental::bug341_s13/s20/s21`
+падают **и на `main`** с теми же числами (412/419, 1 fan-out, 3–4 переиндексации) — не от среза; paint/js-падения срез не трогает.
+Графические тесты (`run.py --ipc --continue-on-fail`): 23 FAIL + 30 долгов, список и `diff_pct` всех 164 тестов
+побитно совпадают с `main` — пиксели срез не двигает (захват gdigrab в этой сессии недоступен: «magenta marker not found»).
+Остаток — в «Что осталось» выше; баг остаётся OPEN.
