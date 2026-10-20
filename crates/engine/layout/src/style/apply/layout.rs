@@ -272,12 +272,12 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "grid-auto-columns" => {
-            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+            if let Some(ts) = GridTrackSize::parse_auto_list(val, is_quirks) {
                 style.grid_auto_columns = ts;
             }
         }
         "grid-auto-rows" => {
-            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+            if let Some(ts) = GridTrackSize::parse_auto_list(val, is_quirks) {
                 style.grid_auto_rows = ts;
             }
         }

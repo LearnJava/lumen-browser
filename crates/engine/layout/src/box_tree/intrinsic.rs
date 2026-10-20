@@ -520,9 +520,9 @@ fn grid_col_sum_by_tracks(
         tracks.iter().map(|t| if t.flex_factor().is_some() { GridTrackSize::Auto } else { t.clone() }).collect();
     let resolve = |l: &Length| l.resolve(s.font_size, None, viewport);
     let kinds = if lanes {
-        gac::classify_all_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &resolve)?
+        gac::classify_all_col_tracks(&as_auto, &[], n_cols, &resolve)?
     } else {
-        gac::classify_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &resolve)?
+        gac::classify_col_tracks(&as_auto, &[], n_cols, &resolve)?
     };
     let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
     let mut contribs = Vec::new();

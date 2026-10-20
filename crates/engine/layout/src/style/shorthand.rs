@@ -891,33 +891,31 @@ pub(in crate::style) fn apply_grid_template_shorthand(
     }
 }
 
-/// Сторона `grid` в форме `auto-flow && dense? <track-size>?`.
+/// Сторона `grid` в форме `auto-flow && dense? <track-size>*`.
 /// `Ok(None)` — слова `auto-flow` нет (сторона — обычный track-list);
-/// `Err(())` — невалидно; `Ok(Some((dense, size)))` — разобрано.
+/// `Err(())` — невалидно; `Ok(Some((dense, sizes)))` — разобрано (`sizes` пуст = `auto`).
 #[allow(clippy::type_complexity, clippy::result_unit_err)]
 fn parse_auto_flow_side(
     s: &str,
     is_quirks: bool,
-) -> Result<Option<(bool, GridTrackSize)>, ()> {
+) -> Result<Option<(bool, Vec<GridTrackSize>)>, ()> {
     let toks = split_top_level_ws(s);
     if !toks.iter().any(|t| t.eq_ignore_ascii_case("auto-flow")) {
         return Ok(None);
     }
     let mut dense = false;
     let mut seen_flow = false;
-    let mut size: Option<GridTrackSize> = None;
+    let mut sizes: Vec<GridTrackSize> = Vec::new();
     for t in toks {
         if t.eq_ignore_ascii_case("auto-flow") && !seen_flow {
             seen_flow = true;
         } else if t.eq_ignore_ascii_case("dense") && !dense {
             dense = true;
-        } else if size.is_none() {
-            size = Some(GridTrackSize::parse_single(t, is_quirks).ok_or(())?);
         } else {
-            return Err(());
+            sizes.extend(GridTrackSize::parse_auto_list(t, is_quirks).ok_or(())?);
         }
     }
-    Ok(Some((dense, size.unwrap_or(GridTrackSize::Auto))))
+    Ok(Some((dense, sizes)))
 }
 
 /// CSS Grid L1 §8.2 — `grid`:
@@ -955,7 +953,7 @@ pub(in crate::style) fn apply_grid_shorthand(
             };
             GridTemplateParts { columns, col_repeat, col_names, col_fill, ..Default::default() }.apply(style);
             style.grid_auto_rows = auto_rows;
-            style.grid_auto_columns = GridTrackSize::Auto;
+            style.grid_auto_columns = Vec::new();
             style.grid_auto_flow = if dense { GridAutoFlow::RowDense } else { GridAutoFlow::Row };
             true
         }
@@ -966,7 +964,7 @@ pub(in crate::style) fn apply_grid_shorthand(
             };
             GridTemplateParts { rows, row_repeat, row_names, row_fill, ..Default::default() }.apply(style);
             style.grid_auto_columns = auto_columns;
-            style.grid_auto_rows = GridTrackSize::Auto;
+            style.grid_auto_rows = Vec::new();
             style.grid_auto_flow =
                 if dense { GridAutoFlow::ColumnDense } else { GridAutoFlow::Column };
             true
@@ -988,7 +986,7 @@ fn apply_grid_template_then_reset_auto(
         return false;
     }
     style.grid_auto_flow = GridAutoFlow::Row;
-    style.grid_auto_rows = GridTrackSize::Auto;
-    style.grid_auto_columns = GridTrackSize::Auto;
+    style.grid_auto_rows = Vec::new();
+    style.grid_auto_columns = Vec::new();
     true
 }
