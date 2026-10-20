@@ -6,7 +6,7 @@
 //! стилевого правила — декларации вперемешку с правилами, `@keyframes` — кадры.
 
 use super::{CssomNode, RuleKind};
-use crate::parser::{canonical_selector_list, split_selector_commas};
+use crate::parser::{canonical_scope_selector_list, canonical_selector_list, split_selector_commas};
 use crate::{parse_apply_call, parse_inline_style, Declaration, MIXIN_APPLY_MARKER};
 
 /// Контекст разбора списка элементов.
@@ -16,8 +16,18 @@ pub(super) enum Ctx {
     Rules { root: bool },
     /// Тело стилевого правила: декларации и правила.
     Body,
+    /// Тело `@scope` (и условных групп в нём) без стилевого предка: как `Body`, но
+    /// селекторы относительны к `:scope`, без неявного `& `.
+    ScopeBody,
     /// Тело `@keyframes`: кадры.
     Keyframes,
+}
+
+impl Ctx {
+    /// Тело с вперемешку идущими декларациями и правилами.
+    pub(super) fn is_body(self) -> bool {
+        matches!(self, Ctx::Body | Ctx::ScopeBody)
+    }
 }
 
 /// Результат разбора списка: ведущие декларации и узлы.
@@ -282,7 +292,7 @@ pub(super) fn parse_items(src: &str, ctx: Ctx) -> Items {
         }
         let mut prelude_text = &src[e.start..e.prelude_end];
         // `--x: {…};` — блок внутри значения пользовательского свойства.
-        if ctx == Ctx::Body && matches!(e.term, Term::Block { .. }) && is_custom_property_prelude(prelude_text) {
+        if ctx.is_body() && matches!(e.term, Term::Block { .. }) && is_custom_property_prelude(prelude_text) {
             let after = scan(b, e.end);
             let (decl_end, next) = match after.term {
                 Term::Semi => (after.prelude_end, after.end),
@@ -299,7 +309,7 @@ pub(super) fn parse_items(src: &str, ctx: Ctx) -> Items {
         }
         if prelude_text.starts_with('@') {
             let (name, params) = at_name(prelude_text);
-            if ctx == Ctx::Body && name == "apply" {
+            if ctx.is_body() && name == "apply" {
                 if let Some(val) = apply_value(src, &e) {
                     items.pending.push(Declaration { property: MIXIN_APPLY_MARKER.to_string(), value: val, important: false });
                 }
@@ -346,7 +356,12 @@ pub(super) fn parse_items(src: &str, ctx: Ctx) -> Items {
                     items.push(style_node(src, &e, sel, inner, closed));
                 }
             }
-            (Ctx::Body, _) => {
+            (Ctx::ScopeBody, Term::Block { inner, closed }) => {
+                if let Some(sel) = canonical_scope_selector_list(prelude_text) {
+                    items.push(style_node(src, &e, sel, inner, closed));
+                }
+            }
+            (Ctx::Body | Ctx::ScopeBody, _) => {
                 items.pending.extend(parse_inline_style(&src[e.start..e.prelude_end]));
             }
             _ => {}
@@ -413,7 +428,7 @@ fn build_at_rule(
     seen_namespace: bool,
 ) -> Option<CssomNode> {
     let root = ctx == Ctx::Rules { root: true };
-    let in_body = ctx == Ctx::Body;
+    let in_body = ctx.is_body();
     let block = match e.term {
         Term::Block { inner, closed } => Some((inner, closed)),
         _ => None,
@@ -734,7 +749,11 @@ fn group_node(
     ctx: Ctx,
 ) -> CssomNode {
     let mut n = CssomNode::new(kind, prelude);
-    let child_ctx = if ctx == Ctx::Body || kind == RuleKind::Scope { Ctx::Body } else { Ctx::Rules { root: false } };
+    let child_ctx = match (kind, ctx) {
+        (RuleKind::Scope, _) | (_, Ctx::ScopeBody) => Ctx::ScopeBody,
+        (_, Ctx::Body) => Ctx::Body,
+        _ => Ctx::Rules { root: false },
+    };
     let body = parse_items(&src[inner.0..inner.1], child_ctx);
     n.children = body.nodes;
     if !body.decls.is_empty() {

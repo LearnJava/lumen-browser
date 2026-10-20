@@ -1930,6 +1930,16 @@ const NESTING_MARKER: &str = ":is(.lumen-nesting-amp)";
 /// если список невалиден. `nested` — тело стилевого правила: допускается
 /// ведущий комбинатор (`> .a`) и `&` в любой позиции (CSS Nesting 1 §3).
 pub(crate) fn canonical_selector_list(input: &str, nested: bool) -> Option<String> {
+    canonical_selector_list_with(input, nested, true)
+}
+
+/// Селекторы правила внутри `@scope` без стилевого предка: относительные к `:scope`,
+/// неявный `& ` не добавляется (`.b` остаётся `.b`, `> .foo` — `> .foo`).
+pub(crate) fn canonical_scope_selector_list(input: &str) -> Option<String> {
+    canonical_selector_list_with(input, true, false)
+}
+
+fn canonical_selector_list_with(input: &str, nested: bool, implicit_amp: bool) -> Option<String> {
     let mut out = Vec::new();
     for item in split_selector_commas(input) {
         let item = item.trim();
@@ -1951,7 +1961,7 @@ pub(crate) fn canonical_selector_list(input: &str, nested: bool) -> Option<Strin
                 let css = sels_to_css_str(&sels);
                 // Вложенный селектор без `&` и без ведущего комбинатора записывается с
                 // неявным `& ` (CSS Nesting 1 §«Syntax», CSSOM-сериализация).
-                let implicit = if nested && (!prefix.is_empty() || !css.contains(NESTING_MARKER)) { "& " } else { "" };
+                let implicit = if nested && implicit_amp && (!prefix.is_empty() || !css.contains(NESTING_MARKER)) { "& " } else { "" };
                 out.push(format!("{implicit}{prefix}{}", css.replace(NESTING_MARKER, "&")));
             }
             // CSS Nesting 1 §«Mixing nesting rules and declarations»: правило, которое

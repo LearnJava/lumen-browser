@@ -93,13 +93,12 @@ fn rule_json(sheet: &Stylesheet, id: u32) -> Option<String> {
         "styleCssText": tree.decls_text(id).unwrap_or_default(),
         "childCount": node.visible_len(),
     });
-    if node.kind == RuleKind::Mixin {
-        if let Some(idx) = sheet.mixin_cssom_index(id)
-            && let Some(lumen_css_parser::CssomRuleRef::Mixin(m)) = sheet.cssom_rules().get(idx).copied()
-        {
-            json["name"] = serde_json::Value::String(m.name.clone());
-            json["mixinIndex"] = serde_json::json!(idx);
-        }
+    if node.kind == RuleKind::Mixin
+        && let Some(idx) = sheet.mixin_cssom_index(id)
+        && let Some(lumen_css_parser::CssomRuleRef::Mixin(m)) = sheet.cssom_rules().get(idx).copied()
+    {
+        json["name"] = serde_json::Value::String(m.name.clone());
+        json["mixinIndex"] = serde_json::json!(idx);
     }
     Some(json.to_string())
 }

@@ -262,3 +262,28 @@ fn constructed_replace_drops_imports_but_keeps_other_rules() {
     sheet.cssom_drop_imports();
     assert_eq!(texts(sheet.cssom_tree()), [".x { color: blue; }"]);
 }
+
+#[test]
+fn top_level_only_at_rules_cannot_be_inserted_into_style_context() {
+    let mut t = tree("div { @media screen { &.a { color: red } } }");
+    let div = t.rules[0].id;
+    let media = t.rules[0].children[0].id;
+    assert_eq!(t.insert_rule(Some(media), "@font-face {}", 0), Err(CssomTreeError::HierarchyRequest));
+    assert_eq!(t.insert_rule(Some(div), "@font-face {}", 0), Err(CssomTreeError::HierarchyRequest));
+    // На верхнем уровне и в верхнеуровневой группе — можно.
+    let mut t = tree("@media screen { a { color: red } }");
+    let media = t.rules[0].id;
+    assert!(t.insert_rule(Some(media), "@font-face { font-family: x }", 0).is_ok());
+}
+
+#[test]
+fn rules_inside_scope_are_scope_relative_without_implicit_ampersand() {
+    let t = tree("@scope (.a) { .b { x: y } > .c { x: y } }");
+    let scope = &t.rules[0];
+    let texts: Vec<_> = scope.children.iter().map(|c| t.css_text(c.id).unwrap()).collect();
+    assert_eq!(texts, [".b { x: y; }", "> .c { x: y; }"]);
+    // Внутри стилевого правила, вложенного в @scope, селектор снова вложенный.
+    let t = tree("@scope (.a) { .b { .c { x: y } } }");
+    let inner = &t.rules[0].children[0].children[0];
+    assert_eq!(t.css_text(inner.id).unwrap(), "& .c { x: y; }");
+}

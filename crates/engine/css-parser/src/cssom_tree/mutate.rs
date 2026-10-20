@@ -5,7 +5,7 @@
 
 use super::parse::{collapse_ws, keyframe_key, nested_declarations, parse_items, space_after_colons, Ctx};
 use super::{find, find_mut, CssomNode, CssomTree, RuleKind};
-use crate::parser::canonical_selector_list;
+use crate::parser::{canonical_scope_selector_list, canonical_selector_list};
 use crate::Declaration;
 
 /// Ошибка CSSOM-мутации (имена — `DOMException`).
@@ -38,32 +38,42 @@ fn invalidate(nodes: &mut [CssomNode], id: u32) -> bool {
     false
 }
 
-/// Контекст тела узла `id`; `in_style` — есть ли стилевой предок.
-fn body_ctx(nodes: &[CssomNode], id: u32, in_style: bool) -> Option<Ctx> {
+/// Контекст тела узла `id`; `parent` — контекст тела, внутри которого лежит `nodes`
+/// (`None` — корень листа).
+fn body_ctx(nodes: &[CssomNode], id: u32, parent: Option<Ctx>) -> Option<Ctx> {
     for n in nodes {
+        let own = match n.kind {
+            RuleKind::Style => Some(Ctx::Body),
+            RuleKind::Scope => Some(Ctx::ScopeBody),
+            RuleKind::Keyframes => Some(Ctx::Keyframes),
+            k if k.is_grouping() => Some(parent.unwrap_or(Ctx::Rules { root: false })),
+            _ => None,
+        };
         if n.id == id {
-            return match n.kind {
-                RuleKind::Style | RuleKind::Scope => Some(Ctx::Body),
-                RuleKind::Keyframes => Some(Ctx::Keyframes),
-                k if k.is_grouping() => Some(if in_style { Ctx::Body } else { Ctx::Rules { root: false } }),
-                _ => None,
-            };
+            return own;
         }
-        if let Some(c) = body_ctx(&n.children, id, in_style || n.kind == RuleKind::Style) {
+        if let Some(c) = body_ctx(&n.children, id, own) {
             return Some(c);
         }
     }
     None
 }
 
-/// Есть ли у узла `id` стилевой предок (его селектор — вложенный).
-fn has_style_ancestor(nodes: &[CssomNode], id: u32, in_style: bool) -> Option<bool> {
+/// Контекст тела, внутри которого лежит узел `id`: `Some(None)` — корень листа,
+/// `None` — узла нет.
+fn container_ctx(nodes: &[CssomNode], id: u32, parent: Option<Ctx>) -> Option<Option<Ctx>> {
     for n in nodes {
         if n.id == id {
-            return Some(in_style);
+            return Some(parent);
         }
-        if let Some(r) = has_style_ancestor(&n.children, id, in_style || n.kind == RuleKind::Style) {
-            return Some(r);
+        let own = match n.kind {
+            RuleKind::Style => Some(Ctx::Body),
+            RuleKind::Scope => Some(Ctx::ScopeBody),
+            k if k.is_grouping() => parent,
+            _ => None,
+        };
+        if let Some(c) = container_ctx(&n.children, id, own) {
+            return Some(c);
         }
     }
     None
@@ -89,7 +99,7 @@ pub(super) fn insert_rule(
 ) -> Result<usize, CssomTreeError> {
     let ctx = match parent {
         None => Ctx::Rules { root: true },
-        Some(id) => body_ctx(&tree.rules, id, false).ok_or_else(|| {
+        Some(id) => body_ctx(&tree.rules, id, None).ok_or_else(|| {
             if find(&tree.rules, id).is_some() { CssomTreeError::HierarchyRequest } else { CssomTreeError::NotFound }
         })?,
     };
@@ -99,6 +109,9 @@ pub(super) fn insert_rule(
     };
     if index > visible_len {
         return Err(CssomTreeError::IndexSize);
+    }
+    if ctx.is_body() && is_top_level_only_at_rule(text) {
+        return Err(CssomTreeError::HierarchyRequest);
     }
     let node = parse_single(text, ctx)?;
     if parent.is_none() {
@@ -113,10 +126,21 @@ pub(super) fn insert_rule(
     Ok(index)
 }
 
+/// `@font-face`, `@keyframes`, … бывают только на верхнем уровне листа или в условной
+/// группе верхнего уровня: в теле стилевого правила их вставка — `HierarchyRequestError`.
+fn is_top_level_only_at_rule(text: &str) -> bool {
+    let Some(rest) = text.trim_start().strip_prefix('@') else { return false };
+    let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "font-face" | "keyframes" | "-webkit-keyframes" | "property" | "counter-style" | "font-feature-values" | "page" | "import" | "namespace"
+    )
+}
+
 /// Ровно одно правило (или, в теле стилевого правила, набор деклараций).
 fn parse_single(text: &str, ctx: Ctx) -> Result<CssomNode, CssomTreeError> {
     let mut items = parse_items(text, ctx);
-    if ctx == Ctx::Body && items.nodes.is_empty() && !items.decls.is_empty() {
+    if ctx.is_body() && items.nodes.is_empty() && !items.decls.is_empty() {
         // css-nesting-1: бросаем, только если нет ни одной валидной декларации
         // (csswg-drafts#10520); невалидные среди валидных отбрасываются.
         let mut decls = std::mem::take(&mut items.decls);
@@ -174,10 +198,14 @@ pub(super) fn delete_rule(tree: &mut CssomTree, parent: Option<u32>, index: usiz
 }
 
 pub(super) fn set_prelude(tree: &mut CssomTree, id: u32, text: &str) -> Result<bool, CssomTreeError> {
-    let nested = has_style_ancestor(&tree.rules, id, false).ok_or(CssomTreeError::NotFound)?;
+    let container = container_ctx(&tree.rules, id, None).ok_or(CssomTreeError::NotFound)?;
     let kind = find(&tree.rules, id).map(|n| n.kind).ok_or(CssomTreeError::NotFound)?;
     let new = match kind {
-        RuleKind::Style => canonical_selector_list(text, nested),
+        RuleKind::Style => match container {
+            Some(Ctx::ScopeBody) => canonical_scope_selector_list(text),
+            Some(_) => canonical_selector_list(text, true),
+            None => canonical_selector_list(text, false),
+        },
         RuleKind::Media => Some(space_after_colons(&collapse_ws(text))),
         RuleKind::Supports | RuleKind::Container => {
             let t = space_after_colons(&collapse_ws(text));
