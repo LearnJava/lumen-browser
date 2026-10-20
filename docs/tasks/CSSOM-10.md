@@ -93,3 +93,44 @@
 
 `cargo test -p lumen-css-parser`, `cargo test -p lumen-js --features v8-backend cssom` (см. `docs/commands.md` и память
 про холодный слот V8), WPT-файлы критерия.
+
+## Уточнения проекта (сессия 2, разведка завершена, кода по-прежнему нет)
+
+Прочитано целиком: `parser.rs` (Stylesheet, insert_rule/delete_rule, replay_cssom_ops), `install/stylesheets.rs`,
+`install/constructed_stylesheets.rs`, `sheet_sync.rs`, JS 12090–12670 в `web_api_shim_mid.js`, три WPT-файла критерия,
+`css-nesting/serialize-group-rules-with-decls.html`, `nested-declarations-cssom.html`. Решения, меняющие проект выше:
+
+1. **Дерево — единственный авторитет для ВСЕХ CSSOM-правок** (и верхнеуровневых тоже). Старые `CssomOp::{InsertRule,
+   DeleteRule,SetRuleStyle,SetMediaChildStyle}` не использовать для правок дерева: индексы типизированных коллекций
+   (`top_level_order`) — «плоские» (вложенные правила разворачиваются в соседние `Style`-теги, at-правила кроме
+   media/mixin без тегов), а индексы дерева — иерархические; отобразить одни в другие нельзя. Остаются только
+   mixin-операции (`SetMixinResultStyle`, `InsertRuleBodyApply`) по устаревшему индексу.
+2. **Синхронизация каскада** = только `CssomOp::TreeEdit`: узел с такими правками → подмена байтового диапазона его
+   текста в `source()` каскада на `tree.to_source()` + один полный `parse` (все узлы, с конца к началу). Для
+   конструируемых листов (`ConstructedStylesheet.sheet` идёт в каскад через `merge_from(clone)`) типизированные
+   коллекции листа пересобираются сразу после правки дерева: `parse(tree.to_source())` с СОХРАНЕНИЕМ прежнего `source`
+   (нужен `Stylesheet::set_source_keep`/аналог в parser.rs — мутаторы коллекций разрешены только там).
+   Быстрый путь: вставка в КОНЕЦ корня при пустом `mixin_rules` → `merge_from(parse(text))` без полной пересборки
+   (CSS-in-JS вставляет тысячи правил; полная пересборка O(n) на вставку была бы O(n²)).
+3. **Дерево живёт в `Stylesheet`** (`cssom: OnceLock<CssomTree>`, лениво из `source`; для чтения `&self`, для правки
+   `OnceLock::get_mut` после `get_or_init`). Методы CSSOM (children/rule_info/insert/delete/set_style/set_prelude)
+   — на `Stylesheet`, поэтому нативы владельческих и конструируемых листов делят код (`constructed: bool` + ключ листа).
+   Адресация узла — глобальный `id: u32` (AtomicU32); JS кэширует обёртки `Map<id, WeakRef>` на лист → идентичность
+   (`cssRules[0].cssRules[1].parentRule === cssRules[0]`). `rule_json(id)` обязан отдавать `parentId`.
+4. **Формат `cssText` (Chrome), подтверждён WPT**: стилевое без детей — `sel { a: b; c: d; }` (декларации в одну
+   строку через пробел; пустое — `sel { }`); с детьми — `sel {\n  a: b; c: d;\n  <child>\n  <child>\n}` (строка
+   деклараций только если они есть; у ребёнка отступ ставится ТОЛЬКО перед первой строкой, внутренние переводы строк
+   не сдвигаются); группа (`@media/@supports/@scope/@container/@layer {}`) — `@media x {\n  <child>\n}`, пустая —
+   `@media x {\n}`; `CSSNestedDeclarations.cssText` — `--x: 1; --y: 1;` (без скобок); `CSSStyleRule` вложенный
+   сохраняет `&`: `& .b { … }`. Группа внутри стилевого правила держит декларации как ребёнка-NestedDeclarations.
+   Пример: `div {\n  @media screen {\n  color: red; background-color: green;\n}\n}` (внутренние `\n` не сдвигаются).
+5. **Разбор**: контексты — лист (только правила), тело стилевого правила / группы внутри него (декларации и правила
+   вперемешку: декларации до первого правила → `decls` родителя, после правил → узлы NestedDeclarations, подряд идущие
+   сливаются в один), декларационные at-правила (`@font-face/@page/@property/@counter-style/@keyframes`-кадры).
+   Конец текста закрывает все открытые блоки (WPT «missing closing braces»). `custom-property: {…};` — декларация.
+   Валидность селектора: `is_valid_selector_list` для верхнего уровня; вложенное правило — убрать ведущий комбинатор,
+   при наличии `&` принимать (WPT `.a { :is(!& .foo, .b) {…} }` сериализуется как есть), иначе тот же валидатор;
+   `% {}` → SyntaxError. `insertRule` в стилевом/групповом правиле: одиночная декларация → NestedDeclarations
+   (SyntaxError, только если ни одной валидной; пример `nothing-to-insert-because-invalid-property: 2;`).
+6. Порядок работы прежний (шаги 1–5 выше). Шаг 1 — `cssom_tree.rs` (+ подмодули `parse`/`serialize`) и юнит-тесты на
+   формат из п.4; зарегистрировать `pub mod cssom_tree;` в `lib.rs`, не забыть `#![deny(missing_docs)]`-совместимость.
