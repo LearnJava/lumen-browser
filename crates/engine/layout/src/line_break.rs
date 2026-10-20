@@ -398,6 +398,32 @@ mod tests {
     }
 
     #[test]
+    fn glue_classes_stick_to_atomic_inlines() {
+        // GL, WJ, ZWJ (CSS Text L3 §5.1) — but NBSP does not glue.
+        for c in ['\u{2060}', '\u{FEFF}', '\u{200D}', '\u{2011}', '\u{202F}', '\u{180E}', '\u{034F}', '\u{0F08}'] {
+            assert!(glues_to_atomic(c), "U+{:04X}", c as u32);
+        }
+        for c in ['a', ' ', '\u{00A0}', '\u{200B}', '-', '中'] {
+            assert!(!glues_to_atomic(c), "U+{:04X}", c as u32);
+        }
+    }
+
+    #[test]
+    fn segment_seam_pairs_follow_uax14() {
+        // The seam test in `inline_wrap` asks ICU about the two characters
+        // either side of a tag boundary: a letter pair has no break, a hyphen
+        // before a letter has one, a word joiner suppresses it.
+        let seam = |a: char, b: char| {
+            let pair: String = [a, b].iter().collect();
+            break_opportunities(&pair, LineBreak::Auto, WordBreak::Normal).contains(&a.len_utf8())
+        };
+        assert!(!seam('A', 'B'));
+        assert!(seam('-', 'B'));
+        assert!(!seam('\u{2060}', 'B'));
+        assert!(!seam('A', '\u{2060}'));
+    }
+
+    #[test]
     fn break_all_breaks_between_letters() {
         assert_eq!(chars_at("abc", WordBreak::BreakAll), vec![1, 2]);
         assert!(chars_at("abc", WordBreak::Normal).is_empty());

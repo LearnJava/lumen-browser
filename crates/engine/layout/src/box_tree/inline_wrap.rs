@@ -465,8 +465,9 @@ pub(crate) fn char_break_offset(
 /// or at the end of the word.
 ///
 /// Returns `start` when not even the first opportunity fits — the caller then
-/// wraps to a fresh line and retries. Width is accumulated per character, the
-/// same approximation `char_break_offset` uses.
+/// wraps to a fresh line and retries. Each candidate prefix is measured as a
+/// whole, so shaped scripts (Indic matras, ligatures) get their real width
+/// rather than a per-character sum.
 #[allow(clippy::too_many_arguments)]
 fn opportunity_break_offset(
     word: &str,
@@ -476,28 +477,23 @@ fn opportunity_break_offset(
     font_size: f32,
     ls: f32,
     families: &[String],
+    axes: &[crate::style::FontVariationSetting],
     m: &dyn TextMeasurer,
 ) -> usize {
+    let width = |end: usize| measure_text_w_varied(&word[start..end], font_size, ls, 0.0, families, axes, m);
     // Last opportunity known to fit; `start` means "nothing fits".
     let mut fit = start;
-    // Width of `word[start..pos]` for the position reached so far.
-    let mut w = 0.0_f32;
-    for (idx, (rel, ch)) in word[start..].char_indices().enumerate() {
-        let pos = start + rel;
-        if pos > start {
-            // `w` only grows, so once it overflows no later cut can fit.
-            if w > avail_px {
-                return fit;
-            }
-            if opps.binary_search(&pos).is_ok() {
-                fit = pos;
-            }
+    let first = opps.partition_point(|&o| o <= start);
+    for &pos in &opps[first..] {
+        if pos >= word.len() {
+            break;
         }
-        let cw = m.char_width_with_families(ch, font_size, families);
-        // Width of the prefix ending at this char: sum(cw + ls) - ls.
-        w = if idx == 0 { cw } else { w + ls + cw };
+        if width(pos) > avail_px {
+            return fit;
+        }
+        fit = pos;
     }
-    if w <= avail_px { word.len() } else { fit }
+    if width(word.len()) <= avail_px { word.len() } else { fit }
 }
 
 // ─── text-wrap: balance / pretty (CSS Text L4 §6.4.2) ───────────────────────
@@ -702,8 +698,6 @@ impl LineIndent {
     }
 }
 
-/// Отступ только у первой строки; см. [`wrap_inline_run_indented`].
-#[allow(clippy::too_many_arguments)]
 /// Does UAX #14 (tailored by `line-break`/`word-break`) allow a soft wrap
 /// between the end of the segments before `seg_idx` and the start of `word`?
 fn tight_boundary_breaks(
@@ -725,6 +719,8 @@ fn tight_boundary_breaks(
     crate::line_break::break_opportunities(&pair, line_break, word_break).contains(&prev.len_utf8())
 }
 
+/// Отступ только у первой строки; см. [`wrap_inline_run_indented`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
@@ -978,8 +974,17 @@ pub(crate) fn wrap_inline_run_indented(
             // characters around it does.
             let tight_join = is_seg_first && word_inter == 0.0 && !current_line.is_empty();
             let base_breakable = !is_seg_first || !no_break_before;
-            let glued_boundary =
-                tight_join && !tight_boundary_breaks(segments, seg_idx, &display_word, line_break, word_break);
+            // `overflow-wrap: anywhere|break-word` and `word-break: break-word` open a
+            // wrap point between any two characters, so a seam is never glued then.
+            // The segment's own `word-break`/`overflow-wrap` count too: the run-wide
+            // ones come from the block container, the span may set its own.
+            let seam_wb = if style.word_break == WordBreak::Normal { word_break } else { style.word_break };
+            let ow_chars = seam_wb == WordBreak::BreakWord
+                || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere)
+                || matches!(style.overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere);
+            let glued_boundary = tight_join
+                && !ow_chars
+                && !tight_boundary_breaks(segments, seg_idx, &display_word, line_break, seam_wb);
             let breakable = base_breakable && !glued_boundary;
             // Слово не влезает в остаток строки. Для мягкого переноса и
             // `word-break: break-all` это достаточное условие, в том числе когда
@@ -997,8 +1002,6 @@ pub(crate) fn wrap_inline_run_indented(
             // are UAX #14's (hyphens, dashes, ZWSP, ideographs, SA scripts),
             // tailored by `line-break` and `word-break`.
             let lb_avail = max_width - current_x - gap - pre;
-            let ow_chars = word_break == WordBreak::BreakWord
-                || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere);
             let lb_opps = if base_breakable && word_w > lb_avail {
                 crate::line_break::break_opportunities(&display_word, line_break, word_break)
             } else {
@@ -1015,7 +1018,7 @@ pub(crate) fn wrap_inline_run_indented(
                     let avail = (max_width - current_x - chunk_gap - chunk_pre).max(0.0);
                     let mut end = opportunity_break_offset(
                         &display_word, start, &lb_opps, avail,
-                        style.font_size, ls, &style.font_family, m,
+                        style.font_size, ls, &style.font_family, &style.font_variation_settings, m,
                     );
                     if end == start {
                         if !current_line.is_empty() && !(glued_boundary && first_chunk) {

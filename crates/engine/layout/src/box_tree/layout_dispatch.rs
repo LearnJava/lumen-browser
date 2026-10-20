@@ -1732,7 +1732,7 @@ pub(super) fn dispatch_box(
                 // what is left of the row starts the next one (GL/WJ/ZWJ keep it
                 // glued to the atomic).
                 if is_run
-                    && cur_x > content_x
+                    && !cur_row.is_empty()
                     && !(b.style.white_space.is_nowrap() || b.style.text_wrap_mode == TextWrapMode::Nowrap)
                     && children
                         .iter()

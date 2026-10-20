@@ -1499,17 +1499,20 @@ fn cjk_wrap_line_break_anywhere_overrides_keep_all() {
 }
 
 #[test]
-fn cjk_wrap_never_starts_a_line_with_small_kana() {
+fn cjk_wrap_small_kana_starts_a_line_only_outside_strict() {
     use crate::style::{LineBreak, WordBreak};
-    // きゃきゃきゃ into 15px (1.5 chars): a break before ゃ is forbidden
-    // unless `loose`, so `normal` keeps each きゃ pair together and lets it
-    // overflow rather than starting a line with the small kana.
-    let normal = wrap_cjk("きゃきゃきゃ", 15.0, LineBreak::Normal, WordBreak::Normal);
-    assert_eq!(normal, vec!["きゃ", "きゃ", "きゃ"]);
-    for line in &normal {
+    // きゃきゃきゃ into 15px (1.5 chars): `strict` forbids a break before ゃ, so
+    // each きゃ pair stays together and overflows rather than starting a line
+    // with the small kana (UAX #14 CJ is NS only under `strict`).
+    let strict = wrap_cjk("きゃきゃきゃ", 15.0, LineBreak::Strict, WordBreak::Normal);
+    assert_eq!(strict, vec!["きゃ", "きゃ", "きゃ"]);
+    for line in &strict {
         assert!(!line.starts_with('ゃ'), "small kana must not start a line: {line}");
     }
-    // `loose` takes the extra opportunity and fits one char per line.
+    // `normal` (line-break-normal-011) and `loose` take the extra opportunity
+    // and fit one char per line.
+    let normal = wrap_cjk("きゃきゃきゃ", 15.0, LineBreak::Normal, WordBreak::Normal);
+    assert_eq!(normal, vec!["き", "ゃ", "き", "ゃ", "き", "ゃ"]);
     let loose = wrap_cjk("きゃきゃきゃ", 15.0, LineBreak::Loose, WordBreak::Normal);
     assert_eq!(loose, vec!["き", "ゃ", "き", "ゃ", "き", "ゃ"]);
 }
