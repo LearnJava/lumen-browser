@@ -648,9 +648,16 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
     // `subgrid-gap-decorations-013`); у обычного grid один элемент по-прежнему не рисует щели.
     let is_subgrid = |t: &[lumen_layout::GridTrackSize]| t.first() == Some(&lumen_layout::GridTrackSize::Subgrid);
     let fragment = b.subgrid_tracks.as_ref().is_some_and(|t| t.fragment);
-    let known_tracks = matches!(s.display, Display::Grid | Display::InlineGrid)
+    // A column flex fragment knows its lines too: the last one may hold a single item, and the rule
+    // between its lines still runs through it (`flex/fragmentation/020`).
+    let column_flex_fragment = fragment
+        && matches!(s.display, Display::Flex)
+        && matches!(s.flex_direction, lumen_layout::FlexDirection::Column)
+        && b.subgrid_tracks.as_ref().is_some_and(|t| t.cols.is_some());
+    let known_tracks = (matches!(s.display, Display::Grid | Display::InlineGrid)
         && b.subgrid_tracks.is_some()
-        && (is_subgrid(&s.grid_template_columns) || is_subgrid(&s.grid_template_rows) || fragment);
+        && (is_subgrid(&s.grid_template_columns) || is_subgrid(&s.grid_template_rows) || fragment))
+        || column_flex_fragment;
     if children.len() < 2 && !empty_grid && !known_tracks {
         return none();
     }
@@ -711,6 +718,7 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
 
     // Flex: щели главной оси — между элементами одной flex-строки, поперечной — между
     // строками; режутся по `*-rule-break: intersection` и сдвигаются `*-rule-inset-*`.
+    let column_flex = matches!(s.flex_direction, lumen_layout::FlexDirection::Column) && s.writing_mode == lumen_layout::style::WritingMode::HorizontalTb;
     flex_gap_segments(
         &children,
         &GridGapParams {
@@ -721,7 +729,13 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
             row_visible: row_rule_visible,
             subgrid_cols: false,
             subgrid_rows: false,
-            subgrid_col_tracks: None,
+            // A column flex fragment: every flex line as `(left, right)` from the box's left edge,
+            // and the gaps of a line along the block axis from the box's top edge; a row flex one
+            // has the gaps along the inline axis from the left edge.
+            subgrid_col_tracks: (fragment && column_flex)
+                .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.cols.as_ref()))
+                .flatten()
+                .map(|t| t.iter().map(|&(a, z)| (b.rect.x + a, b.rect.x + z)).collect()),
             subgrid_row_tracks: fragment
                 .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.rows.as_ref()))
                 .flatten()
@@ -730,7 +744,10 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
             fragment_line_gaps: fragment
                 .then(|| b.subgrid_tracks.as_ref().and_then(|t| t.line_gaps.as_ref()))
                 .flatten()
-                .map(|g| g.iter().map(|l| l.iter().map(|&(a, z)| (b.rect.x + a, b.rect.x + z)).collect()).collect()),
+                .map(|g| {
+                    let origin = if column_flex { b.rect.y } else { b.rect.x };
+                    g.iter().map(|l| l.iter().map(|&(a, z)| (origin + a, origin + z)).collect()).collect()
+                }),
             style: s,
         },
     )

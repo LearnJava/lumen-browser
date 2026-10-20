@@ -64,6 +64,7 @@ use inline_wrap::{caps_synthesis, char_break_offset, try_hyp_break, SMALL_CAPS_S
 
 mod grid;
 mod grid_auto_cols;
+mod grid_lanes;
 pub use grid::resolve_auto_fill_fit_count;
 
 mod baseline;

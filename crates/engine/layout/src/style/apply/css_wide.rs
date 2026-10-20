@@ -640,6 +640,19 @@ fn apply_css_wide_keyword_with(
         }
         "display" => {
             style.display = if inh_only_inherit { inherited.display } else { init.display };
+            style.grid_lanes.enabled = if inh_only_inherit { inherited.grid_lanes.enabled } else { false };
+        }
+        // CSS Grid L3 §3: свойства `grid-lanes` не наследуются.
+        "flow-tolerance" => {
+            style.grid_lanes.tolerance =
+                if inh_only_inherit { inherited.grid_lanes.tolerance.clone() } else { init.grid_lanes.tolerance.clone() };
+        }
+        "grid-lanes-direction" => {
+            style.grid_lanes.direction =
+                if inh_only_inherit { inherited.grid_lanes.direction } else { init.grid_lanes.direction };
+        }
+        "grid-lanes-pack" => {
+            style.grid_lanes.dense = if inh_only_inherit { inherited.grid_lanes.dense } else { init.grid_lanes.dense };
         }
         "background-color" => {
             style.background_color = if inh_only_inherit {

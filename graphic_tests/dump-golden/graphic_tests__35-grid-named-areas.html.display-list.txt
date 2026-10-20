@@ -1,5 +1,4 @@
 FillRect (0.00, 0.00, 1024.00, 720.00) #ff00ffff
-PushClipRect (0.00, 0.00, 1024.00, 720.00)
 FillRect (1.00, 1.00, 1022.00, 718.00) #f7fafcff
 PushClipRect (1.00, 1.00, 1022.00, 718.00)
 FillRect (25.00, 25.00, 964.00, 60.00) #3182ceff
@@ -17,5 +16,4 @@ FillRect (25.00, 804.00, 90.00, 50.00) #38a169ff
 FillRect (118.00, 804.00, 90.00, 50.00) #805ad5ff
 FillRect (211.00, 804.00, 183.00, 50.00) #dd6b20ff
 FillRect (397.00, 804.00, 90.00, 50.00) #d53f8cff
-PopClip
 PopClip

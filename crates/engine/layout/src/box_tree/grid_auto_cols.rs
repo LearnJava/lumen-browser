@@ -18,21 +18,51 @@ use super::grid::{grid_item_indices, grid_track, place_grid_items, GridAxis};
 use super::intrinsic::{max_content_outer_width, min_content_outer_width};
 use super::*;
 
-/// Sizing function of one column track on this path.
+/// One track sizing function (min or max side) on this path.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum TrackKind {
+pub(super) enum Sizing {
     /// A fixed length, already resolved to px.
     Fixed(f32),
-    /// `auto`: sized from the items, then stretched.
+    /// `auto`: the items' minimum / maximum contribution (a max side is also stretched).
     Auto,
-    /// `minmax(auto, <length>)`: the base size comes from the items (minimum contribution),
-    /// the growth limit is the length (never below the base, Grid L1 §11.5 step 5); the
-    /// track grows towards it but is not stretched past it.
-    Bounded(f32),
-    /// `fit-content(<length>)` (Grid L1 §7.2.3.3): `minmax(auto, max-content)` whose growth limit
-    /// is clamped to the length — the track is its items' max-content, at most the length, never
-    /// below their minimum contribution; like `Bounded` it is not stretched.
+    /// `min-content`.
+    MinContent,
+    /// `max-content`.
+    MaxContent,
+    /// `fit-content(<length>)` (Grid L1 §7.2.3.3), max side only: the items' max-content, at most the
+    /// length; like `minmax(auto, <length>)` it is not stretched past it.
     Fit(f32),
+}
+
+/// Sizing function of one column track on this path: `min` gives the base size, `max` the
+/// growth limit (never below the base, Grid L1 §11.5 step 5). Only an `auto` max side
+/// stretches; `minmax(auto, <length>)` grows towards the length but not past it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TrackKind {
+    pub(super) min: Sizing,
+    pub(super) max: Sizing,
+}
+
+impl TrackKind {
+    pub(super) const AUTO: Self = Self { min: Sizing::Auto, max: Sizing::Auto };
+
+    fn fixed(l: f32) -> Self {
+        Self { min: Sizing::Fixed(l), max: Sizing::Fixed(l) }
+    }
+
+    fn is_fixed(&self) -> bool {
+        matches!((self.min, self.max), (Sizing::Fixed(_), Sizing::Fixed(_)))
+    }
+
+    /// The base size is set by the items.
+    fn grows_base(&self) -> bool {
+        !matches!(self.min, Sizing::Fixed(_))
+    }
+
+    /// The growth limit is set by the items.
+    fn grows_limit(&self) -> bool {
+        !matches!(self.max, Sizing::Fixed(_))
+    }
 }
 
 /// What one item (outer margin box, plus the subgrid edge it sits on) asks of
@@ -46,10 +76,33 @@ pub(super) struct ColContribution {
     pub(super) max: f32,
 }
 
-/// `Some(kinds)` when every one of the `n_cols` tracks is `auto`, `minmax(auto, <length>)`
-/// or a length that `resolve` can turn into px, and at least one is not a plain length;
-/// `None` otherwise (the caller keeps its older path).
+/// One side of a track sizing function: `auto`, a length `resolve` can turn into px, `min-content`
+/// or `max-content`; `None` for `fr`, `fit-content()`, nested `minmax()`, …
+fn sizing_of(t: &GridTrackSize, resolve: &dyn Fn(&Length) -> Option<f32>) -> Option<Sizing> {
+    Some(match t {
+        GridTrackSize::Auto => Sizing::Auto,
+        GridTrackSize::Length(l) => Sizing::Fixed(resolve(l)?.max(0.0)),
+        GridTrackSize::MinContent => Sizing::MinContent,
+        GridTrackSize::MaxContent => Sizing::MaxContent,
+        _ => return None,
+    })
+}
+
+/// `Some(kinds)` when every one of the `n_cols` tracks is a keyword (`auto`, `min-content`,
+/// `max-content`), a length that `resolve` can turn into px or a `minmax()` of those, and at
+/// least one is not a plain length; `None` otherwise (the caller keeps its older path).
 pub(super) fn classify_col_tracks(
+    template: &[GridTrackSize],
+    auto_track: &GridTrackSize,
+    n_cols: usize,
+    resolve: &dyn Fn(&Length) -> Option<f32>,
+) -> Option<Vec<TrackKind>> {
+    classify_all_col_tracks(template, auto_track, n_cols, resolve).filter(|k| k.iter().any(|k| !k.is_fixed()))
+}
+
+/// [`classify_col_tracks`] без отбраковки сетки, где все дорожки фиксированы: `grid-lanes` без шаблона
+/// (одни `grid-auto-columns: 80px`) всё равно считается по дорожкам — число полос задают элементы.
+pub(super) fn classify_all_col_tracks(
     template: &[GridTrackSize],
     auto_track: &GridTrackSize,
     n_cols: usize,
@@ -58,20 +111,21 @@ pub(super) fn classify_col_tracks(
     let mut kinds = Vec::with_capacity(n_cols);
     for c in 0..n_cols {
         kinds.push(match grid_track(c as u32, template, auto_track) {
-            GridTrackSize::Auto => TrackKind::Auto,
-            GridTrackSize::Length(l) => TrackKind::Fixed(resolve(l)?.max(0.0)),
-            GridTrackSize::Minmax(min, max) => match (&**min, &**max) {
-                (GridTrackSize::Auto, GridTrackSize::Length(l)) => TrackKind::Bounded(resolve(l)?.max(0.0)),
-                _ => return None,
-            },
+            GridTrackSize::Minmax(min, max) => {
+                TrackKind { min: sizing_of(min, resolve)?, max: sizing_of(max, resolve)? }
+            }
+            GridTrackSize::Length(l) => TrackKind::fixed(resolve(l)?.max(0.0)),
             GridTrackSize::FitContent(limit) => match &**limit {
-                GridTrackSize::Length(l) => TrackKind::Fit(resolve(l)?.max(0.0)),
+                GridTrackSize::Length(l) => TrackKind { min: Sizing::Auto, max: Sizing::Fit(resolve(l)?.max(0.0)) },
                 _ => return None,
             },
-            _ => return None,
+            t => {
+                let z = sizing_of(t, resolve)?;
+                TrackKind { min: z, max: z }
+            }
         });
     }
-    kinds.iter().any(|k| !matches!(k, TrackKind::Fixed(_))).then_some(kinds)
+    Some(kinds)
 }
 
 /// Is `b` a grid container whose column axis is `subgrid`?
@@ -190,22 +244,25 @@ pub(super) fn base_and_limit(
     contribs: &[ColContribution],
     gap: f32,
 ) -> (Vec<f32>, Vec<f32>) {
-    let fixed = |k: &TrackKind| if let TrackKind::Fixed(l) = k { *l } else { 0.0 };
-    let mut base: Vec<f32> = kinds.iter().map(fixed).collect();
-    let mut limit: Vec<f32> =
-        kinds.iter().map(|k| if let TrackKind::Bounded(m) = k { *m } else { fixed(k) }).collect();
+    let fixed = |z: Sizing| if let Sizing::Fixed(l) = z { l } else { 0.0 };
+    let mut base: Vec<f32> = kinds.iter().map(|k| fixed(k.min)).collect();
+    let mut limit: Vec<f32> = kinds.iter().map(|k| fixed(k.max)).collect();
+    // What an item asks of one side of a track: `min-content` its minimum contribution,
+    // `auto` its minimum (base) or maximum (limit), `max-content` its maximum.
+    let ask = |z: Sizing, is_base: bool, c: &ColContribution| match z {
+        Sizing::Fixed(_) => None,
+        Sizing::MinContent => Some(c.min),
+        Sizing::MaxContent => Some(c.max),
+        Sizing::Fit(l) => Some(c.max.min(l)),
+        Sizing::Auto => Some(if is_base { c.min } else { c.max }),
+    };
     for c in contribs.iter().filter(|c| c.span == 1 && c.start < kinds.len()) {
-        match kinds[c.start] {
-            TrackKind::Auto => {
-                base[c.start] = base[c.start].max(c.min);
-                limit[c.start] = limit[c.start].max(c.max);
-            }
-            TrackKind::Bounded(_) => base[c.start] = base[c.start].max(c.min),
-            TrackKind::Fit(l) => {
-                base[c.start] = base[c.start].max(c.min);
-                limit[c.start] = limit[c.start].max(c.max.min(l));
-            }
-            TrackKind::Fixed(_) => {}
+        let k = kinds[c.start];
+        if let Some(v) = ask(k.min, true, c) {
+            base[c.start] = base[c.start].max(v);
+        }
+        if let Some(v) = ask(k.max, false, c) {
+            limit[c.start] = limit[c.start].max(v);
         }
     }
     let mut spanning: Vec<&ColContribution> =
@@ -213,26 +270,26 @@ pub(super) fn base_and_limit(
     spanning.sort_by_key(|c| c.span);
     for c in spanning {
         let end = (c.start + c.span).min(kinds.len());
-        let autos: Vec<usize> = (c.start..end).filter(|&t| kinds[t] == TrackKind::Auto).collect();
-        let growable: Vec<usize> =
-            (c.start..end)
-            .filter(|&t| matches!(kinds[t], TrackKind::Auto | TrackKind::Bounded(_) | TrackKind::Fit(_)))
-            .collect();
-        if growable.is_empty() {
-            continue;
-        }
         let gaps = gap * (end - c.start - 1) as f32;
-        // The base grows on `auto` and bounded tracks alike; the limit only on `auto` ones
-        // (a bounded track's limit is its length).
-        for (sizes, want, targets) in [(&mut base, c.min, &growable), (&mut limit, c.max, &autos)] {
-            if targets.is_empty() {
+        // The base grows on the tracks with an intrinsic min side, the limit on those with an
+        // intrinsic max side; each takes an equal share of what the span still lacks.
+        for is_base in [true, false] {
+            let targets: Vec<usize> = (c.start..end)
+                .filter(|&t| if is_base { kinds[t].grows_base() } else { kinds[t].grows_limit() })
+                .collect();
+            let Some(want) = targets
+                .iter()
+                .filter_map(|&t| ask(if is_base { kinds[t].min } else { kinds[t].max }, is_base, c))
+                .reduce(f32::min)
+            else {
                 continue;
-            }
+            };
+            let sizes = if is_base { &mut base } else { &mut limit };
             let have: f32 = sizes[c.start..end].iter().sum::<f32>() + gaps;
             let extra = want - have;
             if extra > 0.0 {
                 let share = extra / targets.len() as f32;
-                for &t in targets {
+                for &t in &targets {
                     sizes[t] += share;
                 }
             }
@@ -260,9 +317,7 @@ pub(super) fn distribute_free_space(
     let gaps = gap * kinds.len().saturating_sub(1) as f32;
     let mut free = available - w.iter().sum::<f32>() - gaps;
     while free > EPS {
-        let growable: Vec<usize> = (0..w.len())
-            .filter(|&t| !matches!(kinds[t], TrackKind::Fixed(_)) && limit[t] - w[t] > EPS)
-            .collect();
+        let growable: Vec<usize> = (0..w.len()).filter(|&t| limit[t] - w[t] > EPS).collect();
         if growable.is_empty() {
             break;
         }
@@ -275,7 +330,7 @@ pub(super) fn distribute_free_space(
         free -= step * n;
     }
     if free > EPS {
-        let autos: Vec<usize> = (0..w.len()).filter(|&t| kinds[t] == TrackKind::Auto).collect();
+        let autos: Vec<usize> = (0..w.len()).filter(|&t| kinds[t].max == Sizing::Auto).collect();
         if !autos.is_empty() {
             let share = free / autos.len() as f32;
             for t in autos {
@@ -343,7 +398,7 @@ pub(super) fn content_sized_col_widths(
     let kinds = classify_col_tracks(eff_col_template, &s.grid_auto_columns, n_cols, &|l| {
         l.resolve(em, Some(content_width), viewport)
     })?;
-    if n_cols < 2 && !kinds.iter().any(|k| matches!(k, TrackKind::Bounded(_) | TrackKind::Fit(_))) {
+    if n_cols < 2 && kinds.iter().all(|k| k.is_fixed() || *k == TrackKind::AUTO) {
         return None;
     }
     let mut contribs = Vec::new();
