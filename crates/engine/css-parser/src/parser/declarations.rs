@@ -124,9 +124,39 @@ impl<'a> Parser<'a> {
         let mut s = String::new();
         let mut in_string: Option<char> = None;
         let mut depth: u32 = 0;
+        // Inside an unquoted `url(` the body is one url-token (CSS Syntax
+        // §4.3.6): `/*` there is data, not a comment.
+        let mut in_url = false;
         while let Some(c) = self.peek() {
             match (in_string, c) {
                 (None, ';') | (None, '}') if depth == 0 => break,
+                // CSS Syntax §4.3.2: `\` escapes the next code point, so
+                // `\"` does not close a string and `\/*` is not a comment.
+                (_, '\\') => {
+                    self.consume();
+                    s.push(c);
+                    if let Some(n) = self.consume() {
+                        s.push(n);
+                    }
+                }
+                // CSS Syntax §4.3.2: a comment is dropped from the token
+                // stream but still separates tokens, so it becomes one space
+                // (`gr/*c*/een` stays two tokens, BUG-1379).
+                (None, '/') if !in_url && self.peek_at(1) == Some('*') => {
+                    self.consume();
+                    self.consume();
+                    match self.rest().find("*/") {
+                        Some(end) => self.pos += end + 2,
+                        None => self.pos = self.input.len(),
+                    }
+                    s.push(' ');
+                }
+                (None, ')') if in_url => {
+                    in_url = false;
+                    depth = depth.saturating_sub(1);
+                    self.consume();
+                    s.push(c);
+                }
                 (Some(q), c) if c == q => {
                     self.consume();
                     s.push(c);
@@ -141,6 +171,10 @@ impl<'a> Parser<'a> {
                     depth += 1;
                     self.consume();
                     s.push(c);
+                    if c == '(' && !in_url && s.len() >= 4 && s.as_bytes()[s.len() - 4..].eq_ignore_ascii_case(b"url(") {
+                        let quoted = self.rest().trim_start().starts_with(['"', '\'']);
+                        in_url = !quoted;
+                    }
                 }
                 (None, ')') | (None, ']') => {
                     depth = depth.saturating_sub(1);

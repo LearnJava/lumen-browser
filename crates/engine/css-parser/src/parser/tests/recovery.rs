@@ -186,3 +186,46 @@ use super::*;
         assert_eq!(d[0].property, "--Foo");
         assert_eq!(d[1].property, "--foo");
     }
+
+    // --- BUG-1379: комментарий внутри значения — один пробел, не обрыв ---
+
+    #[test]
+    fn comment_inside_value_is_dropped_not_fatal() {
+        for css in [
+            "p{color:/*c*/green}",
+            "p{color:green/*c*/;}",
+            "p{color:/*a*/green/*b*/}",
+            "p{color:green/*c*/}",
+        ] {
+            let d = &parse(css).rules[0].declarations;
+            assert_eq!(d.len(), 1, "{css}");
+            assert_eq!(d[0].value, "green", "{css}");
+        }
+    }
+
+    #[test]
+    fn comment_separates_tokens_in_value() {
+        let s = parse("p{margin:1px/*c*/2px;height:1/*c*/0px;color:gr/*c*/een}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "1px 2px");
+        assert_eq!(d[1].value, "1 0px");
+        assert_eq!(d[2].value, "gr een");
+    }
+
+    #[test]
+    fn comment_markers_survive_inside_strings_and_urls() {
+        let s = parse("p{content:\"a/*b*/c\";background:url(a/*b*/c.png);color:red/*c*/ !important}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "\"a/*b*/c\"");
+        assert_eq!(d[1].value, "url(a/*b*/c.png)");
+        assert_eq!(d[2].value, "red");
+        assert!(d[2].important);
+    }
+
+    #[test]
+    fn escaped_quote_does_not_end_string_in_value() {
+        let s = parse("p{content:\"a\\\"/*x*/;b\";color:red}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "\"a\\\"/*x*/;b\"");
+        assert_eq!(d[1].value, "red");
+    }
