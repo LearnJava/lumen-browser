@@ -289,6 +289,22 @@ pub enum PseudoKind {
     /// variant exists for the rare case a marker's content is itself an
     /// inline run needing a `PseudoKind`, e.g. future nested-marker content).
     Marker,
+    /// `::scroll-marker` (CSS Overflow L5 §scroll-marker) — navigation marker box inside a
+    /// `::scroll-marker-group`; `BoxOrigin::node` is the marker's originating (target) element.
+    ScrollMarker,
+    /// `::scroll-marker-group` (CSS Overflow L5 §scroll-marker-group) — container of the
+    /// markers, a *sibling* of its originating element.
+    ScrollMarkerGroup,
+    /// `::scroll-button(block-start | up | …)` — the four flow-relative scroll buttons, preceding
+    /// siblings of the scroll container. Physical `up/down/left/right` map onto these by the
+    /// originating element's writing mode and direction.
+    ScrollButtonBlockStart,
+    /// `::scroll-button(inline-start | left | right)`; see [`PseudoKind::ScrollButtonBlockStart`].
+    ScrollButtonInlineStart,
+    /// `::scroll-button(inline-end)`; see [`PseudoKind::ScrollButtonBlockStart`].
+    ScrollButtonInlineEnd,
+    /// `::scroll-button(block-end | down)`; see [`PseudoKind::ScrollButtonBlockStart`].
+    ScrollButtonBlockEnd,
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).

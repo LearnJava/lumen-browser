@@ -752,3 +752,12 @@ files (event targeting, disposal, focus/hover/activation, container-query
 interaction, iframe interaction). Remaining scope after this slice: ~32
 files (was ~40) — all in `scroll-markers/`, requiring the box-generation +
 interaction-model work срез 1 originally flagged as its own task.
+
+## Срез 7 (P1, SCROLL-MARKERS, 2026-10-20) — боксы псевдоэлементов
+
+Сделана генерация боксов: `::scroll-marker-group` (before/after контейнера), `::scroll-marker` (по элементу, у
+которого он есть; `scroll-target-group` не учитывается), `::scroll-button()` (сиблинг перед контейнером, UA-вид кнопки), корневой элемент,
+`::column` в грамматике. `css-overflow/scroll-markers`: `root-scroll-button`, `scroll-buttons-001` identical.
+Остаётся интерактивная часть (`:target-current`, активация, синхронизация с прокруткой, боксы `::column`) —
+задача SCROLL-MARKERS-2 в ROADMAP.md. `css-multicol/parsing/column-pseudo-valid` упирается не в `::column`, а в
+[BUG-1439](BUG-1439-OPEN.md) (`insertRule` оторванного листа).
