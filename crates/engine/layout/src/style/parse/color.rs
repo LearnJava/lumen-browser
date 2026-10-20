@@ -456,8 +456,8 @@ pub fn system_color(name_lc: &str, dark: bool) -> Option<Color> {
         ("buttontext", false) => rgb(0, 0, 0),
         ("buttontext", true) => rgb(255, 255, 255),
         // ButtonBorder in Edge's light theme is pure black, not mid-gray.
-        ("buttonborder", false) | ("threedface", false) => rgb(0, 0, 0),
-        ("buttonborder", true) | ("threedface", true) => rgb(97, 97, 97),
+        ("buttonborder", false) => rgb(0, 0, 0),
+        ("buttonborder", true) => rgb(97, 97, 97),
         // Hyperlinks. Edge resolves LinkText/VisitedText/ActiveText to the same
         // #0066cc in light theme (visited/active are anti-fingerprinting clamped).
         ("linktext", false) => rgb(0, 102, 204),

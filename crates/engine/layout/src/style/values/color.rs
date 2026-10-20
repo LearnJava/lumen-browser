@@ -297,11 +297,11 @@ pub enum SystemColor {
     CanvasText,
     /// `Field` (input/textarea backgrounds)
     Field,
-    /// `ButtonFace`
+    /// `ButtonFace` / `ThreeDFace` / `ButtonHighlight` / `ButtonShadow`
     ButtonFace,
     /// `ButtonText`
     ButtonText,
-    /// `ButtonBorder` / `ThreeDFace`
+    /// `ButtonBorder` / `ActiveBorder` / `InactiveBorder` / `WindowFrame`
     ButtonBorder,
     /// `LinkText`
     LinkText,
@@ -344,18 +344,25 @@ impl SystemColor {
     /// non-system-color strings; aliases are normalised to their canonical variant.
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "canvas" | "window" => Some(Self::Canvas),
-            "canvastext" | "windowtext" | "fieldtext" => Some(Self::CanvasText),
+            // Deprecated aliases (CSS Color 4 §6.3) resolve to their targets.
+            "canvas" | "window" | "activecaption" | "appworkspace" | "background"
+            | "inactivecaption" | "infobackground" | "menu" => Some(Self::Canvas),
+            "canvastext" | "windowtext" | "fieldtext" | "captiontext" | "infotext"
+            | "menutext" => Some(Self::CanvasText),
             "field" => Some(Self::Field),
-            "buttonface" => Some(Self::ButtonFace),
+            "buttonface" | "threedface" | "buttonhighlight" | "buttonshadow" => {
+                Some(Self::ButtonFace)
+            }
             "buttontext" => Some(Self::ButtonText),
-            "buttonborder" | "threedface" => Some(Self::ButtonBorder),
+            "buttonborder" | "activeborder" | "inactiveborder" | "windowframe" => {
+                Some(Self::ButtonBorder)
+            }
             "linktext" => Some(Self::LinkText),
             "visitedtext" => Some(Self::VisitedText),
             "activetext" => Some(Self::ActiveText),
             "highlight" | "selecteditem" => Some(Self::Highlight),
             "highlighttext" | "selecteditemtext" => Some(Self::HighlightText),
-            "graytext" | "greytext" => Some(Self::GrayText),
+            "graytext" | "greytext" | "inactivecaptiontext" => Some(Self::GrayText),
             "mark" => Some(Self::Mark),
             "marktext" => Some(Self::MarkText),
             "accentcolor" => Some(Self::AccentColor),
