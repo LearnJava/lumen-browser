@@ -1229,6 +1229,15 @@ fn post_final_item(
             stretch_h = stretch_h.or(Some(item.rect.height));
             stretch_w = stretch_w.or(Some(item.rect.width));
         }
+        // BUG-1414: override ниже читает размеры как border-box. Ось, которую растяжение не
+        // тронуло, но у которой задан авторский размер (`width: 60px` + padding, content-box),
+        // иначе потеряла бы рамку и поля — фиксируем её текущим border-box размером.
+        if !w_auto {
+            stretch_w = stretch_w.or(Some(item.rect.width));
+        }
+        if !h_auto {
+            stretch_h = stretch_h.or(Some(item.rect.height));
+        }
         // If `item` is itself a subgrid, its column/row tracks resolve through
         // the thread-local `SubgridContextGuard` `step_final_item` set up for
         // the original placement pass (already dropped by the time this

@@ -1,6 +1,6 @@
 # BUG-1414 — grid: item с `width` + `padding`, растянутый по строке, теряет padding в `rect.width`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P6, при BUG-1313)
 **Область:** layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs` — финальная раскладка item'а, растянутого по block-оси)
 
@@ -26,3 +26,10 @@
 ## Как проверить
 
 `grid-items-minimum-width-001.html` — все сабтесты `.paddingLeft6`/`.paddingRight3`/`.borderLeft2`/`.borderRight4`.
+
+## Исправление
+
+`step_final_item` (`grid_trampoline.rs`): повторная раскладка растянутого item'а идёт с `UsedSizeOverride { box_sizing: BorderBox, .. }`,
+то есть размеры читаются как border-box. Растяжение по block-оси задавало только `height`, а `width: 60px` (content-box) уходил в override
+как 60 → padding терялся. Теперь ось с авторским размером, которую растяжение не тронуло, фиксируется текущим border-box размером.
+Тесты — `box_tree/tests/grid_stretch_keeps_padding.rs`.
