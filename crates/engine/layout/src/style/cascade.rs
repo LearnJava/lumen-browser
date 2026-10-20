@@ -593,6 +593,7 @@ pub(crate) fn compute_style_shareable(
     // UA stylesheet: <a href> → color: #0000ee. HTML5 §15.3.3.
     if let Some(c) = ua_link_color(doc, node) {
         style.color = c;
+        style.color_css = None;
     }
     // UA stylesheet: <small>/<sub>/<sup> → font-size: 0.83× parent.
     // HTML5 §15.3.3. Author font-size перекроет через pre-pass.

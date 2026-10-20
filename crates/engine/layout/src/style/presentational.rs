@@ -299,6 +299,7 @@ pub(in crate::style) fn apply_text_color_presentational_hint(
         && let Some(c) = parse_legacy_color_html_attr(val)
     {
         style.color = c;
+        style.color_css = None;
     }
 }
 /// HTML5 §15.3.2: `<font size="N">` → абсолютный font-size; `<font face="…">` → font-family.

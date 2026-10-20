@@ -60,6 +60,7 @@ pub(in crate::style) fn apply_quirks_table_reset(doc: &Document, node: NodeId, s
     style.font_weight = FontWeight::NORMAL;
     style.font_stretch = FontStretch::NORMAL;
     style.color = Color::BLACK;
+    style.color_css = None;
     style.text_align = TextAlign::Start;
     style.white_space = WhiteSpace::Normal;
 }

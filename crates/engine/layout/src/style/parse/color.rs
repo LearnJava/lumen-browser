@@ -109,6 +109,12 @@ pub fn canonical_specified_color(s: &str) -> Option<String> {
     if let Some(c) = parse_hex_color(trimmed) {
         return Some(crate::selector_query::color_to_css(c));
     }
+    // BUG-1425: lab()/oklch()/color(…) сериализуются в своём пространстве; `color-mix()` и
+    // относительные цвета остаются записанными как есть (CSS Color L5 §10.2 / §4.4).
+    if let Some(css) = super::color_serialize::computed_color_css(trimmed) {
+        let keep_source = lower.starts_with("color-mix(") || lower.contains("(from ");
+        return Some(if keep_source { lower } else { css });
+    }
     if let Some(c) = parse_function_color(trimmed) {
         return Some(crate::selector_query::color_to_css(c));
     }
@@ -774,6 +780,12 @@ impl ColorFn {
 /// `alpha`) resolves to the origin's channel value, optionally combined with
 /// numbers/percentages inside `calc()`. Returns `None` on any parse error.
 fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
+    let (resolved, alpha) = resolve_relative_color(kind, body)?;
+    parse_function_color(&kind.format_resolved(resolved, alpha))
+}
+
+/// Канонические значения каналов и alpha относительного цвета — до округления в байты.
+fn resolve_relative_color(kind: ColorFn, body: &str) -> Option<([f32; 3], f32)> {
     let toks = tokenize_with_parens(body);
     if toks.len() < 4 {
         return None;
@@ -815,7 +827,44 @@ fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
         Some(a) => eval_color_component(a, &vars, 1.0)?,
         None => chans[3],
     };
-    parse_function_color(&kind.format_resolved(resolved, alpha))
+    Some((resolved, alpha))
+}
+
+/// Computed-значение относительного цвета `<fn>(from …)` (CSS Color L5 §4.4): `rgb()`/`hsl()`
+/// сохраняют float-каналы в `color(srgb …)`, lab-подобные остаются в своей функции (BUG-1425).
+/// `lower` — значение в нижнем регистре; `None` — не относительный цвет или он невалиден.
+pub(super) fn relative_color_css(lower: &str) -> Option<String> {
+    use super::color_serialize::{LabFn, finish_lab, srgb_function};
+    let lower = lower.trim();
+    let (kind, body) = [
+        ("rgba(", ColorFn::Rgb),
+        ("rgb(", ColorFn::Rgb),
+        ("hsla(", ColorFn::Hsl),
+        ("hsl(", ColorFn::Hsl),
+        ("oklch(", ColorFn::Oklch),
+        ("oklab(", ColorFn::Oklab),
+        ("lab(", ColorFn::Lab),
+        ("lch(", ColorFn::Lch),
+    ]
+    .into_iter()
+    .find_map(|(name, k)| Some((k, lower.strip_prefix(name)?.strip_suffix(')')?)))?;
+    let rest = body.trim_start().strip_prefix("from ")?;
+    let (c, alpha) = resolve_relative_color(kind, rest.trim())?;
+    let lab = |k| Some(finish_lab(k, [Some(c[0]), Some(c[1]), Some(c[2])], Some(alpha.clamp(0.0, 1.0))));
+    match kind {
+        ColorFn::Rgb => Some(srgb_function([c[0] / 255.0, c[1] / 255.0, c[2] / 255.0], alpha)),
+        ColorFn::Hsl => {
+            let col = parse_function_color(&kind.format_resolved(c, alpha))?;
+            Some(srgb_function(
+                [f32::from(col.r) / 255.0, f32::from(col.g) / 255.0, f32::from(col.b) / 255.0],
+                f32::from(col.a) / 255.0,
+            ))
+        }
+        ColorFn::Lab => lab(LabFn::Lab),
+        ColorFn::Lch => lab(LabFn::Lch),
+        ColorFn::Oklab => lab(LabFn::Oklab),
+        ColorFn::Oklch => lab(LabFn::Oklch),
+    }
 }
 
 /// Resolve one relative-color component to its canonical channel value.
@@ -824,7 +873,7 @@ fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
 /// literal number / `<percentage>` / `<angle>`, or a `calc()` expression mixing
 /// keywords, numbers and percentages with `+ - * /` and parentheses. `pct_basis`
 /// is the channel's percent reference (`50%` → `0.5 * pct_basis`).
-fn eval_color_component(raw: &str, vars: &[(&str, f32)], pct_basis: f32) -> Option<f32> {
+pub(super) fn eval_color_component(raw: &str, vars: &[(&str, f32)], pct_basis: f32) -> Option<f32> {
     // `calc(` wrappers (including nested) become plain parens; bare tokens pass through.
     let normalized = raw.trim().replace("calc(", "(");
     let tokens = tokenize_color_expr(&normalized, pct_basis)?;
@@ -1165,7 +1214,7 @@ fn parse_color_mix(body: &str) -> Option<Color> {
 /// must preserve full precision for `color(srgb …)`-form serialization
 /// (BUG-930 — rounding to `u8` and back loses it, e.g. `128/255 = 0.50196`
 /// instead of the `0.5` a direct float mix gives) need this instead.
-fn parse_color_mix_f32(body: &str) -> Option<([f32; 4], crate::color_mix::MixColorSpace)> {
+pub(super) fn parse_color_mix_f32(body: &str) -> Option<([f32; 4], crate::color_mix::MixColorSpace)> {
     let parts = split_top_level_commas(body);
     if parts.len() != 3 {
         return None;
