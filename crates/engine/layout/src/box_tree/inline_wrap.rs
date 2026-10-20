@@ -769,6 +769,9 @@ pub(crate) fn wrap_inline_run_indented(
     // A segment boundary with no whitespace on either side joins tightly (e.g.
     // `<q>` `::before` open-quote glued to the quoted text, `<a>link</a>!`).
     let mut prev_trailing_ws = false;
+    // The previous word ended an inline box with a trailing margin/border/padding: the next word
+    // must not be glued to its fragment, or the gap (`current_x += post`) is lost.
+    let mut prev_edge = false;
     // pre-wrap / break-spaces: the previous segment ended with a preserved
     // space, i.e. a line may break before this segment's first word.
     let mut pre_wrap_space_before = false;
@@ -1032,6 +1035,7 @@ pub(crate) fn wrap_inline_run_indented(
                     }
                 }
                 current_x += post;
+                prev_edge = post > 0.0;
                 continue;
             }
 
@@ -1138,6 +1142,7 @@ pub(crate) fn wrap_inline_run_indented(
                         }
                     }
                     current_x += post;
+                    prev_edge = post > 0.0;
                     continue;
                 }
 
@@ -1194,6 +1199,7 @@ pub(crate) fn wrap_inline_run_indented(
                     }
                 }
                 current_x += post;
+                prev_edge = post > 0.0;
                 continue;
             }
 
@@ -1203,7 +1209,7 @@ pub(crate) fn wrap_inline_run_indented(
 
             // Слияние: только когда нет pre/post space у данного слова
             // и предыдущий фраг тоже не заканчивается inline-box-ом.
-            let no_box = pre == 0.0 && post == 0.0;
+            let no_box = pre == 0.0 && post == 0.0 && !prev_edge;
             let merged = if no_box {
                 if let Some(last) = current_line.last_mut() {
                     // Fragments at different UAX #9 embedding levels must stay
@@ -1271,6 +1277,7 @@ pub(crate) fn wrap_inline_run_indented(
             }
 
             current_x += post;
+            prev_edge = post > 0.0;
         }
         // The next segment joins with a gap only if this one ended in whitespace.
         prev_trailing_ws = seg_trail_ws;
