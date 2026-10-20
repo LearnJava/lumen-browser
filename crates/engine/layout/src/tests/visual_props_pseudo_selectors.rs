@@ -1025,7 +1025,7 @@ use super::*;
         let root = lay(
             "<p>x</p><div id=a>y</div><div id=b>z</div><div id=c>w</div>",
             "p { text-overflow: \"-\"; } #a { text-overflow: clip 'a\\62 c'; } \
-             #b { text-overflow: ellipsis ellipsis ellipsis; } #c { text-overflow: \"unterminated; }",
+             #b { text-overflow: ellipsis ellipsis ellipsis; } #c { text-overflow: \"unterminated;\n }",
         );
         let p = first_element_child(&root);
         assert_eq!(p.style.text_overflow, TextOverflow::Str("-".into()));
@@ -1033,7 +1033,9 @@ use super::*;
         let blocks: Vec<_> = root.children.iter().filter(|c| matches!(c.kind, crate::BoxKind::Block)).collect();
         assert_eq!(blocks[1].style.text_overflow, TextOverflow::Clip);
         assert_eq!(blocks[1].style.text_overflow_right, TextOverflow::Str("abc".into()));
-        // Три значения и незакрытая строка — невалидны, остаётся initial.
+        // Три значения и строка, оборванная переводом строки (bad-string), —
+        // невалидны, остаётся initial. (Строка, оборванная EOF, по CSS Syntax
+        // §5.3 закрывается и валидна — BUG-1381.)
         assert_eq!(blocks[2].style.text_overflow, TextOverflow::Clip);
         assert_eq!(blocks[3].style.text_overflow, TextOverflow::Clip);
     }

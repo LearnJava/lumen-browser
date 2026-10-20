@@ -1075,6 +1075,31 @@ pub fn parse_apply_call(input: &str) -> Option<ApplyRule> {
     Parser::new(input).parse_apply_rule()
 }
 
+/// Depth-0 tokens that stop [`Parser::scan_component_values`].
+#[derive(Clone, Copy)]
+pub(crate) struct ScanEnd(u8);
+
+impl ScanEnd {
+    pub(crate) const NONE: Self = Self(0);
+    /// `;` — consumed.
+    pub(crate) const SEMI: Self = Self(1);
+    /// A stray `}` — left for the caller (it closes the enclosing block).
+    pub(crate) const CLOSE_BRACE: Self = Self(2);
+    /// `{` — the whole `{ … }` block is skipped, then the scan stops.
+    pub(crate) const OPEN_BRACE: Self = Self(4);
+
+    fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+}
+
+impl std::ops::BitOr for ScanEnd {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
@@ -1194,6 +1219,12 @@ impl<'a> Parser<'a> {
             let rule_start = self.pos;
             match self.peek() {
                 None => break,
+                // `@` not followed by an ident is a delim token (CSS Syntax
+                // §4.3.1), so `@ import "x.css"; div{…}` starts a qualified rule.
+                Some('@') if !self.at_keyword_follows() => {
+                    self.consume();
+                    self.recover_qualified_rule();
+                }
                 Some('@') => {
                     let primary = self.parse_at_rule();
                     // Primary-outcome + at-rules, всплывшие из тела top-level
@@ -1342,10 +1373,13 @@ impl<'a> Parser<'a> {
         let selectors = self.parse_selector_list();
         self.skip_ws_and_comments();
         if selectors.is_empty() || self.peek() != Some('{') {
+            // Rescan the whole prelude: the selector parser may have eaten an
+            // opening `(`/`[` whose closer the scan has to match.
+            self.pos = start;
+            self.recover_qualified_rule();
             if self.pos == start {
                 self.consume();
             }
-            self.recover_to_block_end();
             return None;
         }
         self.consume(); // '{'
@@ -1836,18 +1870,92 @@ impl<'a> Parser<'a> {
     /// 7355 of 73 375) cost the page all 650+ layout utilities after it, so
     /// the site rendered unstyled — see `bugs/BUG-1068-FIXED.md`.
     fn recover_to_block_end(&mut self) {
+        self.scan_component_values(Vec::new(), ScanEnd::SEMI | ScanEnd::CLOSE_BRACE | ScanEnd::OPEN_BRACE);
+    }
+
+    /// CSS Syntax §5.4.3 «consume a qualified rule» recovery: the prelude of an
+    /// invalid rule runs to the first `{`-block at nesting depth 0, and a `;`
+    /// is an ordinary token in it (`@ import "x.css"; div{…}` is one dropped
+    /// rule, not an at-rule plus a live `div{…}`, BUG-1381). A stray `}` still
+    /// ends the scan — it belongs to the enclosing `@media`/`@layer` body.
+    fn recover_qualified_rule(&mut self) {
+        self.scan_component_values(Vec::new(), ScanEnd::CLOSE_BRACE | ScanEnd::OPEN_BRACE);
+    }
+
+    /// Skips one string token; the opening quote is under the cursor. An
+    /// unescaped newline ends a `<bad-string-token>` and stays unconsumed.
+    pub(crate) fn skip_string_token(&mut self) {
+        let Some(q) = self.consume() else { return };
         while let Some(c) = self.peek() {
             match c {
+                '\\' => {
+                    self.consume();
+                    self.consume();
+                }
+                '\n' | '\r' | '\x0c' => return,
+                _ => {
+                    self.consume();
+                    if c == q {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Skips component values (CSS Syntax §5.4.7): strings, comments and
+    /// escapes are atomic, `(`/`[`/`{` open blocks whose contents hide every
+    /// terminator, and a closer that does not match the innermost open block
+    /// is an ordinary token. `stack` holds the expected closers of blocks
+    /// already open; a non-empty start stack makes the scan return as soon as
+    /// it is empty again (skipping the rest of a `{ … }` block). Otherwise the
+    /// `end` flags pick which depth-0 token stops the scan.
+    pub(crate) fn scan_component_values(&mut self, mut stack: Vec<char>, end: ScanEnd) {
+        let block_mode = !stack.is_empty();
+        while let Some(c) = self.peek() {
+            match c {
+                '\\' => {
+                    self.consume();
+                    if !matches!(self.peek(), None | Some('\n')) {
+                        self.consume();
+                    }
+                }
+                '/' if self.peek_at(1) == Some('*') => {
+                    self.pos += 2;
+                    match self.rest().find("*/") {
+                        Some(e) => self.pos += e + 2,
+                        None => self.pos = self.input.len(),
+                    }
+                }
+                '"' | '\'' => self.skip_string_token(),
+                '(' | '[' => {
+                    self.consume();
+                    stack.push(if c == '(' { ')' } else { ']' });
+                }
                 '{' => {
                     self.consume();
-                    self.skip_block();
-                    return;
+                    if stack.is_empty() && end.contains(ScanEnd::OPEN_BRACE) {
+                        self.scan_component_values(vec!['}'], ScanEnd::NONE);
+                        return;
+                    }
+                    stack.push('}');
                 }
-                ';' => {
+                ')' | ']' | '}' => {
+                    if stack.is_empty() && c == '}' && end.contains(ScanEnd::CLOSE_BRACE) {
+                        return;
+                    }
+                    self.consume();
+                    if stack.last() == Some(&c) {
+                        stack.pop();
+                        if block_mode && stack.is_empty() {
+                            return;
+                        }
+                    }
+                }
+                ';' if stack.is_empty() && end.contains(ScanEnd::SEMI) => {
                     self.consume();
                     return;
                 }
-                '}' => return,
                 _ => {
                     self.consume();
                 }
@@ -1877,6 +1985,16 @@ impl<'a> Parser<'a> {
             }
         }
         Some(s)
+    }
+
+    /// True when the `@` under the cursor starts an `<at-keyword-token>`:
+    /// an ident start or a valid escape follows it.
+    fn at_keyword_follows(&self) -> bool {
+        match self.peek_at(1) {
+            Some('\\') => !matches!(self.peek_at(2), None | Some('\n')),
+            Some(c) => is_ident_start(c),
+            None => false,
+        }
     }
 
     /// CSS Syntax L3 §4.3.8 "check if two code points are a valid escape":
