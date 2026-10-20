@@ -1950,7 +1950,8 @@ fn canonical_selector_list_with(input: &str, nested: bool, implicit_amp: bool) -
             Some(c @ ('>' | '+' | '~')) if nested => (format!("{c} "), item[1..].trim_start()),
             _ => (String::new(), item),
         };
-        let substituted = if nested { replace_outside_strings(rest, '&', NESTING_MARKER) } else { rest.to_string() };
+        // Верхнеуровневый `&` — это `:scope` (CSS Nesting 1 §3.1): допустим и вне вложенности.
+        let substituted = replace_outside_strings(rest, '&', NESTING_MARKER);
         let parsed = if rest.is_empty() || !is_valid_selector_list(&substituted) {
             None
         } else {

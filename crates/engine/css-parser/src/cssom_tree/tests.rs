@@ -287,3 +287,10 @@ fn rules_inside_scope_are_scope_relative_without_implicit_ampersand() {
     let inner = &t.rules[0].children[0].children[0];
     assert_eq!(t.css_text(inner.id).unwrap(), "& .c { x: y; }");
 }
+
+#[test]
+fn top_level_ampersand_rule_is_visible_in_css_rules() {
+    let t = tree(".b { color: red } & { @media screen { &.b { color: green } } }");
+    assert_eq!(t.rules.len(), 2);
+    assert_eq!(t.rules[1].prelude, "&");
+}
