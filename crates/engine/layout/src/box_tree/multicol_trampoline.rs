@@ -3,6 +3,7 @@ use super::layout_cache::finalize_block_height;
 use super::layout_dispatch::{dispatch_box, finish_after_match};
 use super::block_flow_trampoline::{self, DispatchOutcome};
 use super::multicol_flow::{self, Window};
+use super::multicol_nested::{cut_nested, NestedFlow};
 use super::multicol_fragmentation::{balanced_height, forced_breaks, item_lines, pack, ItemLines};
 
 /// One segment of flow children between `column-span: all` boundaries — CSS
@@ -120,6 +121,13 @@ pub(super) struct MulticolInit {
     /// How many segments were cut by [`emit_sliced_fragments`]; `frag_cols` stands for the
     /// whole container only when it is one.
     pub(super) frag_segments: u32,
+    /// Set by the parent multicol container that can cut this one across its own columns
+    /// ([`multicol_nested`](super::multicol_nested)): keep the flow of the only segment.
+    pub(super) keep_flow: bool,
+    /// The flow kept for the parent (`keep_flow`), handed to it when this frame is done.
+    pub(super) nested_out: Option<Box<NestedFlow>>,
+    /// `(index in work, flow)` of the nested multicol items that kept their flow.
+    pub(super) nested: Vec<(usize, Box<NestedFlow>)>,
 }
 
 /// Column geometry of a segment cut by [`emit_sliced_fragments`] without rows of columns.
@@ -326,6 +334,9 @@ pub(super) fn run(
                 }
                 Some(mut parent) => {
                     let i = pending_index(&parent);
+                    if let Some(flow) = current.init.nested_out.take() {
+                        parent.init.nested.push((i, flow));
+                    }
                     parent.init.work[i] = current.b;
                     match parent.phase {
                         Phase::Measure => post_measure_item(&mut parent, i, viewport),
@@ -354,7 +365,8 @@ pub(super) fn run(
                         post_measure_item(&mut current, i, viewport);
                         advance(&mut current);
                     }
-                    StepOutcome::Descend(child_init) => {
+                    StepOutcome::Descend(mut child_init) => {
+                        child_init.keep_flow = wants_nested_flow(&current);
                         let child_box = block_flow_trampoline::take_box(&mut current.init.work[i]);
                         stack.push(current);
                         current = new_frame(child_box, child_init);
@@ -384,7 +396,8 @@ pub(super) fn run(
                         post_place_item(&mut current, i, viewport);
                         advance(&mut current);
                     }
-                    StepOutcome::Descend(child_init) => {
+                    StepOutcome::Descend(mut child_init) => {
+                        child_init.keep_flow = wants_nested_flow(&current);
                         let child_box = block_flow_trampoline::take_box(&mut current.init.work[i]);
                         stack.push(current);
                         current = new_frame(child_box, child_init);
@@ -418,6 +431,19 @@ pub(super) fn run(
             }
         }
     }
+}
+
+/// Can the segment `frame` is measuring cut a nested multicol item across its own columns
+/// ([`emit_nested_fragments`])? Then the item keeps the flow it cuts for it.
+fn wants_nested_flow(frame: &Frame) -> bool {
+    let init = &frame.init;
+    let seg = &init.segments[frame.seg_i];
+    frame.phase == Phase::Measure
+        && init.container_h.is_some()
+        && !init.balance
+        && init.col_rows.is_none()
+        && seg.sliceable
+        && seg.item_idxs.len() == 1
 }
 
 /// Runs right after an item finishes its Measure-phase dispatch — outer
@@ -531,6 +557,12 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
     };
     if scan == OofScan::Unsupported || (scan == OofScan::Inside && frame.init.col_rows.is_some()) {
         return false;
+    }
+    if scan == OofScan::None && emit_nested_fragments(frame, &item_idxs, viewport) {
+        return true;
+    }
+    if scan == OofScan::None && frame.init.keep_flow {
+        keep_nested_flow(frame, &item_idxs, viewport);
     }
     // Absolute boxes of the cut part: their containing block is a fragmented box, so they are cut
     // across the columns on their own, below (`(index of the item, box)`).
@@ -674,6 +706,72 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
         }
     }
     frame.init.cur_y += seg_extent.max(0.0);
+    true
+}
+
+/// The flow of this multicol container, kept for the parent that may cut it across its columns
+/// ([`MulticolInit::keep_flow`]): only a container of one segment without a block size of its own.
+fn keep_nested_flow(frame: &mut Frame, item_idxs: &[usize], viewport: Size) {
+    let init = &frame.init;
+    if init.segments.len() != 1
+        || init.segments[0].span_idx.is_some()
+        || init.col_rows.is_some()
+        || init.container_h.is_some()
+        || init.s.position != Position::Static
+    {
+        return;
+    }
+    let col_w = init.col_w;
+    let items = item_idxs
+        .iter()
+        .map(|&i| {
+            let c = &init.work[i];
+            let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
+            let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, col_w, viewport);
+            (c.clone(), mt, mb)
+        })
+        .collect();
+    let flow = NestedFlow {
+        items,
+        n: init.n_cols as usize,
+        col_w,
+        col_gap: init.col_gap,
+        balance: init.balance,
+        content_x: init.content_x,
+        edge_top: init.s.border_top_width + init.padding_top,
+        edge_bottom: init.s.border_bottom_width + init.padding_bottom,
+    };
+    frame.init.nested_out = Some(Box::new(flow));
+}
+
+/// Fragmentation L3 §4 — the segment is one nested multicol container (with the flow it kept) that
+/// is taller than the column height of this `column-fill: auto` container: its columns continue
+/// in the next column of this one instead of overflowing the first ([`cut_nested`]). `false`
+/// (nothing consumed) when the segment is anything else, or when the nested box fits.
+fn emit_nested_fragments(frame: &mut Frame, item_idxs: &[usize], viewport: Size) -> bool {
+    let [i] = *item_idxs else { return false };
+    let init = &frame.init;
+    let Some(pos) = init.nested.iter().position(|(k, _)| *k == i) else { return false };
+    let Some(h) = segment_limit(init) else { return false };
+    let b = &init.work[i];
+    if init.balance || init.col_rows.is_some() || !multicol_flow::is_cuttable_multicol(b) {
+        return false;
+    }
+    let col_w = init.col_w;
+    let mt = b.style.margin_top.resolve_or_zero(b.style.font_size, col_w, viewport);
+    if mt + b.rect.height <= h + multicol_flow::EPS {
+        return false;
+    }
+    let (content_x, pitch, cur_y) = (init.content_x, col_w + init.col_gap, init.cur_y);
+    let col_dx = |m: usize| content_x + m as f32 * pitch;
+    let Some(cut) = cut_nested(&init.nested[pos].1, b, h, mt, cur_y, &col_dx, viewport) else { return false };
+    // Out-of-flow boxes of the container itself are cut against one window per fragment.
+    let windows: Vec<(f32, f32)> = (0..cut.frags.len()).map(|m| (m as f32 * h, (m + 1) as f32 * h)).collect();
+    frame.init.frag_cols = Some(FragCols { windows, first_h: h, later_h: h, origin: cur_y });
+    frame.init.frag_segments += 1;
+    frame.init.out.extend(cut.frags);
+    frame.init.consumed[i] = true;
+    frame.init.cur_y += cut.extent.max(0.0);
     true
 }
 
