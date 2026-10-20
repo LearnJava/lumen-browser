@@ -33,7 +33,8 @@ use lumen_dom::NodeId;
 
 use crate::style::{Overflow, Position};
 use crate::{
-    box_clips_own_overflow, child_scrollable_bounds, padding_box, LayoutBox, ScrollContainer, UnreachableSides,
+    box_clips_own_overflow, box_padding, child_scrollable_bounds, item_margins, padding_box, LayoutBox, ScrollContainer,
+    UnreachableSides,
 };
 
 /// What the descendants of a box (reached through boxes that do not clip) add to the
@@ -46,6 +47,13 @@ pub(crate) struct OverflowRollup {
     max_x: f32,
     min_y: f32,
     max_y: f32,
+    /// The same four edges with the flex/grid-item margins ([`item_margins`]) added on the
+    /// outer side: only the margin on a container's reachable side counts, so the container
+    /// picks between the plain and the margin-grown edge (BUG-1389).
+    min_x_m: f32,
+    max_x_m: f32,
+    min_y_m: f32,
+    max_y_m: f32,
     /// Border boxes (transform-expanded) of the `position: absolute|fixed` members, which count
     /// unless they lie wholly beyond an unreachable side of the container's padding box.
     positioned: Vec<Rect>,
@@ -58,12 +66,16 @@ impl OverflowRollup {
             max_x: f32::NEG_INFINITY,
             min_y: f32::INFINITY,
             max_y: f32::NEG_INFINITY,
+            min_x_m: f32::INFINITY,
+            max_x_m: f32::NEG_INFINITY,
+            min_y_m: f32::INFINITY,
+            max_y_m: f32::NEG_INFINITY,
             positioned: Vec::new(),
         }
     }
 
     /// Folds `c`'s own scrollable bounds in (not its descendants — see [`Self::merge`]).
-    fn add_member(&mut self, c: &LayoutBox) {
+    fn add_member(&mut self, parent: &LayoutBox, c: &LayoutBox) {
         let bounds = child_scrollable_bounds(c);
         if matches!(c.style.position, Position::Absolute | Position::Fixed) {
             self.positioned.push(bounds);
@@ -72,6 +84,11 @@ impl OverflowRollup {
             self.max_x = self.max_x.max(bounds.x + bounds.width);
             self.min_y = self.min_y.min(bounds.y);
             self.max_y = self.max_y.max(bounds.y + bounds.height);
+            let [mt, mr, mb, ml] = item_margins(parent, c);
+            self.min_x_m = self.min_x_m.min(bounds.x - ml);
+            self.max_x_m = self.max_x_m.max(bounds.x + bounds.width + mr);
+            self.min_y_m = self.min_y_m.min(bounds.y - mt);
+            self.max_y_m = self.max_y_m.max(bounds.y + bounds.height + mb);
         }
     }
 
@@ -81,6 +98,10 @@ impl OverflowRollup {
         self.max_x = self.max_x.max(other.max_x);
         self.min_y = self.min_y.min(other.min_y);
         self.max_y = self.max_y.max(other.max_y);
+        self.min_x_m = self.min_x_m.min(other.min_x_m);
+        self.max_x_m = self.max_x_m.max(other.max_x_m);
+        self.min_y_m = self.min_y_m.min(other.min_y_m);
+        self.max_y_m = self.max_y_m.max(other.max_y_m);
         if self.positioned.is_empty() {
             self.positioned = other.positioned;
         } else {
@@ -90,13 +111,28 @@ impl OverflowRollup {
 
     /// `(scrollWidth, scrollHeight)` magnitudes for a box whose padding box is `pb`: what
     /// [`crate::content_width`] / [`crate::content_height`] return, without a walk.
-    fn content_size(&self, pb: &Rect, u: UnreachableSides) -> (f32, f32) {
+    fn content_size(&self, pb: &Rect, u: UnreachableSides, pad: [f32; 4]) -> (f32, f32) {
         let (mut min_x, mut max_x) = (0.0_f32, pb.width);
         let (mut min_y, mut max_y) = (0.0_f32, pb.height);
-        min_x = min_x.min(self.min_x - pb.x);
-        max_x = max_x.max(self.max_x - pb.x);
-        min_y = min_y.min(self.min_y - pb.y);
-        max_y = max_y.max(self.max_y - pb.y);
+        // The edge on a container's reachable side carries the flex/grid-item margin.
+        let (lo_x, hi_x) = (if u.right { self.min_x_m } else { self.min_x }, if u.left { self.max_x_m } else { self.max_x });
+        let (lo_y, hi_y) = (if u.bottom { self.min_y_m } else { self.min_y }, if u.top { self.max_y_m } else { self.max_y });
+        min_x = min_x.min(lo_x - pb.x);
+        max_x = max_x.max(hi_x - pb.x);
+        min_y = min_y.min(lo_y - pb.y);
+        max_y = max_y.max(hi_y - pb.y);
+        // The padding at the reachable end follows the in-flow content (BUG-1389).
+        let [pad_t, pad_r, pad_b, pad_l] = pad;
+        if u.left && hi_x.is_finite() {
+            max_x = max_x.max(hi_x - pb.x + pad_r);
+        } else if u.right && lo_x.is_finite() {
+            min_x = min_x.min(lo_x - pb.x - pad_l);
+        }
+        if u.top && hi_y.is_finite() {
+            max_y = max_y.max(hi_y - pb.y + pad_b);
+        } else if u.bottom && lo_y.is_finite() {
+            min_y = min_y.min(lo_y - pb.y - pad_t);
+        }
         for bounds in &self.positioned {
             if !u.hides(bounds, pb) {
                 min_x = min_x.min(bounds.x - pb.x);
@@ -115,7 +151,7 @@ fn publish(b: &LayoutBox, r: &OverflowRollup, out: &mut Vec<ScrollContainer>) {
     let scrolls = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden | Overflow::Clip);
     if scrolls(s.overflow_x) || scrolls(s.overflow_y) {
         let clip = padding_box(b);
-        let (scroll_width, scroll_height) = r.content_size(&clip, UnreachableSides::of(s));
+        let (scroll_width, scroll_height) = r.content_size(&clip, UnreachableSides::of(s), box_padding(b));
         out.push(ScrollContainer {
             node: b.node,
             clip_rect: clip,
@@ -128,7 +164,7 @@ fn publish(b: &LayoutBox, r: &OverflowRollup, out: &mut Vec<ScrollContainer>) {
         });
     } else if matches!(s.overflow_x, Overflow::Visible) && matches!(s.overflow_y, Overflow::Visible) {
         let clip = padding_box(b);
-        let (scroll_width, scroll_height) = r.content_size(&clip, UnreachableSides::of(s));
+        let (scroll_width, scroll_height) = r.content_size(&clip, UnreachableSides::of(s), box_padding(b));
         if scroll_width > clip.width + 0.01 || scroll_height > clip.height + 0.01 {
             out.push(ScrollContainer {
                 node: b.node,
@@ -216,7 +252,7 @@ impl Walk<'_, '_> {
     fn fold_children(&mut self, b: &LayoutBox) -> OverflowRollup {
         let mut rollup = OverflowRollup::empty();
         for c in &b.children {
-            rollup.add_member(c);
+            rollup.add_member(b, c);
             let below = self.visit(c);
             if !box_clips_own_overflow(c) {
                 rollup.merge(below);

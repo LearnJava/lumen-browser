@@ -1,6 +1,6 @@
 # BUG-1389 — `scrollWidth`/`scrollHeight` не включают padding в конце и поле flex-/grid-элемента
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 16, `css/css-overflow` + `css/css-sizing`)
 **Область:** layout (`crates/engine/layout/src/lib.rs:1508` `contributes_to_scrollable_overflow` и `collect_scroll_containers_for_js_state` — размер прокручиваемой области)
 
@@ -28,3 +28,12 @@ WPT-RUN-14 срез 16: `css-overflow/scrollable-overflow-padding*.html` (30 и�
 ## Как проверить
 
 `css/css-overflow/scrollable-overflow-padding.html`, `scrollable-overflow-with-flex-item-margin-inline-end.html`.
+
+## Исправление (2026-10-20, P6)
+
+`lib.rs::scrollable_extent_{x,y}` и зеркальный `scroll_rollup.rs::OverflowRollup::content_size` (должны совпадать побитно — дифф-тесты в `scroll_rollup.rs`):
+
+- padding на достижимом конце оси (`UnreachableSides`: inline-end/block-end с учётом `direction`/`writing-mode`) добавляется к краю in-flow содержимого — `max(padding box, край + padding-end)`; abspos/fixed её не получают;
+- поля flex-/grid-элемента (`item_margins`: прямой ребёнок flex/grid-контейнера, не out-of-flow) входят в границы на достижимой стороне; блочные дети — только border box.
+
+Тесты: `tests/scroll_container.rs` (BUG-1389, 5 штук).

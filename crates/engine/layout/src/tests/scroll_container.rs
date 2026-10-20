@@ -1453,3 +1453,65 @@ fn page_collector_drops_viewport_propagated_overflow() {
     let page = collect_page_scroll_containers(&root);
     assert_eq!(all.len(), page.len() + 1, "body убран, .s остался");
 }
+
+// ─── BUG-1389: end padding and flex/grid item margins in scrollable overflow ───
+
+fn scroll_size(css: &str, html: &str) -> (f32, f32) {
+    let root = lay_full(html, css);
+    let c = collect_scroll_containers_for_js_state(&root);
+    let s = c.iter().find(|c| c.clip_rect.width > 0.0).expect("scroll container");
+    (s.scroll_width, s.scroll_height)
+}
+
+#[test]
+fn end_padding_joins_scrollable_overflow() {
+    // CSS Overflow 3 §2.2 (WPT scrollable-overflow-padding.html): 20 + 300 + 20.
+    let (w, h) = scroll_size(
+        "#s { overflow: auto; width: 100px; height: 100px; padding: 20px; box-sizing: content-box; } \
+         #c { width: 300px; height: 300px; }",
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+    );
+    assert!((w - 340.0).abs() < 0.5, "scrollWidth {w}");
+    assert!((h - 340.0).abs() < 0.5, "scrollHeight {h}");
+}
+
+#[test]
+fn end_padding_bottom_only() {
+    let (_, h) = scroll_size(
+        "#s { overflow: auto; width: 100px; height: 100px; padding-bottom: 30px; box-sizing: content-box; } \
+         #c { height: 200px; }",
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+    );
+    assert!((h - 230.0).abs() < 0.5, "scrollHeight {h}");
+}
+
+#[test]
+fn end_padding_does_not_inflate_a_non_overflowing_scroller() {
+    let (w, h) = scroll_size(
+        "#s { overflow: auto; width: 100px; height: 100px; padding: 20px; box-sizing: content-box; } \
+         #c { width: 40px; height: 40px; }",
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+    );
+    assert!((w - 140.0).abs() < 0.5, "scrollWidth {w}");
+    assert!((h - 140.0).abs() < 0.5, "scrollHeight {h}");
+}
+
+#[test]
+fn flex_item_margin_inline_end_joins_scrollable_overflow() {
+    let (w, _) = scroll_size(
+        "#s { overflow: auto; display: flex; width: 100px; height: 100px; } \
+         #c { width: 300px; height: 300px; flex: none; margin-right: 50px; }",
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+    );
+    assert!((w - 350.0).abs() < 0.5, "scrollWidth {w}");
+}
+
+#[test]
+fn block_child_margin_does_not_join_scrollable_overflow() {
+    let (w, _) = scroll_size(
+        "#s { overflow: auto; width: 100px; height: 100px; } \
+         #c { width: 300px; height: 20px; margin-right: 50px; }",
+        "<div id=\"s\"><div id=\"c\"></div></div>",
+    );
+    assert!((w - 300.0).abs() < 0.5, "scrollWidth {w}");
+}
