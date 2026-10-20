@@ -1,6 +1,7 @@
 # BUG-1380 — escape-последовательности в значении свойства и в `url()` не раскрываются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** `parse_value_until_terminator(decode_escapes)` раскрывает валидный escape вне строк: буква, `_`, не-ASCII — всегда, цифра/`-` — только после ident-символа; в неэкранированном `url(` — любой. Структурные (`\3b `, `\31 0px`) остаются в исходной форме. Строки и значения custom property не трогаются (строки `content` — BUG-1572). Тесты: `parser/tests/recovery.rs` (`escape_*`, `structural_escape_*`).
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 15, `css/CSS2` (остальные каталоги: selectors, css1, syntax, box-display, visufx, visudet, …))
 **Область:** css-parser/layout (`crates/engine/css-parser/src/parser.rs::parse_ident` и разбор значений — escape `\HH ` в значениях и `url()`)
 
