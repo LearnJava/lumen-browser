@@ -38,6 +38,7 @@
 #![allow(missing_docs)]
 
 mod at_rules;
+mod cssom_api;
 mod cssom_op;
 mod declarations;
 mod layer_state;
@@ -286,6 +287,10 @@ pub struct Stylesheet {
     /// `Arc<str>` so [`Self::clone`] stays cheap: the same-tick CSSOM flush
     /// clones the whole cascade sheet on every mutated read.
     source: Option<std::sync::Arc<str>>,
+    /// CSSOM-дерево листа (CSSOM-10) — единственный авторитет для правок
+    /// `insertRule`/`deleteRule`/сеттеров; строится лениво из [`Self::source`].
+    /// См. `parser/cssom_api.rs`.
+    cssom: crate::cssom_tree::CssomCell,
 }
 
 /// [`Stylesheet::top_level_spans`] entry for a rule that came from
@@ -370,6 +375,7 @@ impl Default for Stylesheet {
             top_level_order: Vec::new(),
             top_level_spans: Vec::new(),
             source: None,
+            cssom: Default::default(),
         }
     }
 }
@@ -407,6 +413,7 @@ impl Clone for Stylesheet {
             top_level_order: self.top_level_order.clone(),
             top_level_spans: self.top_level_spans.clone(),
             source: self.source.clone(),
+            cssom: self.cssom.clone(),
         }
     }
 }
@@ -556,6 +563,7 @@ impl Stylesheet {
             top_level_order,
             top_level_spans: _,
             source: _,
+            cssom: _,
         } = other;
         self.rules.extend(rules);
         self.properties.extend(properties);
@@ -591,6 +599,8 @@ impl Stylesheet {
         self.top_level_spans
             .extend(std::iter::repeat_n(SYNTHETIC_SPAN, top_level_order.len()));
         self.top_level_order.extend(top_level_order);
+        // Дерево описывает только `source`, а лист вырос — оно устарело.
+        self.cssom.take();
         self.mark_mutated();
     }
 
@@ -984,6 +994,8 @@ impl Stylesheet {
                 CssomOp::InsertRuleBodyApply { rule_index, index, text } => {
                     self.insert_rule_body_apply(base + rule_index, *index, text).map(|_| ())
                 }
+                // Применяется заменой текста листа (`patched_cascade`), не повтором.
+                CssomOp::TreeEdit => Ok(()),
             };
             all_ok &= outcome.is_ok();
         }
@@ -1365,6 +1377,7 @@ impl<'a> Parser<'a> {
             // Filled by `parse` — `parse_stylesheet` is also reached from
             // contexts that have no standalone source string to attribute.
             source: None,
+            cssom: Default::default(),
         }
     }
 

@@ -246,6 +246,11 @@ impl CssomTree {
         serialize::tree_source(&self.rules)
     }
 
+    /// Текст для каскада одного узла (с потомками).
+    pub fn node_source(&self, id: u32) -> Option<String> {
+        self.get(id).map(serialize::node_source)
+    }
+
     /// `CSSRule.cssText` узла.
     pub fn css_text(&self, id: u32) -> Option<String> {
         self.get(id).map(serialize::css_text)
@@ -287,6 +292,48 @@ impl CssomTree {
             }
             None => false,
         }
+    }
+}
+
+/// Ячейка дерева в [`crate::Stylesheet`]: дерево строится лениво из исходного
+/// текста листа при первом обращении и переживает клонирование листа.
+///
+/// Не влияет на равенство листов (`PartialEq` всегда истинно): это
+/// происхождение данных, а не содержимое, как `source`.
+#[derive(Debug, Default)]
+pub struct CssomCell(std::sync::OnceLock<CssomTree>);
+
+impl CssomCell {
+    /// Ячейка с готовым деревом.
+    pub(crate) fn filled(tree: CssomTree) -> Self {
+        let cell = std::sync::OnceLock::new();
+        let _ = cell.set(tree);
+        Self(cell)
+    }
+
+    /// Дерево, построенное из `source` при первом обращении.
+    pub(crate) fn get_or_build(&self, source: Option<&str>) -> &CssomTree {
+        self.0.get_or_init(|| CssomTree::parse(source.unwrap_or("")))
+    }
+
+    /// Забирает дерево, оставляя ячейку пустой.
+    pub(crate) fn take(&mut self) -> Option<CssomTree> {
+        self.0.take()
+    }
+}
+
+impl Clone for CssomCell {
+    fn clone(&self) -> Self {
+        match self.0.get() {
+            Some(t) => Self::filled(t.clone()),
+            None => Self::default(),
+        }
+    }
+}
+
+impl PartialEq for CssomCell {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }
 

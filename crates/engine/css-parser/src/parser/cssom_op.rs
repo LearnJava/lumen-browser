@@ -72,4 +72,9 @@ pub enum CssomOp {
         /// The rule text exactly as JS passed it.
         text: String,
     },
+    /// CSSOM-10: любая правка через дерево [`crate::CssomTree`] (вставка,
+    /// удаление, сеттер правила). Содержимого не несёт — это отметка «лист
+    /// узла изменён»: при наложении на каскад текст листа в `source()` каскада
+    /// заменяется на `Stylesheet::cssom_source_text` листа узла.
+    TreeEdit,
 }
