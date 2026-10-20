@@ -113,7 +113,7 @@ use print::ELLIPSIS_EM;
 // Used by `display_list/{box_layer,walk,background_mask}.rs` (via `super::*`).
 use print::map_blend_mode;
 // Used by `display_list/{box_layer,scrollbars,text_run,walk}.rs` (via `super::*`).
-use print::{clamp_clip_rect, style_overflow_clips};
+use print::{clamp_clip_rect, overflow_clip_rect, style_overflow_clips};
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use print::{record_span, BucketField, RawSpan, ScBucket};
 // Used by `clip_path_to_shape`, still in this file just below the DL-15 region.
@@ -321,7 +321,7 @@ use table::{collect_table_cells, emit_table_box, emit_table_cell_border};
 mod walk;
 use walk::{
     depth_sorted_child_order, emit_box_self, emit_push_perspective, establishes_3d_rendering_context,
-    gap_decoration_commands, is_backface_hidden, walk,
+    gap_decoration_commands, is_backface_hidden, late_gap_decoration_commands, walk,
 };
 // Used only by `display_list/tests/shadows_and_transforms.rs` (via `use super::*`).
 #[cfg(test)]

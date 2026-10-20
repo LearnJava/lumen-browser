@@ -69,6 +69,7 @@ fn linked_sheet_urls_resolve_against_sheet_directory() {
     let base = ResourceBase::File(dir.join("page.html"));
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (css, _outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let css = crate::doc_extract::concat_chunks(&css);
     let resolved: Vec<_> = css
         .split('"')
         .filter(|s| s.starts_with("file:"))

@@ -1,6 +1,6 @@
 # BUG-1390 — `overflow-clip-margin` не расширяет клип в `--dump-display-list`, а `CSS.supports('overflow-clip-margin', '20px')` ложно
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 16, `css/css-overflow` + `css/css-sizing`)
 **Область:** paint (`crates/engine/paint/src/display_list/walk.rs:1242` читает `overflow_clip_margin`, `box_layer.rs:128-175` — нет) + js (`CSS.supports`)
 
@@ -28,3 +28,11 @@ WPT-RUN-14 срез 16: `css-overflow/overflow-clip-margin-*` (18 корневы
 ## Как проверить
 
 `css/css-overflow/overflow-clip-margin-007.html`, `parsing/overflow-clip-margin-computed.html`.
+
+## Исправление (2026-10-20, P6)
+
+- `paint/display_list/print.rs::overflow_clip_rect` — единственное место, строящее прямоугольник клипа `overflow`; вызывается из `walk.rs` и из упорядоченного пути `box_layer.rs` (там поля не учитывались вовсе). `overflow-clip-margin` действует только на оси с `overflow: clip` (на `hidden`/`scroll`/`auto` игнорируется), базовое ребро — по `<visual-box>` (`content-box` / `padding-box` / `border-box`).
+- `css-parser/lib.rs::SUPPORTED_PROPERTIES` получил `overflow-clip-margin`: `CSS.supports('overflow-clip-margin', '20px')` и `@supports (overflow-clip-margin: 20px)` стали истинными.
+- Не сделано: скругление клипа (`border-radius` + margin, `overflow-clip-margin-border-radius-*`) — клип остаётся прямоугольным, как и для `overflow: clip` без margin в пути `walk`.
+
+Тесты: `paint/display_list/tests/svg_table_and_hash.rs` (BUG-1390, 5 штук), `css-parser/parser/tests/at_rules.rs`.

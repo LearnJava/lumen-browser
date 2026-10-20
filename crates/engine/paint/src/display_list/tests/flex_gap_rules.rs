@@ -432,3 +432,52 @@ fn flex_negative_junction_insets_keep_the_whole_cross_rule() {
     // на каждую щель между строками (две щели, y = 102.5 и 212.5 при `top` страницы 0).
     assert_rules(&rules(&dl, false), &[(0.0, 103.0, 520.0, 5.0), (0.0, 213.0, 520.0, 5.0)]);
 }
+
+/// subgrid-gap-decorations-fragmentation-011: `break-before: column` в строке subgrid'а, не первой,
+/// сдвигает его щели, а правила рисуются поверх детей; родительское `row-rule` под subgrid'ом
+/// не идёт.
+#[test]
+fn subgrid_with_forced_break_paints_shifted_rules_over_children() {
+    let html = r#"<div class="m"><div class="g"><div class="i"></div><div class="i"></div><div class="i"></div>
+        <div class="i"></div><div class="i"></div><div class="i"></div><div class="i"></div><div class="i"></div>
+        <div class="i"></div><div class="i"></div><div class="i"></div><div class="i"></div><div class="i"></div>
+        <div class="i"></div><div class="i"></div><div class="i"></div>
+        <div class="s"><div class="i"></div><div class="i"></div><div class="i"></div><div class="i"></div>
+        <div class="i"></div><div class="i" style="break-before:column"></div><div class="i"></div>
+        <div class="i"></div><div class="i"></div></div></div></div>"#;
+    let css = r#"body{margin:0} .m{columns:2;column-fill:auto;width:280px;height:72px;column-gap:0}
+        .g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);gap:10px;height:140px;
+        column-rule:skyblue solid 10px;row-rule:cornflowerblue solid 10px;column-rule-break:none;row-rule-break:none}
+        .s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-2;grid-row:2/-2;
+        column-rule:white solid 10px;row-rule:blue solid 10px} .i{background:purple}"#;
+    let dl = build(html, css);
+    // Нет `row-rule` subgrid'а над разрывом (170..250 на y 50..60), под ним нет куска родительского
+    // (38..48 только по бокам subgrid'а), в колонке 2 есть subgrid-овский на 20..30.
+    assert_rules(
+        &rules(&dl, false),
+        &[
+            (140.0, 8.0, 30.0, 10.0),
+            (250.0, 8.0, 30.0, 10.0),
+            (0.0, 20.0, 140.0, 10.0),
+            (170.0, 20.0, 80.0, 10.0),
+            (140.0, 38.0, 30.0, 10.0),
+            (250.0, 38.0, 30.0, 10.0),
+            (0.0, 50.0, 140.0, 10.0),
+        ],
+    );
+    // Колоночные правила subgrid'а тянутся до сдвинутого конца (50, не 38) и идут после детей.
+    let sub_cols: Vec<usize> = dl
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| match c {
+            DisplayCommand::DrawBorder { rect, widths: [0.0, w, 0.0, 0.0], .. }
+                if *w > 0.0 && (rect.x == 190.0 || rect.x == 220.0) && (rect.height - 50.0).abs() < 0.6 =>
+            {
+                Some(i)
+            }
+            _ => None,
+        })
+        .collect();
+    let last_fill = dl.iter().rposition(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+    assert!(sub_cols.len() == 2 && sub_cols.iter().all(|&i| i > last_fill), "{sub_cols:?} after {last_fill}");
+}

@@ -626,6 +626,10 @@ pub struct ComputedStyle {
     /// Phase 0: parsing — real intrinsic-aspect-ratio enforcement
     /// требует layout-time pass.
     pub aspect_ratio: Option<(f32, f32)>,
+    /// `aspect-ratio: auto <ratio>` / `<ratio> auto`: `aspect_ratio` is only the fallback for a
+    /// box without a natural ratio — a replaced element with one (decoded image, canvas) keeps
+    /// the natural ratio instead.
+    pub aspect_ratio_auto: bool,
     /// Не CSS-свойство — внутренняя пометка `box_tree::build`: `true`, если
     /// `width` заполнен не автором, а presentational-hint'ом из декодированных
     /// intrinsic-пикселей `<img>` (оба `width`/`height` были `auto` — см. ветку
@@ -920,10 +924,12 @@ pub struct ComputedStyle {
     /// CSS Grid Layout L3 §2–3 — `display: grid-lanes` и его `flow-tolerance`,
     /// `grid-lanes-direction`, `grid-lanes-pack`. Non-inherited.
     pub grid_lanes: GridLanes,
-    /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
-    pub grid_auto_columns: GridTrackSize,
-    /// CSS Grid Layout L1 §8.6 — `grid-auto-rows`. Non-inherited. Default `Auto`.
-    pub grid_auto_rows: GridTrackSize,
+    /// CSS Grid Layout L1 §8.6 — `grid-auto-columns` (`<track-size>+`, the pattern repeats over the implicit tracks).
+    /// Non-inherited. Default empty = a single `auto`.
+    pub grid_auto_columns: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §8.6 — `grid-auto-rows` (`<track-size>+`, the pattern repeats over the implicit tracks).
+    /// Non-inherited. Default empty = a single `auto`.
+    pub grid_auto_rows: Vec<GridTrackSize>,
     /// CSS Grid Layout L1 §8.3 — `grid-column-start`. Non-inherited. Default `Auto`.
     pub grid_column_start: GridLine,
     /// CSS Grid Layout L1 §8.3 — `grid-column-end`. Non-inherited. Default `Auto`.
@@ -1492,6 +1498,7 @@ impl ComputedStyle {
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
             aspect_ratio: None,
+            aspect_ratio_auto: false,
             width_is_intrinsic_hint: false,
             height_is_intrinsic_hint: false,
             width_is_ua_default: false,
@@ -1594,8 +1601,8 @@ impl ComputedStyle {
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_lanes: GridLanes::default(),
-            grid_auto_columns: GridTrackSize::Auto,
-            grid_auto_rows: GridTrackSize::Auto,
+            grid_auto_columns: Vec::new(),
+            grid_auto_rows: Vec::new(),
             grid_column_start: GridLine::Auto,
             grid_column_end: GridLine::Auto,
             grid_row_start: GridLine::Auto,
@@ -1900,6 +1907,7 @@ impl ComputedStyle {
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
             aspect_ratio: None,
+            aspect_ratio_auto: false,
             width_is_intrinsic_hint: false,
             height_is_intrinsic_hint: false,
             width_is_ua_default: false,
@@ -2027,8 +2035,8 @@ impl ComputedStyle {
             grid_auto_flow: GridAutoFlow::Row,
             masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_lanes: GridLanes::default(),
-            grid_auto_columns: GridTrackSize::Auto,
-            grid_auto_rows: GridTrackSize::Auto,
+            grid_auto_columns: Vec::new(),
+            grid_auto_rows: Vec::new(),
             grid_column_start: GridLine::Auto,
             grid_column_end: GridLine::Auto,
             grid_row_start: GridLine::Auto,

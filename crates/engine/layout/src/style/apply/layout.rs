@@ -53,6 +53,7 @@ use crate::style::{
     ScrollTargetGroup,
     ShapeOutside,
     parse_aspect_ratio_value,
+    parse_auto_aspect_ratio_value,
     parse_auto_repeat, parse_subgrid_name_fill, parse_track_line_names,
     parse_grid_template_areas,
     parse_length_q,
@@ -272,12 +273,12 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "grid-auto-columns" => {
-            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+            if let Some(ts) = GridTrackSize::parse_auto_list(val, is_quirks) {
                 style.grid_auto_columns = ts;
             }
         }
         "grid-auto-rows" => {
-            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+            if let Some(ts) = GridTrackSize::parse_auto_list(val, is_quirks) {
                 style.grid_auto_rows = ts;
             }
         }
@@ -808,14 +809,20 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "aspect-ratio" => {
-            // CSS Sizing L4 §6.1: `auto | <ratio>`. <ratio> = number или
-            // `W / H`. Phase 0 игнорирует `auto <ratio>` форму
-            // (intrinsic + override).
+            // CSS Sizing L4 §6.1: `auto | <ratio> | auto && <ratio>`. <ratio> = number или
+            // `W / H`. Форма с `auto` хранит <ratio> как запасное отношение
+            // (`aspect_ratio_auto`): у бокса без естественной пропорции оно
+            // работает как обычное (BUG-1385).
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("auto") {
                 style.aspect_ratio = None;
+                style.aspect_ratio_auto = false;
             } else if let Some(r) = parse_aspect_ratio_value(trimmed) {
                 style.aspect_ratio = Some(r);
+                style.aspect_ratio_auto = false;
+            } else if let Some(r) = parse_auto_aspect_ratio_value(trimmed) {
+                style.aspect_ratio = Some(r);
+                style.aspect_ratio_auto = true;
             }
         }
         // CSS Box Alignment L3 — alignment свойства. Парсятся как одно

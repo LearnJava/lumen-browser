@@ -520,9 +520,9 @@ fn grid_col_sum_by_tracks(
         tracks.iter().map(|t| if t.flex_factor().is_some() { GridTrackSize::Auto } else { t.clone() }).collect();
     let resolve = |l: &Length| l.resolve(s.font_size, None, viewport);
     let kinds = if lanes {
-        gac::classify_all_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &resolve)?
+        gac::classify_all_col_tracks(&as_auto, &[], n_cols, &resolve)?
     } else {
-        gac::classify_col_tracks(&as_auto, &GridTrackSize::Auto, n_cols, &resolve)?
+        gac::classify_col_tracks(&as_auto, &[], n_cols, &resolve)?
     };
     let gap = s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
     let mut contribs = Vec::new();
@@ -769,7 +769,7 @@ pub(crate) fn preferred_inline_block_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> Option<f32> {
-    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+    if let Some(w) = transferred_width(b, measurer, viewport) {
         return Some(w.max(0.0));
     }
     let w = super::stretch_basis::scoped_for_children(b, viewport, || {
@@ -934,6 +934,27 @@ fn preferred_inline_block_width_impl(
     }
 }
 
+/// CSS Box Sizing L4 §5 / CSS Containment L3 §4.1: a size-contained box
+/// (`contain: size|strict`, `content-visibility: hidden`) ignores its contents
+/// for intrinsic inline sizing and contributes `contain-intrinsic-width`
+/// (a content-box length) or 0 when it is `none`/unset — exactly as the in-flow
+/// `inline-block` path in `layout_dispatch` treats it (BUG-1388). Vertical
+/// writing modes swap the axes and are left to the generic path.
+fn size_contained_content_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
+    let s = &b.style;
+    let contained = s.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+        || s.content_visibility == crate::style::ContentVisibility::Hidden;
+    if !contained || is_vertical_block(b) {
+        return None;
+    }
+    Some(
+        s.contain_intrinsic_width
+            .as_ref()
+            .and_then(|l| l.resolve(s.font_size, None, viewport))
+            .map_or(0.0, |v| v.max(0.0)),
+    )
+}
+
 /// CSS Intrinsic Sizing L3 §4 — max-content border-box width of `b`.
 ///
 /// The max-content width is the width a box would use if line breaking were
@@ -950,7 +971,7 @@ pub(crate) fn max_content_outer_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
-    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+    if let Some(w) = transferred_width(b, measurer, viewport) {
         return w.max(0.0);
     }
     let w = super::stretch_basis::scoped_for_children(b, viewport, || {
@@ -981,6 +1002,9 @@ fn max_content_outer_width_impl(
             BoxSizing::BorderBox => w.max(pl + pr + s.border_left_width + s.border_right_width),
         };
         return outer.max(0.0);
+    }
+    if let Some(cw) = size_contained_content_width(b, viewport) {
+        return (cw + pl + pr + s.border_left_width + s.border_right_width).max(0.0);
     }
     let block_flow = || {
         // Block container: in-flow children stack vertically → take the
@@ -1041,6 +1065,22 @@ fn max_content_outer_width_impl(
     (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
 }
 
+/// [`super::stretch_basis::canvas_transferred_width`] plus, for a block, the automatic minimum
+/// size of Sizing L4 §5.1 (BUG-1385): the contents can make a ratio'd box wider than the height
+/// run through the ratio unless it is a scroll container or has an authored `min-width`.
+fn transferred_width(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>, viewport: Size) -> Option<f32> {
+    let w = super::stretch_basis::canvas_transferred_width(b, viewport)?;
+    let s = &b.style;
+    if matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && s.min_width.is_none()
+        && matches!(s.overflow_x, Overflow::Visible | Overflow::Clip)
+    {
+        Some(w.max(min_content_outer_width_of_contents(b, measurer, viewport)))
+    } else {
+        Some(w)
+    }
+}
+
 /// CSS Intrinsic Sizing L3 §4 — min-content border-box width of `b`.
 ///
 /// The min-content width is the narrowest a box can be without overflowing:
@@ -1054,7 +1094,7 @@ pub(crate) fn min_content_outer_width(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
 ) -> f32 {
-    if let Some(w) = super::stretch_basis::canvas_transferred_width(b, viewport) {
+    if let Some(w) = transferred_width(b, measurer, viewport) {
         return w.max(0.0);
     }
     let s = &b.style;
@@ -1094,6 +1134,9 @@ pub(crate) fn min_content_outer_width_of_contents(
     let em = s.font_size;
     let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
     let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    if let Some(cw) = size_contained_content_width(b, viewport) {
+        return (cw + pl + pr + s.border_left_width + s.border_right_width).max(0.0);
+    }
     let content_w = match &b.kind {
         BoxKind::InlineRun { segments, .. } => {
             // min-content = widest unbreakable stretch of text.

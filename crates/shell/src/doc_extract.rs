@@ -57,10 +57,73 @@ pub(crate) fn extract_style_blocks(
     doc: &Document,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
 ) -> (String, Vec<String>) {
-    let mut out = String::new();
+    let (chunks, blocked) = extract_style_chunks(doc, csp_gate);
+    (concat_chunks(&chunks), blocked)
+}
+
+/// Те же допущенные `<style>`, что [`extract_style_blocks`], но отдельными
+/// кусками по узлам (BUG-1413): сборка каскада должна знать, какой лист из
+/// какого элемента, чтобы поставить его в порядок документа рядом с
+/// `<link rel=stylesheet>`.
+pub(crate) fn extract_style_chunks(
+    doc: &Document,
+    csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
+) -> (Vec<(NodeId, String)>, Vec<String>) {
+    let mut out = Vec::new();
     let mut blocked = Vec::new();
     walk_style_blocks(doc, doc.root(), csp_gate, &mut out, &mut blocked);
     (out, blocked)
+}
+
+/// Склейка кусков в одну строку в том порядке, в каком они лежат.
+pub(crate) fn concat_chunks(chunks: &[(NodeId, String)]) -> String {
+    let mut out = String::with_capacity(chunks.iter().map(|(_, t)| t.len()).sum());
+    for (_, t) in chunks {
+        out.push_str(t);
+    }
+    out
+}
+
+/// Склейка листов страницы в порядке документа (BUG-1413).
+///
+/// CSS Cascade L4 §6.4.3 «Order of Appearance» / HTML LS §4.2.4: при равной
+/// специфичности побеждает лист, чей элемент (`<style>` или
+/// `<link rel=stylesheet>`) стоит в дереве позже. Раньше каскад собирался как
+/// «все `<style>`, потом все `<link>`», и `<style>` после `<link>` проигрывал
+/// внешнему листу. Позиция элемента берётся одним обходом дерева; оба списка
+/// уже идут в порядке документа, поэтому сортировка стабильна внутри каждого.
+pub(crate) fn merge_sheet_chunks(
+    doc: &Document,
+    inline: &[(NodeId, String)],
+    linked: &[(NodeId, String)],
+) -> String {
+    let mut order = std::collections::HashMap::new();
+    collect_sheet_order(doc, doc.root(), &mut order);
+    let mut all: Vec<&(NodeId, String)> = inline.iter().chain(linked.iter()).collect();
+    all.sort_by_key(|(id, _)| order.get(id).copied().unwrap_or(usize::MAX));
+    let mut out = String::with_capacity(all.iter().map(|(_, t)| t.len()).sum());
+    for (_, t) in all {
+        out.push_str(t);
+    }
+    out
+}
+
+/// Номер каждого `<style>`/`<link>` в обходе дерева в глубину.
+fn collect_sheet_order(
+    doc: &Document,
+    id: NodeId,
+    order: &mut std::collections::HashMap<NodeId, usize>,
+) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && (name.local == "style" || name.local == "link")
+    {
+        let n = order.len();
+        order.insert(id, n);
+    }
+    for &child in &node.children {
+        collect_sheet_order(doc, child, order);
+    }
 }
 
 /// Хэш текста всех инлайновых `<style>` в порядке документа (BUG-743).
@@ -164,10 +227,12 @@ fn hash_link_elements(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher
 /// неразрешённым; это осознанный размен — релейаут не место для сети.
 #[derive(Clone)]
 pub(crate) struct DynamicCssBase {
-    /// Содержимое `@import`-ов инлайновых `<style>`, разрешённое при загрузке.
-    pub(crate) imports_prefix: String,
-    /// Склеенные тела внешних `<link rel=stylesheet>`.
-    pub(crate) linked: String,
+    /// Содержимое `@import`-ов каждого инлайнового `<style>`, разрешённое при
+    /// загрузке, по узлу (BUG-1413: импорты стоят перед текстом СВОЕГО
+    /// `<style>`, а не одним префиксом на весь документ).
+    pub(crate) import_prefixes: std::collections::HashMap<NodeId, String>,
+    /// Тела внешних `<link rel=stylesheet>` по узлам, в порядке документа.
+    pub(crate) linked: Vec<(NodeId, String)>,
     /// Хэш инлайновых `<style>`, из которых собран текущий лист.
     pub(crate) inline_fp: u64,
     /// CSSOM-5 срез 2 (BUG-897): последний увиденный
@@ -195,7 +260,7 @@ fn walk_style_blocks(
     doc: &Document,
     id: NodeId,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
-    out: &mut String,
+    out: &mut Vec<(NodeId, String)>,
     blocked: &mut Vec<String>,
 ) {
     let node = doc.get(id);
@@ -223,8 +288,8 @@ fn walk_style_blocks(
                 return;
             }
         }
-        out.push_str(&text);
-        out.push('\n');
+        text.push('\n');
+        out.push((id, text));
         return;
     }
     for &child in &node.children {

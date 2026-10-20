@@ -1260,13 +1260,21 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                             .filter(|g| !matches!(g.kind, BoxKind::Skip))
                             .map(|g| (g.rect.y - gy, g.rect.y - gy + g.rect.height))
                             .collect();
-                        let cut = c
-                            .subgrid_tracks
-                            .as_ref()
-                            .and_then(|t| item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi, &spans));
-                        if let Some((tracks, d, g)) = cut {
+                        // A forced break inside the item's own rows (`nested_forced_row`): the gap before
+                        // that row is not drawn in the fragment the row starts in, and the next
+                        // fragment lays its gaps out from the row's start (`rule_shift`).
+                        let nested = (!col_flex).then(|| nested_forced_row(c, gy)).flatten();
+                        let cut_at = nested.filter(|&r| r > lo + 0.01 && r < hi - 0.01);
+                        let shift = nested
+                            .filter(|&r| f > 0 && r > windows[f - 1].0 + 0.01 && r < lo - 0.01)
+                            .map_or(0.0, |r| lo - r);
+                        let cut = c.subgrid_tracks.as_ref().and_then(|t| {
+                            item_fragment_tracks(t, c.rect.y - gy + c.style.border_top_width, lo, hi, &spans, cut_at)
+                        });
+                        if let Some((mut tracks, d, g)) = cut {
                             dropped = d;
                             grown = g;
+                            tracks.rule_shift = shift;
                             k.subgrid_tracks = Some(tracks);
                         }
                     }
@@ -1356,6 +1364,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
             fragment: true,
             row_gap_base,
             line_gaps,
+            rule_shift: 0.0,
         }));
         seg_extent = seg_extent.max(frag_h);
         out.push(frag);
@@ -1382,7 +1391,7 @@ fn drop_at(c: &LayoutBox, gy: f32, ws: f32) -> f32 {
         .collect();
     c.subgrid_tracks
         .as_ref()
-        .and_then(|t| item_fragment_tracks(t, top + c.style.border_top_width, ws, top + c.rect.height, &spans))
+        .and_then(|t| item_fragment_tracks(t, top + c.style.border_top_width, ws, top + c.rect.height, &spans, None))
         .map_or(0.0, |r| r.1)
 }
 
@@ -1399,6 +1408,24 @@ fn room_at(c: &LayoutBox, gy: f32, ws: f32, we: f32) -> f32 {
     if needed { drop } else { 0.0 }
 }
 
+/// The start (container coordinates) of the first row of the subgrid item `c`, other than its
+/// first, that holds a child with a forced column break. Such a break is not a cut of its own (the
+/// container's windows come from its direct children), but Chrome lays the item's gap decorations
+/// out as if the column ended there (`subgrid/fragmentation/011`).
+fn nested_forced_row(c: &LayoutBox, gy: f32) -> Option<f32> {
+    use crate::style::BreakValue;
+    let rows = c.subgrid_tracks.as_ref()?.rows.as_ref()?;
+    let top = c.rect.y - gy + c.style.border_top_width;
+    let first = rows.first()?.0 + top;
+    c.children
+        .iter()
+        .filter(|g| !matches!(g.kind, BoxKind::Skip) && !matches!(g.style.position, Position::Absolute | Position::Fixed))
+        .filter(|g| matches!(g.style.break_before, BreakValue::Column | BreakValue::Always))
+        .filter_map(|g| rows.iter().rposition(|r| r.0 + top <= g.rect.y - gy + 0.01).map(|k| rows[k].0 + top))
+        .filter(|&r| r > first + 0.01)
+        .min_by(f32::total_cmp)
+}
+
 /// The row tracks of a grid item cut by a column window, as the fragment of that item: `t.rows`
 /// run from the item's content top (`content_top`, container coordinates), the item keeps the part
 /// `lo..hi` of itself. `None` when the item has no row tracks to clip (the item keeps its own).
@@ -1407,7 +1434,8 @@ fn room_at(c: &LayoutBox, gy: f32, ws: f32, we: f32) -> f32 {
 /// visible track moves up to the fragment's top edge by this amount. When a child of the item
 /// (`spans`, container coordinates) crosses that gap the gap is kept inside the item instead: the
 /// second value is 0 and the third is `(top of the first track, gap size)`, the track grows
-/// upwards over the gap.
+/// upwards over the gap. `forced` — the start of a row with a forced break (`nested_forced_row`)
+/// inside the window: the tracks from it on are left out.
 #[allow(clippy::type_complexity)]
 fn item_fragment_tracks(
     t: &crate::subgrid::SubgridTracks,
@@ -1415,12 +1443,18 @@ fn item_fragment_tracks(
     lo: f32,
     hi: f32,
     spans: &[(f32, f32)],
+    forced: Option<f32>,
 ) -> Option<(Box<crate::subgrid::SubgridTracks>, f32, Option<(f32, f32)>)> {
     let rows = t.rows.as_ref()?;
     let visible: Vec<(usize, (f32, f32))> = rows
         .iter()
         .enumerate()
         .filter_map(|(k, &(a, b))| {
+            // The tracks from the forced break's row on belong to the next fragment: the gap
+            // before that row is not drawn here.
+            if forced.is_some_and(|r| a + content_top > r - 0.01) {
+                return None;
+            }
             let (a, b) = ((a + content_top).max(lo), (b + content_top).min(hi));
             (b > a).then_some((k, (a - lo, b - lo)))
         })
@@ -1443,6 +1477,7 @@ fn item_fragment_tracks(
             fragment: true,
             row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
             line_gaps: None,
+            rule_shift: 0.0,
         }),
         dropped,
         grown,

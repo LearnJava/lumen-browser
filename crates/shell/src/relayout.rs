@@ -216,7 +216,18 @@ impl Lumen {
             let root = doc.root();
             let csp_policy = crate::csp_enforce::document_csp_policy(&doc, root);
             let (inline, blocked) =
-                extract_style_blocks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
+                extract_style_chunks(&doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
+            // BUG-1413: листы идут в порядке документа, а не «`<style>` потом
+            // `<link>`»; порядок считается по дереву, пока документ ещё под замком.
+            // Импорты уже разрешены при загрузке — у нового `<style>` их нет.
+            let inline: Vec<(NodeId, String)> = inline
+                .into_iter()
+                .map(|(id, text)| match base.import_prefixes.get(&id) {
+                    Some(prefix) => (id, format!("{prefix}{text}")),
+                    None => (id, text),
+                })
+                .collect();
+            let css = merge_sheet_chunks(&doc, &inline, &base.linked);
             drop(doc);
             if let Some(js) = self.js_ctx.as_ref() {
                 // GAP-CSPENF срез 57: each dispatch now carries the text of the
@@ -227,11 +238,6 @@ impl Lumen {
                     js.fire_csp_violation("style-src-elem", "inline", text);
                 }
             }
-            let mut css =
-                String::with_capacity(base.imports_prefix.len() + inline.len() + base.linked.len());
-            css.push_str(&base.imports_prefix);
-            css.push_str(&inline);
-            css.push_str(&base.linked);
             let mut sheet = lumen_css_parser::parse(&css);
             // CSS Color L5 §5.3: no network on relayout — keep the ICC bytes
             // the first sheet already fetched.

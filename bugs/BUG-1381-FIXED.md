@@ -1,6 +1,6 @@
 # BUG-1381 — восстановление после синтаксической ошибки: at-rule, скобки, строки, EOF
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 15, `css/CSS2` (остальные каталоги: selectors, css1, syntax, box-display, visufx, visudet, …))
 **Область:** css-parser (`crates/engine/css-parser/src/parser.rs` — восстановление после ошибки: `@ import`, незакрытые `(`/`[`, строки, EOF)
 
@@ -28,3 +28,13 @@ WPT-RUN-14 срез 15: `css/CSS2/syntax/{at-rule,eof,matching-brackets,square-b
 ## Как проверить
 
 `css/CSS2/syntax/eof-002.xht`, `eof-005.xht`, `at-rule-001.xht`.
+
+## Исправление (2026-10-20, P6)
+
+Один сканер компонент-значений `Parser::scan_component_values` (`parser.rs`) вместо четырёх посимвольных циклов (`recover_to_block_end`, `recover_to_decl_boundary`, `skip_at_rule`/`skip_until_block_end`, `skip_block`): строки, комментарии и escape атомарны, `(`/`[`/`{` открывают блоки со стеком закрывающих, несовпадающий закрыватель — обычный токен.
+
+- `@` без идентификатора после него — delim, правило квалифицированное (`@ import "x.css"; div{…}` — один отброшенный prelude); `;` в prelude невалидного top-level-правила не обрывает его (`recover_qualified_rule`, prelude пересканируется с начала).
+- `parse_value_checked` (declarations.rs): стек закрывателей вместо счётчика (`{…}` в значении — блок), EOF закрывает открытые `(`/`[`/`{` и строку, строка, оборванная неэкранированным переводом строки (bad-string), делает декларацию невалидной.
+- `@import "…` без закрывающей кавычки на EOF принимается; невалидный `@import` доходит до своего `;`.
+
+Тесты: `parser/tests/recovery.rs` (BUG-1381, 11 штук, по материалам `css/CSS2/syntax/*`).

@@ -35,7 +35,7 @@ pub(super) struct GridInit {
     /// own borrow of `s.grid_template_rows`.
     pub(super) eff_row_template: Vec<GridTrackSize>,
     /// `grid-auto-rows` with `%` sizes read as `auto` when the container height is indefinite.
-    pub(super) auto_row: GridTrackSize,
+    pub(super) auto_row: Vec<GridTrackSize>,
     /// Row tracks of a `repeat(auto-fit, …)` that hold no item (CSS Grid L1 §7.2.3.2): sized
     /// `0` and without gutters. Same length as `eff_row_template`.
     pub(super) row_collapsed: Vec<bool>,
@@ -1124,6 +1124,21 @@ fn post_final_item(
     if !replaced_ratio && !form_ctl && w_auto && !h_auto && !matches!(justify, AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal)
         && let Some(w) = ratio_width_for_height(is, item.rect.height, content_width, viewport)
     {
+        item.rect.width = w;
+        stretch_w = Some(w);
+        stretch_h = stretch_h.or(Some(item.rect.height));
+    }
+    // BUG-1385: `lay_out` gives a ratio'd block with a definite height the ratio width; an
+    // explicit `justify-self: stretch` (not `normal`, which is `start` for such an item) fills the area.
+    if !replaced_ratio
+        && !form_ctl
+        && w_auto
+        && (!h_auto || stretch_h.is_some())
+        && matches!(justify, AlignValue::Stretch)
+        && is.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0)
+        && cell_w - m_l - m_r > 0.0
+    {
+        let w = cell_w - m_l - m_r;
         item.rect.width = w;
         stretch_w = Some(w);
         stretch_h = stretch_h.or(Some(item.rect.height));

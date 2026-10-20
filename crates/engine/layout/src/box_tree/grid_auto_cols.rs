@@ -93,7 +93,7 @@ fn sizing_of(t: &GridTrackSize, resolve: &dyn Fn(&Length) -> Option<f32>) -> Opt
 /// least one is not a plain length; `None` otherwise (the caller keeps its older path).
 pub(super) fn classify_col_tracks(
     template: &[GridTrackSize],
-    auto_track: &GridTrackSize,
+    auto_track: &[GridTrackSize],
     n_cols: usize,
     resolve: &dyn Fn(&Length) -> Option<f32>,
 ) -> Option<Vec<TrackKind>> {
@@ -104,7 +104,7 @@ pub(super) fn classify_col_tracks(
 /// (одни `grid-auto-columns: 80px`) всё равно считается по дорожкам — число полос задают элементы.
 pub(super) fn classify_all_col_tracks(
     template: &[GridTrackSize],
-    auto_track: &GridTrackSize,
+    auto_track: &[GridTrackSize],
     n_cols: usize,
     resolve: &dyn Fn(&Length) -> Option<f32>,
 ) -> Option<Vec<TrackKind>> {

@@ -8,7 +8,7 @@
 
 use super::grid::{resolve_grid_axis, GridAxis};
 use super::LayoutBox;
-use crate::style::{ComputedStyle, GridTrackSize, LanesAxis};
+use crate::style::{ComputedStyle, LanesAxis};
 use std::sync::Arc;
 
 /// Ось, вдоль которой идут полосы (`grid-lanes-direction: normal` берёт её из шаблона).
@@ -38,7 +38,7 @@ pub(super) fn lanes_style(s: &Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> 
     let mut ls = (**s).clone();
     ls.grid_template_rows.clear();
     ls.grid_template_row_auto_repeat = None;
-    ls.grid_auto_rows = GridTrackSize::Auto;
+    ls.grid_auto_rows = Vec::new();
     Some(Arc::new(ls))
 }
 

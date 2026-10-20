@@ -124,17 +124,11 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     let clip_x = style_overflow_clips(s, s.overflow_x) || paint_contain;
     let clip_y = style_overflow_clips(s, s.overflow_y) || paint_contain;
     if clip_x || clip_y {
-        const BIG: f32 = 1_000_000.0;
         let px = b.rect.x + s.border_left_width;
         let py = b.rect.y + s.border_top_width;
         let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
         let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
-        let cr = Rect::new(
-            if clip_x { px } else { -BIG },
-            if clip_y { py } else { -BIG },
-            if clip_x { pw } else { 2.0 * BIG },
-            if clip_y { ph } else { 2.0 * BIG },
-        );
+        let cr = overflow_clip_rect(b, clip_x, clip_y);
         // scroll/auto → PushScrollLayer (applies clip + scroll translate).
         // hidden/clip/paint-contain → PushClipRect (clip only, no scroll).
         // BUG-132 fix: если есть border-radius, использовать PushClipRoundedRect
@@ -217,6 +211,8 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // children — exactly where `walk` emits them.
     if is_paint_visible(b) && !is_hidden_empty_cell(b) {
         overflow_pre.extend(gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())));
+        // A box that paints its gaps over the children closes them just before its clips.
+        overflow_post.splice(0..0, late_gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())));
     }
     let mut perspective_pre = Vec::new();
     if emit_push_perspective(b, &mut perspective_pre) {

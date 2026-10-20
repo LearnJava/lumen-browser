@@ -711,7 +711,7 @@ fn build_page_cascade(
         // документа (CSS-SPECS §@import). Внешние <link> резолвят собственные
         // `@import` внутри load_linked_stylesheets.
         let (inline, blocked_inline_style_policies) =
-            extract_style_blocks(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
+            extract_style_chunks(doc, csp_policy.as_ref().map(|(p, _)| p.as_slice()));
         // GAP-CSPENF срез 23: `style=""` attribute — same one-shot policy read
         // as above, separate walk (attributes live on arbitrary elements, not
         // only `<style>` nodes).
@@ -721,23 +721,22 @@ fn build_page_cascade(
         // targets, not only the `<style>`/`<link>` themselves — same
         // one-shot `csp_policy` read as the two gates above.
         let self_origin = base.origin();
-        let (mut css, blocked_by_style_src_imports) = inline_css_imports(
-            &inline,
-            base,
-            sink,
-            cookie_jar.clone(),
-            &link_media_ctx,
-            &mut std::collections::HashSet::new(),
-            0,
-            crate::stylesheets::document_encoding(doc),
-            csp_policy.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
-            crate::resource_base::document_referrer_policy(doc),
-        );
+        // BUG-1413: `@import` разворачивается по каждому `<style>` отдельно, а
+        // итоговый текст собирается в порядке документа (ниже).
+        let (inline_resolved, import_prefixes, blocked_by_style_src_imports) =
+            resolve_inline_style_imports(
+                &inline,
+                base,
+                sink,
+                cookie_jar.clone(),
+                &link_media_ctx,
+                crate::stylesheets::document_encoding(doc),
+                csp_policy.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
+                crate::resource_base::document_referrer_policy(doc),
+            );
         // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
         // отдельно — так поздний динамический <style> пересобирает каскад без
-        // единого сетевого запроса. `inline_css_imports` возвращает
-        // `<импорты> + <исходный текст>`, поэтому префикс = всё до хвоста.
-        let imports_prefix = css[..css.len() - inline.len()].to_owned();
+        // единого сетевого запроса.
         let (linked, link_outcomes, mut blocked_by_style_src) = load_linked_stylesheets(
             doc,
             base,
@@ -746,9 +745,10 @@ fn build_page_cascade(
             &link_media_ctx,
         );
         blocked_by_style_src.extend(blocked_by_style_src_imports);
-        css.push_str(&linked);
+        // BUG-1413: порядок листов — порядок элементов в документе.
+        let css = merge_sheet_chunks(doc, &inline_resolved, &linked);
         let dyn_css = DynamicCssBase {
-            imports_prefix,
+            import_prefixes,
             linked,
             inline_fp: inline_style_fingerprint(doc),
             // CSSOM-5 срез 2: placeholder — see the field's doc comment.
