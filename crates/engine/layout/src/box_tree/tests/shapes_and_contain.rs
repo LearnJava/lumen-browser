@@ -1161,3 +1161,58 @@ fn inline_text_follows_right_float_contour() {
         "right edge must vary with the contour: {ends:?}"
     );
 }
+
+// ── BUG-1388: contain-intrinsic-width feeds the parent's intrinsic widths ──
+
+#[test]
+fn contain_intrinsic_width_feeds_max_content_parent() {
+    // `#border{width:max-content}` around a size-contained block with
+    // `contain-intrinsic-size: 111px 222px`: parent = 111 + 2×1px border,
+    // child fills it (WPT contain-intrinsic-size-002).
+    let html = r#"<div id="border"><div id="t"></div></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        "#border { width: max-content; border: 1px solid; } \
+         #t { contain: size; contain-intrinsic-size: 111px 222px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let t = find_size_contained(&root).expect("size-contained box present");
+    assert!((t.rect.width - 111.0).abs() < 0.5, "#t width {}", t.rect.width);
+    assert!((t.rect.height - 222.0).abs() < 0.5, "#t height {}", t.rect.height);
+    fn find_bordered(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+        if b.style.border_left_width > 0.0 {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_bordered)
+    }
+    let border = find_bordered(&root).expect("#border present");
+    assert!((border.rect.width - 113.0).abs() < 0.5, "#border width {}", border.rect.width);
+}
+
+#[test]
+fn contain_intrinsic_width_feeds_max_content_flex_container() {
+    let html = r#"<div id="f"><div id="t"></div></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        "#f { display: flex; width: max-content; } \
+         #t { contain: size; contain-intrinsic-size: 50px 60px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let t = find_size_contained(&root).expect("size-contained box present");
+    assert!((t.rect.width - 50.0).abs() < 0.5, "#t width {}", t.rect.width);
+}
+
+#[test]
+fn size_contained_child_ignores_its_content_width_for_max_content_parent() {
+    // No contain-intrinsic-size: the contained child contributes 0, not the
+    // 300px of its content.
+    let html = r#"<div id="f"><div id="t"><div class="wide"></div></div></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        "#f { display: flex; width: max-content; } #t { contain: size; } \
+         .wide { width: 300px; height: 5px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let t = find_size_contained(&root).expect("size-contained box present");
+    assert!(t.rect.width.abs() < 0.5, "#t width {}", t.rect.width);
+}

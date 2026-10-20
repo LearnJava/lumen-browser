@@ -1,6 +1,6 @@
 # BUG-1388 — `contain-intrinsic-size` не даёт вклада во внутренние размеры родителя (`width: max-content`, flex)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 16, `css/css-overflow` + `css/css-sizing`)
 **Область:** layout (`crates/engine/layout/src/box_tree/intrinsic.rs` — `min_content_outer_width`/`max_content_outer_width` не знают `contain: size` + `contain_intrinsic_width`; в потоке `layout_dispatch.rs` значение учтено)
 
@@ -24,3 +24,7 @@ WPT-RUN-14 срез 16: `css-sizing/contain-intrinsic-size/contain-intrinsic-siz
 ## Как проверить
 
 `css/css-sizing/contain-intrinsic-size/contain-intrinsic-size-002.html`.
+
+## Исправление (2026-10-20, P6)
+
+`intrinsic.rs::size_contained_content_width`: бокс под `contain: size|strict` / `content-visibility: hidden` отдаёт в `max_content_outer_width` и `min_content_outer_width_of_contents` ширину `contain-intrinsic-width` (content-box) либо 0 — так же, как inline-block-ветка `layout_dispatch`. Вертикальные writing modes идут прежним путём. Форма `auto <length>` («запомненный размер») по-прежнему трактуется как длина — это отдельная работа, `CSS-SPECS.md:199`. Тесты: `box_tree/tests/shapes_and_contain.rs` (BUG-1388, 3 штуки).
