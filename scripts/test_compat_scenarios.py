@@ -63,6 +63,8 @@ class FakeDriver:
         self.log.append(("wait", cond, selector))
 
     def eval(self, code):
+        if self.cur.get("eval_error"):
+            raise cs.StepFailed("Eval error: Cannot read properties of null")
         if code.startswith("(() => { const e = document.querySelector("):
             sel = code.split("querySelector(", 1)[1].split(")", 1)[0].strip('"')
             return sel in self.cur.get("visible", set())
@@ -141,6 +143,10 @@ class ScreenTests(unittest.TestCase):
     def test_lumen_error_page(self):
         r = cs.classify_screen({"text": "Не удалось открыть страницу\nERR_NAME_NOT_RESOLVED"})
         self.assertEqual((r["class"], r["signals"]), ("lumen_error", ["ERR_NAME_NOT_RESOLVED"]))
+
+    def test_certificate_rejection(self):
+        r = cs.classify_screen({"text": ""}, error="Wait error: navigation failed: untrusted certificate chain: UnknownIssuer")
+        self.assertEqual((r["class"], r["signals"]), ("cert_error", ["untrusted certificate"]))
 
     def test_cloudflare_wall(self):
         r = cs.classify_screen({"text": "Just a moment... Checking your browser before accessing", "title": "Just a moment..."},
@@ -236,6 +242,13 @@ class RunTests(unittest.TestCase):
         self.assertEqual(r["outcome"], "fail")
         self.assertEqual(r["failed_step"]["index"], 1)
 
+    def test_oracle_eval_error_is_a_miss_not_a_crash(self):
+        sc = scenario(oracle=[{"kind": "eval", "value": "document.querySelector('#x').value === '1'"}])
+        drv = FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "eval_error": True}})
+        r = self.run_sc(drv, sc)
+        self.assertEqual(r["outcome"], "fail")
+        self.assertIn("eval:", r["failed_oracle"])
+
     def test_optional_step_failure_is_ignored(self):
         sc = scenario(steps=[{"do": "navigate", "url": "https://x.test/"}, {"do": "click", "selector": "#cookie", "optional": True}])
         drv = FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "visible": {"input[type=password]"}}})
@@ -266,6 +279,16 @@ class RunTests(unittest.TestCase):
         r = self.run_sc(FakeDriver(hang_on="navigate"), scenario())
         self.assertEqual((r["outcome"], r["screen"]["class"]), ("hang", "hang"))
 
+    def test_state_after_failure_on_busy_window_is_a_hang(self):
+        drv = FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "visible": set()}})
+
+        def state():
+            raise cs.DriverHung("engine thread busy")
+
+        drv.state = state
+        r = self.run_sc(drv, scenario())
+        self.assertEqual((r["outcome"], r["screen"]["class"]), ("fail", "hang"))
+
     def test_flaky_pass_on_retry(self):
         pages = {"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "visible": set()}}
         drv = FakeDriver(pages)
@@ -281,6 +304,17 @@ class RunTests(unittest.TestCase):
         drv.navigate = navigate
         r = self.run_sc(drv, scenario(), rerun=True)
         self.assertEqual((r["outcome"], r.get("flaky")), ("pass", True))
+
+    def test_busy_engine_thread_is_a_hang(self):
+        class Mcp:
+            def tool(self, name, args):
+                raise RuntimeError("tools/call: Eval error: engine thread busy: eval not run within 5.0 s")
+
+        class Br:
+            mcp = Mcp()
+
+        with self.assertRaises(cs.DriverHung):
+            cs.LiveDriver(Br(), 30).eval("1")
 
     def test_handoff_and_missing_account_are_skipped(self):
         r = self.run_sc(FakeDriver(), scenario(category="call", handoff="calls"))
