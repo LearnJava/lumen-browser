@@ -6,7 +6,8 @@
 
 ## Состояние
 
-Кода пока нет — только разведка и проект ниже. Следующая сессия начинает с шага 1.
+Сессия 3: шаги 1–2 готовы и закоммичены (0232f9fcb): `crates/engine/css-parser/src/cssom_tree.rs` + подмодули
+`parse/serialize/mutate/tests` (25 юнит-тестов зелёные, clippy чистый). Следующая сессия начинает с шага 3 (см. «Сессия 3» внизу).
 
 ## Как устроено сейчас (разведка)
 
@@ -134,3 +135,40 @@
    (SyntaxError, только если ни одной валидной; пример `nothing-to-insert-because-invalid-property: 2;`).
 6. Порядок работы прежний (шаги 1–5 выше). Шаг 1 — `cssom_tree.rs` (+ подмодули `parse`/`serialize`) и юнит-тесты на
    формат из п.4; зарегистрировать `pub mod cssom_tree;` в `lib.rs`, не забыть `#![deny(missing_docs)]`-совместимость.
+
+## Сессия 3 — что сделано и что дальше
+
+**Сделано (шаги 1–2).** `CssomTree::{parse(src), get, parent_of, visible_children_of, to_source, css_text(id), insert_rule(parent,text,index),
+delete_rule(parent,index), set_prelude(id,text)->Result<bool>, set_decls(id,decls), set_raw(id,raw)}`; `CssomTreeError::{IndexSize,Syntax,
+HierarchyRequest,NotFound}`; `RuleKind` (+`js_class()`, `visible()`, `is_grouping()`, `body()`); узел `CssomNode{id,kind,prelude,decls,children,raw}`.
+`Opaque` — скрытый узел (неизвестные at-правила, `@function` и т.п.) живёт в дереве ради `to_source`, но не виден в `cssRules`; индексы
+insert/delete — по ВИДИМЫМ детям. `Mixin` — видимый узел с `raw`, `css_text` берёт из `parse(raw).mixin_rules[0].css_text()`.
+Мелочь, сделанная в других файлах: `render_container` в `parser/mixins.rs` стал `pub(crate)`; в `parser/selectors.rs` добавлены
+`canonical_selector_list(text, nested)` (подмена `&` на `:is(.lumen-nesting-amp)` на время разбора) и `split_selector_commas`.
+Формат `cssText` реализован по п.4 «Уточнений»; `@import 'x'`/`@namespace` нормализуются в `url("x")`.
+
+**Шаг 3 (следующий) — детали, выясненные чтением кода:**
+- `Stylesheet` (`parser.rs:156`) — ручные `Default/Clone/PartialEq`, `merge_from` деструктурирует ВСЕ поля: добавить поле
+  `cssom: CssomCell` (новый тип в cssom_tree.rs: обёртка над `OnceLock<CssomTree>`, `PartialEq` всегда true, `Clone` клонирует дерево,
+  `Default`), в `merge_from` — `cssom: _` и сброс `self.cssom` (дерево устарело). Дерево лениво строится из `source` (None → пустое).
+- Методы на `Stylesheet` (в `parser.rs` или новом `parser/cssom_api.rs`; прямые push/extend в коллекции вне parser.rs запрещены gate-тестом):
+  `cssom_tree()`, `cssom_insert_rule(parent,text,index)`, `cssom_delete_rule`, `cssom_set_prelude`, `cssom_set_decls`. После успешной правки
+  — пересборка типизированных коллекций: `let mut f = parse(&tree.to_source()); f.source = self.source.clone(); f.cssom = <дерево>; *self = f`
+  (source ОБЯЗАН остаться исходным: `entry_is_current` в `sheet_sync.rs` сравнивает его с текстом `<style>`). Быстрый путь: вставка в конец
+  корня при пустом `mixin_rules` → `merge_from(parse(node_source))` (CSS-in-JS вставляет тысячи правил).
+- Мостик для mixin-нативов (`_lumen_stylesheet_mixin_*`, они принимают `rule_idx` = индекс в `cssom_rules()`, т.е. в `top_level_order`):
+  нужен `Stylesheet::mixin_cssom_index(tree_id)` = позиция k-го тега `TopLevelRuleKind::Mixin` в `top_level_order`. После правки mixin-результата
+  обновлять `tree.set_raw(id, MixinRule::css_text())` и писать `TreeEdit`. Тест `mixin-invalidation.tentative.html` (3 подтеста: правка `.style`
+  внутри `@result` и `ss.cssRules[1].insertRule('@apply --m3;')` в стилевое правило) должен остаться зелёным/не хуже — `@apply` в теле
+  стилевого правила в дереве = декларация-маркер `MIXIN_APPLY_MARKER` (в `decls` или в `NestedDeclarations`); старая нативка
+  `insert_rule_body_apply` вставляет по индексу среди маркеров.
+- Синхронизация (`crates/js/src/v8_runtime/sheet_sync.rs::patched_cascade`): добавить `CssomOp::TreeEdit` (в `parser/cssom_op.rs`; `replay_cssom_ops`
+  его игнорирует). Для узла с TreeEdit: `locate_embedded_source` даёт `(start,end)` текста листа в `sheet.source()` каскада → подменить
+  `[start,end)` на `entry.sheet.cssom_tree().to_source()`, несколько листов — по убыванию `start`, затем ОДИН `parse` результата; старые
+  `bases`/`replay` для таких узлов не применять. «Нелоцируемые» листы (пустой `<style>` + `insertRule`) вливаются `merge_from(entry.sheet)` как сейчас.
+  Старые `record(InsertRule/DeleteRule/SetRuleStyle/SetMediaChildStyle/...)` в нативах заменить на `record(node, CssomOp::TreeEdit)`.
+- `install/stylesheets.rs` (430 строк, прочитан) и `install/constructed_stylesheets.rs` (294) — нативы шага 4; реестр листа:
+  `Arc<Stylesheet>` в `StylesheetNodeEntry`, правка через `Arc::make_mut`. Конструируемые листы идут в каскад через `merge_from(clone)`.
+- JS-часть (шаг 4): `web_api_shim_mid.js` ~12090–12670, `insertRule` листа ~12458, конструируемый ~12615, `CSSGroupingRule.insertRule` для @apply ~12246.
+
+**Проверка шага 3:** `cargo test -p lumen-css-parser`, затем `every_stylesheet_mutation_in_the_workspace_announces_itself` (в составе), clippy.
