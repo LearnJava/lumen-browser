@@ -280,13 +280,10 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // PushTransform, но снаружи filter/backdrop-filter (клип применяется к
     // отфильтрованному выводу, CSS Filter Effects L1 §4).
     if let Some(clip) = &s.clip_path {
-        match clip_path_to_shape(clip, b.rect) {
-            Some(shape) => pre.push(DisplayCommand::PushClipPath { shape }),
-            None => pre.push(DisplayCommand::PushClipRect {
-                rect: clip_path_to_rect(clip, b.rect),
-            }),
+        for cmd in clip_path_commands(clip, b.rect) {
+            pre.push(cmd);
+            post.push(DisplayCommand::PopClip);
         }
-        post.push(DisplayCommand::PopClip);
     }
     // backdrop-filter: outermost SC — captures parent content, filters it, then
     // composites element on top. Must wrap PushFilter so the element's own `filter`

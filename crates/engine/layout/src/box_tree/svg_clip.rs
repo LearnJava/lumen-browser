@@ -21,10 +21,12 @@ use crate::style::{
     Visibility, compute_style,
 };
 
-/// Сегментов на окружность/эллипс: ошибка хорды `r·(1 − cos(π/N))` < 0.001·r.
-const ARC_SEGMENTS: usize = 96;
-/// Сегментов на скруглённый угол `<rect rx ry>`.
-const CORNER_SEGMENTS: usize = 16;
+/// Сегментов на окружность/эллипс: ошибка хорды `r·(1 − cos(π/N))` < 0.0014·r.
+/// Не больше `PATH_CLIP_MAX_VERTS` (64) шейдера клипа wgpu — иначе окно
+/// откатится на клип по bbox.
+const ARC_SEGMENTS: usize = 60;
+/// Сегментов на скруглённый угол `<rect rx ry>` (4·(N+1) ≤ 64).
+const CORNER_SEGMENTS: usize = 12;
 
 thread_local! {
     /// `<clipPath>`-ы, раскрываемые сейчас: ссылка на уже раскрываемый
@@ -130,7 +132,9 @@ fn collect_child(
             lc.len("ry", SvgAxis::Y),
         ),
         "polygon" | "polyline" => parse_svg_points(node.get_attr("points").unwrap_or("")),
-        "path" => crate::motion_path::flatten_path_to_polygon(node.get_attr("d").unwrap_or("")),
+        "path" => join_contours(crate::motion_path::flatten_path_to_subpaths(
+            node.get_attr("d").unwrap_or(""),
+        )),
         "use" => {
             let href = node
                 .get_attr("href")
@@ -166,6 +170,23 @@ fn collect_child(
         pts: ring.iter().map(|&(x, y)| local.transform_point(x, y)).collect(),
         even_odd: matches!(style.svg_clip_rule, FillRule::EvenOdd),
     });
+}
+
+/// Склеивает контуры одной фигуры (подпути `<path>`) в один замкнутый список
+/// вершин «мостиками»: от начала первого контура к началу очередного и обратно.
+/// Ребро туда и обратно взаимно гасится, поэтому и nonzero, и even-odd
+/// заливка видят исходные контуры (дырки сохраняются).
+fn join_contours(contours: Vec<Vec<(f32, f32)>>) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for c in contours.into_iter().filter(|c| c.len() >= 3) {
+        let first = c[0];
+        if let Some(&anchor) = out.first() {
+            out.push(anchor);
+        }
+        out.extend(c);
+        out.push(first);
+    }
+    out
 }
 
 /// Контур `<rect>`: `[x, y, w, h]`, `[rx, ry]` и признак «атрибут задан».

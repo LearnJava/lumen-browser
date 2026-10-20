@@ -1601,9 +1601,10 @@ fn process_svg_node(
             // Mis-nested siblings (HTML5 parser wraps them inside the self-closed shape).
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
-        "defs" | "symbol" | "pattern" => {
+        "defs" | "symbol" | "pattern" | "clipPath" | "clippath" => {
             // `<defs>` (SVG 2 §5.5) and `<symbol>` (§5.7) are never rendered
-            // directly when encountered as a direct child — their content is
+            // directly when encountered as a direct child (`<clipPath>` only shapes
+            // other elements through `clip-path`) — their content is
             // painted only when instantiated through `<use>`. (The `<use>` arm
             // collects a symbol's children explicitly, so referencing still works.)
         }

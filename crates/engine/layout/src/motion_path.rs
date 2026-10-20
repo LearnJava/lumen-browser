@@ -557,11 +557,27 @@ const FLATTEN_STEPS: usize = 24;
 /// `Z`/`z` returns to the current sub-path start. Returns an empty vector for an
 /// empty or unparseable path.
 pub fn flatten_path_to_polygon(d: &str) -> Vec<(f32, f32)> {
-    let segs = parse_svg_path(d);
     let mut pts: Vec<(f32, f32)> = Vec::new();
+    for p in flatten_path_to_subpaths(d).into_iter().flatten() {
+        if pts.last().is_none_or(|&l| l != p) {
+            pts.push(p);
+        }
+    }
+    pts
+}
+
+/// Как [`flatten_path_to_polygon`], но каждый подпуть (начинается с `M`/`m`) —
+/// отдельный контур; нужен там, где подпути нельзя склеивать (`<clipPath>`).
+pub fn flatten_path_to_subpaths(d: &str) -> Vec<Vec<(f32, f32)>> {
+    let segs = parse_svg_path(d);
+    let mut subs: Vec<Vec<(f32, f32)>> = Vec::new();
     let mut cur = (0.0_f32, 0.0_f32);
     let mut sub_start = (0.0_f32, 0.0_f32);
-    let push = |pts: &mut Vec<(f32, f32)>, p: (f32, f32)| {
+    let push = |subs: &mut Vec<Vec<(f32, f32)>>, p: (f32, f32)| {
+        if subs.is_empty() {
+            subs.push(Vec::new());
+        }
+        let pts = subs.last_mut().expect("just ensured non-empty");
         if pts.last().is_none_or(|&l| l != p) {
             pts.push(p);
         }
@@ -571,11 +587,12 @@ pub fn flatten_path_to_polygon(d: &str) -> Vec<(f32, f32)> {
             PathSeg::MoveTo { x, y } => {
                 cur = (x, y);
                 sub_start = cur;
-                push(&mut pts, cur);
+                subs.push(Vec::new());
+                push(&mut subs, cur);
             }
             PathSeg::LineTo { x, y } => {
                 cur = (x, y);
-                push(&mut pts, cur);
+                push(&mut subs, cur);
             }
             PathSeg::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
                 let (x0, y0) = cur;
@@ -590,7 +607,7 @@ pub fn flatten_path_to_polygon(d: &str) -> Vec<(f32, f32)> {
                         + 3.0 * mt * mt * t * cy1
                         + 3.0 * mt * t * t * cy2
                         + t * t * t * y;
-                    push(&mut pts, (bx, by));
+                    push(&mut subs, (bx, by));
                 }
                 cur = (x, y);
             }
@@ -601,17 +618,17 @@ pub fn flatten_path_to_polygon(d: &str) -> Vec<(f32, f32)> {
                     let mt = 1.0 - t;
                     let bx = mt * mt * x0 + 2.0 * mt * t * cx + t * t * x;
                     let by = mt * mt * y0 + 2.0 * mt * t * cy + t * t * y;
-                    push(&mut pts, (bx, by));
+                    push(&mut subs, (bx, by));
                 }
                 cur = (x, y);
             }
             PathSeg::Close => {
                 cur = sub_start;
-                push(&mut pts, cur);
+                push(&mut subs, cur);
             }
         }
     }
-    pts
+    subs
 }
 
 /// Walk a cubic Bézier; return `(x, y, angle_deg)` at `target` distance along it,
