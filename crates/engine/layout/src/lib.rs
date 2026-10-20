@@ -42,6 +42,7 @@ pub mod pagination;
 pub mod property_trees;
 pub mod ruby;
 pub mod rule_index;
+mod grid_computed;
 mod resolved_geometry;
 mod transform_interp;
 pub mod selection;
@@ -2822,6 +2823,9 @@ pub(crate) use fixtures_and_core_selectors::{
     lay_viewport, lay_with_doc, Fixed8,
 };
 
+#[cfg(test)]
+#[path = "tests/grid_computed_style.rs"]
+mod grid_computed_style;
 #[cfg(test)]
 #[path = "tests/state_pseudo_classes.rs"]
 mod state_pseudo_classes;

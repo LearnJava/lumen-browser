@@ -674,6 +674,7 @@ fn shell(b: &LayoutBox) -> LayoutBox {
         table_caption_inset: b.table_caption_inset,
         clamp_clip: b.clamp_clip,
         subgrid_tracks: b.subgrid_tracks.clone(),
+        used_grid_tracks: b.used_grid_tracks.clone(),
         kind: b.kind.clone(),
         children: Vec::new(),
         col_span: b.col_span,

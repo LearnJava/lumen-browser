@@ -67,6 +67,7 @@ fn box_self_paint_eq<'a>(
         scroll_y,
         dirty: _,
         grid_baselines: _,
+        used_grid_tracks: _,
         fieldset_legend,
         table_caption_inset,
         clamp_clip,
