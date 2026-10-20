@@ -30,3 +30,43 @@ fn relative_child_does_not_grow_parent() {
     );
     assert_eq!(r[0].height, 30.0, "{r:?}");
 }
+
+// ── BUG-1422: top/bottom в процентах — от высоты содержащего блока ──
+
+const PCT_BOX: &str = r#"<div id="c"><div id="a"></div></div>"#;
+
+fn pct_y(container: &str, child: &str) -> f32 {
+    let css = format!("#c{{width:300px;{container}}}#a{{position:relative;height:5px;width:5px;{child}}}");
+    rects(PCT_BOX, &css, &["a"])[0].y
+}
+
+#[test]
+fn relative_top_percent_uses_container_height() {
+    assert_eq!(pct_y("height:100px", "top:10%"), 10.0);
+}
+
+#[test]
+fn relative_bottom_percent_uses_container_height() {
+    assert_eq!(pct_y("height:100px", "bottom:10%"), -10.0);
+}
+
+#[test]
+fn relative_top_percent_with_auto_height_is_auto() {
+    assert_eq!(pct_y("", "top:10%"), 0.0);
+}
+
+#[test]
+fn relative_top_percent_with_auto_height_falls_back_to_bottom() {
+    assert_eq!(pct_y("", "top:10%;bottom:7px"), -7.0);
+}
+
+#[test]
+fn relative_top_calc_percent_uses_container_height() {
+    assert_eq!(pct_y("height:100px", "top:calc(10px + 10%)"), 20.0);
+}
+
+#[test]
+fn relative_left_percent_still_uses_container_width() {
+    let css = "#c{width:300px;height:100px}#a{position:relative;height:5px;width:5px;left:10%}";
+    assert_eq!(rects(PCT_BOX, css, &["a"])[0].x, 30.0);
+}

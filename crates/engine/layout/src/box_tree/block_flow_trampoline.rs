@@ -937,7 +937,7 @@ fn finish_frame(
         frame.init.field_intrinsic, content_height, frame.init.cb,
     );
     finish_after_match(
-        &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
+        &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.available_height, frame.init.is_positioned,
         frame.init.pcb, &frame.init.abs_deferred, measurer, viewport, hp,
     );
     if let Some(cut) = clamp_cut {
@@ -1027,7 +1027,8 @@ fn post_child_bookkeeping(
     } else {
         let child = &frame.b.children[idx];
         let (_, rel_dy) = super::layout_dispatch::relative_offset(
-            &child.style, child.style.font_size, content_width, viewport);
+            &child.style, child.style.font_size, content_width,
+            frame.init.children_available_height, viewport);
         frame.init.child_y = child.rect.y - rel_dy + child.rect.height + child_mb;
         frame.init.prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
     }
