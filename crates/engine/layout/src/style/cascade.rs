@@ -41,8 +41,8 @@ use crate::style::{
     parse_css_wide_keyword, ua_white_space, validate_against_syntax, with_front_cascade_index,
     AlignValue, ComputedStyle, CssContinue, CssWideKeyword, Display, FlexDirection, FlexWrap,
     WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack,
-    FieldSizing, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
-    SHADOW_HOST_SCOPE, SHADOW_SHEETS,
+    FieldSizing, FlexBasis, FontPalette, FontSizeBasis, FontWeight, Length, LengthOrAuto, Overflow,
+    TransformFn, SHADOW_HOST_SCOPE, SHADOW_SHEETS,
 };
 
 /// BUG-341 S18 — process-wide tally of full [`compute_style`] runs.
@@ -220,6 +220,92 @@ fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: 
     style.border_right_width *= z;
     style.border_bottom_width *= z;
     style.border_left_width *= z;
+    scale_visual_lengths(style, z, rem_k, root_k);
+}
+
+/// The non-inherited paint/transform lengths `zoom` scales on top of the box model:
+/// border radii, `box-shadow`, `outline-width`/`-offset`, `flex-basis`,
+/// `contain-intrinsic-*`, `scroll-margin`/`-padding`, `perspective`, `translate`
+/// and the offsets inside `transform` (BUG-1592). `getComputedStyle()` calls it
+/// with `1 / z` to report the unzoomed computed value (CSS Viewport L1 §5).
+pub(crate) fn scale_visual_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32, root_k: f32) {
+    for len in [
+        &mut style.border_top_left_radius,
+        &mut style.border_top_right_radius,
+        &mut style.border_bottom_right_radius,
+        &mut style.border_bottom_left_radius,
+        &mut style.border_top_left_radius_y,
+        &mut style.border_top_right_radius_y,
+        &mut style.border_bottom_right_radius_y,
+        &mut style.border_bottom_left_radius_y,
+        &mut style.outline_offset,
+    ] {
+        zoom_length(len, z, rem_k, root_k);
+    }
+    for shadow in &mut style.box_shadow {
+        shadow.offset_x *= z;
+        shadow.offset_y *= z;
+        shadow.blur *= z;
+        shadow.spread *= z;
+    }
+    style.outline_width *= z;
+    if let FlexBasis::Length(l) = &mut style.flex_basis {
+        zoom_length(l, z, rem_k, root_k);
+    }
+    for len in [&mut style.contain_intrinsic_width, &mut style.contain_intrinsic_height] {
+        if let Some(l) = len.as_mut() {
+            zoom_length(l, z, rem_k, root_k);
+        }
+    }
+    for v in [
+        &mut style.scroll_margin_top,
+        &mut style.scroll_margin_right,
+        &mut style.scroll_margin_bottom,
+        &mut style.scroll_margin_left,
+        &mut style.scroll_padding_top,
+        &mut style.scroll_padding_right,
+        &mut style.scroll_padding_bottom,
+        &mut style.scroll_padding_left,
+    ] {
+        *v *= z;
+    }
+    if let Some(p) = style.perspective.as_mut() {
+        *p *= z;
+    }
+    if let Some((x, y)) = style.translate.as_mut() {
+        zoom_length(x, z, rem_k, root_k);
+        zoom_length(y, z, rem_k, root_k);
+    }
+    for f in &mut style.transform {
+        match f {
+            TransformFn::Translate(x, y) => {
+                *x *= z;
+                *y *= z;
+            }
+            TransformFn::TranslateX(v) | TransformFn::TranslateY(v) | TransformFn::TranslateZ(v) | TransformFn::Perspective(v) => *v *= z,
+            TransformFn::Translate3d(x, y, w) => {
+                *x *= z;
+                *y *= z;
+                *w *= z;
+            }
+            TransformFn::TranslateLp(x, y, w) => {
+                zoom_length(x, z, rem_k, root_k);
+                zoom_length(y, z, rem_k, root_k);
+                *w *= z;
+            }
+            // `matrix(a b c d e f)` / `matrix3d`: only the translation column carries a length.
+            TransformFn::Matrix(m) => {
+                m[4] *= z;
+                m[5] *= z;
+            }
+            TransformFn::Matrix3d(m) => {
+                m[12] *= z;
+                m[13] *= z;
+                m[14] *= z;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// CSS Overflow L3 §3.5 — whether `node`'s `overflow` is propagated to the viewport: the root

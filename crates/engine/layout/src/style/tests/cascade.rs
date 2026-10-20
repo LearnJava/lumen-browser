@@ -771,6 +771,49 @@ use super::*;
         assert!((s.effective_zoom - 0.5).abs() < 1e-6);
     }
 
+    /// BUG-1592: shadows, outline, radii, `flex-basis`, `contain-intrinsic-*`,
+    /// `translate` and the offsets inside `transform` follow the box-model lengths.
+    #[test]
+    fn zoom_scales_paint_and_transform_lengths() {
+        let s = zoom_test_style(
+            "<div style=\"zoom: 2; box-shadow: 20px 5px 3px 1px blue; outline: 10px solid red;              outline-offset: 4px; border-radius: 6px; flex-basis: 50px;              contain-intrinsic-height: 30px; translate: 7px 8px;              transform: translate(50px, 10px) rotate(10deg) translateX(1px);              scroll-margin-top: 9px; perspective: 100px\"></div>",
+        );
+        let sh = s.box_shadow[0];
+        assert_eq!((sh.offset_x, sh.offset_y, sh.blur, sh.spread), (40.0, 10.0, 6.0, 2.0));
+        assert_eq!(s.outline_width, 20.0);
+        assert_eq!(s.outline_offset, Length::Px(8.0));
+        assert_eq!(s.border_top_left_radius, Length::Px(12.0));
+        assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(100.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(60.0)));
+        assert_eq!(s.translate, Some((Length::Px(14.0), Length::Px(16.0))));
+        assert!(matches!(s.transform[0], TransformFn::Translate(x, y) if x == 100.0 && y == 20.0));
+        assert!(matches!(s.transform[2], TransformFn::TranslateX(x) if x == 2.0));
+        assert_eq!(s.scroll_margin_top, 18.0);
+        assert_eq!(s.perspective, Some(200.0));
+    }
+
+    /// An `em` outline width is baked to px: it must meet the zoom factor once, not twice
+    /// (`font-size: 10px` under `zoom: 2` is 20px, so `0.5em` is 10px of the unzoomed 5px × 2).
+    #[test]
+    fn zoom_em_outline_width_is_scaled_once() {
+        let s = zoom_test_style("<div style=\"zoom: 2; font-size: 10px; outline: 0.5em solid red\"></div>");
+        assert!((s.font_size - 20.0).abs() < 0.01);
+        assert!((s.outline_width - 10.0).abs() < 0.01, "outline_width = {}", s.outline_width);
+    }
+
+    /// `getComputedStyle()` reports the unzoomed computed value for the same properties.
+    #[test]
+    fn zoom_computed_style_reports_unzoomed_paint_lengths() {
+        let s = zoom_test_style(
+            "<div style=\"zoom: 2; box-shadow: 20px 0 0 blue; outline: 10px solid red;              border-radius: 6px; transform: translate(50px, 0)\"></div>",
+        );
+        let m = crate::selector_query::computed_style_to_map(&s);
+        assert!(m["box-shadow"].contains("20px 0px 0px"), "{}", m["box-shadow"]);
+        assert_eq!(m["outline-width"], "10px");
+        assert_eq!(m["border-top-left-radius"], "6px");
+        assert!(m["transform"].contains("50"), "{}", m["transform"]);
+    }
+
     /// BUG-1051: viewport units resolve against the unzoomed viewport, so the
     /// zoom factor must land on their coefficient.
     #[test]
