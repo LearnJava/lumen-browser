@@ -141,6 +141,17 @@ impl OverflowRollup {
                 max_y = max_y.max(bounds.y + bounds.height - pb.y);
             }
         }
+        // Overflow past an unreachable (start) side never joins the scrollable area (BUG-1415).
+        if u.left {
+            min_x = min_x.max(0.0);
+        } else if u.right {
+            max_x = max_x.min(pb.width);
+        }
+        if u.top {
+            min_y = min_y.max(0.0);
+        } else if u.bottom {
+            max_y = max_y.min(pb.height);
+        }
         (max_x - min_x, max_y - min_y)
     }
 }
