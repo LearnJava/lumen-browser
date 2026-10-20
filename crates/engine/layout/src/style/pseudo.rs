@@ -197,6 +197,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     // Inherited properties — copy from parent.
     style.color = parent.color;
     style.color_space = parent.color_space;
+    style.color_css = parent.color_css.clone();
     style.text_align = parent.text_align;
     style.direction = parent.direction;
     style.font_size = parent.font_size;
@@ -342,6 +343,7 @@ pub fn merge_pseudo_inherited(
         vertical_align,
     );
     take_clone!(
+        color_css,
         font_family,
         font_variation_settings,
         font_feature_settings,
