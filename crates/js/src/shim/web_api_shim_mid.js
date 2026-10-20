@@ -12146,7 +12146,7 @@ function MediaList() { throw new TypeError('Illegal constructor'); }
 globalThis.MediaList = MediaList;
 
 // CSSOM-10: the rule interfaces. A rule wrapper is `Object.create(<class>.prototype)`
-// plus a hidden `__r = {be, id, last, …}` (see `_lumen_css_wrap`); every accessor
+// plus a hidden `_cssr = {be, id, last, …}` (see `_lumen_css_wrap`); every accessor
 // below lives on the prototype and re-reads the Rust-side tree node by `id`.
 function CSSRule() { throw new TypeError('Illegal constructor'); }
 CSSRule.STYLE_RULE = 1; CSSRule.CHARSET_RULE = 2; CSSRule.IMPORT_RULE = 3; CSSRule.MEDIA_RULE = 4;
@@ -12293,7 +12293,7 @@ function _lumen_css_wrap(be, id) {
     var data = JSON.parse(raw);
     var ctor = _LUMEN_CSS_CLASSES[data.cls] || CSSRule;
     var w = Object.create(ctor.prototype);
-    Object.defineProperty(w, '__r', {
+    Object.defineProperty(w, '_cssr', {
         value: { be: be, id: id, last: data, gone: false, style: null, list: null, media: null },
         enumerable: false, writable: false, configurable: false,
     });
@@ -12317,7 +12317,7 @@ function _lumen_css_wrap(be, id) {
 }
 // Fresh data of the wrapped rule; a removed rule keeps answering from its last snapshot.
 function _lumen_css_data(self) {
-    var r = self === null || self === undefined ? undefined : self.__r;
+    var r = self === null || self === undefined ? undefined : self._cssr;
     if (!r) throw new TypeError('Illegal invocation');
     var raw = _lumen_css_json(r.be, r.id);
     if (raw === null || raw === undefined) { r.gone = true; return r.last; }
@@ -12385,7 +12385,7 @@ function _lumen_css_set_style(be, id, text) {
     if (i >= 0) _lumen_cssom_set_style(be.c, i, id, text);
 }
 function _lumen_css_set_prelude(self, text) {
-    var r = self.__r;
+    var r = self._cssr;
     if (!r) throw new TypeError('Illegal invocation');
     var i = r.be.idx();
     if (i >= 0) _lumen_cssom_set_prelude(r.be.c, i, r.id, String(text));
@@ -12400,7 +12400,7 @@ function _lumen_css_fn(proto, name, fn) {
 // forwards to `cssText` ([PutForwards]).
 function _lumen_css_style_of(self) {
     _lumen_css_data(self);
-    var r = self.__r;
+    var r = self._cssr;
     if (!r.style) {
         r.style = _lumen_make_rule_style({ tree: true, be: r.be, id: r.id },
             self instanceof CSSFontFaceRule ? CSSFontFaceDescriptors.prototype : undefined);
@@ -12409,7 +12409,7 @@ function _lumen_css_style_of(self) {
 }
 function _lumen_css_style_acc(proto) {
     _lumen_css_acc(proto, 'style', function() { return _lumen_css_style_of(this); }, function(v) {
-        var r = this.__r;
+        var r = this._cssr;
         if (!r) throw new TypeError('Illegal invocation');
         _lumen_css_set_style(r.be, r.id, String(v));
     });
@@ -12423,7 +12423,7 @@ function _lumen_css_desc(self, prop) {
     return v === undefined ? null : v;
 }
 function _lumen_css_desc_set(self, prop, value) {
-    var r = self.__r;
+    var r = self._cssr;
     var obj = _lumen_parse_style(_lumen_css_data(self).styleCssText || '');
     obj[prop] = String(value);
     _lumen_css_set_style(r.be, r.id, _lumen_serialize_style(obj));
@@ -12451,27 +12451,27 @@ var _LUMEN_CSS_TYPES = {
 _lumen_css_acc(CSSRule.prototype, 'type', function() { return _LUMEN_CSS_TYPES[_lumen_css_data(this).cls] || 0; });
 _lumen_css_acc(CSSRule.prototype, 'cssText', function() { return _lumen_css_data(this).cssText; }, function() {});
 _lumen_css_acc(CSSRule.prototype, 'parentRule', function() {
-    var d = _lumen_css_data(this), r = this.__r;
+    var d = _lumen_css_data(this), r = this._cssr;
     return (r.gone || !d.parent) ? null : _lumen_css_wrap(r.be, d.parent);
 });
 _lumen_css_acc(CSSRule.prototype, 'parentStyleSheet', function() {
     _lumen_css_data(this);
-    return this.__r.gone ? null : _lumen_css_sheet_for(this.__r.be);
+    return this._cssr.gone ? null : _lumen_css_sheet_for(this._cssr.be);
 });
 _lumen_css_acc(CSSGroupingRule.prototype, 'cssRules', function() {
     _lumen_css_data(this);
-    var r = this.__r;
+    var r = this._cssr;
     return r.list || (r.list = _lumen_css_make_list(r.be, r.id));
 });
 _lumen_css_fn(CSSGroupingRule.prototype, 'insertRule', function(rule, index) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'insertRule' on 'CSSGroupingRule': 1 argument required, but only 0 present.");
     _lumen_css_data(this);
-    return _lumen_css_insert_into(this.__r.be, this.__r.id, 'CSSGroupingRule', rule, index);
+    return _lumen_css_insert_into(this._cssr.be, this._cssr.id, 'CSSGroupingRule', rule, index);
 });
 _lumen_css_fn(CSSGroupingRule.prototype, 'deleteRule', function(index) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'deleteRule' on 'CSSGroupingRule': 1 argument required, but only 0 present.");
     _lumen_css_data(this);
-    _lumen_css_delete_from(this.__r.be, this.__r.id, 'CSSGroupingRule', index);
+    _lumen_css_delete_from(this._cssr.be, this._cssr.id, 'CSSGroupingRule', index);
 });
 _lumen_css_prelude_acc(CSSConditionRule.prototype, 'conditionText', true);
 
@@ -12519,7 +12519,7 @@ function _lumen_css_media_list(self, read, write) {
 _lumen_css_acc(CSSMediaRule.prototype, 'media', function() {
     var self = this;
     _lumen_css_data(self);
-    var r = self.__r;
+    var r = self._cssr;
     return r.media || (r.media = _lumen_css_media_list(self,
         function() { return _lumen_css_data(self).prelude; },
         function(v) { _lumen_css_set_prelude(self, v); }));
@@ -12596,7 +12596,7 @@ _lumen_css_acc(CSSImportRule.prototype, 'supportsText', function() { return _lum
 _lumen_css_acc(CSSImportRule.prototype, 'media', function() {
     var self = this;
     _lumen_css_data(self);
-    var r = self.__r;
+    var r = self._cssr;
     return r.media || (r.media = _lumen_css_media_list(self,
         function() { return _lumen_css_import_parts(_lumen_css_data(self).prelude).media; }, null));
 });
@@ -12621,7 +12621,7 @@ function _lumen_css_key_norm(s) {
     }).join(', ');
 }
 function _lumen_css_keyframe_index(self, select) {
-    var r = self.__r, ids = _lumen_css_ids(r.be, r.id), want = _lumen_css_key_norm(select);
+    var r = self._cssr, ids = _lumen_css_ids(r.be, r.id), want = _lumen_css_key_norm(select);
     for (var i = ids.length - 1; i >= 0; i--) {
         var raw = _lumen_css_json(r.be, ids[i]);
         if (raw && _lumen_css_key_norm(JSON.parse(raw).prelude) === want) return i;
@@ -12631,23 +12631,23 @@ function _lumen_css_keyframe_index(self, select) {
 _lumen_css_prelude_acc(CSSKeyframesRule.prototype, 'name', true);
 _lumen_css_acc(CSSKeyframesRule.prototype, 'cssRules', function() {
     _lumen_css_data(this);
-    var r = this.__r;
+    var r = this._cssr;
     return r.list || (r.list = _lumen_css_make_list(r.be, r.id));
 });
-_lumen_css_acc(CSSKeyframesRule.prototype, 'length', function() { return _lumen_css_ids(this.__r.be, this.__r.id).length; });
+_lumen_css_acc(CSSKeyframesRule.prototype, 'length', function() { return _lumen_css_ids(this._cssr.be, this._cssr.id).length; });
 _lumen_css_fn(CSSKeyframesRule.prototype, 'appendRule', function(rule) {
     _lumen_css_data(this);
-    var r = this.__r, i = r.be.idx();
+    var r = this._cssr, i = r.be.idx();
     if (i >= 0) _lumen_cssom_insert(r.be.c, i, r.id, String(rule), _lumen_css_ids(r.be, r.id).length);
 });
 _lumen_css_fn(CSSKeyframesRule.prototype, 'deleteRule', function(select) {
     _lumen_css_data(this);
-    var r = this.__r, k = _lumen_css_keyframe_index(this, select);
+    var r = this._cssr, k = _lumen_css_keyframe_index(this, select);
     if (k >= 0) _lumen_cssom_delete(r.be.c, r.be.idx(), r.id, k);
 });
 _lumen_css_fn(CSSKeyframesRule.prototype, 'findRule', function(select) {
     _lumen_css_data(this);
-    var r = this.__r, k = _lumen_css_keyframe_index(this, select);
+    var r = this._cssr, k = _lumen_css_keyframe_index(this, select);
     return k < 0 ? null : _lumen_css_wrap(r.be, _lumen_css_ids(r.be, r.id)[k]);
 });
 
@@ -12671,7 +12671,7 @@ _lumen_css_acc(CSSMixinRule.prototype, 'name', function() { return _lumen_css_da
 _lumen_css_acc(CSSMixinRule.prototype, 'cssRules', function() {
     var self = this;
     _lumen_css_data(self);
-    var r = self.__r;
+    var r = self._cssr;
     return _lumen_make_css_rule_list(function() {
         var d = _lumen_css_data(self), i = r.be.idx();
         if (r.be.c || i < 0 || d.mixinIndex === undefined) return [];
@@ -12744,14 +12744,14 @@ function _lumen_css_sheet_for(be) {
     var w = be.sheetRef && be.sheetRef.deref();
     if (w) return w;
     w = Object.create(CSSStyleSheet.prototype);
-    Object.defineProperty(w, '__be__', { value: be, enumerable: false, writable: false, configurable: false });
+    Object.defineProperty(w, '_cssBe', { value: be, enumerable: false, writable: false, configurable: false });
     // `document.adoptedStyleSheets` reads a constructed sheet's identity back through this tag.
     if (be.c) Object.defineProperty(w, '_lumenSheetIdx', { value: be.key, enumerable: false, writable: false, configurable: false });
     be.sheetRef = _lumen_css_weak(w);
     return w;
 }
 function _lumen_css_be(self) {
-    var be = self === null || self === undefined ? undefined : self.__be__;
+    var be = self === null || self === undefined ? undefined : self._cssBe;
     if (!be) throw new TypeError('Illegal invocation');
     return be;
 }
