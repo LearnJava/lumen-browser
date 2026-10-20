@@ -936,6 +936,8 @@ struct ColumnLine {
     lo: f32,
     hi: f32,
     gaps: Vec<LineGap>,
+    /// Indices (into `flex.children`) of the items of the line.
+    members: Vec<usize>,
 }
 
 /// The flex lines (columns) of a wrapped column flex container laid out in full, in `x` order, with
@@ -957,19 +959,20 @@ fn column_flex_lines(flex: &LayoutBox, gy0: f32) -> Option<Vec<ColumnLine>> {
     let main_gap = s.row_gap.resolve_or_zero(em, cw, vp);
     let wrap = s.flex_wrap != crate::style::FlexWrap::Nowrap;
     // Per item: the margin-box span across the main axis (`x`), along it (`y`), its block extent,
-    // monolithic.
-    type Item = ((f32, f32), (f32, f32), f32, f32, bool);
+    // monolithic, its index among the children.
+    type Item = ((f32, f32), (f32, f32), f32, f32, bool, usize);
     let mut items: Vec<Item> = flex
         .children
         .iter()
-        .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
-        .map(|c| {
+        .enumerate()
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|(idx, c)| {
             let cs = &c.style;
             let m = |l: &LengthOrAuto| l.resolve_or_zero(cs.font_size, cw, vp);
             let ordered = |a: f32, b: f32| (a.min(b), b);
             let x = ordered(c.rect.x - m(&cs.margin_left), c.rect.x + c.rect.width + m(&cs.margin_right));
             let y = ordered(c.rect.y - gy0 - m(&cs.margin_top), c.rect.y - gy0 + c.rect.height + m(&cs.margin_bottom));
-            (x, y, c.rect.y - gy0, c.rect.y - gy0 + c.rect.height, is_monolithic(c))
+            (x, y, c.rect.y - gy0, c.rect.y - gy0 + c.rect.height, is_monolithic(c), idx)
         })
         .collect();
     items.sort_by(|a, b| a.0 .0.total_cmp(&b.0 .0));
@@ -1005,7 +1008,7 @@ fn column_flex_lines(flex: &LayoutBox, gy0: f32) -> Option<Vec<ColumnLine>> {
                     }
                     reach = reach.max(it.1 .1);
                 }
-                ColumnLine { lo, hi, gaps }
+                ColumnLine { lo, hi, gaps, members: g.iter().map(|i| i.5).collect() }
             })
             .collect(),
     )
@@ -1121,11 +1124,50 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     let windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
     let all_line_gaps = flex_line_gaps(grid, gy0, &rows);
     let column_lines = column_flex_lines(grid, gy0);
+    // Chrome fragments a wrapped column flex container line by line: an item whose first line box
+    // the break would cut moves to the next column alone, the items of the other lines keep filling
+    // theirs (`flex/fragmentation/013`: `Two` leaves the column at 37px, `Three` runs on to 47px). So
+    // when the lines would break differently each gets windows of its own. A monolithic item
+    // overflows the column for the whole container (`flex/fragmentation/014`), so such a container
+    // keeps the common windows.
+    let line_windows = column_lines.as_ref().filter(|l| l.len() > 1 && forced.is_empty() && mono.is_empty()).and_then(|lines| {
+        let per: Vec<Vec<(f32, f32, bool)>> = lines
+            .iter()
+            .map(|l| {
+                let mut sub = grid.clone();
+                sub.children = l.members.iter().map(|&k| grid.children[k].clone()).collect();
+                let line_rows = column_flex_tracks(&sub, gy0);
+                let line_total = grid.rect.height.max(line_rows.last().map_or(0.0, |r| r.1));
+                grid_windows(&sub, gy0, &line_rows, &[], &[], line_total, cut_at)
+            })
+            .collect();
+        per.iter().any(|w| *w != per[0]).then_some(per)
+    });
+    let mut line_of: Vec<Option<usize>> = vec![None; grid.children.len()];
+    if let (Some(_), Some(lines)) = (&line_windows, &column_lines) {
+        for (li, l) in lines.iter().enumerate() {
+            for &k in &l.members {
+                line_of[k] = Some(li);
+            }
+        }
+    }
+    // The window of the flex line `line` in fragment `f`, from the container's top edge.
+    let win = |line: Option<usize>, f: usize| -> Option<(f32, f32, bool)> {
+        match (&line_windows, line) {
+            (Some(lw), Some(l)) => lw[l].get(f).copied(),
+            _ => windows.get(f).copied(),
+        }
+    };
+    let n_frag = line_windows.as_ref().map_or(windows.len(), |lw| lw.iter().map(Vec::len).max().unwrap_or(0));
     // An item with children is cut between them, never through one: a break inside a line box or
     // a nested block would need real fragmentation of the item, so such a grid stays atomic. A
     // subgrid item that drops its own row gap at the top of a window has that much more room at the
     // bottom of it (`drop_at`), so a child that ends within it is not cut.
-    let straddles = grid.children.iter().any(|c| {
+    let straddles = grid.children.iter().enumerate().any(|(ci, c)| {
+        let windows = match (&line_windows, line_of[ci]) {
+            (Some(lw), Some(l)) => &lw[l],
+            _ => &windows,
+        };
         !matches!(c.kind, BoxKind::Skip)
             && !matches!(c.style.position, Position::Absolute | Position::Fixed)
             && !is_monolithic(c)
@@ -1147,25 +1189,38 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         (frame.init.col_w, frame.init.col_gap, frame.init.content_x, frame.init.cur_y);
     let (gx, gy) = (grid.rect.x, grid.rect.y);
     let mut seg_extent = 0.0f32;
-    let mut out = Vec::with_capacity(windows.len());
-    for (f, &(ws, we, forced_end)) in windows.iter().enumerate() {
+    let mut out = Vec::with_capacity(n_frag);
+    for f in 0..n_frag {
+        // The fragment spans the windows of every line that still has one; it is as tall as the
+        // tallest of them.
+        let present: Vec<(Option<usize>, f32, f32, bool)> = match &line_windows {
+            Some(lw) => (0..lw.len()).filter_map(|l| win(Some(l), f).map(|w| (Some(l), w.0, w.1, w.2))).collect(),
+            None => win(None, f).map(|w| (None, w.0, w.1, w.2)).into_iter().collect(),
+        };
+        let ws = present.iter().map(|w| w.1).fold(f32::INFINITY, f32::min);
+        let we = present.iter().map(|w| w.2).fold(f32::NEG_INFINITY, f32::max);
         let col_x = content_x + f as f32 * (col_w + col_gap);
         let mut frag = grid.clone();
         frag.rect.x = col_x;
         frag.rect.y = cur_y;
         // A column that ends in a forced break keeps the full column height (the column gaps run
         // through it); every other fragment is as tall as its window.
-        let mut frag_h = if forced_end { (we - ws).max(cut_at) } else { we - ws };
-        // In a wrapped column flex container the part of a gap that a break dropped still belongs
-        // to the next fragment's lines: they reach to the end of the remaining block size, which
-        // the column rules run along (`flex/fragmentation/006`: 100px, not the 90px of content).
-        if col_flex && f > 0 && !forced_end {
-            let dropped = (ws - windows[f - 1].1).max(0.0);
-            frag_h = (frag_h + dropped).min(frag_h.max(cut_at));
+        let mut frag_h = 0.0f32;
+        for &(line, lws, lwe, forced_end) in &present {
+            let mut h = if forced_end { (lwe - lws).max(cut_at) } else { lwe - lws };
+            // In a wrapped column flex container the part of a gap that a break dropped still belongs
+            // to the next fragment's lines: they reach to the end of the remaining block size, which
+            // the column rules run along (`flex/fragmentation/006`: 100px, not the 90px of content).
+            if col_flex && f > 0 && !forced_end {
+                let prev = win(line, f - 1).map_or(lws, |w| w.1);
+                let dropped = (lws - prev).max(0.0);
+                h = (h + dropped).min(h.max(cut_at));
+            }
+            frag_h = frag_h.max(h);
         }
         frag.rect.height = frag_h;
         // A fragment keeps the border edge it owns: the top one the first, the bottom one the last.
-        let (first, last) = (f == 0, f + 1 == windows.len());
+        let (first, last) = (f == 0, f + 1 == n_frag);
         if (!first && frag.style.border_top_width > 0.0) || (!last && frag.style.border_bottom_width > 0.0) {
             let st = std::sync::Arc::make_mut(&mut frag.style);
             if !first {
@@ -1179,7 +1234,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         // A window that starts at the leading edge of a row gap kept by a bridging item has no
         // gap to draw at its top: the track after it grows upwards over the gap
         // (`grid-gap-decorations-fragmentation-028`), and so do the items that start in it.
-        let pulled_track = (!first)
+        let pulled_track = (!first && line_windows.is_none())
             .then(|| rows.windows(2).find(|w| (ws - w[0].1).abs() <= 0.01 && ws < w[1].0 - 0.01))
             .flatten()
             .map(|w| w[1].0);
@@ -1212,7 +1267,8 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         frag.children = grid
             .children
             .iter()
-            .filter_map(|c| {
+            .enumerate()
+            .filter_map(|(ci, c)| {
                 let flow = !matches!(c.kind, BoxKind::Skip)
                     && !matches!(c.style.position, Position::Absolute | Position::Fixed);
                 if !flow {
@@ -1222,6 +1278,8 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                         k
                     });
                 }
+                // The window of the item's own line; a line that has run out of windows holds nothing here.
+                let (ws, we, _) = win(line_of[ci], f)?;
                 let (top, bot) = (pull_item(c.rect.y - gy), c.rect.y - gy + c.rect.height);
                 // A monolithic item is not cut: it stays whole in the fragment its top edge falls
                 // in and overflows that column (`contain: size`).
@@ -1236,7 +1294,8 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                 // much further down (`drop_at`); the part it took there is not drawn again in the
                 // next window.
                 let room = if f > 0 { room_at(c, gy, ws, we) } else { 0.0 };
-                let taken = if f > 0 { windows[f - 1].1 + room_at(c, gy, windows[f - 1].0, windows[f - 1].1) } else { 0.0 };
+                let prev = if f > 0 { win(line_of[ci], f - 1) } else { None };
+                let taken = prev.map_or(0.0, |(ps, pe, _)| pe + room_at(c, gy, ps, pe));
                 let (lo, hi) = (top.max(ws), bot.min(we + room));
                 // A zero-height item at the very start of a window belongs to it too; one that the
                 // room of the window before it took whole is not drawn again.
@@ -1345,7 +1404,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
         let mut cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
         // A gap is kept when the item after it has a part in this window.
-        let keeps = |lg: &LineGap| {
+        let keeps = |lg: &LineGap, ws: f32, we: f32| {
             let (t, b) = (pull(lg.next_top), lg.next_bot);
             if lg.next_mono { t >= ws - 0.01 && t < we - 0.01 } else { b.min(we) > t.max(ws) }
         };
@@ -1354,12 +1413,20 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         // item after it has a part of it (a gap that ends above the window is not drawn).
         let column_gaps = column_lines.as_ref().map(|lines| {
             cols = Some(lines.iter().map(|l| (l.lo - gx, l.hi - gx)).collect());
-            lines.iter().map(|l| l.gaps.iter().filter(|g| g.start >= ws - 0.01 && keeps(g)).map(|g| (g.start - ws, g.end - ws)).collect()).collect()
+            lines
+                .iter()
+                .enumerate()
+                .map(|(li, l)| {
+                    // A line that has run out of windows has no gap in this fragment.
+                    let Some((ws, we, _)) = win(line_windows.is_some().then_some(li), f) else { return Vec::new() };
+                    l.gaps.iter().filter(|g| g.start >= ws - 0.01 && keeps(g, ws, we)).map(|g| (g.start - ws, g.end - ws)).collect()
+                })
+                .collect()
         });
         let line_gaps = column_gaps.or_else(|| all_line_gaps.as_ref().map(|g| {
             visible_idx
                 .iter()
-                .map(|&k| g[k].iter().filter(|lg| keeps(lg)).map(|lg| (lg.start - gx, lg.end - gx)).collect())
+                .map(|&k| g[k].iter().filter(|lg| keeps(lg, ws, we)).map(|lg| (lg.start - gx, lg.end - gx)).collect())
                 .collect()
         }));
         frag.subgrid_tracks = Some(Box::new(crate::subgrid::SubgridTracks {

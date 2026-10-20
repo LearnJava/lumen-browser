@@ -388,6 +388,33 @@ fn a_column_flex_break_inside_an_item_whose_line_cannot_fit_pushes_the_line_not_
 }
 
 #[test]
+fn a_wrapped_column_flex_breaks_each_line_on_its_own() {
+    // flex/fragmentation/013 (Edge's `getClientRects()`): the break at 47px cuts the text line of
+    // `Two`, so `Two` moves to the second column whole, but `Three` of the other line is cut at
+    // the column's end: 45px in the first column, 5px in the second, and `Four` follows at y = 15
+    // there (the gap sits at 5..15), not at 25 as when both lines broke at 37px.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div id=\"one\">One</div><div>Two</div><div>Three</div><div>Four</div></div></div>",
+        "body{margin:0} #m{columns:3;height:47px;column-width:110px;width:330px} \
+         #f{border:2px solid #688;display:flex;column-gap:10px;row-gap:10px;width:110px;flex-wrap:wrap;\
+         height:110px;flex-direction:column} #f>div{width:50px;height:50px} #f>#one{height:25px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let items: Vec<Vec<(f32, f32)>> =
+        v.iter().map(|b| b.children.iter().map(|c| (c.rect.y - b.rect.y, c.rect.height)).collect()).collect();
+    assert_eq!(
+        items,
+        vec![
+            vec![(2.0, 25.0), (2.0, 45.0)],
+            vec![(0.0, 47.0), (0.0, 5.0), (15.0, 32.0)],
+            vec![(0.0, 3.0), (0.0, 18.0)],
+        ],
+        "{items:?}"
+    );
+}
+
+#[test]
 fn an_empty_grid_is_cut_by_its_row_tracks_and_drops_the_gaps_at_the_breaks() {
     // grid-gap-decorations-fragmentation-016: 13 rows of 10px with a 10px row gap (250px) and no
     // items, in three 92px columns. Rows end at 10/30/…; the breaks at 92 and 184 fall inside a
