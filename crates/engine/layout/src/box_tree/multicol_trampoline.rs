@@ -929,6 +929,88 @@ fn flex_line_gaps(flex: &LayoutBox, gy0: f32, rows: &[(f32, f32)]) -> Option<Vec
     )
 }
 
+/// One flex line of a wrapped column flex container: its extent across the main axis, `(left,
+/// right)` from the container's left edge, and the main-axis gaps along the block axis (`start`/
+/// `end`/`next_*` from the container's top edge).
+struct ColumnLine {
+    lo: f32,
+    hi: f32,
+    gaps: Vec<LineGap>,
+}
+
+/// The flex lines (columns) of a wrapped column flex container laid out in full, in `x` order, with
+/// the gaps between the items of each. The items are grouped as the painter groups them (two items
+/// share a line when their margin boxes overlap across the main axis), the gap is the free space
+/// between two neighbouring items of one line that is at least the `row-gap` wide (`gap: 0` — any
+/// seam). A fragment cut by a column break keeps every line, even one with no item in it: the
+/// column rule between two lines runs through it all the same (`flex-gap-decorations-fragmentation-020`),
+/// and the gap next to an item that stayed in an earlier column belongs to the fragment that holds
+/// the next item. `None` for anything but a column flex container in a horizontal writing mode.
+fn column_flex_lines(flex: &LayoutBox, gy0: f32) -> Option<Vec<ColumnLine>> {
+    if !is_column_flex(flex) || flex.style.writing_mode != crate::style::WritingMode::HorizontalTb {
+        return None;
+    }
+    let s = &flex.style;
+    let em = s.font_size;
+    let cw = flex.rect.width;
+    let vp = Size::new(cw, flex.rect.height);
+    let main_gap = s.row_gap.resolve_or_zero(em, cw, vp);
+    let wrap = s.flex_wrap != crate::style::FlexWrap::Nowrap;
+    // Per item: the margin-box span across the main axis (`x`), along it (`y`), its block extent,
+    // monolithic.
+    type Item = ((f32, f32), (f32, f32), f32, f32, bool);
+    let mut items: Vec<Item> = flex
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .map(|c| {
+            let cs = &c.style;
+            let m = |l: &LengthOrAuto| l.resolve_or_zero(cs.font_size, cw, vp);
+            let ordered = |a: f32, b: f32| (a.min(b), b);
+            let x = ordered(c.rect.x - m(&cs.margin_left), c.rect.x + c.rect.width + m(&cs.margin_right));
+            let y = ordered(c.rect.y - gy0 - m(&cs.margin_top), c.rect.y - gy0 + c.rect.height + m(&cs.margin_bottom));
+            (x, y, c.rect.y - gy0, c.rect.y - gy0 + c.rect.height, is_monolithic(c))
+        })
+        .collect();
+    items.sort_by(|a, b| a.0 .0.total_cmp(&b.0 .0));
+    let mut groups: Vec<Vec<Item>> = Vec::new();
+    let (mut cur_hi, mut cur_lo) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for it in items {
+        match groups.last_mut() {
+            Some(g) if !wrap || it.0 .0 < cur_hi - 0.5 || it.0 .0 <= cur_lo + 0.5 => {
+                g.push(it);
+                cur_hi = cur_hi.max(it.0 .1);
+                cur_lo = cur_lo.max(it.0 .0);
+            }
+            _ => {
+                groups.push(vec![it]);
+                (cur_lo, cur_hi) = (it.0 .0, it.0 .1);
+            }
+        }
+    }
+    Some(
+        groups
+            .into_iter()
+            .map(|mut g| {
+                g.sort_by(|a, b| a.1 .0.total_cmp(&b.1 .0));
+                let lo = g.iter().map(|i| i.0 .0).fold(f32::INFINITY, f32::min);
+                let hi = g.iter().map(|i| i.0 .1).fold(f32::NEG_INFINITY, f32::max);
+                let mut gaps = Vec::new();
+                let mut reach = g[0].1 .1;
+                for it in &g[1..] {
+                    let dist = it.1 .0 - reach;
+                    let is_gap = if main_gap > 0.5 { dist > 0.5 && dist >= main_gap - 0.5 } else { dist >= -0.5 };
+                    if is_gap {
+                        gaps.push(LineGap { start: reach, end: it.1 .0, next_top: it.2, next_bot: it.3, next_mono: it.4 });
+                    }
+                    reach = reach.max(it.1 .1);
+                }
+                ColumnLine { lo, hi, gaps }
+            })
+            .collect(),
+    )
+}
+
 /// CSS Fragmentation L3 §5 / CSS Gap Decorations L1 §6.2 — a grid container laid out in full
 /// (the Measure pass) is cut into one fragment per column of the multicol container
 /// (`column-fill: auto`, a definite column height). A break that falls inside a row gap drops
@@ -1034,6 +1116,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     };
     let windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
     let all_line_gaps = flex_line_gaps(grid, gy0, &rows);
+    let column_lines = column_flex_lines(grid, gy0);
     // An item with children is cut between them, never through one: a break inside a line box or
     // a nested block would need real fragmentation of the item, so such a grid stays atomic. A
     // subgrid item that drops its own row gap at the top of a window has that much more room at the
@@ -1248,22 +1331,25 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         let row_gap_base = if col_flex { None } else { visible.first().map(|v| (v.0, rows.len() - 1)) };
         let visible_idx: Vec<usize> = visible.iter().map(|v| v.0).collect();
         let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
-        let cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
+        let mut cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
         // A gap is kept when the item after it has a part in this window.
-        let line_gaps = all_line_gaps.as_ref().map(|g| {
+        let keeps = |lg: &LineGap| {
+            let (t, b) = (pull(lg.next_top), lg.next_bot);
+            if lg.next_mono { t >= ws - 0.01 && t < we - 0.01 } else { b.min(we) > t.max(ws) }
+        };
+        // A column flex fragment keeps every line (its `cols`, the extent across the main axis) and
+        // the block-axis gaps of each, from the fragment's top: one that starts in this window, the
+        // item after it has a part of it (a gap that ends above the window is not drawn).
+        let column_gaps = column_lines.as_ref().map(|lines| {
+            cols = Some(lines.iter().map(|l| (l.lo - gx, l.hi - gx)).collect());
+            lines.iter().map(|l| l.gaps.iter().filter(|g| g.start >= ws - 0.01 && keeps(g)).map(|g| (g.start - ws, g.end - ws)).collect()).collect()
+        });
+        let line_gaps = column_gaps.or_else(|| all_line_gaps.as_ref().map(|g| {
             visible_idx
                 .iter()
-                .map(|&k| {
-                    g[k].iter()
-                        .filter(|lg| {
-                            let (t, b) = (pull(lg.next_top), lg.next_bot);
-                            if lg.next_mono { t >= ws - 0.01 && t < we - 0.01 } else { b.min(we) > t.max(ws) }
-                        })
-                        .map(|lg| (lg.start - gx, lg.end - gx))
-                        .collect()
-                })
+                .map(|&k| g[k].iter().filter(|lg| keeps(lg)).map(|lg| (lg.start - gx, lg.end - gx)).collect())
                 .collect()
-        });
+        }));
         frag.subgrid_tracks = Some(Box::new(crate::subgrid::SubgridTracks {
             cols,
             rows: Some(clipped),
