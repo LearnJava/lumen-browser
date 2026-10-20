@@ -2008,6 +2008,12 @@ fn pseudo_kind_name(kind: PseudoKind) -> Option<&'static str> {
         PseudoKind::After => Some("after"),
         PseudoKind::FirstLine => Some("first-line"),
         PseudoKind::FirstLetter => Some("first-letter"),
+        PseudoKind::ScrollMarker => Some("scroll-marker"),
+        PseudoKind::ScrollMarkerGroup => Some("scroll-marker-group"),
+        PseudoKind::ScrollButtonBlockStart => Some("scroll-button(block-start)"),
+        PseudoKind::ScrollButtonInlineStart => Some("scroll-button(inline-start)"),
+        PseudoKind::ScrollButtonInlineEnd => Some("scroll-button(inline-end)"),
+        PseudoKind::ScrollButtonBlockEnd => Some("scroll-button(block-end)"),
         PseudoKind::None | PseudoKind::Marker => None,
     }
 }
@@ -2022,7 +2028,16 @@ fn pseudo_used_display(kind: PseudoKind, style: &ComputedStyle) -> Option<&'stat
                 style.float_side != FloatSide::None || matches!(style.position, Position::Absolute | Position::Fixed);
             Some(if out_of_flow { "block" } else { "inline" })
         }
-        PseudoKind::None | PseudoKind::Before | PseudoKind::After | PseudoKind::Marker => None,
+        PseudoKind::None
+        | PseudoKind::Before
+        | PseudoKind::After
+        | PseudoKind::Marker
+        | PseudoKind::ScrollMarker
+        | PseudoKind::ScrollMarkerGroup
+        | PseudoKind::ScrollButtonBlockStart
+        | PseudoKind::ScrollButtonInlineStart
+        | PseudoKind::ScrollButtonInlineEnd
+        | PseudoKind::ScrollButtonBlockEnd => None,
     }
 }
 
