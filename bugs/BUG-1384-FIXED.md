@@ -1,6 +1,7 @@
 # BUG-1384 — Зависание на `grid-template-columns` из 10⁵ `repeat()`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** уже снят [BUG-1320](BUG-1320-FIXED.md) (предел 10 000 дорожек у `repeat(<integer>, …)`, влит 2026-10-07 20:47, то есть после заведения этого бага). Проверено 2026-10-20 на dev-release от `main` 298fd0f03: `run_smoke.py /css/css-grid/parsing/grid-template-columns-crash.html` → `PASS` (25,9 с вместе с запуском wptserve), `--dump-layout` страницы — 0,9 с. Код не менялся.
 **Заведён:** 2026-10-07 (P6, при закрытии BUG-1315)
 **Область:** js/layout (`crates/js/src/shim/web_api_shim_mid.js` + каскад — `document.body.style.gridTemplateColumns = <2 МБ>`)
 
