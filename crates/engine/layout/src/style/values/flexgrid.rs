@@ -691,6 +691,21 @@ fn split_track_list_tokens(s: &str) -> Vec<&str> {
     let bytes = s.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         match b {
+            // Whitespace around `[names]` is optional (`repeat(5, [a]30px)`, `[a][b]`): a bracket
+            // pair at the top level is a token of its own.
+            b'[' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() {
+                    tokens.push(tok);
+                }
+                start = i;
+                depth += 1;
+            }
+            b']' if depth == 1 => {
+                depth = 0;
+                tokens.push(s[start..=i].trim());
+                start = i + 1;
+            }
             b'(' | b'[' => depth += 1,
             b')' | b']' => depth -= 1,
             b' ' | b'\t' | b'\n' if depth == 0 => {
