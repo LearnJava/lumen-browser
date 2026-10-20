@@ -193,7 +193,9 @@ pub(in crate::style) fn apply_declaration(
 fn baked_then_zoomed(prop: &str) -> bool {
     matches!(
         prop,
-        "box-shadow" | "border" | "border-width" | "border-top" | "border-right" | "border-bottom" | "border-left"
+        "box-shadow" | "text-shadow" | "border-spacing" | "letter-spacing" | "word-spacing" | "text-decoration"
+            | "text-decoration-thickness" | "text-underline-offset" | "-webkit-text-stroke"
+            | "-webkit-text-stroke-width" | "border" | "border-width" | "border-top" | "border-right" | "border-bottom" | "border-left"
             | "border-top-width" | "border-right-width" | "border-bottom-width" | "border-left-width"
     ) || prop.starts_with("outline")
         || prop.starts_with("scroll-margin")

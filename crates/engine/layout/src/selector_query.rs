@@ -1326,6 +1326,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     let style = if z > 0.0 && (z - 1.0).abs() > f32::EPSILON {
         let mut u = style.clone();
         crate::style::scale_visual_lengths(&mut u, 1.0 / z, 1.0, 1.0);
+        crate::style::scale_inherited_lengths(&mut u, 1.0 / z, 1.0, 1.0, crate::style::ZoomDeclared::ALL);
         unzoomed = u;
         &unzoomed
     } else {
