@@ -77,6 +77,26 @@ use super::*;
     }
 
     #[test]
+    fn bug_1416_attr_cycle_through_attribute_value_does_not_overflow_stack() {
+        // BUG-1416: атрибут, значение которого содержит `attr(` на себя же, раскрывался
+        // бесконечно (переполнение стека). Такая декларация невалидна.
+        for css in [
+            "div { width: attr(data-foo type(<length>)); }",
+            "div { --x: attr(data-foo type(*)); }",
+            "div { width: attr(data-foo type(<length>), 11px); }",
+        ] {
+            let (doc, node) = make_doc_with_div(
+                r#"<div data-foo="attr(data-foo type(*)) attr(data-foo type(*))"></div>"#,
+            );
+            let sheet = lumen_css_parser::parse(css);
+            let parent = ComputedStyle::root();
+            let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+            let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+            assert_eq!(style.width, None, "{css}");
+        }
+    }
+
+    #[test]
     fn css_function_direct_call_resolves() {
         // CSS Functions and Mixins L1 — a direct call in a property value
         // (`width: --double(10px);`) should bind the positional argument and

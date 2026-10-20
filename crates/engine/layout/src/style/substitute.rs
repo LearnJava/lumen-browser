@@ -998,7 +998,25 @@ fn find_attr_open(s: &str) -> Option<usize> {
 /// * If the attribute is absent: use `<fallback>` when present, else
 ///   `None` (declaration treated as invalid per CSS Values L4 §7.7.1).
 pub(in crate::style) fn expand_attr_val(value: &str, doc: &Document, node: NodeId) -> Option<String> {
+    let mut budget = ATTR_EXPANSION_BUDGET;
+    expand_attr_val_budget(value, doc, node, &mut budget)
+}
+
+/// Общее число подстановок `attr()` в одной декларации. Значение атрибута,
+/// содержащее `attr(` на себя же (`data-foo="attr(data-foo type(*))"`), даёт цикл
+/// раскрытия: CSS Values 5 §attr() делает такую декларацию «invalid at
+/// computed-value time». Бюджет считает все подстановки, а не глубину, поэтому
+/// размер результата растёт не быстрее линейно (BUG-1416).
+const ATTR_EXPANSION_BUDGET: u32 = 256;
+
+fn expand_attr_val_budget(
+    value: &str,
+    doc: &Document,
+    node: NodeId,
+    budget: &mut u32,
+) -> Option<String> {
     let start = find_attr_open(value)?;
+    *budget = budget.checked_sub(1)?;
     let prefix = &value[..start];
     let after_open = &value[start + 5..]; // skip "attr("
     let (args, after_close) = parse_balanced_to_close(after_open)?;
@@ -1042,7 +1060,7 @@ pub(in crate::style) fn expand_attr_val(value: &str, doc: &Document, node: NodeI
     let combined = format!("{prefix}{resolved}{after_close}");
     // There may be more attr() in the combined result.
     if combined.contains("attr(") {
-        expand_attr_val(&combined, doc, node)
+        expand_attr_val_budget(&combined, doc, node, budget)
     } else {
         Some(combined)
     }
