@@ -137,3 +137,33 @@ use super::*;
         assert_eq!(s.rules[3].selectors, vec![one(SimpleSelector::Class("tc".into()))]);
         assert_eq!(s.rules[3].declarations[0].value, "center");
     }
+
+    // --- BUG-1376: CDO/CDC на верхнем уровне пропускаются (CSS Syntax §5.4.1) ---
+
+    #[test]
+    fn cdo_before_rule_does_not_swallow_it() {
+        let s = parse("p{color:red} <!-- p{color:green}");
+        assert_eq!(s.rules.len(), 2, "rules: {:?}", s.rules);
+        assert_eq!(s.rules[1].declarations[0].value, "green");
+    }
+
+    #[test]
+    fn cdc_between_rules_is_skipped() {
+        let s = parse("p{color:red} --> p{color:green}");
+        assert_eq!(s.rules.len(), 2, "rules: {:?}", s.rules);
+        assert_eq!(s.rules[1].declarations[0].value, "green");
+    }
+
+    #[test]
+    fn style_wrapped_in_sgml_comment_keeps_rule() {
+        let s = parse("<!-- p{color:green} -->");
+        assert_eq!(s.rules.len(), 1, "rules: {:?}", s.rules);
+        assert_eq!(s.rules[0].declarations[0].value, "green");
+    }
+
+    #[test]
+    fn cdo_inside_declaration_block_is_not_skipped() {
+        // Только top-level: внутри блока `<!--` остаётся частью значения/мусором.
+        let s = parse("p{color:red;<!--}q{color:green}");
+        assert_eq!(s.rules.last().unwrap().declarations[0].value, "green");
+    }
