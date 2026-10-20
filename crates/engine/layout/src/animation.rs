@@ -2001,7 +2001,7 @@ mod tests {
         assert_eq!(props.get("color").map(String::as_str), Some("rgb(17, 34, 51)"));
         assert_eq!(
             props.get("background-color").map(String::as_str),
-            Some("rgba(68, 85, 102, 0.502)")
+            Some("rgba(68, 85, 102, 0.5)")
         );
         assert_eq!(props.get("height").map(String::as_str), Some("42px"));
     }

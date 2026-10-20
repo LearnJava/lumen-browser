@@ -547,10 +547,18 @@ pub(crate) fn color_to_css(c: Color) -> String {
     if c.a == 255 {
         format!("rgb({}, {}, {})", c.r, c.g, c.b)
     } else {
-        let a = c.a as f32 / 255.0;
-        let a_str = format!("{:.3}", a).trim_end_matches('0').trim_end_matches('.').to_owned();
-        format!("rgba({}, {}, {}, {})", c.r, c.g, c.b, a_str)
+        format!("rgba({}, {}, {}, {})", c.r, c.g, c.b, alpha_to_css(c.a))
     }
+}
+
+/// CSS Color 4 §15.2 / Chrome: the shortest decimal (two digits, else three) that rounds back to
+/// the same 8-bit alpha — `128` serialises as `0.5`, not `0.502` (BUG-1424).
+fn alpha_to_css(a: u8) -> String {
+    let exact = f32::from(a) / 255.0;
+    let two = (exact * 100.0).round() / 100.0;
+    let v = if (two * 255.0).round() as u8 == a { two } else { (exact * 1000.0).round() / 1000.0 };
+    // `{}` prints the shortest round-trip form (`0.5`, `0.2`, `0.502`), without trailing zeros.
+    format!("{v}")
 }
 
 /// Serialises a [`CssColor`] — `CurrentColor` becomes `"currentcolor"`.
@@ -2501,6 +2509,20 @@ fn json_escape_into(s: &str, out: &mut String) {
 mod tests {
     use super::*;
     use lumen_core::geom::Size;
+
+    /// BUG-1424: alpha prints as the shortest decimal that rounds back to the same 8-bit value.
+    #[test]
+    fn color_alpha_serialises_shortest_round_tripping_decimal() {
+        let c = |a| color_to_css(Color { r: 0, g: 128, b: 0, a });
+        assert_eq!(c(128), "rgba(0, 128, 0, 0.5)");
+        assert_eq!(c(51), "rgba(0, 128, 0, 0.2)");
+        assert_eq!(c(0), "rgba(0, 128, 0, 0)");
+        assert_eq!(c(255), "rgb(0, 128, 0)");
+        assert_eq!(c(77), "rgba(0, 128, 0, 0.3)");
+        // 1/255 = 0.0039 has no two-digit form (0.00 -> 0, 0.01 -> 3): three digits.
+        assert_eq!(c(1), "rgba(0, 128, 0, 0.004)");
+        assert_eq!(c(127), "rgba(0, 128, 0, 0.498)");
+    }
 
     fn layout_tree(html: &str, css: &str) -> (lumen_dom::Document, LayoutBox) {
         let doc = lumen_html_parser::parse(html);

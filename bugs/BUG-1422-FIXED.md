@@ -1,6 +1,6 @@
 # BUG-1422 — `position: relative` с `top`/`bottom` в процентах: база — ширина контейнера, а не высота; при `height: auto` смещение не должно применяться
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs::relative_offset`, `:1887`)
 
@@ -32,3 +32,11 @@ WPT-RUN-14 срез 19: `css-values/calc-offsets-relative-top-1.html` и `calc-o
 ## Как проверить
 
 Страница из таблицы; `css/css-values/calc-offsets-relative-top-1.html`, `…bottom-1.html`.
+
+## Исправление
+
+`relative_offset` (`layout_dispatch.rs`) получил отдельный параметр `cb_h: Option<f32>` — высоту содержащего блока
+(`available_height`, с которой бокс был разложен). `left`/`right` считаются от ширины, `top`/`bottom` — от `cb_h`;
+процент (в том числе внутри `calc()`) при `height: auto` не разрешается и ведёт себя как `auto`, то есть уступает
+противоположному смещению. Вертикальные режимы письма (`vertical_trampoline`, `table_vertical`) сохраняют прежнюю базу.
+Тесты — `box_tree/tests/relative_offset_flow.rs` (`relative_top_percent_*`, `relative_bottom_percent_*`, `relative_top_calc_percent_*`).

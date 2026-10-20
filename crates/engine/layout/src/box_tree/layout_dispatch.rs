@@ -1527,7 +1527,7 @@ pub(super) fn dispatch_box(
                             b, &s, em, available_height, viewport, padding_top, padding_bottom,
                             size_contained, field_intrinsic, 0.0, cb,
                         );
-                        finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
+                        finish_after_match(b, &s, em, cb, available_height, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
                         return DispatchOutcome::Done;
                     }
                 }
@@ -1827,7 +1827,7 @@ pub(super) fn dispatch_box(
                 // applied its `position: relative` offset, but the row must flow
                 // from the unshifted box (neighbours, line height) and phase 2
                 // re-places it on y; the offset is put back after phase 2.
-                let mut rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
+                let mut rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, available_height, viewport) };
 
                 // IFC-4: split a run that wrapped past line 0 while sharing its
                 // row with preceding content — everything after line 0 forms
@@ -1986,7 +1986,7 @@ pub(super) fn dispatch_box(
                     cur_x = content_x;
                     row_has_baseline = false;
                     lay_out(&mut child, cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
-                    rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
+                    rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, None, viewport) };
                     advance = child.rect.width;
                 }
                 let idx = children.len();
@@ -2235,7 +2235,7 @@ pub(super) fn dispatch_box(
         BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => unreachable!(),
     }
 
-    finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
+    finish_after_match(b, &s, em, cb, available_height, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
     DispatchOutcome::Done
 }
 
@@ -2253,6 +2253,7 @@ pub(super) fn finish_after_match(
     s: &ComputedStyle,
     em: f32,
     cb: f32,
+    available_height: Option<f32>,
     is_positioned: bool,
     pcb: Rect,
     abs_deferred: &[(usize, f32, f32)],
@@ -2283,7 +2284,7 @@ pub(super) fn finish_after_match(
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
     if matches!(s.position, Position::Relative) {
-        let (off_x, off_y) = relative_offset(s, em, cb, viewport);
+        let (off_x, off_y) = relative_offset(s, em, cb, available_height, viewport);
         if off_x != 0.0 || off_y != 0.0 {
             shift_tree(b, off_x, off_y);
         }
@@ -2297,8 +2298,8 @@ pub(super) fn finish_after_match(
 /// Takes the `position: relative` offset that `finish_after_match` applied off
 /// `child` again and returns it, so a line-box layout can flow from the
 /// unshifted position (§9.4.3) and re-apply the offset once the box is placed.
-fn unshift_relative(child: &mut LayoutBox, cb: f32, viewport: Size) -> (f32, f32) {
-    let (dx, dy) = relative_offset(&child.style, child.style.font_size, cb, viewport);
+fn unshift_relative(child: &mut LayoutBox, cb: f32, cb_h: Option<f32>, viewport: Size) -> (f32, f32) {
+    let (dx, dy) = relative_offset(&child.style, child.style.font_size, cb, cb_h, viewport);
     if dx != 0.0 || dy != 0.0 {
         shift_tree(child, -dx, -dy);
     }
@@ -2308,23 +2309,23 @@ fn unshift_relative(child: &mut LayoutBox, cb: f32, viewport: Size) -> (f32, f32
 /// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` от `left/right/top/bottom`.
 /// Бокс уже сдвинут на это значение (`shift_tree` в конце раскладки), а родительский поток
 /// обязан отсчитывать курсор от несмещённой позиции — §9.4.3 «не влияет на соседей».
-pub(crate) fn relative_offset(s: &ComputedStyle, em: f32, cb: f32, viewport: Size) -> (f32, f32) {
+///
+/// `left`/`right` в процентах считаются от ширины `cb`, `top`/`bottom` — от высоты `cb_h`
+/// содержащего блока; при неопределённой высоте (`None`, `height: auto`) процент
+/// вычисляется в `auto` (CSS Positioned Layout L3 §3.1.1).
+pub(crate) fn relative_offset(s: &ComputedStyle, em: f32, cb: f32, cb_h: Option<f32>, viewport: Size) -> (f32, f32) {
     if !matches!(s.position, Position::Relative) {
         return (0.0, 0.0);
     }
-    let off_x = match &s.left {
-        LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-        LengthOrAuto::Auto => match &s.right {
-            LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-            LengthOrAuto::Auto => 0.0,
-        },
+    let resolve = |l: &LengthOrAuto, basis: Option<f32>| match l {
+        LengthOrAuto::Length(l) => l.resolve(em, basis, viewport),
+        LengthOrAuto::Auto => None,
     };
-    let off_y = match &s.top {
-        LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-        LengthOrAuto::Auto => match &s.bottom {
-            LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-            LengthOrAuto::Auto => 0.0,
-        },
-    };
+    let off_x = resolve(&s.left, Some(cb))
+        .or_else(|| resolve(&s.right, Some(cb)).map(|r| -r))
+        .unwrap_or(0.0);
+    let off_y = resolve(&s.top, cb_h)
+        .or_else(|| resolve(&s.bottom, cb_h).map(|b| -b))
+        .unwrap_or(0.0);
     (off_x, off_y)
 }
