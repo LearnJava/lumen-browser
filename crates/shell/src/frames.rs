@@ -729,7 +729,7 @@ pub(crate) fn fetch_frame_subresources(
     // `<iframe>` не проверялся вовсе (та же граница, что срез 7 документирует
     // для внешнего `<link>` подфрейма до срез 8).
     let (inline, blocked_inline_style_policies) =
-        extract_style_blocks(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
+        extract_style_chunks(doc, csp_gate.as_ref().map(|(p, _)| p.as_slice()));
     // GAP-CSPENF срез 24: `style=""` attribute inside a frame — same one-shot
     // policy read as the inline `<style>` gate above, separate walk (the
     // attribute lives on arbitrary elements, not only `<style>` nodes); срез
@@ -747,14 +747,12 @@ pub(crate) fn fetch_frame_subresources(
     // frame's own inline `<style>` — same CHILD policy, same one-shot
     // `csp_gate` this function already reads at the top for the image/style
     // gates above.
-    let (mut css, blocked_by_style_src_imports) = inline_css_imports(
+    let (inline_resolved, _import_prefixes, blocked_by_style_src_imports) = resolve_inline_style_imports(
         &inline,
         base,
         sink,
         cookie_jar.clone(),
         media_ctx,
-        &mut std::collections::HashSet::new(),
-        0,
         crate::stylesheets::document_encoding(doc),
         csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref())),
         crate::resource_base::document_referrer_policy(doc),
@@ -767,7 +765,8 @@ pub(crate) fn fetch_frame_subresources(
     let (linked, links, mut blocked_by_style_src) =
         load_linked_stylesheets(doc, base, sink, cookie_jar.clone(), media_ctx);
     blocked_by_style_src.extend(blocked_by_style_src_imports);
-    css.push_str(&linked);
+    // BUG-1413: порядок листов — порядок элементов в документе.
+    let css = merge_sheet_chunks(doc, &inline_resolved, &linked);
 
     let (requests, lazy_requests): (Vec<lumen_layout::ImageRequest>, Vec<lumen_layout::ImageRequest>) =
         lumen_layout::collect_image_requests(doc, viewport)

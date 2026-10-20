@@ -883,7 +883,7 @@ impl Stylesheet {
     ///
     /// This is how a per-node CSSOM edit finds itself inside the page's single
     /// concatenated cascade parse: the shell builds that parse's input as
-    /// `imports_prefix + every <style> body + every <link> body`
+    /// `<style>` bodies (each after its own resolved `@import`s) and `<link>` bodies in document order
     /// (`crates/shell/src/page_pipeline.rs`'s `build_page_cascade`) and copies
     /// each contributor in verbatim, so a node's own source text is a literal
     /// substring of the cascade's source. `from` lets a caller walking the

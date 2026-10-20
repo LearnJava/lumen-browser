@@ -1,6 +1,6 @@
 # BUG-1413 — Каскад: внешний `<link rel=stylesheet>` всегда перебивает `<style>`, даже если `<style>` стоит позже в документе
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P1, GRID-BASELINE-2)
 **Область:** shell (`crates/shell/src/page_pipeline.rs` — сборка `css` в `build_page_cascade`; `crates/shell/src/stylesheets.rs::load_linked_stylesheets`; `crates/shell/src/relayout.rs` — пересборка из `DynamicCssBase`; `crates/shell/src/doc_extract.rs::DynamicCssBase`)
 

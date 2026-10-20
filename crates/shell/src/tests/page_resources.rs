@@ -282,6 +282,7 @@ fn load_linked_stylesheets_reports_one_outcome_per_element() {
     let sink: Arc<dyn EventSink> = Arc::new(NullSink);
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
     let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &sink, None, &ctx);
+    let css = crate::doc_extract::concat_chunks(&css);
     assert!(css.is_empty(), "neither sheet exists on disk");
     assert_eq!(outcomes.len(), 2, "rel=alternate is not a cascade sheet");
     assert!(outcomes.iter().all(|(_, ok)| !ok));
@@ -883,6 +884,78 @@ fn inline_style_fingerprint_handles_document_without_styles() {
     assert_eq!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
 }
 
+// ──────────────── BUG-1413: порядок листов — порядок документа ──────────────
+
+/// `<style>` ПОСЛЕ `<link>` обязан идти в каскаде после листа из `<link>`, а
+/// `<style>` ДО `<link>` — перед ним (CSS Cascade L4 §6.4.3).
+#[test]
+fn page_sheets_follow_document_order() {
+    let dir = import_fixture_dir("doc_order");
+    std::fs::write(dir.join("o.css"), ".a{background-color:red}").unwrap();
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><style>.first{}</style><link rel="stylesheet" href="o.css"><style>.last{}</style></head></html>"#,
+    );
+    let base = ResourceBase::File(dir.join("page.html"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+    let (inline, _) = extract_style_chunks(&doc, None);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let css = merge_sheet_chunks(&doc, &inline, &linked);
+    let first = css.find(".first").unwrap();
+    let link = css.find("background-color:red").unwrap();
+    let last = css.find(".last").unwrap();
+    assert!(first < link && link < last, "порядок не документный: {css:?}");
+}
+
+/// Каскад целиком: `<style>` после `<link>` с тем же селектором побеждает.
+#[test]
+fn style_after_link_wins_at_equal_specificity() {
+    let dir = import_fixture_dir("doc_order_cascade");
+    std::fs::write(dir.join("o.css"), ".a{background-color:red}").unwrap();
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><link rel="stylesheet" href="o.css"><style>.a{background-color:blue}</style></head><body><div class="a">x</div></body></html>"#,
+    );
+    let base = ResourceBase::File(dir.join("page.html"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+    let (inline, _) = extract_style_chunks(&doc, None);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let sheet = lumen_css_parser::parse(&merge_sheet_chunks(&doc, &inline, &linked));
+    let last_bg = sheet
+        .rules
+        .iter()
+        .flat_map(|r| r.declarations.iter())
+        .rfind(|d| d.property == "background-color")
+        .map(|d| d.value.clone())
+        .unwrap_or_default();
+    assert!(last_bg.contains("blue"), "последним должно быть правило из <style>: {last_bg}");
+}
+
+/// `@import` внутри `<style>` встаёт перед текстом СВОЕГО `<style>`, а не
+/// перед всем документом — иначе импорт обгонял бы `<link>`, стоящий выше.
+#[test]
+fn inline_style_imports_stay_with_their_own_style() {
+    let dir = import_fixture_dir("doc_order_import");
+    std::fs::write(dir.join("o.css"), ".o{}").unwrap();
+    std::fs::write(dir.join("imp.css"), ".imp{}").unwrap();
+    let doc = lumen_html_parser::parse(
+        r#"<html><head><link rel="stylesheet" href="o.css"><style>@import url(imp.css);.own{}</style></head></html>"#,
+    );
+    let base = ResourceBase::File(dir.join("page.html"));
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+    let (inline, _) = extract_style_chunks(&doc, None);
+    let (resolved, prefixes, _) = resolve_inline_style_imports(
+        &inline, &base, &null_sink(), None, &ctx,
+        lumen_encoding::Encoding::Utf8, None,
+        lumen_network::ReferrerPolicy::default_policy(),
+    );
+    assert_eq!(prefixes.len(), 1);
+    let (linked, _, _) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let css = merge_sheet_chunks(&doc, &resolved, &linked);
+    let o = css.find(".o{}").unwrap();
+    let imp = css.find(".imp{}").unwrap();
+    let own = css.find(".own{}").unwrap();
+    assert!(o < imp && imp < own, "{css:?}");
+}
+
 /// Вложенные `@import` (a → b → c) разворачиваются в порядке c, b, a.
 #[test]
 fn inline_css_imports_nested_order() {
@@ -1341,6 +1414,7 @@ fn load_linked_stylesheets_falls_back_to_document_encoding() {
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (css, outcomes, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(outcomes[0].1, "a.css must be fetched");
     assert!(
@@ -1369,6 +1443,7 @@ fn load_linked_stylesheets_uses_link_charset_attribute() {
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(
         css.contains('\u{418}'),
@@ -1398,6 +1473,7 @@ fn load_linked_stylesheets_bom_wins_over_document_encoding() {
     let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
 
     let (css, _, _blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+    let css = crate::doc_extract::concat_chunks(&css);
 
     assert!(
         css.contains('\u{418}') && !css.contains('\u{FEFF}'),
