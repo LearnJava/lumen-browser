@@ -88,13 +88,19 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn parse_declaration(&mut self) -> Option<Declaration> {
         self.skip_ws_and_comments();
-        let property = self.parse_ident()?;
+        let mut property = self.parse_ident()?;
+        // CSS 2.1 §4.1.3: property names are ASCII case-insensitive; custom
+        // properties (`--*`) are the exception and stay case-sensitive.
+        if !property.starts_with("--") {
+            property.make_ascii_lowercase();
+        }
         self.skip_ws_and_comments();
         if self.peek() != Some(':') {
             return None;
         }
         self.consume();
-        let value = self.parse_value_until_terminator();
+        // Custom properties keep their source text (CSS Variables L1 §2).
+        let value = self.parse_value_until_terminator(!property.starts_with("--"));
         let (value, important) = extract_important(value.trim());
         // WHATWG Compat §3: `-webkit-*` simple aliases resolve to the
         // unprefixed property here, once, for the whole cascade.
@@ -115,13 +121,60 @@ impl<'a> Parser<'a> {
     /// grammar uses `;` *inside* its parens to separate branches) gets
     /// truncated at the first branch's `;`, leaving the rest of the `if()`
     /// call to be misparsed as a bogus second declaration (BUG-519).
-    pub(crate) fn parse_value_until_terminator(&mut self) -> String {
+    pub(crate) fn parse_value_until_terminator(&mut self, decode_escapes: bool) -> String {
         let mut s = String::new();
         let mut in_string: Option<char> = None;
         let mut depth: u32 = 0;
+        // Inside an unquoted `url(` the body is one url-token (CSS Syntax
+        // §4.3.6): `/*` there is data, not a comment.
+        let mut in_url = false;
         while let Some(c) = self.peek() {
             match (in_string, c) {
                 (None, ';') | (None, '}') if depth == 0 => break,
+                // CSS Syntax §4.3.2: `\` escapes the next code point, so
+                // `\"` does not close a string and `\/*` is not a comment.
+                // BUG-1380: outside strings a valid escape is expanded so the
+                // later keyword/function matching sees `green` in `\67 reen`
+                // and `url(` in `\75rl(`.
+                (None, '\\') if decode_escapes && self.at_escape_start() => {
+                    let start = self.pos;
+                    self.consume();
+                    let Some(d) = self.consume_escaped_code_point() else {
+                        continue;
+                    };
+                    if in_url || escape_decodes_to_plain_ident_char(d, s.chars().next_back()) {
+                        s.push(d);
+                    } else {
+                        // Structural or token-initial: keep the source form
+                        // (`\3b `, `\31 0px`) so it cannot change tokenisation.
+                        s.push_str(&self.input[start..self.pos]);
+                    }
+                }
+                (_, '\\') => {
+                    self.consume();
+                    s.push(c);
+                    if let Some(n) = self.consume() {
+                        s.push(n);
+                    }
+                }
+                // CSS Syntax §4.3.2: a comment is dropped from the token
+                // stream but still separates tokens, so it becomes one space
+                // (`gr/*c*/een` stays two tokens, BUG-1379).
+                (None, '/') if !in_url && self.peek_at(1) == Some('*') => {
+                    self.consume();
+                    self.consume();
+                    match self.rest().find("*/") {
+                        Some(end) => self.pos += end + 2,
+                        None => self.pos = self.input.len(),
+                    }
+                    s.push(' ');
+                }
+                (None, ')') if in_url => {
+                    in_url = false;
+                    depth = depth.saturating_sub(1);
+                    self.consume();
+                    s.push(c);
+                }
                 (Some(q), c) if c == q => {
                     self.consume();
                     s.push(c);
@@ -136,6 +189,10 @@ impl<'a> Parser<'a> {
                     depth += 1;
                     self.consume();
                     s.push(c);
+                    if c == '(' && !in_url && s.len() >= 4 && s.as_bytes()[s.len() - 4..].eq_ignore_ascii_case(b"url(") {
+                        let quoted = self.rest().trim_start().starts_with(['"', '\'']);
+                        in_url = !quoted;
+                    }
                 }
                 (None, ')') | (None, ']') => {
                     depth = depth.saturating_sub(1);
@@ -150,6 +207,18 @@ impl<'a> Parser<'a> {
         }
         s
     }
+}
+
+/// Whether an expanded escape `d` can be spliced into the value text as
+/// itself: a letter, `_` or non-ASCII code point always continues/starts an
+/// ident; a digit or `-` only when it follows an ident character (at a token
+/// start it would turn the ident into a number or a dashed ident).
+fn escape_decodes_to_plain_ident_char(d: char, prev: Option<char>) -> bool {
+    if d.is_ascii_alphabetic() || d == '_' || !d.is_ascii() {
+        return true;
+    }
+    (d.is_ascii_digit() || d == '-')
+        && prev.is_some_and(|p| p.is_ascii_alphanumeric() || p == '-' || p == '_' || !p.is_ascii())
 }
 
 /// CSS Cascade L4 §8.1: если значение оканчивается на `!important` (с

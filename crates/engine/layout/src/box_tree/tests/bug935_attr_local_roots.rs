@@ -814,7 +814,43 @@ fn a_has_argument_on_class_makes_the_ancestor_a_root_only_when_the_match_flips()
         ],
     );
     assert!(r[0].deep == 0 && r[1].deep == 0, "no `:has()` result moved: deep={} {}", r[0].deep, r[1].deep);
-    assert!(r[2].deep >= 1 && r[3].deep >= 1, "`open` came and went: `#top` is a root");
+    // BUG-1651: `#top:has(…)` is the key compound of its rule, so the flip makes `#top` a shallow root.
+    assert!(
+        r[2].deep + r[2].shallow >= 1 && r[3].deep + r[3].shallow >= 1,
+        "`open` came and went: `#top` is a root"
+    );
+}
+
+/// BUG-1651: a `:has()` in the key position of its rule (`html:has(.open)`) styles only the element it
+/// is on, so a flip of its result recascades that element and its children — not the whole subtree the
+/// way an ancestor-position `:has()` (`html:has(.open) p`) must (`drive` checks both against a full cascade).
+#[test]
+fn a_key_position_has_flip_does_not_recascade_the_subtree() {
+    let ps: String = (0..40).map(|i| format!("<section><p>para {i} <b>bold</b></p></section>")).collect();
+    let html = format!("<div id=\"top\"><div id=\"w\" class=\"wrap\"></div>{ps}</div>");
+    let steps = || -> Vec<Mutation> {
+        vec![
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap open");
+            }),
+            Box::new(|d| {
+                let w = by_id(d, "w");
+                set(d, w, "class", "wrap");
+            }),
+        ]
+    };
+    let key = drive(&html, "#top:has(.open) { margin: 2px } p { color: blue }", steps());
+    for (i, s) in key.iter().enumerate() {
+        assert!(s.deep == 0 && s.shallow >= 1, "step {i}: key-position `:has()` is a shallow root: {} {}", s.deep, s.shallow);
+        // The element and its direct children, not the 40 paragraphs and bolds below them.
+        assert!((s.recomputed as usize) * 2 < s.elements, "step {i}: recascaded {} of {}", s.recomputed, s.elements);
+    }
+    let ancestor = drive(&html, "#top:has(.open) p { margin: 2px } p { color: blue }", steps());
+    for (i, s) in ancestor.iter().enumerate() {
+        assert!(s.deep >= 1, "step {i}: an ancestor-position `:has()` keeps the subtree: {}", s.deep);
+        assert!(s.recomputed > key[i].recomputed, "step {i}: {} vs {}", s.recomputed, key[i].recomputed);
+    }
 }
 
 /// BUG-1211: `:nth-child(… of S)` no longer turns the narrowing off for the whole sheet. A write that

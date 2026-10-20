@@ -167,3 +167,100 @@ use super::*;
         let s = parse("p{color:red;<!--}q{color:green}");
         assert_eq!(s.rules.last().unwrap().declarations[0].value, "green");
     }
+
+    // --- BUG-1378: имена свойств ASCII-регистронезависимы (CSS 2.1 §4.1.3) ---
+
+    #[test]
+    fn property_name_is_case_insensitive() {
+        let s = parse("p{COLOR:green;bACkGRounD:red}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].property, "color");
+        assert_eq!(d[0].value, "green");
+        assert_eq!(d[1].property, "background");
+    }
+
+    #[test]
+    fn custom_property_name_stays_case_sensitive() {
+        let s = parse("p{--Foo:1;--foo:2}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].property, "--Foo");
+        assert_eq!(d[1].property, "--foo");
+    }
+
+    // --- BUG-1379: комментарий внутри значения — один пробел, не обрыв ---
+
+    #[test]
+    fn comment_inside_value_is_dropped_not_fatal() {
+        for css in [
+            "p{color:/*c*/green}",
+            "p{color:green/*c*/;}",
+            "p{color:/*a*/green/*b*/}",
+            "p{color:green/*c*/}",
+        ] {
+            let d = &parse(css).rules[0].declarations;
+            assert_eq!(d.len(), 1, "{css}");
+            assert_eq!(d[0].value, "green", "{css}");
+        }
+    }
+
+    #[test]
+    fn comment_separates_tokens_in_value() {
+        let s = parse("p{margin:1px/*c*/2px;height:1/*c*/0px;color:gr/*c*/een}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "1px 2px");
+        assert_eq!(d[1].value, "1 0px");
+        assert_eq!(d[2].value, "gr een");
+    }
+
+    #[test]
+    fn comment_markers_survive_inside_strings_and_urls() {
+        let s = parse("p{content:\"a/*b*/c\";background:url(a/*b*/c.png);color:red/*c*/ !important}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "\"a/*b*/c\"");
+        assert_eq!(d[1].value, "url(a/*b*/c.png)");
+        assert_eq!(d[2].value, "red");
+        assert!(d[2].important);
+    }
+
+    #[test]
+    fn escaped_quote_does_not_end_string_in_value() {
+        let s = parse("p{content:\"a\\\"/*x*/;b\";color:red}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "\"a\\\"/*x*/;b\"");
+        assert_eq!(d[1].value, "red");
+    }
+
+    // --- BUG-1380: escape в значении раскрывается, структурные остаются ---
+
+    #[test]
+    fn escape_in_value_ident_is_expanded() {
+        let s = parse(r"p{color:\67 \72 \65 \65 \6E ;background:\75rl(x.png) green;font-family:\41hem}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, "green");
+        assert_eq!(d[1].value, "url(x.png) green");
+        assert_eq!(d[2].value, "Ahem");
+    }
+
+    #[test]
+    fn escape_in_unquoted_url_is_expanded() {
+        let s = parse(r"p{background:url(support/\'green\ block.png)}");
+        assert_eq!(s.rules[0].declarations[0].value, "url(support/'green block.png)");
+    }
+
+    #[test]
+    fn structural_escape_in_value_stays_escaped() {
+        let s = parse(r"p{content:a\3b b;margin:\31 0px;color:red}");
+        let d = &s.rules[0].declarations;
+        assert_eq!(d.len(), 3);
+        assert_eq!(d[0].value, r"a\3b b");
+        assert_eq!(d[1].value, r"\31 0px");
+        assert_eq!(d[2].value, "red");
+    }
+
+    #[test]
+    fn escape_in_string_and_custom_property_is_untouched() {
+        let s = parse(r#"p{content:"\67";--x:\67 reen}"#);
+        let d = &s.rules[0].declarations;
+        assert_eq!(d[0].value, r#""\67""#);
+        assert_eq!(d[1].value, r"\67 reen");
+    }

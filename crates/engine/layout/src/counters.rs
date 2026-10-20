@@ -1663,7 +1663,19 @@ fn walk(
         }
         (None, None) => {
             // BUG-284/THREAD-4 срез 2 (`style::share_cache`); result also feeds `build_box`.
-            let style = map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode);
+            let mut style = map.share_cache.compute(doc, id, sheet, inherited, viewport, dark_mode);
+            // BUG-1651: a recompute that lands on the same custom properties still builds them
+            // as a fresh `Arc` (a node declaring one `--x` copies the whole inherited map; a
+            // child of such a node inherits that copy), so every comparison against the
+            // displaced style — and every descendant's — walks ~1200 strings on youtube.
+            // Taking the displaced style's allocation back makes them pointer-equal again.
+            if incr.is_some()
+                && let Some(prev) = map.styles.peek_prev(id, parent).map(|p| p.custom_props.clone())
+                && !prev.ptr_eq(&style.custom_props)
+                && prev == style.custom_props
+            {
+                Arc::make_mut(&mut style).custom_props = prev;
+            }
             // BUG-341 S24: keep whatever this displaced — the graft still needs
             // to see the style `prev`'s box was built from (`replaced_styles`).
             let displaced = map.styles.write(id, Arc::clone(&style), parent);
