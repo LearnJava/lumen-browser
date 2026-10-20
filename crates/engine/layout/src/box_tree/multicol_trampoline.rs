@@ -678,14 +678,22 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
 }
 
 /// `true` when a flow item of the grid runs across the whole row gap `[gap_lo, gap_hi)` (its block
-/// extent starts before the gap and ends after it), measured from the grid's top edge `gy`.
+/// extent starts before the gap and ends after it), measured from the grid's top edge `gy`. A row
+/// subgrid that spans the gap does not bridge it by itself: for the subgrid the gap is one of its
+/// own row gaps, and Chrome breaks there like in the parent unless an item of the subgrid (or of
+/// a subgrid nested in it) runs through it (`subgrid/fragmentation/013`).
 fn gap_is_bridged(grid: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
-    grid.children.iter().any(|c| {
-        !matches!(c.kind, BoxKind::Skip)
-            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
-            && c.rect.y - gy < gap_lo - 0.01
-            && c.rect.y - gy + c.rect.height > gap_hi + 0.01
-    })
+    fn bridges(c: &LayoutBox, gy: f32, gap_lo: f32, gap_hi: f32) -> bool {
+        if matches!(c.kind, BoxKind::Skip)
+            || matches!(c.style.position, Position::Absolute | Position::Fixed)
+            || c.rect.y - gy >= gap_lo - 0.01
+            || c.rect.y - gy + c.rect.height <= gap_hi + 0.01
+        {
+            return false;
+        }
+        !super::grid_row_subgrid::is_row_subgrid(c) || c.children.iter().any(|k| bridges(k, gy, gap_lo, gap_hi))
+    }
+    grid.children.iter().any(|c| bridges(c, gy, gap_lo, gap_hi))
 }
 
 /// Block offsets (from the grid's top edge) of the row tracks that a forced column break
@@ -1121,7 +1129,25 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     } else {
         limit
     };
-    let windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
+    let mut windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
+    // A grid with a definite `height` is fragmented over all of it: the row gaps the breaks dropped
+    // do not shorten the container, so empty fragments (the background and the rules) follow the
+    // last window, as many as the height still needs (Edge: `height: 140px` over five 20px rows
+    // and four 10px gaps gives seven 20px columns, `subgrid/fragmentation/013`).
+    if !col_flex
+        && forced.is_empty()
+        && !frame.init.balance
+        && grid.style.height.as_ref().is_some_and(|h| !matches!(h, Length::Percent(_)))
+    {
+        let mut extra = grid.rect.height - windows.iter().map(|w| w.1 - w.0).sum::<f32>();
+        let mut at = windows.last().map_or(total_h, |w| w.1);
+        while extra > 0.01 {
+            let len = extra.min(cut_at);
+            windows.push((at, at + len, false));
+            at += len;
+            extra -= len;
+        }
+    }
     let all_line_gaps = flex_line_gaps(grid, gy0, &rows);
     let column_lines = column_flex_lines(grid, gy0);
     // Chrome fragments a wrapped column flex container line by line: an item whose first line box
@@ -1382,6 +1408,42 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
                 })
             })
             .collect();
+        // The leftover of a row subgrid with a nested one (`subgrid_tail`) is its last fragment.
+        if !col_flex && line_windows.is_none() {
+            frag.children.extend(grid.children.iter().filter_map(|c| {
+                let (last, len) = subgrid_tail(c, gy, &windows)?;
+                (last + 1 == f).then(|| {
+                    let mut k = c.clone();
+                    k.rect.x = col_x + (c.rect.x - gx);
+                    k.rect.y = cur_y;
+                    k.rect.height = len.min(frag_h);
+                    // The nested subgrids stay in it as empty boxes: they keep the item's column
+                    // gaps they span from being ruled.
+                    let (len, dx) = (k.rect.height, k.rect.x - c.rect.x);
+                    k.children = c
+                        .children
+                        .iter()
+                        .filter(|n| !matches!(n.kind, BoxKind::Skip) && super::grid_row_subgrid::is_row_subgrid(n))
+                        .map(|n| {
+                            let mut n = n.clone();
+                            n.children.clear();
+                            n.subgrid_tracks = None;
+                            n.rect.x += dx;
+                            n.rect.y = cur_y;
+                            n.rect.height = len;
+                            n
+                        })
+                        .collect();
+                    k.subgrid_tracks = Some(Box::new(crate::subgrid::SubgridTracks {
+                        cols: c.subgrid_tracks.as_ref().and_then(|t| t.cols.clone()),
+                        rows: Some(vec![(0.0, k.rect.height)]),
+                        fragment: true,
+                        ..Default::default()
+                    }));
+                    k
+                })
+            }));
+        }
         // A line that holds a monolithic item starting in this window reaches to the item's bottom
         // edge, past the window's (the item overflows the column).
         let mono_bottom = |a: f32, b: f32| {
@@ -1405,7 +1467,9 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
         // The gap numbers of this fragment continue those of the fragments before it.
         let row_gap_base = if col_flex { None } else { visible.first().map(|v| (v.0, rows.len() - 1)) };
         let visible_idx: Vec<usize> = visible.iter().map(|v| v.0).collect();
-        let clipped: Vec<(f32, f32)> = visible.into_iter().map(|v| v.1).collect();
+        // A window past the last track holds none: its single empty track carries the rules.
+        let clipped: Vec<(f32, f32)> =
+            if visible.is_empty() && ws >= total_h - 0.01 { vec![(0.0, we - ws)] } else { visible.into_iter().map(|v| v.1).collect() };
         let mut cols = grid.subgrid_tracks.as_ref().and_then(|t| t.cols.clone());
         // A gap is kept when the item after it has a part in this window.
         let keeps = |lg: &LineGap, ws: f32, we: f32| {
@@ -1448,6 +1512,34 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     frame.init.consumed[i] = true;
     frame.init.cur_y += seg_extent;
     true
+}
+
+/// The leftover of a row subgrid item `c` that holds a nested row subgrid: Chrome fragments such an
+/// item over its whole block size, and the row gaps that fall between the windows from the nested
+/// subgrid's top edge on (the nested subgrid drops them itself, the item does not know) stay
+/// unconsumed, so the item gets one more fragment of their total size after its last window
+/// (`subgrid/fragmentation/013`: 20 + 20 + 20 + 10px; a gap above the nested subgrid is dropped
+/// by the item's own break). `(index of the item's last window, leftover)`.
+fn subgrid_tail(c: &LayoutBox, gy: f32, windows: &[(f32, f32, bool)]) -> Option<(usize, f32)> {
+    use super::grid_row_subgrid::is_row_subgrid;
+    if matches!(c.kind, BoxKind::Skip) || !is_row_subgrid(c) {
+        return None;
+    }
+    let (top, bot) = (c.rect.y - gy, c.rect.y - gy + c.rect.height);
+    let nested_top = c
+        .children
+        .iter()
+        .filter(|k| !matches!(k.kind, BoxKind::Skip) && is_row_subgrid(k))
+        .map(|k| k.rect.y - gy)
+        .fold(f32::INFINITY, f32::min);
+    let last = windows.iter().rposition(|w| w.1 > top + 0.01 && w.0 < bot - 0.01)?;
+    let tail: f32 = windows
+        .windows(2)
+        .map(|w| (w[0].1, w[1].0))
+        .filter(|&(lo, hi)| hi > lo + 0.01 && lo >= nested_top - 0.01 && hi <= bot + 0.01)
+        .map(|(lo, hi)| hi - lo)
+        .sum();
+    (tail > 0.01).then_some((last, tail))
 }
 
 /// A subgrid inside a subgrid item that the container's windows cut like the item itself: its rows
