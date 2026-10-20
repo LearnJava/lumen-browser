@@ -58,7 +58,7 @@ impl<'a> Parser<'a> {
     /// If the malformed text turns out to be a brace-delimited block instead
     /// — e.g. `@supports (...) { result: PASS; }` inside a `@function`/
     /// `@mixin` body, which `parse_declaration_block` has no dedicated
-    /// grammar for — skips that whole matched block via [`Self::skip_block`]
+    /// grammar for — skips that whole matched block via [`Self::scan_component_values`]
     /// and stops right there instead of continuing to scan for a trailing
     /// `;`: the declaration that legitimately follows the block must be left
     /// for the caller's own loop to parse, not swallowed into this recovery
@@ -67,23 +67,7 @@ impl<'a> Parser<'a> {
     /// it once brace nesting is tracked, but the text after the block still
     /// ends in its own `;`).
     pub(crate) fn recover_to_decl_boundary(&mut self) {
-        while let Some(c) = self.peek() {
-            match c {
-                ';' => {
-                    self.consume();
-                    return;
-                }
-                '}' => return,
-                '{' => {
-                    self.consume();
-                    self.skip_block();
-                    return;
-                }
-                _ => {
-                    self.consume();
-                }
-            }
-        }
+        self.scan_component_values(Vec::new(), ScanEnd::SEMI | ScanEnd::CLOSE_BRACE | ScanEnd::OPEN_BRACE);
     }
 
     pub(crate) fn parse_declaration(&mut self) -> Option<Declaration> {
@@ -99,7 +83,10 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.consume();
-        let value = self.parse_value_until_terminator();
+        let (value, valid) = self.parse_value_checked();
+        if !valid {
+            return None;
+        }
         let (value, important) = extract_important(value.trim());
         // WHATWG Compat §3: `-webkit-*` simple aliases resolve to the
         // unprefixed property here, once, for the whole cascade.
@@ -120,16 +107,25 @@ impl<'a> Parser<'a> {
     /// grammar uses `;` *inside* its parens to separate branches) gets
     /// truncated at the first branch's `;`, leaving the rest of the `if()`
     /// call to be misparsed as a bogus second declaration (BUG-519).
-    pub(crate) fn parse_value_until_terminator(&mut self) -> String {
+    ///
+    /// Returns the value text and a validity flag: `false` when it holds a
+    /// `<bad-string-token>` (a string cut by an unescaped newline, §4.3.5),
+    /// which makes the whole declaration invalid. Blocks left open at EOF are
+    /// closed in the returned text (§5.3 — EOF closes every open construct, so
+    /// `rgb(0, 128, 0` is `rgb(0, 128, 0)`).
+    pub(crate) fn parse_value_checked(&mut self) -> (String, bool) {
         let mut s = String::new();
         let mut in_string: Option<char> = None;
-        let mut depth: u32 = 0;
+        // Closers of the open `(`/`[`/`{` blocks, innermost last; a closer
+        // that does not match the innermost one is an ordinary token.
+        let mut stack: Vec<char> = Vec::new();
+        let mut valid = true;
         // Inside an unquoted `url(` the body is one url-token (CSS Syntax
         // §4.3.6): `/*` there is data, not a comment.
         let mut in_url = false;
         while let Some(c) = self.peek() {
             match (in_string, c) {
-                (None, ';') | (None, '}') if depth == 0 => break,
+                (None, ';') | (None, '}') if stack.is_empty() => break,
                 // CSS Syntax §4.3.2: `\` escapes the next code point, so
                 // `\"` does not close a string and `\/*` is not a comment.
                 (_, '\\') => {
@@ -138,6 +134,13 @@ impl<'a> Parser<'a> {
                     if let Some(n) = self.consume() {
                         s.push(n);
                     }
+                }
+                // An unescaped newline ends a string token as a bad-string.
+                (Some(_), '\n') => {
+                    valid = false;
+                    in_string = None;
+                    self.consume();
+                    s.push(c);
                 }
                 // CSS Syntax §4.3.2: a comment is dropped from the token
                 // stream but still separates tokens, so it becomes one space
@@ -153,7 +156,7 @@ impl<'a> Parser<'a> {
                 }
                 (None, ')') if in_url => {
                     in_url = false;
-                    depth = depth.saturating_sub(1);
+                    stack.pop();
                     self.consume();
                     s.push(c);
                 }
@@ -167,8 +170,12 @@ impl<'a> Parser<'a> {
                     s.push(c);
                     in_string = Some(c);
                 }
-                (None, '(') | (None, '[') => {
-                    depth += 1;
+                (None, '(') | (None, '[') | (None, '{') => {
+                    stack.push(match c {
+                        '(' => ')',
+                        '[' => ']',
+                        _ => '}',
+                    });
                     self.consume();
                     s.push(c);
                     if c == '(' && !in_url && s.len() >= 4 && s.as_bytes()[s.len() - 4..].eq_ignore_ascii_case(b"url(") {
@@ -176,8 +183,10 @@ impl<'a> Parser<'a> {
                         in_url = !quoted;
                     }
                 }
-                (None, ')') | (None, ']') => {
-                    depth = depth.saturating_sub(1);
+                (None, ')') | (None, ']') | (None, '}') => {
+                    if stack.last() == Some(&c) {
+                        stack.pop();
+                    }
                     self.consume();
                     s.push(c);
                 }
@@ -187,7 +196,13 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        s
+        if let Some(q) = in_string {
+            s.push(q);
+        }
+        while let Some(closer) = stack.pop() {
+            s.push(closer);
+        }
+        (s, valid)
     }
 }
 

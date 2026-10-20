@@ -229,3 +229,143 @@ use super::*;
         assert_eq!(d[0].value, "\"a\\\"/*x*/;b\"");
         assert_eq!(d[1].value, "red");
     }
+
+    // --- BUG-1381: CSS Syntax §5.4 recovery — qualified-rule prelude, brackets, strings, EOF ---
+
+    fn colors(s: &Stylesheet) -> Vec<String> {
+        s.rules
+            .iter()
+            .filter_map(|r| r.declarations.iter().find(|d| d.property == "color"))
+            .map(|d| d.value.clone())
+            .collect()
+    }
+
+    #[test]
+    fn at_sign_with_space_is_a_qualified_rule_prelude() {
+        // `@ import …` — `@` + whitespace is a delim token, not an at-keyword:
+        // the prelude runs `@ import "x.css"; div` up to `{`, the whole rule is
+        // invalid and dropped, `;` does not end it.
+        let s = parse("@ import \"x.css\"; div{color:red} * {color:green}");
+        assert_eq!(s.imports.len(), 0);
+        assert_eq!(colors(&s), vec!["green"], "rules: {:?}", s.rules);
+    }
+
+    #[test]
+    fn semicolon_inside_invalid_top_level_prelude_does_not_end_it() {
+        let s = parse("foo; div{color:red} p{color:green}");
+        assert_eq!(colors(&s), vec!["green"]);
+    }
+
+    #[test]
+    fn unclosed_function_at_eof_closes_in_value() {
+        let s = parse("div{color:rgb(0, 128, 0");
+        assert_eq!(colors(&s), vec!["rgb(0, 128, 0)"], "rules: {:?}", s.rules);
+    }
+
+    #[test]
+    fn unterminated_import_string_at_eof_closes() {
+        let s = parse("@import \"support/eof-green.css");
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "support/eof-green.css");
+    }
+
+    #[test]
+    fn paren_in_prelude_swallows_braces() {
+        // matching-brackets-003: `( … )` hides the `{}` pairs inside it, so
+        // `p ( {…} p {…} ) p` is one invalid prelude ending at the last block.
+        let s = parse("p { color: green; } p ( { border: solid red; } p { background: red; } ) p { color: red; }");
+        assert_eq!(s.rules.len(), 1, "rules: {:?}", s.rules);
+        assert_eq!(colors(&s), vec!["green"]);
+    }
+
+    #[test]
+    fn square_bracket_in_prelude_swallows_rules() {
+        // square-brackets-001
+        let s = parse("p { color: red; }\n[\np { color: red !important; }\np { color: red !important; }\n] p { color: red !important; }\np { color: green; }");
+        assert_eq!(colors(&s), vec!["red", "green"], "rules: {:?}", s.rules);
+    }
+
+    #[test]
+    fn unterminated_string_ends_at_newline_and_drops_declaration() {
+        // unterminated-string-001: bad-string ends at the newline, the
+        // declaration then runs to the next `;` and is invalid.
+        let s = parse("div{color:green;font-family:'Courier;\ncolor:red;}");
+        assert_eq!(colors(&s), vec!["green"], "rules: {:?}", s.rules);
+    }
+
+    #[test]
+    fn blocks_and_strings_in_garbage_declaration_are_matched() {
+        // blocks-and-strings-001
+        let s = parse("div{\"this is a string]}\"\"[{\\\"'\";\n{{}}[]'';\ncolor:green;}");
+        assert_eq!(colors(&s), vec!["green"], "rules: {:?}", s.rules);
+    }
+
+    #[test]
+    fn string_with_escaped_newline_in_attribute_selector() {
+        // strings-000
+        let s = parse("p { color: red }\np[title=\"this is\\\n a test\"] { color: green }");
+        assert_eq!(s.rules.len(), 2, "rules: {:?}", s.rules);
+        assert_eq!(colors(&s), vec!["red", "green"]);
+    }
+
+    #[test]
+    fn junk_with_brackets_and_strings_inside_declaration_is_skipped() {
+        // matching-brackets-002: the junk after `color:` is ONE declaration
+        // (brackets and strings hide its `;` and `}`), the rest of the rule
+        // survives, and no phantom `p { color: red }` rules appear.
+        let s = parse(MATCHING_BRACKETS_002);
+        assert_eq!(s.rules.len(), 1, "rules: {:?}", s.rules);
+        let d = &s.rules[0].declarations;
+        assert_eq!(d.len(), 4, "{d:?}");
+        assert!(d[2].value.starts_with("red ] ) test-token"), "{d:?}");
+        assert_eq!((d[3].property.as_str(), d[3].value.as_str()), ("background", "white"));
+    }
+
+    const MATCHING_BRACKETS_002: &str = r#"p { background: red; color: green; color: red ] ) test-token \
+ ~ ` ! @ # $ % ^ & * - _ + = | : > < ? / , .
+ [\]\5D ']' "]"; background: red; } p { color: red; } ]
+ (\)\29 ')' ")"; background: red; } p { color: red; } )
+ '\'; background: red; } p { color: red; }',
+ "\"; background: red; } p { color: red; }' p { color: red; } "
+ ;
+ background: white; }"#;
+
+    #[test]
+    fn unknown_at_rule_with_unbalanced_junk_ends_at_depth_zero_semicolon() {
+        // matching-brackets-001 (first half): `@foo …;` hides every `;` and `{}`
+        // inside strings, escapes and matched brackets; only the final `;`
+        // ends it, and the rules after it survive.
+        let s = parse(MATCHING_BRACKETS_001);
+        let ids: Vec<_> = s
+            .rules
+            .iter()
+            .map(|r| (format!("{:?}", r.selectors[0].head.parts), r.declarations.len()))
+            .collect();
+        assert_eq!(s.rules.len(), 5, "rules: {ids:?}");
+        assert_eq!(colors(&s), vec!["red", "green", "green"], "rules: {ids:?}");
+    }
+
+    const MATCHING_BRACKETS_001: &str = r#"    p {
+      color: red;
+      background: red;
+    }
+    #semicolon { background: transparent; }
+    @foo ] } ) test-token \
+     ~ ` ! @ # $ % ^ & * - _ + = | : > < ? / , .
+     [\]\5D ']' "]"; # { background: red; } ]
+     (\)\29 ')' ")"; #semicolon { background: red; } } } } )
+     '; #semicolon { background: red; } } } }',
+     "; #semicolon { background: red; }' } } }"
+    ;
+    #semicolon { color: green; }
+    #block { background: transparent; }
+    @foo ] } ) test-token \
+     ~ ` ! @ # $ % ^ & * - _ + = | : > < ? / , .
+     [\]\5D ']' "]"; #block { background: red; } ]
+     (\)\29 ')' ")"; #block { background: red; } )
+     '\'; #block { background: red; }',
+     "\"; #block { background: red; }'"
+     {\}\79 '}' "}"; #block { background: red; }
+        #block { background: red; } }
+    #block { color: green; }
+"#;
