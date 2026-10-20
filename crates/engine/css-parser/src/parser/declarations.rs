@@ -88,7 +88,12 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn parse_declaration(&mut self) -> Option<Declaration> {
         self.skip_ws_and_comments();
-        let property = self.parse_ident()?;
+        let mut property = self.parse_ident()?;
+        // CSS 2.1 §4.1.3: property names are ASCII case-insensitive; custom
+        // properties (`--*`) are the exception and stay case-sensitive.
+        if !property.starts_with("--") {
+            property.make_ascii_lowercase();
+        }
         self.skip_ws_and_comments();
         if self.peek() != Some(':') {
             return None;

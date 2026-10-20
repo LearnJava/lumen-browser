@@ -1,6 +1,7 @@
 # BUG-1378 — имя свойства в CSS регистрозависимо в `parse_declaration`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** `parse_declaration` приводит имя свойства к нижнему регистру (ASCII), кроме custom properties `--*`. Тесты: `parser/tests/recovery.rs::property_name_is_case_insensitive`, `custom_property_name_stays_case_sensitive`.
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 15, `css/CSS2` (остальные каталоги: selectors, css1, syntax, box-display, visufx, visudet, …))
 **Область:** css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_declaration` — имя свойства не приводится к нижнему регистру)
 
