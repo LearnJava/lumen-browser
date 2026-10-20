@@ -731,6 +731,35 @@ use crate::style::values::named_colors::NAMED_COLORS;
     }
 
     #[test]
+    fn system_color_parse_deprecated_aliases_bug1419() {
+        // CSS Color 4 §6.3: each deprecated keyword is an alias of its target.
+        let cases: &[(&str, &str)] = &[
+            ("ActiveBorder", "ButtonBorder"),
+            ("InactiveBorder", "ButtonBorder"),
+            ("WindowFrame", "ButtonBorder"),
+            ("ActiveCaption", "Canvas"),
+            ("AppWorkspace", "Canvas"),
+            ("Background", "Canvas"),
+            ("InactiveCaption", "Canvas"),
+            ("InfoBackground", "Canvas"),
+            ("Menu", "Canvas"),
+            ("ButtonHighlight", "ButtonFace"),
+            ("ButtonShadow", "ButtonFace"),
+            ("ThreeDFace", "ButtonFace"),
+            ("CaptionText", "CanvasText"),
+            ("InfoText", "CanvasText"),
+            ("MenuText", "CanvasText"),
+            ("InactiveCaptionText", "GrayText"),
+        ];
+        for (alias, target) in cases {
+            let a = SystemColor::parse(alias).unwrap_or_else(|| panic!("{alias} not parsed"));
+            assert_eq!(Some(a), SystemColor::parse(target), "{alias} -> {target}");
+        }
+        let c = |r, g, b| Color { r, g, b, a: 255 };
+        assert_eq!(system_color("buttonface", false), Some(c(240, 240, 240)));
+    }
+
+    #[test]
     fn system_color_parse_returns_none_for_named_color() {
         // "blue" is a named color, NOT a system color
         assert!(SystemColor::parse("blue").is_none());
@@ -773,6 +802,21 @@ use crate::style::values::named_colors::NAMED_COLORS;
         let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
         let bg = style.background_color.expect("background-color should be set");
         assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }), "Canvas light bg = white");
+    }
+
+    #[test]
+    fn system_color_deprecated_alias_in_background_color_bug1419() {
+        // `WindowFrame` must be accepted (not dropped) and `ThreeDFace` must be ButtonFace.
+        for (name, expect) in [("WindowFrame", 0u8), ("ThreeDFace", 240), ("Menu", 255)] {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ background-color: {name}; }}"));
+            let root = ComputedStyle::root();
+            let body = doc.body().expect("body");
+            let div = doc.get(body).children[0];
+            let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+            let bg = style.background_color.unwrap_or_else(|| panic!("{name} dropped"));
+            assert_eq!(bg, CssColor::Rgba(Color { r: expect, g: expect, b: expect, a: 255 }), "{name}");
+        }
     }
 
     #[test]

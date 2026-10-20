@@ -684,3 +684,23 @@ fn a_nested_subgrid_cut_between_tracks_gives_each_column_its_own_row_of_items() 
     assert_eq!(per_column, vec![0, 0, 2, 2, 0], "{per_column:?}");
     assert!(cols.iter().flat_map(|b| items(b)).all(|(y, h)| y == 0.0 && h == 20.0));
 }
+
+#[test]
+fn a_nested_subgrid_with_a_row_gap_dropped_at_a_break_leaves_a_tail_and_a_definite_height_trailing_columns() {
+    // `subgrid-gap-decorations-fragmentation-013`: the gaps of a 140px grid (five 20px rows, 10px
+    // gaps) fall at the breaks of 20px columns. A subgrid in rows 2-4 holds a nested subgrid on its
+    // rows 2-3: the gap before the nested one is dropped by the subgrid itself, the gap inside the
+    // nested one is not (a subgrid does not bridge a gap by itself), so every row of items lands
+    // whole in a column of its own, the subgrid gets a 10px tail after them, and the definite
+    // height keeps fragmenting the container into the 7 columns of 140px / 20px.
+    let root = lay(
+        "<div id=\"m\"><div id=\"g\"><div id=\"s\"><div id=\"i\"><div></div><div></div><div></div><div></div></div></div></div></div>",
+        "body{margin:0} #m{columns:2;column-fill:auto;width:280px;height:20px;column-gap:0}          #g{display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);gap:10px;height:140px}          #s{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-2;grid-row:2/-2}          #i{display:grid;grid-template-columns:subgrid;grid-template-rows:subgrid;grid-column:2/-1;grid-row:2/-1}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let cols: Vec<_> = v.iter().filter(|b| b.rect.width == 140.0).collect();
+    assert_eq!(cols.len(), 7, "{:?}", cols.iter().map(|b| b.rect).collect::<Vec<_>>());
+    let subgrid_heights: Vec<f32> = cols.iter().map(|b| b.children.first().map_or(0.0, |s| s.rect.height)).collect();
+    assert_eq!(subgrid_heights, vec![0.0, 20.0, 20.0, 20.0, 10.0, 0.0, 0.0], "{subgrid_heights:?}");
+}

@@ -328,7 +328,7 @@ pub(crate) fn emit_box_self(
                 rect: content_box_rect(b),
                 src: format!("canvas:{nid}"),
                 alt: String::new(),
-                object_fit: ObjectFit::Fill,
+                object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
@@ -406,10 +406,12 @@ pub(crate) fn emit_box_self(
             }
         }
         BoxKind::SvgShape { shape, svg_mask, .. } => {
+            let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
                 Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
                 None => emit_svg_shape(b, shape, out),
             }
+            pop_clip_layers(clip_layers, out);
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
@@ -948,7 +950,8 @@ struct BlockEpilogue {
     has_perspective: bool,
     has_filter: bool,
     has_backdrop: bool,
-    has_clip_path: bool,
+    /// Слоёв `clip-path` (`url(#id)` с вложенным клипом даёт больше одного).
+    clip_path_layers: usize,
     has_transform: bool,
     has_opacity: bool,
     has_blend: bool,
@@ -1093,7 +1096,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     if e.has_backdrop {
         out.push(DisplayCommand::PopBackdropFilter);
     }
-    if e.has_clip_path {
+    for _ in 0..e.clip_path_layers {
         out.push(DisplayCommand::PopClip);
     }
     if e.has_transform {
@@ -1203,7 +1206,7 @@ fn dispatch<'a>(
             }
             // CSS Masking L1 §9: clip-path clips the fully composited element;
             // эмитится ниже — ВНУТРИ PushTransform (BUG-140).
-            let has_clip_path = b.style.clip_path.is_some();
+            let mut clip_path_layers = 0;
             // CSS Compositing & Blending L1 §5: mix-blend-mode wraps opacity so
             // the element (faded by its own opacity) blends against the backdrop
             // (order Clip → Blend → Opacity, mirroring `box_layer_ops`).
@@ -1230,12 +1233,9 @@ fn dispatch<'a>(
             // элемента и переносится его transform-ом — эмитится внутри
             // PushTransform, снаружи filter/backdrop-filter.
             if let Some(clip) = &b.style.clip_path {
-                match clip_path_to_shape(clip, b.rect) {
-                    Some(shape) => out.push(DisplayCommand::PushClipPath { shape }),
-                    None => out.push(DisplayCommand::PushClipRect {
-                        rect: clip_path_to_rect(clip, b.rect),
-                    }),
-                }
+                let cmds = clip_path_commands(clip, b.rect);
+                clip_path_layers = cmds.len();
+                out.extend(cmds);
             }
             // CSS Filter Effects L1 §6.2 — `backdrop-filter` filters the content
             // already painted *behind* the element, clipped to its border box,
@@ -1395,7 +1395,7 @@ fn dispatch<'a>(
                 has_perspective,
                 has_filter,
                 has_backdrop,
-                has_clip_path,
+                clip_path_layers,
                 has_transform: transform.is_some(),
                 has_opacity,
                 has_blend,
@@ -1669,7 +1669,7 @@ fn dispatch<'a>(
                 rect: content_box_rect(b),
                 src: format!("canvas:{nid}"),
                 alt: String::new(),
-                object_fit: ObjectFit::Fill,
+                object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
@@ -1765,10 +1765,12 @@ fn dispatch<'a>(
         BoxKind::SvgShape { shape, svg_mask, .. } => {
             // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
+            let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
                 Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
                 None => emit_svg_shape(b, shape, out),
             }
+            pop_clip_layers(clip_layers, out);
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
             // SVG text element: emit DrawText command with proper positioning.

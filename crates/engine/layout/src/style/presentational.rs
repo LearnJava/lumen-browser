@@ -131,6 +131,9 @@ pub(in crate::style) fn apply_svg_presentational_hints(
         // CSS property, so `resolve_svg_mask` (`box_tree/svg.rs`) sees it
         // via `style.mask_layers` regardless of which form authored it.
         "mask",
+        // SVG 1.1 §14.3 / CSS Masking L1 §3.1 — `clip-path="url(#id)"`;
+        // `compute_style` подменяет ссылку на разрешённый `<clipPath>`.
+        "clip-path",
     ];
     let node_ref = doc.get(node);
     for &attr in ATTRS {
@@ -152,7 +155,7 @@ pub(in crate::style) fn is_svg_presentational_element(local: &str) -> bool {
     matches!(
         local,
         "svg" | "g" | "rect" | "circle" | "ellipse" | "line" | "path"
-            | "polygon" | "polyline" | "text" | "tspan" | "textPath" | "use"
+            | "polygon" | "polyline" | "text" | "tspan" | "textPath" | "use" | "clipPath"
     )
 }
 /// HTML5 §15: `bgcolor` атрибут на `<body>` / table-related элементах

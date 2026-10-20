@@ -701,9 +701,56 @@ struct CounterCtx {
     /// `::before`/`::after` (`style::sheet_has_pseudo_counters`) arms it too. Lives here rather than as a `walk` parameter
     /// because it is per-pass state like the counter stacks themselves.
     pseudo_probe: bool,
+    /// BUG-1395 — innermost `contain: style` boundary: per counter name, how many instances
+    /// were on its stack when the boundary was entered (after the element's own
+    /// `counter-reset`). `None` outside any boundary. An increment/set that finds no instance
+    /// above this floor instantiates a new one instead of touching the outer counter
+    /// (CSS Containment L2 §3.4 — style containment scopes `counter-increment`/`-set`).
+    floor: Option<HashMap<String, usize>>,
+    /// BUG-1395 — names of the instances [`Self::ensure_instance`] created, in creation order.
+    /// A new instance is scoped to its element's parent subtree (the element, its descendants
+    /// and following siblings), so `walk` pops what its children logged once they are done.
+    fresh_log: Vec<String>,
 }
 
 impl CounterCtx {
+    /// BUG-1395 — inside a `contain: style` boundary, make sure `name` has an instance that
+    /// belongs to the boundary: one created here, not an outer counter.
+    fn ensure_instance(&mut self, name: &str) {
+        let Some(floor) = &self.floor else { return };
+        let stack = self.stacks.entry(name.to_owned()).or_default();
+        if stack.len() <= floor.get(name).copied().unwrap_or(0) {
+            stack.push(0);
+            self.fresh_log.push(name.to_owned());
+        }
+    }
+
+    /// BUG-1395 — drop the instances created since `mark` (see [`Self::fresh_log`]).
+    fn pop_fresh(&mut self, mark: usize) {
+        while self.fresh_log.len() > mark {
+            let Some(name) = self.fresh_log.pop() else { break };
+            if let Some(stack) = self.stacks.get_mut(&name) {
+                stack.pop();
+                if stack.is_empty() {
+                    self.stacks.remove(&name);
+                }
+            }
+        }
+    }
+
+    /// BUG-1395 — enter a `contain: style` element: returns the state `leave_style_boundary`
+    /// puts back.
+    fn enter_style_boundary(&mut self) -> (Option<HashMap<String, usize>>, usize) {
+        let floor = self.stacks.iter().map(|(n, s)| (n.clone(), s.len())).collect();
+        (self.floor.replace(floor), self.quote_depth)
+    }
+
+    /// BUG-1395 — leave a `contain: style` element: quotes opened inside do not stay open.
+    fn leave_style_boundary(&mut self, saved: (Option<HashMap<String, usize>>, usize)) {
+        self.floor = saved.0;
+        self.quote_depth = saved.1;
+    }
+
     /// Push new scope(s) from `counter-reset`. Returns the list of names that were reset
     /// so the caller can pop them later.
     fn apply_reset(&mut self, resets: &[(String, i32)]) {
@@ -717,6 +764,7 @@ impl CounterCtx {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn apply_increment(&mut self, increments: &[(String, i32)]) {
         for (name, val) in increments {
+            self.ensure_instance(name);
             let stack = self.stacks.entry(name.clone()).or_default();
             if stack.is_empty() {
                 stack.push(0);
@@ -732,6 +780,7 @@ impl CounterCtx {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn apply_set(&mut self, sets: &[(String, i32)]) {
         for (name, val) in sets {
+            self.ensure_instance(name);
             let stack = self.stacks.entry(name.clone()).or_default();
             if stack.is_empty() {
                 stack.push(*val);
@@ -1712,8 +1761,17 @@ fn walk(
 
     // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
+    // BUG-1395: `contain: style` — the element's own reset is part of the boundary, its
+    // increments/sets and everything below get instances of their own; quotes opened
+    // inside are closed again on the way out.
+    let style_boundary = (style.contain.0 & crate::style::ContainFlags::STYLE.0 != 0).then(|| ctx.enter_style_boundary());
+    let own_mark = ctx.fresh_log.len();
     ctx.apply_increment(&style.counter_increment);
     ctx.apply_set(&style.counter_set);
+    // Instances logged from here on belong to this element's children; the ones its own
+    // properties made live on among its following siblings — unless the element is the
+    // boundary, which keeps them from leaking out.
+    let fresh_mark = if style_boundary.is_some() { own_mark } else { ctx.fresh_log.len() };
 
     // BUG-341 S23: an empty snapshot is indistinguishable from no snapshot at
     // all — both consumers reach it through `snap.and_then(|s| s.get(name))`
@@ -1771,6 +1829,10 @@ fn walk(
 
     ctx.pop_reset(&after_resets);
     ctx.pop_reset(&before_resets);
+    ctx.pop_fresh(fresh_mark);
+    if let Some(saved) = style_boundary {
+        ctx.leave_style_boundary(saved);
+    }
     ctx.pop_reset(&style.counter_reset);
 
     // BUG-341 S4/S16: this node's own style was reused (not recomputed), its
@@ -3615,4 +3677,49 @@ mod tests {
         assert_eq!(pseudo_counter(html, css, "z", QuoteSlot::Before, "k"), None);
     }
 
+    // BUG-1395 — `contain: style` scopes counters and quotes to the subtree.
+
+    #[test]
+    fn contain_style_increments_do_not_leave_subtree() {
+        let css = "#o{counter-reset:n}#o i{counter-increment:n}#t::after{content:counter(n)}";
+        let html = r#"<div id="o"><div style="contain:style"><i></i><i></i></div><b id="t"></b></div>"#;
+        assert_eq!(pseudo_counter(html, css, "t", QuoteSlot::After, "n"), Some(0));
+        let html = r#"<div id="o"><div><i></i><i></i></div><b id="t"></b></div>"#;
+        assert_eq!(pseudo_counter(html, css, "t", QuoteSlot::After, "n"), Some(2));
+    }
+
+    #[test]
+    fn contain_style_boundary_own_reset_is_kept_and_children_start_fresh() {
+        // WPT contain-style-counters-003/004: the spans cannot touch the body's counter.
+        let css = "body{counter-reset:c 13;contain:style}span{counter-increment:c 5}#d::after{content:counter(c)}";
+        let html = r#"<p><span></span><span></span></p><div id="d"></div>"#;
+        assert_eq!(pseudo_counter(html, css, "d", QuoteSlot::After, "c"), Some(13));
+        // Siblings after the first span share the instance it made.
+        let css = "body{counter-reset:c 17;contain:style}span{counter-increment:c 4}#d::after{content:counter(c)}";
+        let html = r#"<span></span><span></span><span></span><div id="d"></div>"#;
+        assert_eq!(pseudo_counter(html, css, "d", QuoteSlot::After, "c"), Some(12));
+    }
+
+    #[test]
+    fn contain_style_restores_quote_depth() {
+        let css = "div::before,span::before{content:open-quote}div::after{content:close-quote}span{contain:style}";
+        let html = r#"<div id="d"><span id="s"></span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let flat = lumen_dom::build_flat_tree(&doc);
+        let map = precompute_counters(&doc, &sheet, Size::new(800.0, 600.0), &flat, false);
+        fn find(doc: &Document, n: NodeId, id: &str) -> Option<NodeId> {
+            if doc.get(n).get_attr("id") == Some(id) {
+                return Some(n);
+            }
+            doc.get(n).children.iter().find_map(|&c| find(doc, c, id))
+        }
+        let d = find(&doc, doc.root(), "d").expect("div");
+        let s = find(&doc, doc.root(), "s").expect("span");
+        assert_eq!(map.quote_depths(d, QuoteSlot::Before), &[0]);
+        assert_eq!(map.quote_depths(s, QuoteSlot::Before), &[1]);
+        // The close-quote ends level 0 ("Z" in WPT quote-scoping-001); without the restore the
+        // span's open-quote would leave depth 2 and it would end level 1.
+        assert_eq!(map.quote_depths(d, QuoteSlot::After), &[0]);
+    }
 }

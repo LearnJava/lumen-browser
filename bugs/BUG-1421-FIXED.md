@@ -1,6 +1,6 @@
 # BUG-1421 — `object-fit` и `object-position` не действуют на `<canvas>`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout/paint (`<canvas>` как replaced-элемент, `object-fit`/`object-position`)
 
@@ -30,3 +30,12 @@ WPT-RUN-15; `object-fit` игнорируется независимо от эт
 ## Как проверить
 
 Страница из таблицы; `css/css-images/object-fit-contain-png-001c.html`.
+
+## Исправление
+
+`display_list/walk.rs`: обе ветки `BoxKind::Canvas` (обычная и с позиционным слоем) жёстко ставили
+`object_fit: ObjectFit::Fill` в `DrawImage { src: "canvas:{nid}" }`; теперь берут `b.style.object_fit`
+(`object_position` уже передавался). Растеризаторы считают рамку через общий `fit_image_rect`, как для `<img>`.
+Проба из таблицы: зелёная область 48×24 в (0,4)–(47,27). Тест
+`canvas_draw_image_carries_object_fit_and_position` (`display_list/tests/text_and_images.rs`).
+Часть 14 id может ещё падать из-за `reftest-wait` (WPT-RUN-15) — независимая причина.

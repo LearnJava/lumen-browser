@@ -34,6 +34,17 @@ pub(in crate::style) fn parse_clip_path(s: &str) -> Option<ClipPath> {
     let func = s[..open].trim().to_ascii_lowercase();
     let inner = s[open + 1..close].trim();
     match func.as_str() {
+        // CSS Masking L1 §3.1 — `url(#id)`: ссылка на `<clipPath>` того же
+        // документа (внешние `file.svg#id` не поддерживаются — не заданы).
+        "url" => {
+            let target = inner.trim_matches(|c| c == '"' || c == '\'').trim();
+            let id = target.strip_prefix('#')?;
+            if id.is_empty() {
+                None
+            } else {
+                Some(ClipPath::Url(id.to_string()))
+            }
+        }
         "path" => {
             // `path([<fill-rule>,]? "<svg-path>")`. Опциональный fill-rule
             // (nonzero|evenodd) управляет заливкой самопересекающихся путей

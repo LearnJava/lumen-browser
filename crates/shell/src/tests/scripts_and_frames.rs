@@ -535,6 +535,7 @@ pub(super) fn splice_handle(src: &str, host_rect: Rect, content_dl: DisplayList)
         interactive: crate::frames::FrameNodeState::default(),
         host_rect: Some(host_rect),
         host_src: src.to_owned(),
+        is_svg_embed: false,
         images: Vec::new(),
         image_keys: Vec::new(),
         scroll_y: 0.0,
@@ -645,6 +646,24 @@ fn splice_frame_content_is_idempotent() {
     let after_first = dl.len();
     crate::frames::splice_frame_content(&mut dl, &frames);
     assert_eq!(after_first, dl.len(), "вторая вклейка обязана быть no-op");
+}
+
+/// BUG-1420: SVG из `<object data>`/`<embed src>` — под-документ для скриптов,
+/// но рисует его хозяин как картинку. `DrawImage` с тем же `src` и
+/// прямоугольником — сама картинка, и вклейка в неё белого фона с
+/// натуральным SVG по полям `body` ломала `object-fit`/масштаб.
+#[test]
+fn splice_frame_content_leaves_svg_embed_image_alone() {
+    let (mut dl, host_rect) = page_with_iframe_placeholder("full.svg");
+    let before = dl.clone();
+    let content = vec![lumen_paint::DisplayCommand::FillRect {
+        rect: Rect::new(8.0, 8.0, 16.0, 8.0),
+        color: lumen_layout::Color { r: 0, g: 128, b: 0, a: 255 },
+    }];
+    let mut handle = splice_handle("full.svg", host_rect, content);
+    handle.is_svg_embed = true;
+    crate::frames::splice_frame_content(&mut dl, &[handle]);
+    assert_eq!(dl, before, "картинку SVG-embed вклейка трогать не должна");
 }
 
 /// Заглушка ищется по ПАРЕ «src + прямоугольник»: совпадения одного `src` мало.
