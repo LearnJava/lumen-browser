@@ -934,6 +934,27 @@ fn preferred_inline_block_width_impl(
     }
 }
 
+/// CSS Box Sizing L4 §5 / CSS Containment L3 §4.1: a size-contained box
+/// (`contain: size|strict`, `content-visibility: hidden`) ignores its contents
+/// for intrinsic inline sizing and contributes `contain-intrinsic-width`
+/// (a content-box length) or 0 when it is `none`/unset — exactly as the in-flow
+/// `inline-block` path in `layout_dispatch` treats it (BUG-1388). Vertical
+/// writing modes swap the axes and are left to the generic path.
+fn size_contained_content_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
+    let s = &b.style;
+    let contained = s.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+        || s.content_visibility == crate::style::ContentVisibility::Hidden;
+    if !contained || is_vertical_block(b) {
+        return None;
+    }
+    Some(
+        s.contain_intrinsic_width
+            .as_ref()
+            .and_then(|l| l.resolve(s.font_size, None, viewport))
+            .map_or(0.0, |v| v.max(0.0)),
+    )
+}
+
 /// CSS Intrinsic Sizing L3 §4 — max-content border-box width of `b`.
 ///
 /// The max-content width is the width a box would use if line breaking were
@@ -981,6 +1002,9 @@ fn max_content_outer_width_impl(
             BoxSizing::BorderBox => w.max(pl + pr + s.border_left_width + s.border_right_width),
         };
         return outer.max(0.0);
+    }
+    if let Some(cw) = size_contained_content_width(b, viewport) {
+        return (cw + pl + pr + s.border_left_width + s.border_right_width).max(0.0);
     }
     let block_flow = || {
         // Block container: in-flow children stack vertically → take the
@@ -1094,6 +1118,9 @@ pub(crate) fn min_content_outer_width_of_contents(
     let em = s.font_size;
     let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
     let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    if let Some(cw) = size_contained_content_width(b, viewport) {
+        return (cw + pl + pr + s.border_left_width + s.border_right_width).max(0.0);
+    }
     let content_w = match &b.kind {
         BoxKind::InlineRun { segments, .. } => {
             // min-content = widest unbreakable stretch of text.
