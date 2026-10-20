@@ -196,6 +196,10 @@ use inline_build::{
     InlineEscape,
 };
 
+mod scroll_pseudos;
+pub(crate) use scroll_pseudos::button_keywords;
+use scroll_pseudos::{inject_scroll_pseudos, ScrollPseudoCx};
+
 mod build;
 use build::{build_box, build_box_or_reuse};
 pub use build::incremental_build_box;

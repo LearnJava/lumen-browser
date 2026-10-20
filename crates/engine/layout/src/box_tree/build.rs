@@ -1511,6 +1511,15 @@ fn build_box_inner(
         // because flex/grid/table children may include display:contents elements whose
         // Contents boxes must be unpacked before lay_out sees them.
         flatten_contents(&mut children);
+        // CSS Overflow L5 — `::scroll-marker-group` / `::scroll-button()` are siblings of their
+        // originating element, so they are injected into the parent's finished child list.
+        if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
+            inject_scroll_pseudos(
+                &ScrollPseudoCx { host: id, doc, sheet, viewport, dark_mode, counters, registry },
+                &style,
+                &mut children,
+            );
+        }
         // CSS 2.1 §17.2.1 — anonymous table boxes (BUG-1362).
         children = super::table_anon::fix_children(doc, id, &kind, &style, children);
     }
