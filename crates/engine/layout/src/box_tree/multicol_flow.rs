@@ -713,6 +713,7 @@ fn grid_fragment_tracks(d: &LayoutBox, track_top: f32, content: f32, from: f32, 
         fragment: true,
         row_gap_base: visible.first().map(|v| (v.0, rows.len().saturating_sub(1))),
         line_gaps: None,
+        rule_shift: 0.0,
     }))
 }
 

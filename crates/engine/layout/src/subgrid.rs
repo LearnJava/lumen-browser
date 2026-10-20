@@ -109,6 +109,12 @@ pub struct SubgridTracks {
     /// фрагменте (`flex-gap-decorations-fragmentation-011`: первый элемент ниже других), не даёт
     /// painter'у границу щели, так что щели считает раскладка по всему контейнеру.
     pub line_gaps: Option<Vec<Vec<(f32, f32)>>>,
+    /// Только у фрагмента subgrid'а, в чьём теле принудительный разрыв (`break-before: column`
+    /// у ребёнка не первой строки): Chrome считает геометрию щелей так, будто разрыв начал
+    /// фрагмент ровно на старте этой строки, а не там, где колонку обрезало (`subgrid/
+    /// fragmentation/011`). Все координаты по оси строк сдвинуты на эту величину вниз; боксы и
+    /// фоны остаются на месте.
+    pub rule_shift: f32,
 }
 
 /// Names of the lines `first..=end` (0-based track indices: the lines around tracks `first..end`)
@@ -136,7 +142,7 @@ pub(crate) fn peek_tracks() -> Option<Box<SubgridTracks>> {
     };
     let cols = SUBGRID_COL_CTX.with(spans);
     let rows = SUBGRID_ROW_CTX.with(spans);
-    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false, row_gap_base: None, line_gaps: None }))
+    (cols.is_some() || rows.is_some()).then(|| Box::new(SubgridTracks { cols, rows, fragment: false, row_gap_base: None, line_gaps: None, rule_shift: 0.0 }))
 }
 
 /// Replaces the parent's gutters in the pending subgrid contexts with the subgrid's own explicit

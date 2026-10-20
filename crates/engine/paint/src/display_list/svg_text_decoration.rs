@@ -1238,6 +1238,7 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
                 }
             }
             if self_visible {
+                out.extend(late_gap_decoration_commands(b, ov.and_then(|o| o.gap_rules.as_ref())));
                 emit_outline(b, out);
             }
             if transform.is_some() {

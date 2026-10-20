@@ -697,7 +697,7 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
                 .or_else(|| subgrid_axis_gap(&ys))
                 .unwrap_or(row_gap_px);
         }
-        return grid_gap_segments(
+        let mut geom = grid_gap_segments(
             &children,
             &GridGapParams {
                 content: (cx, cy, cw, ch),
@@ -714,6 +714,29 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
                 style: s,
             },
         );
+        // A subgrid fragment whose gaps Chrome lays out from a forced break above its top
+        // (`SubgridTracks::rule_shift`): every segment moves down with the rows; the ones that
+        // start at the fragment's top edge keep it and grow instead.
+        let shift = sub.map_or(0.0, |t| t.rule_shift);
+        if shift > 0.0 {
+            for seg in &mut geom.segments {
+                if seg.horizontal {
+                    seg.rect.y += shift;
+                } else if seg.rect.y > cy + 0.01 {
+                    seg.rect.y += shift;
+                } else {
+                    seg.rect.height += shift;
+                }
+            }
+        }
+        // The gaps a shifted subgrid fragment spans are its own: the container's rules do not
+        // run through that area, which reaches `rule_shift` below the fragment's box.
+        for c in &children {
+            let Some(shift) = c.subgrid_tracks.as_ref().map(|t| t.rule_shift).filter(|&s| s > 0.0) else { continue };
+            let area = Rect::new(c.rect.x, c.rect.y, c.rect.width, c.rect.height + shift);
+            geom.segments = geom.segments.drain(..).flat_map(|seg| cut_out_area(seg, area)).collect();
+        }
+        return geom;
     }
 
     // Flex: щели главной оси — между элементами одной flex-строки, поперечной — между
@@ -753,6 +776,34 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
     )
 }
 
+/// `seg` without the part inside `area`, when `area` spans the segment's whole thickness (the gap
+/// lies entirely within it): up to two pieces on either side along the segment's axis.
+fn cut_out_area(seg: GapSegment, area: Rect) -> Vec<GapSegment> {
+    const EPS: f32 = 0.01;
+    let r = seg.rect;
+    let (across, along, a_across, a_along) = if seg.horizontal {
+        ((r.y, r.y + r.height), (r.x, r.x + r.width), (area.y, area.y + area.height), (area.x, area.x + area.width))
+    } else {
+        ((r.x, r.x + r.width), (r.y, r.y + r.height), (area.x, area.x + area.width), (area.y, area.y + area.height))
+    };
+    let covered = across.0 >= a_across.0 - EPS && across.1 <= a_across.1 + EPS;
+    if !covered || along.1 <= a_along.0 + EPS || along.0 >= a_along.1 - EPS {
+        return vec![seg];
+    }
+    let piece = |lo: f32, hi: f32| {
+        let rect = if seg.horizontal { Rect::new(lo, r.y, hi - lo, r.height) } else { Rect::new(r.x, lo, r.width, hi - lo) };
+        GapSegment { rect, ..seg }
+    };
+    let mut out = Vec::new();
+    if a_along.0 > along.0 + EPS {
+        out.push(piece(along.0, a_along.0));
+    }
+    if a_along.1 < along.1 - EPS {
+        out.push(piece(a_along.1, along.1));
+    }
+    out
+}
+
 /// CSS Gap Decorations L1 — `DrawBorder` rules for the gaps of a flex/grid
 /// container. Two independent decoration styles: vertical segments take the
 /// column rule, horizontal ones the row rule. Empty for any other box.
@@ -762,7 +813,30 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
 ///
 /// `gap_rules` — animated `*-rule-width` / `*-rule-color` (CSS Gap Decorations L1 §4.7),
 /// which replace the computed values for this paint without a relayout.
+///
+/// A subgrid fragment whose gaps Chrome lays out from a forced break (`SubgridTracks::rule_shift`)
+/// draws them over its children instead: see [`late_gap_decoration_commands`].
 pub(crate) fn gap_decoration_commands(
+    b: &LayoutBox,
+    gap_rules: Option<&lumen_layout::GapRuleOverride>,
+) -> Vec<DisplayCommand> {
+    if paints_gaps_late(b) { Vec::new() } else { all_gap_decoration_commands(b, gap_rules) }
+}
+
+/// The gap rules of a box that paints them over its children (after them, before the box's
+/// clips close): empty for every other box.
+pub(crate) fn late_gap_decoration_commands(
+    b: &LayoutBox,
+    gap_rules: Option<&lumen_layout::GapRuleOverride>,
+) -> Vec<DisplayCommand> {
+    if paints_gaps_late(b) { all_gap_decoration_commands(b, gap_rules) } else { Vec::new() }
+}
+
+fn paints_gaps_late(b: &LayoutBox) -> bool {
+    b.subgrid_tracks.as_ref().is_some_and(|t| t.rule_shift > 0.0)
+}
+
+fn all_gap_decoration_commands(
     b: &LayoutBox,
     gap_rules: Option<&lumen_layout::GapRuleOverride>,
 ) -> Vec<DisplayCommand> {
@@ -986,6 +1060,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     // own painting and stay flat.
     if e.has_perspective {
         out.push(DisplayCommand::PopTransform);
+    }
+    if e.self_visible {
+        out.extend(late_gap_decoration_commands(b, None));
     }
     if e.has_overflow_clip {
         if e.use_scroll_layer {
