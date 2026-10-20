@@ -720,9 +720,7 @@ fn collect_gap_segments(b: &LayoutBox, s: &ComputedStyle) -> GridGapGeometry {
         let shift = sub.map_or(0.0, |t| t.rule_shift);
         if shift > 0.0 {
             for seg in &mut geom.segments {
-                if seg.horizontal {
-                    seg.rect.y += shift;
-                } else if seg.rect.y > cy + 0.01 {
+                if seg.horizontal || seg.rect.y > cy + 0.01 {
                     seg.rect.y += shift;
                 } else {
                     seg.rect.height += shift;
