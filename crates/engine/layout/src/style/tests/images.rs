@@ -1237,6 +1237,32 @@ use super::*;
         }
     }
 
+    /// BUG-1427 — CSS Images L3 §3.4.3: a gradient with a single colour stop is
+    /// a solid fill. Linear and radial (also repeating) get a doubled stop so the
+    /// two-stop-minimum renderers paint it; conic is left as parsed.
+    #[test]
+    fn gradient_single_stop_is_solid_two_stops() {
+        for src in [
+            "linear-gradient(green)",
+            "linear-gradient(to right, green 50%)",
+            "repeating-linear-gradient(green 50px)",
+            "radial-gradient(green)",
+            "repeating-radial-gradient(10px circle at top left, green)",
+        ] {
+            let stops = match parse_background_gradient(src) {
+                ParsedGradient::Linear { stops, .. } | ParsedGradient::Radial { stops, .. } => stops,
+                other => panic!("{src}: expected linear/radial, got {other:?}"),
+            };
+            assert_eq!(stops.len(), 2, "{src}");
+            assert_eq!(stops[0].color, stops[1].color, "{src}");
+            assert_eq!(stops[0].position, stops[1].position, "{src}");
+        }
+        match parse_background_gradient("conic-gradient(green)") {
+            ParsedGradient::Conic { stops, .. } => assert_eq!(stops.len(), 1),
+            other => panic!("expected conic, got {other:?}"),
+        }
+    }
+
     /// `in oklab` subdivides the stop list, preserves the direction, and the
     /// ~50% stop matches perceptual interpolation — distinct from the naive
     /// sRGB blend (sRGB red→blue midpoint is rgb(127,0,127) with **no green**,
