@@ -1633,30 +1633,109 @@ fn box_clips_own_overflow(b: &LayoutBox) -> bool {
 fn scrollable_extent_x(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_x, mut max_x) = (0.0_f32, pb.width);
-    scrollable_extent_x_rec(b, &pb, UnreachableSides::of(&b.style), &mut min_x, &mut max_x);
+    let u = UnreachableSides::of(&b.style);
+    let mut inflow = (f32::INFINITY, f32::NEG_INFINITY);
+    scrollable_extent_x_rec(b, &pb, u, &mut min_x, &mut max_x, &mut inflow);
+    // CSS Overflow L3 §2.2: the padding at the reachable end of the inline
+    // axis follows the in-flow content, so a scroller whose content overflows
+    // keeps its end padding visible (BUG-1389). `abspos` boxes are placed
+    // against the padding box and carry no such padding.
+    let [_, pad_r, _, pad_l] = box_padding(b);
+    if u.left && inflow.1.is_finite() {
+        max_x = max_x.max(inflow.1 + pad_r);
+    } else if u.right && inflow.0.is_finite() {
+        min_x = min_x.min(inflow.0 - pad_l);
+    }
     (min_x, max_x)
+}
+
+/// A box's used padding `[top, right, bottom, left]` in px.
+pub(crate) fn box_padding(b: &LayoutBox) -> [f32; 4] {
+    b.used_padding.unwrap_or_else(|| {
+        let s = &b.style;
+        let vp = lumen_core::geom::Size::new(0.0, 0.0);
+        let em = s.font_size;
+        [
+            s.padding_top.resolve_or_zero(em, 0.0, vp),
+            s.padding_right.resolve_or_zero(em, 0.0, vp),
+            s.padding_bottom.resolve_or_zero(em, 0.0, vp),
+            s.padding_left.resolve_or_zero(em, 0.0, vp),
+        ]
+    })
+}
+
+/// The margins `[top, right, bottom, left]` (non-negative px) that CSS Overflow L3
+/// §2.2 adds to the scrollable overflow of `c`: those of a flex or grid item
+/// (a direct child of such a container), zero for everything else — block
+/// children contribute their border box alone, out-of-flow boxes are placed
+/// against the padding box (BUG-1389).
+pub(crate) fn item_margins(parent: &LayoutBox, c: &LayoutBox) -> [f32; 4] {
+    if !matches!(
+        parent.style.display,
+        style::Display::Flex | style::Display::InlineFlex | style::Display::Grid | style::Display::InlineGrid
+    ) || matches!(c.style.position, style::Position::Absolute | style::Position::Fixed)
+    {
+        return [0.0; 4];
+    }
+    let vp = lumen_core::geom::Size::new(0.0, 0.0);
+    let em = c.style.font_size;
+    let cb_w = parent.rect.width;
+    let m = |l: &style::LengthOrAuto| l.resolve_or_zero(em, cb_w, vp).max(0.0);
+    [m(&c.style.margin_top), m(&c.style.margin_right), m(&c.style.margin_bottom), m(&c.style.margin_left)]
+}
+
+/// A child's scrollable bounds, grown by [`item_margins`] on the reachable side
+/// of each axis only (`u`): the start-side margin of an unreachable side can
+/// never be scrolled into view.
+fn item_scrollable_bounds(
+    parent: &LayoutBox,
+    c: &LayoutBox,
+    mut bounds: lumen_core::geom::Rect,
+    u: UnreachableSides,
+) -> lumen_core::geom::Rect {
+    let [mt, mr, mb, ml] = item_margins(parent, c);
+    if u.left {
+        bounds.width += mr;
+    } else if u.right {
+        bounds.x -= ml;
+        bounds.width += ml;
+    }
+    if u.top {
+        bounds.height += mb;
+    } else if u.bottom {
+        bounds.y -= mt;
+        bounds.height += mt;
+    }
+    bounds
 }
 
 /// Recursive worker for [`scrollable_extent_x`] (BUG-960): folds in every
 /// descendant that isn't behind a clipping ancestor (per
 /// [`box_clips_own_overflow`]), not just direct children, so overflow from
 /// e.g. a doubly-nested negative-margin box still reaches the outer scroll
-/// container's `scrollWidth`.
+/// container's `scrollWidth`. `inflow` collects the `(min, max)` of the
+/// non-out-of-flow contributors for the end-padding rule.
 fn scrollable_extent_x_rec(
     b: &LayoutBox,
     pb: &lumen_core::geom::Rect,
     u: UnreachableSides,
     min_x: &mut f32,
     max_x: &mut f32,
+    inflow: &mut (f32, f32),
 ) {
     for c in &b.children {
-        let bounds = child_scrollable_bounds(c);
-        if contributes_to_scrollable_overflow(c, &bounds, pb, u) {
+        let own = child_scrollable_bounds(c);
+        if contributes_to_scrollable_overflow(c, &own, pb, u) {
+            let bounds = item_scrollable_bounds(b, c, own, u);
             *min_x = min_x.min(bounds.x - pb.x);
             *max_x = max_x.max(bounds.x + bounds.width - pb.x);
+            if !matches!(c.style.position, style::Position::Absolute | style::Position::Fixed) {
+                inflow.0 = inflow.0.min(bounds.x - pb.x);
+                inflow.1 = inflow.1.max(bounds.x + bounds.width - pb.x);
+            }
         }
         if !box_clips_own_overflow(c) {
-            scrollable_extent_x_rec(c, pb, u, min_x, max_x);
+            scrollable_extent_x_rec(c, pb, u, min_x, max_x, inflow);
         }
     }
 }
@@ -1666,7 +1745,15 @@ fn scrollable_extent_x_rec(
 fn scrollable_extent_y(b: &LayoutBox) -> (f32, f32) {
     let pb = padding_box(b);
     let (mut min_y, mut max_y) = (0.0_f32, pb.height);
-    scrollable_extent_y_rec(b, &pb, UnreachableSides::of(&b.style), &mut min_y, &mut max_y);
+    let u = UnreachableSides::of(&b.style);
+    let mut inflow = (f32::INFINITY, f32::NEG_INFINITY);
+    scrollable_extent_y_rec(b, &pb, u, &mut min_y, &mut max_y, &mut inflow);
+    let [pad_t, _, pad_b, _] = box_padding(b);
+    if u.top && inflow.1.is_finite() {
+        max_y = max_y.max(inflow.1 + pad_b);
+    } else if u.bottom && inflow.0.is_finite() {
+        min_y = min_y.min(inflow.0 - pad_t);
+    }
     (min_y, max_y)
 }
 
@@ -1678,15 +1765,21 @@ fn scrollable_extent_y_rec(
     u: UnreachableSides,
     min_y: &mut f32,
     max_y: &mut f32,
+    inflow: &mut (f32, f32),
 ) {
     for c in &b.children {
-        let bounds = child_scrollable_bounds(c);
-        if contributes_to_scrollable_overflow(c, &bounds, pb, u) {
+        let own = child_scrollable_bounds(c);
+        if contributes_to_scrollable_overflow(c, &own, pb, u) {
+            let bounds = item_scrollable_bounds(b, c, own, u);
             *min_y = min_y.min(bounds.y - pb.y);
             *max_y = max_y.max(bounds.y + bounds.height - pb.y);
+            if !matches!(c.style.position, style::Position::Absolute | style::Position::Fixed) {
+                inflow.0 = inflow.0.min(bounds.y - pb.y);
+                inflow.1 = inflow.1.max(bounds.y + bounds.height - pb.y);
+            }
         }
         if !box_clips_own_overflow(c) {
-            scrollable_extent_y_rec(c, pb, u, min_y, max_y);
+            scrollable_extent_y_rec(c, pb, u, min_y, max_y, inflow);
         }
     }
 }
