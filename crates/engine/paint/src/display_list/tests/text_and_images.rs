@@ -388,6 +388,29 @@
         assert_eq!(canvas_bitmap_rect(&dl), (3.0, 3.0, 94.0, 74.0));
     }
 
+    /// BUG-1421: `object-fit`/`object-position` of a `<canvas>` reach the
+    /// `DrawImage` command like they do for `<img>` (was hard-wired to `fill`).
+    #[test]
+    fn canvas_draw_image_carries_object_fit_and_position() {
+        let dl = build(
+            r#"<canvas width="16" height="8"></canvas>"#,
+            "*{margin:0}canvas{width:48px;height:32px;object-fit:contain;object-position:left top}",
+        );
+        let (fit, pos) = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::DrawImage { src, object_fit, object_position, .. }
+                    if src.starts_with("canvas:") =>
+                {
+                    Some((*object_fit, *object_position))
+                }
+                _ => None,
+            })
+            .expect("<canvas> must emit a DrawImage");
+        assert_eq!(fit, ObjectFit::Contain);
+        assert_ne!(pos, ObjectPosition::default());
+    }
+
     fn rounded_fills(dl: &DisplayList) -> Vec<&Color> {
         dl.iter()
             .filter_map(|c| match c {
