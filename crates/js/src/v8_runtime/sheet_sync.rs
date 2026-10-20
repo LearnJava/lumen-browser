@@ -63,6 +63,11 @@ pub(crate) struct SheetSync {
     /// обратно как лист синхронного флаша, и флаш по ревизии берёт исходный
     /// лист, чтобы не наложить те же правки второй раз.
     pub(crate) pristine: PristineCascade,
+    /// `<style>` узла → `DomTouched::child_list_gen` на момент, когда его лист
+    /// последний раз сверялся с текстом. Смена поколения при том же тексте
+    /// (`style.innerHTML = <тот же текст>`) значит, что браузер создал бы
+    /// новый лист: CSSOM-правки старого выбрасываются, лист разбирается заново.
+    pub(crate) child_list_gen: Arc<Mutex<HashMap<u32, u64>>>,
 }
 
 /// BUG-493: то, что нужно шеллу для каскада отрисовки, без обращения к
@@ -162,15 +167,29 @@ impl SheetSync {
 
         let mut dropped: Vec<u32> = Vec::new();
         let mut shadow = HashSet::new();
+        let gens: HashMap<u32, u64> = {
+            let touched = self.touched.lock().unwrap_or_else(|e| e.into_inner());
+            owners
+                .iter()
+                .map(|o| (o.node, touched.child_list_gen.get(&NodeId::from_raw(o.node)).copied().unwrap_or(0)))
+                .collect()
+        };
         {
+            let mut seen = self.child_list_gen.lock().unwrap_or_else(|e| e.into_inner());
             let mut nodes = self.nodes.lock().unwrap_or_else(|e| e.into_inner());
             let mut old: HashMap<u32, StylesheetNodeEntry> =
                 nodes.drain(..).map(|e| (e.node, e)).collect();
             let mut out = Vec::with_capacity(owners.len());
             for owner in owners {
                 let prev = old.remove(&owner.node);
+                let generation = gens.get(&owner.node).copied().unwrap_or(0);
+                let rewritten = seen.insert(owner.node, generation).is_some_and(|old| old != generation);
                 let entry = match (owner.style_text, prev) {
-                    (Some(text), Some(prev)) if prev.sheet.source().unwrap_or("") == text => prev,
+                    (Some(text), Some(prev))
+                        if !rewritten && prev.sheet.source().unwrap_or("") == text =>
+                    {
+                        prev
+                    }
                     (Some(text), prev) => {
                         if prev.is_some() {
                             dropped.push(owner.node);
@@ -190,6 +209,7 @@ impl SheetSync {
                 out.push(entry);
             }
             dropped.extend(old.into_keys());
+            seen.retain(|n, _| out.iter().any(|e| e.node == *n));
             *nodes = out;
         }
         *self.shadow_owned.lock().unwrap_or_else(|e| e.into_inner()) = shadow;
@@ -248,7 +268,20 @@ impl SheetSync {
             return false;
         }
         match doc.get(id).element_name() {
-            Some(name) if name.local == "style" => style_text(&doc, id) == source,
+            Some(name) if name.local == "style" => {
+                let unchanged_text = style_text(&doc, id) == source;
+                drop(doc);
+                let generation = self
+                    .touched
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .child_list_gen
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(0);
+                let seen = self.child_list_gen.lock().unwrap_or_else(|e| e.into_inner());
+                unchanged_text && seen.get(&nid).is_none_or(|&old| old == generation)
+            }
             Some(_) => true,
             None => false,
         }

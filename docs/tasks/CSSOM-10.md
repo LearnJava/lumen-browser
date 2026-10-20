@@ -245,3 +245,18 @@ top_level_rule_insert_rule_adds_a_nested_rule_and_rejects_garbage` (теперь
    CSSOM-10 → done, `BUGS.md`/`BUGS-FIXED.md` BUG-1455, `subsystems/css-parser.md`/`js.md`), `/lumen-task-finish`. Сборка идёт в основном каталоге; sccache
    иногда падает «io error» — повторить.
 
+
+## Сессия 7 — что сделано и что дальше
+
+**Сделано (WIP).** `cargo test -p lumen-js --features v8-backend --lib cssom` (77) и `--test all bug518` зелёные; `cargo test -p lumen-css-parser` — 630 зелёных.
+- `sheet_sync.rs`: `SheetSync.child_list_gen` — смена `DomTouched::child_list_gen` у `<style>` при том же тексте (`innerHTML = тот же текст`) пересоздаёт лист и выбрасывает CSSOM-правки (WPT `cssom.html` «subrules 9» зависел от протёкшего состояния).
+- css-parser: `parser.rs` — вложенное правило с типовым селектором без `&` (`div {}` в теле стилевого правила; `ident_led_block_ahead`) и prelude с `&` не в голове (`.stuff, :is(&) #inner2`; `parse_nested_rule_with_inner_amp`) теперь раскрываются; `canonical_selector_list` — неявный `& ` у вложенных селекторов без `&` / с ведущим комбинатором (`& > p`) и сохранение при прощающем разборе правила с `&` (`:is(!& .foo)`); `cssom_tree/mutate.rs` — `insertRule` деклараций бросает `SyntaxError`, если нет ни одной известной (`SUPPORTED_PROPERTIES`/`--*`/`-vendor-*`), невалидные среди валидных отбрасываются; `serialize.rs` — пустые `CSSNestedDeclarations` не попадают в `cssText` внешнего правила.
+- Тест `bug518_mixin_cssom` обновлён (теперь `@layer` — видимое `CSSLayerBlockRule`); добавлены `outer_selector_text_setter_*`, `script_made_style_*` (v8_cssom_stylesheets.rs), 2 теста вложенности в `parser/tests/nesting.rs`.
+
+**Дальше.**
+1. Пересобрать `cargo build --profile dev-release --bin lumen` и прогнать WPT (`.tmp/venv-wpt/Scripts/python.exe`, `MSYS_NO_PATHCONV=1 LUMEN_PROFILE=dev-release … tests/wpt/run_report.py --binary <lumen.exe> --all --root css/css-nesting --log-raw .tmp/c10-raw.log`; разбор падений — `python .tmp/c10_fails.py .tmp/c10-raw.log cssom`).
+   Критерий: `css-nesting/cssom.html` целиком (осталось проверить после правок: «Mutating the selectorText…», «Manipulation of nested declarations…»), `css-cascade/layer-cssom-order-reverse.html` (падает «Insert layer invalidates style» — 3 из 4), `scope-cssom.html` (13/13 уже).
+   Не сделано: `CSSNestedDeclarations.style.length` возвращает `''` — у `CSSStyleDeclaration.prototype` нет геттера `length`/`item()`/индексов (см. `web_api_shim_mid.js` ~3595, `_lumen_make_rule_style` ~3856; проверить, есть ли они у `element.style`, `v8_gap_rule_cssom.rs:108` читает `d.style.length`).
+2. После прогона — `--update-expected` для затронутых `.ini` (`css-nesting`, `css-cascade`), `UNEXPECTED-PASS` → PASS; проверить, что остальные css-nesting/css-cascade/cssom не регрессировали (раньше 73/117 в css-nesting).
+3. Юнит-тест на `patched_cascade` с `TreeEdit`; `cargo clippy -p lumen-css-parser -p lumen-js --features lumen-js/v8-backend --all-targets -- -D warnings`; парсер вложенности мог сдвинуть пиксели → `python graphic_tests/run.py --continue-on-fail`.
+4. Доки (`CAPABILITIES.md`, `ROADMAP.md` CSSOM-10 → done, `BUGS.md`/`BUGS-FIXED.md` BUG-1455, `subsystems/css-parser.md`/`js.md`), `/lumen-task-finish`.

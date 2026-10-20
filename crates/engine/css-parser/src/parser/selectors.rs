@@ -1941,13 +1941,33 @@ pub(crate) fn canonical_selector_list(input: &str, nested: bool) -> Option<Strin
             _ => (String::new(), item),
         };
         let substituted = if nested { replace_outside_strings(rest, '&', NESTING_MARKER) } else { rest.to_string() };
-        if rest.is_empty() || !is_valid_selector_list(&substituted) {
-            return None;
+        let parsed = if rest.is_empty() || !is_valid_selector_list(&substituted) {
+            None
+        } else {
+            Parser::new(&substituted).parse_selector_list_strict()
+        };
+        match parsed {
+            Some(sels) => {
+                let css = sels_to_css_str(&sels);
+                // Вложенный селектор без `&` и без ведущего комбинатора записывается с
+                // неявным `& ` (CSS Nesting 1 §«Syntax», CSSOM-сериализация).
+                let implicit = if nested && (!prefix.is_empty() || !css.contains(NESTING_MARKER)) { "& " } else { "" };
+                out.push(format!("{implicit}{prefix}{}", css.replace(NESTING_MARKER, "&")));
+            }
+            // CSS Nesting 1 §«Mixing nesting rules and declarations»: правило, которое
+            // отбрасывается при прощающем разборе `:is()`/`:where()`, но содержит `&`,
+            // всё равно сериализуется как написано.
+            None if nested && !rest.is_empty() && rest.contains('&') && (rest.contains(":is(") || rest.contains(":where(")) => {
+                out.push(format!("{prefix}{}", collapse_selector_ws(rest)));
+            }
+            None => return None,
         }
-        let sels = Parser::new(&substituted).parse_selector_list_strict()?;
-        out.push(format!("{prefix}{}", sels_to_css_str(&sels).replace(NESTING_MARKER, "&")));
     }
     if out.is_empty() { None } else { Some(out.join(", ")) }
+}
+
+fn collapse_selector_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Делит по запятым нулевой глубины (вне скобок и строк).

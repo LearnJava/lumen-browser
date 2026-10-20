@@ -86,7 +86,7 @@ pub(super) fn css_text(n: &CssomNode) -> String {
         | RuleKind::Layer
         | RuleKind::Scope
         | RuleKind::StartingStyle => {
-            let kids: Vec<String> = n.visible_children().map(css_text).collect();
+            let kids = serialized_children(n);
             render_container(&header(n), &kids, false)
         }
         RuleKind::Keyframes => {
@@ -110,6 +110,15 @@ pub(super) fn css_text(n: &CssomNode) -> String {
     }
 }
 
+/// `cssText` вложенных правил; пустые `CSSNestedDeclarations` на сериализацию
+/// внешнего правила не влияют (CSSOM «serialize a CSS rule»).
+fn serialized_children(n: &CssomNode) -> Vec<String> {
+    n.visible_children()
+        .filter(|c| !(c.kind == RuleKind::NestedDeclarations && c.decls.is_empty()))
+        .map(css_text)
+        .collect()
+}
+
 fn decl_block(prelude: &str, decls: &[Declaration]) -> String {
     if decls.is_empty() {
         format!("{prelude} {{ }}")
@@ -129,7 +138,7 @@ fn style_text(n: &CssomNode) -> String {
     } else if !n.decls.is_empty() {
         parts.push(decls_line(&n.decls));
     }
-    parts.extend(n.visible_children().map(css_text));
+    parts.extend(serialized_children(n));
     render_container(&n.prelude, &parts, false)
 }
 

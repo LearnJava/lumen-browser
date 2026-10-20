@@ -39,7 +39,7 @@ fn nested_rule_is_a_child_and_keeps_ampersand() {
 fn implicit_nested_rule_and_relative_combinator() {
     let t = tree("div { .a { x: y } > p { x: y } }");
     let kids: Vec<&str> = t.rules[0].children.iter().map(|c| c.prelude.as_str()).collect();
-    assert_eq!(kids, [".a", "> p"]);
+    assert_eq!(kids, ["& .a", "& > p"]);
 }
 
 #[test]

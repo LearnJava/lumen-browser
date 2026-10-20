@@ -117,7 +117,14 @@ pub(super) fn insert_rule(
 fn parse_single(text: &str, ctx: Ctx) -> Result<CssomNode, CssomTreeError> {
     let mut items = parse_items(text, ctx);
     if ctx == Ctx::Body && items.nodes.is_empty() && !items.decls.is_empty() {
-        return Ok(nested_declarations(std::mem::take(&mut items.decls)));
+        // css-nesting-1: бросаем, только если нет ни одной валидной декларации
+        // (csswg-drafts#10520); невалидные среди валидных отбрасываются.
+        let mut decls = std::mem::take(&mut items.decls);
+        decls.retain(is_known_declaration);
+        if decls.is_empty() {
+            return Err(CssomTreeError::Syntax);
+        }
+        return Ok(nested_declarations(decls));
     }
     if !items.decls.is_empty() || items.nodes.len() != 1 {
         return Err(CssomTreeError::Syntax);
@@ -127,6 +134,13 @@ fn parse_single(text: &str, ctx: Ctx) -> Result<CssomNode, CssomTreeError> {
         return Err(CssomTreeError::Syntax);
     }
     Ok(node)
+}
+
+/// Декларация с именем, которое движок знает (или пользовательским/вендорным).
+fn is_known_declaration(d: &Declaration) -> bool {
+    d.property.starts_with('-')
+        || d.property == crate::MIXIN_APPLY_MARKER
+        || crate::SUPPORTED_PROPERTIES.iter().any(|p| p.eq_ignore_ascii_case(&d.property))
 }
 
 /// CSSOM §6.4.3: порядок `@import` / `@namespace` на корне листа.
