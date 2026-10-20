@@ -3495,6 +3495,13 @@ function _lumen_canonicalize_longhand(key, strVal) {
         // (Chrome 114+), so CSSOM read-back is `auto`.
         return kw === 'overlay' ? 'auto' : kw;
     }
+    if (key === 'opacity') {
+        // CSS Color 4 §3.2: a percentage `<alpha-value>` is stored as the number it denotes
+        // (`50%` -> `0.5`, `-100%` -> `-1`); anything else is left to the regular pipeline (BUG-1424).
+        var opPct = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)%\s*$/i.exec(strVal);
+        if (opPct) return String(Number((parseFloat(opPct[1]) / 100).toPrecision(6)));
+        return strVal;
+    }
     if (key === 'scrollbar-color') {
         return _lumen_css_canonical_scrollbar_color(strVal);
     }
