@@ -770,6 +770,13 @@ pub(in crate::style) fn apply_decl_layout(
                 _ => {}
             }
         }
+        "box-decoration-break" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "clone" => style.box_decoration_clone = true,
+                "slice" => style.box_decoration_clone = false,
+                _ => {}
+            }
+        }
         "column-fill" => {
             match val.trim().to_ascii_lowercase().as_str() {
                 "balance" => style.column_fill_balance = true,

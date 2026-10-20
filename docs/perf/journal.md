@@ -923,6 +923,37 @@ BROKEN_RENDER 18, HUNG 14. Флапы 0 (повторов не было, `--no-r
 - **Границы раннера** (docs/compat-scenarios.md §Границы): нет смены вкладок (попап OAuth, окно 3DS), нет ввода внутри чужих
   кадров, диалог выбора файла блокирует прогон. 3DS проверяется стендом с кадром ACS и `postMessage` (`stand-3ds-iframe`).
 
+## 2026-10-20 — COMPAT-CORPUS-3 срез 3 — база SPR-w Lumen на корпусе S — Windows 10, маршрут home-direct (RU) + proxy 127.0.0.1:12334 (иностранные)
+
+Сборка `dev-release` от `8fb3b9048` (лежит исправление BUG-1629/1630), `--maximized`, `LUMEN_NO_ADBLOCK=1`, эталон — Chrome for Testing 153 в плече `--ref`
+(сценарий, не прошедший в Chrome, — `skip ref_fail`, в метрику не идёт). Два прохода: `--lang ru` напрямую и `--lang en --lumen-arg=--proxy
+--lumen-arg=http://127.0.0.1:12334` (Lumen не читает системный прокси и `HTTPS_PROXY`, Chrome-эталон читает; прокси — системный адрес этой машины);
+`social-telegram-channel` (`lang = ru`, иностранный узел) довыполнен через прокси. Три стенда самопроверки — `pass`.
+
+- **База: SPR-w = 38,4 % (вес 38 из 99), 17 из 44 исполненных сценариев**; `base_reached` (≥ 40) достигнута. RU: 7/20 (вес 15 из 48, 31 %),
+  EN: 10/24 (вес 23 из 51, 45 %). Пропущено 7: 5 плановых передач, 2 `ref_fail` (`login-esia`, `shop-avito` — не прошёл и Chrome). Нестабильных 3
+  (`video-rutube`, `shop-avito`, `shop-amazon`). Прошли: оплата 2/3, госуслуги 2/4, вход 4/10, новости 3/3, документы 2/3, почта 1/4, поиск 1/2, банк 1/5, видео 0/4,
+  магазины 0/2, соцсети 0/2, файл 0/1, карты 0/1.
+- **Распознанные экраны 27 провалов:** `content` 17, `hang` 4, `cert_error` 3, `blank` 2, `wall` 1 — у каждого провала есть класс; кадр
+  `.tmp/compat-scenarios/…/<id>.png` у всех, кроме `hang` (окно не отвечает). Рядом с классом раннер пишет адрес, заголовок и начало текста.
+- **Банки — не дефект раннера и не «белая страница»:** Сбер, ВТБ, Альфа — `cert_error` (`untrusted certificate chain: UnknownIssuer`): цепочка НУЦ принимается
+  только после согласия хоста (COMPAT-TRUST-NUC, кнопка на экране ошибки, согласие в `settings.db`), раннер согласия не даёт. Т-Банк и ФНС (`lkfl2.nalog.ru`) —
+  `blank`, текста нет.
+- **Зависания (`hang`, 4):** `gov-mos-ru` — «engine thread busy … running task from `app/about_to_wait.rs:287` for 34.4 s» (кадр до зависания показывает полностью
+  отрисованную страницу mos.ru); `video-rutube`, `docs-pdf-arxiv`, `shop-amazon` — команда MCP не вернулась за таймаут. Родственник BUG-935 (тяжёлые страницы, путь relayout/rAF) — к P1.
+- **Новый дефект:** BUG-1660 — прямой адрес `.mp4`/`.webm` открывается как текст из байтов контейнера (`video-mp4-h264`, `video-webm-vp8`).
+- **Требует разбора P3 (не заведено — механизм не проверен):** у `login-microsoft` и `mail-outlook` «видимый текст» начинается с исходника скрипта
+  (`!function(e,r){for(var t in r)…`); у `search-google` и `mail-mailru` сайт отдаёт ветку «включите JavaScript» (`google.com/httpservice/retry/enablejs`,
+  `id.vk.ru` «JavaScript disabled»); `shop-ozon` и `mail-proton` — «нет соединения» при рабочем Chrome; у `login-ok-ru` → `login-sber-id` и `video-youtube` → адрес
+  предыдущего сценария остаётся в окне после таймаута навигации; `login-google`, `mail-proton` — `Element click intercepted` (оверлей над полем).
+- **Правки раннера по ходу прогона** (все — исходы, которые валили прогон traceback'ом): ошибка JS в оракуле (`querySelector(…).value` на странице без поля) — теперь промах
+  оракула, а не падение; «поток движка занят» (MCP не получил ответ за 5 с) — `hang`, в том числе при снятии кадра/состояния после провала шага; класс экрана `cert_error`;
+  ключи `--lang`, `--lumen-arg`. Тесты — `scripts/test_compat_scenarios.py` (41).
+- **Не сделано:** шаги смены вкладки для попапа OAuth и окна 3DS (`list_tabs`/`switch_tab`/`close_tab` в MCP) — ROADMAP `COMPAT-CORPUS-3-TABS`; повторная калибровка `manual`
+  с другой точки сети. Ночной прогон по расписанию не заведён: нужен прокси-аргумент в расписании (`--lang`-пара выше).
+- **Диск D дважды заполнялся до 100 % во время прогона** (чужие сборки в слотах): `OSError 28` оборвал два запуска, оба продолжены `--resume`; записи, сделанные
+  в момент нехватки места, удалены и выполнены заново (банки, ФНС, Telegram).
+
 ## 2026-10-15 — COMPAT-AB-IDENTITY — A/B 2×2 идентичности на корпусе из 535 сайтов — Windows 10, маршрут home-direct
 
 Не прогон `perf_audit.py`: свод [runs/2026-10-15-ab-matrix.md](runs/2026-10-15-ab-matrix.md) (сырые записи — `2026-10-15-ab-chrome.json`, `2026-10-15-ab-lumen.json`, матрица заголовков — `2026-10-15-ab-header-matrix.md`). Корпус [corpus-ab.txt](corpus-ab.txt) (500 главных страниц corpus-c + стенд G + BUG-1113 + corpus.txt), измерено 533 (2 мёртвых), must-work 100. Плечо Chrome — Chrome for Testing 153 (JS исполняется), плечо Lumen — `--dump-source` (HTTP без JS; живое окно не отдаёт кадр, BUG-1629).

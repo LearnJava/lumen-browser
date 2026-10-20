@@ -1,6 +1,6 @@
 # BUG-1423 — `overflow: hidden`/`clip` на `<html>` или `<body>` скрывает абсолютно позиционированных потомков
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout/paint (распространение `overflow` корня на viewport)
 
@@ -36,3 +36,11 @@ WPT-RUN-14 срез 19: 10 reftest `css-values` с шаблоном выше (к
 ## Как проверить
 
 Страница из таблицы; `css/css-values/calc-in-max.html`, `calc-parenthesis-stack.html`, `vh-interpolate-px.html`.
+
+## Исправление
+
+Исправлено до взятия задачи: срез 90 css-gaps (`167de3c718`) — `ComputedStyle::overflow_to_viewport` (`cascade.rs::overflow_goes_to_viewport`,
+CSS Overflow L3 §3.5) и `style_overflow_clips` (`paint/src/display_list/print.rs`): `hidden`/`clip` корня и `body` при `html{overflow:visible}`
+уходят во viewport и не клипуют бокс. Тесты — `paint/src/display_list/tests/viewport_overflow.rs`.
+Проверено 2026-10-20 на `dev-release` (`--screenshot`, 1024×720): `html{overflow:hidden}`, `html{overflow:clip}`, `body{overflow:hidden}` и
+потомок прямо в `html` — по 10 000 зелёных px; шаблон WPT (`html{background:red;overflow:hidden}` + `#outer` 100%×100%) — весь viewport зелёный, 0 красных.

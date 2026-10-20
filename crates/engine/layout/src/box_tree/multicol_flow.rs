@@ -147,6 +147,17 @@ pub(super) fn is_fragmentable(b: &LayoutBox, depth: usize) -> bool {
 /// [`is_fragmentable`]; with `oof` an absolutely positioned `b` qualifies as well (an extracted
 /// out-of-flow box is cut across the columns by [`cut_oof`]).
 fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
+    b.style.column_count.is_none() && b.style.column_width.is_none() && fragmentable_any(b, depth, oof)
+}
+
+/// A multicol container that [`multicol_nested`](super::multicol_nested) can cut across the
+/// columns of its parent: a plain block-level box in every respect but its own columns.
+pub(super) fn is_cuttable_multicol(b: &LayoutBox) -> bool {
+    (b.style.column_count.is_some() || b.style.column_width.is_some()) && fragmentable_any(b, 0, false)
+}
+
+/// [`fragmentable`] without the multicol condition.
+fn fragmentable_any(b: &LayoutBox, depth: usize, oof: bool) -> bool {
     let s = &b.style;
     let barred = ContainFlags::SIZE.0 | ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0;
     depth < MAX_DEPTH
@@ -173,8 +184,6 @@ fn fragmentable(b: &LayoutBox, depth: usize, oof: bool) -> bool {
         && matches!(s.overflow_y, Overflow::Visible | Overflow::Clip)
         && s.contain.0 & barred == 0
         && s.writing_mode == crate::style::WritingMode::HorizontalTb
-        && s.column_count.is_none()
-        && s.column_width.is_none()
         && s.transform.is_empty()
         && s.filter.is_empty()
         && s.clip_path.is_none()
@@ -624,6 +633,30 @@ impl Model {
     }
 }
 
+impl Model {
+    /// [`Model::balanced`] for the last columns of a stack whose first `head_cols` columns keep the
+    /// heights `head` gives them: the smallest height of the remaining columns (at most `cap`) at
+    /// which the stack still breaks without breaking a rule into no more than `total_cols`
+    /// columns. `cap` when nothing smaller fits.
+    pub(super) fn balanced_tail(&self, head: &dyn Fn(usize) -> f32, head_cols: usize, total_cols: usize, cap: f32) -> f32 {
+        let cap = cap.max(1.0);
+        let ok = |h: f32| self.paginate(&|k| if k < head_cols { head(k) } else { h }, true).is_some_and(|w| w.len() <= total_cols);
+        if !ok(cap.ceil()) {
+            return cap;
+        }
+        let (mut lo, mut hi) = (1u32, cap.ceil() as u32);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if ok(mid as f32) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        (hi as f32).min(cap)
+    }
+}
+
 /// A column window of the stack with the table sections repeated in it ([`Model::paginate_ex`]).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Pg {
@@ -662,7 +695,7 @@ impl Window {
 }
 
 /// A copy of `b` without its children.
-fn shell(b: &LayoutBox) -> LayoutBox {
+pub(super) fn shell(b: &LayoutBox) -> LayoutBox {
     LayoutBox {
         node: b.node,
         rect: b.rect,
@@ -718,7 +751,7 @@ fn grid_fragment_tracks(d: &LayoutBox, track_top: f32, content: f32, from: f32, 
 }
 
 /// `box-decoration-break: slice` on the edges a break cut.
-fn slice_edges(frag: &mut LayoutBox, top: bool, bottom: bool) {
+pub(super) fn slice_edges(frag: &mut LayoutBox, top: bool, bottom: bool) {
     if top {
         trim_edge(frag, true);
     }

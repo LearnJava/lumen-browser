@@ -481,6 +481,21 @@ pub(crate) fn with_shared_hsts(
     }
 }
 
+/// One open tab of the live window, as `list_tabs` reports it
+/// (COMPAT-CORPUS-3-TABS).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabInfo {
+    /// Stable tab id, never reused within a session — the argument of
+    /// `switch_tab` / `close_tab` (not the strip position, which shifts).
+    pub id: usize,
+    /// Address of the tab's document (`about:blank` while nothing is loaded).
+    pub url: String,
+    /// Tab title as shown in the strip.
+    pub title: String,
+    /// Whether this tab is the one the next command acts on.
+    pub active: bool,
+}
+
 /// Command for automation API — sent to shell via IPC channel (SDC-1a).
 ///
 /// This enum defines the contract between `lumen-driver` and `lumen-shell`.
@@ -492,6 +507,15 @@ pub enum AutomationCommand {
     Navigate(String),
     /// Open a new tab (it becomes active) and navigate it to a URL.
     NewTab(String),
+    /// List the tabs of the live window (COMPAT-CORPUS-3-TABS). Reply:
+    /// [`AutomationReply::Tabs`].
+    ListTabs,
+    /// Make the tab with this stable id the active one and the target of
+    /// every following command (COMPAT-CORPUS-3-TABS). Reply: `Ack`.
+    SwitchTab(usize),
+    /// Close the tab with this stable id (COMPAT-CORPUS-3-TABS). The last
+    /// tab is never closed: it would exit the browser. Reply: `Ack`.
+    CloseTab(usize),
     /// Click at element center (resolved from Target).
     Click(Target),
     /// Type text into an input element.
@@ -624,4 +648,6 @@ pub enum AutomationReply {
     InterceptResolved(bool),
     /// `PollIntercepts` result: requests newly paused since the last poll.
     Intercepts(Vec<InterceptedRequest>),
+    /// `ListTabs` result: every open tab, in strip order (COMPAT-CORPUS-3-TABS).
+    Tabs(Vec<TabInfo>),
 }

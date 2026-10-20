@@ -653,6 +653,6 @@ fn finish(
         .map(|(i, _)| (i, content_x0, content_y0))
         .collect();
     let is_positioned = super::multicol_abspos::establishes_abs_cb(s);
-    super::layout_dispatch::finish_after_match(b, s, em, cb, is_positioned, pcb, &abs, measurer, viewport, hp);
+    super::layout_dispatch::finish_after_match(b, s, em, cb, Some(cb), is_positioned, pcb, &abs, measurer, viewport, hp);
     DispatchOutcome::Done
 }

@@ -501,3 +501,6 @@ mod v8_bug1158_raw_text_inner_html;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug689_attr_nodes;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1424_alpha_opacity_serialization;

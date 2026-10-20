@@ -127,6 +127,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "border-top-width",
     "border-width",
     "bottom",
+    "box-decoration-break",
     "box-shadow",
     "box-sizing",
     // WHATWG Compat §2.1 — legacy flexbox: the orient/pack/align/direction group feeds the

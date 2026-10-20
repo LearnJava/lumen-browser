@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>IdP sign-in stand</title>
+<style>body{font-family:sans-serif;margin:24px}input,button{font-size:16px;padding:8px;margin:6px 0;display:block}</style></head>
+<body>
+<h1>Choose an account</h1>
+<input id="user" placeholder="Email or phone">
+<button id="allow" type="button">Allow</button>
+<p id="done" hidden>Done. You can close this window.</p>
+<script>
+// Окно поставщика: после «Allow» отдаёт результат странице-открывателю. Само окно не закрывается —
+// его закрывает шаг `close_tab` раннера.
+document.getElementById('allow').addEventListener('click', function () {
+  if (window.opener) {
+    window.opener.postMessage({type: 'idp-done', user: document.getElementById('user').value}, '*');
+    document.getElementById('done').hidden = false;
+  }
+});
+</script>
+</body></html>

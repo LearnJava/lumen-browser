@@ -294,7 +294,7 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     // `position: relative` was applied by the child's own layout; re-placing the
     // child on the block axis must carry the offset, the cursor does not (§9.4.3).
     let (rel_x, rel_y) = super::layout_dispatch::relative_offset(
-        &child.style, cem, content_block_avail, viewport,
+        &child.style, cem, content_block_avail, Some(content_block_avail), viewport,
     );
     let placed_x = rel_x + if is_rtl {
         // vertical-rl: rightmost cursor minus consumed-so-far minus this child's width.
@@ -383,7 +383,7 @@ fn finish_frame(
     let cb = frame.init.content_block_avail + frame.init.frame_horiz;
     let is_positioned = super::multicol_abspos::establishes_abs_cb(&style);
     super::layout_dispatch::finish_after_match(
-        &mut frame.b, &style, style.font_size, cb, is_positioned, frame.init.pcb,
+        &mut frame.b, &style, style.font_size, cb, Some(cb), is_positioned, frame.init.pcb,
         &frame.abs_deferred, measurer, viewport, hp,
     );
 }
