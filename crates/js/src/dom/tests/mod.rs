@@ -263,6 +263,8 @@ mod v8_webworker;
 
 #[cfg(feature = "v8-backend")]
 mod v8_cssom_stylesheets;
+#[cfg(feature = "v8-backend")]
+mod v8_cssom10_tree;
 
 #[cfg(feature = "v8-backend")]
 mod v8_cssom5_constructed_stylesheets;

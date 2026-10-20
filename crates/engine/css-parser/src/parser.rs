@@ -38,6 +38,9 @@
 #![allow(missing_docs)]
 
 mod at_rules;
+mod canonical_selectors;
+mod cssom_api;
+mod nesting_amp;
 mod cssom_op;
 mod declarations;
 mod layer_state;
@@ -54,6 +57,7 @@ pub use declarations::*;
 pub use media::*;
 pub use mixins::*;
 pub use selectors::*;
+pub(crate) use canonical_selectors::*;
 pub use supports::*;
 use layer_state::LayerState;
 use nesting_expand::{expand_nesting, substitute_nesting_selector};
@@ -286,6 +290,10 @@ pub struct Stylesheet {
     /// `Arc<str>` so [`Self::clone`] stays cheap: the same-tick CSSOM flush
     /// clones the whole cascade sheet on every mutated read.
     source: Option<std::sync::Arc<str>>,
+    /// CSSOM-дерево листа (CSSOM-10) — единственный авторитет для правок
+    /// `insertRule`/`deleteRule`/сеттеров; строится лениво из [`Self::source`].
+    /// См. `parser/cssom_api.rs`.
+    cssom: crate::cssom_tree::CssomCell,
 }
 
 /// [`Stylesheet::top_level_spans`] entry for a rule that came from
@@ -370,6 +378,7 @@ impl Default for Stylesheet {
             top_level_order: Vec::new(),
             top_level_spans: Vec::new(),
             source: None,
+            cssom: Default::default(),
         }
     }
 }
@@ -407,6 +416,7 @@ impl Clone for Stylesheet {
             top_level_order: self.top_level_order.clone(),
             top_level_spans: self.top_level_spans.clone(),
             source: self.source.clone(),
+            cssom: self.cssom.clone(),
         }
     }
 }
@@ -556,6 +566,7 @@ impl Stylesheet {
             top_level_order,
             top_level_spans: _,
             source: _,
+            cssom: _,
         } = other;
         self.rules.extend(rules);
         self.properties.extend(properties);
@@ -591,6 +602,8 @@ impl Stylesheet {
         self.top_level_spans
             .extend(std::iter::repeat_n(SYNTHETIC_SPAN, top_level_order.len()));
         self.top_level_order.extend(top_level_order);
+        // Дерево описывает только `source`, а лист вырос — оно устарело.
+        self.cssom.take();
         self.mark_mutated();
     }
 
@@ -984,6 +997,8 @@ impl Stylesheet {
                 CssomOp::InsertRuleBodyApply { rule_index, index, text } => {
                     self.insert_rule_body_apply(base + rule_index, *index, text).map(|_| ())
                 }
+                // Применяется заменой текста листа (`patched_cascade`), не повтором.
+                CssomOp::TreeEdit => Ok(()),
             };
             all_ok &= outcome.is_ok();
         }
@@ -1365,6 +1380,7 @@ impl<'a> Parser<'a> {
             // Filled by `parse` — `parse_stylesheet` is also reached from
             // contexts that have no standalone source string to attribute.
             source: None,
+            cssom: Default::default(),
         }
     }
 
@@ -1471,6 +1487,14 @@ impl<'a> Parser<'a> {
                         let ats = self.parse_nested_at_rule(parent_sels);
                         at_rules.extend(ats);
                     }
+                }
+                // CSS Nesting L1 §4 (relaxed): `div { }` — an ident-led prelude that
+                // reaches a `{` before any `;`/`}` is a nested rule, not a declaration
+                // (custom properties keep `--x: { … }`).
+                Some(c) if (c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()) && self.ident_led_block_ahead() => {
+                    let (r, a) = self.parse_implicit_nested_rule(parent_sels, None);
+                    nested.extend(r);
+                    at_rules.extend(a);
                 }
                 _ => match self.parse_declaration() {
                     Some(d) => decls.push(d),
@@ -1610,6 +1634,9 @@ impl<'a> Parser<'a> {
         parent_sels: &[ComplexSelector],
         combinator: Option<Combinator>,
     ) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
+        if let Some(parsed) = self.parse_nested_rule_with_inner_amp(parent_sels, combinator) {
+            return parsed;
+        }
         let nested_sels = self.parse_selector_list();
         if nested_sels.is_empty() {
             self.recover_to_block_end();
@@ -1966,6 +1993,11 @@ impl<'a> Parser<'a> {
     fn parse_ident(&mut self) -> Option<String> {
         let first = self.peek()?;
         if !is_ident_start(first) && !self.at_escape_start() {
+            return None;
+        }
+        // CSS Syntax L3 §4.3.9: a lone `-` (or `-` + digit) does not start an ident.
+        let escape_after_dash = self.peek_at(1) == Some('\\') && !matches!(self.peek_at(2), None | Some('\n'));
+        if first == '-' && !matches!(self.peek_at(1), Some(c) if is_ident_start(c)) && !escape_after_dash {
             return None;
         }
         let mut s = String::new();

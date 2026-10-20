@@ -18,6 +18,7 @@
 //! получила приставку `scope, ctx, store,`, тела ветвей не редактировались.
 
 mod constructed_stylesheets;
+mod cssom_tree_natives;
 mod dom_core;
 mod dom_editing;
 pub(super) mod net;
@@ -26,6 +27,7 @@ mod storage;
 mod stylesheets;
 
 pub(super) use constructed_stylesheets::*;
+pub(super) use cssom_tree_natives::*;
 pub(super) use dom_core::*;
 pub(super) use dom_editing::*;
 pub(super) use net::*;

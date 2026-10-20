@@ -112,16 +112,19 @@ fn mixin_rule_is_not_a_css_style_rule_and_reflects_its_name() {
 }
 
 #[test]
-fn cssom_rules_includes_top_level_mixin_but_not_layered_one() {
-    // A `@mixin` declared inside `@layer` gets no `cssRules` entry of its
-    // own (an `@layer` block itself has none either) — only the two
-    // top-level ones do.
+fn cssom_rules_includes_top_level_mixin_and_the_layer_block() {
+    // CSSOM-10: an `@layer` block now has its own `cssRules` entry
+    // (`CSSLayerBlockRule`); a `@mixin` inside it is not a top-level one.
     let rt = rt_with_sheet(
         "@mixin --a() {} @layer L { @mixin --b() {} } @mixin --c() {} p {}",
     );
-    assert_eq!(rt.eval("document.styleSheets[0].cssRules.length").unwrap(), JsValue::Number(3.0));
+    assert_eq!(rt.eval("document.styleSheets[0].cssRules.length").unwrap(), JsValue::Number(4.0));
     assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[0].name"), "--a");
-    assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[1].name"), "--c");
+    assert_eq!(
+        eval_string(&rt, "document.styleSheets[0].cssRules[1].constructor.name"),
+        "CSSLayerBlockRule",
+    );
+    assert_eq!(eval_string(&rt, "document.styleSheets[0].cssRules[2].name"), "--c");
 }
 
 // --- BUG-518 срез 7: `CSSStyleSheet.insertRule`/`.deleteRule` on an owned
