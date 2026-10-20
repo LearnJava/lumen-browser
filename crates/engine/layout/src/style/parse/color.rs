@@ -23,6 +23,7 @@ use crate::style::{Color, ColorFloat, CssColor, SystemColor, split_top_level_com
 /// каскада (`currentcolor`, системные цвета) здесь НЕ резолвятся — за них
 /// отвечают [`parse_css_color_legacy`] и [`system_color`].
 pub fn parse_color(s: &str) -> Option<Color> {
+    let s = strip_comments(s);
     let s = s.trim();
     if let Some(c) = named_color(&s.to_ascii_lowercase()) {
         return Some(c);
@@ -57,6 +58,7 @@ pub fn parse_color(s: &str) -> Option<Color> {
 /// their input has to stay in functional form — Canvas 2D
 /// `fillStyle`/`strokeStyle`/`shadowColor` (BUG-930).
 pub fn parse_color_function(s: &str) -> Option<ColorFloat> {
+    let s = strip_comments(s);
     let s = s.trim();
     if let Some(wide) = parse_css_color_fn(s) {
         return Some(wide);
@@ -92,6 +94,7 @@ pub fn parse_color_function(s: &str) -> Option<ColorFloat> {
 /// assignment instead of storing an unparsed string — the gap measured in
 /// WPT `css/CSS2/syntax/colors-007.html` (BUG-465).
 pub fn canonical_specified_color(s: &str) -> Option<String> {
+    let s = strip_comments(s);
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return None;
@@ -157,6 +160,30 @@ pub(in crate::style) fn parse_color_legacy(s: &str, is_quirks: bool) -> Option<C
     parse_color(&with_hash)
 }
 
+/// Заменяет `/* … */` пробелом: комментарий между токенами цветовой функции
+/// (`hsl(120/* c */75%/* c */50%)`) — разделитель, а не часть значения. Без
+/// комментариев ничего не копирует. Незакрытый комментарий тянется до конца.
+pub(super) fn strip_comments(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains("/*") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("/*") {
+        out.push_str(&rest[..i]);
+        out.push(' ');
+        match rest[i + 2..].find("*/") {
+            Some(j) => rest = &rest[i + 2 + j + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
 /// Парсит `<color>` + `currentcolor` keyword в `CssColor`.
 ///
 /// `currentcolor` — специальное CSS keyword, означающее «использовать
@@ -164,6 +191,7 @@ pub(in crate::style) fn parse_color_legacy(s: &str, is_quirks: bool) -> Option<C
 /// `Some(CssColor::CurrentColor)` для этого случая;
 /// `Some(CssColor::Rgba(...))` для обычных цветов; `None` для невалидных.
 pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
+    let s = strip_comments(s);
     let s = s.trim();
     if s.eq_ignore_ascii_case("currentcolor") {
         return Some(CssColor::CurrentColor);
@@ -608,6 +636,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
     }
+    // CSS Color 4 §4.4: `none` существует только в современном (беззапятом) синтаксисе.
+    if body.contains(',') && parts.iter().any(|p| p == "none") {
+        return None;
+    }
     let alpha = if parts.len() == 4 {
         parse_alpha_component(&parts[3])?
     } else {
@@ -630,8 +662,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
         }
         ColorFn::Hsl => {
             let h = parse_hue_component(&parts[0])?;
-            let s = parse_percent_component(&parts[1])?;
-            let l = parse_percent_component(&parts[2])?;
+            // CSS Color 4 §8: в современном синтаксисе s/l бывают и `<number>` (100 = 100%).
+            let modern = !body.contains(',');
+            let s = parse_percent_component(&parts[1], modern)?;
+            let l = parse_percent_component(&parts[2], modern)?;
             let (r, g, b) = hsl_to_rgb(h, s, l);
             Some(Color { r, g, b, a: alpha })
         }
@@ -684,6 +718,10 @@ fn parse_hwb_body(body: &str) -> Option<Color> {
     if body.trim_start().starts_with("from ") {
         return None;
     }
+    // CSS Color 4 §7: у `hwb()` нет legacy-синтаксиса с запятыми.
+    if body.contains(',') {
+        return None;
+    }
     let parts = split_color_args(body);
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
@@ -694,8 +732,8 @@ fn parse_hwb_body(body: &str) -> Option<Color> {
         255
     };
     let h = parse_hue_component(&parts[0])?;
-    let w = parse_percent_component(&parts[1])?;
-    let bk = parse_percent_component(&parts[2])?;
+    let w = parse_percent_component(&parts[1], true)?;
+    let bk = parse_percent_component(&parts[2], true)?;
     if w + bk >= 1.0 {
         let gray = clamp_byte(w / (w + bk) * 255.0);
         return Some(Color { r: gray, g: gray, b: gray, a: alpha });
@@ -1037,6 +1075,9 @@ fn eval_color_primary(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]
 /// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
 fn parse_oklch_lightness(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0).clamp(0.0, 1.0));
     }
@@ -1046,6 +1087,9 @@ fn parse_oklch_lightness(s: &str) -> Option<f32> {
 /// Парсит chroma для oklch: число (0..~0.4 типично) или процент (100% = 0.4).
 fn parse_oklch_chroma(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.3: 100% = 0.4.
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 0.4).max(0.0));
@@ -1056,6 +1100,9 @@ fn parse_oklch_chroma(s: &str) -> Option<f32> {
 /// Парсит a/b для oklab: число (~±0.4) или процент (100% = 0.4).
 fn parse_oklab_ab(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.4: 100% = 0.4 для a/b.
         return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 0.4);
@@ -1066,6 +1113,9 @@ fn parse_oklab_ab(s: &str) -> Option<f32> {
 /// Парсит lightness для CIE Lab/LCH: число 0..100 или процент 0..100%.
 fn parse_lab_lightness(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         return pct.trim().parse::<f32>().ok().map(|p| p.clamp(0.0, 100.0));
     }
@@ -1075,6 +1125,9 @@ fn parse_lab_lightness(s: &str) -> Option<f32> {
 /// Парсит a/b для CIE Lab: число (~±125) или процент (100% = 125).
 fn parse_lab_ab(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.5: 100% = 125.
         return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 125.0);
@@ -1085,6 +1138,9 @@ fn parse_lab_ab(s: &str) -> Option<f32> {
 /// Парсит chroma для LCH: число (≥0, ~0..230) или процент (100% = 150).
 fn parse_lch_chroma(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.5: 100% = 150 для LCH.
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 150.0).max(0.0));
@@ -1398,18 +1454,24 @@ fn split_color_args(body: &str) -> Vec<String> {
     let tokens: Vec<&str> = normalized.split_whitespace().collect();
     // Ищем `/` — разделитель alpha.
     if let Some(slash) = tokens.iter().position(|&t| t == "/") {
-        let mut head: Vec<String> = tokens[..slash].iter().map(|t| t.to_string()).collect();
-        if let Some(alpha) = tokens.get(slash + 1) {
-            head.push((*alpha).to_string());
+        // Ровно три канала до `/` и ровно один токен alpha после него.
+        if slash != 3 || tokens.len() != 5 {
+            return Vec::new();
         }
-        head
-    } else {
+        tokens.iter().filter(|&&t| t != "/").map(|t| t.to_string()).collect()
+    } else if tokens.len() == 3 {
+        // Alpha без `/` в современном синтаксисе невалидна (`hsl(120 75% 50% 0.5)`).
         tokens.iter().map(|t| t.to_string()).collect()
+    } else {
+        Vec::new()
     }
 }
 
 fn parse_rgb_component(s: &str) -> Option<u8> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         let p = pct.trim().parse::<f32>().ok()?;
         return Some(clamp_byte((p / 100.0) * 255.0));
@@ -1420,6 +1482,9 @@ fn parse_rgb_component(s: &str) -> Option<u8> {
 
 fn parse_alpha_component(s: &str) -> Option<u8> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         let p = pct.trim().parse::<f32>().ok()?;
         return Some(clamp_byte((p / 100.0) * 255.0));
@@ -1438,6 +1503,9 @@ fn parse_alpha_component(s: &str) -> Option<u8> {
 /// `grad` будет ошибочно ловиться как `rad`.
 fn parse_hue_component(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(num) = s.strip_suffix("turn") {
         return num.trim().parse::<f32>().ok().map(|v| v * 360.0);
     }
@@ -1451,10 +1519,18 @@ fn parse_hue_component(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok()
 }
 
-fn parse_percent_component(s: &str) -> Option<f32> {
+/// Процентный канал hsl/hwb в долях `0..=1`. `bare_number` — разрешить голое
+/// число (`100` = `100%`, только в современном синтаксисе).
+fn parse_percent_component(s: &str, bare_number: bool) -> Option<f32> {
     let s = s.trim();
-    let pct = s.strip_suffix('%')?;
-    let p = pct.trim().parse::<f32>().ok()?;
+    if s == "none" {
+        return Some(0.0);
+    }
+    let p = match s.strip_suffix('%') {
+        Some(pct) => pct.trim().parse::<f32>().ok()?,
+        None if bare_number => s.parse::<f32>().ok()?,
+        None => return None,
+    };
     Some((p / 100.0).clamp(0.0, 1.0))
 }
 

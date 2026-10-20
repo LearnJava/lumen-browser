@@ -1542,8 +1542,8 @@ fn hwb_pure_hue_and_gray() {
     // Относительная форма пока не поддержана — и отвергается явно, а не
     // считается неверно.
     assert_eq!(parse_color("hwb(from red h w b)"), None);
-    // Компоненты w/b — только проценты.
-    assert_eq!(parse_color("hwb(120 0 0)"), None);
+    // Компоненты w/b — проценты или числа (CSS Color 4 §7; WPT color-valid-hwb: `hwb(120 30 50)`).
+    assert_eq!(parse_color("hwb(120 0 0)"), parse_color("hwb(120 0% 0%)"));
 }
 
 /// `color(<space> …)` раньше разбирался только через `CssColor::Wide`, то есть
@@ -1634,4 +1634,100 @@ fn legacy_rgb_rejects_mixed_percent_and_number() {
     assert_eq!(parse_color("rgb(100%, 0, 0)"), None);
     assert_eq!(parse_color("rgb(255, 0%, 0)"), None);
     assert_eq!(parse_color("rgb(100%, 0%, 0%)"), Some(rgba(255, 0, 0, 255)));
+}
+
+#[test]
+fn color_function_comments_are_token_separators() {
+    // BUG-1426: комментарий между токенами не должен отбрасывать всю функцию.
+    let green = Some(rgba(0, 128, 0, 255));
+    assert_eq!(parse_color("hsl(120/* c */100%/* c */25.1%)"), parse_color("hsl(120 100% 25.1%)"));
+    assert!(parse_color("hsl(120/* c */75%/* c */50%)").is_some());
+    assert!(parse_color("hsl(120/* c */75%/* c */50%/1.0)").is_some());
+    assert!(parse_color("hsl(120,/* c */75%,/* c */50%,1.0)").is_some());
+    assert_eq!(parse_color("rgb(0 /*c*/ 128 0)"), green);
+    assert_eq!(parse_color("rgb(0/*c*/,/*c*/128,/*c*/0)"), green);
+    assert!(canonical_specified_color("rgb(0 /*c*/ 128 0)").is_some());
+    assert_eq!(parse_color("rgb(0 /* не закрыт 128 0)"), None);
+}
+
+#[test]
+fn color_none_keyword_is_modern_syntax_only() {
+    // BUG-1426: `none` = отсутствующий канал (в отрисовке 0), но только без запятых.
+    assert_eq!(parse_color("rgb(none 128 0)"), Some(rgba(0, 128, 0, 255)));
+    assert_eq!(parse_color("rgb(0 128 0 / none)"), Some(rgba(0, 128, 0, 0)));
+    assert_eq!(parse_color("rgb(none none none / none)"), Some(rgba(0, 0, 0, 0)));
+    assert!(parse_color("hsl(none 100% 25%)").is_some());
+    assert!(parse_color("hsl(120 none none)").is_some());
+    assert!(parse_color("hwb(none 0% 50%)").is_some());
+    assert!(parse_color("hwb(120 none none / none)").is_some());
+    assert!(parse_color("oklch(none none none)").is_some());
+    assert!(parse_color("lab(none none none)").is_some());
+    assert!(parse_color("color-mix(in hsl, hsl(none 50% 50%), blue)").is_some());
+    // Legacy-синтаксис `none` не знает.
+    assert_eq!(parse_color("rgb(none, none, none)"), None);
+    assert_eq!(parse_color("rgba(none, none, none, none)"), None);
+    assert_eq!(parse_color("rgb(128, 0, none)"), None);
+    assert_eq!(parse_color("rgb(255, 255, 255, none)"), None);
+    assert_eq!(parse_color("hsl(120, 75%, none)"), None);
+}
+
+#[test]
+fn color_function_alpha_needs_slash_in_modern_syntax() {
+    // BUG-1426: `hsl(120 75% 50% 0.5)` и `rgb(0 0 0 0.5)` невалидны; alpha — через `/` или запятую.
+    assert_eq!(parse_color("hsl(120 75% 50% 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 128 0 0.5)"), None);
+    assert_eq!(parse_color("hwb(120 0% 50% 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 0 / 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 0 0 / 0.5 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 0 0 0 / 0.5)"), None);
+    assert!(parse_color("hsl(120 75% 50% / 0.5)").is_some());
+    assert!(parse_color("hsl(120, 75%, 50%, 0.5)").is_some());
+    assert_eq!(parse_color("rgb(0, 128, 0, 0.5)"), Some(rgba(0, 128, 0, 128)));
+    // Контроль смеси чисел и процентов.
+    assert_eq!(parse_color("rgb(255, 0, 0%)"), None);
+    assert_eq!(parse_color("rgb(100%, 1, 0)"), None);
+    assert_eq!(parse_color("rgb(0, 0%, 0%)"), None);
+    assert_eq!(parse_color("rgb(254, 255%, 0)"), None);
+    assert!(parse_color("rgb(100% 1 0)").is_some());
+    // hwb не имеет legacy-синтаксиса.
+    assert_eq!(parse_color("hwb(120, 0%, 0%)"), None);
+}
+
+#[test]
+fn hsl_hwb_modern_syntax_accepts_bare_numbers() {
+    // BUG-1426: CSS Color 4 §8 — s/l/w/b в современном синтаксисе бывают и `<number>`.
+    assert_eq!(parse_color("hsl(120 30 50)"), parse_color("hsl(120 30% 50%)"));
+    assert_eq!(parse_color("hsl(120 30% 50)"), parse_color("hsl(120 30% 50%)"));
+    assert_eq!(parse_color("hwb(120 30 50)"), parse_color("hwb(120 30% 50%)"));
+    // В запятой-синтаксисе — только проценты.
+    assert_eq!(parse_color("hsl(120, 30, 50)"), None);
+}
+
+#[test]
+fn cascade_accepts_color_functions_with_comments_and_none() {
+    // BUG-1426: те же формы доходят до computed style через настоящий каскад.
+    for (value, want) in [
+        ("hsl(120/* c */100%/* c */25.1%)", rgba(0, 128, 0, 255)),
+        ("rgb(0 /*c*/ 128 0)", rgba(0, 128, 0, 255)),
+        ("rgb(none 128 0)", rgba(0, 128, 0, 255)),
+    ] {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(&format!("div {{ background-color: red; background-color: {value}; }}"));
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let Some(CssColor::Rgba(got)) = style.background_color else { panic!("{value}: {:?}", style.background_color) };
+        assert!(
+            (i32::from(got.r) - i32::from(want.r)).abs() <= 1
+                && (i32::from(got.g) - i32::from(want.g)).abs() <= 1
+                && (i32::from(got.b) - i32::from(want.b)).abs() <= 1,
+            "{value}: {got:?}"
+        );
+    }
+    // Невалидная декларация отбрасывается, прежняя остаётся.
+    let doc = lumen_html_parser::parse("<div></div>");
+    let sheet = lumen_css_parser::parse("div { background-color: red; background-color: rgb(none, 128, 0); }");
+    let div = doc.get(doc.body().unwrap()).children[0];
+    let style = compute_style(&doc, div, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+    assert_eq!(style.background_color, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
 }
