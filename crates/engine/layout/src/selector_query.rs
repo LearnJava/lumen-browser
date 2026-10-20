@@ -685,6 +685,22 @@ fn absolute_length_css(l: &Length, font_size: f32) -> String {
     }
 }
 
+/// Computed-значение `min-/max-width|height` (CSS Sizing L3 §4): `<length-percentage [0,∞]>` с
+/// `em`/`calc()` без процентов сворачивается в px по `font_size` (отрицательная сумма — `0px`),
+/// `fit-content(<lp>)` сворачивает свой аргумент; ключевые слова и значения с `%` — как есть
+/// (BUG-1391).
+fn sizing_computed_css(l: &Length, font_size: f32) -> String {
+    match l {
+        Length::FitContent(Some(arg)) => format!("fit-content({})", sizing_computed_css(arg, font_size)),
+        Length::Em(v) => px_str((v * font_size).max(0.0)),
+        Length::Calc(node) => match node.resolve(font_size, None, Size::ZERO) {
+            Some(px) => px_str(px.max(0.0)),
+            None => length_to_css(l),
+        },
+        other => length_to_css(other),
+    }
+}
+
 fn text_wrap_mode_css(v: TextWrapMode) -> &'static str {
     match v {
         TextWrapMode::Wrap => "wrap",
@@ -1371,10 +1387,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
-    m.insert("min-width".into(), style.min_width.as_ref().map_or("0px".into(), length_to_css));
-    m.insert("max-width".into(), style.max_width.as_ref().map_or("none".into(), length_to_css));
-    m.insert("min-height".into(), style.min_height.as_ref().map_or("0px".into(), length_to_css));
-    m.insert("max-height".into(), style.max_height.as_ref().map_or("none".into(), length_to_css));
+    let fs = style.font_size;
+    m.insert("min-width".into(), style.min_width.as_ref().map_or("auto".into(), |l| sizing_computed_css(l, fs)));
+    m.insert("max-width".into(), style.max_width.as_ref().map_or("none".into(), |l| sizing_computed_css(l, fs)));
+    m.insert("min-height".into(), style.min_height.as_ref().map_or("auto".into(), |l| sizing_computed_css(l, fs)));
+    m.insert("max-height".into(), style.max_height.as_ref().map_or("none".into(), |l| sizing_computed_css(l, fs)));
 
     m.insert("margin-top".into(), unzoom_length_or_auto_to_css(&style.margin_top, z));
     m.insert("margin-right".into(), unzoom_length_or_auto_to_css(&style.margin_right, z));
@@ -3080,6 +3097,22 @@ mod tests {
         assert_eq!(m.get("contain").map(String::as_str), Some("layout paint"));
         let m = div_computed_map("<div>x</div>", "div { contain: content; }");
         assert_eq!(m.get("contain").map(String::as_str), Some("layout style paint"));
+    }
+
+    #[test]
+    fn computed_map_min_max_size_initial_and_calc() {
+        let m = div_computed_map("<div>x</div>", "div { }");
+        assert_eq!(m.get("min-width").map(String::as_str), Some("auto"));
+        assert_eq!(m.get("min-height").map(String::as_str), Some("auto"));
+        assert_eq!(m.get("max-width").map(String::as_str), Some("none"));
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { font-size: 40px; min-width: calc(10px - 0.5em); max-width: calc(10px + 0.5em);              min-height: fit-content(calc(10px + 0.5em)); max-height: calc(10% + 40px); }",
+        );
+        assert_eq!(m.get("min-width").map(String::as_str), Some("0px"));
+        assert_eq!(m.get("max-width").map(String::as_str), Some("30px"));
+        assert_eq!(m.get("min-height").map(String::as_str), Some("fit-content(30px)"));
+        assert_eq!(m.get("max-height").map(String::as_str), Some("calc(10% + 40px)"));
     }
 
     #[test]

@@ -2770,6 +2770,18 @@ var _LUMEN_SIZING_LENGTH_PROPERTIES = {
     'width': 1, 'height': 1,
 };
 
+// BUG-1391: `min-*` is `auto | <sizing>`, `max-*` is `none | <sizing>`; the value is the
+// `is_max` flag of `_lumen_css_canonical_min_max_size`. `contain-intrinsic-*` is
+// `auto? [none | <length>]` per axis (the `-size` shorthand takes 1–2 axes).
+var _LUMEN_MIN_MAX_SIZE_PROPERTIES = {
+    'min-width': false, 'min-height': false, 'min-inline-size': false, 'min-block-size': false,
+    'max-width': true, 'max-height': true, 'max-inline-size': true, 'max-block-size': true,
+};
+var _LUMEN_CONTAIN_INTRINSIC_PROPERTIES = {
+    'contain-intrinsic-size': 1, 'contain-intrinsic-width': 1, 'contain-intrinsic-height': 1,
+    'contain-intrinsic-inline-size': 1, 'contain-intrinsic-block-size': 1,
+};
+
 // BUG-1315: grid-family properties (plus `flex-grow`/`flex-shrink` and
 // `flow-tolerance`) have no per-value canonical form here, only a grammar:
 // `_lumen_css_canonical_grid` (engine `style::values::grid_cssom`) returns the
@@ -3449,6 +3461,12 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_sizing_length(strVal);
     }
+    if (_LUMEN_MIN_MAX_SIZE_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_min_max_size(strVal, _LUMEN_MIN_MAX_SIZE_PROPERTIES[key]);
+    }
+    if (_LUMEN_CONTAIN_INTRINSIC_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_contain_intrinsic(key, strVal);
+    }
     if (_LUMEN_GRID_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_grid(key, strVal);
     }
@@ -3728,6 +3746,8 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_MIN_MAX_SIZE_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_CONTAIN_INTRINSIC_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_GRID_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SCROLL_OFFSET_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_TEXT_PROPERTIES.hasOwnProperty(key) ||

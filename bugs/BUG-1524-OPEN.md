@@ -27,7 +27,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 24: `css-align/parsing/*` (`align-*`/`justify-*`/`place-*` `-computed`/`-valid`/`-invalid`/`-shorthand`, около 50 id), `default-alignment/parse-*`, `place-items-shorthand-*`, `shorthand-serialization-001`, `content-distribution/parse-*`, `place-content-shorthand-*`, `self-alignment/parse-*`, `place-self-shorthand-*`, `inheritance.html`. Класс тот же, что [BUG-1297](BUG-1297-OPEN.md)/[BUG-1391](BUG-1391-OPEN.md): `element.style` не валидирует и не канонизирует. Пересекается с [BUG-1307](BUG-1307-OPEN.md) (`justify-items` в карте).
+WPT-RUN-14 срез 24: `css-align/parsing/*` (`align-*`/`justify-*`/`place-*` `-computed`/`-valid`/`-invalid`/`-shorthand`, около 50 id), `default-alignment/parse-*`, `place-items-shorthand-*`, `shorthand-serialization-001`, `content-distribution/parse-*`, `place-content-shorthand-*`, `self-alignment/parse-*`, `place-self-shorthand-*`, `inheritance.html`. Класс тот же, что [BUG-1297](BUG-1297-OPEN.md)/[BUG-1391](BUG-1391-FIXED.md): `element.style` не валидирует и не канонизирует. Пересекается с [BUG-1307](BUG-1307-OPEN.md) (`justify-items` в карте).
 
 ## Что делать
 

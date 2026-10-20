@@ -528,6 +528,59 @@ pub fn canonical_specified_sizing_length(s: &str) -> Option<String> {
     Some(crate::selector_query::length_to_css(&len))
 }
 
+/// CSSOM-2 (BUG-1391): `min-width|height` (`auto | <sizing>`) and `max-width|height`
+/// (`none | <sizing>`) — [`canonical_specified_sizing_length`] plus the one keyword each side
+/// owns: `min-*` rejects `none`, `max-*` rejects `auto`.
+pub fn canonical_specified_min_max_size(s: &str, is_max: bool) -> Option<String> {
+    let v = s.trim();
+    if is_max {
+        if v.eq_ignore_ascii_case("none") {
+            return Some("none".to_string());
+        }
+        if v.eq_ignore_ascii_case("auto") {
+            return None;
+        }
+    } else if v.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    canonical_specified_sizing_length(v)
+}
+
+/// CSSOM-2 (BUG-1391): one axis of `contain-intrinsic-size` — `auto? [none | <length [0,∞]>]` —
+/// consumed from the front of `tokens`; returns the canonical text and the unread tail.
+fn contain_intrinsic_axis<'a, 'b>(tokens: &'b [&'a str]) -> Option<(String, &'b [&'a str])> {
+    let (auto, rest) = match tokens.split_first() {
+        Some((first, rest)) if first.eq_ignore_ascii_case("auto") => (true, rest),
+        _ => (false, tokens),
+    };
+    let (value, rest) = rest.split_first()?;
+    let value = if value.eq_ignore_ascii_case("none") {
+        "none".to_string()
+    } else {
+        crate::selector_query::length_to_css(&parse_overflow_clip_margin_length(value)?)
+    };
+    Some((if auto { format!("auto {value}") } else { value }, rest))
+}
+
+/// CSSOM-2 (BUG-1391): validates and canonicalizes a `contain-intrinsic-*` specified value for the
+/// JS `element.style` object. The `contain-intrinsic-size` shorthand takes one or two axes
+/// (`[auto? [none | <length>]]{1,2}`) and serializes `A A` as `A`; each longhand takes exactly one.
+pub fn canonical_specified_contain_intrinsic(key: &str, s: &str) -> Option<String> {
+    let tokens = split_top_level_ws(s.trim());
+    let (first, rest) = contain_intrinsic_axis(&tokens)?;
+    if key != "contain-intrinsic-size" {
+        return rest.is_empty().then_some(first);
+    }
+    if rest.is_empty() {
+        return Some(first);
+    }
+    let (second, rest) = contain_intrinsic_axis(rest)?;
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(if first == second { first } else { format!("{first} {second}") })
+}
+
 /// Extracts the sign of a `Length`'s underlying numeric literal, for
 /// [`canonical_specified_length`]'s `non_negative` grammar check. `Calc` and
 /// the intrinsic-sizing keywords have no single literal to check — treated
