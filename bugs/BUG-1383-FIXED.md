@@ -1,6 +1,7 @@
 # BUG-1383 — Регресс в `main`: `getComputedStyle().gridTemplateColumns` пуст
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
+**Исправление:** симптом (`""` вместо значения) устранён BUG-1307 (`grid_computed::insert_grid_computed`, used-размеры из раскладки): оба файла теперь завершаются `OK`, а не `TIMEOUT`. Проверено `run_smoke.py` на dev-release: `grid-columns-rows-get-set-multiple` 26/40, `grid-content-sized-columns-resolution` 0/42 — оставшиеся падения не про пустую строку. Остаток: [BUG-1656](BUG-1656-OPEN.md) (невалидный `none auto`, `inherit`), [BUG-1657](BUG-1657-OPEN.md) (размеры auto/content-sized дорожек). `.ini`-ожидания `TIMEOUT` (BUG-467) устарели, их обновление — после BUG-1657.
 **Заведён:** 2026-10-07 (P6, при закрытии BUG-1315)
 **Область:** js/layout (`getComputedStyle(el).gridTemplateColumns` — Rust-сторона `_lumen_get_computed_style`)
 

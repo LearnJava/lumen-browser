@@ -309,6 +309,29 @@ fn a_wrapped_column_flex_is_cut_by_its_items_and_keeps_a_gap_the_break_falls_in_
 }
 
 #[test]
+fn a_column_flex_fragment_keeps_every_line_and_the_gap_whose_item_stayed_in_an_earlier_column() {
+    // flex/fragmentation/020: line 1 holds 40/30/30px items with `row-gap: 10px`, line 2 one 60px
+    // item; 35px columns cut the container at 35/70/105. The gap 40..50 belongs to column 1 (the
+    // item after it starts there, the item before it stayed in column 0); column 2 has no item of
+    // line 2 any more, yet the line (its x extent) is still there for the column rule.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div style=\"height:40px\"></div><div style=\"height:30px\"></div>         <div style=\"height:30px\"></div><div style=\"height:60px\"></div></div></div>",
+        "body{margin:0} #m{columns:3;column-fill:auto;column-gap:10px;width:350px;height:35px}          #f{display:flex;flex-direction:column;flex-wrap:wrap;width:110px;height:110px;row-gap:10px;column-gap:10px}          #f>div{width:50px}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    assert!(v.len() >= 3, "{} fragments", v.len());
+    let t = v[1].subgrid_tracks.as_ref().unwrap();
+    assert_eq!(t.cols.as_ref().map(Vec::len), Some(2), "{:?}", t.cols);
+    let gaps = t.line_gaps.as_ref().expect("line gaps");
+    assert_eq!(gaps.len(), 2, "{gaps:?}");
+    assert_eq!(gaps[0].len(), 1, "{gaps:?}");
+    assert!((gaps[0][0].0 - 5.0).abs() < 0.01 && (gaps[0][0].1 - 15.0).abs() < 0.01, "{gaps:?}");
+    let last = v[2].subgrid_tracks.as_ref().unwrap();
+    assert_eq!(last.cols.as_ref().map(Vec::len), Some(2), "{:?}", last.cols);
+}
+
+#[test]
 fn a_column_flex_fragment_after_a_dropped_gap_keeps_the_block_size_the_gap_took() {
     // flex/fragmentation/006: 200px column flex (two columns of four 30px items, `row-gap: 20px`,
     // centred) in a 150px multicol, balanced to 100px columns. The break falls inside the gap
