@@ -1,6 +1,6 @@
 # BUG-1419 — Устаревшие системные цвета CSS Color 4 §6.2: 15 имён отвергаются, `ThreeDFace` рисуется чёрным
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout (`crates/engine/layout/src/style/` — таблица `SystemColor`)
 
@@ -34,3 +34,13 @@ WPT-RUN-14 срез 19: `css-color/deprecated-sameas-001…014`, `017`, `022.htm
 ## Как проверить
 
 `css/css-color/deprecated-sameas-001.html`…`014.html`, `017.html`, `022.html`.
+
+## Исправление
+
+`SystemColor::parse` (`values/color.rs`) принимает 15 устаревших имён как алиасы канонических вариантов по CSS Color 4 §6.3
+(`ActiveBorder`/`InactiveBorder`/`WindowFrame` → `ButtonBorder`; `ActiveCaption`/`AppWorkspace`/`Background`/`InactiveCaption`/
+`InfoBackground`/`Menu` → `Canvas`; `ButtonHighlight`/`ButtonShadow` → `ButtonFace`; `CaptionText`/`InfoText`/`MenuText` → `CanvasText`;
+`InactiveCaptionText` → `GrayText`), а `ThreeDFace` теперь `ButtonFace` (240,240,240), а не `ButtonBorder`. Таблица цветов
+(`system_color`) не менялась. `ButtonBorder` по-прежнему чёрный (как у Edge в светлой теме) — пункт «заодно» симптома не трогался.
+Тесты: `style::tests::color::system_color_parse_deprecated_aliases_bug1419`, `system_color_deprecated_alias_in_background_color_bug1419`.
+`deprecated-sameas-*` под `wptrunner` не перепроверялись.

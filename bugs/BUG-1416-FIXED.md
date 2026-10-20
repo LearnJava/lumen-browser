@@ -1,6 +1,6 @@
 # BUG-1416 — Цикл в `attr()` (значение атрибута содержит `attr(` на себя же) — бесконечная рекурсия, переполнение стека
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-20 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout (`crates/engine/layout/src/style/substitute.rs::expand_attr_val`)
 
@@ -43,3 +43,11 @@ WPT-RUN-14 срез 19: `css-values/attr-cycle.html` — CRASH; `if-cycle.html` 
 ## Как проверить
 
 `css/css-values/attr-cycle.html` и `if-cycle.html`: оба не CRASH; страница из таблицы выше — код 0.
+
+## Исправление
+
+`expand_attr_val` (`substitute.rs`) делегирует в `expand_attr_val_budget` с общим бюджетом 256 подстановок на декларацию; при исчерпании
+возвращает `None` — декларация невалидна, как при отсутствии атрибута без fallback. Бюджет считает все подстановки, а не глубину, поэтому
+`attr(a) attr(a)` с самоссылочным `a` растёт линейно. Для свойств типа `width` декларация отбрасывается; кастомное свойство сохраняет
+значение предпрохода (как и при отсутствующем атрибуте — прежнее поведение, не менялось). Тест: `style::tests::attr_mixins_scroll::bug_1416_*`.
+`if-cycle.html` под `wptrunner` не перепроверялся.
