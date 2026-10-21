@@ -509,6 +509,9 @@ impl MaskClip {
 pub struct BackgroundLayer {
     /// `background-image` для этого слоя.
     pub image: BackgroundImage,
+    /// Computed-запись `background-image` (BUG-1428): градиент/`image-set()`/`cross-fade()` целиком,
+    /// как её отдаёт `getComputedStyle`. `None` — запись строится из `image`.
+    pub image_css: Option<std::sync::Arc<str>>,
     /// `background-repeat` для этого слоя.
     pub repeat: BackgroundRepeat,
     /// `background-size` для этого слоя.
@@ -531,6 +534,7 @@ impl Default for BackgroundLayer {
     fn default() -> Self {
         Self {
             image: BackgroundImage::None,
+            image_css: None,
             repeat: BackgroundRepeat::REPEAT,
             size: BackgroundSize::Auto,
             position: ObjectPosition::background_initial(),

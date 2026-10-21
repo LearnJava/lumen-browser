@@ -63,7 +63,7 @@ fn apply_background_longhand_wide(style: &mut ComputedStyle, prop: &str, parent:
             .enumerate()
             .map(|(i, s)| {
                 let base = old.get(i % old.len().max(1)).cloned().unwrap_or_default();
-                BackgroundLayer { image: s.image, ..base }
+                BackgroundLayer { image: s.image, image_css: s.image_css, ..base }
             })
             .collect();
         return;

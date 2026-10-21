@@ -305,6 +305,7 @@ pub(in crate::style) fn apply_forced_colors_mode(
     for layer in &mut style.background_layers {
         if !matches!(layer.image, BackgroundImage::None | BackgroundImage::Url(_)) {
             layer.image = BackgroundImage::None;
+            layer.image_css = None;
         }
     }
 }

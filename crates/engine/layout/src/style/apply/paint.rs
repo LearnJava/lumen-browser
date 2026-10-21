@@ -73,6 +73,7 @@ use crate::style::parse::box_sides::{
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
 use crate::style::parse::color_serialize::{computed_color_css, none_to_zero};
 use crate::style::parse::counters::is_css_ident;
+use crate::style::parse::image_computed::computed_image_css;
 use crate::style::parse::image::{
     apply_mask_longhand,
     is_gradient_function,
@@ -366,20 +367,26 @@ pub(in crate::style) fn apply_decl_paint(
             // недопустимым — прежнее значение остаётся.
             let Some(images) = pieces.iter().map(|s| {
                 let s = s.trim();
+                // Computed-запись функции целиком (BUG-1428); у `url()`/`none` её строит сериализатор.
+                let css = || computed_image_css(s, em_basis, viewport).map(std::sync::Arc::<str>::from);
                 Some(if s.eq_ignore_ascii_case("none") {
-                    BackgroundImage::None
+                    (BackgroundImage::None, None)
                 } else if is_image_set_value(s) {
                     // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
-                    BackgroundImage::Url(s.to_string())
+                    (BackgroundImage::Url(s.to_string()), css())
                 } else if let Some((a, b, t)) = parse_cross_fade(s) {
-                    BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
+                    (BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }, css())
                 } else if let Some(paint_name) = parse_paint_function(s) {
                     // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
-                    BackgroundImage::Paint(paint_name)
+                    (BackgroundImage::Paint(paint_name), None)
                 } else if let Some(url) = parse_url_value(s) {
-                    BackgroundImage::Url(url)
+                    (BackgroundImage::Url(url), None)
                 } else if is_gradient_function(s) {
-                    BackgroundImage::Gradient(parse_background_gradient(s))
+                    (BackgroundImage::Gradient(parse_background_gradient(s)), css())
+                } else if s.to_ascii_lowercase().starts_with("cross-fade(") && let Some(c) = css() {
+                    // Форма, которую отрисовка не умеет (три картинки, цвет вместо картинки), но
+                    // значение допустимо и читается обратно через getComputedStyle.
+                    (BackgroundImage::None, Some(c))
                 } else {
                     return None;
                 })
@@ -388,10 +395,10 @@ pub(in crate::style) fn apply_decl_paint(
             };
             // Сохраняем текущие per-layer данные для cycling после изменения размера.
             let old_layers = std::mem::take(&mut style.background_layers);
-            style.background_layers = images.into_iter().enumerate().map(|(i, image)| {
+            style.background_layers = images.into_iter().enumerate().map(|(i, (image, image_css))| {
                 // Прочие свойства берём из старого слоя (cycling) или defaults.
                 let old = old_layers.get(i % old_layers.len().max(1)).cloned().unwrap_or_default();
-                BackgroundLayer { image, ..old }
+                BackgroundLayer { image, image_css, ..old }
             }).collect();
         }
         "background-repeat" => {

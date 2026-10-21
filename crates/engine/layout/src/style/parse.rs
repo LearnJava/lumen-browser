@@ -8,6 +8,7 @@ pub mod counters;
 pub mod font;
 pub mod font_size;
 pub mod image;
+pub(in crate::style) mod image_computed;
 pub mod shape;
 pub mod timeline;
 pub mod transform;
