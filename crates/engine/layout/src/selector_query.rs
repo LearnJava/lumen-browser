@@ -2005,6 +2005,12 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Compositing ───────────────────────────────────────────────
     m.insert("mix-blend-mode".into(), mix_blend_mode_to_css(style.mix_blend_mode).into());
+    // VT-API: `getComputedStyle(el).viewTransitionName` and the JS side's
+    // duplicate-name check (`_lumen_vt_named_elements`) read it from here.
+    m.insert(
+        "view-transition-name".into(),
+        style.view_transition_name.as_deref().unwrap_or("none").into(),
+    );
     m.insert("interpolate-size".into(), match style.interpolate_size {
         InterpolateSizeMode::NumericOnly => "numeric-only",
         InterpolateSizeMode::AllowKeywords => "allow-keywords",
@@ -3249,6 +3255,15 @@ mod tests {
         let (doc, tree) = layout_tree(html, css);
         let b = find_box_by_selector(&tree, &doc, "div").expect("div box exists");
         computed_style_to_map(&b.style)
+    }
+
+    #[test]
+    fn computed_map_carries_the_view_transition_name() {
+        // VT-API: `getComputedStyle(el).viewTransitionName` was `""`.
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("view-transition-name").map(String::as_str), Some("none"));
+        let m = div_computed_map("<div>x</div>", "div { view-transition-name: hero; }");
+        assert_eq!(m.get("view-transition-name").map(String::as_str), Some("hero"));
     }
 
     #[test]

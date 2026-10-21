@@ -1,6 +1,7 @@
 # BUG-1510 — `ViewTransition` не является интерфейсом: нет глобала `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent`; нет `types`, `transitionRoot`, `document.activeViewTransition`; `view-transition-class`/`-group` не разбираются
 
-**Статус:** OPEN (ДОРАБОТКА → VT-API)
+**Статус:** OPEN (ДОРАБОТКА → VT-API-2)
+**Тип:** нереализованная функциональность; срез 1 (интерфейсы и автомат) сделан задачей `VT-API` 2026-10-21, остаток — `VT-API-2`.
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** js (`crates/js/src/view_transitions.rs` — `startViewTransition` возвращает простой объект)
 
@@ -35,3 +36,18 @@ WPT-RUN-14 срез 22: `css-view-transitions/{idlharness (17 из 66 сабте
 ## Как проверить
 
 Таблица выше; `css/css-view-transitions/idlharness.html`, `document-active-view-transition.html`.
+
+## Сделано в VT-API (2026-10-21, ветка `p1-vt-api`)
+
+Проба из таблицы выше: `typeof ViewTransition|ViewTransitionTypeSet|CSSViewTransitionRule|PageRevealEvent|PageSwapEvent` — `function`;
+`"activeViewTransition" in document`, `typeof vt.types|vt.transitionRoot`, `vt.constructor.name === 'ViewTransition'`,
+`"onpagereveal" in window`, `"onpageswap" in window`, `getComputedStyle(a).viewTransitionName === 'a'` — выполняются.
+`startViewTransition({update, types})`, отказ по дублю имени, `TimeoutError` колбэка, `waitUntil` — работают
+(`crates/js/src/shim/view_transitions_shim.js`, тесты `crates/js/src/dom/tests/v8_vt_api.rs`).
+
+## Остаток (VT-API-2 и P4)
+
+- События `pagereveal`/`pageswap` не отправляются (BUG-945); интерфейсы и обработчики есть.
+- `CSS.supports('view-transition-class','b')` и `('view-transition-group','normal')` — `false`: свойства не разбираются (строки `CSS-SPECS.md` для P4).
+- `Element.prototype.startViewTransition`/`activeViewTransition` — VT-SCOPED (BUG-1511).
+- UA-стиль и анимации псевдодерева — BUG-1509.

@@ -12160,7 +12160,9 @@ function _lumen_css_class(name, parent) {
     Object.setPrototypeOf(C, parent);
     Object.setPrototypeOf(C.prototype, parent.prototype);
     Object.defineProperty(C.prototype, Symbol.toStringTag, { value: name, configurable: true });
-    globalThis[name] = C;
+    // WebIDL interface object: a non-enumerable global whose `prototype` is read-only.
+    Object.defineProperty(C, 'prototype', { writable: false });
+    Object.defineProperty(globalThis, name, { value: C, writable: true, enumerable: false, configurable: true });
     _LUMEN_CSS_CLASSES[name] = C;
     return C;
 }
@@ -12185,6 +12187,7 @@ var CSSPropertyRule = _lumen_css_class('CSSPropertyRule', CSSRule);
 var CSSCounterStyleRule = _lumen_css_class('CSSCounterStyleRule', CSSRule);
 var CSSFontFeatureValuesRule = _lumen_css_class('CSSFontFeatureValuesRule', CSSRule);
 var CSSMixinRule = _lumen_css_class('CSSMixinRule', CSSRule);
+var CSSViewTransitionRule = _lumen_css_class('CSSViewTransitionRule', CSSRule);
 
 // Generic index-only live-list Proxy: `itemsFn()` returns the current array
 // of already-built member objects, `protoObj` decides which interface the
@@ -12403,6 +12406,9 @@ function _lumen_css_set_prelude(self, text) {
     if (i >= 0) _lumen_cssom_set_prelude(r.be.c, i, r.id, String(text));
 }
 function _lumen_css_acc(proto, name, get, set) {
+    // WebIDL names the accessor functions (`get x` / `set x`); idlharness checks it.
+    if (typeof get === 'function') Object.defineProperty(get, 'name', { value: 'get ' + name, configurable: true });
+    if (typeof set === 'function') Object.defineProperty(set, 'name', { value: 'set ' + name, configurable: true });
     Object.defineProperty(proto, name, { get: get, set: set, enumerable: true, configurable: true });
 }
 function _lumen_css_fn(proto, name, fn) {
@@ -12677,6 +12683,23 @@ _lumen_css_prelude_acc(CSSCounterStyleRule.prototype, 'name', true);
         function(v) { _lumen_css_desc_set(this, pair[1], v); });
 });
 _lumen_css_prelude_acc(CSSFontFeatureValuesRule.prototype, 'fontFamily', true);
+
+// ── @view-transition (CSS View Transitions 2 §3) ──
+_lumen_css_acc(CSSViewTransitionRule.prototype, 'navigation', function() {
+    return (_lumen_css_desc(this, 'navigation') || 'none').trim().toLowerCase() === 'auto' ? 'auto' : 'none';
+});
+// `[SameObject] FrozenArray<CSSOMString>`: one frozen array per descriptor value.
+_lumen_css_acc(CSSViewTransitionRule.prototype, 'types', function() {
+    var v = (_lumen_css_desc(this, 'types') || '').trim();
+    if (!this._vtTypes || this._vtTypesKey !== v) {
+        Object.defineProperty(this, '_vtTypesKey', { value: v, writable: true, configurable: true });
+        Object.defineProperty(this, '_vtTypes', {
+            value: Object.freeze(v === '' || v.toLowerCase() === 'none' ? [] : v.split(/\s+/)),
+            writable: true, configurable: true,
+        });
+    }
+    return this._vtTypes;
+});
 
 // ── @mixin (CSS Mixins L1) — owned sheets only, via the legacy mixin natives ──
 _lumen_css_acc(CSSMixinRule.prototype, 'name', function() { return _lumen_css_data(this).name; });

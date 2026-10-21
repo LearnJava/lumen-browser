@@ -22,6 +22,7 @@ fn at_keyword(kind: RuleKind) -> &'static str {
         RuleKind::Property => "@property",
         RuleKind::CounterStyle => "@counter-style",
         RuleKind::FontFeatureValues => "@font-feature-values",
+        RuleKind::ViewTransition => "@view-transition",
         _ => "",
     }
 }
@@ -100,7 +101,8 @@ pub(super) fn css_text(n: &CssomNode) -> String {
         | RuleKind::Page
         | RuleKind::Property
         | RuleKind::CounterStyle
-        | RuleKind::FontFeatureValues => decl_block(&header(n), &n.decls),
+        | RuleKind::FontFeatureValues
+        | RuleKind::ViewTransition => decl_block(&header(n), &n.decls),
         RuleKind::Mixin => n
             .raw
             .as_deref()
