@@ -2065,6 +2065,9 @@ function _lumen_parse_style(s) {
         var prop = decl.slice(0, idx).trim();
         var val  = decl.slice(idx + 1).trim();
         if (!prop) return;
+        // `!important` is a priority, not part of the value (CSSOM §6.7.2; BUG-1401). Priority is
+        // not tracked here, but the suffix must not leak into `style.<prop>`.
+        val = val.replace(/\s*!\s*important\s*$/i, '');
         if (prop === 'word-wrap') prop = 'overflow-wrap';
         prop = _lumen_compat_alias(prop);
         if (_lumen_gap_rule_key_re.test(prop)) {
@@ -2972,6 +2975,8 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // CSS Scroll Snap L2 §4: `scroll-initial-target: none | nearest` — the
     // strict two-keyword `match` in `style/apply/motion.rs`.
     'scroll-initial-target': ['none', 'nearest'],
+    // CSS Containment L2 §4: `content-visibility: visible | auto | hidden` — single keyword (BUG-1401).
+    'content-visibility': ['visible', 'auto', 'hidden'],
 };
 
 // CSS Scrollbars L1 §2 (CSSOM-2/BUG-484, срез 11): `scrollbar-color: auto |
@@ -3219,6 +3224,46 @@ function _lumen_css_canonical_block_ellipsis(strVal) {
     if (/^no-ellipsis$/i.test(v)) return 'no-ellipsis';
     if (/^ellipsis$/i.test(v)) return 'ellipsis';
     if (/^"([^"\\]|\\.)*"$/.test(v) || /^'([^'\\]|\\.)*'$/.test(v)) return v;
+    return null;
+}
+
+// CSS Containment L3 §3 `contain: none | strict | content | [ [size | inline-size] || layout
+// || style || paint ]` (BUG-1401). `strict`/`content` stand alone; the flag list is
+// serialized in canonical order (size|inline-size, layout, style, paint) and `size` excludes
+// `inline-size`. The computed value collapses the full sets back to `strict`/`content` on the
+// engine side (`contain_to_css`).
+function _lumen_css_canonical_contain(strVal) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length === 1) {
+        return _lumen_css_canonical_keyword(tokens[0], ['none', 'strict', 'content', 'size', 'inline-size', 'layout', 'style', 'paint']);
+    }
+    var seen = {};
+    for (var i = 0; i < tokens.length; i++) {
+        var kw = _lumen_css_canonical_keyword(tokens[i], ['size', 'inline-size', 'layout', 'style', 'paint']);
+        if (kw === null || kw === undefined || seen[kw]) return null;
+        seen[kw] = true;
+    }
+    if (seen['size'] && seen['inline-size']) return null;
+    return ['size', 'inline-size', 'layout', 'style', 'paint'].filter(function(k) { return seen[k]; }).join(' ');
+}
+
+// CSS Conditional 5 §3.1 `container-type: normal | [ [size | inline-size] || scroll-state ]`
+// (BUG-1401): the size axis serializes before `scroll-state` whatever the input order.
+function _lumen_css_canonical_container_type(strVal) {
+    var v = strVal.trim();
+    if (v.length === 0) return null;
+    var tokens = _lumen_split_top_level_ws(v);
+    if (tokens.length === 1) {
+        return _lumen_css_canonical_keyword(tokens[0], ['normal', 'size', 'inline-size', 'scroll-state']);
+    }
+    if (tokens.length !== 2) return null;
+    var a = _lumen_css_canonical_keyword(tokens[0], ['size', 'inline-size', 'scroll-state']);
+    var b = _lumen_css_canonical_keyword(tokens[1], ['size', 'inline-size', 'scroll-state']);
+    if (a === null || a === undefined || b === null || b === undefined) return null;
+    if (a === 'scroll-state' && b !== 'scroll-state') return b + ' scroll-state';
+    if (b === 'scroll-state' && a !== 'scroll-state') return a + ' scroll-state';
     return null;
 }
 
@@ -3558,6 +3603,12 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'zoom') {
         return _lumen_css_canonical_zoom(strVal);
     }
+    if (key === 'contain') {
+        return _lumen_css_canonical_contain(strVal);
+    }
+    if (key === 'container-type') {
+        return _lumen_css_canonical_container_type(strVal);
+    }
     return strVal;
 }
 
@@ -3803,7 +3854,9 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         // covered by that check in this same condition).
         key === 'scroll-marker-group' ||
         key === 'interest-delay-start' ||
-        key === 'interest-delay-end') {
+        key === 'interest-delay-end' ||
+        key === 'contain' ||
+        key === 'container-type') {
         var canon = _lumen_canonicalize_longhand(key, strVal);
         if (canon === null || canon === undefined) return; // invalid value: no-op
         obj[key] = canon;
