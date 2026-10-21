@@ -382,21 +382,11 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
 /// сильным bidi-классом (L → `ltr`, R/AL → `rtl`) в тексте поддерева.
 /// Пропускаются `script`/`style`/`textarea`/`bdi` и потомки с явным валидным
 /// `dir` (`ltr`/`rtl`/`auto`) — их содержимое изолировано от родителя.
-fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
-    use unicode_bidi::{bidi_class, BidiClass};
+pub(in crate::style) fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
     fn walk(doc: &Document, node: NodeId, is_root: bool) -> Option<Direction> {
         let node_ref = doc.get(node);
         match &node_ref.data {
-            NodeData::Text(t) => {
-                for ch in t.chars() {
-                    match bidi_class(ch) {
-                        BidiClass::L => return Some(Direction::Ltr),
-                        BidiClass::R | BidiClass::AL => return Some(Direction::Rtl),
-                        _ => {}
-                    }
-                }
-                None
-            }
+            NodeData::Text(t) => first_strong_in_text(t),
             NodeData::Element { name, .. } => {
                 if !is_root {
                     if matches!(name.local.as_str(), "script" | "style" | "textarea" | "bdi") {
@@ -414,6 +404,18 @@ fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
         }
     }
     walk(doc, root, true)
+}
+
+/// Направление первого символа с сильным bidi-классом в строке (L → `ltr`,
+/// R/AL → `rtl`); `None`, если сильных символов нет. Для значения
+/// `<input>`/`<textarea>` с `dir=auto` и для текстовых узлов поддерева.
+pub(in crate::style) fn first_strong_in_text(text: &str) -> Option<Direction> {
+    use unicode_bidi::{bidi_class, BidiClass};
+    text.chars().find_map(|ch| match bidi_class(ch) {
+        BidiClass::L => Some(Direction::Ltr),
+        BidiClass::R | BidiClass::AL => Some(Direction::Rtl),
+        _ => None,
+    })
 }
 /// HTML5 §15.3.3: атрибут `align` на блочных элементах → CSS `text-align`.
 ///
