@@ -85,6 +85,7 @@ use crate::style::parse::image::{
     parse_single_bg_layer,
     parse_single_mask_layer,
     parse_url_value,
+    parse_url_with_modifiers, UrlModifiers,
 };
 use crate::style::parse::shape::parse_clip_path;
 use crate::style::parse::transform::parse_filter_list;
@@ -379,8 +380,10 @@ pub(in crate::style) fn apply_decl_paint(
                 } else if let Some(paint_name) = parse_paint_function(s) {
                     // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
                     (BackgroundImage::Paint(paint_name), None)
-                } else if let Some(url) = parse_url_value(s) {
-                    (BackgroundImage::Url(url), None)
+                } else if let Some((url, mods)) = parse_url_with_modifiers(s) {
+                    // Модификаторы запроса (BUG-1433) читаются обратно только из computed-записи.
+                    let css = if mods == UrlModifiers::default() { None } else { css() };
+                    (BackgroundImage::Url(url), css)
                 } else if is_gradient_function(s) {
                     (BackgroundImage::Gradient(parse_background_gradient(s)), css())
                 } else if s.to_ascii_lowercase().starts_with("cross-fade(") && let Some(c) = css() {

@@ -1459,3 +1459,35 @@ use super::*;
         );
         assert!(matches!(s.mask_layers[0].image, BackgroundImage::Gradient(_)));
     }
+
+    /// BUG-1433: `<request-url-modifier>` не должен попадать в адрес картинки.
+    #[test]
+    fn background_image_url_with_request_modifiers() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url('g.png' referrer-policy(origin)); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("g.png".into()));
+        assert_eq!(
+            s.background_layers[0].image_css.as_deref(),
+            Some("url(\"g.png\" referrer-policy(origin))")
+        );
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url('g.png' cross-origin(anonymous)) no-repeat; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("g.png".into()));
+        assert_eq!(
+            s.background_layers[0].image_css.as_deref(),
+            Some("url(\"g.png\" cross-origin(anonymous))")
+        );
+        // невалидный модификатор — декларация отвергается, прежнее значение остаётся
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png); background-image: url('g.png' cross-origin(bogus)); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("a.png".into()));
+    }

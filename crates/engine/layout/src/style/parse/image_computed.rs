@@ -67,7 +67,12 @@ fn image(s: &str, c: &Ctx) -> Option<String> {
         return Some("none".into());
     }
     if lower.starts_with("url(") && t.ends_with(')') {
-        return Some(url_text(&super::image::parse_url_value(t)?));
+        let (url, mods) = super::image::parse_url_with_modifiers(t)?;
+        let text = url_text(&url);
+        return Some(match mods.serialize() {
+            m if m.is_empty() => text,
+            m => format!("{}{m})", text.strip_suffix(')').unwrap_or(&text)),
+        });
     }
     let open = lower.find('(')?;
     if !t.ends_with(')') {
@@ -888,6 +893,33 @@ mod tests {
             "image-set(url(a.png) 1xtype('a'))",
         ] {
             assert_eq!(sp(bad), None, "{bad}");
+        }
+    }
+
+    /// BUG-1433: модификаторы запроса не попадают в URL; computed — в каноническом порядке.
+    #[test]
+    fn url_request_modifiers() {
+        assert_eq!(css("url('g.png' referrer-policy(origin))").as_deref(), Some("url(\"g.png\" referrer-policy(origin))"));
+        assert_eq!(
+            css("url(\"a.png\" referrer-policy(no-referrer) integrity(\"sha384-x\") cross-origin(anonymous))").as_deref(),
+            Some("url(\"a.png\" cross-origin(anonymous) integrity(\"sha384-x\") referrer-policy(no-referrer))")
+        );
+        assert_eq!(css("url(\"a.png\" integrity(\"\"))").as_deref(), Some("url(\"a.png\" integrity(\"\"))"));
+        // неизвестный модификатор игнорируется
+        assert_eq!(css("url(\"a.png\" foobar(baz))").as_deref(), Some("url(\"a.png\")"));
+        for bad in [
+            "url(\"a.png\" cross-origin())",
+            "url(\"a.png\" cross-origin(anonymous foobar))",
+            "url(\"a.png\" cross-origin(anonymous) cross-origin(use-credentials))",
+            "url(\"a.png\" integrity(sha384-foobar))",
+            "url(\"a.png\" integrity(\"a\",))",
+            "url(\"a.png\" referrer-policy(no-referrer same-origin))",
+            "url(\"a.png\" foobar foobar)",
+            "url(\"a.png\" 42)",
+            "url(\"a.png\" \"foobar\")",
+            "url(a.png cross-origin(anonymous))",
+        ] {
+            assert_eq!(css(bad), None, "{bad}");
         }
     }
 }
