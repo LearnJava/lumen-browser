@@ -134,6 +134,9 @@ pub(in crate::style) fn apply_svg_presentational_hints(
         // SVG 1.1 §14.3 / CSS Masking L1 §3.1 — `clip-path="url(#id)"`;
         // `compute_style` подменяет ссылку на разрешённый `<clipPath>`.
         "clip-path",
+        // Filter Effects L1 §3 — `filter="url(#id)"` (как `clip-path`: ссылку
+        // разворачивает `compute_style`).
+        "filter",
     ];
     let node_ref = doc.get(node);
     for &attr in ATTRS {

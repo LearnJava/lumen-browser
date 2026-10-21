@@ -302,6 +302,8 @@ pub(crate) fn filter_fn_to_entry(f: &FilterFn) -> FilterEntryCpu {
         FilterFn::Opacity(v)    => (6,    *v),
         FilterFn::Saturate(v)   => (7,    *v),
         FilterFn::Sepia(v)      => (8,    *v),
+        // SVG-фильтры исполняет только CPU-растеризатор (SVG-FILTER); окно — тождество.
+        FilterFn::Url(_)        => (1,    1.0),
     };
     FilterEntryCpu { kind, amount, _p0: 0, _p1: 0 }
 }

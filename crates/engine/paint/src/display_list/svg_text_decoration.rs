@@ -333,8 +333,25 @@ pub(crate) fn emit_svg_shape_masked(
         lumen_layout::MaskMode::Luminance => MaskMode::Luminance,
     };
     out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    // Filter Effects L1 §4: `filter` runs before `mask`, so it wraps only the shape's own
+    // paint, below the mask layer.
+    let filtered = super::push_shape_filter(b, out);
     emit_svg_shape(b, shape, out);
-    out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode });
+    super::pop_shape_filter(filtered, out);
+    // The mask is limited to `rect`; a filtered shape paints beyond its box (blur,
+    // flood over the filter region), and that ink must be masked too.
+    let rect = if b.style.filter.is_empty() {
+        b.rect
+    } else {
+        const FILTER_REACH: f32 = 2048.0;
+        Rect::new(
+            b.rect.x - FILTER_REACH,
+            b.rect.y - FILTER_REACH,
+            b.rect.width + 2.0 * FILTER_REACH,
+            b.rect.height + 2.0 * FILTER_REACH,
+        )
+    };
+    out.push(DisplayCommand::PushMaskLayer { rect, mode });
     for content_box in &mask.content {
         walk(content_box, out, dpr);
     }

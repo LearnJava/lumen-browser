@@ -408,12 +408,18 @@ pub(crate) fn emit_box_self(
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
                 Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr),
-                None => emit_svg_shape(b, shape, out),
+                None => {
+                    let filtered = push_shape_filter(b, out);
+                    emit_svg_shape(b, shape, out);
+                    pop_shape_filter(filtered, out);
+                }
             }
             pop_clip_layers(clip_layers, out);
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
+            let filtered = push_shape_filter(b, out);
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
+            pop_shape_filter(filtered, out);
         }
     }
     // BUG-231: apply animated background-color / color compositor override to the
@@ -1770,7 +1776,11 @@ fn dispatch<'a>(
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
                 Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr),
-                None => emit_svg_shape(b, shape, out),
+                None => {
+                    let filtered = push_shape_filter(b, out);
+                    emit_svg_shape(b, shape, out);
+                    pop_shape_filter(filtered, out);
+                }
             }
             pop_clip_layers(clip_layers, out);
         }
@@ -1778,7 +1788,9 @@ fn dispatch<'a>(
             // SVG text element: emit DrawText command with proper positioning.
             // CSS: fill, stroke, font-family, font-size — P4 wires ComputedStyle fields.
             // // CSS: text-anchor, dominant-baseline, baseline-shift
+            let filtered = push_shape_filter(b, out);
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
+            pop_shape_filter(filtered, out);
         }
     }
     close_position_layers(b, is_fixed, is_sticky, out)

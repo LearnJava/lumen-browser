@@ -651,6 +651,8 @@ fn filter_identity_for(f: &FilterFn) -> FilterFn {
         FilterFn::Opacity(_) => FilterFn::Opacity(1.0),
         FilterFn::Saturate(_) => FilterFn::Saturate(1.0),
         FilterFn::Sepia(_) => FilterFn::Sepia(0.0),
+        // `url()` не интерполируется (дискретно): нейтрального значения нет.
+        FilterFn::Url(_) => f.clone(),
     }
 }
 

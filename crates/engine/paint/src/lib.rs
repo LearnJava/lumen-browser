@@ -72,6 +72,8 @@ mod cpu_font_resolve;
 mod cpu_projective;
 #[cfg(feature = "cpu-render")]
 pub mod cpu_raster;
+#[cfg(feature = "cpu-render")]
+mod svg_filter;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};

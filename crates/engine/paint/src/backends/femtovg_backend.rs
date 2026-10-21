@@ -1443,6 +1443,8 @@ fn apply_filter_rgba(rgba: &mut [u8], filter: &lumen_layout::FilterFn) {
                 g = fmix(g, sg, *amt);
                 b = fmix(b, sb, *amt);
             }
+            // SVG-фильтры исполняет только CPU-растеризатор (SVG-FILTER).
+            FilterFn::Url(_) => {}
         }
 
         // Re-premultiply: na is new alpha (f32 0..255), channel = straight * na.
