@@ -1,6 +1,6 @@
 # BUG-1445 — Вложенные правила, где `&` не стоит первым (`.t &`, `div &`, `.r&`, `:not(&)`), и вложенный голый тип (`.p { div {…} }`) отбрасываются; `&` на верхнем уровне и в `@supports selector(&)` не работают
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** css-parser/layout (вложенные правила: `crates/engine/css-parser/src/parser/` — разбор nested rule; `&` вне первого компаунда)
 
@@ -37,3 +37,13 @@ WPT-RUN-14 срез 20: `css-nesting/nesting-type-selector.html`, `nesting-basic
 ## Как проверить
 
 Таблица выше; `css/css-nesting/nesting-type-selector.html`, `css/css-nesting/nesting-basic.html`.
+
+## Исправление
+
+К моменту взятия бóльшая часть таблицы уже работала (`nesting_amp.rs`: `&` не в голове prelude, вложенный голый тип). Оставались четыре случая, все закрыты 2026-10-21:
+
+- `& + &`, `&.a &` — второй `&` в цепочке после ведущего `&` не разбирался (`parse_nested_rule_amp` ждал список селекторов). Теперь prelude с двумя и более `&` идёт общим путём `parse_nested_rule_with_extra_amp` → `parse_nested_rule_with_inner_amp` (`crates/engine/css-parser/src/parser/nesting_amp.rs`): `&` подставляется как `:is(<родитель>)` по всей цепочке.
+- `&` на верхнем уровне и в `selector(&)` — `parse_simple_selector` (`parser/selectors.rs`) теперь принимает `&` как `:where(:scope)` (нулевая специфичность, Nesting L1 §3.2); раньше правило отбрасывалось, `@supports selector(&)` и `CSS.supports('selector(&)')` были ложны (и вложенный `@supports selector(&)`).
+- Проверено на собранном бинаре (`--dump-display-list` по таблице проб: все одиннадцать строк зелёные, `& + &` красит только второго брата), `css/css-nesting` 102→103 из 117 сабтестов (`top-level-parent-pseudo-specificity` проходит; `.ini` обновлены).
+
+Тесты: `parser/tests/nesting.rs` (`nested_second_amp_in_tail_is_substituted`, `nested_amp_not_at_head_and_leading_combinator`, `top_level_amp_is_scope`, `supports_selector_amp_is_supported`).

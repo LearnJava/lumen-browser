@@ -1368,6 +1368,18 @@ impl<'a> Parser<'a> {
                 self.consume();
                 Some(SimpleSelector::Id(self.parse_ident()?))
             }
+            // Nesting L1 §3.2: `&` вне вложенного правила (верхний уровень,
+            // `selector(&)`) — `:where(:scope)`. Внутри style-правила `&` подставляется
+            // раньше, до разбора селектора.
+            '&' => {
+                self.consume();
+                Some(SimpleSelector::PseudoClass(PseudoClass::Where(vec![ComplexSelector {
+                    head: CompoundSelector {
+                        parts: vec![SimpleSelector::PseudoClass(PseudoClass::Scope)],
+                    },
+                    tail: Vec::new(),
+                }])))
+            }
             '[' => self.parse_attr_selector(),
             ':' => self.parse_pseudo(),
             c if is_ident_start(c) || c == '\\' => {
