@@ -218,6 +218,41 @@ mod first_letter_drop_cap {
         assert_eq!(segments[1].text, "ello world");
     }
 
+    /// BUG-1447: a non-float `::first-letter` is an inline box — its
+    /// background/border/padding reach the painter as an element-box segment.
+    #[test]
+    fn non_float_first_letter_carries_box_decoration() {
+        let root = layout(
+            "<p>Hello world</p>",
+            "p::first-letter { background: #0f0; border: 5px solid #00f; padding: 0 3px; margin-right: 2px; }",
+        );
+        let run = find_rest_run(&root).expect("run missing");
+        let super::super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!();
+        };
+        let (letter, tail) = (&segments[0], &segments[1]);
+        assert_eq!(letter.text, "H");
+        assert!(letter.is_element_box, "letter must paint its own box");
+        assert!(letter.style.background_color.is_some(), "background reaches the letter");
+        assert_eq!(letter.style.border_left_width, 5.0);
+        assert_eq!(letter.pre_space, 5.0 + 3.0);
+        assert_eq!(letter.post_space, 3.0 + 5.0 + 2.0);
+        assert!(!tail.is_element_box, "the rest of the paragraph stays plain text");
+        assert!(tail.style.background_color.is_none());
+        assert_eq!(tail.post_space, 0.0);
+    }
+
+    #[test]
+    fn non_float_first_letter_without_decoration_stays_plain() {
+        let root = layout("<p>Hello world</p>", "p::first-letter { color: red; }");
+        let run = find_rest_run(&root).expect("run missing");
+        let super::super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!();
+        };
+        assert!(!segments[0].is_element_box);
+        assert_eq!(segments[0].pre_space, 0.0);
+    }
+
     #[test]
     fn leading_punctuation_joins_first_letter() {
         // CSS Pseudo-elements L4 §5.1: leading punctuation is part of the unit.

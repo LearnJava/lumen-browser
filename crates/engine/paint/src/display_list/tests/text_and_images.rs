@@ -1035,6 +1035,37 @@
         assert_eq!(n, 1, "block background must not be repeated by its inline run");
     }
 
+    /// BUG-1447: `::first-letter` без `float` — inline-бокс, его `background` и
+    /// `border` рисуются как у `<span>` (раньше команд заливки не было вовсе).
+    #[test]
+    fn non_float_first_letter_paints_background_and_border() {
+        let dl = build_wrapped(
+            "<p>hello world</p>",
+            "p::first-letter { background: #00ff00; border: 2px solid #0000ff; padding: 0 3px }",
+            800.0,
+        );
+        let green = Color { r: 0, g: 255, b: 0, a: 255 };
+        let rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::FillRect { rect, color } if *color == green => Some(*rect),
+                _ => None,
+            })
+            .expect("::first-letter background must emit a FillRect");
+        // Одна буква «h» (8px) + padding 3+3 + border 2+2.
+        assert!((rect.width - 18.0).abs() < 1.0, "width={}", rect.width);
+        assert!(
+            dl.iter().any(|c| matches!(c, DisplayCommand::DrawBorder { rect, .. } if (rect.width - 18.0).abs() < 1.0)),
+            "::first-letter border must emit a DrawBorder around the letter"
+        );
+        // Остаток абзаца фона не получает.
+        let n = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { color, .. } if *color == green))
+            .count();
+        assert_eq!(n, 1, "only the letter is filled");
+    }
+
     // ── Тесты inline-flow ───────────────────────────────────────────────────
 
     /// Текст с <span> внутри — один DrawText (одинаковый стиль → фрагменты сливаются).
