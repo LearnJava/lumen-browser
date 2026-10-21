@@ -301,3 +301,17 @@ fn nested_selector_with_type_after_ampersand_is_dropped() {
     let kids: Vec<_> = t.rules[0].children.iter().map(|c| c.prelude.as_str()).collect();
     assert_eq!(kids, ["&.ok", "& div"]);
 }
+
+#[test]
+fn view_transition_rule_is_a_visible_declaration_rule() {
+    let t = tree("@view-transition { navigation: auto; types: slide back }");
+    assert_eq!(t.rules.len(), 1);
+    assert_eq!(t.rules[0].kind, RuleKind::ViewTransition);
+    assert_eq!(t.rules[0].kind.js_class(), "CSSViewTransitionRule");
+    assert_eq!(texts(&t), ["@view-transition { navigation: auto; types: slide back; }"]);
+}
+
+#[test]
+fn view_transition_rule_takes_no_prelude() {
+    assert!(tree("@view-transition foo { navigation: auto }").rules.is_empty());
+}

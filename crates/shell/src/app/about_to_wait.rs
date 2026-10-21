@@ -1949,9 +1949,12 @@ impl Lumen {
                 match event {
                     ViewTransitionEvent::Begin => {
                         // Capture current display list as the "before" snapshot.
+                        // The update callback may be asynchronous, so `End` can come
+                        // frames later: until it does the snapshot is held at full
+                        // opacity (`-inf` elapsed), not aged out from epoch 0.
                         self.view_transition = Some(ViewTransitionState {
                             old_dl: self.display_list.clone(),
-                            start_ms: 0.0,
+                            start_ms: f64::INFINITY,
                             duration_ms: crate::view_transition::DEFAULT_DURATION_MS,
                             easing: lumen_layout::TimingFunction::Linear,
                         });

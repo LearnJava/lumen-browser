@@ -1242,6 +1242,32 @@ pub(crate) fn install_computed_styles(
                 .unwrap_or_default()
         });
     }
+    // VT-API: every rendered element carrying a `view-transition-name`, as a JSON
+    // `[[nodeIndex, name], …]` ordered by node index. The View Transitions shim
+    // (`view_transitions.rs`) checks it for duplicate names at the capture and
+    // activation steps; reading the whole snapshot here costs one pass, where a
+    // JS-side `getComputedStyle` walk would cost one flush-checked call per element.
+    {
+        let cs = Arc::clone(&computed_styles);
+        let flush = flush.clone();
+        let needed = Arc::clone(&computed_styles_needed);
+        reg!(scope, ctx, store, "_lumen_vt_named_elements", move || -> String {
+            needed.store(true, Ordering::Relaxed);
+            flush.maybe_flush();
+            let mut named: Vec<(u32, String)> = cs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, m)| !m.contains_key(lumen_layout::BOXLESS_KEY))
+                .filter_map(|(nid, m)| {
+                    let name = m.get("view-transition-name")?;
+                    (name != "none").then(|| (*nid, name.clone()))
+                })
+                .collect();
+            named.sort_unstable();
+            serde_json::to_string(&named).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
     // CSSOM-6 (BUG-490): `getComputedStyle(el, pseudoElt)` — same lookup as
     // `_lumen_get_computed_style` above, but keyed by `(nid, pseudo name)`.
     // `kind` is the JS shim's already-normalized pseudo name ("before"/"after"/

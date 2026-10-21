@@ -262,6 +262,7 @@ fn kind_of(name: &str) -> Option<RuleKind> {
         "property" => RuleKind::Property,
         "counter-style" => RuleKind::CounterStyle,
         "font-feature-values" => RuleKind::FontFeatureValues,
+        "view-transition" => RuleKind::ViewTransition,
         "mixin" => RuleKind::Mixin,
         _ => return None,
     })
@@ -492,12 +493,21 @@ fn build_at_rule(
             n.raw = closed.then(|| src[e.start..e.end].to_string());
             Some(n)
         }
-        RuleKind::FontFace | RuleKind::Page | RuleKind::Property | RuleKind::CounterStyle | RuleKind::FontFeatureValues => {
+        RuleKind::FontFace
+        | RuleKind::Page
+        | RuleKind::Property
+        | RuleKind::CounterStyle
+        | RuleKind::FontFeatureValues
+        | RuleKind::ViewTransition => {
             let (inner, closed) = block?;
             if !matches!(ctx, Ctx::Rules { .. }) {
                 return None;
             }
             if kind == RuleKind::Property && !params_c.starts_with("--") {
+                return None;
+            }
+            // `@view-transition` has no prelude (CSS View Transitions 2 §3).
+            if kind == RuleKind::ViewTransition && !params_c.is_empty() {
                 return None;
             }
             if matches!(kind, RuleKind::CounterStyle | RuleKind::FontFeatureValues) && params_c.is_empty() {

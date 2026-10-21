@@ -74,6 +74,8 @@ pub enum RuleKind {
     CounterStyle,
     /// `@font-feature-values`.
     FontFeatureValues,
+    /// `@view-transition` (CSS View Transitions 2 §3) — `navigation`/`types` descriptors.
+    ViewTransition,
     /// Декларации после вложенного правила (CSS Nesting 1 §6.1).
     NestedDeclarations,
     /// `@mixin` (CSS Mixins) — работает через собственные нативы по `raw`.
@@ -118,6 +120,7 @@ impl RuleKind {
             Self::Property => "CSSPropertyRule",
             Self::CounterStyle => "CSSCounterStyleRule",
             Self::FontFeatureValues => "CSSFontFeatureValuesRule",
+            Self::ViewTransition => "CSSViewTransitionRule",
             Self::NestedDeclarations => "CSSNestedDeclarations",
             Self::Mixin => "CSSMixinRule",
             Self::Opaque => "CSSRule",
@@ -160,7 +163,7 @@ impl RuleKind {
             | Self::CounterStyle
             | Self::NestedDeclarations => RuleBody::Decls,
             Self::Keyframes => RuleBody::Keyframes,
-            Self::FontFeatureValues => RuleBody::Decls,
+            Self::FontFeatureValues | Self::ViewTransition => RuleBody::Decls,
             Self::LayerStatement
             | Self::Import
             | Self::Namespace
