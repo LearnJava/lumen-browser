@@ -95,6 +95,11 @@ pub(crate) fn box_baseline(
     side: BaselineSide,
     measurer: Option<&dyn TextMeasurer>,
 ) -> Option<f32> {
+    // CSS Containment L1 §3.2: a layout-contained box has no baseline of its own; the caller
+    // synthesises one from the border box.
+    if b.style.contain.0 & ContainFlags::LAYOUT.0 != 0 {
+        return None;
+    }
     let bl = content_baseline(b, side, measurer)?;
     // CSS Align §9.1: базовая линия контейнера прокрутки берётся из содержимого,
     // но не может выйти за border box — переполнение её не двигает.

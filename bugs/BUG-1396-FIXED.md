@@ -1,6 +1,6 @@
 # BUG-1396 — `contain: layout` / `paint`: baseline, независимый форматирующий контекст, stacking context, scrollable overflow
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 17, `css/css-multicol` + `css/css-contain`)
 **Область:** layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`; `box_tree/baseline.rs`; `lib.rs:1508` `contributes_to_scrollable_overflow`), paint (`display_list/stacking`)
 
@@ -28,3 +28,13 @@ WPT-RUN-14 срез 17: `contain-layout-independent-formatting-context-001/002`,
 ## Как проверить
 
 `css/css-contain/contain-layout-independent-formatting-context-001.html`, `contain-layout-baseline-002.html`, `contain-layout-ink-overflow-016.html`, `contain-paint-stacking-context-001a.html`.
+
+## Исправление (2026-10-21, P6)
+
+- `establishes_bfc` (`box_tree/bfc.rs`): `contain: layout|paint` — независимый форматирующий контекст, поля ребёнка не выходят наружу.
+- `creates_stacking_context` (`stacking.rs`): те же флаги создают stacking context.
+- `box_baseline` (`box_tree/baseline.rs`): у бокса с `contain: layout` нет своей базовой линии, вызывающий синтезирует её по нижней границе border box.
+- `box_clips_own_overflow` (`lib.rs`): потомки `contain: layout|paint` не расширяют scrollable overflow предка (собственная рамка бокса учитывается).
+- Тесты: `box_tree/tests/shapes_and_contain.rs` (`contain_layout_*`).
+
+Не проверено прогоном WPT и полным `graphic_tests/run.py` (TEST-00 «magenta marker not found» дважды — в сессии нет захвата экрана). `--dump-display-list` для `28-css-containment.html` и `1000000-final.html` отличается от `main` только лишними `PopClip`/`PushClipRect` и перестановкой блока `contain` в порядок позиционированных слоёв; `dump_golden.py` — расхождение только в `65-flex-align-content` (не использует `contain`).
