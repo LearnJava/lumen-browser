@@ -1,6 +1,6 @@
 # BUG-1434 — Цвета `lch()`/`oklch()`/`lab()` вне гаммы sRGB обрезаются покомпонентно вместо сопоставления гамм; `L = 100%`/`0%` не дают белый/чёрный
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images` + `css/css-values` + `css/css-color`)
 **Область:** layout (`crates/engine/layout/src/style/values/color.rs` — перевод `lab`/`lch`/`oklab`/`oklch` в sRGB)
 
@@ -33,3 +33,10 @@ WPT-RUN-14 срез 19: `css-color/lch-009.html`, `lch-010.html`, `oklch-009.htm
 ## Как проверить
 
 Страница из таблицы; `css/css-color/lch-009.html`, `oklch-010.html`.
+
+## Исправление
+
+`crates/engine/layout/src/style/parse/color.rs`: `lab`/`lch`/`oklab`/`oklch` переводятся в линейный sRGB без обрезки, затем
+`gamut_map_linear_srgb` — CSS Color 4 §13.2 (бинарный поиск по chroma в OKLCH, JND ΔEOK = 0.02). `L = 100%` → белый, `L = 0%` → чёрный
+напрямую. Тесты — `style/tests/color.rs` (`lab_family_*`, `out_of_gamut_chroma_*`).
+Не затронуто: `color-mix()` в этих пространствах (`color_mix.rs` держит свои `lab_to_srgb`/`oklab_to_srgb` с покомпонентным clamp).

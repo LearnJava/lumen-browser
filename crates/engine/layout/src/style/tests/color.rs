@@ -82,6 +82,30 @@ use crate::style::values::named_colors::NAMED_COLORS;
         assert_eq!(parse_color("oklch(abc def ghi)"), None);
     }
 
+    // ── BUG-1434: сопоставление гамм (CSS Color 4 §13) ──
+
+    #[test]
+    fn lab_family_full_and_zero_lightness_are_white_and_black() {
+        for v in ["lch(100% 110 60)", "oklch(100% 1.1 60)", "lab(100% 50 50)", "oklab(100% 0.3 0.3)"] {
+            let c = parse_color(v).unwrap();
+            assert_eq!((c.r, c.g, c.b), (255, 255, 255), "{v}");
+        }
+        for v in ["lch(0% 110 60)", "oklch(0% 1.1 60)", "lab(0% 50 50)", "oklab(0% 0.3 0.3)"] {
+            let c = parse_color(v).unwrap();
+            assert_eq!((c.r, c.g, c.b), (0, 0, 0), "{v}");
+        }
+    }
+
+    #[test]
+    fn out_of_gamut_chroma_is_reduced_not_clipped_per_channel() {
+        // Покомпонентный clamp давал чистый (255,0,0); gamut mapping сохраняет светлоту и тон.
+        let c = parse_color("lch(50% 200 60)").unwrap();
+        assert!(c.r > 150 && c.g > 20 && c.g < 120 && c.b < 60, "{c:?}");
+        // Внутри гаммы — без изменений.
+        let c = parse_color("lch(50% 50 90)").unwrap();
+        assert_eq!((c.r, c.g, c.b), (136, 118, 22));
+    }
+
     // ── CSS Color L5 §4 — relative color syntax ──
 
     #[test]
