@@ -218,6 +218,28 @@ fn push_bg_image_urls(image: &BackgroundImage, dpr: f32, out: &mut Vec<String>) 
     }
 }
 
+/// CSS Shapes L1 §6.2 — URLs of the `shape-outside: url(…)` images of a laid-out
+/// tree, as written in the stylesheet (the key [`lumen_dom::Document::set_shape_image`]
+/// expects). Unlike a background, such an image changes the layout it came from: the
+/// shell decodes it, reports its alpha plane to the document and relays out. Document
+/// order, duplicates removed.
+#[must_use]
+pub fn collect_shape_image_requests(root: &LayoutBox) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if b.style.float_side != crate::style::FloatSide::None
+            && let crate::style::ShapeOutside::Value(sv) = &b.style.shape_outside
+            && let Some(url) = super::shape_resolve::shape_image_url(sv)
+            && !out.contains(&url)
+        {
+            out.push(url);
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
+}
+
 /// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
 /// recursion: nothing after the loop over `children` reads a value the walk
 /// produced, so this is the same safe mechanical class LAYOUT-1 already

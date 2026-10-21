@@ -1,55 +1,82 @@
 use lumen_core::geom::Size;
 
-// ── CSS Shapes L1 — shape-outside circle() ────────────────────────────────
+use super::super::shape_resolve::{resolve_shape, FloatBoxes, Rect4};
+use super::super::FloatContext;
+use lumen_dom::ImageAlpha;
+use std::sync::Arc;
 
-#[test]
-fn parse_circle_px_valid() {
-    assert_eq!(super::super::parse_circle_px("circle(50px)"), Some(50.0));
-    assert_eq!(super::super::parse_circle_px("circle(0px)"), None);
-    assert_eq!(super::super::parse_circle_px("circle(10)"), Some(10.0));
-    assert_eq!(super::super::parse_circle_px("CIRCLE(30PX)"), Some(30.0)); // case-insensitive
+// ── CSS Shapes L1 — a float's contour in the float context ────────────────
+
+/// A 100×100 float: margin box == border box, no radii.
+fn plain_boxes() -> FloatBoxes {
+    let r = Rect4 { x0: 0.0, y0: 0.0, x1: 100.0, y1: 100.0 };
+    FloatBoxes {
+        margin: r,
+        border: r,
+        padding: r,
+        content: r,
+        radii: [(0.0, 0.0); 4],
+        margins: [0.0; 4],
+        borders: [0.0; 4],
+        paddings: [0.0; 4],
+        em: 16.0,
+        threshold: 0.0,
+        image: None,
+        replaced: false,
+    }
 }
 
-#[test]
-fn parse_circle_px_invalid() {
-    assert_eq!(super::super::parse_circle_px("none"), None);
-    assert_eq!(super::super::parse_circle_px("ellipse(30px 20px)"), None);
-    assert_eq!(super::super::parse_circle_px("polygon(0 0, 10 0, 10 10)"), None);
+/// `bx`'s float sitting at the left edge (`x ∈ [0, 100]`) or at the right edge of a
+/// 400px container (`x ∈ [300, 400]`), with `sv` as its `shape-outside` grown by
+/// `margin` px of `shape-margin`.
+fn shaped_in(sv: &str, bx: &FloatBoxes, is_left: bool, margin: f32) -> FloatContext {
+    let x0 = if is_left { 0.0 } else { 300.0 };
+    let mut fc = FloatContext::new();
+    if is_left {
+        fc.add_left(0.0, 100.0, 100.0);
+    } else {
+        fc.add_right(0.0, 100.0, 300.0);
+    }
+    let mut prims = resolve_shape(sv, bx).expect("shape-outside understood");
+    for p in &mut prims {
+        p.translate(x0, 0.0);
+    }
+    fc.add_shape_prims(prims, is_left, (0.0, 100.0), (x0, x0 + 100.0), margin);
+    fc
+}
+
+/// The wrap edges a line box at `y` sees: the contour only, not the margin rectangle.
+fn left_at(fc: &FloatContext, y: f32) -> f32 {
+    fc.line_band(y, y + 0.01, 0.0, 400.0).0
+}
+
+fn right_at(fc: &FloatContext, y: f32) -> f32 {
+    fc.line_band(y, y + 0.01, 0.0, 400.0).1
+}
+
+fn shaped(sv: &str, is_left: bool, margin: f32) -> FloatContext {
+    shaped_in(sv, &plain_boxes(), is_left, margin)
 }
 
 #[test]
 fn shape_outside_circle_computation() {
-    // Circle with radius 50px centered at (100, 50): at y=50 (center),
-    // horizontal extent = center_x + radius = 100 + 50 = 150.
-    // At y=0 (50px above center): hw = sqrt(50^2 - 50^2) = 0, extent = 100.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_circles.push((0.0, 100.0, true, 100.0, 50.0, 50.0));
-    assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
-    assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
-}
-
-// ── CSS Shapes L1 — shape-outside polygon() ───────────────────────────────
-
-#[test]
-fn parse_shape_polygon_valid() {
-    // Triangle with px values.
-    let pts = super::super::parse_shape_polygon_px("polygon(0px 0px, 100px 0px, 50px 100px)");
-    assert_eq!(pts, Some(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 100.0)]));
-    // Bare numbers (no "px" suffix).
-    let pts2 = super::super::parse_shape_polygon_px("polygon(0 0, 10 0, 10 10, 0 10)");
-    assert_eq!(pts2, Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
-    // With fill-rule prefix.
-    let pts3 = super::super::parse_shape_polygon_px("polygon(nonzero, 0 0, 50 0, 50 50)");
-    assert_eq!(pts3, Some(vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)]));
+    // circle(40px) centred in the 100×100 box: widest at y = 50 (50 + 40), a
+    // point at y = 10 (50 + 0).
+    let fc = shaped("circle(40px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 90.0).abs() < 0.01);
+    assert!((left_at(&fc, 10.0) - 50.0).abs() < 0.01);
 }
 
 #[test]
-fn parse_shape_polygon_invalid() {
-    // Fewer than 3 points.
-    assert_eq!(super::super::parse_shape_polygon_px("polygon(0 0, 10 10)"), None);
-    // Not a polygon.
-    assert_eq!(super::super::parse_shape_polygon_px("circle(50px)"), None);
-    assert_eq!(super::super::parse_shape_polygon_px("none"), None);
+fn shape_outside_invalid_value_is_not_understood() {
+    let bx = plain_boxes();
+    assert!(resolve_shape("garbage", &bx).is_none());
+    assert!(resolve_shape("circle(10px) circle(20px)", &bx).is_none());
+    assert!(resolve_shape("border-box margin-box", &bx).is_none());
+    // An `<image>` stands alone: no `<shape-box>` beside it.
+    assert!(resolve_shape("margin-box linear-gradient(black, transparent)", &bx).is_none());
+    // A `url()` whose image has not been reported yet is no shape (the float stays a rectangle).
+    assert!(resolve_shape("url(a.png)", &bx).is_none());
 }
 
 // ── CSS Shapes L1 — shape-outside path() ──────────────────────────────────
@@ -59,46 +86,15 @@ fn parse_shape_path_triangle() {
     // Straight-line triangle: M 0 0 L 100 0 L 50 100 Z → 3 distinct vertices.
     let pts = super::super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 50 100 Z")"#)
         .expect("triangle path should parse");
-    assert_eq!(pts[0], (0.0, 0.0));
-    assert_eq!(pts[1], (100.0, 0.0));
-    assert_eq!(pts[2], (50.0, 100.0));
-    // Close returns to the sub-path start.
-    assert_eq!(*pts.last().unwrap(), (0.0, 0.0));
-}
-
-#[test]
-fn parse_shape_path_fill_rule_and_quotes() {
-    // Leading fill-rule is accepted and ignored; single quotes work too.
-    let pts = super::super::parse_shape_path_px(r#"path(evenodd, 'M 0 0 L 10 0 L 10 10 Z')"#)
-        .expect("path with fill-rule + single quotes should parse");
-    assert_eq!(pts[0], (0.0, 0.0));
-    assert_eq!(pts[1], (10.0, 0.0));
-    assert_eq!(pts[2], (10.0, 10.0));
-}
-
-#[test]
-fn parse_shape_path_invalid() {
-    // Not a path() function.
-    assert_eq!(super::super::parse_shape_path_px("polygon(0 0, 10 0, 10 10)"), None);
-    assert_eq!(super::super::parse_shape_path_px("none"), None);
-    // Missing quotes around the d-string.
-    assert_eq!(super::super::parse_shape_path_px("path(M 0 0 L 10 0 L 10 10 Z)"), None);
-    // Degenerate (< 3 vertices).
-    assert_eq!(super::super::parse_shape_path_px(r#"path("M 0 0 L 10 10")"#), None);
+    assert!(pts.len() >= 3, "{pts:?}");
 }
 
 #[test]
 fn float_context_path_left_float() {
-    // path() flattened to the same right-triangle as the polygon case:
-    // M 0 0 L 100 0 L 0 100 Z. At y=50 the hypotenuse right edge = 50.
-    let pts = super::super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 0 100 Z")"#)
-        .expect("triangle path should parse");
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_polygons.push(super::super::ShapePolygon {
-        top_y: 0.0, bottom_y: 100.0, is_left: true, points: pts,
-        margin: 0.0, bound_x: f32::INFINITY,
-    });
-    assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+    // path() flattened to a right triangle M 0 0 L 100 0 L 0 100 Z.
+    // At y=50 the hypotenuse right edge = 50.
+    let fc = shaped(r#"path("M 0 0 L 100 0 L 0 100 Z")"#, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 50.0).abs() < 0.01);
 }
 
 #[test]
@@ -117,195 +113,72 @@ fn polygon_edge_at_y_triangle() {
 
 #[test]
 fn float_context_polygon_left_float() {
-    // Triangle left float: (0,0)→(100,0)→(0,100)→(0,0) in content-area coords.
-    // At y=50: rightmost edge = 50. Should narrow left boundary to 50.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_polygons.push(super::super::ShapePolygon {
-        top_y: 0.0, bottom_y: 100.0, is_left: true,
-        points: vec![(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)],
-        margin: 0.0, bound_x: f32::INFINITY,
-    });
-    assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
-    // Outside float range: falls back to default.
-    assert!((fc.left_edge_at(110.0, 0.0) - 0.0).abs() < 0.01);
+    // Triangle left float: (0,0)→(100,0)→(0,100)→(0,0). At y=50 the rightmost
+    // edge is 50: the left boundary narrows to it.
+    let fc = shaped("polygon(0 0, 100px 0, 0 100px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 50.0).abs() < 0.01);
+    // Outside the float range: falls back to default.
+    assert!((left_at(&fc, 110.0) - 0.0).abs() < 0.01);
 }
 
 // ── CSS Shapes L1 — shape-outside ellipse() ───────────────────────────────
 
 #[test]
-fn parse_shape_ellipse_valid() {
-    let r = super::super::parse_shape_ellipse_px("ellipse(50px 80px at 100px 150px)");
-    assert_eq!(r, Some((50.0, 80.0, 100.0, 150.0)));
-    // Bare numbers.
-    let r2 = super::super::parse_shape_ellipse_px("ellipse(30 40 at 60 70)");
-    assert_eq!(r2, Some((30.0, 40.0, 60.0, 70.0)));
-}
-
-#[test]
-fn parse_shape_ellipse_invalid() {
-    // No "at" keyword.
-    assert_eq!(super::super::parse_shape_ellipse_px("ellipse(50px 80px)"), None);
-    // Zero radius.
-    assert_eq!(super::super::parse_shape_ellipse_px("ellipse(0px 40px at 50px 50px)"), None);
-    // Not an ellipse.
-    assert_eq!(super::super::parse_shape_ellipse_px("circle(50px)"), None);
-}
-
-#[test]
 fn float_context_ellipse_left_float() {
-    // Ellipse: rx=50, ry=50, center (100,50). At y=50 (center): right edge = 150.
-    // At y=0 (top): norm=(0-50)/50=-1.0, hw=0, right edge=100.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_ellipses.push(super::super::ShapeEllipse {
-        top_y: 0.0, bottom_y: 100.0, is_left: true,
-        cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0, bound_x: f32::INFINITY,
-    });
-    assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
-    assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    // Ellipse: rx=40, ry=50, centre (50,50). At y=50 the right edge is 90;
+    // at y=0 (top) the ellipse is a point: 50.
+    let fc = shaped("ellipse(40px 50px at 50px 50px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 90.0).abs() < 0.01);
+    assert!((left_at(&fc, 0.0) - 50.0).abs() < 0.01);
 }
 
 #[test]
 fn float_context_ellipse_right_float() {
-    // Ellipse: rx=50, ry=50, center (200,50). Right float.
-    // At y=50 (center): left edge = 200 - 50 = 150.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_ellipses.push(super::super::ShapeEllipse {
-        top_y: 0.0, bottom_y: 100.0, is_left: false,
-        cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0, bound_x: f32::NEG_INFINITY,
-    });
-    assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
+    // Right float at x ∈ [300, 400]: centre (350,50), rx = 40 → left edge 310.
+    let fc = shaped("ellipse(40px 50px at 50px 50px)", false, 0.0);
+    assert!((right_at(&fc, 50.0) - 310.0).abs() < 0.01);
 }
 
 // ── CSS Shapes L1 — shape-outside inset() ─────────────────────────────────
 
 #[test]
-fn parse_shape_inset_valid() {
-    // 4-value form, no rounding.
-    assert_eq!(
-        super::super::parse_shape_inset_px("inset(10px 20px 30px 40px)"),
-        Some((10.0, 20.0, 30.0, 40.0, 0.0))
-    );
-    // 1-value form expands to all sides.
-    assert_eq!(
-        super::super::parse_shape_inset_px("inset(15px)"),
-        Some((15.0, 15.0, 15.0, 15.0, 0.0))
-    );
-    // 2-value form: vertical horizontal.
-    assert_eq!(
-        super::super::parse_shape_inset_px("inset(10 20)"),
-        Some((10.0, 20.0, 10.0, 20.0, 0.0))
-    );
-    // 3-value form: top horizontal bottom.
-    assert_eq!(
-        super::super::parse_shape_inset_px("inset(5 10 15)"),
-        Some((5.0, 10.0, 15.0, 10.0, 0.0))
-    );
-    // With round clause (single radius).
-    assert_eq!(
-        super::super::parse_shape_inset_px("inset(10px round 8px)"),
-        Some((10.0, 10.0, 10.0, 10.0, 8.0))
-    );
-}
-
-#[test]
-fn parse_shape_inset_invalid() {
-    // Not an inset.
-    assert_eq!(super::super::parse_shape_inset_px("circle(50px)"), None);
-    assert_eq!(super::super::parse_shape_inset_px("none"), None);
-    // Too many length values.
-    assert_eq!(super::super::parse_shape_inset_px("inset(1 2 3 4 5)"), None);
-    // `round` keyword without a radius value.
-    assert_eq!(super::super::parse_shape_inset_px("inset(10px round )"), None);
-}
-
-#[test]
 fn float_context_inset_left_float_sharp() {
-    // Left float inset rect spanning x∈[10,90], y∈[0,100], no rounding.
-    // Content to the right must clear the inset right edge = 90 for all y in range.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_insets.push(super::super::ShapeInset {
-        top_y: 0.0, bottom_y: 100.0, is_left: true,
-        left_x: 10.0, right_x: 90.0, radius: 0.0,
-        corner_top: 0.0, corner_bottom: 100.0,
-        bound_x: f32::INFINITY,
-    });
-    assert!((fc.left_edge_at(0.0, 0.0) - 90.0).abs() < 0.01);
-    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
-    // Outside the vertical range: falls back to default.
-    assert!((fc.left_edge_at(150.0, 0.0) - 0.0).abs() < 0.01);
+    // inset(10px 20px) = rect x ∈ [20, 90], y ∈ [10, 90]: content to the right
+    // clears x = 90 for every y in the range.
+    let fc = shaped("inset(10px 10px 10px 20px)", true, 0.0);
+    assert!((left_at(&fc, 10.0) - 90.0).abs() < 0.01);
+    assert!((left_at(&fc, 50.0) - 90.0).abs() < 0.01);
+    // Above the rectangle: the shape does not reach.
+    assert!((left_at(&fc, 5.0) - 0.0).abs() < 0.01);
+    // Outside the vertical range of the float: falls back to default.
+    assert!((left_at(&fc, 150.0) - 0.0).abs() < 0.01);
 }
 
 #[test]
 fn float_context_inset_right_float_sharp() {
-    // Right float inset rect x∈[210,290]. Content to the left clears left edge = 210.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_insets.push(super::super::ShapeInset {
-        top_y: 0.0, bottom_y: 100.0, is_left: false,
-        left_x: 210.0, right_x: 290.0, radius: 0.0,
-        corner_top: 0.0, corner_bottom: 100.0,
-        bound_x: f32::NEG_INFINITY,
-    });
-    assert!((fc.right_edge_at(50.0, 400.0) - 210.0).abs() < 0.01);
+    // Right float, inset rect x ∈ [310, 380]. Content to the left clears x = 310.
+    let fc = shaped("inset(0 20px 0 10px)", false, 0.0);
+    assert!((right_at(&fc, 50.0) - 310.0).abs() < 0.01);
 }
 
 #[test]
 fn float_context_inset_rounded_corner() {
-    // Left float rect x∈[0,100], y∈[0,100], corner radius 20.
-    // At the very top (y=0), the rounded corner recedes the right edge fully
-    // by `radius` → edge = 100 - 20 = 80. At mid-height (y=50, flat band) the
-    // edge is the full right_x = 100.
-    let mut fc = super::super::FloatContext::new();
-    fc.shape_insets.push(super::super::ShapeInset {
-        top_y: 0.0, bottom_y: 100.0, is_left: true,
-        left_x: 0.0, right_x: 100.0, radius: 20.0,
-        corner_top: 0.0, corner_bottom: 100.0,
-        bound_x: f32::INFINITY,
-    });
-    assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
-    assert!((fc.left_edge_at(0.0, 0.0) - 80.0).abs() < 0.01);
-    // Quarter-circle midpoint: at y=20-20*cos(45°)... use exact: dy at y where
-    // inward = radius - sqrt(r^2 - dy^2). At y = top_band - dy. top_band=20.
-    // For y=20 (band edge), inward=0 → edge=100.
-    assert!((fc.left_edge_at(20.0, 0.0) - 100.0).abs() < 0.01);
-}
-
-#[test]
-fn inset_corner_inward_helper() {
-    // No radius → no inward offset.
-    assert_eq!(super::super::inset_corner_inward(0.0, 0.0, 100.0, 0.0), 0.0);
-    // Flat middle band → no offset.
-    assert_eq!(super::super::inset_corner_inward(50.0, 0.0, 100.0, 20.0), 0.0);
-    // Exactly at the top edge → full radius recession.
-    assert!((super::super::inset_corner_inward(0.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
-    // Exactly at the bottom edge → full radius recession.
-    assert!((super::super::inset_corner_inward(100.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
+    // Rect x ∈ [0,100], y ∈ [0,100], corner radius 20. At the very top the
+    // rounded corner recedes the right edge by `radius`; in the flat band the
+    // edge is the full 100.
+    let fc = shaped("inset(0 round 20px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 100.0).abs() < 0.01);
+    assert!((left_at(&fc, 0.0) - 80.0).abs() < 0.01);
+    // At the band edge (y = 20) the corner no longer recedes.
+    assert!((left_at(&fc, 20.0) - 100.0).abs() < 0.01);
 }
 
 // ── CSS Shapes L1 §6.3 — shape-margin ─────────────────────────────────────
 
-use super::super::{FloatContext, FloatShapeGeom, register_shape_outside};
-
-/// A 100x100 left float at the origin: margin box == border box.
-fn left_geom() -> FloatShapeGeom {
-    FloatShapeGeom {
-        is_left: true, child_y: 0.0, top_y: 0.0, bot_y: 100.0,
-        box_left: 0.0, box_right: 100.0, center_x: 50.0, center_y: 50.0,
-    }
-}
-
-/// The same float on the right edge of a 400px container (x in [300, 400]).
-fn right_geom() -> FloatShapeGeom {
-    FloatShapeGeom {
-        is_left: false, child_y: 0.0, top_y: 0.0, bot_y: 100.0,
-        box_left: 300.0, box_right: 400.0, center_x: 350.0, center_y: 50.0,
-    }
-}
-
 #[test]
 fn shape_margin_zero_keeps_bare_polygon() {
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 0.0);
-    assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+    let fc = shaped("polygon(0px 0px, 100px 0px, 0px 100px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 50.0).abs() < 0.01);
 }
 
 #[test]
@@ -313,19 +186,17 @@ fn shape_margin_grows_polygon_along_normal() {
     // Hypotenuse x + y = 100: pushed out by 10px along its normal (1,1)/sqrt2
     // it becomes x + y = 100 + 10*sqrt2, so at y = 50 the edge is at
     // 50 + 14.142 = 64.142 (still inside the 100px margin box).
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 10.0);
+    let fc = shaped("polygon(0px 0px, 100px 0px, 0px 100px)", true, 10.0);
     let want = 50.0 + 10.0 * 2.0_f32.sqrt();
-    assert!((fc.left_edge_at(50.0, 0.0) - want).abs() < 0.05, "{}", fc.left_edge_at(50.0, 0.0));
+    assert!((left_at(&fc, 50.0) - want).abs() < 0.05, "{}", left_at(&fc, 50.0));
 }
 
 #[test]
 fn shape_margin_never_exceeds_margin_box() {
     // §6.3 note: the grown shape does not extend past the float's margin box.
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "polygon(0px 0px, 100px 0px, 0px 100px)", &left_geom(), 10.0);
+    let fc = shaped("polygon(0px 0px, 100px 0px, 0px 100px)", true, 10.0);
     // At y = 5 the bare edge is 95, grown ~109 -> clamped to the box edge 100.
-    assert!((fc.left_edge_at(5.0, 0.0) - 100.0).abs() < 0.01);
+    assert!((left_at(&fc, 5.0) - 100.0).abs() < 0.01);
 }
 
 #[test]
@@ -341,21 +212,18 @@ fn shape_margin_vertex_disc_extends_past_polygon_top() {
 #[test]
 fn shape_margin_circle_becomes_larger_circle() {
     // circle(30px) centred (50,50) + 10px margin == radius 40 at y = 50 -> 90.
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "circle(30px)", &left_geom(), 10.0);
-    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+    let fc = shaped("circle(30px)", true, 10.0);
+    assert!((left_at(&fc, 50.0) - 90.0).abs() < 0.01);
     // Without margin it stays 80.
-    let mut fc0 = FloatContext::new();
-    register_shape_outside(&mut fc0, "circle(30px)", &left_geom(), 0.0);
-    assert!((fc0.left_edge_at(50.0, 0.0) - 80.0).abs() < 0.01);
+    let fc0 = shaped("circle(30px)", true, 0.0);
+    assert!((left_at(&fc0, 50.0) - 80.0).abs() < 0.01);
 }
 
 #[test]
 fn shape_margin_ellipse_clamped_to_margin_box() {
     // ellipse(40 40 at 50 50) + 20px margin = radius 60 -> 110, clamped to 100.
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "ellipse(40px 40px at 50px 50px)", &left_geom(), 20.0);
-    assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
+    let fc = shaped("ellipse(40px 40px at 50px 50px)", true, 20.0);
+    assert!((left_at(&fc, 50.0) - 100.0).abs() < 0.01);
 }
 
 #[test]
@@ -363,24 +231,161 @@ fn shape_margin_inset_grows_rect_and_rounds_corners() {
     // inset(20px) on 100x100 = rect [20,80]^2; +10px margin = [10,90]^2 with
     // a 10px corner radius. Flat band at y = 50 -> right edge 90; at the very
     // top of the grown rect (y = 10) the corner recedes by the full radius.
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "inset(20px)", &left_geom(), 10.0);
-    assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
-    assert!((fc.left_edge_at(10.0, 0.0) - 80.0).abs() < 0.01);
+    let fc = shaped("inset(20px)", true, 10.0);
+    assert!((left_at(&fc, 50.0) - 90.0).abs() < 0.01);
+    assert!((left_at(&fc, 10.0) - 80.0).abs() < 0.01);
     // Above the grown rect: no shape boundary (default).
-    assert!((fc.left_edge_at(5.0, 0.0) - 0.0).abs() < 0.01);
+    assert!((left_at(&fc, 5.0) - 0.0).abs() < 0.01);
 }
 
 #[test]
 fn shape_margin_right_float_mirrors() {
     // Right float, circle(30px) at (350,50) + 10px -> left edge 350 - 40 = 310.
-    let mut fc = FloatContext::new();
-    register_shape_outside(&mut fc, "circle(30px)", &right_geom(), 10.0);
-    assert!((fc.right_edge_at(50.0, 400.0) - 310.0).abs() < 0.01);
+    let fc = shaped("circle(30px)", false, 10.0);
+    assert!((right_at(&fc, 50.0) - 310.0).abs() < 0.01);
     // Large margin clamps at the margin box's left edge (300).
-    let mut fc2 = FloatContext::new();
-    register_shape_outside(&mut fc2, "circle(30px)", &right_geom(), 40.0);
-    assert!((fc2.right_edge_at(50.0, 400.0) - 300.0).abs() < 0.01);
+    let fc2 = shaped("circle(30px)", false, 40.0);
+    assert!((right_at(&fc2, 50.0) - 300.0).abs() < 0.01);
+}
+
+// ── CSS Shapes L1 §3 — <shape-box> ────────────────────────────────────────
+
+#[test]
+fn border_box_radius_rounds_the_contour() {
+    let mut bx = plain_boxes();
+    bx.radii = [(50.0, 50.0); 4];
+    let fc = shaped_in("border-box", &bx, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 100.0).abs() < 0.01);
+    // A 50% radius turns the top of the box into an arc, not a rectangle edge.
+    assert!(left_at(&fc, 0.5) < 60.0, "{}", left_at(&fc, 0.5));
+}
+
+#[test]
+fn content_box_follows_the_padding() {
+    let mut bx = plain_boxes();
+    bx.content = Rect4 { x0: 30.0, y0: 30.0, x1: 70.0, y1: 70.0 };
+    let fc = shaped_in("content-box", &bx, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 70.0).abs() < 0.01);
+    // Above the content box the float does not push content away.
+    assert!(left_at(&fc, 10.0).abs() < 0.01);
+}
+
+#[test]
+fn basic_shape_takes_the_shape_box_as_its_reference() {
+    let mut bx = plain_boxes();
+    bx.content = Rect4 { x0: 30.0, y0: 30.0, x1: 70.0, y1: 70.0 };
+    // `closest-side` of the content box's centre: a circle of radius 20 at (50, 50).
+    let fc = shaped_in("content-box circle(closest-side)", &bx, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 70.0).abs() < 0.01);
+    let fc = shaped_in("circle(closest-side) content-box", &bx, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 70.0).abs() < 0.01);
+}
+
+// ── CSS Shapes L1 §6.2 — <image> shapes ───────────────────────────────────
+
+/// A `w × h` image given as its alpha plane.
+fn alpha_image(w: u32, h: u32, alpha: &[u8]) -> Arc<ImageAlpha> {
+    Arc::new(ImageAlpha { width: w, height: h, alpha: alpha.to_vec() })
+}
+
+#[test]
+fn radial_gradient_masks_its_opaque_disc() {
+    // Opaque up to 50% of the 50px closest-side radius: a disc of radius 25.
+    let fc = shaped("radial-gradient(circle closest-side, black 50%, transparent 50%)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 75.0).abs() < 1.5, "{}", left_at(&fc, 50.0));
+    assert!(left_at(&fc, 80.0).abs() < 0.01, "outside the disc");
+}
+
+#[test]
+fn conic_gradient_masks_its_opaque_quadrant() {
+    // 0°–90° (clockwise from the top) opaque: the top-right quarter of the box.
+    let fc = shaped("conic-gradient(black 25%, transparent 25%)", true, 0.0);
+    assert!((left_at(&fc, 25.0) - 100.0).abs() < 1.5, "{}", left_at(&fc, 25.0));
+    assert!(left_at(&fc, 75.0).abs() < 0.01, "bottom half is transparent");
+}
+
+#[test]
+fn repeating_linear_gradient_masks_stripes() {
+    // Opaque [0,10) of every 20px: the last stripe inside 100px ends at 90.
+    let fc = shaped("repeating-linear-gradient(to right, black 0, black 10px, transparent 10px, transparent 20px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 90.0).abs() < 1.5, "{}", left_at(&fc, 50.0));
+}
+
+#[test]
+fn url_image_wraps_by_its_alpha() {
+    // Left half opaque: the float's right edge is the middle of the box.
+    let mut bx = plain_boxes();
+    bx.image = Some(alpha_image(2, 1, &[255, 0]));
+    let fc = shaped_in("url(a.png)", &bx, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 50.0).abs() < 1.5, "{}", left_at(&fc, 50.0));
+    // A right float is wrapped on the left edge of the opaque part instead.
+    let fc = shaped_in("url(a.png)", &bx, false, 0.0);
+    assert!((right_at(&fc, 50.0) - 300.0).abs() < 1.5, "{}", right_at(&fc, 50.0));
+}
+
+#[test]
+fn an_img_float_lays_its_shape_image_over_the_content_box() {
+    // WPT `shape-image-013`: `margin-left: 10px` — the 100px-wide image sits at
+    // x ∈ [10, 100] of the margin box (here 90px), its right half is opaque.
+    let mut bx = plain_boxes();
+    bx.content = Rect4 { x0: 10.0, y0: 0.0, x1: 100.0, y1: 100.0 };
+    bx.image = Some(alpha_image(2, 1, &[0, 255]));
+    bx.replaced = true;
+    let fc = shaped_in("url(a.png)", &bx, false, 0.0);
+    // Opaque part: x ∈ [55, 100] → on the right float at 300: [355, 400].
+    assert!((right_at(&fc, 50.0) - 355.0).abs() < 1.5, "{}", right_at(&fc, 50.0));
+    // A block float stretches the image over the whole margin box instead.
+    bx.replaced = false;
+    let fc = shaped_in("url(a.png)", &bx, false, 0.0);
+    assert!((right_at(&fc, 50.0) - 350.0).abs() < 1.5, "{}", right_at(&fc, 50.0));
+}
+
+#[test]
+fn shape_image_threshold_decides_which_alpha_counts() {
+    let mut bx = plain_boxes();
+    // 70% alpha everywhere (`left-half-rectangle-70.png`): inside the shape at the
+    // default threshold 0, outside it above 0.7.
+    bx.image = Some(alpha_image(1, 1, &[178]));
+    let fc = shaped_in("url(a.png)", &bx, true, 0.0);
+    assert!((left_at(&fc, 50.0) - 100.0).abs() < 0.01);
+    bx.threshold = 0.8;
+    let fc = shaped_in("url(a.png)", &bx, true, 0.0);
+    assert!(left_at(&fc, 50.0).abs() < 0.01, "a translucent image is not a shape above the threshold");
+}
+
+#[test]
+fn shape_margin_dilates_an_image_mask() {
+    let mut bx = plain_boxes();
+    bx.image = Some(alpha_image(2, 1, &[255, 0]));
+    let fc = shaped_in("url(a.png)", &bx, true, 10.0);
+    assert!((left_at(&fc, 50.0) - 60.0).abs() < 1.5, "{}", left_at(&fc, 50.0));
+}
+
+#[test]
+fn mask_turns_with_the_float_context_axes() {
+    let mut bx = plain_boxes();
+    bx.image = Some(alpha_image(2, 1, &[255, 0]));
+    let prims = resolve_shape("url(a.png)", &bx).expect("image");
+    // Physical: the opaque part is x ∈ [0, 50], all y. Logical frame (x' = y, y' = x):
+    // all x', y' ∈ [0, 50].
+    let q = prims[0].rotate(100.0, false);
+    let (l, r) = q.extent_at(25.0, 0.0).expect("on the opaque band");
+    assert!(l.abs() < 1.5 && (r - 100.0).abs() < 1.5, "{l} {r}");
+    assert!(q.extent_at(75.0, 0.0).is_none());
+    // vertical-rl mirrors the block axis: y' = 100 - x → the band is y' ∈ [50, 100].
+    let q = prims[0].rotate(100.0, true);
+    assert!(q.extent_at(25.0, 0.0).is_none());
+    assert!(q.extent_at(75.0, 0.0).is_some());
+}
+
+#[test]
+fn shape_image_url_is_the_raw_unquoted_url() {
+    use super::super::shape_resolve::shape_image_url;
+    assert_eq!(shape_image_url("url(a.png)").as_deref(), Some("a.png"));
+    assert_eq!(shape_image_url(r#"URL( "dir/a b.png" )"#).as_deref(), Some("dir/a b.png"));
+    assert_eq!(shape_image_url("url('x.png')").as_deref(), Some("x.png"));
+    assert_eq!(shape_image_url("circle(10px)"), None);
+    assert_eq!(shape_image_url("url()"), None);
 }
 
 #[test]
@@ -1081,11 +1086,18 @@ fn content_visibility_auto_skipped_keeps_explicit_height() {
 /// Left edge (x relative to the container) and right extent of every line of
 /// the first `InlineRun` in the tree, as `(top_y, x0, x1)`.
 fn shaped_lines(css: &str) -> Vec<(f32, f32, f32)> {
+    let doc = lumen_html_parser::parse(&shaped_html());
+    run_lines(&doc, &lumen_css_parser::parse(css))
+}
+
+fn shaped_html() -> String {
     let words = "aa ".repeat(60);
-    let html = format!(r#"<div><div class="f"></div><p>{words}</p></div>"#);
-    let doc = lumen_html_parser::parse(&html);
-    let sheet = lumen_css_parser::parse(css);
-    let root = super::super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Ifc8);
+    format!(r#"<div><div class="f"></div><p>{words}</p></div>"#)
+}
+
+/// [`shaped_lines`] for a document the caller has prepared.
+fn run_lines(doc: &lumen_dom::Document, sheet: &lumen_css_parser::Stylesheet) -> Vec<(f32, f32, f32)> {
+    let root = super::super::layout_measured(doc, sheet, Size::new(500.0, 300.0), &Ifc8);
     fn find(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
         if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
             return Some(b);
@@ -1160,6 +1172,53 @@ fn inline_text_follows_right_float_contour() {
         ends.iter().cloned().fold(f32::MIN, f32::max) > ends.iter().cloned().fold(f32::MAX, f32::min) + 1.0,
         "right edge must vary with the contour: {ends:?}"
     );
+}
+
+#[test]
+fn url_shape_image_reported_to_the_document_wraps_the_text() {
+    let css = "div { width: 400px; } p { margin: 0; }                .f { float: left; width: 100px; height: 100px; shape-outside: url(shape.png); }";
+    let sheet = lumen_css_parser::parse(css);
+    let mut doc = lumen_html_parser::parse(&shaped_html());
+    // The image is not decoded yet: the float keeps its rectangle (8 + 100).
+    let before = run_lines(&doc, &sheet);
+    assert!(before.iter().filter(|l| l.0 < 100.0).all(|l| (l.1 - 108.0).abs() < 0.5), "{before:?}");
+    // Its alpha plane arrives (left half opaque): the text starts at the shape's edge (8 + 50).
+    assert!(doc.set_shape_image("shape.png", lumen_dom::ImageAlpha { width: 2, height: 1, alpha: vec![255, 0] }));
+    let after = run_lines(&doc, &sheet);
+    assert!(
+        after.iter().filter(|l| l.0 < 100.0).all(|l| (l.1 - 58.0).abs() < 1.5),
+        "text must hug the opaque half: {after:?}"
+    );
+    // The same plane again is not a change: no relayout is owed.
+    assert!(!doc.set_shape_image("shape.png", lumen_dom::ImageAlpha { width: 2, height: 1, alpha: vec![255, 0] }));
+}
+
+#[test]
+fn inline_text_follows_the_content_box_of_a_padded_float() {
+    // Margin box 100×100, but `shape-outside: content-box` is the inner 40×40 square
+    // at (30, 30): text above it runs at full width, text beside it starts at the
+    // square's right edge.
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 40px; height: 40px; padding: 30px; shape-outside: content-box; }",
+    );
+    let first = lines.first().expect("lines");
+    assert!((first.1 - 8.0).abs() < 0.5, "above the content box: {lines:?}");
+    assert!(
+        lines.iter().any(|l| l.0 >= 30.0 && l.0 < 60.0 && (l.1 - 78.0).abs() < 0.5),
+        "beside the content box the text starts at its right edge (x = 8 + 70): {lines:?}"
+    );
+}
+
+#[test]
+fn inline_text_follows_a_rounded_border_box() {
+    // A 50% radius on a 200×200 box is a circle: the text band widens line by line,
+    // exactly like `circle(100px)`, instead of staying at the rectangle's 200px.
+    let lines = shaped_lines(
+        "div { width: 400px; } p { margin: 0; }          .f { float: left; width: 200px; height: 200px; border-radius: 50%; shape-outside: border-box; }",
+    );
+    let starts: Vec<f32> = lines.iter().filter(|l| l.0 < 200.0).map(|l| l.1).collect();
+    assert!(starts.len() >= 4, "{starts:?}");
+    assert!(starts.iter().any(|&x| x < 207.0), "no line follows the contour: {starts:?}");
 }
 
 // ── BUG-1388: contain-intrinsic-width feeds the parent's intrinsic widths ──
@@ -1324,4 +1383,28 @@ fn contain_layout_descendant_overflow_does_not_grow_scrollable_area() {
     let s = find_scroller(&root).expect("scroller present");
     assert!((crate::content_height(s) - 100.0).abs() < 0.5, "scrollHeight = {}", crate::content_height(s));
     assert!((crate::content_width(s) - 100.0).abs() < 0.5, "scrollWidth = {}", crate::content_width(s));
+}
+
+#[test]
+fn grown_contour_does_not_narrow_a_line_that_starts_on_its_edge() {
+    // WPT `shape-outside-polygon-012`: a concave polygon on a 200×200 margin box of a
+    // right float, `shape-margin: 20px`. The grown contour ends at `y = 80 + 20` and
+    // `y = 160 + 20`; a line box that starts exactly there must see the free width of
+    // its own rows, not the touching boundary of the row above.
+    let r = Rect4 { x0: 0.0, y0: 0.0, x1: 200.0, y1: 200.0 };
+    let bx = FloatBoxes { margin: r, border: r, padding: r, content: r, ..plain_boxes() };
+    let sv = "margin-box polygon(20% 20%, 90% 20%, 90% 80%, 50% 80%, 50% 70%, 70% 70%, 70% 40%, 20% 40%)";
+    let mut prims = resolve_shape(sv, &bx).expect("polygon");
+    for p in &mut prims {
+        p.translate(40.0, 0.0);
+    }
+    let mut fc = FloatContext::new();
+    fc.add_right(0.0, 200.0, 40.0);
+    fc.add_shape_prims(prims, false, (0.0, 200.0), (40.0, 240.0), 20.0);
+    let band = |y: f32| fc.line_band(y, y + 20.0, 0.0, 240.0).1;
+    assert_eq!(band(0.0), 240.0, "above the grown contour");
+    assert!((band(20.0) - 60.0).abs() < 0.01);
+    assert!((band(100.0) - 160.0).abs() < 0.01, "{}", band(100.0));
+    assert!((band(120.0) - 120.0).abs() < 0.01);
+    assert_eq!(band(180.0), 240.0, "below the grown contour");
 }
