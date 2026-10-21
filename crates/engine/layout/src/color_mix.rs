@@ -19,6 +19,8 @@
 //! - `oklch` — Oklch perceptual polar space
 //! - `xyz-d65` — CIE XYZ (D65 white point)
 //! - `xyz-d50` — CIE XYZ (D50 white point)
+//! - `display-p3`, `display-p3-linear`, `a98-rgb`, `prophoto-rgb`, `rec2020` —
+//!   predefined RGB spaces (gamma-encoded, except `display-p3-linear`)
 //!
 //! # P4 handoff
 //!
@@ -56,6 +58,16 @@ pub enum MixColorSpace {
     XyzD65,
     /// `xyz-d50` — CIE XYZ with D50 white point (same as `xyz` in CSS Color L4).
     XyzD50,
+    /// `display-p3` — Display P3 primaries with the sRGB transfer function.
+    DisplayP3,
+    /// `display-p3-linear` — Display P3 primaries, linear light.
+    DisplayP3Linear,
+    /// `a98-rgb` — Adobe RGB (1998), gamma 563/256.
+    A98Rgb,
+    /// `prophoto-rgb` — ProPhoto RGB (D50 primaries), gamma 1.8.
+    ProphotoRgb,
+    /// `rec2020` — ITU-R BT.2020 primaries and transfer function.
+    Rec2020,
 }
 
 impl MixColorSpace {
@@ -72,6 +84,11 @@ impl MixColorSpace {
             "oklch" => Some(Self::Oklch),
             "xyz" | "xyz-d65" => Some(Self::XyzD65),
             "xyz-d50" => Some(Self::XyzD50),
+            "display-p3" => Some(Self::DisplayP3),
+            "display-p3-linear" => Some(Self::DisplayP3Linear),
+            "a98-rgb" => Some(Self::A98Rgb),
+            "prophoto-rgb" => Some(Self::ProphotoRgb),
+            "rec2020" => Some(Self::Rec2020),
             _ => None,
         }
     }
@@ -237,6 +254,17 @@ pub fn mix_colors_hue(
             let x2 = srgb_to_xyz_d50(pre2);
             let mixed = lerp4(x1, x2, p2);
             xyz_d50_to_srgb(mixed)
+        }
+
+        MixColorSpace::DisplayP3
+        | MixColorSpace::DisplayP3Linear
+        | MixColorSpace::A98Rgb
+        | MixColorSpace::ProphotoRgb
+        | MixColorSpace::Rec2020 => {
+            let rgb1 = srgb_to_predefined(space, pre1);
+            let rgb2 = srgb_to_predefined(space, pre2);
+            let mixed = lerp4(rgb1, rgb2, p2);
+            predefined_to_srgb(space, mixed)
         }
     };
 
@@ -532,6 +560,126 @@ fn xyz_d50_to_srgb(c: [f32; 4]) -> [f32; 4] {
     [gamma_encode(r), gamma_encode(g), gamma_encode(b), c[3]]
 }
 
+// ─── sRGB ↔ predefined RGB spaces (CSS Color L4 §10) ─────────────────────────
+
+type Mat3 = [[f64; 3]; 3];
+
+fn mat3_mul(m: &Mat3, v: (f32, f32, f32)) -> (f32, f32, f32) {
+    let (x, y, z) = (f64::from(v.0), f64::from(v.1), f64::from(v.2));
+    (
+        (m[0][0] * x + m[0][1] * y + m[0][2] * z) as f32,
+        (m[1][0] * x + m[1][1] * y + m[1][2] * z) as f32,
+        (m[2][0] * x + m[2][1] * y + m[2][2] * z) as f32,
+    )
+}
+
+// Matrices from CSS Color L4 §10 sample code (full f64 precision).
+const P3_LIN_TO_XYZ: Mat3 = [
+    [0.486_570_948_648_216_2, 0.265_667_693_169_093_06, 0.198_217_285_234_362_5],
+    [0.228_974_564_069_748_8, 0.691_738_521_836_570_8, 0.079_286_914_093_745],
+    [0.0, 0.045_113_381_858_902_64, 1.043_944_368_900_976],
+];
+const XYZ_TO_P3_LIN: Mat3 = [
+    [2.493_496_911_941_425, -0.931_383_617_919_123_9, -0.402_710_784_450_716_84],
+    [-0.829_488_969_561_574_7, 1.762_664_060_318_346_3, 0.023_624_685_841_943_577],
+    [0.035_845_830_243_784_47, -0.076_172_389_268_041_82, 0.956_884_524_007_687_2],
+];
+const A98_LIN_TO_XYZ: Mat3 = [
+    [0.576_669_042_910_130_5, 0.185_558_237_906_546_3, 0.188_228_646_234_994_7],
+    [0.297_344_975_250_536_05, 0.627_363_566_255_466_1, 0.075_291_458_493_997_8],
+    [0.027_031_361_386_412_34, 0.070_688_852_535_827_23, 0.991_337_536_837_638_8],
+];
+const XYZ_TO_A98_LIN: Mat3 = [
+    [2.041_587_903_810_746_5, -0.565_006_974_278_878_6, -0.344_731_350_778_329_56],
+    [-0.969_243_636_280_879_5, 1.875_967_501_507_72, 0.041_555_057_407_175_57],
+    [0.013_444_280_632_031_142, -0.118_362_392_231_010_14, 1.015_174_994_391_205_4],
+];
+const REC2020_LIN_TO_XYZ: Mat3 = [
+    [0.636_958_048_301_291_4, 0.144_616_903_586_208_32, 0.168_880_975_164_172_1],
+    [0.262_700_212_011_267_1, 0.677_998_071_518_870_8, 0.059_301_716_469_869_86],
+    [0.0, 0.028_072_693_049_087_428, 1.060_985_057_710_790_9],
+];
+const XYZ_TO_REC2020_LIN: Mat3 = [
+    [1.716_651_187_971_267_4, -0.355_670_783_776_392_33, -0.253_366_281_373_652_74],
+    [-0.666_684_351_832_489_2, 1.616_481_236_634_939_3, 0.015_768_545_813_911_13],
+    [0.017_639_857_445_310_783, -0.042_770_613_257_808_524, 0.942_103_121_235_473_8],
+];
+/// ProPhoto's matrices are relative to a D50 white point.
+const PROPHOTO_LIN_TO_XYZ_D50: Mat3 = [
+    [0.797_760_489_672_302_7, 0.135_185_837_175_740_31, 0.031_349_349_581_524_8],
+    [0.288_071_128_229_293_4, 0.711_843_217_810_101_4, 0.000_085_653_960_605_259_02],
+    [0.0, 0.0, 0.825_104_602_510_460_1],
+];
+const XYZ_D50_TO_PROPHOTO_LIN: Mat3 = [
+    [1.345_798_973_102_828_1, -0.255_580_100_079_975_34, -0.051_106_285_067_533_01],
+    [-0.544_622_493_902_834_7, 1.508_232_741_313_278_1, 0.020_536_032_391_479_73],
+    [0.0, 0.0, 1.211_967_545_638_945_4],
+];
+
+fn a98_decode(v: f32) -> f32 {
+    v.abs().powf(563.0 / 256.0).copysign(v)
+}
+fn a98_encode(v: f32) -> f32 {
+    v.abs().powf(256.0 / 563.0).copysign(v)
+}
+fn prophoto_decode(v: f32) -> f32 {
+    if v.abs() <= 16.0 / 512.0 { v / 16.0 } else { v.abs().powf(1.8).copysign(v) }
+}
+fn prophoto_encode(v: f32) -> f32 {
+    if v.abs() <= 1.0 / 512.0 { 16.0 * v } else { v.abs().powf(1.0 / 1.8).copysign(v) }
+}
+const REC2020_ALPHA: f32 = 1.099_296_8;
+const REC2020_BETA: f32 = 0.018_053_97;
+fn rec2020_decode(v: f32) -> f32 {
+    if v.abs() < REC2020_BETA * 4.5 {
+        v / 4.5
+    } else {
+        ((v.abs() + REC2020_ALPHA - 1.0) / REC2020_ALPHA).powf(1.0 / 0.45).copysign(v)
+    }
+}
+fn rec2020_encode(v: f32) -> f32 {
+    if v.abs() < REC2020_BETA {
+        4.5 * v
+    } else {
+        (REC2020_ALPHA * v.abs().powf(0.45) - (REC2020_ALPHA - 1.0)).copysign(v)
+    }
+}
+
+/// sRGB (gamma, premultiplied or not) → channels of a predefined RGB `space`
+/// (gamma-encoded for all but `display-p3-linear`). Out-of-range values are kept
+/// so the round trip stays lossless for in-gamut colours.
+fn srgb_to_predefined(space: MixColorSpace, c: [f32; 4]) -> [f32; 4] {
+    let (x, y, z) = linear_srgb_to_xyz_d65(gamma_decode(c[0]), gamma_decode(c[1]), gamma_decode(c[2]));
+    let (lin, enc): (_, fn(f32) -> f32) = match space {
+        MixColorSpace::DisplayP3 => (mat3_mul(&XYZ_TO_P3_LIN, (x, y, z)), gamma_encode),
+        MixColorSpace::DisplayP3Linear => (mat3_mul(&XYZ_TO_P3_LIN, (x, y, z)), |v| v),
+        MixColorSpace::A98Rgb => (mat3_mul(&XYZ_TO_A98_LIN, (x, y, z)), a98_encode),
+        MixColorSpace::Rec2020 => (mat3_mul(&XYZ_TO_REC2020_LIN, (x, y, z)), rec2020_encode),
+        MixColorSpace::ProphotoRgb => {
+            let (xd, yd, zd) = xyz_d65_to_d50(x, y, z);
+            (mat3_mul(&XYZ_D50_TO_PROPHOTO_LIN, (xd, yd, zd)), prophoto_encode)
+        }
+        _ => unreachable!("not a predefined RGB space"),
+    };
+    [enc(lin.0), enc(lin.1), enc(lin.2), c[3]]
+}
+
+/// Inverse of [`srgb_to_predefined`]: predefined-space channels → sRGB (gamma).
+fn predefined_to_srgb(space: MixColorSpace, c: [f32; 4]) -> [f32; 4] {
+    let (dec, m): (fn(f32) -> f32, &Mat3) = match space {
+        MixColorSpace::DisplayP3 => (gamma_decode, &P3_LIN_TO_XYZ),
+        MixColorSpace::DisplayP3Linear => (|v| v, &P3_LIN_TO_XYZ),
+        MixColorSpace::A98Rgb => (a98_decode, &A98_LIN_TO_XYZ),
+        MixColorSpace::Rec2020 => (rec2020_decode, &REC2020_LIN_TO_XYZ),
+        MixColorSpace::ProphotoRgb => (prophoto_decode, &PROPHOTO_LIN_TO_XYZ_D50),
+        _ => unreachable!("not a predefined RGB space"),
+    };
+    let (x, y, z) = mat3_mul(m, (dec(c[0]), dec(c[1]), dec(c[2])));
+    let (x, y, z) = if space == MixColorSpace::ProphotoRgb { xyz_d50_to_d65(x, y, z) } else { (x, y, z) };
+    let (r, g, b) = xyz_d65_to_linear_srgb(x, y, z);
+    [gamma_encode(r), gamma_encode(g), gamma_encode(b), c[3]]
+}
+
 // ─── sRGB ↔ CIE Lab D50 ──────────────────────────────────────────────────────
 
 /// Lab f function (CSS Color L4 §10.7).
@@ -765,7 +913,7 @@ mod tests {
 
     #[test]
     fn parse_unknown_space_is_none() {
-        assert_eq!(MixColorSpace::from_css("display-p3"), None);
+        assert_eq!(MixColorSpace::from_css("display-p3-ish"), None);
         assert_eq!(MixColorSpace::from_css(""), None);
     }
 
@@ -1032,6 +1180,70 @@ mod tests {
         let result = mix_colors(MixColorSpace::Hwb, red, 0.5, blue, 0.5);
         assert!(result[0] + result[1] + result[2] > 0.5);
         assert!(approx_eq(result[3], 1.0));
+    }
+
+    // ── predefined RGB spaces ────────────────────────────────────────────────
+
+    const PREDEFINED: [MixColorSpace; 5] = [
+        MixColorSpace::DisplayP3,
+        MixColorSpace::DisplayP3Linear,
+        MixColorSpace::A98Rgb,
+        MixColorSpace::ProphotoRgb,
+        MixColorSpace::Rec2020,
+    ];
+
+    #[test]
+    fn predefined_spaces_parse() {
+        assert_eq!(MixColorSpace::from_css("display-p3"), Some(MixColorSpace::DisplayP3));
+        assert_eq!(MixColorSpace::from_css("display-p3-linear"), Some(MixColorSpace::DisplayP3Linear));
+        assert_eq!(MixColorSpace::from_css("a98-rgb"), Some(MixColorSpace::A98Rgb));
+        assert_eq!(MixColorSpace::from_css("prophoto-rgb"), Some(MixColorSpace::ProphotoRgb));
+        assert_eq!(MixColorSpace::from_css("rec2020"), Some(MixColorSpace::Rec2020));
+    }
+
+    #[test]
+    fn predefined_spaces_roundtrip() {
+        let c = [0.3_f32, 0.6, 0.1, 1.0];
+        for sp in PREDEFINED {
+            let back = predefined_to_srgb(sp, srgb_to_predefined(sp, c));
+            assert!(approx_eq4(back, c), "{sp:?} roundtrip: {back:?}");
+        }
+    }
+
+    #[test]
+    fn display_p3_primaries_match_known_srgb_linear_values() {
+        // Display P3 green (0,1,0) in linear sRGB is (-0.2249, 1.0421, -0.0787).
+        let (x, y, z) = mat3_mul(&P3_LIN_TO_XYZ, (0.0, 1.0, 0.0));
+        let (r, g, b) = xyz_d65_to_linear_srgb(x, y, z);
+        assert!((r + 0.2249).abs() < 0.002 && (g - 1.0421).abs() < 0.002 && (b + 0.0787).abs() < 0.002,
+            "p3 green → ({r}, {g}, {b})");
+    }
+
+    #[test]
+    fn predefined_spaces_mix_green_blue_varies_and_hits_endpoints() {
+        let green = [0.0_f32, 128.0 / 255.0, 0.0, 1.0];
+        let blue = [0.0_f32, 0.0, 1.0, 1.0];
+        for sp in PREDEFINED {
+            let a = mix_colors(sp, green, 1.0, blue, 0.0);
+            let b = mix_colors(sp, green, 0.0, blue, 1.0);
+            let m = mix_colors(sp, green, 0.5, blue, 0.5);
+            assert!(approx_eq4(a, green), "{sp:?} start: {a:?}");
+            assert!(approx_eq4(b, blue), "{sp:?} end: {b:?}");
+            assert!(m[1] > 0.1 && m[2] > 0.1, "{sp:?} midpoint is a blend: {m:?}");
+        }
+    }
+
+    #[test]
+    fn display_p3_grey_ramp_matches_srgb_transfer() {
+        // Display P3 shares the sRGB transfer function and white point, so a
+        // black→white mix lands on the same grey as sRGB itself.
+        let white = [1.0_f32; 4];
+        let black = [0.0, 0.0, 0.0, 1.0];
+        let p3 = mix_colors(MixColorSpace::DisplayP3, white, 0.5, black, 0.5);
+        assert!(approx_eq4(p3, [0.5, 0.5, 0.5, 1.0]), "p3 grey: {p3:?}");
+        let lin = mix_colors(MixColorSpace::DisplayP3Linear, white, 0.5, black, 0.5);
+        let srgb_lin = mix_colors(MixColorSpace::SrgbLinear, white, 0.5, black, 0.5);
+        assert!(approx_eq4(lin, srgb_lin), "p3-linear grey: {lin:?} vs {srgb_lin:?}");
     }
 
     // ── Alpha mixing ─────────────────────────────────────────────────────────

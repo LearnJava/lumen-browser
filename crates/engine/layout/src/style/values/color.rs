@@ -200,6 +200,8 @@ pub(in crate::style) fn predefined_to_srgb_linear(space: &str, c1: f32, c2: f32,
     Some(match space {
         // Linear-light sRGB primaries — channels are already linear sRGB.
         "srgb-linear" => (c1, c2, c3),
+        // Display P3 primaries, linear light (no transfer function).
+        "display-p3-linear" => p3_linear_to_srgb_linear(c1, c2, c3),
         // Adobe RGB (1998): gamma 563/256, then A98 linear → XYZ(D65) → sRGB.
         "a98-rgb" => {
             let dec = |c: f32| c.signum() * c.abs().powf(563.0 / 256.0);

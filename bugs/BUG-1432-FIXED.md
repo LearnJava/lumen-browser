@@ -1,6 +1,6 @@
 # BUG-1432 — `linear-gradient(… in display-p3|a98-rgb|rec2020|prophoto-rgb …)` рисует сплошной цвет; `color-mix(in display-p3, …)` отвергается; `color(display-p3-linear …)` отвергается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images` + `css/css-values` + `css/css-color`)
 **Область:** layout/paint (`style/parse/gradient*.rs`, `style/values/color_mix.rs` — предопределённые цветовые пространства)
 
@@ -36,3 +36,9 @@ WPT-RUN-14 срез 19: `css-images/gradient/display-p3-linear-gradient.html`, `
 ## Как проверить
 
 Страница из таблицы; `css/css-images/gradient/display-p3-linear-gradient.html`, `css/css-color/display-p3-linear-001.html`.
+
+## Исправление
+
+Корень: `MixColorSpace::from_css` не знал предопределённых RGB-пространств, поэтому `in display-p3` не вырезался из прелюдии градиента (остатки токенов портили разбор, ступени не разбивались) и `color-mix(in display-p3, …)` отвергался целиком. В [`color_mix.rs`](../crates/engine/layout/src/color_mix.rs) добавлены `DisplayP3`, `DisplayP3Linear`, `A98Rgb`, `ProphotoRgb`, `Rec2020` (sRGB → XYZ D65 → линейные каналы пространства → передаточная функция; ProPhoto идёт через D50); смешение — покомпонентное в каналах пространства, результат обрезается в sRGB. Градиентный «densify» (`image.rs`) и `color-mix()` получают пространства без доработок. `color(display-p3-linear …)` добавлен в `predefined_to_srgb_linear` ([`values/color.rs`](../crates/engine/layout/src/style/values/color.rs)); `display-p3-linear` добавлен и в канонизацию `in <space>` у computed `background-image` ([`image_computed.rs`](../crates/engine/layout/src/style/parse/image_computed.rs)).
+
+Тесты: `predefined_*`, `display_p3_*` в `color_mix.rs` (круг туда-обратно, эталон P3-зелёного в linear sRGB, серая шкала), `gradient_interp_predefined_rgb_spaces_vary_along_the_ramp` (`style/tests/images.rs`), `color_fn_display_p3_linear`, `color_mix_predefined_rgb_spaces_are_accepted` (`style/tests/color.rs`).

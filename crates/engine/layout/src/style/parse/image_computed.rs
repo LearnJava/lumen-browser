@@ -284,7 +284,7 @@ fn split_interp<'a>(tokens: &[&'a str]) -> Option<(Vec<&'a str>, Option<String>)
     let polar = matches!(space.as_str(), "hsl" | "hwb" | "lch" | "oklch");
     let rect = matches!(
         space.as_str(),
-        "srgb" | "srgb-linear" | "display-p3" | "a98-rgb" | "prophoto-rgb" | "rec2020" | "lab"
+        "srgb" | "srgb-linear" | "display-p3" | "display-p3-linear" | "a98-rgb" | "prophoto-rgb" | "rec2020" | "lab"
             | "oklab" | "xyz" | "xyz-d50" | "xyz-d65"
     );
     if !polar && !rect {

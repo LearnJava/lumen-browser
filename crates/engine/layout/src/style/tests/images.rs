@@ -1327,6 +1327,26 @@ use super::*;
         }
     }
 
+    /// BUG-1432: predefined RGB spaces (`display-p3`, `a98-rgb`, `rec2020`,
+    /// `prophoto-rgb`, `display-p3-linear`) are recognised and densify the ramp
+    /// instead of leaving a garbage prelude token that paints one flat colour.
+    #[test]
+    fn gradient_interp_predefined_rgb_spaces_vary_along_the_ramp() {
+        for sp in ["display-p3", "display-p3-linear", "a98-rgb", "rec2020", "prophoto-rgb"] {
+            let g = parse_background_gradient(&format!(
+                "linear-gradient(to right in {sp}, green, blue)"
+            ));
+            let ParsedGradient::Linear { stops, .. } = g else {
+                panic!("expected linear for {sp}");
+            };
+            assert!(stops.len() > 2, "{sp}: densified, got {}", stops.len());
+            let (first, last) = (stops[0].color, stops[stops.len() - 1].color);
+            assert!(first.g > last.g && last.b > first.b, "{sp}: ramp runs green→blue");
+            let mid = stops[stops.len() / 2].color;
+            assert!(mid.g > 20 && mid.b > 20, "{sp}: midpoint blends, got {mid:?}");
+        }
+    }
+
     // ── radial-gradient shape / size (CSS Images L3 §3.5, BUG-239) ─────────────
 
     #[test]
