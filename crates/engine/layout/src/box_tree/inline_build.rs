@@ -1229,6 +1229,20 @@ pub(crate) fn inject_pseudo(
     blockify: bool,
 ) {
     let Some(ps) = ps else { return };
+    // CSS Display L3 §2.7: `display: none` generates no box — not even the anonymous run that
+    // would hold its `content`.
+    if ps.display == Display::None {
+        return;
+    }
+    // CSS Display L3 §2.7: a floated or absolutely positioned pseudo-element is blockified — it
+    // is a box of its own taking no part in the line, however its `display` reads (the initial
+    // `inline` of `a::after { content: ''; position: absolute }`).
+    let mut ps = ps;
+    let out_of_flow =
+        ps.float_side != FloatSide::None || matches!(ps.position, Position::Absolute | Position::Fixed);
+    if out_of_flow && let Some(d) = blockified_legend_display(ps.display) {
+        ps.display = d;
+    }
     let slot = if is_before { QuoteSlot::Before } else { QuoteSlot::After };
     match ps.display {
         Display::Inline

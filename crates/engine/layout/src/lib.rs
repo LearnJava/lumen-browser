@@ -44,6 +44,8 @@ pub mod ruby;
 pub mod rule_index;
 mod grid_computed;
 mod resolved_geometry;
+mod pseudo_geometry;
+pub use pseudo_geometry::{collect_pseudo_rects, PseudoGeometry};
 mod transform_interp;
 pub mod selection;
 pub mod selector_query;

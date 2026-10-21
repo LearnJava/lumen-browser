@@ -23,6 +23,8 @@ the time — read dates.
 
 ## Done
 
+- **`CSSPseudoElement` и `Element.pseudo()` (CSSOM-11, 2026-10-21, [BUG-1456](../bugs/BUG-1456-OPEN.md)).** `shim/pseudo_element_shim.js`, после `GEOMETRY_SHIM` (использует `DOMQuad`/`DOMPoint`/`DOMRectList`). Объект — ручка, не снимок: кэш `WeakMap` по обёртке владельца даёт идентичность, а геометрия читается при каждом вызове через нативную `_lumen_get_pseudo_geometry(nid, name)` (`platform.rs`) → `[x, y, w, h, border×4, padding×4, margin×4]` или `undefined`. Таблица `lumen_layout::collect_pseudo_rects` собирается полным обходом дерева боксов и только после первого обращения (`pseudo_rects_needed` в `FlushHandles`, по образцу `text_frags_needed`); `update_client_rects` сбрасывает `pseudo_rects_collected`. Ключ — `(владелец, имя без `::`)`, значение — первый бокс с `BoxRole::Pseudo`. Бокс есть только у блочно-уровневого псевдоэлемента: inline-`::before` склеивается в `InlineRun` владельца без вида псевдоэлемента во фрагментах, его `getBoxQuads()` пуст. Начало координат узла для `convert*FromNode`/`relativeTo` — левый верхний угол border box (у `document` — `-scrollX,-scrollY`). Нет бокса у источника/приёмника → `convert*FromNode` возвращает `null`.
+  - Раскладка: `inject_pseudo` не строит бокс для `display: none` и блокифицирует плавающий/абсолютно позиционированный псевдоэлемент с `display: inline` (CSS Display L3 §2.7) — иначе он оставался текстом в строке владельца, а `display: none` рисовался.
 - **`Origin` (GAP-ORIGIN, P1, 2026-09-27).** `shim/origin_shim.js`, spliced after `URL_SHIM`
   into the page shim and `worker_exposed_shim()`. Tuple vs opaque comes from the native
   `_lumen_url_origin` (`origin.rs` → `lumen_core::url::Url::tuple_origin`, URL Standard §6.1),
