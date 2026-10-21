@@ -1143,39 +1143,51 @@ pub(crate) fn compute_style_shareable(
     // every element of every real page, that nothing declares `revert-layer`/
     // `revert-rule`. One allocation-free scan first (measured: 1.4 ms per
     // chrome layout pass, ~7% of the cascade stage).
+
+    // BUG-1449: «слой» объявления — позиция в порядке слоёв, независимая от
+    // важности (у `!important` `lp` инвертирован), с атрибутом `style` как
+    // отдельным шагом над unlayered: `2·layer_idx + is_inline`. `revert-layer`
+    // выкидывает объявления свойства с позицией ≥ своей — и normal, и
+    // `!important` (Chrome: откат к слоям *до* текущего в порядке слоёв, а не в
+    // порядке приоритета данной важности).
+    let layer_pos = |imp: bool, inline: bool, lp: i32| -> i32 {
+        (if imp { -lp } else { lp }) * 2 + i32::from(inline)
+    };
     while matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
         let v = decl.value.trim();
         v.eq_ignore_ascii_case("revert-layer") || v.eq_ignore_ascii_case("revert-rule")
     }) {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
-        // (lp, important, rule_idx, is_revert_layer, is_revert_rule)
-        let mut winners: HashMap<String, (i32, bool, usize, bool, bool)> = HashMap::new();
-        for &(imp, _inline, lp, _, rule_idx, _, decl, _) in &matched {
+        // (pos, rule_idx, is_revert_layer, is_revert_rule)
+        let mut winners: HashMap<String, (i32, usize, bool, bool)> = HashMap::new();
+        for &(imp, inline, lp, _, rule_idx, _, decl, _) in &matched {
             let key = decl.property.to_ascii_lowercase();
             let v = decl.value.trim();
             let is_revert_layer = v.eq_ignore_ascii_case("revert-layer");
             let is_revert_rule = v.eq_ignore_ascii_case("revert-rule");
-            winners.insert(key, (lp, imp, rule_idx, is_revert_layer, is_revert_rule));
+            winners.insert(
+                key,
+                (layer_pos(imp, inline, lp), rule_idx, is_revert_layer, is_revert_rule),
+            );
         }
-        let layer_targets: Vec<(String, i32, bool)> = winners
+        let layer_targets: Vec<(String, i32)> = winners
             .iter()
-            .filter(|&(_, &(_, _, _, is_revert_layer, _))| is_revert_layer)
-            .map(|(k, &(lp, imp, _, _, _))| (k.clone(), lp, imp))
+            .filter(|&(_, &(_, _, is_revert_layer, _))| is_revert_layer)
+            .map(|(k, &(pos, _, _, _))| (k.clone(), pos))
             .collect();
         let rule_targets: Vec<(String, usize)> = winners
             .iter()
-            .filter(|&(_, &(_, _, _, _, is_revert_rule))| is_revert_rule)
-            .map(|(k, &(_, _, rule_idx, _, _))| (k.clone(), rule_idx))
+            .filter(|&(_, &(_, _, _, is_revert_rule))| is_revert_rule)
+            .map(|(k, &(_, rule_idx, _, _))| (k.clone(), rule_idx))
             .collect();
         if layer_targets.is_empty() && rule_targets.is_empty() {
             break;
         }
-        matched.retain(|&(imp, _inline, lp, _, rule_idx, _, decl, _)| {
+        matched.retain(|&(imp, inline, lp, _, rule_idx, _, decl, _)| {
             let key = decl.property.to_ascii_lowercase();
-            let hit_layer = layer_targets
-                .iter()
-                .any(|(tk, tlp, timp)| *tk == key && *tlp == lp && *timp == imp);
+            let pos = layer_pos(imp, inline, lp);
+            let hit_layer = layer_targets.iter().any(|(tk, tpos)| *tk == key && pos >= *tpos);
             let hit_rule =
                 rule_targets.iter().any(|(tk, tridx)| *tk == key && *tridx == rule_idx);
             !(hit_layer || hit_rule)

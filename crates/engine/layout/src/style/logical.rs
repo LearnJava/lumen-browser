@@ -247,6 +247,33 @@ fn flow_relative_sides(style: &ComputedStyle) -> [Side; 4] {
 }
 
 
+/// `revert` на логическом margin-longhand (BUG-1449): логическое поле при
+/// резолве затирает физическое только если то равно `ZERO`, поэтому откат
+/// логического значения к UA-базе (`margin-block-start: revert` на `<h1>`
+/// после `margin: 0`) сам по себе физическую сторону не возвращает. Здесь
+/// физическая сторона, на которую `prop` (`margin-{inline,block}-{start,end}`)
+/// отображается по writing-mode/direction `style`, берётся из `ua_baseline`.
+/// `prop` не из этого набора — ничего не делает.
+pub(in crate::style) fn revert_logical_margin_side(
+    style: &mut ComputedStyle,
+    prop: &str,
+    ua_baseline: &ComputedStyle,
+) {
+    let idx = match prop {
+        "margin-inline-start" => 0,
+        "margin-inline-end" => 1,
+        "margin-block-start" => 2,
+        "margin-block-end" => 3,
+        _ => return,
+    };
+    match flow_relative_sides(style)[idx] {
+        Side::Top => style.margin_top = ua_baseline.margin_top.clone(),
+        Side::Right => style.margin_right = ua_baseline.margin_right.clone(),
+        Side::Bottom => style.margin_bottom = ua_baseline.margin_bottom.clone(),
+        Side::Left => style.margin_left = ua_baseline.margin_left.clone(),
+    }
+}
+
 /// CSS Overflow L3 §logical (BUG-505) — resolve `overflow-block`/
 /// `overflow-inline` to the physical `overflow_x`/`overflow_y` pair.
 ///

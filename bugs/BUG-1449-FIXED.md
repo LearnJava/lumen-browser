@@ -1,6 +1,6 @@
 # BUG-1449 — `revert-layer`: из атрибута `style` и с `!important` не откатывает слой (11 reftest); `margin-block-start: revert` не возвращает UA-значение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** layout (каскад: `revert-layer` в атрибуте `style` и с `!important`; `revert` логических `margin-*`)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 20: `css-cascade/revert-layer-005.html`, `-009`, `-012`; `re
 ## Как проверить
 
 Таблица выше; `css/css-cascade/revert-layer-009.html`, `css/css-cascade/revert-val-005.html`.
+
+## Исправление
+
+(1)+(2) `cascade.rs`, пре-пасс `revert-layer`: «слой» объявления теперь позиция `2·layer_idx + is_inline` независимо от важности; `revert-layer` выкидывает объявления свойства с позицией ≥ своей (и normal, и `!important`). Атрибут `style` — отдельный шаг над unlayered, поэтому откат из него оставляет значение листа. (3) `css_wide.rs` + `logical.rs::revert_logical_margin_side`: `revert` логического margin-longhand/шортката ещё и возвращает UA-значение физической стороны (логическое поле физическое не перебивает, если оно уже 0). Тесты: `style::tests::cascade::revert_layer_in_style_attribute_falls_to_sheet`, `revert_layer_important_rolls_back_to_earlier_layer`, `revert_logical_margin_restores_ua_value`.
