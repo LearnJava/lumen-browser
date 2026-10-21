@@ -333,6 +333,17 @@ fn apply_css_wide_keyword_with(
         }
         "text-transform" => {
             style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
+            style.text_extra.transform =
+                if inh { inherited.text_extra.transform } else { init.text_extra.transform };
+        }
+        "tab-size" => {
+            // Число и длина лежат в двух полях (BUG-1437): сбрасываются вместе.
+            let src = if inh { inherited } else { init };
+            style.tab_size = src.tab_size;
+            style.text_extra.tab_size_number = src.text_extra.tab_size_number;
+        }
+        "hyphens" => {
+            style.hyphens = if inh { inherited.hyphens } else { init.hyphens };
         }
         "white-space" => {
             // L4 §2.1: shorthand — CSS-wide keyword применяется к обеим
@@ -351,6 +362,10 @@ fn apply_css_wide_keyword_with(
         }
         "text-indent" => {
             style.text_indent = if inh { inherited.text_indent.clone() } else { init.text_indent.clone() };
+            // `hanging`/`each-line` — часть значения (BUG-1437).
+            let src = if inh { inherited } else { init };
+            style.text_extra.indent_hanging = src.text_extra.indent_hanging;
+            style.text_extra.indent_each_line = src.text_extra.indent_each_line;
         }
         "letter-spacing" => {
             style.letter_spacing = if inh { inherited.letter_spacing } else { init.letter_spacing };
