@@ -1,6 +1,6 @@
 # BUG-1435 — `getComputedStyle()` не возвращает `rotate`, `scale`, `translate`, `tab-size`, `interpolate-size`, `image-orientation`, `object-view-box`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images` + `css/css-values` + `css/css-color`)
 **Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
 
@@ -37,3 +37,9 @@ WPT-RUN-14 срез 19: почти все `*-computed.html` в `css-values` пр
 ## Как проверить
 
 Страница из таблицы; `css/css-values/round-mod-rem-computed.html`, `random-computed.tentative.html`.
+
+## Исправление
+
+`rotate`/`scale`/`translate`/`tab-size` уже отдавались после BUG-1430 срез 1 (`computed_style_to_map`; тесты — `crates/driver/tests/cases/bug1430_math_functions.rs`).
+Здесь добавлен `interpolate-size` (`numeric-only`/`allow-keywords`, наследуется) в `selector_query.rs::computed_style_to_map`; тест `interpolate_size_is_serialised_and_inherited`.
+`image-orientation` и `object-view-box` в движке не разбираются вовсе — это недостающая функциональность, а не дефект карты computed; учтены в `CSS-SPECS.md` (⬜).

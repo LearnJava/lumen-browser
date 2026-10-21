@@ -27,7 +27,7 @@ use crate::style::{
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, ImageRendering, Isolation, IterationCount, Length,
+    FontVariantPosition, ImageRendering, InterpolateSizeMode, Isolation, IterationCount, Length,
     LengthOrAuto,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowAnchor, overflow_clip_margin_serialize,
     OutlineColor, OverscrollBehavior,
@@ -1975,6 +1975,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Compositing ───────────────────────────────────────────────
     m.insert("mix-blend-mode".into(), mix_blend_mode_to_css(style.mix_blend_mode).into());
+    m.insert("interpolate-size".into(), match style.interpolate_size {
+        InterpolateSizeMode::NumericOnly => "numeric-only",
+        InterpolateSizeMode::AllowKeywords => "allow-keywords",
+    }.into());
     m.insert("isolation".into(), match style.isolation {
         Isolation::Auto => "auto",
         Isolation::Isolate => "isolate",
@@ -2653,6 +2657,22 @@ mod tests {
         assert_eq!(get("#v", "direction").as_deref(), Some("rtl"));
         assert_eq!(get("#v", "unicode-bidi").as_deref(), Some("isolate-override"));
         assert_eq!(get("#v", "text-orientation").as_deref(), Some("upright"));
+    }
+
+    /// BUG-1435: `interpolate-size` is inherited and readable through `getComputedStyle()`.
+    #[test]
+    fn interpolate_size_is_serialised_and_inherited() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="d">x</div><div id="v"><p id="c">y</p></div>"#,
+            "#v { interpolate-size: allow-keywords }",
+        );
+        let get = |sel: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get("interpolate-size").cloned()
+        };
+        assert_eq!(get("#d").as_deref(), Some("numeric-only"));
+        assert_eq!(get("#v").as_deref(), Some("allow-keywords"));
+        assert_eq!(get("#c").as_deref(), Some("allow-keywords"));
     }
 
     /// BUG-1325: the CSS Text longhands that `getComputedStyle()` used to read back as `""`.
