@@ -5,6 +5,12 @@
 //! (анкер `fn apply_container_styles`) без правок тел.
 
 use super::*;
+use crate::style::{ContainerKinds, ScrollStateInfo};
+
+/// The box establishes a query container (`container-type` other than `normal`).
+fn is_query_container(style: &ComputedStyle) -> bool {
+    !matches!(style.container_type, ContainerType::Normal) || style.container_scroll_state
+}
 
 /// CSS Container Queries L1: second-pass after layout.
 ///
@@ -66,8 +72,11 @@ fn apply_container_inner(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) {
-    let mut stack: Vec<(&mut LayoutBox, Rect, f32)> = vec![(b, pcb, parent_h)];
-    while let Some((b, pcb, parent_h)) = stack.pop() {
+    // The third element is the nearest query container above the box — the head of
+    // the chain a descendant container links to via `ContainerContext::parent`.
+    type Outer = Option<Arc<ContainerContext>>;
+    let mut stack: Vec<(&mut LayoutBox, Rect, f32, Outer)> = vec![(b, pcb, parent_h, None)];
+    while let Some((b, pcb, parent_h, outer)) = stack.pop() {
         // Derive content dimensions from already-laid-out rect + style — needed
         // both for container-query context (if `b` is a container) and as the
         // `parent_h` basis passed down to `b`'s own children either way.
@@ -82,14 +91,15 @@ fn apply_container_inner(
         let content_h_val = (b.rect.height - pad_t - pad_b
             - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
 
-        let is_container = !matches!(b.style.container_type, ContainerType::Normal);
+        let is_container = is_query_container(&b.style);
         if is_container {
+            let size_container = !matches!(b.style.container_type, ContainerType::Normal);
             let content_h = if matches!(b.style.container_type, ContainerType::Size) {
                 Some(content_h_val)
             } else {
                 None // inline-size: height not queryable
             };
-            let ctx = ContainerContext {
+            let ctx = Arc::new(ContainerContext {
                 width: content_w,
                 height: content_h,
                 names: b.style.container_name.clone(),
@@ -98,10 +108,27 @@ fn apply_container_inner(
                 font_size: em,
                 viewport,
                 own_containing_block_height: parent_h,
-            };
+                kinds: ContainerKinds { size: size_container, scroll_state: b.style.container_scroll_state },
+                scroll_state: if b.style.container_scroll_state {
+                    crate::scroll_state::scroll_state_info(b)
+                } else {
+                    ScrollStateInfo::default()
+                },
+                parent: outer,
+            });
             // Re-apply container rules to all direct + indirect descendants.
             for child in &mut b.children {
                 re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
+            }
+            if !size_container {
+                // A scroll-state-only container does not contain its size: the queries
+                // restyle the subtree, but the box tree below keeps its first-pass geometry
+                // (re-laying out a block stack here would drop margin collapsing, floats and
+                // inline flow of an `overflow: auto` scroller).
+                for child in &mut b.children {
+                    stack.push((child, pcb, content_h_val, Some(Arc::clone(&ctx))));
+                }
+                continue;
             }
             // Re-lay out block-flow children with updated styles.
             let content_x = b.rect.x + pad_l + b.style.border_left_width;
@@ -133,12 +160,12 @@ fn apply_container_inner(
             // After re-layout, push children to catch nested containers.
             // Each nested container will set its own cq* context during its own re-layout.
             for child in &mut b.children {
-                stack.push((child, child_pcb, content_h_val));
+                stack.push((child, child_pcb, content_h_val, Some(Arc::clone(&ctx))));
             }
         } else {
             // Not a container — just descend looking for container descendants.
             for child in &mut b.children {
-                stack.push((child, pcb, content_h_val));
+                stack.push((child, pcb, content_h_val, outer.clone()));
             }
         }
     }
@@ -465,7 +492,7 @@ fn re_style_subtree(
             apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
         }
         // Don't propagate into nested containers — they'll build their own context.
-        if matches!(b.style.container_type, ContainerType::Normal) {
+        if !is_query_container(&b.style) {
             stack.extend(b.children.iter_mut());
         }
     }

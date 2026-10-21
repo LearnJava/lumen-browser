@@ -1758,6 +1758,9 @@ use super::*;
             font_size: 16.0,
             viewport: lumen_core::Size::new(1024.0, 768.0),
             own_containing_block_height: 100.0,
+            kinds: crate::ContainerKinds::SIZE,
+            scroll_state: crate::ScrollStateInfo::default(),
+            parent: None,
         }
     }
 

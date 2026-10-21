@@ -56,6 +56,7 @@ pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
+mod scroll_state;
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
@@ -177,7 +178,7 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    apply_container_rules, evaluate_container_condition,
+    apply_container_rules, evaluate_container_condition, evaluate_container_query,
     set_interactive_state, clear_interactive_state,
     set_animated_heights, clear_animated_heights,
     set_forced_colors, forced_colors_active,
@@ -186,7 +187,7 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, ContainerKinds, Edge, EdgeFlags, ScrollStateInfo, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
     AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle,
@@ -3086,6 +3087,10 @@ mod scroll_interaction_misc;
 #[cfg(test)]
 #[path = "tests/scroll_container.rs"]
 mod scroll_container;
+
+#[cfg(test)]
+#[path = "tests/scroll_state_queries.rs"]
+mod scroll_state_queries;
 
 #[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]

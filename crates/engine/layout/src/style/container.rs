@@ -8,6 +8,7 @@
 //! (анкер `struct ContainFlags` до конца `apply_container_rules`) без правок тел.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{Declaration, Specificity, Stylesheet};
@@ -15,6 +16,7 @@ use lumen_dom::{Document, DocumentMode, NodeId};
 
 use crate::style::apply::apply_declaration;
 use crate::style::computed::ComputedStyle;
+use crate::style::container_scroll::{evaluate_scroll_state_query, ScrollStateInfo};
 use crate::style::matching::matches_complex;
 use crate::style::parse::color::parse_color;
 use crate::style::substitute::{expand_attr_val, expand_vars};
@@ -118,6 +120,30 @@ pub struct ContainerContext {
     /// of the containing block is not specified explicitly… the percentage
     /// value computes to auto" is not modeled here).
     pub own_containing_block_height: f32,
+    /// Which query kinds this container answers (`container-type`).
+    pub kinds: ContainerKinds,
+    /// `scroll-state()` state of a `container-type: scroll-state` container.
+    pub scroll_state: ScrollStateInfo,
+    /// The next container up the ancestor chain. A query resolves its own
+    /// container per feature kind (CSS Conditional 5 §«container selection»):
+    /// the nearest ancestor with the right `container-type` and, for a named
+    /// `@container`, the right `container-name`.
+    pub parent: Option<Arc<ContainerContext>>,
+}
+
+/// Query kinds a container answers — the `container-type` axes of
+/// CSS Conditional 5 §3.1.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContainerKinds {
+    /// `size` / `inline-size`: answers size features (`width`, `height`, …).
+    pub size: bool,
+    /// `scroll-state`: answers `scroll-state(…)`.
+    pub scroll_state: bool,
+}
+
+impl ContainerKinds {
+    /// A size container.
+    pub const SIZE: Self = Self { size: true, scroll_state: false };
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
@@ -183,52 +209,119 @@ pub struct ContainerContext {
 ///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
-    let s = condition.trim();
-    // Handle `not (...)` and `not style(...)`.
-    if let Some(rest) = s.strip_prefix("not") {
-        let rest = rest.trim();
-        if rest.starts_with('(') || rest.to_ascii_lowercase().starts_with("style(") {
-            return !evaluate_container_condition(rest, ctx);
+    evaluate_container_query(condition, None, ctx)
+}
+
+/// Three-valued truth of a container condition: `None` is «unknown»
+/// (CSS Conditional 5 §«general-enclosed»; `unknown` and `not unknown` are both
+/// unknown, so a rule with an unknown condition never applies).
+pub(super) type Tri = Option<bool>;
+
+fn tri_not(t: Tri) -> Tri {
+    t.map(|b| !b)
+}
+
+fn tri_and(a: Tri, b: Tri) -> Tri {
+    match (a, b) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+fn tri_or(a: Tri, b: Tri) -> Tri {
+    match (a, b) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    }
+}
+
+/// `not`/`and`/`or`/parenthesised-group structure shared by container conditions,
+/// `style()` and `scroll-state()`; `leaf` evaluates one bare feature (text without
+/// its parentheses) or a whole `style(…)`/`scroll-state(…)` function.
+pub(super) fn eval_tri(s: &str, leaf: &dyn Fn(&str) -> Tri) -> Tri {
+    let s = s.trim();
+    if s.len() > 3 && s.is_char_boundary(3) && s[..3].eq_ignore_ascii_case("not") {
+        let rest = &s[3..];
+        if rest.starts_with(char::is_whitespace) {
+            return tri_not(eval_tri(rest, leaf));
         }
     }
-    // Split on top-level `and` / `or`.
     if let Some((lhs, rhs)) = split_top_level_logical(s, " and ") {
-        return evaluate_container_condition(lhs, ctx) && evaluate_container_condition(rhs, ctx);
+        return tri_and(eval_tri(lhs, leaf), eval_tri(rhs, leaf));
     }
     if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
-        return evaluate_container_condition(lhs, ctx) || evaluate_container_condition(rhs, ctx);
+        return tri_or(eval_tri(lhs, leaf), eval_tri(rhs, leaf));
     }
-    // Handle `style(...)` queries.
-    let s_lower = s.to_ascii_lowercase();
-    if s_lower.starts_with("style(") && s.ends_with(')') {
-        // Extract content between `style(` and the final `)`.
-        let inner = s[6..s.len() - 1].trim();
-        return evaluate_style_query(inner, ctx);
+    if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        return eval_tri(inner, leaf);
     }
-    // Feature: `(feature: value)`.
-    let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'));
-    let inner = match inner {
-        Some(i) => i.trim(),
-        None => return false,
+    leaf(s)
+}
+
+/// Nearest container on the chain starting at `ctx` that answers `want` and (for a
+/// named `@container`) carries `name`.
+fn resolve_container<'a>(
+    ctx: &'a ContainerContext,
+    name: Option<&str>,
+    want: impl Fn(&ContainerContext) -> bool,
+) -> Option<&'a ContainerContext> {
+    let mut cur = Some(ctx);
+    while let Some(c) = cur {
+        if want(c) && name.is_none_or(|n| c.names.iter().any(|x| x == n)) {
+            return Some(c);
+        }
+        cur = c.parent.as_deref();
+    }
+    None
+}
+
+/// Size features the engine knows by name: evaluated for the `name: length` form,
+/// `false` for the forms not modelled yet (range syntax, `aspect-ratio`, `orientation`).
+fn is_known_size_feature(name: &str) -> bool {
+    let base = name.strip_prefix("min-").or_else(|| name.strip_prefix("max-")).unwrap_or(name);
+    matches!(base, "width" | "height" | "inline-size" | "block-size" | "aspect-ratio" | "orientation")
+}
+
+/// Evaluates a raw `@container` condition against the container chain starting at
+/// `ctx`; `name` is the `@container <name>` of the rule. «Unknown» counts as false.
+pub fn evaluate_container_query(condition: &str, name: Option<&str>, ctx: &ContainerContext) -> bool {
+    eval_tri(condition, &|leaf| container_leaf(leaf, name, ctx)) == Some(true)
+}
+
+fn container_leaf(s: &str, name: Option<&str>, ctx: &ContainerContext) -> Tri {
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("style(") && s.ends_with(')') {
+        let c = resolve_container(ctx, name, |_| true)?;
+        return evaluate_style_query(&s[6..s.len() - 1], c);
+    }
+    if lower.starts_with("scroll-state(") && s.ends_with(')') {
+        let c = resolve_container(ctx, name, |c| c.kinds.scroll_state)?;
+        return evaluate_scroll_state_query(&s["scroll-state(".len()..s.len() - 1], &c.scroll_state);
+    }
+    // Feature: `feature: value` (the parentheses were stripped by `eval_tri`).
+    let Some(pos) = s.find(':') else {
+        let head: String = s.chars().take_while(|c| c.is_ascii_alphabetic() || *c == '-').collect();
+        let ranged = s.contains(['<', '>', '=']);
+        return (is_known_size_feature(&head.to_ascii_lowercase()) || ranged).then_some(false);
     };
-    // Parse `feature: value`.
-    let colon = inner.find(':');
-    let (feature, value) = if let Some(pos) = colon {
-        (inner[..pos].trim(), inner[pos + 1..].trim())
-    } else {
-        // Boolean feature (e.g. `(color)`) — unsupported in Phase 0.
-        return false;
-    };
+    let feature = s[..pos].trim().to_ascii_lowercase();
+    let value = s[pos + 1..].trim();
+    if !is_known_size_feature(&feature) {
+        return None;
+    }
+    let c = resolve_container(ctx, name, |c| c.kinds.size)?;
     let px = parse_css_length_to_px(value);
-    match (feature, px) {
-        ("min-width", Some(v))  => ctx.width >= v,
-        ("max-width", Some(v))  => ctx.width <= v,
-        ("width", Some(v))      => (ctx.width - v).abs() < 0.5,
-        ("min-height", Some(v)) => ctx.height.is_some_and(|h| h >= v),
-        ("max-height", Some(v)) => ctx.height.is_none_or(|h| h <= v),
-        ("height", Some(v))     => ctx.height.is_some_and(|h| (h - v).abs() < 0.5),
+    Some(match (feature.as_str(), px) {
+        ("min-width", Some(v)) => c.width >= v,
+        ("max-width", Some(v)) => c.width <= v,
+        ("width", Some(v)) => (c.width - v).abs() < 0.5,
+        ("min-height", Some(v)) => c.height.is_some_and(|h| h >= v),
+        ("max-height", Some(v)) => c.height.is_none_or(|h| h <= v),
+        ("height", Some(v)) => c.height.is_some_and(|h| (h - v).abs() < 0.5),
         _ => false,
-    }
+    })
 }
 
 /// Evaluates the content of a `style()` container query — CSS Containment L3
@@ -241,26 +334,14 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
 /// `style(not (display: none))`). `<style-feature>` itself always queries
 /// exactly one property — the grammar has no comma-separated multi-declaration
 /// form — handled by `evaluate_style_feature`.
-fn evaluate_style_query(s: &str, ctx: &ContainerContext) -> bool {
-    let s = s.trim();
-    if let Some(rest) = s.strip_prefix("not") {
-        let rest = rest.trim();
-        if rest.starts_with('(') {
-            return !evaluate_style_query(rest, ctx);
-        }
-    }
-    if let Some((lhs, rhs)) = split_top_level_logical(s, " and ") {
-        return evaluate_style_query(lhs, ctx) && evaluate_style_query(rhs, ctx);
-    }
-    if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
-        return evaluate_style_query(lhs, ctx) || evaluate_style_query(rhs, ctx);
-    }
-    // `<style-in-parens>` grouping: strip one layer and recurse.
-    if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
-        return evaluate_style_query(inner, ctx);
-    }
-    // Leaf: a bare `<style-feature>` (boolean `prop` or declaration `prop: value`).
-    evaluate_style_feature(s, ctx)
+fn evaluate_style_query(s: &str, ctx: &ContainerContext) -> Tri {
+    eval_tri(s, &|feature| {
+        // A property name is an identifier: `scroll-state(…)` inside `style()` is
+        // `<general-enclosed>` (unknown), not a property that is merely unset.
+        let name = feature.split(':').next().unwrap_or("").trim();
+        let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        valid.then(|| evaluate_style_feature(feature, ctx))
+    })
 }
 
 /// Evaluates a single `<style-feature>` (CSS Containment L3 §5.2): the boolean
@@ -473,13 +554,7 @@ pub fn apply_container_rules(
 ) {
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for container_rule in &sheet.container_rules {
-        // Name filter: if the rule has a name, the context must include that name.
-        if container_rule.name.as_ref().is_some_and(|rule_name| {
-            !ctx.names.iter().any(|n| n == rule_name)
-        }) {
-            continue;
-        }
-        if !evaluate_container_condition(&container_rule.condition, ctx) {
+        if !evaluate_container_query(&container_rule.condition, container_rule.name.as_deref(), ctx) {
             continue;
         }
         // Apply declarations from matching rules.
@@ -499,6 +574,19 @@ pub fn apply_container_rules(
                 let pw = style.font_weight;
                 let inherited = style.clone();
                 for decl in &rule.declarations {
+                    // Custom properties are not a cascade of `apply_declaration` (compute_style
+                    // collects them in its own pass): a `@container` rule sets them here.
+                    if decl.property.starts_with("--") {
+                        let value = if decl.value.contains("var(") {
+                            expand_vars(&decl.value, &style.custom_props, 0, em, viewport)
+                        } else {
+                            Some(decl.value.clone())
+                        };
+                        if let Some(value) = value {
+                            style.custom_props.make_mut().insert(decl.property.clone(), value);
+                        }
+                        continue;
+                    }
                     let attr_buf;
                     let effective_decl: &Declaration = if decl.value.contains("attr(") {
                         let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };

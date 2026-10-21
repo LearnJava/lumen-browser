@@ -1054,6 +1054,10 @@ pub struct ComputedStyle {
     /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
     /// Phase 0: parse + store; @container query matching — deferred.
     pub container_type: ContainerType,
+    /// CSS Conditional 5 §3 — `container-type: … scroll-state`: the box is a scroll-state
+    /// query container (`@container scroll-state(…)`). Independent of the size axis in
+    /// [`Self::container_type`]; NOT inherited. Initial: `false`.
+    pub container_scroll_state: bool,
     /// CSS Container Queries L1 §3.2 — `container-name`. NOT inherited. Initial: empty.
     /// `none` = empty vec. Each name is a `<custom-ident>`.
     pub container_name: Vec<String>,
@@ -1649,6 +1653,7 @@ impl ComputedStyle {
             interest_delay_start: None,
             interest_delay_end: None,
             container_type: ContainerType::Normal,
+            container_scroll_state: false,
             container_name: Vec::new(),
             backdrop_filter: Vec::new(),
             print_color_adjust: PrintColorAdjust::Economy,
@@ -2094,6 +2099,7 @@ impl ComputedStyle {
             interest_delay_start: None,
             interest_delay_end: None,
             container_type: ContainerType::Normal,
+            container_scroll_state: false,
             container_name: Vec::new(),
             // CSS Filter Effects L2 — backdrop-filter не наследуется.
             backdrop_filter: Vec::new(),
