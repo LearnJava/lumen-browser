@@ -4014,6 +4014,28 @@ function _lumen_selection_tree_root_nid(nid) {
 // DOM §4.2.6 «converting nodes into a node»: аргумент ParentNode-методов —
 // либо узел, либо строка, которая становится текстовым узлом. Возвращает nid
 // или `null`, если аргумент не то и не другое.
+// DOM LS §4.2.6 «convert nodes into a node», as a flat nid list: a string (or
+// any non-node value, stringified) becomes a text node, a DocumentFragment
+// contributes its children — never the fragment itself (BUG-1440). The list is
+// a snapshot, so inserting its first entry (which empties the fragment) does
+// not shift the rest.
+function _lumen_expand_insert_nids(args) {
+    var out = [];
+    for (var i = 0; i < args.length; i++) {
+        var a = args[i];
+        if (a && typeof a === 'object' && _lumen_adopt_detached(a).__nid__ !== undefined) {
+            if (a.__isDocumentFragment__) {
+                var kids = _lumen_get_children(a.__nid__);
+                for (var k = 0; k < kids.length; k++) out.push(kids[k]);
+            } else {
+                out.push(a.__nid__);
+            }
+        } else {
+            out.push(_lumen_create_text_node(typeof a === 'string' ? a : String(a)));
+        }
+    }
+    return out;
+}
 function _lumen_node_or_text_nid(arg) {
     if (typeof arg === 'string') return _lumen_create_text_node(arg);
     if (arg && _lumen_adopt_detached(arg).__nid__ !== undefined) return arg.__nid__;
@@ -4131,14 +4153,14 @@ var _lumen_document_fragment_members = {
         // DOM §4.2.6 ParentNode.append/prepend/replaceChildren — принимают узлы
         // и строки (строка становится текстовым узлом).
         append:               function() { var nid = this.__nid__;
-            for (var i = 0; i < arguments.length; i++) {
-                _lumen_append_child(nid, _lumen_node_or_text_nid(arguments[i]));
-            }
+            var ins = _lumen_expand_insert_nids(arguments);
+            for (var i = 0; i < ins.length; i++) _lumen_append_child(nid, ins[i]);
         },
         prepend:              function() { var nid = this.__nid__;
             var first = _lumen_get_children(nid)[0];
-            for (var i = 0; i < arguments.length; i++) {
-                var cnid = _lumen_node_or_text_nid(arguments[i]);
+            var ins = _lumen_expand_insert_nids(arguments);
+            for (var i = 0; i < ins.length; i++) {
+                var cnid = ins[i];
                 if (first === undefined) {
                     _lumen_append_child(nid, cnid);
                 } else {
@@ -4147,12 +4169,13 @@ var _lumen_document_fragment_members = {
             }
         },
         replaceChildren:      function() { var nid = this.__nid__;
-            var kids = _lumen_get_children(nid);
+            var ins = _lumen_expand_insert_nids(arguments);
+            var kids = _lumen_get_children(nid).slice();
             for (var i = 0; i < kids.length; i++) {
                 _lumen_remove_child(nid, kids[i]);
             }
-            for (var j = 0; j < arguments.length; j++) {
-                _lumen_append_child(nid, _lumen_node_or_text_nid(arguments[j]));
+            for (var j = 0; j < ins.length; j++) {
+                _lumen_append_child(nid, ins[j]);
             }
         },
 };
@@ -5046,40 +5069,26 @@ Object.defineProperty(ShadowRoot.prototype, 'children', {
 // element wrapper's `append`/`prepend` above.
 ShadowRoot.prototype.append = function() {
     var nid = this.__nid__;
-    for (var i = 0; i < arguments.length; i++) {
-        var n = arguments[i];
-        if (typeof n === 'string') {
-            _lumen_append_child(nid, _lumen_create_text_node(n));
-        } else if (n && n.__nid__ !== undefined) {
-            _lumen_append_child(nid, n.__nid__);
-        }
-    }
+    var ins = _lumen_expand_insert_nids(arguments);
+    for (var i = 0; i < ins.length; i++) _lumen_append_child(nid, ins[i]);
 };
 ShadowRoot.prototype.prepend = function() {
     var nid = this.__nid__;
     var ch = _lumen_get_children(nid);
     var firstChild = ch.length > 0 ? ch[0] : null;
-    for (var i = 0; i < arguments.length; i++) {
-        var n = arguments[i];
-        var childNid = (typeof n === 'string') ? _lumen_create_text_node(n)
-            : (n && n.__nid__ !== undefined ? n.__nid__ : null);
-        if (childNid === null) { continue; }
+    var ins = _lumen_expand_insert_nids(arguments);
+    for (var i = 0; i < ins.length; i++) {
+        var childNid = ins[i];
         if (firstChild !== null) { _lumen_insert_before(nid, childNid, firstChild); }
         else { _lumen_append_child(nid, childNid); }
     }
 };
 ShadowRoot.prototype.replaceChildren = function() {
     var nid = this.__nid__;
+    var ins = _lumen_expand_insert_nids(arguments);
     var old = _lumen_get_children(nid).slice();
     for (var i = 0; i < old.length; i++) { _lumen_remove_child(nid, old[i]); }
-    for (var j = 0; j < arguments.length; j++) {
-        var n = arguments[j];
-        if (typeof n === 'string') {
-            _lumen_append_child(nid, _lumen_create_text_node(n));
-        } else if (n && n.__nid__ !== undefined) {
-            _lumen_append_child(nid, n.__nid__);
-        }
-    }
+    for (var j = 0; j < ins.length; j++) _lumen_append_child(nid, ins[j]);
 };
 // Scoped to this shadow tree's descendants — see BUG-291.
 ShadowRoot.prototype.querySelector = function(sel) {
@@ -9109,14 +9118,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
         before: function() { var nid = this.__nid__;
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid === null) return;
-            for (var _bi = 0; _bi < arguments.length; _bi++) {
-                var _bn = arguments[_bi];
-                if (typeof _bn === 'string') {
-                    var _btn = _lumen_create_text_node(_bn);
-                    _lumen_insert_before(pid, _btn, nid);
-                } else if (_bn && _lumen_adopt_detached(_bn).__nid__ !== undefined) {
-                    _lumen_insert_before(pid, _bn.__nid__, nid);
-                }
+            var _bins = _lumen_expand_insert_nids(arguments);
+            for (var _bi = 0; _bi < _bins.length; _bi++) {
+                _lumen_insert_before(pid, _bins[_bi], nid);
             }
             _lumen_fire_slotchange(pid);
         },
@@ -9127,16 +9131,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var ch = _lumen_get_children(pid);
             var idx = ch.indexOf(nid);
             var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
-            for (var _ai = 0; _ai < arguments.length; _ai++) {
-                var _an = arguments[_ai];
-                if (typeof _an === 'string') {
-                    var _atn = _lumen_create_text_node(_an);
-                    if (nextSib !== null) { _lumen_insert_before(pid, _atn, nextSib); }
-                    else { _lumen_append_child(pid, _atn); }
-                } else if (_an && _lumen_adopt_detached(_an).__nid__ !== undefined) {
-                    if (nextSib !== null) { _lumen_insert_before(pid, _an.__nid__, nextSib); }
-                    else { _lumen_append_child(pid, _an.__nid__); }
-                }
+            var _ains = _lumen_expand_insert_nids(arguments);
+            for (var _ai = 0; _ai < _ains.length; _ai++) {
+                if (nextSib !== null) { _lumen_insert_before(pid, _ains[_ai], nextSib); }
+                else { _lumen_append_child(pid, _ains[_ai]); }
             }
             _lumen_fire_slotchange(pid);
         },
@@ -9151,16 +9149,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
                 _lumen_remove_child(pid, nid);
                 _lumen_ce_maybe_disconnected(this);
-                for (var _ri = 0; _ri < arguments.length; _ri++) {
-                    var _rn = arguments[_ri];
-                    if (typeof _rn === 'string') {
-                        var _rtn = _lumen_create_text_node(_rn);
-                        if (nextSib !== null) { _lumen_insert_before(pid, _rtn, nextSib); }
-                        else { _lumen_append_child(pid, _rtn); }
-                    } else if (_rn && _lumen_adopt_detached(_rn).__nid__ !== undefined) {
-                        if (nextSib !== null) { _lumen_insert_before(pid, _rn.__nid__, nextSib); }
-                        else { _lumen_append_child(pid, _rn.__nid__); }
-                    }
+                var _rins = _lumen_expand_insert_nids(arguments);
+                for (var _ri = 0; _ri < _rins.length; _ri++) {
+                    if (nextSib !== null) { _lumen_insert_before(pid, _rins[_ri], nextSib); }
+                    else { _lumen_append_child(pid, _rins[_ri]); }
                 }
                 _lumen_fire_slotchange(pid);
             } finally { _lumen_ce_pop_current_element_queue(); }
@@ -9170,28 +9162,18 @@ var _LUMEN_WRAPPER_MEMBERS = {
         prepend: function() { var nid = this.__nid__;
             var ch = _lumen_get_children(nid);
             var firstChild = ch.length > 0 ? ch[0] : null;
-            for (var _pi = 0; _pi < arguments.length; _pi++) {
-                var _pn = arguments[_pi];
-                if (typeof _pn === 'string') {
-                    var _ptn = _lumen_create_text_node(_pn);
-                    if (firstChild !== null) { _lumen_insert_before(nid, _ptn, firstChild); }
-                    else { _lumen_append_child(nid, _ptn); }
-                } else if (_pn && _lumen_adopt_detached(_pn).__nid__ !== undefined) {
-                    if (firstChild !== null) { _lumen_insert_before(nid, _pn.__nid__, firstChild); }
-                    else { _lumen_append_child(nid, _pn.__nid__); }
-                }
+            var _pins = _lumen_expand_insert_nids(arguments);
+            for (var _pi = 0; _pi < _pins.length; _pi++) {
+                if (firstChild !== null) { _lumen_insert_before(nid, _pins[_pi], firstChild); }
+                else { _lumen_append_child(nid, _pins[_pi]); }
             }
             _lumen_fire_slotchange(nid);
         },
         // ParentNode.append (DOM LS §4.2.5): appends nodes/strings as the last children.
         append: function() { var nid = this.__nid__;
-            for (var _ai = 0; _ai < arguments.length; _ai++) {
-                var _an = arguments[_ai];
-                if (typeof _an === 'string') {
-                    _lumen_append_child(nid, _lumen_create_text_node(_an));
-                } else if (_an && _lumen_adopt_detached(_an).__nid__ !== undefined) {
-                    _lumen_append_child(nid, _an.__nid__);
-                }
+            var _ains = _lumen_expand_insert_nids(arguments);
+            for (var _ai = 0; _ai < _ains.length; _ai++) {
+                _lumen_append_child(nid, _ains[_ai]);
             }
             _lumen_fire_slotchange(nid);
         },
@@ -9264,17 +9246,13 @@ var _LUMEN_WRAPPER_MEMBERS = {
         },
         // Replaces all children of this element.
         replaceChildren: function() { var nid = this.__nid__;
+            var _rcins = _lumen_expand_insert_nids(arguments);
             var old = _lumen_get_children(nid).slice();
             for (var _rci = 0; _rci < old.length; _rci++) {
                 _lumen_remove_child(nid, old[_rci]);
             }
-            for (var _rni = 0; _rni < arguments.length; _rni++) {
-                var _rcn = arguments[_rni];
-                if (typeof _rcn === 'string') {
-                    _lumen_append_child(nid, _lumen_create_text_node(_rcn));
-                } else if (_rcn && _lumen_adopt_detached(_rcn).__nid__ !== undefined) {
-                    _lumen_append_child(nid, _rcn.__nid__);
-                }
+            for (var _rni = 0; _rni < _rcins.length; _rni++) {
+                _lumen_append_child(nid, _rcins[_rni]);
             }
         },
         // DOM LS §4.4: cloneNode(deep) — shallow or deep copy of this element.
