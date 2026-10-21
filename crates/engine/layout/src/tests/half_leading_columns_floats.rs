@@ -557,6 +557,54 @@ fn ordered_list_decimal_marker() {
     }
 }
 
+// ── ::marker UA style and text properties (BUG-1446) ─────────────────
+
+fn marker_of_first_item(root: &LayoutBox) -> &LayoutBox {
+    let ol = first_element_child(root);
+    let li = ol.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+    li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap()
+}
+
+#[test]
+fn marker_takes_ua_defaults_not_inherited_text_transform_and_indent() {
+    // CSS Pseudo-Elements L4 §4.2: `text-transform` and `text-indent` are inherited, but a
+    // marker starts from `none` / `0` rather than taking the list item's values.
+    let root = lay(
+        "<ol><li>a</li></ol>",
+        "li { text-transform: uppercase; text-indent: 7px; }",
+    );
+    let m = marker_of_first_item(&root);
+    assert_eq!(m.style.text_transform, crate::style::TextTransform::None);
+    assert_eq!(m.style.text_indent, crate::style::Length::Px(0.0));
+    assert_eq!(m.style.unicode_bidi, crate::style::UnicodeBidi::Isolate);
+    assert_eq!(
+        m.style.font_variant_numeric.spacing,
+        crate::style::NumericSpacing::Tabular
+    );
+}
+
+#[test]
+fn marker_text_transform_rule_changes_the_marker_string() {
+    let root = lay(
+        "<ol><li>a</li></ol>",
+        "ol { list-style-type: lower-alpha; } li::marker { text-transform: uppercase; }",
+    );
+    let m = marker_of_first_item(&root);
+    let BoxKind::Marker { text, .. } = &m.kind else { unreachable!() };
+    assert_eq!(text, "A. ");
+}
+
+#[test]
+fn marker_letter_spacing_rule_applies_to_the_marker_style() {
+    // CSS Pseudo-Elements L4 §4.2: `letter-spacing` applies to `::marker`; the painter reads
+    // it off the marker box's style (the box width is measured with it, too).
+    let root = lay(
+        "<ol><li>a</li></ol>",
+        "ol { list-style-type: decimal; } li::marker { letter-spacing: 10px; }",
+    );
+    assert_eq!(marker_of_first_item(&root).style.letter_spacing, 10.0);
+}
+
 #[test]
 fn marker_outside_not_in_flow() {
     // For outside markers: child_y must not advance past the marker.

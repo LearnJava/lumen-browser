@@ -800,8 +800,8 @@ pub(crate) fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         axes
                      },
                      tab_size: 0.0,
-                     letter_spacing: 0,
-                     word_spacing: 0,
+                     letter_spacing: super::spacing_to_fixed(s.letter_spacing),
+                     word_spacing: super::spacing_to_fixed(s.word_spacing + s.word_spacing_pct * 0.25 * em),
                      highlight_name: None,
                      text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
                          Some(s.text_orientation)

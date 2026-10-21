@@ -242,7 +242,7 @@ fn extract_clean_subtrees_inner(
 /// it looks.
 fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: b.node,
         rect: b.rect,
         used_padding: None, used_line_height: b.used_line_height,
@@ -983,7 +983,7 @@ mod tests {
 
     fn leaf(id: u32, rect: Rect) -> LayoutBox {
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(id as usize),
             rect,
@@ -1007,7 +1007,7 @@ mod tests {
 
     fn block_with_children(id: u32, rect: Rect, children: Vec<LayoutBox>) -> LayoutBox {
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(id as usize),
             rect,
@@ -2409,7 +2409,7 @@ mod tests {
 
         let node = lumen_dom::NodeId::from_index(7);
         let husk = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node,
             rect: Rect::new(1.0, 2.0, 3.0, 4.0),

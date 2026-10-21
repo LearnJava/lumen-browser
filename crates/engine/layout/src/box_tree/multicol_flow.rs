@@ -697,7 +697,7 @@ impl Window {
 /// A copy of `b` without its children.
 pub(super) fn shell(b: &LayoutBox) -> LayoutBox {
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: b.node,
         rect: b.rect,
         style: Arc::clone(&b.style),

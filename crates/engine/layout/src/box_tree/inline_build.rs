@@ -281,7 +281,7 @@ pub(crate) fn anon_inline_run(
 ) -> LayoutBox {
     let style = anon_style(parent);
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -344,7 +344,7 @@ pub(crate) fn build_anon_text_item(
     // The anonymous item is blockified regardless of the container's own display.
     item_style.display = Display::Block;
     Some(LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: item_style.font_size * item_style.line_height,
@@ -787,7 +787,7 @@ pub(crate) fn breaks_inline_row(b: &LayoutBox) -> bool {
 pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<LayoutBox>) -> LayoutBox {
     let style = anon_style(parent);
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -1294,7 +1294,7 @@ pub(crate) fn inject_pseudo(
                 vec![anon_inline_run(parent_id, &ps, inner_segs, BoxRole::Pseudo(pseudo_kind))]
             };
             let b = LayoutBox {
-                anchor_scroll: None,
+                anchor_scroll: None, cv_hidden: Vec::new(),
                 node: parent_id,
                 rect: Rect::ZERO,
                 used_padding: None, used_line_height: ps.font_size * ps.line_height,
@@ -1612,9 +1612,12 @@ pub(crate) fn inject_marker(
         // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.
         _ => build_list_marker_text(style.list_style_type.clone(), ordinal, registry),
     };
+    // CSS Pseudo-Elements L4 §4.2: `::marker` supports `text-transform` (UA value `none`) —
+    // it applies to the marker string like to any other text run (BUG-1446).
+    let text = ms.text_extra.transform_text(ms.text_transform, &text);
     ms.display = Display::Inline;
     children.insert(0, LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node:     parent_id,
         rect:     Rect::ZERO,
         used_padding: None, used_line_height: ms.font_size * ms.line_height,

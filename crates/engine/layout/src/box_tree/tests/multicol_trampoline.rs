@@ -59,7 +59,7 @@ fn wrapper(node_index: usize, children: Vec<LayoutBox>) -> LayoutBox {
     let mut style = ComputedStyle::root();
     style.column_count = Some(1);
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -87,7 +87,7 @@ fn leaf() -> LayoutBox {
     let mut style = ComputedStyle::root();
     style.height = Some(Length::Px(LEAF_HEIGHT));
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -158,7 +158,7 @@ fn deep_multicol_chain_two_columns_lays_out_without_overflowing_the_stack() {
     let left = deep_chain(DEPTH / 2);
     let right = deep_chain(DEPTH / 2);
     let mut root = LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

@@ -142,7 +142,7 @@ pub(crate) fn extract_first_letter_float(
         inner_style.clear = ClearSide::None;
         inner_style.text_indent = Length::Px(0.0);
         let inner = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: inner_style.font_size * inner_style.line_height,
@@ -162,7 +162,7 @@ pub(crate) fn extract_first_letter_float(
         outer_style.display = Display::Block;
         outer_style.text_indent = Length::Px(0.0);
         return Some(LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: outer_style.font_size * outer_style.line_height,
@@ -277,7 +277,7 @@ pub(crate) fn extract_initial_letter(
         seg.style = Arc::new(inner_style.clone());
 
         let inner = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: inner_style.font_size * inner_style.line_height,
@@ -306,7 +306,7 @@ pub(crate) fn extract_initial_letter(
         outer_style.overflow_x = crate::style::Overflow::Hidden;
         outer_style.overflow_y = crate::style::Overflow::Hidden;
         return Some(LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: outer_style.font_size * outer_style.line_height,
@@ -604,7 +604,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
         let base_h = child.used_line_height;
         let rect = child.rect;
         let box2 = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node: child.node,
             rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
             used_padding: None, used_line_height: base_h,

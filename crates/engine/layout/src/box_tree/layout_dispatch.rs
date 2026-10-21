@@ -246,6 +246,52 @@ fn lay_out_inner_impl(
     }
 }
 
+/// CSS Containment L2 §content-visibility: hidden — "the user agent must lay out the skipped contents
+/// when a geometry API asks for them" (BUG-1400). The skipped children of `b` (`b.cv_hidden`) are laid
+/// out as the children of a copy of `b` with exactly `b`'s constraints: `content-visibility` itself is
+/// dropped from the copy (it would hide them again) and size/layout/paint/style containment stands in
+/// for it, so the copy sizes the way the hidden box does. Only the laid-out children are kept — back
+/// in `b.cv_hidden`, where `collect_layout_rects` reads them; `b` itself stays a childless box.
+#[allow(clippy::too_many_arguments)]
+fn lay_out_cv_hidden_probe(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+    outer_floats: Option<&FloatContext>,
+    parent_justify_items: AlignValue,
+    used_size_override: Option<UsedSizeOverride>,
+) {
+    let _prof = lumen_core::profile::scope_detail("lo_cv_hidden");
+    let mut kids = std::mem::take(&mut b.cv_hidden);
+    // The skipped boxes may be a previous pass's: lay every one out afresh.
+    for k in &mut kids {
+        crate::incremental::mark_subtree_dirty(k);
+    }
+    let mut probe = b.clone();
+    probe.children = kids;
+    let st = Arc::make_mut(&mut probe.style);
+    st.content_visibility = crate::style::ContentVisibility::Visible;
+    st.contain = crate::style::ContainFlags(
+        st.contain.0
+            | (crate::style::ContainFlags::SIZE.0
+                | crate::style::ContainFlags::LAYOUT.0
+                | crate::style::ContainFlags::PAINT.0
+                | crate::style::ContainFlags::STYLE.0),
+    );
+    lay_out_inner(
+        &mut probe, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+        in_block_flow, outer_floats, parent_justify_items, used_size_override,
+    );
+    b.cv_hidden = std::mem::take(&mut probe.children);
+}
+
 /// Border-box width of a replaced box from its content/border-box height `h` and ratio —
 /// the mirror of `layout_cache::ratio_height` (BUG-1280). Out of line for the frame size.
 #[inline(never)]
@@ -548,6 +594,14 @@ pub(super) fn dispatch_box(
         );
     if cv_auto_skipped {
         b.children.clear();
+    }
+    // BUG-1400: `content-visibility: hidden` keeps its subtree out of `children`, but a geometry
+    // query on a descendant still needs a layout of it.
+    if !b.cv_hidden.is_empty() {
+        lay_out_cv_hidden_probe(
+            b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+            in_block_flow, outer_floats, parent_justify_items, used_size_override,
+        );
     }
 
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
@@ -1908,7 +1962,7 @@ pub(super) fn dispatch_box(
                     for (li, line) in cont_lines.into_iter().enumerate() {
                         let line_w = line.last().map_or(0.0, |f| f.x + f.width);
                         let cont_box = LayoutBox {
-                            anchor_scroll: None,
+                            anchor_scroll: None, cv_hidden: Vec::new(),
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_padding: None,

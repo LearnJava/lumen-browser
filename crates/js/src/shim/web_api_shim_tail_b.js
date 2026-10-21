@@ -45,6 +45,8 @@ function _lumen_normalize_pseudo_elt(pseudoElt) {
         case 'after': return 'after';
         case 'first-line': return 'first-line';
         case 'first-letter': return 'first-letter';
+        // CSS Pseudo-Elements L4 §4.2 (BUG-1446): the list item's marker box.
+        case 'marker': return 'marker';
         // CSS Overflow L5 scroll pseudo-elements.
         case 'scroll-marker': return 'scroll-marker';
         case 'scroll-marker-group': return 'scroll-marker-group';

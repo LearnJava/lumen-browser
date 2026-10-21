@@ -135,6 +135,14 @@ pub struct LayoutBox {
     /// containers. Written by `apply_anchor_positions`, offsets refreshed on every scroll.
     /// `None` — the box does not follow any scrolling.
     pub anchor_scroll: Option<Box<AnchorScroll>>,
+    /// CSS Containment L2 §content-visibility: hidden (BUG-1400) — the subtree the box skips. A
+    /// `content-visibility: hidden` box keeps no `children` (paint, hit-testing, overflow and every
+    /// other tree walk see an empty box), but the geometry queries (`getBoundingClientRect`,
+    /// `offset*`, `getClientRects`) must still answer as if it were laid out, so the skipped
+    /// children are laid out here as a probe — by the box's own constraints, with the contents
+    /// size-contained — and only `collect_layout_rects` reads them. Document-space like `children`
+    /// (moved by `shift_tree`). Empty on every other box.
+    pub cv_hidden: Vec<LayoutBox>,
     /// Incremental-layout dirty flags (EE-3). Only consulted during
     /// `lay_out_incremental` passes — normal `lay_out` ignores this field.
     /// Set via `mark_dirty`; cleared via `clear_dirty` / `lay_out_incremental`.
@@ -157,11 +165,13 @@ impl Drop for LayoutBox {
     /// no single `drop` call recurses past its own direct children.
     fn drop(&mut self) {
         let mut pending: Vec<LayoutBox> = std::mem::take(&mut self.children);
+        pending.append(&mut self.cv_hidden);
         if let BoxKind::SvgShape { svg_mask: Some(mask), .. } = &mut self.kind {
             pending.append(&mut mask.content);
         }
         while let Some(mut b) = pending.pop() {
             pending.append(&mut b.children);
+            pending.append(&mut b.cv_hidden);
             if let BoxKind::SvgShape { svg_mask: Some(mask), .. } = &mut b.kind {
                 pending.append(&mut mask.content);
             }

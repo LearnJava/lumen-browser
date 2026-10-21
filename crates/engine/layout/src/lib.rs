@@ -2057,6 +2057,19 @@ fn pseudo_used_display(kind: PseudoKind, style: &ComputedStyle) -> Option<&'stat
     }
 }
 
+/// The published style of a `::marker` box (BUG-1446): its own cascaded style plus the used
+/// values CSSOM reports for it — `display` is `inline` for an inside marker and a block
+/// container (`block`) for an outside one (CSS Lists L3 §3.1), `width`/`height` the marker
+/// box's resolved size.
+fn marker_style_map(b: &LayoutBox, position: ListStylePosition) -> std::collections::HashMap<String, String> {
+    let mut map = computed_style_to_map(&b.style);
+    let display = if position == ListStylePosition::Outside { "block" } else { "inline" };
+    map.insert("display".to_string(), display.to_string());
+    map.insert("width".to_string(), selector_query::px_str(b.rect.width));
+    map.insert("height".to_string(), selector_query::px_str(b.rect.height));
+    map
+}
+
 fn pseudo_style_map(style: &ComputedStyle, kind: PseudoKind) -> std::collections::HashMap<String, String> {
     let mut map = computed_style_to_map(style);
     if let Some(used_display) = pseudo_used_display(kind, style) {
@@ -2106,6 +2119,13 @@ pub(crate) fn collect_pseudo_computed_styles_box(
     held: Option<&scoped_collect::PseudoMaps>,
     out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
 ) {
+    // `::marker` — the list item's marker box (`BoxKind::Marker`, not a `BoxRole::Pseudo`).
+    if let box_tree::BoxKind::Marker { position, .. } = &b.kind {
+        let key = (b.node.index() as u32, "marker".to_string());
+        if !held.is_some_and(|h| h.contains_key(&key)) {
+            out.entry(key).or_insert_with(|| marker_style_map(b, *position));
+        }
+    }
     if let BoxRole::Pseudo(kind) = b.origin.role
         && let Some(name) = pseudo_kind_name(kind)
     {
@@ -2158,8 +2178,9 @@ pub(crate) fn collect_pseudo_computed_styles_box(
 }
 
 /// The pseudo-element names [`collect_pseudo_computed_styles`] keys by.
-const PSEUDO_NAMES: [&str; 14] = [
+const PSEUDO_NAMES: [&str; 15] = [
     "before",
+    "marker",
     "after",
     "first-line",
     "first-letter",
@@ -2456,6 +2477,8 @@ fn collect_layout_rects_rec(
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         collect_layout_rects_box(doc, b, out);
+        // `content-visibility: hidden` (BUG-1400): the skipped subtree, laid out as a probe.
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2548,6 +2571,7 @@ fn collect_boxed_node_ids(root: &LayoutBox, out: &mut std::collections::HashSet<
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         out.insert(b.node.index() as u32);
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2592,6 +2616,7 @@ fn collect_client_rects_rec(
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         collect_client_rects_box(doc, b, boxed, out);
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }

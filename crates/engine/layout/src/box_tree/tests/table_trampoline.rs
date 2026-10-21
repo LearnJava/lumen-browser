@@ -43,7 +43,7 @@ fn leaf() -> LayoutBox {
     let mut style = ComputedStyle::root();
     style.height = Some(crate::style::Length::Px(LEAF_HEIGHT));
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -69,7 +69,7 @@ fn plain_box(node_index: usize, kind: BoxKind, display: Display, children: Vec<L
     let mut style = ComputedStyle::root();
     style.display = display;
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

@@ -394,7 +394,7 @@ impl LoadedPage {
             animated_gifs: Vec::new(),
             lazy_pairs: Vec::new(),
             layout_box: lumen_layout::LayoutBox {
-                anchor_scroll: None,
+                anchor_scroll: None, cv_hidden: Vec::new(),
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
                 used_padding: None, used_line_height: 16.0 * 1.2,

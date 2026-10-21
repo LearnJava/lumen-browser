@@ -423,7 +423,7 @@ fn lay_out_msub(mathml: &MathmlBox) -> LayoutBox {
 /// Create an empty anonymous box for layout stacking with the given style.
 fn make_anonymous_box_with_style(style: std::sync::Arc<ComputedStyle>) -> LayoutBox {
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: NodeId::from_index(0),
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,

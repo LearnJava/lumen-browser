@@ -155,7 +155,7 @@ fn build_ruby_box(
     finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
 
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -246,7 +246,7 @@ fn build_ruby_group_box(
     // them correctly (`RubyAlign`), not the container's width.
     bstyle.display = Display::InlineBlock;
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: owner_id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: bstyle.font_size * bstyle.line_height,
@@ -327,7 +327,7 @@ fn build_base_select_box(
     let mut trigger_style = anon_style(style);
     trigger_style.display = Display::Block;
     let trigger = LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: trigger_style.font_size * trigger_style.line_height,
@@ -351,7 +351,7 @@ fn build_base_select_box(
     };
 
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -978,36 +978,6 @@ fn build_box_inner(
         st.padding_left = Length::Px(0.0);
     }
 
-    // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree.
-    // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
-    // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
-    if style.content_visibility == crate::style::ContentVisibility::Hidden {
-        if let Some(author) = legend_author_display {
-            Arc::make_mut(&mut style).display = author;
-        }
-        return LayoutBox {
-            anchor_scroll: None,
-            node: id,
-            rect: Rect::ZERO,
-            used_padding: None, used_line_height: style.font_size * style.line_height,
-            grid_baselines: None,
-            fieldset_legend: None,
-            table_caption_inset: [0.0; 2],
-            clamp_clip: None,
-            subgrid_tracks: None, used_grid_tracks: None,
-            style,
-            kind,
-            children: Vec::new(),
-            col_span: 1,
-            row_span: 1,
-            svg_group_transform: None,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            dirty: Default::default(),
-            origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
-        };
-    }
-
     let mut children = Vec::new();
     // BUG-441: a `<textarea>` renders its *current* value. Unlike `<input>`,
     // whose text the form-control painter draws from `FormControlKind`, a
@@ -1378,7 +1348,7 @@ fn build_box_inner(
                         if had_ws && !row_items.is_empty() {
                             let gap_style = anon_style(&style);
                             row_items.push(LayoutBox {
-                                anchor_scroll: None,
+                                anchor_scroll: None, cv_hidden: Vec::new(),
                                 node: id,
                                 rect: Rect::ZERO,
                                 used_padding: None, used_line_height: gap_style.font_size * gap_style.line_height,
@@ -1566,7 +1536,16 @@ fn build_box_inner(
     if let Some(author) = legend_author_display {
         Arc::make_mut(&mut style).display = author;
     }
-    let fieldset_legend = if is_fieldset_element(doc, id) {
+    // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree: the box keeps its
+    // own box and contributes no content (it is size-contained). The skipped children are not
+    // dropped — `cv_hidden` carries them to the layout probe that answers geometry queries
+    // (BUG-1400); every other tree walk sees an empty box.
+    let cv_hidden = if style.content_visibility == crate::style::ContentVisibility::Hidden {
+        std::mem::take(&mut children)
+    } else {
+        Vec::new()
+    };
+    let fieldset_legend = if is_fieldset_element(doc, id) && cv_hidden.is_empty() {
         rendered_legend_index(doc, &children).map(|idx| FieldsetLegend {
             idx,
             node: children[idx].node,
@@ -1578,7 +1557,7 @@ fn build_box_inner(
         None
     };
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden,
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,

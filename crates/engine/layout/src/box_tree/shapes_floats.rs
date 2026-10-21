@@ -62,6 +62,7 @@ pub(crate) fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
             }
         }
         stack.extend(node.children.iter_mut());
+        stack.extend(node.cv_hidden.iter_mut());
     }
 }
 

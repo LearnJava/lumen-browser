@@ -1,6 +1,6 @@
 # BUG-1400 — `content-visibility: hidden`: геометрия потомков (`getBoundingClientRect`, `offset*`, `getClientRects`) — нули, принудительного layout нет
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 17, `css/css-multicol` + `css/css-contain`)
 **Область:** layout/js (`crates/engine/layout/src/content_visibility.rs`, `selector_query.rs` — геометрия скрытого поддерева; шим `getBoundingClientRect`)
 
@@ -28,3 +28,9 @@ WPT-RUN-14 срез 17: 18 testharness-id в `css-contain/content-visibility/` (
 ## Как проверить
 
 `css/css-contain/content-visibility/content-visibility-hidden-offsetTop-left-width-height.html`, `content-visibility-036.html`.
+
+## Как исправлено
+
+`build_box` больше не выбрасывает детей `content-visibility: hidden` — они уходят в новое поле `LayoutBox::cv_hidden` (`children` остаётся пустым: paint, hit-test, overflow и прочие обходы видят пустой бокс). `layout_dispatch::lay_out_cv_hidden_probe` раскладывает их как детей копии бокса с теми же ограничениями (`content-visibility` снят, вместо него `contain: size layout paint style`), результат возвращается в `cv_hidden`. `collect_layout_rects` и `collect_client_rects` обходят `cv_hidden`; `shift_tree` сдвигает, `Drop` освобождает итеративно. Тесты: `box_tree/tests/cv_hidden_geometry.rs`, `driver/tests/cases/layout_snapshot_to_js.rs::hidden_subtree_geometry_is_answered_and_follows_style_edits` (gBCR, `offset*`, `getClientRects`, правка стиля).
+
+**Не закрыто этим исправлением:** `innerText` потомка скрытого поддерева и `getBBox`/`getTotalLength` SVG внутри него; сами WPT-id `content-visibility-*` не перепрогонялись (обновление `MANIFEST.json` в worktree не уложилось в 10 мин) — `.ini`-ожидания не менялись.
