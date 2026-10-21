@@ -2711,6 +2711,30 @@ mod tests {
         assert_eq!(get("#r", "letter-spacing").as_deref(), Some("normal"));
     }
 
+    /// BUG-1437: `initial`/`inherit`/`unset` reset the whole value of `tab-size`, `text-indent`
+    /// (with its `hanging`/`each-line`) and `hyphens` — a transition from them starts at the
+    /// right computed value.
+    #[test]
+    fn css_wide_keywords_reset_text_longhands() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="p"><div id="i">a</div><div id="n">b</div><div id="u">c</div></div>"#,
+            "#p { tab-size: 20; text-indent: 30px hanging each-line; hyphens: auto }              #i { tab-size: initial; text-indent: initial; hyphens: initial }              #n { tab-size: 3; text-indent: 5px hanging; hyphens: none }              #n { tab-size: inherit; text-indent: inherit; hyphens: inherit }              #u { tab-size: 3px; text-indent: 5px hanging; hyphens: none }              #u { tab-size: unset; text-indent: unset; hyphens: unset }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#i", "tab-size").as_deref(), Some("8"));
+        assert_eq!(get("#i", "text-indent").as_deref(), Some("0px"));
+        assert_eq!(get("#i", "hyphens").as_deref(), Some("manual"));
+        assert_eq!(get("#n", "tab-size").as_deref(), Some("20"));
+        assert_eq!(get("#n", "text-indent").as_deref(), Some("30px hanging each-line"));
+        assert_eq!(get("#n", "hyphens").as_deref(), Some("auto"));
+        assert_eq!(get("#u", "tab-size").as_deref(), Some("20"));
+        assert_eq!(get("#u", "text-indent").as_deref(), Some("30px hanging each-line"));
+        assert_eq!(get("#u", "hyphens").as_deref(), Some("auto"));
+    }
+
     /// CSS Text L3 §7.1: `start` inherited from an RTL parent becomes `right` under
     /// `match-parent` (the root-element case is covered by WPT `text-align-match-parent-002`).
     #[test]

@@ -645,6 +645,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Initial value of a property (`getComputedStyle()` form) and whether it inherits: what
+    // `initial`/`unset` mean inside `@keyframes` and Web Animations keyframes (BUG-1437).
+    reg!(scope, ctx, store,
+        "_lumen_css_initial_value",
+        |prop: String| -> Option<String> {
+            lumen_layout::initial_computed_value(&prop)
+        }
+    );
+    reg!(scope, ctx, store,
+        "_lumen_css_is_inherited",
+        |prop: String| -> bool {
+            lumen_layout::is_inherited_property(&prop)
+        }
+    );
+
     // CSS Transforms L2 §15 — interpolation of two `transform` values given as text
     // (BUG-1293, the JS read-time transition/animation overlay). `w`/`h` are the
     // element's border box, the base of `translate*()` percentages. Answers the resolved

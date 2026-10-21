@@ -189,6 +189,34 @@ fn marker_property_applies(prop: &str) -> bool {
         )
 }
 
+/// CSS Pseudo-Elements L4 §3.2 — true when `prop` applies to `::first-line`: the font
+/// properties, `color`, `opacity`, the background properties, `text-decoration*` /
+/// `text-emphasis*` / `text-underline-*` / `text-shadow` / `text-transform` / `text-justify`,
+/// `-webkit-text-*`, `letter-spacing`, `word-spacing`, `line-height` and `vertical-align`.
+/// Every other declaration is dropped; custom properties stay for `var()`.
+fn first_line_property_applies(prop: &str) -> bool {
+    let p = prop.trim().to_ascii_lowercase();
+    p.starts_with("--")
+        || p.starts_with("font")
+        || p.starts_with("background")
+        || p.starts_with("text-decoration")
+        || p.starts_with("text-emphasis")
+        || p.starts_with("text-underline")
+        || p.starts_with("-webkit-text-")
+        || matches!(
+            p.as_str(),
+            "color"
+                | "opacity"
+                | "letter-spacing"
+                | "word-spacing"
+                | "line-height"
+                | "text-shadow"
+                | "text-transform"
+                | "text-justify"
+                | "vertical-align"
+        )
+}
+
 /// Builds the starting `ComputedStyle` for a pseudo-element of `parent`: every
 /// field at its initial value (CSS Pseudo-elements L4 §4 makes `display`
 /// `inline`), then every inherited property copied down from the originating
@@ -603,8 +631,13 @@ fn compute_pseudo_element_style_inner(
     // `background`) are dropped so a `::marker` rule cannot perturb marker layout
     // or paint beyond the spec-permitted font/color/text-flow styling.
     let is_marker = pseudo.eq_ignore_ascii_case("marker");
+    // The same for `::first-line` (§3.2): a box-level declaration (`margin`, `position`,
+    // `word-break`, ...) does not apply to it, so the computed value is the parent's (BUG-1437).
+    let is_first_line = pseudo.eq_ignore_ascii_case("first-line");
     for (_, _, _, _, decl) in &matched {
-        if is_marker && !marker_property_applies(&decl.property) {
+        if (is_marker && !marker_property_applies(&decl.property))
+            || (is_first_line && !first_line_property_applies(&decl.property))
+        {
             continue;
         }
         let attr_buf;

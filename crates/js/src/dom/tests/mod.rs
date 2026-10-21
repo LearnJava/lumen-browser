@@ -324,6 +324,8 @@ mod v8_bug1316_document_parentnode;
 mod v8_gap_rule_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1293_motion_overlay;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1437_text_motion;
 mod v8_gap_rule_interp;
 mod v8_bug1305_wa_neutral;
 #[cfg(feature = "v8-backend")]
