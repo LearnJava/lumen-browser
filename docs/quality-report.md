@@ -2,17 +2,17 @@
 
 <!-- Генерируется `python scripts/quality_report.py` — руками не править. Как читать — docs/quality-report-howto.md -->
 
-**Итог:** WPT 33.71% (Δ +0.16 п.п.) · graphic_tests 112/165 PASS (Δ +1) · открытых багов 322 (Δ n/a) · просадок 17
+**Итог:** WPT 33.71% (Δ +0.16 п.п.) · graphic_tests 112/165 PASS (Δ +1) · открытых багов 327 (Δ +5) · просадок 17
 
 ## Источники
 
 | Источник | Свежий | Предыдущий |
 |---|---|---|
 | WPT (`docs/wpt/runs`) | `2026-10-05-subdomains.json` · `d913a39b9` · 2026-10-05T16:15:35 | `2026-10-05.json` · `d913a39b9` · 2026-10-05T15:09:05 |
-| graphic_tests | `20261020-200244.json` · `5b8345773` (p1-svg-clippath) | `20261020-145035.json` · `57d93d3b9` (p1-linebreak-uax14) |
-| BUGS.md | рабочее дерево | n/a |
+| graphic_tests | `20261020-200244.json` · `5b8345773` (p1-svg-clippath) · режим `default` · **WIP** | `20261020-145035.json` · `57d93d3b9` (p1-linebreak-uax14) · режим `default` |
+| BUGS.md | рабочее дерево | срез `20261020-200244` |
 
-Дельта WPT и graphic_tests — к предыдущему прогону того же раннера; дельта багов — к прошлому срезу `docs/quality/runs/`. Частичные прогоны WPT (scope — список категорий) и graphic_tests (`--only`, `--recheck`) в сравнение не берутся.
+Дельта WPT — к предыдущему прогону; дельта graphic_tests — к предыдущему полному прогону **того же режима съёмки** (`ipc` / `gdigrab` / `default` — смесь по `GPU_CAPTURE`; `legacy` — прогон до TEST-9 без поля `capture`); дельта багов — к прошлому срезу `docs/quality/runs/`. Частичные прогоны WPT (scope — список категорий) и graphic_tests (`--only`, `--recheck`) в сравнение не берутся. «не в main» — коммит прогона не предок `origin/main`; «WIP» — тема коммита начинается с `WIP`: числа такого прогона предварительные.
 
 ## Просадки с прошлого отчёта
 
@@ -79,30 +79,30 @@ Pass rate корпуса 33.71% — балл (PASS = 1, testharness — доля
 
 ## Открытые баги по подсистемам
 
-Открыто 322, из них доработок (`ДОРАБОТКА → …`) 39, должников (`DEBTOR`) 21. Баг с несколькими компонентами считается в каждом.
+Открыто 327, из них доработок (`ДОРАБОТКА → …`) 39, должников (`DEBTOR`) 21. Баг с несколькими компонентами считается в каждом.
 
 | Компонент | Открыто | Δ |
 |---|---|---|
-| `layout` | 183 | n/a |
-| `js` | 110 | n/a |
-| `css-parser` | 52 | n/a |
-| `paint` | 37 | n/a |
-| `shell` | 33 | n/a |
-| `dom` | 6 | n/a |
-| `font` | 3 | n/a |
-| `chrome` | 2 | n/a |
-| `net` | 2 | n/a |
-| `network` | 2 | n/a |
-| `bidi-server` | 1 | n/a |
-| `core` | 1 | n/a |
-| `encoding` | 1 | n/a |
-| `executor` | 1 | n/a |
-| `shell chrome` | 1 | n/a |
-| `snapshot` | 1 | n/a |
-| `storage` | 1 | n/a |
-| `test` | 1 | n/a |
-| `test-harness` | 1 | n/a |
-| `tests` | 1 | n/a |
+| `layout` | 186 | +3 |
+| `js` | 112 | +2 |
+| `css-parser` | 52 | 0 |
+| `paint` | 36 | -1 |
+| `shell` | 33 | 0 |
+| `dom` | 7 | +1 |
+| `ua-стили` | 5 | +5 |
+| `font` | 3 | 0 |
+| `chrome` | 2 | 0 |
+| `net` | 2 | 0 |
+| `network` | 2 | 0 |
+| `не локализовано` | 2 | +1 |
+| `bidi-server` | 1 | 0 |
+| `core` | 1 | 0 |
+| `encoding` | 1 | 0 |
+| `executor` | 1 | 0 |
+| `shell chrome` | 1 | 0 |
+| `snapshot` | 1 | 0 |
+| `storage` | 1 | 0 |
+| `test` | 1 | 0 |
 
 ## graphic_tests
 
