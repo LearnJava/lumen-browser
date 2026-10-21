@@ -22,6 +22,7 @@ fn plain_boxes() -> FloatBoxes {
         em: 16.0,
         threshold: 0.0,
         image: None,
+        replaced: false,
     }
 }
 
@@ -320,6 +321,23 @@ fn url_image_wraps_by_its_alpha() {
     // A right float is wrapped on the left edge of the opaque part instead.
     let fc = shaped_in("url(a.png)", &bx, false, 0.0);
     assert!((right_at(&fc, 50.0) - 300.0).abs() < 1.5, "{}", right_at(&fc, 50.0));
+}
+
+#[test]
+fn an_img_float_lays_its_shape_image_over_the_content_box() {
+    // WPT `shape-image-013`: `margin-left: 10px` — the 100px-wide image sits at
+    // x ∈ [10, 100] of the margin box (here 90px), its right half is opaque.
+    let mut bx = plain_boxes();
+    bx.content = Rect4 { x0: 10.0, y0: 0.0, x1: 100.0, y1: 100.0 };
+    bx.image = Some(alpha_image(2, 1, &[0, 255]));
+    bx.replaced = true;
+    let fc = shaped_in("url(a.png)", &bx, false, 0.0);
+    // Opaque part: x ∈ [55, 100] → on the right float at 300: [355, 400].
+    assert!((right_at(&fc, 50.0) - 355.0).abs() < 1.5, "{}", right_at(&fc, 50.0));
+    // A block float stretches the image over the whole margin box instead.
+    bx.replaced = false;
+    let fc = shaped_in("url(a.png)", &bx, false, 0.0);
+    assert!((right_at(&fc, 50.0) - 350.0).abs() < 1.5, "{}", right_at(&fc, 50.0));
 }
 
 #[test]
@@ -1339,4 +1357,28 @@ fn contain_layout_descendant_overflow_does_not_grow_scrollable_area() {
     let s = find_scroller(&root).expect("scroller present");
     assert!((crate::content_height(s) - 100.0).abs() < 0.5, "scrollHeight = {}", crate::content_height(s));
     assert!((crate::content_width(s) - 100.0).abs() < 0.5, "scrollWidth = {}", crate::content_width(s));
+}
+
+#[test]
+fn grown_contour_does_not_narrow_a_line_that_starts_on_its_edge() {
+    // WPT `shape-outside-polygon-012`: a concave polygon on a 200×200 margin box of a
+    // right float, `shape-margin: 20px`. The grown contour ends at `y = 80 + 20` and
+    // `y = 160 + 20`; a line box that starts exactly there must see the free width of
+    // its own rows, not the touching boundary of the row above.
+    let r = Rect4 { x0: 0.0, y0: 0.0, x1: 200.0, y1: 200.0 };
+    let bx = FloatBoxes { margin: r, border: r, padding: r, content: r, ..plain_boxes() };
+    let sv = "margin-box polygon(20% 20%, 90% 20%, 90% 80%, 50% 80%, 50% 70%, 70% 70%, 70% 40%, 20% 40%)";
+    let mut prims = resolve_shape(sv, &bx).expect("polygon");
+    for p in &mut prims {
+        p.translate(40.0, 0.0);
+    }
+    let mut fc = FloatContext::new();
+    fc.add_right(0.0, 200.0, 40.0);
+    fc.add_shape_prims(prims, false, (0.0, 200.0), (40.0, 240.0), 20.0);
+    let band = |y: f32| fc.line_band(y, y + 20.0, 0.0, 240.0).1;
+    assert_eq!(band(0.0), 240.0, "above the grown contour");
+    assert!((band(20.0) - 60.0).abs() < 0.01);
+    assert!((band(100.0) - 160.0).abs() < 0.01, "{}", band(100.0));
+    assert!((band(120.0) - 120.0).abs() < 0.01);
+    assert_eq!(band(180.0), 240.0, "below the grown contour");
 }

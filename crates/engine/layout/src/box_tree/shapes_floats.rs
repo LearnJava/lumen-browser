@@ -520,9 +520,11 @@ pub(crate) fn polygon_edge_x_at_y_margin(
     for i in 0..n {
         let (ax, ay) = pts[i];
         let (bx, by) = pts[(i + 1) % n];
-        // Vertex disc.
+        // Vertex disc: half-open like every other piece of the contour — the
+        // scanline at the disc's bottom touches it in one point only, and a line box
+        // that starts exactly there (integer geometry!) must not be narrowed by it.
         let dy = y - ay;
-        if dy.abs() <= margin {
+        if dy >= -margin && dy < margin {
             let hw = (margin * margin - dy * dy).max(0.0).sqrt();
             take(if want_max { ax + hw } else { ax - hw });
         }
@@ -537,7 +539,7 @@ pub(crate) fn polygon_edge_x_at_y_margin(
         for sign in [1.0_f32, -1.0] {
             let (x0, y0) = (ax + sign * nx, ay + sign * ny);
             let (x1, y1) = (bx + sign * nx, by + sign * ny);
-            if (y0 <= y && y <= y1) || (y1 <= y && y <= y0) {
+            if (y0 <= y && y < y1) || (y1 <= y && y < y0) {
                 take(x0 + (y - y0) * (x1 - x0) / (y1 - y0));
             }
         }

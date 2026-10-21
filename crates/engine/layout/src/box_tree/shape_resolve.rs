@@ -106,9 +106,11 @@ impl MaskExtents {
         let mut best: Option<(f32, f32)> = None;
         for r in first..=last {
             let Some((lo, hi)) = self.rows[r] else { continue };
-            // Distance from the scanline to this row's band.
-            let dy = (r as f32 * ch - yl).max(yl - (r as f32 + 1.0) * ch).max(0.0);
-            if dy > m {
+            // Distance from the scanline to this row's band; the band is half-open
+            // `[r·ch, (r+1)·ch)`, so a scanline on its bottom edge is already below it.
+            let below = yl >= (r as f32 + 1.0) * ch;
+            let dy = if below { yl - (r as f32 + 1.0) * ch } else { (r as f32 * ch - yl).max(0.0) };
+            if dy > m || (below && dy >= m) {
                 continue;
             }
             let e = (m * m - dy * dy).max(0.0).sqrt();
@@ -183,8 +185,9 @@ impl Prim {
                 if ry <= 0.0 || rx <= 0.0 {
                     return None;
                 }
+                // Half-open `[cy - ry, cy + ry)`: the bottom pole is a single point.
                 let norm = (y - cy) / ry;
-                if norm.abs() > 1.0 {
+                if !(-1.0..1.0).contains(&norm) {
                     return None;
                 }
                 let hw = rx * (1.0 - norm * norm).max(0.0).sqrt();
@@ -306,6 +309,10 @@ pub(crate) struct FloatBoxes {
     /// The decoded alpha plane of a `url()` `shape-outside` (`None` while it is not
     /// loaded yet, or when the value has no image).
     pub(crate) image: Option<Arc<ImageAlpha>>,
+    /// The float is a replaced image (`<img>`): its `shape-outside` image is laid over
+    /// the content box, not stretched over the margin box (what Chromium does and the
+    /// WPT `shape-image` tests expect).
+    pub(crate) replaced: bool,
 }
 
 impl FloatBoxes {
@@ -356,6 +363,7 @@ impl FloatBoxes {
                 crate::style::ShapeOutside::Value(sv) => shape_image_url(sv).and_then(|u| shape_image(&u)),
                 crate::style::ShapeOutside::None => None,
             },
+            replaced: matches!(child.kind, super::BoxKind::Image { .. }),
         }
     }
 
@@ -791,12 +799,12 @@ fn clip_half_plane(pts: &[(f32, f32)], f: &dyn Fn((f32, f32)) -> f32, bound: f32
     out
 }
 
-/// CSS Shapes L1 §6.2 — a `url()` image: the cells of the margin box whose image
-/// alpha exceeds `shape-image-threshold`. The image is stretched over the margin
-/// box. `None` while the image has not been loaded (the float keeps its rectangle).
+/// CSS Shapes L1 §6.2 — a `url()` image: the cells whose image alpha exceeds
+/// `shape-image-threshold`. The image is stretched over the margin box (over the
+/// content box of an `<img>` float). `None` while the image has not been loaded (the float keeps its rectangle).
 fn resolve_image(bx: &FloatBoxes) -> Option<Vec<Prim>> {
     let img = bx.image.as_deref()?;
-    let rect = bx.margin;
+    let rect = if bx.replaced { bx.content } else { bx.margin };
     let (w, h) = (rect.w(), rect.h());
     if w <= 0.0 || h <= 0.0 || img.width == 0 || img.height == 0 {
         return Some(Vec::new());

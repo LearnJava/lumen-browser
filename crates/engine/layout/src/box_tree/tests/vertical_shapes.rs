@@ -22,6 +22,7 @@ fn boxes(radii: [(f32, f32); 4]) -> FloatBoxes {
         em: 16.0,
         threshold: 0.0,
         image: None,
+        replaced: false,
     }
 }
 
