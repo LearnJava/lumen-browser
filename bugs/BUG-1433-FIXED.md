@@ -1,6 +1,6 @@
 # BUG-1433 — `url("…" referrer-policy(…)|cross-origin(…)|integrity(…))` — модификаторы остаются внутри строки URL; запрос идёт по испорченному адресу
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images` + `css/css-values` + `css/css-color`)
 **Область:** css-parser/layout/shell (`crates/engine/layout/src/style/parse/` — разбор `url()` с `<request-url-modifier>`; `crates/shell/src/subresources.rs`)
 
@@ -35,3 +35,11 @@ WPT-RUN-14 срез 19: 21 reftest в `css-values/urls/{cross-origin,integrity,r
 ## Как проверить
 
 `css/css-values/urls/referrer-policy/origin/url-image-referrer-policy-same-origin.html`, `url-request-modifiers-computed.sub.html`.
+
+## Исправление
+
+Корень: `parse_url_value` ([`image.rs`](../crates/engine/layout/src/style/parse/image.rs)) брала всё между `url(` и последней `)` и срезала кавычки с краёв, поэтому хвост `' referrer-policy(origin)` оставался частью адреса. Теперь `parse_url_with_modifiers` разбирает `url(<string> <request-url-modifier>*)`: после закрывающей кавычки идут `cross-origin(anonymous|use-credentials)`, `integrity("…")`, `referrer-policy(<8 ключевых слов>)`; повтор известного модификатора, лишние токены в аргументах, число/строка вместо ident/функции и модификаторы после `url(<url-token>)` без кавычек отвергают значение (declaration отбрасывается); неизвестные модификаторы игнорируются, но их повтор — ошибка. Адрес в `BackgroundImage::Url` — без модификаторов; computed (`image_css`, `image_computed.rs`) сериализует их в каноническом порядке `cross-origin → integrity → referrer-policy`.
+
+Тесты: `url_request_modifiers` (`image_computed.rs`), `background_image_url_with_request_modifiers` (`style/tests/images.rs`).
+
+Не сделано, заведено отдельно: применение политик к самому запросу (`Referer`, CORS, SRI) — [BUG-1661](BUG-1661-OPEN.md).

@@ -25,12 +25,166 @@ use crate::style::{
 
 /// Извлечь URL из `url(...)`-функции. Поддерживает кавычки и без них.
 /// Возвращает None если строка не выглядит как url().
+///
+/// Модификаторы запроса (`cross-origin()`, `integrity()`, `referrer-policy()`) отбрасываются;
+/// невалидный модификатор отвергает значение целиком (BUG-1433). Они же — в
+/// [`parse_url_with_modifiers`].
 pub(in crate::style) fn parse_url_value(s: &str) -> Option<String> {
+    parse_url_with_modifiers(s).map(|(url, _)| url)
+}
+
+/// `<request-url-modifier>`ы функции `url()` (CSS Values 4 §4.5.1, CSS Values 5): известные
+/// значения в каноническом порядке сериализации `cross-origin → integrity → referrer-policy`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(in crate::style) struct UrlModifiers {
+    pub cross_origin: Option<String>,
+    /// Содержимое строки `integrity("…")` без внешних кавычек.
+    pub integrity: Option<String>,
+    pub referrer_policy: Option<String>,
+}
+
+impl UrlModifiers {
+    /// ` cross-origin(…) integrity("…") referrer-policy(…)` — с ведущим пробелом перед каждым.
+    pub(in crate::style) fn serialize(&self) -> String {
+        let mut out = String::new();
+        if let Some(c) = &self.cross_origin {
+            out.push_str(&format!(" cross-origin({c})"));
+        }
+        if let Some(i) = &self.integrity {
+            out.push_str(&format!(" integrity(\"{i}\")"));
+        }
+        if let Some(r) = &self.referrer_policy {
+            out.push_str(&format!(" referrer-policy({r})"));
+        }
+        out
+    }
+}
+
+const REFERRER_POLICIES: [&str; 8] = [
+    "no-referrer",
+    "no-referrer-when-downgrade",
+    "same-origin",
+    "origin",
+    "strict-origin",
+    "origin-when-cross-origin",
+    "strict-origin-when-cross-origin",
+    "unsafe-url",
+];
+
+/// `url(<string> <request-url-modifier>*)` или `url(<url-token>)`. Модификаторы допустимы
+/// только после строки в кавычках; неизвестные модификаторы игнорируются, но их повтор —
+/// ошибка (CSS Values 5 §4.5.1). `None` — это не `url()` или значение невалидно.
+pub(in crate::style) fn parse_url_with_modifiers(s: &str) -> Option<(String, UrlModifiers)> {
     let s = s.trim();
     let after = s.strip_prefix("url(")?;
     let close = after.rfind(')')?;
-    let inner = after[..close].trim().trim_matches(['"', '\''].as_ref());
-    Some(inner.to_string())
+    let inner = after[..close].trim();
+    let quote = inner.chars().next().filter(|c| matches!(c, '"' | '\''));
+    let Some(q) = quote else {
+        // `<url-token>`: пробелы и скобки внутри недопустимы (после него модификаторов нет).
+        if inner.contains(|c: char| c.is_ascii_whitespace() || c == '(') {
+            return None;
+        }
+        return Some((inner.to_string(), UrlModifiers::default()));
+    };
+    let body = &inner[1..];
+    let mut end = body.len();
+    let mut escaped = false;
+    for (i, ch) in body.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == q {
+            end = i;
+            break;
+        }
+    }
+    let url = body[..end].to_string();
+    let rest = body.get(end + 1..).unwrap_or("");
+    Some((url, parse_url_modifiers(rest)?))
+}
+
+/// Хвост `url("…" <modifier>*)` после закрывающей кавычки.
+fn parse_url_modifiers(mut rest: &str) -> Option<UrlModifiers> {
+    let mut mods = UrlModifiers::default();
+    let mut unknown: Vec<String> = Vec::new();
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return Some(mods);
+        }
+        let name_len = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .unwrap_or(rest.len());
+        let name = rest[..name_len].to_ascii_lowercase();
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            return None; // число, строка и т.п. — не ident/функция
+        }
+        rest = &rest[name_len..];
+        let mut args: Option<&str> = None;
+        if let Some(r) = rest.strip_prefix('(') {
+            let mut depth = 1usize;
+            let mut quote: Option<char> = None;
+            let mut escaped = false;
+            let mut close = None;
+            for (i, ch) in r.char_indices() {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if let Some(q) = quote {
+                    if ch == q {
+                        quote = None;
+                    }
+                } else if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                } else if ch == '(' {
+                    depth += 1;
+                } else if ch == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+            }
+            let close = close?;
+            args = Some(r[..close].trim());
+            rest = &r[close + 1..];
+        }
+        match name.as_str() {
+            "cross-origin" => {
+                let a = args?.to_ascii_lowercase();
+                if mods.cross_origin.is_some() || !matches!(a.as_str(), "anonymous" | "use-credentials") {
+                    return None;
+                }
+                mods.cross_origin = Some(a);
+            }
+            "integrity" => {
+                let a = args?;
+                let q = a.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+                let body = a[1..].strip_suffix(q)?;
+                if mods.integrity.is_some() || body.contains(q) {
+                    return None; // повтор или лишние токены внутри `integrity()`
+                }
+                mods.integrity = Some(body.to_string());
+            }
+            "referrer-policy" => {
+                let a = args?.to_ascii_lowercase();
+                if mods.referrer_policy.is_some() || !REFERRER_POLICIES.contains(&a.as_str()) {
+                    return None;
+                }
+                mods.referrer_policy = Some(a);
+            }
+            _ => {
+                if unknown.contains(&name) {
+                    return None; // повтор неизвестного модификатора
+                }
+                unknown.push(name);
+            }
+        }
+    }
 }
 
 /// Проверка, является ли value одной из gradient-функций.
@@ -428,8 +582,11 @@ pub(in crate::style) fn parse_single_bg_layer(
             continue;
         }
         if t.to_ascii_lowercase().starts_with("url(") {
-            if let Some(url) = parse_url_value(t) {
+            if let Some((url, mods)) = parse_url_with_modifiers(t) {
                 layer.image = BackgroundImage::Url(url);
+                if mods != UrlModifiers::default() {
+                    layer.image_css = computed_image_css(t, em_basis, viewport).map(Into::into);
+                }
             }
             idx += 1;
             continue;
