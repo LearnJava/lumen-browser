@@ -213,6 +213,7 @@ pub(in crate::style) fn apply_background_image_presentational_hint(doc: &Documen
                 style.background_layers.push(BackgroundLayer::default());
             }
             style.background_layers[0].image = BackgroundImage::Url(val.to_string());
+            style.background_layers[0].image_css = None;
         }
     }
 }
