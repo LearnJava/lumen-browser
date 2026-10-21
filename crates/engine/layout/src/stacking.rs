@@ -27,7 +27,7 @@
 #![allow(missing_docs)]
 
 use crate::box_tree::{BoxKind, LayoutBox};
-use crate::style::{ComputedStyle, Isolation, MixBlendMode, Position};
+use crate::style::{ComputedStyle, ContainFlags, Isolation, MixBlendMode, Position};
 
 /// Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -207,6 +207,11 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
         }
     }
     if style.opacity < 1.0 {
+        return true;
+    }
+    // CSS Containment L1 §3.2 / §3.3: `contain: layout` and `contain: paint` each establish a
+    // stacking context.
+    if style.contain.0 & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0) != 0 {
         return true;
     }
     if !style.transform.is_empty()

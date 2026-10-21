@@ -1609,9 +1609,14 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
 /// not — their overflow is contained (and separately reported by that box's
 /// own `scrollWidth`/`scrollHeight`), not folded further into the ancestor
 /// chain.
+///
+/// CSS Containment L1 §3.2 / §3.3: `contain: layout` and `contain: paint` turn the box's
+/// descendants' overflow into ink overflow, so the scrollable area of an ancestor never grows
+/// for it either.
 fn box_clips_own_overflow(b: &LayoutBox) -> bool {
     !matches!(b.style.overflow_x, style::Overflow::Visible)
         || !matches!(b.style.overflow_y, style::Overflow::Visible)
+        || b.style.contain.0 & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0) != 0
 }
 
 /// The horizontal scrollable-overflow span of a box, as `(min_x, max_x)`

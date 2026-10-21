@@ -1216,3 +1216,71 @@ fn size_contained_child_ignores_its_content_width_for_max_content_parent() {
     let t = find_size_contained(&root).expect("size-contained box present");
     assert!(t.rect.width.abs() < 0.5, "#t width {}", t.rect.width);
 }
+
+// ── layout / paint containment (CSS Containment L1 §3.2, §3.3) ──
+
+/// Find the first box that carries `contain: layout` or `contain: paint`.
+fn find_layout_or_paint_contained(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+    let mask = crate::style::ContainFlags::LAYOUT.0 | crate::style::ContainFlags::PAINT.0;
+    if b.style.contain.0 & mask != 0 {
+        return Some(b);
+    }
+    b.children.iter().find_map(find_layout_or_paint_contained)
+}
+
+#[test]
+fn contain_layout_and_paint_are_independent_formatting_contexts() {
+    // A child's margin-top must not collapse through the contained wrapper.
+    for kind in ["layout", "paint"] {
+        let html = r#"<div class="c"><div class="m"></div></div><div class="n"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&format!(
+            "body {{ margin: 0; }} .c {{ contain: {kind}; }} .m {{ margin-top: 40px; height: 10px; }} .n {{ height: 10px; }}"
+        ));
+        let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_layout_or_paint_contained(&root).expect("contained box present");
+        assert!(c.rect.y.abs() < 0.5, "contain:{kind} wrapper y = {}", c.rect.y);
+        assert!((c.rect.height - 50.0).abs() < 0.5, "contain:{kind} wrapper height = {}", c.rect.height);
+    }
+}
+
+#[test]
+fn contain_layout_and_paint_create_stacking_context() {
+    for kind in ["layout", "paint"] {
+        let doc = lumen_html_parser::parse(r#"<div class="c"></div>"#);
+        let sheet = lumen_css_parser::parse(&format!(".c {{ contain: {kind}; }}"));
+        let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_layout_or_paint_contained(&root).expect("contained box present");
+        assert!(crate::stacking::creates_stacking_context(&c.style), "contain:{kind}");
+    }
+}
+
+#[test]
+fn contain_layout_has_no_baseline_of_its_own() {
+    let doc = lumen_html_parser::parse(r#"<div class="c"><div class="t">x</div></div>"#);
+    let sheet = lumen_css_parser::parse(".c { contain: layout; } .t { height: 20px; }");
+    let root = super::super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+    let c = find_layout_or_paint_contained(&root).expect("contained box present");
+    let bl = super::super::baseline::box_baseline(c, super::super::baseline::BaselineSide::First, None);
+    assert!(bl.is_none(), "layout-contained box must not expose a content baseline, got {bl:?}");
+}
+
+#[test]
+fn contain_layout_descendant_overflow_does_not_grow_scrollable_area() {
+    let html = r#"<div class="s"><div class="c"><div class="big"></div></div></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(
+        "body { margin: 0; } .s { overflow: auto; width: 100px; height: 100px; } \
+         .c { contain: layout; height: 0; } .big { width: 300px; height: 300px; }",
+    );
+    let root = super::super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    fn find_scroller(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+        if !matches!(b.style.overflow_y, crate::style::Overflow::Visible) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_scroller)
+    }
+    let s = find_scroller(&root).expect("scroller present");
+    assert!((crate::content_height(s) - 100.0).abs() < 0.5, "scrollHeight = {}", crate::content_height(s));
+    assert!((crate::content_width(s) - 100.0).abs() < 0.5, "scrollWidth = {}", crate::content_width(s));
+}
