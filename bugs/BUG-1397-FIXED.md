@@ -1,6 +1,6 @@
 # BUG-1397 — `contain: size` у замещаемых и grid, `contain: inline-size` в раскладке не применяются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 17, `css/css-multicol` + `css/css-contain`)
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs:512`, `grid_vertical.rs:356`, `intrinsic.rs`; `ContainFlags::INLINE_SIZE` в раскладке не читается)
 
@@ -32,3 +32,12 @@ WPT-RUN-14 срез 17: `contain-size-013/041/042`, `contain-size-replaced-001�
 ## Как проверить
 
 `css/css-contain/contain-size-013.html`, `contain-size-grid-003.html`, `contain-inline-size-flex.html`.
+
+## Исправление (2026-10-21, P6)
+
+- Замещаемые (`box_tree/build.rs`): `<img>`/`<canvas>` с `contain: size` не получают размер и пропорцию bitmap; `layout_dispatch.rs` — auto-ширина такого бокса = `contain-intrinsic-width` (или 0) + padding + border.
+- Grid: при size containment элементы не растят строки (`grid_trampoline.rs` `post_probe_item`) и не участвуют в размере столбцов (`grid.rs`); высота контейнера — сумма явных дорожек, `contain-intrinsic-height` перекрывает её. Ширина `inline-grid` — сумма явных столбцов (`intrinsic::size_contained_content_width`, `layout_dispatch.rs`).
+- `contain: inline-size`: shrink-to-fit (`inline-block`/`inline-flex`/`inline-grid`) и intrinsic-вклад схлопывают только inline-ось; блок остаётся на ширину контейнера.
+- Тесты: `box_tree/tests/shapes_and_contain.rs` (`contain_size_canvas_drops_bitmap_size`, `contain_size_inline_grid_keeps_explicit_tracks`, `contain_inline_size_collapses_inline_block_width_only`).
+
+Не сделано: `contain: inline-size` в вертикальных writing-mode (`contain-inline-size-vertical-rl-*`), WPT-прогон среза не выполнен.

@@ -650,8 +650,11 @@ fn build_box_inner(
                 // ровно в одном случае «обе стороны auto» — и только в
                 // ширину: высоту из неё выведет ratio-ветка, и она же
                 // отработает после `min-`/`max-width`.
+                // CSS Containment L1 §3.1 (BUG-1397): under `contain: size` the natural size and
+                // ratio of the image do not exist — the box is sized as if it had no content.
+                let size_contained = style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0;
                 let intrinsic_ratio = match (src.intrinsic_width, src.intrinsic_height) {
-                    (Some(w), Some(h)) if w > 0 && h > 0 => Some((w as f32, h as f32)),
+                    (Some(w), Some(h)) if w > 0 && h > 0 && !size_contained => Some((w as f32, h as f32)),
                     _ => None,
                 };
                 if let Some((iw, ih)) = intrinsic_ratio {
@@ -670,11 +673,13 @@ fn build_box_inner(
                     // Известна одна сторона — ratio не построить, поведение
                     // прежнее: hint заполняет пустой слот.
                     if style.width.is_none()
+                        && !size_contained
                         && let Some(w) = src.intrinsic_width
                     {
                         Arc::make_mut(&mut style).width = Some(Length::Px(w as f32));
                     }
                     if style.height.is_none()
+                        && !size_contained
                         && let Some(h) = src.intrinsic_height
                     {
                         Arc::make_mut(&mut style).height = Some(Length::Px(h as f32));
@@ -752,17 +757,19 @@ fn build_box_inner(
                 };
                 let width_authored = definite(&style.width, style.width_is_intrinsic_hint);
                 let height_authored = definite(&style.height, style.height_is_intrinsic_hint);
-                if style.width.is_none() && !height_authored {
+                // BUG-1397: `contain: size` drops the bitmap size and ratio (CSS Containment L1 §3.1).
+                let size_contained = style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0;
+                if style.width.is_none() && !height_authored && !size_contained {
                     let st = Arc::make_mut(&mut style);
                     st.width = Some(Length::Px(cw as f32 + fill_extra_w));
                     st.width_is_intrinsic_hint = true;
                 }
-                if style.height.is_none() && !width_authored {
+                if style.height.is_none() && !width_authored && !size_contained {
                     let st = Arc::make_mut(&mut style);
                     st.height = Some(Length::Px(ch as f32 + fill_extra_h));
                     st.height_is_intrinsic_hint = true;
                 }
-                if (style.aspect_ratio.is_none() || style.aspect_ratio_auto) && cw > 0 && ch > 0 {
+                if (style.aspect_ratio.is_none() || style.aspect_ratio_auto) && cw > 0 && ch > 0 && !size_contained {
                     Arc::make_mut(&mut style).aspect_ratio = Some((cw as f32, ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }

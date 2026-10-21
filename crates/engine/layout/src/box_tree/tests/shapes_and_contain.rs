@@ -1217,6 +1217,47 @@ fn size_contained_child_ignores_its_content_width_for_max_content_parent() {
     assert!(t.rect.width.abs() < 0.5, "#t width {}", t.rect.width);
 }
 
+// ── BUG-1397: size containment of replaced elements, grids; `contain: inline-size` ──
+
+fn find_contained_by(b: &super::super::LayoutBox, mask: u8) -> Option<&super::super::LayoutBox> {
+    if b.style.contain.0 & mask != 0 {
+        return Some(b);
+    }
+    b.children.iter().find_map(|c| find_contained_by(c, mask))
+}
+
+#[test]
+fn contain_size_canvas_drops_bitmap_size() {
+    let doc = lumen_html_parser::parse(r#"<canvas id="c" width="50" height="50"></canvas>"#);
+    let sheet = lumen_css_parser::parse("#c { contain: size; padding: 10px; }");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let c = find_size_contained(&root).expect("canvas");
+    assert!((c.rect.width - 20.0).abs() < 0.5, "canvas width {}", c.rect.width);
+    assert!((c.rect.height - 20.0).abs() < 0.5, "canvas height {}", c.rect.height);
+}
+
+#[test]
+fn contain_size_inline_grid_keeps_explicit_tracks() {
+    let doc = lumen_html_parser::parse(r#"<div id="g"><div style="height:80px"></div></div>"#);
+    let sheet = lumen_css_parser::parse("#g { display: inline-grid; contain: size; grid: 50px / 100px; }");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let g = find_size_contained(&root).expect("grid");
+    assert!((g.rect.width - 100.0).abs() < 0.5, "grid width {}", g.rect.width);
+    assert!((g.rect.height - 50.0).abs() < 0.5, "grid height {}", g.rect.height);
+}
+
+#[test]
+fn contain_inline_size_collapses_inline_block_width_only() {
+    let doc = lumen_html_parser::parse(
+        r#"<div id="b"><div style="width:300px;height:30px"></div></div>"#,
+    );
+    let sheet = lumen_css_parser::parse("#b { display: inline-block; contain: inline-size; }");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let b = find_contained_by(&root, crate::style::ContainFlags::INLINE_SIZE.0).expect("inline-block");
+    assert!(b.rect.width.abs() < 0.5, "inline-block width {}", b.rect.width);
+    assert!((b.rect.height - 30.0).abs() < 0.5, "inline-block height {}", b.rect.height);
+}
+
 // ── layout / paint containment (CSS Containment L1 §3.2, §3.3) ──
 
 /// Find the first box that carries `contain: layout` or `contain: paint`.
