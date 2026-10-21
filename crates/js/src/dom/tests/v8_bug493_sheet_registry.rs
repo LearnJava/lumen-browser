@@ -219,3 +219,71 @@ fn shell_registry_push_keeps_earlier_insert_rule_edits() {
     }]);
     assert_eq!(s(&rt, "t.sheet.cssRules.length"), "1");
 }
+
+/// BUG-1439: лист `<style>`, снятого из дерева, остаётся самостоятельным
+/// объектом — `insertRule`/`deleteRule`/`cssRules` работают, `ownerNode` —
+/// `null` (CSSOM §6.2). Так устроен `parsing-testcommon.js` WPT.
+#[test]
+fn sheet_of_removed_style_keeps_its_rules() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(function(){ var st = document.createElement('style'); \
+              st.textContent = 'p{color:red}'; \
+              document.head.append(st); \
+              var sh = st.sheet; \
+              document.head.removeChild(st); \
+              var rules = sh.cssRules; \
+              var at = sh.insertRule('a{}', 0); \
+              var n1 = rules.length; \
+              sh.deleteRule(0); \
+              return [at, n1, rules.length, rules[0].cssText, sh.ownerNode, st.sheet, \
+                      document.styleSheets.length].join('|'); })()"
+        ),
+        "0|2|1|p { color: red; }|||0"
+    );
+}
+
+/// BUG-1439: невалидный селектор на листе снятого `<style>` — `SyntaxError`,
+/// а не `IndexSizeError`; `replaceSync` по-прежнему запрещён.
+#[test]
+fn removed_sheet_reports_syntax_error_and_stays_non_constructed() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(function(){ var st = document.createElement('style'); \
+              document.head.append(st); \
+              var sh = st.sheet; \
+              document.head.removeChild(st); \
+              var r = []; \
+              try { sh.insertRule('a:::b{}'); } catch (e) { r.push(e.name); } \
+              try { sh.replaceSync('a{}'); } catch (e) { r.push(e.name); } \
+              return r.join(); })()"
+        ),
+        "SyntaxError,NotAllowedError"
+    );
+}
+
+/// BUG-1439: повторная вставка того же `<style>` даёт новый лист, старый объект
+/// остаётся оторванным.
+#[test]
+fn reinserted_style_gets_a_fresh_sheet() {
+    let rt = v8_runtime_with_dom(make_doc());
+    assert_eq!(
+        s(
+            &rt,
+            "(function(){ var st = document.createElement('style'); \
+              document.head.append(st); \
+              var old = st.sheet; \
+              document.head.removeChild(st); \
+              old.insertRule('a{}'); \
+              document.head.append(st); \
+              var fresh = st.sheet; \
+              return [fresh !== old, fresh.cssRules.length, old.cssRules.length, \
+                      old.ownerNode, fresh.ownerNode === st].join(); })()"
+        ),
+        "true,0,1,,true"
+    );
+}

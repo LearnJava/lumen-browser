@@ -184,5 +184,21 @@ pub(crate) fn install_cssom_tree_natives(
             }
         });
     }
+    // BUG-1439: лист узла, вышедшего из дерева, переезжает в реестр
+    // конструируемых и дальше адресуется как `(true, idx)`: правила остаются
+    // доступными (CSSOM §6.2). `-1` — отложенного листа у узла нет.
+    {
+        let sh = sheets.clone();
+        reg!(scope, ctx, store, "_lumen_stylesheet_take_detached", move |nid: u32| -> i32 {
+            let sheet = {
+                let mut detached = sh.sync.detached.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(at) = detached.iter().position(|(n, _)| *n == nid) else { return -1 };
+                detached.remove(at).1
+            };
+            let mut guard = sh.constructed.lock().unwrap_or_else(|e| e.into_inner());
+            guard.push(super::constructed_stylesheets::ConstructedStylesheet { sheet, disabled: false });
+            (guard.len() - 1) as i32
+        });
+    }
     Ok(())
 }
