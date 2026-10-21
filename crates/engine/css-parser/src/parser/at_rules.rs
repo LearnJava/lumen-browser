@@ -1412,7 +1412,16 @@ impl<'a> Parser<'a> {
         // если сразу `(`, это начало condition без имени. `style(...)` — тоже
         // condition, а не имя.
         let name = if self.peek() != Some('(') && !self.starts_with_keyword("style") {
-            self.parse_ident()
+            let start = self.pos;
+            let ident = self.parse_ident();
+            // `ident(` is a function of the condition (`scroll-state(…)`), and the
+            // keyword `not` starts it — neither is a container name (CSS Conditional 5).
+            if self.peek() == Some('(') || ident.as_deref().is_some_and(|i| i.eq_ignore_ascii_case("not")) {
+                self.pos = start;
+                None
+            } else {
+                ident
+            }
         } else {
             None
         };

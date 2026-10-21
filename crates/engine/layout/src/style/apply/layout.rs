@@ -1053,12 +1053,10 @@ pub(in crate::style) fn apply_decl_layout(
             };
         }
         "container-type" => {
-            style.container_type = match val.trim() {
-                "normal" => ContainerType::Normal,
-                "size" => ContainerType::Size,
-                "inline-size" => ContainerType::InlineSize,
-                _ => style.container_type,
-            };
+            if let Some((ty, scroll_state)) = parse_container_type(val) {
+                style.container_type = ty;
+                style.container_scroll_state = scroll_state;
+            }
         }
         "container-name" => {
             let v = val.trim();
@@ -1084,11 +1082,9 @@ pub(in crate::style) fn apply_decl_layout(
                     .map(|s| s.to_string())
                     .collect();
             }
-            style.container_type = match type_part {
-                "size" => ContainerType::Size,
-                "inline-size" => ContainerType::InlineSize,
-                _ => ContainerType::Normal,
-            };
+            let (ty, scroll_state) = parse_container_type(type_part).unwrap_or((ContainerType::Normal, false));
+            style.container_type = ty;
+            style.container_scroll_state = scroll_state;
         }
         "resize" => {
             style.resize = match val.trim() {
@@ -1235,6 +1231,31 @@ struct RuleTriplet {
 /// and the `place-*` shorthands).
 /// `width`/`height`/`inline-size`/`block-size`: `Some(None)` is `auto`, `Some(Some(len))` a size,
 /// `None` an invalid value that the caller must drop (CSS Syntax §2.2, BUG-1377).
+/// `container-type` — `normal | [ [ size | inline-size ] || scroll-state ]`
+/// (CSS Conditional 5 §3.1): `(size axis, scroll-state flag)`, or `None` when the
+/// value is invalid (repeated keyword, `normal` mixed with another, `size`
+/// together with `inline-size`, empty).
+fn parse_container_type(val: &str) -> Option<(ContainerType, bool)> {
+    let mut ty: Option<ContainerType> = None;
+    let mut scroll_state = false;
+    let mut normal = false;
+    let mut any = false;
+    for tok in val.split_ascii_whitespace() {
+        any = true;
+        match tok.to_ascii_lowercase().as_str() {
+            "normal" => normal = true,
+            "size" if ty.is_none() => ty = Some(ContainerType::Size),
+            "inline-size" if ty.is_none() => ty = Some(ContainerType::InlineSize),
+            "scroll-state" if !scroll_state => scroll_state = true,
+            _ => return None,
+        }
+    }
+    if !any || (normal && (ty.is_some() || scroll_state || val.split_ascii_whitespace().count() > 1)) {
+        return None;
+    }
+    Some((ty.unwrap_or(ContainerType::Normal), scroll_state))
+}
+
 fn parse_size_or_auto(val: &str, is_quirks: bool) -> Option<Option<Length>> {
     if val.trim().eq_ignore_ascii_case("auto") {
         return Some(None);

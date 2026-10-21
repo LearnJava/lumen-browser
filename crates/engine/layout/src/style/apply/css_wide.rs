@@ -587,6 +587,11 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.container_type
             };
+            style.container_scroll_state = if inh_only_inherit {
+                inherited.container_scroll_state
+            } else {
+                init.container_scroll_state
+            };
         }
         "container-name" | "container" => {
             style.container_name = if inh_only_inherit {

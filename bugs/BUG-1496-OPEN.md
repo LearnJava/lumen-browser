@@ -33,3 +33,5 @@ WPT-RUN-14 срез 22: `css-conditional/container-queries/{custom-property-styl
 ## Как проверить
 
 Таблица выше; `css/css-conditional/container-queries/style-query-no-cycle.html`, `custom-property-style-queries.html`.
+
+2026-10-21 (CQ-SCROLL-STATE): запрос выбирает контейнер по цепочке (`ContainerContext::parent`) — по типу и по имени, а не только ближайший.

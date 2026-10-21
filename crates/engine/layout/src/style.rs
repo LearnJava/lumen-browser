@@ -46,6 +46,7 @@ mod cascade;
 mod cascade_index;
 mod computed;
 mod container;
+mod container_scroll;
 mod env;
 mod logical;
 mod math_value;
@@ -268,9 +269,11 @@ pub use values::misc::{
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };
 pub use container::{
-    apply_container_rules, evaluate_container_condition, ContainFlags, ContainerContext,
-    ContainerType, ContentVisibility, InterpolateSizeMode,
+    apply_container_rules, apply_matched_container_rules, evaluate_container_condition,
+    evaluate_container_query, matching_container_rules, ContainFlags,
+    ContainerContext, ContainerKinds, ContainerType, ContentVisibility, InterpolateSizeMode,
 };
+pub use container_scroll::{Edge, EdgeFlags, ScrollStateInfo};
 pub use values::scroll::{
     FontSizeAdjust, OffsetRotate, OverscrollBehavior, PrintColorAdjust, ScrollBehavior,
     ScrollInitialTarget, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,

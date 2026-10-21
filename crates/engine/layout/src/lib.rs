@@ -56,6 +56,7 @@ pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
+mod scroll_state;
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
@@ -177,7 +178,7 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    apply_container_rules, evaluate_container_condition,
+    apply_container_rules, evaluate_container_condition, evaluate_container_query,
     set_interactive_state, clear_interactive_state,
     set_animated_heights, clear_animated_heights,
     set_forced_colors, forced_colors_active,
@@ -186,7 +187,7 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, ContainerKinds, Edge, EdgeFlags, ScrollStateInfo, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
     AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle,
@@ -1866,6 +1867,16 @@ pub fn collect_computed_styles(
     let mut out = std::collections::HashMap::new();
     collect_computed_styles_rec(doc, root, resolved_geometry::GeomCtx::root(viewport), viewport, &mut out);
     if let Some(counters) = counters {
+        // CQ-SCROLL-STATE: box-less elements inside a query container, restyled by its
+        // `@container` rules — they replace the segment-derived approximation too.
+        for (id, style) in counters.cq_boxless() {
+            let idx = id.index() as u32;
+            let mut m = StyleMap::of_style(style);
+            if !out.contains_key(&idx) && style.display != Display::Contents {
+                m.set(resolved_geometry::BOXLESS_KEY, "1".to_owned());
+            }
+            out.insert(idx, m);
+        }
         for i in 0..doc.len() {
             let idx = i as u32;
             if out.contains_key(&idx) {
@@ -2212,6 +2223,19 @@ pub fn collect_custom_properties(
     root: &LayoutBox,
     viewport: lumen_core::geom::Size,
 ) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
+    collect_custom_properties_for(root, None, viewport)
+}
+
+/// [`collect_custom_properties`] that also publishes the custom properties of the
+/// elements that own no box — plain inline elements, `display: none` / `contents`
+/// ones — below a query container (CQ-SCROLL-STATE: where `@container` rules set a
+/// `--x` that `getComputedStyle` has to read back; [`CounterMap::cq_boxless`]).
+/// Without `counters`, and outside query containers, those elements stay absent.
+pub fn collect_custom_properties_for(
+    root: &LayoutBox,
+    counters: Option<&CounterMap>,
+    viewport: lumen_core::geom::Size,
+) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
     let mut out = std::collections::HashMap::new();
     // Keyed by the address of the source allocation — identity, never read.
     let mut resolved: std::collections::HashMap<
@@ -2219,7 +2243,43 @@ pub fn collect_custom_properties(
         std::sync::Arc<std::collections::HashMap<String, String>>,
     > = std::collections::HashMap::new();
     collect_custom_properties_rec(root, viewport, &mut out, &mut resolved);
+    if let Some(counters) = counters {
+        for (id, style) in counters.cq_boxless() {
+            let idx = id.index() as u32;
+            if !out.contains_key(&idx) && !style.custom_props.is_empty() {
+                out.insert(idx, resolve_custom_props(style, viewport, &mut resolved));
+            }
+        }
+    }
     out
+}
+
+/// `style.custom_props` with every `var()` expanded, one resolution per distinct
+/// allocation (`resolved`, keyed by the allocation's address).
+fn resolve_custom_props(
+    style: &ComputedStyle,
+    viewport: lumen_core::geom::Size,
+    resolved: &mut std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+    let key = style.custom_props.as_ptr() as usize;
+    if let Some(m) = resolved.get(&key) {
+        return std::sync::Arc::clone(m);
+    }
+    let raw = style.custom_props.shared();
+    let em_basis = style.font_size;
+    let m = std::sync::Arc::new(
+        raw.iter()
+            .map(|(name, value)| {
+                let computed = crate::style::expand_vars_and_env(value, &raw, em_basis, viewport).unwrap_or_default();
+                (name.clone(), computed.trim().to_string())
+            })
+            .collect::<std::collections::HashMap<String, String>>(),
+    );
+    resolved.insert(key, std::sync::Arc::clone(&m));
+    m
 }
 
 /// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
@@ -2269,27 +2329,7 @@ pub(crate) fn collect_custom_properties_box(
     if b.style.custom_props.is_empty() || held.is_some_and(|h| h.contains_key(&(b.node.index() as u32))) {
         return;
     }
-    let key = b.style.custom_props.as_ptr() as usize;
-    let map = match resolved.get(&key) {
-        Some(m) => std::sync::Arc::clone(m),
-        None => {
-            let raw = b.style.custom_props.shared();
-            let em_basis = b.style.font_size;
-            let m = std::sync::Arc::new(
-                raw.iter()
-                    .map(|(name, value)| {
-                        let computed = crate::style::expand_vars_and_env(
-                            value, &raw, em_basis, viewport,
-                        )
-                        .unwrap_or_default();
-                        (name.clone(), computed.trim().to_string())
-                    })
-                    .collect::<std::collections::HashMap<String, String>>(),
-            );
-            resolved.insert(key, std::sync::Arc::clone(&m));
-            m
-        }
-    };
+    let map = resolve_custom_props(&b.style, viewport, resolved);
     out.entry(b.node.index() as u32).or_insert(map);
 }
 
@@ -3086,6 +3126,10 @@ mod scroll_interaction_misc;
 #[cfg(test)]
 #[path = "tests/scroll_container.rs"]
 mod scroll_container;
+
+#[cfg(test)]
+#[path = "tests/scroll_state_queries.rs"]
+mod scroll_state_queries;
 
 #[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]

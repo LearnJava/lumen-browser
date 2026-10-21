@@ -32,3 +32,5 @@ WPT-RUN-14 срез 22: `container-queries/{container-computed,container-type-co
 ## Как проверить
 
 Таблица выше; `css/css-conditional/container-queries/container-type-computed.html`, `container-computed.html`.
+
+2026-10-21 (CQ-SCROLL-STATE): `computed_style_to_map` теперь отдаёт `container-type` (с `scroll-state`) и `container-name`; шорткат `container` и `'container-type' in getComputedStyle(t)` остаются.

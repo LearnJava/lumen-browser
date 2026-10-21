@@ -36,3 +36,5 @@ WPT-RUN-14 срез 22: `container-queries/{size-feature-evaluation,query-evalua
 ## Как проверить
 
 Таблица выше; `css/css-conditional/container-queries/size-feature-evaluation.html`, `query-evaluation.html`.
+
+2026-10-21 (CQ-SCROLL-STATE): range-синтаксис `(100px < width <= 300px)`, булев `(inline-size)`, `inline-size`/`block-size`-варианты, блоковая ось `inline-size`-контейнера — unknown; `aspect-ratio`/`orientation` по-прежнему не считаются.
