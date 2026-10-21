@@ -258,11 +258,10 @@ pub(crate) fn render_source_to_png(
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
         // `::selection` of a selection a page script made (`getSelection().addRange`).
+        let custom = crate::display_list_metrics::custom_highlights(parsed.js_ctx.as_deref());
         let highlights = {
-            let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-            let measurer = crate::relayout::page_measurer(&font, &[]);
-            let doc = parsed.document.lock().unwrap();
-            crate::display_list_metrics::page_highlights(&parsed.layout, &doc, &parsed.stylesheet, vp, false, &measurer)
+            let doc = parsed.document.lock().unwrap_or_else(|e| e.into_inner());
+            crate::display_list_metrics::page_highlights(&parsed.layout, &doc, &parsed.stylesheet, vp, false, &parsed.measurer, &custom)
         };
         let mut dl = crate::display_list_metrics::paint_ordered_in_highlighted(&parsed.layout, vp, highlights);
         // BUG-480 срез 15: содержимое под-документов фреймов — и здесь. Живой
@@ -845,11 +844,10 @@ pub(crate) fn run_dump(
         DumpKind::DisplayList => {
             let vp = dump_vp;
             let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
+            let custom = crate::display_list_metrics::custom_highlights(parsed.js_ctx.as_deref());
             let highlights = {
-                let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-                let measurer = crate::relayout::page_measurer(&font, &[]);
-                let doc = parsed.document.lock().unwrap();
-                crate::display_list_metrics::page_highlights(&parsed.layout, &doc, &parsed.stylesheet, vp, false, &measurer)
+                let doc = parsed.document.lock().unwrap_or_else(|e| e.into_inner());
+                crate::display_list_metrics::page_highlights(&parsed.layout, &doc, &parsed.stylesheet, vp, false, &parsed.measurer, &custom)
             };
             let mut dl = crate::display_list_metrics::paint_ordered_in_highlighted(&parsed.layout, vp, highlights);
             // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на

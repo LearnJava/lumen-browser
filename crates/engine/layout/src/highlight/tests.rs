@@ -200,10 +200,37 @@ fn computed_highlight_style_per_pseudo() {
     let sel = get("selection").expect("selection");
     assert_eq!(sel.color, Color { r: 0, g: 255, b: 0, a: 255 });
     assert!(sel.background_color.is_some());
+    // What `getComputedStyle(el, "::selection")` serialises.
+    let map = crate::computed_style_to_map(&sel);
+    assert_eq!(map.get("background-color").map(String::as_str), Some("rgb(0, 128, 0)"));
+    assert_eq!(map.get("color").map(String::as_str), Some("rgb(0, 255, 0)"));
     assert_eq!(get("spelling-error").expect("spelling").color, Color { r: 255, g: 0, b: 0, a: 255 });
     assert_eq!(get("grammar-error").expect("grammar").color, Color { r: 0, g: 0, b: 255, a: 255 });
     assert_eq!(get("highlight(foo)").expect("foo").color, Color { r: 255, g: 255, b: 0, a: 255 });
     assert!(get("highlight(bar)").expect("bar").background_color.is_some());
     assert!(get("highlight(baz)").is_none(), "no rule for that name");
     assert!(get("target-text").is_none(), "no ::target-text rule");
+}
+
+/// Collapsed whitespace: DOM offsets of a pretty-printed text land on the right glyphs.
+#[test]
+fn collapsed_whitespace_is_aligned() {
+    let (doc, sheet, root) = setup("<body><p>foo\n      bar baz</p></body>", "");
+    let t = text_node(&doc, "foo\n      bar baz");
+    // "bar" is bytes 10..13 of the DOM text, 4..7 of the laid-out "foo bar baz".
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(t, 10), end: pos(t, 13) }]).expect("highlights");
+    let pieces = hl.pieces(first_frag(&root).unwrap()).unwrap();
+    let cuts: Vec<_> = pieces.iter().map(|p| (p.bytes.clone(), p.looks.len())).collect();
+    assert_eq!(cuts, vec![(0..4, 0), (4..7, 1), (7..11, 0)]);
+    assert_eq!(pieces[1].x, 32.0, "after \"foo \" at 8 px a character");
+}
+
+/// Preserved whitespace maps one to one.
+#[test]
+fn preserved_whitespace_is_not_collapsed() {
+    let (doc, sheet, root) = setup("<body><p>a  b</p></body>", "p{white-space:pre}");
+    let t = text_node(&doc, "a  b");
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(t, 3), end: pos(t, 4) }]).expect("highlights");
+    let pieces = hl.pieces(first_frag(&root).unwrap()).unwrap();
+    assert_eq!(pieces.iter().find(|p| !p.looks.is_empty()).map(|p| p.bytes.clone()), Some(3..4));
 }

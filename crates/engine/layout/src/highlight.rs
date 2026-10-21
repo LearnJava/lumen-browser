@@ -211,11 +211,11 @@ impl TreeOrder {
                 continue;
             };
             let (start, end) = if a <= b { (a, b) } else { (b, a) };
-            for &t in &self.texts {
+            // `texts` is in preorder: only the nodes from `start` to `end` are visited.
+            let from = self.texts.partition_point(|t| self.pre[t] < start.0);
+            let to = self.texts.partition_point(|t| self.pre[t] <= end.0);
+            for &t in &self.texts[from..to] {
                 let p = self.pre[&t];
-                if p < start.0 || p > end.0 {
-                    continue;
-                }
                 let NodeData::Text(s) = &doc.get(t).data else { continue };
                 let lo = if p == start.0 { start.1 } else { 0 };
                 let hi = if p == end.0 { end.1 } else { u32::MAX };
@@ -322,13 +322,24 @@ impl Resolver<'_, '_> {
         let node = span.source_node;
         // Segments of this node per layer, in the span's own byte coordinates.
         let mut segments: Vec<(usize, usize, usize)> = Vec::new();
+        // The DOM text and the fragment's text differ where whitespace collapsed.
+        let align = match &self.env.doc.get(node).data {
+            NodeData::Text(raw) => Some(align_offsets(raw, span.source_char_offset as usize, span.text, frag.style.white_space.preserves_whitespace())),
+            _ => None,
+        };
         for (layer, spans) in self.spans.iter().enumerate() {
             if self.layers[layer].pseudo == "selection" && frag.style.user_select == UserSelect::None {
                 continue;
             }
             for &(lo, hi) in spans.get(&node).map(Vec::as_slice).unwrap_or_default() {
-                let a = floor_boundary(span.text, lo.saturating_sub(span.source_char_offset) as usize);
-                let b = floor_boundary(span.text, hi.saturating_sub(span.source_char_offset) as usize);
+                let (a, b) = match &align {
+                    Some(map) => (map_offset(map, lo as usize), map_offset(map, hi as usize)),
+                    None => (
+                        lo.saturating_sub(span.source_char_offset) as usize,
+                        hi.saturating_sub(span.source_char_offset) as usize,
+                    ),
+                };
+                let (a, b) = (floor_boundary(span.text, a), floor_boundary(span.text, b));
                 if a < b {
                     segments.push((a, b, layer));
                 }
@@ -497,6 +508,36 @@ fn chain_root(text: &ComputedStyle) -> ComputedStyle {
 /// Sum of the glyph advances of `text` in the font of `frag`.
 fn text_width(text: &str, frag: &InlineFrag, m: &dyn TextMeasurer) -> f32 {
     text.chars().map(|c| m.char_width_with_families(c, frag.style.font_size, &frag.style.font_family)).sum()
+}
+
+/// `(offset in the DOM text, offset in the fragment text)` for every character of `text`
+/// and for its end. The fragment's text is the DOM text from `start` with every run of
+/// collapsible whitespace (CSS Text L3 §4.1.1) reduced to one space, unless `preserve`.
+fn align_offsets(raw: &str, start: usize, text: &str, preserve: bool) -> Vec<(usize, usize)> {
+    let is_ws = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}');
+    let mut r = floor_boundary(raw, start);
+    let mut out = Vec::with_capacity(text.len() + 1);
+    for (ti, tc) in text.char_indices() {
+        out.push((r, ti));
+        if !preserve && is_ws(tc) {
+            while let Some(c) = raw[r..].chars().next().filter(|&c| is_ws(c)) {
+                r += c.len_utf8();
+            }
+        } else if let Some(c) = raw[r..].chars().next() {
+            r += c.len_utf8();
+        }
+    }
+    out.push((r, text.len()));
+    out
+}
+
+/// The fragment-text offset of DOM-text offset `raw_off`, per [`align_offsets`]: the start
+/// of the character it falls in.
+fn map_offset(map: &[(usize, usize)], raw_off: usize) -> usize {
+    match map.partition_point(|&(r, _)| r <= raw_off) {
+        0 => 0,
+        i => map[i - 1].1,
+    }
 }
 
 /// `i` clamped to `s` and moved down to a char boundary.

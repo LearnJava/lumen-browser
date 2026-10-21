@@ -98,6 +98,11 @@ pub fn build_display_list_ordered_dpr_cached(
     dpr: f32,
     cache: &mut SubtreeEmitCache,
 ) -> (DisplayList, ProvenanceIndex) {
+    // A cached subtree replays the emit it was stored with: with highlights in effect
+    // (`with_highlights`) that is the unhighlighted one.
+    if super::highlight_paint::active_highlights().is_some() {
+        return ordered_dpr_impl(root, tree, order, dpr, None);
+    }
     ordered_dpr_impl(root, tree, order, dpr, Some(cache))
 }
 
