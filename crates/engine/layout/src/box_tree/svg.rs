@@ -1800,6 +1800,12 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         m_doc.compose(&composed);
         super::svg_clip::place_clip_path(b, &m_doc);
     }
+    // Filter Effects L1 — `filter: url(#id)` likewise lives in the element's user space.
+    if b.style.filter.iter().any(|f| matches!(f, crate::style::FilterFn::Url(_))) {
+        let mut m_doc = SvgTransform { matrix: [sx, 0.0, 0.0, sy, ox, oy] };
+        m_doc.compose(&composed);
+        super::svg_filter::place_filters(b, &m_doc);
+    }
 }
 
 /// Applies an SVG transform matrix to a bounding box by transforming all 4 corners

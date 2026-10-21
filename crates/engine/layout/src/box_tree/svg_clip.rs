@@ -266,7 +266,7 @@ fn with_placement(def: &SvgClipPath, placement: SvgClipPlacement) -> SvgClipPath
 }
 
 /// bounding box элемента в его user space (`clipPathUnits="objectBoundingBox"`).
-fn user_bbox_of(b: &LayoutBox, m_doc: &SvgTransform) -> (f32, f32, f32, f32) {
+pub(super) fn user_bbox_of(b: &LayoutBox, m_doc: &SvgTransform) -> (f32, f32, f32, f32) {
     if let BoxKind::SvgShape { shape, .. } = &b.kind {
         match shape {
             SvgShapeKind::Path { d } => {

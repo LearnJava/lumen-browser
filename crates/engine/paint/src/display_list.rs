@@ -257,7 +257,7 @@ mod text_run;
 use text_run::emit_inline_run;
 
 mod clip_url;
-use clip_url::{clip_path_commands, pop_clip_layers, push_shape_clip_path};
+use clip_url::{clip_path_commands, pop_clip_layers, pop_shape_filter, push_shape_clip_path, push_shape_filter};
 
 mod box_layer;
 use box_layer::{fill_buckets, fill_buckets_cached};
@@ -349,6 +349,10 @@ mod svg_table_and_hash;
 #[cfg(test)]
 #[path = "display_list/tests/svg_clip_url.rs"]
 mod svg_clip_url;
+
+#[cfg(test)]
+#[path = "display_list/tests/svg_filter_url.rs"]
+mod svg_filter_url;
 
 #[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]

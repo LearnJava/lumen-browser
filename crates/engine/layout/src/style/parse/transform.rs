@@ -7,7 +7,7 @@
 //! видимость тех items, которые продолжают звать `style.rs`, его тест-модули
 //! и соседние модули `style::parse`.
 
-use crate::style::{parse_length, FilterFn, Length, TransformFn};
+use crate::style::{parse_length, FilterFn, FilterUrl, Length, TransformFn};
 
 /// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
 /// `100grad`. Без единицы — number-as-radians (для совместимости).
@@ -296,6 +296,13 @@ fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
         "opacity" => parse_number_or_percent(args).map(FilterFn::Opacity),
         "saturate" => parse_number_or_percent(args).map(FilterFn::Saturate),
         "sepia" => parse_number_or_percent(args).map(FilterFn::Sepia),
+        // Filter Effects L1 §3 — `url(#id)` на `<filter>` того же документа
+        // (внешние `file.svg#id` — отдельная задача).
+        "url" => {
+            let target = args.trim_matches(|c| c == '"' || c == '\'').trim();
+            let id = target.strip_prefix('#').filter(|id| !id.is_empty())?;
+            Some(FilterFn::Url(FilterUrl { id: id.to_string(), graph: None, placement: None }))
+        }
         _ => None,
     }
 }

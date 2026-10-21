@@ -251,6 +251,39 @@ impl CookieJar {
         Ok(count)
     }
 
+    /// Все не истёкшие cookies раздела `top_level_site` без фильтра по хосту и
+    /// пути — для интроспекции (WebDriver BiDi `storage.getCookies`, DEVX-20).
+    pub fn list_all(&self, now_unix: i64, top_level_site: Option<&str>) -> Result<Vec<Cookie>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("cookies mutex poisoned".into()))?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT domain, path, name, value, expires_at, secure, http_only, same_site
+                 FROM cookies
+                 WHERE top_level_site = ?1
+                   AND (expires_at IS NULL OR expires_at >= ?2)
+                 ORDER BY domain, path, name",
+            )
+            .map_err(|e| Error::Storage(format!("cookies prepare list: {e}")))?;
+        let rows = stmt
+            .query_map(params![top_level_site.unwrap_or(""), now_unix], |row| {
+                Ok(Cookie {
+                    domain: row.get(0)?,
+                    path: row.get(1)?,
+                    name: row.get(2)?,
+                    value: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    secure: row.get::<_, i32>(5)? != 0,
+                    http_only: row.get::<_, i32>(6)? != 0,
+                    same_site: SameSite::from_db_str(&row.get::<_, String>(7)?),
+                })
+            })
+            .map_err(|e| Error::Storage(format!("cookies query: {e}")))?;
+        rows.map(|r| r.map_err(|e| Error::Storage(format!("cookies row: {e}")))).collect()
+    }
+
     /// Получить все cookies, применимые к данному запросу. Фильтрация:
     /// 1. Same `top_level_site` partition.
     /// 2. Domain-match: cookie.domain == request_host ИЛИ request_host
@@ -817,6 +850,20 @@ mod tests {
             http_only: false,
             same_site: SameSite::Lax,
         }
+    }
+
+    #[test]
+    fn list_all_returns_every_live_cookie_of_the_partition() {
+        let jar = make_jar();
+        jar.set(make_cookie("a.test", "/", "x", "1"), None).unwrap();
+        jar.set(make_cookie("b.test", "/p", "y", "2"), None).unwrap();
+        jar.set(make_cookie("a.test", "/", "z", "3"), Some("other.test")).unwrap();
+        let mut expired = make_cookie("a.test", "/", "old", "0");
+        expired.expires_at = Some(100);
+        jar.set(expired, None).unwrap();
+        let all = jar.list_all(1_000, None).unwrap();
+        let names: Vec<&str> = all.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["x", "y"], "expired and other-partition cookies are excluded");
     }
 
     // ── domain_matches ──

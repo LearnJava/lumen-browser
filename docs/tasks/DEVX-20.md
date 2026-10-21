@@ -44,3 +44,11 @@ WPT-тестов и честность протокола: success без эфф
 
 - CDP (`--devtools-port`) — осознанный stub, вне задачи.
 - Модель доступа (токены, ADR-024) не ослаблять.
+
+## Итог (2026-10-22, ветка `p2-devx-20`)
+
+- `crates/network/src/intercept.rs`: фаза `responseStarted` (`pause_for_response_started`, вызов в `fetch_with_redirect` после заголовков, до тела), `InterceptAnnouncement`.
+- `network.continueResponse` — реальный resolve, override-поля → `unsupported operation`; `network.responseStarted` с `isBlocked` и статусом; `addIntercept{authRequired}` → `unsupported operation`, `continueWithAuth` → `no such request`.
+- `storage.*` с окном — настоящий jar профиля: `CookieJar::list_all`, `AutomationCommand::{GetCookies,SetCookie,DeleteCookie}` / `AutomationReply::Cookies`, `LiveWindowSession::{get,set,delete}_cookie`, обработчики в `lumen/automation.rs`; `value` — строка или BytesValue `{type:"string"}`. Без окна — прежняя память `BidiState`.
+- Живая проверка: `tests/wpt/verify_devx20_bidi_network.py` (17 OK), регрессия `verify_devx6_bidi_scenarios.py`.
+- Не сделано осознанно: `base64`-значения cookie, `continueResponse` с переопределением ответа, `authRequired` как событие (нужен выделенный challenge в `lumen_network`).

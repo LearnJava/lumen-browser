@@ -239,6 +239,67 @@ impl Lumen {
                 .collect()
         }
 
+        /// Non-expired cookies of the active profile's jar for
+        /// `AutomationCommand::GetCookies` (DEVX-20, `storage.getCookies`).
+        /// The jar is the one pages read through `document.cookie` and requests
+        /// send from; cookie storage is not partitioned (`COOKIE_PARTITION` is
+        /// `None`), so the `None` partition is the whole store.
+        pub(crate) fn automation_get_cookies(&self) -> Vec<lumen_driver::AutomationCookie> {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+            let Ok(cookies) = self.active_cookie_jar().list_all(now, None) else { return Vec::new() };
+            cookies
+                .into_iter()
+                .map(|c| lumen_driver::AutomationCookie {
+                    name: c.name,
+                    value: c.value,
+                    domain: c.domain,
+                    path: c.path,
+                    secure: c.secure,
+                    http_only: c.http_only,
+                    same_site: match c.same_site {
+                        lumen_storage::SameSite::Strict => "strict",
+                        lumen_storage::SameSite::Lax => "lax",
+                        lumen_storage::SameSite::None => "none",
+                        lumen_storage::SameSite::Unspecified => "default",
+                    }
+                    .to_owned(),
+                    expiry: c.expires_at.and_then(|t| u64::try_from(t).ok()).unwrap_or(0),
+                })
+                .collect()
+        }
+
+        /// Store `cookie` in the active profile's jar for
+        /// `AutomationCommand::SetCookie` (DEVX-20, `storage.setCookie`).
+        /// A script-invisible (`HttpOnly`) cookie is allowed here: unlike
+        /// `document.cookie`, the automation API is a "non-script" writer.
+        pub(crate) fn automation_set_cookie(&self, cookie: lumen_driver::AutomationCookie) -> Result<(), String> {
+            let same_site = match cookie.same_site.as_str() {
+                "strict" => lumen_storage::SameSite::Strict,
+                "lax" => lumen_storage::SameSite::Lax,
+                "none" => lumen_storage::SameSite::None,
+                _ => lumen_storage::SameSite::Unspecified,
+            };
+            let stored = lumen_storage::Cookie {
+                domain: cookie.domain,
+                path: cookie.path,
+                name: cookie.name,
+                value: cookie.value,
+                expires_at: (cookie.expiry > 0).then(|| i64::try_from(cookie.expiry).unwrap_or(i64::MAX)),
+                secure: cookie.secure,
+                http_only: cookie.http_only,
+                same_site,
+            };
+            self.active_cookie_jar().set(stored, None).map_err(|e| e.to_string())
+        }
+
+        /// Remove one cookie from the active profile's jar for
+        /// `AutomationCommand::DeleteCookie` (DEVX-20, `storage.deleteCookies`).
+        pub(crate) fn automation_delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<(), String> {
+            self.active_cookie_jar().delete(domain, path, name, None).map_err(|e| e.to_string())
+        }
+
         /// Poll an `AutomationCommand::Wait` condition against current shell
         /// state (SDC-1b). Never blocks — called once per frame from
         /// `about_to_wait` via `self.pending_waits` until it returns `true` or
