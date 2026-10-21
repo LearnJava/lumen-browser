@@ -386,9 +386,11 @@ async def fetch_probe(session: BidiSession, ctx: str, url: str, var_name: str):
     await eval_json(
         session,
         ctx,
-        f"window.{var_name} = 'pending'; "
+        # One expression (an IIFE): `script.evaluate` wraps the source as an
+        # expression, so a `;`-separated statement list is a syntax error.
+        f"(() => {{ window.{var_name} = 'pending'; "
         f"fetch({url!r}).then(r => {{ window.{var_name} = r.ok; }}, "
-        f"() => {{ window.{var_name} = 'rejected'; }});",
+        f"() => {{ window.{var_name} = 'rejected'; }}); return 1; }})()",
     )
     result = await poll_eval_json(session, ctx, f"window.{var_name}", "pending")
     return "rejected" if result == "pending" else result

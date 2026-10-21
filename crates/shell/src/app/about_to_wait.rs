@@ -1318,7 +1318,7 @@ impl Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::ResolveIntercept { request_id, continue_request } => {
-                    // BUG-295 remainder (`network.continueRequest`/`network.failRequest`):
+                    // BUG-295 remainder (`network.continueRequest`/`continueResponse`/`failRequest`):
                     // unblocks the fetch worker thread (if any) paused on
                     // `request_id` in `lumen_network`'s registry.
                     let decision = if continue_request {
@@ -1332,9 +1332,31 @@ impl Lumen {
                 AutomationCommand::PollIntercepts => {
                     let requests = lumen_network::drain_new_intercept_announcements()
                         .into_iter()
-                        .map(|(request_id, url)| InterceptedRequest { request_id, url })
+                        .map(|a| InterceptedRequest {
+                            request_id: a.request_id,
+                            url: a.url,
+                            phase: a.phase,
+                            status: a.status,
+                        })
                         .collect();
                     let _ = reply_tx.send(AutomationReply::Intercepts(requests));
+                }
+                AutomationCommand::GetCookies => {
+                    let _ = reply_tx.send(AutomationReply::Cookies(self.automation_get_cookies()));
+                }
+                AutomationCommand::SetCookie(cookie) => {
+                    let reply = match self.automation_set_cookie(cookie) {
+                        Ok(()) => AutomationReply::Ack,
+                        Err(e) => AutomationReply::Error(format!("storage.setCookie: {e}")),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
+                AutomationCommand::DeleteCookie { domain, path, name } => {
+                    let reply = match self.automation_delete_cookie(&domain, &path, &name) {
+                        Ok(()) => AutomationReply::Ack,
+                        Err(e) => AutomationReply::Error(format!("storage.deleteCookies: {e}")),
+                    };
+                    let _ = reply_tx.send(reply);
                 }
             }
         }
