@@ -161,6 +161,9 @@ fn find_img(doc: &Document, id: NodeId) -> Option<NodeId> {
 
 /// Parse `html`, run `apply_intrinsic_size` on its `<img>` with the given
 /// intrinsic size, and return the resulting `(width, height)` attributes.
+/// An `<img>` with neither attribute (BUG-1280) keeps the decoded size in the
+/// document side table instead; a missing attribute then reads from there
+/// (every fixture's `src` is `p.png`).
 fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
     let mut doc = lumen_html_parser::parse(html);
     let img = find_img(&doc, doc.root()).expect("img present");
@@ -174,7 +177,11 @@ fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
             .find(|a| a.name.local.eq_ignore_ascii_case(name))
             .map(|a| a.value.to_string())
     };
-    (pick("width"), pick("height"))
+    let embedded = doc.embedded_image(img, "p.png");
+    (
+        pick("width").or_else(|| embedded.map(|(_, w, _)| w.to_string())),
+        pick("height").or_else(|| embedded.map(|(_, _, h)| h.to_string())),
+    )
 }
 
 #[test]

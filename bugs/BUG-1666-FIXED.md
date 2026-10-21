@@ -1,6 +1,6 @@
 # BUG-1666 — красный `main`: 15 тестов paint/snapshot/shell и 5 goldens падают без связи с текущими задачами
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21
 **Заведён:** 2026-10-21 (Chat; найден гейтом `scripts/scoped-test.sh` при слиянии BUG-1665, падения подтверждены на чистом `main` 40088de85 без коммита BUG-1665)
 **Область:** paint / shell / tests (`crates/engine/paint/src/display_list/tests/text_and_images.rs`, `crates/engine/paint/src/hit_test.rs:401`, `crates/engine/paint/tests/cases/snapshot_tests.rs:37`, `crates/shell/src/tests/page_pipeline.rs:201,280`, goldens `graphic_tests/`)
 **Владелец:** P6 (неотложное: красный `main` валит гейт `/lumen-task-finish` у всех ролей)
@@ -46,3 +46,15 @@ python graphic_tests/dump_golden.py
 - `bash scripts/scoped-test.sh` на ветке: в выводе нет ни одного теста из таблицы «Симптом» (падения из BUG-1237/BUG-1651/BUG-480 допустимы, они вне этого бага).
 - `python graphic_tests/dump_golden.py` — 0 несовпадений.
 - `cargo clippy -p <затронутый крейт> --all-targets -- -D warnings` чисто.
+
+## Корень и починка (2026-10-21, P6)
+
+Одной причины не было — три разных устаревших ожидания; сам движок в этих местах прав.
+
+| группа | коммит-виновник | что произошло | починка |
+|---|---|---|---|
+| paint: позиции текста/декораций, `hit_inside_simple_block`, снапшоты `tests/all.rs` | `3f792856b` BUG-1334 (2026-10-12) | UA-таблица получила `p { margin: 1em 0 }`; поле первого `<p>` схлопывается сквозь `body{margin:0}`, и абзац сел на y=16, а тесты считали `p` без полей. BUG-1334 поправил только тесты `lumen-layout`. Проверено bisect-ом по датам: красно уже на 2026-10-13 (`890db72fe`) | `BODY_RESET` в `display_list/tests/text_and_images.rs` и `tests/cases/snapshot_tests.rs` и `build` в `hit_test.rs` получили `p{margin:0}` — как это сделано в layout-тестах |
+| paint: `color_input_paints_value_swatch` | `b5c886721` BUG-1277 (2026-10-08) | авторский `background` на `<input type=color>` давал used `appearance:none`, а в нём плашка цвета подавляется. Плашка — отдельная UA-часть (в Chrome — `::-webkit-color-swatch` внутри shadow), фон на контроле её не убирает | `color` добавлен в исключения `is_disableable_widget` (`layout/src/style/ua.rs`) |
+| shell: `bug269_no_attrs…`, `bug969_density_descriptor…`, `bug969_nw_descriptor…` | `bc5b0f816` BUG-1280 (2026-10-19) | у `<img>` без `width`/`height` декодированный размер теперь лежит в боковой таблице документа, а не в атрибутах | `img_dims` в `shell/src/tests/page_pipeline.rs` читает размер из `Document::embedded_image`, если атрибута нет |
+
+Flaky-тройка `lumen-js` вынесена в [BUG-1677](BUG-1677-OPEN.md).
