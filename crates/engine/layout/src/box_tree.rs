@@ -142,6 +142,8 @@ thread_local! {
 mod svg;
 mod svg_clip;
 pub(crate) use svg_clip::resolve_clip_path_url;
+mod svg_filter;
+pub(crate) use svg_filter::resolve_filter_url;
 pub use svg::{
     FormControlKind, PreserveAspectRatio, SvgAlignX, SvgAlignY, SvgBaselineShift,
     SvgDominantBaseline, SvgMeetOrSlice, SvgShapeKind, SvgTextAnchor, SvgTransform, ViewBox,

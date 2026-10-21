@@ -1,8 +1,8 @@
 # BUG-1450 — `:dir(rtl)` не распознаёт направление по тексту: `dir=auto` на `<div>`, `<input>` и `<bdi>` с текстом на иврите даёт `ltr`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
-**Область:** layout (`crates/engine/layout/src/style/matching.rs:91` → `matches_dir`)
+**Область:** layout (`crates/engine/layout/src/style/matching/forms.rs` → `matches_dir`/`element_directionality`)
 
 ## Симптом
 
@@ -28,3 +28,9 @@ WPT-RUN-14 срез 20: `selectors/dir-pseudo-on-bdi-element.html` (3 из 5), `
 ## Как проверить
 
 Таблица выше; `css/selectors/dir-pseudo-on-bdi-element.html`.
+
+## Исправление
+
+`element_directionality` (`style/matching/forms.rs`) реализует HTML LS §3.2.6.1: `dir=ltr|rtl` — значение; `dir=auto` и `<bdi>` без валидного `dir` — первый сильный символ (UAX #9 P2/P3): у `<textarea>` и `<input>` с текстовым типом (всё, кроме `date`/`time`/`datetime-local`/`month`/`week`/`number`/`range`/`color`/`checkbox`/`radio`/`image`/`file`) — в `Document::control_value`, у остальных — в тексте поддерева (`first_strong_direction`, пропускает `script`/`style`/`textarea`/`bdi` и потомков с валидным `dir`); нет сильных → `ltr`. `<input type=tel>` без валидного `dir` — всегда `ltr`. Невалидный `dir` теперь наследует направление родителя, а не даёт `ltr`. Проба из таблицы (JS `matches(':dir(rtl)')`, включая динамическую смену `type`/`value`/`dir`) — все строки верны; юнит-тесты `dir_*` в `tests/state_pseudo_classes.rs`.
+
+Не сделано: свойство `direction` в `getComputedStyle` для `<bdi>`/`<input dir=auto>` (presentational hint учитывает только `dir` на элементе и не знает про `bdi`/`tel`), инвалидация стилей при смене текста у `dir=auto` (`dir-selector-change-004`).

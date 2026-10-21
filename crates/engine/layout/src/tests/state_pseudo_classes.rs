@@ -896,6 +896,66 @@ use super::*;
         assert_eq!((c.r, c.b), (0, 255));
     }
 
+    // BUG-1450: `dir=auto` / `<bdi>` / текстовые `<input>` определяют направление по тексту.
+
+    /// Цвет `p`-подобного элемента `tag`: красный — `:dir(rtl)`, синий — `:dir(ltr)`.
+    fn dir_of(html: &str, tag: &str) -> &'static str {
+        let (root, doc) = lay_with_doc(html, &format!("{tag}:dir(rtl) {{ color: red; }} {tag}:dir(ltr) {{ color: blue; }}"));
+        let c = first_named(&doc, &root, tag);
+        match (c.r, c.b) {
+            (255, 0) => "rtl",
+            (0, 255) => "ltr",
+            other => panic!("neither :dir(rtl) nor :dir(ltr) matched: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dir_auto_uses_first_strong_character() {
+        assert_eq!(dir_of("<p dir=auto>שלום</p>", "p"), "rtl");
+        assert_eq!(dir_of("<p dir=AUTO>abc שלום</p>", "p"), "ltr");
+        assert_eq!(dir_of("<p dir=auto>123 שלום</p>", "p"), "rtl");
+        assert_eq!(dir_of("<p dir=auto>123</p>", "p"), "ltr");
+    }
+
+    #[test]
+    fn dir_auto_ignores_script_bdi_and_explicit_dir_descendants() {
+        assert_eq!(dir_of("<p dir=auto><bdi>שלום</bdi>abc</p>", "p"), "ltr");
+        assert_eq!(dir_of("<p dir=auto><span dir=rtl>שלום</span>abc</p>", "p"), "ltr");
+        assert_eq!(dir_of("<p dir=auto><span>שלום</span></p>", "p"), "rtl");
+    }
+
+    #[test]
+    fn dir_bdi_without_valid_dir_is_auto() {
+        assert_eq!(dir_of("<bdi>שלום</bdi>", "bdi"), "rtl");
+        assert_eq!(dir_of("<bdi dir=foo>שלום</bdi>", "bdi"), "rtl");
+        assert_eq!(dir_of("<bdi dir=ltr>שלום</bdi>", "bdi"), "ltr");
+        assert_eq!(dir_of("<div dir=rtl><bdi>abc</bdi></div>", "bdi"), "ltr");
+    }
+
+    #[test]
+    fn dir_invalid_value_inherits_from_parent() {
+        assert_eq!(dir_of("<div dir=rtl><p dir=foo>x</p></div>", "p"), "rtl");
+    }
+
+    #[test]
+    fn dir_auto_input_uses_value_text() {
+        assert_eq!(dir_of(r#"<input dir=auto value="שלום">"#, "input"), "rtl");
+        assert_eq!(dir_of(r#"<input dir=auto value="abc">"#, "input"), "ltr");
+        assert_eq!(dir_of(r#"<input dir=auto type=number value="שלום">"#, "input"), "ltr");
+        assert_eq!(dir_of(r#"<div dir=rtl><input type=text></div>"#, "input"), "rtl");
+    }
+
+    #[test]
+    fn dir_tel_input_does_not_inherit() {
+        assert_eq!(dir_of(r#"<div dir=rtl><input type=tel></div>"#, "input"), "ltr");
+        assert_eq!(dir_of(r#"<div dir=rtl><input type=tel dir=rtl></div>"#, "input"), "rtl");
+    }
+
+    #[test]
+    fn dir_auto_textarea_uses_text_content() {
+        assert_eq!(dir_of("<textarea dir=auto>שלום</textarea>", "textarea"), "rtl");
+    }
+
     // ──────────────── :link / :visited / :any-link (CSS Selectors L4 §6.2) ────────────────
 
     /// Computes color для первого element-child указанного тега в DOM (без

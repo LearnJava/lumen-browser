@@ -32,6 +32,24 @@ pub(super) fn push_shape_clip_path(b: &LayoutBox, out: &mut DisplayList) -> usiz
     n
 }
 
+/// SVG-фигура/текст не идут через `box_layer` (у них нет слоёв Push*/Pop* в блочном
+/// пути), поэтому `filter` оборачивает их отрисовку здесь — внутри клипа
+/// (Filter Effects L1 §4: клип режет уже отфильтрованный вывод).
+pub(super) fn push_shape_filter(b: &LayoutBox, out: &mut DisplayList) -> bool {
+    if b.style.filter.is_empty() {
+        return false;
+    }
+    out.push(DisplayCommand::PushFilter { filters: b.style.filter.clone(), bounds: Some(b.rect) });
+    true
+}
+
+/// Закрывает фильтр, открытый [`push_shape_filter`].
+pub(super) fn pop_shape_filter(opened: bool, out: &mut DisplayList) {
+    if opened {
+        out.push(DisplayCommand::PopFilter);
+    }
+}
+
 /// Закрывает `n` слоёв клипа, открытых [`push_shape_clip_path`].
 pub(super) fn pop_clip_layers(n: usize, out: &mut DisplayList) {
     for _ in 0..n {

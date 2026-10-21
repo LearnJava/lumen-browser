@@ -20,7 +20,8 @@ use lumen_css_parser::{Combinator, ComplexSelector, DirArg, PseudoClass};
 use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID};
-use crate::style::SHADOW_HOST_SCOPE;
+use crate::style::presentational::{first_strong_direction, first_strong_in_text};
+use crate::style::{Direction, SHADOW_HOST_SCOPE};
 
 use super::{matches_complex, matches_complex_anchored};
 
@@ -883,41 +884,79 @@ fn matches_target_within(doc: &Document, node: NodeId) -> bool {
     any_descendant(doc, node, |n| doc.get(n).get_attr("id") == Some(target))
 }
 
-/// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с
-/// соответствующей directionality, определяемой через `dir`-атрибут
-/// (с inherited fallback от ближайшего ancestor-а). При отсутствии
-/// `dir` нигде в цепочке — default `ltr` (HTML5 §3.2.6.1).
+/// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2): совпадает с directionality
+/// элемента по HTML LS §3.2.6.1 — см. [`element_directionality`].
 fn matches_dir(doc: &Document, node: NodeId, want: DirArg) -> bool {
     element_directionality(doc, node) == want
 }
 
-/// Computes content-directionality элемента по HTML5 §3.2.6.1
-/// «directionality»: значение `dir`-атрибута самого элемента, либо
-/// унаследовано от ближайшего ancestor с `dir`-атрибутом. Default `ltr`.
-///
-/// Phase 0 не реализует real auto-direction (UAX #9 first-strong scan по
-/// текстовому содержимому для `<bdi>` и `dir="auto"`) — оба трактуются
-/// как `ltr`, что соответствует поведению типичных страниц на латинице.
-/// Real bidi откладывается до layout-bidi движка (см. lumen-layout `Отложено`).
+/// Directionality элемента (HTML LS §3.2.6.1, BUG-1450):
+/// - `dir=ltr|rtl` (без учёта регистра) — это значение;
+/// - `dir=auto`, а также `<bdi>` без валидного `dir` — направление первого
+///   сильного символа (UAX #9 P2/P3): у `<textarea>` и текстового `<input>` в
+///   их значении, у остальных в тексте поддерева; нет сильных → `ltr`;
+/// - `<input type=tel>` без валидного `dir` — `ltr`, предка не спрашиваем;
+/// - иначе (нет `dir` или значение невалидно) — directionality родителя,
+///   у корня `ltr`.
 fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
     let mut cur = Some(node);
     while let Some(n) = cur {
-        if let NodeData::Element { .. } = &doc.get(n).data
-            && let Some(v) = doc.get(n).get_attr("dir")
-        {
-            return match v.trim().to_ascii_lowercase().as_str() {
-                "ltr" => DirArg::Ltr,
-                "rtl" => DirArg::Rtl,
-                // `auto` и любое другое значение — Phase 0 fallback to ltr;
-                // продолжаем walking up НЕ нужно: spec говорит, что
-                // `dir` атрибут на самом элементе финализирует
-                // directionality (`auto` тоже считается «явным»).
-                _ => DirArg::Ltr,
-            };
+        let node_ref = doc.get(n);
+        if let NodeData::Element { name, .. } = &node_ref.data {
+            let tag = name.local.as_str();
+            match node_ref.get_attr("dir").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+                Some("ltr") => return DirArg::Ltr,
+                Some("rtl") => return DirArg::Rtl,
+                Some("auto") => return auto_directionality(doc, n),
+                _ if tag.eq_ignore_ascii_case("bdi") => return auto_directionality(doc, n),
+                _ if is_tel_input(doc, n) => return DirArg::Ltr,
+                _ => {}
+            }
         }
-        cur = doc.get(n).parent;
+        cur = node_ref.parent;
     }
     DirArg::Ltr
+}
+
+/// Направление «auto» (HTML LS §3.2.6.1 «auto directionality») для `n`.
+fn auto_directionality(doc: &Document, n: NodeId) -> DirArg {
+    let found = if uses_value_for_dir(doc, n) {
+        first_strong_in_text(&doc.control_value(n))
+    } else {
+        first_strong_direction(doc, n)
+    };
+    match found {
+        Some(Direction::Rtl) => DirArg::Rtl,
+        _ => DirArg::Ltr,
+    }
+}
+
+/// `<textarea>` и `<input>` с типом, у которого есть текстовое значение: для
+/// `dir=auto` направление берётся из значения, а не из потомков. Типы
+/// `date`/`number`/`range`/`color`/`checkbox`/`radio`/`image`/`file` значение
+/// не используют (отсутствующий и неизвестный `type` — это `text`).
+fn uses_value_for_dir(doc: &Document, n: NodeId) -> bool {
+    let node_ref = doc.get(n);
+    let Some(name) = node_ref.element_name() else {
+        return false;
+    };
+    if name.local.eq_ignore_ascii_case("textarea") {
+        return true;
+    }
+    name.local.eq_ignore_ascii_case("input")
+        && !matches!(
+            input_type(doc, n).as_str(),
+            "date" | "time" | "datetime-local" | "month" | "week" | "number" | "range" | "color" | "checkbox" | "radio" | "image" | "file"
+        )
+}
+
+fn is_tel_input(doc: &Document, n: NodeId) -> bool {
+    doc.get(n).element_name().is_some_and(|name| name.local.eq_ignore_ascii_case("input"))
+        && input_type(doc, n) == "tel"
+}
+
+fn input_type(doc: &Document, n: NodeId) -> String {
+    doc.get(n).get_attr("type").unwrap_or("").trim().to_ascii_lowercase()
 }
 
 /// `:heading` / `:heading(n)` (WHATWG «heading level» draft,
