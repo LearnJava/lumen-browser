@@ -159,7 +159,98 @@ pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
         return;
     }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new());
+    let mut links = Vec::new();
+    apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new(), &mut links);
+    chain_anchor_scroll(root, &links);
+    // A relayout keeps the scroll offsets of the previous tree, so the fresh chains start from them.
+    crate::refresh_anchor_scroll(root);
+}
+
+/// An anchor-positioned box and the anchor it was positioned against, kept for [`chain_anchor_scroll`].
+struct AnchorLink {
+    /// The positioned box.
+    node: lumen_dom::NodeId,
+    /// The element carrying the anchor name.
+    anchor: lumen_dom::NodeId,
+    /// Box ancestors of the positioned box: their scrolling needs no compensation.
+    ancestors: Vec<lumen_dom::NodeId>,
+    /// Scroll containers of the anchor (see [`anchor_scroll_for`]).
+    scrollers: Vec<lumen_dom::NodeId>,
+}
+
+/// CSS Anchor Positioning L1 §4.3: a box positioned against an anchor that is itself positioned
+/// against another anchor follows both chains of scroll containers (`anchor-scroll-chained-*`).
+fn chain_anchor_scroll(root: &mut LayoutBox, links: &[AnchorLink]) {
+    use std::collections::HashMap;
+    let by_node: HashMap<lumen_dom::NodeId, usize> = links.iter().enumerate().map(|(i, l)| (l.node, i)).collect();
+    if !links.iter().any(|l| by_node.contains_key(&l.anchor)) {
+        return;
+    }
+    let mut chained: HashMap<lumen_dom::NodeId, Vec<lumen_dom::NodeId>> = HashMap::new();
+    for l in links {
+        let mut all = l.scrollers.clone();
+        let mut hop = l.anchor;
+        // A cycle (`a` against `b` against `a`) ends at the hop bound, not by luck.
+        for _ in 0..links.len() {
+            let Some(&i) = by_node.get(&hop) else { break };
+            for &n in &links[i].scrollers {
+                if !all.contains(&n) {
+                    all.insert(0, n);
+                }
+            }
+            hop = links[i].anchor;
+        }
+        all.retain(|n| !l.ancestors.contains(n));
+        if all != l.scrollers {
+            chained.insert(l.node, all);
+        }
+    }
+    if chained.is_empty() {
+        return;
+    }
+    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // The principal box of the node only (first in pre-order).
+        if let Some(all) = chained.remove(&b.node) {
+            b.anchor_scroll = scroll_of(&all);
+        }
+        stack.extend(b.children.iter_mut().rev());
+    }
+}
+
+/// The anchor `lb` is positioned against and the scroll containers around it that `lb` follows
+/// (CSS Anchor Positioning L1 §4.3): the ones that are not among `lb`'s own box ancestors, which
+/// already scroll it. The anchor is the `position-anchor` one, else the first one named in an
+/// `anchor()`/`anchor-size()`. `None` — not an anchor-positioned box.
+fn anchor_scroll_for(
+    lb: &LayoutBox,
+    registry: &crate::anchor::AnchorRegistry,
+    ancestors: &[lumen_dom::NodeId],
+) -> Option<(lumen_dom::NodeId, Vec<lumen_dom::NodeId>)> {
+    if !matches!(lb.style.position, Position::Absolute | Position::Fixed) {
+        return None;
+    }
+    let s = &lb.style;
+    let visible = |n: &&str| registry.get_scoped(n, ancestors).is_some();
+    let named = [&s.anchor_top, &s.anchor_right, &s.anchor_bottom, &s.anchor_left]
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.anchor_name.as_deref())
+        .chain([&s.anchor_size_w, &s.anchor_size_h].into_iter().flatten().filter_map(|f| f.anchor_name.as_deref()));
+    let name = s.position_anchor.as_deref().filter(visible).or_else(|| named.into_iter().find(visible))?;
+    let anchor = registry.get(name)?.node;
+    let scrollers = registry
+        .scroll_chains
+        .get(name)
+        .map(|chain| chain.iter().filter(|n| !ancestors.contains(n)).copied().collect())
+        .unwrap_or_default();
+    Some((anchor, scrollers))
+}
+
+fn scroll_of(nodes: &[lumen_dom::NodeId]) -> Option<Box<AnchorScroll>> {
+    (!nodes.is_empty()).then(|| {
+        Box::new(AnchorScroll { scrollers: nodes.iter().map(|&node| AnchorScroller { node, x: 0.0, y: 0.0 }).collect() })
+    })
 }
 
 /// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
@@ -178,6 +269,7 @@ fn apply_anchor_positions_rec(
     viewport: Size,
     pcb: Rect,
     ancestors: &mut Vec<lumen_dom::NodeId>,
+    links: &mut Vec<AnchorLink>,
 ) {
     // `fixed_cb` — padding box of the nearest ancestor that captures `position: fixed`
     // (transform/filter/contain, css-transforms-1 §2); `None` — the viewport.
@@ -321,6 +413,14 @@ fn apply_anchor_positions_rec(
                 shift_tree(lb, dx, dy);
             }
         }
+    }
+
+    // CSS Anchor Positioning L1 §4.3 — the scroll containers the anchor sits in that this
+    // box is not inside of: their offsets move the anchor, so they move this box too.
+    lb.anchor_scroll = None;
+    if let Some((anchor, scrollers)) = anchor_scroll_for(lb, registry, ancestors) {
+        lb.anchor_scroll = scroll_of(&scrollers);
+        links.push(AnchorLink { node: lb.node, anchor, ancestors: ancestors.to_vec(), scrollers });
     }
 
     // Compute the containing blocks for absolute- and fixed-positioned children of this element.

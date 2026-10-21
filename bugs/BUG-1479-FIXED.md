@@ -1,6 +1,6 @@
 # BUG-1479 — `--screenshot` (CPU-растр): содержимое прокрученного контейнера, лежащее по непрокрученной координате за нижним краем снимка, не рисуется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P1, ANCHOR-SCROLL, ветка `p1-anchor-scroll`)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs:430` — `PushScrollLayer` с ненулевым `scroll_y`: слой `Pixmap::new(width, height)`, рисование до сдвига)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 21: проба `anchor-scroll` с цель-якорь в п�
 ## Как проверить
 
 Таблица выше; `.tmp`-страница из описания.
+
+## Исправление
+
+`cpu_raster.rs`, ветка `PushScrollLayer` со сдвигом: тело слоя (до парного `PopScrollLayer`, `matching_pop_scroll`) рисуется через `render_offcanvas_transform_group` (BUG-1288) с матрицей `translate(-scroll_x, -scroll_y)` — слой по габариту содержимого, а не по размеру холста; клип контейнера идёт как внешний клип группы. Если содержимое и так внутри холста, остаётся прежний путь (картинка не меняется). Регрессионные тесты — `scroll_layer_shows_content_from_below_the_canvas`, `scroll_layer_shows_content_from_right_of_the_canvas` (`cpu_raster.rs`). Живое окно (wgpu, `renderer.rs`) не затронуто: там `PushScrollLayer` — клип и матрица на стеке, слоя размером с холст нет.

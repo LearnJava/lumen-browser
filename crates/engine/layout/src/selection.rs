@@ -414,6 +414,7 @@ mod tests {
     fn make_inline_run_box(rect: Rect, lines: Vec<Vec<InlineFrag>>) -> LayoutBox {
         let style = std::sync::Arc::new(ComputedStyle::root());
         LayoutBox {
+            anchor_scroll: None,
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,

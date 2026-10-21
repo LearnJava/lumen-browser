@@ -479,6 +479,32 @@ fn rasterize_cpu_pixmap(
             // composite time, exactly like `PushTransform` — the clip is mapped
             // through the inverse so it still gates the pre-translation draws.
             DisplayCommand::PushScrollLayer { clip_rect: cr, scroll_x, scroll_y, .. } => {
+                // BUG-1479: the scrolled content is drawn in its pre-scroll
+                // coordinates, so a canvas-sized layer lost whatever lies below
+                // or right of the canvas before the shift. Same remedy as the
+                // `PushTransform` group above: a layer of the content's own
+                // extent, composited with the scroll translation.
+                if (*scroll_x != 0.0 || *scroll_y != 0.0)
+                    && let Some(end) = matching_pop_scroll(commands, cmd_idx)
+                {
+                    let mut ambient = clip_stack.clone();
+                    ambient.push(*cr);
+                    let matrix = lumen_layout::Mat4::translation_2d(-*scroll_x, -*scroll_y);
+                    if let GroupLayer::Rendered(group, group_t) = render_offcanvas_transform_group(
+                        width, height, &matrix, &commands[cmd_idx + 1..end], clip_intersection(&ambient),
+                        image_map, font_provider,
+                    )? {
+                        skip_until = end + 1;
+                        if let Some(group) = group
+                            && let Some(dst) = layers.last_mut()
+                        {
+                            let (gw, gh) = (group.width() as f32, group.height() as f32);
+                            let src = CpuLayer { pm: group, dirty: Some((0.0, 0.0, gw, gh)) };
+                            close_layer(dst, &src, &LayerComposite::Transform(group_t));
+                        }
+                        continue;
+                    }
+                }
                 clip_stack.push(*cr);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
@@ -1833,6 +1859,24 @@ fn matching_pop_transform(commands: &[DisplayCommand], start: usize) -> Option<u
         match cmd {
             DisplayCommand::PushTransform { .. } => depth += 1,
             DisplayCommand::PopTransform => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Индекс `PopScrollLayer`, закрывающего `PushScrollLayer` в `commands[start]`.
+fn matching_pop_scroll(commands: &[DisplayCommand], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, cmd) in commands.iter().enumerate().skip(start) {
+        match cmd {
+            DisplayCommand::PushScrollLayer { .. } => depth += 1,
+            DisplayCommand::PopScrollLayer => {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 {
                     return Some(i);
@@ -3846,6 +3890,39 @@ mod tests {
         assert_eq!(px(&img, 10, 35), (0, 128, 0, 255), "green starts at 30");
         assert_eq!(px(&img, 10, 65), (255, 255, 255, 255), "clip stops at y=60");
         assert_eq!(px(&img, 50, 35), (255, 255, 255, 255), "clip stops at x=40");
+    }
+
+    /// BUG-1479: content that lies below the canvas before the scroll shift
+    /// (`y = 80…100` on a 40×60 canvas, `scrollTop = 70`) still reaches the
+    /// frame at `y = 10…30`; the canvas-sized layer used to cut it off.
+    #[test]
+    fn scroll_layer_shows_content_from_below_the_canvas() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 40.0, 40.0), scroll_x: 0.0, scroll_y: 70.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 80.0, 40.0, 20.0), color: green },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(40, 60, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 5), (255, 255, 255, 255), "above the block");
+        assert_eq!(px(&img, 10, 15), (0, 128, 0, 255), "block at 80-70=10");
+        assert_eq!(px(&img, 10, 35), (255, 255, 255, 255), "below the block, inside the clip");
+        assert_eq!(px(&img, 10, 50), (255, 255, 255, 255), "outside the clip");
+    }
+
+    /// Same for a horizontal scroll: content right of the canvas comes into view.
+    #[test]
+    fn scroll_layer_shows_content_from_right_of_the_canvas() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 40.0, 40.0), scroll_x: 90.0, scroll_y: 0.0 },
+            DisplayCommand::FillRect { rect: rect(100.0, 0.0, 20.0, 40.0), color: green },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(50, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 5, 20), (255, 255, 255, 255));
+        assert_eq!(px(&img, 15, 20), (0, 128, 0, 255), "block at 100-90=10");
+        assert_eq!(px(&img, 35, 20), (255, 255, 255, 255));
     }
 
     /// With a zero offset the scroll layer is a plain clip (no extra layer).

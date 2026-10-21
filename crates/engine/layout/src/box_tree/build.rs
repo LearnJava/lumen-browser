@@ -155,6 +155,7 @@ fn build_ruby_box(
     finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
 
     LayoutBox {
+        anchor_scroll: None,
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -245,6 +246,7 @@ fn build_ruby_group_box(
     // them correctly (`RubyAlign`), not the container's width.
     bstyle.display = Display::InlineBlock;
     LayoutBox {
+        anchor_scroll: None,
         node: owner_id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: bstyle.font_size * bstyle.line_height,
@@ -325,6 +327,7 @@ fn build_base_select_box(
     let mut trigger_style = anon_style(style);
     trigger_style.display = Display::Block;
     let trigger = LayoutBox {
+        anchor_scroll: None,
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: trigger_style.font_size * trigger_style.line_height,
@@ -348,6 +351,7 @@ fn build_base_select_box(
     };
 
     LayoutBox {
+        anchor_scroll: None,
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -975,6 +979,7 @@ fn build_box_inner(
             Arc::make_mut(&mut style).display = author;
         }
         return LayoutBox {
+            anchor_scroll: None,
             node: id,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -1366,6 +1371,7 @@ fn build_box_inner(
                         if had_ws && !row_items.is_empty() {
                             let gap_style = anon_style(&style);
                             row_items.push(LayoutBox {
+                                anchor_scroll: None,
                                 node: id,
                                 rect: Rect::ZERO,
                                 used_padding: None, used_line_height: gap_style.font_size * gap_style.line_height,
@@ -1565,6 +1571,7 @@ fn build_box_inner(
         None
     };
     LayoutBox {
+        anchor_scroll: None,
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,

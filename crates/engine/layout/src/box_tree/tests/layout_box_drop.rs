@@ -17,6 +17,7 @@ use crate::style::MaskMode;
 fn block(children: Vec<LayoutBox>) -> LayoutBox {
     let style = ComputedStyle::root();
     LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -50,6 +51,7 @@ fn svg_shape_with_mask(mask_content: Vec<LayoutBox>) -> LayoutBox {
         Some(Box::new(SvgMaskContent { content: mask_content, mode: MaskMode::Alpha }))
     };
     LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

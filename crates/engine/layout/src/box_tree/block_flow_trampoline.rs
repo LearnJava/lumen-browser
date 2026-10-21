@@ -122,6 +122,7 @@ struct Frame {
 /// (fully laid out) value before `run` looks at that slot again.
 pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
     let placeholder = LayoutBox {
+        anchor_scroll: None,
         node: slot.node,
         rect: Rect::ZERO,
         style: Arc::clone(&slot.style),

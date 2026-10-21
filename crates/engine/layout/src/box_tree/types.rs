@@ -10,6 +10,34 @@ pub struct UsedGridTracks {
     pub row_names: Vec<Vec<String>>,
 }
 
+/// One scroll container whose offset an anchor-positioned box follows; see
+/// [`LayoutBox::anchor_scroll`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchorScroller {
+    /// Node of the scroll container (the `PushScrollLayer::id` is its `index()`).
+    pub node: NodeId,
+    /// The container's current `scroll_x` / `scroll_y`, refreshed by
+    /// [`crate::refresh_anchor_scroll`] whenever a scroll position changes.
+    pub x: f32,
+    pub y: f32,
+}
+
+/// CSS Anchor Positioning L1 §4.3 «Scroll Adjustment» — the scroll containers between an
+/// anchor and the containing block of the box positioned against it. Their scroll offsets
+/// move the anchor on screen without a relayout, so the positioned box paints under the same
+/// translation. Outermost container first.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AnchorScroll {
+    pub scrollers: Vec<AnchorScroller>,
+}
+
+impl AnchorScroll {
+    /// Sum of the offsets, i.e. the vector the box is displaced by is its negation.
+    pub fn total(&self) -> (f32, f32) {
+        self.scrollers.iter().fold((0.0, 0.0), |(x, y), s| (x + s.x, y + s.y))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
     pub node: NodeId,
@@ -102,6 +130,11 @@ pub struct LayoutBox {
     pub scroll_x: f32,
     /// Vertical scroll offset in CSS px. Same semantics as `scroll_x`.
     pub scroll_y: f32,
+    /// CSS Anchor Positioning L1 §4.3 — on an `absolute`/`fixed` box positioned against an
+    /// anchor that sits inside scroll containers its own ancestors do not include: those
+    /// containers. Written by `apply_anchor_positions`, offsets refreshed on every scroll.
+    /// `None` — the box does not follow any scrolling.
+    pub anchor_scroll: Option<Box<AnchorScroll>>,
     /// Incremental-layout dirty flags (EE-3). Only consulted during
     /// `lay_out_incremental` passes — normal `lay_out` ignores this field.
     /// Set via `mark_dirty`; cleared via `clear_dirty` / `lay_out_incremental`.
