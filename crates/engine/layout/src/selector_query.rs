@@ -735,6 +735,7 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::Rem(v) => format!("{}rem", v),
         Length::Ch(v) => format!("{}ch", v),
         Length::Ex(v) => format!("{}ex", v),
+        Length::Cap(v) => format!("{}cap", v),
         Length::Lh(v) => format!("{}lh", v),
         Length::Rlh(v) => format!("{}rlh", v),
         Length::Rex(v) => format!("{}rex", v),
@@ -931,6 +932,50 @@ pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
         format!("matrix({})", parts.join(", "))
     } else {
         format!("matrix3d({})", v.map(matrix_num).join(", "))
+    }
+}
+
+/// CSSOM resolved value of a `<number>` (CSS Values L4 §10.9.1): at most six
+/// significant digits like Chrome, `e+NN` form outside `1e-5..1e21`, signed zero kept.
+pub(crate) fn css_number(v: f32) -> String {
+    if v.is_nan() || v == 0.0 {
+        return if v.is_sign_negative() && !v.is_nan() { "-0".into() } else { "0".into() };
+    }
+    let sci = format!("{:.5e}", f64::from(v));
+    let rounded: f64 = sci.parse().unwrap_or(f64::from(v));
+    let a = rounded.abs();
+    if (1e-5..1e21).contains(&a) {
+        return format!("{rounded}");
+    }
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let mantissa = if mantissa.contains('.') { mantissa.trim_end_matches('0').trim_end_matches('.') } else { mantissa };
+    let exp: i32 = exp.parse().unwrap_or(0);
+    format!("{mantissa}e{}{}", if exp < 0 { '-' } else { '+' }, exp.abs())
+}
+
+/// `translate` resolved value: `none`, or `<x>` / `<x> <y>` with a zero `y` dropped.
+fn translate_to_css(t: Option<&(Length, Length)>) -> String {
+    match t {
+        None => "none".into(),
+        Some((x, Length::Px(0.0))) => length_to_css(x),
+        Some((x, y)) => format!("{} {}", length_to_css(x), length_to_css(y)),
+    }
+}
+
+/// `rotate` resolved value: `none` or the angle in degrees.
+fn rotate_to_css(r: Option<f32>) -> String {
+    match r {
+        None => "none".into(),
+        Some(rad) => format!("{}deg", css_number(rad.to_degrees())),
+    }
+}
+
+/// `scale` resolved value: `none`, or `<x>` when both factors agree, else `<x> <y>`.
+fn scale_to_css(s: Option<(f32, f32)>) -> String {
+    match s {
+        None => "none".into(),
+        Some((x, y)) if x.to_bits() == y.to_bits() => css_number(x),
+        Some((x, y)) => format!("{} {}", css_number(x), css_number(y)),
     }
 }
 
@@ -1918,6 +1963,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Transform / filter ───────────────────────────────────────
     m.insert("transform".into(), transform_list_to_css(&style.transform));
+    m.insert("translate".into(), translate_to_css(style.translate.as_ref()));
+    m.insert("rotate".into(), rotate_to_css(style.rotate));
+    m.insert("scale".into(), scale_to_css(style.scale));
 
     m.insert("filter".into(), if style.filter.is_empty() {
         "none".into()

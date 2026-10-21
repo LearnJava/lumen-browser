@@ -1,6 +1,6 @@
 # BUG-1429 — `ex`, `cap`, `ic`, `ch` не берут метрики веб-шрифта из OS/2 (`sxHeight`, `sCapHeight`): `10ex` у шрифта с `sxHeight` = em/8 даёт 437 px вместо 100
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout/font (`crates/engine/layout/src/style/values/length.rs` — `FONT_CH_EX`/`FONT_LH`)
 
@@ -35,3 +35,15 @@ WPT-RUN-14 срез 19: `css-values/ex-unit-00{1…3}.html`, `cap-unit-001.html`
 ## Как проверить
 
 Страница из таблицы (`ExTest.woff` лежит в `css/css-values/resources/`); `css/css-values/ex-unit-003.html`, `cap-unit-001.html`.
+
+## Исправление
+
+`ex` к моменту работы уже читал `OS/2.sxHeight` гарнитуры бокса (BUG-1340, `x_height_px_with_families`): проба `10ex` с `ExTest.woff` даёт 100 px, Ahem `5ex` — 80. Оставался `cap`: парсер подставлял `Length::Em(n * 0.7)`, метрики шрифта не читались (Ahem `5cap` — 70 вместо 80).
+
+Добавлена единица `Length::Cap`. `TextMeasurer::cap_height_px{,_with_families}` ([`lib.rs`](../crates/engine/layout/src/lib.rs)) читают `OS/2.sCapHeight` (при отсутствии или нуле — `0.7 em`) у `FontMeasurer` и `OwnedFontMetrics` ([`paint/src/lib.rs`](../crates/engine/paint/src/lib.rs)); `FontContext::enter` публикует тройку `(ch, ex, cap)` в `FONT_CH_EX`, `Length::resolve` берёт `cap` оттуда (запасной вариант вне раскладки — `0.7em`). `calc()`, анимация, сериализация и `font-size` знают новый вариант.
+
+Тесты: `cap_height_with_families_uses_registered_font_ahem_is_0_8_em` (paint), `length_resolve_ch_ex_*` (layout). Проба: Ahem `5cap` = 80, `5ex` = 80, `5ch` = 100, `ExTest` `10ex` = 100, `ic` = 100.
+
+## Остаток
+
+`rcap`/`ric`/`ic` по-прежнему приближены (`rcap` = `0.7 rem`, `ic` = `1em`) — метрики корневого шрифта и CJK-глифа не читаются; пересчёт после загрузки `@font-face` в headless-проходе не проверен (`document.fonts.ready` там не срабатывает).

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use lumen_core::geom::Size;
 
+use crate::style::math_value::canonical_math_length;
 use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
 use crate::style::values::misc::OverflowClipMarginBox;
 use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS, ROOT_FONT_SIZE};
@@ -83,6 +84,10 @@ pub enum Length {
     /// Resolved via the same `FONT_CH_EX` thread-local; the spec fallback when the
     /// metric is unavailable is `0.5em` (the assumed x-height).
     Ex(f32),
+    /// CSS Values L4 §5.1.1 — `cap`: the used cap-height of the element's own
+    /// font (`OS/2.sCapHeight`). Resolved via `FONT_CH_EX`; the fallback when the
+    /// metric is unavailable is `0.7em`.
+    Cap(f32),
     /// CSS Values L4 §5.1.1 — `lh`: the computed `line-height` of the element
     /// (absolute px, from `FONT_LH` set per box at layout time). Outside a layout
     /// pass the fallback is `1.2em`.
@@ -175,10 +180,13 @@ impl Length {
             // (thread-local `FONT_CH_EX`, absolute px per unit). Outside a layout
             // pass the metric is unavailable → spec fallback of `0.5em`.
             Length::Ch(v) => {
-                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _)| *v * ch))
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _, _)| *v * ch))
             }
             Length::Ex(v) => {
-                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex, _)| *v * ex))
+            }
+            Length::Cap(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.7 * em_basis, |(_, _, cap)| *v * cap))
             }
             Length::Rlh(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 1.2 * ROOT_FONT_SIZE, |(lh, _, _)| *v * lh)),
             Length::Rch(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 0.5 * ROOT_FONT_SIZE, |(_, ch, _)| *v * ch)),
@@ -327,7 +335,7 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
     // against the box's real font metrics at layout time (`FONT_CH_EX`), with a
     // `0.5em` spec fallback (CSS Values L4 §5.1.1).
-    // `cap` = cap-height; Phase 0 approximation: 0.7em.
+    // `cap` = cap-height (`OS/2.sCapHeight`), `0.7em` fallback like `ch`/`ex`.
     // `lh` = computed line-height; Phase 0 approximation: 1.2em.
     if let Some(num) = s.strip_suffix("ch") {
         return num.trim().parse::<f32>().ok().map(Length::Ch);
@@ -336,7 +344,7 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
         return num.trim().parse::<f32>().ok().map(Length::Ex);
     }
     if let Some(num) = s.strip_suffix("cap") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
+        return num.trim().parse::<f32>().ok().map(Length::Cap);
     }
     if let Some(num) = s.strip_suffix("lh") {
         return num.trim().parse::<f32>().ok().map(Length::Lh);
@@ -465,7 +473,11 @@ pub fn canonical_specified_length(s: &str, allow_auto: bool, non_negative: bool)
         return Some("auto".to_string());
     }
     if looks_like_function_call(v) {
-        let len = parse_math_function_value(v)?;
+        let Some(len) = parse_math_function_value(v) else {
+            // BUG-1430: constants (`pi`, `NaN`, `infinity`) and `progress()` are not in the
+            // old parser's grammar; the typed evaluator folds them.
+            return canonical_math_length(v);
+        };
         return Some(crate::selector_query::length_to_css(&len));
     }
     let len = parse_length_q(v, false)?;
@@ -521,7 +533,10 @@ pub fn canonical_specified_sizing_length(s: &str) -> Option<String> {
     if v.eq_ignore_ascii_case("auto") {
         return Some("auto".to_string());
     }
-    let len = parse_sizing_length(v, false)?;
+    let Some(len) = parse_sizing_length(v, false) else {
+        // BUG-1430: constants and `progress()` — see `canonical_specified_length`.
+        return if looks_like_function_call(v) { canonical_math_length(v) } else { None };
+    };
     if length_literal_is_negative(&len) {
         return None;
     }
@@ -588,7 +603,7 @@ pub fn canonical_specified_contain_intrinsic(key: &str, s: &str) -> Option<Strin
 /// and this function is never reached for calc() anyway, see above).
 fn length_literal_is_negative(l: &Length) -> bool {
     match l {
-        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v) | Length::Lh(v)
+        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v) | Length::Cap(v) | Length::Lh(v)
         | Length::Rlh(v) | Length::Rex(v) | Length::Rch(v)
         | Length::Percent(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v)
         | Length::Cqw(v) | Length::Cqh(v) | Length::Cqi(v) | Length::Cqb(v)

@@ -1148,24 +1148,120 @@ fn parse_lch_chroma(s: &str) -> Option<f32> {
     s.parse::<f32>().ok().map(|v| v.max(0.0))
 }
 
-/// CSS Color L4 §10.4: OKLab напрямую → linear sRGB → gamma sRGB.
-/// `l` ∈ [0,1], `a`/`b` — unitless. Алгоритм — second half of oklch_to_srgb.
-fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+/// OKLab → линейный sRGB без обрезки (значения вне `[0,1]` — вне гаммы).
+fn oklab_to_linear(l: f32, a: f32, b: f32) -> [f32; 3] {
     let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
     let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
     let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
     let l3 = l_ * l_ * l_;
     let m3 = m_ * m_ * m_;
     let s3 = s_ * s_ * s_;
-    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
-    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
-    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
-    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+    [
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    ]
 }
 
-/// CSS Color L4 §10.5: CIE Lab (D50) → XYZ → D65 (Bradford) → linear sRGB.
-/// `l` ∈ [0,100], `a`/`b` — unitless (CIE units, не процентные).
+/// Линейный sRGB (в том числе вне гаммы) → OKLab.
+fn linear_to_oklab(rgb: [f32; 3]) -> [f32; 3] {
+    let [r, g, b] = rgb;
+    let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+/// Допуск принадлежности гамме: гасит шум f32 после матричных преобразований.
+const GAMUT_EPSILON: f32 = 2e-5;
+
+fn in_srgb_gamut(rgb: [f32; 3]) -> bool {
+    rgb.iter().all(|c| (-GAMUT_EPSILON..=1.0 + GAMUT_EPSILON).contains(c))
+}
+
+fn encode_linear(rgb: [f32; 3]) -> (u8, u8, u8) {
+    (encode_srgb(rgb[0]), encode_srgb(rgb[1]), encode_srgb(rgb[2]))
+}
+
+/// CSS Color 4 §13.2: сопоставление гамм в sRGB — бинарный поиск по chroma в OKLCH
+/// с постоянной светлотой и тоном, пока обрезанный цвет не окажется в пределах JND
+/// (ΔEOK < 0.02) от неё. `L ≥ 1` → белый, `L ≤ 0` → чёрный. Вход — линейный sRGB
+/// (возможно, вне гаммы), выход — готовые байты sRGB.
+fn gamut_map_linear_srgb(rgb: [f32; 3]) -> (u8, u8, u8) {
+    if in_srgb_gamut(rgb) {
+        return encode_linear(rgb);
+    }
+    const JND: f32 = 0.02;
+    const EPS: f32 = 0.0001;
+    let [l, a, b] = linear_to_oklab(rgb);
+    if l >= 1.0 {
+        return (255, 255, 255);
+    }
+    if l <= 0.0 {
+        return (0, 0, 0);
+    }
+    let chroma = a.hypot(b);
+    let (cos_h, sin_h) = if chroma > 0.0 { (a / chroma, b / chroma) } else { (1.0, 0.0) };
+    let at = |c: f32| oklab_to_linear(l, c * cos_h, c * sin_h);
+    let clip = |v: [f32; 3]| v.map(|c| c.clamp(0.0, 1.0));
+    let delta_e = |clipped: [f32; 3], c: f32| {
+        let [cl, ca, cb] = linear_to_oklab(clipped);
+        ((cl - l).powi(2) + (ca - c * cos_h).powi(2) + (cb - c * sin_h).powi(2)).sqrt()
+    };
+    let origin_clipped = clip(rgb);
+    if delta_e(origin_clipped, chroma) < JND {
+        return encode_linear(origin_clipped);
+    }
+    let (mut min, mut max, mut min_in_gamut) = (0.0_f32, chroma, true);
+    let mut clipped = origin_clipped;
+    while max - min > EPS {
+        let mid = (min + max) / 2.0;
+        let cur = at(mid);
+        if min_in_gamut && in_srgb_gamut(cur) {
+            min = mid;
+            continue;
+        }
+        clipped = clip(cur);
+        let e = delta_e(clipped, mid);
+        if e < JND {
+            if JND - e < EPS {
+                return encode_linear(clipped);
+            }
+            min_in_gamut = false;
+            min = mid;
+        } else {
+            max = mid;
+        }
+    }
+    encode_linear(clipped)
+}
+
+/// CSS Color L4 §10.4: OKLab напрямую → linear sRGB → gamma sRGB (с сопоставлением гамм).
+/// `l` ∈ [0,1], `a`/`b` — unitless.
+fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    if l >= 1.0 {
+        return (255, 255, 255);
+    }
+    if l <= 0.0 {
+        return (0, 0, 0);
+    }
+    gamut_map_linear_srgb(oklab_to_linear(l, a, b))
+}
+
+/// CSS Color L4 §10.5: CIE Lab (D50) → XYZ → D65 (Bradford) → linear sRGB
+/// (с сопоставлением гамм). `l` ∈ [0,100], `a`/`b` — unitless (CIE units, не процентные).
+/// `L = 100` — белый, `L = 0` — чёрный при любых `a`/`b`.
 fn lab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    if l >= 100.0 {
+        return (255, 255, 255);
+    }
+    if l <= 0.0 {
+        return (0, 0, 0);
+    }
     // Lab → XYZ (D50). Алгоритм CIE 15.3 §8.4.2.
     let fy = (l + 16.0) / 116.0;
     let fx = a / 500.0 + fy;
@@ -1203,7 +1299,7 @@ fn lab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
     let lr = 3.240_625_5 * x_d65 - 1.537_208 * y_d65 - 0.498_628_6 * z_d65;
     let lg = -0.968_930_7 * x_d65 + 1.875_756_1 * y_d65 + 0.041_517_5 * z_d65;
     let lb = 0.055_710_1 * x_d65 - 0.204_021_1 * y_d65 + 1.056_995_9 * z_d65;
-    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+    gamut_map_linear_srgb([lr, lg, lb])
 }
 
 /// Linear sRGB → gamma sRGB (IEC 61966-2-1).
@@ -1220,34 +1316,8 @@ pub(in crate::style) fn encode_srgb(c: f32) -> u8 {
 /// CSS Color L4 §10.3: OKLCH → OKLab → linear sRGB → sRGB (gamma-encoded).
 /// `l` ∈ [0,1], `c` ≥ 0, `h_deg` в градусах.
 fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
-    // OKLCH → OKLab.
     let h_rad = h_deg.to_radians();
-    let a = c * h_rad.cos();
-    let b = c * h_rad.sin();
-
-    // OKLab → linear LMS → linear sRGB. Константы из CSS Color L4 §10.3,
-    // округлены до f32-precision.
-    let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
-    let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
-    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
-    let l3 = l_ * l_ * l_;
-    let m3 = m_ * m_ * m_;
-    let s3 = s_ * s_ * s_;
-    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
-    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
-    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
-
-    // Linear sRGB → gamma sRGB (per IEC 61966-2-1).
-    fn encode(c: f32) -> u8 {
-        let c = c.clamp(0.0, 1.0);
-        let v = if c <= 0.003_130_8 {
-            12.92 * c
-        } else {
-            1.055 * c.powf(1.0 / 2.4) - 0.055
-        };
-        clamp_byte(v * 255.0)
-    }
-    (encode(lr), encode(lg), encode(lb))
+    oklab_to_srgb(l, c * h_rad.cos(), c * h_rad.sin())
 }
 
 /// CSS Color L5 §10.2 — parse `color-mix(in <space>, <c1> [pct]?, <c2> [pct]?)`

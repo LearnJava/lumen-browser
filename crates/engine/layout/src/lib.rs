@@ -302,6 +302,20 @@ pub trait TextMeasurer {
         self.x_height_px(font_size_px)
     }
 
+    /// Cap-height шрифта в пикселях при размере `font_size_px` — высота заглавных
+    /// (`OS/2.sCapHeight`); источник единицы `cap`/`rcap` (CSS Values L4 §5.1.1,
+    /// BUG-1429). Реализации без доступа к метрикам возвращают `0.7 × size`.
+    fn cap_height_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.7
+    }
+
+    /// [`Self::cap_height_px`] с учётом CSS `font-family` каскада — см.
+    /// [`Self::descent_px_with_families`].
+    fn cap_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.cap_height_px(font_size_px)
+    }
+
     /// Line-gap шрифта в пикселях при размере `font_size_px` — рекомендуемый
     /// межстрочный зазор поверх content area (ascent + descent), источник —
     /// `OS/2.sTypoLineGap`/`hhea.lineGap` (FONTLOAD-13, BUG-467).

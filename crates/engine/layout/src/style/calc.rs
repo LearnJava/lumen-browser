@@ -225,6 +225,7 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Rem(v) => (2, *v),
         Length::Ch(v) => (3, *v),
         Length::Ex(v) => (4, *v),
+        Length::Cap(v) => (20, *v),
         Length::Lh(v) => (16, *v),
         Length::Rlh(v) => (17, *v),
         Length::Rex(v) => (18, *v),
@@ -255,6 +256,7 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         Length::Rem(_) => Length::Rem(v),
         Length::Ch(_) => Length::Ch(v),
         Length::Ex(_) => Length::Ex(v),
+        Length::Cap(_) => Length::Cap(v),
         Length::Lh(_) => Length::Lh(v),
         Length::Rlh(_) => Length::Rlh(v),
         Length::Rex(_) => Length::Rex(v),
@@ -681,7 +683,7 @@ pub(in crate::style) fn calc_node_contains_percent(node: &CalcNode) -> bool {
 // ──────────────── calc() лексер + парсер ────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-enum CalcToken {
+pub(in crate::style) enum CalcToken {
     /// Числовой токен с (опциональным) unit-суффиксом.
     Num(f32, String),
     /// Идентификатор функции (`calc`, `min`, `max`, `clamp`). Хранится в
@@ -704,7 +706,7 @@ enum CalcToken {
 /// минус (`calc(-10px + 5px)`) разрешается парсером через
 /// `factor := ('-' | '+') factor | …`. Это даёт корректное поведение и для
 /// `10px - 5px` (whitespace по спецификации), и для `10px-5px` (lenient).
-fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
+pub(in crate::style) fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
     let mut tokens = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -766,6 +768,19 @@ fn lex_number(bytes: &[u8], start: usize) -> Option<(f32, String, usize)> {
         i += 1;
         while i < bytes.len() && bytes[i].is_ascii_digit() {
             i += 1;
+        }
+    }
+    // Экспонента (`3e+9px`): только если за `e` идёт цифра (иначе `e` — начало единицы `em`/`ex`).
+    if matches!(bytes.get(i), Some(b'e' | b'E')) {
+        let mut k = i + 1;
+        if matches!(bytes.get(k), Some(b'+' | b'-')) {
+            k += 1;
+        }
+        if bytes.get(k).is_some_and(u8::is_ascii_digit) {
+            while bytes.get(k).is_some_and(u8::is_ascii_digit) {
+                k += 1;
+            }
+            i = k;
         }
     }
     let num_end = i;
@@ -1032,7 +1047,7 @@ fn parse_arg_list(tokens: &[CalcToken], pos: &mut usize) -> Option<Vec<CalcNode>
 /// `Number(radians)` (по CSS Values L4 §10.7 — trig-функции принимают
 /// число или angle; unitless считается уже в радианах). Неизвестный unit
 /// (`pt`, `mm`, …) даёт None.
-fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
+pub(in crate::style) fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     if unit.is_empty() {
         return Some(CalcNode::Number(value));
     }
@@ -1056,12 +1071,12 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
         "rex" => Length::Rex(value),
         "rch" => Length::Rch(value),
         "ric" => Length::Rem(value),
-        // `ch`/`ex` carry their own variants (resolved against real font metrics
-        // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
+        // `ch`/`ex`/`cap` carry their own variants (resolved against real font
+        // metrics at layout time); `lh` stays em-approximated (Phase 0, no metric).
         "ch" => Length::Ch(value),
         "ex" => Length::Ex(value),
         "em" => Length::Em(value),
-        "cap" => Length::Em(value * 0.7),
+        "cap" => Length::Cap(value),
         "lh" => Length::Lh(value),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),

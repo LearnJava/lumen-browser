@@ -375,6 +375,19 @@
     }
 
     #[test]
+    fn cap_height_with_families_uses_registered_font_ahem_is_0_8_em() {
+        // BUG-1429: `cap` брался как 0.7em, а не OS/2 `sCapHeight` гарнитуры бокса.
+        let ahem = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../assets/fonts/Ahem.ttf"))
+            .expect("Ahem.ttf должен читаться");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("ahem", ahem);
+        let families = vec!["ahem".to_string()];
+        assert!((m.cap_height_px_with_families(20.0, &families) - 16.0).abs() < 0.01);
+        assert_eq!(m.cap_height_px_with_families(20.0, &[]), m.cap_height_px(20.0));
+    }
+
+    #[test]
     fn ascent_descent_with_families_picks_first_resolving_family() {
         // CSS font stack fallback: первая семья без данных пропускается,
         // используется первая, у которой они есть — тот же приоритет, что

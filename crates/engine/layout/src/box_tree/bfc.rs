@@ -98,6 +98,45 @@ fn fold_margin((pos, neg): (f32, f32), own: f32) -> (f32, f32) {
     (pos.max(own), neg.min(own))
 }
 
+/// The content-box width `node` gets inside a containing block `cb` wide — the
+/// containing-block width its in-flow children resolve percentages against
+/// (BUG-1431). Mirrors the width part of `lay_out`: a definite `width` (px / %
+/// / `calc`, in the box's `box-sizing`) wins over the `auto` fill of the
+/// containing block minus margins, then `max-width` and `min-width` clamp it
+/// (`min` last). Intrinsic keywords (`min-content`, `fit-content`, …) cannot be
+/// resolved without measuring, so they fall back to the `auto` fill.
+fn content_box_width(node: &LayoutBox, cb: f32, viewport: Size) -> f32 {
+    let s = &node.style;
+    let em = s.font_size;
+    let frame = s.padding_left.resolve_or_zero(em, cb, viewport)
+        + s.padding_right.resolve_or_zero(em, cb, viewport)
+        + s.border_left_width
+        + s.border_right_width;
+    // Border-box size -> content-box size.
+    let content = |v: f32| match s.box_sizing {
+        BoxSizing::ContentBox => v,
+        BoxSizing::BorderBox => v - frame,
+    };
+    let resolve = |l: &Option<Length>| {
+        l.as_ref()
+            .filter(|l| !l.is_intrinsic() && !matches!(l, Length::Stretch))
+            .and_then(|l| l.resolve(em, Some(cb), viewport))
+            .map(|v| content(v.max(0.0)))
+    };
+    let mut w = resolve(&s.width).unwrap_or_else(|| {
+        let margins = s.margin_left.resolve_or_zero(em, cb, viewport)
+            + s.margin_right.resolve_or_zero(em, cb, viewport);
+        cb - margins - frame
+    });
+    if let Some(max) = resolve(&s.max_width) {
+        w = w.min(max);
+    }
+    if let Some(min) = resolve(&s.min_width) {
+        w = w.max(min);
+    }
+    w.max(0.0)
+}
+
 /// CSS 2.1 §8.3.1 — the *collapsed* top margin of a block-level box (px).
 ///
 /// The top margin of an in-flow block collapses with the top margin of its
@@ -169,12 +208,7 @@ pub(crate) fn collapsed_top_margin(
         match first_collapsible_child(node) {
             Some(child) => {
                 // Child's containing-block width = this box's content width.
-                cur_cb = (cur_cb
-                    - node.style.padding_left.resolve_or_zero(em, cur_cb, viewport)
-                    - node.style.padding_right.resolve_or_zero(em, cur_cb, viewport)
-                    - node.style.border_left_width
-                    - node.style.border_right_width)
-                    .max(0.0);
+                cur_cb = content_box_width(node, cur_cb, viewport);
                 node = child;
             }
             None => break,
@@ -277,12 +311,7 @@ pub(crate) fn collapsed_bottom_margin(
         match last_collapsible_child(node) {
             Some(child) => {
                 // Child's containing-block width = this box's content width.
-                cur_cb = (cur_cb
-                    - node.style.padding_left.resolve_or_zero(em, cur_cb, viewport)
-                    - node.style.padding_right.resolve_or_zero(em, cur_cb, viewport)
-                    - node.style.border_left_width
-                    - node.style.border_right_width)
-                    .max(0.0);
+                cur_cb = content_box_width(node, cur_cb, viewport);
                 node = child;
             }
             None => break,

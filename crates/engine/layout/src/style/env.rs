@@ -57,8 +57,8 @@ pub fn cq_context_active() -> bool {
 }
 
 thread_local! {
-    /// CSS Values L4 §5.1.1 — absolute px value of one `ch` and one `ex` unit for
-    /// the box currently being laid out: `(char_width('0'), x_height)` measured at
+    /// CSS Values L4 §5.1.1 — absolute px value of one `ch`, `ex` and `cap` unit for
+    /// the box currently being laid out: `(char_width('0'), x_height, cap_height)` measured at
     /// the box's own used `font-size`. `lay_out_inner` pushes this from the active
     /// [`crate::TextMeasurer`] before resolving the box's lengths and restores the
     /// parent's value on exit (RAII, so it is always balanced across recursion).
@@ -68,7 +68,7 @@ thread_local! {
     /// metric is impractical to obtain).
     // SPLIT-ST9: та же причина, что у `CONTAINER_CQ` — `ch`/`ex` резолвит
     // `Length::resolve` из `style::values::length`.
-    pub(in crate::style) static FONT_CH_EX: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+    pub(in crate::style) static FONT_CH_EX: Cell<Option<(f32, f32, f32)>> = const { Cell::new(None) };
     /// Used `line-height` (px) of the box being laid out, for the `lh` unit
     /// (CSS Values L4 §5.1.1). `None` outside layout → `1.2em` fallback.
     pub(in crate::style) static FONT_LH: Cell<Option<f32>> = const { Cell::new(None) };
@@ -80,7 +80,7 @@ thread_local! {
 /// Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
 /// laid out and returns the previous value so the caller can restore it (RAII).
 /// `None` clears the context, making `Length::{Ch,Ex}` use the `0.5em` fallback.
-pub fn push_ch_ex_context(ch_ex: Option<(f32, f32)>) -> Option<(f32, f32)> {
+pub fn push_ch_ex_context(ch_ex: Option<(f32, f32, f32)>) -> Option<(f32, f32, f32)> {
     FONT_CH_EX.with(|c| c.replace(ch_ex))
 }
 
@@ -111,7 +111,7 @@ pub fn pop_lh_context(prev: Option<f32>) {
 
 /// Restores the `ch`/`ex` metric context to a value previously returned by
 /// [`push_ch_ex_context`], undoing the box's contribution once its subtree is done.
-pub fn pop_ch_ex_context(prev: Option<(f32, f32)>) {
+pub fn pop_ch_ex_context(prev: Option<(f32, f32, f32)>) {
     FONT_CH_EX.with(|c| c.set(prev));
 }
 
