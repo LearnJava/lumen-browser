@@ -18,6 +18,7 @@
 
 mod mutate;
 mod parse;
+mod scroll_state_cond;
 mod serialize;
 #[cfg(test)]
 mod tests;

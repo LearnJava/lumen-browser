@@ -5,7 +5,28 @@
 //! (анкер `fn apply_container_styles`) без правок тел.
 
 use super::*;
-use crate::style::{ContainerKinds, ScrollStateInfo};
+use crate::counters::CounterMap;
+use crate::style::{matching_container_rules, apply_matched_container_rules, ContainerKinds, ScrollStateInfo};
+use std::collections::HashSet;
+
+/// The nodes whose `overflow` goes to the viewport: the root element, and `body` while the
+/// root's own `overflow` is `visible` (CSS Overflow 3 §3.5).
+fn viewport_propagating_nodes(root: &LayoutBox) -> HashSet<NodeId> {
+    fn first_box(b: &LayoutBox) -> Option<&LayoutBox> {
+        b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
+    }
+    let mut out = HashSet::new();
+    // `root` is the document box; its first real child is `html`, whose first is `body`.
+    let Some(html) = first_box(root) else { return out };
+    out.insert(html.node);
+    let visible = |s: &ComputedStyle| matches!(s.overflow_x, Overflow::Visible) && matches!(s.overflow_y, Overflow::Visible);
+    if visible(&html.style)
+        && let Some(body) = first_box(html)
+    {
+        out.insert(body.node);
+    }
+    out
+}
 
 /// The box establishes a query container (`container-type` other than `normal`).
 fn is_query_container(style: &ComputedStyle) -> bool {
@@ -32,6 +53,7 @@ pub fn apply_container_styles(
     measurer: Option<&dyn TextMeasurer>,
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
+    counters: &mut CounterMap,
 ) {
     // No container rules in this sheet → fast path.
     if sheet.container_rules.is_empty() {
@@ -40,7 +62,10 @@ pub fn apply_container_styles(
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     // CSS2.1 §10.5: the initial containing block's height is the viewport height —
     // the `%`-height basis a root-level container itself would resolve against.
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode);
+    let mut boxless = HashMap::new();
+    let propagating = viewport_propagating_nodes(root);
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode, counters, &propagating, &mut boxless);
+    counters.set_cq_boxless(boxless);
 }
 
 /// `parent_h` is the content-box height (px) of `b`'s *immediate* parent —
@@ -71,6 +96,9 @@ fn apply_container_inner(
     parent_h: f32,
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
+    counters: &CounterMap,
+    propagating: &HashSet<NodeId>,
+    boxless: &mut HashMap<NodeId, Arc<ComputedStyle>>,
 ) {
     // The third element is the nearest query container above the box — the head of
     // the chain a descendant container links to via `ContainerContext::parent`.
@@ -91,7 +119,8 @@ fn apply_container_inner(
         let content_h_val = (b.rect.height - pad_t - pad_b
             - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
 
-        let is_container = is_query_container(&b.style);
+        // A `Skip` box (`display: none`) is no principal box: it answers no query.
+        let is_container = !matches!(b.kind, BoxKind::Skip) && is_query_container(&b.style);
         if is_container {
             let size_container = !matches!(b.style.container_type, ContainerType::Normal);
             let content_h = if matches!(b.style.container_type, ContainerType::Size) {
@@ -110,16 +139,19 @@ fn apply_container_inner(
                 own_containing_block_height: parent_h,
                 kinds: ContainerKinds { size: size_container, scroll_state: b.style.container_scroll_state },
                 scroll_state: if b.style.container_scroll_state {
-                    crate::scroll_state::scroll_state_info(b)
+                    crate::scroll_state::scroll_state_info(b, propagating.contains(&b.node))
                 } else {
                     ScrollStateInfo::default()
                 },
                 parent: outer,
-            });
+                rule_hits: Vec::new(),
+            }.with_rule_hits(sheet));
             // Re-apply container rules to all direct + indirect descendants.
+            let mut seen = SeenBoxes::default();
             for child in &mut b.children {
-                re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
+                re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, &mut seen);
             }
+            restyle_boxless(doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless);
             if !size_container {
                 // A scroll-state-only container does not contain its size: the queries
                 // restyle the subtree, but the box tree below keeps its first-pass geometry
@@ -485,15 +517,69 @@ fn re_style_subtree(
     ctx: &ContainerContext,
     viewport: Size,
     dark_mode: bool,
+    seen: &mut SeenBoxes,
 ) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(b) = stack.pop() {
         if !matches!(b.kind, BoxKind::Skip) {
-            apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
+            seen.boxed.insert(b.node);
+            let rules = matching_container_rules(doc, b.node, sheet, ctx);
+            if !rules.is_empty() {
+                apply_matched_container_rules(Arc::make_mut(&mut b.style), &rules, doc, b.node, viewport, dark_mode);
+            }
         }
         // Don't propagate into nested containers — they'll build their own context.
-        if !is_query_container(&b.style) {
+        if is_query_container(&b.style) {
+            seen.nested.insert(b.node);
+        } else {
             stack.extend(b.children.iter_mut());
         }
+    }
+}
+
+/// Nodes [`re_style_subtree`] met below a container: those with a box, and the nested
+/// containers (whose subtrees belong to the nested container's own pass).
+#[derive(Default)]
+struct SeenBoxes {
+    boxed: HashSet<NodeId>,
+    nested: HashSet<NodeId>,
+}
+
+/// `@container` rules for the elements below `container` that own no box — plain
+/// inline elements, `display: none` / `contents` — which `re_style_subtree` cannot
+/// reach through the box tree. Their cascaded style comes from `counters`; the ones a
+/// rule matches are restyled into `out`.
+#[allow(clippy::too_many_arguments)]
+fn restyle_boxless(
+    doc: &Document,
+    sheet: &Stylesheet,
+    counters: &CounterMap,
+    container: NodeId,
+    seen: &SeenBoxes,
+    ctx: &ContainerContext,
+    viewport: Size,
+    dark_mode: bool,
+    out: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+) {
+    let mut stack: Vec<NodeId> = doc.get(container).children.iter().rev().copied().collect();
+    while let Some(id) = stack.pop() {
+        if !matches!(doc.get(id).data, NodeData::Element { .. }) || seen.nested.contains(&id) {
+            continue;
+        }
+        if !seen.boxed.contains(&id)
+            && let Some(mut style) = counters.style_arc(id)
+        {
+            // A container with no principal box answers no query: what lies below it is
+            // out of this container's reach and is not matched against it either.
+            if is_query_container(&style) {
+                continue;
+            }
+            let rules = matching_container_rules(doc, id, sheet, ctx);
+            if !rules.is_empty() {
+                apply_matched_container_rules(Arc::make_mut(&mut style), &rules, doc, id, viewport, dark_mode);
+                out.insert(id, style);
+            }
+        }
+        stack.extend(doc.get(id).children.iter().rev().copied());
     }
 }

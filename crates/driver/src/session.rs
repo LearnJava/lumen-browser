@@ -488,7 +488,7 @@ impl InProcessSession {
                 rt.update_style_maps(lumen_layout::collect_computed_styles(layout_root, &doc_guard, counters, self.viewport));
                 rt.update_pseudo_computed_styles(lumen_layout::collect_pseudo_computed_styles(layout_root));
             }
-            rt.update_custom_properties(lumen_layout::collect_custom_properties(layout_root, self.viewport));
+            rt.update_custom_properties(lumen_layout::collect_custom_properties_for(layout_root, counters, self.viewport));
             rt.update_viewport_size(self.viewport.width, self.viewport.height);
             // CSSOM-4/BUG-493: push the stylesheet the JS runtime needs to force a
             // synchronous style+layout flush on a same-tick `getComputedStyle`/

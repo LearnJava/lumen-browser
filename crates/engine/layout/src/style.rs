@@ -269,7 +269,8 @@ pub use values::misc::{
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };
 pub use container::{
-    apply_container_rules, evaluate_container_condition, evaluate_container_query, ContainFlags,
+    apply_container_rules, apply_matched_container_rules, evaluate_container_condition,
+    evaluate_container_query, matching_container_rules, ContainFlags,
     ContainerContext, ContainerKinds, ContainerType, ContentVisibility, InterpolateSizeMode,
 };
 pub use container_scroll::{Edge, EdgeFlags, ScrollStateInfo};

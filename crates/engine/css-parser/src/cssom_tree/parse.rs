@@ -477,7 +477,11 @@ fn build_at_rule(
                 return None;
             }
             let prelude = match kind {
-                RuleKind::Media | RuleKind::Supports | RuleKind::Container => space_after_colons(&params_c),
+                RuleKind::Container => {
+                    let (text, funcs) = super::scroll_state_cond::extract_scroll_state_functions(params);
+                    super::scroll_state_cond::restore_scroll_state_functions(&space_after_colons(&collapse_ws(&text)), &funcs)
+                }
+                RuleKind::Media | RuleKind::Supports => space_after_colons(&params_c),
                 RuleKind::Scope => scope_prelude(&params_c)?,
                 _ => params_c,
             };

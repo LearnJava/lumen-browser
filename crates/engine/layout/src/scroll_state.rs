@@ -26,9 +26,14 @@ fn logical_starts(mode: WritingMode, dir: Direction) -> (Edge, Edge) {
 }
 
 /// Состояния `scroll-state()` для бокса с `container-type: scroll-state`.
-pub(crate) fn scroll_state_info(b: &LayoutBox) -> ScrollStateInfo {
+/// `viewport_scroller` — `overflow` бокса ушёл во вьюпорт (CSS Overflow 3 §3.5: корень,
+/// а при `visible` у корня — `body`): сам бокс контейнером прокрутки не остаётся.
+pub(crate) fn scroll_state_info(b: &LayoutBox, viewport_scroller: bool) -> ScrollStateInfo {
     let s = &b.style;
     let (block_start, inline_start) = logical_starts(s.writing_mode, s.direction);
+    if viewport_scroller {
+        return ScrollStateInfo { block_start, inline_start, ..ScrollStateInfo::default() };
+    }
     let pb = padding_box(b);
     // Пользователь прокручивает только `scroll`/`auto`; `hidden`/`clip`/`visible` — нет.
     let user_scrollable = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto);

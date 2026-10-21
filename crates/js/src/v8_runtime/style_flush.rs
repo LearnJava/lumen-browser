@@ -860,7 +860,7 @@ impl FlushHandles {
                     }
                     plan.collect_custom_properties(viewport, &mut custom);
                     if verify_scope_prune() {
-                        let full = lumen_layout::collect_custom_properties(&layout_root, viewport);
+                        let full = lumen_layout::collect_custom_properties_for(&layout_root, Some(&counters), viewport);
                         let stale = full.iter().filter(|(k, v)| custom.get(*k) != Some(*v)).count();
                         if stale > 0 {
                             eprintln!(
@@ -871,7 +871,7 @@ impl FlushHandles {
                         }
                     }
                 }
-                _ => *custom = lumen_layout::collect_custom_properties(&layout_root, viewport),
+                _ => *custom = lumen_layout::collect_custom_properties_for(&layout_root, Some(&counters), viewport),
             }
             self.custom_props_collected.store(true, Ordering::Relaxed);
         }

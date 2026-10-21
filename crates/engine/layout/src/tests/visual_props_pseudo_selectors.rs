@@ -1761,6 +1761,7 @@ use super::*;
             kinds: crate::ContainerKinds::SIZE,
             scroll_state: crate::ScrollStateInfo::default(),
             parent: None,
+            rule_hits: Vec::new(),
         }
     }
 
