@@ -22,7 +22,7 @@ use lumen_dom::{Document, NodeData, NodeId};
 use crate::style::env::{ACTIVE_NID, FOCUS_NID, HOVER_NID};
 use crate::style::SHADOW_HOST_SCOPE;
 
-use super::matches_complex;
+use super::{matches_complex, matches_complex_anchored};
 
 pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
     match p {
@@ -1007,40 +1007,79 @@ fn has_non_whitespace_text(doc: &Document, node: NodeId) -> bool {
     false
 }
 
-/// Проверяет, что хоть один кандидат относительно `scope` (в зависимости от
-/// combinator-а) удовлетворяет внутреннему selector-у.
+/// Проверяет, что относительный селектор `:has()` выполним от субъекта `scope`:
+/// цепочка `rs.selector` начинается в `scope` (как `:scope <comb> .a > .b`), а не
+/// просто правый compound совпал где-то рядом (BUG-1444).
 fn matches_relative(rs: &lumen_css_parser::RelativeSelector, doc: &Document, scope: NodeId) -> bool {
-    match rs.combinator {
-        // Implicit descendant — обходим всё поддерево scope.
-        None => any_descendant(doc, scope, |n| matches_complex(&rs.selector, doc, n)),
-        Some(Combinator::Child) => {
-            // Прямые element-children scope.
-            doc.get(scope).children.iter().any(|&c| {
-                is_element(doc, c) && matches_complex(&rs.selector, doc, c)
-            })
-        }
-        Some(Combinator::NextSibling) => {
-            // Прямой следующий element-sibling.
-            next_element_sibling(doc, scope)
-                .map(|n| matches_complex(&rs.selector, doc, n))
-                .unwrap_or(false)
-        }
-        Some(Combinator::LaterSibling) => {
-            // Любой последующий element-sibling.
-            let mut cur = next_element_sibling(doc, scope);
-            while let Some(n) = cur {
-                if matches_complex(&rs.selector, doc, n) {
-                    return true;
-                }
-                cur = next_element_sibling(doc, n);
+    let sibling_lead = matches!(rs.combinator, Some(Combinator::NextSibling | Combinator::LaterSibling));
+    // Односоставной селектор: кандидат — сам левый compound, якорь проверяется
+    // выбором кандидатов (быстрый путь, как до BUG-1444).
+    if rs.selector.tail.is_empty() {
+        return match rs.combinator {
+            None | Some(Combinator::Descendant) => {
+                any_descendant(doc, scope, |n| matches_complex(&rs.selector, doc, n))
             }
-            false
-        }
-        // Descendant как explicit combinator — то же что None.
-        Some(Combinator::Descendant) => {
-            any_descendant(doc, scope, |n| matches_complex(&rs.selector, doc, n))
-        }
+            Some(Combinator::Child) => doc.get(scope).children.iter().any(|&c| {
+                is_element(doc, c) && matches_complex(&rs.selector, doc, c)
+            }),
+            Some(Combinator::NextSibling) => next_element_sibling(doc, scope)
+                .map(|n| matches_complex(&rs.selector, doc, n))
+                .unwrap_or(false),
+            Some(Combinator::LaterSibling) => {
+                let mut cur = next_element_sibling(doc, scope);
+                while let Some(n) = cur {
+                    if matches_complex(&rs.selector, doc, n) {
+                        return true;
+                    }
+                    cur = next_element_sibling(doc, n);
+                }
+                false
+            }
+        };
     }
+    // Составной: правый compound сидит среди потомков субъекта (для `>`/` `) либо
+    // среди последующих братьев и их потомков (для `+`/`~`); якорь — левый compound.
+    let anchored = |leftmost: NodeId| -> bool {
+        match rs.combinator {
+            None | Some(Combinator::Descendant) => is_proper_ancestor(doc, scope, leftmost),
+            Some(Combinator::Child) => doc.get(leftmost).parent == Some(scope),
+            Some(Combinator::NextSibling) => previous_element_sibling(doc, leftmost) == Some(scope),
+            Some(Combinator::LaterSibling) => {
+                let mut cur = previous_element_sibling(doc, leftmost);
+                while let Some(p) = cur {
+                    if p == scope {
+                        return true;
+                    }
+                    cur = previous_element_sibling(doc, p);
+                }
+                false
+            }
+        }
+    };
+    let candidate = |n: NodeId| matches_complex_anchored(&rs.selector, doc, n, &anchored);
+    if !sibling_lead {
+        return any_descendant(doc, scope, candidate);
+    }
+    let mut cur = next_element_sibling(doc, scope);
+    while let Some(sib) = cur {
+        if candidate(sib) || any_descendant(doc, sib, candidate) {
+            return true;
+        }
+        cur = next_element_sibling(doc, sib);
+    }
+    false
+}
+
+/// `ancestor` — собственный предок `node` (сам `node` не считается).
+fn is_proper_ancestor(doc: &Document, ancestor: NodeId, node: NodeId) -> bool {
+    let mut cur = doc.get(node).parent;
+    while let Some(p) = cur {
+        if p == ancestor {
+            return true;
+        }
+        cur = doc.get(p).parent;
+    }
+    false
 }
 
 /// True если хоть один element-descendant `root` удовлетворяет `pred`. Сам
