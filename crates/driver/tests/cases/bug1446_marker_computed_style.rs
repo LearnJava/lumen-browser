@@ -48,7 +48,11 @@ fn marker_computed_style_has_ua_defaults_not_the_items_inherited_values() {
 fn marker_computed_style_reads_the_marker_rule() {
     let mut s = InProcessSession::new();
     s.navigate_html(PAGE).expect("navigate_html");
-    assert_eq!(cs(&mut s, "o-mk", "content"), "\\\"marker\\\"");
+    // The serialized `<string>` keeps its quotes; compare inside the page to dodge the JSON layer.
+    let quoted = s
+        .eval("getComputedStyle(document.getElementById('o-mk'), '::marker').content === '\"marker\"'")
+        .expect("eval");
+    assert_eq!(quoted, "true");
     assert_eq!(cs(&mut s, "o-mk", "color"), "rgb(0, 128, 0)");
     assert_eq!(cs(&mut s, "o-mk", "font-size"), "20px");
     assert_eq!(cs(&mut s, "o-sym", "content"), "normal");
