@@ -12285,9 +12285,30 @@ function _lumen_css_backend(constructed, key) {
     be = { c: constructed, key: key, rules: new Map(), sweepAt: 256, sheetRef: null, list: null };
     be.idx = constructed
         ? function() { return key; }
-        : function() { return key === undefined ? -1 : _lumen_stylesheet_index_for(key); };
+        : function() {
+            if (key === undefined) return -1;
+            var i = _lumen_stylesheet_index_for(key);
+            return i < 0 ? _lumen_css_detach(be) : i;
+        };
     m.set(key, be);
     return be;
+}
+// BUG-1439: the owner left the tree, so the registry lost its sheet — but a
+// `CSSStyleSheet` stays a usable object (CSSOM §6.2). Rust parks the sheet and
+// hands it over as a constructed-registry entry; from then on `be` addresses that
+// entry and the wrapper stops being "owned" (`ownerNode === null`). Dropping the
+// backend from the owner map makes a later re-insert of the same `<style>` build
+// a fresh sheet, as a browser does. Returns the new registry index, `-1` if
+// there is nothing to take (never attached, or a `<link>` still loading).
+function _lumen_css_detach(be) {
+    var at = _lumen_stylesheet_take_detached(be.key);
+    if (at < 0) return -1;
+    if (_lumen_css_be_owned.get(be.key) === be) _lumen_css_be_owned.delete(be.key);
+    be.c = true;
+    be.detached = true;
+    be.key = at;
+    be.idx = function() { return at; };
+    return at;
 }
 function _lumen_css_ids(be, parentId) {
     var i = be.idx();
@@ -12769,6 +12790,7 @@ function _lumen_css_be(self) {
     return be;
 }
 function _lumen_css_owner(be) {
+    if (!be.c) be.idx(); // an owner that left the tree detaches the sheet (BUG-1439)
     return (be.c || be.idx() < 0) ? null : _lumen_make_element(be.key);
 }
 var _lumen_css_sheet_proto = CSSStyleSheet.prototype;
@@ -12804,7 +12826,7 @@ _lumen_css_acc(_lumen_css_sheet_proto, 'rules', function() { return this.cssRule
 _lumen_css_fn(_lumen_css_sheet_proto, 'insertRule', function(rule, index) {
     if (arguments.length < 1) throw new TypeError("Failed to execute 'insertRule' on 'CSSStyleSheet': 1 argument required, but only 0 present.");
     var be = _lumen_css_be(this);
-    if (be.c && /^\s*@import\b/i.test(String(rule))) {
+    if (be.c && !be.detached && /^\s*@import\b/i.test(String(rule))) {
         throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': Can't insert @import rules into a constructed stylesheet.", 'SyntaxError');
     }
     return _lumen_css_insert_into(be, 0, 'CSSStyleSheet', rule, index);
@@ -12825,7 +12847,7 @@ _lumen_css_fn(_lumen_css_sheet_proto, 'removeRule', function(index) {
 });
 _lumen_css_fn(_lumen_css_sheet_proto, 'replaceSync', function(text) {
     var be = _lumen_css_be(this);
-    if (!be.c) {
+    if (!be.c || be.detached) {
         throw new DOMException("Failed to execute 'replaceSync' on 'CSSStyleSheet': Can't call replaceSync on non-constructed CSSStyleSheets.", 'NotAllowedError');
     }
     _lumen_constructed_replace_sync(be.key, text === undefined || text === null ? '' : String(text));

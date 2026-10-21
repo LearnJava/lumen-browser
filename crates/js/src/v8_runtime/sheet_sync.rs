@@ -68,7 +68,21 @@ pub(crate) struct SheetSync {
     /// (`style.innerHTML = <тот же текст>`) значит, что браузер создал бы
     /// новый лист: CSSOM-правки старого выбрасываются, лист разбирается заново.
     pub(crate) child_list_gen: Arc<Mutex<HashMap<u32, u64>>>,
+    /// BUG-1439: листы узлов, вышедших из дерева, — старые первыми. `CSSStyleSheet`
+    /// самостоятельный объект (CSSOM §6.2): после `removeChild(style)` скрипт,
+    /// державший `style.sheet`, по-прежнему читает и правит его правила. Реестр
+    /// узлов лист теряет, поэтому сверка откладывает его сюда, а
+    /// `_lumen_stylesheet_take_detached` переселяет в реестр конструируемых.
+    pub(crate) detached: DetachedSheets,
 }
+
+/// Листы узлов, вышедших из дерева, — см. [`SheetSync::detached`].
+pub(crate) type DetachedSheets = Arc<Mutex<Vec<(u32, Arc<Stylesheet>)>>>;
+
+/// Сколько листов вышедших из дерева узлов держит [`SheetSync::detached`]:
+/// CSS-in-JS снимает и создаёт `<style>` непрерывно, а забрать лист успевает
+/// только тот, у кого есть живая обёртка.
+const DETACHED_SHEETS_CAP: usize = 256;
 
 /// BUG-493: то, что нужно шеллу для каскада отрисовки, без обращения к
 /// самому рантайму. Под движковым потоком (ADR-023, по умолчанию) рантайм
@@ -208,7 +222,16 @@ impl SheetSync {
                 }
                 out.push(entry);
             }
-            dropped.extend(old.into_keys());
+            {
+                let mut detached = self.detached.lock().unwrap_or_else(|e| e.into_inner());
+                for (node, entry) in old {
+                    dropped.push(node);
+                    detached.retain(|(n, _)| *n != node);
+                    detached.push((node, entry.sheet));
+                }
+                let excess = detached.len().saturating_sub(DETACHED_SHEETS_CAP);
+                detached.drain(..excess);
+            }
             seen.retain(|n, _| out.iter().any(|e| e.node == *n));
             *nodes = out;
         }
