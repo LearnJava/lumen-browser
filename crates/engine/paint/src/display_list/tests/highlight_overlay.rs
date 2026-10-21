@@ -71,16 +71,16 @@ fn ua_background_covers_the_selected_stretch() {
     assert_eq!(
         ops,
         vec![
-            text("q", 0.0, (0, 0, 0)),
             Op::Fill { x: 8.0, w: 24.0, rgb: (0x30, 0x8a, 0xff) },
+            text("q", 0.0, (0, 0, 0)),
             text("uic", 8.0, (0, 0, 0)),
             text("k", 32.0, (0, 0, 0)),
         ]
     );
 }
 
-/// highlight-painting-001: the element's shadows go first for every piece, then the
-/// highlight's background, its shadows and its glyphs over the selected one.
+/// highlight-painting-001: the element's shadow goes first, as one run, then the highlight's
+/// background, then the plain glyphs, the highlight's shadows and its glyphs.
 #[test]
 fn shadows_then_background_then_highlight_shadows_then_glyphs() {
     let ops = paint(
@@ -95,20 +95,51 @@ fn shadows_then_background_then_highlight_shadows_then_glyphs() {
     assert_eq!(
         ops,
         vec![
-            // 1. the originating shadows of all three pieces
-            text("q", 4.0, yellow),
-            text("uic", 12.0, yellow),
-            text("k", 36.0, yellow),
-            // 2. the unselected glyph before the selection
-            text("q", 0.0, (0, 0, 0)),
-            // 3. the selection: background, its shadow, its glyphs
+            // 1. the originating shadow, one run for the whole fragment
+            text("quick", 4.0, yellow),
+            // 2. the background of the selection, before any glyph
             Op::Fill { x: 8.0, w: 24.0, rgb: (0xc0, 0xc0, 0xc0) },
+            // 3. the unselected glyph before the selection, then the selection's shadow, glyphs
+            text("q", 0.0, (0, 0, 0)),
             text("uic", 16.0, blue),
             text("uic", 8.0, (0, 0, 0)),
             // 4. the unselected glyph after it
             text("k", 32.0, (0, 0, 0)),
         ]
     );
+}
+
+/// The element's own `currentcolor` decorations over selected text take the highlight's colour.
+#[test]
+fn underlying_decoration_takes_the_highlight_colour() {
+    let doc = lumen_html_parser::parse("<p>quick</p>");
+    let sheet = lumen_css_parser::parse(&format!(
+        "{BODY_RESET}p{{color:red;text-decoration:underline}} p::selection{{color:lime}}"
+    ));
+    let vp = Size::new(800.0, 600.0);
+    let tree = lumen_layout::layout_measured(&doc, &sheet, vp, &Fixed8);
+    let node = (0..doc.len())
+        .map(lumen_dom::NodeId::from_index)
+        .find(|&n| matches!(&doc.get(n).data, lumen_dom::NodeData::Text(t) if &**t == "quick"))
+        .expect("text node");
+    let ranges = [lumen_dom::Range {
+        start: lumen_dom::DomPosition { container: node, offset: 1 },
+        end: lumen_dom::DomPosition { container: node, offset: 4 },
+    }];
+    let env = lumen_layout::HighlightEnv { doc: &doc, sheet: &sheet, viewport: vp, dark_mode: false, measurer: &Fixed8 };
+    let layer = lumen_layout::HighlightLayer { pseudo: "selection", ranges: &ranges, ua_background: None };
+    let highlights = lumen_layout::resolve_highlights(&tree, &env, &[layer]).map(std::sync::Arc::new);
+    let dl = with_highlights(highlights, || build_display_list(&tree));
+    // Underline fills: red under the plain pieces, lime (24 px wide) under "uic".
+    let lines: Vec<(f32, (u8, u8, u8))> = dl
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillRect { rect, color } => Some((rect.width, rgb(*color))),
+            _ => None,
+        })
+        .collect();
+    assert!(lines.contains(&(24.0, (0, 255, 0))), "{lines:?}");
+    assert!(lines.contains(&(8.0, (255, 0, 0))), "{lines:?}");
 }
 
 /// Without a selection (or with no highlights installed) nothing changes.

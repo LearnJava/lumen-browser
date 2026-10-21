@@ -130,7 +130,7 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use highlight::{
-    compute_highlight_style, resolve_highlights, HighlightEnv, HighlightLayer, HighlightLook, HighlightPiece, Highlights,
+    compute_highlight_style, originating_base, resolve_highlights, HighlightEnv, HighlightLayer, HighlightLook, HighlightPiece, Highlights,
     UA_SELECTION_BACKGROUND,
 };
 pub use selection::{

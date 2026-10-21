@@ -283,48 +283,43 @@ impl Resolver<'_, '_> {
     fn frag(&mut self, frag: &InlineFrag) {
         let spans = crate::frag_source_spans(frag);
         let base = frag.text.as_ptr() as usize;
+        // A span's text is trimmed of the space that joins it to the next text node; the
+        // piece keeps it, so a highlight over both nodes has no hole at the join.
+        let starts: Vec<usize> = spans.iter().map(|s| s.text.as_ptr() as usize - base).collect();
         let mut pieces: Vec<HighlightPiece> = Vec::new();
-        let (mut cursor, mut cursor_x) = (0usize, 0.0f32);
         let mut any = false;
-        for span in &spans {
-            let start = span.text.as_ptr() as usize - base;
-            let len = span.text.len();
-            // Bytes between the previous span and this one (a trimmed trailing space).
-            if start > cursor {
-                pieces.push(HighlightPiece {
-                    bytes: cursor..start,
-                    x: cursor_x,
-                    width: (span.x - cursor_x).max(0.0),
-                    looks: Vec::new(),
-                });
-            }
-            let cuts = self.span_pieces(frag, span, start, len);
+        for (i, span) in spans.iter().enumerate() {
+            let start = starts[i];
+            let (end, width) = match spans.get(i + 1) {
+                Some(next) => (starts[i + 1], (next.x - span.x).max(0.0)),
+                None => (frag.text.len(), (frag.width - span.x).max(0.0)),
+            };
+            let cuts = self.span_pieces(frag, span, start..end, width);
             any |= cuts.iter().any(|p| !p.looks.is_empty());
-            cursor_x = cuts.last().map_or(span.x + span.width, |p| p.x + p.width);
-            cursor = start + len;
             pieces.extend(cuts);
-        }
-        if cursor < frag.text.len() {
-            pieces.push(HighlightPiece {
-                bytes: cursor..frag.text.len(),
-                x: cursor_x,
-                width: (frag.width - cursor_x).max(0.0),
-                looks: Vec::new(),
-            });
         }
         if any {
             self.out.frags.insert((frag.source_node, frag.source_char_offset), pieces);
         }
     }
 
-    /// One text-node span of a fragment, cut where a highlight starts or ends.
-    fn span_pieces(&mut self, frag: &InlineFrag, span: &crate::FragSpan<'_>, start: usize, len: usize) -> Vec<HighlightPiece> {
+    /// One text-node span of a fragment (`bytes` of `frag.text`, `width` px wide), cut
+    /// where a highlight starts or ends.
+    fn span_pieces(
+        &mut self,
+        frag: &InlineFrag,
+        span: &crate::FragSpan<'_>,
+        bytes: std::ops::Range<usize>,
+        width: f32,
+    ) -> Vec<HighlightPiece> {
         let node = span.source_node;
+        let (start, len) = (bytes.start, bytes.len());
+        let text = &frag.text[bytes];
         // Segments of this node per layer, in the span's own byte coordinates.
         let mut segments: Vec<(usize, usize, usize)> = Vec::new();
         // The DOM text and the fragment's text differ where whitespace collapsed.
         let align = match &self.env.doc.get(node).data {
-            NodeData::Text(raw) => Some(align_offsets(raw, span.source_char_offset as usize, span.text, frag.style.white_space.preserves_whitespace())),
+            NodeData::Text(raw) => Some(align_offsets(raw, span.source_char_offset as usize, text, frag.style.white_space.preserves_whitespace())),
             _ => None,
         };
         for (layer, spans) in self.spans.iter().enumerate() {
@@ -339,14 +334,14 @@ impl Resolver<'_, '_> {
                         hi.saturating_sub(span.source_char_offset) as usize,
                     ),
                 };
-                let (a, b) = (floor_boundary(span.text, a), floor_boundary(span.text, b));
+                let (a, b) = (floor_boundary(text, a), floor_boundary(text, b));
                 if a < b {
                     segments.push((a, b, layer));
                 }
             }
         }
         let whole = || {
-            vec![HighlightPiece { bytes: start..start + len, x: span.x, width: span.width, looks: Vec::new() }]
+            vec![HighlightPiece { bytes: start..start + len, x: span.x, width, looks: Vec::new() }]
         };
         if segments.is_empty() || len == 0 {
             return whole();
@@ -362,14 +357,14 @@ impl Resolver<'_, '_> {
         }
         cuts.sort_unstable();
         cuts.dedup();
-        let total = text_width(span.text, frag, self.env.measurer);
+        let total = text_width(text, frag, self.env.measurer);
         let x_at = |b: usize| -> f32 {
             let frac = if total > 0.0 {
-                text_width(&span.text[..b], frag, self.env.measurer) / total
+                text_width(&text[..b], frag, self.env.measurer) / total
             } else {
                 b as f32 / len as f32
             };
-            span.x + span.width * frac
+            span.x + width * frac
         };
         let mut looks_by_layer: HashMap<usize, Option<Arc<HighlightLook>>> = HashMap::new();
         let mut out = Vec::new();
@@ -430,10 +425,17 @@ fn chain_style(
     }
     let mut parent = cur.and_then(|n| memo.get(&n).cloned()).flatten();
     for &el in chain.iter().rev() {
-        let basis = match &parent {
+        let mut basis = match &parent {
             Some(p) => (**p).clone(),
             None => chain_root(base),
         };
+        // `var()` in a highlight resolves against the originating element's custom
+        // properties, not those a highlight above it declared (CSS Pseudo L4 §3.4).
+        basis.custom_props = base.custom_props.clone();
+        // A rule none of whose declarations applies (`foo: bar`) leaves the style as the
+        // inherited one: an invalid declaration block is ignored, so it does not count as
+        // the author styling the highlight (no UA background is suppressed by it).
+        let inherited = highlight_inherited_style(&basis);
         let own = crate::style::compute_pseudo_element_style(
             doc,
             el,
@@ -442,7 +444,8 @@ fn chain_style(
             &basis,
             env.viewport,
             env.dark_mode,
-        );
+        )
+        .filter(|s| *s != inherited);
         let style = match (own, &parent) {
             (Some(s), _) => Some(Arc::new(s)),
             (None, Some(p)) => Some(Arc::new(highlight_inherited_style(p))),
@@ -454,10 +457,24 @@ fn chain_style(
     parent
 }
 
+/// A stand-in for the originating element's computed style, from the two values of its
+/// computed-style snapshot the highlight cascade needs: the text colour and the font size.
+/// Anything missing or unparsable stays at its initial value.
+pub fn originating_base(color: Option<&str>, font_size: Option<&str>) -> ComputedStyle {
+    let mut base = ComputedStyle::root();
+    if let Some(c) = color.and_then(crate::style::parse_color) {
+        base.color = c;
+    }
+    if let Some(px) = font_size.and_then(|v| v.trim().strip_suffix("px")).and_then(|v| v.trim().parse::<f32>().ok()) {
+        base.font_size = px;
+    }
+    base
+}
+
 /// Computed style of the `pseudo` highlight pseudo-element of `element` — what
 /// `getComputedStyle(element, "::selection")` and its siblings read. `None` when no rule
-/// of the chain styles it. The text's own style is not known here, so unset inherited
-/// properties come from the initial values.
+/// of the chain styles it. `base` is the element's own style ([`originating_base`]): the
+/// font and lengths of the chain, and the colour a highlight that declares none keeps.
 pub fn compute_highlight_style(
     doc: &Document,
     sheet: &Stylesheet,
@@ -465,10 +482,10 @@ pub fn compute_highlight_style(
     dark_mode: bool,
     element: NodeId,
     pseudo: &str,
+    base: &ComputedStyle,
 ) -> Option<ComputedStyle> {
     let env = HighlightEnv { doc, sheet, viewport, dark_mode, measurer: &NoMeasure };
-    let base = ComputedStyle::root();
-    let mut style = chain_style(&env, pseudo, element, &base, &mut StyleMemo::new()).map(|s| (*s).clone())?;
+    let mut style = chain_style(&env, pseudo, element, base, &mut StyleMemo::new()).map(|s| (*s).clone())?;
     if style.color == UNDECLARED_COLOR {
         style.color = base.color;
     }

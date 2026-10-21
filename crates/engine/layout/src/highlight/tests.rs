@@ -196,7 +196,8 @@ fn computed_highlight_style_per_pseudo() {
     );
     let el = element(&doc, "div");
     let vp = Size::new(800.0, 600.0);
-    let get = |pseudo: &str| compute_highlight_style(&doc, &sheet, vp, false, el, pseudo);
+    let base = originating_base(Some("rgb(0, 128, 0)"), Some("20px"));
+    let get = |pseudo: &str| compute_highlight_style(&doc, &sheet, vp, false, el, pseudo, &base);
     let sel = get("selection").expect("selection");
     assert_eq!(sel.color, Color { r: 0, g: 255, b: 0, a: 255 });
     assert!(sel.background_color.is_some());
@@ -233,4 +234,54 @@ fn preserved_whitespace_is_not_collapsed() {
     let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(t, 3), end: pos(t, 4) }]).expect("highlights");
     let pieces = hl.pieces(first_frag(&root).unwrap()).unwrap();
     assert_eq!(pieces.iter().find(|p| !p.looks.is_empty()).map(|p| p.bytes.clone()), Some(3..4));
+}
+
+/// Adjacent text nodes of one fragment: the space that joins them is highlighted with them,
+/// and the pieces abut.
+#[test]
+fn join_space_between_nodes_is_highlighted() {
+    let (doc, sheet, root) = setup("<body><span>One </span><span>two </span><span>three</span></body>", "");
+    let body = element(&doc, "body");
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(body, 0), end: pos(body, 2) }]).expect("highlights");
+    let pieces = hl.pieces(first_frag(&root).unwrap()).unwrap();
+    let lit: Vec<_> = pieces.iter().filter(|p| !p.looks.is_empty()).collect();
+    assert_eq!(lit.iter().map(|p| p.bytes.len()).sum::<usize>(), "One two ".len(), "{pieces:?}");
+    for w in lit.windows(2) {
+        assert!((w[0].x + w[0].width - w[1].x).abs() < 0.01, "a hole between {:?} and {:?}", w[0], w[1]);
+    }
+    assert!(pieces.last().unwrap().looks.is_empty(), "\"three\" is not selected");
+}
+
+/// A `::selection` rule with no valid declaration is ignored: the UA background stays.
+#[test]
+fn invalid_declaration_block_keeps_the_ua_default() {
+    let (doc, sheet, root) = setup("<body><p>quick</p></body>", "p::selection{foo:bar}");
+    let t = text_node(&doc, "quick");
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(t, 0), end: pos(t, 5) }]).expect("highlights");
+    let look = &hl.pieces(first_frag(&root).unwrap()).unwrap()[0].looks[0];
+    assert_eq!(look.background, Some(UA_SELECTION_BACKGROUND));
+}
+
+/// A highlight that declares no `color` reports the originating element's own.
+#[test]
+fn undeclared_colour_is_the_originating_one() {
+    let (doc, sheet, _) = setup("<body><main id=m>x</main></body>", ":root::selection{background-color:lime}");
+    let el = element(&doc, "main");
+    let base = originating_base(Some("rgb(0, 128, 0)"), None);
+    let s = compute_highlight_style(&doc, &sheet, Size::new(800.0, 600.0), false, el, "selection", &base).expect("selection");
+    assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+}
+
+/// `var()` in a highlight reads the originating element's custom properties, not the ones a
+/// parent highlight declared (highlight-cascade-008).
+#[test]
+fn var_resolves_against_the_originating_element() {
+    let (doc, sheet, root) = setup(
+        "<body><div>text</div></body>",
+        ":root{--c:green} :root::selection{--c:cyan} div::selection{background-color:var(--c,red)}",
+    );
+    let t = text_node(&doc, "text");
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(t, 0), end: pos(t, 4) }]).expect("highlights");
+    let look = &hl.pieces(first_frag(&root).unwrap()).unwrap()[0].looks[0];
+    assert_eq!(look.background, Some(Color { r: 0, g: 128, b: 0, a: 255 }));
 }

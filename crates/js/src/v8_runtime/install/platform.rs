@@ -1181,7 +1181,16 @@ fn highlight_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<
     if !doc.contains_id(node) {
         return None;
     }
-    let style = lumen_layout::compute_highlight_style(&doc, &sheet, lumen_core::geom::Size::new(w, h), false, node, kind)?;
+    // The element's own colour and font size, from the cascade snapshot: what a highlight
+    // that declares neither inherits.
+    let base = {
+        let styles = flush.computed_styles.lock().ok()?;
+        let own = styles.get(&nid);
+        let get = |p: &str| own.and_then(|m| m.get(p)).map(String::as_str);
+        lumen_layout::originating_base(get("color"), get("font-size"))
+    };
+    let style =
+        lumen_layout::compute_highlight_style(&doc, &sheet, lumen_core::geom::Size::new(w, h), false, node, kind, &base)?;
     Some(lumen_layout::computed_style_to_map(&style))
 }
 

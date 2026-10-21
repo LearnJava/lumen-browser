@@ -127,7 +127,7 @@ fn emit_text_frags(
             continue;
         }
 
-        let geo = FragGeometry { container_x, container_width, line_y, line_h, frag_y };
+        let geo = FragGeometry { container_x, container_width, line_h, frag_y };
         match highlights.as_deref().and_then(|h| h.pieces(frag)) {
             Some(pieces) => super::highlight_paint::emit_highlighted_frag(out, frag, pieces, &geo),
             None => emit_frag_text(out, frag, &geo, TextParts::ALL),
@@ -139,7 +139,6 @@ fn emit_text_frags(
 pub(super) struct FragGeometry {
     pub(super) container_x: f32,
     pub(super) container_width: f32,
-    pub(super) line_y: f32,
     pub(super) line_h: f32,
     pub(super) frag_y: f32,
 }
