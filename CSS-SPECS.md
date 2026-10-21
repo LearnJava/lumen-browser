@@ -377,6 +377,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Nested rules `&` | ✅ | parse-time expansion: `& sel`, `& > sel`, `& + sel`, `& ~ sel`, `&.cls`; multi-parent + deep nesting |
+| `&` в любой позиции цепочки, голый тип, top-level `&` | ✅ | `.t &`, `.t > &`, `.r&`, `:not(&)`, `& + &` — `&` подставляется `:is(<родитель>)` (`nesting_amp.rs`); вложенный `i {}` — потомок; `&` вне вложения и в `selector(&)` — `:where(:scope)` (BUG-1445, P3 2026-10-21) |
 | `@nest` (legacy) | ✅ | `@nest <selector-list> { … }` inside a style rule: `&` substituted by the parent in any position (`@nest .dark & {}`, `&.on`), parent is `:is(…)` unless it is a single tail-less compound; a complex selector without `&` invalidates the whole rule; nested `@nest`/`&`/at-rules inside work (`Parser::parse_legacy_nest_rule`, css-parser); 5 tests; P4 2026-10-03 |
 
 ### [T1] Table Layout
