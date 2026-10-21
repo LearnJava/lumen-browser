@@ -726,6 +726,15 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // BUG-1430: specified value of a number / time / angle property whose whole value is one
+    // math function. `""` — untouched, `"!"` — drop the assignment, else the stored form.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_math",
+        |prop: String, value: String| -> String {
+            lumen_layout::style::canonical_specified_numeric_math(&prop, &value)
+        }
+    );
+
     // Canonical `<line-width>` serialization for inline-`style`
     // border-*-width longhands (CSS Backgrounds L3 §4.2, CSSOM-2/BUG-484
     // second slice) — same role as `_lumen_css_canonical_length` above, but
