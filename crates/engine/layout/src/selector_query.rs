@@ -496,6 +496,25 @@ pub(crate) fn px_str(v: f32) -> String {
     }
 }
 
+/// Computed-value text of `abs px + pct × 100%` when the percentage part is non-zero
+/// (`110%`, `calc(-15% + 10px)`); `None` for a plain length. Same term order as CSS Values 4
+/// §10.10: percentage first.
+fn length_percentage_css(abs_px: f32, pct: f32) -> Option<String> {
+    let round = |v: f32| (v * 1000.0).round() / 1000.0;
+    let pct = round(pct * 100.0);
+    if pct == 0.0 {
+        return None;
+    }
+    let abs = round(abs_px);
+    Some(if abs == 0.0 {
+        format!("{}%", number_str(pct))
+    } else if abs < 0.0 {
+        format!("calc({}% - {})", number_str(pct), px_str(-abs))
+    } else {
+        format!("calc({}% + {})", number_str(pct), px_str(abs))
+    })
+}
+
 /// Serialises one `aspect-ratio` ratio component as a bare CSS `<number>`
 /// (no unit) — omits the decimal point for whole-number values, matching
 /// `test_computed_value("aspect-ratio", …)`'s expected `"auto W / H"` form.
@@ -1394,6 +1413,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // the *used* value (already zoom-scaled on the real UA too), not the computed
     // one.
     let z = style.effective_zoom;
+    // BUG-1438: `letter_spacing` already holds `abs + pct * font_size`; the computed value
+    // keeps the `%` share symbolic, so split it off before the zoom is divided out.
+    let letter_spacing_abs = (style.letter_spacing - style.letter_spacing_pct * style.font_size)
+        / if z > 0.0 { z } else { 1.0 };
     // BUG-1592: radii, shadows, outline, flex-basis, transform offsets etc. are scaled
     // by `scale_visual_lengths`; report them as if `zoom` were not applied.
     let unzoomed;
@@ -1641,8 +1664,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         } else if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
     });
     // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
-    m.insert("letter-spacing".into(), if style.letter_spacing == 0.0 { "normal".into() } else { px_str(style.letter_spacing) });
-    m.insert("word-spacing".into(), px_str(style.word_spacing + style.word_spacing_pct * 0.5 * style.font_size));
+    // CSS Text L4: a `<percentage>` stays a percentage in the computed value (`110%`,
+    // `calc(-15% + 10px)`), it is only resolved against the font in layout.
+    m.insert("letter-spacing".into(), match length_percentage_css(letter_spacing_abs, style.letter_spacing_pct) {
+        Some(css) => css,
+        None if style.letter_spacing == 0.0 => "normal".into(),
+        None => px_str(style.letter_spacing),
+    });
+    m.insert("word-spacing".into(), length_percentage_css(style.word_spacing, style.word_spacing_pct)
+        .unwrap_or_else(|| px_str(style.word_spacing)));
     m.insert("text-align".into(), match style.text_align {
         TextAlign::Start => "start",
         TextAlign::End => "end",
@@ -2709,6 +2739,52 @@ mod tests {
         assert_eq!(get("#m", "text-align").as_deref(), Some("center"));
         assert_eq!(get("#r", "tab-size").as_deref(), Some("10px"));
         assert_eq!(get("#r", "letter-spacing").as_deref(), Some("normal"));
+    }
+
+    /// BUG-1438: a percentage in `letter-spacing`/`word-spacing` stays a percentage in the
+    /// computed value, and a number-valued `calc()` in `tab-size` is evaluated.
+    #[test]
+    fn percent_spacing_and_calc_tab_size_are_computed() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="c"><div id="a">x</div><div id="b">x</div><div id="d" style="letter-spacing: calc(10px - (5% + 10%)">x</div><div id="w" style="word-spacing: calc(10px - (5% + 10%)">x</div><div id="e">x</div><div id="f">x</div><div id="g">x</div><div id="h">x</div><div id="k">x</div></div>"#,
+            "#c { container-type: inline-size; width: 100px } #c div { font-size: 40px }
+             #a { letter-spacing: 110%; word-spacing: 110% }
+             #b { letter-spacing: calc(10% - 20%); word-spacing: calc(10% - 20%) }
+             #e { tab-size: calc(10 + (sign(2px - 10px) * 5)) }
+             #f { tab-size: calc(10px + (sign(2px - 10px) * 5px)) }
+             #g { letter-spacing: 10%; word-spacing: 0 }
+             #h { letter-spacing: calc(10px - 0.5em) }
+             #k { tab-size: calc(10px + 0.5em) }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#a", "letter-spacing").as_deref(), Some("110%"));
+        assert_eq!(get("#a", "word-spacing").as_deref(), Some("110%"));
+        assert_eq!(get("#b", "letter-spacing").as_deref(), Some("-10%"));
+        assert_eq!(get("#b", "word-spacing").as_deref(), Some("-10%"));
+        assert_eq!(get("#d", "letter-spacing").as_deref(), Some("calc(-15% + 10px)"));
+        assert_eq!(get("#w", "word-spacing").as_deref(), Some("calc(-15% + 10px)"));
+        assert_eq!(get("#e", "tab-size").as_deref(), Some("5"));
+        assert_eq!(get("#f", "tab-size").as_deref(), Some("5px"));
+        assert_eq!(get("#h", "letter-spacing").as_deref(), Some("-10px"));
+        assert_eq!(get("#k", "tab-size").as_deref(), Some("30px"));
+        // The share is resolved against the element's own font-size in layout: 10% of 40px.
+        let g = find_box_by_selector(&tree, &doc, "#g").expect("box");
+        assert!((g.style.letter_spacing - 4.0).abs() < 0.01, "{}", g.style.letter_spacing);
+    }
+
+    /// BUG-1438: the `%` share of an inherited `letter-spacing` follows the heir's font-size.
+    #[test]
+    fn inherited_percent_letter_spacing_follows_font_size() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="p"><div id="s">x</div></div>"#,
+            "#p { font-size: 20px; letter-spacing: 10% } #s { font-size: 10px }",
+        );
+        let ls = |sel: &str| find_box_by_selector(&tree, &doc, sel).expect("box").style.letter_spacing;
+        assert!((ls("#p") - 2.0).abs() < 0.01, "{}", ls("#p"));
+        assert!((ls("#s") - 1.0).abs() < 0.01, "{}", ls("#s"));
     }
 
     /// BUG-1437: `initial`/`inherit`/`unset` reset the whole value of `tab-size`, `text-indent`

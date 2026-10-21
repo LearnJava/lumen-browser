@@ -478,9 +478,12 @@ use super::*;
     }
 
     #[test]
-    fn calc_unbalanced_paren_invalid() {
-        assert!(parse_length("calc(10px + 5px").is_none());
-        assert!(parse_length("calc((10px + 5px)").is_none());
+    fn calc_unbalanced_paren_closed_at_end_of_value() {
+        // CSS Syntax L3 §5.4.7: a function open at EOF is closed there (BUG-1438).
+        assert!(parse_length("calc(10px + 5px").is_some());
+        assert!(parse_length("calc((10px + 5px)").is_some());
+        // A stray `)` is still an error.
+        assert!(parse_length("calc(10px + 5px))").is_none());
     }
 
     #[test]
@@ -607,7 +610,8 @@ use super::*;
 
     #[test]
     fn calc_canon_invalid_still_rejected() {
-        assert_eq!(canonical_specified_length("calc(10px + 5px", false, false), None);
+        assert_eq!(canonical_specified_length("calc(10px + 5px))", false, false), None);
+        assert_eq!(canonical_specified_length("calc(10px + )", false, false), None);
     }
 
     // ──────────────── CSS Values L4 §10.6: min() / max() / clamp() ────────────────

@@ -641,6 +641,20 @@ pub(in crate::style) fn looks_like_function_call(s: &str) -> bool {
 /// `Length::Calc`. Возвращает None, если разбор не удался — `parse_length`
 /// тогда падает в обычную strip_suffix-ветку.
 pub(in crate::style) fn parse_math_function_value(s: &str) -> Option<Length> {
+    // CSS Syntax L3 §5.4.7: a function still open at the end of the value is closed
+    // there (`calc(10px - (5% + 10%)` ≡ `calc(10px - (5% + 10%))`, BUG-1438).
+    let depth = s.bytes().fold(0i32, |d, b| match b {
+        b'(' => d + 1,
+        b')' => d - 1,
+        _ => d,
+    });
+    let closed;
+    let s = if depth > 0 {
+        closed = format!("{s}{}", ")".repeat(depth as usize));
+        closed.as_str()
+    } else {
+        s
+    };
     let tokens = tokenize_calc(s)?;
     let mut pos = 0usize;
     let node = parse_calc_expr(&tokens, &mut pos)?;

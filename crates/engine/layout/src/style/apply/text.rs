@@ -394,14 +394,19 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "letter-spacing" => {
-            // CSS Text L3 §11.2: normal (= 0) | <length>. `%` не валиден.
+            // CSS Text L4 §11.2: normal (= 0) | <length-percentage>. `%` — доля `font-size`
+            // самого элемента: храним отдельно (`letter_spacing_pct`), в `letter_spacing`
+            // её дописывает конец каскада; для calc() разделяем линейно базой 0 и 1.
             // Резолвим сразу — em_basis уже известен на каскаде.
             if val.trim() == "normal" {
                 style.letter_spacing = 0.0;
+                style.letter_spacing_pct = 0.0;
             } else if let Some(len) = parse_length_q(val, is_quirks)
-                && let Some(px) = len.resolve(em_basis, None, viewport)
+                && let Some(base) = len.resolve(em_basis, Some(0.0), viewport)
             {
-                style.letter_spacing = px;
+                let unit = len.resolve(em_basis, Some(1.0), viewport).unwrap_or(base);
+                style.letter_spacing = base;
+                style.letter_spacing_pct = unit - base;
             }
         }
         "word-spacing" => {

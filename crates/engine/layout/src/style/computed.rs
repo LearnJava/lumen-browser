@@ -232,6 +232,10 @@ pub struct ComputedStyle {
     /// отрицательным (сжимает текст). Применяется в wrap_inline_run при
     /// расчёте ширин.
     pub letter_spacing: f32,
+    /// Процентная часть `letter-spacing` (доля `font-size` элемента; 0.1 = 10%, BUG-1438).
+    /// `letter_spacing` уже включает её (`abs + pct * font_size`, дописывается в конце каскада);
+    /// потомок пересчитывает долю от своего `font-size`.
+    pub letter_spacing_pct: f32,
     /// CSS Text L3 §11.3: дополнительное расстояние **между словами**
     /// (resolved px). Inherited. В отличие от `letter-spacing`, добавляется
     /// только на word-boundary, не между всеми символами. Может быть
@@ -1312,6 +1316,7 @@ impl ComputedStyle {
             && self.font_stretch == other.font_stretch
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
+            && (self.letter_spacing_pct - other.letter_spacing_pct).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && (self.word_spacing_pct - other.word_spacing_pct).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
@@ -1371,6 +1376,7 @@ impl ComputedStyle {
             white_space_collapse: WhiteSpaceCollapse::Collapse,
             text_indent: Length::Px(0.0),
             letter_spacing: 0.0,
+            letter_spacing_pct: 0.0,
             word_spacing: 0.0,
             word_spacing_pct: 0.0,
             text_decoration_line: TextDecorationLine::default(),
@@ -1771,6 +1777,7 @@ impl ComputedStyle {
             white_space_collapse: inherited.white_space_collapse,
             text_indent: inherited.text_indent.clone(),
             letter_spacing: inherited.letter_spacing,
+            letter_spacing_pct: inherited.letter_spacing_pct,
             word_spacing: inherited.word_spacing,
             word_spacing_pct: inherited.word_spacing_pct,
             text_decoration_line: inherited.text_decoration_line,

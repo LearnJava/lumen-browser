@@ -275,6 +275,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.white_space_collapse = parent.white_space_collapse;
     style.text_indent = parent.text_indent.clone();
     style.letter_spacing = parent.letter_spacing;
+    style.letter_spacing_pct = parent.letter_spacing_pct;
     style.word_spacing = parent.word_spacing;
     style.word_spacing_pct = parent.word_spacing_pct;
     style.text_decoration_line = parent.text_decoration_line;

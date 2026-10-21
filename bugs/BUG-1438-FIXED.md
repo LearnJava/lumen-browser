@@ -1,6 +1,6 @@
 # BUG-1438 — проценты в `letter-spacing`/`word-spacing` и числовой `calc()` в `tab-size` не представимы в `ComputedStyle`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P6, остаток [BUG-1325](BUG-1325-FIXED.md))
 **Область:** layout (`crates/engine/layout/src/style/apply/text.rs` — ветки `letter-spacing`, `word-spacing`, `tab-size`; поля `ComputedStyle::{letter_spacing, word_spacing, tab_size}`)
 
@@ -26,3 +26,12 @@ WPT: `css/css-text/parsing/letter-spacing-computed.html` (4), `word-spacing-comp
 ## Как проверить
 
 `run_report.py --all --root css/css-text/parsing --recursive` (`letter-spacing-computed`, `word-spacing-computed`, `tab-size-computed`).
+
+## Исправление (2026-10-21)
+
+- `letter-spacing: <percentage>` — доля `font-size` самого элемента (CSS Text L4 §11.2): `ComputedStyle::letter_spacing_pct`; `letter_spacing` по-прежнему готовые px (`abs + pct * font_size`), доля дописывается в конце каскада (`cascade.rs`, после zoom), потомок пересчитывает её от своего `font-size` (в наследуемом значении долю вычитают после пре-пасса `font-size`).
+- `getComputedStyle()` (`selector_query.rs::length_percentage_css`) отдаёт процентную часть символически: `110%`, `-10%`, `calc(-15% + 10px)` — для `letter-spacing` и `word-spacing`.
+- Функция, не закрытая к концу значения, закрывается там (CSS Syntax L3 §5.4.7): `calc(10px - (5% + 10%)` ≡ `calc(10px - (5% + 10%))` (`style/calc.rs::parse_math_function_value`).
+- Числовой `calc()` в `tab-size` без `cq*` уже вычислялся (BUG-1430), покрыт тестом.
+
+Остаток: `cq*` в `tab-size` (2 сабтеста `tab-size-computed`) — [BUG-1664](BUG-1664-OPEN.md).

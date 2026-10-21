@@ -368,7 +368,14 @@ fn apply_css_wide_keyword_with(
             style.text_extra.indent_each_line = src.text_extra.indent_each_line;
         }
         "letter-spacing" => {
-            style.letter_spacing = if inh { inherited.letter_spacing } else { init.letter_spacing };
+            // BUG-1438: the inherited value carries the parent's `%` share; it is re-added in
+            // the cascade epilogue against this element's `font-size`.
+            style.letter_spacing = if inh {
+                inherited.letter_spacing - inherited.letter_spacing_pct * inherited.font_size
+            } else {
+                init.letter_spacing
+            };
+            style.letter_spacing_pct = if inh { inherited.letter_spacing_pct } else { init.letter_spacing_pct };
         }
         "word-spacing" => {
             style.word_spacing = if inh { inherited.word_spacing } else { init.word_spacing };

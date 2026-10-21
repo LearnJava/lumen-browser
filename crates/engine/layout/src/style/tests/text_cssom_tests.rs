@@ -25,6 +25,8 @@
             assert_eq!(canon(prop, "-10px").as_deref(), Some("-10px"));
             assert_eq!(canon(prop, "120%").as_deref(), Some("120%"));
             assert_eq!(canon(prop, "calc(2ch - 30%)").as_deref(), Some("calc(-30% + 2ch)"));
+            // A function still open at the end of the value is closed there (BUG-1438).
+            assert!(canon(prop, "calc(10px - (5% + 10%)").is_some(), "{prop}: unclosed calc()");
             for bad in ["auto", "20", "normal 10px", "10% 10px"] {
                 assert!(canon(prop, bad).is_none(), "{prop}: {bad:?} должно быть отклонено");
             }
