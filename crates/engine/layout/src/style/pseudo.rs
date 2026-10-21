@@ -50,6 +50,8 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::Marker => "marker",
         PseudoElementKind::Selection => "selection",
         PseudoElementKind::TargetText => "target-text",
+        PseudoElementKind::SpellingError => "spelling-error",
+        PseudoElementKind::GrammarError => "grammar-error",
         PseudoElementKind::Placeholder => "placeholder",
         PseudoElementKind::Highlight(_) => "highlight",
         PseudoElementKind::Picker(_) => "picker",
@@ -78,6 +80,16 @@ fn split_pseudo_request(pseudo: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// True for the highlight pseudo-elements (CSS Pseudo-Elements L4 §3): `selection`,
+/// `target-text`, `spelling-error`, `grammar-error` and `highlight(<name>)`. They style
+/// a stretch of text, generate no box and need no `content`.
+pub fn is_highlight_pseudo(pseudo: &str) -> bool {
+    let base = split_pseudo_request(pseudo).0;
+    ["selection", "target-text", "spelling-error", "grammar-error", "highlight"]
+        .iter()
+        .any(|n| base.eq_ignore_ascii_case(n))
+}
+
 /// Helper: check if a pseudo-element name matches a PseudoElementKind.
 ///
 /// `name` is either a bare name (`"before"`) or, for the `::view-transition-*`
@@ -98,6 +110,11 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
             None => true,
             Some(w) => dir == "*" || w.split('|').any(|alias| alias == dir),
         };
+    }
+    // `::highlight(<name>)` (CSS Custom Highlight API L1 §3.1): a `<custom-ident>`,
+    // case-sensitive; a bare `"highlight"` request matches any name.
+    if let PseudoElementKind::Highlight(own) = kind {
+        return wanted.is_none_or(|w| own == w);
     }
     let own = match kind {
         PseudoElementKind::ViewTransitionGroup(a)
@@ -185,6 +202,12 @@ fn marker_property_applies(prop: &str) -> bool {
 /// on *every* node to keep `quotes` nesting continuous (1656 calls per chrome
 /// layout pass), and `apply_webkit_scrollbar_pseudos` adds three more per
 /// element.
+/// The style of a highlight pseudo-element that matches no rule of its own: what it
+/// inherits from the highlight of the parent element (CSS Pseudo-Elements L4 §3.3).
+pub(crate) fn highlight_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
+    pseudo_inherited_style(parent)
+}
+
 fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     #[cfg(test)]
     PSEUDO_BASE_BUILDS.with(|c| c.set(c.get() + 1));
@@ -608,8 +631,7 @@ fn compute_pseudo_element_style_inner(
     if pseudo.eq_ignore_ascii_case("first-letter")
         || pseudo.eq_ignore_ascii_case("scroll-marker-group")
         || pseudo.eq_ignore_ascii_case("first-line")
-        || pseudo.eq_ignore_ascii_case("selection")
-        || pseudo.eq_ignore_ascii_case("target-text")
+        || is_highlight_pseudo(pseudo)
         || pseudo.eq_ignore_ascii_case("placeholder")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-thumb")

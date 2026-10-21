@@ -299,7 +299,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `::before`, `::after` | ✅ | block-level ✅; inline ✅ (display:inline/inline-block in IFC) |
 | `::first-line`, `::first-letter` | ✅ | parsed + `compute_pseudo_element_style`; segment style-override wired (`apply_first_letter_pseudo`/`apply_first_letter_style`, box_tree.rs:1664-1995) |
 | `::marker` | ✅ | per-rule box styling ✅ (color/font/content override + content:none suppress); list-style-image ✅; property set restricted to §5.5 (font/color/white-space/direction/unicode-bidi/text-combine-upright/content/animation) |
-| `::selection` | 🟡 | parsed; live selection highlight application ⬜ (Selection API, P3) |
+| `::selection`, `::target-text`, `::spelling-error`, `::grammar-error`, `::highlight()` | 🟡 | HIGHLIGHT-PAINT (2026-10-21): parsed + cascade with highlight inheritance (`layout/src/highlight.rs`), `getComputedStyle(el, '::…')`; painted over the selected/covered text (background, `color`, `text-shadow`, decorations) in the headless raster; live window — `::selection` background only |
 | `::placeholder` | ✅ | `PseudoElementKind::Placeholder` (style.rs:7221, p4-placeholder-pseudo) |
 | `:nth-child(An+B of S)` | ✅ | "of S" filter via `element_index_filtered`, style.rs:7664 |
 
@@ -499,7 +499,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `::first-line` / `::first-letter` | ✅ | line split done — drop-cap float + `apply_first_letter_pseudo` (WQ#15) |
 | `::marker` | ✅ | `MarkerBox` in `box_tree.rs` (WQ#16); see the T0 Selectors row for the restricted property set |
 | `::placeholder` | ✅ | input placeholder (p4-placeholder-pseudo) |
-| `::selection` | ⬜ | text selection highlight |
+| `::selection` | 🟡 | text selection highlight — headless raster full (HIGHLIGHT-PAINT), live window background only |
 
 ### [T2] Backgrounds & Images
 

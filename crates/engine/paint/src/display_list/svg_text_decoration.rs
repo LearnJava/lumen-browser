@@ -271,7 +271,7 @@ fn emit_svg_pattern_tiles(cmds: &mut DisplayList, pat: &SvgPatternDef, opacity: 
                     cmds.push(DisplayCommand::PushClipRect { rect: clip });
                 }
                 for content_box in &content {
-                    walk(content_box, cmds, 1.0, None);
+                    walk(content_box, cmds, 1.0);
                 }
                 if clipped {
                     cmds.push(DisplayCommand::PopClip);
@@ -285,7 +285,7 @@ fn emit_svg_pattern_tiles(cmds: &mut DisplayList, pat: &SvgPatternDef, opacity: 
                 cmds.push(DisplayCommand::PushTransform { matrix: m4(content_m) });
             }
             for content_box in pat.content.iter() {
-                walk(content_box, cmds, 1.0, None);
+                walk(content_box, cmds, 1.0);
             }
             if fitted {
                 cmds.push(DisplayCommand::PopTransform);
@@ -323,7 +323,6 @@ pub(crate) fn emit_svg_shape_masked(
     mask: &lumen_layout::SvgMaskContent,
     out: &mut DisplayList,
     dpr: f32,
-    sel: Option<&SelectionHighlight>,
 ) {
     // `lumen_layout::MaskMode` and `display_list::MaskMode` are distinct types
     // (the paint crate's own copy predates `lumen-layout`'s CSS `mask-mode`
@@ -337,7 +336,7 @@ pub(crate) fn emit_svg_shape_masked(
     emit_svg_shape(b, shape, out);
     out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode });
     for content_box in &mask.content {
-        walk(content_box, out, dpr, sel);
+        walk(content_box, out, dpr);
     }
     out.push(DisplayCommand::PopMaskLayer);
     out.push(DisplayCommand::PopOpacity);
@@ -1255,11 +1254,11 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
         }
         BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, None, dpr, out);
+            emit_inline_run(b, lines, dpr, out);
         }
         // Image and other kinds: no compositor-offloadable properties, delegate to walk.
         _ => {
-            walk(b, out, dpr, None);
+            walk(b, out, dpr);
         }
     }
     if is_fixed {

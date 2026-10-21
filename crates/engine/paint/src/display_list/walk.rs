@@ -14,7 +14,6 @@ pub(crate) fn emit_box_self(
     b: &LayoutBox,
     out: &mut Vec<DisplayCommand>,
     dpr: f32,
-    sel: Option<&SelectionHighlight>,
     ov: Option<&CompositorOverride>,
 ) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
@@ -72,7 +71,7 @@ pub(crate) fn emit_box_self(
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, sel, dpr, out);
+            emit_inline_run(b, lines, dpr, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace | BoxKind::Contents => {}
         BoxKind::Marker { .. } => {
@@ -408,7 +407,7 @@ pub(crate) fn emit_box_self(
         BoxKind::SvgShape { shape, svg_mask, .. } => {
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
-                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
+                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr),
                 None => emit_svg_shape(b, shape, out),
             }
             pop_clip_layers(clip_layers, out);
@@ -1004,7 +1003,7 @@ enum WalkOutcome<'a> {
 /// handful of native frames per transition, same accepted shape as
 /// `lumen-layout`'s table trampoline calling into the block-flow trampoline
 /// for `<table>`-in-`<td>` (out of scope for this срез).
-fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
+fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32) {
     let mut current = frame;
     let mut stack: Vec<Box<Frame<'a>>> = Vec::new();
     loop {
@@ -1020,7 +1019,7 @@ fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&
         }
         let child = current.children[current.next_idx];
         current.next_idx += 1;
-        match dispatch(child, current.in_fixed_cb, out, dpr, sel) {
+        match dispatch(child, current.in_fixed_cb, out, dpr) {
             WalkOutcome::Done => {}
             WalkOutcome::NeedsLoop(child_frame) => {
                 stack.push(current);
@@ -1124,9 +1123,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
 /// where `walk` used to recurse into `b`'s children to [`dispatch`]; [`run`]
 /// then drives that (and every further non-tail-recursive container it
 /// meets) on an explicit heap stack instead.
-pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
-    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr, sel) {
-        run(frame, out, dpr, sel);
+pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
+    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr) {
+        run(frame, out, dpr);
     }
 }
 
@@ -1141,7 +1140,6 @@ fn dispatch<'a>(
     in_fixed_cb: bool,
     out: &mut DisplayList,
     dpr: f32,
-    sel: Option<&SelectionHighlight>,
 ) -> WalkOutcome<'a> {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
@@ -1482,7 +1480,7 @@ fn dispatch<'a>(
             emit_list_marker(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, sel, dpr, out);
+            emit_inline_run(b, lines, dpr, out);
         }
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
@@ -1767,7 +1765,7 @@ fn dispatch<'a>(
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
-                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
+                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr),
                 None => emit_svg_shape(b, shape, out),
             }
             pop_clip_layers(clip_layers, out);

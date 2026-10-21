@@ -211,6 +211,100 @@ pub(crate) fn paint_ordered_in(layout: &lumen_layout::LayoutBox, viewport: lumen
     lumen_paint::with_fixed_background_viewport(viewport, || paint_ordered(layout))
 }
 
+/// One entry of `CSS.highlights` (CSS Custom Highlight API L1): the ranges of a `Highlight`
+/// object under the name `::highlight(<name>)` styles it by.
+pub(crate) struct CustomHighlight {
+    pub(crate) name: String,
+    /// Stacking rank among the highlights: `spelling-error` below `grammar-error` below a
+    /// plain `highlight` (§3.1), then `Highlight.priority`, then registration order.
+    sort_key: (u8, i32, usize),
+    pub(crate) ranges: Vec<lumen_dom::Range>,
+}
+
+/// Reads the page's `CSS.highlights` registry. Empty when the page has no JS, never
+/// touched the Highlight API or the read fails — a highlight is cosmetic, never an error.
+pub(crate) fn custom_highlights(js: Option<&dyn crate::persistent_js::PersistentJs>) -> Vec<CustomHighlight> {
+    // `Range.__start_nid__`/`__start_off__`/… are what `getSelection().addRange` hands to
+    // `_lumen_set_selection`, i.e. already the DOM's own positions.
+    const READ: &str = "(function(){var out=[];try{if(typeof CSS==='undefined'||!CSS.highlights)return out;        var i=0;CSS.highlights.forEach(function(h,name){var rs=[];h.forEach(function(r){        var sn=r.__start_nid__,en=r.__end_nid__;if(sn==null||en==null)return;        rs.push([sn,r.__start_off__,en,r.__end_off__]);});        out.push({name:String(name),priority:h.priority|0,type:String(h.type),order:i++,ranges:rs});});}        catch(e){}return out;})()";
+    let Some(json) = js.and_then(|j| j.eval_js_value(READ).ok()) else { return Vec::new() };
+    let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&json) else { return Vec::new() };
+    let pos = |v: &serde_json::Value, i: usize| v.get(i).and_then(serde_json::Value::as_u64).map(|n| n as u32);
+    entries
+        .iter()
+        .filter_map(|e| {
+            let name = e.get("name")?.as_str()?.to_owned();
+            let rank = match e.get("type").and_then(serde_json::Value::as_str) {
+                Some("spelling-error") => 0,
+                Some("grammar-error") => 1,
+                _ => 2,
+            };
+            let priority = e.get("priority").and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+            let order = e.get("order").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+            let ranges = e
+                .get("ranges")?
+                .as_array()?
+                .iter()
+                .filter_map(|r| {
+                    let at = |c: usize, o: usize| {
+                        Some(lumen_dom::DomPosition {
+                            container: lumen_dom::NodeId::from_index(pos(r, c)? as usize),
+                            offset: pos(r, o)?,
+                        })
+                    };
+                    Some(lumen_dom::Range { start: at(0, 1)?, end: at(2, 3)? })
+                })
+                .collect();
+            Some(CustomHighlight { name, sort_key: (rank, priority, order), ranges })
+        })
+        .collect()
+}
+
+/// Highlights of the page — `CSS.highlights` entries under the document's selection —
+/// resolved against `layout`. `None` when nothing is highlighted, the common case, which
+/// costs one range read. The DOM selection is the JS `getSelection()` one and the mouse one.
+pub(crate) fn page_highlights(
+    layout: &lumen_layout::LayoutBox,
+    doc: &lumen_dom::Document,
+    sheet: &lumen_css_parser::Stylesheet,
+    viewport: lumen_core::geom::Size,
+    dark_mode: bool,
+    measurer: &dyn lumen_layout::TextMeasurer,
+    custom: &[CustomHighlight],
+) -> Option<Arc<lumen_layout::Highlights>> {
+    let selection: Vec<lumen_dom::Range> =
+        doc.get_selection().get_range().filter(|r| !r.is_collapsed()).into_iter().collect();
+    if selection.is_empty() && custom.iter().all(|c| c.ranges.iter().all(lumen_dom::Range::is_collapsed)) {
+        return None;
+    }
+    // Lowest layer first (CSS Pseudo-Elements L4 §3.6): custom highlights by their rank,
+    // then `::selection` on top.
+    let mut sorted: Vec<&CustomHighlight> = custom.iter().collect();
+    sorted.sort_by_key(|c| c.sort_key);
+    let pseudos: Vec<String> = sorted.iter().map(|c| format!("highlight({})", c.name)).collect();
+    let mut layers: Vec<lumen_layout::HighlightLayer<'_>> = sorted
+        .iter()
+        .zip(&pseudos)
+        .map(|(c, pseudo)| lumen_layout::HighlightLayer { pseudo, ranges: &c.ranges, ua_background: None })
+        .collect();
+    layers.push(lumen_layout::HighlightLayer {
+        pseudo: "selection",
+        ranges: &selection,
+        ua_background: Some(lumen_layout::UA_SELECTION_BACKGROUND),
+    });
+    let env = lumen_layout::HighlightEnv { doc, sheet, viewport, dark_mode, measurer };
+    lumen_layout::resolve_highlights(layout, &env, &layers).map(Arc::new)
+}
+
+/// [`paint_ordered_in`] with `highlights` painted over the text they cover.
+pub(crate) fn paint_ordered_in_highlighted(
+    layout: &lumen_layout::LayoutBox,
+    viewport: lumen_core::geom::Size,
+    highlights: Option<Arc<lumen_layout::Highlights>>,
+) -> DisplayList {
+    lumen_paint::with_highlights(highlights, || paint_ordered_in(layout, viewport))
+}
+
 /// Следующая версия display list-а; `0` пропускается — он зарезервирован за
 /// «версия неизвестна» (BUG-405 срез 39).
 pub(crate) fn next_dl_epoch(cur: u64) -> u64 {

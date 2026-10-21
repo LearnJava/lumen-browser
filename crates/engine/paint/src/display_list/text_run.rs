@@ -81,23 +81,17 @@ fn emit_text_emphasis_marks(
 
 /// Emits shadow + DrawText + decorations for every visible frag in `line`.
 ///
-/// When `sel` is `Some`, fragments that overlap the active selection range
-/// receive a `FillRect` highlight background before the text, and optionally
-/// have their text colour overridden by `sel.fg_color` (CSS Pseudo-elements
-/// L4 §5.6 `::selection`).
-///
-/// Phase 0 limitation: selection pixel bounds are estimated proportionally
-/// by byte offset, which is accurate for ASCII but approximate for non-ASCII.
-/// Per-glyph accuracy requires a `TextMeasurer` which is not available here.
+/// A fragment a highlight (`::selection`, …) touches goes through
+/// [`emit_highlighted_frag`] instead — see `lumen_layout::Highlights`.
 fn emit_text_frags(
     line: &[InlineFrag],
     container_x: f32,
     container_width: f32,
     line_y: f32,
     line_h: f32,
-    sel: Option<&SelectionHighlight>,
     out: &mut Vec<DisplayCommand>,
 ) {
+    let highlights = super::highlight_paint::active_highlights();
     for frag in line {
         if !matches!(frag.style.visibility, Visibility::Visible) {
             continue;
@@ -133,65 +127,90 @@ fn emit_text_frags(
             continue;
         }
 
-        // ::selection highlight — emit FillRect for selected portion before text.
-        let sel_fg = sel.and_then(|s| {
-            let hi = frag_selection_highlight(frag, s);
-            if let Some((sel_x, sel_w)) = hi {
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(container_x + sel_x, line_y, sel_w, line_h),
-                    color: s.bg_color,
-                });
-            }
-            if hi.is_some() { s.fg_color } else { None }
-        });
-
-        let text_color = sel_fg.unwrap_or_else(|| frag.style.used_text_fill_color());
-        let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
-        emit_text_shadows(out, base_rect, line_h, frag);
-        out.push(DisplayCommand::DrawText {
-            font_stretch: frag.style.font_stretch,
-            rect: base_rect,
-            // UAX #9 L2/L4 — a right-to-left fragment is handed to the
-            // rasterizers already reversed and mirrored: they advance strictly
-            // left to right and do no bidi work of their own. `frag.text` stays
-            // logical, so Selection/Range offsets are unaffected.
-            text: lumen_layout::bidi::visual_text(&frag.text, frag.bidi_level).into_owned(),
-            font_size: frag.style.font_size,
-            color: text_color,
-            font_family: frag.style.font_family.clone(),
-            font_weight: frag.style.font_weight,
-            font_style: frag.style.font_style,
-            font_features: lumen_layout::style::text_font_features(&frag.style),
-            font_palette: palette_selection(&frag.style),
-            font_variation_axes: {
-                let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
-                    .iter().map(|a| (a.tag, a.value)).collect();
-                if frag.style.font_optical_sizing == FontOpticalSizing::Auto
-                    && !axes.iter().any(|(t, _)| t == b"opsz")
-                {
-                    axes.push((*b"opsz", frag.style.font_size));
-                }
-                if frag.style.font_stretch != FontStretch::NORMAL
-                    && !axes.iter().any(|(t, _)| t == b"wdth")
-                {
-                    axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
-                }
-                axes
-            },
-            tab_size: frag.style.tab_size,
-            letter_spacing: super::spacing_to_fixed(frag.style.letter_spacing),
-            word_spacing: super::spacing_to_fixed(frag.style.word_spacing + frag.style.word_spacing_pct * 0.25 * frag.style.font_size),
-            highlight_name: None,
-            text_orientation: if frag.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
-                Some(frag.style.text_orientation)
-            } else {
-                None
-            },
-        });
-        emit_text_stroke(out, base_rect, frag);
-        push_text_decoration(out, container_x, frag_y, frag);
-        emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
+        let geo = FragGeometry { container_x, container_width, line_h, frag_y };
+        match highlights.as_deref().and_then(|h| h.pieces(frag)) {
+            Some(pieces) => super::highlight_paint::emit_highlighted_frag(out, frag, pieces, &geo),
+            None => emit_frag_text(out, frag, &geo, TextParts::ALL),
+        }
     }
+}
+
+/// Where one fragment sits on its line.
+pub(super) struct FragGeometry {
+    pub(super) container_x: f32,
+    pub(super) container_width: f32,
+    pub(super) line_h: f32,
+    pub(super) frag_y: f32,
+}
+
+/// Which layers of a fragment's text [`emit_frag_text`] draws. A highlighted fragment
+/// draws its shadows first, for all of its pieces, and the glyphs afterwards.
+#[derive(Clone, Copy)]
+pub(super) struct TextParts {
+    pub(super) shadows: bool,
+    pub(super) glyphs: bool,
+}
+
+impl TextParts {
+    pub(super) const ALL: Self = Self { shadows: true, glyphs: true };
+    pub(super) const SHADOWS: Self = Self { shadows: true, glyphs: false };
+    pub(super) const GLYPHS: Self = Self { shadows: false, glyphs: true };
+}
+
+/// Shadows, glyphs, stroke, decorations and emphasis marks of one text fragment.
+pub(super) fn emit_frag_text(out: &mut Vec<DisplayCommand>, frag: &InlineFrag, geo: &FragGeometry, parts: TextParts) {
+    let FragGeometry { container_x, container_width, line_h, frag_y, .. } = *geo;
+    let text_color = frag.style.used_text_fill_color();
+    let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
+    if parts.shadows {
+        emit_text_shadows(out, base_rect, line_h, frag);
+    }
+    if !parts.glyphs {
+        return;
+    }
+    out.push(DisplayCommand::DrawText {
+        font_stretch: frag.style.font_stretch,
+        rect: base_rect,
+        // UAX #9 L2/L4 — a right-to-left fragment is handed to the
+        // rasterizers already reversed and mirrored: they advance strictly
+        // left to right and do no bidi work of their own. `frag.text` stays
+        // logical, so Selection/Range offsets are unaffected.
+        text: lumen_layout::bidi::visual_text(&frag.text, frag.bidi_level).into_owned(),
+        font_size: frag.style.font_size,
+        color: text_color,
+        font_family: frag.style.font_family.clone(),
+        font_weight: frag.style.font_weight,
+        font_style: frag.style.font_style,
+        font_features: lumen_layout::style::text_font_features(&frag.style),
+        font_palette: palette_selection(&frag.style),
+        font_variation_axes: {
+            let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
+                .iter().map(|a| (a.tag, a.value)).collect();
+            if frag.style.font_optical_sizing == FontOpticalSizing::Auto
+                && !axes.iter().any(|(t, _)| t == b"opsz")
+            {
+                axes.push((*b"opsz", frag.style.font_size));
+            }
+            if frag.style.font_stretch != FontStretch::NORMAL
+                && !axes.iter().any(|(t, _)| t == b"wdth")
+            {
+                axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
+            }
+            axes
+        },
+        tab_size: frag.style.tab_size,
+        letter_spacing: super::spacing_to_fixed(frag.style.letter_spacing),
+        word_spacing: super::spacing_to_fixed(frag.style.word_spacing + frag.style.word_spacing_pct * 0.25 * frag.style.font_size),
+        highlight_name: None,
+        text_orientation: if frag.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+            Some(frag.style.text_orientation)
+        } else {
+            None
+        },
+    });
+    emit_text_stroke(out, base_rect, frag);
+    push_text_decoration(out, container_x, frag_y, frag);
+    emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
 }
 
 /// WHATWG Compat §3.2 — `-webkit-text-stroke`: обводка глифов поверх заливки
@@ -223,61 +242,6 @@ fn emit_text_stroke(out: &mut Vec<DisplayCommand>, base_rect: Rect, frag: &Inlin
         width,
         color,
     });
-}
-
-/// Compute the (frag-relative x, width) pixel span that is covered by the
-/// active selection for a single inline fragment.
-///
-/// Returns `None` when the fragment is outside the selection range.
-///
-/// Uses byte-proportional estimation for sub-fragment boundaries.  Accurate
-/// for ASCII text; approximate for variable-width or multi-byte characters.
-fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Option<(f32, f32)> {
-    let range = &sel.range;
-    if range.is_collapsed() {
-        return None;
-    }
-    // CSS UI L4 §6.2: `user-select: none` text is never highlighted.
-    if frag.style.user_select == lumen_layout::UserSelect::None {
-        return None;
-    }
-    let frag_end = frag.source_char_offset + frag.text.len() as u32;
-    let same_start = range.start.container == frag.source_node;
-    let same_end = range.end.container == frag.source_node;
-
-    // byte offsets within the frag's text
-    let (byte_start, byte_end): (u32, u32) = if same_start && same_end {
-        let s = range.start.offset.max(frag.source_char_offset).min(frag_end)
-            - frag.source_char_offset;
-        let e = range.end.offset.max(frag.source_char_offset).min(frag_end)
-            - frag.source_char_offset;
-        if e <= s { return None; }
-        (s, e)
-    } else if same_start {
-        let s = range.start.offset.max(frag.source_char_offset).min(frag_end)
-            - frag.source_char_offset;
-        (s, frag.text.len() as u32)
-    } else if same_end {
-        let e = range.end.offset.max(frag.source_char_offset).min(frag_end)
-            - frag.source_char_offset;
-        if e == 0 { return None; }
-        (0, e)
-    } else {
-        // Neither endpoint lives in this node: the whole fragment is selected
-        // when its node sits between them in document order.
-        if !lumen_layout::node_between(frag.source_node, range) {
-            return None;
-        }
-        (0, frag.text.len() as u32)
-    };
-
-    let total = frag.text.len() as f32;
-    if total <= 0.0 {
-        return None;
-    }
-    let x_start = frag.x + frag.width * (byte_start as f32 / total);
-    let x_end   = frag.x + frag.width * (byte_end   as f32 / total);
-    Some((x_start, (x_end - x_start).max(0.0)))
 }
 
 /// CSS Writing Modes L4 §3–4 — paints an InlineRun's lines when the box is in
@@ -379,7 +343,6 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
 pub(crate) fn emit_inline_run(
     b: &LayoutBox,
     lines: &[Vec<InlineFrag>],
-    sel: Option<&SelectionHighlight>,
     dpr: f32,
     out: &mut Vec<DisplayCommand>,
 ) {
@@ -432,7 +395,7 @@ pub(crate) fn emit_inline_run(
             out.push(DisplayCommand::PushClipRect {
                 rect: Rect::new(b.rect.x, line_y, clip_w, line_h),
             });
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
             out.push(DisplayCommand::PopClip);
             out.push(DisplayCommand::DrawText {
                 font_stretch: ef.style.font_stretch,
@@ -471,7 +434,7 @@ pub(crate) fn emit_inline_run(
                 },
             });
         } else {
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
         }
     }
 }

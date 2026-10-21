@@ -1178,6 +1178,31 @@ pub(crate) fn install_pointer_lock(
     Ok(())
 }
 
+/// Computed style of a highlight pseudo-element (`::selection`, `::target-text`,
+/// `::spelling-error`, `::grammar-error`, `::highlight(name)`) of node `nid`. These have no
+/// box in the layout tree, so — unlike `::before` — the cascade snapshot cannot carry them:
+/// they are computed on demand from the DOM and the stylesheet.
+fn highlight_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<HashMap<String, String>> {
+    let sheet = flush.stylesheet.lock().ok()?.clone()?;
+    let [w, h] = *flush.viewport_size.lock().ok()?;
+    let doc = flush.doc.lock().ok()?;
+    let node = NodeId::from_raw(nid);
+    if !doc.contains_id(node) {
+        return None;
+    }
+    // The element's own colour and font size, from the cascade snapshot: what a highlight
+    // that declares neither inherits.
+    let base = {
+        let styles = flush.computed_styles.lock().ok()?;
+        let own = styles.get(&nid);
+        let get = |p: &str| own.and_then(|m| m.get(p)).map(String::as_str);
+        lumen_layout::originating_base(get("color"), get("font-size"))
+    };
+    let style =
+        lumen_layout::compute_highlight_style(&doc, &sheet, lumen_core::geom::Size::new(w, h), false, node, kind, &base)?;
+    Some(lumen_layout::computed_style_to_map(&style))
+}
+
 /// `window.getComputedStyle` and custom-property reads off the cascade snapshot.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]
@@ -1230,6 +1255,11 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo", move |nid: u32, kind: String, prop: String| -> String {
             needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
+            if lumen_layout::is_highlight_pseudo(&kind) {
+                return highlight_pseudo_style(&flush, nid, &kind)
+                    .and_then(|m| m.get(&prop).cloned())
+                    .unwrap_or_default();
+            }
             pcs.lock()
                 .unwrap()
                 .get(&(nid, kind))
@@ -1248,6 +1278,11 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo_entries", move |nid: u32, kind: String| -> String {
             needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
+            if lumen_layout::is_highlight_pseudo(&kind) {
+                let pairs: Vec<(String, String)> =
+                    highlight_pseudo_style(&flush, nid, &kind).map(|m| m.into_iter().collect()).unwrap_or_default();
+                return _style_entries_to_json(pairs);
+            }
             let pairs: Vec<(String, String)> = pcs
                 .lock()
                 .unwrap()

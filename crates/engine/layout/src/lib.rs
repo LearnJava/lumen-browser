@@ -27,6 +27,7 @@ pub mod color_mix;
 pub mod incremental;
 pub mod content_visibility;
 pub mod field_sizing;
+pub mod highlight;
 pub mod hyphenation;
 pub mod counters;
 mod custom_flow;
@@ -128,13 +129,17 @@ pub use property_trees::{
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
+pub use highlight::{
+    compute_highlight_style, originating_base, resolve_highlights, HighlightEnv, HighlightLayer, HighlightLook, HighlightPiece, Highlights,
+    UA_SELECTION_BACKGROUND,
+};
 pub use selection::{
     caret_at_point, clamp_to_range, node_between, paragraph_range_at_point, select_scope_at_point, selection_rects,
     user_select_none_text_nodes, SelectScope,
 };
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
 pub use style::{
-    compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
+    is_highlight_pseudo, compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
     compute_view_transition_pseudo_style, ViewTransitionPart,
 };
 pub use selector_query::{
@@ -204,29 +209,6 @@ pub use style::{
     UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
-
-/// Computed `::selection` highlight data — passed to the paint layer so it can
-/// apply `::selection` CSS overrides when rendering selected text.
-///
-/// CSS Pseudo-elements L4 §5.6 restricts `::selection` to a limited set of
-/// properties: `color`, `background-color`, `text-decoration-*`, `text-shadow`.
-/// The paint layer reads only `fg_color` and `bg_color`; other properties from
-/// the full `ComputedStyle` are ignored during selection rendering.
-///
-/// Build via [`compute_selection_style`] or construct directly with OS-default
-/// colours when no `::selection` rules are present.
-#[derive(Debug, Clone)]
-pub struct SelectionHighlight {
-    /// The active DOM selection range. Must not be collapsed.
-    pub range: lumen_dom::Range,
-    /// Text colour override from `::selection { color: ... }`. `None` = inherit
-    /// (keep each fragment's own `color`).
-    pub fg_color: Option<Color>,
-    /// Selection background from `::selection { background-color: ... }`.
-    /// The default when no `::selection` rule is present is the OS accent colour;
-    /// callers should supply a sensible fallback (e.g. `#308aff`).
-    pub bg_color: Color,
-}
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///

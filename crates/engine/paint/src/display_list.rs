@@ -35,7 +35,7 @@ use lumen_layout::{
     GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, PrintColorAdjust, Resize,
-    ScrollbarWidth, SelectionHighlight,
+    ScrollbarWidth,
     StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
     TransformStyle,
@@ -98,8 +98,9 @@ pub use builder::{
     build_display_list_ordered_dpr_cached,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_ordered_with_anim_split, build_display_list_with_anim,
-    build_display_list_with_selection,
 };
+mod highlight_paint;
+pub use highlight_paint::with_highlights;
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use builder::SplitTracker;
 
@@ -314,6 +315,10 @@ mod text_and_images;
 #[cfg(test)]
 #[path = "display_list/tests/images_media.rs"]
 mod images_media;
+
+#[cfg(test)]
+#[path = "display_list/tests/highlight_overlay.rs"]
+mod highlight_overlay;
 
 mod text_highlight;
 pub use text_highlight::emit_text_with_highlights;

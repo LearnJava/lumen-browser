@@ -372,6 +372,12 @@ pub enum PseudoElementKind {
     /// Fragment §4) — text matched by a `:~:text=` URL fragment directive.
     /// Same restricted property subset as `::selection` (STTF-1 остаток).
     TargetText,
+    /// `::spelling-error` (CSS Pseudo-Elements L4 §3.2) — text the UA flags as
+    /// misspelled. Same restricted property subset as `::selection`.
+    SpellingError,
+    /// `::grammar-error` (CSS Pseudo-Elements L4 §3.2) — text the UA flags as
+    /// grammatically wrong. Same restricted property subset as `::selection`.
+    GrammarError,
     /// `::placeholder` (CSS Pseudo-Elements L4 §4.10) — placeholder hint text
     /// of a text-like `<input>`/`<textarea>` (matched while the field's `value`
     /// is empty). P4 wires: color/opacity/font-* overrides applied when the
@@ -772,6 +778,8 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::Marker => "::marker".into(),
         PseudoElementKind::Selection => "::selection".into(),
         PseudoElementKind::TargetText => "::target-text".into(),
+        PseudoElementKind::SpellingError => "::spelling-error".into(),
+        PseudoElementKind::GrammarError => "::grammar-error".into(),
         PseudoElementKind::Placeholder => "::placeholder".into(),
         PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
         PseudoElementKind::Picker(name) => format!("::picker({name})"),
@@ -1027,6 +1035,8 @@ pub(crate) fn pseudo_element_allows_user_action(pe: &PseudoElementKind) -> bool 
         pe,
         PseudoElementKind::Selection
             | PseudoElementKind::TargetText
+            | PseudoElementKind::SpellingError
+            | PseudoElementKind::GrammarError
             | PseudoElementKind::Highlight(_)
             | PseudoElementKind::Column
     )
@@ -1415,6 +1425,8 @@ impl<'a> Parser<'a> {
                 "marker" => PseudoElementKind::Marker,
                 "selection" => PseudoElementKind::Selection,
                 "target-text" => PseudoElementKind::TargetText,
+                "spelling-error" => PseudoElementKind::SpellingError,
+                "grammar-error" => PseudoElementKind::GrammarError,
                 "placeholder" => PseudoElementKind::Placeholder,
                 "checkmark" => PseudoElementKind::Checkmark,
                 "picker-icon" => PseudoElementKind::PickerIcon,

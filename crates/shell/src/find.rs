@@ -462,8 +462,7 @@ pub fn build_page_with_highlights(
 /// find-in-page matches can be interleaved anywhere in paint order), a
 /// text-fragment match is singular and always drawn behind text — so the
 /// rects are simply prepended, mirroring how `::selection` rects precede
-/// their glyphs in the ordered paint (`crates/engine/paint/src/display_list`
-/// `SelectionHighlight` convention: fill before text in the same bucket).
+/// their glyphs in the ordered paint (fill before text in the same bucket).
 pub fn build_page_with_target_text_highlight(
     base: &DisplayList,
     rects: &[Rect],

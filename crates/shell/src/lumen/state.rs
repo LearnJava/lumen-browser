@@ -425,7 +425,7 @@ pub(crate) struct Lumen {
     /// `lumen_layout::compute_target_text_style` against the match's own DOM
     /// node — `None` when no page rule targets `::target-text` (redraw falls
     /// back to [`find::TARGET_TEXT_HIGHLIGHT_DEFAULT`], same UA-default contract
-    /// as [`lumen_layout::SelectionHighlight::bg_color`]'s doc comment).
+    /// as [`lumen_layout::UA_SELECTION_BACKGROUND`]).
     pub(crate) target_text_highlight_color: Option<lumen_layout::Color>,
     /// Состояние Ctrl+L адресной строки. Открыт ли бар и текущий ввод.
     /// Закрывается при навигации (commit) и при Esc.
