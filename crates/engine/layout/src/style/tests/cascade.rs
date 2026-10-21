@@ -547,11 +547,21 @@ use super::*;
     }
 
     #[test]
-    fn revert_non_inherited_no_ua_hint_matches_unset() {
-        // Control case: `unset` on the same property/element stays at the
-        // engine's non-inherited fallback (`Block`), confirming `revert` above
-        // is genuinely different, not an artifact of the test setup.
-        let s = cascade_at("<span>x</span>", "span { display: unset; }", &[0]);
+    fn display_initial_and_unset_are_inline() {
+        // BUG-1448: the initial value of `display` is `inline` (CSS Display 3 §2.1),
+        // not the `block` of the root `ComputedStyle`; `unset` on a non-inherited
+        // property is the same. Control: `revert` still rolls back to the UA value.
+        for (html, css) in [
+            ("<span>x</span>", "span { display: unset; }"),
+            ("<b>x</b>", "b { display: initial; }"),
+            ("<li>x</li>", "li { display: initial; }"),
+            ("<div>x</div>", "div { display: initial; }"),
+            ("<span>x</span>", "span { display: inline-block; display: unset; }"),
+        ] {
+            let s = cascade_at(html, css, &[0]);
+            assert_eq!(s.display, Display::Inline, "{css}");
+        }
+        let s = cascade_at("<div>x</div>", "div { display: inline; display: revert; }", &[0]);
         assert_eq!(s.display, Display::Block);
     }
 

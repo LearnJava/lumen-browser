@@ -673,7 +673,13 @@ fn apply_css_wide_keyword_with(
             };
         }
         "display" => {
-            style.display = if inh_only_inherit { inherited.display } else { init.display };
+            // Initial value of `display` is `inline` (CSS Display 3 §2.1); the shared
+            // root style carries `block`, so `initial`/`unset` must not read it (BUG-1448).
+            style.display = match kw {
+                Inherit => inherited.display,
+                Revert => init.display,
+                _ => Display::Inline,
+            };
             style.grid_lanes.enabled = if inh_only_inherit { inherited.grid_lanes.enabled } else { false };
         }
         // CSS Grid L3 §3: свойства `grid-lanes` не наследуются.

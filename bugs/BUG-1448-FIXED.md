@@ -1,6 +1,6 @@
 # BUG-1448 — `display: initial` и `display: unset` дают `block` вместо `inline` для любого элемента
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** layout (`crates/engine/layout/src/style/` — начальное значение `display` для `initial`/`unset`)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 20: `css-cascade/unset-val-002.html` (красный `inline
 ## Как проверить
 
 Таблица выше; `css/css-cascade/unset-val-002.html`.
+
+## Исправление
+
+`apply/css_wide.rs`, ветка `"display"`: `initial`/`unset` → `Display::Inline` (начальное значение, CSS Display 3 §2.1) вместо `init.display` — общий корневой `ComputedStyle::root()` несёт `block`. `inherit` и `revert` без изменений. Тест `display_initial_and_unset_are_inline` в `style/tests/cascade.rs` (заменил `revert_non_inherited_no_ua_hint_matches_unset`, закреплявший `block`).
