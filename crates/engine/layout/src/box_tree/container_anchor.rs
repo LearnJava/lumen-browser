@@ -549,7 +549,7 @@ struct SeenBoxes {
 /// `@container` rules for the elements below `container` that own no box — plain
 /// inline elements, `display: none` / `contents` — which `re_style_subtree` cannot
 /// reach through the box tree. Their cascaded style comes from `counters`; the ones a
-/// rule matches are restyled into `out`.
+/// rule matches are restyled, and all of them are recorded in `out`.
 #[allow(clippy::too_many_arguments)]
 fn restyle_boxless(
     doc: &Document,
@@ -578,8 +578,10 @@ fn restyle_boxless(
             let rules = matching_container_rules(doc, id, sheet, ctx);
             if !rules.is_empty() {
                 apply_matched_container_rules(Arc::make_mut(&mut style), &rules, doc, id, viewport, dark_mode);
-                out.insert(id, style);
             }
+            // Every box-less element below a container is recorded, matched or not: the
+            // snapshot collectors read their style (and custom properties) from here.
+            out.insert(id, style);
         }
         stack.extend(doc.get(id).children.iter().rev().copied());
     }

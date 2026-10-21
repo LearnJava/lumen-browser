@@ -2228,9 +2228,9 @@ pub fn collect_custom_properties(
 
 /// [`collect_custom_properties`] that also publishes the custom properties of the
 /// elements that own no box — plain inline elements, `display: none` / `contents`
-/// ones — from the cascade `counters` holds (CQ-SCROLL-STATE: such an element is
-/// where `@container` rules set a `--x` that `getComputedStyle` has to read back).
-/// Without `counters` those elements stay absent, as before.
+/// ones — below a query container (CQ-SCROLL-STATE: where `@container` rules set a
+/// `--x` that `getComputedStyle` has to read back; [`CounterMap::cq_boxless`]).
+/// Without `counters`, and outside query containers, those elements stay absent.
 pub fn collect_custom_properties_for(
     root: &LayoutBox,
     counters: Option<&CounterMap>,
@@ -2244,15 +2244,10 @@ pub fn collect_custom_properties_for(
     > = std::collections::HashMap::new();
     collect_custom_properties_rec(root, viewport, &mut out, &mut resolved);
     if let Some(counters) = counters {
-        for id in counters.styles().keys() {
+        for (id, style) in counters.cq_boxless() {
             let idx = id.index() as u32;
-            if out.contains_key(&idx) {
-                continue;
-            }
-            if let Some(style) = counters.boxless_style(*id)
-                && !style.custom_props.is_empty()
-            {
-                out.insert(idx, resolve_custom_props(&style, viewport, &mut resolved));
+            if !out.contains_key(&idx) && !style.custom_props.is_empty() {
+                out.insert(idx, resolve_custom_props(style, viewport, &mut resolved));
             }
         }
     }

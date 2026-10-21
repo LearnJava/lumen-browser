@@ -746,7 +746,7 @@ impl FlushHandles {
                 // exactly when this is that first-ever collect, same as the
                 // always-on `layout_rects`/`client_rects` above got for free
                 // by never being gated.
-                if self.computed_styles_collected.load(Ordering::Relaxed) {
+                if self.computed_styles_collected.load(Ordering::Relaxed) && counters.cq_boxless().is_empty() {
                     let mut kept = 0u64;
                     for nid in prev_node_ids {
                         if plan.keeps_computed_style(*nid) {
@@ -852,7 +852,9 @@ impl FlushHandles {
             let _custom_scope = lumen_core::profile::scope("flush.custom_props");
             let mut custom = self.custom_properties.lock().unwrap_or_else(|e| e.into_inner());
             match (&scoped_plan, scoped_ids) {
-                (Some(plan), Some(ids)) if self.custom_props_collected.load(Ordering::Relaxed) => {
+                (Some(plan), Some(ids))
+                    if self.custom_props_collected.load(Ordering::Relaxed) && counters.cq_boxless().is_empty() =>
+                {
                     for nid in ids {
                         if !plan.keeps_published(*nid) {
                             custom.remove(nid);
