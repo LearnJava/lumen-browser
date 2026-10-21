@@ -6,7 +6,7 @@ use std::io::{BufRead, Read};
 use lumen_core::error::{Error, Result};
 use lumen_core::net_error::NetErrorCode;
 
-use crate::http1::chunked::{read_body_to_eof, read_chunked};
+use crate::http1::chunked::{read_body_to_eof, read_chunked, response_has_no_body};
 use crate::http1::read_failure;
 use crate::{Connection, Response, header_value};
 
@@ -113,7 +113,12 @@ pub(crate) fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
     )))
 }
 
-pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
+/// Прочитать ответ целиком: head + тело.
+///
+/// `method` — метод исходного запроса: ответ на `HEAD` тела не имеет
+/// (RFC 9110 §9.3.2), даже если сервер прислал `Content-Length` — тот
+/// описывает длину тела, которого сервер не прислал.
+pub(crate) fn read_response(conn: &mut Connection, method: &str) -> Result<Response> {
     let (status, headers, server_wants_close, early_hint_links) = read_head(conn)?;
 
     // Body: chunked > Content-Length > read-to-EOF. RFC 7230 §3.3.3 (7): a
@@ -129,7 +134,14 @@ pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
     let content_length =
         header_value(&headers, "content-length").and_then(|v| v.trim().parse::<usize>().ok());
 
-    let body = if is_chunked {
+    // Ответ на HEAD и ответы «без тела» (1xx/204/304) тела не имеют
+    // (RFC 9110 §9.3.2) — даже если сервер прислал `Content-Length`: он
+    // описывает длину тела, которое метод/статус запретили показывать.
+    // Читать такой `Content-Length` нельзя: на keep-alive соединении клиент
+    // съел бы следующий ответ.
+    let body = if response_has_no_body(status, method) {
+        Vec::new()
+    } else if is_chunked {
         match read_chunked(&mut conn.reader) {
             Ok(b) => b,
             Err(e) => {
@@ -144,9 +156,6 @@ pub(crate) fn read_response(conn: &mut Connection) -> Result<Response> {
             return Err(read_failure("read body", &e));
         }
         buf
-    } else if status == 204 || status == 304 {
-        // 204 No Content / 304 Not Modified не имеют тела (RFC 7230 §3.3.3).
-        Vec::new()
     } else {
         // Ни chunked, ни Content-Length — читаем до EOF (RFC 7230 §3.3.3 п.7),
         // независимо от того, прислал ли сервер явный `Connection: close`.
