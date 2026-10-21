@@ -105,7 +105,7 @@ pub(super) fn lay_out_inner(
 /// Trampolines resolve a box's block-size *after* `dispatch_box` has returned,
 /// so their `run` entry points re-enter this context for the box they finish.
 pub(super) struct FontContext {
-    prev_ch_ex: Option<(f32, f32)>,
+    prev_ch_ex: Option<(f32, f32, f32)>,
     prev_lh: Option<f32>,
 }
 
@@ -117,6 +117,7 @@ impl FontContext {
             (
                 m.char_width_with_families('0', fs, &b.style.font_family),
                 m.x_height_px_with_families(fs, &b.style.font_family),
+                m.cap_height_px_with_families(fs, &b.style.font_family),
             )
         });
         // `lh`: `used_line_height` is the measurer-resolved value; fall back to

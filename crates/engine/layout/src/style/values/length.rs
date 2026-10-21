@@ -83,6 +83,10 @@ pub enum Length {
     /// Resolved via the same `FONT_CH_EX` thread-local; the spec fallback when the
     /// metric is unavailable is `0.5em` (the assumed x-height).
     Ex(f32),
+    /// CSS Values L4 §5.1.1 — `cap`: the used cap-height of the element's own
+    /// font (`OS/2.sCapHeight`). Resolved via `FONT_CH_EX`; the fallback when the
+    /// metric is unavailable is `0.7em`.
+    Cap(f32),
     /// CSS Values L4 §5.1.1 — `lh`: the computed `line-height` of the element
     /// (absolute px, from `FONT_LH` set per box at layout time). Outside a layout
     /// pass the fallback is `1.2em`.
@@ -175,10 +179,13 @@ impl Length {
             // (thread-local `FONT_CH_EX`, absolute px per unit). Outside a layout
             // pass the metric is unavailable → spec fallback of `0.5em`.
             Length::Ch(v) => {
-                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _)| *v * ch))
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(ch, _, _)| *v * ch))
             }
             Length::Ex(v) => {
-                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex)| *v * ex))
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.5 * em_basis, |(_, ex, _)| *v * ex))
+            }
+            Length::Cap(v) => {
+                Some(FONT_CH_EX.with(|c| c.get()).map_or(*v * 0.7 * em_basis, |(_, _, cap)| *v * cap))
             }
             Length::Rlh(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 1.2 * ROOT_FONT_SIZE, |(lh, _, _)| *v * lh)),
             Length::Rch(v) => Some(ROOT_FONT_METRICS.with(|c| c.get()).map_or(*v * 0.5 * ROOT_FONT_SIZE, |(_, ch, _)| *v * ch)),
@@ -327,7 +334,7 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     // `ch` = advance width of the '0' glyph; `ex` = x-height. Both resolve to px
     // against the box's real font metrics at layout time (`FONT_CH_EX`), with a
     // `0.5em` spec fallback (CSS Values L4 §5.1.1).
-    // `cap` = cap-height; Phase 0 approximation: 0.7em.
+    // `cap` = cap-height (`OS/2.sCapHeight`), `0.7em` fallback like `ch`/`ex`.
     // `lh` = computed line-height; Phase 0 approximation: 1.2em.
     if let Some(num) = s.strip_suffix("ch") {
         return num.trim().parse::<f32>().ok().map(Length::Ch);
@@ -336,7 +343,7 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
         return num.trim().parse::<f32>().ok().map(Length::Ex);
     }
     if let Some(num) = s.strip_suffix("cap") {
-        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
+        return num.trim().parse::<f32>().ok().map(Length::Cap);
     }
     if let Some(num) = s.strip_suffix("lh") {
         return num.trim().parse::<f32>().ok().map(Length::Lh);
@@ -588,7 +595,7 @@ pub fn canonical_specified_contain_intrinsic(key: &str, s: &str) -> Option<Strin
 /// and this function is never reached for calc() anyway, see above).
 fn length_literal_is_negative(l: &Length) -> bool {
     match l {
-        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v) | Length::Lh(v)
+        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Ch(v) | Length::Ex(v) | Length::Cap(v) | Length::Lh(v)
         | Length::Rlh(v) | Length::Rex(v) | Length::Rch(v)
         | Length::Percent(v) | Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v)
         | Length::Cqw(v) | Length::Cqh(v) | Length::Cqi(v) | Length::Cqb(v)

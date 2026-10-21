@@ -225,6 +225,7 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Rem(v) => (2, *v),
         Length::Ch(v) => (3, *v),
         Length::Ex(v) => (4, *v),
+        Length::Cap(v) => (20, *v),
         Length::Lh(v) => (16, *v),
         Length::Rlh(v) => (17, *v),
         Length::Rex(v) => (18, *v),
@@ -255,6 +256,7 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         Length::Rem(_) => Length::Rem(v),
         Length::Ch(_) => Length::Ch(v),
         Length::Ex(_) => Length::Ex(v),
+        Length::Cap(_) => Length::Cap(v),
         Length::Lh(_) => Length::Lh(v),
         Length::Rlh(_) => Length::Rlh(v),
         Length::Rex(_) => Length::Rex(v),
@@ -1056,12 +1058,12 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
         "rex" => Length::Rex(value),
         "rch" => Length::Rch(value),
         "ric" => Length::Rem(value),
-        // `ch`/`ex` carry their own variants (resolved against real font metrics
-        // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
+        // `ch`/`ex`/`cap` carry their own variants (resolved against real font
+        // metrics at layout time); `lh` stays em-approximated (Phase 0, no metric).
         "ch" => Length::Ch(value),
         "ex" => Length::Ex(value),
         "em" => Length::Em(value),
-        "cap" => Length::Em(value * 0.7),
+        "cap" => Length::Cap(value),
         "lh" => Length::Lh(value),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),

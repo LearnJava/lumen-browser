@@ -73,15 +73,19 @@ use super::*;
         pop_ch_ex_context(None);
         assert_eq!(Length::Ch(10.0).resolve(20.0, None, vp()), Some(100.0));
         assert_eq!(Length::Ex(4.0).resolve(20.0, None, vp()), Some(40.0));
+        // `cap` без метрики — запасные 0.7em (BUG-1429).
+        assert_eq!(parse_length("2cap"), Some(Length::Cap(2.0)));
+        assert_eq!(Length::Cap(10.0).resolve(20.0, None, vp()), Some(140.0));
     }
 
     #[test]
     fn length_resolve_ch_ex_uses_font_metric_context() {
         // With real metrics published (ch = 9px, ex = 7px per unit) the em_basis
         // is ignored — the absolute per-unit px drives the result.
-        let prev = push_ch_ex_context(Some((9.0, 7.0)));
+        let prev = push_ch_ex_context(Some((9.0, 7.0, 11.0)));
         assert_eq!(Length::Ch(3.0).resolve(20.0, None, vp()), Some(27.0));
         assert_eq!(Length::Ex(2.0).resolve(20.0, None, vp()), Some(14.0));
+        assert_eq!(Length::Cap(2.0).resolve(20.0, None, vp()), Some(22.0));
         pop_ch_ex_context(prev);
         // Context restored → fallback again.
         assert_eq!(Length::Ch(1.0).resolve(20.0, None, vp()), Some(10.0));
