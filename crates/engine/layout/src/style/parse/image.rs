@@ -13,6 +13,7 @@ use lumen_core::geom::Size;
 use crate::color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors_hue};
 use crate::style::parse::box_sides::resolve_box_length;
 use crate::style::parse::color::{parse_color, parse_css_color_legacy};
+use crate::style::parse::image_computed::computed_image_css;
 use crate::style::parse::transform::parse_angle_to_radians;
 use crate::style::parse::webkit_gradient::{is_webkit_gradient_function, parse_webkit_gradient};
 use crate::style::{
@@ -401,6 +402,7 @@ pub(in crate::style) fn parse_single_bg_layer(
         }
         if is_gradient_function(t) {
             layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            layer.image_css = computed_image_css(t, em_basis, viewport).map(Into::into);
             idx += 1;
             continue;
         }
@@ -415,11 +417,13 @@ pub(in crate::style) fn parse_single_bg_layer(
         if is_image_set_value(t) {
             // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
             layer.image = BackgroundImage::Url(t.to_string());
+            layer.image_css = computed_image_css(t, em_basis, viewport).map(Into::into);
             idx += 1;
             continue;
         }
         if let Some((a, b, cf_t)) = parse_cross_fade(t) {
             layer.image = BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t: cf_t };
+            layer.image_css = computed_image_css(t, em_basis, viewport).map(Into::into);
             idx += 1;
             continue;
         }

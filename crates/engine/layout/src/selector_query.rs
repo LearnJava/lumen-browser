@@ -585,25 +585,28 @@ fn css_color_to_css(c: &CssColor) -> String {
 /// observable). Layers are comma-joined, topmost (index 0) first, matching
 /// `background-color`/other multi-layer shorthand serialization order.
 ///
-/// Only [`BackgroundImage::None`] and [`BackgroundImage::Url`] round-trip
-/// exactly; the engine has no source text to reconstruct for the other three
-/// variants (they're computed/generated, not stored verbatim), so those
-/// serialise as `"none"` — a known gap, not a regression, since this key did
-/// not exist in the map at all before this change.
+/// Gradients, `image-set()` and `cross-fade()` carry their computed text in
+/// [`BackgroundLayer::image_css`] (BUG-1428, built by `parse::image_computed`);
+/// `url()` is re-quoted from the stored path. `paint()` and the forms that
+/// module does not recognise (legacy `-webkit-*-gradient`) serialise as `"none"`.
 fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
     if layers.is_empty() {
         return "none".into();
     }
     layers
         .iter()
-        .map(|l| match &l.image {
-            BackgroundImage::Url(s) => {
+        .map(|l| match (&l.image_css, &l.image) {
+            (Some(css), _) => css.to_string(),
+            (None, BackgroundImage::Url(s)) => {
                 format!("url(\"{}\")", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
-            BackgroundImage::None
-            | BackgroundImage::Gradient(_)
-            | BackgroundImage::CrossFade { .. }
-            | BackgroundImage::Paint(_) => "none".to_string(),
+            (
+                None,
+                BackgroundImage::None
+                | BackgroundImage::Gradient(_)
+                | BackgroundImage::CrossFade { .. }
+                | BackgroundImage::Paint(_),
+            ) => "none".to_string(),
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -3476,6 +3479,36 @@ mod tests {
     fn computed_map_background_image_url() {
         let m = div_computed_map("<div>x</div>", "div { background-image: url(a.png); }");
         assert_eq!(m.get("background-image").map(String::as_str), Some("url(\"a.png\")"));
+    }
+
+    #[test]
+    fn computed_map_background_image_functions() {
+        // BUG-1428: градиент / image-set() / cross-fade() читаются целиком, а не как `none`.
+        let css = |decl: &str| {
+            let m = div_computed_map("<div>x</div>", &format!("div {{ {decl} }}"));
+            m.get("background-image").cloned().unwrap_or_default()
+        };
+        assert_eq!(
+            css("background-image: linear-gradient(90deg in oklab, red, blue)"),
+            "linear-gradient(90deg in oklab, rgb(255, 0, 0), rgb(0, 0, 255))"
+        );
+        assert_eq!(
+            css("background: url(a.png), radial-gradient(at 10% 20%, red, blue)"),
+            "url(\"a.png\"), radial-gradient(at 10% 20%, rgb(255, 0, 0), rgb(0, 0, 255))"
+        );
+        assert_eq!(
+            css("background-image: image-set(url(a.png) 1x)"),
+            "image-set(url(\"a.png\") 1dppx)"
+        );
+        assert_eq!(
+            css("background-image: -webkit-image-set(url(a.png) 2x)"),
+            "image-set(url(\"a.png\") 2dppx)"
+        );
+        assert_eq!(
+            css("background-image: cross-fade(50% red, 50% green, 50% blue)"),
+            "cross-fade(rgb(255, 0, 0) 50%, rgb(0, 128, 0) 50%, rgb(0, 0, 255) 50%)"
+        );
+        assert_eq!(css("background-image: conic-gradient(red, blue)"), "conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))");
     }
 
     // ── computed_style_to_map: BUG-495 additions ─────────────────────────────

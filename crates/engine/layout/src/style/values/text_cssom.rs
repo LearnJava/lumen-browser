@@ -56,7 +56,7 @@ pub(super) fn canonical_length_sorted(v: &str, auto: bool, non_negative: bool) -
     Some(sort_calc_sum(&c).unwrap_or(c))
 }
 
-fn sort_calc_sum(css: &str) -> Option<String> {
+pub(in crate::style) fn sort_calc_sum(css: &str) -> Option<String> {
     let inner = css.strip_prefix("calc(")?.strip_suffix(')')?;
     if inner.contains(['(', '*', '/']) {
         return None;
