@@ -1086,11 +1086,18 @@ fn content_visibility_auto_skipped_keeps_explicit_height() {
 /// Left edge (x relative to the container) and right extent of every line of
 /// the first `InlineRun` in the tree, as `(top_y, x0, x1)`.
 fn shaped_lines(css: &str) -> Vec<(f32, f32, f32)> {
+    let doc = lumen_html_parser::parse(&shaped_html());
+    run_lines(&doc, &lumen_css_parser::parse(css))
+}
+
+fn shaped_html() -> String {
     let words = "aa ".repeat(60);
-    let html = format!(r#"<div><div class="f"></div><p>{words}</p></div>"#);
-    let doc = lumen_html_parser::parse(&html);
-    let sheet = lumen_css_parser::parse(css);
-    let root = super::super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Ifc8);
+    format!(r#"<div><div class="f"></div><p>{words}</p></div>"#)
+}
+
+/// [`shaped_lines`] for a document the caller has prepared.
+fn run_lines(doc: &lumen_dom::Document, sheet: &lumen_css_parser::Stylesheet) -> Vec<(f32, f32, f32)> {
+    let root = super::super::layout_measured(doc, sheet, Size::new(500.0, 300.0), &Ifc8);
     fn find(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
         if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
             return Some(b);
@@ -1165,6 +1172,25 @@ fn inline_text_follows_right_float_contour() {
         ends.iter().cloned().fold(f32::MIN, f32::max) > ends.iter().cloned().fold(f32::MAX, f32::min) + 1.0,
         "right edge must vary with the contour: {ends:?}"
     );
+}
+
+#[test]
+fn url_shape_image_reported_to_the_document_wraps_the_text() {
+    let css = "div { width: 400px; } p { margin: 0; }                .f { float: left; width: 100px; height: 100px; shape-outside: url(shape.png); }";
+    let sheet = lumen_css_parser::parse(css);
+    let mut doc = lumen_html_parser::parse(&shaped_html());
+    // The image is not decoded yet: the float keeps its rectangle (8 + 100).
+    let before = run_lines(&doc, &sheet);
+    assert!(before.iter().filter(|l| l.0 < 100.0).all(|l| (l.1 - 108.0).abs() < 0.5), "{before:?}");
+    // Its alpha plane arrives (left half opaque): the text starts at the shape's edge (8 + 50).
+    assert!(doc.set_shape_image("shape.png", lumen_dom::ImageAlpha { width: 2, height: 1, alpha: vec![255, 0] }));
+    let after = run_lines(&doc, &sheet);
+    assert!(
+        after.iter().filter(|l| l.0 < 100.0).all(|l| (l.1 - 58.0).abs() < 1.5),
+        "text must hug the opaque half: {after:?}"
+    );
+    // The same plane again is not a change: no relayout is owed.
+    assert!(!doc.set_shape_image("shape.png", lumen_dom::ImageAlpha { width: 2, height: 1, alpha: vec![255, 0] }));
 }
 
 #[test]

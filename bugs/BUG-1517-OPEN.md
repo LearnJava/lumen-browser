@@ -36,3 +36,7 @@ WPT-RUN-14 срез 23: `shape-outside/supported-shapes/{circle,ellipse,inset,po
 ## Как проверить
 
 Таблица выше; `css/css-shapes/shape-outside/supported-shapes/circle/shape-outside-circle-031.html`, `ellipse/shape-outside-ellipse-033.html`.
+
+## Срез SHAPE-OUTSIDE-2 (2026-10-21, ветка `p1-shape-outside-2`)
+
+Проба таблицы выше на dev-release бинаре: все строки дают ожидаемые края (`circle(50%)`/`circle()`/`closest-side` → `90,99,100,99,90`; `at <position>`, `ellipse()`, `inset(… round …)`, `polygon()` с `%` — смещённые/процентные формы). Не работает только `calc()` в аргументах (`circle(calc(10px + 20px) …)` — прямоугольное обтекание). Закрыть после `calc()` и проверки WPT `circle/ellipse` — их reftest упираются в BUG-1411 (`<br>`).
