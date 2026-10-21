@@ -737,6 +737,51 @@ use super::*;
     }
 
     #[test]
+    fn lang_extended_filtering_wpt_cases() {
+        // selectors-4/lang-004…025: (селектор, значение lang, ожидается совпадение).
+        for (sel, lang, want) in [
+            (r#"("fr")"#, "fr-CH", true),
+            (r#"("FR")"#, "fr", true),
+            (r#"("fr-CH")"#, "fr", false),
+            (r#"("fr-CH")"#, "fr-FR", false),
+            (r#"("*-CH")"#, "fr-CH", true),
+            (r#"("*-Latn")"#, "fr-Latn-FR", true),
+            (r#"("fr-FR")"#, "fr-Latn-FR", true),
+            (r#"("*-FR")"#, "fr-Latn-FR", true),
+            (r#"("fr", "nl", "de")"#, "fr-Latn-FR", true),
+            (r#"(\*-FR)"#, "fr-Latn-FR", true),
+            (r#"("fr")"#, "fr-FR-x-foobar", true),
+            (r#"("fr-x-foobar")"#, "fr-Latn-FR-x-foobar", true),
+            (r#"("*-x-foobar")"#, "fr-Latn-FR-x-foobar", true),
+            (r#"("fr-x-foobar")"#, "fr", false),
+            (r#"("iw")"#, "iw-ase-jpan-basiceng", true),
+            (r#"("x")"#, "x-lojban", true),
+            (r#"("art")"#, "art-x-lojban", true),
+            (r#"("fr")"#, "fr-x-fr", true),
+            (r#"("de")"#, "fr-x-de", false),
+            (r#"("")"#, "", true),
+            (r#"("")"#, "fr", false),
+            (r#"("*")"#, "", false),
+            ("(0)", "0", false),
+        ] {
+            let (root, doc) = lay_with_doc(
+                &format!(r#"<p lang="{lang}">x</p>"#),
+                &format!("p:lang{sel} {{ color: red; }}"),
+            );
+            assert_eq!(first_named(&doc, &root, "p").r == 255, want, ":lang{sel} vs lang={lang:?}");
+        }
+    }
+
+    #[test]
+    fn dir_unknown_ident_matches_nothing() {
+        let (root, doc) = lay_with_doc(
+            r#"<p dir="rtl">x</p>"#,
+            "p:dir(lol) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 0);
+    }
+
+    #[test]
     fn lang_xml_lang_fallback() {
         // xml:lang атрибут используется как fallback (XHTML legacy).
         let (root, doc) = lay_with_doc(

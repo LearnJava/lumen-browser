@@ -1010,15 +1010,96 @@ use super::*;
     }
 
     #[test]
-    fn pseudo_dir_unknown_keyword_falls_back() {
-        // `auto` — невалидный аргумент для :dir в spec (только ltr/rtl).
-        // Парсер откатывает в Unsupported.
-        let s = parse(":dir(auto) { color: red; }");
-        let p = &s.rules[0].selectors[0].head.parts[0];
-        assert!(matches!(
-            p,
-            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "dir"
-        ));
+    fn pseudo_dir_unknown_keyword_is_valid_but_never_matches() {
+        // Selectors L4 §13.2: `:dir(<ident>)` — любой идентификатор валиден,
+        // но матчит только `ltr`/`rtl` (BUG-1441).
+        for src in [":dir(auto)", ":dir(lol)", ":dir( lol\n)"] {
+            let s = parse(&format!("{src} {{ color: red; }}"));
+            let p = &s.rules[0].selectors[0].head.parts[0];
+            assert!(
+                matches!(p, SimpleSelector::PseudoClass(PseudoClass::DirOther(_))),
+                "{src}: {p:?}"
+            );
+        }
+        assert!(is_valid_selector_list(":dir(lol)"));
+        assert!(is_valid_selector_list(":dir( auto)"));
+        assert_eq!(parse_selector_list(":dir(lol)")[0].to_css_str(), ":dir(lol)");
+    }
+
+    #[test]
+    fn pseudo_lang_string_and_wildcard_ranges() {
+        for (src, want) in [
+            (r#":lang("fr")"#, vec!["fr"]),
+            (":lang('FR-ch')", vec!["fr-ch"]),
+            (r#":lang("fr", "nl", de)"#, vec!["fr", "nl", "de"]),
+            (r#":lang("*-CH")"#, vec!["*-ch"]),
+            (":lang(*-CH)", vec!["*-ch"]),
+            (r":lang(\*-FR)", vec!["*-fr"]),
+            (r#":lang("")"#, vec![""]),
+        ] {
+            let sel = &parse_selector_list(src)[0];
+            match &sel.head.parts[0] {
+                SimpleSelector::PseudoClass(PseudoClass::Lang(tags)) => {
+                    assert_eq!(tags, &want.iter().map(|t| t.to_string()).collect::<Vec<_>>(), "{src}");
+                }
+                p => panic!("{src}: {p:?}"),
+            }
+            assert!(is_valid_selector_list(src), "{src}");
+        }
+        assert_eq!(parse_selector_list(r#":lang("fr", "x y", 'a')"#)[0].to_css_str(), r#":lang(fr, "x y", a)"#);
+    }
+
+    #[test]
+    fn pseudo_lang_rejects_digit_leading_idents() {
+        // lang-013 / lang-014: `0` не ident → весь селектор невалиден.
+        assert!(!is_valid_selector_list(":lang(0)"));
+        assert!(!is_valid_selector_list(":lang(de, nl, 0, fr)"));
+        assert!(!is_valid_selector_list(":lang()"));
+    }
+
+    #[test]
+    fn unclosed_blocks_close_at_end_of_input() {
+        // CSS Syntax §5.4.7: на DOM-границе недостающие `)`/`]` дописываются.
+        for src in ["span:not([class]", "span:not([class", ":is(a, b", ":lang(\"fr", "[a=\"b"] {
+            assert!(is_valid_selector_list(src), "{src}");
+            assert!(!parse_selector_list(src).is_empty(), "{src}");
+        }
+        assert!(!is_valid_selector_list("span)"));
+    }
+
+    #[test]
+    fn spec_defined_unmodeled_pseudo_elements_are_valid() {
+        for src in [
+            "::backdrop",
+            "::file-selector-button",
+            "::details-content",
+            "::search-text",
+            "::part(foo)",
+            "::part(--foo)",
+            "::part(a b)",
+            "::spelling-error",
+        ] {
+            assert!(is_valid_selector_list(src), "{src}");
+            assert_eq!(parse_selector_list(src)[0].to_css_str(), src, "{src}");
+        }
+        for src in ["::part()", "::part(1a)", "::bogus", "::backdrop::before x"] {
+            assert!(!is_valid_selector_list(src), "{src}");
+        }
+    }
+
+    #[test]
+    fn is_where_are_forgiving() {
+        for src in [":is()", ":where()", ":not(:is())", ":is(,div)", ":is(div,)", ":is(div, !!, p)"] {
+            assert!(is_valid_selector_list(src), "{src}");
+        }
+        let sel = &parse_selector_list(":is(div, !!, p)")[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoClass(PseudoClass::Is(list)) => assert_eq!(list.len(), 2),
+            p => panic!("{p:?}"),
+        }
+        // Невалидный элемент не «съедает» хвост выше уровня скобок.
+        let sel = &parse_selector_list(":is([a=\")\"], b).c")[0];
+        assert_eq!(sel.head.parts.len(), 2);
     }
 
     #[test]
@@ -1648,18 +1729,18 @@ use super::*;
     }
 
     #[test]
-    fn pseudo_is_empty_falls_back() {
-        // `:is()` без аргументов — невалидно, должен дать Unsupported.
+    fn pseudo_is_empty_is_valid_and_matches_nothing() {
+        // Selectors L4 §3.4: forgiving-список — `:is()` валиден (BUG-1441).
         let s = parse(":is() { color: red; }");
         let pc = pseudo_at(&s, 0, 0, 0);
-        assert!(matches!(pc, PseudoClass::Unsupported(n) if n == "is"), "got {pc:?}");
+        assert!(matches!(pc, PseudoClass::Is(l) if l.is_empty()), "got {pc:?}");
     }
 
     #[test]
-    fn pseudo_where_empty_falls_back() {
+    fn pseudo_where_empty_is_valid_and_matches_nothing() {
         let s = parse(":where() { color: red; }");
         let pc = pseudo_at(&s, 0, 0, 0);
-        assert!(matches!(pc, PseudoClass::Unsupported(n) if n == "where"), "got {pc:?}");
+        assert!(matches!(pc, PseudoClass::Where(l) if l.is_empty()), "got {pc:?}");
     }
 
     #[test]

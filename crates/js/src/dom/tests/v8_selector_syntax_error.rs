@@ -117,3 +117,48 @@ fn get_elements_by_tag_and_class_never_throw() {
         "no-throw"
     );
 }
+
+/// BUG-1441: селекторы, валидные по Selectors 4, не бросают `SyntaxError`.
+#[test]
+fn selectors4_valid_forms_do_not_throw() {
+    let rt = v8_runtime_with_dom(make_doc());
+    for sel in [
+        ":is()",
+        ":where()",
+        ":not(:is())",
+        ":is(,div)",
+        ":dir(lol)",
+        ":dir( auto)",
+        r#":lang("fr")"#,
+        ":lang('fr', de)",
+        r#":lang("*-CH")"#,
+        ":lang(*-CH)",
+        "span:not([class]",
+        "::backdrop",
+        "::file-selector-button",
+        "::details-content",
+        "::part(foo)",
+        "::part(--foo)",
+        "::spelling-error",
+    ] {
+        let js_str = format!("\"{}\"", sel.replace('\\', "\\\\").replace('"', "\\\""));
+        let expr = format!("document.querySelectorAll({js_str})");
+        assert_eq!(throw_name(&rt, &expr), "no-throw", "for {sel}");
+    }
+    assert!(bool_eval(&rt, "document.querySelectorAll(':is()').length === 0"));
+    assert!(bool_eval(&rt, "document.querySelectorAll(':is(div, !!)').length > 0"));
+}
+
+#[test]
+fn selectors4_invalid_forms_still_throw() {
+    let rt = v8_runtime_with_dom(make_doc());
+    for expr in [
+        "document.querySelectorAll(':lang(0)')",
+        "document.querySelectorAll(':lang()')",
+        "document.querySelectorAll(':dir()')",
+        "document.querySelectorAll('span)')",
+        "document.querySelectorAll('::part()')",
+    ] {
+        assert_eq!(throw_name(&rt, expr), "SyntaxError", "for {expr}");
+    }
+}
