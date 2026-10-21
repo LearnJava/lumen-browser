@@ -1393,3 +1393,44 @@ use super::*;
         assert_eq!(sels[0].tail.len(), 1);
         assert!(matches!(sels[1].head.parts[0], SimpleSelector::PseudoClass(PseudoClass::Is(_))));
     }
+
+    fn selectors_css(rules: &[Rule]) -> Vec<String> {
+        rules.iter().flat_map(|r| r.selectors.iter().map(ComplexSelector::to_css_str)).collect()
+    }
+
+    #[test]
+    fn nested_second_amp_in_tail_is_substituted() {
+        // BUG-1445: `& + &` — второй `&` тоже подставляет родителя.
+        let s = parse(".q { & + & { color: green; } }");
+        assert_eq!(selectors_css(&s.rules), [".q", ".q + .q"]);
+        let s = parse(".q { &.a & { color: green; } }");
+        assert_eq!(selectors_css(&s.rules), [".q", ".q.a .q"]);
+    }
+
+    #[test]
+    fn nested_amp_not_at_head_and_leading_combinator() {
+        // BUG-1445: `.t &`, `.t > &`, `.r&`, `:not(&)`, `:is(.x) &`.
+        let s = parse(".q { .t & { a: b } div & { a: b } :is(.x) & { a: b } .t > & { a: b } .r& { a: b } :not(&) { a: b } }");
+        assert_eq!(
+            selectors_css(&s.rules),
+            [".q", ".t .q", "div .q", ":is(.x) .q", ".t > .q", ".r.q", ":not(.q)"]
+        );
+    }
+
+    #[test]
+    fn top_level_amp_is_scope() {
+        // Nesting L1 §3.2: `&` вне вложения — `:where(:scope)` (нулевая специфичность).
+        let s = parse("& .x { color: green }");
+        assert_eq!(selectors_css(&s.rules), [":where(:scope) .x"]);
+        let s = parse("& { color: green }");
+        assert_eq!(selectors_css(&s.rules), [":where(:scope)"]);
+    }
+
+    #[test]
+    fn supports_selector_amp_is_supported() {
+        // `@supports selector(&)` истинно — и на верхнем уровне, и во вложении.
+        let s = parse("@supports selector(&) { a { color: green } }");
+        assert!(s.supports_rules[0].condition.evaluate(&[]));
+        let s = parse(".q { @supports selector(&) { color: green } }");
+        assert!(s.supports_rules[0].condition.evaluate(&[]));
+    }
