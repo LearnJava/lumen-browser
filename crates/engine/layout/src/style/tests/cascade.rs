@@ -410,6 +410,44 @@ use super::*;
         );
     }
 
+    #[test]
+    fn revert_layer_in_style_attribute_falls_to_sheet() {
+        // BUG-1449: атрибут `style` — отдельный шаг над unlayered, `revert-layer`
+        // откатывает только его → значение из листа (зелёное), а не «ничего».
+        let s = cascade_at(
+            r#"<p style="color: red; color: revert-layer">x</p>"#,
+            "p { color: green; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_important_rolls_back_to_earlier_layer() {
+        // BUG-1449: `revert-layer !important` в слое `b` убирает и normal/
+        // important объявления слоёв `b` и `c`; остаётся слой `a` (зелёный).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer a { p { color: green; } }              @layer b { p { color: red; color: red !important;                                 color: revert-layer !important; } }              @layer c { p { color: red; color: red !important; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_logical_margin_restores_ua_value() {
+        // BUG-1449: `margin: 0; margin-block-start: revert` на `<h1>` → UA-отступ
+        // (как у `margin-top: revert`), а не 0.
+        let ua = cascade_at("<h1>x</h1>", "", &[0]);
+        let s = cascade_at(
+            "<h1>x</h1>",
+            "h1 { margin: 0; margin-block-start: revert; }",
+            &[0],
+        );
+        assert_ne!(ua.margin_top, LengthOrAuto::ZERO);
+        assert_eq!(s.margin_top, ua.margin_top);
+    }
+
     // ─── revert-rule (CSS Cascade L5 §revert-rule-keyword, BUG-487) ──────────
 
     #[test]

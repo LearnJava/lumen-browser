@@ -765,16 +765,37 @@ fn apply_css_wide_keyword_with(
             style.margin_left = src.margin_left.clone();
         }
         // CSS Logical Properties L1 — margin-inline-* / margin-block-*.
+        // `revert` дополнительно возвращает UA-значение физической стороны
+        // (BUG-1449): логическое поле физическое не перебивает, если оно уже 0.
+        "margin-inline-start" | "margin-inline-end" | "margin-block-start" | "margin-block-end"
+            if kw == Revert =>
+        {
+            crate::style::logical::revert_logical_margin_side(style, prop, ua_baseline);
+            match prop {
+                "margin-inline-start" => style.margin_inline_start = init.margin_inline_start.clone(),
+                "margin-inline-end" => style.margin_inline_end = init.margin_inline_end.clone(),
+                "margin-block-start" => style.margin_block_start = init.margin_block_start.clone(),
+                _ => style.margin_block_end = init.margin_block_end.clone(),
+            }
+        }
         "margin-inline-start" => style.margin_inline_start = if inh_only_inherit { inherited.margin_inline_start.clone() } else { init.margin_inline_start.clone() },
         "margin-inline-end"   => style.margin_inline_end = if inh_only_inherit { inherited.margin_inline_end.clone() } else { init.margin_inline_end.clone() },
         "margin-block-start"  => style.margin_block_start = if inh_only_inherit { inherited.margin_block_start.clone() } else { init.margin_block_start.clone() },
         "margin-block-end"    => style.margin_block_end = if inh_only_inherit { inherited.margin_block_end.clone() } else { init.margin_block_end.clone() },
         "margin-inline" => {
+            if kw == Revert {
+                crate::style::logical::revert_logical_margin_side(style, "margin-inline-start", ua_baseline);
+                crate::style::logical::revert_logical_margin_side(style, "margin-inline-end", ua_baseline);
+            }
             let src = if inh_only_inherit { inherited } else { init };
             style.margin_inline_start = src.margin_inline_start.clone();
             style.margin_inline_end = src.margin_inline_end.clone();
         }
         "margin-block" => {
+            if kw == Revert {
+                crate::style::logical::revert_logical_margin_side(style, "margin-block-start", ua_baseline);
+                crate::style::logical::revert_logical_margin_side(style, "margin-block-end", ua_baseline);
+            }
             let src = if inh_only_inherit { inherited } else { init };
             style.margin_block_start = src.margin_block_start.clone();
             style.margin_block_end = src.margin_block_end.clone();
