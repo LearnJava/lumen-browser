@@ -77,7 +77,15 @@ pub(crate) fn fetch_and_decode_background_images(
     // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
     // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
     // который эмиттер кладёт в `DrawBackgroundImage.src`.
-    let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
+    let mut urls = lumen_layout::collect_background_image_requests(layout, 1.0);
+    // CSS Shapes L1 §6.2: `shape-outside: url()` images ride the same fetch (CSP,
+    // cache, referrer policy); the caller turns them into alpha planes instead of
+    // painting them ([`report_shape_images`](crate::page_pipeline)).
+    for url in lumen_layout::collect_shape_image_requests(layout) {
+        if !urls.contains(&url) {
+            urls.push(url);
+        }
+    }
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let outcomes = parallel_map(&urls, |_, url| {
         // BUG-692: `upgrade-insecure-requests` переписывает схему ДО гейта

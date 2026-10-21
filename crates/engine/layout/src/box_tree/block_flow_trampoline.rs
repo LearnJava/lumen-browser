@@ -2,6 +2,7 @@ use super::*;
 use super::layout_cache::finalize_block_height;
 use super::line_clamp_flow;
 use super::layout_dispatch::{dispatch_box, finish_after_match, FontContext};
+use super::shape_resolve::{resolve_shape, FloatBoxes};
 
 /// LAYOUT-2 срез 1 — see `dispatch_box`'s doc comment (`layout_dispatch.rs`)
 /// for why this split exists. `Done` matches every dispatch arm that already
@@ -772,7 +773,8 @@ fn place_float(
             let right_edge = lx + fml + fw + fmr;
             fc.add_left(child_y, bot_y, right_edge);
             wire_shape_outside(fc, child, true, ShapeBoxes {
-                child_y, top_y, bot_y, box_left: lx, box_right: right_edge,
+                child_y, bot_y, box_left: lx, box_right: right_edge,
+                margins: [fmt, fmr, fmb, fml],
             }, content_width, viewport);
         }
         FloatSide::Right => {
@@ -784,7 +786,8 @@ fn place_float(
             let left_edge = rx - fmr - fw - fml;
             fc.add_right(child_y, bot_y, left_edge);
             wire_shape_outside(fc, child, false, ShapeBoxes {
-                child_y, top_y, bot_y, box_left: left_edge, box_right: rx,
+                child_y, bot_y, box_left: left_edge, box_right: rx,
+                margins: [fmt, fmr, fmb, fml],
             }, content_width, viewport);
         }
         FloatSide::None => unreachable!(),
@@ -837,10 +840,11 @@ fn same_line_float_top(children: &[LayoutBox], i: usize, child_y: f32) -> Option
 /// Margin-box geometry of a just-placed float (see [`wire_shape_outside`]).
 struct ShapeBoxes {
     child_y: f32,
-    top_y: f32,
     bot_y: f32,
     box_left: f32,
     box_right: f32,
+    /// Resolved margins `[top, right, bottom, left]`.
+    margins: [f32; 4],
 }
 
 /// CSS Shapes L1 — record `child`'s `shape-outside` (grown by `shape-margin`,
@@ -860,18 +864,18 @@ fn wire_shape_outside(
     let margin = child.style.shape_margin
         .resolve_or_zero(child.style.font_size, cb_width, viewport)
         .max(0.0);
-    let g = FloatShapeGeom {
-        is_left,
-        child_y: bx.child_y,
-        top_y: bx.top_y,
-        bot_y: bx.bot_y,
-        box_left: bx.box_left,
-        box_right: bx.box_right,
-        center_x: child.rect.x + child.rect.width / 2.0,
-        center_y: bx.top_y + child.rect.height / 2.0,
-    };
-    if register_shape_outside(fc, sv, &g, margin) {
-        fc.mark_last_shaped(is_left);
+    let boxes = FloatBoxes::of(child, bx.margins, cb_width, viewport);
+    if let Some(prims) = resolve_shape(sv, &boxes) {
+        // The contour is physical px from the margin-box top-left, which is
+        // the float context's frame once moved to where the float sits.
+        let prims = prims
+            .into_iter()
+            .map(|mut p| {
+                p.translate(bx.box_left, bx.child_y);
+                p
+            })
+            .collect();
+        fc.add_shape_prims(prims, is_left, (bx.child_y, bx.bot_y), (bx.box_left, bx.box_right), margin);
     }
 }
 

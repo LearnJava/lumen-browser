@@ -1,6 +1,6 @@
 # BUG-1518 — `shape-outside: <shape-box>` и `<basic-shape> <shape-box>` не поддержаны: опорный бокс всегда margin-box, скругление рамки (`border-radius`) контура не задаёт
 
-**Статус:** OPEN (ДОРАБОТКА → SHAPE-OUTSIDE-2)
+**Статус:** OPEN (срез 1 влит; ДОРАБОТКА → SHAPE-OUTSIDE-3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 23, `css/css-text-decor` + `css-gaps` + `css-shapes`)
 **Область:** layout (`crates/engine/layout/src/box_tree/shapes_floats.rs::register_shape_outside`, `style::ShapeOutside::Value(String)`)
 
@@ -32,3 +32,7 @@ WPT-RUN-14 срез 23: `shape-outside/shape-box/*` (39 id, из них 12 `bord
 ## Как проверить
 
 `css/css-shapes/shape-outside/shape-box/shape-outside-border-box-border-radius-001.html`, `supported-shapes/circle/shape-outside-circle-026.html`.
+
+## Срез SHAPE-OUTSIDE-2 (2026-10-21, ветка `p1-shape-outside-2`)
+
+Горизонтальное обтекание теперь идёт через `shape_resolve::resolve_shape` (тот же разбор, что у вертикального режима): `<shape-box>` как опорный бокс и как самостоятельное значение со скруглениями `border-radius`, `<basic-shape> <shape-box>` считается от выбранного бокса. Из таблицы пробы работают все строки; WPT `shape-box/*` — 13 из 42 identical (было 10), остальные 29 — ряды `inline-block` (`BoxKind::InlineBlockRow` не спрашивает `FloatContext`) и `<br>` (BUG-1411): задача SHAPE-OUTSIDE-3.
