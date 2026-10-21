@@ -15,6 +15,7 @@ mod bug1191_boxless_computed_style;
 mod bug1425_color_space_computed;
 mod bug1430_math_functions;
 mod bug1329_text_transform_lang;
+mod bug1446_marker_computed_style;
 mod bug590_create_event_beforeunload;
 mod bug936_mask_layer_wgpu_vs_cpu;
 mod compare_backends;

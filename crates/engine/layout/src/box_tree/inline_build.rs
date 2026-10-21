@@ -1612,6 +1612,9 @@ pub(crate) fn inject_marker(
         // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.
         _ => build_list_marker_text(style.list_style_type.clone(), ordinal, registry),
     };
+    // CSS Pseudo-Elements L4 §4.2: `::marker` supports `text-transform` (UA value `none`) —
+    // it applies to the marker string like to any other text run (BUG-1446).
+    let text = ms.text_extra.transform_text(ms.text_transform, &text);
     ms.display = Display::Inline;
     children.insert(0, LayoutBox {
         anchor_scroll: None, cv_hidden: Vec::new(),

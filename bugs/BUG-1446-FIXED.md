@@ -1,6 +1,6 @@
 # BUG-1446 — `::marker`: `getComputedStyle(li, '::marker')` отдаёт значения элемента, а не маркера (`content: normal`, `display: list-item`, `unicode-bidi: normal`, ширина `1008px`), а `letter-spacing` и `text-transform` на маркере не применяются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** layout/paint (`::marker`: стиль и компьютед; `crates/engine/layout/src/style/`, `crates/engine/layout/src/box_tree/`)
 
@@ -39,3 +39,20 @@ WPT-RUN-14 срез 20: `css-pseudo/marker-default-styles.html` (32/32), `marker
 ## Срез 25 (2026-10-08, P2, WPT-RUN-14 `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 
 `css/css-lists`: `marker-quotes`, `marker-webkit-text-fill-color`, `marker-dynamic-content-change`, `nested-marker-styling`, `marker-counter` — маркер не получает свой стиль. Пересекается с BUG-1548 (ширина `inside`-маркера) и BUG-1568.
+
+## Исправление (2026-10-21, P3)
+
+- `crates/engine/layout/src/style/pseudo.rs` — новая `marker_base_style`: база псевдоэлемента плюс UA-значения Pseudo L4 §4.2 (`unicode-bidi: isolate`, `font-variant-numeric: tabular-nums`, `text-transform: none`, `text-indent: 0`) — наследуемые `text-transform`/`text-indent` маркер больше не берёт у `li`. `marker_property_applies` пропускает `text-transform`, `letter-spacing`, `word-spacing`, `text-shadow`, `text-emphasis*`, `tab-size`, `hyphens`, `line-break`, `word-break`, `overflow-wrap` (до этого правило `::marker { letter-spacing }` отбрасывалось целиком).
+- `crates/engine/layout/src/box_tree/inline_build.rs::inject_marker` — строка маркера проходит `text_transform` (регистр, `full-width` и т. д.).
+- `crates/engine/paint/src/display_list/form_controls.rs::emit_list_marker` — `DrawText` маркера получает `letter_spacing`/`word_spacing` (раскладка уже мерила ширину с `letter-spacing`, рисовалось без).
+- `crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles_box` — запись `"marker"` для каждого `BoxKind::Marker` (`marker_style_map`: `display` = `inline` у `inside`, `block` у `outside`; `width`/`height` — размер бокса маркера); шим `_lumen_normalize_pseudo_elt` принимает `::marker`. Раньше имя не распознавалось, и `getComputedStyle(li, '::marker')` отдавал стиль самого `li`.
+
+## Проверка
+
+- `crates/driver/tests/cases/bug1446_marker_computed_style.rs` — 3 теста (UA-значения при `li { text-transform: lowercase; text-indent: 1px }`, правило `::marker` читается, `display`/`width` у маркера); до правки падали.
+- `crates/engine/layout/src/tests/half_leading_columns_floats.rs` — UA-значения, `text-transform` меняет строку маркера, `letter-spacing` доходит до стиля маркера. Тест `marker_ignores_non_applicable_properties` переведён с `letter-spacing` на `text-decoration-line`: WPT `marker-letter-spacing.html` требует, чтобы `letter-spacing` на `::marker` работал.
+- Перезапуск WPT-категории `css-pseudo`/`css-lists` не выполнялся: `.ini` для `marker-default-styles`, `marker-computed-*`, `marker-letter-spacing`, `marker-text-transform-*` снимать отдельным прогоном.
+
+## Остаток → [BUG-1667](BUG-1667-OPEN.md)
+
+Маркер без бокса (`list-style: none`, `content: none`) и `::marker` у не-`list-item` отдают пустую строку вместо `auto`/своего стиля; `marker-computed-content`, `marker-computed-size` (размер для `content: <image>`), срез 25 `css-lists`.
