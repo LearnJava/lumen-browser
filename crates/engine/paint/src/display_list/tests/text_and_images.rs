@@ -259,8 +259,9 @@
 
     /// Neutralise the UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204)
     /// so display-list coordinates reflect the element under test, not the body
-    /// margin — exactly as a real page does with `* { margin: 0 }`.
-    pub(super) const BODY_RESET: &str = "body{margin:0}";
+    /// margin — exactly as a real page does with `* { margin: 0 }`. `p` gets the same
+    /// reset: the UA `p { margin: 1em 0 }` (BUG-1334) would shift every paragraph by 16px.
+    pub(super) const BODY_RESET: &str = "body{margin:0}p{margin:0}";
 
     pub(crate) fn build(html: &str, css: &str) -> DisplayList {
         let doc = lumen_html_parser::parse(html);

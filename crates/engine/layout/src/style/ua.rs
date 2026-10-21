@@ -721,7 +721,8 @@ pub(in crate::style) fn is_appearance_disabling_property(prop: &str) -> bool {
 }
 
 /// Widgets for which the disabling properties apply (HTML LS §15.5): everything
-/// except checkbox/radio/range inputs and dropdown `<select>`.
+/// except checkbox/radio/range/color inputs and dropdown `<select>`. A color input keeps
+/// its swatch under an author `background` (it is a separate UA part, not the control box).
 pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> bool {
     let n = doc.get(node);
     let NodeData::Element { name, .. } = &n.data else { return false; };
@@ -729,7 +730,7 @@ pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> b
         "button" | "textarea" | "meter" | "progress" => true,
         "input" => !n.get_attr("type").is_some_and(|t| {
             let t = t.trim();
-            ["checkbox", "radio", "range", "hidden"].iter().any(|k| t.eq_ignore_ascii_case(k))
+            ["checkbox", "radio", "range", "color", "hidden"].iter().any(|k| t.eq_ignore_ascii_case(k))
         }),
         "select" => {
             n.get_attr("multiple").is_some()

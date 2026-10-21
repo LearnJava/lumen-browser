@@ -46,8 +46,8 @@ fn assert_snapshot(name: &str, actual: &str) {
 
 // Neutralise the UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204) so
 // these snapshots reflect element geometry, not the body margin — exactly as a
-// real page does with `* { margin: 0 }`.
-const BODY_RESET: &str = "body{margin:0}";
+// real page does with `* { margin: 0 }`. `p` is reset too (UA `p { margin: 1em 0 }`, BUG-1334).
+const BODY_RESET: &str = "body{margin:0}p{margin:0}";
 
 fn build(html: &str, css: &str, width: f32) -> String {
     let doc = lumen_html_parser::parse(html);
