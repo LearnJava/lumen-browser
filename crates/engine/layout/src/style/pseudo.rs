@@ -164,7 +164,9 @@ fn matches_complex_for_pseudo(
 /// CSS Pseudo-Elements L4 §5.5 — true when property `prop` is one of the limited
 /// set that applies to the `::marker` pseudo-element: all font properties, the
 /// `white-space` property, `color`, the `direction` / `unicode-bidi` /
-/// `text-combine-upright` writing-mode properties, `content`, and all animation
+/// `text-combine-upright` writing-mode properties, `content`, the text-flow properties the
+/// WPT `marker-*` tests exercise (`text-transform`, `letter-spacing`, `word-spacing`,
+/// `text-shadow`, `text-emphasis*`, `tab-size`, `hyphens`, wrapping), and all animation
 /// and transition properties. Custom properties (`--*`) are kept so `var()` inside
 /// `content` still resolves. Any other declaration on `::marker` is ignored.
 fn marker_property_applies(prop: &str) -> bool {
@@ -175,6 +177,7 @@ fn marker_property_applies(prop: &str) -> bool {
     }
     // `font`, `font-*`, `animation*` and `transition*` families are allowed wholesale.
     p.starts_with("font")
+        || p.starts_with("text-emphasis")
         || p.starts_with("animation")
         || p.starts_with("transition")
         || matches!(
@@ -186,6 +189,16 @@ fn marker_property_applies(prop: &str) -> bool {
                 | "direction"
                 | "unicode-bidi"
                 | "text-combine-upright"
+                | "text-transform"
+                | "letter-spacing"
+                | "word-spacing"
+                | "text-shadow"
+                | "tab-size"
+                | "hyphens"
+                | "line-break"
+                | "word-break"
+                | "overflow-wrap"
+                | "word-wrap"
         )
 }
 
@@ -234,6 +247,24 @@ fn first_line_property_applies(prop: &str) -> bool {
 /// inherits from the highlight of the parent element (CSS Pseudo-Elements L4 §3.3).
 pub(crate) fn highlight_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     pseudo_inherited_style(parent)
+}
+
+/// CSS Pseudo-Elements L4 §4.2 — the UA style of `::marker` on top of the inherited base:
+/// `unicode-bidi: isolate`, `font-variant-numeric: tabular-nums`, `text-transform: none`,
+/// `text-indent: 0`. The last two are inherited properties that a marker must *not* take
+/// from its list item (BUG-1446).
+fn marker_base_style(parent: &ComputedStyle) -> ComputedStyle {
+    use crate::style::NumericSpacing;
+    use crate::style::{TextTransform, TextTransformExtra, UnicodeBidi};
+    let mut style = pseudo_inherited_style(parent);
+    style.unicode_bidi = UnicodeBidi::Isolate;
+    style.font_variant_numeric.spacing = NumericSpacing::Tabular;
+    style.text_transform = TextTransform::None;
+    style.text_extra.transform = TextTransformExtra::default();
+    style.text_extra.indent_hanging = false;
+    style.text_extra.indent_each_line = false;
+    style.text_indent = crate::style::Length::Px(0.0);
+    style
 }
 
 fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
@@ -583,7 +614,7 @@ fn compute_pseudo_element_style_inner(
         // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
         if pseudo.eq_ignore_ascii_case("marker") {
             let _prof_init = lumen_core::profile::scope_detail("ps_init");
-            return Some(pseudo_inherited_style(parent));
+            return Some(marker_base_style(parent));
         }
         if let Some(item) = ua_quote {
             let mut style = pseudo_inherited_style(parent);
@@ -602,7 +633,7 @@ fn compute_pseudo_element_style_inner(
     drop(prof_match);
     let mut style = {
         let _prof_init = lumen_core::profile::scope_detail("ps_init");
-        let mut style = pseudo_inherited_style(parent);
+        let mut style = if pseudo.eq_ignore_ascii_case("marker") { marker_base_style(parent) } else { pseudo_inherited_style(parent) };
         if let Some(item) = ua_quote {
             style.content = Content::Items(vec![item]);
         }
