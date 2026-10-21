@@ -162,6 +162,14 @@ pub(crate) struct FlushHandles {
     /// additionally cleared by `update_client_rects`, because the table is
     /// never pushed by the embedder alongside its fresh geometry.
     pub(crate) text_frags_collected: Arc<AtomicBool>,
+    /// CSSOM-11: `(owner node, pseudo name) → border box and edge widths` of the pseudo-element
+    /// boxes ([`lumen_layout::collect_pseudo_rects`]) behind `CSSPseudoElement`'s geometry.
+    /// Collected only while [`Self::pseudo_rects_needed`] is set — the walk is O(document).
+    pub(crate) pseudo_rects: Arc<Mutex<HashMap<(u32, String), lumen_layout::PseudoGeometry>>>,
+    /// CSSOM-11: set by `_lumen_get_pseudo_geometry` before it flushes.
+    pub(crate) pseudo_rects_needed: Arc<AtomicBool>,
+    /// CSSOM-11: same bypass as [`Self::text_frags_collected`]; cleared by `update_client_rects`.
+    pub(crate) pseudo_rects_collected: Arc<AtomicBool>,
     /// BUG-1202: set when a flush publishes a layout tree newer than the one the embedder pushed
     /// into `hit_test_tree`; `elementFromPoint`/`elementsFromPoint` then hit-test `incr_basis`
     /// instead. Cleared by `V8JsRuntime::update_hit_test_tree`.
@@ -484,6 +492,8 @@ impl FlushHandles {
             && !self.custom_props_collected.load(Ordering::Relaxed);
         let text_frags_pending = self.text_frags_needed.load(Ordering::Relaxed)
             && !self.text_frags_collected.load(Ordering::Relaxed);
+        let pseudo_rects_pending = self.pseudo_rects_needed.load(Ordering::Relaxed)
+            && !self.pseudo_rects_collected.load(Ordering::Relaxed);
         if !self.never_flushed.load(Ordering::Relaxed)
             && !self.flush_stale.load(Ordering::Relaxed)
             && !focus_changed
@@ -492,6 +502,7 @@ impl FlushHandles {
             && !pseudo_styles_pending
             && !custom_props_pending
             && !text_frags_pending
+            && !pseudo_rects_pending
         {
             return;
         }
@@ -871,6 +882,11 @@ impl FlushHandles {
                 .unwrap_or_else(|e| e.into_inner()) =
                 lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard);
             self.text_frags_collected.store(true, Ordering::Relaxed);
+        }
+        if self.pseudo_rects_needed.load(Ordering::Relaxed) {
+            *self.pseudo_rects.lock().unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_pseudo_rects(&layout_root, viewport);
+            self.pseudo_rects_collected.store(true, Ordering::Relaxed);
         }
         // BUG-1211: scroll containers ARE scoped — cheap per box (a handful
         // of field reads, no ancestor context needed) but still an

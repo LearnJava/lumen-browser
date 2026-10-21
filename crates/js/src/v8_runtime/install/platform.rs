@@ -332,6 +332,22 @@ pub(crate) fn install_element_geometry(
         });
     }
 
+    // CSSOM-11: border box and edge widths of a pseudo-element box, backing `CSSPseudoElement`'s
+    // geometry — `[x, y, w, h, border t/r/b/l, padding t/r/b/l, margin t/r/b/l]`, or `undefined`
+    // when the pseudo-element owns no box (not generated, `display: none`, or inline — see
+    // `lumen_layout::collect_pseudo_rects`). The first call opts the page into collecting the
+    // table on every later flush (`FlushHandles::pseudo_rects_needed`).
+    {
+        let table = Arc::clone(&flush.pseudo_rects);
+        let needed = Arc::clone(&flush.pseudo_rects_needed);
+        let flush_pg = flush.clone();
+        reg!(scope, ctx, store, "_lumen_get_pseudo_geometry", move |nid: u32, name: String| -> Option<Vec<f64>> {
+            needed.store(true, Ordering::Relaxed);
+            flush_pg.maybe_flush();
+            table.lock().unwrap().get(&(nid, name)).map(|g| g.iter().map(|v| f64::from(*v)).collect())
+        });
+    }
+
     // BUG-1007: per-fragment rects backing `Element.prototype.getClientRects()`/
     // `getBoxQuads()` — one `[x, y, width, height]` per CSS fragment (visual
     // line, for a multi-line plain inline element) instead of the single

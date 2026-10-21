@@ -476,6 +476,11 @@ const WEB_API_SHIM_MID_B4: &str = include_str!("shim/web_api_shim_mid_b4.js");
 #[cfg(feature = "v8-backend")]
 const GEOMETRY_SHIM: &str = include_str!("shim/geometry_shim.js");
 
+/// `CSSPseudoElement` and `Element.prototype.pseudo()` (CSS Pseudo-Elements L4 §3, CSSOM-11).
+/// After [`GEOMETRY_SHIM`]: its geometry methods build `DOMQuad`/`DOMPoint`/`DOMRectList`.
+#[cfg(feature = "v8-backend")]
+const PSEUDO_ELEMENT_SHIM: &str = include_str!("shim/pseudo_element_shim.js");
+
 /// `URLSearchParams` + `URL` (WHATWG URL §5/§6.1) — `[Exposed=(Window,Worker)]`.
 ///
 /// Второй кусок, общий с воркером: сервис-воркеры разбирают запросы именно
@@ -590,7 +595,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a

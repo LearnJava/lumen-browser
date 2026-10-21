@@ -1,6 +1,8 @@
 # BUG-1456 — `CSSPseudoElement` и `Element.pseudo()` не реализованы: 12 id, 72 упавших сабтеста
 
-**Статус:** OPEN (ДОРАБОТКА → CSSOM-11)
+**Статус:** OPEN (ДОРАБОТКА → CSSOM-12)
+**Сделано в CSSOM-11 (2026-10-21):** `CSSPseudoElement`, `Element.pseudo()`, геометрия блочных псевдоэлементов и `convert*FromNode` — `CSSPseudoElement-identity.html`, `-convertPoint.tentative.html`, `-getBoxQuads.tentative.html` зелёные, `-geometry-edge-cases.tentative.html` 22/23. Остаток ниже и в `CSSOM-12`: события/`pseudoTarget`/`:hover` на псевдоэлементе, живое дерево `::view-transition*`, бокс у пустого inline-`::before`, `idlharness.html`.
+**Тип:** остаток — отсутствующая функциональность (задача ROADMAP `CSSOM-12`), не дефект.
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** js (`Element.prototype.pseudo()`, `CSSPseudoElement`, `getPseudoElements()` — отсутствуют вовсе)
 
@@ -18,7 +20,7 @@ WPT-RUN-14 срез 20: сообщения `target.pseudo is not a function`, `e
 
 ## Что делать
 
-Задача `CSSOM-11` (`ROADMAP.md`): `Element.pseudo(type)`, интерфейс `CSSPseudoElement` (`element`, `type`, `getBoundingClientRect`, `getClientRects`, цель событий), `getPseudoElements()`.
+Задача `CSSOM-12` (`ROADMAP.md`; интерфейс и геометрия — `CSSOM-11`, сделана): `Element.pseudo(type)`, интерфейс `CSSPseudoElement` (`element`, `type`, `getBoundingClientRect`, `getClientRects`, цель событий), `getPseudoElements()`.
 
 ## Как проверить
 

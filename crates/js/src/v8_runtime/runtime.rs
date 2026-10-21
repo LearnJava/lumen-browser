@@ -472,6 +472,13 @@ pub struct V8JsRuntime {
     /// cleared by [`Self::update_client_rects`] so fresh embedder geometry
     /// forces the next reader through a real flush.
     pub(super) text_frags_collected: Arc<AtomicBool>,
+    /// CSSOM-11: mirrors [`super::style_flush::FlushHandles::pseudo_rects`].
+    pub(super) pseudo_rects: Arc<Mutex<HashMap<(u32, String), lumen_layout::PseudoGeometry>>>,
+    /// CSSOM-11: mirrors [`super::style_flush::FlushHandles::pseudo_rects_needed`].
+    pub(super) pseudo_rects_needed: Arc<AtomicBool>,
+    /// CSSOM-11: mirrors [`super::style_flush::FlushHandles::pseudo_rects_collected`]; cleared by
+    /// [`Self::update_client_rects`].
+    pub(super) pseudo_rects_collected: Arc<AtomicBool>,
     /// BUG-1202: mirrors [`super::style_flush::FlushHandles::hit_tree_stale`].
     pub(super) hit_tree_stale: Arc<AtomicBool>,
     /// CSSOM-4/BUG-493: the page's current stylesheet, pushed by the embedder
@@ -774,6 +781,9 @@ impl V8JsRuntime {
             text_frag_rects: Arc::new(Mutex::new(HashMap::new())),
             text_frags_needed: Arc::new(AtomicBool::new(false)),
             text_frags_collected: Arc::new(AtomicBool::new(false)),
+            pseudo_rects: Arc::new(Mutex::new(HashMap::new())),
+            pseudo_rects_needed: Arc::new(AtomicBool::new(false)),
+            pseudo_rects_collected: Arc::new(AtomicBool::new(false)),
             hit_tree_stale: Arc::new(AtomicBool::new(false)),
             flush_stylesheet: Arc::new(Mutex::new(None)),
             style_never_flushed: Arc::new(AtomicBool::new(true)),
@@ -1323,6 +1333,7 @@ impl V8JsRuntime {
         // tree, not pushed here — mark it stale so the next
         // `highlightsFromPoint()` re-collects against the new layout.
         self.text_frags_collected.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.pseudo_rects_collected.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Replace the `LayoutBox` tree snapshot backing `elementFromPoint`/
