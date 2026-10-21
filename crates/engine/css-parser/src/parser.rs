@@ -1432,8 +1432,12 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 Some('&') => {
-                    // Explicit nesting with `&`.
-                    let (r, a) = self.parse_nested_rule_amp(parent_sels);
+                    // Explicit nesting with `&`; второй `&` в prelude (`& + &`,
+                    // `&.a &`) — подстановка `:is(<родитель>)` по всей цепочке.
+                    let (r, a) = match self.parse_nested_rule_with_extra_amp(parent_sels) {
+                        Some(parsed) => parsed,
+                        None => self.parse_nested_rule_amp(parent_sels),
+                    };
                     nested.extend(r);
                     at_rules.extend(a);
                 }

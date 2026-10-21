@@ -46,6 +46,21 @@ impl Parser<'_> {
         matches!(prelude_terminator(rest), (_, Some('{'))) && !rest.starts_with("--")
     }
 
+    /// Prelude с ведущим `&` и ещё одним `&` дальше по цепочке (`& + &`, `&.a &`):
+    /// общий путь [`Self::parse_nested_rule_with_inner_amp`], а не `& <комбинатор> <список>`,
+    /// который второй `&` разобрать не может. `None` — второго `&` нет, курсор не сдвинут.
+    pub(super) fn parse_nested_rule_with_extra_amp(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+    ) -> Option<(Vec<Rule>, Vec<AtRuleOutcome>)> {
+        let rest = &self.input[self.pos..];
+        let (len, _) = prelude_terminator(rest);
+        if rest[..len].matches('&').count() < 2 {
+            return None;
+        }
+        self.parse_nested_rule_with_inner_amp(parent_sels, None)
+    }
+
     /// CSS Nesting L1 §3.1: a nested prelude that mentions `&` somewhere other than
     /// its head (`.stuff, :is(&) #inner2 { }`) — `&` stands for `:is(<родитель>)`
     /// wherever it is, and a list entry without `&` is a descendant of the parent.
