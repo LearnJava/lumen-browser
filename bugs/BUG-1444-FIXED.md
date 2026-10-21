@@ -1,6 +1,6 @@
 # BUG-1444 — `:has()` с составным относительным селектором (`:has(> .a > .b)`, `:has(+ .a + .c)`, `:has(~ .a .t)`) не привязан к субъекту: проверяется только правый компаунд кандидата
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** layout (`crates/engine/layout/src/style/matching/forms.rs::matches_relative` `:1004`)
 
@@ -36,3 +36,7 @@ WPT-RUN-14 срез 20: `selectors/invalidation/has-sibling.html` (26 из 71), 
 ## Как проверить
 
 Таблица выше; `css/selectors/invalidation/has-sibling.html`.
+
+## Исправление
+
+`matches_relative` (`crates/engine/layout/src/style/matching/forms.rs`) для составного относительного селектора больше не матчит цепочку «где-то рядом»: правый compound ищется среди потомков субъекта (для `>`/пробела/без комбинатора) либо среди последующих братьев субъекта и их потомков (для `+`/`~`), а самый левый compound цепочки обязан стоять в отношении, заданном ведущим комбинатором, к субъекту (`matches_complex_anchored` в `matching.rs`: `matches_chain` получил параметр-предикат для левого узла, горячий `matches_complex` передаёт `|_| true` и после мономорфизации не платит). Односоставные аргументы идут прежним быстрым путём. Заодно починен случай без комбинатора: `.a > .b` в `:has()` больше не принимает за `.a` сам субъект. Тесты — `style/tests/has_relative_chain.rs` (матрица из таблицы выше + субъект как `.a`).
