@@ -115,7 +115,7 @@ pub use box_tree::{
     is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_mutation_incremental_with_counters, layout_streaming_incremental,
-    lay_out_incremental, select_widget_arrow_width, select_widget_font_size, BoxKind, BoxOrigin,
+    lay_out_incremental, select_widget_arrow_width, select_widget_font_size, AnchorScroll, AnchorScroller, BoxKind, BoxOrigin,
     BoxRole, CrossOriginMode, FieldsetLegend, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
@@ -2709,6 +2709,45 @@ pub fn collect_dirty_subtree_ids<S: std::hash::BuildHasher>(
 }
 
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
+    let found = set_scroll_position_rec(root, node, x, y);
+    if found {
+        refresh_anchor_scroll(root);
+    }
+    found
+}
+
+/// CSS Anchor Positioning L1 §4.3 — copies the current `scroll_x` / `scroll_y` of every scroll
+/// container an anchor-positioned box follows ([`LayoutBox::anchor_scroll`]) into that box, so
+/// the next paint (or patch of a built display list) moves it with its anchor. Call after any
+/// change of a container's scroll offset made without a relayout; a tree without such boxes
+/// costs one read-only walk.
+pub fn refresh_anchor_scroll(root: &mut LayoutBox) {
+    let mut any = false;
+    let mut offsets: std::collections::HashMap<lumen_dom::NodeId, (f32, f32)> = std::collections::HashMap::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        any |= b.anchor_scroll.is_some();
+        if b.scroll_x != 0.0 || b.scroll_y != 0.0 {
+            // The principal box of a node comes first in pre-order and owns the offset.
+            offsets.entry(b.node).or_insert((b.scroll_x, b.scroll_y));
+        }
+        stack.extend(b.children.iter());
+    }
+    if !any {
+        return;
+    }
+    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if let Some(a) = b.anchor_scroll.as_mut() {
+            for sc in &mut a.scrollers {
+                (sc.x, sc.y) = offsets.get(&sc.node).copied().unwrap_or((0.0, 0.0));
+            }
+        }
+        stack.extend(b.children.iter_mut());
+    }
+}
+
+fn set_scroll_position_rec(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
     if root.node == node {
         let pb = padding_box(root);
         root.scroll_x = if root.style.overflow_x == style::Overflow::Clip {
@@ -2726,7 +2765,7 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
         return true;
     }
     for child in &mut root.children {
-        if set_scroll_position(child, node, x, y) {
+        if set_scroll_position_rec(child, node, x, y) {
             return true;
         }
     }
@@ -2749,7 +2788,8 @@ pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections:
     }
     let mut pending = states.len();
     let mut applied = std::collections::HashSet::new();
-    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    let mut moved = false;
+    let mut stack: Vec<&mut LayoutBox> = vec![&mut *root];
     while let Some(b) = stack.pop() {
         let node = b.node;
         if let Some(s) = states.get(&node.raw())
@@ -2758,13 +2798,18 @@ pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections:
             pending -= 1;
             let at_origin = b.scroll_x == 0.0 && b.scroll_y == 0.0;
             if !(at_origin && s[0] == 0.0 && s[1] == 0.0) {
-                set_scroll_position(b, node, s[0], s[1]);
+                set_scroll_position_rec(b, node, s[0], s[1]);
+                moved = true;
             }
             if pending == 0 {
-                return;
+                break;
             }
         }
         stack.extend(b.children.iter_mut().rev());
+    }
+    drop(stack);
+    if moved {
+        refresh_anchor_scroll(root);
     }
 }
 

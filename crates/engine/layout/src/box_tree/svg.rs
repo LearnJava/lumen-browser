@@ -1357,6 +1357,7 @@ fn process_svg_node(
         "rect" => {
             let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Rect {
@@ -1380,6 +1381,7 @@ fn process_svg_node(
         "circle" => {
             let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Circle {
@@ -1399,6 +1401,7 @@ fn process_svg_node(
         "ellipse" => {
             let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Ellipse {
@@ -1419,6 +1422,7 @@ fn process_svg_node(
         "line" => {
             let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::SvgShape {
                     shape: SvgShapeKind::Line {
@@ -1440,6 +1444,7 @@ fn process_svg_node(
             let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
             let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity(), svg_mask },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -1461,6 +1466,7 @@ fn process_svg_node(
             // attribute is folded into the cascade by `apply_svg_presentational_hints`.
             let baseline_shift = style.baseline_shift;
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::SvgText {
                     text,
@@ -1485,6 +1491,7 @@ fn process_svg_node(
             collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, own_svg_size, flat, &mut group_children, dark_mode, use_stack);
             let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
             out.push(LayoutBox {
+                anchor_scroll: None,
                 node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                 kind: BoxKind::Block,
                 children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -1568,6 +1575,7 @@ fn process_svg_node(
 
             if !use_children.is_empty() {
                 out.push(LayoutBox {
+                    anchor_scroll: None,
                     node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                     kind: BoxKind::Block,
                     children: use_children, col_span: 1, row_span: 1,
@@ -1592,6 +1600,7 @@ fn process_svg_node(
             if let Some(d) = points_to_path_d(&points, close) {
                 let svg_mask = resolve_svg_mask(doc, sheet, &style, viewport, own_svg_size, flat, dark_mode, use_stack);
                 out.push(LayoutBox {
+                    anchor_scroll: None,
                     node: child_id, rect: Rect::ZERO, used_padding: None, used_line_height: style.font_size * style.line_height, grid_baselines: None, fieldset_legend: None, table_caption_inset: [0.0; 2], clamp_clip: None, subgrid_tracks: None, used_grid_tracks: None, style,
                     kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity(), svg_mask },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),

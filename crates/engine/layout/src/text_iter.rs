@@ -158,6 +158,7 @@ mod tests {
 
     fn make_inline_run(rect: Rect, lines: Vec<Vec<InlineFrag>>) -> LayoutBox {
         LayoutBox {
+            anchor_scroll: None,
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
@@ -177,6 +178,7 @@ mod tests {
 
     fn make_block(rect: Rect, children: Vec<LayoutBox>) -> LayoutBox {
         LayoutBox {
+            anchor_scroll: None,
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
@@ -340,6 +342,7 @@ mod tests {
     #[test]
     fn skip_box_omitted() {
         let b = LayoutBox {
+            anchor_scroll: None,
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect: Rect { x: 0.0, y: 0.0, width: 100.0, height: 20.0 },

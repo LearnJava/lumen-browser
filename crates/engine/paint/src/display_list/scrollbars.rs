@@ -291,7 +291,9 @@ pub fn patch_scroll_layer(dl: &mut DisplayList, b: &LayoutBox) -> bool {
             push_idxs.push(i);
         }
     }
-    let Some(&first_push) = push_idxs.first() else {
+    // The container's own layer, not the `anchor_scroll_layers` of a box that follows it: only the
+    // former is followed by the scrollbars.
+    let Some(first_push) = push_idxs.iter().copied().find(|&i| !is_anchor_scroll_layer(&dl[i])) else {
         return false;
     };
     // Балансирующий PopScrollLayer оригинального (первого) слоя.
@@ -376,7 +378,9 @@ pub fn apply_scroll_overrides(dl: &mut DisplayList, overrides: &[ScrollLayerOver
                     *scroll_y = overrides[k].scroll_y;
                     touched[k] = true;
                 }
-                open.push(k);
+                // A layer of a box following the container (`anchor_scroll_layers`) has no scrollbars.
+                let follower = is_anchor_scroll_layer(&dl[i]);
+                open.push(if follower { None } else { k });
             }
             DisplayCommand::PopScrollLayer => {
                 if let Some(Some(k)) = open.pop()

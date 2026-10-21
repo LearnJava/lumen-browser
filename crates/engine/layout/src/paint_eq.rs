@@ -65,6 +65,7 @@ fn box_self_paint_eq<'a>(
         svg_group_transform,
         scroll_x,
         scroll_y,
+        anchor_scroll,
         dirty: _,
         grid_baselines: _,
         used_grid_tracks: _,
@@ -90,6 +91,7 @@ fn box_self_paint_eq<'a>(
         && svg_group_transform == &b.svg_group_transform
         && scroll_x.to_bits() == b.scroll_x.to_bits()
         && scroll_y.to_bits() == b.scroll_y.to_bits()
+        && anchor_scroll == &b.anchor_scroll
         && children.len() == b.children.len()
         && kind_paint_eq(kind, &b.kind, work)
         && {

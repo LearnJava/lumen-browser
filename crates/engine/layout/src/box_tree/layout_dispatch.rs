@@ -1891,6 +1891,7 @@ pub(super) fn dispatch_box(
                     for (li, line) in cont_lines.into_iter().enumerate() {
                         let line_w = line.last().map_or(0.0, |f| f.x + f.width);
                         let cont_box = LayoutBox {
+                            anchor_scroll: None,
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_padding: None,

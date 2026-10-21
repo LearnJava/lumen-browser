@@ -1,6 +1,6 @@
 # BUG-1469 — Привязка к прокрутке для CSS Anchor Positioning не реализована: якорёный бокс не следует за прокруткой контейнера якоря
 
-**Статус:** OPEN (ДОРАБОТКА → ANCHOR-SCROLL)
+**Статус:** OPEN (ДОРАБОТКА → ANCHOR-SCROLL-2)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout/paint/js (`crates/engine/layout/src/anchor.rs` — `apply_anchor_positions` работает от геометрии без учёта прокрутки; скролл-контейнеры якорей)
 
@@ -33,3 +33,9 @@ WPT-RUN-14 срез 21: `css-anchor-position/anchor-scroll-002.html`, `anchor-sc
 ## Как проверить
 
 Таблица выше; `css/css-anchor-position/anchor-scroll-002.html`, `anchor-scroll-position-try-001.html`.
+
+## Срез 1 (ANCHOR-SCROLL, 2026-10-21)
+
+Влит показ: `LayoutBox::anchor_scroll` (контейнеры прокрутки вокруг якоря, которых нет среди предков цели; цепочки якорь-на-якоре), `refresh_anchor_scroll` (смещения на каждой прокрутке), paint оборачивает цель в `PushScrollLayer` с `id` контейнера (`patch_scroll_layer`/`apply_scroll_overrides` двигают её без пересборки). Проба из таблицы выше: цель `y=80` при якоре `y=50…79` (`scrollTop=250`, `--viewport 800x600`), цель `position:fixed` — на `y=20` при якоре на `y=20`. A/B по 210 reftest `css/css-anchor-position`: identical 40→50, без регрессий.
+
+**Осталось (ANCHOR-SCROLL-2):** прямоугольники для скриптов (`getBoundingClientRect`/`offsetTop`) — прокрутку предков-скроллеров не вычитают (BUG-1166), а у цели нет сдвига `anchor_scroll`; `position-area` в прокручиваемом содержащем блоке; `position-try-fallbacks` при прокрутке (BUG-562); `position: fixed` + прокрутка страницы; якорь-`inline` (BUG-1477); hit-test цели по непрокрученному прямоугольнику. Из трёх критериев задачи (`anchor-scroll-002.html`, `-003.html`, `position-area-scrolling-005.html`) ни один не зелёный — все три читают геометрию через `getBoundingClientRect`/`offsetLeft`.
