@@ -1,6 +1,6 @@
 # BUG-1440 — `ParentNode.append/prepend/replaceChildren` и `ChildNode.before/after/replaceWith` с `DocumentFragment` ничего не вставляют
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — `append` `:8772`, `prepend` `:8755`, `before` `:8694`, `after` `:8709`, `replaceWith` `:8729`, `replaceChildren` `:8851`; у `DocumentFragment` — `:3736-3758`)
 
@@ -38,3 +38,7 @@ WPT-RUN-14 срез 20: `css-cascade/scope-implicit.html` и ещё 12 `scope-*`
 ## Дополнение: WPT-RUN-14 срез 26 (2026-10-09)
 
 У `ShadowRoot` разворачивание `DocumentFragment` не работает ни в одном из методов, включая `appendChild` и `insertBefore(fragment, null)` (у `Element` эти два работают — см. выше): `r.appendChild(tpl.content.cloneNode(true))` кладёт в shadow root узел `#document-fragment`, детей фрагмента там нет. Это отдельная запись — [BUG-1577](BUG-1577-OPEN.md) (вместе с `ShadowRoot.getElementById`, ломающим 27 id `css-shadow`).
+
+## Исправление (2026-10-21, P3)
+
+Новый помощник `_lumen_expand_insert_nids(args)` (`web_api_shim_mid.js`) — DOM LS §4.2.6 «convert nodes into a node» как плоский список nid: строка/не-узел → текстовый узел, `DocumentFragment` → снимок его детей. Через него идут `append`/`prepend`/`before`/`after`/`replaceWith`/`replaceChildren` у элемента, собственные `append`/`prepend`/`replaceChildren` фрагмента и `ShadowRoot.prototype`. `firstElementChild`/`lastElementChild`/`childElementCount` у фрагмента уже были (BUG-1130). Тесты — `crates/js/src/dom/tests/v8_bug1440_fragment_insertion.rs`. `ShadowRoot.appendChild(fragment)` — отдельно, BUG-1577.
