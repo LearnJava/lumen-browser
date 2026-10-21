@@ -114,6 +114,30 @@ fn body_bg_propagates_to_html_when_html_has_none() {
     );
 }
 
+/// BUG-1398: layout/paint/size/style containment on `<html>` or `<body>` cuts the propagation.
+#[test]
+fn containment_on_root_or_body_blocks_bg_propagation() {
+    for who in ["html", "body"] {
+        for c in ["layout", "paint", "size", "style", "strict", "content"] {
+            let root = lay_full(
+                "<html><body><p>x</p></body></html>",
+                &format!("body {{ background-color: red; }} {who} {{ contain: {c}; }}"),
+            );
+            assert_eq!(canvas_background_color(&root), None, "{who} contain:{c}");
+        }
+    }
+    let root = lay_full(
+        "<html><body><p>x</p></body></html>",
+        "body { background-color: red; contain: inline-size; }",
+    );
+    assert_eq!(canvas_background_color(&root), Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    let root = lay_full(
+        "<html><body><p>x</p></body></html>",
+        "html { background-color: blue; contain: paint; } body { background-color: red; }",
+    );
+    assert_eq!(canvas_background_color(&root), Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+}
+
 #[test]
 fn html_with_own_bg_blocks_propagation() {
     let root = lay_full(

@@ -804,9 +804,25 @@ pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> 
     let html = root.children.iter().find(|c| is_element_box_kind(&c.kind))?;
     let html_has_bg =
         html.style.background_color.is_some() || !html.style.background_layers.is_empty();
-    let source = if html_has_bg { html } else { first_child_element_box(html, html.node)? };
+    let source = if html_has_bg {
+        html
+    } else {
+        let body = first_child_element_box(html, html.node)?;
+        // CSS Containment: layout/paint/size/style containment on either the root or the
+        // `<body>` stops the `<body>` background from reaching the canvas (BUG-1398).
+        if blocks_background_propagation(html) || blocks_background_propagation(body) {
+            return None;
+        }
+        body
+    };
     let color = source.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
+}
+
+/// `contain` values that cut the root-background propagation (CSS Containment L1/L2 §`contain`).
+fn blocks_background_propagation(b: &LayoutBox) -> bool {
+    let c = b.style.contain.0;
+    c & (ContainFlags::SIZE.0 | ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0 | ContainFlags::STYLE.0) != 0
 }
 
 /// Boxes an element can generate as its principal box — `html` / `body` may carry
