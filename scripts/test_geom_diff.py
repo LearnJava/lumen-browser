@@ -178,6 +178,16 @@ class Report(unittest.TestCase):
         lu["title"] = "  Stack\n  Overflow "  # тот же заголовок с несхлопнутыми пробелами — сравнимы
         self.assertFalse(gd.compare(c, lu, 4)["incomparable"])
 
+    def test_triage_block_survives_regeneration(self):
+        meta = {"date": "2026-10-21", "lumen": "l", "lumen_mtime": "t", "chrome": "c", "limit": 500}
+        first = gd.report_md([], meta, 4)
+        self.assertIn(gd.TRIAGE_STUB, first)  # заглушка, пока триажа нет
+        manual = first.replace("_Не заполнен", "BUG-1: ручная запись\n_Не заполнен")
+        kept = gd.extract_triage(manual)
+        self.assertIn("BUG-1: ручная запись", kept)
+        self.assertIn(kept, gd.report_md([], meta, 4, kept))
+        self.assertIsNone(gd.extract_triage("# отчёт без блока"))
+
     def test_stale_children_is_not_clean(self):
         c = snap([node("body", 0, 0, 1, 1, [])])
         lu = snap([node("body", 0, 0, 1, 1, [])])

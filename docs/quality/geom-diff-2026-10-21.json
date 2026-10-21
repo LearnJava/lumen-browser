@@ -1,9 +1,9 @@
 {
  "meta": {
-  "date": "2026-10-21",
+  "date": "2026-10-22",
   "lumen": "target/dev-release/lumen.exe",
-  "lumen_mtime": "2026-10-21 23:02",
-  "chrome": "C:\\Users\\konstantin\\AppData\\Local\\ms-playwright\\chromium-1234\\chrome-win64\\chrome.exe",
+  "lumen_mtime": "?",
+  "chrome": "-",
   "limit": 500,
   "threshold": 4.0
  },

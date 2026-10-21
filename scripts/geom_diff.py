@@ -20,7 +20,8 @@ CDP с `Emulation.setDeviceMetricsOverride` 1280×720, DPR 1. Снимок — �
 изменения числа элементов.
 
 Сырые снимки — `.tmp/geom_diff/<slug>.<браузер>.json` (`--reuse` сравнивает их без браузеров);
-отчёт — `docs/quality/geom-diff-<дата>.md` и сводка `geom-diff-<дата>.json` рядом. Как читать —
+отчёт — `docs/quality/geom-diff-<дата>.md` и сводка `geom-diff-<дата>.json` рядом; блок
+`<!-- triage -->…<!-- /triage -->` в отчёте пишется руками и при перегенерации сохраняется. Как читать —
 docs/quality/geom-diff-howto.md.
 """
 
@@ -728,7 +729,21 @@ def summary_line(results: list[dict]) -> str:
             f"(несопоставимы: {odd}, не сняты: {lost}, всего {len(results)})")
 
 
-def report_md(results: list[dict], meta: dict, threshold: float) -> str:
+TRIAGE_OPEN, TRIAGE_CLOSE = "<!-- triage -->", "<!-- /triage -->"
+TRIAGE_STUB = "\n".join([
+    TRIAGE_OPEN, "## Триаж", "",
+    "_Не заполнен: сгруппировать находки по первопричине, завести BUG-NNN или записать «легитимная разница»._",
+    TRIAGE_CLOSE])
+
+
+def extract_triage(text: str) -> str | None:
+    """Блок ручного триажа из прежнего отчёта (вместе с маркерами) — перегенерация его не теряет."""
+    a = text.find(TRIAGE_OPEN)
+    b = text.find(TRIAGE_CLOSE, a + 1) if a >= 0 else -1
+    return text[a:b + len(TRIAGE_CLOSE)] if b >= 0 else None
+
+
+def report_md(results: list[dict], meta: dict, threshold: float, triage: str | None = None) -> str:
     out = [
         f"# Geometry/computed-styles diff против Chrome — {meta['date']}", "",
         f"Скрипт `scripts/geom_diff.py` (TEST-11), как читать — [geom-diff-howto.md](geom-diff-howto.md). "
@@ -751,7 +766,7 @@ def report_md(results: list[dict], meta: dict, threshold: float) -> str:
         out.append(f"| {r['slug']} | {len(s['chrome']['nodes'])}/{len(s['lumen']['nodes'])} | "
                    f"{c['matched_pct']}% | {c['geom']} ({len(c['geom_roots'])} / {c['geom_block_roots']}) | {c['lumen_zero_rect']} | {c['style']} | "
                    f"{c['missing_total']} |")
-    out += ["", "## По сайтам", ""]
+    out += ["", triage or TRIAGE_STUB, "", "## По сайтам", ""]
     for r in results:
         out += site_md(r["slug"], r["url"], r["snaps"], r["cmp"])
     return "\n".join(out).rstrip() + "\n"
@@ -852,7 +867,8 @@ def main() -> int:
             "limit": args.limit, "threshold": args.threshold}
     out = Path(args.out) if args.out else REPO / "docs" / "quality" / f"geom-diff-{stamp}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report_md(results, meta, args.threshold), encoding="utf-8", newline="\n")
+    triage = extract_triage(out.read_text(encoding="utf-8")) if out.is_file() else None
+    out.write_text(report_md(results, meta, args.threshold, triage), encoding="utf-8", newline="\n")
     out.with_suffix(".json").write_text(
         json.dumps(summary_json(results, meta), ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(summary_line(results))
