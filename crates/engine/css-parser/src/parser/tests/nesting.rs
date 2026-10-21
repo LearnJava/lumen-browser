@@ -1369,3 +1369,27 @@ use super::*;
         assert!(matches!(sel.head.parts[0], SimpleSelector::PseudoClass(PseudoClass::Is(_))));
         assert_eq!(sel.tail.len(), 1);
     }
+
+    #[test]
+    fn nested_type_selector_without_amp_is_a_descendant_rule() {
+        // CSS Nesting L1 §4 (relaxed): `div { }` inside a style rule.
+        let s = parse(".p { div { color: red; } --x: { a: b }; margin: 0; }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[0].declarations.iter().filter(|d| d.property == "margin").count(), 1);
+        assert_eq!(
+            s.rules[1].selectors,
+            vec![two(SimpleSelector::Class("p".into()), Combinator::Descendant, SimpleSelector::Type("div".into()))]
+        );
+    }
+
+    #[test]
+    fn nested_prelude_with_inner_amp_substitutes_it_and_nests_the_rest() {
+        // `.stuff, :is(&) #inner2 { }` inside `.a`: first entry is a descendant,
+        // second wraps the parent in `:is()`.
+        let s = parse(".a { .stuff, :is(&) #inner2 { z-index: 1; } }");
+        assert_eq!(s.rules.len(), 2);
+        let sels = &s.rules[1].selectors;
+        assert_eq!(sels.len(), 2);
+        assert_eq!(sels[0].tail.len(), 1);
+        assert!(matches!(sels[1].head.parts[0], SimpleSelector::PseudoClass(PseudoClass::Is(_))));
+    }

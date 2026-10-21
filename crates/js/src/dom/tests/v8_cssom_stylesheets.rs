@@ -271,6 +271,47 @@ fn rule_style_setter_is_visible_to_same_tick_get_computed_style() {
     assert_eq!(r, lumen_core::JsValue::String("123px".to_string()));
 }
 
+/// CSSOM-10: `selectorText` of an outer rule re-targets its nested rules too
+/// (`css-nesting/cssom.html`, «Mutating the selectorText of outer rule
+/// invalidates inner rules») — the independent cascade parse must see it.
+#[test]
+fn outer_selector_text_setter_restyles_nested_rules_in_same_tick() {
+    let (rt, _style_nid) =
+        v8_runtime_with_flush_and_style_node(".a { & { z-index: 1; } }");
+    let r = rt
+        .eval(
+            "(function() {
+                var m = document.getElementById('main');
+                var before = getComputedStyle(m).zIndex;
+                document.styleSheets[0].cssRules[0].selectorText = '#main';
+                return before + '|' + getComputedStyle(m).zIndex;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("auto|1".to_string()));
+}
+
+/// Same as above for a `<style>` the script itself appended (the WPT shape):
+/// the cascade pushed by the shell never saw its text.
+#[test]
+fn script_made_style_selector_text_setter_restyles_nested_rules() {
+    let (rt, _style_nid) = v8_runtime_with_flush_and_style_node("#other { width: 50px; }");
+    let r = rt
+        .eval(
+            "(function() {
+                var main = document.createElement('main');
+                main.innerHTML = '<style>.a { & { z-index: 1; } }</style>';
+                document.body.appendChild(main);
+                var m = document.getElementById('main');
+                var before = getComputedStyle(m).zIndex;
+                main.firstElementChild.sheet.cssRules[0].selectorText = '#main';
+                return before + '|' + getComputedStyle(m).zIndex;
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::String("auto|1".to_string()));
+}
+
 /// A page that never calls any CSSOM mutator must not pay the
 /// `cssom_patched_sheet` clone at all — same-tick reads stay on the plain
 /// pushed cascade sheet.
@@ -381,19 +422,22 @@ fn top_level_rule_insert_rule_accepts_an_apply_statement() {
 }
 
 #[test]
-fn top_level_rule_insert_rule_rejects_a_non_apply_rule_text() {
+fn top_level_rule_insert_rule_adds_a_nested_rule_and_rejects_garbage() {
     let (doc, style_nid) = make_doc_with_style();
     let rt = v8_runtime_with_dom(doc);
     rt.update_stylesheet_nodes(one_sheet_entry(style_nid, "p { color: red; }"));
     let r = rt.eval(
         "(function() {
+            var rule = document.styleSheets[0].cssRules[0];
+            rule.insertRule('b { color: red; }', 0);
+            var nested = rule.cssRules.length + ':' + rule.cssRules[0].cssText + ':' + (rule.cssRules[0].parentRule === rule);
             try {
-                document.styleSheets[0].cssRules[0].insertRule('b { color: red; }', 0);
-                return 'no-throw';
+                rule.insertRule('% {}', 0);
+                return nested + ':no-throw';
             } catch (e) {
-                return e.name;
+                return nested + ':' + e.name;
             }
         })()",
     ).unwrap();
-    assert_eq!(r, lumen_core::JsValue::String("SyntaxError".to_string()));
+    assert_eq!(r, lumen_core::JsValue::String("1:& b { color: red; }:true:SyntaxError".to_string()));
 }

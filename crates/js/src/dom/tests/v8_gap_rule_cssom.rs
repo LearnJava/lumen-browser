@@ -108,6 +108,6 @@ fn style_attribute_round_trips_and_remove_property_clears_longhands() {
                 "{DIV} d.style.columnRule = '5px solid red'; var old = d.style.removeProperty('column-rule');                  old + '|' + d.style.columnRuleWidth + '|' + d.style.length"
             )
         ),
-        "5px solid red||"
+        "5px solid red||0"
     );
 }

@@ -53,8 +53,6 @@
 use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
-use super::stylesheets::{media_rule_json, mixin_rule_json, style_rule_json};
-use lumen_css_parser::CssomRuleRef;
 
 /// One `new CSSStyleSheet()` instance (CSSOM §2.1). Indexed by position in
 /// [`ConstructedStylesheets`]; that index is the JS wrapper's identity.
@@ -170,7 +168,9 @@ pub(crate) fn install_constructed_stylesheets(
         let s = Arc::clone(&sheets);
         reg!(scope, ctx, store, "_lumen_constructed_replace_sync", move |idx: u32, text: String| {
             if let Some(entry) = s.lock().unwrap_or_else(|e| e.into_inner()).get_mut(idx as usize) {
-                entry.sheet = Arc::new(lumen_css_parser::parse(&text));
+                let mut sheet = lumen_css_parser::parse(&text);
+                sheet.cssom_drop_imports();
+                entry.sheet = Arc::new(sheet);
             }
         });
     }
@@ -189,54 +189,6 @@ pub(crate) fn install_constructed_stylesheets(
         reg!(scope, ctx, store, "_lumen_constructed_set_disabled", move |idx: u32, val: bool| {
             if let Some(entry) = s.lock().unwrap_or_else(|e| e.into_inner()).get_mut(idx as usize) {
                 entry.disabled = val;
-            }
-        });
-    }
-    {
-        let s = Arc::clone(&sheets);
-        reg!(scope, ctx, store, "_lumen_constructed_rule_count", move |idx: u32| -> u32 {
-            s.lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(idx as usize)
-                .map(|e| e.sheet.cssom_rules().len() as u32)
-                .unwrap_or(0)
-        });
-    }
-    {
-        let s = Arc::clone(&sheets);
-        reg!(scope, ctx, store, "_lumen_constructed_rule_json", move |idx: u32, rule_idx: u32| -> Option<String> {
-            let guard = s.lock().unwrap_or_else(|e| e.into_inner());
-            let entry = guard.get(idx as usize)?;
-            let rules = entry.sheet.cssom_rules();
-            let json = match rules.get(rule_idx as usize)? {
-                CssomRuleRef::Style(r) => style_rule_json(r),
-                CssomRuleRef::Media(r) => media_rule_json(r),
-                CssomRuleRef::Mixin(r) => mixin_rule_json(r),
-            };
-            Some(json.to_string())
-        });
-    }
-    {
-        let s = Arc::clone(&sheets);
-        reg!(scope, ctx, store, "_lumen_constructed_media_child_count", move |idx: u32, rule_idx: u32| -> u32 {
-            let guard = s.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(entry) = guard.get(idx as usize) else { return 0 };
-            let rules = entry.sheet.cssom_rules();
-            match rules.get(rule_idx as usize) {
-                Some(CssomRuleRef::Media(r)) => r.rules.len() as u32,
-                _ => 0,
-            }
-        });
-    }
-    {
-        let s = Arc::clone(&sheets);
-        reg!(scope, ctx, store, "_lumen_constructed_media_child_json", move |idx: u32, rule_idx: u32, child_idx: u32| -> Option<String> {
-            let guard = s.lock().unwrap_or_else(|e| e.into_inner());
-            let entry = guard.get(idx as usize)?;
-            let rules = entry.sheet.cssom_rules();
-            match rules.get(rule_idx as usize)? {
-                CssomRuleRef::Media(r) => Some(style_rule_json(r.rules.get(child_idx as usize)?).to_string()),
-                CssomRuleRef::Style(_) | CssomRuleRef::Mixin(_) => None,
             }
         });
     }
@@ -260,34 +212,6 @@ pub(crate) fn install_constructed_stylesheets(
         let a = Arc::clone(&adopted);
         reg!(scope, ctx, store, "_lumen_get_adopted_stylesheets", move |scope_id: u32| -> Vec<u32> {
             a.lock().unwrap_or_else(|e| e.into_inner()).get(&scope_id).cloned().unwrap_or_default()
-        });
-    }
-    // `CSSStyleSheet.insertRule`/`.deleteRule` (CSSOM-5 срез 3, BUG-897).
-    // Sentinel returns (no exception path through `reg!`'s natives — see
-    // `_lumen_set_adopted_stylesheets` above for the same convention): the
-    // JS wrapper (`_lumen_make_constructed_style_sheet`) turns a negative
-    // result into the matching `DOMException`.
-    {
-        let s = Arc::clone(&sheets);
-        reg!(scope, ctx, store, "_lumen_constructed_insert_rule", move |idx: u32, rule_text: String, index: u32| -> i32 {
-            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
-            match Arc::make_mut(&mut entry.sheet).insert_rule(&rule_text, index as usize) {
-                Ok(new_index) => new_index as i32,
-                Err(lumen_css_parser::CssomRuleMutationError::IndexSize) => -1,
-                Err(lumen_css_parser::CssomRuleMutationError::Syntax) => -2,
-            }
-        });
-    }
-    {
-        let s = Arc::clone(&sheets);
-        reg!(scope, ctx, store, "_lumen_constructed_delete_rule", move |idx: u32, index: u32| -> i32 {
-            let mut guard = s.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(entry) = guard.get_mut(idx as usize) else { return -1 };
-            match Arc::make_mut(&mut entry.sheet).delete_rule(index as usize) {
-                Ok(()) => 0,
-                Err(_) => -1,
-            }
         });
     }
     Ok(())

@@ -84,6 +84,7 @@ impl Stylesheet {
             top_level_order: _,
             top_level_spans: _,
             source: _,
+            cssom: _,
         } = self;
         let mut differing = Vec::new();
         let mut check = |name: &'static str, same: bool| {
