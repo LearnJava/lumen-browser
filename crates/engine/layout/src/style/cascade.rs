@@ -1302,6 +1302,12 @@ pub(crate) fn compute_style_shareable(
         FontSizeBasis::Absolute => style.effective_zoom,
         FontSizeBasis::ParentRelative => own_zoom,
     };
+    // BUG-1438: `letter-spacing` inherited as `abs + pct * parent_font_size` keeps only its
+    // absolute part here; the `%` share is re-added against this element's `font-size` once
+    // the cascade (and zoom) is done.
+    if inherited.letter_spacing_pct != 0.0 {
+        style.letter_spacing -= inherited.letter_spacing_pct * inherited.font_size;
+    }
     // The document element's computed font-size is what `rem` refers to.
     if doc.get(node).parent == Some(doc.root()) {
         style.root_font_size = style.font_size;
@@ -1802,6 +1808,9 @@ pub(crate) fn compute_style_shareable(
         ZoomDeclared::of(matched.iter().map(|m| m.6))
     };
     apply_zoom_to_lengths(&mut style, z, rem_k, root_k, declared);
+    if style.letter_spacing_pct != 0.0 {
+        style.letter_spacing += style.letter_spacing_pct * style.font_size;
+    }
 
     (style, shareable)
 }
