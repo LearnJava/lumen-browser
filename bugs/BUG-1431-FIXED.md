@@ -1,6 +1,6 @@
 # BUG-1431 — Процентный `margin-top` первого потомка (схлопывание через родителя): база — ширина содержащего блока родителя, а не его собственная ширина
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** layout (`crates/engine/layout/src/box_tree/bfc.rs::collapsed_top_margin`, `:149–157`)
 
@@ -34,3 +34,9 @@ green; width: 500px">`: в нашем снимке отступ 18 вместо 
 ## Как проверить
 
 Страница из таблицы (первая строка); `css/css-values/calc-margin-block-1.html` после BUG-1298.
+
+## Исправление
+
+`collapsed_top_margin`/`collapsed_bottom_margin` ([`bfc.rs`](../crates/engine/layout/src/box_tree/bfc.rs)) спускаясь по цепочке первых/последних детей, сужали `cur_cb` только на padding+border, игнорируя собственную `width`. Новая функция `content_box_width` считает content-ширину узла как `lay_out`: явная `width` (px/%/`calc`, с учётом `box-sizing`) либо `cb − margin-left − margin-right − padding − border` при `auto`, затем зажим `max-width` и `min-width`; интринсивные ключевые слова (`min-content`, `fit-content`, `stretch`) не измеряются и идут по `auto`-ветке.
+
+Тесты: `collapsed_top_margin_percentage_uses_the_parents_own_width`, `first_child_percentage_margin_top_uses_the_parent_width_in_layout` ([`bfc_margin_collapse.rs`](../crates/engine/layout/src/box_tree/tests/bfc_margin_collapse.rs)): 3 / 13 / 5 / 3 (border-box) / 31 (padding-top разрывает цепочку).

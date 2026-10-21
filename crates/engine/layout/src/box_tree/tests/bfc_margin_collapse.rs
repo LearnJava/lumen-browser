@@ -123,3 +123,49 @@ fn collapsed_margins_sum_largest_positive_and_most_negative() {
     assert!((top + 40.0).abs() < 0.01, "top={top}");
     assert!((bottom + 40.0).abs() < 0.01, "bottom={bottom}");
 }
+
+/// BUG-1431: a percentage top margin of the first child resolves against the
+/// parent's *content width* (`width:300px`), not against the parent's own
+/// containing block (800).
+#[test]
+fn collapsed_top_margin_percentage_uses_the_parents_own_width() {
+    let mut child = block_with_margins(0.0, 0.0, vec![]);
+    std::sync::Arc::make_mut(&mut child.style).margin_top =
+        LengthOrAuto::Length(Length::Percent(1.0));
+    let mut root = block_with_margins(0.0, 0.0, vec![child]);
+    std::sync::Arc::make_mut(&mut root.style).width = Some(Length::Px(300.0));
+    let got = collapsed_top_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
+    assert!((got - 3.0).abs() < 0.01, "expected 1% of 300 = 3, got {got}");
+
+    // Auto width fills the containing block minus the margins and the frame.
+    let mut root = block_with_margins(0.0, 0.0, vec![{
+        let mut c = block_with_margins(0.0, 0.0, vec![]);
+        std::sync::Arc::make_mut(&mut c.style).margin_top =
+            LengthOrAuto::Length(Length::Percent(10.0));
+        c
+    }]);
+    let s = std::sync::Arc::make_mut(&mut root.style);
+    s.margin_left = LengthOrAuto::Length(Length::Px(100.0));
+    s.margin_right = LengthOrAuto::Length(Length::Px(100.0));
+    let got = collapsed_top_margin(&root, 800.0, VIEWPORT, &mut MarginCollapseCache::default());
+    assert!((got - 60.0).abs() < 0.01, "expected 10% of 600 = 60, got {got}");
+}
+
+/// BUG-1431, end to end: the first child of a `width:300px` block with `margin-top:1%`
+/// sits 3px down (1% of 300), also with `calc(10px + 1%)` (13px) and a border-box parent.
+#[test]
+fn first_child_percentage_margin_top_uses_the_parent_width_in_layout() {
+    for (css, want) in [
+        ("#c{width:300px}#p{margin:1% 0 0 0}", 3.0),
+        ("#c{width:300px}#p{margin:calc(10px + 1%) 0 0 0}", 13.0),
+        ("#c{width:500px}#p{margin:1% 0 0 0}", 5.0),
+        ("#c{width:320px;padding:0 10px;box-sizing:border-box}#p{margin:1% 0 0 0}", 3.0),
+        ("#c{width:300px;padding-top:1px}#p{margin:10% 0 0 0}", 31.0),
+    ] {
+        let doc = lumen_html_parser::parse(r#"<div id="c"><p id="p" style="height:5px"></p></div>"#);
+        let sheet = lumen_css_parser::parse(&format!("body{{margin:0}}p{{height:5px}}{css}"));
+        let root = super::super::layout(&doc, &sheet, VIEWPORT);
+        let p = super::find_by_id_all(&root, &doc, "p").expect("нет #p");
+        assert!((p.rect.y - want).abs() < 0.01, "{css}: y={} ожидалось {want}", p.rect.y);
+    }
+}
