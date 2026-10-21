@@ -745,6 +745,14 @@ pub(super) fn dispatch_box(
             // rendering §15.5.1); clamp it to the available inline size, which
             // is what `fit-content` means (same rule as `Length::FitContent`).
             fit.min((available_width - margin_left - margin_right).max(0.0))
+        } else if size_contained {
+            // BUG-1397: no natural size under `contain: size` — only the box's own padding and
+            // border (plus `contain-intrinsic-width`) remain (CSS Containment L1 §3.1).
+            s.contain_intrinsic_width
+                .as_ref()
+                .and_then(|l| l.resolve(em, None, viewport))
+                .map_or(0.0, |v| v.max(0.0))
+                + padding_left + padding_right + s.border_left_width + s.border_right_width
         } else {
             0.0
         }
@@ -876,11 +884,20 @@ pub(super) fn dispatch_box(
             Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
         )
     {
-        if size_contained {
+        // BUG-1397: `contain: inline-size` collapses the inline axis alone (CSS Containment L3 §3.2).
+        let inline_contained = size_contained
+            || (s.contain.0 & crate::style::ContainFlags::INLINE_SIZE.0 != 0 && !intrinsic::is_vertical_block(b));
+        if inline_contained {
             let cw = s
                 .contain_intrinsic_width
                 .as_ref()
                 .and_then(|l| l.resolve(em, None, viewport))
+                .or_else(|| {
+                    // Explicit grid tracks size a grid container with no items (Grid L1 §7.1).
+                    matches!(s.display, Display::InlineGrid)
+                        .then(|| intrinsic::grid_col_intrinsic_sum(b, viewport, false, &|_| 0.0))
+                        .flatten()
+                })
                 .map_or(0.0, |v| v.max(0.0));
             b.rect.width = (cw + padding_left + padding_right
                 + s.border_left_width + s.border_right_width)

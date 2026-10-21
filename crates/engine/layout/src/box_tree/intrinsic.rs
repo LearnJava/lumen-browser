@@ -197,7 +197,7 @@ fn is_vertical_mode(b: &LayoutBox) -> bool {
     !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
 }
 
-fn is_vertical_block(b: &LayoutBox) -> bool {
+pub(super) fn is_vertical_block(b: &LayoutBox) -> bool {
     !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
         && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
 }
@@ -940,19 +940,25 @@ fn preferred_inline_block_width_impl(
 /// (a content-box length) or 0 when it is `none`/unset — exactly as the in-flow
 /// `inline-block` path in `layout_dispatch` treats it (BUG-1388). Vertical
 /// writing modes swap the axes and are left to the generic path.
-fn size_contained_content_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
+pub(super) fn size_contained_content_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
     let s = &b.style;
-    let contained = s.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+    // CSS Containment L3 §3.2: `contain: inline-size` ignores the contents on the inline axis only.
+    let contained = s.contain.0 & (crate::style::ContainFlags::SIZE.0 | crate::style::ContainFlags::INLINE_SIZE.0) != 0
         || s.content_visibility == crate::style::ContentVisibility::Hidden;
     if !contained || is_vertical_block(b) {
         return None;
     }
-    Some(
-        s.contain_intrinsic_width
-            .as_ref()
-            .and_then(|l| l.resolve(s.font_size, None, viewport))
-            .map_or(0.0, |v| v.max(0.0)),
-    )
+    let authored = s
+        .contain_intrinsic_width
+        .as_ref()
+        .and_then(|l| l.resolve(s.font_size, None, viewport));
+    // BUG-1397: a grid's explicit tracks size it with no items (Grid L1 §7.1); the items add nothing.
+    let tracks = || {
+        matches!(s.display, Display::Grid | Display::InlineGrid)
+            .then(|| grid_col_intrinsic_sum(b, viewport, false, &|_| 0.0))
+            .flatten()
+    };
+    Some(authored.or_else(tracks).map_or(0.0, |v| v.max(0.0)))
 }
 
 /// CSS Intrinsic Sizing L3 §4 — max-content border-box width of `b`.

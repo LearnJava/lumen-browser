@@ -410,6 +410,10 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         }
     }
 
+    // BUG-1397: under size containment the items add nothing to the row tracks.
+    if frame.init.size_contained {
+        return;
+    }
     grow_rows_for_item(frame, k, i, viewport);
     if frame.init.lanes.is_some() {
         let h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
@@ -1401,7 +1405,9 @@ fn finish_frame(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport
         frame.init.available_height,
         frame.init.padding_top,
         frame.init.padding_bottom,
-        frame.init.size_contained,
+        // BUG-1397: the items are already left out of the tracks (`post_probe_item`); the explicit
+        // tracks keep the grid's block size unless `contain-intrinsic-height` replaces it.
+        frame.init.size_contained && frame.init.s.contain_intrinsic_height.is_some(),
         viewport,
         content_height,
     );
