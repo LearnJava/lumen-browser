@@ -19,6 +19,7 @@ must not restate it — a restated rule drifts, and the two copies then contradi
 | Per-crate state, API and traps | [`SUBSYSTEMS.md`](../SUBSYSTEMS.md) → `subsystems/<crate>.md` |
 | WPT status and vendoring | [`wpt-status.md`](wpt-status.md) · [`wpt/compat.md`](wpt/compat.md) (compat/ + reftest) · `tests/wpt/VENDOR.md` · [`wpt-vendor-notes/`](wpt-vendor-notes/) |
 | Is the browser better than last run (WPT + graphic_tests + bugs, with deltas) | [`quality-report.md`](quality-report.md) (generated) · how to run/read — [`quality-report-howto.md`](quality-report-howto.md) |
+| Where Lumen's layout/computed styles differ from Chrome on real sites (node geometry diff, triage) | [`quality/geom-diff-howto.md`](quality/geom-diff-howto.md) · reports `quality/geom-diff-<date>.md` · `scripts/geom_diff.py` |
 
 ## Architecture and decisions
 
