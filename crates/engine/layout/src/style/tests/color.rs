@@ -1243,6 +1243,27 @@ use crate::style::values::named_colors::NAMED_COLORS;
         assert!(mid.r >= 186 && mid.r <= 190, "mid grey r={}", mid.r);
     }
 
+    /// BUG-1432: `display-p3-linear` is a valid `color()` space (linear light).
+    #[test]
+    fn color_fn_display_p3_linear() {
+        let white = color_fn_srgb("color(display-p3-linear 1 1 1)");
+        assert_eq!((white.r, white.g, white.b), (255, 255, 255));
+        let mid = color_fn_srgb("color(display-p3-linear 0.5 0.5 0.5)");
+        assert!(mid.r >= 186 && mid.r <= 190, "mid grey r={}", mid.r);
+        // Wide-gamut P3 green clips to sRGB green.
+        let g = color_fn_srgb("color(display-p3-linear 0 1 0)");
+        assert_eq!((g.r, g.g, g.b), (0, 255, 0));
+    }
+
+    /// BUG-1432: `color-mix()` accepts predefined RGB interpolation spaces.
+    #[test]
+    fn color_mix_predefined_rgb_spaces_are_accepted() {
+        for sp in ["display-p3", "display-p3-linear", "a98-rgb", "prophoto-rgb", "rec2020"] {
+            let c = parse_color(&format!("color-mix(in {sp}, red, blue)"));
+            assert!(c.is_some(), "color-mix(in {sp}, …) must parse");
+        }
+    }
+
     #[test]
     fn color_fn_xyz_d65_white_and_black() {
         // D65 reference white in XYZ → sRGB white.
