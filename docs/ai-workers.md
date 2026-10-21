@@ -63,7 +63,7 @@ comparison in words), any image/audio/video input. The only multimodal free mode
 ## How to call
 
 Client: `.tmp/kilo_client.py` (gitignored; recreate from this spec if missing).
-API key: `.tmp/kilo.env` (**never commit**). Model is chosen via the `KILO_MODEL`
+API key: `env/kilo.env` (**never commit**). Model is chosen via the `KILO_MODEL`
 env var; default is Step 3.7 Flash.
 
 ```bash
