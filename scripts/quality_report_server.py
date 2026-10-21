@@ -7,8 +7,9 @@
 страница перезагружается. Относительные ссылки отчёта (`../bugs/BUG-NNN.md`,
 `wpt-status.md`) открываются тем же рендером — только `.md` внутри репозитория.
 
-  python scripts/quality_report_server.py            # http://127.0.0.1:8740/
+  python scripts/quality_report_server.py            # http://127.0.0.1:8740/ + браузер
   python scripts/quality_report_server.py --port N   # другой порт
+  python scripts/quality_report_server.py --no-open  # не открывать браузер
 
 Остановить — Ctrl+C. Сервер слушает только localhost и ничего не пишет,
 кроме того, что пишет сам quality_report.py. Как читать отчёт —
@@ -21,6 +22,8 @@ import html
 import re
 import subprocess
 import sys
+import threading
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -361,9 +364,16 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--no-open", action="store_true",
+                        help="не открывать страницу в браузере по умолчанию")
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"Отчёт качества: http://127.0.0.1:{args.port}/  (Ctrl+C — остановить)")
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"Отчёт качества: {url}  (Ctrl+C — остановить)")
+    if not args.no_open:
+        # Открываем после старта serve_forever, иначе браузер может успеть
+        # постучаться до того, как сервер начнёт принимать соединения.
+        threading.Timer(0.3, webbrowser.open, (url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
