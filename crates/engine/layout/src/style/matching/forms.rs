@@ -89,6 +89,7 @@ pub(in crate::style) fn matches_pseudo_class(p: &PseudoClass, doc: &Document, no
         PseudoClass::Default => matches_default(doc, node),
         PseudoClass::Lang(tags) => matches_lang(doc, node, tags),
         PseudoClass::Dir(arg) => matches_dir(doc, node, *arg),
+        PseudoClass::DirOther(_) => false,
         PseudoClass::Heading(arg) => matches_heading(doc, node, *arg),
         PseudoClass::Link => matches_any_link(doc, node),
         // CSS Selectors L4 §6.2.3: `:visited` требует history-runtime
@@ -698,20 +699,8 @@ fn nearest_form_or_root(doc: &Document, node: NodeId) -> NodeId {
     nearest_form(doc, node).unwrap_or_else(|| doc.root())
 }
 
-/// `:lang(<tag>#)` (CSS Selectors L4 §11). Элемент матчит, если его
-/// content-language matches хотя бы один из tag-ов в списке по RFC 4647
-/// §3.3.1 «basic filtering»: range matches tag, если range — exact equal
-/// или range — proper prefix tag с границей по `-`. То есть `:lang(en)`
-/// matches `lang="en"`, `lang="en-US"`, `lang="en-Latn-GB"`, но не
-/// `lang="english"` и не `lang="fr-en"` (последний — `fr` + `en` — `en`
-/// здесь регион/вариант, не language).
-///
-/// Content-language определяется через ближайший `lang` или `xml:lang`
-/// атрибут вверх по дереву (HTML5 §3.2.6 «inheritance»; xml:lang —
-/// исторически из XHTML, до сих пор используется в реальных страницах).
-/// Если ни один ancestor не имеет `lang`, элемент не имеет языка и не
-/// матчит ни один tag — кроме пустого `*` (Selectors L4 расширение пока
-/// не поддерживается).
+/// `:lang(range, …)` (CSS Selectors L4 §8.2): extended filtering по RFC 4647
+/// §3.3.2 между каждым language range и content language элемента.
 fn matches_lang(doc: &Document, node: NodeId, tags: &[String]) -> bool {
     let Some(content_lang) = element_lang(doc, node) else {
         return false;
@@ -722,19 +711,18 @@ fn matches_lang(doc: &Document, node: NodeId, tags: &[String]) -> bool {
 
 /// Определяет content-language элемента, walking up ancestors. Сначала
 /// `lang`, потом `xml:lang` на том же узле; затем родитель, и так далее.
-/// Возвращает None если ни у кого нет атрибута либо найденное значение —
-/// пустая строка (HTML5: `lang=""` — «явно неизвестен», не наследует от
-/// предков — Phase 0 трактует как «нет языка»).
+/// Возвращает None, если ни у кого нет атрибута. Явный `lang=""` — это
+/// `Some("")` («язык неизвестен»), его матчит только range `""`.
 fn element_lang(doc: &Document, node: NodeId) -> Option<String> {
     let mut cur = Some(node);
     while let Some(n) = cur {
         if let NodeData::Element { .. } = &doc.get(n).data {
             let nr = doc.get(n);
             if let Some(v) = nr.get_attr("lang") {
-                return if v.is_empty() { None } else { Some(v.to_string()) };
+                return Some(v.to_string());
             }
             if let Some(v) = nr.get_attr("xml:lang") {
-                return if v.is_empty() { None } else { Some(v.to_string()) };
+                return Some(v.to_string());
             }
         }
         cur = doc.get(n).parent;
@@ -742,17 +730,37 @@ fn element_lang(doc: &Document, node: NodeId) -> Option<String> {
     None
 }
 
-/// RFC 4647 §3.3.1 «basic filtering»: language range matches language tag,
-/// если range — case-insensitive prefix tag с границей по `-` или концом
-/// строки. Обе стороны уже ожидаются в lowercase.
+/// RFC 4647 §3.3.2 «extended filtering». Обе стороны уже в lowercase.
+/// Первый subtag range-а — `*` или равен первому subtag-у тега; дальше `*`
+/// пропускается, остальные subtag-и range-а ищутся в теге по порядку, причём
+/// лишние subtag-и тега пропускаются, кроме singleton-а (`x`, `u`, …): он
+/// обрывает поиск. Пустой range матчит только пустой язык.
 fn lang_range_matches(range_lc: &str, tag_lc: &str) -> bool {
-    if range_lc == tag_lc {
-        return true;
+    if range_lc.is_empty() || tag_lc.is_empty() {
+        return range_lc == tag_lc;
     }
-    if let Some(rest) = tag_lc.strip_prefix(range_lc) {
-        return rest.starts_with('-');
+    let mut range = range_lc.split('-');
+    let mut tag = tag_lc.split('-');
+    let (Some(r0), Some(t0)) = (range.next(), tag.next()) else {
+        return false;
+    };
+    if r0 != "*" && r0 != t0 {
+        return false;
     }
-    false
+    for r in range {
+        if r == "*" {
+            continue;
+        }
+        loop {
+            match tag.next() {
+                None => return false,
+                Some(t) if t == r => break,
+                Some(t) if t.len() == 1 => return false,
+                Some(_) => {}
+            }
+        }
+    }
+    true
 }
 
 /// `:any-link` / `:link` (CSS Selectors L4 §6.2.1 / §6.2.2, HTML5 §4.6).
