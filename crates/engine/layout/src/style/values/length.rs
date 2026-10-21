@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use lumen_core::geom::Size;
 
+use crate::style::math_value::canonical_math_length;
 use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
 use crate::style::values::misc::OverflowClipMarginBox;
 use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS, ROOT_FONT_SIZE};
@@ -472,7 +473,11 @@ pub fn canonical_specified_length(s: &str, allow_auto: bool, non_negative: bool)
         return Some("auto".to_string());
     }
     if looks_like_function_call(v) {
-        let len = parse_math_function_value(v)?;
+        let Some(len) = parse_math_function_value(v) else {
+            // BUG-1430: constants (`pi`, `NaN`, `infinity`) and `progress()` are not in the
+            // old parser's grammar; the typed evaluator folds them.
+            return canonical_math_length(v);
+        };
         return Some(crate::selector_query::length_to_css(&len));
     }
     let len = parse_length_q(v, false)?;
@@ -528,7 +533,10 @@ pub fn canonical_specified_sizing_length(s: &str) -> Option<String> {
     if v.eq_ignore_ascii_case("auto") {
         return Some("auto".to_string());
     }
-    let len = parse_sizing_length(v, false)?;
+    let Some(len) = parse_sizing_length(v, false) else {
+        // BUG-1430: constants and `progress()` — see `canonical_specified_length`.
+        return if looks_like_function_call(v) { canonical_math_length(v) } else { None };
+    };
     if length_literal_is_negative(&len) {
         return None;
     }

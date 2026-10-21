@@ -24,6 +24,7 @@ mod text;
 use lumen_core::geom::Size;
 use lumen_css_parser::Declaration;
 
+use crate::style::math_value::substitute_numeric_math;
 use crate::style::substitute::{
     contains_env_call, env_calls_well_formed, substitution_value_well_formed,
 };
@@ -147,6 +148,11 @@ pub(in crate::style) fn apply_declaration(
     if prop == "all" {
         return;
     }
+    // BUG-1430: math functions with a number / angle / time result (`calc(1s + 1s)`,
+    // `abs(-3)`, `calc(pi)`) are evaluated to a literal before the property parser, which
+    // has no notion of a typed `calc()`.
+    let math_literal = substitute_numeric_math(prop, val, em_basis, viewport);
+    let val: &str = math_literal.as_deref().unwrap_or(val);
     // `zoom` scales these after the cascade (`apply_zoom_to_lengths`), but an `em`
     // length is baked to px right here against the already-zoomed `font_size` —
     // resolve it against the unzoomed one so the later multiply applies the factor once.

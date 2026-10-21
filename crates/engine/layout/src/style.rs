@@ -48,6 +48,7 @@ mod computed;
 mod container;
 mod env;
 mod logical;
+mod math_value;
 mod matching;
 mod parse;
 mod presentational;
@@ -194,6 +195,7 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 // three re-exports above — `selector_query::length_to_css`'s `Length::Calc`
 // arm is its only caller.
 pub(crate) use calc::calc_node_to_css;
+pub use math_value::canonical_specified_numeric_math;
 pub use parse::box_sides::canonical_specified_anchor;
 pub use values::length::{
     canonical_specified_contain_intrinsic, canonical_specified_length, canonical_specified_line_width,

@@ -3448,6 +3448,15 @@ function _lumen_split_top_level_ws(strVal) {
 // `strVal` through unchanged (лишь лишний `.toLowerCase()` для одного из
 // пяти CSS-wide-ключевых-слов, срез 11) — most properties have no grammar
 // here yet.
+// BUG-1430: a number / integer / time / angle property whose whole value is one math function
+// (`opacity: abs(-.5)`, `z-index: calc(1 + 2)`). `undefined` — not covered, keep the regular path;
+// `null` — invalid, drop the assignment; a string — the specified form (`calc(3)`).
+function _lumen_math_value_canon(key, strVal) {
+    if (strVal.indexOf('(') === -1) return undefined;
+    var r = _lumen_css_canonical_math(key, strVal);
+    if (r === '') return undefined;
+    return r === '!' ? null : r;
+}
 function _lumen_canonicalize_longhand(key, strVal) {
     var lowerVal = strVal.trim().toLowerCase();
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
@@ -3495,6 +3504,8 @@ function _lumen_canonicalize_longhand(key, strVal) {
         // (Chrome 114+), so CSSOM read-back is `auto`.
         return kw === 'overlay' ? 'auto' : kw;
     }
+    var mathCanon = _lumen_math_value_canon(key, strVal);
+    if (mathCanon !== undefined) return mathCanon;
     if (key === 'opacity') {
         // CSS Color 4 §3.2: a percentage `<alpha-value>` is stored as the number it denotes
         // (`50%` -> `0.5`, `-100%` -> `-1`); anything else is left to the regular pipeline (BUG-1424).
@@ -3799,7 +3810,9 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _lumen_style_set_parsed(nid, obj);
         return;
     }
-    obj[key] = strVal;
+    var mathStored = _lumen_math_value_canon(key, strVal);
+    if (mathStored === null) return; // invalid math expression: declaration dropped
+    obj[key] = mathStored === undefined ? strVal : mathStored;
     _lumen_style_set_parsed(nid, obj);
 };
 CSSStyleDeclaration.prototype.removeProperty = function(prop) {
