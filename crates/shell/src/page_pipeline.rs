@@ -916,7 +916,7 @@ fn report_shape_images(
     if urls.is_empty() {
         return layout;
     }
-    let mut d = doc_arc.lock().unwrap();
+    let Ok(mut d) = doc_arc.lock() else { return layout };
     let mut changed = false;
     for url in &urls {
         if let Some((_, image)) = images.iter().find(|(key, _)| key == url) {
