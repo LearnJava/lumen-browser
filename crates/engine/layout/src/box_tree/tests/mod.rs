@@ -546,6 +546,7 @@ mod grid_abspos;
 mod grid_rtl;
 mod fieldset_legend;
 mod ruby_pipeline;
+mod cv_hidden_geometry;
 mod pre_wrap;
 mod tab_size;
 mod segment_break;

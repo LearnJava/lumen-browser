@@ -833,7 +833,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let root = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
@@ -863,7 +863,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let mut child = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(1),
             rect: rect(100.0, 150.0, 200.0, 100.0),
@@ -886,7 +886,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut child.style).anchor_name = Some("--tooltip".into());
 
         let root = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
@@ -919,7 +919,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let mut anchor_deep = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(2),
             rect: rect(50.0, 50.0, 100.0, 100.0),
@@ -942,7 +942,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut anchor_deep.style).anchor_name = Some("--deep".into());
 
         let child = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(1),
             rect: rect(0.0, 0.0, 200.0, 200.0),
@@ -964,7 +964,7 @@ mod tests {
         };
 
         let root = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
@@ -997,7 +997,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let mut child1 = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(1),
             rect: rect(0.0, 0.0, 100.0, 100.0),
@@ -1020,7 +1020,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut child1.style).anchor_name = Some("--left".into());
 
         let mut child2 = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(2),
             rect: rect(150.0, 0.0, 100.0, 100.0),
@@ -1043,7 +1043,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut child2.style).anchor_name = Some("--right".into());
 
         let root = LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),

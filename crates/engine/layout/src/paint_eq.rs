@@ -67,6 +67,8 @@ fn box_self_paint_eq<'a>(
         scroll_y,
         anchor_scroll,
         dirty: _,
+        // Пропущенное поддерево `content-visibility: hidden` не рисуется — только отвечает на геометрию.
+        cv_hidden: _,
         grid_baselines: _,
         used_grid_tracks: _,
         fieldset_legend,

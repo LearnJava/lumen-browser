@@ -612,7 +612,7 @@ mod tests {
     /// Build a minimal LayoutBox with the given kind for unit testing.
     fn make_box(kind: BoxKind) -> LayoutBox {
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: lumen_dom::NodeId::from_index(0),
             rect: lumen_core::geom::Rect::ZERO,

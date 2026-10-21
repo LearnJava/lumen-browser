@@ -44,7 +44,7 @@ const LEAF_HEIGHT: f32 = 10.0;
 fn wrapper(node_index: usize, children: Vec<LayoutBox>) -> LayoutBox {
     let style = ComputedStyle::root();
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -74,7 +74,7 @@ fn leaf() -> LayoutBox {
     let mut style = ComputedStyle::root();
     style.height = Some(Length::Px(LEAF_HEIGHT));
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -164,7 +164,7 @@ fn deep_chain_with_margins_collapses_through_the_trampoline() {
         let mut style = ComputedStyle::root();
         style.margin_top = crate::style::LengthOrAuto::Length(Length::Px(1.0));
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node: lumen_dom::NodeId::from_index(node_index),
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             used_padding: None, used_line_height: style.font_size * style.line_height,

@@ -2456,6 +2456,8 @@ fn collect_layout_rects_rec(
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         collect_layout_rects_box(doc, b, out);
+        // `content-visibility: hidden` (BUG-1400): the skipped subtree, laid out as a probe.
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2548,6 +2550,7 @@ fn collect_boxed_node_ids(root: &LayoutBox, out: &mut std::collections::HashSet<
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         out.insert(b.node.index() as u32);
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2592,6 +2595,7 @@ fn collect_client_rects_rec(
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         collect_client_rects_box(doc, b, boxed, out);
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }

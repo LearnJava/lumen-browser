@@ -2826,7 +2826,7 @@ mod tests {
 
     fn make_dialog_lb(node: NodeId, rect: Rect) -> LayoutBox {
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect,
             used_padding: None, used_line_height: 16.0 * 1.2,
@@ -3095,7 +3095,7 @@ mod tests {
 
     fn make_field_lb(node: NodeId, rect: Rect, children: Vec<LayoutBox>) -> LayoutBox {
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect,
             used_padding: None, used_line_height: 16.0 * 1.2,
@@ -3119,7 +3119,7 @@ mod tests {
 
     fn make_inline_run_lb(node: NodeId, rect: Rect) -> LayoutBox {
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect,
             used_padding: None, used_line_height: 16.0 * 1.2,

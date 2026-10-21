@@ -319,7 +319,7 @@ fn pseudo_box(cx: &ScrollPseudoCx, node: NodeId, ps: ComputedStyle, kind: Pseudo
         children.push(anon_inline_run(cx.host, &ps, segs, BoxRole::Pseudo(kind)));
     }
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: cx.host,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: ps.font_size * ps.line_height,
