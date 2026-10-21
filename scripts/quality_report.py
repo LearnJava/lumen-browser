@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -214,13 +215,74 @@ def graphic_runs(results_dir: Path) -> list:
     return [(name, data) for _, name, data in runs if len(data["tests"]) >= 0.9 * longest]
 
 
-def graphic_summary(name: str, data: dict) -> dict:
+def graphic_mode(data: dict) -> str:
+    """Способ съёмки прогона: `ipc` / `gdigrab` (все тесты одним способом),
+    `default` (смесь по `GPU_CAPTURE` из `graphic_tests/run.py`) и `legacy` —
+    прогон до TEST-9, у тестов нет поля `capture`."""
+    caps = {t.get("capture") for t in data["tests"]}
+    if caps == {None}:
+        return "legacy"
+    if len(caps) == 1:
+        return caps.pop()
+    return "default"
+
+
+def graphic_pair(runs: list) -> tuple:
+    """(свежий, предыдущий того же режима | None, причина отсутствия | None).
+
+    Прогоны разных способов съёмки несопоставимы (CPU-снимок IPC и gdigrab
+    живого окна расходятся на AA-краях), поэтому предыдущий — последний более
+    ранний полный прогон **того же режима**.
+    """
+    if not runs:
+        return None, None, None
+    cur = runs[-1]
+    mode = graphic_mode(cur[1])
+    for prev in reversed(runs[:-1]):
+        if graphic_mode(prev[1]) == mode:
+            return cur, prev, None
+    others = sorted({graphic_mode(d) for _, d in runs[:-1]})
+    why = f"нет более раннего полного прогона режима `{mode}`"
+    if others:
+        why += f" (есть только режимы {', '.join(f'`{m}`' for m in others)} — несопоставимы)"
+    return cur, None, why
+
+
+def git_origin(root: Path | None, git: dict) -> dict:
+    """Пометки прогона: `wip` — коммит с темой `WIP…`; `in_main` — коммит предок
+    `origin/main` (None, если git недоступен или коммит ему неизвестен)."""
+    wip = str(git.get("subject") or "").lstrip().upper().startswith("WIP")
+    in_main = None
+    commit = git.get("commit")
+    if root is not None and commit:
+        try:
+            for ref in ("origin/main", "main"):
+                rc = subprocess.run(["git", "merge-base", "--is-ancestor", commit, ref], cwd=root,
+                                    capture_output=True, timeout=20).returncode
+                if rc in (0, 1):
+                    in_main = rc == 0
+                    break
+        except (OSError, subprocess.SubprocessError):
+            in_main = None
+    return {"in_main": in_main, "wip": wip}
+
+
+def origin_mark(origin: dict | None) -> str:
+    if not origin:
+        return ""
+    if origin.get("in_main") is False:
+        return "не в main / WIP" if origin.get("wip") else "не в main"
+    return "WIP" if origin.get("wip") else ""
+
+
+def graphic_summary(name: str, data: dict, root: Path | None = None) -> dict:
     counts = dict.fromkeys(GT_STATUS_ORDER, 0)
     tests = {}
     for t in data["tests"]:
         status = t.get("status", "")
         counts[status] = counts.get(status, 0) + 1
-        tests[t.get("stem") or t.get("id")] = {"status": status, "diff_pct": t.get("diff_pct")}
+        tests[t.get("stem") or t.get("id")] = {"status": status, "diff_pct": t.get("diff_pct"),
+                                               "capture": t.get("capture")}
     summary = data.get("summary", {})
     mismatch = [s for s, key in GT_SUMMARY_KEY.items() if summary.get(key, 0) != counts.get(s, 0)]
     total = len(data["tests"])
@@ -230,6 +292,8 @@ def graphic_summary(name: str, data: dict) -> dict:
         "timestamp": data.get("timestamp"),
         "commit": git.get("commit"),
         "branch": git.get("branch"),
+        "mode": graphic_mode(data),
+        "origin": git_origin(root, git),
         "total": total,
         "counts": counts,
         "pass_rate": round(counts["PASS"] / total, 4) if total else None,
@@ -239,17 +303,28 @@ def graphic_summary(name: str, data: dict) -> dict:
 
 
 def graphic_changes(cur: dict, prev: dict) -> list:
+    """Сменившие статус тесты. Тест, у которого в двух прогонах разный способ
+    съёмки, сюда не попадает — см. `graphic_capture_changes`."""
     out = []
     for stem, t in cur["tests"].items():
         old = prev["tests"].get(stem)
         if old is None:
             out.append((stem, "—", t["status"], t["diff_pct"], None))
+        elif old.get("capture") != t.get("capture"):
+            continue
         elif old["status"] != t["status"]:
             out.append((stem, old["status"], t["status"], t["diff_pct"], old["diff_pct"]))
     for stem, old in prev["tests"].items():
         if stem not in cur["tests"]:
             out.append((stem, old["status"], "—", None, old["diff_pct"]))
     return sorted(out)
+
+
+def graphic_capture_changes(cur: dict, prev: dict) -> list:
+    """Тесты, снятые в двух прогонах разными способами: (stem, было, стало)."""
+    return sorted((stem, prev["tests"][stem].get("capture"), t.get("capture"))
+                  for stem, t in cur["tests"].items()
+                  if stem in prev["tests"] and prev["tests"][stem].get("capture") != t.get("capture"))
 
 
 def graphic_is_regression(change) -> bool:
@@ -472,6 +547,8 @@ def snapshot_payload(snap: dict) -> dict:
     out = json.loads(json.dumps(snap, default=sorted))
     if out["graphic"]:
         out["graphic"]["tests"] = {k: v["status"] for k, v in out["graphic"]["tests"].items()}
+        # Зависит от состояния git на момент отчёта, а не от прогона: срез не должен дрожать от мержей.
+        out["graphic"].pop("origin", None)
     return out
 
 
@@ -532,6 +609,7 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
     bugs = snap["bugs"]
     wpt_regs = wpt_regressions(wpt, wpt_prev) if wpt and wpt_prev else None
     gt_changes = graphic_changes(gt, gt_prev) if gt and gt_prev else None
+    gt_cap = graphic_capture_changes(gt, gt_prev) if gt and gt_prev else []
     gt_regs = [c for c in gt_changes if graphic_is_regression(c)] if gt_changes is not None else None
     status_regs = []
     if wpt and wpt_prev:
@@ -558,16 +636,25 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
     else:
         src.append(("WPT (`docs/wpt/runs`)", NA, NA))
     if gt:
-        prev_txt = (f"`{gt_prev['run']}` · `{gt_prev['commit']}` ({gt_prev['branch']})" if gt_prev else NA)
-        src.append(("graphic_tests", f"`{gt['run']}` · `{gt['commit']}` ({gt['branch']})", prev_txt))
+        def gt_cell(g: dict) -> str:
+            cell = f"`{g['run']}` · `{g['commit']}` ({g['branch']}) · режим `{g['mode']}`"
+            mark = origin_mark(g.get("origin"))
+            return f"{cell} · **{mark}**" if mark else cell
+
+        src.append(("graphic_tests", gt_cell(gt), gt_cell(gt_prev) if gt_prev else NA))
     else:
         src.append(("graphic_tests", NA, NA))
     bug_prev = f"срез `{prev_snap['stamp']}`" if prev_snap and prev_snap.get("bugs") else NA
     src.append(("BUGS.md", "рабочее дерево" if bugs else NA, bug_prev))
     L += md_table(["Источник", "Свежий", "Предыдущий"], src) + [""]
-    L += ["Дельта WPT и graphic_tests — к предыдущему прогону того же раннера; дельта багов — "
-          "к прошлому срезу `docs/quality/runs/`. Частичные прогоны WPT (scope — список категорий) "
-          "и graphic_tests (`--only`, `--recheck`) в сравнение не берутся.", ""]
+    L += ["Дельта WPT — к предыдущему прогону; дельта graphic_tests — к предыдущему полному прогону "
+          "**того же режима съёмки** (`ipc` / `gdigrab` / `default` — смесь по `GPU_CAPTURE`; `legacy` — "
+          "прогон до TEST-9 без поля `capture`); дельта багов — к прошлому срезу `docs/quality/runs/`. "
+          "Частичные прогоны WPT (scope — список категорий) и graphic_tests (`--only`, `--recheck`) "
+          "в сравнение не берутся. «не в main» — коммит прогона не предок `origin/main`; "
+          "«WIP» — тема коммита начинается с `WIP`: числа такого прогона предварительные.", ""]
+    if gt and not gt_prev and snap.get("graphic_no_prev"):
+        L += [f"graphic_tests: Δ {NA} — {snap['graphic_no_prev']}.", ""]
 
     # Просадки
     L += ["## Просадки с прошлого отчёта", ""]
@@ -684,6 +771,11 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
             L += ["Сменившие статус:", ""]
             L += md_table(["Тест", "Было", "Стало", "diff %"],
                           [(f"`{s}`", o, n, NA if d is None else d) for s, o, n, d, _ in gt_changes]) + [""]
+        if gt_cap:
+            names = ", ".join(f"`{s}` ({o or NA} → {n or NA})" for s, o, n in gt_cap[:5])
+            more = f" и ещё {len(gt_cap) - 5}" if len(gt_cap) > 5 else ""
+            L += [f"Сменился способ съёмки: {len(gt_cap)} — {names}{more}. Эти тесты не входят ни в "
+                  "«Сменившие статус», ни в просадки: их сдвиг нельзя отличить от разницы способа съёмки.", ""]
     else:
         L += [f"{NA} — в `graphic_tests/results/` нет прогонов.", ""]
 
@@ -709,10 +801,11 @@ def build(root: Path) -> dict:
     wpt = wpt_summary(*runs[-1]) if runs else None
     wpt_prev = wpt_summary(*runs[-2]) if len(runs) > 1 else None
     gruns = graphic_runs(root / "graphic_tests" / "results")
-    gt = graphic_summary(*gruns[-1]) if gruns else None
-    gt_prev = graphic_summary(*gruns[-2]) if len(gruns) > 1 else None
+    cur_run, prev_run, why = graphic_pair(gruns)
+    gt = graphic_summary(*cur_run, root=root) if cur_run else None
+    gt_prev = graphic_summary(*prev_run, root=root) if prev_run else None
     snap = {"schema": 1, "wpt": wpt, "wpt_prev": wpt_prev, "graphic": gt, "graphic_prev": gt_prev,
-            "bugs": bugs_summary(root, wpt)}
+            "graphic_no_prev": why, "bugs": bugs_summary(root, wpt)}
     snap["stamp"] = snapshot_stamp(snap)
     return snap
 
@@ -730,7 +823,7 @@ def main(argv=None) -> int:
     runs_dir = root / "docs" / "quality" / "runs"
     payload = snapshot_payload(snap)
     # Срез хранит только свежие данные; предыдущие прогоны раннеров в нём не нужны.
-    payload_core = {k: v for k, v in payload.items() if k not in ("wpt_prev", "graphic_prev")}
+    payload_core = {k: v for k, v in payload.items() if k not in ("wpt_prev", "graphic_prev", "graphic_no_prev")}
     prev_snap, write = previous_snapshot(runs_dir, payload_core)
     text, head = render(snap, prev_snap)
     if args.check:
