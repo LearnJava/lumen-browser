@@ -2642,6 +2642,19 @@ fn rasterize_radial_gradient(
     let cx = rect.x + center_x_pct * rect.width;
     let cy = rect.y + center_y_pct * rect.height;
     let radius = (rx * (hi - lo)).max(1e-3);
+    // A centre or radius that overflowed to ±inf/NaN (`at 9999…9%`) has no
+    // finite rings: every pixel lies infinitely far out, so the layer is the
+    // last stop's solid colour (CSS Images 3 §3.5.1 — degenerate sizing) rather
+    // than an error that fails the whole screenshot (BUG-1436).
+    if !(cx.is_finite() && cy.is_finite() && radius.is_finite()) {
+        let last = resolved.last().map(|s| s.1).ok_or("empty gradient")?;
+        let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+            .ok_or("Invalid rect dimensions")?;
+        let mut paint = Paint::default();
+        paint.set_color(color_to_skia(last));
+        pixmap.fill_rect(skia_rect, &paint, Transform::identity(), clip);
+        return Ok(());
+    }
     let center = Point::from_xy(cx, cy);
     let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
     // Scale y about the centre by ry/rx (identity for a circle → byte-identical).
@@ -2649,15 +2662,17 @@ fn rasterize_radial_gradient(
     let local = Transform::from_translate(cx, cy)
         .pre_scale(1.0, sy)
         .pre_translate(-cx, -cy);
-    let shader = RadialGradient::new(
+    let Some(shader) = RadialGradient::new(
         center,
         center,
         radius,
         skia_stops,
         mode,
         local,
-    )
-    .ok_or("degenerate radial gradient")?;
+    ) else {
+        // tiny-skia refuses the remaining degenerate cases: nothing to draw.
+        return Ok(());
+    };
 
     let paint = Paint {
         shader,
@@ -6100,6 +6115,28 @@ mod tests {
             hr.abs_diff(vr) < 16 && hb.abs_diff(vb) < 16,
             "isotropic: horizontal ({hr},{hb}) ≈ vertical ({vr},{vb})"
         );
+    }
+
+    /// BUG-1436: a centre position that overflows f32 (`at 9999…9%`) used to fail
+    /// the whole `--screenshot` with "degenerate radial gradient"; now the box
+    /// is filled with the last stop (the WPT ref is a plain green square).
+    #[test]
+    fn radial_gradient_with_infinite_centre_does_not_fail_the_snapshot() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawRadialGradient {
+            rect: rect(0.0, 0.0, 40.0, 40.0),
+            center_x_pct: f32::INFINITY,
+            center_y_pct: f32::INFINITY,
+            radius_x: 50.0,
+            radius_y: 50.0,
+            stops: vec![
+                GradientStop { color: green, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                GradientStop { color: green, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+            ],
+            repeating: true,
+        }];
+        let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("must not error");
+        assert_eq!(px(&img, 20, 20), (0, 128, 0, 255), "last stop fills the box");
     }
 
     fn solid_2x2(rgba: [u8; 4]) -> Image {
