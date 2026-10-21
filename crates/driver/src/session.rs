@@ -432,12 +432,12 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let (mut layout_root, counters) =
+        let (mut layout_root, mut counters) =
             lumen_layout::layout_measured_with_counters(&doc_guard, sheet, self.viewport, &measurer);
         for &(node, x, y) in prev_scroll {
             lumen_layout::set_scroll_position(&mut layout_root, node, x, y);
         }
-        let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
+        let mut flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
         // BUG-430: background/marker/`content: url()` images are known only from
@@ -446,6 +446,21 @@ impl InProcessSession {
         // here, after layout, and only need to be in the map before the raster
         // resolves the display list's `src` keys.
         self.load_background_images(&layout_root);
+
+        // CSS Shapes L1 §6.2: the exception — a `shape-outside: url()` image decides
+        // where the text wraps, so its alpha plane goes to the document and the page
+        // is laid out once more.
+        if self.report_shape_images(&layout_root, doc)? {
+            let doc_guard = Self::lock_arc_doc(doc)?;
+            let (mut relaid, relaid_counters) =
+                lumen_layout::layout_measured_with_counters(&doc_guard, sheet, self.viewport, &measurer);
+            for &(node, x, y) in prev_scroll {
+                lumen_layout::set_scroll_position(&mut relaid, node, x, y);
+            }
+            flat_tree = lumen_dom::build_flat_tree(&doc_guard);
+            layout_root = relaid;
+            counters = relaid_counters;
+        }
 
         self.commit_layout(&layout_root, doc, Some(&counters), sheet);
 
@@ -710,6 +725,34 @@ impl InProcessSession {
                  (офлайн-путь читает только file://-источники)"
             );
         }
+    }
+
+    /// Reports the alpha planes of the `shape-outside: url()` images of `layout_root`
+    /// to the document (CSS Shapes L1 §6.2). `true` when one is new — the page has to
+    /// be laid out again.
+    fn report_shape_images(&self, layout_root: &LayoutBox, doc: &Arc<Mutex<Document>>) -> Result<bool> {
+        let urls = lumen_layout::collect_shape_image_requests(layout_root);
+        if urls.is_empty() {
+            return Ok(false);
+        }
+        let mut skipped_remote = 0usize;
+        let mut guard = Self::lock_arc_doc(doc)?;
+        let mut changed = false;
+        for url in urls {
+            let Some(image) = self.decode_local_image(&url, &mut skipped_remote) else { continue };
+            let alpha = image.to_rgba8().chunks_exact(4).map(|px| px[3]).collect();
+            changed |= guard.set_shape_image(
+                &url,
+                lumen_dom::ImageAlpha { width: image.width, height: image.height, alpha },
+            );
+        }
+        if skipped_remote > 0 {
+            eprintln!(
+                "InProcessSession: пропущено {skipped_remote} нелокальных shape-outside url() \
+                 (офлайн-путь читает только file://-источники)"
+            );
+        }
+        Ok(changed)
     }
 
     /// Decode one subresource image into [`Self::subresource_images`] and return

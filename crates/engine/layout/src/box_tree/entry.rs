@@ -49,6 +49,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    super::shape_resolve::install_shape_images(doc);
     let mut counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
@@ -147,6 +148,7 @@ pub fn layout_measured_hyp_with_counters(
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    super::shape_resolve::install_shape_images(doc);
     let mut counters = {
         let _prof = lumen_core::profile::scope("precompute_counters");
         lumen_core::tracy_zone!("precompute_counters");
@@ -299,6 +301,7 @@ pub fn layout_streaming_incremental_with_counters(
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    super::shape_resolve::install_shape_images(doc);
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
@@ -449,6 +452,7 @@ pub fn layout_mutation_incremental_restyle(
         // number of shadow hosts.
         let _prof = lumen_core::profile::scope("build_shadow_sheets");
         crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+        super::shape_resolve::install_shape_images(doc);
     }
     // BUG-935 срез 78: the flush's scope — what the JS-visible caches treat as changed — is taken
     // before the delta is consumed; the ids the build releases from it are read off `prev` below.

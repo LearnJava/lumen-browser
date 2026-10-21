@@ -21,6 +21,7 @@ fn boxes(radii: [(f32, f32); 4]) -> FloatBoxes {
         paddings: [0.0; 4],
         em: 16.0,
         threshold: 0.0,
+        image: None,
     }
 }
 
@@ -119,7 +120,6 @@ fn linear_gradient_keeps_only_opaque_bands() {
 fn circle_ctx() -> FloatContext {
     let mut fc = FloatContext::new();
     fc.add_left(0.0, 100.0, 100.0);
-    fc.mark_last_shaped(true);
     fc.add_shape_prims(
         vec![Prim::Ellipse { cx: 50.0, cy: 50.0, rx: 50.0, ry: 50.0 }],
         true,

@@ -15,8 +15,12 @@
 //! the shape occupy at block position `y`".
 
 use super::shapes_floats::{parse_shape_path_px, polygon_edge_x_at_y_margin};
-use crate::style::{Length, ParsedGradient};
+use crate::style::{GradientStop, Length, ParsedGradient};
 use lumen_core::geom::Size;
+use lumen_dom::{Document, ImageAlpha};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// One piece of a float's contour. In [`resolve_shape`]'s output the coordinates
 /// are physical px from the margin-box top-left; after [`Prim::rotate`] they are
@@ -31,6 +35,87 @@ pub(crate) enum Prim {
     /// corners `[x0·y0, x1·y0, x1·y1, x0·y1]` — in the physical frame that is
     /// `[top-left, top-right, bottom-right, bottom-left]`.
     RRect { x0: f32, y0: f32, x1: f32, y1: f32, radii: [(f32, f32); 4] },
+    /// A rasterised alpha mask (`<image>` / non-linear gradient) whose top-left
+    /// corner sits at `(ox, oy)`.
+    Mask { ox: f32, oy: f32, m: Arc<MaskExtents> },
+}
+
+/// Per-row and per-column extents of the opaque cells of a rasterised alpha mask
+/// (CSS Shapes L1 §6.2). A float is wrapped from the outside, so for every scanline
+/// only the outermost opaque cells matter; holes are ignored. Coordinates are px
+/// from the mask's top-left corner.
+#[derive(Debug)]
+pub(crate) struct MaskExtents {
+    w: f32,
+    h: f32,
+    /// `x` range of the opaque cells on each row (row `r` spans `y ∈ [r·ch, (r+1)·ch]`).
+    rows: Vec<Option<(f32, f32)>>,
+    /// `y` range of the opaque cells in each column — what a quarter turn needs.
+    cols: Vec<Option<(f32, f32)>>,
+}
+
+impl MaskExtents {
+    /// Samples `inside(x, y)` (px from the top-left) on a `w × h` grid of at most
+    /// `MASK_CELLS` cells per axis, one cell per px where the box is small enough.
+    fn build(w: f32, h: f32, inside: &dyn Fn(f32, f32) -> bool) -> MaskExtents {
+        const MASK_CELLS: f32 = 1024.0;
+        let nx = w.ceil().clamp(1.0, MASK_CELLS) as usize;
+        let ny = h.ceil().clamp(1.0, MASK_CELLS) as usize;
+        let (cw, ch) = (w / nx as f32, h / ny as f32);
+        let mut rows: Vec<Option<(f32, f32)>> = vec![None; ny];
+        let mut cols: Vec<Option<(f32, f32)>> = vec![None; nx];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let y = (r as f32 + 0.5) * ch;
+            for (c, col) in cols.iter_mut().enumerate() {
+                if !inside((c as f32 + 0.5) * cw, y) {
+                    continue;
+                }
+                let (x0, x1) = (c as f32 * cw, (c as f32 + 1.0) * cw);
+                *row = Some(row.map_or((x0, x1), |(lo, hi)| (lo.min(x0), hi.max(x1))));
+                let (y0, y1) = (r as f32 * ch, (r as f32 + 1.0) * ch);
+                *col = Some(col.map_or((y0, y1), |(lo, hi)| (lo.min(y0), hi.max(y1))));
+            }
+        }
+        MaskExtents { w, h, rows, cols }
+    }
+
+    /// The mask turned by a quarter, as [`Prim::rotate`] does for the other primitives:
+    /// `x' = y`, `y' = x` (`rl`: `y' = w - x`).
+    fn rotated(&self, rl: bool) -> MaskExtents {
+        let (rows, cols) = if rl {
+            (
+                self.cols.iter().rev().copied().collect(),
+                self.rows.iter().map(|r| r.map(|(lo, hi)| (self.w - hi, self.w - lo))).collect(),
+            )
+        } else {
+            (self.cols.clone(), self.rows.clone())
+        };
+        MaskExtents { w: self.h, h: self.w, rows, cols }
+    }
+
+    /// The `x` range (from the left edge) the opaque cells — grown by `m` — cover on
+    /// the scanline `yl` (px from the top edge).
+    fn extent_at(&self, yl: f32, m: f32) -> Option<(f32, f32)> {
+        let n = self.rows.len();
+        let ch = self.h / n as f32;
+        if m <= 0.0 && !(0.0..self.h).contains(&yl) {
+            return None;
+        }
+        let first = (((yl - m) / ch).floor().max(0.0)) as usize;
+        let last = ((((yl + m) / ch).floor()).min(n as f32 - 1.0)).max(0.0) as usize;
+        let mut best: Option<(f32, f32)> = None;
+        for r in first..=last {
+            let Some((lo, hi)) = self.rows[r] else { continue };
+            // Distance from the scanline to this row's band.
+            let dy = (r as f32 * ch - yl).max(yl - (r as f32 + 1.0) * ch).max(0.0);
+            if dy > m {
+                continue;
+            }
+            let e = (m * m - dy * dy).max(0.0).sqrt();
+            best = Some(best.map_or((lo - e, hi + e), |(a, b)| (a.min(lo - e), b.max(hi + e))));
+        }
+        best
+    }
 }
 
 impl Prim {
@@ -54,6 +139,11 @@ impl Prim {
                 }
                 Prim::RRect { x0: *y0, y0: ny0, x1: *y1, y1: ny1, radii: out }
             }
+            Prim::Mask { ox, oy, m } => Prim::Mask {
+                ox: *oy,
+                oy: if rl { mw - (ox + m.w) } else { *ox },
+                m: Arc::new(m.rotated(rl)),
+            },
         }
     }
 
@@ -75,6 +165,10 @@ impl Prim {
                 *x1 += dx;
                 *y0 += dy;
                 *y1 += dy;
+            }
+            Prim::Mask { ox, oy, .. } => {
+                *ox += dx;
+                *oy += dy;
             }
         }
     }
@@ -117,6 +211,7 @@ impl Prim {
                 let right = inward(radii[1], true).max(inward(radii[2], false));
                 Some((x0 + left, x1 - right))
             }
+            Prim::Mask { ox, oy, m: mask } => mask.extent_at(y - oy, m).map(|(l, r)| (l + ox, r + ox)),
         }
     }
 }
@@ -131,6 +226,42 @@ fn corner_inward(rx: f32, ry: f32, d: f32) -> f32 {
     }
     let dy = d.min(ry);
     rx * (1.0 - (1.0 - (dy / ry) * (dy / ry)).max(0.0).sqrt())
+}
+
+thread_local! {
+    /// Alpha planes of the `shape-outside: url()` images of the page being laid out
+    /// ([`install_shape_images`]).
+    static SHAPE_IMAGES: RefCell<HashMap<String, Arc<ImageAlpha>>> = RefCell::new(HashMap::new());
+}
+
+/// Installs `doc`'s decoded shape images for the layout pass that starts now (the
+/// layout entry points call it next to `set_shadow_sheets`).
+pub(crate) fn install_shape_images(doc: &Document) {
+    SHAPE_IMAGES.with(|cell| {
+        let mut map = cell.borrow_mut();
+        map.clear();
+        map.extend(doc.shape_images().iter().map(|(k, v)| (k.clone(), Arc::clone(v))));
+    });
+}
+
+fn shape_image(url: &str) -> Option<Arc<ImageAlpha>> {
+    SHAPE_IMAGES.with(|cell| cell.borrow().get(url).cloned())
+}
+
+/// The raw URL of a `shape-outside: url(…)` value (quotes stripped), `None` for any
+/// other value. This is the key the shell fetches and reports the image under.
+pub(crate) fn shape_image_url(sv: &str) -> Option<String> {
+    let t = sv.trim();
+    let head = t.get(..4)?;
+    if !head.eq_ignore_ascii_case("url(") || !t.ends_with(')') {
+        return None;
+    }
+    let inner = t[4..t.len() - 1].trim();
+    let unquoted = match inner.as_bytes() {
+        [q @ (b'"' | b'\''), .., last] if q == last => &inner[1..inner.len() - 1],
+        _ => inner,
+    };
+    (!unquoted.is_empty()).then(|| unquoted.to_string())
 }
 
 /// An axis-aligned box in physical px from the margin-box top-left.
@@ -172,6 +303,9 @@ pub(crate) struct FloatBoxes {
     pub(crate) em: f32,
     /// `shape-image-threshold`: alpha above which an image pixel is in the shape.
     pub(crate) threshold: f32,
+    /// The decoded alpha plane of a `url()` `shape-outside` (`None` while it is not
+    /// loaded yet, or when the value has no image).
+    pub(crate) image: Option<Arc<ImageAlpha>>,
 }
 
 impl FloatBoxes {
@@ -218,6 +352,10 @@ impl FloatBoxes {
             paddings,
             em,
             threshold: s.shape_image_threshold,
+            image: match &s.shape_outside {
+                crate::style::ShapeOutside::Value(sv) => shape_image_url(sv).and_then(|u| shape_image(&u)),
+                crate::style::ShapeOutside::None => None,
+            },
         }
     }
 
@@ -407,6 +545,13 @@ pub(crate) fn resolve_shape(sv: &str, bx: &FloatBoxes) -> Option<Vec<Prim>> {
     }
     let name = func[..open].trim().to_ascii_lowercase();
     let inner = &func[open + 1..close];
+    // `<image>` is a `shape-outside` value of its own: no `<shape-box>` beside it.
+    if name == "url" || name.ends_with("-gradient") {
+        if kw.is_some() {
+            return None;
+        }
+        return if name == "url" { resolve_image(bx) } else { resolve_gradient(func, bx) };
+    }
     let (rect, _) = bx.reference(kw.as_deref().unwrap_or("margin-box"));
     match name.as_str() {
         "circle" => resolve_circle(&inner.to_ascii_lowercase(), rect, bx),
@@ -417,7 +562,6 @@ pub(crate) fn resolve_shape(sv: &str, bx: &FloatBoxes) -> Option<Vec<Prim>> {
             let pts = parse_shape_path_px(func)?;
             Some(vec![Prim::Polygon(pts.into_iter().map(|(x, y)| (x + rect.x0, y + rect.y0)).collect())])
         }
-        "linear-gradient" => resolve_linear_gradient(func, rect, bx),
         _ => None,
     }
 }
@@ -647,33 +791,41 @@ fn clip_half_plane(pts: &[(f32, f32)], f: &dyn Fn((f32, f32)) -> f32, bound: f32
     out
 }
 
-/// CSS Shapes L1 §3.3 — a `linear-gradient()` shape: the part of the reference box
-/// whose gradient colour is more opaque than `shape-image-threshold`, as one convex
-/// polygon per opaque interval along the gradient line.
-fn resolve_linear_gradient(func: &str, rect: Rect4, bx: &FloatBoxes) -> Option<Vec<Prim>> {
-    let ParsedGradient::Linear { angle_deg, corner, stops, repeating: false } =
-        crate::style::parse_background_gradient(func)
-    else {
-        return None;
+/// CSS Shapes L1 §6.2 — a `url()` image: the cells of the margin box whose image
+/// alpha exceeds `shape-image-threshold`. The image is stretched over the margin
+/// box. `None` while the image has not been loaded (the float keeps its rectangle).
+fn resolve_image(bx: &FloatBoxes) -> Option<Vec<Prim>> {
+    let img = bx.image.as_deref()?;
+    let rect = bx.margin;
+    let (w, h) = (rect.w(), rect.h());
+    if w <= 0.0 || h <= 0.0 || img.width == 0 || img.height == 0 {
+        return Some(Vec::new());
+    }
+    let thr = bx.threshold.clamp(0.0, 1.0);
+    let (iw, ih) = (img.width as usize, img.height as usize);
+    let inside = |x: f32, y: f32| {
+        let u = ((x / w * iw as f32) as usize).min(iw - 1);
+        let v = ((y / h * ih as f32) as usize).min(ih - 1);
+        img.alpha.get(v * iw + u).is_some_and(|a| f32::from(*a) / 255.0 > thr)
     };
+    Some(vec![Prim::Mask { ox: rect.x0, oy: rect.y0, m: Arc::new(MaskExtents::build(w, h, &inside)) }])
+}
+
+/// CSS Images L3 §3.4.3 — positions of the colour stops along a gradient line of
+/// `len` px: unset ends default to `0` / `len`, unset runs are spread evenly, and a
+/// stop never sits before its predecessor. A `<percentage>` is a share of `len`;
+/// `abs_ok == false` (conic: the line is an angle) rejects absolute lengths.
+fn stop_positions(stops: &[GradientStop], len: f32, em: f32, abs_ok: bool) -> Option<Vec<f32>> {
     if stops.is_empty() {
         return None;
     }
-    let (w, h) = (rect.w(), rect.h());
-    let ang = corner.map_or(angle_deg, |c| c.angle_deg(w, h)).to_radians();
-    let (dx, dy) = (ang.sin(), -ang.cos());
-    let len = (w * ang.sin()).abs() + (h * ang.cos()).abs();
-    if len <= 0.0 {
-        return Some(Vec::new());
-    }
-    // Stop positions along the gradient line, px (CSS Images L3 §3.4.3).
     let mut pos: Vec<Option<f32>> = Vec::with_capacity(stops.len());
-    for st in &stops {
+    for st in stops {
         pos.push(match &st.position {
             None => None,
             Some(Length::Percent(p)) => Some(p / 100.0 * len),
-            Some(Length::Px(v)) => Some(*v),
-            Some(Length::Em(v)) => Some(v * bx.em),
+            Some(Length::Px(v)) if abs_ok => Some(*v),
+            Some(Length::Em(v)) if abs_ok => Some(v * em),
             Some(_) => return None,
         });
     }
@@ -700,6 +852,104 @@ fn resolve_linear_gradient(func: &str, rect: Rect4, bx: &FloatBoxes) -> Option<V
     for n in 1..at.len() {
         at[n] = at[n].max(at[n - 1]);
     }
+    Some(at)
+}
+
+/// Alpha of a gradient along its line: piecewise linear between the stops, flat
+/// beyond them (or periodic for a `repeating-*` gradient).
+struct AlphaRamp {
+    at: Vec<f32>,
+    alpha: Vec<f32>,
+    repeating: bool,
+}
+
+impl AlphaRamp {
+    fn new(stops: &[GradientStop], len: f32, em: f32, abs_ok: bool, repeating: bool) -> Option<AlphaRamp> {
+        Some(AlphaRamp {
+            at: stop_positions(stops, len, em, abs_ok)?,
+            alpha: stops.iter().map(|s| f32::from(s.color.a) / 255.0).collect(),
+            repeating,
+        })
+    }
+
+    fn alpha_at(&self, t: f32) -> f32 {
+        let last = self.at.len() - 1;
+        let period = self.at[last] - self.at[0];
+        let t = if self.repeating && period > 0.0 {
+            self.at[0] + (t - self.at[0]).rem_euclid(period)
+        } else {
+            t
+        };
+        if t <= self.at[0] {
+            return self.alpha[0];
+        }
+        if t >= self.at[last] {
+            return self.alpha[last];
+        }
+        let i = self.at.partition_point(|&p| p <= t) - 1;
+        let (p0, p1) = (self.at[i], self.at[i + 1]);
+        self.alpha[i] + (self.alpha[i + 1] - self.alpha[i]) * (t - p0) / (p1 - p0)
+    }
+}
+
+/// CSS Shapes L1 §6.2 — a gradient `<image>` as a shape: the cells of the margin
+/// box whose gradient alpha exceeds `shape-image-threshold`. An exact polygon for a
+/// plain `linear-gradient()`, a rasterised mask for the other kinds.
+fn resolve_gradient(func: &str, bx: &FloatBoxes) -> Option<Vec<Prim>> {
+    let g = crate::style::parse_background_gradient(func);
+    let rect = bx.margin;
+    let (w, h) = (rect.w(), rect.h());
+    let em = bx.em;
+    let thr = bx.threshold.clamp(0.0, 1.0);
+    let inside: Box<dyn Fn(f32, f32) -> bool> = match &g {
+        ParsedGradient::Linear { angle_deg, corner, stops, repeating } => {
+            let ang = corner.map_or(*angle_deg, |c| c.angle_deg(w, h)).to_radians();
+            let len = (w * ang.sin()).abs() + (h * ang.cos()).abs();
+            if len <= 0.0 {
+                return Some(Vec::new());
+            }
+            if !repeating {
+                return resolve_linear_gradient(stops, ang, len, rect, bx);
+            }
+            let ramp = AlphaRamp::new(stops, len, em, true, true)?;
+            let (dx, dy) = (ang.sin(), -ang.cos());
+            Box::new(move |x, y| ramp.alpha_at((x - w / 2.0) * dx + (y - h / 2.0) * dy + len / 2.0) > thr)
+        }
+        ParsedGradient::Radial { center_x_pct, center_y_pct, shape, size, stops, repeating } => {
+            let (cx, cy) = (center_x_pct * w, center_y_pct * h);
+            let (rx, ry) = crate::style::radial_gradient_radii(*shape, *size, *center_x_pct, *center_y_pct, w, h);
+            let ramp = AlphaRamp::new(stops, rx, em, true, *repeating)?;
+            Box::new(move |x, y| ramp.alpha_at((((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2)).sqrt() * rx) > thr)
+        }
+        ParsedGradient::Conic { center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+            let (cx, cy, from) = (center_x_pct * w, center_y_pct * h, *from_angle_deg);
+            let ramp = AlphaRamp::new(stops, 1.0, em, false, *repeating)?;
+            Box::new(move |x, y| {
+                let deg = (x - cx).atan2(-(y - cy)).to_degrees() - from;
+                ramp.alpha_at(deg.rem_euclid(360.0) / 360.0) > thr
+            })
+        }
+        ParsedGradient::Unknown(_) => return None,
+    };
+    if w <= 0.0 || h <= 0.0 {
+        return Some(Vec::new());
+    }
+    Some(vec![Prim::Mask { ox: rect.x0, oy: rect.y0, m: Arc::new(MaskExtents::build(w, h, &*inside)) }])
+}
+
+/// A plain `linear-gradient()`: the part of the box whose gradient colour is more
+/// opaque than `shape-image-threshold`, as one convex polygon per opaque interval
+/// along the gradient line (`ang` — its direction in radians, `len` — its length).
+fn resolve_linear_gradient(
+    stops: &[GradientStop],
+    ang: f32,
+    len: f32,
+    rect: Rect4,
+    bx: &FloatBoxes,
+) -> Option<Vec<Prim>> {
+    let at = stop_positions(stops, len, bx.em, true)?;
+    let last = at.len() - 1;
+    let (dx, dy) = (ang.sin(), -ang.cos());
     let alpha: Vec<f32> = stops.iter().map(|s| f32::from(s.color.a) / 255.0).collect();
     let thr = bx.threshold.clamp(0.0, 1.0);
 

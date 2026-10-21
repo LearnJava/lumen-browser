@@ -528,6 +528,15 @@ pub struct TextSelection {
     pub from_script: bool,
 }
 
+/// The alpha channel of a decoded image, row-major, one byte per pixel
+/// (`width * height` bytes). See [`Document::set_shape_image`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageAlpha {
+    pub width: u32,
+    pub height: u32,
+    pub alpha: Vec<u8>,
+}
+
 // ── Selection / Range ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -676,6 +685,13 @@ pub struct Document {
     /// [`Self::embedded_images`].
     #[serde(default)]
     embedded_documents: HashMap<u32, (String, bool)>,
+    /// Alpha planes of the images named by `shape-outside: url(…)` (CSS Shapes L1
+    /// §6.2): the raw URL as written in the stylesheet → decoded alpha. Layout has
+    /// no pixels of its own, so the shell reports each decoded image here
+    /// ([`Self::set_shape_image`]) and relayouts; a float whose URL has no entry yet
+    /// wraps as if `shape-outside` were `none`.
+    #[serde(skip)]
+    shape_images: HashMap<String, std::sync::Arc<ImageAlpha>>,
     /// Active pointer captures: maps `pointerId` → captured `NodeId`.
     ///
     /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
@@ -863,6 +879,7 @@ impl Document {
             cdata_sections: HashSet::new(),
             embedded_images: HashMap::new(),
             embedded_documents: HashMap::new(),
+            shape_images: HashMap::new(),
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             text_selections: HashMap::new(),
@@ -1731,6 +1748,22 @@ impl Document {
         self.content_journal.note(id);
         self.embedded_images.insert(key, (url.to_string(), width, height));
         true
+    }
+
+    /// Record the alpha plane of the image `url` names in a `shape-outside`.
+    /// Returns `true` when the entry changed — the caller then owes the page a
+    /// relayout, same contract as [`Self::set_embedded_image`].
+    pub fn set_shape_image(&mut self, url: &str, alpha: ImageAlpha) -> bool {
+        if self.shape_images.get(url).is_some_and(|a| **a == alpha) {
+            return false;
+        }
+        self.shape_images.insert(url.to_string(), std::sync::Arc::new(alpha));
+        true
+    }
+
+    /// Every alpha plane [`Self::set_shape_image`] recorded, keyed by raw URL.
+    pub fn shape_images(&self) -> &HashMap<String, std::sync::Arc<ImageAlpha>> {
+        &self.shape_images
     }
 
     /// Decoded image `id` represents, if its current resource URL is one
