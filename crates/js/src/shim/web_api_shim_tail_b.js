@@ -5216,7 +5216,9 @@ function _wa_lerp_scalar(a, b, t) {
     var na = parseFloat(a), nb = parseFloat(b);
     if (isNaN(na) || isNaN(nb)) return t < 0.5 ? a : b;
     var ua = _wa_unit(a).toLowerCase(), ub = _wa_unit(b).toLowerCase();
-    if (ua === ub || !ua || !ub) {
+    // A bare `0` is a length; any other number is not mixable with a unit (`tab-size: 1` vs
+    // `10px`, `line-height: 1.5` vs `20px`) and flips.
+    if (ua === ub || (!ua && na === 0) || (!ub && nb === 0)) {
         return (na + (nb - na) * t) + (_wa_unit(a) || _wa_unit(b));
     }
     var sa = _wa_unit_scale[ua], sb = _wa_unit_scale[ub];
@@ -5923,6 +5925,19 @@ function _wa_motion_try(camel, from, to, t) {
         var box = /[%(]/.test(from + to) ? _wa_motion_box() : [0, 0];
         return _lumen_css_interpolate_transform(from, to, t, box[0], box[1]);
     }
+    if (camel === 'letterSpacing' || camel === 'wordSpacing') {
+        // `normal` is 0 for interpolation (CSS Text 3 §8.1, §8.2).
+        if (from === to) return from;
+        // The ends themselves keep their keyword: `normal` at progress 0, not `0px`.
+        // (`word-spacing: normal` computes to `0px`, so only `letter-spacing` keeps it.)
+        if (camel === 'letterSpacing' && t === 0 && from === 'normal') return from;
+        if (camel === 'letterSpacing' && t === 1 && to === 'normal') return to;
+        if (from === 'normal') from = '0px';
+        if (to === 'normal') to = '0px';
+    }
+    from = _wa_canon_prop(camel, from); to = _wa_canon_prop(camel, to);
+    var lp = _wa_lp_interp(camel, from, to, t);
+    if (lp != null) return lp;
     if (_wa_motion_is_color(camel)) return _wa_motion_lerp_color(from, to, t);
     var seq = _wa_motion_seq_try(camel, from, to, t);
     if (seq !== undefined) return seq;
@@ -5933,7 +5948,7 @@ function _wa_motion_try(camel, from, to, t) {
 // Value ranges: an overshooting timing function (`cubic-bezier(.., 2, ..)`, `at (1.5)`) may not
 // carry an opacity outside [0, 1] or a size below 0 (CSS Values 4 §4.5.3 "range clamping").
 var _wa_motion_unit_range_re = /^(opacity|fillOpacity|strokeOpacity|floodOpacity|stopOpacity|shapeImageThreshold)$/;
-var _wa_motion_nonneg_re = /^(width|height|(min|max)(Width|Height)|padding(Top|Right|Bottom|Left)?|border(Top|Right|Bottom|Left)?Width|border(Top|Bottom)?(Left|Right)?Radius|outlineWidth|fontSize|flexGrow|flexShrink|columnWidth|gap|rowGap|columnGap|strokeWidth|scrollPadding.*)$/;
+var _wa_motion_nonneg_re = /^(width|height|(min|max)(Width|Height)|padding(Top|Right|Bottom|Left)?|border(Top|Right|Bottom|Left)?Width|border(Top|Bottom)?(Left|Right)?Radius|outlineWidth|fontSize|flexGrow|flexShrink|columnWidth|gap|rowGap|columnGap|strokeWidth|tabSize|scrollPadding.*)$/;
 function _wa_motion_clamp(camel, v) {
     var lo, hi = Infinity;
     if (_wa_motion_unit_range_re.test(camel)) { lo = 0; hi = 1; }
@@ -5964,11 +5979,109 @@ function _wa_motion_interp(camel, from, to, t) {
         var res = _lumen_css_resolve_transform(String(end), box[0], box[1]);
         return res == null ? end : res;
     }
-    return end;
+    return _wa_canon_prop(camel, end);
 }
 
 function _wa_motion_interpolable(camel, kebab, from, to) {
     return _wa_motion_try(camel, from, to, 0.5) != null;
+}
+
+// CSS-wide keywords in a keyframe (BUG-1437): `from { tab-size: initial }` interpolates the
+// computed value, not the word. `initial` is the property's initial value, `inherit` the
+// parent's computed value, `unset` one of the two by the property's inheritance. `revert*`
+// and anything else stay as written.
+function _wa_wide_resolve(tgt, camel, v) {
+    if (v == null) return v;
+    var kw = String(v).trim().toLowerCase();
+    if (kw !== 'initial' && kw !== 'inherit' && kw !== 'unset') return v;
+    var kebab = camel.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
+    if (kw === 'unset') kw = _lumen_css_is_inherited(kebab) ? 'inherit' : 'initial';
+    if (kw === 'inherit') {
+        var par = tgt && tgt.parentElement;
+        if (par) {
+            try {
+                var pv = getComputedStyle(par)[camel];
+                if (pv) return pv;
+            } catch (e) {}
+        }
+    }
+    if (kebab === 'display') return 'inline';
+    var init = _lumen_css_initial_value(kebab);
+    return init == null || init === '' ? v : init;
+}
+
+// Canonical computed text of the properties whose value is more than a number (`50px
+// each-line hanging` -> `50px hanging each-line`); anything else, and a value the engine
+// rejects, stays as it is.
+var _wa_canon_text_re = /^(textIndent|tabSize)$/;
+function _wa_canon_prop(camel, v) {
+    if (v == null || !_wa_canon_text_re.test(camel)) return v;
+    try {
+        var c = _lumen_css_canonical_text(camel.replace(/[A-Z]/g, function(m) { return '-' + m.toLowerCase(); }), String(v));
+        return c == null ? v : c;
+    } catch (e) { return v; }
+}
+
+// <length-percentage> as {pct, px} for `Npx`, `N%`, `0` and `calc()` sums of those; null for
+// anything else. Only the sums `calc(100% + 50px)` needs: no `*`, no nesting, one unit family.
+function _wa_lp_parse(tok) {
+    tok = String(tok).trim();
+    var m = /^calc\((.*)\)$/i.exec(tok), body = m ? m[1] : tok;
+    var parts = body.split(/\s+([+-])\s+/), pct = 0, px = 0, sign = 1;
+    for (var i = 0; i < parts.length; i++) {
+        if (i % 2 === 1) { sign = parts[i] === '-' ? -1 : 1; continue; }
+        var n = _wa_motion_num(parts[i]);
+        if (!n) return null;
+        if (n.unit === '%') pct += sign * n.n;
+        else if (n.unit === '' && n.n === 0) continue;
+        else if (_wa_unit_scale[n.unit] && _wa_unit_scale[n.unit][0] === 'px') px += sign * n.n * _wa_unit_scale[n.unit][1];
+        else return null;
+    }
+    return { pct: pct, px: px };
+}
+
+function _wa_lp_fmt(lp) {
+    var pct = +lp.pct.toFixed(6), px = +lp.px.toFixed(6);
+    if (px === 0) return pct === 0 ? '0px' : _wa_motion_fmt(pct) + '%';
+    if (pct === 0) return _wa_motion_fmt(px) + 'px';
+    return 'calc(' + _wa_motion_fmt(pct) + '% ' + (px < 0 ? '- ' : '+ ') + _wa_motion_fmt(Math.abs(px)) + 'px)';
+}
+
+// `text-indent` as [length-percentage, sorted modifiers].
+function _wa_text_indent_parts(v) {
+    var toks = _wa_split_top(v, ' ');
+    return toks.length ? [toks[0], toks.slice(1).sort().join(' ')] : null;
+}
+
+// Interpolation of a pair that mixes percentages and lengths (`calc(100% + 20px)`): the
+// result is the sum of both parts. null when the pair is not such a pair, so the plain
+// per-token interpolation (same unit) handles it.
+function _wa_lp_interp(camel, from, to, t) {
+    from = String(from).trim(); to = String(to).trim();
+    var mods = '';
+    if (camel === 'textIndent') {
+        var pf = _wa_text_indent_parts(from), pt = _wa_text_indent_parts(to);
+        if (!pf || !pt) return null;
+        if (pf[1] !== pt[1]) return null;   // `hanging`/`each-line` differ: discrete
+        from = pf[0]; to = pt[0]; mods = pf[1] ? ' ' + pf[1] : '';
+    } else {
+        return null;
+    }
+    var a = _wa_lp_parse(from), b = _wa_lp_parse(to);
+    if (!a || !b) return null;
+    // Same single unit on both ends is the plain interpolation's business.
+    if ((a.pct === 0 && b.pct === 0) || (a.px === 0 && b.px === 0 && !/calc\(/i.test(from + to))) return null;
+    return _wa_lp_fmt({ pct: a.pct + (b.pct - a.pct) * t, px: a.px + (b.px - a.px) * t }) + mods;
+}
+
+// Web Animations §5.4.2 `add`/`accumulate` for `text-indent`: the lengths add when the
+// `hanging`/`each-line` parts agree, otherwise the added value replaces the underlying one.
+function _wa_composite_text_indent(under, v) {
+    var u = _wa_text_indent_parts(_wa_canon_prop('textIndent', under)), w = _wa_text_indent_parts(_wa_canon_prop('textIndent', v));
+    if (!u || !w || u[1] !== w[1]) return _wa_canon_prop('textIndent', v);
+    var a = _wa_lp_parse(u[0]), b = _wa_lp_parse(w[0]);
+    if (!a || !b) return _wa_canon_prop('textIndent', v);
+    return _wa_canon_prop('textIndent', _wa_lp_fmt({ pct: a.pct + b.pct, px: a.px + b.px }) + (w[1] ? ' ' + w[1] : ''));
 }
 
 // A keyframe's specified value as something `_wa_motion_try` reads: colours in their
@@ -5976,7 +6089,7 @@ function _wa_motion_interpolable(camel, kebab, from, to) {
 function _wa_motion_resolve(eff, camel, v) {
     if (_wa_gap_prop_re.test(camel)) return _wa_gap_resolve(eff, camel, v);
     if (v == null) return v;
-    v = String(v).trim();
+    v = _wa_canon_prop(camel, _wa_wide_resolve(eff && eff.target, camel, String(v).trim()));
     if (_wa_motion_is_color(camel)) {
         if (/^currentcolor$/i.test(v)) {
             try { return getComputedStyle(eff.target).color || v; } catch (e) { return v; }
@@ -6204,6 +6317,14 @@ function _wa_motion_seq_try(prop, from, to, t) {
 
 // Interpolate a single CSS property value between two string values.
 function _wa_interp_prop(prop, from, to, t) {
+    from = _wa_canon_prop(prop, from); to = _wa_canon_prop(prop, to);
+    var lp = _wa_lp_interp(prop, from, to, t);
+    if (lp != null) return lp;
+    var r = _wa_interp_prop_raw(prop, from, to, t);
+    return typeof r === 'string' ? _wa_motion_clamp(prop, r) : r;
+}
+
+function _wa_interp_prop_raw(prop, from, to, t) {
     if (from === to) return from;
     // `normal` spacing is 0 for interpolation (CSS Text 3 §8.1, §8.2).
     if (prop === 'letterSpacing' || prop === 'wordSpacing') {
@@ -6275,6 +6396,12 @@ function _wa_composite_transform(under, v, mode) {
 }
 
 function _wa_composite_scalar(under, v) {
+    // `100%` + `50px` is `calc(100% + 50px)` (a <length-percentage> sum, Values 4 §10).
+    var lu = _wa_lp_parse(under), lv = _wa_lp_parse(v);
+    if (lu && lv) {
+        var sum = { pct: lu.pct + lv.pct, px: lu.px + lv.px };
+        if (sum.pct !== 0 && sum.px !== 0) return _wa_lp_fmt(sum);
+    }
     var nu = parseFloat(under), nv = parseFloat(v);
     if (isNaN(nu) || isNaN(nv)) return v;
     var uu = _wa_unit(under), uv = _wa_unit(v);
@@ -6294,6 +6421,7 @@ function _wa_composite_color(under, v) {
 function _wa_composite_value(prop, under, v, mode) {
     if (mode !== 'add' && mode !== 'accumulate') return v;
     if (under == null || under === '') return v;
+    if (prop === 'textIndent') return _wa_composite_text_indent(under, v);
     if (prop === 'transform') return _wa_composite_transform(under, v, mode);
     if (_wa_color_props[prop]) return _wa_composite_color(under, v);
     return _wa_composite_scalar(under, v);
@@ -6340,8 +6468,9 @@ function _wa_compute_at_p(effect, p) {
     // the interpolator.
     function val(kf, prop) {
         var mode = (kf.composite && kf.composite !== 'auto') ? kf.composite : (effect.composite || 'replace');
-        var v = _wa_composite_value(prop, under[prop], kf[prop], mode);
-        return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : v;
+        var raw = _wa_gap_prop_re.test(prop) ? kf[prop] : _wa_wide_resolve(effect.target, prop, kf[prop]);
+        var v = _wa_composite_value(prop, under[prop], _wa_canon_prop(prop, raw), mode);
+        return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : _wa_canon_prop(prop, v);
     }
     for (var prop in props) {
         var list = [];

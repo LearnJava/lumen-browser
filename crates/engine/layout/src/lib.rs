@@ -50,6 +50,8 @@ pub use pseudo_geometry::{collect_pseudo_rects, PseudoGeometry};
 mod transform_interp;
 pub mod selection;
 pub mod selector_query;
+mod css_wide_value;
+pub use css_wide_value::{initial_computed_value, is_inherited_property};
 pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
