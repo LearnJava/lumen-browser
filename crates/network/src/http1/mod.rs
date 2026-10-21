@@ -83,4 +83,26 @@ mod tests {
         let truncated = read_chunked(&mut Cursor::new(b"a\r\nabc".to_vec())).unwrap_err();
         assert_eq!(code(&truncated), NetErrorCode::ConnectionClosed);
     }
+
+    /// «Тела нет» — это про МЕТОД запроса и про СТАТУС ответа, а не про
+    /// заголовки: `Content-Length` в таком ответе описывает тело, которого
+    /// сервер не прислал, и читать его нельзя (RFC 9110 §9.3.2).
+    #[test]
+    fn no_body_detection_covers_head_and_no_body_statuses() {
+        use crate::http1::chunked::response_has_no_body;
+        // HEAD — тела нет при любом статусе.
+        assert!(response_has_no_body(200, "HEAD"));
+        assert!(response_has_no_body(404, "HEAD"));
+        assert!(response_has_no_body(200, "head"));
+        // 1xx/204/304 — тела нет при любом методе.
+        assert!(response_has_no_body(100, "GET"));
+        assert!(response_has_no_body(204, "GET"));
+        assert!(response_has_no_body(304, "GET"));
+        assert!(response_has_no_body(304, "POST"));
+        // Обычные ответы тело имеют.
+        assert!(!response_has_no_body(200, "GET"));
+        assert!(!response_has_no_body(206, "GET"));
+        assert!(!response_has_no_body(404, "GET"));
+        assert!(!response_has_no_body(500, "POST"));
+    }
 }

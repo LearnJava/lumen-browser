@@ -2233,8 +2233,8 @@ fn do_request(
         watchdog = Some(AbortWatchdog::spawn(t.clone(), sock));
     }
     let read_result: Result<Response> = match stream_sink {
-        Some(sink) => read_response_streamed(&mut conn, sink),
-        None => read_response(&mut conn),
+        Some(sink) => read_response_streamed(&mut conn, method, sink),
+        None => read_response(&mut conn, method),
     };
     if let Some(wd) = watchdog {
         wd.stop();
@@ -2575,6 +2575,17 @@ fn fetch_with_redirect(
     // Request body for POST/PUT/PATCH/DELETE (it also carries the method);
     // `None` для GET/HEAD. На redirect-hop переносится по правилам Fetch §4.4.
     body: Option<&RequestBody<'_>>,
+    // HTTP-метод запроса для случаев БЕЗ тела: `GET`/`HEAD`.
+    // Запрос с телом несёт свой метод в `body` — там он и есть источник правды.
+    //
+    // BUG-1665: метод раньше терялся по дороге к проводу. `fetch_with_redirect`
+    // выводил его из тела (`body.method`) или из CORS-контекста
+    // (`cors_ctx.method`), а для запроса без тела и без CORS-контекста
+    // подставлял `"GET"` — то есть `fetch(url, {method: 'HEAD'})` уезжал на
+    // сервер как GET. Для HEAD это ещё и ломало чтение
+    // ответа: сервер честно отвечает на HEAD без тела, но с `Content-Length`,
+    // и клиент, не зная что это HEAD, читал тело, которого нет.
+    method: &str,
     // BUG-1114: `true` for navigation (`fetch_page`/`fetch_page_streaming`) and
     // `fetch()` (`fetch_request_impl`) — callers that must see the final
     // non-2xx/3xx response as an `Ok(Response)` body (HTML LS: any HTTP status
@@ -2835,10 +2846,15 @@ fn fetch_with_redirect(
     // Метод и cross-origin extra-headers для actual запроса. Запрос с телом
     // несёт свой метод сам: `cors_ctx` заводится не на каждом пути (у JS-fetch
     // его нет), а без него POST молча уехал бы как GET.
+    //
+    // BUG-1665: тело — не единственный носитель метода. Запрос без тела
+    // (`HEAD`) несёт метод в аргументе `method`; CORS-контекст
+    // — третий источник. Приоритет: тело (у него метод всегда свой) → CORS →
+    // явный `method`.
     let actual_method = body
         .map(|b| b.method)
         .or_else(|| cors_ctx.map(|cx| cx.method.as_str()))
-        .unwrap_or("GET");
+        .unwrap_or(method);
     let actual_extra_headers = {
         let mut h = match (cors_ctx, &cross_origin_target) {
             (Some(cx), Some(_)) => build_actual_cross_origin_headers(&cx.requestor, &cx.headers),
@@ -3125,6 +3141,21 @@ fn fetch_with_redirect(
                         307 | 308 => body,
                         301 | 302 if !actual_method.eq_ignore_ascii_case("POST") => body,
                         _ => None,
+                    },
+                    // Метод следующего hop-а — те же правила Fetch §4.4, что и
+                    // для тела выше: 303 переводит в GET всё, кроме GET/HEAD;
+                    // 301/302 — только POST; 307/308 сохраняют метод.
+                    // BUG-1665: без этого HEAD после редиректа превращался в
+                    // GET — и ответ приходил с телом, которого у HEAD не бывает.
+                    match resp.status {
+                        307 | 308 => actual_method,
+                        301 | 302 if !actual_method.eq_ignore_ascii_case("POST") => actual_method,
+                        303 if actual_method.eq_ignore_ascii_case("GET")
+                            || actual_method.eq_ignore_ascii_case("HEAD") =>
+                        {
+                            actual_method
+                        }
+                        _ => "GET",
                     },
                     // Redirected navigation/fetch() keeps the same error-body contract.
                     http_error_is_response,
@@ -4052,9 +4083,10 @@ impl HttpClient {
             .as_deref()
             .ok_or_else(|| Error::Network("CORS preflight cache not configured (call with_cors_cache)".to_owned()))?;
         let target = request.target.clone();
+        let request_method = request.method.clone();
         let cors_ctx = CorsContext {
             requestor: request.origin,
-            method: request.method,
+            method: request_method.clone(),
             headers: request.headers,
             credentials_mode: request.credentials_mode,
             cache,
@@ -4092,6 +4124,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                &request_method, // BUG-1665: метод CORS-запроса — из CorsRequest
                 false, // BUG-1114: CORS fetch keeps the old "4xx/5xx ⇒ Err" contract
         )
         .map(|(resp, _final_url)| resp.body)
@@ -4137,6 +4170,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                "GET", // BUG-1665: range-запрос — GET
                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         let content_range = if resp.status == 206 {
@@ -4216,6 +4250,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                "GET", // BUG-1665: multi-range запрос — GET
                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         Ok(parse_multi_range_response(resp))
@@ -4411,6 +4446,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                "GET", // BUG-1665: conditional GET подресурса — GET
                                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
                 )?;
                 if resp.status == 304 {
@@ -4477,6 +4513,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                "GET", // BUG-1665: подресурс без тела — GET
                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         if let Some(cache) = &self.http_cache {
@@ -4600,6 +4637,7 @@ impl HttpClient {
             None, // PH1-2a: conditional GET is not streamed
             false, // BUG-292: subresource, not a document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                "GET", // BUG-1665: conditional GET — GET
                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         if resp.status == 304 {
@@ -4711,6 +4749,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                "GET", // BUG-1665: навигация без тела — GET
                                 true, // BUG-1114: navigation/fetch() see the final status as Ok
                 )?;
                 if resp.status == 304 {
@@ -4749,6 +4788,7 @@ impl HttpClient {
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
             true, // BUG-292: top-level document navigation
             req_body, // E2E-1: тело POST-навигации; None — обычный GET
+            "GET", // BUG-1665: навигация без тела — GET (POST несёт метод в теле)
             true, // BUG-1114: navigation sees the final status as Ok
         )?;
         // E2E-1: ответ на POST не кэшируется под адресом запроса — иначе
@@ -4835,6 +4875,7 @@ impl HttpClient {
                     Some(on_chunk),
                     true, // BUG-292: top-level document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                "GET", // BUG-1665: навигация без тела — GET
                                 true, // BUG-1114: navigation/fetch() see the final status as Ok
                 )?;
                 if resp.status == 304 {
@@ -4876,6 +4917,7 @@ impl HttpClient {
             Some(on_chunk),
             true, // BUG-292: top-level document navigation
             req_body, // E2E-1: тело POST-навигации; None — обычный GET
+            "GET", // BUG-1665: навигация без тела — GET (POST несёт метод в теле)
             true, // BUG-1114: navigation sees the final status as Ok
         )?;
         // E2E-1: см. `fetch_page` — ответ на POST под URL-ключ не кладём.
@@ -4946,6 +4988,7 @@ impl NetworkTransport for HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
                                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                                "GET", // BUG-1665: подресурс без тела — GET
                                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
                 )?;
                 if resp.status == 304 {
@@ -4988,6 +5031,7 @@ impl NetworkTransport for HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
                 None, // тело запроса: только POST/PUT/… с телом передают Some
+                "GET", // BUG-1665: подресурс без тела — GET
                 false, // BUG-1114: keeps the old "4xx/5xx => Err" contract
         )?;
         if let Some(cache) = &self.http_cache {
@@ -6066,6 +6110,7 @@ impl HttpClient {
             None,  // PH1-2a: streaming sink — only fetch_page_streaming streams
             false, // BUG-292: subresource, not a document navigation
             request_body.as_ref(),
+            &method_upper, // BUG-1665: метод fetch()-запроса (GET/HEAD)
             true, // BUG-1114: fetch() resolves ok:false on 4xx/5xx, doesn't reject
         )?;
         Ok(JsFetchResult {
@@ -9005,6 +9050,205 @@ mod tests {
             let _ = sock.shutdown(std::net::Shutdown::Both);
         });
         (port, handle)
+    }
+
+    // ── Тело ответа: HEAD и «no body»-статусы (RFC 9110 §9.3.2) ─────────────
+
+    /// Метод запроса обязан дойти до провода: `fetch_with_redirect` выводил его
+    /// из тела или из CORS-контекста, а для запроса без тела и без CORS
+    /// подставлял `"GET"` — то есть `fetch(url, {method:'HEAD'})` уезжал на
+    /// сервер как GET (BUG-1665).
+    #[test]
+    fn request_method_reaches_the_wire() {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_in_server = Arc::clone(&captured);
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                request.push_str(&line);
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            captured_in_server.lock().unwrap().push(request);
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        client
+            .fetch_sync(&format!("http://127.0.0.1:{port}/doc"), "HEAD")
+            .expect("HEAD");
+        server.join().unwrap();
+
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 1);
+        assert!(
+            reqs[0].starts_with("HEAD "),
+            "request line must carry the HEAD method, got {:?}",
+            reqs[0]
+        );
+    }
+
+    /// Метод сохраняется на редиректе для 307/308 (Fetch §4.4 «HTTP-redirect
+    /// fetch»): HEAD после редиректа обязан остаться HEAD, иначе ответ придёт
+    /// с телом, которого у HEAD не бывает.
+    #[test]
+    fn head_method_survives_a_307_redirect() {
+        let (port, server) = mock_http_server(2, |i| match i {
+            1 => b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            _ => b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        });
+        let client = HttpClient::new();
+        let url = format!("http://127.0.0.1:{port}/start");
+        let resp = client.fetch_sync(&url, "HEAD").expect("HEAD with redirect");
+        assert_eq!(resp.status, 200);
+        assert!(resp.body.is_empty(), "HEAD body must be empty");
+        server.join().unwrap();
+    }
+
+    /// Fetch §4.4 «HTTP-redirect fetch», шаг 11: 303 сохраняет GET/HEAD и
+    /// превращает в GET всё остальное. HEAD после 303 обязан остаться HEAD.
+    #[test]
+    fn head_method_survives_a_303_redirect() {
+        let (port, server) = mock_http_server(2, |i| match i {
+            1 => b"HTTP/1.1 303 See Other\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            _ => b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        });
+        let client = HttpClient::new();
+        let url = format!("http://127.0.0.1:{port}/start");
+        let resp = client.fetch_sync(&url, "HEAD").expect("HEAD with 303");
+        assert_eq!(resp.status, 200);
+        assert!(resp.body.is_empty(), "HEAD body must be empty");
+        server.join().unwrap();
+    }
+
+    /// Mock-сервер, который на ОДИН accept-е обслуживает два запроса подряд:
+    /// на первый отвечает `first`, на второй — `second`. Сокет НЕ закрывается
+    /// между ответами — то есть клиент обязан корректно дочитать первое тело,
+    /// иначе второй ответ он прочитает с середины.
+    fn mock_two_on_one_connection(
+        first: Vec<u8>,
+        second: Vec<u8>,
+    ) -> (u16, thread::JoinHandle<()>) {
+        let listener = bind_ephemeral_listener();
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            for body in [first, second] {
+                let mut got_any = false;
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    got_any = true;
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                if !got_any {
+                    break;
+                }
+                if sock.write_all(&body).is_err() {
+                    break;
+                }
+            }
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+        (port, handle)
+    }
+
+    /// Ответ на HEAD тела не имеет (RFC 9110 §9.3.2), даже когда сервер
+    /// прислал `Content-Length` — он описывает длину тела, которого не будет.
+    ///
+    /// До фикса клиент читал `Content-Length` байт и получал в тело первые
+    /// байты ЧУЖОГО ответа (на keep-alive соединении — хвост следующего
+    /// запроса), а на закрытом соединении — ошибку чтения вместо пустого тела.
+    #[test]
+    fn head_response_body_is_empty_despite_content_length() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n".to_vec()
+        });
+        let url = format!("http://127.0.0.1:{port}/doc");
+        let resp = HttpClient::new()
+            .fetch_sync(&url, "HEAD")
+            .expect("HEAD must succeed");
+        assert_eq!(resp.status, 200);
+        assert!(resp.body.is_empty(), "HEAD response must have no body");
+        server.join().unwrap();
+    }
+
+    /// Тот же сценарий на keep-alive соединении: тело HEAD-ответа не съедает
+    /// следующий ответ.
+    #[test]
+    fn head_response_does_not_consume_the_next_response() {
+        let (port, server) = mock_two_on_one_connection(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond".to_vec(),
+        );
+        let client = HttpClient::new();
+        let head_url = format!("http://127.0.0.1:{port}/doc");
+        let head = client.fetch_sync(&head_url, "HEAD").expect("HEAD");
+        assert!(head.body.is_empty(), "HEAD body must be empty");
+
+        let get_url = format!("http://127.0.0.1:{port}/doc2");
+        let get = client.fetch_sync(&get_url, "GET").expect("GET");
+        assert_eq!(get.body, b"second", "second response must not be corrupted");
+        server.join().unwrap();
+    }
+
+    /// Ответ `304 Not Modified` тела не имеет (RFC 9110 §15.4.5), даже если
+    /// сервер прислал `Content-Length` — так делают часть CDN и прокси.
+    /// Клиент обязан не читать эти байты, иначе он съест следующий ответ.
+    #[test]
+    fn not_modified_response_body_is_empty_despite_content_length() {
+        let (port, server) = mock_two_on_one_connection(
+            b"HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nContent-Length: 5\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond".to_vec(),
+        );
+        let client = HttpClient::new();
+        let first = format!("http://127.0.0.1:{port}/data");
+        let resp = client.fetch_sync(&first, "GET").expect("304");
+        assert_eq!(resp.status, 304);
+        assert!(resp.body.is_empty(), "304 body must be empty");
+
+        let second = format!("http://127.0.0.1:{port}/data2");
+        let got = client.fetch_sync(&second, "GET").expect("second request");
+        assert_eq!(got.body, b"second", "second response must not be corrupted");
+        server.join().unwrap();
+    }
+
+    /// Ответ `204 No Content` тела не имеет (RFC 9110 §15.3.5) — тот же
+    /// случай, что 304, но другой статус.
+    #[test]
+    fn no_content_response_body_is_empty_despite_content_length() {
+        let (port, server) = mock_two_on_one_connection(
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 7\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond".to_vec(),
+        );
+        let client = HttpClient::new();
+        let first = format!("http://127.0.0.1:{port}/empty");
+        let resp = client.fetch_sync(&first, "GET").expect("204");
+        assert_eq!(resp.status, 204);
+        assert!(resp.body.is_empty(), "204 body must be empty");
+
+        let second = format!("http://127.0.0.1:{port}/empty2");
+        let got = client.fetch_sync(&second, "GET").expect("second request");
+        assert_eq!(got.body, b"second", "second response must not be corrupted");
+        server.join().unwrap();
     }
 
     /// Phase A: an already-aborted token short-circuits before any socket work.
