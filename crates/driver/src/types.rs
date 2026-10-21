@@ -626,6 +626,46 @@ pub enum AutomationCommand {
     /// Poll requests newly paused by an active intercept since the last call
     /// (BUG-295 remainder, `network.beforeRequestSent` event data).
     PollIntercepts,
+    /// Every non-expired cookie of the live window's active cookie jar,
+    /// `HttpOnly` ones included (WebDriver BiDi `storage.getCookies`,
+    /// DEVX-20). Reply: [`AutomationReply::Cookies`].
+    GetCookies,
+    /// Store (or replace) a cookie in the live window's active cookie jar —
+    /// the one pages read through `document.cookie` and requests send
+    /// (`storage.setCookie`, DEVX-20). Reply: `Ack`.
+    SetCookie(AutomationCookie),
+    /// Remove the cookie `(domain, path, name)` from the live window's active
+    /// cookie jar (`storage.deleteCookies`, DEVX-20). Reply: `Ack`.
+    DeleteCookie {
+        /// Cookie domain as stored in the jar.
+        domain: String,
+        /// Cookie path.
+        path: String,
+        /// Cookie name.
+        name: String,
+    },
+}
+
+/// A cookie as exchanged with the live window (WebDriver BiDi `storage.Cookie`,
+/// DEVX-20).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationCookie {
+    /// Cookie name.
+    pub name: String,
+    /// Cookie value (string form).
+    pub value: String,
+    /// Domain (lowercase host, no leading dot).
+    pub domain: String,
+    /// Path (`/` by default).
+    pub path: String,
+    /// `Secure` flag.
+    pub secure: bool,
+    /// `HttpOnly` flag.
+    pub http_only: bool,
+    /// `strict`, `lax`, `none` or `default` (attribute absent).
+    pub same_site: String,
+    /// Expiry as a Unix timestamp in seconds; `0` = session cookie.
+    pub expiry: u64,
 }
 
 /// Reply from automation API — returned from shell after command execution.
@@ -655,4 +695,6 @@ pub enum AutomationReply {
     Intercepts(Vec<InterceptedRequest>),
     /// `ListTabs` result: every open tab, in strip order (COMPAT-CORPUS-3-TABS).
     Tabs(Vec<TabInfo>),
+    /// `GetCookies` result: the live jar's non-expired cookies (DEVX-20).
+    Cookies(Vec<AutomationCookie>),
 }

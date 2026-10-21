@@ -2114,33 +2114,87 @@ fn viewport_json(vp: Option<(u32, u32)>) -> JsonValue {
 // storage.* handlers (BiDi §13)
 // ──────────────────────────────────────────
 
+/// `storage.getCookies` / `storage.deleteCookies` filter (BiDi §13): `filter`
+/// with `name`, `domain`, `path`, plus `partition.sourceOrigin` as an
+/// origin-based domain filter. An absent field matches everything.
+struct CookieFilter {
+    name: Option<String>,
+    domain: Option<String>,
+    path: Option<String>,
+    origin_domain: Option<String>,
+}
+
+impl CookieFilter {
+    fn from_params(params: &JsonValue) -> Self {
+        let filter = params.get("filter");
+        let field = |key: &str| filter.and_then(|f| f.get(key)).and_then(|v| v.as_str()).map(str::to_owned);
+        Self {
+            name: field("name"),
+            domain: field("domain"),
+            path: field("path"),
+            // `partition.sourceOrigin` strips the scheme+port to extract the effective domain.
+            origin_domain: params
+                .get("partition")
+                .and_then(|p| p.get("sourceOrigin"))
+                .and_then(|v| v.as_str())
+                .map(origin_to_domain),
+        }
+    }
+
+    fn matches(&self, c: &BidiCookie) -> bool {
+        let domain_ok = |d: &str| c.domain == d || c.domain.ends_with(&format!(".{d}"));
+        self.name.as_deref().is_none_or(|n| c.name == n)
+            && self.domain.as_deref().is_none_or(domain_ok)
+            && self.path.as_deref().is_none_or(|p| c.path == p)
+            && self.origin_domain.as_deref().is_none_or(domain_ok)
+    }
+}
+
+/// Cookies visible to `storage.*`: the live window's jar (the one pages read
+/// through `document.cookie` and requests send from, `HttpOnly` included) when
+/// the session is attached to a window, else the session's own memory. DEVX-20.
+fn session_cookies(state: &BidiState) -> Result<Vec<BidiCookie>, String> {
+    let Some(live) = state.live.as_ref() else { return Ok(state.cookies.clone()) };
+    let cookies = live.get_cookies().map_err(|e| e.to_string())?;
+    Ok(cookies
+        .into_iter()
+        .map(|c| BidiCookie {
+            name: c.name,
+            value: c.value,
+            domain: c.domain,
+            path: c.path,
+            secure: c.secure,
+            http_only: c.http_only,
+            same_site: c.same_site,
+            expiry: c.expiry,
+        })
+        .collect())
+}
+
+/// `storage.Cookie` value: a plain string or a BiDi `BytesValue`
+/// (`{"type":"string","value":…}`). `base64` bytes are not decoded.
+fn cookie_value_text(value: &JsonValue) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.to_owned());
+    }
+    if value.get("type").and_then(|t| t.as_str()) == Some("string") {
+        return value.get("value").and_then(|v| v.as_str()).map(str::to_owned);
+    }
+    None
+}
+
 /// `storage.getCookies` — retrieve cookies matching an optional filter (BiDi §13.2.1).
 ///
 /// Params: `filter` (optional) with `name`, `domain`, `path` string matchers.
 /// Also accepts `partition.sourceOrigin` as an origin-based domain filter (BiDi §13).
+/// With a live window the answer comes from the real cookie jar (DEVX-20).
 fn storage_get_cookies(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
-    let filter = params.get("filter");
-    let filter_name = filter.and_then(|f| f.get("name")).and_then(|v| v.as_str());
-    let filter_domain = filter.and_then(|f| f.get("domain")).and_then(|v| v.as_str());
-    let filter_path = filter.and_then(|f| f.get("path")).and_then(|v| v.as_str());
-    // `partition.sourceOrigin` strips the scheme+port to extract the effective domain.
-    let filter_origin_domain =
-        params.get("partition").and_then(|p| p.get("sourceOrigin")).and_then(|v| v.as_str()).map(origin_to_domain);
-
-    let cookies: Vec<JsonValue> = state
-        .cookies
-        .iter()
-        .filter(|c| {
-            filter_name.is_none_or(|n| c.name == n)
-                && filter_domain
-                    .is_none_or(|d| c.domain == d || c.domain.ends_with(&format!(".{d}")))
-                && filter_path.is_none_or(|p| c.path == p)
-                && filter_origin_domain.as_deref().is_none_or(|d| {
-                    c.domain == d || c.domain.ends_with(&format!(".{d}"))
-                })
-        })
-        .map(cookie_to_json)
-        .collect();
+    let filter = CookieFilter::from_params(params);
+    let all = match session_cookies(state) {
+        Ok(all) => all,
+        Err(e) => return DispatchResult::single(make_error(Some(id), "unknown error", &e)),
+    };
+    let cookies: Vec<JsonValue> = all.iter().filter(|c| filter.matches(c)).map(cookie_to_json).collect();
 
     let mut result = BTreeMap::new();
     result.insert("cookies".into(), JsonValue::Array(cookies));
@@ -2149,7 +2203,9 @@ fn storage_get_cookies(id: i64, params: &JsonValue, state: &BidiState) -> Dispat
 
 /// `storage.setCookie` — add or replace a cookie (BiDi §13.2.2).
 ///
-/// Params: `cookie { name, value, domain, path?, secure?, httpOnly?, sameSite?, expiry? }`.
+/// Params: `cookie { name, value, domain, path?, secure?, httpOnly?, sameSite?, expiry? }`;
+/// `value` is a string or a `{type:"string", value}` BytesValue.
+/// With a live window the cookie lands in the real jar (DEVX-20).
 /// Auto-emits `storage.cookieAdded` or `storage.cookieChanged` when subscribed.
 fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(cookie_params) = params.get("cookie") else {
@@ -2167,11 +2223,11 @@ fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
             "cookie.name is required",
         ));
     };
-    let Some(value) = cookie_params.get("value").and_then(|v| v.as_str()) else {
+    let Some(value) = cookie_params.get("value").and_then(cookie_value_text) else {
         return DispatchResult::single(make_error(
             Some(id),
             "invalid argument",
-            "cookie.value is required",
+            "cookie.value is required (string or {type:\"string\", value})",
         ));
     };
     let Some(domain) = cookie_params.get("domain").and_then(|v| v.as_str()) else {
@@ -2184,7 +2240,7 @@ fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
 
     let cookie = BidiCookie {
         name: name.to_owned(),
-        value: value.to_owned(),
+        value,
         domain: domain.to_owned(),
         path: cookie_params.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_owned(),
         secure: cookie_params.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -2197,20 +2253,37 @@ fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
         expiry: cookie_params.get("expiry").and_then(|v| v.as_number()).unwrap_or(0.0) as u64,
     };
 
-    // Replace existing or append; track whether this is an add or update.
-    let is_update = state.cookies.iter().any(|c| {
-        c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path
-    });
-    if is_update {
-        for slot in &mut state.cookies {
-            if slot.name == cookie.name && slot.domain == cookie.domain && slot.path == cookie.path
-            {
-                *slot = cookie.clone();
-                break;
-            }
+    let same_key = |c: &BidiCookie| c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path;
+    let is_update;
+    if let Some(live) = state.live.as_ref() {
+        let existing = match session_cookies(state) {
+            Ok(all) => all,
+            Err(e) => return DispatchResult::single(make_error(Some(id), "unknown error", &e)),
+        };
+        is_update = existing.iter().any(same_key);
+        let live_cookie = lumen_driver::AutomationCookie {
+            name: cookie.name.clone(),
+            value: cookie.value.clone(),
+            domain: cookie.domain.clone(),
+            path: cookie.path.clone(),
+            secure: cookie.secure,
+            http_only: cookie.http_only,
+            same_site: cookie.same_site.clone(),
+            expiry: cookie.expiry,
+        };
+        if let Err(e) = live.set_cookie(live_cookie) {
+            return DispatchResult::single(make_error(Some(id), "unable to set cookie", &e.to_string()));
         }
     } else {
-        state.cookies.push(cookie.clone());
+        // Replace existing or append; track whether this is an add or update.
+        is_update = state.cookies.iter().any(same_key);
+        if is_update {
+            if let Some(slot) = state.cookies.iter_mut().find(|c| same_key(c)) {
+                *slot = cookie.clone();
+            }
+        } else {
+            state.cookies.push(cookie.clone());
+        }
     }
 
     let mut frames = vec![make_success(id, empty_obj())];
@@ -2225,39 +2298,26 @@ fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
 ///
 /// Params: `filter` with optional `name`, `domain`, `path`.
 /// Also accepts `partition.sourceOrigin` for per-origin deletion (BiDi §13).
+/// With a live window the cookies are removed from the real jar (DEVX-20).
 /// Auto-emits `storage.cookieRemoved` for each deleted cookie when subscribed.
 fn storage_delete_cookies(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
-    let filter = params.get("filter");
-    let filter_name = filter.and_then(|f| f.get("name")).and_then(|v| v.as_str()).map(str::to_owned);
-    let filter_domain =
-        filter.and_then(|f| f.get("domain")).and_then(|v| v.as_str()).map(str::to_owned);
-    let filter_path = filter.and_then(|f| f.get("path")).and_then(|v| v.as_str()).map(str::to_owned);
-    let filter_origin_domain = params
-        .get("partition")
-        .and_then(|p| p.get("sourceOrigin"))
-        .and_then(|v| v.as_str())
-        .map(origin_to_domain);
-
-    let matches_filter = |c: &BidiCookie| -> bool {
-        let name_match = filter_name.as_deref().is_some_and(|n| c.name == n);
-        let domain_match = filter_domain.as_deref().is_some_and(|d| {
-            c.domain == d || c.domain.ends_with(&format!(".{d}"))
-        });
-        let path_match = filter_path.as_deref().is_some_and(|p| c.path == p);
-        let origin_match = filter_origin_domain.as_deref().is_some_and(|d| {
-            c.domain == d || c.domain.ends_with(&format!(".{d}"))
-        });
-
-        filter_name.as_ref().is_none_or(|_| name_match)
-            && filter_domain.as_ref().is_none_or(|_| domain_match)
-            && filter_path.as_ref().is_none_or(|_| path_match)
-            && filter_origin_domain.as_ref().is_none_or(|_| origin_match)
-    };
+    let filter = CookieFilter::from_params(params);
 
     // Collect deleted cookies before removal so we can emit events.
-    let deleted: Vec<BidiCookie> =
-        state.cookies.iter().filter(|c| matches_filter(c)).cloned().collect();
-    state.cookies.retain(|c| !matches_filter(c));
+    let all = match session_cookies(state) {
+        Ok(all) => all,
+        Err(e) => return DispatchResult::single(make_error(Some(id), "unknown error", &e)),
+    };
+    let deleted: Vec<BidiCookie> = all.into_iter().filter(|c| filter.matches(c)).collect();
+    if let Some(live) = state.live.as_ref() {
+        for c in &deleted {
+            if let Err(e) = live.delete_cookie(&c.domain, &c.path, &c.name) {
+                return DispatchResult::single(make_error(Some(id), "unable to set cookie", &e.to_string()));
+            }
+        }
+    } else {
+        state.cookies.retain(|c| !filter.matches(c));
+    }
 
     let mut frames = vec![make_success(id, empty_obj())];
     if state.is_subscribed("storage.cookieRemoved") {
@@ -2678,6 +2738,88 @@ mod tests {
             }
         });
         LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
+    /// A live window whose cookie jar is a vector behind the channel, with one
+    /// `HttpOnly` cookie the BiDi session never set itself (as a `Set-Cookie`
+    /// response would leave it) — DEVX-20.
+    fn fake_live_session_with_jar() -> LiveWindowSession {
+        use lumen_driver::{AutomationCommand, AutomationCookie, AutomationHandle, AutomationReply};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        std::thread::spawn(move || {
+            let mut jar = vec![AutomationCookie {
+                name: "server".into(),
+                value: "from-server".into(),
+                domain: "127.0.0.1".into(),
+                path: "/".into(),
+                secure: false,
+                http_only: true,
+                same_site: "default".into(),
+                expiry: 0,
+            }];
+            for (cmd, reply_tx) in rx {
+                let reply = match cmd {
+                    AutomationCommand::GetCookies => AutomationReply::Cookies(jar.clone()),
+                    AutomationCommand::SetCookie(c) => {
+                        jar.retain(|j| !(j.name == c.name && j.domain == c.domain && j.path == c.path));
+                        jar.push(c);
+                        AutomationReply::Ack
+                    }
+                    AutomationCommand::DeleteCookie { domain, path, name } => {
+                        jar.retain(|j| !(j.name == name && j.domain == domain && j.path == path));
+                        AutomationReply::Ack
+                    }
+                    _ => AutomationReply::Ack,
+                };
+                let _ = reply_tx.send(reply);
+            }
+        });
+        LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
+    #[test]
+    fn storage_with_live_window_reads_and_writes_the_real_jar() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_jar(), None);
+        let got = dispatch(r#"{"id":1,"method":"storage.getCookies","params":{"filter":{"name":"server"}}}"#, &mut state);
+        assert!(got.frames[0].contains("from-server"), "jar cookie not visible: {}", got.frames[0]);
+        assert!(got.frames[0].contains(r#""httpOnly":true"#), "got: {}", got.frames[0]);
+
+        // BytesValue form of `value`; lands in the jar, not just in session memory.
+        let set = dispatch(
+            r#"{"id":2,"method":"storage.setCookie","params":{"cookie":{"name":"sid","value":{"type":"string","value":"abc"},"domain":"127.0.0.1"}}}"#,
+            &mut state,
+        );
+        assert!(set.frames[0].contains("success"), "got: {}", set.frames[0]);
+        assert_eq!(state.cookie_count(), 0, "live mode keeps no shadow copy");
+        let got = dispatch(r#"{"id":3,"method":"storage.getCookies","params":{}}"#, &mut state);
+        assert!(got.frames[0].contains("abc") && got.frames[0].contains("from-server"), "got: {}", got.frames[0]);
+
+        let del = dispatch(r#"{"id":4,"method":"storage.deleteCookies","params":{"filter":{"name":"sid"}}}"#, &mut state);
+        assert!(del.frames[0].contains("success"), "got: {}", del.frames[0]);
+        let got = dispatch(r#"{"id":5,"method":"storage.getCookies","params":{}}"#, &mut state);
+        assert!(!got.frames[0].contains("abc"), "deleted cookie still listed: {}", got.frames[0]);
+        assert!(got.frames[0].contains("from-server"), "unfiltered cookie lost: {}", got.frames[0]);
+    }
+
+    #[test]
+    fn storage_live_set_over_existing_cookie_emits_changed() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_jar(), None);
+        dispatch(r#"{"id":1,"method":"session.subscribe","params":{"events":["storage.cookieChanged","storage.cookieAdded"]}}"#, &mut state);
+        let set = dispatch(
+            r#"{"id":2,"method":"storage.setCookie","params":{"cookie":{"name":"server","value":"x","domain":"127.0.0.1"}}}"#,
+            &mut state,
+        );
+        assert!(set.frames.iter().any(|f| f.contains("storage.cookieChanged")), "got: {:?}", set.frames);
+    }
+
+    #[test]
+    fn storage_set_cookie_rejects_base64_value() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"storage.setCookie","params":{"cookie":{"name":"a","value":{"type":"base64","value":"YQ=="},"domain":"x.test"}}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("invalid argument"), "got: {}", r.frames[0]);
     }
 
     #[test]

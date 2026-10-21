@@ -1341,6 +1341,23 @@ impl Lumen {
                         .collect();
                     let _ = reply_tx.send(AutomationReply::Intercepts(requests));
                 }
+                AutomationCommand::GetCookies => {
+                    let _ = reply_tx.send(AutomationReply::Cookies(self.automation_get_cookies()));
+                }
+                AutomationCommand::SetCookie(cookie) => {
+                    let reply = match self.automation_set_cookie(cookie) {
+                        Ok(()) => AutomationReply::Ack,
+                        Err(e) => AutomationReply::Error(format!("storage.setCookie: {e}")),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
+                AutomationCommand::DeleteCookie { domain, path, name } => {
+                    let reply = match self.automation_delete_cookie(&domain, &path, &name) {
+                        Ok(()) => AutomationReply::Ack,
+                        Err(e) => AutomationReply::Error(format!("storage.deleteCookies: {e}")),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
             }
         }
 

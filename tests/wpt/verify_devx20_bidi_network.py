@@ -190,9 +190,9 @@ async def start_fetch(session: BidiSession, ctx: str, url: str, var: str) -> Non
     await eval_json(
         session,
         ctx,
-        f"window.{var} = 'pending'; "
+        f"(() => {{ window.{var} = 'pending'; "
         f"fetch({url!r}).then(r => r.text()).then(t => {{ window.{var} = t; }}, "
-        f"() => {{ window.{var} = 'rejected'; }});",
+        f"() => {{ window.{var} = 'rejected'; }}); return 1; }})()",
     )
 
 

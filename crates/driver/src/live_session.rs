@@ -26,7 +26,7 @@ use std::time::Duration;
 use lumen_core::error::{Error, Result};
 
 use crate::{
-    A11yNode, AutomationCommand, AutomationHandle, AutomationReply, AxQuery, BoxModel,
+    A11yNode, AutomationCommand, AutomationCookie, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
     ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
     Target, WaitCondition,
@@ -82,6 +82,31 @@ impl LiveWindowSession {
     /// Type `text` into the focused element without clicking first (BUG-1194).
     pub fn type_focused(&self, text: &str) -> Result<()> {
         self.execute(AutomationCommand::TypeFocused(text.to_owned()))?;
+        Ok(())
+    }
+
+    /// Non-expired cookies of the live window's active jar, `HttpOnly` included
+    /// (`storage.getCookies`, DEVX-20).
+    pub fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
+        match self.execute(AutomationCommand::GetCookies)? {
+            AutomationReply::Cookies(cookies) => Ok(cookies),
+            other => Err(unexpected_reply("Cookies", &other)),
+        }
+    }
+
+    /// Store a cookie in the live window's active jar (`storage.setCookie`, DEVX-20).
+    pub fn set_cookie(&self, cookie: AutomationCookie) -> Result<()> {
+        self.execute(AutomationCommand::SetCookie(cookie))?;
+        Ok(())
+    }
+
+    /// Remove one cookie from the live window's active jar (`storage.deleteCookies`, DEVX-20).
+    pub fn delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<()> {
+        self.execute(AutomationCommand::DeleteCookie {
+            domain: domain.to_owned(),
+            path: path.to_owned(),
+            name: name.to_owned(),
+        })?;
         Ok(())
     }
 
