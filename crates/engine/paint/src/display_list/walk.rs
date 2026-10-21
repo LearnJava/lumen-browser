@@ -1040,6 +1040,7 @@ fn finish_epilogue(frame: &Frame, out: &mut DisplayList) {
         Epilogue::SvgViewportClip => out.push(DisplayCommand::PopClip),
         Epilogue::None => {}
     }
+    out.extend(std::iter::repeat_n(DisplayCommand::PopScrollLayer, anchor_scroll_layer_count(frame.b)));
     if frame.is_fixed {
         out.push(DisplayCommand::EndFixedLayer);
     }
@@ -1180,6 +1181,9 @@ fn dispatch<'a>(
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);
     }
+    // CSS Anchor Positioning L1 §4.3: the box follows the scroll of its anchor's containers.
+    // Innermost marker layer; closed first, with the other position markers.
+    out.extend(anchor_scroll_layers(b));
     match &b.kind {
         BoxKind::Skip | BoxKind::Contents => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
@@ -1423,7 +1427,7 @@ fn dispatch<'a>(
         BoxKind::FormControl { kind } => {
             // Replaced element: background + border box (Phase 0, no content).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
@@ -1485,7 +1489,7 @@ fn dispatch<'a>(
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → <img>.
             // background/border у `<img>` валидны по CSS — например, для
@@ -1552,7 +1556,7 @@ fn dispatch<'a>(
         BoxKind::Video { src, poster } => {
             // visibility:hidden на `<video>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → placeholder.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1622,7 +1626,7 @@ fn dispatch<'a>(
         BoxKind::Canvas { .. } => {
             // visibility:hidden on <canvas> skips everything (no children).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Painter's order for replaced element: background → bg-image → border → bitmap.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1675,7 +1679,7 @@ fn dispatch<'a>(
         }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Phase 0: grey bar for audio controls UI.
             let grey = Color { r: 200, g: 200, b: 200, a: 255 };
@@ -1684,7 +1688,7 @@ fn dispatch<'a>(
         }
         BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Phase 0: grey placeholder — no sub-document navigation.
             // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
@@ -1777,14 +1781,15 @@ fn dispatch<'a>(
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
     }
-    close_position_layers(is_fixed, is_sticky, out)
+    close_position_layers(b, is_fixed, is_sticky, out)
 }
 
 /// Closes the `BeginFixedLayer`/`BeginStickyLayer` that `dispatch` opened for
 /// this box. Every exit of `dispatch` after the markers are pushed — including
 /// the early returns of invisible replaced elements — goes through here, so the
 /// brackets stay balanced (BUG-1037).
-fn close_position_layers<'a>(is_fixed: bool, is_sticky: bool, out: &mut DisplayList) -> WalkOutcome<'a> {
+fn close_position_layers<'a>(b: &LayoutBox, is_fixed: bool, is_sticky: bool, out: &mut DisplayList) -> WalkOutcome<'a> {
+    out.extend(std::iter::repeat_n(DisplayCommand::PopScrollLayer, anchor_scroll_layer_count(b)));
     if is_fixed {
         out.push(DisplayCommand::EndFixedLayer);
     }

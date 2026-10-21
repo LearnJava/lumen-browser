@@ -807,6 +807,7 @@ mod tests {
 
     fn make_box(id: u32, x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
         LayoutBox {
+            anchor_scroll: None,
             node: node(id),
             rect: Rect { x, y, width: w, height: h },
             used_padding: None, used_line_height: 16.0 * 1.2,

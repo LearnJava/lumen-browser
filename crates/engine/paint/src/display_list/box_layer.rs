@@ -81,6 +81,10 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
         }
         return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
+    // CSS Anchor Positioning L1 §4.3: an anchor-positioned box follows the scroll of its anchor's
+    // containers — outermost layer, around the box's own background and border as well.
+    pre.extend(anchor_scroll_layers(b));
+    post.extend(std::iter::repeat_n(DisplayCommand::PopScrollLayer, anchor_scroll_layer_count(b)));
     let s = &b.style;
 
     // CSS Masking L1 §4 (BUG-183): mask-image wraps the fully composited element
@@ -537,6 +541,7 @@ fn enter_fill<'a>(
         let mut layer_child_clips: Vec<DisplayCommand> = Vec::new();
         if pseudo {
             layer_child_clips.extend(inherited_clips.iter().cloned());
+            layer_child_clips.extend(ops.pre.iter().filter(|c| is_anchor_scroll_layer(c)).cloned());
             layer_child_clips.extend(
                 ops.overflow_pre
                     .iter()

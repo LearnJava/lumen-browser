@@ -104,6 +104,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     inline_style.font_size = 100.0;
     inline_style.font_size_adjust = FontSizeAdjust::Value(0.5);
     let inline_box = super::super::LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: inline_style.font_size * inline_style.line_height,
@@ -127,6 +128,7 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
     root_style.font_size = 100.0;
     root_style.font_size_adjust = FontSizeAdjust::Value(0.5);
     let mut root = super::super::LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: root_style.font_size * root_style.line_height,
@@ -173,6 +175,7 @@ fn font_size_adjust_keeps_absolute_line_height_fixed() {
     s.line_height_is_relative = false; // absolute length
     s.font_size_adjust = FontSizeAdjust::Value(0.5);
     let mut b = super::super::LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: s.font_size * s.line_height,
@@ -214,6 +217,7 @@ fn font_size_adjust_scales_relative_number_line_height() {
     s.line_height_is_relative = true;
     s.font_size_adjust = FontSizeAdjust::Value(0.5);
     let mut b = super::super::LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: s.font_size * s.line_height,
@@ -256,6 +260,7 @@ fn post_build_walks_leave_a_reused_subtree_alone() {
         s.font_size = 100.0;
         s.font_size_adjust = FontSizeAdjust::Value(0.5);
         super::super::LayoutBox {
+            anchor_scroll: None,
             node: lumen_dom::NodeId::from_index(0),
             rect: super::super::Rect::new(0.0, 0.0, 0.0, 0.0),
             used_padding: None, used_line_height: -1.0,

@@ -80,6 +80,7 @@ mod tests {
 
     fn make_box(height: f32) -> LayoutBox {
         LayoutBox {
+            anchor_scroll: None,
             origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(0),
             rect: Rect::new(0.0, 0.0, 100.0, height),

@@ -1172,3 +1172,74 @@ use super::text_and_images::Fixed8;
         assert_eq!(pushes, pops);
         assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::DrawScrollbar { .. })));
     }
+
+    // ── ANCHOR-SCROLL: CSS Anchor Positioning L1 §4.3 ─────────────────────
+
+    const ANCHOR_HTML: &str = "<div class='s'><div class='a'></div><div class='tall'></div></div><div class='t'>x</div>";
+    const ANCHOR_CSS: &str = "body { margin: 0; }              .s { overflow-y: scroll; width: 100px; height: 100px; }              .a { anchor-name: --a; width: 50px; height: 50px; margin-top: 50px; }              .tall { height: 400px; }              .t { position: absolute; width: 20px; height: 20px; position-anchor: --a; left: anchor(right); top: anchor(top); }";
+
+    /// `(id, scroll_y, clip is unbounded)` of every `PushScrollLayer`, in list order.
+    fn scroll_push_summary(dl: &[DisplayCommand]) -> Vec<(u32, f32, bool)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushScrollLayer { id, scroll_y, clip_rect, .. } => {
+                    Some((*id, *scroll_y, clip_rect.width >= 1.0e6))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The target paints under a layer of the scroller its anchor sits in, with the scroller's
+    /// id and current offset, in both builders; the layers stay balanced.
+    #[test]
+    fn anchor_target_paints_under_the_anchors_scroll_layer() {
+        let mut tree = layout_for(ANCHOR_HTML, ANCHOR_CSS);
+        let scroller = lumen_layout::collect_scroll_containers(&tree)[0].node;
+        assert!(lumen_layout::set_scroll_position(&mut tree, scroller, 0.0, 30.0));
+        let id = scroller.index() as u32;
+        for (name, dl) in [("ordered", ordered_of(&tree)), ("walk", build_display_list(&tree))] {
+            let summary = scroll_push_summary(&dl);
+            assert!(summary.contains(&(id, 30.0, false)), "{name}: the container's own layer {summary:?}");
+            assert!(summary.contains(&(id, 30.0, true)), "{name}: the target's follower layer {summary:?}");
+            let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopScrollLayer)).count();
+            assert_eq!(summary.len(), pops, "{name}: balanced layers");
+        }
+    }
+
+    /// A page without anchor scrolling gets no extra layers.
+    #[test]
+    fn target_of_an_anchor_outside_scrollers_gets_no_follower_layer() {
+        let dl = build_ordered(
+            "<div class='a'></div><div class='t'>x</div>",
+            "body { margin: 0; } .a { anchor-name: --a; width: 50px; height: 50px; }              .t { position: absolute; position-anchor: --a; left: anchor(right); top: anchor(top); }",
+        );
+        assert!(scroll_push_summary(&dl).is_empty());
+    }
+
+    /// Scrolling by patching a built list (the wheel fast path) moves the follower with the
+    /// container and equals a full rebuild.
+    #[test]
+    fn patch_scroll_layer_moves_followers_and_equals_rebuild() {
+        let mut tree = layout_for(ANCHOR_HTML, ANCHOR_CSS);
+        let scroller = lumen_layout::collect_scroll_containers(&tree)[0].node;
+        let mut dl = ordered_of(&tree);
+        assert!(lumen_layout::set_scroll_position(&mut tree, scroller, 0.0, 40.0));
+        let truth = ordered_of(&tree);
+        let b = lumen_layout::find_box_by_node(&tree, scroller).expect("scroller box");
+        assert!(patch_scroll_layer(&mut dl, b), "patch must apply");
+        assert_dl_eq(&dl, &truth);
+    }
+
+    /// Same for the render thread's override path.
+    #[test]
+    fn scroll_override_moves_followers_and_equals_rebuild() {
+        let mut tree = layout_for(ANCHOR_HTML, ANCHOR_CSS);
+        let c = lumen_layout::collect_scroll_containers(&tree)[0].clone();
+        let mut dl = ordered_of(&tree);
+        assert!(lumen_layout::set_scroll_position(&mut tree, c.node, 0.0, 40.0));
+        let truth = ordered_of(&tree);
+        let o = ScrollLayerOverride { id: c.node.index() as u32, scroll_x: 0.0, scroll_y: 40.0, max_x: 0.0, max_y: 400.0 };
+        assert!(apply_scroll_overrides(&mut dl, &[o]) >= 1);
+        assert_dl_eq(&dl, &truth);
+    }

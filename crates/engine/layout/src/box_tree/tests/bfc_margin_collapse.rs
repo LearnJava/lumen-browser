@@ -23,6 +23,7 @@ fn block_with_margins(margin_top_px: f32, margin_bottom_px: f32, children: Vec<L
     style.margin_top = LengthOrAuto::Length(Length::Px(margin_top_px));
     style.margin_bottom = LengthOrAuto::Length(Length::Px(margin_bottom_px));
     LayoutBox {
+        anchor_scroll: None,
         node: lumen_dom::NodeId::from_index(0),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

@@ -747,6 +747,7 @@ fn stack_boxes_horizontal(boxes: &[LayoutBox]) -> LayoutBox {
 /// Create an anonymous box (no DOM node) with the given style for stacking.
 fn make_anonymous_box_with_style(style: std::sync::Arc<crate::style::ComputedStyle>) -> LayoutBox {
     LayoutBox {
+        anchor_scroll: None,
         node: NodeId::from_index(0),
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
