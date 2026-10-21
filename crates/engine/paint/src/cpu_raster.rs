@@ -59,7 +59,10 @@ enum LayerComposite {
     /// close the chain is applied pixel-wise to the layer (Gaussian blur +
     /// colour-matrix filters, left to right) and the filtered layer is
     /// composited onto the backdrop below with plain `SourceOver`.
-    Filter(Vec<FilterFn>),
+    ///
+    /// `bounds` — border box элемента (CSS px): bbox для `url(#id)` на SVG-фильтр
+    /// ([`crate::svg_filter`]).
+    Filter { filters: Vec<FilterFn>, bounds: Rect },
     /// CSS Masking L1 §4 — `mask-image` (`PushMask*`/`PopMask`). The element's
     /// fully-composited subtree renders into a transparent full-size layer; on
     /// close the mask is evaluated per-pixel (the gradient's alpha channel —
@@ -761,11 +764,14 @@ fn rasterize_cpu_pixmap(
             // in favour of the layer's tracked dirty box — the hint is the border
             // box for the element `filter` case and would under-cover overflowing
             // children, while the dirty box is a guaranteed ink superset.
-            DisplayCommand::PushFilter { filters, bounds: _ } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create filter layer")?;
                 layers.push(CpuLayer::new(layer));
-                layer_ops.push(LayerComposite::Filter(filters.clone()));
+                layer_ops.push(LayerComposite::Filter {
+                    filters: filters.clone(),
+                    bounds: bounds.unwrap_or(Rect::ZERO),
+                });
             }
             // CSS Masking L1 §4 — `mask-image`. Like `PushOpacity`, the element's
             // fully-composited subtree renders into a transparent full-size layer;
@@ -941,7 +947,11 @@ fn composite_layer(
 /// closed group's dirty box is propagated into `dst` so nested filter groups
 /// still see a correct ink superset.
 fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
-    let Some(src_dirty) = src.dirty else { return };
+    // An SVG filter can paint on an empty source (`feFlood`), so it alone runs on
+    // an untouched layer.
+    let has_svg = matches!(op, LayerComposite::Filter { filters, .. }
+        if filters.iter().any(|f| matches!(f, FilterFn::Url(_))));
+    let Some(src_dirty) = src.dirty.or(has_svg.then_some((0.0, 0.0, 0.0, 0.0))) else { return };
     match op {
         LayerComposite::Opacity(a) => {
             composite_layer(&mut dst.pm, &src.pm, *a, src_dirty);
@@ -969,9 +979,13 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
             composite_blend_layer(&mut dst.pm, &src.pm, *mode, src_dirty);
             dst.mark(src_dirty);
         }
-        LayerComposite::Filter(filters) => {
-            if let Some(written) = composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
-            {
+        LayerComposite::Filter { filters, bounds } => {
+            let written = if has_svg {
+                composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, src_dirty)
+            } else {
+                composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
+            };
+            if let Some(written) = written {
                 dst.mark(written);
             }
         }
@@ -1405,6 +1419,56 @@ fn composite_filter_layer(
     Some((cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32))
 }
 
+/// [`composite_filter_layer`] for a chain containing `url(#id)` (SVG filter graph,
+/// [`crate::svg_filter`]). The chain runs on a window `(pixmap, origin)` that starts
+/// as the ink crop of `src` and is replaced by the filter-region window after each
+/// SVG filter (a flood may paint beyond the ink). A dangling reference makes the
+/// whole chain invalid (Filter Effects L1 §3): the layer is composited unfiltered.
+fn composite_svg_filter_chain(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    filters: &[FilterFn],
+    bounds: Rect,
+    src_dirty: DrawBounds,
+) -> Option<DrawBounds> {
+    if filters.iter().any(|f| matches!(f, FilterFn::Url(u) if u.graph.is_none())) {
+        return composite_filter_layer(dst, src, &[], src_dirty);
+    }
+    let canvas = (src.width(), src.height());
+    let margin = filter_chain_reach(filters) + 2.0;
+    let (mut cur, mut origin) = match clamp_crop(src_dirty, margin, canvas.0, canvas.1) {
+        Some((cx0, cy0, cx1, cy1)) => (
+            crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?,
+            (cx0 as i32, cy0 as i32),
+        ),
+        None => (tiny_skia::Pixmap::new(1, 1)?, (0, 0)),
+    };
+    for f in filters {
+        match f {
+            FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma),
+            FilterFn::Url(u) => {
+                if let Some(win) = crate::svg_filter::apply(&cur, origin, canvas, u, bounds) {
+                    cur = win.pixmap;
+                    origin = (win.x, win.y);
+                }
+            }
+            other => apply_color_filter(&mut cur, other),
+        }
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(origin.0, origin.1, cur.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    Some((
+        origin.0 as f32,
+        origin.1 as f32,
+        origin.0 as f32 + cur.width() as f32,
+        origin.1 as f32 + cur.height() as f32,
+    ))
+}
+
 /// Total spatial reach in px of a filter chain — how far the chain can carry
 /// ink beyond its source. Only `blur()` is spatial: three box passes of radius
 /// `r` (the same `r` [`gaussian_blur`] derives from σ — keep the formulas in
@@ -1652,7 +1716,7 @@ fn apply_color_filter(pixmap: &mut tiny_skia::Pixmap, f: &FilterFn) {
         };
         let mut a_unit = a / 255.0;
         match f {
-            FilterFn::Blur(_) => {}
+            FilterFn::Blur(_) | FilterFn::Url(_) => {}
             FilterFn::Brightness(amt) => {
                 r = (r * amt).clamp(0.0, 1.0);
                 g = (g * amt).clamp(0.0, 1.0);

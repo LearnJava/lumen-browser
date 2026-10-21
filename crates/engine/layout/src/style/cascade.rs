@@ -1800,6 +1800,15 @@ pub(crate) fn compute_style_shareable(
         style.clip_path = crate::box_tree::resolve_clip_path_url(doc, sheet, id, viewport, dark_mode);
     }
 
+    // Filter Effects L1 §3 — `filter: url(#id)` names a `<filter>` element; paint has no
+    // `Document`, so the primitive graph is attached here. A reference to nothing / to a
+    // non-`<filter>` leaves `graph == None` (paint ignores the whole chain).
+    for f in &mut style.filter {
+        if let FilterFn::Url(u) = f {
+            u.graph = crate::box_tree::resolve_filter_url(doc, sheet, &u.id, viewport, dark_mode);
+        }
+    }
+
     apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
 
     // Last, so every earlier pass has already written its box-model lengths and

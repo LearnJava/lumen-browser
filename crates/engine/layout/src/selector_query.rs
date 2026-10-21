@@ -1020,6 +1020,7 @@ fn filter_fn_to_css(f: &FilterFn) -> String {
         FilterFn::Opacity(v) => format!("opacity({})", v),
         FilterFn::Saturate(v) => format!("saturate({})", v),
         FilterFn::Sepia(v) => format!("sepia({})", v),
+        FilterFn::Url(u) => format!("url(\"#{}\")", u.id),
     }
 }
 
