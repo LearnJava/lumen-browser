@@ -23,8 +23,9 @@ use crate::resolved_geometry::contains_fixed_descendants;
 /// container has more than one column (or wraps into rows) and flows horizontally; what inside
 /// an item may be cut is decided there box by box. A vertical container keeps the atomic
 /// placement.
-fn segment_is_sliceable(n_cols: u32, col_rows: bool, container: &ComputedStyle) -> bool {
-    (n_cols > 1 || col_rows) && matches!(container.writing_mode, crate::style::WritingMode::HorizontalTb)
+fn segment_is_sliceable(n_cols: u32, col_rows: bool, definite_height: bool, container: &ComputedStyle) -> bool {
+    // A single column with a definite height still overflows into extra columns (§3.5).
+    (n_cols > 1 || col_rows || definite_height) && matches!(container.writing_mode, crate::style::WritingMode::HorizontalTb)
 }
 
 /// An in-flow item of a grid cut by `emit_grid_fragments`: a border-less block that may hold
@@ -170,11 +171,17 @@ pub(crate) fn build_multicol_init(
     // CSS Multicol L2 §4.2 / §4.4: a definite `column-height` fixes the block size of every
     // column; overflow columns then open new rows (`row-gap` apart) instead of extending
     // the inline axis.
-    let col_rows = s.column_height_px(em, viewport).filter(|_| s.column_rows_wrap(em, viewport)).map(|col_h| {
-        super::multicol_trampoline::ColRows {
-            col_h,
-            row_gap: s.row_gap.resolve_or_zero(em, container_h.unwrap_or(0.0), viewport).max(0.0),
-        }
+    // `column-height: auto` with an explicit `column-wrap: wrap` takes the container's definite
+    // block size as the column height (Multicol L2 §4.2).
+    let col_h = s.column_height_px(em, viewport).filter(|_| s.column_rows_wrap(em, viewport)).or_else(|| {
+        (s.column_height.is_none() && s.column_wrap_explicit && !s.column_wrap_nowrap)
+            .then_some(container_h)
+            .flatten()
+            .filter(|h| *h > 0.0)
+    });
+    let col_rows = col_h.map(|col_h| super::multicol_trampoline::ColRows {
+        col_h,
+        row_gap: s.row_gap.resolve_or_zero(em, container_h.unwrap_or(0.0), viewport).max(0.0),
     });
 
     // CSS Multicol L2 §4.4: an explicit `column-wrap: wrap` rows up forced breaks without a
@@ -215,7 +222,7 @@ pub(crate) fn build_multicol_init(
     for &i in &flow_idxs {
         if super::multicol_span::is_column_spanner(&work[i]) {
             let grid_frag = n_cols > 1 && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
-            let sliceable = segment_is_sliceable(n_cols, col_rows.is_some(), s);
+            let sliceable = segment_is_sliceable(n_cols, col_rows.is_some(), container_h.is_some(), s);
             segments.push(SegmentInit {
                 item_idxs: std::mem::take(&mut seg),
                 span_idx: Some(i),
@@ -227,7 +234,7 @@ pub(crate) fn build_multicol_init(
         }
     }
     let grid_frag = n_cols > 1 && container_h.is_some() && col_rows.is_none() && seg.len() == 1 && is_fragmentable_grid(&work[seg[0]], s);
-    let sliceable = segment_is_sliceable(n_cols, col_rows.is_some(), s);
+    let sliceable = segment_is_sliceable(n_cols, col_rows.is_some(), container_h.is_some(), s);
     segments.push(SegmentInit { item_idxs: seg, span_idx: None, sliceable, grid_frag });
 
     let consumed = vec![false; work.len()];

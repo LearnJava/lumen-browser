@@ -1,6 +1,6 @@
 # BUG-1399 — multicol: `columns: 1` не контейнер колонок; `column-wrap: wrap` без `column-height` не открывает второй ряд
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 17, `css/css-multicol` + `css/css-contain`)
 **Область:** layout (`crates/engine/layout/src/box_tree/multicol_trampoline.rs`, `multicol_abspos.rs`)
 
@@ -28,3 +28,7 @@ WPT-RUN-14 срез 17: 16 id с `columns: 1` (из них `multicol-span-float-
 ## Как проверить
 
 `css/css-multicol/column-height-011.html`, `column-height-003.html`.
+
+## Исправление (2026-10-21, P6)
+
+`columns:1` уже был контейнером колонок, но `segment_is_sliceable` резал сегмент только при `n_cols > 1` или `column-height` — одна колонка с определённой высотой оставалась атомарной. Теперь режется и она. Для `column-wrap: wrap` при `column-height: auto` (`multicol_abspos.rs`) `ColRows::col_h` берётся из определённой высоты контейнера. Тесты: `multicol_rows.rs` (`one_column_with_a_definite_height_…`, `auto_column_height_takes_the_container_height_…`).
