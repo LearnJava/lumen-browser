@@ -28,8 +28,9 @@ use lumen_core::ext::{AbortToken, JsSseEvent, JsWsEvent};
 use lumen_core::url::Url;
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::{
-    DocumentMode, DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange,
-    Selection, ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
+    byte_to_utf16_offset, DocumentMode, DomPosition, Namespace, NodeData, NodeId, QualName,
+    Range as DomRange, Selection, ShadowRootMode, node_child_count, node_length, node_text_content,
+    range_text, utf16_to_byte_offset,
 };
 use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::{HashMap, HashSet};

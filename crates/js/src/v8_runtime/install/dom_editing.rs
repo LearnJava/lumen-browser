@@ -8,6 +8,31 @@ use super::reg;
 #[allow(unused_imports)]
 use super::super::*;
 
+/// The engine-internal offset of a boundary point the page just handed us:
+/// UTF-8 bytes inside a text node (the engine's model — the layout caret and
+/// the hit-test speak bytes), the child index everywhere else.
+///
+/// The Web APIs count UTF-16 code units (DOM §4.4), so every offset that
+/// crosses this boundary is converted.
+fn internal_offset(doc: &lumen_dom::Document, container: NodeId, units: u32) -> u32 {
+    match &doc.get(container).data {
+        NodeData::Text(s) => utf16_to_byte_offset(s.as_str(), units as usize) as u32,
+        _ => units,
+    }
+}
+
+/// The Web-API offset of a boundary point: UTF-16 code units inside a text
+/// node, the child index everywhere else — the inverse of [`internal_offset`].
+fn web_offset(doc: &lumen_dom::Document, pos: DomPosition) -> u32 {
+    if !doc.contains_id(pos.container) {
+        return pos.offset;
+    }
+    match &doc.get(pos.container).data {
+        NodeData::Text(s) => byte_to_utf16_offset(s.as_str(), pos.offset as usize) as u32,
+        _ => pos.offset,
+    }
+}
+
 /// Selection API (WHATWG Selection API + DOM §4.5).
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_selection(
@@ -24,6 +49,8 @@ pub(crate) fn install_selection(
     // singleton per document; Range objects are snapshots of endpoint pairs.
     {
         // Returns [anchor_nid, anchor_offset, focus_nid, focus_offset] or null.
+        // The offsets are UTF-16 code units (DOM §4.4) — the engine stores
+        // them as UTF-8 bytes, so they are converted on the way out.
         let d = Arc::clone(&doc);
         reg!(scope, ctx, store, "_lumen_get_selection", move || -> Option<Vec<u32>> {
             let doc = d.lock().unwrap();
@@ -31,9 +58,9 @@ pub(crate) fn install_selection(
             match (sel.anchor, sel.focus) {
                 (Some(a), Some(f)) => Some(vec![
                     a.container.raw(),
-                    a.offset,
+                    web_offset(&doc, a),
                     f.container.raw(),
-                    f.offset,
+                    web_offset(&doc, f),
                 ]),
                 _ => None,
             }
@@ -41,6 +68,8 @@ pub(crate) fn install_selection(
     }
     {
         // Sets selection to [anchor_nid, anchor_offset, focus_nid, focus_offset].
+        // The offsets come from the page in UTF-16 code units (DOM §4.4) and
+        // are stored as UTF-8 bytes — the engine's model.
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
@@ -60,6 +89,8 @@ pub(crate) fn install_selection(
                     log_foreign_node_id(&doc, "_lumen_set_selection focus", focus_nid);
                     return;
                 }
+                let anchor_off = internal_offset(&doc, anchor_id, anchor_off);
+                let focus_off = internal_offset(&doc, focus_id, focus_off);
                 doc.set_selection(Selection {
                     anchor: Some(DomPosition {
                         container: anchor_id,
@@ -107,19 +138,25 @@ pub(crate) fn install_selection(
     }
     {
         // Returns text covered by the given range endpoints.
+        // The endpoints come from the page in UTF-16 code units (DOM §4.4).
         let d = Arc::clone(&doc);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_get_range_text",
             move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> String {
                 let doc = d.lock().unwrap();
+                let start_id = NodeId::from_raw(start_nid);
+                let end_id = NodeId::from_raw(end_nid);
+                if !doc.contains_id(start_id) || !doc.contains_id(end_id) {
+                    return String::new();
+                }
                 let r = DomRange {
                     start: DomPosition {
-                        container: NodeId::from_raw(start_nid),
-                        offset: start_off,
+                        container: start_id,
+                        offset: internal_offset(&doc, start_id, start_off),
                     },
                     end: DomPosition {
-                        container: NodeId::from_raw(end_nid),
-                        offset: end_off,
+                        container: end_id,
+                        offset: internal_offset(&doc, end_id, end_off),
                     },
                 };
                 range_text(&doc, &r)
@@ -152,22 +189,28 @@ pub(crate) fn install_selection(
     }
     {
         // Deletes the contents of range; returns [new_pos_nid, new_pos_offset].
+        // The endpoints come from the page in UTF-16 code units (DOM §4.4).
         let d = Arc::clone(&doc);
         let dirty = Arc::clone(&dom_dirty);
         let stale = Arc::clone(&flush_stale);
         let touched = Arc::clone(&dom_touched);
-        reg!(scope, ctx, store, 
+        reg!(scope, ctx, store,
             "_lumen_range_delete_contents",
             move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> Vec<u32> {
                 let mut doc = d.lock().unwrap();
+                let start_id = NodeId::from_raw(start_nid);
+                let end_id = NodeId::from_raw(end_nid);
+                if !doc.contains_id(start_id) || !doc.contains_id(end_id) {
+                    return vec![start_nid, start_off];
+                }
                 let r = DomRange {
                     start: DomPosition {
-                        container: NodeId::from_raw(start_nid),
-                        offset: start_off,
+                        container: start_id,
+                        offset: internal_offset(&doc, start_id, start_off),
                     },
                     end: DomPosition {
-                        container: NodeId::from_raw(end_nid),
-                        offset: end_off,
+                        container: end_id,
+                        offset: internal_offset(&doc, end_id, end_off),
                     },
                 };
                 let pos = lumen_dom::delete_range(&mut doc, &r);
@@ -390,12 +433,15 @@ pub(crate) fn install_design_mode(
                             if !children.is_empty() {
                                 let first = *children.first().unwrap();
                                 let last = *children.last().unwrap();
-                                let last_len = node_length(&doc, last);
+                                // `node_length` counts UTF-16 units; the
+                                // selection stores UTF-8 bytes.
+                                let last_len =
+                                    internal_offset(&doc, last, node_length(&doc, last) as u32);
                                 doc.set_selection(Selection {
                                     anchor: Some(DomPosition { container: first, offset: 0 }),
                                     focus: Some(DomPosition {
                                         container: last,
-                                        offset: last_len as u32,
+                                        offset: last_len,
                                     }),
                                 });
                                 record_dom_touch_unattributed(&touched);
