@@ -45,6 +45,7 @@ fn is_query_container(style: &ComputedStyle) -> bool {
 /// - Only block-flow children are re-laid out (Flex/Grid children use first-pass positions).
 /// - Nested containers are processed outermost-first (inner containers are re-entered in
 ///   the same walk, but they use the parent container's context for their own re-layout).
+#[allow(clippy::too_many_arguments)]
 pub fn apply_container_styles(
     root: &mut LayoutBox,
     doc: &Document,
