@@ -157,12 +157,12 @@ pub fn text_hits_at_point(
 /// UTF-16 length of `s[..byte]`, with `byte` clamped to `s.len()` and moved
 /// back to the nearest char boundary — `source_char_offset` is a best-effort
 /// mapping (whitespace collapsing and `text-transform` can shift it).
+///
+/// The conversion itself lives in `lumen-dom` (BUG-1464): the DOM layer
+/// converts between UTF-8 byte offsets and UTF-16 code units for every
+/// Web-API boundary, and the hit-test table speaks the same units.
 fn utf16_offset_of_byte(s: &str, byte: usize) -> u32 {
-    let mut b = byte.min(s.len());
-    while !s.is_char_boundary(b) {
-        b -= 1;
-    }
-    s[..b].encode_utf16().count() as u32
+    lumen_dom::byte_to_utf16_offset(s, byte) as u32
 }
 
 #[cfg(test)]

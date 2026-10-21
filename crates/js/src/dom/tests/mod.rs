@@ -223,6 +223,9 @@ mod v8_selection_range_editing;
 mod v8_bug1447_pseudo_computed;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1464_utf16_offsets;
+
+#[cfg(feature = "v8-backend")]
 mod v8_computedstyle;
 
 #[cfg(feature = "v8-backend")]

@@ -28,7 +28,7 @@ WPT-RUN-14 срез 10: `text-transform-tailoring-*` (8 id, включая `-dyn
 - `capitalize` режет слова по упрощённому UAX #29 (`is_word_start`), а не по пробелам: `john's`, `foo_bar`, `3.14` — одно слово, `foo-bar` → `Foo-Bar`, `(hello)` → `(Hello)`.
 - `cascade.rs`: собственный `lang`/`xml:lang` элемента (в том числе пустой) кладётся в `text_extra.case_lang`, остальное наследуется; ключ share-cache содержит полный набор атрибутов, смена `lang` через `setAttribute` пересчитывает стиль.
 - `innerText`: собственная копия `capitalize` в шиме удалена, текст идёт через нативный `_lumen_text_transform` → `style::transform_text_by_value` (те же функции, что у раскладки); язык — ближайший `lang`/`xml:lang` предка.
-- `Selection.toString()` (`_lumen_selection_string`): если среди покрытых текстовых узлов есть с `text-transform`, фрагменты пересобираются в шиме и преобразуются (`ß` → `SS`); иначе ответ DOM-стороны без изменений. Срез по UTF-16 вместо байтов — только на этом пути; остальное — [BUG-1464](BUG-1464-OPEN.md).
+- `Selection.toString()` (`_lumen_selection_string`): если среди покрытых текстовых узлов есть с `text-transform`, фрагменты пересобираются в шиме и преобразуются (`ß` → `SS`); иначе ответ DOM-стороны без изменений. Срез по UTF-16 вместо байтов — только на этом пути; остальное — [BUG-1464](BUG-1464-FIXED.md).
 
 Тесты: `style/tests/text_cssom_tests.rs::case_lang`, `tests/box_sizing_text_props.rs::text_transform_lang_*`, сквозные `crates/driver/tests/cases/bug1329_text_transform_lang.rs`. WPT: `text-transform-tailoring-001`, `-dynamic`, `-document-lang-dynamic`, `upperlower-039…044`, `-107`, `capitalize-036` (5 из 6 сабтестов).
 
