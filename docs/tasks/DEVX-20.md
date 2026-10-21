@@ -44,3 +44,20 @@ WPT-тестов и честность протокола: success без эфф
 
 - CDP (`--devtools-port`) — осознанный stub, вне задачи.
 - Модель доступа (токены, ADR-024) не ослаблять.
+
+## Статус WIP (ветка `p2-devx-20`, 2026-10-22)
+
+Сделано (код, не закоммичено в main):
+- `crates/network/src/intercept.rs`: фаза `responseStarted` — `pause_for_response_started(url, status)`, `InterceptAnnouncement {request_id,url,phase,status}` вместо кортежа; вызов в `fetch_with_redirect` (lib.rs) после `RequestCompleted`, до CORS/статус-ветвления; юнит-тесты + интеграционный тест `global_response_started_intercept_pauses_after_headers_until_resolved`.
+- `crates/driver`: `InterceptedRequest` получил `phase`, `status`; `crates/shell/src/app/about_to_wait.rs` проброс.
+- `crates/bidi-server/src/protocol.rs`: `network.continueResponse` (реальный resolve; неизвестный id → `no such request`; override-поля → `unsupported operation`), `continueWithAuth` → `no such request`, `addIntercept{authRequired}` → `unsupported operation`, неизвестная фаза → `invalid argument`, событие `network.responseStarted` (isBlocked, response.status). `cargo test -p lumen-bidi-server` — 121 ок.
+- `tests/wpt/verify_devx20_bidi_network.py` — написан, ещё НЕ запускался (нужен dev-release бинарь + venv).
+
+Найдено: `storage.getCookies|setCookie|deleteCookies` в protocol.rs работают только по `BidiState.cookies` (память) и не касаются jar живого окна; `value` принимается только строкой (по спецификации — BytesValue `{type:"string",value}`).
+
+Осталось:
+1. Подключить storage.* к живому jar: `lumen_storage::CookieJar::list(top_level_site, now)` (нет метода «все cookie»); `LiveCookie` + `AutomationCommand::{ListCookies,SetCookie,DeleteCookie}` / `AutomationReply::Cookies` в `crates/driver/src/types.rs`; методы `BrowserSession` (по умолчанию «нет живого jar» → in-memory) и `LiveWindowSession`; обработчик в `crates/shell/src/app/about_to_wait.rs` (jar — `self.lumen.active_cookie_jar()`, как у `document.cookie`); в protocol.rs принимать `value` и строкой, и BytesValue, отдавать BytesValue; `storage_get_cookies` сейчас берёт `&BidiState` — нужен `&mut`.
+2. `cargo test -p lumen-network intercept`, `cargo test -p lumen-driver`, `cargo check -p lumen-shell`, затем `cargo clippy -p lumen-bidi-server -p lumen-network -p lumen-driver --all-targets -- -D warnings`.
+3. Собрать `dev-release` (`LUMEN_PROFILE=dev-release`) и прогнать `tests/wpt/verify_devx20_bidi_network.py` и `verify_devx6_bidi_scenarios.py` против живого окна; поправить скрипт по факту.
+4. doc-sync: `docs/automation.md` §WebDriver BiDi (строка про «accepted-and-stored only» — заменить: responseStarted/continueResponse живые; authRequired — unsupported operation; storage.* — по результату п.1), `CAPABILITIES.md` (строка DEVX-6, ~330), модульные комментарии в `crates/driver/src/lib.rs`.
+5. Закрытие: гейт, `/lumen-task-finish`, в `ROADMAP.md` DEVX-20 → done, удалить указатель из `STATUS-P2.md` (в main-репо он `ROADMAP.md:1243`).

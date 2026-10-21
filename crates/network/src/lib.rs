@@ -275,8 +275,8 @@ fn apply_ua_override_h2(mut headers: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(Vec<u8>, V
 }
 
 pub use intercept::{
-    GlobalIntercept, InterceptDecision, add_global_intercept, drain_new_intercept_announcements,
-    pause_for_intercept, remove_global_intercept, resolve_intercept, wait_for_new_intercept_announcement,
+    GlobalIntercept, InterceptAnnouncement, InterceptDecision, add_global_intercept,
+    drain_new_intercept_announcements, pause_for_intercept, pause_for_response_started, remove_global_intercept, resolve_intercept, wait_for_new_intercept_announcement,
 };
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{
@@ -2744,8 +2744,8 @@ fn fetch_with_redirect(
     // blocked anyway), before CORS preflight / Started: a paused request that
     // gets failed follows the same "no RequestStarted/RequestCompleted"
     // contract as the blocks above. Only the `beforeRequestSent` phase pauses
-    // here; `responseStarted`/`authRequired` phases remain unactuated (see
-    // `intercept.rs` module doc).
+    // here; `responseStarted` pauses below once the hop's headers arrived
+    // (DEVX-20); `authRequired` is rejected at `network.addIntercept`.
     if let Err(reason) = intercept::pause_for_intercept(url.as_str(), "beforeRequestSent") {
         return Err(Error::Network(reason));
     }
@@ -3028,6 +3028,15 @@ fn fetch_with_redirect(
                 url: url.clone(),
                 status: resp.status,
             });
+        }
+
+        // DEVX-20: BiDi `responseStarted` intercept — статус и заголовки уже
+        // получены, тело ещё не отдано потребителю. Пауза до
+        // `network.continueResponse`; `failRequest`/таймаут обрывают запрос
+        // как остальные блокировки (после RequestCompleted — байты ответа
+        // уже были видны). Без совпавшего правила — одна проверка RwLock.
+        if let Err(reason) = intercept::pause_for_response_started(url.as_str(), resp.status) {
+            return Err(Error::Network(reason));
         }
 
         // CORS actual-response validation (Fetch §4.10) — на каждом
@@ -12347,7 +12356,7 @@ world\r\n\
         let handle = thread::spawn(move || HttpClient::new().fetch(&fetch_url));
 
         let announced = wait_for_new_intercept_announcement(std::time::Duration::from_secs(5));
-        let (request_id, seen_url) =
+        let InterceptAnnouncement { request_id, url: seen_url, .. } =
             announced.into_iter().next().expect("fetch never registered as paused");
         assert_eq!(seen_url, url.to_string());
         assert!(!handle.is_finished(), "fetch must stay blocked until resolved");
@@ -12357,6 +12366,44 @@ world\r\n\
         assert_eq!(body, b"ok");
 
         remove_global_intercept("test-intercept");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn global_response_started_intercept_pauses_after_headers_until_resolved() {
+        // DEVX-20: `responseStarted` пауза — запрос уходит на сервер (mock
+        // видит его), но fetch не возвращается, пока клиент не решит; в
+        // объявлении — фаза и статус ответа.
+        let _guard = crate::intercept::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK
+Content-Length: 2
+Connection: close
+
+ok".to_vec()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/rs")).unwrap();
+        add_global_intercept(GlobalIntercept {
+            id: "test-response-started".into(),
+            phases: vec!["responseStarted".into()],
+            url_patterns: vec![url.to_string()],
+        });
+
+        let fetch_url = url.clone();
+        let handle = thread::spawn(move || HttpClient::new().fetch(&fetch_url));
+
+        let announced = wait_for_new_intercept_announcement(std::time::Duration::from_secs(5));
+        let ann = announced.into_iter().next().expect("fetch never paused at responseStarted");
+        assert_eq!(ann.phase, "responseStarted");
+        assert_eq!(ann.status, Some(200));
+        assert_eq!(ann.url, url.to_string());
+        assert!(!handle.is_finished(), "fetch must stay blocked until continueResponse");
+
+        assert!(resolve_intercept(&ann.request_id, InterceptDecision::Continue));
+        let body = handle.join().unwrap().expect("fetch must complete once resolved as Continue");
+        assert_eq!(body, b"ok");
+
+        remove_global_intercept("test-response-started");
         server.join().unwrap();
     }
 

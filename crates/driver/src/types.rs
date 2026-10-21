@@ -150,15 +150,20 @@ pub struct NetworkEntry {
 }
 
 /// A network request paused by an active intercept, not yet reported to the
-/// BiDi connection that registered it (WebDriver BiDi `network.beforeRequestSent`,
-/// BUG-295 remainder). See [`BrowserSession::poll_intercepted_requests`].
+/// BiDi connection that registered it (WebDriver BiDi `network.beforeRequestSent`
+/// / `network.responseStarted`, BUG-295 remainder, DEVX-20). See [`BrowserSession::poll_intercepted_requests`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptedRequest {
     /// Opaque request identifier — the same id `network.continueRequest`/
-    /// `network.failRequest` must reference to resolve this pause.
+    /// `network.continueResponse`/`network.failRequest` must reference to
+    /// resolve this pause.
     pub request_id: String,
     /// URL of the paused request.
     pub url: String,
+    /// Phase the request is paused at: `"beforeRequestSent"` or `"responseStarted"`.
+    pub phase: String,
+    /// HTTP status of the response (`"responseStarted"` only).
+    pub status: Option<u16>,
 }
 
 /// Запись из консоли [`BrowserSession::console_log`].
@@ -601,8 +606,8 @@ pub enum AutomationCommand {
     AddIntercept {
         /// Opaque intercept identifier (BiDi `intercept`).
         id: String,
-        /// Phases at which to intercept (only `"beforeRequestSent"` is
-        /// actually paused on — see `lumen_network::intercept`).
+        /// Phases at which to intercept (`"beforeRequestSent"` and
+        /// `"responseStarted"` — see `lumen_network::intercept`).
         phases: Vec<String>,
         /// URL patterns to match (BiDi urlPattern `type: "string"`; empty = match-all).
         url_patterns: Vec<String>,

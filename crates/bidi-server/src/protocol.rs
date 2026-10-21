@@ -39,10 +39,16 @@
 //! bookkeeping. `browsingContext.navigate` blocks on the JS runtime's real
 //! `document.readyState == "complete"` signal before emitting
 //! `browsingContext.load` with a real timestamp (P2-wpt S1).
-//! `network.addIntercept`+`continueRequest`/`failRequest` genuinely pause and
-//! resume a matching `beforeRequestSent` request against `lumen_network`'s
-//! process-global registry (BUG-295 remainder) — `responseStarted`/
-//! `authRequired` phases remain unactuated. Everything else (cookie events, a
+//! `network.addIntercept`+`continueRequest`/`continueResponse`/`failRequest`
+//! genuinely pause and resume a matching `beforeRequestSent` request or
+//! `responseStarted` response (headers received, body not yet consumed)
+//! against `lumen_network`'s process-global registry (BUG-295 remainder,
+//! DEVX-20). The `authRequired` phase is not implemented: `addIntercept`
+//! rejects it with `unsupported operation` and `continueWithAuth` answers
+//! `no such request` (HTTP-auth challenges are not a first-class event in
+//! `lumen_network`), instead of reporting a success with no effect.
+//! `continueResponse` overrides (`statusCode`, `headers`, ...) are likewise
+//! rejected as `unsupported operation`. Everything else (cookie events, a
 //! dedicated `domContentLoaded` event, full input action-chain fidelity)
 //! remains a later handoff — roadmap 8H.3.
 //! Without a live window this layer stays a pure protocol state machine: one
@@ -688,10 +694,14 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "network.addIntercept" => network_add_intercept(id, &params, state),
         "network.removeIntercept" => network_remove_intercept(id, &params, state),
         "network.continueRequest" => network_continue_request(id, &params, state),
-        // `responseStarted`/`authRequired` phases are not paused on (BUG-295
-        // remainder scopes to `beforeRequestSent` only) — bare ACK, unchanged.
-        "network.continueResponse" => DispatchResult::single(make_success(id, empty_obj())),
-        "network.continueWithAuth" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.continueResponse" => network_continue_response(id, &params, state),
+        // `authRequired` is rejected by `addIntercept`, so no request can ever
+        // be blocked on auth — the spec's answer for such a request id.
+        "network.continueWithAuth" => DispatchResult::single(make_error(
+            Some(id),
+            "no such request",
+            "no request is blocked at the authRequired phase (unsupported by this browser)",
+        )),
         "network.failRequest" => network_fail_request(id, &params, state),
         "network.setCacheBehavior" => network_set_cache_behavior(id, &params, state),
         "input.performActions" => input_perform_actions(id, &params, state),
@@ -721,24 +731,35 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
     // along on the response to SOME incoming command. So opportunistically
     // drain any requests newly paused by an active intercept (on whatever
     // thread is running the matching fetch) and prepend `network.
-    // beforeRequestSent` events ahead of `method`'s own response frames,
+    // beforeRequestSent` / `network.responseStarted` events (by the phase the
+    // request is paused at, DEVX-20) ahead of `method`'s own response frames,
     // regardless of which command triggered this dispatch call. A client
     // that polls at all (as any BiDi automation client driving a paused
-    // request must) observes the event within its next round-trip.
-    if state.is_subscribed("network.beforeRequestSent")
+    // request must) observes the event within its next round-trip. A pause
+    // whose phase event nobody subscribed to is drained and dropped.
+    if (state.is_subscribed("network.beforeRequestSent") || state.is_subscribed("network.responseStarted"))
         && let Some(live) = &mut state.live
         && let Ok(requests) = live.poll_intercepted_requests()
     {
         for req in requests.iter().rev() {
-            let frame = make_event("network.beforeRequestSent", before_request_sent_params(state, req));
+            let event = if req.phase == "responseStarted" {
+                "network.responseStarted"
+            } else {
+                "network.beforeRequestSent"
+            };
+            if !state.is_subscribed(event) {
+                continue;
+            }
+            let frame = make_event(event, before_request_sent_params(state, req));
             result.frames.insert(0, frame);
         }
     }
     result
 }
 
-/// Parameters for the `network.beforeRequestSent` event (BiDi §12.5.1,
-/// simplified — BUG-295 remainder). `context` is the first browsing context
+/// Parameters for the `network.beforeRequestSent` / `network.responseStarted`
+/// events (BiDi §12.5.1 / §12.5.3, simplified — BUG-295 remainder, DEVX-20;
+/// the latter adds a `response` object with the real status). `context` is the first browsing context
 /// in this connection (Lumen runs one window per process, so there is
 /// exactly one meaningful context to attribute a live-window request to).
 fn before_request_sent_params(state: &BidiState, req: &InterceptedRequest) -> JsonValue {
@@ -758,6 +779,16 @@ fn before_request_sent_params(state: &BidiState, req: &InterceptedRequest) -> Js
     params.insert("redirectCount".into(), JsonValue::Number(0.0));
     params.insert("request".into(), JsonValue::Object(request_data));
     params.insert("timestamp".into(), JsonValue::Number(unix_timestamp_ms()));
+    if req.phase == "responseStarted" {
+        let mut response = BTreeMap::new();
+        response.insert("url".into(), JsonValue::String(req.url.clone()));
+        response.insert("status".into(), JsonValue::Number(f64::from(req.status.unwrap_or(0))));
+        response.insert("fromCache".into(), JsonValue::Bool(false));
+        response.insert("headers".into(), JsonValue::Array(Vec::new()));
+        response.insert("headersSize".into(), JsonValue::Number(-1.0));
+        response.insert("bodySize".into(), JsonValue::Null);
+        params.insert("response".into(), JsonValue::Object(response));
+    }
     JsonValue::Object(params)
 }
 
@@ -1770,8 +1801,11 @@ fn script_get_realms(id: i64, _state: &BidiState) -> DispatchResult {
 /// into [`LiveWindowSession::add_intercept`] — `lumen_network`'s
 /// process-global registry, consulted at the `fetch_with_redirect` chokepoint
 /// every fetch path funnels through. Only the `"beforeRequestSent"` phase is
-/// actually paused on — `"responseStarted"`/`"authRequired"` are accepted
-/// (stored) but not yet acted on.
+/// actually paused on — `"beforeRequestSent"` and `"responseStarted"`
+/// (DEVX-20). `"authRequired"` is rejected as `unsupported operation`
+/// (HTTP-auth challenges are not a first-class event in `lumen_network`; a
+/// silently-stored phase that never fires would mislead the client), any
+/// other phase name as `invalid argument`.
 fn network_add_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let phases: Vec<String> = params
         .get("phases")
@@ -1784,6 +1818,21 @@ fn network_add_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> 
             Some(id),
             "invalid argument",
             "phases must be a non-empty array",
+        ));
+    }
+
+    if phases.iter().any(|p| p == "authRequired") {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unsupported operation",
+            "the authRequired intercept phase is not supported",
+        ));
+    }
+    if let Some(bad) = phases.iter().find(|p| !matches!(p.as_str(), "beforeRequestSent" | "responseStarted")) {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            &format!("unknown intercept phase: {bad}"),
         ));
     }
 
@@ -1864,6 +1913,48 @@ fn network_remove_intercept(id: i64, params: &JsonValue, state: &mut BidiState) 
 /// bookkeeping existed avoids breaking callers that resolve defensively.
 fn network_continue_request(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     resolve_intercepted_request(id, params, state, true)
+}
+
+/// `network.continueResponse` — resume a response paused at the
+/// `responseStarted` phase (BiDi §12.6.14, DEVX-20). Unlike
+/// [`network_continue_request`] an unknown/expired `request` id is an error
+/// (`no such request`): success must mean a paused response was released.
+/// The optional response overrides are not applied, so they are rejected
+/// rather than silently ignored.
+fn network_continue_response(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let Some(request_id) = params.get("request").and_then(|v| v.as_str()) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "missing request id"));
+    };
+    for key in ["statusCode", "reasonPhrase", "headers", "cookies", "credentials"] {
+        if params.get(key).is_some() {
+            return DispatchResult::single(make_error(
+                Some(id),
+                "unsupported operation",
+                &format!("network.continueResponse does not support overriding `{key}`"),
+            ));
+        }
+    }
+    let resolved = match &mut state.live {
+        Some(live) => match live.resolve_intercepted_request(request_id, true) {
+            Ok(matched) => matched,
+            Err(e) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "unknown error",
+                    &format!("resolve intercepted response: {e}"),
+                ));
+            }
+        },
+        None => false,
+    };
+    if !resolved {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such request",
+            &format!("no paused request with id: {request_id}"),
+        ));
+    }
+    DispatchResult::single(make_success(id, empty_obj()))
 }
 
 /// `network.failRequest` — resolve a paused request as "fail" (BiDi §12.6.15,
@@ -2555,7 +2646,7 @@ mod tests {
     /// nothing thereafter (mirrors `lumen_network::drain_new_intercept_
     /// announcements`'s at-most-once-per-request semantics);
     /// `ResolveIntercept` matches only that same id.
-    fn fake_live_session_with_intercept() -> LiveWindowSession {
+    fn fake_live_session_with_intercept(phase: &'static str) -> LiveWindowSession {
         use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, InterceptedRequest};
         let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
         std::thread::spawn(move || {
@@ -2573,6 +2664,8 @@ mod tests {
                             AutomationReply::Intercepts(vec![InterceptedRequest {
                                 request_id: "r1".into(),
                                 url: "http://example.test/paused".into(),
+                                phase: phase.into(),
+                                status: (phase == "responseStarted").then_some(200),
                             }])
                         }
                     }
@@ -2589,7 +2682,7 @@ mod tests {
 
     #[test]
     fn before_request_sent_event_delivered_when_subscribed() {
-        let mut state = BidiState::with_live_session(fake_live_session_with_intercept(), None);
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("beforeRequestSent"), None);
         // Subscribing itself is a dispatch call, so it can already opportunistically
         // drain the pause (this transport has no async push — see `dispatch`'s doc
         // comment: the event rides along on whatever call happens to run next).
@@ -2610,7 +2703,7 @@ mod tests {
 
     #[test]
     fn before_request_sent_event_not_delivered_without_subscription() {
-        let mut state = BidiState::with_live_session(fake_live_session_with_intercept(), None);
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("beforeRequestSent"), None);
         let r = dispatch(r#"{"id":1,"method":"session.status","params":{}}"#, &mut state);
         assert_eq!(r.frames.len(), 1, "no subscription — no event: {:?}", r.frames);
         assert!(!r.frames[0].contains("beforeRequestSent"));
@@ -2618,12 +2711,97 @@ mod tests {
 
     #[test]
     fn continue_request_with_live_window_resolves_matching_id() {
-        let mut state = BidiState::with_live_session(fake_live_session_with_intercept(), None);
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("beforeRequestSent"), None);
         let r = dispatch(
             r#"{"id":1,"method":"network.continueRequest","params":{"request":"r1"}}"#,
             &mut state,
         );
         assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn response_started_event_delivered_with_status_when_subscribed() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("responseStarted"), None);
+        let r = dispatch(
+            r#"{"id":1,"method":"session.subscribe","params":{"events":["network.responseStarted"]}}"#,
+            &mut state,
+        );
+        assert_eq!(r.frames.len(), 2, "expected event frame + response frame: {:?}", r.frames);
+        assert!(r.frames[0].contains("network.responseStarted"), "got: {}", r.frames[0]);
+        assert!(r.frames[0].contains("\"isBlocked\":true"), "got: {}", r.frames[0]);
+        assert!(r.frames[0].contains("\"status\":200"), "got: {}", r.frames[0]);
+        assert!(r.frames[0].contains("\"r1\""), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn response_started_pause_not_reported_as_before_request_sent() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("responseStarted"), None);
+        let r = dispatch(
+            r#"{"id":1,"method":"session.subscribe","params":{"events":["network.beforeRequestSent"]}}"#,
+            &mut state,
+        );
+        assert_eq!(r.frames.len(), 1, "responseStarted pause must not surface as beforeRequestSent: {:?}", r.frames);
+    }
+
+    #[test]
+    fn continue_response_with_live_window_resolves_matching_id() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("responseStarted"), None);
+        let ok = dispatch(
+            r#"{"id":1,"method":"network.continueResponse","params":{"request":"r1"}}"#,
+            &mut state,
+        );
+        assert!(ok.frames[0].contains("success"), "got: {}", ok.frames[0]);
+        let unknown = dispatch(
+            r#"{"id":2,"method":"network.continueResponse","params":{"request":"nope"}}"#,
+            &mut state,
+        );
+        assert!(unknown.frames[0].contains("no such request"), "got: {}", unknown.frames[0]);
+    }
+
+    #[test]
+    fn continue_response_without_live_window_is_no_such_request() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.continueResponse","params":{"request":"r1"}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("no such request"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn continue_response_overrides_are_unsupported() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept("responseStarted"), None);
+        let r = dispatch(
+            r#"{"id":1,"method":"network.continueResponse","params":{"request":"r1","statusCode":201}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("unsupported operation"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn add_intercept_rejects_auth_required_and_unknown_phase() {
+        let mut state = BidiState::new();
+        let auth = dispatch(
+            r#"{"id":1,"method":"network.addIntercept","params":{"phases":["authRequired"]}}"#,
+            &mut state,
+        );
+        assert!(auth.frames[0].contains("unsupported operation"), "got: {}", auth.frames[0]);
+        let bogus = dispatch(
+            r#"{"id":2,"method":"network.addIntercept","params":{"phases":["nonsense"]}}"#,
+            &mut state,
+        );
+        assert!(bogus.frames[0].contains("invalid argument"), "got: {}", bogus.frames[0]);
+        assert_eq!(state.intercept_count(), 0, "a rejected rule must not be stored");
+    }
+
+    #[test]
+    fn continue_with_auth_is_no_such_request() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.continueWithAuth","params":{"request":"r1","action":"default"}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("no such request"), "got: {}", r.frames[0]);
     }
 
     #[test]

@@ -398,9 +398,9 @@ pub trait BrowserSession {
     /// `url_patterns` (exact-string match, per BiDi urlPattern `type: "string"`;
     /// empty = match-all) for one of `phases` pauses at that phase until
     /// [`resolve_intercepted_request`](BrowserSession::resolve_intercepted_request)
-    /// decides it or a bounded timeout elapses. Only the `"beforeRequestSent"`
-    /// phase is actually paused on by [`LiveWindowSession`] — `"responseStarted"`/
-    /// `"authRequired"` are accepted but not yet acted on.
+    /// decides it or a bounded timeout elapses. [`LiveWindowSession`] pauses on
+    /// `"beforeRequestSent"` and `"responseStarted"` (DEVX-20); `"authRequired"`
+    /// is not paused on — the BiDi layer rejects it before it gets here.
     ///
     /// Default impl is a no-op (`Ok(())`), same rationale as [`set_offline`](
     /// BrowserSession::set_offline); [`LiveWindowSession`] overrides it for
@@ -417,7 +417,7 @@ pub trait BrowserSession {
     }
 
     /// Deliver a decision for a paused request (`network.continueRequest`/
-    /// `network.failRequest`, BUG-295 remainder). `continue_request = true` lets
+    /// `network.continueResponse`/`network.failRequest`, BUG-295 remainder). `continue_request = true` lets
     /// the request proceed unmodified; `false` fails it.
     ///
     /// Returns `true` if `request_id` matched an outstanding pause — an
@@ -431,8 +431,8 @@ pub trait BrowserSession {
     }
 
     /// Requests newly paused by an active intercept since the last call —
-    /// data for the `network.beforeRequestSent` event a BiDi connection
-    /// should deliver to its client.
+    /// data for the `network.beforeRequestSent` / `network.responseStarted`
+    /// events a BiDi connection should deliver to its client.
     ///
     /// Default impl always returns an empty vector, same rationale as
     /// [`add_intercept`](BrowserSession::add_intercept).
