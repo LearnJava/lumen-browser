@@ -169,7 +169,7 @@ pub(crate) fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: 
                 emit_table_row(row_group, out, dpr);
             }
             _ => {
-                walk(row_group, out, dpr, None);
+                walk(row_group, out, dpr);
             }
         }
     }
@@ -283,6 +283,6 @@ pub(crate) fn emit_table_cell_border(b: &LayoutBox, out: &mut Vec<DisplayCommand
 /// Emit a table cell's content (text, nested blocks, …).
 fn emit_table_cell_content(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     for child in &b.children {
-        walk(child, out, dpr, None);
+        walk(child, out, dpr);
     }
 }

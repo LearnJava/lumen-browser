@@ -160,10 +160,11 @@ use property_syntax::apply_property_initial_values;
 // re-export, since `syntax_string` itself stays private (§2.1).
 pub use syntax_string::validate_registered_property;
 pub use pseudo::{
-    compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
+    is_highlight_pseudo, compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
     compute_view_transition_pseudo_style, merge_pseudo_inherited, ua_quote_content, ViewTransitionPart,
 };
 pub(in crate::style) use pseudo::pseudo_element_name;
+pub(crate) use pseudo::highlight_inherited_style;
 // Пост-каскадная `resolve_logical_properties` дописана в созданный ST-7
 // `style::logical` тем же батчем; её единственный вызыватель — `compute_style`.
 use logical::resolve_logical_properties;

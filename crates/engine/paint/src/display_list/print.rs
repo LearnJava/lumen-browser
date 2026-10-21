@@ -29,7 +29,7 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             let dy = frag.page_y_offset - frag.layout_box.rect.y;
             let matrix = Mat4::translation_2d(0.0, dy);
             cmds.push(DisplayCommand::PushTransform { matrix });
-            walk(&frag.layout_box, &mut cmds, 1.0, None);
+            walk(&frag.layout_box, &mut cmds, 1.0);
             cmds.push(DisplayCommand::PopTransform);
         }
         // Emit margin-box text content (headers, footers, page numbers).

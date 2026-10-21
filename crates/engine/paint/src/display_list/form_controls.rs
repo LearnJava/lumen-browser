@@ -5,8 +5,8 @@ const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
 /// FRAME-7 remainder 2: fallback text-selection highlight colour for a
 /// typeable field, used since a form control's value is not part of the DOM
 /// text `::selection` targets — this engine has no per-field way to author a
-/// different one. Same `#308aff` the OS-accent fallback
-/// [`lumen_layout::SelectionHighlight::bg_color`]'s doc comment recommends,
+/// different one. Same `#308aff` as
+/// [`lumen_layout::UA_SELECTION_BACKGROUND`],
 /// translucent so the value text drawn on top stays legible.
 const SELECTION_HIGHLIGHT_DEFAULT: Color = Color { r: 0x30, g: 0x8a, b: 0xff, a: 110 };
 

@@ -8,27 +8,7 @@ use super::*;
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let _vp = FixedBgViewportGuard::install(root);
     let mut list = Vec::new();
-    walk(root, &mut list, 1.0, None);
-    list
-}
-
-/// Like [`build_display_list`] but applies `::selection` CSS highlight styles
-/// to text fragments that fall within `sel`.
-///
-/// Pass `Some(&SelectionHighlight)` to enable `::selection` rendering — selected
-/// text receives a `FillRect` background (from `sel.bg_color`) and optionally an
-/// overridden text colour (from `sel.fg_color`). Pass `None` to get the same
-/// output as `build_display_list`.
-///
-/// This function is a pure function per ADR-008 Invariant 3: it depends only on
-/// the function parameters and carries no hidden global state.
-pub fn build_display_list_with_selection(
-    root: &LayoutBox,
-    sel: Option<&SelectionHighlight>,
-) -> DisplayList {
-    let _vp = FixedBgViewportGuard::install(root);
-    let mut list = Vec::new();
-    walk(root, &mut list, 1.0, sel);
+    walk(root, &mut list, 1.0);
     list
 }
 

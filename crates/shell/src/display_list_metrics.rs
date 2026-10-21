@@ -211,6 +211,37 @@ pub(crate) fn paint_ordered_in(layout: &lumen_layout::LayoutBox, viewport: lumen
     lumen_paint::with_fixed_background_viewport(viewport, || paint_ordered(layout))
 }
 
+/// Highlights (`::selection`) of the document's current selection, resolved against
+/// `layout` — `None` when nothing is selected, which is the common case and costs one
+/// range read. The DOM selection is the JS `getSelection()` one and the mouse one.
+pub(crate) fn page_highlights(
+    layout: &lumen_layout::LayoutBox,
+    doc: &lumen_dom::Document,
+    sheet: &lumen_css_parser::Stylesheet,
+    viewport: lumen_core::geom::Size,
+    dark_mode: bool,
+    measurer: &dyn lumen_layout::TextMeasurer,
+) -> Option<Arc<lumen_layout::Highlights>> {
+    let range = doc.get_selection().get_range().filter(|r| !r.is_collapsed())?;
+    let ranges = [range];
+    let layers = [lumen_layout::HighlightLayer {
+        pseudo: "selection",
+        ranges: &ranges,
+        ua_background: Some(lumen_layout::UA_SELECTION_BACKGROUND),
+    }];
+    let env = lumen_layout::HighlightEnv { doc, sheet, viewport, dark_mode, measurer };
+    lumen_layout::resolve_highlights(layout, &env, &layers).map(Arc::new)
+}
+
+/// [`paint_ordered_in`] with `highlights` painted over the text they cover.
+pub(crate) fn paint_ordered_in_highlighted(
+    layout: &lumen_layout::LayoutBox,
+    viewport: lumen_core::geom::Size,
+    highlights: Option<Arc<lumen_layout::Highlights>>,
+) -> DisplayList {
+    lumen_paint::with_highlights(highlights, || paint_ordered_in(layout, viewport))
+}
+
 /// Следующая версия display list-а; `0` пропускается — он зарезервирован за
 /// «версия неизвестна» (BUG-405 срез 39).
 pub(crate) fn next_dl_epoch(cur: u64) -> u64 {

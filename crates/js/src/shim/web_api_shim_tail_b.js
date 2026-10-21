@@ -22,8 +22,23 @@ function _lumen_computed_property(nid, name) {
 // argument was wired up. Full CSSOM pseudo-element conformance (`::backdrop`,
 // `::marker`, immutability, item-based blockification, nonexistent-pseudo
 // resolution) is out of scope for this slice.
+// CSS Pseudo-Elements L4 §3: the highlight pseudo-elements. `::selection` & co. take no
+// argument and no single-colon spelling; `::highlight(<ident>)` takes exactly one `<custom-ident>`
+// (case-sensitive). A string that names one of them but is not exactly one of those forms is
+// ill-formed — CSSOM §2.2.1 answers an empty declaration, not the element's own style.
+var _LUMEN_PSEUDO_INVALID = {};
+function _lumen_normalize_highlight_pseudo(pseudoElt) {
+    var m = /^::(selection|target-text|spelling-error|grammar-error)$/i.exec(pseudoElt);
+    if (m) return m[1].toLowerCase();
+    m = /^::highlight\(\s*(-?(?:[A-Za-z_]|[^\x00-\x7f])(?:[\w-]|[^\x00-\x7f])*)\s*\)$/i.exec(pseudoElt);
+    if (m) return 'highlight(' + m[1] + ')';
+    if (/^:{1,3}(selection|target-text|spelling-error|grammar-error|highlight)/i.test(pseudoElt)) return _LUMEN_PSEUDO_INVALID;
+    return null;
+}
 function _lumen_normalize_pseudo_elt(pseudoElt) {
     if (typeof pseudoElt !== 'string' || pseudoElt.length === 0) return null;
+    var hl = _lumen_normalize_highlight_pseudo(pseudoElt);
+    if (hl !== null) return hl;
     var name = pseudoElt.replace(/^::?/, '').toLowerCase();
     switch (name) {
         case 'before': return 'before';
@@ -42,6 +57,8 @@ window.getComputedStyle = function(element, pseudoElt) {
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
     if (nid != null && _wa_gap_an[nid]) _wa_motion_prune(nid);
     var pseudo = _lumen_normalize_pseudo_elt(pseudoElt);
+    var illFormed = pseudo === _LUMEN_PSEUDO_INVALID;
+    if (illFormed) pseudo = null;
     // Cache: keyed by nid, invalidated on next call (live object semantics).
     // BUG-483 ч.2: `length`/`item(i)`/`Symbol.iterator` used to be hardcoded
     // (length always 0, item() always '', no iterator at all) instead of
@@ -53,7 +70,7 @@ window.getComputedStyle = function(element, pseudoElt) {
     var entries = null;
     function resolveEntries() {
         if (entries === null) {
-            entries = nid == null ? [] : JSON.parse(
+            entries = nid == null || illFormed ? [] : JSON.parse(
                 pseudo ? _lumen_get_computed_style_pseudo_entries(nid, pseudo)
                        : _lumen_get_computed_style_entries(nid, false)
             );
@@ -61,7 +78,7 @@ window.getComputedStyle = function(element, pseudoElt) {
         return entries;
     }
     function readProp(name) {
-        if (nid == null) return '';
+        if (nid == null || illFormed) return '';
         if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
         var base = _lumen_computed_property(nid, name);
         // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
