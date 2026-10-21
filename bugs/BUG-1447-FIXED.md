@@ -1,6 +1,6 @@
 # BUG-1447 — `::first-letter` без `float` не рисует `background` и `border`; computed `::first-letter` теряет `background-*`, у `::first-line` пропадают `background-image` и часть свойств
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-21 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** layout/paint (`::first-letter`, `::first-line`: фон, границы, computed; `crates/engine/layout/src/box_tree/pseudo_text.rs`)
 
@@ -33,3 +33,11 @@ WPT-RUN-14 срез 20: `css-pseudo/first-letter-002.html`…, `first-line-allow
 ## Как проверить
 
 Таблица выше; `css/css-pseudo/first-letter-002.html`, `css/css-pseudo/first-line-allowed-properties.html`.
+
+## Исправление (2026-10-21, P3)
+
+`::first-letter` без `float` — inline-бокс (Pseudo 4 §3.3), но `apply_first_letter_style` (`crates/engine/layout/src/box_tree/pseudo_text.rs`) переносил на сегмент только наследуемые текстовые свойства (`merge_pseudo_inherited`): фон, граница, отступы, `border-radius`, `box-shadow`, `opacity` терялись. Теперь `apply_first_letter_box_decoration` накладывает эти свойства из стиля псевдоэлемента на сегмент буквы; если у псевдоэлемента есть фон/граница/отступы, сегмент становится `is_element_box` с `pre_space`/`post_space` из `margin + border + padding` — painter рисует его как `<span>` (`emit_inline_frag_box`). Хвост абзаца и внешний inline-бокс (`<em style="background:…">`) не затронуты. Побочно `getComputedStyle(el, '::first-letter')` перестал отдавать фон/margin/radius/shadow/opacity элемента-владельца.
+
+Тесты: `layout` (`box_tree/tests/pseudo_first_line.rs::non_float_first_letter_*`), `paint` (`display_list/tests/text_and_images.rs::non_float_first_letter_paints_background_and_border`), `js` (`v8_bug1447_pseudo_computed.rs`, копия логики `first-letter-allowed-properties.html`: 10 свойств через CSSOM пустого правила).
+
+**Остаток** (не относится к псевдоэлементу, воспроизводится на обычном элементе): `getComputedStyle(el).border` / `.font` / `.textDecoration` и `fontKerning` дают `""` (`computed_style_to_map`, BUG-1407); `::first-line` у `display: inline`/`flex` и свойства без записи в карте — BUG-1662. Reftest'ы `first-letter-0NN` и `first-line-*` в WPT-раннере не перезапускались.

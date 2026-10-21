@@ -1434,7 +1434,7 @@ fn build_box_inner(
                             children.push(letter);
                         }
                     } else {
-                        apply_first_letter_style(&mut row_items, fl_style, &style);
+                        apply_first_letter_style(&mut row_items, fl_style, &style, viewport);
                     }
                 }
 

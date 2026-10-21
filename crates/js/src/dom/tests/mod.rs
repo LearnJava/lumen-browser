@@ -220,6 +220,9 @@ mod v8_formdata;
 mod v8_selection_range_editing;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1447_pseudo_computed;
+
+#[cfg(feature = "v8-backend")]
 mod v8_computedstyle;
 
 #[cfg(feature = "v8-backend")]
