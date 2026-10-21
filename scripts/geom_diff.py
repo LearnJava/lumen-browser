@@ -39,6 +39,7 @@ import threading
 import time
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_chromium import WS, free_port  # noqa: E402
@@ -48,6 +49,7 @@ DEFAULT_CORPUS = REPO / "docs" / "quality" / "geom-corpus.txt"
 RAW_DIR = REPO / ".tmp" / "geom_diff"
 VIEWPORT = (1280, 720)
 STYLE_KEYS = ("display", "position", "font-size", "font-family", "visibility", "overflow")
+INCOMPARABLE_PCT = 20  # меньше сматчено и заголовки разные — браузерам отдали разные страницы
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -59,7 +61,14 @@ SNAPSHOT_JS = r"""(() => {
   const SKIP = {script: 1, style: 1, link: 1, meta: 1, template: 1};
   const vw = window.innerWidth, vh = window.innerHeight, rx = 2 * vw, ry = 2 * vh;
   const h = v => Math.round(v * 2) / 2;
-  const nodes = [], all = [], hidden = [];
+  // Подпись узла для выравнивания деревьев (`align_keys`): тег, id, два первых класса.
+  const sig = el => {
+    let s = el.localName;
+    if (el.id) s += '#' + el.id;
+    const c = (el.getAttribute('class') || '').trim().split(/\s+/).slice(0, 2).join('.');
+    return (c ? s + '.' + c : s).slice(0, 80);
+  };
+  const nodes = [], all = [], hidden = [], stale = [];
   let truncated = false;
   const body = document.body;
   if (!body) return JSON.stringify({error: 'no body'});
@@ -67,16 +76,21 @@ SNAPSHOT_JS = r"""(() => {
   while (stack.length) {
     const [el, key, ord] = stack.pop();
     const cs = getComputedStyle(el);
-    if (cs.display === 'none') { hidden.push(key); continue; }
+    const i = ord.length ? ord[ord.length - 1] : 0;
+    if (cs.display === 'none') { hidden.push([key, i, sig(el)]); continue; }
     const r = el.getBoundingClientRect();
-    if (all.length < ALL_CAP) all.push([key, h(r.left), h(r.top), h(r.width), h(r.height)]);
+    if (all.length < ALL_CAP) all.push([key, h(r.left), h(r.top), h(r.width), h(r.height), i, sig(el)]);
     if (r.right >= 0 && r.bottom >= 0 && r.left < rx && r.top < ry) {
       if (nodes.length < LIMIT) {
         nodes.push({k: key, o: ord, x: h(r.left), y: h(r.top), w: h(r.width), h: h(r.height),
                     s: [cs.display, cs.position, cs.fontSize, cs.fontFamily, cs.visibility, cs.overflow]});
       } else truncated = true;
     }
-    const kids = el.children, seen = {}, list = [];
+    // Дети — через childNodes: `children` у Lumen бывает устаревшим (crates.io), обход по нему
+    // теряет поддеревья. Расхождение двух API записывается отдельно — это само по себе находка.
+    const kids = [], seen = {}, list = [];
+    for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType === 1) kids.push(c);
+    if (el.children.length !== kids.length) stale.push([key, el.children.length, kids.length]);
     for (let i = 0; i < kids.length; i++) {
       const t = kids[i].localName;
       if (SKIP[t]) continue;
@@ -88,7 +102,7 @@ SNAPSHOT_JS = r"""(() => {
   const de = document.documentElement;
   return JSON.stringify({url: location.href, title: document.title, vw: vw, vh: vh,
     cw: de.clientWidth, dpr: window.devicePixelRatio, elements: document.getElementsByTagName('*').length,
-    truncated: truncated, nodes: nodes, all: all, hidden: hidden});
+    truncated: truncated, nodes: nodes, all: all, hidden: hidden, stale_children: stale});
 })()"""
 
 FREEZE_JS = r"""(() => {
@@ -99,16 +113,36 @@ FREEZE_JS = r"""(() => {
   return 'ok';
 })()"""
 
-PROBE_JS = "document.readyState + '|' + document.getElementsByTagName('*').length"
+PROBE_JS = "document.readyState + '|' + document.getElementsByTagName('*').length + '|' + location.href"
+
+
+def same_site(href: str, url: str) -> bool:
+    """Тот же сайт по двум последним меткам хоста: `www.microsoft.com/de-de` ~ `microsoft.com`."""
+    def site(u: str) -> str:
+        return ".".join((urlsplit(u).hostname or "").split(".")[-2:])
+    return site(href) == site(url) != ""
 
 
 # ── браузеры ─────────────────────────────────────────────────────────────────
+
+class ClosingWS(WS):
+    """`WS`, у которого закрытый собеседником сокет — ошибка, а не бесконечный цикл пустых чтений."""
+
+    def _recv(self, n):
+        while len(self._rest) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionAbortedError("WebSocket закрыт собеседником")
+            self._rest += chunk
+        out, self._rest = self._rest[:n], self._rest[n:]
+        return out
+
 
 class Rpc:
     """JSON-сообщения поверх WS: `call` ждёт ответ со своим id, события пропускает."""
 
     def __init__(self, url: str) -> None:
-        self.ws = WS(url)
+        self.ws = ClosingWS(url)
         self.n = 0
 
     def call(self, method: str, params: dict | None = None, timeout: float = 30) -> dict:
@@ -180,9 +214,19 @@ class Browser:
         except Exception as e:  # noqa: BLE001 — страница могла частично загрузиться, снимаем всё равно
             note = f"navigate: {e}"
         try:
+            # Навигация, не дождавшаяся DocumentReady, может так и не смениться: тогда в окне
+            # остаётся предыдущий сайт корпуса (microsoft снимался как apple). Пока страница чужая —
+            # ждём; редирект скриптом после удачной навигации (lenta → id.sber.ru) — законный итог.
             deadline = time.monotonic() + args.nav_timeout
-            while time.monotonic() < deadline and not str(self.eval(PROBE_JS)).startswith("complete"):
+            while True:
+                state = str(self.eval(PROBE_JS)).split("|")
+                ours = not note or same_site(state[-1], url)
+                if (state[0] == "complete" and ours) or time.monotonic() >= deadline:
+                    break
                 time.sleep(0.5)
+            if not ours:
+                return {"error": f"навигация не дошла: в окне {state[-1]}", "error_kind": "nav", "note": note,
+                        "load_s": round(time.monotonic() - t0, 1)}
             self.eval(FREEZE_JS)
             last, stable_since, deadline = None, time.monotonic(), time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -198,6 +242,8 @@ class Browser:
             snap["snapshot_ms"] = round((time.monotonic() - t1) * 1000)
         except Exception as e:  # noqa: BLE001
             snap = {"error": f"{type(e).__name__}: {e}"}
+            if isinstance(e, OSError):  # оборванное соединение и таймауты сокета (TimeoutError ⊂ OSError)
+                snap["error_kind"] = "os"
         snap["load_s"] = round(time.monotonic() - t0, 1)
         if note:
             snap["note"] = note
@@ -255,10 +301,26 @@ class Lumen(Browser):
                 }, timeout)
                 return r.get("result", {}).get("value")
             except RuntimeError as e:
-                # JS-рантайм нового документа ставится после readyState (verify_devx6_bidi_scenarios.py).
-                if "JS context not available" not in str(e) or time.monotonic() > deadline:
+                # JS-рантайм нового документа ставится после readyState (verify_devx6_bidi_scenarios.py);
+                # занятый поток движка (тяжёлый скрипт страницы) отвечает «engine thread busy» через 5 с.
+                retry = "JS context not available" in str(e) or "engine thread busy" in str(e)
+                if not retry or time.monotonic() > deadline:
                     raise
-                time.sleep(0.3)
+                time.sleep(0.5)
+
+    def snapshot(self, url: str, args) -> dict:
+        """Оборванный WS или умерший процесс — перезапустить Lumen и снять сайт ещё раз."""
+        snap = super().snapshot(url, args)
+        if "error" in snap and (not self.alive() or snap.get("error_kind") in ("os", "nav")):
+            first = snap["error"]
+            self.close()
+            try:
+                self.start()
+            except Exception as e:  # noqa: BLE001
+                return snap | {"error": f"{first}; перезапуск: {type(e).__name__}: {e}"}
+            snap = super().snapshot(url, args)
+            snap["note"] = (snap.get("note", "") + f"; повтор после перезапуска ({first})").lstrip("; ")
+        return snap
 
     def close(self) -> None:
         if self.rpc:
@@ -359,6 +421,11 @@ def norm_style(s: list) -> tuple:
     return display, position, size, family, visibility, overflow
 
 
+def norm_title(title) -> str:
+    """Заголовок без лишних пробелов: Lumen их в `document.title` не схлопывает (rust-lang)."""
+    return " ".join(str(title or "").split())
+
+
 def parent_key(key: str) -> str | None:
     return key.rsplit(">", 1)[0] if ">" in key else None
 
@@ -398,13 +465,109 @@ def inherited_shift(g: dict, geom: dict, prev_of: dict, parents: set, t: float) 
     return shift_ok and width_ok and height_ok
 
 
+def hidden_keys(snap: dict) -> set:
+    return {h[0] if isinstance(h, list) else h for h in snap["hidden"]}
+
+
+def lcs_pairs(a: list, b: list) -> list[tuple[int, int]]:
+    """Пары индексов наибольшей общей подпоследовательности `a` и `b` (по возрастанию)."""
+    n, m = len(a), len(b)
+    if not n or not m:
+        return []
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        row, nxt = dp[i], dp[i + 1]
+        for j in range(m - 1, -1, -1):
+            row[j] = nxt[j + 1] + 1 if a[i] == b[j] else max(nxt[j], row[j + 1])
+    out, i, j = [], 0, 0
+    while i < n and j < m:
+        if a[i] == b[j]:
+            out.append((i, j))
+            i, j = i + 1, j + 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def children_index(snap: dict) -> dict[str, list[tuple[int, str, str]]]:
+    """Родитель → дети `(индекс среди детей, ключ, подпись)` по порядку документа."""
+    kids: dict[str, list] = {}
+    for e in snap["all"]:
+        if len(e) >= 7:
+            kids.setdefault(parent_key(e[0]), []).append((e[5], e[0], e[6]))
+    for h in snap["hidden"]:
+        if isinstance(h, list):
+            kids.setdefault(parent_key(h[0]), []).append((h[1], h[0], h[2]))
+    for v in kids.values():
+        v.sort()
+    return kids
+
+
+def align_keys(chrome: dict, lumen: dict) -> dict | None:
+    """Ключ Lumen → ключ Chrome для одного и того же узла.
+
+    `tag:nth-of-type` ломается от одного лишнего соседа: у github у Chrome на один `div` больше, и
+    все ключи ниже сдвигаются (сматчено 1%). Поэтому дети каждой сопоставленной пары родителей
+    выравниваются LCS по подписи (тег, id, классы), а промежутки между опорами — LCS по тегу (классы,
+    выставленные скриптом, могут разниться). Несопоставленный узел Lumen получает ключ с `~l`.
+    `None` — снимки старого формата без подписей."""
+    ck, lk = children_index(chrome), children_index(lumen)
+    if not ck or not lk:
+        return None
+    mapping, queue = {"body": "body"}, [("body", "body")]
+    while queue:
+        c, lu = queue.pop()
+        a, b = ck.get(c, []), lk.get(lu, [])
+        pairs, pi, pj = [], -1, -1
+        for i, j in lcs_pairs([x[2] for x in a], [y[2] for y in b]) + [(len(a), len(b))]:
+            ga, gb = list(range(pi + 1, i)), list(range(pj + 1, j))
+            tags_a = [a[k][2].split("#")[0].split(".")[0] for k in ga]
+            tags_b = [b[k][2].split("#")[0].split(".")[0] for k in gb]
+            pairs += [(ga[x], gb[y]) for x, y in lcs_pairs(tags_a, tags_b)]
+            if i < len(a):
+                pairs.append((i, j))
+            pi, pj = i, j
+        for i, j in pairs:
+            mapping[b[j][1]] = a[i][1]
+            queue.append((a[i][1], b[j][1]))
+
+    renamed: dict[str, str] = {}
+
+    def rename(key: str) -> str:
+        if key in mapping:
+            return mapping[key]
+        if key not in renamed:
+            p = parent_key(key)
+            renamed[key] = (rename(p) + ">" if p else "") + key.rsplit(">", 1)[-1] + "~l"
+        return renamed[key]
+
+    return {k: rename(k) for k in [n["k"] for n in lumen["nodes"]] + [e[0] for e in lumen["all"]]
+            + [h[0] if isinstance(h, list) else h for h in lumen["hidden"]]}
+
+
+def realign(chrome: dict, lumen: dict) -> dict:
+    """Снимок Lumen с ключами, переименованными в ключи Chrome (`align_keys`)."""
+    m = align_keys(chrome, lumen)
+    if m is None:
+        return lumen
+    out = dict(lumen)
+    out["nodes"] = [n | {"k": m[n["k"]]} for n in lumen["nodes"]]
+    out["all"] = [[m[e[0]], *e[1:]] for e in lumen["all"]]
+    out["hidden"] = [[m[h[0]], *h[1:]] if isinstance(h, list) else m[h] for h in lumen["hidden"]]
+    out["stale_children"] = [[m.get(s[0], s[0]), *s[1:]] for s in lumen.get("stale_children", [])]
+    return out
+
+
 def compare(chrome: dict, lumen: dict, threshold: float) -> dict:
     """Сравнить два снимка. Δ = Lumen − Chrome. Возвращает сводку сайта (см. `site_md`)."""
+    lumen = realign(chrome, lumen)
     cn = {n["k"]: n for n in chrome["nodes"]}
     ln = {n["k"]: n for n in lumen["nodes"]}
     call = {a[0]: a for a in chrome["all"]}
     lall = {a[0]: a for a in lumen["all"]}
-    chid, lhid = set(chrome["hidden"]), set(lumen["hidden"])
+    chid, lhid = hidden_keys(chrome), hidden_keys(lumen)
 
     geom, style, missing, zero = {}, [], {"lumen": [], "chrome": []}, []
     beyond = 0
@@ -473,10 +636,16 @@ def compare(chrome: dict, lumen: dict, threshold: float) -> dict:
 
     compared = len(set(cn) | set(ln)) - beyond
     matched = len(set(cn) & set(ln))
+    matched_pct = round(100 * matched / compared, 1) if compared else 0.0
+    titles = {"chrome": norm_title(chrome.get("title")), "lumen": norm_title(lumen.get("title"))}
     return {
+        # Браузеры получили разные страницы (антибот-заглушка, редирект по региону) — сравнивать нечего.
+        "incomparable": matched_pct < INCOMPARABLE_PCT and titles["chrome"] != titles["lumen"],
+        "titles": titles,
+        "stale_children": {"chrome": chrome.get("stale_children", []), "lumen": lumen.get("stale_children", [])},
         "compared": compared,
         "matched": matched,
-        "matched_pct": round(100 * matched / compared, 1) if compared else 0.0,
+        "matched_pct": matched_pct,
         "beyond_limit": beyond,
         "geom": len(geom),
         "geom_roots": roots,
@@ -509,6 +678,15 @@ def site_md(slug: str, url: str, snaps: dict, cmp: dict | None) -> list[str]:
                        f"снимок {s['snapshot_ms']} мс" + (f"; {s['note']}" if s.get("note") else ""))
     if cmp is None:
         return out + [""]
+    if cmp["incomparable"]:
+        out.append(f"- **несопоставимы** — разные страницы (сматчено {cmp['matched_pct']}%): Chrome «{cmp['titles']['chrome']}», "
+                   f"Lumen «{cmp['titles']['lumen']}»; в итоговую строку не входит")
+        return out + [""]
+    for name in ("lumen", "chrome"):
+        stale = cmp["stale_children"][name]
+        if stale:
+            out.append(f"- `children` у {name} расходится с `childNodes` у {len(stale)} элементов (children/элементов "
+                       f"среди childNodes): " + ", ".join(f"`{k}` {a}/{b}" for k, a, b in stale[:5]))
     out.append(f"- сматчено {cmp['matched']} из {cmp['compared']} ({cmp['matched_pct']}%), за лимитом "
                f"{cmp['beyond_limit']}; геометрия: {cmp['geom']} узлов ({len(cmp['geom_roots'])} корней, из них "
                f"блочного уровня {cmp['geom_block_roots']}); "
@@ -536,14 +714,18 @@ def site_md(slug: str, url: str, snaps: dict, cmp: dict | None) -> list[str]:
 
 
 def clean(cmp: dict) -> bool:
-    return cmp["geom"] == 0 and cmp["lumen_zero_rect"] == 0 and cmp["style"] == 0 and cmp["missing_total"] == 0
+    return (cmp["geom"] == 0 and cmp["lumen_zero_rect"] == 0 and cmp["style"] == 0 and cmp["missing_total"] == 0
+            and not any(cmp["stale_children"].values()))
 
 
 def summary_line(results: list[dict]) -> str:
-    done = [r for r in results if r["cmp"] is not None]
+    """«N сайтов из M без расхождений»: M — сайты, снятые обоими браузерами с одной и той же страницей."""
+    done = [r for r in results if r["cmp"] is not None and not r["cmp"]["incomparable"]]
     ok = sum(1 for r in done if clean(r["cmp"]))
+    odd = sum(1 for r in results if r["cmp"] is not None and r["cmp"]["incomparable"])
+    lost = sum(1 for r in results if r["cmp"] is None)
     return (f"Итог: {ok} сайтов из {len(done)} без расхождений "
-            f"(не сняты: {len(results) - len(done)} из {len(results)})")
+            f"(несопоставимы: {odd}, не сняты: {lost}, всего {len(results)})")
 
 
 def report_md(results: list[dict], meta: dict, threshold: float) -> str:
@@ -562,6 +744,10 @@ def report_md(results: list[dict], meta: dict, threshold: float) -> str:
             bad = [n for n in ("chrome", "lumen") if "error" in s[n]]
             out.append(f"| {r['slug']} | — | не снят ({', '.join(bad)}) | — | — | — | — |")
             continue
+        if c["incomparable"]:
+            out.append(f"| {r['slug']} | {len(s['chrome']['nodes'])}/{len(s['lumen']['nodes'])} | "
+                       f"несопоставимы ({c['matched_pct']}%) | — | — | — | — |")
+            continue
         out.append(f"| {r['slug']} | {len(s['chrome']['nodes'])}/{len(s['lumen']['nodes'])} | "
                    f"{c['matched_pct']}% | {c['geom']} ({len(c['geom_roots'])} / {c['geom_block_roots']}) | {c['lumen_zero_rect']} | {c['style']} | "
                    f"{c['missing_total']} |")
@@ -578,7 +764,8 @@ def summary_json(results: list[dict], meta: dict) -> dict:
         sites[r["slug"]] = None if c is None else {
             k: c[k] for k in ("compared", "matched", "matched_pct", "beyond_limit", "geom", "lumen_zero_rect", "style",
                                 "missing_total")
-        } | {"geom_roots": len(c["geom_roots"]), "geom_block_roots": c["geom_block_roots"], "clean": clean(c)}
+        } | {"geom_roots": len(c["geom_roots"]), "geom_block_roots": c["geom_block_roots"], "clean": clean(c),
+             "incomparable": c["incomparable"], "stale_children_lumen": len(c["stale_children"]["lumen"])}
     return {"meta": meta, "summary": summary_line(results), "sites": sites}
 
 
@@ -645,11 +832,15 @@ def main() -> int:
             ok = all("error" not in s for s in snaps.values())
             cmp = compare(snaps["chrome"], snaps["lumen"], args.threshold) if ok else None
             results.append({"slug": slug, "url": url, "snaps": snaps, "cmp": cmp})
-            if cmp:
+            if cmp and cmp["incomparable"]:
+                print(f"{slug:14} несопоставимы: {cmp['titles']}", flush=True)
+            elif cmp:
                 print(f"{slug:14} сматчено {cmp['matched_pct']:5}%  геометрия {cmp['geom']:4} "
-                      f"({len(cmp['geom_roots'])} корней, блочных {cmp['geom_block_roots']})  стиль {cmp['style']:4}  дерево {cmp['missing_total']}")
+                      f"({len(cmp['geom_roots'])} корней, блочных {cmp['geom_block_roots']})  стиль {cmp['style']:4}  "
+                      f"дерево {cmp['missing_total']}", flush=True)
             else:
-                print(f"{slug:14} не снят: " + "; ".join(f"{n}: {s['error']}" for n, s in snaps.items() if "error" in s))
+                print(f"{slug:14} не снят: " + "; ".join(f"{n}: {s['error']}" for n, s in snaps.items() if "error" in s),
+                      flush=True)
     finally:
         for b in browsers.values():
             b.close()

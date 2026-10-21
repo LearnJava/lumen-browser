@@ -104,12 +104,87 @@ class Compare(unittest.TestCase):
         self.assertEqual((cmp["beyond_limit"], cmp["compared"], cmp["matched_pct"]), (1, 2, 100.0))
 
 
+def tree(entries: list[tuple[str, str]], hidden: list[tuple[str, str]] = ()) -> dict:
+    """Снимок нового формата из `(ключ, подпись)` в порядке документа; индекс — номер среди соседей."""
+    idx: dict[str | None, int] = {}
+    nodes, all_ = [], []
+    for k, sig in entries:
+        p = gd.parent_key(k)
+        idx[p] = idx.get(p, -1) + 1
+        nodes.append(node(k, 0, len(nodes) * 10, 10, 10, [idx[p]]))
+        all_.append([k, 0, len(all_) * 10, 10, 10, idx[p], sig])
+    hid = []
+    for k, sig in hidden:
+        p = gd.parent_key(k)
+        idx[p] = idx.get(p, -1) + 1
+        hid.append([k, idx[p], sig])
+    return {"nodes": nodes, "all": all_, "hidden": hid, "truncated": False}
+
+
+class Align(unittest.TestCase):
+    def test_extra_sibling_does_not_shift_keys(self):
+        c = tree([("body", "body"), ("body>div:1", "div.banner"), ("body>div:2", "div.app"),
+                  ("body>div:2>p:1", "p")])
+        lu = tree([("body", "body"), ("body>div:1", "div.app"), ("body>div:1>p:1", "p")])
+        m = gd.align_keys(c, lu)
+        self.assertEqual(m["body>div:1"], "body>div:2")
+        self.assertEqual(m["body>div:1>p:1"], "body>div:2>p:1")
+        cmp = gd.compare(c, lu, 1000)
+        self.assertEqual((cmp["matched"], [x["k"] for x in cmp["missing_in_lumen"]]), (3, ["body>div:1"]))
+
+    def test_class_change_falls_back_to_tag(self):
+        c = tree([("body", "body"), ("body>nav:1", "nav.open")])
+        lu = tree([("body", "body"), ("body>nav:1", "nav.closed")])
+        self.assertEqual(gd.align_keys(c, lu)["body>nav:1"], "body>nav:1")
+
+    def test_unmatched_lumen_node_gets_unique_key(self):
+        c = tree([("body", "body"), ("body>div:1", "div.a")])
+        lu = tree([("body", "body"), ("body>span:1", "span"), ("body>span:1>i:1", "i"), ("body>div:1", "div.a")])
+        m = gd.align_keys(c, lu)
+        self.assertEqual((m["body>span:1"], m["body>span:1>i:1"]), ("body>span:1~l", "body>span:1~l>i:1~l"))
+        self.assertEqual(m["body>div:1"], "body>div:1")
+
+    def test_hidden_node_is_aligned(self):
+        c = tree([("body", "body"), ("body>div:2", "div.b")], hidden=[("body>div:1", "div.x")])
+        lu = tree([("body", "body"), ("body>div:1", "div.b")])
+        self.assertEqual(gd.align_keys(c, lu)["body>div:1"], "body>div:2")
+
+    def test_old_format_is_left_alone(self):
+        self.assertIsNone(gd.align_keys(snap([node("body", 0, 0, 1, 1, [])]), snap([node("body", 0, 0, 1, 1, [])])))
+
+    def test_same_site(self):
+        self.assertTrue(gd.same_site("https://www.microsoft.com/de-de", "https://www.microsoft.com/"))
+        self.assertFalse(gd.same_site("https://www.apple.com/", "https://www.microsoft.com/"))
+        self.assertFalse(gd.same_site("about:blank", "https://example.com/"))
+
+
 class Report(unittest.TestCase):
     def test_summary_line_counts_clean_and_failed(self):
         ok = gd.compare(snap([node("body", 0, 0, 1, 1, [])]), snap([node("body", 0, 0, 1, 1, [])]), 4)
         bad = gd.compare(snap([node("body", 0, 0, 1, 1, [])]), snap([node("body", 9, 0, 1, 1, [])]), 4)
         results = [{"cmp": ok}, {"cmp": bad}, {"cmp": None}]
-        self.assertEqual(gd.summary_line(results), "Итог: 1 сайтов из 2 без расхождений (не сняты: 1 из 3)")
+        self.assertEqual(gd.summary_line(results),
+                         "Итог: 1 сайтов из 2 без расхождений (несопоставимы: 0, не сняты: 1, всего 3)")
+
+    def test_different_pages_are_incomparable_and_out_of_total(self):
+        c = snap([node("body", 0, 0, 1, 1, [])] + [node(f"body>p:{i}", 0, i, 1, 1, [i]) for i in range(1, 10)])
+        c["title"] = "Stack Overflow"
+        lu = snap([node("body", 0, 0, 1, 1, []), node("body>div:1", 0, 0, 1, 1, [0])])
+        lu["title"] = "Just a moment..."
+        cmp = gd.compare(c, lu, 4)
+        self.assertTrue(cmp["incomparable"])
+        self.assertEqual(gd.summary_line([{"cmp": cmp}]),
+                         "Итог: 0 сайтов из 0 без расхождений (несопоставимы: 1, не сняты: 0, всего 1)")
+        lu["title"] = "  Stack\n  Overflow "  # тот же заголовок с несхлопнутыми пробелами — сравнимы
+        self.assertFalse(gd.compare(c, lu, 4)["incomparable"])
+
+    def test_stale_children_is_not_clean(self):
+        c = snap([node("body", 0, 0, 1, 1, [])])
+        lu = snap([node("body", 0, 0, 1, 1, [])])
+        lu["stale_children"] = [["body", 0, 1]]
+        cmp = gd.compare(c, lu, 4)
+        self.assertEqual(cmp["stale_children"], {"chrome": [], "lumen": [["body", 0, 1]]})
+        self.assertFalse(gd.clean(cmp))
 
 
 if __name__ == "__main__":
