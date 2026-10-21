@@ -135,7 +135,7 @@ fn anon_box(
 ) -> LayoutBox {
     let style = anon_table_style(owner, display);
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node,
         rect: Rect::ZERO,
         used_padding: None,

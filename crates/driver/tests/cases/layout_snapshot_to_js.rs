@@ -110,3 +110,35 @@ fn bounding_client_rect_is_published_after_navigation() {
         assert_eq!((b.x, b.y, b.width), (8.0, 8.0, 50.0), "layout sanity: {b:?}");
     }
 }
+
+/// BUG-1400 — geometry of a descendant of a `content-visibility: hidden` box: the skipped subtree
+/// is laid out on request, so `getBoundingClientRect`, `offset*` and `getClientRects` answer, and a
+/// style edit is seen by the next query.
+const HIDDEN_PAGE: &str = r#"<html><head><style>
+  body { margin: 0 }
+  #cv { content-visibility: hidden; width: 100px; margin-left: 20px }
+</style></head><body><div id="cv"><div id="zz" style="height:40px;width:30px;margin-left:5px">t</div><span id="sp">text here</span></div></body></html>"#;
+
+#[test]
+fn hidden_subtree_geometry_is_answered_and_follows_style_edits() {
+    let mut session = InProcessSession::new();
+    session.navigate_html(HIDDEN_PAGE).expect("navigate_html");
+    let mut probe = |js: &str| unquote(&session.eval(js).expect("eval"));
+
+    assert_eq!(
+        probe("var r = document.getElementById('zz').getBoundingClientRect(); [r.x, r.width, r.height].join()"),
+        "25,30,40"
+    );
+    assert_eq!(
+        probe("var z = document.getElementById('zz'); [z.offsetWidth, z.offsetHeight].join()"),
+        "30,40"
+    );
+    assert_eq!(probe("document.getElementById('sp').getClientRects().length"), "1");
+    assert_eq!(
+        probe("var c = document.getElementById('cv').getBoundingClientRect(); [c.x, c.width, c.height].join()"),
+        "20,100,0",
+        "the hidden box itself stays size-contained"
+    );
+    probe("document.getElementById('zz').style.width = '60px'; 0");
+    assert_eq!(probe("document.getElementById('zz').getBoundingClientRect().width"), "60");
+}

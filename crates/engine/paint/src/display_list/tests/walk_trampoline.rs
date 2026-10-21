@@ -28,7 +28,7 @@ fn leaf_style(overflow_hidden: bool) -> ComputedStyle {
 /// it), wrapping `children`.
 fn wrapper(node_index: usize, style: ComputedStyle, kind: BoxKind, children: Vec<LayoutBox>) -> LayoutBox {
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 100.0, 100.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

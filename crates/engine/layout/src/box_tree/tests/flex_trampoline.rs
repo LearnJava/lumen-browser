@@ -58,7 +58,7 @@ fn wrapper(node_index: usize, children: Vec<LayoutBox>) -> LayoutBox {
     style.flex_direction = FlexDirection::Row;
     style.flex_basis = FlexBasis::Length(Length::Px(ITEM_BASIS));
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -92,7 +92,7 @@ fn leaf() -> LayoutBox {
     style.height = Some(Length::Px(LEAF_HEIGHT));
     style.flex_basis = FlexBasis::Length(Length::Px(ITEM_BASIS));
     LayoutBox {
-        anchor_scroll: None,
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -185,7 +185,7 @@ fn deep_flex_column_chain_lays_out_without_overflowing_the_stack() {
         style.flex_basis = FlexBasis::Length(Length::Px(ITEM_BASIS));
         style.min_height = Some(Length::Px(0.0));
         LayoutBox {
-            anchor_scroll: None,
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node: lumen_dom::NodeId::from_index(node_index),
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             used_padding: None, used_line_height: style.font_size * style.line_height,
