@@ -33,6 +33,7 @@ fn computed_color_keeps_lab_oklch_and_color_function() {
     assert_eq!(computed(&mut s, "color-mix(in srgb, red, blue)"), "color(srgb 0.5 0 0.5)");
     assert_eq!(computed(&mut s, "rgb(from rebeccapurple r g b)"), "color(srgb 0.4 0.2 0.6)");
     assert_eq!(computed(&mut s, "hwb(120 0% 50%)"), "rgb(0, 128, 0)");
+    assert_eq!(computed(&mut s, "hwb(from rebeccapurple h w b)"), "color(srgb 0.4 0.2 0.6)");
 }
 
 #[test]
