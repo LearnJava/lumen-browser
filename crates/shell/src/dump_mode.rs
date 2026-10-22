@@ -373,14 +373,28 @@ pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, v
         js.run_animation_frame(ts);
     }
     settle_reftest_wait(js.as_ref(), ts);
-    if !js.take_dom_dirty() {
+    // BUG-1451: `el.focus()` из скрипта страницы ставит запрос в очередь, который живой цикл
+    // дренирует в `about_to_wait` и кладёт в `focused_node` (он питает `:focus`/`:focus-within`
+    // при каждом layout). Однократный headless-путь этого не делал, и стиль `:focus` в снимке
+    // не применялся. Последний запрос — фокус на момент снимка.
+    let focused = js
+        .take_focus_requests()
+        .into_iter()
+        .last()
+        .flatten()
+        .map(|n| lumen_dom::NodeId::from_index(n as usize));
+    let dom_dirty = js.take_dom_dirty();
+    if !dom_dirty && focused.is_none() {
         return;
     }
     let layout = {
         let Ok(doc) = parsed.document.lock() else { return };
-        lumen_layout::layout_measured_hyp(
+        lumen_layout::set_interactive_state(None, focused, None);
+        let layout = lumen_layout::layout_measured_hyp(
             &doc, &parsed.stylesheet, vp, &parsed.measurer, &NullHyphenationProvider, false,
-        )
+        );
+        lumen_layout::clear_interactive_state();
+        layout
     };
     parsed.layout = layout;
 }

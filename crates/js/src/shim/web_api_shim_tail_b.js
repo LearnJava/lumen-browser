@@ -1149,7 +1149,47 @@ __lumen_C._lumen_focus_update = _lumen_focus_update;
 function _lumen_focus_fixup() {
     var nid = _lumen_last_focused_nid;
     if (nid === null || nid === undefined || nid === -1) return;
-    if (!_lumen_is_focusable(nid)) _lumen_focus_update(-1);
+    if (!_lumen_is_focusable(nid) || _lumen_focus_not_rendered(nid)) _lumen_focus_drop();
+}
+
+// BUG-1451: the shell's focus (and the engine-side `:focus` mirror) must follow
+// the shim's: a fixup that only reset `_lumen_last_focused_nid` left
+// `matches(':focus')` true. `_lumen_request_blur` clears both.
+function _lumen_focus_drop() {
+    _lumen_request_blur();
+    _lumen_focus_update(-1);
+}
+
+// HTML LS §6.6.2 "being rendered": the element or any flat-tree ancestor is
+// `display: none` (no box, so the element stops being a focusable area).
+function _lumen_focus_not_rendered(nid) {
+    // No published layout at all (worker/test contexts, parser time): nothing
+    // can be judged «not rendered».
+    var bid = _lumen_u2n(_lumen_get_body());
+    if (bid === null || _lumen_get_computed_style(bid, 'display') === '') return false;
+    var htmlId = _lumen_u2n(_lumen_get_html_element());
+    var anc = nid;
+    for (var guard = 0; guard < 512 && anc !== null && anc !== undefined; guard++) {
+        // A `display: none` element publishes no computed style in the
+        // snapshot, so «none» and «no entry» both mean no box.
+        var d = _lumen_get_computed_style(anc, 'display');
+        if (d === 'none' || d === '') return true;
+        if (anc === htmlId) return false;
+        var next = _lumen_u2n(_lumen_get_parent(anc));
+        if (next === null) next = _lumen_u2n(_lumen_get_shadow_root_host(anc));
+        anc = next;
+    }
+    return false;
+}
+
+// BUG-1451: the focused element left the document (`remove()`, `innerHTML = ''`
+// on an ancestor) — HTML LS §6.6.2 hands focus back to the viewport, so
+// `document.activeElement` becomes `<body>` straight away instead of at the
+// next frame. Called lazily from every reader/writer of focus state.
+function _lumen_focus_drop_if_disconnected() {
+    var nid = _lumen_last_focused_nid;
+    if (nid === null || nid === undefined || nid === -1) return;
+    if (!_lumen_resource_is_connected(nid)) _lumen_focus_drop();
 }
 __lumen_C._lumen_focus_fixup = _lumen_focus_fixup;
 
@@ -1182,9 +1222,12 @@ HTMLElement.prototype.focus = function(options) {
         if (nid === -1) return;
         target = _lumen_make_element(nid);
     }
-    if (!_lumen_is_focusable(nid)) return;
+    if (!_lumen_is_focusable(nid) || !_lumen_resource_is_connected(nid)) return;
     _lumen_request_focus(nid);
     _lumen_focus_update(nid);
+    // The `blur`/`focusout` listeners of the previous element may have removed
+    // the new target from the document (BUG-1451, `focus-within-removal.html`).
+    _lumen_focus_drop_if_disconnected();
     // HTML LS §6.6.3 «scroll into view» step, unless the caller opted out.
     if (!(options && options.preventScroll) && target && typeof target.scrollIntoView === 'function') {
         try { target.scrollIntoView(); } catch (e) {}
