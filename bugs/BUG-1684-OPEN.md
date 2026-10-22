@@ -1,24 +1,33 @@
-# BUG-1684 — `getComputedStyle` для якорного позиционирования: используемые значения вставок, `ident()`, `anchor()` внутри `calc()`
+# BUG-1684 — инкрементальная перераскладка теряет каскадный стиль бокс-less элементов (BUG-1191)
 
 **Статус:** OPEN
-**Заведён:** 2026-10-22 (P3, остаток [BUG-1478](BUG-1478-FIXED.md))
-**Область:** layout/css-parser (`crates/engine/layout/src/selector_query.rs` — вставки и размеры якорного элемента; `style/parse/box_sides.rs` — `ident()`, `anchor()` в `calc()`)
+**Заведён:** 2026-10-22 (Chat, найдено при починке тестов `v8_gap_uashadowslot`, ветка `chat-fix-details-summary`)
+**Область:** layout/js (публикация записей стиля элементов без бокса — BUG-1191 — на инкрементальном пути раскладки, `counters: None`)
 
 ## Симптом
 
-После BUG-1478 `anchor-name`/`position-anchor`/`anchor-scope`/`position-area`/`position-visibility` корректно попадают в `getComputedStyle`. Не работает остальное (прогон WPT `css/css-anchor-position`, 2026-10-22):
+BUG-1191 отдаёт `getComputedStyle()` элементу без бокса (как Chrome), в том числе содержимому
+закрытого `<details>` (`content-visibility: hidden` у слота). При первичной раскладке это работает:
+у `<p>` внутри закрытого `<details>` 361 свойство. После `d.setAttribute('open','')` и
+`d.removeAttribute('open')` то же содержимое отдаёт `getComputedStyle(p).length === 0` — записи
+стиля бокс-less элементов не публикуются инкрементальной перераскладкой.
 
-| тест | подтесты | у нас | ожидается |
-|---|---|---|---|
-| `anchor-getComputedStyle-001.html` | Basic case; Mixed writing modes | `left` = `-210px` / `-60px` | `100px` |
-| `anchor-getComputedStyle-002.html` | фрагментированный containing block (multicol / inline) | `182.48px` / `""` | `25px` / `20px` |
-| `anchor-getComputedStyle-003.html` | absolutize `@try` | `999999px` / `0px` | `100px` / `200px` |
-| `anchor-getComputedStyle-004.html` | `auto` при `position-area` | `80px` | `0px` |
-| `position-area-anchor-getComputedStyle.html` | 4 подтеста | `125px` | `0px` |
-| `anchor-ident-function.html` | `ident("--x" calc(42 * sign(...)))` в `anchor-name`/`anchor-scope`/`position-anchor`; `calc(anchor(--a1 left)*4)` | `none` / `--a1` / `0px` | `--myident42` и т.д. |
-| `position-area-parsing.html` | 1 800 из 2 125 | `style.setProperty` не принимает | значение принято и сериализовано |
-| `anchor-parse-valid.html`, `anchor-size-parse-valid.html`, `property-interpolations.html` | ~1 200 + ~1 800 + ~290 | `anchor()` внутри `calc()` отклонён | принято (GAP-ANCHORCSSOM, [BUG-563](BUG-563-OPEN.md)) |
+Проба (JS в `crates/js/src/dom/tests/v8_gap_uashadowslot.rs`, `runtime(&[("details", &[])])`):
 
-## Как проверить
+```
+closed 361/…/1/false … reclosed 0///false
+```
 
-`css/css-anchor-position/anchor-getComputedStyle-001.html` … `-004`, `position-area-anchor-getComputedStyle.html`, `anchor-ident-function.html` (`tests/wpt/run_report.py --all --root css/css-anchor-position`).
+## Побочный эффект
+
+Тест `dom::tests::v8_gap_uashadowslot::slotted_child_inherits_from_ua_slot` ожидает `e3:-` и проходит
+только благодаря этой дыре; Chrome дал бы `block/hidden`. После починки ожидание теста нужно
+исправить на поведение Chrome.
+
+## Готово, когда
+
+- После цикла open → close у содержимого `<details>` `getComputedStyle(el).length > 0` и значения
+  совпадают с первичной раскладкой (тест на цикл open/close в `v8_gap_uashadowslot.rs`).
+- `slotted_child_inherits_from_ua_slot` ожидает поведение Chrome и проходит.
+- `cargo test -p lumen-js --features v8-backend --lib -- uashadowslot details` и тесты затронутого
+  крейта layout зелёные.
