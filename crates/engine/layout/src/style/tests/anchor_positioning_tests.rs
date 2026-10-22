@@ -815,7 +815,7 @@
         for (given, want) in [
             ("top left", "left top"), ("center left", "left center"), ("top center", "center top"),
             ("left span-all", "left"), ("span-all top", "top"), ("center center", "center"),
-            ("block-start inline-end", "start end"), ("block-end block-end", "end"),
+            ("block-start inline-end", "start end"), ("block-end inline-end", "end"),
             ("inline-start center", "center start"), ("block-start span-all", "block-start"),
             ("span-self-block-end self-inline-start", "span-self-end self-start"),
             ("start end", "start end"), ("start start", "start"), ("start span-all", "block-start"),
