@@ -68,6 +68,7 @@ mod grid_auto_cols;
 mod grid_row_subgrid;
 mod grid_lanes;
 pub use grid::resolve_auto_fill_fit_count;
+pub(crate) use grid::add_area_line_names;
 
 mod baseline;
 use baseline::BaselineSide;

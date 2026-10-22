@@ -358,10 +358,11 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
     {
         let subgrid = |t: &[crate::style::GridTrackSize]| matches!(t, [crate::style::GridTrackSize::Subgrid]);
         let axes = [
-            ("grid-template-columns", subgrid(&s.grid_template_columns), &u.cols, &u.col_names),
-            ("grid-template-rows", subgrid(&s.grid_template_rows), &u.rows, &u.row_names),
+            ("grid-template-columns", subgrid(&s.grid_template_columns), &u.cols, &u.col_names, true),
+            ("grid-template-rows", subgrid(&s.grid_template_rows), &u.rows, &u.row_names, false),
         ];
-        for (name, is_subgrid, sizes, names) in axes {
+        for (name, is_subgrid, sizes, names, col) in axes {
+            let names = &crate::grid_computed::without_area_line_names(names, &s.grid_template_areas, col);
             set_used(
                 m,
                 name,

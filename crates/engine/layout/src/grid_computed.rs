@@ -152,6 +152,24 @@ pub(crate) fn resolved_track_list(sizes: &[f32], names: &[Vec<String>], zoom: f3
     out.join(" ")
 }
 
+/// `names` (the line names a grid axis was laid out with) less the implicit `<area>-start` /
+/// `<area>-end` names the container's own `grid-template-areas` added to them: CSS Grid L1 §7.3.2 —
+/// implicitly-assigned line names do not appear in the value of `grid-template-rows`/`-columns`,
+/// the resolved value (§7.2.6) included. A name also written explicitly keeps its written copy.
+pub(crate) fn without_area_line_names(names: &[Vec<String>], areas: &[Vec<String>], col: bool) -> Vec<Vec<String>> {
+    let mut implicit = Vec::new();
+    crate::box_tree::add_area_line_names(&mut implicit, areas, col);
+    let mut out = names.to_vec();
+    for (line, added) in out.iter_mut().zip(&implicit) {
+        for name in added {
+            if let Some(i) = line.iter().rposition(|n| n == name) {
+                line.remove(i);
+            }
+        }
+    }
+    out
+}
+
 /// `subgrid [a] [] [b c]` — every line is listed, an unnamed one as `[]`.
 fn subgrid_list<'a>(lines: impl Iterator<Item = &'a [String]>) -> String {
     std::iter::once("subgrid".to_owned()).chain(lines.map(|n| format!("[{}]", n.join(" ")))).collect::<Vec<_>>().join(" ")

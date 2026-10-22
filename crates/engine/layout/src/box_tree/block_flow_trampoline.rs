@@ -171,6 +171,20 @@ pub(super) fn run(
     if !line_clamp_flow::wants_balance_pass(b) {
         return run_pass(b, init, measurer, viewport, hp);
     }
+    run_balanced(b, init, measurer, viewport, hp)
+}
+
+/// `run` of a `line-clamp` container with balanced runs inside. Out of line so
+/// the pristine copy it keeps stays off `run`'s frame, which every table/flex/
+/// grid ↔ block-flow nesting level pays for.
+#[inline(never)]
+fn run_balanced(
+    b: &mut LayoutBox,
+    init: Box<BlockFlowInit>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) -> FloatContext {
     // `line-clamp` + `text-wrap: balance` inside: the visible lines of each balanced run are
     // known only after a layout without balancing, so the container is laid out twice.
     let (pristine, pristine_init) = (b.clone(), init.clone());
@@ -190,14 +204,11 @@ fn run_pass(
     viewport: Size,
     hp: &dyn HyphenationProvider,
 ) -> FloatContext {
-    let mut current = Frame {
-        b: take_box(b),
-        init,
-        next_child_idx: 0,
-        pending_is_block: false,
-        pending_collapsed_mt: 0.0,
-    };
-    let mut stack: Vec<Frame> = Vec::new();
+    // Frames live on the heap (`Box<Frame>`): `run_pass` sits on the native
+    // stack once per table/flex/grid <-> block-flow nesting level, so a frame
+    // held by value (a whole `LayoutBox`) would be paid on every such level.
+    let mut current = enter(b, init);
+    let mut stack: Vec<Box<Frame>> = Vec::new();
     // BUG-1026: shared for the whole `run()` pass, not per-frame — a deep
     // single-child chain is exactly one first-child chain spanning every
     // frame this loop pushes, so the memo only pays off if levels share it.
@@ -208,17 +219,9 @@ fn run_pass(
         if current.next_child_idx >= current.b.children.len() {
             finish_frame(&mut current, measurer, viewport, hp, &mut bottom_cache);
             match stack.pop() {
-                None => {
-                    *b = current.b;
-                    return current.init.fc;
-                }
+                None => return leave(b, current),
                 Some(mut parent) => {
-                    let idx = parent.next_child_idx;
-                    if current.init.shares_floats {
-                        parent.init.fc.absorb_vertical(&current.init.fc, 0.0, 0.0);
-                    }
-                    parent.b.children[idx] = current.b;
-                    post_child_bookkeeping(&mut parent, idx, viewport, &mut bottom_cache);
+                    return_to_parent(&mut parent, current, viewport, &mut bottom_cache);
                     parent.next_child_idx += 1;
                     current = parent;
                 }
@@ -229,6 +232,10 @@ fn run_pass(
         let i = current.next_child_idx;
         match step_child(&mut current, i, measurer, viewport, hp, &mut top_cache, &mut bottom_cache) {
             StepOutcome::Advance => {
+                current.next_child_idx += 1;
+            }
+            StepOutcome::Foreign(outcome) => {
+                run_foreign_child(&mut current, i, outcome, measurer, viewport, hp, &mut bottom_cache);
                 current.next_child_idx += 1;
             }
             StepOutcome::Descend(child_init) if line_clamp_flow::wants_balance_pass(&current.b.children[i]) => {
@@ -243,19 +250,41 @@ fn run_pass(
                 current.next_child_idx += 1;
             }
             StepOutcome::Descend(child_init) => {
-                let child_box = take_box(&mut current.b.children[i]);
-                let child_frame = Frame {
-                    b: child_box,
-                    init: child_init,
-                    next_child_idx: 0,
-                    pending_is_block: false,
-                    pending_collapsed_mt: 0.0,
-                };
+                let child_frame = enter(&mut current.b.children[i], child_init);
                 stack.push(current);
                 current = child_frame;
             }
         }
     }
+}
+
+/// A heap frame owning `slot`'s box (see `run_pass`). Out of line, like
+/// [`leave`] and [`return_to_parent`]: the `LayoutBox` moves they make stay off
+/// `run_pass`'s own frame.
+#[inline(never)]
+fn enter(slot: &mut LayoutBox, init: Box<BlockFlowInit>) -> Box<Frame> {
+    Box::new(Frame { b: take_box(slot), init, next_child_idx: 0, pending_is_block: false, pending_collapsed_mt: 0.0 })
+}
+
+/// Puts the root frame's box back into `b` and returns its float context.
+#[inline(never)]
+fn leave(b: &mut LayoutBox, frame: Box<Frame>) -> FloatContext {
+    let Frame { b: laid_out, init, .. } = *frame;
+    *b = laid_out;
+    init.fc
+}
+
+/// Puts a finished child frame's box back into its parent's slot and does the
+/// parent's post-child bookkeeping.
+#[inline(never)]
+fn return_to_parent(parent: &mut Frame, child: Box<Frame>, viewport: Size, bottom_cache: &mut MarginCollapseCache) {
+    let idx = parent.next_child_idx;
+    let Frame { b: laid_out, init, .. } = *child;
+    if init.shares_floats {
+        parent.init.fc.absorb_vertical(&init.fc, 0.0, 0.0);
+    }
+    parent.b.children[idx] = laid_out;
+    post_child_bookkeeping(parent, idx, viewport, bottom_cache);
 }
 
 enum StepOutcome {
@@ -266,6 +295,42 @@ enum StepOutcome {
     /// This child is itself a plain block-flow box with its own children to
     /// process — push the current frame and continue processing this one.
     Descend(Box<BlockFlowInit>),
+    /// This child is a flex/grid/table/multicol/vertical container: its own
+    /// trampoline runs from `run_pass` (`run_foreign_child`), after
+    /// `step_child`'s frame is gone — see `run_foreign_child`.
+    Foreign(DispatchOutcome),
+}
+
+/// Drives a normal-flow child whose dispatch resolved to another kind's
+/// trampoline, then does the post-child bookkeeping. Out of line and called
+/// from `run_pass`, not from `step_child`: a kind transition (block → table →
+/// block → …, a `<td>` holding a `<table>`) still costs native frames per
+/// level, and `step_child`'s frame is by far the largest of them — keeping it
+/// off that chain is what lets `tests::table_trampoline`'s 500-level chain fit
+/// a test thread's 2 MiB stack.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn run_foreign_child(
+    frame: &mut Frame,
+    i: usize,
+    outcome: DispatchOutcome,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    bottom_cache: &mut MarginCollapseCache,
+) {
+    let child = &mut frame.b.children[i];
+    match outcome {
+        DispatchOutcome::NeedsFlexLoop(ci) => super::flex_trampoline::run(child, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsGridLoop(ci) => super::grid_trampoline::run(child, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsTableLoop(ci) => super::table_trampoline::run(child, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsMulticolLoop(ci) => super::multicol_trampoline::run(child, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsVerticalLoop(ci) => super::vertical_trampoline::run(child, ci, measurer, viewport, hp),
+        DispatchOutcome::Done | DispatchOutcome::NeedsBlockFlowLoop(_) => {
+            unreachable!("step_child handles Done/NeedsBlockFlowLoop itself")
+        }
+    }
+    post_child_bookkeeping(frame, i, viewport, bottom_cache);
 }
 
 /// Handles exactly one child of `frame.b` at `i` — abs-positioned deferral,
@@ -276,6 +341,7 @@ enum StepOutcome {
 /// recursive call, which now either finishes synchronously (`Advance`, doing
 /// the same post-child bookkeeping the old loop did right after the call) or
 /// hands back the child's `BlockFlowInit` for `run` to push and descend into.
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn step_child(
     frame: &mut Frame,
@@ -619,32 +685,16 @@ fn step_child(
         // drives its own chain synchronously instead, exactly mirroring how
         // `flex_trampoline::step_item` calls back into `run` above for a
         // `NeedsBlockFlowLoop` child.
-        DispatchOutcome::NeedsFlexLoop(child_init) => {
-            super::flex_trampoline::run(child, child_init, measurer, viewport, hp);
-            post_child_bookkeeping(frame, i, viewport, bottom_cache);
-            StepOutcome::Advance
-        }
+        outcome @ DispatchOutcome::NeedsFlexLoop(_) => StepOutcome::Foreign(outcome),
         // LAYOUT-2 срез 4: a block-flow normal-flow child that is itself a
         // grid container — same shape as the flex arm above.
-        DispatchOutcome::NeedsGridLoop(child_init) => {
-            super::grid_trampoline::run(child, child_init, measurer, viewport, hp);
-            post_child_bookkeeping(frame, i, viewport, bottom_cache);
-            StepOutcome::Advance
-        }
+        outcome @ DispatchOutcome::NeedsGridLoop(_) => StepOutcome::Foreign(outcome),
         // LAYOUT-2 срез 6: a block-flow normal-flow child that is itself a
         // table — same shape as the flex/grid arms above.
-        DispatchOutcome::NeedsTableLoop(child_init) => {
-            super::table_trampoline::run(child, child_init, measurer, viewport, hp);
-            post_child_bookkeeping(frame, i, viewport, bottom_cache);
-            StepOutcome::Advance
-        }
+        outcome @ DispatchOutcome::NeedsTableLoop(_) => StepOutcome::Foreign(outcome),
         // LAYOUT-2 срез 7: a block-flow normal-flow child that is itself a
         // multicol container — same shape as the flex/grid/table arms above.
-        DispatchOutcome::NeedsMulticolLoop(child_init) => {
-            super::multicol_trampoline::run(child, child_init, measurer, viewport, hp);
-            post_child_bookkeeping(frame, i, viewport, bottom_cache);
-            StepOutcome::Advance
-        }
+        outcome @ DispatchOutcome::NeedsMulticolLoop(_) => StepOutcome::Foreign(outcome),
         // LAYOUT-2 срез 8: a block-flow normal-flow child that is itself a
         // vertical-writing-mode container — same shape as the flex/grid/
         // table/multicol arms above.
@@ -654,9 +704,7 @@ fn step_child(
             child_init.collapses_start = false;
             child_init.collapses_end = false;
             child_init.encloses_floats = true;
-            super::vertical_trampoline::run(child, child_init, measurer, viewport, hp);
-            post_child_bookkeeping(frame, i, viewport, bottom_cache);
-            StepOutcome::Advance
+            StepOutcome::Foreign(DispatchOutcome::NeedsVerticalLoop(child_init))
         }
     }
 }

@@ -157,7 +157,7 @@ fn axis_line_names(
 /// CSS Grid L1 §7.3 — the implicit `<area>-start` / `<area>-end` lines of `grid-template-areas`
 /// recorded among the line names of one axis, so a subgrid inherits them with the parent lines it
 /// spans (CSS Grid L2 §9): an item of the subgrid placed by `a` finds the parent's area edge.
-pub(super) fn add_area_line_names(names: &mut Vec<Vec<String>>, areas: &[Vec<String>], col: bool) {
+pub(crate) fn add_area_line_names(names: &mut Vec<Vec<String>>, areas: &[Vec<String>], col: bool) {
     let mut seen: Vec<&str> = Vec::new();
     for cell in areas.iter().flatten() {
         if cell == "." || seen.contains(&cell.as_str()) {
