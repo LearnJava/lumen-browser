@@ -1,6 +1,6 @@
 # BUG-1453 — В таблице стилей теневого дерева селектор `:host <потомок>` (`:host div.red`, `:host > div`, `:host .x`, `:host(.x) div`) не применяется; `:host {…}` применяется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** layout/css-parser (`crates/engine/layout/src/style/matching/` — `:host` в составных селекторах теневого дерева)
 
@@ -32,3 +32,7 @@ WPT-RUN-14 срез 20: `selectors/featureless-001.html` … `featureless-005.ht
 ## Как проверить
 
 Таблица выше; `css/selectors/featureless-001.html`.
+
+## Исправление
+
+Причина: у `ShadowRoot` нет `parent`, поэтому обход предков в `matches_chain` (`style/matching.rs`) никогда не доходил до хоста, а `:host` ещё и включался только для подлежащего (`SHADOW_HOST_SCOPE` ставился лишь при каскаде самого хоста). Теперь `cascade.rs` на время матчинга листа внутреннего узла ставит `SHADOW_HOST_SCOPE` = охватывающий хост, а `Descendant`/`Child` при упоре в `ShadowRoot` переходят к хосту (`scoped_shadow_host`). Вне такого скоупа поведение прежнее (`:host` в документе — no-op; светлые дети хоста и документные правила не затронуты). Тесты: `style/tests/shadow_dom_selectors.rs` (`host_descendant_*`, `host_child_*`, `host_function_with_descendant_*`).
