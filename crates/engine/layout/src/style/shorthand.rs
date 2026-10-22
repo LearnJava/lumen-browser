@@ -502,15 +502,24 @@ pub(in crate::style) fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val
 pub(in crate::style) fn apply_flex_flow_shorthand(style: &mut ComputedStyle, val: &str) {
     style.flex_direction = FlexDirection::Row;
     style.flex_wrap = FlexWrap::Nowrap;
+    style.flex_wrap_balance = false;
 
     let mut dir: Option<FlexDirection> = None;
     let mut wrap: Option<FlexWrap> = None;
+    let mut balance = false;
     for tok in val.split_whitespace() {
         if let Some(d) = FlexDirection::parse(tok) {
             if dir.is_some() {
                 return;
             }
             dir = Some(d);
+            continue;
+        }
+        if tok.eq_ignore_ascii_case("balance") {
+            if balance {
+                return;
+            }
+            balance = true;
             continue;
         }
         if let Some(w) = FlexWrap::parse(tok) {
@@ -522,12 +531,18 @@ pub(in crate::style) fn apply_flex_flow_shorthand(style: &mut ComputedStyle, val
         }
         return;
     }
+    if balance && wrap == Some(FlexWrap::Nowrap) {
+        return;
+    }
     if let Some(d) = dir {
         style.flex_direction = d;
     }
     if let Some(w) = wrap {
         style.flex_wrap = w;
+    } else if balance {
+        style.flex_wrap = FlexWrap::Wrap;
     }
+    style.flex_wrap_balance = balance;
 }
 
 /// CSS Flexbox L1 §7 — `flex` shorthand.

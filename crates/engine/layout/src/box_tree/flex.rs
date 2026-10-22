@@ -546,9 +546,20 @@ pub(crate) fn build_flex_init(
     let mut probe_cross: Vec<f32> =
         if is_column { vec![0.0; item_idxs.len()] } else { Vec::new() };
     if is_column {
+        // A balanced column is measured against one line's share of the container's width, not
+        // all of it (Flexbox L2 §9.3: the available size for measuring is smaller).
+        let lines_min = s.flex_line_count.max(1);
+        let measure_w = if is_wrap && s.flex_wrap_balance && lines_min > 1 {
+            ((content_width - cross_gap * (lines_min - 1) as f32) / lines_min as f32).max(0.0)
+        } else {
+            content_width
+        };
         for (k, &i) in item_idxs.iter().enumerate() {
+            // Only a content-sized (auto-width) item is measured in the share; a specified or
+            // percentage width still resolves against the whole container.
+            let w = if children[i].style.width.is_none() { measure_w } else { content_width };
             probe_cross[k] = column_item_avail_cross(
-                &children[i], s, content_width, is_wrap, measurer, viewport,
+                &children[i], s, w, is_wrap, measurer, viewport,
             );
         }
     }
@@ -846,25 +857,46 @@ pub(crate) fn build_flex_init(
     // CSS Flexbox L1 §9.3: lines are cut against the container's main size. For a
     // column container the main size is its height, so wrapping needs a definite one
     // (`main_definite`); an auto-height column is a single line (it grows to fit).
-    let lines: Vec<Vec<usize>> = if is_wrap && main_definite.is_some() && container_main > 0.0 {
-        let mut lines: Vec<Vec<usize>> = Vec::new();
-        let mut cur_line: Vec<usize> = Vec::new();
-        let mut cur_main = 0.0_f32;
-        for (k, &item_main) in all_hyp.iter().enumerate() {
-            let gap = if cur_line.is_empty() { 0.0 } else { item_gap };
-            if !cur_line.is_empty() && cur_main + gap + item_main > container_main {
-                lines.push(cur_line);
-                cur_line = vec![k];
-                cur_main = item_main;
-            } else {
-                cur_line.push(k);
-                cur_main += gap + item_main;
+    // An auto-height balanced column (Flexbox L2 §9.3): the main size is indefinite, so its
+    // available size is the sum of everything and `flex-line-count` alone cuts the lines.
+    let balance_indefinite = is_wrap && s.flex_wrap_balance && main_definite.is_none();
+    let lines: Vec<Vec<usize>> = if is_wrap
+        && ((main_definite.is_some() && container_main > 0.0) || balance_indefinite)
+    {
+        // `flex-wrap: balance` (Flexbox L2 §9.3) counts a negative outer size as zero here.
+        let balance = s.flex_wrap_balance;
+        let break_main: Vec<f32> =
+            all_hyp.iter().map(|&v| if balance { v.max(0.0) } else { v }).collect();
+        let avail_main = if balance_indefinite {
+            break_main.iter().sum::<f32>() + item_gap * break_main.len().saturating_sub(1) as f32
+        } else {
+            container_main
+        };
+        let balanced = if balance {
+            super::flex_balance::balanced_lines(&break_main, item_gap, avail_main, s.flex_line_count)
+        } else {
+            None
+        };
+        balanced.unwrap_or_else(|| {
+            let mut lines: Vec<Vec<usize>> = Vec::new();
+            let mut cur_line: Vec<usize> = Vec::new();
+            let mut cur_main = 0.0_f32;
+            for (k, &item_main) in break_main.iter().enumerate() {
+                let gap = if cur_line.is_empty() { 0.0 } else { item_gap };
+                if !cur_line.is_empty() && cur_main + gap + item_main > avail_main {
+                    lines.push(cur_line);
+                    cur_line = vec![k];
+                    cur_main = item_main;
+                } else {
+                    cur_line.push(k);
+                    cur_main += gap + item_main;
+                }
             }
-        }
-        if !cur_line.is_empty() {
-            lines.push(cur_line);
-        }
-        lines
+            if !cur_line.is_empty() {
+                lines.push(cur_line);
+            }
+            lines
+        })
     } else {
         vec![(0..item_idxs.len()).collect()]
     };

@@ -2058,10 +2058,12 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         FlexDirection::Column => "column",
         FlexDirection::ColumnReverse => "column-reverse",
     };
-    let fw = match style.flex_wrap {
-        FlexWrap::Nowrap => "nowrap",
-        FlexWrap::Wrap => "wrap",
-        FlexWrap::WrapReverse => "wrap-reverse",
+    let fw = match (style.flex_wrap, style.flex_wrap_balance) {
+        (FlexWrap::Nowrap, _) => "nowrap",
+        (FlexWrap::Wrap, false) => "wrap",
+        (FlexWrap::Wrap, true) => "balance",
+        (FlexWrap::WrapReverse, false) => "wrap-reverse",
+        (FlexWrap::WrapReverse, true) => "wrap-reverse balance",
     };
     let fb = match &style.flex_basis {
         FlexBasis::Auto => "auto".to_string(),
@@ -2070,6 +2072,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     };
     m.insert("flex-direction".into(), fd.into());
     m.insert("flex-wrap".into(), fw.into());
+    m.insert("flex-line-count".into(), style.flex_line_count.to_string());
     m.insert("flex-flow".into(), format!("{fd} {fw}"));
     m.insert("flex-grow".into(), style.flex_grow.to_string());
     m.insert("flex-shrink".into(), style.flex_shrink.to_string());

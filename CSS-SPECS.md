@@ -314,7 +314,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `justify-content` | ✅ | |
 | `justify-items` / `justify-self` | ✅ | grid cells ✅; block-level `justify-self` (start/center/end, box_tree.rs auto-margin path) ✅ 2026-07-05; container `justify-items` default for block children ✅ 2026-07-18 |
 | `gap` / `row-gap` / `column-gap` | ✅ | |
-| `flex-wrap: balance` / `flex-line-count` | ⬜ | CSS Flexbox L2 `#algo-balance`: `FlexWrap` knows only nowrap/wrap/wrap-reverse (`style/values/flexgrid.rs`); 40 id `css/css-flexbox/balance/*` (WPT-RUN-14 срез 1, [BUG-1259](bugs/BUG-1259-OPEN.md)) |
+| `flex-wrap: balance` / `flex-line-count` | ✅ | CSS Flexbox L2 `#algo-balance`: `flex-wrap: nowrap \| [wrap \| wrap-reverse] \|\| balance` (`FlexWrap::parse_balance`, флаг `flex_wrap_balance`), `flex-line-count` (integer ≥ 1, initial 1); раскладка — `box_tree/flex_balance.rs` (минимум суммы квадратов остатка, приоритет первой строки); WPT `css/css-flexbox/balance/*`: 37 из 46 reftest идентичны (было 6), остаток — [BUG-1259](bugs/BUG-1259-FIXED.md) |
 
 ### [T0] Transforms
 

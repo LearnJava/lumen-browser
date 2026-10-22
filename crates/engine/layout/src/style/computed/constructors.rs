@@ -279,6 +279,8 @@ impl ComputedStyle {
             image_rendering: ImageRendering::Auto,
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Nowrap,
+            flex_wrap_balance: false,
+            flex_line_count: 1,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
@@ -722,6 +724,8 @@ impl ComputedStyle {
             // CSS Flexbox L1 §5 — flex-direction / flex-wrap не наследуются.
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Nowrap,
+            flex_wrap_balance: false,
+            flex_line_count: 1,
             // CSS Flexbox L1 §7 — flex-grow / flex-shrink / flex-basis не наследуются.
             flex_grow: 0.0,
             flex_shrink: 1.0,

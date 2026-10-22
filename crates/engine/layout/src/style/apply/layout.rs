@@ -152,9 +152,18 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "flex-wrap" => {
-            // CSS Flexbox L1 §5.2: nowrap | wrap | wrap-reverse.
-            if let Some(v) = FlexWrap::parse(val) {
+            // CSS Flexbox L1 §5.2 + L2: nowrap | [ wrap | wrap-reverse ] || balance.
+            if let Some((v, balance)) = FlexWrap::parse_balance(val) {
                 style.flex_wrap = v;
+                style.flex_wrap_balance = balance;
+            }
+        }
+        "flex-line-count" => {
+            // CSS Flexbox L2: <integer [1,∞]>.
+            if let Ok(n) = val.trim().parse::<u32>()
+                && n >= 1
+            {
+                style.flex_line_count = n;
             }
         }
         "flex-flow" => {

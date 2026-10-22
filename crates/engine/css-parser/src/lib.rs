@@ -205,6 +205,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "flex-direction",
     "flex-flow",
     "flex-grow",
+    "flex-line-count",
     "flex-shrink",
     "flex-wrap",
     "float",

@@ -74,6 +74,7 @@ mod baseline;
 use baseline::BaselineSide;
 mod flex;
 use flex::UsedSizeOverride;
+mod flex_balance;
 
 mod multicol_abspos;
 mod multicol_break;

@@ -1669,6 +1669,7 @@ pub(crate) fn compute_style_shareable(
             (true, true) => FlexDirection::ColumnReverse,
         };
         style.flex_wrap = FlexWrap::Nowrap;
+        style.flex_wrap_balance = false;
         style.justify_content = match style.box_pack {
             WebkitBoxPack::Start => AlignValue::Start,
             WebkitBoxPack::Center => AlignValue::Center,
