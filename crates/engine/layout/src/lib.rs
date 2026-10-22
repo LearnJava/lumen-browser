@@ -2257,6 +2257,9 @@ mod animation_gradient_quirks;
 #[cfg(test)]
 #[path = "tests/table_grid_presentational.rs"]
 mod table_grid_presentational;
+#[cfg(test)]
+#[path = "tests/grid_layout.rs"]
+mod grid_layout;
 
 #[cfg(test)]
 #[path = "tests/layout_generation_misc.rs"]
