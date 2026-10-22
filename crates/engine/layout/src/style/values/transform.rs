@@ -34,6 +34,14 @@ pub enum ShapeValue {
     ClosestSide,
     /// `farthest-side` — расстояние от центра до дальней стороны reference box.
     FarthestSide,
+    /// `px + pct% · basis` — результат `calc()`-свёртки, нужен `rect()`/`xywh()`:
+    /// отступ от дальней стороны `100% − x − w` смешивает px и проценты.
+    Lin {
+        /// Абсолютная часть, px.
+        px: f32,
+        /// Процентная часть базиса (0–100).
+        pct: f32,
+    },
 }
 
 impl ShapeValue {
@@ -43,6 +51,7 @@ impl ShapeValue {
         match self {
             Self::Px(v) => v,
             Self::Pct(p) => p / 100.0 * basis,
+            Self::Lin { px, pct } => px + pct / 100.0 * basis,
             Self::ClosestSide | Self::FarthestSide => 0.0,
         }
     }

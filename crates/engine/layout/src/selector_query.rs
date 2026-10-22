@@ -3701,6 +3701,12 @@ mod tests {
         assert_eq!(computed_of("div { clip-path: ellipse(at 50% 50%); }", "clip-path"), "ellipse(at 50% 50%)");
         assert_eq!(computed_of("div { clip-path: inset(5px 5px 5px 5px); }", "clip-path"), "inset(5px)");
         assert_eq!(computed_of("div { clip-path: inset(5px 10px round 4px); }", "clip-path"), "inset(5px 10px round 4px)");
+        // `xywh()`/`rect()` сводятся к `inset()`; смешанные px и % — `calc()`.
+        assert_eq!(
+            computed_of("div { clip-path: xywh(10px 20px 50% 30px); }", "clip-path"),
+            "inset(20px calc(50% - 10px) calc(100% - 50px) 10px)"
+        );
+        assert_eq!(computed_of("div { clip-path: rect(auto auto 50% 10%); }", "clip-path"), "inset(0px 0px 50% 10%)");
         assert_eq!(
             computed_of("div { clip-path: polygon(0 0, 100% 0, 50% 100%); }", "clip-path"),
             "polygon(0px 0px, 100% 0px, 50% 100%)"

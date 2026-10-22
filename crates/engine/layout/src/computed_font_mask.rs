@@ -128,6 +128,12 @@ fn shape_value_to_css(v: ShapeValue) -> String {
         ShapeValue::Pct(p) => format!("{p}%"),
         ShapeValue::ClosestSide => "closest-side".into(),
         ShapeValue::FarthestSide => "farthest-side".into(),
+        ShapeValue::Lin { px, pct: 0.0 } => px_str(px),
+        ShapeValue::Lin { px, pct } => {
+            let pct = if pct.fract() == 0.0 { format!("{}", pct as i64) } else { format!("{pct}") };
+            let sign = if px < 0.0 { '-' } else { '+' };
+            format!("calc({pct}% {sign} {})", px_str(px.abs()))
+        }
     }
 }
 

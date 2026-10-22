@@ -678,6 +678,21 @@ use lumen_dom::NodeId;
         assert_eq!(cr, Rect::new(20.0, 10.0, 160.0, 80.0));
     }
 
+    /// `xywh(10px 20px 50% 30px)` на боксе 200×100: x 10..110, y 20..50.
+    #[test]
+    fn clip_path_xywh_mixed_units_resolves_against_box() {
+        use super::clip_path_to_rect;
+        use lumen_layout::{ClipPath, ShapeValue};
+        let r = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let clip = ClipPath::Inset(vec![
+            ShapeValue::Px(20.0),
+            ShapeValue::Lin { px: -10.0, pct: 50.0 },
+            ShapeValue::Lin { px: -50.0, pct: 100.0 },
+            ShapeValue::Px(10.0),
+        ]);
+        assert_eq!(clip_path_to_rect(&clip, r), Rect::new(10.0, 20.0, 100.0, 30.0));
+    }
+
     #[test]
     fn clip_path_circle_default_center() {
         use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};

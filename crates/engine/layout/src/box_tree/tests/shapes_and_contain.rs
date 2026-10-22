@@ -173,6 +173,31 @@ fn float_context_inset_rounded_corner() {
     assert!((left_at(&fc, 20.0) - 100.0).abs() < 0.01);
 }
 
+// ── CSS Shapes L1 — shape-outside rect() / xywh() ─────────────────────────
+
+#[test]
+fn float_context_xywh_and_rect_match_the_equivalent_inset() {
+    // All three describe x ∈ [20, 90], y ∈ [10, 90] of the 100×100 float.
+    for v in ["xywh(20px 10px 70px 80px)", "rect(10px 90px 90px 20px)"] {
+        let fc = shaped(v, true, 0.0);
+        assert!((left_at(&fc, 10.0) - 90.0).abs() < 0.01, "{v}");
+        assert!((left_at(&fc, 50.0) - 90.0).abs() < 0.01, "{v}");
+        assert!((left_at(&fc, 5.0) - 0.0).abs() < 0.01, "{v}");
+    }
+}
+
+#[test]
+fn float_context_rect_auto_and_xywh_round() {
+    // `auto` right/bottom/left/top edges are the box edges; the rect spans y ∈ [30, 100].
+    let fc = shaped("rect(30px auto auto auto)", true, 0.0);
+    assert!((left_at(&fc, 60.0) - 100.0).abs() < 0.01);
+    assert!((left_at(&fc, 10.0) - 0.0).abs() < 0.01);
+    // Rounded: the top edge recedes by the radius, the flat band reaches the full width.
+    let fc = shaped("xywh(0px 0px 100% 100% round 20px)", true, 0.0);
+    assert!((left_at(&fc, 50.0) - 100.0).abs() < 0.01);
+    assert!((left_at(&fc, 0.0) - 80.0).abs() < 0.01);
+}
+
 // ── CSS Shapes L1 §6.3 — shape-margin ─────────────────────────────────────
 
 #[test]
