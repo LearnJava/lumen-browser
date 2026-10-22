@@ -14,6 +14,7 @@
 use crate::*;
 
 pub(crate) mod about_to_wait;
+pub(crate) mod automation_cmds;
 pub(crate) mod resumed;
 pub(crate) mod user_event;
 pub(crate) mod window_event;

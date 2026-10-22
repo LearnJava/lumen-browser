@@ -321,6 +321,7 @@ mod v8_bug1391_sizing_cssom;
 mod v8_bug1401_contain_cssom;
 mod v8_bug1402_multicol_cssom;
 mod v8_bug1459_style_important;
+mod v8_bug1476_display_canonical;
 mod compat_css_alias;
 #[cfg(feature = "v8-backend")]
 mod overflow_overlay;

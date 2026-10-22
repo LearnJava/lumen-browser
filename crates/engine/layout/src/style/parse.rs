@@ -5,6 +5,7 @@ pub mod color;
 pub mod color_serialize;
 pub mod content;
 pub mod counters;
+pub(in crate::style) mod display;
 pub mod font;
 pub mod font_size;
 pub mod image;

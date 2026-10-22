@@ -25,7 +25,6 @@ use crate::style::{
     ContainFlags,
     ContainerType,
     ContentVisibility,
-    Display,
     EmptyCells,
     FieldSizing,
     FlexBasis,
@@ -77,6 +76,7 @@ use crate::style::parse::box_sides::{
     split_box_tokens,
 };
 use crate::style::parse::color::parse_css_color_keep_srgb_form;
+use crate::style::parse::display::parse_display;
 use crate::style::values::length::split_top_level_ws;
 use crate::style::values::misc::RuleInsetProp;
 use crate::style::shorthand::{
@@ -107,60 +107,14 @@ pub(in crate::style) fn apply_decl_layout(
 ) -> bool {
     match prop {
         "display" => {
-            // CSS Grid L3 §2: `grid-lanes` / `inline-grid-lanes` — не отдельные варианты `Display`,
-            // контейнер остаётся `Grid`/`InlineGrid`, а `grid_lanes.enabled` переключает раскладку.
-            let mut valid = true;
-            // Двухсловная форма (`<display-outside> <display-inside>`) — только с `grid-lanes`
-            // внутри; остальные многословные значения — BUG-1476.
-            let val = match val.split_ascii_whitespace().collect::<Vec<_>>()[..] {
-                ["inline", "grid-lanes"] | ["grid-lanes", "inline"] => "inline-grid-lanes",
-                ["block", "grid-lanes"] | ["grid-lanes", "block"] => "grid-lanes",
-                _ => val,
-            };
-            let lanes = matches!(val, "grid-lanes" | "inline-grid-lanes");
-            style.display = match val {
-                "grid-lanes" => Display::Grid,
-                "inline-grid-lanes" => Display::InlineGrid,
-                "block" => Display::Block,
-                "inline" => Display::Inline,
-                "none" => Display::None,
-                "flex" => Display::Flex,
-                "inline-flex" => Display::InlineFlex,
-                "grid" => Display::Grid,
-                "inline-grid" => Display::InlineGrid,
-                "inline-block" => Display::InlineBlock,
-                "flow-root" => Display::FlowRoot,
-                "contents" => Display::Contents,
-                "table" => Display::Table,
-                "inline-table" => Display::InlineTable,
-                "table-row-group" => Display::TableRowGroup,
-                "table-header-group" => Display::TableHeaderGroup,
-                "table-footer-group" => Display::TableFooterGroup,
-                "table-row" => Display::TableRow,
-                "table-column-group" => Display::TableColumnGroup,
-                "table-column" => Display::TableColumn,
-                "table-cell" => Display::TableCell,
-                "table-caption" => Display::TableCaption,
-                "list-item" => Display::ListItem,
-                // WHATWG Compat §2.1 — legacy `-webkit-box`/`-webkit-inline-box`
-                // keep their own computed-value identity (BUG-505 срез 5,
-                // `webkit_box_computed_display`, `selector_query.rs`);
-                // `-webkit-flex`/`-webkit-inline-flex` are plain compat
-                // aliases for the standard `flex`/`inline-flex` and get no
-                // such quirk (confirmed by `webkit-box-computed.html`'s own
-                // `-webkit-flex`/`-webkit-inline-flex` cases).
-                "-webkit-box" => Display::WebkitBox,
-                "-webkit-inline-box" => Display::WebkitInlineBox,
-                "-webkit-flex" => Display::Flex,
-                "-webkit-inline-flex" => Display::InlineFlex,
-                _ => {
-                    valid = false;
-                    style.display
-                }
-            };
-            // Любое распознанное значение `display` перезаписывает прежний `grid-lanes`.
-            if valid {
-                style.grid_lanes.enabled = lanes;
+            // CSS Display 3 §2: многословные формы, `ruby`/`math`/`run-in`/`grid-lanes` — `parse_display`.
+            // `grid-lanes` остаётся `Grid`/`InlineGrid`, раскладку переключает `grid_lanes.enabled`.
+            // Недопустимое значение оставляет прежний `display`.
+            if let Some(d) = parse_display(val) {
+                style.display = d.display;
+                style.display_form = d.form.map(|f| (d.display, f));
+                // Любое распознанное значение `display` перезаписывает прежний `grid-lanes`.
+                style.grid_lanes.enabled = d.lanes;
             }
         }
         "flow-tolerance" => {
