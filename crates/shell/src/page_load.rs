@@ -620,7 +620,7 @@ impl Lumen {
                 // reload'а без окна о фреймах не знал вовсе и оставлял хэндлы
                 // ПРЕДЫДУЩЕГО документа живыми). Строго до записи списка: она
                 // вклеивает в него содержимое фреймов.
-                self.frames = page.frames;
+                frame_dynamic_load::release_frame_handles(std::mem::replace(&mut self.frames, page.frames));
                 self.frame_env = page.frame_env;
                 // FRAME-4 срез 3: см. тот же сброс в `apply_loaded_page`.
                 frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
@@ -1705,8 +1705,9 @@ impl Lumen {
         self.layout_box = Some(page.layout_box);
         self.page_tracks = page.page_tracks;
         // BUG-480 срез 1: под-документы новой страницы заменяют старые целиком —
-        // прежние фреймы (и их JS-контексты) падают вместе со страницей.
-        self.frames = page.frames;
+        // прежние фреймы (и их JS-контексты) падают вместе со страницей —
+        // вне UI-потока (BUG-1682, `release_frame_handles`).
+        frame_dynamic_load::release_frame_handles(std::mem::replace(&mut self.frames, page.frames));
         self.frame_env = page.frame_env;
         // FRAME-4 срез 3: слоты старой страницы адресуют документы, которых
         // больше нет — новый ответ на них уже не придёт (generation этого
