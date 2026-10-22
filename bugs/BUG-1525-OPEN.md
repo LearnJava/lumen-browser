@@ -23,7 +23,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 24: `css-align/gaps/*` (`gap-parsing-001/002`, `*-gap-parsing-001`, `gap-normal-computed-001`, `legacy-gap-aliases-001`, `*-gap-animation-*`), `css-align/parsing/{gap,row-gap,column-gap,grid-*-gap}-{computed,valid,invalid,shorthand}`. [BUG-1307](BUG-1307-OPEN.md) и [BUG-1402](BUG-1402-OPEN.md) называют `row-gap`/`column-gap` среди пропущенных в карте; здесь — полный набор вместе с грамматикой и алиасами.
+WPT-RUN-14 срез 24: `css-align/gaps/*` (`gap-parsing-001/002`, `*-gap-parsing-001`, `gap-normal-computed-001`, `legacy-gap-aliases-001`, `*-gap-animation-*`), `css-align/parsing/{gap,row-gap,column-gap,grid-*-gap}-{computed,valid,invalid,shorthand}`. [BUG-1307](BUG-1307-OPEN.md) и [BUG-1402](BUG-1402-FIXED.md) называют `row-gap`/`column-gap` среди пропущенных в карте; здесь — полный набор вместе с грамматикой и алиасами.
 
 ## Что делать
 

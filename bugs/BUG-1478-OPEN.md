@@ -28,7 +28,7 @@ WPT-RUN-14 срез 21: `css-anchor-position/anchor-getComputedStyle-002.html`, 
 
 ## Что делать
 
-Добавить свойства в карту `computed_style_to_map` (тот же механизм, что [BUG-472](BUG-472-OPEN.md), [BUG-1297](BUG-1297-OPEN.md), [BUG-1402](BUG-1402-OPEN.md)); `anchor()` внутри `calc()` и вложенный фолбэк — GAP-ANCHORCSSOM ([BUG-563](BUG-563-OPEN.md)).
+Добавить свойства в карту `computed_style_to_map` (тот же механизм, что [BUG-472](BUG-472-OPEN.md), [BUG-1297](BUG-1297-OPEN.md), [BUG-1402](BUG-1402-FIXED.md)); `anchor()` внутри `calc()` и вложенный фолбэк — GAP-ANCHORCSSOM ([BUG-563](BUG-563-OPEN.md)).
 
 ## Как проверить
 
