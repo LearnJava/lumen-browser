@@ -3,7 +3,7 @@
 //! полноэкранный опрос и состояние `content-visibility`.
 
 use super::*;
-use crate::relayout::compute_layout_shift_score;
+use crate::layout_shift::compute_layout_shift_score;
 
 // ── Ph3 P3-bfcache: Cache-Control: no-store eligibility filter ──────────
 

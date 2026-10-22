@@ -7,7 +7,7 @@
 
 use crate::*;
 #[cfg(feature = "v8")]
-use crate::relayout::compute_layout_shift_score;
+use crate::layout_shift::compute_layout_shift_score;
 
 impl Lumen {
     /// Fetch, decode and register lazy images whose node IDs were queued by JS.
