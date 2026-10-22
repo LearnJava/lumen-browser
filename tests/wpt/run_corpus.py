@@ -534,6 +534,31 @@ NO_TESTS_MARKERS = ("Unable to find any tests at the path(s)", "No tests ran")
 WPTRUNNER_RETURNCODES = (0, 1, 64)
 LOG_TAIL_BYTES = 8192
 EMPTY_REPORT_RETRY_PAUSE = 10
+REMOVE_RELEASE_WAIT = 30
+
+
+def remove_released(path: str) -> None:
+    """Remove a file a just-killed process may still hold open, or leave it.
+
+    `taskkill /F /T` returns before Windows has closed the handles of the
+    processes it ended, so the file can stay locked for a while (WPT-RUN-16:
+    under swap two lanes hit `WinError 32` here and their threads died, leaving
+    one lane to run the rest of the corpus). A leftover zero-byte report is
+    harmless — aggregation rescues it from the raw stream — so after
+    `REMOVE_RELEASE_WAIT` seconds it is kept rather than raised.
+    """
+    deadline = time.time() + REMOVE_RELEASE_WAIT
+    while True:
+        try:
+            os.remove(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if time.time() >= deadline:
+                print(f"  still locked after {REMOVE_RELEASE_WAIT}s, kept: {path}", flush=True)
+                return
+            time.sleep(1)
 
 
 def report_is_empty(report_path: str) -> bool:
@@ -698,7 +723,7 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         # A killed shard leaves the empty file wptrunner opened up front; it would
         # otherwise show up as an unreadable report at aggregation time.
         if outcome == "timeout" and os.path.isfile(report_path) and os.path.getsize(report_path) == 0:
-            os.remove(report_path)
+            remove_released(report_path)
 
         if outcome == "ran" and returncode not in WPTRUNNER_RETURNCODES:
             # Ended from outside — on the Windows half of the 2026-08-20 corpus
@@ -1073,6 +1098,13 @@ def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
             try:
                 state = run_shard(unit, binary, args.out_dir, args.processes, budget,
                                   exclude_file, extra_env, rss_cap, args.shared_queue)
+            except Exception as exc:  # noqa: BLE001 — a dead lane must still be reported
+                # An uncaught exception ends only this thread: the other lanes
+                # go on and the run exits 0 with the unit silently lost.
+                with mutex:
+                    failures.append(f"lane {lane}: {unit['name']}: {exc!r}")
+                    queue.insert(0, unit)
+                return
             finally:
                 shared_lock.release()
                 with mutex:
