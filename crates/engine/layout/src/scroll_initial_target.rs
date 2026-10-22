@@ -13,7 +13,8 @@
 
 use crate::box_tree::BoxKind;
 use crate::style::{Overflow, ScrollInitialTarget, ScrollSnapAlignKeyword};
-use crate::{LayoutBox, padding_box, set_scroll_position, snap_offset_x, snap_offset_y};
+use crate::sticky_snap::{snap_offset_x, snap_offset_y};
+use crate::{LayoutBox, padding_box, set_scroll_position};
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::NodeId;
 use std::collections::HashSet;
