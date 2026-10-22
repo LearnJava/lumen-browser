@@ -987,27 +987,9 @@ pub(in crate::style) fn apply_decl_layout(
             };
         }
         "contain" => {
-            let v = val.trim();
-            style.contain = if v.eq_ignore_ascii_case("none") {
-                ContainFlags::NONE
-            } else if v.eq_ignore_ascii_case("strict") {
-                ContainFlags::STRICT
-            } else if v.eq_ignore_ascii_case("content") {
-                ContainFlags::CONTENT
-            } else {
-                let mut f = ContainFlags::NONE;
-                for kw in v.split_whitespace() {
-                    match kw {
-                        "size" => f.0 |= ContainFlags::SIZE.0,
-                        "inline-size" => f.0 |= ContainFlags::INLINE_SIZE.0,
-                        "layout" => f.0 |= ContainFlags::LAYOUT.0,
-                        "style" => f.0 |= ContainFlags::STYLE.0,
-                        "paint" => f.0 |= ContainFlags::PAINT.0,
-                        _ => {}
-                    }
-                }
-                f
-            };
+            if let Some(f) = parse_contain(val) {
+                style.contain = f;
+            }
         }
         "content-visibility" => {
             style.content_visibility = match val.trim() {
@@ -1254,6 +1236,50 @@ fn parse_container_type(val: &str) -> Option<(ContainerType, bool)> {
         return None;
     }
     Some((ty.unwrap_or(ContainerType::Normal), scroll_state))
+}
+
+/// Parses the `contain` value (CSS Containment L3 §3): `none | strict | content | [ [size |
+/// inline-size] || layout || style || paint ]`, or `None` when invalid — `strict`/`content`/`none`
+/// combined with anything, a repeated keyword, `size` together with `inline-size`, an unknown
+/// keyword, an empty value (BUG-1401).
+fn parse_contain(val: &str) -> Option<ContainFlags> {
+    let mut f = ContainFlags::NONE;
+    let mut count = 0usize;
+    let mut standalone = None;
+    for tok in val.split_ascii_whitespace() {
+        count += 1;
+        let bit = match tok.to_ascii_lowercase().as_str() {
+            "none" => {
+                standalone = Some(ContainFlags::NONE);
+                continue;
+            }
+            "strict" => {
+                standalone = Some(ContainFlags::STRICT);
+                continue;
+            }
+            "content" => {
+                standalone = Some(ContainFlags::CONTENT);
+                continue;
+            }
+            "size" => ContainFlags::SIZE,
+            "inline-size" => ContainFlags::INLINE_SIZE,
+            "layout" => ContainFlags::LAYOUT,
+            "style" => ContainFlags::STYLE,
+            "paint" => ContainFlags::PAINT,
+            _ => return None,
+        };
+        if f.0 & bit.0 != 0 {
+            return None;
+        }
+        f.0 |= bit.0;
+    }
+    if let Some(s) = standalone {
+        return (count == 1).then_some(s);
+    }
+    if count == 0 || (f.0 & ContainFlags::SIZE.0 != 0 && f.0 & ContainFlags::INLINE_SIZE.0 != 0) {
+        return None;
+    }
+    Some(f)
 }
 
 fn parse_size_or_auto(val: &str, is_quirks: bool) -> Option<Option<Length>> {

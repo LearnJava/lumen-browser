@@ -2486,6 +2486,13 @@ fn contain_to_css(flags: ContainFlags) -> String {
     if flags == ContainFlags::NONE {
         return "none".into();
     }
+    // CSS Containment L3 §3: the full sets serialize as their shorthand keywords.
+    if flags == ContainFlags::STRICT {
+        return "strict".into();
+    }
+    if flags == ContainFlags::CONTENT {
+        return "content".into();
+    }
     let mut out: Vec<&str> = Vec::with_capacity(5);
     for (bit, name) in [
         (ContainFlags::SIZE, "size"),
@@ -3326,13 +3333,32 @@ mod tests {
     }
 
     #[test]
-    fn computed_map_contain_expands_shorthand_keywords() {
-        // CSS Containment L3 §3: `strict`/`content` compute to the set they
-        // expand to, so neither keyword may appear in the computed value.
+    fn computed_map_contain_collapses_full_sets_to_shorthand_keywords() {
+        // CSS Containment L3 §3 (as serialised by Chrome, WPT `contain-computed`): the flag sets
+        // `size layout style paint` / `layout style paint` serialize as `strict` / `content`;
+        // every other combination lists its flags in canonical order (BUG-1401).
         let m = div_computed_map("<div>x</div>", "div { contain: layout paint; }");
         assert_eq!(m.get("contain").map(String::as_str), Some("layout paint"));
         let m = div_computed_map("<div>x</div>", "div { contain: content; }");
-        assert_eq!(m.get("contain").map(String::as_str), Some("layout style paint"));
+        assert_eq!(m.get("contain").map(String::as_str), Some("content"));
+        let m = div_computed_map("<div>x</div>", "div { contain: strict; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("strict"));
+        let m = div_computed_map("<div>x</div>", "div { contain: paint style layout size; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("strict"));
+        let m = div_computed_map("<div>x</div>", "div { contain: size layout paint; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("size layout paint"));
+        let m = div_computed_map("<div>x</div>", "div { contain: inline-size layout style paint; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("inline-size layout style paint"));
+    }
+
+    #[test]
+    fn computed_map_contain_invalid_value_is_dropped() {
+        // CSS Containment L3 §3 grammar: `strict`/`content` stand alone, no repeats, and `size`
+        // excludes `inline-size` — an invalid declaration leaves the initial value.
+        for bad in ["strict layout", "layout layout", "size inline-size", "strict content", "auto", "none strict"] {
+            let m = div_computed_map("<div>x</div>", &format!("div {{ contain: {bad}; }}"));
+            assert_eq!(m.get("contain").map(String::as_str), Some("none"), "contain: {bad}");
+        }
     }
 
     #[test]
