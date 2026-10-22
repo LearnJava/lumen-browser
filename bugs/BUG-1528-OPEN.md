@@ -20,7 +20,7 @@
 
 ## Как найдено
 
-WPT-RUN-14 срез 24: `css-align/abspos/align-items-static-position`, `align-self-static-position-001…008` (кроме 005), `justify-self-static-position-001`. Родственный [BUG-1470](BUG-1470-OPEN.md) (статическая позиция внутри inline-контекста) и [BUG-1481](BUG-1481-OPEN.md) (бокс с обоими инсетами).
+WPT-RUN-14 срез 24: `css-align/abspos/align-items-static-position`, `align-self-static-position-001…008` (кроме 005), `justify-self-static-position-001`. Родственный [BUG-1470](BUG-1470-OPEN.md) (статическая позиция внутри inline-контекста) и [BUG-1481](BUG-1481-FIXED.md) (бокс с обоими инсетами).
 
 ## Что делать
 

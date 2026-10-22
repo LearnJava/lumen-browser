@@ -554,8 +554,23 @@ fn place_abs_child(
         }
         (cb.x + pos.left, cb.y + pos.top)
     } else {
-        // Normal abs-pos: resolve from left/right/top/bottom insets.
+        // Normal abs-pos: resolve from left/right/top/bottom insets. An axis with both insets and a
+        // definite size is over-determined: auto margins absorb the free space, otherwise
+        // `justify-self` / `align-self` place the box inside the inset-modified containing block.
+        let aligned = |fixed: bool, near: Option<f32>, far: Option<f32>, auto_m: bool, is_x: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
+            let (Some(n), Some(f)) = (near, far) else { return None };
+            (fixed && !auto_m).then(|| abs_self_aligned_start(&cs, is_x, origin + n, extent - n - f, size, m.0, m.1)).flatten()
+        };
+        let aligned_x = aligned(
+            w_fixed, left, right, cs.margin_left.is_auto() || cs.margin_right.is_auto(), true,
+            cb.x, cb.width, child.rect.width, (c_ml, c_mr),
+        );
+        let aligned_y = aligned(
+            h_fixed, top, bottom, cs.margin_top.is_auto() || cs.margin_bottom.is_auto(), false,
+            cb.y, cb.height, child.rect.height, (c_mt, c_mb),
+        );
         let nx = match (left, right) {
+            (Some(_), Some(_)) if aligned_x.is_some() => aligned_x.unwrap_or(cb.x),
             (Some(l), Some(r)) if w_fixed => {
                 cb.x + l + c_ml + auto_margin_shift(
                     cb.width - l - r - c_ml - c_mr - child.rect.width,
@@ -569,6 +584,7 @@ fn place_abs_child(
             (None, None)    => static_x + c_ml,
         };
         let ny = match (top, bottom) {
+            (Some(_), Some(_)) if aligned_y.is_some() => aligned_y.unwrap_or(cb.y),
             (Some(t), Some(bv)) if h_fixed => {
                 cb.y + t + c_mt + auto_margin_shift(
                     cb.height - t - bv - c_mt - c_mb - child.rect.height,
@@ -586,6 +602,52 @@ fn place_abs_child(
     let dx = new_x - child.rect.x;
     let dy = new_y - child.rect.y;
     shift_tree(child, dx, dy);
+}
+
+/// CSS Box Alignment L3 §«Absolute-Position»: border-box start (physical coordinate) of an
+/// abs-pos box of border-box `size` and margins `m_lo`/`m_hi`, aligned by `justify-self` /
+/// `align-self` inside the inset-modified containing block `[lo, lo + cell]` of the physical
+/// axis `is_x`. `None` for `auto`/`normal`/`stretch`/baseline values — the box then keeps its
+/// inset-driven position. The containing block's writing mode and direction are taken from
+/// the box itself (both properties inherit from it).
+fn abs_self_aligned_start(
+    cs: &ComputedStyle,
+    is_x: bool,
+    lo: f32,
+    cell: f32,
+    size: f32,
+    m_lo: f32,
+    m_hi: f32,
+) -> Option<f32> {
+    use crate::style::{Direction, WritingMode};
+    let rtl = cs.direction == Direction::Rtl;
+    let horizontal = cs.writing_mode == WritingMode::HorizontalTb;
+    let (inline, rev) = if horizontal {
+        (is_x, is_x && rtl)
+    } else if is_x {
+        (false, matches!(cs.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl))
+    } else {
+        (true, rtl != (cs.writing_mode == WritingMode::SidewaysLr))
+    };
+    let cx = &cs.content_align_extra;
+    let (mut align, safe) = if inline {
+        let v = super::grid_vertical::resolve_own(cs.justify_self, cx.justify_self_own, cs, is_x, !rev);
+        (super::grid_vertical::resolve_side(v, cx.justify_self_side, cs.writing_mode, rev), cx.justify_self_safe)
+    } else {
+        (super::grid_vertical::resolve_own(cs.align_self, cx.self_own, cs, is_x, !rev), cx.self_safe)
+    };
+    let (m_s, m_e) = if rev { (m_hi, m_lo) } else { (m_lo, m_hi) };
+    if matches!(align, AlignValue::LastBaseline) {
+        align = AlignValue::End;
+    }
+    if !matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center) {
+        return None;
+    }
+    if safe && size + m_s + m_e > cell && matches!(align, AlignValue::End | AlignValue::Center) {
+        align = AlignValue::Start;
+    }
+    let off = super::grid_vertical::axis_offset(align, cell, size, m_s, m_e, false, false);
+    Some(if rev { lo + cell - off - size } else { lo + off })
 }
 
 /// Offset of an abs-pos box inside the gap between its two insets when the axis
