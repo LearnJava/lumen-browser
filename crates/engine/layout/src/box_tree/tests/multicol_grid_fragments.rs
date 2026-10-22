@@ -704,3 +704,33 @@ fn a_nested_subgrid_with_a_row_gap_dropped_at_a_break_leaves_a_tail_and_a_defini
     let subgrid_heights: Vec<f32> = cols.iter().map(|b| b.children.first().map_or(0.0, |s| s.rect.height)).collect();
     assert_eq!(subgrid_heights, vec![0.0, 20.0, 20.0, 20.0, 10.0, 0.0, 0.0], "{subgrid_heights:?}");
 }
+
+#[test]
+fn a_row_wrap_flex_with_a_forced_break_is_cut_at_the_column_height_and_pulls_the_items_up() {
+    // flex/fragmentation/008 (Edge's `getClientRects()`): a 174px wrapped flex (two stretched 80px
+    // lines, `row-gap: 10px`, `break-before: column` on every 30px item) in 90px columns. The box
+    // is cut exactly at the column height (90 + 84), the forced break does not move it, and the
+    // items of the line after the break sit `limit - (end of the item lines before it + row-gap)`
+    // lower than the stretched line: item 3 at y = 50 in the second column. The column rule runs
+    // along the items (30px), not along the stretched line.
+    let root = lay(
+        "<div id=\"m\"><div id=\"f\"><div>1</div><div>2</div><div>3</div><div>4</div></div></div>",
+        "body{margin:0} #m{columns:2;height:90px;column-width:100px;width:330px} \
+         #f{border:2px solid;display:flex;column-gap:10px;row-gap:10px;width:90px;flex-wrap:wrap;height:170px;\
+         column-rule:10px solid blue;row-rule:10px solid gold} \
+         #f>div{width:30px;height:30px;break-before:column}",
+    );
+    let mut v = Vec::new();
+    fragments(&root, &mut v);
+    let geo: Vec<(f32, f32, f32)> = v.iter().map(|b| (b.rect.x, b.rect.y, b.rect.height)).collect();
+    assert_eq!(geo.len(), 2, "{geo:?}");
+    assert!((geo[0].2 - 90.0).abs() < 0.01 && (geo[1].2 - 84.0).abs() < 0.01, "{geo:?}");
+    let ys: Vec<Vec<f32>> = v.iter().map(|b| b.children.iter().map(|c| c.rect.y - b.rect.y).collect()).collect();
+    assert_eq!(ys[0].len(), 2, "{ys:?}");
+    assert_eq!(ys[1].len(), 2, "{ys:?}");
+    assert!((ys[1][0] - 50.0).abs() < 0.01, "{ys:?}");
+    let rows: Vec<Vec<(f32, f32)>> = v.iter().map(|b| b.subgrid_tracks.as_ref().unwrap().rows.clone().unwrap()).collect();
+    assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1], "{rows:?}");
+    assert!((rows[0][0].1 - rows[0][0].0 - 30.0).abs() < 0.01, "{rows:?}");
+    assert!((rows[1][0].1 - rows[1][0].0 - 30.0).abs() < 0.01, "{rows:?}");
+}
