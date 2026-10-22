@@ -192,7 +192,7 @@ pub use style::{
     AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
-    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, SvgClipPath, SvgClipPlacement, SvgClipSubpath, Color, ColorFloat,
+    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, GeometryBox, SvgClipPath, SvgClipPlacement, SvgClipSubpath, Color, ColorFloat,
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, CaptionSide, TableLayout, FilterFn, FilterUrl, FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
     FontStyle,

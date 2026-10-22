@@ -1114,3 +1114,76 @@ fn translate_property_percent_and_calc() {
     let (dx, dy) = translated_by(&format!("{base} translate: calc(10% + 5px) 100%; }}"));
     assert!((dx - 15.0).abs() < 0.01 && (dy - 50.0).abs() < 0.01, "-> ({dx}, {dy})");
 }
+
+fn clip_of(css: &str) -> Option<ClipPath> {
+    let root = lay("<p>x</p>", &format!("p {{ clip-path: {css}; }}"));
+    first_p_style(&root).clip_path.clone()
+}
+
+/// BUG-1405: `circle()` без радиуса — `closest-side`; ключевые слова радиуса и `at` без радиуса.
+#[test]
+fn clip_path_circle_keyword_and_default_radius() {
+    assert_eq!(clip_of("circle()"), Some(ClipPath::Circle { radius: ShapeValue::ClosestSide, center: None }));
+    assert_eq!(
+        clip_of("circle(farthest-side)"),
+        Some(ClipPath::Circle { radius: ShapeValue::FarthestSide, center: None })
+    );
+    assert_eq!(
+        clip_of("circle(at left top)"),
+        Some(ClipPath::Circle {
+            radius: ShapeValue::ClosestSide,
+            center: Some((ShapeValue::Pct(0.0), ShapeValue::Pct(0.0)))
+        })
+    );
+    assert_eq!(clip_of("circle(-5px)"), None);
+}
+
+#[test]
+fn clip_path_ellipse_default_and_keywords() {
+    assert_eq!(
+        clip_of("ellipse()"),
+        Some(ClipPath::Ellipse { rx: ShapeValue::ClosestSide, ry: ShapeValue::ClosestSide, center: None })
+    );
+    assert_eq!(
+        clip_of("ellipse(closest-side farthest-side at bottom)"),
+        Some(ClipPath::Ellipse {
+            rx: ShapeValue::ClosestSide,
+            ry: ShapeValue::FarthestSide,
+            center: Some((ShapeValue::Pct(50.0), ShapeValue::Pct(100.0)))
+        })
+    );
+}
+
+#[test]
+fn clip_path_inset_round() {
+    assert_eq!(
+        clip_of("inset(10px round 20px 5px / 1px)"),
+        Some(ClipPath::InsetRound {
+            sides: vec![ShapeValue::Px(10.0)],
+            rx: vec![ShapeValue::Px(20.0), ShapeValue::Px(5.0)],
+            ry: vec![ShapeValue::Px(1.0)],
+        })
+    );
+    assert_eq!(clip_of("inset(10px round)"), None);
+}
+
+/// `<geometry-box>` до и после формы и без неё.
+#[test]
+fn clip_path_geometry_box() {
+    use crate::style::GeometryBox;
+    let circle = Box::new(ClipPath::Circle { radius: ShapeValue::Px(20.0), center: None });
+    assert_eq!(
+        clip_of("circle(20px) content-box"),
+        Some(ClipPath::Boxed { shape: Some(circle.clone()), geometry: GeometryBox::ContentBox })
+    );
+    assert_eq!(
+        clip_of("margin-box circle(20px)"),
+        Some(ClipPath::Boxed { shape: Some(circle.clone()), geometry: GeometryBox::MarginBox })
+    );
+    assert_eq!(clip_of("border-box circle(20px)"), Some(*circle));
+    assert_eq!(
+        clip_of("padding-box"),
+        Some(ClipPath::Boxed { shape: None, geometry: GeometryBox::PaddingBox })
+    );
+    assert_eq!(clip_of("content-box padding-box"), None);
+}

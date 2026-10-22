@@ -10,13 +10,14 @@ use lumen_layout::SvgClipPath;
 /// Команды `Push*`, открывающие `clip-path` элемента с border-box `r`.
 /// Каждой команде соответствует свой `PopClip`; число слоёв — `len()`.
 /// Ссылка `url(#id)`, не разрешённая layout-ом, ничего не клипует.
-pub(super) fn clip_path_commands(clip: &ClipPath, r: Rect) -> Vec<DisplayCommand> {
+pub(super) fn clip_path_commands(clip: &ClipPath, refs: impl Into<ClipRefs>) -> Vec<DisplayCommand> {
+    let refs = refs.into();
     match clip {
         ClipPath::Url(_) => Vec::new(),
-        ClipPath::Svg(def) => svg_clip_layers(def, r),
-        other => match clip_path_to_shape(other, r) {
+        ClipPath::Svg(def) => svg_clip_layers(def, refs.border()),
+        other => match clip_path_to_shape(other, refs) {
             Some(shape) => vec![DisplayCommand::PushClipPath { shape }],
-            None => vec![DisplayCommand::PushClipRect { rect: clip_path_to_rect(other, r) }],
+            None => vec![DisplayCommand::PushClipRect { rect: clip_path_to_rect(other, refs) }],
         },
     }
 }
@@ -26,7 +27,7 @@ pub(super) fn clip_path_commands(clip: &ClipPath, r: Rect) -> Vec<DisplayCommand
 /// Возвращает число слоёв — столько же `PopClip` даст [`pop_clip_layers`].
 pub(super) fn push_shape_clip_path(b: &LayoutBox, out: &mut DisplayList) -> usize {
     let Some(clip) = &b.style.clip_path else { return 0 };
-    let cmds = clip_path_commands(clip, b.rect);
+    let cmds = clip_path_commands(clip, ClipRefs::of_box(b));
     let n = cmds.len();
     out.extend(cmds);
     n

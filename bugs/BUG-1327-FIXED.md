@@ -42,4 +42,4 @@ WPT-RUN-14 срез 10: `white-space/break-spaces-newline-011/014/015/016.html`,
 Тесты: `box_tree/tests/ws_only_text.rs` (4 штуки: пробелы между элементами в `pre`/`pre-wrap`/`break-spaces`, схлопывание в `normal`/`nowrap`/`pre-line`, `
 ` между элементами в `pre`/`pre-wrap`/`pre-line`, U+3000 в `pre`).
 
-**Остаток — [BUG-1462](BUG-1462-OPEN.md):** в `white-space: normal` U+3000 всё ещё сводится к U+0020 при разбиении на слова (последняя строка таблицы симптомов). WPT-прогон `css/css-text/white-space` после правки не делался (нужен WPT-venv).
+**Остаток — [BUG-1462](BUG-1462-FIXED.md):** в `white-space: normal` U+3000 всё ещё сводится к U+0020 при разбиении на слова (последняя строка таблицы симптомов). WPT-прогон `css/css-text/white-space` после правки не делался (нужен WPT-venv).

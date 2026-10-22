@@ -362,12 +362,13 @@ fn rasterize_cpu_pixmap(
                     rect.x + rect.width + offset,
                     rect.y + rect.height + offset,
                 );
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                // The stroke band extends `width` beyond the offset rect: that outer box,
+                // not the offset rect, decides whether the clip can be skipped.
+                let outer = (b.0 - width, b.1 - width, b.2 + width, b.3 + width);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), outer);
                 let layer = layers.last_mut().expect("base layer");
                 rasterize_draw_outline(&mut layer.pm, rect, *width, color, *offset, c)?;
-                // The stroke band extends `width` beyond the offset rect, so the
-                // dirty box is wider than the clip-decision box above.
-                layer.mark((b.0 - width, b.1 - width, b.2 + width, b.3 + width));
+                layer.mark(outer);
             }
             DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                 let b = rect_bounds(rect);
@@ -3933,6 +3934,29 @@ mod tests {
         assert_eq!(px(&img, 27, 40), white, "gap between box and outline");
         assert_eq!(px(&img, 19, 40), (0, 0, 255, 255), "band spans x=15..25");
         assert_eq!(px(&img, 16, 40), (0, 0, 255, 255));
+    }
+
+    /// BUG-1405: an outline whose element box lies inside the clip rect still has a stroke band
+    /// reaching past it — the clip must cut that band (`clip-path: margin-box` + wide outline).
+    #[test]
+    fn outline_band_is_cut_by_clip_rect_around_the_box() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let white = (255, 255, 255, 255);
+        let cmds = vec![
+            DisplayCommand::PushClipRect { rect: rect(20.0, 20.0, 40.0, 40.0) },
+            DisplayCommand::DrawOutline {
+                rect: rect(30.0, 30.0, 20.0, 20.0),
+                width: 20.0,
+                style: lumen_layout::style::OutlineStyle::Solid,
+                color: green,
+                offset: 0.0,
+            },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(100, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 25, 40), (0, 128, 0, 255), "band inside the clip is painted");
+        assert_eq!(px(&img, 10, 40), white, "band beyond the clip is cut");
+        assert_eq!(px(&img, 70, 40), white);
     }
 
     /// `PushScrollLayer` with a non-zero offset shifts the content up by
