@@ -56,8 +56,9 @@ function _lumen_normalize_pseudo_elt(pseudoElt) {
     }
 }
 window.getComputedStyle = function(element, pseudoElt) {
+    _css_gen++;
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
-    if (nid != null && _wa_gap_an[nid]) _wa_motion_prune(nid);
+    if (nid != null) { _wa_motion_prune(nid); _css_tr_prune(nid); }
     var pseudo = _lumen_normalize_pseudo_elt(pseudoElt);
     var illFormed = pseudo === _LUMEN_PSEUDO_INVALID;
     if (illFormed) pseudo = null;
@@ -5047,7 +5048,9 @@ function DocumentTimeline(options) {
     this._originTime = (options && options.originTime != null) ? +options.originTime : 0;
 }
 Object.defineProperty(DocumentTimeline.prototype, 'currentTime', {
-    get: function() { return _wa_current_time > 0 ? _wa_current_time - this._originTime : null; },
+    // The time of the last frame; before the first one, the clock — a document timeline is
+    // active from the start and a script reads a number (Web Animations §4.1).
+    get: function() { return (_wa_current_time > 0 ? _wa_current_time : _wa_gap_tr_clock()) - this._originTime; },
     configurable: true,
 });
 
@@ -5383,10 +5386,18 @@ var _wa_gap_tr_count = 0;
 var _wa_gap_tr_clock_ms = null;
 
 // One `performance.now()` per task: every read of one script turn sees one time.
+// The reading lives until the next task (a zero timer), not until the next microtask: a
+// synchronous flush inside a native (`getComputedStyle`) can run microtasks, and the animation
+// timeline must not advance by the length of a layout in the middle of a script.
 function _wa_gap_tr_clock() {
     if (_wa_gap_tr_clock_ms === null) {
         _wa_gap_tr_clock_ms = performance.now();
-        Promise.resolve().then(function() { _wa_gap_tr_clock_ms = null; });
+        var deadline = _lumen_now_ms();
+        _lumen_timers.push({
+            id: _lumen_timer_seq++, interval: null, nesting: 0, deadline: deadline,
+            fn: function() { _wa_gap_tr_clock_ms = null; },
+        });
+        _lumen_request_wakeup(deadline);
     }
     return _wa_gap_tr_clock_ms;
 }
@@ -5451,10 +5462,7 @@ function _wa_gap_tr_value(nid, kebab, base) {
     // CSS Transitions L1 §3: an element that is not rendered (`display: none`, no box) has no
     // before-change style, so it never starts a transition — nor does one that just became
     // rendered.
-    var boxlessNow = function() {
-        return _lumen_get_computed_style(nid, 'computed:-lumen-boxless') !== ''
-            || _lumen_get_computed_style(nid, 'display') === 'none';
-    };
+    var boxlessNow = function() { return _css_boxless(nid); };
     if (!rec) {
         // A page that reads many properties of many nodes would otherwise keep one record per
         // pair for good; forgetting them costs one missed before-change style, not a wrong value.
@@ -5463,7 +5471,7 @@ function _wa_gap_tr_value(nid, kebab, base) {
         (_wa_motion_by_nid[nid] || (_wa_motion_by_nid[nid] = {}))[kebab] = 1;
         return base;
     }
-    var now = _wa_gap_tr_clock();
+    var now = _css_now();
     var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
     if (base !== rec.seen) {
         var from = rec.run ? _wa_gap_tr_current(rec, now, camel) : rec.seen;
@@ -5482,8 +5490,18 @@ function _wa_gap_tr_value(nid, kebab, base) {
         if (boxless || rec.boxless) timing = null;
         rec.boxless = boxless;
         rec.seen = base;
+        // The running transition (if any) is cancelled by a changed end value; a new one
+        // replaces it (CSS Transitions L1 §3 «start, replace and cancel»).
+        var prevRun = rec.run;
         rec.run = timing ? { from: from, to: base, start: now, dur: timing.dur * 1000,
                              delay: timing.delay * 1000, easing: timing.easing } : null;
+        _css_tr_cancel(prevRun);
+        if (rec.run) _css_tr_start(nid, kebab, camel, rec.run);
+    } else if (rec.run && !rec.run.done && !_wa_gap_tr_timing(nid, kebab)) {
+        // `transition-property` no longer names the property, or the combined duration is not
+        // positive: the running transition is cancelled.
+        _css_tr_cancel(rec.run);
+        rec.run = null;
     }
     if (!rec.run) return base;
     var cur = _wa_gap_tr_current(rec, now, camel);
@@ -5493,6 +5511,10 @@ function _wa_gap_tr_value(nid, kebab, base) {
 
 function _wa_gap_tr_current(rec, now, camel) {
     var r = rec.run;
+    // A script that cancelled the transition or took its effect away leaves the end value; a
+    // paused one stands still.
+    if (r._anim && (r._anim._cx || !r._anim._eff)) return r.to;
+    if (r.pausedAt != null) now = r.pausedAt;
     var raw = (now - r.start - r.delay) / r.dur;
     if (raw >= 1) { r.done = true; return r.to; }
     if (raw < 0) return r.from;   // inside the delay the effect fills backwards
@@ -5516,7 +5538,6 @@ function _wa_gap_tr_current(rec, now, camel) {
 // driven frame by frame; no `animationstart/iteration/end` events), no
 // `animation-composition`, shorthand declarations of a keyframe (`column-rule: ...`) are
 // not read. `getAnimations()` lists it through `_wa_gap_an_sync` below.
-var _wa_gap_an = {};
 
 // The winning `@keyframes <name>` of the document as JSON, or null (a shim-level seam
 // over the native so the unit tests can substitute it).
@@ -5580,37 +5601,26 @@ function _wa_gap_an_progress(t, ms) {
 // The animated value of `kebab` for `nid` given its settled value `base`, or `value`
 // (what the transitions made of it) when no animation of the element touches it.
 function _wa_gap_an_value(nid, kebab, base, value) {
-    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
-    var recs = _wa_gap_an[nid];
-    if (names.length === 1 && (names[0] === 'none' || names[0] === '')) {
-        if (recs) { _wa_motion_cancel_stale(nid, recs, null); delete _wa_gap_an[nid]; }
-        return value;
-    }
-    var lists = {};
-    ['duration', 'delay', 'timing-function', 'iteration-count', 'direction', 'fill-mode', 'play-state']
-        .forEach(function(p) { lists[p] = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-' + p)); });
-    var pick = function(p, i) { var l = lists[p]; return l[i % l.length]; };
-    var ms = _wa_gap_tr_clock();
+    var list = _css_an_update(nid, null);
+    if (!list.length) return value;
+    var ms = _css_now();
     var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
-    var live = {}, result = value, eff = null;
-    for (var i = 0; i < names.length; i++) {
-        var name = names[i];
-        if (name === 'none' || name === '') continue;
-        var key = i + ':' + name;
-        var rec = (recs && recs[key]) || { start: ms, pausedAt: null };
-        live[key] = rec;
-        var paused = pick('play-state', i) === 'paused';
-        if (paused && rec.pausedAt === null) rec.pausedAt = ms;
-        else if (!paused && rec.pausedAt !== null) { rec.start += ms - rec.pausedAt; rec.pausedAt = null; }
+    var result = value, eff = null;
+    for (var n = 0; n < list.length; n++) {
+        var anim = list[n].anim, i = list[n].i;
+        // A script that cancelled the animation, or replaced/removed its effect, took it off
+        // the element: the settled value shows.
+        if (anim._cx || anim._effRepl) continue;
+        var rec = anim._c, name = anim._cname;
         var frames = _wa_gap_an_frames(kebab, name);
         if (!frames) continue;
-        var itok = pick('iteration-count', i);
+        var tm = anim._eff._timing;
         var t = {
             start: rec.start,
-            dur: _wa_gap_tr_seconds(pick('duration', i)),
-            delay: _wa_gap_tr_seconds(pick('delay', i)),
-            iters: itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1),
-            dir: pick('direction', i), fill: pick('fill-mode', i)
+            dur: tm.duration / 1000,
+            delay: tm.delay / 1000,
+            iters: tm.iterations,
+            dir: tm.direction, fill: tm.fill
         };
         var p = _wa_gap_an_progress(t, rec.pausedAt !== null ? rec.pausedAt : ms);
         if (p === null) continue;
@@ -5631,142 +5641,12 @@ function _wa_gap_an_value(nid, kebab, base, value) {
         var local = (p - from.offset) / (to.offset - from.offset);
         // `animation-timing-function` shapes every keyframe interval (a keyframe's own
         // declaration wins); snapped like the transitions' eased progress.
-        local = Math.round(_wa_ease(local, from.easing || pick('timing-function', i)) * 1e5) / 1e5;
+        var tfs = list.lists['timing-function'];
+        local = Math.round(_wa_ease(local, from.easing || tfs[i % tfs.length]) * 1e5) / 1e5;
         result = _wa_motion_interp(camel, _wa_motion_resolve(eff, camel, from.value),
                                    _wa_motion_resolve(eff, camel, to.value), local);
     }
-    _wa_motion_cancel_stale(nid, recs, live);
-    if (Object.keys(live).length) _wa_gap_an[nid] = live; else delete _wa_gap_an[nid];
     return result;
-}
-
-// `element.getAnimations()` for a CSS `@keyframes` animation of a gap-decoration property.
-// The Rust `AnimationScheduler` registers a `getAnimations()` shadow entry only after its
-// first frame and with an effect that knows no timing, while the value `getComputedStyle()`
-// reports comes from the clock in `_wa_gap_an` above. This brings the two together: for
-// every animation of the element whose `@keyframes` declare a gap-decoration longhand it
-// finds (or creates, under the same registry key the scheduler's `animationstart` uses) the
-// `Animation`, gives its effect the computed `animation-*` timing, and lets `currentTime`
-// read and write that clock — a seek (`anim.currentTime = ms`) re-bases the record, so the
-// next `getComputedStyle()` read sees the value at that time. A paused animation is held at
-// the moment the record was created. Animations that are not current (finished without a
-// forwards/both fill) are not listed.
-var _wa_gap_an_kf_re = /^(?:(?:column|row)-)?rule-(?:width|color|inset)/;
-
-function _wa_gap_an_has_gap_frames(name) {
-    var json = _wa_gap_keyframes_json(name);
-    if (json == null) return false;
-    var frames = JSON.parse(json);
-    for (var i = 0; i < frames.length; i++) {
-        for (var j = 0; j < frames[i].decls.length; j++) {
-            if (_wa_gap_an_kf_re.test(frames[i].decls[j][0])) return true;
-        }
-    }
-    return false;
-}
-
-// Cancels the shadow `Animation`s of the records `live` no longer names: an `animation-name`
-// that left the list (or was replaced) cancels its animation — `finished` rejects with an
-// AbortError (CSS Animations L2 §3.2) — and the record goes with it.
-function _wa_motion_cancel_stale(nid, recs, live) {
-    if (!recs) return;
-    for (var k in recs) {
-        if (live && live[k]) continue;
-        _lumen_css_anim_unregister('a:', nid, k.slice(k.indexOf(':') + 1), 'idle');
-        delete recs[k];
-    }
-}
-
-// `getComputedStyle(el)` is a style recalc: an element whose `animation-name` dropped a
-// running animation has it cancelled there, whichever property is read next.
-function _wa_motion_prune(nid) {
-    var recs = _wa_gap_an[nid];
-    if (!recs) return;
-    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name')), live = {};
-    for (var i = 0; i < names.length; i++) live[i + ':' + names[i]] = 1;
-    _wa_motion_cancel_stale(nid, recs, live);
-    if (!Object.keys(recs).length) delete _wa_gap_an[nid];
-}
-
-function _wa_gap_an_sync(target) {
-    var nid = target && target.__nid__;
-    if (nid == null) return;
-    var names = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-name'));
-    var lists = null;
-    var ms = _wa_gap_tr_clock();
-    _wa_motion_prune(nid);
-    for (var i = 0; i < names.length; i++) {
-        var name = names[i];
-        if (name === 'none' || name === '' || !_wa_motion_has_frames(name)) continue;
-        if (!lists) {
-            lists = {};
-            ['duration', 'delay', 'iteration-count', 'direction', 'fill-mode', 'play-state']
-                .forEach(function(p) { lists[p] = _wa_gap_tr_split(_lumen_computed_property(nid, 'animation-' + p)); });
-        }
-        var pick = function(p) { var l = lists[p]; return l[i % l.length]; };
-        var recs = _wa_gap_an[nid] || (_wa_gap_an[nid] = {});
-        var key = i + ':' + name;
-        var paused = pick('play-state') === 'paused';
-        var rec = recs[key];
-        if (!rec) { rec = recs[key] = { start: ms, pausedAt: paused ? ms : null }; }
-        var dur = _wa_gap_tr_seconds(pick('duration')), delay = _wa_gap_tr_seconds(pick('delay'));
-        var itok = pick('iteration-count');
-        var iters = itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1);
-        var fill = pick('fill-mode');
-        var now = rec.pausedAt !== null ? rec.pausedAt : ms;
-        var elapsed = (now - rec.start) / 1000 - delay;
-        var finished = !(iters === Infinity) && elapsed >= dur * iters;
-        var fwd = fill === 'forwards' || fill === 'both';
-        if (finished && !fwd) {
-            _lumen_css_anim_unregister('a:', nid, name, 'idle');
-            if (rec.anim) rec.anim = null;
-            continue;
-        }
-        // The scheduler's `animationend` drops the registry key but leaves a finished
-        // entry in the list; reuse that one rather than registering a second.
-        var anim = (rec.anim && _wa_animations.indexOf(rec.anim) >= 0) ? rec.anim
-                 : _lumen_css_anim_register('a:', nid, name);
-        rec.anim = anim;
-        anim.effect._timing = {
-            duration: dur * 1000, delay: delay * 1000, endDelay: 0, fill: fill === 'none' ? 'auto' : fill,
-            iterationStart: 0, iterations: iters, easing: 'linear', direction: pick('direction')
-        };
-        anim._state = finished ? 'finished' : (paused ? 'paused' : 'running');
-        var startClock = !anim._wa_gap_an_bound && !finished && !paused;
-        if (!anim._wa_gap_an_bound) {
-            anim._wa_gap_an_bound = true;
-            (function(anim, nid, key, rec0) {
-                Object.defineProperty(anim, 'currentTime', {
-                    get: function() {
-                        var r = (_wa_gap_an[nid] || {})[key] || rec0;
-                        return (r.pausedAt !== null ? r.pausedAt : _wa_gap_tr_clock()) - r.start;
-                    },
-                    set: function(v) {
-                        var r = (_wa_gap_an[nid] || {})[key] || rec0;
-                        var at = _wa_gap_tr_clock();
-                        if (r.pausedAt !== null) r.pausedAt = at;
-                        r.start = at - (+v || 0);
-                    },
-                    configurable: true
-                });
-                // `startTime` is the same instant on the document timeline's clock.
-                Object.defineProperty(anim, 'startTime', {
-                    get: function() {
-                        var r = (_wa_gap_an[nid] || {})[key] || rec0, tl = _wa_doc_timeline.currentTime || 0;
-                        return tl - (_wa_gap_tr_clock() - r.start);
-                    },
-                    set: function(v) {
-                        var r = (_wa_gap_an[nid] || {})[key] || rec0, tl = _wa_doc_timeline.currentTime || 0;
-                        r.start = _wa_gap_tr_clock() - (tl - (+v || 0));
-                    },
-                    configurable: true
-                });
-            })(anim, nid, key, rec);
-        }
-        // The shadow animation runs on the same clock (its effect has no keyframes, so it
-        // never writes a style): `finished`, the `finish` event and `playState` follow it.
-        if (startClock) anim.play();
-    }
 }
 
 // ── BUG-1293: read-time CSS Transitions / Animations for every property ──────
@@ -5810,7 +5690,17 @@ function _wa_motion_read(nid, kebab, resolved) {
     // the live value into the snapshot: that value is not a style change.
     var rec = _wa_gap_tr[nid + ':' + kebab];
     if (_wa_motion_native_re.test(kebab) && _lumen_computed_is_animated(nid, kebab)) {
-        if (rec) { rec.run = null; rec.native = true; }
+        if (rec) {
+            var run = rec.run;
+            if (run && run._anim) {
+                // A transition the overlay started that the scheduler now drives: it is over
+                // when the style stops asking for it, otherwise the scheduler's events end it.
+                if (!run.done && !_wa_gap_tr_timing(nid, kebab)) _css_tr_cancel(run);
+                else run._anim._ev = true;
+            }
+            rec.run = null;
+            rec.native = true;
+        }
         return resolved;
     }
     var computed = kebab === 'transform' ? (_lumen_get_transform_list(nid) || resolved)
@@ -6104,8 +5994,8 @@ function _wa_motion_resolve(eff, camel, v) {
 
 // `element.getAnimations()` for the transitions the overlay started: re-read every property
 // of the element the overlay has a settled value for (the read is what notices the change),
-// then list each running transition under the registry key the scheduler's `transitionrun`
-// uses and give its effect the computed timing.
+// which starts and cancels the `CSSTransition` objects (`_css_tr_start`/`_css_drop`), and let
+// the ones that are over leave the list.
 function _wa_motion_tr_sync(target) {
     var nid = target && target.__nid__;
     if (nid == null) return;
@@ -6116,31 +6006,8 @@ function _wa_motion_tr_sync(target) {
             var resolved = _lumen_computed_property(nid, kebab);
             if (resolved !== '') _wa_motion_read(nid, kebab, resolved);
         }
-        var rec = _wa_gap_tr[nid + ':' + kebab];
-        var run = rec && rec.run;
-        if (!run || run.done) {
-            // Ended or superseded: stop the shadow animation's own clock too.
-            var old = _lumen_css_anim_registry['t:' + nid + ':' + kebab];
-            if (old) old._cancelRaf();
-            _lumen_css_anim_unregister('t:', nid, kebab, 'idle');
-            continue;
-        }
-        var anim = _lumen_css_anim_register('t:', nid, kebab);
-        if (anim._wa_motion_run !== run) {
-            // A new transition (or the first sight of one): give the shadow `Animation` the
-            // computed timing and let it play — its effect has no keyframes, so the clock
-            // only drives `finished`/`currentTime`, never a style write.
-            anim._wa_motion_run = run;
-            anim._cancelRaf();
-            anim.effect._timing = {
-                duration: run.dur, delay: run.delay, endDelay: 0, fill: 'backwards',
-                iterationStart: 0, iterations: 1, easing: 'linear', direction: 'normal'
-            };
-            anim.transitionProperty = kebab;
-            anim._startTime = null;
-            anim._holdTime = null;
-            anim.play();
-        }
+        var a = _css_tr_by_key[nid + ':' + kebab];
+        if (a && !_css_relevant(a)) _css_tr_retire(nid, kebab);
     }
 }
 
@@ -7086,7 +6953,8 @@ function _wa_effect_props(effect) {
 // driven by a timeline (a `null` timeline — a disconnected animation — can
 // never be superseded, since it has no notion of "later").
 function _wa_is_replaceable(anim) {
-    return anim._state === 'finished' &&
+    // CSS animations and transitions are owned by markup, not by the replace algorithm.
+    return !anim._css && anim._state === 'finished' &&
            anim._replaceState === 'active' &&
            anim.timeline != null &&
            !!(anim.effect && anim.effect.target);
@@ -7131,30 +6999,744 @@ function _wa_element_animate(target, keyframes, options) {
     return anim;
 }
 
-// element.getAnimations() — all non-idle animations targeting this element.
-function _wa_get_animations_for(target) {
-    _wa_motion_tr_sync(target);
-    _wa_gap_an_sync(target);
-    return _wa_motion_order(_wa_animations.filter(function(a) {
-        return a._state !== 'idle' && a.effect && a.effect.target === target;
-    }));
+// element.getAnimations() — the relevant animations targeting this element (and, with
+// `{ subtree: true }`, its descendants and their pseudo-elements, in tree order).
+function _wa_get_animations_for(target, options) {
+    var out = [], subtree = !!(options && options.subtree);
+    _wa_collect_animations(target, out, subtree);
+    if (subtree) {
+        var walk = function(el) {
+            for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+                _wa_collect_animations(c, out, true);
+                walk(c);
+            }
+        };
+        walk(target);
+    }
+    for (var i = 0; i < out.length; i++) _css_observe(out[i]);
+    return out;
 }
 
-// Transitions of one element sort by property name (CSS Transitions L2 §animation-composite-order);
-// everything else keeps the order it was created in.
+// One element's relevant animations (Web Animations §5.2.3 `getAnimations()`), then those of
+// its `::before`/`::after`.
+function _wa_collect_animations(el, out, withPseudo) {
+    _css_gen++;
+    _wa_motion_tr_sync(el);
+    var pe = withPseudo ? [null, '::before', '::after'] : [null];
+    for (var p = 0; p < pe.length; p++) {
+        _wa_gap_an_sync(el, pe[p]);
+        var mine = _wa_animations.filter(function(a) {
+            if (!_wa_is_relevant(a)) return false;
+            var e = _wa_eff(a);
+            return e.target === el && (e.pseudoElement || null) === pe[p];
+        });
+        Array.prototype.push.apply(out, _wa_motion_order(mine));
+    }
+}
+
+// An animation `getAnimations()` lists: an effect that is current or in effect. A CSS
+// animation/transition judges that from its own clock, any other one from its play state.
+function _wa_is_relevant(a) {
+    if (!_wa_eff(a)) return false;
+    return a._css ? _css_relevant(a) : a._state !== 'idle';
+}
+
+// The effect without the style flush the public getter of a CSS animation performs.
+function _wa_eff(a) { return a._css ? a._eff : a.effect; }
+
+// CSS Transitions L2 / CSS Animations L2 «animation composite order»: transitions first
+// (by transition-property, then by creation), then CSS animations (in `animation-name` order),
+// then every other animation in creation order.
 function _wa_motion_order(list) {
-    var trs = list.filter(function(a) { return a.transitionProperty !== undefined; });
-    if (trs.length < 2) return list;
-    trs.sort(function(a, b) { return a.transitionProperty < b.transitionProperty ? -1 : (a.transitionProperty > b.transitionProperty ? 1 : 0); });
-    var i = 0;
-    return list.map(function(a) { return a.transitionProperty !== undefined ? trs[i++] : a; });
+    return list.map(function(a, i) { return { a: a, i: i }; }).sort(_wa_order_cmp).map(function(x) { return x.a; });
 }
 
-// document.getAnimations() — all non-idle animations on this document.
+// Orders `{a, i}` pairs of one target (`i` — creation order): transitions, then the CSS
+// animations still bound to their `animation-name`, then everything else — script animations
+// and CSS animations a style change took off the markup (they are «free» once played again).
+function _wa_order_cmp(x, y) {
+    var rank = function(a) { return a._ctype === 't' ? 0 : (a._ctype === 'a' && !a._free ? 1 : 2); };
+    var rx = rank(x.a), ry = rank(y.a);
+    if (rx !== ry) return rx - ry;
+    if (rx === 0 && x.a._cgen !== y.a._cgen) return x.a._cgen - y.a._cgen;
+    if (rx === 0 && x.a._cprop !== y.a._cprop) return x.a._cprop < y.a._cprop ? -1 : 1;
+    if (rx === 1 && x.a._cord !== y.a._cord) return x.a._cord - y.a._cord;
+    return x.i - y.i;
+}
+
+// document.getAnimations() — every relevant animation on this document, element after element
+// in tree order.
 function _wa_doc_get_animations() {
     // A style change nobody read since is a transition too (see `_wa_motion_tr_sync`).
     for (var nid in _wa_motion_by_nid) _wa_motion_tr_sync({ __nid__: +nid });
-    return _wa_animations.filter(function(a) { return a._state !== 'idle'; });
+    _css_an_update_all();
+    // A CSS animation is listed while its target is in the document (Web Animations §5.21); one a
+    // style change took off the markup and a script played again outlives its element's removal.
+    var live = _wa_animations.filter(function(a) {
+        if (!_wa_is_relevant(a)) return false;
+        var t = _wa_eff(a).target;
+        return !(a._css && t && t.isConnected === false);
+    });
+    if (live.length > 1) {
+        live = live.map(function(a, i) { return { a: a, i: i }; }).sort(function(x, y) {
+            var ex = _wa_eff(x.a), ey = _wa_eff(y.a);
+            var tx = ex.target, ty = ey.target;
+            if (tx !== ty && tx && ty && tx.compareDocumentPosition) {
+                var pos = tx.compareDocumentPosition(ty);
+                if (pos & 4) return -1;      // ty follows tx
+                if (pos & 2) return 1;       // ty precedes tx
+            }
+            if (tx === ty) {
+                var pr = { '': 0, '::before': 1, '::after': 2 };
+                var px = pr[ex.pseudoElement || ''] || 0, py = pr[ey.pseudoElement || ''] || 0;
+                if (px !== py) return px - py;
+                return _wa_order_cmp(x, y);
+            }
+            return x.i - y.i;
+        }).map(function(x) { return x.a; });
+    }
+    for (var i = 0; i < live.length; i++) _css_observe(live[i]);
+    return live;
+}
+
+// ── CSSANIM-MODEL: CSSAnimation / CSSTransition (CSS Animations L2 §3, CSS Transitions L2 §3) ──
+// The Rust schedulers paint CSS animations and transitions; this is the script-visible model of
+// them. Every CSS animation/transition is a real `CSSAnimation`/`CSSTransition` (an `Animation`)
+// whose effect carries the `@keyframes` of the animation, or the from/to pair of the transition,
+// and whose timing comes from the element's computed `animation-*`/`transition-*` lists.
+//
+// The objects are created where the style change is first seen: `getComputedStyle()` reads (the
+// BUG-1293 overlay), `getAnimations()`, and the schedulers' `animationstart`/`transitionrun`
+// events, whichever comes first. They own a clock record (`_c`) the overlay reads its progress
+// from, so a seek (`currentTime`, `startTime`), `pause()`, `play()`, `finish()` and `cancel()`
+// move the value `getComputedStyle()` reports; the scheduler's painted frame is not driven by
+// the script (a known gap: `docs/engine-gaps.md`).
+//
+// Clock record `_c`: `start` — the `_css_now()` instant the animation's time is
+// zero at; `pausedAt` — the instant it was paused at (current time = `pausedAt - start`), or null;
+// `pending` — 'play'|'pause' until the next frame; `pend0` — a play-pending animation that has
+// not started yet (current time 0, start time unresolved). Pending never slides `start`: the
+// painted animation began at its creation, and the reported values stay continuous with it.
+
+var _css_an_by_key = {};   // `nid:pseudo` → CSSAnimation[] in animation-name order
+var _css_tr_by_key = {};   // `nid:property` → the CSSTransition in flight
+// «Style change event» counter: transitions started by one style flush share it and sort by
+// property name; those of different flushes keep the order they were started in.
+var _css_gen = 1;
+
+function CSSAnimation() { throw new TypeError('Illegal constructor'); }
+CSSAnimation.prototype = Object.create(Animation.prototype);
+function CSSTransition() { throw new TypeError('Illegal constructor'); }
+CSSTransition.prototype = Object.create(Animation.prototype);
+[[CSSAnimation, 'CSSAnimation'], [CSSTransition, 'CSSTransition']].forEach(function(p) {
+    Object.defineProperty(p[0].prototype, 'constructor', { value: p[0], writable: true, configurable: true });
+    Object.defineProperty(p[0].prototype, Symbol.toStringTag, { value: p[1], configurable: true });
+});
+Object.defineProperty(CSSAnimation.prototype, 'animationName',
+    { get: function() { return this._cname; }, enumerable: true, configurable: true });
+Object.defineProperty(CSSTransition.prototype, 'transitionProperty',
+    { get: function() { return this._cprop; }, enumerable: true, configurable: true });
+
+// Reading or driving an animation flushes style first (Web Animations §6.4): a change of
+// `animation-name`/`animation-play-state`/`transition-*` made since is applied before the
+// answer, as if a style recalc had run.
+function _css_refresh(a) {
+    if (a._refreshing) return;
+    a._refreshing = true;
+    try {
+        if (a._ctype === 'a') _css_an_update(a._nid, a._pseudo);
+        else if (a._ctype === 't') _wa_motion_tr_sync({ __nid__: a._nid });
+    } finally {
+        a._refreshing = false;
+    }
+}
+
+function _css_invalid_state(msg) { return new DOMException(msg, 'InvalidStateError'); }
+
+// The instant every CSS animation clock reads: the time of the last frame while frames are
+// coming (a timeline does not advance inside a frame, so `startTime = timeline.currentTime -
+// 150000` seeks to exactly 150 s), the task clock otherwise. Both are `performance.now()` based,
+// so a start time is the same number on either.
+function _css_now() {
+    var f = _wa_current_time, c = _wa_gap_tr_clock();
+    return (f > 0 && c - f < 100) ? f : c;
+}
+
+// End of the effect on the animation's timeline: delay + active duration + end delay.
+function _css_end(a) {
+    var e = a._eff;
+    if (!e) return 0;
+    var t = e._timing, dur = +t.duration || 0, it = t.iterations == null ? 1 : +t.iterations;
+    var active = (dur === 0 || it === 0) ? 0 : dur * it;
+    return Math.max((+t.delay || 0) + active + (+t.endDelay || 0), 0);
+}
+
+function _css_ct(a) {
+    return !a._cx && a._c.pend0 ? 0 : _css_ct_real(a);
+}
+
+// The current time by the clock, whether or not the first frame has come: what relevance and the
+// overlay go by.
+function _css_ct_real(a) {
+    if (a._cx) return null;
+    var c = a._c;
+    if (c.pausedAt !== null) return c.pausedAt - c.start;
+    // A playing animation that has reached its end holds there (Web Animations §4.4.14).
+    var ct = _css_now() - c.start, end = _css_end(a);
+    return ct > end ? end : ct;
+}
+
+function _css_state(a) {
+    if (a._cx) return 'idle';
+    var c = a._c, st;
+    if (c.pausedAt !== null) st = 'paused';
+    else if (c.pending === 'play') st = 'running';
+    else st = _css_ct(a) >= _css_end(a) ? 'finished' : 'running';
+    _css_sync_finished(a, st === 'finished');
+    return st;
+}
+
+// Web Animations §4.4.14 «update the finished state»: resolve `finished` and queue the `finish`
+// event on arrival at the end, and replace the promise when a seek takes the animation back.
+function _css_sync_finished(a, fin) {
+    if (fin && !a._fin) {
+        a._fin = true;
+        a._finishRej = null;
+        a._onFinish();
+    } else if (!fin && a._fin) {
+        a._fin = false;
+        _css_fresh_finished(a);
+    }
+}
+
+function _css_fresh_finished(a) {
+    a._finished = new Promise(function(res, rej) { a._finishRes = res; a._finishRej = rej; });
+    a._finished.catch(function() {});   // an AbortError nobody awaited is not an error
+}
+
+// An effect a `getAnimations()` call lists: current (not yet over) or still in effect (filling).
+function _css_relevant(a) {
+    if (a._cx || !a._eff) return false;
+    if (_css_ct_real(a) < _css_end(a)) return true;
+    var fill = a._eff._timing.fill;
+    return fill === 'forwards' || fill === 'both';
+}
+
+// Ready promise: pending until the next frame (Web Animations §4.4.8 «pending play/pause task»).
+function _css_pend(a, kind) {
+    var c = a._c;
+    c.pending = kind;
+    if (!c.readyRes) {
+        a._ready = new Promise(function(res, rej) { c.readyRes = res; c.readyRej = rej; });
+        a._ready.catch(function() {});
+    }
+    if (!c.raf) c.raf = requestAnimationFrame(function() { c.raf = 0; _css_complete_pending(a); });
+}
+
+function _css_complete_pending(a) {
+    var c = a._c;
+    if (c.pending === null) return;
+    c.pending = null;
+    c.pend0 = false;
+    var res = c.readyRes;
+    c.readyRes = c.readyRej = null;
+    if (res) res(a);
+}
+
+// Arms a one-shot timer for the end of an observed animation, so `finished` settles and `finish`
+// fires without the script polling. Not armed for the many animations nobody looked at.
+function _css_arm(a) {
+    if (a._armed || a._cx || a._c.pausedAt !== null || !a._eff) return;
+    var end = _css_end(a);
+    if (end === Infinity) return;
+    var wait = Math.max(0, end - _css_ct(a));
+    a._armed = true;
+    var deadline = _lumen_now_ms() + wait;
+    _lumen_timers.push({
+        id: _lumen_timer_seq++, interval: null, nesting: 0, deadline: deadline,
+        fn: function() {
+            a._armed = false;
+            if (a._cx) return;
+            _css_state(a);
+            if (!a._fin) _css_arm(a);
+        },
+    });
+    _lumen_request_wakeup(deadline);
+}
+
+function _css_observe(a) {
+    if (!a._css) return;
+    a._obs = true;
+    _css_arm(a);
+}
+
+// Defines `name` on both CSS interfaces. Non-enumerable, like the members it overrides.
+function _css_define(name, desc) {
+    desc.configurable = true;
+    Object.defineProperty(CSSAnimation.prototype, name, desc);
+    Object.defineProperty(CSSTransition.prototype, name, desc);
+}
+
+_css_define('currentTime', {
+    get: function() { _css_refresh(this); return _css_ct(this); },
+    set: function(v) {
+        _css_refresh(this);
+        if (v === null || v === undefined) {
+            if (this._cx) return;
+            throw new TypeError("Failed to set the 'currentTime' property on 'Animation': currentTime may not be changed to an unresolved value");
+        }
+        v = +v;
+        if (isNaN(v)) throw new TypeError("Failed to set the 'currentTime' property on 'Animation': The provided double value is non-finite.");
+        var a = this, c = a._c, now = _css_now();
+        _css_readd(a);
+        if (a._cx) { _css_revive(a); c.pausedAt = now; }
+        c.pend0 = false;
+        c.start = (c.pausedAt !== null ? c.pausedAt : now) - v;
+        // A seek ends a pending play or pause: the start time is settled by the new current time.
+        if (c.pending) _css_complete_pending(a);
+        _css_state(a);
+        _css_arm(a);
+    },
+});
+
+_css_define('startTime', {
+    get: function() {
+        _css_refresh(this);
+        var c = this._c;
+        if (this._cx || c.pausedAt !== null || c.pending === 'play') return null;
+        return c.start;
+    },
+    set: function(v) {
+        var a = this, c = a._c, now = _css_now();
+        _css_refresh(a);
+        var wasPaused = !a._cx && c.pausedAt !== null;
+        if (v === null || v === undefined) {
+            // An unresolved start time freezes the animation at its current time.
+            if (!a._cx && c.pausedAt === null) { var ct = _css_ct_real(a); c.start = now - ct; c.pausedAt = now; }
+            if (c.pending) _css_complete_pending(a);
+            _css_note_ps(a, wasPaused);
+            return;
+        }
+        v = +v;
+        if (isNaN(v)) throw new TypeError("Failed to set the 'startTime' property on 'Animation': The provided double value is non-finite.");
+        _css_readd(a);
+        if (a._cx) _css_revive(a);
+        c.pausedAt = null;
+        c.pend0 = false;
+        c.start = v;
+        if (c.pending) _css_complete_pending(a);
+        _css_note_ps(a, wasPaused);
+        _css_state(a);
+        _css_arm(a);
+    },
+});
+
+_css_define('pending', { get: function() { _css_refresh(this); return this._c.pending !== null; } });
+_css_define('playState', { get: function() { _css_refresh(this); return this._state; } });
+
+// A script's own change between paused and running stands against later changes of
+// `animation-play-state` (CSS Animations L2 §3.3: the property no longer drives it).
+function _css_note_ps(a, wasPaused) {
+    if (a._ctype === 'a' && (!a._cx && a._c.pausedAt !== null) !== wasPaused) a._psOverride = true;
+}
+
+// An API `cancel()` leaves the object in place, idle; `play()` (or a seek) brings it back.
+function _css_revive(a) {
+    a._cx = false;
+    a._fin = false;
+    a._c.pausedAt = null;
+    if (_wa_animations.indexOf(a) < 0) _wa_animations.push(a);
+}
+
+function _css_cancel(a) {
+    if (a._cx) return;
+    var c = a._c, abort = function() { return new DOMException('The animation was aborted', 'AbortError'); };
+    a._cx = true;
+    if (c.readyRej) c.readyRej(abort());
+    c.readyRes = c.readyRej = null;
+    c.pending = null;
+    c.pend0 = false;
+    c.pausedAt = null;
+    if (c.raf) { cancelAnimationFrame(c.raf); c.raf = 0; }
+    a._ready = Promise.resolve(a);
+    if (a._finishRej) a._finishRej(abort());
+    a._fin = false;
+    _css_fresh_finished(a);
+    a._fire('cancel', null);
+}
+
+// The object leaves its element for good (the style no longer names it).
+function _css_drop(a) {
+    a._free = true;
+    _css_cancel(a);
+    var i = _wa_animations.indexOf(a);
+    if (i >= 0) _wa_animations.splice(i, 1);
+}
+
+// A finished transition left the list; a seek or `play()` puts it back.
+function _css_readd(a) {
+    if (_wa_animations.indexOf(a) < 0) _wa_animations.push(a);
+}
+
+function _css_play(a) {
+    _css_refresh(a);
+    _css_readd(a);
+    var c = a._c, now = _css_now();
+    var wasPaused = !a._cx && c.pausedAt !== null;
+    if (a._pbRate < 0 && _css_end(a) === Infinity) {
+        throw _css_invalid_state('Cannot play a reversed animation with an infinite effect end');
+    }
+    if (a._cx) {
+        _css_revive(a);
+        c.start = now;
+        c.pend0 = true;
+        _css_fresh_finished(a);
+        _css_pend(a, 'play');
+        _css_arm(a);
+        return;
+    }
+    var finished = _css_ct(a) >= _css_end(a);
+    if (c.pausedAt !== null) {
+        c.start = finished ? now : now - (c.pausedAt - c.start);
+        c.pausedAt = null;
+        _css_pend(a, 'play');
+    } else if (finished) {
+        c.start = now;
+        _css_pend(a, 'play');
+    }
+    if (finished) _css_sync_finished(a, false);
+    _css_note_ps(a, wasPaused);
+    _css_arm(a);
+}
+
+function _css_pause(a) {
+    var c = a._c, now = _css_now();
+    if (a._cx) { _css_revive(a); c.start = now; c.pausedAt = now; _css_pend(a, 'pause'); return; }
+    if (c.pausedAt !== null) return;
+    var ct = _css_ct_real(a);
+    c.start = now - ct;
+    c.pausedAt = now;
+    c.pend0 = false;
+    _css_pend(a, 'pause');
+}
+
+// `pause()` called by a script.
+function _css_script_pause(a) {
+    _css_refresh(a);
+    _css_pause(a);
+    // Unlike `play()`, a `pause()` of an animation that is already paused still takes it out of
+    // the hands of `animation-play-state`.
+    if (a._ctype === 'a') a._psOverride = true;
+}
+
+function _css_resume(a) {
+    var c = a._c;
+    if (a._cx || c.pausedAt === null) return;
+    c.start = _css_now() - (c.pausedAt - c.start);
+    c.pausedAt = null;
+    _css_pend(a, 'play');
+    _css_arm(a);
+}
+
+_css_define('play', { value: function() { _css_play(this); }, writable: true });
+_css_define('pause', { value: function() { _css_script_pause(this); }, writable: true });
+_css_define('cancel', { value: function() { _css_refresh(this); _css_cancel(this); }, writable: true });
+_css_define('finish', {
+    value: function() {
+        var a = this, c = a._c;
+        _css_refresh(a);
+        var end = _css_end(a);
+        if (end === Infinity) throw _css_invalid_state('Cannot finish an animation with an infinite effect end');
+        if (a._cx) _css_revive(a);
+        c.start = _css_now() - end;
+        c.pausedAt = null;
+        c.pend0 = false;
+        if (c.pending) _css_complete_pending(a);
+        _css_state(a);
+    },
+    writable: true,
+});
+
+// Builds the CSS animation or transition object: `proto` picks the interface, `nid` the element,
+// `pseudo` (or null) the pseudo-element of the effect target, `clock` the record of §above.
+function _css_new(proto, nid, pseudo, clock) {
+    var a = Object.create(proto);
+    var eff = new KeyframeEffect(_lumen_make_element(nid), [], {});
+    eff.pseudoElement = pseudo || null;
+    Animation.call(a, eff, _wa_doc_timeline);
+    a._css = true;
+    a._nid = nid;
+    a._pseudo = pseudo || null;
+    a._eff = eff;
+    a._cx = false;
+    a._fin = false;
+    a._obs = false;
+    a._effRepl = false;
+    a._armed = false;
+    a._c = clock;
+    Object.defineProperty(a, 'effect', {
+        get: function() { _css_refresh(this); return this._eff; },
+        set: function(v) {
+            if (v === this._eff) return;
+            this._eff = v || null;
+            this._effRepl = true;
+            if (v) Object.defineProperty(v, '_animation', { value: this, writable: true, configurable: true });
+            _css_state(this);
+        },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(a, '_state', {
+        get: function() { return _css_state(this); },
+        set: function() {},
+        configurable: true,
+    });
+    Object.defineProperty(a, 'ready', {
+        get: function() { _css_refresh(this); return this._ready; },
+        set: function(v) { this._ready = v; },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(a, 'finished', {
+        get: function() { _css_refresh(this); return this._finished; },
+        set: function(v) { this._finished = v; },
+        enumerable: true, configurable: true,
+    });
+    _css_fresh_finished(a);
+    _css_pend(a, 'play');
+    _wa_animations.push(a);
+    return a;
+}
+
+function _css_new_clock() {
+    return { start: _css_now(), pausedAt: null, pending: null, pend0: true,
+             readyRes: null, readyRej: null, raf: 0 };
+}
+
+// Computed value of an `animation-*`/`transition-*` property of the element or one of its
+// pseudo-elements.
+function _css_prop(nid, pseudo, name) {
+    if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo.slice(2), name) || '';
+    return _lumen_computed_property(nid, name);
+}
+
+function _css_an_lists(nid, pseudo) {
+    var lists = {};
+    ['name', 'duration', 'delay', 'timing-function', 'iteration-count', 'direction', 'fill-mode',
+     'play-state', 'composition'].forEach(function(p) {
+        lists[p] = _wa_gap_tr_split(_css_prop(nid, pseudo, 'animation-' + p));
+    });
+    return lists;
+}
+
+// `@keyframes name` as Web Animations keyframes: one per `@keyframes` block, `animation-
+// timing-function` / `animation-composition` of the block turned into its easing / composite.
+function _css_an_keyframes(name, easing) {
+    var json = _wa_gap_keyframes_json(name);
+    if (json == null) return [];
+    var frames = JSON.parse(json), out = [];
+    for (var i = 0; i < frames.length; i++) {
+        var kf = { offset: frames[i].offset, computedOffset: frames[i].offset, easing: easing, composite: 'auto' };
+        var decls = frames[i].decls;
+        for (var j = 0; j < decls.length; j++) {
+            var prop = decls[j][0];
+            if (prop === 'animation-timing-function') kf.easing = decls[j][1];
+            else if (prop === 'animation-composition') kf.composite = decls[j][1];
+            else kf[prop.replace(/-([a-z])/g, function(m, ch) { return ch.toUpperCase(); })] = decls[j][1];
+        }
+        out.push(kf);
+    }
+    out.sort(function(x, y) { return x.offset - y.offset; });
+    return out;
+}
+
+// Copies the computed `animation-*` of list slot `i` onto the animation: the timing (unless a
+// script replaced the effect) when it changed since the last copy, and a changed
+// `animation-play-state` as a pause or a resume — a script's own `pause()`/`play()` stands until
+// the style says something new.
+function _css_an_apply(a, lists, i) {
+    var pick = function(p) { var l = lists[p]; return l && l.length ? l[i % l.length] : ''; };
+    var sig = [pick('duration'), pick('delay'), pick('iteration-count'), pick('direction'),
+               pick('fill-mode')].join('|');
+    if (a._sig !== sig && !a._effRepl && a._eff) {
+        a._sig = sig;
+        var itok = pick('iteration-count'), t = a._eff._timing;
+        t.duration = _wa_gap_tr_seconds(pick('duration')) * 1000;
+        t.delay = _wa_gap_tr_seconds(pick('delay')) * 1000;
+        t.endDelay = 0;
+        t.iterations = itok === 'infinite' ? Infinity : (parseFloat(itok) >= 0 ? parseFloat(itok) : 1);
+        t.direction = pick('direction') || 'normal';
+        t.fill = pick('fill-mode') || 'none';
+        t.easing = 'linear';
+        if (a._obs) _css_arm(a);
+    }
+    var ps = pick('play-state');
+    if (a._cps !== ps) {
+        var first = a._cps === undefined;
+        a._cps = ps;
+        if (!a._cx && (first || !a._psOverride)) {
+            if (ps === 'paused') _css_pause(a);
+            else if (!first) _css_resume(a);
+        }
+    }
+    var comp = pick('composition');
+    if (a._eff && !a._effRepl) a._eff.composite = comp === 'add' || comp === 'accumulate' ? comp : 'replace';
+}
+
+function _css_boxless(nid) {
+    return _lumen_get_computed_style(nid, 'computed:-lumen-boxless') !== ''
+        || _lumen_get_computed_style(nid, 'display') === 'none';
+}
+
+// Re-reads the element's (or pseudo-element's) `animation-name` list and brings its CSSAnimation
+// objects in line: new names create one, dropped names cancel theirs, repeated names keep one
+// object per occurrence. Returns `[{anim, i}]` in list order (`i` = slot in the computed lists).
+function _css_an_update(nid, pseudo) {
+    var key = nid + ':' + (pseudo || '');
+    var cur = _css_an_by_key[key];
+    var names = _wa_gap_tr_split(_css_prop(nid, pseudo, 'animation-name'));
+    var none = names.length === 1 && (names[0] === 'none' || names[0] === '');
+    var res = [];
+    if (none && !cur) { res.lists = null; return res; }
+    // CSS Animations L1 §3: an element that is not rendered runs no animation.
+    if (none || (!pseudo && _css_boxless(nid))) names = [];
+    var lists = _css_an_lists(nid, pseudo), next = [], occ = {};
+    cur = cur || [];
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (name === 'none' || name === '') continue;
+        var k = occ[name] = (occ[name] === undefined ? 0 : occ[name] + 1), anim = null;
+        for (var j = 0; j < cur.length; j++) {
+            if (cur[j]._cname === name && cur[j]._occ === k) { anim = cur[j]; break; }
+        }
+        if (!anim) {
+            if (!_wa_motion_has_frames(name)) continue;
+            anim = _css_new(CSSAnimation.prototype, nid, pseudo, _css_new_clock());
+            anim._ctype = 'a';
+            anim._cname = name;
+            anim._occ = k;
+            anim._eff._keyframes = _css_an_keyframes(name, (lists['timing-function'][i % lists['timing-function'].length]) || 'ease');
+        }
+        _css_an_apply(anim, lists, i);
+        anim._cord = i;
+        next.push(anim);
+        res.push({ anim: anim, i: i });
+    }
+    for (var d = 0; d < cur.length; d++) {
+        if (next.indexOf(cur[d]) < 0) _css_drop(cur[d]);
+    }
+    if (next.length) _css_an_by_key[key] = next; else delete _css_an_by_key[key];
+    res.lists = lists;
+    return res;
+}
+
+// A transition the overlay (or a `transitionrun` event) just started; `run` is its clock record
+// and what the overlay reads its progress from.
+function _css_tr_start(nid, kebab, camel, run) {
+    run.pausedAt = null;
+    run.pending = null;
+    run.pend0 = true;
+    run.readyRes = run.readyRej = null;
+    run.raf = 0;
+    var a = _css_new(CSSTransition.prototype, nid, null, run);
+    run._anim = a;
+    a._ctype = 't';
+    a._cprop = kebab;
+    a._cgen = _css_gen;
+    var easing = run.easing || 'ease';
+    a._eff._timing = {
+        duration: run.dur, delay: run.delay, endDelay: 0, fill: 'backwards',
+        iterationStart: 0, iterations: 1, easing: easing, direction: 'normal'
+    };
+    var k0 = { offset: 0, computedOffset: 0, easing: 'linear', composite: 'auto' };
+    var k1 = { offset: 1, computedOffset: 1, easing: 'linear', composite: 'auto' };
+    k0[camel] = run.from;
+    k1[camel] = run.to;
+    a._eff._keyframes = [k0, k1];
+    _css_tr_by_key[nid + ':' + kebab] = a;
+    return a;
+}
+
+// The transition of `run` is cancelled by a style change — unless it already finished.
+function _css_tr_cancel(run) {
+    var a = run && run._anim;
+    if (a && !a._cx && _css_ct_real(a) < _css_end(a)) _css_drop(a);
+}
+
+// The transition is over (finished or cancelled): it leaves the element's list. The object
+// stays usable — a seek or `play()` puts it back.
+function _css_tr_retire(nid, kebab) {
+    var key = nid + ':' + kebab, a = _css_tr_by_key[key];
+    if (!a) return;
+    delete _css_tr_by_key[key];
+    var i = _wa_animations.indexOf(a);
+    if (i >= 0) _wa_animations.splice(i, 1);
+}
+
+// `transitionrun` from the Rust scheduler (opacity, transform, colours, height): the overlay
+// does not run those, so the object is made here, from the computed `transition-*` lists.
+function _css_tr_from_event(nid, prop) {
+    var key = nid + ':' + prop, a = _css_tr_by_key[key];
+    if (a && !a._cx && _css_relevant(a)) return a;
+    var tm = _wa_gap_tr_timing(nid, prop);
+    var run = { from: '', to: '', start: _css_now(), dur: tm ? tm.dur * 1000 : 0,
+                delay: tm ? tm.delay * 1000 : 0, easing: tm ? tm.easing : 'ease', done: false };
+    a = _css_tr_start(nid, prop, prop.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); }), run);
+    a._ev = true;
+    return a;
+}
+
+// `transitioncancel` from the Rust scheduler: only a transition made from its `transitionrun`
+// is cancelled by it — the overlay cancels its own when it sees the style change.
+function _css_tr_event_cancel(nid, prop) {
+    var key = nid + ':' + prop, a = _css_tr_by_key[key];
+    if (!a || !a._ev) return;
+    delete _css_tr_by_key[key];
+    _css_drop(a);
+}
+
+// `getComputedStyle(el)` is a style recalc: a running transition of the element whose
+// `transition-property` (or the value itself) changed is cancelled there, whichever property
+// is read next.
+var _css_tr_pruning = false;
+function _css_tr_prune(nid) {
+    if (_css_tr_pruning) return;
+    var live = false;
+    for (var k in _css_tr_by_key) {
+        if (k.indexOf(nid + ':') === 0) { live = true; break; }
+    }
+    if (!live) return;
+    _css_tr_pruning = true;
+    try { _wa_motion_tr_sync({ __nid__: nid }); } finally { _css_tr_pruning = false; }
+}
+
+// Every element with CSS animations, for `document.getAnimations()`.
+function _css_an_update_all() {
+    for (var key in _css_an_by_key) {
+        var at = key.indexOf(':');
+        _css_an_update(+key.slice(0, at), key.slice(at + 1) || null);
+    }
+    if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
+    var els = document.querySelectorAll('*');
+    for (var n = 0; n < els.length; n++) {
+        var nid = els[n].__nid__;
+        if (nid == null) continue;
+        _css_an_update(nid, null);
+        _css_an_update(nid, '::before');
+        _css_an_update(nid, '::after');
+    }
+}
+
+// The element's `getAnimations()` entry point: brings the CSS animations of the element and its
+// pseudo-elements up to date.
+function _wa_gap_an_sync(target, pseudo) {
+    var nid = target && target.__nid__;
+    if (nid == null) return;
+    _css_an_update(nid, pseudo || null);
+}
+
+// `getComputedStyle()` is a style recalc: an element whose `animation-name` dropped a running
+// animation has it cancelled there, whichever property is read next.
+function _wa_motion_prune(nid) {
+    if (_css_an_by_key[nid + ':']) _css_an_update(nid, null);
 }
 
 // ── Web Locks API (W3C Web Locks API §5) ──────────────────────────────────────

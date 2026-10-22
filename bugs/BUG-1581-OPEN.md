@@ -1,6 +1,6 @@
 # BUG-1581 — Модель CSS Animations/Transitions в JS: нет интерфейсов `CSSAnimation`/`CSSTransition`, `getAnimations()` отдаёт пустые оболочки без эффекта и таймлайна
 
-**Статус:** OPEN (ДОРАБОТКА → CSSANIM-MODEL)
+**Статус:** OPEN (ДОРАБОТКА → CSSANIM-MODEL-2)
 **Заведён:** 2026-10-09 (P2, WPT-RUN-14 срез 26, `css/css-page` + `css-animations` + `css-transitions` + `css-shadow` + `css-borders` + `css-scroll-snap`)
 **Область:** js/layout (`crates/js/src/shim/web_api_shim_mid_b4.js:761` `_lumen_css_anim_register` — запись `Animation` с пустым `KeyframeEffect`; планировщики `AnimationScheduler`/`TransitionScheduler` стартуют на тике кадра)
 
@@ -36,3 +36,7 @@ WPT-RUN-14 срез 26: 57 id `css-animations/CSS*`, `css-transitions/CSSTransit
 ## Как проверить
 
 `css/css-animations/CSSAnimation-id.tentative.html`, `Element-getAnimations.tentative.html`, `css/css-transitions/CSSTransition-ready.tentative.html`.
+
+## Срез 1 (CSSANIM-MODEL, P1, 2026-10-22)
+
+Сделано: интерфейсы `CSSAnimation`/`CSSTransition`, по объекту на вхождение имени и на идущий переход, эффект из `@keyframes`/пары from/to, часы объекта (`currentTime`/`startTime`/`pause()`/`play()`/`finish()`/`cancel()` двигают вычисленное значение), `pending`/`ready`/`finished`, составной порядок, `getAnimations({subtree})`, `document.getAnimations()` по документу. Три тестовых файла из «Как проверить» зелёные. Остаток — CSSANIM-MODEL-2 (стиль «до изменения» для непрочитанных свойств, замена эффекта, события от скриптовой перемотки, нарисованный кадр при `cancel()`/перемотке нативных свойств).

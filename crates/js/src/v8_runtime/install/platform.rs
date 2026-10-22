@@ -1218,6 +1218,36 @@ fn highlight_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<
     Some(lumen_layout::computed_style_to_map(&style))
 }
 
+/// The cascaded style of a `::before`/`::after` of node `nid` that generated no box, from the
+/// DOM and the stylesheet. Inheritance is not modelled (the parent is the initial style): the
+/// callers read properties that do not inherit (`animation-*`, `transition-*`, `content`).
+fn generated_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<HashMap<String, String>> {
+    if kind != "before" && kind != "after" {
+        return None;
+    }
+    let sheet = flush.stylesheet.lock().ok()?.clone()?;
+    // The sheet the flush cascades against: the pushed one plus every `<style>` and CSSOM edit
+    // the page has made since.
+    let sheet = flush.cssom_patched_sheet(&sheet).unwrap_or(sheet);
+    let [w, h] = *flush.viewport_size.lock().ok()?;
+    let doc = flush.doc.lock().ok()?;
+    let node = NodeId::from_raw(nid);
+    if !doc.contains_id(node) {
+        return None;
+    }
+    let parent = lumen_layout::ComputedStyle::root();
+    let style = lumen_layout::style::compute_pseudo_element_style(
+        &doc,
+        node,
+        kind,
+        &sheet,
+        &parent,
+        lumen_core::geom::Size::new(w, h),
+        false,
+    )?;
+    Some(lumen_layout::computed_style_to_map(&style))
+}
+
 /// `window.getComputedStyle` and custom-property reads off the cascade snapshot.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]
@@ -1301,11 +1331,16 @@ pub(crate) fn install_computed_styles(
                     .and_then(|m| m.get(&prop).cloned())
                     .unwrap_or_default();
             }
-            pcs.lock()
-                .unwrap()
-                .get(&(nid, kind))
-                .and_then(|m| m.get(&prop))
-                .cloned()
+            let guard = pcs.lock().unwrap();
+            if let Some(m) = guard.get(&(nid, kind.clone())) {
+                return m.get(&prop).cloned().unwrap_or_default();
+            }
+            drop(guard);
+            // `::before`/`::after` whose `content` generates nothing to draw (`content: ''`)
+            // have no box and so no snapshot entry; CSS Animations still run on them and
+            // `getAnimations()` lists them, so their style is cascaded on demand.
+            generated_pseudo_style(&flush, nid, &kind)
+                .and_then(|m| m.get(&prop).cloned())
                 .unwrap_or_default()
         });
     }

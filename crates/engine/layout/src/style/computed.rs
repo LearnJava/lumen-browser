@@ -786,6 +786,10 @@ pub struct ComputedStyle {
     pub list_style_image: Option<String>,
     /// CSS Transitions L1 §3 — `transition-property: none | all | <ident>+`.
     pub transition_properties: Vec<String>,
+    /// `transition-property: none` was declared (the list is empty either way: the scheduler
+    /// treats both as «no transition»). Only the computed value differs — `none` against the
+    /// initial `all` (CSSANIM-MODEL).
+    pub transition_property_none: bool,
     /// CSS Transitions L1 §3 — `transition-duration: <time>+` в секундах.
     pub transition_durations: Vec<f32>,
     /// CSS Transitions L1 §3 — `transition-delay: <time>+` в секундах.
@@ -1574,6 +1578,7 @@ impl ComputedStyle {
             list_style_position: ListStylePosition::Outside,
             list_style_image: None,
             transition_properties: Vec::new(),
+            transition_property_none: false,
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
@@ -2002,6 +2007,7 @@ impl ComputedStyle {
             list_style_image: inherited.list_style_image.clone(),
             // CSS Transitions / Animations — не наследуются. Initial = empty list.
             transition_properties: Vec::new(),
+            transition_property_none: false,
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),

@@ -344,6 +344,7 @@ pub(in crate::style) fn apply_transition_shorthand(style: &mut ComputedStyle, va
     }
 
     style.transition_properties = props;
+    style.transition_property_none = false;
     style.transition_durations = durations;
     style.transition_timing_functions = timings;
     style.transition_delays = delays;

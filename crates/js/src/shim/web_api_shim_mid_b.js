@@ -1097,6 +1097,7 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     _ro_raf_epoch++;
     var ts = timestamp_ms < 0 ? performance.now() : +timestamp_ms;
     _wa_current_time = ts;
+    _wa_gap_tr_clock_ms = null;   // a new frame is a new task: CSS animation clocks re-read the time
     // BUG-1041: playback events queued before this frame go out ahead of the
     // rAF callbacks (Web Animations §4.4.3 "update animations and send events").
     if (typeof _wa_pending_events !== 'undefined' && _wa_pending_events.length !== 0) {

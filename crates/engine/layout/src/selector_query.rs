@@ -2224,7 +2224,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
     m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
     m.insert("transition-property".into(), if style.transition_properties.is_empty() {
-        "all".into()
+        if style.transition_property_none { "none".into() } else { "all".into() }
     } else {
         style.transition_properties.join(", ")
     });

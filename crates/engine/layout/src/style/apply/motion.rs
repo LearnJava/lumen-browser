@@ -523,6 +523,7 @@ pub(in crate::style) fn apply_decl_motion(
         }
         "transition-property" => {
             let trimmed = val.trim();
+            style.transition_property_none = trimmed.eq_ignore_ascii_case("none");
             if trimmed.eq_ignore_ascii_case("none") {
                 style.transition_properties = Vec::new();
             } else if trimmed.eq_ignore_ascii_case("all") {

@@ -107,6 +107,16 @@ pub(crate) fn install_stylesheets(
             Some(serde_json::Value::Array(frames).to_string())
         });
     }
+    // Whether any enabled sheet defines a `@keyframes` rule. `document.getAnimations()` walks
+    // every element for CSS animations only when this is true.
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_has_keyframes", move || -> bool {
+            sync.sync();
+            let guard = sync.nodes.lock().unwrap_or_else(|e| e.into_inner());
+            guard.iter().filter(|e| !e.disabled).any(|e| !e.sheet.keyframes.is_empty())
+        });
+    }
     {
         let s = Arc::clone(&stylesheet_nodes);
         reg!(scope, ctx, store, "_lumen_stylesheet_disabled", move |idx: u32| -> bool {
