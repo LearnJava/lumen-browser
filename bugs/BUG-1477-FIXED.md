@@ -1,6 +1,6 @@
 # BUG-1477 — Якорь — разорванный inline (несколько строк / колонок) или внутри multicol: берётся один прямоугольник, а не объединение фрагментов
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout (`crates/engine/layout/src/anchor.rs` — `collect_anchors`, геометрия якоря-`inline` со многими боксами/строками)
 
@@ -30,3 +30,11 @@ WPT-RUN-14 срез 21: `css-anchor-position/anchor-name-inline-001.html`, `anch
 ## Как проверить
 
 Таблица выше; `css/css-anchor-position/anchor-name-inline-001.html`.
+
+## Исправление
+
+Корень: `collect_anchors` обходил только `LayoutBox`, а простой inline-элемент (`<span>`, `<div style="display:inline">`) своего бокса не имеет (BUG-488) — его `anchor-name` в реестр не попадал, цель оставалась на статической позиции `(0, …)`. Теперь `apply_anchor_positions` получает `doc` и кэш каскада: `InlineAnchors::from_cascade` собирает inline-элементы с `anchor-name` (если их нет — обход фрагментов пропускается), а `collect_anchors_inline` регистрирует каждый как объединение строковых фрагментов его `InlineRun` (общий с `getBoundingClientRect` проход `for_each_inline_frag_ancestor`, в порядке дерева вместе с боксами). Текст во вложенном `<b>` внутри якоря входит в объединение; `inline-block` по-прежнему идёт через собственный бокс. Тесты: `box_tree/tests/anchor_inline.rs`.
+
+## Остаток
+
+`multicol`: простые случаи (якорь во второй колонке, цель в `position:relative` multicol-контейнере или вне него) проверены юнит-пробой и дают верные координаты. WPT `anchor-position-multicol-*` в репозитории не вендорен; если после вендоринга они всё ещё красные, нужен новый баг с конкретным воспроизведением (разрыв самого якоря между колонками, `column-span`).
