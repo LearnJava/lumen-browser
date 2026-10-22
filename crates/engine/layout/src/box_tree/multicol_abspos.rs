@@ -368,6 +368,26 @@ pub(super) fn lay_out_abs_children_with(
     // This registry is used to resolve `position-anchor` and `anchor()` function calls below.
     // CSS: anchor-name, position-anchor, anchor()
     let anchors = crate::anchor::collect_anchors(parent);
+    // BUG-1483: each child sees only the anchors before it in tree order; `child_seq[i]` is the
+    // pre-order index `collect_anchors` gave `parent.children[i]` (the parent itself is 0).
+    let child_seq: Vec<u32> = if anchors.is_empty() {
+        Vec::new()
+    } else {
+        let mut next = 1u32;
+        parent
+            .children
+            .iter()
+            .map(|c| {
+                let at = next;
+                let mut stack = vec![c];
+                while let Some(b) = stack.pop() {
+                    next += 1;
+                    stack.extend(b.children.iter());
+                }
+                at
+            })
+            .collect()
+    };
     // css-transforms-1 §2: `parent` itself captures its `position: fixed` children when it
     // carries a transform/filter/…; otherwise they resolve against the viewport.
     let fixed_cb = fixed_cb_rect(parent);
@@ -382,7 +402,9 @@ pub(super) fn lay_out_abs_children_with(
             my_pcb
         };
         let rtl = static_rtl && cb_override.is_none();
-        place_abs_child(&mut parent.children[idx], static_x, rtl, static_y, cb, &anchors, measurer, viewport, my_pcb, hp);
+        let seen = child_seq.get(idx).map(|&seq| anchors.before(seq));
+        let anchors = seen.as_deref().unwrap_or(&anchors);
+        place_abs_child(&mut parent.children[idx], static_x, rtl, static_y, cb, anchors, measurer, viewport, my_pcb, hp);
     }
 }
 

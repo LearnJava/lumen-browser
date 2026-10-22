@@ -539,6 +539,7 @@ mod flex_vwm6;
 mod fixed_cb;
 mod anchor_scroll;
 mod anchor_inline;
+mod anchor_order;
 mod abs_auto_margins;
 mod relative_offset_flow;
 mod vertical_positioned;
