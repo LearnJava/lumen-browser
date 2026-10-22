@@ -41,12 +41,14 @@ mod caret_blink;
 mod close_warning;
 mod status_bubble;
 mod chrome_float;
+mod chrome_action;
 mod chrome_preview;
 mod chrome_ui;
 mod cli_args;
 mod diag_stderr;
 mod doc_extract;
 mod web_font_usage;
+mod web_font_fetch;
 mod display_list_metrics;
 mod dump_mode;
 mod dump_tls;
@@ -141,6 +143,7 @@ mod import_manager;
 mod translate_manager;
 mod find;
 mod layout_fix;
+mod layout_shift;
 mod frame_ancestry;
 mod frame_dynamic_load;
 mod frame_lazy;
@@ -154,6 +157,7 @@ mod image_cache;
 mod memory_poll;
 mod newtab;
 mod input;
+mod js_precollect;
 #[allow(dead_code)] // UX-AUTOFILL: потребители — срезы 2–4
 mod autofill_form;
 mod autofill_store;
@@ -176,7 +180,9 @@ mod panels;
 mod platform;
 mod prefetch;
 mod reader_view;
+mod video_tick;
 mod relayout;
+mod relayout_job;
 mod render_thread;
 mod resource_timing;
 mod source_view;
@@ -212,7 +218,7 @@ mod renderer_process;
 use crate::display_list_metrics::{
     build_split_placeholder, content_height_of, content_width_in, content_width_of, next_dl_epoch, paint_ordered, paint_ordered_cached,
 };
-use crate::app::about_to_wait::{PendingEval, PendingWait};
+use crate::app::automation_cmds::{PendingEval, PendingWait};
 use crate::doc_extract::{
     DynamicCssBase, collect_style_attr_csp_blocked, extract_style_blocks, extract_style_chunks,
     extract_title, inline_style_fingerprint, merge_sheet_chunks, stylesheet_link_fingerprint, window_title,

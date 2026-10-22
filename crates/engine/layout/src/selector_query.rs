@@ -1370,6 +1370,12 @@ pub fn inline_segment_style_map(style: &ComputedStyle) -> HashMap<String, String
 fn webkit_box_computed_display(style: &ComputedStyle) -> &'static str {
     let is_clamping = style.box_orient == WebkitBoxOrient::Vertical
         && (style.line_clamp.is_some() || style.line_clamp_auto || style.continue_value == CssContinue::Discard);
+    if let Some((display, form)) = style.display_form
+        && display == style.display
+        && style.legacy_box_display.is_none()
+    {
+        return form;
+    }
     match style.legacy_box_display.unwrap_or(style.display) {
         Display::Block => "block",
         Display::Inline => "inline",
@@ -4257,6 +4263,27 @@ mod tests {
             "div { display: -webkit-inline-flex; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }",
         );
         assert_eq!(m.get("display").map(String::as_str), Some("inline-flex"));
+    }
+
+    #[test]
+    fn multi_word_display_serialises_canonically() {
+        // BUG-1476: CSS Display 3 §2 — двухсловные формы и слова, которых нет в `Display`.
+        for (decl, want) in [
+            ("inline flow-root", "inline-block"),
+            ("block flow-root", "flow-root"),
+            ("list-item block", "list-item"),
+            ("inline list-item", "inline list-item"),
+            ("list-item flow-root inline", "inline flow-root list-item"),
+            ("inline grid", "inline-grid"),
+            ("block flex", "flex"),
+            ("block ruby", "block ruby"),
+            ("grid-lanes", "grid-lanes"),
+        ] {
+            let (doc, tree) = layout_tree("<div>x</div>", &format!("div {{ display: {decl}; }}"));
+            let b = find_box_by_selector(&tree, &doc, "div").unwrap_or_else(|| panic!("display: {decl}: no div box"));
+            let m = computed_style_to_map(&b.style);
+            assert_eq!(m.get("display").map(String::as_str), Some(want), "display: {decl}");
+        }
     }
 
     #[test]

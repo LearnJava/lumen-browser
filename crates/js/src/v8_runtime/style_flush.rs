@@ -130,7 +130,7 @@ pub(crate) struct FlushHandles {
     /// `true` once the page has read `getComputedStyle(el, pseudoElt)`/
     /// `computedStyleMap()`'s pseudo-element path. Gates the matching
     /// collector in [`Self::maybe_flush`] the same way the async
-    /// `collect_js_data` (`crates/shell/src/relayout.rs`) gates its own copy
+    /// `collect_js_data` (`crates/shell/src/js_precollect.rs`) gates its own copy
     /// of the same collector — S42's consumer audit found no reader of
     /// `pseudo_computed_styles` outside the `maybe_flush`-gated natives, so
     /// this cannot serve a stale answer.
