@@ -117,3 +117,72 @@ fn deep_svg_mask_chain_drops_without_overflowing_the_stack() {
     }
     drop(node);
 }
+
+/// The same chain through `Clone`: `#[derive(Clone)]` recursed one native
+/// frame per level and overflowed a `cargo test` worker at ~380 levels (the
+/// wall `grid_trampoline`'s deep-chain test hit through the probe-reuse
+/// stash). Both the source and the copy drop for real afterwards.
+#[test]
+fn deep_single_child_chain_clones_without_overflowing_the_stack() {
+    const DEPTH: usize = 200_000;
+    let mut node = block(vec![]);
+    for _ in 0..DEPTH {
+        node = block(vec![node]);
+    }
+    let copy = node.clone();
+    let mut depth = 0;
+    let mut cur = &copy;
+    while let [only] = cur.children.as_slice() {
+        cur = only;
+        depth += 1;
+    }
+    assert_eq!(depth, DEPTH);
+}
+
+/// `SvgMaskContent::content` is cloned from the same work stack, not by the
+/// derived `BoxKind` impl recursing back into `LayoutBox::clone`.
+#[test]
+fn deep_svg_mask_chain_clones_without_overflowing_the_stack() {
+    const DEPTH: usize = 200_000;
+    let mut node = svg_shape_with_mask(vec![]);
+    for _ in 0..DEPTH {
+        node = svg_shape_with_mask(vec![node]);
+    }
+    let copy = node.clone();
+    drop(node);
+    drop(copy);
+}
+
+/// The iterative clone keeps every nested box in its own list and in source
+/// order: `children`, `cv_hidden` and `<mask>` content, at several depths.
+#[test]
+fn clone_preserves_children_cv_hidden_and_mask_order() {
+    fn tagged(i: usize, children: Vec<LayoutBox>) -> LayoutBox {
+        let mut b = block(children);
+        b.node = lumen_dom::NodeId::from_index(i);
+        b
+    }
+    fn ids(list: &[LayoutBox]) -> Vec<usize> {
+        list.iter().map(|b| b.node.index()).collect()
+    }
+    let mut masked = svg_shape_with_mask(vec![tagged(30, vec![tagged(31, vec![])]), tagged(32, vec![])]);
+    masked.node = lumen_dom::NodeId::from_index(3);
+    let mut root = tagged(0, vec![tagged(1, vec![tagged(10, vec![]), tagged(11, vec![])]), tagged(2, vec![]), masked]);
+    root.cv_hidden = vec![tagged(4, vec![tagged(40, vec![])]), tagged(5, vec![])];
+    root.children[1].cv_hidden = vec![tagged(20, vec![])];
+    root.rect = Rect::new(1.0, 2.0, 3.0, 4.0);
+
+    let copy = root.clone();
+    assert_eq!(copy.rect, root.rect);
+    assert_eq!(ids(&copy.children), [1, 2, 3]);
+    assert_eq!(ids(&copy.cv_hidden), [4, 5]);
+    assert_eq!(ids(&copy.children[0].children), [10, 11]);
+    assert_eq!(ids(&copy.children[1].cv_hidden), [20]);
+    assert!(copy.children[1].children.is_empty());
+    assert_eq!(ids(&copy.cv_hidden[0].children), [40]);
+    let BoxKind::SvgShape { svg_mask: Some(mask), .. } = &copy.children[2].kind else {
+        unreachable!("the third child is the masked SvgShape");
+    };
+    assert_eq!(ids(&mask.content), [30, 32]);
+    assert_eq!(ids(&mask.content[0].children), [31]);
+}

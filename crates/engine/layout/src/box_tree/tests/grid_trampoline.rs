@@ -9,19 +9,22 @@
 //!
 //! Neither test here reaches the `DEPTH: usize = 20_000` sibling constant in
 //! `flex_trampoline`/`block_flow_trampoline` — grid's own probe/reuse design
-//! (BUG-341 S33) makes a single-item chain hit one of two *pre-existing*,
-//! out-of-scope walls before the dispatch-recursion this slice fixes ever
-//! becomes the limiting factor (both empirically confirmed while writing this
-//! file, not assumed):
+//! (BUG-341 S33) makes a single-item chain cost more than linear time, so
+//! both tests are sized by run time, not by stack depth (empirically
+//! confirmed while writing this file, not assumed):
 //! - With reuse eligible (the common case — see `deep_grid_chain_*` below),
 //!   `GridInit::probe_reuse`'s stash clones the *reused* subtree
-//!   (`frame.b.children[i].clone()` in `grid_trampoline::post_probe_item`) —
-//!   `LayoutBox`'s `#[derive(Clone)]`, unlike its `impl Drop`, was never
-//!   converted to an explicit stack (LAYOUT-1 fixed only `Drop`), so it
-//!   recurses natively over however much of the chain sits below the item
-//!   being probed. Confirmed to overflow a `cargo test` worker thread's stack
-//!   at `DEPTH == 1_000` (and `5_000`), pass cleanly at `500` — the constant
-//!   below stays under that empirically-found ceiling with margin.
+//!   (`frame.b.children[i].clone()` in `grid_trampoline::post_probe_item`)
+//!   at every level, so a chain of `n` costs O(n²) box copies. That clone
+//!   used to be a stack wall as well: `LayoutBox`'s `#[derive(Clone)]`
+//!   recursed natively per level and overflowed a `cargo test` worker at
+//!   `DEPTH == 1_000` when this file was written, and at ~380 by 2026-10-22
+//!   after `LayoutBox` grew fields — so the then-500 constant below started
+//!   aborting the whole test binary. Since 2026-10-22 `impl Clone for
+//!   LayoutBox` is iterative (explicit heap stack, like LAYOUT-1's `Drop`),
+//!   and the wall is gone: measured on 2026-10-22, the test passes on the
+//!   default worker stack at 500 (1.4 s), 1 000 and 2 000 (14 s). `DEPTH`
+//!   stays 500 for run time, not stack safety.
 //! - With reuse defeated (`deep_subgrid_chain_*` below — a subgrid item's
 //!   track context genuinely differs between probe and final, so it can
 //!   never reuse, unlike a probe/CV-touched miss), *both* passes dispatch a
@@ -38,10 +41,10 @@
 //!   magnitude past the ~150–800 native-recursion-overflow range LAYOUT-1's
 //!   ROADMAP entry measured for other unconverted recursive functions.
 //!
-//! Both walls are pre-existing and out of this slice's scope — the same
+//! Both costs are pre-existing and out of this slice's scope — the same
 //! stance `flex_trampoline`'s own deep-chain tests take toward the Step 1
 //! probe and `flex_auto_base_main_width` (see that module's doc comment):
-//! construct around a known unrelated recursion rather than "fix" it here.
+//! construct around a known unrelated cost rather than "fix" it here.
 
 use lumen_core::geom::Size;
 use crate::style::{ComputedStyle, Display, GridTrackSize, Length};
@@ -51,9 +54,9 @@ use super::super::{BoxKind, BoxOrigin, LayoutBox, Rect};
 const VIEWPORT: Size = Size { width: 800.0, height: 600.0 };
 const LEAF_HEIGHT: f32 = 10.0;
 const COL_WIDTH: f32 = 100.0;
-/// See the file doc comment — bounded by `LayoutBox::Clone`'s native
-/// recursion (pre-existing, out of scope), not by anything this slice fixes.
-/// Empirically: 500 passes, 1 000 and 5 000 overflow the stack.
+/// See the file doc comment — bounded by the O(n²) cost of the probe-reuse
+/// stash, not by stack depth: on 2026-10-22, 500 runs in 1.4 s and 2 000 in
+/// 14 s, both on the default `cargo test` worker stack.
 const DEPTH: usize = 500;
 /// See the file doc comment — bounded by the `T(n) = 2·T(n-1)` cost of a
 /// chain where every level is reuse-ineligible by construction, not by stack
@@ -237,3 +240,4 @@ fn absolute_child_of_grid_is_not_a_grid_item() {
     assert_eq!(u.rect.width, 796.0, "u.width={}", u.rect.width);
     assert_eq!(d.rect.y, 0.0, "the only grid item must start in row 1, d.y={}", d.rect.y);
 }
+
