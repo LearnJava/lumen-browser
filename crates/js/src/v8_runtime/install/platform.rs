@@ -915,6 +915,7 @@ pub(crate) struct PageScrollX {
 
 /// Scroll offsets and scroll requests for containers and the page.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // SMOOTH-SCROLL added the 8th (page_scroll_x); mirrors the rest of this file's install_* fns
 pub(crate) fn install_scroll_state(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,

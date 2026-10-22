@@ -59,6 +59,9 @@ fn runtime(main_style: &str) -> (V8JsRuntime, u32) {
          .content {{ width: 200px; height: 200px; }}"
     ))));
     rt.update_viewport_size(800.0, 600.0);
+    // Settle the pending style/layout flush now: the first geometry read would otherwise
+    // run it later and replace the rects and scroll states the tests inject below.
+    rt.eval("['main', 'target', 'free'].forEach(function(i) { getComputedStyle(document.getElementById(i)).display; })").unwrap();
     let mut states = HashMap::new();
     states.insert(main_nid, [0.0, 0.0, 200.0, 200.0]);
     rt.update_scroll_states(states);
