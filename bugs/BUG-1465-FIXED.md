@@ -1,6 +1,6 @@
 # BUG-1465 — `text-transform: full-width`: схлопнутый пробел между inline-боксами остаётся U+0020
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P6, остаток [BUG-1328](BUG-1328-FIXED.md))
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_build.rs` — ветка `NodeData::Text(_)` без сегмента: схлопываемый пробельный узел дописывает `' '` к предыдущему сегменту)
 
@@ -15,3 +15,9 @@ CSS Text L3 §2.1: `full-width` превращает в U+3000 пробел, **�
 ## Что делать
 
 В ветке схлопываемого узла, если у его стиля `text_extra.transform.full_width`, дописывать к предыдущему сегменту U+3000 вместо U+0020 — и убедиться, что `wrap_inline_run` не склеивает его как обычный пробел (см. [BUG-1462](BUG-1462-OPEN.md)). `-006`/`-008` проверяются с Ahem ([BUG-1273](BUG-1273-FIXED.md)) — после правки перепрогнать.
+
+## Исправление
+
+`collect_inline_segments` (`inline_build.rs`, ветка `NodeData::Text`): схлопнутый пробел между inline-боксами при `full-width` получает собственный сегмент `U+3000` со стилем узла (раньше U+0020 дописывался к предыдущему сегменту, и фон/рамка `<span> </span>` не рисовались). Условие — U+3000 не разделитель слов ([BUG-1462](BUG-1462-FIXED.md)). WPT: `text-transform-fullwidth-001.xht` и `-006.html` — `identical` (`reftest_pixdiff`, Ahem, 800×600). Тесты — `ws_only_text.rs::full_width_turns_the_collapsed_space_between_inline_boxes_into_u3000`.
+
+**Остаток — [BUG-1681](BUG-1681-OPEN.md):** `-008.html` (U+3000 от `full-width` в конце строки).

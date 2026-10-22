@@ -708,8 +708,13 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
 /// relying on specific Unicode glyphs in the bundled font.
 /// Counter types (decimal/roman/alpha/greek) are rendered as text.
 pub(crate) fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
-    let BoxKind::Marker { ref text, ref list_style_type, ref image, .. } = b.kind else { return };
+    let BoxKind::Marker { ref text, ref list_style_type, ref image, in_run, .. } = b.kind else { return };
     if !is_paint_visible(b) {
+        return;
+    }
+    // An `inside` text marker is the first fragment of the item's own inline run,
+    // which paints it with the rest of the line.
+    if in_run && image.is_none() {
         return;
     }
     let s = &b.style;

@@ -157,10 +157,10 @@ fn kind_paint_eq<'a>(
             matches!(b, BoxKind::FormControl { kind: k } if kind == k)
         }
         BoxKind::Ruby { shape } => matches!(b, BoxKind::Ruby { shape: s } if shape == s),
-        BoxKind::Marker { text, position, list_style_type, image } => matches!(
+        BoxKind::Marker { text, position, list_style_type, image, in_run } => matches!(
             b,
-            BoxKind::Marker { text: t, position: p, list_style_type: l, image: i }
-                if text == t && position == p && list_style_type == l && image == i
+            BoxKind::Marker { text: t, position: p, list_style_type: l, image: i, in_run: r }
+                if text == t && position == p && list_style_type == l && image == i && in_run == r
         ),
         BoxKind::SvgRoot { view_box, preserve_aspect_ratio } => matches!(
             b,

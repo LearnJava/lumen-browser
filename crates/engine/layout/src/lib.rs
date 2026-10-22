@@ -29,6 +29,9 @@ pub mod content_visibility;
 pub mod field_sizing;
 pub mod highlight;
 pub mod hyphenation;
+pub mod counter_builtin;
+#[cfg(test)]
+mod counter_builtin_cases;
 pub mod counters;
 mod custom_flow;
 mod invariants;
@@ -3088,6 +3091,9 @@ pub(crate) use fixtures_and_core_selectors::{
     lay_viewport, lay_with_doc, Fixed8,
 };
 
+#[cfg(test)]
+#[path = "tests/counter_style_markers.rs"]
+mod counter_style_markers;
 #[cfg(test)]
 #[path = "tests/grid_computed_style.rs"]
 mod grid_computed_style;
