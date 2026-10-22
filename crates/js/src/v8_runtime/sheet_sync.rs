@@ -287,7 +287,7 @@ impl SheetSync {
             return true;
         };
         let id = NodeId::from_raw(nid);
-        if !doc.contains_id(id) || !is_connected(&doc, id) {
+        if !doc.contains_id(id) || !doc.is_connected(id) {
             return false;
         }
         match doc.get(id).element_name() {
@@ -475,25 +475,6 @@ fn style_text(doc: &Document, id: NodeId) -> String {
         }
     }
     out
-}
-
-/// Подключён ли узел к документу (DOM §4.2 «connected»), с переходом из
-/// теневого корня к его хосту.
-fn is_connected(doc: &Document, id: NodeId) -> bool {
-    let root = doc.root();
-    let mut cur = id;
-    loop {
-        if cur == root {
-            return true;
-        }
-        match doc.get(cur).parent {
-            Some(p) => cur = p,
-            None => match doc.shadow_host_of(cur) {
-                Some(host) => cur = host,
-                None => return false,
-            },
-        }
-    }
 }
 
 #[cfg(test)]

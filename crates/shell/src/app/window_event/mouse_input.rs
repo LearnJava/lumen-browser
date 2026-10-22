@@ -510,7 +510,7 @@ impl Lumen {
             let vh = self.viewport_height_css();
             match scrollbar::classify_track_click(
                 x_css,
-                y_css,
+                self.page_local_y(y_css),
                 self.scroll_y,
                 self.content_height,
                 self.viewport_width_css(),

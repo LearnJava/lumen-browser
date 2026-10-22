@@ -19,6 +19,12 @@ impl Lumen {
         )
     }
 
+    /// Y окна → Y в координатах viewport-а страницы, в которых строятся и классифицируются
+    /// полосы страницы (BUG-1642: страница начинается ниже тулбара).
+    pub(crate) fn page_local_y(&self, y_css: f32) -> f32 {
+        y_css - self.page_offset().1
+    }
+
     /// Куда попала точка (сырые оконные CSS px) относительно горизонтальной
     /// полосы страницы. `None` при `--no-scrollbar`.
     pub(crate) fn hscroll_hit(&self, x_css: f32, y_css: f32) -> scrollbar::TrackClick {
@@ -28,7 +34,7 @@ impl Lumen {
         let (vw, origin_x, v_present) = self.hbar_layout();
         scrollbar::classify_hscroll_click(
             x_css,
-            y_css,
+            self.page_local_y(y_css),
             self.scroll_x,
             self.content_width,
             vw,
@@ -47,7 +53,7 @@ impl Lumen {
             let (x, y) = ((pos.x as f32) / dpr, (pos.y as f32) / dpr);
             let v = scrollbar::classify_track_click(
                 x,
-                y,
+                self.page_local_y(y),
                 self.scroll_y,
                 self.content_height,
                 self.viewport_width_css(),
@@ -88,7 +94,7 @@ impl Lumen {
         // Scrollbar takes highest priority.
         let hover = scrollbar::classify_track_click(
             x_css,
-            y_css,
+            self.page_local_y(y_css),
             self.scroll_y,
             self.content_height,
             self.viewport_width_css(),
