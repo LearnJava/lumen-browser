@@ -23,6 +23,8 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 - **There is no `navigation` global at all** — `'onnavigate' in navigation` and every other Navigation API feature-detect throws `ReferenceError` before it even gets to answer `false` ([BUG-881](../bugs/BUG-881-OPEN.md)). What a probe should still not expect is shadow-tree retargeting, which is unmodelled, so a path crossing a shadow boundary lists the real nodes.
 
+- **A script's `cancel()`/seek of a CSS animation or transition moves the computed value, not the painted frame, for `opacity`/`transform`/colours/`height`** — those the frame loop (`AnimationScheduler`/`TransitionScheduler`) drives and the read-time overlay stands aside for them, so `getComputedStyle(el).transform` after `animation.cancel()` still reports the animated matrix, and `animationstart`/`animationend` do not follow a `startTime`/`currentTime` seek (CSSANIM-MODEL-2). Every other property follows the object's clock. `getAnimations()` lists a transition only for a property the page read before the change.
+
 ## Resource loading
 
 - **A script-made `<img>` fires `load`/`error` reliably only via plain `src` in the top-level document** ([BUG-1048](../bugs/BUG-1048-FIXED.md) fixed that path, including a never-inserted `new Image()`). Inside an iframe a *detached* image stays silent (the fetch itself starts at once; [BUG-1148](../bugs/BUG-1148-FIXED.md) covered `srcset`/`<picture>`, hibernation and the iframe fetch, [BUG-1230](../bugs/BUG-1230-OPEN.md)) — never read that silence as evidence that a policy blocked it.

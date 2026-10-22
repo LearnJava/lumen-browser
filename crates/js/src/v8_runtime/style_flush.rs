@@ -1449,7 +1449,7 @@ impl FlushHandles {
     /// (`V8JsRuntime::patch_cascade`, recognised by its revision), the edits
     /// are replayed onto the pristine sheet it was made from instead, so they
     /// are never applied twice.
-    fn cssom_patched_sheet(
+    pub(crate) fn cssom_patched_sheet(
         &self,
         sheet: &Arc<lumen_css_parser::Stylesheet>,
     ) -> Option<Arc<lumen_css_parser::Stylesheet>> {

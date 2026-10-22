@@ -10413,7 +10413,7 @@ _lumen_canvas_define_dim('height', 1, 150);
         writable: true, enumerable: false, configurable: true,
     });
     Object.defineProperty(Element.prototype, 'getAnimations', {
-        value: function() { return _wa_get_animations_for(this); },
+        value: function(options) { return _wa_get_animations_for(this, options); },
         writable: true, enumerable: false, configurable: true,
     });
     // DOM LS §4.4: `ownerDocument` must be the same `document` object by reference

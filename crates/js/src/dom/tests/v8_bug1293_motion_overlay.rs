@@ -199,13 +199,18 @@ fn a_keyframe_with_add_composition_stacks_on_the_underlying_value() {
 }
 
 #[test]
-fn a_removed_animation_name_cancels_the_shadow_animation() {
+fn a_removed_animation_name_cancels_the_css_animation() {
     let rt = rt();
     let script = format!(
         "{PRELUDE}
-        var a = _lumen_css_anim_register('a:', 1, 'k');
-        var fin = a.finished, out = [];
-        _wa_gap_an[1] = {{ '0:k': {{ start: 0, pausedAt: null, anim: a }} }};
+        __vals['animation-name'] = 'k'; __vals['animation-duration'] = '10s'; __vals['animation-delay'] = '0s';
+        __vals['animation-timing-function'] = 'linear'; __vals['animation-iteration-count'] = '1';
+        __vals['animation-direction'] = 'normal'; __vals['animation-fill-mode'] = 'none';
+        __vals['animation-play-state'] = 'running';
+        __kf['k'] = [{{ offset: 0, decls: [['margin-left', '10px']] }}, {{ offset: 1, decls: [['margin-left', '30px']] }}];
+        __an('margin-left', '3px');
+        var a = _css_an_by_key['1:'][0];
+        var fin = a.finished, out = [a.animationName, a._state, a instanceof CSSAnimation];
         __vals['animation-name'] = 'none';
         __an('margin-left', '3px');
         fin.then(function() {{ out.push('resolved'); }}, function(e) {{ out.push(e.name); }});
@@ -213,8 +218,8 @@ fn a_removed_animation_name_cancels_the_shadow_animation() {
         out.join(',')"
     );
     // `finished` отклоняется асинхронно; синхронно видно только состояние.
-    assert_eq!(eval_str(&rt, &script), "idle");
-    assert_eq!(eval_str(&rt, "typeof _wa_gap_an[1]"), "undefined");
+    assert_eq!(eval_str(&rt, &script), "k,running,true,idle");
+    assert_eq!(eval_str(&rt, "typeof _css_an_by_key['1:']"), "undefined");
 }
 
 #[test]

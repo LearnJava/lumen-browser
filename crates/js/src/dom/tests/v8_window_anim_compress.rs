@@ -766,9 +766,11 @@ fn document_timeline_exists() {
 }
 
 #[test]
-fn document_timeline_current_time_null_before_raf() {
+fn document_timeline_current_time_is_a_number_before_raf() {
+    // An active document timeline answers the clock before the first frame (CSSANIM-MODEL):
+    // `animation.startTime = document.timeline.currentTime` must not write `null`.
     let rt = v8_runtime_with_dom(make_doc());
-    let r = rt.eval("document.timeline.currentTime === null").unwrap();
+    let r = rt.eval("typeof document.timeline.currentTime === 'number'").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
 
