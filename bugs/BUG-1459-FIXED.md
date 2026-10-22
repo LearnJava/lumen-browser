@@ -1,6 +1,6 @@
 # BUG-1459 — Приоритет `!important` в инлайновом `element.style` теряется: `cssText = 'c: v !important'` и `el.style = '…'` отбрасывают декларацию, `setProperty(…, 'important')` не пишет приоритет, `getPropertyPriority` отсутствует
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`, `cssText`/`setProperty`/`getPropertyPriority`)
 
@@ -33,3 +33,7 @@ WPT-RUN-14 срез 20: `css-cascade/layer-vs-inline-style.html` (сабтест
 ## Как проверить
 
 Таблица выше; `css/css-cascade/layer-vs-inline-style.html`.
+
+## Исправление
+
+`crates/js/src/shim/web_api_shim_mid.js`: разобранный объект инлайнового стиля несёт неперечислимую карту `__imp__` (longhand → `!important`). `_lumen_parse_style` разбирает каждую декларацию в отдельный объект и вливает его через `_lumen_style_merge_decl` (обычная декларация не перебивает `!important` в том же блоке), `_lumen_serialize_style` печатает ` !important` (шорткат сворачивается, только если у всех longhand один приоритет), `setProperty(prop, val, priority)` принимает `""`/`important` без учёта регистра, `getPropertyPriority` (в т.ч. для шорткатов), `removeProperty` снимает приоритет. Каскад получает `!important` через атрибут `style`, как и при `setAttribute`. Тесты — `crates/js/src/dom/tests/v8_bug1459_style_important.rs`; пиксельная проверка: `@layer{#t{background-color:red}}` + `style = '… !important'` / `setProperty(…, 'important')` даёт зелёный (`--dump-display-list`).
