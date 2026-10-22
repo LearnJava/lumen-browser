@@ -285,6 +285,13 @@ class LumenBrowser(WebDriverBrowser):
         # (`AssertionError: Got results from X, expected Y`). No test in
         # this corpus should ever be exercising the ad-blocker itself.
         env["LUMEN_NO_ADBLOCK"] = "1"
+        # WPT-RUN-16: the interactive shell gates `window.open`, clipboard
+        # writes and permission prompts on a live user gesture
+        # (UX-USER-ACTIVATION). Tests open popups from a bare script, the way
+        # chromedriver's `--disable-popup-blocking` lets them in Chrome; with
+        # the gate on, `window.open` returns `null` and every popup-based
+        # subtest fails on harness plumbing, not on the feature under test.
+        env["LUMEN_ALLOW_POPUPS"] = "1"
         super().__init__(logger, binary=binary, webdriver_binary=binary, env=env or None, **kwargs)
         self.ipc_mode = ipc_mode
         self.forced_colors = forced_colors

@@ -2,7 +2,63 @@
 
 Ветка `p2-wpt-run-16`, слот `p2-work`.
 
-## Сейчас (2026-10-22 19:27): идёт попытка 4 (`2 × 10 --resume`) — НЕ ПЕРЕЗАПУСКАТЬ
+## Сейчас (2026-10-22 23:40): полный прогон готов, идёт перепрогон 104 шардов «с попапами» — НЕ ПЕРЕЗАПУСКАТЬ
+
+**Полный прогон закончен** (попытка 4, `RUN_EXIT=0`, 22:52): **42.65 %** (29 051 из 68 116), снимок
+`docs/wpt/runs/2026-10-22.json` (не закоммичен — лежит в слоте, коммитить вместе с итогом), отчёты
+`.tmp/wpt-corpus/`. Статусы: OK 29 690 · PASS 16 309 · FAIL 13 168 · TIMEOUT 5 113 · ERROR 2 806 ·
+NOT-RUN 734 · SKIP 178 · CRASH 116 · пустой статус 1 (`html5lib_write_single.html?file=webkit01`).
+Сабтесты 379 686 / 1 138 470; убийств сторожем RSS 60 (было 8). Like-for-like со скорингом 08-18 — 20.15 %.
+По типам: reftest 14 293 · testharness 12 742 · crashtest 1 829 · print-reftest 187 (новый исполнитель:
+в 2026-10-05 все 416 print-reftest были «нет исполнителя»).
+
+**Аудит (`score_audit.py`):** 722 — нет исполнителя (wdspec 626, aamtest 96), **12 необъяснённых** —
+объяснены: wptrunner молча выбрасывает тест, когда браузер не стартовал после рестарта под нехваткой
+памяти: `Max restarts exceeded` — 10 (css-break 5, html/browsers 3, css-ui 1, referrer-policy 1), гонка
+`init_failed in state RunningState` — 1 (editing), трейсбек старта после рестарта — 1 (IndexedDB).
+Тест есть в `suite_start`, `test_start` нет. Цена ≤ 12 id = 0.018 п.п. Скрипт — `.tmp/run16_lost.py`.
+
+**Сравнение с 2026-10-05-subdomains** (`.tmp/run16_compare.py`, `.tmp/run16_drops.py` → `.tmp/run16-cmp.txt`,
+`.tmp/run16-drops.txt`): рост в основном `css` +5 915.9 (+17.66 п.п.), дальше svg +50, media-source +39,
+compat +23, fullscreen +14, mixed-content +12, fetch +11, scroll-animations +11, close-watcher +10.5, dom +10.
+Падений больше 1 балла — 18. Вердикты на сейчас:
+- `webrtc` −21.05 — **движок, намеренно**: COMPAT-API-01-WEBRTC (`c1eb0435f`, ADR-034) убрал `RTCPeerConnection`.
+- `client-hints` −10.17 — **раннер**: гейт user activation (UX-USER-ACTIVATION, `79fcd8923`) включён в
+  оконном режиме всегда, `window.open` из скрипта → `null` (67 сабтестов «Popup windows not allowed»).
+  Починка в этой ветке: `env["LUMEN_ALLOW_POPUPS"] = "1"` в `tools/wptrunner/wptrunner/browsers/lumen.py`.
+  Проверка на одной категории: 30.67 → **47.83** (было 40.17).
+- `selection` −8.00 — **движок**: 9 рефтестов `cross-shadow-boundary-*` были ложным PASS до HIGHLIGHT-PAINT;
+  выделение не заходит в shadow root → [BUG-1686](../../bugs/BUG-1686-OPEN.md) (+ `BUGS.md:366` в `STATUS-P3.MD`).
+- `workers` −5.80 — воспроизводится на том же бинаре без нагрузки (194.53); ждать перепрогона с попапами
+  (workers в списке), потом разбирать.
+- Перепрогон без нагрузки (`.tmp/wpt-run16-check/`, 6 процессов): client-hints 30.67, selection 69.41 —
+  значит не шум памяти.
+- `html/syntax` 47 CRASH (сторож RSS, пик 1.2 ГБ на один `html5lib_write.html?file=tests2`) — цене цифры
+  < 1 балла: `html5lib_write*` и без CRASH проходят 0 сабтестов. В оговорки, бага не заводить.
+- Остальные (cookies −4.05, editing −4.03, quirks −2.47, mediacapture-streams −2.25, connection-allowlist −2.19,
+  permissions-policy −2.04, webstorage −2.00, serial −1.85, preload −1.60, WebCryptoAPI −1.55, IndexedDB −1.42,
+  webaudio −1.23, webhid −1.09, webusb −1.07) — вердикт после перепрогона. Уже известно: WebCryptoAPI —
+  110 тестов `*.any.worker.html` с `crypto is not defined` (crypto нет в выделенном воркере — проверить,
+  было ли раньше); quirks — 11 тестов `win.document.open is not a function` (окно iframe); serial/webhid/webusb —
+  TIMEOUT `*-permissions-policy*` без сообщения; editing — `live window closed` (память, раннер).
+
+**Перепрогон «с попапами»** запущен в 23:30 отдельно от сессии: `.tmp/run16-popups.cmd` (тот же бинарь,
+`--prefixes` из `.tmp/run16-popup-prefixes.txt` — 104 шарда, 20 088 id, где в исходниках есть `window.open(`,
+`clipboard.write`, `requestPermission`; `2 × 10`, out-dir `.tmp/wpt-run16-popups`, лог `.tmp/run16-popups.log`,
+в конце `RUN_EXIT=`; при обрыве — тот же cmd с `--resume`). Сумма шардов в полном прогоне — 5 ч машинного времени.
+
+## Что дальше (новая сессия)
+
+1. Дождаться `RUN_EXIT=` в `.tmp/run16-popups.log`. Свести снимок «с попапами» по прецеденту WPT-RUN-9:
+   скопировать `.tmp/wpt-corpus` в `.tmp/wpt-corpus-popups`, подменить отчёты 104 шардов (`*.json`,
+   `*.raw.jsonl`, `*.log`) из `.tmp/wpt-run16-popups`, пересчитать (`run_corpus.py --all --resume
+   --out-dir .tmp/wpt-corpus-popups --run-json docs/wpt/runs/2026-10-22-popups.json` с тем же `--binary`;
+   проверить, что ничего не запускает) — две цифры «как снято» / «с попапами».
+2. Повторить `.tmp/run16_drops.py` для «с попапами» против 2026-10-05-subdomains, дописать вердикты
+   оставшихся падений; падение-движок > 5 баллов → баг + указатель в `STATUS-P3.MD`.
+3. `docs/wpt/pass-rate.md`: раздел «Четвёртая полная цифра» (по образцу «Третьей») + 2 строки в журнал;
+   `python scripts/quality_report.py`; цифра в `CAPABILITIES.md` и `docs/wpt-status.md`; ROADMAP WPT-RUN-16 → done.
+4. Закрыть задачу: коммит (снимки, доки, lumen.py, BUG-1686) → merge в main → убрать `ROADMAP.md:1246` из `STATUS-P2.md`.
 
 Попытка 3 (3 × 14) остановлена в 19:23 по решению пользователя «avail → 0 → 2 × 10». До 17:33 шла сносно
 (avail 1.5–6 ГБ, 17 шардов «ran»), в 17:36 свободная память упала до 0 и машина ~1.5 ч стояла в свопе
