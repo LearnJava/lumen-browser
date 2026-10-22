@@ -60,7 +60,7 @@
 
 /// BUG-1329 — языковые правила регистра `text-transform` (CSS Text L3 §2.1).
 mod case_lang {
-    use crate::style::{transform_text_by_value as t, CaseLang, TextTransform};
+    use crate::style::{transform_text_after_by_value, transform_text_by_value as t, CaseLang, TextTransform};
 
     #[test]
     fn lang_tags_are_classified_by_primary_subtag() {
@@ -111,6 +111,33 @@ mod case_lang {
         assert_eq!(t("capitalize", "en", "3.14 a.b l\u{2019}eau"), "3.14 A.b L\u{2019}eau");
         assert_eq!(t("capitalize", "en", "1st ab12 x"), "1st Ab12 X");
         assert_eq!(t("capitalize", "en", ""), "");
+    }
+
+    #[test]
+    fn greek_uppercase_drops_tonos_keeps_dialytika() {
+        assert_eq!(t("uppercase", "el", "καλημέρα αύριο"), "ΚΑΛΗΜΕΡΑ ΑΥΡΙΟ");
+        assert_eq!(t("uppercase", "el", "θεϊκό"), "ΘΕΪΚΟ");
+        assert_eq!(t("uppercase", "el", "ευφυΐα Νεράιδα"), "ΕΥΦΥΪΑ ΝΕΡΑΪΔΑ");
+        assert_eq!(t("uppercase", "el", "ήσουν ή εγώ ή εσύ"), "ΗΣΟΥΝ Ή ΕΓΩ Ή ΕΣΥ");
+        // NFD: тонос — отдельный комбинируемый знак.
+        assert_eq!(t("uppercase", "el-GR", "καλημε\u{301}ρα"), "ΚΑΛΗΜΕΡΑ");
+        // Не греческий язык — обычный Unicode.
+        assert_eq!(t("uppercase", "en", "καλημέρα"), "ΚΑΛΗΜΈΡΑ");
+        // capitalize: ударная первая гласная сохраняет тонос.
+        assert_eq!(t("capitalize", "el", "όμηρος"), "Όμηρος");
+        assert_eq!(t("lowercase", "el", "ΟΔΥΣΣΕΑΣ"), "οδυσσεας");
+    }
+
+    #[test]
+    fn capitalize_continues_a_word_begun_in_the_previous_node() {
+        let c = |before: &str, s: &str| transform_text_after_by_value("capitalize", "en", before, s);
+        assert_eq!(c("a", "b"), "b");
+        assert_eq!(c("a ", "b"), "B");
+        assert_eq!(c("", "b"), "B");
+        assert_eq!(c("a-", "b"), "B");
+        assert_eq!(c("a'", "b"), "b");
+        assert_eq!(c("(", "b"), "B");
+        assert_eq!(c("a", " b"), " B");
     }
 
     #[test]

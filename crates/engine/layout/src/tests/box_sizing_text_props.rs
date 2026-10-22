@@ -1373,6 +1373,28 @@ use super::*;
         assert_eq!(first_inline_text(&root), "IJsland");
     }
 
+    // BUG-1486: греческий регистр в раскладке и продолжение слова через границу узла.
+    #[test]
+    fn text_transform_greek_and_capitalize_across_nodes() {
+        let root = lay("<p lang=\"el\">καλημέρα αύριο</p>", "p { text-transform: uppercase; }");
+        assert_eq!(first_inline_text(&root), "ΚΑΛΗΜΕΡΑ ΑΥΡΙΟ");
+        let segments = |html: &str| -> Vec<String> {
+            let root = lay(html, "p { text-transform: capitalize; }");
+            let p = first_element_child(&root);
+            let mut out = Vec::new();
+            for c in &p.children {
+                if let BoxKind::InlineRun { segments, .. } = &c.kind {
+                    out.extend(segments.iter().map(|s| s.text.clone()));
+                }
+            }
+            out
+        };
+        // `a<span>b</span>c`: слово началось в предыдущем узле.
+        assert_eq!(segments("<p>a<span>b</span>c</p>").join("|"), "A|b|c");
+        // Пробел между inline-элементами — граница слова.
+        assert_eq!(segments("<p><b>a</b> <i>b</i></p>").join("|"), "A |B");
+    }
+
     #[test]
     fn text_transform_lang_inherits_from_ancestor_and_resets() {
         let css = "p { text-transform: uppercase; }";

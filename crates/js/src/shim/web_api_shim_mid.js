@@ -8518,9 +8518,53 @@ function _lumen_rt_lang(n) {
     return '';
 }
 
+// The tail (collapsed, at most two characters) of the text that ends the subtree `n`,
+// or null when `n` contributes none (an empty text node, a comment, `display: none`).
+// A box that is not inline (a block, an atomic inline) is a word boundary: ''.
+function _lumen_rt_tail(n) {
+    if (_lumen_is_text_node(n)) {
+        var t = _lumen_get_text_content(n).replace(/[ \t\n\f\r]+/g, ' ');
+        return t === '' ? null : t.slice(-2);
+    }
+    var d = _lumen_get_computed_style(n, 'display');
+    if (d === 'none') { return null; }
+    if (d !== 'inline' && d !== '') { return ''; }
+    var kids = _lumen_get_children(n);
+    for (var _rtk = kids.length - 1; _rtk >= 0; _rtk--) {
+        var r = _lumen_rt_tail(kids[_rtk]);
+        if (r !== null) { return r; }
+    }
+    return null;
+}
+
+// The text of the same inline run immediately before the text node `n` (BUG-1486):
+// `capitalize` does not start a word in the middle of one begun by a neighbouring
+// node (`a<span>b</span>c`). Climbs out of inline ancestors only.
+function _lumen_rt_before(n) {
+    var cur = n;
+    while (cur !== null) {
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        if (pid === null) { return ''; }
+        var sibs = _lumen_get_children(pid);
+        var idx = -1;
+        for (var _rbi = 0; _rbi < sibs.length; _rbi++) {
+            if (sibs[_rbi] === cur) { idx = _rbi; break; }
+        }
+        for (var _rbj = idx - 1; _rbj >= 0; _rbj--) {
+            var r = _lumen_rt_tail(sibs[_rbj]);
+            if (r !== null) { return r; }
+        }
+        var pd = _lumen_get_computed_style(pid, 'display');
+        if (pd !== 'inline') { return ''; }
+        cur = pid;
+    }
+    return '';
+}
+
 function _lumen_rt_transform(n, s, tt) {
     if (tt === '' || tt === 'none') { return s; }
-    return _lumen_text_transform(s, tt, _lumen_rt_lang(n));
+    var before = tt.indexOf('capitalize') >= 0 ? _lumen_rt_before(n) : '';
+    return _lumen_text_transform(s, tt, _lumen_rt_lang(n), before);
 }
 
 // Step 4: the text of the boxes `n` produces, after `white-space` collapsing and

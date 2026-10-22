@@ -881,6 +881,26 @@ pub(crate) struct InlineEscape {
     inherited: Arc<ComputedStyle>,
 }
 
+/// Текст, уже стоящий в строке непосредственно перед новым текстовым узлом: хвост последнего
+/// сегмента. Пробельный узел между inline-элементами дописывает схлопнутый пробел в `text`
+/// предыдущего сегмента, так что `<b>a</b> <i>b</i>` даёт здесь `"a "` (BUG-1486, `capitalize`
+/// продолжает слово через границу узла только без пробела). Принудительный перенос и атомарный
+/// бокс — граница слова.
+fn text_before(out: &[InlineSegment], escapes: &[InlineEscape]) -> String {
+    // Атомарный бокс (`escapes`) стоит ровно в конце уже собранного — это граница слова.
+    if escapes.last().is_some_and(|e| e.at == out.len()) {
+        return String::new();
+    }
+    match out.last() {
+        Some(last) if !last.forced_break => {
+            let mut tail: Vec<char> = last.text.chars().rev().take(2).collect();
+            tail.reverse();
+            tail.into_iter().collect()
+        }
+        _ => String::new(),
+    }
+}
+
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
 ///
 /// `need_first_letter` — starts `true` for the first call on a block container; set to `false`
@@ -934,7 +954,8 @@ pub(crate) fn collect_inline_segments(
                 // not occupy advance width even in white-space: pre.
                 // text-transform действует и в `pre`/`pre-wrap` (там же U+0020 → U+3000
                 // для `full-width`).
-                let text = style.text_extra.transform_text(style.text_transform, &strip_invisible_controls(line));
+                let before = text_before(out, escapes);
+                let text = style.text_extra.transform_text_after(style.text_transform, &before, &strip_invisible_controls(line));
                 if !text.is_empty() {
                     out.push(InlineSegment {
                         text,
@@ -986,7 +1007,8 @@ pub(crate) fn collect_inline_segments(
                 }
                 let stripped = strip_invisible_controls(line);
                 if !stripped.chars().all(is_collapsible_whitespace) {
-                    let text = inherited.text_extra.transform_text(inherited.text_transform, &stripped);
+                    let before = text_before(out, escapes);
+                    let text = inherited.text_extra.transform_text_after(inherited.text_transform, &before, &stripped);
                     let kind = if *need_first_letter && !text.trim().is_empty() {
                         *need_first_letter = false;
                         PseudoKind::FirstLetter
@@ -1018,7 +1040,8 @@ pub(crate) fn collect_inline_segments(
             let s = strip_invisible_controls(s);
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
-            let text = inherited.text_extra.transform_text(inherited.text_transform, &s);
+            let before = text_before(out, escapes);
+            let text = inherited.text_extra.transform_text_after(inherited.text_transform, &before, &s);
             // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
             // is the candidate for ::first-letter. Mark the whole first non-whitespace
             // segment; `apply_first_letter_pseudo` later looks up the ::first-letter rule
