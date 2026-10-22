@@ -5,6 +5,7 @@
 //! батч DL-12).
 
 use super::*;
+use super::inline_frag::mask_clip_layer_rect;
 
 thread_local! {
     /// CSS Backgrounds L3 §3.6 — the viewport rect (scroll 0, page space) that
@@ -743,6 +744,7 @@ pub(crate) fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::Ma
             .collect(),
     }
 }
+
 /// CSS Masking L1 §4.7/§4.9 — какие слои из [`ComputedStyle::mask_layers`]
 /// попадают в display list как вложенные `PushMask*` (быстрый путь).
 ///
@@ -952,6 +954,7 @@ fn gradient_for_mask_mode(g: &ParsedGradient, mode: lumen_layout::MaskMode) -> P
         ParsedGradient::Linear { stops, .. }
         | ParsedGradient::Radial { stops, .. }
         | ParsedGradient::Conic { stops, .. } => *stops = mask_stops_for_mode(stops, mode),
+        ParsedGradient::Unknown(_) => {}
     }
     g
 }

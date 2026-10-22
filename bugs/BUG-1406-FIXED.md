@@ -1,6 +1,6 @@
 # BUG-1406 — `mask-image`: `mask-size`/`mask-position`/`mask-repeat`/`mask-composite` не действуют, `url()`-маска не накладывается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** paint/layout (`crates/engine/layout/src/style/apply/paint.rs` — `mask_layers`; `display_list` — `PushMaskLinearGradient`; `crates/engine/paint/src/cpu_raster.rs` — маски)
 
@@ -42,3 +42,20 @@ WPT-RUN-14 срез 18, `css/css-masking/mask-image/`: 92 reftest (89 `thick`, 3
 
 `css/css-masking/mask-image/mask-size-contain.html`, `mask-position-1a.html`, `mask-repeat-1.html`,
 `mask-composite-1a.html`, `mask-image-1a.html`.
+
+## Исправление (2026-10-22, P6)
+
+- `emit_push_mask` (`background_mask.rs`) возвращает команды закрытия. Составная маска — градиентный слой с `mask-size`
+  или `add`/`subtract`/`exclude` между слоями, `mask_needs_composite` — собирается в `PushOpacity(1)` · содержимое ·
+  `PushMaskLayer(alpha)` · плитки слоёв (`emit_background_layer`: size/position/repeat/origin, `mask-clip` как
+  `PushClipRect`) · `PopMaskLayer` · `PopOpacity`. Операторы — вложенные `PushMaskLayer`-группы; `subtract`/`exclude`
+  используют новый `MaskMode::InvertedAlpha` (`1 − alpha`; CPU и wgpu `fs_inv_alpha`). Оператор нижнего слоя
+  игнорируется (применяется к прозрачному фону). Цепочка `intersect` и одиночный слой без `mask-size` — прежний путь.
+- `url()`-маска: URL не попадал в загрузку подресурсов (`collect_background_image_requests` обходил только фоны) —
+  добавлены `mask_layers`. CPU-растр рисует картинку плитками в `MaskSpec::Raster` и берёт её альфу.
+- `mask-position` initial — `0% 0%` (было `center` из `ObjectPosition::default`).
+- Тесты: `display_list/tests/mask_composite.rs` (счёт пикселей: 2500 / 2500 справа-внизу / 40 000 / `add` 10 000,
+  `intersect` 2500, `subtract` 7500, `exclude` 7500 / `url()` 5000).
+- Не проверено вживую: wgpu-путь (вложенные `PushMaskLayer`, `fs_inv_alpha`); `mask-mode: luminance` для `url()` в
+  составной маске (берётся альфа); `exclude` складывает две половины source-over (точно для бинарных масок).
+  femtovg-fallback составную маску не рисует отдельно (команды общие, `MaskMode` он не читает).

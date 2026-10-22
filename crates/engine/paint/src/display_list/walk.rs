@@ -963,7 +963,8 @@ struct BlockEpilogue {
     mask_clip_is_some: bool,
     /// A float that reaches past the `line-clamp` content edge: clip pushed after the mask clip.
     has_clamp_clip: bool,
-    mask_groups: usize,
+    /// Команды закрытия mask-групп ([`emit_push_mask`]).
+    mask_close: Vec<DisplayCommand>,
 }
 
 /// One level of the explicit stack `run` maintains in place of the native
@@ -1120,9 +1121,7 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
     if e.mask_clip_is_some {
         out.push(DisplayCommand::PopClip);
     }
-    for _ in 0..e.mask_groups {
-        out.push(DisplayCommand::PopMask);
-    }
+    out.extend(e.mask_close.iter().cloned());
 }
 
 /// Legacy (non-ordered) display-list builder's central per-box entry point —
@@ -1196,10 +1195,10 @@ fn dispatch<'a>(
         | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::Ruby { .. } => {
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
-            // `mask_groups` > 1 — вложенные группы `mask-composite: intersect`
+            // несколько закрывающих команд — вложенные группы `mask-composite: intersect`
             // (см. `rendered_mask_layers`); закрываются столькими же PopMask.
-            let mask_groups = emit_push_mask(out, b);
-            let has_mask = mask_groups > 0;
+            let mask_close = emit_push_mask(out, b, dpr);
+            let has_mask = !mask_close.is_empty();
             // CSS Masking L1 §4.6 — `mask-clip` restricts the masked painting to
             // the padding/content box. Pushed inside the mask group; popped before
             // PopMask below.
@@ -1409,7 +1408,7 @@ fn dispatch<'a>(
                 has_blend,
                 mask_clip_is_some: mask_clip.is_some(),
                 has_clamp_clip: clamp_clip.is_some(),
-                mask_groups,
+                mask_close,
             });
             if matches!(b.kind, BoxKind::Table) {
                 emit_table_box(b, out, dpr);
