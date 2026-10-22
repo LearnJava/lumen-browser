@@ -770,6 +770,43 @@ fn navigating_a_frame_drops_its_whole_subtree_and_spares_siblings() {
     assert_eq!(frames[1].host_src, "other.html", "сосед страницы не тронут");
 }
 
+/// BUG-1682: `iframe.remove()` замечается сканом, и фрейм уходит из списка
+/// со всем поддеревом — раньше хэндл (и рантайм V8 ребёнка) жил до замены
+/// страницы. Поздний ответ загрузки для уже вынутого хоста не вклеивается.
+#[test]
+fn removed_host_drops_its_frame_subtree_and_late_load() {
+    use crate::frame_dynamic_load::{apply_new_frame_load, remove_frames_of, scan_dynamic_frames};
+    let page = Arc::new(Mutex::new(lumen_html_parser::parse(
+        "<body><iframe src=a.html></iframe><iframe src=b.html></iframe></body>",
+    )));
+    let hosts: Vec<NodeId> = lumen_dom::collect_iframes(&page.lock().unwrap()).iter().map(|i| i.node).collect();
+    let mut a = splice_handle("a.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    a.host = hosts[0];
+    let a_doc = Arc::clone(&a.doc);
+    let mut nested = splice_handle("n.html", Rect::new(0.0, 0.0, 50.0, 25.0), DisplayList::new());
+    nested.depth = 1;
+    nested.parent_doc = Some(Arc::clone(&a_doc));
+    let mut b = splice_handle("b.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    b.host = hosts[1];
+    let mut frames = vec![a, nested, b];
+
+    let delta = scan_dynamic_frames(&page, &frames, true).unwrap();
+    assert!(delta.removed.is_empty() && delta.new.is_empty() && delta.changed.is_empty());
+
+    page.lock().unwrap().detach(hosts[0]);
+    let delta = scan_dynamic_frames(&page, &frames, true).unwrap();
+    assert_eq!(delta.removed.len(), 1, "вынутый хост замечен");
+    assert!(Arc::ptr_eq(&delta.removed[0], &a_doc));
+    remove_frames_of(&mut frames, &delta.removed[0]);
+    assert_eq!(frames.len(), 1, "фрейм ушёл вместе с вложенным");
+    assert_eq!(frames[0].host_src, "b.html", "сосед не тронут");
+
+    let mut late = splice_handle("a.html", Rect::new(0.0, 0.0, 100.0, 50.0), DisplayList::new());
+    late.host = hosts[0];
+    assert!(!apply_new_frame_load(&mut frames, &page, hosts[0], true, vec![late]));
+    assert_eq!(frames.len(), 1, "ответ для вынутого хоста отброшен");
+}
+
 // ── асинхронная навигация фрейма (FRAME-4 срез 3) ───────────────────────────
 
 /// `apply_frame_navigation` — успешный путь: старый хэндл (и его поддерево)
