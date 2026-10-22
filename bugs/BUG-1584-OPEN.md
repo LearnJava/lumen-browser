@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Заведён:** 2026-10-09 (P2, WPT-RUN-14 срез 26, `css/css-page` + `css-animations` + `css-transitions` + `css-shadow` + `css-borders` + `css-scroll-snap`)
-**Область:** shell/js (цикл событий движка и тики анимаций; возможна связь с ADR-016 rAF-путём, [BUG-935](bugs/BUG-935-OPEN.md) — не проверена)
+**Область:** shell/js (цикл событий движка и тики анимаций; возможна связь с ADR-016 rAF-путём, [BUG-935](BUG-935-OPEN.md) — не проверена)
 
 ## Симптом
 

@@ -36,6 +36,7 @@ pub mod counters;
 mod custom_flow;
 mod invariants;
 pub mod font_palette;
+mod computed_font_mask;
 pub mod image_gating;
 pub mod image_set;
 pub mod line_break;

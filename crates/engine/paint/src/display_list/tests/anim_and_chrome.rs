@@ -678,6 +678,21 @@ use lumen_dom::NodeId;
         assert_eq!(cr, Rect::new(20.0, 10.0, 160.0, 80.0));
     }
 
+    /// `xywh(10px 20px 50% 30px)` на боксе 200×100: x 10..110, y 20..50.
+    #[test]
+    fn clip_path_xywh_mixed_units_resolves_against_box() {
+        use super::clip_path_to_rect;
+        use lumen_layout::{ClipPath, ShapeValue};
+        let r = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let clip = ClipPath::Inset(vec![
+            ShapeValue::Px(20.0),
+            ShapeValue::Lin { px: -10.0, pct: 50.0 },
+            ShapeValue::Lin { px: -50.0, pct: 100.0 },
+            ShapeValue::Px(10.0),
+        ]);
+        assert_eq!(clip_path_to_rect(&clip, r), Rect::new(10.0, 20.0, 100.0, 30.0));
+    }
+
     #[test]
     fn clip_path_circle_default_center() {
         use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
@@ -1123,6 +1138,31 @@ use lumen_dom::NodeId;
         // Column rules: band 1 (y 0..40), band 2 (y 58..60) and the rows below — two gaps each.
         assert_eq!((cols[0].1, cols[0].3), (0.0, 40.0), "{cols:?}");
         assert!(cols.iter().any(|c| (c.1, c.3) == (58.0, 2.0)), "{cols:?}");
+    }
+
+    #[test]
+    fn nested_multicol_rows_cut_by_the_outer_columns_get_rule_bands_per_fragment() {
+        // multicol-gap-decorations-007: the nested container (3 columns of 100px, a spanner) is
+        // cut by two 200px outer columns. Fragment 1: bands 2..22 (balanced above the spanner),
+        // 40..140 (a fresh row after the spanner) and 160..200 (the row cut by the outer column);
+        // fragment 2: 0..100 and the balanced last row 120..130. Row rules sit in the row gaps.
+        let dl = build(
+            r#"<div style="width:620px;height:200px;columns:2;column-fill:auto;gap:20px">
+                 <div style="columns:3;gap:20px;border:2px solid;column-height:100px;column-wrap:wrap;
+                             column-rule:10px solid blue;row-rule:10px solid green">
+                   <div style="height:60px"></div>
+                   <div style="column-span:all;height:18px"></div>
+                   <div style="height:750px"></div>
+                 </div></div>"#,
+            "",
+        );
+        let cols = col_rule_rects(&dl);
+        let bands: Vec<(f32, f32)> = cols.iter().map(|c| (c.1, c.3)).collect();
+        for want in [(2.0, 20.0), (40.0, 100.0), (160.0, 40.0), (0.0, 100.0), (120.0, 10.0)] {
+            assert!(bands.contains(&want), "no column rule band {want:?}: {bands:?}");
+        }
+        let rows: Vec<f32> = row_rule_cmds(&dl).iter().map(|r| r.1).collect();
+        assert!(rows.iter().any(|y| (y - 145.0).abs() < 0.01) && rows.iter().any(|y| (y - 105.0).abs() < 0.01), "{rows:?}");
     }
 
     #[test]

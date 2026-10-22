@@ -50,6 +50,7 @@ pub(crate) fn resolve_clip_path_url(
     }
     if ACTIVE.with(|a| a.borrow().contains(&cp)) {
         return Some(ClipPath::Svg(Arc::new(SvgClipPath {
+            id: id.to_string(),
             object_bbox_units: false,
             subpaths: Vec::new(),
             nested: None,
@@ -76,6 +77,7 @@ fn build_clip_path(
         collect_child(doc, sheet, child, &cp_style, &cp_xf, viewport, dark_mode, &mut subpaths);
     }
     SvgClipPath {
+        id: doc.get(cp).get_attr("id").unwrap_or_default().to_string(),
         object_bbox_units: doc
             .get(cp)
             .get_attr("clipPathUnits")

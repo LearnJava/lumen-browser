@@ -491,6 +491,10 @@ pub(crate) const HOT_KINDS: [HotKind; 5] =
 /// Готовый горячий пайплайн вместе с видом и потоком-сборщиком.
 pub(crate) type HotDelivery = (HotKind, std::thread::ThreadId, wgpu::RenderPipeline);
 
+/// `PopMaskLayer` composite pipelines: alpha, luminance, inverted alpha
+/// (`1 - mask.a`, the building block of `mask-composite: subtract`/`exclude`).
+pub(crate) type MaskLayerPipelines = (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline);
+
 /// Входы сборки горячих пайплайнов — ровно те хэндлы, которых достаточно, и
 /// ничего сверх. Все поля `Clone + Send` (в wgpu 26 хэндлы внутри `Arc`),
 /// поэтому снимок уезжает на фоновый поток так же, как [`PipelineDeps`] у
@@ -715,8 +719,8 @@ pub(crate) enum WarmedPipeline {
     Blend(wgpu::RenderPipeline),
     /// → [`Renderer::mask_composite_pipeline`].
     MaskComposite(wgpu::RenderPipeline),
-    /// → [`Renderer::mask_layer_pipelines`] (пара luminance/alpha).
-    MaskLayer(Box<(wgpu::RenderPipeline, wgpu::RenderPipeline)>),
+    /// → [`Renderer::mask_layer_pipelines`] (alpha / luminance / inverted alpha).
+    MaskLayer(Box<MaskLayerPipelines>),
     /// → [`Renderer::filter_pipeline`].
     Filter(wgpu::RenderPipeline),
     /// → [`Renderer::blur_composite_pipeline`].
@@ -1297,7 +1301,7 @@ impl PipelineDeps {
     /// BUG-406: компилируется лениво, при первом реальном использовании —
     /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
     /// старте окна ради эффекта, которого на странице может не быть, нельзя.
-    fn build_mask_layer_pipeline(&self) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    fn build_mask_layer_pipeline(&self) -> MaskLayerPipelines {
         // ── Mask-layer composite pipelines ──────────────────────────────────
         // CSS Masking L1 §5: apply a rendered mask layer to the parent layer.
         // Reuses mask_composite_bgl (same binding layout: t_content, t_mask, s).
@@ -1335,69 +1339,44 @@ impl PipelineDeps {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let mask_layer_alpha_pipeline = self.timed(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-layer-alpha-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_layer_shader,
-                entry_point: Some("vs_main"),
-                buffers: std::slice::from_ref(&mask_layer_vtx_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_layer_shader,
-                entry_point: Some("fs_alpha"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: self.surface_format,
-                    blend: Some(replace_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        let mask_layer_luma_pipeline = self.timed(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-layer-luma-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_layer_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[mask_layer_vtx_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_layer_shader,
-                entry_point: Some("fs_luma"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: self.surface_format,
-                    blend: Some(replace_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        (mask_layer_alpha_pipeline, mask_layer_luma_pipeline)
+        let build = |label: &'static str, entry_point: &'static str| {
+            self.timed(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&mask_composite_layout),
+                vertex: wgpu::VertexState {
+                    module: &mask_layer_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: std::slice::from_ref(&mask_layer_vtx_layout),
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &mask_layer_shader,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: self.surface_format,
+                        blend: Some(replace_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Always,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        (
+            build("mask-layer-alpha-pipeline", "fs_alpha"),
+            build("mask-layer-luma-pipeline", "fs_luma"),
+            build("mask-layer-inv-alpha-pipeline", "fs_inv_alpha"),
+        )
     }
 
     /// Пайплайн цветовых CSS-фильтров (CSS Filter Effects L1).
@@ -1778,7 +1757,7 @@ impl Renderer {
         self.backdrop_blit_pipeline.get_or_init(|| self.pdeps.build_backdrop_blit_pipeline())
     }
     /// Ленивый доступ к паре mask-layer-пайплайнов (alpha, luminance) — BUG-406.
-    pub(crate) fn mask_layer_pipelines(&self) -> &(wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    pub(crate) fn mask_layer_pipelines(&self) -> &MaskLayerPipelines {
         self.mask_layer_pipelines.get_or_init(|| self.pdeps.build_mask_layer_pipeline())
     }
 }

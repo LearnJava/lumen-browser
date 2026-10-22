@@ -142,7 +142,7 @@ fn a_log_that_outgrows_its_cap_falls_back_to_the_plain_child_list() {
     assert!(read().unattributed, "первое чтение не знает базиса");
     rt.eval(&format!(
         "for (var i = 0; i < {}; i++) document.body.appendChild(document.createElement('p'));",
-        crate::v8_runtime::runtime::CHILD_EDIT_CAP + 1
+        crate::v8_runtime::dom_touched::CHILD_EDIT_CAP + 1
     ))
     .unwrap();
     assert_eq!(changes_of(&read, body), vec![OwnedNodeChange::ChildList]);

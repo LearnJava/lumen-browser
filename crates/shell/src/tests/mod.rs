@@ -21,6 +21,7 @@ mod form_post_nav;
 mod hbar_strip;
 mod page_pipeline;
 mod page_resources;
+mod resource_base;
 mod screenshot_web_fonts;
 mod scripts_and_frames;
 mod subdocument_frames;

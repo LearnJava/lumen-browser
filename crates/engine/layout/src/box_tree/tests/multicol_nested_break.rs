@@ -123,3 +123,25 @@ fn nested_multicol_that_fits_the_outer_column_stays_whole() {
     );
     assert_eq!(v, [(10.0, 10.0, 30.0), (105.0, 10.0, 30.0)], "{v:?}");
 }
+
+const ROWS_CSS: &str = "body{margin:0} #o{columns:2;column-gap:20px;column-fill:auto;width:620px;height:200px} \
+                        #n{columns:3;gap:20px;border:2px solid;column-height:100px;column-wrap:wrap} \
+                        .a{height:60px} .s{column-span:all;height:18px} .b{height:750px}";
+
+#[test]
+fn nested_multicol_rows_with_a_spanner_are_cut_by_the_outer_columns() {
+    // WPT `css-gaps/multicol/multicol-gap-decorations-007`: the row after the spanner is a fresh
+    // 100px row, the next row is cut to 40px by the end of the outer column; the second fragment
+    // holds the rest (300 in a full row, the last 30 balanced to 10 + 10 + 10).
+    let v = leaf_boxes(
+        "<div id=o><div id=n><div class=a></div><div class=s></div><div class=b></div></div></div>",
+        ROWS_CSS,
+    );
+    let ys: Vec<(f32, f32)> = v.iter().map(|b| (b.1, b.2)).collect();
+    let want = [
+        (2.0, 20.0), (2.0, 20.0), (2.0, 20.0), (22.0, 18.0),
+        (40.0, 100.0), (40.0, 100.0), (40.0, 100.0), (160.0, 40.0), (160.0, 40.0), (160.0, 40.0),
+        (0.0, 100.0), (0.0, 100.0), (0.0, 100.0), (120.0, 10.0), (120.0, 10.0), (120.0, 10.0),
+    ];
+    assert_eq!(ys, want, "{v:?}");
+}

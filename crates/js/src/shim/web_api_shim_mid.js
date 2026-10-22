@@ -3084,6 +3084,52 @@ function _lumen_css_canonical_scrollbar_color(strVal) {
     return thumb + ' ' + track;
 }
 
+// CSS Display 3 §2 (BUG-1476): `display: [ <display-outside> || <display-inside> ] | <display-listitem> |
+// <display-internal> | <display-box> | <display-legacy>`. Returns the shortest serialization
+// (`inline flow-root` -> `inline-block`, `list-item block` -> `list-item`, `flow` -> `block`) or null
+// for an invalid value. Mirrors `style/parse/display.rs::parse_display` on the cascade side.
+var _LUMEN_DISPLAY_SINGLE = ['none', 'contents', 'inline-block', 'inline-table', 'inline-flex', 'inline-grid',
+    'inline-grid-lanes', 'table-row-group', 'table-header-group', 'table-footer-group', 'table-row',
+    'table-column-group', 'table-column', 'table-cell', 'table-caption', 'ruby-base', 'ruby-text',
+    'ruby-base-container', 'ruby-text-container', '-webkit-box', '-webkit-inline-box', '-webkit-flex',
+    '-webkit-inline-flex'];
+var _LUMEN_DISPLAY_OUTSIDE = ['block', 'inline', 'run-in'];
+var _LUMEN_DISPLAY_INSIDE = ['flow', 'flow-root', 'table', 'flex', 'grid', 'grid-lanes', 'ruby', 'math'];
+function _lumen_css_canonical_display(strVal) {
+    var words = strVal.trim().toLowerCase().split(/\s+/);
+    if (words.length === 1 && _LUMEN_DISPLAY_SINGLE.indexOf(words[0]) !== -1) return words[0];
+    if (words.length > 3) return null;
+    var outside = null, inside = null, listItem = false;
+    for (var i = 0; i < words.length; i++) {
+        var w = words[i];
+        if (w === 'list-item') {
+            if (listItem) return null;
+            listItem = true;
+        } else if (_LUMEN_DISPLAY_OUTSIDE.indexOf(w) !== -1) {
+            if (outside !== null) return null;
+            outside = w;
+        } else if (_LUMEN_DISPLAY_INSIDE.indexOf(w) !== -1) {
+            if (inside !== null) return null;
+            inside = w;
+        } else {
+            return null;
+        }
+    }
+    if (inside === null) inside = 'flow';
+    // `ruby` / `math` without an outside keyword are inline-level (`display: ruby` = `inline ruby`).
+    if (outside === null) outside = inside === 'ruby' || inside === 'math' ? 'inline' : 'block';
+    if (listItem) {
+        if (inside !== 'flow' && inside !== 'flow-root') return null;
+        return (outside === 'block' ? '' : outside + ' ') + (inside === 'flow-root' ? 'flow-root ' : '') + 'list-item';
+    }
+    if (inside === 'flow') return outside;
+    if (outside === 'run-in') return 'run-in ' + inside;
+    if (inside === 'ruby' || inside === 'math') return outside === 'block' ? 'block ' + inside : inside;
+    if (inside === 'grid-lanes') return outside === 'block' ? 'grid-lanes' : 'inline grid-lanes';
+    if (outside === 'block') return inside;
+    return inside === 'flow-root' ? 'inline-block' : 'inline-' + inside;
+}
+
 // CSS Scroll Snap L1 §3.1 (CSSOM-2/BUG-484, срез 18): `scroll-snap-type:
 // none | [ x | y | block | inline | both ] [ mandatory | proximity ]?` —
 // same "one longhand, several tokens" shape as `scrollbar-color` above, so
@@ -3677,6 +3723,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (key === 'container-type') {
         return _lumen_css_canonical_container_type(strVal);
     }
+    if (key === 'display') {
+        return _lumen_css_canonical_display(strVal);
+    }
     return strVal;
 }
 
@@ -3931,7 +3980,8 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         key === 'interest-delay-start' ||
         key === 'interest-delay-end' ||
         key === 'contain' ||
-        key === 'container-type') {
+        key === 'container-type' ||
+        key === 'display') {
         var canon = _lumen_canonicalize_longhand(key, strVal);
         if (canon === null || canon === undefined) return; // invalid value: no-op
         obj[key] = canon;
