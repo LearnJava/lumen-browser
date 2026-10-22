@@ -2229,7 +2229,10 @@ pub(crate) use box_sizing_text_props::{first_inline_run, first_inline_text};
 #[path = "tests/visual_props_pseudo_selectors.rs"]
 mod visual_props_pseudo_selectors;
 #[cfg(test)]
-pub(crate) use visual_props_pseudo_selectors::{style_ctx, style_ctx_with_style_props};
+#[path = "tests/containment_style_queries.rs"]
+mod containment_style_queries;
+#[cfg(test)]
+pub(crate) use containment_style_queries::{style_ctx, style_ctx_with_style_props};
 
 #[cfg(test)]
 #[path = "tests/container_queries_replaced.rs"]
