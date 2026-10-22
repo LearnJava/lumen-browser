@@ -1054,6 +1054,7 @@ pub(crate) fn collect_inline_segments(
             // gap at that boundary. Without this, adjacent segments would be joined
             // tightly even when source whitespace separated them. Leading
             // whitespace (no preceding segment) collapses away entirely.
+            let mut full_width_gap = false;
             if let Some(last) = out.last_mut()
                 && !last.forced_break
                 && !last.style.white_space.preserves_whitespace()
@@ -1061,7 +1062,32 @@ pub(crate) fn collect_inline_segments(
             {
                 // `folded_gap` keeps a segment break visible to `collapse_segment_breaks`.
                 let gap = super::segment_break::folded_gap(&last.text, s.contains('\n'));
-                last.text.push(gap);
+                if gap == ' ' && inherited.text_extra.transform.full_width {
+                    full_width_gap = true;
+                } else {
+                    last.text.push(gap);
+                }
+            }
+            // CSS Text L3 §2.1: `full-width` превращает в U+3000 пробел, оставшийся после
+            // схлопывания (BUG-1465). Пробел принадлежит узлу, а не предыдущему сегменту, —
+            // поэтому он получает собственный сегмент со стилем узла (фон и рамка
+            // `<span> </span>` рисуются вокруг него).
+            if full_width_gap {
+                out.push(InlineSegment {
+                    text: "\u{3000}".to_string(),
+                    style: inherited.clone(),
+                    pre_space: 0.0,
+                    post_space: 0.0,
+                    is_element_box: false,
+                    img_src: None,
+                    img_is_lazy: false,
+                    img_width: 0.0,
+                    forced_break: false,
+                    pseudo_kind: PseudoKind::None,
+                    source_node: id,
+                    source_char_offset: 0,
+                    bidi_level: 0,
+                });
             }
         }
         NodeData::Element { .. } => {

@@ -997,10 +997,13 @@ pub(crate) fn is_discardable_text(s: &str, white_space: crate::WhiteSpace) -> bo
 /// Word separators for line breaking: Unicode white space except the
 /// no-break spaces U+00A0, U+202F, U+2007 (UAX #14 class GL), which are not CSS
 /// document white space (CSS Text L3 §4.1.1) and must stay inside the word
-/// (BUG-1323). Other Unicode spaces (EN SPACE, IDEOGRAPHIC SPACE…) are class BA —
-/// they stay break opportunities.
+/// (BUG-1323). The other Unicode spaces (U+1680, U+2000…200A, U+205F, IDEOGRAPHIC
+/// SPACE U+3000) are not document white space either: each keeps its own width
+/// and is never folded into U+0020 (BUG-1462). As UAX #14 class BA they stay break
+/// opportunities, which `line_break::break_opportunities` finds inside the word.
 pub(crate) fn is_wrap_whitespace(c: char) -> bool {
-    c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{202f}' | '\u{2007}')
+    c.is_whitespace()
+        && !matches!(c, '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}')
 }
 
 /// `str::split_whitespace` over [`is_wrap_whitespace`].
