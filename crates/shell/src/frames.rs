@@ -2313,7 +2313,7 @@ pub(crate) fn apply_frame_navigation(
         eprintln!("iframe: навигация фрейма показывает документ ошибки");
     }
     drop_frame_subtree(frames, old_doc);
-    frames.retain(|o| !Arc::ptr_eq(&o.doc, old_doc));
+    frame_dynamic_load::release_frame_handles(frames.extract_if(.., |o| Arc::ptr_eq(&o.doc, old_doc)).collect());
     frames.extend(handles);
     true
 }
@@ -2338,20 +2338,26 @@ pub(crate) fn drop_frame_subtree(frames: &mut Vec<FrameHandle>, doc: &Arc<Mutex<
         }
         i += 1;
     }
-    frames.retain(|h| {
-        !h.parent_doc
-            .as_ref()
-            .is_some_and(|pd| doomed.iter().any(|d| Arc::ptr_eq(d, pd)))
-    });
+    let gone = frames
+        .extract_if(.., |h| {
+            h.parent_doc
+                .as_ref()
+                .is_some_and(|pd| doomed.iter().any(|d| Arc::ptr_eq(d, pd)))
+        })
+        .collect();
+    frame_dynamic_load::release_frame_handles(gone);
 }
 
 /// Живой sub-документ одного `<iframe>` (BUG-480, срез 1).
 ///
 /// Держит порождённый `Document` и его JS-контекст живыми на время жизни
 /// страницы: пока хэндл жив, тикают таймеры ребёнка и работают его
-/// обработчики. Падает вместе со страницей — замена страницы в
-/// [`Lumen::apply_loaded_page`] уносит все фреймы разом, отдельного
-/// lifecycle-менеджмента не нужно.
+/// обработчики. Падает вместе со страницей (замена страницы в
+/// [`Lumen::apply_loaded_page`] уносит все фреймы разом), с навигацией фрейма
+/// и с удалением его host-элемента из документа (BUG-1682,
+/// [`frame_dynamic_load::remove_frames_of`]). Хэндл — единственный сильный
+/// владелец рантайма фрейма: реестры `frame_bridge` держат его слабо, поэтому
+/// отпускать хэндлы — через [`frame_dynamic_load::release_frame_handles`].
 ///
 /// Срез 2 дал JS родителя фасады под-документа через реестр биндингов
 /// `frame_bridge.rs` — регистрация идёт из локальных переменных этой функции,
