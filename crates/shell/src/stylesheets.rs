@@ -124,7 +124,11 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
     // (`sheet_base`), чтобы вложенные импорты (`<link href="/css/a.css">` →
     // `@import "b.css"` = `/css/b.css`) разрешались корректно.
     let gate_ref = csp_gate.as_ref().map(|(p, _)| (p.as_slice(), self_origin.as_ref()));
-    let parts = parallel_map(&hrefs, |_, (_, href, charset_attr, referrer_policy_attr)| {
+    // BUG-1490: the element's `nonce` is part of the `style-src-elem`
+    // pre-request check; read it here, before the parallel phase.
+    let nonces: Vec<Option<String>> =
+        hrefs.iter().map(|(id, ..)| doc.get(*id).get_attr("nonce").map(str::to_owned)).collect();
+    let parts = parallel_map(&hrefs, |i, (_, href, charset_attr, referrer_policy_attr)| {
         // GAP-REFERRER срез 6: `referrerpolicy` на этом конкретном `<link>`
         // переопределяет политику документа только для его собственного
         // запроса (и для `@import`-ов внутри его листа — тот же источник,
@@ -142,7 +146,7 @@ pub(crate) fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink:
             // дали картинкам и `<script src>`.
             let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url);
             let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
-            if crate::csp_enforce::style_src_blocked(policy, gate_url, self_origin.as_ref()) {
+            if crate::csp_enforce::style_link_blocked(policy, gate_url, self_origin.as_ref(), nonces[i].as_deref()) {
                 return Err(Some(gate_url.to_owned()));
             }
         }
@@ -636,7 +640,8 @@ pub(crate) fn build_stylesheet_node_registry(
                     let resolved_url = base.resolve_str(&href);
                     let upgraded = crate::csp_enforce::upgrade_insecure_url(policy, &resolved_url);
                     let gate_url = upgraded.as_deref().unwrap_or(&resolved_url);
-                    if crate::csp_enforce::style_src_blocked(policy, gate_url, self_origin.as_ref()) {
+                    let nonce = doc.get(id).get_attr("nonce");
+                    if crate::csp_enforce::style_link_blocked(policy, gate_url, self_origin.as_ref(), nonce) {
                         continue;
                     }
                 }

@@ -1399,6 +1399,32 @@ fn stylesheet_node_registry_skips_style_src_blocked_link() {
     assert!(entries.is_empty(), "style-src 'none' must keep the link out of the registry");
 }
 
+/// BUG-1490: `style-src 'nonce-…'` пропускает `<link rel=stylesheet nonce>` с
+/// совпавшим nonce, а не судит его по URL — раньше гейт видел только адрес,
+/// не находил источника и блокировал лист. Без nonce или с чужим — блок.
+#[test]
+fn nonced_link_stylesheet_passes_style_src_nonce_policy() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <meta http-equiv="Content-Security-Policy" content="style-src 'nonce-k'">
+                <link rel="stylesheet" nonce="k" href="ok.css">
+                <link rel="stylesheet" nonce="bad" href="wrong.css">
+                <link rel="stylesheet" href="none.css">
+            </head><body></body></html>"#,
+    );
+    // URL-база: файловый путь гейт не судит вовсе; порт 9 отказывает сразу.
+    let base = ResourceBase::Url("http://127.0.0.1:9/page.html".to_owned());
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+
+    let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+
+    assert_eq!(
+        blocked,
+        vec!["http://127.0.0.1:9/wrong.css".to_owned(), "http://127.0.0.1:9/none.css".to_owned()],
+        "only the links without a matching nonce are blocked"
+    );
+}
+
 // ──────────── BUG-509: CSS "determine the fallback encoding" wiring ───────
 
 /// `#\xC8{ visibility:hidden }` — byte 0xC8 decodes to `И` (U+0418) under
