@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::NodeId;
 
-use crate::box_tree::LayoutBox;
+use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{Length, LengthOrAuto};
 
 // ─── AnchorSide ──────────────────────────────────────────────────────────────
@@ -203,6 +203,9 @@ pub struct AnchorFunc {
 pub struct AnchorRegistry {
     /// Maps anchor-name strings (including the `--` prefix) to border-box rects.
     pub entries: HashMap<String, AnchorEntry>,
+    /// Maps an anchor name to the scroll containers its element sits in, outermost first
+    /// (CSS Anchor Positioning L1 §4.3). Absent — the anchor is in no scroll container.
+    pub scroll_chains: HashMap<String, Vec<NodeId>>,
 }
 
 /// One registered anchor element.
@@ -279,8 +282,13 @@ pub fn collect_anchors(root: &LayoutBox) -> AnchorRegistry {
 /// `register_anchor_scoped`), so children are pushed in reverse to keep the
 /// LIFO stack's pop order identical to the old left-to-right recursion.
 fn collect_anchors_rec(root: &LayoutBox, registry: &mut AnchorRegistry, scope_root: Option<NodeId>) {
-    let mut stack: Vec<(&LayoutBox, Option<NodeId>)> = vec![(root, scope_root)];
-    while let Some((lb, scope_root)) = stack.pop() {
+    // `scrollers` is the path of scroll containers above the popped box; `depth` restores it
+    // to what the box's parent saw (the push-before-children / pop-after discipline the
+    // recursion gave for free, as in `apply_anchor_positions_rec`).
+    let mut scrollers: Vec<NodeId> = Vec::new();
+    let mut stack: Vec<(&LayoutBox, Option<NodeId>, usize)> = vec![(root, scope_root, 0)];
+    while let Some((lb, scope_root, depth)) = stack.pop() {
+        scrollers.truncate(depth);
         // Determine the scope root for this element's descendants.
         let next_scope = match &lb.style.anchor_scope {
             AnchorScope::All | AnchorScope::Named(_) => Some(lb.node),
@@ -289,11 +297,30 @@ fn collect_anchors_rec(root: &LayoutBox, registry: &mut AnchorRegistry, scope_ro
 
         if let Some(name) = &lb.style.anchor_name {
             register_anchor_scoped(registry, name.to_string(), lb.node, lb.rect, next_scope);
+            // A later registration of the same name replaces the earlier one, chain included.
+            if scrollers.is_empty() {
+                registry.scroll_chains.remove(name.as_ref());
+            } else {
+                registry.scroll_chains.insert(name.to_string(), scrollers.clone());
+            }
         }
+        if is_scroll_container(lb) && scrollers.last() != Some(&lb.node) {
+            scrollers.push(lb.node);
+        }
+        let child_depth = scrollers.len();
         for child in lb.children.iter().rev() {
-            stack.push((child, next_scope));
+            stack.push((child, next_scope, child_depth));
         }
     }
+}
+
+/// True for a box whose content a scroll offset can move: `overflow: scroll | auto`, and
+/// `hidden`, which script can scroll too. `clip` never scrolls.
+pub(crate) fn is_scroll_container(lb: &LayoutBox) -> bool {
+    use crate::style::Overflow;
+    let moves = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden);
+    matches!(lb.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table)
+        && (moves(lb.style.overflow_x) || moves(lb.style.overflow_y))
 }
 
 /// Register an element as a named anchor (globally visible, no scope restriction).
@@ -806,6 +833,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let root = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
@@ -835,6 +863,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let mut child = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(1),
             rect: rect(100.0, 150.0, 200.0, 100.0),
@@ -857,6 +886,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut child.style).anchor_name = Some("--tooltip".into());
 
         let root = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
@@ -889,6 +919,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let mut anchor_deep = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(2),
             rect: rect(50.0, 50.0, 100.0, 100.0),
@@ -911,6 +942,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut anchor_deep.style).anchor_name = Some("--deep".into());
 
         let child = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(1),
             rect: rect(0.0, 0.0, 200.0, 200.0),
@@ -932,6 +964,7 @@ mod tests {
         };
 
         let root = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),
@@ -964,6 +997,7 @@ mod tests {
         use crate::style::ComputedStyle;
 
         let mut child1 = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(1),
             rect: rect(0.0, 0.0, 100.0, 100.0),
@@ -986,6 +1020,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut child1.style).anchor_name = Some("--left".into());
 
         let mut child2 = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(2),
             rect: rect(150.0, 0.0, 100.0, 100.0),
@@ -1008,6 +1043,7 @@ mod tests {
         std::sync::Arc::make_mut(&mut child2.style).anchor_name = Some("--right".into());
 
         let root = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(0),
             rect: rect(0.0, 0.0, 800.0, 600.0),

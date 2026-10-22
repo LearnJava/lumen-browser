@@ -472,7 +472,7 @@ fn collect_text_mask(b: &LayoutBox, dpr: f32, is_root: bool, out: &mut Vec<Displ
     if let BoxKind::InlineRun { lines, .. } = &b.kind {
         let mut tmp = Vec::new();
         super::inline_frag::TEXT_MASK_BUILD.with(|f| f.set(true));
-        emit_inline_run(b, lines, None, dpr, &mut tmp);
+        emit_inline_run(b, lines, dpr, &mut tmp);
         super::inline_frag::TEXT_MASK_BUILD.with(|f| f.set(false));
         for mut c in tmp {
             if let DisplayCommand::DrawText { color, .. } = &mut c {

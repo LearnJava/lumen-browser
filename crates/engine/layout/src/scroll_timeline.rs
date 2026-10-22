@@ -374,6 +374,7 @@ mod tests {
 
     fn make_box(id: u32, x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
         LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             origin: crate::box_tree::BoxOrigin::default(),
             node: node(id),
             rect: Rect { x, y, width: w, height: h },

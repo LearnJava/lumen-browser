@@ -73,15 +73,19 @@ use super::*;
         pop_ch_ex_context(None);
         assert_eq!(Length::Ch(10.0).resolve(20.0, None, vp()), Some(100.0));
         assert_eq!(Length::Ex(4.0).resolve(20.0, None, vp()), Some(40.0));
+        // `cap` без метрики — запасные 0.7em (BUG-1429).
+        assert_eq!(parse_length("2cap"), Some(Length::Cap(2.0)));
+        assert_eq!(Length::Cap(10.0).resolve(20.0, None, vp()), Some(140.0));
     }
 
     #[test]
     fn length_resolve_ch_ex_uses_font_metric_context() {
         // With real metrics published (ch = 9px, ex = 7px per unit) the em_basis
         // is ignored — the absolute per-unit px drives the result.
-        let prev = push_ch_ex_context(Some((9.0, 7.0)));
+        let prev = push_ch_ex_context(Some((9.0, 7.0, 11.0)));
         assert_eq!(Length::Ch(3.0).resolve(20.0, None, vp()), Some(27.0));
         assert_eq!(Length::Ex(2.0).resolve(20.0, None, vp()), Some(14.0));
+        assert_eq!(Length::Cap(2.0).resolve(20.0, None, vp()), Some(22.0));
         pop_ch_ex_context(prev);
         // Context restored → fallback again.
         assert_eq!(Length::Ch(1.0).resolve(20.0, None, vp()), Some(10.0));
@@ -474,9 +478,12 @@ use super::*;
     }
 
     #[test]
-    fn calc_unbalanced_paren_invalid() {
-        assert!(parse_length("calc(10px + 5px").is_none());
-        assert!(parse_length("calc((10px + 5px)").is_none());
+    fn calc_unbalanced_paren_closed_at_end_of_value() {
+        // CSS Syntax L3 §5.4.7: a function open at EOF is closed there (BUG-1438).
+        assert!(parse_length("calc(10px + 5px").is_some());
+        assert!(parse_length("calc((10px + 5px)").is_some());
+        // A stray `)` is still an error.
+        assert!(parse_length("calc(10px + 5px))").is_none());
     }
 
     #[test]
@@ -603,7 +610,8 @@ use super::*;
 
     #[test]
     fn calc_canon_invalid_still_rejected() {
-        assert_eq!(canonical_specified_length("calc(10px + 5px", false, false), None);
+        assert_eq!(canonical_specified_length("calc(10px + 5px))", false, false), None);
+        assert_eq!(canonical_specified_length("calc(10px + )", false, false), None);
     }
 
     // ──────────────── CSS Values L4 §10.6: min() / max() / clamp() ────────────────

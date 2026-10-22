@@ -63,7 +63,26 @@ pub(crate) struct SheetSync {
     /// обратно как лист синхронного флаша, и флаш по ревизии берёт исходный
     /// лист, чтобы не наложить те же правки второй раз.
     pub(crate) pristine: PristineCascade,
+    /// `<style>` узла → `DomTouched::child_list_gen` на момент, когда его лист
+    /// последний раз сверялся с текстом. Смена поколения при том же тексте
+    /// (`style.innerHTML = <тот же текст>`) значит, что браузер создал бы
+    /// новый лист: CSSOM-правки старого выбрасываются, лист разбирается заново.
+    pub(crate) child_list_gen: Arc<Mutex<HashMap<u32, u64>>>,
+    /// BUG-1439: листы узлов, вышедших из дерева, — старые первыми. `CSSStyleSheet`
+    /// самостоятельный объект (CSSOM §6.2): после `removeChild(style)` скрипт,
+    /// державший `style.sheet`, по-прежнему читает и правит его правила. Реестр
+    /// узлов лист теряет, поэтому сверка откладывает его сюда, а
+    /// `_lumen_stylesheet_take_detached` переселяет в реестр конструируемых.
+    pub(crate) detached: DetachedSheets,
 }
+
+/// Листы узлов, вышедших из дерева, — см. [`SheetSync::detached`].
+pub(crate) type DetachedSheets = Arc<Mutex<Vec<(u32, Arc<Stylesheet>)>>>;
+
+/// Сколько листов вышедших из дерева узлов держит [`SheetSync::detached`]:
+/// CSS-in-JS снимает и создаёт `<style>` непрерывно, а забрать лист успевает
+/// только тот, у кого есть живая обёртка.
+const DETACHED_SHEETS_CAP: usize = 256;
 
 /// BUG-493: то, что нужно шеллу для каскада отрисовки, без обращения к
 /// самому рантайму. Под движковым потоком (ADR-023, по умолчанию) рантайм
@@ -162,15 +181,29 @@ impl SheetSync {
 
         let mut dropped: Vec<u32> = Vec::new();
         let mut shadow = HashSet::new();
+        let gens: HashMap<u32, u64> = {
+            let touched = self.touched.lock().unwrap_or_else(|e| e.into_inner());
+            owners
+                .iter()
+                .map(|o| (o.node, touched.child_list_gen.get(&NodeId::from_raw(o.node)).copied().unwrap_or(0)))
+                .collect()
+        };
         {
+            let mut seen = self.child_list_gen.lock().unwrap_or_else(|e| e.into_inner());
             let mut nodes = self.nodes.lock().unwrap_or_else(|e| e.into_inner());
             let mut old: HashMap<u32, StylesheetNodeEntry> =
                 nodes.drain(..).map(|e| (e.node, e)).collect();
             let mut out = Vec::with_capacity(owners.len());
             for owner in owners {
                 let prev = old.remove(&owner.node);
+                let generation = gens.get(&owner.node).copied().unwrap_or(0);
+                let rewritten = seen.insert(owner.node, generation).is_some_and(|old| old != generation);
                 let entry = match (owner.style_text, prev) {
-                    (Some(text), Some(prev)) if prev.sheet.source().unwrap_or("") == text => prev,
+                    (Some(text), Some(prev))
+                        if !rewritten && prev.sheet.source().unwrap_or("") == text =>
+                    {
+                        prev
+                    }
                     (Some(text), prev) => {
                         if prev.is_some() {
                             dropped.push(owner.node);
@@ -189,7 +222,17 @@ impl SheetSync {
                 }
                 out.push(entry);
             }
-            dropped.extend(old.into_keys());
+            {
+                let mut detached = self.detached.lock().unwrap_or_else(|e| e.into_inner());
+                for (node, entry) in old {
+                    dropped.push(node);
+                    detached.retain(|(n, _)| *n != node);
+                    detached.push((node, entry.sheet));
+                }
+                let excess = detached.len().saturating_sub(DETACHED_SHEETS_CAP);
+                detached.drain(..excess);
+            }
+            seen.retain(|n, _| out.iter().any(|e| e.node == *n));
             *nodes = out;
         }
         *self.shadow_owned.lock().unwrap_or_else(|e| e.into_inner()) = shadow;
@@ -248,7 +291,20 @@ impl SheetSync {
             return false;
         }
         match doc.get(id).element_name() {
-            Some(name) if name.local == "style" => style_text(&doc, id) == source,
+            Some(name) if name.local == "style" => {
+                let unchanged_text = style_text(&doc, id) == source;
+                drop(doc);
+                let generation = self
+                    .touched
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .child_list_gen
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(0);
+                let seen = self.child_list_gen.lock().unwrap_or_else(|e| e.into_inner());
+                unchanged_text && seen.get(&nid).is_none_or(|&old| old == generation)
+            }
             Some(_) => true,
             None => false,
         }
@@ -279,6 +335,8 @@ pub(crate) fn patched_cascade(
     merge_unlocated_text: bool,
 ) -> Option<Stylesheet> {
     let mut bases: HashMap<u32, usize> = HashMap::new();
+    // CSSOM-10: листы с правками дерева заменяют свой кусок текста каскада.
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
     let mut unlocated: Vec<&Stylesheet> = Vec::new();
     let mut cursor = 0usize;
     for entry in nodes {
@@ -286,33 +344,62 @@ pub(crate) fn patched_cascade(
             continue;
         }
         let needle = entry.sheet.source().unwrap_or("");
+        let tree_edited = deltas
+            .iter()
+            .any(|(n, op)| *n == entry.node && matches!(op, CssomOp::TreeEdit));
         match sheet.locate_embedded_source(needle, cursor) {
             Some((start, end)) => {
                 cursor = end;
-                if deltas.iter().any(|(n, _)| *n == entry.node) {
+                if tree_edited {
+                    replacements.push((start, end, entry.sheet.cssom_source_text()));
+                } else if deltas.iter().any(|(n, _)| *n == entry.node) {
                     let (base, _count) = sheet.cssom_range_for_source_span(start, end);
                     bases.insert(entry.node, base);
                 }
             }
             None => {
                 let wanted = if needle.is_empty() {
-                    !entry.sheet.cssom_rules().is_empty()
+                    // `@layer`/`@scope`/… не входят в `cssom_rules()` — у правленого листа
+                    // смотрим на дерево.
+                    !entry.sheet.cssom_rules().is_empty() || (tree_edited && !entry.sheet.cssom_tree().rules.is_empty())
                 } else {
                     merge_unlocated_text
                 };
-                if wanted {
+                if !wanted {
+                    continue;
+                }
+                // Порядок слоёв зависит от места объявления: пустой `<style>`,
+                // в который вставили `@layer`, встаёт на своё место в тексте.
+                if needle.is_empty() && tree_edited && sheet.source().is_some() && declares_layers(&entry.sheet) {
+                    replacements.push((cursor, cursor, entry.sheet.cssom_source_text()));
+                } else {
                     unlocated.push(&entry.sheet);
                 }
             }
         }
     }
-    if bases.is_empty() && unlocated.is_empty() {
+    if bases.is_empty() && unlocated.is_empty() && replacements.is_empty() {
         return None;
     }
-    let mut patched = sheet.clone();
+    let mut patched = if replacements.is_empty() {
+        sheet.clone()
+    } else {
+        let mut text = sheet.source().unwrap_or("").to_owned();
+        // С конца к началу: ранние смещения не сдвигают поздние.
+        // Равные `start` (вставки пустых листов) — тоже в обратном порядке.
+        let mut indexed: Vec<_> = replacements.into_iter().enumerate().collect();
+        indexed.sort_by_key(|(i, (start, _, _))| std::cmp::Reverse((*start, *i)));
+        for (_, (start, end, with)) in indexed {
+            text.replace_range(start..end, &with);
+        }
+        let mut rebuilt = lumen_css_parser::parse(&text);
+        rebuilt.carry_color_profile_data(sheet);
+        rebuilt
+    };
     // По убыванию `base`: правка раньше по странице сдвигает индексы всех
     // листов после неё, а `base` посчитаны один раз по нетронутому листу —
-    // см. `Stylesheet::cssom_range_for_source_span`.
+    // см. `Stylesheet::cssom_range_for_source_span`. После подмены текста
+    // индексы сдвинуты, поэтому старый путь работает только без подмен.
     let mut order: Vec<u32> = bases.keys().copied().collect();
     order.sort_unstable_by_key(|n| std::cmp::Reverse(bases[n]));
     for node in order {
@@ -329,6 +416,16 @@ pub(crate) fn patched_cascade(
         patched.merge_from(extra.clone());
     }
     Some(patched)
+}
+
+/// В листе есть `@layer` (блок или список имён) на верхнем уровне.
+fn declares_layers(sheet: &Stylesheet) -> bool {
+    use lumen_css_parser::cssom_tree::RuleKind;
+    sheet
+        .cssom_tree()
+        .rules
+        .iter()
+        .any(|n| matches!(n.kind, RuleKind::Layer | RuleKind::LayerStatement))
 }
 
 /// Обход дерева в порядке документа с заходом в теневые деревья: теневой
@@ -396,5 +493,49 @@ fn is_connected(doc: &Document, id: NodeId) -> bool {
                 None => return false,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tree_edit_tests {
+    use super::*;
+
+    fn entry(node: u32, sheet: Stylesheet) -> StylesheetNodeEntry {
+        StylesheetNodeEntry { node, sheet: Arc::new(sheet), disabled: false }
+    }
+
+    /// Правка дерева листа подменяет его кусок текста каскада; соседний лист не трогается.
+    #[test]
+    fn tree_edit_replaces_the_located_sheet_text_only() {
+        let first = "a { color: red; }";
+        let second = "p { color: blue; }";
+        let cascade = lumen_css_parser::parse(&format!("{first}\n{second}"));
+        let mut edited = lumen_css_parser::parse(first);
+        edited.cssom_insert_rule(None, "@media print { a { color: green; } }", 1).unwrap();
+        let nodes = [entry(1, edited), entry(2, lumen_css_parser::parse(second))];
+        let deltas = [(1u32, CssomOp::TreeEdit)];
+
+        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), false).unwrap();
+        let text = patched.source().unwrap();
+        assert!(text.contains("@media print"), "{text}");
+        assert!(text.contains(second), "{text}");
+        assert_eq!(patched.media_rules.len(), 1);
+    }
+
+    /// `@layer`, вставленный в пустой `<style>`, встаёт на место этого `<style>` в тексте
+    /// (порядок слоёв зависит от места объявления), а не в конец каскада.
+    #[test]
+    fn layer_inserted_into_an_empty_style_lands_at_its_document_position() {
+        let cascade = lumen_css_parser::parse("@layer second { p { color: red; } }");
+        let mut empty = lumen_css_parser::parse("");
+        empty.cssom_insert_rule(None, "@layer first {}", 0).unwrap();
+        assert_eq!(empty.source(), Some(""), "source() must stay the DOM text");
+        let nodes = [entry(1, empty), entry(2, lumen_css_parser::parse("@layer second { p { color: red; } }"))];
+        let deltas = [(1u32, CssomOp::TreeEdit)];
+
+        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), false).unwrap();
+        let text = patched.source().unwrap();
+        assert!(text.contains("first") && text.contains("second"), "{text:?}");
+        assert!(text.find("first").unwrap() < text.find("second").unwrap(), "{text:?}");
     }
 }

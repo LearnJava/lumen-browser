@@ -161,6 +161,9 @@ fn find_img(doc: &Document, id: NodeId) -> Option<NodeId> {
 
 /// Parse `html`, run `apply_intrinsic_size` on its `<img>` with the given
 /// intrinsic size, and return the resulting `(width, height)` attributes.
+/// An `<img>` with neither attribute (BUG-1280) keeps the decoded size in the
+/// document side table instead; a missing attribute then reads from there
+/// (every fixture's `src` is `p.png`).
 fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
     let mut doc = lumen_html_parser::parse(html);
     let img = find_img(&doc, doc.root()).expect("img present");
@@ -174,7 +177,11 @@ fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
             .find(|a| a.name.local.eq_ignore_ascii_case(name))
             .map(|a| a.value.to_string())
     };
-    (pick("width"), pick("height"))
+    let embedded = doc.embedded_image(img, "p.png");
+    (
+        pick("width").or_else(|| embedded.map(|(_, w, _)| w.to_string())),
+        pick("height").or_else(|| embedded.map(|(_, _, h)| h.to_string())),
+    )
 }
 
 #[test]
@@ -1477,6 +1484,24 @@ fn screenshot_settle_runs_load_and_raf_then_relayouts() {
     assert!(after >= 1000.0, "double rAF: {before} -> {after}");
     let (before, after) = height("<!DOCTYPE html><body style='margin:0'><div id=a style='height:10px'></div></body>");
     assert_eq!(before, after);
+}
+
+/// BUG-1451: `el.focus()` из скрипта страницы доходит до снимка `--screenshot` —
+/// `:focus`/`:focus-within` применяются (раньше запрос фокуса не дренировался, и
+/// стиль не появлялся ни у самого элемента, ни у предка).
+#[cfg(feature = "v8")]
+#[test]
+fn screenshot_settle_applies_focus_requested_by_script() {
+    let height = |css: &str| {
+        let mut page = parse_and_layout_for_test(&format!(
+            "<!DOCTYPE html><style>#f{{height:10px}}{css}</style><body style='margin:0'>             <div id=t><div id=f tabindex=0></div></div>            <script>document.getElementById('f').focus()</script></body>"
+        ));
+        crate::dump_mode::settle_after_load(&mut page, Size::new(1024.0, 20.0));
+        page.layout.rect.height
+    };
+    assert!(height("#f:focus{height:300px}") >= 300.0, ":focus");
+    assert!(height("#t:focus-within #f{height:300px}") >= 300.0, ":focus-within");
+    assert!(height("#f:hover{height:300px}") < 300.0);
 }
 
 /// WPT-RUN-15: `<html class="reftest-wait">` держит снимок, пока страница сама не снимет

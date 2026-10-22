@@ -22,12 +22,12 @@ use crate::style::{
     BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
     FlexBasis, FlexDirection, FlexWrap,
-    ContainFlags, Content, ContentItem, ContentVisibility,
+    ContainFlags, ContainerType, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, ImageRendering, Isolation, IterationCount, Length,
+    FontVariantPosition, ImageRendering, InterpolateSizeMode, Isolation, IterationCount, Length,
     LengthOrAuto,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowAnchor, overflow_clip_margin_serialize,
     OutlineColor, OverscrollBehavior,
@@ -496,6 +496,25 @@ pub(crate) fn px_str(v: f32) -> String {
     }
 }
 
+/// Computed-value text of `abs px + pct × 100%` when the percentage part is non-zero
+/// (`110%`, `calc(-15% + 10px)`); `None` for a plain length. Same term order as CSS Values 4
+/// §10.10: percentage first.
+fn length_percentage_css(abs_px: f32, pct: f32) -> Option<String> {
+    let round = |v: f32| (v * 1000.0).round() / 1000.0;
+    let pct = round(pct * 100.0);
+    if pct == 0.0 {
+        return None;
+    }
+    let abs = round(abs_px);
+    Some(if abs == 0.0 {
+        format!("{}%", number_str(pct))
+    } else if abs < 0.0 {
+        format!("calc({}% - {})", number_str(pct), px_str(-abs))
+    } else {
+        format!("calc({}% + {})", number_str(pct), px_str(abs))
+    })
+}
+
 /// Serialises one `aspect-ratio` ratio component as a bare CSS `<number>`
 /// (no unit) — omits the decimal point for whole-number values, matching
 /// `test_computed_value("aspect-ratio", …)`'s expected `"auto W / H"` form.
@@ -547,10 +566,18 @@ pub(crate) fn color_to_css(c: Color) -> String {
     if c.a == 255 {
         format!("rgb({}, {}, {})", c.r, c.g, c.b)
     } else {
-        let a = c.a as f32 / 255.0;
-        let a_str = format!("{:.3}", a).trim_end_matches('0').trim_end_matches('.').to_owned();
-        format!("rgba({}, {}, {}, {})", c.r, c.g, c.b, a_str)
+        format!("rgba({}, {}, {}, {})", c.r, c.g, c.b, alpha_to_css(c.a))
     }
+}
+
+/// CSS Color 4 §15.2 / Chrome: the shortest decimal (two digits, else three) that rounds back to
+/// the same 8-bit alpha — `128` serialises as `0.5`, not `0.502` (BUG-1424).
+fn alpha_to_css(a: u8) -> String {
+    let exact = f32::from(a) / 255.0;
+    let two = (exact * 100.0).round() / 100.0;
+    let v = if (two * 255.0).round() as u8 == a { two } else { (exact * 1000.0).round() / 1000.0 };
+    // `{}` prints the shortest round-trip form (`0.5`, `0.2`, `0.502`), without trailing zeros.
+    format!("{v}")
 }
 
 /// Serialises a [`CssColor`] — `CurrentColor` becomes `"currentcolor"`.
@@ -577,25 +604,28 @@ fn css_color_to_css(c: &CssColor) -> String {
 /// observable). Layers are comma-joined, topmost (index 0) first, matching
 /// `background-color`/other multi-layer shorthand serialization order.
 ///
-/// Only [`BackgroundImage::None`] and [`BackgroundImage::Url`] round-trip
-/// exactly; the engine has no source text to reconstruct for the other three
-/// variants (they're computed/generated, not stored verbatim), so those
-/// serialise as `"none"` — a known gap, not a regression, since this key did
-/// not exist in the map at all before this change.
+/// Gradients, `image-set()` and `cross-fade()` carry their computed text in
+/// [`BackgroundLayer::image_css`] (BUG-1428, built by `parse::image_computed`);
+/// `url()` is re-quoted from the stored path. `paint()` and the forms that
+/// module does not recognise (legacy `-webkit-*-gradient`) serialise as `"none"`.
 fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
     if layers.is_empty() {
         return "none".into();
     }
     layers
         .iter()
-        .map(|l| match &l.image {
-            BackgroundImage::Url(s) => {
+        .map(|l| match (&l.image_css, &l.image) {
+            (Some(css), _) => css.to_string(),
+            (None, BackgroundImage::Url(s)) => {
                 format!("url(\"{}\")", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
-            BackgroundImage::None
-            | BackgroundImage::Gradient(_)
-            | BackgroundImage::CrossFade { .. }
-            | BackgroundImage::Paint(_) => "none".to_string(),
+            (
+                None,
+                BackgroundImage::None
+                | BackgroundImage::Gradient(_)
+                | BackgroundImage::CrossFade { .. }
+                | BackgroundImage::Paint(_),
+            ) => "none".to_string(),
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -724,6 +754,7 @@ pub(crate) fn length_to_css(l: &Length) -> String {
         Length::Rem(v) => format!("{}rem", v),
         Length::Ch(v) => format!("{}ch", v),
         Length::Ex(v) => format!("{}ex", v),
+        Length::Cap(v) => format!("{}cap", v),
         Length::Lh(v) => format!("{}lh", v),
         Length::Rlh(v) => format!("{}rlh", v),
         Length::Rex(v) => format!("{}rex", v),
@@ -923,6 +954,50 @@ pub(crate) fn transform_list_to_css(list: &[TransformFn]) -> String {
     }
 }
 
+/// CSSOM resolved value of a `<number>` (CSS Values L4 §10.9.1): at most six
+/// significant digits like Chrome, `e+NN` form outside `1e-5..1e21`, signed zero kept.
+pub(crate) fn css_number(v: f32) -> String {
+    if v.is_nan() || v == 0.0 {
+        return if v.is_sign_negative() && !v.is_nan() { "-0".into() } else { "0".into() };
+    }
+    let sci = format!("{:.5e}", f64::from(v));
+    let rounded: f64 = sci.parse().unwrap_or(f64::from(v));
+    let a = rounded.abs();
+    if (1e-5..1e21).contains(&a) {
+        return format!("{rounded}");
+    }
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let mantissa = if mantissa.contains('.') { mantissa.trim_end_matches('0').trim_end_matches('.') } else { mantissa };
+    let exp: i32 = exp.parse().unwrap_or(0);
+    format!("{mantissa}e{}{}", if exp < 0 { '-' } else { '+' }, exp.abs())
+}
+
+/// `translate` resolved value: `none`, or `<x>` / `<x> <y>` with a zero `y` dropped.
+fn translate_to_css(t: Option<&(Length, Length)>) -> String {
+    match t {
+        None => "none".into(),
+        Some((x, Length::Px(0.0))) => length_to_css(x),
+        Some((x, y)) => format!("{} {}", length_to_css(x), length_to_css(y)),
+    }
+}
+
+/// `rotate` resolved value: `none` or the angle in degrees.
+fn rotate_to_css(r: Option<f32>) -> String {
+    match r {
+        None => "none".into(),
+        Some(rad) => format!("{}deg", css_number(rad.to_degrees())),
+    }
+}
+
+/// `scale` resolved value: `none`, or `<x>` when both factors agree, else `<x> <y>`.
+fn scale_to_css(s: Option<(f32, f32)>) -> String {
+    match s {
+        None => "none".into(),
+        Some((x, y)) if x.to_bits() == y.to_bits() => css_number(x),
+        Some((x, y)) => format!("{} {}", css_number(x), css_number(y)),
+    }
+}
+
 /// Число в сериализации матрицы: до 6 значащих цифр, как у Chrome;
 /// микроскопический f32-шум от `sin/cos` даёт `-0` → `0`.
 fn matrix_num(v: f32) -> String {
@@ -945,6 +1020,7 @@ fn filter_fn_to_css(f: &FilterFn) -> String {
         FilterFn::Opacity(v) => format!("opacity({})", v),
         FilterFn::Saturate(v) => format!("saturate({})", v),
         FilterFn::Sepia(v) => format!("sepia({})", v),
+        FilterFn::Url(u) => format!("url(\"#{}\")", u.id),
     }
 }
 
@@ -1338,6 +1414,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // the *used* value (already zoom-scaled on the real UA too), not the computed
     // one.
     let z = style.effective_zoom;
+    // BUG-1438: `letter_spacing` already holds `abs + pct * font_size`; the computed value
+    // keeps the `%` share symbolic, so split it off before the zoom is divided out.
+    let letter_spacing_abs = (style.letter_spacing - style.letter_spacing_pct * style.font_size)
+        / if z > 0.0 { z } else { 1.0 };
     // BUG-1592: radii, shadows, outline, flex-basis, transform offsets etc. are scaled
     // by `scale_visual_lengths`; report them as if `zoom` were not applied.
     let unzoomed;
@@ -1384,6 +1464,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("block-step".into(), block_step_shorthand_computed(style));
     // CSS Gap Decorations L1 §3–§4: `column-rule*` / `row-rule*` / `rule*`.
     crate::style::insert_gap_rule_computed(style, &mut m);
+    // CSS Multi-column L1/L2: `column-count/width/height/fill/span/wrap` and `columns`.
+    crate::style::insert_multicol_computed(style, &mut m);
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));
@@ -1449,7 +1531,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("left".into(), length_or_auto_to_css(&style.left));
 
     // ── Colors ────────────────────────────────────────────────────
-    m.insert("color".into(), color_to_css(style.color));
+    // BUG-1425: lab()/oklch()/color()/color-mix() сохраняют своё пространство в computed-значении.
+    m.insert(
+        "color".into(),
+        style.color_css.as_deref().map_or_else(|| color_to_css(style.color), str::to_owned),
+    );
     m.insert("background-color".into(), style.background_color.as_ref()
         .map_or_else(|| "rgba(0, 0, 0, 0)".into(), css_color_to_css));
     m.insert("background-image".into(), background_layers_to_css(&style.background_layers));
@@ -1581,8 +1667,15 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         } else if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
     });
     // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
-    m.insert("letter-spacing".into(), if style.letter_spacing == 0.0 { "normal".into() } else { px_str(style.letter_spacing) });
-    m.insert("word-spacing".into(), px_str(style.word_spacing + style.word_spacing_pct * 0.5 * style.font_size));
+    // CSS Text L4: a `<percentage>` stays a percentage in the computed value (`110%`,
+    // `calc(-15% + 10px)`), it is only resolved against the font in layout.
+    m.insert("letter-spacing".into(), match length_percentage_css(letter_spacing_abs, style.letter_spacing_pct) {
+        Some(css) => css,
+        None if style.letter_spacing == 0.0 => "normal".into(),
+        None => px_str(style.letter_spacing),
+    });
+    m.insert("word-spacing".into(), length_percentage_css(style.word_spacing, style.word_spacing_pct)
+        .unwrap_or_else(|| px_str(style.word_spacing)));
     m.insert("text-align".into(), match style.text_align {
         TextAlign::Start => "start",
         TextAlign::End => "end",
@@ -1903,6 +1996,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Transform / filter ───────────────────────────────────────
     m.insert("transform".into(), transform_list_to_css(&style.transform));
+    m.insert("translate".into(), translate_to_css(style.translate.as_ref()));
+    m.insert("rotate".into(), rotate_to_css(style.rotate));
+    m.insert("scale".into(), scale_to_css(style.scale));
 
     m.insert("filter".into(), if style.filter.is_empty() {
         "none".into()
@@ -1912,6 +2008,16 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Compositing ───────────────────────────────────────────────
     m.insert("mix-blend-mode".into(), mix_blend_mode_to_css(style.mix_blend_mode).into());
+    // VT-API: `getComputedStyle(el).viewTransitionName` and the JS side's
+    // duplicate-name check (`_lumen_vt_named_elements`) read it from here.
+    m.insert(
+        "view-transition-name".into(),
+        style.view_transition_name.as_deref().unwrap_or("none").into(),
+    );
+    m.insert("interpolate-size".into(), match style.interpolate_size {
+        InterpolateSizeMode::NumericOnly => "numeric-only",
+        InterpolateSizeMode::AllowKeywords => "allow-keywords",
+    }.into());
     m.insert("isolation".into(), match style.isolation {
         Isolation::Auto => "auto",
         Isolation::Isolate => "isolate",
@@ -2014,6 +2120,25 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ContentVisibility::Hidden => "hidden",
     }.into());
     m.insert("contain".into(), contain_to_css(style.contain));
+    // CSS Conditional 5 §3.1: `normal | [ [ size | inline-size ] || scroll-state ]`, the size
+    // axis first.
+    m.insert("container-type".into(), {
+        let axis = match style.container_type {
+            ContainerType::Normal => "",
+            ContainerType::Size => "size",
+            ContainerType::InlineSize => "inline-size",
+        };
+        match (axis, style.container_scroll_state) {
+            ("", false) => "normal".to_owned(),
+            ("", true) => "scroll-state".to_owned(),
+            (axis, false) => axis.to_owned(),
+            (axis, true) => format!("{axis} scroll-state"),
+        }
+    });
+    m.insert(
+        "container-name".into(),
+        if style.container_name.is_empty() { "none".to_owned() } else { style.container_name.join(" ") },
+    );
     let cis_w = contain_intrinsic_to_css(
         style.contain_intrinsic_width_auto, style.contain_intrinsic_width.as_ref());
     let cis_h = contain_intrinsic_to_css(
@@ -2101,7 +2226,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     });
     m.insert("transition-timing-function".into(), timing_function_list_to_css(&style.transition_timing_functions));
     m.insert("transition-property".into(), if style.transition_properties.is_empty() {
-        "all".into()
+        if style.transition_property_none { "none".into() } else { "all".into() }
     } else {
         style.transition_properties.join(", ")
     });
@@ -2363,6 +2488,13 @@ fn contain_to_css(flags: ContainFlags) -> String {
     if flags == ContainFlags::NONE {
         return "none".into();
     }
+    // CSS Containment L3 §3: the full sets serialize as their shorthand keywords.
+    if flags == ContainFlags::STRICT {
+        return "strict".into();
+    }
+    if flags == ContainFlags::CONTENT {
+        return "content".into();
+    }
     let mut out: Vec<&str> = Vec::with_capacity(5);
     for (bit, name) in [
         (ContainFlags::SIZE, "size"),
@@ -2502,6 +2634,20 @@ mod tests {
     use super::*;
     use lumen_core::geom::Size;
 
+    /// BUG-1424: alpha prints as the shortest decimal that rounds back to the same 8-bit value.
+    #[test]
+    fn color_alpha_serialises_shortest_round_tripping_decimal() {
+        let c = |a| color_to_css(Color { r: 0, g: 128, b: 0, a });
+        assert_eq!(c(128), "rgba(0, 128, 0, 0.5)");
+        assert_eq!(c(51), "rgba(0, 128, 0, 0.2)");
+        assert_eq!(c(0), "rgba(0, 128, 0, 0)");
+        assert_eq!(c(255), "rgb(0, 128, 0)");
+        assert_eq!(c(77), "rgba(0, 128, 0, 0.3)");
+        // 1/255 = 0.0039 has no two-digit form (0.00 -> 0, 0.01 -> 3): three digits.
+        assert_eq!(c(1), "rgba(0, 128, 0, 0.004)");
+        assert_eq!(c(127), "rgba(0, 128, 0, 0.498)");
+    }
+
     fn layout_tree(html: &str, css: &str) -> (lumen_dom::Document, LayoutBox) {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
@@ -2578,6 +2724,22 @@ mod tests {
         assert_eq!(get("#v", "text-orientation").as_deref(), Some("upright"));
     }
 
+    /// BUG-1435: `interpolate-size` is inherited and readable through `getComputedStyle()`.
+    #[test]
+    fn interpolate_size_is_serialised_and_inherited() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="d">x</div><div id="v"><p id="c">y</p></div>"#,
+            "#v { interpolate-size: allow-keywords }",
+        );
+        let get = |sel: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get("interpolate-size").cloned()
+        };
+        assert_eq!(get("#d").as_deref(), Some("numeric-only"));
+        assert_eq!(get("#v").as_deref(), Some("allow-keywords"));
+        assert_eq!(get("#c").as_deref(), Some("allow-keywords"));
+    }
+
     /// BUG-1325: the CSS Text longhands that `getComputedStyle()` used to read back as `""`.
     #[test]
     fn css_text_longhands_are_serialised() {
@@ -2612,6 +2774,76 @@ mod tests {
         assert_eq!(get("#m", "text-align").as_deref(), Some("center"));
         assert_eq!(get("#r", "tab-size").as_deref(), Some("10px"));
         assert_eq!(get("#r", "letter-spacing").as_deref(), Some("normal"));
+    }
+
+    /// BUG-1438: a percentage in `letter-spacing`/`word-spacing` stays a percentage in the
+    /// computed value, and a number-valued `calc()` in `tab-size` is evaluated.
+    #[test]
+    fn percent_spacing_and_calc_tab_size_are_computed() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="c"><div id="a">x</div><div id="b">x</div><div id="d" style="letter-spacing: calc(10px - (5% + 10%)">x</div><div id="w" style="word-spacing: calc(10px - (5% + 10%)">x</div><div id="e">x</div><div id="f">x</div><div id="g">x</div><div id="h">x</div><div id="k">x</div></div>"#,
+            "#c { container-type: inline-size; width: 100px } #c div { font-size: 40px }
+             #a { letter-spacing: 110%; word-spacing: 110% }
+             #b { letter-spacing: calc(10% - 20%); word-spacing: calc(10% - 20%) }
+             #e { tab-size: calc(10 + (sign(2px - 10px) * 5)) }
+             #f { tab-size: calc(10px + (sign(2px - 10px) * 5px)) }
+             #g { letter-spacing: 10%; word-spacing: 0 }
+             #h { letter-spacing: calc(10px - 0.5em) }
+             #k { tab-size: calc(10px + 0.5em) }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#a", "letter-spacing").as_deref(), Some("110%"));
+        assert_eq!(get("#a", "word-spacing").as_deref(), Some("110%"));
+        assert_eq!(get("#b", "letter-spacing").as_deref(), Some("-10%"));
+        assert_eq!(get("#b", "word-spacing").as_deref(), Some("-10%"));
+        assert_eq!(get("#d", "letter-spacing").as_deref(), Some("calc(-15% + 10px)"));
+        assert_eq!(get("#w", "word-spacing").as_deref(), Some("calc(-15% + 10px)"));
+        assert_eq!(get("#e", "tab-size").as_deref(), Some("5"));
+        assert_eq!(get("#f", "tab-size").as_deref(), Some("5px"));
+        assert_eq!(get("#h", "letter-spacing").as_deref(), Some("-10px"));
+        assert_eq!(get("#k", "tab-size").as_deref(), Some("30px"));
+        // The share is resolved against the element's own font-size in layout: 10% of 40px.
+        let g = find_box_by_selector(&tree, &doc, "#g").expect("box");
+        assert!((g.style.letter_spacing - 4.0).abs() < 0.01, "{}", g.style.letter_spacing);
+    }
+
+    /// BUG-1438: the `%` share of an inherited `letter-spacing` follows the heir's font-size.
+    #[test]
+    fn inherited_percent_letter_spacing_follows_font_size() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="p"><div id="s">x</div></div>"#,
+            "#p { font-size: 20px; letter-spacing: 10% } #s { font-size: 10px }",
+        );
+        let ls = |sel: &str| find_box_by_selector(&tree, &doc, sel).expect("box").style.letter_spacing;
+        assert!((ls("#p") - 2.0).abs() < 0.01, "{}", ls("#p"));
+        assert!((ls("#s") - 1.0).abs() < 0.01, "{}", ls("#s"));
+    }
+
+    /// BUG-1437: `initial`/`inherit`/`unset` reset the whole value of `tab-size`, `text-indent`
+    /// (with its `hanging`/`each-line`) and `hyphens` — a transition from them starts at the
+    /// right computed value.
+    #[test]
+    fn css_wide_keywords_reset_text_longhands() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="p"><div id="i">a</div><div id="n">b</div><div id="u">c</div></div>"#,
+            "#p { tab-size: 20; text-indent: 30px hanging each-line; hyphens: auto }              #i { tab-size: initial; text-indent: initial; hyphens: initial }              #n { tab-size: 3; text-indent: 5px hanging; hyphens: none }              #n { tab-size: inherit; text-indent: inherit; hyphens: inherit }              #u { tab-size: 3px; text-indent: 5px hanging; hyphens: none }              #u { tab-size: unset; text-indent: unset; hyphens: unset }",
+        );
+        let get = |sel: &str, prop: &str| {
+            let b = find_box_by_selector(&tree, &doc, sel).expect("box");
+            computed_style_to_map(&b.style).get(prop).cloned()
+        };
+        assert_eq!(get("#i", "tab-size").as_deref(), Some("8"));
+        assert_eq!(get("#i", "text-indent").as_deref(), Some("0px"));
+        assert_eq!(get("#i", "hyphens").as_deref(), Some("manual"));
+        assert_eq!(get("#n", "tab-size").as_deref(), Some("20"));
+        assert_eq!(get("#n", "text-indent").as_deref(), Some("30px hanging each-line"));
+        assert_eq!(get("#n", "hyphens").as_deref(), Some("auto"));
+        assert_eq!(get("#u", "tab-size").as_deref(), Some("20"));
+        assert_eq!(get("#u", "text-indent").as_deref(), Some("30px hanging each-line"));
+        assert_eq!(get("#u", "hyphens").as_deref(), Some("auto"));
     }
 
     /// CSS Text L3 §7.1: `start` inherited from an RTL parent becomes `right` under
@@ -3055,6 +3287,15 @@ mod tests {
     }
 
     #[test]
+    fn computed_map_carries_the_view_transition_name() {
+        // VT-API: `getComputedStyle(el).viewTransitionName` was `""`.
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("view-transition-name").map(String::as_str), Some("none"));
+        let m = div_computed_map("<div>x</div>", "div { view-transition-name: hero; }");
+        assert_eq!(m.get("view-transition-name").map(String::as_str), Some("hero"));
+    }
+
+    #[test]
     fn computed_map_scrollbar_color_defaults_to_auto() {
         // Before BUG-388 the key was absent entirely, so `getComputedStyle`
         // answered "" where every other engine answers "auto".
@@ -3094,13 +3335,32 @@ mod tests {
     }
 
     #[test]
-    fn computed_map_contain_expands_shorthand_keywords() {
-        // CSS Containment L3 §3: `strict`/`content` compute to the set they
-        // expand to, so neither keyword may appear in the computed value.
+    fn computed_map_contain_collapses_full_sets_to_shorthand_keywords() {
+        // CSS Containment L3 §3 (as serialised by Chrome, WPT `contain-computed`): the flag sets
+        // `size layout style paint` / `layout style paint` serialize as `strict` / `content`;
+        // every other combination lists its flags in canonical order (BUG-1401).
         let m = div_computed_map("<div>x</div>", "div { contain: layout paint; }");
         assert_eq!(m.get("contain").map(String::as_str), Some("layout paint"));
         let m = div_computed_map("<div>x</div>", "div { contain: content; }");
-        assert_eq!(m.get("contain").map(String::as_str), Some("layout style paint"));
+        assert_eq!(m.get("contain").map(String::as_str), Some("content"));
+        let m = div_computed_map("<div>x</div>", "div { contain: strict; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("strict"));
+        let m = div_computed_map("<div>x</div>", "div { contain: paint style layout size; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("strict"));
+        let m = div_computed_map("<div>x</div>", "div { contain: size layout paint; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("size layout paint"));
+        let m = div_computed_map("<div>x</div>", "div { contain: inline-size layout style paint; }");
+        assert_eq!(m.get("contain").map(String::as_str), Some("inline-size layout style paint"));
+    }
+
+    #[test]
+    fn computed_map_contain_invalid_value_is_dropped() {
+        // CSS Containment L3 §3 grammar: `strict`/`content` stand alone, no repeats, and `size`
+        // excludes `inline-size` — an invalid declaration leaves the initial value.
+        for bad in ["strict layout", "layout layout", "size inline-size", "strict content", "auto", "none strict"] {
+            let m = div_computed_map("<div>x</div>", &format!("div {{ contain: {bad}; }}"));
+            assert_eq!(m.get("contain").map(String::as_str), Some("none"), "contain: {bad}");
+        }
     }
 
     #[test]
@@ -3314,6 +3574,30 @@ mod tests {
     }
 
     #[test]
+    fn computed_map_color_keeps_lab_and_wide_gamut_spaces() {
+        // BUG-1425: `color` не схлопывается в rgb() для lab()/oklch()/color()/color-mix().
+        let color_of = |decl: &str| {
+            let m = div_computed_map("<div>x</div>", &format!("div {{ color: {decl}; }}"));
+            m.get("color").cloned().unwrap_or_default()
+        };
+        assert_eq!(color_of("lab(46 -50 50)"), "lab(46 -50 50)");
+        assert_eq!(color_of("oklch(0.5 0.1 90)"), "oklch(0.5 0.1 90)");
+        assert_eq!(color_of("color(srgb 0 0.5 0)"), "color(srgb 0 0.5 0)");
+        assert_eq!(color_of("lab(20 0 10/50%)"), "lab(20 0 10 / 0.5)");
+        assert_eq!(color_of("lab(none 0 0)"), "lab(none 0 0)");
+        assert_eq!(color_of("color-mix(in srgb, red, blue)"), "color(srgb 0.5 0 0.5)");
+        assert_eq!(color_of("rgb(from rebeccapurple r g b)"), "color(srgb 0.4 0.2 0.6)");
+        assert_eq!(color_of("hwb(120 0% 50%)"), "rgb(0, 128, 0)");
+        // Наследование и перекрытие обычным цветом.
+        let m = div_computed_map(
+            "<section><div>x</div></section>",
+            "section { color: lab(46 -50 50); }",
+        );
+        assert_eq!(m.get("color").map(String::as_str), Some("lab(46 -50 50)"));
+        assert_eq!(color_of("red"), "rgb(255, 0, 0)");
+    }
+
+    #[test]
     fn computed_map_color_adjust_mirrors_print_color_adjust_alias() {
         let m = div_computed_map("<div>x</div>", "div { color-adjust: exact; }");
         assert_eq!(m.get("print-color-adjust").map(String::as_str), Some("exact"));
@@ -3426,6 +3710,36 @@ mod tests {
     fn computed_map_background_image_url() {
         let m = div_computed_map("<div>x</div>", "div { background-image: url(a.png); }");
         assert_eq!(m.get("background-image").map(String::as_str), Some("url(\"a.png\")"));
+    }
+
+    #[test]
+    fn computed_map_background_image_functions() {
+        // BUG-1428: градиент / image-set() / cross-fade() читаются целиком, а не как `none`.
+        let css = |decl: &str| {
+            let m = div_computed_map("<div>x</div>", &format!("div {{ {decl} }}"));
+            m.get("background-image").cloned().unwrap_or_default()
+        };
+        assert_eq!(
+            css("background-image: linear-gradient(90deg in oklab, red, blue)"),
+            "linear-gradient(90deg in oklab, rgb(255, 0, 0), rgb(0, 0, 255))"
+        );
+        assert_eq!(
+            css("background: url(a.png), radial-gradient(at 10% 20%, red, blue)"),
+            "url(\"a.png\"), radial-gradient(at 10% 20%, rgb(255, 0, 0), rgb(0, 0, 255))"
+        );
+        assert_eq!(
+            css("background-image: image-set(url(a.png) 1x)"),
+            "image-set(url(\"a.png\") 1dppx)"
+        );
+        assert_eq!(
+            css("background-image: -webkit-image-set(url(a.png) 2x)"),
+            "image-set(url(\"a.png\") 2dppx)"
+        );
+        assert_eq!(
+            css("background-image: cross-fade(50% red, 50% green, 50% blue)"),
+            "cross-fade(rgb(255, 0, 0) 50%, rgb(0, 128, 0) 50%, rgb(0, 0, 255) 50%)"
+        );
+        assert_eq!(css("background-image: conic-gradient(red, blue)"), "conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))");
     }
 
     // ── computed_style_to_map: BUG-495 additions ─────────────────────────────

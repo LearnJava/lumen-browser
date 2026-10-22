@@ -8,13 +8,15 @@
 //! (анкер `struct ContainFlags` до конца `apply_container_rules`) без правок тел.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use lumen_core::geom::Size;
-use lumen_css_parser::{Declaration, Specificity, Stylesheet};
+use lumen_css_parser::{Declaration, Rule, Stylesheet};
 use lumen_dom::{Document, DocumentMode, NodeId};
 
 use crate::style::apply::apply_declaration;
 use crate::style::computed::ComputedStyle;
+use crate::style::container_scroll::{evaluate_scroll_state_query, ScrollStateInfo};
 use crate::style::matching::matches_complex;
 use crate::style::parse::color::parse_color;
 use crate::style::substitute::{expand_attr_val, expand_vars};
@@ -118,6 +120,47 @@ pub struct ContainerContext {
     /// of the containing block is not specified explicitly… the percentage
     /// value computes to auto" is not modeled here).
     pub own_containing_block_height: f32,
+    /// Which query kinds this container answers (`container-type`).
+    pub kinds: ContainerKinds,
+    /// `scroll-state()` state of a `container-type: scroll-state` container.
+    pub scroll_state: ScrollStateInfo,
+    /// The next container up the ancestor chain. A query resolves its own
+    /// container per feature kind (CSS Conditional 5 §«container selection»):
+    /// the nearest ancestor with the right `container-type` and, for a named
+    /// `@container`, the right `container-name`.
+    pub parent: Option<Arc<ContainerContext>>,
+    /// Whether each `sheet.container_rules[i]` query holds under this container, in rule
+    /// order — the answer depends on the container, not on the element, so the second pass
+    /// computes it once per container ([`ContainerContext::with_rule_hits`]) instead of once
+    /// per box. Empty: not precomputed, [`matching_container_rules`] evaluates the query.
+    pub rule_hits: Vec<bool>,
+}
+
+impl ContainerContext {
+    /// `self` with [`Self::rule_hits`] computed against `sheet`.
+    pub fn with_rule_hits(mut self, sheet: &Stylesheet) -> Self {
+        self.rule_hits = sheet
+            .container_rules
+            .iter()
+            .map(|r| evaluate_container_query(&r.condition, r.name.as_deref(), &self))
+            .collect();
+        self
+    }
+}
+
+/// Query kinds a container answers — the `container-type` axes of
+/// CSS Conditional 5 §3.1.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContainerKinds {
+    /// `size` / `inline-size`: answers size features (`width`, `height`, …).
+    pub size: bool,
+    /// `scroll-state`: answers `scroll-state(…)`.
+    pub scroll_state: bool,
+}
+
+impl ContainerKinds {
+    /// A size container.
+    pub const SIZE: Self = Self { size: true, scroll_state: false };
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
@@ -183,52 +226,280 @@ pub struct ContainerContext {
 ///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
-    let s = condition.trim();
-    // Handle `not (...)` and `not style(...)`.
-    if let Some(rest) = s.strip_prefix("not") {
-        let rest = rest.trim();
-        if rest.starts_with('(') || rest.to_ascii_lowercase().starts_with("style(") {
-            return !evaluate_container_condition(rest, ctx);
+    evaluate_container_query(condition, None, ctx)
+}
+
+/// Three-valued truth of a container condition: `None` is «unknown»
+/// (CSS Conditional 5 §«general-enclosed»; `unknown` and `not unknown` are both
+/// unknown, so a rule with an unknown condition never applies).
+pub(super) type Tri = Option<bool>;
+
+fn tri_not(t: Tri) -> Tri {
+    t.map(|b| !b)
+}
+
+fn tri_and(a: Tri, b: Tri) -> Tri {
+    match (a, b) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+fn tri_or(a: Tri, b: Tri) -> Tri {
+    match (a, b) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    }
+}
+
+/// `not`/`and`/`or`/parenthesised-group structure shared by container conditions,
+/// `style()` and `scroll-state()`; `leaf` evaluates one bare feature (text without
+/// its parentheses) or a whole `style(…)`/`scroll-state(…)` function.
+pub(super) fn eval_tri(s: &str, leaf: &dyn Fn(&str) -> Tri) -> Tri {
+    let s = s.trim();
+    if s.len() > 3 && s.is_char_boundary(3) && s[..3].eq_ignore_ascii_case("not") {
+        let rest = &s[3..];
+        if rest.starts_with(char::is_whitespace) {
+            return tri_not(eval_tri(rest, leaf));
         }
     }
-    // Split on top-level `and` / `or`.
     if let Some((lhs, rhs)) = split_top_level_logical(s, " and ") {
-        return evaluate_container_condition(lhs, ctx) && evaluate_container_condition(rhs, ctx);
+        return tri_and(eval_tri(lhs, leaf), eval_tri(rhs, leaf));
     }
     if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
-        return evaluate_container_condition(lhs, ctx) || evaluate_container_condition(rhs, ctx);
+        return tri_or(eval_tri(lhs, leaf), eval_tri(rhs, leaf));
     }
-    // Handle `style(...)` queries.
-    let s_lower = s.to_ascii_lowercase();
-    if s_lower.starts_with("style(") && s.ends_with(')') {
-        // Extract content between `style(` and the final `)`.
-        let inner = s[6..s.len() - 1].trim();
-        return evaluate_style_query(inner, ctx);
+    if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        return eval_tri(inner, leaf);
     }
-    // Feature: `(feature: value)`.
-    let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'));
-    let inner = match inner {
-        Some(i) => i.trim(),
-        None => return false,
-    };
-    // Parse `feature: value`.
-    let colon = inner.find(':');
-    let (feature, value) = if let Some(pos) = colon {
-        (inner[..pos].trim(), inner[pos + 1..].trim())
-    } else {
-        // Boolean feature (e.g. `(color)`) — unsupported in Phase 0.
+    leaf(s)
+}
+
+/// Nearest container on the chain starting at `ctx` that answers `want` and (for a
+/// named `@container`) carries `name`.
+fn resolve_container<'a>(
+    ctx: &'a ContainerContext,
+    name: Option<&str>,
+    want: impl Fn(&ContainerContext) -> bool,
+) -> Option<&'a ContainerContext> {
+    let mut cur = Some(ctx);
+    while let Some(c) = cur {
+        if want(c) && name.is_none_or(|n| c.names.iter().any(|x| x == n)) {
+            return Some(c);
+        }
+        cur = c.parent.as_deref();
+    }
+    None
+}
+
+/// Size features the engine knows by name: evaluated for the `name: length` form,
+/// `false` for the forms not modelled yet (range syntax, `aspect-ratio`, `orientation`).
+fn is_known_size_feature(name: &str) -> bool {
+    let base = name.strip_prefix("min-").or_else(|| name.strip_prefix("max-")).unwrap_or(name);
+    matches!(base, "width" | "height" | "inline-size" | "block-size" | "aspect-ratio" | "orientation")
+}
+
+/// Evaluates a raw `@container` prelude against the container chain starting at
+/// `ctx`; `name` is the `@container <name>` the parser split off the first entry.
+/// A comma list is true when any entry is (`<container-condition>#`); every entry after
+/// the first carries its own leading `<name>`. «Unknown» counts as false.
+pub fn evaluate_container_query(condition: &str, name: Option<&str>, ctx: &ContainerContext) -> bool {
+    split_top_level_commas(condition).into_iter().enumerate().any(|(i, entry)| {
+        let (entry_name, body) = if i == 0 { (name, entry.trim()) } else { split_leading_name(entry) };
+        evaluate_container_entry(body, entry_name, ctx)
+    })
+}
+
+/// Container features a query reads — they pick the one query container (CSS
+/// Conditional 5 §«container selection»): the nearest ancestor that answers all of them.
+#[derive(Default, Clone, Copy)]
+struct Needs {
+    size: bool,
+    scroll_state: bool,
+}
+
+fn leaf_needs(s: &str) -> Needs {
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("scroll-state(") {
+        return Needs { size: false, scroll_state: true };
+    }
+    if lower.starts_with("style(") {
+        return Needs::default();
+    }
+    let head: String = lower.chars().take_while(|c| c.is_ascii_alphabetic() || *c == '-').collect();
+    Needs { size: is_known_size_feature(&head) || s.contains(['<', '>', '=']), scroll_state: false }
+}
+
+fn evaluate_container_entry(condition: &str, name: Option<&str>, ctx: &ContainerContext) -> bool {
+    let needs = std::cell::Cell::new(Needs::default());
+    eval_tri(condition, &|leaf| {
+        let n = leaf_needs(leaf);
+        needs.set(Needs {
+            size: needs.get().size || n.size,
+            scroll_state: needs.get().scroll_state || n.scroll_state,
+        });
+        None
+    });
+    let needs = needs.get();
+    let Some(c) = resolve_container(ctx, name, |c| {
+        (!needs.size || c.kinds.size) && (!needs.scroll_state || c.kinds.scroll_state)
+    }) else {
         return false;
     };
-    let px = parse_css_length_to_px(value);
-    match (feature, px) {
-        ("min-width", Some(v))  => ctx.width >= v,
-        ("max-width", Some(v))  => ctx.width <= v,
-        ("width", Some(v))      => (ctx.width - v).abs() < 0.5,
-        ("min-height", Some(v)) => ctx.height.is_some_and(|h| h >= v),
-        ("max-height", Some(v)) => ctx.height.is_none_or(|h| h <= v),
-        ("height", Some(v))     => ctx.height.is_some_and(|h| (h - v).abs() < 0.5),
-        _ => false,
+    eval_tri(condition, &|leaf| container_leaf(leaf, c)) == Some(true)
+}
+
+/// Splits `s` at the commas outside parentheses.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0);
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
     }
+    out.push(&s[start..]);
+    out
+}
+
+/// `<name>? <query>` of a comma-list entry after the first: the leading identifier
+/// (not `not`, not a function) is the container name.
+fn split_leading_name(entry: &str) -> (Option<&str>, &str) {
+    let entry = entry.trim();
+    let end = entry.find(|c: char| c.is_whitespace() || c == '(').unwrap_or(entry.len());
+    let (head, rest) = entry.split_at(end);
+    if head.is_empty() || rest.starts_with('(') || head.eq_ignore_ascii_case("not") || rest.trim().is_empty() {
+        return (None, entry);
+    }
+    (Some(head), rest.trim_start())
+}
+
+/// Axis a size feature measures: the inline axis (`width`/`inline-size`) is always
+/// there on a size container, the block axis only on `container-type: size`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    Inline,
+    Block,
+}
+
+fn axis_of(feature: &str) -> Option<Axis> {
+    match feature {
+        "width" | "inline-size" => Some(Axis::Inline),
+        "height" | "block-size" => Some(Axis::Block),
+        _ => None,
+    }
+}
+
+/// The container's size on `axis`; `None` when the container does not expose it.
+fn axis_size(c: &ContainerContext, axis: Axis) -> Option<f32> {
+    match axis {
+        Axis::Inline => Some(c.width),
+        Axis::Block => c.height,
+    }
+}
+
+fn compare(l: f32, op: &str, r: f32) -> Option<bool> {
+    Some(match op {
+        "<" => l < r,
+        "<=" => l <= r,
+        ">" => l > r,
+        ">=" => l >= r,
+        "=" => (l - r).abs() < 0.5,
+        _ => return None,
+    })
+}
+
+/// Range syntax: `<feature> <op> <length>`, `<length> <op> <feature>`,
+/// `<length> <op> <feature> <op> <length>` (CSS Conditional 5 §«range context»).
+fn range_feature(s: &str, c: &ContainerContext) -> Tri {
+    let (mut operands, mut ops): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    let b = s.as_bytes();
+    let (mut start, mut i) = (0, 0);
+    while i < b.len() {
+        if matches!(b[i], b'<' | b'>' | b'=') {
+            let mut j = i + 1;
+            if b[i] != b'=' && b.get(j) == Some(&b'=') {
+                j += 1;
+            }
+            operands.push(s[start..i].trim());
+            ops.push(&s[i..j]);
+            (start, i) = (j, j);
+        } else {
+            i += 1;
+        }
+    }
+    operands.push(s[start..].trim());
+    if !(2..=3).contains(&operands.len()) || operands.iter().any(|o| o.is_empty()) {
+        return None;
+    }
+    let mut features = 0;
+    let mut values: Vec<Option<f32>> = Vec::new();
+    for o in &operands {
+        let lower = o.to_ascii_lowercase();
+        if let Some(axis) = axis_of(&lower) {
+            features += 1;
+            values.push(axis_size(c, axis));
+        } else {
+            values.push(Some(parse_css_length_to_px(o)?));
+        }
+    }
+    if features != 1 {
+        return None;
+    }
+    let mut result = true;
+    for (w, op) in values.windows(2).zip(&ops) {
+        result &= compare(w[0]?, op, w[1]?)?;
+    }
+    Some(result)
+}
+
+fn container_leaf(s: &str, c: &ContainerContext) -> Tri {
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("style(") && s.ends_with(')') {
+        return evaluate_style_query(&s[6..s.len() - 1], c);
+    }
+    if lower.starts_with("scroll-state(") && s.ends_with(')') {
+        return evaluate_scroll_state_query(&s["scroll-state(".len()..s.len() - 1], &c.scroll_state);
+    }
+    // Feature: `feature: value` (the parentheses were stripped by `eval_tri`).
+    let Some(pos) = s.find(':') else {
+        if s.contains(['<', '>', '=']) {
+            return range_feature(s, c);
+        }
+        // Boolean context: a size feature is true when the container has a nonzero size on
+        // that axis; `orientation`/`aspect-ratio` need both axes and are not modelled.
+        let head = s.trim().to_ascii_lowercase();
+        if let Some(axis) = axis_of(&head) {
+            return axis_size(c, axis).map(|v| v > 0.0);
+        }
+        return is_known_size_feature(&head).then(|| c.height.is_some().then_some(false)).flatten();
+    };
+    let feature = s[..pos].trim().to_ascii_lowercase();
+    let value = s[pos + 1..].trim();
+    if !is_known_size_feature(&feature) {
+        return None;
+    }
+    let base = feature.strip_prefix("min-").or_else(|| feature.strip_prefix("max-")).unwrap_or(&feature);
+    let Some(axis) = axis_of(base) else {
+        // `orientation`/`aspect-ratio`: both axes or nothing.
+        return c.height.is_some().then_some(false);
+    };
+    let size = axis_size(c, axis)?;
+    let Some(v) = parse_css_length_to_px(value) else { return Some(false) };
+    Some(if feature.starts_with("min-") {
+        size >= v
+    } else if feature.starts_with("max-") {
+        size <= v
+    } else {
+        (size - v).abs() < 0.5
+    })
 }
 
 /// Evaluates the content of a `style()` container query — CSS Containment L3
@@ -241,26 +512,14 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
 /// `style(not (display: none))`). `<style-feature>` itself always queries
 /// exactly one property — the grammar has no comma-separated multi-declaration
 /// form — handled by `evaluate_style_feature`.
-fn evaluate_style_query(s: &str, ctx: &ContainerContext) -> bool {
-    let s = s.trim();
-    if let Some(rest) = s.strip_prefix("not") {
-        let rest = rest.trim();
-        if rest.starts_with('(') {
-            return !evaluate_style_query(rest, ctx);
-        }
-    }
-    if let Some((lhs, rhs)) = split_top_level_logical(s, " and ") {
-        return evaluate_style_query(lhs, ctx) && evaluate_style_query(rhs, ctx);
-    }
-    if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
-        return evaluate_style_query(lhs, ctx) || evaluate_style_query(rhs, ctx);
-    }
-    // `<style-in-parens>` grouping: strip one layer and recurse.
-    if let Some(inner) = s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
-        return evaluate_style_query(inner, ctx);
-    }
-    // Leaf: a bare `<style-feature>` (boolean `prop` or declaration `prop: value`).
-    evaluate_style_feature(s, ctx)
+fn evaluate_style_query(s: &str, ctx: &ContainerContext) -> Tri {
+    eval_tri(s, &|feature| {
+        // A property name is an identifier: `scroll-state(…)` inside `style()` is
+        // `<general-enclosed>` (unknown), not a property that is merely unset.
+        let name = feature.split(':').next().unwrap_or("").trim();
+        let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        valid.then(|| evaluate_style_feature(feature, ctx))
+    })
 }
 
 /// Evaluates a single `<style-feature>` (CSS Containment L3 §5.2): the boolean
@@ -459,9 +718,36 @@ fn split_top_level_logical<'a>(s: &'a str, sep: &str) -> Option<(&'a str, &'a st
     None
 }
 
+/// The `@container` rules of `sheet` whose query holds under `ctx` and whose selector
+/// matches `node`, in sheet order.
+pub fn matching_container_rules<'a>(
+    doc: &Document,
+    node: NodeId,
+    sheet: &'a Stylesheet,
+    ctx: &ContainerContext,
+) -> Vec<&'a Rule> {
+    let mut out = Vec::new();
+    let precomputed = ctx.rule_hits.len() == sheet.container_rules.len();
+    for (i, container_rule) in sheet.container_rules.iter().enumerate() {
+        let holds = if precomputed {
+            ctx.rule_hits[i]
+        } else {
+            evaluate_container_query(&container_rule.condition, container_rule.name.as_deref(), ctx)
+        };
+        if !holds {
+            continue;
+        }
+        out.extend(container_rule.rules.iter().filter(|rule| {
+            rule.selectors.iter().any(|complex| matches_complex(complex, doc, node))
+        }));
+    }
+    out
+}
+
 /// Applies matching `@container` rules from `sheet` to `style`.
 /// Called during the second layout pass for descendants of container elements.
-/// `ctx` — resolved size of the nearest container ancestor.
+/// `ctx` — the nearest container ancestor; a query picks the container it needs
+/// (type, name) from the chain behind it.
 pub fn apply_container_rules(
     style: &mut ComputedStyle,
     doc: &Document,
@@ -471,46 +757,47 @@ pub fn apply_container_rules(
     viewport: Size,
     dark_mode: bool,
 ) {
+    let rules = matching_container_rules(doc, node, sheet, ctx);
+    apply_matched_container_rules(style, &rules, doc, node, viewport, dark_mode);
+}
+
+/// Applies the declarations of `rules` ([`matching_container_rules`]) to `style`.
+pub fn apply_matched_container_rules(
+    style: &mut ComputedStyle,
+    rules: &[&Rule],
+    doc: &Document,
+    node: NodeId,
+    viewport: Size,
+    dark_mode: bool,
+) {
     let is_quirks = doc.mode() == DocumentMode::Quirks;
-    for container_rule in &sheet.container_rules {
-        // Name filter: if the rule has a name, the context must include that name.
-        if container_rule.name.as_ref().is_some_and(|rule_name| {
-            !ctx.names.iter().any(|n| n == rule_name)
-        }) {
-            continue;
-        }
-        if !evaluate_container_condition(&container_rule.condition, ctx) {
-            continue;
-        }
-        // Apply declarations from matching rules.
-        for rule in &container_rule.rules {
-            let mut best: Option<Specificity> = None;
-            for complex in &rule.selectors {
-                if matches_complex(complex, doc, node) {
-                    let spec = complex.specificity();
-                    best = Some(match best {
-                        Some(prev) if prev >= spec => prev,
-                        _ => spec,
-                    });
+    for rule in rules {
+        let em = style.font_size;
+        let pw = style.font_weight;
+        let inherited = style.clone();
+        for decl in &rule.declarations {
+            // Custom properties are not a cascade of `apply_declaration` (compute_style
+            // collects them in its own pass): a `@container` rule sets them here.
+            if decl.property.starts_with("--") {
+                let value = if decl.value.contains("var(") {
+                    expand_vars(&decl.value, &style.custom_props, 0, em, viewport)
+                } else {
+                    Some(decl.value.clone())
+                };
+                if let Some(value) = value {
+                    style.custom_props.make_mut().insert(decl.property.clone(), value);
                 }
+                continue;
             }
-            if best.is_some() {
-                let em = style.font_size;
-                let pw = style.font_weight;
-                let inherited = style.clone();
-                for decl in &rule.declarations {
-                    let attr_buf;
-                    let effective_decl: &Declaration = if decl.value.contains("attr(") {
-                        let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
-                        attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
-                        &attr_buf
-                    } else {
-                        decl
-                    };
-                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, &inherited, is_quirks, dark_mode);
-                }
-            }
+            let attr_buf;
+            let effective_decl: &Declaration = if decl.value.contains("attr(") {
+                let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+                attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+                &attr_buf
+            } else {
+                decl
+            };
+            apply_declaration(style, effective_decl, em, viewport, pw, &inherited, &inherited, is_quirks, dark_mode);
         }
     }
 }
-

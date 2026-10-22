@@ -519,6 +519,7 @@ fn interpolate_length(from: &Length, to: &Length, t: f32) -> Option<Length> {
         (Length::Rem(a), Length::Rem(b)) => Some(Length::Rem(lerp_f32(*a, *b, t))),
         (Length::Ch(a), Length::Ch(b)) => Some(Length::Ch(lerp_f32(*a, *b, t))),
         (Length::Ex(a), Length::Ex(b)) => Some(Length::Ex(lerp_f32(*a, *b, t))),
+        (Length::Cap(a), Length::Cap(b)) => Some(Length::Cap(lerp_f32(*a, *b, t))),
         (Length::Lh(a), Length::Lh(b)) => Some(Length::Lh(lerp_f32(*a, *b, t))),
         (Length::Rlh(a), Length::Rlh(b)) => Some(Length::Rlh(lerp_f32(*a, *b, t))),
         (Length::Rex(a), Length::Rex(b)) => Some(Length::Rex(lerp_f32(*a, *b, t))),
@@ -650,6 +651,8 @@ fn filter_identity_for(f: &FilterFn) -> FilterFn {
         FilterFn::Opacity(_) => FilterFn::Opacity(1.0),
         FilterFn::Saturate(_) => FilterFn::Saturate(1.0),
         FilterFn::Sepia(_) => FilterFn::Sepia(0.0),
+        // `url()` не интерполируется (дискретно): нейтрального значения нет.
+        FilterFn::Url(_) => f.clone(),
     }
 }
 
@@ -2001,7 +2004,7 @@ mod tests {
         assert_eq!(props.get("color").map(String::as_str), Some("rgb(17, 34, 51)"));
         assert_eq!(
             props.get("background-color").map(String::as_str),
-            Some("rgba(68, 85, 102, 0.502)")
+            Some("rgba(68, 85, 102, 0.5)")
         );
         assert_eq!(props.get("height").map(String::as_str), Some("42px"));
     }

@@ -49,7 +49,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
-    let counters = precompute_counters(doc, sheet, viewport, &flat, false);
+    super::shape_resolve::install_shape_images(doc);
+    let mut counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false, None);
     propagate_body_writing_mode(doc, &mut root, viewport);
@@ -70,7 +71,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     );
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, false);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
-    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
+    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false, &mut counters);
     // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
     apply_anchor_positions(&mut root, viewport);
     // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
@@ -147,7 +148,8 @@ pub fn layout_measured_hyp_with_counters(
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
-    let counters = {
+    super::shape_resolve::install_shape_images(doc);
+    let mut counters = {
         let _prof = lumen_core::profile::scope("precompute_counters");
         lumen_core::tracy_zone!("precompute_counters");
         precompute_counters(doc, sheet, viewport, &flat, dark_mode)
@@ -199,7 +201,7 @@ pub fn layout_measured_hyp_with_counters(
         let _prof = lumen_core::profile::scope("post_layout_passes");
         lumen_core::tracy_zone!("post_layout_passes");
         apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
         // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
         apply_anchor_positions(&mut root, viewport);
         // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
@@ -299,6 +301,7 @@ pub fn layout_streaming_incremental_with_counters(
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+    super::shape_resolve::install_shape_images(doc);
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode, None);
@@ -374,11 +377,11 @@ pub fn layout_mutation_incremental_with_counters(
     prev: &LayoutBox,
 ) -> (LayoutBox, CounterMap) {
     // Full cascade + graft: unchanged-style subtrees become CLEAN.
-    let (mut root, counters) =
+    let (mut root, mut counters) =
         layout_streaming_incremental_with_counters(doc, sheet, viewport, measurer, hp, dark_mode, prev);
     // Post-layout passes — same set as layout_measured_hyp, same order.
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
     apply_anchor_positions(&mut root, viewport);
     split_first_line_boxes(&mut root);
     (root, counters)
@@ -449,6 +452,7 @@ pub fn layout_mutation_incremental_restyle(
         // number of shadow hosts.
         let _prof = lumen_core::profile::scope("build_shadow_sheets");
         crate::style::set_shadow_sheets(build_shadow_sheets(doc));
+        super::shape_resolve::install_shape_images(doc);
     }
     // BUG-935 срез 78: the flush's scope — what the JS-visible caches treat as changed — is taken
     // before the delta is consumed; the ids the build releases from it are read off `prev` below.
@@ -572,7 +576,7 @@ pub fn layout_mutation_incremental_restyle(
         let _prof = lumen_core::profile::scope("post_layout_passes");
         // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
         apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
-        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+        apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
         apply_anchor_positions(&mut root, viewport);
         split_first_line_boxes(&mut root);
     }
@@ -804,9 +808,25 @@ pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> 
     let html = root.children.iter().find(|c| is_element_box_kind(&c.kind))?;
     let html_has_bg =
         html.style.background_color.is_some() || !html.style.background_layers.is_empty();
-    let source = if html_has_bg { html } else { first_child_element_box(html, html.node)? };
+    let source = if html_has_bg {
+        html
+    } else {
+        let body = first_child_element_box(html, html.node)?;
+        // CSS Containment: layout/paint/size/style containment on either the root or the
+        // `<body>` stops the `<body>` background from reaching the canvas (BUG-1398).
+        if blocks_background_propagation(html) || blocks_background_propagation(body) {
+            return None;
+        }
+        body
+    };
     let color = source.style.background_color?.to_color_opt()?;
     (color.a == 255).then_some(color)
+}
+
+/// `contain` values that cut the root-background propagation (CSS Containment L1/L2 §`contain`).
+fn blocks_background_propagation(b: &LayoutBox) -> bool {
+    let c = b.style.contain.0;
+    c & (ContainFlags::SIZE.0 | ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0 | ContainFlags::STYLE.0) != 0
 }
 
 /// Boxes an element can generate as its principal box — `html` / `body` may carry

@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-19",
+ "generated": "2026-10-21",
  "counts": {
-  "open": 369,
-  "fixed": 1219,
+  "open": 322,
+  "fixed": 1280,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1591,
+ "total_bugs": 1605,
  "phases": [
   {
    "id": "P0",
@@ -678,16 +678,25 @@
     {
      "id": "GRID-LANES",
      "title": "GRID-LANES: display: grid-lanes",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "`display: grid-lanes` (CSS Grid L3, бывший `masonry`): раскладка по полосам (lanes) — элементы без явного места падают в самую короткую полосу, `flow-tolerance`, `grid-lanes-direction`, `grid-lanes-pack`, шорткат `grid-lanes`, `grid-template-columns/rows` на одной оси и `masonry`-ключевое слово на другой, `subgrid` в grid-lanes, abspos, baseline, `order`, intrinsic sizing. Сейчас значение разбирается без ошибки, но `getComputedStyle(el).display` отдаёт `block`, и контейнер раскладывается как блок: проба — `display:grid-lanes; grid-template-columns:100px 100px; gap:10px; width:300px` с четырьмя детьми 50/30/20/20 даёт детей друг под другом шириной 300. `masonry.rs` (waterfall) лежит неподключённым; решение «masonry — запасной вариант обычной сетки по образцу Edge» (CSS-SPECS.md:508, BUG-105/143) принято до переименования в `grid-lanes` и требует подтверждения пользователя перед стартом. Замер WPT-RUN-14 S8 (2026-10-06): `css/css-grid/grid-lanes` — 884 id, 124 зелёных случайно (раскладка блока совпала с эталоном), 760 не зелёных: 669 reftest (666 thick) и 91 testharness (1 193 сабтеста). По подкаталогам не зелёные / всего: `subgrid` 180/226, `track-sizing` 173/196, `alignment` 88/97, `intrinsic-sizing` 60/69, `item-placement` 64/67, `tentative` 60/64, `baseline` 40/40. Часть testharness-провалов — `getComputedStyle` (BUG-1307) и разбор (BUG-1315), не раскладка; свойства `flow-tolerance`/`grid-lanes-*` — P4 (`CSS-SPECS.md:508`). Критерий готовности: `display: grid-lanes` вычисляется как есть, четыре базовых reftest из `grid-lanes/track-sizing` зелёные, остаток по подкаталогам разобран заново"
+     "note": "Сделано (2026-10-20, ветка `p1-grid-lanes`): `display: grid-lanes` / `inline-grid-lanes` / `inline grid-lanes` вычисляется как есть (`getComputedStyle(el).display` отдаёт значение; `display: masonry` и `grid-template-*: masonry` остаются невалидными по решению пользователя, graphic_tests 27/63/75 не тронуты). Полосы-столбцы: типы `FlowTolerance`/`LanesDirection`/`GridLanes` (`style/values/grid_lanes.rs`, поле `ComputedStyle.grid_lanes`), `box_tree/grid_lanes.rs` — выбор полосы по самой короткой с допуском `flow-tolerance` (`normal` = 1em, `%`, `infinite`), курсор §4.4 (равные полосы берутся не раньше последнего размещённого элемента, определённые тоже сдвигают курсор), `grid-column` с `span`, `track-reverse`; автоэлемент вносит вклад в каждую полосу, которую мог бы занять (§3.4, и в раскладке, и в intrinsic-ширине); строки шаблона игнорируются, строка `k` = элемент `k`. Побочно `grid_auto_cols` теперь ведёт дорожки парой (min, max) из `fixed`/`auto`/`min-content`/`max-content`/`fit-content()` (`minmax(<len>|auto|min/max-content, …)` у обычных сеток тоже считается по содержимому). Проба из постановки (`grid-template-columns:100px 100px; gap:10px; width:300px`, дети 50/30/20/20) раскладывается по полосам. Замер `css/css-grid/grid-lanes` (882 id, ref-тесты 775): 222 идентичны (было 124 случайных) — track-sizing 001..005 зелёные (47/196 id, остаток — `repeat(auto-*)`, `fit-content()` в полосах, `no-match-ref` testharness), item-placement 16/67, abspos 13/13, overflow 13/15, subgrid 72/226, alignment 16/95, intrinsic-sizing 19/68, baseline 8/40. Остаток по подкаталогам не зелёных: subgrid 135, track-sizing 113, alignment 79, item-placement 51, intrinsic-sizing 48, tentative 43, baseline 32, grid-placement 14, items 12, order 11; общая причина большей части — НЕТ ПОЛОС-СТРОК (`grid-lanes-direction: row` / только `grid-template-rows`: ~260 id в имени `row`), затем `dense`-упаковка (`grid-lanes-pack: dense` / `grid-auto-flow: dense`, 46 id), `fill-reverse`, шорткат `grid-lanes`, `subgrid` в полосах, baseline, `order`. Оформлено задачей GRID-LANES-2. Свойства `flow-tolerance`/`grid-lanes-*` как CSS-свойства — P4 (`CSS-SPECS.md:508`)",
+     "tasks": [
+      {
+       "id": "GRID-LANES-2",
+       "title": "GRID-LANES-2: полосы-строки, dense, subgrid",
+       "status": "planned",
+       "size": "L",
+       "note": "Остаток GRID-LANES (`tests/wpt/css/css-grid/grid-lanes`, 882 id: 222 идентичны, 546 `thick`). По убыванию отдачи: (1) полосы-строки — `grid-lanes-direction: row`, раскладка только по `grid-template-rows` (ось потока — inline, полосы — строки; ~260 id с `row` в имени, в `build_grid_init` ветка `lane_items` включается только при `LanesAxis::Column`, `lanes_axis` уже умеет `Row`); (2) `grid-lanes-pack: dense` и `grid-auto-flow: dense` в полосах (`item-placement/dense-packing`, 46 id: элемент ставится в самую раннюю щель полосы, `LanesState.ends` заменить интервалами занятости; тест `column-dense-packing-004` — щель берётся только при том же размере дорожки); (3) `fill-reverse`, шорткат `grid-lanes` (`grid-lanes: <template> / <flow-tolerance>`), `repeat(auto-fill|auto-fit)` и `fit-content()` в полосах (`track-sizing`, 113 id; 36 из них — testharness `no-match-ref`); (4) `subgrid` в grid-lanes (135 id), baseline-выравнивание (32), `order` (11), ортогональные элементы `column-negative-margin-003/004`. Проверка — `python .tmp/lanes_all.py`-подобный прогон `tests/wpt/reftest_pixdiff.py` по подкаталогам, viewport 800×600. Критерий: зелёных ref-тестов в `grid-lanes` ≥ 450"
+      }
+     ]
     },
     {
      "id": "LINEBREAK-UAX14",
      "title": "LINEBREAK-UAX14: возможности переноса строки по UAX #14",
      "status": "done",
      "size": "M",
-     "note": "Возможности переноса строки по UAX #14 вне CJK. `box_tree/inline_wrap.rs` режет текст по `split_whitespace()`, а `line_break.rs` знает только ~60 символов CJK-классов (OP/CL/EX/NS/PR/PO) и включается лишь рядом с CJK-символом. Пробы (`--dump-layout`, 20ch/50ch): после U+2010, U+2013, `-` (`word-word-word-word-word-word-word` в 20ch — одна строка 34 символа), U+200B, `\\|`, после ряда BA/B2-символов переноса нет; `<wbr>` работает; рядом с inline-блоком перенос есть всегда, хотя WJ, U+200D, U+FEFF, U+180E, U+034F, U+2011, U+0F08 его запрещают (`line-breaking-atomic-006/011/013/014/016/020/022/024/026` — красное остаётся в локальном A/B на Ahem); OP-символы вне таблицы (U+0F3C, U+2045, U+2768 — `css3-text-line-break-opclns-005/009/014`: `中中⁅` / `文` вместо `中中` / `⁅文`; по выборке 40 из 158 `opclns`, каждый четвёртый, с реальным CJK-шрифтом 14 совпали с эталоном, 26 нет). Что нужно: классы UAX #14 для всего Unicode (в `lumen-encoding` уже есть ICU4x `LineSegmenter`, `unicode_provider.rs:24`; `lumen-layout` от него не зависит — граница слоёв решается владельцем), `line-break: strict/normal/loose/anywhere` и `word-break: keep-all` поверх них, GL/WJ/ZWJ у inline-блоков (CSS Text L3 §5.1, §5.2; BUG-1323 — отдельно, дёшево: NBSP/NNBSP/U+2007 считаются пробелом). Замер WPT-RUN-14 S9 (2026-10-06): `css/css-text/i18n/css3-text-line-break-baspglwj-*` 80 id, `opclns-*` 158 reftest, `line-breaking/line-breaking-atomic-*`/`-replaced-*` 34 id (по локальному A/B на Ahem красное остаётся у 17 из 33 reftest, у остальных 16 — вероятно BUG-1273), `line-breaking-001…012` 12 (красное — у 001 и 012, остальные 10 — вероятно BUG-1273). Критерий готовности: baspglwj-* зелёные по `normal` и `pre-line`, `opclns-*` совпадают с эталоном, `line-breaking-atomic-*` без красного",
+     "note": "Сделано (2026-10-20, ветка `p1-linebreak-uax14`): классы и правила UAX #14 берутся из ICU4x (`line_break.rs`, `LineBreakProvider`), перенос для любого слова; `strict/normal/loose/anywhere` и `keep-all`/`break-all` поверх ICU; стыки сегментов без пробела — по паре символов (`tight_boundary_breaks`); у atomic inline GL/WJ/ZWJ запрещают перенос (`glues_to_atomic`), текст после atomic с невлезающим первым отрезком уходит на новую строку ряда. Замер: `i18n` opclns 48 → 157/158 (с mplus), baspglwj 113 testharness — normal/pre-line зелёные (остались pre-wrap/break-spaces у 020/077/078/113-118), reftest line-breaking/line-break/word-break/overflow-wrap 192 → 222 identical, новый провал один — `word-break-break-all-008` (ширина блока задаётся JS). Остаток `line-breaking-atomic-009`, `replaced-004/005` — строка с inline-block/img смещена на ~4px (метрики ряда, не перенос). Возможности переноса строки по UAX #14 вне CJK. `box_tree/inline_wrap.rs` режет текст по `split_whitespace()`, а `line_break.rs` знает только ~60 символов CJK-классов (OP/CL/EX/NS/PR/PO) и включается лишь рядом с CJK-символом. Пробы (`--dump-layout`, 20ch/50ch): после U+2010, U+2013, `-` (`word-word-word-word-word-word-word` в 20ch — одна строка 34 символа), U+200B, `\\|`, после ряда BA/B2-символов переноса нет; `<wbr>` работает; рядом с inline-блоком перенос есть всегда, хотя WJ, U+200D, U+FEFF, U+180E, U+034F, U+2011, U+0F08 его запрещают (`line-breaking-atomic-006/011/013/014/016/020/022/024/026` — красное остаётся в локальном A/B на Ahem); OP-символы вне таблицы (U+0F3C, U+2045, U+2768 — `css3-text-line-break-opclns-005/009/014`: `中中⁅` / `文` вместо `中中` / `⁅文`; по выборке 40 из 158 `opclns`, каждый четвёртый, с реальным CJK-шрифтом 14 совпали с эталоном, 26 нет). Что нужно: классы UAX #14 для всего Unicode (в `lumen-encoding` уже есть ICU4x `LineSegmenter`, `unicode_provider.rs:24`; `lumen-layout` от него не зависит — граница слоёв решается владельцем), `line-break: strict/normal/loose/anywhere` и `word-break: keep-all` поверх них, GL/WJ/ZWJ у inline-блоков (CSS Text L3 §5.1, §5.2; BUG-1323 — отдельно, дёшево: NBSP/NNBSP/U+2007 считаются пробелом). Замер WPT-RUN-14 S9 (2026-10-06): `css/css-text/i18n/css3-text-line-break-baspglwj-*` 80 id, `opclns-*` 158 reftest, `line-breaking/line-breaking-atomic-*`/`-replaced-*` 34 id (по локальному A/B на Ahem красное остаётся у 17 из 33 reftest, у остальных 16 — вероятно BUG-1273), `line-breaking-001…012` 12 (красное — у 001 и 012, остальные 10 — вероятно BUG-1273). Критерий готовности: baspglwj-* зелёные по `normal` и `pre-line`, `opclns-*` совпадают с эталоном, `line-breaking-atomic-*` без красного",
      "bugs": [
       "BUG-1323"
      ]
@@ -695,9 +704,9 @@
     {
      "id": "TEXT-JUSTIFY",
      "title": "TEXT-JUSTIFY: text-align justify",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "`text-align: justify`/`justify-all`/`match-parent` и `text-align-last: justify`, `text-justify`. `TextAlign` (`style/values/typography.rs:69`) знает только start/end/left/center/right; разбор `text.rs:102` на неизвестное значение оставляет прежнее (`getComputedStyle` отдаёт `center` вместо `justify`), `TextAlignLast::Justify` в `align_one_line` приравнен к `start` (`inline_wrap.rs:1108`), раскладка с растяжением межсловных промежутков отсутствует: проба `text-align:justify` в 25ch — строки по `x=0` с естественной шириной. Нужно: режим justify в выравнивании строки (растяжение пробелов, `text-justify: inter-word|inter-character|none|auto`, последняя строка и строка перед `<br>` — по `text-align-last`), `justify-all`, `match-parent` (CSS Text L3 §7.1–7.3). Замер WPT-RUN-14 S9 (2026-10-06): `text-align/text-align-justify-*`, `-justifyall-*`, `-last-justify*`, `-match-parent-*` — 23 reftest; `text-justify` — 3 id / 8 сабтестов parsing (разбор свойства — P4, `CSS-SPECS.md:76`). Критерий готовности: reftest перечисленных семейств совпадают с эталоном"
+     "note": "`text-align: justify`/`justify-all`/`match-parent` и `text-align-last: justify`, `text-justify`. `TextAlign` (`style/values/typography.rs:69`) знает только start/end/left/center/right; разбор `text.rs:102` на неизвестное значение оставляет прежнее (`getComputedStyle` отдаёт `center` вместо `justify`), `TextAlignLast::Justify` в `align_one_line` приравнен к `start` (`inline_wrap.rs:1108`), раскладка с растяжением межсловных промежутков отсутствует: проба `text-align:justify` в 25ch — строки по `x=0` с естественной шириной. Нужно: режим justify в выравнивании строки (растяжение пробелов, `text-justify: inter-word|inter-character|none|auto`, последняя строка и строка перед `<br>` — по `text-align-last`), `justify-all`, `match-parent` (CSS Text L3 §7.1–7.3). Замер WPT-RUN-14 S9 (2026-10-06): `text-align/text-align-justify-*`, `-justifyall-*`, `-last-justify*`, `-match-parent-*` — 23 reftest; `text-justify` — 3 id / 8 сабтестов parsing (разбор свойства — P4, `CSS-SPECS.md:76`). Критерий готовности: reftest перечисленных семейств совпадают с эталоном. СДЕЛАНО 2026-10-20 (ветка `p1-text-justify`): `box_tree/inline_justify.rs::justify_line` растягивает строку в `align_one_line` — добавка кладётся в `word-spacing`/`letter-spacing` стиля фрагмента (`text-justify: auto|inter-word|inter-character|none`, в `auto` строка без пробелов с CJK растягивается по символам, `white-space: pre` не растягивается, после последней табуляции — только хвост, висящие пробелы `pre-wrap` отделяются в свой фрагмент `split_hanging_spaces` и не растягиваются); `justify-all`; `text-align-last: justify|match-parent`; строка перед принудительным переносом (`InlineFrag.forced_end`) — «последняя»; `text-justify` разобран и отдаётся `getComputedStyle`/`CSS.supports`. `DrawText.word_spacing`/`letter_spacing` (i16) получили кусочное кодирование (до ±128 px — 1/64, дальше 1/2 px до ±12 415 px): запас строки из 2 слов больше прежних ±511 px. 14 тестов `tests/text_justify.rs`. Reftest `text-align` (Ahem, 800×600, до → после): justify-001…004/006, justifyall-001…004/006, justify-last-default — thick → identical (11 id); остаток — не justify: 005/justifyall-005 и `bidi-control` (U+200F/U+2066 получают ненулевую ширину у оценщика), `last-justify`/`-rtl` (эталон на float'ах — оценщик против реальных глифов), `match-parent-05` (`text-align-all`). graphic_tests: «Изменений нет»"
     },
     {
      "id": "TABLE-ANON",
@@ -712,36 +721,72 @@
     {
      "id": "SCROLL-MARKERS",
      "title": "SCROLL-MARKERS: ::scroll-marker и ::scroll-button",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "`::scroll-marker`, `::scroll-marker-group`, `::scroll-button()`, `scroll-target-group` и `::column` (CSS Overflow L5): свойства и селекторы разбираются (BUG-505 срезы 1–6), боксов нет. Проба: `getComputedStyle(li, '::scroll-marker').content` — `normal`, `display` — `list-item`, фон прозрачный; `ul::scroll-marker-group` ничего не создаёт. Нужно: генерация псевдобоксов (`::scroll-marker` у каждой цели привязки, группа до/после контейнера, `::column` в multicol), стили из каскада, состояние `:target-current`, активация кликом/клавишей и синхронизация с прокруткой, кнопки `::scroll-button(up|down|left|right|…)`. WPT `css/css-overflow/scroll-markers/` и корень `css-overflow` — 161 id, 221 из 231 сабтеста (WPT-RUN-14 срез 16); 5 SKIP и 5 TIMEOUT ждут активации. Критерий готовности: `scroll-marker-group-003.html`, `scroll-marker-006.html`, `scroll-buttons-001.html` зелёные `::column` (S17, `css-multicol`): ещё 4 id (`parsing/column-pseudo-{valid,invalid,computed}.html`, `column-pseudo-background-color.html`) — псевдоэлемент не разбирается."
+     "note": "Сделано (2026-10-20, ветка `p1-scroll-markers`): боксы псевдоэлементов CSS Overflow L5. `::scroll-marker-group` (`scroll-marker-group: before|after`, группа первым/последним ребёнком контейнера), `::scroll-marker` (у каждого элемента с таким боксом; цель входит в группу ближайшего контейнера, abs/fixed — по containing block), `::scroll-button(up|down|left|right|block-*|inline-*|prev|next)` (сиблинг перед контейнером; без собственного `content` бокса нет; UA-вид кнопки `<button>`), корневой элемент (`:root::scroll-marker-group`/`::scroll-button()` — первый/последний ребёнок html), `::column` разбирается в грамматике (`PseudoElementKind::Column`, пары `::before::column`, `::column::scroll-marker`). Код: `box_tree/scroll_pseudos.rs`, `style/pseudo.rs`, `style/ua.rs::apply_ua_scroll_button`. WPT `css-overflow/scroll-markers` `root-scroll-button`, `scroll-buttons-001` — identical; `scroll-marker-006` — thin-only (дробная нижняя граница клипа overflow:hidden, не про маркеры). `scroll-target-group` боксов не порождает. Остаток — SCROLL-MARKERS-2. `::scroll-marker`, `::scroll-marker-group`, `::scroll-button()`, `scroll-target-group` и `::column` (CSS Overflow L5): свойства и селекторы разбираются (BUG-505 срезы 1–6), боксов нет. Проба: `getComputedStyle(li, '::scroll-marker').content` — `normal`, `display` — `list-item`, фон прозрачный; `ul::scroll-marker-group` ничего не создаёт. Нужно: генерация псевдобоксов (`::scroll-marker` у каждой цели привязки, группа до/после контейнера, `::column` в multicol), стили из каскада, состояние `:target-current`, активация кликом/клавишей и синхронизация с прокруткой, кнопки `::scroll-button(up|down|left|right|…)`. WPT `css/css-overflow/scroll-markers/` и корень `css-overflow` — 161 id, 221 из 231 сабтеста (WPT-RUN-14 срез 16); 5 SKIP и 5 TIMEOUT ждут активации. Критерий готовности: `scroll-marker-group-003.html`, `scroll-marker-006.html`, `scroll-buttons-001.html` зелёные `::column` (S17, `css-multicol`): ещё 4 id (`parsing/column-pseudo-{valid,invalid,computed}.html`, `column-pseudo-background-color.html`) — псевдоэлемент не разбирается.",
+     "tasks": [
+      {
+       "id": "SCROLL-MARKERS-2",
+       "title": "SCROLL-MARKERS-2: активация, :target-current и ::column",
+       "status": "planned",
+       "size": "L",
+       "note": "Интерактивная часть CSS Overflow L5 (`::scroll-marker`, `::scroll-button()`): псевдокласс `:target-current` (состояние в thread-local рядом с `HOVER_NID` в `style/matching/forms.rs` + `restyle_root_set_for_state_change`), активация клика/клавиши по `::scroll-marker` и `::scroll-button()` (`shell/src/lumen/click.rs`: `HitTestResult` не знает о псевдобоксах — добавить в результат originating-элемент), прокрутка к цели (`scrollIntoView`/`scrollBy`), синхронизация текущего маркера с позицией прокрутки, `:disabled` у `::scroll-button()` на краю прокрутки, фокус группы (`tabs`/`links`), стрелки в группе. Критерий: 5 SKIP и 5 TIMEOUT `css/css-overflow/scroll-markers/*activation*` и `*scroll-tracking*` зелёные; `::column` боксы (`css-multicol/parsing/column-pseudo-computed.html`, `column-pseudo-background-color.html`)."
+      }
+     ]
     },
     {
      "id": "SVG-CLIPPATH",
      "title": "SVG-CLIPPATH: <clipPath> и clip-path: url()",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "SVG `<clipPath>` и `clip-path: url(#id)` / `clip-path=\"url(#id)\"` (CSS Masking L1 §3.1, SVG 1.1 §14.3): ссылка на элемент не клипует ни SVG-фигуры, ни HTML-элементы, хотя CSS-формы (`circle()`/`polygon()`/`path()`) клипуют. Проба (`--screenshot`, зелёных px): inline `<svg width=200 height=200><clipPath id=c><rect x=50 y=50 width=100 height=100/></clipPath><rect width=200 height=200 fill=green clip-path=\"url(#c)\"/></svg>` — 40 000 при ожидаемых 10 000; то же через `style=\"clip-path:url(#c)\"`, на `<g>`, standalone `.svg`; с `clip-rule=\"evenodd\"` в `<clipPath>` — 40 000. `<mask>` на том же элементе работает (10 000). Нужно: разбор `<clipPath>` (`clipPathUnits`, дети `rect`/`circle`/`path`/`polygon`/`text`/`use`, `clip-rule`, `transform`, вложенный `clip-path`), тип `ClipPath::Url` в `style/values/transform.rs` рядом с формами, пересечение с клипом элемента в display list (обе ветки растра, CPU и wgpu), `clip-rule` у содержимого (`CSS-SPECS.md` строка `clip-rule` помечает рендер отложенным до этой ссылки). WPT `css/css-masking/clip-path-svg-content/` — 94 reftest (`thick`), `clip-path/clip-path-element-*`/`reference-*` — ещё 15, `clip-rule/clip-rule-00{1,2}.html`, `mask-svg-content/` частично (вложенный `clip-path` внутри `<mask>`) — около 110 id; кластер — `docs/wpt-vendor-notes/css.md` §css-fonts + css-masking + WOFF2 (WPT-RUN-14 S18, 2026-10-07). Критерий готовности: `clip-path-svg-content/clip-path-clip-rule-001.svg`, `clip-path-on-g-001.svg`, `clip-path/clip-path-element-userSpaceOnUse-001.html` зелёные."
+     "note": "SVG `<clipPath>` и `clip-path: url(#id)` / `clip-path=\"url(#id)\"` (CSS Masking L1 §3.1, SVG 1.1 §14.3): ссылка на элемент не клипует ни SVG-фигуры, ни HTML-элементы, хотя CSS-формы (`circle()`/`polygon()`/`path()`) клипуют. Проба (`--screenshot`, зелёных px): inline `<svg width=200 height=200><clipPath id=c><rect x=50 y=50 width=100 height=100/></clipPath><rect width=200 height=200 fill=green clip-path=\"url(#c)\"/></svg>` — 40 000 при ожидаемых 10 000; то же через `style=\"clip-path:url(#c)\"`, на `<g>`, standalone `.svg`; с `clip-rule=\"evenodd\"` в `<clipPath>` — 40 000. `<mask>` на том же элементе работает (10 000). Нужно: разбор `<clipPath>` (`clipPathUnits`, дети `rect`/`circle`/`path`/`polygon`/`text`/`use`, `clip-rule`, `transform`, вложенный `clip-path`), тип `ClipPath::Url` в `style/values/transform.rs` рядом с формами, пересечение с клипом элемента в display list (обе ветки растра, CPU и wgpu), `clip-rule` у содержимого (`CSS-SPECS.md` строка `clip-rule` помечает рендер отложенным до этой ссылки). WPT `css/css-masking/clip-path-svg-content/` — 94 reftest (`thick`), `clip-path/clip-path-element-*`/`reference-*` — ещё 15, `clip-rule/clip-rule-00{1,2}.html`, `mask-svg-content/` частично (вложенный `clip-path` внутри `<mask>`) — около 110 id; кластер — `docs/wpt-vendor-notes/css.md` §css-fonts + css-masking + WOFF2 (WPT-RUN-14 S18, 2026-10-07). СДЕЛАНО 2026-10-20 (ветка `p1-svg-clippath`): layout разворачивает `url(#id)` в полигоны (`box_tree/svg_clip.rs`, `ClipPath::Svg`: rect/circle/ellipse/polygon/polyline/path/use, `clipPathUnits`, `transform`, `clip-rule`, вложенный `clip-path` на `<clipPath>`), paint эмитит слои `PushClipPath{Polygon}` (`display_list/clip_url.rs`) для HTML-боксов, `<g>` и SVG-фигур — CPU/femtovg/wgpu без правок растра. `clip-path-clip-rule-001..004.svg`, `clip-path-on-g-001.svg` identical, `clip-path-element-userSpaceOnUse-001.html` и `clip-rule-001/002.html` thin-only (viewport 800x600); `clip-path-svg-content` 48 identical + 2 thin из 101, `mask-svg-content` 2 identical. Графтест 165 (Edge 0,04 %), 8 layout- и 11 paint-тестов. Не сделано: `<text>` в `<clipPath>`, `clip-path` на детях `<clipPath>`, на корневом `<svg>`, на `<marker>`, внешние `url(file.svg#id)`, `<geometry-box>`, evenodd-дырки при нескольких детях (объединяются как nonzero), окно wgpu при >64 вершин откатывается на bbox. Критерий готовности: `clip-path-svg-content/clip-path-clip-rule-001.svg`, `clip-path-on-g-001.svg`, `clip-path/clip-path-element-userSpaceOnUse-001.html` зелёные."
     },
     {
      "id": "HIGHLIGHT-PAINT",
      "title": "HIGHLIGHT-PAINT: выделение и highlight-псевдоэлементы",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Highlight-псевдоэлементы (CSS Pseudo-Elements 4 §3, CSS Custom Highlight API): `::selection`, `::target-text`, `::spelling-error`, `::grammar-error`, `::highlight(name)` и каскад между ними. Сейчас `getSelection().addRange(r)` с `::selection{background:green;color:green}` не даёт ни одной команды в display list и ни одного зелёного пикселя на `--screenshot`; `CSS.highlights.set('x', new Highlight(range))` с `::highlight(x){…}` — то же; `getComputedStyle(el, '::selection').backgroundColor` — `rgba(0, 0, 0, 0)` при заданном `green` (`CSS-SPECS.md`: `::selection` — «live selection highlight application ⬜»). Нужно: (1) каскад и computed для highlight-псевдоэлементов (§3.4–3.5: наследование от highlight-родителя, а не от originating element, `currentcolor`, `:visited`), (2) отрисовка фона, цвета текста, `text-decoration`, `text-shadow`, `-webkit-text-stroke` выделенного фрагмента в ОБОИХ растрах (CPU `cpu_raster.rs` и wgpu `renderer.rs`; `crates/engine/paint/CLAUDE.md`), (3) порядок слоёв (`highlight-z-index`, `selection-over-highlight`), (4) SVG-текст. Масштаб: 72 reftest (69 thick) + 10 testharness (`highlight-cascade/highlight-pseudos-computed*.html`, `highlight-currentcolor-computed*.html`); кластер — `docs/wpt-vendor-notes/css.md` §selectors + css-pseudo + css-nesting + css-namespaces + css-cascade (WPT-RUN-14 S20, 2026-10-08). Критерий готовности: `active-selection-011.html`, `highlight-painting-001.html`, `highlight-pseudos-computed.html` зелёные.",
+     "note": "**Сделано (2026-10-21, ветка `p1-highlight-paint`):** `::selection`, `::highlight(name)` и каскад highlight-псевдоэлементов в headless-растре. `crates/engine/layout/src/highlight.rs`: `resolve_highlights` режет текстовые фрагменты по границам диапазонов (ширина куска — по `TextMeasurer` layout-а, смещения DOM→фрагмент с учётом схлопнутых пробелов) и кладёт на куски стек `HighlightLook`-ов по слоям; каскад идёт по цепочке предков (highlight inheritance, Pseudo 4 §3.3), UA-фон только если автор не стилизовал псевдоэлемент (§3.2); `PseudoElementKind::{SpellingError, GrammarError}` добавлены, `::highlight(name)` матчится по имени; `getComputedStyle(el, '::selection'|'::target-text'|'::spelling-error'|'::grammar-error'|'::highlight(x)')` считается на лету (JS-native `highlight_pseudo_style`), плохо сформированная строка отдаёт пустой стиль. `crates/engine/paint/src/display_list/highlight_paint.rs`: `with_highlights`; порядок — тень оригинала одним прогоном, фоны подсветки, глифы (обычные куски; у подсвеченных — декорации оригинала, тени подсветки, её глифы, декорации); новых `DisplayCommand` нет, оба растра работают без правок. `--screenshot`/`--dump-display-list` читают выделение документа и `CSS.highlights`. Старый `SelectionHighlight`/параметр `sel` удалены. Тесты: 13 в `layout/src/highlight/tests.rs`, 6 в `paint/.../tests/highlight_overlay.rs` (две пиксель-в-пиксель копии css-pseudo `active-selection-011` и `highlight-painting-001` с контролем «без выделения пиксели другие»). **Измерено на `lumen.exe` (`--screenshot`, 800×600, рецепт `--ahem`, до/после, срез css-pseudo + css-highlight-api по именам `selection|highlight|spelling|grammar|target-text`, 212 reftest):** совпадают с эталоном 55 → 73. Критерий готовности выполнен: `active-selection-011` и `highlight-painting-001` — пиксель-в-пиксель, `highlight-pseudos-computed.html` — все 82 проверки цикла теста (включая плохо сформированные строки) на реальном бинаре. Ещё 8 тестов были «зелёными» только потому, что ни тест, ни эталон подсветки не рисовали, а теперь краснеют честно: `custom-highlight-font-metrics-003`, `custom-highlight-painting-below-grammar`, `highlight-cascade-008`, `highlight-currentcolor-root-{explicit,implicit}-default-001`, `highlight-styling-001`, `selection-link-001/002` (`:visited::selection`). **Не сделано → HIGHLIGHT-PAINT-2:** живое окно (оверлей оболочки — только фон выделения), `::target-text` и ошибки орфографии в растре, вертикальный текст и SVG-текст, разбор оставшихся `thick`.",
      "bugs": [
       "BUG-1457"
+     ],
+     "tasks": [
+      {
+       "id": "HIGHLIGHT-PAINT-2",
+       "title": "HIGHLIGHT-PAINT-2: живое окно и остаток highlight-псевдоэлементов",
+       "status": "planned",
+       "size": "M",
+       "note": "Остаток HIGHLIGHT-PAINT. (1) Разобрать оставшиеся `thick` (138 из 212 в срезе HIGHLIGHT-PAINT; рецепт — `tests/wpt/reftest_pixdiff.py --ahem --viewport 800x600`): одинаковые 257 px у ~15 `custom-highlight-painting-*` — не подсветка, а расхождение метрик layout и растра на шрифте не Ahem (куски подсветки стоят по `TextMeasurer`, слитый текст рисуется одним прогоном по advance растра; чинить в выборе шрифта, а не здесь); `:visited::selection` (`selection-link-*`); `currentcolor` у корня (`highlight-currentcolor-root-*`); `highlight-styling-001`; `::target-text` и `::spelling-error` в растре; `highlight-painting-002..004`, `active-selection-014/031/063`. (2) Живое окно: `Lumen::doc_selection_overlay`/`build_page_with_selection_highlight` (`crates/shell/src/lumen/doc_select.rs`, `app/window_event/redraw_requested.rs`) красят только фон — перевести на `lumen_layout::resolve_highlights` + `lumen_paint::with_highlights` (`display_list_metrics::page_highlights`/`paint_ordered_in_highlighted` уже есть): страница с выделением пересобирается из `layout_box` и кэшируется по `(display_list_epoch, диапазон)`, `anim_dl`/`splice_frame_content`/find-подсветка не должны сломаться; `::highlight()` и `::target-text` в окне — тем же путём. (3) `::spelling-error`/`::grammar-error` — UA-подчёркивание-волна (сейчас только стиль автора), `Highlight.type`. (4) вертикальные режимы письма (`emit_inline_run_vertical`) и SVG-текст игнорируют highlights. (5) `highlight-z-index`-подобная раскладка слоёв сверх фиксированного порядка. Критерий готовности: измерение (1) без регрессий, живое окно показывает `::selection{color; text-shadow}` (`--screenshot` живого окна через MCP) и `./graphic_tests` зелёные.",
+       "bugs": [
+        "BUG-1457"
+       ]
+      }
      ]
     },
     {
      "id": "ANCHOR-SCROLL",
      "title": "ANCHOR-SCROLL: привязка якорного позиционирования к прокрутке",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Привязка CSS Anchor Positioning к прокрутке (CSS Anchor Positioning 1 §4.3 «Scroll Adjustment», §3.2 `position-area` в прокручиваемом содержащем блоке): бокс с `position-anchor` + `anchor()` остаётся на месте непрокрученного якоря — якорь внутри `overflow:auto` контейнера с `scrollTop=250`: на `--screenshot` якорь `y=50`, цель `y=300` (`apply_anchor_positions`, `crates/engine/layout/src/anchor.rs`, работает от геометрии без учёта смещения прокрутки контейнеров якоря). Нужно: (1) смещение прокрутки контейнеров якоря в расчёте цели и пересчёт при `scroll`; (2) `position-area` в прокручиваемом содержащем блоке (`position-area-scrolling-*`, `scrollable-containing-block-*`); (3) `anchor-scroll-position-try-*` — после реализации `position-try` (BUG-562); (4) цепочки и `anchor-scope` (`anchor-scroll-chained-*`, `anchor-scope-scroll`); (5) CPU-растр: содержимое прокрученного контейнера ниже высоты холста (BUG-1479) — без него `--screenshot` не показывает результат. Масштаб: 86 id среза S21 (52 reftest `thick`, 32 testharness, 1 ERROR, 1 TIMEOUT: `anchor-scroll-*` 28, `anchor-scroll-position-try-*` 14, `position-area-scrolling-*` 9, `anchor-scroll-update-*` 9, `anchor-scroll-to-sticky-*` 5, `anchor-center-scroll*` 4); кластер — `docs/wpt-vendor-notes/css.md` §css-anchor-position + css-position + css-display (WPT-RUN-14 S21, 2026-10-08). Зависит от BUG-1166 для тестов на `getBoundingClientRect`. Критерий готовности: `anchor-scroll-002.html`, `anchor-scroll-003.html`, `position-area-scrolling-005.html` зелёные.",
+     "note": "**Сделано (2026-10-21, ветка `p1-anchor-scroll`), срез 1 — показ:** бокс `absolute`/`fixed`, привязанный к якорю внутри `overflow` контейнеров, которых нет среди его предков, следует за их прокруткой в `--screenshot` и в живом окне (CSS Anchor Positioning 1 §4.3). `LayoutBox::anchor_scroll` (`AnchorScroll { scrollers: Vec<AnchorScroller { node, x, y }> }`, внешний контейнер первым) пишет `apply_anchor_positions` (`box_tree/container_anchor.rs::anchor_scroll_for`: якорь из `position-anchor`, иначе первый именованный в `anchor()`/`anchor-size()`; путь контейнеров якоря — `AnchorRegistry::scroll_chains` из `collect_anchors`; `chain_anchor_scroll` добавляет контейнеры якоря, который сам позиционирован по якорю, с защитой от циклов); смещения копирует `refresh_anchor_scroll` — из хвоста прохода, из `set_scroll_position` и из `restore_scroll_positions`. Геометрия бокса в дереве layout остаётся непрокрученной. Paint оборачивает бокс в `PushScrollLayer` с `id` контейнера (`display_list/print.rs::anchor_scroll_layers`; в `walk` и в `box_layer_ops`), поэтому `patch_scroll_layer` и `apply_scroll_overrides` двигают бокс вместе с контейнером без пересборки списка. **BUG-1479 закрыт:** `cpu_raster.rs` рисует `PushScrollLayer` со сдвигом через `render_offcanvas_transform_group` (слой по габариту содержимого, не по размеру холста). Тесты: `box_tree/tests/anchor_scroll.rs` (8), `display_list/tests/ordered_build_scroll.rs` (4), `cpu_raster.rs` (2). A/B по 210 reftest `css/css-anchor-position` (`--viewport 800x600`, Ahem): thick 169→159, identical 40→50 (`anchor-scroll-chained-001/002/003`, `-composited-scrolling-006`, `-composited-scrolling-paint-001`, `-scrollable-anchor`, `-update-005/006/009/010`), ни одного identical→thick. **Остаток — ANCHOR-SCROLL-2** (критерий `anchor-scroll-002/003`, `position-area-scrolling-005` не достигнут: им нужен `getBoundingClientRect`/`offsetTop` с прокруткой, BUG-1166).",
      "bugs": [
       "BUG-1469",
       "BUG-1479"
+     ],
+     "tasks": [
+      {
+       "id": "ANCHOR-SCROLL-2",
+       "title": "ANCHOR-SCROLL-2: геометрия для скриптов, position-area и fixed при прокрутке",
+       "status": "planned",
+       "size": "L",
+       "note": "Остаток ANCHOR-SCROLL. (1) **Геометрия для скриптов:** `getBoundingClientRect`/`offsetLeft`/`offsetTop` якоря в прокручиваемом контейнере и цели, привязанной к нему, обязаны отдавать прокрученное положение (`anchor-scroll-002.html`: цель и якорь `top = 40` после `scrollTop = 10`; `-003.html`). Опубликованные прямоугольники — координаты документа без смещений предков-скроллеров (BUG-1166), собираются тремя обходчиками (`collect_layout_rects`, `ScopedCollection::collect_layout_rects`, `collect_client_rects`): нужны вычитание смещений предков-контейнеров и `anchor_scroll` цели в каждом из них и согласованное отсечение «прямоугольник не сдвинулся» в `scoped_collect.rs`. (2) **`position-area` в прокручиваемом содержащем блоке** (`position-area-scrolling-001…007`, `position-area-scroll-adjust`): полоса сетки строится по scrollable overflow содержащего блока; `-005` ещё требует `position-try-fallbacks: flip-*` с проверкой переполнения при текущей прокрутке. (3) `anchor-scroll-position-try-*` (14 id) — после `position-try` (BUG-562). (4) **`position: fixed` и прокрутка страницы** (`anchor-scroll-fixedpos*`): фиксированная цель с якорем в потоке документа не следует за прокруткой страницы (маркеры `BeginFixedLayer` выводят её из прокрутки; цель с таким якорем должна оставаться в прокручиваемой части). (5) Якорь-`inline` без `LayoutBox` (BUG-1477): без него не зеленеют `anchor-scroll-001`, `-update-001…004/007`, `-implicit-*` — цель остаётся в статической позиции. (6) Hit-test цели: попадание считается по непрокрученному прямоугольнику. (7) Не разбирались: `anchor-scope-scroll`, `anchor-center-scroll-*`, `position-visibility-*-scroll*`, `anchor-scroll-to-sticky-*` (нужен ещё BUG-1468), `anchor-scroll-vlr/vrl`. Стартовая проба и A/B — рецепт в `docs/probe-method.md`, пачка `css/css-anchor-position` через `tests/wpt/reftest_pixdiff.classify`.",
+       "bugs": [
+        "BUG-1469",
+        "BUG-1166",
+        "BUG-1477",
+        "BUG-562"
+       ]
+      }
      ]
     },
     {
@@ -757,9 +802,9 @@
     {
      "id": "VT-API",
      "title": "VT-API: интерфейс ViewTransition",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Интерфейс `ViewTransition` и родственные (CSS View Transitions L1/L2): `document.startViewTransition()` возвращает простой объект (`vt.constructor.name` — `Object`; `ready`/`finished`/`updateCallbackDone`/`skipTransition` есть), а глобалов `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent` нет, нет `document.activeViewTransition`, `vt.types`, `vt.transitionRoot`, `startViewTransition({update,types})`, `onpagereveal`/`onpageswap` (BUG-945), отказа по `duplicate-tag`; свойства `view-transition-class` и `view-transition-group` не разбираются (`CSS.supports` — `false`; строки `CSS-SPECS.md` для P4), `view-transition-name`/`-class` не отдаются в `getComputedStyle`. Во время перехода нет UA-стиля псевдоэлементов (`getComputedStyle(html,'::view-transition').position` — `static`) и CSS-анимаций на них — BUG-1509. Нужно: класс `ViewTransition` с прототипной цепочкой и состоянием, `types`/`activeViewTransition`, события навигации (в связке с P3-viewtransnav), UA-таблица стилей `::view-transition*` и `-ua-view-transition-*`-анимации; `CSSViewTransitionRule` — CSSOM-10. Масштаб: 24 id кластера «интерфейс», 15 `parsing/`, 55 `navigation/` (44 TIMEOUT: popup ждёт `pagereveal`/`pageswap`), 43 «псевдоэлементы перехода»; кластеры — `docs/wpt-vendor-notes/css.md` §css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins (WPT-RUN-14 S22, 2026-10-08). Зависит от WPT-RUN-15 для измерения рисования (160 reftest `reftest-wait`). Критерий готовности: `idlharness.html` (css-view-transitions), `document-active-view-transition.html`, `duplicate-tag-rejects-capture.html`, `pseudo-get-computed-style.html` зелёные.",
+     "note": "**Сделано (2026-10-21, ветка `p1-vt-api`), срез 1 — API:** вместо объекта-литерала в `view_transitions.rs` — `crates/js/src/shim/view_transitions_shim.js`: интерфейсы `ViewTransition` и `ViewTransitionTypeSet` (setlike) с прототипной цепочкой и WebIDL-членами (`updateCallbackDone`/`ready`/`finished`, `skipTransition()`, `types`, `transitionRoot`, `waitUntil()`), `Document.prototype.startViewTransition(callback | {update, types})` и `activeViewTransition`, `PageRevealEvent`/`PageSwapEvent` + `window.onpagereveal`/`onpageswap`, `CSSViewTransitionRule` (`navigation`, `types`; новый `RuleKind::ViewTransition` в `cssom_tree`). Автомат §6.3: колбэк обновления вызывается задачей позже (раньше синхронно) и его обещание ждётся; пропуск — `skipTransition()`, новый `startViewTransition()`, дубли `view-transition-name` в старом и в новом состоянии (нативный `_lumen_vt_named_elements` читает снимок стилей; `view-transition-name` теперь отдаётся в `getComputedStyle`), таймаут колбэка 4 с → `TimeoutError`; `waitUntil` откладывает `finished`; отказ колбэка отклоняет `updateCallbackDone`/`ready`/`finished` (`unhandledrejection` приходит по каждому). Шеллу: `Begin` — прямо перед колбэком, `End` — после его обещания, до этого `ViewTransitionState.start_ms = ∞` (снимок держится непрозрачным). WPT `css-view-transitions`: idlharness 17→64 из 66 (остаток — `Element.startViewTransition`/`activeViewTransition`, это VT-SCOPED), `document-active-view-transition`, `duplicate-tag-rejects-*`, `unhandled-rejection`, `update-callback-timeout`, `view-transition-types-mutable*`, `view-transition-waituntil-finished-promise`, `synchronous-callback-skipped-before-run`, `navigation/page{reveal,swap}-ctor` зелёные; A/B по 58 testharness-тестам верхнего уровня — без регрессий. **Остаток — VT-API-2.** Исходная постановка: Интерфейс `ViewTransition` и родственные (CSS View Transitions L1/L2): `document.startViewTransition()` возвращает простой объект (`vt.constructor.name` — `Object`; `ready`/`finished`/`updateCallbackDone`/`skipTransition` есть), а глобалов `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent` нет, нет `document.activeViewTransition`, `vt.types`, `vt.transitionRoot`, `startViewTransition({update,types})`, `onpagereveal`/`onpageswap` (BUG-945), отказа по `duplicate-tag`; свойства `view-transition-class` и `view-transition-group` не разбираются (`CSS.supports` — `false`; строки `CSS-SPECS.md` для P4), `view-transition-name`/`-class` не отдаются в `getComputedStyle`. Во время перехода нет UA-стиля псевдоэлементов (`getComputedStyle(html,'::view-transition').position` — `static`) и CSS-анимаций на них — BUG-1509. Нужно: класс `ViewTransition` с прототипной цепочкой и состоянием, `types`/`activeViewTransition`, события навигации (в связке с P3-viewtransnav), UA-таблица стилей `::view-transition*` и `-ua-view-transition-*`-анимации; `CSSViewTransitionRule` — CSSOM-10. Масштаб: 24 id кластера «интерфейс», 15 `parsing/`, 55 `navigation/` (44 TIMEOUT: popup ждёт `pagereveal`/`pageswap`), 43 «псевдоэлементы перехода»; кластеры — `docs/wpt-vendor-notes/css.md` §css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins (WPT-RUN-14 S22, 2026-10-08). Зависит от WPT-RUN-15 для измерения рисования (160 reftest `reftest-wait`). Критерий готовности: `idlharness.html` (css-view-transitions), `document-active-view-transition.html`, `duplicate-tag-rejects-capture.html`, `pseudo-get-computed-style.html` зелёные.",
      "bugs": [
       "BUG-1510"
      ]
@@ -777,9 +822,9 @@
     {
      "id": "CQ-SCROLL-STATE",
      "title": "CQ-SCROLL-STATE: scroll-state container queries",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Scroll-state container queries (CSS Conditional 5 §scroll-state, CSS Overflow 5): `container-type: scroll-state` разбирается (`CSS.supports` — `true`), но `@container scroll-state(stuck|snapped|scrollable|scrolled)` не разбирается и не вычисляется (проба: контейнер `overflow:auto` 100×50 с содержимым 300 px и `@container scroll-state(scrollable:bottom)` — стиль не применяется), `cssRules` для таких правил пуст (BUG-1455 / CSSOM-10). Нужно: разбор `scroll-state()` (значения `scrollable`, `scrolled`, `snapped`, `stuck` с осями и направлениями), состояния прокрутки контейнера и их инвалидация по прокрутке, `stuck` — после `position: sticky` (BUG-1468). Масштаб: 54 id среза S22 (`container-queries/scroll-state/*`: `at-container-{scrollable,scrolled,snapped,stuck}-{parsing,serialization}` 8 id, `scroll-state-*` 46 id; 203 из 211 сабтестов); кластер — `docs/wpt-vendor-notes/css.md` §css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins (WPT-RUN-14 S22, 2026-10-08). Критерий готовности: `scroll-state-scrollable-axis.html`, `scroll-state-scrolled-programmatic-absolute-scrolls.html` зелёные.",
+     "note": "**Сделано (2026-10-21, ветка `p1-cq-scroll-state`), срез 1 — разбор, выбор контейнера, `scrollable`:** `container-type: [size | inline-size] || scroll-state` (`ComputedStyle::container_scroll_state`; `getComputedStyle` отдаёт `container-type`/`container-name` в каноническом виде); `@container scroll-state(scrollable | scrolled | stuck | snapped [: …])` с `not`/`and`/`or`, скобками и логическими сторонами по `writing-mode`/`direction` (`style/container_scroll.rs`); **трёхзначная оценка условий** (`style/container.rs::eval_tri`: `unknown` и `not unknown` не применяются — раньше `not (неизвестное)` было истиной); контейнер запроса выбирается по цепочке `ContainerContext::parent` (тип и имя; запрос с size- и scroll-state-признаками берёт один контейнер, умеющий оба), списки через запятую со своими именами, range-синтаксис `(100px < width <= 300px)`, булев контекст `(inline-size)`, блоковая ось у `inline-size`-контейнера — unknown, `Skip`-бокс и бокс-less контейнер запросов не отвечают; `scrollable` — по геометрии и `scroll_x/y` бокса (`scroll_state.rs`; `body`/корень с `overflow`, ушедшим во вьюпорт, — нет); правила `@container` выставляют custom properties, а **элементы без бокса** (инлайновые, `display: none`/`contents`) получают результат через `CounterMap::cq_boxless` и `collect_custom_properties_for` (раньше `getComputedStyle(span).getPropertyValue('--x')` было пусто у любого инлайн-элемента); CSSOM: `scroll-state(…)` в `conditionText` канонически, невалидное — как написано; парсер `@container`: `ident(` и `not` — не имя контейнера. WPT `container-queries/`: 350 → 622 из 1226 субтестов, регрессий нет; `scroll-state/`: 39 → 161 из 237 (`scrollable-axis`, `scrolled-programmatic-absolute-scrolls`, `initially-scrollable`, `scrollable-wm`, все `at-container-*-parsing`/`-serialization` зелёные). Остаток — CQ-SCROLL-STATE-2.",
      "bugs": [
       "BUG-1512"
      ]
@@ -787,9 +832,9 @@
     {
      "id": "SHAPE-OUTSIDE-2",
      "title": "SHAPE-OUTSIDE-2: shape-box и image",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Остаток CSS Shapes L1 для `shape-outside` как геометрии обтекания: (1) `<shape-box>` (`margin-box`/`border-box`/`padding-box`/`content-box`) как самостоятельное значение и вместе с `<basic-shape>`, опорный прямоугольник со скруглениями `border-radius` (CSS Backgrounds 3 §5.5) — сейчас `ShapeOutside::Value(String)` хранит сырую строку, форма всегда считается от margin-box, `border-box` с `border-radius:50%` обтекается прямоугольником; (2) `<image>`: `url()`, `linear-gradient()`, `radial-gradient()` — маска по альфа-каналу и `shape-image-threshold` (CSS Shapes 1 §6.2; свойство разбирается и нигде не читается), `shape-margin` по маске. Общее: форма хранится строкой и разбирается по месту (`parse_circle_px`, `parse_shape_*_px` в `box_tree/shapes_floats.rs`) — нужен типизированный `ShapeOutside` с `<shape-box>` и опорным боксом; аргументы `circle()`/`ellipse()` (`at <position>`, `%`, `closest-side`) — BUG-1517 (делать вместе: общий разбор с `clip-path`, BUG-1405). Масштаб: 111 + 52 id среза S23 (`shape-outside/shape-box/*`, `shape-image/*`, `shape-image/gradients/*`, `supported-shapes/*` с `<shape-box>`, `spec-examples/shape-outside-010…017`, `-019`); кластеры — `docs/wpt-vendor-notes/css.md` §css-text-decor + css-gaps + css-shapes (WPT-RUN-14 S23, 2026-10-08). Критерий готовности: `shape-box/shape-outside-border-box-border-radius-001.html`, `supported-shapes/circle/shape-outside-circle-026.html`, `shape-image/shape-image-001.html`, `gradients/shape-outside-linear-gradient-001.html` зелёные.",
+     "note": "**Сделано (2026-10-21, ветка `p1-shape-outside-2`), срез 1 — контур float'а из `shape_resolve`:** горизонтальное обтекание берёт тот же `resolve_shape`, что и вертикальное (LAYOUT-VFLOAT-3): `<shape-box>` как опорный бокс (`<basic-shape> <shape-box>`) и как самостоятельное значение со скруглениями `border-radius`, `closest-side`/`farthest-side`, `at <position>`, `inset() round`; образы-градиенты (`linear-gradient` — точными полигонами, `radial-`/`conic-`/`repeating-*` — растровой маской `Prim::Mask`) и `url()` по альфа-каналу с `shape-image-threshold`; `shape-margin` растит любую маску. Прежние `register_shape_outside`, `ShapePolygon`/`ShapeEllipse`/`ShapeInset`, `shape_circles` и их px-парсеры (`circle(Npx)` считал центр по border-box, а контур круга — на любой строке окна) удалены. `url()` доходит до layout альфа-плоскостью: `Document::set_shape_image` (ключ — сырой URL), `collect_shape_image_requests`; shell (`fetch_and_decode_background_images` берёт и эти URL, `report_shape_images` в `page_pipeline.rs`) и headless-драйвер (`session.rs`) декодируют картинку и перекладывают страницу один раз. Образ `<img>`-float ложится на content box, остальных — растягивается на margin box (так делает Chromium; `shape-image-013`). Границы контура полуоткрытые: строка, начинающаяся ровно на нижнем краю расширенного контура, не сужается (`shape-outside-polygon-012`). WPT `css-shapes/shape-outside` (221 reftest, 800×600, `--ahem`, A/B с бинарём до правки): identical 66 → 101, регрессий 0; `shape-image-001`, `gradients/shape-outside-linear-gradient-001` зелёные. **Остаток — SHAPE-OUTSIDE-3** (ряды `inline-block` у контура — 72 из 120 оставшихся `thick`, `<br>` из BUG-1411 — 42; `circle-026` и `border-box-border-radius-001` из критерия зависят от них).",
      "bugs": [
       "BUG-1518",
       "BUG-1519"
@@ -874,6 +919,42 @@
      "status": "planned",
      "size": "M",
      "note": "Multicol в вертикальном `writing-mode` (Multicol L1 §3 + Writing Modes L3): колонки идут по inline-оси (физически вниз), у `vertical-rl` содержимое колонки течёт справа налево, высота колонки по блочной оси — физическая ширина контейнера. Сейчас `layout_dispatch` отправляет вертикальный блок в `vertical_trampoline` раньше multicol-ветки (`layout_dispatch.rs`, «CSS Writing Modes L3 §3»), колонки не строятся, дети стопкой по блочной оси. Нужно: ветка multicol для вертикального контейнера (по образцу `grid_vertical`) — число/ширина колонок по физической высоте, раскладка детей по inline-размеру колонки, нарезка по блочным экстентам, `column-span: all`, `column-fill`, принудительные разрывы; baseline multicol-контейнера во flex/grid. WPT: `css-flexbox/alignment/flex-align-baseline-multicol-002/003`, `css-grid/alignment/grid-align-baseline-multicol-002/003` (offsetLeft 105 против 195), `css-multicol/multicol-span-auto-size-in-vertical-writing-mode-*`. Выделено из MULTICOL-BREAKS-2 (пункт 4)."
+    },
+    {
+     "id": "VT-API-2",
+     "title": "VT-API-2: UA-стиль и анимации псевдодерева",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток VT-API. (1) **UA-стиль и анимации дерева псевдоэлементов (BUG-1509):** во время активного перехода `getComputedStyle(html, '::view-transition…')` отдаёт UA-таблицу §6/§7 (`::view-transition`, `-group`, `-image-pair`, `-old`, `-new`: `position: absolute`/`fixed`, `inset`, `animation-name: -ua-view-transition-*`, `mix-blend-mode: plus-lighter` на old/new), авторские правила (`::view-transition-image-pair(target) { position: fixed }`) поверх; вне перехода — пусто; `document.getAnimations()` / `getAnimations({subtree: true})` показывают анимации групп/old/new (`pseudo-element-animations.html`, `computed-style-no-active-transition.html`). Имена берутся из `_lumen_vt_named_elements` старого и нового состояния; `compute_view_transition_pseudo_style` уже даёт авторскую часть, UA-часть нужно добавить. (2) **`finished` по концу анимации:** сейчас он разрешается задачей после `ready` (и после `waitUntil`), а кросс-фейд идёт в шелле ещё до 300 мс; нужен обратный канал шелл → JS «переход закончен» (тогда `document.activeViewTransition` живёт, пока идёт анимация). (3) **События `pagereveal`/`pageswap`** не отправляются (интерфейсы и `onpagereveal`/`onpageswap` есть): навигация, в связке с P3-viewtransnav, BUG-945 (`navigation/pagereveal-*`, `pageswap-*`, 44 TIMEOUT). (4) `view-transition-class` / `view-transition-group` и `::view-transition-group(*.class)` не разбираются — строки CSS-SPECS.md для P4, не здесь. Критерий готовности: `pseudo-get-computed-style.html`, `pseudo-element-animations.html`, `computed-style-no-active-transition.html`, `navigation/pagereveal-with-view-transition.html` зелёные.",
+     "bugs": [
+      "BUG-1509",
+      "BUG-1510",
+      "BUG-945"
+     ]
+    },
+    {
+     "id": "CQ-SCROLL-STATE-2",
+     "title": "CQ-SCROLL-STATE-2: инвалидация по прокрутке, scrolled/stuck/snapped, прокрутка страницы",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток CQ-SCROLL-STATE (76 из 237 субтестов `container-queries/scroll-state/`). (1) **Инвалидация по прокрутке:** состояния считаются один раз за проход `apply_container_styles` по `scroll_x/y` свежей раскладки; прокрутка (колесо, клавиши, `scrollTop`) запрос не пересчитывает — `scrollable: top/bottom` после прокрутки, `scroll-state-scrollable-change`, `-container-type-change`. Нужен пересчёт стиля только scroll-state-контейнеров по смене смещения без полной раскладки (ориентир — `refresh_anchor_scroll`) и сигнал оболочке/JS-флашу о смене. (2) **`scrolled`:** сейчас всегда `none`; нужно направление последней *пользовательской* прокрутки (колесо, клавиши, перетаскивание, касание, полоса прокрутки; программные `scrollTo`/`scrollTop` не считаются — это уже верно) — `scroll-state-scrolled-*`, 16 id. (3) **`stuck`:** липкий бокс (`position: sticky`, BUG-1468), сдвиг от `compute_sticky_offset` относительно скроллпорта, начальное состояние, `writing-mode` — `scroll-state-stuck-*`, `initially-stuck`. (4) **`snapped`:** выбранная снап-позиция по осям, `initially-snapped` (прокрутка к якорю на старте), `snapped-*`. (5) **Прокрутка страницы:** контейнер — `html`/`body` с `overflow`, ушедшим во вьюпорт: `scrollable-root`, `scrollable-body-001/002`. (6) Цели-псевдоэлементы `::before` (`scrollable-pseudo`, `snapped-pseudo`, `stuck-pseudo`); `query-with-var` (3 из 6: `var()` с запасным значением, зарегистрированные свойства). (7) Соседнее: `container-type` в `element.style` не проверяется и не канонизируется (`container-type-scroll-state-parsing`, 4 из 6: `scroll-state inline-size` → `inline-size scroll-state`, повтор и `normal scroll-state` невалидны); шорткат `container` в `getComputedStyle` (BUG-1514). (8) Ограничения среза 1: в scroll-state-only контейнере поддерево перестилизуется, но не перекладывается (правила, меняющие геометрию, раскладку не двигают); сегменты инлайн-текста держат собственный стиль, поэтому правило `@container` на инлайн-элементе видно в `getComputedStyle`, но в растр оно, возможно, не попадает — проверить `color` на `span` с текстом в контейнере. Критерий готовности: `scroll-state-scrollable-change.html`, `scroll-state-scrolled-wheel-scroll.html`, `scroll-state-initially-stuck.html`, `scroll-state-initially-snapped.html`, `scroll-state-scrollable-root.html` зелёные.",
+     "bugs": [
+      "BUG-1512",
+      "BUG-1514",
+      "BUG-1468"
+     ]
+    },
+    {
+     "id": "SHAPE-OUTSIDE-3",
+     "title": "SHAPE-OUTSIDE-3: ряды inline-block у контура, <br>",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток SHAPE-OUTSIDE-2 (120 `thick` из 221 в `css-shapes/shape-outside`). (1) **Ряды `inline-block` рядом с контуром** (72 id: `shape-box/*-border-radius-*`, `supported-shapes/*`, `gradients/…-004`): `BoxKind::InlineBlockRow` в `layout_dispatch.rs` расставляет детей по x, ни разу не спрашивая `FloatContext` (у вертикального режима для этого есть `vertical_row.rs` + `FloatContext::line_band`); нужно для каждой строки ряда брать полосу `line_band(y, y + высота строки, …)`, начинать с её левого края и переносить ребёнка, не влезающего в полосу, на ближайший `y`, где он влезает. (2) **BUG-1411** — ведущие и подряд идущие `<br>` не дают строки (42 id с `<br/>` после float, в том числе `circle-026`); подмена `<br/>` на блок высотой 40px даёт верный результат для `circle-026` (зелёный квадрат слева от синей линии, красного нет), значит контур правильный, мешает только `<br>`. (3) Типизированный `ShapeOutside` вместо `Value(String)`: невалидное значение должно отбрасываться при разборе (каскад оставляет предыдущее), сейчас оно доходит до layout и там даёт «не форма». (4) Образы: `url()`, заданный скриптом после загрузки (`spawn_dynamic_background_image_loads` собирает только фоны), `image-set()`, корневые `/images/…` под `file://` (`shape-image-004`, `-011`); `shape-image-000` — картинка из data-URL не совпала с эталоном (глазами верно, разобрать эталон). Критерий готовности: `shape-box/shape-outside-border-box-border-radius-001.html`, `supported-shapes/circle/shape-outside-circle-026.html` зелёные; A/B `css-shapes/shape-outside` (рецепт — `tests/wpt/reftest_pixdiff.py --ahem --viewport 800x600`): identical ≥ 160 из 221.",
+     "bugs": [
+      "BUG-1518",
+      "BUG-1519",
+      "BUG-1411"
+     ]
     }
    ],
    "date": "2026-06"
@@ -2597,7 +2678,7 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "done",
+     "status": "active",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
@@ -2727,6 +2808,13 @@
        "status": "done",
        "size": "S",
        "note": "DONE 2026-08-02 (P1): `V8JsRuntime::set_deterministic_mode(on, rng_seed, monotonic_clock)` — `--rng-seed` overrides the URL-hash `Math.random` seed, `--monotonic-clock` advances `Date.now()`/`performance.now()` by 1ms per call off one shared counter instead of staying frozen at 0. `DetConfig` threaded as a `Copy` struct through `WinitSession`'s two runtime-creation sites (fresh load + bfcache thaw) in place of a bare bool. QuickJS rollback path untouched (CLAUDE.md policy). See docs/tasks/p1-introspection-track.md §DEVX-16"
+      },
+      {
+       "id": "DEVX-20",
+       "title": "DEVX-20: BiDi responseStarted/continueResponse и верификация storage.*",
+       "status": "planned",
+       "size": "M",
+       "note": "Хвосты BiDi (остаток BUG-295): пауза фазы `responseStarted` в `crates/network/src/intercept.rs` + живое действие `network.continueResponse` (`protocol.rs:693`); `authRequired`/`continueWithAuth` — реализовать или честный `unsupported operation` вместо молчаливого success; верификация `storage.getCookies|setCookie|deleteCookies` против живого окна (сценарии рядом с `verify_devx6_bidi_scenarios.py`); снять строки «accepted-and-stored only» в `docs/automation.md` в том же коммите. Бриф [docs/tasks/DEVX-20.md](docs/tasks/DEVX-20.md)"
       }
      ]
     },
@@ -5916,6 +6004,20 @@
        "status": "done",
        "size": "M",
        "note": "--ipc становится захватом по умолчанию, gdigrab остаётся только для GPU_CAPTURE. Отдельная таблица должников для ipc, разжалованы 135 и 136. Готово после полного прогона в foreground и сверки с results/20260919-131021.json и -133745.json. Зависит от S1. Бриф [docs/tasks/TEST-9-S2.md](docs/tasks/TEST-9-S2.md)"
+      },
+      {
+       "id": "TEST-10",
+       "title": "TEST-10: сводный отчёт качества с дельтами по подсистемам",
+       "status": "planned",
+       "size": "M",
+       "note": "Сводный отчёт качества: `scripts/quality_report.py` сводит свежий и предыдущий прогоны (`docs/wpt/runs/*.json`, `graphic_tests/results/*.json`, открытые баги `BUGS.md`) в `docs/quality-report.md` + JSON-срез `docs/quality/runs/`. Раздельные счётчики PASS/FAIL/CRASH/TIMEOUT/UNSUPPORTED, дельта к прошлому прогону по подсистемам, раздел «Просадки», топ-5 багов по числу заблокированных тестов. Раннеры не трогать — только читать их выход. Бриф [docs/tasks/TEST-10.md](docs/tasks/TEST-10.md)"
+      },
+      {
+       "id": "TEST-11",
+       "title": "TEST-11: geometry/computed-styles diff против Chrome на реальных сайтах",
+       "status": "planned",
+       "size": "M",
+       "note": "Differential-срез против Chrome: `scripts/geom_diff.py` инжектит один JS-сниппет в Lumen (BiDi `script.evaluate`, viewport 1280×720) и Chrome (CDP, обвязка как `compat_ab_chrome.py`), сравнивает `getBoundingClientRect` (порог 4px) и срез computed styles видимых элементов на ~20 сайтах перф-корпуса; несматченные узлы — секция «дерево разошлось». Отчёт `docs/quality/geom-diff-<дата>.md`; находки группируются по первопричине в BUG-NNN (фиксы вне задачи). Движок/bidi-server не трогать. Бриф [docs/tasks/TEST-11.md](docs/tasks/TEST-11.md)"
       }
      ]
     },
@@ -6548,9 +6650,9 @@
       {
        "id": "CSSOM-10",
        "title": "CSSOM-10: CSSOM для at-правил и вложенных правил",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "CSSOM для at-правил (CSSOM §6.4, CSS Cascade L5/L6, CSS Nesting 1): `CSSStyleSheet.insertRule`/`cssRules` знают только обычные правила и `@media` — `@layer`, `@import`, `@scope`, `@supports`, `@container`, `@font-face`, `@keyframes`, `@property`, `@namespace`, `@page` бросают `SyntaxError` при вставке, а в `cssRules` пропадают (лист, состоящий из одного `@layer`, — `cssRules.length === 0`); вложенные правила разворачиваются при разборе в плоские (`#y{color:red; & b{…}}` → два верхнеуровневых `CSSStyleRule`, у первого нет `cssRules`); глобалов `CSSGroupingRule`, `CSSLayerBlockRule`, `CSSLayerStatementRule`, `CSSScopeRule`, `CSSNestedDeclarations`, `CSSImportRule.layerName` нет. Нужно: расширить реестр правил листа (`lumen_css_parser::StylesheetNodeEntry`) вариантами at-правил, сериализацию `cssText`, вложенные списки (`cssRules`, `insertRule`/`deleteRule` внутри группирующего правила), классы и прототипную цепочку (`CSSGroupingRule` ← `CSSMediaRule`/`CSSSupportsRule`/`CSSLayerBlockRule`/`CSSScopeRule`/`CSSStyleRule`), `selectorText`-сеттер у вложенных. Продолжение CSSOM-8 (запись для собственных листов). Смежно: BUG-1220 (`insertRule` бросает `SyntaxError` на странице `/calendar`). Масштаб: 18 id и 203 из 225 сабтестов среза S20 (`css-cascade/layer-cssom-order-reverse`, `scope-cssom`, `all-prop-revert-layer`, `idlharness`, `css-nesting/cssom`, `nested-declarations-cssom*`, `serialize-group-rules-with-decls`, `layer-rules-cssom`) + 7 id с `the supplied text is not a valid rule` (46 сабтестов); кластер — `docs/wpt-vendor-notes/css.md` §selectors + css-pseudo + css-nesting + css-namespaces + css-cascade (WPT-RUN-14 S20, 2026-10-08). Критерий готовности: `css-cascade/layer-cssom-order-reverse.html`, `css-nesting/cssom.html`, `css-cascade/scope-cssom.html` зелёные.",
+       "note": "**Сделано (2026-10-21, ветка `p1-cssom-10`):** отдельное иерархическое дерево CSSOM (`crates/engine/css-parser/src/cssom_tree*`, `Stylesheet::cssom_*`) стало источником истины для `cssRules`/`insertRule`/`deleteRule`/сеттеров владельческих и конструируемых листов; JS-слой переписан на него (`_lumen_cssom_*`, иерархия `CSSGroupingRule`/`CSSConditionRule`/`CSSLayerBlockRule`/`CSSLayerStatementRule`/`CSSScopeRule`/`CSSNestedDeclarations`/`CSSImportRule.layerName`…, идентичность обёрток, `cssText` в формате Chrome); правки доходят до каскада (`CssomOp::TreeEdit`, `sheet_sync::patched_cascade`). Критерий выполнен: `css-nesting/cssom.html`, `css-cascade/layer-cssom-order-reverse.html`, `scope-cssom.html` зелёные; css-nesting 100/117 (было 12/85), css-cascade 700 (было 400), cssom 2471 (было 2059). Остаток — отдельные дефекты соседних областей (сопоставление вложенных деклараций, `:scope`-селекторы в `querySelector`). Исходное описание: CSSOM для at-правил (CSSOM §6.4, CSS Cascade L5/L6, CSS Nesting 1): `CSSStyleSheet.insertRule`/`cssRules` знают только обычные правила и `@media` — `@layer`, `@import`, `@scope`, `@supports`, `@container`, `@font-face`, `@keyframes`, `@property`, `@namespace`, `@page` бросают `SyntaxError` при вставке, а в `cssRules` пропадают (лист, состоящий из одного `@layer`, — `cssRules.length === 0`); вложенные правила разворачиваются при разборе в плоские (`#y{color:red; & b{…}}` → два верхнеуровневых `CSSStyleRule`, у первого нет `cssRules`); глобалов `CSSGroupingRule`, `CSSLayerBlockRule`, `CSSLayerStatementRule`, `CSSScopeRule`, `CSSNestedDeclarations`, `CSSImportRule.layerName` нет. Нужно: расширить реестр правил листа (`lumen_css_parser::StylesheetNodeEntry`) вариантами at-правил, сериализацию `cssText`, вложенные списки (`cssRules`, `insertRule`/`deleteRule` внутри группирующего правила), классы и прототипную цепочку (`CSSGroupingRule` ← `CSSMediaRule`/`CSSSupportsRule`/`CSSLayerBlockRule`/`CSSScopeRule`/`CSSStyleRule`), `selectorText`-сеттер у вложенных. Продолжение CSSOM-8 (запись для собственных листов). Смежно: BUG-1220 (`insertRule` бросает `SyntaxError` на странице `/calendar`). Масштаб: 18 id и 203 из 225 сабтестов среза S20 (`css-cascade/layer-cssom-order-reverse`, `scope-cssom`, `all-prop-revert-layer`, `idlharness`, `css-nesting/cssom`, `nested-declarations-cssom*`, `serialize-group-rules-with-decls`, `layer-rules-cssom`) + 7 id с `the supplied text is not a valid rule` (46 сабтестов); кластер — `docs/wpt-vendor-notes/css.md` §selectors + css-pseudo + css-nesting + css-namespaces + css-cascade (WPT-RUN-14 S20, 2026-10-08). Критерий готовности: `css-cascade/layer-cssom-order-reverse.html`, `css-nesting/cssom.html`, `css-cascade/scope-cssom.html` зелёные.",
        "bugs": [
         "BUG-1455"
        ]
@@ -6558,9 +6660,19 @@
       {
        "id": "CSSOM-11",
        "title": "CSSOM-11: CSSPseudoElement и Element.pseudo()",
+       "status": "done",
+       "size": "M",
+       "note": "**Сделано (2026-10-21, ветка `p1-cssom-11`):** `CSSPseudoElement` и `Element.prototype.pseudo(type)` (`crates/js/src/shim/pseudo_element_shim.js`): один объект на (элемент, тип) — `el.pseudo('::before') === el.pseudo('::before')`, `type`/`element`/`parent`/`selectorText`, `::first-line`/`::first-letter`/без `::` → `null`, цепочка `::view-transition` → `-group()` → `-image-pair()` → `-old()`/`-new()`; геометрия — `getBoundingClientRect`/`getClientRects`/`getBoxQuads({box, relativeTo})` и `convertPointFromNode`/`convertRectFromNode`/`convertQuadFromNode` из таблицы боксов псевдоэлементов (`lumen_layout::collect_pseudo_rects`, нативная `_lumen_get_pseudo_geometry`, собирается только после первого обращения). Попутно исправлены два дефекта раскладки: `::before`/`::after` с `display: none` строили бокс (`inject_pseudo`), а плавающий/абсолютно позиционированный псевдоэлемент с исходным `display: inline` не блокифицировался и оставался текстом в строке владельца. WPT `css-pseudo`: `CSSPseudoElement-identity`, `-convertPoint.tentative`, `-getBoxQuads.tentative` зелёные, `-geometry-edge-cases.tentative` 22/23, `-view-transitions.tentative` 1/4; остаток — CSSOM-12.",
+       "bugs": [
+        "BUG-1456"
+       ]
+      },
+      {
+       "id": "CSSOM-12",
+       "title": "CSSOM-12: событийная модель и остаток геометрии CSSPseudoElement",
        "status": "planned",
        "size": "M",
-       "note": "`CSSPseudoElement` и `Element.pseudo(type)` (CSS Pseudo-Elements 4 §3, `Element.getPseudoElements()`): интерфейса нет вовсе — `typeof el.pseudo`, `typeof CSSPseudoElement`, `typeof window.getPseudoElements` — `undefined`. Нужно: объект-обёртка с `element`, `type`, геометрией (`getBoundingClientRect`, `getClientRects`, `getBoxQuads`, `convertPointFromNode`), идентичностью (`el.pseudo('::before') === el.pseudo('::before')`), целью событий (`mouseover`/`click` по псевдоэлементу, `hover` — состояние), `view-transition`-псевдоэлементы. Масштаб: 12 id, 72 из 80 сабтестов (`CSSPseudoElement-convertPoint.tentative` 7/7, `-geometry-edge-cases.tentative` 23/23, `-getBoxQuads.tentative` 8/8, `-identity`, `events-on-pseudo-element*.tentative`, `hover-on-pseudo-elements.tentative`, `idlharness` частично); кластер — `docs/wpt-vendor-notes/css.md` §selectors + css-pseudo + css-nesting + css-namespaces + css-cascade (WPT-RUN-14 S20, 2026-10-08). Критерий готовности: `CSSPseudoElement-identity.html`, `CSSPseudoElement-convertPoint.tentative.html` зелёные.",
+       "note": "Остаток `CSSPseudoElement` после CSSOM-11 (CSS Pseudo-Elements 4 §3, UI Events): (1) цель событий — `event.pseudoTarget` у `mouseover`/`mouseout`/`click`/`dblclick`/`pointer*`/`wheel`/`scroll`/`focus*`/`animation*`/`transition*` и сам `CSSPseudoElement` как `EventTarget` (`events-on-pseudo-element.tentative`, `-mutation.tentative`, `-on-after-before-marker.tentative`), `:hover` на псевдоэлементе (`hover-on-pseudo-elements.tentative`) — hit-test должен вернуть пару (элемент, псевдоэлемент), сейчас видит только владельца; (2) живое дерево `::view-transition*` под `startViewTransition` (`CSSPseudoElement-view-transitions*.tentative`, `events-on-view-transition-pseudos.tentative`): `pseudo()` сейчас строит цепочку по имени, не сверяясь с активным переходом, и не знает имён из захвата; (3) пустой inline `::before` (`content: ''`, `display: inline`) без бокса — `getBoxQuads()` пуст, а должен дать нулевой прямоугольник в позиции вставки (`CSSPseudoElement-geometry-edge-cases.tentative`, «zero-size»); inline-псевдоэлемент с текстом тоже не имеет бокса (его фрагменты не несут вид псевдоэлемента) — нужны прямоугольники строк; (4) квадры — осевые: собственный `transform` даёт AABB, `rotate(45deg)` не даёт повёрнутый четырёхугольник; (5) `idlharness.html` использует устаревший `window.getPseudoElements`/`CSSPseudoElementList` — вне плана, пока IDL не обновят. Критерий готовности: `events-on-pseudo-element.tentative.html`, `hover-on-pseudo-elements.tentative.html`, `CSSPseudoElement-geometry-edge-cases.tentative.html` зелёные.",
        "bugs": [
         "BUG-1456"
        ]
@@ -8919,9 +9031,9 @@
         {
          "id": "COMPAT-CORPUS-2-BASE",
          "title": "Первая база CPR корпуса C с двух точек",
-         "status": "planned",
+         "status": "done",
          "size": "S",
-         "note": "Корпус C (COMPAT-CORPUS-2) готов, но по нему ничего не прогнано. Объём: первый прогон 500 сайтов с точки «резидентный IP РФ» и с зарубежной точки (`scripts/corpus_c.py run --point ru|abroad`, потребитель — scripts/compat_crawl.py из COMPAT-CORPUS-1), CPR-RU/CPR-Global и разрыв по отказам записать в docs/perf/journal.md. Блокеры: COMPAT-CORPUS-1; машина и IP — решение владельца (COMPAT-BIZ), живой прогон требует окна на переднем плане. Приёмка: база CPR на 500 сайтах с обеих точек в журнале. Источник: docs/research/site-compat/report.md §7.7 этап 1 п.10."
+         "note": "ЗАКРЫТ 2026-10-20 (ветки p2-compat-corpus-2-base и p2-compat-corpus-2-base-ru): база CPR на 500 главных страницах корпуса C с обеих точек, один проход, одна сборка Lumen (8778cac44), записи в docs/perf/journal.md. **abroad** (VPN, Таллин): CPR 5,9 % (RU 11,8 %, global 2,0 %); **ru** (резидентный IP РФ, МТС): CPR 15,2 % (RU 12,8 %, global 17,2 %, эталон не открыл 66 сайтов). Разрыв: CPR-RU от точки не зависит (±1 п. п.); CPR-Global точки ru завышен симметричной гео-блокировкой (Chrome и Lumen получают одну страницу отказа) — для global брать точку abroad; гипотеза «TIMEOUT в global из-за VPN» не подтверждена (105 из 300 напрямую против 107 через VPN). Порог флапов ≤5 % не проверен (`--no-rerun`). Приёмка: база CPR на 500 сайтах с обеих точек в журнале — выполнена. Источник: docs/research/site-compat/report.md §7.7 этап 1 п.10."
         },
         {
          "id": "COMPAT-CORPUS-5",
@@ -8935,7 +9047,14 @@
          "title": "Корпус S: ≥40 сквозных сценариев и SPR-w",
          "status": "planned",
          "size": "L",
-         "note": "Раннера сценариев нет: E2E-1…4 — только локальные стенды (samples/e2e4-hydration); MCP даёт navigate/click/type/wait/eval (crates/mcp/src/server.rs:646-758), но не переключает и не закрывает вкладки, BiDi create/close в живом окне не проверены (docs/automation.md:123) — а это попап OAuth и окно 3DS. Объём: формат сценария (шаги, оракул конца, вес 3/2/1), ≥40 сценариев RU+EN (вход Google/Яндекс/VK/ЕСИА до пароля, банк, 3DS в песочницах эквайеров, видео, почта, загрузка файла), ≥10 автоматических ночью, SPR-w; крах = провал. Аккаунты — владелец. Приёмка: база SPR-w на ≥40, у каждого провала распознанный экран. Источник: docs/research/site-compat/report.md §7.8, §8.8. СРЕЗ 1 СДЕЛАН (2026-10-14, ветка p2-compat-corpus-3): scripts/compat_scenarios.py (формат TOML, раннер через MCP, плечо Chrome `--ref`, SPR-w, распознавание экрана провала) + тесты + 2 стенда самопроверки. СРЕЗ 2 СДЕЛАН (2026-10-15, ветка p2-compat-corpus-3-s2): корпус docs/perf/scenarios/{login,bank-pay-gov,media-mail-docs,web,handoffs}.toml — 58 сценариев в SPR-w (RU/EN поровну; вход, банки, оплата, госуслуги, видео, почта, документы, файл, поиск, новости, магазины, карты, соцсети) и 5 плановых передач, 46 ночных; калибровка по Chrome (`--chrome-only --headless`, новый ключ): 47 из 57 исполненных проходят, остальные — `manual` с причиной; стенд 3DS с кадром ACS и postMessage (stand-3ds-iframe); docs/compat-scenarios.md (формат, правила оракула, границы), строка в docs/INDEX.md, запись в docs/perf/journal.md, тесты корпуса. ОСТАЛОСЬ: (1) база SPR-w Lumen — живое окно не отдаёт кадр до конца `wait` (BUG-1629, OPEN; на сборке 14.10 все стенды `hang`), после его исправления: `python scripts/compat_scenarios.py --ref --nightly --exe <свежий lumen.exe>`, база и распознанные экраны провалов — в docs/perf/journal.md; (2) шаги смены вкладки для попапов OAuth и 3DS требуют расширения MCP (list_tabs/switch_tab/close_tab, crates/mcp/src/server.rs:646) — отдельная задача; (3) повторная калибровка `manual`-сценариев (узлы Яндекс/Wildberries) с другой точки сети."
+         "note": "Раннера сценариев нет: E2E-1…4 — только локальные стенды (samples/e2e4-hydration); MCP даёт navigate/click/type/wait/eval (crates/mcp/src/server.rs:646-758), но не переключает и не закрывает вкладки, BiDi create/close в живом окне не проверены (docs/automation.md:123) — а это попап OAuth и окно 3DS. Объём: формат сценария (шаги, оракул конца, вес 3/2/1), ≥40 сценариев RU+EN (вход Google/Яндекс/VK/ЕСИА до пароля, банк, 3DS в песочницах эквайеров, видео, почта, загрузка файла), ≥10 автоматических ночью, SPR-w; крах = провал. Аккаунты — владелец. Приёмка: база SPR-w на ≥40, у каждого провала распознанный экран. Источник: docs/research/site-compat/report.md §7.8, §8.8. СРЕЗ 1 СДЕЛАН (2026-10-14, ветка p2-compat-corpus-3): scripts/compat_scenarios.py (формат TOML, раннер через MCP, плечо Chrome `--ref`, SPR-w, распознавание экрана провала) + тесты + 2 стенда самопроверки. СРЕЗ 2 СДЕЛАН (2026-10-15, ветка p2-compat-corpus-3-s2): корпус docs/perf/scenarios/{login,bank-pay-gov,media-mail-docs,web,handoffs}.toml — 58 сценариев в SPR-w (RU/EN поровну; вход, банки, оплата, госуслуги, видео, почта, документы, файл, поиск, новости, магазины, карты, соцсети) и 5 плановых передач, 46 ночных; калибровка по Chrome (`--chrome-only --headless`, новый ключ): 47 из 57 исполненных проходят, остальные — `manual` с причиной; стенд 3DS с кадром ACS и postMessage (stand-3ds-iframe); docs/compat-scenarios.md (формат, правила оракула, границы), строка в docs/INDEX.md, запись в docs/perf/journal.md, тесты корпуса. СРЕЗ 3 СДЕЛАН (2026-10-20, ветка p2-compat-corpus-3-s3): **база SPR-w Lumen = 38,4 % (вес 38 из 99), 17 из 44 исполненных сценариев** (RU 31 %, EN 45 %), у каждого из 27 провалов распознанный экран (`content` 17, `hang` 4, `cert_error` 3, `blank` 2, `wall` 1) и кадр; маршрут: RU напрямую, иностранные через proxy; раннер: ошибка JS в оракуле — промах, «поток движка занят» — `hang`, класс `cert_error`, ключи `--lang`/`--lumen-arg`; журнал docs/perf/journal.md, заведён BUG-1660 (`.mp4`/`.webm` на верхнем уровне — текст из байтов). ОСТАЛОСЬ: (1) шаги смены вкладки для попапов OAuth и 3DS — COMPAT-CORPUS-3-TABS; (2) повторная калибровка `manual`-сценариев (узлы Яндекс/Wildberries) с другой точки сети; (3) ночной прогон по расписанию с парой `--lang`-проходов; (4) банковские сценарии упираются в согласие на цепочку НУЦ (раннер согласия не даёт) — решить, как сеять согласие в профиль прогона"
+        },
+        {
+         "id": "COMPAT-CORPUS-3-TABS",
+         "title": "Смена вкладок в MCP и раннере",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-10-20 (ветка p2-compat-corpus-3-tabs): MCP `list_tabs`/`switch_tab`/`close_tab` (id — стабильный `TabEntry::id`), шаги раннера `switch_tab` (url/index) и `close_tab`, стенды `stand-oauth-popup` и `stand-3ds-newtab` проходят и на живом окне Lumen, и в Chrome; в корпусе `login-popup.toml` 5 сценариев «Google во всплывающем окне» (Disqus, Imgur, Wattpad, Webflow, Glassdoor; Chrome — 5/5, Lumen 2026-10-20 — Imgur проходит, остальные — дефекты сайтов/движка: перехват клика Disqus, ERR_CONTENT_DECODING_FAILED Wattpad, зависание Webflow, согласие Glassdoor). Было: Остаток COMPAT-CORPUS-3: MCP не переключает и не закрывает вкладки (crates/mcp/src/server.rs: есть `new_tab`, нет `list_tabs`/`switch_tab`/`close_tab`; драйвер — crates/driver/src/live_session.rs:255), а попап OAuth и окно 3DS открываются во второй вкладке. Сделать: три инструмента MCP поверх вкладок живого окна (`list_tabs` → id/url/title/active, `switch_tab`, `close_tab`), шаги раннера `switch_tab` (по regex адреса или номеру) и `close_tab` в scripts/compat_scenarios.py + формат в docs/compat-scenarios.md, 2 стенда (попап с `window.open` и postMessage; 3DS в новой вкладке), тесты. Приёмка: оба стенда проходят на живом окне; в корпус добавлено ≥ 4 сценария «вход через Google/VK во всплывающем окне». Источник: docs/compat-scenarios.md §Границы."
         }
        ]
       },
@@ -10019,13 +10138,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1299": {
-   "status": "open",
-   "title": "`background-repeat` с двумя значениями (`repeat no-repeat`, `space no-repeat`, `round repeat`) не разбирается — слой остаётся `repeat`. WPT `css/css-backgrounds…",
-   "component": "css-parser/layout (`crates/engine/layout/src/style/values/background.rs:215` — `enum BackgroundRepeat`, один на обе оси)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1300": {
    "status": "open",
    "title": "Фон на холсте: явный `transparent`/`none` на `<html>` отключает распространение фона `<body>`; градиент/картинка `<html>` рисуются в боксе корня, а не на холсте…",
@@ -10033,80 +10145,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1301": {
-   "status": "open",
-   "title": "`initial`/`inherit`/`unset`/`revert` на `background-size",
-   "component": "layout (`crates/engine/layout/src/style/apply/css_wide.rs:1209` — один арм на все `background-*` longhand'ы)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1302": {
-   "status": "open",
-   "title": "Внешняя `box-shadow` не вырезается по границе бокса: сквозь `rgba`-фон и между линиями `double`-рамки виден цвет тени, тень `<body>` заливает внутренность; на `…",
-   "component": "paint (`crates/engine/paint/src/display_list/box_shadow.rs::emit_box_shadows`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1303": {
-   "status": "open",
-   "title": "Плитки `background-image` не выходят за позиционирующую область: при `background-origin: padding-box",
-   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, сетка плиток; wgpu не проверялось)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1305": {
-   "status": "open",
-   "title": "Web Animations: неявный («neutral») ключевой кадр, шорткод `border-width`, `background-size` и `box-shadow` не интерполируются (на 30 % — начальное/конечное зна…",
-   "component": "layout (`crates/engine/layout/src/animation.rs` — сборка ключевых кадров и интерполятор)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1306": {
    "status": "open",
    "title": "`offsetWidth`/`getBoundingClientRect` читаются из устаревшего снимка: после загрузки `@font-face` значение остаётся оценкой шрифта (34,1 вместо 50 у `XX` Ahem 2…",
    "component": "layout/shell (`crates/shell/src/page_pipeline.rs::collect_js_layout_snapshot` — снимок геометрии для JS)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1307": {
-   "status": "open",
-   "title": "`getComputedStyle()` не отдаёт grid-лонгхендов: `grid-template-*`, `grid-auto-*`, `grid-column/row/area`, `row-gap`/`column-gap` — `\"\"` (тот же класс, что BUG-1…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1308": {
-   "status": "open",
-   "title": "Проценты в `grid-template-rows` и `row-gap` при неопределённой высоте контейнера считаются от ширины (`60%` → 120 при ширине 200, ожидается `auto`/0). WPT `css/…",
-   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — `%` в треках и gap)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1309": {
-   "status": "open",
-   "title": "`width:max-content`/`inline-grid` не учитывают неявные столбцы (`grid-auto-flow: column` → 90 вместо 180, второй ребёнок поверх первого); `inline-grid` с `aspec…",
-   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — intrinsic-размер контейнера)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1310": {
-   "status": "open",
-   "title": "Процентные `margin`/`padding` grid-item считаются от ширины контейнера, а не grid-области (`margin-left:30%` при области 200 в контейнере 300 → 90 вместо 60). W…",
-   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — база `%` у item'а)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1360": {
-   "status": "open",
-   "title": "`position:absolute` с `left/right:auto` в контейнере `direction: rtl`: статическая позиция у левого края (`x=0`), а не у правого (`x=180` в контейнере 200 px, ш…",
-   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1371": {
-   "status": "open",
-   "title": "`unicode-bidi: bidi-override` не действует на вложенные inline (`<span>`, `<b>`), `<bdo dir=rtl>` без эффекта. 44 id `bidi-text`",
-   "component": "layout (`crates/engine/layout/src/bidi.rs`)",
    "date": null,
    "debtor": false
   },
@@ -10138,69 +10180,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1376": {
-   "status": "open",
-   "title": "CDO/CDC (`<!--`, `-->`) в таблице стилей не пропускаются как токены верхнего уровня: следующее за `<!--` правило пропадает. 4 id",
-   "component": "css-parser (`crates/engine/css-parser/src/parser.rs::parse_stylesheet`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1377": {
-   "status": "open",
-   "title": "Невалидное значение `width`/`height` не отбрасывается, а затирает прежнее: `height:20px; height:1 0px` → высота 0; `+ 10px`, `-5px`, `foo` — то же. `rgb(100%, 0…",
-   "component": "css-parser/layout (`crates/engine/layout/src/style/apply/layout.rs:293`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1378": {
-   "status": "open",
-   "title": "Имена свойств чувствительны к регистру: `COLOR:green`, `bACkGRounD:green`, `Color:green` не применяются (CSS 2.1 §4.1.3 — ASCII case-insensitive)",
-   "component": "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_declaration`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1379": {
-   "status": "open",
-   "title": "Комментарий внутри значения (`color:/*c*/green`, `color:green/*c*/;`) обрывает разбор: объявление теряется",
-   "component": "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_value_until_terminator`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1380": {
-   "status": "open",
-   "title": "CSS-escape в значениях и `url()` не декодируется: `color:\\67reen`, `\\75rl(…)` в значении, `url(support/\\'green\\ block.png)`. Идентификаторы в селекторах и имена…",
-   "component": "css-parser/layout (`crates/engine/css-parser/src/parser.rs::parse_ident` и разбор значений)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1381": {
-   "status": "open",
-   "title": "Восстановление после ошибок разбора не по CSS Syntax: `@ import` (с пробелом), незакрытая скобка в конце листа, `[`/`]`, неоконченная строка. 17 id",
-   "component": "css-parser (`crates/engine/css-parser/src/parser.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1382": {
-   "status": "open",
-   "title": "`margin-right` (и `margin-left` у первого сегмента) на `<span>` без фона/рамки/отступа не сдвигает следующий текст: `<span style=\"margin-right:40px\">x</span>y`…",
-   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs:1020-1028`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1383": {
-   "status": "open",
-   "title": "`getComputedStyle(el).gridTemplateColumns` / `gridTemplateRows` отдаёт `\"\"` вместо `none` (значение по умолчанию) и вместо разрешённых размеров дорожек (`45px 4…",
-   "component": "js/layout (`getComputedStyle(el).gridTemplateColumns` — Rust-сторона `_lumen_get_computed_style`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1384": {
-   "status": "open",
-   "title": "`css/css-grid/parsing/grid-template-columns-crash.html` (`gridTemplateColumns` = 100000 раз `repeat(1000, Npx)`, строка ≈ 2,2 МБ) не отвечает по BiDi 20 с (`LUM…",
-   "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js` + каскад — `document.body.style.gridTemplateColumns = <2 МБ>`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1385": {
    "status": "open",
    "title": "`aspect-ratio` не выводит ширину из заданной высоты: `height:100px;aspect-ratio:1/1` у блока → 800×100 (ожидается 100×100); то же у float, inline-block, flex-/g…",
@@ -10222,87 +10201,17 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1388": {
-   "status": "open",
-   "title": "`contain-intrinsic-size` при `contain:size` не даёт вклада в `max-content` родителя: `width:max-content` вокруг `contain-intrinsic-size:111px 222px` → 2×224 вме…",
-   "component": "layout (`crates/engine/layout/src/box_tree/intrinsic.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1389": {
-   "status": "open",
-   "title": "`scrollWidth`/`scrollHeight` не включают padding в конце (`padding-bottom:30px` + ребёнок 200 → 200 вместо 230) и margin flex-/grid-элемента (`margin-inline-end…",
-   "component": "layout (`crates/engine/layout/src/lib.rs:1508`, `collect_scroll_containers_for_js_state`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1390": {
-   "status": "open",
-   "title": "`overflow-clip-margin` не расширяет клип в `--dump-display-list` (`PushClipRect (30,30,100,50)` при `20px`); `CSS.supports('overflow-clip-margin','20px')` — `fa…",
-   "component": "paint (`crates/engine/paint/src/display_list/walk.rs:1242`, `box_layer.rs:128-175`) + js (`CSS.supports`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1391": {
-   "status": "open",
-   "title": "CSSOM: `min-width='none'`, `max-width='auto'`, `contain-intrinsic-size='legacy'` принимаются; `0` не канонизируется в `0px`; `5px 5px` не сворачивается в `5px`.…",
-   "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js`, `selector_query.rs::computed_style_to_map`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1392": {
-   "status": "open",
-   "title": "`el.style.webkitLineClamp = 2` пишет в атрибут `webkit-line-clamp` без ведущего дефиса, `'webkitTransform' in el.style` — `false`; `WebkitX` работает. 5 id `lin…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — camelCase → kebab у `element.style`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1394": {
    "status": "open",
-   "title": "остаток WPT `css/css-grid/subgrid` после BUG-1319: `parent-repeat-auto-fit-001/002` (вклад subgrid в `minmax(0, auto)`), `repeat-auto-fill-003/006` (вложенный s…",
+   "title": "остаток WPT `css/css-grid/subgrid` после BUG-1319 (закрыты `line-names-005/007/010`, `parent-repeat-auto-fit-001`): `parent-repeat-auto-fit-002` (auto-fit строк…",
    "component": "layout (`crates/engine/layout/src/box_tree/grid.rs`, `grid_vertical.rs`, `grid_auto_cols.rs` — subgrid: ортогональный `writing-mode`/`rtl`, `minmax()` в родителе, padding/border subgrid)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1395": {
-   "status": "open",
-   "title": "`contain: style` разбирается (`style/apply/layout.rs:913`), но ни один обход не смотрит на `ContainFlags::STYLE`: `counter-increment` внутри поддерева меняет сч…",
-   "component": "layout (`crates/engine/layout/src/counters.rs::precompute_counters`, разбор кавычек; флаг `ContainFlags::STYLE` читается только в `selector_query.rs:2080`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1396": {
-   "status": "open",
-   "title": "`contain: layout",
-   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`; `box_tree/baseline.rs`; `lib.rs:1508` `contributes_to_scrollable_overflow`), paint (`display_list/stacking`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1397": {
-   "status": "open",
-   "title": "`<img>`/`<canvas>` с `contain:size;padding:50px` остаются 160×160/70×70 (внутренний размер должен быть 0); `inline-grid;contain:size;grid:50px/100px` — 0×0 вмес…",
-   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs:512`, `grid_vertical.rs:356`, `intrinsic.rs`; `ContainFlags::INLINE_SIZE` в раскладке не читается)",
    "date": null,
    "debtor": false
   },
   "BUG-1398": {
    "status": "open",
-   "title": "фон `<body>` переносится на холст при любом `contain` у `<html>`/`<body>` (проба: 420 000 красных px при `layout`/`paint`/`size`/`style` и без `contain`), хотя…",
-   "component": "layout/paint (перенос фона корня на canvas, `crates/engine/paint/src/display_list/` — root background propagation)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1399": {
-   "status": "open",
-   "title": "`column-count:1` с `column-fill:auto` и заданной высотой не режет содержимое: ребёнок 200 px остаётся одним боксом 50×200 (при `columns:2` те же 200 px идут во…",
-   "component": "layout (`crates/engine/layout/src/box_tree/multicol_trampoline.rs`, `multicol_abspos.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1400": {
-   "status": "open",
-   "title": "у потомка элемента с `content-visibility:hidden` `getBoundingClientRect()` — `0×0`, `offsetWidth/Height` — 0, `getClientRects().length` — 0, и после правки стил…",
-   "component": "layout/js (`crates/engine/layout/src/content_visibility.rs`, `selector_query.rs` — геометрия скрытого поддерева; шим `getBoundingClientRect`)",
+   "title": "7 id `contain-{body,html}-overflow-*` падают с расхождением 120 px у текста (`x=200…221, y=2…14`): абзац «Test passes if there is no red.» в `width:200px` раскл…",
+   "component": "layout (замер текста: оценщик раскладки против глифов растра, `--screenshot`)",
    "date": null,
    "debtor": false
   },
@@ -10390,34 +10299,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1413": {
-   "status": "open",
-   "title": "Порядок листов в каскаде — «все инлайновые `<style>`, затем все `<link rel=stylesheet>`», а не порядок документа (CSS Cascade L4 §6.4.3): правило из `<style>`,…",
-   "component": "shell (`crates/shell/src/page_pipeline.rs` — сборка `css` в `build_page_cascade`; `stylesheets.rs::load_linked_stylesheets`; `relayout.rs` + `doc_extract.rs::DynamicCssBase` — пересборка)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1414": {
-   "status": "open",
-   "title": "grid-item с `width: 60px` + `padding-left: 6px` (content-box) в строке с заданной высотой трека (`grid-template-rows: 10px`) получает `rect.width = 60` вместо 6…",
-   "component": "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs` — финальная раскладка grid-item, растянутого по строке)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1415": {
-   "status": "open",
-   "title": "`scrollWidth`/`scrollHeight` grid-контейнера не учитывают треки, выровненные `justify-content`/`align-content` с переполнением (`css/css-grid/alignment/grid-con…",
-   "component": "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs`, scrollable overflow grid-контейнера)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1416": {
-   "status": "open",
-   "title": "`expand_attr_val` (`substitute.rs:1004`) после подстановки значения атрибута вызывает себя же, если в результате снова есть `attr(`; глубины и множества посещён…",
-   "component": "layout (`crates/engine/layout/src/style/substitute.rs::expand_attr_val`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1417": {
    "status": "open",
    "title": "остановки градиента вне отрезка линии (`-50px`, `150px`, `1e9px`, `-131070000px`) не продолжают интерполяцию за пределами бокса, а прижимаются к концам линии. П…",
@@ -10432,157 +10313,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1419": {
-   "status": "open",
-   "title": "`ActiveBorder`, `ActiveCaption`, `AppWorkspace`, `Background`, `ButtonHighlight`, `ButtonShadow`, `CaptionText`, `InactiveBorder`, `InactiveCaption`, `InactiveC…",
-   "component": "layout (`crates/engine/layout/src/style/` — таблица `SystemColor`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1420": {
-   "status": "open",
-   "title": "`<object data=\"full.svg\" style=\"width:48px;height:32px\">` и `<embed>` с SVG 16×8 (`viewBox 0 0 16 8`, `preserveAspectRatio=none`, зелёный прямоугольник во всю п…",
-   "component": "layout/paint (вложенный документ `<object>`/`<embed>` с SVG; standalone `.svg`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1421": {
-   "status": "open",
-   "title": "`<canvas width=16 height=8 style=\"width:48px;height:32px;object-fit:contain\">` с зелёной заливкой даёт 1536 зелёных px в (0,0)–(47,31) (холст растянут по боксу)…",
-   "component": "layout/paint (`<canvas>` как replaced-элемент, `object-fit`/`object-position`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1422": {
-   "status": "open",
-   "title": "`relative_offset(s, em, cb, viewport)` принимает одно число `cb` и использует его для обеих осей: `top:10%` у потомка контейнера 300×100 даёт смещение 30 (10 %…",
-   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs::relative_offset`, `:1887`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1423": {
-   "status": "open",
-   "title": "`html{overflow:hidden}` (или `body{overflow:hidden}`) при `position:absolute` потомке с фоном: потомок не рисуется (0 зелёных px при ожидаемых 10 000). Без `ove…",
-   "component": "layout/paint (распространение `overflow` корня на viewport)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1424": {
-   "status": "open",
-   "title": "`getComputedStyle().color` для `rgb(0 128 0 / 0.5)`, `hsl(120 100% 25% / 0.5)`, `#00800080` отдаёт `rgba(0, 128, 0, 0.502)` (Chrome — `rgba(0, 128, 0, 0.5)`: ищ…",
-   "component": "layout/js (сериализация цвета с альфой, `crates/engine/layout/src/selector_query.rs`, `web_api_shim_mid.js`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1425": {
-   "status": "open",
-   "title": "`lab(46 -50 50)`, `oklch(0.5 0.1 90)`, `color(srgb 0 0.5 0)`, `color-mix(in srgb, red, blue)`, `rgb(from rebeccapurple r g b)` читаются как `rgb(r, g, b)`; по C…",
-   "component": "layout/js (`crates/engine/layout/src/selector_query.rs` — computed `color`; `web_api_shim_mid.js` — specified-значение)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1426": {
-   "status": "open",
-   "title": "(1) комментарии `/* */` между токенами отвергают всю функцию: `hsl(120/* c */75%/* c */50%)`, `hsl(120,/* c */75%,/* c */50%,1.0)`, `rgb(0 /*c*/ 128 0)` — декла…",
-   "component": "layout/css-parser (`crates/engine/layout/src/style/parse/color.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1427": {
-   "status": "open",
-   "title": "`background-image: linear-gradient(green)` — белый пиксель (ожидается зелёный: один стоп → сплошной цвет); `radial-gradient(green)`, `repeating-linear-gradient(…",
-   "component": "layout/paint (разбор градиентов с одной остановкой)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1428": {
-   "status": "open",
-   "title": "`linear-gradient(…)`, `radial-gradient(…)`, `conic-gradient(…)` в computed `background-image` — `none` (ожидается сама функция с цветами в `rgb()`); `cross-fade…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs` — computed `background-image` и `image-set`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1429": {
-   "status": "open",
-   "title": "`@font-face{font-family:ExTest;src:url(ExTest.woff)}`, `font:80px ExTest; width:10ex` — ширина 437 px (ожидается 100 = 10·0.125·80; `ExTest` задаёт `sxHeight` =…",
-   "component": "layout/font (`crates/engine/layout/src/style/values/length.rs` — `FONT_CH_EX`/`FONT_LH`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1430": {
    "status": "open",
    "title": "`z-index: calc(1 + 2)`, `order: calc(1 + 2)`, `opacity: calc(0.5 + 0.25)`, `flex-grow: calc(1 + 2)`, `transition-delay: calc(1s + 1s)`, `animation-duration: cal…",
    "component": "layout/css-parser (`crates/engine/layout/src/style/parse/` — `calc()`/`min()`/`round()`… в нечисловых контекстах; `selector_query.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1431": {
-   "status": "open",
-   "title": "`<div style=\"width:300px\"><p style=\"margin:1% 0 0 0\">` — отступ 8 (1 % от 800, ширины окна), ожидается 3 (1 % от 300); с `calc(10px + 1%)` — 18 вместо 13. У вто…",
-   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs::collapsed_top_margin`, `:149–157`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1432": {
-   "status": "open",
-   "title": "градиент с `in display-p3`, `in a98-rgb`, `in rec2020`, `in prophoto-rgb` даёт один и тот же пиксель во всей полосе (`(0,58,140)` и в x=5, и в x=90; для `green…",
-   "component": "layout/paint (`style/parse/gradient*.rs`, `style/values/color_mix.rs` — предопределённые цветовые пространства)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1433": {
-   "status": "open",
-   "title": "`background-image: url('g.png' referrer-policy(origin))` разбирается как `src=\"g.png' referrer-policy(origin)\"` (кавычка и модификатор не отделяются; `--dump-di…",
-   "component": "css-parser/layout/shell (`crates/engine/layout/src/style/parse/` — разбор `url()` с `<request-url-modifier>`; `crates/shell/src/subresources.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1434": {
-   "status": "open",
-   "title": "`lch(100% 110 60)` рисуется `(255,208,50)` (должно быть белым: CSS Color 4: при `L = 100%` результат — белый при любых `C`/`h`), `lch(0% 110 60)` — `(75,0,0)` (…",
-   "component": "layout (`crates/engine/layout/src/style/values/color.rs` — перевод `lab`/`lch`/`oklab`/`oklch` в sRGB)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1435": {
-   "status": "open",
-   "title": "`getComputedStyle(el).getPropertyValue(<свойство>)` — пустая строка для `rotate` (`rotate:45deg` читается `''`), `scale` (`scale:2` → `''`), `translate`, `tab-s…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1436": {
-   "status": "open",
-   "title": "`repeating-radial-gradient(closest-corner circle at 9999…999%, green, green)` (позиция из 100 девяток) на `300×300` бокс: `--screenshot` завершается `Ошибка --s…",
-   "component": "paint (`--screenshot` / CPU-растр; ошибка «degenerate radial gradient»)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1437": {
-   "status": "open",
-   "title": "после BUG-1325 `tab-size`, `text-indent hanging/each-line`, `text-align-last`, `line-break`, `hyphens` видны в `getComputedStyle()`, и WPT-тесты анимаций, прохо…",
-   "component": "layout (`crates/engine/layout/src/animation.rs`, `style/pseudo.rs` — анимация/переход свойств CSS Text и `::first-line`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1438": {
-   "status": "open",
-   "title": "проценты в `letter-spacing`/`word-spacing` (CSS Text L4: `110%`, `calc(10% - 20%)`) и числовой `calc()` в `tab-size` (`calc(10 + (sign(2cqw - 10px) * 5))` → `5`…",
-   "component": "layout (`crates/engine/layout/src/style/apply/text.rs` — `letter-spacing`/`word-spacing`/`tab-size`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1439": {
-   "status": "open",
-   "title": "`CSSStyleSheet`, оторванный от документа (`<style>` снят через `removeChild`), теряет правила: `insertRule` бросает `IndexSizeError`. `const {sheet} = style` у…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js:12069-12086` — `_lumen_make_css_style_sheet`, `cur()`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1440": {
-   "status": "open",
-   "title": "`ParentNode.append/prepend/replaceChildren` и `ChildNode.before/after/replaceWith` с `DocumentFragment` ничего не вставляют. `el.append(fragment)`, `prepend`, `…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `append` `:8772`, `prepend` `:8755`, `before` `:8694`, `after` `:8709`, `replaceWith` `:8729`, `replaceChildren` `:8851`; у `DocumentFragment` — `:3736-3758`)",
    "date": null,
    "debtor": false
   },
@@ -10604,27 +10338,6 @@
    "status": "open",
    "title": "Сериализация `:nth-child()` неканонична (`1n` вместо `n`, `-1n+3` вместо `-n+3`), а число за пределами `i32` обнуляет аргумент: `:nth-child(99999999999)` → `:nt…",
    "component": "css-parser (`crates/engine/css-parser/src/parser/selectors.rs` — `nth_to_css_str` `:649`, разбор An+B)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1444": {
-   "status": "open",
-   "title": "`:has()` с составным относительным селектором (`:has(> .a > .b)`, `:has(+ .a + .c)`, `:has(~ .a .t)`) не привязан к субъекту: проверяется только правый компаунд…",
-   "component": "layout (`crates/engine/layout/src/style/matching/forms.rs::matches_relative` `:1004`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1445": {
-   "status": "open",
-   "title": "Вложенные правила, где `&` не стоит первым (`.t &`, `div &`, `.r&`, `:not(&)`), и вложенный голый тип (`.p { div {…} }`) отбрасываются; `&` на верхнем уровне и…",
-   "component": "css-parser/layout (вложенные правила: `crates/engine/css-parser/src/parser/` — разбор nested rule; `&` вне первого компаунда)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1446": {
-   "status": "open",
-   "title": "`::marker`: `getComputedStyle(li, '::marker')` отдаёт значения элемента, а не маркера (`content: normal`, `display: list-item`, `unicode-bidi: normal`, ширина `…",
-   "component": "layout/paint (`::marker`: стиль и компьютед; `crates/engine/layout/src/style/`, `crates/engine/layout/src/box_tree/`)",
    "date": null,
    "debtor": false
   },
@@ -10684,17 +10397,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1455": {
-   "status": "open",
-   "title": "CSSOM не знает at-правил кроме `@media`: `insertRule('@layer …')` бросает `SyntaxError`, `cssRules` пропускает `@layer`/`@scope`/`@supports`/`@container`/`@font…",
-   "component": "js/css-parser (CSSOM правил: `CSSStyleSheet.insertRule`/`cssRules` для at-правил, `CSSGroupingRule`/`CSSLayerBlockRule`/`CSSScopeRule`/`CSSNestedDeclarations`, `cssRules` у `CSSStyleRule`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1456": {
    "status": "open",
-   "title": "`CSSPseudoElement` и `Element.pseudo()` не реализованы: 12 id, 72 упавших сабтеста. `typeof document.getElementById('a').pseudo` = `undefined`, `typeof CSSPseud…",
-   "component": "js (`Element.prototype.pseudo()`, `CSSPseudoElement`, `getPseudoElements()` — отсутствуют вовсе)",
+   "title": "Интерфейс `CSSPseudoElement`/`Element.pseudo()` и геометрия блочных псевдоэлементов сделаны в CSSOM-11 (identity, convertPoint, getBoxQuads зелёные). Остаток: `…",
+   "component": "js (`CSSPseudoElement`: события и `:hover` на псевдоэлементе, `pseudoTarget`, живое дерево `::view-transition*`)",
    "date": null,
    "debtor": false
   },
@@ -10784,7 +10490,7 @@
   },
   "BUG-1469": {
    "status": "open",
-   "title": "Привязка к прокрутке для CSS Anchor Positioning не реализована: якорёный бокс не следует за прокруткой контейнера якоря. Бокс с `position-anchor` + `anchor()` о…",
+   "title": "**Срез 1 влит (ANCHOR-SCROLL, 2026-10-21):** `--screenshot` и живое окно рисуют цель там, где прокрученный якорь; осталось — геометрия для скриптов (BUG-1166),…",
    "component": "layout/paint/js (`crates/engine/layout/src/anchor.rs` — `apply_anchor_positions` работает от геометрии без учёта прокрутки; скролл-контейнеры якорей)",
    "date": null,
    "debtor": false
@@ -10849,13 +10555,6 @@
    "status": "open",
    "title": "`getComputedStyle()` не отдаёт свойства CSS Anchor Positioning: `anchor-name`, `position-anchor`, `position-area`, `anchor-scope` и значения `anchor()`/`anchor-…",
    "component": "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `anchor-name`, `position-anchor`, `position-area`, `anchor-scope`; `getComputedStyle` anchor-свойств)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1479": {
-   "status": "open",
-   "title": "`--screenshot` (CPU-растр): содержимое прокрученного контейнера, лежащее по непрокрученной координате за нижним краем снимка, не рисуется. Для `PushScrollLayer`…",
-   "component": "paint (`crates/engine/paint/src/cpu_raster.rs:430` — `PushScrollLayer` с ненулевым `scroll_y`: слой `Pixmap::new(width, height)`, рисование до сдвига)",
    "date": null,
    "debtor": false
   },
@@ -11064,7 +10763,7 @@
   },
   "BUG-1512": {
    "status": "open",
-   "title": "Scroll-state container queries (`container-type: scroll-state`, `@container scroll-state(stuck\\",
+   "title": "**Срез 1 влит (CQ-SCROLL-STATE, 2026-10-21):** `container-type: scroll-state`, разбор и оценка `scroll-state()` (`scrollable` — по геометрии), трёхзначные услов…",
    "component": "css-parser/layout (`container-type: scroll-state`, `@container scroll-state(…)`)",
    "date": null,
    "debtor": false
@@ -11820,8 +11519,8 @@
   },
   "BUG-1651": {
    "status": "open",
-   "title": "youtube главная: одна задача таймеров/pump держит engine-поток ≥ 8,7 с (живой `eval` — `engine thread busy`), страница не отвечает на ввод",
-   "component": "shell/js (`app/about_to_wait.rs:287` — `route_task_js`: `tick_timers`/`pump_*`) — не локализовано",
+   "title": "youtube главная: задачи engine-потока до 15–18 с (причина — ≈ 40 принудительных флашей с пересчётом 1300–2000 элементов; срез 1 снёс до ≤ 2 с), осталось 3–5 зад…",
+   "component": "layout/js (`restyle.rs::has_reach_roots`, `counters.rs::walk`, флаш под JS-циклом)",
    "date": null,
    "debtor": false
   },
@@ -11836,6 +11535,97 @@
    "status": "open",
    "title": "Остаток `background-attachment: local`: ячейка таблицы, `rtl` с отрицательным `scrollLeft`; попутно `url()`-фон не режется по `border-radius`. WPT `table-cell-b…",
    "component": "paint/layout (`display_list/background_mask.rs::local_bg_scroller`, `emit_background_layer` `BackgroundImage::Url`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1654": {
+   "status": "open",
+   "title": "`box-shadow` на `<span>` внутри строки не попадает в display list: проба `<span style=\"box-shadow:0 0 0 10px red\">` — на снимке тени нет. WPT `css/css-backgroun…",
+   "component": "paint (`crates/engine/paint/src/display_list/walk.rs`, инлайновая ветка)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1655": {
+   "status": "open",
+   "title": "`getComputedStyle()`: остаток BUG-1307 — шорткоды `grid`/`grid-template` не сериализуются, `repeat(N, …)` у не-grid элемента отдаётся раскрытым, `grid-auto-colu…",
+   "component": "layout (`crates/engine/layout/src/grid_computed.rs`, `selector_query.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1656": {
+   "status": "open",
+   "title": "`grid-template-columns/rows`: невалидный список `none auto` / `none 100px` / `100px none` принимается вместо отбрасывания; `inherit` сбрасывает все grid-свойств…",
+   "component": "layout (`crates/engine/layout/src/style/values/flexgrid.rs::parse_track_list`, `style/apply/css_wide.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1657": {
+   "status": "open",
+   "title": "Разрешённые размеры дорожек grid расходятся со спецификацией: auto-дорожки растягиваются при `justify-content: start`, content-sized/процентные/`minmax` дорожки…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs`, `grid_auto_cols.rs`, `grid_trampoline.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1658": {
+   "status": "open",
+   "title": "`counter-reset` снимается при выходе из самого элемента, а не после его следующих соседей (CSS Lists L3 §4.4: область — элемент, потомки и следующие соседи; сес…",
+   "component": "layout (`crates/engine/layout/src/counters.rs::walk`, `pop_reset`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1659": {
+   "status": "open",
+   "title": "`lumen --dump-display-list full.svg` (корневой `<svg width=16 height=8 viewBox=\"0 0 16 8\">`, viewport 200×100) рисует содержимое в (8,13), а не в (0,0): SVG-док…",
+   "component": "layout (самостоятельный SVG-документ верхнего уровня: `parse_xml_flavoured` + UA-стили `body`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1660": {
+   "status": "open",
+   "title": "Прямой адрес `.mp4`/`.webm` открывается как текст: «видимый текст» — сырые байты контейнера, `<video>` нет (Chrome даёт медиа-просмотрщик). Найдено базой SPR-w…",
+   "component": "shell/net (документ верхнего уровня с `Content-Type: video/*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1661": {
+   "status": "open",
+   "title": "остаток BUG-1433: `url(… referrer-policy()\\",
+   "component": "shell/net (`crates/shell/src/subresources.rs`; `BackgroundImage::Url` не хранит модификаторы)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1662": {
+   "status": "open",
+   "title": "`getComputedStyle(el, '::first-line')` отдаёт `\"\"` для всех свойств, если у `el` `display: inline`/`flex` (сегмента первой строки нет, стиль псевдоэлемента не с…",
+   "component": "layout (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles`, `box_tree/build.rs`, `selector_query.rs::computed_style_to_map`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1663": {
+   "status": "open",
+   "title": "used-значение `grid-template-columns` включает неявные имена area-линий (`a-start`, `b-end`…) — юнит-тест `template_of_an_empty_grid_container_is_resolved_to_us…",
+   "component": "layout (`crates/engine/layout/src/tests/grid_computed_style.rs:84`, сериализация used-значения `grid-template-columns`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1664": {
+   "status": "open",
+   "title": "`cq*`-единицы в заранее резолвимых при каскаде свойствах (`tab-size: calc(10 + (sign(2cqw - 10px) * 5))`, `font-size: 5cqw`, `letter-spacing: 2cqw`) не видят ко…",
+   "component": "layout (`crates/engine/layout/src/box_tree/container_anchor.rs:30`, `style/apply/text.rs` — `tab-size`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1666": {
+   "status": "open",
+   "title": "Красный `main`: 7 тестов `lumen-paint` (позиции текста/декораций, hit-test), 5 снапшотов `tests/all.rs`, 3 `page_pipeline::bug269/bug969` и 5 goldens (`PushClip…",
+   "component": "paint / shell / tests (`crates/engine/paint/src/display_list/tests/text_and_images.rs`, `paint/src/hit_test.rs:401`, `paint/tests/cases/snapshot_tests.rs:37`, `shell/src/tests/page_pipeline.rs:201,280`, goldens)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1667": {
+   "status": "open",
+   "title": "`getComputedStyle(el, '::marker')`: маркер без бокса (`list-style: none`, `content: none`) и `::marker` у не-`list-item` отдают пустую строку вместо `none`/`aut…",
+   "component": "layout/js (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles_box`, `inject_marker`)",
    "date": null,
    "debtor": false
   },
@@ -20392,6 +20182,433 @@
    "component": "layout (`crates/engine/layout/src/style/parse/box_sides.rs::apply_border_shorthand`/`apply_border_side_shorthand`, `style/apply/paint.rs` `border-*-width`)",
    "date": "2026-10-19",
    "debtor": false
+  },
+  "BUG-1301": {
+   "status": "fixed",
+   "title": "`initial`/`inherit`/`unset`/`revert` на `background-size",
+   "component": "layout (`crates/engine/layout/src/style/apply/css_wide.rs:1209` — один арм на все `background-*` longhand'ы)",
+   "date": "2026-10-19",
+   "debtor": false
+  },
+  "BUG-1299": {
+   "status": "fixed",
+   "title": "`background-repeat` с двумя значениями (`repeat no-repeat`, `space no-repeat`, `round repeat`) не разбирается — слой остаётся `repeat`. WPT `css/css-backgrounds…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/values/background.rs:215` — `enum BackgroundRepeat`, один на обе оси)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1302": {
+   "status": "fixed",
+   "title": "Внешняя `box-shadow` не вырезается по границе бокса: сквозь `rgba`-фон и между линиями `double`-рамки виден цвет тени, тень `<body>` заливает внутренность; на `…",
+   "component": "paint (`crates/engine/paint/src/display_list/box_shadow.rs::emit_box_shadows`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1303": {
+   "status": "fixed",
+   "title": "Плитки `background-image` не выходят за позиционирующую область: при `background-origin: padding-box",
+   "component": "paint (`crates/engine/paint/src/display_list/geometry.rs::extend_start_to_paint_area`, `cpu_raster.rs`, `renderer.rs`, `femtovg_backend/image.rs` — сетка плиток `DrawBackgroundImage`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1305": {
+   "status": "fixed",
+   "title": "Web Animations: неявный («neutral») ключевой кадр, шорткод `border-width`, `background-size` и `box-shadow` не интерполируются (на 30 % — начальное/конечное зна…",
+   "component": "js shim (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_compute_at_p`, интерполятор Web Animations)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1307": {
+   "status": "fixed",
+   "title": "`getComputedStyle()` не отдаёт grid-лонгхендов: `grid-template-*`, `grid-auto-*`, `grid-column/row/area`, `row-gap`/`column-gap` — `\"\"` (тот же класс, что BUG-1…",
+   "component": "layout (`crates/engine/layout/src/grid_computed.rs`, `selector_query.rs::computed_style_to_map`, `resolved_geometry.rs`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1308": {
+   "status": "fixed",
+   "title": "Проценты в `grid-template-rows` и `row-gap` при неопределённой высоте контейнера считаются от ширины (`60%` → 120 при ширине 200, ожидается `auto`/0). WPT `css/…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — `%` в треках и gap)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1309": {
+   "status": "fixed",
+   "title": "`width:max-content`/`inline-grid` не учитывают неявные столбцы (`grid-auto-flow: column` → 90 вместо 180, второй ребёнок поверх первого); `inline-grid` с `aspec…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — intrinsic-размер контейнера)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1310": {
+   "status": "fixed",
+   "title": "Процентные `margin`/`padding` grid-item считаются от ширины контейнера, а не grid-области (`margin-left:30%` при области 200 в контейнере 300 → 90 вместо 60). W…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid.rs` — база `%` у item'а)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1360": {
+   "status": "fixed",
+   "title": "`position:absolute` с `left/right:auto` в контейнере `direction: rtl`: статическая позиция у левого края (`x=0`), а не у правого (`x=180` в контейнере 200 px, ш…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — статическая позиция abspos по `direction`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1371": {
+   "status": "fixed",
+   "title": "`unicode-bidi: bidi-override` не действует на вложенные inline (`<span>`, `<b>`), `<bdo dir=rtl>` без эффекта. 44 id `bidi-text`",
+   "component": "layout (`crates/engine/layout/src/bidi.rs`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1376": {
+   "status": "fixed",
+   "title": "CDO/CDC (`<!--`, `-->`) в таблице стилей не пропускаются как токены верхнего уровня: следующее за `<!--` правило пропадает. 4 id",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs::parse_stylesheet`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1377": {
+   "status": "fixed",
+   "title": "Невалидное значение `width`/`height` не отбрасывается, а затирает прежнее: `height:20px; height:1 0px` → высота 0; `+ 10px`, `-5px`, `foo` — то же. `rgb(100%, 0…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/apply/layout.rs:293`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1378": {
+   "status": "fixed",
+   "title": "Имена свойств чувствительны к регистру: `COLOR:green`, `bACkGRounD:green`, `Color:green` не применяются (CSS 2.1 §4.1.3 — ASCII case-insensitive)",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_declaration`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1379": {
+   "status": "fixed",
+   "title": "Комментарий внутри значения (`color:/*c*/green`, `color:green/*c*/;`) обрывает разбор: объявление теряется",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_value_until_terminator`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1380": {
+   "status": "fixed",
+   "title": "CSS-escape в значениях и `url()` не декодируется: `color:\\67reen`, `\\75rl(…)` в значении, `url(support/\\'green\\ block.png)`. Идентификаторы в селекторах и имена…",
+   "component": "css-parser/layout (`crates/engine/css-parser/src/parser.rs::parse_ident` и разбор значений)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1382": {
+   "status": "fixed",
+   "title": "`margin-right` (и `margin-left` у первого сегмента) на `<span>` без фона/рамки/отступа не сдвигает следующий текст: `<span style=\"margin-right:40px\">x</span>y`…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs:1020-1028`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1383": {
+   "status": "fixed",
+   "title": "`getComputedStyle(el).gridTemplateColumns` / `gridTemplateRows` отдаёт `\"\"` вместо `none` (значение по умолчанию) и вместо разрешённых размеров дорожек (`45px 4…",
+   "component": "js/layout (`getComputedStyle(el).gridTemplateColumns` — Rust-сторона `_lumen_get_computed_style`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1384": {
+   "status": "fixed",
+   "title": "`css/css-grid/parsing/grid-template-columns-crash.html` (`gridTemplateColumns` = 100000 раз `repeat(1000, Npx)`, строка ≈ 2,2 МБ) не отвечает по BiDi 20 с (`LUM…",
+   "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js` + каскад — `document.body.style.gridTemplateColumns = <2 МБ>`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1381": {
+   "status": "fixed",
+   "title": "Восстановление после ошибок разбора не по CSS Syntax: `@ import` (с пробелом), незакрытая скобка в конце листа, `[`/`]`, неоконченная строка. 17 id",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1388": {
+   "status": "fixed",
+   "title": "`contain-intrinsic-size` при `contain:size` не даёт вклада в `max-content` родителя: `width:max-content` вокруг `contain-intrinsic-size:111px 222px` → 2×224 вме…",
+   "component": "layout (`crates/engine/layout/src/box_tree/intrinsic.rs`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1389": {
+   "status": "fixed",
+   "title": "`scrollWidth`/`scrollHeight` не включают padding в конце (`padding-bottom:30px` + ребёнок 200 → 200 вместо 230) и margin flex-/grid-элемента (`margin-inline-end…",
+   "component": "layout (`crates/engine/layout/src/lib.rs:1508`, `collect_scroll_containers_for_js_state`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1390": {
+   "status": "fixed",
+   "title": "`overflow-clip-margin` не расширяет клип в `--dump-display-list` (`PushClipRect (30,30,100,50)` при `20px`); `CSS.supports('overflow-clip-margin','20px')` — `fa…",
+   "component": "paint (`crates/engine/paint/src/display_list/walk.rs:1242`, `box_layer.rs:128-175`) + js (`CSS.supports`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1413": {
+   "status": "fixed",
+   "title": "Порядок листов в каскаде — «все инлайновые `<style>`, затем все `<link rel=stylesheet>`», а не порядок документа (CSS Cascade L4 §6.4.3): правило из `<style>`,…",
+   "component": "shell (`crates/shell/src/page_pipeline.rs` — сборка `css` в `build_page_cascade`; `stylesheets.rs::load_linked_stylesheets`; `relayout.rs` + `doc_extract.rs::DynamicCssBase` — пересборка)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1391": {
+   "status": "fixed",
+   "title": "CSSOM: `min-width='none'`, `max-width='auto'`, `contain-intrinsic-size='legacy'` принимаются; `0` не канонизируется в `0px`; `5px 5px` не сворачивается в `5px`.…",
+   "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js`, `selector_query.rs::computed_style_to_map`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1392": {
+   "status": "fixed",
+   "title": "`el.style.webkitLineClamp = 2` пишет `-webkit-line-clamp` (дефис уже сохранялся), `'webkitLineClamp' in el.style` теперь `true` для реализованных не-алиасных `-…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1414": {
+   "status": "fixed",
+   "title": "grid-item с `width: 60px` + `padding-left: 6px` (content-box) в строке с заданной высотой трека (`grid-template-rows: 10px`) получает `rect.width = 60` вместо 6…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs` — финальная раскладка grid-item, растянутого по строке)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1415": {
+   "status": "fixed",
+   "title": "`scrollWidth`/`scrollHeight` grid-контейнера не учитывают треки, выровненные `justify-content`/`align-content` с переполнением (`css/css-grid/alignment/grid-con…",
+   "component": "layout (`crates/engine/layout/src/box_tree/grid_trampoline.rs`, scrollable overflow grid-контейнера)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1416": {
+   "status": "fixed",
+   "title": "`expand_attr_val` (`substitute.rs:1004`) после подстановки значения атрибута вызывает себя же, если в результате снова есть `attr(`; глубины и множества посещён…",
+   "component": "layout (`crates/engine/layout/src/style/substitute.rs::expand_attr_val`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1419": {
+   "status": "fixed",
+   "title": "`ActiveBorder`, `ActiveCaption`, `AppWorkspace`, `Background`, `ButtonHighlight`, `ButtonShadow`, `CaptionText`, `InactiveBorder`, `InactiveCaption`, `InactiveC…",
+   "component": "layout (`crates/engine/layout/src/style/` — таблица `SystemColor`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1395": {
+   "status": "fixed",
+   "title": "`contain: style` разбирается (`style/apply/layout.rs:913`), но ни один обход не смотрит на `ContainFlags::STYLE`: `counter-increment` внутри поддерева меняет сч…",
+   "component": "layout (`crates/engine/layout/src/counters.rs::precompute_counters`, разбор кавычек; флаг `ContainFlags::STYLE` читается только в `selector_query.rs:2080`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1420": {
+   "status": "fixed",
+   "title": "`<object data=\"full.svg\" style=\"width:48px;height:32px\">` и `<embed>` с SVG 16×8 (`viewBox 0 0 16 8`, `preserveAspectRatio=none`, зелёный прямоугольник во всю п…",
+   "component": "layout/paint (вложенный документ `<object>`/`<embed>` с SVG; standalone `.svg`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1421": {
+   "status": "fixed",
+   "title": "`<canvas width=16 height=8 style=\"width:48px;height:32px;object-fit:contain\">` с зелёной заливкой даёт 1536 зелёных px в (0,0)–(47,31) (холст растянут по боксу)…",
+   "component": "layout/paint (`<canvas>` как replaced-элемент, `object-fit`/`object-position`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1422": {
+   "status": "fixed",
+   "title": "`relative_offset(s, em, cb, viewport)` принимает одно число `cb` и использует его для обеих осей: `top:10%` у потомка контейнера 300×100 даёт смещение 30 (10 %…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs::relative_offset`, `:1887`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1423": {
+   "status": "fixed",
+   "title": "`html{overflow:hidden}` (или `body{overflow:hidden}`) при `position:absolute` потомке с фоном: потомок не рисуется (0 зелёных px при ожидаемых 10 000). Без `ove…",
+   "component": "layout/paint (распространение `overflow` корня на viewport)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1424": {
+   "status": "fixed",
+   "title": "`getComputedStyle().color` для `rgb(0 128 0 / 0.5)`, `hsl(120 100% 25% / 0.5)`, `#00800080` отдаёт `rgba(0, 128, 0, 0.502)` (Chrome — `rgba(0, 128, 0, 0.5)`: ищ…",
+   "component": "layout/js (сериализация цвета с альфой, `crates/engine/layout/src/selector_query.rs`, `web_api_shim_mid.js`)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1425": {
+   "status": "fixed",
+   "title": "`lab(46 -50 50)`, `oklch(0.5 0.1 90)`, `color(srgb 0 0.5 0)`, `color-mix(in srgb, red, blue)`, `rgb(from rebeccapurple r g b)` читаются как `rgb(r, g, b)`; по C…",
+   "component": "layout/js (`crates/engine/layout/src/selector_query.rs` — computed `color`; `web_api_shim_mid.js` — specified-значение)",
+   "date": "2026-10-20",
+   "debtor": false
+  },
+  "BUG-1426": {
+   "status": "fixed",
+   "title": "(1) комментарии `/* */` между токенами отвергают всю функцию: `hsl(120/* c */75%/* c */50%)`, `hsl(120,/* c */75%,/* c */50%,1.0)`, `rgb(0 /*c*/ 128 0)` — декла…",
+   "component": "layout/css-parser (`crates/engine/layout/src/style/parse/color.rs`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1427": {
+   "status": "fixed",
+   "title": "`background-image: linear-gradient(green)` — белый пиксель (ожидается зелёный: один стоп → сплошной цвет); `radial-gradient(green)`, `repeating-linear-gradient(…",
+   "component": "layout/paint (разбор градиентов с одной остановкой)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1455": {
+   "status": "fixed",
+   "title": "CSSOM не знает at-правил кроме `@media`: `insertRule('@layer …')` бросает `SyntaxError`, `cssRules` пропускает `@layer`/`@scope`/`@supports`/`@container`/`@font…",
+   "component": "js/css-parser (CSSOM правил: `CSSStyleSheet.insertRule`/`cssRules` для at-правил, `CSSGroupingRule`/`CSSLayerBlockRule`/`CSSScopeRule`/`CSSNestedDeclarations`, `cssRules` у `CSSStyleRule`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1428": {
+   "status": "fixed",
+   "title": "`linear-gradient(…)`, `radial-gradient(…)`, `conic-gradient(…)` в computed `background-image` — `none` (ожидается сама функция с цветами в `rgb()`); `cross-fade…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs` — computed `background-image` и `image-set`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1429": {
+   "status": "fixed",
+   "title": "`@font-face{font-family:ExTest;src:url(ExTest.woff)}`, `font:80px ExTest; width:10ex` — ширина 437 px (ожидается 100 = 10·0.125·80; `ExTest` задаёт `sxHeight` =…",
+   "component": "layout/font (`crates/engine/layout/src/style/values/length.rs` — `FONT_CH_EX`/`FONT_LH`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1431": {
+   "status": "fixed",
+   "title": "`<div style=\"width:300px\"><p style=\"margin:1% 0 0 0\">` — отступ 8 (1 % от 800, ширины окна), ожидается 3 (1 % от 300); с `calc(10px + 1%)` — 18 вместо 13. У вто…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs::collapsed_top_margin`, `:149–157`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1432": {
+   "status": "fixed",
+   "title": "градиент с `in display-p3`, `in a98-rgb`, `in rec2020`, `in prophoto-rgb` даёт один и тот же пиксель во всей полосе (`(0,58,140)` и в x=5, и в x=90; для `green…",
+   "component": "layout/paint (`style/parse/gradient*.rs`, `style/values/color_mix.rs` — предопределённые цветовые пространства)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1433": {
+   "status": "fixed",
+   "title": "`background-image: url('g.png' referrer-policy(origin))` разбирается как `src=\"g.png' referrer-policy(origin)\"` (кавычка и модификатор не отделяются; `--dump-di…",
+   "component": "css-parser/layout/shell (`crates/engine/layout/src/style/parse/` — разбор `url()` с `<request-url-modifier>`; `crates/shell/src/subresources.rs`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1434": {
+   "status": "fixed",
+   "title": "`lch(100% 110 60)` рисуется `(255,208,50)` (должно быть белым: CSS Color 4: при `L = 100%` результат — белый при любых `C`/`h`), `lch(0% 110 60)` — `(75,0,0)` (…",
+   "component": "layout (`crates/engine/layout/src/style/values/color.rs` — перевод `lab`/`lch`/`oklab`/`oklch` в sRGB)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1435": {
+   "status": "fixed",
+   "title": "`getComputedStyle(el).getPropertyValue(<свойство>)` — пустая строка для `rotate` (`rotate:45deg` читается `''`), `scale` (`scale:2` → `''`), `translate`, `tab-s…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1479": {
+   "status": "fixed",
+   "title": "`--screenshot` (CPU-растр): содержимое прокрученного контейнера, лежащее по непрокрученной координате за нижним краем снимка, не рисуется. Для `PushScrollLayer`…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs:430` — `PushScrollLayer` с ненулевым `scroll_y`: слой `Pixmap::new(width, height)`, рисование до сдвига)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1436": {
+   "status": "fixed",
+   "title": "`repeating-radial-gradient(closest-corner circle at 9999…999%, green, green)` (позиция из 100 девяток) на `300×300` бокс: `--screenshot` завершается `Ошибка --s…",
+   "component": "paint (`--screenshot` / CPU-растр; ошибка «degenerate radial gradient»)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1437": {
+   "status": "fixed",
+   "title": "после BUG-1325 `tab-size`, `text-indent hanging/each-line`, `text-align-last`, `line-break`, `hyphens` видны в `getComputedStyle()`, и WPT-тесты анимаций, прохо…",
+   "component": "layout (`crates/engine/layout/src/animation.rs`, `style/pseudo.rs` — анимация/переход свойств CSS Text и `::first-line`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1438": {
+   "status": "fixed",
+   "title": "проценты в `letter-spacing`/`word-spacing` и незакрытая скобка `calc(` в конце значения; `getComputedStyle()` теперь отдаёт `110%`, `-10%`, `calc(-15% + 10px)`.…",
+   "component": "layout (`crates/engine/layout/src/style/apply/text.rs`, `style/cascade.rs`, `selector_query.rs`, `style/calc.rs`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1396": {
+   "status": "fixed",
+   "title": "`contain: layout` и `paint` — независимый форматирующий контекст, stacking context, без собственной baseline, переполнение потомков не расширяет scrollable over…",
+   "component": "layout (`crates/engine/layout/src/box_tree/bfc.rs` — `establishes_bfc`; `box_tree/baseline.rs`; `lib.rs:1508` `contributes_to_scrollable_overflow`), paint (`display_list/stacking`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1397": {
+   "status": "fixed",
+   "title": "`<img>`/`<canvas>` с `contain:size;padding:50px` остаются 160×160/70×70 (внутренний размер должен быть 0); `inline-grid;contain:size;grid:50px/100px` — 0×0 вмес…",
+   "component": "layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs:512`, `grid_vertical.rs:356`, `intrinsic.rs`; `ContainFlags::INLINE_SIZE` в раскладке не читается)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1439": {
+   "status": "fixed",
+   "title": "`CSSStyleSheet` снятого из дерева `<style>` теряла правила: `insertRule`/`deleteRule` бросали `IndexSizeError`. Теперь лист переезжает в реестр конструируемых и…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_css_backend`/`_lumen_css_detach`; `crates/js/src/v8_runtime/sheet_sync.rs` — `detached`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1440": {
+   "status": "fixed",
+   "title": "`ParentNode.append/prepend/replaceChildren` и `ChildNode.before/after/replaceWith` вставляли сам узел `#document-fragment`, а не его детей. Теперь все шесть мет…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_expand_insert_nids`, `append`/`prepend`/`before`/`after`/`replaceWith`/`replaceChildren` у Element, DocumentFragment и ShadowRoot)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1399": {
+   "status": "fixed",
+   "title": "`column-count:1` с `column-fill:auto` и заданной высотой не режет содержимое: ребёнок 200 px остаётся одним боксом 50×200 (при `columns:2` те же 200 px идут во…",
+   "component": "layout (`crates/engine/layout/src/box_tree/multicol_trampoline.rs`, `multicol_abspos.rs`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1665": {
+   "status": "fixed",
+   "title": "`fetch(url, {method:'HEAD'})` уходил на провод как GET (метод запроса без тела не доходил до `fetch_with_redirect`, `.unwrap_or(\"GET\")`), на редиректе HEAD тоже…",
+   "component": "network (`crates/network/src/lib.rs` — `fetch_with_redirect`; `http1/response.rs` — `read_response`; `http1/chunked.rs` — `read_response_streamed`, `response_has_no_body`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1400": {
+   "status": "fixed",
+   "title": "у потомка элемента с `content-visibility:hidden` `getBoundingClientRect()`/`offset*`/`getClientRects()` были нулями. Скрытые дети теперь живут в `LayoutBox::cv_…",
+   "component": "layout/js (`crates/engine/layout/src/box_tree/build.rs`, `layout_dispatch.rs::lay_out_cv_hidden_probe`, `lib.rs::collect_layout_rects`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1444": {
+   "status": "fixed",
+   "title": "`:has()` с составным относительным селектором (`:has(> .a > .b)`, `:has(+ .a + .c)`, `:has(~ .a .t)`) не привязан к субъекту: проверяется только правый компаунд…",
+   "component": "layout (`crates/engine/layout/src/style/matching/forms.rs::matches_relative` `:1004`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1445": {
+   "status": "fixed",
+   "title": "Вложенные правила, где `&` не стоит первым (`.t &`, `div &`, `.r&`, `:not(&)`), и вложенный голый тип (`.p { div {…} }`) отбрасываются; `&` на верхнем уровне и…",
+   "component": "css-parser/layout (вложенные правила: `crates/engine/css-parser/src/parser/` — разбор nested rule; `&` вне первого компаунда)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1446": {
+   "status": "fixed",
+   "title": "`::marker`: `getComputedStyle(li, '::marker')` отдаёт значения элемента, а не маркера (`content: normal`, `display: list-item`, `unicode-bidi: normal`, ширина `…",
+   "component": "layout/paint (`::marker`: стиль и компьютед; `crates/engine/layout/src/style/`, `crates/engine/layout/src/box_tree/`)",
+   "date": "2026-10-21",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -20650,9 +20867,6 @@
   ],
   "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\": [
    "BUG-521"
-  ],
-  "css-parser/layout (no `position-try`/`position-try-fallbacks`/`position-try-order`/`@position-try` anywhere in `css-parser/src/` or `layout/src/style.rs`)": [
-   "BUG-562"
   ],
   "css-parser/layout (вложенные правила: `crates/engine/css-parser/src/parser/` — разбор nested rule; `&` вне первого компаунда)": [
    "BUG-1445"
@@ -21170,9 +21384,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js:11895-11910` `_lumen_script_load_external`: `setTimeout` → `fetch().then(execute).then(fire load)`, таймеры одного тика исполняются подряд)": [
    "BUG-1128"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js:12069-12086` — `_lumen_make_css_style_sheet`, `cur()`)": [
-   "BUG-1439"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js:1336-1398` — `DOMTokenList.prototype`: есть `forEach`, итераторов нет; образец — `NodeList`, `:6067-6088`)": [
    "BUG-1125"
   ],
@@ -21248,8 +21459,14 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_ce_elements`/`_lumen_ce_run_constructor`/`_lumen_ce_upgrade_element`; `crates/js/src/shim/event_target_shim.js` + `web_api_shim_tail_b.js` — `_lumen_et_platform_impl`)": [
    "BUG-1167"
   ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_css_backend`/`_lumen_css_detach`; `crates/js/src/v8_runtime/sheet_sync.rs` — `detached`)": [
+   "BUG-1439"
+  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_document_collection`, геттеры литерала `document`)": [
    "BUG-892"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_expand_insert_nids`, `append`/`prepend`/`before`/`after`/`replaceWith`/`replaceChildren` у Element, DocumentFragment и ShadowRoot)": [
+   "BUG-1440"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_font_face_try_one_source`; `crates/js/src/shim/web_api_shim_mid_b.js` — `_lumen_fetch`)": [
    "BUG-1013"
@@ -21290,14 +21507,8 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `appendChild` `:8612`, `insertBefore`, `firstChild`; не локализовано)": [
    "BUG-1452"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — `append` `:8772`, `prepend` `:8755`, `before` `:8694`, `after` `:8709`, `replaceWith` `:8729`, `replaceChildren` `:8851`; у `DocumentFragment` — `:3736-3758`)": [
-   "BUG-1440"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `scrollingElement`, `scrollTop`, `clientHeight` корня)": [
    "BUG-1559"
-  ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — camelCase → kebab у `element.style`)": [
-   "BUG-1392"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — арена-элементный `appendChild`, `~6718`)": [
    "BUG-1055"
@@ -21324,6 +21535,7 @@
    "BUG-1074"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`)": [
+   "BUG-1392",
    "BUG-463",
    "BUG-474",
    "BUG-476",
@@ -21534,9 +21746,6 @@
   "js (`crates/js/src/video_bindings.rs` — шим `<video>`; `crates/js/src/dom.rs` — хук вставки `<source>`)": [
    "BUG-825"
   ],
-  "js (`crates/js/src/view_transitions.rs`, `crates/shell/src/persistent_js.rs`)": [
-   "BUG-945"
-  ],
   "js (`crates/js/src/wasm/parser.rs::parse_element_section`)": [
    "BUG-700"
   ],
@@ -21672,6 +21881,9 @@
   "js shim (`crates/js/src/shim/web_api_shim_mid.js` — `_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-494"
   ],
+  "js shim (`crates/js/src/shim/web_api_shim_tail_b.js` — `_wa_compute_at_p`, интерполятор Web Animations)": [
+   "BUG-1305"
+  ],
   "js — не локализовано (оркестратор челленджа Cloudflare `cdn-cgi/challenge-platform/.../orchestrate/chl_page/v1`, падение на тике таймера; кандидат — `iframe.contentWindow === null` синхронно после `appendChild`, BUG-480)": [
    "BUG-1176"
   ],
@@ -21767,9 +21979,6 @@
   ],
   "js/network граница (`crates/network/src/lib.rs::HttpClient::fetch_subresource_inner`; `crates/shell/src/page_load.rs`/`frames.rs`)": [
    "BUG-520"
-  ],
-  "js/shell (`_lumen_get_bounding_rect` — прямоугольники `update_layout_rects`, `crates/shell/src/relayout.rs`)": [
-   "BUG-1166"
   ],
   "js/shell (`crates/js/src/frame_bridge.rs` — доставка `postMessage` между изолятами; место потери не локализовано)": [
    "BUG-1188"
@@ -21888,9 +22097,6 @@
   "layout (`box_tree/image_requests.rs::collect_cascade_background_image_requests`) + shell (`page_pipeline.rs` — `prefetch-bg-images` до `fetch-images`; `subresources.rs::spawn_background_image_prefetch`, `decode_background_image` через `IMAGE_CACHE`)": [
    "BUG-1117"
   ],
-  "layout (`crates/engine/layout/src/anchor.rs` — `collect_anchors`, геометрия якоря-`inline` со многими боксами/строками)": [
-   "BUG-1477"
-  ],
   "layout (`crates/engine/layout/src/anchor.rs` — `collect_anchors`/поиск якоря по имени: порядок в дереве и область видимости имени)": [
    "BUG-1483"
   ],
@@ -21902,9 +22108,6 @@
   ],
   "layout (`crates/engine/layout/src/animation.rs` — интерполяция значений зарегистрированных пользовательских свойств)": [
    "BUG-1504"
-  ],
-  "layout (`crates/engine/layout/src/animation.rs` — сборка ключевых кадров и интерполятор)": [
-   "BUG-1305"
   ],
   "layout (`crates/engine/layout/src/animation.rs`, `style/pseudo.rs` — анимация/переход свойств CSS Text и `::first-line`)": [
    "BUG-1437"
@@ -22016,6 +22219,9 @@
   "layout (`crates/engine/layout/src/box_tree/container_anchor.rs:30` — раннее возвращение при `sheet.container_rules.is_empty()`; `crates/engine/layout/src/style/env.rs` `CONTAINER_CQ`)": [
    "BUG-1499"
   ],
+  "layout (`crates/engine/layout/src/box_tree/container_anchor.rs:30`, `style/apply/text.rs` — `tab-size`)": [
+   "BUG-1664"
+  ],
   "layout (`crates/engine/layout/src/box_tree/container_anchor.rs` — выбор контейнера по `container-type`/имени/осям)": [
    "BUG-1498"
   ],
@@ -22061,6 +22267,9 @@
   "layout (`crates/engine/layout/src/box_tree/grid.rs` — выравнивание контента и размер трека)": [
    "BUG-1313"
   ],
+  "layout (`crates/engine/layout/src/box_tree/grid.rs`, `grid_auto_cols.rs`, `grid_trampoline.rs`)": [
+   "BUG-1657"
+  ],
   "layout (`crates/engine/layout/src/box_tree/grid.rs`, `intrinsic.rs` — shrink-to-fit ширина контейнера с элементами, размещёнными по имени линии/области)": [
    "BUG-1317"
   ],
@@ -22096,9 +22305,6 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — схлопываемый пробельный узел между inline-боксами)": [
    "BUG-1465"
-  ],
-  "layout (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs`; не локализовано)": [
-   "BUG-1411"
   ],
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs:600` — ветка `preserves_whitespace()`)": [
    "BUG-1322"
@@ -22254,11 +22460,20 @@
   "layout (`crates/engine/layout/src/counters.rs::walk`)": [
    "BUG-1368"
   ],
+  "layout (`crates/engine/layout/src/counters.rs::walk`, `pop_reset`)": [
+   "BUG-1658"
+  ],
   "layout (`crates/engine/layout/src/counters.rs` — `format_counter_with_registry` и вызов из `counter()`/`counters()`)": [
    "BUG-1550"
   ],
   "layout (`crates/engine/layout/src/counters.rs` — `format_counter_with_registry`, знак `negative`)": [
    "BUG-1566"
+  ],
+  "layout (`crates/engine/layout/src/grid_computed.rs`, `selector_query.rs::computed_style_to_map`, `resolved_geometry.rs`)": [
+   "BUG-1307"
+  ],
+  "layout (`crates/engine/layout/src/grid_computed.rs`, `selector_query.rs`)": [
+   "BUG-1655"
   ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
@@ -22284,6 +22499,9 @@
   "layout (`crates/engine/layout/src/lib.rs::collect_layout_rects_rec`)": [
    "BUG-540"
   ],
+  "layout (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles`, `box_tree/build.rs`, `selector_query.rs::computed_style_to_map`)": [
+   "BUG-1662"
+  ],
   "layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)": [
    "BUG-504"
   ],
@@ -22302,14 +22520,10 @@
   "layout (`crates/engine/layout/src/selector_query.rs:688` `computed_style_to_map` — 88 свойств, обоих нет) + shell (`crates/shell/src/main.rs:22950` `take_cv_events` — вызывающих нет)": [
    "BUG-852"
   ],
-  "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — `container-type`, `container-name`, `container`)": [
-   "BUG-1514"
-  ],
   "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-1050",
    "BUG-1254",
    "BUG-1278",
-   "BUG-1307",
    "BUG-1407",
    "BUG-1435",
    "BUG-1515",
@@ -22353,14 +22567,14 @@
   "layout (`crates/engine/layout/src/style/apply/paint.rs:147`, `:357`, `:582`)": [
    "BUG-1625"
   ],
-  "layout (`crates/engine/layout/src/style/apply/text.rs` — `letter-spacing`/`word-spacing`/`tab-size`)": [
-   "BUG-1438"
-  ],
   "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `text-transform`; enum `TextTransform` и `TextTransform::apply`, `style/values/typography.rs`)": [
    "BUG-1328"
   ],
   "layout (`crates/engine/layout/src/style/apply/text.rs` — разбор `word-spacing`; `getComputedStyle` отдаёт `0px`)": [
    "BUG-1333"
+  ],
+  "layout (`crates/engine/layout/src/style/apply/text.rs`, `style/cascade.rs`, `selector_query.rs`, `style/calc.rs`)": [
+   "BUG-1438"
   ],
   "layout (`crates/engine/layout/src/style/cascade.rs:633-679` — `next_rule_idx`, блоки `media_rules` и `supports_rules`)": [
    "BUG-1492"
@@ -22446,11 +22660,17 @@
   "layout (`crates/engine/layout/src/style/values/color.rs` — перевод `lab`/`lch`/`oklab`/`oklch` в sRGB)": [
    "BUG-1434"
   ],
+  "layout (`crates/engine/layout/src/style/values/flexgrid.rs::parse_track_list`, `style/apply/css_wide.rs`)": [
+   "BUG-1656"
+  ],
   "layout (`crates/engine/layout/src/style/values/length.rs:171`)": [
    "BUG-1340"
   ],
   "layout (`crates/engine/layout/src/style/values/misc.rs::ListStyleType::parse`, `counters.rs::build_list_marker_text`)": [
    "BUG-1567"
+  ],
+  "layout (`crates/engine/layout/src/tests/grid_computed_style.rs:84`, сериализация used-значения `grid-template-columns`)": [
+   "BUG-1663"
   ],
   "layout (`crates/engine/layout/src/vertical.rs::wrap_inline_run_vertical`)": [
    "BUG-1275"
@@ -22500,6 +22720,9 @@
   "layout (inline-раскладка — перенос строк между атомарными inline-боксами)": [
    "BUG-1284"
   ],
+  "layout (замер текста: оценщик раскладки против глифов растра, `--screenshot`)": [
+   "BUG-1398"
+  ],
   "layout (используемое значение — не локализовано глубже прогона)": [
    "BUG-1051"
   ],
@@ -22517,6 +22740,9 @@
   ],
   "layout (разобран на подбаги)": [
    "BUG-725"
+  ],
+  "layout (самостоятельный SVG-документ верхнего уровня: `parse_xml_flavoured` + UA-стили `body`)": [
+   "BUG-1659"
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
@@ -22558,11 +22784,14 @@
   "layout/js (`computed_style_to_map`: нет `offset-*`; `offset-position` не разбирается)": [
    "BUG-1589"
   ],
-  "layout/js (`crates/engine/layout/src/content_visibility.rs`, `selector_query.rs` — геометрия скрытого поддерева; шим `getBoundingClientRect`)": [
+  "layout/js (`crates/engine/layout/src/box_tree/build.rs`, `layout_dispatch.rs::lay_out_cv_hidden_probe`, `lib.rs::collect_layout_rects`)": [
    "BUG-1400"
   ],
   "layout/js (`crates/engine/layout/src/lib.rs::collect_layout_rects`, `_lumen_get_bounding_rect`; `Range.getClientRects`)": [
    "BUG-1558"
+  ],
+  "layout/js (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles_box`, `inject_marker`)": [
+   "BUG-1667"
   ],
   "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `anchor-name`, `position-anchor`, `position-area`, `anchor-scope`; `getComputedStyle` anchor-свойств)": [
    "BUG-1478"
@@ -22579,11 +22808,11 @@
   "layout/js (`crates/engine/layout/src/selector_query.rs` — computed `color`; `web_api_shim_mid.js` — specified-значение)": [
    "BUG-1425"
   ],
-  "layout/js (`crates/engine/layout/src/style/pseudo.rs` — `compute_view_transition_pseudo_style`; `crates/js/src/view_transitions.rs`; снимок и кросс-фейд собирает шелл)": [
-   "BUG-1509"
-  ],
   "layout/js (`crates/engine/layout/src/style/values/typography.rs` — `case_upper`; `box_tree/inline_build.rs` — контекст `capitalize` между текстовыми узлами)": [
    "BUG-1486"
+  ],
+  "layout/js (`restyle.rs::has_reach_roots`, `counters.rs::walk`, флаш под JS-циклом)": [
+   "BUG-1651"
   ],
   "layout/js (`selector_query.rs::computed_style_to_map`, разбор scroll-padding/scroll-margin/scroll-snap-*)": [
    "BUG-1575"
@@ -22672,9 +22901,6 @@
   "layout/paint (вложенный документ `<object>`/`<embed>` с SVG; standalone `.svg`)": [
    "BUG-1420"
   ],
-  "layout/paint (перенос фона корня на canvas, `crates/engine/paint/src/display_list/` — root background propagation)": [
-   "BUG-1398"
-  ],
   "layout/paint (разбор градиентов с одной остановкой)": [
    "BUG-1427"
   ],
@@ -22683,9 +22909,6 @@
   ],
   "layout/paint/shell": [
    "BUG-242"
-  ],
-  "layout/paint/shell (`crates/engine/paint/src/display_list/walk.rs:1056` — `BeginStickyLayer`; прокрутка вложенного контейнера в `crates/shell`)": [
-   "BUG-1468"
   ],
   "layout/shell (`crates/shell/src/subresources.rs`, `crates/engine/image/src/svg.rs` — внутренние размеры и пропорции SVG-картинки)": [
    "BUG-1295"
@@ -22776,6 +22999,9 @@
   ],
   "network (`crates/network/src/lib.rs` — `bind_ephemeral_listener`, `mod bad_port`)": [
    "BUG-911"
+  ],
+  "network (`crates/network/src/lib.rs` — `fetch_with_redirect`; `http1/response.rs` — `read_response`; `http1/chunked.rs` — `read_response_streamed`, `response_has_no_body`)": [
+   "BUG-1665"
   ],
   "network (`crates/network/src/referrer_policy.rs::compute_referrer`, `referrer_policy.rs:98-148`)": [
    "BUG-1096"
@@ -22921,9 +23147,6 @@
   "paint (`crates/engine/paint/src/cpu_raster.rs` `PushBackdropFilter`; `display_list/box_layer.rs:268` — порядок `PushBackdropFilter`/`PushTransform`/`PushClipPath`/`PushOpacity`)": [
    "BUG-1539"
   ],
-  "paint (`crates/engine/paint/src/cpu_raster.rs` — `DrawBackgroundImage`, сетка плиток; wgpu не проверялось)": [
-   "BUG-1303"
-  ],
   "paint (`crates/engine/paint/src/cpu_raster.rs` — `PushFilter` с `blur` внутри `PushClipRect` предка с `overflow:hidden`)": [
    "BUG-1542"
   ],
@@ -22943,6 +23166,9 @@
   "paint (`crates/engine/paint/src/display_list/box_shadow.rs::emit_box_shadows`)": [
    "BUG-1302"
   ],
+  "paint (`crates/engine/paint/src/display_list/geometry.rs::extend_start_to_paint_area`, `cpu_raster.rs`, `renderer.rs`, `femtovg_backend/image.rs` — сетка плиток `DrawBackgroundImage`)": [
+   "BUG-1303"
+  ],
   "paint (`crates/engine/paint/src/display_list/tests/text_and_images.rs:514`)": [
    "BUG-1466"
   ],
@@ -22954,6 +23180,9 @@
   ],
   "paint (`crates/engine/paint/src/display_list/walk.rs`)": [
    "BUG-1037"
+  ],
+  "paint (`crates/engine/paint/src/display_list/walk.rs`, инлайновая ветка)": [
+   "BUG-1654"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — `MaskLayerComposite`)": [
    "BUG-936"
@@ -23023,6 +23252,9 @@
   ],
   "paint (путь снимка `resource://screenshot` → `cpu_raster.rs`) против shell (эвристика `broken_render`, `health_log.rs`)": [
    "BUG-993"
+  ],
+  "paint / shell / tests (`crates/engine/paint/src/display_list/tests/text_and_images.rs`, `paint/src/hit_test.rs:401`, `paint/tests/cases/snapshot_tests.rs:37`, `shell/src/tests/page_pipeline.rs:201,280`, goldens)": [
+   "BUG-1666"
   ],
   "paint/cpu_raster": [
    "BUG-052"
@@ -23351,9 +23583,6 @@
    "BUG-164",
    "BUG-345"
   ],
-  "shell/js (`app/about_to_wait.rs:287` — `route_task_js`: `tick_timers`/`pump_*`) — не локализовано": [
-   "BUG-1651"
-  ],
   "shell/js (`crates/shell/src/app/about_to_wait.rs` — `opener_tab_id` теперь читается один раз до цикла (P3, 2026-09-29); `lumen_js::window_messaging` — доставка попап → опенер)": [
    "BUG-1212"
   ],
@@ -23365,6 +23594,12 @@
   ],
   "shell/js (память `lumen.exe` под `wptrunner`; страница `normal-flow/crashtests/block-in-inline-ax-crash.html`)": [
    "BUG-1355"
+  ],
+  "shell/net (`crates/shell/src/subresources.rs`; `BackgroundImage::Url` не хранит модификаторы)": [
+   "BUG-1661"
+  ],
+  "shell/net (документ верхнего уровня с `Content-Type: video/*`)": [
+   "BUG-1660"
   ],
   "shell/network": [
    "BUG-234"

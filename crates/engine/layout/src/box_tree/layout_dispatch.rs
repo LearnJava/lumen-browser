@@ -105,7 +105,7 @@ pub(super) fn lay_out_inner(
 /// Trampolines resolve a box's block-size *after* `dispatch_box` has returned,
 /// so their `run` entry points re-enter this context for the box they finish.
 pub(super) struct FontContext {
-    prev_ch_ex: Option<(f32, f32)>,
+    prev_ch_ex: Option<(f32, f32, f32)>,
     prev_lh: Option<f32>,
 }
 
@@ -117,6 +117,7 @@ impl FontContext {
             (
                 m.char_width_with_families('0', fs, &b.style.font_family),
                 m.x_height_px_with_families(fs, &b.style.font_family),
+                m.cap_height_px_with_families(fs, &b.style.font_family),
             )
         });
         // `lh`: `used_line_height` is the measurer-resolved value; fall back to
@@ -243,6 +244,52 @@ fn lay_out_inner_impl(
             super::vertical_trampoline::run(b, init, measurer, viewport, hp);
         }
     }
+}
+
+/// CSS Containment L2 §content-visibility: hidden — "the user agent must lay out the skipped contents
+/// when a geometry API asks for them" (BUG-1400). The skipped children of `b` (`b.cv_hidden`) are laid
+/// out as the children of a copy of `b` with exactly `b`'s constraints: `content-visibility` itself is
+/// dropped from the copy (it would hide them again) and size/layout/paint/style containment stands in
+/// for it, so the copy sizes the way the hidden box does. Only the laid-out children are kept — back
+/// in `b.cv_hidden`, where `collect_layout_rects` reads them; `b` itself stays a childless box.
+#[allow(clippy::too_many_arguments)]
+fn lay_out_cv_hidden_probe(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+    outer_floats: Option<&FloatContext>,
+    parent_justify_items: AlignValue,
+    used_size_override: Option<UsedSizeOverride>,
+) {
+    let _prof = lumen_core::profile::scope_detail("lo_cv_hidden");
+    let mut kids = std::mem::take(&mut b.cv_hidden);
+    // The skipped boxes may be a previous pass's: lay every one out afresh.
+    for k in &mut kids {
+        crate::incremental::mark_subtree_dirty(k);
+    }
+    let mut probe = b.clone();
+    probe.children = kids;
+    let st = Arc::make_mut(&mut probe.style);
+    st.content_visibility = crate::style::ContentVisibility::Visible;
+    st.contain = crate::style::ContainFlags(
+        st.contain.0
+            | (crate::style::ContainFlags::SIZE.0
+                | crate::style::ContainFlags::LAYOUT.0
+                | crate::style::ContainFlags::PAINT.0
+                | crate::style::ContainFlags::STYLE.0),
+    );
+    lay_out_inner(
+        &mut probe, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+        in_block_flow, outer_floats, parent_justify_items, used_size_override,
+    );
+    b.cv_hidden = std::mem::take(&mut probe.children);
 }
 
 /// Border-box width of a replaced box from its content/border-box height `h` and ratio —
@@ -548,6 +595,14 @@ pub(super) fn dispatch_box(
     if cv_auto_skipped {
         b.children.clear();
     }
+    // BUG-1400: `content-visibility: hidden` keeps its subtree out of `children`, but a geometry
+    // query on a descendant still needs a layout of it.
+    if !b.cv_hidden.is_empty() {
+        lay_out_cv_hidden_probe(
+            b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+            in_block_flow, outer_floats, parent_justify_items, used_size_override,
+        );
+    }
 
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
@@ -744,6 +799,14 @@ pub(super) fn dispatch_box(
             // rendering §15.5.1); clamp it to the available inline size, which
             // is what `fit-content` means (same rule as `Length::FitContent`).
             fit.min((available_width - margin_left - margin_right).max(0.0))
+        } else if size_contained {
+            // BUG-1397: no natural size under `contain: size` — only the box's own padding and
+            // border (plus `contain-intrinsic-width`) remain (CSS Containment L1 §3.1).
+            s.contain_intrinsic_width
+                .as_ref()
+                .and_then(|l| l.resolve(em, None, viewport))
+                .map_or(0.0, |v| v.max(0.0))
+                + padding_left + padding_right + s.border_left_width + s.border_right_width
         } else {
             0.0
         }
@@ -875,11 +938,20 @@ pub(super) fn dispatch_box(
             Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
         )
     {
-        if size_contained {
+        // BUG-1397: `contain: inline-size` collapses the inline axis alone (CSS Containment L3 §3.2).
+        let inline_contained = size_contained
+            || (s.contain.0 & crate::style::ContainFlags::INLINE_SIZE.0 != 0 && !intrinsic::is_vertical_block(b));
+        if inline_contained {
             let cw = s
                 .contain_intrinsic_width
                 .as_ref()
                 .and_then(|l| l.resolve(em, None, viewport))
+                .or_else(|| {
+                    // Explicit grid tracks size a grid container with no items (Grid L1 §7.1).
+                    matches!(s.display, Display::InlineGrid)
+                        .then(|| intrinsic::grid_col_intrinsic_sum(b, viewport, false, &|_| 0.0))
+                        .flatten()
+                })
                 .map_or(0.0, |v| v.max(0.0));
             b.rect.width = (cw + padding_left + padding_right
                 + s.border_left_width + s.border_right_width)
@@ -1527,7 +1599,7 @@ pub(super) fn dispatch_box(
                             b, &s, em, available_height, viewport, padding_top, padding_bottom,
                             size_contained, field_intrinsic, 0.0, cb,
                         );
-                        finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
+                        finish_after_match(b, &s, em, cb, available_height, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
                         return DispatchOutcome::Done;
                     }
                 }
@@ -1583,6 +1655,7 @@ pub(super) fn dispatch_box(
                 );
                 return DispatchOutcome::NeedsBlockFlowLoop(Box::new(block_flow_trampoline::BlockFlowInit {
                     fc,
+                    shares_floats: in_block_flow && matches!(b.kind, BoxKind::Block) && !establishes_bfc(b),
                     container_right,
                     child_y: content_y + legend_extra,
                     prev_block_mb: 0.0,
@@ -1827,7 +1900,7 @@ pub(super) fn dispatch_box(
                 // applied its `position: relative` offset, but the row must flow
                 // from the unshifted box (neighbours, line height) and phase 2
                 // re-places it on y; the offset is put back after phase 2.
-                let mut rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
+                let mut rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, available_height, viewport) };
 
                 // IFC-4: split a run that wrapped past line 0 while sharing its
                 // row with preceding content — everything after line 0 forms
@@ -1890,6 +1963,7 @@ pub(super) fn dispatch_box(
                     for (li, line) in cont_lines.into_iter().enumerate() {
                         let line_w = line.last().map_or(0.0, |f| f.x + f.width);
                         let cont_box = LayoutBox {
+                            anchor_scroll: None, cv_hidden: Vec::new(),
                             node,
                             rect: Rect::new(content_x, cur_y, content_width, line_h),
                             used_padding: None,
@@ -1986,7 +2060,7 @@ pub(super) fn dispatch_box(
                     cur_x = content_x;
                     row_has_baseline = false;
                     lay_out(&mut child, cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
-                    rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, viewport) };
+                    rel = if is_run { (0.0, 0.0) } else { unshift_relative(&mut child, content_width, None, viewport) };
                     advance = child.rect.width;
                 }
                 let idx = children.len();
@@ -2235,7 +2309,7 @@ pub(super) fn dispatch_box(
         BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => unreachable!(),
     }
 
-    finish_after_match(b, &s, em, cb, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
+    finish_after_match(b, &s, em, cb, available_height, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
     DispatchOutcome::Done
 }
 
@@ -2253,6 +2327,7 @@ pub(super) fn finish_after_match(
     s: &ComputedStyle,
     em: f32,
     cb: f32,
+    available_height: Option<f32>,
     is_positioned: bool,
     pcb: Rect,
     abs_deferred: &[(usize, f32, f32)],
@@ -2283,7 +2358,7 @@ pub(super) fn finish_after_match(
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
     if matches!(s.position, Position::Relative) {
-        let (off_x, off_y) = relative_offset(s, em, cb, viewport);
+        let (off_x, off_y) = relative_offset(s, em, cb, available_height, viewport);
         if off_x != 0.0 || off_y != 0.0 {
             shift_tree(b, off_x, off_y);
         }
@@ -2297,8 +2372,8 @@ pub(super) fn finish_after_match(
 /// Takes the `position: relative` offset that `finish_after_match` applied off
 /// `child` again and returns it, so a line-box layout can flow from the
 /// unshifted position (§9.4.3) and re-apply the offset once the box is placed.
-fn unshift_relative(child: &mut LayoutBox, cb: f32, viewport: Size) -> (f32, f32) {
-    let (dx, dy) = relative_offset(&child.style, child.style.font_size, cb, viewport);
+fn unshift_relative(child: &mut LayoutBox, cb: f32, cb_h: Option<f32>, viewport: Size) -> (f32, f32) {
+    let (dx, dy) = relative_offset(&child.style, child.style.font_size, cb, cb_h, viewport);
     if dx != 0.0 || dy != 0.0 {
         shift_tree(child, -dx, -dy);
     }
@@ -2308,23 +2383,23 @@ fn unshift_relative(child: &mut LayoutBox, cb: f32, viewport: Size) -> (f32, f32
 /// CSS Positioned Layout L3 §9.4.3 — смещение `position: relative` от `left/right/top/bottom`.
 /// Бокс уже сдвинут на это значение (`shift_tree` в конце раскладки), а родительский поток
 /// обязан отсчитывать курсор от несмещённой позиции — §9.4.3 «не влияет на соседей».
-pub(crate) fn relative_offset(s: &ComputedStyle, em: f32, cb: f32, viewport: Size) -> (f32, f32) {
+///
+/// `left`/`right` в процентах считаются от ширины `cb`, `top`/`bottom` — от высоты `cb_h`
+/// содержащего блока; при неопределённой высоте (`None`, `height: auto`) процент
+/// вычисляется в `auto` (CSS Positioned Layout L3 §3.1.1).
+pub(crate) fn relative_offset(s: &ComputedStyle, em: f32, cb: f32, cb_h: Option<f32>, viewport: Size) -> (f32, f32) {
     if !matches!(s.position, Position::Relative) {
         return (0.0, 0.0);
     }
-    let off_x = match &s.left {
-        LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-        LengthOrAuto::Auto => match &s.right {
-            LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-            LengthOrAuto::Auto => 0.0,
-        },
+    let resolve = |l: &LengthOrAuto, basis: Option<f32>| match l {
+        LengthOrAuto::Length(l) => l.resolve(em, basis, viewport),
+        LengthOrAuto::Auto => None,
     };
-    let off_y = match &s.top {
-        LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
-        LengthOrAuto::Auto => match &s.bottom {
-            LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
-            LengthOrAuto::Auto => 0.0,
-        },
-    };
+    let off_x = resolve(&s.left, Some(cb))
+        .or_else(|| resolve(&s.right, Some(cb)).map(|r| -r))
+        .unwrap_or(0.0);
+    let off_y = resolve(&s.top, cb_h)
+        .or_else(|| resolve(&s.bottom, cb_h).map(|b| -b))
+        .unwrap_or(0.0);
     (off_x, off_y)
 }

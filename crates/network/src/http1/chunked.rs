@@ -76,6 +76,31 @@ pub(crate) enum BodyFraming {
     Chunked,
     /// Ни длины, ни chunked — читаем до EOF (только при `Connection: close`).
     Eof,
+    /// Тела нет вовсе (RFC 9110 §9.3.2): ответ на `HEAD` либо статус из
+    /// «no body» (1xx/204/304). Длина из `Content-Length` НЕ читается —
+    /// это длина тела, которое метод/статус запретили показывать.
+    None,
+}
+
+/// Ответ не имеет тела: ответ на `HEAD` (RFC 9110 §9.3.2 «Responses to HEAD
+/// and 304 have no body») и ответы с «no body»-статусом — 1xx (§15.2),
+/// 204 (§15.3.5), 304 (§15.4.5).
+///
+/// Вынесено отдельной функцией, потому что ДВА разных места решают это
+/// по-разному и обязаны решать одинаково: `read_response` (буферизованный
+/// путь) и `read_response_streamed` (streaming-путь). Плюс к этому
+/// `Content-Length` у таких ответов описывает длину тела, которое сервер
+/// НЕ прислал, — читать его нельзя, иначе клиент съест следующий ответ на
+/// том же keep-alive соединении.
+pub(crate) fn response_has_no_body(status: u16, method: &str) -> bool {
+    // 1xx — информационные (RFC 9110 §15.2), 204 — «No Content» (§15.3.5),
+    // 304 — «Not Modified» (§15.4.5). У всех тела нет.
+    if status == 204 || status == 304 || (100..200).contains(&status) {
+        return true;
+    }
+    // Ответ на HEAD несёт те же заголовки, что и GET, но без тела
+    // (RFC 9110 §9.3.2).
+    method.eq_ignore_ascii_case("HEAD")
 }
 
 /// Стратегия декодирования тела для прогрессивного preview-sink-а. Тело всегда
@@ -145,6 +170,11 @@ impl<R: BufRead> Read for BodyReader<'_, R> {
             return Ok(0);
         }
         match self.framing {
+            // Тела нет (ответ на HEAD / 1xx / 204 / 304) — читать нечего.
+            BodyFraming::None => {
+                self.done = true;
+                Ok(0)
+            }
             BodyFraming::Length(_) => {
                 if self.remaining == 0 {
                     self.done = true;
@@ -275,6 +305,8 @@ pub(crate) fn read_body_to_eof<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
 /// body-секции `read_response`, параметризованный уже определённым `framing`.
 pub(crate) fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFraming) -> Result<Vec<u8>> {
     match framing {
+        // Тела нет (ответ на HEAD / 1xx / 204 / 304) — пустое тело.
+        BodyFraming::None => Ok(Vec::new()),
         BodyFraming::Chunked => read_chunked(reader),
         BodyFraming::Length(len) => {
             let mut buf = vec![0u8; len];
@@ -298,7 +330,11 @@ pub(crate) fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFram
 /// декодированные байты. Для сжатого тела decode выполняется дважды (streaming
 /// preview + финальный авторитетный) — осознанный размен на простоту: документ
 /// декодируется один раз за навигацию.
-pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>) -> Result<Response> {
+pub(crate) fn read_response_streamed(
+    conn: &mut Connection,
+    method: &str,
+    sink: ChunkSink<'_>,
+) -> Result<Response> {
     let (status, headers, server_wants_close, early_hint_links) = read_head(conn)?;
 
     let is_chunked = header_value(&headers, "transfer-encoding")
@@ -311,12 +347,16 @@ pub(crate) fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>)
     // framing applies unconditionally, not gated on an explicit `Connection:
     // close` header (see `read_response`'s matching comment — found running
     // P2-wpt S4 against wptserve, which omits that header).
-    let framing = if is_chunked {
+    //
+    // Ответ на HEAD и ответы «без тела» (1xx/204/304) тела не имеют
+    // (RFC 9110 §9.3.2) — `Content-Length` в них описывает длину тела,
+    // которого сервер не прислал, и читать его нельзя.
+    let framing = if response_has_no_body(status, method) {
+        BodyFraming::None
+    } else if is_chunked {
         BodyFraming::Chunked
     } else if let Some(len) = content_length {
         BodyFraming::Length(len)
-    } else if status == 204 || status == 304 {
-        BodyFraming::Length(0)
     } else {
         BodyFraming::Eof
     };

@@ -257,7 +257,13 @@ pub(crate) fn render_source_to_png(
 
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
-        let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
+        // `::selection` of a selection a page script made (`getSelection().addRange`).
+        let custom = crate::display_list_metrics::custom_highlights(parsed.js_ctx.as_deref());
+        let highlights = {
+            let doc = parsed.document.lock().unwrap_or_else(|e| e.into_inner());
+            crate::display_list_metrics::page_highlights(&parsed.layout, &doc, &parsed.stylesheet, vp, false, &parsed.measurer, &custom)
+        };
+        let mut dl = crate::display_list_metrics::paint_ordered_in_highlighted(&parsed.layout, vp, highlights);
         // BUG-480 срез 15: содержимое под-документов фреймов — и здесь. Живой
         // путь вклеивает его в `Lumen::set_display_list` (срез 14), а `--dump-
         // display-list` — у себя; снимок собирает список сам и до этого среза
@@ -367,14 +373,28 @@ pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, v
         js.run_animation_frame(ts);
     }
     settle_reftest_wait(js.as_ref(), ts);
-    if !js.take_dom_dirty() {
+    // BUG-1451: `el.focus()` из скрипта страницы ставит запрос в очередь, который живой цикл
+    // дренирует в `about_to_wait` и кладёт в `focused_node` (он питает `:focus`/`:focus-within`
+    // при каждом layout). Однократный headless-путь этого не делал, и стиль `:focus` в снимке
+    // не применялся. Последний запрос — фокус на момент снимка.
+    let focused = js
+        .take_focus_requests()
+        .into_iter()
+        .last()
+        .flatten()
+        .map(|n| lumen_dom::NodeId::from_index(n as usize));
+    let dom_dirty = js.take_dom_dirty();
+    if !dom_dirty && focused.is_none() {
         return;
     }
     let layout = {
         let Ok(doc) = parsed.document.lock() else { return };
-        lumen_layout::layout_measured_hyp(
+        lumen_layout::set_interactive_state(None, focused, None);
+        let layout = lumen_layout::layout_measured_hyp(
             &doc, &parsed.stylesheet, vp, &parsed.measurer, &NullHyphenationProvider, false,
-        )
+        );
+        lumen_layout::clear_interactive_state();
+        layout
     };
     parsed.layout = layout;
 }
@@ -838,7 +858,12 @@ pub(crate) fn run_dump(
         DumpKind::DisplayList => {
             let vp = dump_vp;
             let parsed = parse_and_layout(&raw.bytes, raw.content_type.as_deref(), &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, None, lumen_core::ColorSpace::Srgb, false, &raw.csp_header, &raw.report_to_endpoints, raw.sync_xhr_document_policy, raw.sync_xhr_permissions_policy, raw.referrer_policy_header.as_deref(), raw.document_referrer.as_deref(), None)?;
-            let mut dl = crate::display_list_metrics::paint_ordered_in(&parsed.layout, vp);
+            let custom = crate::display_list_metrics::custom_highlights(parsed.js_ctx.as_deref());
+            let highlights = {
+                let doc = parsed.document.lock().unwrap_or_else(|e| e.into_inner());
+                crate::display_list_metrics::page_highlights(&parsed.layout, &doc, &parsed.stylesheet, vp, false, &parsed.measurer, &custom)
+            };
+            let mut dl = crate::display_list_metrics::paint_ordered_in_highlighted(&parsed.layout, vp, highlights);
             // BUG-480 срез 14: дамп обязан показывать то же, что попадёт на
             // экран, — окно вклеивает содержимое под-документов в список
             // страницы (`Lumen::set_display_list`), и без этой строки дамп

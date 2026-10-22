@@ -23,6 +23,7 @@ use crate::style::{Color, ColorFloat, CssColor, SystemColor, split_top_level_com
 /// каскада (`currentcolor`, системные цвета) здесь НЕ резолвятся — за них
 /// отвечают [`parse_css_color_legacy`] и [`system_color`].
 pub fn parse_color(s: &str) -> Option<Color> {
+    let s = strip_comments(s);
     let s = s.trim();
     if let Some(c) = named_color(&s.to_ascii_lowercase()) {
         return Some(c);
@@ -57,6 +58,7 @@ pub fn parse_color(s: &str) -> Option<Color> {
 /// their input has to stay in functional form — Canvas 2D
 /// `fillStyle`/`strokeStyle`/`shadowColor` (BUG-930).
 pub fn parse_color_function(s: &str) -> Option<ColorFloat> {
+    let s = strip_comments(s);
     let s = s.trim();
     if let Some(wide) = parse_css_color_fn(s) {
         return Some(wide);
@@ -92,6 +94,7 @@ pub fn parse_color_function(s: &str) -> Option<ColorFloat> {
 /// assignment instead of storing an unparsed string — the gap measured in
 /// WPT `css/CSS2/syntax/colors-007.html` (BUG-465).
 pub fn canonical_specified_color(s: &str) -> Option<String> {
+    let s = strip_comments(s);
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return None;
@@ -108,6 +111,12 @@ pub fn canonical_specified_color(s: &str) -> Option<String> {
     }
     if let Some(c) = parse_hex_color(trimmed) {
         return Some(crate::selector_query::color_to_css(c));
+    }
+    // BUG-1425: lab()/oklch()/color(…) сериализуются в своём пространстве; `color-mix()` и
+    // относительные цвета остаются записанными как есть (CSS Color L5 §10.2 / §4.4).
+    if let Some(css) = super::color_serialize::computed_color_css(trimmed) {
+        let keep_source = lower.starts_with("color-mix(") || lower.contains("(from ");
+        return Some(if keep_source { lower } else { css });
     }
     if let Some(c) = parse_function_color(trimmed) {
         return Some(crate::selector_query::color_to_css(c));
@@ -151,6 +160,30 @@ pub(in crate::style) fn parse_color_legacy(s: &str, is_quirks: bool) -> Option<C
     parse_color(&with_hash)
 }
 
+/// Заменяет `/* … */` пробелом: комментарий между токенами цветовой функции
+/// (`hsl(120/* c */75%/* c */50%)`) — разделитель, а не часть значения. Без
+/// комментариев ничего не копирует. Незакрытый комментарий тянется до конца.
+pub(super) fn strip_comments(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains("/*") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("/*") {
+        out.push_str(&rest[..i]);
+        out.push(' ');
+        match rest[i + 2..].find("*/") {
+            Some(j) => rest = &rest[i + 2 + j + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
 /// Парсит `<color>` + `currentcolor` keyword в `CssColor`.
 ///
 /// `currentcolor` — специальное CSS keyword, означающее «использовать
@@ -158,6 +191,7 @@ pub(in crate::style) fn parse_color_legacy(s: &str, is_quirks: bool) -> Option<C
 /// `Some(CssColor::CurrentColor)` для этого случая;
 /// `Some(CssColor::Rgba(...))` для обычных цветов; `None` для невалидных.
 pub(in crate::style) fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
+    let s = strip_comments(s);
     let s = s.trim();
     if s.eq_ignore_ascii_case("currentcolor") {
         return Some(CssColor::CurrentColor);
@@ -602,6 +636,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
     }
+    // CSS Color 4 §4.4: `none` существует только в современном (беззапятом) синтаксисе.
+    if body.contains(',') && parts.iter().any(|p| p == "none") {
+        return None;
+    }
     let alpha = if parts.len() == 4 {
         parse_alpha_component(&parts[3])?
     } else {
@@ -624,8 +662,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
         }
         ColorFn::Hsl => {
             let h = parse_hue_component(&parts[0])?;
-            let s = parse_percent_component(&parts[1])?;
-            let l = parse_percent_component(&parts[2])?;
+            // CSS Color 4 §8: в современном синтаксисе s/l бывают и `<number>` (100 = 100%).
+            let modern = !body.contains(',');
+            let s = parse_percent_component(&parts[1], modern)?;
+            let l = parse_percent_component(&parts[2], modern)?;
             let (r, g, b) = hsl_to_rgb(h, s, l);
             Some(Color { r, g, b, a: alpha })
         }
@@ -678,6 +718,10 @@ fn parse_hwb_body(body: &str) -> Option<Color> {
     if body.trim_start().starts_with("from ") {
         return None;
     }
+    // CSS Color 4 §7: у `hwb()` нет legacy-синтаксиса с запятыми.
+    if body.contains(',') {
+        return None;
+    }
     let parts = split_color_args(body);
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
@@ -688,8 +732,8 @@ fn parse_hwb_body(body: &str) -> Option<Color> {
         255
     };
     let h = parse_hue_component(&parts[0])?;
-    let w = parse_percent_component(&parts[1])?;
-    let bk = parse_percent_component(&parts[2])?;
+    let w = parse_percent_component(&parts[1], true)?;
+    let bk = parse_percent_component(&parts[2], true)?;
     if w + bk >= 1.0 {
         let gray = clamp_byte(w / (w + bk) * 255.0);
         return Some(Color { r: gray, g: gray, b: gray, a: alpha });
@@ -774,6 +818,12 @@ impl ColorFn {
 /// `alpha`) resolves to the origin's channel value, optionally combined with
 /// numbers/percentages inside `calc()`. Returns `None` on any parse error.
 fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
+    let (resolved, alpha) = resolve_relative_color(kind, body)?;
+    parse_function_color(&kind.format_resolved(resolved, alpha))
+}
+
+/// Канонические значения каналов и alpha относительного цвета — до округления в байты.
+fn resolve_relative_color(kind: ColorFn, body: &str) -> Option<([f32; 3], f32)> {
     let toks = tokenize_with_parens(body);
     if toks.len() < 4 {
         return None;
@@ -815,7 +865,44 @@ fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
         Some(a) => eval_color_component(a, &vars, 1.0)?,
         None => chans[3],
     };
-    parse_function_color(&kind.format_resolved(resolved, alpha))
+    Some((resolved, alpha))
+}
+
+/// Computed-значение относительного цвета `<fn>(from …)` (CSS Color L5 §4.4): `rgb()`/`hsl()`
+/// сохраняют float-каналы в `color(srgb …)`, lab-подобные остаются в своей функции (BUG-1425).
+/// `lower` — значение в нижнем регистре; `None` — не относительный цвет или он невалиден.
+pub(super) fn relative_color_css(lower: &str) -> Option<String> {
+    use super::color_serialize::{LabFn, finish_lab, srgb_function};
+    let lower = lower.trim();
+    let (kind, body) = [
+        ("rgba(", ColorFn::Rgb),
+        ("rgb(", ColorFn::Rgb),
+        ("hsla(", ColorFn::Hsl),
+        ("hsl(", ColorFn::Hsl),
+        ("oklch(", ColorFn::Oklch),
+        ("oklab(", ColorFn::Oklab),
+        ("lab(", ColorFn::Lab),
+        ("lch(", ColorFn::Lch),
+    ]
+    .into_iter()
+    .find_map(|(name, k)| Some((k, lower.strip_prefix(name)?.strip_suffix(')')?)))?;
+    let rest = body.trim_start().strip_prefix("from ")?;
+    let (c, alpha) = resolve_relative_color(kind, rest.trim())?;
+    let lab = |k| Some(finish_lab(k, [Some(c[0]), Some(c[1]), Some(c[2])], Some(alpha.clamp(0.0, 1.0))));
+    match kind {
+        ColorFn::Rgb => Some(srgb_function([c[0] / 255.0, c[1] / 255.0, c[2] / 255.0], alpha)),
+        ColorFn::Hsl => {
+            let col = parse_function_color(&kind.format_resolved(c, alpha))?;
+            Some(srgb_function(
+                [f32::from(col.r) / 255.0, f32::from(col.g) / 255.0, f32::from(col.b) / 255.0],
+                f32::from(col.a) / 255.0,
+            ))
+        }
+        ColorFn::Lab => lab(LabFn::Lab),
+        ColorFn::Lch => lab(LabFn::Lch),
+        ColorFn::Oklab => lab(LabFn::Oklab),
+        ColorFn::Oklch => lab(LabFn::Oklch),
+    }
 }
 
 /// Resolve one relative-color component to its canonical channel value.
@@ -824,7 +911,7 @@ fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
 /// literal number / `<percentage>` / `<angle>`, or a `calc()` expression mixing
 /// keywords, numbers and percentages with `+ - * /` and parentheses. `pct_basis`
 /// is the channel's percent reference (`50%` → `0.5 * pct_basis`).
-fn eval_color_component(raw: &str, vars: &[(&str, f32)], pct_basis: f32) -> Option<f32> {
+pub(super) fn eval_color_component(raw: &str, vars: &[(&str, f32)], pct_basis: f32) -> Option<f32> {
     // `calc(` wrappers (including nested) become plain parens; bare tokens pass through.
     let normalized = raw.trim().replace("calc(", "(");
     let tokens = tokenize_color_expr(&normalized, pct_basis)?;
@@ -988,6 +1075,9 @@ fn eval_color_primary(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]
 /// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
 fn parse_oklch_lightness(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0).clamp(0.0, 1.0));
     }
@@ -997,6 +1087,9 @@ fn parse_oklch_lightness(s: &str) -> Option<f32> {
 /// Парсит chroma для oklch: число (0..~0.4 типично) или процент (100% = 0.4).
 fn parse_oklch_chroma(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.3: 100% = 0.4.
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 0.4).max(0.0));
@@ -1007,6 +1100,9 @@ fn parse_oklch_chroma(s: &str) -> Option<f32> {
 /// Парсит a/b для oklab: число (~±0.4) или процент (100% = 0.4).
 fn parse_oklab_ab(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.4: 100% = 0.4 для a/b.
         return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 0.4);
@@ -1017,6 +1113,9 @@ fn parse_oklab_ab(s: &str) -> Option<f32> {
 /// Парсит lightness для CIE Lab/LCH: число 0..100 или процент 0..100%.
 fn parse_lab_lightness(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         return pct.trim().parse::<f32>().ok().map(|p| p.clamp(0.0, 100.0));
     }
@@ -1026,6 +1125,9 @@ fn parse_lab_lightness(s: &str) -> Option<f32> {
 /// Парсит a/b для CIE Lab: число (~±125) или процент (100% = 125).
 fn parse_lab_ab(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.5: 100% = 125.
         return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 125.0);
@@ -1036,6 +1138,9 @@ fn parse_lab_ab(s: &str) -> Option<f32> {
 /// Парсит chroma для LCH: число (≥0, ~0..230) или процент (100% = 150).
 fn parse_lch_chroma(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         // CSS Color L4 §10.5: 100% = 150 для LCH.
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 150.0).max(0.0));
@@ -1043,24 +1148,120 @@ fn parse_lch_chroma(s: &str) -> Option<f32> {
     s.parse::<f32>().ok().map(|v| v.max(0.0))
 }
 
-/// CSS Color L4 §10.4: OKLab напрямую → linear sRGB → gamma sRGB.
-/// `l` ∈ [0,1], `a`/`b` — unitless. Алгоритм — second half of oklch_to_srgb.
-fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+/// OKLab → линейный sRGB без обрезки (значения вне `[0,1]` — вне гаммы).
+fn oklab_to_linear(l: f32, a: f32, b: f32) -> [f32; 3] {
     let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
     let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
     let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
     let l3 = l_ * l_ * l_;
     let m3 = m_ * m_ * m_;
     let s3 = s_ * s_ * s_;
-    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
-    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
-    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
-    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+    [
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    ]
 }
 
-/// CSS Color L4 §10.5: CIE Lab (D50) → XYZ → D65 (Bradford) → linear sRGB.
-/// `l` ∈ [0,100], `a`/`b` — unitless (CIE units, не процентные).
+/// Линейный sRGB (в том числе вне гаммы) → OKLab.
+fn linear_to_oklab(rgb: [f32; 3]) -> [f32; 3] {
+    let [r, g, b] = rgb;
+    let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+/// Допуск принадлежности гамме: гасит шум f32 после матричных преобразований.
+const GAMUT_EPSILON: f32 = 2e-5;
+
+fn in_srgb_gamut(rgb: [f32; 3]) -> bool {
+    rgb.iter().all(|c| (-GAMUT_EPSILON..=1.0 + GAMUT_EPSILON).contains(c))
+}
+
+fn encode_linear(rgb: [f32; 3]) -> (u8, u8, u8) {
+    (encode_srgb(rgb[0]), encode_srgb(rgb[1]), encode_srgb(rgb[2]))
+}
+
+/// CSS Color 4 §13.2: сопоставление гамм в sRGB — бинарный поиск по chroma в OKLCH
+/// с постоянной светлотой и тоном, пока обрезанный цвет не окажется в пределах JND
+/// (ΔEOK < 0.02) от неё. `L ≥ 1` → белый, `L ≤ 0` → чёрный. Вход — линейный sRGB
+/// (возможно, вне гаммы), выход — готовые байты sRGB.
+fn gamut_map_linear_srgb(rgb: [f32; 3]) -> (u8, u8, u8) {
+    if in_srgb_gamut(rgb) {
+        return encode_linear(rgb);
+    }
+    const JND: f32 = 0.02;
+    const EPS: f32 = 0.0001;
+    let [l, a, b] = linear_to_oklab(rgb);
+    if l >= 1.0 {
+        return (255, 255, 255);
+    }
+    if l <= 0.0 {
+        return (0, 0, 0);
+    }
+    let chroma = a.hypot(b);
+    let (cos_h, sin_h) = if chroma > 0.0 { (a / chroma, b / chroma) } else { (1.0, 0.0) };
+    let at = |c: f32| oklab_to_linear(l, c * cos_h, c * sin_h);
+    let clip = |v: [f32; 3]| v.map(|c| c.clamp(0.0, 1.0));
+    let delta_e = |clipped: [f32; 3], c: f32| {
+        let [cl, ca, cb] = linear_to_oklab(clipped);
+        ((cl - l).powi(2) + (ca - c * cos_h).powi(2) + (cb - c * sin_h).powi(2)).sqrt()
+    };
+    let origin_clipped = clip(rgb);
+    if delta_e(origin_clipped, chroma) < JND {
+        return encode_linear(origin_clipped);
+    }
+    let (mut min, mut max, mut min_in_gamut) = (0.0_f32, chroma, true);
+    let mut clipped = origin_clipped;
+    while max - min > EPS {
+        let mid = (min + max) / 2.0;
+        let cur = at(mid);
+        if min_in_gamut && in_srgb_gamut(cur) {
+            min = mid;
+            continue;
+        }
+        clipped = clip(cur);
+        let e = delta_e(clipped, mid);
+        if e < JND {
+            if JND - e < EPS {
+                return encode_linear(clipped);
+            }
+            min_in_gamut = false;
+            min = mid;
+        } else {
+            max = mid;
+        }
+    }
+    encode_linear(clipped)
+}
+
+/// CSS Color L4 §10.4: OKLab напрямую → linear sRGB → gamma sRGB (с сопоставлением гамм).
+/// `l` ∈ [0,1], `a`/`b` — unitless.
+fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    if l >= 1.0 {
+        return (255, 255, 255);
+    }
+    if l <= 0.0 {
+        return (0, 0, 0);
+    }
+    gamut_map_linear_srgb(oklab_to_linear(l, a, b))
+}
+
+/// CSS Color L4 §10.5: CIE Lab (D50) → XYZ → D65 (Bradford) → linear sRGB
+/// (с сопоставлением гамм). `l` ∈ [0,100], `a`/`b` — unitless (CIE units, не процентные).
+/// `L = 100` — белый, `L = 0` — чёрный при любых `a`/`b`.
 fn lab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    if l >= 100.0 {
+        return (255, 255, 255);
+    }
+    if l <= 0.0 {
+        return (0, 0, 0);
+    }
     // Lab → XYZ (D50). Алгоритм CIE 15.3 §8.4.2.
     let fy = (l + 16.0) / 116.0;
     let fx = a / 500.0 + fy;
@@ -1098,7 +1299,7 @@ fn lab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
     let lr = 3.240_625_5 * x_d65 - 1.537_208 * y_d65 - 0.498_628_6 * z_d65;
     let lg = -0.968_930_7 * x_d65 + 1.875_756_1 * y_d65 + 0.041_517_5 * z_d65;
     let lb = 0.055_710_1 * x_d65 - 0.204_021_1 * y_d65 + 1.056_995_9 * z_d65;
-    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+    gamut_map_linear_srgb([lr, lg, lb])
 }
 
 /// Linear sRGB → gamma sRGB (IEC 61966-2-1).
@@ -1115,34 +1316,8 @@ pub(in crate::style) fn encode_srgb(c: f32) -> u8 {
 /// CSS Color L4 §10.3: OKLCH → OKLab → linear sRGB → sRGB (gamma-encoded).
 /// `l` ∈ [0,1], `c` ≥ 0, `h_deg` в градусах.
 fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
-    // OKLCH → OKLab.
     let h_rad = h_deg.to_radians();
-    let a = c * h_rad.cos();
-    let b = c * h_rad.sin();
-
-    // OKLab → linear LMS → linear sRGB. Константы из CSS Color L4 §10.3,
-    // округлены до f32-precision.
-    let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
-    let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
-    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
-    let l3 = l_ * l_ * l_;
-    let m3 = m_ * m_ * m_;
-    let s3 = s_ * s_ * s_;
-    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
-    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
-    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
-
-    // Linear sRGB → gamma sRGB (per IEC 61966-2-1).
-    fn encode(c: f32) -> u8 {
-        let c = c.clamp(0.0, 1.0);
-        let v = if c <= 0.003_130_8 {
-            12.92 * c
-        } else {
-            1.055 * c.powf(1.0 / 2.4) - 0.055
-        };
-        clamp_byte(v * 255.0)
-    }
-    (encode(lr), encode(lg), encode(lb))
+    oklab_to_srgb(l, c * h_rad.cos(), c * h_rad.sin())
 }
 
 /// CSS Color L5 §10.2 — parse `color-mix(in <space>, <c1> [pct]?, <c2> [pct]?)`
@@ -1165,7 +1340,7 @@ fn parse_color_mix(body: &str) -> Option<Color> {
 /// must preserve full precision for `color(srgb …)`-form serialization
 /// (BUG-930 — rounding to `u8` and back loses it, e.g. `128/255 = 0.50196`
 /// instead of the `0.5` a direct float mix gives) need this instead.
-fn parse_color_mix_f32(body: &str) -> Option<([f32; 4], crate::color_mix::MixColorSpace)> {
+pub(super) fn parse_color_mix_f32(body: &str) -> Option<([f32; 4], crate::color_mix::MixColorSpace)> {
     let parts = split_top_level_commas(body);
     if parts.len() != 3 {
         return None;
@@ -1349,18 +1524,24 @@ fn split_color_args(body: &str) -> Vec<String> {
     let tokens: Vec<&str> = normalized.split_whitespace().collect();
     // Ищем `/` — разделитель alpha.
     if let Some(slash) = tokens.iter().position(|&t| t == "/") {
-        let mut head: Vec<String> = tokens[..slash].iter().map(|t| t.to_string()).collect();
-        if let Some(alpha) = tokens.get(slash + 1) {
-            head.push((*alpha).to_string());
+        // Ровно три канала до `/` и ровно один токен alpha после него.
+        if slash != 3 || tokens.len() != 5 {
+            return Vec::new();
         }
-        head
-    } else {
+        tokens.iter().filter(|&&t| t != "/").map(|t| t.to_string()).collect()
+    } else if tokens.len() == 3 {
+        // Alpha без `/` в современном синтаксисе невалидна (`hsl(120 75% 50% 0.5)`).
         tokens.iter().map(|t| t.to_string()).collect()
+    } else {
+        Vec::new()
     }
 }
 
 fn parse_rgb_component(s: &str) -> Option<u8> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         let p = pct.trim().parse::<f32>().ok()?;
         return Some(clamp_byte((p / 100.0) * 255.0));
@@ -1371,6 +1552,9 @@ fn parse_rgb_component(s: &str) -> Option<u8> {
 
 fn parse_alpha_component(s: &str) -> Option<u8> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0);
+    }
     if let Some(pct) = s.strip_suffix('%') {
         let p = pct.trim().parse::<f32>().ok()?;
         return Some(clamp_byte((p / 100.0) * 255.0));
@@ -1389,6 +1573,9 @@ fn parse_alpha_component(s: &str) -> Option<u8> {
 /// `grad` будет ошибочно ловиться как `rad`.
 fn parse_hue_component(s: &str) -> Option<f32> {
     let s = s.trim();
+    if s == "none" {
+        return Some(0.0);
+    }
     if let Some(num) = s.strip_suffix("turn") {
         return num.trim().parse::<f32>().ok().map(|v| v * 360.0);
     }
@@ -1402,10 +1589,18 @@ fn parse_hue_component(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok()
 }
 
-fn parse_percent_component(s: &str) -> Option<f32> {
+/// Процентный канал hsl/hwb в долях `0..=1`. `bare_number` — разрешить голое
+/// число (`100` = `100%`, только в современном синтаксисе).
+fn parse_percent_component(s: &str, bare_number: bool) -> Option<f32> {
     let s = s.trim();
-    let pct = s.strip_suffix('%')?;
-    let p = pct.trim().parse::<f32>().ok()?;
+    if s == "none" {
+        return Some(0.0);
+    }
+    let p = match s.strip_suffix('%') {
+        Some(pct) => pct.trim().parse::<f32>().ok()?,
+        None if bare_number => s.parse::<f32>().ok()?,
+        None => return None,
+    };
     Some((p / 100.0).clamp(0.0, 1.0))
 }
 

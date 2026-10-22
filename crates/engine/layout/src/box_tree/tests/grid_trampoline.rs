@@ -72,6 +72,7 @@ fn wrapper(node_index: usize, children: Vec<LayoutBox>) -> LayoutBox {
     style.display = Display::Grid;
     style.grid_template_columns = vec![GridTrackSize::Length(Length::Px(COL_WIDTH))];
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -99,6 +100,7 @@ fn leaf() -> LayoutBox {
     let mut style = ComputedStyle::root();
     style.height = Some(Length::Px(LEAF_HEIGHT));
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -179,6 +181,7 @@ fn deep_subgrid_chain_lays_out_without_overflowing_the_stack() {
         style.display = Display::Grid;
         style.grid_template_columns = vec![GridTrackSize::Subgrid];
         LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node: lumen_dom::NodeId::from_index(node_index),
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             used_padding: None, used_line_height: style.font_size * style.line_height,

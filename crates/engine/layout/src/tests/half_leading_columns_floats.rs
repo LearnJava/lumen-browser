@@ -557,6 +557,54 @@ fn ordered_list_decimal_marker() {
     }
 }
 
+// ── ::marker UA style and text properties (BUG-1446) ─────────────────
+
+fn marker_of_first_item(root: &LayoutBox) -> &LayoutBox {
+    let ol = first_element_child(root);
+    let li = ol.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+    li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap()
+}
+
+#[test]
+fn marker_takes_ua_defaults_not_inherited_text_transform_and_indent() {
+    // CSS Pseudo-Elements L4 §4.2: `text-transform` and `text-indent` are inherited, but a
+    // marker starts from `none` / `0` rather than taking the list item's values.
+    let root = lay(
+        "<ol><li>a</li></ol>",
+        "li { text-transform: uppercase; text-indent: 7px; }",
+    );
+    let m = marker_of_first_item(&root);
+    assert_eq!(m.style.text_transform, crate::style::TextTransform::None);
+    assert_eq!(m.style.text_indent, crate::style::Length::Px(0.0));
+    assert_eq!(m.style.unicode_bidi, crate::style::UnicodeBidi::Isolate);
+    assert_eq!(
+        m.style.font_variant_numeric.spacing,
+        crate::style::NumericSpacing::Tabular
+    );
+}
+
+#[test]
+fn marker_text_transform_rule_changes_the_marker_string() {
+    let root = lay(
+        "<ol><li>a</li></ol>",
+        "ol { list-style-type: lower-alpha; } li::marker { text-transform: uppercase; }",
+    );
+    let m = marker_of_first_item(&root);
+    let BoxKind::Marker { text, .. } = &m.kind else { unreachable!() };
+    assert_eq!(text, "A. ");
+}
+
+#[test]
+fn marker_letter_spacing_rule_applies_to_the_marker_style() {
+    // CSS Pseudo-Elements L4 §4.2: `letter-spacing` applies to `::marker`; the painter reads
+    // it off the marker box's style (the box width is measured with it, too).
+    let root = lay(
+        "<ol><li>a</li></ol>",
+        "ol { list-style-type: decimal; } li::marker { letter-spacing: 10px; }",
+    );
+    assert_eq!(marker_of_first_item(&root).style.letter_spacing, 10.0);
+}
+
 #[test]
 fn marker_outside_not_in_flow() {
     // For outside markers: child_y must not advance past the marker.
@@ -723,19 +771,55 @@ fn clear_both_advances_past_floats() {
         "clear:both block must start below tallest float (got {})", clr.rect.y);
 }
 
-/// Контейнер height охватывает float (float clearing родителя).
-/// CSS 2.1 §9.5: контейнер должен расти, чтобы содержать свои float-ы.
+/// CSS 2.1 §10.6.7: высота охватывает float только у корня BFC (`overflow: hidden`, `flow-root`).
 #[test]
-fn container_height_encloses_float() {
+fn bfc_root_height_encloses_float() {
+    for establish in ["overflow: hidden;", "display: flow-root;"] {
+        let root = lay(
+            "<div class='c'><div class='f'></div></div>",
+            &format!(".c {{ width: 400px; {establish} }}
+                      .f {{ float: left; width: 100px; height: 80px; }}"),
+        );
+        let c = root.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))
+            .expect("container");
+        assert!(c.rect.height >= 80.0 - 0.01,
+            "{establish} container must enclose float (height={}, expected >=80)", c.rect.height);
+    }
+}
+
+/// BUG-1403, CSS 2.1 §10.6.3: блок без BFC не растёт до своего float, float выступает вниз
+/// и обтекает следующий блок.
+#[test]
+fn plain_block_does_not_enclose_float_and_next_block_wraps_it() {
     let root = lay(
-        "<div class='c'><div class='f'>x</div></div>",
-        ".c { width: 400px; }
-         .f { float: left; width: 100px; height: 80px; }",
+        "<div class='a'><div class='f'></div></div><div class='b'></div>",
+        ".a { width: 400px; }
+         .f { float: left; width: 10px; height: 50px; }
+         .b { height: 5px; }",
     );
-    let c = first_element_child(&root);
-    // Container has no non-float children, so height = float height = 80.
-    assert!(c.rect.height >= 80.0 - 0.01,
-        "container must enclose float (height={}, expected >=80)", c.rect.height);
+    let blocks: Vec<&LayoutBox> = root.children.iter()
+        .filter(|c| matches!(c.kind, BoxKind::Block))
+        .collect();
+    let (a, b) = (blocks[0], blocks[1]);
+    assert!(a.rect.height.abs() < 0.01, "a must not enclose its float (height={})", a.rect.height);
+    assert!(b.rect.y.abs() < 0.01, "b follows a at y=0 (got {})", b.rect.y);
+    assert!(b.rect.x >= 10.0 - 0.01, "b is displaced by the float that sticks out of a (x={})", b.rect.x);
+}
+
+/// BUG-1403: `clear` на следующем блоке учитывает float, выступающий из предыдущего блока.
+#[test]
+fn clear_sees_float_of_previous_plain_block() {
+    let root = lay(
+        "<div class='a'><div class='f'></div></div><div class='b'></div>",
+        ".a { width: 400px; }
+         .f { float: left; width: 10px; height: 50px; }
+         .b { clear: left; height: 5px; }",
+    );
+    let blocks: Vec<&LayoutBox> = root.children.iter()
+        .filter(|c| matches!(c.kind, BoxKind::Block))
+        .collect();
+    assert!((blocks[1].rect.y - 50.0).abs() < 0.01, "b clears the float (y={})", blocks[1].rect.y);
 }
 
 /// `clear: left` сдвигает элемент мимо левого float.

@@ -46,8 +46,10 @@ mod cascade;
 mod cascade_index;
 mod computed;
 mod container;
+mod container_scroll;
 mod env;
 mod logical;
+mod math_value;
 mod matching;
 mod parse;
 mod presentational;
@@ -160,10 +162,11 @@ use property_syntax::apply_property_initial_values;
 // re-export, since `syntax_string` itself stays private (§2.1).
 pub use syntax_string::validate_registered_property;
 pub use pseudo::{
-    compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
+    is_highlight_pseudo, compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
     compute_view_transition_pseudo_style, merge_pseudo_inherited, ua_quote_content, ViewTransitionPart,
 };
 pub(in crate::style) use pseudo::pseudo_element_name;
+pub(crate) use pseudo::highlight_inherited_style;
 // Пост-каскадная `resolve_logical_properties` дописана в созданный ST-7
 // `style::logical` тем же батчем; её единственный вызыватель — `compute_style`.
 use logical::resolve_logical_properties;
@@ -194,6 +197,7 @@ pub use calc::{CalcNode, MathFn, RoundStrategy};
 // three re-exports above — `selector_query::length_to_css`'s `Length::Calc`
 // arm is its only caller.
 pub(crate) use calc::calc_node_to_css;
+pub use math_value::canonical_specified_numeric_math;
 pub use parse::box_sides::canonical_specified_anchor;
 pub use values::length::{
     canonical_specified_contain_intrinsic, canonical_specified_length, canonical_specified_line_width,
@@ -202,6 +206,8 @@ pub use values::length::{
     overflow_clip_margin_serialize, parse_length, parse_overflow_clip_margin,
     resolve_block_step_size, Length, LengthOrAuto,
 };
+pub use values::multicol_cssom::canonical_specified_multicol;
+pub(crate) use values::multicol_cssom::insert_multicol_computed;
 // SPLIT-ST16. Типы значений — типографика/текст, цвет, бокс-модель, тайминг —
 // уехали в `style::values::{typography,color,box_model,timing}`. Все четыре
 // группы — публичная поверхность крейта (`pub mod style` в `lib.rs`; `box_tree.rs`,
@@ -211,7 +217,7 @@ pub use values::length::{
 pub use values::typography::{
     ColorScheme, CssContinue, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing,
     FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
-    FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
+    FontVariantNumeric, NumericSpacing, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, TextJustify, CaseLang, resolve_match_parent, resolve_match_parent_last,
     TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
@@ -265,9 +271,11 @@ pub use values::misc::{
     ScrollbarGutter, ScrollbarWidth, TouchAction, WordBreak,
 };
 pub use container::{
-    apply_container_rules, evaluate_container_condition, ContainFlags, ContainerContext,
-    ContainerType, ContentVisibility, InterpolateSizeMode,
+    apply_container_rules, apply_matched_container_rules, evaluate_container_condition,
+    evaluate_container_query, matching_container_rules, ContainFlags,
+    ContainerContext, ContainerKinds, ContainerType, ContentVisibility, InterpolateSizeMode,
 };
+pub use container_scroll::{Edge, EdgeFlags, ScrollStateInfo};
 pub use values::scroll::{
     FontSizeAdjust, OffsetRotate, OverscrollBehavior, PrintColorAdjust, ScrollBehavior,
     ScrollInitialTarget, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
@@ -290,8 +298,12 @@ pub(crate) use values::flexgrid::{parse_auto_repeat, parse_subgrid_name_fill, pa
 // `parse_position_component` тоже была приватной в доноре, но её зовёт
 // сосед `style::apply::motion` — реэкспорт сужен до `crate::style`.
 pub(in crate::style) use values::flexgrid::{parse_position_axis, parse_position_component};
+pub use values::svg_filter::{
+    FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput, FePrimitive, FeTransfer, SvgFilter,
+    SvgFilterPrimitive,
+};
 pub use values::transform::{
-    BackfaceVisibility, ClipPath, SvgClipPath, SvgClipPlacement, SvgClipSubpath, FilterFn, GradientStop, MaskComposite, MaskLayer, MaskMode,
+    BackfaceVisibility, ClipPath, SvgClipPath, SvgClipPlacement, SvgClipSubpath, FilterFn, FilterUrl, GradientStop, MaskComposite, MaskLayer, MaskMode,
     ShapeValue, TransformFn, TransformStyle,
 };
 // Вызывателей внутри производственного `style.rs` у них нет — только

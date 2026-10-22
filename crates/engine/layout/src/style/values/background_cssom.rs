@@ -9,6 +9,7 @@
 use super::length::split_top_level_ws;
 use super::text_cssom::canonical_length_sorted;
 use crate::style::canonical_specified_color;
+use crate::style::parse::image_computed::{specified_gradient_css, specified_image_set_css};
 
 /// Каноническая запись `value` свойства `prop` либо `None`, если значение не по грамматике
 /// (присваивание игнорируется). `None` и для свойства, которого здесь нет.
@@ -74,7 +75,20 @@ fn image(s: &str) -> Option<String> {
     let name = &s[..open];
     let ident = !name.is_empty()
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    (ident && s.ends_with(')')).then(|| s.to_string())
+    if !(ident && s.ends_with(')')) {
+        return None;
+    }
+    // BUG-1428: градиент проверяется по грамматике и пишется канонически (`in <space>` после
+    // направления). `var()`/`env()`/`attr()`/`sign()` разбор не берёт — такая запись остаётся как есть.
+    if let Some(c) = specified_gradient_css(s).or_else(|| specified_image_set_css(s)) {
+        return Some(c);
+    }
+    let lower = s.to_ascii_lowercase();
+    let name_lower = name.to_ascii_lowercase();
+    let is_gradient = (name_lower.ends_with("-gradient") && !name.starts_with('-'))
+        || matches!(name_lower.as_str(), "image-set" | "-webkit-image-set");
+    let opaque = ["var(", "env(", "attr(", "sign("].iter().any(|f| lower.contains(f));
+    (!is_gradient || opaque).then(|| s.to_string())
 }
 
 /// `contain | cover | [ <length-percentage [0,∞]> | auto ]{1,2}`.

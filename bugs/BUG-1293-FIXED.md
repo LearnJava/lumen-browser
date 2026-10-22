@@ -90,6 +90,6 @@ WPT-RUN-14 срез 5: `css/css-transforms/animation/*` — 15 файлов, 168
 | `css/css-color` | 5179 / 11338 | 5228 / 11338 |
 | `css/cssom`, `web-animations` | 2063 / 4002, 1938 / 4381 | 2063, 1939 |
 
-**Остаток** (в записи не закрыт, вынесен): `!important` в таблице стилей должен перебивать `@keyframes`, и четыре теста перешли OK → TIMEOUT — [BUG-1648](BUG-1648-OPEN.md); классы `CSSAnimation`/`CSSTransition` — [BUG-1581](BUG-1581-OPEN.md); `rotate`/`scale`/`translate` в снимке — [BUG-1435](BUG-1435-OPEN.md); `em` внутри `calc()` в `translate*()` при интерполяции берёт 16px (а не `font-size` элемента) — в `transform_interp.rs::interpolate_transform_value`; 3D-пары, где Rust-парсер `parse_transform_list` не знает функцию, не интерполируются.
+**Остаток** (в записи не закрыт, вынесен): `!important` в таблице стилей должен перебивать `@keyframes`, и четыре теста перешли OK → TIMEOUT — [BUG-1648](BUG-1648-OPEN.md); классы `CSSAnimation`/`CSSTransition` — [BUG-1581](BUG-1581-OPEN.md); `rotate`/`scale`/`translate` в снимке — [BUG-1435](BUG-1435-FIXED.md); `em` внутри `calc()` в `translate*()` при интерполяции берёт 16px (а не `font-size` элемента) — в `transform_interp.rs::interpolate_transform_value`; 3D-пары, где Rust-парсер `parse_transform_list` не знает функцию, не интерполируются.
 
 **Тесты:** `crates/js/src/dom/tests/v8_bug1293_motion_overlay.rs` (13), `transform_interp::tests` (10).

@@ -593,6 +593,7 @@ pub(crate) fn compute_style_shareable(
     // UA stylesheet: <a href> → color: #0000ee. HTML5 §15.3.3.
     if let Some(c) = ua_link_color(doc, node) {
         style.color = c;
+        style.color_css = None;
     }
     // UA stylesheet: <small>/<sub>/<sup> → font-size: 0.83× parent.
     // HTML5 §15.3.3. Author font-size перекроет через pre-pass.
@@ -1061,6 +1062,11 @@ pub(crate) fn compute_style_shareable(
         let base = next_rule_idx
             + own_shadow.as_ref().map_or(0, |s| s.rules.len())
             + host_shadow.as_ref().map_or(0, |s| s.rules.len());
+        // BUG-1453: `:host <потомок>` — комбинатор в листе теневого дерева ведёт к
+        // хосту; скоуп включает `:host` на нём только на время матчинга этого листа.
+        if let Some(host) = doc.enclosing_shadow_host(node) {
+            SHADOW_HOST_SCOPE.with(|c| c.set(host.index() as u32));
+        }
         for (i, rule) in shadow.rules.iter().enumerate() {
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
@@ -1080,6 +1086,7 @@ pub(crate) fn compute_style_shareable(
                 }
             }
         }
+        SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
     }
 
     // Inline-style declarations подключаются с `is_inline = true` и
@@ -1142,39 +1149,51 @@ pub(crate) fn compute_style_shareable(
     // every element of every real page, that nothing declares `revert-layer`/
     // `revert-rule`. One allocation-free scan first (measured: 1.4 ms per
     // chrome layout pass, ~7% of the cascade stage).
+
+    // BUG-1449: «слой» объявления — позиция в порядке слоёв, независимая от
+    // важности (у `!important` `lp` инвертирован), с атрибутом `style` как
+    // отдельным шагом над unlayered: `2·layer_idx + is_inline`. `revert-layer`
+    // выкидывает объявления свойства с позицией ≥ своей — и normal, и
+    // `!important` (Chrome: откат к слоям *до* текущего в порядке слоёв, а не в
+    // порядке приоритета данной важности).
+    let layer_pos = |imp: bool, inline: bool, lp: i32| -> i32 {
+        (if imp { -lp } else { lp }) * 2 + i32::from(inline)
+    };
     while matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
         let v = decl.value.trim();
         v.eq_ignore_ascii_case("revert-layer") || v.eq_ignore_ascii_case("revert-rule")
     }) {
         use std::collections::HashMap;
         // Winner per property = last occurrence in the cascade-sorted vec.
-        // (lp, important, rule_idx, is_revert_layer, is_revert_rule)
-        let mut winners: HashMap<String, (i32, bool, usize, bool, bool)> = HashMap::new();
-        for &(imp, _inline, lp, _, rule_idx, _, decl, _) in &matched {
+        // (pos, rule_idx, is_revert_layer, is_revert_rule)
+        let mut winners: HashMap<String, (i32, usize, bool, bool)> = HashMap::new();
+        for &(imp, inline, lp, _, rule_idx, _, decl, _) in &matched {
             let key = decl.property.to_ascii_lowercase();
             let v = decl.value.trim();
             let is_revert_layer = v.eq_ignore_ascii_case("revert-layer");
             let is_revert_rule = v.eq_ignore_ascii_case("revert-rule");
-            winners.insert(key, (lp, imp, rule_idx, is_revert_layer, is_revert_rule));
+            winners.insert(
+                key,
+                (layer_pos(imp, inline, lp), rule_idx, is_revert_layer, is_revert_rule),
+            );
         }
-        let layer_targets: Vec<(String, i32, bool)> = winners
+        let layer_targets: Vec<(String, i32)> = winners
             .iter()
-            .filter(|&(_, &(_, _, _, is_revert_layer, _))| is_revert_layer)
-            .map(|(k, &(lp, imp, _, _, _))| (k.clone(), lp, imp))
+            .filter(|&(_, &(_, _, is_revert_layer, _))| is_revert_layer)
+            .map(|(k, &(pos, _, _, _))| (k.clone(), pos))
             .collect();
         let rule_targets: Vec<(String, usize)> = winners
             .iter()
-            .filter(|&(_, &(_, _, _, _, is_revert_rule))| is_revert_rule)
-            .map(|(k, &(_, _, rule_idx, _, _))| (k.clone(), rule_idx))
+            .filter(|&(_, &(_, _, _, is_revert_rule))| is_revert_rule)
+            .map(|(k, &(_, rule_idx, _, _))| (k.clone(), rule_idx))
             .collect();
         if layer_targets.is_empty() && rule_targets.is_empty() {
             break;
         }
-        matched.retain(|&(imp, _inline, lp, _, rule_idx, _, decl, _)| {
+        matched.retain(|&(imp, inline, lp, _, rule_idx, _, decl, _)| {
             let key = decl.property.to_ascii_lowercase();
-            let hit_layer = layer_targets
-                .iter()
-                .any(|(tk, tlp, timp)| *tk == key && *tlp == lp && *timp == imp);
+            let pos = layer_pos(imp, inline, lp);
+            let hit_layer = layer_targets.iter().any(|(tk, tpos)| *tk == key && pos >= *tpos);
             let hit_rule =
                 rule_targets.iter().any(|(tk, tridx)| *tk == key && *tridx == rule_idx);
             !(hit_layer || hit_rule)
@@ -1301,6 +1320,12 @@ pub(crate) fn compute_style_shareable(
         FontSizeBasis::Absolute => style.effective_zoom,
         FontSizeBasis::ParentRelative => own_zoom,
     };
+    // BUG-1438: `letter-spacing` inherited as `abs + pct * parent_font_size` keeps only its
+    // absolute part here; the `%` share is re-added against this element's `font-size` once
+    // the cascade (and zoom) is done.
+    if inherited.letter_spacing_pct != 0.0 {
+        style.letter_spacing -= inherited.letter_spacing_pct * inherited.font_size;
+    }
     // The document element's computed font-size is what `rem` refers to.
     if doc.get(node).parent == Some(doc.root()) {
         style.root_font_size = style.font_size;
@@ -1781,6 +1806,15 @@ pub(crate) fn compute_style_shareable(
         style.clip_path = crate::box_tree::resolve_clip_path_url(doc, sheet, id, viewport, dark_mode);
     }
 
+    // Filter Effects L1 §3 — `filter: url(#id)` names a `<filter>` element; paint has no
+    // `Document`, so the primitive graph is attached here. A reference to nothing / to a
+    // non-`<filter>` leaves `graph == None` (paint ignores the whole chain).
+    for f in &mut style.filter {
+        if let FilterFn::Url(u) = f {
+            u.graph = crate::box_tree::resolve_filter_url(doc, sheet, &u.id, viewport, dark_mode);
+        }
+    }
+
     apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
 
     // Last, so every earlier pass has already written its box-model lengths and
@@ -1801,6 +1835,9 @@ pub(crate) fn compute_style_shareable(
         ZoomDeclared::of(matched.iter().map(|m| m.6))
     };
     apply_zoom_to_lengths(&mut style, z, rem_k, root_k, declared);
+    if style.letter_spacing_pct != 0.0 {
+        style.letter_spacing += style.letter_spacing_pct * style.font_size;
+    }
 
     (style, shareable)
 }

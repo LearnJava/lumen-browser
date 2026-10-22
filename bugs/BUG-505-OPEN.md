@@ -760,4 +760,4 @@ interaction-model work срез 1 originally flagged as its own task.
 `::column` в грамматике. `css-overflow/scroll-markers`: `root-scroll-button`, `scroll-buttons-001` identical.
 Остаётся интерактивная часть (`:target-current`, активация, синхронизация с прокруткой, боксы `::column`) —
 задача SCROLL-MARKERS-2 в ROADMAP.md. `css-multicol/parsing/column-pseudo-valid` упирается не в `::column`, а в
-[BUG-1439](BUG-1439-OPEN.md) (`insertRule` оторванного листа).
+[BUG-1439](BUG-1439-FIXED.md) (`insertRule` оторванного листа).

@@ -1372,6 +1372,25 @@ use super::*;
         );
     }
 
+    /// BUG-1437: only the properties that apply to `::first-line` (CSS Pseudo-elements L4 §3.2)
+    /// reach its computed style; a box-level or non-listed inherited one stays the parent's.
+    #[test]
+    fn first_line_computed_style_keeps_only_applicable_properties() {
+        let (doc, root) = lay_full_measured_with_doc(
+            "<html><body><p id=p>Some wrapping text for the first line pseudo element test</p></body></html>",
+            "body{margin:0} #p{width:80px} #p::first-line{color:red;letter-spacing:3px;margin:10px;position:absolute;word-break:break-all;opacity:.5}",
+        );
+        let p_nid = find_first_dom_node_by_selector(&doc, "#p").expect("#p must exist").index() as u32;
+        let pseudo = collect_pseudo_computed_styles(&root);
+        let fl = pseudo.get(&(p_nid, "first-line".to_string())).expect("::first-line must have an entry");
+        assert_eq!(fl.get("color").map(String::as_str), Some("rgb(255, 0, 0)"));
+        assert_eq!(fl.get("letter-spacing").map(String::as_str), Some("3px"));
+        assert_eq!(fl.get("opacity").map(String::as_str), Some("0.5"));
+        assert_eq!(fl.get("margin-top").map(String::as_str), Some("0px"));
+        assert_eq!(fl.get("position").map(String::as_str), Some("static"));
+        assert_eq!(fl.get("word-break").map(String::as_str), Some("normal"));
+    }
+
     /// `::first-line` always reports used display `inline` (CSS
     /// Pseudo-elements L4 §5.1) — it can never be floated or out-of-flow, so
     /// the raw cascaded value must never leak through (WPT

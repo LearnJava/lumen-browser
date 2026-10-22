@@ -1237,6 +1237,32 @@ use super::*;
         }
     }
 
+    /// BUG-1427 — CSS Images L3 §3.4.3: a gradient with a single colour stop is
+    /// a solid fill. Linear and radial (also repeating) get a doubled stop so the
+    /// two-stop-minimum renderers paint it; conic is left as parsed.
+    #[test]
+    fn gradient_single_stop_is_solid_two_stops() {
+        for src in [
+            "linear-gradient(green)",
+            "linear-gradient(to right, green 50%)",
+            "repeating-linear-gradient(green 50px)",
+            "radial-gradient(green)",
+            "repeating-radial-gradient(10px circle at top left, green)",
+        ] {
+            let stops = match parse_background_gradient(src) {
+                ParsedGradient::Linear { stops, .. } | ParsedGradient::Radial { stops, .. } => stops,
+                other => panic!("{src}: expected linear/radial, got {other:?}"),
+            };
+            assert_eq!(stops.len(), 2, "{src}");
+            assert_eq!(stops[0].color, stops[1].color, "{src}");
+            assert_eq!(stops[0].position, stops[1].position, "{src}");
+        }
+        match parse_background_gradient("conic-gradient(green)") {
+            ParsedGradient::Conic { stops, .. } => assert_eq!(stops.len(), 1),
+            other => panic!("expected conic, got {other:?}"),
+        }
+    }
+
     /// `in oklab` subdivides the stop list, preserves the direction, and the
     /// ~50% stop matches perceptual interpolation — distinct from the naive
     /// sRGB blend (sRGB red→blue midpoint is rgb(127,0,127) with **no green**,
@@ -1298,6 +1324,26 @@ use super::*;
             assert_eq!(stops.len(), 2, "unknown space → no densify");
         } else {
             panic!("expected linear");
+        }
+    }
+
+    /// BUG-1432: predefined RGB spaces (`display-p3`, `a98-rgb`, `rec2020`,
+    /// `prophoto-rgb`, `display-p3-linear`) are recognised and densify the ramp
+    /// instead of leaving a garbage prelude token that paints one flat colour.
+    #[test]
+    fn gradient_interp_predefined_rgb_spaces_vary_along_the_ramp() {
+        for sp in ["display-p3", "display-p3-linear", "a98-rgb", "rec2020", "prophoto-rgb"] {
+            let g = parse_background_gradient(&format!(
+                "linear-gradient(to right in {sp}, green, blue)"
+            ));
+            let ParsedGradient::Linear { stops, .. } = g else {
+                panic!("expected linear for {sp}");
+            };
+            assert!(stops.len() > 2, "{sp}: densified, got {}", stops.len());
+            let (first, last) = (stops[0].color, stops[stops.len() - 1].color);
+            assert!(first.g > last.g && last.b > first.b, "{sp}: ramp runs green→blue");
+            let mid = stops[stops.len() / 2].color;
+            assert!(mid.g > 20 && mid.b > 20, "{sp}: midpoint blends, got {mid:?}");
         }
     }
 
@@ -1412,4 +1458,36 @@ use super::*;
             &[0],
         );
         assert!(matches!(s.mask_layers[0].image, BackgroundImage::Gradient(_)));
+    }
+
+    /// BUG-1433: `<request-url-modifier>` не должен попадать в адрес картинки.
+    #[test]
+    fn background_image_url_with_request_modifiers() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url('g.png' referrer-policy(origin)); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("g.png".into()));
+        assert_eq!(
+            s.background_layers[0].image_css.as_deref(),
+            Some("url(\"g.png\" referrer-policy(origin))")
+        );
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url('g.png' cross-origin(anonymous)) no-repeat; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("g.png".into()));
+        assert_eq!(
+            s.background_layers[0].image_css.as_deref(),
+            Some("url(\"g.png\" cross-origin(anonymous))")
+        );
+        // невалидный модификатор — декларация отвергается, прежнее значение остаётся
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png); background-image: url('g.png' cross-origin(bogus)); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("a.png".into()));
     }

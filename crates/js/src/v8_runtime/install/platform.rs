@@ -332,6 +332,22 @@ pub(crate) fn install_element_geometry(
         });
     }
 
+    // CSSOM-11: border box and edge widths of a pseudo-element box, backing `CSSPseudoElement`'s
+    // geometry — `[x, y, w, h, border t/r/b/l, padding t/r/b/l, margin t/r/b/l]`, or `undefined`
+    // when the pseudo-element owns no box (not generated, `display: none`, or inline — see
+    // `lumen_layout::collect_pseudo_rects`). The first call opts the page into collecting the
+    // table on every later flush (`FlushHandles::pseudo_rects_needed`).
+    {
+        let table = Arc::clone(&flush.pseudo_rects);
+        let needed = Arc::clone(&flush.pseudo_rects_needed);
+        let flush_pg = flush.clone();
+        reg!(scope, ctx, store, "_lumen_get_pseudo_geometry", move |nid: u32, name: String| -> Option<Vec<f64>> {
+            needed.store(true, Ordering::Relaxed);
+            flush_pg.maybe_flush();
+            table.lock().unwrap().get(&(nid, name)).map(|g| g.iter().map(|v| f64::from(*v)).collect())
+        });
+    }
+
     // BUG-1007: per-fragment rects backing `Element.prototype.getClientRects()`/
     // `getBoxQuads()` — one `[x, y, width, height]` per CSS fragment (visual
     // line, for a multi-line plain inline element) instead of the single
@@ -629,6 +645,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Initial value of a property (`getComputedStyle()` form) and whether it inherits: what
+    // `initial`/`unset` mean inside `@keyframes` and Web Animations keyframes (BUG-1437).
+    reg!(scope, ctx, store,
+        "_lumen_css_initial_value",
+        |prop: String| -> Option<String> {
+            lumen_layout::initial_computed_value(&prop)
+        }
+    );
+    reg!(scope, ctx, store,
+        "_lumen_css_is_inherited",
+        |prop: String| -> bool {
+            lumen_layout::is_inherited_property(&prop)
+        }
+    );
+
     // CSS Transforms L2 §15 — interpolation of two `transform` values given as text
     // (BUG-1293, the JS read-time transition/animation overlay). `w`/`h` are the
     // element's border box, the base of `translate*()` percentages. Answers the resolved
@@ -707,6 +738,24 @@ pub(crate) fn install_css_supports_and_lazy_images(
         "_lumen_css_canonical_length",
         |value: String, allow_auto: bool, non_negative: bool| -> Option<String> {
             lumen_layout::style::canonical_specified_length(&value, allow_auto, non_negative)
+        }
+    );
+
+    // BUG-1430: specified value of a number / time / angle property whose whole value is one
+    // math function. `""` — untouched, `"!"` — drop the assignment, else the stored form.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_math",
+        |prop: String, value: String| -> String {
+            lumen_layout::style::canonical_specified_numeric_math(&prop, &value)
+        }
+    );
+
+    // BUG-1402: grammar and canonical form of `column-count`/`column-width`/`column-height`
+    // and the `columns` shorthand for inline-`style` (`None` — the assignment is dropped).
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_multicol",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_multicol(&prop, &value)
         }
     );
 
@@ -1153,6 +1202,61 @@ pub(crate) fn install_pointer_lock(
     Ok(())
 }
 
+/// Computed style of a highlight pseudo-element (`::selection`, `::target-text`,
+/// `::spelling-error`, `::grammar-error`, `::highlight(name)`) of node `nid`. These have no
+/// box in the layout tree, so — unlike `::before` — the cascade snapshot cannot carry them:
+/// they are computed on demand from the DOM and the stylesheet.
+fn highlight_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<HashMap<String, String>> {
+    let sheet = flush.stylesheet.lock().ok()?.clone()?;
+    let [w, h] = *flush.viewport_size.lock().ok()?;
+    let doc = flush.doc.lock().ok()?;
+    let node = NodeId::from_raw(nid);
+    if !doc.contains_id(node) {
+        return None;
+    }
+    // The element's own colour and font size, from the cascade snapshot: what a highlight
+    // that declares neither inherits.
+    let base = {
+        let styles = flush.computed_styles.lock().ok()?;
+        let own = styles.get(&nid);
+        let get = |p: &str| own.and_then(|m| m.get(p)).map(String::as_str);
+        lumen_layout::originating_base(get("color"), get("font-size"))
+    };
+    let style =
+        lumen_layout::compute_highlight_style(&doc, &sheet, lumen_core::geom::Size::new(w, h), false, node, kind, &base)?;
+    Some(lumen_layout::computed_style_to_map(&style))
+}
+
+/// The cascaded style of a `::before`/`::after` of node `nid` that generated no box, from the
+/// DOM and the stylesheet. Inheritance is not modelled (the parent is the initial style): the
+/// callers read properties that do not inherit (`animation-*`, `transition-*`, `content`).
+fn generated_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<HashMap<String, String>> {
+    if kind != "before" && kind != "after" {
+        return None;
+    }
+    let sheet = flush.stylesheet.lock().ok()?.clone()?;
+    // The sheet the flush cascades against: the pushed one plus every `<style>` and CSSOM edit
+    // the page has made since.
+    let sheet = flush.cssom_patched_sheet(&sheet).unwrap_or(sheet);
+    let [w, h] = *flush.viewport_size.lock().ok()?;
+    let doc = flush.doc.lock().ok()?;
+    let node = NodeId::from_raw(nid);
+    if !doc.contains_id(node) {
+        return None;
+    }
+    let parent = lumen_layout::ComputedStyle::root();
+    let style = lumen_layout::style::compute_pseudo_element_style(
+        &doc,
+        node,
+        kind,
+        &sheet,
+        &parent,
+        lumen_core::geom::Size::new(w, h),
+        false,
+    )?;
+    Some(lumen_layout::computed_style_to_map(&style))
+}
+
 /// `window.getComputedStyle` and custom-property reads off the cascade snapshot.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]
@@ -1192,6 +1296,32 @@ pub(crate) fn install_computed_styles(
                 .unwrap_or_default()
         });
     }
+    // VT-API: every rendered element carrying a `view-transition-name`, as a JSON
+    // `[[nodeIndex, name], …]` ordered by node index. The View Transitions shim
+    // (`view_transitions.rs`) checks it for duplicate names at the capture and
+    // activation steps; reading the whole snapshot here costs one pass, where a
+    // JS-side `getComputedStyle` walk would cost one flush-checked call per element.
+    {
+        let cs = Arc::clone(&computed_styles);
+        let flush = flush.clone();
+        let needed = Arc::clone(&computed_styles_needed);
+        reg!(scope, ctx, store, "_lumen_vt_named_elements", move || -> String {
+            needed.store(true, Ordering::Relaxed);
+            flush.maybe_flush();
+            let mut named: Vec<(u32, String)> = cs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, m)| !m.contains_key(lumen_layout::BOXLESS_KEY))
+                .filter_map(|(nid, m)| {
+                    let name = m.get("view-transition-name")?;
+                    (name != "none").then(|| (*nid, name.clone()))
+                })
+                .collect();
+            named.sort_unstable();
+            serde_json::to_string(&named).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
     // CSSOM-6 (BUG-490): `getComputedStyle(el, pseudoElt)` — same lookup as
     // `_lumen_get_computed_style` above, but keyed by `(nid, pseudo name)`.
     // `kind` is the JS shim's already-normalized pseudo name ("before"/"after"/
@@ -1205,11 +1335,21 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo", move |nid: u32, kind: String, prop: String| -> String {
             needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
-            pcs.lock()
-                .unwrap()
-                .get(&(nid, kind))
-                .and_then(|m| m.get(&prop))
-                .cloned()
+            if lumen_layout::is_highlight_pseudo(&kind) {
+                return highlight_pseudo_style(&flush, nid, &kind)
+                    .and_then(|m| m.get(&prop).cloned())
+                    .unwrap_or_default();
+            }
+            let guard = pcs.lock().unwrap();
+            if let Some(m) = guard.get(&(nid, kind.clone())) {
+                return m.get(&prop).cloned().unwrap_or_default();
+            }
+            drop(guard);
+            // `::before`/`::after` whose `content` generates nothing to draw (`content: ''`)
+            // have no box and so no snapshot entry; CSS Animations still run on them and
+            // `getAnimations()` lists them, so their style is cascaded on demand.
+            generated_pseudo_style(&flush, nid, &kind)
+                .and_then(|m| m.get(&prop).cloned())
                 .unwrap_or_default()
         });
     }
@@ -1223,6 +1363,11 @@ pub(crate) fn install_computed_styles(
         reg!(scope, ctx, store, "_lumen_get_computed_style_pseudo_entries", move |nid: u32, kind: String| -> String {
             needed.store(true, Ordering::Relaxed);
             flush.maybe_flush();
+            if lumen_layout::is_highlight_pseudo(&kind) {
+                let pairs: Vec<(String, String)> =
+                    highlight_pseudo_style(&flush, nid, &kind).map(|m| m.into_iter().collect()).unwrap_or_default();
+                return _style_entries_to_json(pairs);
+            }
             let pairs: Vec<(String, String)> = pcs
                 .lock()
                 .unwrap()

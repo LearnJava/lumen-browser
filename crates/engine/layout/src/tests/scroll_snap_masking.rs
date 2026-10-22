@@ -1100,6 +1100,21 @@ fn transition_property_none_clears() {
     assert!(first_p_style(&root).transition_properties.is_empty());
 }
 
+/// CSS Transitions L1 §3: the computed `transition-property` is `none` after a `none`
+/// declaration and the initial `all` otherwise — the list is empty in both cases (CSSANIM-MODEL).
+#[test]
+fn transition_property_none_is_reported_apart_from_the_initial_all() {
+    let computed = |css: &str| {
+        let root = lay("<p>x</p>", css);
+        crate::computed_style_to_map(first_p_style(&root))["transition-property"].clone()
+    };
+    assert_eq!(computed("p { transition-property: none; }"), "none");
+    assert_eq!(computed("p { transition-property: opacity; transition-property: none; }"), "none");
+    assert_eq!(computed("p { color: red; }"), "all");
+    assert_eq!(computed("p { transition-property: none; transition-property: opacity; }"), "opacity");
+    assert_eq!(computed("p { transition-property: none; transition: all 1s; }"), "all");
+}
+
 #[test]
 fn transition_duration_seconds_and_ms() {
     let root = lay("<p>x</p>", "p { transition-duration: 0.5s, 200ms, 1s; }");

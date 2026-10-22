@@ -220,6 +220,12 @@ mod v8_formdata;
 mod v8_selection_range_editing;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1447_pseudo_computed;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1464_utf16_offsets;
+
+#[cfg(feature = "v8-backend")]
 mod v8_computedstyle;
 
 #[cfg(feature = "v8-backend")]
@@ -263,6 +269,8 @@ mod v8_webworker;
 
 #[cfg(feature = "v8-backend")]
 mod v8_cssom_stylesheets;
+#[cfg(feature = "v8-backend")]
+mod v8_cssom10_tree;
 
 #[cfg(feature = "v8-backend")]
 mod v8_cssom5_constructed_stylesheets;
@@ -306,8 +314,13 @@ mod v8_bug935_s64_sheet_delta;
 mod v8_bug935_s94_shell_attr_writes;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1245_inline_restyle;
+#[cfg(feature = "v8-backend")]
+mod v8_cssom11_pseudo_element;
 mod v8_bug1315_grid_cssom;
 mod v8_bug1391_sizing_cssom;
+mod v8_bug1401_contain_cssom;
+mod v8_bug1402_multicol_cssom;
+mod v8_bug1459_style_important;
 mod compat_css_alias;
 #[cfg(feature = "v8-backend")]
 mod overflow_overlay;
@@ -320,6 +333,11 @@ mod v8_bug1316_document_parentnode;
 mod v8_gap_rule_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1293_motion_overlay;
+mod v8_cssanim_model;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1437_text_motion;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1440_fragment_insertion;
 mod v8_gap_rule_interp;
 mod v8_bug1305_wa_neutral;
 #[cfg(feature = "v8-backend")]
@@ -357,6 +375,8 @@ mod v8_bug1121_document_referrer;
 #[cfg(feature = "v8-backend")]
 mod v8_bug567_title_text;
 
+#[cfg(feature = "v8-backend")]
+mod v8_bug1458_hover_mirror;
 #[cfg(feature = "v8-backend")]
 mod v8_bug560_sync_focus;
 
@@ -461,6 +481,8 @@ mod v8_bug671_selection_interface;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1137_history_interface;
 #[cfg(feature = "v8-backend")]
+mod v8_vt_api;
+#[cfg(feature = "v8-backend")]
 mod v8_soft_navigation_s1;
 
 #[cfg(feature = "v8-backend")]
@@ -499,3 +521,6 @@ mod v8_bug1158_raw_text_inner_html;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug689_attr_nodes;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1424_alpha_opacity_serialization;

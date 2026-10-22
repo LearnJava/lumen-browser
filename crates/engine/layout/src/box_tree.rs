@@ -22,7 +22,7 @@ use lumen_html_parser::{
 };
 
 use crate::style::{
-    apply_container_rules, clear_cq_context, compute_pseudo_element_style, compute_style,
+    clear_cq_context, compute_pseudo_element_style, compute_style,
     set_cq_context, AlignValue,
     BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
@@ -142,6 +142,8 @@ thread_local! {
 mod svg;
 mod svg_clip;
 pub(crate) use svg_clip::resolve_clip_path_url;
+mod svg_filter;
+pub(crate) use svg_filter::resolve_filter_url;
 pub use svg::{
     FormControlKind, PreserveAspectRatio, SvgAlignX, SvgAlignY, SvgBaselineShift,
     SvgDominantBaseline, SvgMeetOrSlice, SvgShapeKind, SvgTextAnchor, SvgTransform, ViewBox,
@@ -162,12 +164,12 @@ use svg::{
 mod image_requests;
 pub use image_requests::{
     apply_intrinsic_size, collect_background_image_requests, collect_cascade_background_image_requests,
-    collect_image_requests, pick_image_request_url, CrossOriginMode, ImageRequest,
+    collect_image_requests, collect_shape_image_requests, pick_image_request_url, CrossOriginMode, ImageRequest,
 };
 use image_requests::resolve_image_source;
 
 mod types;
-pub use types::{BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, UsedGridTracks, SvgMaskContent};
+pub use types::{AnchorScroll, AnchorScroller, BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, UsedGridTracks, SvgMaskContent};
 
 mod pseudo_text;
 use pseudo_text::{
@@ -226,20 +228,13 @@ mod shape_resolve;
 pub(crate) use shapes_floats::shift_tree;
 // `FloatContext` is also the float state of a vertical block (`vertical::VerticalInit`).
 pub(crate) use shapes_floats::FloatContext;
-use shapes_floats::{
-    register_shape_outside, shift_y_box, FloatShapeGeom,
-};
+use shapes_floats::shift_y_box;
 // Used only by `mod tests` (super::super::X) — never called from this file's
 // own non-test code.
 #[cfg(test)]
 use shapes_floats::{
-    parse_circle_px, parse_shape_ellipse_px, parse_shape_inset_px, parse_shape_path_px,
-    parse_shape_polygon_px, polygon_edge_x_at_y_margin, ShapeEllipse, ShapeInset, ShapePolygon,
+    parse_shape_path_px, polygon_edge_x_at_y_margin, polygon_left_edge_at_y, polygon_right_edge_at_y,
 };
-// Used only by `mod tests` (super::super::X) — never called from this file's
-// own non-test code.
-#[cfg(test)]
-use shapes_floats::{inset_corner_inward, polygon_left_edge_at_y, polygon_right_edge_at_y};
 
 mod bfc;
 mod line_clamp_flow;

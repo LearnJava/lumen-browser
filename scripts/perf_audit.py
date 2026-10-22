@@ -86,6 +86,7 @@ OUT_ROOT = REPO_ROOT / ".tmp" / "perf-audit"
 # Паттерны строк stderr, которые считаем сигналом проблемы (без учёта регистра)
 # Доп. переменные окружения для каждого спавна lumen (--env KEY=VAL)
 EXTRA_ENV: dict[str, str] = {}
+EXTRA_ARGS: list[str] = []  # доп. аргументы командной строки lumen.exe (например, --proxy URL)
 ERROR_RE = re.compile(r"error|panic|failed|не распознан|unsupported", re.IGNORECASE)
 # Строки верхнего уровня дерева LUMEN_PROFILE_TREE=1 (без начального отступа)
 PROFILE_LINE_RE = re.compile(r"^\S.*\d+(?:\.\d+)?\s*ms", re.MULTILINE)
@@ -1005,7 +1006,7 @@ class LiveBrowser:
         env.update(EXTRA_ENV)
         t_spawn = time.monotonic()
         self.proc = subprocess.Popen(
-            [str(self.exe), "--mcp-live-port", str(port), "--maximized", "about:blank"],
+            [str(self.exe), "--mcp-live-port", str(port), "--maximized", *EXTRA_ARGS, "about:blank"],
             stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT), env=env,
         )
         self.mcp = Mcp(port, self.timeout, self.log_path)

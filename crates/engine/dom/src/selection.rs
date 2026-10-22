@@ -350,15 +350,56 @@ pub fn node_child_count(doc: &Document, node: NodeId) -> usize {
     doc.get(node).children.len()
 }
 
+/// Number of UTF-16 code units in `s` — the `length` of a `CharacterData`
+/// node (DOM §4.10) and the unit every text offset of the Web APIs counts.
+pub fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// Byte offset of the UTF-16 code unit `units` inside `s`.
+///
+/// The engine stores text positions as UTF-8 byte offsets (the layout caret
+/// and the hit-test work in bytes), while the Web APIs count UTF-16 code
+/// units (DOM §4.4) — this is the boundary between the two.
+///
+/// An offset past the end clamps to `s.len()`; an offset that would land
+/// inside a surrogate pair rounds down to the start of that character, so a
+/// slice never splits it.
+pub fn utf16_to_byte_offset(s: &str, units: usize) -> usize {
+    let mut seen = 0usize;
+    for (byte, ch) in s.char_indices() {
+        if seen + ch.len_utf16() > units {
+            return byte;
+        }
+        seen += ch.len_utf16();
+    }
+    s.len()
+}
+
+/// UTF-16 code-unit offset of the byte offset `bytes` inside `s` — the
+/// inverse of [`utf16_to_byte_offset`].
+///
+/// A byte offset inside a character rounds down to the character's start.
+pub fn byte_to_utf16_offset(s: &str, bytes: usize) -> usize {
+    let bytes = bytes.min(s.len());
+    let mut seen = 0usize;
+    for (byte, ch) in s.char_indices() {
+        if byte + ch.len_utf8() > bytes {
+            return seen;
+        }
+        seen += ch.len_utf16();
+    }
+    seen
+}
+
 /// DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
 /// count for element/document nodes.
 ///
-/// Approximated as Rust `char` count (correct for BMP text).
 /// Used to clamp Range endpoint offsets to valid values.
 pub fn node_length(doc: &Document, node: NodeId) -> usize {
     match &doc.get(node).data {
-        NodeData::Text(s) | NodeData::Comment(s) => s.chars().count(),
-        NodeData::ProcessingInstruction { data, .. } => data.chars().count(),
+        NodeData::Text(s) | NodeData::Comment(s) => utf16_len(s),
+        NodeData::ProcessingInstruction { data, .. } => utf16_len(data),
         _ => doc.get(node).children.len(),
     }
 }
@@ -639,5 +680,63 @@ mod tests {
             end: DomPosition { container: div, offset: node_length(&doc, div) as u32 },
         };
         assert_eq!(range_text(&doc, &range), "world");
+    }
+
+    // ── UTF-16 ↔ UTF-8 byte offsets (BUG-1464) ────────────────────────────
+
+    #[test]
+    fn utf16_len_counts_code_units_not_chars() {
+        assert_eq!(utf16_len("abc"), 3);
+        // "я" — one char, one code unit; "😀" — one char, two code units.
+        assert_eq!(utf16_len("я"), 1);
+        assert_eq!(utf16_len("😀"), 2);
+        assert_eq!(utf16_len("😀a"), 3);
+    }
+
+    #[test]
+    fn utf16_to_byte_offset_cuts_on_code_units() {
+        assert_eq!(utf16_to_byte_offset("abc", 0), 0);
+        assert_eq!(utf16_to_byte_offset("abc", 2), 2);
+        assert_eq!(utf16_to_byte_offset("abc", 3), 3);
+        // Past the end clamps to the end of the string.
+        assert_eq!(utf16_to_byte_offset("abc", 9), 3);
+        // "привет" — two bytes per letter.
+        assert_eq!(utf16_to_byte_offset("привет", 1), 2);
+        assert_eq!(utf16_to_byte_offset("привет", 6), 12);
+        // "😀a" — the emoji takes two code units and four bytes.
+        assert_eq!(utf16_to_byte_offset("😀a", 0), 0);
+        assert_eq!(utf16_to_byte_offset("😀a", 2), 4);
+        assert_eq!(utf16_to_byte_offset("😀a", 3), 5);
+    }
+
+    #[test]
+    fn utf16_to_byte_offset_never_splits_a_character() {
+        // An offset inside a surrogate pair rounds down to the pair's start.
+        assert_eq!(utf16_to_byte_offset("😀a", 1), 0);
+        // A BMP letter is one code unit, so unit 1 is the boundary right
+        // after it — no letter is ever cut in half.
+        assert_eq!(utf16_to_byte_offset("яb", 1), 2);
+    }
+
+    #[test]
+    fn byte_to_utf16_offset_is_the_inverse() {
+        assert_eq!(byte_to_utf16_offset("abc", 0), 0);
+        assert_eq!(byte_to_utf16_offset("abc", 2), 2);
+        assert_eq!(byte_to_utf16_offset("abc", 3), 3);
+        assert_eq!(byte_to_utf16_offset("abc", 99), 3);
+        assert_eq!(byte_to_utf16_offset("привет", 2), 1);
+        assert_eq!(byte_to_utf16_offset("привет", 12), 6);
+        assert_eq!(byte_to_utf16_offset("😀a", 4), 2);
+        // A byte offset inside a character rounds down to its start.
+        assert_eq!(byte_to_utf16_offset("яb", 1), 0);
+        assert_eq!(byte_to_utf16_offset("😀a", 2), 0);
+    }
+
+    #[test]
+    fn node_length_of_text_is_utf16_units() {
+        let mut doc = Document::new();
+        let text = doc.create_text("😀a");
+        doc.append_child(doc.root(), text);
+        assert_eq!(node_length(&doc, text), 3);
     }
 }

@@ -59,7 +59,10 @@ enum LayerComposite {
     /// close the chain is applied pixel-wise to the layer (Gaussian blur +
     /// colour-matrix filters, left to right) and the filtered layer is
     /// composited onto the backdrop below with plain `SourceOver`.
-    Filter(Vec<FilterFn>),
+    ///
+    /// `bounds` — border box элемента (CSS px): bbox для `url(#id)` на SVG-фильтр
+    /// ([`crate::svg_filter`]).
+    Filter { filters: Vec<FilterFn>, bounds: Rect },
     /// CSS Masking L1 §4 — `mask-image` (`PushMask*`/`PopMask`). The element's
     /// fully-composited subtree renders into a transparent full-size layer; on
     /// close the mask is evaluated per-pixel (the gradient's alpha channel —
@@ -479,6 +482,32 @@ fn rasterize_cpu_pixmap(
             // composite time, exactly like `PushTransform` — the clip is mapped
             // through the inverse so it still gates the pre-translation draws.
             DisplayCommand::PushScrollLayer { clip_rect: cr, scroll_x, scroll_y, .. } => {
+                // BUG-1479: the scrolled content is drawn in its pre-scroll
+                // coordinates, so a canvas-sized layer lost whatever lies below
+                // or right of the canvas before the shift. Same remedy as the
+                // `PushTransform` group above: a layer of the content's own
+                // extent, composited with the scroll translation.
+                if (*scroll_x != 0.0 || *scroll_y != 0.0)
+                    && let Some(end) = matching_pop_scroll(commands, cmd_idx)
+                {
+                    let mut ambient = clip_stack.clone();
+                    ambient.push(*cr);
+                    let matrix = lumen_layout::Mat4::translation_2d(-*scroll_x, -*scroll_y);
+                    if let GroupLayer::Rendered(group, group_t) = render_offcanvas_transform_group(
+                        width, height, &matrix, &commands[cmd_idx + 1..end], clip_intersection(&ambient),
+                        image_map, font_provider,
+                    )? {
+                        skip_until = end + 1;
+                        if let Some(group) = group
+                            && let Some(dst) = layers.last_mut()
+                        {
+                            let (gw, gh) = (group.width() as f32, group.height() as f32);
+                            let src = CpuLayer { pm: group, dirty: Some((0.0, 0.0, gw, gh)) };
+                            close_layer(dst, &src, &LayerComposite::Transform(group_t));
+                        }
+                        continue;
+                    }
+                }
                 clip_stack.push(*cr);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
@@ -735,11 +764,14 @@ fn rasterize_cpu_pixmap(
             // in favour of the layer's tracked dirty box — the hint is the border
             // box for the element `filter` case and would under-cover overflowing
             // children, while the dirty box is a guaranteed ink superset.
-            DisplayCommand::PushFilter { filters, bounds: _ } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create filter layer")?;
                 layers.push(CpuLayer::new(layer));
-                layer_ops.push(LayerComposite::Filter(filters.clone()));
+                layer_ops.push(LayerComposite::Filter {
+                    filters: filters.clone(),
+                    bounds: bounds.unwrap_or(Rect::ZERO),
+                });
             }
             // CSS Masking L1 §4 — `mask-image`. Like `PushOpacity`, the element's
             // fully-composited subtree renders into a transparent full-size layer;
@@ -915,7 +947,11 @@ fn composite_layer(
 /// closed group's dirty box is propagated into `dst` so nested filter groups
 /// still see a correct ink superset.
 fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
-    let Some(src_dirty) = src.dirty else { return };
+    // An SVG filter can paint on an empty source (`feFlood`), so it alone runs on
+    // an untouched layer.
+    let has_svg = matches!(op, LayerComposite::Filter { filters, .. }
+        if filters.iter().any(|f| matches!(f, FilterFn::Url(_))));
+    let Some(src_dirty) = src.dirty.or(has_svg.then_some((0.0, 0.0, 0.0, 0.0))) else { return };
     match op {
         LayerComposite::Opacity(a) => {
             composite_layer(&mut dst.pm, &src.pm, *a, src_dirty);
@@ -943,9 +979,13 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
             composite_blend_layer(&mut dst.pm, &src.pm, *mode, src_dirty);
             dst.mark(src_dirty);
         }
-        LayerComposite::Filter(filters) => {
-            if let Some(written) = composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
-            {
+        LayerComposite::Filter { filters, bounds } => {
+            let written = if has_svg {
+                composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, src_dirty)
+            } else {
+                composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
+            };
+            if let Some(written) = written {
                 dst.mark(written);
             }
         }
@@ -1379,6 +1419,56 @@ fn composite_filter_layer(
     Some((cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32))
 }
 
+/// [`composite_filter_layer`] for a chain containing `url(#id)` (SVG filter graph,
+/// [`crate::svg_filter`]). The chain runs on a window `(pixmap, origin)` that starts
+/// as the ink crop of `src` and is replaced by the filter-region window after each
+/// SVG filter (a flood may paint beyond the ink). A dangling reference makes the
+/// whole chain invalid (Filter Effects L1 §3): the layer is composited unfiltered.
+fn composite_svg_filter_chain(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    filters: &[FilterFn],
+    bounds: Rect,
+    src_dirty: DrawBounds,
+) -> Option<DrawBounds> {
+    if filters.iter().any(|f| matches!(f, FilterFn::Url(u) if u.graph.is_none())) {
+        return composite_filter_layer(dst, src, &[], src_dirty);
+    }
+    let canvas = (src.width(), src.height());
+    let margin = filter_chain_reach(filters) + 2.0;
+    let (mut cur, mut origin) = match clamp_crop(src_dirty, margin, canvas.0, canvas.1) {
+        Some((cx0, cy0, cx1, cy1)) => (
+            crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?,
+            (cx0 as i32, cy0 as i32),
+        ),
+        None => (tiny_skia::Pixmap::new(1, 1)?, (0, 0)),
+    };
+    for f in filters {
+        match f {
+            FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma),
+            FilterFn::Url(u) => {
+                if let Some(win) = crate::svg_filter::apply(&cur, origin, canvas, u, bounds) {
+                    cur = win.pixmap;
+                    origin = (win.x, win.y);
+                }
+            }
+            other => apply_color_filter(&mut cur, other),
+        }
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(origin.0, origin.1, cur.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    Some((
+        origin.0 as f32,
+        origin.1 as f32,
+        origin.0 as f32 + cur.width() as f32,
+        origin.1 as f32 + cur.height() as f32,
+    ))
+}
+
 /// Total spatial reach in px of a filter chain — how far the chain can carry
 /// ink beyond its source. Only `blur()` is spatial: three box passes of radius
 /// `r` (the same `r` [`gaussian_blur`] derives from σ — keep the formulas in
@@ -1626,7 +1716,7 @@ fn apply_color_filter(pixmap: &mut tiny_skia::Pixmap, f: &FilterFn) {
         };
         let mut a_unit = a / 255.0;
         match f {
-            FilterFn::Blur(_) => {}
+            FilterFn::Blur(_) | FilterFn::Url(_) => {}
             FilterFn::Brightness(amt) => {
                 r = (r * amt).clamp(0.0, 1.0);
                 g = (g * amt).clamp(0.0, 1.0);
@@ -1833,6 +1923,24 @@ fn matching_pop_transform(commands: &[DisplayCommand], start: usize) -> Option<u
         match cmd {
             DisplayCommand::PushTransform { .. } => depth += 1,
             DisplayCommand::PopTransform => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Индекс `PopScrollLayer`, закрывающего `PushScrollLayer` в `commands[start]`.
+fn matching_pop_scroll(commands: &[DisplayCommand], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, cmd) in commands.iter().enumerate().skip(start) {
+        match cmd {
+            DisplayCommand::PushScrollLayer { .. } => depth += 1,
+            DisplayCommand::PopScrollLayer => {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 {
                     return Some(i);
@@ -2598,6 +2706,19 @@ fn rasterize_radial_gradient(
     let cx = rect.x + center_x_pct * rect.width;
     let cy = rect.y + center_y_pct * rect.height;
     let radius = (rx * (hi - lo)).max(1e-3);
+    // A centre or radius that overflowed to ±inf/NaN (`at 9999…9%`) has no
+    // finite rings: every pixel lies infinitely far out, so the layer is the
+    // last stop's solid colour (CSS Images 3 §3.5.1 — degenerate sizing) rather
+    // than an error that fails the whole screenshot (BUG-1436).
+    if !(cx.is_finite() && cy.is_finite() && radius.is_finite()) {
+        let last = resolved.last().map(|s| s.1).ok_or("empty gradient")?;
+        let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+            .ok_or("Invalid rect dimensions")?;
+        let mut paint = Paint::default();
+        paint.set_color(color_to_skia(last));
+        pixmap.fill_rect(skia_rect, &paint, Transform::identity(), clip);
+        return Ok(());
+    }
     let center = Point::from_xy(cx, cy);
     let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
     // Scale y about the centre by ry/rx (identity for a circle → byte-identical).
@@ -2605,15 +2726,17 @@ fn rasterize_radial_gradient(
     let local = Transform::from_translate(cx, cy)
         .pre_scale(1.0, sy)
         .pre_translate(-cx, -cy);
-    let shader = RadialGradient::new(
+    let Some(shader) = RadialGradient::new(
         center,
         center,
         radius,
         skia_stops,
         mode,
         local,
-    )
-    .ok_or("degenerate radial gradient")?;
+    ) else {
+        // tiny-skia refuses the remaining degenerate cases: nothing to draw.
+        return Ok(());
+    };
 
     let paint = Paint {
         shader,
@@ -3833,6 +3956,39 @@ mod tests {
         assert_eq!(px(&img, 50, 35), (255, 255, 255, 255), "clip stops at x=40");
     }
 
+    /// BUG-1479: content that lies below the canvas before the scroll shift
+    /// (`y = 80…100` on a 40×60 canvas, `scrollTop = 70`) still reaches the
+    /// frame at `y = 10…30`; the canvas-sized layer used to cut it off.
+    #[test]
+    fn scroll_layer_shows_content_from_below_the_canvas() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 40.0, 40.0), scroll_x: 0.0, scroll_y: 70.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 80.0, 40.0, 20.0), color: green },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(40, 60, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 5), (255, 255, 255, 255), "above the block");
+        assert_eq!(px(&img, 10, 15), (0, 128, 0, 255), "block at 80-70=10");
+        assert_eq!(px(&img, 10, 35), (255, 255, 255, 255), "below the block, inside the clip");
+        assert_eq!(px(&img, 10, 50), (255, 255, 255, 255), "outside the clip");
+    }
+
+    /// Same for a horizontal scroll: content right of the canvas comes into view.
+    #[test]
+    fn scroll_layer_shows_content_from_right_of_the_canvas() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushScrollLayer { id: 0, clip_rect: rect(0.0, 0.0, 40.0, 40.0), scroll_x: 90.0, scroll_y: 0.0 },
+            DisplayCommand::FillRect { rect: rect(100.0, 0.0, 20.0, 40.0), color: green },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let img = rasterize_cpu(50, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 5, 20), (255, 255, 255, 255));
+        assert_eq!(px(&img, 15, 20), (0, 128, 0, 255), "block at 100-90=10");
+        assert_eq!(px(&img, 35, 20), (255, 255, 255, 255));
+    }
+
     /// With a zero offset the scroll layer is a plain clip (no extra layer).
     #[test]
     fn scroll_layer_at_origin_is_plain_clip() {
@@ -3845,6 +4001,46 @@ mod tests {
         let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (128, 128, 128, 255));
         assert_eq!(px(&img, 30, 30), (255, 255, 255, 255));
+    }
+
+    /// BUG-1427 — a one-stop gradient reaches the backend as two equal stops
+    /// (`linear-gradient(green)`); it must paint solid, also when repeating
+    /// (zero period) and for the radial shape.
+    #[test]
+    fn single_colour_gradients_paint_solid() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let stop = |position| GradientStop {
+            color: green,
+            color_space: lumen_layout::ColorSpace::Srgb,
+            position,
+        };
+        for (stops, repeating) in [
+            (vec![stop(None), stop(None)], false),
+            (vec![stop(Some(lumen_layout::Length::Percent(50.0))), stop(Some(lumen_layout::Length::Percent(50.0)))], false),
+            (vec![stop(Some(lumen_layout::Length::Px(50.0))), stop(Some(lumen_layout::Length::Px(50.0)))], true),
+        ] {
+            let cmds = vec![
+                DisplayCommand::DrawLinearGradient {
+                    rect: rect(0.0, 0.0, 40.0, 10.0),
+                    angle_deg: 180.0,
+                    stops: stops.clone(),
+                    repeating,
+                },
+                DisplayCommand::DrawRadialGradient {
+                    rect: rect(0.0, 20.0, 40.0, 10.0),
+                    center_x_pct: 0.5,
+                    center_y_pct: 0.5,
+                    radius_x: 30.0,
+                    radius_y: 30.0,
+                    stops,
+                    repeating,
+                },
+            ];
+            let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+            for (x, y) in [(5, 5), (35, 8), (5, 25), (35, 28)] {
+                assert_eq!(px(&img, x, y), (0, 128, 0, 255), "({x},{y}) repeating={repeating}");
+            }
+        }
     }
 
     /// `DrawSvgPath` fills the tessellated triangle interior with the solid
@@ -5983,6 +6179,28 @@ mod tests {
             hr.abs_diff(vr) < 16 && hb.abs_diff(vb) < 16,
             "isotropic: horizontal ({hr},{hb}) ≈ vertical ({vr},{vb})"
         );
+    }
+
+    /// BUG-1436: a centre position that overflows f32 (`at 9999…9%`) used to fail
+    /// the whole `--screenshot` with "degenerate radial gradient"; now the box
+    /// is filled with the last stop (the WPT ref is a plain green square).
+    #[test]
+    fn radial_gradient_with_infinite_centre_does_not_fail_the_snapshot() {
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawRadialGradient {
+            rect: rect(0.0, 0.0, 40.0, 40.0),
+            center_x_pct: f32::INFINITY,
+            center_y_pct: f32::INFINITY,
+            radius_x: 50.0,
+            radius_y: 50.0,
+            stops: vec![
+                GradientStop { color: green, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                GradientStop { color: green, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+            ],
+            repeating: true,
+        }];
+        let img = rasterize_cpu(40, 40, &cmds, &[], 0.0, 0.0).expect("must not error");
+        assert_eq!(px(&img, 20, 20), (0, 128, 0, 255), "last stop fills the box");
     }
 
     fn solid_2x2(rgba: [u8; 4]) -> Image {

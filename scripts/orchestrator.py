@@ -152,7 +152,7 @@ Fallback на резервную модель при rate limit
                        --model / дефолт CLI; слабые модели не рекомендуются —
                        ревью — самый ответственный этап конвейера).
 
-Нужен KILO_API_KEY (env или .tmp/kilo.env); SDK не нужен (urllib).
+Нужен KILO_API_KEY (env или env/kilo.env); SDK не нужен (urllib).
 ПРИВАТНОСТЬ: free-эндпоинты Kilo/NVIDIA — trial, запросы логируются на их
 стороне; solo шлёт исходники (READ) и скриншоты. Полная документация —
 scripts/README.md, раздел «Делегирование кодерам Kilo».
@@ -1152,7 +1152,7 @@ def announce_fallback(developer: str, reason: str, model: str) -> None:
 # включаются только явным флагом. Конфиденциальное не слать.
 
 KILO_API_URL = "https://api.kilo.ai/api/gateway/chat/completions"
-KILO_ENV = PROJECT_DIR / ".tmp" / "kilo.env"
+KILO_ENV = PROJECT_DIR / "env" / "kilo.env"
 
 # Реестр кодеров: ключ → model id (Kilo Gateway), человекочитаемый ярлык и
 # маркёр для STATUS-PN.md. Ключ также идёт в имя ветки/worktree.
@@ -1207,7 +1207,7 @@ def coder_debug(developer: str, message: str) -> None:
 CODERS_ASSIST_NOTE = (
     " РЕЖИМ КОДЕРОВ(assist): код НЕ пиши сам — делегируй написание Step 3.7 Flash. "
     "Собери точное ТЗ (сигнатуры, путь к файлу, ограничения) в messages-JSON в файле "
-    "внутри .tmp/, затем вызови `source .tmp/kilo.env && python .tmp/kilo_client.py "
+    "внутри .tmp/, затем вызови `source env/kilo.env && python .tmp/kilo_client.py "
     "<messages.json> <ответ.txt>`. Для ревью чужим взглядом — тот же вызов с "
     "KILO_MODEL='nvidia/nemotron-3-ultra-550b-a55b:free'. Получив код — САМ проверь "
     "его: cargo check/clippy/test -p <crate>; при ошибках отправь на доработку тем же "
@@ -1218,7 +1218,7 @@ CODERS_ASSIST_NOTE = (
 
 
 def _load_kilo_key() -> str | None:
-    """Достать KILO_API_KEY из env или .tmp/kilo.env (формат `export KILO_API_KEY=...`)."""
+    """Достать KILO_API_KEY из env или env/kilo.env (формат `export KILO_API_KEY=...`)."""
     if os.environ.get("KILO_API_KEY"):
         return os.environ["KILO_API_KEY"]
     if KILO_ENV.exists():
@@ -1246,7 +1246,7 @@ class KiloClient:
     def __init__(self, developer: str, model: str) -> None:
         key = _load_kilo_key()
         if not key:
-            raise RuntimeError("KILO_API_KEY не найден (ни в env, ни в .tmp/kilo.env)")
+            raise RuntimeError("KILO_API_KEY не найден (ни в env, ни в env/kilo.env)")
         self.developer = developer
         self.model = model
         self.key = key
@@ -2876,7 +2876,7 @@ def run_wizard() -> None:
         ], default=1)
         coders_mode = {1: None, 2: "assist", 3: "solo", 4: "team"}[mode_idx]
         if coders_mode:
-            print("  (нужен KILO_API_KEY в env/.tmp/kilo.env)")
+            print("  (нужен KILO_API_KEY в env или env/kilo.env)")
             if coders_mode == "solo":
                 print("  ВНИМАНИЕ: solo шлёт исходники и скриншоты на trial-эндпоинты Kilo/NVIDIA.")
 
@@ -3016,7 +3016,7 @@ def main():
             "team — полный цикл: Claude готовит брифы двум кодерам, кодеры "
             "пишут, Claude ревьюит и вливает одобренное в main (--max-tasks "
             "считает циклы, 1 цикл = до 2 задач). Исходники и скриншоты уходят "
-            "на trial-эндпоинты. Требует KILO_API_KEY (env или .tmp/kilo.env)."
+            "на trial-эндпоинты. Требует KILO_API_KEY (env или env/kilo.env)."
         ),
     )
     parser.add_argument(

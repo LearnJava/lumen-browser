@@ -28,8 +28,9 @@ use lumen_core::ext::{AbortToken, JsSseEvent, JsWsEvent};
 use lumen_core::url::Url;
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::{
-    DocumentMode, DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange,
-    Selection, ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
+    byte_to_utf16_offset, DocumentMode, DomPosition, Namespace, NodeData, NodeId, QualName,
+    Range as DomRange, Selection, ShadowRootMode, node_child_count, node_length, node_text_content,
+    range_text, utf16_to_byte_offset,
 };
 use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::{HashMap, HashSet};
@@ -356,6 +357,8 @@ impl V8JsRuntime {
                 synced: Arc::clone(&self.sheet_synced),
                 shadow_owned: Arc::clone(&self.shadow_sheet_owners),
                 pristine: Arc::clone(&self.patched_pristine),
+                child_list_gen: Arc::default(),
+                detached: Arc::default(),
             };
             *self.sheet_sync.lock().unwrap_or_else(|e| e.into_inner()) = Some(sheet_sync.clone());
             let flush_handles = FlushHandles {
@@ -372,6 +375,8 @@ impl V8JsRuntime {
                 scroll_states: Arc::clone(&scroll_states),
                 focused_nid: Arc::clone(&self.focused_nid),
                 last_flushed_focus: Arc::clone(&self.last_flushed_focus),
+                hovered_nid: Arc::clone(&self.hovered_nid),
+                last_flushed_hover: Arc::clone(&self.last_flushed_hover),
                 sheet_sync: sheet_sync.clone(),
                 pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
                 pseudo_styles_collected: Arc::clone(&self.pseudo_styles_collected),
@@ -382,6 +387,9 @@ impl V8JsRuntime {
                 text_frag_rects: Arc::clone(&self.text_frag_rects),
                 text_frags_needed: Arc::clone(&self.text_frags_needed),
                 text_frags_collected: Arc::clone(&self.text_frags_collected),
+                pseudo_rects: Arc::clone(&self.pseudo_rects),
+                pseudo_rects_needed: Arc::clone(&self.pseudo_rects_needed),
+                pseudo_rects_collected: Arc::clone(&self.pseudo_rects_collected),
                 hit_tree_stale: Arc::clone(&self.hit_tree_stale),
                 dom_touched: Arc::clone(&dom_touched),
                 incr_basis: Arc::new(Mutex::new(None)),
@@ -446,6 +454,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&self.focused_nid),
+                Arc::clone(&self.hovered_nid),
             )?;
 
             install::install_node_properties(
@@ -604,6 +613,14 @@ impl V8JsRuntime {
                 Arc::clone(&pseudo_styles_needed),
                 Arc::clone(&custom_props_needed),
                 Arc::clone(&computed_styles_needed),
+            )?;
+
+            install::install_cssom_tree_natives(
+                scope,
+                ctx,
+                store,
+                sheet_sync.clone(),
+                Arc::clone(&constructed_stylesheets),
             )?;
 
             install::install_stylesheets(

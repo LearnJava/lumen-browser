@@ -71,7 +71,9 @@ use crate::style::parse::box_sides::{
     split_radius_pair,
 };
 use crate::style::parse::color::{parse_color_legacy, parse_css_color_legacy};
+use crate::style::parse::color_serialize::{computed_color_css, none_to_zero};
 use crate::style::parse::counters::is_css_ident;
+use crate::style::parse::image_computed::computed_image_css;
 use crate::style::parse::image::{
     apply_mask_longhand,
     is_gradient_function,
@@ -83,6 +85,7 @@ use crate::style::parse::image::{
     parse_single_bg_layer,
     parse_single_mask_layer,
     parse_url_value,
+    parse_url_with_modifiers, UrlModifiers,
 };
 use crate::style::parse::shape::parse_clip_path;
 use crate::style::parse::transform::parse_filter_list;
@@ -112,7 +115,15 @@ pub(in crate::style) fn apply_decl_paint(
 ) -> bool {
     match prop {
         "color" => {
-            match parse_css_color_legacy(val, is_quirks) {
+            // BUG-1425: lab()/oklch()/color()/color-mix()/относительные цвета хранят запись computed
+            // `color` отдельно — `color: Color` теряет пространство. Формы с calc()/`none`, которые
+            // sRGB-разбор не берёт, получают байты из канонической записи.
+            let css = computed_color_css(val);
+            let parsed = parse_css_color_legacy(val, is_quirks).or_else(|| {
+                parse_css_color_legacy(&none_to_zero(css.as_deref()?), is_quirks)
+            });
+            let prev_css = std::mem::replace(&mut style.color_css, css.map(Into::into));
+            match parsed {
                 Some(CssColor::Rgba(c)) => {
                     style.color = c;
                     style.color_space = ColorSpace::Srgb;
@@ -120,6 +131,7 @@ pub(in crate::style) fn apply_decl_paint(
                 Some(CssColor::CurrentColor) => {
                     style.color = inherited.color;
                     style.color_space = inherited.color_space;
+                    style.color_css = inherited.color_css.clone();
                 }
                 Some(CssColor::Wide(f)) => {
                     style.color = f.to_srgb_color();
@@ -133,7 +145,7 @@ pub(in crate::style) fn apply_decl_paint(
                     style.color = sc.resolve_color(dark);
                     style.color_space = ColorSpace::Srgb;
                 }
-                None => {}
+                None => style.color_css = prev_css,
             }
         }
         "background-color" => {
@@ -356,20 +368,28 @@ pub(in crate::style) fn apply_decl_paint(
             // недопустимым — прежнее значение остаётся.
             let Some(images) = pieces.iter().map(|s| {
                 let s = s.trim();
+                // Computed-запись функции целиком (BUG-1428); у `url()`/`none` её строит сериализатор.
+                let css = || computed_image_css(s, em_basis, viewport).map(std::sync::Arc::<str>::from);
                 Some(if s.eq_ignore_ascii_case("none") {
-                    BackgroundImage::None
+                    (BackgroundImage::None, None)
                 } else if is_image_set_value(s) {
                     // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
-                    BackgroundImage::Url(s.to_string())
+                    (BackgroundImage::Url(s.to_string()), css())
                 } else if let Some((a, b, t)) = parse_cross_fade(s) {
-                    BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
+                    (BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }, css())
                 } else if let Some(paint_name) = parse_paint_function(s) {
                     // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
-                    BackgroundImage::Paint(paint_name)
-                } else if let Some(url) = parse_url_value(s) {
-                    BackgroundImage::Url(url)
+                    (BackgroundImage::Paint(paint_name), None)
+                } else if let Some((url, mods)) = parse_url_with_modifiers(s) {
+                    // Модификаторы запроса (BUG-1433) читаются обратно только из computed-записи.
+                    let css = if mods == UrlModifiers::default() { None } else { css() };
+                    (BackgroundImage::Url(url), css)
                 } else if is_gradient_function(s) {
-                    BackgroundImage::Gradient(parse_background_gradient(s))
+                    (BackgroundImage::Gradient(parse_background_gradient(s)), css())
+                } else if s.to_ascii_lowercase().starts_with("cross-fade(") && let Some(c) = css() {
+                    // Форма, которую отрисовка не умеет (три картинки, цвет вместо картинки), но
+                    // значение допустимо и читается обратно через getComputedStyle.
+                    (BackgroundImage::None, Some(c))
                 } else {
                     return None;
                 })
@@ -378,10 +398,10 @@ pub(in crate::style) fn apply_decl_paint(
             };
             // Сохраняем текущие per-layer данные для cycling после изменения размера.
             let old_layers = std::mem::take(&mut style.background_layers);
-            style.background_layers = images.into_iter().enumerate().map(|(i, image)| {
+            style.background_layers = images.into_iter().enumerate().map(|(i, (image, image_css))| {
                 // Прочие свойства берём из старого слоя (cycling) или defaults.
                 let old = old_layers.get(i % old_layers.len().max(1)).cloned().unwrap_or_default();
-                BackgroundLayer { image, ..old }
+                BackgroundLayer { image, image_css, ..old }
             }).collect();
         }
         "background-repeat" => {

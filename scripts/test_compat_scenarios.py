@@ -28,11 +28,48 @@ class FakeDriver:
 
     def __init__(self, pages=None, die_on=None, hang_on=None, status=None):
         self.pages = pages or {}
-        self.cur = {"href": "about:blank", "title": "", "text": "", "visible": set()}
+        # вкладки: у каждой стабильный id и страница; `cur` — страница активной
+        self.tabs: list[dict] = [{"id": 1, "page": {"href": "about:blank", "title": "", "text": "", "visible": set()}}]
+        self.active = 0
+        self._next_id = 2
         self.die_on, self.hang_on, self.status = die_on, hang_on, status
         self.log: list[tuple] = []
         self.restarts = 0
         self._alive = True
+
+    @property
+    def cur(self) -> dict:
+        return self.tabs[self.active]["page"]
+
+    @cur.setter
+    def cur(self, page: dict) -> None:
+        self.tabs[self.active]["page"] = page
+
+    def list_tabs(self):
+        return [{"id": t["id"], "url": t["page"].get("href", ""), "title": t["page"].get("title", ""),
+                 "active": i == self.active} for i, t in enumerate(self.tabs)]
+
+    def switch_tab(self, tab_id):
+        self.log.append(("switch_tab", tab_id))
+        idx = next((i for i, t in enumerate(self.tabs) if t["id"] == tab_id), None)
+        if idx is None:
+            raise cs.StepFailed(f"нет вкладки {tab_id}")
+        self.active = idx
+
+    def close_tab(self, tab_id):
+        self.log.append(("close_tab", tab_id))
+        idx = next((i for i, t in enumerate(self.tabs) if t["id"] == tab_id), None)
+        if idx is None or len(self.tabs) == 1:
+            raise cs.StepFailed("close_tab: нельзя")
+        was_active = idx == self.active
+        del self.tabs[idx]
+        self.active = 0 if was_active else (self.active - 1 if idx < self.active else self.active)
+
+    def _open_popup(self, page: dict) -> None:
+        """Страница открыла попап: он появляется в стрипе и забирает фокус, как в Lumen."""
+        self.tabs.append({"id": self._next_id, "page": dict(page)})
+        self._next_id += 1
+        self.active = len(self.tabs) - 1
 
     def _guard(self, what: str) -> None:
         if self.die_on == what:
@@ -52,6 +89,10 @@ class FakeDriver:
         if selector not in self.cur.get("visible", set()) and not selector.startswith("[data-lumen-scn"):
             raise cs.StepFailed(f"нет элемента {selector}")
         self.log.append(("click", selector))
+        popup = self.cur.get("on_click_popup", {}).get(selector)
+        if popup:
+            self._open_popup(popup)
+            return
         nxt = self.cur.get("on_click", {}).get(selector)
         if nxt:
             self.cur = dict(nxt)
@@ -63,6 +104,8 @@ class FakeDriver:
         self.log.append(("wait", cond, selector))
 
     def eval(self, code):
+        if self.cur.get("eval_error"):
+            raise cs.StepFailed("Eval error: Cannot read properties of null")
         if code.startswith("(() => { const e = document.querySelector("):
             sel = code.split("querySelector(", 1)[1].split(")", 1)[0].strip('"')
             return sel in self.cur.get("visible", set())
@@ -109,6 +152,16 @@ class FormatTests(unittest.TestCase):
         errs = cs.validate_scenario(scenario(steps=[{"do": "wait", "cond": "visible"}]))
         self.assertTrue(any("нужен selector" in e for e in errs))
 
+    def test_tab_steps_format(self):
+        ok = [{"do": "switch_tab", "url": "idp\\.test"}, {"do": "switch_tab", "index": 0}, {"do": "close_tab"},
+              {"do": "close_tab", "url": "idp"}]
+        self.assertEqual(cs.validate_scenario(scenario(steps=ok)), [])
+        errs = cs.validate_scenario(scenario(steps=[{"do": "switch_tab"}, {"do": "close_tab", "url": "("},
+                                                    {"do": "switch_tab", "index": "0"}]))
+        self.assertTrue(any("switch_tab требует" in e for e in errs))
+        self.assertTrue(any("плохая регулярка url" in e for e in errs))
+        self.assertTrue(any("index — целое" in e for e in errs))
+
     def test_bad_regex_in_oracle(self):
         errs = cs.validate_scenario(scenario(oracle=[{"kind": "text", "value": "("}]))
         self.assertTrue(any("регулярка" in e for e in errs))
@@ -141,6 +194,10 @@ class ScreenTests(unittest.TestCase):
     def test_lumen_error_page(self):
         r = cs.classify_screen({"text": "Не удалось открыть страницу\nERR_NAME_NOT_RESOLVED"})
         self.assertEqual((r["class"], r["signals"]), ("lumen_error", ["ERR_NAME_NOT_RESOLVED"]))
+
+    def test_certificate_rejection(self):
+        r = cs.classify_screen({"text": ""}, error="Wait error: navigation failed: untrusted certificate chain: UnknownIssuer")
+        self.assertEqual((r["class"], r["signals"]), ("cert_error", ["untrusted certificate"]))
 
     def test_cloudflare_wall(self):
         r = cs.classify_screen({"text": "Just a moment... Checking your browser before accessing", "title": "Just a moment..."},
@@ -236,6 +293,84 @@ class RunTests(unittest.TestCase):
         self.assertEqual(r["outcome"], "fail")
         self.assertEqual(r["failed_step"]["index"], 1)
 
+    def test_oracle_eval_error_is_a_miss_not_a_crash(self):
+        sc = scenario(oracle=[{"kind": "eval", "value": "document.querySelector('#x').value === '1'"}])
+        drv = FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "eval_error": True}})
+        r = self.run_sc(drv, sc)
+        self.assertEqual(r["outcome"], "fail")
+        self.assertIn("eval:", r["failed_oracle"])
+
+    def popup_scenario(self, steps, oracle=None):
+        return scenario(steps=[{"do": "navigate", "url": "https://x.test/"}, {"do": "click", "selector": "#signin"}] + steps,
+                        oracle=oracle or [{"kind": "url", "value": r"x\.test/$"}, {"kind": "text", "value": "Signed in"}])
+
+    def popup_driver(self):
+        idp = {"href": "https://idp.test/auth?client=1", "text": "Choose an account", "visible": {"#allow"}}
+        opener = {"href": "https://x.test/", "text": "Signed in", "visible": {"#signin"}, "on_click_popup": {"#signin": idp}}
+        return FakeDriver({"https://x.test/": opener})
+
+    def test_switch_tab_by_url_acts_on_popup_and_close_returns_to_opener(self):
+        sc = self.popup_scenario([{"do": "switch_tab", "url": r"idp\.test/auth"},
+                                  {"do": "click", "selector": "#allow"}, {"do": "close_tab"}])
+        drv = self.popup_driver()
+        r = self.run_sc(drv, sc)
+        self.assertEqual(r["outcome"], "pass", r)
+        self.assertIn(("click", "#allow"), drv.log)  # клик ушёл в попап, а не в окно-открыватель
+        self.assertEqual(len(drv.tabs), 1)
+
+    def test_switch_tab_by_index(self):
+        sc = self.popup_scenario([{"do": "switch_tab", "index": 1}, {"do": "click", "selector": "#allow"},
+                                  {"do": "switch_tab", "index": 0}])
+        drv = self.popup_driver()
+        self.assertEqual(self.run_sc(drv, sc)["outcome"], "pass")
+        sc = self.popup_scenario([{"do": "switch_tab", "index": -1}, {"do": "click", "selector": "#allow"},
+                                  {"do": "switch_tab", "index": 0}])
+        self.assertEqual(self.run_sc(self.popup_driver(), sc)["outcome"], "pass")
+
+    def test_missing_tab_fails_the_step_and_names_what_exists(self):
+        cs.TAB_WAIT_S = 0
+        sc = self.popup_scenario([{"do": "switch_tab", "url": "nowhere\\.test"}])
+        r = self.run_sc(self.popup_driver(), sc)
+        self.assertEqual(r["outcome"], "fail")
+        self.assertEqual(r["failed_step"]["do"], "switch_tab")
+        self.assertIn("nowhere", r["failed_step"]["error"])
+        self.assertIn("idp.test", r["failed_step"]["error"])
+
+    def test_popup_that_opens_late_is_awaited(self):
+        drv = self.popup_driver()
+        calls = {"n": 0}
+        real = drv.list_tabs
+
+        def delayed():
+            calls["n"] += 1
+            return real() if calls["n"] > 2 else real()[:1]
+
+        drv.list_tabs = delayed
+        sc = self.popup_scenario([{"do": "switch_tab", "url": r"idp\.test", "wait_s": 5}, {"do": "close_tab"}])
+        self.assertEqual(self.run_sc(drv, sc)["outcome"], "pass")
+
+    def test_close_of_last_tab_is_a_step_failure(self):
+        sc = scenario(steps=[{"do": "navigate", "url": "https://x.test/"}, {"do": "close_tab"}])
+        r = self.run_sc(FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40}}), sc)
+        self.assertEqual(r["outcome"], "fail")
+        self.assertEqual(r["failed_step"]["do"], "close_tab")
+
+    def test_tabs_left_open_do_not_leak_into_the_next_scenario(self):
+        sc = self.popup_scenario([{"do": "switch_tab", "url": r"idp\.test"}],
+                                 oracle=[{"kind": "url", "value": r"idp\.test"}])
+        drv = self.popup_driver()
+        self.assertEqual(self.run_sc(drv, sc)["outcome"], "pass")
+        self.assertEqual([t["id"] for t in drv.tabs], [1])
+        self.assertEqual(drv.active, 0)
+
+    def test_pick_tab_takes_newest_match_and_active_by_default(self):
+        tabs = [{"id": 1, "url": "https://a.test/x", "active": False}, {"id": 2, "url": "https://a.test/y", "active": True},
+                {"id": 3, "url": "https://a.test/z", "active": False}]
+        self.assertEqual(cs.pick_tab(tabs, {"url": "a\\.test"})["id"], 3)
+        self.assertEqual(cs.pick_tab(tabs, {})["id"], 2)
+        self.assertEqual(cs.pick_tab(tabs, {"index": -3})["id"], 1)
+        self.assertIsNone(cs.pick_tab(tabs, {"index": 3}))
+
     def test_optional_step_failure_is_ignored(self):
         sc = scenario(steps=[{"do": "navigate", "url": "https://x.test/"}, {"do": "click", "selector": "#cookie", "optional": True}])
         drv = FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "visible": {"input[type=password]"}}})
@@ -266,6 +401,16 @@ class RunTests(unittest.TestCase):
         r = self.run_sc(FakeDriver(hang_on="navigate"), scenario())
         self.assertEqual((r["outcome"], r["screen"]["class"]), ("hang", "hang"))
 
+    def test_state_after_failure_on_busy_window_is_a_hang(self):
+        drv = FakeDriver({"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "visible": set()}})
+
+        def state():
+            raise cs.DriverHung("engine thread busy")
+
+        drv.state = state
+        r = self.run_sc(drv, scenario())
+        self.assertEqual((r["outcome"], r["screen"]["class"]), ("fail", "hang"))
+
     def test_flaky_pass_on_retry(self):
         pages = {"https://x.test/": {"href": "https://x.test/", "text": "x" * 40, "visible": set()}}
         drv = FakeDriver(pages)
@@ -281,6 +426,17 @@ class RunTests(unittest.TestCase):
         drv.navigate = navigate
         r = self.run_sc(drv, scenario(), rerun=True)
         self.assertEqual((r["outcome"], r.get("flaky")), ("pass", True))
+
+    def test_busy_engine_thread_is_a_hang(self):
+        class Mcp:
+            def tool(self, name, args):
+                raise RuntimeError("tools/call: Eval error: engine thread busy: eval not run within 5.0 s")
+
+        class Br:
+            mcp = Mcp()
+
+        with self.assertRaises(cs.DriverHung):
+            cs.LiveDriver(Br(), 30).eval("1")
 
     def test_handoff_and_missing_account_are_skipped(self):
         r = self.run_sc(FakeDriver(), scenario(category="call", handoff="calls"))

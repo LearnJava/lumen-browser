@@ -923,6 +923,37 @@ fn after_pseudo_string_content() {
     }
 }
 
+/// CSS Pseudo-Elements L4 §3.1 / CSS Display L3 §2.7: `display: none` on `::before`/`::after`
+/// generates no box at all (`getBoxQuads()` of its `CSSPseudoElement` is empty, CSSOM-11).
+#[test]
+fn display_none_pseudo_generates_no_box() {
+    for rule in [
+        r#"p::before { content: "x"; display: none; }"#,
+        r#"p::after { content: "x"; display: none; }"#,
+    ] {
+        let root = lay("<p></p>", rule);
+        let p = first_element_child(&root);
+        assert!(p.children.is_empty(), "{rule}: a display:none pseudo-element built {} box(es)", p.children.len());
+        assert!(p.rect.height < 1.0, "{rule}: p is {}px tall", p.rect.height);
+    }
+}
+
+/// CSS Display L3 §2.7: `float`/`position: absolute` blockify a pseudo-element whose `display`
+/// is the initial `inline` — it must be a box of its own, not text in the owner's line.
+#[test]
+fn out_of_flow_inline_pseudo_is_a_block_box() {
+    for (rule, w, h) in [
+        (r#"p::before { content: "x"; float: left; width: 60px; height: 40px; }"#, 60.0, 40.0),
+        (r#"p::after { content: "x"; position: absolute; width: 30px; height: 20px; }"#, 30.0, 20.0),
+    ] {
+        let root = lay("<p></p>", rule);
+        let p = first_element_child(&root);
+        let b = &p.children[0];
+        assert!(matches!(b.kind, BoxKind::Block), "{rule}: {:?}", std::mem::discriminant(&b.kind));
+        assert_eq!((b.rect.width, b.rect.height), (w, h), "{rule}");
+    }
+}
+
 #[test]
 fn before_and_after_together() {
     // ::before и ::after оба применяются.

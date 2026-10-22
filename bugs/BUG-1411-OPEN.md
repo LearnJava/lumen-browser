@@ -43,3 +43,7 @@ WPT-RUN-14 срез 18: `css-fonts/font-size-zero-2.html`; 23 упавших ref
 ## Как проверить
 
 Проба выше; `css/css-fonts/font-size-zero-2.html`.
+
+## Влияние на SHAPE-OUTSIDE-2 (2026-10-21)
+
+42 reftest `css-shapes/shape-outside` с `<br/>` после float (`supported-shapes/circle/shape-outside-circle-026.html` и др.) не проходят только из-за этого дефекта: подмена `<br/>` на блок высотой 40px даёт верный контур. Проба: `<div style="font:40px/1 Ahem;width:300px"><br/><br/>X</div>` — два пустых `Block` высотой 0 и один `InlineRun` с `X` (должно быть три строки).

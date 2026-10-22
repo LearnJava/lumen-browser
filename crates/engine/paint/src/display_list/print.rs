@@ -29,7 +29,7 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             let dy = frag.page_y_offset - frag.layout_box.rect.y;
             let matrix = Mat4::translation_2d(0.0, dy);
             cmds.push(DisplayCommand::PushTransform { matrix });
-            walk(&frag.layout_box, &mut cmds, 1.0, None);
+            walk(&frag.layout_box, &mut cmds, 1.0);
             cmds.push(DisplayCommand::PopTransform);
         }
         // Emit margin-box text content (headers, footers, page numbers).
@@ -297,6 +297,43 @@ pub(crate) fn overflow_clip_rect(b: &LayoutBox, clip_x: bool, clip_y: bool) -> R
         if clip_x { w + 2.0 * mx } else { 2.0 * BIG },
         if clip_y { h + 2.0 * my } else { 2.0 * BIG },
     )
+}
+
+/// Half-extent of the clip rectangle of an anchor-scroll wrapper layer; see [`anchor_scroll_layers`].
+const ANCHOR_SCROLL_CLIP_BIG: f32 = 1_000_000.0;
+
+/// CSS Anchor Positioning L1 §4.3 «Scroll Adjustment» — the layers an anchor-positioned box paints
+/// under: one `PushScrollLayer` per scroll container its anchor sits in (outermost first), carrying
+/// that container's `id` and current offset. They are the same layers the container itself emits,
+/// so everything keyed on the id follows along: `patch_scroll_layer` and the render thread's
+/// `apply_scroll_overrides` update the box together with the container, without a rebuild. The
+/// clip is unbounded — the container's own clip does not apply to a box outside of it.
+pub(crate) fn anchor_scroll_layers(b: &LayoutBox) -> Vec<DisplayCommand> {
+    let Some(a) = &b.anchor_scroll else { return Vec::new() };
+    a.scrollers
+        .iter()
+        .map(|s| DisplayCommand::PushScrollLayer {
+            id: s.node.index() as u32,
+            clip_rect: Rect::new(
+                -ANCHOR_SCROLL_CLIP_BIG,
+                -ANCHOR_SCROLL_CLIP_BIG,
+                2.0 * ANCHOR_SCROLL_CLIP_BIG,
+                2.0 * ANCHOR_SCROLL_CLIP_BIG,
+            ),
+            scroll_x: s.x,
+            scroll_y: s.y,
+        })
+        .collect()
+}
+
+/// Number of `PopScrollLayer` that close [`anchor_scroll_layers`] of `b`.
+pub(crate) fn anchor_scroll_layer_count(b: &LayoutBox) -> usize {
+    b.anchor_scroll.as_ref().map_or(0, |a| a.scrollers.len())
+}
+
+/// True for a `PushScrollLayer` made by [`anchor_scroll_layers`] (as opposed to the container's own).
+pub(crate) fn is_anchor_scroll_layer(cmd: &DisplayCommand) -> bool {
+    matches!(cmd, DisplayCommand::PushScrollLayer { clip_rect, .. } if clip_rect.width >= 2.0 * ANCHOR_SCROLL_CLIP_BIG)
 }
 
 /// CSS Overflow L4 §line-clamp: the content box a clamped container clips its descendants to

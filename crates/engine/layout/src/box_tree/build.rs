@@ -155,6 +155,7 @@ fn build_ruby_box(
     finish_segment(&mut bases, &mut levels, &mut shape, &mut children);
 
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -245,6 +246,7 @@ fn build_ruby_group_box(
     // them correctly (`RubyAlign`), not the container's width.
     bstyle.display = Display::InlineBlock;
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: owner_id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: bstyle.font_size * bstyle.line_height,
@@ -325,6 +327,7 @@ fn build_base_select_box(
     let mut trigger_style = anon_style(style);
     trigger_style.display = Display::Block;
     let trigger = LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: trigger_style.font_size * trigger_style.line_height,
@@ -348,6 +351,7 @@ fn build_base_select_box(
     };
 
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -646,8 +650,11 @@ fn build_box_inner(
                 // ровно в одном случае «обе стороны auto» — и только в
                 // ширину: высоту из неё выведет ratio-ветка, и она же
                 // отработает после `min-`/`max-width`.
+                // CSS Containment L1 §3.1 (BUG-1397): under `contain: size` the natural size and
+                // ratio of the image do not exist — the box is sized as if it had no content.
+                let size_contained = style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0;
                 let intrinsic_ratio = match (src.intrinsic_width, src.intrinsic_height) {
-                    (Some(w), Some(h)) if w > 0 && h > 0 => Some((w as f32, h as f32)),
+                    (Some(w), Some(h)) if w > 0 && h > 0 && !size_contained => Some((w as f32, h as f32)),
                     _ => None,
                 };
                 if let Some((iw, ih)) = intrinsic_ratio {
@@ -666,11 +673,13 @@ fn build_box_inner(
                     // Известна одна сторона — ratio не построить, поведение
                     // прежнее: hint заполняет пустой слот.
                     if style.width.is_none()
+                        && !size_contained
                         && let Some(w) = src.intrinsic_width
                     {
                         Arc::make_mut(&mut style).width = Some(Length::Px(w as f32));
                     }
                     if style.height.is_none()
+                        && !size_contained
                         && let Some(h) = src.intrinsic_height
                     {
                         Arc::make_mut(&mut style).height = Some(Length::Px(h as f32));
@@ -748,17 +757,19 @@ fn build_box_inner(
                 };
                 let width_authored = definite(&style.width, style.width_is_intrinsic_hint);
                 let height_authored = definite(&style.height, style.height_is_intrinsic_hint);
-                if style.width.is_none() && !height_authored {
+                // BUG-1397: `contain: size` drops the bitmap size and ratio (CSS Containment L1 §3.1).
+                let size_contained = style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0;
+                if style.width.is_none() && !height_authored && !size_contained {
                     let st = Arc::make_mut(&mut style);
                     st.width = Some(Length::Px(cw as f32 + fill_extra_w));
                     st.width_is_intrinsic_hint = true;
                 }
-                if style.height.is_none() && !width_authored {
+                if style.height.is_none() && !width_authored && !size_contained {
                     let st = Arc::make_mut(&mut style);
                     st.height = Some(Length::Px(ch as f32 + fill_extra_h));
                     st.height_is_intrinsic_hint = true;
                 }
-                if (style.aspect_ratio.is_none() || style.aspect_ratio_auto) && cw > 0 && ch > 0 {
+                if (style.aspect_ratio.is_none() || style.aspect_ratio_auto) && cw > 0 && ch > 0 && !size_contained {
                     Arc::make_mut(&mut style).aspect_ratio = Some((cw as f32, ch as f32));
                 }
                 BoxKind::Canvas { width: cw, height: ch }
@@ -965,35 +976,6 @@ fn build_box_inner(
         st.padding_right = Length::Px(0.0);
         st.padding_bottom = Length::Px(0.0);
         st.padding_left = Length::Px(0.0);
-    }
-
-    // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree.
-    // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
-    // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
-    if style.content_visibility == crate::style::ContentVisibility::Hidden {
-        if let Some(author) = legend_author_display {
-            Arc::make_mut(&mut style).display = author;
-        }
-        return LayoutBox {
-            node: id,
-            rect: Rect::ZERO,
-            used_padding: None, used_line_height: style.font_size * style.line_height,
-            grid_baselines: None,
-            fieldset_legend: None,
-            table_caption_inset: [0.0; 2],
-            clamp_clip: None,
-            subgrid_tracks: None, used_grid_tracks: None,
-            style,
-            kind,
-            children: Vec::new(),
-            col_span: 1,
-            row_span: 1,
-            svg_group_transform: None,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            dirty: Default::default(),
-            origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
-        };
     }
 
     let mut children = Vec::new();
@@ -1366,6 +1348,7 @@ fn build_box_inner(
                         if had_ws && !row_items.is_empty() {
                             let gap_style = anon_style(&style);
                             row_items.push(LayoutBox {
+                                anchor_scroll: None, cv_hidden: Vec::new(),
                                 node: id,
                                 rect: Rect::ZERO,
                                 used_padding: None, used_line_height: gap_style.font_size * gap_style.line_height,
@@ -1451,7 +1434,7 @@ fn build_box_inner(
                             children.push(letter);
                         }
                     } else {
-                        apply_first_letter_style(&mut row_items, fl_style, &style);
+                        apply_first_letter_style(&mut row_items, fl_style, &style, viewport);
                     }
                 }
 
@@ -1553,7 +1536,16 @@ fn build_box_inner(
     if let Some(author) = legend_author_display {
         Arc::make_mut(&mut style).display = author;
     }
-    let fieldset_legend = if is_fieldset_element(doc, id) {
+    // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree: the box keeps its
+    // own box and contributes no content (it is size-contained). The skipped children are not
+    // dropped — `cv_hidden` carries them to the layout probe that answers geometry queries
+    // (BUG-1400); every other tree walk sees an empty box.
+    let cv_hidden = if style.content_visibility == crate::style::ContentVisibility::Hidden {
+        std::mem::take(&mut children)
+    } else {
+        Vec::new()
+    };
+    let fieldset_legend = if is_fieldset_element(doc, id) && cv_hidden.is_empty() {
         rendered_legend_index(doc, &children).map(|idx| FieldsetLegend {
             idx,
             node: children[idx].node,
@@ -1565,6 +1557,7 @@ fn build_box_inner(
         None
     };
     LayoutBox {
+        anchor_scroll: None, cv_hidden,
         node: id,
         rect: Rect::ZERO,
         used_padding: None, used_line_height: style.font_size * style.line_height,

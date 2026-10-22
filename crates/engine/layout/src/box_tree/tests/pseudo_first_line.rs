@@ -169,7 +169,8 @@ mod first_letter_drop_cap {
         let cap = find_drop_cap(&root).expect("drop-cap box not created");
         assert_eq!(letter_seg(cap).text, "X");
         assert!(find_rest_run(&root).is_none(), "emptied InlineRun must be dropped");
-        // CSS 2.1 §9.5: the paragraph height still encloses the float.
+        // CSS 2.1 §10.6.3: the paragraph is no BFC root, so its (empty) flow height stays 0
+        // and the float sticks out of it.
         fn find_p<'a>(b: &'a super::super::super::LayoutBox, cap: &super::super::super::LayoutBox) -> Option<&'a super::super::super::LayoutBox> {
             if b.children.iter().any(|c| std::ptr::eq(c, cap)) {
                 return Some(b);
@@ -178,8 +179,8 @@ mod first_letter_drop_cap {
         }
         let p = find_p(&root, cap).expect("paragraph not found");
         assert!(
-            p.rect.height >= cap.rect.height - 0.01,
-            "paragraph height {} must enclose float {}",
+            p.rect.height.abs() < 0.01,
+            "paragraph height {} must not enclose float {}",
             p.rect.height,
             cap.rect.height,
         );
@@ -216,6 +217,41 @@ mod first_letter_drop_cap {
         assert_eq!(segments[0].text, "H");
         assert_eq!(segments[0].style.font_size, 32.0);
         assert_eq!(segments[1].text, "ello world");
+    }
+
+    /// BUG-1447: a non-float `::first-letter` is an inline box — its
+    /// background/border/padding reach the painter as an element-box segment.
+    #[test]
+    fn non_float_first_letter_carries_box_decoration() {
+        let root = layout(
+            "<p>Hello world</p>",
+            "p::first-letter { background: #0f0; border: 5px solid #00f; padding: 0 3px; margin-right: 2px; }",
+        );
+        let run = find_rest_run(&root).expect("run missing");
+        let super::super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!();
+        };
+        let (letter, tail) = (&segments[0], &segments[1]);
+        assert_eq!(letter.text, "H");
+        assert!(letter.is_element_box, "letter must paint its own box");
+        assert!(letter.style.background_color.is_some(), "background reaches the letter");
+        assert_eq!(letter.style.border_left_width, 5.0);
+        assert_eq!(letter.pre_space, 5.0 + 3.0);
+        assert_eq!(letter.post_space, 3.0 + 5.0 + 2.0);
+        assert!(!tail.is_element_box, "the rest of the paragraph stays plain text");
+        assert!(tail.style.background_color.is_none());
+        assert_eq!(tail.post_space, 0.0);
+    }
+
+    #[test]
+    fn non_float_first_letter_without_decoration_stays_plain() {
+        let root = layout("<p>Hello world</p>", "p::first-letter { color: red; }");
+        let run = find_rest_run(&root).expect("run missing");
+        let super::super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!();
+        };
+        assert!(!segments[0].is_element_box);
+        assert_eq!(segments[0].pre_space, 0.0);
     }
 
     #[test]

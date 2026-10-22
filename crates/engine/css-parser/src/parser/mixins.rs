@@ -346,7 +346,7 @@ fn nested_rule_prelude(combinator: Option<Combinator>, selectors: &[ComplexSelec
 ///   it) — confirmed by hand-tracing every non-throwing
 ///   `mixin-cssom.tentative.html` `assert_equals` string against this
 ///   exact algorithm before implementing it.
-pub(super) fn render_container(prelude: &str, children: &[String], flat: bool) -> String {
+pub(crate) fn render_container(prelude: &str, children: &[String], flat: bool) -> String {
     if children.is_empty() {
         return format!("{prelude} {{\n}}");
     }

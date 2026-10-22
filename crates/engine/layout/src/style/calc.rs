@@ -225,6 +225,7 @@ fn length_unit_value(l: &Length) -> Option<(u8, f32)> {
         Length::Rem(v) => (2, *v),
         Length::Ch(v) => (3, *v),
         Length::Ex(v) => (4, *v),
+        Length::Cap(v) => (20, *v),
         Length::Lh(v) => (16, *v),
         Length::Rlh(v) => (17, *v),
         Length::Rex(v) => (18, *v),
@@ -255,6 +256,7 @@ fn length_with_value(template: &Length, v: f32) -> Length {
         Length::Rem(_) => Length::Rem(v),
         Length::Ch(_) => Length::Ch(v),
         Length::Ex(_) => Length::Ex(v),
+        Length::Cap(_) => Length::Cap(v),
         Length::Lh(_) => Length::Lh(v),
         Length::Rlh(_) => Length::Rlh(v),
         Length::Rex(_) => Length::Rex(v),
@@ -639,6 +641,20 @@ pub(in crate::style) fn looks_like_function_call(s: &str) -> bool {
 /// `Length::Calc`. Возвращает None, если разбор не удался — `parse_length`
 /// тогда падает в обычную strip_suffix-ветку.
 pub(in crate::style) fn parse_math_function_value(s: &str) -> Option<Length> {
+    // CSS Syntax L3 §5.4.7: a function still open at the end of the value is closed
+    // there (`calc(10px - (5% + 10%)` ≡ `calc(10px - (5% + 10%))`, BUG-1438).
+    let depth = s.bytes().fold(0i32, |d, b| match b {
+        b'(' => d + 1,
+        b')' => d - 1,
+        _ => d,
+    });
+    let closed;
+    let s = if depth > 0 {
+        closed = format!("{s}{}", ")".repeat(depth as usize));
+        closed.as_str()
+    } else {
+        s
+    };
     let tokens = tokenize_calc(s)?;
     let mut pos = 0usize;
     let node = parse_calc_expr(&tokens, &mut pos)?;
@@ -681,7 +697,7 @@ pub(in crate::style) fn calc_node_contains_percent(node: &CalcNode) -> bool {
 // ──────────────── calc() лексер + парсер ────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-enum CalcToken {
+pub(in crate::style) enum CalcToken {
     /// Числовой токен с (опциональным) unit-суффиксом.
     Num(f32, String),
     /// Идентификатор функции (`calc`, `min`, `max`, `clamp`). Хранится в
@@ -704,7 +720,7 @@ enum CalcToken {
 /// минус (`calc(-10px + 5px)`) разрешается парсером через
 /// `factor := ('-' | '+') factor | …`. Это даёт корректное поведение и для
 /// `10px - 5px` (whitespace по спецификации), и для `10px-5px` (lenient).
-fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
+pub(in crate::style) fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
     let mut tokens = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -766,6 +782,19 @@ fn lex_number(bytes: &[u8], start: usize) -> Option<(f32, String, usize)> {
         i += 1;
         while i < bytes.len() && bytes[i].is_ascii_digit() {
             i += 1;
+        }
+    }
+    // Экспонента (`3e+9px`): только если за `e` идёт цифра (иначе `e` — начало единицы `em`/`ex`).
+    if matches!(bytes.get(i), Some(b'e' | b'E')) {
+        let mut k = i + 1;
+        if matches!(bytes.get(k), Some(b'+' | b'-')) {
+            k += 1;
+        }
+        if bytes.get(k).is_some_and(u8::is_ascii_digit) {
+            while bytes.get(k).is_some_and(u8::is_ascii_digit) {
+                k += 1;
+            }
+            i = k;
         }
     }
     let num_end = i;
@@ -1032,7 +1061,7 @@ fn parse_arg_list(tokens: &[CalcToken], pos: &mut usize) -> Option<Vec<CalcNode>
 /// `Number(radians)` (по CSS Values L4 §10.7 — trig-функции принимают
 /// число или angle; unitless считается уже в радианах). Неизвестный unit
 /// (`pt`, `mm`, …) даёт None.
-fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
+pub(in crate::style) fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     if unit.is_empty() {
         return Some(CalcNode::Number(value));
     }
@@ -1056,12 +1085,12 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
         "rex" => Length::Rex(value),
         "rch" => Length::Rch(value),
         "ric" => Length::Rem(value),
-        // `ch`/`ex` carry their own variants (resolved against real font metrics
-        // at layout time); `cap`/`lh` stay em-approximated (Phase 0, no metric).
+        // `ch`/`ex`/`cap` carry their own variants (resolved against real font
+        // metrics at layout time); `lh` stays em-approximated (Phase 0, no metric).
         "ch" => Length::Ch(value),
         "ex" => Length::Ex(value),
         "em" => Length::Em(value),
-        "cap" => Length::Em(value * 0.7),
+        "cap" => Length::Cap(value),
         "lh" => Length::Lh(value),
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),

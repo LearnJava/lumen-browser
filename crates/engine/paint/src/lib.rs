@@ -72,6 +72,8 @@ mod cpu_font_resolve;
 mod cpu_projective;
 #[cfg(feature = "cpu-render")]
 pub mod cpu_raster;
+#[cfg(feature = "cpu-render")]
+mod svg_filter;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};
@@ -365,7 +367,7 @@ pub use display_list::{
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
     cull_display_list, hash_content, hash_display_list, is_image_set, patch_scroll_layer, ScrollLayerOverride, apply_scroll_overrides,
     point_on_resize_grip, select_image_set_url, split_at_page_breaks, serialize_display_list,
-    apply_print_color_adjust, with_fixed_background_viewport,
+    apply_print_color_adjust, with_fixed_background_viewport, with_highlights,
     BlendMode, CornerRadii,
     DisplayCommand, DisplayList, FrameDelta, FrameFingerprint, ProvenanceIndex, ProvenanceSpan,
 };
@@ -412,6 +414,8 @@ pub struct FontMeasurer<'a> {
     ascent_units: u16,
     descent_units: u16,
     x_height_units: u16,
+    /// cap-height в font units (`OS/2.sCapHeight`, иначе `0.7 em`) — для `cap` (BUG-1429).
+    cap_height_units: u16,
     line_gap_units: u16,
     /// `line-height: normal` line-spacing metrics, resolved once from
     /// `OS/2.fsSelection.USE_TYPO_METRICS` (FONTLOAD-15, BUG-467) — see
@@ -423,6 +427,14 @@ pub struct FontMeasurer<'a> {
     normal_ascent_units: u16,
     normal_descent_units: u16,
     normal_line_gap_units: u16,
+}
+
+/// cap-height в font units: `OS/2.sCapHeight` (v2+), иначе `0.7 em` — приближение
+/// CSS Values L4 §5.1.1 для шрифта без надёжной метрики (BUG-1429).
+fn cap_height_units_of(os2: Option<&lumen_font::os2::Os2>, units_per_em: u16) -> u16 {
+    os2.and_then(|o| o.cap_height)
+        .filter(|&v| v > 0)
+        .map_or((units_per_em as f32 * 0.7).round() as u16, |v| v as u16)
 }
 
 impl<'a> FontMeasurer<'a> {
@@ -449,11 +461,12 @@ impl<'a> FontMeasurer<'a> {
             .and_then(|o| o.x_height)
             .filter(|&v| v > 0)
             .map_or(units_per_em / 2, |v| v as u16);
+        let cap_height_units = cap_height_units_of(os2.as_ref(), units_per_em);
         let (normal_ascent_units, normal_descent_units, normal_line_gap_units) =
             normal_line_height_units(os2.as_ref(), &hhea);
         Ok(Self {
             hmtx, cmap, units_per_em,
-            ascent_units, descent_units, x_height_units, line_gap_units,
+            ascent_units, descent_units, x_height_units, cap_height_units, line_gap_units,
             normal_ascent_units, normal_descent_units, normal_line_gap_units,
         })
     }
@@ -509,6 +522,10 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
 
     fn x_height_px(&self, font_size_px: f32) -> f32 {
         self.x_height_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    fn cap_height_px(&self, font_size_px: f32) -> f32 {
+        self.cap_height_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     fn line_gap_px(&self, font_size_px: f32) -> f32 {
@@ -600,6 +617,8 @@ struct OwnedFontMetrics {
     line_gap_units: u16,
     /// x-height в font units (`OS/2.sxHeight`, иначе `units_per_em / 2`) — для `ex` (BUG-1340).
     x_height_units: u16,
+    /// cap-height в font units (`OS/2.sCapHeight`, иначе `0.7 em`) — для `cap` (BUG-1429).
+    cap_height_units: u16,
     /// `line-height: normal` line-spacing metrics (FONTLOAD-15, BUG-467) —
     /// see [`FontMeasurer`]'s field of the same name for why this trio is
     /// separate from `ascent_units`/`descent_units`/`line_gap_units` above.
@@ -646,10 +665,12 @@ impl OwnedFontMetrics {
             .and_then(|o| o.x_height)
             .filter(|&v| v > 0)
             .map_or(head.units_per_em / 2, |v| v as u16);
+        let cap_height_units = cap_height_units_of(os2.as_ref(), head.units_per_em);
         let (normal_ascent_units, normal_descent_units, normal_line_gap_units) =
             normal_line_height_units(os2.as_ref(), &hhea);
         Ok(Self {
             x_height_units,
+            cap_height_units,
             cmap_data,
             advance_widths,
             units_per_em: head.units_per_em,
@@ -683,6 +704,11 @@ impl OwnedFontMetrics {
     /// x-height в px — та же формула, что [`FontMeasurer::x_height_px`].
     fn x_height_px(&self, font_size_px: f32) -> f32 {
         self.x_height_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    /// cap-height в px — та же формула, что [`FontMeasurer::cap_height_px`].
+    fn cap_height_px(&self, font_size_px: f32) -> f32 {
+        self.cap_height_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     /// Line-gap в px — та же формула, что [`FontMeasurer::line_gap_px`]
@@ -957,6 +983,16 @@ impl PrimaryFontMetrics<'_> {
                 metrics.x_height_px(font_size_px * size_adjust.unwrap_or(1.0))
             }
             Self::Shared(m) => m.x_height_px(font_size_px),
+        }
+    }
+
+    /// cap-height в px (BUG-1429) — size-adjust домножает размер, как у x-height.
+    fn cap_height_px(&self, font_size_px: f32) -> f32 {
+        match self {
+            Self::Owned { metrics, size_adjust, .. } => {
+                metrics.cap_height_px(font_size_px * size_adjust.unwrap_or(1.0))
+            }
+            Self::Shared(m) => m.cap_height_px(font_size_px),
         }
     }
 
@@ -1260,6 +1296,7 @@ impl MultiFontMeasurer {
                 descent_units: 0,
                 line_gap_units: 0,
                 x_height_units: 500,
+                cap_height_units: 700,
                 normal_ascent_units: 0,
                 normal_descent_units: 0,
                 normal_line_gap_units: 0,
@@ -1356,6 +1393,10 @@ impl TextMeasurer for MultiFontMeasurer {
         self.fallback.x_height_px(font_size_px)
     }
 
+    fn cap_height_px(&self, font_size_px: f32) -> f32 {
+        self.fallback.cap_height_px(font_size_px)
+    }
+
     fn line_gap_px(&self, font_size_px: f32) -> f32 {
         self.fallback.line_gap_px(font_size_px)
     }
@@ -1385,6 +1426,13 @@ impl TextMeasurer for MultiFontMeasurer {
         match self.primary_metrics(families) {
             Some(m) => m.x_height_px(font_size_px),
             None => self.x_height_px(font_size_px),
+        }
+    }
+
+    fn cap_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        match self.primary_metrics(families) {
+            Some(m) => m.cap_height_px(font_size_px),
+            None => self.cap_height_px(font_size_px),
         }
     }
 

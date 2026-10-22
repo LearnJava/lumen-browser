@@ -520,7 +520,10 @@ pub(crate) fn build_grid_init(
             let lane_sizing = lane_items
                 .as_ref()
                 .map(|l| super::grid_lanes::sizing_items(&item_idxs, &placements, l, n_cols as usize));
+            // BUG-1397: a size-contained grid is sized as if it had no items (CSS Containment L1 §3.1);
+            // only its explicit tracks count.
             let (size_idxs, size_places) = match &lane_sizing {
+                _ if size_contained => (&[][..], &[][..]),
                 Some((i, p)) => (i.as_slice(), p.as_slice()),
                 None => (item_idxs.as_slice(), placements.as_slice()),
             };
@@ -557,7 +560,7 @@ pub(crate) fn build_grid_init(
                 let mut w = 0.0_f32;
                 for (k, &i) in item_idxs.iter().enumerate() {
                     let (cs, ce, _, _) = placements[k];
-                    if cs as usize != c + 1 || ce.saturating_sub(cs) > 1 {
+                    if size_contained || cs as usize != c + 1 || ce.saturating_sub(cs) > 1 {
                         continue;
                     }
                     let item = &children[i];

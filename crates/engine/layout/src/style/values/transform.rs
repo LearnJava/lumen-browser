@@ -121,7 +121,7 @@ pub struct SvgClipSubpath {
 /// Положение ссылающегося SVG-элемента, выставляется layout-ом SVG
 /// (`lay_out_svg_element_position`). Сдвиг матрицы хранится относительно
 /// `LayoutBox::rect.x/y`, поэтому `shift_tree` (abs-pos, scroll) его не ломает.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SvgClipPlacement {
     /// user space элемента → документ, `[a, b, c, d, e, f]`; `e`/`f` — смещение
     /// относительно левого верхнего угла `rect` бокса.
@@ -222,6 +222,24 @@ pub enum FilterFn {
     Saturate(f32),
     /// `sepia(<number-percentage>)`. 0.0 = unchanged, 1.0 = full sepia.
     Sepia(f32),
+    /// `url(#id)` — ссылка на SVG `<filter>` (Filter Effects L1 §3). Граф
+    /// подставляет каскад (`box_tree/svg_filter.rs`), где виден `Document`.
+    Url(FilterUrl),
+}
+
+/// `url(#id)` из `filter` и (после каскада) разобранный граф `<filter>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilterUrl {
+    /// Фрагмент без `#`.
+    pub id: String,
+    /// `None` — ссылка в никуда или не на `<filter>`: вся цепочка игнорируется.
+    #[serde(skip)]
+    pub graph: Option<std::sync::Arc<super::svg_filter::SvgFilter>>,
+    /// Где user space ссылающегося SVG-элемента стоит в документе (выставляет layout
+    /// SVG); `None` — HTML-бокс: user space — левый верхний угол border box, bbox —
+    /// border box.
+    #[serde(skip)]
+    pub placement: Option<SvgClipPlacement>,
 }
 
 /// CSS Images L3 §3.4 — единичный `<color-stop>` градиента.

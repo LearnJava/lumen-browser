@@ -349,6 +349,15 @@ fn parse_scripted_font_weight(s: &str) -> u16 {
     }
 }
 
+/// The engine thread's same-tick views of the two interactive states a selector
+/// match needs: the focused node (BUG-560) and the node under the pointer
+/// (BUG-1458), each mirrored from the shell by the runtime.
+#[derive(Clone)]
+struct InteractiveMirror {
+    focused: Arc<Mutex<Option<u32>>>,
+    hovered: Arc<Mutex<Option<u32>>>,
+}
+
 /// BUG-560: `query_all`/`matches_selector` (and their scoped siblings) match
 /// selectors directly against the `Document`, with no layout pass of their
 /// own — so unlike a real relayout they never call
@@ -360,14 +369,20 @@ fn parse_scripted_font_weight(s: &str) -> u16 {
 /// restores the thread-local to "nothing focused" afterwards so an unrelated
 /// selector match elsewhere on this thread (e.g. inside the same-tick style
 /// flush's own bracketing, `style_flush::FlushHandles::maybe_flush`) is not
-/// left with a stale focus target. `:hover`/`:active` are untouched — out of
-/// this bug's scope, and matched this path exactly as they always have (never).
-fn with_focus_state<R>(focused_nid: &Mutex<Option<u32>>, f: impl FnOnce() -> R) -> R {
-    let nid = focused_nid
+/// left with a stale focus target. `:hover` (BUG-1458) comes from the pointer
+/// mirror installed alongside; `:active` is still unmatched here, as before.
+fn with_focus_state<R>(mirror: &InteractiveMirror, f: impl FnOnce() -> R) -> R {
+    let nid = mirror
+        .focused
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .map(NodeId::from_raw);
-    lumen_layout::set_interactive_state(None, nid, None);
+    let hover = mirror
+        .hovered
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(NodeId::from_raw);
+    lumen_layout::set_interactive_state(hover, nid, None);
     let result = f();
     lumen_layout::clear_interactive_state();
     result
@@ -381,7 +396,9 @@ pub(crate) fn install_node_lookup(
     store: &mut Vec<OwnedNativeFn>,
     doc: Arc<Mutex<lumen_dom::Document>>,
     focused_nid: Arc<Mutex<Option<u32>>>,
+    hovered_nid: Arc<Mutex<Option<u32>>>,
 ) -> JsResult<()> {
+    let mirror = InteractiveMirror { focused: focused_nid, hovered: hovered_nid };
     // ── node lookup ──────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
@@ -403,7 +420,7 @@ pub(crate) fn install_node_lookup(
             lumen_css_parser::is_valid_selector_list(&sel)
         });
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store, "_lumen_query_selector", move |sel: String| -> Option<u32> {
             with_focus_state(&fnid, || {
                 let doc = d.lock().unwrap();
@@ -411,7 +428,7 @@ pub(crate) fn install_node_lookup(
             })
         });
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store,
             "_lumen_query_selector_all",
             move |sel: String| -> Vec<u32> {
@@ -430,7 +447,7 @@ pub(crate) fn install_node_lookup(
         // for subtrees not yet attached to the document (`testharness.js` builds
         // its results table off-document before appending it).
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store,
             "_lumen_query_selector_scoped",
             move |node_id: u32, sel: String| -> Option<u32> {
@@ -442,7 +459,7 @@ pub(crate) fn install_node_lookup(
             }
         );
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store,
             "_lumen_query_selector_all_scoped",
             move |node_id: u32, sel: String| -> Vec<u32> {
@@ -457,7 +474,7 @@ pub(crate) fn install_node_lookup(
             }
         );
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store,
             "_lumen_node_matches_selector",
             move |node_id: u32, sel: String| -> bool {
@@ -475,7 +492,7 @@ pub(crate) fn install_node_lookup(
         // subtree — e.g. `testharness.js`'s `render()` template builder — always
         // returned nothing).
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store,
             "_lumen_query_selector_scoped",
             move |node_id: u32, sel: String| -> Option<u32> {
@@ -494,7 +511,7 @@ pub(crate) fn install_node_lookup(
             }
         );
         let d = Arc::clone(&doc);
-        let fnid = Arc::clone(&focused_nid);
+        let fnid = mirror.clone();
         reg!(scope, ctx, store,
             "_lumen_query_selector_all_scoped",
             move |node_id: u32, sel: String| -> Vec<u32> {
@@ -1140,6 +1157,29 @@ pub(crate) fn install_tree_navigation(
                 // BUG-986: returning None ends the bubble walk at the stale
                 // node — graceful, no process death.
                 doc.try_get(nid).and_then(|n| n.parent).map(|p| p.raw())
+            }
+        );
+        // BUG-1452: neighbours of `child` in `parent`'s list without copying the
+        // whole list into a JS array — the MutationObserver wrappers asked
+        // `_lumen_get_children` per insertion, which is O(n) in the sibling
+        // count and made N appends quadratic. `[prev, next]`, `u32::MAX` = none
+        // (also for a stale id or a child that is not in `parent`).
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_siblings",
+            move |parent_id: u32, child_id: u32| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let none = vec![u32::MAX, u32::MAX];
+                let Some(parent) = doc.try_get(NodeId::from_raw(parent_id)) else {
+                    return none;
+                };
+                // Appends are the common case: look from the tail first.
+                let Some(idx) = parent.children.iter().rposition(|c| c.raw() == child_id) else {
+                    return none;
+                };
+                let prev = idx.checked_sub(1).map_or(u32::MAX, |i| parent.children[i].raw());
+                let next = parent.children.get(idx + 1).map_or(u32::MAX, |c| c.raw());
+                vec![prev, next]
             }
         );
     }

@@ -358,6 +358,16 @@ impl Lumen {
                 #[cfg(feature = "v8")]
                 let old_nid = self.hovered_nid;
                 self.hovered_nid = new_hovered;
+                // BUG-1458: echo the new hover target to the engine thread's
+                // `:hover` mirror before the events below, so a `mouseover`
+                // handler reading `:hover`/`getComputedStyle` already sees it.
+                #[cfg(feature = "v8")]
+                {
+                    let hover_idx = new_hovered.map(|n| n.index() as u32);
+                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                        js.notify_hover_changed(hover_idx);
+                    });
+                }
                 // ADR-016 M2.2b-5: :hover restyle is async-safe (no
                 // geometry read of its own; the JS pointer events below
                 // target `old_nid`/`new_hovered`, not this reflow).

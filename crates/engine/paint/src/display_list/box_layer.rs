@@ -81,6 +81,10 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
         }
         return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
+    // CSS Anchor Positioning L1 §4.3: an anchor-positioned box follows the scroll of its anchor's
+    // containers — outermost layer, around the box's own background and border as well.
+    pre.extend(anchor_scroll_layers(b));
+    post.extend(std::iter::repeat_n(DisplayCommand::PopScrollLayer, anchor_scroll_layer_count(b)));
     let s = &b.style;
 
     // CSS Masking L1 §4 (BUG-183): mask-image wraps the fully composited element
@@ -537,6 +541,7 @@ fn enter_fill<'a>(
         let mut layer_child_clips: Vec<DisplayCommand> = Vec::new();
         if pseudo {
             layer_child_clips.extend(inherited_clips.iter().cloned());
+            layer_child_clips.extend(ops.pre.iter().filter(|c| is_anchor_scroll_layer(c)).cloned());
             layer_child_clips.extend(
                 ops.overflow_pre
                     .iter()
@@ -567,7 +572,7 @@ fn enter_fill<'a>(
         record_span(raw_spans, current_sc.0, BucketField::Pre, pre_start, pre_end, b.origin, 0);
 
         let bg_start = bucket.root_bg.len();
-        emit_box_self(b, &mut bucket.root_bg, dpr, None, ov);
+        emit_box_self(b, &mut bucket.root_bg, dpr, ov);
         // Overflow-клип — после собственных bg/border (они не клиппятся
         // своим overflow, BUG-123), но до contents с детьми.
         bucket.root_bg.extend(ops.overflow_pre);
@@ -624,7 +629,7 @@ fn enter_fill<'a>(
         let bucket = &mut buckets[current_sc.0 as usize];
         let lead_start = bucket.contents.len();
         bucket.contents.extend(ops.pre);
-        emit_box_self(b, &mut bucket.contents, dpr, None, ov);
+        emit_box_self(b, &mut bucket.contents, dpr, ov);
         // Overflow-клип после собственных bg/border (BUG-123).
         bucket.contents.extend(ops.overflow_pre.iter().cloned());
         let lead_end = bucket.contents.len();

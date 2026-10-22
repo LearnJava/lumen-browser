@@ -111,6 +111,14 @@ pub(crate) struct FlushHandles {
     /// `.focus()` apart from "nothing changed" even when it left `dom_dirty`
     /// untouched. Updated at the end of every successful flush.
     pub(crate) last_flushed_focus: Arc<Mutex<Option<u32>>>,
+    /// BUG-1458: the engine thread's `:hover` mirror (see
+    /// [`super::runtime::V8JsRuntime::hovered_nid`]) — read-only here, installed
+    /// as the hover target before laying out, exactly as the focus mirror is.
+    pub(crate) hovered_nid: Arc<Mutex<Option<u32>>>,
+    /// BUG-1458: the hover target baked into the current snapshot — the twin of
+    /// [`Self::last_flushed_focus`], so a pointer move that changed `:hover`
+    /// without touching the DOM still triggers a flush.
+    pub(crate) last_flushed_hover: Arc<Mutex<Option<u32>>>,
     /// CSSOM-8 вариант C / BUG-493: the per-`<style>`/`<link>` registry, the
     /// CSSOM edit log and its "grew since the last flush" flag, bundled with
     /// what reconciles the registry with the DOM — see
@@ -162,6 +170,14 @@ pub(crate) struct FlushHandles {
     /// additionally cleared by `update_client_rects`, because the table is
     /// never pushed by the embedder alongside its fresh geometry.
     pub(crate) text_frags_collected: Arc<AtomicBool>,
+    /// CSSOM-11: `(owner node, pseudo name) → border box and edge widths` of the pseudo-element
+    /// boxes ([`lumen_layout::collect_pseudo_rects`]) behind `CSSPseudoElement`'s geometry.
+    /// Collected only while [`Self::pseudo_rects_needed`] is set — the walk is O(document).
+    pub(crate) pseudo_rects: Arc<Mutex<HashMap<(u32, String), lumen_layout::PseudoGeometry>>>,
+    /// CSSOM-11: set by `_lumen_get_pseudo_geometry` before it flushes.
+    pub(crate) pseudo_rects_needed: Arc<AtomicBool>,
+    /// CSSOM-11: same bypass as [`Self::text_frags_collected`]; cleared by `update_client_rects`.
+    pub(crate) pseudo_rects_collected: Arc<AtomicBool>,
     /// BUG-1202: set when a flush publishes a layout tree newer than the one the embedder pushed
     /// into `hit_test_tree`; `elementFromPoint`/`elementsFromPoint` then hit-test `incr_basis`
     /// instead. Cleared by `V8JsRuntime::update_hit_test_tree`.
@@ -281,6 +297,8 @@ pub(crate) struct IncrFlushBasis {
     /// alongside it so a focus-only transition since then can still be
     /// expressed as a `RestyleDelta` instead of forcing a full recompute.
     pub(crate) focus: Option<u32>,
+    /// BUG-1458: hover baked into `layout`/`cascade` — the twin of [`Self::focus`].
+    pub(crate) hover: Option<u32>,
     /// BUG-1211: [`super::runtime::DomTouched::epoch`] at the moment this
     /// basis was produced — the watermark [`FlushHandles::
     /// try_incremental_flush`] diffs `touch_gen` against, since `touched.
@@ -452,8 +470,12 @@ impl FlushHandles {
         // focus baked into the last flush rather than trusting
         // `flush_stale`/`never_flushed` alone.
         let current_focus = *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner());
-        let focus_changed =
-            *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner()) != current_focus;
+        let current_hover = *self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner());
+        // BUG-1458: the same for the pointer — `:hover` flips on a hit-test
+        // change, which touches no DOM node either.
+        let focus_changed = *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner())
+            != current_focus
+            || *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) != current_hover;
         // BUG-935 S34: gate on `flush_stale`, a dedicated flag set at every
         // same DOM-mutating call site as the scheduler's own `dom_dirty`
         // (`V8JsRuntime::dom_dirty`, a separate `Arc<AtomicBool>` this struct
@@ -484,6 +506,8 @@ impl FlushHandles {
             && !self.custom_props_collected.load(Ordering::Relaxed);
         let text_frags_pending = self.text_frags_needed.load(Ordering::Relaxed)
             && !self.text_frags_collected.load(Ordering::Relaxed);
+        let pseudo_rects_pending = self.pseudo_rects_needed.load(Ordering::Relaxed)
+            && !self.pseudo_rects_collected.load(Ordering::Relaxed);
         if !self.never_flushed.load(Ordering::Relaxed)
             && !self.flush_stale.load(Ordering::Relaxed)
             && !focus_changed
@@ -492,6 +516,7 @@ impl FlushHandles {
             && !pseudo_styles_pending
             && !custom_props_pending
             && !text_frags_pending
+            && !pseudo_rects_pending
         {
             return;
         }
@@ -550,9 +575,9 @@ impl FlushHandles {
         // thread-local's untouched "nothing focused" default (a real relayout
         // does the equivalent via `set_interactive_state` on the shell thread —
         // this flush runs on the engine thread, which never gets that call).
-        // `:hover`/`:active` stay unset — out of this bug's scope.
+        // `:active` stays unset; `:hover` comes from the pointer mirror (BUG-1458).
         let focus_node = current_focus.map(lumen_dom::NodeId::from_raw);
-        lumen_layout::set_interactive_state(None, focus_node, None);
+        lumen_layout::set_interactive_state(current_hover.map(lumen_dom::NodeId::from_raw), focus_node, None);
         // BUG-1211: try the incremental restyle path first — a full
         // `layout_measured_with_counters` recomputes the *entire* tree's
         // cascade+layout on every same-tick accessor read after a mutation,
@@ -578,7 +603,7 @@ impl FlushHandles {
         let content_journal = doc_guard.take_content_journal();
         let incr_scope_guard = lumen_core::profile::scope("flush.try_incremental");
         let incr = self.try_incremental_flush(
-            &doc_guard, &sheet, viewport, &measurer, current_focus, &touched, content_journal.as_ref(),
+            &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, &touched, content_journal.as_ref(),
         );
         // BUG-1211 (post-collectors): `incr_scope` is `Some((dirty_roots,
         // prev_node_ids))` only when the incremental cascade+layout path
@@ -735,7 +760,7 @@ impl FlushHandles {
                 // exactly when this is that first-ever collect, same as the
                 // always-on `layout_rects`/`client_rects` above got for free
                 // by never being gated.
-                if self.computed_styles_collected.load(Ordering::Relaxed) {
+                if self.computed_styles_collected.load(Ordering::Relaxed) && counters.cq_boxless().is_empty() {
                     let mut kept = 0u64;
                     for nid in prev_node_ids {
                         if plan.keeps_computed_style(*nid) {
@@ -841,7 +866,9 @@ impl FlushHandles {
             let _custom_scope = lumen_core::profile::scope("flush.custom_props");
             let mut custom = self.custom_properties.lock().unwrap_or_else(|e| e.into_inner());
             match (&scoped_plan, scoped_ids) {
-                (Some(plan), Some(ids)) if self.custom_props_collected.load(Ordering::Relaxed) => {
+                (Some(plan), Some(ids))
+                    if self.custom_props_collected.load(Ordering::Relaxed) && counters.cq_boxless().is_empty() =>
+                {
                     for nid in ids {
                         if !plan.keeps_published(*nid) {
                             custom.remove(nid);
@@ -849,7 +876,7 @@ impl FlushHandles {
                     }
                     plan.collect_custom_properties(viewport, &mut custom);
                     if verify_scope_prune() {
-                        let full = lumen_layout::collect_custom_properties(&layout_root, viewport);
+                        let full = lumen_layout::collect_custom_properties_for(&layout_root, Some(&counters), viewport);
                         let stale = full.iter().filter(|(k, v)| custom.get(*k) != Some(*v)).count();
                         if stale > 0 {
                             eprintln!(
@@ -860,7 +887,7 @@ impl FlushHandles {
                         }
                     }
                 }
-                _ => *custom = lumen_layout::collect_custom_properties(&layout_root, viewport),
+                _ => *custom = lumen_layout::collect_custom_properties_for(&layout_root, Some(&counters), viewport),
             }
             self.custom_props_collected.store(true, Ordering::Relaxed);
         }
@@ -871,6 +898,11 @@ impl FlushHandles {
                 .unwrap_or_else(|e| e.into_inner()) =
                 lumen_layout::collect_text_frag_rects(&layout_root, &doc_guard);
             self.text_frags_collected.store(true, Ordering::Relaxed);
+        }
+        if self.pseudo_rects_needed.load(Ordering::Relaxed) {
+            *self.pseudo_rects.lock().unwrap_or_else(|e| e.into_inner()) =
+                lumen_layout::collect_pseudo_rects(&layout_root, viewport);
+            self.pseudo_rects_collected.store(true, Ordering::Relaxed);
         }
         // BUG-1211: scroll containers ARE scoped — cheap per box (a handful
         // of field reads, no ancestor context needed) but still an
@@ -947,6 +979,7 @@ impl FlushHandles {
             sheet_revision: sheet.revision(),
             sheet: Arc::clone(&sheet),
             focus: current_focus,
+            hover: current_hover,
             touch_epoch: touched.epoch,
             scroll_rollups: next_rollups,
         });
@@ -957,6 +990,7 @@ impl FlushHandles {
             .last_flushed_focus
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = current_focus;
+        *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) = current_hover;
         // CSSOM-8 вариант C: `cssom_deltas` itself is never cleared — it is
         // replayed onto every future cascade rebuild too (see the field's doc
         // comment) — only the "has something changed since the last flush"
@@ -1169,6 +1203,7 @@ impl FlushHandles {
         viewport: lumen_core::geom::Size,
         measurer: &lumen_paint::FontMeasurer<'_>,
         current_focus: Option<u32>,
+        current_hover: Option<u32>,
         touched: &super::runtime::DomTouched,
         content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
@@ -1306,6 +1341,13 @@ impl FlushHandles {
                 doc, basis.focus.map(lumen_dom::NodeId::from_raw), current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
             ));
         }
+        // BUG-1458: the same transition for the pointer. One `state_index` per pass.
+        if basis.hover != current_hover {
+            let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                doc, basis.hover.map(lumen_dom::NodeId::from_raw), current_hover.map(lumen_dom::NodeId::from_raw), &state_index,
+            ));
+        }
         drop(roots_scope);
         let tp_roots = tp0.elapsed();
         // BUG-935 S55: a complete per-node content record licenses reuse of
@@ -1431,7 +1473,7 @@ impl FlushHandles {
     /// (`V8JsRuntime::patch_cascade`, recognised by its revision), the edits
     /// are replayed onto the pristine sheet it was made from instead, so they
     /// are never applied twice.
-    fn cssom_patched_sheet(
+    pub(crate) fn cssom_patched_sheet(
         &self,
         sheet: &Arc<lumen_css_parser::Stylesheet>,
     ) -> Option<Arc<lumen_css_parser::Stylesheet>> {

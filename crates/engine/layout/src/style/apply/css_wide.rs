@@ -63,7 +63,7 @@ fn apply_background_longhand_wide(style: &mut ComputedStyle, prop: &str, parent:
             .enumerate()
             .map(|(i, s)| {
                 let base = old.get(i % old.len().max(1)).cloned().unwrap_or_default();
-                BackgroundLayer { image: s.image, ..base }
+                BackgroundLayer { image: s.image, image_css: s.image_css, ..base }
             })
             .collect();
         return;
@@ -185,7 +185,11 @@ fn apply_css_wide_keyword_with(
 
     match prop {
         // ──────── Inherited properties ────────
-        "color" => style.color = if inh { inherited.color } else { init.color },
+        "color" => {
+            let src = if inh { inherited } else { init };
+            style.color = src.color;
+            style.color_css = src.color_css.clone();
+        }
         "caret-color" => {
             style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
         }
@@ -329,6 +333,17 @@ fn apply_css_wide_keyword_with(
         }
         "text-transform" => {
             style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
+            style.text_extra.transform =
+                if inh { inherited.text_extra.transform } else { init.text_extra.transform };
+        }
+        "tab-size" => {
+            // Число и длина лежат в двух полях (BUG-1437): сбрасываются вместе.
+            let src = if inh { inherited } else { init };
+            style.tab_size = src.tab_size;
+            style.text_extra.tab_size_number = src.text_extra.tab_size_number;
+        }
+        "hyphens" => {
+            style.hyphens = if inh { inherited.hyphens } else { init.hyphens };
         }
         "white-space" => {
             // L4 §2.1: shorthand — CSS-wide keyword применяется к обеим
@@ -347,9 +362,20 @@ fn apply_css_wide_keyword_with(
         }
         "text-indent" => {
             style.text_indent = if inh { inherited.text_indent.clone() } else { init.text_indent.clone() };
+            // `hanging`/`each-line` — часть значения (BUG-1437).
+            let src = if inh { inherited } else { init };
+            style.text_extra.indent_hanging = src.text_extra.indent_hanging;
+            style.text_extra.indent_each_line = src.text_extra.indent_each_line;
         }
         "letter-spacing" => {
-            style.letter_spacing = if inh { inherited.letter_spacing } else { init.letter_spacing };
+            // BUG-1438: the inherited value carries the parent's `%` share; it is re-added in
+            // the cascade epilogue against this element's `font-size`.
+            style.letter_spacing = if inh {
+                inherited.letter_spacing - inherited.letter_spacing_pct * inherited.font_size
+            } else {
+                init.letter_spacing
+            };
+            style.letter_spacing_pct = if inh { inherited.letter_spacing_pct } else { init.letter_spacing_pct };
         }
         "word-spacing" => {
             style.word_spacing = if inh { inherited.word_spacing } else { init.word_spacing };
@@ -561,6 +587,11 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.container_type
             };
+            style.container_scroll_state = if inh_only_inherit {
+                inherited.container_scroll_state
+            } else {
+                init.container_scroll_state
+            };
         }
         "container-name" | "container" => {
             style.container_name = if inh_only_inherit {
@@ -642,7 +673,13 @@ fn apply_css_wide_keyword_with(
             };
         }
         "display" => {
-            style.display = if inh_only_inherit { inherited.display } else { init.display };
+            // Initial value of `display` is `inline` (CSS Display 3 §2.1); the shared
+            // root style carries `block`, so `initial`/`unset` must not read it (BUG-1448).
+            style.display = match kw {
+                Inherit => inherited.display,
+                Revert => init.display,
+                _ => Display::Inline,
+            };
             style.grid_lanes.enabled = if inh_only_inherit { inherited.grid_lanes.enabled } else { false };
         }
         // CSS Grid L3 §3: свойства `grid-lanes` не наследуются.
@@ -728,16 +765,37 @@ fn apply_css_wide_keyword_with(
             style.margin_left = src.margin_left.clone();
         }
         // CSS Logical Properties L1 — margin-inline-* / margin-block-*.
+        // `revert` дополнительно возвращает UA-значение физической стороны
+        // (BUG-1449): логическое поле физическое не перебивает, если оно уже 0.
+        "margin-inline-start" | "margin-inline-end" | "margin-block-start" | "margin-block-end"
+            if kw == Revert =>
+        {
+            crate::style::logical::revert_logical_margin_side(style, prop, ua_baseline);
+            match prop {
+                "margin-inline-start" => style.margin_inline_start = init.margin_inline_start.clone(),
+                "margin-inline-end" => style.margin_inline_end = init.margin_inline_end.clone(),
+                "margin-block-start" => style.margin_block_start = init.margin_block_start.clone(),
+                _ => style.margin_block_end = init.margin_block_end.clone(),
+            }
+        }
         "margin-inline-start" => style.margin_inline_start = if inh_only_inherit { inherited.margin_inline_start.clone() } else { init.margin_inline_start.clone() },
         "margin-inline-end"   => style.margin_inline_end = if inh_only_inherit { inherited.margin_inline_end.clone() } else { init.margin_inline_end.clone() },
         "margin-block-start"  => style.margin_block_start = if inh_only_inherit { inherited.margin_block_start.clone() } else { init.margin_block_start.clone() },
         "margin-block-end"    => style.margin_block_end = if inh_only_inherit { inherited.margin_block_end.clone() } else { init.margin_block_end.clone() },
         "margin-inline" => {
+            if kw == Revert {
+                crate::style::logical::revert_logical_margin_side(style, "margin-inline-start", ua_baseline);
+                crate::style::logical::revert_logical_margin_side(style, "margin-inline-end", ua_baseline);
+            }
             let src = if inh_only_inherit { inherited } else { init };
             style.margin_inline_start = src.margin_inline_start.clone();
             style.margin_inline_end = src.margin_inline_end.clone();
         }
         "margin-block" => {
+            if kw == Revert {
+                crate::style::logical::revert_logical_margin_side(style, "margin-block-start", ua_baseline);
+                crate::style::logical::revert_logical_margin_side(style, "margin-block-end", ua_baseline);
+            }
             let src = if inh_only_inherit { inherited } else { init };
             style.margin_block_start = src.margin_block_start.clone();
             style.margin_block_end = src.margin_block_end.clone();
@@ -795,6 +853,32 @@ fn apply_css_wide_keyword_with(
             style.block_step_insert = src.block_step_insert;
             style.block_step_align = src.block_step_align;
             style.block_step_round = src.block_step_round;
+        }
+        // CSS Multi-column L1 §3 / L2 §4 — none of the column properties are inherited.
+        "column-count" | "column-width" | "column-height" | "column-wrap" | "column-fill"
+        | "column-span" | "columns" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            let all = prop == "columns";
+            if all || prop == "column-count" {
+                style.column_count = src.column_count;
+            }
+            if all || prop == "column-width" {
+                style.column_width = src.column_width.clone();
+            }
+            if all || prop == "column-height" {
+                style.column_height = src.column_height.clone();
+            }
+            if all || prop == "column-wrap" {
+                style.column_wrap_nowrap = src.column_wrap_nowrap;
+                style.column_wrap_explicit = src.column_wrap_explicit;
+            }
+            if prop == "column-fill" {
+                style.column_fill_balance = src.column_fill_balance;
+                style.column_fill_balance_all = src.column_fill_balance_all;
+            }
+            if prop == "column-span" {
+                style.column_span_all = src.column_span_all;
+            }
         }
         // CSS Multi-column L1 §4 / CSS Gap Decorations L1 §3 — none of the
         // `*-rule*` properties are inherited.

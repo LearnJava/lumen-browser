@@ -35,7 +35,7 @@ use lumen_layout::{
     GradientStop, ImageRendering, Isolation, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, PrintColorAdjust, Resize,
-    ScrollbarWidth, SelectionHighlight,
+    ScrollbarWidth,
     StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
     TransformStyle,
@@ -98,8 +98,9 @@ pub use builder::{
     build_display_list_ordered_dpr_cached,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_ordered_with_anim_split, build_display_list_with_anim,
-    build_display_list_with_selection,
 };
+mod highlight_paint;
+pub use highlight_paint::with_highlights;
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use builder::SplitTracker;
 
@@ -113,7 +114,10 @@ use print::ELLIPSIS_EM;
 // Used by `display_list/{box_layer,walk,background_mask}.rs` (via `super::*`).
 use print::map_blend_mode;
 // Used by `display_list/{box_layer,scrollbars,text_run,walk}.rs` (via `super::*`).
-use print::{clamp_clip_rect, overflow_clip_rect, style_overflow_clips};
+use print::{
+    anchor_scroll_layer_count, anchor_scroll_layers, clamp_clip_rect, is_anchor_scroll_layer, overflow_clip_rect,
+    style_overflow_clips,
+};
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use print::{record_span, BucketField, RawSpan, ScBucket};
 // Used by `clip_path_to_shape`, still in this file just below the DL-15 region.
@@ -253,7 +257,7 @@ mod text_run;
 use text_run::emit_inline_run;
 
 mod clip_url;
-use clip_url::{clip_path_commands, pop_clip_layers, push_shape_clip_path};
+use clip_url::{clip_path_commands, pop_clip_layers, pop_shape_filter, push_shape_clip_path, push_shape_filter};
 
 mod box_layer;
 use box_layer::{fill_buckets, fill_buckets_cached};
@@ -315,6 +319,10 @@ mod text_and_images;
 #[path = "display_list/tests/images_media.rs"]
 mod images_media;
 
+#[cfg(test)]
+#[path = "display_list/tests/highlight_overlay.rs"]
+mod highlight_overlay;
+
 mod text_highlight;
 pub use text_highlight::emit_text_with_highlights;
 
@@ -341,6 +349,10 @@ mod svg_table_and_hash;
 #[cfg(test)]
 #[path = "display_list/tests/svg_clip_url.rs"]
 mod svg_clip_url;
+
+#[cfg(test)]
+#[path = "display_list/tests/svg_filter_url.rs"]
+mod svg_filter_url;
 
 #[cfg(test)]
 #[path = "display_list/tests/anim_and_chrome.rs"]

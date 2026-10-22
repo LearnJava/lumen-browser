@@ -1,6 +1,7 @@
 # BUG-1509 — Дерево псевдоэлементов View Transition не видно из DOM: нет UA-стиля `::view-transition*`, нет CSS-анимаций на них, `getAnimations()` пуст
 
-**Статус:** OPEN
+**Статус:** OPEN (ДОРАБОТКА → VT-API-2)
+**Тип:** нереализованная функциональность (UA-таблица стилей и анимации дерева псевдоэлементов), не дефект — задача `VT-API-2` в ROADMAP.md.
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** layout/js (`crates/engine/layout/src/style/pseudo.rs` — `compute_view_transition_pseudo_style`; `crates/js/src/view_transitions.rs`; снимок и кросс-фейд собирает шелл)
 

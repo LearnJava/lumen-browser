@@ -27,6 +27,7 @@ pub mod color_mix;
 pub mod incremental;
 pub mod content_visibility;
 pub mod field_sizing;
+pub mod highlight;
 pub mod hyphenation;
 pub mod counters;
 mod custom_flow;
@@ -44,13 +45,18 @@ pub mod ruby;
 pub mod rule_index;
 mod grid_computed;
 mod resolved_geometry;
+mod pseudo_geometry;
+pub use pseudo_geometry::{collect_pseudo_rects, PseudoGeometry};
 mod transform_interp;
 pub mod selection;
 pub mod selector_query;
+mod css_wide_value;
+pub use css_wide_value::{initial_computed_value, is_inherited_property};
 pub mod style_map;
 pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
+mod scroll_state;
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
@@ -108,11 +114,11 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles, apply_intrinsic_size, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_cascade_background_image_requests, collect_image_requests,
-    pick_image_request_url,
+    pick_image_request_url, collect_shape_image_requests,
     is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_measured_with_counters, layout_mutation_incremental,
     layout_mutation_incremental_with_counters, layout_streaming_incremental,
-    lay_out_incremental, select_widget_arrow_width, select_widget_font_size, BoxKind, BoxOrigin,
+    lay_out_incremental, select_widget_arrow_width, select_widget_font_size, AnchorScroll, AnchorScroller, BoxKind, BoxOrigin,
     BoxRole, CrossOriginMode, FieldsetLegend, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox, MergedSource,
     PseudoKind, SvgMaskContent, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     ViewBox, SELECT_WIDGET_PAD_PX,
@@ -126,13 +132,17 @@ pub use property_trees::{
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
+pub use highlight::{
+    compute_highlight_style, originating_base, resolve_highlights, HighlightEnv, HighlightLayer, HighlightLook, HighlightPiece, Highlights,
+    UA_SELECTION_BACKGROUND,
+};
 pub use selection::{
     caret_at_point, clamp_to_range, node_between, paragraph_range_at_point, select_scope_at_point, selection_rects,
     user_select_none_text_nodes, SelectScope,
 };
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
 pub use style::{
-    compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
+    is_highlight_pseudo, compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
     compute_view_transition_pseudo_style, ViewTransitionPart,
 };
 pub use selector_query::{
@@ -168,7 +178,7 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    apply_container_rules, evaluate_container_condition,
+    apply_container_rules, evaluate_container_condition, evaluate_container_query,
     set_interactive_state, clear_interactive_state,
     set_animated_heights, clear_animated_heights,
     set_forced_colors, forced_colors_active,
@@ -177,14 +187,14 @@ pub use style::{
     parse_background_gradient, parse_color, parse_color_function, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
-    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
+    AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, ContainerKinds, Edge, EdgeFlags, ScrollStateInfo, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
     AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, SvgClipPath, SvgClipPlacement, SvgClipSubpath, Color, ColorFloat,
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, CaptionSide, TableLayout, FilterFn, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, CaptionSide, TableLayout, FilterFn, FilterUrl, FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, FloatSide, FontOpticalSizing, FontStretch, PrintColorAdjust,
     FontStyle,
     FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Hyphens, ImageRendering,
     MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
@@ -202,29 +212,6 @@ pub use style::{
     UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
-
-/// Computed `::selection` highlight data — passed to the paint layer so it can
-/// apply `::selection` CSS overrides when rendering selected text.
-///
-/// CSS Pseudo-elements L4 §5.6 restricts `::selection` to a limited set of
-/// properties: `color`, `background-color`, `text-decoration-*`, `text-shadow`.
-/// The paint layer reads only `fg_color` and `bg_color`; other properties from
-/// the full `ComputedStyle` are ignored during selection rendering.
-///
-/// Build via [`compute_selection_style`] or construct directly with OS-default
-/// colours when no `::selection` rules are present.
-#[derive(Debug, Clone)]
-pub struct SelectionHighlight {
-    /// The active DOM selection range. Must not be collapsed.
-    pub range: lumen_dom::Range,
-    /// Text colour override from `::selection { color: ... }`. `None` = inherit
-    /// (keep each fragment's own `color`).
-    pub fg_color: Option<Color>,
-    /// Selection background from `::selection { background-color: ... }`.
-    /// The default when no `::selection` rule is present is the OS accent colour;
-    /// callers should supply a sensible fallback (e.g. `#308aff`).
-    pub bg_color: Color,
-}
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -316,6 +303,20 @@ pub trait TextMeasurer {
     fn x_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
         let _ = families;
         self.x_height_px(font_size_px)
+    }
+
+    /// Cap-height шрифта в пикселях при размере `font_size_px` — высота заглавных
+    /// (`OS/2.sCapHeight`); источник единицы `cap`/`rcap` (CSS Values L4 §5.1.1,
+    /// BUG-1429). Реализации без доступа к метрикам возвращают `0.7 × size`.
+    fn cap_height_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.7
+    }
+
+    /// [`Self::cap_height_px`] с учётом CSS `font-family` каскада — см.
+    /// [`Self::descent_px_with_families`].
+    fn cap_height_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.cap_height_px(font_size_px)
     }
 
     /// Line-gap шрифта в пикселях при размере `font_size_px` — рекомендуемый
@@ -1609,9 +1610,14 @@ fn child_scrollable_bounds(c: &LayoutBox) -> lumen_core::geom::Rect {
 /// not — their overflow is contained (and separately reported by that box's
 /// own `scrollWidth`/`scrollHeight`), not folded further into the ancestor
 /// chain.
+///
+/// CSS Containment L1 §3.2 / §3.3: `contain: layout` and `contain: paint` turn the box's
+/// descendants' overflow into ink overflow, so the scrollable area of an ancestor never grows
+/// for it either.
 fn box_clips_own_overflow(b: &LayoutBox) -> bool {
     !matches!(b.style.overflow_x, style::Overflow::Visible)
         || !matches!(b.style.overflow_y, style::Overflow::Visible)
+        || b.style.contain.0 & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0) != 0
 }
 
 /// The horizontal scrollable-overflow span of a box, as `(min_x, max_x)`
@@ -1861,6 +1867,16 @@ pub fn collect_computed_styles(
     let mut out = std::collections::HashMap::new();
     collect_computed_styles_rec(doc, root, resolved_geometry::GeomCtx::root(viewport), viewport, &mut out);
     if let Some(counters) = counters {
+        // CQ-SCROLL-STATE: box-less elements inside a query container, restyled by its
+        // `@container` rules — they replace the segment-derived approximation too.
+        for (id, style) in counters.cq_boxless() {
+            let idx = id.index() as u32;
+            let mut m = StyleMap::of_style(style);
+            if !out.contains_key(&idx) && style.display != Display::Contents {
+                m.set(resolved_geometry::BOXLESS_KEY, "1".to_owned());
+            }
+            out.insert(idx, m);
+        }
         for i in 0..doc.len() {
             let idx = i as u32;
             if out.contains_key(&idx) {
@@ -2041,6 +2057,19 @@ fn pseudo_used_display(kind: PseudoKind, style: &ComputedStyle) -> Option<&'stat
     }
 }
 
+/// The published style of a `::marker` box (BUG-1446): its own cascaded style plus the used
+/// values CSSOM reports for it — `display` is `inline` for an inside marker and a block
+/// container (`block`) for an outside one (CSS Lists L3 §3.1), `width`/`height` the marker
+/// box's resolved size.
+fn marker_style_map(b: &LayoutBox, position: ListStylePosition) -> std::collections::HashMap<String, String> {
+    let mut map = computed_style_to_map(&b.style);
+    let display = if position == ListStylePosition::Outside { "block" } else { "inline" };
+    map.insert("display".to_string(), display.to_string());
+    map.insert("width".to_string(), selector_query::px_str(b.rect.width));
+    map.insert("height".to_string(), selector_query::px_str(b.rect.height));
+    map
+}
+
 fn pseudo_style_map(style: &ComputedStyle, kind: PseudoKind) -> std::collections::HashMap<String, String> {
     let mut map = computed_style_to_map(style);
     if let Some(used_display) = pseudo_used_display(kind, style) {
@@ -2090,6 +2119,13 @@ pub(crate) fn collect_pseudo_computed_styles_box(
     held: Option<&scoped_collect::PseudoMaps>,
     out: &mut std::collections::HashMap<(u32, String), std::collections::HashMap<String, String>>,
 ) {
+    // `::marker` — the list item's marker box (`BoxKind::Marker`, not a `BoxRole::Pseudo`).
+    if let box_tree::BoxKind::Marker { position, .. } = &b.kind {
+        let key = (b.node.index() as u32, "marker".to_string());
+        if !held.is_some_and(|h| h.contains_key(&key)) {
+            out.entry(key).or_insert_with(|| marker_style_map(b, *position));
+        }
+    }
     if let BoxRole::Pseudo(kind) = b.origin.role
         && let Some(name) = pseudo_kind_name(kind)
     {
@@ -2142,8 +2178,9 @@ pub(crate) fn collect_pseudo_computed_styles_box(
 }
 
 /// The pseudo-element names [`collect_pseudo_computed_styles`] keys by.
-const PSEUDO_NAMES: [&str; 14] = [
+const PSEUDO_NAMES: [&str; 15] = [
     "before",
+    "marker",
     "after",
     "first-line",
     "first-letter",
@@ -2207,6 +2244,19 @@ pub fn collect_custom_properties(
     root: &LayoutBox,
     viewport: lumen_core::geom::Size,
 ) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
+    collect_custom_properties_for(root, None, viewport)
+}
+
+/// [`collect_custom_properties`] that also publishes the custom properties of the
+/// elements that own no box — plain inline elements, `display: none` / `contents`
+/// ones — below a query container (CQ-SCROLL-STATE: where `@container` rules set a
+/// `--x` that `getComputedStyle` has to read back; [`CounterMap::cq_boxless`]).
+/// Without `counters`, and outside query containers, those elements stay absent.
+pub fn collect_custom_properties_for(
+    root: &LayoutBox,
+    counters: Option<&CounterMap>,
+    viewport: lumen_core::geom::Size,
+) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
     let mut out = std::collections::HashMap::new();
     // Keyed by the address of the source allocation — identity, never read.
     let mut resolved: std::collections::HashMap<
@@ -2214,7 +2264,43 @@ pub fn collect_custom_properties(
         std::sync::Arc<std::collections::HashMap<String, String>>,
     > = std::collections::HashMap::new();
     collect_custom_properties_rec(root, viewport, &mut out, &mut resolved);
+    if let Some(counters) = counters {
+        for (id, style) in counters.cq_boxless() {
+            let idx = id.index() as u32;
+            if !out.contains_key(&idx) && !style.custom_props.is_empty() {
+                out.insert(idx, resolve_custom_props(style, viewport, &mut resolved));
+            }
+        }
+    }
     out
+}
+
+/// `style.custom_props` with every `var()` expanded, one resolution per distinct
+/// allocation (`resolved`, keyed by the allocation's address).
+fn resolve_custom_props(
+    style: &ComputedStyle,
+    viewport: lumen_core::geom::Size,
+    resolved: &mut std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+    let key = style.custom_props.as_ptr() as usize;
+    if let Some(m) = resolved.get(&key) {
+        return std::sync::Arc::clone(m);
+    }
+    let raw = style.custom_props.shared();
+    let em_basis = style.font_size;
+    let m = std::sync::Arc::new(
+        raw.iter()
+            .map(|(name, value)| {
+                let computed = crate::style::expand_vars_and_env(value, &raw, em_basis, viewport).unwrap_or_default();
+                (name.clone(), computed.trim().to_string())
+            })
+            .collect::<std::collections::HashMap<String, String>>(),
+    );
+    resolved.insert(key, std::sync::Arc::clone(&m));
+    m
 }
 
 /// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
@@ -2264,27 +2350,7 @@ pub(crate) fn collect_custom_properties_box(
     if b.style.custom_props.is_empty() || held.is_some_and(|h| h.contains_key(&(b.node.index() as u32))) {
         return;
     }
-    let key = b.style.custom_props.as_ptr() as usize;
-    let map = match resolved.get(&key) {
-        Some(m) => std::sync::Arc::clone(m),
-        None => {
-            let raw = b.style.custom_props.shared();
-            let em_basis = b.style.font_size;
-            let m = std::sync::Arc::new(
-                raw.iter()
-                    .map(|(name, value)| {
-                        let computed = crate::style::expand_vars_and_env(
-                            value, &raw, em_basis, viewport,
-                        )
-                        .unwrap_or_default();
-                        (name.clone(), computed.trim().to_string())
-                    })
-                    .collect::<std::collections::HashMap<String, String>>(),
-            );
-            resolved.insert(key, std::sync::Arc::clone(&m));
-            m
-        }
-    };
+    let map = resolve_custom_props(&b.style, viewport, resolved);
     out.entry(b.node.index() as u32).or_insert(map);
 }
 
@@ -2411,6 +2477,8 @@ fn collect_layout_rects_rec(
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         collect_layout_rects_box(doc, b, out);
+        // `content-visibility: hidden` (BUG-1400): the skipped subtree, laid out as a probe.
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2503,6 +2571,7 @@ fn collect_boxed_node_ids(root: &LayoutBox, out: &mut std::collections::HashSet<
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         out.insert(b.node.index() as u32);
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2547,6 +2616,7 @@ fn collect_client_rects_rec(
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
         collect_client_rects_box(doc, b, boxed, out);
+        stack.extend(b.cv_hidden.iter().rev());
         stack.extend(b.children.iter().rev());
     }
 }
@@ -2711,6 +2781,45 @@ pub fn collect_dirty_subtree_ids<S: std::hash::BuildHasher>(
 }
 
 pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
+    let found = set_scroll_position_rec(root, node, x, y);
+    if found {
+        refresh_anchor_scroll(root);
+    }
+    found
+}
+
+/// CSS Anchor Positioning L1 §4.3 — copies the current `scroll_x` / `scroll_y` of every scroll
+/// container an anchor-positioned box follows ([`LayoutBox::anchor_scroll`]) into that box, so
+/// the next paint (or patch of a built display list) moves it with its anchor. Call after any
+/// change of a container's scroll offset made without a relayout; a tree without such boxes
+/// costs one read-only walk.
+pub fn refresh_anchor_scroll(root: &mut LayoutBox) {
+    let mut any = false;
+    let mut offsets: std::collections::HashMap<lumen_dom::NodeId, (f32, f32)> = std::collections::HashMap::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        any |= b.anchor_scroll.is_some();
+        if b.scroll_x != 0.0 || b.scroll_y != 0.0 {
+            // The principal box of a node comes first in pre-order and owns the offset.
+            offsets.entry(b.node).or_insert((b.scroll_x, b.scroll_y));
+        }
+        stack.extend(b.children.iter());
+    }
+    if !any {
+        return;
+    }
+    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if let Some(a) = b.anchor_scroll.as_mut() {
+            for sc in &mut a.scrollers {
+                (sc.x, sc.y) = offsets.get(&sc.node).copied().unwrap_or((0.0, 0.0));
+            }
+        }
+        stack.extend(b.children.iter_mut());
+    }
+}
+
+fn set_scroll_position_rec(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
     if root.node == node {
         let pb = padding_box(root);
         root.scroll_x = if root.style.overflow_x == style::Overflow::Clip {
@@ -2728,7 +2837,7 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
         return true;
     }
     for child in &mut root.children {
-        if set_scroll_position(child, node, x, y) {
+        if set_scroll_position_rec(child, node, x, y) {
             return true;
         }
     }
@@ -2751,7 +2860,8 @@ pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections:
     }
     let mut pending = states.len();
     let mut applied = std::collections::HashSet::new();
-    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    let mut moved = false;
+    let mut stack: Vec<&mut LayoutBox> = vec![&mut *root];
     while let Some(b) = stack.pop() {
         let node = b.node;
         if let Some(s) = states.get(&node.raw())
@@ -2760,13 +2870,18 @@ pub fn restore_scroll_positions(root: &mut LayoutBox, states: &std::collections:
             pending -= 1;
             let at_origin = b.scroll_x == 0.0 && b.scroll_y == 0.0;
             if !(at_origin && s[0] == 0.0 && s[1] == 0.0) {
-                set_scroll_position(b, node, s[0], s[1]);
+                set_scroll_position_rec(b, node, s[0], s[1]);
+                moved = true;
             }
             if pending == 0 {
-                return;
+                break;
             }
         }
         stack.extend(b.children.iter_mut().rev());
+    }
+    drop(stack);
+    if moved {
+        refresh_anchor_scroll(root);
     }
 }
 
@@ -3036,6 +3151,10 @@ mod scroll_interaction_misc;
 #[cfg(test)]
 #[path = "tests/scroll_container.rs"]
 mod scroll_container;
+
+#[cfg(test)]
+#[path = "tests/scroll_state_queries.rs"]
+mod scroll_state_queries;
 
 #[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]

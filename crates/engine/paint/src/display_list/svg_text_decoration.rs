@@ -271,7 +271,7 @@ fn emit_svg_pattern_tiles(cmds: &mut DisplayList, pat: &SvgPatternDef, opacity: 
                     cmds.push(DisplayCommand::PushClipRect { rect: clip });
                 }
                 for content_box in &content {
-                    walk(content_box, cmds, 1.0, None);
+                    walk(content_box, cmds, 1.0);
                 }
                 if clipped {
                     cmds.push(DisplayCommand::PopClip);
@@ -285,7 +285,7 @@ fn emit_svg_pattern_tiles(cmds: &mut DisplayList, pat: &SvgPatternDef, opacity: 
                 cmds.push(DisplayCommand::PushTransform { matrix: m4(content_m) });
             }
             for content_box in pat.content.iter() {
-                walk(content_box, cmds, 1.0, None);
+                walk(content_box, cmds, 1.0);
             }
             if fitted {
                 cmds.push(DisplayCommand::PopTransform);
@@ -323,7 +323,6 @@ pub(crate) fn emit_svg_shape_masked(
     mask: &lumen_layout::SvgMaskContent,
     out: &mut DisplayList,
     dpr: f32,
-    sel: Option<&SelectionHighlight>,
 ) {
     // `lumen_layout::MaskMode` and `display_list::MaskMode` are distinct types
     // (the paint crate's own copy predates `lumen-layout`'s CSS `mask-mode`
@@ -334,10 +333,27 @@ pub(crate) fn emit_svg_shape_masked(
         lumen_layout::MaskMode::Luminance => MaskMode::Luminance,
     };
     out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    // Filter Effects L1 §4: `filter` runs before `mask`, so it wraps only the shape's own
+    // paint, below the mask layer.
+    let filtered = super::push_shape_filter(b, out);
     emit_svg_shape(b, shape, out);
-    out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode });
+    super::pop_shape_filter(filtered, out);
+    // The mask is limited to `rect`; a filtered shape paints beyond its box (blur,
+    // flood over the filter region), and that ink must be masked too.
+    let rect = if b.style.filter.is_empty() {
+        b.rect
+    } else {
+        const FILTER_REACH: f32 = 2048.0;
+        Rect::new(
+            b.rect.x - FILTER_REACH,
+            b.rect.y - FILTER_REACH,
+            b.rect.width + 2.0 * FILTER_REACH,
+            b.rect.height + 2.0 * FILTER_REACH,
+        )
+    };
+    out.push(DisplayCommand::PushMaskLayer { rect, mode });
     for content_box in &mask.content {
-        walk(content_box, out, dpr, sel);
+        walk(content_box, out, dpr);
     }
     out.push(DisplayCommand::PopMaskLayer);
     out.push(DisplayCommand::PopOpacity);
@@ -1255,11 +1271,11 @@ pub(crate) fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, 
         }
         BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, None, dpr, out);
+            emit_inline_run(b, lines, dpr, out);
         }
         // Image and other kinds: no compositor-offloadable properties, delegate to walk.
         _ => {
-            walk(b, out, dpr, None);
+            walk(b, out, dpr);
         }
     }
     if is_fixed {

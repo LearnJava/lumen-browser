@@ -183,8 +183,12 @@ pub enum PseudoClass {
     /// самого элемента или ближайшего ancestor-а (HTML5 §3.2.6.1).
     /// При отсутствии `dir` — default `ltr`. `dir="auto"` в Phase 0
     /// трактуется как `ltr` (real auto-direction по UAX #9 first-strong
-    /// отложен до bidi-движка). Невалидные аргументы → `Unsupported(name)`.
+    /// отложен до bidi-движка).
     Dir(DirArg),
+    /// `:dir(<ident>)` с идентификатором, отличным от `ltr`/`rtl`: по Selectors
+    /// L4 §13.2 синтаксически валиден, но не матчит ни один элемент. Хранит
+    /// идентификатор как написан — для сериализации.
+    DirOther(String),
     /// `:state(<custom-ident>)` (CSS Selectors L4 §17.4 / WHATWG HTML §4.13.2
     /// `CustomStateSet`). Матчит custom-element, у которого
     /// `ElementInternals.states` содержит данный state-ident. Custom-ident —
@@ -372,6 +376,12 @@ pub enum PseudoElementKind {
     /// Fragment §4) — text matched by a `:~:text=` URL fragment directive.
     /// Same restricted property subset as `::selection` (STTF-1 остаток).
     TargetText,
+    /// `::spelling-error` (CSS Pseudo-Elements L4 §3.2) — text the UA flags as
+    /// misspelled. Same restricted property subset as `::selection`.
+    SpellingError,
+    /// `::grammar-error` (CSS Pseudo-Elements L4 §3.2) — text the UA flags as
+    /// grammatically wrong. Same restricted property subset as `::selection`.
+    GrammarError,
     /// `::placeholder` (CSS Pseudo-Elements L4 §4.10) — placeholder hint text
     /// of a text-like `<input>`/`<textarea>` (matched while the field's `value`
     /// is empty). P4 wires: color/opacity/font-* overrides applied when the
@@ -602,11 +612,21 @@ pub(crate) fn pseudo_class_is_supported(pc: &PseudoClass) -> bool {
     }
 }
 
+/// Псевдоэлементы, определённые спецификациями, но не смоделированные
+/// движком (отдельного варианта [`PseudoElementKind`] нет, лежат в `Unknown`).
+/// Синтаксически валидны (`querySelectorAll('::backdrop')` — пустой список, не
+/// `SyntaxError`) и ничего не выбирают. `part(…)` приходит уже с аргументом.
+fn is_known_unmodeled_pseudo_element(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(lower.as_str(), "backdrop" | "file-selector-button" | "details-content" | "search-text")
+        || lower.starts_with("part(")
+}
+
 /// True если псевдо-элемент распознан. `Unknown(_)` → `false`; `::slotted()`
 /// рекурсивно проверяет свой аргумент-селектор.
 pub(crate) fn pseudo_element_is_supported(pe: &PseudoElementKind) -> bool {
     match pe {
-        PseudoElementKind::Unknown(_) => false,
+        PseudoElementKind::Unknown(name) => is_known_unmodeled_pseudo_element(name),
         PseudoElementKind::Slotted(Some(list)) => list.iter().all(ComplexSelector::is_supported),
         _ => true,
     }
@@ -721,7 +741,11 @@ pub(crate) fn pc_to_css_str(pc: &PseudoClass) -> String {
         PseudoClass::Checked => ":checked".into(),
         PseudoClass::Indeterminate => ":indeterminate".into(),
         PseudoClass::Default => ":default".into(),
-        PseudoClass::Lang(tags) => format!(":lang({})", tags.join(", ")),
+        PseudoClass::Lang(tags) => format!(
+            ":lang({})",
+            tags.iter().map(|t| serialize_lang_range(t)).collect::<Vec<_>>().join(", ")
+        ),
+        PseudoClass::DirOther(kw) => format!(":dir({kw})"),
         PseudoClass::Link => ":link".into(),
         PseudoClass::Visited => ":visited".into(),
         PseudoClass::AnyLink => ":any-link".into(),
@@ -772,6 +796,8 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::Marker => "::marker".into(),
         PseudoElementKind::Selection => "::selection".into(),
         PseudoElementKind::TargetText => "::target-text".into(),
+        PseudoElementKind::SpellingError => "::spelling-error".into(),
+        PseudoElementKind::GrammarError => "::grammar-error".into(),
         PseudoElementKind::Placeholder => "::placeholder".into(),
         PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
         PseudoElementKind::Picker(name) => format!("::picker({name})"),
@@ -888,11 +914,69 @@ impl PartialOrd for Specificity {
     }
 }
 
+/// Язык-диапазон `:lang()` в сериализации: ident, если это допустимый ident
+/// (латиница, цифры не в начале, `-`, `*`), иначе строка в двойных кавычках.
+fn serialize_lang_range(range: &str) -> String {
+    let plain = !range.is_empty()
+        && !range.starts_with(|c: char| c.is_ascii_digit())
+        && range.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '*'));
+    if plain {
+        range.to_string()
+    } else {
+        format!("\"{}\"", range.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
 /// Парсит строку CSS selector list (через запятую) и возвращает разобранные
 /// `ComplexSelector`-ы. Невалидные или неизвестные части молча пропускаются.
 /// Используется lumen-layout для selector-based lookup (find_box_by_selector).
 pub fn parse_selector_list(input: &str) -> Vec<ComplexSelector> {
-    Parser::new(input).parse_selector_list()
+    Parser::new(&close_unclosed_blocks(input)).parse_selector_list()
+}
+
+/// CSS Syntax §5.4.7: незакрытый блок/функция/строка закрывается в конце
+/// ввода, поэтому `span:not([class]` — валидный селектор. Дописывает к
+/// `input` недостающие закрывающие `)`/`]`/кавычку; без незакрытых блоков
+/// возвращает вход как есть. Применяется на DOM-границе
+/// (`querySelector`/`matches`/`closest`), а не к преамбулам правил таблицы
+/// стилей, где `{` уже ограничивает прелюдию.
+pub(crate) fn close_unclosed_blocks(input: &str) -> std::borrow::Cow<'_, str> {
+    let mut stack: Vec<char> = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (_, '\\') => {
+                chars.next();
+            }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '/') if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+            }
+            (None, '(') => stack.push(')'),
+            (None, '[') => stack.push(']'),
+            (None, ')' | ']') => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+    if stack.is_empty() && quote.is_none() {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    let mut out = input.to_string();
+    out.extend(quote);
+    out.extend(stack.iter().rev());
+    std::borrow::Cow::Owned(out)
 }
 
 /// Проверяет, валиден ли `input` как selector-list по правилам DOM LS для
@@ -921,7 +1005,8 @@ pub fn parse_selector_list(input: &str) -> Vec<ComplexSelector> {
 /// L4 §3.2, поэтому их содержимое не валидируется; `:not()`/`:has()`
 /// non-forgiving и проверяются рекурсивно.
 pub fn is_valid_selector_list(input: &str) -> bool {
-    let mut parser = Parser::new(input);
+    let input = close_unclosed_blocks(input);
+    let mut parser = Parser::new(&input);
     let Some(list) = parser.parse_selector_list_strict() else {
         return false;
     };
@@ -1027,6 +1112,8 @@ pub(crate) fn pseudo_element_allows_user_action(pe: &PseudoElementKind) -> bool 
         pe,
         PseudoElementKind::Selection
             | PseudoElementKind::TargetText
+            | PseudoElementKind::SpellingError
+            | PseudoElementKind::GrammarError
             | PseudoElementKind::Highlight(_)
             | PseudoElementKind::Column
     )
@@ -1055,7 +1142,7 @@ pub(crate) fn is_user_action_pseudo_class(pc: &PseudoClass) -> bool {
 /// Валиден ли pseudo-element: известен движку и с допустимым аргументом.
 pub(crate) fn pseudo_element_is_valid(pe: &PseudoElementKind) -> bool {
     match pe {
-        PseudoElementKind::Unknown(_) => false,
+        PseudoElementKind::Unknown(name) => is_known_unmodeled_pseudo_element(name),
         // `::picker()` определён спекой только для аргумента `select`.
         PseudoElementKind::Picker(arg) => arg == "select",
         // `::scroll-button()` (CSS Overflow L5 §scroll-buttons): the closed
@@ -1115,6 +1202,64 @@ impl<'a> Parser<'a> {
             break;
         }
         sels
+    }
+
+    /// Forgiving-selector-list (Selectors L4 §3.4) для аргументов `:is()` /
+    /// `:where()`: элемент, который не разобрался целиком, отбрасывается
+    /// (пропускается до ближайшей верхнеуровневой `,` или `)`), а не делает
+    /// невалидным весь список. Останавливается на `)` либо конце ввода, не
+    /// съедая их.
+    fn parse_forgiving_selector_list(&mut self) -> Vec<ComplexSelector> {
+        let mut sels = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            let start = self.pos;
+            let parsed = self.parse_complex_selector();
+            self.skip_ws_and_comments();
+            match (parsed, self.peek()) {
+                (Some(s), None | Some(',' | ')')) => sels.push(s),
+                _ => {
+                    self.pos = start;
+                    self.skip_forgiving_item();
+                }
+            }
+            if self.peek() == Some(',') {
+                self.consume();
+                continue;
+            }
+            break;
+        }
+        sels
+    }
+
+    /// Пропускает остаток элемента forgiving-списка до верхнеуровневой `,`
+    /// или закрывающей `)` внешнего списка (не потребляя её), учитывая
+    /// вложенные скобки, строки и экранирование.
+    fn skip_forgiving_item(&mut self) {
+        let mut depth = 0usize;
+        while let Some(c) = self.peek() {
+            match c {
+                ',' | ')' if depth == 0 => return,
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                '\\' => {
+                    self.consume();
+                }
+                '"' | '\'' => {
+                    self.consume();
+                    while let Some(q) = self.consume() {
+                        if q == '\\' {
+                            self.consume();
+                        } else if q == c {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            self.consume();
+        }
     }
 
     /// Строгий вариант [`Parser::parse_selector_list`] для DOM-границы
@@ -1222,6 +1367,18 @@ impl<'a> Parser<'a> {
             '#' => {
                 self.consume();
                 Some(SimpleSelector::Id(self.parse_ident()?))
+            }
+            // Nesting L1 §3.2: `&` вне вложенного правила (верхний уровень,
+            // `selector(&)`) — `:where(:scope)`. Внутри style-правила `&` подставляется
+            // раньше, до разбора селектора.
+            '&' => {
+                self.consume();
+                Some(SimpleSelector::PseudoClass(PseudoClass::Where(vec![ComplexSelector {
+                    head: CompoundSelector {
+                        parts: vec![SimpleSelector::PseudoClass(PseudoClass::Scope)],
+                    },
+                    tail: Vec::new(),
+                }])))
             }
             '[' => self.parse_attr_selector(),
             ':' => self.parse_pseudo(),
@@ -1388,8 +1545,26 @@ impl<'a> Parser<'a> {
             self.consume();
             if is_element {
                 // Функциональный pseudo-element (например ::slotted(...))
+                let arg_start = self.pos;
                 let pe = self.parse_functional_pseudo_element(&lower);
                 self.skip_to_paren_close();
+                // `::part(<ident>+)` (CSS Shadow Parts) не моделируется, но
+                // аргумент сохраняется в имени, чтобы сериализация и
+                // валидация видели `::part(foo)`, а не голое `::part`.
+                if pe.is_none() && lower == "part" {
+                    let arg = self.input[arg_start..self.pos].trim_end_matches(')').trim();
+                    let well_formed = !arg.is_empty()
+                        && arg.split_ascii_whitespace().all(|t| {
+                            !t.starts_with(|c: char| c.is_ascii_digit())
+                                && t.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'))
+                        });
+                    if well_formed {
+                        let arg = arg.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
+                        return Some(SimpleSelector::PseudoElement(PseudoElementKind::Unknown(
+                            format!("{name}({arg})"),
+                        )));
+                    }
+                }
                 return Some(SimpleSelector::PseudoElement(pe.unwrap_or(
                     PseudoElementKind::Unknown(name)
                 )));
@@ -1415,6 +1590,8 @@ impl<'a> Parser<'a> {
                 "marker" => PseudoElementKind::Marker,
                 "selection" => PseudoElementKind::Selection,
                 "target-text" => PseudoElementKind::TargetText,
+                "spelling-error" => PseudoElementKind::SpellingError,
+                "grammar-error" => PseudoElementKind::GrammarError,
                 "placeholder" => PseudoElementKind::Placeholder,
                 "checkmark" => PseudoElementKind::Checkmark,
                 "picker-icon" => PseudoElementKind::PickerIcon,
@@ -1505,18 +1682,17 @@ impl<'a> Parser<'a> {
                 Some(PseudoClass::Not(list))
             }
             "is" => {
-                let list = self.parse_selector_list();
-                self.skip_ws_and_comments();
-                // Должны быть на `)`; иначе argument невалиден.
-                if self.peek() != Some(')') || list.is_empty() {
+                // Selectors L4 §3.4: forgiving-список — пустой или с
+                // невалидными элементами аргумент валиден (ничего не выбирает).
+                let list = self.parse_forgiving_selector_list();
+                if self.peek() != Some(')') {
                     return None;
                 }
                 Some(PseudoClass::Is(list))
             }
             "where" => {
-                let list = self.parse_selector_list();
-                self.skip_ws_and_comments();
-                if self.peek() != Some(')') || list.is_empty() {
+                let list = self.parse_forgiving_selector_list();
+                if self.peek() != Some(')') {
                     return None;
                 }
                 Some(PseudoClass::Where(list))
@@ -1544,65 +1720,41 @@ impl<'a> Parser<'a> {
                 Some(PseudoClass::Host(Some(list)))
             }
             "dir" => {
-                // CSS Selectors L4 §13.2: single keyword argument `ltr` или
-                // `rtl`, ASCII case-insensitive. Остальные значения, включая
-                // `auto`, — невалидны (фоллбэк на Unsupported у caller-а).
+                // CSS Selectors L4 §13.2: `:dir(<ident>)`; `ltr`/`rtl`
+                // (ASCII case-insensitive) матчат по directionality, любой
+                // другой идентификатор валиден, но ничего не выбирает.
                 self.skip_ws_and_comments();
-                let mut kw = String::new();
-                while let Some(c) = self.peek() {
-                    if c.is_ascii_alphabetic() {
-                        kw.push(c.to_ascii_lowercase());
-                        self.consume();
-                    } else {
-                        break;
-                    }
-                }
+                let kw = self.parse_ident()?;
                 self.skip_ws_and_comments();
                 if self.peek() != Some(')') {
                     return None;
                 }
-                match kw.as_str() {
+                match kw.to_ascii_lowercase().as_str() {
                     "ltr" => Some(PseudoClass::Dir(DirArg::Ltr)),
                     "rtl" => Some(PseudoClass::Dir(DirArg::Rtl)),
-                    _ => None,
+                    _ => Some(PseudoClass::DirOther(kw)),
                 }
             }
             "lang" => {
-                // CSS Selectors L4 §11: comma-list BCP 47 language tags.
-                // Tag = ASCII alpha, после которого допустимы alpha/digit/`-`
-                // (RFC 5646). Нормализуем к lowercase для case-insensitive
-                // matching. Whitespace внутри и вокруг запятой допускается;
-                // строковые литералы и quoted-tags по строгой спеке тоже
-                // допускаются, но в Phase 0 поддерживаем ident-форму — этого
-                // достаточно для подавляющего большинства author CSS.
+                // CSS Selectors L4 §8.2: список `<ident> | <string>` —
+                // language range-ы (RFC 4647 §3.3.2). Нормализуем к lowercase
+                // для case-insensitive сопоставления; в ident допустим `*`
+                // (в том числе экранированный `\*`). Невалидный элемент
+                // (в т.ч. ident с цифры) делает невалидным весь псевдокласс.
                 let mut tags: Vec<String> = Vec::new();
                 loop {
                     self.skip_ws_and_comments();
-                    if matches!(self.peek(), None | Some(')')) {
-                        break;
-                    }
-                    let mut buf = String::new();
-                    while let Some(c) = self.peek() {
-                        if c.is_ascii_alphanumeric() || c == '-' {
-                            buf.push(c.to_ascii_lowercase());
-                            self.consume();
-                        } else {
-                            break;
-                        }
-                    }
-                    if buf.is_empty() {
-                        return None;
-                    }
-                    tags.push(buf);
+                    let tag = match self.peek() {
+                        Some(q @ ('"' | '\'')) => self.parse_lang_string(q)?,
+                        _ => self.parse_lang_ident()?,
+                    };
+                    tags.push(tag.to_ascii_lowercase());
                     self.skip_ws_and_comments();
                     if self.peek() == Some(',') {
                         self.consume();
                     } else {
                         break;
                     }
-                }
-                if tags.is_empty() {
-                    return None;
                 }
                 Some(PseudoClass::Lang(tags))
             }
@@ -1637,6 +1789,43 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Строка `:lang("…")`: позиция на открывающей кавычке. `None`, если
+    /// строка не закрыта до конца ввода.
+    fn parse_lang_string(&mut self, quote: char) -> Option<String> {
+        self.consume();
+        let mut out = String::new();
+        loop {
+            match self.consume()? {
+                c if c == quote => return Some(out),
+                '\\' => out.push(self.consume()?),
+                c => out.push(c),
+            }
+        }
+    }
+
+    /// Идентификатор `:lang(…)`: буквы, цифры, `-`, `_`, не-ASCII, `*` и
+    /// экранированные символы; первый неэкранированный символ не цифра.
+    fn parse_lang_ident(&mut self) -> Option<String> {
+        let mut out = String::new();
+        let mut first = true;
+        while let Some(c) = self.peek() {
+            if c == '\\' {
+                self.consume();
+                out.push(self.consume()?);
+            } else if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '*') || !c.is_ascii() {
+                if first && c.is_ascii_digit() {
+                    return None;
+                }
+                out.push(c);
+                self.consume();
+            } else {
+                break;
+            }
+            first = false;
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     /// Парсит relative-selector-list для `:has()`. Каждый элемент — опциональный

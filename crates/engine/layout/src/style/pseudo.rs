@@ -50,6 +50,8 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::Marker => "marker",
         PseudoElementKind::Selection => "selection",
         PseudoElementKind::TargetText => "target-text",
+        PseudoElementKind::SpellingError => "spelling-error",
+        PseudoElementKind::GrammarError => "grammar-error",
         PseudoElementKind::Placeholder => "placeholder",
         PseudoElementKind::Highlight(_) => "highlight",
         PseudoElementKind::Picker(_) => "picker",
@@ -78,6 +80,16 @@ fn split_pseudo_request(pseudo: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// True for the highlight pseudo-elements (CSS Pseudo-Elements L4 §3): `selection`,
+/// `target-text`, `spelling-error`, `grammar-error` and `highlight(<name>)`. They style
+/// a stretch of text, generate no box and need no `content`.
+pub fn is_highlight_pseudo(pseudo: &str) -> bool {
+    let base = split_pseudo_request(pseudo).0;
+    ["selection", "target-text", "spelling-error", "grammar-error", "highlight"]
+        .iter()
+        .any(|n| base.eq_ignore_ascii_case(n))
+}
+
 /// Helper: check if a pseudo-element name matches a PseudoElementKind.
 ///
 /// `name` is either a bare name (`"before"`) or, for the `::view-transition-*`
@@ -98,6 +110,11 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
             None => true,
             Some(w) => dir == "*" || w.split('|').any(|alias| alias == dir),
         };
+    }
+    // `::highlight(<name>)` (CSS Custom Highlight API L1 §3.1): a `<custom-ident>`,
+    // case-sensitive; a bare `"highlight"` request matches any name.
+    if let PseudoElementKind::Highlight(own) = kind {
+        return wanted.is_none_or(|w| own == w);
     }
     let own = match kind {
         PseudoElementKind::ViewTransitionGroup(a)
@@ -147,7 +164,9 @@ fn matches_complex_for_pseudo(
 /// CSS Pseudo-Elements L4 §5.5 — true when property `prop` is one of the limited
 /// set that applies to the `::marker` pseudo-element: all font properties, the
 /// `white-space` property, `color`, the `direction` / `unicode-bidi` /
-/// `text-combine-upright` writing-mode properties, `content`, and all animation
+/// `text-combine-upright` writing-mode properties, `content`, the text-flow properties the
+/// WPT `marker-*` tests exercise (`text-transform`, `letter-spacing`, `word-spacing`,
+/// `text-shadow`, `text-emphasis*`, `tab-size`, `hyphens`, wrapping), and all animation
 /// and transition properties. Custom properties (`--*`) are kept so `var()` inside
 /// `content` still resolves. Any other declaration on `::marker` is ignored.
 fn marker_property_applies(prop: &str) -> bool {
@@ -158,6 +177,7 @@ fn marker_property_applies(prop: &str) -> bool {
     }
     // `font`, `font-*`, `animation*` and `transition*` families are allowed wholesale.
     p.starts_with("font")
+        || p.starts_with("text-emphasis")
         || p.starts_with("animation")
         || p.starts_with("transition")
         || matches!(
@@ -169,6 +189,44 @@ fn marker_property_applies(prop: &str) -> bool {
                 | "direction"
                 | "unicode-bidi"
                 | "text-combine-upright"
+                | "text-transform"
+                | "letter-spacing"
+                | "word-spacing"
+                | "text-shadow"
+                | "tab-size"
+                | "hyphens"
+                | "line-break"
+                | "word-break"
+                | "overflow-wrap"
+                | "word-wrap"
+        )
+}
+
+/// CSS Pseudo-Elements L4 §3.2 — true when `prop` applies to `::first-line`: the font
+/// properties, `color`, `opacity`, the background properties, `text-decoration*` /
+/// `text-emphasis*` / `text-underline-*` / `text-shadow` / `text-transform` / `text-justify`,
+/// `-webkit-text-*`, `letter-spacing`, `word-spacing`, `line-height` and `vertical-align`.
+/// Every other declaration is dropped; custom properties stay for `var()`.
+fn first_line_property_applies(prop: &str) -> bool {
+    let p = prop.trim().to_ascii_lowercase();
+    p.starts_with("--")
+        || p.starts_with("font")
+        || p.starts_with("background")
+        || p.starts_with("text-decoration")
+        || p.starts_with("text-emphasis")
+        || p.starts_with("text-underline")
+        || p.starts_with("-webkit-text-")
+        || matches!(
+            p.as_str(),
+            "color"
+                | "opacity"
+                | "letter-spacing"
+                | "word-spacing"
+                | "line-height"
+                | "text-shadow"
+                | "text-transform"
+                | "text-justify"
+                | "vertical-align"
         )
 }
 
@@ -185,6 +243,30 @@ fn marker_property_applies(prop: &str) -> bool {
 /// on *every* node to keep `quotes` nesting continuous (1656 calls per chrome
 /// layout pass), and `apply_webkit_scrollbar_pseudos` adds three more per
 /// element.
+/// The style of a highlight pseudo-element that matches no rule of its own: what it
+/// inherits from the highlight of the parent element (CSS Pseudo-Elements L4 §3.3).
+pub(crate) fn highlight_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
+    pseudo_inherited_style(parent)
+}
+
+/// CSS Pseudo-Elements L4 §4.2 — the UA style of `::marker` on top of the inherited base:
+/// `unicode-bidi: isolate`, `font-variant-numeric: tabular-nums`, `text-transform: none`,
+/// `text-indent: 0`. The last two are inherited properties that a marker must *not* take
+/// from its list item (BUG-1446).
+fn marker_base_style(parent: &ComputedStyle) -> ComputedStyle {
+    use crate::style::NumericSpacing;
+    use crate::style::{TextTransform, TextTransformExtra, UnicodeBidi};
+    let mut style = pseudo_inherited_style(parent);
+    style.unicode_bidi = UnicodeBidi::Isolate;
+    style.font_variant_numeric.spacing = NumericSpacing::Tabular;
+    style.text_transform = TextTransform::None;
+    style.text_extra.transform = TextTransformExtra::default();
+    style.text_extra.indent_hanging = false;
+    style.text_extra.indent_each_line = false;
+    style.text_indent = crate::style::Length::Px(0.0);
+    style
+}
+
 fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     #[cfg(test)]
     PSEUDO_BASE_BUILDS.with(|c| c.set(c.get() + 1));
@@ -197,6 +279,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     // Inherited properties — copy from parent.
     style.color = parent.color;
     style.color_space = parent.color_space;
+    style.color_css = parent.color_css.clone();
     style.text_align = parent.text_align;
     style.direction = parent.direction;
     style.font_size = parent.font_size;
@@ -223,6 +306,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.white_space_collapse = parent.white_space_collapse;
     style.text_indent = parent.text_indent.clone();
     style.letter_spacing = parent.letter_spacing;
+    style.letter_spacing_pct = parent.letter_spacing_pct;
     style.word_spacing = parent.word_spacing;
     style.word_spacing_pct = parent.word_spacing_pct;
     style.text_decoration_line = parent.text_decoration_line;
@@ -342,6 +426,7 @@ pub fn merge_pseudo_inherited(
         vertical_align,
     );
     take_clone!(
+        color_css,
         font_family,
         font_variation_settings,
         font_feature_settings,
@@ -529,7 +614,7 @@ fn compute_pseudo_element_style_inner(
         // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
         if pseudo.eq_ignore_ascii_case("marker") {
             let _prof_init = lumen_core::profile::scope_detail("ps_init");
-            return Some(pseudo_inherited_style(parent));
+            return Some(marker_base_style(parent));
         }
         if let Some(item) = ua_quote {
             let mut style = pseudo_inherited_style(parent);
@@ -548,7 +633,7 @@ fn compute_pseudo_element_style_inner(
     drop(prof_match);
     let mut style = {
         let _prof_init = lumen_core::profile::scope_detail("ps_init");
-        let mut style = pseudo_inherited_style(parent);
+        let mut style = if pseudo.eq_ignore_ascii_case("marker") { marker_base_style(parent) } else { pseudo_inherited_style(parent) };
         if let Some(item) = ua_quote {
             style.content = Content::Items(vec![item]);
         }
@@ -578,8 +663,13 @@ fn compute_pseudo_element_style_inner(
     // `background`) are dropped so a `::marker` rule cannot perturb marker layout
     // or paint beyond the spec-permitted font/color/text-flow styling.
     let is_marker = pseudo.eq_ignore_ascii_case("marker");
+    // The same for `::first-line` (§3.2): a box-level declaration (`margin`, `position`,
+    // `word-break`, ...) does not apply to it, so the computed value is the parent's (BUG-1437).
+    let is_first_line = pseudo.eq_ignore_ascii_case("first-line");
     for (_, _, _, _, decl) in &matched {
-        if is_marker && !marker_property_applies(&decl.property) {
+        if (is_marker && !marker_property_applies(&decl.property))
+            || (is_first_line && !first_line_property_applies(&decl.property))
+        {
             continue;
         }
         let attr_buf;
@@ -606,8 +696,7 @@ fn compute_pseudo_element_style_inner(
     if pseudo.eq_ignore_ascii_case("first-letter")
         || pseudo.eq_ignore_ascii_case("scroll-marker-group")
         || pseudo.eq_ignore_ascii_case("first-line")
-        || pseudo.eq_ignore_ascii_case("selection")
-        || pseudo.eq_ignore_ascii_case("target-text")
+        || is_highlight_pseudo(pseudo)
         || pseudo.eq_ignore_ascii_case("placeholder")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar")
         || pseudo.eq_ignore_ascii_case("-webkit-scrollbar-thumb")

@@ -343,7 +343,7 @@ mod tests {
 
     fn build(html: &str, css: &str) -> (Document, LayoutBox) {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("p{{margin:0}}{css}"));
         let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
         (doc, root)
     }

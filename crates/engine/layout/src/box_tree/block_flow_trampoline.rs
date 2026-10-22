@@ -2,6 +2,7 @@ use super::*;
 use super::layout_cache::finalize_block_height;
 use super::line_clamp_flow;
 use super::layout_dispatch::{dispatch_box, finish_after_match, FontContext};
+use super::shape_resolve::{resolve_shape, FloatBoxes};
 
 /// LAYOUT-2 срез 1 — see `dispatch_box`'s doc comment (`layout_dispatch.rs`)
 /// for why this split exists. `Done` matches every dispatch arm that already
@@ -65,6 +66,9 @@ pub(super) enum DispatchOutcome {
 #[derive(Clone)]
 pub(super) struct BlockFlowInit {
     pub(super) fc: FloatContext,
+    /// CSS 2.1 §9.5/§10.6.3: a non-BFC in-flow block shares its parent's formatting
+    /// context — it does not enclose its floats, its parent takes them over.
+    pub(super) shares_floats: bool,
     pub(super) container_right: f32,
     pub(super) child_y: f32,
     pub(super) prev_block_mb: f32,
@@ -122,6 +126,7 @@ struct Frame {
 /// (fully laid out) value before `run` looks at that slot again.
 pub(super) fn take_box(slot: &mut LayoutBox) -> LayoutBox {
     let placeholder = LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: slot.node,
         rect: Rect::ZERO,
         style: Arc::clone(&slot.style),
@@ -158,10 +163,9 @@ pub(super) fn run(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
-) {
+) -> FloatContext {
     if !line_clamp_flow::wants_balance_pass(b) {
-        run_pass(b, init, measurer, viewport, hp);
-        return;
+        return run_pass(b, init, measurer, viewport, hp);
     }
     // `line-clamp` + `text-wrap: balance` inside: the visible lines of each balanced run are
     // known only after a layout without balancing, so the container is laid out twice.
@@ -170,8 +174,9 @@ pub(super) fn run(
     run_pass(b, init, measurer, viewport, hp);
     line_clamp_flow::begin_budget_pass(b);
     *b = pristine;
-    run_pass(b, pristine_init, measurer, viewport, hp);
+    let fc = run_pass(b, pristine_init, measurer, viewport, hp);
     line_clamp_flow::end_pass(saved);
+    fc
 }
 
 fn run_pass(
@@ -180,7 +185,7 @@ fn run_pass(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
-) {
+) -> FloatContext {
     let mut current = Frame {
         b: take_box(b),
         init,
@@ -201,10 +206,13 @@ fn run_pass(
             match stack.pop() {
                 None => {
                     *b = current.b;
-                    return;
+                    return current.init.fc;
                 }
                 Some(mut parent) => {
                     let idx = parent.next_child_idx;
+                    if current.init.shares_floats {
+                        parent.init.fc.absorb_vertical(&current.init.fc, 0.0, 0.0);
+                    }
                     parent.b.children[idx] = current.b;
                     post_child_bookkeeping(&mut parent, idx, viewport, &mut bottom_cache);
                     parent.next_child_idx += 1;
@@ -222,7 +230,11 @@ fn run_pass(
             StepOutcome::Descend(child_init) if line_clamp_flow::wants_balance_pass(&current.b.children[i]) => {
                 // A clamp container with balanced runs is laid out twice: `run` does that for a
                 // whole box, so it is driven recursively instead of as a frame of this stack.
-                run(&mut current.b.children[i], child_init, measurer, viewport, hp);
+                let shares = child_init.shares_floats;
+                let child_fc = run(&mut current.b.children[i], child_init, measurer, viewport, hp);
+                if shares {
+                    current.init.fc.absorb_vertical(&child_fc, 0.0, 0.0);
+                }
                 post_child_bookkeeping(&mut current, i, viewport, &mut bottom_cache);
                 current.next_child_idx += 1;
             }
@@ -771,7 +783,8 @@ fn place_float(
             let right_edge = lx + fml + fw + fmr;
             fc.add_left(child_y, bot_y, right_edge);
             wire_shape_outside(fc, child, true, ShapeBoxes {
-                child_y, top_y, bot_y, box_left: lx, box_right: right_edge,
+                child_y, bot_y, box_left: lx, box_right: right_edge,
+                margins: [fmt, fmr, fmb, fml],
             }, content_width, viewport);
         }
         FloatSide::Right => {
@@ -783,7 +796,8 @@ fn place_float(
             let left_edge = rx - fmr - fw - fml;
             fc.add_right(child_y, bot_y, left_edge);
             wire_shape_outside(fc, child, false, ShapeBoxes {
-                child_y, top_y, bot_y, box_left: left_edge, box_right: rx,
+                child_y, bot_y, box_left: left_edge, box_right: rx,
+                margins: [fmt, fmr, fmb, fml],
             }, content_width, viewport);
         }
         FloatSide::None => unreachable!(),
@@ -836,10 +850,11 @@ fn same_line_float_top(children: &[LayoutBox], i: usize, child_y: f32) -> Option
 /// Margin-box geometry of a just-placed float (see [`wire_shape_outside`]).
 struct ShapeBoxes {
     child_y: f32,
-    top_y: f32,
     bot_y: f32,
     box_left: f32,
     box_right: f32,
+    /// Resolved margins `[top, right, bottom, left]`.
+    margins: [f32; 4],
 }
 
 /// CSS Shapes L1 — record `child`'s `shape-outside` (grown by `shape-margin`,
@@ -859,18 +874,18 @@ fn wire_shape_outside(
     let margin = child.style.shape_margin
         .resolve_or_zero(child.style.font_size, cb_width, viewport)
         .max(0.0);
-    let g = FloatShapeGeom {
-        is_left,
-        child_y: bx.child_y,
-        top_y: bx.top_y,
-        bot_y: bx.bot_y,
-        box_left: bx.box_left,
-        box_right: bx.box_right,
-        center_x: child.rect.x + child.rect.width / 2.0,
-        center_y: bx.top_y + child.rect.height / 2.0,
-    };
-    if register_shape_outside(fc, sv, &g, margin) {
-        fc.mark_last_shaped(is_left);
+    let boxes = FloatBoxes::of(child, bx.margins, cb_width, viewport);
+    if let Some(prims) = resolve_shape(sv, &boxes) {
+        // The contour is physical px from the margin-box top-left, which is
+        // the float context's frame once moved to where the float sits.
+        let prims = prims
+            .into_iter()
+            .map(|mut p| {
+                p.translate(bx.box_left, bx.child_y);
+                p
+            })
+            .collect();
+        fc.add_shape_prims(prims, is_left, (bx.child_y, bx.bot_y), (bx.box_left, bx.box_right), margin);
     }
 }
 
@@ -904,11 +919,14 @@ fn finish_frame(
     } else {
         0.0
     };
-    // CSS 2.1 §9.5: the container height must also enclose all floats.
-    // `overflow: clip` is no BFC root (CSS Overflow L3 §3.1): floats stick out of it.
-    let encloses_floats = !(matches!(frame.init.s.overflow_x, Overflow::Clip)
-        || matches!(frame.init.s.overflow_y, Overflow::Clip))
-        || establishes_bfc(&frame.b);
+    // CSS 2.1 §10.6.7: only a BFC root's height encloses its floats. A non-BFC in-flow block
+    // shares its parent's formatting context (`shares_floats`) — the floats stick out of it
+    // and the parent takes them over. `overflow: clip` is no BFC root either (CSS Overflow L3
+    // §3.1).
+    let encloses_floats = !frame.init.shares_floats
+        && (!(matches!(frame.init.s.overflow_x, Overflow::Clip)
+            || matches!(frame.init.s.overflow_y, Overflow::Clip))
+            || establishes_bfc(&frame.b));
     let float_bottom = frame.init.fc.left.iter().chain(frame.init.fc.right.iter())
         .map(|(bot, _)| *bot)
         .filter(|_| encloses_floats)
@@ -937,7 +955,7 @@ fn finish_frame(
         frame.init.field_intrinsic, content_height, frame.init.cb,
     );
     finish_after_match(
-        &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.is_positioned,
+        &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.available_height, frame.init.is_positioned,
         frame.init.pcb, &frame.init.abs_deferred, measurer, viewport, hp,
     );
     if let Some(cut) = clamp_cut {
@@ -1027,7 +1045,8 @@ fn post_child_bookkeeping(
     } else {
         let child = &frame.b.children[idx];
         let (_, rel_dy) = super::layout_dispatch::relative_offset(
-            &child.style, child.style.font_size, content_width, viewport);
+            &child.style, child.style.font_size, content_width,
+            frame.init.children_available_height, viewport);
         frame.init.child_y = child.rect.y - rel_dy + child.rect.height + child_mb;
         frame.init.prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
     }

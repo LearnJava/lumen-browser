@@ -317,8 +317,8 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
 
     // ── CSS UI L4 §6.2: `user-select` in the `::selection` highlight ────────
 
-    /// Fill rects emitted by `build_display_list_with_selection` over the
-    /// selection `first text node .. last text node` of `<p>`'s children.
+    /// Fill rects the `::selection` highlight adds over the selection
+    /// `first text node .. last text node` of `<p>`'s children.
     fn selection_fills(css: &str) -> usize {
         let doc = lumen_html_parser::parse("<p>aa <span>bb</span> cc</p>");
         let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
@@ -338,25 +338,34 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
         let mut texts = Vec::new();
         collect_texts(&doc, doc.root(), &mut texts);
         let (first, last) = (texts[0], *texts.last().unwrap());
-        let sel = SelectionHighlight {
-            range: lumen_dom::Range {
-                start: lumen_dom::DomPosition { container: first, offset: 0 },
-                end: lumen_dom::DomPosition { container: last, offset: 3 },
-            },
-            fg_color: None,
-            bg_color: Color { r: 1, g: 2, b: 3, a: 255 },
+        let ranges = [lumen_dom::Range {
+            start: lumen_dom::DomPosition { container: first, offset: 0 },
+            end: lumen_dom::DomPosition { container: last, offset: 3 },
+        }];
+        let env = lumen_layout::HighlightEnv {
+            doc: &doc,
+            sheet: &sheet,
+            viewport: Size::new(800.0, 600.0),
+            dark_mode: false,
+            measurer: &Fixed8,
         };
+        let layer = lumen_layout::HighlightLayer {
+            pseudo: "selection",
+            ranges: &ranges,
+            ua_background: Some(Color { r: 1, g: 2, b: 3, a: 255 }),
+        };
+        let highlights = lumen_layout::resolve_highlights(&tree, &env, &[layer]).map(std::sync::Arc::new);
         let base = fills(&build_display_list(&tree)).len();
-        let with = build_display_list_with_selection(&tree, Some(&sel));
+        let with = with_highlights(highlights, || build_display_list(&tree));
         fills(&with).len() - base
     }
 
     #[test]
     fn selection_highlights_every_node_between_the_endpoints() {
         // "aa " + "bb" (between, neither endpoint) + " cc" merge into ONE
-        // same-style fragment whose own node is the start endpoint — one fill
-        // covering all of it (the `bb` node is not dropped).
-        assert_eq!(selection_fills(""), 1);
+        // same-style fragment; each of its three text nodes gets its own fill
+        // (the `bb` node is not dropped), the fills abut without a seam.
+        assert_eq!(selection_fills(""), 3);
     }
 
     #[test]

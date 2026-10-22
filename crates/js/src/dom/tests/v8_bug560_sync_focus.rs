@@ -120,3 +120,67 @@ fn matches_stops_seeing_focus_after_same_tick_blur() {
         .unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(false));
 }
+
+/// BUG-1451: `display: none` on the focused element (or an ancestor) takes it
+/// out of rendering; the focus fixup of the next frame must drop `:focus`
+/// as well as `activeElement` (`focus-display-none-001.html`).
+#[test]
+fn focus_fixup_drops_focus_on_display_none() {
+    for target in ["el", "el.parentNode"] {
+        let rt = v8_runtime_with_focus_rule(make_doc());
+        let script = format!(
+            "(function() {{
+                var el = document.createElement('input');
+                document.getElementById('main').appendChild(el);
+                el.focus();
+                var before = el.matches(':focus') && document.activeElement === el;
+                {target}.style.display = 'none';
+                _lumen_run_raf_callbacks(0);
+                return before && !el.matches(':focus') && document.activeElement === document.body;
+            }})()"
+        );
+        assert_eq!(rt.eval(&script).unwrap(), lumen_core::JsValue::Bool(true), "{target}");
+    }
+}
+
+/// BUG-1451: removing the focused element returns focus to `<body>` at once.
+#[test]
+fn removing_focused_element_resets_active_element() {
+    let rt = v8_runtime_with_focus_rule(make_doc());
+    let r = rt
+        .eval(
+            "(function() {
+                var el = document.createElement('input');
+                document.getElementById('main').appendChild(el);
+                el.focus();
+                el.remove();
+                return document.activeElement === document.body && !el.matches(':focus');
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}
+
+/// BUG-1451, `focus-within-removal.html`: a `focusout` listener detaches the
+/// element that is about to receive focus — focus ends up on `<body>` and no
+/// ancestor keeps `:focus-within`.
+#[test]
+fn focus_target_removed_by_focusout_listener_leaves_no_focus() {
+    let rt = v8_runtime_with_focus_rule(make_doc());
+    let r = rt
+        .eval(
+            "(function() {
+                var root = document.getElementById('main');
+                root.innerHTML = '<div id=c tabindex=-1><input></div>';
+                var c = document.getElementById('c');
+                var input = root.querySelector('input');
+                input.focus();
+                input.addEventListener('focusout', function() { root.innerHTML = ''; });
+                c.focus();
+                return document.activeElement === document.body
+                    && c.parentNode === null && !c.matches(':focus-within');
+            })()",
+        )
+        .unwrap();
+    assert_eq!(r, lumen_core::JsValue::Bool(true));
+}

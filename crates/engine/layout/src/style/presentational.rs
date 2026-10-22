@@ -134,6 +134,9 @@ pub(in crate::style) fn apply_svg_presentational_hints(
         // SVG 1.1 §14.3 / CSS Masking L1 §3.1 — `clip-path="url(#id)"`;
         // `compute_style` подменяет ссылку на разрешённый `<clipPath>`.
         "clip-path",
+        // Filter Effects L1 §3 — `filter="url(#id)"` (как `clip-path`: ссылку
+        // разворачивает `compute_style`).
+        "filter",
     ];
     let node_ref = doc.get(node);
     for &attr in ATTRS {
@@ -213,6 +216,7 @@ pub(in crate::style) fn apply_background_image_presentational_hint(doc: &Documen
                 style.background_layers.push(BackgroundLayer::default());
             }
             style.background_layers[0].image = BackgroundImage::Url(val.to_string());
+            style.background_layers[0].image_css = None;
         }
     }
 }
@@ -299,6 +303,7 @@ pub(in crate::style) fn apply_text_color_presentational_hint(
         && let Some(c) = parse_legacy_color_html_attr(val)
     {
         style.color = c;
+        style.color_css = None;
     }
 }
 /// HTML5 §15.3.2: `<font size="N">` → абсолютный font-size; `<font face="…">` → font-family.
@@ -380,21 +385,11 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
 /// сильным bidi-классом (L → `ltr`, R/AL → `rtl`) в тексте поддерева.
 /// Пропускаются `script`/`style`/`textarea`/`bdi` и потомки с явным валидным
 /// `dir` (`ltr`/`rtl`/`auto`) — их содержимое изолировано от родителя.
-fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
-    use unicode_bidi::{bidi_class, BidiClass};
+pub(in crate::style) fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
     fn walk(doc: &Document, node: NodeId, is_root: bool) -> Option<Direction> {
         let node_ref = doc.get(node);
         match &node_ref.data {
-            NodeData::Text(t) => {
-                for ch in t.chars() {
-                    match bidi_class(ch) {
-                        BidiClass::L => return Some(Direction::Ltr),
-                        BidiClass::R | BidiClass::AL => return Some(Direction::Rtl),
-                        _ => {}
-                    }
-                }
-                None
-            }
+            NodeData::Text(t) => first_strong_in_text(t),
             NodeData::Element { name, .. } => {
                 if !is_root {
                     if matches!(name.local.as_str(), "script" | "style" | "textarea" | "bdi") {
@@ -412,6 +407,18 @@ fn first_strong_direction(doc: &Document, root: NodeId) -> Option<Direction> {
         }
     }
     walk(doc, root, true)
+}
+
+/// Направление первого символа с сильным bidi-классом в строке (L → `ltr`,
+/// R/AL → `rtl`); `None`, если сильных символов нет. Для значения
+/// `<input>`/`<textarea>` с `dir=auto` и для текстовых узлов поддерева.
+pub(in crate::style) fn first_strong_in_text(text: &str) -> Option<Direction> {
+    use unicode_bidi::{bidi_class, BidiClass};
+    text.chars().find_map(|ch| match bidi_class(ch) {
+        BidiClass::L => Some(Direction::Ltr),
+        BidiClass::R | BidiClass::AL => Some(Direction::Rtl),
+        _ => None,
+    })
 }
 /// HTML5 §15.3.3: атрибут `align` на блочных элементах → CSS `text-align`.
 ///

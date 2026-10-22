@@ -36,6 +36,7 @@ fn deep_chain(depth: usize) -> LayoutBox {
     let style = Arc::new(style);
     let leaf_line_height = style.font_size * style.line_height;
     let mut node = LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, LEAF_SIZE, LEAF_SIZE),
         used_padding: None, used_line_height: leaf_line_height,
@@ -57,6 +58,7 @@ fn deep_chain(depth: usize) -> LayoutBox {
     };
     for i in 1..=depth {
         node = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node: NodeId::from_index(i + 1),
             rect: Rect::new(0.0, 0.0, LEAF_SIZE, LEAF_SIZE),
             used_padding: None, used_line_height: leaf_line_height,

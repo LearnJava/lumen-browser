@@ -14,7 +14,6 @@ pub(crate) fn emit_box_self(
     b: &LayoutBox,
     out: &mut Vec<DisplayCommand>,
     dpr: f32,
-    sel: Option<&SelectionHighlight>,
     ov: Option<&CompositorOverride>,
 ) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
@@ -72,7 +71,7 @@ pub(crate) fn emit_box_self(
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, sel, dpr, out);
+            emit_inline_run(b, lines, dpr, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace | BoxKind::Contents => {}
         BoxKind::Marker { .. } => {
@@ -408,13 +407,19 @@ pub(crate) fn emit_box_self(
         BoxKind::SvgShape { shape, svg_mask, .. } => {
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
-                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
-                None => emit_svg_shape(b, shape, out),
+                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr),
+                None => {
+                    let filtered = push_shape_filter(b, out);
+                    emit_svg_shape(b, shape, out);
+                    pop_shape_filter(filtered, out);
+                }
             }
             pop_clip_layers(clip_layers, out);
         }
         BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
+            let filtered = push_shape_filter(b, out);
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
+            pop_shape_filter(filtered, out);
         }
     }
     // BUG-231: apply animated background-color / color compositor override to the
@@ -1004,7 +1009,7 @@ enum WalkOutcome<'a> {
 /// handful of native frames per transition, same accepted shape as
 /// `lumen-layout`'s table trampoline calling into the block-flow trampoline
 /// for `<table>`-in-`<td>` (out of scope for this срез).
-fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
+fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32) {
     let mut current = frame;
     let mut stack: Vec<Box<Frame<'a>>> = Vec::new();
     loop {
@@ -1020,7 +1025,7 @@ fn run<'a>(frame: Box<Frame<'a>>, out: &mut DisplayList, dpr: f32, sel: Option<&
         }
         let child = current.children[current.next_idx];
         current.next_idx += 1;
-        match dispatch(child, current.in_fixed_cb, out, dpr, sel) {
+        match dispatch(child, current.in_fixed_cb, out, dpr) {
             WalkOutcome::Done => {}
             WalkOutcome::NeedsLoop(child_frame) => {
                 stack.push(current);
@@ -1041,6 +1046,7 @@ fn finish_epilogue(frame: &Frame, out: &mut DisplayList) {
         Epilogue::SvgViewportClip => out.push(DisplayCommand::PopClip),
         Epilogue::None => {}
     }
+    out.extend(std::iter::repeat_n(DisplayCommand::PopScrollLayer, anchor_scroll_layer_count(frame.b)));
     if frame.is_fixed {
         out.push(DisplayCommand::EndFixedLayer);
     }
@@ -1124,9 +1130,9 @@ fn finish_block_epilogue(b: &LayoutBox, out: &mut DisplayList, e: &BlockEpilogue
 /// where `walk` used to recurse into `b`'s children to [`dispatch`]; [`run`]
 /// then drives that (and every further non-tail-recursive container it
 /// meets) on an explicit heap stack instead.
-pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
-    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr, sel) {
-        run(frame, out, dpr, sel);
+pub(crate) fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
+    if let WalkOutcome::NeedsLoop(frame) = dispatch(b, false, out, dpr) {
+        run(frame, out, dpr);
     }
 }
 
@@ -1141,7 +1147,6 @@ fn dispatch<'a>(
     in_fixed_cb: bool,
     out: &mut DisplayList,
     dpr: f32,
-    sel: Option<&SelectionHighlight>,
 ) -> WalkOutcome<'a> {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
@@ -1182,6 +1187,9 @@ fn dispatch<'a>(
     if is_fixed {
         out.push(DisplayCommand::BeginFixedLayer);
     }
+    // CSS Anchor Positioning L1 §4.3: the box follows the scroll of its anchor's containers.
+    // Innermost marker layer; closed first, with the other position markers.
+    out.extend(anchor_scroll_layers(b));
     match &b.kind {
         BoxKind::Skip | BoxKind::Contents => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
@@ -1425,7 +1433,7 @@ fn dispatch<'a>(
         BoxKind::FormControl { kind } => {
             // Replaced element: background + border box (Phase 0, no content).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
@@ -1482,12 +1490,12 @@ fn dispatch<'a>(
             emit_list_marker(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, sel, dpr, out);
+            emit_inline_run(b, lines, dpr, out);
         }
         BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → <img>.
             // background/border у `<img>` валидны по CSS — например, для
@@ -1554,7 +1562,7 @@ fn dispatch<'a>(
         BoxKind::Video { src, poster } => {
             // visibility:hidden на `<video>` пропускает всё (no children).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Painter's order для replaced element: фон → bg-image → border → placeholder.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1624,7 +1632,7 @@ fn dispatch<'a>(
         BoxKind::Canvas { .. } => {
             // visibility:hidden on <canvas> skips everything (no children).
             if !is_paint_visible(b) {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Painter's order for replaced element: background → bg-image → border → bitmap.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1677,7 +1685,7 @@ fn dispatch<'a>(
         }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Phase 0: grey bar for audio controls UI.
             let grey = Color { r: 200, g: 200, b: 200, a: 255 };
@@ -1686,7 +1694,7 @@ fn dispatch<'a>(
         }
         BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
-                return close_position_layers(is_fixed, is_sticky, out);
+                return close_position_layers(b, is_fixed, is_sticky, out);
             }
             // Phase 0: grey placeholder — no sub-document navigation.
             // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
@@ -1767,8 +1775,12 @@ fn dispatch<'a>(
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             let clip_layers = push_shape_clip_path(b, out);
             match svg_mask.as_deref() {
-                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr, sel),
-                None => emit_svg_shape(b, shape, out),
+                Some(mask) => emit_svg_shape_masked(b, shape, mask, out, dpr),
+                None => {
+                    let filtered = push_shape_filter(b, out);
+                    emit_svg_shape(b, shape, out);
+                    pop_shape_filter(filtered, out);
+                }
             }
             pop_clip_layers(clip_layers, out);
         }
@@ -1776,17 +1788,20 @@ fn dispatch<'a>(
             // SVG text element: emit DrawText command with proper positioning.
             // CSS: fill, stroke, font-family, font-size — P4 wires ComputedStyle fields.
             // // CSS: text-anchor, dominant-baseline, baseline-shift
+            let filtered = push_shape_filter(b, out);
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
+            pop_shape_filter(filtered, out);
         }
     }
-    close_position_layers(is_fixed, is_sticky, out)
+    close_position_layers(b, is_fixed, is_sticky, out)
 }
 
 /// Closes the `BeginFixedLayer`/`BeginStickyLayer` that `dispatch` opened for
 /// this box. Every exit of `dispatch` after the markers are pushed — including
 /// the early returns of invisible replaced elements — goes through here, so the
 /// brackets stay balanced (BUG-1037).
-fn close_position_layers<'a>(is_fixed: bool, is_sticky: bool, out: &mut DisplayList) -> WalkOutcome<'a> {
+fn close_position_layers<'a>(b: &LayoutBox, is_fixed: bool, is_sticky: bool, out: &mut DisplayList) -> WalkOutcome<'a> {
+    out.extend(std::iter::repeat_n(DisplayCommand::PopScrollLayer, anchor_scroll_layer_count(b)));
     if is_fixed {
         out.push(DisplayCommand::EndFixedLayer);
     }

@@ -10,6 +10,7 @@ pub(crate) fn apply_first_letter_style(
     row_items: &mut [LayoutBox],
     fl_style: ComputedStyle,
     inherited: &ComputedStyle,
+    viewport: Size,
 ) {
     for item in row_items.iter_mut() {
         let BoxKind::InlineRun { segments, .. } = &mut item.kind else {
@@ -37,11 +38,14 @@ pub(crate) fn apply_first_letter_style(
                 segments[i].text = first_text;
                 segments[i].style =
                     Arc::new(crate::style::merge_pseudo_inherited(&own_style, inherited, &fl_style));
+                let tail_post_space = segments[i].post_space;
+                apply_first_letter_box_decoration(&mut segments[i], &fl_style, viewport);
+                let letter_post_space = segments[i].post_space;
                 let rest = InlineSegment {
                     text: rest_text,
                     style: own_style,
                     pre_space: 0.0,
-                    post_space: segments[i].post_space,
+                    post_space: tail_post_space,
                     is_element_box,
                     img_src,
                     img_is_lazy: false,
@@ -52,17 +56,106 @@ pub(crate) fn apply_first_letter_style(
                     source_char_offset: segments[i].source_char_offset + boundary as u32,
                     bidi_level: 0,
                 };
-                // Transfer post_space from first-letter to rest.
-                segments[i].post_space = 0.0;
+                // The enclosing inline's end edge moved to the tail; the letter keeps
+                // only its own pseudo-element edge.
+                segments[i].post_space = letter_post_space - tail_post_space;
                 segments.insert(i + 1, rest);
             } else {
                 // Single-char or empty segment: just layer the pseudo style on.
                 segments[i].style = Arc::new(crate::style::merge_pseudo_inherited(
                     &segments[i].style, inherited, &fl_style,
                 ));
+                apply_first_letter_box_decoration(&mut segments[i], &fl_style, viewport);
             }
             return;
         }
+    }
+}
+
+/// CSS Pseudo-elements L4 §3.3 — `::first-letter` (without `float`) is an inline
+/// box, so its `background`, `border`, `padding`, `margin`, `border-radius` and
+/// `box-shadow` belong to the letter itself. `merge_pseudo_inherited` carries
+/// only the inherited text properties; this lays the box properties of
+/// `fl_style` over the segment (so `getComputedStyle(el, '::first-letter')` no
+/// longer reports the originating element's background) and, when the
+/// pseudo-element paints a box, turns the segment into an element box, so the
+/// painter draws the fill and the border exactly as for `<span>` (the `float`
+/// case builds a real block and never comes through here). A pseudo-element
+/// without any decoration leaves a segment inside a decorated `<em>` untouched.
+fn apply_first_letter_box_decoration(
+    seg: &mut InlineSegment,
+    fl_style: &ComputedStyle,
+    viewport: Size,
+) {
+    let em = fl_style.font_size;
+    let pad_l = fl_style.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let pad_r = fl_style.padding_right.resolve_or_zero(em, 0.0, viewport);
+    let mar_l = fl_style.margin_left.resolve_or_zero(em, 0.0, viewport);
+    let mar_r = fl_style.margin_right.resolve_or_zero(em, 0.0, viewport);
+    let has_bg = fl_style
+        .background_color
+        .is_some_and(|c| !matches!(c, crate::style::CssColor::Rgba(rgba) if rgba.a == 0))
+        || !fl_style.background_layers.is_empty();
+    let has_border = fl_style.border_top_style.is_visible()
+        || fl_style.border_right_style.is_visible()
+        || fl_style.border_bottom_style.is_visible()
+        || fl_style.border_left_style.is_visible();
+    let has_box = pad_l != 0.0
+        || pad_r != 0.0
+        || mar_l != 0.0
+        || mar_r != 0.0
+        || fl_style.padding_top.resolve_or_zero(em, 0.0, viewport) != 0.0
+        || fl_style.padding_bottom.resolve_or_zero(em, 0.0, viewport) != 0.0;
+    let decorated = has_bg || has_border || has_box;
+    // A letter inside a decorated inline (`<em style="background:…">A…`) keeps the
+    // inline's box when the pseudo-element adds none of its own.
+    if seg.is_element_box && !decorated {
+        return;
+    }
+    let mut style = (*seg.style).clone();
+    macro_rules! take {
+        ($($f:ident),+ $(,)?) => { $(style.$f = fl_style.$f.clone();)+ };
+    }
+    take!(
+        background_color,
+        background_layers,
+        background_specified,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        opacity,
+        padding_top,
+        padding_right,
+        padding_bottom,
+        padding_left,
+        border_top_width,
+        border_right_width,
+        border_bottom_width,
+        border_left_width,
+        border_top_style,
+        border_right_style,
+        border_bottom_style,
+        border_left_style,
+        border_top_color,
+        border_right_color,
+        border_bottom_color,
+        border_left_color,
+        border_top_left_radius,
+        border_top_right_radius,
+        border_bottom_right_radius,
+        border_bottom_left_radius,
+        border_top_left_radius_y,
+        border_top_right_radius_y,
+        border_bottom_right_radius_y,
+        border_bottom_left_radius_y,
+        box_shadow,
+    );
+    seg.style = Arc::new(style);
+    if decorated {
+        seg.is_element_box = true;
+        seg.pre_space += mar_l + fl_style.border_left_width + pad_l;
+        seg.post_space += pad_r + fl_style.border_right_width + mar_r;
     }
 }
 
@@ -142,6 +235,7 @@ pub(crate) fn extract_first_letter_float(
         inner_style.clear = ClearSide::None;
         inner_style.text_indent = Length::Px(0.0);
         let inner = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: inner_style.font_size * inner_style.line_height,
@@ -161,6 +255,7 @@ pub(crate) fn extract_first_letter_float(
         outer_style.display = Display::Block;
         outer_style.text_indent = Length::Px(0.0);
         return Some(LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: outer_style.font_size * outer_style.line_height,
@@ -275,6 +370,7 @@ pub(crate) fn extract_initial_letter(
         seg.style = Arc::new(inner_style.clone());
 
         let inner = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: inner_style.font_size * inner_style.line_height,
@@ -303,6 +399,7 @@ pub(crate) fn extract_initial_letter(
         outer_style.overflow_x = crate::style::Overflow::Hidden;
         outer_style.overflow_y = crate::style::Overflow::Hidden;
         return Some(LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node,
             rect: Rect::ZERO,
             used_padding: None, used_line_height: outer_style.font_size * outer_style.line_height,
@@ -600,6 +697,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
         let base_h = child.used_line_height;
         let rect = child.rect;
         let box2 = LayoutBox {
+            anchor_scroll: None, cv_hidden: Vec::new(),
             node: child.node,
             rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
             used_padding: None, used_line_height: base_h,

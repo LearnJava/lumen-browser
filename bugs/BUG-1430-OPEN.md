@@ -46,3 +46,11 @@ WPT-RUN-14 срез 19: `signs-abs-computed` (189/233), `round-mod-rem-computed`
 ## Как проверить
 
 `css/css-values/signs-abs-computed.html`, `round-mod-rem-computed.html`, `minmax-number-computed.html`, `calc-infinity-nan-computed.html`.
+
+## Срез 1 (2026-10-21, P3)
+
+Что сделано: `crates/engine/layout/src/style/math_value.rs` — вычислитель с размерностью (длина, угол, время, процент; `f64`) поверх токенов `calc.rs`. `apply_declaration` перед разбором свойства заменяет внешние вызовы math-функций с числовым/угловым/временным результатом литералом (`calc(1s + 1s)` → `2s`; `<integer>` округляется, середина к +∞; `NaN` → 0, бесконечность → максимум `f32`). Длина подставляется, только если прежний разбор `calc.rs` выражение отвергает (константы, `progress()`). CSSOM: `_lumen_css_canonical_math` (`canonical_specified_numeric_math`) даёт `calc(3)` / `calc(NaN)` / `calc(2s)` или отбрасывает присваивание для `opacity`/`scale`/`z-index`/`order`/`flex-*`/`transition-*`/`animation-*`/`rotate`; `canonical_specified_length` падает на тот же вычислитель для `calc(100px*pi)` → `calc(314.1593px)`. `getComputedStyle` теперь отдаёт `rotate`/`scale`/`translate` (`selector_query.rs`). Лексер читает экспоненту (`3e+9px`).
+
+Замер (css-values, отдельные файлы, бинарь dev-release): `*-computed`, `calc-*`, `round-function`, `signed-zero`, `progress-computed` и др. (19 файлов) 226 → 1077 из 1190 сабтестов; `*-serialize`/`*-invalid` (23 файла) 31 → 636 из 1094. Тесты: `crates/driver/tests/cases/bug1430_math_functions.rs`, `style::math_value::tests`.
+
+Остаток: специфицированная запись и проверка типов внутри аргументов `transform`-функций (`rotate(asin(...))`, `scale(min(...))` — нет канонизатора `transform`); `sibling-index()`; `calc-mix()`, `random()`; сериализация `calc(NaN*1%)` у процентов; `tab-size: calc(2 * -4)` (отрицательное → невалидно) и `calc(1 + 1px)`; `calc(infinity*1px)` в `width` (в длинах без процента подставляется максимум `f32`, а тест ждёт ≥ 1e6 — перепроверить после слияния).

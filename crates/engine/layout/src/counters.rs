@@ -470,6 +470,13 @@ pub struct CounterMap {
     /// BUG-341 S24: and the map itself is now *carried* from pass to pass
     /// ([`CascadeStyles`]) rather than rebuilt — see that type's doc comment.
     styles: CascadeStyles,
+    /// CQ-SCROLL-STATE: the cascaded style of every box-less element (inline,
+    /// `display: none`/`contents`) inside an `@container` query container, with the
+    /// matching `@container` rules applied. Filled by `apply_container_styles`
+    /// after layout; read by `collect_computed_styles` / `collect_custom_properties_for`.
+    /// Kept apart from [`Self::styles`], which is the reference the incremental
+    /// cascade must reproduce bit for bit.
+    cq_boxless: HashMap<NodeId, Arc<ComputedStyle>>,
     /// BUG-341 S24 — for every entry this pass overwrote, the value it replaced.
     ///
     /// Carrying `styles` across passes means a recomputed node's *previous*
@@ -643,6 +650,23 @@ impl CounterMap {
     /// styles) take their copy via `Arc::make_mut`.
     pub fn style_arc(&self, id: NodeId) -> Option<Arc<ComputedStyle>> {
         self.styles.get(&id).cloned()
+    }
+
+    /// The style of a box-less element: the one `apply_container_styles` left after
+    /// applying `@container` rules when the element sits inside a query container,
+    /// the plain cascade result otherwise.
+    pub fn boxless_style(&self, id: NodeId) -> Option<Arc<ComputedStyle>> {
+        self.cq_boxless.get(&id).cloned().or_else(|| self.style_arc(id))
+    }
+
+    /// Box-less elements restyled by `@container` rules (see [`Self::boxless_style`]).
+    pub fn cq_boxless(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
+        &self.cq_boxless
+    }
+
+    /// Stores the `@container`-restyled box-less elements of this layout pass.
+    pub(crate) fn set_cq_boxless(&mut self, styles: HashMap<NodeId, Arc<ComputedStyle>>) {
+        self.cq_boxless = styles;
     }
 
     /// Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2).

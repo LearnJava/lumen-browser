@@ -42,6 +42,7 @@ fn table_grid_rect(b: &LayoutBox) -> Option<Rect> {
 pub(crate) fn fieldset_decoration_box(b: &LayoutBox) -> Option<LayoutBox> {
     let rect = shifted_border_rect(b)?;
     Some(LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: b.node,
         rect,
         style: b.style.clone(),

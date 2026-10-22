@@ -5,6 +5,33 @@
 //! (анкер `fn apply_container_styles`) без правок тел.
 
 use super::*;
+use crate::counters::CounterMap;
+use crate::style::{matching_container_rules, apply_matched_container_rules, ContainerKinds, ScrollStateInfo};
+use std::collections::HashSet;
+
+/// The nodes whose `overflow` goes to the viewport: the root element, and `body` while the
+/// root's own `overflow` is `visible` (CSS Overflow 3 §3.5).
+fn viewport_propagating_nodes(root: &LayoutBox) -> HashSet<NodeId> {
+    fn first_box(b: &LayoutBox) -> Option<&LayoutBox> {
+        b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
+    }
+    let mut out = HashSet::new();
+    // `root` is the document box; its first real child is `html`, whose first is `body`.
+    let Some(html) = first_box(root) else { return out };
+    out.insert(html.node);
+    let visible = |s: &ComputedStyle| matches!(s.overflow_x, Overflow::Visible) && matches!(s.overflow_y, Overflow::Visible);
+    if visible(&html.style)
+        && let Some(body) = first_box(html)
+    {
+        out.insert(body.node);
+    }
+    out
+}
+
+/// The box establishes a query container (`container-type` other than `normal`).
+fn is_query_container(style: &ComputedStyle) -> bool {
+    !matches!(style.container_type, ContainerType::Normal) || style.container_scroll_state
+}
 
 /// CSS Container Queries L1: second-pass after layout.
 ///
@@ -18,6 +45,7 @@ use super::*;
 /// - Only block-flow children are re-laid out (Flex/Grid children use first-pass positions).
 /// - Nested containers are processed outermost-first (inner containers are re-entered in
 ///   the same walk, but they use the parent container's context for their own re-layout).
+#[allow(clippy::too_many_arguments)]
 pub fn apply_container_styles(
     root: &mut LayoutBox,
     doc: &Document,
@@ -26,6 +54,7 @@ pub fn apply_container_styles(
     measurer: Option<&dyn TextMeasurer>,
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
+    counters: &mut CounterMap,
 ) {
     // No container rules in this sheet → fast path.
     if sheet.container_rules.is_empty() {
@@ -34,7 +63,10 @@ pub fn apply_container_styles(
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     // CSS2.1 §10.5: the initial containing block's height is the viewport height —
     // the `%`-height basis a root-level container itself would resolve against.
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode);
+    let mut boxless = HashMap::new();
+    let propagating = viewport_propagating_nodes(root);
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode, counters, &propagating, &mut boxless);
+    counters.set_cq_boxless(boxless);
 }
 
 /// `parent_h` is the content-box height (px) of `b`'s *immediate* parent —
@@ -65,9 +97,15 @@ fn apply_container_inner(
     parent_h: f32,
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
+    counters: &CounterMap,
+    propagating: &HashSet<NodeId>,
+    boxless: &mut HashMap<NodeId, Arc<ComputedStyle>>,
 ) {
-    let mut stack: Vec<(&mut LayoutBox, Rect, f32)> = vec![(b, pcb, parent_h)];
-    while let Some((b, pcb, parent_h)) = stack.pop() {
+    // The third element is the nearest query container above the box — the head of
+    // the chain a descendant container links to via `ContainerContext::parent`.
+    type Outer = Option<Arc<ContainerContext>>;
+    let mut stack: Vec<(&mut LayoutBox, Rect, f32, Outer)> = vec![(b, pcb, parent_h, None)];
+    while let Some((b, pcb, parent_h, outer)) = stack.pop() {
         // Derive content dimensions from already-laid-out rect + style — needed
         // both for container-query context (if `b` is a container) and as the
         // `parent_h` basis passed down to `b`'s own children either way.
@@ -82,14 +120,16 @@ fn apply_container_inner(
         let content_h_val = (b.rect.height - pad_t - pad_b
             - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
 
-        let is_container = !matches!(b.style.container_type, ContainerType::Normal);
+        // A `Skip` box (`display: none`) is no principal box: it answers no query.
+        let is_container = !matches!(b.kind, BoxKind::Skip) && is_query_container(&b.style);
         if is_container {
+            let size_container = !matches!(b.style.container_type, ContainerType::Normal);
             let content_h = if matches!(b.style.container_type, ContainerType::Size) {
                 Some(content_h_val)
             } else {
                 None // inline-size: height not queryable
             };
-            let ctx = ContainerContext {
+            let ctx = Arc::new(ContainerContext {
                 width: content_w,
                 height: content_h,
                 names: b.style.container_name.clone(),
@@ -98,10 +138,30 @@ fn apply_container_inner(
                 font_size: em,
                 viewport,
                 own_containing_block_height: parent_h,
-            };
+                kinds: ContainerKinds { size: size_container, scroll_state: b.style.container_scroll_state },
+                scroll_state: if b.style.container_scroll_state {
+                    crate::scroll_state::scroll_state_info(b, propagating.contains(&b.node))
+                } else {
+                    ScrollStateInfo::default()
+                },
+                parent: outer,
+                rule_hits: Vec::new(),
+            }.with_rule_hits(sheet));
             // Re-apply container rules to all direct + indirect descendants.
+            let mut seen = SeenBoxes::default();
             for child in &mut b.children {
-                re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
+                re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, &mut seen);
+            }
+            restyle_boxless(doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless);
+            if !size_container {
+                // A scroll-state-only container does not contain its size: the queries
+                // restyle the subtree, but the box tree below keeps its first-pass geometry
+                // (re-laying out a block stack here would drop margin collapsing, floats and
+                // inline flow of an `overflow: auto` scroller).
+                for child in &mut b.children {
+                    stack.push((child, pcb, content_h_val, Some(Arc::clone(&ctx))));
+                }
+                continue;
             }
             // Re-lay out block-flow children with updated styles.
             let content_x = b.rect.x + pad_l + b.style.border_left_width;
@@ -133,12 +193,12 @@ fn apply_container_inner(
             // After re-layout, push children to catch nested containers.
             // Each nested container will set its own cq* context during its own re-layout.
             for child in &mut b.children {
-                stack.push((child, child_pcb, content_h_val));
+                stack.push((child, child_pcb, content_h_val, Some(Arc::clone(&ctx))));
             }
         } else {
             // Not a container — just descend looking for container descendants.
             for child in &mut b.children {
-                stack.push((child, pcb, content_h_val));
+                stack.push((child, pcb, content_h_val, outer.clone()));
             }
         }
     }
@@ -159,7 +219,98 @@ pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
         return;
     }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new());
+    let mut links = Vec::new();
+    apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new(), &mut links);
+    chain_anchor_scroll(root, &links);
+    // A relayout keeps the scroll offsets of the previous tree, so the fresh chains start from them.
+    crate::refresh_anchor_scroll(root);
+}
+
+/// An anchor-positioned box and the anchor it was positioned against, kept for [`chain_anchor_scroll`].
+struct AnchorLink {
+    /// The positioned box.
+    node: lumen_dom::NodeId,
+    /// The element carrying the anchor name.
+    anchor: lumen_dom::NodeId,
+    /// Box ancestors of the positioned box: their scrolling needs no compensation.
+    ancestors: Vec<lumen_dom::NodeId>,
+    /// Scroll containers of the anchor (see [`anchor_scroll_for`]).
+    scrollers: Vec<lumen_dom::NodeId>,
+}
+
+/// CSS Anchor Positioning L1 §4.3: a box positioned against an anchor that is itself positioned
+/// against another anchor follows both chains of scroll containers (`anchor-scroll-chained-*`).
+fn chain_anchor_scroll(root: &mut LayoutBox, links: &[AnchorLink]) {
+    use std::collections::HashMap;
+    let by_node: HashMap<lumen_dom::NodeId, usize> = links.iter().enumerate().map(|(i, l)| (l.node, i)).collect();
+    if !links.iter().any(|l| by_node.contains_key(&l.anchor)) {
+        return;
+    }
+    let mut chained: HashMap<lumen_dom::NodeId, Vec<lumen_dom::NodeId>> = HashMap::new();
+    for l in links {
+        let mut all = l.scrollers.clone();
+        let mut hop = l.anchor;
+        // A cycle (`a` against `b` against `a`) ends at the hop bound, not by luck.
+        for _ in 0..links.len() {
+            let Some(&i) = by_node.get(&hop) else { break };
+            for &n in &links[i].scrollers {
+                if !all.contains(&n) {
+                    all.insert(0, n);
+                }
+            }
+            hop = links[i].anchor;
+        }
+        all.retain(|n| !l.ancestors.contains(n));
+        if all != l.scrollers {
+            chained.insert(l.node, all);
+        }
+    }
+    if chained.is_empty() {
+        return;
+    }
+    let mut stack: Vec<&mut LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        // The principal box of the node only (first in pre-order).
+        if let Some(all) = chained.remove(&b.node) {
+            b.anchor_scroll = scroll_of(&all);
+        }
+        stack.extend(b.children.iter_mut().rev());
+    }
+}
+
+/// The anchor `lb` is positioned against and the scroll containers around it that `lb` follows
+/// (CSS Anchor Positioning L1 §4.3): the ones that are not among `lb`'s own box ancestors, which
+/// already scroll it. The anchor is the `position-anchor` one, else the first one named in an
+/// `anchor()`/`anchor-size()`. `None` — not an anchor-positioned box.
+fn anchor_scroll_for(
+    lb: &LayoutBox,
+    registry: &crate::anchor::AnchorRegistry,
+    ancestors: &[lumen_dom::NodeId],
+) -> Option<(lumen_dom::NodeId, Vec<lumen_dom::NodeId>)> {
+    if !matches!(lb.style.position, Position::Absolute | Position::Fixed) {
+        return None;
+    }
+    let s = &lb.style;
+    let visible = |n: &&str| registry.get_scoped(n, ancestors).is_some();
+    let named = [&s.anchor_top, &s.anchor_right, &s.anchor_bottom, &s.anchor_left]
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.anchor_name.as_deref())
+        .chain([&s.anchor_size_w, &s.anchor_size_h].into_iter().flatten().filter_map(|f| f.anchor_name.as_deref()));
+    let name = s.position_anchor.as_deref().filter(visible).or_else(|| named.into_iter().find(visible))?;
+    let anchor = registry.get(name)?.node;
+    let scrollers = registry
+        .scroll_chains
+        .get(name)
+        .map(|chain| chain.iter().filter(|n| !ancestors.contains(n)).copied().collect())
+        .unwrap_or_default();
+    Some((anchor, scrollers))
+}
+
+fn scroll_of(nodes: &[lumen_dom::NodeId]) -> Option<Box<AnchorScroll>> {
+    (!nodes.is_empty()).then(|| {
+        Box::new(AnchorScroll { scrollers: nodes.iter().map(|&node| AnchorScroller { node, x: 0.0, y: 0.0 }).collect() })
+    })
 }
 
 /// Explicit heap-stack pre-order walk (LAYOUT-2 срез 2), not native
@@ -178,6 +329,7 @@ fn apply_anchor_positions_rec(
     viewport: Size,
     pcb: Rect,
     ancestors: &mut Vec<lumen_dom::NodeId>,
+    links: &mut Vec<AnchorLink>,
 ) {
     // `fixed_cb` — padding box of the nearest ancestor that captures `position: fixed`
     // (transform/filter/contain, css-transforms-1 §2); `None` — the viewport.
@@ -323,6 +475,14 @@ fn apply_anchor_positions_rec(
         }
     }
 
+    // CSS Anchor Positioning L1 §4.3 — the scroll containers the anchor sits in that this
+    // box is not inside of: their offsets move the anchor, so they move this box too.
+    lb.anchor_scroll = None;
+    if let Some((anchor, scrollers)) = anchor_scroll_for(lb, registry, ancestors) {
+        lb.anchor_scroll = scroll_of(&scrollers);
+        links.push(AnchorLink { node: lb.node, anchor, ancestors: ancestors.to_vec(), scrollers });
+    }
+
     // Compute the containing blocks for absolute- and fixed-positioned children of this element.
     let padding_box = Rect::new(
         lb.rect.x + lb.style.border_left_width,
@@ -358,15 +518,71 @@ fn re_style_subtree(
     ctx: &ContainerContext,
     viewport: Size,
     dark_mode: bool,
+    seen: &mut SeenBoxes,
 ) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(b) = stack.pop() {
         if !matches!(b.kind, BoxKind::Skip) {
-            apply_container_rules(Arc::make_mut(&mut b.style), doc, b.node, sheet, ctx, viewport, dark_mode);
+            seen.boxed.insert(b.node);
+            let rules = matching_container_rules(doc, b.node, sheet, ctx);
+            if !rules.is_empty() {
+                apply_matched_container_rules(Arc::make_mut(&mut b.style), &rules, doc, b.node, viewport, dark_mode);
+            }
         }
         // Don't propagate into nested containers — they'll build their own context.
-        if matches!(b.style.container_type, ContainerType::Normal) {
+        if is_query_container(&b.style) {
+            seen.nested.insert(b.node);
+        } else {
             stack.extend(b.children.iter_mut());
         }
+    }
+}
+
+/// Nodes [`re_style_subtree`] met below a container: those with a box, and the nested
+/// containers (whose subtrees belong to the nested container's own pass).
+#[derive(Default)]
+struct SeenBoxes {
+    boxed: HashSet<NodeId>,
+    nested: HashSet<NodeId>,
+}
+
+/// `@container` rules for the elements below `container` that own no box — plain
+/// inline elements, `display: none` / `contents` — which `re_style_subtree` cannot
+/// reach through the box tree. Their cascaded style comes from `counters`; the ones a
+/// rule matches are restyled, and all of them are recorded in `out`.
+#[allow(clippy::too_many_arguments)]
+fn restyle_boxless(
+    doc: &Document,
+    sheet: &Stylesheet,
+    counters: &CounterMap,
+    container: NodeId,
+    seen: &SeenBoxes,
+    ctx: &ContainerContext,
+    viewport: Size,
+    dark_mode: bool,
+    out: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+) {
+    let mut stack: Vec<NodeId> = doc.get(container).children.iter().rev().copied().collect();
+    while let Some(id) = stack.pop() {
+        if !matches!(doc.get(id).data, NodeData::Element { .. }) || seen.nested.contains(&id) {
+            continue;
+        }
+        if !seen.boxed.contains(&id)
+            && let Some(mut style) = counters.style_arc(id)
+        {
+            // A container with no principal box answers no query: what lies below it is
+            // out of this container's reach and is not matched against it either.
+            if is_query_container(&style) {
+                continue;
+            }
+            let rules = matching_container_rules(doc, id, sheet, ctx);
+            if !rules.is_empty() {
+                apply_matched_container_rules(Arc::make_mut(&mut style), &rules, doc, id, viewport, dark_mode);
+            }
+            // Every box-less element below a container is recorded, matched or not: the
+            // snapshot collectors read their style (and custom properties) from here.
+            out.insert(id, style);
+        }
+        stack.extend(doc.get(id).children.iter().rev().copied());
     }
 }

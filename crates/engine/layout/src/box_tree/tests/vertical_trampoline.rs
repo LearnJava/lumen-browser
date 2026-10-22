@@ -60,6 +60,7 @@ fn vertical_wrapper(node_index: usize, mode: WritingMode, children: Vec<LayoutBo
     let mut style = ComputedStyle::root();
     style.writing_mode = mode;
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(node_index),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,
@@ -91,6 +92,7 @@ fn leaf() -> LayoutBox {
     let mut style = ComputedStyle::root();
     style.width = Some(Length::Px(LEAF_WIDTH));
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: lumen_dom::NodeId::from_index(1),
         rect: Rect::new(0.0, 0.0, 0.0, 0.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

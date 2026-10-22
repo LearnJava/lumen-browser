@@ -681,8 +681,10 @@ pub(in crate::style) fn apply_decl_layout(
             let mut width: Option<Length> = None;
             let mut had_width = false;
             let mut had_count = false;
+            let mut had_auto = false;
             for p in &parts {
                 if p.eq_ignore_ascii_case("auto") {
+                    had_auto = true;
                     continue;
                 }
                 if let Ok(n) = p.parse::<u32>()
@@ -707,10 +709,13 @@ pub(in crate::style) fn apply_decl_layout(
                     .filter(|l| !matches!(l, Length::Px(v) if *v < 0.0))
                     .map(Some),
             };
-            if (had_width || had_count) && let Some(h) = height_len {
+            if (had_width || had_count || had_auto) && let Some(h) = height_len {
                 style.column_width = width;
                 style.column_count = count;
                 style.column_height = h;
+                // Multicol L2 §4.5: `column-wrap` — longhand шортката, сбрасывается им в `auto`.
+                style.column_wrap_nowrap = false;
+                style.column_wrap_explicit = false;
             }
         }
         // CSS Multi-column L1 §4 + CSS Gap Decorations L1 §3: `column-rule*` / `row-rule*`
@@ -779,8 +784,18 @@ pub(in crate::style) fn apply_decl_layout(
         }
         "column-fill" => {
             match val.trim().to_ascii_lowercase().as_str() {
-                "balance" => style.column_fill_balance = true,
-                "auto" => style.column_fill_balance = false,
+                "balance" => {
+                    style.column_fill_balance = true;
+                    style.column_fill_balance_all = false;
+                }
+                "balance-all" => {
+                    style.column_fill_balance = true;
+                    style.column_fill_balance_all = true;
+                }
+                "auto" => {
+                    style.column_fill_balance = false;
+                    style.column_fill_balance_all = false;
+                }
                 _ => {}
             }
         }
@@ -987,27 +1002,9 @@ pub(in crate::style) fn apply_decl_layout(
             };
         }
         "contain" => {
-            let v = val.trim();
-            style.contain = if v.eq_ignore_ascii_case("none") {
-                ContainFlags::NONE
-            } else if v.eq_ignore_ascii_case("strict") {
-                ContainFlags::STRICT
-            } else if v.eq_ignore_ascii_case("content") {
-                ContainFlags::CONTENT
-            } else {
-                let mut f = ContainFlags::NONE;
-                for kw in v.split_whitespace() {
-                    match kw {
-                        "size" => f.0 |= ContainFlags::SIZE.0,
-                        "inline-size" => f.0 |= ContainFlags::INLINE_SIZE.0,
-                        "layout" => f.0 |= ContainFlags::LAYOUT.0,
-                        "style" => f.0 |= ContainFlags::STYLE.0,
-                        "paint" => f.0 |= ContainFlags::PAINT.0,
-                        _ => {}
-                    }
-                }
-                f
-            };
+            if let Some(f) = parse_contain(val) {
+                style.contain = f;
+            }
         }
         "content-visibility" => {
             style.content_visibility = match val.trim() {
@@ -1053,12 +1050,10 @@ pub(in crate::style) fn apply_decl_layout(
             };
         }
         "container-type" => {
-            style.container_type = match val.trim() {
-                "normal" => ContainerType::Normal,
-                "size" => ContainerType::Size,
-                "inline-size" => ContainerType::InlineSize,
-                _ => style.container_type,
-            };
+            if let Some((ty, scroll_state)) = parse_container_type(val) {
+                style.container_type = ty;
+                style.container_scroll_state = scroll_state;
+            }
         }
         "container-name" => {
             let v = val.trim();
@@ -1084,11 +1079,9 @@ pub(in crate::style) fn apply_decl_layout(
                     .map(|s| s.to_string())
                     .collect();
             }
-            style.container_type = match type_part {
-                "size" => ContainerType::Size,
-                "inline-size" => ContainerType::InlineSize,
-                _ => ContainerType::Normal,
-            };
+            let (ty, scroll_state) = parse_container_type(type_part).unwrap_or((ContainerType::Normal, false));
+            style.container_type = ty;
+            style.container_scroll_state = scroll_state;
         }
         "resize" => {
             style.resize = match val.trim() {
@@ -1235,6 +1228,75 @@ struct RuleTriplet {
 /// and the `place-*` shorthands).
 /// `width`/`height`/`inline-size`/`block-size`: `Some(None)` is `auto`, `Some(Some(len))` a size,
 /// `None` an invalid value that the caller must drop (CSS Syntax §2.2, BUG-1377).
+/// `container-type` — `normal | [ [ size | inline-size ] || scroll-state ]`
+/// (CSS Conditional 5 §3.1): `(size axis, scroll-state flag)`, or `None` when the
+/// value is invalid (repeated keyword, `normal` mixed with another, `size`
+/// together with `inline-size`, empty).
+fn parse_container_type(val: &str) -> Option<(ContainerType, bool)> {
+    let mut ty: Option<ContainerType> = None;
+    let mut scroll_state = false;
+    let mut normal = false;
+    let mut any = false;
+    for tok in val.split_ascii_whitespace() {
+        any = true;
+        match tok.to_ascii_lowercase().as_str() {
+            "normal" => normal = true,
+            "size" if ty.is_none() => ty = Some(ContainerType::Size),
+            "inline-size" if ty.is_none() => ty = Some(ContainerType::InlineSize),
+            "scroll-state" if !scroll_state => scroll_state = true,
+            _ => return None,
+        }
+    }
+    if !any || (normal && (ty.is_some() || scroll_state || val.split_ascii_whitespace().count() > 1)) {
+        return None;
+    }
+    Some((ty.unwrap_or(ContainerType::Normal), scroll_state))
+}
+
+/// Parses the `contain` value (CSS Containment L3 §3): `none | strict | content | [ [size |
+/// inline-size] || layout || style || paint ]`, or `None` when invalid — `strict`/`content`/`none`
+/// combined with anything, a repeated keyword, `size` together with `inline-size`, an unknown
+/// keyword, an empty value (BUG-1401).
+fn parse_contain(val: &str) -> Option<ContainFlags> {
+    let mut f = ContainFlags::NONE;
+    let mut count = 0usize;
+    let mut standalone = None;
+    for tok in val.split_ascii_whitespace() {
+        count += 1;
+        let bit = match tok.to_ascii_lowercase().as_str() {
+            "none" => {
+                standalone = Some(ContainFlags::NONE);
+                continue;
+            }
+            "strict" => {
+                standalone = Some(ContainFlags::STRICT);
+                continue;
+            }
+            "content" => {
+                standalone = Some(ContainFlags::CONTENT);
+                continue;
+            }
+            "size" => ContainFlags::SIZE,
+            "inline-size" => ContainFlags::INLINE_SIZE,
+            "layout" => ContainFlags::LAYOUT,
+            "style" => ContainFlags::STYLE,
+            "paint" => ContainFlags::PAINT,
+            _ => return None,
+        };
+        if f.0 & bit.0 != 0 {
+            return None;
+        }
+        f.0 |= bit.0;
+    }
+    if let Some(s) = standalone {
+        return (count == 1).then_some(s);
+    }
+    if count == 0 || (f.0 & ContainFlags::SIZE.0 != 0 && f.0 & ContainFlags::INLINE_SIZE.0 != 0) {
+        return None;
+    }
+    Some(f)
+}
+
 fn parse_size_or_auto(val: &str, is_quirks: bool) -> Option<Option<Length>> {
     if val.trim().eq_ignore_ascii_case("auto") {
         return Some(None);

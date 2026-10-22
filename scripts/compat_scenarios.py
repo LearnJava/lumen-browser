@@ -78,6 +78,8 @@ STEP_KINDS = {
     "wait": ("cond",),
     "sleep": ("seconds",),
     "eval": ("code",),
+    "switch_tab": (),
+    "close_tab": (),
 }
 WAIT_CONDS = ("document_ready", "visible", "stable", "network_idle", "js_idle")
 ORACLE_KINDS = ("visible", "url", "text", "not_text", "eval")
@@ -135,6 +137,16 @@ def validate_scenario(sc: dict) -> list[str]:
         for key in STEP_KINDS[kind]:
             if key not in st:
                 bad(f"шаг {i} ({kind}): нет поля {key}")
+        if kind == "switch_tab" and not ("url" in st or "index" in st):
+            bad(f"шаг {i}: switch_tab требует url (регулярка по адресу) или index")
+        if kind in ("switch_tab", "close_tab"):
+            if "url" in st:
+                try:
+                    re.compile(st["url"])
+                except re.error as e:
+                    bad(f"шаг {i}: плохая регулярка url: {e}")
+            if "index" in st and not isinstance(st["index"], int):
+                bad(f"шаг {i}: index — целое число")
         if kind == "wait" and st.get("cond") not in WAIT_CONDS:
             bad(f"шаг {i}: cond не из {WAIT_CONDS}")
         if kind == "wait" and st.get("cond") in ("visible", "stable") and not st.get("selector"):
@@ -179,9 +191,11 @@ def load_scenarios(paths: list[Path] | None = None) -> tuple[list[dict], list[st
     return scenarios, errors
 
 
-def select(scenarios: list[dict], only: list[str], nightly: bool, with_stands: bool) -> list[dict]:
+def select(scenarios: list[dict], only: list[str], nightly: bool, with_stands: bool, lang: str = "") -> list[dict]:
     out = []
     for sc in scenarios:
+        if lang and sc.get("lang", "en") != lang:
+            continue
         if only and not any(o in sc["id"] for o in only):
             continue
         if nightly and sc.get("mode", "nightly") != "nightly":
@@ -204,11 +218,12 @@ LUMEN_ERR_RE = re.compile(r"\bERR_[A-Z0-9_]{3,}\b")
 BLANK_TEXT_MAX = 20
 EXCERPT_MAX = 240
 
-SCREEN_CLASSES = ("crash", "hang", "lumen_error", "wall", "captcha", "consent", "blank", "content")
+SCREEN_CLASSES = ("crash", "hang", "cert_error", "lumen_error", "wall", "captcha", "consent", "blank", "content")
+CERT_ERR_RE = re.compile(r"untrusted certificate|certificate (chain|verif)|invalid certificate|ERR_CERT_", re.IGNORECASE)
 
 
 def classify_screen(state: dict | None, status: int | None = None, dead: bool = False,
-                    hung: bool = False) -> dict:
+                    hung: bool = False, error: str = "") -> dict:
     """Распознать экран, на котором встал сценарий.
 
     state — {href, title, text} (видимый текст страницы); status — HTTP-статус главного
@@ -223,6 +238,9 @@ def classify_screen(state: dict | None, status: int | None = None, dead: bool = 
         return out
     if hung:
         out["class"] = "hang"
+        return out
+    if CERT_ERR_RE.search(error):  # навигация отвергнута проверкой сертификата (например, цепочка НУЦ без согласия)
+        out.update({"class": "cert_error", "signals": [CERT_ERR_RE.search(error).group(0)]})
         return out
     err = LUMEN_ERR_RE.search(text)
     if err:
@@ -348,7 +366,7 @@ class LiveDriver:
         try:
             return self.br.mcp.tool(name, args)
         except RuntimeError as e:
-            if "command timed out" in str(e):
+            if "command timed out" in str(e) or "engine thread busy" in str(e):
                 raise DriverHung(str(e)[:160]) from e
             raise StepFailed(str(e)[:200]) from e
         except (OSError, socket.timeout) as e:
@@ -358,6 +376,15 @@ class LiveDriver:
 
     def navigate(self, url: str) -> None:
         self._tool("navigate", {"url": url})
+
+    def list_tabs(self) -> list[dict]:
+        return list(self._tool("list_tabs", {}).get("tabs") or [])
+
+    def switch_tab(self, tab_id) -> None:
+        self._tool("switch_tab", {"id": tab_id})
+
+    def close_tab(self, tab_id) -> None:
+        self._tool("close_tab", {"id": tab_id})
 
     def click(self, selector: str) -> None:
         self._tool("click", {"target": {"selector": selector}})
@@ -414,19 +441,80 @@ class ChromeDriver:
     """
 
     def __init__(self, ref, timeout_s: int) -> None:
-        import chrome_interaction_baseline as cib
-        from bench_chromium import WS
         self.ref, self.timeout_s = ref, timeout_s
         self.ctx = ref.browser.call("Target.createBrowserContext")["browserContextId"]
         self.tid = ref.browser.call("Target.createTarget", {"url": "about:blank", "browserContextId": self.ctx})["targetId"]
-        self.cdp = cib.Cdp(WS(f"ws://127.0.0.1:{ref.port}/devtools/page/{self.tid}"))
+        self.cdp = None
+        self._order: list[str] = [self.tid]
+        self._attach(self.tid)
+
+    def _attach(self, tid: str) -> None:
+        """Подключиться к вкладке `tid`: свой CDP-сокет, окно 1600×900, UA без «Headless».
+
+        Журнал событий общий для всех вкладок сценария — `stderr_mark` остаётся действительным после смены вкладки.
+        """
+        import chrome_interaction_baseline as cib
+        from bench_chromium import WS
+        events = self.cdp.events if self.cdp else []
+        cdp = cib.Cdp(WS(f"ws://127.0.0.1:{self.ref.port}/devtools/page/{tid}"))
+        cdp.events = events
         for dom in ("Page", "Network", "Runtime"):
-            self.cdp.call(f"{dom}.enable")
-        self.cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1600, "height": 900, "deviceScaleFactor": 1,
-                                                             "mobile": False})
-        if ref.headless:
-            ua = self.cdp.eval("navigator.userAgent") or ""
-            self.cdp.call("Network.setUserAgentOverride", {"userAgent": ua.replace("HeadlessChrome", "Chrome")})
+            cdp.call(f"{dom}.enable")
+        cdp.call("Emulation.setDeviceMetricsOverride", {"width": 1600, "height": 900, "deviceScaleFactor": 1,
+                                                        "mobile": False})
+        if self.ref.headless:
+            ua = cdp.eval("navigator.userAgent") or ""
+            cdp.call("Network.setUserAgentOverride", {"userAgent": ua.replace("HeadlessChrome", "Chrome")})
+        if self.cdp:
+            try:
+                self.cdp.ws.sock.close()
+            except OSError:
+                pass
+        self.cdp, self.tid = cdp, tid
+
+    def _targets(self) -> list[dict]:
+        """Вкладки своего контекста в порядке создания (CDP `Target.getTargets`)."""
+        try:
+            infos = self.ref.browser.call("Target.getTargets").get("targetInfos", [])
+        except RuntimeError as e:
+            raise StepFailed(str(e)[:200]) from e
+        except (OSError, ConnectionError) as e:
+            raise DriverDead(str(e)[:160]) from e
+        mine = [t for t in infos if t.get("type") == "page" and t.get("browserContextId") == self.ctx]
+        # CDP отдаёт вкладки в произвольном порядке — порядок таб-стрипа ведём сами: по первому появлению
+        for t in mine:
+            if t["targetId"] not in self._order:
+                self._order.append(t["targetId"])
+        return sorted(mine, key=lambda t: self._order.index(t["targetId"]))
+
+    def list_tabs(self) -> list[dict]:
+        return [{"id": t["targetId"], "url": t.get("url", ""), "title": t.get("title", ""),
+                 "active": t["targetId"] == self.tid} for t in self._targets()]
+
+    def switch_tab(self, tab_id) -> None:
+        if tab_id == self.tid:
+            return
+        if tab_id not in {t["targetId"] for t in self._targets()}:
+            raise StepFailed(f"нет вкладки {tab_id}")
+        self._attach(tab_id)
+        self._call("Page.bringToFront")
+
+    def close_tab(self, tab_id) -> None:
+        targets = self._targets()
+        if len(targets) <= 1:
+            raise StepFailed("последняя вкладка не закрывается")
+        victim = next((t for t in targets if t["targetId"] == tab_id), None)
+        if victim is None:
+            raise StepFailed(f"нет вкладки {tab_id}")
+        # как в Lumen: после закрытия активной вкладки в фокусе её открыватель, иначе первая из оставшихся
+        rest = [t for t in targets if t["targetId"] != tab_id]
+        heir = next((t for t in rest if t["targetId"] == victim.get("openerId")), rest[0])
+        try:
+            self.ref.browser.call("Target.closeTarget", {"targetId": tab_id})
+        except RuntimeError as e:
+            raise StepFailed(str(e)[:200]) from e
+        if tab_id == self.tid:
+            self._attach(heir["targetId"])
 
     def close(self) -> None:
         for fn in (lambda: self.cdp.ws.sock.close(),
@@ -532,6 +620,54 @@ def subst(value, ctx: dict):
     return value
 
 
+TAB_WAIT_S = 10.0
+
+
+def pick_tab(tabs: list[dict], step: dict) -> dict | None:
+    """Вкладка, которую назвал шаг: `url` — регулярка по адресу (из подходящих берётся самая новая),
+    `index` — номер в таб-стрипе (с 0, отрицательный — с конца); без обоих — активная."""
+    if "url" in step:
+        hits = [t for t in tabs if re.search(step["url"], t.get("url", ""))]
+        return hits[-1] if hits else None
+    if "index" in step:
+        idx = step["index"]
+        return tabs[idx] if -len(tabs) <= idx < len(tabs) else None
+    return next((t for t in tabs if t.get("active")), None)
+
+
+def tab_step(drv, step: dict, default_wait_s: float) -> None:
+    """`switch_tab` / `close_tab`: попап открывается не мгновенно — вкладку ждут до `wait_s` (по умолчанию 10 с)."""
+    named = "url" in step or "index" in step
+    deadline = time.monotonic() + (float(step.get("wait_s", min(TAB_WAIT_S, default_wait_s))) if named else 0.0)
+    while True:
+        tabs = drv.list_tabs()
+        tab = pick_tab(tabs, step)
+        if tab or time.monotonic() >= deadline:
+            break
+        time.sleep(0.3)
+    if tab is None:
+        want = f"адрес /{step['url']}/" if "url" in step else f"номер {step['index']}" if "index" in step else "активная"
+        have = ", ".join(t.get("url", "")[:60] for t in tabs) or "нет"
+        raise StepFailed(f"нет вкладки: {want} (есть: {have})")
+    if step["do"] == "switch_tab":
+        drv.switch_tab(tab["id"])
+    else:
+        drv.close_tab(tab["id"])
+
+
+def reset_tabs(drv) -> None:
+    """Оставить одну вкладку — самую старую: попапы прошлого сценария не должны достаться следующему."""
+    try:
+        tabs = drv.list_tabs()
+        if len(tabs) <= 1:
+            return
+        drv.switch_tab(tabs[0]["id"])
+        for tab in tabs[1:]:
+            drv.close_tab(tab["id"])
+    except StepFailed:
+        pass
+
+
 def run_step(drv, step: dict, ctx: dict, default_wait_s: float) -> None:
     kind = step["do"]
     if kind == "navigate":
@@ -549,6 +685,8 @@ def run_step(drv, step: dict, ctx: dict, default_wait_s: float) -> None:
         drv.wait(step["cond"], step.get("selector"), float(step.get("timeout_s", default_wait_s)))
     elif kind == "sleep":
         time.sleep(float(step["seconds"]))
+    elif kind in ("switch_tab", "close_tab"):
+        tab_step(drv, step, default_wait_s)
     elif kind == "eval":
         val = drv.eval(subst(step["code"], ctx))
         if step.get("expect", False) and not val:
@@ -559,11 +697,17 @@ def check_oracle(drv, oracle: dict) -> tuple[bool, str]:
     """Одна проверка оракула: (выполнена, пояснение)."""
     kind, value = oracle["kind"], oracle["value"]
     if kind == "visible":
-        ok = drv.eval("(() => { const e = document.querySelector(%s); if (!e) return false; "
-                      "const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()" % jsq(value))
+        try:
+            ok = drv.eval("(() => { const e = document.querySelector(%s); if (!e) return false; "
+                          "const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()" % jsq(value))
+        except StepFailed as e:
+            return False, f"visible {value}: {e}"
         return ok is True, f"visible {value}"
     if kind == "eval":
-        return bool(drv.eval(value)), "eval"
+        try:
+            return bool(drv.eval(value)), "eval"
+        except StepFailed as e:  # страница без ожидаемых узлов: оракул «не выполнен», а не падение прогона
+            return False, f"eval: {e}"
     st = drv.state()
     if kind == "url":
         return bool(re.search(value, st.get("href", ""))), f"url ~ /{value}/ (сейчас {st.get('href', '')[:80]})"
@@ -627,9 +771,15 @@ def attempt(drv, sc: dict, ctx: dict, out_dir: Path, tag: str) -> dict:
         rec["outcome"] = "crash"
     rec["seconds"] = round(time.monotonic() - t0, 1)
     if rec["outcome"] != "pass":
-        state = {} if (dead or hung) else drv.state()
+        state = {}
+        if not (dead or hung):
+            try:
+                state = drv.state()
+            except DriverHung:  # окно перестало отвечать уже после шагов — это тоже зависание
+                hung = True
         status = None if (dead or hung or not last_url) else drv.main_status(mark, last_url)
-        rec["screen"] = classify_screen(state, status=status, dead=dead, hung=hung)
+        err_text = " ".join(str(v) for v in ((rec.get("failed_step") or {}).get("error"), rec.get("failed_oracle")) if v)
+        rec["screen"] = classify_screen(state, status=status, dead=dead, hung=hung, error=err_text)
         rec["http_status"] = status
         if not (dead or hung):
             png = out_dir / f"{sc['id']}{tag}.png"
@@ -638,6 +788,11 @@ def attempt(drv, sc: dict, ctx: dict, out_dir: Path, tag: str) -> dict:
         if dead or hung or not drv.alive():
             drv.restart()
             rec["restarted"] = True
+    if not (dead or hung):
+        try:
+            reset_tabs(drv)
+        except (DriverDead, DriverHung):  # следующий сценарий сам наткнётся на то же и классифицирует
+            pass
     return rec
 
 
@@ -751,6 +906,10 @@ def main() -> int:
                     help="калибровка оракулов: прогнать только в Chrome, без окна Lumen (результат — как у Lumen, с пометкой chrome_only)")
     ap.add_argument("--chrome", help="путь к chrome.exe (по умолчанию Chrome for Testing из ms-playwright)")
     ap.add_argument("--headless", action="store_true", help="Chrome без окна")
+    ap.add_argument("--lang", choices=("ru", "en"), default="",
+                    help="только сценарии этого языка: RU-сайты идут напрямую, EN — через --lumen-arg=--proxy (маршрут иностранных сайтов)")
+    ap.add_argument("--lumen-arg", action="append", default=[], metavar="ARG",
+                    help="доп. аргумент командной строки lumen.exe (повторяемый; значение с дефисом — через =)")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VAL", help="доп. окружение для lumen")
     args = ap.parse_args()
 
@@ -763,7 +922,7 @@ def main() -> int:
         if args.validate or not args.list:
             return 1
     only = [o for o in args.only.split(",") if o]
-    chosen = select(scenarios, only, args.nightly, args.with_stands)
+    chosen = select(scenarios, only, args.nightly, args.with_stands, args.lang)
     if args.validate:
         print(f"[scenarios] {len(scenarios)} сценариев, формат верен")
         return 0
@@ -783,6 +942,7 @@ def main() -> int:
     for kv in args.env:
         k, _, v = kv.partition("=")
         pa.EXTRA_ENV[k] = v
+    pa.EXTRA_ARGS[:] = args.lumen_arg
     out_dir = (args.resume or args.out or OUT_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     (out_dir / "chrome").mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"

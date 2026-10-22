@@ -46,9 +46,32 @@ fn a_partly_filled_row_keeps_its_column_height() {
 }
 
 #[test]
-fn without_a_column_height_nothing_wraps() {
+fn auto_column_height_takes_the_container_height_with_explicit_wrap() {
+    // WPT column-height-003: `column-height: auto` + `column-wrap: wrap` and a definite
+    // height of 60px → rows of 60px, so the overflow columns open a second row.
     let (doc, root) = lay(SIX, &format!("{BASE}height:60px;column-wrap:wrap}}"));
-    assert_eq!(rect(&root, &doc, "e").y, 0.0, "no column-height: overflow stays in the inline direction");
+    assert_eq!((rect(&root, &doc, "e").x, rect(&root, &doc, "e").y), (0.0, 70.0));
+}
+
+#[test]
+fn auto_column_wrap_with_auto_column_height_does_not_wrap() {
+    let (doc, root) = lay(SIX, &format!("{BASE}height:60px}}"));
+    assert_eq!(rect(&root, &doc, "e").y, 0.0, "column-wrap: auto + column-height: auto: overflow stays inline");
+}
+
+#[test]
+fn one_column_with_a_definite_height_overflows_into_a_second_column() {
+    // WPT column-height-011: `columns: 1`, 50px wide, 100px tall, a 200px child → two 100px
+    // fragments side by side.
+    let html = r#"<div id="c"><p id="a"></p></div>"#;
+    let (doc, root) = lay(
+        html,
+        "body{margin:0} p{height:200px;margin:0} #c{columns:1;column-fill:auto;width:50px;column-gap:0;height:100px}",
+    );
+    let frags: Vec<_> = super::find_by_id_all(&root, &doc, "c").unwrap().children.iter().collect();
+    assert_eq!(frags.len(), 2, "child is cut in two");
+    assert_eq!((frags[0].rect.x, frags[0].rect.height), (0.0, 100.0));
+    assert_eq!((frags[1].rect.x, frags[1].rect.height), (50.0, 100.0));
 }
 
 #[test]

@@ -26,10 +26,10 @@ use std::time::Duration;
 use lumen_core::error::{Error, Result};
 
 use crate::{
-    A11yNode, AutomationCommand, AutomationHandle, AutomationReply, AxQuery, BoxModel,
+    A11yNode, AutomationCommand, AutomationCookie, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
-    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, Target,
-    WaitCondition,
+    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, TabInfo,
+    Target, WaitCondition,
 };
 
 /// Default timeout for a single automation round-trip to the live window.
@@ -82,6 +82,31 @@ impl LiveWindowSession {
     /// Type `text` into the focused element without clicking first (BUG-1194).
     pub fn type_focused(&self, text: &str) -> Result<()> {
         self.execute(AutomationCommand::TypeFocused(text.to_owned()))?;
+        Ok(())
+    }
+
+    /// Non-expired cookies of the live window's active jar, `HttpOnly` included
+    /// (`storage.getCookies`, DEVX-20).
+    pub fn get_cookies(&self) -> Result<Vec<AutomationCookie>> {
+        match self.execute(AutomationCommand::GetCookies)? {
+            AutomationReply::Cookies(cookies) => Ok(cookies),
+            other => Err(unexpected_reply("Cookies", &other)),
+        }
+    }
+
+    /// Store a cookie in the live window's active jar (`storage.setCookie`, DEVX-20).
+    pub fn set_cookie(&self, cookie: AutomationCookie) -> Result<()> {
+        self.execute(AutomationCommand::SetCookie(cookie))?;
+        Ok(())
+    }
+
+    /// Remove one cookie from the live window's active jar (`storage.deleteCookies`, DEVX-20).
+    pub fn delete_cookie(&self, domain: &str, path: &str, name: &str) -> Result<()> {
+        self.execute(AutomationCommand::DeleteCookie {
+            domain: domain.to_owned(),
+            path: path.to_owned(),
+            name: name.to_owned(),
+        })?;
         Ok(())
     }
 
@@ -257,6 +282,23 @@ impl BrowserSession for LiveWindowSession {
         if let Ok(mut cur) = self.current_url.lock() {
             *cur = url.to_owned();
         }
+        Ok(())
+    }
+
+    fn list_tabs(&self) -> Result<Vec<TabInfo>> {
+        match self.execute(AutomationCommand::ListTabs)? {
+            AutomationReply::Tabs(tabs) => Ok(tabs),
+            other => Err(unexpected_reply("Tabs", &other)),
+        }
+    }
+
+    fn switch_tab(&mut self, id: usize) -> Result<()> {
+        self.execute(AutomationCommand::SwitchTab(id))?;
+        Ok(())
+    }
+
+    fn close_tab(&mut self, id: usize) -> Result<()> {
+        self.execute(AutomationCommand::CloseTab(id))?;
         Ok(())
     }
 

@@ -902,6 +902,47 @@ impl Lumen {
                     self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::ListTabs => {
+                    let _ = reply_tx.send(AutomationReply::Tabs(self.automation_tab_list()));
+                }
+                AutomationCommand::SwitchTab(id) => {
+                    // The chosen tab becomes the automation target: `Navigate`
+                    // and a background-aware `Eval` follow `automation_tab`,
+                    // which would otherwise pull the foreground back to the
+                    // tab the popup was opened from (BUG-1199).
+                    let reply = match self.tab_strip.tabs.iter().position(|t| t.id == id) {
+                        Some(idx) => {
+                            self.switch_tab(idx);
+                            self.devtools_console.clear();
+                            self.automation_tab = Some(id);
+                            AutomationReply::Ack
+                        }
+                        None => AutomationReply::Error(format!("switch_tab: нет вкладки с id {id}")),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
+                AutomationCommand::CloseTab(id) => {
+                    let reply = match self.tab_strip.tabs.iter().position(|t| t.id == id) {
+                        None => AutomationReply::Error(format!("close_tab: нет вкладки с id {id}")),
+                        Some(_) if self.tab_strip.len() == 1 => AutomationReply::Error(
+                            "close_tab: последняя вкладка не закрывается (это завершило бы браузер)".to_owned(),
+                        ),
+                        Some(idx) => {
+                            self.close_tab(idx, event_loop);
+                            let target_open = self
+                                .automation_tab
+                                .is_some_and(|t| self.tab_strip.tabs.iter().any(|e| e.id == t));
+                            if !target_open {
+                                // The closed tab was the target: follow the tab
+                                // that took the foreground.
+                                self.automation_tab = Some(self.tab_strip.tabs[self.tab_strip.active].id);
+                            }
+                            self.devtools_console.clear();
+                            AutomationReply::Ack
+                        }
+                    };
+                    let _ = reply_tx.send(reply);
+                }
                 AutomationCommand::Click(target) => {
                     match self.resolve_automation_target(&target) {
                         // BUG-934: a raw `Target::Point` may land on engine
@@ -1013,15 +1054,24 @@ impl Lumen {
                 }
                 // BUG-1194: hover without a click — the same handler a real
                 // `CursorMoved` runs (hit test, `:hover`, over/out/enter/leave).
+                //
+                // BUG-1458: `x`/`y` are content-viewport coordinates (the
+                // contract of `Target::Point` in `Click`), while
+                // `on_cursor_moved` wants OS-window ones — add the content
+                // origin (`page_offset`, toolbar/sidebar) exactly as
+                // `resolve_automation_target` does for a click. Without it the
+                // pointer landed `CHROME_H` above the target, on the toolbar,
+                // and the page never saw `mouseover`/`:hover`.
                 AutomationCommand::PointerMove { x, y } => {
                     let dpr = self
                         .renderer
                         .as_ref()
                         .map_or(1.0_f64, |r| r.scale_factor())
                         .max(1e-6);
+                    let (offset_x, offset_y) = self.page_offset();
                     self.on_cursor_moved(winit::dpi::PhysicalPosition::new(
-                        f64::from(x) * dpr,
-                        f64::from(y) * dpr,
+                        (f64::from(x) + f64::from(offset_x)) * dpr,
+                        (f64::from(y) + f64::from(offset_y)) * dpr,
                     ));
                     #[cfg(feature = "v8")]
                     self.flush_pointer_moves();
@@ -1277,7 +1327,7 @@ impl Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::ResolveIntercept { request_id, continue_request } => {
-                    // BUG-295 remainder (`network.continueRequest`/`network.failRequest`):
+                    // BUG-295 remainder (`network.continueRequest`/`continueResponse`/`failRequest`):
                     // unblocks the fetch worker thread (if any) paused on
                     // `request_id` in `lumen_network`'s registry.
                     let decision = if continue_request {
@@ -1291,9 +1341,31 @@ impl Lumen {
                 AutomationCommand::PollIntercepts => {
                     let requests = lumen_network::drain_new_intercept_announcements()
                         .into_iter()
-                        .map(|(request_id, url)| InterceptedRequest { request_id, url })
+                        .map(|a| InterceptedRequest {
+                            request_id: a.request_id,
+                            url: a.url,
+                            phase: a.phase,
+                            status: a.status,
+                        })
                         .collect();
                     let _ = reply_tx.send(AutomationReply::Intercepts(requests));
+                }
+                AutomationCommand::GetCookies => {
+                    let _ = reply_tx.send(AutomationReply::Cookies(self.automation_get_cookies()));
+                }
+                AutomationCommand::SetCookie(cookie) => {
+                    let reply = match self.automation_set_cookie(cookie) {
+                        Ok(()) => AutomationReply::Ack,
+                        Err(e) => AutomationReply::Error(format!("storage.setCookie: {e}")),
+                    };
+                    let _ = reply_tx.send(reply);
+                }
+                AutomationCommand::DeleteCookie { domain, path, name } => {
+                    let reply = match self.automation_delete_cookie(&domain, &path, &name) {
+                        Ok(()) => AutomationReply::Ack,
+                        Err(e) => AutomationReply::Error(format!("storage.deleteCookies: {e}")),
+                    };
+                    let _ = reply_tx.send(reply);
                 }
             }
         }
@@ -1908,9 +1980,12 @@ impl Lumen {
                 match event {
                     ViewTransitionEvent::Begin => {
                         // Capture current display list as the "before" snapshot.
+                        // The update callback may be asynchronous, so `End` can come
+                        // frames later: until it does the snapshot is held at full
+                        // opacity (`-inf` elapsed), not aged out from epoch 0.
                         self.view_transition = Some(ViewTransitionState {
                             old_dl: self.display_list.clone(),
-                            start_ms: 0.0,
+                            start_ms: f64::INFINITY,
                             duration_ms: crate::view_transition::DEFAULT_DURATION_MS,
                             easing: lumen_layout::TimingFunction::Linear,
                         });

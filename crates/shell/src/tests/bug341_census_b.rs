@@ -817,6 +817,7 @@ fn bug341_s4_incremental_box_build_share() {
     // (never consulted while the flag is off).
     set_incremental_box_build(false);
     let mut unused_placeholder = lumen_layout::LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node: doc.root(),
         rect: Rect::ZERO,
         used_padding: None, used_line_height: root_style.font_size * root_style.line_height,

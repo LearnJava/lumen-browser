@@ -239,6 +239,7 @@ pub(in crate::style) fn apply_forced_colors_mode(
     // §3.2 `preserve-parent-color`: only the `color` property escapes forcing.
     if style.forced_color_adjust != ForcedColorAdjust::PreserveParentColor {
         style.color = fg;
+        style.color_css = None;
     }
 
     // background-color: forced to the backdrop system color, but the author's
@@ -304,6 +305,7 @@ pub(in crate::style) fn apply_forced_colors_mode(
     for layer in &mut style.background_layers {
         if !matches!(layer.image, BackgroundImage::None | BackgroundImage::Url(_)) {
             layer.image = BackgroundImage::None;
+            layer.image_css = None;
         }
     }
 }

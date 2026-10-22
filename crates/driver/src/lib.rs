@@ -39,8 +39,8 @@ pub mod gpu_session;
 
 pub use types::{
     A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
-    ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
-    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    AutomationCookie, ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
+    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, TabInfo, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -209,6 +209,33 @@ pub trait BrowserSession {
         self.navigate(url)
     }
 
+    /// Открытые вкладки в порядке таб-стрипа (COMPAT-CORPUS-3-TABS).
+    ///
+    /// Сессии без таб-стрипа вкладок не различают — по умолчанию `Err`.
+    fn list_tabs(&self) -> Result<Vec<TabInfo>> {
+        Err(lumen_core::error::Error::Other("list_tabs: сессия без вкладок".into()))
+    }
+
+    /// Сделать активной вкладку со стабильным id `id` (из [`BrowserSession::list_tabs`]):
+    /// все следующие команды действуют на неё (COMPAT-CORPUS-3-TABS).
+    ///
+    /// # Errors
+    /// `Err`, если вкладки с таким id нет или сессия без вкладок.
+    fn switch_tab(&mut self, id: usize) -> Result<()> {
+        let _ = id;
+        Err(lumen_core::error::Error::Other("switch_tab: сессия без вкладок".into()))
+    }
+
+    /// Закрыть вкладку `id` (COMPAT-CORPUS-3-TABS). Последняя вкладка не
+    /// закрывается — это завершило бы браузер.
+    ///
+    /// # Errors
+    /// `Err`, если вкладки нет, она последняя или сессия без вкладок.
+    fn close_tab(&mut self, id: usize) -> Result<()> {
+        let _ = id;
+        Err(lumen_core::error::Error::Other("close_tab: сессия без вкладок".into()))
+    }
+
     /// Кликнуть по цели. Для `Target::Selector` берётся центр первого
     /// совпадающего элемента. Для headless — обновляет layout без GPU.
     fn click(&mut self, target: &Target) -> Result<()>;
@@ -371,9 +398,9 @@ pub trait BrowserSession {
     /// `url_patterns` (exact-string match, per BiDi urlPattern `type: "string"`;
     /// empty = match-all) for one of `phases` pauses at that phase until
     /// [`resolve_intercepted_request`](BrowserSession::resolve_intercepted_request)
-    /// decides it or a bounded timeout elapses. Only the `"beforeRequestSent"`
-    /// phase is actually paused on by [`LiveWindowSession`] — `"responseStarted"`/
-    /// `"authRequired"` are accepted but not yet acted on.
+    /// decides it or a bounded timeout elapses. [`LiveWindowSession`] pauses on
+    /// `"beforeRequestSent"` and `"responseStarted"` (DEVX-20); `"authRequired"`
+    /// is not paused on — the BiDi layer rejects it before it gets here.
     ///
     /// Default impl is a no-op (`Ok(())`), same rationale as [`set_offline`](
     /// BrowserSession::set_offline); [`LiveWindowSession`] overrides it for
@@ -390,7 +417,7 @@ pub trait BrowserSession {
     }
 
     /// Deliver a decision for a paused request (`network.continueRequest`/
-    /// `network.failRequest`, BUG-295 remainder). `continue_request = true` lets
+    /// `network.continueResponse`/`network.failRequest`, BUG-295 remainder). `continue_request = true` lets
     /// the request proceed unmodified; `false` fails it.
     ///
     /// Returns `true` if `request_id` matched an outstanding pause — an
@@ -404,8 +431,8 @@ pub trait BrowserSession {
     }
 
     /// Requests newly paused by an active intercept since the last call —
-    /// data for the `network.beforeRequestSent` event a BiDi connection
-    /// should deliver to its client.
+    /// data for the `network.beforeRequestSent` / `network.responseStarted`
+    /// events a BiDi connection should deliver to its client.
     ///
     /// Default impl always returns an empty vector, same rationale as
     /// [`add_intercept`](BrowserSession::add_intercept).

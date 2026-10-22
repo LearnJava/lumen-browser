@@ -44,6 +44,7 @@ fn block(node_index: usize, children: Vec<LayoutBox>) -> LayoutBox {
 fn block_with_id(node: lumen_dom::NodeId, children: Vec<LayoutBox>) -> LayoutBox {
     let style = ComputedStyle::root();
     LayoutBox {
+        anchor_scroll: None, cv_hidden: Vec::new(),
         node,
         rect: Rect::new(0.0, 0.0, 10.0, 10.0),
         used_padding: None, used_line_height: style.font_size * style.line_height,

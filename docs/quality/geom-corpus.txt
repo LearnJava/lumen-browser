@@ -1,0 +1,24 @@
+# Корпус differential-среза geometry/computed styles против Chrome (scripts/geom_diff.py, TEST-11).
+# Формат: <slug> <url>. Строки с # — комментарии.
+# Первые 14 — перф-корпус docs/perf/corpus.txt целиком, остальные 6 — сайты без логина из
+# docs/perf/corpus-top100-foreign.txt. Антибот-сайты не выкинуты: «не снято» — тоже результат.
+example        https://example.com/
+ya             https://ya.ru/
+hn             https://news.ycombinator.com/
+w3             https://www.w3.org/
+rust-lang      https://www.rust-lang.org/
+lenta          https://lenta.ru/
+github         https://github.com/
+stackoverflow  https://stackoverflow.com/
+crates         https://crates.io/
+docs-rs        https://docs.rs/
+ria            https://ria.ru/
+habr           https://habr.com/ru/
+mdn            https://developer.mozilla.org/en-US/
+rbc            https://www.rbc.ru/
+duckduckgo     https://duckduckgo.com/
+bing           https://www.bing.com/
+apple          https://www.apple.com/
+microsoft      https://www.microsoft.com/
+bbc            https://www.bbc.com/
+cnn            https://edition.cnn.com/

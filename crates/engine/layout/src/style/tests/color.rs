@@ -82,6 +82,30 @@ use crate::style::values::named_colors::NAMED_COLORS;
         assert_eq!(parse_color("oklch(abc def ghi)"), None);
     }
 
+    // ── BUG-1434: сопоставление гамм (CSS Color 4 §13) ──
+
+    #[test]
+    fn lab_family_full_and_zero_lightness_are_white_and_black() {
+        for v in ["lch(100% 110 60)", "oklch(100% 1.1 60)", "lab(100% 50 50)", "oklab(100% 0.3 0.3)"] {
+            let c = parse_color(v).unwrap();
+            assert_eq!((c.r, c.g, c.b), (255, 255, 255), "{v}");
+        }
+        for v in ["lch(0% 110 60)", "oklch(0% 1.1 60)", "lab(0% 50 50)", "oklab(0% 0.3 0.3)"] {
+            let c = parse_color(v).unwrap();
+            assert_eq!((c.r, c.g, c.b), (0, 0, 0), "{v}");
+        }
+    }
+
+    #[test]
+    fn out_of_gamut_chroma_is_reduced_not_clipped_per_channel() {
+        // Покомпонентный clamp давал чистый (255,0,0); gamut mapping сохраняет светлоту и тон.
+        let c = parse_color("lch(50% 200 60)").unwrap();
+        assert!(c.r > 150 && c.g > 20 && c.g < 120 && c.b < 60, "{c:?}");
+        // Внутри гаммы — без изменений.
+        let c = parse_color("lch(50% 50 90)").unwrap();
+        assert_eq!((c.r, c.g, c.b), (136, 118, 22));
+    }
+
     // ── CSS Color L5 §4 — relative color syntax ──
 
     #[test]
@@ -1243,6 +1267,27 @@ use crate::style::values::named_colors::NAMED_COLORS;
         assert!(mid.r >= 186 && mid.r <= 190, "mid grey r={}", mid.r);
     }
 
+    /// BUG-1432: `display-p3-linear` is a valid `color()` space (linear light).
+    #[test]
+    fn color_fn_display_p3_linear() {
+        let white = color_fn_srgb("color(display-p3-linear 1 1 1)");
+        assert_eq!((white.r, white.g, white.b), (255, 255, 255));
+        let mid = color_fn_srgb("color(display-p3-linear 0.5 0.5 0.5)");
+        assert!(mid.r >= 186 && mid.r <= 190, "mid grey r={}", mid.r);
+        // Wide-gamut P3 green clips to sRGB green.
+        let g = color_fn_srgb("color(display-p3-linear 0 1 0)");
+        assert_eq!((g.r, g.g, g.b), (0, 255, 0));
+    }
+
+    /// BUG-1432: `color-mix()` accepts predefined RGB interpolation spaces.
+    #[test]
+    fn color_mix_predefined_rgb_spaces_are_accepted() {
+        for sp in ["display-p3", "display-p3-linear", "a98-rgb", "prophoto-rgb", "rec2020"] {
+            let c = parse_color(&format!("color-mix(in {sp}, red, blue)"));
+            assert!(c.is_some(), "color-mix(in {sp}, …) must parse");
+        }
+    }
+
     #[test]
     fn color_fn_xyz_d65_white_and_black() {
         // D65 reference white in XYZ → sRGB white.
@@ -1542,8 +1587,8 @@ fn hwb_pure_hue_and_gray() {
     // Относительная форма пока не поддержана — и отвергается явно, а не
     // считается неверно.
     assert_eq!(parse_color("hwb(from red h w b)"), None);
-    // Компоненты w/b — только проценты.
-    assert_eq!(parse_color("hwb(120 0 0)"), None);
+    // Компоненты w/b — проценты или числа (CSS Color 4 §7; WPT color-valid-hwb: `hwb(120 30 50)`).
+    assert_eq!(parse_color("hwb(120 0 0)"), parse_color("hwb(120 0% 0%)"));
 }
 
 /// `color(<space> …)` раньше разбирался только через `CssColor::Wide`, то есть
@@ -1589,6 +1634,23 @@ fn canonical_specified_color_hex_and_functional_forms_become_rgb() {
 }
 
 #[test]
+fn canonical_specified_color_keeps_color_space_forms() {
+    // BUG-1425: lab()/oklch()/color() не схлопываются в rgb(), color-mix()/относительные — как записаны.
+    assert_eq!(canonical_specified_color("lab(46 -50 50)"), Some("lab(46 -50 50)".to_string()));
+    assert_eq!(canonical_specified_color("OKLCH(0.5 0.1 90)"), Some("oklch(0.5 0.1 90)".to_string()));
+    assert_eq!(canonical_specified_color("color(srgb 0 0.5 0)"), Some("color(srgb 0 0.5 0)".to_string()));
+    assert_eq!(
+        canonical_specified_color("color-mix(in srgb, red, blue)"),
+        Some("color-mix(in srgb, red, blue)".to_string())
+    );
+    assert_eq!(
+        canonical_specified_color("rgb(from rebeccapurple r g b)"),
+        Some("rgb(from rebeccapurple r g b)".to_string())
+    );
+    assert_eq!(canonical_specified_color("lab(1 2)"), None);
+}
+
+#[test]
 fn canonical_specified_color_keeps_keyword_syntax_as_keyword() {
     assert_eq!(canonical_specified_color("red"), Some("red".to_string()));
     assert_eq!(canonical_specified_color("AQUA"), Some("aqua".to_string()));
@@ -1617,4 +1679,100 @@ fn legacy_rgb_rejects_mixed_percent_and_number() {
     assert_eq!(parse_color("rgb(100%, 0, 0)"), None);
     assert_eq!(parse_color("rgb(255, 0%, 0)"), None);
     assert_eq!(parse_color("rgb(100%, 0%, 0%)"), Some(rgba(255, 0, 0, 255)));
+}
+
+#[test]
+fn color_function_comments_are_token_separators() {
+    // BUG-1426: комментарий между токенами не должен отбрасывать всю функцию.
+    let green = Some(rgba(0, 128, 0, 255));
+    assert_eq!(parse_color("hsl(120/* c */100%/* c */25.1%)"), parse_color("hsl(120 100% 25.1%)"));
+    assert!(parse_color("hsl(120/* c */75%/* c */50%)").is_some());
+    assert!(parse_color("hsl(120/* c */75%/* c */50%/1.0)").is_some());
+    assert!(parse_color("hsl(120,/* c */75%,/* c */50%,1.0)").is_some());
+    assert_eq!(parse_color("rgb(0 /*c*/ 128 0)"), green);
+    assert_eq!(parse_color("rgb(0/*c*/,/*c*/128,/*c*/0)"), green);
+    assert!(canonical_specified_color("rgb(0 /*c*/ 128 0)").is_some());
+    assert_eq!(parse_color("rgb(0 /* не закрыт 128 0)"), None);
+}
+
+#[test]
+fn color_none_keyword_is_modern_syntax_only() {
+    // BUG-1426: `none` = отсутствующий канал (в отрисовке 0), но только без запятых.
+    assert_eq!(parse_color("rgb(none 128 0)"), Some(rgba(0, 128, 0, 255)));
+    assert_eq!(parse_color("rgb(0 128 0 / none)"), Some(rgba(0, 128, 0, 0)));
+    assert_eq!(parse_color("rgb(none none none / none)"), Some(rgba(0, 0, 0, 0)));
+    assert!(parse_color("hsl(none 100% 25%)").is_some());
+    assert!(parse_color("hsl(120 none none)").is_some());
+    assert!(parse_color("hwb(none 0% 50%)").is_some());
+    assert!(parse_color("hwb(120 none none / none)").is_some());
+    assert!(parse_color("oklch(none none none)").is_some());
+    assert!(parse_color("lab(none none none)").is_some());
+    assert!(parse_color("color-mix(in hsl, hsl(none 50% 50%), blue)").is_some());
+    // Legacy-синтаксис `none` не знает.
+    assert_eq!(parse_color("rgb(none, none, none)"), None);
+    assert_eq!(parse_color("rgba(none, none, none, none)"), None);
+    assert_eq!(parse_color("rgb(128, 0, none)"), None);
+    assert_eq!(parse_color("rgb(255, 255, 255, none)"), None);
+    assert_eq!(parse_color("hsl(120, 75%, none)"), None);
+}
+
+#[test]
+fn color_function_alpha_needs_slash_in_modern_syntax() {
+    // BUG-1426: `hsl(120 75% 50% 0.5)` и `rgb(0 0 0 0.5)` невалидны; alpha — через `/` или запятую.
+    assert_eq!(parse_color("hsl(120 75% 50% 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 128 0 0.5)"), None);
+    assert_eq!(parse_color("hwb(120 0% 50% 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 0 / 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 0 0 / 0.5 0.5)"), None);
+    assert_eq!(parse_color("rgb(0 0 0 0 / 0.5)"), None);
+    assert!(parse_color("hsl(120 75% 50% / 0.5)").is_some());
+    assert!(parse_color("hsl(120, 75%, 50%, 0.5)").is_some());
+    assert_eq!(parse_color("rgb(0, 128, 0, 0.5)"), Some(rgba(0, 128, 0, 128)));
+    // Контроль смеси чисел и процентов.
+    assert_eq!(parse_color("rgb(255, 0, 0%)"), None);
+    assert_eq!(parse_color("rgb(100%, 1, 0)"), None);
+    assert_eq!(parse_color("rgb(0, 0%, 0%)"), None);
+    assert_eq!(parse_color("rgb(254, 255%, 0)"), None);
+    assert!(parse_color("rgb(100% 1 0)").is_some());
+    // hwb не имеет legacy-синтаксиса.
+    assert_eq!(parse_color("hwb(120, 0%, 0%)"), None);
+}
+
+#[test]
+fn hsl_hwb_modern_syntax_accepts_bare_numbers() {
+    // BUG-1426: CSS Color 4 §8 — s/l/w/b в современном синтаксисе бывают и `<number>`.
+    assert_eq!(parse_color("hsl(120 30 50)"), parse_color("hsl(120 30% 50%)"));
+    assert_eq!(parse_color("hsl(120 30% 50)"), parse_color("hsl(120 30% 50%)"));
+    assert_eq!(parse_color("hwb(120 30 50)"), parse_color("hwb(120 30% 50%)"));
+    // В запятой-синтаксисе — только проценты.
+    assert_eq!(parse_color("hsl(120, 30, 50)"), None);
+}
+
+#[test]
+fn cascade_accepts_color_functions_with_comments_and_none() {
+    // BUG-1426: те же формы доходят до computed style через настоящий каскад.
+    for (value, want) in [
+        ("hsl(120/* c */100%/* c */25.1%)", rgba(0, 128, 0, 255)),
+        ("rgb(0 /*c*/ 128 0)", rgba(0, 128, 0, 255)),
+        ("rgb(none 128 0)", rgba(0, 128, 0, 255)),
+    ] {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(&format!("div {{ background-color: red; background-color: {value}; }}"));
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let Some(CssColor::Rgba(got)) = style.background_color else { panic!("{value}: {:?}", style.background_color) };
+        assert!(
+            (i32::from(got.r) - i32::from(want.r)).abs() <= 1
+                && (i32::from(got.g) - i32::from(want.g)).abs() <= 1
+                && (i32::from(got.b) - i32::from(want.b)).abs() <= 1,
+            "{value}: {got:?}"
+        );
+    }
+    // Невалидная декларация отбрасывается, прежняя остаётся.
+    let doc = lumen_html_parser::parse("<div></div>");
+    let sheet = lumen_css_parser::parse("div { background-color: red; background-color: rgb(none, 128, 0); }");
+    let div = doc.get(doc.body().unwrap()).children[0];
+    let style = compute_style(&doc, div, &sheet, &ComputedStyle::root(), Size::new(800.0, 600.0), false);
+    assert_eq!(style.background_color, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
 }

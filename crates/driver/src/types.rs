@@ -150,15 +150,20 @@ pub struct NetworkEntry {
 }
 
 /// A network request paused by an active intercept, not yet reported to the
-/// BiDi connection that registered it (WebDriver BiDi `network.beforeRequestSent`,
-/// BUG-295 remainder). See [`BrowserSession::poll_intercepted_requests`].
+/// BiDi connection that registered it (WebDriver BiDi `network.beforeRequestSent`
+/// / `network.responseStarted`, BUG-295 remainder, DEVX-20). See [`BrowserSession::poll_intercepted_requests`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptedRequest {
     /// Opaque request identifier — the same id `network.continueRequest`/
-    /// `network.failRequest` must reference to resolve this pause.
+    /// `network.continueResponse`/`network.failRequest` must reference to
+    /// resolve this pause.
     pub request_id: String,
     /// URL of the paused request.
     pub url: String,
+    /// Phase the request is paused at: `"beforeRequestSent"` or `"responseStarted"`.
+    pub phase: String,
+    /// HTTP status of the response (`"responseStarted"` only).
+    pub status: Option<u16>,
 }
 
 /// Запись из консоли [`BrowserSession::console_log`].
@@ -481,6 +486,21 @@ pub(crate) fn with_shared_hsts(
     }
 }
 
+/// One open tab of the live window, as `list_tabs` reports it
+/// (COMPAT-CORPUS-3-TABS).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabInfo {
+    /// Stable tab id, never reused within a session — the argument of
+    /// `switch_tab` / `close_tab` (not the strip position, which shifts).
+    pub id: usize,
+    /// Address of the tab's document (`about:blank` while nothing is loaded).
+    pub url: String,
+    /// Tab title as shown in the strip.
+    pub title: String,
+    /// Whether this tab is the one the next command acts on.
+    pub active: bool,
+}
+
 /// Command for automation API — sent to shell via IPC channel (SDC-1a).
 ///
 /// This enum defines the contract between `lumen-driver` and `lumen-shell`.
@@ -492,6 +512,15 @@ pub enum AutomationCommand {
     Navigate(String),
     /// Open a new tab (it becomes active) and navigate it to a URL.
     NewTab(String),
+    /// List the tabs of the live window (COMPAT-CORPUS-3-TABS). Reply:
+    /// [`AutomationReply::Tabs`].
+    ListTabs,
+    /// Make the tab with this stable id the active one and the target of
+    /// every following command (COMPAT-CORPUS-3-TABS). Reply: `Ack`.
+    SwitchTab(usize),
+    /// Close the tab with this stable id (COMPAT-CORPUS-3-TABS). The last
+    /// tab is never closed: it would exit the browser. Reply: `Ack`.
+    CloseTab(usize),
     /// Click at element center (resolved from Target).
     Click(Target),
     /// Type text into an input element.
@@ -577,8 +606,8 @@ pub enum AutomationCommand {
     AddIntercept {
         /// Opaque intercept identifier (BiDi `intercept`).
         id: String,
-        /// Phases at which to intercept (only `"beforeRequestSent"` is
-        /// actually paused on — see `lumen_network::intercept`).
+        /// Phases at which to intercept (`"beforeRequestSent"` and
+        /// `"responseStarted"` — see `lumen_network::intercept`).
         phases: Vec<String>,
         /// URL patterns to match (BiDi urlPattern `type: "string"`; empty = match-all).
         url_patterns: Vec<String>,
@@ -597,6 +626,46 @@ pub enum AutomationCommand {
     /// Poll requests newly paused by an active intercept since the last call
     /// (BUG-295 remainder, `network.beforeRequestSent` event data).
     PollIntercepts,
+    /// Every non-expired cookie of the live window's active cookie jar,
+    /// `HttpOnly` ones included (WebDriver BiDi `storage.getCookies`,
+    /// DEVX-20). Reply: [`AutomationReply::Cookies`].
+    GetCookies,
+    /// Store (or replace) a cookie in the live window's active cookie jar —
+    /// the one pages read through `document.cookie` and requests send
+    /// (`storage.setCookie`, DEVX-20). Reply: `Ack`.
+    SetCookie(AutomationCookie),
+    /// Remove the cookie `(domain, path, name)` from the live window's active
+    /// cookie jar (`storage.deleteCookies`, DEVX-20). Reply: `Ack`.
+    DeleteCookie {
+        /// Cookie domain as stored in the jar.
+        domain: String,
+        /// Cookie path.
+        path: String,
+        /// Cookie name.
+        name: String,
+    },
+}
+
+/// A cookie as exchanged with the live window (WebDriver BiDi `storage.Cookie`,
+/// DEVX-20).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationCookie {
+    /// Cookie name.
+    pub name: String,
+    /// Cookie value (string form).
+    pub value: String,
+    /// Domain (lowercase host, no leading dot).
+    pub domain: String,
+    /// Path (`/` by default).
+    pub path: String,
+    /// `Secure` flag.
+    pub secure: bool,
+    /// `HttpOnly` flag.
+    pub http_only: bool,
+    /// `strict`, `lax`, `none` or `default` (attribute absent).
+    pub same_site: String,
+    /// Expiry as a Unix timestamp in seconds; `0` = session cookie.
+    pub expiry: u64,
 }
 
 /// Reply from automation API — returned from shell after command execution.
@@ -624,4 +693,8 @@ pub enum AutomationReply {
     InterceptResolved(bool),
     /// `PollIntercepts` result: requests newly paused since the last poll.
     Intercepts(Vec<InterceptedRequest>),
+    /// `ListTabs` result: every open tab, in strip order (COMPAT-CORPUS-3-TABS).
+    Tabs(Vec<TabInfo>),
+    /// `GetCookies` result: the live jar's non-expired cookies (DEVX-20).
+    Cookies(Vec<AutomationCookie>),
 }

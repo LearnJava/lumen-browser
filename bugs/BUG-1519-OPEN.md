@@ -1,6 +1,6 @@
 # BUG-1519 — `shape-outside: <image>` (`url()`, `linear-gradient()`, `radial-gradient()`) и `shape-image-threshold` не влияют на обтекание
 
-**Статус:** OPEN (ДОРАБОТКА → SHAPE-OUTSIDE-2)
+**Статус:** OPEN (срез 1 влит; ДОРАБОТКА → SHAPE-OUTSIDE-3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 23, `css/css-text-decor` + `css-gaps` + `css-shapes`)
 **Область:** layout (`crates/engine/layout/src/box_tree/shapes_floats.rs`, `block_flow_trampoline.rs::wire_shape_outside`)
 
@@ -23,3 +23,7 @@ WPT-RUN-14 срез 23: `shape-outside/shape-image/*` (28 id), `shape-image/grad
 ## Как проверить
 
 `css/css-shapes/shape-outside/shape-image/shape-image-001.html`, `gradients/shape-outside-linear-gradient-001.html`.
+
+## Срез SHAPE-OUTSIDE-2 (2026-10-21, ветка `p1-shape-outside-2`)
+
+Образы работают: `linear-gradient` (точные полигоны), `radial-`/`conic-`/`repeating-*` и `url()` — растровая маска `Prim::Mask` по альфа-каналу с `shape-image-threshold`, `shape-margin` растит маску; `url()` доходит до layout через `Document::set_shape_image` (shell: `report_shape_images`, драйвер: `report_shape_images` в `session.rs`). WPT `shape-image/*` identical 7 → 23 из 29, `gradients/*` 14 → 15 из 17. Остаток (SHAPE-OUTSIDE-3): ряды `inline-block` (`gradients/…-004`), `url()` из скрипта и `image-set()`, корневые `/images/…` под `file://`.

@@ -114,6 +114,10 @@ pub struct ComputedStyle {
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
     pub color_space: ColorSpace,
+    /// CSSOM-запись computed `color`, когда её нельзя восстановить из `color: Color`
+    /// (`lab()`/`oklch()`/`color(display-p3 …)`/`color-mix()`/относительные цвета, BUG-1425).
+    /// `None` — `getComputedStyle` печатает `rgb()` из `color`. Наследуется вместе с `color`.
+    pub color_css: Option<std::sync::Arc<str>>,
     pub background_color: Option<CssColor>,
     pub font_size: f32,
     /// CSS Viewport L1 §5 — the element's *effective* `zoom`: its own declared
@@ -228,6 +232,10 @@ pub struct ComputedStyle {
     /// отрицательным (сжимает текст). Применяется в wrap_inline_run при
     /// расчёте ширин.
     pub letter_spacing: f32,
+    /// Процентная часть `letter-spacing` (доля `font-size` элемента; 0.1 = 10%, BUG-1438).
+    /// `letter_spacing` уже включает её (`abs + pct * font_size`, дописывается в конце каскада);
+    /// потомок пересчитывает долю от своего `font-size`.
+    pub letter_spacing_pct: f32,
     /// CSS Text L3 §11.3: дополнительное расстояние **между словами**
     /// (resolved px). Inherited. В отличие от `letter-spacing`, добавляется
     /// только на word-boundary, не между всеми символами. Может быть
@@ -615,6 +623,9 @@ pub struct ComputedStyle {
     /// колонками), `false` = auto (заполняет колонки последовательно до
     /// высоты контейнера). Не наследуется.
     pub column_fill_balance: bool,
+    /// `column-fill: balance-all` (Multicol L2 §6.2) — раскладывается как `balance`, но
+    /// `getComputedStyle` отдаёт исходное ключевое слово.
+    pub column_fill_balance_all: bool,
     /// CSS Fragmentation L3 §5.1 — `box-decoration-break: slice | clone`. `true` = `clone` (every
     /// fragment of the box keeps its own full border, padding and margin), `false` = `slice` (the
     /// default: the edges a break cuts lose them). Read by the nested-multicol cut in
@@ -778,6 +789,10 @@ pub struct ComputedStyle {
     pub list_style_image: Option<String>,
     /// CSS Transitions L1 §3 — `transition-property: none | all | <ident>+`.
     pub transition_properties: Vec<String>,
+    /// `transition-property: none` was declared (the list is empty either way: the scheduler
+    /// treats both as «no transition»). Only the computed value differs — `none` against the
+    /// initial `all` (CSSANIM-MODEL).
+    pub transition_property_none: bool,
     /// CSS Transitions L1 §3 — `transition-duration: <time>+` в секундах.
     pub transition_durations: Vec<f32>,
     /// CSS Transitions L1 §3 — `transition-delay: <time>+` в секундах.
@@ -1046,6 +1061,10 @@ pub struct ComputedStyle {
     /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
     /// Phase 0: parse + store; @container query matching — deferred.
     pub container_type: ContainerType,
+    /// CSS Conditional 5 §3 — `container-type: … scroll-state`: the box is a scroll-state
+    /// query container (`@container scroll-state(…)`). Independent of the size axis in
+    /// [`Self::container_type`]; NOT inherited. Initial: `false`.
+    pub container_scroll_state: bool,
     /// CSS Container Queries L1 §3.2 — `container-name`. NOT inherited. Initial: empty.
     /// `none` = empty vec. Each name is a `<custom-ident>`.
     pub container_name: Vec<String>,
@@ -1308,6 +1327,7 @@ impl ComputedStyle {
             && self.font_stretch == other.font_stretch
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
+            && (self.letter_spacing_pct - other.letter_spacing_pct).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && (self.word_spacing_pct - other.word_spacing_pct).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
@@ -1335,6 +1355,7 @@ impl ComputedStyle {
             bidi_override: None,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
+            color_css: None,
             background_color: None,
             font_size: 16.0,
             // No ancestor and no declaration yet — `zoom` starts neutral.
@@ -1366,6 +1387,7 @@ impl ComputedStyle {
             white_space_collapse: WhiteSpaceCollapse::Collapse,
             text_indent: Length::Px(0.0),
             letter_spacing: 0.0,
+            letter_spacing_pct: 0.0,
             word_spacing: 0.0,
             word_spacing_pct: 0.0,
             text_decoration_line: TextDecorationLine::default(),
@@ -1499,6 +1521,7 @@ impl ComputedStyle {
             border_spacing_v: 0.0,
             column_span_all: false,
             column_fill_balance: true,
+            column_fill_balance_all: false,
             box_decoration_clone: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
@@ -1559,6 +1582,7 @@ impl ComputedStyle {
             list_style_position: ListStylePosition::Outside,
             list_style_image: None,
             transition_properties: Vec::new(),
+            transition_property_none: false,
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
@@ -1638,6 +1662,7 @@ impl ComputedStyle {
             interest_delay_start: None,
             interest_delay_end: None,
             container_type: ContainerType::Normal,
+            container_scroll_state: false,
             container_name: Vec::new(),
             backdrop_filter: Vec::new(),
             print_color_adjust: PrintColorAdjust::Economy,
@@ -1728,6 +1753,7 @@ impl ComputedStyle {
             // Наследуемые свойства (CSS inherited properties).
             color: inherited.color,
             color_space: inherited.color_space,
+            color_css: inherited.color_css.clone(),
             text_align: inherited.text_align,
             direction: inherited.direction,
             block_container_direction: inherited.block_container_direction,
@@ -1765,6 +1791,7 @@ impl ComputedStyle {
             white_space_collapse: inherited.white_space_collapse,
             text_indent: inherited.text_indent.clone(),
             letter_spacing: inherited.letter_spacing,
+            letter_spacing_pct: inherited.letter_spacing_pct,
             word_spacing: inherited.word_spacing,
             word_spacing_pct: inherited.word_spacing_pct,
             text_decoration_line: inherited.text_decoration_line,
@@ -1909,6 +1936,7 @@ impl ComputedStyle {
             row_rule_inset: RuleInsets::default(),
             column_span_all: false,
             column_fill_balance: true,
+            column_fill_balance_all: false,
             box_decoration_clone: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
@@ -1984,6 +2012,7 @@ impl ComputedStyle {
             list_style_image: inherited.list_style_image.clone(),
             // CSS Transitions / Animations — не наследуются. Initial = empty list.
             transition_properties: Vec::new(),
+            transition_property_none: false,
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
@@ -2081,6 +2110,7 @@ impl ComputedStyle {
             interest_delay_start: None,
             interest_delay_end: None,
             container_type: ContainerType::Normal,
+            container_scroll_state: false,
             container_name: Vec::new(),
             // CSS Filter Effects L2 — backdrop-filter не наследуется.
             backdrop_filter: Vec::new(),

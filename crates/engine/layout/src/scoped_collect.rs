@@ -124,6 +124,7 @@ fn context_style_eq(a: &crate::style::ComputedStyle, b: &crate::style::ComputedS
         && a.display == b.display
         && a.position == b.position
         && a.container_type == b.container_type
+        && a.container_scroll_state == b.container_scroll_state
         && a.container_name == b.container_name
 }
 

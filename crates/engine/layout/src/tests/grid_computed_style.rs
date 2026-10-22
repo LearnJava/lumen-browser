@@ -156,3 +156,70 @@ fn span_of_one_name_drops_the_count() {
     assert_eq!(val(&s, "grid-row-end"), "span 1");
     assert_eq!(val(&s, "grid-column-start"), "-3 n");
 }
+
+// BUG-1402: multicol longhands and the `columns` shorthand in `getComputedStyle()`.
+
+#[test]
+fn multicol_longhands_and_shorthand() {
+    let css = "#a { font-size: 40px; columns: 2 0.25em / 2.5em; column-fill: balance-all; column-span: all; column-wrap: nowrap }";
+    let s = grid_style_of("<html><body><div id=a></div></body></html>", css, "#a");
+    for (name, want) in [
+        ("column-count", "2"),
+        ("column-width", "10px"),
+        ("column-height", "100px"),
+        ("column-fill", "balance-all"),
+        ("column-span", "all"),
+        ("column-wrap", "nowrap"),
+        ("columns", "10px 2 / 100px"),
+    ] {
+        assert_eq!(val(&s, name), want, "{name}");
+    }
+}
+
+#[test]
+fn multicol_initial_values_and_calc_width() {
+    let plain = grid_style_of("<html><body><div id=a></div></body></html>", "", "#a");
+    for (name, want) in [
+        ("column-count", "auto"),
+        ("column-width", "auto"),
+        ("column-height", "auto"),
+        ("column-fill", "balance"),
+        ("column-span", "none"),
+        ("column-wrap", "auto"),
+        ("columns", "auto"),
+    ] {
+        assert_eq!(val(&plain, name), want, "{name}");
+    }
+    let calc = grid_style_of(
+        "<html><body><div id=a></div></body></html>",
+        "#a { font-size: 40px; column-width: calc(10px + 0.5em) }",
+        "#a",
+    );
+    assert_eq!(val(&calc, "column-width"), "30px");
+    let count = grid_style_of(
+        "<html><body><div id=a></div></body></html>",
+        "#a { column-count: calc(1 + 234) }",
+        "#a",
+    );
+    assert_eq!(val(&count, "column-count"), "235");
+}
+
+#[test]
+fn multicol_css_wide_keywords_and_height_only_shorthand() {
+    let html = "<html><body><div id=p><div id=c></div></div></body></html>";
+    let inherit = grid_style_of(
+        html,
+        "#p { columns: 3 80px; column-span: all; column-fill: auto } #c { columns: inherit; column-span: inherit; column-fill: inherit }",
+        "#c",
+    );
+    for (name, want) in [("column-count", "3"), ("column-width", "80px"), ("column-span", "all"), ("column-fill", "auto")] {
+        assert_eq!(val(&inherit, name), want, "inherit {name}");
+    }
+    let plain = grid_style_of(html, "#p { columns: 3 80px; column-span: all }", "#c");
+    assert_eq!(val(&plain, "column-count"), "auto", "column-count не наследуется");
+    assert_eq!(val(&plain, "column-span"), "none", "column-span не наследуется");
+    let height_only = grid_style_of(html, "#c { font-size: 40px; columns: auto / 2.5em }", "#c");
+    assert_eq!(val(&height_only, "columns"), "auto / 100px");
+    let wrap_reset = grid_style_of(html, "#c { column-wrap: nowrap; columns: 100px / 100px }", "#c");
+    assert_eq!(val(&wrap_reset, "column-wrap"), "auto");
+}
