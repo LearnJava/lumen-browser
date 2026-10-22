@@ -1,6 +1,6 @@
 # BUG-1478 — `getComputedStyle()` не отдаёт свойства CSS Anchor Positioning: `anchor-name`, `position-anchor`, `position-area`, `anchor-scope` и значения `anchor()`/`anchor-size()`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `anchor-name`, `position-anchor`, `position-area`, `anchor-scope`; `getComputedStyle` anchor-свойств)
 
@@ -33,3 +33,9 @@ WPT-RUN-14 срез 21: `css-anchor-position/anchor-getComputedStyle-002.html`, 
 ## Как проверить
 
 Таблица выше; `css/css-anchor-position/anchor-getComputedStyle-002.html`, `position-area-computed.html`.
+
+## Исправление
+
+`computed_style_to_map` отдаёт `anchor-name`, `position-anchor`, `anchor-scope`, `position-area`, `position-visibility` (начальные значения `none`/`auto`/`none`/`none`/`anchors-visible`). `anchor-name`/`anchor-scope` принимают список `<dashed-ident>` через запятую (`parse_dashed_ident_list`), `collect_anchors` регистрирует блок под каждым именем. `position-area` сериализуется в каноничной форме (`position_area_computed`: `top left` → `left top`, `block-start inline-end` → `start end`, `left span-all` → `left`), `position-visibility` — флаги в порядке `anchors-valid anchors-visible no-overflow`. `position-visibility` добавлено в `SUPPORTED_PROPERTIES`. WPT `css-anchor-position`: `position-area-computed.html` 633/633, `anchor-scope-computed.html` 10/10, `position-visibility-computed.html` 19/19. Тесты: `anchor_positioning_tests` (`anchor_props_in_computed_map_with_initials` и др.).
+
+Остаток (используемое значение вставок, `ident()`, `anchor()` в `calc()`) — [BUG-1684](BUG-1684-OPEN.md).
