@@ -2056,18 +2056,63 @@ function _lumen_make_focus_group_list(nid) {
 // `return` — it never reaches `obj`. A property with no registered grammar
 // (most of them — this only covers the tables above) passes through
 // unchanged, same as before this slice.
+//
+// `!important` priority (BUG-1459): the parsed object is a plain `{longhand: value}` map; the set of
+// longhands declared `!important` rides on it as the non-enumerable `__imp__` map (invisible to
+// `Object.keys`/`item()`/`length`), written by `_lumen_style_mark_important`, carried through every
+// get/set round trip and re-emitted by `_lumen_serialize_style`.
+function _lumen_style_is_important(obj, key) {
+    var imp = obj.__imp__;
+    return !!imp && Object.prototype.hasOwnProperty.call(imp, key);
+}
+function _lumen_style_mark_important(obj, key, on) {
+    var imp = obj.__imp__;
+    if (!imp) {
+        if (!on) return;
+        imp = {};
+        Object.defineProperty(obj, '__imp__',
+            { value: imp, enumerable: false, writable: true, configurable: true });
+    }
+    if (on) imp[key] = true; else delete imp[key];
+}
+// CSSOM §6.6.1 "set a CSS declaration": merges the longhands one declaration expanded to (`decl`)
+// into `obj`. While parsing a declaration block (`force` false) a declaration without priority never
+// replaces an `!important` one already present; `setProperty` (`force`) replaces unconditionally.
+function _lumen_style_merge_decl(obj, decl, important, force) {
+    Object.keys(decl).forEach(function(k) {
+        if (k === '__imp__') return;
+        if (!important && !force && _lumen_style_is_important(obj, k)) return;
+        obj[k] = decl[k];
+        _lumen_style_mark_important(obj, k, important);
+    });
+}
+// `setProperty` write-back: merges the scratch declaration `decl` into the element's/rule's
+// current declarations `real` and stores the result.
+function _lumen_style_commit_decl(target, real, decl, important) {
+    _lumen_style_merge_decl(real, decl, important, true);
+    _lumen_style_set_parsed(target, real);
+}
 function _lumen_parse_style(s) {
     var obj = {};
     if (!s) return obj;
-    s.split(';').forEach(function(decl) {
-        var idx = decl.indexOf(':');
+    s.split(';').forEach(function(declText) {
+        var idx = declText.indexOf(':');
         if (idx < 0) return;
-        var prop = decl.slice(0, idx).trim();
-        var val  = decl.slice(idx + 1).trim();
+        var prop = declText.slice(0, idx).trim();
+        var val  = declText.slice(idx + 1).trim();
         if (!prop) return;
-        // `!important` is a priority, not part of the value (CSSOM §6.7.2; BUG-1401). Priority is
-        // not tracked here, but the suffix must not leak into `style.<prop>`.
+        // `!important` is a priority, not part of the value (CSSOM §6.7.2; BUG-1401).
+        var important = /\s*!\s*important\s*$/i.test(val);
         val = val.replace(/\s*!\s*important\s*$/i, '');
+        var decl = {};
+        _lumen_parse_decl_into(decl, prop, val);
+        _lumen_style_merge_decl(obj, decl, important);
+    });
+    return obj;
+}
+// One `prop: val` declaration (priority already stripped) expanded into its longhands in `obj`.
+function _lumen_parse_decl_into(obj, prop, val) {
+    (function() {
         if (prop === 'word-wrap') prop = 'overflow-wrap';
         prop = _lumen_compat_alias(prop);
         if (_lumen_gap_rule_key_re.test(prop)) {
@@ -2129,8 +2174,7 @@ function _lumen_parse_style(s) {
         var canon = _lumen_canonicalize_longhand(prop, val);
         if (canon === null || canon === undefined) return; // invalid declaration: dropped, not stored
         obj[prop] = canon;
-    });
-    return obj;
+    })();
 }
 // CSSOM §6.7.2 "serialize a CSS declaration block" collapses these four
 // TRBL longhand groups into their shorthand when all four are present with
@@ -2487,16 +2531,24 @@ function _lumen_serialize_style(obj) {
         shorthandOf[lh[0]] = sh;
         shorthandOf[lh[1]] = sh;
     });
+    // CSSOM §6.7.2: a shorthand is only emitted when all its longhands carry the same priority.
+    var shorthandPriority = {};  // shorthand name -> 'all' | 'none' | 'mixed'
+    keys.forEach(function(k) {
+        var sh = shorthandOf[k];
+        if (!sh) return;
+        var p = _lumen_style_is_important(obj, k) ? 'all' : 'none';
+        shorthandPriority[sh] = shorthandPriority[sh] === undefined || shorthandPriority[sh] === p ? p : 'mixed';
+    });
     var emittedShorthand = {};
     var parts = [];
     keys.forEach(function(k) {
         var sh = shorthandOf[k];
-        if (sh) {
+        if (sh && shorthandPriority[sh] !== 'mixed') {
             if (emittedShorthand[sh]) return;
             emittedShorthand[sh] = true;
-            parts.push(sh + ': ' + shorthandVal[sh]);
+            parts.push(sh + ': ' + shorthandVal[sh] + (shorthandPriority[sh] === 'all' ? ' !important' : ''));
         } else {
-            parts.push(k + ': ' + obj[k]);
+            parts.push(k + ': ' + obj[k] + (_lumen_style_is_important(obj, k) ? ' !important' : ''));
         }
     });
     return parts.length ? parts.join('; ') + ';' : '';
@@ -3745,12 +3797,16 @@ function _lumen_gap_rule_delete(obj, key) {
     }
     delete obj[key];
 }
-CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
+CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
     var nid = this;
     var key = _lumen_camel_to_kebab(String(prop));
     var strVal = String(val);
+    // CSSOM §6.7.4: a priority other than "" / "important" (ASCII case-insensitive) is ignored.
+    var prio = priority === undefined || priority === null ? '' : String(priority).toLowerCase();
+    if (prio !== '' && prio !== 'important') return;
     if (_lumen_gap_rule_key_re.test(key)) strVal = _lumen_close_open_parens(strVal);
-    var obj = _lumen_style_get_parsed(nid);
+    var realObj = _lumen_style_get_parsed(nid);
+    var obj = realObj;
     if (strVal === '') {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property; a TRBL shorthand is stored
         // as its four longhands, so those go too (BUG-1297: `border-style = ''` between WPT cases).
@@ -3761,15 +3817,17 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
             _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
         }
         _lumen_gap_rule_delete(obj, key);
+        _lumen_style_mark_important(obj, key, false);
         _lumen_style_set_parsed(nid, obj);
         return;
     }
+    obj = {};  // scratch: the longhands this one declaration expands to
     if (_lumen_pending_substitution_value(strVal) === undefined) {
         var gapPairs = _lumen_gap_rule_expand(key, strVal);
         if (gapPairs === false) return; // invalid gap-decoration value: declaration dropped
         if (gapPairs !== null) {
             gapPairs.forEach(function(kv) { obj[kv[0]] = kv[1]; });
-            _lumen_style_set_parsed(nid, obj);
+            _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
             return;
         }
     }
@@ -3779,7 +3837,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
     if (pendingVal === null) return; // malformed env(): declaration dropped
     if (pendingVal !== undefined) {
         obj[key] = pendingVal;
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     if (_LUMEN_TRBL_SHORTHAND_CANON.hasOwnProperty(key)) {
@@ -3790,7 +3848,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         obj[trblLonghands[1]] = expanded.right;
         obj[trblLonghands[2]] = expanded.bottom;
         obj[trblLonghands[3]] = expanded.left;
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     if (key === 'overflow') {
@@ -3798,7 +3856,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         if (ovExpanded === null) return; // invalid shorthand value: whole declaration dropped
         obj['overflow-x'] = ovExpanded.x;
         obj['overflow-y'] = ovExpanded.y;
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     if (key === 'block-step') {
@@ -3808,7 +3866,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         obj['block-step-insert'] = bsExpanded.insert;
         obj['block-step-align'] = bsExpanded.align;
         obj['block-step-round'] = bsExpanded.round;
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) {
@@ -3817,14 +3875,14 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         if (expanded2v === null) return; // invalid shorthand value: whole declaration dropped
         obj[longhands2v[0]] = expanded2v.start;
         obj[longhands2v[1]] = expanded2v.end;
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
         var txtExpanded = _lumen_expand_text_shorthand(key, strVal);
         if (txtExpanded === null) return; // invalid shorthand value: whole declaration dropped
         Object.keys(txtExpanded).forEach(function(k) { obj[k] = txtExpanded[k]; });
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     // Срез 10: color/length/line-width/sizing/keyword grammars all
@@ -3877,13 +3935,32 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         var canon = _lumen_canonicalize_longhand(key, strVal);
         if (canon === null || canon === undefined) return; // invalid value: no-op
         obj[key] = canon;
-        _lumen_style_set_parsed(nid, obj);
+        _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
     }
     var mathStored = _lumen_math_value_canon(key, strVal);
     if (mathStored === null) return; // invalid math expression: declaration dropped
     obj[key] = mathStored === undefined ? strVal : mathStored;
-    _lumen_style_set_parsed(nid, obj);
+    _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
+};
+// CSSOM §6.7.3: "important" when `prop` (or, for a shorthand, every longhand it covers) was
+// declared `!important`, else "".
+CSSStyleDeclaration.prototype.getPropertyPriority = function getPropertyPriority(prop) {
+    if (arguments.length < 1) {
+        throw new TypeError("Failed to execute 'getPropertyPriority' on 'CSSStyleDeclaration': 1 argument required, but only 0 present.");
+    }
+    var key = _lumen_camel_to_kebab(String(prop));
+    var obj = _lumen_style_get_parsed(this);
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return _lumen_style_is_important(obj, key) ? 'important' : '';
+    var longhands = null;
+    if (_LUMEN_TRBL_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_TRBL_SHORTHANDS[key];
+    else if (key === 'overflow') longhands = ['overflow-x', 'overflow-y'];
+    else if (key === 'block-step') longhands = ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
+    else if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_2V_SHORTHANDS[key];
+    else if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_TEXT_SHORTHANDS[key];
+    else if (_lumen_gap_rule_key_re.test(key)) longhands = JSON.parse(_lumen_css_gap_rule_longhands(key));
+    if (!longhands || !longhands.length) return '';
+    return longhands.every(function(lh) { return _lumen_style_is_important(obj, lh); }) ? 'important' : '';
 };
 CSSStyleDeclaration.prototype.removeProperty = function(prop) {
     var nid = this;
@@ -3895,7 +3972,8 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
         old = _lumen_text_shorthand_value(obj, key) || '';
         _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
     }
-    _lumen_gap_rule_delete(obj, key); _lumen_style_set_parsed(nid, obj); return old;
+    _lumen_gap_rule_delete(obj, key); _lumen_style_mark_important(obj, key, false);
+    _lumen_style_set_parsed(nid, obj); return old;
 };
 Object.defineProperty(CSSStyleDeclaration.prototype, 'cssText', {
     // CSSOM §6.7.2: cssText always reflects the current declarations'
