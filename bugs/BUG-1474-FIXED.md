@@ -1,6 +1,6 @@
 # BUG-1474 — `position-area`: одиночные `top`/`bottom`/`left`/`right` считаются углом, `self-*` и `span-<сторона> <сторона>` не распознаются, невалидные сочетания принимаются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** css-parser/layout (`crates/engine/layout/src/anchor.rs` — `InsetAreaKeyword`, разбор `position-area`; `crates/engine/layout/src/style/parse/`)
 
@@ -35,3 +35,9 @@ WPT-RUN-14 срез 21: `css-anchor-position/position-area-basic.html`, `positio
 ## Как проверить
 
 Таблица выше; `css/css-anchor-position/position-area-basic.html`, `position-area-parsing.html`.
+
+## Исправление
+
+`parse_position_area` (`crates/engine/layout/src/style/parse/box_sides.rs`) заменил пословный `parse_inset_area_keyword`: слова классифицируются по семействам грамматики (physical `left`/`x-*`/`self-x-*`, logical `block-*`/`inline-*`, `self-block-*`/`self-inline-*`, ambiguous `start`/`end`, `self-start`/`self-end`; `center` и `span-all` общие), пара слов в одном семействе раскладывается по осям независимо от порядка, слово с привязкой к оси в одиночку получает `span-all` на другой оси, одиночное неоднозначное дублируется. Недопустимое значение (смешение семейств, две оси одного направления, неизвестное слово, больше двух слов) отбрасывается целиком, свойство остаётся прежним. Тесты: `position_area_*` в `style/tests/anchor_positioning_tests.rs`.
+
+Остаётся (вне этого бага): логические/`self-*` слова считаются в horizontal-tb LTR (`position-area-wm-dir`), сериализация `element.style.positionArea` и отклонение недопустимых значений в CSSOM — [BUG-563](BUG-563-OPEN.md).
