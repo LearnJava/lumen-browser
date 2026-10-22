@@ -229,6 +229,7 @@ pub(crate) fn repeat_axis_geometry(
 /// Returns the latest tile start `<= paint_origin` on the grid
 /// `start + k·step`; a non-repeating axis keeps its single tile.
 #[must_use]
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg", test))]
 pub(crate) fn extend_start_to_paint_area(start: f32, step: f32, repeats: bool, paint_origin: f32) -> f32 {
     if repeats && step > 0.0 && start > paint_origin {
         start - ((start - paint_origin) / step).ceil() * step
