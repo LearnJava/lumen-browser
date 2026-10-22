@@ -87,15 +87,19 @@ fn slotted_child_inherits_from_ua_slot() {
 #[test]
 fn closed_details_renders_summary_only_and_open_reveals_content() {
     let rt = runtime(&[("details", &[])]);
+    // «Rendered» is read through `checkVisibility()` (CSSOM View: no box, or a
+    // flat-tree ancestor with `content-visibility: hidden` → `false`), not through
+    // `getComputedStyle().length`: since BUG-1191 a closed `<details>`' content has a
+    // full computed style but no box — as in Chrome.
     let src = "(function() {
         var d = document.getElementById('e0');
         var s = d.appendChild(document.createElement('summary')); s.textContent = 'S';
         var p = d.appendChild(document.createElement('p')); p.textContent = 'P';
-        var closed = getComputedStyle(s).length > 0 && getComputedStyle(p).length === 0;
+        var closed = s.checkVisibility() && !p.checkVisibility() && getComputedStyle(p).length > 0;
         d.setAttribute('open', '');
-        var open = getComputedStyle(p).length > 0 && getComputedStyle(p).display === 'block';
+        var open = p.checkVisibility() && getComputedStyle(p).display === 'block';
         d.removeAttribute('open');
-        var reclosed = getComputedStyle(p).length === 0;
+        var reclosed = !p.checkVisibility();
         return closed + ',' + open + ',' + reclosed;
     })()";
     assert_eq!(eval_str(&rt, src), "true,true,true");
@@ -105,14 +109,14 @@ fn closed_details_renders_summary_only_and_open_reveals_content() {
 fn details_takes_first_summary_by_position_ignoring_slot_attribute() {
     let rt = runtime(&[("details", &[])]);
     // The second `<summary>` and a child naming a slot are ordinary content:
-    // hidden while the element is closed.
+    // not rendered while the element is closed (`checkVisibility()`, see above).
     let src = "(function() {
         var d = document.getElementById('e0');
         var s1 = d.appendChild(document.createElement('summary')); s1.textContent = 'A';
         var s2 = d.appendChild(document.createElement('summary')); s2.textContent = 'B';
         var n = d.appendChild(document.createElement('div')); n.textContent = 'C';
         n.setAttribute('slot', 'anything');
-        return [s1, s2, n].map(function(e) { return getComputedStyle(e).length > 0; }).join(',');
+        return [s1, s2, n].map(function(e) { return e.checkVisibility(); }).join(',');
     })()";
     assert_eq!(eval_str(&rt, src), "true,false,false");
 }
