@@ -68,7 +68,7 @@ use crate::style::parse::box_sides::{
     parse_rule_style_opt,
     parse_break_value,
     parse_line_width,
-    parse_inset_area_keyword,
+    parse_position_area,
     parse_margin_shorthand,
     parse_padding_shorthand,
     set_inset_side,
@@ -897,17 +897,9 @@ pub(in crate::style) fn apply_decl_layout(
         // CSS Anchor Positioning L1 §5 — inset-area: [<inset-area-kw>]{1,2}.
         // `position-area` is the updated spec name; both are identical.
         "inset-area" | "position-area" => {
-            let toks: Vec<&str> = val.split_whitespace().collect();
-            let (row_tok, col_tok) = match toks.as_slice() {
-                [a] => (*a, *a),
-                [a, b] => (*a, *b),
-                _ => return true,
-            };
-            if let Some(r) = parse_inset_area_keyword(row_tok) {
-                style.inset_area_row = r;
-            }
-            if let Some(c) = parse_inset_area_keyword(col_tok) {
-                style.inset_area_col = c;
+            if let Some((row, col)) = parse_position_area(val) {
+                style.inset_area_row = row;
+                style.inset_area_col = col;
             }
         }
         // CSS Anchor Positioning L1 §2.1 — anchor-scope: none | all | <custom-ident>.

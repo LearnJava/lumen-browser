@@ -56,4 +56,4 @@
 
 Живое окно `--maximized`, `LUMEN_NO_ADBLOCK=1`, dev-release через `--proxy`: `[JS error]` исчез,
 `ytd-page-manager` апгрейднут. Страница по-прежнему пуста (`innerText` 0, `ytd-page-manager` без детей,
-`ytd-browse` нет, ошибок в логе нет) — отдельный дефект, [BUG-1239](BUG-1239-OPEN.md).
+`ytd-browse` нет, ошибок в логе нет) — отдельный дефект, [BUG-1239](BUG-1239-FIXED.md).
