@@ -333,13 +333,16 @@ fn collect_anchors_rec(
             AnchorScope::None => scope_root,
         };
 
-        let register = |registry: &mut AnchorRegistry, name: &str, node: NodeId, rect: Rect| {
-            register_anchor_scoped(registry, name.to_string(), node, rect, next_scope);
-            // A later registration of the same name replaces the earlier one, chain included.
-            if scrollers.is_empty() {
-                registry.scroll_chains.remove(name);
-            } else {
-                registry.scroll_chains.insert(name.to_string(), scrollers.clone());
+        // `anchor-name` is a comma list: one box registers under every name.
+        let register = |registry: &mut AnchorRegistry, names: &str, node: NodeId, rect: Rect| {
+            for name in names.split(", ") {
+                register_anchor_scoped(registry, name.to_string(), node, rect, next_scope);
+                // A later registration of the same name replaces the earlier one, chain included.
+                if scrollers.is_empty() {
+                    registry.scroll_chains.remove(name);
+                } else {
+                    registry.scroll_chains.insert(name.to_string(), scrollers.clone());
+                }
             }
         };
         if let Some(name) = &lb.style.anchor_name {

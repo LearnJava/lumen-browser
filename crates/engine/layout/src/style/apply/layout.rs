@@ -67,7 +67,10 @@ use crate::style::parse::box_sides::{
     parse_rule_style_opt,
     parse_break_value,
     parse_line_width,
+    parse_dashed_ident_list,
     parse_position_area,
+    parse_position_visibility,
+    position_area_computed,
     parse_margin_shorthand,
     parse_padding_shorthand,
     set_inset_side,
@@ -835,8 +838,8 @@ pub(in crate::style) fn apply_decl_layout(
             let v = val.trim();
             if v.eq_ignore_ascii_case("none") {
                 style.anchor_name = None;
-            } else if v.starts_with("--") {
-                style.anchor_name = Some(v.into());
+            } else if let Some(list) = parse_dashed_ident_list(v) {
+                style.anchor_name = Some(list);
             }
         }
         // CSS Anchor Positioning L1 §3 — position-anchor: <custom-ident> | auto.
@@ -854,21 +857,28 @@ pub(in crate::style) fn apply_decl_layout(
             if let Some((row, col)) = parse_position_area(val) {
                 style.inset_area_row = row;
                 style.inset_area_col = col;
+                style.position_area_text = position_area_computed(val)
+                    .filter(|t| t != "none")
+                    .map(Into::into);
+            }
+        }
+        // CSS Anchor Positioning L1 — position-visibility.
+        "position-visibility" => {
+            if let Some(t) = parse_position_visibility(val) {
+                style.position_visibility = (t != "anchors-visible").then_some(t);
             }
         }
         // CSS Anchor Positioning L1 §2.1 — anchor-scope: none | all | <custom-ident>.
         "anchor-scope" => {
             use crate::anchor::AnchorScope;
             let v = val.trim();
-            style.anchor_scope = if v.eq_ignore_ascii_case("none") {
-                AnchorScope::None
+            if v.eq_ignore_ascii_case("none") {
+                style.anchor_scope = AnchorScope::None;
             } else if v.eq_ignore_ascii_case("all") {
-                AnchorScope::All
-            } else if v.starts_with("--") {
-                AnchorScope::Named(v.into())
-            } else {
-                AnchorScope::None
-            };
+                style.anchor_scope = AnchorScope::All;
+            } else if let Some(list) = parse_dashed_ident_list(v) {
+                style.anchor_scope = AnchorScope::Named(list);
+            }
         }
         // CSS Anchor Positioning L1 §3.1 — intercept `anchor()` before normal inset parsing.
         "top" => set_inset_side(&mut style.top, &mut style.anchor_top, val, is_quirks),
