@@ -3,9 +3,9 @@
 //!
 //! `paint_ordered` is the crate's single entry point for turning a laid-out
 //! tree into a display list with the CSS 2.1 Appendix E painting order;
-//! `content_height_of` / `content_width_of` derive the scrollable extent from
-//! the emitted display list (the shell has no other source for it — see the
-//! `CLAUDE.md` note that a spacer painting nothing leaves `max_scroll()` at 0),
+//! `content_height_of` / `content_width_of` derive the painted extent from
+//! the emitted display list and `page_content_extent` widens it by the
+//! layout's scrollable overflow (a spacer that paints nothing still scrolls),
 //! `next_dl_epoch` versions it, and `build_split_placeholder` synthesises a
 //! minimal list for a hibernated tab whose real one was evicted. Moved out of
 //! `main.rs` by the SPLIT track (batches SH-5 and SH-3c); behaviour and
@@ -78,12 +78,51 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
     max_y
 }
 
+/// Scroll range of the page — `(content_height, content_width)` in CSS px:
+/// what the display list paints, extended by the layout's scrollable overflow
+/// ([`lumen_layout::page_scrollable_extent`]) so an invisible spacer or an
+/// empty sized block still gives the page room to scroll (SMOOTH-SCROLL: WPT
+/// `scrollIntoView-smooth.html` scrolls to a box inside a 2500x2500 container
+/// that paints nothing itself).
+pub(crate) fn page_content_extent(
+    dl: &lumen_paint::DisplayList,
+    lb: &lumen_layout::LayoutBox,
+    viewport_width: f32,
+) -> (f32, f32) {
+    let (lw, lh) = lumen_layout::page_scrollable_extent(lb);
+    let w = content_width_in(dl, lb, viewport_width);
+    // `overflow-x: hidden|clip` на viewport-е (BUG-1642) отсекает и scrollable overflow раскладки.
+    let w = if viewport_clips_x(lb) { w } else { w.max(lw) };
+    (content_height_of(dl).max(lh), w)
+}
+
 /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по всем
-/// rect-несущим командам display list-а. Используется для clamping-а scroll_x.
+/// rect-несущим командам display list-а, обрезанным клипами предков: содержимое под
+/// `overflow: hidden` не прокручивается за край клипа (BUG-1642 — подложка
+/// `left: -50vw; width: 150vw` под `overflow: hidden` давала лишнюю h-полосу).
+/// Используется для clamping-а scroll_x.
 pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
     use lumen_paint::DisplayCommand;
     let mut max_x = 0.0_f32;
+    // Правые края открытых клипов; общий `PopClip` закрывает и `PushClipPath`, чья форма
+    // ширину не ограничивает (наследует край внешнего клипа).
+    let mut clip_right: Vec<f32> = Vec::new();
     for cmd in dl {
+        let outer = clip_right.last().copied().unwrap_or(f32::INFINITY);
+        match cmd {
+            DisplayCommand::PushClipRect { rect } | DisplayCommand::PushClipRoundedRect { rect, .. } => {
+                clip_right.push(outer.min(rect.x + rect.width));
+            }
+            DisplayCommand::PushScrollLayer { clip_rect, .. } => {
+                clip_right.push(outer.min(clip_rect.x + clip_rect.width));
+            }
+            DisplayCommand::PushClipPath { .. } => clip_right.push(outer),
+            DisplayCommand::PopClip | DisplayCommand::PopScrollLayer => {
+                clip_right.pop();
+                continue;
+            }
+            _ => {}
+        }
         let r = match cmd {
             DisplayCommand::FillRect { rect, .. }
             | DisplayCommand::FillRoundedRect { rect, .. }
@@ -135,12 +174,47 @@ pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PageBreak
             | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
-        let right = r.x + r.width;
+        // Клип, открытый самой командой, уже на вершине стека — `outer` его не знает.
+        let limit = clip_right.last().copied().unwrap_or(f32::INFINITY);
+        let right = (r.x + r.width).min(limit);
         if right > max_x {
             max_x = right;
         }
     }
     max_x
+}
+
+/// Горизонтально ли viewport не прокручивается пользователем: `overflow-x: hidden | clip` у
+/// `<html>` (или у `<body>`, когда у `<html>` `visible`) уходит на viewport (CSS Overflow L3
+/// §3.5) — страница не растягивается вбок, что бы ни торчало за правым краем.
+fn viewport_clips_x(root: &lumen_layout::LayoutBox) -> bool {
+    use lumen_layout::Overflow;
+    // `<html>` помечен всегда, `<body>` — только при `visible` у `<html>`: источник — первый
+    // помеченный с не-`visible` значением (иначе `<html>` с `visible` заслонил бы `<body>`).
+    fn source(b: &lumen_layout::LayoutBox, depth: u8) -> Option<&lumen_layout::LayoutBox> {
+        let own = b.style.overflow_to_viewport
+            && !(b.style.overflow_x == Overflow::Visible && b.style.overflow_y == Overflow::Visible);
+        if own {
+            return Some(b);
+        }
+        if depth == 0 {
+            return None;
+        }
+        b.children.iter().find_map(|c| source(c, depth - 1))
+    }
+    source(root, 3).is_some_and(|b| matches!(b.style.overflow_x, Overflow::Hidden | Overflow::Clip))
+}
+
+/// [`content_width_of`] с учётом `overflow-x` корня: при `hidden`/`clip` на viewport ширина
+/// контента не превышает `viewport_width` (BUG-1642 — `html { overflow-x: hidden }` рисовал
+/// h-полосу, хотя в Chrome её нет).
+pub(crate) fn content_width_in(
+    dl: &lumen_paint::DisplayList,
+    root: &lumen_layout::LayoutBox,
+    viewport_width: f32,
+) -> f32 {
+    let w = content_width_of(dl);
+    if viewport_clips_x(root) { w.min(viewport_width) } else { w }
 }
 
 /// Build a minimal placeholder display list for a hibernated tab in split view.

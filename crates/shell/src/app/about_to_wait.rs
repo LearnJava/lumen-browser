@@ -1623,6 +1623,14 @@ impl Lumen {
         // Smooth requests go through the rAF-based animation; instant ones set
         // scroll_y directly (CSS Scroll Behavior L1 §3).
         // ADR-016 M2.2d: value-drain через `route_query_js`.
+        //
+        // SMOOTH-SCROLL: the horizontal half of `window.scrollTo(x, y)` /
+        // `scrollIntoView` arrives on its own channel, instant only — a smooth
+        // sequence is stepped from the shim, one request per frame.
+        #[cfg(feature = "v8")]
+        if let Some(target_x) = self.drain_query_js(|j| j.take_page_scroll_x_request()).flatten() {
+            self.scroll_x_by(target_x - self.scroll_x);
+        }
         #[cfg(feature = "v8")]
         for (target_y, smooth) in self.drain_query_js(|j| j.take_page_scroll_requests()).unwrap_or_default()
         {

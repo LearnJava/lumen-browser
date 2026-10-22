@@ -18,12 +18,14 @@
 //! already documents as accepted for a flex/block/flex chain, not something
 //! this (or any) LAYOUT-2 slice eliminates. `DEPTH` is chosen for that native-
 //! frame-pair-per-level ceiling, not the `20_000` bar `block_flow_trampoline`/
-//! `flex_trampoline`/`grid_trampoline` reach for a *same-kind* chain —
-//! empirically: 500 passes, 1 000 and 5 000 overflow a `cargo test` worker
-//! thread's stack (same order of magnitude as LAYOUT-1's ROADMAP entry
-//! measured for wholly-unconverted recursive functions, ~150–800 — the two
-//! native frames this slice leaves per table-in-table level land in the same
-//! range as one unconverted call used to).
+//! `flex_trampoline`/`grid_trampoline` reach for a *same-kind* chain.
+//! Measured (debug test build, 2026-10): one table-in-cell level costs ~2.2 KB
+//! of native stack, so a `cargo test` worker thread's 2 MiB holds ~900 levels.
+//! The level used to cost ~9.7 KB (~200 levels, and 500 overflowed) while
+//! `block_flow_trampoline::step_child` — inlined into `run_pass`, ~5 KB of
+//! frame — and `table_trampoline::step_cell` stayed on the chain and both
+//! trampolines held their frames (a whole `LayoutBox` each) by value; they now
+//! return the foreign dispatch to the loop and keep frames boxed.
 
 use lumen_core::geom::Size;
 use crate::style::{ComputedStyle, Display};

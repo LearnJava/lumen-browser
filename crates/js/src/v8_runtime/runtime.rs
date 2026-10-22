@@ -99,6 +99,9 @@ pub struct V8JsRuntime {
     pub(super) pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
     /// Current page scroll Y exposed to JS `window.scrollY` / `window.pageYOffset`.
     pub(super) page_scroll_y: Arc<Mutex<f32>>,
+    /// Horizontal twin of [`Self::page_scroll_y`] plus the not-yet-drained
+    /// instant `window.scrollTo` x request (SMOOTH-SCROLL).
+    pub(super) page_scroll_x: Arc<Mutex<super::install::PageScrollX>>,
     /// BUG-822: `true` when the page moved on a rendering update whose scroll
     /// sequence was still in flight, so a `scrollend` is still owed once it
     /// settles. Lives next to [`Self::page_scroll_y`] for the same reason it
@@ -494,6 +497,7 @@ impl V8JsRuntime {
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
             page_scroll_y: Arc::new(Mutex::new(0.0)),
+            page_scroll_x: Arc::new(Mutex::new(super::install::PageScrollX::default())),
             page_scroll_end_pending: Arc::new(Mutex::new(false)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             pseudo_computed_styles: Arc::new(Mutex::new(HashMap::new())),
@@ -1171,6 +1175,21 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (*cur - y).abs() > f32::EPSILON;
         *cur = y;
+        moved
+    }
+
+    /// Drain the horizontal page scroll request queued by `window.scrollTo`
+    /// (SMOOTH-SCROLL): the last instant `x` since the previous drain.
+    pub fn take_page_scroll_x_request(&self) -> Option<f32> {
+        self.page_scroll_x.lock().unwrap_or_else(|e| e.into_inner()).pending.take()
+    }
+
+    /// `x` twin of [`Self::set_page_scroll_y`]: pushes the applied horizontal
+    /// page scroll and reports whether it moved (a `scroll` event is due).
+    pub fn set_page_scroll_x(&self, x: f32) -> bool {
+        let mut cur = self.page_scroll_x.lock().unwrap_or_else(|e| e.into_inner());
+        let moved = (cur.committed - x).abs() > f32::EPSILON;
+        cur.committed = x;
         moved
     }
 

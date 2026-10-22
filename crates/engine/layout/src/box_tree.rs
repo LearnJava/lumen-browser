@@ -38,7 +38,7 @@ use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry, Quo
                       build_counter_style_registry, format_counter_with_registry,
                       build_list_marker_text};
 use crate::subgrid::{SubgridContext, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
-use crate::anchor::{collect_anchors, InsetAreaKeyword};
+use crate::anchor::{collect_anchors_inline, InsetAreaKeyword};
 use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
 use crate::TextMeasurer;
@@ -68,6 +68,7 @@ mod grid_auto_cols;
 mod grid_row_subgrid;
 mod grid_lanes;
 pub use grid::resolve_auto_fill_fit_count;
+pub(crate) use grid::add_area_line_names;
 
 mod baseline;
 use baseline::BaselineSide;

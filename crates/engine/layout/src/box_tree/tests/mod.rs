@@ -475,6 +475,7 @@ mod flex_axes;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
+mod bug341_in_place_reuse;
 mod bug935_attr_local_roots;
 mod bug935_fresh_node_roots;
 mod bug935_child_list_ends;
@@ -537,6 +538,7 @@ mod flex_vwm5;
 mod flex_vwm6;
 mod fixed_cb;
 mod anchor_scroll;
+mod anchor_inline;
 mod abs_auto_margins;
 mod relative_offset_flow;
 mod vertical_positioned;

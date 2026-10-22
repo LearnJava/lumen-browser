@@ -610,8 +610,8 @@ impl Lumen {
                 self.sync_engine_js_state();
                 // The new runtime starts empty; re-seed it with the current Navigation state.
                 self.commit_nav_state();
-                self.content_height = content_height_of(&page.display_list);
-                self.content_width = content_width_of(&page.display_list);
+                (self.content_height, self.content_width) =
+                    crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css());
                 // On full page load, mark all tiles dirty — content has changed completely.
                 self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
                 // BUG-480 срез 14: под-документы новой страницы заменяют старые
@@ -1162,8 +1162,7 @@ impl Lumen {
         };
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
 
-        self.content_height = content_height_of(&dl);
-        self.content_width = content_width_of(&dl);
+        (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
         self.set_display_list(dl);
         // BUG-341 S7: streaming layout is a separate incremental mechanism
         // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
@@ -1692,8 +1691,8 @@ impl Lumen {
         } else {
             None
         };
-        self.content_height = content_height_of(&page.display_list);
-        self.content_width = content_width_of(&page.display_list);
+        (self.content_height, self.content_width) =
+            crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css());
         // Full page load: force all tiles dirty.
         self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
         self.animation_scheduler.clear();

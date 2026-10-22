@@ -270,7 +270,40 @@ impl AnchorRegistry {
 // CSS: anchor-name, anchor-scope
 pub fn collect_anchors(root: &LayoutBox) -> AnchorRegistry {
     let mut registry = AnchorRegistry::default();
-    collect_anchors_rec(root, &mut registry, None);
+    collect_anchors_rec(root, None, &mut registry, None);
+    registry
+}
+
+/// The plain inline elements (`<span>`, `<em>`, …) of a document that carry an `anchor-name`.
+/// They own no [`LayoutBox`] (BUG-488), so [`collect_anchors_inline`] finds them through the
+/// fragments of the `InlineRun` that holds them.
+pub(crate) struct InlineAnchors<'a> {
+    doc: &'a lumen_dom::Document,
+    names: HashMap<NodeId, Box<str>>,
+}
+
+impl<'a> InlineAnchors<'a> {
+    /// `None` when no inline element of the cascade has an `anchor-name` (the common case:
+    /// the fragment walk is skipped altogether).
+    pub(crate) fn from_cascade(
+        doc: &'a lumen_dom::Document,
+        styles: &crate::counters::CascadeStyles,
+    ) -> Option<Self> {
+        let names: HashMap<NodeId, Box<str>> = styles
+            .into_iter()
+            .filter(|(_, s)| matches!(s.display, crate::style::Display::Inline))
+            .filter_map(|(id, s)| s.anchor_name.clone().map(|n| (*id, n)))
+            .collect();
+        (!names.is_empty()).then_some(Self { doc, names })
+    }
+}
+
+/// [`collect_anchors`] that also registers the plain inline elements of `inline`, anchored to
+/// the union of their line fragments — what `getBoundingClientRect` reports for them
+/// (CSS Anchor Positioning L1 §2.2; BUG-1477). They are registered in tree order with the boxes.
+pub(crate) fn collect_anchors_inline(root: &LayoutBox, inline: Option<&InlineAnchors<'_>>) -> AnchorRegistry {
+    let mut registry = AnchorRegistry::default();
+    collect_anchors_rec(root, inline, &mut registry, None);
     registry
 }
 
@@ -281,7 +314,12 @@ pub fn collect_anchors(root: &LayoutBox) -> AnchorRegistry {
 /// anchor name overwrites the registry entry (`HashMap::insert` in
 /// `register_anchor_scoped`), so children are pushed in reverse to keep the
 /// LIFO stack's pop order identical to the old left-to-right recursion.
-fn collect_anchors_rec(root: &LayoutBox, registry: &mut AnchorRegistry, scope_root: Option<NodeId>) {
+fn collect_anchors_rec(
+    root: &LayoutBox,
+    inline: Option<&InlineAnchors<'_>>,
+    registry: &mut AnchorRegistry,
+    scope_root: Option<NodeId>,
+) {
     // `scrollers` is the path of scroll containers above the popped box; `depth` restores it
     // to what the box's parent saw (the push-before-children / pop-after discipline the
     // recursion gave for free, as in `apply_anchor_positions_rec`).
@@ -295,13 +333,35 @@ fn collect_anchors_rec(root: &LayoutBox, registry: &mut AnchorRegistry, scope_ro
             AnchorScope::None => scope_root,
         };
 
+        // `anchor-name` is a comma list: one box registers under every name.
+        let register = |registry: &mut AnchorRegistry, names: &str, node: NodeId, rect: Rect| {
+            for name in names.split(", ") {
+                register_anchor_scoped(registry, name.to_string(), node, rect, next_scope);
+                // A later registration of the same name replaces the earlier one, chain included.
+                if scrollers.is_empty() {
+                    registry.scroll_chains.remove(name);
+                } else {
+                    registry.scroll_chains.insert(name.to_string(), scrollers.clone());
+                }
+            }
+        };
         if let Some(name) = &lb.style.anchor_name {
-            register_anchor_scoped(registry, name.to_string(), lb.node, lb.rect, next_scope);
-            // A later registration of the same name replaces the earlier one, chain included.
-            if scrollers.is_empty() {
-                registry.scroll_chains.remove(name.as_ref());
-            } else {
-                registry.scroll_chains.insert(name.to_string(), scrollers.clone());
+            register(registry, name, lb.node, lb.rect);
+        }
+        if let Some(inline) = inline {
+            // Union per element, in order of first appearance (tree order).
+            let mut unions: Vec<(NodeId, [f32; 4])> = Vec::new();
+            crate::for_each_inline_frag_ancestor(inline.doc, lb, |anc, [x1, y1, x2, y2]| {
+                if !inline.names.contains_key(&anc) {
+                    return;
+                }
+                match unions.iter_mut().find(|(n, _)| *n == anc) {
+                    Some((_, u)) => *u = [u[0].min(x1), u[1].min(y1), u[2].max(x2), u[3].max(y2)],
+                    None => unions.push((anc, [x1, y1, x2, y2])),
+                }
+            });
+            for (anc, [x1, y1, x2, y2]) in unions {
+                register(registry, &inline.names[&anc], anc, Rect::new(x1, y1, x2 - x1, y2 - y1));
             }
         }
         if is_scroll_container(lb) && scrollers.last() != Some(&lb.node) {

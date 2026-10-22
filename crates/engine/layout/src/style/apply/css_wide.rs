@@ -1324,6 +1324,10 @@ fn apply_css_wide_keyword_with(
         "inset-area" | "position-area" => {
             style.inset_area_row = if inh_only_inherit { inherited.inset_area_row } else { init.inset_area_row };
             style.inset_area_col = if inh_only_inherit { inherited.inset_area_col } else { init.inset_area_col };
+            style.position_area_text = if inh_only_inherit { inherited.position_area_text.clone() } else { None };
+        }
+        "position-visibility" => {
+            style.position_visibility = if inh_only_inherit { inherited.position_visibility } else { None };
         }
         "anchor-scope" => {
             style.anchor_scope = if inh_only_inherit { inherited.anchor_scope.clone() } else { init.anchor_scope.clone() };

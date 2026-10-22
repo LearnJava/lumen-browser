@@ -23,7 +23,7 @@
 - `clientWidth` корня — по спеке CSSOM View равен ширине viewport-а за вычетом полосы; найти, откуда
   берётся 2216.
 - `scrollWidth` не должен включать переполнение, обрезанное `overflow:hidden`/`clip` потомка
-  (тот же корень, что [BUG-1642](BUG-1642-OPEN.md) п. 1, но в layout/JS-геометрии).
+  (тот же корень, что [BUG-1642](BUG-1642-FIXED.md) п. 1, но в layout/JS-геометрии).
   Смежно: [BUG-1389](BUG-1389-FIXED.md), [BUG-1415](BUG-1415-FIXED.md).
 - Репро: локальная страница с `div{overflow:hidden}` > `section{position:relative}` >
   `::before{position:absolute;left:-50vw;width:150vw}`; сначала проверить, воспроизводится ли

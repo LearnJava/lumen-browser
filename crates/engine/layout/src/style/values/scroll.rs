@@ -100,7 +100,7 @@ impl UserSelect {
     }
 }
 
-/// CSS Overflow L3 — `scroll-behavior`. Inherited.
+/// CSS Overflow L3 — `scroll-behavior`. Not inherited (CSSOM View §13).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ScrollBehavior {
     #[default]

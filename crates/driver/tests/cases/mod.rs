@@ -12,6 +12,7 @@
 mod antidetect_surface_api;
 mod bug489_display_contents_computed_style;
 mod bug1191_boxless_computed_style;
+mod bug1480_display_inline_computed;
 mod bug1425_color_space_computed;
 mod bug1430_math_functions;
 mod bug1329_text_transform_lang;

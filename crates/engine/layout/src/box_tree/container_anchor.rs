@@ -213,8 +213,14 @@ fn apply_container_inner(
 ///
 /// Respects `anchor-scope`: anchors in a scoped subtree are invisible to
 /// positioned elements that are not descendants of the scope root.
-pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
-    let registry = collect_anchors(root);
+pub(crate) fn apply_anchor_positions(
+    root: &mut LayoutBox,
+    doc: &lumen_dom::Document,
+    counters: &CounterMap,
+    viewport: Size,
+) {
+    let inline = crate::anchor::InlineAnchors::from_cascade(doc, counters.styles());
+    let registry = collect_anchors_inline(root, inline.as_ref());
     if registry.is_empty() {
         return;
     }
@@ -530,8 +536,12 @@ fn re_style_subtree(
             }
         }
         // Don't propagate into nested containers — they'll build their own context.
+        // A `Skip` box (`display: none`) builds none: its subtree is left to
+        // `restyle_boxless`, which records it unmatched.
         if is_query_container(&b.style) {
-            seen.nested.insert(b.node);
+            if !matches!(b.kind, BoxKind::Skip) {
+                seen.nested.insert(b.node);
+            }
         } else {
             stack.extend(b.children.iter_mut());
         }
@@ -562,27 +572,32 @@ fn restyle_boxless(
     dark_mode: bool,
     out: &mut HashMap<NodeId, Arc<ComputedStyle>>,
 ) {
-    let mut stack: Vec<NodeId> = doc.get(container).children.iter().rev().copied().collect();
-    while let Some(id) = stack.pop() {
+    // `(node, reached)`: `reached` is false below a box-less query container.
+    let mut stack: Vec<(NodeId, bool)> = doc.get(container).children.iter().rev().map(|&c| (c, true)).collect();
+    while let Some((id, reached)) = stack.pop() {
         if !matches!(doc.get(id).data, NodeData::Element { .. }) || seen.nested.contains(&id) {
             continue;
         }
+        let mut below_reached = reached;
         if !seen.boxed.contains(&id)
             && let Some(mut style) = counters.style_arc(id)
         {
             // A container with no principal box answers no query: what lies below it is
-            // out of this container's reach and is not matched against it either.
+            // out of this container's reach and is not matched against it either — but it
+            // is still recorded below, with its cascaded style (its queries all fail).
             if is_query_container(&style) {
-                continue;
+                below_reached = false;
             }
-            let rules = matching_container_rules(doc, id, sheet, ctx);
-            if !rules.is_empty() {
-                apply_matched_container_rules(Arc::make_mut(&mut style), &rules, doc, id, viewport, dark_mode);
+            if reached {
+                let rules = matching_container_rules(doc, id, sheet, ctx);
+                if !rules.is_empty() {
+                    apply_matched_container_rules(Arc::make_mut(&mut style), &rules, doc, id, viewport, dark_mode);
+                }
             }
             // Every box-less element below a container is recorded, matched or not: the
             // snapshot collectors read their style (and custom properties) from here.
             out.insert(id, style);
         }
-        stack.extend(doc.get(id).children.iter().rev().copied());
+        stack.extend(doc.get(id).children.iter().rev().map(|&c| (c, below_reached)));
     }
 }

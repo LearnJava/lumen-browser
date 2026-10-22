@@ -90,12 +90,17 @@ impl Lumen {
         #[cfg(feature = "v8")]
         {
             let scroll_y = self.scroll_y;
+            let scroll_x = self.scroll_x;
             let settled = self.scroll_anim.is_none()
                 && self.momentum_anim.is_none()
                 && self.scroll_drag.is_none()
                 && self.hscroll_drag.is_none();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                let moved = j.set_page_scroll_y(scroll_y);
+                // SMOOTH-SCROLL: both axes are pushed (no short-circuit) —
+                // a horizontal move is a viewport scroll like a vertical one.
+                let moved_y = j.set_page_scroll_y(scroll_y);
+                let moved_x = j.set_page_scroll_x(scroll_x);
+                let moved = moved_y || moved_x;
                 if moved {
                     j.fire_window_scroll();
                 }
@@ -737,6 +742,7 @@ impl Lumen {
         // справа от `ww - 8`), так что фактического overdraw нет.
         // --no-scrollbar подавляет полосу для screenshot-пайплайна.
         if !self.no_scrollbar {
+            let page_y_offset = self.page_offset().1;
             // FRAME-3 remainder: собственный scrollbar каждого видимого
             // фрейма — то же приём, добавлен в ту же полосу overlay-а рядом
             // со страничным.
@@ -759,19 +765,24 @@ impl Lumen {
                 v_present,
                 h_state,
             ));
+            // BUG-1642: билдеры считают от верха страницы, overlay рисуется в координатах окна.
+            // Полосы фреймов уже в страничных координатах своего хоста — их не сдвигаем.
+            scrollbar::shift_overlay_y(&mut scrollbar_cmds, page_y_offset);
             scrollbar_cmds.extend(frames::frame_scrollbar_overlay(
                 &self.frames,
                 self.scroll_x,
                 self.scroll_y,
             ));
             // UX-FIND-ALL: метки совпадений поиска поверх трека (после thumb-а).
-            scrollbar_cmds.extend(scrollbar::build_find_marks(
+            let mut find_marks = scrollbar::build_find_marks(
                 &find_mark_ys,
                 self.find.is_open().then(|| self.find.active_index()),
                 self.content_height,
                 self.viewport_width_css(),
                 self.viewport_height_css(),
-            ));
+            );
+            scrollbar::shift_overlay_y(&mut find_marks, page_y_offset);
+            scrollbar_cmds.extend(find_marks);
             if !scrollbar_cmds.is_empty() {
                 let mut combined = scrollbar_cmds;
                 combined.append(&mut overlay_buf);
