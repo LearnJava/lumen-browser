@@ -375,7 +375,13 @@ fn collect_anchors_rec(
             }
         };
         if let Some(name) = &lb.style.anchor_name {
-            register(registry, name, lb.node, lb.rect);
+            // CSS Anchor Positioning L1 §2.2: a transformed anchor is the bounding box of its
+            // transformed border box — what `getBoundingClientRect` reports (BUG-1485).
+            let rect = match crate::property_trees::forward_box_transform(lb) {
+                Some(m) => crate::transformed_aabb(&lb.rect, &m),
+                None => lb.rect,
+            };
+            register(registry, name, lb.node, rect);
         }
         if let Some(inline) = inline {
             // Union per element, in order of first appearance (tree order).
