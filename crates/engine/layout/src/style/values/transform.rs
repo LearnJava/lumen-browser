@@ -397,7 +397,7 @@ impl Default for MaskLayer {
             image: BackgroundImage::None,
             repeat: BackgroundRepeat::REPEAT,
             size: BackgroundSize::Auto,
-            position: ObjectPosition::default(),
+            position: ObjectPosition::background_initial(),
             origin: BackgroundOrigin::BorderBox,
             clip: MaskClip::BorderBox,
             mode: MaskMode::Alpha,

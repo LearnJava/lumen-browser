@@ -97,11 +97,10 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // Слоёв может быть несколько (`mask-composite: intersect` — вложенные
     // группы, см. `rendered_mask_layers`), поэтому закрываем ровно столько
     // `PopMask`, сколько групп открылось.
-    let mask_groups = emit_push_mask(&mut pre, b);
-    if mask_groups > 0 {
-        for _ in 0..mask_groups {
-            post.push(DisplayCommand::PopMask);
-        }
+    let mask_close = emit_push_mask(&mut pre, b, dpr);
+    if !mask_close.is_empty() {
+        // `post` is reversed later: push the closers back to front.
+        post.extend(mask_close.into_iter().rev());
         // CSS Masking L1 §4.6 — `mask-clip` restricts the masked painting to the
         // padding/content box. Pushed inside the mask group (after PushMask); the
         // clip result is identical whether the scissor sits inside or outside the

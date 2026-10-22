@@ -1215,7 +1215,7 @@ pub struct Renderer {
     /// Shared BGL with mask_composite (same binding layout: t_content, t_mask, s).
     /// BUG-406: ленивая компиляция пары (alpha, luminance) — общий шейдер,
     /// поэтому один `OnceCell` на оба пайплайна.
-    pub(crate) mask_layer_pipelines: OnceCell<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    pub(crate) mask_layer_pipelines: OnceCell<super::pipelines::MaskLayerPipelines>,
     /// CSS Filter Effects L1 — color filter pipeline (grayscale/sepia/brightness/etc.).
     pub(crate) filter_bgl: wgpu::BindGroupLayout,
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
