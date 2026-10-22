@@ -595,12 +595,24 @@ pub(crate) fn object_src_blocked(policies: &[CspPolicy], url: &str, self_origin:
 /// checked here (the caller only calls this when a policy exists), and a
 /// `url` that fails to parse is treated as allowed.
 pub(crate) fn style_src_blocked(policies: &[CspPolicy], url: &str, self_origin: Option<&Origin>) -> bool {
+    style_link_blocked(policies, url, self_origin, None)
+}
+
+/// [`style_src_blocked`] for a `<link rel=stylesheet>` *element* (BUG-1490):
+/// the element's own `nonce` is part of the CSP3 `style-src-elem` pre-request
+/// check ([`CspPolicy::style_element_fetch_allows`]), so a nonce-only source
+/// list admits the nonced link. An `@import` target has no element and
+/// passes `None`.
+pub(crate) fn style_link_blocked(
+    policies: &[CspPolicy],
+    url: &str,
+    self_origin: Option<&Origin>,
+    nonce: Option<&str>,
+) -> bool {
     let Ok(parsed) = lumen_core::url::Url::parse(url) else {
         return false;
     };
-    policies
-        .iter()
-        .any(|policy| !policy.fetch_directive_allows(&CspDirective::StyleSrcElem, &parsed, self_origin))
+    policies.iter().any(|policy| !policy.style_element_fetch_allows(&parsed, self_origin, nonce))
 }
 
 /// Срез 56: test-only now — the one production caller
