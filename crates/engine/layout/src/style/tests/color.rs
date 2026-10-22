@@ -148,6 +148,23 @@ use crate::style::values::named_colors::NAMED_COLORS;
     }
 
     #[test]
+    fn relative_hwb_identity_and_calc() {
+        let ident = |o: &str| parse_color(&format!("hwb(from {o} h w b)"));
+        assert_eq!(ident("red"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(ident("rgb(51 102 204)"), Some(rgba(51, 102, 204, 255)));
+        // w = min(rgb) = 20 %, b = 1 − max(rgb) = 20 %.
+        assert_eq!(parse_color("hwb(from rgb(51 102 204) h calc(w + 10) b)"), parse_color("hwb(220 30% 20%)"));
+        assert_eq!(parse_color("hwb(from rgb(51 102 204) h w calc(b * 2))"), parse_color("hwb(220 20% 40%)"));
+        // Каналы можно переставлять, alpha наследуется и переопределяется.
+        assert_eq!(parse_color("hwb(from rgba(255 0 0 / 0.5) h w b)").unwrap().a, 128);
+        assert_eq!(parse_color("hwb(from red h w b / 0.25)").unwrap().a, 64);
+        assert_eq!(parse_color("hwb(from red h w b / alpha)").unwrap().a, 255);
+        // Ключевые слова чужих функций в hwb() недопустимы.
+        assert_eq!(parse_color("hwb(from red h s l)"), None);
+        assert_eq!(parse_color("hwb(from red r g b)"), None);
+    }
+
+    #[test]
     fn relative_oklch_identity_with_alpha() {
         // White origin round-trips to white.
         let w = parse_color("oklch(from white l c h)").unwrap();
@@ -1584,9 +1601,9 @@ fn hwb_pure_hue_and_gray() {
     assert_eq!((c.r, c.g, c.b), (64, 191, 64));
     // Альфа через слэш.
     assert_eq!(parse_color("hwb(120 0% 0% / 0.5)").unwrap().a, 128);
-    // Относительная форма пока не поддержана — и отвергается явно, а не
-    // считается неверно.
-    assert_eq!(parse_color("hwb(from red h w b)"), None);
+    // Относительная форма (CSS Color L5 §4): тождество и подмена каналов.
+    assert_eq!(parse_color("hwb(from red h w b)"), Some(rgba(255, 0, 0, 255)));
+    assert_eq!(parse_color("hwb(from red h 50% b)"), Some(rgba(255, 128, 128, 255)));
     // Компоненты w/b — проценты или числа (CSS Color 4 §7; WPT color-valid-hwb: `hwb(120 30 50)`).
     assert_eq!(parse_color("hwb(120 0 0)"), parse_color("hwb(120 0% 0%)"));
 }
