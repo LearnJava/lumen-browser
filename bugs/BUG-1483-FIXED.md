@@ -1,6 +1,6 @@
 # BUG-1483 — Поиск якоря по `anchor-name` игнорирует порядок в дереве: цель видит якорь, который стоит после неё (CSS Anchor Positioning 1 §2.2)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout (`crates/engine/layout/src/anchor.rs` — `collect_anchors`/поиск якоря по имени: порядок в дереве и область видимости имени)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 21: `css-anchor-position/anchor-name-003.html` (29 из 39 �
 ## Как проверить
 
 Таблица выше; `css/css-anchor-position/anchor-name-003.html`.
+
+## Исправление
+
+`AnchorEntry.seq` — pre-order индекс бокса; `AnchorRegistry` хранит все регистрации имени, `AnchorRegistry::before(seq)` отдаёт цели вид «последний предшествующий ей в дереве якорь». Глобальный проход (`apply_anchor_positions_rec`) нумерует боксы тем же порядком (дети кладутся в стек в обратном порядке), локальный (`lay_out_abs_children_with`) считает индексы детей по размерам поддеревьев. `scroll_chains` теперь по `NodeId` якоря. Тесты — `box_tree/tests/anchor_order.rs`. Область `anchor-scope`/содержащего блока по-прежнему как была (`get_scoped`).

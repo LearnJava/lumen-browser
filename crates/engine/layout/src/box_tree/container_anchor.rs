@@ -307,7 +307,7 @@ fn anchor_scroll_for(
     let anchor = registry.get(name)?.node;
     let scrollers = registry
         .scroll_chains
-        .get(name)
+        .get(&anchor)
         .map(|chain| chain.iter().filter(|n| !ancestors.contains(n)).copied().collect())
         .unwrap_or_default();
     Some((anchor, scrollers))
@@ -340,8 +340,20 @@ fn apply_anchor_positions_rec(
     // `fixed_cb` — padding box of the nearest ancestor that captures `position: fixed`
     // (transform/filter/contain, css-transforms-1 §2); `None` — the viewport.
     let mut stack: Vec<(&mut LayoutBox, Rect, Option<Rect>, usize)> = vec![(lb, pcb, None, ancestors.len())];
+    // Pre-order index of the popped box — the numbering `collect_anchors_rec` gave the anchors
+    // (children are pushed in reverse so the pop order is document order).
+    let mut seq: u32 = 0;
     while let Some((lb, pcb, fixed_cb, depth)) = stack.pop() {
     ancestors.truncate(depth);
+    seq += 1;
+    // §2.2: an anchor must precede its positioned element in tree order.
+    let own_view;
+    let registry = if matches!(lb.style.position, Position::Absolute | Position::Fixed) {
+        own_view = registry.before(seq - 1);
+        &*own_view
+    } else {
+        registry
+    };
     let viewport_rect = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     // CSS Anchor Positioning L1 §4 — correct `anchor-size()` width/height against the
     // final, global anchor registry. The local registry `lay_out_abs_children` used is
@@ -505,7 +517,7 @@ fn apply_anchor_positions_rec(
 
     ancestors.push(lb.node);
     let child_depth = ancestors.len();
-    for child in &mut lb.children {
+    for child in lb.children.iter_mut().rev() {
         stack.push((child, my_pcb, my_fixed_cb, child_depth));
     }
     }
