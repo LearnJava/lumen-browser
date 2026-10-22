@@ -40,3 +40,9 @@ font-kerning-computed,font-synthesis-computed,font-variant-east-asian-computed,f
 
 `css/css-fonts/parsing/font-feature-settings-computed.html`, `font-palette-computed.html`,
 `css/css-masking/parsing/clip-path-computed.html`, `mask-image-computed.html`.
+
+## Срез 1 (P6, 2026-10-22)
+
+В `computed_style_to_map` добавлены (`computed_font_mask.rs`): `font` (пусто, если не выражается), `font-feature-settings`, `font-variation-settings` (дубли схлопнуты, порядок по тегу), `font-size-adjust` (`none`/число/`from-font`), `font-optical-sizing`, `font-palette`, `clip-path` (inset/circle/ellipse/polygon/path/box/`url("#id")`), `clip-rule`, `mask-image/-repeat/-size/-position/-origin/-clip/-mode/-composite` и шорткод `mask`. В `MaskLayer` добавлен `image_css` (градиент), в `SvgClipPath` — `id`.
+
+**Остаток (OPEN):** свойства, которых парсер не знает, остаются вне карты — `clip`, `mask-type`, `mask-border-*`, `font-width`; `mask-mode: alpha` неотличим от `match-source` (оба хранятся как `Alpha`); `xywh()`/`rect()` и `polygon(round …)` не разбираются, `calc()` в `ShapeValue` не хранится (тесты `clip-path-computed.html` красные на этих строках); `font`-шорткод для `font-stretch` ≠ 100% отдаёт пустую строку.

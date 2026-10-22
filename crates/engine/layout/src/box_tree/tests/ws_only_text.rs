@@ -82,3 +82,41 @@ fn ideographic_spaces_are_not_collapsible() {
     // CSS Text L3 §4.1.1: only U+0020, U+0009, U+000A, U+000C, U+000D collapse.
     assert_eq!(b_pos("pre", "\u{3000}\u{3000}").0, 30.0);
 }
+
+#[test]
+fn ideographic_spaces_keep_their_width_in_normal_mode() {
+    // BUG-1462: U+3000 is an ordinary character in `white-space: normal` — it neither
+    // collapses nor turns into U+0020; each one is a 10 px glyph under `Fixed10`.
+    assert_eq!(b_pos("normal", "\u{3000}\u{3000}").0, 30.0);
+    assert_eq!(laid_out_texts("normal", "\u{3000}\u{3000}").concat(), "a\u{3000}\u{3000}b");
+}
+
+#[test]
+fn full_width_turns_the_collapsed_space_between_inline_boxes_into_u3000() {
+    // BUG-1465 / CSS Text L3 §2.1: `x<span>   </span>x` → `x`, U+3000, `x`.
+    let html = r#"<div id="box">x<span>   </span>x</div>"#;
+    let css = "body{margin:0}#box{font:20px sans-serif}span{text-transform:full-width}";
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed10);
+    let joined: String = texts(&root).into_iter().map(|(t, _)| t).collect();
+    assert_eq!(joined, "x\u{3000}x");
+}
+
+#[test]
+fn line_may_break_after_an_ideographic_space() {
+    // BUG-1462: U+3000 stays inside the word, and UAX #14 (class BA) still offers a
+    // break after it: `a　b　c` in 25 px (each char 10 px) wraps after each U+3000.
+    let doc = lumen_html_parser::parse(r#"<div id="box">a　b　c</div>"#);
+    let sheet = lumen_css_parser::parse("body{margin:0}#box{font:20px sans-serif;width:25px}");
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed10);
+    fn lines(b: &super::super::LayoutBox, out: &mut Vec<String>) {
+        if let super::super::BoxKind::InlineRun { lines, .. } = &b.kind {
+            out.extend(lines.iter().map(|l| l.iter().map(|f| f.text.as_str()).collect::<String>()));
+        }
+        b.children.iter().for_each(|c| lines(c, out));
+    }
+    let mut got = Vec::new();
+    lines(&root, &mut got);
+    assert_eq!(got, ["a\u{3000}", "b\u{3000}", "c"]);
+}

@@ -1,6 +1,6 @@
 # BUG-1462 — `white-space: normal`: U+3000 и прочие не-CSS пробелы схлопываются в U+0020 при разбиении на слова
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P6, остаток [BUG-1327](BUG-1327-FIXED.md))
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — разбиение текста на слова через `split_css_whitespace` / `is_wrap_whitespace`, `box_tree/entry.rs`)
 
@@ -17,3 +17,7 @@ CSS Text L3 §4.1.1: схлопываются только U+0020, U+0009, U+000
 ## Что делать
 
 Разделять слова по `is_collapsible_whitespace`, а U+3000 и подобные оставлять внутри текста с точкой переноса после них. Затронуты `split_css_whitespace` и его вызовы, ширина и позиции фрагментов.
+
+## Исправление
+
+`is_wrap_whitespace` (`crates/engine/layout/src/box_tree/entry.rs`) больше не считает разделителем слов U+1680, U+2000…200A, U+205F и U+3000: они остаются внутри слова со своей шириной, а перенос после них даёт `line_break::break_opportunities` (UAX #14, класс BA). Тесты — `box_tree/tests/ws_only_text.rs` (`ideographic_spaces_keep_their_width_in_normal_mode`, `line_may_break_after_an_ideographic_space`). Исправлено вместе с [BUG-1465](BUG-1465-FIXED.md), которому нужен тот же код.

@@ -309,7 +309,7 @@ pub(crate) fn mask_clip_paint_rect(b: &LayoutBox) -> Option<Rect> {
 /// plus `stroke-box`/`view-box` which fall back to it for CSS boxes) or when
 /// painting is not clipped at all (`no-clip`). A `None` here means the clip
 /// would be a no-op scissor, so unmasked-default rendering stays byte-identical.
-fn mask_clip_layer_rect(b: &LayoutBox, clip: MaskClip) -> Option<Rect> {
+pub(crate) fn mask_clip_layer_rect(b: &LayoutBox, clip: MaskClip) -> Option<Rect> {
     match clip {
         MaskClip::PaddingBox => Some(background_clip_rect(b, BackgroundClip::PaddingBox)),
         // fill-box has no SVG geometry on a CSS box → object bounding box = content box.

@@ -11,7 +11,7 @@
 1. `li { list-style: none }` или `li::marker { content: none }` — записи нет, `getComputedStyle(li, '::marker').content` = `""`; Chrome отдаёт `none`, а `width`/`height` — `auto` (`marker-computed-size.html`, «`::marker` with no box due to 'list-style'»; `marker-computed-content.html`, вариант `none`).
 2. `::marker` у элемента, не являющегося `list-item` (`li { display: block }`), — тоже пусто; Chrome отдаёт стиль псевдоэлемента (`marker-computed-content.html`, список `.no-list`).
 3. `marker-computed-size.html` для `content: <image>` ждёт `100px`×`52px` (высота с выравниванием по базовой линии); у нас — высота строки.
-4. Срез 25 BUG-1446 (`css/css-lists`: `marker-quotes`, `marker-webkit-text-fill-color`, `marker-dynamic-content-change`, `nested-marker-styling`, `marker-counter`) — маркер не получает свой стиль; пересекается с [BUG-1548](BUG-1548-OPEN.md) и BUG-1568.
+4. Срез 25 BUG-1446 (`css/css-lists`: `marker-quotes`, `marker-webkit-text-fill-color`, `marker-dynamic-content-change`, `nested-marker-styling`, `marker-counter`) — маркер не получает свой стиль; пересекается с [BUG-1548](BUG-1548-FIXED.md) и BUG-1568.
 
 ## Что делать
 

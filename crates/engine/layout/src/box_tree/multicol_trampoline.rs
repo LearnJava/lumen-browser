@@ -1126,6 +1126,60 @@ fn column_flex_lines(flex: &LayoutBox, gy0: f32) -> Option<Vec<ColumnLine>> {
     )
 }
 
+/// A wrapped row flex container whose items carry one forced column break (`break-before: column`
+/// of an item that begins a later line) is not cut at the break the way a grid is: Chrome cuts the
+/// box exactly at the column heights and the items of the lines from the break on sit lower than
+/// the stretched line by `limit - c`, where `c` is the end of the item lines before the break plus
+/// the row gap (Edge, `flex/fragmentation/008`: the 174px box gives 90 + 84, the third item sits
+/// at y = 50 of the second column). Returns the container with those items moved and the lines as
+/// the extents of their items (the rules run along the items, not along the stretched line);
+/// `None` when the container does not qualify.
+fn row_flex_forced_pull(
+    grid: &LayoutBox,
+    gy0: f32,
+    rows: &[(f32, f32)],
+    forced: &[f32],
+    total_h: f32,
+    limit: f32,
+) -> Option<(LayoutBox, Vec<(f32, f32)>)> {
+    // A break in front of the first line is no break.
+    let first = rows.first()?.0;
+    let later: Vec<f32> = forced.iter().copied().filter(|&y| y > first + 0.01).collect();
+    if !matches!(grid.style.display, Display::Flex) || is_column_flex(grid) || later.len() != 1 || total_h <= limit {
+        return None;
+    }
+    let fs = later[0];
+    let s = &grid.style;
+    let cw = grid.rect.width;
+    let vp = Size::new(cw, grid.rect.height);
+    let row_gap = s.row_gap.resolve_or_zero(s.font_size, cw, vp);
+    let flow = |c: &LayoutBox| !matches!(c.kind, BoxKind::Skip) && !matches!(c.style.position, Position::Absolute | Position::Fixed);
+    let before = grid
+        .children
+        .iter()
+        .filter(|c| flow(c) && c.rect.y - gy0 < fs - 0.01)
+        .map(|c| c.rect.y - gy0 + c.rect.height + c.style.margin_bottom.resolve_or_zero(c.style.font_size, cw, vp))
+        .fold(None, |m: Option<f32>, b| Some(m.map_or(b, |m| m.max(b))))?;
+    let c = before + row_gap;
+    if c >= limit - 0.01 {
+        return None;
+    }
+    let delta = limit - c;
+    let mut moved = grid.clone();
+    let mut natural: Vec<Option<(f32, f32)>> = vec![None; rows.len()];
+    for ch in moved.children.iter_mut().filter(|c| flow(c)) {
+        let top = ch.rect.y - gy0;
+        let k = rows.iter().rposition(|r| r.0 <= top + 0.5).unwrap_or(0);
+        if top >= fs - 0.01 {
+            super::shift_tree(ch, 0.0, delta);
+        }
+        let (t, b) = (ch.rect.y - gy0, ch.rect.y - gy0 + ch.rect.height);
+        natural[k] = Some(natural[k].map_or((t, b), |n| (n.0.min(t), n.1.max(b))));
+    }
+    let natural = natural.into_iter().zip(rows).map(|(n, &r)| n.unwrap_or(r)).collect();
+    Some((moved, natural))
+}
+
 /// CSS Fragmentation L3 §5 / CSS Gap Decorations L1 §6.2 — a grid container laid out in full
 /// (the Measure pass) is cut into one fragment per column of the multicol container
 /// (`column-fill: auto`, a definite column height). A break that falls inside a row gap drops
@@ -1170,6 +1224,20 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     let total_h = grid.rect.height.max(rows.last().map_or(0.0, |r| r.1));
     let n_cols = frame.init.n_cols as usize;
     let forced = forced_row_starts(grid, gy0, &rows);
+    // A wrapped row flex container with one forced break is cut at the column height whatever the
+    // fill, its later lines pulled up (see [`row_flex_forced_pull`]).
+    let pulled = row_flex_forced_pull(grid, gy0, &rows, &forced, total_h, limit);
+    let quirk = pulled.is_some();
+    let (pulled_grid, natural) = match pulled {
+        Some((g, n)) => (Some(g), Some(n)),
+        None => (None, None),
+    };
+    let grid = pulled_grid.as_ref().unwrap_or(grid);
+    let forced = if quirk { Vec::new() } else { forced };
+    // The windows see the container as one track (no gap to drop at the cut); the rules and the
+    // visible tracks use the lines' item extents.
+    let win_rows = if quirk { vec![(0.0, total_h)] } else { rows.clone() };
+    let rows = natural.unwrap_or(rows);
     // A forced break is placed only in a `column-fill: auto` container; a balanced one keeps the
     // atomic path (the balanced height would have to account for the forced columns).
     if !forced.is_empty() && frame.init.balance {
@@ -1193,8 +1261,8 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     } else {
         Vec::new()
     };
-    let cut_at = if frame.init.balance && total_h < limit * n_cols as f32 - 0.01 {
-        let fits = |h: f32| grid_windows(grid, gy0, &rows, &forced, &mono, total_h, h).len() <= n_cols;
+    let cut_at = if !quirk && frame.init.balance && total_h < limit * n_cols as f32 - 0.01 {
+        let fits = |h: f32| grid_windows(grid, gy0, &win_rows, &forced, &mono, total_h, h).len() <= n_cols;
         if !fits(limit) {
             return false;
         }
@@ -1233,7 +1301,7 @@ fn emit_grid_fragments(frame: &mut Frame) -> bool {
     } else {
         limit
     };
-    let mut windows = grid_windows(grid, gy0, &rows, &forced, &mono, total_h, cut_at);
+    let mut windows = grid_windows(grid, gy0, &win_rows, &forced, &mono, total_h, cut_at);
     // A grid with a definite `height` is fragmented over all of it: the row gaps the breaks dropped
     // do not shorten the container, so empty fragments (the background and the rules) follow the
     // last window, as many as the height still needs (Edge: `height: 140px` over five 20px rows

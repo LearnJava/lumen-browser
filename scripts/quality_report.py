@@ -59,6 +59,12 @@ GT_SUMMARY_KEY = {"PASS": "passed", "FAIL": "failed", "ERROR": "errors",
 # балла или хотя бы один тест, завершавшийся OK/PASS. Потеря OK без потери балла
 # (тест без пройденных сабтестов стал TIMEOUT) — шум, не просадка.
 REGRESSION_SCORE = -1.0
+# Параметры раннера WPT, от которых зависят TIMEOUT/CRASH: разные значения у двух
+# прогонов — разница может быть от окружения, а не от кода.
+RUNNER_KEYS = ("processes", "parallel_shards", "batch_small", "shared_queue", "no_paint",
+               "max_browser_gb", "exclude_prefixes")
+# Источники, разнесённые во времени дальше этого, описывают разные состояния кода.
+STALE_DAYS = 7
 # Каталог из ROADMAP шире этого числа тестов — не привязка к багу, а область.
 ROADMAP_DIR_CAP = 500
 TEST_EXT = (".html", ".htm", ".xht", ".xhtml", ".svg", ".js")
@@ -103,6 +109,36 @@ def pp(cur, prev) -> str:
 
 def diff(cur, prev):
     return None if cur is None or prev is None else cur - prev
+
+
+def days_between(a: str | None, b: str | None) -> int | None:
+    """Целых суток между двумя ISO-метками (знак не важен)."""
+    if not a or not b:
+        return None
+    try:
+        return abs((datetime.fromisoformat(a) - datetime.fromisoformat(b)).days)
+    except ValueError:
+        return None
+
+
+def commit_lag(root: Path, commit: str | None) -> str:
+    """Насколько коммит прогона отстаёт от `origin/main` (нет его — от `main`):
+    «N коммитов» или «вне main» (коммит невлитой ветки). Нет git или коммита — n/a."""
+    if not commit:
+        return NA
+    try:
+        for ref in ("origin/main", "main"):
+            rc = subprocess.run(["git", "merge-base", "--is-ancestor", commit, ref], cwd=root,
+                                capture_output=True, timeout=20).returncode
+            if rc == 1:
+                return "вне main"
+            if rc == 0:
+                n = subprocess.run(["git", "rev-list", "--count", f"{commit}..{ref}"], cwd=root,
+                                   capture_output=True, text=True, timeout=20)
+                return f"{n.stdout.strip()} коммитов" if n.returncode == 0 else NA
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return NA
 
 
 # ---------------------------------------------------------------- WPT
@@ -166,6 +202,7 @@ def wpt_summary(name: str, data: dict) -> dict:
         "run": name,
         "commit": data.get("commit"),
         "finished": data.get("finished"),
+        "runner": {k: data[k] for k in RUNNER_KEYS if k in data},
         "totals": totals,
         "subtest_rate": round(totals.get("subtests_passed", 0) / sub_total, 4) if sub_total else None,
         "statuses": statuses,
@@ -189,6 +226,18 @@ def wpt_regressions(cur: dict, prev: dict) -> list:
             rows.append((cat, d_score, d_ok, row, old))
     rows.sort(key=lambda r: (r[1], r[2]))
     return rows
+
+
+def runner_diff(cur: dict, prev: dict) -> list:
+    """Параметры раннера, различающиеся у двух прогонов: `processes` 14 → 7."""
+    a, b = prev.get("runner", {}), cur.get("runner", {})
+    return [f"`{k}` {a.get(k, NA)} → {b.get(k, NA)}" for k in RUNNER_KEYS
+            if (k in a or k in b) and a.get(k) != b.get(k)]
+
+
+def same_commit(cur: dict | None, prev: dict | None) -> bool:
+    """Оба прогона сняты на одном коммите: их разница — окружение и разброс, не код."""
+    return bool(cur and prev and cur.get("commit") and cur["commit"] == prev.get("commit"))
 
 
 # ---------------------------------------------------------------- graphic_tests
@@ -575,12 +624,19 @@ def previous_snapshot(runs_dir: Path, payload: dict) -> tuple:
 
 # ---------------------------------------------------------------- report
 
+def source_gap(snap: dict) -> int | None:
+    """На сколько суток свежий прогон WPT разошёлся со свежим graphic_tests."""
+    wpt, gt = snap["wpt"], snap["graphic"]
+    return days_between(wpt and wpt["finished"], gt and gt["timestamp"])
+
+
 def headline(snap: dict, prev_snap: dict | None, regressions: int | None) -> str:
     wpt, wpt_prev, gt, gt_prev = snap["wpt"], snap["wpt_prev"], snap["graphic"], snap["graphic_prev"]
     parts = []
     if wpt:
         rate = wpt["totals"].get("pass_rate")
-        parts.append(f"WPT {pct(rate)} (Δ {pp(rate, wpt_prev and wpt_prev['totals'].get('pass_rate'))})")
+        note = ", тот же коммит — разброс" if same_commit(wpt, wpt_prev) else ""
+        parts.append(f"WPT {pct(rate)} (Δ {pp(rate, wpt_prev and wpt_prev['totals'].get('pass_rate'))}{note})")
     else:
         parts.append(f"WPT {NA}")
     if gt:
@@ -594,6 +650,10 @@ def headline(snap: dict, prev_snap: dict | None, regressions: int | None) -> str
     else:
         parts.append(f"открытых багов {NA}")
     parts.append(f"просадок {NA if regressions is None else regressions}")
+    gap = source_gap(snap)
+    if gap is not None and gap > STALE_DAYS:
+        older = "WPT" if wpt["finished"] < gt["timestamp"] else "graphic_tests"
+        parts.append(f"{older} старше соседнего источника на {gap} дн.")
     return " · ".join(parts)
 
 
@@ -617,10 +677,23 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
             d = wpt["statuses"][s] - wpt_prev["statuses"][s]
             if d > 0:
                 status_regs.append((s, d))
+    # Два прогона одного коммита код не сравнивают: их «просадки» — разброс.
+    wpt_noise = same_commit(wpt, wpt_prev)
     n_regs = None
     if wpt_regs is not None or gt_regs is not None:
-        n_regs = len(wpt_regs or []) + len(gt_regs or []) + len(status_regs)
+        n_regs = len(gt_regs or []) + (0 if wpt_noise else len(wpt_regs or []) + len(status_regs))
     head = headline(snap, prev_snap, n_regs)
+
+    def wpt_drop_lines() -> list:
+        out = [f"- WPT: тестов со статусом {s} стало больше на {d} "
+               f"({wpt_prev['statuses'][s]} → {wpt['statuses'][s]})." for s, d in status_regs]
+        for cat, d_score, d_ok, row, old in (wpt_regs or [])[:25]:
+            out.append(f"- WPT `{cat}`: балл {old['score']} → {row['score']} ({signed(d_score, 2)}), "
+                       f"OK/PASS {old['harness_ok']} → {row['harness_ok']} ({signed(d_ok)}), "
+                       f"pass rate {pp(row['pass_rate'], old['pass_rate'])}")
+        if wpt_regs and len(wpt_regs) > 25:
+            out.append(f"- … и ещё {len(wpt_regs) - 25} категорий WPT (полная таблица — в конце).")
+        return out
 
     L = ["# Отчёт качества", "",
          "<!-- Генерируется `python scripts/quality_report.py` — руками не править. "
@@ -629,52 +702,68 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
 
     # Источники
     L += ["## Источники", ""]
+    lag = snap.get("lag", {})
     src = []
     if wpt:
         prev_txt = f"`{wpt_prev['run']}` · `{wpt_prev['commit']}` · {wpt_prev['finished']}" if wpt_prev else NA
-        src.append(("WPT (`docs/wpt/runs`)", f"`{wpt['run']}` · `{wpt['commit']}` · {wpt['finished']}", prev_txt))
+        src.append(("WPT (`docs/wpt/runs`)", f"`{wpt['run']}` · `{wpt['commit']}` · {wpt['finished']}", prev_txt,
+                    lag.get("wpt", NA)))
     else:
-        src.append(("WPT (`docs/wpt/runs`)", NA, NA))
+        src.append(("WPT (`docs/wpt/runs`)", NA, NA, NA))
     if gt:
         def gt_cell(g: dict) -> str:
             cell = f"`{g['run']}` · `{g['commit']}` ({g['branch']}) · режим `{g['mode']}`"
             mark = origin_mark(g.get("origin"))
             return f"{cell} · **{mark}**" if mark else cell
 
-        src.append(("graphic_tests", gt_cell(gt), gt_cell(gt_prev) if gt_prev else NA))
+        src.append(("graphic_tests", gt_cell(gt), gt_cell(gt_prev) if gt_prev else NA, lag.get("graphic", NA)))
     else:
-        src.append(("graphic_tests", NA, NA))
+        src.append(("graphic_tests", NA, NA, NA))
     bug_prev = f"срез `{prev_snap['stamp']}`" if prev_snap and prev_snap.get("bugs") else NA
-    src.append(("BUGS.md", "рабочее дерево" if bugs else NA, bug_prev))
-    L += md_table(["Источник", "Свежий", "Предыдущий"], src) + [""]
+    src.append(("BUGS.md", "рабочее дерево" if bugs else NA, bug_prev, "—"))
+    L += md_table(["Источник", "Свежий", "Предыдущий", "Отставание от main"], src) + [""]
     L += ["Дельта WPT — к предыдущему прогону; дельта graphic_tests — к предыдущему полному прогону "
           "**того же режима съёмки** (`ipc` / `gdigrab` / `default` — смесь по `GPU_CAPTURE`; `legacy` — "
           "прогон до TEST-9 без поля `capture`); дельта багов — к прошлому срезу `docs/quality/runs/`. "
           "Частичные прогоны WPT (scope — список категорий) и graphic_tests (`--only`, `--recheck`) "
           "в сравнение не берутся. «не в main» — коммит прогона не предок `origin/main`; "
-          "«WIP» — тема коммита начинается с `WIP`: числа такого прогона предварительные.", ""]
+          "«WIP» — тема коммита начинается с `WIP`: числа такого прогона предварительные. "
+          "«Отставание от main» — сколько коммитов `origin/main` прогон не видел.", ""]
     if gt and not gt_prev and snap.get("graphic_no_prev"):
         L += [f"graphic_tests: Δ {NA} — {snap['graphic_no_prev']}.", ""]
+    warn = []
+    gap = source_gap(snap)
+    if gap is not None and gap > STALE_DAYS:
+        warn.append(f"свежие прогоны WPT и graphic_tests разнесены на {gap} дн. — отчёт сводит "
+                    "разные состояния кода, их цифры между собой не сопоставимы")
+    if wpt_noise:
+        warn.append(f"оба прогона WPT сняты на одном коммите `{wpt['commit']}` — их разница не от кода "
+                    "и в просадки не идёт (раздел «Разброс прогонов»)")
+    if wpt and wpt_prev and runner_diff(wpt, wpt_prev):
+        warn.append("у прогонов WPT разные параметры раннера: " + ", ".join(runner_diff(wpt, wpt_prev))
+                    + " — от них зависят CRASH и TIMEOUT")
+    if warn:
+        L += ["**Внимание:**", ""] + [f"- {w}." for w in warn] + [""]
 
     # Просадки
     L += ["## Просадки с прошлого отчёта", ""]
     if n_regs is None:
         L += [f"{NA} — нет предыдущего прогона для сравнения.", ""]
     elif n_regs == 0:
-        L += ["Просадок нет.", ""]
+        L += ["Просадок нет." + (" Разница прогонов WPT одного коммита — в разделе «Разброс прогонов»."
+                                 if wpt_noise and (wpt_regs or status_regs) else ""), ""]
     else:
-        for s, d in status_regs:
-            L.append(f"- WPT: тестов со статусом {s} стало больше на {d} "
-                     f"({wpt_prev['statuses'][s]} → {wpt['statuses'][s]}).")
-        for cat, d_score, d_ok, row, old in (wpt_regs or [])[:25]:
-            L.append(f"- WPT `{cat}`: балл {old['score']} → {row['score']} ({signed(d_score, 2)}), "
-                     f"OK/PASS {old['harness_ok']} → {row['harness_ok']} ({signed(d_ok)}), "
-                     f"pass rate {pp(row['pass_rate'], old['pass_rate'])}")
-        if wpt_regs and len(wpt_regs) > 25:
-            L.append(f"- … и ещё {len(wpt_regs) - 25} категорий WPT (полная таблица — в конце).")
+        if not wpt_noise:
+            L += wpt_drop_lines()
         for stem, old, new, d_new, _ in gt_regs or []:
             L.append(f"- graphic_tests `{stem}`: {old} → {new} (diff {d_new}%).")
         L.append("")
+
+    if wpt_noise:
+        L += ["## Разброс прогонов", ""]
+        L += [f"Оба прогона WPT — коммит `{wpt['commit']}`: код один, разница — от окружения "
+              "(параметры раннера, нагрузка машины, флаки). Это мера шума прогона, а не просадки.", ""]
+        L += (wpt_drop_lines() or ["Заметной разницы нет."]) + [""]
 
     # WPT статусы
     L += ["## WPT: статусы тестов", ""]
@@ -771,6 +860,12 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
             L += ["Сменившие статус:", ""]
             L += md_table(["Тест", "Было", "Стало", "diff %"],
                           [(f"`{s}`", o, n, NA if d is None else d) for s, o, n, d, _ in gt_changes]) + [""]
+            reclass = sum(1 for _, o, n, _, _ in gt_changes if {o, n} == {"FAIL", "DEBTOR"})
+            if reclass:
+                L += [f"Из них FAIL ↔ DEBTOR: {reclass} — переклассификация храповика, не исправление и не "
+                      "поломка: FAIL дают и выход за baseline должника, и улучшение ниже него (надо снизить "
+                      "baseline). Строки FAIL и DEBTOR выше сдвигаются на это число, даже если отрисовка "
+                      "не менялась.", ""]
         if gt_cap:
             names = ", ".join(f"`{s}` ({o or NA} → {n or NA})" for s, o, n in gt_cap[:5])
             more = f" и ещё {len(gt_cap) - 5}" if len(gt_cap) > 5 else ""
@@ -807,6 +902,9 @@ def build(root: Path) -> dict:
     snap = {"schema": 1, "wpt": wpt, "wpt_prev": wpt_prev, "graphic": gt, "graphic_prev": gt_prev,
             "graphic_no_prev": why, "bugs": bugs_summary(root, wpt)}
     snap["stamp"] = snapshot_stamp(snap)
+    # Отставание зависит от состояния git, а не от прогонов — в срез не пишется.
+    snap["lag"] = {"wpt": commit_lag(root, wpt and wpt["commit"]),
+                   "graphic": commit_lag(root, gt and gt["commit"])}
     return snap
 
 
@@ -823,7 +921,8 @@ def main(argv=None) -> int:
     runs_dir = root / "docs" / "quality" / "runs"
     payload = snapshot_payload(snap)
     # Срез хранит только свежие данные; предыдущие прогоны раннеров в нём не нужны.
-    payload_core = {k: v for k, v in payload.items() if k not in ("wpt_prev", "graphic_prev", "graphic_no_prev")}
+    payload_core = {k: v for k, v in payload.items()
+                    if k not in ("wpt_prev", "graphic_prev", "graphic_no_prev", "lag")}
     prev_snap, write = previous_snapshot(runs_dir, payload_core)
     text, head = render(snap, prev_snap)
     if args.check:

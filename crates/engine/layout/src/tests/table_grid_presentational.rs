@@ -847,7 +847,7 @@ fn author_css_overrides_body_text_hint() {
 /// `<font color="red">` задаёт color на элементе font.
 #[test]
 fn font_color_attr_sets_color() {
-    let root = lay("<body><font color=\"red\">x</font></body>", "");
+    let root = lay("<body><font color=\"red\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -860,7 +860,7 @@ fn font_color_attr_sets_color() {
 /// `<font color="#0000ff">` — hash long hex form.
 #[test]
 fn font_color_hash_long_hex() {
-    let root = lay("<body><font color=\"#0000ff\">x</font></body>", "");
+    let root = lay("<body><font color=\"#0000ff\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -875,7 +875,7 @@ fn font_color_hash_long_hex() {
 fn author_css_overrides_font_color_hint() {
     let root = lay(
         "<body><font color=\"red\">x</font></body>",
-        "font { color: blue; }",
+        "font { display: block; color: blue; }",
     );
     let body = &root;
     let font = first_element_child(body);
@@ -891,7 +891,7 @@ fn author_css_overrides_font_color_hint() {
 /// `<font size="3">` → font-size 16px (medium).
 #[test]
 fn font_size_attr_medium() {
-    let root = lay("<body><font size=\"3\">x</font></body>", "");
+    let root = lay("<body><font size=\"3\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -903,7 +903,7 @@ fn font_size_attr_medium() {
 /// `<font size="1">` → font-size 10px (xx-small).
 #[test]
 fn font_size_attr_xxsmall() {
-    let root = lay("<body><font size=\"1\">x</font></body>", "");
+    let root = lay("<body><font size=\"1\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -915,7 +915,7 @@ fn font_size_attr_xxsmall() {
 /// `<font size="7">` → font-size 48px (xxx-large).
 #[test]
 fn font_size_attr_xxxlarge() {
-    let root = lay("<body><font size=\"7\">x</font></body>", "");
+    let root = lay("<body><font size=\"7\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -927,7 +927,7 @@ fn font_size_attr_xxxlarge() {
 /// `<font size="+2">` → base 3 + 2 = 5 → 24px.
 #[test]
 fn font_size_attr_relative_plus() {
-    let root = lay("<body><font size=\"+2\">x</font></body>", "");
+    let root = lay("<body><font size=\"+2\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -939,7 +939,7 @@ fn font_size_attr_relative_plus() {
 /// `<font size="-1">` → base 3 - 1 = 2 → 13px.
 #[test]
 fn font_size_attr_relative_minus() {
-    let root = lay("<body><font size=\"-1\">x</font></body>", "");
+    let root = lay("<body><font size=\"-1\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -951,7 +951,7 @@ fn font_size_attr_relative_minus() {
 /// `<font size="99">` clamps to 7 → 48px.
 #[test]
 fn font_size_attr_clamp_max() {
-    let root = lay("<body><font size=\"99\">x</font></body>", "");
+    let root = lay("<body><font size=\"99\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert_eq!(
@@ -965,7 +965,7 @@ fn font_size_attr_clamp_max() {
 fn author_css_overrides_font_size_hint() {
     let root = lay(
         "<body><font size=\"7\">x</font></body>",
-        "font { font-size: 20px; }",
+        "font { display: block; font-size: 20px; }",
     );
     let body = &root;
     let font = first_element_child(body);
@@ -978,7 +978,7 @@ fn author_css_overrides_font_size_hint() {
 /// `<font face="Arial, sans-serif">` → font-family.
 #[test]
 fn font_face_attr_sets_font_family() {
-    let root = lay("<body><font face=\"Arial, sans-serif\">x</font></body>", "");
+    let root = lay("<body><font face=\"Arial, sans-serif\">x</font></body>", "font { display: block; }");
     let body = &root;
     let font = first_element_child(body);
     assert!(

@@ -129,10 +129,13 @@ enum CpuClipKind {
 /// mask-mode for raster/gradient sources — the GPU shader applies `c.a * m.a`).
 enum MaskSpec {
     /// No effective mask — the layer composites unchanged. Used for
-    /// `PushMaskImage` because the deterministic CPU path decodes no images, so
-    /// the mask source is unavailable; the GPU renderer likewise composites with
-    /// alpha = 1.0 when the mask image is not registered.
+    /// `PushMaskImage` whose `src` has no decoded pixels; the GPU renderer
+    /// likewise composites with alpha = 1.0 when the mask image is not registered.
     None,
+    /// `url(...)` mask: the decoded image, already tiled per `mask-size` /
+    /// `mask-position` / `mask-repeat` into a full-canvas pixmap when the mask
+    /// group opened; its alpha channel is the mask value.
+    Raster(tiny_skia::Pixmap),
     /// `linear-gradient(...)` mask: alpha taken from the gradient at each pixel.
     Linear {
         rect: Rect,
@@ -781,11 +784,25 @@ fn rasterize_cpu_pixmap(
             // masks (`PushMaskImage`) have no decoded source on the CPU path, so
             // they record `MaskSpec::None` (composite unchanged), mirroring the GPU
             // fallback when the mask image is not registered.
-            DisplayCommand::PushMaskImage { .. } => {
+            DisplayCommand::PushMaskImage { rect, src, size, position, repeat, .. } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create mask layer")?;
                 layers.push(CpuLayer::new(layer));
-                layer_ops.push(LayerComposite::Mask(MaskSpec::None));
+                // The decoded image is tiled into a mask pixmap right away (the
+                // image map is at hand here, not at `PopMask`); an unregistered
+                // `src` leaves the layer unmasked like the GPU fallback.
+                let spec = match image_map.get(src.as_str()) {
+                    Some(img) => {
+                        let mut mask = tiny_skia::Pixmap::new(width, height)
+                            .ok_or("Failed to create mask image layer")?;
+                        rasterize_background_image(
+                            &mut mask, rect, rect, img, *size, position, *repeat, None,
+                        )?;
+                        MaskSpec::Raster(mask)
+                    }
+                    None => MaskSpec::None,
+                };
+                layer_ops.push(LayerComposite::Mask(spec));
             }
             DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
@@ -1258,6 +1275,7 @@ fn render_mask(spec: &MaskSpec, width: u32, height: u32) -> Option<tiny_skia::Pi
     let mut mask = tiny_skia::Pixmap::new(width, height)?;
     match spec {
         MaskSpec::None => return None,
+        MaskSpec::Raster(pm) => return Some(pm.clone()),
         MaskSpec::Linear { rect, angle_deg, stops, repeating } => {
             rasterize_linear_gradient(&mut mask, rect, *angle_deg, stops, *repeating, None).ok()?;
         }
@@ -1331,6 +1349,7 @@ fn composite_mask_layer_rendered(
             let i = row + x as usize * 4;
             let value: u32 = match mode {
                 crate::display_list::MaskMode::Alpha => u32::from(md[i + 3]),
+                crate::display_list::MaskMode::InvertedAlpha => 255 - u32::from(md[i + 3]),
                 crate::display_list::MaskMode::Luminance => {
                     let r = f32::from(md[i]);
                     let g = f32::from(md[i + 1]);

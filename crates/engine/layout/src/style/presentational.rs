@@ -359,7 +359,7 @@ pub(in crate::style) fn apply_font_element_presentational_hints(
     }
 }
 /// HTML LS §15.3.6 «Bidirectional text»: атрибут `dir` → `direction` и
-/// `unicode-bidi`. `[dir=ltr|rtl]` → `direction` + `unicode-bidi: isolate`;
+/// `unicode-bidi` (`<bdi>` без допустимого `dir` — как `dir=auto`). `[dir=ltr|rtl]` → `direction` + `unicode-bidi: isolate`;
 /// `<bdo dir>` → `unicode-bidi: isolate-override`; `[dir=auto]` →
 /// направление по первому сильному символу текста элемента (UAX #9 P2/P3,
 /// пусто → `ltr`) + `isolate`. Hint применяется ДО CSS-каскада — author
@@ -368,13 +368,13 @@ pub(in crate::style) fn apply_dir_presentational_hint(doc: &Document, node: Node
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return;
     };
-    let Some(val) = doc.get(node).get_attr("dir") else {
-        return;
-    };
-    let dir = match val.trim().to_ascii_lowercase().as_str() {
-        "ltr" => Direction::Ltr,
-        "rtl" => Direction::Rtl,
-        "auto" => first_strong_direction(doc, node).unwrap_or(Direction::Ltr),
+    let auto = || first_strong_direction(doc, node).unwrap_or(Direction::Ltr);
+    let dir = match doc.get(node).get_attr("dir").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("ltr") => Direction::Ltr,
+        Some("rtl") => Direction::Rtl,
+        Some("auto") => auto(),
+        // HTML LS §15.3.6: `<bdi>` is `unicode-bidi: isolate` and its `dir` defaults to `auto`.
+        _ if name.local == "bdi" => auto(),
         _ => return,
     };
     style.direction = dir;

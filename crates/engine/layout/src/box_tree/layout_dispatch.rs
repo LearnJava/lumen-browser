@@ -1664,6 +1664,7 @@ pub(super) fn dispatch_box(
                     seen_inflow_child: false,
                     inside_marker_w: 0.0,
                     inside_marker_h: 0.0,
+                    inside_marker_seg: None,
                     abs_deferred: Vec::new(),
                     s,
                     em,

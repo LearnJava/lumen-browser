@@ -5545,6 +5545,7 @@ impl Renderer {
                     let pipeline = match plan.mode {
                         MaskMode::Alpha     => &self.mask_layer_pipelines().0,
                         MaskMode::Luminance => &self.mask_layer_pipelines().1,
+                        MaskMode::InvertedAlpha => &self.mask_layer_pipelines().2,
                     };
                     {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -144,6 +144,8 @@ pub enum GeometryBox {
 /// подпутей — область, которую клип оставляет видимой.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SvgClipPath {
+    /// `id` элемента `<clipPath>` — нужен, чтобы `getComputedStyle` вернул `url("#id")` (BUG-1407).
+    pub id: String,
     /// `clipPathUnits="objectBoundingBox"`: координаты полигонов — доли
     /// bounding box ссылающегося элемента (0..1), а не user units.
     pub object_bbox_units: bool,
@@ -373,6 +375,9 @@ pub struct MaskLayer {
     /// `mask-image` этого слоя. `BackgroundImage` переиспользуется как тип
     /// (та же структура: None / Url / Gradient).
     pub image: BackgroundImage,
+    /// Computed-запись `mask-image` для градиента (BUG-1407), как её отдаёт `getComputedStyle`;
+    /// `None` — запись строится из `image`.
+    pub image_css: Option<Arc<str>>,
     /// `mask-repeat` этого слоя (§4.3). Initial `repeat`.
     pub repeat: BackgroundRepeat,
     /// `mask-size` этого слоя (§4.2). Initial `auto`.
@@ -395,9 +400,10 @@ impl Default for MaskLayer {
     fn default() -> Self {
         Self {
             image: BackgroundImage::None,
+            image_css: None,
             repeat: BackgroundRepeat::REPEAT,
             size: BackgroundSize::Auto,
-            position: ObjectPosition::default(),
+            position: ObjectPosition::background_initial(),
             origin: BackgroundOrigin::BorderBox,
             clip: MaskClip::BorderBox,
             mode: MaskMode::Alpha,
