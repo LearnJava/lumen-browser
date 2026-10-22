@@ -38,10 +38,11 @@ fn read_base128(data: &[u8], pos: &mut usize) -> Result<u32, FontError> {
         if i == 0 && b == 0x80 {
             return Err(FontError::InvalidData("woff2: base128 leading zero"));
         }
-        result = (result << 7) | (b & 0x7F) as u32;
-        if result > 0x1FFF_FFFF {
+        // The value must fit in 32 bits: reject if the shift would drop set bits.
+        if result & 0xFE00_0000 != 0 {
             return Err(FontError::InvalidData("woff2: base128 overflow"));
         }
+        result = (result << 7) | (b & 0x7F) as u32;
         if b & 0x80 == 0 {
             return Ok(result);
         }
@@ -281,11 +282,16 @@ pub(crate) fn decode_transformed_glyf(
             *n_contour_stream.get(g * 2).ok_or(FontError::UnexpectedEof)?,
             *n_contour_stream.get(g * 2 + 1).ok_or(FontError::UnexpectedEof)?,
         ]);
+        let has_bbox = bbox_bitmap[g / 8] >> (7 - (g % 8)) & 1 != 0;
         if n_contours == 0 {
-            continue; // empty glyph: no outline, loca[g] == loca[g+1]
+            // Empty glyph: no outline, loca[g] == loca[g+1]. Its bbox bit MUST be
+            // clear (WOFF2 §5.2, conform-mustRejectNonEmptyBBox2).
+            if has_bbox {
+                return Err(FontError::InvalidData("woff2: empty glyph has a bbox"));
+            }
+            continue;
         }
 
-        let has_bbox = bbox_bitmap[g / 8] >> (7 - (g % 8)) & 1 != 0;
         let explicit_bbox = if has_bbox {
             let b = bbox_data
                 .get(bbox_data_pos..bbox_data_pos + 8)
@@ -303,7 +309,8 @@ pub(crate) fn decode_transformed_glyf(
 
         if n_contours < 0 {
             // ── Composite glyph: bbox is always explicit per spec ──
-            let bbox = explicit_bbox.unwrap_or([0, 0, 0, 0]);
+            let bbox = explicit_bbox
+                .ok_or(FontError::InvalidData("woff2: composite glyph without bbox"))?;
             out.extend_from_slice(&n_contours.to_be_bytes());
             for v in bbox {
                 out.extend_from_slice(&v.to_be_bytes());
@@ -489,10 +496,18 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
         return Err(FontError::InvalidData("woff2: bad magic"));
     }
     let flavor             = u32::from_be_bytes([woff2[4], woff2[5], woff2[6], woff2[7]]);
-    // length, reserved, totalSfntSize, totalCompressedSize at 8..24
+    let length             = u32::from_be_bytes([woff2[8], woff2[9], woff2[10], woff2[11]]) as usize;
     let total_compressed   = u32::from_be_bytes([woff2[20], woff2[21], woff2[22], woff2[23]]);
     let num_tables         = u16::from_be_bytes([woff2[12], woff2[13]]) as usize;
-    // metaOffset starts at 28, privOffset at 40 — skip for now.
+    let meta_offset        = u32::from_be_bytes([woff2[28], woff2[29], woff2[30], woff2[31]]) as usize;
+    let meta_length        = u32::from_be_bytes([woff2[32], woff2[33], woff2[34], woff2[35]]) as usize;
+    let priv_offset        = u32::from_be_bytes([woff2[40], woff2[41], woff2[42], woff2[43]]) as usize;
+    let priv_length        = u32::from_be_bytes([woff2[44], woff2[45], woff2[46], woff2[47]]) as usize;
+
+    // The header `length` is the size of the whole file (WOFF2 §5.1).
+    if length != woff2.len() {
+        return Err(FontError::InvalidData("woff2: header length does not match file size"));
+    }
 
     let mut pos = 48usize;
 
@@ -515,14 +530,24 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
         let xform_version = (flags_byte >> 6) & 0x03;
         let orig_length = read_base128(woff2, &mut pos)?;
 
-        // glyf and loca have a transform length even if xform_version == 0
+        // Version 0 is the glyf/loca transform and the null transform for every
+        // other table; any other version of glyf/loca is the null transform.
         let is_glyf = &tag == b"glyf";
         let is_loca = &tag == b"loca";
-        let has_xform_length = (is_glyf || is_loca) && xform_version != 3
-            || (!is_glyf && !is_loca && xform_version != 0);
+        let is_hmtx = &tag == b"hmtx";
+        let transformed = if is_glyf || is_loca { xform_version == 0 } else { xform_version != 0 };
+        // Only glyf, loca and hmtx have a defined transform; hmtx's is version 1.
+        if transformed && !(is_glyf || is_loca || (is_hmtx && xform_version == 1)) {
+            return Err(FontError::InvalidData("woff2: unsupported table transform"));
+        }
 
-        let xform_length = if has_xform_length {
-            Some(read_base128(woff2, &mut pos)?)
+        let xform_length = if transformed {
+            let l = read_base128(woff2, &mut pos)?;
+            // The transformed loca is empty: it is rebuilt from the glyf data.
+            if is_loca && l != 0 {
+                return Err(FontError::InvalidData("woff2: transformed loca is not empty"));
+            }
+            Some(l)
         } else {
             None
         };
@@ -530,11 +555,47 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
         entries.push(W2TableEntry { tag, orig_length, xform_length });
     }
 
-    // Compressed data starts at `pos`, length = total_compressed_size
-    if pos + total_compressed as usize > woff2.len() {
-        return Err(FontError::UnexpectedEof);
+    // glyf and loca are either both transformed or both left as they are.
+    let glyf_transformed = entries.iter().any(|e| &e.tag == b"glyf" && e.xform_length.is_some());
+    let loca_transformed = entries.iter().any(|e| &e.tag == b"loca" && e.xform_length.is_some());
+    if glyf_transformed != loca_transformed {
+        return Err(FontError::InvalidData("woff2: glyf and loca transforms disagree"));
     }
-    let compressed = &woff2[pos..pos + total_compressed as usize];
+
+    // File layout after the table directory: compressed stream, metadata block,
+    // private block, each starting on a 4-byte boundary with zero padding and
+    // nothing in between or after (WOFF2 §5.1, conform-extraneous/overlap-reject).
+    let round4 = |n: usize| n.checked_add(3).map(|v| v & !3);
+    let compressed_end = pos
+        .checked_add(total_compressed as usize)
+        .filter(|&e| e <= woff2.len())
+        .ok_or(FontError::UnexpectedEof)?;
+    let mut block_end = round4(compressed_end).ok_or(FontError::UnexpectedEof)?;
+    if meta_offset != 0 {
+        if meta_offset != block_end {
+            return Err(FontError::InvalidData("woff2: metadata block misplaced"));
+        }
+        let end = meta_offset
+            .checked_add(meta_length)
+            .filter(|&e| e <= woff2.len())
+            .ok_or(FontError::InvalidData("woff2: metadata block out of range"))?;
+        block_end = round4(end).ok_or(FontError::UnexpectedEof)?;
+    }
+    if priv_offset != 0 {
+        if priv_offset != block_end {
+            return Err(FontError::InvalidData("woff2: private block misplaced"));
+        }
+        let end = priv_offset
+            .checked_add(priv_length)
+            .filter(|&e| e <= woff2.len())
+            .ok_or(FontError::InvalidData("woff2: private block out of range"))?;
+        block_end = round4(end).ok_or(FontError::UnexpectedEof)?;
+    }
+    if block_end != round4(woff2.len()).ok_or(FontError::UnexpectedEof)? {
+        return Err(FontError::InvalidData("woff2: extraneous data after the last block"));
+    }
+
+    let compressed = &woff2[pos..compressed_end];
 
     // Decompress with Brotli
     let mut decompressed = Vec::new();
@@ -542,6 +603,15 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
         let mut reader = Cursor::new(compressed);
         brotli_decompressor::BrotliDecompress(&mut reader, &mut decompressed)
             .map_err(|_| FontError::InvalidData("woff2: brotli decompress failed"))?;
+    }
+
+    // The tables must account for every decompressed byte.
+    let expected_total: u64 = entries
+        .iter()
+        .map(|e| u64::from(e.xform_length.unwrap_or(e.orig_length)))
+        .sum();
+    if expected_total != decompressed.len() as u64 {
+        return Err(FontError::InvalidData("woff2: decompressed size differs from table lengths"));
     }
 
     // Reconstruct table data for each entry. glyf is decoded first (it also
@@ -553,6 +623,7 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
     let mut decomp_pos = 0usize;
     let mut loca_entries: Vec<u32> = Vec::new();
     let mut glyf_decoded = false;
+    let mut glyf_index_format = 0u16;
     // True when loca was rebuilt in long (u32) form → head must be patched.
     let mut loca_is_long = false;
 
@@ -566,10 +637,17 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
         if Some(i) == glyf_idx && entry.xform_length.is_some() {
             // Transformed glyf — reconstruct it (also fills loca_entries).
             let glyf_out = decode_transformed_glyf(&chunk, &mut loca_entries)?;
+            // indexFormat is the Uint16 at byte 6 of the transformed glyf header.
+            glyf_index_format = u16::from_be_bytes([chunk[6], chunk[7]]);
             glyf_decoded = true;
             table_data.push(glyf_out);
         } else if Some(i) == loca_idx && entry.xform_length.is_some() {
             // Transformed loca — synthesise long offsets from loca_entries.
+            // Its original length must match the glyph count of the glyf header.
+            let entry_size = if glyf_index_format == 0 { 2 } else { 4 };
+            if u64::from(entry.orig_length) != loca_entries.len() as u64 * entry_size {
+                return Err(FontError::InvalidData("woff2: loca origLength does not match glyph count"));
+            }
             if glyf_decoded && !loca_entries.is_empty() {
                 let mut loca_out = Vec::with_capacity(loca_entries.len() * 4);
                 for off in &loca_entries {
@@ -582,6 +660,14 @@ pub fn decode_woff2(woff2: &[u8]) -> Result<Vec<u8>, FontError> {
                 table_data.push(chunk);
             }
         } else {
+            if &entry.tag == b"hmtx" && entry.xform_length.is_some() {
+                // Bit 0/1 clear = proportional/monospace lsb arrays present, so
+                // both clear is the null transform; bits 2..7 are reserved.
+                let flags = *chunk.first().ok_or(FontError::UnexpectedEof)?;
+                if flags & 0xFC != 0 || flags & 3 == 0 {
+                    return Err(FontError::InvalidData("woff2: invalid hmtx transform flags"));
+                }
+            }
             table_data.push(chunk);
         }
     }
