@@ -322,6 +322,23 @@ fn abs_box_shrinks_to_fit(b: &LayoutBox) -> bool {
     ) && !matches!(b.style.display, Display::Grid | Display::InlineGrid)
 }
 
+/// `(width, height)` of an abs-pos box is `auto` for the insets-driven sizing of CSS Position L3
+/// §6. A form control's UA-default `width`/`height` (`apply_ua_form_controls`) counts as `auto`
+/// (§5.3 «semi-replaced»: they stretch like non-replaced boxes); the fixed-size checkbox/radio do not.
+fn abs_auto_sizes(kind: &BoxKind, s: &ComputedStyle) -> (bool, bool) {
+    let semi_replaced = match kind {
+        BoxKind::FormControl { kind: FormControlKind::Input { input_type, .. } } => {
+            !matches!(input_type, lumen_dom::InputType::Checkbox | lumen_dom::InputType::Radio)
+        }
+        BoxKind::FormControl { .. } => true,
+        _ => false,
+    };
+    (
+        s.width.is_none() || (semi_replaced && s.width_is_ua_default),
+        s.height.is_none() || (semi_replaced && s.height_is_ua_default),
+    )
+}
+
 /// Positions absolutely/fixed-positioned deferred children of `parent`.
 /// Called after parent's height is finalized so `my_pcb` is complete.
 pub(crate) fn lay_out_abs_children(
@@ -431,7 +448,8 @@ fn place_abs_child(
     let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
 
     // Доступная ширина для layout абсолютного child.
-    let avail_w = if left.is_some() && right.is_some() && cs.width.is_none() {
+    let (w_auto, h_auto) = abs_auto_sizes(&child.kind, &cs);
+    let avail_w = if left.is_some() && right.is_some() && w_auto {
         // Обе инсеты заданы, ширина `auto` → ширина выводится из зазора
         // между ними (CSS Position L3 §6), shrink-to-fit не применяется.
         (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
@@ -480,9 +498,12 @@ fn place_abs_child(
     let ratio = cs.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0);
     let ratio_stretched_w = ratio && left.is_some() && right.is_some() && cs.width.is_none() && cs.height.is_none();
     let ratio_sized_h = ratio && cs.height.is_none() && (cs.width.is_some() || ratio_stretched_w);
-    let stretched_h = (top.is_some() && bottom.is_some() && cs.height.is_none() && !ratio_sized_h)
+    let stretched_h = (top.is_some() && bottom.is_some() && h_auto && !ratio_sized_h)
         .then(|| (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0));
-    let stretched_w = ratio_stretched_w.then(|| (avail_w - c_ml - c_mr).max(0.0));
+    // CSS Position L3 §5.3: a form control with a UA-default `width` is «semi-replaced» — two insets
+    // stretch it like a non-replaced box instead of keeping the 174px/200px/… UA size.
+    let semi_stretched_w = left.is_some() && right.is_some() && w_auto && matches!(child.kind, BoxKind::FormControl { .. });
+    let stretched_w = (ratio_stretched_w || semi_stretched_w).then(|| (avail_w - c_ml - c_mr).max(0.0));
     // CSS 2.1 §10.5: a percentage `height` of an out-of-flow box resolves against
     // the padding box of its containing block, whose height is always definite.
     match (stretched_h, stretched_w) {
@@ -499,8 +520,8 @@ fn place_abs_child(
     // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
     // Done before resolving `inset-area` so the element's used size (used to
     // align it within its position-area band) reflects the anchor-size result.
-    let mut w_fixed = cs.width.is_some();
-    let mut h_fixed = cs.height.is_some();
+    let mut w_fixed = cs.width.is_some() && !semi_stretched_w;
+    let mut h_fixed = cs.height.is_some() && stretched_h.is_none();
     if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
         crate::anchor::resolve_anchor_size_or_fallback(
             anchors, f, cs.position_anchor.as_deref(), c_em, cb.width, viewport,
@@ -735,7 +756,7 @@ pub(crate) fn fix_out_of_flow_descendants(
                 // The size of a box whose height follows the containing block
                 // (`height: 50%`, `top` + `bottom`) was derived from the zero-high
                 // first-pass block, and so was everything laid out inside it.
-                Position::Absolute if abs_open && height_follows_cb(&x.style, viewport) => {
+                Position::Absolute if abs_open && height_follows_cb(&x.kind, &x.style, viewport) => {
                     refit_out_of_flow_child(x, abs_cb, measurer, viewport, hp);
                 }
                 Position::Absolute if abs_open => reposition_abs_child(x, abs_cb, viewport),
@@ -771,7 +792,7 @@ fn reposition_abs_child(child: &mut LayoutBox, cb: Rect, viewport: Size) {
     let (ml, mr) = (cs.margin_left.resolve_or_zero(em, cb.width, viewport), cs.margin_right.resolve_or_zero(em, cb.width, viewport));
     let (mt, mb) = (cs.margin_top.resolve_or_zero(em, cb.height, viewport), cs.margin_bottom.resolve_or_zero(em, cb.height, viewport));
     // Mirrors the `top` + `bottom` + `height: auto` rule of `place_abs_child`.
-    if top.is_some() && bottom.is_some() && cs.height.is_none() {
+    if top.is_some() && bottom.is_some() && abs_auto_sizes(&child.kind, cs).1 {
         child.rect.height = (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - mt - mb).max(0.0);
     }
     let x = match (left, right) {
@@ -792,12 +813,12 @@ fn reposition_abs_child(child: &mut LayoutBox, cb: Rect, viewport: Size) {
 /// of its containing block's height: a percentage `height`/`min-height`/
 /// `max-height`, or `top` + `bottom` around `height: auto`. Probed by resolving
 /// against two different bases, which also covers `calc()` mixing `%`.
-fn height_follows_cb(s: &ComputedStyle, viewport: Size) -> bool {
+fn height_follows_cb(kind: &BoxKind, s: &ComputedStyle, viewport: Size) -> bool {
     let em = s.font_size;
     let tracks = |l: &Option<Length>| {
         l.as_ref().is_some_and(|l| l.resolve(em, Some(0.0), viewport) != l.resolve(em, Some(100.0), viewport))
     };
-    let stretched = s.height.is_none() && !s.top.is_auto() && !s.bottom.is_auto();
+    let stretched = abs_auto_sizes(kind, s).1 && !s.top.is_auto() && !s.bottom.is_auto();
     stretched || tracks(&s.height) || tracks(&s.min_height) || tracks(&s.max_height)
 }
 

@@ -1,6 +1,6 @@
 # BUG-1482 — `position:absolute; inset:0` на `<button>`/`<input>` не растягивает элемент (CSS Position 3 §5.3: «semi-replaced» элементы растягиваются как не-replaced)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout (`crates/engine/layout/src/box_tree/` — абсолютно позиционированные `<button>`, `<input>`, `<select>`: «semi-replaced» растяжение по инсетам)
 
@@ -28,3 +28,7 @@ WPT-RUN-14 срез 21: `css-position/position-absolute-semi-replaced-stretch-bu
 ## Как проверить
 
 Таблица выше; `css/css-position/position-absolute-semi-replaced-stretch-button.html`.
+
+## Исправление
+
+`place_abs_child` (`crates/engine/layout/src/box_tree/multicol_abspos.rs`): `width`/`height` нативного контрола, заданные UA-стилем (`width_is_ua_default`/`height_is_ua_default` — `<input>` 174×21, `<textarea>` 200×48, `<button>`/`<select>` высота 21, `range`, `progress`/`meter`), для абсолютного бокса считаются `auto` (`abs_auto_sizes`, CSS Position 3 §5.3 «semi-replaced»); `checkbox`/`radio` остаются фиксированными. При обоих инсетах по оси бокс растягивается между ними: высота — как у не-replaced, ширина — через `UsedSizeOverride` (иначе `lay_out` берёт ширину по содержимому/UA). Авторский `width`/`height` и случай с одним инсетом не затронуты. Тесты: `box_tree/tests/abs_auto_margins.rs` (`abs_form_controls_stretch_between_insets`). Три WPT-reftest `position-absolute-semi-replaced-stretch-{button,input,other}` совпадают с эталоном попиксельно (`--screenshot`).

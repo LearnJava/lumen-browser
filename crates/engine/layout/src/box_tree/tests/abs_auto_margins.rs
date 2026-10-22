@@ -115,3 +115,37 @@ fn safe_center_overflow_falls_back_to_start() {
     let r = aligned_rect_of("width:300px;justify-self:safe center");
     assert_eq!(r.x, 0.0, "{r:?}");
 }
+
+// ── BUG-1482: «semi-replaced» form controls stretch between two insets (Position L3 §5.3) ──
+
+fn control_rect(markup: &str, css: &str) -> Rect {
+    let html = format!(r#"<div id="p">{markup}</div>"#);
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse(&format!(
+        "body{{margin:0}}#p{{position:relative;width:200px;height:100px}}#c{{position:absolute;margin:0;{css}}}"
+    ));
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    super::find_by_id_all(&root, &doc, "c").expect("нет #c").rect
+}
+
+#[test]
+fn abs_form_controls_stretch_between_insets() {
+    for markup in [
+        r#"<button id="c">x</button>"#,
+        r#"<input id="c" type="text">"#,
+        r#"<input id="c" type="button" value="go">"#,
+        r#"<select id="c"><option>a</option></select>"#,
+        r#"<textarea id="c">t</textarea>"#,
+    ] {
+        let r = control_rect(markup, "inset:0;box-sizing:border-box");
+        assert_eq!((r.x, r.y, r.width, r.height), (0.0, 0.0, 200.0, 100.0), "{markup}: {r:?}");
+        let r = control_rect(markup, "top:3px;right:3px;bottom:3px;left:3px;box-sizing:border-box");
+        assert_eq!((r.x, r.y, r.width, r.height), (3.0, 3.0, 194.0, 94.0), "{markup}: {r:?}");
+    }
+}
+
+#[test]
+fn abs_form_control_with_one_inset_keeps_content_size() {
+    let r = control_rect(r#"<button id="c">x</button>"#, "left:0;top:0");
+    assert!(r.width < 50.0 && r.height < 50.0, "{r:?}");
+}
