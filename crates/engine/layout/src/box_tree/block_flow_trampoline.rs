@@ -318,7 +318,15 @@ fn step_child(
                 )
             })
         };
-        let marker_w = default_w.max(text_w); // CSS: list-style-type determines exact width
+        // CSS Lists L3 §3.1: an `inside` marker is an ordinary inline box, so
+        // the line continues right after its text; the `1.5em` floor is only a
+        // gutter for `outside` markers and glyph (bullet) markers without text
+        // (BUG-1548).
+        let marker_w = if position == ListStylePosition::Inside && text_w > 0.0 {
+            text_w
+        } else {
+            default_w.max(text_w) // CSS: list-style-type determines exact width
+        };
         match position {
             ListStylePosition::Outside => {
                 // Out of flow: does not advance child_y.
@@ -333,14 +341,19 @@ fn step_child(
             ListStylePosition::Inside => {
                 // CSS Lists L3 §2.4: inside marker shares the first line with
                 // content. Place at content_x; record indent for the next child.
-                child.rect = Rect::new(
-                    content_x.round(),
-                    child_y.round(),
-                    marker_w.round(),
-                    line_h.round(),
-                );
-                frame.init.inside_marker_w = marker_w.round();
-                frame.init.inside_marker_h = line_h.round();
+                // A text marker is laid out like the inline fragment it stands for:
+                // same `x`, and the half-leading (CSS 2.1 §10.8.1) above its glyphs
+                // that `apply_inline_vertical_align` gives the first line's text —
+                // otherwise the marker sits a pixel above the baseline of the text
+                // that follows it. Bullet markers keep the integer-snapped box.
+                child.rect = if marker_text.is_empty() {
+                    Rect::new(content_x.round(), child_y.round(), marker_w, line_h.round())
+                } else {
+                    let half_leading = (line_h - em) / 2.0;
+                    Rect::new(content_x, child_y + half_leading, marker_w, line_h)
+                };
+                frame.init.inside_marker_w = marker_w;
+                frame.init.inside_marker_h = child.rect.height;
                 // Do NOT advance child_y — marker is inline with content.
             }
         }
