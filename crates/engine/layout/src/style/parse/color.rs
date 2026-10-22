@@ -603,11 +603,12 @@ fn parse_function_color(s: &str) -> Option<Color> {
     if lower.starts_with("color-contrast(") && s.ends_with(')') {
         return parse_color_contrast(&s["color-contrast(".len()..s.len() - 1]);
     }
-    // CSS Color L4 §7 hwb(). Отдельной веткой, а не вариантом `ColorFn`:
-    // относительная форма `hwb(from …)` требует канала в
-    // `relative_origin_channels`, которого у `MixColorSpace::Hwb` нет (там
-    // ветка `_ => srgb`), и вариант молча давал бы неверный результат.
+    // CSS Color L4 §7 hwb(): абсолютная форма разбирается отдельно, относительная
+    // `hwb(from …)` идёт общим путём `ColorFn::Hwb` (CSS Color L5 §4).
     if let Some(b) = lower.strip_prefix("hwb(").and_then(|t| t.strip_suffix(')')) {
+        if let Some(rest) = b.trim_start().strip_prefix("from ") {
+            return parse_relative_color(ColorFn::Hwb, rest.trim());
+        }
         return parse_hwb_body(b);
     }
     let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
@@ -705,6 +706,8 @@ fn parse_function_color(s: &str) -> Option<Color> {
             let (r, g, b) = lab_to_srgb(l, a, b_v);
             Some(Color { r, g, b, a: alpha })
         }
+        // Недостижимо: `hwb(` перехвачен выше, но `match` должен быть исчерпывающим.
+        ColorFn::Hwb => parse_hwb_body(body),
     }
 }
 
@@ -713,11 +716,8 @@ fn parse_function_color(s: &str) -> Option<Color> {
 ///
 /// Формула спеки: при `w + b >= 1` цвет — серый `w / (w + b)`, иначе чистый тон
 /// (`hsl(h 100% 50%)`) сжимается в интервал `[w, 1 - b]`. Относительная форма
-/// (`hwb(from …)`) не поддержана и отвергается — см. вызывающую ветку.
+/// (`hwb(from …)`) разбирает вызывающая ветка, сюда она не попадает.
 fn parse_hwb_body(body: &str) -> Option<Color> {
-    if body.trim_start().starts_with("from ") {
-        return None;
-    }
     // CSS Color 4 §7: у `hwb()` нет legacy-синтаксиса с запятыми.
     if body.contains(',') {
         return None;
@@ -752,6 +752,7 @@ enum ColorFn {
     Oklab,
     Lab,
     Lch,
+    Hwb,
     // Прочие CSS4 расширения (color()) — позже.
 }
 
@@ -767,6 +768,7 @@ impl ColorFn {
             ColorFn::Oklab => M::Oklab,
             ColorFn::Lab => M::Lab,
             ColorFn::Lch => M::Lch,
+            ColorFn::Hwb => M::Hwb,
         }
     }
 
@@ -776,6 +778,7 @@ impl ColorFn {
         match self {
             ColorFn::Rgb => ["r", "g", "b"],
             ColorFn::Hsl => ["h", "s", "l"],
+            ColorFn::Hwb => ["h", "w", "b"],
             ColorFn::Oklch | ColorFn::Lch => ["l", "c", "h"],
             ColorFn::Oklab | ColorFn::Lab => ["l", "a", "b"],
         }
@@ -788,7 +791,7 @@ impl ColorFn {
     fn channel_pct_basis(self) -> [f32; 3] {
         match self {
             ColorFn::Rgb => [255.0, 255.0, 255.0],
-            ColorFn::Hsl => [0.0, 100.0, 100.0],
+            ColorFn::Hsl | ColorFn::Hwb => [0.0, 100.0, 100.0],
             ColorFn::Lab => [100.0, 125.0, 125.0],
             ColorFn::Lch => [100.0, 150.0, 0.0],
             ColorFn::Oklab => [1.0, 0.4, 0.4],
@@ -803,6 +806,8 @@ impl ColorFn {
             ColorFn::Rgb => format!("rgb({} {} {} / {})", c[0], c[1], c[2], alpha),
             // s / l are percentages in hsl().
             ColorFn::Hsl => format!("hsl({} {}% {}% / {})", c[0], c[1], c[2], alpha),
+            // w / b — проценты в hwb().
+            ColorFn::Hwb => format!("hwb({} {}% {}% / {})", c[0], c[1], c[2], alpha),
             ColorFn::Lab => format!("lab({} {} {} / {})", c[0], c[1], c[2], alpha),
             ColorFn::Lch => format!("lch({} {} {} / {})", c[0], c[1], c[2], alpha),
             ColorFn::Oklab => format!("oklab({} {} {} / {})", c[0], c[1], c[2], alpha),
@@ -879,6 +884,7 @@ pub(super) fn relative_color_css(lower: &str) -> Option<String> {
         ("rgb(", ColorFn::Rgb),
         ("hsla(", ColorFn::Hsl),
         ("hsl(", ColorFn::Hsl),
+        ("hwb(", ColorFn::Hwb),
         ("oklch(", ColorFn::Oklch),
         ("oklab(", ColorFn::Oklab),
         ("lab(", ColorFn::Lab),
@@ -891,7 +897,7 @@ pub(super) fn relative_color_css(lower: &str) -> Option<String> {
     let lab = |k| Some(finish_lab(k, [Some(c[0]), Some(c[1]), Some(c[2])], Some(alpha.clamp(0.0, 1.0))));
     match kind {
         ColorFn::Rgb => Some(srgb_function([c[0] / 255.0, c[1] / 255.0, c[2] / 255.0], alpha)),
-        ColorFn::Hsl => {
+        ColorFn::Hsl | ColorFn::Hwb => {
             let col = parse_function_color(&kind.format_resolved(c, alpha))?;
             Some(srgb_function(
                 [f32::from(col.r) / 255.0, f32::from(col.g) / 255.0, f32::from(col.b) / 255.0],

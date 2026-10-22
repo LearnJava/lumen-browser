@@ -855,12 +855,13 @@ fn oklch_to_srgb(c: [f32; 4]) -> [f32; 4] {
 /// |---------|-------------|-----------|-----------|---------|
 /// | `Srgb`  | r·255       | g·255     | b·255     | a (0–1) |
 /// | `Hsl`   | h (deg)     | s (0–100) | l (0–100) | a (0–1) |
+/// | `Hwb`   | h (deg)     | w (0–100) | b (0–100) | a (0–1) |
 /// | `Lab`   | L (0–100)   | a         | b         | a (0–1) |
 /// | `Lch`   | L (0–100)   | C         | h (deg)   | a (0–1) |
 /// | `Oklab` | L (0–1)     | a         | b         | a (0–1) |
 /// | `Oklch` | L (0–1)     | C         | h (deg)   | a (0–1) |
 ///
-/// Spaces other than these six are not valid base functions for relative color
+/// Spaces other than these seven are not valid base functions for relative color
 /// in Lumen and return the sRGB input unchanged.
 #[must_use]
 pub fn relative_origin_channels(space: MixColorSpace, srgb: [f32; 4]) -> [f32; 4] {
@@ -868,6 +869,10 @@ pub fn relative_origin_channels(space: MixColorSpace, srgb: [f32; 4]) -> [f32; 4
         MixColorSpace::Srgb => [srgb[0] * 255.0, srgb[1] * 255.0, srgb[2] * 255.0, srgb[3]],
         MixColorSpace::Hsl => {
             let h = srgb_to_hsl(srgb);
+            [h[0], h[1] * 100.0, h[2] * 100.0, h[3]]
+        }
+        MixColorSpace::Hwb => {
+            let h = srgb_to_hwb(srgb);
             [h[0], h[1] * 100.0, h[2] * 100.0, h[3]]
         }
         MixColorSpace::Lab => srgb_to_lab(srgb),
