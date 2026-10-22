@@ -1,6 +1,6 @@
 # BUG-1480 — После `el.style.display = 'inline'` на `div` `'display' in getComputedStyle(el)` — `false` и значение пустое, пока не пройдёт кадр
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, снимок `getComputedStyle` после мутации `style.display`)
 
@@ -30,3 +30,13 @@ WPT-RUN-14 срез 21: `css-display/parsing/display-computed.html` (105 из 11
 ## Как проверить
 
 Таблица выше; `css/css-display/parsing/display-computed.html`.
+
+## Исправление
+
+Корень — тот же, что у [BUG-1684](BUG-1684-OPEN.md): флаш на инкрементальном пути вытесняет записи стиля
+перестроенных боксов (`prev_node_ids`) и пересобирает их обходом боксов; элемент, потерявший бокс в этом
+рестайле (`div.style.display = 'inline'` без содержимого — пустой inline, BUG-1191), обходом не
+достигается, и его записи нет до следующего полного сбора («через кадр»). Теперь после
+`ScopedCollection::collect_computed_styles` флаш (`crates/js/src/v8_runtime/style_flush.rs`) возвращает
+такие записи из каскада `CounterMap` через `lumen_layout::publish_boxless_computed_style`
+(общий с полным сбором). Тесты: `crates/driver/tests/cases/bug1480_display_inline_computed.rs`.

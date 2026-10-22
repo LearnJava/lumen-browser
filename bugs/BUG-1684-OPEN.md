@@ -31,3 +31,12 @@ closed 361/…/1/false … reclosed 0///false
 - `slotted_child_inherits_from_ua_slot` ожидает поведение Chrome и проходит.
 - `cargo test -p lumen-js --features v8-backend --lib -- uashadowslot details` и тесты затронутого
   крейта layout зелёные.
+
+## Частичный фикс (2026-10-22, P3, BUG-1480)
+
+Публикация записей стиля элементов, потерявших бокс при инкрементальном флаше, возвращена
+(`publish_boxless_computed_style` в `style_flush.rs`): цикл open → close у `<details>` отдаёт
+`getComputedStyle(p).length > 0` и `display: block` (тест в `closed_details_renders_summary_only_and_open_reveals_content`).
+Не сделано: ожидание `e3` в `slotted_child_inherits_from_ua_slot` по-прежнему `-` (проверить, почему оно не
+изменилось, и привести к поведению Chrome) — только оно остаётся от «Готово, когда». Запись бокс-less элемента,
+у которого меняется стиль, пока он остаётся бокс-less, обновляется только полным сбором.
