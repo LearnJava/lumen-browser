@@ -570,6 +570,97 @@ fn content_width_ignores_pop_commands() {
     assert_eq!(content_width_of(&dl), 0.0);
 }
 
+/// BUG-1642: подложка `left: -50vw; width: 150vw` под `overflow: hidden` предком не
+/// прокручивается — её хвост за краем клипа не расширяет контент.
+#[test]
+fn content_width_is_capped_by_overflow_clip() {
+    use lumen_core::geom::Rect;
+    use lumen_layout::Color;
+    use lumen_paint::DisplayCommand;
+    let fill = |x, w| DisplayCommand::FillRect {
+        rect: Rect::new(x, 0.0, w, 10.0),
+        color: Color { r: 0, g: 0, b: 0, a: 255 },
+    };
+    let dl: lumen_paint::DisplayList = vec![
+        fill(0.0, 800.0),
+        DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 800.0, 600.0) },
+        fill(-400.0, 1200.0),
+        // клип внутри клипа не расширяет внешний
+        DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 2000.0, 100.0) },
+        fill(0.0, 1500.0),
+        DisplayCommand::PopClip,
+        DisplayCommand::PopClip,
+    ];
+    assert!((content_width_of(&dl) - 800.0).abs() < 0.01);
+}
+
+#[test]
+fn content_width_counts_content_after_clip_closed_and_clip_box_itself() {
+    use lumen_core::geom::Rect;
+    use lumen_layout::Color;
+    use lumen_paint::DisplayCommand;
+    let fill = |x, w| DisplayCommand::FillRect {
+        rect: Rect::new(x, 0.0, w, 10.0),
+        color: Color { r: 0, g: 0, b: 0, a: 255 },
+    };
+    // Сам бокс с `overflow: hidden` шире viewport-а — это настоящая ширина контента.
+    let wide_box: lumen_paint::DisplayList = vec![
+        DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 1400.0, 100.0) },
+        fill(0.0, 5000.0),
+        DisplayCommand::PopClip,
+    ];
+    assert!((content_width_of(&wide_box) - 1400.0).abs() < 0.01);
+    // После `PopClip` ограничение снято.
+    let after: lumen_paint::DisplayList = vec![
+        DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 300.0, 100.0) },
+        DisplayCommand::PopClip,
+        fill(0.0, 900.0),
+    ];
+    assert!((content_width_of(&after) - 900.0).abs() < 0.01);
+    // `PushClipPath` делит `PopClip` с rect-клипами и ширину не ограничивает.
+    let shaped: lumen_paint::DisplayList = vec![
+        DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 500.0, 100.0) },
+        DisplayCommand::PushClipPath {
+            shape: lumen_paint::display_list::ResolvedClipShape::Circle { cx: 0.0, cy: 0.0, r: 10.0 },
+        },
+        fill(0.0, 900.0),
+        DisplayCommand::PopClip,
+        fill(0.0, 450.0),
+        DisplayCommand::PopClip,
+        fill(0.0, 520.0),
+    ];
+    assert!((content_width_of(&shaped) - 520.0).abs() < 0.01);
+}
+
+/// Ширина контента страницы от HTML до display list-а, как её считает загрузка страницы.
+fn page_content_width(html: &str) -> f32 {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("");
+    let layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, Size::new(800.0, 600.0));
+    crate::display_list_metrics::content_width_in(&dl, &layout, 800.0)
+}
+
+/// BUG-1642: `left: -50vw; width: 150vw` под `overflow: hidden` предком — как на
+/// otpravka.pochta.ru — страницу вбок не растягивает.
+#[test]
+fn page_width_ignores_abs_overflow_inside_hidden_ancestor() {
+    let html = "<body style='margin:0'><div style='overflow:hidden'>        <div style='position:relative;height:100px'>        <div style='position:absolute;left:-400px;width:1200px;height:50px;background:#fcc'></div>        </div></div></body>";
+    assert!(page_content_width(html) <= 800.01, "{}", page_content_width(html));
+}
+
+/// BUG-1642: `overflow-x: hidden` на `<html>` / `<body>` уходит на viewport.
+#[test]
+fn page_width_is_viewport_when_root_overflow_x_hidden() {
+    let wide = "<div style='width:3000px;height:50px;background:#cfc'></div>";
+    let plain = format!("<body style='margin:0'>{wide}</body>");
+    assert!(page_content_width(&plain) > 2999.0);
+    let on_html = format!("<html><body style='margin:0;overflow-x:hidden'>{wide}</body></html>");
+    assert!(page_content_width(&on_html) <= 800.01, "{}", page_content_width(&on_html));
+    let on_body = format!("<html><body style='margin:0;overflow-x:hidden'>{wide}</body></html>");
+    assert!(page_content_width(&on_body) <= 800.01, "{}", page_content_width(&on_body));
+}
+
 // ── Scroll-keybindings ────────────────────────────────────────────────────
 
 #[test]
