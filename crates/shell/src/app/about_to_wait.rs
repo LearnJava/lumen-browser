@@ -1054,15 +1054,24 @@ impl Lumen {
                 }
                 // BUG-1194: hover without a click — the same handler a real
                 // `CursorMoved` runs (hit test, `:hover`, over/out/enter/leave).
+                //
+                // BUG-1458: `x`/`y` are content-viewport coordinates (the
+                // contract of `Target::Point` in `Click`), while
+                // `on_cursor_moved` wants OS-window ones — add the content
+                // origin (`page_offset`, toolbar/sidebar) exactly as
+                // `resolve_automation_target` does for a click. Without it the
+                // pointer landed `CHROME_H` above the target, on the toolbar,
+                // and the page never saw `mouseover`/`:hover`.
                 AutomationCommand::PointerMove { x, y } => {
                     let dpr = self
                         .renderer
                         .as_ref()
                         .map_or(1.0_f64, |r| r.scale_factor())
                         .max(1e-6);
+                    let (offset_x, offset_y) = self.page_offset();
                     self.on_cursor_moved(winit::dpi::PhysicalPosition::new(
-                        f64::from(x) * dpr,
-                        f64::from(y) * dpr,
+                        (f64::from(x) + f64::from(offset_x)) * dpr,
+                        (f64::from(y) + f64::from(offset_y)) * dpr,
                     ));
                     #[cfg(feature = "v8")]
                     self.flush_pointer_moves();

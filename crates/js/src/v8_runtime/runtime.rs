@@ -578,6 +578,16 @@ pub struct V8JsRuntime {
     /// BUG-560: the focus target baked into the current same-tick style flush
     /// snapshot — see [`crate::v8_runtime::style_flush::FlushHandles::last_flushed_focus`].
     pub(super) last_flushed_focus: Arc<Mutex<Option<u32>>>,
+    /// BUG-1458: the engine thread's view of "what node is under the pointer",
+    /// the `:hover` twin of [`Self::focused_nid`]. Written by
+    /// `V8JsRuntime::set_hovered_nid` when the shell's hit test changes its
+    /// `hovered_nid`; read by selector matching (`matches(':hover')`) and by the
+    /// same-tick style flush, so `getComputedStyle()` sees `:hover` rules.
+    /// Without it the engine thread matched `:hover` never.
+    pub(super) hovered_nid: Arc<Mutex<Option<u32>>>,
+    /// BUG-1458: the hover target baked into the current same-tick style flush
+    /// snapshot — see [`crate::v8_runtime::style_flush::FlushHandles::last_flushed_hover`].
+    pub(super) last_flushed_hover: Arc<Mutex<Option<u32>>>,
     /// Node ID of the current pointer capture target (W3C Pointer Events L3 §4.1),
     /// set via `_lumen_set_capture_state`/`_lumen_release_capture_state`.
     /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
@@ -809,6 +819,8 @@ impl V8JsRuntime {
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             focused_nid: Arc::new(Mutex::new(None)),
             last_flushed_focus: Arc::new(Mutex::new(None)),
+            hovered_nid: Arc::new(Mutex::new(None)),
+            last_flushed_hover: Arc::new(Mutex::new(None)),
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
             deterministic_rng_seed: Mutex::new(None),
@@ -1748,6 +1760,14 @@ impl V8JsRuntime {
     /// focus change.
     pub fn set_focused_nid(&self, nid: Option<u32>) {
         *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner()) = nid;
+    }
+
+    /// BUG-1458: record the node under the pointer on the engine thread's own
+    /// mirror ([`Self::hovered_nid`]) — the `:hover` counterpart of
+    /// [`Self::set_focused_nid`]. Called from `notify_hover_changed` each time
+    /// the shell's hit test changes the hovered node.
+    pub fn set_hovered_nid(&self, nid: Option<u32>) {
+        *self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner()) = nid;
     }
 
     /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).
