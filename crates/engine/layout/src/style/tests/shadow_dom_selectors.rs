@@ -396,3 +396,48 @@
         clear_shadow_sheets();
         assert_eq!(custom(&s, "--actual").as_deref(), Some("24px"));
     }
+
+    // ── BUG-1453: `:host` как предок в составном селекторе листа теневого дерева ──
+
+    fn interior_color(css: &str) -> (u8, u8, u8) {
+        let (doc, host, e1) = make_shadow_host_with_interior_child();
+        install_shadow_sheet(host, css);
+        let s = compute_style(&doc, e1, &Stylesheet::default(), &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        (s.color.r, s.color.g, s.color.b)
+    }
+
+    #[test]
+    fn host_descendant_combinator_matches_interior_element() {
+        assert_eq!(interior_color(":host div { color: green; }"), (0, 128, 0));
+        assert_eq!(interior_color(":host #e1 { color: green; }"), (0, 128, 0));
+    }
+
+    #[test]
+    fn host_child_combinator_matches_interior_element() {
+        assert_eq!(interior_color(":host > div { color: green; }"), (0, 128, 0));
+    }
+
+    #[test]
+    fn host_descendant_beats_lower_specificity_interior_rule() {
+        // featureless-001: `:host div.red` (0,2,1+) выигрывает у `div.red`.
+        assert_eq!(
+            interior_color(":host #e1 { color: green; } div { color: red; }"),
+            (0, 128, 0),
+        );
+    }
+
+    #[test]
+    fn host_function_with_descendant_checks_host_selector() {
+        assert_eq!(interior_color(":host(#host) div { color: green; }"), (0, 128, 0));
+        assert_eq!(interior_color(":host(.missing) div { color: green; }"), (0, 0, 0));
+    }
+
+    #[test]
+    fn host_descendant_rule_does_not_apply_to_slotted_light_child() {
+        let (doc, host, slotted) = make_shadow_host_with_slotted();
+        install_shadow_sheet(host, ":host span { color: green; }");
+        let s = compute_style(&doc, slotted, &Stylesheet::default(), &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 0));
+    }
