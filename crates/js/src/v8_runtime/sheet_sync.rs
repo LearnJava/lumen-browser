@@ -24,7 +24,7 @@ use lumen_css_parser::{CssomOp, Stylesheet, StylesheetNodeEntry, StylesheetRevis
 use lumen_dom::{Document, NodeData, NodeId};
 
 use super::named_access::lock_document_bounded;
-use super::runtime::DomTouched;
+use super::dom_touched::DomTouched;
 use super::style_flush::CssomDeltaLog;
 
 /// Лист шелла до наложения CSSOM-правок и ревизия результата наложения —

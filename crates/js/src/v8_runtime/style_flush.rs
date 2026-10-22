@@ -183,13 +183,13 @@ pub(crate) struct FlushHandles {
     /// instead. Cleared by `V8JsRuntime::update_hit_test_tree`.
     pub(crate) hit_tree_stale: Arc<AtomicBool>,
     /// BUG-1211: page-side DOM-mutation tracker (BUG-341 S7), read-only here
-    /// — [`Self::maybe_flush`] only *peeks* at [`super::runtime::DomTouched`],
+    /// — [`Self::maybe_flush`] only *peeks* at [`super::dom_touched::DomTouched`],
     /// it never drains it. Draining is [`super::runtime::V8JsRuntime::
     /// take_dom_touched`]'s job (the shell's rAF/relayout pipeline), and a
     /// same-tick flush that also drained it would make the page pipeline's
     /// own next `try_relayout_raf_incremental` blind to mutations this flush
     /// already saw, forcing an unnecessary full cascade there instead.
-    pub(crate) dom_touched: Arc<Mutex<super::runtime::DomTouched>>,
+    pub(crate) dom_touched: Arc<Mutex<super::dom_touched::DomTouched>>,
     /// BUG-1211: incremental same-tick flush basis — the previous flush's
     /// laid-out tree, cascade cache and the inputs it was built against
     /// (viewport, sheet revision, focus). `None` until the first successful
@@ -299,7 +299,7 @@ pub(crate) struct IncrFlushBasis {
     pub(crate) focus: Option<u32>,
     /// BUG-1458: hover baked into `layout`/`cascade` — the twin of [`Self::focus`].
     pub(crate) hover: Option<u32>,
-    /// BUG-1211: [`super::runtime::DomTouched::epoch`] at the moment this
+    /// BUG-1211: [`super::dom_touched::DomTouched::epoch`] at the moment this
     /// basis was produced — the watermark [`FlushHandles::
     /// try_incremental_flush`] diffs `touch_gen` against, since `touched.
     /// nodes` itself is never drained (see [`FlushHandles::dom_touched`]'s
@@ -1187,7 +1187,7 @@ impl FlushHandles {
     ///   StylesheetRevision`] changed since the basis was taken — either can
     ///   affect any node's cascade, so nothing in the old tree is safely
     ///   reusable (mirrors BUG-743's rationale in `relayout.rs`);
-    /// * [`super::runtime::DomTouched::unattributed_since`] the basis — an untracked
+    /// * [`super::dom_touched::DomTouched::unattributed_since`] the basis — an untracked
     ///   mutation primitive (`execCommand`, contenteditable, Shadow DOM
     ///   attach) whose reach `dirty_roots` cannot express.
     ///
@@ -1204,7 +1204,7 @@ impl FlushHandles {
         measurer: &lumen_paint::FontMeasurer<'_>,
         current_focus: Option<u32>,
         current_hover: Option<u32>,
-        touched: &super::runtime::DomTouched,
+        touched: &super::dom_touched::DomTouched,
         content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
         // BUG-935 срез 58: why a flush fell back to the full path — on a live
