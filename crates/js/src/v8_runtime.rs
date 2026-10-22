@@ -100,6 +100,8 @@ use named_access::set_named_access_document;
 use style_flush::FlushHandles;
 use thread::v8_thread_main;
 mod overrides;
+mod console_natives;
+mod dom_touched;
 mod runtime;
 
 pub use overrides::{
@@ -107,7 +109,8 @@ pub use overrides::{
     set_global_user_agent_override,
     timezone_override_script, user_agent_override_script,
 };
-pub use runtime::{CustomPropertySnapshot, DomChanges, DomTouched, PseudoComputedStyles, V8JsRuntime};
+pub use dom_touched::{DomChanges, DomTouched};
+pub use runtime::{CustomPropertySnapshot, PseudoComputedStyles, V8JsRuntime};
 pub use style_flush::{attr_narrowing_enabled, child_list_narrowing_enabled, fresh_node_roots_enabled};
 pub use sheet_sync::CascadeSource;
 pub(crate) use script_attribution::capture_call_site as script_attribution_capture_call_site;

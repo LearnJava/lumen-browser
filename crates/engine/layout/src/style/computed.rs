@@ -631,6 +631,10 @@ pub struct ComputedStyle {
     /// default: the edges a break cuts lose them). Read by the nested-multicol cut in
     /// `multicol_trampoline`; not inherited.
     pub box_decoration_clone: bool,
+    /// The box is one fragment of a multicol container that its multicol parent cut across its own
+    /// columns (`multicol_nested`): the rows of columns of the last band end where the fragment
+    /// does, not at a full `column-height`. Set by the layout, never by the cascade.
+    pub multicol_fragment: bool,
     /// CSS Fragmentation L3 §3.1 — `break-before`. Phase 0 — enum со
     /// значениями auto/avoid/always/page/column/region. Не наследуется.
     pub break_before: BreakValue,
@@ -1005,6 +1009,11 @@ pub struct ComputedStyle {
     /// отдавал `-webkit-box` (`webkit_box_computed_display`). `None` — обычный `display`
     /// (в том числе зажатый `-webkit-line-clamp` бокс, он остаётся блоком). Не наследуется.
     pub legacy_box_display: Option<Display>,
+    /// CSS Display 3 §2 — каноническая строка `display`, которую `Display` не выражает
+    /// (`inline list-item`, `ruby`, `block math`, `run-in flex`, `ruby-text`), вместе с тем
+    /// `Display`, в который её свёл разбор. Сериализатор верит строке, пока `style.display` равен
+    /// этому `Display`: блокификация или каскад, поменявшие его, обесценивают форму. Не наследуется.
+    pub display_form: Option<(Display, &'static str)>,
     /// CSS Overflow L4 §continue — `continue`. Не наследуется. Initial
     /// `Normal`. Phase 0: parsing + storage, участвует в том же computed-
     /// value quirk что и `box_orient`; фрагментационное поведение
@@ -1523,6 +1532,7 @@ impl ComputedStyle {
             column_fill_balance: true,
             column_fill_balance_all: false,
             box_decoration_clone: false,
+            multicol_fragment: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
@@ -1649,6 +1659,7 @@ impl ComputedStyle {
             box_flex: 0.0,
             box_ordinal_group: 1,
             legacy_box_display: None,
+            display_form: None,
             continue_value: CssContinue::Normal,
             orphans: 2,
             widows: 2,
@@ -1938,6 +1949,7 @@ impl ComputedStyle {
             column_fill_balance: true,
             column_fill_balance_all: false,
             box_decoration_clone: false,
+            multicol_fragment: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
@@ -2092,6 +2104,7 @@ impl ComputedStyle {
             box_flex: 0.0,
             box_ordinal_group: 1,
             legacy_box_display: None,
+            display_form: None,
             continue_value: CssContinue::Normal,
             // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
             orphans: inherited.orphans,

@@ -421,7 +421,7 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// behind the score plus their pre-/post-shift geometry, largest impact
     /// first (§4.2 attribution, capped at five); `had_input` = whether user
     /// input occurred recently.
-    fn deliver_layout_shift(&self, value: f64, sources: &[crate::relayout::LayoutShiftSource], had_input: bool);
+    fn deliver_layout_shift(&self, value: f64, sources: &[crate::layout_shift::LayoutShiftSource], had_input: bool);
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1265,7 +1265,7 @@ impl PersistentJs for V8PersistentJs {
             "_lumen_deliver_lcp_entry({element_id}, {size}, {start_ms}, {render_time_ms})"
         ));
     }
-    fn deliver_layout_shift(&self, value: f64, sources: &[crate::relayout::LayoutShiftSource], had_input: bool) {
+    fn deliver_layout_shift(&self, value: f64, sources: &[crate::layout_shift::LayoutShiftSource], had_input: bool) {
         let had_input_js = if had_input { "true" } else { "false" };
         // GAP-LAYOUTSHIFT срез 3 (BUG-809): each source carries its
         // pre-/post-shift border box so the shim can build a real

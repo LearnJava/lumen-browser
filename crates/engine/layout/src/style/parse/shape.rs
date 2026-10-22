@@ -21,7 +21,7 @@ fn parse_shape_value(s: &str) -> Option<ShapeValue> {
 }
 
 /// Парсит `<basic-shape>` для `clip-path` (CSS Masking L1 §3.5).
-/// Поддерживает: `inset(t r b l)`, `circle(r at cx cy)`,
+/// Поддерживает: `inset(t r b l)`, `rect()`/`xywh()` (сводятся к `inset()`), `circle(r at cx cy)`,
 /// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`,
 /// `path([<fill-rule>,]? "<svg>")` (CSS Shapes L1 §4).
 pub(in crate::style) fn parse_clip_path(s: &str) -> Option<ClipPath> {
@@ -107,21 +107,81 @@ fn split_at_keyword(inner: &str) -> (Vec<&str>, Option<Vec<&str>>) {
     }
 }
 
+/// 1..=4 `<length-percentage>` подряд.
+fn shape_values(toks: &[&str]) -> Option<Vec<ShapeValue>> {
+    let v: Option<Vec<ShapeValue>> = toks.iter().map(|t| parse_shape_value(t)).collect();
+    v.filter(|v| (1..=4).contains(&v.len()))
+}
+
+/// `<border-radius>` после `round`: `<radii>{1,4} [/ <radii>{1,4}]?` → (rx, ry);
+/// `ry` пуст, если `/` не было.
+fn parse_round_radii(radii: &[&str]) -> Option<(Vec<ShapeValue>, Vec<ShapeValue>)> {
+    Some(match radii.iter().position(|t| *t == "/") {
+        Some(j) => (shape_values(&radii[..j])?, shape_values(&radii[j + 1..])?),
+        None => (shape_values(radii)?, Vec::new()),
+    })
+}
+
 /// `inset(…)`: `<sides>{1,4} [round <radii>{1,4} [/ <radii>{1,4}]]?`.
 fn parse_inset(inner: &str) -> Option<ClipPath> {
     let toks: Vec<&str> = inner.split_whitespace().collect();
     let round = toks.iter().position(|t| t.eq_ignore_ascii_case("round"));
-    let values = |toks: &[&str]| -> Option<Vec<ShapeValue>> {
-        let v: Option<Vec<ShapeValue>> = toks.iter().map(|t| parse_shape_value(t)).collect();
-        v.filter(|v| (1..=4).contains(&v.len()))
-    };
-    let sides = values(&toks[..round.unwrap_or(toks.len())])?;
+    let sides = shape_values(&toks[..round.unwrap_or(toks.len())])?;
     let Some(i) = round else { return Some(ClipPath::Inset(sides)) };
-    let radii = &toks[i + 1..];
-    let (rx, ry) = match radii.iter().position(|t| *t == "/") {
-        Some(j) => (values(&radii[..j])?, values(&radii[j + 1..])?),
-        None => (values(radii)?, Vec::new()),
+    let (rx, ry) = parse_round_radii(&toks[i + 1..])?;
+    Some(ClipPath::InsetRound { sides, rx, ry })
+}
+
+/// Отступ от дальней стороны для края, заданного позицией `parts` от ближней:
+/// `100% − Σ parts`. Чистый px или чистый процент остаются простыми значениями.
+fn far_inset(parts: &[ShapeValue]) -> ShapeValue {
+    let (mut px, mut pct) = (0.0, 100.0);
+    for p in parts {
+        match *p {
+            ShapeValue::Px(v) => px -= v,
+            ShapeValue::Pct(v) => pct -= v,
+            ShapeValue::Lin { px: a, pct: b } => {
+                px -= a;
+                pct -= b;
+            }
+            ShapeValue::ClosestSide | ShapeValue::FarthestSide => {}
+        }
+    }
+    if px == 0.0 { ShapeValue::Pct(pct) } else { ShapeValue::Lin { px, pct } }
+}
+
+/// `rect(<top> <right> <bottom> <left> [round …])` и `xywh(<x> <y> <w> <h> [round …])`
+/// (CSS Shapes L1 §3.2–3.3) сводятся к `inset()`: `rect` задаёт края расстояниями от
+/// верхнего/левого края reference box (`auto` — сам край), `xywh` — позицией и размером;
+/// отступ от правой/нижней стороны — `100% − …` ([`far_inset`]).
+fn parse_rect_xywh(func: &str, inner: &str) -> Option<ClipPath> {
+    let toks: Vec<&str> = inner.split_whitespace().collect();
+    let round = toks.iter().position(|t| t.eq_ignore_ascii_case("round"));
+    let args = &toks[..round.unwrap_or(toks.len())];
+    let [a, b, c, d] = args else { return None };
+    let zero = ShapeValue::Px(0.0);
+    let sides = if func == "rect" {
+        let edge = |t: &&str| -> Option<Option<ShapeValue>> {
+            if t.eq_ignore_ascii_case("auto") { Some(None) } else { parse_shape_value(t).map(Some) }
+        };
+        let (top, right, bottom, left) = (edge(a)?, edge(b)?, edge(c)?, edge(d)?);
+        vec![
+            top.unwrap_or(zero),
+            right.map_or(zero, |r| far_inset(&[r])),
+            bottom.map_or(zero, |v| far_inset(&[v])),
+            left.unwrap_or(zero),
+        ]
+    } else {
+        let (x, y) = (parse_shape_value(a)?, parse_shape_value(b)?);
+        let (w, h) = (parse_shape_value(c)?, parse_shape_value(d)?);
+        let negative = |v: ShapeValue| matches!(v, ShapeValue::Px(n) | ShapeValue::Pct(n) if n < 0.0);
+        if negative(w) || negative(h) {
+            return None;
+        }
+        vec![y, far_inset(&[x, w]), far_inset(&[y, h]), x]
     };
+    let Some(i) = round else { return Some(ClipPath::Inset(sides)) };
+    let (rx, ry) = parse_round_radii(&toks[i + 1..])?;
     Some(ClipPath::InsetRound { sides, rx, ry })
 }
 
@@ -193,6 +253,7 @@ fn parse_basic_shape(s: &str) -> Option<ClipPath> {
             }
         }
         "inset" => parse_inset(inner),
+        "rect" | "xywh" => parse_rect_xywh(&func, inner),
         "circle" => {
             // `[<radius>]? [at <position>]?`; без радиуса — `closest-side`.
             let (radii, at) = split_at_keyword(inner);

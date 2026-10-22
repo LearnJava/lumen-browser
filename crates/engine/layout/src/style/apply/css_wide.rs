@@ -680,6 +680,7 @@ fn apply_css_wide_keyword_with(
                 Revert => init.display,
                 _ => Display::Inline,
             };
+            style.display_form = if matches!(kw, Inherit) { inherited.display_form } else { None };
             style.grid_lanes.enabled = if inh_only_inherit { inherited.grid_lanes.enabled } else { false };
         }
         // CSS Grid L3 §3: свойства `grid-lanes` не наследуются.

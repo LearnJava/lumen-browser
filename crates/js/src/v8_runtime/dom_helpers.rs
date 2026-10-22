@@ -213,7 +213,7 @@ pub(super) fn record_dom_touch_child_edit(tracker: &Mutex<DomTouched>, nid: Node
         return;
     };
     let log = t.child_edits.entry(nid).or_default();
-    if log.len() >= super::runtime::CHILD_EDIT_CAP {
+    if log.len() >= super::dom_touched::CHILD_EDIT_CAP {
         log.clear();
         t.child_any_gen.insert(nid, touch_gen);
         return;
@@ -283,7 +283,7 @@ pub(super) fn record_dom_touch_attr(tracker: &Mutex<DomTouched>, nid: NodeId, at
     t.touch_gen.insert(nid, touch_gen);
     // BUG-935 срез 68: a `class`/`id` write keeps the value it replaced, so the flush can
     // tell which tokens moved since its basis.
-    if let Some(kind) = super::runtime::LoggedAttr::of(attr) {
+    if let Some(kind) = super::dom_touched::LoggedAttr::of(attr) {
         t.value_log.entry((nid, kind)).or_default().push(touch_gen, before.unwrap_or(""));
     }
     let names = t.attr_gen.entry(nid).or_default();

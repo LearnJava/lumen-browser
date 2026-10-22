@@ -47,7 +47,7 @@ pub(crate) struct EngineCommit {
     /// submission time); `apply_relayout_result` then falls back to its own
     /// inline collection, matching pre-S41 behaviour.
     #[cfg(feature = "v8")]
-    pub(crate) precollected: Option<crate::relayout::PrecollectedJsData>,
+    pub(crate) precollected: Option<crate::js_precollect::PrecollectedJsData>,
 }
 
 /// ADR-016 M2.2c-2b: персистентное состояние движкового потока `S` — «место»

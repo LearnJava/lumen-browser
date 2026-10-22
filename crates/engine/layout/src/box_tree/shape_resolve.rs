@@ -565,6 +565,7 @@ pub(crate) fn resolve_shape(sv: &str, bx: &FloatBoxes) -> Option<Vec<Prim>> {
         "circle" => resolve_circle(&inner.to_ascii_lowercase(), rect, bx),
         "ellipse" => resolve_ellipse(&inner.to_ascii_lowercase(), rect, bx),
         "inset" => resolve_inset(&inner.to_ascii_lowercase(), rect, bx),
+        "rect" | "xywh" => resolve_rect_xywh(name == "rect", &inner.to_ascii_lowercase(), rect, bx),
         "polygon" => resolve_polygon(&inner.to_ascii_lowercase(), rect, bx),
         "path" => {
             let pts = parse_shape_path_px(func)?;
@@ -753,6 +754,12 @@ fn resolve_inset(inner: &str, rect: Rect4, bx: &FloatBoxes) -> Option<Vec<Prim>>
         x1: rect.x1 - r.of(rect.w()),
         y1: rect.y1 - b.of(rect.h()),
     };
+    rounded_rect(inner_rect, round, bx)
+}
+
+/// The rounded rectangle `inner_rect` (an empty shape when it has no area) with the
+/// `round <radii>` tokens, if any.
+fn rounded_rect(inner_rect: Rect4, round: Option<&[&str]>, bx: &FloatBoxes) -> Option<Vec<Prim>> {
     if inner_rect.x1 <= inner_rect.x0 || inner_rect.y1 <= inner_rect.y0 {
         return Some(Vec::new());
     }
@@ -762,6 +769,39 @@ fn resolve_inset(inner: &str, rect: Rect4, bx: &FloatBoxes) -> Option<Vec<Prim>>
     };
     clamp_radii(&mut radii, inner_rect.w(), inner_rect.h());
     Some(vec![Prim::RRect { x0: inner_rect.x0, y0: inner_rect.y0, x1: inner_rect.x1, y1: inner_rect.y1, radii }])
+}
+
+/// CSS Shapes L1 §3.2–3.3 — `rect(<top> <right> <bottom> <left>)` (distances from the
+/// top/left edge of the reference box, `auto` = the edge itself) and
+/// `xywh(<x> <y> <w> <h>)`, each with an optional `round <radii>`.
+fn resolve_rect_xywh(is_rect: bool, inner: &str, rect: Rect4, bx: &FloatBoxes) -> Option<Vec<Prim>> {
+    let spaced = inner.replace('/', " / ");
+    let toks = split_ws(&spaced);
+    let (args, round) = match toks.iter().position(|t| *t == "round") {
+        Some(i) => (&toks[..i], Some(&toks[i + 1..])),
+        None => (&toks[..], None),
+    };
+    let [a, b, c, d] = args else { return None };
+    let (w, h) = (rect.w(), rect.h());
+    let inner_rect = if is_rect {
+        let edge = |t: &str, basis: f32, auto: f32| -> Option<f32> {
+            if t == "auto" { Some(auto) } else { Lp::parse(t, bx.em).map(|lp| lp.of(basis)) }
+        };
+        Rect4 {
+            y0: rect.y0 + edge(a, h, 0.0)?,
+            x1: rect.x0 + edge(b, w, w)?,
+            y1: rect.y0 + edge(c, h, h)?,
+            x0: rect.x0 + edge(d, w, 0.0)?,
+        }
+    } else {
+        let (x, y) = (Lp::parse(a, bx.em)?.of(w), Lp::parse(b, bx.em)?.of(h));
+        let (bw, bh) = (Lp::parse(c, bx.em)?.of(w), Lp::parse(d, bx.em)?.of(h));
+        if bw < 0.0 || bh < 0.0 {
+            return None;
+        }
+        Rect4 { x0: rect.x0 + x, y0: rect.y0 + y, x1: rect.x0 + x + bw, y1: rect.y0 + y + bh }
+    };
+    rounded_rect(inner_rect, round, bx)
 }
 
 fn resolve_polygon(inner: &str, rect: Rect4, bx: &FloatBoxes) -> Option<Vec<Prim>> {

@@ -8,7 +8,7 @@
 //! кладёт итог (или не кладёт — «поток занят»).
 
 use super::*;
-use crate::app::about_to_wait::EvalOutcome;
+use crate::app::automation_cmds::EvalOutcome;
 use crate::engine_thread::EngineWork;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
