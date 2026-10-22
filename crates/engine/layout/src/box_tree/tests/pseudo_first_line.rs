@@ -169,7 +169,8 @@ mod first_letter_drop_cap {
         let cap = find_drop_cap(&root).expect("drop-cap box not created");
         assert_eq!(letter_seg(cap).text, "X");
         assert!(find_rest_run(&root).is_none(), "emptied InlineRun must be dropped");
-        // CSS 2.1 §9.5: the paragraph height still encloses the float.
+        // CSS 2.1 §10.6.3: the paragraph is no BFC root, so its (empty) flow height stays 0
+        // and the float sticks out of it.
         fn find_p<'a>(b: &'a super::super::super::LayoutBox, cap: &super::super::super::LayoutBox) -> Option<&'a super::super::super::LayoutBox> {
             if b.children.iter().any(|c| std::ptr::eq(c, cap)) {
                 return Some(b);
@@ -178,8 +179,8 @@ mod first_letter_drop_cap {
         }
         let p = find_p(&root, cap).expect("paragraph not found");
         assert!(
-            p.rect.height >= cap.rect.height - 0.01,
-            "paragraph height {} must enclose float {}",
+            p.rect.height.abs() < 0.01,
+            "paragraph height {} must not enclose float {}",
             p.rect.height,
             cap.rect.height,
         );
