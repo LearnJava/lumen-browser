@@ -854,6 +854,32 @@ fn apply_css_wide_keyword_with(
             style.block_step_align = src.block_step_align;
             style.block_step_round = src.block_step_round;
         }
+        // CSS Multi-column L1 §3 / L2 §4 — none of the column properties are inherited.
+        "column-count" | "column-width" | "column-height" | "column-wrap" | "column-fill"
+        | "column-span" | "columns" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            let all = prop == "columns";
+            if all || prop == "column-count" {
+                style.column_count = src.column_count;
+            }
+            if all || prop == "column-width" {
+                style.column_width = src.column_width.clone();
+            }
+            if all || prop == "column-height" {
+                style.column_height = src.column_height.clone();
+            }
+            if all || prop == "column-wrap" {
+                style.column_wrap_nowrap = src.column_wrap_nowrap;
+                style.column_wrap_explicit = src.column_wrap_explicit;
+            }
+            if prop == "column-fill" {
+                style.column_fill_balance = src.column_fill_balance;
+                style.column_fill_balance_all = src.column_fill_balance_all;
+            }
+            if prop == "column-span" {
+                style.column_span_all = src.column_span_all;
+            }
+        }
         // CSS Multi-column L1 §4 / CSS Gap Decorations L1 §3 — none of the
         // `*-rule*` properties are inherited.
         "column-rule-width" | "column-rule-style" | "column-rule-color" | "column-rule"

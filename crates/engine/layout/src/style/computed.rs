@@ -623,6 +623,9 @@ pub struct ComputedStyle {
     /// колонками), `false` = auto (заполняет колонки последовательно до
     /// высоты контейнера). Не наследуется.
     pub column_fill_balance: bool,
+    /// `column-fill: balance-all` (Multicol L2 §6.2) — раскладывается как `balance`, но
+    /// `getComputedStyle` отдаёт исходное ключевое слово.
+    pub column_fill_balance_all: bool,
     /// CSS Fragmentation L3 §5.1 — `box-decoration-break: slice | clone`. `true` = `clone` (every
     /// fragment of the box keeps its own full border, padding and margin), `false` = `slice` (the
     /// default: the edges a break cuts lose them). Read by the nested-multicol cut in
@@ -1514,6 +1517,7 @@ impl ComputedStyle {
             border_spacing_v: 0.0,
             column_span_all: false,
             column_fill_balance: true,
+            column_fill_balance_all: false,
             box_decoration_clone: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
@@ -1927,6 +1931,7 @@ impl ComputedStyle {
             row_rule_inset: RuleInsets::default(),
             column_span_all: false,
             column_fill_balance: true,
+            column_fill_balance_all: false,
             box_decoration_clone: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,

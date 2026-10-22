@@ -651,7 +651,7 @@ pub(in crate::style) fn split_top_level_ws(s: &str) -> Vec<&str> {
 /// literal top-level negative (same `non_negative` leniency
 /// [`canonical_specified_length`] gives calc() — a negative *inside*
 /// `calc()` isn't known without resolving it, so it's left alone).
-fn parse_overflow_clip_margin_length(tok: &str) -> Option<Length> {
+pub(in crate::style) fn parse_overflow_clip_margin_length(tok: &str) -> Option<Length> {
     if looks_like_function_call(tok) {
         let len = parse_math_function_value(tok)?;
         if let Length::Calc(node) = &len

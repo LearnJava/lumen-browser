@@ -681,8 +681,10 @@ pub(in crate::style) fn apply_decl_layout(
             let mut width: Option<Length> = None;
             let mut had_width = false;
             let mut had_count = false;
+            let mut had_auto = false;
             for p in &parts {
                 if p.eq_ignore_ascii_case("auto") {
+                    had_auto = true;
                     continue;
                 }
                 if let Ok(n) = p.parse::<u32>()
@@ -707,10 +709,13 @@ pub(in crate::style) fn apply_decl_layout(
                     .filter(|l| !matches!(l, Length::Px(v) if *v < 0.0))
                     .map(Some),
             };
-            if (had_width || had_count) && let Some(h) = height_len {
+            if (had_width || had_count || had_auto) && let Some(h) = height_len {
                 style.column_width = width;
                 style.column_count = count;
                 style.column_height = h;
+                // Multicol L2 §4.5: `column-wrap` — longhand шортката, сбрасывается им в `auto`.
+                style.column_wrap_nowrap = false;
+                style.column_wrap_explicit = false;
             }
         }
         // CSS Multi-column L1 §4 + CSS Gap Decorations L1 §3: `column-rule*` / `row-rule*`
@@ -779,8 +784,18 @@ pub(in crate::style) fn apply_decl_layout(
         }
         "column-fill" => {
             match val.trim().to_ascii_lowercase().as_str() {
-                "balance" => style.column_fill_balance = true,
-                "auto" => style.column_fill_balance = false,
+                "balance" => {
+                    style.column_fill_balance = true;
+                    style.column_fill_balance_all = false;
+                }
+                "balance-all" => {
+                    style.column_fill_balance = true;
+                    style.column_fill_balance_all = true;
+                }
+                "auto" => {
+                    style.column_fill_balance = false;
+                    style.column_fill_balance_all = false;
+                }
                 _ => {}
             }
         }

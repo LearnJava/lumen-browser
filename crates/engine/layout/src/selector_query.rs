@@ -1464,6 +1464,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("block-step".into(), block_step_shorthand_computed(style));
     // CSS Gap Decorations L1 §3–§4: `column-rule*` / `row-rule*` / `rule*`.
     crate::style::insert_gap_rule_computed(style, &mut m);
+    // CSS Multi-column L1/L2: `column-count/width/height/fill/span/wrap` and `columns`.
+    crate::style::insert_multicol_computed(style, &mut m);
 
     m.insert("width".into(), style.width.as_ref().map_or("auto".into(), length_to_css));
     m.insert("height".into(), style.height.as_ref().map_or("auto".into(), length_to_css));

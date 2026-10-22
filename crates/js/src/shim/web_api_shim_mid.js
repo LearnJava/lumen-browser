@@ -2777,6 +2777,11 @@ var _LUMEN_LINE_WIDTH_PROPERTIES = {
 // intrinsic keywords and `canonical_specified_length`'s `"auto"` handling is
 // margin/inset-specific (rejects a negative sizing length that margin/inset
 // would accept).
+// BUG-1402: multicol longhands with a non-keyword grammar plus the `columns` shorthand —
+// native `_lumen_css_canonical_multicol` (engine `style::values::multicol_cssom`).
+var _LUMEN_MULTICOL_PROPERTIES = {
+    'column-count': 1, 'column-width': 1, 'column-height': 1, 'columns': 1,
+};
 var _LUMEN_SIZING_LENGTH_PROPERTIES = {
     'width': 1, 'height': 1,
 };
@@ -2851,6 +2856,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // `none | <length [0,∞]>` grammar, not a flat keyword list, so it gets
     // its own canon function (`_lumen_css_canonical_block_step_size`,
     // native) below instead of an entry here.
+    'column-fill': ['auto', 'balance', 'balance-all'],
+    'column-span': ['none', 'all'],
+    'column-wrap': ['auto', 'nowrap', 'wrap'],
     'block-step-insert': ['margin-box', 'padding-box', 'content-box'],
     'block-step-align':  ['auto', 'center', 'start', 'end'],
     'block-step-round':  ['up', 'down', 'nearest'],
@@ -3524,6 +3532,14 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (_LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_sizing_length(strVal);
     }
+    if (_LUMEN_MULTICOL_PROPERTIES.hasOwnProperty(key)) {
+        if (key === 'column-count') {
+            // `calc(1 + 234)` folds to `235` through the typed math evaluator.
+            var countMath = _lumen_math_value_canon(key, strVal);
+            if (countMath !== undefined) return countMath;
+        }
+        return _lumen_css_canonical_multicol(key, strVal);
+    }
     if (_LUMEN_MIN_MAX_SIZE_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_min_max_size(strVal, _LUMEN_MIN_MAX_SIZE_PROPERTIES[key]);
     }
@@ -3819,6 +3835,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val) {
         _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_MULTICOL_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_MIN_MAX_SIZE_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_CONTAIN_INTRINSIC_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_GRID_PROPERTIES.hasOwnProperty(key) ||
