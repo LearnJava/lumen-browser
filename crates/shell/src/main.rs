@@ -41,6 +41,7 @@ mod caret_blink;
 mod close_warning;
 mod status_bubble;
 mod chrome_float;
+mod chrome_action;
 mod chrome_preview;
 mod chrome_ui;
 mod cli_args;
