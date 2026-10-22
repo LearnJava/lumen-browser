@@ -9684,9 +9684,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // top-left corner to the container's. That old always-top-left
         // shortcut also only computed the right offset when the container
         // happened to be at scroll position 0 (see the git history of this
-        // function for the derivation) — `contentX`/`contentY` below fold the
-        // container's CURRENT scroll back in, so 'start' is correct at any
-        // starting scroll position, not just zero.
+        // function for the derivation) — `contentX`/`contentY` below are the
+        // target's offset inside the container's unscrolled content, so
+        // 'start' is correct at any starting scroll position, not just zero.
         scrollIntoView: function(arg) { var nid = this.__nid__;
             var opts = _lumen_parse_scroll_into_view_opts(arg);
             // Scroll the nearest ancestor scroll container to make this element visible.
@@ -9711,10 +9711,21 @@ var _LUMEN_WRAPPER_MEMBERS = {
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) {
-                        var contentX = (r[0] - smLeft - pr[0]) + ps[0];
-                        var contentY = (r[1] - smTop - pr[1]) + ps[1];
-                        var newX = _lumen_align_scroll(contentX, mw, pr[2], ps[0], opts.inline);
-                        var newY = _lumen_align_scroll(contentY, mh, pr[3], ps[1], opts.block);
+                        // `_lumen_get_bounding_rect` answers in document coordinates, with
+                        // NO ancestor scroll offset applied (BUG-1166) — so the difference
+                        // of two rects is already the target's offset inside the container's
+                        // unscrolled content, wherever the container is scrolled to now.
+                        // (Adding `ps` here, as this once did, moved the target further on
+                        // every call from an already-scrolled container.)
+                        // The scrollport is the PADDING box: its origin and size drop the border.
+                        var bl = parseFloat(_lumen_get_computed_style(parent, 'border-left-width')) || 0;
+                        var bt = parseFloat(_lumen_get_computed_style(parent, 'border-top-width')) || 0;
+                        var br = parseFloat(_lumen_get_computed_style(parent, 'border-right-width')) || 0;
+                        var bb = parseFloat(_lumen_get_computed_style(parent, 'border-bottom-width')) || 0;
+                        var contentX = (r[0] - smLeft) - (pr[0] + bl);
+                        var contentY = (r[1] - smTop) - (pr[1] + bt);
+                        var newX = _lumen_align_scroll(contentX, mw, pr[2] - bl - br, ps[0], opts.inline);
+                        var newY = _lumen_align_scroll(contentY, mh, pr[3] - bt - bb, ps[1], opts.block);
                         _lumen_scroll_to_pos(parent, newX, newY, opts.behavior);
                         var parentEl = _lumen_make_element(parent);
                         if (parentEl) {
@@ -9735,8 +9746,9 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var vp = _lumen_get_viewport_size();
             var curX = _lumen_get_page_scroll_x();
             var curY = _lumen_get_page_scroll_y();
-            var pageX = _lumen_align_scroll((r[0] - smLeft) + curX, mw, vp[0], curX, opts.inline);
-            var pageY = _lumen_align_scroll((r[1] - smTop) + curY, mh, vp[1], curY, opts.block);
+            // Document coordinates already (BUG-1166): no `+ cur`.
+            var pageX = _lumen_align_scroll(r[0] - smLeft, mw, vp[0], curX, opts.inline);
+            var pageY = _lumen_align_scroll(r[1] - smTop, mh, vp[1], curY, opts.block);
             _lumen_scroll_to_pos('p', pageX, pageY, opts.behavior);
             return _lumen_scroll_settle_promise(window, function() {
                 return [_lumen_get_committed_page_scroll_x(), _lumen_get_committed_page_scroll_y()];

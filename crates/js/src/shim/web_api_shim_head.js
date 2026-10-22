@@ -127,11 +127,14 @@ function _lumen_smooth_scroll(key, tx, ty) {
         ty = Math.min(Math.max(ty, 0), max[1]);
     }
     var a = _lumen_smooth_anims[key];
-    if (a !== undefined && a.fin === 0 && Math.abs(a.tx - tx) < 1 && Math.abs(a.ty - ty) < 1) return;
+    // The same target as the running (or just landed, `scrollend` still owed)
+    // animation: nothing to do — a caller re-issuing the call every timer tick
+    // must neither restart the curve nor cancel the pending `scrollend`.
+    if (a !== undefined && (a.fin === 0 || a.landed) && Math.abs(a.tx - tx) < 1 && Math.abs(a.ty - ty) < 1) return;
     if (a === undefined && Math.abs(cur[0] - tx) < 0.01 && Math.abs(cur[1] - ty) < 0.01) return;
     _lumen_smooth_anims[key] = {
         sx: cur[0], sy: cur[1], tx: tx, ty: ty, t0: performance.now(),
-        hist: [cur[0], cur[1]], fin: 0
+        hist: [cur[0], cur[1]], fin: 0, landed: false
     };
     _lumen_smooth_kick();
 }
@@ -189,7 +192,7 @@ function _lumen_smooth_tick() {
         _lumen_scroller_set(key, x, y);
         a.hist.push(x, y);
         if (a.hist.length > 6) a.hist.splice(0, 2);
-        if (t >= 1) a.fin = _LUMEN_SMOOTH_SETTLE;
+        if (t >= 1) { a.fin = _LUMEN_SMOOTH_SETTLE; a.landed = true; }
         more = true;
     }
     if (more) _lumen_smooth_kick();
