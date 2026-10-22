@@ -1167,6 +1167,54 @@ fn clip_path_inset_round() {
     assert_eq!(clip_of("inset(10px round)"), None);
 }
 
+/// `xywh()` / `rect()` сводятся к `inset()`: отступ от дальней стороны — `100% − …`.
+#[test]
+fn clip_path_xywh_and_rect_reduce_to_inset() {
+    let far = |px: f32, pct: f32| ShapeValue::Lin { px, pct };
+    // Бокс 200×100: right = −10 + 50% · 200 = 90, bottom = −50 + 100% · 100 = 50.
+    assert_eq!(
+        clip_of("xywh(10px 20px 50% 30px)"),
+        Some(ClipPath::Inset(vec![ShapeValue::Px(20.0), far(-10.0, 50.0), far(-50.0, 100.0), ShapeValue::Px(10.0)]))
+    );
+    // Одни проценты остаются процентами.
+    assert_eq!(
+        clip_of("xywh(12.5% 25% 37.5% 50%)"),
+        Some(ClipPath::Inset(vec![
+            ShapeValue::Pct(25.0),
+            ShapeValue::Pct(50.0),
+            ShapeValue::Pct(25.0),
+            ShapeValue::Pct(12.5)
+        ]))
+    );
+    assert_eq!(
+        clip_of("rect(50px 200px 150px 50px)"),
+        Some(ClipPath::Inset(vec![ShapeValue::Px(50.0), far(-200.0, 100.0), far(-150.0, 100.0), ShapeValue::Px(50.0)]))
+    );
+    // `auto` — сам край reference box.
+    assert_eq!(
+        clip_of("rect(auto auto 50% 10%)"),
+        Some(ClipPath::Inset(vec![
+            ShapeValue::Px(0.0),
+            ShapeValue::Px(0.0),
+            ShapeValue::Pct(50.0),
+            ShapeValue::Pct(10.0)
+        ]))
+    );
+    assert_eq!(
+        clip_of("xywh(0 0 100% 100% round 20px / 10px)"),
+        Some(ClipPath::InsetRound {
+            sides: vec![ShapeValue::Px(0.0), ShapeValue::Pct(0.0), ShapeValue::Pct(0.0), ShapeValue::Px(0.0)],
+            rx: vec![ShapeValue::Px(20.0)],
+            ry: vec![ShapeValue::Px(10.0)],
+        })
+    );
+    // Ровно четыре значения; ширина и высота `xywh()` неотрицательны.
+    assert_eq!(clip_of("xywh(1px 2px 3px)"), None);
+    assert_eq!(clip_of("rect(1px 2px 3px)"), None);
+    assert_eq!(clip_of("xywh(0 0 -1px 5px)"), None);
+    assert_eq!(clip_of("rect(1px 2px 3px 4px round)"), None);
+}
+
 /// `<geometry-box>` до и после формы и без неё.
 #[test]
 fn clip_path_geometry_box() {
