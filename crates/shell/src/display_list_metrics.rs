@@ -3,9 +3,9 @@
 //!
 //! `paint_ordered` is the crate's single entry point for turning a laid-out
 //! tree into a display list with the CSS 2.1 Appendix E painting order;
-//! `content_height_of` / `content_width_of` derive the scrollable extent from
-//! the emitted display list (the shell has no other source for it — see the
-//! `CLAUDE.md` note that a spacer painting nothing leaves `max_scroll()` at 0),
+//! `content_height_of` / `content_width_of` derive the painted extent from
+//! the emitted display list and `page_content_extent` widens it by the
+//! layout's scrollable overflow (a spacer that paints nothing still scrolls),
 //! `next_dl_epoch` versions it, and `build_split_placeholder` synthesises a
 //! minimal list for a hibernated tab whose real one was evicted. Moved out of
 //! `main.rs` by the SPLIT track (batches SH-5 and SH-3c); behaviour and
@@ -76,6 +76,24 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
         }
     }
     max_y
+}
+
+/// Scroll range of the page — `(content_height, content_width)` in CSS px:
+/// what the display list paints, extended by the layout's scrollable overflow
+/// ([`lumen_layout::page_scrollable_extent`]) so an invisible spacer or an
+/// empty sized block still gives the page room to scroll (SMOOTH-SCROLL: WPT
+/// `scrollIntoView-smooth.html` scrolls to a box inside a 2500x2500 container
+/// that paints nothing itself).
+pub(crate) fn page_content_extent(
+    dl: &lumen_paint::DisplayList,
+    lb: &lumen_layout::LayoutBox,
+    viewport_width: f32,
+) -> (f32, f32) {
+    let (lw, lh) = lumen_layout::page_scrollable_extent(lb);
+    let w = content_width_in(dl, lb, viewport_width);
+    // `overflow-x: hidden|clip` на viewport-е (BUG-1642) отсекает и scrollable overflow раскладки.
+    let w = if viewport_clips_x(lb) { w } else { w.max(lw) };
+    (content_height_of(dl).max(lh), w)
 }
 
 /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по всем

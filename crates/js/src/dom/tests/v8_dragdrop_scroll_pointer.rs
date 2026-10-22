@@ -298,14 +298,24 @@ fn window_scroll_to_instant_queues_page_request() {
     assert!(!reqs[0].1, "smooth should be false for instant scroll");
 }
 
+/// SMOOTH-SCROLL: a smooth page scroll is stepped from the shim (one instant request per
+/// frame), so the call itself queues nothing and leaves an animation towards the target.
 #[test]
-fn window_scroll_to_smooth_sets_smooth_flag() {
+fn window_scroll_to_smooth_starts_a_stepped_animation() {
     let rt = v8_runtime_with_dom(make_doc());
+    let html_nid = {
+        let doc_arc = make_doc();
+        let doc = doc_arc.lock().unwrap();
+        super::super::find_element_by_tag(&doc, "html").unwrap().index() as u32
+    };
+    rt.update_scroll_states([(html_nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
     rt.eval("window.scrollTo({ top: 300, behavior: 'smooth' })").unwrap();
-    let reqs = rt.take_page_scroll_requests();
-    assert_eq!(reqs.len(), 1);
-    assert!((reqs[0].0 - 300.0).abs() < 0.1, "target_y should be 300");
-    assert!(reqs[0].1, "smooth should be true");
+    assert!(rt.take_page_scroll_requests().is_empty(), "no instant request at the call");
+    assert_eq!(
+        rt.eval("_lumen_smooth_anims.p.ty").unwrap(),
+        lumen_core::JsValue::Number(300.0),
+        "an animation towards the target is running"
+    );
 }
 
 #[test]

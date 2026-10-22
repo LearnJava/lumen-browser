@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-22",
  "counts": {
-  "open": 319,
-  "fixed": 1293,
+  "open": 314,
+  "fixed": 1302,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1615,
+ "total_bugs": 1619,
  "phases": [
   {
    "id": "P0",
@@ -534,7 +534,7 @@
      "title": "LINE-CLAMP-BOX-2: balance, ruby, поплавки, abspos, rtl",
      "status": "planned",
      "size": "M",
-     "note": "Остаток LINE-CLAMP-BOX. **Сделано (2026-10-17, ветка `p1-line-clamp-box-2f`):** поплавок, оставшийся над линией отсечки, но вылезающий за content edge контейнера, обрезается по нему (`LayoutBox::clamp_clip`, пишет `line_clamp_flow::clip_float_at`; рисуется `PushClipRect` в `walk.rs` и в `box_layer_ops` — поплавки идут через бакеты stacking context, не через `walk`); обрезанная часть не входит в scrollable overflow (`child_scrollable_bounds`); `overflow: clip` не BFC-корень (`bfc.rs`) и не охватывает поплавки высотой (`finish_frame`) — оба по CSS Overflow L3 §3.1 (`line-clamp-with-floats-005`, `-010` совпали с эталоном). Охват поплавков высотой у обычного блока — [BUG-1403](bugs/BUG-1403-OPEN.md), здесь не тронут. `-006`/`-007` не закрыты: поплавок-`div` между кусками текста движок раскладывает как блок между двумя `InlineRun` — текст после него уходит на следующую строку, а текст до него не сдвигается обтеканием (`Hello<div float></div> world` → «world» на строку ниже); нужен поплавок внутри IFC. Тесты `float_past_the_content_edge_is_clipped_there`, `overflow_clip_container_does_not_enclose_its_float`, `clipped_part_of_a_float_is_not_scrollable_overflow`. Свип `css-overflow/line-clamp` (800×600, Ahem): identical 142 → 144, регрессий нет; display list `graphic_tests` (12 дампов) не изменился. **Сделано (2026-10-17, ветка `p1-line-clamp-box-2e`):** `text-wrap: balance` во вложенном блоке (п. 1 остатка, `line-clamp-balance-002`): контейнер `line-clamp` с балансируемым прогоном внутри раскладывается дважды (`block_flow_trampoline::run` → `line_clamp_flow::wants_balance_pass`) — жадно, без balance, затем с бюджетом строк на каждый прогон (`collect_budgets`); тесты `nested_balance_works_on_the_visible_lines_only`, `auto_clamp_balances_after_clamping_by_height` (`line-clamp: auto` по высоте работает тем же путём). `-003…-012` (все с `<span>` крупнее строки) не закрыты по другой причине: строки прогона делят `rect.height` поровну и не растут от инлайна с большим кеглем (`line-height: 1` у `<span>` 2em), поэтому число строк по высоте и сама высота строки неверны — нужна неравномерная высота строк прогона. **Сделано (2026-10-15, ветка `p1-line-clamp-box-2d`):** `display: inline-table` — atomic inline в `InlineBlockRow` (`is_atomic_inline_level`, `breaks_inline_row`), а не блочная `Table`, рвущая ряд: таблица делит строку с соседями, ряды из таблиц считаются по визуальным строкам и режутся `line-clamp` (тесты `inline_table_*` в `line_clamp_flow.rs`). **Сделано (2026-10-08, ветка `p1-line-clamp-box-2c`):** `text-overflow: <string>` (п. 5 остатка): разбор `[clip|ellipsis|<string>]{1,2}` (`TextOverflow::Str`, `text_overflow_right`), метка — отдельный фрагмент со стилем блока без `text-emphasis`, шире бокса — клип, первый символ остаётся (`apply_text_overflow_string`); внутри `line-clamp` строки до отсечки получают метку, строка отсечки — «…» (`line-clamp-with-text-overflow-string-003` — метка встаёт верно, пиксели расходятся из-за `monospace`-фоллбэка среды, `-001/-002` идентичны); css-ui `text-overflow-string-004` идентичен, `-001/-003` идентичны при `line-height: 30px` (иначе упираются в [BUG-1281](bugs/BUG-1281-FIXED.md)), `-005…008` — RTL/bidi, не сделаны. **Сделано (2026-10-08, ветка `p1-line-clamp-box-2b`):** ряд atomic inline (`InlineBlockRow`) считается по визуальным строкам, а не одной (`row_line_bottoms`), перенесённый ряд режется по линии отсечки вместе с детьми ниже неё; строка текста при `line-height: 0` остаётся строкой (`line-clamp-033`); `line-clamp: <n> auto` / `auto <n>` — действует более раннее из числа и высоты (`Mode::CountOrAuto`, `line-clamp-041`), `getComputedStyle` отдаёт `4 auto`; display list `graphic_tests/48-line-clamp` и `1000000-final` не изменился. **Сделано (2026-10-08, ветка `p1-line-clamp-box-2`):** флоат ниже линии отсечки скрывается вместе со строкой (`is_hidden_float`); abspos считается в scrollable overflow по недостижимым сторонам padding box (`UnreachableSides`, CSS Overflow L3 §3.3: начало inline- и block-осей), а не по пересечению — выпадающий вниз блок увеличивает `scrollHeight` (`line-clamp-with-abspos-019`, `-023`); «…» слева при `direction: rtl` (`ellipsize_last_line(.., rtl)`; у эталона `webkit-line-clamp-014` зазор ещё на ~2 px шире); `text-wrap: balance` на самом контейнере с `line-clamp` балансирует только видимые n строк (`balance_limit`); `<br>` на линии отсечки многоточие не отнимает. Свип рефтестов `css-overflow/line-clamp` (800×600, Ahem, file://, `reftest_pixdiff.classify`): без различий 142 из 264, регрессий против LINE-CLAMP-BOX нет; display list 186 страниц (graphic_tests + samples) байт-в-байт. Не сделано: (1) `text-wrap: balance`: `line-clamp-balance-003…012` — упираются в неравномерную высоту строк прогона (см. выше), не в бюджет; (2) `ruby` (`line-clamp-auto-with-ruby-*`, `line-clamp-026..029`): аннотация — часть line box, высота строки с ruby другая, равномерное деление `rect.height / lines.len()` неверно; (3) флоат между последней видимой строкой и переносом (`line-clamp-with-floats-005`: эталон его показывает и растит контейнер, а `-003` с тем же геометрическим положением скрывает — нужен признак «после принудительного переноса»), `-006/-007` (обрезка по content edge сделана в 2f; остаётся поплавок внутри IFC), abspos `-015/-017` — не разобраны; (4) зазор «…» при rtl (`webkit-line-clamp-014`); (5) `line-clamp-auto-041` (`5lh`, `<span>` крупнее строки) не разобран; (6) скрытые дети удаляются из `children` — `getBoundingClientRect` скрытого узла пуст, а в эталоне он имеет геометрию. Свойства `max-lines`/`block-ellipsis`/`continue` (49 id) — разбор и `ComputedStyle` у P4 (`CSS-SPECS.md`, строки `max-lines`/`block-ellipsis`), алгоритм — здесь. Критерий готовности: перечисленные тесты совпадают с эталоном без регрессий в уже зелёных"
+     "note": "Остаток LINE-CLAMP-BOX. **Сделано (2026-10-17, ветка `p1-line-clamp-box-2f`):** поплавок, оставшийся над линией отсечки, но вылезающий за content edge контейнера, обрезается по нему (`LayoutBox::clamp_clip`, пишет `line_clamp_flow::clip_float_at`; рисуется `PushClipRect` в `walk.rs` и в `box_layer_ops` — поплавки идут через бакеты stacking context, не через `walk`); обрезанная часть не входит в scrollable overflow (`child_scrollable_bounds`); `overflow: clip` не BFC-корень (`bfc.rs`) и не охватывает поплавки высотой (`finish_frame`) — оба по CSS Overflow L3 §3.1 (`line-clamp-with-floats-005`, `-010` совпали с эталоном). Охват поплавков высотой у обычного блока — [BUG-1403](bugs/BUG-1403-FIXED.md), здесь не тронут. `-006`/`-007` не закрыты: поплавок-`div` между кусками текста движок раскладывает как блок между двумя `InlineRun` — текст после него уходит на следующую строку, а текст до него не сдвигается обтеканием (`Hello<div float></div> world` → «world» на строку ниже); нужен поплавок внутри IFC. Тесты `float_past_the_content_edge_is_clipped_there`, `overflow_clip_container_does_not_enclose_its_float`, `clipped_part_of_a_float_is_not_scrollable_overflow`. Свип `css-overflow/line-clamp` (800×600, Ahem): identical 142 → 144, регрессий нет; display list `graphic_tests` (12 дампов) не изменился. **Сделано (2026-10-17, ветка `p1-line-clamp-box-2e`):** `text-wrap: balance` во вложенном блоке (п. 1 остатка, `line-clamp-balance-002`): контейнер `line-clamp` с балансируемым прогоном внутри раскладывается дважды (`block_flow_trampoline::run` → `line_clamp_flow::wants_balance_pass`) — жадно, без balance, затем с бюджетом строк на каждый прогон (`collect_budgets`); тесты `nested_balance_works_on_the_visible_lines_only`, `auto_clamp_balances_after_clamping_by_height` (`line-clamp: auto` по высоте работает тем же путём). `-003…-012` (все с `<span>` крупнее строки) не закрыты по другой причине: строки прогона делят `rect.height` поровну и не растут от инлайна с большим кеглем (`line-height: 1` у `<span>` 2em), поэтому число строк по высоте и сама высота строки неверны — нужна неравномерная высота строк прогона. **Сделано (2026-10-15, ветка `p1-line-clamp-box-2d`):** `display: inline-table` — atomic inline в `InlineBlockRow` (`is_atomic_inline_level`, `breaks_inline_row`), а не блочная `Table`, рвущая ряд: таблица делит строку с соседями, ряды из таблиц считаются по визуальным строкам и режутся `line-clamp` (тесты `inline_table_*` в `line_clamp_flow.rs`). **Сделано (2026-10-08, ветка `p1-line-clamp-box-2c`):** `text-overflow: <string>` (п. 5 остатка): разбор `[clip|ellipsis|<string>]{1,2}` (`TextOverflow::Str`, `text_overflow_right`), метка — отдельный фрагмент со стилем блока без `text-emphasis`, шире бокса — клип, первый символ остаётся (`apply_text_overflow_string`); внутри `line-clamp` строки до отсечки получают метку, строка отсечки — «…» (`line-clamp-with-text-overflow-string-003` — метка встаёт верно, пиксели расходятся из-за `monospace`-фоллбэка среды, `-001/-002` идентичны); css-ui `text-overflow-string-004` идентичен, `-001/-003` идентичны при `line-height: 30px` (иначе упираются в [BUG-1281](bugs/BUG-1281-FIXED.md)), `-005…008` — RTL/bidi, не сделаны. **Сделано (2026-10-08, ветка `p1-line-clamp-box-2b`):** ряд atomic inline (`InlineBlockRow`) считается по визуальным строкам, а не одной (`row_line_bottoms`), перенесённый ряд режется по линии отсечки вместе с детьми ниже неё; строка текста при `line-height: 0` остаётся строкой (`line-clamp-033`); `line-clamp: <n> auto` / `auto <n>` — действует более раннее из числа и высоты (`Mode::CountOrAuto`, `line-clamp-041`), `getComputedStyle` отдаёт `4 auto`; display list `graphic_tests/48-line-clamp` и `1000000-final` не изменился. **Сделано (2026-10-08, ветка `p1-line-clamp-box-2`):** флоат ниже линии отсечки скрывается вместе со строкой (`is_hidden_float`); abspos считается в scrollable overflow по недостижимым сторонам padding box (`UnreachableSides`, CSS Overflow L3 §3.3: начало inline- и block-осей), а не по пересечению — выпадающий вниз блок увеличивает `scrollHeight` (`line-clamp-with-abspos-019`, `-023`); «…» слева при `direction: rtl` (`ellipsize_last_line(.., rtl)`; у эталона `webkit-line-clamp-014` зазор ещё на ~2 px шире); `text-wrap: balance` на самом контейнере с `line-clamp` балансирует только видимые n строк (`balance_limit`); `<br>` на линии отсечки многоточие не отнимает. Свип рефтестов `css-overflow/line-clamp` (800×600, Ahem, file://, `reftest_pixdiff.classify`): без различий 142 из 264, регрессий против LINE-CLAMP-BOX нет; display list 186 страниц (graphic_tests + samples) байт-в-байт. Не сделано: (1) `text-wrap: balance`: `line-clamp-balance-003…012` — упираются в неравномерную высоту строк прогона (см. выше), не в бюджет; (2) `ruby` (`line-clamp-auto-with-ruby-*`, `line-clamp-026..029`): аннотация — часть line box, высота строки с ruby другая, равномерное деление `rect.height / lines.len()` неверно; (3) флоат между последней видимой строкой и переносом (`line-clamp-with-floats-005`: эталон его показывает и растит контейнер, а `-003` с тем же геометрическим положением скрывает — нужен признак «после принудительного переноса»), `-006/-007` (обрезка по content edge сделана в 2f; остаётся поплавок внутри IFC), abspos `-015/-017` — не разобраны; (4) зазор «…» при rtl (`webkit-line-clamp-014`); (5) `line-clamp-auto-041` (`5lh`, `<span>` крупнее строки) не разобран; (6) скрытые дети удаляются из `children` — `getBoundingClientRect` скрытого узла пуст, а в эталоне он имеет геометрию. Свойства `max-lines`/`block-ellipsis`/`continue` (49 id) — разбор и `ComputedStyle` у P4 (`CSS-SPECS.md`, строки `max-lines`/`block-ellipsis`), алгоритм — здесь. Критерий готовности: перечисленные тесты совпадают с эталоном без регрессий в уже зелёных"
     },
     {
      "id": "FLEX-VWM-6",
@@ -873,7 +873,7 @@
      "title": "COUNTER-STYLES-BUILTIN: 40 встроенных counter-style",
      "status": "done",
      "size": "L",
-     "note": "**Сделано (2026-10-22, ветка `p1-counter-styles-builtin`):** `crates/engine/layout/src/counter_builtin.rs` — 40 предопределённых стилей §6 (таблицы `CounterStyleDef` + алгоритмические `CounterSystem::Builtin`: девять восточноазиатских «длинных» стилей и `ethiopic-numeric`), поиск «авторский `@counter-style` → таблица → прежние ключевые слова» (`counters.rs::lookup_style`); `counter()` отдаёт только представление, `::marker` — с префиксом и суффиксом (по умолчанию `\". \"`); `lower-greek` стал алфавитным. Вместе закрыты BUG-1546 (inline UA-`display` для `bdi`/`kbd`/… и пользовательских элементов, `<bdi>` — изолят с `dir=auto`) и BUG-1548 (`inside`-маркер — первый inline-сегмент строки пункта, `PseudoKind::Marker`); UAX #9 L2 не разворачивает серию через границу изолята. Итог: `counter-cjk-decimal`, `counter-japanese-formal` (и ещё девять `counter-*` без `-extended`), `hebrew/css3-counter-styles-015` и 49 других reftest `css-counter-styles` совпадают с эталоном попиксельно (61 из 234, было 0; wptrunner: 3 файла критерия зелёные). Остаток — `COUNTER-STYLES-2`, BUG-1547 (`<ol start>`/`<li value>`), BUG-1658 (область счётчика). Встроенные counter-style CSS Counter Styles 3 §6 не реализованы: `counter(a, hebrew)` при `counter-reset: a 12` даёт `12` для всех 40 имён (`armenian`, `lower-armenian`, `upper-armenian`, `georgian`, `hebrew`, `cjk-decimal`, `cjk-earthly-branch`, `cjk-heavenly-stem`, `hiragana`, `hiragana-iroha`, `katakana`, `katakana-iroha`, `japanese-informal`, `japanese-formal`, `korean-hangul-formal`, `korean-hanja-informal`, `korean-hanja-formal`, `simp-chinese-informal`, `simp-chinese-formal`, `trad-chinese-informal`, `trad-chinese-formal`, `ethiopic-numeric`, `arabic-indic` и 17 индийских и юго-восточных систем счисления, `disclosure-open/closed`); в `crates/engine/layout/src/counters.rs:1700-1740` знают только `decimal`, `decimal-leading-zero`, `lower/upper-alpha|latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`. Объём: объявить 40 стилей как предопределённые `@counter-style` в `CounterStyleRegistry` по таблицам §6.1–§6.3 (системы `additive`/`numeric`/`alphabetic`/`fixed`, `suffix`, `negative`, `pad`, `range`, `speak-as`), для CJK — формальные и неформальные записи; `list-style-type: <имя>` и `counter(.., <имя>)` берут стиль из реестра. Масштаб: 158 reftest `css/css-counter-styles/<имя>/` (до готовности нужно ещё BUG-1546 — `display: inline` для `<bdi>`/`<bdo>` — и BUG-1548 — ширина `inside`-маркера, иначе эталоны остаются `thick`); кластер — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles. Критерий готовности: `css-counter-styles/hebrew/css3-counter-styles-015.html`, `cjk-decimal/counter-cjk-decimal.html`, `japanese-formal/counter-japanese-formal.html` зелёные в `run_corpus.py --prefixes css/css-counter-styles`.",
+     "note": "**Сделано (2026-10-22, ветка `p1-counter-styles-builtin`):** `crates/engine/layout/src/counter_builtin.rs` — 40 предопределённых стилей §6 (таблицы `CounterStyleDef` + алгоритмические `CounterSystem::Builtin`: девять восточноазиатских «длинных» стилей и `ethiopic-numeric`), поиск «авторский `@counter-style` → таблица → прежние ключевые слова» (`counters.rs::lookup_style`); `counter()` отдаёт только представление, `::marker` — с префиксом и суффиксом (по умолчанию `\". \"`); `lower-greek` стал алфавитным. Вместе закрыты BUG-1546 (inline UA-`display` для `bdi`/`kbd`/… и пользовательских элементов, `<bdi>` — изолят с `dir=auto`) и BUG-1548 (`inside`-маркер — первый inline-сегмент строки пункта, `PseudoKind::Marker`); UAX #9 L2 не разворачивает серию через границу изолята. Итог: `counter-cjk-decimal`, `counter-japanese-formal` (и ещё девять `counter-*` без `-extended`), `hebrew/css3-counter-styles-015` и ещё 85 reftest `css-counter-styles` совпадают с эталоном попиксельно (97 из 234, было 0; wptrunner: 3 файла критерия зелёные); 100 из остальных ждут `<ol start>`/`<li value>` (BUG-1547). Остаток — `COUNTER-STYLES-2`, BUG-1547 (`<ol start>`/`<li value>`), BUG-1658 (область счётчика). Встроенные counter-style CSS Counter Styles 3 §6 не реализованы: `counter(a, hebrew)` при `counter-reset: a 12` даёт `12` для всех 40 имён (`armenian`, `lower-armenian`, `upper-armenian`, `georgian`, `hebrew`, `cjk-decimal`, `cjk-earthly-branch`, `cjk-heavenly-stem`, `hiragana`, `hiragana-iroha`, `katakana`, `katakana-iroha`, `japanese-informal`, `japanese-formal`, `korean-hangul-formal`, `korean-hanja-informal`, `korean-hanja-formal`, `simp-chinese-informal`, `simp-chinese-formal`, `trad-chinese-informal`, `trad-chinese-formal`, `ethiopic-numeric`, `arabic-indic` и 17 индийских и юго-восточных систем счисления, `disclosure-open/closed`); в `crates/engine/layout/src/counters.rs:1700-1740` знают только `decimal`, `decimal-leading-zero`, `lower/upper-alpha|latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`. Объём: объявить 40 стилей как предопределённые `@counter-style` в `CounterStyleRegistry` по таблицам §6.1–§6.3 (системы `additive`/`numeric`/`alphabetic`/`fixed`, `suffix`, `negative`, `pad`, `range`, `speak-as`), для CJK — формальные и неформальные записи; `list-style-type: <имя>` и `counter(.., <имя>)` берут стиль из реестра. Масштаб: 158 reftest `css/css-counter-styles/<имя>/` (до готовности нужно ещё BUG-1546 — `display: inline` для `<bdi>`/`<bdo>` — и BUG-1548 — ширина `inside`-маркера, иначе эталоны остаются `thick`); кластер — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles. Критерий готовности: `css-counter-styles/hebrew/css3-counter-styles-015.html`, `cjk-decimal/counter-cjk-decimal.html`, `japanese-formal/counter-japanese-formal.html` зелёные в `run_corpus.py --prefixes css/css-counter-styles`.",
      "bugs": [
       "BUG-1570"
      ]
@@ -892,9 +892,9 @@
     {
      "id": "SMOOTH-SCROLL",
      "title": "SMOOTH-SCROLL: плавная прокрутка",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Плавная прокрутка (CSSOM View §«Scrolling»: `ScrollBehavior`, CSS Overflow 3 `scroll-behavior`): сейчас `el.scrollTo({top:50, behavior:\"smooth\"})` и `scrollIntoView({behavior:\"smooth\"})` прокручивают мгновенно (`scrollTop` 50 сразу), `scroll-behavior: smooth` хранится и на прокрутку не влияет, `scrollend` не приходит. Объём: анимация позиции скроллера по кадрам (easing), прерывание новой прокруткой или жестом, `scrollend`, каскад `scroll-behavior` (корневой скроллер берёт значение с `<html>`), `behavior` в `scroll*()`/`scrollIntoView()`, плавный якорный переход. Масштаб: 24 id `css/cssom-view/` (`scroll-behavior-*`, `smooth-*`, `scrollIntoView-smooth`, `visual-scrollIntoView-*`; 171 из 236 сабтестов, 4 `TIMEOUT`); кластер — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles. Критерий готовности: `scroll-behavior-smooth.html`, `scrollIntoView-smooth.html`, `smooth-scroll-nonstop.html` зелёные.",
+     "note": "**Сделано (2026-10-22, ветка `p1-smooth-scroll`), срез 1:** плавная программная прокрутка ведётся из шима (`_lumen_smooth_scroll` / `_lumen_smooth_tick`, `web_api_shim_head.js`): по одному мгновенному запросу на кадр rAF, ease-out-cubic за 200 мс, нативный `scrollend` промежуточных шагов гасится, после последнего шага — один `scrollend`; та же цель повторным вызовом кривую не перезапускает, другая стартует от текущей точки, мгновенный запрос отменяет, чужое смещение (колесо, клавиши, край контейнера) завершает анимацию на месте; ключ скроллера — `'p'` (вьюпорт) или nid. `behavior: auto` читает `scroll-behavior` скроллера (вьюпорт — с `<html>`, `getComputedStyle().scrollBehavior` теперь отдаётся, свойство **не** наследуется — CSSOM View §13, раньше наследовалось), `scrollTo`/`scroll`/`scrollBy`/`scrollIntoView` у элемента и `window`, сеттеры `scrollTop`/`scrollLeft`, пропущенная ось остаётся на месте, неверный `behavior` — `TypeError`. `document.scrollingElement` — вьюпорт (`scrollTop`/`scrollLeft`/`clientWidth`/`clientHeight`/`scrollTo`); горизонтальная прокрутка страницы дошла до JS (`window.scrollX`/`pageXOffset`, `x` у `window.scrollTo`/`scrollIntoView`; `_lumen_request_page_scroll_x`, `take_page_scroll_x_request`, `set_page_scroll_x`). Диапазон прокрутки страницы — max(display list, `lumen_layout::page_scrollable_extent`): бокс, который ничего не рисует (прозрачная распорка, пустой блок), теперь даёт место для прокрутки (`display_list_metrics::page_content_extent`, пять мест в shell). `scrollIntoView` считает в координатах документа (BUG-1166) и по padding-box скроллера, контейнером считается только настоящий скроллер (`_lumen_is_scroll_container`), элемент без скроллбокса прокрутку игнорирует. Критерий: `scroll-behavior-smooth` 3/3, `scrollIntoView-smooth` 4/4, `smooth-scroll-nonstop` 2/2; `css/cssom-view` целиком PASS 768 → 913, три файла TIMEOUT → OK, регрессия одна — `scrollIntoView-stuck.tentative` (липкая цель, нужны BUG-1468/BUG-1166; раньше проходил случайно). Остаток — SMOOTH-SCROLL-2.",
      "bugs": [
       "BUG-1560"
      ]
@@ -1005,6 +1005,16 @@
      "bugs": [
       "BUG-1581",
       "BUG-1293"
+     ]
+    },
+    {
+     "id": "SMOOTH-SCROLL-2",
+     "title": "SMOOTH-SCROLL-2: остаток плавной прокрутки",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток SMOOTH-SCROLL (срез 1 — шаги из шима, `scroll-behavior`, `scrollX`, корневой скроллер, диапазон страницы по раскладке, см. строку SMOOTH-SCROLL). (1) Под-документы (`<iframe>`): прокрутка фрейма мгновенная — у фрейма нет своего rAF (`scroll-behavior-subframe-root`/`-window` 2/40, 2/28, `scrollIntoView-iframes`). (2) `scrollIntoView` проходит только первый скроллер цепочки: вложенные контейнеры и «скроллер → вьюпорт» одним вызовом (`scrollIntoView-multiple-nested` TIMEOUT, `scroll-behavior-scrollintoview-nested`), `scroll-padding` (`scrollIntoView-scrollPadding` 0/3), `position: fixed`, липкая цель (BUG-1468), writing-mode/rtl (`scrollIntoView-*writing-mode*`), `visualViewport` (`visual-scrollIntoView-*`). (3) Шаги анимации страницы не проходят через scroll-snap (раньше `start_smooth_scroll` привязывал к точке прилипания); якорный переход `#frag` остаётся нативным по y и не двигает x. (4) Прерывание жестом распознаётся по несовпадению позиции с запрошенной, а не по событию ввода; `smooth-scrollIntoView-with-unrelated-gesture-scroll` и `-with-smooth-fragment-scroll` — TIMEOUT. (5) Прокрутка при навигации по истории (`scroll-behavior-smooth-navigation` 1/3) и в обработчике `load` (`smooth-scroll-in-load-event`: размер вьюпорта в WPT-окне). (6) `vertical-align: <length>` у inline-block не применяется — из-за этого `scroll-behavior-element`/`-smooth-positions` не проходят в части `scrollIntoView` (отдельный пробел раскладки). (7) Промисы `scrollTo`/`scrollBy`/`scrollIntoView` (BUG-479) резолвятся в `undefined`, а WPT ждёт `{interrupted: boolean}` (`element-scroll-promises` 0/24, `window-scroll-promises` 0/18, `*-promise-interruption` 0/14 и 0/4, `*-after-removal` 0/5): запись анимации в `_lumen_smooth_anims` знает, чем закончилась — докатилась, вытеснена новым запросом или чужим смещением, — остаётся отдать это в промис; для вложенных скроллеров нужен обход всей цепочки в `scrollIntoView`. Критерий готовности: пункты 1–3 закрыты, `scroll-behavior-subframe-*` и `scrollIntoView-multiple-nested` зелёные.",
+     "bugs": [
+      "BUG-1560"
      ]
     }
    ],
@@ -10266,27 +10276,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1403": {
-   "status": "open",
-   "title": "высота обычного блока (не BFC-корня) растёт до нижней кромки float внутри, хотя CSS 2.1 §10.6.3 и §10.6.7 этого не делают (охват — только у BFC-корня; отсюда cl…",
-   "component": "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:819-830` — «the container height must also enclose all floats»; закреплено юнит-тестом `tests/half_leading_columns_floats.rs:621` `container_height_encloses_float`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1404": {
-   "status": "open",
-   "title": "`decode_woff2` не проверяет часть условий отказа из W3C WOFF2 §5…§7: лишние/нулевые байты между блоками и после них, перекрытие блоков метаданных/приватных данн…",
-   "component": "font (`crates/engine/font/src/woff2.rs::decode_woff2`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1405": {
-   "status": "open",
-   "title": "`clip-path: circle()`, `circle(closest-side",
-   "component": "layout (`crates/engine/layout/src/style/parse/shape.rs::parse_clip_path`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1406": {
    "status": "open",
    "title": "В `--screenshot` (CPU-растр) градиентная маска покрывает весь бокс независимо от `mask-size`/`mask-position`/`mask-repeat` (`mask-size:50px 50px; mask-repeat:no…",
@@ -10378,13 +10367,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1453": {
-   "status": "open",
-   "title": "В таблице стилей теневого дерева селектор `:host <потомок>` (`:host div.red`, `:host > div`, `:host .x`, `:host(.x) div`) не применяется; `:host {…}` применяетс…",
-   "component": "layout/css-parser (`crates/engine/layout/src/style/matching/` — `:host` в составных селекторах теневого дерева)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1454": {
    "status": "open",
    "title": "`@namespace` не реализован: префикс `ns\\",
@@ -10406,20 +10388,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1458": {
-   "status": "open",
-   "title": "`test_driver.Actions().pointerMove(0, 0, {origin: el}).send()` под `wptrunner` не доставляет `mouseover`/`mousemove` и не включает `:hover`. На странице `<div i…",
-   "component": "bidi-server/executor (`crates/bidi-server/src/protocol.rs:2311-2340` `replay_input_actions`; `tools/wptrunner/wptrunner/executors/executorlumen.py:600` `_action_action_sequence`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1459": {
-   "status": "open",
-   "title": "Приоритет `!important` в инлайновом `element.style` теряется: `cssText = 'c: v !important'` и `el.style = '…'` отбрасывают декларацию, `setProperty(…, 'importan…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`, `cssText`/`setProperty`/`getPropertyPriority`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1460": {
    "status": "open",
    "title": "Условные групповые правила не вкладываются друг в друга на верхнем уровне: `@media{@layer}`, `@media{@media}`, `@media{@supports}`, `@supports{@media}`, `@suppo…",
@@ -10434,31 +10402,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1462": {
-   "status": "open",
-   "title": "`white-space: normal`: U+3000 (и другие не-CSS пробелы Unicode — U+2003, U+2009…) схлопывается в обычный пробел U+0020 при переносе слов, хотя CSS Text L3 §4.1.…",
-   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — разбиение на слова по `split_css_whitespace`/`is_wrap_whitespace`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1463": {
    "status": "open",
    "title": "`graphic_tests` TEST-158 (`background-attachment`) стал FAIL 2.92 % (рамка x:99–986 y:277–680) против PASS 0.27 % в прогоне на `b2fd56ab2`; воспроизводится на `…",
    "component": "paint/layout (graphic_tests `158-background-attachment.html`, фиксированный фон; причина не найдена)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1465": {
-   "status": "open",
-   "title": "`text-transform: full-width`: оставшийся после схлопывания пробел между inline-боксами не превращается в U+3000 (`x<span> </span>x`). WPT `text-transform-fullwi…",
-   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — схлопываемый пробельный узел между inline-боксами)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1466": {
-   "status": "open",
-   "title": "`color_input_paints_value_swatch` падает: `<input type=color value=#ff0000>` с авторским `background: #00ff00` не рисует образец значения (получает только `#00f…",
-   "component": "paint (`crates/engine/paint/src/display_list/tests/text_and_images.rs:514`)",
    "date": null,
    "debtor": false
   },
@@ -11656,6 +11603,34 @@
    "status": "open",
    "title": "Три flaky-теста `lumen-js` падают в полном параллельном прогоне `scoped-test.sh` (буфер обмена, code cache) и проходят по одному — общее состояние между тестами",
    "component": "js (`crates/js/src/dom/tests/v8_idle_message_clipboard.rs`, `v8_runtime` `perf9_code_cache_*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1678": {
+   "status": "open",
+   "title": "`decode_woff2` не реконструирует преобразованную таблицу `hmtx` (WOFF2 §5.4, transform version 1): байты потока `hmtx` с флагами и массивами lsb попадают в sfnt…",
+   "component": "font (`crates/engine/font/src/woff2.rs::decode_woff2`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1679": {
+   "status": "open",
+   "title": "`clientX`/`clientY` событий мыши и указателя в окне включают смещение контента (`toolbar::CHROME_H` = 68 px): курсор в центре элемента `(48, 28)` даёт `click@48…",
+   "component": "shell (`crates/shell/src/lumen/pointer.rs` — `js_click_event`/`js_pointer_event`/`js_pointer_move_captured`; вызывающие передают оконные `x_css`/`y_css`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1680": {
+   "status": "open",
+   "title": "Корневой `<svg>` с `padding`/`border` получает border-box, равный его content-box: `svg { width:30px; height:30px; padding:10px; border:25px solid }` даёт `SvgR…",
+   "component": "layout (`crates/engine/layout/src/box_tree/svg.rs` — раскладка корневого `<svg>`, `BoxKind::SvgRoot`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1681": {
+   "status": "open",
+   "title": "`text-transform: full-width`: преобразованный пробел в конце строки не удаляется (фаза 2 обработки пробелов); `text-align: right` и `width: min-content` считают…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs`, `box_tree/inline_build.rs` — U+3000, полученный из схлопнутого U+0020)",
    "date": null,
    "debtor": false
   },
@@ -20710,6 +20685,69 @@
    "date": "2026-10-22",
    "debtor": false
   },
+  "BUG-1403": {
+   "status": "fixed",
+   "title": "высота обычного блока (не BFC-корня) растёт до нижней кромки float внутри, хотя CSS 2.1 §10.6.3 и §10.6.7 этого не делают (охват — только у BFC-корня; отсюда cl…",
+   "component": "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:819-830` — «the container height must also enclose all floats»; закреплено юнит-тестом `tests/half_leading_columns_floats.rs:621` `container_height_encloses_float`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1453": {
+   "status": "fixed",
+   "title": "В таблице стилей теневого дерева селектор `:host <потомок>` (`:host div.red`, `:host > div`, `:host .x`, `:host(.x) div`) не применяется; `:host {…}` применяетс…",
+   "component": "layout/css-parser (`crates/engine/layout/src/style/matching/` — `:host` в составных селекторах теневого дерева)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1404": {
+   "status": "fixed",
+   "title": "`decode_woff2` не проверяет часть условий отказа из W3C WOFF2 §5…§7: лишние/нулевые байты между блоками и после них, перекрытие блоков метаданных/приватных данн…",
+   "component": "font (`crates/engine/font/src/woff2.rs::decode_woff2`; закреплено `crates/engine/font/tests/cases/woff2_conformance.rs`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1458": {
+   "status": "fixed",
+   "title": "`test_driver.Actions().pointerMove(0, 0, {origin: el}).send()` под `wptrunner` не доставляет `mouseover`/`mousemove` и не включает `:hover`. На странице `<div i…",
+   "component": "bidi-server/executor (`crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::PointerMove`; `crates/js/src/v8_runtime/style_flush.rs`, `install/dom_core.rs` — зеркало `:hover` движкового потока)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1405": {
+   "status": "fixed",
+   "title": "`clip-path: circle()`, `circle(closest-side",
+   "component": "layout (`crates/engine/layout/src/style/parse/shape.rs::parse_clip_path`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1459": {
+   "status": "fixed",
+   "title": "Приоритет `!important` в инлайновом `element.style` теряется: `cssText = 'c: v !important'` и `el.style = '…'` отбрасывают декларацию, `setProperty(…, 'importan…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_make_style`, `cssText`/`setProperty`/`getPropertyPriority`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1462": {
+   "status": "fixed",
+   "title": "`white-space: normal`: U+3000 (и другие не-CSS пробелы Unicode — U+2003, U+2009…) схлопывается в обычный пробел U+0020 при переносе слов, хотя CSS Text L3 §4.1.…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — разбиение на слова по `split_css_whitespace`/`is_wrap_whitespace`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1465": {
+   "status": "fixed",
+   "title": "`text-transform: full-width`: оставшийся после схлопывания пробел между inline-боксами не превращается в U+3000 (`x<span> </span>x`). WPT `text-transform-fullwi…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs` — схлопываемый пробельный узел между inline-боксами)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1466": {
+   "status": "fixed",
+   "title": "`color_input_paints_value_swatch` падает: `<input type=color value=#ff0000>` с авторским `background: #00ff00` не рисует образец значения (получает только `#00f…",
+   "component": "paint (`crates/engine/paint/src/display_list/tests/text_and_images.rs:514`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
   "BUG-1546": {
    "status": "fixed",
    "title": "`<bdi>`, `<bdo>`, `<kbd>`, `<samp>`, `<var>`, `<dfn>`, `<time>`, `<data>`, `<tt>`, `<big>`, `<strike>`, `<font>`, `<nobr>`, `<output>`, `<acronym>` и пользовате…",
@@ -20772,7 +20810,7 @@
   "bidi-server (protocol.rs)": [
    "BUG-319"
   ],
-  "bidi-server/executor (`crates/bidi-server/src/protocol.rs:2311-2340` `replay_input_actions`; `tools/wptrunner/wptrunner/executors/executorlumen.py:600` `_action_action_sequence`)": [
+  "bidi-server/executor (`crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::PointerMove`; `crates/js/src/v8_runtime/style_flush.rs`, `install/dom_core.rs` — зеркало `:hover` движкового потока)": [
    "BUG-1458"
   ],
   "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout (`box_tree.rs::lay_out_inner`)": [
@@ -21076,6 +21114,9 @@
    "BUG-283"
   ],
   "font (`crates/engine/font/src/woff2.rs::decode_woff2`)": [
+   "BUG-1678"
+  ],
+  "font (`crates/engine/font/src/woff2.rs::decode_woff2`; закреплено `crates/engine/font/tests/cases/woff2_conformance.rs`)": [
    "BUG-1404"
   ],
   "font (`face.rs::glyph_resolved_inner`, `rasterizer.rs::rasterize`)": [
@@ -22463,6 +22504,9 @@
   "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs` — слияние слов в `InlineFrag`; критерий `ComputedStyle::text_rendering_eq`)": [
    "BUG-1190"
   ],
+  "layout (`crates/engine/layout/src/box_tree/inline_wrap.rs`, `box_tree/inline_build.rs` — U+3000, полученный из схлопнутого U+0020)": [
+   "BUG-1681"
+  ],
   "layout (`crates/engine/layout/src/box_tree/intrinsic.rs` — `preferred_inline_block_width`/`max_content_outer_width`/`min_content_outer_width_of_contents`)": [
    "BUG-740"
   ],
@@ -22544,6 +22588,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/svg.rs` — `parse_svg_transform(get_attr(\"transform\"))`)": [
    "BUG-1286"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/svg.rs` — раскладка корневого `<svg>`, `BoxKind::SvgRoot`)": [
+   "BUG-1680"
   ],
   "layout (`crates/engine/layout/src/box_tree/svg.rs`, `inline_build.rs` — встроенный `<svg>` в потоке)": [
    "BUG-1354"
@@ -23540,6 +23587,9 @@
   ],
   "shell (`crates/shell/src/lumen/navigation.rs::navigate_to`/`navigate_to_forced`, `crates/shell/src/app/about_to_wait.rs`), js (`crates/js/src/navigation_api.rs`)": [
    "BUG-1031"
+  ],
+  "shell (`crates/shell/src/lumen/pointer.rs` — `js_click_event`/`js_pointer_event`/`js_pointer_move_captured`; вызывающие передают оконные `x_css`/`y_css`)": [
+   "BUG-1679"
   ],
   "shell (`crates/shell/src/lumen/text_input.rs::typeable_field` — блокирующий `document.lock()` на пути кадра через `focused_input_caret`)": [
    "BUG-1108"

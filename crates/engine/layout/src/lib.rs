@@ -1392,6 +1392,36 @@ pub fn collect_page_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> 
     out
 }
 
+/// Scrollable overflow area of the page — `(width, height)` in CSS px, the
+/// extent the viewport can be scrolled over (CSSOM View §5.2: what
+/// `document.scrollingElement.scrollWidth`/`scrollHeight` report).
+///
+/// The shell derives the page's scroll range from the rects the display list
+/// paints, so a box that paints nothing (a transparent spacer, an empty
+/// `height: 5000px` block) never extended it; this is the layout-side answer
+/// (the same BUG-960 scrollable-overflow walk the JS-visible `scrollHeight`
+/// uses) and the shell takes the larger of the two. An axis whose viewport
+/// `overflow` is `hidden`/`clip` reports `0.0`: the user cannot scroll it, and
+/// the shell keeps its paint-based range there as before (CSS Overflow L3
+/// §3.5: the viewport takes the root's `overflow`, or the `body`'s when the
+/// root's is `visible`).
+pub fn page_scrollable_extent(root: &LayoutBox) -> (f32, f32) {
+    fn first_box(b: &LayoutBox) -> Option<&LayoutBox> {
+        b.children.iter().find(|c| !matches!(c.kind, box_tree::BoxKind::Skip))
+    }
+    let Some(html) = first_box(root) else { return (0.0, 0.0) };
+    let html_visible = matches!(html.style.overflow_x, style::Overflow::Visible)
+        && matches!(html.style.overflow_y, style::Overflow::Visible);
+    let viewport_style = match first_box(html) {
+        Some(body) if html_visible => &body.style,
+        _ => &html.style,
+    };
+    let clipped = |o: style::Overflow| matches!(o, style::Overflow::Hidden | style::Overflow::Clip);
+    let w = if clipped(viewport_style.overflow_x) { 0.0 } else { content_width(html) };
+    let h = if clipped(viewport_style.overflow_y) { 0.0 } else { content_height(html) };
+    (w, h)
+}
+
 fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>, include_non_wheel: bool) {
     scroll_container_into(b, out, include_non_wheel);
     for child in &b.children {

@@ -30,7 +30,7 @@ use crate::style::{
     FontVariantPosition, ImageRendering, InterpolateSizeMode, Isolation, IterationCount, Length,
     LengthOrAuto,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowAnchor, overflow_clip_margin_serialize,
-    OutlineColor, OverscrollBehavior,
+    OutlineColor, OverscrollBehavior, ScrollBehavior,
     OutlineStyle, PointerEvents, Position, PositionComponent, PrintColorAdjust, Quotes,
     ScrollbarGutter, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign,
     TextAlignLast, TextDecorationLine, TextDecorationStyle, TextWrapMode, TextWrapStyle,
@@ -2306,6 +2306,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             AnimationPlayState::Paused => "paused",
         }).collect::<Vec<_>>().join(", ")
     });
+
+    // ── Scroll behaviour (CSSOM View §13 / CSS Overflow 3) ──────────
+    // SMOOTH-SCROLL: the scroll methods' `behavior: "auto"` reads it from here.
+    m.insert("scroll-behavior".into(), match style.scroll_behavior {
+        ScrollBehavior::Auto => "auto",
+        ScrollBehavior::Smooth => "smooth",
+    }.into());
 
     // ── Overscroll behaviour (CSS Overscroll Behavior §3) ───────────
     m.insert("overscroll-behavior-x".into(), match style.overscroll_behavior_x {

@@ -901,8 +901,21 @@ pub(crate) fn install_css_supports_and_lazy_images(
     Ok(())
 }
 
+/// Horizontal page scroll as JS sees it (SMOOTH-SCROLL): the shell's applied
+/// position next to the last instant `window.scrollTo` request it has not
+/// drained yet — the `x` twin of `page_scroll_y` + the instant tail of
+/// `pending_page_scrolls`.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct PageScrollX {
+    /// Position the shell has applied (pushed by `set_page_scroll_x`).
+    pub committed: f32,
+    /// Last instant request still waiting in the queue; the last one wins.
+    pub pending: Option<f32>,
+}
+
 /// Scroll offsets and scroll requests for containers and the page.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::too_many_arguments)]  // SMOOTH-SCROLL added the 8th (page_scroll_x); mirrors the rest of this file's install_* fns
 pub(crate) fn install_scroll_state(
     scope: &mut v8::PinScope<'_, '_>,
     ctx: v8::Local<'_, v8::Context>,
@@ -910,6 +923,7 @@ pub(crate) fn install_scroll_state(
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
     page_scroll_y: Arc<Mutex<f32>>,
+    page_scroll_x: Arc<Mutex<PageScrollX>>,
     flush: FlushHandles,
 ) -> JsResult<()> {
     // ── scroll state (for scrollTop/scrollLeft/scrollWidth/scrollHeight) ─────────
@@ -1016,6 +1030,23 @@ pub(crate) fn install_scroll_state(
         let psy = Arc::clone(&page_scroll_y);
         reg!(scope, ctx, store, "_lumen_get_committed_page_scroll_y", move || -> f64 {
             f64::from(*psy.lock().unwrap())
+        });
+        // SMOOTH-SCROLL: horizontal page scroll — `window.scrollX`/`pageXOffset`,
+        // `document.scrollingElement.scrollLeft` and the x half of every
+        // `window.scrollTo`/`scrollIntoView`. Instant only: a smooth sequence
+        // is driven from the shim, one instant request per frame.
+        let px = Arc::clone(&page_scroll_x);
+        reg!(scope, ctx, store, "_lumen_request_page_scroll_x", move |x: f64| {
+            px.lock().unwrap().pending = Some(x as f32);
+        });
+        let px = Arc::clone(&page_scroll_x);
+        reg!(scope, ctx, store, "_lumen_get_page_scroll_x", move || -> f64 {
+            let p = px.lock().unwrap();
+            f64::from(p.pending.map_or(p.committed, |x| x.max(0.0)))
+        });
+        let px = Arc::clone(&page_scroll_x);
+        reg!(scope, ctx, store, "_lumen_get_committed_page_scroll_x", move || -> f64 {
+            f64::from(px.lock().unwrap().committed)
         });
     }
     Ok(())

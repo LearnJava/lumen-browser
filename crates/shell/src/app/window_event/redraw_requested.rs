@@ -90,12 +90,17 @@ impl Lumen {
         #[cfg(feature = "v8")]
         {
             let scroll_y = self.scroll_y;
+            let scroll_x = self.scroll_x;
             let settled = self.scroll_anim.is_none()
                 && self.momentum_anim.is_none()
                 && self.scroll_drag.is_none()
                 && self.hscroll_drag.is_none();
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                let moved = j.set_page_scroll_y(scroll_y);
+                // SMOOTH-SCROLL: both axes are pushed (no short-circuit) —
+                // a horizontal move is a viewport scroll like a vertical one.
+                let moved_y = j.set_page_scroll_y(scroll_y);
+                let moved_x = j.set_page_scroll_x(scroll_x);
+                let moved = moved_y || moved_x;
                 if moved {
                     j.fire_window_scroll();
                 }

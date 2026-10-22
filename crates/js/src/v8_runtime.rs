@@ -334,6 +334,7 @@ impl V8JsRuntime {
             let pending_scrolls = Arc::clone(&self.pending_scrolls);
             let pending_page_scrolls = Arc::clone(&self.pending_page_scrolls);
             let page_scroll_y = Arc::clone(&self.page_scroll_y);
+            let page_scroll_x = Arc::clone(&self.page_scroll_x);
             let computed_styles = Arc::clone(&self.computed_styles);
             let pseudo_computed_styles = Arc::clone(&self.pseudo_computed_styles);
             let custom_properties = Arc::clone(&self.custom_properties);
@@ -596,6 +597,7 @@ impl V8JsRuntime {
                 Arc::clone(&pending_scrolls),
                 Arc::clone(&pending_page_scrolls),
                 Arc::clone(&page_scroll_y),
+                Arc::clone(&page_scroll_x),
                 flush_handles.clone(),
             )?;
 

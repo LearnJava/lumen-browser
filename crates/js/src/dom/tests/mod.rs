@@ -351,6 +351,7 @@ mod v8_bug935_s55_content_journal;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug975_scroll_request_sync;
+mod v8_smooth_scroll;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug599_get_root_node;

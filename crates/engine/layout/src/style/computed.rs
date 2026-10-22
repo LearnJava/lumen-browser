@@ -1986,10 +1986,11 @@ impl ComputedStyle {
             appearance: Appearance::Auto,
             field_sizing: FieldSizing::Fixed,
             text_align_last: TextAlignLast::Auto,
-            // User Select / Scroll Behavior — наследуются.
+            // User Select — наследуется; Scroll Behavior — нет (CSSOM View
+            // §13: Inherited: no — вложенный скроллер сам решает, гладкий ли он).
             user_select: inherited.user_select,
             resize: Resize::None,
-            scroll_behavior: inherited.scroll_behavior,
+            scroll_behavior: ScrollBehavior::Auto,
             // Scroll Snap / Overscroll — не наследуются, defaults.
             scroll_snap_type: ScrollSnapType::default(),
             scroll_snap_align: ScrollSnapAlign::default(),

@@ -359,6 +359,27 @@ fn scroll_width_height_fall_back_to_bounding_rect_for_non_scroll_container() {
     assert_eq!(sh, lumen_core::JsValue::Number(60.0));
 }
 
+/// SMOOTH-SCROLL: the scroll methods ignore an element without a scrolling box
+/// (`overflow: visible`), so a test that scrolls `<body>` must give it one — and
+/// the root element a non-visible overflow too, or the body's overflow is the
+/// viewport's and `<body>` is no scroller (CSS Overflow L3 §3.5).
+fn make_body_a_scroller(rt: &V8JsRuntime) {
+    let doc_arc = make_doc();
+    let (html_nid, body_nid) = {
+        let doc = doc_arc.lock().unwrap();
+        (
+            super::super::find_element_by_tag(&doc, "html").unwrap().index() as u32,
+            super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32,
+        )
+    };
+    let auto = || -> std::collections::HashMap<String, String> {
+        [("overflow-x".to_string(), "auto".to_string()), ("overflow-y".to_string(), "auto".to_string())]
+            .into_iter()
+            .collect()
+    };
+    rt.update_computed_styles([(html_nid, auto()), (body_nid, auto())].into_iter().collect());
+}
+
 #[test]
 fn scroll_to_queues_request() {
     let rt = v8_runtime_with_dom(make_doc());
@@ -367,6 +388,7 @@ fn scroll_to_queues_request() {
         let doc = doc_arc.lock().unwrap();
         super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
     };
+    make_body_a_scroller(&rt);
     rt.update_scroll_states([(nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
     rt.eval("document.body.scrollTo(100, 200)").unwrap();
     let reqs = rt.take_scroll_requests();
@@ -384,6 +406,7 @@ fn scroll_by_adds_to_current_position() {
         let doc = doc_arc.lock().unwrap();
         super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
     };
+    make_body_a_scroller(&rt);
     rt.update_scroll_states([(nid, [50.0, 100.0, 800.0, 2000.0])].into_iter().collect());
     rt.eval("document.body.scrollBy(10, -20)").unwrap();
     let reqs = rt.take_scroll_requests();
@@ -402,6 +425,7 @@ fn element_scroll_is_alias_for_scroll_to() {
         let doc = doc_arc.lock().unwrap();
         super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
     };
+    make_body_a_scroller(&rt);
     rt.update_scroll_states([(nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
     rt.eval("document.body.scroll(100, 200)").unwrap();
     let reqs = rt.take_scroll_requests();
@@ -482,10 +506,11 @@ fn scroll_into_view_block_end_aligns_bottom_edge() {
         let doc = doc.lock().unwrap();
         super::super::find_element_by_tag(&doc, "body").unwrap().index() as u32
     };
-    // Container (body) viewport-relative box: 0,0 400x300, currently at
-    // scroll (0, 50). Target sits at container-relative (0, 500), 20px tall
-    // — content-space Y = 500 + 50 = 550, so 'end' should land the container
-    // at scroll_y = 550 + 20 - 300 = 270.
+    // Container (body) box: 0,0 400x300, currently at scroll (0, 50). Rects are
+    // in document coordinates with no scroll applied (BUG-1166), so the target
+    // at y = 500, 20px tall, sits 500 down the container's unscrolled content,
+    // wherever the container is scrolled to: 'end' lands at 500 + 20 - 300 = 220.
+    make_body_a_scroller(&rt);
     rt.update_scroll_states([(body_nid, [0.0, 50.0, 400.0, 3000.0])].into_iter().collect());
     let mut rects = std::collections::HashMap::new();
     rects.insert(body_nid, [0.0_f32, 0.0, 400.0, 300.0]);
@@ -495,7 +520,7 @@ fn scroll_into_view_block_end_aligns_bottom_edge() {
     let reqs = rt.take_scroll_requests();
     assert_eq!(reqs.len(), 1);
     assert_eq!(reqs[0].0, body_nid);
-    assert!((reqs[0].2 - 270.0).abs() < 0.1, "expected scroll_y 270, got {}", reqs[0].2);
+    assert!((reqs[0].2 - 220.0).abs() < 0.1, "expected scroll_y 220, got {}", reqs[0].2);
 }
 
 #[test]
