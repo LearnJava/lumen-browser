@@ -1126,6 +1126,31 @@ use lumen_dom::NodeId;
     }
 
     #[test]
+    fn nested_multicol_rows_cut_by_the_outer_columns_get_rule_bands_per_fragment() {
+        // multicol-gap-decorations-007: the nested container (3 columns of 100px, a spanner) is
+        // cut by two 200px outer columns. Fragment 1: bands 2..22 (balanced above the spanner),
+        // 40..140 (a fresh row after the spanner) and 160..200 (the row cut by the outer column);
+        // fragment 2: 0..100 and the balanced last row 120..130. Row rules sit in the row gaps.
+        let dl = build(
+            r#"<div style="width:620px;height:200px;columns:2;column-fill:auto;gap:20px">
+                 <div style="columns:3;gap:20px;border:2px solid;column-height:100px;column-wrap:wrap;
+                             column-rule:10px solid blue;row-rule:10px solid green">
+                   <div style="height:60px"></div>
+                   <div style="column-span:all;height:18px"></div>
+                   <div style="height:750px"></div>
+                 </div></div>"#,
+            "",
+        );
+        let cols = col_rule_rects(&dl);
+        let bands: Vec<(f32, f32)> = cols.iter().map(|c| (c.1, c.3)).collect();
+        for want in [(2.0, 20.0), (40.0, 100.0), (160.0, 40.0), (0.0, 100.0), (120.0, 10.0)] {
+            assert!(bands.contains(&want), "no column rule band {want:?}: {bands:?}");
+        }
+        let rows: Vec<f32> = row_rule_cmds(&dl).iter().map(|r| r.1).collect();
+        assert!(rows.iter().any(|y| (y - 145.0).abs() < 0.01) && rows.iter().any(|y| (y - 105.0).abs() < 0.01), "{rows:?}");
+    }
+
+    #[test]
     fn multicol_spanner_cuts_column_rules_into_bands_without_column_height() {
         // `p p <spanner 20px> p p p`, 3 columns, `column-fill: auto`, no `column-height`: both `p`
         // stack in column 1, so the spanner sits at y 100..120; the rules of the band above stop at

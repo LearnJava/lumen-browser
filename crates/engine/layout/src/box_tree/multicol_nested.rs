@@ -20,7 +20,7 @@ pub(super) enum NestedSeg {
     /// origin.
     Cols(Vec<(LayoutBox, f32, f32)>),
     /// A `column-span: all` element with its margins, as the container placed it.
-    Span(LayoutBox, f32, f32),
+    Span(Box<LayoutBox>, f32, f32),
 }
 
 /// The measured segments of a nested multicol container and the geometry its columns were cut
@@ -183,7 +183,7 @@ pub(super) fn cut_nested_rows(
                     y = 0.0;
                     frags.push(FragAcc::default());
                 }
-                let mut placed = sp.clone();
+                let mut placed = (**sp).clone();
                 shift_tree(&mut placed, col_dx(m), content_top(m) + y + smt - sp.rect.y);
                 y += need;
                 frags[m].children.push(placed);

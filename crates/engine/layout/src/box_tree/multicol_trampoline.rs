@@ -715,7 +715,7 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
 /// ([`MulticolInit::keep_flow`])? Not with a block size of its own or out of the flow; a container
 /// of one plain segment, or one with rows of columns (and spanners between the segments).
 fn nested_flow_eligible(init: &MulticolInit) -> bool {
-    init.container_h.is_none()
+    (init.container_h.is_none() || (init.col_rows.is_some() && !init.limit_shared))
         && init.s.position == Position::Static
         && init.wrap_auto.is_none()
         && (init.col_rows.is_some() || (init.segments.len() == 1 && init.segments[0].span_idx.is_none()))
@@ -2062,7 +2062,7 @@ fn post_span_item(frame: &mut Frame, span_i: usize, viewport: Size) {
     let placed = c.clone();
     if frame.init.keep_flow && nested_flow_eligible(&frame.init) {
         let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, content_width, viewport);
-        nested_flow_mut(&mut frame.init).segs.push(NestedSeg::Span(placed.clone(), mt, mb));
+        nested_flow_mut(&mut frame.init).segs.push(NestedSeg::Span(Box::new(placed.clone()), mt, mb));
     }
     // A spanner after a row of columns eats into that row's `column-height`.
     if let Some(used) = frame.init.row_used {
