@@ -30,3 +30,7 @@ WPT-RUN-14 срез 21: `css-anchor-position/transform-001.html`…`transform-01
 ## Как проверить
 
 Таблица выше; `css/css-anchor-position/transform-001.html`.
+
+## Срез 1 (2026-10-23, P3)
+
+`collect_anchors_rec` (`anchor.rs`) регистрирует якорь по AABB его `forward_box_transform` — тот же прямоугольник, что у `getBoundingClientRect` (`transformed_aabb`). Тесты: `box_tree/tests/anchor_transform.rs` (translate/scale/rotate). Остаток: анимация `transform` якоря (`transform-010…017`, не пробовано — перепроверить, пересчитывается ли позиция цели по кадрам) и накопление transform предков (3D, `transform-005`).
