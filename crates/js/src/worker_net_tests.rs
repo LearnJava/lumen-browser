@@ -62,7 +62,7 @@ impl lumen_core::ext::JsFetchProvider for Net {
 fn scope(net: Option<Arc<Net>>) -> V8JsRuntime {
     let rt = V8JsRuntime::new().unwrap();
     crate::worker::install_worker_scope_globals_v8(&rt, None).unwrap();
-    rt.eval(crate::worker::WORKER_TIMERS_SHIM).unwrap();
+    rt.eval(crate::worker_shims::WORKER_TIMERS_SHIM).unwrap();
     rt.set_global("_lumen_worker_base_url", JsValue::String("https://w.test/dir/worker.js".into())).unwrap();
     let provider = net.map(|n| n as Arc<dyn lumen_core::ext::JsFetchProvider>);
     super::install_worker_net_v8(&rt, provider).unwrap();

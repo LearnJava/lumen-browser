@@ -396,7 +396,7 @@ impl V8JsRuntime {
     ///
     /// A `WorkerGlobalScope` has no `window` and no `_lumen_report_exception`;
     /// its own "report the exception" entry point is
-    /// `_lumen_report_worker_exception` (`crate::worker::worker_global_shim`),
+    /// `_lumen_report_worker_exception` (`crate::worker_shims::worker_global_shim`),
     /// which fires `error` at the worker scope first and only forwards to the
     /// owning `Worker` object on the page if nothing cancelled it (BUG-813).
     /// That is the only reason this name is a parameter — page code must keep
