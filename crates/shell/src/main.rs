@@ -216,7 +216,7 @@ mod renderer_process;
 
 // SPLIT SH-5: helpers that used to live at the bottom of this file.
 use crate::display_list_metrics::{
-    build_split_placeholder, content_height_of, content_width_in, content_width_of, next_dl_epoch, paint_ordered, paint_ordered_cached,
+    build_split_placeholder, content_height_of, content_width_of, next_dl_epoch, paint_ordered, paint_ordered_cached,
 };
 use crate::app::automation_cmds::{PendingEval, PendingWait};
 use crate::doc_extract::{
