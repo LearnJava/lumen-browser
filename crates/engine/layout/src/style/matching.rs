@@ -13,8 +13,11 @@ use lumen_css_parser::{
     AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, PseudoClass,
     PseudoElementKind, SimpleSelector, Specificity,
 };
+use std::cell::Cell;
+
 use lumen_dom::{Attribute, Document, NodeData, NodeId};
 
+use crate::style::SHADOW_HOST_SCOPE;
 use forms::{is_element, matches_pseudo_class, previous_element_sibling};
 
 pub(in crate::style) mod forms;
@@ -52,6 +55,21 @@ fn compound_at(complex: &ComplexSelector, i: usize) -> &CompoundSelector {
     if i == 0 { &complex.head } else { &complex.tail[i - 1].1 }
 }
 
+/// Теневой хост, видимый из `ShadowRoot` `sr` при матчинге листа его собственного
+/// теневого дерева (`SHADOW_HOST_SCOPE` == индекс хоста). `ShadowRoot` не имеет
+/// `parent`, поэтому комбинатор `:host <потомок>` / `:host > <потомок>` (Scoping 1
+/// §3.2, BUG-1453) переходит к хосту отсюда; вне такого скоупа — `None`.
+fn scoped_shadow_host(doc: &Document, sr: NodeId) -> Option<NodeId> {
+    if !matches!(doc.get(sr).data, NodeData::ShadowRoot { .. }) {
+        return None;
+    }
+    let scope = SHADOW_HOST_SCOPE.with(Cell::get);
+    if scope == u32::MAX {
+        return None;
+    }
+    doc.shadow_host_of(sr).filter(|h| h.index() as u32 == scope)
+}
+
 /// Рекурсивный matcher с back-tracking. Compound `n - 1` матчится на `node`;
 /// для левее идущих compound-ов перебираем кандидатов согласно combinator-у.
 fn matches_chain(
@@ -75,19 +93,28 @@ fn matches_chain(
         Combinator::Descendant => {
             // Перебираем всех предков как кандидатов.
             let mut cur = doc.get(node).parent;
+            let mut top = None;
             while let Some(p) = cur {
                 if is_element(doc, p) && matches_chain(complex, n - 1, doc, p, leftmost_ok) {
                     return true;
                 }
+                top = Some(p);
                 cur = doc.get(p).parent;
             }
-            false
+            // Цепочка упёрлась в корень теневого дерева: хост — последний кандидат.
+            match top.and_then(|t| scoped_shadow_host(doc, t)) {
+                Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
+                None => false,
+            }
         }
         Combinator::Child => {
             // Один кандидат: parent.
             let Some(parent) = doc.get(node).parent else { return false; };
             if !is_element(doc, parent) {
-                return false;
+                return match scoped_shadow_host(doc, parent) {
+                    Some(host) => matches_chain(complex, n - 1, doc, host, leftmost_ok),
+                    None => false,
+                };
             }
             matches_chain(complex, n - 1, doc, parent, leftmost_ok)
         }

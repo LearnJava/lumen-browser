@@ -1062,6 +1062,11 @@ pub(crate) fn compute_style_shareable(
         let base = next_rule_idx
             + own_shadow.as_ref().map_or(0, |s| s.rules.len())
             + host_shadow.as_ref().map_or(0, |s| s.rules.len());
+        // BUG-1453: `:host <потомок>` — комбинатор в листе теневого дерева ведёт к
+        // хосту; скоуп включает `:host` на нём только на время матчинга этого листа.
+        if let Some(host) = doc.enclosing_shadow_host(node) {
+            SHADOW_HOST_SCOPE.with(|c| c.set(host.index() as u32));
+        }
         for (i, rule) in shadow.rules.iter().enumerate() {
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
@@ -1081,6 +1086,7 @@ pub(crate) fn compute_style_shareable(
                 }
             }
         }
+        SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
     }
 
     // Inline-style declarations подключаются с `is_inline = true` и
