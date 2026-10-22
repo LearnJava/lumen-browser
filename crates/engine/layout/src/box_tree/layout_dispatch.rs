@@ -1655,6 +1655,7 @@ pub(super) fn dispatch_box(
                 );
                 return DispatchOutcome::NeedsBlockFlowLoop(Box::new(block_flow_trampoline::BlockFlowInit {
                     fc,
+                    shares_floats: in_block_flow && matches!(b.kind, BoxKind::Block) && !establishes_bfc(b),
                     container_right,
                     child_y: content_y + legend_extra,
                     prev_block_mb: 0.0,

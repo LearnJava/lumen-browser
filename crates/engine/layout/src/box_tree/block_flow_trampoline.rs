@@ -66,6 +66,9 @@ pub(super) enum DispatchOutcome {
 #[derive(Clone)]
 pub(super) struct BlockFlowInit {
     pub(super) fc: FloatContext,
+    /// CSS 2.1 §9.5/§10.6.3: a non-BFC in-flow block shares its parent's formatting
+    /// context — it does not enclose its floats, its parent takes them over.
+    pub(super) shares_floats: bool,
     pub(super) container_right: f32,
     pub(super) child_y: f32,
     pub(super) prev_block_mb: f32,
@@ -160,10 +163,9 @@ pub(super) fn run(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
-) {
+) -> FloatContext {
     if !line_clamp_flow::wants_balance_pass(b) {
-        run_pass(b, init, measurer, viewport, hp);
-        return;
+        return run_pass(b, init, measurer, viewport, hp);
     }
     // `line-clamp` + `text-wrap: balance` inside: the visible lines of each balanced run are
     // known only after a layout without balancing, so the container is laid out twice.
@@ -172,8 +174,9 @@ pub(super) fn run(
     run_pass(b, init, measurer, viewport, hp);
     line_clamp_flow::begin_budget_pass(b);
     *b = pristine;
-    run_pass(b, pristine_init, measurer, viewport, hp);
+    let fc = run_pass(b, pristine_init, measurer, viewport, hp);
     line_clamp_flow::end_pass(saved);
+    fc
 }
 
 fn run_pass(
@@ -182,7 +185,7 @@ fn run_pass(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
-) {
+) -> FloatContext {
     let mut current = Frame {
         b: take_box(b),
         init,
@@ -203,10 +206,13 @@ fn run_pass(
             match stack.pop() {
                 None => {
                     *b = current.b;
-                    return;
+                    return current.init.fc;
                 }
                 Some(mut parent) => {
                     let idx = parent.next_child_idx;
+                    if current.init.shares_floats {
+                        parent.init.fc.absorb_vertical(&current.init.fc, 0.0, 0.0);
+                    }
                     parent.b.children[idx] = current.b;
                     post_child_bookkeeping(&mut parent, idx, viewport, &mut bottom_cache);
                     parent.next_child_idx += 1;
@@ -224,7 +230,11 @@ fn run_pass(
             StepOutcome::Descend(child_init) if line_clamp_flow::wants_balance_pass(&current.b.children[i]) => {
                 // A clamp container with balanced runs is laid out twice: `run` does that for a
                 // whole box, so it is driven recursively instead of as a frame of this stack.
-                run(&mut current.b.children[i], child_init, measurer, viewport, hp);
+                let shares = child_init.shares_floats;
+                let child_fc = run(&mut current.b.children[i], child_init, measurer, viewport, hp);
+                if shares {
+                    current.init.fc.absorb_vertical(&child_fc, 0.0, 0.0);
+                }
                 post_child_bookkeeping(&mut current, i, viewport, &mut bottom_cache);
                 current.next_child_idx += 1;
             }
@@ -909,11 +919,14 @@ fn finish_frame(
     } else {
         0.0
     };
-    // CSS 2.1 §9.5: the container height must also enclose all floats.
-    // `overflow: clip` is no BFC root (CSS Overflow L3 §3.1): floats stick out of it.
-    let encloses_floats = !(matches!(frame.init.s.overflow_x, Overflow::Clip)
-        || matches!(frame.init.s.overflow_y, Overflow::Clip))
-        || establishes_bfc(&frame.b);
+    // CSS 2.1 §10.6.7: only a BFC root's height encloses its floats. A non-BFC in-flow block
+    // shares its parent's formatting context (`shares_floats`) — the floats stick out of it
+    // and the parent takes them over. `overflow: clip` is no BFC root either (CSS Overflow L3
+    // §3.1).
+    let encloses_floats = !frame.init.shares_floats
+        && (!(matches!(frame.init.s.overflow_x, Overflow::Clip)
+            || matches!(frame.init.s.overflow_y, Overflow::Clip))
+            || establishes_bfc(&frame.b));
     let float_bottom = frame.init.fc.left.iter().chain(frame.init.fc.right.iter())
         .map(|(bot, _)| *bot)
         .filter(|_| encloses_floats)

@@ -771,19 +771,55 @@ fn clear_both_advances_past_floats() {
         "clear:both block must start below tallest float (got {})", clr.rect.y);
 }
 
-/// Контейнер height охватывает float (float clearing родителя).
-/// CSS 2.1 §9.5: контейнер должен расти, чтобы содержать свои float-ы.
+/// CSS 2.1 §10.6.7: высота охватывает float только у корня BFC (`overflow: hidden`, `flow-root`).
 #[test]
-fn container_height_encloses_float() {
+fn bfc_root_height_encloses_float() {
+    for establish in ["overflow: hidden;", "display: flow-root;"] {
+        let root = lay(
+            "<div class='c'><div class='f'></div></div>",
+            &format!(".c {{ width: 400px; {establish} }}
+                      .f {{ float: left; width: 100px; height: 80px; }}"),
+        );
+        let c = root.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))
+            .expect("container");
+        assert!(c.rect.height >= 80.0 - 0.01,
+            "{establish} container must enclose float (height={}, expected >=80)", c.rect.height);
+    }
+}
+
+/// BUG-1403, CSS 2.1 §10.6.3: блок без BFC не растёт до своего float, float выступает вниз
+/// и обтекает следующий блок.
+#[test]
+fn plain_block_does_not_enclose_float_and_next_block_wraps_it() {
     let root = lay(
-        "<div class='c'><div class='f'>x</div></div>",
-        ".c { width: 400px; }
-         .f { float: left; width: 100px; height: 80px; }",
+        "<div class='a'><div class='f'></div></div><div class='b'></div>",
+        ".a { width: 400px; }
+         .f { float: left; width: 10px; height: 50px; }
+         .b { height: 5px; }",
     );
-    let c = first_element_child(&root);
-    // Container has no non-float children, so height = float height = 80.
-    assert!(c.rect.height >= 80.0 - 0.01,
-        "container must enclose float (height={}, expected >=80)", c.rect.height);
+    let blocks: Vec<&LayoutBox> = root.children.iter()
+        .filter(|c| matches!(c.kind, BoxKind::Block))
+        .collect();
+    let (a, b) = (blocks[0], blocks[1]);
+    assert!(a.rect.height.abs() < 0.01, "a must not enclose its float (height={})", a.rect.height);
+    assert!(b.rect.y.abs() < 0.01, "b follows a at y=0 (got {})", b.rect.y);
+    assert!(b.rect.x >= 10.0 - 0.01, "b is displaced by the float that sticks out of a (x={})", b.rect.x);
+}
+
+/// BUG-1403: `clear` на следующем блоке учитывает float, выступающий из предыдущего блока.
+#[test]
+fn clear_sees_float_of_previous_plain_block() {
+    let root = lay(
+        "<div class='a'><div class='f'></div></div><div class='b'></div>",
+        ".a { width: 400px; }
+         .f { float: left; width: 10px; height: 50px; }
+         .b { clear: left; height: 5px; }",
+    );
+    let blocks: Vec<&LayoutBox> = root.children.iter()
+        .filter(|c| matches!(c.kind, BoxKind::Block))
+        .collect();
+    assert!((blocks[1].rect.y - 50.0).abs() < 0.01, "b clears the float (y={})", blocks[1].rect.y);
 }
 
 /// `clear: left` сдвигает элемент мимо левого float.

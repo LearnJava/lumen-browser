@@ -1,6 +1,6 @@
 # BUG-1403 — Блок без BFC растёт до своих float: высота охватывает float, а следующий блок не обтекает его
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 17, `css/css-multicol` + `css/css-contain`)
 **Область:** layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:819-830` — «the container height must also enclose all floats»; закреплено юнит-тестом `tests/half_leading_columns_floats.rs:621` `container_height_encloses_float`)
 
@@ -28,3 +28,11 @@ WPT-RUN-14 срез 17, побочно: проба `contain: layout` с float в
 ## Как проверить
 
 Страница из таблицы; `css/CSS2/floats/floats-001.xht` и соседние `floats-*.xht`.
+
+## Как исправлено
+
+`block_flow_trampoline.rs::finish_frame` — охват float по высоте только у корня BFC (`BlockFlowInit::shares_floats == false`). Обычный нормальнопоточный `Block` без BFC делит контекст форматирования с родителем: его высота float не включает, а `run_pass` после завершения кадра отдаёт собственные float-ы ребёнка в `FloatContext` родителя (`absorb_vertical(.., 0, 0)`), поэтому следующий соседний блок обтекает float, а `clear` его видит. Охват остался у корня документа, `overflow`≠`visible`/`clip`, `flow-root`, `float`, `position:absolute|fixed`, flex/grid/table-ячейки, `contain: layout|paint`, multicol.
+
+Юнит-тесты: `half_leading_columns_floats.rs` — `bfc_root_height_encloses_float`, `plain_block_does_not_enclose_float_and_next_block_wraps_it`, `clear_sees_float_of_previous_plain_block` (прежний `container_height_encloses_float` закреплял дефект); `pseudo_first_line.rs::float_single_char_paragraph_drops_empty_run` — абзац с одним плавающим `::first-letter` имеет высоту 0, как в Chrome.
+
+Остаток: блок с заданной `width` рядом с float сдвигается целиком (legacy-приближение, `step_child`), а по §9.5 сдвигаются только его строки — в этот баг не входит.
