@@ -14,11 +14,22 @@
 use super::multicol_flow::{cut, shell, slice_edges, Flow, Item, Window};
 use super::*;
 
-/// The measured items of a nested multicol container (its only segment) and the geometry its
-/// columns were cut with.
+/// One part of the flow of a nested multicol container.
+pub(super) enum NestedSeg {
+    /// The items of a segment of columns: `(item, margin-top, margin-bottom)`, as measured at the
+    /// origin.
+    Cols(Vec<(LayoutBox, f32, f32)>),
+    /// A `column-span: all` element with its margins, as the container placed it.
+    Span(Box<LayoutBox>, f32, f32),
+}
+
+/// The measured segments of a nested multicol container and the geometry its columns were cut
+/// with.
 pub(super) struct NestedFlow {
-    /// `(item, margin-top, margin-bottom)`, as measured at the origin.
-    pub(super) items: Vec<(LayoutBox, f32, f32)>,
+    /// In source order: segments of columns and the spanners between them.
+    pub(super) segs: Vec<NestedSeg>,
+    /// `(column-height, row-gap)` of a container with rows of columns ([`cut_nested_rows`]).
+    pub(super) rows: Option<(f32, f32)>,
     /// `column-count` of the inner container.
     pub(super) n: usize,
     pub(super) col_w: f32,
@@ -53,7 +64,8 @@ pub(super) fn cut_nested(
 ) -> Option<NestedCut> {
     let clone = b.style.box_decoration_clone;
     let nn = nf.n.max(1);
-    let items: Vec<Item> = nf.items.iter().map(|(c, mt, mb)| (c, *mt, *mb)).collect();
+    let Some(NestedSeg::Cols(measured)) = nf.segs.first() else { return None };
+    let items: Vec<Item> = measured.iter().map(|(c, mt, mb)| (c, *mt, *mb)).collect();
     let flow = Flow::new(&items, viewport);
     let model = &flow.model;
     let (dt, db) = (nf.edge_top, nf.edge_bottom);
@@ -123,3 +135,143 @@ pub(super) fn cut_nested(
     }
     Some(NestedCut { frags, extent })
 }
+
+/// What one fragment of a nested container collects while [`cut_nested_rows`] fills it.
+#[derive(Default)]
+struct FragAcc {
+    children: Vec<LayoutBox>,
+    /// Block extent of the content, from the top of the fragment's content box.
+    used: f32,
+}
+
+/// [`cut_nested`] for a container with rows of columns (`column-height`) and/or `column-span: all`
+/// elements. The fragments are filled top down with a cursor `(m, y)` — fragment `m` (one column of
+/// the parent), `y` from the top of its content box: a spanner takes the full width at the cursor
+/// (and moves to the next fragment when it does not fit), a segment of columns opens rows of
+/// `column-height` one after another (a row after a spanner is a new one, Multicol L2 §4.4), a row
+/// gap that would start a fragment is dropped, and a row cut short by the end of the fragment only
+/// has the room that is left (Fragmentation L3 §5.1). The last row of a segment is balanced
+/// (`column-fill: balance`, or because a spanner follows it).
+pub(super) fn cut_nested_rows(
+    nf: &NestedFlow,
+    b: &LayoutBox,
+    h: f32,
+    mt: f32,
+    cur_y: f32,
+    col_dx: &dyn Fn(usize) -> f32,
+    viewport: Size,
+) -> Option<NestedCut> {
+    let (col_h, row_gap) = nf.rows?;
+    let clone = b.style.box_decoration_clone;
+    let nn = nf.n.max(1);
+    let (dt, db) = (nf.edge_top, nf.edge_bottom);
+    // Block size of fragment `m`'s content box that is left for the content.
+    let avail = |m: usize| {
+        let top = if m == 0 { mt } else { 0.0 } + if m == 0 || clone { dt } else { 0.0 };
+        (h - top - if clone { db } else { 0.0 }).max(1.0)
+    };
+    // Page `y` of the top of fragment `m`'s content box.
+    let content_top = |m: usize| cur_y + if m == 0 { mt } else { 0.0 } + if m == 0 || clone { dt } else { 0.0 };
+    let mut frags: Vec<FragAcc> = vec![FragAcc::default()];
+    let (mut m, mut y) = (0usize, 0.0f32);
+    for (si, seg) in nf.segs.iter().enumerate() {
+        match seg {
+            NestedSeg::Span(sp, smt, smb) => {
+                let need = smt + sp.rect.height + smb;
+                if y > 0.0 && y + need > avail(m) + multicol_flow::EPS {
+                    m += 1;
+                    y = 0.0;
+                    frags.push(FragAcc::default());
+                }
+                let mut placed = (**sp).clone();
+                shift_tree(&mut placed, col_dx(m), content_top(m) + y + smt - sp.rect.y);
+                y += need;
+                frags[m].children.push(placed);
+                frags[m].used = frags[m].used.max(y);
+            }
+            NestedSeg::Cols(measured) => {
+                let items: Vec<Item> = measured.iter().map(|(c, mt, mb)| (c, *mt, *mb)).collect();
+                let flow = Flow::new(&items, viewport);
+                let model = &flow.model;
+                let followed_by_span = matches!(nf.segs.get(si + 1), Some(NestedSeg::Span(..)));
+                let mut caps: Vec<f32> = Vec::new();
+                let mut r = 0usize;
+                loop {
+                    if r > 0 {
+                        y += row_gap;
+                    }
+                    if y > 0.0 && avail(m) - y < 1.0 {
+                        m += 1;
+                        y = 0.0;
+                        frags.push(FragAcc::default());
+                    }
+                    let cap_r = col_h.min(avail(m) - y).max(1.0);
+                    caps.extend(std::iter::repeat_n(cap_r, nn));
+                    let h_of = |g: usize| caps.get(g).copied().unwrap_or(cap_r);
+                    let mut pages = model.paginate_ex(&h_of, false)?;
+                    let last_row = pages.len() <= (r + 1) * nn;
+                    let mut row_h = cap_r;
+                    if last_row && (nf.balance || followed_by_span) {
+                        row_h = model.balanced_tail(&|g| caps[g], r * nn, (r + 1) * nn, cap_r);
+                        let tail = caps.len() - nn;
+                        caps[tail..].fill(row_h);
+                        pages = model.paginate_ex(&|g| caps.get(g).copied().unwrap_or(row_h), false)?;
+                    }
+                    let total = pages.len();
+                    for (j, pg) in pages[r * nn..((r + 1) * nn).min(total)].iter().enumerate() {
+                        let win = Window {
+                            lo: pg.lo,
+                            hi: pg.hi,
+                            lead: pg.lead,
+                            tail: pg.tail,
+                            last: r * nn + j + 1 == total,
+                            extent: row_h,
+                            col_top: content_top(m) + y,
+                            dx: col_dx(m) + nf.content_x + j as f32 * (nf.col_w + nf.col_gap),
+                        };
+                        for &(item, off) in &flow.items {
+                            if let Some(mut piece) = cut(item, off, &win, 0) {
+                                if matches!(piece.kind, BoxKind::InlineRun { .. }) {
+                                    piece.rect.width = nf.col_w;
+                                }
+                                frags[m].children.push(piece);
+                            }
+                        }
+                    }
+                    y += row_h;
+                    frags[m].used = frags[m].used.max(y);
+                    if last_row {
+                        break;
+                    }
+                    r += 1;
+                    if r > MAX_ROWS {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    let frags_n = frags.len();
+    let mut out = Vec::with_capacity(frags_n);
+    let mut extent = 0.0f32;
+    for (m, acc) in frags.into_iter().enumerate() {
+        let last = m + 1 == frags_n;
+        let y0 = cur_y + if m == 0 { mt } else { 0.0 };
+        let top_edge = if m == 0 || clone { dt } else { 0.0 };
+        let bottom_edge = if last || clone { db } else { 0.0 };
+        let content_h = if last { acc.used } else { avail(m) };
+        let mut frag = shell(b);
+        frag.rect.x = b.rect.x + col_dx(m);
+        frag.rect.y = y0;
+        frag.rect.height = top_edge + content_h + bottom_edge;
+        slice_edges(&mut frag, m > 0 && !clone, !last && !clone);
+        Arc::make_mut(&mut frag.style).multicol_fragment = true;
+        frag.children = acc.children;
+        extent = extent.max(y0 + frag.rect.height - cur_y);
+        out.push(frag);
+    }
+    Some(NestedCut { frags: out, extent })
+}
+
+/// Upper bound of the rows one segment of a nested container may open.
+const MAX_ROWS: usize = 500;
