@@ -1501,7 +1501,7 @@ fn push_content_text(
 
 /// Builds a plain-text `InlineSegment` for generated (`content`) text.
 /// `source_node` is the owning element so Selection/Range can map back to it.
-fn make_content_text_segment(
+pub(super) fn make_content_text_segment(
     style: &ComputedStyle,
     owner_id: NodeId,
     text: String,
@@ -1658,6 +1658,7 @@ pub(crate) fn inject_marker(
             position:        style.list_style_position,
             list_style_type: style.list_style_type.clone(),
             image:           style.list_style_image.clone(),
+            in_run:          false,
         },
         children: vec![],
         col_span: 1,

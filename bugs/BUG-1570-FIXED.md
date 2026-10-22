@@ -1,6 +1,6 @@
 # BUG-1570 — Встроенные counter-style CSS Counter Styles 3 §6 не реализованы: `hebrew`, `armenian`, `georgian`, `cjk-*`, `japanese-*`, `korean-*`, `*-chinese-*`, `ethiopic-numeric`, `arabic-indic` и ещё 30 систем счисления
 
-**Статус:** OPEN (ДОРАБОТКА → COUNTER-STYLES-BUILTIN)
+**Статус:** FIXED 2026-10-22 (COUNTER-STYLES-BUILTIN, ветка `p1-counter-styles-builtin`)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** layout (`crates/engine/layout/src/counters.rs:1700-1740` — `format_counter` знает `decimal`, `decimal-leading-zero`, `lower/upper-alpha|latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`)
 
@@ -28,3 +28,14 @@ WPT-RUN-14 срез 25: `css/css-counter-styles/<имя>/*.html` (40 катал�
 ## Как проверить
 
 эталоны `css-counter-styles/hebrew/css3-counter-styles-015.html`, `cjk-decimal/counter-cjk-decimal.html`.
+
+## Как исправлено
+
+`crates/engine/layout/src/counter_builtin.rs`: 40 предопределённых стилей §6 — таблицы `CounterStyleDef` (18 позиционных наборов цифр, аддитивные `hebrew`/`armenian`/`georgian`, алфавитные кана, `fixed` `cjk-earthly-branch`/`cjk-heavenly-stem`, `disclosure-*`) и две алгоритмические системы `CounterSystem::Builtin` (девять «длинных» восточноазиатских стилей, `ethiopic-numeric`). `counters.rs::lookup_style` ищет сначала авторский `@counter-style`, затем таблицу. `counter()`/`counters()` отдают только представление (`format_counter_with_registry`), текст `::marker` — префикс + представление + суффикс (`format_marker_with_registry`, суффикс по умолчанию `". "`); запасной стиль даёт только представление. `lower-greek` — настоящий алфавитный (`αα` после `ω`). 1150 строк таблицы ожиданий из эталонов WPT — тест `counter_builtin::wpt_cases`.
+
+## Что осталось
+
+- Значения счётчика — `i32`: расширенный диапазон восточноазиатских стилей (`*-extended`, > 2^31) недостижим; `korean-hangul-formal` для 10^15 в эталоне — `천조` без `일` (ошибка эталона).
+- `speak-as`, направление-зависимый глиф `disclosure-closed`, перестановка суффикса при `dir=rtl` (`counter-suffix.html`).
+- Область счётчика не включает следующих соседей (`counter-hebrew-nested.html`: `counter-reset` на первом `span`).
+- Reftest-ы `css3-counter-styles-NNN` с `<ol start>`/`<li value>` ждут BUG-1547.
