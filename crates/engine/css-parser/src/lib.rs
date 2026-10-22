@@ -345,6 +345,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "position",
     "position-anchor",
     "position-area",
+    "position-visibility",
     "print-color-adjust",
     "quotes",
     "resize",

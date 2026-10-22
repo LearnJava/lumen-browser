@@ -748,7 +748,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `anchor-name` / `position-anchor` / `inset-area` | ✅ | ComputedStyle + collect_anchors + apply_anchor_positions post-layout pass; position-area alias |
 | `anchor()` / `anchor-size()` functions | ✅ | `anchor()` in top/right/bottom/left (+ `inset` shorthand) resolved via `resolve_inset`/`resolve_inset_scoped` (two-phase, mirrors `inset-area`); `anchor-size()` in width/height via `resolve_anchor_size`; тест 144 (p4-anchor-functions 2026-07-15) |
 | `position-visibility` | ⬜ | не разбирается (WPT-RUN-14 S21, 2026-10-08): `CSS.supports('position-visibility','anchors-visible')` — `false`, в `getComputedStyle` нет. CSS Anchor Positioning 1 §position-visibility (`always \| anchors-valid \| anchors-visible \| no-overflow`): скрытие цели, когда якорь не виден или цель вышла из содержащего блока. WPT `css-anchor-position/position-visibility-*` — 29 reftest, `parsing/position-visibility-*` (19 + 18 из 30 сабтестов) |
-| `anchor-scope`, `container-type: anchored` — computed | 🟡 | разбираются (`CSS.supports` — `true`), но `getComputedStyle` их не отдаёт (WPT-RUN-14 S21, 2026-10-08, [BUG-1478](bugs/BUG-1478-OPEN.md)); `position-try-fallbacks`/`position-try-order`/`position-try` не разбираются ([BUG-562](bugs/BUG-562-OPEN.md)) |
+| `anchor-scope`, `container-type: anchored` — computed | 🟡 | разбираются (`CSS.supports` — `true`), но `getComputedStyle` их не отдаёт (WPT-RUN-14 S21, 2026-10-08, [BUG-1478](bugs/BUG-1478-FIXED.md)); `position-try-fallbacks`/`position-try-order`/`position-try` не разбираются ([BUG-562](bugs/BUG-562-OPEN.md)) |
 
 ### [T4] Color L5
 

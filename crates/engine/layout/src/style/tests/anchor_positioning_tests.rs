@@ -784,3 +784,57 @@
         assert_eq!(canonical_specified_anchor("anchor(--a top)", false), None);
         assert!(canonical_specified_anchor("anchor-size(--a width)", false).is_some());
     }
+
+    // ── BUG-1478: computed values reported by getComputedStyle ──────────────
+
+    fn anchor_prop(css: &str, prop: &str) -> String {
+        let s = first_div_style("<div></div>", &format!("div {{ {css} }}"));
+        crate::selector_query::computed_style_to_map(&s).get(prop).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn anchor_props_in_computed_map_with_initials() {
+        for (prop, init) in [
+            ("anchor-name", "none"), ("anchor-scope", "none"), ("position-area", "none"),
+            ("position-anchor", "auto"), ("position-visibility", "anchors-visible"),
+        ] {
+            assert_eq!(anchor_prop("", prop), init, "{prop}");
+        }
+    }
+
+    #[test]
+    fn anchor_name_and_scope_lists_serialize_joined() {
+        assert_eq!(anchor_prop("anchor-name: --a,--b", "anchor-name"), "--a, --b");
+        assert_eq!(anchor_prop("anchor-scope: --foo ,  --bar", "anchor-scope"), "--foo, --bar");
+        assert_eq!(anchor_prop("anchor-scope: all", "anchor-scope"), "all");
+        assert_eq!(anchor_prop("anchor-name: --a, foo", "anchor-name"), "none");
+    }
+
+    #[test]
+    fn position_area_computed_canonical_forms() {
+        for (given, want) in [
+            ("top left", "left top"), ("center left", "left center"), ("top center", "center top"),
+            ("left span-all", "left"), ("span-all top", "top"), ("center center", "center"),
+            ("block-start inline-end", "start end"), ("block-end inline-end", "end"),
+            ("inline-start center", "center start"), ("block-start span-all", "block-start"),
+            ("span-self-block-end self-inline-start", "span-self-end self-start"),
+            ("start end", "start end"), ("start start", "start"), ("start span-all", "block-start"),
+            ("span-all span-end", "span-inline-end"), ("span-all span-all", "span-all"),
+            ("span-all center", "span-all center"), ("start center", "start center"),
+            ("x-start y-end", "x-start y-end"), ("none", "none"),
+        ] {
+            let got = anchor_prop(&format!("position-area: {given}"), "position-area");
+            assert_eq!(got, want, "{given}");
+        }
+    }
+
+    #[test]
+    fn position_visibility_flags_serialize_in_fixed_order() {
+        for (given, want) in [
+            ("always", "always"), ("no-overflow anchors-visible", "anchors-visible no-overflow"),
+            ("no-overflow anchors-visible anchors-valid", "anchors-valid anchors-visible no-overflow"),
+            ("anchors-valid anchors-valid", "anchors-visible"),
+        ] {
+            assert_eq!(anchor_prop(&format!("position-visibility: {given}"), "position-visibility"), want, "{given}");
+        }
+    }
