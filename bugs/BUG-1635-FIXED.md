@@ -1,7 +1,7 @@
 # BUG-1635 — headless `--mcp-port` не учитывает `--proxy`
 
 **Статус:** FIXED 2026-10-18 (P6)
-**Заведён:** 2026-10-18 (Chat, при разборе [BUG-1239](BUG-1239-OPEN.md))
+**Заведён:** 2026-10-18 (Chat, при разборе [BUG-1239](BUG-1239-FIXED.md))
 **Область:** shell / driver (`crates/shell/src/automation_server.rs`, `InProcessSession` в `crates/driver`)
 
 ## Симптом
