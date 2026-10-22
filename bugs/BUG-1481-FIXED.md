@@ -1,6 +1,6 @@
 # BUG-1481 — `justify-self`/`align-self`/`place-self` не выравнивают `position:absolute` бокс внутри содержащего блока (CSS Box Alignment 3 §«Absolute-Position»)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout (`crates/engine/layout/src/box_tree/` — абсолютно позиционированный бокс: `justify-self`/`align-self`/`place-self` для бокса с обоими инсетами)
 
@@ -34,3 +34,21 @@ WPT-RUN-14 срез 21: `css-position/position-absolute-center-001.html`, `-002.
 ## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
 
 `css/css-align/abspos/*` (67 id, 856 из 1 086 сабтестов): `{align,justify}-self-*-{htb,vlr,vrl}-*`, `*-default-overflow-*`, `safe-*-self-*`, `stretch-intrinsic-size-*`, `table-*-self-stretch`. Тот же код нужен для статической позиции ([BUG-1528](BUG-1528-OPEN.md)) и размера по `justify-self` без `width` ([BUG-1526](BUG-1526-OPEN.md)).
+
+## Исправление
+
+`place_abs_child` (`crates/engine/layout/src/box_tree/multicol_abspos.rs`): ось с двумя заданными инсетами и
+определённым размером (`width`/`height` либо `anchor-size()`) раньше всегда брала начало (`left`/`top`) и сдвигала
+бокс только `auto`-полями. Теперь без `auto`-полей по оси бокс выравнивается `justify-self` / `align-self` /
+`place-self` внутри блока, суженного инсетами (`abs_self_aligned_start`): `start`/`end`/`center`/`self-start`/`self-end`/
+`left`/`right`, `safe` при переполнении прижимает к началу, `last baseline` → `end`; `auto`/`normal`/`stretch` не
+сдвигают. Оси — физические по `writing-mode` и `direction` самого бокса (они наследуются от содержащего блока);
+`auto`-поля по-прежнему перекрывают выравнивание. Тесты: `box_tree/tests/abs_auto_margins.rs` (таблица пробы из
+симптома, rtl, поля, `safe`).
+
+**Остаток (не закрыт этим багом):** `position-absolute-center-006/007` — это `display: table` с `margin: auto` и
+нулевыми инсетами, а не `justify-self` (имя файла в заявке указывало на него ошибочно); `auto` значения
+`justify-self`/`align-self` не берутся из `justify-items`/`align-items` содержащего блока; размер бокса без `width`
+по `justify-self` — [BUG-1526](BUG-1526-OPEN.md), статическая позиция — [BUG-1528](BUG-1528-OPEN.md). Проба в юнит-тесте
+показала, что `display:table` с единственным блочным потомком без табличных частей даёт ширину 0 даже в потоке —
+проверить на настоящей странице отдельно.

@@ -63,3 +63,55 @@ fn rtl_explicit_left_still_wins() {
     let r = rtl_rect_of("left:10px");
     assert_eq!(r.x, 10.0, "{r:?}");
 }
+
+// ── BUG-1481: `justify-self` / `align-self` / `place-self` выравнивают бокс между инсетами ──
+
+fn aligned_rect_of(css: &str) -> Rect {
+    let doc = lumen_html_parser::parse(r#"<div id="p"><div id="c"></div></div>"#);
+    let sheet = lumen_css_parser::parse(&format!(
+        "body{{margin:0}}#p{{position:relative;width:200px;height:100px}}#c{{position:absolute;inset:0;width:50px;height:50px;{css}}}"
+    ));
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    super::find_by_id_all(&root, &doc, "c").expect("нет #c").rect
+}
+
+#[test]
+fn self_alignment_center_center() {
+    let r = aligned_rect_of("justify-self:center;align-self:center");
+    assert_eq!((r.x, r.y), (75.0, 25.0), "{r:?}");
+}
+
+#[test]
+fn self_alignment_end_end() {
+    let r = aligned_rect_of("justify-self:end;align-self:end");
+    assert_eq!((r.x, r.y), (150.0, 50.0), "{r:?}");
+}
+
+#[test]
+fn place_self_sets_both_axes() {
+    let r = aligned_rect_of("place-self:end center");
+    assert_eq!((r.x, r.y), (75.0, 50.0), "{r:?}");
+}
+
+#[test]
+fn self_alignment_counts_margins_and_rtl_flips_start() {
+    let r = aligned_rect_of("justify-self:end;margin-right:10px;direction:rtl");
+    // rtl: the inline `end` edge is the left one.
+    assert_eq!(r.x, 0.0, "{r:?}");
+    let r = aligned_rect_of("justify-self:end;margin-right:10px");
+    assert_eq!(r.x, 140.0, "{r:?}");
+}
+
+#[test]
+fn self_alignment_yields_to_auto_margins_and_normal_stays_at_start() {
+    let r = aligned_rect_of("justify-self:end;margin:auto");
+    assert_eq!((r.x, r.y), (75.0, 25.0), "{r:?}");
+    let r = aligned_rect_of("justify-self:normal;align-self:stretch");
+    assert_eq!((r.x, r.y), (0.0, 0.0), "{r:?}");
+}
+
+#[test]
+fn safe_center_overflow_falls_back_to_start() {
+    let r = aligned_rect_of("width:300px;justify-self:safe center");
+    assert_eq!(r.x, 0.0, "{r:?}");
+}
