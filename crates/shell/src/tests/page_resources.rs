@@ -365,14 +365,25 @@ fn frame_subresources_fetch_links_and_imgs_with_outcomes() {
     assert!(out.image_keys.iter().all(|(raw, key)| raw != key), "ключ отличается от src");
     assert_eq!(out.lazy_requests.len(), 1, "собран, но не загружен — сеть его не видела");
     assert_eq!(out.lazy_requests[0].url, "lazy.png");
-    // Intrinsic-размеры дописаны в дерево ребёнка: без них `<img>` без
-    // атрибутов лёг бы нулевым боксом внутри фрейма.
+    // Intrinsic-размеры доставлены в дерево ребёнка: без них `<img>` без
+    // атрибутов лёг бы нулевым боксом внутри фрейма. С BUG-1280 у `<img>` без
+    // width/height натуральный размер живёт в боковой таблице документа, а не
+    // в атрибутах — как в Chrome, где `getAttribute('width')` после загрузки
+    // остаётся `null`, а hint-пара `width+height` пиннила бы вторую сторону
+    // при CSS на одной (CSS 2.1 §10.3.2/§10.6.2).
     let img = out.images[0].0;
     let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(img).data else {
         panic!("<img> is an element");
     };
-    let w = attrs.iter().find(|a| a.name.local == "width").map(|a| a.value.clone());
-    assert_eq!(w.as_deref(), Some("4"), "intrinsic width из декодированной картинки");
+    assert!(
+        !attrs.iter().any(|a| a.name.local == "width" || a.name.local == "height"),
+        "натуральный размер не становится атрибутом (BUG-1280)"
+    );
+    assert_eq!(
+        doc.embedded_image(img, "ok.png").map(|(_, w, h)| (w, h)),
+        Some((4, 2)),
+        "intrinsic-размер из декодированной картинки"
+    );
 }
 
 /// GAP-CSPENF срез 8: `img-src`/`style-src` политика ребёнка `<iframe>`
