@@ -1142,6 +1142,29 @@ pub(crate) fn install_tree_navigation(
                 doc.try_get(nid).and_then(|n| n.parent).map(|p| p.raw())
             }
         );
+        // BUG-1452: neighbours of `child` in `parent`'s list without copying the
+        // whole list into a JS array — the MutationObserver wrappers asked
+        // `_lumen_get_children` per insertion, which is O(n) in the sibling
+        // count and made N appends quadratic. `[prev, next]`, `u32::MAX` = none
+        // (also for a stale id or a child that is not in `parent`).
+        let d = Arc::clone(&doc);
+        reg!(scope, ctx, store,
+            "_lumen_get_siblings",
+            move |parent_id: u32, child_id: u32| -> Vec<u32> {
+                let doc = d.lock().unwrap();
+                let none = vec![u32::MAX, u32::MAX];
+                let Some(parent) = doc.try_get(NodeId::from_raw(parent_id)) else {
+                    return none;
+                };
+                // Appends are the common case: look from the tail first.
+                let Some(idx) = parent.children.iter().rposition(|c| c.raw() == child_id) else {
+                    return none;
+                };
+                let prev = idx.checked_sub(1).map_or(u32::MAX, |i| parent.children[i].raw());
+                let next = parent.children.get(idx + 1).map_or(u32::MAX, |c| c.raw());
+                vec![prev, next]
+            }
+        );
     }
     Ok(())
 }

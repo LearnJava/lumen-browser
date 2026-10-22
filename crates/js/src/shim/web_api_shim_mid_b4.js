@@ -198,10 +198,11 @@ function _lumen_mo_in_subtree(ancestorNid, nid) {
 // insertion (the node's new neighbors) but before removal (the node's old
 // ones), since `_lumen_get_children` only sees whatever the tree holds now.
 function _lumen_mo_siblings(parentNid, nid) {
-    var sibs = _lumen_get_children(parentNid);
-    var idx = sibs.indexOf(nid);
-    if (idx < 0) return [null, null];
-    return [idx > 0 ? sibs[idx - 1] : null, idx + 1 < sibs.length ? sibs[idx + 1] : null];
+    // BUG-1452: the native finds the neighbours in Rust; copying the whole child
+    // list into a JS array here made every insertion O(siblings) — 16 000
+    // `appendChild` calls took 17 s whenever any MutationObserver existed.
+    var sb = _lumen_get_siblings(parentNid, nid);
+    return [sb[0] === 4294967295 ? null : sb[0], sb[1] === 4294967295 ? null : sb[1]];
 }
 
 function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds, prevSibNid, nextSibNid) {
