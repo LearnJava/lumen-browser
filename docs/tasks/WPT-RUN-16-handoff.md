@@ -38,8 +38,11 @@ compat +23, fullscreen +14, mixed-content +12, fetch +11, scroll-animations +11,
 - Остальные (cookies −4.05, editing −4.03, quirks −2.47, mediacapture-streams −2.25, connection-allowlist −2.19,
   permissions-policy −2.04, webstorage −2.00, serial −1.85, preload −1.60, WebCryptoAPI −1.55, IndexedDB −1.42,
   webaudio −1.23, webhid −1.09, webusb −1.07) — вердикт после перепрогона. Уже известно: WebCryptoAPI —
-  110 тестов `*.any.worker.html` с `crypto is not defined` (crypto нет в выделенном воркере — проверить,
-  было ли раньше); quirks — 11 тестов `win.document.open is not a function` (окно iframe); serial/webhid/webusb —
+  110 тестов `*.any.worker.html` с `crypto is not defined`, но `crypto` в выделенном воркере нет и на
+  `d913a39b9` (`worker.rs` `install_worker_scope_globals_v8`, шим `web_api_shim_tail_b.js` в воркер не идёт) —
+  не регрессия; потеря скорее в 39 `navigate: wait timeout: DocumentRead…` (шард шёл в своп до 17:33 → раннер).
+  quirks — 11 тестов `win.document.open is not a function`: фасад `contentWindow.document`
+  (`frame_bridge.rs` `docFacade`) без `open/write/close` и на `d913a39b9` — не регрессия, искать в другом; serial/webhid/webusb —
   TIMEOUT `*-permissions-policy*` без сообщения; editing — `live window closed` (память, раннер).
 
 **Перепрогон «с попапами»** запущен в 23:30 отдельно от сессии: `.tmp/run16-popups.cmd` (тот же бинарь,
