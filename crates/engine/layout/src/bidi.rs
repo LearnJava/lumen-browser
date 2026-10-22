@@ -296,7 +296,11 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
                 continue;
             }
             let start = i;
-            while i < frags.len() && level_of(&frags[i]) >= level {
+            i += 1;
+            while i < frags.len()
+                && level_of(&frags[i]) >= level
+                && !isolate_boundary(&frags[i - 1], &frags[i])
+            {
                 i += 1;
             }
             reflect(&mut frags[start..i], start == 0);
@@ -306,6 +310,22 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
         }
         level -= 1;
     }
+}
+
+/// True when an isolate's opening or closing control character (LRI/RLI/FSI,
+/// PDI) sits between two neighbouring fragments. Those characters stay at the
+/// paragraph level, so rule L2 never reverses a run across them — without this
+/// a `<bdi dir=ltr>א. </bdi>א` line was reflected as one piece and the
+/// isolate's content ended up on the wrong side of the text after it.
+fn isolate_boundary(before: &InlineFrag, after: &InlineFrag) -> bool {
+    let key = |f: &InlineFrag| {
+        matches!(
+            f.style.unicode_bidi,
+            UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride | UnicodeBidi::Plaintext
+        )
+            .then_some(f.source_node)
+    };
+    key(before) != key(after)
 }
 
 /// Mirrors each fragment's `x` inside the run's own geometric span.

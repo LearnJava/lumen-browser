@@ -12,7 +12,7 @@ fn square(x: f32, y: f32, s: f32) -> SvgClipSubpath {
 }
 
 fn def(subpaths: Vec<SvgClipSubpath>) -> SvgClipPath {
-    SvgClipPath { object_bbox_units: false, subpaths, nested: None, placement: None }
+    SvgClipPath { id: String::new(), object_bbox_units: false, subpaths, nested: None, placement: None }
 }
 
 fn polygon(cmd: &DisplayCommand) -> (&[(f32, f32)], bool) {

@@ -858,44 +858,6 @@ use super::text_and_images::build;
     }
 
     #[test]
-    fn mask_composite_add_renders_top_layer_only() {
-        // `add` вложением не выражается (нужна сборка маски в офскрине) —
-        // остаётся прежнее поведение: рендерится только верхний слой.
-        let dl = build(
-            "<div></div>",
-            "div { width: 100px; height: 60px; \
-             mask-image: url(a.png), linear-gradient(black, transparent); }",
-        );
-        assert_eq!(mask_group_shape(&dl), vec!["PushImage", "Pop"]);
-    }
-
-    #[test]
-    fn mask_composite_intersect_on_bottom_layer_falls_back() {
-        // У нижнего слоя оператор применяется к прозрачному фону: `intersect`
-        // там вычистил бы маску целиком, и браузеры расходятся в трактовке —
-        // уходим в fallback «только верхний слой», а не гасим элемент.
-        let dl = build(
-            "<div></div>",
-            "div { width: 100px; height: 60px; \
-             mask-image: url(a.png), linear-gradient(black, transparent); \
-             mask-composite: intersect, intersect; }",
-        );
-        assert_eq!(mask_group_shape(&dl), vec!["PushImage", "Pop"]);
-    }
-
-    #[test]
-    fn mask_composite_intersect_with_none_layer_falls_back() {
-        // Слой `none` — прозрачная маска; в `intersect` он обнулил бы результат,
-        // поэтому такая цепочка не вкладывается.
-        let dl = build(
-            "<div></div>",
-            "div { width: 100px; height: 60px; \
-             mask-image: url(a.png), none; mask-composite: intersect, add; }",
-        );
-        assert_eq!(mask_group_shape(&dl), vec!["PushImage", "Pop"]);
-    }
-
-    #[test]
     fn mask_clip_intersects_across_nested_layers() {
         // content-box 100×60 + padding 10 + border 5 → padding-box 120×80,
         // content-box 100×60. Клипы слоёв пересекаются → берётся content-box.

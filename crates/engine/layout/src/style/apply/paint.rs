@@ -637,11 +637,12 @@ pub(in crate::style) fn apply_decl_paint(
                 .map(|s| {
                     let s = s.trim();
                     Some(if s.eq_ignore_ascii_case("none") {
-                        BackgroundImage::None
+                        (BackgroundImage::None, None)
                     } else if let Some(u) = parse_url_value(s) {
-                        BackgroundImage::Url(u)
+                        (BackgroundImage::Url(u), None)
                     } else if is_gradient_function(s) {
-                        BackgroundImage::Gradient(parse_background_gradient(s))
+                        let css = computed_image_css(s, em_basis, viewport).map(std::sync::Arc::<str>::from);
+                        (BackgroundImage::Gradient(parse_background_gradient(s)), css)
                     } else {
                         return None;
                     })
@@ -654,12 +655,12 @@ pub(in crate::style) fn apply_decl_paint(
             style.mask_layers = images
                 .into_iter()
                 .enumerate()
-                .map(|(i, image)| {
+                .map(|(i, (image, image_css))| {
                     let old = old_layers
                         .get(i % old_layers.len().max(1))
                         .cloned()
                         .unwrap_or_default();
-                    MaskLayer { image, ..old }
+                    MaskLayer { image, image_css, ..old }
                 })
                 .collect();
         }

@@ -1242,6 +1242,16 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
     let ma   = luma * m.a;
     return vec4<f32>(c.rgb * ma, c.a * ma);
 }
+
+// Inverted alpha — `1 - mask.a`. Not a CSS mask-mode: the emitter of a
+// layered `mask-composite` (`subtract`/`exclude`) uses it to cut the layers
+// below out of the layer above.
+@fragment fn fs_inv_alpha(in: VOut) -> @location(0) vec4<f32> {
+    let c  = textureSample(t_content, s, in.uv);
+    let m  = textureSample(t_mask,    s, in.uv);
+    let ma = 1.0 - m.a;
+    return vec4<f32>(c.rgb * ma, c.a * ma);
+}
 "#;
 
 /// CSS Filter Effects Module L1 — color filter pipeline.

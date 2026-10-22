@@ -304,6 +304,10 @@ mod svg_table_and_hash;
 mod svg_clip_url;
 
 #[cfg(test)]
+#[path = "display_list/tests/mask_composite.rs"]
+mod mask_composite;
+
+#[cfg(test)]
 #[path = "display_list/tests/svg_filter_url.rs"]
 mod svg_filter_url;
 

@@ -900,7 +900,8 @@ use super::*;
 
     /// Цвет `p`-подобного элемента `tag`: красный — `:dir(rtl)`, синий — `:dir(ltr)`.
     fn dir_of(html: &str, tag: &str) -> &'static str {
-        let (root, doc) = lay_with_doc(html, &format!("{tag}:dir(rtl) {{ color: red; }} {tag}:dir(ltr) {{ color: blue; }}"));
+        // `<bdi>` is inline and inline elements get no layout box of their own; give it one.
+        let (root, doc) = lay_with_doc(html, &format!("{tag} {{ display: block; }} {tag}:dir(rtl) {{ color: red; }} {tag}:dir(ltr) {{ color: blue; }}"));
         let c = first_named(&doc, &root, tag);
         match (c.r, c.b) {
             (255, 0) => "rtl",

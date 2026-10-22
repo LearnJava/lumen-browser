@@ -351,26 +351,117 @@ pub(in crate::style) fn parse_overscroll_behavior(s: &str) -> Option<OverscrollB
 }
 
 /// Парсит CSS Fragmentation L3 §3.1 `break-*` keyword.
-/// CSS Anchor Positioning L1 §5 — parses a single `inset-area` axis keyword.
-pub(in crate::style) fn parse_inset_area_keyword(s: &str) -> Option<crate::anchor::InsetAreaKeyword> {
+/// Keyword family of a `position-area` word; the words of one value must all
+/// come from the same family (`left inline-start` is invalid).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AreaFamily {
+    Physical,
+    Logical,
+    SelfLogical,
+    Generic,
+    SelfGeneric,
+}
+
+/// One classified `position-area` word: the band it names, the family it
+/// belongs to and the axis it is bound to. `family == None` marks the words
+/// shared by every family (`center`, `span-all`); `axis == None` marks the
+/// ambiguous `start`/`end` forms, whose axis is decided by position.
+struct AreaWord {
+    kw: crate::anchor::InsetAreaKeyword,
+    family: Option<AreaFamily>,
+    /// `Some(true)` = row (block / y axis), `Some(false)` = column (inline / x axis).
+    row: Option<bool>,
+}
+
+fn classify_position_area_word(tok: &str) -> Option<AreaWord> {
     use crate::anchor::InsetAreaKeyword as K;
-    match s.trim().to_ascii_lowercase().as_str() {
-        "none"       => Some(K::None),
-        "start"      => Some(K::Start),
-        "center"     => Some(K::Center),
-        "end"        => Some(K::End),
-        "span-start" => Some(K::SpanStart),
-        "span-end"   => Some(K::SpanEnd),
-        "span-all"   => Some(K::SpanAll),
-        "self-start" => Some(K::SelfStart),
-        "self-end"   => Some(K::SelfEnd),
-        // Physical keywords that map to logical equivalents in LTR.
-        "top" | "left"   => Some(K::Start),
-        "bottom" | "right" => Some(K::End),
-        "x-start" | "y-start" | "inline-start" | "block-start" => Some(K::Start),
-        "x-end" | "y-end" | "inline-end" | "block-end" => Some(K::End),
-        "span-x-start" | "span-y-start" | "span-inline-start" | "span-block-start" => Some(K::SpanStart),
-        "span-x-end" | "span-y-end" | "span-inline-end" | "span-block-end" => Some(K::SpanEnd),
+    use AreaFamily as F;
+    match tok {
+        "center" => return Some(AreaWord { kw: K::Center, family: None, row: None }),
+        "span-all" => return Some(AreaWord { kw: K::SpanAll, family: None, row: None }),
+        _ => {}
+    }
+    let (span, base) = match tok.strip_prefix("span-") {
+        Some(rest) => (true, rest),
+        None => (false, tok),
+    };
+    // Physical words and the single-edge forms are written without `-start`/`-end`.
+    let (family, row, end) = match base {
+        "left" => (F::Physical, false, false),
+        "right" => (F::Physical, false, true),
+        "top" => (F::Physical, true, false),
+        "bottom" => (F::Physical, true, true),
+        "x-start" | "self-x-start" => (F::Physical, false, false),
+        "x-end" | "self-x-end" => (F::Physical, false, true),
+        "y-start" | "self-y-start" => (F::Physical, true, false),
+        "y-end" | "self-y-end" => (F::Physical, true, true),
+        "block-start" => (F::Logical, true, false),
+        "block-end" => (F::Logical, true, true),
+        "inline-start" => (F::Logical, false, false),
+        "inline-end" => (F::Logical, false, true),
+        "self-block-start" => (F::SelfLogical, true, false),
+        "self-block-end" => (F::SelfLogical, true, true),
+        "self-inline-start" => (F::SelfLogical, false, false),
+        "self-inline-end" => (F::SelfLogical, false, true),
+        "start" | "end" | "self-start" | "self-end" => {
+            let family = if base.starts_with("self-") { F::SelfGeneric } else { F::Generic };
+            let kw = match (span, base.ends_with("end")) {
+                (false, false) => K::Start,
+                (false, true) => K::End,
+                (true, false) => K::SpanStart,
+                (true, true) => K::SpanEnd,
+            };
+            return Some(AreaWord { kw, family: Some(family), row: None });
+        }
+        _ => return None,
+    };
+    let kw = match (span, end) {
+        (false, false) => K::Start,
+        (false, true) => K::End,
+        (true, false) => K::SpanStart,
+        (true, true) => K::SpanEnd,
+    };
+    Some(AreaWord { kw, family: Some(family), row: Some(row) })
+}
+
+/// CSS Anchor Positioning L1 §3.1 — parses a `position-area` / `inset-area`
+/// value into its `(row, column)` bands, or `None` for an invalid value.
+///
+/// Horizontal-tb / LTR is assumed for the logical and `self-*` words, so
+/// `block-*`/`y-*` are the row and `inline-*`/`x-*` the column.
+pub(in crate::style) fn parse_position_area(s: &str) -> Option<(crate::anchor::InsetAreaKeyword, crate::anchor::InsetAreaKeyword)> {
+    use crate::anchor::InsetAreaKeyword as K;
+    let lower = s.to_ascii_lowercase();
+    let toks: Vec<&str> = lower.split_whitespace().collect();
+    if toks.as_slice() == ["none"] {
+        return Some((K::None, K::None));
+    }
+    let words: Vec<AreaWord> = toks.iter().map(|t| classify_position_area_word(t)).collect::<Option<_>>()?;
+    let mut family = None;
+    for w in &words {
+        match (family, w.family) {
+            (Some(a), Some(b)) if a != b => return None,
+            (None, Some(b)) => family = Some(b),
+            _ => {}
+        }
+    }
+    let axis_bound = matches!(family, Some(AreaFamily::Physical | AreaFamily::Logical | AreaFamily::SelfLogical));
+    match (words.as_slice(), axis_bound) {
+        // Ambiguous forms: one word names both axes, two words are block then inline.
+        ([w], false) => Some((w.kw, w.kw)),
+        ([a, b], false) => Some((a.kw, b.kw)),
+        // An axis-bound word alone leaves the other axis spanning everything.
+        ([w], true) => Some(if w.row == Some(true) { (w.kw, K::SpanAll) } else { (K::SpanAll, w.kw) }),
+        ([a, b], true) => {
+            // The words combine in any order; a shared word takes the free axis.
+            let a_row = match (a.row, b.row) {
+                (Some(x), Some(y)) if x == y => return None,
+                (Some(x), _) => x,
+                (None, Some(y)) => !y,
+                (None, None) => true,
+            };
+            Some(if a_row { (a.kw, b.kw) } else { (b.kw, a.kw) })
+        }
         _ => None,
     }
 }

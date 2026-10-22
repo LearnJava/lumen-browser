@@ -109,6 +109,10 @@ pub enum MaskMode {
     /// Convert the mask layer's colour to luminance: `luma = 0.2126·R + 0.7152·G + 0.0722·B`,
     /// then multiply by alpha. White opaque → mask=1, black opaque → mask=0.
     Luminance,
+    /// `1 - alpha` of the mask layer. Not a CSS `mask-mode`: the display-list
+    /// emitter of a layered `mask-composite` (`subtract`/`exclude`) uses it to
+    /// cut the layers below out of the layer above.
+    InvertedAlpha,
 }
 
 /// Corner radii for CSS `border-radius`. Values are in CSS pixels, clamped to ≥ 0.

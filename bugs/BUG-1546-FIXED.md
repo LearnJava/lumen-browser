@@ -1,6 +1,6 @@
 # BUG-1546 — `<bdi>`, `<bdo>`, `<kbd>`, `<samp>`, `<var>`, `<dfn>`, `<time>`, `<data>`, `<tt>`, `<big>`, `<strike>`, `<font>`, `<nobr>`, `<output>`, `<acronym>` и пользовательские теги получают `display: block`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (COUNTER-STYLES-BUILTIN, ветка `p1-counter-styles-builtin`)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** layout (`crates/engine/layout/src/style/ua.rs::default_display` — ветка `_ => Display::Block`)
 
@@ -30,3 +30,7 @@ WPT-RUN-14 срез 25: `css/css-counter-styles/*/css3-counter-styles-NNN.html` 
 ## Как проверить
 
 `<div>A<bdi>B</bdi>C</div>` — `offsetHeight` 19; `css/css-counter-styles/lower-roman/css3-counter-styles-019.html` после BUG-1548 — `identical`. Страница с неизвестным тегом `<foo>x</foo>` в потоке текста не рвёт строку.
+
+## Как исправлено
+
+`ua.rs::default_display`: `acronym`, `bdi`, `bdo`, `big`, `data`, `dfn`, `font`, `kbd`, `nobr`, `output`, `samp`, `strike`, `time`, `tt`, `var`, `wbr` и автономные пользовательские элементы (имя со строчной буквы и дефисом, без зарезервированных `font-face`, `annotation-xml`, …) — `display: inline`; `<nobr>` — ещё `white-space: nowrap`. Неизвестные теги без дефиса остаются `block` (HTMLUnknownElement тоже inline по спецификации, но это самый рискованный сдвиг для живых сайтов — отдельной правкой). Вместе с правкой пришлось поправить `<bdi>`: UA-изоляция `unicode-bidi: isolate` и `dir=auto` по умолчанию (`presentational.rs`), и UAX #9 L2 не разворачивает серию через границу изолята (`bidi.rs::isolate_boundary`) — без этого `<bdi dir=ltr>א. </bdi>א` рисовался с изолятом справа от текста.

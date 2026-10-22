@@ -633,7 +633,7 @@ fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
 
 /// Serialises one axis of a `background-position`/`object-position` value —
 /// `Px` as `"<n>px"`, `Percent` (stored as a `0.0..=1.0` fraction) as `"<n>%"`.
-fn position_component_to_css(c: PositionComponent) -> String {
+pub(crate) fn position_component_to_css(c: PositionComponent) -> String {
     match c {
         PositionComponent::Px(v) => px_str(v),
         PositionComponent::Percent(p) => {
@@ -1054,7 +1054,7 @@ fn mix_blend_mode_to_css(v: MixBlendMode) -> &'static str {
     }
 }
 
-fn background_repeat_to_css(r: BackgroundRepeat) -> String {
+pub(crate) fn background_repeat_to_css(r: BackgroundRepeat) -> String {
     fn axis(s: RepeatStyle) -> &'static str {
         match s {
             RepeatStyle::Repeat => "repeat",
@@ -1079,7 +1079,7 @@ fn background_attachment_to_css(a: BackgroundAttachment) -> &'static str {
     }
 }
 
-fn background_origin_to_css(o: BackgroundOrigin) -> &'static str {
+pub(crate) fn background_origin_to_css(o: BackgroundOrigin) -> &'static str {
     match o {
         BackgroundOrigin::BorderBox => "border-box",
         BackgroundOrigin::PaddingBox => "padding-box",
@@ -1107,7 +1107,7 @@ fn bg_size_axis_to_css(a: BgSizeAxis) -> String {
     }
 }
 
-fn background_size_to_css(s: BackgroundSize) -> String {
+pub(crate) fn background_size_to_css(s: BackgroundSize) -> String {
     match s {
         BackgroundSize::Auto => "auto".into(),
         BackgroundSize::Cover => "cover".into(),
@@ -1140,7 +1140,7 @@ fn background_layer_field_to_css<T: Copy, S: Into<String>>(
     layers.iter().map(|l| to_css(extract(l)).into()).collect::<Vec<String>>().join(", ")
 }
 
-fn fill_rule_to_css(r: FillRule) -> &'static str {
+pub(crate) fn fill_rule_to_css(r: FillRule) -> &'static str {
     match r {
         FillRule::NonZero => "nonzero",
         FillRule::EvenOdd => "evenodd",
@@ -1644,6 +1644,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("font-variant-position".into(), style.font_variant_position.as_str().into());
     m.insert("font-variant-caps".into(), style.font_variant_caps.as_str().into());
     m.insert("font-variant-emoji".into(), style.font_variant_emoji.as_str().into());
+    // BUG-1407: `font`, `font-feature/variation-settings`, `font-size-adjust`, `font-optical-sizing`,
+    // `font-palette`, `clip-path`, `clip-rule`, `mask*`.
+    crate::computed_font_mask::insert_font_mask_computed(style, style.font_size / z, &mut m);
     m.insert("font-stretch".into(), {
         let pct = style.font_stretch.0 as f32 / 10.0;
         if pct.fract() == 0.0 { format!("{}%", pct as i64) } else { format!("{}%", pct) }
@@ -3651,6 +3654,79 @@ mod tests {
         assert_eq!(m.get("ruby-position").map(String::as_str), Some("under"));
         assert_eq!(m.get("ruby-align").map(String::as_str), Some("center"));
         assert_eq!(m.get("ruby-merge").map(String::as_str), Some("merge"));
+    }
+
+    fn computed_of(css: &str, prop: &str) -> String {
+        div_computed_map("<div>x</div>", css).get(prop).cloned().unwrap_or_else(|| format!("<missing {prop}>"))
+    }
+
+    #[test]
+    fn computed_map_font_settings_defaults_and_values() {
+        assert_eq!(computed_of("", "font-feature-settings"), "normal");
+        assert_eq!(computed_of("", "font-variation-settings"), "normal");
+        assert_eq!(computed_of("", "font-optical-sizing"), "auto");
+        assert_eq!(computed_of("", "font-palette"), "normal");
+        assert_eq!(computed_of("", "font-size-adjust"), "none");
+        // Дубли — побеждает последний, порядок — по тегу, `1` у feature опускается.
+        assert_eq!(
+            computed_of("div { font-feature-settings: \"dlig\", \"smcp\", \"dlig\" 0; }", "font-feature-settings"),
+            "\"dlig\" 0, \"smcp\""
+        );
+        assert_eq!(computed_of("div { font-feature-settings: \"tnum\", \"hist\"; }", "font-feature-settings"), "\"hist\", \"tnum\"");
+        assert_eq!(
+            computed_of("div { font-variation-settings: \"wght\" 100, \"wdth\" 200, \"wght\" 300; }", "font-variation-settings"),
+            "\"wdth\" 200, \"wght\" 300"
+        );
+        assert_eq!(computed_of("div { font-palette: --pitchfork; }", "font-palette"), "--pitchfork");
+        assert_eq!(computed_of("div { font-optical-sizing: none; }", "font-optical-sizing"), "none");
+        assert_eq!(computed_of("div { font-size-adjust: 0.5; }", "font-size-adjust"), "0.5");
+    }
+
+    #[test]
+    fn computed_map_font_shorthand() {
+        assert_eq!(
+            computed_of("div { font: italic 700 20px/1.5 Arial, sans-serif; }", "font"),
+            "italic 700 20px/1.5 Arial, sans-serif"
+        );
+        // Лонгхенд, который шорткод не выражает, — пустая строка.
+        assert_eq!(computed_of("div { font-feature-settings: \"liga\" 0; }", "font"), "");
+    }
+
+    #[test]
+    fn computed_map_clip_path_and_rule() {
+        assert_eq!(computed_of("", "clip-path"), "none");
+        assert_eq!(computed_of("", "clip-rule"), "nonzero");
+        assert_eq!(computed_of("div { clip-rule: evenodd; }", "clip-rule"), "evenodd");
+        assert_eq!(computed_of("div { clip-path: circle(10px at 50% 50%); }", "clip-path"), "circle(10px at 50% 50%)");
+        assert_eq!(computed_of("div { clip-path: ellipse(at 50% 50%); }", "clip-path"), "ellipse(at 50% 50%)");
+        assert_eq!(computed_of("div { clip-path: inset(5px 5px 5px 5px); }", "clip-path"), "inset(5px)");
+        assert_eq!(computed_of("div { clip-path: inset(5px 10px round 4px); }", "clip-path"), "inset(5px 10px round 4px)");
+        assert_eq!(
+            computed_of("div { clip-path: polygon(0 0, 100% 0, 50% 100%); }", "clip-path"),
+            "polygon(0px 0px, 100% 0px, 50% 100%)"
+        );
+    }
+
+    #[test]
+    fn computed_map_mask_longhands() {
+        for (p, init) in [
+            ("mask-image", "none"),
+            ("mask-repeat", "repeat"),
+            ("mask-size", "auto"),
+            ("mask-origin", "border-box"),
+            ("mask-clip", "border-box"),
+            ("mask-composite", "add"),
+            ("mask-mode", "match-source"),
+            ("mask", "none"),
+        ] {
+            assert_eq!(computed_of("", p), init, "{p}");
+        }
+        let css = "div { mask-image: linear-gradient(red, blue), none; mask-repeat: no-repeat; \
+                   mask-size: 10px 20px, cover; mask-composite: intersect; }";
+        assert_eq!(computed_of(css, "mask-image"), "linear-gradient(rgb(255, 0, 0), rgb(0, 0, 255)), none");
+        assert_eq!(computed_of(css, "mask-repeat"), "no-repeat, no-repeat");
+        assert_eq!(computed_of(css, "mask-size"), "10px 20px, cover");
+        assert_eq!(computed_of(css, "mask-composite"), "intersect, intersect");
     }
 
     #[test]

@@ -773,6 +773,7 @@ pub(in crate::style) fn parse_single_mask_layer(
         }
         if is_gradient_function(t) {
             layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            layer.image_css = computed_image_css(t, em_basis, viewport).map(Into::into);
             idx += 1;
             continue;
         }

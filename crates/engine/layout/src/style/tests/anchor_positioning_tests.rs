@@ -72,6 +72,63 @@
         assert_eq!(s.inset_area_col, InsetAreaKeyword::End);
     }
 
+    /// `position-area: <value>` → `(row, column)` bands, `None` when the
+    /// declaration is rejected (the property then keeps its initial `none`).
+    fn area_of(value: &str) -> Option<(InsetAreaKeyword, InsetAreaKeyword)> {
+        let css = format!("div {{ position: absolute; position-area: {value}; }}");
+        let s = first_div_style("<div></div>", &css);
+        match (s.inset_area_row, s.inset_area_col) {
+            (InsetAreaKeyword::None, InsetAreaKeyword::None) => None,
+            pair => Some(pair),
+        }
+    }
+
+    #[test]
+    fn position_area_single_axis_word_spans_other_axis() {
+        use InsetAreaKeyword::*;
+        // BUG-1474: `top` is `top span-all`, not the top-left corner.
+        assert_eq!(area_of("top"), Some((Start, SpanAll)));
+        assert_eq!(area_of("bottom"), Some((End, SpanAll)));
+        assert_eq!(area_of("left"), Some((SpanAll, Start)));
+        assert_eq!(area_of("right"), Some((SpanAll, End)));
+        assert_eq!(area_of("block-end"), Some((End, SpanAll)));
+        assert_eq!(area_of("inline-start"), Some((SpanAll, Start)));
+        assert_eq!(area_of("self-y-end"), Some((End, SpanAll)));
+        // Ambiguous single words name both axes.
+        assert_eq!(area_of("start"), Some((Start, Start)));
+        assert_eq!(area_of("span-end"), Some((SpanEnd, SpanEnd)));
+        assert_eq!(area_of("center"), Some((Center, Center)));
+        assert_eq!(area_of("span-all"), Some((SpanAll, SpanAll)));
+    }
+
+    #[test]
+    fn position_area_pairs_combine_in_any_order() {
+        use InsetAreaKeyword::*;
+        assert_eq!(area_of("span-left bottom"), Some((End, SpanStart)));
+        assert_eq!(area_of("bottom span-left"), Some((End, SpanStart)));
+        assert_eq!(area_of("span-bottom span-right"), Some((SpanEnd, SpanEnd)));
+        assert_eq!(area_of("self-x-start self-y-start"), Some((Start, Start)));
+        assert_eq!(area_of("span-self-x-end y-start"), Some((Start, SpanEnd)));
+        assert_eq!(area_of("top center"), Some((Start, Center)));
+        assert_eq!(area_of("center top"), Some((Start, Center)));
+        assert_eq!(area_of("span-all left"), Some((SpanAll, Start)));
+        assert_eq!(area_of("inline-end block-start"), Some((Start, End)));
+        // `start`/`end` pairs are block then inline.
+        assert_eq!(area_of("end start"), Some((End, Start)));
+        assert_eq!(area_of("self-start span-self-end"), Some((Start, SpanEnd)));
+    }
+
+    #[test]
+    fn position_area_rejects_invalid_combinations() {
+        for bad in [
+            "left inline-start", "top top", "left left", "top block-start",
+            "left right", "block-start block-end", "start inline-start",
+            "top start", "self-start start", "foobar", "start foobar", "top left right",
+        ] {
+            assert_eq!(area_of(bad), None, "{bad} must be rejected");
+        }
+    }
+
     // ── CSS Anchor Positioning L1 §3.1 — `anchor()` function ─────────────────
 
     #[test]
