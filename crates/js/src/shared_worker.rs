@@ -368,7 +368,7 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
   };
 
   // Timers come from the shim shared with the dedicated-worker scope
-  // (`crate::worker::WORKER_TIMERS_SHIM`, evaluated as its own IIFE right
+  // (`crate::worker_shims::WORKER_TIMERS_SHIM`, evaluated as its own IIFE right
   // after this one) — deadline-ordered and driven by this thread's own wait
   // rather than only by an incoming port message (BUG-815).
 
@@ -858,7 +858,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
     // guards on its own global, so evaluating it here as well costs nothing
     // when `install_worker_bindings_v8` already ran — and keeps the
     // shared-worker unit tests (which install these bindings alone) working.
-    rt.eval(crate::worker::WORKER_OPTIONS_SHIM)?;
+    rt.eval(crate::worker_shims::WORKER_OPTIONS_SHIM)?;
     rt.eval(SHARED_WORKER_SHIM)?;
     Ok(())
 }
@@ -1079,7 +1079,7 @@ fn broadcast_shared_worker_error(
 /// (BUG-776) globals, both derived from `script_url`, plus
 /// `_lumen_worker_is_module` (BUG-777, gates `importScripts`), and evaluates
 /// [`SHARED_WORKER_GLOBAL_SHIM`] followed by
-/// [`crate::worker::WORKER_TIMERS_SHIM`] and the network surface of
+/// [`crate::worker_shims::WORKER_TIMERS_SHIM`] and the network surface of
 /// [`crate::worker_net::install_worker_net_v8`].
 ///
 /// No native here reaches `error_ports` (BUG-905): a runtime exception now
@@ -1181,7 +1181,7 @@ fn install_shared_worker_globals_v8(
     )?;
 
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
-    rt.eval(crate::worker::WORKER_TIMERS_SHIM)?;   // BUG-815
+    rt.eval(crate::worker_shims::WORKER_TIMERS_SHIM)?;   // BUG-815
     crate::worker_net::install_worker_net_v8(rt, net_provider)?;
     Ok(())
 }
