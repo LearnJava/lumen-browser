@@ -1,6 +1,6 @@
 # BUG-1560 — Плавная прокрутка не реализована: `scroll-behavior: smooth` и `behavior: "smooth"` прокручивают мгновенно
 
-**Статус:** OPEN (ДОРАБОТКА → SMOOTH-SCROLL)
+**Статус:** OPEN (ДОРАБОТКА → SMOOTH-SCROLL-2; срез 1 влит 2026-10-22)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** shell/js (`el.scrollTo({behavior})`, `scrollIntoView`, якорные переходы; `crates/shell/`)
 
@@ -28,3 +28,13 @@ WPT-RUN-14 срез 25: `css/cssom-view/{scroll-behavior-*,smooth-*,scrollIntoVi
 ## Как проверить
 
 `css/cssom-view/scroll-behavior-smooth.html`, `scrollIntoView-smooth.html`.
+
+## Срез 1 (SMOOTH-SCROLL, 2026-10-22)
+
+Сделано: плавная прокрутка элемента и вьюпорта шагами из шима по rAF (ease-out-cubic, 200 мс), один `scrollend` в конце,
+`scroll-behavior` (не наследуется) для `behavior: auto`, `scrollTop`/`scrollLeft`-сеттеры, `document.scrollingElement` как вьюпорт,
+`window.scrollX`, диапазон прокрутки страницы по раскладке. `css/cssom-view` PASS 768 → 913; `scroll-behavior-smooth` 3/3,
+`scrollIntoView-smooth` 4/4, `smooth-scroll-nonstop` 2/2. Подробности — строка `SMOOTH-SCROLL` в `ROADMAP.md` и `subsystems/js.md`.
+
+Остаток — задача `SMOOTH-SCROLL-2` (под-документы, цепочка вложенных скроллеров в `scrollIntoView`, scroll-snap на шагах,
+промисы с `{interrupted}`, навигация по истории).

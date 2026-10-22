@@ -3,9 +3,9 @@
 //!
 //! `paint_ordered` is the crate's single entry point for turning a laid-out
 //! tree into a display list with the CSS 2.1 Appendix E painting order;
-//! `content_height_of` / `content_width_of` derive the scrollable extent from
-//! the emitted display list (the shell has no other source for it — see the
-//! `CLAUDE.md` note that a spacer painting nothing leaves `max_scroll()` at 0),
+//! `content_height_of` / `content_width_of` derive the painted extent from
+//! the emitted display list and `page_content_extent` widens it by the
+//! layout's scrollable overflow (a spacer that paints nothing still scrolls),
 //! `next_dl_epoch` versions it, and `build_split_placeholder` synthesises a
 //! minimal list for a hibernated tab whose real one was evicted. Moved out of
 //! `main.rs` by the SPLIT track (batches SH-5 and SH-3c); behaviour and

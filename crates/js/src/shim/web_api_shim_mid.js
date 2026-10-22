@@ -9707,7 +9707,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var rootNid = _lumen_root_scroller_nid();
             var parent = _lumen_u2n(_lumen_get_parent(nid));
             while (parent !== null && parent !== undefined && parent !== rootNid) {
-                var ps = _lumen_is_scroll_container(parent) ? _lumen_get_scroll_state(parent) : null;
+                var ps = _lumen_get_scroll_state(parent);
+                if (ps && !_lumen_is_scroll_container(parent)) ps = null;
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) {

@@ -38,3 +38,15 @@ height: 200px }` с высоким потомком `#target`. После `root.
 прямоугольников, либо в биндинге `_lumen_get_bounding_rect` по
 `_lumen_get_scroll_state` предков — и пересобирать их при изменении
 `scrollTop` из скрипта.
+
+## Потребители, завязанные на нынешнюю семантику
+
+`Element.scrollIntoView` (`web_api_shim_mid.js`, SMOOTH-SCROLL, 2026-10-22) считает
+выравнивание в предположении, что `_lumen_get_bounding_rect` отдаёт координаты документа
+без вычета прокрутки (`contentY = (r[1] - smTop) - (pr[1] + borderTop)`, для страницы
+`r[1] - smTop`): разность двух прямоугольников — смещение цели внутри несдвинутого
+содержимого скроллера, где бы он сейчас ни стоял. Когда прямоугольники станут
+scroll-aware, **эти формулы нужно перевести** (вернуть слагаемое текущей прокрутки),
+иначе `scrollIntoView` из уже прокрученного контейнера снова поедет не туда. Пинит
+это поведение тест `scroll_into_view_in_a_scrolled_container_does_not_drift` в `crates/js/src/dom/tests/v8_smooth_scroll.rs`
+и WPT `smooth-scroll-nonstop.html`.

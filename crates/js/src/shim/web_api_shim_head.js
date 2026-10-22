@@ -147,6 +147,9 @@ function _lumen_scroll_instant(key, x, y) {
 
 // Scroll `key` to (x, y) honouring `behavior` (`auto` | `instant` | `smooth`).
 function _lumen_scroll_to_pos(key, x, y, behavior) {
+    // An element without a scrolling box (no layout box, `overflow: visible`) scrolls nowhere
+    // (CSSOM View §Extensions to the Element interface: «return»).
+    if (key !== 'p' && !(_lumen_get_scroll_state(key) && _lumen_is_scroll_container(key))) return;
     var cssNid = key === 'p' ? _lumen_u2n(_lumen_get_html_element()) : key;
     if (_lumen_use_smooth(behavior, cssNid)) _lumen_smooth_scroll(key, x, y);
     else _lumen_scroll_instant(key, x, y);
@@ -179,9 +182,17 @@ function _lumen_smooth_tick() {
             continue;
         }
         var cur = _lumen_scroller_get(key);
-        var mine = false;
-        for (var j = 0; j + 1 < a.hist.length; j += 2) {
-            if (Math.abs(cur[0] - a.hist[j]) < 0.5 && Math.abs(cur[1] - a.hist[j + 1]) < 0.5) { mine = true; break; }
+        // Only an axis the animation moves is checked: the other one keeps the
+        // value it started from, which the shell may have clamped (a raw 1000 on a
+        // container that scrolls to 800) without anybody having touched it.
+        var mine = true;
+        for (var ax = 0; ax < 2 && mine; ax++) {
+            if (Math.abs((ax === 0 ? a.tx - a.sx : a.ty - a.sy)) < 0.01) continue;
+            var seen = false;
+            for (var j = ax; j < a.hist.length; j += 2) {
+                if (Math.abs(cur[ax] - a.hist[j]) < 0.5) { seen = true; break; }
+            }
+            mine = seen;
         }
         if (!mine) { a.fin = _LUMEN_SMOOTH_SETTLE; more = true; continue; }
         var t = (now - a.t0) / _LUMEN_SMOOTH_MS;

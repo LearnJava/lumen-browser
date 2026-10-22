@@ -26,12 +26,26 @@ fn make_doc() -> (Arc<Mutex<Document>>, u32) {
     if let NodeData::Element { attrs, .. } = &mut doc.get_mut(content).data {
         attrs.push(lumen_dom::Attribute { name: QualName::html("class"), value: "content".into() });
     }
+    let target = doc.create_element(QualName::html("span"));
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(target).data {
+        attrs.push(lumen_dom::Attribute { name: QualName::html("id"), value: "target".into() });
+    }
+    let free = doc.create_element(QualName::html("span"));
+    if let NodeData::Element { attrs, .. } = &mut doc.get_mut(free).data {
+        attrs.push(lumen_dom::Attribute { name: QualName::html("id"), value: "free".into() });
+    }
     doc.append_child(doc.root(), html);
     doc.append_child(html, body);
     doc.append_child(body, main);
     doc.append_child(main, content);
+    doc.append_child(main, target);
+    doc.append_child(body, free);
     let main_nid = main.index() as u32;
     (Arc::new(Mutex::new(doc)), main_nid)
+}
+
+fn nid_of(rt: &V8JsRuntime, id: &str) -> u32 {
+    num(rt, &format!("document.getElementById('{id}').__nid__")) as u32
 }
 
 fn runtime(main_style: &str) -> (V8JsRuntime, u32) {
@@ -243,4 +257,65 @@ fn root_scroller_is_the_viewport() {
     rt.eval("document.scrollingElement.scrollTo(5, 6)").unwrap();
     assert_eq!(rt.take_page_scroll_x_request(), Some(5.0));
     assert_eq!(rt.take_page_scroll_requests(), vec![(6.0, false)]);
+}
+
+/// `_lumen_get_bounding_rect` answers in document coordinates with no ancestor
+/// scroll applied (BUG-1166): the difference of two rects is the target's
+/// offset in the container's unscrolled content, whatever the container's
+/// current scroll is.
+#[test]
+fn scroll_into_view_in_a_scrolled_container_does_not_drift() {
+    let (rt, main_nid) = runtime("");
+    let target = nid_of(&rt, "target");
+    rt.update_layout_rects(
+        [(main_nid, [0.0, 0.0, 20.0, 20.0]), (target, [0.0, 100.0, 10.0, 10.0])].into_iter().collect(),
+    );
+    // Already scrolled to 50: the answer for `start` is still 100, not 150.
+    let mut states = HashMap::new();
+    states.insert(main_nid, [0.0, 50.0, 200.0, 200.0]);
+    rt.update_scroll_states(states);
+    rt.eval("document.getElementById('target').scrollIntoView({block: 'start', behavior: 'instant'})").unwrap();
+    assert_eq!(num(&rt, "document.getElementById('main').scrollTop"), 100.0);
+    assert_eq!(rt.take_scroll_requests(), vec![(main_nid, 0.0, 100.0)]);
+}
+
+#[test]
+fn smooth_scroll_into_view_retargets_to_the_same_place() {
+    let (rt, main_nid) = runtime("");
+    let target = nid_of(&rt, "target");
+    rt.update_layout_rects(
+        [(main_nid, [0.0, 0.0, 20.0, 20.0]), (target, [0.0, 100.0, 10.0, 10.0])].into_iter().collect(),
+    );
+    rt.eval(
+        "var t = document.getElementById('target'), m = document.getElementById('main');
+         t.scrollIntoView({block: 'start', behavior: 'smooth'});",
+    )
+    .unwrap();
+    rt.eval(&format!("{TICK_AT}(100, 1)")).unwrap();
+    let t0 = num(&rt, "_lumen_smooth_anims[m.__nid__].t0");
+    // The caller asks again mid-flight (WPT smooth-scroll-nonstop, scrollIntoView half).
+    rt.eval("t.scrollIntoView({block: 'start', behavior: 'smooth'})").unwrap();
+    assert_eq!(num(&rt, "_lumen_smooth_anims[m.__nid__].t0"), t0, "same target: the curve is not restarted");
+    assert_eq!(num(&rt, "_lumen_smooth_anims[m.__nid__].ty"), 100.0);
+}
+
+#[test]
+fn page_scroll_into_view_uses_document_coordinates_on_both_axes() {
+    let (rt, main_nid) = runtime("");
+    let free = nid_of(&rt, "free");
+    rt.update_layout_rects(
+        [(main_nid, [0.0, 0.0, 20.0, 20.0]), (free, [30.0, 500.0, 10.0, 10.0])].into_iter().collect(),
+    );
+    rt.set_page_scroll_y(200.0);
+    rt.eval("document.getElementById('free').scrollIntoView({block: 'start', inline: 'start', behavior: 'instant'})").unwrap();
+    assert_eq!(rt.take_page_scroll_x_request(), Some(30.0));
+    assert_eq!(rt.take_page_scroll_requests(), vec![(500.0, false)]);
+}
+
+#[test]
+fn scroll_on_an_element_without_a_scrolling_box_does_nothing() {
+    let (rt, _) = runtime("");
+    assert_eq!(num(&rt, "var f = document.getElementById('free'); f.scrollTo(1, 2); f.scrollTop"), 0.0);
+    assert_eq!(num(&rt, "f.scrollTop = 5; f.scrollLeft"), 0.0);
+    assert!(rt.take_scroll_requests().is_empty());
 }
