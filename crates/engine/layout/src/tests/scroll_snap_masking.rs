@@ -1106,7 +1106,7 @@ fn transition_property_none_clears() {
 fn transition_property_none_is_reported_apart_from_the_initial_all() {
     let computed = |css: &str| {
         let root = lay("<p>x</p>", css);
-        crate::computed_style_to_map(&first_p_style(&root))["transition-property"].clone()
+        crate::computed_style_to_map(first_p_style(&root))["transition-property"].clone()
     };
     assert_eq!(computed("p { transition-property: none; }"), "none");
     assert_eq!(computed("p { transition-property: opacity; transition-property: none; }"), "none");

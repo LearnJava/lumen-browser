@@ -5505,7 +5505,9 @@ function _wa_gap_tr_value(nid, kebab, base) {
     }
     if (!rec.run) return base;
     var cur = _wa_gap_tr_current(rec, now, camel);
-    if (rec.run && rec.run.done) rec.run = null;
+    // A finished transition no longer overlays the value, but its object may still be played
+    // again (`_css_tr_restore`).
+    if (rec.run && rec.run.done) { rec.finishedRun = rec.run; rec.run = null; }
     return cur;
 }
 
@@ -7295,6 +7297,7 @@ _css_define('currentTime', {
         // A seek ends a pending play or pause: the start time is settled by the new current time.
         if (c.pending) _css_complete_pending(a);
         _css_state(a);
+        _css_tr_restore(a);
         _css_arm(a);
     },
 });
@@ -7327,6 +7330,7 @@ _css_define('startTime', {
         if (c.pending) _css_complete_pending(a);
         _css_note_ps(a, wasPaused);
         _css_state(a);
+        _css_tr_restore(a);
         _css_arm(a);
     },
 });
@@ -7392,6 +7396,7 @@ function _css_play(a) {
         c.pend0 = true;
         _css_fresh_finished(a);
         _css_pend(a, 'play');
+        _css_tr_restore(a);
         _css_arm(a);
         return;
     }
@@ -7406,6 +7411,7 @@ function _css_play(a) {
     }
     if (finished) _css_sync_finished(a, false);
     _css_note_ps(a, wasPaused);
+    _css_tr_restore(a);
     _css_arm(a);
 }
 
@@ -7659,6 +7665,19 @@ function _css_tr_start(nid, kebab, camel, run) {
 function _css_tr_cancel(run) {
     var a = run && run._anim;
     if (a && !a._cx && _css_ct_real(a) < _css_end(a)) _css_drop(a);
+}
+
+// A finished transition that a script plays again or seeks back into is a transition in flight
+// once more: its record goes back under the overlay (unless the style has moved on since).
+function _css_tr_restore(a) {
+    if (a._ctype !== 't' || a._cx) return;
+    var rec = _wa_gap_tr[a._nid + ':' + a._cprop], run = a._c;
+    if (!rec || rec.run || rec.finishedRun !== run) return;
+    if (_css_ct_real(a) >= _css_end(a)) return;
+    run.done = false;
+    rec.run = run;
+    rec.finishedRun = null;
+    _css_tr_by_key[a._nid + ':' + a._cprop] = a;
 }
 
 // The transition is over (finished or cancelled): it leaves the element's list. The object
