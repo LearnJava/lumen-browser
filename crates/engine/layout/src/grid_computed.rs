@@ -68,7 +68,7 @@ pub(crate) fn insert_grid_computed(style: &ComputedStyle, m: &mut HashMap<String
 /// Computed value of a `<length-percentage>`: absolute units become `px`, a percentage (or a `calc()` that
 /// needs a basis) stays as written. `zoom` is un-applied from a baked-in `px` the way the other
 /// box-model lengths are.
-fn absolute_length(l: &Length, em: f32, zoom: f32) -> String {
+pub(crate) fn absolute_length(l: &Length, em: f32, zoom: f32) -> String {
     match l {
         Length::Px(v) => px_str(*v / zoom),
         Length::Em(_) | Length::Rem(_) => l.resolve(em, None, Size::ZERO).map_or_else(|| length_to_css(l), px_str),

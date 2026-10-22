@@ -206,6 +206,8 @@ pub use values::length::{
     overflow_clip_margin_serialize, parse_length, parse_overflow_clip_margin,
     resolve_block_step_size, Length, LengthOrAuto,
 };
+pub use values::multicol_cssom::canonical_specified_multicol;
+pub(crate) use values::multicol_cssom::insert_multicol_computed;
 // SPLIT-ST16. Типы значений — типографика/текст, цвет, бокс-модель, тайминг —
 // уехали в `style::values::{typography,color,box_model,timing}`. Все четыре
 // группы — публичная поверхность крейта (`pub mod style` в `lib.rs`; `box_tree.rs`,

@@ -11,6 +11,7 @@ pub mod grid_cssom;
 pub mod grid_lanes;
 pub mod length;
 pub mod misc;
+pub mod multicol_cssom;
 pub mod named_colors;
 pub mod rule_anim;
 pub mod rule_computed;

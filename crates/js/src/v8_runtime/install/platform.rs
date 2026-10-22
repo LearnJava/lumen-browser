@@ -750,6 +750,15 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // BUG-1402: grammar and canonical form of `column-count`/`column-width`/`column-height`
+    // and the `columns` shorthand for inline-`style` (`None` — the assignment is dropped).
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_multicol",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_multicol(&prop, &value)
+        }
+    );
+
     // Canonical `<line-width>` serialization for inline-`style`
     // border-*-width longhands (CSS Backgrounds L3 §4.2, CSSOM-2/BUG-484
     // second slice) — same role as `_lumen_css_canonical_length` above, but
