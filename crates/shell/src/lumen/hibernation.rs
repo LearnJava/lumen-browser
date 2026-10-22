@@ -261,7 +261,10 @@ impl Lumen {
         self.scroll_y = data.scroll_y;
         self.issue_scroll_command();
         self.content_height = content_height_of(&self.display_list);
-        self.content_width = content_width_of(&self.display_list);
+        self.content_width = match self.layout_box.as_ref() {
+            Some(lb) => content_width_in(&self.display_list, lb, self.viewport_width_css()),
+            None => content_width_of(&self.display_list),
+        };
 
         // Seed the restored runtime with layout geometry + viewport so JS can
         // query bounding rects immediately (mirrors the fresh-load path).

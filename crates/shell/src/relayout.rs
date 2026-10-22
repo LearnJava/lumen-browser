@@ -1277,7 +1277,7 @@ impl Lumen {
         });
         let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
-        self.content_width = content_width_of(&new_dl);
+        self.content_width = content_width_in(&new_dl, &lb, self.viewport_width_css());
         // BUG-480 срез 14: вклейка ПОСЛЕ метрик (содержимое фрейма не должно
         // растягивать прокрутку страницы — обе функции складывают плоский
         // список прямоугольников и клипов не видят) и ДО diff/кэша, чтобы обе
