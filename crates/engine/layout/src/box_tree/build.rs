@@ -1102,6 +1102,18 @@ fn build_box_inner(
             // sized against. Counting it kept `body` above the threshold on a
             // cycle where every one of its element children was a move.
             //
+            // `display: none` children are excluded too (BUG-1608): they never
+            // enter the reuse index either — they have no box to move — but
+            // their style is already in the cascade cache and `build_box`
+            // turns them into a childless `Skip` box without descending, so
+            // they cost a hash lookup, not the cascade plus box build the
+            // threshold was sized against. Chrome's `body` carries an SVG
+            // sprite and seven hidden overlay panels (`.info-panel` ...
+            // `.profile-frame`); counting them put `body` back over the
+            // threshold on every keystroke once UX-CHROME-PANELS added the
+            // eighth, with `.stage` the only child genuinely rebuilt. A child
+            // the cache has no style for is counted (a genuine build).
+            //
             // `None` (every full-layout entry point) leaves the decision at
             // `dom_children.len()`, i.e. M4.1's behaviour byte for byte.
             let children_to_build = match prev_index {
@@ -1111,6 +1123,7 @@ fn build_box_inner(
                     .filter(|&&c| {
                         !idx.contains_key(&c)
                             && matches!(doc.get(c).data, NodeData::Element { .. })
+                            && !counters.style_arc(c).is_some_and(|s| s.display == Display::None)
                     })
                     .count(),
             };
