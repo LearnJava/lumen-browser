@@ -807,8 +807,8 @@ pub(crate) fn install_css_supports_and_lazy_images(
     // `text-transform`, `lang` the element's `lang`/`xml:lang` ("" when unset).
     reg!(scope, ctx, store,
         "_lumen_text_transform",
-        |text: String, value: String, lang: String| -> String {
-            lumen_layout::style::transform_text_by_value(&value, &lang, &text)
+        |text: String, value: String, lang: String, before: String| -> String {
+            lumen_layout::style::transform_text_after_by_value(&value, &lang, &before, &text)
         }
     );
 

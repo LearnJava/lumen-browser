@@ -32,4 +32,4 @@ WPT-RUN-14 срез 10: `text-transform-tailoring-*` (8 id, включая `-dyn
 
 Тесты: `style/tests/text_cssom_tests.rs::case_lang`, `tests/box_sizing_text_props.rs::text_transform_lang_*`, сквозные `crates/driver/tests/cases/bug1329_text_transform_lang.rs`. WPT: `text-transform-tailoring-001`, `-dynamic`, `-document-lang-dynamic`, `upperlower-039…044`, `-107`, `capitalize-036` (5 из 6 сабтестов).
 
-Остаток (греческий, контекст между текстовыми узлами) — [BUG-1486](BUG-1486-OPEN.md).
+Остаток (греческий, контекст между текстовыми узлами) — [BUG-1486](BUG-1486-FIXED.md).

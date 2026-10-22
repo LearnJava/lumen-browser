@@ -586,7 +586,8 @@ pub enum TextTransform {
     Lowercase,
     /// `capitalize`: первая буква каждого слова в верхний регистр. Слово — по упрощённому
     /// UAX #29 (`is_word_start`): `john's`, `foo_bar` — одно слово, `foo-bar` — два.
-    /// Состояние не переходит через границу текстового узла.
+    /// Через границу текстового узла слово продолжается: контекст слева даёт
+    /// `apply_lang_after` (раскладка берёт его из предыдущего сегмента строки).
     Capitalize,
 }
 
@@ -648,6 +649,13 @@ impl TextTransformExtra {
     /// `full-size-kana`; `math-auto` — курсив только для текста из одного символа
     /// (CSS Text L4: значение рассчитано на содержимое `<mi>`).
     pub fn apply(self, case: TextTransform, lang: CaseLang, s: &str) -> String {
+        self.apply_after(case, lang, "", s)
+    }
+
+    /// То же, что [`apply`](Self::apply), но `before` — текст, стоящий в той же inline-строке
+    /// непосредственно перед `s` (соседний текстовый узел): `capitalize` по нему решает, начался
+    /// ли уже текущий «хвост» слова (`a<span>b</span>c` → `b`, не `B`).
+    pub fn apply_after(self, case: TextTransform, lang: CaseLang, before: &str, s: &str) -> String {
         if self.math_auto {
             let mut chars = s.chars();
             return match (chars.next(), chars.next()) {
@@ -655,7 +663,7 @@ impl TextTransformExtra {
                 _ => s.to_string(),
             };
         }
-        let cased = case.apply_lang(s, lang);
+        let cased = case.apply_lang_after(s, lang, before);
         if !self.full_width && !self.full_size_kana {
             return cased;
         }
@@ -729,6 +737,12 @@ impl TextCssomExtra {
     pub fn transform_text(&self, case: TextTransform, s: &str) -> String {
         self.transform.apply(case, self.case_lang, s)
     }
+
+    /// `transform_text` для текста, продолжающего inline-строку после `before` (см.
+    /// [`TextTransformExtra::apply_after`]).
+    pub fn transform_text_after(&self, case: TextTransform, before: &str, s: &str) -> String {
+        self.transform.apply_after(case, self.case_lang, before, s)
+    }
 }
 
 impl TextTransform {
@@ -741,14 +755,24 @@ impl TextTransform {
     /// Unicode SpecialCasing.txt): турецкий/азербайджанский `i`, литовские
     /// точки над `i`/`j`/`į`, ирландские `n`/`t`-приставки, нидерландское `ij`.
     pub fn apply_lang(self, s: &str, lang: CaseLang) -> String {
+        self.apply_lang_after(s, lang, "")
+    }
+
+    /// `apply_lang` с контекстом слева: `before` — текст непосредственно перед `s`. Только
+    /// `capitalize` его читает (достаточно двух последних символов: предыдущий и тот, что
+    /// перед ним, для «серединных» знаков).
+    pub fn apply_lang_after(self, s: &str, lang: CaseLang, before: &str) -> String {
         match self {
             TextTransform::None => s.to_string(),
             TextTransform::Uppercase => case_upper(s, lang),
             TextTransform::Lowercase => case_lower(s, lang),
             TextTransform::Capitalize => {
-                let chars: Vec<char> = s.chars().collect();
+                let mut chars: Vec<char> = before.chars().rev().take(2).collect();
+                chars.reverse();
+                let prefix = chars.len();
+                chars.extend(s.chars());
                 let mut out = String::with_capacity(s.len());
-                let mut i = 0;
+                let mut i = prefix;
                 while i < chars.len() {
                     let ch = chars[i];
                     let next = chars.get(i + 1).copied();
@@ -810,6 +834,8 @@ pub enum CaseLang {
     Irish,
     /// `nl`: `ij` в начале слова при `capitalize` даёт `IJ`.
     Dutch,
+    /// `el`: при `uppercase` слово теряет тонос (CLDR `el-Upper`), см. `greek_upper`.
+    Greek,
 }
 
 impl CaseLang {
@@ -825,6 +851,8 @@ impl CaseLang {
             CaseLang::Irish
         } else if primary.eq_ignore_ascii_case("nl") {
             CaseLang::Dutch
+        } else if primary.eq_ignore_ascii_case("el") {
+            CaseLang::Greek
         } else {
             CaseLang::Other
         }
@@ -851,6 +879,7 @@ fn push_upper(out: &mut String, ch: char, lang: CaseLang) {
 fn case_upper(s: &str, lang: CaseLang) -> String {
     match lang {
         CaseLang::Other | CaseLang::Dutch => s.to_uppercase(),
+        CaseLang::Greek => greek_upper(s),
         CaseLang::Turkic => {
             let mut out = String::with_capacity(s.len());
             for ch in s.chars() {
@@ -889,6 +918,77 @@ fn case_upper(s: &str, lang: CaseLang) -> String {
             out
         }
     }
+}
+
+/// Греческая гласная с тоносом / диалитикой: `(базовая строчная, тонос, диалитика)`.
+fn greek_split(ch: char) -> Option<(char, bool, bool)> {
+    Some(match ch {
+        'ά' | 'Ά' => ('α', true, false),
+        'έ' | 'Έ' => ('ε', true, false),
+        'ή' | 'Ή' => ('η', true, false),
+        'ί' | 'Ί' => ('ι', true, false),
+        'ό' | 'Ό' => ('ο', true, false),
+        'ύ' | 'Ύ' => ('υ', true, false),
+        'ώ' | 'Ώ' => ('ω', true, false),
+        'ϊ' | 'Ϊ' => ('ι', false, true),
+        'ϋ' | 'Ϋ' => ('υ', false, true),
+        'ΐ' => ('ι', true, true),
+        'ΰ' => ('υ', true, true),
+        _ => return None,
+    })
+}
+
+/// Регистр `uppercase` для `lang=el` (CSS Text L3 §2.1, CLDR `el-Upper`): тонос снимается,
+/// диалитика остаётся (`ΐ` → `Ϊ`), дифтонг с тоносом на первом символе даёт диалитику на
+/// втором (`άι` → `ΑΪ`), отдельное слово `ή` («или») сохраняет тонос (`Ή`).
+fn greek_upper(s: &str) -> String {
+    let in_word = |c: char| c.is_alphanumeric() || ('\u{300}'..='\u{36F}').contains(&c);
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if !in_word(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && in_word(chars[i]) {
+            i += 1;
+        }
+        out.push_str(&greek_upper_word(&chars[start..i]));
+    }
+    out
+}
+
+fn greek_upper_word(word: &[char]) -> String {
+    // (буква, тонос, диалитика): комбинируемые U+0301/U+0308 сливаются с предыдущей гласной.
+    let mut units: Vec<(char, bool, bool)> = Vec::with_capacity(word.len());
+    for &ch in word {
+        match (ch, units.last_mut()) {
+            ('\u{301}', Some(u)) if "αεηιουω".contains(u.0) && !u.1 => u.1 = true,
+            ('\u{308}', Some(u)) if matches!(u.0, 'ι' | 'υ') && !u.2 => u.2 = true,
+            _ => units.push(greek_split(ch).unwrap_or((ch, false, false))),
+        }
+    }
+    if let [('η', true, false)] = units[..] {
+        return "\u{389}".to_string();
+    }
+    let mut out = String::with_capacity(word.len() * 2);
+    let mut force_dia = false;
+    for (n, &(base, tonos, dia)) in units.iter().enumerate() {
+        let dia = dia || force_dia;
+        force_dia = tonos
+            && !dia
+            && matches!(base, 'α' | 'ε' | 'η' | 'ο' | 'υ')
+            && matches!(units.get(n + 1), Some(&(next, false, false)) if matches!(next, 'ι' | 'υ'));
+        match (base, dia) {
+            ('ι', true) => out.push('\u{3AA}'),
+            ('υ', true) => out.push('\u{3AB}'),
+            _ => out.extend(base.to_uppercase()),
+        }
+    }
+    out
 }
 
 fn case_lower(s: &str, lang: CaseLang) -> String {
