@@ -109,6 +109,37 @@ enum StepOutcome {
     /// This cell's content is itself a table with its own rows to place —
     /// push the current frame and continue processing this one.
     Descend(Box<TableInit>),
+    /// This cell's content resolved to another kind's trampoline (block-flow/
+    /// flex/grid/multicol/vertical) — `run` drives it via `run_cell_content`.
+    Foreign(DispatchOutcome),
+}
+
+/// Drives the current cell's own trampoline once `step_cell` has returned. Out
+/// of line and called from `run`, not from `step_cell`: a table nested in a
+/// cell re-enters `run` through `block_flow_trampoline::run`, one native frame
+/// pair per nesting level, so every frame kept off that chain (here
+/// `step_cell`'s) raises the depth a test thread's 2 MiB stack can hold.
+#[inline(never)]
+fn run_cell_content(
+    frame: &mut Frame,
+    outcome: DispatchOutcome,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+) {
+    let cell_box = current_cell_mut(frame);
+    match outcome {
+        DispatchOutcome::NeedsBlockFlowLoop(ci) => {
+            block_flow_trampoline::run(cell_box, ci, measurer, viewport, hp);
+        }
+        DispatchOutcome::NeedsFlexLoop(ci) => super::flex_trampoline::run(cell_box, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsGridLoop(ci) => super::grid_trampoline::run(cell_box, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsMulticolLoop(ci) => super::multicol_trampoline::run(cell_box, ci, measurer, viewport, hp),
+        DispatchOutcome::NeedsVerticalLoop(ci) => super::vertical_trampoline::run(cell_box, ci, measurer, viewport, hp),
+        DispatchOutcome::Done | DispatchOutcome::NeedsTableLoop(_) => {
+            unreachable!("step_cell handles Done/NeedsTableLoop itself")
+        }
+    }
 }
 
 fn row_init_ref(entry: &TopEntry, r: usize) -> &RowInit {
@@ -159,26 +190,22 @@ pub(super) fn run(
     viewport: Size,
     hp: &dyn HyphenationProvider,
 ) {
-    let mut current = Frame { b: block_flow_trampoline::take_box(b), init, t: 0, r: 0, cell: 0, group_row_y: 0.0 };
-    let mut stack: Vec<Frame> = Vec::new();
+    // Heap frames (`Box<Frame>`), moved in and out by the out-of-line helpers
+    // below: `run` sits on the native stack once per table-in-cell level (see
+    // the doc comment above), so a by-value frame would be paid on every level.
+    let mut current = enter(b, init);
+    let mut stack: Vec<Box<Frame>> = Vec::new();
 
     loop {
         if current.t >= current.init.top_level.len() {
             finish_table(&mut current, measurer, viewport, hp);
             match stack.pop() {
                 None => {
-                    *b = current.b;
+                    leave(b, current);
                     return;
                 }
                 Some(mut parent) => {
-                    let cell_local_idx = {
-                        let ri = row_init_ref(&parent.init.top_level[parent.t], parent.r);
-                        ri.cell_idxs[parent.cell]
-                    };
-                    {
-                        let row = row_box_mut(&mut parent.b, &parent.init.top_level, parent.t, parent.r);
-                        row.children[cell_local_idx] = current.b;
-                    }
+                    return_to_parent(&mut parent, current);
                     parent.cell += 1;
                     current = parent;
                 }
@@ -217,22 +244,43 @@ pub(super) fn run(
             StepOutcome::Advance => {
                 current.cell += 1;
             }
+            StepOutcome::Foreign(outcome) => {
+                run_cell_content(&mut current, outcome, measurer, viewport, hp);
+                current.cell += 1;
+            }
             StepOutcome::Descend(child_init) => {
-                let cell_local_idx = {
-                    let ri = row_init_ref(&current.init.top_level[current.t], current.r);
-                    ri.cell_idxs[current.cell]
-                };
-                let child_box = {
-                    let row = row_box_mut(&mut current.b, &current.init.top_level, current.t, current.r);
-                    block_flow_trampoline::take_box(&mut row.children[cell_local_idx])
-                };
-                let child_frame =
-                    Frame { b: child_box, init: child_init, t: 0, r: 0, cell: 0, group_row_y: 0.0 };
+                let child_frame = enter(current_cell_mut(&mut current), child_init);
                 stack.push(current);
                 current = child_frame;
             }
         }
     }
+}
+
+/// A heap frame owning `slot`'s box (see `run`). Out of line, like [`leave`]
+/// and [`return_to_parent`]: their `LayoutBox` moves stay off `run`'s frame.
+#[inline(never)]
+fn enter(slot: &mut LayoutBox, init: Box<TableInit>) -> Box<Frame> {
+    Box::new(Frame { b: block_flow_trampoline::take_box(slot), init, t: 0, r: 0, cell: 0, group_row_y: 0.0 })
+}
+
+/// Puts the root frame's box back into `b`.
+#[inline(never)]
+fn leave(b: &mut LayoutBox, frame: Box<Frame>) {
+    *b = frame.b;
+}
+
+/// Puts a finished nested table back into the parent's current cell.
+#[inline(never)]
+fn return_to_parent(parent: &mut Frame, child: Box<Frame>) {
+    *current_cell_mut(parent) = child.b;
+}
+
+/// The cell `frame`'s `(t, r, cell)` cursor points at.
+fn current_cell_mut(frame: &mut Frame) -> &mut LayoutBox {
+    let cell_local_idx = row_init_ref(&frame.init.top_level[frame.t], frame.r).cell_idxs[frame.cell];
+    let row = row_box_mut(&mut frame.b, &frame.init.top_level, frame.t, frame.r);
+    &mut row.children[cell_local_idx]
 }
 
 /// Places the row group's own box (`content_x`/`group_y`/`content_width`) and
@@ -286,6 +334,7 @@ fn begin_row(frame: &mut Frame, viewport: Size) {
 /// outcome (including `NeedsTableLoop`), so restoring here — rather than
 /// deferring past a possible descend — is safe and matches every other
 /// trampoline's item-dispatch shape.
+#[inline(never)]
 fn step_cell(
     frame: &mut Frame,
     measurer: Option<&dyn TextMeasurer>,
@@ -337,32 +386,10 @@ fn step_cell(
     Arc::make_mut(&mut cell_box.style).width = saved_width;
     match outcome {
         DispatchOutcome::Done => StepOutcome::Advance,
-        DispatchOutcome::NeedsBlockFlowLoop(ci) => {
-            block_flow_trampoline::run(cell_box, ci, measurer, viewport, hp);
-            StepOutcome::Advance
-        }
-        DispatchOutcome::NeedsFlexLoop(ci) => {
-            super::flex_trampoline::run(cell_box, ci, measurer, viewport, hp);
-            StepOutcome::Advance
-        }
-        DispatchOutcome::NeedsGridLoop(ci) => {
-            super::grid_trampoline::run(cell_box, ci, measurer, viewport, hp);
-            StepOutcome::Advance
-        }
         DispatchOutcome::NeedsTableLoop(ci) => StepOutcome::Descend(ci),
-        // LAYOUT-2 срез 7: a cell whose content is itself a multicol
-        // container — same shape as the flex/grid arms above.
-        DispatchOutcome::NeedsMulticolLoop(ci) => {
-            super::multicol_trampoline::run(cell_box, ci, measurer, viewport, hp);
-            StepOutcome::Advance
-        }
-        // LAYOUT-2 срез 8: a cell whose content is itself a vertical
-        // writing-mode container — same shape as the flex/grid/multicol arms
-        // above.
-        DispatchOutcome::NeedsVerticalLoop(ci) => {
-            super::vertical_trampoline::run(cell_box, ci, measurer, viewport, hp);
-            StepOutcome::Advance
-        }
+        // Block-flow/flex/grid content, and (LAYOUT-2 срез 7/8) a multicol or
+        // vertical writing-mode container — driven by `run_cell_content`.
+        outcome => StepOutcome::Foreign(outcome),
     }
 }
 
