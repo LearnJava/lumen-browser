@@ -1630,7 +1630,7 @@ impl V8JsRuntime {
                 name,
                 accessible,
                 opaque_id: opaque.then(crate::frame_bridge::next_opaque_origin_id),
-                peer,
+                peer: peer.as_ref().map(Arc::downgrade),
             };
             crate::frame_bridge::upsert_binding(&mut reg, binding)
         });
@@ -1679,7 +1679,7 @@ impl V8JsRuntime {
                     name,
                     accessible,
                     opaque_id: None,
-                    peer,
+                    peer: peer.as_ref().map(Arc::downgrade),
                 });
         });
         // Срез 3: включить геттеры window.parent/top/frameElement/name. Ошибки
@@ -1712,7 +1712,7 @@ impl V8JsRuntime {
                     name: None,
                     accessible,
                     opaque_id: None,
-                    peer,
+                    peer: peer.as_ref().map(Arc::downgrade),
                 });
         });
         // Слот top ставится только у фреймов глубины ≥ 2, у которых parent

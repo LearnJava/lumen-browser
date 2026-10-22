@@ -213,8 +213,14 @@ fn apply_container_inner(
 ///
 /// Respects `anchor-scope`: anchors in a scoped subtree are invisible to
 /// positioned elements that are not descendants of the scope root.
-pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
-    let registry = collect_anchors(root);
+pub(crate) fn apply_anchor_positions(
+    root: &mut LayoutBox,
+    doc: &lumen_dom::Document,
+    counters: &CounterMap,
+    viewport: Size,
+) {
+    let inline = crate::anchor::InlineAnchors::from_cascade(doc, counters.styles());
+    let registry = collect_anchors_inline(root, inline.as_ref());
     if registry.is_empty() {
         return;
     }

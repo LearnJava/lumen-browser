@@ -59,14 +59,18 @@ impl Lumen {
         // блокирующего запроса к движковому потоку (срез 87).
         self.poll_dynamic_frames_in(&page_doc, true, 0, &page_base, None);
 
-        // Снимок индексов: `self.frames` уже плоский список по всем уровням
+        // Снимок документов: `self.frames` уже плоский список по всем уровням
         // вложенности, поэтому один проход по нему покрывает и глубокие
-        // фреймы — у любого из них может появиться собственный ребёнок.
-        for idx in 0..self.frames.len() {
-            let Some((doc, base, depth, js)) = self
+        // фреймы — у любого из них может появиться собственный ребёнок. Не
+        // индексов: скан уровня выше мог уже выбросить фрейм (BUG-1682), и
+        // список под циклом сдвинулся.
+        let docs: Vec<Arc<Mutex<Document>>> = self.frames.iter().map(|h| Arc::clone(&h.doc)).collect();
+        for doc in docs {
+            let Some((base, depth, js)) = self
                 .frames
-                .get(idx)
-                .map(|h| (Arc::clone(&h.doc), h.base.clone(), h.depth, h.js.clone()))
+                .iter()
+                .find(|h| Arc::ptr_eq(&h.doc, &doc))
+                .map(|h| (h.base.clone(), h.depth, h.js.clone()))
             else {
                 continue;
             };
@@ -89,10 +93,30 @@ impl Lumen {
         js: Option<&Arc<dyn PersistentJs>>,
     ) {
         // BUG-935 срез 87: документ занят движковым потоком — не ждём его на UI-потоке.
-        let Some(delta) = frame_dynamic_load::scan_dynamic_frames(doc, &self.frames, is_top) else {
+        let Some(mut delta) = frame_dynamic_load::scan_dynamic_frames(doc, &self.frames, is_top) else {
             self.frame_scan_retry = true;
             return;
         };
+        // BUG-1682: вынутый хост уносит фрейм со всем поддеревом — после
+        // `changed`, чьи индексы сняты по ещё не тронутому списку.
+        let removed = std::mem::take(&mut delta.removed);
+        self.poll_dynamic_frames_apply(doc, is_top, depth, base, js, delta);
+        for gone in &removed {
+            frame_dynamic_load::remove_frames_of(&mut self.frames, gone);
+        }
+    }
+
+    /// Новые и сменившие `src` хосты из `delta` — вторая половина
+    /// [`Self::poll_dynamic_frames_in`].
+    fn poll_dynamic_frames_apply(
+        &mut self,
+        doc: &Arc<Mutex<Document>>,
+        is_top: bool,
+        depth: usize,
+        base: &ResourceBase,
+        js: Option<&Arc<dyn PersistentJs>>,
+        delta: frame_dynamic_load::DynamicFrameDelta,
+    ) {
         // BUG-935 срез 87: хэндл JS страницы берётся только при новом `<iframe>` и
         // без ожидания чужого задания — `clone_js_ctx` стоял на UI-потоке до
         // 2,3 с за движковым FIFO (кадры ria.ru). Занят — скан повторится.

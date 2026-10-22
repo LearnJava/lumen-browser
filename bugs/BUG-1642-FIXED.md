@@ -1,6 +1,6 @@
 # BUG-1642 — Лишняя горизонтальная полоса прокрутки страницы, нарисованная на 72 px выше низа
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P6)
 **Заведён:** 2026-10-19 (живой прогон https://otpravka.pochta.ru/specification#/enums-base-mail-type)
 **Область:** shell (`crates/shell/src/display_list_metrics.rs::content_width_of`, `crates/shell/src/scrollbar.rs::build_hscrollbar_overlay`)
 
@@ -39,3 +39,28 @@ thumb до 28 %.
   `overflow:hidden`-предка с `left:-50vw; width:150vw`.
 - Позиция полосы — в тех же координатах, что и вертикальная полоса / page offset; тест на
   `build_hscrollbar_overlay` + место вызова.
+
+## Исправлено
+
+Живой репро: страница шире окна с `overflow:hidden` предком (и `html { overflow-x:hidden }`)
+в `--maximized` окне — полоса висела на 72 px выше низа.
+
+- `display_list_metrics.rs::content_width_of` ведёт стек клипов (`PushClipRect`,
+  `PushClipRoundedRect`, `PushScrollLayer`; `PushClipPath` делит `PopClip`) и обрезает правый край
+  каждого rect-а правым краем внешнего клипа; бокс самого клипа считается. Подложка
+  `left:-50vw; width:150vw` под `overflow:hidden` больше не растягивает страницу.
+- `content_width_in` дополнительно прижимает ширину к viewport-у, когда `overflow-x: hidden|clip`
+  `<html>` (или `<body>` при `visible` у `<html>`) уходит на viewport (CSS Overflow L3 §3.5) —
+  display list этот случай клипом не выражает. Пять мест присвоения `content_width`
+  (`page_load.rs` ×3, `relayout.rs`, `lumen/hibernation.rs`) вызывают её.
+- Позиция: overlay-буфер рисуется в координатах окна, а полосы страницы строятся от верха
+  страницы — `scrollbar::shift_overlay_y` сдвигает вертикальную и горизонтальную полосы и метки
+  поиска на `page_offset().1`, а хит-тесты/hover (`Lumen::page_local_y`, `mouse_input.rs`,
+  `cursor.rs`) вычитают тот же сдвиг. Заодно выправлена вертикальная полоса: её thumb при
+  `scroll_y = 0` лежал под тулбаром.
+
+Тесты: `tests/cli.rs` (`content_width_*`, `page_width_*`), `scrollbar.rs`
+(`page_bars_shifted_into_window_coords`).
+
+Остаток: полосы прокрутки фреймов — [BUG-1683](BUG-1683-OPEN.md). Прокрутка вбок скриптом
+(`scrollTo`) при `overflow-x:hidden` на viewport-е ограничена `content_width = viewport`.

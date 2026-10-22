@@ -742,6 +742,7 @@ impl Lumen {
         // справа от `ww - 8`), так что фактического overdraw нет.
         // --no-scrollbar подавляет полосу для screenshot-пайплайна.
         if !self.no_scrollbar {
+            let page_y_offset = self.page_offset().1;
             // FRAME-3 remainder: собственный scrollbar каждого видимого
             // фрейма — то же приём, добавлен в ту же полосу overlay-а рядом
             // со страничным.
@@ -764,19 +765,24 @@ impl Lumen {
                 v_present,
                 h_state,
             ));
+            // BUG-1642: билдеры считают от верха страницы, overlay рисуется в координатах окна.
+            // Полосы фреймов уже в страничных координатах своего хоста — их не сдвигаем.
+            scrollbar::shift_overlay_y(&mut scrollbar_cmds, page_y_offset);
             scrollbar_cmds.extend(frames::frame_scrollbar_overlay(
                 &self.frames,
                 self.scroll_x,
                 self.scroll_y,
             ));
             // UX-FIND-ALL: метки совпадений поиска поверх трека (после thumb-а).
-            scrollbar_cmds.extend(scrollbar::build_find_marks(
+            let mut find_marks = scrollbar::build_find_marks(
                 &find_mark_ys,
                 self.find.is_open().then(|| self.find.active_index()),
                 self.content_height,
                 self.viewport_width_css(),
                 self.viewport_height_css(),
-            ));
+            );
+            scrollbar::shift_overlay_y(&mut find_marks, page_y_offset);
+            scrollbar_cmds.extend(find_marks);
             if !scrollbar_cmds.is_empty() {
                 let mut combined = scrollbar_cmds;
                 combined.append(&mut overlay_buf);

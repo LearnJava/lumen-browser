@@ -261,7 +261,7 @@ impl Lumen {
         self.scroll_y = data.scroll_y;
         self.issue_scroll_command();
         (self.content_height, self.content_width) = match self.layout_box.as_ref() {
-            Some(lb) => crate::display_list_metrics::page_content_extent(&self.display_list, lb),
+            Some(lb) => crate::display_list_metrics::page_content_extent(&self.display_list, lb, self.viewport_width_css()),
             None => (content_height_of(&self.display_list), content_width_of(&self.display_list)),
         };
 

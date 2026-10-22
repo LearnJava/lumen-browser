@@ -1,6 +1,6 @@
 # BUG-1682 — рантайм V8 дочернего фрейма не освобождается никогда: ~20 МБ на каждый iframe, ни удаление `<iframe>`, ни замена страницы его не уносят
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P5)
 **Заведён:** 2026-10-22 (P2, блокер WPT-RUN-16)
 **Область:** shell/js (`crates/shell/src/frames.rs` — `FrameHandle`, `spawn_frame`, `drop_frame_subtree`; `crates/shell/src/frame_dynamic_load.rs::scan_dynamic_frames`; `crates/js/src/frame_bridge.rs::upsert_binding`; `crates/shell/src/frame_ancestry.rs` — `register_parent_document(…, parent_peer)`; `impl Drop for V8JsRuntime` в `crates/js/src/v8_runtime/runtime.rs:2175`)
 
@@ -64,3 +64,26 @@ onload = function () { setTimeout(function () { location.replace(location.pathna
 ## Как проверить
 
 Таблица выше: все три страницы с фреймами держатся на уровне строки `nav.html`, то есть не растут после первых секунд. Тест в `crates/shell`: после `drop` страницы с фреймом и после удаления хоста число живых `V8JsRuntime` (счётчик в `Drop` или `Weak::strong_count`) возвращается к исходному. Затем WPT-RUN-16: шард `referrer-policy` под `run_smoke.py` не поднимает браузер выше нескольких сотен МБ.
+
+## Исправление (2026-10-22, P5)
+
+1. **Цикл разорван.** `FrameDocBinding::peer` — `Weak<dyn FramePeerBridge>` (`frame_bridge.rs`); `register_frame/parent/top_document` понижают переданный `Arc`, `frame_bridge_globals.rs::resolve_peer` повышает его на время вызова, мёртвый рантайм читается как `absent`. Единственный сильный владелец рантайма фрейма — `FrameHandle::js` в shell.
+2. **Удаление хоста.** `scan_dynamic_frames` сообщает `removed` — хэндлы этого документа, чей хост больше не подключён (`Document::is_connected`, новый метод `lumen-dom`; поколение сверяется через `resolve`). `poll_dynamic_frames_in` уносит их с поддеревом (`frame_dynamic_load::remove_frames_of`); `apply_new_frame_load` отбрасывает поздний ответ загрузки для уже вынутого хоста.
+3. **Реестр родителя.** Регистрация НОВОГО хоста (`upsert_binding`) сначала превращает биндинги отсоединённых хостов в надгробия (`DETACHED_HOST`) на месте — индекс = `bid` уже построенных фасадов, сдвигать нельзя. Надгробие не находится по host-nid (`contentWindow` вынутого iframe — `null`), не считается в `window.length`, документ ребёнка отпускает.
+4. **Освобождение вне UI-потока.** `Drop for V8JsRuntime` join-ит поток V8; теперь, когда он реально срабатывает, все места, где уходят хэндлы (замена страницы, навигация фрейма, удаление), идут через `frame_dynamic_load::release_frame_handles` — короткоживущий поток.
+
+Не сделано: индексные геттеры `window[i]` не переиндексируются после удаления — `window[i]` вынутого фрейма отдаёт `null`.
+
+### Проверка
+
+Тесты: `frame_bridge_globals::tests::{mutual_peers_do_not_keep_runtimes_alive, dead_peer_reads_as_absent, registering_a_new_frame_buries_bindings_of_removed_hosts}`, `tests::subdocument_frames::removed_host_drops_its_frame_subtree_and_late_load`.
+
+Проба — те же страницы через `http.server`, `lumen.exe --no-paint --maximized`, `dev-release`, приватная память (МБ) / число потоков процесса:
+
+| страница | 15 с | 45 с | 75 с | 105 с | 135 с |
+|---|---|---|---|---|---|
+| `ifr-empty.html` (3 / 15 / 30 с) | 91 / 174 / 174, потоков 49 стабильно | | | | |
+| `navframes.html` | 261 / 57 | 290 / 56 | 312 / 51 | 316 / 59 | 348 / 53 |
+| `nav.html` (без фреймов, фон) | 182 / 66 | 191 / 59 | 197 / 51 | 221 / 51 | 230 / 55 |
+
+До правки `ifr-empty` за 30 с доходил до 3 413 МБ, `navframes` — до 3 322 МБ. Остаточный рост `navframes` (~0,7 МБ/с) того же порядка, что у навигации без фреймов (~0,4 МБ/с), число потоков не растёт. `contentWindow` вынутого iframe — `null`, `window.length` после «удалить один, вставить другой» — 1.

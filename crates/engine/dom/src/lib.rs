@@ -1304,6 +1304,31 @@ impl Document {
         None
     }
 
+    /// Whether `id` is connected (DOM §4.2 "connected"): its shadow-including
+    /// root is this document's root. A shadow root is crossed to its host
+    /// (its own `parent` is never set, see [`Self::shadow_host_of`]).
+    ///
+    /// Structural only, generation-blind like [`Self::contains_id`]: a
+    /// caller holding a `NodeId` that may outlive its slot checks
+    /// [`Self::resolve`] first.
+    pub fn is_connected(&self, id: NodeId) -> bool {
+        let root = self.root();
+        let mut cur = id;
+        loop {
+            if cur == root {
+                return true;
+            }
+            let Some(node) = self.try_get(cur) else { return false };
+            match node.parent {
+                Some(p) => cur = p,
+                None => match self.shadow_host_of(cur) {
+                    Some(host) => cur = host,
+                    None => return false,
+                },
+            }
+        }
+    }
+
     /// Whether `id` indexes this document's node arena.
     ///
     /// The arena never shrinks (`Node`s are detached, not freed), so a valid

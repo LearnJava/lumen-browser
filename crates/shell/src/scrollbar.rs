@@ -94,6 +94,17 @@ pub fn build_scrollbar_overlay(
     )
 }
 
+/// Сдвиг команд полосы по вертикали: билдеры строят её в координатах viewport-а страницы
+/// (`y = 0` — верх страницы), а overlay-буфер рисуется в координатах окна — под тулбаром
+/// (BUG-1642). `dy` — `page_offset().1`.
+pub fn shift_overlay_y(cmds: &mut DisplayList, dy: f32) {
+    for cmd in cmds {
+        if let DisplayCommand::FillRect { rect, .. } = cmd {
+            rect.y += dy;
+        }
+    }
+}
+
 /// То же, что [`build_scrollbar_overlay`], но thumb окрашен по `state`.
 pub fn build_scrollbar_overlay_with_state(
     scroll_y: f32,
@@ -864,5 +875,22 @@ mod tests {
         let cmds = build_scrollbar_overlay_with_state(0.0, 4000.0, 800.0, 600.0, ThumbState::Active);
         let DisplayCommand::FillRect { color, .. } = &cmds[1] else { panic!() };
         assert_eq!(*color, ThumbState::Active.color());
+    }
+
+    /// BUG-1642: overlay-буфер рисуется в координатах окна, а полосы страницы строятся от верха
+    /// страницы — после сдвига на `page_offset().1` дорожка встаёт на нижний край окна.
+    #[test]
+    fn page_bars_shifted_into_window_coords() {
+        let chrome_h = 72.0;
+        let (vw, vh) = (1000.0, 700.0);
+        let mut h = build_hscrollbar_overlay(0.0, 2000.0, vw, vh, 0.0, false, ThumbState::Idle);
+        shift_overlay_y(&mut h, chrome_h);
+        let Some(DisplayCommand::FillRect { rect, .. }) = h.first() else { panic!("hbar track missing") };
+        assert!(approx_eq(rect.y + rect.height, chrome_h + vh));
+        let mut v = build_scrollbar_overlay(0.0, 3000.0, vw, vh);
+        shift_overlay_y(&mut v, chrome_h);
+        let Some(DisplayCommand::FillRect { rect, .. }) = v.first() else { panic!("vbar track missing") };
+        assert!(approx_eq(rect.y, chrome_h));
+        assert!(approx_eq(rect.y + rect.height, chrome_h + vh));
     }
 }

@@ -611,7 +611,7 @@ impl Lumen {
                 // The new runtime starts empty; re-seed it with the current Navigation state.
                 self.commit_nav_state();
                 (self.content_height, self.content_width) =
-                    crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box);
+                    crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css());
                 // On full page load, mark all tiles dirty — content has changed completely.
                 self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
                 // BUG-480 срез 14: под-документы новой страницы заменяют старые
@@ -619,7 +619,7 @@ impl Lumen {
                 // reload'а без окна о фреймах не знал вовсе и оставлял хэндлы
                 // ПРЕДЫДУЩЕГО документа живыми). Строго до записи списка: она
                 // вклеивает в него содержимое фреймов.
-                self.frames = page.frames;
+                frame_dynamic_load::release_frame_handles(std::mem::replace(&mut self.frames, page.frames));
                 self.frame_env = page.frame_env;
                 // FRAME-4 срез 3: см. тот же сброс в `apply_loaded_page`.
                 frames::clear_frame_nav_requests(&mut self.frame_nav_requests);
@@ -1162,7 +1162,7 @@ impl Lumen {
         };
         let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
 
-        (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout);
+        (self.content_height, self.content_width) = crate::display_list_metrics::page_content_extent(&dl, &layout, self.viewport_width_css());
         self.set_display_list(dl);
         // BUG-341 S7: streaming layout is a separate incremental mechanism
         // (`layout_streaming_incremental`, no `CounterMap`) — invalidate the
@@ -1692,7 +1692,7 @@ impl Lumen {
             None
         };
         (self.content_height, self.content_width) =
-            crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box);
+            crate::display_list_metrics::page_content_extent(&page.display_list, &page.layout_box, self.viewport_width_css());
         // Full page load: force all tiles dirty.
         self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
         self.animation_scheduler.clear();
@@ -1703,8 +1703,9 @@ impl Lumen {
         self.layout_box = Some(page.layout_box);
         self.page_tracks = page.page_tracks;
         // BUG-480 срез 1: под-документы новой страницы заменяют старые целиком —
-        // прежние фреймы (и их JS-контексты) падают вместе со страницей.
-        self.frames = page.frames;
+        // прежние фреймы (и их JS-контексты) падают вместе со страницей —
+        // вне UI-потока (BUG-1682, `release_frame_handles`).
+        frame_dynamic_load::release_frame_handles(std::mem::replace(&mut self.frames, page.frames));
         self.frame_env = page.frame_env;
         // FRAME-4 срез 3: слоты старой страницы адресуют документы, которых
         // больше нет — новый ответ на них уже не придёт (generation этого

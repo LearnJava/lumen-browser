@@ -35,7 +35,8 @@ fn resolve_peer(
     if !binding.accessible {
         return Err(envelope_tag("absent"));
     }
-    let Some(peer) = binding.peer.clone() else {
+    // BUG-1682: фрейм, которого shell уже выбросил, — такой же «нет рантайма».
+    let Some(peer) = binding.peer.as_ref().and_then(std::sync::Weak::upgrade) else {
         return Err(envelope_tag("absent"));
     };
     let from = reg.self_key.unwrap_or(0);
@@ -131,9 +132,11 @@ mod tests {
             name: None,
             accessible,
             opaque_id: None,
-            peer: Some(child_rt as Arc<dyn crate::frame_peer_bridge::FramePeerBridge>),
+            peer: Some(Arc::downgrade(&child_rt) as std::sync::Weak<dyn crate::frame_peer_bridge::FramePeerBridge>),
         });
         f(&parent_rt);
+        // Реестр держит ребёнка слабо (BUG-1682) — живым его держит фикстура.
+        drop(child_rt);
     }
 
     fn eval_str(rt: &V8JsRuntime, script: &str) -> String {
@@ -273,5 +276,104 @@ mod tests {
         with_parent_and_child("window.secret = 'leak-me-not';", false, |rt| {
             assert_eq!(eval_str(rt, "_lumen_f_global_get(0, 'secret').kind"), "absent");
         });
+    }
+
+    /// BUG-1682: same-origin родитель и ребёнок ссылаются друг на друга
+    /// (`frames[i].peer` ↔ `parent.peer`), но оба рантайма умирают, как только
+    /// их отпускает владелец — shell. Раньше это был цикл `Arc`, и поток с
+    /// изолятом каждого фрейма жил до конца процесса.
+    #[test]
+    fn mutual_peers_do_not_keep_runtimes_alive() {
+        use crate::frame_peer_bridge::FramePeerBridge;
+        let parent = Arc::new(V8JsRuntime::new().unwrap());
+        let child = Arc::new(V8JsRuntime::new().unwrap());
+        let parent_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<iframe></iframe>")));
+        let child_doc = Arc::new(Mutex::new(lumen_html_parser::parse("<p>hi")));
+        parent.register_frame_document(
+            7,
+            child_doc,
+            "https://a.test/child".to_owned(),
+            None,
+            true,
+            false,
+            Some(Arc::clone(&child) as Arc<dyn FramePeerBridge>),
+        );
+        child.register_parent_document(
+            7,
+            parent_doc,
+            "https://a.test/".to_owned(),
+            None,
+            true,
+            Some(Arc::clone(&parent) as Arc<dyn FramePeerBridge>),
+        );
+        let (weak_parent, weak_child) = (Arc::downgrade(&parent), Arc::downgrade(&child));
+        drop(child);
+        assert!(weak_child.upgrade().is_none(), "ребёнка держал реестр родителя");
+        drop(parent);
+        assert!(weak_parent.upgrade().is_none(), "родителя держал слот parent ребёнка");
+    }
+
+    /// BUG-1682: биндинг рантайма, которого уже нет, отвечает как биндинг
+    /// без рантайма, а не падает.
+    #[test]
+    fn dead_peer_reads_as_absent() {
+        let parent_rt = V8JsRuntime::new().unwrap();
+        parent_rt.eval("var window = globalThis;").unwrap();
+        let registry: FrameDocRegistry = Arc::new(Mutex::new(FrameDocSlots::default()));
+        install_frame_bridge_v8(&parent_rt, Arc::clone(&registry)).unwrap();
+        install_frame_bridge_globals_v8(&parent_rt, Arc::clone(&registry)).unwrap();
+        let child_rt = Arc::new(V8JsRuntime::new().unwrap());
+        registry.lock().unwrap().frames.push(FrameDocBinding {
+            host_nid: 7,
+            doc: Arc::new(Mutex::new(lumen_html_parser::parse("<html></html>"))),
+            url: "about:srcdoc".to_owned(),
+            name: None,
+            accessible: true,
+            opaque_id: None,
+            peer: Some(Arc::downgrade(&child_rt) as std::sync::Weak<dyn crate::frame_peer_bridge::FramePeerBridge>),
+        });
+        drop(child_rt);
+        assert_eq!(eval_str(&parent_rt, "_lumen_f_global_get(0, 'mark').kind"), "absent");
+    }
+
+    /// BUG-1682: регистрация нового фрейма хоронит биндинг хоста, вынутого из
+    /// документа, на его месте — `bid` соседей не сдвигается, `window.length`
+    /// считает только живые, под-документ вынутого отпущен.
+    #[test]
+    fn registering_a_new_frame_buries_bindings_of_removed_hosts() {
+        use crate::frame_bridge::{DETACHED_HOST, upsert_binding};
+        let doc = Arc::new(Mutex::new(lumen_html_parser::parse(
+            "<body><iframe></iframe><iframe></iframe><iframe></iframe></body>",
+        )));
+        let hosts: Vec<u32> =
+            lumen_dom::collect_iframes(&doc.lock().unwrap()).iter().map(|i| i.node.index() as u32).collect();
+        assert_eq!(hosts.len(), 3);
+        let mut slots = FrameDocSlots { self_doc: Some(Arc::clone(&doc)), ..FrameDocSlots::default() };
+        let binding = |host_nid: u32, child: &Arc<Mutex<lumen_dom::Document>>| FrameDocBinding {
+            host_nid,
+            doc: Arc::clone(child),
+            url: "about:blank".to_owned(),
+            name: None,
+            accessible: true,
+            opaque_id: None,
+            peer: None,
+        };
+        let first = Arc::new(Mutex::new(lumen_dom::Document::new()));
+        let second = Arc::new(Mutex::new(lumen_dom::Document::new()));
+        assert_eq!(upsert_binding(&mut slots, binding(hosts[0], &first)), 0);
+        assert_eq!(upsert_binding(&mut slots, binding(hosts[1], &second)), 1);
+
+        doc.lock().unwrap().detach(lumen_dom::NodeId::from_index(hosts[0] as usize));
+        // Повторная регистрация живого хоста (навигация фрейма) не хоронит.
+        assert_eq!(upsert_binding(&mut slots, binding(hosts[1], &second)), 1);
+        assert_eq!(slots.frames[0].host_nid, hosts[0]);
+
+        let third = Arc::new(Mutex::new(lumen_dom::Document::new()));
+        assert_eq!(upsert_binding(&mut slots, binding(hosts[2], &third)), 2, "индексы не сдвинулись");
+        assert_eq!(slots.frames[0].host_nid, DETACHED_HOST);
+        assert!(slots.frames[0].peer.is_none());
+        assert_eq!(Arc::strong_count(&first), 1, "под-документ вынутого фрейма отпущен");
+        assert_eq!(slots.frames[1].host_nid, hosts[1]);
+        assert_eq!(slots.frames.iter().filter(|b| b.host_nid != DETACHED_HOST).count(), 2);
     }
 }

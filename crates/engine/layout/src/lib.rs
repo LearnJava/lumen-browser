@@ -2561,31 +2561,42 @@ fn collect_layout_rects_box(
     // inside them, keyed by DOM ancestor via `inline_element_ancestors`. Line
     // y-position uses the same `font_size * line_height` uniform-line-height
     // model `selection.rs` uses to turn `lines[line_idx]` into a pixel rect.
-    if let BoxKind::InlineRun { lines, .. } = &b.kind {
-        let line_h = b.used_line_height;
-        for (line_idx, line) in lines.iter().enumerate() {
-            let line_y = b.rect.y + line_idx as f32 * line_h;
-            // GAP-HLHITTEST: per source span, so an inline element whose
-            // words `wrap_inline_run` merged into its same-style
-            // neighbour's fragment still gets its own geometry.
-            for (frag, span) in line.iter().flat_map(|f| {
-                text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
-            }) {
-                let fx1 = b.rect.x + frag.x + span.x;
-                let fy1 = line_y;
-                let fx2 = fx1 + span.width;
-                let fy2 = fy1 + line_h;
-                for anc in inline_element_ancestors(doc, span.source_node, b.node) {
-                    out.entry(anc.index() as u32)
-                        .and_modify(|cur| {
-                            let cx1 = cur[0].min(fx1);
-                            let cy1 = cur[1].min(fy1);
-                            let cx2 = (cur[0] + cur[2]).max(fx2);
-                            let cy2 = (cur[1] + cur[3]).max(fy2);
-                            *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
-                        })
-                        .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
-                }
+    for_each_inline_frag_ancestor(doc, b, |anc, [fx1, fy1, fx2, fy2]| {
+        out.entry(anc.index() as u32)
+            .and_modify(|cur| {
+                let cx1 = cur[0].min(fx1);
+                let cy1 = cur[1].min(fy1);
+                let cx2 = (cur[0] + cur[2]).max(fx2);
+                let cy2 = (cur[1] + cur[3]).max(fy2);
+                *cur = [cx1, cy1, cx2 - cx1, cy2 - cy1];
+            })
+            .or_insert([fx1, fy1, fx2 - fx1, fy2 - fy1]);
+    });
+}
+
+/// For an `InlineRun` box: calls `f(element, [x1, y1, x2, y2])` for every plain inline element
+/// (see [`inline_element_ancestors`]) once per laid-out fragment span inside it — the pieces
+/// whose union is the element's `getBoundingClientRect` (BUG-488), also what an `anchor-name`
+/// on such an element anchors to (BUG-1477). Other boxes: no calls.
+pub(crate) fn for_each_inline_frag_ancestor(
+    doc: &lumen_dom::Document,
+    b: &LayoutBox,
+    mut f: impl FnMut(lumen_dom::NodeId, [f32; 4]),
+) {
+    let BoxKind::InlineRun { lines, .. } = &b.kind else { return };
+    let line_h = b.used_line_height;
+    for (line_idx, line) in lines.iter().enumerate() {
+        let line_y = b.rect.y + line_idx as f32 * line_h;
+        // GAP-HLHITTEST: per source span, so an inline element whose
+        // words `wrap_inline_run` merged into its same-style
+        // neighbour's fragment still gets its own geometry.
+        for (frag, span) in line.iter().flat_map(|f| {
+            text_geometry::frag_source_spans(f).into_iter().map(move |s| (f, s))
+        }) {
+            let fx1 = b.rect.x + frag.x + span.x;
+            let rect = [fx1, line_y, fx1 + span.width, line_y + line_h];
+            for anc in inline_element_ancestors(doc, span.source_node, b.node) {
+                f(anc, rect);
             }
         }
     }

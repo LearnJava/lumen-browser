@@ -23,6 +23,10 @@ pub(crate) struct DynamicFrameDelta {
     /// (индекс в `frames`, новое значение `src`) — хэндл есть, но `src`
     /// сменился на непустое значение с прошлого скана.
     pub(crate) changed: Vec<(usize, String)>,
+    /// BUG-1682: документы хэндлов, чей host-элемент вынут из `doc`. HTML LS
+    /// §4.8.5: удаление `<iframe>` из документа уничтожает его вложенный
+    /// navigable — хэндл со всем поддеревом уходит ([`remove_frames_of`]).
+    pub(crate) removed: Vec<Arc<Mutex<Document>>>,
 }
 
 /// Сверить живое дерево `doc` со списком уже загруженных `frames`.
@@ -50,20 +54,26 @@ pub(crate) fn scan_dynamic_frames(
     frames: &[FrameHandle],
     is_top: bool,
 ) -> Option<DynamicFrameDelta> {
-    let infos = match doc.try_lock() {
-        Ok(d) => collect_iframes(&d),
-        Err(std::sync::TryLockError::Poisoned(p)) => collect_iframes(&p.into_inner()),
+    let hosted_here = |h: &FrameHandle| match &h.parent_doc {
+        None => is_top,
+        Some(pd) => Arc::ptr_eq(pd, doc),
+    };
+    let guard = match doc.try_lock() {
+        Ok(d) => d,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => return None,
     };
-    let mut delta = DynamicFrameDelta { new: Vec::new(), changed: Vec::new() };
+    let infos = collect_iframes(&guard);
+    // Поколение сверяется: слот вынутого хоста мог уже уйти другому узлу.
+    let removed = frames
+        .iter()
+        .filter(|h| hosted_here(h) && !(guard.resolve(h.host.raw()) == Some(h.host) && guard.is_connected(h.host)))
+        .map(|h| Arc::clone(&h.doc))
+        .collect();
+    drop(guard);
+    let mut delta = DynamicFrameDelta { new: Vec::new(), changed: Vec::new(), removed };
     for info in infos {
-        let existing = frames.iter().enumerate().find(|(_, h)| {
-            h.host == info.node
-                && match &h.parent_doc {
-                    None => is_top,
-                    Some(pd) => Arc::ptr_eq(pd, doc),
-                }
-        });
+        let existing = frames.iter().enumerate().find(|(_, h)| h.host == info.node && hosted_here(h));
         match existing {
             None if info.loading_lazy => {}
             None => delta.new.push(info),
@@ -144,8 +154,9 @@ pub(crate) fn run_new_frame_load(
 ///
 /// `false`, если `host` тем временем обзавёлся хэндлом сам (повторный скан
 /// успел заметить и загрузить его другим путём, гонка с самим собой не
-/// исключена при двух почти одновременных мутациях) — тогда `handles`
-/// просто роняются вместе со своими JS-рантаймами.
+/// исключена при двух почти одновременных мутациях) или уже вынут из
+/// документа, пока грузился (BUG-1682: `iframe.remove()` раньше ответа), —
+/// тогда `handles` отпускаются вместе со своими JS-рантаймами.
 pub(crate) fn apply_new_frame_load(
     frames: &mut Vec<FrameHandle>,
     host_doc: &Arc<Mutex<Document>>,
@@ -153,7 +164,14 @@ pub(crate) fn apply_new_frame_load(
     is_top: bool,
     handles: Vec<FrameHandle>,
 ) -> bool {
+    // Документ занят — считаем хост на месте: следующий скан его всё равно сверит.
+    let detached = match host_doc.try_lock() {
+        Ok(d) => !d.is_connected(host),
+        Err(std::sync::TryLockError::Poisoned(p)) => !p.into_inner().is_connected(host),
+        Err(std::sync::TryLockError::WouldBlock) => false,
+    };
     if handles.is_empty()
+        || detached
         || frames.iter().any(|h| {
             h.host == host
                 && match &h.parent_doc {
@@ -162,10 +180,38 @@ pub(crate) fn apply_new_frame_load(
                 }
         })
     {
+        release_frame_handles(handles);
         return false;
     }
     frames.extend(handles);
     true
+}
+
+/// Выбросить хэндл фрейма с документом `doc` вместе со всем его поддеревом
+/// (BUG-1682) — host-элемент вынут из документа хозяина.
+pub(crate) fn remove_frames_of(frames: &mut Vec<FrameHandle>, doc: &Arc<Mutex<Document>>) {
+    frames::drop_frame_subtree(frames, doc);
+    release_frame_handles(frames.extract_if(.., |h| Arc::ptr_eq(&h.doc, doc)).collect());
+}
+
+/// Отпустить выброшенные хэндлы фреймов НЕ на вызывающем потоке (BUG-1682).
+///
+/// Последний `Arc` рантайма фрейма уходит вместе с хэндлом, и
+/// `Drop for V8JsRuntime` join-ит поток V8: тот доделывает текущее задание,
+/// прежде чем прочесть `Shutdown`. На UI-потоке это стояние за чужим
+/// скриптом — до бесконечности, если фрейм крутит цикл. Пока родитель и
+/// ребёнок держали друг друга циклом `Arc`, `Drop` не срабатывал вовсе, и
+/// цены этой никто не платил.
+pub(crate) fn release_frame_handles(handles: Vec<FrameHandle>) {
+    if handles.iter().all(|h| h.js.is_none()) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("lumen-frame-release".to_owned())
+        .spawn(move || drop(handles));
+    if let Err(e) = spawned {
+        eprintln!("iframe: поток освобождения фреймов не запущен ({e}), освобождаю на месте");
+    }
 }
 
 #[cfg(test)]

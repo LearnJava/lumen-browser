@@ -213,10 +213,10 @@ pub(crate) const TOP_BID: u32 = u32::MAX - 1;
 
 /// Один зарегистрированный под-документ `<iframe>` в реестре рантайма.
 ///
-/// Живёт в [`FrameDocSlots`] столько же, сколько контекст страницы: биндинг
-/// никогда не удаляется по одному — замена страницы уносит весь рантайм вместе
-/// с реестром (тот же lifecycle, что у [`crate::img_bitmap_store`]). Навигация
-/// фрейма его ЗАМЕЩАЕТ, сохраняя индекс, — см. [`upsert_binding`].
+/// Живёт в [`FrameDocSlots`] не дольше контекста страницы. Навигация фрейма
+/// его ЗАМЕЩАЕТ, сохраняя индекс, а биндинг хоста, вынутого из документа,
+/// становится надгробием ([`DETACHED_HOST`]) при следующей регистрации, — см.
+/// [`upsert_binding`].
 #[cfg(feature = "v8-backend")]
 pub(crate) struct FrameDocBinding {
     /// `NodeId` элемента-хоста `<iframe>` в документе родителя.
@@ -254,7 +254,14 @@ pub(crate) struct FrameDocBinding {
     /// IDL-набор `winFacade`) — `None` у тестовых биндингов без рантайма и
     /// когда `accessible == false` (глобалы читаются только same-origin,
     /// натив дополнительно гейтит это явно, поле не единственная защита).
-    pub(crate) peer: Option<Arc<dyn crate::frame_peer_bridge::FramePeerBridge>>,
+    ///
+    /// BUG-1682: слабая ссылка. Сильная делала родителя и ребёнка циклом
+    /// `Arc` (у ребёнка в слоте `parent` — рантайм родителя, у родителя в
+    /// `frames` — рантайм ребёнка), и `Drop for V8JsRuntime` не срабатывал
+    /// никогда: поток и изолят каждого фрейма жили до конца процесса. Рантайм
+    /// фрейма держит shell (`FrameHandle::js`); реестр лишь заглядывает в него,
+    /// пока тот жив.
+    pub(crate) peer: Option<Weak<dyn crate::frame_peer_bridge::FramePeerBridge>>,
 }
 
 /// Реестр биндингов одного V8-изолята: дочерние фреймы + ссылки на предков.
@@ -303,8 +310,16 @@ pub(crate) struct FrameDocSlots {
 /// документу, поэтому повторная регистрация ТОГО ЖЕ документа сохраняет
 /// прежний `opaque_id`, а новый документ хоста (навигация, перезагрузка)
 /// остаётся со свежим.
+///
+/// BUG-1682: добавление НОВОГО хоста сначала хоронит биндинги хостов, которых
+/// в собственном документе больше нет ([`bury_detached_bindings`]), — иначе
+/// страница, создающая и удаляющая `<iframe>`, копила бы под-документы без
+/// предела.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, mut binding: FrameDocBinding) -> usize {
+    if !slots.frames.iter().any(|b| b.host_nid == binding.host_nid) {
+        bury_detached_bindings(slots);
+    }
     match slots.frames.iter().position(|b| b.host_nid == binding.host_nid) {
         Some(i) => {
             let old = &slots.frames[i];
@@ -317,6 +332,47 @@ pub(crate) fn upsert_binding(slots: &mut FrameDocSlots, mut binding: FrameDocBin
         None => {
             slots.frames.push(binding);
             slots.frames.len() - 1
+        }
+    }
+}
+
+/// `host_nid` надгробия — биндинга хоста, вынутого из документа (BUG-1682).
+///
+/// Запись остаётся на своём месте, а не удаляется из `frames`: индекс — это
+/// `bid`, который фасады, построенные раньше, держат в замыканиях, и сдвиг
+/// перевёл бы их на чужой документ. Надгробие не находит ни один host-nid
+/// (`contentWindow` вынутого хоста — `null`, HTML LS §4.8.5), не входит в
+/// `window.length` и не держит ни документ ребёнка, ни его рантайм.
+#[cfg(feature = "v8-backend")]
+pub(crate) const DETACHED_HOST: u32 = u32::MAX;
+
+/// Превратить в надгробия биндинги, чей хост больше не подключён к
+/// собственному документу контекста ([`FrameDocSlots::self_doc`]).
+///
+/// Документ занят другим потоком — уборка пропускается до следующей
+/// регистрации: ждать его здесь нельзя, вызывающий держит замок реестра.
+#[cfg(feature = "v8-backend")]
+fn bury_detached_bindings(slots: &mut FrameDocSlots) {
+    let Some(self_doc) = slots.self_doc.as_ref() else { return };
+    let doc = match self_doc.try_lock() {
+        Ok(d) => d,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    for b in slots.frames.iter_mut().filter(|b| b.host_nid != DETACHED_HOST) {
+        // `host_nid` — индекс слота без поколения (`frames.rs` регистрирует
+        // `node.index()`): слот живого хоста не переиспользуется, так что
+        // ошибиться можно лишь в сторону лишней жизни переиспользованного.
+        if !doc.is_connected(lumen_dom::NodeId::from_index(b.host_nid as usize)) {
+            *b = FrameDocBinding {
+                host_nid: DETACHED_HOST,
+                doc: Arc::new(Mutex::new(lumen_dom::Document::new())),
+                url: String::new(),
+                name: None,
+                accessible: false,
+                opaque_id: None,
+                peer: None,
+            };
         }
     }
 }
@@ -939,7 +995,8 @@ pub(crate) fn install_frame_bridge_v8(
         rt.register_native(
             "_lumen_frame_count",
             into_v8_fn0(move || -> u32 {
-                reg.lock().unwrap_or_else(|e| e.into_inner()).frames.len() as u32
+                let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
+                reg.frames.iter().filter(|b| b.host_nid != DETACHED_HOST).count() as u32
             }),
         )?;
     }
