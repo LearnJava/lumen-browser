@@ -472,6 +472,7 @@ mod multicol_table;
 mod multicol_oof;
 mod multicol_flow;
 mod flex_axes;
+mod flex_balance;
 
 mod svg_transform_and_misc;
 mod bug341_differential;

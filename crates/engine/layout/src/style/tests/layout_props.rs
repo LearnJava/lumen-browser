@@ -111,6 +111,34 @@ use super::*;
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
     }
 
+    #[test]
+    fn flex_wrap_balance_and_line_count() {
+        let cases = [
+            ("balance", FlexWrap::Wrap, true),
+            ("balance wrap-reverse", FlexWrap::WrapReverse, true),
+            ("wrap-reverse balance", FlexWrap::WrapReverse, true),
+            ("wrap balance", FlexWrap::Wrap, true),
+            ("nowrap balance", FlexWrap::Nowrap, false),
+            ("balance balance", FlexWrap::Nowrap, false),
+        ];
+        for (css_val, wrap, balance) in cases {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ flex-wrap: {css_val}; flex-line-count: 3; }}"));
+            let root = ComputedStyle::root();
+            let node = doc.get(doc.body().unwrap()).children[0];
+            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!((s.flex_wrap, s.flex_wrap_balance), (wrap, balance), "flex-wrap: {css_val}");
+            assert_eq!(s.flex_line_count, 3);
+        }
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-line-count: 0; } div { flex-flow: column balance; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.flex_line_count, 1);
+        assert_eq!((s.flex_direction, s.flex_wrap, s.flex_wrap_balance), (FlexDirection::Column, FlexWrap::Wrap, true));
+    }
+
     // ── flex-flow shorthand ───────────────────────────────────────────────
 
     #[test]

@@ -1508,6 +1508,18 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.flex_wrap
             };
+            style.flex_wrap_balance = if inh_only_inherit {
+                inherited.flex_wrap_balance
+            } else {
+                init.flex_wrap_balance
+            };
+        }
+        "flex-line-count" => {
+            style.flex_line_count = if inh_only_inherit {
+                inherited.flex_line_count
+            } else {
+                init.flex_line_count
+            };
         }
         "flex-flow" => {
             style.flex_direction = if inh_only_inherit {
@@ -1519,6 +1531,11 @@ fn apply_css_wide_keyword_with(
                 inherited.flex_wrap
             } else {
                 init.flex_wrap
+            };
+            style.flex_wrap_balance = if inh_only_inherit {
+                inherited.flex_wrap_balance
+            } else {
+                init.flex_wrap_balance
             };
         }
         "grid-template-columns" | "grid-template-rows" | "grid-template-areas"

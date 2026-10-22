@@ -901,6 +901,10 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited. Default `Nowrap`.
     /// Phase 0: parsing + storage; реальный multi-line flex — задача 4B.5.
     pub flex_wrap: FlexWrap,
+    /// CSS Flexbox L2 `flex-wrap: balance` — `flex_wrap` is then `Wrap`/`WrapReverse`.
+    pub flex_wrap_balance: bool,
+    /// CSS Flexbox L2 `flex-line-count` — minimum line count of a balanced container. Initial 1.
+    pub flex_line_count: u32,
     /// CSS Flexbox L1 §7.1 — `flex-grow`. Non-inherited. Default `0`.
     /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
     pub flex_grow: f32,
