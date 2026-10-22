@@ -3,7 +3,7 @@ use super::layout_cache::finalize_block_height;
 use super::layout_dispatch::{dispatch_box, finish_after_match};
 use super::block_flow_trampoline::{self, DispatchOutcome};
 use super::multicol_flow::{self, Window};
-use super::multicol_nested::{cut_nested, NestedFlow};
+use super::multicol_nested::{cut_nested, cut_nested_rows, NestedFlow, NestedSeg};
 use super::multicol_fragmentation::{balanced_height, forced_breaks, item_lines, pack, ItemLines};
 
 /// One segment of flow children between `column-span: all` boundaries — CSS
@@ -334,7 +334,9 @@ pub(super) fn run(
                 }
                 Some(mut parent) => {
                     let i = pending_index(&parent);
-                    if let Some(flow) = current.init.nested_out.take() {
+                    if let Some(flow) = current.init.nested_out.take()
+                        && nested_flow_complete(&flow, &current.init)
+                    {
                         parent.init.nested.push((i, flow));
                     }
                     parent.init.work[i] = current.b;
@@ -709,39 +711,60 @@ fn emit_sliced_fragments(frame: &mut Frame, viewport: Size) -> bool {
     true
 }
 
-/// The flow of this multicol container, kept for the parent that may cut it across its columns
-/// ([`MulticolInit::keep_flow`]): only a container of one segment without a block size of its own.
-fn keep_nested_flow(frame: &mut Frame, item_idxs: &[usize], viewport: Size) {
-    let init = &frame.init;
-    if init.segments.len() != 1
-        || init.segments[0].span_idx.is_some()
-        || init.col_rows.is_some()
-        || init.container_h.is_some()
-        || init.s.position != Position::Static
-    {
-        return;
-    }
-    let col_w = init.col_w;
-    let items = item_idxs
-        .iter()
-        .map(|&i| {
-            let c = &init.work[i];
-            let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
-            let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, col_w, viewport);
-            (c.clone(), mt, mb)
-        })
-        .collect();
+/// May this multicol container keep its flow for a parent that cuts it across its columns
+/// ([`MulticolInit::keep_flow`])? Not with a block size of its own or out of the flow; a container
+/// of one plain segment, or one with rows of columns (and spanners between the segments).
+fn nested_flow_eligible(init: &MulticolInit) -> bool {
+    init.container_h.is_none()
+        && init.s.position == Position::Static
+        && init.wrap_auto.is_none()
+        && (init.col_rows.is_some() || (init.segments.len() == 1 && init.segments[0].span_idx.is_none()))
+}
+
+/// The flow being kept for the parent, started on first use.
+fn nested_flow_mut(init: &mut MulticolInit) -> &mut NestedFlow {
     let flow = NestedFlow {
-        items,
+        segs: Vec::new(),
+        rows: init.col_rows.map(|r| (r.col_h, r.row_gap)),
         n: init.n_cols as usize,
-        col_w,
+        col_w: init.col_w,
         col_gap: init.col_gap,
         balance: init.balance,
         content_x: init.content_x,
         edge_top: init.s.border_top_width + init.padding_top,
         edge_bottom: init.s.border_bottom_width + init.padding_bottom,
     };
-    frame.init.nested_out = Some(Box::new(flow));
+    init.nested_out.get_or_insert_with(|| Box::new(flow))
+}
+
+/// Did every segment of columns and every spanner of the container reach its kept flow? A segment
+/// that was placed whole (atomic, a grid, ...) leaves a hole, and the flow cannot be cut.
+fn nested_flow_complete(flow: &NestedFlow, init: &MulticolInit) -> bool {
+    let wanted: usize = init
+        .segments
+        .iter()
+        .map(|s| usize::from(!s.item_idxs.is_empty()) + usize::from(s.span_idx.is_some()))
+        .sum();
+    flow.segs.len() == wanted
+}
+
+/// The flow of this multicol container, kept for the parent that may cut it across its columns
+/// ([`MulticolInit::keep_flow`]): the items of the segment being measured.
+fn keep_nested_flow(frame: &mut Frame, item_idxs: &[usize], viewport: Size) {
+    if !nested_flow_eligible(&frame.init) || item_idxs.is_empty() {
+        return;
+    }
+    let col_w = frame.init.col_w;
+    let items = item_idxs
+        .iter()
+        .map(|&i| {
+            let c = &frame.init.work[i];
+            let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
+            let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, col_w, viewport);
+            (c.clone(), mt, mb)
+        })
+        .collect();
+    nested_flow_mut(&mut frame.init).segs.push(NestedSeg::Cols(items));
 }
 
 /// Fragmentation L3 §4 — the segment is one nested multicol container (with the flow it kept) that
@@ -764,7 +787,9 @@ fn emit_nested_fragments(frame: &mut Frame, item_idxs: &[usize], viewport: Size)
     }
     let (content_x, pitch, cur_y) = (init.content_x, col_w + init.col_gap, init.cur_y);
     let col_dx = |m: usize| content_x + m as f32 * pitch;
-    let Some(cut) = cut_nested(&init.nested[pos].1, b, h, mt, cur_y, &col_dx, viewport) else { return false };
+    let nf = &init.nested[pos].1;
+    let cut = if nf.rows.is_some() { cut_nested_rows(nf, b, h, mt, cur_y, &col_dx, viewport) } else { cut_nested(nf, b, h, mt, cur_y, &col_dx, viewport) };
+    let Some(cut) = cut else { return false };
     // Out-of-flow boxes of the container itself are cut against one window per fragment.
     let windows: Vec<(f32, f32)> = (0..cut.frags.len()).map(|m| (m as f32 * h, (m + 1) as f32 * h)).collect();
     frame.init.frag_cols = Some(FragCols { windows, first_h: h, later_h: h, origin: cur_y });
@@ -2035,6 +2060,10 @@ fn post_span_item(frame: &mut Frame, span_i: usize, viewport: Size) {
     let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, content_width, viewport);
     let new_cur_y = c.rect.y + c.rect.height + mb;
     let placed = c.clone();
+    if frame.init.keep_flow && nested_flow_eligible(&frame.init) {
+        let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, content_width, viewport);
+        nested_flow_mut(&mut frame.init).segs.push(NestedSeg::Span(placed.clone(), mt, mb));
+    }
     // A spanner after a row of columns eats into that row's `column-height`.
     if let Some(used) = frame.init.row_used {
         frame.init.row_used = Some(used + (new_cur_y - frame.init.cur_y));

@@ -62,3 +62,27 @@
 - Гейт перед закрывающим коммитом: `cargo clippy -p lumen-layout -p lumen-paint --all-targets -- -D warnings` + таргетные тесты
   (`scripts/scoped-test.sh`), графические тесты — полный `python graphic_tests/run.py --continue-on-fail` (рисование меняется) либо, если захват экрана недоступен, `python graphic_tests/dump_golden.py` и пометка об этом в сообщении коммита.
 - Машина медленная: `find`/широкий `grep` по репозиторию зависают — искать через `Grep` с узким `path`.
+
+## Состояние на конец сессии 2 (код написан, `cargo check` чист, 007 ещё 94240 px)
+
+Сделано (всё в ветке, WIP-коммит):
+- `multicol_nested.rs`: `NestedSeg { Cols, Span }`, `NestedFlow.segs/rows`, новая `cut_nested_rows` (курсор `(m, y)`, свежий ряд после спаннера,
+  обрезок ряда по концу фрагмента, балансировка последнего ряда), `ComputedStyle::multicol_fragment` ставится на фрагменты.
+- `multicol_trampoline.rs`: `nested_flow_eligible/nested_flow_mut/nested_flow_complete`, `keep_nested_flow` дописывает сегменты,
+  `post_span_item` дописывает `Span`, `emit_nested_fragments` зовёт `cut_nested_rows` при `nf.rows.is_some()`.
+- paint: `MulticolGeom::fragment_bottom` (из `multicol_fragment`), `read_bands` — свежий ряд после спаннера (`bottom <= row_start + col_h`),
+  `gap_before` (нет row-gap между полосой и свежим рядом вплотную к спаннеру), `clip()` нижней границы последней полосы.
+- Бинарь `target/dev-release/lumen.exe` собран с этим кодом (5 мин, `CARGO_INCREMENTAL=0 cargo build --profile dev-release --bin lumen`);
+  базовый бинарь слота p4-work скопирован в `.tmp/lumen-base.exe` (срез 99).
+
+Результат: `python .tmp/gaps_pixdiff.py multicol/multicol-gap-decorations-007` → thick 94240 (как до правок): вложенный поток НЕ режется.
+Дальше (отладка, в таком порядке):
+1. Почему `emit_nested_fragments` не срабатывает: добавить временный `eprintln!` в `keep_nested_flow`/`nested_flow_complete`/`emit_nested_fragments`
+   (достигается ли `keep_nested_flow` для обоих Cols-сегментов? `nested_flow_complete` считает `segs.len()` против числа сегментов с items + спаннеров;
+   `wants_nested_flow` требует у внешнего `seg.sliceable && item_idxs.len()==1`; `is_cuttable_multicol(b)` требует, чтобы дети внутри бокса —
+   у вложенного с рядами/спаннером монолитная раскладка может выпускать детей за rect; `forced_rows_wanted(frame)` может обходить `emit_sliced_fragments`
+   для внутреннего; `scan_oof`).
+2. Тест слоя layout рядом с `multicol_nested_break.rs` (три колонки по 20 до спаннера, ряд 40..140, обрезок 160..200, второй фрагмент 100/100/100 + 10/10/10).
+3. После 007: полный `python .tmp/gaps_pixdiff.py` (7 мин; базово 304 identical, 8 thick, `.tmp/lumen-base.exe` для сравнения — поменять `r.BIN`),
+   `cargo clippy -p lumen-layout -p lumen-paint --all-targets -- -D warnings`, `scripts/scoped-test.sh`, `graphic_tests/dump_golden.py`,
+   документы (`CSS-SPECS.md` ячейка css-gaps «Срез 100» через python с `newline=''`), удалить указатель из `STATUS-P4.MD`.

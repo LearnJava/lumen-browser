@@ -631,6 +631,10 @@ pub struct ComputedStyle {
     /// default: the edges a break cuts lose them). Read by the nested-multicol cut in
     /// `multicol_trampoline`; not inherited.
     pub box_decoration_clone: bool,
+    /// The box is one fragment of a multicol container that its multicol parent cut across its own
+    /// columns (`multicol_nested`): the rows of columns of the last band end where the fragment
+    /// does, not at a full `column-height`. Set by the layout, never by the cascade.
+    pub multicol_fragment: bool,
     /// CSS Fragmentation L3 §3.1 — `break-before`. Phase 0 — enum со
     /// значениями auto/avoid/always/page/column/region. Не наследуется.
     pub break_before: BreakValue,
@@ -1523,6 +1527,7 @@ impl ComputedStyle {
             column_fill_balance: true,
             column_fill_balance_all: false,
             box_decoration_clone: false,
+            multicol_fragment: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
@@ -1938,6 +1943,7 @@ impl ComputedStyle {
             column_fill_balance: true,
             column_fill_balance_all: false,
             box_decoration_clone: false,
+            multicol_fragment: false,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,

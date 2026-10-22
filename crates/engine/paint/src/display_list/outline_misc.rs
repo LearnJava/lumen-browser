@@ -139,6 +139,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             n_cols,
             col_h,
             row_gap: s.row_gap.resolve_or_zero(em, content_h, vp).max(0.0),
+            fragment_bottom: s.multicol_fragment.then_some(content_y + content_h),
         };
         if crate::multicol_gap_decorations::emit_multicol_row_rules(b, &geom, content_h, out) {
             return;
@@ -177,6 +178,7 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         n_cols: band_cols,
         col_h: content_h,
         row_gap: 0.0,
+        fragment_bottom: None,
     };
     if crate::multicol_gap_decorations::emit_multicol_spanner_rules(b, &geom, content_h, out) {
         return;
