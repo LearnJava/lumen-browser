@@ -13522,6 +13522,7 @@ var document = {
     // underlying state is `_lumen_last_focused_nid`, kept in step with the
     // shell's `focused_node` by `_lumen_focus_update`.
     get activeElement() {
+        _lumen_focus_drop_if_disconnected();
         var n = _lumen_last_focused_nid;
         if (n === null || n === undefined || n === -1) {
             var bid = _lumen_u2n(_lumen_get_body());
