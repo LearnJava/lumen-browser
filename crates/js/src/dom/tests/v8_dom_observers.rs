@@ -1327,3 +1327,56 @@ fn resize_observer_layout_delivery_follows_raf_in_same_frame() {
     rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
     assert_eq!(rt.eval("_ro_ord.join()").unwrap(), lumen_core::JsValue::String("raf,ro".into()));
 }
+
+#[test]
+fn mutation_observer_append_and_remove_report_neighbours() {
+    // BUG-1452: the neighbours of the record now come from the native
+    // `_lumen_get_siblings` instead of a copy of the whole child list.
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var _mo_n_recs = [];
+                var obs = new MutationObserver(function(records) { _mo_n_recs = _mo_n_recs.concat(records); });
+                var p = document.createElement('div');
+                var a = document.createElement('span'); a.id = 'a';
+                var b = document.createElement('span'); b.id = 'b';
+                var c = document.createElement('span'); c.id = 'c';
+                p.appendChild(a);
+                p.appendChild(b);
+                document.body.appendChild(p);
+                obs.observe(p, { childList: true });
+                p.appendChild(c);
+                p.removeChild(b);
+            "#).unwrap();
+    rt.eval("_lumen_flush_mutation_observers()").unwrap();
+    assert_eq!(rt.eval("_mo_n_recs.length").unwrap(), lumen_core::JsValue::Number(2.0));
+    // append: previous = old last child, next = none
+    assert_eq!(
+        rt.eval("_mo_n_recs[0].previousSibling.id + '|' + _mo_n_recs[0].nextSibling").unwrap(),
+        lumen_core::JsValue::String("b|null".into())
+    );
+    // remove: neighbours as they were before the removal
+    assert_eq!(
+        rt.eval("_mo_n_recs[1].previousSibling.id + '|' + _mo_n_recs[1].nextSibling.id").unwrap(),
+        lumen_core::JsValue::String("a|c".into())
+    );
+}
+
+#[test]
+fn get_siblings_native_returns_neighbours_and_sentinels() {
+    // BUG-1452: `[prev, next]`, 4294967295 (`u32::MAX`) stands for "none".
+    let rt = v8_runtime_with_dom(make_doc());
+    rt.eval(r#"
+                var p = document.createElement('div');
+                var k = [];
+                for (var i = 0; i < 3; i++) { var s = document.createElement('span'); p.appendChild(s); k.push(s.__nid__); }
+                var alien = document.createElement('i');
+                var r = [_lumen_get_siblings(p.__nid__, k[0]), _lumen_get_siblings(p.__nid__, k[1]),
+                         _lumen_get_siblings(p.__nid__, k[2]), _lumen_get_siblings(p.__nid__, alien.__nid__)];
+                var NONE = 4294967295;
+                var out = r.map(function(x) { return x.map(function(n) { return n === NONE ? '-' : k.indexOf(n); }).join(','); }).join(';');
+            "#).unwrap();
+    assert_eq!(
+        rt.eval("out").unwrap(),
+        lumen_core::JsValue::String("-,1;0,2;1,-;-,-".into())
+    );
+}
