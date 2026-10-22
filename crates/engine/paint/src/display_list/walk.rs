@@ -1241,7 +1241,7 @@ fn dispatch<'a>(
             // элемента и переносится его transform-ом — эмитится внутри
             // PushTransform, снаружи filter/backdrop-filter.
             if let Some(clip) = &b.style.clip_path {
-                let cmds = clip_path_commands(clip, b.rect);
+                let cmds = clip_path_commands(clip, ClipRefs::of_box(b));
                 clip_path_layers = cmds.len();
                 out.extend(cmds);
             }

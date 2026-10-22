@@ -284,7 +284,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     // PushTransform, но снаружи filter/backdrop-filter (клип применяется к
     // отфильтрованному выводу, CSS Filter Effects L1 §4).
     if let Some(clip) = &s.clip_path {
-        for cmd in clip_path_commands(clip, b.rect) {
+        for cmd in clip_path_commands(clip, ClipRefs::of_box(b)) {
             pre.push(cmd);
             post.push(DisplayCommand::PopClip);
         }

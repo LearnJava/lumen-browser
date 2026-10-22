@@ -303,7 +303,7 @@ pub use values::svg_filter::{
     SvgFilterPrimitive,
 };
 pub use values::transform::{
-    BackfaceVisibility, ClipPath, SvgClipPath, SvgClipPlacement, SvgClipSubpath, FilterFn, FilterUrl, GradientStop, MaskComposite, MaskLayer, MaskMode,
+    BackfaceVisibility, ClipPath, GeometryBox, SvgClipPath, SvgClipPlacement, SvgClipSubpath, FilterFn, FilterUrl, GradientStop, MaskComposite, MaskLayer, MaskMode,
     ShapeValue, TransformFn, TransformStyle,
 };
 // Вызывателей внутри производственного `style.rs` у них нет — только

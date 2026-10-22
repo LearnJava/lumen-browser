@@ -8,7 +8,7 @@
 //! и соседние модули `style::parse`.
 
 use crate::style::parse::transform::parse_length_px;
-use crate::style::{ClipPath, FillRule, ShapeValue};
+use crate::style::{ClipPath, FillRule, GeometryBox, ShapeValue};
 
 /// Распарсить `<length-percentage>` координату basic-shape: `%` →
 /// `ShapeValue::Pct`, остальное через `parse_length_px` → `ShapeValue::Px`.
@@ -25,6 +25,128 @@ fn parse_shape_value(s: &str) -> Option<ShapeValue> {
 /// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`,
 /// `path([<fill-rule>,]? "<svg>")` (CSS Shapes L1 §4).
 pub(in crate::style) fn parse_clip_path(s: &str) -> Option<ClipPath> {
+    // `[<basic-shape> || <geometry-box>]` (CSS Masking L1 §3): бокс стоит до или после формы.
+    let mut geometry = None;
+    let mut shape = None;
+    for tok in split_top_level(s.trim()) {
+        if let Some(g) = parse_geometry_box(tok) {
+            if geometry.replace(g).is_some() {
+                return None;
+            }
+        } else if shape.replace(tok).is_some() {
+            return None;
+        }
+    }
+    match (shape, geometry) {
+        (None, None) => None,
+        (None, Some(geometry)) => Some(ClipPath::Boxed { shape: None, geometry }),
+        (Some(shape), None | Some(GeometryBox::BorderBox)) => parse_basic_shape(shape),
+        (Some(shape), Some(geometry)) => match parse_basic_shape(shape)? {
+            ClipPath::Url(_) => None,
+            shape => Some(ClipPath::Boxed { shape: Some(Box::new(shape)), geometry }),
+        },
+    }
+}
+
+/// Токены верхнего уровня, разделённые пробелами вне скобок.
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, None);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(st) = start.take() {
+                    out.push(&s[st..i]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(i);
+    }
+    if let Some(st) = start {
+        out.push(&s[st..]);
+    }
+    out
+}
+
+fn parse_geometry_box(tok: &str) -> Option<GeometryBox> {
+    Some(match tok.to_ascii_lowercase().as_str() {
+        "border-box" => GeometryBox::BorderBox,
+        "padding-box" => GeometryBox::PaddingBox,
+        "content-box" => GeometryBox::ContentBox,
+        "margin-box" => GeometryBox::MarginBox,
+        "fill-box" => GeometryBox::FillBox,
+        "stroke-box" => GeometryBox::StrokeBox,
+        "view-box" => GeometryBox::ViewBox,
+        _ => return None,
+    })
+}
+
+/// Радиус `circle()`/`ellipse()`: `closest-side | farthest-side | <length-percentage [0,∞)>`.
+fn parse_radius(tok: &str) -> Option<ShapeValue> {
+    let v = match tok.to_ascii_lowercase().as_str() {
+        "closest-side" => ShapeValue::ClosestSide,
+        "farthest-side" => ShapeValue::FarthestSide,
+        _ => parse_shape_value(tok)?,
+    };
+    match v {
+        ShapeValue::Px(n) | ShapeValue::Pct(n) if n < 0.0 => None,
+        v => Some(v),
+    }
+}
+
+/// Делит аргументы формы на токены до и после ключевого слова `at`.
+fn split_at_keyword(inner: &str) -> (Vec<&str>, Option<Vec<&str>>) {
+    let toks: Vec<&str> = inner.split_whitespace().collect();
+    match toks.iter().position(|t| t.eq_ignore_ascii_case("at")) {
+        Some(i) => (toks[..i].to_vec(), Some(toks[i + 1..].to_vec())),
+        None => (toks, None),
+    }
+}
+
+/// `inset(…)`: `<sides>{1,4} [round <radii>{1,4} [/ <radii>{1,4}]]?`.
+fn parse_inset(inner: &str) -> Option<ClipPath> {
+    let toks: Vec<&str> = inner.split_whitespace().collect();
+    let round = toks.iter().position(|t| t.eq_ignore_ascii_case("round"));
+    let values = |toks: &[&str]| -> Option<Vec<ShapeValue>> {
+        let v: Option<Vec<ShapeValue>> = toks.iter().map(|t| parse_shape_value(t)).collect();
+        v.filter(|v| (1..=4).contains(&v.len()))
+    };
+    let sides = values(&toks[..round.unwrap_or(toks.len())])?;
+    let Some(i) = round else { return Some(ClipPath::Inset(sides)) };
+    let radii = &toks[i + 1..];
+    let (rx, ry) = match radii.iter().position(|t| *t == "/") {
+        Some(j) => (values(&radii[..j])?, values(&radii[j + 1..])?),
+        None => (values(radii)?, Vec::new()),
+    };
+    Some(ClipPath::InsetRound { sides, rx, ry })
+}
+
+/// `at <position>`: 1–2 значения, ключевые слова `left|center|right|top|bottom`.
+/// Трёх- и четырёхзначная форма (`right 10px bottom 20px`) не поддержана.
+fn parse_position(toks: &[&str]) -> Option<(ShapeValue, ShapeValue)> {
+    let kw = |t: &str| match t.to_ascii_lowercase().as_str() {
+        "left" | "top" => Some(ShapeValue::Pct(0.0)),
+        "right" | "bottom" => Some(ShapeValue::Pct(100.0)),
+        "center" => Some(ShapeValue::Pct(50.0)),
+        _ => None,
+    };
+    let val = |t: &str| kw(t).or_else(|| parse_shape_value(t));
+    let center = ShapeValue::Pct(50.0);
+    let is = |t: &str, names: &[&str]| names.iter().any(|n| t.eq_ignore_ascii_case(n));
+    match toks {
+        [a] if is(a, &["top", "bottom"]) => Some((center, val(a)?)),
+        [a] => Some((val(a)?, center)),
+        [a, b] if is(a, &["top", "bottom"]) || is(b, &["left", "right"]) => Some((val(b)?, val(a)?)),
+        [a, b] => Some((val(a)?, val(b)?)),
+        _ => None,
+    }
+}
+
+fn parse_basic_shape(s: &str) -> Option<ClipPath> {
     let s = s.trim();
     let open = s.find('(')?;
     let close = s.rfind(')')?;
@@ -70,47 +192,33 @@ pub(in crate::style) fn parse_clip_path(s: &str) -> Option<ClipPath> {
                 Some(ClipPath::Path(pts, fill_rule))
             }
         }
-        "inset" => {
-            let parts: Vec<ShapeValue> = inner
-                .split_whitespace()
-                .filter_map(parse_shape_value)
-                .collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(ClipPath::Inset(parts))
-            }
-        }
+        "inset" => parse_inset(inner),
         "circle" => {
-            // `radius` [`at cx cy`]
-            let (radius_part, at_part) = if let Some(idx) = inner.find(" at ") {
-                (&inner[..idx], Some(&inner[idx + 4..]))
-            } else {
-                (inner, None)
+            // `[<radius>]? [at <position>]?`; без радиуса — `closest-side`.
+            let (radii, at) = split_at_keyword(inner);
+            let radius = match radii.as_slice() {
+                [] => ShapeValue::ClosestSide,
+                [r] => parse_radius(r)?,
+                _ => return None,
             };
-            let radius = parse_shape_value(radius_part.trim())?;
-            let center = at_part.and_then(parse_at_pair);
+            let center = match at {
+                Some(t) => Some(parse_position(&t)?),
+                None => None,
+            };
             Some(ClipPath::Circle { radius, center })
         }
         "ellipse" => {
-            let (radii_part, at_part) = if let Some(idx) = inner.find(" at ") {
-                (&inner[..idx], Some(&inner[idx + 4..]))
-            } else {
-                (inner, None)
+            let (radii, at) = split_at_keyword(inner);
+            let (rx, ry) = match radii.as_slice() {
+                [] => (ShapeValue::ClosestSide, ShapeValue::ClosestSide),
+                [rx, ry] => (parse_radius(rx)?, parse_radius(ry)?),
+                _ => return None,
             };
-            let radii: Vec<ShapeValue> = radii_part
-                .split_whitespace()
-                .filter_map(parse_shape_value)
-                .collect();
-            if radii.len() < 2 {
-                return None;
-            }
-            let center = at_part.and_then(parse_at_pair);
-            Some(ClipPath::Ellipse {
-                rx: radii[0],
-                ry: radii[1],
-                center,
-            })
+            let center = match at {
+                Some(t) => Some(parse_position(&t)?),
+                None => None,
+            };
+            Some(ClipPath::Ellipse { rx, ry, center })
         }
         "polygon" => {
             // `polygon([<fill-rule>,]? x1 y1, ...)`. Опциональный fill-rule —
@@ -143,14 +251,5 @@ pub(in crate::style) fn parse_clip_path(s: &str) -> Option<ClipPath> {
             }
         }
         _ => None,
-    }
-}
-
-fn parse_at_pair(s: &str) -> Option<(ShapeValue, ShapeValue)> {
-    let parts: Vec<ShapeValue> = s.split_whitespace().filter_map(parse_shape_value).collect();
-    if parts.len() >= 2 {
-        Some((parts[0], parts[1]))
-    } else {
-        None
     }
 }
