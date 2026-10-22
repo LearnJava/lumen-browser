@@ -89,12 +89,11 @@ impl EastAsian {
                 continue;
             }
             let mut piece = String::new();
-            if self.gap_zero {
-                if let Some(p) = prev {
-                    if p > i + 1 || g < 1000 {
-                        piece.push_str(self.digits[0]);
-                    }
-                }
+            if self.gap_zero
+                && let Some(p) = prev
+                && (p > i + 1 || g < 1000)
+            {
+                piece.push_str(self.digits[0]);
             }
             let lone_one_man = self.drop_one_before_man && i == 1 && g == 1;
             if !lone_one_man {
@@ -618,7 +617,6 @@ mod tests {
 
 #[cfg(test)]
 mod wpt_cases {
-    use super::*;
     use crate::counters::{format_counter_with_registry, CounterStyleRegistry};
 
     /// Every row of the table extracted from the WPT references must agree.

@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-21",
+ "generated": "2026-10-22",
  "counts": {
-  "open": 322,
-  "fixed": 1280,
+  "open": 319,
+  "fixed": 1293,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1605,
+ "total_bugs": 1615,
  "phases": [
   {
    "id": "P0",
@@ -843,9 +843,9 @@
     {
      "id": "SVG-FILTER",
      "title": "SVG-FILTER: фильтры `<filter>`/`fe*`",
-     "status": "planned",
+     "status": "done",
      "size": "XL",
-     "note": "SVG-фильтры (Filter Effects L1 §«Filter Functions: url()» и `<filter>`): сейчас `filter: url(#id)` и `<filter>` с примитивами `fe*` не делают ничего — `FilterFn` (`crates/engine/layout/src/style/values/transform.rs:149`) знает 9 функций CSS, `parse_filter_fn` (`style/parse/transform.rs:236`) разбирает только их, `<filter>`/`fe*` есть лишь в таблице тегов `html-parser/src/foreign_content.rs`. Проба (`--screenshot`): `<rect filter=\"url(#f)\">` с 16 примитивами (`feFlood`, `feOffset`, `feGaussianBlur`, `feColorMatrix`, `feComposite`, `feDropShadow`, `feDisplacementMap`, `feImage`, `feTile`, `feMorphology`, `feTurbulence`, `feDiffuseLighting`, `feConvolveMatrix`, `feComponentTransfer`, `feBlend`, `feMerge`) рисуется без изменений, то же `filter:url(#g)` на `<div>`. Нужно: (1) тип `FilterRef::Url` рядом с `FilterFn` в `ComputedStyle::filter`/`backdrop_filter` (список функций и ссылок в порядке записи); (2) разбор `<filter>`, `filterUnits`/`primitiveUnits`, подрегиона `x/y/width/height`, графа примитивов (`in`/`in2`/`result`, `color-interpolation-filters`); (3) исполнение графа в `cpu_raster.rs` и в `renderer.rs` — две независимые реализации (`crates/engine/paint/CLAUDE.md`); (4) `getComputedStyle` для `url()`, мутации (`svg-mutation-*`), внешний ресурс (`filter-external-*`), tainting кросс-доменного `feImage`/`feDisplacementMap`; (5) свойства `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` — строка `CSS-SPECS.md`; (6) интерфейсы `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Масштаб: 94 id среза S24 (`tainting-*` 17, `feImage*` 17, `svg-mutation-*` 12, `effect-reference-*` 10, остальные — `fe*-*`, `filter-region-*`, `filter-subregion-01`, `svg-filter-*-user-space*`, `empty-element-with-filter*`) + 24 CSSOM id; кластер — `docs/wpt-vendor-notes/css.md` §filter-effects + css-inline + css-tables + css-align. Критерий готовности: `svg-feflood-001.html`, `tainting-feflood-001.html`, `effect-reference-feimage-001.html`, `feImage-with-hidden-container-defs.html`, `svg-mutation-function-to-url.html` зелёные в `run_corpus.py --prefixes css/filter-effects`.",
+     "note": "**Сделано (2026-10-22, ветка `p1-svg-filter`), срез 1 — `filter: url(#id)` на CPU-растре:** `FilterFn::Url(FilterUrl)` (`style/values/transform.rs`; разбор `url(#id)` и атрибута `filter=\"…\"` у SVG-элементов, `getComputedStyle` → `url(\"#id\")`); каскад разворачивает ссылку в граф `SvgFilter` (`box_tree/svg_filter.rs`: `filterUnits`/`primitiveUnits`, область по умолчанию `-10% -10% 120% 120%`, подобласти, `in`/`in2`/`result`, `color-interpolation-filters` — по умолчанию linearRGB) и кладёт user-space-матрицу/bbox элемента (`place_filters`); исполнитель `paint/src/svg_filter.rs` (premultiplied f32, sRGB↔linearRGB на примитив) — `feFlood`, `feOffset`, `feGaussianBlur` (3×box при σ≥2), `feColorMatrix`, `feComposite` (6 операторов), `feBlend`, `feMerge`, `feComponentTransfer`, `feDropShadow`; `cpu_raster::composite_svg_filter_chain` (цепочка с `url()` + CSS-функциями; фильтр работает и на пустом элементе); фигуры/текст SVG оборачиваются в `PushFilter` внутри клипа и под маской; битая ссылка — вся цепочка игнорируется; `feDisplacementMap`/`feTile`/`feMorphology`/`feConvolveMatrix` пока пропускают вход, остальные `fe*` — прозрачный чёрный. A/B по 114 reftest `css/filter-effects` (svg-fe*, effect-reference*, svg-mutation*, tainting*, feImage*, filter-region*, filter-subregion, empty-element*): thick→identical 12 (+1 thin-only), identical→thick 3 (`effect-reference-rename-002` — нет инвалидации при смене id, `filter-region-transformed-*` ×2 — bbox HTML-бокса без ink потомков); `svg-filter-vs-mask` (атрибут `filter=\"blur()\"` раньше игнорировался) исправлен — маска SVG-фигуры теперь режет и ink фильтра вне бокса. Остаток — **SVG-FILTER-2**. Исходная постановка: SVG-фильтры (Filter Effects L1 §«Filter Functions: url()» и `<filter>`): сейчас `filter: url(#id)` и `<filter>` с примитивами `fe*` не делают ничего — `FilterFn` (`crates/engine/layout/src/style/values/transform.rs:149`) знает 9 функций CSS, `parse_filter_fn` (`style/parse/transform.rs:236`) разбирает только их, `<filter>`/`fe*` есть лишь в таблице тегов `html-parser/src/foreign_content.rs`. Проба (`--screenshot`): `<rect filter=\"url(#f)\">` с 16 примитивами (`feFlood`, `feOffset`, `feGaussianBlur`, `feColorMatrix`, `feComposite`, `feDropShadow`, `feDisplacementMap`, `feImage`, `feTile`, `feMorphology`, `feTurbulence`, `feDiffuseLighting`, `feConvolveMatrix`, `feComponentTransfer`, `feBlend`, `feMerge`) рисуется без изменений, то же `filter:url(#g)` на `<div>`. Нужно: (1) тип `FilterRef::Url` рядом с `FilterFn` в `ComputedStyle::filter`/`backdrop_filter` (список функций и ссылок в порядке записи); (2) разбор `<filter>`, `filterUnits`/`primitiveUnits`, подрегиона `x/y/width/height`, графа примитивов (`in`/`in2`/`result`, `color-interpolation-filters`); (3) исполнение графа в `cpu_raster.rs` и в `renderer.rs` — две независимые реализации (`crates/engine/paint/CLAUDE.md`); (4) `getComputedStyle` для `url()`, мутации (`svg-mutation-*`), внешний ресурс (`filter-external-*`), tainting кросс-доменного `feImage`/`feDisplacementMap`; (5) свойства `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` — строка `CSS-SPECS.md`; (6) интерфейсы `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Масштаб: 94 id среза S24 (`tainting-*` 17, `feImage*` 17, `svg-mutation-*` 12, `effect-reference-*` 10, остальные — `fe*-*`, `filter-region-*`, `filter-subregion-01`, `svg-filter-*-user-space*`, `empty-element-with-filter*`) + 24 CSSOM id; кластер — `docs/wpt-vendor-notes/css.md` §filter-effects + css-inline + css-tables + css-align. Критерий готовности: `svg-feflood-001.html`, `tainting-feflood-001.html`, `effect-reference-feimage-001.html`, `feImage-with-hidden-container-defs.html`, `svg-mutation-function-to-url.html` зелёные в `run_corpus.py --prefixes css/filter-effects`.",
      "bugs": [
       "BUG-1538"
      ]
@@ -853,11 +853,22 @@
     {
      "id": "COUNTER-STYLES-BUILTIN",
      "title": "COUNTER-STYLES-BUILTIN: 40 встроенных counter-style",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Встроенные counter-style CSS Counter Styles 3 §6 не реализованы: `counter(a, hebrew)` при `counter-reset: a 12` даёт `12` для всех 40 имён (`armenian`, `lower-armenian`, `upper-armenian`, `georgian`, `hebrew`, `cjk-decimal`, `cjk-earthly-branch`, `cjk-heavenly-stem`, `hiragana`, `hiragana-iroha`, `katakana`, `katakana-iroha`, `japanese-informal`, `japanese-formal`, `korean-hangul-formal`, `korean-hanja-informal`, `korean-hanja-formal`, `simp-chinese-informal`, `simp-chinese-formal`, `trad-chinese-informal`, `trad-chinese-formal`, `ethiopic-numeric`, `arabic-indic` и 17 индийских и юго-восточных систем счисления, `disclosure-open/closed`); в `crates/engine/layout/src/counters.rs:1700-1740` знают только `decimal`, `decimal-leading-zero`, `lower/upper-alpha|latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`. Объём: объявить 40 стилей как предопределённые `@counter-style` в `CounterStyleRegistry` по таблицам §6.1–§6.3 (системы `additive`/`numeric`/`alphabetic`/`fixed`, `suffix`, `negative`, `pad`, `range`, `speak-as`), для CJK — формальные и неформальные записи; `list-style-type: <имя>` и `counter(.., <имя>)` берут стиль из реестра. Масштаб: 158 reftest `css/css-counter-styles/<имя>/` (до готовности нужно ещё BUG-1546 — `display: inline` для `<bdi>`/`<bdo>` — и BUG-1548 — ширина `inside`-маркера, иначе эталоны остаются `thick`); кластер — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles. Критерий готовности: `css-counter-styles/hebrew/css3-counter-styles-015.html`, `cjk-decimal/counter-cjk-decimal.html`, `japanese-formal/counter-japanese-formal.html` зелёные в `run_corpus.py --prefixes css/css-counter-styles`.",
+     "note": "**Сделано (2026-10-22, ветка `p1-counter-styles-builtin`):** `crates/engine/layout/src/counter_builtin.rs` — 40 предопределённых стилей §6 (таблицы `CounterStyleDef` + алгоритмические `CounterSystem::Builtin`: девять восточноазиатских «длинных» стилей и `ethiopic-numeric`), поиск «авторский `@counter-style` → таблица → прежние ключевые слова» (`counters.rs::lookup_style`); `counter()` отдаёт только представление, `::marker` — с префиксом и суффиксом (по умолчанию `\". \"`); `lower-greek` стал алфавитным. Вместе закрыты BUG-1546 (inline UA-`display` для `bdi`/`kbd`/… и пользовательских элементов, `<bdi>` — изолят с `dir=auto`) и BUG-1548 (`inside`-маркер — первый inline-сегмент строки пункта, `PseudoKind::Marker`); UAX #9 L2 не разворачивает серию через границу изолята. Итог: `counter-cjk-decimal`, `counter-japanese-formal` (и ещё девять `counter-*` без `-extended`), `hebrew/css3-counter-styles-015` и 49 других reftest `css-counter-styles` совпадают с эталоном попиксельно (61 из 234, было 0; wptrunner: 3 файла критерия зелёные). Остаток — `COUNTER-STYLES-2`, BUG-1547 (`<ol start>`/`<li value>`), BUG-1658 (область счётчика). Встроенные counter-style CSS Counter Styles 3 §6 не реализованы: `counter(a, hebrew)` при `counter-reset: a 12` даёт `12` для всех 40 имён (`armenian`, `lower-armenian`, `upper-armenian`, `georgian`, `hebrew`, `cjk-decimal`, `cjk-earthly-branch`, `cjk-heavenly-stem`, `hiragana`, `hiragana-iroha`, `katakana`, `katakana-iroha`, `japanese-informal`, `japanese-formal`, `korean-hangul-formal`, `korean-hanja-informal`, `korean-hanja-formal`, `simp-chinese-informal`, `simp-chinese-formal`, `trad-chinese-informal`, `trad-chinese-formal`, `ethiopic-numeric`, `arabic-indic` и 17 индийских и юго-восточных систем счисления, `disclosure-open/closed`); в `crates/engine/layout/src/counters.rs:1700-1740` знают только `decimal`, `decimal-leading-zero`, `lower/upper-alpha|latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`. Объём: объявить 40 стилей как предопределённые `@counter-style` в `CounterStyleRegistry` по таблицам §6.1–§6.3 (системы `additive`/`numeric`/`alphabetic`/`fixed`, `suffix`, `negative`, `pad`, `range`, `speak-as`), для CJK — формальные и неформальные записи; `list-style-type: <имя>` и `counter(.., <имя>)` берут стиль из реестра. Масштаб: 158 reftest `css/css-counter-styles/<имя>/` (до готовности нужно ещё BUG-1546 — `display: inline` для `<bdi>`/`<bdo>` — и BUG-1548 — ширина `inside`-маркера, иначе эталоны остаются `thick`); кластер — `docs/wpt-vendor-notes/css.md` §css-typed-om + cssom-view + cssom + css-lists + css-counter-styles. Критерий готовности: `css-counter-styles/hebrew/css3-counter-styles-015.html`, `cjk-decimal/counter-cjk-decimal.html`, `japanese-formal/counter-japanese-formal.html` зелёные в `run_corpus.py --prefixes css/css-counter-styles`.",
      "bugs": [
       "BUG-1570"
+     ]
+    },
+    {
+     "id": "COUNTER-STYLES-2",
+     "title": "COUNTER-STYLES-2: i64-счётчики, rtl-суффикс, disclosure, speak-as",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток CSS Counter Styles 3 после COUNTER-STYLES-BUILTIN: (1) значения счётчика шире `i32` — `counter-reset: n 1000000000000` (WPT `counter-*-extended`, `simp-chinese-*`/`trad-chinese-*` свыше 2^31) — `CounterSnapshot`/`counter_reset`/`format_*` на `i64`, алгоритм восточноазиатских стилей уже принимает `i64`; (2) `suffix` при `dir=rtl` (`counter-suffix.html` — суффикс ставится по направлению маркера); (3) `disclosure-closed` под `dir=rtl`/вертикальным письмом (`◂` вместо `▸`, `disclosure-styles.html`); (4) `speak-as`; (5) `system: extends` наследует только неуказанные дескрипторы (сейчас — аффиксы базы, если у производного стиля префикс пуст, а суффикс по умолчанию; нужен флаг «задан» на дескриптор). Проверка: `run_corpus.py --prefixes css/css-counter-styles`.",
+     "bugs": [
+      "BUG-1547",
+      "BUG-1658"
      ]
     },
     {
@@ -885,9 +896,9 @@
     {
      "id": "CSSANIM-MODEL",
      "title": "CSSANIM-MODEL: CSSAnimation/CSSTransition в JS",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Модель CSS Animations/Transitions в JS (CSS Animations L1 §«CSSAnimation», CSS Transitions L1 §«CSSTransition», Web Animations L1): после GAP-CSSANIM `getAnimations()` возвращает для CSS-анимации `Animation` с пустым `KeyframeEffect` (`web_api_shim_mid_b4.js:761`), чтобы список был ненулевым, а значения рисует Rust-планировщик. Не работает: `typeof CSSAnimation`/`CSSTransition` — `undefined`, `animationName`/`transitionProperty` пусты, `effect.getKeyframes()` — `[]`, `getComputedTiming().duration` — 0, `currentTime`/`startTime` — `null`, `ready` не создаётся, `getAnimations()` сразу после смены стиля пуст (BUG-1293). Объём: настоящие `CSSAnimation`/`CSSTransition` (наследники `Animation`), эффект из `@keyframes` и из пары значений перехода, общий таймлайн с `ready`/`finished`/`pending`, создание при пересчёте стиля, `animation-play-state` ↔ `pause()`/`play()`, замена эффекта (`effect = null`), порядок композиции, `CSSPseudoElement` как цель (CSSOM-11). Масштаб: 57 id / 319 сабтестов `css/css-animations` и `css/css-transitions` (`CSSAnimation-*`, `CSSTransition-*`, `Element-getAnimations*`, `Document-getAnimations`, `KeyframeEffect-*`, `AnimationEffect-*`), ещё около 20 id с TIMEOUT, ждущих события; кластер — `docs/wpt-vendor-notes/css.md` §css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap. Критерий готовности: `CSSAnimation-id.tentative.html`, `Element-getAnimations.tentative.html`, `css-transitions/CSSTransition-ready.tentative.html` зелёные.",
+     "note": "**Сделано (2026-10-22, ветка `p1-cssanim-model`), срез 1 — настоящие `CSSAnimation`/`CSSTransition`:** интерфейсы-наследники `Animation` (`new CSSAnimation()` — `TypeError`, `Symbol.toStringTag`, `animationName`/`transitionProperty`, `id` изначально `''`), по одному объекту на вхождение имени в `animation-name` (`_css_an_update`, повтор имени — отдельный объект, порядок объектов = порядок списка, объект переживает перестановку списка и сохраняет `startTime`) и на каждый идущий переход (`_css_tr_start`); эффект несёт `@keyframes` (или пару from/to) для `getKeyframes()`, тайминг — из вычисленных `animation-*`/`transition-*`; у объекта своя запись часов `_c`, из которой наложение `getComputedStyle()` (BUG-1293) берёт прогресс, поэтому `currentTime`/`startTime`, `pause()`/`play()`/`finish()`/`cancel()` двигают вычисленное значение; новый объект play-pending (`pending`, `ready` разрешается на следующем кадре, `startTime` `null`, `currentTime` 0), `ready`/`finished` отклоняются `AbortError` при отмене стилем или `cancel()`, чтение любого свойства объекта сначала сбрасывает стиль (`style.animationPlayState = 'running'; a.playState`), `animation-play-state` ↔ `pause()`/`play()` (скриптовое переключение сильнее стиля), `getAnimations()` отдаёт только current/in-effect (конец без fill, отмена скриптом — не отдаются; `play()` возвращает), составной порядок (переходы по поколению и имени → CSS-анимации по `animation-name` → «свободные» и скриптовые по порядку создания), `getAnimations({subtree: true})` с `::before`/`::after` (стиль бокс-less псевдо с `content: ''` каскадируется по требованию: `generated_pseudo_style`), `document.getAnimations()` обходит документ и берёт только подключённые цели; `document.timeline.currentTime` — число и до первого кадра; общие часы `_css_now()` (кадр, пока кадры идут), `startTime = timeline.currentTime - N` попадает ровно на N; `transition-property: none` в вычисленном стиле — `none`, а не `all` (`ComputedStyle::transition_property_none`). Из набора WPT `css-animations`/`css-transitions` (`CSSAnimation-*`, `CSSTransition-*`, `*-getAnimations*`, 24 файла, 146 подтестов): 43 → 111; `CSSAnimation-id`, `Element-getAnimations` (animations, 22/22), `CSSTransition-ready` — зелёные. Побочно: завершённый переход, который скрипт проигрывает снова или перематывает назад, возвращается под наложение (`_css_tr_restore`). Остаток — **CSSANIM-MODEL-2**. Исходная постановка: Модель CSS Animations/Transitions в JS (CSS Animations L1 §«CSSAnimation», CSS Transitions L1 §«CSSTransition», Web Animations L1): после GAP-CSSANIM `getAnimations()` возвращает для CSS-анимации `Animation` с пустым `KeyframeEffect` (`web_api_shim_mid_b4.js:761`), чтобы список был ненулевым, а значения рисует Rust-планировщик. Не работает: `typeof CSSAnimation`/`CSSTransition` — `undefined`, `animationName`/`transitionProperty` пусты, `effect.getKeyframes()` — `[]`, `getComputedTiming().duration` — 0, `currentTime`/`startTime` — `null`, `ready` не создаётся, `getAnimations()` сразу после смены стиля пуст (BUG-1293). Объём: настоящие `CSSAnimation`/`CSSTransition` (наследники `Animation`), эффект из `@keyframes` и из пары значений перехода, общий таймлайн с `ready`/`finished`/`pending`, создание при пересчёте стиля, `animation-play-state` ↔ `pause()`/`play()`, замена эффекта (`effect = null`), порядок композиции, `CSSPseudoElement` как цель (CSSOM-11). Масштаб: 57 id / 319 сабтестов `css/css-animations` и `css/css-transitions` (`CSSAnimation-*`, `CSSTransition-*`, `Element-getAnimations*`, `Document-getAnimations`, `KeyframeEffect-*`, `AnimationEffect-*`), ещё около 20 id с TIMEOUT, ждущих события; кластер — `docs/wpt-vendor-notes/css.md` §css-page + css-animations + css-transitions + css-shadow + css-borders + css-scroll-snap. Критерий готовности: `CSSAnimation-id.tentative.html`, `Element-getAnimations.tentative.html`, `css-transitions/CSSTransition-ready.tentative.html` зелёные.",
      "bugs": [
       "BUG-1581",
       "BUG-1293"
@@ -954,6 +965,28 @@
       "BUG-1518",
       "BUG-1519",
       "BUG-1411"
+     ]
+    },
+    {
+     "id": "SVG-FILTER-2",
+     "title": "SVG-FILTER-2: остаток SVG-фильтров",
+     "status": "planned",
+     "size": "XL",
+     "note": "Остаток SVG-FILTER (срез 1 — граф и 9 примитивов на CPU-растре, см. строку SVG-FILTER). (1) **GPU-путь:** wgpu (`renderer.rs`) и femtovg (`femtovg_backend.rs`) игнорируют `FilterFn::Url` (цветовая запись-тождество) — в окне такой элемент рисуется без фильтра; нужен перенос графа на GPU или readback → `paint/src/svg_filter.rs` → upload, обязательно в обоих бэкендах (`crates/engine/paint/CLAUDE.md`). (2) **Остальные примитивы:** `feTile`, `feMorphology`, `feConvolveMatrix`, `feDisplacementMap` (с tainting: `tainting-*`, сейчас пропускают вход), `feTurbulence`, `feDiffuseLighting`/`feSpecularLighting` + источники света, `feImage` (в т.ч. `feImage-with-hidden-container-*`, ссылка на элемент, `href` на данные), режимы `feBlend` hue/saturation/color/luminosity, `BackgroundImage`/`FillPaint`/`StrokePaint`, наследование шаблона `<filter href>`. (3) **bbox HTML-бокса** = объединение border box потомков с их transform (`filter-region-transformed-child-001`, `-composited-`, `filter-region-*`), `<g filter>` у пустого/смещённого контейнера, поворот/скос CTM (сейчас только масштаб+перенос). (4) **Мутации и инвалидация:** смена `id` у `<filter>`, `filter`-атрибута, `<filter>` в `<defs>`, удаление (`effect-reference-rename-*`, `-delete`, `svg-mutation-*`) — каскад читает граф один раз при расчёте стиля ссылающегося элемента. (5) **CSS:** `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` в `ComputedStyle` + CSSOM + правила таблицы стилей (сейчас только атрибут и inline `style`, строка `CSS-SPECS.md`), `drop-shadow()` ([BUG-1540](bugs/BUG-1540-OPEN.md)), внешний ресурс `filter-external-*`. (6) **Интерфейсы** `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Критерий готовности: `effect-reference-feimage-001.html`, `feImage-with-hidden-container-defs.html`, `svg-mutation-function-to-url.html`, `tainting-feflood-001.html` зелёные в `run_corpus.py --prefixes css/filter-effects`; окно (wgpu) и `--screenshot` рисуют `filter: url(#f)` одинаково.",
+     "bugs": [
+      "BUG-1538",
+      "BUG-1540"
+     ]
+    },
+    {
+     "id": "CSSANIM-MODEL-2",
+     "title": "CSSANIM-MODEL-2: остаток модели CSS-анимаций",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток CSSANIM-MODEL (срез 1 — объекты, часы, порядок, pending/ready, см. строку CSSANIM-MODEL). (1) **Стиль «до изменения» для непрочитанных свойств:** переход заводится только для свойства, которое страница читала до изменения (`_wa_motion_by_nid`); `left`/`top`/`opacity`/`border-*-width`, выставленные inline и затем изменённые, перехода не дают — нужен снимок всего вычисленного стиля элемента при первом наблюдении (`_lumen_get_computed_style_entries`) и сравнение при следующем (около 15 подтестов: `css-transitions/Element-getAnimations`, `Document-getAnimations`, `CSSTransition-startTime` «based on when they are generated», reversing-тесты `CSSTransition-currentTime`/`-effect`, «free animation vs CSS Transitions»). (2) **Замена эффекта:** `animation.effect = new KeyframeEffect(...)` / `= null` (`CSSAnimation-effect`, `CSSTransition-effect`) — пока лишь отключает наложение; нужно рисовать чужой эффект по часам CSS-анимации (`_applyAtP` базового класса), событие `animationend` при `effect = null`, `animation-composition` → `effect.composite` (`lists['composition']` пуст — вычисленного свойства нет в снимке). (3) **События от скриптовой перемотки:** `animationstart`/`animationend`/`transitionstart`/`transitionend` после `startTime`/`currentTime = …` (`CSSAnimation-startTime`, `CSSTransition-currentTime`, `-startTime` — TIMEOUT) — планировщик Rust о перемотке не знает; JS должен сам рассылать события по своим часам и гасить события планировщика. (4) **Нарисованный кадр:** `cancel()`/перемотка двигают только вычисленное значение; нативные `opacity`/`transform`/цвета/`height` ведёт кадровый цикл (`AnimationScheduler`/`TransitionScheduler`), `getComputedStyle().transform` после `cancel()` остаётся анимированным (`CSSAnimation-canceling`, `CSSTransition-canceling`) — нужна команда JS → планировщик (отмена, смещение часов). (5) `display: none` у предка: `getComputedStyle(child).marginLeft` отдаёт `''` вместо `0px` (`CSSAnimation-canceling` «ancestor»); `::marker` и `::before`/`::after` у переходов (`Element-getAnimations` transitions, pseudo-тесты); анимации на `::before`/`::after` без `content` не получают вычисленного стиля от слоя. Критерий готовности: `CSSAnimation-effect.tentative.html`, `CSSTransition-startTime.tentative.html`, `css-transitions/Element-getAnimations.tentative.html` зелёные.",
+     "bugs": [
+      "BUG-1581",
+      "BUG-1293"
      ]
     }
    ],
@@ -2678,7 +2711,7 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
@@ -2811,10 +2844,10 @@
       },
       {
        "id": "DEVX-20",
-       "title": "DEVX-20: BiDi responseStarted/continueResponse и верификация storage.*",
-       "status": "planned",
+       "title": "deleteCookies` с окном идут в настоящий cookie jar профиля (`AutomationCommand::{GetCookies,SetCookie,DeleteCookie}`, `CookieJar::list_all`, `value` — строка или BytesValue). Живая верификация `tests/wpt/verify_devx20_bidi_network.py` — 17 OK; `docs/automation.md`/`CAPABILITIES.md` синхронизированы. Было: DEVX-20: BiDi responseStarted/continueResponse и верификация storage.*",
+       "status": "done",
        "size": "M",
-       "note": "Хвосты BiDi (остаток BUG-295): пауза фазы `responseStarted` в `crates/network/src/intercept.rs` + живое действие `network.continueResponse` (`protocol.rs:693`); `authRequired`/`continueWithAuth` — реализовать или честный `unsupported operation` вместо молчаливого success; верификация `storage.getCookies|setCookie|deleteCookies` против живого окна (сценарии рядом с `verify_devx6_bidi_scenarios.py`); снять строки «accepted-and-stored only» в `docs/automation.md` в том же коммите. Бриф [docs/tasks/DEVX-20.md](docs/tasks/DEVX-20.md)"
+       "note": "Хвосты BiDi (остаток BUG-295): пауза фазы `responseStarted` в `crates/network/src/intercept.rs` + живое действие `network.continueResponse` (`protocol.rs:693`); `authRequired`/`continueWithAuth` — реализовать или честный `unsupported operation` вместо молчаливого success; верификация `storage.getCookies|setCookie|deleteCookies` против живого окна (сценарии рядом с `verify_devx6_bidi_scenarios.py`); снять строки «accepted-and-stored only» в `docs/automation.md` в том же коммите. Бриф [docs/tasks/DEVX-20.md](docs/tasks/DEVX-20.md) | ЗАКРЫТ 2026-10-22 (ветка p2-devx-20): фаза `responseStarted` в `crates/network/src/intercept.rs` (пауза после заголовков, до тела; `InterceptAnnouncement`), `network.continueResponse` с реальным resolve и событием `network.responseStarted` (`isBlocked`, статус); `authRequired` в `addIntercept` — честный `unsupported operation` (challenge не выделен событием в `lumen_network`), `continueWithAuth` — `no such request`; `storage.getCookies|setCookie"
       }
      ]
     },
@@ -6008,16 +6041,16 @@
       {
        "id": "TEST-10",
        "title": "TEST-10: сводный отчёт качества с дельтами по подсистемам",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Сводный отчёт качества: `scripts/quality_report.py` сводит свежий и предыдущий прогоны (`docs/wpt/runs/*.json`, `graphic_tests/results/*.json`, открытые баги `BUGS.md`) в `docs/quality-report.md` + JSON-срез `docs/quality/runs/`. Раздельные счётчики PASS/FAIL/CRASH/TIMEOUT/UNSUPPORTED, дельта к прошлому прогону по подсистемам, раздел «Просадки», топ-5 багов по числу заблокированных тестов. Раннеры не трогать — только читать их выход. Бриф [docs/tasks/TEST-10.md](docs/tasks/TEST-10.md)"
+       "note": "ЗАКРЫТ 2026-10-21 (ветка p2-test-10): `scripts/quality_report.py` (stdlib, тесты `scripts/test_quality_report.py`) пишет `docs/quality-report.md` и срез `docs/quality/runs/<stamp>.json` (только при изменении данных — повтор идемпотентен), `--check` — итоговая строка; WPT берёт два последних полных прогона (`scope: full-corpus`), graphic_tests — два последних полных; статусы PASS/OK/FAIL/ERROR/CRASH/TIMEOUT/UNSUPPORTED/SKIPPED/NOT-RUN сходятся с `status_counts` (сумма = ids); подсистемы — по верхнеуровневым категориям (`html/syntax` в агрегате не выделить, строка HTML покрывает `html`); топ-5 багов — `tests/wpt/metadata/**/*.ini` + WPT-пути незакрытых строк ROADMAP + `docs/wpt-status.md`. Как читать — docs/quality-report-howto.md. Было: Сводный отчёт качества: `scripts/quality_report.py` сводит свежий и предыдущий прогоны (`docs/wpt/runs/*.json`, `graphic_tests/results/*.json`, открытые баги `BUGS.md`) в `docs/quality-report.md` + JSON-срез `docs/quality/runs/`. Раздельные счётчики PASS/FAIL/CRASH/TIMEOUT/UNSUPPORTED, дельта к прошлому прогону по подсистемам, раздел «Просадки», топ-5 багов по числу заблокированных тестов. Раннеры не трогать — только читать их выход. Бриф [docs/tasks/TEST-10.md](docs/tasks/TEST-10.md)"
       },
       {
        "id": "TEST-11",
        "title": "TEST-11: geometry/computed-styles diff против Chrome на реальных сайтах",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Differential-срез против Chrome: `scripts/geom_diff.py` инжектит один JS-сниппет в Lumen (BiDi `script.evaluate`, viewport 1280×720) и Chrome (CDP, обвязка как `compat_ab_chrome.py`), сравнивает `getBoundingClientRect` (порог 4px) и срез computed styles видимых элементов на ~20 сайтах перф-корпуса; несматченные узлы — секция «дерево разошлось». Отчёт `docs/quality/geom-diff-<дата>.md`; находки группируются по первопричине в BUG-NNN (фиксы вне задачи). Движок/bidi-server не трогать. Бриф [docs/tasks/TEST-11.md](docs/tasks/TEST-11.md)"
+       "note": "ЗАКРЫТ 2026-10-22 (ветка p2-test-11): `scripts/geom_diff.py` (тесты `scripts/test_geom_diff.py`) снимает один JS-сниппет в Lumen (BiDi) и Chrome (CDP) на 20 сайтах корпуса `docs/quality/geom-corpus.txt`, выравнивает ключи LCS по подписи, сравнивает rect (порог 4px) и срез computed styles, отделяет «дерево разошлось» и несопоставимые страницы; отчёт `docs/quality/geom-diff-2026-10-21.md` с блоком ручного триажа (переживает перегенерацию). Первый прогон: 15 сравнимых, 3 несопоставимы, 2 не сняты; `docs-rs`/`hn` 100% сматченных узлов. Находки: BUG-1668..1676. Инструкция [docs/quality/geom-diff-howto.md](docs/quality/geom-diff-howto.md)"
       }
      ]
     },
@@ -10215,20 +10248,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1401": {
-   "status": "open",
-   "title": "`getComputedStyle().contain` отдаёт `size layout style paint` вместо `strict`; `style.contain = \"layout size\"` остаётся `layout size` (канон `size layout`); `\"s…",
-   "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js` — валидация `element.style`; `crates/engine/layout/src/selector_query.rs:2060-2090` — `contain` в computed)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1402": {
-   "status": "open",
-   "title": "`\"column-count\" in getComputedStyle(el)` — `false` (так же `column-width`, `column-fill`, `column-span`, `columns`, `column-gap`; `column-rule-*` есть); `style.…",
-   "component": "js/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `column-*`; `crates/js/src/shim/web_api_shim_mid.js` — валидация)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1403": {
    "status": "open",
    "title": "высота обычного блока (не BFC-корня) растёт до нижней кромки float внутри, хотя CSS 2.1 §10.6.3 и §10.6.7 этого не делают (охват — только у BFC-корня; отсюда cl…",
@@ -10341,48 +10360,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1447": {
-   "status": "open",
-   "title": "`::first-letter` без `float` не рисует `background` и `border`; computed `::first-letter` теряет `background-*`, у `::first-line` пропадают `background-image` и…",
-   "component": "layout/paint (`::first-letter`, `::first-line`: фон, границы, computed; `crates/engine/layout/src/box_tree/pseudo_text.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1448": {
-   "status": "open",
-   "title": "`display: initial` и `display: unset` дают `block` вместо `inline` для любого элемента. Начальное значение `display` — `inline` (CSS Display 3 §2.1), `unset` дл…",
-   "component": "layout (`crates/engine/layout/src/style/` — начальное значение `display` для `initial`/`unset`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1449": {
-   "status": "open",
-   "title": "`revert-layer`: из атрибута `style` и с `!important` не откатывает слой (11 reftest); `margin-block-start: revert` не возвращает UA-значение. (1) `<div id=t sty…",
-   "component": "layout (каскад: `revert-layer` в атрибуте `style` и с `!important`; `revert` логических `margin-*`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1450": {
-   "status": "open",
-   "title": "`:dir(rtl)` не распознаёт направление по тексту: `dir=auto` на `<div>`, `<input>` и `<bdi>` с текстом на иврите даёт `ltr`. `<bdi>שלום</bdi>`, `<div dir=auto>של…",
-   "component": "layout (`crates/engine/layout/src/style/matching.rs:91` → `matches_dir`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1451": {
-   "status": "open",
-   "title": "После `display:none` или удаления сфокусированного элемента `document.activeElement` остаётся им, `:focus` продолжает совпадать; в `--screenshot` `:focus`/`:foc…",
-   "component": "js/shell (фокус: «focus fixup» и `:focus` в `--screenshot`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1452": {
-   "status": "open",
-   "title": "`appendChild`/`insertBefore` в родителя с тысячами детей стоит O(n) за вызов: 8 000 вставок — 4,3 с, 16 000 — 17,3 с (квадратичный рост). Время `for (i<N) paren…",
-   "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `appendChild` `:8612`, `insertBefore`, `firstChild`; не локализовано)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1453": {
    "status": "open",
    "title": "В таблице стилей теневого дерева селектор `:host <потомок>` (`:host div.red`, `:host > div`, `:host .x`, `:host(.x) div`) не применяется; `:host {…}` применяетс…",
@@ -10450,13 +10427,6 @@
    "status": "open",
    "title": "`graphic_tests` TEST-158 (`background-attachment`) стал FAIL 2.92 % (рамка x:99–986 y:277–680) против PASS 0.27 % в прогоне на `b2fd56ab2`; воспроизводится на `…",
    "component": "paint/layout (graphic_tests `158-background-attachment.html`, фиксированный фон; причина не найдена)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1464": {
-   "status": "open",
-   "title": "`Selection.toString()`: смещения режут текст как байты UTF-8 (выделение одного символа кириллицы/CJK даёт `\"\"`), `text-transform` в тексте выделения не применяе…",
-   "component": "dom/js (`crates/engine/dom/src/selection.rs::range_text_filtered`, `crates/js/src/v8_runtime/install/dom_editing.rs`)",
    "date": null,
    "debtor": false
   },
@@ -10999,24 +10969,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1546": {
-   "status": "open",
-   "title": "`<bdi>`, `<bdo>`, `<kbd>`, `<samp>`, `<var>`, `<dfn>`, `<time>`, `<data>`, `<tt>`, `<big>`, `<strike>`, `<font>`, `<nobr>`, `<output>`, `<acronym>` и пользовате…",
-   "component": "layout (`crates/engine/layout/src/style/ua.rs::default_display` — ветка `_ => Display::Block`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1547": {
    "status": "open",
    "title": "`<ol>`: маркер по умолчанию — `disc`, атрибуты `start`, `reversed`, `<li value>` и `type` не действуют, `li.value` — пустая строка. `<ol>`: маркер по умолчанию…",
    "component": "layout (`crates/engine/layout/src/style/ua.rs`, `crates/engine/layout/src/box_tree/inline_build.rs::li_ordinal`, `crates/engine/layout/src/counters.rs`), js (`HTMLLIElement.value`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1548": {
-   "status": "open",
-   "title": "`list-style-position: inside`: маркер занимает не меньше `1.5em` вместо ширины своего текста, текст строки начинается правее. `list-style-position: inside`: шир…",
-   "component": "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:268-294` — `default_w = em * 1.5`, `marker_w = default_w.max(text_w)`)",
    "date": null,
    "debtor": false
   },
@@ -11164,13 +11120,6 @@
    "status": "open",
    "title": "CSS Lists: `getComputedStyle` не знает `counter-reset/increment/set`, `list-style-*`; канонические формы (`chapter 1`), недопустимое принимается. CSS Lists: `ge…",
    "component": "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, разбор `counter-*`/`list-style`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1570": {
-   "status": "open",
-   "title": "latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`)",
-   "component": "layout (`crates/engine/layout/src/counters.rs:1700-1740` — `format_counter` знает `decimal`, `decimal-leading-zero`, `lower/upper-alpha",
    "date": null,
    "debtor": false
   },
@@ -11615,17 +11564,80 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1666": {
-   "status": "open",
-   "title": "Красный `main`: 7 тестов `lumen-paint` (позиции текста/декораций, hit-test), 5 снапшотов `tests/all.rs`, 3 `page_pipeline::bug269/bug969` и 5 goldens (`PushClip…",
-   "component": "paint / shell / tests (`crates/engine/paint/src/display_list/tests/text_and_images.rs`, `paint/src/hit_test.rs:401`, `paint/tests/cases/snapshot_tests.rs:37`, `shell/src/tests/page_pipeline.rs:201,280`, goldens)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1667": {
    "status": "open",
    "title": "`getComputedStyle(el, '::marker')`: маркер без бокса (`list-style: none`, `content: none`) и `::marker` у не-`list-item` отдают пустую строку вместо `none`/`aut…",
    "component": "layout/js (`crates/engine/layout/src/lib.rs::collect_pseudo_computed_styles_box`, `inject_marker`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1668": {
+   "status": "open",
+   "title": "`margin: 0 auto` не центрирует блок, ширину которого ограничил `max-width`: auto-поля получают 0 до применения ограничения (example.com `body`, MDN). Найден geo…",
+   "component": "layout (ширина блока в потоке)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1669": {
+   "status": "open",
+   "title": "`<center>` не центрирует блочного потомка (таблицу `width:50%`): нет `text-align: -webkit-center` для блочных детей (HN). Найден geom_diff (TEST-11), [отчёт](do…",
+   "component": "layout/UA-стили (`center`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1670": {
+   "status": "open",
+   "title": "Quirks-режим: таблица сбрасывает `font-family` к `serif`, а не наследует его (HN: Verdana у body → Times в ячейках). Найден geom_diff (TEST-11), [отчёт](docs/qu…",
+   "component": "layout/UA-стили (quirks `table`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1671": {
+   "status": "open",
+   "title": "`getBoundingClientRect` = `0,0,0,0` у пустого inline (`<span></span>` между текстом) и у inline с блочным потомком. Найден geom_diff (TEST-11), [отчёт](docs/qua…",
+   "component": "js/layout (rect строчного элемента)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1672": {
+   "status": "open",
+   "title": "SVG-потомки получают `display: block` вместо `inline`, нулевые rect у `g`/`path`, у `svg` нет `overflow: hidden`. Найден geom_diff (TEST-11), [отчёт](docs/quali…",
+   "component": "layout/UA-стили (SVG) и js",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1673": {
+   "status": "open",
+   "title": "`source` не скрыт (`display` не `none`), `option` закрытого `select` — `none`, у замещаемых нет `overflow: clip`. Найден geom_diff (TEST-11), [отчёт](docs/quali…",
+   "component": "layout/UA-стили (`html.css`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1674": {
+   "status": "open",
+   "title": "`document.title` не обрезает и не схлопывает пробелы (`\"\\r\\n Rust Lang \\r\\n\"` вместо `\"Rust Lang\"`). Найден geom_diff (TEST-11), [отчёт](docs/quality/geom-diff-…",
+   "component": "js/dom (`document.title`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1675": {
+   "status": "open",
+   "title": "`<template>` в потоке получает `display: block` вместо `none` (Chrome `none`). Найден geom_diff (TEST-11), [отчёт](docs/quality/geom-diff-2026-10-21.md).",
+   "component": "layout/UA-стили (`template`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1676": {
+   "status": "open",
+   "title": "microsoft.com и cnn.com не доходят до `DocumentReady` за 90 с, bbc.com — «слишком долго не отвечает», ria.ru — `script.evaluate` голодает за redraw (Chrome 9–13…",
+   "component": "не локализовано (сеть / загрузка / JS)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1677": {
+   "status": "open",
+   "title": "Три flaky-теста `lumen-js` падают в полном параллельном прогоне `scoped-test.sh` (буфер обмена, code cache) и проходят по одному — общее состояние между тестами",
+   "component": "js (`crates/js/src/dom/tests/v8_idle_message_clipboard.rs`, `v8_runtime` `perf9_code_cache_*`)",
    "date": null,
    "debtor": false
   },
@@ -20582,6 +20594,13 @@
    "date": "2026-10-21",
    "debtor": false
   },
+  "BUG-1666": {
+   "status": "fixed",
+   "title": "Красный `main`: устаревшие ожидания тестов после BUG-1334 (UA-поля `p`), BUG-1277 (плашка `input[type=color]` под авторским фоном), BUG-1280 (размер `<img>` без…",
+   "component": "paint / shell / tests",
+   "date": "2026-10-21",
+   "debtor": false
+  },
   "BUG-1400": {
    "status": "fixed",
    "title": "у потомка элемента с `content-visibility:hidden` `getBoundingClientRect()`/`offset*`/`getClientRects()` были нулями. Скрытые дети теперь живут в `LayoutBox::cv_…",
@@ -20608,6 +20627,90 @@
    "title": "`::marker`: `getComputedStyle(li, '::marker')` отдаёт значения элемента, а не маркера (`content: normal`, `display: list-item`, `unicode-bidi: normal`, ширина `…",
    "component": "layout/paint (`::marker`: стиль и компьютед; `crates/engine/layout/src/style/`, `crates/engine/layout/src/box_tree/`)",
    "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1447": {
+   "status": "fixed",
+   "title": "`::first-letter` без `float` не рисует `background` и `border`; computed `::first-letter` теряет `background-*`, у `::first-line` пропадают `background-image` и…",
+   "component": "layout/paint (`::first-letter`, `::first-line`: фон, границы, computed; `crates/engine/layout/src/box_tree/pseudo_text.rs`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1448": {
+   "status": "fixed",
+   "title": "`display: initial` и `display: unset` дают `block` вместо `inline` для любого элемента. Начальное значение `display` — `inline` (CSS Display 3 §2.1), `unset` дл…",
+   "component": "layout (`crates/engine/layout/src/style/` — начальное значение `display` для `initial`/`unset`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1449": {
+   "status": "fixed",
+   "title": "`revert-layer`: из атрибута `style` и с `!important` не откатывает слой (11 reftest); `margin-block-start: revert` не возвращает UA-значение. (1) `<div id=t sty…",
+   "component": "layout (каскад: `revert-layer` в атрибуте `style` и с `!important`; `revert` логических `margin-*`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1450": {
+   "status": "fixed",
+   "title": "`:dir(rtl)` не распознаёт направление по тексту: `dir=auto` на `<div>`, `<input>` и `<bdi>` с текстом на иврите даёт `ltr`. `<bdi>שלום</bdi>`, `<div dir=auto>של…",
+   "component": "layout (`crates/engine/layout/src/style/matching.rs:91` → `matches_dir`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1401": {
+   "status": "fixed",
+   "title": "`getComputedStyle().contain` отдаёт `size layout style paint` вместо `strict`; `style.contain = \"layout size\"` остаётся `layout size` (канон `size layout`); `\"s…",
+   "component": "js/layout (`crates/js/src/shim/web_api_shim_mid.js` — валидация `element.style`; `crates/engine/layout/src/selector_query.rs:2060-2090` — `contain` в computed)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1464": {
+   "status": "fixed",
+   "title": "`Selection.toString()`/`Range.toString()`/`Range.deleteContents()` резали текст как байты UTF-8, а страница отдаёт смещения в единицах UTF-16 (DOM §4.4): выделе…",
+   "component": "dom/js (`crates/engine/dom/src/selection.rs` — `utf16_to_byte_offset`/`byte_to_utf16_offset`, `node_length`; `crates/js/src/v8_runtime/install/dom_editing.rs` — `_lumen_set_selection`/`_lumen_get_selection`/`_lumen_get_range_text`/`_lumen_range_delete_contents`)",
+   "date": "2026-10-21",
+   "debtor": false
+  },
+  "BUG-1451": {
+   "status": "fixed",
+   "title": "После `display:none` или удаления сфокусированного элемента `document.activeElement` остаётся им, `:focus` продолжает совпадать; в `--screenshot` `:focus`/`:foc…",
+   "component": "js/shell (фокус: «focus fixup» и `:focus` в `--screenshot`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1402": {
+   "status": "fixed",
+   "title": "`\"column-count\" in getComputedStyle(el)` — `false` (так же `column-width`, `column-fill`, `column-span`, `columns`, `column-gap`; `column-rule-*` есть); `style.…",
+   "component": "js/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — нет строк для `column-*`; `crates/js/src/shim/web_api_shim_mid.js` — валидация)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1452": {
+   "status": "fixed",
+   "title": "`appendChild`/`insertBefore` в родителя с тысячами детей стоит O(n) за вызов: 8 000 вставок — 4,3 с, 16 000 — 17,3 с (квадратичный рост). Время `for (i<N) paren…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid_b4.js` — `_lumen_mo_siblings`; `crates/js/src/v8_runtime/install/dom_core.rs` — `_lumen_get_siblings`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1546": {
+   "status": "fixed",
+   "title": "`<bdi>`, `<bdo>`, `<kbd>`, `<samp>`, `<var>`, `<dfn>`, `<time>`, `<data>`, `<tt>`, `<big>`, `<strike>`, `<font>`, `<nobr>`, `<output>`, `<acronym>` и пользовате…",
+   "component": "layout (`crates/engine/layout/src/style/ua.rs::default_display` — ветка `_ => Display::Block`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1548": {
+   "status": "fixed",
+   "title": "`list-style-position: inside`: маркер занимает не меньше `1.5em` вместо ширины своего текста, текст строки начинается правее. `list-style-position: inside`: шир…",
+   "component": "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:268-294` — `default_w = em * 1.5`, `marker_w = default_w.max(text_w)`)",
+   "date": "2026-10-22",
+   "debtor": false
+  },
+  "BUG-1570": {
+   "status": "fixed",
+   "title": "latin`, `lower/upper-roman`, `lower-greek`, `disc/circle/square`)",
+   "component": "layout (`crates/engine/layout/src/counters.rs:1700-1740` — `format_counter` знает `decimal`, `decimal-leading-zero`, `lower/upper-alpha",
+   "date": "2026-10-22",
    "debtor": false
   }
  },
@@ -20909,7 +21012,7 @@
   "dom (`crates/engine/dom/src/vtt.rs::parse_vtt` — разбиение на блоки только по пустым строкам; проверка подписи `header.as_bytes()[6].is_ascii_whitespace()`)": [
    "BUG-903"
   ],
-  "dom/js (`crates/engine/dom/src/selection.rs::range_text_filtered`, `crates/js/src/v8_runtime/install/dom_editing.rs`)": [
+  "dom/js (`crates/engine/dom/src/selection.rs` — `utf16_to_byte_offset`/`byte_to_utf16_offset`, `node_length`; `crates/js/src/v8_runtime/install/dom_editing.rs` — `_lumen_set_selection`/`_lumen_get_selection`/`_lumen_get_range_text`/`_lumen_range_delete_contents`)": [
    "BUG-1464"
   ],
   "dom/js (`crates/js/src/shim/web_api_shim_mid.js::_lumen_element_prototype_for`, парсер XML/SVG-документа верхнего уровня)": [
@@ -21255,6 +21358,9 @@
   "js (`crates/js/src/dom/tests/v8_gap_uashadowslot.rs:101,117`)": [
    "BUG-1237"
   ],
+  "js (`crates/js/src/dom/tests/v8_idle_message_clipboard.rs`, `v8_runtime` `perf9_code_cache_*`)": [
+   "BUG-1677"
+  ],
   "js (`crates/js/src/dom/tests/v8_perf_typedom_node.rs` — `native_binding_panic_does_not_abort_process`)": [
    "BUG-1030"
   ],
@@ -21504,9 +21610,6 @@
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `_lumen_wrapper_proto_for`/`_LUMEN_WRAPPER_MEMBERS`)": [
    "BUG-1101"
   ],
-  "js (`crates/js/src/shim/web_api_shim_mid.js` — `appendChild` `:8612`, `insertBefore`, `firstChild`; не локализовано)": [
-   "BUG-1452"
-  ],
   "js (`crates/js/src/shim/web_api_shim_mid.js` — `scrollingElement`, `scrollTop`, `clientHeight` корня)": [
    "BUG-1559"
   ],
@@ -21585,6 +21688,9 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b4.js` `function IntersectionObserver` — записи собирались литералом `{isIntersecting:…, intersectionRatio:…}`; интерфейс `IntersectionObserverEntry` рядом с `_io_dom_rect`, экспорт — `web_api_shim_tail_mc.js:49`)": [
    "BUG-1131"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid_b4.js` — `_lumen_mo_siblings`; `crates/js/src/v8_runtime/install/dom_core.rs` — `_lumen_get_siblings`)": [
+   "BUG-1452"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid_b4.js`)": [
    "BUG-1056"
@@ -21917,6 +22023,9 @@
   "js/dom (`crates/js/src/shim/web_api_shim_mid.js` `_lumen_make_range` — `[nid, offset]` без перепривязки)": [
    "BUG-1232"
   ],
+  "js/dom (`document.title`)": [
+   "BUG-1674"
+  ],
   "js/dom (не локализовано)": [
    "BUG-1267"
   ],
@@ -21967,6 +22076,9 @@
   ],
   "js/layout (hit-test: `document.elementFromPoint`, `elementsFromPoint`; `crates/js/src/shim/web_api_shim_mid*.js`, `crates/engine/layout/src/`)": [
    "BUG-1557"
+  ],
+  "js/layout (rect строчного элемента)": [
+   "BUG-1671"
   ],
   "js/layout (события Scroll Snap 2; `scroll_initial_target.rs`)": [
    "BUG-1576"
@@ -22460,9 +22572,6 @@
   "layout (`crates/engine/layout/src/counters.rs::walk`)": [
    "BUG-1368"
   ],
-  "layout (`crates/engine/layout/src/counters.rs::walk`, `pop_reset`)": [
-   "BUG-1658"
-  ],
   "layout (`crates/engine/layout/src/counters.rs` — `format_counter_with_registry` и вызов из `counter()`/`counters()`)": [
    "BUG-1550"
   ],
@@ -22651,9 +22760,6 @@
   "layout (`crates/engine/layout/src/style/ua.rs`)": [
    "BUG-1334"
   ],
-  "layout (`crates/engine/layout/src/style/ua.rs`, `crates/engine/layout/src/box_tree/inline_build.rs::li_ordinal`, `crates/engine/layout/src/counters.rs`), js (`HTMLLIElement.value`)": [
-   "BUG-1547"
-  ],
   "layout (`crates/engine/layout/src/style/ua.rs`, `style/presentational.rs` — нет правила для атрибута `dir`)": [
    "BUG-1321"
   ],
@@ -22744,12 +22850,30 @@
   "layout (самостоятельный SVG-документ верхнего уровня: `parse_xml_flavoured` + UA-стили `body`)": [
    "BUG-1659"
   ],
+  "layout (ширина блока в потоке)": [
+   "BUG-1668"
+  ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
   ],
   "layout+paint": [
    "BUG-005",
    "BUG-023"
+  ],
+  "layout/UA-стили (SVG) и js": [
+   "BUG-1672"
+  ],
+  "layout/UA-стили (`center`)": [
+   "BUG-1669"
+  ],
+  "layout/UA-стили (`html.css`)": [
+   "BUG-1673"
+  ],
+  "layout/UA-стили (`template`)": [
+   "BUG-1675"
+  ],
+  "layout/UA-стили (quirks `table`)": [
+   "BUG-1670"
   ],
   "layout/chrome (`.modal` в `assets/chrome/chrome.html`; flex column + `max-height:82%`)": [
    "BUG-1607"
@@ -22882,9 +23006,6 @@
   ],
   "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — `grayscale`/`sepia` не ограничены 1)": [
    "BUG-1544"
-  ],
-  "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — нет ветки `drop-shadow`; `style/values/transform.rs:149` `FilterFn` — нет варианта)": [
-   "BUG-1540"
   ],
   "layout/paint (`filter` на `display:inline` элементе с блочным/плавающим потомком)": [
    "BUG-1543"
@@ -23253,7 +23374,7 @@
   "paint (путь снимка `resource://screenshot` → `cpu_raster.rs`) против shell (эвристика `broken_render`, `health_log.rs`)": [
    "BUG-993"
   ],
-  "paint / shell / tests (`crates/engine/paint/src/display_list/tests/text_and_images.rs`, `paint/src/hit_test.rs:401`, `paint/tests/cases/snapshot_tests.rs:37`, `shell/src/tests/page_pipeline.rs:201,280`, goldens)": [
+  "paint / shell / tests": [
    "BUG-1666"
   ],
   "paint/cpu_raster": [
@@ -23686,6 +23807,9 @@
   ],
   "не локализовано (путь вставки классического скрипта: `_lumen_resource_after_insert` → `_lumen_script_prepare` → `_lumen_script_execute_classic`, `crates/js/src/shim/web_api_shim_mid.js`)": [
    "BUG-1158"
+  ],
+  "не локализовано (сеть / загрузка / JS)": [
+   "BUG-1676"
   ],
   "не локализовано — bfcache (`crates/shell/src/lumen/bfcache.rs`) либо закрытие WebSocket на смене документа": [
    "BUG-1072"

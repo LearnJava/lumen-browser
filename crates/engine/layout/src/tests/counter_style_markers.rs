@@ -58,22 +58,30 @@ fn outside_marker_keeps_the_gutter() {
 }
 
 #[test]
-fn inside_marker_width_is_not_rounded_to_whole_pixels() {
-    // Fixed8 glyphs are 8px; a marker of 3 glyphs under `letter-spacing: 0.25px`
-    // measures 24.75px and the first line starts exactly there.
+fn inside_text_marker_is_the_first_fragment_of_the_first_line() {
+    // The marker's text flows with the item's text (CSS Lists L3 §3.1): one
+    // run, the marker's glyphs first, the item's text right behind them.
     let root = lay_measured(
         "<ul><li>x</ul>",
-        "ul { padding: 0; list-style-position: inside; list-style-type: hebrew; }\n\
-         li::marker { letter-spacing: 0.25px; }",
+        "ul { padding: 0; list-style-position: inside; list-style-type: hebrew; }",
         400.0,
     );
     let list = first_element_child(&root);
     let li = list.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
     let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+    let BoxKind::Marker { in_run, .. } = &marker.kind else { unreachable!() };
+    assert!(*in_run, "the run paints the marker, the marker box must not");
     let run = li.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
-    let BoxKind::InlineRun { first_line_inset, .. } = &run.kind else { unreachable!() };
-    assert_eq!(*first_line_inset, marker.rect.width);
-    assert!(marker.rect.width.fract() != 0.0, "width {} was rounded", marker.rect.width);
+    let BoxKind::InlineRun { segments, lines, first_line_inset, .. } = &run.kind else { unreachable!() };
+    assert_eq!(*first_line_inset, 0.0);
+    assert_eq!(segments[0].text, "א. ");
+    assert_eq!(segments[0].pseudo_kind, PseudoKind::Marker);
+    // The marker's trailing space is a gap between fragments, not part of a glyph run.
+    let line: String = lines[0].iter().map(|f| f.text.as_str()).collect();
+    assert!(line.starts_with("א."), "marker text leads line 0, got {line:?}");
+    assert!(line.ends_with('x'));
+    let item = lines[0].last().unwrap();
+    assert!(item.x >= 24.0, "the item's text starts after the marker, x = {}", item.x);
 }
 
 #[test]

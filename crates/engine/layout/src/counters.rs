@@ -2372,14 +2372,13 @@ fn affixes<'a>(
     registry: &'a CounterStyleRegistry,
     depth: u32,
 ) -> (&'a str, &'a str) {
-    if let CounterSystem::Extends(base) = &def.system {
-        if depth > 0 {
-            if let Some(base_def) = lookup_style(base, registry) {
-                if def.prefix.is_empty() && def.suffix == CounterStyleDef::default().suffix {
-                    return affixes(base_def, registry, depth - 1);
-                }
-            }
-        }
+    if let CounterSystem::Extends(base) = &def.system
+        && depth > 0
+        && let Some(base_def) = lookup_style(base, registry)
+        && def.prefix.is_empty()
+        && def.suffix == CounterStyleDef::default().suffix
+    {
+        return affixes(base_def, registry, depth - 1);
     }
     (&def.prefix, &def.suffix)
 }

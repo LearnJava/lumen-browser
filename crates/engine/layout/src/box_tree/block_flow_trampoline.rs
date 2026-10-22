@@ -76,6 +76,10 @@ pub(super) struct BlockFlowInit {
     /// Line height of the pending inside marker — consumed together with
     /// `inside_marker_w` when the first in-flow child is block-level.
     pub(super) inside_marker_h: f32,
+    /// The pending `inside` text marker as an inline segment, and the index of its
+    /// `BoxKind::Marker` box — consumed with `inside_marker_w` when the first in-flow
+    /// child is an inline run, which then lays the marker out as its first fragment.
+    pub(super) inside_marker_seg: Option<(usize, InlineSegment)>,
     pub(super) abs_deferred: Vec<(usize, f32, f32)>,
     pub(super) s: Arc<ComputedStyle>,
     pub(super) em: f32,
@@ -294,9 +298,11 @@ fn step_child(
     if matches!(&frame.b.children[i].kind, BoxKind::Marker { .. }) {
         let child_y = frame.init.child_y;
         let child = &mut frame.b.children[i];
-        let (position, em, marker_text) =
-            if let BoxKind::Marker { position, text, .. } = &child.kind {
-                (*position, child.style.font_size, text.clone())
+        let (position, em, marker_text, has_image) =
+            if let BoxKind::Marker { position, text, in_run, image, .. } = &mut child.kind {
+                // Re-decided on every layout pass, see `inside_marker_seg`.
+                *in_run = false;
+                (*position, child.style.font_size, text.clone(), image.is_some())
             } else { unreachable!() };
         let line_h = child.used_line_height;
         // CSS Lists L3 §2.4 — the outside marker occupies the area to the
@@ -354,6 +360,8 @@ fn step_child(
                 };
                 frame.init.inside_marker_w = marker_w;
                 frame.init.inside_marker_h = child.rect.height;
+                frame.init.inside_marker_seg = (!marker_text.is_empty() && !has_image)
+                    .then(|| (i, inline_marker_segment(child, &marker_text)));
                 // Do NOT advance child_y — marker is inline with content.
             }
         }
@@ -404,17 +412,36 @@ fn step_child(
     //    horizontal shift of the child.
     let inside_marker_w = std::mem::take(&mut frame.init.inside_marker_w);
     let inside_marker_h = std::mem::take(&mut frame.init.inside_marker_h);
+    let inside_marker_seg = frame.init.inside_marker_seg.take();
     let mut marker_shift = 0.0;
     if inside_marker_w > 0.0 {
         let child = &mut frame.b.children[i];
+        let mut marker_in_run = None;
         match &mut child.kind {
-            BoxKind::InlineRun { first_line_inset, .. } => *first_line_inset = inside_marker_w,
+            BoxKind::InlineRun { segments, first_line_inset, .. } => match inside_marker_seg {
+                // The marker's text is the run's first fragment: it is shaped,
+                // split at bidi boundaries and positioned like the text after it.
+                Some((marker_idx, seg)) => {
+                    match segments.first_mut() {
+                        Some(first) if first.pseudo_kind == PseudoKind::Marker => *first = seg,
+                        _ => segments.insert(0, seg),
+                    }
+                    *first_line_inset = 0.0;
+                    marker_in_run = Some(marker_idx);
+                }
+                None => *first_line_inset = inside_marker_w,
+            },
             BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table => {
                 frame.init.child_y += inside_marker_h;
                 frame.init.prev_block_mb = 0.0;
                 frame.init.seen_inflow_child = true;
             }
             _ => marker_shift = inside_marker_w,
+        }
+        if let Some(idx) = marker_in_run
+            && let BoxKind::Marker { in_run, .. } = &mut frame.b.children[idx].kind
+        {
+            *in_run = true;
         }
     }
     // CSS Text L3 §7.1: `text-indent` belongs to the container's first line; a run that
@@ -622,6 +649,19 @@ fn step_child(
             StepOutcome::Advance
         }
     }
+}
+
+/// The text of an `inside` marker as the first inline segment of the list item's run
+/// (CSS Lists L3 §3.1). The UA's `tabular-nums` only matters for Latin digits: without
+/// any, the feature is dropped so the shaper keeps the plain glyph run — a marker such
+/// as `א. ` or `১. ` then shapes exactly like the same text typed into the line (with
+/// `tnum` on, the bundled fallback font moves the full stop).
+fn inline_marker_segment(marker: &LayoutBox, text: &str) -> InlineSegment {
+    let mut style = (*marker.style).clone();
+    if !text.chars().any(|c| c.is_ascii_digit()) {
+        style.font_variant_numeric.spacing = crate::style::NumericSpacing::Normal;
+    }
+    super::inline_build::make_content_text_segment(&style, marker.node, text.to_string(), PseudoKind::Marker)
 }
 
 /// CSS 2.1 §9.5.1 — float box placement, copied verbatim from the removed
