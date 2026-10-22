@@ -1,6 +1,5 @@
 //! P1/SPLIT-DL15: print-конвейер — `fn build_print_display_list` … до конца
-//! `fn clip_path_to_rect` (конец региона перед `fn clip_path_to_shape`,
-//! которая остаётся в `display_list.rs`). Вынесено из `display_list.rs`
+//! `fn clip_path_to_rect` (теперь живёт в `clip_shape.rs`). Вынесено из `display_list.rs`
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа DL, батч DL-15).
 
 use super::*;
@@ -353,31 +352,4 @@ pub(crate) fn resolve_shape_center(center: Option<(ShapeValue, ShapeValue)>, r: 
     center
         .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
         .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5))
-}
-
-/// CSS Masking L1 §9 — bounding-box rect for a `clip-path` shape relative to
-/// the element's border-box `r`. Для `inset(...)` это точное представление;
-/// для circle/ellipse/polygon — bounding box (используется fallback-путями;
-/// точная форма идёт через `clip_path_to_shape` → `PushClipPath`, BUG-140).
-pub(crate) fn clip_path_to_rect(clip: &ClipPath, r: Rect) -> Rect {
-    match clip_path_to_shape(clip, r) {
-        Some(shape) => shape.bounding_rect(),
-        None => {
-            let ClipPath::Inset(sides) = clip else { return r };
-            let rs = |v: &ShapeValue, basis: f32| v.resolve(basis);
-            let (top, right, bottom, left) = match sides.as_slice() {
-                [a] => (rs(a, r.height), rs(a, r.width), rs(a, r.height), rs(a, r.width)),
-                [tb, rl] => (rs(tb, r.height), rs(rl, r.width), rs(tb, r.height), rs(rl, r.width)),
-                [t, rl, b] => (rs(t, r.height), rs(rl, r.width), rs(b, r.height), rs(rl, r.width)),
-                [t, ri, b, l] => (rs(t, r.height), rs(ri, r.width), rs(b, r.height), rs(l, r.width)),
-                _ => (0.0, 0.0, 0.0, 0.0),
-            };
-            Rect::new(
-                r.x + left,
-                r.y + top,
-                (r.width - left - right).max(0.0),
-                (r.height - top - bottom).max(0.0),
-            )
-        }
-    }
 }

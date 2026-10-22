@@ -108,7 +108,8 @@ mod print;
 pub use print::{apply_print_color_adjust, build_print_display_list, split_at_page_breaks};
 // Used by `display_list/{box_layer,walk}.rs` and `display_list/tests/anim_and_chrome.rs`
 // (via `super::*` / explicit `use super::clip_path_to_rect`).
-use print::clip_path_to_rect;
+mod clip_shape;
+use clip_shape::{clip_path_to_rect, clip_path_to_shape, ClipRefs};
 // Used only by `display_list/text_run.rs` (via `super::*`).
 use print::ELLIPSIS_EM;
 // Used by `display_list/{box_layer,walk,background_mask}.rs` (via `super::*`).
@@ -120,56 +121,8 @@ use print::{
 };
 // Used only by `display_list/box_layer.rs` (via `super::*`).
 use print::{record_span, BucketField, RawSpan, ScBucket};
-// Used by `clip_path_to_shape`, still in this file just below the DL-15 region.
+// Used by `clip_shape.rs` (via `super::*`).
 use print::resolve_shape_center;
-
-/// BUG-140: резолвит `clip-path` в точную форму в page-координатах
-/// (пространство до transform элемента) относительно border-box `r`.
-/// `None` для `inset(...)` — он точно представим прямоугольником и эмитится
-/// как `PushClipRect` (см. `clip_path_to_rect`). Базисы процентов —
-/// CSS Shapes L1 §5: x/width, y/height, радиус circle — `sqrt(w²+h²)/√2`.
-fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
-    match clip {
-        ClipPath::Inset(_) | ClipPath::Url(_) | ClipPath::Svg(_) => None,
-        ClipPath::Circle { radius, center } => {
-            let (cx, cy) = resolve_shape_center(*center, r);
-            let diag = ((r.width * r.width + r.height * r.height) * 0.5).sqrt();
-            Some(ResolvedClipShape::Circle { cx, cy, r: radius.resolve(diag) })
-        }
-        ClipPath::Ellipse { rx, ry, center } => {
-            let (cx, cy) = resolve_shape_center(*center, r);
-            Some(ResolvedClipShape::Ellipse {
-                cx,
-                cy,
-                rx: rx.resolve(r.width),
-                ry: ry.resolve(r.height),
-            })
-        }
-        ClipPath::Polygon(vertices, fill_rule) => {
-            if vertices.is_empty() {
-                return None;
-            }
-            Some(ResolvedClipShape::Polygon {
-                verts: vertices
-                    .iter()
-                    .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
-                    .collect(),
-                even_odd: matches!(fill_rule, FillRule::EvenOdd),
-            })
-        }
-        // CSS Shapes L1 §4 — `path()`: точки уже флэттены в px системы пути
-        // (origin = верхний левый угол reference box). Смещаем на позицию box.
-        ClipPath::Path(points, fill_rule) => {
-            if points.len() < 3 {
-                return None;
-            }
-            Some(ResolvedClipShape::Polygon {
-                verts: points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
-                even_odd: matches!(fill_rule, FillRule::EvenOdd),
-            })
-        }
-    }
-}
 
 /// Union of a line's visible fragments, as a painting rect for
 /// [`text_run::emit_first_line_background`]. `None` when the line contributes no extent.

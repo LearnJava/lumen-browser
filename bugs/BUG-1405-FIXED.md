@@ -1,6 +1,6 @@
 # BUG-1405 — `clip-path`: `circle()`/`ellipse()` без радиуса и с `closest-side`/`farthest-side`, `inset(… round …)`, `<geometry-box>` игнорируются или считаются неверно
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** layout (`crates/engine/layout/src/style/parse/shape.rs::parse_clip_path`, `display_list` — вычисление опорного прямоугольника `clip-path`)
 
@@ -57,3 +57,32 @@ WPT-RUN-14 срез 18, `css/css-masking/clip-path/`: `clip-path-circle-001…00
 ## Повторное измерение: WPT-RUN-14 срез 23 (2026-10-08)
 
 Тот же строковый разбор аргументов форм действует и у `shape-outside` (`parse_circle_px`, `parse_shape_ellipse_px` в `box_tree/shapes_floats.rs`): `circle()`, `circle(closest-side)`, `circle(50%)`, `ellipse(50% 50%)` без `at`, `at left top` дают прямоугольное обтекание, у `circle()` `at <position>` отбрасывается (BUG-1517, 25 reftest). Исправлять разбор аргументов нужно один раз для `clip-path` и `shape-outside`.
+
+## Исправление (2026-10-22, P6)
+
+- `parse_clip_path` (`style/parse/shape.rs`) разбирает `[<basic-shape> || <geometry-box>]`: бокс до или после формы и
+  голый бокс. Новые варианты `ClipPath::Boxed { shape, geometry }` и `ClipPath::InsetRound`, `GeometryBox`,
+  `ShapeValue::{ClosestSide, FarthestSide}`.
+- `circle()`/`ellipse()` без радиуса — `closest-side`; `closest-side`/`farthest-side`; `at <position>` из 1–2 значений
+  с ключевыми словами (в том числе `circle(at left top)` без радиуса). Трёх- и четырёхзначная позиция
+  (`at right 10px bottom 20px`) по-прежнему не поддержана — декларация отбрасывается.
+- `inset(… round <r>{1,4} [/ <r>{1,4}])` — многоугольник с дугами в углах (16 сегментов на угол), радиусы
+  масштабируются по CSS Backgrounds L3 §5.5.
+- paint: `display_list/clip_shape.rs` (форма вынесена из `display_list.rs`); `ClipRefs` даёт border/padding/content/margin
+  box элемента. Для CSS-боксов `fill-box` = content-box, `stroke-box`/`view-box` = border-box (как в `mask-clip`).
+- Попутно `cpu_raster.rs`, `DrawOutline`: решение «клип можно не применять» принималось по рамке без полосы
+  обводки, поэтому `outline` шире клипа вылезал за `clip-path`/`overflow` (`clip-path-marginBox-1b`).
+
+Пиксельная проверка (`--screenshot`, 200×200, зелёный блок): `circle()`/`ellipse()` — 31 192 px (идеал 31 416), `circle(50px)` —
+7 772, `inset(10px round 20px)` — 32 024 при bbox (10,10)…(189,189); `content-box` сдвигает центр круга на border+padding,
+`padding-box`/`content-box` без формы режут по своему боксу.
+
+## Остаток
+
+- WPT `css/css-masking/clip-path` (локальное сравнение тест/референс с допуском `fuzzy`, 50 id этой выборки): 14 проходят
+  (до правки — единицы). Не проходят: ≈17 id на корневом `<svg>` — BUG-1680 (раскладка `<svg>` с padding/border);
+  `clip-path-circle-00N`/`ellipse-00N` — край окружности: 635 px с макс. расхождением 128 при допуске 60 (качество
+  антиалиасинга маски `PushClipPath` в CPU-растре, форма и положение верны); `*-closest-corner`/`farthest-corner` —
+  ключевые слова удалённой из спецификации формы, не разбираются.
+- `rect()`/`xywh()`/`shape()` — отдельно, `CSS-SPECS.md`.
+- `shape-outside`: тот же строковый разбор аргументов в `box_tree/shapes_floats.rs` — BUG-1517 (общий парсер не вынесен).

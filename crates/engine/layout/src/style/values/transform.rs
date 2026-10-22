@@ -28,6 +28,12 @@ pub enum ShapeValue {
     Px(f32),
     /// Процент соответствующего базиса reference box (0–100).
     Pct(f32),
+    /// `closest-side` — только как радиус `circle()`/`ellipse()` (CSS Shapes L1
+    /// §3.1): расстояние от центра до ближайшей стороны reference box.
+    /// `resolve` отдаёт 0 — значение зависит от центра, считает paint.
+    ClosestSide,
+    /// `farthest-side` — расстояние от центра до дальней стороны reference box.
+    FarthestSide,
 }
 
 impl ShapeValue {
@@ -37,6 +43,7 @@ impl ShapeValue {
         match self {
             Self::Px(v) => v,
             Self::Pct(p) => p / 100.0 * basis,
+            Self::ClosestSide | Self::FarthestSide => 0.0,
         }
     }
 }
@@ -52,6 +59,26 @@ pub enum ClipPath {
     /// `inset(top right bottom left)` — 1..=4 length-percentage значения
     /// (top/bottom — % от height, left/right — % от width).
     Inset(Vec<ShapeValue>),
+    /// `inset(<sides> round <radii> [/ <radii>])` — CSS Shapes L1 §3.3. `sides` как у
+    /// [`ClipPath::Inset`]; `rx`/`ry` — 1..=4 радиуса углов в порядке
+    /// top-left, top-right, bottom-right, bottom-left (раскрываются по правилу
+    /// `border-radius`); `ry` пуст, если `/` не было (радиусы круговые).
+    InsetRound {
+        /// Смещения сторон (top right bottom left, 1..=4 значения).
+        sides: Vec<ShapeValue>,
+        /// Горизонтальные радиусы углов.
+        rx: Vec<ShapeValue>,
+        /// Вертикальные радиусы углов; пусто — равны `rx`.
+        ry: Vec<ShapeValue>,
+    },
+    /// `<geometry-box>` (CSS Masking L1 §4.5): reference box формы, отличный от
+    /// `border-box`, либо сам бокс без формы (`shape: None` — граница бокса).
+    Boxed {
+        /// Форма; `None` — `clip-path: <geometry-box>` без `<basic-shape>`.
+        shape: Option<Box<ClipPath>>,
+        /// Выбранный reference box.
+        geometry: GeometryBox,
+    },
     /// `circle(radius at cx cy)` — radius и center (опц.).
     Circle {
         /// Радиус: % резолвится по `sqrt(w²+h²)/√2`.
@@ -90,6 +117,26 @@ pub enum ClipPath {
     /// Разрешённая ссылка на `<clipPath>` (SVG 1.1 §14.3, CSS Masking L1
     /// §3.1): содержимое элемента уже сведено к полигонам.
     Svg(Arc<SvgClipPath>),
+}
+
+/// `<geometry-box>` (CSS Masking L1 §4.5). Для CSS-боксов `fill-box` = content-box,
+/// `stroke-box`/`view-box` = border-box (как в `mask-clip`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometryBox {
+    /// `border-box` (значение по умолчанию).
+    BorderBox,
+    /// `padding-box`.
+    PaddingBox,
+    /// `content-box`.
+    ContentBox,
+    /// `margin-box`.
+    MarginBox,
+    /// `fill-box`.
+    FillBox,
+    /// `stroke-box`.
+    StrokeBox,
+    /// `view-box`.
+    ViewBox,
 }
 
 /// Содержимое `<clipPath>`, сведённое к полигонам в его системе координат

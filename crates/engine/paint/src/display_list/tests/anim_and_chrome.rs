@@ -773,6 +773,76 @@ use lumen_dom::NodeId;
         );
     }
 
+    fn first_clip(css_clip: &str) -> DisplayCommand {
+        let dl = build(
+            "<div></div>",
+            &format!(
+                "div {{ width:100px; height:100px; padding:10px; border:5px solid; margin:20px;                  background:red; clip-path:{css_clip}; }}"
+            ),
+        );
+        dl.iter()
+            .find(|c| matches!(c, DisplayCommand::PushClipPath { .. } | DisplayCommand::PushClipRect { .. }))
+            .cloned()
+            .expect("clip-path должен эмитить клип")
+    }
+
+    /// BUG-1405: голый `<geometry-box>` клипует по соответствующему боксу.
+    #[test]
+    fn clip_path_bare_geometry_box_clips_to_that_box() {
+        let w = |name: &str| match first_clip(name) {
+            DisplayCommand::PushClipRect { rect } => rect.width,
+            other => panic!("{name}: ожидался PushClipRect, получено {other:?}"),
+        };
+        assert_eq!(w("content-box"), 100.0);
+        assert_eq!(w("padding-box"), 120.0);
+        assert_eq!(w("border-box"), 130.0);
+        assert_eq!(w("margin-box"), 170.0);
+    }
+
+    /// BUG-1405: форма считается от выбранного бокса, а не от border-box.
+    #[test]
+    fn clip_path_shape_uses_geometry_box() {
+        let DisplayCommand::PushClipPath { shape: ResolvedClipShape::Circle { cx: bx, .. } } =
+            first_clip("circle(20px at 0 0)")
+        else {
+            panic!()
+        };
+        let DisplayCommand::PushClipPath { shape: ResolvedClipShape::Circle { cx: cbx, .. } } =
+            first_clip("circle(20px at 0 0) content-box")
+        else {
+            panic!()
+        };
+        // content-box начинается на border+padding = 15px правее border-box.
+        assert_eq!(cbx - bx, 15.0);
+    }
+
+    /// BUG-1405: `circle()` без радиуса — `closest-side` (r = половина стороны).
+    #[test]
+    fn clip_path_circle_default_radius_is_closest_side() {
+        let DisplayCommand::PushClipPath { shape: ResolvedClipShape::Circle { r, .. } } = first_clip("circle()")
+        else {
+            panic!()
+        };
+        assert_eq!(r, 65.0);
+        let DisplayCommand::PushClipPath { shape: ResolvedClipShape::Circle { r, .. } } =
+            first_clip("circle(farthest-side at 0 0)")
+        else {
+            panic!()
+        };
+        assert_eq!(r, 130.0);
+    }
+
+    /// BUG-1405: `inset(… round …)` — многоугольник со скруглёнными углами в пределах inset-прямоугольника.
+    #[test]
+    fn clip_path_inset_round_is_rounded_polygon() {
+        let DisplayCommand::PushClipPath { shape } = first_clip("inset(10px round 20px)") else { panic!() };
+        let b = shape.bounding_rect();
+        assert_eq!((b.width, b.height), (110.0, 110.0));
+        let ResolvedClipShape::Polygon { verts, .. } = shape else { panic!() };
+        // Угол прямоугольника (b.x, b.y) срезан дугой.
+        assert!(verts.iter().all(|&(x, y)| !(x < b.x + 1.0 && y < b.y + 1.0)));
+    }
+
     #[test]
     fn clip_path_path_emits_push_clip_path() {
         let dl = build(
