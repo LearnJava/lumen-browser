@@ -76,4 +76,4 @@
 
 Побочные находки: `<link nonce>` под `style-src 'nonce-…'` не применяется окончательным
 гейтом ([BUG-1490](BUG-1490-FIXED.md), на p11 `#a` остаётся чёрным); прогрев
-`preload`/`modulepreload`/`prefetch` по-прежнему идёт в обход CSP ([BUG-1491](BUG-1491-OPEN.md)).
+`preload`/`modulepreload`/`prefetch` по-прежнему идёт в обход CSP ([BUG-1491](BUG-1491-FIXED.md)).

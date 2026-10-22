@@ -15627,13 +15627,17 @@ function _lumen_link_hint_type_supported(dest, type) {
 // <script>/stylesheet paths above: `link.onload = …` almost always follows
 // the appendChild.
 //
-// `dest` — the preload's `as` destination ('' when there is none: prefetch,
-// icon, embed/object). The bytes may end up serving the real `<script src>`/
-// `@font-face`/`<img>`, so Rust gates the request as that destination.
+// `dest` — the preload's `as` destination ('' when there is none: prefetch;
+// 'icon' for rel=icon). The bytes may end up serving the real `<script src>`/
+// `@font-face`/`<img>`, so Rust gates the request as that destination. It also
+// picks the CSP directive the request is judged by (BUG-1491), with the
+// element's own `nonce`; a forbidden request is never sent and the element
+// gets `error`.
 function _lumen_link_hint_fetch(nid, href, onBody, dest) {
     setTimeout(function() {
         var url = _url_resolve(String(href), _lumen_document_base_url());
-        var ok = _lumen_link_prefetch_sync(url, dest || '');
+        var nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
+        var ok = _lumen_link_prefetch_sync(url, dest || '', nonce === null ? '' : String(nonce));
         if (!ok) {
             _lumen_console_error('link hint fetch failed: ' + url);
             _lumen_resource_fire(nid, 'error');
@@ -15731,7 +15735,7 @@ function _lumen_link_hint_prepare(nid, toks) {
     // `prefetch` and `icon` (BUG-848) are both destination-agnostic: prefetch
     // warms the cache for a future navigation, icon has no `as` at all — so
     // neither is gated by `as`/`type` (WPT `preload/prefetch-events`).
-    _lumen_link_hint_fetch(nid, href, null);
+    _lumen_link_hint_fetch(nid, href, null, kind === 'icon' ? 'icon' : '');
 }
 
 // The parser's half. A `<link>` written by the HTML parser never goes through

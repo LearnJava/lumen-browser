@@ -22,6 +22,21 @@ fn http_status_text(status: u16) -> &'static str {
     }
 }
 
+/// Effective directive name `CspPolicy::preload_fetch_allows` judges a
+/// preload of destination `as_kind` by (for the violation report).
+fn csp_directive_name_for_preload(as_kind: &str) -> &'static str {
+    match as_kind {
+        "script" => "script-src-elem",
+        "style" => "style-src-elem",
+        "image" | "icon" => "img-src",
+        "font" => "font-src",
+        "audio" | "video" | "track" => "media-src",
+        "fetch" | "json" => "connect-src",
+        "worker" | "sharedworker" => "worker-src",
+        _ => "prefetch-src",
+    }
+}
+
 impl JsFetchProvider for HttpClient {
     /// Единственный настоящий путь JS-запроса: и GET, и запрос с телом, и
     /// author-заголовки страницы (BUG-749) — четыре метода ниже сводятся сюда.
@@ -99,7 +114,11 @@ impl JsFetchProvider for HttpClient {
     /// the HTTP status code — a non-2xx response is still `Ok`, only a
     /// transport-level failure is `Err`. `status`/`ok` are hardcoded to
     /// `200`/`true` on the `Ok` path to match.
-    fn fetch_preload_cached(&self, url: &str, as_kind: &str) -> Result<JsFetchResult> {
+    fn fetch_preload_cached(&self, url: &str, as_kind: &str, nonce: &str) -> Result<JsFetchResult> {
+        // BUG-1491: a hint the document's CSP forbids is not requested at all
+        // — the warm-up (`page_pipeline::warm_preload_cache`) asks the same
+        // predicate, so neither path reaches the network.
+        self.preload_src_gate(as_kind, url, nonce)?;
         let Some(cache) = self.subresource_cache.clone() else {
             return self.fetch_sync(url, "GET");
         };
@@ -842,6 +861,31 @@ impl HttpClient {
             });
         }
         Ok(())
+    }
+
+    /// CSP gate of a `<link rel=preload|modulepreload|prefetch|icon>` fetch
+    /// (BUG-1491): the destination `as_kind` names (`""` for prefetch) picks
+    /// the directive ([`CspPolicy::preload_fetch_allows`]), checked against
+    /// the document policies of [`Self::element_src_policy`]. The URL is
+    /// upgraded first, as the request will be sent.
+    pub(crate) fn preload_src_gate(&self, as_kind: &str, url: &str, nonce: &str) -> Result<()> {
+        let Some((policies, self_origin, original_policy)) = &self.element_src_policy else {
+            return Ok(());
+        };
+        let parsed = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let parsed = self.upgrade_insecure_requests_url(parsed);
+        let nonce = Some(nonce).filter(|n| !n.is_empty());
+        if policies
+            .iter()
+            .all(|policy| policy.preload_fetch_allows(as_kind, &parsed, self_origin.as_ref(), nonce))
+        {
+            return Ok(());
+        }
+        Err(Error::CspElementSrcBlocked {
+            directive: csp_directive_name_for_preload(as_kind).to_owned(),
+            blocked_uri: parsed.to_string(),
+            original_policy: original_policy.clone(),
+        })
     }
 
     /// `script-src`/`style-src` gate backing [`JsFetchProvider::check_element_src`]

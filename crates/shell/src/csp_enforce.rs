@@ -802,8 +802,12 @@ pub(crate) fn violating_script_element_policy<'a>(
 /// at `url` (BUG-1185) — the same element pre-request checks the final gates
 /// ask ([`violating_script_element_policy`], [`style_src_blocked`]), fed from
 /// the hint's own `nonce`/`integrity` since the element does not exist yet.
-/// Any other hint is not this gate's business, and a `url` that fails to parse
-/// is never fetched anyway, so both are `false`.
+/// `<link rel=preload|modulepreload|prefetch>` (BUG-1491) is judged by the
+/// directive of its destination ([`CspPolicy::preload_fetch_allows`]) — the
+/// very predicate the element's own fetch asks in
+/// `HttpClient::fetch_preload_cached`. Any other hint is not this gate's
+/// business, and a `url` that fails to parse is never fetched anyway, so both
+/// are `false`.
 pub(crate) fn speculative_fetch_blocked(
     policies: &[CspPolicy],
     hint: &lumen_html_parser::PreloadHint,
@@ -826,6 +830,16 @@ pub(crate) fn speculative_fetch_blocked(
         PreloadHint::Stylesheet { nonce, .. } => policies
             .iter()
             .any(|policy| !policy.style_element_fetch_allows(&parsed, self_origin, nonce.as_deref())),
+        PreloadHint::Preload { as_kind, nonce, .. } => {
+            let destination = as_kind.as_deref().unwrap_or("");
+            policies.iter().any(|policy| !policy.preload_fetch_allows(destination, &parsed, self_origin, nonce.as_deref()))
+        }
+        PreloadHint::ModulePreload { nonce, .. } => {
+            policies.iter().any(|policy| !policy.preload_fetch_allows("script", &parsed, self_origin, nonce.as_deref()))
+        }
+        PreloadHint::Prefetch { .. } => {
+            policies.iter().any(|policy| !policy.preload_fetch_allows("", &parsed, self_origin, None))
+        }
         _ => false,
     }
 }
@@ -1746,5 +1760,45 @@ mod tests {
         assert!(!speculative_fetch_blocked(&policies, &style_hint(Some("abc")), url, None));
         assert!(speculative_fetch_blocked(&policies, &script_hint(Some("zzz")), url, None));
         assert!(speculative_fetch_blocked(&policies, &style_hint(None), url, None));
+    }
+
+    /// BUG-1491: `preload`/`modulepreload`/`prefetch` warm-up asks the
+    /// directive of the hint's destination — `script-src 'none'` stops
+    /// `as=script` and `modulepreload` but leaves `as=image` alone.
+    #[test]
+    fn speculative_fetch_blocked_covers_preload_hints() {
+        use lumen_html_parser::PreloadHint;
+        let url = "https://cdn.test/x";
+        let preload = |as_kind: &str, nonce: Option<&str>| PreloadHint::Preload {
+            url: "/x".into(),
+            as_kind: Some(as_kind.into()),
+            fetch_priority: None,
+            nonce: nonce.map(str::to_owned),
+        };
+        let module = |nonce: Option<&str>| PreloadHint::ModulePreload { url: "/x".into(), nonce: nonce.map(str::to_owned) };
+        let prefetch = PreloadHint::Prefetch { url: "/x".into() };
+        let no_script = [lumen_network::csp::parse_csp_header("script-src 'none'")];
+        assert!(speculative_fetch_blocked(&no_script, &preload("script", None), url, None));
+        assert!(speculative_fetch_blocked(&no_script, &module(None), url, None));
+        assert!(!speculative_fetch_blocked(&no_script, &preload("image", None), url, None));
+        assert!(!speculative_fetch_blocked(&no_script, &prefetch, url, None));
+        let by_dest = [
+            ("style-src 'none'", "style"),
+            ("img-src 'none'", "image"),
+            ("font-src 'none'", "font"),
+            ("media-src 'none'", "audio"),
+            ("connect-src 'none'", "fetch"),
+        ];
+        for (policy, as_kind) in by_dest {
+            let policies = [lumen_network::csp::parse_csp_header(policy)];
+            assert!(speculative_fetch_blocked(&policies, &preload(as_kind, None), url, None), "{policy}");
+        }
+        let no_default = [lumen_network::csp::parse_csp_header("default-src 'none'")];
+        assert!(speculative_fetch_blocked(&no_default, &prefetch, url, None));
+        let nonce_only = [lumen_network::csp::parse_csp_header("script-src 'nonce-abc'")];
+        assert!(!speculative_fetch_blocked(&nonce_only, &preload("script", Some("abc")), url, None));
+        assert!(!speculative_fetch_blocked(&nonce_only, &module(Some("abc")), url, None));
+        assert!(speculative_fetch_blocked(&nonce_only, &module(None), url, None));
+        assert!(!speculative_fetch_blocked(&[], &preload("script", None), url, None));
     }
 }
