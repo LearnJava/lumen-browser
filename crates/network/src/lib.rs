@@ -6519,6 +6519,68 @@ mod tests {
         <HttpClient as lumen_core::ext::JsFetchProvider>::check_element_src(&client, destination, url, nonce, "", false)
     }
 
+    /// BUG-1491: the verdict of `fetch_preload_cached` for a hint of
+    /// destination `as_kind` against `policy`, on a client with no cache — a
+    /// permitted hint would go to the (unroutable) network, so the tests only
+    /// ever read the *blocked* verdict.
+    fn preload_blocked_directive(policy: &str, as_kind: &str, url: &str, nonce: &str) -> Option<String> {
+        let client = HttpClient::new().with_element_src_policy(
+            vec![csp::parse_csp_header(policy)],
+            None,
+            policy.to_owned(),
+        );
+        match client.preload_src_gate(as_kind, url, nonce) {
+            Err(Error::CspElementSrcBlocked { directive, blocked_uri, original_policy }) => {
+                assert_eq!(blocked_uri, url);
+                assert_eq!(original_policy, policy);
+                Some(directive)
+            }
+            Ok(()) => None,
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// BUG-1491: a `<link rel=preload|modulepreload|prefetch|icon>` is judged
+    /// by the directive of its destination, so a policy that forbids that
+    /// destination stops the request before any socket work.
+    #[test]
+    fn preload_hint_is_judged_by_its_destination_directive() {
+        let u = "https://cdn.test/x";
+        let cases = [
+            ("script-src 'none'", "script", "script-src-elem"),
+            ("style-src 'none'", "style", "style-src-elem"),
+            ("img-src 'none'", "image", "img-src"),
+            ("img-src 'none'", "icon", "img-src"),
+            ("font-src 'none'", "font", "font-src"),
+            ("media-src 'none'", "video", "media-src"),
+            ("connect-src 'none'", "fetch", "connect-src"),
+            ("default-src 'none'", "", "prefetch-src"),
+        ];
+        for (policy, as_kind, directive) in cases {
+            assert_eq!(
+                preload_blocked_directive(policy, as_kind, u, "").as_deref(),
+                Some(directive),
+                "{policy} / as={as_kind}"
+            );
+        }
+    }
+
+    /// BUG-1491: a directive the hint's destination does not consult leaves it
+    /// alone, a nonce admits `script`/`style`, and no policy gates nothing.
+    #[test]
+    fn preload_hint_ignores_other_directives_and_honours_nonce() {
+        let u = "https://cdn.test/x";
+        assert_eq!(preload_blocked_directive("img-src 'none'", "script", u, ""), None);
+        assert_eq!(preload_blocked_directive("script-src 'none'", "image", u, ""), None);
+        assert_eq!(preload_blocked_directive("script-src 'nonce-abc'", "script", u, "abc"), None);
+        assert!(preload_blocked_directive("script-src 'nonce-abc'", "script", u, "zzz").is_some());
+        assert_eq!(preload_blocked_directive("style-src 'nonce-abc'", "style", u, "abc"), None);
+        // An unknown destination is not this gate's business.
+        assert_eq!(preload_blocked_directive("default-src 'none'", "document", u, ""), None);
+        let ungated = HttpClient::new();
+        assert!(ungated.preload_src_gate("script", u, "").is_ok());
+    }
+
     #[test]
     fn element_src_script_is_judged_by_script_src_and_nonce() {
         // The BUG-1175 repro: `script-src 'nonce-abc'`, an inserted

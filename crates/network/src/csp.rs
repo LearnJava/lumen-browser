@@ -319,6 +319,42 @@ impl CspPolicy {
         sources.iter().any(|s| source_matches_url(s, url, self_origin))
     }
 
+    /// `true` if this policy lets a `<link rel=preload|modulepreload|prefetch|icon>`
+    /// fetch `url` (BUG-1491, CSP3 §6.8.1 «Get the effective directive»): the
+    /// hint is judged by the directive of the destination it fetches for, not
+    /// by `connect-src`. `destination` is the preload's `as` keyword —
+    /// `script`/`style` consult the element pre-request checks with the hint's
+    /// own `nonce`, `image`/`icon` → `img-src`, `font` → `font-src`,
+    /// `audio`/`video`/`track` → `media-src`, `fetch`/`json` → `connect-src`,
+    /// `worker`/`sharedworker` → `worker-src` (via `child-src`); `""` (prefetch)
+    /// → `prefetch-src`, which falls back to `default-src`. Any other keyword
+    /// is not this gate's business and passes.
+    pub fn preload_fetch_allows(
+        &self,
+        destination: &str,
+        url: &Url,
+        self_origin: Option<&Origin>,
+        nonce: Option<&str>,
+    ) -> bool {
+        match destination {
+            "script" => self.script_element_fetch_allows(
+                url,
+                self_origin,
+                &ScriptRequestMetadata { nonce, integrity: None, parser_inserted: false },
+            ),
+            "style" => self.style_element_fetch_allows(url, self_origin, nonce),
+            "image" | "icon" => self.fetch_directive_allows(&CspDirective::ImgSrc, url, self_origin),
+            "font" => self.fetch_directive_allows(&CspDirective::FontSrc, url, self_origin),
+            "audio" | "video" | "track" => self.fetch_directive_allows(&CspDirective::MediaSrc, url, self_origin),
+            "fetch" | "json" => self.fetch_directive_allows(&CspDirective::ConnectSrc, url, self_origin),
+            "worker" | "sharedworker" => {
+                self.fetch_directive_allows_via_child_src(&CspDirective::WorkerSrc, url, self_origin)
+            }
+            "" => self.fetch_directive_allows(&CspDirective::PrefetchSrc, url, self_origin),
+            _ => true,
+        }
+    }
+
     /// Returns the effective source list for `directive`, falling back to
     /// `child-src` and then `default-src` — the CSP3 §6.4 granular chain
     /// that `frame-src` and `worker-src` get (unlike every other fetch

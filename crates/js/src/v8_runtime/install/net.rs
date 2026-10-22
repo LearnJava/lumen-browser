@@ -487,7 +487,7 @@ pub(crate) fn install_fetch(
             }
         });
 
-        // _lumen_link_prefetch_sync(url, as) → bool. BUG-1116: the same shape as
+        // _lumen_link_prefetch_sync(url, as, nonce) → bool. BUG-1116: the same shape as
         // `_lumen_fetch_sync` above and sharing its `FetchCache` slot/accessors
         // (`_lumen_fetch_get_status`/`_get_body`/`_get_headers`/`_get_url`) —
         // JS calls these one at a time (blocking), so reuse is safe — but
@@ -496,9 +496,9 @@ pub(crate) fn install_fetch(
         // hint's own fetch (`_lumen_link_hint_fetch` in the shim) shares bytes
         // with whatever else on the page fetches the same URL this
         // navigation, rather than always hitting the network again.
-        reg!(scope, ctx, store, "_lumen_link_prefetch_sync", move |url: String, as_kind: String| -> bool {
+        reg!(scope, ctx, store, "_lumen_link_prefetch_sync", move |url: String, as_kind: String, nonce: String| -> bool {
             let Some(ref provider) = fp_preload else { return false };
-            match provider.fetch_preload_cached(&url, &as_kind) {
+            match provider.fetch_preload_cached(&url, &as_kind, &nonce) {
                 Ok(resp) => {
                     let mut flat = Vec::with_capacity(resp.headers.len() * 2);
                     for (k, v) in resp.headers {

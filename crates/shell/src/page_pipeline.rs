@@ -201,7 +201,7 @@ pub(crate) fn dispatch_preload_hints(
                 (s.clone(), SubresourceKind::Image, fetch_priority.clone()),
             PreloadHint::SourceSet { srcset, .. } =>
                 (srcset.clone(), SubresourceKind::Image, None),
-            PreloadHint::Preload { url, as_kind, fetch_priority } => {
+            PreloadHint::Preload { url, as_kind, fetch_priority, .. } => {
                 let kind = match as_kind.as_deref() {
                     Some("font") => SubresourceKind::Font,
                     Some("image") => SubresourceKind::Image,
@@ -214,7 +214,7 @@ pub(crate) fn dispatch_preload_hints(
             // BUG-826: остальные два вида author-хинта. Реальный fetch и
             // события `load`/`error` для них делает JS-шим на самом элементе
             // (`_lumen_link_hint_prepare`), здесь — только строка сетевого лога.
-            PreloadHint::ModulePreload { url } =>
+            PreloadHint::ModulePreload { url, .. } =>
                 (base.resolve_str(url), SubresourceKind::Script, None),
             PreloadHint::Prefetch { url } =>
                 (base.resolve_str(url), SubresourceKind::Other { as_kind: Some("prefetch".into()) }, None),
@@ -260,15 +260,22 @@ pub(crate) fn dispatch_preload_hints(
 /// повторный вызов с тем же URL (в т.ч. вызов из ранней `feed_preload_and_emit`
 /// для этой же навигации) — конкурирующий вызов просто блокируется на слоте
 /// первого, а не шлёт второй запрос.
+///
+/// `csp` — every policy in force for the document (response header plus the
+/// `<meta>` ones the scanner saw): a hint any of them forbids is not requested
+/// at all, CSP3 §4.1.2 forbids the fetch itself, not just the use of the
+/// response (BUG-1491, see [`crate::csp_enforce::speculative_fetch_blocked`]).
 pub(crate) fn warm_preload_cache(
     hints: &[lumen_html_parser::PreloadHint],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    csp: &[lumen_network::csp::CspPolicy],
 ) {
     use lumen_html_parser::PreloadHint;
     use lumen_network::RequestDestination;
 
+    let self_origin = base.origin();
     for hint in hints {
         let (raw_url, destination) = match hint {
             PreloadHint::Preload { url, as_kind, .. } => {
@@ -277,12 +284,16 @@ pub(crate) fn warm_preload_cache(
                 };
                 (url, dest)
             }
-            PreloadHint::ModulePreload { url } => (url, RequestDestination::Script),
+            PreloadHint::ModulePreload { url, .. } => (url, RequestDestination::Script),
             PreloadHint::Prefetch { url } => (url, RequestDestination::Prefetch),
             _ => continue,
         };
         let resolved = base.resolve_str(raw_url);
         let Ok(parsed) = lumen_core::url::Url::parse(&resolved) else { continue };
+        if crate::csp_enforce::speculative_fetch_blocked(csp, hint, &resolved, self_origin.as_ref()) {
+            eprintln!("  ⤷ preload пропущен (CSP): {resolved}");
+            continue;
+        }
         let generation = crate::prefetch::PREFETCH_CACHE.current_generation();
         let sink = Arc::clone(sink);
         let base = base.clone();
@@ -1039,9 +1050,16 @@ pub(crate) fn parse_and_layout(
     // `preload_seen` — cross-call dedup: если streaming уже отправил <head>-хинты
     // через EarlyPreloadHints, финальный scan пропустит их и добавит только новые
     // (body-images, lazy-loaded resources и т.п.).
-    let preload_hints = lumen_html_parser::scan_preload_hints(&source);
+    let (preload_hints, meta_csp) = lumen_html_parser::scan_preload_hints_with_meta_csp(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
-    warm_preload_cache(&preload_hints, base, sink, cookie_jar.clone());
+    // BUG-1491: the DOM does not exist yet, so the warm-up is gated by the
+    // header policies plus the `<meta>` ones the scan just collected.
+    let warm_csp: Vec<_> = csp_header
+        .iter()
+        .chain(&meta_csp)
+        .map(|p| lumen_network::csp::parse_csp_header(p))
+        .collect();
+    warm_preload_cache(&preload_hints, base, sink, cookie_jar.clone(), &warm_csp);
 
     let mut doc = {
         let _s = lumen_core::trace::span("parse-html", "parse");
