@@ -44,6 +44,9 @@ pub(crate) struct MulticolGeom {
     pub n_cols: u32,
     pub col_h: f32,
     pub row_gap: f32,
+    /// Page `y` of the content box's bottom edge when the box is a fragment cut by its multicol
+    /// parent (`ComputedStyle::multicol_fragment`): the rows end there, not at a full `column-height`.
+    pub fragment_bottom: Option<f32>,
 }
 
 /// Number of columns from `column-count` / `column-width` (CSS Multicol L1 §3.4) — the same
@@ -91,6 +94,7 @@ type Frag = (f32, f32, Option<usize>);
 /// Reads the bands back from the laid-out children. `None` when they cannot be told apart
 /// (a spanner with `row-gap: 0`).
 fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
+    let clip = |bottom: f32| g.fragment_bottom.map_or(bottom, |fb| bottom.min(fb));
     let step = g.col_w + g.col_gap;
     let pitch = g.col_h + g.row_gap;
     let n = g.n_cols as usize;
@@ -117,7 +121,7 @@ fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
             let row = ((top - g.content_y + 0.01) / pitch).floor().max(0.0) as usize;
             while bands.len() <= row {
                 let t = g.content_y + bands.len() as f32 * pitch;
-                bands.push(Band { top: t, bottom: t + g.col_h, cells: vec![false; n], gap_after: true });
+                bands.push(Band { top: t, bottom: clip(t + g.col_h), cells: vec![false; n], gap_after: true });
             }
             bands[row].cells[col?] = true;
         }
@@ -136,12 +140,15 @@ fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
         bottom: f32,
         cells: Vec<bool>,
         preceded: bool,
+        /// A row gap (and not a spanner alone, or nothing) lies between this band and the one before.
+        gap_before: bool,
         followed: bool,
         row_start: f32,
     }
     let mut raw: Vec<Raw> = Vec::new();
     let mut open = false; // the last raw band can still take fragments
     let mut after_span = true;
+    let mut span_bottom = g.content_y;
     let mut row_start = g.content_y;
     for &(top, bottom, col) in &frags {
         match col {
@@ -151,6 +158,7 @@ fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
                 }
                 open = false;
                 after_span = true;
+                span_bottom = bottom;
             }
             Some(c) => {
                 // A fragment at or past the end of the current row opens the next row.
@@ -158,14 +166,21 @@ fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
                     l.bottom = l.bottom.max(bottom);
                     l.cells[c] = true;
                 } else {
-                    // After a spanner the columns continue the row while `column-height` is left.
-                    let same_row = after_span && !raw.is_empty() && top - row_start < g.col_h - 0.5;
+                    // After a spanner the columns continue the row while `column-height` is left for
+                    // them; a fragment that is taller opens a new row right below the spanner (a box
+                    // cut by its multicol parent: Multicol L2 §4.4, the row a spanner closes is full).
+                    let same_row = after_span
+                        && !raw.is_empty()
+                        && top - row_start < g.col_h - 0.5
+                        && bottom <= row_start + g.col_h + 0.5;
                     if !same_row {
                         row_start = top;
                     }
+                    // A new row that starts flush below a spanner has no row gap before it.
+                    let gap_before = !after_span || raw.is_empty() || top - span_bottom > 0.5;
                     let mut cells = vec![false; n];
                     cells[c] = true;
-                    raw.push(Raw { top, bottom, cells, preceded: same_row, followed: false, row_start });
+                    raw.push(Raw { top, bottom, cells, preceded: same_row, gap_before, followed: false, row_start });
                     open = true;
                     after_span = false;
                 }
@@ -175,10 +190,10 @@ fn read_bands(b: &LayoutBox, g: &MulticolGeom) -> Option<Vec<Band>> {
     let mut bands: Vec<Band> = Vec::with_capacity(raw.len());
     for r in raw {
         // A band closed by a spanner is balanced; a band that ends a row keeps `column-height`.
-        let bottom = if r.followed { r.bottom } else { r.row_start + g.col_h };
+        let bottom = if r.followed { r.bottom } else { clip(r.row_start + g.col_h) };
         // The spanner between a band and the continuation of its row takes no row gap.
         if let Some(prev) = bands.last_mut() {
-            prev.gap_after = !r.preceded;
+            prev.gap_after = !r.preceded && r.gap_before;
         }
         bands.push(Band { top: r.top, bottom, cells: r.cells, gap_after: false });
     }
