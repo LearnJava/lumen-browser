@@ -375,6 +375,8 @@ impl V8JsRuntime {
                 scroll_states: Arc::clone(&scroll_states),
                 focused_nid: Arc::clone(&self.focused_nid),
                 last_flushed_focus: Arc::clone(&self.last_flushed_focus),
+                hovered_nid: Arc::clone(&self.hovered_nid),
+                last_flushed_hover: Arc::clone(&self.last_flushed_hover),
                 sheet_sync: sheet_sync.clone(),
                 pseudo_styles_needed: Arc::clone(&self.pseudo_styles_needed),
                 pseudo_styles_collected: Arc::clone(&self.pseudo_styles_collected),
@@ -452,6 +454,7 @@ impl V8JsRuntime {
                 store,
                 Arc::clone(&doc),
                 Arc::clone(&self.focused_nid),
+                Arc::clone(&self.hovered_nid),
             )?;
 
             install::install_node_properties(

@@ -907,6 +907,13 @@ pub(crate) trait PersistentJs: Send + Sync {
     #[allow(dead_code)]
     fn notify_focus_changed(&self, _nid: Option<u32>) {}
 
+    /// BUG-1458: the shell's hit test moved the pointer onto another node
+    /// (`None` = off the page). Keeps the engine thread's `:hover` mirror in
+    /// step, so `matches(':hover')` and `getComputedStyle()` see the state the
+    /// painted frame already shows.
+    #[allow(dead_code)]
+    fn notify_hover_changed(&self, _nid: Option<u32>) {}
+
     /// Return the node ID of the current pointer capture target, if any.
     ///
     /// Non-consuming: the capture stays active until `take_pointer_capture()`.
@@ -1563,6 +1570,9 @@ impl PersistentJs for V8PersistentJs {
             "if(typeof _lumen_focus_update==='function')_lumen_focus_update({n});\
              else if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
         ));
+    }
+    fn notify_hover_changed(&self, nid: Option<u32>) {
+        self.rt.set_hovered_nid(nid);
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
         self.rt.pointer_capture_nid()

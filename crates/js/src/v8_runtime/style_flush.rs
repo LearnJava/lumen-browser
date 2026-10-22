@@ -111,6 +111,14 @@ pub(crate) struct FlushHandles {
     /// `.focus()` apart from "nothing changed" even when it left `dom_dirty`
     /// untouched. Updated at the end of every successful flush.
     pub(crate) last_flushed_focus: Arc<Mutex<Option<u32>>>,
+    /// BUG-1458: the engine thread's `:hover` mirror (see
+    /// [`super::runtime::V8JsRuntime::hovered_nid`]) — read-only here, installed
+    /// as the hover target before laying out, exactly as the focus mirror is.
+    pub(crate) hovered_nid: Arc<Mutex<Option<u32>>>,
+    /// BUG-1458: the hover target baked into the current snapshot — the twin of
+    /// [`Self::last_flushed_focus`], so a pointer move that changed `:hover`
+    /// without touching the DOM still triggers a flush.
+    pub(crate) last_flushed_hover: Arc<Mutex<Option<u32>>>,
     /// CSSOM-8 вариант C / BUG-493: the per-`<style>`/`<link>` registry, the
     /// CSSOM edit log and its "grew since the last flush" flag, bundled with
     /// what reconciles the registry with the DOM — see
@@ -289,6 +297,8 @@ pub(crate) struct IncrFlushBasis {
     /// alongside it so a focus-only transition since then can still be
     /// expressed as a `RestyleDelta` instead of forcing a full recompute.
     pub(crate) focus: Option<u32>,
+    /// BUG-1458: hover baked into `layout`/`cascade` — the twin of [`Self::focus`].
+    pub(crate) hover: Option<u32>,
     /// BUG-1211: [`super::runtime::DomTouched::epoch`] at the moment this
     /// basis was produced — the watermark [`FlushHandles::
     /// try_incremental_flush`] diffs `touch_gen` against, since `touched.
@@ -460,8 +470,12 @@ impl FlushHandles {
         // focus baked into the last flush rather than trusting
         // `flush_stale`/`never_flushed` alone.
         let current_focus = *self.focused_nid.lock().unwrap_or_else(|e| e.into_inner());
-        let focus_changed =
-            *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner()) != current_focus;
+        let current_hover = *self.hovered_nid.lock().unwrap_or_else(|e| e.into_inner());
+        // BUG-1458: the same for the pointer — `:hover` flips on a hit-test
+        // change, which touches no DOM node either.
+        let focus_changed = *self.last_flushed_focus.lock().unwrap_or_else(|e| e.into_inner())
+            != current_focus
+            || *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) != current_hover;
         // BUG-935 S34: gate on `flush_stale`, a dedicated flag set at every
         // same DOM-mutating call site as the scheduler's own `dom_dirty`
         // (`V8JsRuntime::dom_dirty`, a separate `Arc<AtomicBool>` this struct
@@ -561,9 +575,9 @@ impl FlushHandles {
         // thread-local's untouched "nothing focused" default (a real relayout
         // does the equivalent via `set_interactive_state` on the shell thread —
         // this flush runs on the engine thread, which never gets that call).
-        // `:hover`/`:active` stay unset — out of this bug's scope.
+        // `:active` stays unset; `:hover` comes from the pointer mirror (BUG-1458).
         let focus_node = current_focus.map(lumen_dom::NodeId::from_raw);
-        lumen_layout::set_interactive_state(None, focus_node, None);
+        lumen_layout::set_interactive_state(current_hover.map(lumen_dom::NodeId::from_raw), focus_node, None);
         // BUG-1211: try the incremental restyle path first — a full
         // `layout_measured_with_counters` recomputes the *entire* tree's
         // cascade+layout on every same-tick accessor read after a mutation,
@@ -589,7 +603,7 @@ impl FlushHandles {
         let content_journal = doc_guard.take_content_journal();
         let incr_scope_guard = lumen_core::profile::scope("flush.try_incremental");
         let incr = self.try_incremental_flush(
-            &doc_guard, &sheet, viewport, &measurer, current_focus, &touched, content_journal.as_ref(),
+            &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, &touched, content_journal.as_ref(),
         );
         // BUG-1211 (post-collectors): `incr_scope` is `Some((dirty_roots,
         // prev_node_ids))` only when the incremental cascade+layout path
@@ -965,6 +979,7 @@ impl FlushHandles {
             sheet_revision: sheet.revision(),
             sheet: Arc::clone(&sheet),
             focus: current_focus,
+            hover: current_hover,
             touch_epoch: touched.epoch,
             scroll_rollups: next_rollups,
         });
@@ -975,6 +990,7 @@ impl FlushHandles {
             .last_flushed_focus
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = current_focus;
+        *self.last_flushed_hover.lock().unwrap_or_else(|e| e.into_inner()) = current_hover;
         // CSSOM-8 вариант C: `cssom_deltas` itself is never cleared — it is
         // replayed onto every future cascade rebuild too (see the field's doc
         // comment) — only the "has something changed since the last flush"
@@ -1187,6 +1203,7 @@ impl FlushHandles {
         viewport: lumen_core::geom::Size,
         measurer: &lumen_paint::FontMeasurer<'_>,
         current_focus: Option<u32>,
+        current_hover: Option<u32>,
         touched: &super::runtime::DomTouched,
         content_journal: Option<&std::collections::HashSet<lumen_dom::NodeId>>,
     ) -> Option<IncrFlushResult> {
@@ -1322,6 +1339,13 @@ impl FlushHandles {
             let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
             dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
                 doc, basis.focus.map(lumen_dom::NodeId::from_raw), current_focus.map(lumen_dom::NodeId::from_raw), &state_index,
+            ));
+        }
+        // BUG-1458: the same transition for the pointer. One `state_index` per pass.
+        if basis.hover != current_hover {
+            let state_index = lumen_layout::style::restyle_state_index(doc, sheet);
+            dirty_roots.extend(lumen_layout::style::restyle_root_set_for_state_change(
+                doc, basis.hover.map(lumen_dom::NodeId::from_raw), current_hover.map(lumen_dom::NodeId::from_raw), &state_index,
             ));
         }
         drop(roots_scope);

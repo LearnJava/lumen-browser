@@ -375,6 +375,8 @@ mod v8_bug1121_document_referrer;
 mod v8_bug567_title_text;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1458_hover_mirror;
+#[cfg(feature = "v8-backend")]
 mod v8_bug560_sync_focus;
 
 #[cfg(feature = "v8-backend")]
