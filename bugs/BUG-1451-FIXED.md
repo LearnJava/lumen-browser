@@ -1,6 +1,6 @@
 # BUG-1451 — После `display:none` или удаления сфокусированного элемента `document.activeElement` остаётся им, `:focus` продолжает совпадать; в `--screenshot` `:focus`/`:focus-within` после `el.focus()` не окрашивают ничего
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 20, `css/selectors` + `css-pseudo` + `css-nesting` + `css-namespaces` + `css-cascade`)
 **Область:** js/shell (фокус: «focus fixup» и `:focus` в `--screenshot`)
 
@@ -30,3 +30,11 @@ WPT-RUN-14 срез 20: `selectors/focus-display-none-001.html`, `focus-within-d
 ## Как проверить
 
 Таблица выше; `css/selectors/focus-display-none-001.html`.
+
+## Исправление (2026-10-22, P3)
+
+(1) Фокус-фиксап (`_lumen_focus_fixup`, `web_api_shim_tail_b.js`) теперь снимает фокус и у элемента, который перестал рендериться (`display: none` у него или у предка — `_lumen_focus_not_rendered`; «нет записи в снимке» равно «нет бокса», а без опубликованного layout элемент не считается скрытым), и сбрасывает не только JS-копию, но и фокус оболочки/движка (`_lumen_focus_drop` → `_lumen_request_blur`), поэтому `matches(':focus')` тоже становится `false`. Удаление сфокусированного элемента из документа возвращает фокус на `<body>` сразу: `document.activeElement` и `focus()` проверяют подключённость (`_lumen_focus_drop_if_disconnected`), а `focus()` не фокусирует отсоединённый элемент и перепроверяет цель после `blur`/`focusout`-обработчиков (`focus-within-removal.html`).
+
+(2) Причина «0 зелёных px» — не порядок «стиль → фокус»: однократный headless-путь `render_source_to_png` не дренировал очередь `take_focus_requests`, а layout после скриптов считался без `set_interactive_state`. `settle_after_load` (`crates/shell/src/dump_mode.rs`) теперь берёт последний запрос фокуса и пересчитывает layout с этим `:focus`/`:focus-within`.
+
+Тесты: `js` (`dom/tests/v8_bug560_sync_focus.rs` — `focus_fixup_drops_focus_on_display_none`, `removing_focused_element_resets_active_element`, `focus_target_removed_by_focusout_listener_leaves_no_focus`), `shell` (`tests/page_pipeline.rs::screenshot_settle_applies_focus_requested_by_script`). Реftest-ы WPT (`focus-display-none-001` и др.) прогоном не проверялись.
