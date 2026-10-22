@@ -329,7 +329,6 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.cursor = parent.cursor;
     style.text_shadow = parent.text_shadow.clone();
     style.user_select = parent.user_select;
-    style.scroll_behavior = parent.scroll_behavior;
     style.tab_size = parent.tab_size;
     style.caret_color = parent.caret_color;
     style.overflow_wrap = parent.overflow_wrap;

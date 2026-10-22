@@ -843,14 +843,15 @@ fn scroll_behavior_smooth() {
 }
 
 #[test]
-fn scroll_behavior_inherited() {
+fn scroll_behavior_not_inherited() {
     let root = lay(
         "<div><p>x</p></div>",
         "div { scroll-behavior: smooth; }",
     );
     let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
     let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-    assert_eq!(p.style.scroll_behavior, ScrollBehavior::Smooth);
+    // CSSOM View §13: `scroll-behavior` is not inherited.
+    assert_eq!(p.style.scroll_behavior, ScrollBehavior::Auto);
 }
 
 #[test]

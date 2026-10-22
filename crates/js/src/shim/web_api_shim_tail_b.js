@@ -8239,12 +8239,16 @@ function _lumen_fire_window_scroll_event() {
 // touch momentum is the update on which it stopped driving the position.
 // Like `scroll`, `scrollend` is non-bubbling and non-cancelable.
 function _lumen_fire_scrollend_on_element(nid) {
+    // SMOOTH-SCROLL: a stepped animation pays one `scrollend` when it ends
+    // (`_lumen_fire_scrollend_now`); the one each of its steps would bring is held back.
+    if (!_lumen_scrollend_bypass && _lumen_smooth_anims[nid] !== undefined) return;
     var el = _lumen_make_element(nid);
     if (!el) return;
     var ev = new Event('scrollend', { bubbles: false, cancelable: false });
     el.dispatchEvent(ev);
 }
 function _lumen_fire_window_scrollend_event() {
+    if (!_lumen_scrollend_bypass && _lumen_smooth_anims.p !== undefined) return;
     var ev = new Event('scrollend', { bubbles: false, cancelable: false });
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }

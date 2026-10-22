@@ -78,9 +78,9 @@ window.matchMedia            = matchMedia;
 // window.scrollTo / scroll / scrollBy — programmatic page scroll with behavior option.
 Object.defineProperties(window, {
     scrollY: { get: function() { return _lumen_get_page_scroll_y(); }, enumerable: true },
-    scrollX: { get: function() { return 0; }, enumerable: true },
+    scrollX: { get: function() { return _lumen_get_page_scroll_x(); }, enumerable: true },
     pageYOffset: { get: function() { return _lumen_get_page_scroll_y(); }, enumerable: true },
-    pageXOffset: { get: function() { return 0; }, enumerable: true }
+    pageXOffset: { get: function() { return _lumen_get_page_scroll_x(); }, enumerable: true }
 });
 
 // ── window.innerWidth/innerHeight/outerWidth/outerHeight (CSSOM View §5.3) ──
@@ -122,21 +122,18 @@ if (typeof globalThis.devicePixelRatio === 'undefined') {
 // all (native drops `scroll`/`scrollend` entirely for a no-op page scroll,
 // unlike the element/container path, so waiting on the event alone would
 // hang forever on e.g. `scrollTo(scrollX, scrollY)`).
-window.scrollTo = function(x, y) {
-    var top, smooth;
-    if (typeof x === 'object' && x !== null) { top = +(x.top || 0); smooth = x.behavior === 'smooth' ? 1 : 0; }
-    else { top = +(y || 0); smooth = 0; }
-    _lumen_request_page_scroll(top, smooth);
-    return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
-};
+// SMOOTH-SCROLL: both axes, `{left, top, behavior}`, and `scroll-behavior` of
+// the root element for `behavior: "auto"` (`_lumen_scroll_to_pos`).
+function _lumen_window_scroll(args, relative, fn) {
+    var a = _lumen_parse_scroll_args(args, [_lumen_get_page_scroll_x(), _lumen_get_page_scroll_y()], relative, fn);
+    _lumen_scroll_to_pos('p', a.x, a.y, a.behavior);
+    return _lumen_scroll_settle_promise(window, function() {
+        return [_lumen_get_committed_page_scroll_x(), _lumen_get_committed_page_scroll_y()];
+    }, 'p');
+}
+window.scrollTo = function() { return _lumen_window_scroll(arguments, false, 'scrollTo'); };
 window.scroll = window.scrollTo;
-window.scrollBy = function(x, y) {
-    var dy, smooth;
-    if (typeof x === 'object' && x !== null) { dy = +(x.top || 0); smooth = x.behavior === 'smooth' ? 1 : 0; }
-    else { dy = +(y || 0); smooth = 0; }
-    _lumen_request_page_scroll(_lumen_get_page_scroll_y() + dy, smooth);
-    return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
-};
+window.scrollBy = function() { return _lumen_window_scroll(arguments, true, 'scrollBy'); };
 
 // ── window.visualViewport (Visual Viewport API) ─────────────────────────────
 // `scale` is `<meta name=viewport initial-scale>` (`_lumen_get_meta_viewport_scale`,
@@ -169,7 +166,7 @@ Object.defineProperties(VisualViewport.prototype, {
     height:     { get: function() { return _lumen_get_viewport_size()[1] / _lumen_get_meta_viewport_scale(); } },
     offsetLeft: { get: function() { return 0; } },
     offsetTop:  { get: function() { return 0; } },
-    pageLeft:   { get: function() { return 0; } },
+    pageLeft:   { get: function() { return _lumen_get_page_scroll_x(); } },
     pageTop:    { get: function() { return _lumen_get_page_scroll_y(); } },
     scale:      { get: function() { return _lumen_get_meta_viewport_scale(); } }
 });

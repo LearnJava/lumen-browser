@@ -8704,6 +8704,38 @@ function _lumen_body_potentially_scrollable(bodyNid, htmlNid) {
     return nonVisible(htmlNid) && nonVisible(bodyNid);
 }
 
+// `document.scrollingElement` as a node id (CSSOM View §5.2), `null` when the
+// quirks-mode body is itself potentially scrollable.
+function _lumen_root_scroller_nid() {
+    var hid = _lumen_u2n(_lumen_get_html_element());
+    if (_lumen_get_document_compat_mode() !== 'BackCompat') return hid;
+    var bid = _lumen_u2n(_lumen_get_body());
+    if (bid === null) return null;
+    if (hid !== null && _lumen_body_potentially_scrollable(bid, hid)) return null;
+    return bid;
+}
+
+// SMOOTH-SCROLL: is `nid` the viewport's scrolling element — the one whose
+// client box, scroll offsets and scroll methods are the page's?
+function _lumen_is_root_scroller(nid) {
+    return nid === _lumen_root_scroller_nid();
+}
+
+// A real scroll container (`overflow` other than visible/clip on some axis).
+// `_lumen_get_scroll_state` alone is not that test: it also has entries for
+// `overflow: visible` boxes whose content spills out (BUG-960). The body whose
+// overflow was propagated to the viewport is not one either.
+function _lumen_is_scroll_container(nid) {
+    if (!_lumen_overflow_not_visible(nid, 'overflow-x') && !_lumen_overflow_not_visible(nid, 'overflow-y')) return false;
+    if (_lumen_get_computed_style(nid, 'overflow-x') === 'clip' && _lumen_get_computed_style(nid, 'overflow-y') === 'clip') return false;
+    var bid = _lumen_u2n(_lumen_get_body());
+    if (bid === nid) {
+        var hid = _lumen_u2n(_lumen_get_html_element());
+        if (hid !== null && !_lumen_overflow_not_visible(hid, 'overflow-x') && !_lumen_overflow_not_visible(hid, 'overflow-y')) return false;
+    }
+    return true;
+}
+
 // BUG-849: the wrapper's whole interface used to be built PER NODE — the object
 // literal below (~130 accessors and methods), the `Object.defineProperty` block
 // after it, and one `on<type>` accessor pair for every name in
@@ -9559,16 +9591,38 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var pid = _lumen_offset_parent_nid(nid);
             return pid === null || pid === undefined ? null : _lumen_make_element(pid);
         },
-        get clientWidth()  { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
-        get clientHeight() { var nid = this.__nid__; var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
+        // SMOOTH-SCROLL: the scrolling element (CSSOM View §5.2: `<html>`, or
+        // `<body>` in quirks mode) is the VIEWPORT — its client box is the
+        // viewport's, its scroll offsets are the page's, and its scroll methods
+        // scroll the page. Everything else is an ordinary box.
+        get clientWidth()  { var nid = this.__nid__;
+            if (_lumen_is_root_scroller(nid)) return _lumen_get_viewport_size()[0];
+            var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0;
+        },
+        get clientHeight() { var nid = this.__nid__;
+            if (_lumen_is_root_scroller(nid)) return _lumen_get_viewport_size()[1];
+            var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0;
+        },
         get scrollLeft() { var nid = this.__nid__;
+            if (_lumen_is_root_scroller(nid)) return _lumen_get_page_scroll_x();
             var s = _lumen_get_scroll_state(nid); return s ? s[0] : 0;
         },
-        set scrollLeft(v) { var nid = this.__nid__; _lumen_request_scroll(nid, +v, _lumen_get_scroll_state(nid) ? _lumen_get_scroll_state(nid)[1] : 0); },
+        // CSSOM View §Extensions to the Element interface: the setters scroll
+        // with behavior `auto`, i.e. along the box's own `scroll-behavior`.
+        set scrollLeft(v) { var nid = this.__nid__;
+            v = +v; if (!isFinite(v)) v = 0;
+            var key = _lumen_is_root_scroller(nid) ? 'p' : nid;
+            _lumen_scroll_to_pos(key, v, _lumen_scroller_get(key)[1], 'auto');
+        },
         get scrollTop() { var nid = this.__nid__;
+            if (_lumen_is_root_scroller(nid)) return _lumen_get_page_scroll_y();
             var s = _lumen_get_scroll_state(nid); return s ? s[1] : 0;
         },
-        set scrollTop(v) { var nid = this.__nid__; _lumen_request_scroll(nid, _lumen_get_scroll_state(nid) ? _lumen_get_scroll_state(nid)[0] : 0, +v); },
+        set scrollTop(v) { var nid = this.__nid__;
+            v = +v; if (!isFinite(v)) v = 0;
+            var key = _lumen_is_root_scroller(nid) ? 'p' : nid;
+            _lumen_scroll_to_pos(key, _lumen_scroller_get(key)[0], v, 'auto');
+        },
         // CSSOM View §Extensions to the Element interface: scrollWidth/scrollHeight
         // are defined for EVERY element, not just designated scroll containers
         // (`overflow: scroll`/`auto`) — they must return at least the element's
@@ -9581,34 +9635,47 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // (border box ⊇ padding box, so this still satisfies the "at least
         // padding-box" floor, same relationship `content_width`/`content_height`
         // already use as the scroll-container minimum in
-        // `lumen_layout::collect_scroll_containers`).
+        // `lumen_layout::collect_scroll_containers`). The viewport's scrollable
+        // area is never smaller than the viewport.
         get scrollWidth()  { var nid = this.__nid__;
-            var s = _lumen_get_scroll_state(nid); if (s) return s[2];
-            var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0;
+            var root = _lumen_is_root_scroller(nid);
+            var s = _lumen_get_scroll_state(nid);
+            var w;
+            if (s) w = s[2]; else { var r = _lumen_get_bounding_rect(nid); w = r ? r[2] : 0; }
+            return root ? Math.max(w, _lumen_get_viewport_size()[0]) : w;
         },
         get scrollHeight() { var nid = this.__nid__;
-            var s = _lumen_get_scroll_state(nid); if (s) return s[3];
-            var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0;
+            var root = _lumen_is_root_scroller(nid);
+            var s = _lumen_get_scroll_state(nid);
+            var h;
+            if (s) h = s[3]; else { var r = _lumen_get_bounding_rect(nid); h = r ? r[3] : 0; }
+            return root ? Math.max(h, _lumen_get_viewport_size()[1]) : h;
         },
         // BUG-479: `scroll` is `scrollTo`'s CSSOM View §4 alias (`window`
         // already had it — the element side never did). Both return a
         // Promise per the spec's "Scrolling with a promise" revision, settled
         // through `_lumen_scroll_settle_promise` (`web_api_shim_head.js`).
-        scrollTo: function(x, y) { var nid = this.__nid__;
-            if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
-            _lumen_request_scroll(nid, +x, +y);
-            return _lumen_scroll_settle_promise(this, function() {
-                var s = _lumen_get_scroll_state(nid); return s ? [s[0], s[1]] : [0, 0];
-            });
+        // SMOOTH-SCROLL: `{left, top, behavior}` — an omitted axis stays where
+        // it is, `behavior: "smooth"` (or `auto` on a `scroll-behavior: smooth`
+        // box) animates, see `_lumen_smooth_scroll`.
+        scrollTo: function() { var nid = this.__nid__;
+            var key = _lumen_is_root_scroller(nid) ? 'p' : nid;
+            var a = _lumen_parse_scroll_args(arguments, _lumen_scroller_get(key), false, 'scrollTo');
+            _lumen_scroll_to_pos(key, a.x, a.y, a.behavior);
+            return _lumen_scroll_settle_promise(key === 'p' ? window : this, function() {
+                return key === 'p' ? [_lumen_get_committed_page_scroll_x(), _lumen_get_committed_page_scroll_y()]
+                                   : _lumen_scroller_get(key);
+            }, key);
         },
-        scroll: function(x, y) { return this.scrollTo(x, y); },
-        scrollBy: function(x, y) { var nid = this.__nid__;
-            if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
-            var s = _lumen_get_scroll_state(nid);
-            _lumen_request_scroll(nid, (s ? s[0] : 0) + (+x), (s ? s[1] : 0) + (+y));
-            return _lumen_scroll_settle_promise(this, function() {
-                var s2 = _lumen_get_scroll_state(nid); return s2 ? [s2[0], s2[1]] : [0, 0];
-            });
+        scroll: function() { return this.scrollTo.apply(this, arguments); },
+        scrollBy: function() { var nid = this.__nid__;
+            var key = _lumen_is_root_scroller(nid) ? 'p' : nid;
+            var a = _lumen_parse_scroll_args(arguments, _lumen_scroller_get(key), true, 'scrollBy');
+            _lumen_scroll_to_pos(key, a.x, a.y, a.behavior);
+            return _lumen_scroll_settle_promise(key === 'p' ? window : this, function() {
+                return key === 'p' ? [_lumen_get_committed_page_scroll_x(), _lumen_get_committed_page_scroll_y()]
+                                   : _lumen_scroller_get(key);
+            }, key);
         },
         // BUG-479: took no parameter at all — `block`/`inline`/`behavior`
         // (or the legacy boolean `alignToTop`) are now parsed and actually
@@ -9637,9 +9704,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
             var smLeft = parseFloat(_lumen_get_computed_style(nid, 'scroll-margin-left')) || 0;
             var mw = r[2] + smLeft + smRight;
             var mh = r[3] + smTop + smBottom;
+            var rootNid = _lumen_root_scroller_nid();
             var parent = _lumen_u2n(_lumen_get_parent(nid));
-            while (parent !== null && parent !== undefined) {
-                var ps = _lumen_get_scroll_state(parent);
+            while (parent !== null && parent !== undefined && parent !== rootNid) {
+                var ps = _lumen_is_scroll_container(parent) ? _lumen_get_scroll_state(parent) : null;
                 if (ps) {
                     var pr = _lumen_get_bounding_rect(parent);
                     if (pr) {
@@ -9647,12 +9715,12 @@ var _LUMEN_WRAPPER_MEMBERS = {
                         var contentY = (r[1] - smTop - pr[1]) + ps[1];
                         var newX = _lumen_align_scroll(contentX, mw, pr[2], ps[0], opts.inline);
                         var newY = _lumen_align_scroll(contentY, mh, pr[3], ps[1], opts.block);
-                        _lumen_request_scroll(parent, newX, newY);
+                        _lumen_scroll_to_pos(parent, newX, newY, opts.behavior);
                         var parentEl = _lumen_make_element(parent);
                         if (parentEl) {
                             return _lumen_scroll_settle_promise(parentEl, function() {
-                                var s = _lumen_get_scroll_state(parent); return s ? [s[0], s[1]] : [0, 0];
-                            });
+                                return _lumen_scroller_get(parent);
+                            }, parent);
                         }
                     }
                     return Promise.resolve();
@@ -9662,14 +9730,17 @@ var _LUMEN_WRAPPER_MEMBERS = {
             // CSSOM-View §14: the viewport is the last scrolling box of the
             // chain, so an element with no scrollable ancestor scrolls the PAGE
             // (BUG-821, second facet — this used to fall off the loop and do
-            // nothing at all, which is most elements on most pages). `window`
-            // has no tracked horizontal scroll position (`scrollX` is a
-            // hardcoded 0 — a separate gap), so only the block axis moves here.
-            var pageY = _lumen_align_scroll(
-                (r[1] - smTop) + _lumen_get_page_scroll_y(), mh,
-                _lumen_get_viewport_size()[1], _lumen_get_page_scroll_y(), opts.block);
-            _lumen_request_page_scroll(pageY, opts.behavior === 'smooth' ? 1 : 0);
-            return _lumen_scroll_settle_promise(window, function() { return [0, _lumen_get_committed_page_scroll_y()]; });
+            // nothing at all, which is most elements on most pages).
+            // SMOOTH-SCROLL: both axes now — `window.scrollX` is real.
+            var vp = _lumen_get_viewport_size();
+            var curX = _lumen_get_page_scroll_x();
+            var curY = _lumen_get_page_scroll_y();
+            var pageX = _lumen_align_scroll((r[0] - smLeft) + curX, mw, vp[0], curX, opts.inline);
+            var pageY = _lumen_align_scroll((r[1] - smTop) + curY, mh, vp[1], curY, opts.block);
+            _lumen_scroll_to_pos('p', pageX, pageY, opts.behavior);
+            return _lumen_scroll_settle_promise(window, function() {
+                return [_lumen_get_committed_page_scroll_x(), _lumen_get_committed_page_scroll_y()];
+            }, 'p');
         },
         // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
         // `tabIndex` reflects the `tabindex` content attribute; with the

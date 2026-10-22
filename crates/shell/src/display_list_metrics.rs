@@ -78,6 +78,17 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
     max_y
 }
 
+/// Scroll range of the page — `(content_height, content_width)` in CSS px:
+/// what the display list paints, extended by the layout's scrollable overflow
+/// ([`lumen_layout::page_scrollable_extent`]) so an invisible spacer or an
+/// empty sized block still gives the page room to scroll (SMOOTH-SCROLL: WPT
+/// `scrollIntoView-smooth.html` scrolls to a box inside a 2500x2500 container
+/// that paints nothing itself).
+pub(crate) fn page_content_extent(dl: &lumen_paint::DisplayList, lb: &lumen_layout::LayoutBox) -> (f32, f32) {
+    let (lw, lh) = lumen_layout::page_scrollable_extent(lb);
+    (content_height_of(dl).max(lh), content_width_of(dl).max(lw))
+}
+
 /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по всем
 /// rect-несущим командам display list-а. Используется для clamping-а scroll_x.
 pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {

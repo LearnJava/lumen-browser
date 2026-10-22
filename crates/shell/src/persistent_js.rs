@@ -743,6 +743,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `scroll` on the new document.
     #[allow(dead_code)]
     fn set_page_scroll_y(&self, y: f32) -> bool;
+    /// Drain the horizontal page scroll request of `window.scrollTo` /
+    /// `scrollIntoView` (SMOOTH-SCROLL): the last instant `x` since the
+    /// previous drain. Smooth sequences arrive as one such request per frame.
+    #[allow(dead_code)]
+    fn take_page_scroll_x_request(&self) -> Option<f32>;
+    /// `x` twin of [`Self::set_page_scroll_y`] (`window.scrollX`); `true` when
+    /// the applied horizontal position moved since the previous push.
+    #[allow(dead_code)]
+    fn set_page_scroll_x(&self, x: f32) -> bool;
     /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
     ///
     /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
@@ -1457,6 +1466,12 @@ impl PersistentJs for V8PersistentJs {
     }
     fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
         self.rt.take_page_scroll_requests()
+    }
+    fn take_page_scroll_x_request(&self) -> Option<f32> {
+        self.rt.take_page_scroll_x_request()
+    }
+    fn set_page_scroll_x(&self, x: f32) -> bool {
+        self.rt.set_page_scroll_x(x)
     }
     fn set_page_scroll_y(&self, y: f32) -> bool {
         self.rt.set_page_scroll_y(y)
