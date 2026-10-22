@@ -16,10 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quality_report as qr  # noqa: E402
 
 
-def wpt_run(finished: str, pass_n: int, ok: int, skip: int, no_exec: int, css_score: float) -> dict:
+def wpt_run(finished: str, pass_n: int, ok: int, skip: int, no_exec: int, css_score: float,
+            commit: str = "abc1234") -> dict:
     ids = pass_n + ok + skip + no_exec
     return {
-        "commit": "abc1234", "finished": finished, "scope": "full-corpus",
+        "commit": commit, "finished": finished, "scope": "full-corpus", "processes": 4,
         "scored": {
             "coverage": {"no_executor": no_exec},
             "status_counts": {"PASS": pass_n, "OK": ok, "SKIP": skip, "NOT-RUN": no_exec},
@@ -85,7 +86,7 @@ class Fixture(unittest.TestCase):
 
     def full_repo(self):
         write(self.root, "docs/wpt/runs/a.json", wpt_run("2026-10-01T10:00:00", 2, 3, 1, 1, 1.0))
-        write(self.root, "docs/wpt/runs/b.json", wpt_run("2026-10-02T10:00:00", 2, 3, 1, 1, 0.0))
+        write(self.root, "docs/wpt/runs/b.json", wpt_run("2026-10-02T10:00:00", 2, 3, 1, 1, 0.0, "fff9999"))
         partial = wpt_run("2026-10-03T10:00:00", 9, 0, 0, 0, 0.0)
         partial["scope"] = ["css"]
         write(self.root, "docs/wpt/runs/c-partial.json", partial)
@@ -137,6 +138,34 @@ class FullRepo(Fixture):
         self.assertIn("graphic_tests 1/3 PASS (Δ -1)", head)
         self.assertIn("`02-b`: PASS → FAIL", text)
         self.assertIn("WPT `css`: балл", text)
+        self.assertIn("просадок 2", head, "категория WPT + PASS → FAIL, коммиты разные")
+        self.assertNotIn("## Разброс прогонов", text)
+        self.assertEqual(snap["lag"], {"wpt": "n/a", "graphic": "n/a"}, "вне git-репозитория — n/a")
+
+    def test_same_commit_is_noise_not_regression(self):
+        b = wpt_run("2026-10-02T10:00:00", 2, 3, 1, 1, 0.0)
+        b["processes"] = 8
+        write(self.root, "docs/wpt/runs/b.json", b)
+        text, head = qr.render(qr.build(self.root), None)
+        self.assertIn("просадок 1", head, "в просадках только graphic_tests")
+        self.assertIn("тот же коммит — разброс", head)
+        noise = text.split("## Разброс прогонов", 1)[1]
+        self.assertIn("WPT `css`: балл", noise)
+        self.assertIn("`processes` 4 → 8", text)
+
+    def test_reclass_noted(self):
+        write(self.root, "graphic_tests/results/20261002-100000.json",
+              gt_run("2026-10-02T10:00:00", {"01-a": "PASS", "02-b": "PASS", "03-c": "FAIL"}))
+        text, head = qr.render(qr.build(self.root), None)
+        self.assertIn("Из них FAIL ↔ DEBTOR: 1", text)
+        self.assertIn("просадок 1", head, "DEBTOR → FAIL — не просадка, остаётся категория WPT")
+
+    def test_stale_sources_warned(self):
+        write(self.root, "graphic_tests/results/20261020-100000.json",
+              gt_run("2026-10-20T10:00:00", {"01-a": "PASS", "02-b": "FAIL", "03-c": "DEBTOR"}))
+        text, head = qr.render(qr.build(self.root), None)
+        self.assertIn("WPT старше соседнего источника на 18 дн.", head)
+        self.assertIn("разнесены на 18 дн.", text)
 
     def test_bugs(self):
         snap = qr.build(self.root)
@@ -242,6 +271,8 @@ class GraphicModes(Fixture):
         side = git("rev-parse", "HEAD")
         self.assertTrue(qr.git_origin(self.root, {"commit": merged})["in_main"])
         self.assertFalse(qr.git_origin(self.root, {"commit": side})["in_main"])
+        self.assertEqual(qr.commit_lag(self.root, merged), "0 коммитов")
+        self.assertEqual(qr.commit_lag(self.root, side), "вне main")
         self.put("20261001-100000", "2026-10-01T10:00:00", stems(), "ipc", commit=merged)
         self.put("20261002-100000", "2026-10-02T10:00:00", stems(), "ipc", commit=side, subject="WIP: side")
         text, _ = qr.render(qr.build(self.root), None)
