@@ -503,7 +503,11 @@ fn place_abs_child(
                 min_content_outer_width(child, measurer, viewport),
             ),
         };
-        max_c.min(min_c.max(free)) + c_ml + c_mr
+        // BUG-1484: the intrinsic widths resolve a percentage `padding` against 0; here the
+        // containing block is definite, so the frame takes its real share of `cb.width`.
+        let pct_pad = |l: &Length| l.resolve_or_zero(c_em, cb.width, viewport) - l.resolve_or_zero(c_em, 0.0, viewport);
+        let pad_extra = pct_pad(&cs.padding_left) + pct_pad(&cs.padding_right);
+        (max_c + pad_extra).min((min_c + pad_extra).max(free)) + c_ml + c_mr
     } else {
         cb.width
     };
@@ -528,11 +532,23 @@ fn place_abs_child(
     let stretched_w = (ratio_stretched_w || semi_stretched_w).then(|| (avail_w - c_ml - c_mr).max(0.0));
     // CSS 2.1 §10.5: a percentage `height` of an out-of-flow box resolves against
     // the padding box of its containing block, whose height is always definite.
+    // CSS 2.1 §10.3.7 / Box 4: `padding` and `margin` percentages resolve against the containing
+    // block's width, not against the inset gap or shrink-to-fit width `avail_w` stands for (BUG-1484).
+    let pct_base = (avail_w != cb.width).then_some(cb.width);
     match (stretched_h, stretched_w) {
-        (None, None) => lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false),
+        (None, None) if pct_base.is_none() => {
+            lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false);
+        }
+        (None, None) => lay_out_with_used_size(
+            child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false,
+            UsedSizeOverride { percentage_base: pct_base, ..Default::default() },
+        ),
         (h, w) => lay_out_with_used_size(
             child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false,
-            UsedSizeOverride { width: w, height: h, box_sizing: Some(BoxSizing::BorderBox), ..Default::default() },
+            UsedSizeOverride {
+                width: w, height: h, box_sizing: Some(BoxSizing::BorderBox), percentage_base: pct_base,
+                ..Default::default()
+            },
         ),
     }
     if let Some(h) = stretched_h {
