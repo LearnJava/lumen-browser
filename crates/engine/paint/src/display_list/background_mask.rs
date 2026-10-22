@@ -743,9 +743,8 @@ pub(crate) fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::Ma
             .collect(),
     }
 }
-
 /// CSS Masking L1 §4.7/§4.9 — какие слои из [`ComputedStyle::mask_layers`]
-/// реально попадают в display list.
+/// попадают в display list как вложенные `PushMask*` (быстрый путь).
 ///
 /// Один `PushMask*` несёт ровно один mask-канал, но группы **вкладываются**, а
 /// вложение перемножает альфы: содержимое под `PushMask(A) PushMask(B) … PopMask
@@ -763,23 +762,42 @@ pub(crate) fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::Ma
 ///   прозрачному фону, где `add`/`subtract`/`exclude` дают сам слой, а
 ///   `intersect` (source-in с прозрачным) вычистил бы маску целиком. Реализация
 ///   этого вырожденного случая расходится между браузерами, поэтому он уходит в
-///   тот же fallback, а не рендерится по букве спеки.
+///   общий путь [`mask_needs_composite`].
 ///
-/// Иначе — `// CSS: mask-composite` — рендерится только верхний слой (прежнее
-/// поведение). `add`/`subtract`/`exclude` между слоями вложением не выражаются:
-/// им нужна сборка маски в отдельный офскрин во всех трёх бэкендах (femtovg,
-/// wgpu `renderer.rs`, `cpu_raster.rs`), что уже renderer-side задача, а не
-/// стилевая.
+/// Всё остальное — `add`/`subtract`/`exclude` между слоями и градиентные слои с
+/// `mask-size` — собирается в одну маску отдельным офскрином
+/// ([`composite_mask_close`]); тогда эта функция возвращает пустой список.
 pub(crate) fn rendered_mask_layers(b: &LayoutBox) -> &[MaskLayer] {
-    let layers = &b.style.mask_layers;
-    let Some((bottom, upper)) = layers.split_last() else {
+    if mask_needs_composite(b) {
         return &[];
+    }
+    let layers = &b.style.mask_layers;
+    if is_intersect_chain(layers) { layers } else { &layers[..layers.len().min(1)] }
+}
+
+/// Цепочка слоёв, которую точно выражает вложение `PushMask*` (см.
+/// [`rendered_mask_layers`]).
+fn is_intersect_chain(layers: &[MaskLayer]) -> bool {
+    let Some((bottom, upper)) = layers.split_last() else {
+        return false;
     };
-    let all_intersect = !upper.is_empty()
+    !upper.is_empty()
         && upper.iter().all(|l| l.composite == MaskComposite::Intersect)
         && bottom.composite != MaskComposite::Intersect
-        && layers.iter().all(is_renderable_mask_source);
-    if all_intersect { layers } else { &layers[..1] }
+        && layers.iter().all(is_renderable_mask_source)
+}
+
+/// Нужна ли слоям маски элемента сборка в одну маску через офскрин
+/// ([`composite_mask_close`]) вместо вложенных `PushMask*`.
+///
+/// `PushMask*` несёт только `rect` и источник: размера плитки `mask-size` у
+/// градиента в команде нет (для картинки он есть, плитку считает бэкенд), а
+/// `add`/`subtract`/`exclude` между слоями вложением не выражаются.
+fn mask_needs_composite(b: &LayoutBox) -> bool {
+    let layers = &b.style.mask_layers;
+    layers.iter().any(|l| {
+        matches!(l.image, BackgroundImage::Gradient(_)) && matches!(l.size, BackgroundSize::Length(..))
+    }) || (layers.len() > 1 && !is_intersect_chain(layers))
 }
 
 /// Есть ли у слоя источник, который [`emit_push_mask`] умеет превратить в
@@ -792,9 +810,17 @@ fn is_renderable_mask_source(l: &MaskLayer) -> bool {
     }
 }
 
-/// Эмитит mask-группы элемента. Возвращает число открытых групп — столько же
-/// `PopMask` обязан выставить вызывающий.
-pub(crate) fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> usize {
+/// Эмитит открытие mask-групп элемента и возвращает команды их закрытия — их
+/// вызывающий выставляет после содержимого элемента (и после своих внутренних
+/// `PopClip`). Пустой список — маски нет.
+pub(crate) fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) -> Vec<DisplayCommand> {
+    if mask_needs_composite(b) {
+        // Содержимое элемента — в изолированную opacity-группу: `PopMaskLayer`
+        // умножает слой под собой на маску, а без изоляции этим слоем была бы
+        // вся страница под элементом.
+        out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+        return composite_mask_close(b, dpr);
+    }
     let mut opened = 0;
     // Верхний слой идёт наружу. Для `intersect` порядок безразличен, но так
     // display list читается в том же порядке, что и CSS-список слоёв.
@@ -803,7 +829,131 @@ pub(crate) fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> us
             opened += 1;
         }
     }
-    opened
+    vec![DisplayCommand::PopMask; opened]
+}
+
+/// Запас вокруг `b.rect` для прямоугольника `PushMaskLayer`: композит маски
+/// действует только внутри него, а содержимое элемента (тень, переполнение)
+/// выходит за border-box — его маска тоже обязана скрыть.
+const MASK_LAYER_MARGIN: f32 = 16384.0;
+
+/// Закрытие группы, открытой `PushOpacity` в [`emit_push_mask`] для составной
+/// маски: `PushMaskLayer`, собранная из слоёв маска, `PopMaskLayer`,
+/// `PopOpacity`.
+fn composite_mask_close(b: &LayoutBox, dpr: f32) -> Vec<DisplayCommand> {
+    let layers: Vec<&MaskLayer> = b.style.mask_layers.iter().rev().collect();
+    let mut close = vec![DisplayCommand::PushMaskLayer {
+        rect: mask_layer_rect(b),
+        mode: MaskMode::Alpha,
+    }];
+    close.extend(composite_mask_stack(b, dpr, &layers));
+    close.push(DisplayCommand::PopMaskLayer);
+    close.push(DisplayCommand::PopOpacity);
+    close
+}
+
+fn mask_layer_rect(b: &LayoutBox) -> Rect {
+    Rect::new(
+        b.rect.x - MASK_LAYER_MARGIN,
+        b.rect.y - MASK_LAYER_MARGIN,
+        b.rect.width + 2.0 * MASK_LAYER_MARGIN,
+        b.rect.height + 2.0 * MASK_LAYER_MARGIN,
+    )
+}
+
+/// Команды, рисующие в текущий слой альфу-маску `layers[..]` (снизу вверх;
+/// последний — верхний слой), собранную операторами `mask-composite` (CSS
+/// Masking L1 §4.7): оператор слоя применяется к маске слоёв под ним, оператор
+/// самого нижнего слоя применяется к прозрачному фону.
+///
+/// * `add` — слой поверх накопленного (source-over);
+/// * `intersect` — накопленное, умноженное на слой: `PushMaskLayer` с альфой
+///   слоя поверх группы с накопленным;
+/// * `subtract` — слой, умноженный на `1 − накопленное` (`InvertedAlpha`);
+/// * `exclude` — `subtract` в обе стороны. Две половины складываются
+///   source-over, что для непересекающихся (`a·(1−b)` и `b·(1−a)` не
+///   пересекаются) точно, а для частичных альф отличается на произведение.
+///
+/// `exclude` дублирует накопленное, поэтому размер растёт экспоненциально по
+/// числу подряд идущих `exclude`; за [`MAX_COMPOSITE_COMMANDS`] вторая половина
+/// отбрасывается.
+fn composite_mask_stack(b: &LayoutBox, dpr: f32, layers: &[&MaskLayer]) -> Vec<DisplayCommand> {
+    const MAX_COMPOSITE_COMMANDS: usize = 8192;
+    let Some((top, below)) = layers.split_last() else {
+        return Vec::new();
+    };
+    let own = composite_mask_layer_content(b, dpr, top);
+    if below.is_empty() {
+        return own;
+    }
+    let lower = composite_mask_stack(b, dpr, below);
+    let group = |content: &[DisplayCommand], mode: MaskMode, mask: &[DisplayCommand]| {
+        let mut g = vec![DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) }];
+        g.extend_from_slice(content);
+        g.push(DisplayCommand::PushMaskLayer { rect: mask_layer_rect(b), mode });
+        g.extend_from_slice(mask);
+        g.push(DisplayCommand::PopMaskLayer);
+        g.push(DisplayCommand::PopOpacity);
+        g
+    };
+    match top.composite {
+        MaskComposite::Add => {
+            let mut out = lower;
+            out.extend(own);
+            out
+        }
+        MaskComposite::Intersect => group(&lower, MaskMode::Alpha, &own),
+        MaskComposite::Subtract => group(&own, MaskMode::InvertedAlpha, &lower),
+        MaskComposite::Exclude => {
+            let mut out = group(&own, MaskMode::InvertedAlpha, &lower);
+            if own.len() + lower.len() <= MAX_COMPOSITE_COMMANDS {
+                out.extend(group(&lower, MaskMode::InvertedAlpha, &own));
+            }
+            out
+        }
+    }
+}
+
+/// Команды, рисующие один слой маски (плитки `mask-size`/`-position`/`-repeat`
+/// внутри `mask-origin`, обрезанные по `mask-clip`) в текущий слой. Слой
+/// `none` и нерисуемые источники дают пустой список — прозрачную маску.
+///
+/// Градиентные стопы пересчитываются под `mask-mode` слоя ([`mask_stops_for_mode`]);
+/// у картинки берётся её альфа, `mask-mode: luminance` для `url()` в составной
+/// маске не учитывается.
+fn composite_mask_layer_content(b: &LayoutBox, dpr: f32, layer: &MaskLayer) -> Vec<DisplayCommand> {
+    let image = match &layer.image {
+        BackgroundImage::Gradient(g) => BackgroundImage::Gradient(gradient_for_mask_mode(g, layer.mode)),
+        BackgroundImage::Url(src) if !src.is_empty() => layer.image.clone(),
+        _ => return Vec::new(),
+    };
+    let bg = BackgroundLayer {
+        image,
+        repeat: layer.repeat,
+        size: layer.size,
+        position: layer.position,
+        origin: layer.origin,
+        ..BackgroundLayer::default()
+    };
+    let mut out = Vec::new();
+    // `mask-clip` ограничивает рисуемую область слоя (§4.6); `border-box` и
+    // `no-clip` оставляют плитки в границах элемента.
+    let clip_rect = mask_clip_layer_rect(b, layer.clip).unwrap_or(b.rect);
+    out.push(DisplayCommand::PushClipRect { rect: clip_rect });
+    emit_background_layer(&mut out, b, &bg, dpr, true, CornerRadii::default(), None);
+    out.push(DisplayCommand::PopClip);
+    out
+}
+
+/// Градиент с альфой стопов, пересчитанной под `mask-mode` ([`mask_stops_for_mode`]).
+fn gradient_for_mask_mode(g: &ParsedGradient, mode: lumen_layout::MaskMode) -> ParsedGradient {
+    let mut g = g.clone();
+    match &mut g {
+        ParsedGradient::Linear { stops, .. }
+        | ParsedGradient::Radial { stops, .. }
+        | ParsedGradient::Conic { stops, .. } => *stops = mask_stops_for_mode(stops, mode),
+    }
+    g
 }
 
 /// Эмитит `PushMask*` одного слоя. `false` — источник не рисуемый, группа не
