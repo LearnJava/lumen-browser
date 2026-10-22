@@ -38,7 +38,7 @@ impl AnchorScroll {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LayoutBox {
     pub node: NodeId,
     /// Border-box rectangle: (x, y) is the top-left corner after margin,
@@ -178,6 +178,131 @@ impl Drop for LayoutBox {
             // `b`'s remaining fields drop normally here — `children` and
             // `svg_mask.content` are already empty, so this recursion is
             // exactly one level deep regardless of the original subtree depth.
+        }
+    }
+}
+
+impl Clone for LayoutBox {
+    /// Counterpart of the `Drop` impl above: `#[derive(Clone)]` recursed one
+    /// native frame (~5.5 KB in the test profile) per nesting level, so
+    /// cloning a ~380-deep chain overflowed a 2 MB `cargo test` worker — the
+    /// wall `grid_trampoline::post_probe_item`'s reuse stash
+    /// (`frame.b.children[i].clone()`) hit on a deep grid chain. Descendants are
+    /// now cloned from a heap work stack instead: each entry is a source box,
+    /// its shallow copy and a cursor over the boxes nested directly in it
+    /// (`children`, `cv_hidden`, `SvgMaskContent::content` — the same three
+    /// places `Drop` drains); a finished copy is appended to its parent's
+    /// matching list, so order is preserved.
+    ///
+    /// Boxes embedded in other `BoxKind` payloads (ruby/MathML parts) are
+    /// still cloned by the derived `BoxKind` impl — each is again an iterative
+    /// clone, so native depth there grows with kind-nesting, not tree depth.
+    fn clone(&self) -> Self {
+        struct Pending<'a> {
+            src: &'a LayoutBox,
+            out: LayoutBox,
+            /// Index into `src`'s nested boxes of the next one to clone.
+            next: usize,
+            /// Which list of the parent's copy `out` goes into.
+            slot: NestedSlot,
+        }
+        let mut root = Pending { src: self, out: self.clone_shallow(), next: 0, slot: NestedSlot::Children };
+        let mut stack: Vec<Pending<'_>> = Vec::new();
+        loop {
+            let top = stack.last_mut().unwrap_or(&mut root);
+            let src = top.src;
+            if let Some((slot, child)) = src.nested_box(top.next) {
+                top.next += 1;
+                stack.push(Pending { src: child, out: child.clone_shallow(), next: 0, slot });
+                continue;
+            }
+            let Some(done) = stack.pop() else { return root.out };
+            stack.last_mut().unwrap_or(&mut root).out.push_nested(done.slot, done.out);
+        }
+    }
+}
+
+/// Which of a `LayoutBox`'s own lists a directly nested box lives in — see
+/// `LayoutBox::nested_box`.
+#[derive(Clone, Copy)]
+enum NestedSlot {
+    Children,
+    CvHidden,
+    Mask,
+}
+
+impl LayoutBox {
+    /// Every field cloned except the nested-box lists (`children`,
+    /// `cv_hidden`, `SvgMaskContent::content`), which come back empty with the
+    /// source's capacity — the per-node step of `Clone::clone`. A struct
+    /// literal without `..`, so a new field fails to compile here instead of
+    /// being silently left at a default.
+    fn clone_shallow(&self) -> Self {
+        let kind = match &self.kind {
+            BoxKind::SvgShape { shape, svg_transform, svg_paint_matrix, svg_mask: Some(mask) } => BoxKind::SvgShape {
+                shape: shape.clone(),
+                svg_transform: svg_transform.clone(),
+                svg_paint_matrix: svg_paint_matrix.clone(),
+                svg_mask: Some(Box::new(SvgMaskContent {
+                    content: Vec::with_capacity(mask.content.len()),
+                    mode: mask.mode,
+                })),
+            },
+            other => other.clone(),
+        };
+        LayoutBox {
+            node: self.node,
+            rect: self.rect,
+            style: Arc::clone(&self.style),
+            used_line_height: self.used_line_height,
+            used_padding: self.used_padding,
+            grid_baselines: self.grid_baselines,
+            fieldset_legend: self.fieldset_legend,
+            table_caption_inset: self.table_caption_inset,
+            clamp_clip: self.clamp_clip,
+            subgrid_tracks: self.subgrid_tracks.clone(),
+            used_grid_tracks: self.used_grid_tracks.clone(),
+            kind,
+            children: Vec::with_capacity(self.children.len()),
+            col_span: self.col_span,
+            row_span: self.row_span,
+            svg_group_transform: self.svg_group_transform.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+            anchor_scroll: self.anchor_scroll.clone(),
+            cv_hidden: Vec::with_capacity(self.cv_hidden.len()),
+            dirty: self.dirty,
+            origin: self.origin,
+        }
+    }
+
+    /// The `i`-th box nested directly in `self`, counting `children`, then
+    /// `cv_hidden`, then the `<mask>` content of an `SvgShape`.
+    fn nested_box(&self, i: usize) -> Option<(NestedSlot, &LayoutBox)> {
+        let (c, h) = (self.children.len(), self.cv_hidden.len());
+        if let Some(b) = self.children.get(i) {
+            return Some((NestedSlot::Children, b));
+        }
+        if let Some(b) = self.cv_hidden.get(i - c) {
+            return Some((NestedSlot::CvHidden, b));
+        }
+        match &self.kind {
+            BoxKind::SvgShape { svg_mask: Some(mask), .. } => mask.content.get(i - c - h).map(|b| (NestedSlot::Mask, b)),
+            _ => None,
+        }
+    }
+
+    /// Appends a finished copy to the list `slot` names. `Mask` is only ever
+    /// produced for a source with a mask, whose shallow copy has one too.
+    fn push_nested(&mut self, slot: NestedSlot, b: LayoutBox) {
+        match slot {
+            NestedSlot::Children => self.children.push(b),
+            NestedSlot::CvHidden => self.cv_hidden.push(b),
+            NestedSlot::Mask => {
+                if let BoxKind::SvgShape { svg_mask: Some(mask), .. } = &mut self.kind {
+                    mask.content.push(b);
+                }
+            }
         }
     }
 }
