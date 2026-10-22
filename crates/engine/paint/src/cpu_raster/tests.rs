@@ -924,7 +924,7 @@ fn draw_text_with_provider_but_no_match_is_byte_identical() {
 #[test]
 fn draw_text_size_adjust_from_registered_face_widens_ink() {
     let black = Color { r: 0, g: 0, b: 0, a: 255 };
-    let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let bundled = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
     let registry = lumen_font::FontRegistry::new();
     registry.register_from_bytes(
         "BigWebFont",
@@ -989,7 +989,7 @@ fn draw_text_size_adjust_from_registered_face_widens_ink() {
 /// `rustybuzz` shaping pass per sub-run.
 #[test]
 fn itemize_by_cascade_splits_on_declared_unicode_range() {
-    let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let bundled = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
     let candidate = |ranges: Vec<(u32, u32)>| {
         let face = build_face(bundled).expect("bundled Inter must parse");
         let cmap = face.font.cmap().ok();
@@ -1009,7 +1009,7 @@ fn itemize_by_cascade_splits_on_declared_unicode_range() {
 /// promise.
 #[test]
 fn itemize_by_cascade_single_candidate_is_one_run() {
-    let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let bundled = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
     let face = build_face(bundled).expect("bundled Inter must parse");
     let cmap = face.font.cmap().ok();
     let cascade = vec![FaceCandidate { bytes: bundled, face, ranges: Vec::new(), cmap }];
@@ -1023,7 +1023,7 @@ fn itemize_by_cascade_single_candidate_is_one_run() {
 /// silently picking an unrelated candidate).
 #[test]
 fn itemize_by_cascade_falls_back_to_primary_outside_every_range() {
-    let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let bundled = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
     let candidate = |ranges: Vec<(u32, u32)>| {
         let face = build_face(bundled).expect("bundled Inter must parse");
         let cmap = face.font.cmap().ok();
@@ -1044,7 +1044,7 @@ fn itemize_by_cascade_falls_back_to_primary_outside_every_range() {
 #[test]
 fn draw_text_renders_through_unicode_range_sibling_cascade() {
     let black = Color { r: 0, g: 0, b: 0, a: 255 };
-    let bundled = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let bundled = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
     let registry = lumen_font::FontRegistry::new();
     registry.register_from_bytes(
         "SplitFont",
