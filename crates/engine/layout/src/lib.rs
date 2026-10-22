@@ -1886,20 +1886,32 @@ pub fn collect_computed_styles(
             if out.contains_key(&idx) {
                 continue;
             }
-            let id = lumen_dom::NodeId::from_index(i);
-            if let Some(style) = counters.style_arc(id) {
-                let mut m = StyleMap::of_style(&style);
-                // BUG-1191: no box (empty inline, `display: none` /
-                // `content-visibility: hidden` descendant) — publish the
-                // cascaded style, marked so «rendered» checks can skip it.
-                if style.display != Display::Contents {
-                    m.set(resolved_geometry::BOXLESS_KEY, "1".to_owned());
-                }
-                out.insert(idx, m);
-            }
+            publish_boxless_computed_style(counters, idx, &mut out);
         }
     }
     out
+}
+
+/// BUG-1191: publishes the cascaded style of node `idx` — an element with no box
+/// (empty inline, `display: none` / `content-visibility: hidden` descendant) —
+/// from `counters`, marked ([`resolved_geometry::BOXLESS_KEY`]) so «rendered»
+/// checks can skip it. A no-op for a node `counters` holds no style for.
+///
+/// BUG-1480/BUG-1684: also the incremental flush's backfill — it evicts the
+/// entries of the boxes it rebuilt, and an element that *lost* its box in that
+/// restyle (`div.style.display = 'inline'`, a closed `<details>`' content) is
+/// not walked by the box collector, so nothing would refill its entry.
+pub fn publish_boxless_computed_style(
+    counters: &CounterMap,
+    idx: u32,
+    out: &mut std::collections::HashMap<u32, StyleMap>,
+) {
+    let Some(style) = counters.style_arc(lumen_dom::NodeId::from_index(idx as usize)) else { return };
+    let mut m = StyleMap::of_style(&style);
+    if style.display != Display::Contents {
+        m.set(resolved_geometry::BOXLESS_KEY, "1".to_owned());
+    }
+    out.insert(idx, m);
 }
 
 /// The properties published for a text node that ended up inside an inline run.

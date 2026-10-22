@@ -771,6 +771,14 @@ impl FlushHandles {
                     }
                     self.style_entries_kept.fetch_add(kept, Ordering::Relaxed);
                     let stats = plan.collect_computed_styles(&doc_guard, viewport, &mut cs);
+                    // BUG-1480/BUG-1684: an element that lost its box in this restyle
+                    // (`style.display = 'inline'` on an empty `div`) was evicted above
+                    // and no box collects it any more — republish its cascaded style.
+                    for nid in prev_node_ids {
+                        if !cs.contains_key(nid) {
+                            lumen_layout::publish_boxless_computed_style(&counters, *nid, &mut cs);
+                        }
+                    }
                     if lumen_paint::frame_log_enabled() {
                         eprintln!(
                             "[engine] style collect {stats:?} evicted_prev={} dirty_roots={}",

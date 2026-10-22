@@ -99,7 +99,8 @@ fn closed_details_renders_summary_only_and_open_reveals_content() {
         d.setAttribute('open', '');
         var open = p.checkVisibility() && getComputedStyle(p).display === 'block';
         d.removeAttribute('open');
-        var reclosed = !p.checkVisibility();
+        // BUG-1684: the entry the open pass evicted is republished on the way back.
+        var reclosed = !p.checkVisibility() && getComputedStyle(p).length > 0 && getComputedStyle(p).display === 'block';
         return closed + ',' + open + ',' + reclosed;
     })()";
     assert_eq!(eval_str(&rt, src), "true,true,true");
