@@ -861,6 +861,30 @@ use super::*;
     }
 
     #[test]
+    fn display_inline_level_forms_keep_their_canonical_word() {
+        // BUG-1476: `Display` не различает `ruby`/`math`/`ruby-text`/`run-in flex` и
+        // `inline list-item`; computed value отдаёт каноническое слово (CSS Display 3 §2).
+        for (decl, display, want) in [
+            ("ruby", Display::Inline, "ruby"),
+            ("inline ruby", Display::Inline, "ruby"),
+            ("math", Display::Inline, "math"),
+            ("ruby-text", Display::Inline, "ruby-text"),
+            ("run-in flex", Display::InlineFlex, "run-in flex"),
+            ("inline list-item", Display::ListItem, "inline list-item"),
+            ("inline flow-root", Display::InlineBlock, "inline-block"),
+        ] {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ display: {decl}; }}"));
+            let root = ComputedStyle::root();
+            let div = doc.get(doc.body().unwrap()).children[0];
+            let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(style.display, display, "display: {decl}");
+            let map = crate::selector_query::computed_style_to_map(&style);
+            assert_eq!(map.get("display").map(String::as_str), Some(want), "display: {decl}");
+        }
+    }
+
+    #[test]
     fn display_table_parsed() {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: table; }");

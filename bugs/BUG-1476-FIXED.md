@@ -1,6 +1,6 @@
 # BUG-1476 — `display`: многословные значения (`inline flow-root`, `block ruby`, `list-item block`), `math`, `ruby`, `grid-lanes` и `initial`/`unset` на неблочных элементах дают `block`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** css-parser/layout (`crates/engine/layout/src/style/` — разбор и сериализация `display`; `selector_query.rs::computed_style_to_map`)
 
@@ -34,3 +34,10 @@ WPT-RUN-14 срез 21: `css-display/parsing/display-valid.html`, `display-compu
 ## Как проверить
 
 Таблица выше; `css/css-display/parsing/display-valid.html`.
+
+## Исправление
+
+- `crates/engine/layout/src/style/parse/display.rs::parse_display` — грамматика `display` CSS Display 3 §2 (внешнее/внутреннее слово в любом порядке, `list-item` с `flow`/`flow-root`, `run-in`, `ruby`/`math`, `ruby-base|text|*-container`, `grid-lanes`); недопустимое значение отбрасывается. Формы, которых нет в `Display` (`inline list-item`, `ruby`, `block math`, `run-in flex`, `ruby-text`), сохраняются в `ComputedStyle::display_form`, `webkit_box_computed_display` отдаёт их в `getComputedStyle`.
+- `crates/js/src/shim/web_api_shim_mid.js::_lumen_css_canonical_display` — `style.display` читается в короткой канонической форме (`inline flow-root` → `inline-block`) и отбрасывает невалидное значение.
+- `initial`/`unset` на неблочных элементах — уже исправлено в [BUG-1448](BUG-1448-FIXED.md).
+- Остаток: `contents`/`inline` у элемента без бокса в `getComputedStyle` сразу после присваивания читается пустым — это [BUG-1480](BUG-1480-OPEN.md) (карта computed не содержит элемент без бокса). Блокификация `ruby`/`inline list-item` в flex/grid-элементе даёт короткую форму (`block`/`list-item`), а не `block ruby`.
