@@ -2212,6 +2212,9 @@ mod grid_computed_style;
 mod state_pseudo_classes;
 #[cfg(test)]
 pub(crate) use state_pseudo_classes::element_color;
+#[cfg(test)]
+#[path = "tests/functional_pseudo_classes.rs"]
+mod functional_pseudo_classes;
 
 #[cfg(test)]
 #[path = "tests/text_justify.rs"]
