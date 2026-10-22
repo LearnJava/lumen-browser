@@ -36,6 +36,11 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         | "label" | "abbr" | "cite" | "q" | "mark" | "u"
         // HTML §15.3.7: <del>, <ins>, <s> — flow content, UA display = inline.
         | "del" | "ins" | "s"
+        // HTML rendering §15.3.1 / §15.3.2 / §15.5 — phrasing elements with no UA
+        // `display` rule are inline; before BUG-1546 the `_ => Display::Block`
+        // catch-all split the text around them onto separate lines.
+        | "acronym" | "bdi" | "bdo" | "big" | "data" | "dfn" | "font" | "kbd" | "nobr"
+        | "output" | "samp" | "strike" | "time" | "tt" | "var" | "wbr"
         // BUG-614: <ruby>/<rb>/<rt>/<rp>/<rtc> have no dedicated box-tree wiring
         // (`RubyBox`/`lay_out_ruby` exist but no pipeline caller). Falling
         // through to the `_ => Display::Block` catch-all splits base +
@@ -109,8 +114,24 @@ pub(in crate::style) fn default_display(doc: &Document, node: NodeId) -> Display
         // inheritance step between the host and its slotted nodes, not a box.
         // `<details>`' content slot is the one exception (`apply_ua_slot`).
         "slot" => Display::Contents,
+        // HTML LS §15.3.1 — an autonomous custom element has no UA `display`
+        // rule, so it is `inline` like any unstyled phrasing element.
+        local if is_autonomous_custom_element_name(local) => Display::Inline,
         _ => Display::Block,
     }
+}
+
+/// HTML LS §4.13.3 valid custom element name: starts with a lowercase ASCII
+/// letter, contains a hyphen, and is not one of the SVG/MathML names that
+/// contain one (`font-face`, `annotation-xml`, …).
+fn is_autonomous_custom_element_name(local: &str) -> bool {
+    const RESERVED: [&str; 8] = [
+        "annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri",
+        "font-face-format", "font-face-name", "missing-glyph",
+    ];
+    local.starts_with(|c: char| c.is_ascii_lowercase())
+        && local.contains('-')
+        && !RESERVED.contains(&local)
 }
 /// HTML5 §14.3.3 — UA white-space for specific elements.
 /// Returns `Some` only for elements that override the inherited value.
@@ -123,6 +144,8 @@ pub(in crate::style) fn ua_white_space(doc: &Document, node: NodeId) -> Option<W
         "pre" | "listing" | "xmp" | "plaintext" => Some(WhiteSpace::Pre),
         // textarea — white-space: pre-wrap (per HTML5 rendering spec)
         "textarea" => Some(WhiteSpace::PreWrap),
+        // HTML rendering §15.5 — `<nobr>` never wraps.
+        "nobr" => Some(WhiteSpace::Nowrap),
         _ => None,
     }
 }

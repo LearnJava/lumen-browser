@@ -645,11 +645,17 @@ pub enum BoxKind {
     /// present it replaces the `list_style_type`/`text` marker (the painter emits a
     /// `DrawImage` instead of a bullet/counter). Same URL key used by
     /// `collect_background_image_requests`, so the shell fetches and registers it.
+    ///
+    /// `in_run` — an `inside` text marker is laid out as the first inline segment of
+    /// the list item's own `InlineRun` (CSS Lists L3 §3.1: the marker is an inline box
+    /// at the start of the first line) and the run paints its text; the box then only
+    /// carries the `::marker` geometry and style and must not draw `text` again.
     Marker {
         text: String,
         position: ListStylePosition,
         list_style_type: ListStyleType,
         image: Option<String>,
+        in_run: bool,
     },
     /// CSS Display L3 §8 — `display: flow-root`. Establishes a Block Formatting
     /// Context: contains floats, prevents margin escape. Laid out identically to

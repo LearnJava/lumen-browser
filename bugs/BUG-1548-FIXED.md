@@ -1,6 +1,6 @@
 # BUG-1548 — `list-style-position: inside`: маркер занимает не меньше `1.5em` вместо ширины своего текста, текст строки начинается правее
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (COUNTER-STYLES-BUILTIN, ветка `p1-counter-styles-builtin`)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:268-294` — `default_w = em * 1.5`, `marker_w = default_w.max(text_w)`)
 
@@ -29,3 +29,7 @@ WPT-RUN-14 срез 25: `css/css-lists/content-property/marker-text-matches-*` (
 ## Как проверить
 
 `css/css-lists/content-property/marker-text-matches-decimal.html`, `css/css-counter-styles/lower-roman/css3-counter-styles-019.html` (после BUG-1546).
+
+## Как исправлено
+
+Текстовый `inside`-маркер стал первым inline-сегментом `InlineRun` пункта списка (`block_flow_trampoline.rs::inline_marker_segment`, `PseudoKind::Marker`): он размечается, режется по границам bidi и позиционируется как текст после него, поэтому ширина — ширина его текста, а `1.5em` остался запасом только для `outside` и маркеров-фигур. Бокс `BoxKind::Marker` получил `in_run` и хранит только геометрию и стиль (текст рисует строка); повторная раскладка заменяет сегмент, а не добавляет второй. Отдельный `DrawText` маркера не годился: растр сам шейпит его и подбирает шрифт для точки, а строка эталона размечена layout-ом — расхождение в долю пикселя и в начертании точки (`tnum` у `::marker` в запасном шрифте тоже двигает точку, поэтому для маркеров без ASCII-цифр функция снимается). Из 234 reftest `css-counter-styles` 97 теперь совпадают с эталоном попиксельно (было 0); 100 из остальных ждут `<ol start>`/`<li value>` (BUG-1547), прочие — детали `@counter-style`/CSSOM, область счётчика по следующим соседям (BUG-1658), `dir=rtl` и значения вне `i32`.

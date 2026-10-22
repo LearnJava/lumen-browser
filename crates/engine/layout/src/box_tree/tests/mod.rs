@@ -450,6 +450,7 @@ mod object_embed;
 mod inline_absolute;
 mod inline_line_growth;
 mod pseudo_first_line;
+mod inside_marker_run;
 
 mod generated_float;
 mod scroll_markers;

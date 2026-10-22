@@ -1935,11 +1935,18 @@ fn roman_counter(n: i32, upper: bool) -> String {
 }
 
 fn greek_counter(n: i32) -> String {
+    // CSS Counter Styles L3 §6.2: `lower-greek` is alphabetic over 24 letters.
     const GREEK: &[char] = &['α','β','γ','δ','ε','ζ','η','θ','ι','κ','λ','μ',
                               'ν','ξ','ο','π','ρ','σ','τ','υ','φ','χ','ψ','ω'];
     if n <= 0 { return n.to_string(); }
-    let idx = ((n as usize) - 1) % GREEK.len();
-    GREEK[idx].to_string()
+    let mut n = n as usize;
+    let mut out = Vec::new();
+    while n > 0 {
+        n -= 1;
+        out.push(GREEK[n % GREEK.len()]);
+        n /= GREEK.len();
+    }
+    out.iter().rev().collect()
 }
 
 // ─── Custom counter styles (CSS Counter Styles L3) ───────────────────────────
@@ -1961,6 +1968,9 @@ pub enum CounterSystem {
     Fixed(i32),
     /// Inherits algorithm + symbols from another counter style (§4.7).
     Extends(String),
+    /// Algorithmic predefined style (East Asian longhand, Ethiopic) — §6.4–§6.5.
+    /// Only the predefined table in `counter_builtin` produces it.
+    Builtin(crate::counter_builtin::BuiltinSystem),
 }
 
 /// Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5).
@@ -1992,7 +2002,7 @@ pub struct CounterStyleDef {
     pub additive_symbols: Vec<(i32, String)>,
     /// Prepended to every counter representation.
     pub prefix: String,
-    /// Appended to every counter representation (default `"."`).
+    /// Appended to every counter representation (default `". "`).
     pub suffix: String,
     /// Range descriptor controlling when fallback is used.
     pub range: CounterRange,
@@ -2011,7 +2021,7 @@ impl Default for CounterStyleDef {
             symbols: Vec::new(),
             additive_symbols: Vec::new(),
             prefix: String::new(),
-            suffix: ".".to_string(),
+            suffix: ". ".to_string(),
             range: CounterRange::Auto,
             pad: None,
             negative: ("-".to_string(), String::new()),
@@ -2297,27 +2307,86 @@ impl CounterStyleDef {
                 val >= *start
                     && (val as i64 - *start as i64) < self.symbols.len() as i64
             }
-            CounterSystem::Extends(_) => true,
+            CounterSystem::Extends(_) | CounterSystem::Builtin(_) => true,
         }
     }
 }
 
-/// Format a counter value using the registry (custom `@counter-style`) first,
-/// then fall back to built-in `format_counter` for standard style names.
+/// The counter style named `name`: an author `@counter-style` first, then a
+/// predefined style (CSS Counter Styles L3 §6).
+fn lookup_style<'a>(
+    name: &str,
+    registry: &'a CounterStyleRegistry,
+) -> Option<&'a CounterStyleDef> {
+    registry.get(name).or_else(|| crate::counter_builtin::lookup(name))
+}
+
+/// Representation of `val` for `counter()` / `counters()`: the author
+/// `@counter-style` or predefined style first, then the legacy keyword set.
+/// Prefix and suffix are *not* part of it (CSS Counter Styles L3 §3.1) — use
+/// [`format_marker_with_registry`] for `::marker` text.
 pub fn format_counter_with_registry(
     val: i32,
     style_name: &str,
     registry: &CounterStyleRegistry,
 ) -> String {
-    if let Some(def) = registry.get(style_name) {
-        format_with_def(val, def, registry, 8)
-    } else {
-        format_counter(val, style_name)
+    match lookup_style(style_name, registry) {
+        Some(def) => representation(val, def, registry, 8),
+        None => format_counter(val, style_name),
     }
 }
 
-/// Recursively format using a `CounterStyleDef` (depth-limited to avoid cycles).
+/// `::marker` text of `val`: prefix + representation + suffix of the style
+/// (CSS Counter Styles L3 §2.7). Unknown names fall back to bare decimal.
+pub fn format_marker_with_registry(
+    val: i32,
+    style_name: &str,
+    registry: &CounterStyleRegistry,
+) -> String {
+    match lookup_style(style_name, registry) {
+        Some(def) => format_with_def(val, def, registry, 8),
+        None => format_counter(val, style_name),
+    }
+}
+
+/// Prefix + representation + suffix (depth-limited to avoid cycles).
 fn format_with_def(
+    val: i32,
+    def: &CounterStyleDef,
+    registry: &CounterStyleRegistry,
+    depth: u32,
+) -> String {
+    if depth == 0 {
+        return val.to_string();
+    }
+    let (prefix, suffix) = affixes(def, registry, depth - 1);
+    format!("{prefix}{}{suffix}", representation(val, def, registry, depth))
+}
+
+/// Prefix and suffix of `def`; an `extends` style takes the base's unless it
+/// has its own (a descriptor left at its default is indistinguishable from an
+/// explicit one, so a derived style keeps the base's affixes only when the
+/// base is a distinct, resolvable style).
+fn affixes<'a>(
+    def: &'a CounterStyleDef,
+    registry: &'a CounterStyleRegistry,
+    depth: u32,
+) -> (&'a str, &'a str) {
+    if let CounterSystem::Extends(base) = &def.system
+        && depth > 0
+        && let Some(base_def) = lookup_style(base, registry)
+        && def.prefix.is_empty()
+        && def.suffix == CounterStyleDef::default().suffix
+    {
+        return affixes(base_def, registry, depth - 1);
+    }
+    (&def.prefix, &def.suffix)
+}
+
+/// Representation of `val` in `def`: system algorithm, then `negative` and
+/// `pad`, with the `fallback` style when the value is out of range or the
+/// system cannot express it (CSS Counter Styles L3 §2.1–§2.4).
+fn representation(
     val: i32,
     def: &CounterStyleDef,
     registry: &CounterStyleRegistry,
@@ -2329,7 +2398,7 @@ fn format_with_def(
 
     // Check range; use fallback if out of range.
     if !def.in_range(val) {
-        return format_fallback(val, &def.fallback, registry, depth - 1);
+        return fallback_representation(val, &def.fallback, registry, depth - 1);
     }
 
     // Step 1: Generate initial token using system algorithm.
@@ -2366,18 +2435,18 @@ fn format_with_def(
                 Some(def.symbols[idx as usize].clone())
             }
         }
+        CounterSystem::Builtin(algorithm) => algorithm.represent(i64::from(val).abs()),
         CounterSystem::Extends(name) => {
             // Delegate entirely to the named base style.
-            if let Some(base) = registry.get(name) {
-                let s = format_with_def(val, base, registry, depth - 1);
-                return s;
-            }
-            return format_counter(val, name);
+            return match lookup_style(name, registry) {
+                Some(base) => representation(val, base, registry, depth - 1),
+                None => format_counter(val, name),
+            };
         }
     };
 
     let Some(mut token) = token_opt else {
-        return format_fallback(val, &def.fallback, registry, depth - 1);
+        return fallback_representation(val, &def.fallback, registry, depth - 1);
     };
 
     // Step 2: Apply negative descriptor for negative values.
@@ -2395,20 +2464,20 @@ fn format_with_def(
         }
     }
 
-    // Step 4: Prepend prefix + append suffix.
-    format!("{}{}{}", def.prefix, token, def.suffix)
+    token
 }
 
-fn format_fallback(
+/// The fallback style's *representation* — prefix and suffix stay those of the
+/// style that fell back (CSS Counter Styles L3 §2.1).
+fn fallback_representation(
     val: i32,
     fallback: &str,
     registry: &CounterStyleRegistry,
     depth: u32,
 ) -> String {
-    if let Some(def) = registry.get(fallback) {
-        format_with_def(val, def, registry, depth)
-    } else {
-        format_counter(val, fallback)
+    match lookup_style(fallback, registry) {
+        Some(def) => representation(val, def, registry, depth),
+        None => format_counter(val, fallback),
     }
 }
 
@@ -2503,7 +2572,7 @@ pub fn build_list_marker_text(
         ListStyleType::LowerAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-alpha", registry)),
         ListStyleType::UpperAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "upper-alpha", registry)),
         ListStyleType::LowerGreek => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-greek", registry)),
-        ListStyleType::Custom(ref name) => format_counter_with_registry(ordinal as i32, name, registry),
+        ListStyleType::Custom(ref name) => format_marker_with_registry(ordinal as i32, name, registry),
     }
 }
 
@@ -3428,9 +3497,11 @@ mod tests {
             ..CounterStyleDef::default()
         };
         registry.insert(s("thumbs"), def);
-        assert_eq!(format_counter_with_registry(1, "thumbs", &registry), "👍 ");
-        assert_eq!(format_counter_with_registry(2, "thumbs", &registry), "👎 ");
-        assert_eq!(format_counter_with_registry(3, "thumbs", &registry), "👍 ");
+        // `counter()` shows the bare representation, the marker adds the suffix.
+        assert_eq!(format_counter_with_registry(1, "thumbs", &registry), "👍");
+        assert_eq!(format_marker_with_registry(1, "thumbs", &registry), "👍 ");
+        assert_eq!(format_marker_with_registry(2, "thumbs", &registry), "👎 ");
+        assert_eq!(format_marker_with_registry(3, "thumbs", &registry), "👍 ");
     }
 
     #[test]

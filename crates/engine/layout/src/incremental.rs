@@ -864,8 +864,9 @@ pub(crate) fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::
         (Iframe { src: s1, srcdoc: d1 }, Iframe { src: s2, srcdoc: d2 }) => s1 == s2 && d1 == d2,
         (FormControl { kind: k1 }, FormControl { kind: k2 }) => k1 == k2,
         (
-            Marker { text: t1, position: p1, list_style_type: ls1, image: i1 },
-            Marker { text: t2, position: p2, list_style_type: ls2, image: i2 },
+            // `in_run` is decided by layout, not by the build: it is not compared.
+            Marker { text: t1, position: p1, list_style_type: ls1, image: i1, .. },
+            Marker { text: t2, position: p2, list_style_type: ls2, image: i2, .. },
         ) => t1 == t2 && p1 == p2 && ls1 == ls2 && i1 == i2,
         _ => false,
     }
