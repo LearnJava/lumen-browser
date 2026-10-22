@@ -1238,6 +1238,13 @@ pub struct ComputedStyle {
     /// CSS Anchor Positioning L1 §2.1 — `anchor-scope`. Non-inherited. Initial: `None`.
     /// Restricts which named anchors from this element's subtree are visible outside.
     pub anchor_scope: crate::anchor::AnchorScope,
+    /// CSS Anchor Positioning L1 §3.1 — computed `position-area` text as
+    /// `getComputedStyle` reports it (`inset_area_row/col` lose the keyword
+    /// family). `None` = `none`.
+    pub position_area_text: Option<Box<str>>,
+    /// CSS Anchor Positioning L1 — `position-visibility`, canonical computed text.
+    /// Non-inherited. `None` = the initial `anchors-visible`.
+    pub position_visibility: Option<&'static str>,
     /// CSS Anchor Positioning L1 §4 — `anchor-size()` in `width`. Non-inherited. Initial: `None`.
     /// When set, the element's used width is the referenced anchor's dimension.
     pub anchor_size_w: Option<crate::anchor::AnchorSizeFunc>,
@@ -1743,6 +1750,8 @@ impl ComputedStyle {
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
             inset_area_col: crate::anchor::InsetAreaKeyword::None,
             anchor_scope: crate::anchor::AnchorScope::None,
+            position_area_text: None,
+            position_visibility: None,
             anchor_size_w: None,
             anchor_size_h: None,
             anchor_top: None,
@@ -2202,6 +2211,8 @@ impl ComputedStyle {
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
             inset_area_col: crate::anchor::InsetAreaKeyword::None,
             anchor_scope: crate::anchor::AnchorScope::None,
+            position_area_text: None,
+            position_visibility: None,
             anchor_size_w: None,
             anchor_size_h: None,
             anchor_top: None,

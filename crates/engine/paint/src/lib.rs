@@ -56,6 +56,8 @@ pub mod renderer;
 pub mod scroll_cache;
 pub mod scroll_snap;
 pub mod svg_path;
+// Only the backends render `DrawTextStroke`; without one nothing calls `expand_all`.
+#[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg", feature = "cpu-render"))]
 pub(crate) mod text_stroke;
 pub mod varied_text;
 #[cfg(feature = "backend-wgpu")]

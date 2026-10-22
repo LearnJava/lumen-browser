@@ -466,6 +466,109 @@ pub(in crate::style) fn parse_position_area(s: &str) -> Option<(crate::anchor::I
     }
 }
 
+/// CSS Anchor Positioning L1 §3.1 `#position-area-computed` — the computed
+/// `position-area` serialization of a valid value (`None` when invalid).
+///
+/// `(row, column)` bands alone lose the keyword family, so the computed text is
+/// built from the words: a physical pair is written horizontal-first
+/// (`top left` → `left top`), a logical pair block-first with the `block-` /
+/// `inline-` axis dropped (`block-start inline-end` → `start end`), a word with
+/// `span-all` keeps its axis-bound spelling, and an ambiguous `start`/`end` word
+/// next to `span-all` gets the axis it ended up on (`start span-all` →
+/// `block-start`).
+pub(in crate::style) fn position_area_computed(s: &str) -> Option<String> {
+    parse_position_area(s)?;
+    let lower = s.to_ascii_lowercase();
+    let toks: Vec<&str> = lower.split_whitespace().collect();
+    if toks.as_slice() == ["none"] {
+        return Some("none".into());
+    }
+    let words: Vec<AreaWord> = toks.iter().map(|t| classify_position_area_word(t)).collect::<Option<_>>()?;
+    let family = words.iter().find_map(|w| w.family);
+    let axis_bound = matches!(family, Some(AreaFamily::Physical | AreaFamily::Logical | AreaFamily::SelfLogical));
+    // `(row, column)` as typed words; `center` and `span-all` stay bands.
+    let (row, col) = match (words.as_slice(), axis_bound) {
+        ([_], false) => return Some(toks[0].to_string()),
+        ([_, _], false) => (toks[0], toks[1]),
+        ([w], true) => if w.row == Some(true) { (toks[0], "span-all") } else { ("span-all", toks[0]) },
+        ([a, b], true) => {
+            let a_row = match (a.row, b.row) {
+                (Some(x), _) => x,
+                (None, Some(y)) => !y,
+                (None, None) => true,
+            };
+            if a_row { (toks[0], toks[1]) } else { (toks[1], toks[0]) }
+        }
+        _ => return None,
+    };
+    let reduce = |t: &str| t.replacen("block-", "", 1).replacen("inline-", "", 1);
+    let text = if axis_bound {
+        match (row, col) {
+            (r, "span-all") => r.to_string(),
+            ("span-all", c) => c.to_string(),
+            (r, c) => {
+                let (r, c) = if family == Some(AreaFamily::Physical) { (c, r) } else { (r, c) };
+                let (a, b) = if family == Some(AreaFamily::Physical) { (r.to_string(), c.to_string()) } else { (reduce(r), reduce(c)) };
+                if a == b { a } else { format!("{a} {b}") }
+            }
+        }
+    } else {
+        let axis_word = |t: &str, axis: &str| match t.rsplit_once('-') {
+            Some((p, e)) => format!("{p}-{axis}-{e}"),
+            None => format!("{axis}-{t}"),
+        };
+        match (row, col) {
+            ("span-all", "span-all") => "span-all".to_string(),
+            (r, c) if r == c => r.to_string(),
+            (r, "span-all") if r != "center" => axis_word(r, "block"),
+            ("span-all", c) if c != "center" => axis_word(c, "inline"),
+            (r, c) => format!("{r} {c}"),
+        }
+    };
+    Some(text)
+}
+
+/// `none`, or a comma-separated list of `<dashed-ident>`s, as the canonical
+/// `, `-joined text (CSS Anchor Positioning L1 `anchor-name` / `anchor-scope`
+/// computed value). `None` when any item is not a dashed ident.
+pub(in crate::style) fn parse_dashed_ident_list(s: &str) -> Option<Box<str>> {
+    let items: Vec<&str> = s.split(',').map(str::trim).collect();
+    let dashed = |t: &str| t.len() > 2 && t.starts_with("--") && !t.contains(char::is_whitespace);
+    items.iter().all(|t| dashed(t)).then(|| items.join(", ").into())
+}
+
+/// CSS Anchor Positioning L1 `position-visibility`: `always`, or any
+/// combination of `anchors-valid`, `anchors-visible`, `no-overflow` — the
+/// computed text lists them in that fixed order. `None` when invalid.
+pub(in crate::style) fn parse_position_visibility(s: &str) -> Option<&'static str> {
+    let lower = s.to_ascii_lowercase();
+    if lower.trim() == "always" {
+        return Some("always");
+    }
+    let (mut valid, mut visible, mut overflow) = (false, false, false);
+    for t in lower.split_whitespace() {
+        let flag = match t {
+            "anchors-valid" => &mut valid,
+            "anchors-visible" => &mut visible,
+            "no-overflow" => &mut overflow,
+            _ => return None,
+        };
+        if std::mem::replace(flag, true) {
+            return None;
+        }
+    }
+    Some(match (valid, visible, overflow) {
+        (false, false, false) => return None,
+        (true, false, false) => "anchors-valid",
+        (false, true, false) => "anchors-visible",
+        (false, false, true) => "no-overflow",
+        (true, true, false) => "anchors-valid anchors-visible",
+        (true, false, true) => "anchors-valid no-overflow",
+        (false, true, true) => "anchors-visible no-overflow",
+        (true, true, true) => "anchors-valid anchors-visible no-overflow",
+    })
+}
+
 /// CSS Anchor Positioning L1 §4 — parse `anchor-size(<anchor-el>? <anchor-size>)`.
 ///
 /// The `<anchor-name>` and `<anchor-size>` components combine with `&&`, in any

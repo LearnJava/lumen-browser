@@ -1440,6 +1440,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // ── Display / layout mode ─────────────────────────────────────
     m.insert("display".into(), webkit_box_computed_display(style).into());
 
+    // ── CSS Anchor Positioning L1 (BUG-1478) ──────────────────────
+    m.insert("anchor-name".into(), style.anchor_name.as_deref().unwrap_or("none").into());
+    m.insert("position-anchor".into(), style.position_anchor.as_deref().unwrap_or("auto").into());
+    m.insert("anchor-scope".into(), match &style.anchor_scope {
+        crate::anchor::AnchorScope::None => "none".into(),
+        crate::anchor::AnchorScope::All => "all".into(),
+        crate::anchor::AnchorScope::Named(list) => list.to_string(),
+    });
+    m.insert("position-area".into(), style.position_area_text.as_deref().unwrap_or("none").into());
+    m.insert("position-visibility".into(), style.position_visibility.unwrap_or("anchors-visible").into());
+
     m.insert("visibility".into(), match style.visibility {
         Visibility::Visible => "visible",
         Visibility::Hidden => "hidden",
