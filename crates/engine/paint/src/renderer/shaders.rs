@@ -570,7 +570,8 @@ fn vs_main(in: VIn) -> VOut {
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r * rrect_clip_coverage(in.clip.xy);
+    let cov = text_gamma_correct(textureSample(atlas_tex, atlas_smp, in.uv).r, in.color.rgb);
+    let alpha = cov * rrect_clip_coverage(in.clip.xy);
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
 "#;
