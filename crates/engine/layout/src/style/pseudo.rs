@@ -11,11 +11,13 @@
 // ловит неразрешённое имя (урок SH-3a о cfg у реэкспорта).
 #[cfg(test)]
 use crate::style::PSEUDO_BASE_BUILDS;
+use crate::style::cascade::{part_scopes_of, set_part_scope_host};
+use crate::style::matches_part_complex;
 use crate::style::{
     apply_declaration, apply_font_size, ensure_cascade_index, expand_attr_val, matches_complex,
     note_pseudo_cascade, sheet_targets_pseudo, with_front_cascade_index, ComputedStyle, Content,
     ContentItem,
-    Display, PSEUDO_STATS_ON,
+    Display, PSEUDO_STATS_ON, SHADOW_HOST_SCOPE,
 };
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -23,6 +25,9 @@ use lumen_css_parser::{
     Stylesheet,
 };
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
+
+/// Rule-order base of `host::part()::pseudo` rules, above every part-less rule of the sheet.
+const PART_RULE_BASE: usize = usize::MAX / 2;
 
 /// Проверяет, является ли `complex` правилом для псевдоэлемента `pseudo`
 /// (например "before" для `::before`) на элементе `node`.
@@ -47,6 +52,7 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::FirstLine => "first-line",
         PseudoElementKind::FirstLetter => "first-letter",
         PseudoElementKind::Slotted(_) => "slotted",
+        PseudoElementKind::Part(_) => "part",
         PseudoElementKind::Marker => "marker",
         PseudoElementKind::Selection => "selection",
         PseudoElementKind::TargetText => "target-text",
@@ -137,6 +143,11 @@ fn matches_complex_for_pseudo(
     if !last.parts.iter().any(|p| {
         matches!(p, SimpleSelector::PseudoElement(n) if pseudo_element_matches(n, pseudo))
     }) {
+        return None;
+    }
+    // `host::part(a)::before` styles a part of the host's shadow tree, never the host itself:
+    // `compute_pseudo_element_style_inner` matches it against the part element.
+    if last.parts.iter().any(|p| matches!(p, SimpleSelector::PseudoElement(PseudoElementKind::Part(_)))) {
         return None;
     }
     // Строим модифицированный последний compound без PseudoElement.
@@ -515,10 +526,13 @@ fn compute_pseudo_element_style_inner(
     // HTML rendering §15.3.7: `q::before`/`q::after` get `open-quote`/`close-quote` from the UA
     // sheet (BUG-1598) — no author rule needed, so the sheet-level gate does not apply.
     let ua_quote = ua_quote_content(doc, node, pseudo);
+    // CSS Shadow Parts L1 §2: `host::part(a)::before` rules of the outer trees reach a `part` element.
+    let part_scopes = part_scopes_of(doc, node);
     let is_scroll_group = pseudo.eq_ignore_ascii_case("scroll-marker-group");
     if !pseudo.eq_ignore_ascii_case("marker")
         && !is_scroll_group
         && ua_quote.is_none()
+        && part_scopes.is_empty()
         && !sheet_targets_pseudo(sheet, viewport, dark_mode, split_pseudo_request(pseudo).0)
     {
         return None;
@@ -612,6 +626,35 @@ fn compute_pseudo_element_style_inner(
             }
         }
     });
+
+    // Part scopes: the outer tree's `host::part(names)::pseudo` rules match the part element. They sort
+    // after the part-less rules of their sheet (rule index offset), never ahead by specificity.
+    let part_pseudo_ok = |k: &PseudoElementKind| pseudo_element_matches(k, pseudo);
+    for scope in &part_scopes {
+        let names: Vec<&str> = scope.names.iter().map(String::as_str).collect();
+        set_part_scope_host(doc, scope);
+        let rules: &[lumen_css_parser::Rule] = match &scope.sheet {
+            Some(shadow) => &shadow.rules,
+            None => &sheet.rules,
+        };
+        for (i, rule) in rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_part_complex(complex, doc, node, scope.host, &names, Some(&part_pseudo_ok)) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, PART_RULE_BASE + i, decl_idx, decl));
+                }
+            }
+        }
+        SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
+    }
 
     if matched.is_empty() {
         // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type

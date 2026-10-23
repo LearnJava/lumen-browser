@@ -373,6 +373,7 @@ pub(crate) use matching::matches_complex;
 pub(crate) use matching::matches_complex_reference;
 pub(in crate::style) use matching::matches_simple;
 use matching::{complex_has_host, matches_slotted_complex};
+pub(in crate::style) use matching::matches_part_complex;
 
 // SPLIT-ST11. UA-таблица (`style::ua`), презентационные HTML-атрибуты
 // (`style::presentational`), quirks-режим (`style::quirks`) и шрифтовые
