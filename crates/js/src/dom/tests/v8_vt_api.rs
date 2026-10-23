@@ -698,3 +698,21 @@ fn scoped_pseudo_animations_target_the_scope_element() {
     assert!(got.ends_with(",0"), "{got}");
     assert!(got.contains("main::view-transition-old(outer)") && !got.contains("(root)"), "{got}");
 }
+
+/// `animation: unset` on the group and image pair leaves only the fade animations of the old and
+/// new images (WPT `scoped/capture.html`).
+#[test]
+fn page_animation_unset_removes_the_ua_group_animation_of_a_scoped_tree() {
+    let rt = scoped_rt(&format!(
+        "{NAMES_CSS} ::view-transition-group(*), ::view-transition-image-pair(*) {{ animation: unset; }}          ::view-transition-old(*) {{ animation: -ua-view-transition-fade-out 1s paused; }}          ::view-transition-new(*) {{ animation: -ua-view-transition-fade-in 1s paused; }}"
+    ));
+    rt.eval(
+        "main.startViewTransition().ready.then(function () {            log.push(main.getAnimations({ subtree: true }).map(function (a) {              return a.animationName.replace('-ua-view-transition-', '') + '@' + a.effect.pseudoElement; }).join(' ')); }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(
+        log(&rt),
+        "fade-out@::view-transition-old(outer) fade-in@::view-transition-new(outer) fade-out@::view-transition-old(inner) fade-in@::view-transition-new(inner)"
+    );
+}

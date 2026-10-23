@@ -293,6 +293,8 @@ function skip(s, reason) {
   clearCurrent(s);
   if (s.began) { s.began = false; native('_lumen_vt_cancel', s); }
   s.ready.reject(reason);
+  // §6.3 "skip": the ready promise of a skipped transition is marked as handled.
+  s.ready.promise.catch(noop);
   if (needsCallback) { later(function () { invokeCallback(s); }); }
   // `finished` follows the update callback. Deliberately not `updateDone.promise.then(…)`:
   // a reaction there would mark a rejected `updateCallbackDone` as handled, and the page

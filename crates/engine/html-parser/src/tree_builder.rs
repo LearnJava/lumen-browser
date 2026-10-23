@@ -1178,6 +1178,15 @@ impl IncrementalTreeBuilder {
                     if let Some(pos) = self.open_elements.iter().position(|&n| n == head) {
                         self.open_elements.remove(pos);
                     }
+                    // A rawtext head element (<script>/<style>/<title>) switched us to Text
+                    // with `original_insertion_mode = InHead` (the mode set above); its end
+                    // tag must return to «after head», not to «in head» — there a later
+                    // `<body>` pops `<html>` and the body is built outside the tree.
+                    if self.insertion_mode == InsertionMode::Text
+                        && self.original_insertion_mode == Some(InsertionMode::InHead)
+                    {
+                        self.original_insertion_mode = Some(saved);
+                    }
                     // Restore only if InHead didn't switch us to InTemplate.
                     if self.insertion_mode == InsertionMode::InHead {
                         self.insertion_mode = saved;
