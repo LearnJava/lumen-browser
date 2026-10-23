@@ -1285,6 +1285,12 @@ pub struct ComputedStyle {
     /// During a `document.startViewTransition()` call the shell matches old/new snapshots
     /// by name and cross-fades them. `None` means the property is `none`.
     pub view_transition_name: Option<Box<str>>,
+    /// CSS View Transitions L2 §2.2 — `view-transition-class: none | <custom-ident>+`.
+    /// Non-inherited. Initial `None` (none); otherwise the idents joined by single spaces.
+    pub view_transition_class: Option<Box<str>>,
+    /// CSS View Transitions L2 §2.3 — `view-transition-group: normal | contain | nearest |
+    /// <custom-ident>`. Non-inherited. Initial `None` (normal).
+    pub view_transition_group: Option<Box<str>>,
     /// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial `auto`.
     /// Supplies the glyph pairs for `content: open-quote` / `close-quote`.
     pub quotes: Quotes,

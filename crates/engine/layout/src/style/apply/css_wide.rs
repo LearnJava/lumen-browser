@@ -1376,6 +1376,12 @@ fn apply_css_wide_keyword_with(
         "anchor-scope" => {
             style.anchor_scope = if inh_only_inherit { inherited.anchor_scope.clone() } else { init.anchor_scope.clone() };
         }
+        "view-transition-class" => {
+            style.view_transition_class = if inh_only_inherit { inherited.view_transition_class.clone() } else { None };
+        }
+        "view-transition-group" => {
+            style.view_transition_group = if inh_only_inherit { inherited.view_transition_group.clone() } else { None };
+        }
         "view-transition-name" => {
             style.view_transition_name = if inh_only_inherit { inherited.view_transition_name.clone() } else { None };
         }
