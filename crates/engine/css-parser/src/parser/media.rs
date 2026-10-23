@@ -14,6 +14,8 @@ use super::*;
 pub struct MediaRule {
     pub query: MediaQuery,
     pub rules: Vec<Rule>,
+    /// Место блока среди обычных правил листа — см. [`BlockPos`].
+    pub pos: BlockPos,
 }
 
 /// Media query — OR-список AND-clauses (Media Queries L4 §3). Пустой

@@ -10,6 +10,8 @@ use super::*;
 pub struct SupportsRule {
     pub condition: SupportsCondition,
     pub rules: Vec<Rule>,
+    /// Место блока среди обычных правил листа — см. [`BlockPos`].
+    pub pos: BlockPos,
 }
 
 /// Условие в `@supports (...)`. Грамматика:
@@ -407,6 +409,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Some(SupportsRule { condition, rules })
+        Some(SupportsRule { condition, rules, pos: BlockPos::default() })
     }
 }

@@ -301,6 +301,20 @@ pub struct Stylesheet {
 /// [`Stylesheet::insert_rule`] rather than from parsed source text.
 pub const SYNTHETIC_SPAN: usize = usize::MAX;
 
+/// Where a top-level `@media`/`@supports` block stands among the sheet's plain style
+/// rules (CSS Cascade 4 §6.4.3, order of appearance). `Stylesheet::rules` and the
+/// two block vecs share no index space, so the cascade cannot tell from them alone
+/// whether `.a{}` written after `@media{ .a{} }` comes later; this records it.
+///
+/// Lexicographic order (`rules_before`, then `seq`) is source order among the blocks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BlockPos {
+    /// How many entries of [`Stylesheet::rules`] precede the block in the source.
+    pub rules_before: usize,
+    /// Index of the block among all `@media`/`@supports` blocks of the sheet.
+    pub seq: usize,
+}
+
 /// Tag for [`Stylesheet::top_level_order`] — see that field's doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopLevelRuleKind {
@@ -547,12 +561,12 @@ impl Stylesheet {
             revision: _,
             rules,
             properties,
-            media_rules,
+            mut media_rules,
             imports,
             font_faces,
             layer_order,
             layers,
-            supports_rules,
+            mut supports_rules,
             keyframes,
             counter_styles,
             page_rules,
@@ -569,6 +583,15 @@ impl Stylesheet {
             source: _,
             cssom: _,
         } = other;
+        // The merged-in blocks stand after everything `self` already holds.
+        let rules_off = self.rules.len();
+        let seq_off = self.media_rules.len() + self.supports_rules.len();
+        let shift = |pos: &mut BlockPos| {
+            pos.rules_before += rules_off;
+            pos.seq += seq_off;
+        };
+        media_rules.iter_mut().for_each(|b| shift(&mut b.pos));
+        supports_rules.iter_mut().for_each(|b| shift(&mut b.pos));
         self.rules.extend(rules);
         self.properties.extend(properties);
         self.media_rules.extend(media_rules);
@@ -684,8 +707,39 @@ impl Stylesheet {
         let sub_index =
             self.top_level_order[..index].iter().filter(|k| **k == kind).count();
         match (kind, style_rule, media_rule) {
-            (TopLevelRuleKind::Style, Some(rule), _) => self.rules.insert(sub_index, rule),
-            (TopLevelRuleKind::Media, _, Some(rule)) => self.media_rules.insert(sub_index, rule),
+            (TopLevelRuleKind::Style, Some(rule), _) => {
+                // Blocks written after the new rule now follow one more plain rule.
+                let media_before = self.top_level_order[..index]
+                    .iter()
+                    .filter(|k| **k == TopLevelRuleKind::Media)
+                    .count();
+                for (i, m) in self.media_rules.iter_mut().enumerate() {
+                    if m.pos.rules_before > sub_index
+                        || (m.pos.rules_before == sub_index && i >= media_before)
+                    {
+                        m.pos.rules_before += 1;
+                    }
+                }
+                for s in self.supports_rules.iter_mut() {
+                    if s.pos.rules_before > sub_index {
+                        s.pos.rules_before += 1;
+                    }
+                }
+                self.rules.insert(sub_index, rule);
+            }
+            (TopLevelRuleKind::Media, _, Some(mut rule)) => {
+                rule.pos = BlockPos {
+                    rules_before: self.top_level_order[..index]
+                        .iter()
+                        .filter(|k| **k == TopLevelRuleKind::Style)
+                        .count(),
+                    seq: self.media_rules.get(sub_index).map_or_else(
+                        || sub_index.checked_sub(1).map_or(0, |p| self.media_rules[p].pos.seq + 1),
+                        |next| next.pos.seq,
+                    ),
+                };
+                self.media_rules.insert(sub_index, rule);
+            }
             _ => return Err(CssomRuleMutationError::Syntax),
         }
         self.top_level_order.insert(index, kind);
@@ -714,6 +768,16 @@ impl Stylesheet {
         match kind {
             TopLevelRuleKind::Style => {
                 self.rules.remove(sub_index);
+                for pos in self
+                    .media_rules
+                    .iter_mut()
+                    .map(|b| &mut b.pos)
+                    .chain(self.supports_rules.iter_mut().map(|b| &mut b.pos))
+                {
+                    if pos.rules_before > sub_index {
+                        pos.rules_before -= 1;
+                    }
+                }
             }
             TopLevelRuleKind::Media => {
                 self.media_rules.remove(sub_index);
@@ -1211,6 +1275,7 @@ impl<'a> Parser<'a> {
         let mut mixin_rules: Vec<MixinRule> = Vec::new();
         let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
         let mut top_level_spans: Vec<usize> = Vec::new();
+        let mut block_seq = 0usize;
         loop {
             self.skip_ws_and_comments();
             // CSS Syntax §5.4.1 «consume a list of rules» (top-level): CDO/CDC
@@ -1254,7 +1319,9 @@ impl<'a> Parser<'a> {
                     while let Some(outcome) = queue.pop_front() {
                         match outcome {
                             AtRuleOutcome::Property(p) => properties.push(p),
-                            AtRuleOutcome::Media(m) => {
+                            AtRuleOutcome::Media(mut m) => {
+                                m.pos = BlockPos { rules_before: rules.len(), seq: block_seq };
+                                block_seq += 1;
                                 media_rules.push(m);
                                 top_level_order.push(TopLevelRuleKind::Media);
                             }
@@ -1286,7 +1353,11 @@ impl<'a> Parser<'a> {
                                 mixin_rules.extend(mixins);
                                 queue.extend(hoisted);
                             }
-                            AtRuleOutcome::Supports(s) => supports_rules.push(s),
+                            AtRuleOutcome::Supports(mut s) => {
+                                s.pos = BlockPos { rules_before: rules.len(), seq: block_seq };
+                                block_seq += 1;
+                                supports_rules.push(s);
+                            }
                             AtRuleOutcome::Keyframes(k) => keyframes.push(k),
                             AtRuleOutcome::CounterStyle(c) => counter_styles.push(c),
                             AtRuleOutcome::Page(p) => page_rules.push(p),
@@ -1318,11 +1389,17 @@ impl<'a> Parser<'a> {
                         // CSS Nesting L1 §5: nested at-rules bubble up into the stylesheet.
                         for at in nested_at {
                             match at {
-                                AtRuleOutcome::Media(m) => {
+                                AtRuleOutcome::Media(mut m) => {
+                                    m.pos = BlockPos { rules_before: rules.len(), seq: block_seq };
+                                    block_seq += 1;
                                     media_rules.push(m);
                                     top_level_order.push(TopLevelRuleKind::Media);
                                 }
-                                AtRuleOutcome::Supports(s) => supports_rules.push(s),
+                                AtRuleOutcome::Supports(mut s) => {
+                                    s.pos = BlockPos { rules_before: rules.len(), seq: block_seq };
+                                    block_seq += 1;
+                                    supports_rules.push(s);
+                                }
                                 AtRuleOutcome::LayerNames(names) => {
                                     for n in names {
                                         layer_state.declare(n);

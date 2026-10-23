@@ -1142,7 +1142,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Some(MediaRule { query, rules })
+        Some(MediaRule { query, rules, pos: BlockPos::default() })
     }
 
     /// Парсит тело `@keyframes <name> { <frame>* }` — CSS Animations L1 §3.

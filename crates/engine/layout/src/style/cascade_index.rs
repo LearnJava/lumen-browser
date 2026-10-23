@@ -131,6 +131,83 @@ pub(in crate::style) struct CascadeIndex {
     pub(in crate::style) pseudo_media: Vec<PseudoBlockIndex>,
     /// Likewise for `@supports` blocks; their base continues after the last media block.
     pub(in crate::style) pseudo_supports: Vec<PseudoBlockIndex>,
+    /// Source-order numbering of the plain rules and the `@media`/`@supports` blocks.
+    pub(in crate::style) order: RuleOrder,
+}
+
+/// BUG-1492 — the one numbering of `sheet.rules` and the rules of every `@media`/`@supports`
+/// block that follows the order of appearance in the source (CSS Cascade 4 §6.4.3). A plain
+/// rule written after an `@media` block must outrank an equally specific rule inside it, but
+/// the cascade sorts by a single integer, and `rules`/`media_rules`/`supports_rules` are three
+/// vecs. The key of a block's first rule and of every plain rule is fixed here, once per sheet;
+/// a block's rule `r` has key `base + r`.
+#[derive(Default)]
+pub(in crate::style) struct RuleOrder {
+    /// Key of `sheet.rules[i]`. Empty when it is `i` itself — every block follows all plain rules.
+    style_key: Vec<usize>,
+    /// Key of the first rule of `sheet.media_rules[i]`.
+    pub(in crate::style) media_base: Vec<usize>,
+    /// Key of the first rule of `sheet.supports_rules[i]`.
+    pub(in crate::style) supports_base: Vec<usize>,
+    /// One past the largest key: where the numbering of `@layer`/`@scope`/shadow rules starts.
+    pub(in crate::style) end: usize,
+}
+
+impl RuleOrder {
+    fn build(sheet: &Stylesheet) -> Self {
+        // (position, is_supports, index into the block vec, rule count)
+        let mut blocks: Vec<(lumen_css_parser::BlockPos, bool, usize, usize)> = sheet
+            .media_rules
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.pos, false, i, m.rules.len()))
+            .chain(sheet.supports_rules.iter().enumerate().map(|(i, s)| (s.pos, true, i, s.rules.len())))
+            .collect();
+        blocks.sort_by_key(|&(pos, is_supports, i, _)| (pos, is_supports, i));
+        let mut order = Self {
+            style_key: Vec::new(),
+            media_base: vec![0; sheet.media_rules.len()],
+            supports_base: vec![0; sheet.supports_rules.len()],
+            end: 0,
+        };
+        let plain = sheet.rules.len();
+        let identity = blocks.iter().all(|(pos, ..)| pos.rules_before >= plain);
+        if !identity {
+            order.style_key.reserve(plain);
+        }
+        let mut key = 0usize;
+        let mut next_block = 0usize;
+        let mut place_blocks_up_to = |order: &mut Self, key: &mut usize, rules_before: usize| {
+            while let Some(&(pos, is_supports, i, len)) = blocks.get(next_block) {
+                if pos.rules_before > rules_before {
+                    break;
+                }
+                if is_supports {
+                    order.supports_base[i] = *key;
+                } else {
+                    order.media_base[i] = *key;
+                }
+                *key += len;
+                next_block += 1;
+            }
+        };
+        for i in 0..plain {
+            place_blocks_up_to(&mut order, &mut key, i);
+            if !identity {
+                order.style_key.push(key);
+            }
+            key += 1;
+        }
+        place_blocks_up_to(&mut order, &mut key, usize::MAX);
+        order.end = key;
+        order
+    }
+
+    /// Cascade key of the plain rule `sheet.rules[i]`.
+    #[inline]
+    pub(in crate::style) fn style(&self, i: usize) -> usize {
+        self.style_key.get(i).copied().unwrap_or(i)
+    }
 }
 
 /// One `@media`/`@supports` block's pseudo-subject rules — see
@@ -138,7 +215,7 @@ pub(in crate::style) struct CascadeIndex {
 pub(in crate::style) struct PseudoBlockIndex {
     /// Position in `sheet.media_rules` / `sheet.supports_rules`.
     pub(in crate::style) block: usize,
-    /// Global index of the block's first rule in the pseudo cascade's numbering.
+    /// Global index of the block's first rule in the pseudo cascade's numbering ([`RuleOrder`]).
     pub(in crate::style) base: usize,
     /// Candidates carry indices into the block's own `rules`.
     pub(in crate::style) index: RuleIndex,
@@ -163,6 +240,7 @@ impl CascadeIndex {
             pseudo_rules: RuleIndex::empty(),
             pseudo_media: Vec::new(),
             pseudo_supports: Vec::new(),
+            order: RuleOrder::default(),
         }
     }
 
@@ -236,16 +314,15 @@ impl CascadeIndex {
         let pseudo_rules = RuleIndex::build_from_indexed(
             sheet.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
         );
-        let mut base = sheet.rules.len();
+        let order = RuleOrder::build(sheet);
         let mut pseudo_media = Vec::new();
         for (block, m) in sheet.media_rules.iter().enumerate() {
             if m.rules.iter().any(has_pseudo_subject) {
                 let index = RuleIndex::build_from_indexed(
                     m.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
                 );
-                pseudo_media.push(PseudoBlockIndex { block, base, index });
+                pseudo_media.push(PseudoBlockIndex { block, base: order.media_base[block], index });
             }
-            base += m.rules.len();
         }
         let mut pseudo_supports = Vec::new();
         for (block, sp) in sheet.supports_rules.iter().enumerate() {
@@ -253,9 +330,8 @@ impl CascadeIndex {
                 let index = RuleIndex::build_from_indexed(
                     sp.rules.iter().enumerate().filter(|(_, r)| has_pseudo_subject(r)),
                 );
-                pseudo_supports.push(PseudoBlockIndex { block, base, index });
+                pseudo_supports.push(PseudoBlockIndex { block, base: order.supports_base[block], index });
             }
-            base += sp.rules.len();
         }
         let predicates_ns = t.elapsed().as_nanos() as u64;
 
@@ -276,6 +352,7 @@ impl CascadeIndex {
             pseudo_rules,
             pseudo_media,
             pseudo_supports,
+            order,
         };
         let stats = CascadeIndexStats {
             builds: 1,
