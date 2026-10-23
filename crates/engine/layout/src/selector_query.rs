@@ -22,7 +22,7 @@ use crate::style::{
     BorderStyle, BoxShadow, BoxSizing,
     ClearSide, Color, ColorScheme,
     FlexBasis, FlexDirection, FlexWrap,
-    ContainFlags, ContainerType, Content, ContentItem, ContentVisibility,
+    ContainerType, Content, ContentItem, ContentVisibility,
     CssColor, CssContinue,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
@@ -2519,44 +2519,6 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m
 }
 
-/// Serialises [`ContainFlags`] the way CSS Containment L3 §3 asks for: the
-/// `none` keyword when empty, and otherwise the individual keywords in
-/// canonical order — never the `strict`/`content` shorthand keywords, which the
-/// spec defines as computing to the set they expand to.
-fn contain_to_css(flags: ContainFlags) -> String {
-    if flags == ContainFlags::NONE {
-        return "none".into();
-    }
-    // CSS Containment L3 §3: the full sets serialize as their shorthand keywords.
-    if flags == ContainFlags::STRICT {
-        return "strict".into();
-    }
-    if flags == ContainFlags::CONTENT {
-        return "content".into();
-    }
-    let mut out: Vec<&str> = Vec::with_capacity(5);
-    for (bit, name) in [
-        (ContainFlags::SIZE, "size"),
-        (ContainFlags::INLINE_SIZE, "inline-size"),
-        (ContainFlags::LAYOUT, "layout"),
-        (ContainFlags::STYLE, "style"),
-        (ContainFlags::PAINT, "paint"),
-    ] {
-        if flags.0 & bit.0 != 0 {
-            out.push(name);
-        }
-    }
-    out.join(" ")
-}
-
-/// Serialises one axis of `contain-intrinsic-size`: `auto? [ none | <length> ]`.
-/// The `auto` keyword is behaviourally ignored by layout but is part of the
-/// computed value, so it must survive the round-trip (BUG-852).
-fn contain_intrinsic_to_css(auto: bool, len: Option<&Length>) -> String {
-    let base = len.map_or_else(|| "none".to_string(), length_to_css);
-    if auto { format!("auto {base}") } else { base }
-}
-
 /// Serialises a [`ComputedStyle`] into a deterministic JSON object string.
 ///
 /// Each key is a CSS property name and each value is the resolved value as
@@ -2667,6 +2629,9 @@ fn json_escape_into(s: &str, out: &mut String) {
     }
     out.push('"');
 }
+
+mod contain_css;
+use contain_css::{contain_intrinsic_to_css, contain_to_css};
 
 #[cfg(test)]
 mod tests;

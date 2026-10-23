@@ -1142,7 +1142,7 @@ use super::*;
 
     #[test]
     fn property_syntax_union_length_or_percentage() {
-        // `<length-percentage>` принимает оба.
+        // `<length-percentage>` принимает оба; computed-значение абсолютизировано (BUG-1505).
         let v1 = lay_get_custom_prop(
             "<p>x</p>",
             "@property --w { syntax: '<length-percentage>'; inherits: false; initial-value: 0px; } p { --w: 50%; }",
@@ -1154,7 +1154,7 @@ use super::*;
             "@property --w { syntax: '<length-percentage>'; inherits: false; initial-value: 0px; } p { --w: 10rem; }",
             "--w",
         );
-        assert_eq!(v2, Some("10rem".to_string()));
+        assert_eq!(v2, Some("160px".to_string()));
     }
 
     #[test]

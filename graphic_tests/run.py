@@ -670,7 +670,7 @@ _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 # и wgpu — независимые реализации, число «gdigrab-должника» к нему неприменимо.
 # Детерминированный снимок не шумит от прогона к прогону, поэтому допуск уже.
 KNOWN_DEBTORS_IPC: dict[str, tuple[str, float]] = {
-    '18': ('BUG-219', 6.09),  # gdigrab-baseline 2.11
+    '18': ('BUG-219', 2.08),  # gdigrab-baseline 2.11
     '32': ('BUG-128', 3.70),  # gdigrab-baseline 3.75
     '34': ('BUG-128', 3.10),  # gdigrab-baseline 3.02
     '46': ('BUG-128', 1.35),  # gdigrab-baseline 1.96

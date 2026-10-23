@@ -61,4 +61,4 @@
 
 Исправление: на время рисования chrome те же блоки отцепляются из `layout` (`take_floating_panel`), рисуются отдельным списком `chrome_popover_dl` по z-index без клипа и возвращаются в дерево (хит-тест и инкрементальный базис видят их на месте). `redraw_requested.rs` кладёт список в `overlay_buf`. Заодно `FindOpen` (Ctrl+F, vim `/`) не вызывал `relayout_chrome_host` — строка поиска не получала `.open`.
 
-Проверено вживую (`.tmp`-зонд, SendInput, `--maximized`): Ctrl+Shift+Q, Ctrl+K, Ctrl+F, F12, Ctrl+Shift+Y, Ctrl+Shift+E, список профилей, кнопка перевода — каждое меняет кадр. Найдено попутно: [BUG-1607](BUG-1607-OPEN.md) (модал сплющен), [BUG-1608](BUG-1608-OPEN.md) (красный тест на `main`).
+Проверено вживую (`.tmp`-зонд, SendInput, `--maximized`): Ctrl+Shift+Q, Ctrl+K, Ctrl+F, F12, Ctrl+Shift+Y, Ctrl+Shift+E, список профилей, кнопка перевода — каждое меняет кадр. Найдено попутно: [BUG-1607](BUG-1607-OPEN.md) (модал сплющен), [BUG-1608](BUG-1608-FIXED.md) (красный тест на `main`).

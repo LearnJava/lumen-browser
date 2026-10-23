@@ -66,6 +66,7 @@ mod substitute;
 mod syntax_string;
 mod ua;
 mod values;
+mod zoom;
 
 // SPLIT-ST15. `ComputedStyle` (объявление + `impl`) уехала в `style::computed`.
 // Это центральный тип публичной поверхности крейта: `lib.rs` реэкспортирует его
@@ -85,7 +86,7 @@ use apply::apply_declaration;
 pub use cascade::{compute_style, take_compute_style_calls};
 #[cfg(test)]
 pub(in crate::style) use cascade::parse_zoom;
-pub(crate) use cascade::{scale_inherited_lengths, scale_visual_lengths, ZoomDeclared};
+pub(crate) use zoom::{scale_inherited_lengths, scale_visual_lengths, ZoomDeclared};
 // THREAD-4 срез 2: intra-pass structural memo for `compute_style` — see
 // `share_cache`'s module doc. Sole consumer is `counters::walk`.
 pub(crate) use share_cache::ShareCache;
@@ -156,7 +157,7 @@ use adjust::{
     resolve_system_colors_in_style,
 };
 pub use property_syntax::validate_against_syntax;
-use property_syntax::apply_property_initial_values;
+use property_syntax::{apply_property_initial_values, compute_registered_values};
 // BUG-531: `CSS.registerProperty()` (`crates/js/src/css_properties_values_api.rs`)
 // is the only consumer outside `crate::style` — reachable only through this
 // re-export, since `syntax_string` itself stays private (§2.1).
@@ -319,7 +320,7 @@ use values::color::srgb_gamma_decode;
 use crate::scroll_timeline::ScrollAxis;
 // `expand_vars_and_env` — `pub(crate)`, её зовёт `lib.rs`; остальные видны только
 // внутри `style` и его потомков, поэтому и реэкспорт сужен до `crate::style`.
-pub(crate) use substitute::expand_vars_and_env;
+pub(crate) use substitute::{expand_custom_property_value, expand_vars_and_env};
 // `env_calls_well_formed` — публичная: ею же inline-`style` CSSOM (`crates/js`)
 // решает, принять ли значение с `env()` (BUG-514).
 pub use substitute::env_calls_well_formed;
