@@ -153,6 +153,14 @@ class FullRepo(Fixture):
         self.assertIn("WPT `css`: балл", noise)
         self.assertIn("`processes` 4 → 8", text)
 
+    def test_derived_snapshot_replaces_its_base(self):
+        c = wpt_run("2026-10-02T12:00:00", 3, 2, 1, 1, 0.0, "fff9999")
+        c["derived_from"] = "b.json"
+        write(self.root, "docs/wpt/runs/b-popups.json", c)
+        snap = qr.build(self.root)
+        self.assertEqual(snap["wpt"]["run"], "b-popups.json")
+        self.assertEqual(snap["wpt_prev"]["run"], "a.json", "исходник составного снимка в пару не идёт")
+
     def test_reclass_noted(self):
         write(self.root, "graphic_tests/results/20261002-100000.json",
               gt_run("2026-10-02T10:00:00", {"01-a": "PASS", "02-b": "PASS", "03-c": "FAIL"}))
