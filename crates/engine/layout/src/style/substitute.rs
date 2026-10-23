@@ -68,39 +68,76 @@ pub(in crate::style) fn expand_vars(
     em_basis: f32,
     viewport: Size,
 ) -> Option<String> {
+    expand_vars_tracked(value, custom, depth, em_basis, viewport, &mut Vec::new()).ok()
+}
+
+/// Why a `var()` substitution failed. A `Cycle` names the custom property that was
+/// reached again while it was still being resolved (CSS Variables L1 §3.1: every
+/// property on the cycle is guaranteed-invalid, so a fallback *inside* the cycle
+/// must not rescue it).
+enum VarFail {
+    Invalid,
+    Cycle(String),
+}
+
+fn expand_vars_tracked<'a>(
+    value: &str,
+    custom: &'a HashMap<String, String>,
+    depth: u32,
+    em_basis: f32,
+    viewport: Size,
+    active: &mut Vec<&'a str>,
+) -> Result<String, VarFail> {
     if depth > VAR_EXPAND_MAX_DEPTH {
-        return None;
+        return Err(VarFail::Invalid);
     }
     let Some(start) = find_var_open(value) else {
-        return Some(value.to_string());
+        return Ok(value.to_string());
     };
     let prefix = &value[..start];
     let after_open = &value[start + 4..]; // skip "var("
-    let (args, after_close) = parse_balanced_to_close(after_open)?;
+    let (args, after_close) = parse_balanced_to_close(after_open).ok_or(VarFail::Invalid)?;
     let (name, fallback) = split_var_args(args);
     let resolved_ident_name;
     let effective_name: &str = if let Some(inner) = ident_call_inner(name) {
-        resolved_ident_name = eval_ident_call(inner, em_basis, viewport)?;
+        resolved_ident_name = eval_ident_call(inner, em_basis, viewport).ok_or(VarFail::Invalid)?;
         resolved_ident_name.as_str()
     } else if name.starts_with("--") {
         name
     } else {
-        return None;
+        return Err(VarFail::Invalid);
     };
     // BUG-1502: объявление хранит имя раскрытым (`--\30` → `--0`), а в значении
     // экранирование, которое нельзя раскрыть на месте (`\27 `), осталось как есть.
     let decoded_name;
     let effective_name = if effective_name.contains('\\') {
-        decoded_name = unescape_dashed_ident(effective_name)?;
+        decoded_name = unescape_dashed_ident(effective_name).ok_or(VarFail::Invalid)?;
         decoded_name.as_str()
     } else {
         effective_name
     };
-    let resolved = if let Some(v) = custom.get(effective_name) {
-        expand_vars(v.trim(), custom, depth + 1, em_basis, viewport)?
-    } else {
-        let fb = fallback?;
-        expand_vars(fb.trim(), custom, depth + 1, em_basis, viewport)?
+    // BUG-1503: a referenced property that is missing, in a cycle, or whose own value
+    // cannot be substituted is guaranteed-invalid — the fallback applies. A cycle that
+    // passes through this property is only absorbed once it unwinds back to its start.
+    let own_value = match custom.get_key_value(effective_name) {
+        Some((key, _)) if active.contains(&key.as_str()) => return Err(VarFail::Cycle(key.clone())),
+        Some((key, v)) => {
+            active.push(key.as_str());
+            let r = expand_vars_tracked(v.trim(), custom, depth + 1, em_basis, viewport, active);
+            active.pop();
+            match r {
+                Err(VarFail::Cycle(n)) if n != *key => return Err(VarFail::Cycle(n)),
+                other => other,
+            }
+        }
+        None => Err(VarFail::Invalid),
+    };
+    let resolved = match own_value {
+        Ok(v) => v,
+        Err(_) => {
+            let fb = fallback.ok_or(VarFail::Invalid)?;
+            expand_vars_tracked(fb.trim(), custom, depth + 1, em_basis, viewport, active)?
+        }
     };
     // BUG-1501: подстановка вставляет токены, а не символы — `var(--a)var(--b)`
     // не должно склеиваться в один идентификатор/размерность.
@@ -117,7 +154,7 @@ pub(in crate::style) fn expand_vars(
         token_boundary_sep(&resolved, after_close)
     };
     let combined = format!("{prefix}{left_sep}{resolved}{right_sep}{after_close}");
-    expand_vars(&combined, custom, depth + 1, em_basis, viewport)
+    expand_vars_tracked(&combined, custom, depth + 1, em_basis, viewport, active)
 }
 
 /// `" "`, если конец `left` и начало `right` при прямой склейке слились бы в

@@ -1,6 +1,6 @@
 # BUG-1503 — CSS-wide слова у пользовательских свойств (`initial`/`inherit`/`unset`) читаются как литерал; запасное значение `var(--a, x)` не используется при цикле и после `initial`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** layout (`crates/engine/layout/src/style/substitute.rs`, `crates/engine/layout/src/style/cascade.rs` — CSS-wide ключевые слова у пользовательских свойств и циклы)
 
@@ -35,3 +35,9 @@ WPT-RUN-14 срез 22: `css-variables/variable-declaration-{30,43,44,45,46,47,5
 ## Как проверить
 
 Таблица выше; `css/css-variables/variable-declaration-43.html`, `variable-css-wide-keywords.html`.
+
+## Исправление
+
+Два механизма. (1) Каскад ([`cascade.rs`](../crates/engine/layout/src/style/cascade.rs), пасс custom properties): `initial` удаляет запись (guaranteed-invalid; у зарегистрированного свойства `apply_property_initial_values` возвращает `initial-value`), `inherit` берёт значение родителя, `unset` — как `inherit` для наследуемого и как `initial` для `inherits: false`; слово больше не хранится литералом, `getPropertyValue('--x')` после `--x:initial` пуст. (2) Подстановка ([`substitute.rs`](../crates/engine/layout/src/style/substitute.rs), `expand_vars_tracked`): свойство, на которое ссылается `var()`, считается guaranteed-invalid и при отсутствии, и когда его собственное значение не подставляется (ссылка на несуществующее), и при цикле — тогда применяется запасное значение. Цикл ищется стеком раскрываемых имён, а не глубиной: запасное значение внутри цикла (`--a:var(--b,x);--b:var(--a,x)`) цикл не спасает, поглощается он только там, где замкнулся (у `var(--a, green)`), а зависящее от цикла свойство тоже недействительно. Тесты — `tests/var_css_wide.rs`.
+
+Остаток: `revert`/`revert-layer`/`revert-rule` в запасном значении у **пользовательского** свойства (`--x: var(--unknown, revert)` → `getPropertyValue` пуст) по-прежнему читаются буквально; для типизированных свойств (`margin: var(--unknown, revert)`) откат к UA уже работает.
