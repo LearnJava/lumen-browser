@@ -427,6 +427,7 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         0.0,
         (0.0, 0.0),
         None,
+        1.0,
     );
 
     // Два слоя → два quad-а → 12 вершин; монохромный фолбэк дал бы 6.
@@ -470,11 +471,11 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
         left: 0.0,
         top: 0.0,
     };
-    assert!(atlas.insert(AtlasKey::new(u16::MAX, 0, 1, 0), &filler).is_some());
+    assert!(atlas.insert(AtlasKey::new(u16::MAX, 0, 1, 0, 0), &filler).is_some());
 
-    let key = atlas_key(0, 1, 32, 0);
+    let key = atlas_key(0, 1, 128, 0, 0);
     assert!(
-        ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 32, &[]).is_none(),
+        ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 128, 0, &[]).is_none(),
         "в переполненный атлас глиф не лёг"
     );
     assert!(atlas.exhausted(), "атлас пометил себя исчерпанным");
@@ -485,7 +486,7 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
 
     // Сброс атласа (в рантайме — на старте следующего кадра).
     atlas.reset();
-    let g = ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 32, &[]);
+    let g = ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 128, 0, &[]);
     assert!(g.is_some(), "после сброса тот же глиф растеризуется и ложится");
     assert!(cached.get(&key).copied().flatten().is_some(), "и попадает в мемоизацию");
 }
@@ -532,6 +533,7 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         0.0,
         (0.0, 0.0),
         Some(&selection),
+        1.0,
     );
 
     assert_eq!(out.len(), 12);
@@ -585,6 +587,7 @@ fn text_run_cache_skips_color_glyph_runs() {
             0.0,
             (0.0, 0.0),
             None,
+            1.0,
         );
     }
     assert_eq!(out.len(), 12, "цветной глиф всё ещё даёт quad на слой");
@@ -635,6 +638,7 @@ fn text_run_cache_replays_identical_vertices() {
             0.0,
             (0.0, 0.0),
             None,
+            1.0,
         );
         out
     };

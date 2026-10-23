@@ -59,6 +59,19 @@ impl Rasterizer {
     /// Растеризует simple-glyph. Возвращает `None` для composite-глифов
     /// и пустого outline.
     pub fn rasterize(&self, glyph: &Glyph) -> Option<Bitmap> {
+        self.rasterize_offset(glyph, 0.0)
+    }
+
+    /// То же, что [`Rasterizer::rasterize`], но контур сдвинут по X на `dx`
+    /// пикселей до расчёта bbox (TEXTQ-1): так растрируются субпиксельные
+    /// фазы глифа для GPU-атласа, где перо стоит на дробной device-позиции.
+    /// `left` результата остаётся целым — `dx` уходит в содержимое bitmap-а, а
+    /// не в его позицию; origin глифа при этом лежит в `dx` правее целого пера.
+    ///
+    /// `rasterize(g)` ≡ `rasterize_offset(g, 0.0)` побайтно: прибавление `0.0`
+    /// к `f32` тождественно, поэтому выход `rasterize` — контракт CPU-эталонов
+    /// — этим методом не двигается.
+    pub fn rasterize_offset(&self, glyph: &Glyph, dx: f32) -> Option<Bitmap> {
         let Outline::Simple(contours) = &glyph.outline else {
             return None;
         };
@@ -80,9 +93,9 @@ impl Rasterizer {
             glyph.bbox
         };
 
-        let x_min = (bbox.x_min as f32 * scale - pad).floor() as i32;
+        let x_min = (bbox.x_min as f32 * scale + dx - pad).floor() as i32;
         let y_min = (bbox.y_min as f32 * scale - pad).floor() as i32;
-        let x_max = (bbox.x_max as f32 * scale + pad).ceil() as i32;
+        let x_max = (bbox.x_max as f32 * scale + dx + pad).ceil() as i32;
         let y_max = (bbox.y_max as f32 * scale + pad).ceil() as i32;
         // BUG-283: a corrupt/inverted glyph bbox (x_max < x_min or y_max <
         // y_min) makes `x_max - x_min` negative; casting that straight to
@@ -111,7 +124,9 @@ impl Rasterizer {
             let mut edges = std::mem::take(&mut sc.edges);
             edges.clear();
             for contour in contours {
-                walk_contour(contour, scale, x_min as f32, y_max as f32, &mut edges);
+                // Сдвиг `dx` входит в «левый край bitmap-а»: точка ставится в
+                // `p.x·scale − (x_min − dx)`, при `dx = 0` — как раньше.
+                walk_contour(contour, scale, x_min as f32 - dx, y_max as f32, &mut edges);
             }
             fill_pixels_in(sc, &edges, width, height, &mut pixels);
             sc.edges = edges;
@@ -1008,5 +1023,64 @@ mod tests {
         };
         // units_per_em=1000, pixel_size=100000 → scale 100 → bitmap ~100000×100000.
         assert!(Rasterizer::new(100_000.0, 1000).rasterize(&glyph).is_none());
+    }
+
+    /// TEXTQ-1: `rasterize(g)` ≡ `rasterize_offset(g, 0.0)` побайтно на
+    /// реальном шрифте — выход `rasterize` заморожен контрактом CPU-эталонов.
+    #[test]
+    fn rasterize_offset_zero_equals_rasterize_on_real_font() {
+        let bytes = std::fs::read(assets_dir().join("Inter-Regular.ttf"))
+            .expect("assets/fonts/Inter-Regular.ttf");
+        let font = crate::Font::parse(&bytes).expect("Inter parses");
+        let upem = font.head().expect("head").units_per_em;
+        let mut compared = 0;
+        for size in [11.0_f32, 13.5, 16.0, 72.0] {
+            let r = Rasterizer::new(size, upem);
+            for gid in 1_u16..120 {
+                let Ok(Some(glyph)) = font.glyph_resolved(gid) else {
+                    continue;
+                };
+                let a = r.rasterize(&glyph);
+                let b = r.rasterize_offset(&glyph, 0.0);
+                assert_eq!(a.is_some(), b.is_some(), "gid {gid} @ {size}");
+                if let (Some(a), Some(b)) = (a, b) {
+                    assert_eq!((a.width, a.height, a.left, a.top), (b.width, b.height, b.left, b.top));
+                    assert_eq!(a.pixels, b.pixels, "gid {gid} @ {size}");
+                    compared += 1;
+                }
+            }
+        }
+        assert!(compared > 100, "сравнено слишком мало глифов: {compared}");
+    }
+
+    /// Сдвиг контура на `dx` двигает центр масс покрытия ровно на `dx`
+    /// (с поправкой на целый `left`), а `left` остаётся целым.
+    #[test]
+    fn rasterize_offset_shifts_coverage_centroid() {
+        let glyph = Glyph {
+            bbox: BoundingBox { x_min: 100, y_min: 0, x_max: 600, y_max: 800 },
+            outline: Outline::Simple(vec![Contour {
+                points: vec![pt(100, 0, true), pt(600, 0, true), pt(600, 800, true), pt(100, 800, true)],
+            }]),
+        };
+        let r = Rasterizer::new(20.0, 1000);
+        let centroid = |bm: &Bitmap| {
+            let (mut sum, mut mass) = (0.0_f64, 0.0_f64);
+            for y in 0..bm.height {
+                for x in 0..bm.width {
+                    let c = f64::from(coverage_at(bm, x, y));
+                    sum += c * (f64::from(x) + 0.5);
+                    mass += c;
+                }
+            }
+            f64::from(bm.left) + sum / mass
+        };
+        let base = r.rasterize_offset(&glyph, 0.0).expect("bitmap");
+        for phase in [0.25_f32, 0.5, 0.75] {
+            let shifted = r.rasterize_offset(&glyph, phase).expect("bitmap");
+            assert_eq!(shifted.left.fract(), 0.0, "left целый");
+            let d = centroid(&shifted) - centroid(&base);
+            assert!((d - f64::from(phase)).abs() < 0.05, "phase {phase}: сдвиг центроида {d}");
+        }
     }
 }

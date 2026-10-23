@@ -47,34 +47,6 @@ fn region_dst_quad_covers_region_rect() {
 }
 
 #[test]
-fn size_bin_for_exact_match() {
-    // Точное совпадение — bin == входу.
-    for &bin in &SIZE_BINS {
-        assert_eq!(size_bin_for(f32::from(bin)), bin, "bin {bin}");
-    }
-}
-
-#[test]
-fn size_bin_for_rounds_up_to_next_bin() {
-    // 9 → 12, 13 → 16, 17 → 20, 25 → 32, 33 → 48.
-    assert_eq!(size_bin_for(9.0), 12);
-    assert_eq!(size_bin_for(13.0), 16);
-    assert_eq!(size_bin_for(17.0), 20);
-    assert_eq!(size_bin_for(25.0), 32);
-    assert_eq!(size_bin_for(33.0), 48);
-    // Дробные: 13.5 → 16 (ceil 14 → bin 16).
-    assert_eq!(size_bin_for(13.5), 16);
-}
-
-#[test]
-fn size_bin_for_below_min_clamps_to_min() {
-    // < 8 — bin 8 (нечитаемо иначе).
-    assert_eq!(size_bin_for(1.0), 8);
-    assert_eq!(size_bin_for(7.0), 8);
-    assert_eq!(size_bin_for(0.5), 8);
-}
-
-#[test]
 fn rotate_text_vertices_cw_maps_horizontal_run_into_vertical_column() {
     // Ph3 writing-mode vertical, Срез 2: a horizontal run laid out at the
     // local origin (0,0)..(40,10) — a wide, short glyph quad — must land
@@ -102,41 +74,29 @@ fn rotate_text_vertices_cw_maps_horizontal_run_into_vertical_column() {
 }
 
 #[test]
-fn size_bin_for_above_max_clamps_to_max() {
-    // > 64 — bin 64 (с up-scaling-ом для редких headline-ов).
-    assert_eq!(size_bin_for(72.0), 64);
-    assert_eq!(size_bin_for(120.0), 64);
-    assert_eq!(size_bin_for(1000.0), 64);
-}
-
-#[test]
-fn size_bin_for_invalid_returns_min() {
-    // NaN / negative / 0 → bin 8 (минимум, без panic).
-    assert_eq!(size_bin_for(f32::NAN), 8);
-    assert_eq!(size_bin_for(-1.0), 8);
-    assert_eq!(size_bin_for(0.0), 8);
-    assert_eq!(size_bin_for(f32::INFINITY), 64);
-}
-
-#[test]
-fn atlas_key_distinguishes_size_bins() {
-    // Один и тот же глиф на двух размерах = два разных ключа.
-    let k16 = atlas_key(0, 42, 16, 0);
-    let k32 = atlas_key(0, 42, 32, 0);
+fn atlas_key_distinguishes_sizes_and_x_phases() {
+    // Один и тот же глиф на двух размерах = два разных ключа; квант 1/4 px
+    // различим (16 px и 16.25 px), и каждая из 4 фаз пера — своя запись.
+    let k16 = atlas_key(0, 42, 64, 0, 0);
+    let k32 = atlas_key(0, 42, 128, 0, 0);
     assert_ne!(k16, k32);
+    assert_ne!(k16, atlas_key(0, 42, 65, 0, 0));
+    for p in 1..X_PHASES {
+        assert_ne!(k16, atlas_key(0, 42, 64, p, 0), "фаза {p}");
+    }
 }
 
 #[test]
 fn atlas_key_distinguishes_glyph_ids() {
-    let k_a = atlas_key(0, 100, 16, 0);
-    let k_b = atlas_key(0, 200, 16, 0);
+    let k_a = atlas_key(0, 100, 16, 0, 0);
+    let k_b = atlas_key(0, 200, 16, 0, 0);
     assert_ne!(k_a, k_b);
 }
 
 #[test]
 fn atlas_key_distinguishes_face_ids() {
-    let k0 = atlas_key(0, 42, 16, 0);
-    let k1 = atlas_key(1, 42, 16, 0);
+    let k0 = atlas_key(0, 42, 16, 0, 0);
+    let k1 = atlas_key(1, 42, 16, 0, 0);
     assert_ne!(k0, k1);
 }
 
@@ -145,19 +105,20 @@ fn atlas_key_distinguishes_variation_coords_hashes() {
     // Тот же (face, glyph, size), но разные normalized coords ⇒ разные
     // ключи. Без этого variant glyph перезаписывал бы default-instance
     // в atlas-кеше.
-    let k_default = atlas_key(0, 42, 16, 0);
-    let k_bold = atlas_key(0, 42, 16, 0xdead_beef_cafe_babe);
+    let k_default = atlas_key(0, 42, 16, 0, 0);
+    let k_bold = atlas_key(0, 42, 16, 0, 0xdead_beef_cafe_babe);
     assert_ne!(k_default, k_bold);
 }
 
 #[test]
 fn atlas_key_is_deterministic() {
-    assert_eq!(atlas_key(3, 17, 24, 0), atlas_key(3, 17, 24, 0));
-    assert_eq!(atlas_key(3, 17, 24, 42), atlas_key(3, 17, 24, 42));
+    assert_eq!(atlas_key(3, 17, 24, 0, 0), atlas_key(3, 17, 24, 0, 0));
+    assert_eq!(atlas_key(3, 17, 24, 0, 42), atlas_key(3, 17, 24, 0, 42));
 }
 
 mod clip_blend_vertex;
 mod sticky_colr_font;
+mod text_quality;
 
 /// BUG-406: инстанс рендера не должен нести `VALIDATION_INDIRECT_CALL` —
 /// с ним каждый `create_pipeline_layout` на DX12 создаёт три
