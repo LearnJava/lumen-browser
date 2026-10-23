@@ -1385,6 +1385,31 @@ fn band_blit_quad_offsets_uv_by_the_ring_phase() {
     assert_eq!((shifted[0].1[0], shifted[0].2[0]), (0.0, 1.0));
 }
 
+/// TEXTQ-3: квад блита полосы стоит на целых device px при любом дробном
+/// сдвиге, иначе билинейная выборка размывает текст при каждой прокрутке.
+#[test]
+fn band_blit_quad_snaps_shift_to_whole_device_px() {
+    for dpr in [1.0_f32, 1.5, 2.0] {
+        // Целое число device px по высоте: `H / dpr` в CSS.
+        let h_px = 2400_u32;
+        for dy_css in [-762.0_f32, -762.3, -762.5, -762.77, -0.2, -1233.37, 0.0] {
+            let quads = band_blit_quads(dy_css, 1920.0 / dpr, h_px, 17, dpr);
+            assert_eq!(quads.len(), 1);
+            let y_dev = quads[0].0.y * dpr;
+            assert!(
+                (y_dev - y_dev.round()).abs() < 1e-3,
+                "dpr {dpr}, dy {dy_css}: верх квада {y_dev} device px не целый",
+            );
+            assert!(
+                (y_dev - dy_css * dpr).abs() <= 0.5 + 1e-3,
+                "dpr {dpr}, dy {dy_css}: сдвиг больше 0.5 device px",
+            );
+            let h_dev = quads[0].0.height * dpr;
+            assert!((h_dev - h_dev.round()).abs() < 1e-3, "высота квада не целая");
+        }
+    }
+}
+
 /// BUG-405 срез 30: гейт на разбор рычага переписи [`band_pass_load_ops`]
 /// → [`band_pass_load_choice`].
 ///
