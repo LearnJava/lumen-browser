@@ -288,13 +288,15 @@ pub(crate) fn matches_slotted_complex(
 /// 3. простые селекторы после `::part()` — только нематериальные для структуры
 ///    псевдоклассы (`:hover`, `:focus`, …) — матчат `part_el`; структурные
 ///    псевдоклассы (`:first-child`, `:nth-child()`, …) части не матчат (§2),
-///    псевдоэлементы после `::part()` обрабатывает путь псевдоэлементов.
+///    псевдоэлементы после `::part()` допустимы только в режиме `pseudo` (стиль
+///    псевдоэлемента части: `::part(a)::before`) — ровно один, принятый предикатом.
 pub(crate) fn matches_part_complex(
     complex: &ComplexSelector,
     doc: &Document,
     part_el: NodeId,
     host: NodeId,
     names: &[&str],
+    pseudo: Option<&dyn Fn(&PseudoElementKind) -> bool>,
 ) -> Option<Specificity> {
     let last = complex.tail.last().map(|(_, c)| c).unwrap_or(&complex.head);
     let at = last.parts.iter().position(|p| {
@@ -306,6 +308,7 @@ pub(crate) fn matches_part_complex(
     if !wanted.iter().all(|w| names.contains(&w.as_str())) {
         return None;
     }
+    let mut pseudo_seen = false;
     for p in &last.parts[at + 1..] {
         match p {
             SimpleSelector::PseudoClass(pc) if !pseudo_class_is_structural(pc) => {
@@ -313,8 +316,14 @@ pub(crate) fn matches_part_complex(
                     return None;
                 }
             }
+            SimpleSelector::PseudoElement(k) if !pseudo_seen && pseudo.is_some_and(|ok| ok(k)) => {
+                pseudo_seen = true;
+            }
             _ => return None,
         }
+    }
+    if pseudo.is_some() && !pseudo_seen {
+        return None;
     }
     let head_last = CompoundSelector { parts: last.parts[..at].to_vec() };
     let outer = if complex.tail.is_empty() {

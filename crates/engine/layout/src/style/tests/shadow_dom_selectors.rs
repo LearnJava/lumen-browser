@@ -541,6 +541,34 @@
         assert_eq!(color_of(&s), (255, 0, 0));
     }
 
+    #[test]
+    fn host_part_in_own_shadow_sheet_styles_part_element() {
+        // Shadow Parts L1 §2: `:host::part(p1)` in the host's own sheet reaches its part;
+        // the host itself is not styled by it.
+        let (doc, host, span) = make_part_host();
+        install_shadow_sheet(host, ":host::part(p1) { color: green; }");
+        let sheet = lumen_css_parser::parse("");
+        let s = compute_style(&doc, span, &sheet, &ComputedStyle::root(), VP, false);
+        let h = compute_style(&doc, host, &sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(color_of(&s), (0, 128, 0));
+        assert_eq!(color_of(&h), (0, 0, 0));
+    }
+
+    #[test]
+    fn part_pseudo_element_rule_styles_part_pseudo_not_host() {
+        let (doc, host, span) = make_part_host();
+        let sheet = lumen_css_parser::parse(
+            "#host::part(p1)::before { content: 'x'; color: green; } #host::part(zz)::after { content: 'y'; }",
+        );
+        let parent = ComputedStyle::root();
+        let before = compute_pseudo_element_style(&doc, span, "before", &sheet, &parent, VP, false)
+            .expect("::part()::before reaches the part");
+        assert_eq!(color_of(&before), (0, 128, 0));
+        assert!(compute_pseudo_element_style(&doc, span, "after", &sheet, &parent, VP, false).is_none());
+        assert!(compute_pseudo_element_style(&doc, host, "before", &sheet, &parent, VP, false).is_none());
+    }
+
     /// outer-host › shadow › (`inner-host` [exportparts] › shadow › `<i part="deep">`).
     fn make_exported_part(exportparts: Option<&str>) -> (lumen_dom::Document, NodeId, NodeId, NodeId) {
         let (mut doc, outer, inner, deep) = make_nested_shadow_hosts();

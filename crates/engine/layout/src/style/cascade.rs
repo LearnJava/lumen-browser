@@ -1122,9 +1122,7 @@ pub(crate) fn compute_style_shareable(
     };
     for scope in &part_scopes {
         let names: Vec<&str> = scope.names.iter().map(String::as_str).collect();
-        SHADOW_HOST_SCOPE.with(|c| {
-            c.set(doc.enclosing_shadow_host(scope.host).map_or(u32::MAX, |h| h.index() as u32));
-        });
+        set_part_scope_host(doc, scope);
         let (rules, key_base): (&[lumen_css_parser::Rule], usize) = match &scope.sheet {
             Some(shadow) => (&shadow.rules, next_rule_idx),
             None => (&sheet.rules, 0),
@@ -1132,7 +1130,7 @@ pub(crate) fn compute_style_shareable(
         for (i, rule) in rules.iter().enumerate() {
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
-                if let Some(spec) = matches_part_complex(complex, doc, node, scope.host, &names) {
+                if let Some(spec) = matches_part_complex(complex, doc, node, scope.host, &names, None) {
                     best = Some(match best {
                         Some(prev) if prev >= spec => prev,
                         _ => spec,
@@ -1948,16 +1946,31 @@ fn shadow_tree_depth(doc: &Document, node: NodeId) -> u32 {
     depth
 }
 
+/// Points `:host` of the matcher at the tree whose rules `scope` is about to match.
+pub(in crate::style) fn set_part_scope_host(doc: &Document, scope: &PartScope) {
+    SHADOW_HOST_SCOPE.with(|c| {
+        let h = scope.own_host.or_else(|| doc.enclosing_shadow_host(scope.host));
+        c.set(h.map_or(u32::MAX, |h| h.index() as u32));
+    });
+}
+
+/// Encapsulation depth of the shadow tree hosted by `host`.
+fn depth_of_own_tree(doc: &Document, host: NodeId) -> u32 {
+    shadow_tree_depth(doc, host) + 1
+}
+
 /// One outer tree's view of a `part` element (CSS Shadow Parts L1 §2, §3).
-struct PartScope {
+pub(in crate::style) struct PartScope {
     /// The element a `host::part()` compound must match in this tree.
-    host: NodeId,
+    pub(in crate::style) host: NodeId,
     /// The sheet of the tree that contains `host` (`None` = the document sheet).
-    sheet: Option<Stylesheet>,
+    pub(in crate::style) sheet: Option<Stylesheet>,
     /// Shadow-tree depth of that sheet, the cascade's encapsulation context.
-    depth: u32,
+    pub(in crate::style) depth: u32,
     /// The names the element answers to from this tree.
-    names: Vec<String>,
+    pub(in crate::style) names: Vec<String>,
+    /// The shadow host `:host` stands for in this tree's rules (`:host::part()` in the host's own sheet).
+    pub(in crate::style) own_host: Option<NodeId>,
 }
 
 /// The `exportparts` of `host` applied to `names`: `inner:outer` forwards `inner` as `outer`,
@@ -1981,7 +1994,7 @@ fn export_part_names(doc: &Document, host: NodeId, names: &[String]) -> Vec<Stri
 /// The chain of outer trees from which `node` (an element inside a shadow tree) is visible as a
 /// part: its own `part` tokens are seen from the tree containing its host; that host's
 /// `exportparts` carries them one tree further out, and so on up to the document.
-fn part_scopes_of(doc: &Document, node: NodeId) -> Vec<PartScope> {
+pub(in crate::style) fn part_scopes_of(doc: &Document, node: NodeId) -> Vec<PartScope> {
     let mut scopes = Vec::new();
     let mut names: Vec<String> = doc
         .get(node)
@@ -2002,7 +2015,11 @@ fn part_scopes_of(doc: &Document, node: NodeId) -> Vec<PartScope> {
         // A shadow tree without a sheet has no rules to offer, but its host may still
         // forward the names.
         if tree_host.is_none() || sheet.is_some() {
-            scopes.push(PartScope { host: h, sheet, depth, names });
+            scopes.push(PartScope { host: h, sheet, depth, names: names.clone(), own_host: None });
+        }
+        // `:host::part(n)` in the host's own sheet sees the same names as the tree that holds it.
+        if let Some(own) = SHADOW_SHEETS.with(|c| c.borrow().get(&h).cloned()) {
+            scopes.push(PartScope { host: h, sheet: Some(own), depth: depth_of_own_tree(doc, h), names, own_host: Some(h) });
         }
         names = next;
         host = tree_host;
