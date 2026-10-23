@@ -684,16 +684,19 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        // Sampler блита полосы: как линейный выше, но по V — `Repeat`
-        // (BUG-405 срез 32). Полоса адресуется кольцом, поэтому её строка
-        // `H−1` документно соседствует со строкой `0`: при дробном сдвиге
-        // блита фильтрации на шве нужны обе, а `ClampToEdge` подсунула бы
-        // край. При нулевой фазе кольца (полоса только что перерисована
-        // целиком) uv остаются в `0…1` и режим ни на что не влияет.
+        // Sampler блита полосы: по V — `Repeat` (BUG-405 срез 32), выборка
+        // `Nearest` (TEXTQ-3). Полоса адресуется кольцом: её строка `H−1`
+        // документно соседствует со строкой `0`, а `ClampToEdge` подсунула бы
+        // шву край. Сдвиг блита и фаза кольца — целые device px
+        // (`band_blit_quads`), пиксель экрана приходится на центр текселя, и
+        // билинейная фильтрация только размывала бы текст на шве и при
+        // нецелом масштабе. При нулевой фазе кольца (полоса только что
+        // перерисована целиком) uv остаются в `0…1`, и `Repeat` ни на что не
+        // влияет.
         let band_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("page-band-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::Repeat,
