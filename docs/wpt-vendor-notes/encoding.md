@@ -34,13 +34,19 @@ Test category, added 2026-07-27 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 1. Однобайтовые таблицы WHATWG и полная таблица меток (`ENC-SINGLEBYTE`) — дёшево, снимает E и половину `streams`.
 2. CJK-декодеры и кодеры (`ENC-CJK`): Shift_JIS, EUC-JP, ISO-2022-JP, EUC-KR, Big5 (HKSCS), GBK/GB18030; таблицы индексов генерируются скриптом из `index-*.txt` Encoding Standard — `encoding_rs` по ADR-027 остаётся в «никогда не берём».
 3. Кодировка запроса URL и формы (`ENC-QUERY`): `<a href>`/`URL`-парсер по кодировке документа, `accept-charset`, `&#NNNN;` для неотображаемых.
-4. Баги: `form.target`, задержка загрузки iframe, загрузка большого документа, API `TextDecoder`/`TextEncoder`, `TextDecoderStream`.
+4. Баги: `form.target` ([BUG-1269](../../bugs/BUG-1269-OPEN.md), кластер A), задержка загрузки iframe ([BUG-1693](../../bugs/BUG-1693-OPEN.md), H), загрузка большого документа ([BUG-1694](../../bugs/BUG-1694-OPEN.md), C), API `TextDecoder`/`TextEncoder` ([BUG-1695](../../bugs/BUG-1695-OPEN.md), F), `TextDecoderStream`/`TextEncoderStream` ([BUG-1696](../../bugs/BUG-1696-OPEN.md), G), service worker ([BUG-1226](../../bugs/BUG-1226-OPEN.md), D).
 
-<!-- HANDOFF WPT-ENC-SCOUT: удалить этот блок при закрытии задачи.
-Сделано: прогон/разбор, таблица кластеров выше (скрипты анализа — .tmp/wpt-enc/*.py слота p2-work, данные — .tmp/wpt-corpus/encoding.json).
-Осталось (done-критерий задачи):
- 1. BUG-NNN-OPEN.md + строка BUGS.md + указатель в STATUS-P3.md: (a) form.submit() игнорирует target (A); (b) iframe грузятся по ≈140 мс строго по очереди (H); (c) iframe с документом 850 КБ/17 000 span грузится ≈21 с (C, перф); (d) TextDecoder/TextEncoder API F; (e) TextDecoderStream/TextEncoderStream G. К BUG-1226 дописать, что у encoding все importScripts дают 200, но результата нет.
- 2. ROADMAP.md строки planned + указатели в STATUS-P1.md: ENC-SINGLEBYTE (M), ENC-CJK (XL, декодеры+кодеры, зависит от ENC-SINGLEBYTE), ENC-QUERY (L, кодировка URL-запроса и формы, зависит от ENC-CJK и бага (a)).
- 3. Строка encoding в docs/wpt-status.md: ссылка на эту заметку.
- 4. Строку ROADMAP WPT-ENC-SCOUT (ROADMAP.md:1245) → done, указатель удалить из STATUS-P2.md (и из STATUS-P5.md, если есть), CAPABILITIES.md — только если меняется что-то умеемое (нет).
--->
+### Заведено по итогам разведки
+
+| Кластер | Куда |
+|---|---|
+| A | [BUG-1269](../../bugs/BUG-1269-OPEN.md) (target формы) + `ENC-QUERY` |
+| B | `ENC-QUERY` (+ `ENC-CJK`-кодеры) |
+| C | `ENC-CJK` + [BUG-1694](../../bugs/BUG-1694-OPEN.md) (перф загрузки; блокирует измерение) |
+| D | дополнение к [BUG-1226](../../bugs/BUG-1226-OPEN.md) |
+| E | `ENC-SINGLEBYTE` + `ENC-CJK` |
+| F | [BUG-1695](../../bugs/BUG-1695-OPEN.md) |
+| G | [BUG-1696](../../bugs/BUG-1696-OPEN.md) |
+| H | [BUG-1693](../../bugs/BUG-1693-OPEN.md) |
+
+Кластеров «раннер/бюджет» нет: правок `.ini` и таймаутов разведка не потребовала. Строки `ENC-*` — `ROADMAP.md` (`planned`), указатели — `STATUS-P1.md`; баги — `STATUS-P3.MD`.
