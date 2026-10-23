@@ -3685,6 +3685,9 @@ fn rasterize_text(
     let width = pixmap.width();
     let height = pixmap.height();
     let mut mask = tiny_skia::Mask::new(width, height).ok_or("Failed to create glyph mask")?;
+    // TEXTQ-2: gamma/contrast correction of glyph coverage by the text colour's
+    // luminance — the same function the wgpu text shader evaluates.
+    let coverage_lut = crate::text_gamma::coverage_lut(color.r, color.g, color.b);
     let mut any_coverage = false;
     // BUG-267: union bbox of every glyph bitmap actually blitted (page px),
     // returned to the caller for the layer's dirty tracking. Uses the unclipped
@@ -3773,6 +3776,7 @@ fn rasterize_text(
                             clip,
                             width,
                             height,
+                            &coverage_lut,
                         ) {
                             any_coverage = true;
                             mark_ink(gb, &mut ink);
@@ -3788,6 +3792,7 @@ fn rasterize_text(
                                 clip,
                                 width,
                                 height,
+                                &coverage_lut,
                             )
                         {
                             any_coverage = true;
@@ -3864,6 +3869,7 @@ fn shear_glyph(glyph: &mut lumen_font::Glyph) {
 /// pixel for a deterministic pen-to-pixel snap. Pixels outside the pixmap or
 /// the rectangular `clip` are dropped; overlapping glyph pixels keep the max
 /// coverage (glyphs in a run rarely overlap, but kerning-tight pairs can).
+/// `lut` maps raw glyph coverage to gamma-corrected coverage ([`crate::text_gamma`]).
 fn blit_glyph_coverage(
     mask: &mut tiny_skia::Mask,
     bitmap: &lumen_font::Bitmap,
@@ -3872,6 +3878,7 @@ fn blit_glyph_coverage(
     clip: Option<&Rect>,
     width: u32,
     height: u32,
+    lut: &[u8; 256],
 ) -> bool {
     if bitmap.width == 0 || bitmap.height == 0 {
         return false;
@@ -3907,6 +3914,7 @@ fn blit_glyph_coverage(
                 continue;
             }
             let idx = (dy * w + dx) as usize;
+            let cov = lut[cov as usize];
             if cov > data[idx] {
                 data[idx] = cov;
             }

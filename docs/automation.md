@@ -141,6 +141,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 | Var | Effect |
 |---|---|
 | `LUMEN_BACKEND` | Renderer: empty = probe (wgpu first), `femtovg`, `wgpu` |
+| `LUMEN_TEXT_GAMMA` | `0` turns off the glyph-coverage gamma/contrast correction (TEXTQ-2, `text_gamma.rs`; wgpu text shader and CPU `blit_glyph_coverage` alike) — the A/B switch for comparing text weight before/after. Read once at startup (pipeline build), so set it before launching |
 | `WGPU_BACKEND` / `LUMEN_NO_BACKEND_PROBE` | Force / skip GPU backend probe |
 | `LUMEN_NO_BROWSER_THREAD=1` | **Rollback** for the browser thread (ADR-032 slice 2, on by default): `Lumen` state lives on the `lumen-browser` thread and the main thread only forwards winit events. `=1` restores `Lumen` as the `ApplicationHandler` on the main thread |
 | `LUMEN_NO_WHEEL_ROUTE=1` | **Rollback** for wheel/touchpad routing straight to the render thread (ADR-032 slice 3, on by default with the browser thread): the main thread no longer hands the wheel over the page — or, since slice 4, over an overflow container — to the render thread, every wheel goes to the browser thread as in slice 2. While routing is on, MCP `scroll` / `scroll_perf.py` measure the command path, not the user's wheel (the wheel metric is THREAD-5, `scripts/scroll_smoothness_run.py`) |
