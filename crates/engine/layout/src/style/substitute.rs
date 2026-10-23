@@ -93,8 +93,37 @@ pub(in crate::style) fn expand_vars(
         let fb = fallback?;
         expand_vars(fb.trim(), custom, depth + 1, em_basis, viewport)?
     };
-    let combined = format!("{prefix}{resolved}{after_close}");
+    // BUG-1501: подстановка вставляет токены, а не символы — `var(--a)var(--b)`
+    // не должно склеиваться в один идентификатор/размерность.
+    let left_sep = if resolved.is_empty() || prefix.is_empty() {
+        ""
+    } else {
+        token_boundary_sep(prefix, &resolved)
+    };
+    let right_sep = if after_close.is_empty() {
+        ""
+    } else if resolved.is_empty() {
+        token_boundary_sep(prefix, after_close)
+    } else {
+        token_boundary_sep(&resolved, after_close)
+    };
+    let combined = format!("{prefix}{left_sep}{resolved}{right_sep}{after_close}");
     expand_vars(&combined, custom, depth + 1, em_basis, viewport)
+}
+
+/// `" "`, если конец `left` и начало `right` при прямой склейке слились бы в
+/// один токен CSS (идентификатор, число, размерность); иначе `""`.
+fn token_boundary_sep(left: &str, right: &str) -> &'static str {
+    let (Some(l), Some(r)) = (left.chars().next_back(), right.chars().next()) else {
+        return "";
+    };
+    let name_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || !c.is_ascii();
+    let can_continue = name_char(l) || (l == '#' && name_char(r));
+    if can_continue && (name_char(r) || r == '%' || r == '\\') {
+        " "
+    } else {
+        ""
+    }
 }
 
 /// Recognises `name` (the trimmed first argument of a `var(...)` call) as a
