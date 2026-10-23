@@ -3,36 +3,30 @@
 //! The JS half lives in `shim/paint_worklet.js` (`Worklet`, `CSS.paintWorklet`,
 //! `registerPaint`, the renderer). This file wires it to the runtime: it installs
 //! the shim, hands the shim the `paint()` layers of the laid-out page
-//! ([`PaintJob`] → `__lumen_paint_set_requests`) and drains the bitmaps the shim
+//! ([`PaintRequest`] → `__lumen_paint_set_requests`) and drains the bitmaps the shim
 //! drew ([`take_published`]). Everything is per JS thread (`thread_local!`), like
 //! the canvas registries it sits next to.
 
+use lumen_core::{PaintImage, PaintRequest};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// One `background-image: paint()` layer the page needs a bitmap for.
-///
-/// Mirrors `lumen_paint::PaintRequest` (this crate sits below `lumen-paint`, so the
-/// shell converts between the two).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaintJob {
-    /// Renderer image key the bitmap is registered under.
-    pub key: String,
-    /// Arena index of the element whose computed style feeds `inputProperties`.
-    pub node: u32,
-    /// Name given to `registerPaint()`.
-    pub name: String,
-    /// Raw `paint()` arguments after the name.
-    pub args: Vec<String>,
-    /// Paint-size width in CSS px.
-    pub width: f32,
-    /// Paint-size height in CSS px.
-    pub height: f32,
-    /// Device pixel ratio the bitmap is rendered at.
-    pub dpr: f32,
+/// Number of `registerPaint()` calls that succeeded, process-wide. The shell reads it
+/// from the UI thread (no JS round trip) to learn that a page has a paint worklet at
+/// all and so is worth collecting `paint()` layers for.
+static REGISTERED: AtomicU64 = AtomicU64::new(0);
+
+/// `registerPaint()` calls that succeeded so far (0 = the page never used the Paint API).
+#[must_use]
+pub fn paint_worklet_epoch() -> u64 {
+    REGISTERED.load(Ordering::Relaxed)
 }
 
-/// A bitmap drawn by a paint worklet: `(key, width, height, rgba)`.
-pub type PaintImage = (String, u32, u32, Vec<u8>);
+/// `_lumen_paint_registered()`: the shim reports a successful `registerPaint()`.
+#[cfg(feature = "v8-backend")]
+fn note_registered() {
+    REGISTERED.fetch_add(1, Ordering::Relaxed);
+}
 
 thread_local! {
     /// Bitmaps published by `_lumen_paint_publish`, drained by the host.
@@ -54,7 +48,7 @@ fn publish(key: String, canvas_id: u32) {
 }
 
 /// JSON array the shim's `__lumen_paint_set_requests` parses.
-pub(crate) fn jobs_to_json(jobs: &[PaintJob]) -> String {
+pub(crate) fn jobs_to_json(jobs: &[PaintRequest]) -> String {
     let items: Vec<serde_json::Value> = jobs
         .iter()
         .map(|j| {
@@ -81,6 +75,7 @@ pub(crate) fn install_paint_worklet_api_v8(rt: &crate::v8_runtime::V8JsRuntime) 
     use crate::v8_compat::into_v8_fn2;
     use lumen_core::ext::JsRuntime as _;
     rt.register_native("_lumen_paint_publish", into_v8_fn2(publish))?;
+    rt.register_native("_lumen_paint_registered", crate::v8_compat::into_v8_fn0(note_registered))?;
     rt.eval(PAINT_WORKLET_SHIM)?;
     Ok(())
 }
@@ -91,7 +86,7 @@ mod tests {
 
     #[test]
     fn jobs_serialise_to_the_shape_the_shim_reads() {
-        let job = PaintJob {
+        let job = PaintRequest {
             key: "paint:1:ab".into(),
             node: 7,
             name: "foo".into(),

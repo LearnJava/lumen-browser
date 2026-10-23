@@ -1559,7 +1559,7 @@ impl V8JsRuntime {
     /// Hand the paint worklet the `background-image: paint()` layers of the laid-out
     /// page (replaces the previous set). The bitmaps are drawn lazily by
     /// [`Self::flush_paint_images`].
-    pub fn set_paint_jobs(&self, jobs: &[crate::paint_worklet::PaintJob]) {
+    pub fn set_paint_jobs(&self, jobs: &[lumen_core::PaintRequest]) {
         let json = crate::paint_worklet::jobs_to_json(jobs);
         // The JSON goes in as a JS string literal (JSON is a JS string once quoted again).
         let quoted = serde_json::Value::String(json).to_string();
@@ -1570,7 +1570,7 @@ impl V8JsRuntime {
     /// the bitmaps it (re)drew: `(image key, width, height, rgba)`. A layer whose
     /// `inputProperties`, arguments and size did not change since the last call is not
     /// redrawn, so an idle page returns an empty vec.
-    pub fn flush_paint_images(&self) -> Vec<crate::paint_worklet::PaintImage> {
+    pub fn flush_paint_images(&self) -> Vec<lumen_core::PaintImage> {
         self.eval("__lumen_paint_flush();").ok();
         self.run(|_inner| crate::paint_worklet::take_published())
     }

@@ -4,7 +4,7 @@
 //! `v8_cssanim_model`.
 
 use super::*;
-use crate::paint_worklet::PaintJob;
+use lumen_core::PaintRequest;
 use crate::v8_runtime::V8JsRuntime;
 
 fn rt() -> V8JsRuntime {
@@ -32,8 +32,8 @@ fn add_module(rt: &V8JsRuntime, module_src: &str) {
     rt.eval("0").unwrap();
 }
 
-fn job(key: &str, name: &str, args: &[&str], w: f32, h: f32, dpr: f32) -> PaintJob {
-    PaintJob {
+fn job(key: &str, name: &str, args: &[&str], w: f32, h: f32, dpr: f32) -> PaintRequest {
+    PaintRequest {
         key: key.into(),
         node: 1,
         name: name.into(),

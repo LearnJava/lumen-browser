@@ -64,6 +64,7 @@ mod no_paint_backend;
 mod noise_secret;
 mod os_locale;
 mod page_source;
+mod paint_worklet_host;
 mod page_state;
 mod present_log;
 mod parallel_fetch;

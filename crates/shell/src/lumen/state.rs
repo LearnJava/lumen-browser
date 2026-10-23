@@ -1053,6 +1053,10 @@ pub(crate) struct Lumen {
     /// unused off the deferred path (every other producer still fetches its
     /// own `lazy_reqs` synchronously, byte-identical to before).
     pub(crate) pending_lazy_image_reqs: Arc<Mutex<Vec<(u32, String)>>>,
+    /// `background-image: paint()` layers last handed to the Houdini paint worklet
+    /// ([`Self::pump_paint_worklet`]); a frame whose layout yields the same set does not
+    /// resend it. Empty on pages that never used the Paint API.
+    pub(crate) paint_jobs_sent: Vec<lumen_core::PaintRequest>,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.

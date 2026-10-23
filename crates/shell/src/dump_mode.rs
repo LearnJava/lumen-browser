@@ -254,6 +254,13 @@ pub(crate) fn render_source_to_png(
             .map(|js| js.flush_canvas_updates())
             .unwrap_or_default(),
     ));
+    // Houdini Paint API: `background-image: paint()` bitmaps are drawn by the paint
+    // worklet on request, so the one-shot path asks once, after the scripts (and the
+    // `reftest-wait` settle) have registered their classes.
+    #[cfg(feature = "v8")]
+    if let Some(js) = parsed.js_ctx.as_deref() {
+        images.extend(crate::paint_worklet_host::paint_worklet_images(js, &parsed.layout, 1.0));
+    }
 
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");

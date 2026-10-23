@@ -9,29 +9,10 @@
 //! `url()` background).
 
 use lumen_core::geom::Rect;
+use lumen_core::PaintRequest;
 use lumen_layout::{BackgroundImage, BackgroundLayer, BackgroundSize, BgSizeAxis, LayoutBox};
 
 use super::background_origin_rect;
-
-/// One image a paint worklet has to draw: what to call, with which arguments, at
-/// which size, and under which key to hand the bitmap back.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaintRequest {
-    /// Renderer image-set key (`DrawBackgroundImage.src`) the bitmap is registered under.
-    pub key: String,
-    /// Arena index of the element whose computed style feeds `inputProperties`.
-    pub node: u32,
-    /// Name given to `registerPaint()`.
-    pub name: String,
-    /// Raw `paint()` arguments after the name (`inputArguments`).
-    pub args: Vec<String>,
-    /// Paint-size width in CSS px (the tile the layer draws).
-    pub width: f32,
-    /// Paint-size height in CSS px.
-    pub height: f32,
-    /// Device pixel ratio: the bitmap is rendered at `width × dpr` by `height × dpr`.
-    pub dpr: f32,
-}
 
 /// CSS Images L3 §5.3 default sizing of an image with no intrinsic size or ratio
 /// (a `paint()` image): an `auto` axis — and `cover`/`contain` — fills the

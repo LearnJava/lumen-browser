@@ -57,6 +57,7 @@
       alpha: alpha, instance: null
     });
     epoch++;
+    _lumen_paint_registered();
   }
 
   function moduleSource(url) {
