@@ -17,7 +17,7 @@ use lumen_core::geom::Size;
 use crate::style::math_value::canonical_math_length;
 use crate::style::calc::{calc_node_contains_percent, looks_like_function_call, parse_math_function_value};
 use crate::style::values::misc::OverflowClipMarginBox;
-use crate::style::{CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS, ROOT_FONT_SIZE};
+use crate::style::{note_cq_unit, CalcNode, CONTAINER_CQ, FONT_CH_EX, FONT_LH, ROOT_FONT_METRICS, ROOT_FONT_SIZE};
 
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
 /// отдельную семантику (centering). Typed; `%` резолвится при layout с
@@ -113,11 +113,11 @@ pub enum Length {
     /// `vmax` — 1% от большей из двух сторон viewport.
     Vmax(f32),
     /// CSS Container Queries L1 §6.2 — `cqw`: 1% of the nearest container's inline size (width
-    /// in horizontal writing mode). Resolves via thread-local `CONTAINER_CQ`; returns `None`
-    /// outside a container re-layout pass.
+    /// in horizontal writing mode). Resolves via thread-local `CONTAINER_CQ`; outside a container
+    /// re-layout pass it is the small viewport width (BUG-1499).
     Cqw(f32),
     /// `cqh`: 1% of the nearest container's block size (height in horizontal writing mode).
-    /// Returns `None` when the container is `inline-size` type (block axis not queryable).
+    /// A container that is `inline-size` does not expose the block axis: the small viewport height.
     Cqh(f32),
     /// `cqi`: 1% of the nearest container's inline size. Alias for `cqw` in horizontal writing
     /// mode; writing-mode-aware in vertical contexts (Phase 0: treated as cqw).
@@ -154,6 +154,14 @@ pub enum Length {
     /// `is_intrinsic()` — it does not depend on content, so the intrinsic
     /// sizing helpers treat it as `auto`.
     Stretch,
+}
+
+/// One axis of the `cq*` resolution basis: the content size of the nearest container that contains
+/// its size along the axis (`inline-size` hides the block axis), or the small viewport when there
+/// is none. `inline` — width in horizontal writing mode.
+fn cq_axis(inline: bool, viewport: Size) -> f32 {
+    let (w, h) = CONTAINER_CQ.with(|c| c.get()).unwrap_or((None, None));
+    if inline { w.unwrap_or(viewport.width) } else { h.unwrap_or(viewport.height) }
 }
 
 impl Length {
@@ -197,28 +205,13 @@ impl Length {
             Length::Vw(v) => Some(*v / 100.0 * viewport.width),
             Length::Vmin(v) => Some(*v / 100.0 * viewport.width.min(viewport.height)),
             Length::Vmax(v) => Some(*v / 100.0 * viewport.width.max(viewport.height)),
-            // CSS Container Queries L1 §6.2 — resolved against the nearest container's
-            // dimensions, available via thread-local CONTAINER_CQ set before re-layout.
-            Length::Cqw(v) | Length::Cqi(v) => {
-                CONTAINER_CQ.with(|c| c.get()).map(|(w, _h)| *v / 100.0 * w)
-            }
-            Length::Cqh(v) | Length::Cqb(v) => {
-                // Block size is 0.0 when the container is `inline-size` type (not queryable).
-                CONTAINER_CQ.with(|c| c.get()).and_then(|(_w, h)| {
-                    if h > 0.0 { Some(*v / 100.0 * h) } else { None }
-                })
-            }
-            Length::Cqmin(v) => {
-                CONTAINER_CQ.with(|c| c.get()).and_then(|(w, h)| {
-                    // When block size is 0 (inline-size container), block axis is unknown → None.
-                    if h > 0.0 { Some(*v / 100.0 * w.min(h)) } else { None }
-                })
-            }
-            Length::Cqmax(v) => {
-                CONTAINER_CQ.with(|c| c.get()).and_then(|(w, h)| {
-                    if h > 0.0 { Some(*v / 100.0 * w.max(h)) } else { None }
-                })
-            }
+            // CSS Conditional 5 §container-lengths — the nearest container's content box, installed in
+            // `CONTAINER_CQ` for the container re-layout; an axis the container does not expose (or no
+            // container at all) falls back to the small viewport (`cqw` → `svw`, `cqh` → `svh`).
+            Length::Cqw(v) | Length::Cqi(v) => Some(*v / 100.0 * cq_axis(true, viewport)),
+            Length::Cqh(v) | Length::Cqb(v) => Some(*v / 100.0 * cq_axis(false, viewport)),
+            Length::Cqmin(v) => Some(*v / 100.0 * cq_axis(true, viewport).min(cq_axis(false, viewport))),
+            Length::Cqmax(v) => Some(*v / 100.0 * cq_axis(true, viewport).max(cq_axis(false, viewport))),
             Length::Calc(node) => node.resolve(em_basis, percent_basis, viewport),
             // Intrinsic sizing keywords require layout context — not resolvable here.
             Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => None,
@@ -389,22 +382,22 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     // ── Container-relative units (CSS Container Queries L1 §6.2) ─────────────
     // Longer suffixes (cqmin/cqmax) before shorter (cqw/cqh/cqi/cqb).
     if let Some(num) = s.strip_suffix("cqmin") {
-        return num.trim().parse::<f32>().ok().map(Length::Cqmin);
+        return cq_unit(num, Length::Cqmin);
     }
     if let Some(num) = s.strip_suffix("cqmax") {
-        return num.trim().parse::<f32>().ok().map(Length::Cqmax);
+        return cq_unit(num, Length::Cqmax);
     }
     if let Some(num) = s.strip_suffix("cqw") {
-        return num.trim().parse::<f32>().ok().map(Length::Cqw);
+        return cq_unit(num, Length::Cqw);
     }
     if let Some(num) = s.strip_suffix("cqh") {
-        return num.trim().parse::<f32>().ok().map(Length::Cqh);
+        return cq_unit(num, Length::Cqh);
     }
     if let Some(num) = s.strip_suffix("cqi") {
-        return num.trim().parse::<f32>().ok().map(Length::Cqi);
+        return cq_unit(num, Length::Cqi);
     }
     if let Some(num) = s.strip_suffix("cqb") {
-        return num.trim().parse::<f32>().ok().map(Length::Cqb);
+        return cq_unit(num, Length::Cqb);
     }
     // ── Absolute units → px at parse time (CSS Values L3 §5.2) ──────────────
     // Reference: 1in = 96px, 1pt = 1/72in = 4/3px, 1pc = 12pt = 16px,
@@ -433,6 +426,13 @@ pub(in crate::style) fn parse_length_q(s: &str, is_quirks: bool) -> Option<Lengt
     }
     let n = s.parse::<f32>().ok()?;
     if n == 0.0 || is_quirks { Some(Length::Px(n)) } else { None }
+}
+
+/// A parsed `cq*` length; remembers that the sheet uses container units ([`note_cq_unit`]).
+fn cq_unit(num: &str, make: fn(f32) -> Length) -> Option<Length> {
+    let len = num.trim().parse::<f32>().ok().map(make)?;
+    note_cq_unit();
+    Some(len)
 }
 
 pub fn parse_length(s: &str) -> Option<Length> {

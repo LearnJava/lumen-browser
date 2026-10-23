@@ -65,8 +65,9 @@ pub fn apply_container_styles(
     dark_mode: bool,
     counters: &mut CounterMap,
 ) {
-    // No container rules in this sheet → fast path.
-    if sheet.container_rules.is_empty() {
+    // No container rules in this sheet and no `cq*` length anywhere → fast path. A `cq*` length
+    // alone still needs the pass: it resolves against the container's size (BUG-1499).
+    if sheet.container_rules.is_empty() && !crate::style::cq_units_seen() {
         return;
     }
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
@@ -137,8 +138,10 @@ fn apply_container_inner(
     // The third element is the nearest query container above the box — the head of
     // the chain a descendant container links to via `ContainerContext::parent`.
     type Outer = Option<Arc<ContainerContext>>;
-    let mut stack: Vec<(&mut LayoutBox, Rect, f32, Outer)> = vec![(b, pcb, parent_h, None)];
-    while let Some((b, pcb, parent_h, outer)) = stack.pop() {
+    // The fifth element is the content height of the nearest `container-type: size` box above:
+    // `cqh`/`cqb` of an `inline-size` container resolve against it, not against the container.
+    let mut stack: Vec<(&mut LayoutBox, Rect, f32, Outer, Option<f32>)> = vec![(b, pcb, parent_h, None, None)];
+    while let Some((b, pcb, parent_h, outer, size_h)) = stack.pop() {
         // Derive content dimensions from already-laid-out rect + style — needed
         // both for container-query context (if `b` is a container) and as the
         // `parent_h` basis passed down to `b`'s own children either way.
@@ -163,7 +166,7 @@ fn apply_container_inner(
             // Re-apply container rules to all direct + indirect descendants.
             if let Some(sweep) = sweep {
                 sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending);
-            } else {
+            } else if !sheet.container_rules.is_empty() {
                 let mut seen = SeenBoxes::default();
                 for child in &mut b.children {
                     re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen);
@@ -176,7 +179,7 @@ fn apply_container_inner(
                 // (re-laying out a block stack here would drop margin collapsing, floats and
                 // inline flow of an `overflow: auto` scroller).
                 for child in &mut b.children {
-                    stack.push((child, pcb, content_h_val, Some(Arc::clone(&ctx))));
+                    stack.push((child, pcb, content_h_val, Some(Arc::clone(&ctx)), size_h));
                 }
                 continue;
             }
@@ -192,7 +195,8 @@ fn apply_container_inner(
                 pcb
             };
             // Expose this container's dimensions to cq* unit resolution during re-layout.
-            set_cq_context(content_w, content_h);
+            let size_h = content_h.or(size_h);
+            set_cq_axes(Some(content_w), size_h);
             let mut child_y = content_y;
             for child in &mut b.children {
                 if matches!(child.style.position, Position::Absolute | Position::Fixed) {
@@ -212,12 +216,12 @@ fn apply_container_inner(
             // After re-layout, push children to catch nested containers.
             // Each nested container will set its own cq* context during its own re-layout.
             for child in &mut b.children {
-                stack.push((child, child_pcb, content_h_val, Some(Arc::clone(&ctx))));
+                stack.push((child, child_pcb, content_h_val, Some(Arc::clone(&ctx)), size_h));
             }
         } else {
             // Not a container — just descend looking for container descendants.
             for child in &mut b.children {
-                stack.push((child, pcb, content_h_val, outer.clone()));
+                stack.push((child, pcb, content_h_val, outer.clone(), size_h));
             }
         }
     }

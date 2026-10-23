@@ -1118,6 +1118,12 @@ pub(in crate::style) fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcN
         "%" => Length::Percent(value),
         _ => return None,
     };
+    if matches!(
+        length,
+        Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_) | Length::Cqmin(_) | Length::Cqmax(_)
+    ) {
+        crate::style::note_cq_unit();
+    }
     Some(CalcNode::Length(length))
 }
 
