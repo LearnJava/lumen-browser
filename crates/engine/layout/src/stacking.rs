@@ -27,7 +27,7 @@
 #![allow(missing_docs)]
 
 use crate::box_tree::{BoxKind, LayoutBox};
-use crate::style::{ComputedStyle, ContainFlags, Isolation, MixBlendMode, Position};
+use crate::style::{BackgroundImage, ComputedStyle, ContainFlags, Isolation, MixBlendMode, Position};
 
 /// Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -180,6 +180,7 @@ fn z_sort_key(ctx: &StackingContext) -> i32 {
 ///   context» — проекция детей эмитится обёрткой вокруг всех потомков SC);
 /// - `filter != none` (непустой `Vec<FilterFn>`);
 /// - `clip-path != none`;
+/// - `mask-image != none` (любой слой, CSS Masking L1 §4.1);
 /// - `mix-blend-mode != normal`;
 /// - `isolation: isolate`;
 /// - `will-change` с указанием stacking-свойства (`transform`, `opacity`,
@@ -238,6 +239,12 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
         return true;
     }
     if style.clip_path.is_some() {
+        return true;
+    }
+    // CSS Masking L1 §4.1: a computed `mask-image` other than `none` (any layer)
+    // establishes a stacking context — descendants, positioned ones included,
+    // are painted inside the mask group instead of escaping it.
+    if style.mask_layers.iter().any(|l| !matches!(l.image, BackgroundImage::None)) {
         return true;
     }
     if style.mix_blend_mode != MixBlendMode::Normal {
@@ -780,6 +787,15 @@ mod tests {
     fn filter_creates_stacking_context() {
         let tree = build_tree("<div>x</div>", "div { filter: blur(2px); }");
         assert_eq!(tree.contexts.len(), 2);
+    }
+
+    #[test]
+    fn mask_image_creates_stacking_context() {
+        let tree = build_tree("<div>x</div>", "div { mask-image: linear-gradient(black, black); }");
+        assert_eq!(tree.contexts.len(), 2);
+        // `mask-image: none` (and a lone `mask-repeat`) does not.
+        let tree = build_tree("<div>x</div>", "div { mask-image: none; mask-repeat: no-repeat; }");
+        assert_eq!(tree.contexts.len(), 1);
     }
 
     #[test]

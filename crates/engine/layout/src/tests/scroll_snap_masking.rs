@@ -491,6 +491,21 @@ fn mask_clip_and_origin_lists() {
 }
 
 #[test]
+fn mask_origin_geometry_boxes_map_to_css_boxes() {
+    // CSS Box 4 §1: fill-box = content box, stroke-box / view-box = border box.
+    let root = lay(
+        "<p>x</p>",
+        "p { mask-image: url(a.png), url(b.png), url(c.png); mask-origin: fill-box, stroke-box, view-box; }",
+    );
+    let layers = &first_p_style(&root).mask_layers;
+    assert_eq!(layers[0].origin, BackgroundOrigin::ContentBox);
+    assert_eq!(layers[1].origin, BackgroundOrigin::BorderBox);
+    assert_eq!(layers[2].origin, BackgroundOrigin::BorderBox);
+    let root = lay("<p>x</p>", "p { mask: url(a.png) fill-box; }");
+    assert_eq!(first_p_mask(&root).origin, BackgroundOrigin::ContentBox);
+}
+
+#[test]
 fn mask_longhand_without_image_creates_a_layer() {
     // Longhand без `mask-image` не должен теряться: создаётся один слой
     // с initial-значениями и применённым longhand-ом.

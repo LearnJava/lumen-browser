@@ -744,9 +744,9 @@ pub(in crate::style) fn apply_mask_longhand<T: Copy>(
 /// origin, второй в clip.
 ///
 /// Ключевые слова `fill-box` / `stroke-box` / `view-box` в позиции origin
-/// схлопываются до `border-box`-семантики (`mask-origin` в нашей модели —
-/// [`BackgroundOrigin`] из трёх CSS-боксов), но в позиции clip сохраняются
-/// точно — это ровно та же аппроксимация, что и у longhand `mask-origin`.
+/// сводятся к CSS-боксам ([`BackgroundOrigin::parse_geometry_box`]: `fill-box` —
+/// content-box, остальные — border-box; `mask-origin` в нашей модели —
+/// [`BackgroundOrigin`] из трёх CSS-боксов), в позиции clip сохраняются точно.
 pub(in crate::style) fn parse_single_mask_layer(
     layer_str: &str,
     em_basis: f32,
@@ -821,7 +821,7 @@ pub(in crate::style) fn parse_single_mask_layer(
             } else if !origin_set {
                 // Первый настоящий <geometry-box> идёт в origin и, пока clip не
                 // занят, дублируется в clip (одиночный бокс задаёт оба).
-                if let Some(o) = BackgroundOrigin::parse(t) {
+                if let Some(o) = BackgroundOrigin::parse_geometry_box(t) {
                     layer.origin = o;
                 }
                 origin_set = true;
