@@ -193,13 +193,13 @@
     rendered.set(req.key, sig);
   }
 
-  global.__lumen_paint_set_requests = function (json) {
+  __lumen_C.__lumen_paint_set_requests = function (json) {
     requests = JSON.parse(json);
     var live = new Set();
     for (var i = 0; i < requests.length; i++) live.add(requests[i].key);
     rendered.forEach(function (_v, k) { if (!live.has(k)) rendered.delete(k); });
   };
-  global.__lumen_paint_flush = function () {
+  __lumen_C.__lumen_paint_flush = function () {
     for (var i = 0; i < requests.length; i++) renderOne(requests[i]);
   };
 })(globalThis)
