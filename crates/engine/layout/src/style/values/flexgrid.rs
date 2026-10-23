@@ -129,6 +129,33 @@ impl FlexWrap {
             _ => None,
         }
     }
+
+    /// CSS Flexbox L2 §5.2: `nowrap | [ wrap | wrap-reverse ] || balance`. Returns the base
+    /// wrapping and the `balance` flag; a lone `balance` is `wrap` with balancing on.
+    pub fn parse_balance(s: &str) -> Option<(Self, bool)> {
+        let mut wrap: Option<Self> = None;
+        let mut balance = false;
+        for tok in s.split_whitespace() {
+            if tok.eq_ignore_ascii_case("balance") {
+                if balance {
+                    return None;
+                }
+                balance = true;
+            } else {
+                let w = Self::parse(tok)?;
+                if wrap.is_some() {
+                    return None;
+                }
+                wrap = Some(w);
+            }
+        }
+        match (wrap, balance) {
+            (None, false) => None,
+            (None, true) => Some((Self::Wrap, true)),
+            (Some(Self::Nowrap), true) => None,
+            (Some(w), b) => Some((w, b)),
+        }
+    }
 }
 
 /// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited.

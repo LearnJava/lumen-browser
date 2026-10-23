@@ -134,6 +134,36 @@ mod raster {
         assert_eq!(two_layers("exclude"), 7500);
     }
 
+    /// 50×50 родитель с маской и абсолютно позиционированный потомок 100×100.
+    fn overflowing_child(mask: &str) -> usize {
+        let dl = build(
+            "<div class=p><div class=c></div></div>",
+            &format!(
+                ".p {{ width: 50px; height: 50px; position: absolute; left: 0; top: 0; {mask} }}                  .c {{ position: absolute; left: 0; top: 0; width: 100px; height: 100px; background: rgb(0,255,0); }}"
+            ),
+        );
+        green(&crate::cpu_raster::rasterize_cpu(220, 220, &dl, &[], 0.0, 0.0).expect("rasterize"))
+    }
+
+    #[test]
+    fn mask_covers_positioned_descendants() {
+        // CSS Masking §4.1: `mask-image` образует stacking context — потомок,
+        // выступающий из рамки, лежит внутри группы маски и обрезается по ней.
+        assert_eq!(overflowing_child(&format!("mask-image: {BLACK};")), 2500);
+    }
+
+    #[test]
+    fn no_clip_mask_tiles_continue_outside_the_box() {
+        // `mask-clip: no-clip`: плитки `repeat` идут за границы элемента, поэтому
+        // выступающий потомок остаётся виден целиком.
+        assert_eq!(overflowing_child(&format!("mask-image: {BLACK}; mask-clip: no-clip;")), 10_000);
+        // С `no-repeat` плитка одна — за рамкой маска прозрачна.
+        assert_eq!(
+            overflowing_child(&format!("mask-image: {BLACK}; mask-clip: no-clip; mask-repeat: no-repeat;")),
+            2500
+        );
+    }
+
     #[test]
     fn url_mask_uses_the_decoded_image_alpha() {
         // 100×100: верхняя половина прозрачна, нижняя непрозрачна.

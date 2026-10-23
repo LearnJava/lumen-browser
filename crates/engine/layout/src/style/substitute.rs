@@ -87,14 +87,52 @@ pub(in crate::style) fn expand_vars(
     } else {
         return None;
     };
+    // BUG-1502: объявление хранит имя раскрытым (`--\30` → `--0`), а в значении
+    // экранирование, которое нельзя раскрыть на месте (`\27 `), осталось как есть.
+    let decoded_name;
+    let effective_name = if effective_name.contains('\\') {
+        decoded_name = unescape_dashed_ident(effective_name)?;
+        decoded_name.as_str()
+    } else {
+        effective_name
+    };
     let resolved = if let Some(v) = custom.get(effective_name) {
         expand_vars(v.trim(), custom, depth + 1, em_basis, viewport)?
     } else {
         let fb = fallback?;
         expand_vars(fb.trim(), custom, depth + 1, em_basis, viewport)?
     };
-    let combined = format!("{prefix}{resolved}{after_close}");
+    // BUG-1501: подстановка вставляет токены, а не символы — `var(--a)var(--b)`
+    // не должно склеиваться в один идентификатор/размерность.
+    let left_sep = if resolved.is_empty() || prefix.is_empty() {
+        ""
+    } else {
+        token_boundary_sep(prefix, &resolved)
+    };
+    let right_sep = if after_close.is_empty() {
+        ""
+    } else if resolved.is_empty() {
+        token_boundary_sep(prefix, after_close)
+    } else {
+        token_boundary_sep(&resolved, after_close)
+    };
+    let combined = format!("{prefix}{left_sep}{resolved}{right_sep}{after_close}");
     expand_vars(&combined, custom, depth + 1, em_basis, viewport)
+}
+
+/// `" "`, если конец `left` и начало `right` при прямой склейке слились бы в
+/// один токен CSS (идентификатор, число, размерность); иначе `""`.
+fn token_boundary_sep(left: &str, right: &str) -> &'static str {
+    let (Some(l), Some(r)) = (left.chars().next_back(), right.chars().next()) else {
+        return "";
+    };
+    let name_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || !c.is_ascii();
+    let can_continue = name_char(l) || (l == '#' && name_char(r));
+    if can_continue && (name_char(r) || r == '%' || r == '\\') {
+        " "
+    } else {
+        ""
+    }
 }
 
 /// Recognises `name` (the trimmed first argument of a `var(...)` call) as a
@@ -791,7 +829,8 @@ fn calls_well_formed(
             return false;
         }
         if let Some(fb) = fallback
-            && !(calls_well_formed(fb, find_env_open, env_head_is_valid)
+            && !(fallback_declaration_value_ok(fb)
+                && calls_well_formed(fb, find_env_open, env_head_is_valid)
                 && calls_well_formed(fb, find_var_open, var_head_is_valid))
         {
             return false;
@@ -801,11 +840,88 @@ fn calls_well_formed(
     true
 }
 
+/// Fallback `var()`/`env()` — `<declaration-value>` (CSS Variables L1 §3): на
+/// его верхнем уровне нет `!` и `;` (`var(--b,!)`, `var(--b,;)`,
+/// `var(--b,!important)` — ошибка разбора, BUG-1500). Внутри скобок, `{}`-блоков
+/// и строк оба символа допустимы.
+fn fallback_declaration_value_ok(fallback: &str) -> bool {
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    let bytes = fallback.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_string = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_string = Some(b),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'!' if is_cdo_bang(bytes, i) => {}
+            b'!' | b';' if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The `!` at `i` is the tail of a `<!--` <CDO-token>, not a `!` delimiter.
+fn is_cdo_bang(bytes: &[u8], i: usize) -> bool {
+    i > 0 && bytes[i - 1] == b'<' && bytes[i + 1..].starts_with(b"--")
+}
+
 /// `var( <custom-property-name> , ... )`: голова — ровно один `--ident`
 /// (`var(--x ())`, `var(--x(),)` невалидны, `css-variables/var-parsing.html`).
 fn var_head_is_valid(head: &str) -> bool {
     let name = head.trim_matches(|c: char| c.is_ascii_whitespace());
-    name.len() > 2 && name.starts_with("--") && name.bytes().all(is_ident_byte)
+    name.len() > 2 && name.starts_with("--") && unescape_dashed_ident(name).is_some()
+}
+
+/// Имя из `var()` после раскрытия escape-последовательностей (CSS Syntax L3
+/// §4.3.7: `\` + 1–6 hex-цифр и один пробел-терминатор, либо `\` + любой символ,
+/// кроме перевода строки; 0, суррогат и значение за U+10FFFF — U+FFFD).
+/// `None`, если в имени остался неэкранированный не-ident символ.
+fn unescape_dashed_ident(name: &str) -> Option<String> {
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            if !c.is_ascii() || is_ident_byte(c as u8) {
+                out.push(c);
+                continue;
+            }
+            return None;
+        }
+        match chars.peek().copied() {
+            None | Some('\n' | '\r' | '\x0C') => return None,
+            Some(h) if h.is_ascii_hexdigit() => {
+                let mut code = 0u32;
+                let mut digits = 0;
+                while digits < 6 {
+                    let Some(d) = chars.peek().and_then(|h| h.to_digit(16)) else { break };
+                    code = code * 16 + d;
+                    digits += 1;
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some(' ' | '\t')) {
+                    chars.next();
+                }
+                out.push(char::from_u32(code).filter(|&c| c != '\0').unwrap_or('\u{FFFD}'));
+            }
+            Some(other) => {
+                out.push(other);
+                chars.next();
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Parse-time проверка значения с `var()`/`env()` (CSS Syntax §5.4.4
@@ -822,7 +938,7 @@ pub fn substitution_value_well_formed(value: &str) -> bool {
     let mut stack: Vec<u8> = Vec::new();
     let mut in_string: Option<u8> = None;
     let mut escaped = false;
-    for b in cleaned.bytes() {
+    for (i, b) in cleaned.bytes().enumerate() {
         if let Some(q) = in_string {
             if escaped {
                 escaped = false;
@@ -841,7 +957,7 @@ pub fn substitution_value_well_formed(value: &str) -> bool {
             b'[' => stack.push(b']'),
             b'{' => stack.push(b'}'),
             b')' | b']' | b'}' if stack.pop() != Some(b) => return false,
-            b'!' if stack.is_empty() => return false,
+            b'!' if stack.is_empty() && !is_cdo_bang(cleaned.as_bytes(), i) => return false,
             _ => {}
         }
     }

@@ -1,6 +1,6 @@
 # BUG-1484 — У `position:absolute` бокса с `width:auto` и заданными `left` процентные `padding-left`/`padding-right` дают ширину 0
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-22 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 21, `css/css-anchor-position` + `css/css-position` + `css/css-display`)
 **Область:** layout (`crates/engine/layout/src/box_tree/layout_dispatch.rs` — абсолютно позиционированный бокс: процентные горизонтальные `padding-left`/`padding-right` при `width:auto`)
 
@@ -28,3 +28,7 @@ WPT-RUN-14 срез 21: `css-position/position-absolute-padding-percentage.html`
 ## Как проверить
 
 Таблица выше; `css/css-position/position-absolute-padding-percentage.html`.
+
+## Исправление
+
+`place_abs_child` (`multicol_abspos.rs`): intrinsic-ширины (`max_content_outer_width`/`min_content_outer_width`) считают процентный `padding` от 0, а содержащий блок абсолютного бокса определён. К shrink-to-fit ширине добавляется разница «процент от `cb.width` − процент от 0» для `padding-left`/`padding-right`. Кроме того, `avail_w` (зазор между инсетами или shrink-to-fit ширина) был базой процентов `padding`/`margin` самого бокса в `dispatch_box` — теперь, если `avail_w != cb.width`, база передаётся через `UsedSizeOverride::percentage_base = cb.width` (CSS 2.1 §8.1). `percentage_base` добавлен в `UsedSizeOverrideBits` — ключ кэша раскладки. Тест — `box_tree/tests/shrink_to_fit_margins.rs::absolute_auto_width_resolves_percent_horizontal_padding`.

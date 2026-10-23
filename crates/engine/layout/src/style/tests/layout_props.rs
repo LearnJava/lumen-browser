@@ -111,6 +111,34 @@ use super::*;
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
     }
 
+    #[test]
+    fn flex_wrap_balance_and_line_count() {
+        let cases = [
+            ("balance", FlexWrap::Wrap, true),
+            ("balance wrap-reverse", FlexWrap::WrapReverse, true),
+            ("wrap-reverse balance", FlexWrap::WrapReverse, true),
+            ("wrap balance", FlexWrap::Wrap, true),
+            ("nowrap balance", FlexWrap::Nowrap, false),
+            ("balance balance", FlexWrap::Nowrap, false),
+        ];
+        for (css_val, wrap, balance) in cases {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ flex-wrap: {css_val}; flex-line-count: 3; }}"));
+            let root = ComputedStyle::root();
+            let node = doc.get(doc.body().unwrap()).children[0];
+            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!((s.flex_wrap, s.flex_wrap_balance), (wrap, balance), "flex-wrap: {css_val}");
+            assert_eq!(s.flex_line_count, 3);
+        }
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-line-count: 0; } div { flex-flow: column balance; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.flex_line_count, 1);
+        assert_eq!((s.flex_direction, s.flex_wrap, s.flex_wrap_balance), (FlexDirection::Column, FlexWrap::Wrap, true));
+    }
+
     // ── flex-flow shorthand ───────────────────────────────────────────────
 
     #[test]
@@ -531,6 +559,7 @@ use super::*;
             ("<textarea></textarea>", "textarea { padding-left: 3px; }", true),
             ("<input type=text>", "input { background-color: red; }", true),
             ("<input type=checkbox>", "input { border-top-color: red; }", false),
+            ("<input type=color>", "input { border-top-width: 1px; }", true),
             ("<select></select>", "select { border-top-color: red; }", false),
             ("<button></button>", "button { color: red; }", false),
             ("<button></button>", "button { appearance: auto; border-top-color: red; }", true),
@@ -543,6 +572,54 @@ use super::*;
             let style = compute_style(&doc, el, &sheet, &root, Size::new(800.0, 600.0), false);
             assert_eq!(style.appearance == Appearance::None, disabled, "{html} {css}");
         }
+    }
+
+    /// BUG-1277: the UA border width copied back as an author declaration (what
+    /// `compute-kind-widget-generated` does) must not give the control a border its
+    /// `appearance: none` form lacks — the stripped border style is `none`.
+    #[test]
+    fn appearance_disabled_lone_border_width_keeps_border_stripped() {
+        let width_of = |css: &str| {
+            let doc = lumen_html_parser::parse("<button></button>");
+            let sheet = lumen_css_parser::parse(css);
+            let root = ComputedStyle::root();
+            let el = doc.get(doc.body().unwrap()).children[0];
+            let s = compute_style(&doc, el, &sheet, &root, Size::new(800.0, 600.0), false);
+            (s.border_left_width, s.border_top_width)
+        };
+        assert_eq!(width_of("button { border-left-width: 1px; border-top-width: 1px; }"), (0.0, 0.0));
+        assert_eq!(width_of("button { appearance: none; }"), (0.0, 0.0));
+        // A full `border` declaration brings its own style back.
+        assert_eq!(width_of("button { border: 2px solid red; }"), (2.0, 2.0));
+    }
+
+    /// CSS Logical L1 §3.3: `border-{start,end}-{start,end}-radius` follow `writing-mode` + `direction`.
+    #[test]
+    fn logical_corner_radii_map_to_physical_corners() {
+        let radii = |css: &str| {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(css);
+            let root = ComputedStyle::root();
+            let el = doc.get(doc.body().unwrap()).children[0];
+            let s = compute_style(&doc, el, &sheet, &root, Size::new(800.0, 600.0), false);
+            let px = |l: &Length| match l { Length::Px(v) => *v, _ => -1.0 };
+            [
+                (px(&s.border_top_left_radius), px(&s.border_top_left_radius_y)),
+                (px(&s.border_top_right_radius), px(&s.border_top_right_radius_y)),
+                (px(&s.border_bottom_right_radius), px(&s.border_bottom_right_radius_y)),
+                (px(&s.border_bottom_left_radius), px(&s.border_bottom_left_radius_y)),
+            ]
+        };
+        let all = "div { border-start-start-radius: 1px 2px; border-start-end-radius: 3px; \
+                   border-end-end-radius: 5px; border-end-start-radius: 7px 8px; ";
+        // [top-left, top-right, bottom-right, bottom-left]
+        assert_eq!(radii(&format!("{all} }}")), [(1.0, 2.0), (3.0, 3.0), (5.0, 5.0), (7.0, 8.0)]);
+        assert_eq!(radii(&format!("{all} direction: rtl; }}")), [(3.0, 3.0), (1.0, 2.0), (7.0, 8.0), (5.0, 5.0)]);
+        // vertical-rl: block-start = right, inline-start = top; the inline radius is the physical y radius.
+        assert_eq!(radii(&format!("{all} writing-mode: vertical-rl; }}")), [(8.0, 7.0), (2.0, 1.0), (3.0, 3.0), (5.0, 5.0)]);
+        // `border-radius` after the longhand wins; a longhand after it wins again.
+        assert_eq!(radii("div { border-start-start-radius: 9px; border-radius: 4px; }"), [(4.0, 4.0); 4]);
+        assert_eq!(radii("div { border-radius: 4px; border-start-start-radius: 9px; }")[0], (9.0, 9.0));
     }
 
     #[test]

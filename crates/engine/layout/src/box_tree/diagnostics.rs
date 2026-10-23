@@ -107,6 +107,7 @@ pub(crate) struct UsedSizeOverrideBits {
     height_bits: Option<u32>,
     box_sizing: Option<BoxSizing>,
     clear_intrinsic_hint: bool,
+    percentage_base_bits: Option<u32>,
 }
 
 impl From<Option<&UsedSizeOverride>> for UsedSizeOverrideBits {
@@ -118,6 +119,7 @@ impl From<Option<&UsedSizeOverride>> for UsedSizeOverrideBits {
                 height_bits: o.height.map(f32::to_bits),
                 box_sizing: o.box_sizing,
                 clear_intrinsic_hint: o.clear_intrinsic_hint,
+                percentage_base_bits: o.percentage_base.map(f32::to_bits),
             },
         }
     }

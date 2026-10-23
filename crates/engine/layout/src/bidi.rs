@@ -16,22 +16,22 @@
 //!    lay glyphs out left-to-right with no bidi awareness of their own, so an
 //!    RTL fragment is handed to paint already reversed.
 //!
-//! # Known limitation — flat segment list
+//! # Scopes
 //!
-//! `collect_inline_segments` flattens the inline box tree, so a non-`normal`
-//! `unicode-bidi` is wrapped **per segment run**, not per inline element.
-//! `<span style="unicode-bidi:isolate">abc <b>def</b> ghi</span>` therefore
-//! produces two isolates (`abc `, ` ghi`) around a bare `def` instead of one
-//! isolate around all three: `unicode-bidi` does not inherit, so the `<b>`
-//! segment carries `normal` and breaks the group. Single-text-node cases —
-//! `<bdo>`, `<bdi>`, `<span dir=rtl>` — are exact. The one exception is the
-//! `*-override` family: `ComputedStyle::bidi_override` carries the context down
-//! to `normal` descendants, so they are overridden and grouped with the owner
-//! (BUG-1371).
+//! `unicode-bidi` is per *element*: `collect_inline_segments` stamps every
+//! segment with the chain of enclosing inline elements whose value is not
+//! `normal` ([`InlineSegment::bidi_scopes`]), and [`resolve`] opens each scope
+//! once and closes it when the last segment inside it ends. The block
+//! container's own value arrives as a separate argument and is the outermost
+//! scope. So `<span style="unicode-bidi:isolate">abc <b>def</b> ghi</span>` is
+//! one isolate around all three segments, and a `bidi-override` reaches its
+//! `normal` descendants because they sit inside its control characters.
 
 use std::borrow::Cow;
 
 use unicode_bidi::BidiInfo;
+
+use lumen_dom::NodeId;
 
 use crate::box_tree::{InlineFrag, InlineSegment};
 use crate::style::{Direction, UnicodeBidi};
@@ -76,16 +76,6 @@ fn wrapping(bidi: UnicodeBidi, dir: Direction) -> (&'static [char], &'static [ch
     }
 }
 
-/// `unicode-bidi` and `direction` that wrap the segment. A `normal` segment
-/// nested in a `bidi-override` box is overridden too (CSS Writing Modes L4
-/// §2.4.2), with the box's own direction — see `ComputedStyle::bidi_override`.
-fn effective(seg: &InlineSegment) -> (UnicodeBidi, Direction) {
-    match seg.style.bidi_override {
-        Some(ctx) if seg.style.unicode_bidi == UnicodeBidi::Normal => ctx,
-        _ => (seg.style.unicode_bidi, seg.style.direction),
-    }
-}
-
 /// True when `text` can possibly carry a non-zero embedding level: it holds a
 /// right-to-left character, an Arabic number, or an explicit bidi control.
 ///
@@ -114,10 +104,15 @@ fn has_bidi_relevant_char(text: &str) -> bool {
 /// A left-to-right block whose every segment is plain `unicode-bidi: normal`
 /// left-to-right text resolves to level 0 everywhere, which is what the
 /// fragments already default to — [`resolve`] would be a no-op.
-pub(crate) fn needs_resolution(segments: &[InlineSegment], base: Direction) -> bool {
+pub(crate) fn needs_resolution(
+    segments: &[InlineSegment],
+    base: Direction,
+    block: UnicodeBidi,
+) -> bool {
     base == Direction::Rtl
+        || block != UnicodeBidi::Normal
         || segments.iter().any(|s| {
-            effective(s).0 != UnicodeBidi::Normal
+            !s.bidi_scopes.is_empty()
                 || s.style.direction == Direction::Rtl
                 || has_bidi_relevant_char(&s.text)
         })
@@ -132,46 +127,69 @@ pub(crate) fn needs_resolution(segments: &[InlineSegment], base: Direction) -> b
 /// L2 needs in order to reorder its halves independently.
 ///
 /// A `forced_break` segment ends the bidi paragraph (rule P1): the algorithm
-/// restarts on the next line with the same base level.
-pub(crate) fn resolve(segments: &[InlineSegment], base: Direction) -> Vec<InlineSegment> {
+/// restarts on the next line with the same base level, so every open scope is
+/// closed before the break and reopened by the next segment.
+///
+/// `block` is the block container's own `unicode-bidi` (the outermost scope);
+/// its `direction` is `base`.
+pub(crate) fn resolve(
+    segments: &[InlineSegment],
+    base: Direction,
+    block: UnicodeBidi,
+) -> Vec<InlineSegment> {
     // Paragraph text, plus one mark per content character recording where it
     // came from. Injected control characters get no mark.
     let mut text = String::new();
     let mut marks: Vec<Mark> = Vec::new();
+    // Innermost isolating scope each segment sits in.
+    let mut isolates: Vec<Option<NodeId>> = Vec::with_capacity(segments.len());
 
-    let mut i = 0usize;
-    while i < segments.len() {
-        // Adjacent segments sharing the same non-`normal` `unicode-bidi` are
-        // wrapped once, as a group: a `<span dir=rtl>` split into several
-        // segments by whitespace handling must stay a single embedding.
-        let (group_bidi, group_dir) = effective(&segments[i]);
-        let mut j = i + 1;
-        if group_bidi != UnicodeBidi::Normal {
-            while j < segments.len()
-                && effective(&segments[j]) == (group_bidi, group_dir)
-            {
-                j += 1;
+    // Scopes currently open, outermost first. The block's own scope has no node.
+    let mut open: Vec<(Option<NodeId>, UnicodeBidi, Direction)> = Vec::new();
+    let close_to = |text: &mut String, open: &mut Vec<(Option<NodeId>, UnicodeBidi, Direction)>, keep: usize| {
+        while open.len() > keep {
+            let Some((_, bidi, dir)) = open.pop() else { break };
+            text.extend(wrapping(bidi, dir).1.iter());
+        }
+    };
+    let mut chain: Vec<(Option<NodeId>, UnicodeBidi, Direction)> = Vec::new();
+    for (seg_idx, seg) in segments.iter().enumerate() {
+        if seg.forced_break {
+            // Rule P1 — a paragraph separator; `BidiInfo` restarts here.
+            close_to(&mut text, &mut open, 0);
+            text.push('\n');
+            isolates.push(None);
+            continue;
+        }
+        chain.clear();
+        if block != UnicodeBidi::Normal {
+            chain.push((None, block, base));
+        }
+        chain.extend(seg.bidi_scopes.iter().map(|sc| (Some(sc.node), sc.bidi, sc.dir)));
+        let common = open.iter().zip(&chain).take_while(|(a, b)| a == b).count();
+        close_to(&mut text, &mut open, common);
+        for &scope in &chain[common..] {
+            text.extend(wrapping(scope.1, scope.2).0.iter());
+            open.push(scope);
+        }
+        isolates.push(
+            seg.bidi_scopes
+                .iter()
+                .rev()
+                .find(|sc| sc.is_isolating())
+                .map(|sc| sc.node),
+        );
+        if seg.img_src.is_some() {
+            marks.push(Mark { para_byte: text.len(), seg_idx, seg_byte: 0 });
+            text.push(OBJECT);
+        } else {
+            for (off, ch) in seg.text.char_indices() {
+                marks.push(Mark { para_byte: text.len(), seg_idx, seg_byte: off });
+                text.push(ch);
             }
         }
-        let (open, close) = wrapping(group_bidi, group_dir);
-        text.extend(open.iter());
-        for (seg_idx, seg) in segments[i..j].iter().enumerate().map(|(k, s)| (i + k, s)) {
-            if seg.forced_break {
-                // Rule P1 — a paragraph separator; `BidiInfo` restarts here.
-                text.push('\n');
-            } else if seg.img_src.is_some() {
-                marks.push(Mark { para_byte: text.len(), seg_idx, seg_byte: 0 });
-                text.push(OBJECT);
-            } else {
-                for (off, ch) in seg.text.char_indices() {
-                    marks.push(Mark { para_byte: text.len(), seg_idx, seg_byte: off });
-                    text.push(ch);
-                }
-            }
-        }
-        text.extend(close.iter());
-        i = j;
     }
+    close_to(&mut text, &mut open, 0);
 
     let para_level = unicode_bidi::Level::new(u8::from(base == Direction::Rtl)).ok();
     let info = BidiInfo::new(&text, para_level);
@@ -199,6 +217,7 @@ pub(crate) fn resolve(segments: &[InlineSegment], base: Direction) -> Vec<Inline
         if seg.img_src.is_some() {
             let mut piece = seg.clone();
             piece.bidi_level = first_level;
+            piece.bidi_isolate = isolates[idx];
             out.push(piece);
             continue;
         }
@@ -212,6 +231,7 @@ pub(crate) fn resolve(segments: &[InlineSegment], base: Direction) -> Vec<Inline
         if cuts.len() == 1 {
             let mut piece = seg.clone();
             piece.bidi_level = first_level;
+            piece.bidi_isolate = isolates[idx];
             out.push(piece);
             continue;
         }
@@ -220,6 +240,7 @@ pub(crate) fn resolve(segments: &[InlineSegment], base: Direction) -> Vec<Inline
             let mut piece = seg.clone();
             piece.text = seg.text[start..end].to_string();
             piece.bidi_level = level;
+            piece.bidi_isolate = isolates[idx];
             piece.source_char_offset = seg.source_char_offset + start as u32;
             // Inline-box edges belong to the outer pieces only: the box's own
             // margin/border/padding is not duplicated at every level boundary.
@@ -281,11 +302,17 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
     }
     // Lowest odd level present, counting each even level as the odd one above
     // it (UAX #9: «including intermediate levels not actually present»).
-    let lowest_odd = frags
+    let mut lowest_odd = frags
         .iter()
         .map(|f| level_of(f) | 1)
         .min()
         .unwrap_or(1);
+    // An isolate's control characters sit at the paragraph level and are on the line, though no
+    // fragment carries them: in an RTL paragraph that puts level 1 in play, so the isolate
+    // (and the text beside it) is reversed as a unit.
+    if base_level == 1 && frags.iter().any(|f| f.bidi_isolate.is_some()) {
+        lowest_odd = 1;
+    }
 
     let mut level = max;
     while level >= lowest_odd {
@@ -299,7 +326,7 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
             i += 1;
             while i < frags.len()
                 && level_of(&frags[i]) >= level
-                && !isolate_boundary(&frags[i - 1], &frags[i])
+                && !(level > base_level && isolate_boundary(&frags[i - 1], &frags[i]))
             {
                 i += 1;
             }
@@ -314,18 +341,12 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
 
 /// True when an isolate's opening or closing control character (LRI/RLI/FSI,
 /// PDI) sits between two neighbouring fragments. Those characters stay at the
-/// paragraph level, so rule L2 never reverses a run across them — without this
+/// paragraph level, so rule L2 never reverses a run *above* that level across them
+/// (the paragraph level itself reverses the isolate as one unit) — without this
 /// a `<bdi dir=ltr>א. </bdi>א` line was reflected as one piece and the
 /// isolate's content ended up on the wrong side of the text after it.
 fn isolate_boundary(before: &InlineFrag, after: &InlineFrag) -> bool {
-    let key = |f: &InlineFrag| {
-        matches!(
-            f.style.unicode_bidi,
-            UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride | UnicodeBidi::Plaintext
-        )
-            .then_some(f.source_node)
-    };
-    key(before) != key(after)
+    before.bidi_isolate != after.bidi_isolate
 }
 
 /// Mirrors each fragment's `x` inside the run's own geometric span.
@@ -348,6 +369,49 @@ fn reflect(run: &mut [InlineFrag], at_line_start: bool) {
     for frag in run.iter_mut() {
         frag.x = span_start + hi - (frag.x + frag.width);
     }
+}
+
+/// UAX #9 P2–P3 — the paragraph direction `unicode-bidi: plaintext` takes from the first
+/// strong character of the block's text (left-to-right when there is none). Looks at the
+/// first paragraph only: a forced break starts the next one.
+pub(crate) fn plaintext_direction(segments: &[InlineSegment]) -> Direction {
+    let mut text = String::new();
+    for seg in segments {
+        if seg.forced_break {
+            break;
+        }
+        text.push_str(&seg.text);
+    }
+    let info = BidiInfo::new(&text, None);
+    match info.paragraphs.first() {
+        Some(p) if p.level.is_rtl() => Direction::Rtl,
+        _ => Direction::Ltr,
+    }
+}
+
+/// UAX #9 P2–I2 over a stand-alone string — the `text-overflow` marker, which is its own
+/// bidi paragraph with the block's `base` direction (CSS UI L4 §6.2). Returns the text cut
+/// at every embedding-level change, each piece with its level.
+pub(crate) fn split_by_level(text: &str, base: Direction) -> Vec<(&str, u8)> {
+    let para_level = unicode_bidi::Level::new(u8::from(base == Direction::Rtl)).ok();
+    let info = BidiInfo::new(text, para_level);
+    let mut out: Vec<(&str, u8)> = Vec::new();
+    let mut start = 0usize;
+    let mut cur = 0u8;
+    for (off, _) in text.char_indices() {
+        let level = info.levels.get(off).map(|l| l.number()).unwrap_or(0);
+        if off == 0 {
+            cur = level;
+        } else if level != cur {
+            out.push((&text[start..off], cur));
+            start = off;
+            cur = level;
+        }
+    }
+    if start < text.len() {
+        out.push((&text[start..], cur));
+    }
+    out
 }
 
 /// UAX #9 rules L2 (character half) and L4 — the text of `level`'s fragment as
@@ -386,6 +450,7 @@ pub fn visual_text(text: &str, level: u8) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::box_tree::BidiScope;
     use crate::style::ComputedStyle;
 
     /// Hebrew "שלום" — four strong-RTL letters.
@@ -409,6 +474,12 @@ mod tests {
             source_node: lumen_dom::NodeId::from_index(0),
             source_char_offset: 0,
             bidi_level: 0,
+            bidi_scopes: if bidi == UnicodeBidi::Normal {
+                Vec::new()
+            } else {
+                vec![BidiScope { node: lumen_dom::NodeId::from_index(0), bidi, dir }]
+            },
+            bidi_isolate: None,
         }
     }
 
@@ -428,6 +499,7 @@ mod tests {
             source_node: lumen_dom::NodeId::from_index(0),
             source_char_offset: 0,
             bidi_level: level,
+            bidi_isolate: None,
             merged_sources: Vec::new(),
             forced_end: false,
         }
@@ -438,25 +510,25 @@ mod tests {
     #[test]
     fn plain_ltr_ascii_skips_the_algorithm() {
         let segs = [seg("hello world", Direction::Ltr, UnicodeBidi::Normal)];
-        assert!(!needs_resolution(&segs, Direction::Ltr));
+        assert!(!needs_resolution(&segs, Direction::Ltr, UnicodeBidi::Normal));
     }
 
     #[test]
     fn rtl_block_always_resolves() {
         let segs = [seg("hello", Direction::Ltr, UnicodeBidi::Normal)];
-        assert!(needs_resolution(&segs, Direction::Rtl));
+        assert!(needs_resolution(&segs, Direction::Rtl, UnicodeBidi::Normal));
     }
 
     #[test]
     fn hebrew_text_in_ltr_block_resolves() {
         let segs = [seg(HE, Direction::Ltr, UnicodeBidi::Normal)];
-        assert!(needs_resolution(&segs, Direction::Ltr));
+        assert!(needs_resolution(&segs, Direction::Ltr, UnicodeBidi::Normal));
     }
 
     #[test]
     fn override_on_ascii_resolves() {
         let segs = [seg("abc", Direction::Rtl, UnicodeBidi::BidiOverride)];
-        assert!(needs_resolution(&segs, Direction::Ltr));
+        assert!(needs_resolution(&segs, Direction::Ltr, UnicodeBidi::Normal));
     }
 
     #[test]
@@ -471,7 +543,7 @@ mod tests {
     #[test]
     fn ltr_paragraph_is_all_level_zero() {
         let segs = [seg("hello", Direction::Ltr, UnicodeBidi::Normal)];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].bidi_level, 0);
     }
@@ -479,7 +551,7 @@ mod tests {
     #[test]
     fn hebrew_in_ltr_paragraph_gets_level_one() {
         let segs = [seg(HE, Direction::Ltr, UnicodeBidi::Normal)];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].bidi_level, 1, "strong RTL letters resolve to level 1");
     }
@@ -491,7 +563,7 @@ mod tests {
         // the split would land in the wrong place.
         let text = format!("a{HE}");
         let segs = [seg(&text, Direction::Ltr, UnicodeBidi::Normal)];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out.len(), 2, "one split between the Latin and Hebrew runs");
         assert_eq!(out[0].text, "a");
         assert_eq!(out[0].bidi_level, 0);
@@ -503,7 +575,7 @@ mod tests {
     #[test]
     fn rtl_paragraph_puts_latin_at_level_two() {
         let segs = [seg("abc", Direction::Rtl, UnicodeBidi::Normal)];
-        let out = resolve(&segs, Direction::Rtl);
+        let out = resolve(&segs, Direction::Rtl, UnicodeBidi::Normal);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].bidi_level, 2, "Latin inside an RTL paragraph nests one level");
     }
@@ -513,49 +585,84 @@ mod tests {
         // `unicode-bidi: bidi-override` + `direction: rtl` injects RLO, which
         // makes even plain Latin resolve to an odd level.
         let segs = [seg("abc", Direction::Rtl, UnicodeBidi::BidiOverride)];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].bidi_level, 1);
-    }
-
-    fn seg_in_override(text: &str, bidi: UnicodeBidi) -> InlineSegment {
-        let mut s = seg(text, Direction::Rtl, UnicodeBidi::Normal);
-        let mut style = (*s.style).clone();
-        style.bidi_override = Some((bidi, Direction::Rtl));
-        s.style = std::sync::Arc::new(style);
-        s
     }
 
     #[test]
     fn normal_descendant_of_an_override_is_overridden_too() {
         // BUG-1371: `<p style="direction:rtl;unicode-bidi:bidi-override"><span>abc</span> def</p>`
+        // — the block's own value is the outermost scope.
         let segs = [
-            seg_in_override("abc", UnicodeBidi::BidiOverride),
-            seg("def", Direction::Rtl, UnicodeBidi::BidiOverride),
+            seg("abc", Direction::Rtl, UnicodeBidi::Normal),
+            seg("def", Direction::Rtl, UnicodeBidi::Normal),
         ];
-        assert!(needs_resolution(&segs[..1], Direction::Ltr));
-        let out = resolve(&segs, Direction::Ltr);
+        assert!(needs_resolution(&segs, Direction::Ltr, UnicodeBidi::BidiOverride));
+        let out = resolve(&segs, Direction::Rtl, UnicodeBidi::BidiOverride);
         assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|p| p.bidi_level == 1), "both words are forced RTL");
+        assert!(out.iter().all(|p| p.bidi_level % 2 == 1), "both words are forced RTL");
     }
 
     #[test]
-    fn override_context_groups_with_its_owner_into_one_wrapper() {
-        // The nested `normal` segment must not break the owner's `isolate-override`.
-        let segs = [
-            seg("ab", Direction::Rtl, UnicodeBidi::IsolateOverride),
-            seg_in_override("cd", UnicodeBidi::IsolateOverride),
-        ];
-        let out = resolve(&segs, Direction::Ltr);
+    fn element_scope_spans_a_normal_child_segment() {
+        // `<span style="unicode-bidi:isolate">abc <b>def</b> ghi</span>` is ONE
+        // isolate: the `<b>` segment carries no scope of its own, but the
+        // enclosing span's chain is stamped on it.
+        let scope = |s: &mut InlineSegment| {
+            s.bidi_scopes = vec![BidiScope {
+                node: lumen_dom::NodeId::from_index(7),
+                bidi: UnicodeBidi::Isolate,
+                dir: Direction::Rtl,
+            }];
+        };
+        let mut a = seg("abc ", Direction::Ltr, UnicodeBidi::Normal);
+        let mut b = seg(HE, Direction::Ltr, UnicodeBidi::Normal);
+        let mut c = seg(" ghi", Direction::Ltr, UnicodeBidi::Normal);
+        [&mut a, &mut b, &mut c].into_iter().for_each(scope);
+        let out = resolve(&[a, b, c], Direction::Ltr, UnicodeBidi::Normal);
+        // RLI wraps all three: the Latin words nest at level 2, Hebrew at 1.
+        let levels: Vec<u8> = out.iter().map(|p| p.bidi_level).collect();
+        assert_eq!(levels.first(), Some(&2), "{levels:?}");
+        assert_eq!(levels.last(), Some(&2), "{levels:?}");
+        assert!(out.iter().all(|p| p.bidi_isolate == Some(lumen_dom::NodeId::from_index(7))));
+    }
+
+    #[test]
+    fn sibling_elements_with_equal_values_are_separate_scopes() {
+        // Two `<bdi>` in a row: each is its own isolate, so the digits of the
+        // second one do not merge into the first one's number context.
+        let mk = |text: &str, n: usize| {
+            let mut s = seg(text, Direction::Ltr, UnicodeBidi::Normal);
+            s.bidi_scopes = vec![BidiScope {
+                node: lumen_dom::NodeId::from_index(n),
+                bidi: UnicodeBidi::Isolate,
+                dir: Direction::Ltr,
+            }];
+            s
+        };
+        let out = resolve(&[mk(HE, 1), mk(HE, 2)], Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|p| p.bidi_level % 2 == 1), "{:?}", out.iter().map(|p| p.bidi_level).collect::<Vec<_>>());
-        assert_eq!(out[0].bidi_level, out[1].bidi_level, "one wrapper, one level");
+        assert_ne!(out[0].bidi_isolate, out[1].bidi_isolate);
+    }
+
+    #[test]
+    fn scopes_close_and_reopen_around_a_forced_break() {
+        let mut a = seg("abc", Direction::Rtl, UnicodeBidi::BidiOverride);
+        a.source_char_offset = 0;
+        let mut br = seg("", Direction::Rtl, UnicodeBidi::BidiOverride);
+        br.forced_break = true;
+        let b = seg("def", Direction::Rtl, UnicodeBidi::BidiOverride);
+        let out = resolve(&[a, br, b], Direction::Ltr, UnicodeBidi::Normal);
+        let words: Vec<(&str, u8)> =
+            out.iter().filter(|p| !p.forced_break).map(|p| (p.text.as_str(), p.bidi_level)).collect();
+        assert_eq!(words, vec![("abc", 1), ("def", 1)], "the override restarts on the next line");
     }
 
     #[test]
     fn normal_latin_stays_ltr_without_the_override() {
         let segs = [seg("abc", Direction::Rtl, UnicodeBidi::Normal)];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out[0].bidi_level, 0, "`direction` alone must not move the level");
     }
 
@@ -567,7 +674,7 @@ mod tests {
             seg(HE, Direction::Rtl, UnicodeBidi::Isolate),
             seg("12", Direction::Ltr, UnicodeBidi::Normal),
         ];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         let digits = out.last().expect("digit segment survives");
         assert_eq!(digits.text, "12");
         assert_eq!(digits.bidi_level, 0, "isolated neighbour does not raise the digits");
@@ -578,7 +685,7 @@ mod tests {
         // `plaintext` ignores `direction: ltr` and uses first-strong (rule P3),
         // so Hebrew content still resolves right-to-left.
         let segs = [seg(HE, Direction::Ltr, UnicodeBidi::Plaintext)];
-        let out = resolve(&segs, Direction::Ltr);
+        let out = resolve(&segs, Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out[0].bidi_level, 1);
     }
 
@@ -587,7 +694,7 @@ mod tests {
         let mut s = seg(&format!("a{HE}"), Direction::Ltr, UnicodeBidi::Normal);
         s.pre_space = 5.0;
         s.post_space = 7.0;
-        let out = resolve(&[s], Direction::Ltr);
+        let out = resolve(&[s], Direction::Ltr, UnicodeBidi::Normal);
         assert_eq!(out.len(), 2);
         assert_eq!((out[0].pre_space, out[0].post_space), (5.0, 0.0));
         assert_eq!((out[1].pre_space, out[1].post_space), (0.0, 7.0));
@@ -597,7 +704,7 @@ mod tests {
     fn forced_break_segment_is_passed_through() {
         let mut br = seg("", Direction::Ltr, UnicodeBidi::Normal);
         br.forced_break = true;
-        let out = resolve(&[br], Direction::Rtl);
+        let out = resolve(&[br], Direction::Rtl, UnicodeBidi::Normal);
         assert_eq!(out.len(), 1);
         assert!(out[0].forced_break);
     }
@@ -685,6 +792,40 @@ mod tests {
         let mut line = vec![frag(0.0, 30.0, 0, "one"), frag(35.0, 40.0, 0, "two")];
         reorder_line(&mut line, Direction::Rtl);
         assert_eq!(visual_order(&line), ["two", "one"]);
+    }
+
+    #[test]
+    fn rtl_paragraph_reverses_an_isolate_as_one_unit() {
+        // `ext` (level 2) then an `RLI A ום PDI` isolate (levels 4 and 3) in an RTL paragraph:
+        // the isolate lands left of `ext`, internally right-to-left (`A` rightmost).
+        let iso = Some(lumen_dom::NodeId::from_index(5));
+        let mut line = vec![
+            frag(0.0, 30.0, 2, "ext"),
+            frag(30.0, 10.0, 4, "A"),
+            frag(40.0, 20.0, 3, " ום"),
+        ];
+        line[1].bidi_isolate = iso;
+        line[2].bidi_isolate = iso;
+        reorder_line(&mut line, Direction::Rtl);
+        assert_eq!(visual_order(&line), [" ום", "A", "ext"]);
+    }
+
+    // ── plaintext_direction / split_by_level ─────────────────────────────────
+
+    #[test]
+    fn plaintext_takes_the_direction_of_the_first_strong_char() {
+        let ltr = [seg("abc \u{5d0}", Direction::Rtl, UnicodeBidi::Plaintext)];
+        assert_eq!(plaintext_direction(&ltr), Direction::Ltr);
+        let rtl = [seg("12 \u{5d0}bc", Direction::Ltr, UnicodeBidi::Plaintext)];
+        assert_eq!(plaintext_direction(&rtl), Direction::Rtl);
+    }
+
+    #[test]
+    fn marker_string_splits_at_level_changes() {
+        let pieces = split_by_level("A \u{5d0}\u{5d1}", Direction::Rtl);
+        assert_eq!(pieces, [("A", 2), (" \u{5d0}\u{5d1}", 1)]);
+        assert_eq!(split_by_level("-", Direction::Ltr), [("-", 0)]);
+        assert!(split_by_level("", Direction::Ltr).is_empty());
     }
 
     // ── visual_text ──────────────────────────────────────────────────────────

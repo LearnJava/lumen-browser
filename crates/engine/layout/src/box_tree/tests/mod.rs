@@ -259,6 +259,8 @@ fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSeg
         source_node: lumen_dom::NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     }
 }
 
@@ -472,6 +474,7 @@ mod multicol_table;
 mod multicol_oof;
 mod multicol_flow;
 mod flex_axes;
+mod flex_balance;
 
 mod svg_transform_and_misc;
 mod bug341_differential;
@@ -539,6 +542,8 @@ mod flex_vwm6;
 mod fixed_cb;
 mod anchor_scroll;
 mod anchor_inline;
+mod anchor_transform;
+mod anchor_order;
 mod abs_auto_margins;
 mod relative_offset_flow;
 mod vertical_positioned;
@@ -558,4 +563,5 @@ mod nbsp_no_wrap;
 mod svg_inline_replaced;
 mod table_vwm;
 mod bug1371_bidi_override_nested;
+mod unicode_bidi_element_scope;
 mod bug1382_inline_margin_right;

@@ -91,6 +91,7 @@ fn integer_property(prop: &str) -> bool {
             | "orphans"
             | "widows"
             | "column-count"
+            | "flex-line-count"
             | "-webkit-line-clamp"
             | "line-clamp"
             | "grid-row"
@@ -653,7 +654,7 @@ fn expected_dims(prop: &str) -> Option<&'static [Dim]> {
             Some(&[NUM, PCT])
         }
         "z-index" | "order" | "orphans" | "widows" | "column-count" | "flex-grow" | "flex-shrink"
-        | "shape-image-threshold" => Some(&[NUM]),
+        | "flex-line-count" | "shape-image-threshold" => Some(&[NUM]),
         "transition-delay" | "transition-duration" | "animation-delay" | "animation-duration" => {
             Some(&[TIME])
         }

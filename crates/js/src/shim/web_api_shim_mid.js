@@ -2904,6 +2904,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
     'color-interpolation': ['auto', 'srgb', 'linearrgb'],
+    // CSS UI L4 §6.2 — `caret-shape` / `caret-animation` (inherited keyword longhands).
+    'caret-shape': ['auto', 'bar', 'block', 'underscore'],
+    'caret-animation': ['auto', 'manual'],
     // CSS Rhythmic Sizing L1 §3 (BUG-517) — `block-step-size` is a
     // `none | <length [0,∞]>` grammar, not a flat keyword list, so it gets
     // its own canon function (`_lumen_css_canonical_block_step_size`,
@@ -8518,9 +8521,53 @@ function _lumen_rt_lang(n) {
     return '';
 }
 
+// The tail (collapsed, at most two characters) of the text that ends the subtree `n`,
+// or null when `n` contributes none (an empty text node, a comment, `display: none`).
+// A box that is not inline (a block, an atomic inline) is a word boundary: ''.
+function _lumen_rt_tail(n) {
+    if (_lumen_is_text_node(n)) {
+        var t = _lumen_get_text_content(n).replace(/[ \t\n\f\r]+/g, ' ');
+        return t === '' ? null : t.slice(-2);
+    }
+    var d = _lumen_get_computed_style(n, 'display');
+    if (d === 'none') { return null; }
+    if (d !== 'inline' && d !== '') { return ''; }
+    var kids = _lumen_get_children(n);
+    for (var _rtk = kids.length - 1; _rtk >= 0; _rtk--) {
+        var r = _lumen_rt_tail(kids[_rtk]);
+        if (r !== null) { return r; }
+    }
+    return null;
+}
+
+// The text of the same inline run immediately before the text node `n` (BUG-1486):
+// `capitalize` does not start a word in the middle of one begun by a neighbouring
+// node (`a<span>b</span>c`). Climbs out of inline ancestors only.
+function _lumen_rt_before(n) {
+    var cur = n;
+    while (cur !== null) {
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        if (pid === null) { return ''; }
+        var sibs = _lumen_get_children(pid);
+        var idx = -1;
+        for (var _rbi = 0; _rbi < sibs.length; _rbi++) {
+            if (sibs[_rbi] === cur) { idx = _rbi; break; }
+        }
+        for (var _rbj = idx - 1; _rbj >= 0; _rbj--) {
+            var r = _lumen_rt_tail(sibs[_rbj]);
+            if (r !== null) { return r; }
+        }
+        var pd = _lumen_get_computed_style(pid, 'display');
+        if (pd !== 'inline') { return ''; }
+        cur = pid;
+    }
+    return '';
+}
+
 function _lumen_rt_transform(n, s, tt) {
     if (tt === '' || tt === 'none') { return s; }
-    return _lumen_text_transform(s, tt, _lumen_rt_lang(n));
+    var before = tt.indexOf('capitalize') >= 0 ? _lumen_rt_before(n) : '';
+    return _lumen_text_transform(s, tt, _lumen_rt_lang(n), before);
 }
 
 // Step 4: the text of the boxes `n` produces, after `white-space` collapsing and
@@ -15583,13 +15630,17 @@ function _lumen_link_hint_type_supported(dest, type) {
 // <script>/stylesheet paths above: `link.onload = …` almost always follows
 // the appendChild.
 //
-// `dest` — the preload's `as` destination ('' when there is none: prefetch,
-// icon, embed/object). The bytes may end up serving the real `<script src>`/
-// `@font-face`/`<img>`, so Rust gates the request as that destination.
+// `dest` — the preload's `as` destination ('' when there is none: prefetch;
+// 'icon' for rel=icon). The bytes may end up serving the real `<script src>`/
+// `@font-face`/`<img>`, so Rust gates the request as that destination. It also
+// picks the CSP directive the request is judged by (BUG-1491), with the
+// element's own `nonce`; a forbidden request is never sent and the element
+// gets `error`.
 function _lumen_link_hint_fetch(nid, href, onBody, dest) {
     setTimeout(function() {
         var url = _url_resolve(String(href), _lumen_document_base_url());
-        var ok = _lumen_link_prefetch_sync(url, dest || '');
+        var nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
+        var ok = _lumen_link_prefetch_sync(url, dest || '', nonce === null ? '' : String(nonce));
         if (!ok) {
             _lumen_console_error('link hint fetch failed: ' + url);
             _lumen_resource_fire(nid, 'error');
@@ -15687,7 +15738,7 @@ function _lumen_link_hint_prepare(nid, toks) {
     // `prefetch` and `icon` (BUG-848) are both destination-agnostic: prefetch
     // warms the cache for a future navigation, icon has no `as` at all — so
     // neither is gated by `as`/`type` (WPT `preload/prefetch-events`).
-    _lumen_link_hint_fetch(nid, href, null);
+    _lumen_link_hint_fetch(nid, href, null, kind === 'icon' ? 'icon' : '');
 }
 
 // The parser's half. A `<link>` written by the HTML parser never goes through

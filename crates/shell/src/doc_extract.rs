@@ -288,6 +288,12 @@ fn walk_style_blocks(
                 return;
             }
         }
+        // CSS Syntax §4.3.5: EOF ends a string, but the `\n` separating this block
+        // from the next would turn it into a bad-string and drop the declaration
+        // (`color: var(--a, "` at the end of a `<style>`, BUG-1500).
+        if let Some(quote) = open_string_quote_at_end(&text) {
+            text.push(quote);
+        }
         text.push('\n');
         out.push((id, text));
         return;
@@ -295,6 +301,36 @@ fn walk_style_blocks(
     for &child in &node.children {
         walk_style_blocks(doc, child, csp_gate, out, blocked);
     }
+}
+
+/// The quote of a string token still open at the end of `css` (strings, escapes
+/// and comments tracked; a newline ends a string as a bad-string), else `None`.
+fn open_string_quote_at_end(css: &str) -> Option<char> {
+    let mut chars = css.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (_, '\\') => {
+                chars.next();
+            }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), '\n') => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '/') if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                for d in chars.by_ref() {
+                    if prev == '*' && d == '/' {
+                        break;
+                    }
+                    prev = d;
+                }
+            }
+            (None, _) => {}
+        }
+    }
+    quote
 }
 
 /// GAP-CSPENF срез 23: walk the whole tree once and collect every element
@@ -375,6 +411,19 @@ mod tests {
         assert!(css.contains("a{color:red}"));
         assert!(!css.contains("b{color:blue}"));
         assert_eq!(blocked, vec![policy.raw.clone()]);
+    }
+
+    /// BUG-1500: a string left open at the end of a `<style>` is closed before the
+    /// block separator, so the `\n` does not turn it into a bad-string.
+    #[test]
+    fn extract_style_blocks_closes_a_string_open_at_eof() {
+        let doc = lumen_html_parser::parse("<style>p{color:var(--a, \"</style><style>b{x:\"y\"}</style>");
+        let (css, _) = extract_style_blocks(&doc, None);
+        assert!(css.starts_with("p{color:var(--a, \"\"\n"), "{css:?}");
+        assert!(css.contains("b{x:\"y\"}\n"));
+        assert_eq!(open_string_quote_at_end("a{b:'c\\'d"), Some('\''));
+        assert_eq!(open_string_quote_at_end("a{b:\"c\" /* \" */ }"), None);
+        assert_eq!(open_string_quote_at_end("a{b:\"c\nd"), None);
     }
 
     #[test]

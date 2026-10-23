@@ -6,6 +6,7 @@
 //! видимость функции и пути импортов.
 
 use crate::style::values::misc::RuleInsetProp;
+use crate::style::logical::Corner;
 use crate::style::{ComputedStyle, CssWideKeyword, Display, WhiteSpace};
 
 
@@ -152,7 +153,6 @@ pub(in crate::style) fn apply_all_shorthand(
     }
     next.direction = style.direction;
     next.unicode_bidi = style.unicode_bidi;
-    next.bidi_override = style.bidi_override;
     next.custom_props = std::mem::take(&mut style.custom_props);
     next.font_size = style.font_size;
     next.effective_zoom = style.effective_zoom;
@@ -192,6 +192,17 @@ fn apply_css_wide_keyword_with(
         }
         "caret-color" => {
             style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
+        }
+        "caret-shape" => {
+            style.caret_shape = if inh { inherited.caret_shape } else { init.caret_shape };
+        }
+        "caret-animation" => {
+            style.caret_animation = if inh { inherited.caret_animation } else { init.caret_animation };
+        }
+        "caret" => {
+            style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
+            style.caret_shape = if inh { inherited.caret_shape } else { init.caret_shape };
+            style.caret_animation = if inh { inherited.caret_animation } else { init.caret_animation };
         }
         // `font-size` сюда не доходит: `apply_declaration` отсекает его до
         // keyword-ветки (BUG-731) — размер целиком считает pre-pass
@@ -1237,6 +1248,33 @@ fn apply_css_wide_keyword_with(
         "border-block-start-color"  => style.border_top_color    = if inh_only_inherit { inherited.border_top_color    } else { init.border_top_color    },
         "border-block-end-color"    => style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color },
         // border-radius (CSS Backgrounds L3 §5) — 4 угла, x и y.
+        // Logical corner radii: `inherit` takes the parent's physical corner for that flow slot
+        // (mapped through the parent's own mode), the other keywords drop the declaration.
+        "border-start-start-radius" | "border-start-end-radius"
+        | "border-end-start-radius" | "border-end-end-radius" => {
+            let slot = match prop {
+                "border-start-start-radius" => 0,
+                "border-start-end-radius" => 1,
+                "border-end-start-radius" => 2,
+                _ => 3,
+            };
+            let value = inh_only_inherit.then(|| {
+                let (x, y) = match crate::style::logical::logical_corner(inherited, slot) {
+                    Corner::TopLeft => (&inherited.border_top_left_radius, &inherited.border_top_left_radius_y),
+                    Corner::TopRight => (&inherited.border_top_right_radius, &inherited.border_top_right_radius_y),
+                    Corner::BottomRight => (&inherited.border_bottom_right_radius, &inherited.border_bottom_right_radius_y),
+                    Corner::BottomLeft => (&inherited.border_bottom_left_radius, &inherited.border_bottom_left_radius_y),
+                };
+                if crate::style::logical::is_vertical_writing_mode(inherited.writing_mode) {
+                    (y.clone(), x.clone())
+                } else {
+                    (x.clone(), y.clone())
+                }
+            });
+            if value.is_some() || style.border_logical_radii.is_some() {
+                style.border_logical_radii.get_or_insert_with(Default::default)[slot] = value;
+            }
+        }
         "border-top-left-radius" => {
             style.border_top_left_radius   = if inh_only_inherit { inherited.border_top_left_radius.clone()   } else { init.border_top_left_radius.clone()   };
             style.border_top_left_radius_y = if inh_only_inherit { inherited.border_top_left_radius_y.clone() } else { init.border_top_left_radius_y.clone() };
@@ -1508,6 +1546,18 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.flex_wrap
             };
+            style.flex_wrap_balance = if inh_only_inherit {
+                inherited.flex_wrap_balance
+            } else {
+                init.flex_wrap_balance
+            };
+        }
+        "flex-line-count" => {
+            style.flex_line_count = if inh_only_inherit {
+                inherited.flex_line_count
+            } else {
+                init.flex_line_count
+            };
         }
         "flex-flow" => {
             style.flex_direction = if inh_only_inherit {
@@ -1519,6 +1569,11 @@ fn apply_css_wide_keyword_with(
                 inherited.flex_wrap
             } else {
                 init.flex_wrap
+            };
+            style.flex_wrap_balance = if inh_only_inherit {
+                inherited.flex_wrap_balance
+            } else {
+                init.flex_wrap_balance
             };
         }
         "grid-template-columns" | "grid-template-rows" | "grid-template-areas"

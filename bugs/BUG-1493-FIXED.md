@@ -1,6 +1,6 @@
 # BUG-1493 — Грамматика условия `@supports`: `not(`/`or(` как функции, смесь `and`/`or` без скобок, `;`, пустое значение и приоритеты не отвергаются как недопустимые
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** css-parser (`crates/engine/css-parser/src/parser/supports.rs` — разбор условия `@supports`)
 
@@ -41,3 +41,11 @@ WPT-RUN-14 срез 22: 32 reftest `css-conditional` (`at-supports-014/016/018/0
 ## Как проверить
 
 Таблица выше; `css/css-conditional/at-supports-016.html`, `at-supports-019.html`, `css-supports-013.xht`.
+
+## Исправление
+
+- `crates/engine/css-parser/src/parser/supports.rs` — условие разбирается по грамматике Conditional 3 §2 (`parse_condition` / `parse_in_parens` / `parse_paren_content` / `parse_declaration`) вместо «первая связка на уровне»: `not`/`and`/`or` — идентификаторы с обязательным пробелом после (`not(`/`or(` — функции, `<general-enclosed>` → ложь), `and` и `or` на одном уровне не смешиваются, хвостовые токены и голый идентификатор делают всё условие `Unknown`. Скобки, не разобравшиеся ни как условие, ни как объявление, — `<general-enclosed>` (ложь, но `not (…)` над ними истинно).
+- Структура объявления: у обычного свойства значение не пусто и без `:`/`;` на верхнем уровне; `!important` — не более одного раза, в конце и ровно этим словом (`!bogus`, `!important x`, `!important !important` → ложь); `--*` допускает пустое значение и `:`. Имя свойства — валидный ident.
+- `parse_supports_rule` (`supports.rs`) и вложенный `@supports` (`nested_rules.rs`): лишняя `)` в прелюдии не уводит глубину в минус — `{`/`;` за ней снова завершают прелюдию, следующее правило не съедается.
+- Тесты: `at_supports_grammar_rejects_invalid_conditions`, `at_supports_grammar_accepts_valid_conditions`, `at_supports_stray_close_paren_recovers`.
+- Остаток: строка таблицы `(not (width:compute( 2px + 2px )))` (значение с неизвестной функцией считается валидным) и значения вроде `(color:bogus)` — это проверка значения свойства, [BUG-1475](BUG-1475-OPEN.md); WPT-прогон `css-conditional` после него даст полную картину.

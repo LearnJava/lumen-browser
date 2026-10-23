@@ -716,11 +716,18 @@ pub(in crate::style) fn strip_ua_appearance_box_styling(doc: &Document, node: No
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
     match name.local.as_str() {
         "input" | "button" | "select" | "textarea" | "progress" | "meter" => {
-            // Remove UA border
+            // Remove UA border. The style goes too (back to the initial `none`), so a
+            // lone author `border-*-width` — e.g. the computed UA value copied into an
+            // appearance-disabling declaration — does not resurrect a border that the
+            // `appearance: none` form of the same control does not have (BUG-1277).
             style.border_top_width = 0.0;
             style.border_right_width = 0.0;
             style.border_bottom_width = 0.0;
             style.border_left_width = 0.0;
+            style.border_top_style = BorderStyle::None;
+            style.border_right_style = BorderStyle::None;
+            style.border_bottom_style = BorderStyle::None;
+            style.border_left_style = BorderStyle::None;
             // Remove UA padding
             style.padding_top = Length::Px(0.0);
             style.padding_right = Length::Px(0.0);
@@ -744,8 +751,9 @@ pub(in crate::style) fn is_appearance_disabling_property(prop: &str) -> bool {
 }
 
 /// Widgets for which the disabling properties apply (HTML LS §15.5): everything
-/// except checkbox/radio/range/color inputs and dropdown `<select>`. A color input keeps
-/// its swatch under an author `background` (it is a separate UA part, not the control box).
+/// except checkbox/radio/range inputs and dropdown `<select>`. A color input is in the set
+/// (WPT `compute-kind-widget-fallback-color-input-ref.html`); paint keeps its swatch under
+/// used `appearance: none`, so an author border/background only restyles the box.
 pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> bool {
     let n = doc.get(node);
     let NodeData::Element { name, .. } = &n.data else { return false; };
@@ -753,7 +761,7 @@ pub(in crate::style) fn is_disableable_widget(doc: &Document, node: NodeId) -> b
         "button" | "textarea" | "meter" | "progress" => true,
         "input" => !n.get_attr("type").is_some_and(|t| {
             let t = t.trim();
-            ["checkbox", "radio", "range", "color", "hidden"].iter().any(|k| t.eq_ignore_ascii_case(k))
+            ["checkbox", "radio", "range", "hidden"].iter().any(|k| t.eq_ignore_ascii_case(k))
         }),
         "select" => {
             n.get_attr("multiple").is_some()

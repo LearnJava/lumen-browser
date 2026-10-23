@@ -1,35 +1,17 @@
-# BUG-1686 — выделение не подсвечивает текст внутри shadow-дерева
+# BUG-1686 — `@keyframes`, `@property`, `@counter-style` и вложенный `@media`/`@supports` внутри тела `@media`/`@supports` отбрасываются
 
 **Статус:** OPEN
-**Заведён:** 2026-10-22 (P2, WPT-RUN-16 — разбор падения категории `selection` −8.00 балла)
-**Область:** layout (`crates/engine/layout/src/highlight.rs` — `TreeOrder`)
+**Заведён:** 2026-10-23 (P3, остаток [BUG-1495](BUG-1495-FIXED.md))
+**Область:** css-parser (`crates/engine/css-parser/src/parser/at_rules.rs` `parse_media_rule`, `parse_conditional_body_at_rule`; `supports.rs` `parse_supports_rule`)
 
 ## Симптом
 
-`getSelection().selectAllChildren(document.body)` на странице с shadow-хостом подсвечивает только
-light-DOM текст; текст из shadow root хоста остаётся без фона `::selection`. В эталоне тот же текст
-лежит обычным `<div>` и подсвечен.
+Тело `@media`/`@supports` верхнего уровня разбирает только style-правила и `@font-face` (BUG-1495). Любое другое `@`-правило уходит в `skip_at_rule`: `@media all{@keyframes k{…}}` не регистрирует `k`, `@property`/`@counter-style` под условием не действуют, а вложенный `@media`/`@supports` в теле `@media`/`@supports` теряется вместе со своими style-правилами (в отличие от вложения в style-правило, где CSS Nesting работает).
 
-Репро — `tests/wpt/selection/shadow-dom/cross-shadow-boundary-1.html` против `-1-ref.html`:
+## Что делать
 
-```
-lumen --viewport 400x120 --screenshot test.png tests/wpt/selection/shadow-dom/cross-shadow-boundary-1.html
-lumen --viewport 400x120 --screenshot ref.png  tests/wpt/selection/shadow-dom/cross-shadow-boundary-1-ref.html
-```
-
-В тесте подсвечен только «OuterText», «innerText» (в shadow root) — нет; в эталоне подсвечены обе строки.
-
-## Почему
-
-`TreeOrder::new` (`highlight.rs:162`) обходит только `doc.get(node).children`; дети shadow root в обход
-не попадают, поэтому `node_spans` не находит их текстовые узлы между концами диапазона. До
-HIGHLIGHT-PAINT (`cfa28ab9f`) выделение в растр не попадало вовсе, тест и эталон рисовались одинаково,
-и 9 рефтестов `cross-shadow-boundary-*` были ложным PASS. В прогоне 2026-10-22 все 9 — FAIL.
-
-Попутно видно (и в тесте, и в эталоне): фон выделения короче строки — у «OuterText» не закрыта
-последняя буква. На PASS рефтеста не влияет (одинаково с обеих сторон), но это отдельный дефект ширины.
+Тем же приёмом, что `@font-face` в BUG-1495: хранить условие группы в правиле (`conditions: Vec<LayerCondition>`), поднимать через `Parser::bubbled`, а потребителей (`animation.rs`, `counters.rs`, `cascade.rs`, `custom_flow.rs`, `shell/animation_scheduler.rs`, `js/.../stylesheets.rs`) фильтровать по контексту. Вложенные условные группы — склеивать условия по AND. Учесть, что `at-media-content-003`/`at-supports-content-003` красные и с верхнеуровневым `@keyframes` (см. BUG-1495, «Симптом»): причина там не в `@media`.
 
 ## Как проверить
 
-`tests/wpt/run_corpus.py --prefixes selection/shadow-dom` — `cross-shadow-boundary-1…6`, `-img`,
-`-select-root`, `-select-document` зелёные (было 9 FAIL, категория `selection` 69.41 → ~77).
+`@media all{@keyframes k{from{color:red}to{color:blue}}}` + `animation: k 1s` — `getAnimations()` непуст; `css/css-conditional/at-media-content-003.html`.

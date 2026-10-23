@@ -217,7 +217,7 @@ pub use style::{
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
     PointerEvents,
     Position, PositionComponent, Quotes, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
-    ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
+    ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, CaretAnimation, CaretShape,
     FillRule, ScrollbarWidth, ShapeValue, StepPosition, StrokeLinecap, StrokeLinejoin,
     SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPatternDef, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
@@ -2322,6 +2322,18 @@ mod scroll_container;
 #[cfg(test)]
 #[path = "tests/scroll_state_queries.rs"]
 mod scroll_state_queries;
+
+#[cfg(test)]
+#[path = "tests/style_container_any_element.rs"]
+mod style_container_any_element;
+
+#[cfg(test)]
+#[path = "tests/var_invalid_declaration_value.rs"]
+mod var_invalid_declaration_value;
+
+#[cfg(test)]
+#[path = "tests/var_escaped_name.rs"]
+mod var_escaped_name;
 
 #[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]

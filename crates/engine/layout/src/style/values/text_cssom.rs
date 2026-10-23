@@ -41,8 +41,15 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
 /// Недопустимое `value` оставляет текст как есть. Нужна `innerText`/выделению, чтобы они
 /// совпадали с нарисованным текстом (BUG-1329).
 pub fn transform_text_by_value(value: &str, lang: &str, text: &str) -> String {
+    transform_text_after_by_value(value, lang, "", text)
+}
+
+/// [`transform_text_by_value`] для текста, продолжающего inline-строку: `before` — текст слева
+/// от `text` в той же строке (BUG-1486). `capitalize` не начинает слово посреди слова,
+/// начатого соседним узлом.
+pub fn transform_text_after_by_value(value: &str, lang: &str, before: &str, text: &str) -> String {
     match TextTransformExtra::parse(value.trim()) {
-        Some((case, extra)) => extra.apply(case, CaseLang::from_tag(lang), text),
+        Some((case, extra)) => extra.apply_after(case, CaseLang::from_tag(lang), before, text),
         None => text.to_string(),
     }
 }

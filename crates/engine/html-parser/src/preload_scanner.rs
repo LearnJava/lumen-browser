@@ -119,11 +119,18 @@ pub enum PreloadHint {
         as_kind: Option<String>,
         /// См. `Stylesheet::fetch_priority`.
         fetch_priority: Option<String>,
+        /// См. `Stylesheet::nonce`: пропускает хинт `as=script`/`as=style`
+        /// под nonce-политикой (BUG-1491).
+        nonce: Option<String>,
     },
     /// `<link rel="modulepreload" href="...">`. `as` спекой ограничен
     /// script-подобными destination-ами, поэтому здесь не хранится: caller
     /// (JS-шим) перечитывает атрибут с самого элемента.
-    ModulePreload { url: String },
+    ModulePreload {
+        url: String,
+        /// См. `Stylesheet::nonce` (`script-src-elem 'nonce-…'`, BUG-1491).
+        nonce: Option<String>,
+    },
     /// `<link rel="prefetch" href="...">` — ресурс для будущей навигации.
     /// Destination-агностичен: `as`/`type` его не фильтруют.
     Prefetch { url: String },
@@ -154,6 +161,17 @@ pub enum PreloadHint {
 pub fn scan_preload_hints(input: &str) -> Vec<PreloadHint> {
     let tokens: Vec<Token> = Tokenizer::new(input).collect();
     collect_hints_from_tokens(&tokens)
+}
+
+/// [`scan_preload_hints`] плюс текст каждой `<meta http-equiv="Content-Security-Policy">`
+/// документа (как [`PreloadScanner::meta_csp`]): однопроходному вызывающему,
+/// у которого нет DOM, нужны обе половины, чтобы проверить хинты CSP до
+/// запроса (BUG-1491).
+pub fn scan_preload_hints_with_meta_csp(input: &str) -> (Vec<PreloadHint>, Vec<String>) {
+    let tokens: Vec<Token> = Tokenizer::new(input).collect();
+    let mut meta_csp = Vec::new();
+    collect_meta_csp(&tokens, &mut meta_csp);
+    (collect_hints_from_tokens(&tokens), meta_csp)
 }
 
 fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
@@ -192,9 +210,11 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
                     .filter(|s| !s.is_empty())
                     .cloned(),
                 fetch_priority: fetch_priority.clone(),
+                nonce: find_attr(attrs, "nonce").map(str::to_string),
             }),
             "modulepreload" => out.push(PreloadHint::ModulePreload {
                 url: href.to_string(),
+                nonce: find_attr(attrs, "nonce").map(str::to_string),
             }),
             "prefetch" => out.push(PreloadHint::Prefetch {
                 url: href.to_string(),
@@ -431,8 +451,8 @@ pub fn parse_link_header(header: &str) -> Vec<PreloadHint> {
                 // HTML-атрибут несёт author-override (срез 4); заголовочные
                 // hint-ы всегда падают на эвристику `FetchPriority::for_kind`.
                 "stylesheet" => out.push(PreloadHint::Stylesheet { url: url.clone(), media: None, fetch_priority: None, nonce: None }),
-                "preload" => out.push(PreloadHint::Preload { url: url.clone(), as_kind: as_kind.clone(), fetch_priority: None }),
-                "modulepreload" => out.push(PreloadHint::ModulePreload { url: url.clone() }),
+                "preload" => out.push(PreloadHint::Preload { url: url.clone(), as_kind: as_kind.clone(), fetch_priority: None, nonce: None }),
+                "modulepreload" => out.push(PreloadHint::ModulePreload { url: url.clone(), nonce: None }),
                 "prefetch" => out.push(PreloadHint::Prefetch { url: url.clone() }),
                 "preconnect" => out.push(PreloadHint::Preconnect { url: url.clone(), dns_only: false }),
                 "dns-prefetch" => out.push(PreloadHint::Preconnect { url: url.clone(), dns_only: true }),
@@ -567,7 +587,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "font.woff2".into(),
-                as_kind: Some("font".into()), fetch_priority: None }]
+                as_kind: Some("font".into()), fetch_priority: None, nonce: None }]
         );
     }
 
@@ -579,7 +599,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "x.bin".into(),
-                as_kind: None, fetch_priority: None }]
+                as_kind: None, fetch_priority: None, nonce: None }]
         );
     }
 
@@ -621,7 +641,7 @@ mod tests {
             vec![
                 PreloadHint::Preload {
                     url: "hero.css".into(),
-                    as_kind: Some("style".into()), fetch_priority: None },
+                    as_kind: Some("style".into()), fetch_priority: None, nonce: None },
                 PreloadHint::Stylesheet {
                     url: "hero.css".into(),
                     media: None, fetch_priority: None, nonce: None },
@@ -639,7 +659,7 @@ mod tests {
         assert_eq!(
             hints,
             vec![
-                PreloadHint::ModulePreload { url: "mod.js".into() },
+                PreloadHint::ModulePreload { url: "mod.js".into(), nonce: None },
                 PreloadHint::Prefetch { url: "/next.html".into() },
             ]
         );
@@ -889,7 +909,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "https://example.test/style.css".into(),
-                as_kind: Some("style".into()), fetch_priority: None }]
+                as_kind: Some("style".into()), fetch_priority: None, nonce: None }]
         );
     }
 
@@ -915,8 +935,8 @@ mod tests {
         assert_eq!(
             hints,
             vec![
-                PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) , fetch_priority: None },
-                PreloadHint::Preload { url: "/b.js".into(), as_kind: Some("script".into()) , fetch_priority: None },
+                PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) , fetch_priority: None, nonce: None },
+                PreloadHint::Preload { url: "/b.js".into(), as_kind: Some("script".into()) , fetch_priority: None, nonce: None },
             ]
         );
     }
@@ -927,7 +947,7 @@ mod tests {
         assert_eq!(
             hints,
             vec![
-                PreloadHint::Preload { url: "/hero.css".into(), as_kind: Some("style".into()) , fetch_priority: None },
+                PreloadHint::Preload { url: "/hero.css".into(), as_kind: Some("style".into()) , fetch_priority: None, nonce: None },
                 PreloadHint::Stylesheet { url: "/hero.css".into(), media: None , fetch_priority: None, nonce: None },
             ]
         );
@@ -941,7 +961,7 @@ mod tests {
         assert_eq!(
             hints,
             vec![
-                PreloadHint::ModulePreload { url: "/mod.js".into() },
+                PreloadHint::ModulePreload { url: "/mod.js".into(), nonce: None },
                 PreloadHint::Prefetch { url: "/next.html".into() },
             ]
         );
@@ -973,7 +993,7 @@ mod tests {
         let hints = parse_link_header(r#"</f.woff2>; rel=preload; as="font""#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Preload { url: "/f.woff2".into(), as_kind: Some("font".into()) , fetch_priority: None }]
+            vec![PreloadHint::Preload { url: "/f.woff2".into(), as_kind: Some("font".into()) , fetch_priority: None, nonce: None }]
         );
     }
 
@@ -984,7 +1004,7 @@ mod tests {
         let hints = parse_link_header(r#"</a.css>; rel=preload; as=style; title="a, b""#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) , fetch_priority: None }]
+            vec![PreloadHint::Preload { url: "/a.css".into(), as_kind: Some("style".into()) , fetch_priority: None, nonce: None }]
         );
     }
 
@@ -993,7 +1013,7 @@ mod tests {
         let hints = parse_link_header(r#"</x.css>; REL=Preload; AS=Style"#);
         assert_eq!(
             hints,
-            vec![PreloadHint::Preload { url: "/x.css".into(), as_kind: Some("style".into()) , fetch_priority: None }]
+            vec![PreloadHint::Preload { url: "/x.css".into(), as_kind: Some("style".into()) , fetch_priority: None, nonce: None }]
         );
     }
 
@@ -1006,7 +1026,7 @@ mod tests {
             hints,
             vec![PreloadHint::Preload {
                 url: "x.bin".into(),
-                as_kind: None, fetch_priority: None }]
+                as_kind: None, fetch_priority: None, nonce: None }]
         );
     }
 
@@ -1031,6 +1051,7 @@ mod tests {
                     url: "b.woff2".into(),
                     as_kind: Some("font".into()),
                     fetch_priority: Some("low".into()),
+                    nonce: None,
                 },
             ]
         );
@@ -1063,6 +1084,7 @@ mod tests {
                     url: "hero.css".into(),
                     as_kind: Some("style".into()),
                     fetch_priority: Some("high".into()),
+                    nonce: None,
                 },
                 PreloadHint::Stylesheet {
                     url: "hero.css".into(),
@@ -1114,6 +1136,7 @@ mod tests {
                 url: "a.css".into(),
                 as_kind: Some("style".into()),
                 fetch_priority: None,
+                nonce: None,
             }]
         );
     }
@@ -1148,6 +1171,29 @@ mod streaming_tests {
         }
         out.extend(scanner.end());
         out
+    }
+
+    /// BUG-1491: `nonce` у `preload`/`modulepreload` доезжает до caller-а, а
+    /// `<meta http-equiv=Content-Security-Policy>` — отдельным списком.
+    #[test]
+    fn preload_hints_carry_nonce_and_meta_csp_is_collected() {
+        let (hints, meta) = scan_preload_hints_with_meta_csp(
+            r#"<meta http-equiv="Content-Security-Policy" content="script-src 'none'">
+               <link rel=preload as=script href=a.js nonce=n1><link rel=modulepreload href=m.js nonce=n2>"#,
+        );
+        assert_eq!(meta, vec!["script-src 'none'".to_owned()]);
+        assert_eq!(
+            hints,
+            vec![
+                PreloadHint::Preload {
+                    url: "a.js".into(),
+                    as_kind: Some("script".into()),
+                    fetch_priority: None,
+                    nonce: Some("n1".into()),
+                },
+                PreloadHint::ModulePreload { url: "m.js".into(), nonce: Some("n2".into()) },
+            ]
+        );
     }
 
     /// BUG-1185: `nonce`/`integrity` доезжают до caller-а — по ним CSP

@@ -1056,3 +1056,36 @@ use super::*;
         let ctx_narrow = MediaContext { width: 600.0, ..ctx.clone() };
         assert!(!s.media_rules[0].query.matches(&ctx_narrow));
     }
+
+    // ── BUG-1492: место блока среди обычных правил ──
+
+    fn block_places(s: &Stylesheet) -> Vec<(bool, usize, usize)> {
+        let mut v: Vec<_> = s.media_rules.iter().map(|b| (false, b.pos.rules_before, b.pos.seq)).collect();
+        v.extend(s.supports_rules.iter().map(|b| (true, b.pos.rules_before, b.pos.seq)));
+        v
+    }
+
+    #[test]
+    fn block_pos_records_rules_and_blocks_before() {
+        let s = parse("a{} @media all{b{}} c{} d{} @supports (margin:0){e{}} @media all{f{}}");
+        assert_eq!(block_places(&s), [(false, 1, 0), (false, 3, 2), (true, 3, 1)]);
+        // A block bubbled out of a style rule follows that rule.
+        let s = parse("a{ @media all{ color: red } } b{}");
+        assert_eq!(block_places(&s), [(false, 1, 0)]);
+    }
+
+    #[test]
+    fn block_pos_follows_merge_insert_and_delete() {
+        let mut s = parse("a{} @media all{b{}}");
+        s.merge_from(parse("c{} @supports (margin:0){d{}}"));
+        assert_eq!(block_places(&s), [(false, 1, 0), (true, 2, 1)]);
+        // A rule inserted before the block (cssRules index 0) pushes the block after it.
+        s.insert_rule("z{}", 0).expect("insert");
+        assert_eq!(block_places(&s), [(false, 2, 0), (true, 3, 1)]);
+        s.delete_rule(0).expect("delete");
+        assert_eq!(block_places(&s), [(false, 1, 0), (true, 2, 1)]);
+        // A block inserted between the two plain rules at the front.
+        s.insert_rule("@media all{y{}}", 1).expect("insert");
+        assert_eq!(s.media_rules[0].pos.rules_before, 1);
+        assert_eq!(s.media_rules[1].pos.rules_before, 1);
+    }

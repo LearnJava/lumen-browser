@@ -2058,10 +2058,12 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         FlexDirection::Column => "column",
         FlexDirection::ColumnReverse => "column-reverse",
     };
-    let fw = match style.flex_wrap {
-        FlexWrap::Nowrap => "nowrap",
-        FlexWrap::Wrap => "wrap",
-        FlexWrap::WrapReverse => "wrap-reverse",
+    let fw = match (style.flex_wrap, style.flex_wrap_balance) {
+        (FlexWrap::Nowrap, _) => "nowrap",
+        (FlexWrap::Wrap, false) => "wrap",
+        (FlexWrap::Wrap, true) => "balance",
+        (FlexWrap::WrapReverse, false) => "wrap-reverse",
+        (FlexWrap::WrapReverse, true) => "wrap-reverse balance",
     };
     let fb = match &style.flex_basis {
         FlexBasis::Auto => "auto".to_string(),
@@ -2070,6 +2072,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     };
     m.insert("flex-direction".into(), fd.into());
     m.insert("flex-wrap".into(), fw.into());
+    m.insert("flex-line-count".into(), style.flex_line_count.to_string());
     m.insert("flex-flow".into(), format!("{fd} {fw}"));
     m.insert("flex-grow".into(), style.flex_grow.to_string());
     m.insert("flex-shrink".into(), style.flex_shrink.to_string());
@@ -2353,6 +2356,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ColorScheme::OnlyLight => "only light",
         ColorScheme::OnlyDark => "only dark",
     }.into());
+    // CSS UI L4 §6.2 — caret-shape / caret-animation.
+    m.insert("caret-shape".into(), style.caret_shape.to_css().into());
+    m.insert("caret-animation".into(), style.caret_animation.to_css().into());
     m.insert("forced-color-adjust".into(), match style.forced_color_adjust {
         ForcedColorAdjust::Auto => "auto",
         ForcedColorAdjust::None => "none",
@@ -2469,6 +2475,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             ("border-block-start-style", "border-top-style"), ("border-block-end-style", "border-bottom-style"),
             ("border-inline-start-color", "border-left-color"), ("border-inline-end-color", "border-right-color"),
             ("border-block-start-color", "border-top-color"), ("border-block-end-color", "border-bottom-color"),
+            ("border-start-start-radius", "border-top-left-radius"), ("border-start-end-radius", "border-top-right-radius"),
+            ("border-end-start-radius", "border-bottom-left-radius"), ("border-end-end-radius", "border-bottom-right-radius"),
         ];
         for (logical, physical) in LOGICAL_LONGHANDS {
             if let Some(v) = m.get(*physical).cloned() {

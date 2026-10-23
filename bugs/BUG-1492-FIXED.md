@@ -1,6 +1,6 @@
 # BUG-1492 — Правила внутри `@media`/`@supports` каскадируются после ВСЕХ обычных правил листа, а не на своём месте в исходнике
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** layout (`crates/engine/layout/src/style/cascade.rs:633-679` — `next_rule_idx`, блоки `media_rules` и `supports_rules`)
 
@@ -35,3 +35,14 @@ WPT-RUN-14 срез 22: `css-conditional/at-media-001.html`, `at-supports-001.ht
 ## Как проверить
 
 Таблица выше; `css/css-conditional/at-media-001.html`, `at-supports-001.html`.
+
+## Исправление
+
+`MediaRule`/`SupportsRule` получили `pos: BlockPos` (`rules_before` — сколько обычных правил листа
+стоит выше блока, `seq` — номер среди всех `@media`/`@supports` блоков); парсер ставит его при
+разборе, `merge_from`/`insert_rule`/`delete_rule` сдвигают. `RuleOrder` в `cascade_index.rs` один раз
+на лист нумерует обычные правила и правила блоков в порядке появления; `compute_style` и
+`compute_pseudo_element_style` берут ключ оттуда вместо `sheet.rules.len() + …`. Таблица из «Проба»
+покрыта тестом `media_and_supports_blocks_keep_source_order_with_plain_rules`.
+
+Остаток: порядок `@layer`/`@scope`/`@container` не менялся (они и так ортогональны или идут после).

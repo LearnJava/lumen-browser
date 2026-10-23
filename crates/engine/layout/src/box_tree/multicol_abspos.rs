@@ -368,6 +368,26 @@ pub(super) fn lay_out_abs_children_with(
     // This registry is used to resolve `position-anchor` and `anchor()` function calls below.
     // CSS: anchor-name, position-anchor, anchor()
     let anchors = crate::anchor::collect_anchors(parent);
+    // BUG-1483: each child sees only the anchors before it in tree order; `child_seq[i]` is the
+    // pre-order index `collect_anchors` gave `parent.children[i]` (the parent itself is 0).
+    let child_seq: Vec<u32> = if anchors.is_empty() {
+        Vec::new()
+    } else {
+        let mut next = 1u32;
+        parent
+            .children
+            .iter()
+            .map(|c| {
+                let at = next;
+                let mut stack = vec![c];
+                while let Some(b) = stack.pop() {
+                    next += 1;
+                    stack.extend(b.children.iter());
+                }
+                at
+            })
+            .collect()
+    };
     // css-transforms-1 §2: `parent` itself captures its `position: fixed` children when it
     // carries a transform/filter/…; otherwise they resolve against the viewport.
     let fixed_cb = fixed_cb_rect(parent);
@@ -382,7 +402,9 @@ pub(super) fn lay_out_abs_children_with(
             my_pcb
         };
         let rtl = static_rtl && cb_override.is_none();
-        place_abs_child(&mut parent.children[idx], static_x, rtl, static_y, cb, &anchors, measurer, viewport, my_pcb, hp);
+        let seen = child_seq.get(idx).map(|&seq| anchors.before(seq));
+        let anchors = seen.as_deref().unwrap_or(&anchors);
+        place_abs_child(&mut parent.children[idx], static_x, rtl, static_y, cb, anchors, measurer, viewport, my_pcb, hp);
     }
 }
 
@@ -481,7 +503,11 @@ fn place_abs_child(
                 min_content_outer_width(child, measurer, viewport),
             ),
         };
-        max_c.min(min_c.max(free)) + c_ml + c_mr
+        // BUG-1484: the intrinsic widths resolve a percentage `padding` against 0; here the
+        // containing block is definite, so the frame takes its real share of `cb.width`.
+        let pct_pad = |l: &Length| l.resolve_or_zero(c_em, cb.width, viewport) - l.resolve_or_zero(c_em, 0.0, viewport);
+        let pad_extra = pct_pad(&cs.padding_left) + pct_pad(&cs.padding_right);
+        (max_c + pad_extra).min((min_c + pad_extra).max(free)) + c_ml + c_mr
     } else {
         cb.width
     };
@@ -506,11 +532,23 @@ fn place_abs_child(
     let stretched_w = (ratio_stretched_w || semi_stretched_w).then(|| (avail_w - c_ml - c_mr).max(0.0));
     // CSS 2.1 §10.5: a percentage `height` of an out-of-flow box resolves against
     // the padding box of its containing block, whose height is always definite.
+    // CSS 2.1 §10.3.7 / Box 4: `padding` and `margin` percentages resolve against the containing
+    // block's width, not against the inset gap or shrink-to-fit width `avail_w` stands for (BUG-1484).
+    let pct_base = (avail_w != cb.width).then_some(cb.width);
     match (stretched_h, stretched_w) {
-        (None, None) => lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false),
+        (None, None) if pct_base.is_none() => {
+            lay_out(child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false);
+        }
+        (None, None) => lay_out_with_used_size(
+            child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false,
+            UsedSizeOverride { percentage_base: pct_base, ..Default::default() },
+        ),
         (h, w) => lay_out_with_used_size(
             child, 0.0, 0.0, avail_w, Some(cb.height), measurer, viewport, my_pcb, hp, false,
-            UsedSizeOverride { width: w, height: h, box_sizing: Some(BoxSizing::BorderBox), ..Default::default() },
+            UsedSizeOverride {
+                width: w, height: h, box_sizing: Some(BoxSizing::BorderBox), percentage_base: pct_base,
+                ..Default::default()
+            },
         ),
     }
     if let Some(h) = stretched_h {

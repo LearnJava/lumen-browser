@@ -2238,8 +2238,11 @@ fn feed_preload_and_emit(
     // element's own fetch (`HttpClient::fetch_preload_cached`, driven by the
     // JS shim once the DOM is ready) and a real consumer elsewhere on the
     // page share one network round trip instead of each doing its own.
-    crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned());
     let meta_csp: Vec<_> = scanner.meta_csp().iter().map(|p| lumen_network::csp::parse_csp_header(p)).collect();
+    // BUG-1491: gated by the same header + `<meta>` policies as the
+    // stylesheet/script warm-up below.
+    let doc_csp: Vec<_> = header_csp.iter().chain(&meta_csp).cloned().collect();
+    crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned(), &doc_csp);
     let self_origin = base.origin();
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
     // HTML is still streaming. Linked stylesheets AND external classic scripts are

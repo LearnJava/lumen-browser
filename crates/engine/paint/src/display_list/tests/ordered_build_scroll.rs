@@ -358,11 +358,11 @@ use super::text_and_images::Fixed8;
     }
 
     /// CSS Masking L1 §4.6 — `stroke-box`/`view-box` fall back to the border box
-    /// for CSS boxes (= `b.rect`), and `no-clip` disables the clip. None of them
-    /// may emit an extra `PushClipRect`, matching the `border-box` no-op.
+    /// for CSS boxes (= `b.rect`). Neither may emit an extra `PushClipRect`,
+    /// matching the `border-box` no-op.
     #[test]
     fn ordered_mask_clip_border_equivalents_emit_no_clip() {
-        for value in ["stroke-box", "view-box", "no-clip"] {
+        for value in ["stroke-box", "view-box"] {
             let css = format!(
                 ".m {{ width: 100px; height: 100px; border: 10px solid #000; \
                  background: #f00; \
@@ -375,6 +375,20 @@ use super::text_and_images::Fixed8;
                 "mask-clip: {value} must not emit a PushClipRect (border-box equivalent)"
             );
         }
+    }
+
+    /// CSS Masking L1 §4.6 — `no-clip` leaves the mask painting area unbounded, so
+    /// the layer's tiles continue past the border box: it is assembled in an
+    /// offscreen mask (`PushMaskLayer`) rather than a `PushMask*` group, which
+    /// carries a single rect for positioning and painting alike.
+    #[test]
+    fn ordered_mask_clip_no_clip_assembles_mask_offscreen() {
+        let dl = build_ordered(
+            "<div class='m'></div>",
+            ".m { width: 100px; height: 100px; background: #f00;              mask-image: linear-gradient(to bottom, black, transparent); mask-clip: no-clip; }",
+        );
+        assert!(dl.iter().any(|c| matches!(c, DisplayCommand::PushMaskLayer { .. })));
+        assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::PopMask)));
     }
 
     /// BUG-200: under `border-collapse: collapse` a thick cell border must survive a

@@ -20,6 +20,8 @@ use crate::style::{
     BackgroundRepeat,
     BackgroundSize,
     BackgroundSpecified,
+    CaretAnimation,
+    CaretShape,
     ColorScheme,
     ComputedStyle,
     CssColor,
@@ -56,6 +58,7 @@ use crate::style::{
     parse_position_axis,
     split_top_level_commas,
 };
+use crate::style::shorthand::apply_caret_shorthand;
 use crate::style::parse::box_sides::{
     apply_border_shorthand,
     apply_border_side_shorthand,
@@ -609,6 +612,19 @@ pub(in crate::style) fn apply_decl_paint(
                 style.caret_color = Some(c);
             }
         }
+        "caret-shape" => {
+            // CSS UI L4 §6.2: auto | bar | block | underscore.
+            if let Some(v) = CaretShape::parse(val) {
+                style.caret_shape = v;
+            }
+        }
+        "caret-animation" => {
+            // CSS UI L4 §6.2: auto | manual.
+            if let Some(v) = CaretAnimation::parse(val) {
+                style.caret_animation = v;
+            }
+        }
+        "caret" => apply_caret_shorthand(style, val, is_quirks),
         "mask" => {
             // CSS Masking L1 §4.8 shorthand: comma-separated list of layers.
             // Each layer: <mask-reference> || <position> [/ <size>]? ||
@@ -706,7 +722,7 @@ pub(in crate::style) fn apply_decl_paint(
             // CSS Masking L1 §4.5 — `<geometry-box>#`.
             let values: Vec<BackgroundOrigin> = split_top_level_commas(val.trim())
                 .iter()
-                .filter_map(|s| BackgroundOrigin::parse(s.trim()))
+                .filter_map(|s| BackgroundOrigin::parse_geometry_box(s.trim()))
                 .collect();
             apply_mask_longhand(style, &values, |layer, v| layer.origin = v);
         }
@@ -1054,6 +1070,8 @@ pub(in crate::style) fn apply_decl_paint(
             // Каждая часть раскрывается по правилу expand_border_4 (TL TR BR BL).
             // Если `/` нет — V-радиусы равны H-радиусам (круговые углы).
             let (h_part, v_part) = split_border_radius_slash(val);
+            // The shorthand sets all four corners, so it overrides an earlier logical longhand.
+            style.border_logical_radii = None;
             let h = expand_border_4(h_part);
             let v = if let Some(vp) = v_part { expand_border_4(vp) } else { h };
             if let Some(x) = parse_radius_length(h[0], em_basis, viewport, is_quirks) {
@@ -1079,6 +1097,25 @@ pub(in crate::style) fn apply_decl_paint(
             }
             if let Some(y) = parse_radius_length(v[3], em_basis, viewport, is_quirks) {
                 style.border_bottom_left_radius_y = y;
+            }
+        }
+        // CSS Logical Properties L1 §3.3 — flow-relative corner radii: `(inline, block)` pair,
+        // mapped onto a physical corner by `resolve_logical_properties` once `writing-mode` and
+        // `direction` are final.
+        "border-start-start-radius" | "border-start-end-radius"
+        | "border-end-start-radius" | "border-end-end-radius" => {
+            let (rx, ry) = split_radius_pair(val);
+            if let (Some(x), Some(y)) = (
+                parse_radius_length(rx, em_basis, viewport, is_quirks),
+                parse_radius_length(ry.unwrap_or(rx), em_basis, viewport, is_quirks),
+            ) {
+                let slot = match prop {
+                    "border-start-start-radius" => 0,
+                    "border-start-end-radius" => 1,
+                    "border-end-start-radius" => 2,
+                    _ => 3,
+                };
+                style.border_logical_radii.get_or_insert_with(Default::default)[slot] = Some((x, y));
             }
         }
         "border-top-left-radius" => {

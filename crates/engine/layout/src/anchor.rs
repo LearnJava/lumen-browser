@@ -197,15 +197,21 @@ pub struct AnchorFunc {
 /// Built once after layout completes via [`collect_anchors`].  Consumed by the
 /// positioned-layout second pass and by `anchor()` function resolution.
 ///
-/// When multiple elements share the same `anchor-name` only the **last one in
-/// tree order** is kept — matching the spec's "last in paint order" rule.
+/// When multiple elements share the same `anchor-name` `entries` keeps the **last one in
+/// tree order**; `history` keeps all of them so that [`AnchorRegistry::before`] can pick,
+/// for one positioned element, the last one that precedes it (§2.2: an anchor must come
+/// before its target in tree order).
 #[derive(Debug, Default, Clone)]
 pub struct AnchorRegistry {
     /// Maps anchor-name strings (including the `--` prefix) to border-box rects.
     pub entries: HashMap<String, AnchorEntry>,
-    /// Maps an anchor name to the scroll containers its element sits in, outermost first
+    /// Every registration per name, in registration (tree) order.
+    history: HashMap<String, Vec<AnchorEntry>>,
+    /// Highest [`AnchorEntry::seq`] registered.
+    max_seq: u32,
+    /// Maps an anchor element to the scroll containers it sits in, outermost first
     /// (CSS Anchor Positioning L1 §4.3). Absent — the anchor is in no scroll container.
-    pub scroll_chains: HashMap<String, Vec<NodeId>>,
+    pub scroll_chains: HashMap<NodeId, Vec<NodeId>>,
 }
 
 /// One registered anchor element.
@@ -221,9 +227,31 @@ pub struct AnchorEntry {
     /// that are descendants of the given scope root.
     /// `None` = globally visible (no scope restriction).
     pub scope_root: Option<NodeId>,
+    /// Pre-order index of the owning box in the layout tree (`0` — the root, or an anchor
+    /// registered by hand). Positioned elements numbered by the same walk compare against it.
+    pub seq: u32,
 }
 
 impl AnchorRegistry {
+    /// The registry as the positioned element numbered `target_seq` (pre-order index of its
+    /// box) sees it: per name, the last anchor that precedes it in tree order (CSS Anchor
+    /// Positioning L1 §2.2). Borrows `self` when no anchor follows the element.
+    pub fn before(&self, target_seq: u32) -> std::borrow::Cow<'_, AnchorRegistry> {
+        use std::borrow::Cow;
+        if target_seq > self.max_seq {
+            return Cow::Borrowed(self);
+        }
+        let mut view = AnchorRegistry { scroll_chains: self.scroll_chains.clone(), ..Default::default() };
+        for (name, all) in &self.history {
+            let kept: Vec<AnchorEntry> = all.iter().filter(|e| e.seq < target_seq).copied().collect();
+            if let Some(last) = kept.last() {
+                view.entries.insert(name.clone(), *last);
+                view.history.insert(name.clone(), kept);
+            }
+        }
+        Cow::Owned(view)
+    }
+
     /// Look up an anchor by CSS name (e.g. `"--tooltip-anchor"`).
     ///
     /// Returns `None` when no element in the current layout tree declared this
@@ -325,8 +353,12 @@ fn collect_anchors_rec(
     // recursion gave for free, as in `apply_anchor_positions_rec`).
     let mut scrollers: Vec<NodeId> = Vec::new();
     let mut stack: Vec<(&LayoutBox, Option<NodeId>, usize)> = vec![(root, scope_root, 0)];
+    // Pre-order index of the popped box: what `AnchorEntry::seq` records.
+    let mut seq: u32 = 0;
     while let Some((lb, scope_root, depth)) = stack.pop() {
         scrollers.truncate(depth);
+        seq += 1;
+        let box_seq = seq - 1;
         // Determine the scope root for this element's descendants.
         let next_scope = match &lb.style.anchor_scope {
             AnchorScope::All | AnchorScope::Named(_) => Some(lb.node),
@@ -336,17 +368,20 @@ fn collect_anchors_rec(
         // `anchor-name` is a comma list: one box registers under every name.
         let register = |registry: &mut AnchorRegistry, names: &str, node: NodeId, rect: Rect| {
             for name in names.split(", ") {
-                register_anchor_scoped(registry, name.to_string(), node, rect, next_scope);
-                // A later registration of the same name replaces the earlier one, chain included.
-                if scrollers.is_empty() {
-                    registry.scroll_chains.remove(name);
-                } else {
-                    registry.scroll_chains.insert(name.to_string(), scrollers.clone());
-                }
+                register_anchor_at(registry, name.to_string(), node, rect, next_scope, box_seq);
+            }
+            if !scrollers.is_empty() {
+                registry.scroll_chains.insert(node, scrollers.clone());
             }
         };
         if let Some(name) = &lb.style.anchor_name {
-            register(registry, name, lb.node, lb.rect);
+            // CSS Anchor Positioning L1 §2.2: a transformed anchor is the bounding box of its
+            // transformed border box — what `getBoundingClientRect` reports (BUG-1485).
+            let rect = match crate::property_trees::forward_box_transform(lb) {
+                Some(m) => crate::transformed_aabb(&lb.rect, &m),
+                None => lb.rect,
+            };
+            register(registry, name, lb.node, rect);
         }
         if let Some(inline) = inline {
             // Union per element, in order of first appearance (tree order).
@@ -388,7 +423,7 @@ pub(crate) fn is_scroll_container(lb: &LayoutBox) -> bool {
 /// Called by P4's CSS wiring when it encounters `anchor-name: --foo` in ComputedStyle.
 /// Uses last-in-tree-order semantics: later registrations overwrite earlier ones.
 pub fn register_anchor(registry: &mut AnchorRegistry, name: String, node: NodeId, rect: Rect) {
-    registry.entries.insert(name, AnchorEntry { node, rect, scope_root: None });
+    register_anchor_at(registry, name, node, rect, None, 0);
 }
 
 /// Register an element as a named anchor with optional scope restriction.
@@ -402,7 +437,22 @@ pub fn register_anchor_scoped(
     rect: Rect,
     scope_root: Option<NodeId>,
 ) {
-    registry.entries.insert(name, AnchorEntry { node, rect, scope_root });
+    register_anchor_at(registry, name, node, rect, scope_root, 0);
+}
+
+/// [`register_anchor_scoped`] for an anchor whose box has pre-order index `seq`.
+pub(crate) fn register_anchor_at(
+    registry: &mut AnchorRegistry,
+    name: String,
+    node: NodeId,
+    rect: Rect,
+    scope_root: Option<NodeId>,
+    seq: u32,
+) {
+    let entry = AnchorEntry { node, rect, scope_root, seq };
+    registry.max_seq = registry.max_seq.max(seq);
+    registry.history.entry(name.clone()).or_default().push(entry);
+    registry.entries.insert(name, entry);
 }
 
 // ─── resolve_anchor_function ─────────────────────────────────────────────────

@@ -137,13 +137,16 @@ fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, width: f32, o
     // already true for `forced-colors`/`color-scheme` overrides applied
     // earlier in the cascade (see `style/adjust.rs`), so this is the same
     // resolution rule applied one more time at paint.
-    let color = s.used_caret_color();
+    // CSS UI L4 §6.2 `caret-shape`: the cell of the character under the caret
+    // is `font_size * 0.5` wide here, the same advance used for `caret_x`.
+    let shape = s.caret_shape;
+    let color = shape.paint_color(s.used_caret_color());
 
     out.push(DisplayCommand::PushClipRect {
         rect: Rect::new(content_x, content_y, content_w, content_h),
     });
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(caret_x, content_y, width, content_h),
+        rect: shape.rect(caret_x, content_y, content_h, font_size * 0.5, width),
         color,
     });
     out.push(DisplayCommand::PopClip);
@@ -306,8 +309,8 @@ pub(crate) fn emit_form_control_indicator(
     // (border/padding/background) is already stripped in
     // `strip_ua_appearance_box_styling` (before the author cascade); here we
     // suppress the painted indicator so authors can fully restyle it.
-    // BUG-225: the suppression is scoped to the native primitives only (color
-    // swatch, checkbox tick, radio dot, range slider, progress/meter bar, select
+    // BUG-225: the suppression is scoped to the native primitives only
+    // (checkbox tick, radio dot, range slider, progress/meter bar, select
     // arrow). Text-input `value`/`placeholder` and button labels are author
     // content, not a UA primitive, so they keep rendering under `appearance:none`.
     let suppress_primitive = b.style.appearance == Appearance::None;
@@ -324,27 +327,26 @@ pub(crate) fn emit_form_control_indicator(
             // `#000000`. Drawn before the `checked` gate since color is not
             // a checkable type.
             if *input_type == InputType::Color {
-                // The swatch is the native primitive — suppressed under
-                // `appearance:none` (the control has no text value to fall back
-                // to, so nothing else is painted here).
-                if !suppress_primitive {
-                    let swatch = lumen_layout::style::parse_color(value_text)
-                        .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
-                    let bl = b.style.border_left_width;
-                    let bt = b.style.border_top_width;
-                    let br = b.style.border_right_width;
-                    let bb = b.style.border_bottom_width;
-                    let pad = 2.0;
-                    out.push(DisplayCommand::FillRect {
-                        rect: Rect::new(
-                            b.rect.x + bl + pad,
-                            b.rect.y + bt + pad,
-                            (b.rect.width  - bl - br - pad * 2.0).max(1.0),
-                            (b.rect.height - bt - bb - pad * 2.0).max(1.0),
-                        ),
-                        color: swatch,
-                    });
-                }
+                // The swatch is the control's value, not a themed primitive: it stays under
+                // `appearance:none` (Chrome keeps `::-webkit-color-swatch`), which also keeps an
+                // author `border`/`background` — an appearance-disabling property — from
+                // blanking the control (compute-kind-widget-generated, color-input).
+                let swatch = lumen_layout::style::parse_color(value_text)
+                    .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
+                let bl = b.style.border_left_width;
+                let bt = b.style.border_top_width;
+                let br = b.style.border_right_width;
+                let bb = b.style.border_bottom_width;
+                let pad = 2.0;
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(
+                        b.rect.x + bl + pad,
+                        b.rect.y + bt + pad,
+                        (b.rect.width  - bl - br - pad * 2.0).max(1.0),
+                        (b.rect.height - bt - bb - pad * 2.0).max(1.0),
+                    ),
+                    color: swatch,
+                });
                 return;
             }
             // HTML rendering §15.5.5 — text-like inputs paint their `value` as

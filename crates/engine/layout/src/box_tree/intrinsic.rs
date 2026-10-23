@@ -231,6 +231,37 @@ fn is_row_flex_container(b: &LayoutBox) -> bool {
         )
 }
 
+/// Max-content width of a balanced column flex container (`flex-wrap: balance`, Flexbox L2): the
+/// items sit on `flex-line-count` lines side by side, so the width is the sum of the lines'
+/// widest items + the gaps between lines. The lines come from the items' specified `px` heights
+/// (all of them, else equal shares) — a layout-free approximation of the real balancing.
+fn balanced_column_max_content(b: &LayoutBox, viewport: Size, per_item: &dyn Fn(&LayoutBox) -> f32) -> Option<f32> {
+    let s = &b.style;
+    if !s.flex_wrap_balance || s.flex_line_count < 2 {
+        return None;
+    }
+    let em = s.font_size;
+    let items: Vec<&LayoutBox> = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).collect();
+    let widths: Vec<f32> = items.iter().map(|c| per_item(c)).collect();
+    let px_heights: Vec<Option<f32>> = items
+        .iter()
+        .map(|c| match c.style.height {
+            Some(crate::style::Length::Px(h)) => Some(h.max(0.0)),
+            _ => None,
+        })
+        .collect();
+    let (sizes, main_gap) = if px_heights.iter().all(Option::is_some) {
+        (px_heights.iter().flatten().copied().collect::<Vec<_>>(), s.row_gap.resolve(em, None, viewport).unwrap_or(0.0).max(0.0))
+    } else {
+        (vec![1.0; items.len()], 0.0)
+    };
+    let total = sizes.iter().sum::<f32>() + main_gap * sizes.len().saturating_sub(1) as f32;
+    let lines = super::flex_balance::balanced_lines(&sizes, main_gap, total, s.flex_line_count)?;
+    let cross_gap = s.column_gap.resolve(em, Some(0.0), viewport).unwrap_or(0.0).max(0.0);
+    let widest: f32 = lines.iter().map(|l| l.iter().map(|&k| widths[k]).fold(0.0_f32, f32::max)).sum();
+    Some(widest + cross_gap * lines.len().saturating_sub(1) as f32)
+}
+
 /// Is `b` a grid container (`display: grid`/`inline-grid`)?
 fn is_grid_container(b: &LayoutBox) -> bool {
     matches!(b.style.display, Display::Grid | Display::InlineGrid)
@@ -685,6 +716,7 @@ fn flex_row_intrinsic_sum(
         .max(0.0);
     let mut sum = 0.0_f32;
     let mut n_items = 0_usize;
+    let mut widths: Vec<f32> = Vec::new();
     // HTML Rendering §15.3.13: legend flex-fieldset'а — не элемент, он стоит на границе; в
     // ширину fieldset он входит как отдельный блок (наибольшее из legend и содержимого).
     let legend_idx = super::fieldset::rendered_legend_idx_of(b);
@@ -712,6 +744,12 @@ fn flex_row_intrinsic_sum(
         }
         sum += w;
         n_items += 1;
+        widths.push(w);
+    }
+    // `flex-wrap: balance` with `flex-line-count` > 1 (Flexbox L2): the items are spread over at
+    // least that many lines, so the widest line can be narrower than all items in a row.
+    if b.style.flex_wrap_balance && b.style.flex_line_count > 1 {
+        return super::flex_balance::balanced_max_content(&widths, gap, b.style.flex_line_count).max(legend_w);
     }
     (sum + gap * n_items.saturating_sub(1) as f32).max(legend_w)
 }
@@ -916,6 +954,12 @@ fn preferred_inline_block_width_impl(
             &|c| preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0),
             &block_flow,
         )
+    } else if matches!(b.style.display, Display::Flex | Display::InlineFlex) {
+        // Balanced column flex container: lines side by side (see `balanced_column_max_content`).
+        balanced_column_max_content(b, viewport, &|c| {
+            preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
+        })
+        .unwrap_or_else(block_flow)
     } else {
         block_flow()
     };
@@ -1057,6 +1101,14 @@ fn max_content_outer_width_impl(
             flex_row_intrinsic_sum(b, viewport, &|c| {
                 max_content_outer_width(c, measurer, viewport)
             })
+        }
+        _ if matches!(b.style.display, Display::Flex | Display::InlineFlex)
+            && !is_row_flex_container(b)
+            && b.style.flex_wrap_balance
+            && b.style.flex_line_count > 1 =>
+        {
+            balanced_column_max_content(b, viewport, &|c| max_content_outer_width(c, measurer, viewport))
+                .unwrap_or_else(block_flow)
         }
         // Grid container: max-content is the sum of column max-content widths
         // + gaps (CSS Grid L1 §11.5), not the widest item — see BUG-740.

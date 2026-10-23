@@ -15,7 +15,6 @@ impl ComputedStyle {
             direction: Direction::Ltr,
             block_container_direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
-            bidi_override: None,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
             color_css: None,
@@ -233,6 +232,8 @@ impl ComputedStyle {
             // CSS Text typography defaults.
             tab_size: 64.0,  // 8 spaces × 8px-space-width default.
             caret_color: None,  // `auto`.
+            caret_shape: CaretShape::Auto,
+            caret_animation: CaretAnimation::Auto,
             overflow_wrap: OverflowWrap::Normal,
             word_break: WordBreak::Normal,
             line_break: LineBreak::Auto,
@@ -279,6 +280,8 @@ impl ComputedStyle {
             image_rendering: ImageRendering::Auto,
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Nowrap,
+            flex_wrap_balance: false,
+            flex_line_count: 1,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
@@ -392,6 +395,7 @@ impl ComputedStyle {
             border_inline_end_width: None,
             border_block_start_width: None,
             border_block_end_width: None,
+            border_logical_radii: None,
             anchor_name: None,
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
@@ -426,8 +430,6 @@ impl ComputedStyle {
             block_container_direction: inherited.block_container_direction,
             // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
             unicode_bidi: UnicodeBidi::Normal,
-            // Но `bidi-override` предка продолжает действовать на потомков.
-            bidi_override: inherited.bidi_override,
             font_size: inherited.font_size,
             // Seeded from the parent so the value compounds; the element's own
             // `zoom` declaration is folded in by the pre-pass below.
@@ -665,6 +667,8 @@ impl ComputedStyle {
             // CSS Text typography — все inherited.
             tab_size: inherited.tab_size,
             caret_color: inherited.caret_color,
+            caret_shape: inherited.caret_shape,
+            caret_animation: inherited.caret_animation,
             overflow_wrap: inherited.overflow_wrap,
             word_break: inherited.word_break,
             line_break: inherited.line_break,
@@ -722,6 +726,8 @@ impl ComputedStyle {
             // CSS Flexbox L1 §5 — flex-direction / flex-wrap не наследуются.
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Nowrap,
+            flex_wrap_balance: false,
+            flex_line_count: 1,
             // CSS Flexbox L1 §7 — flex-grow / flex-shrink / flex-basis не наследуются.
             flex_grow: 0.0,
             flex_shrink: 1.0,
@@ -853,6 +859,7 @@ impl ComputedStyle {
             border_inline_end_width: None,
             border_block_start_width: None,
             border_block_end_width: None,
+            border_logical_radii: None,
             anchor_name: None,
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,

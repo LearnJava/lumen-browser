@@ -553,6 +553,20 @@
         );
     }
 
+    /// `appearance: none` strips the box but the swatch is the control's value, so it stays
+    /// (an author border/background disables the native look the same way).
+    #[test]
+    fn color_input_keeps_swatch_under_appearance_none() {
+        for css in ["input { appearance: none; }", "input { border-top-width: 1px; }"] {
+            let dl = build(r##"<input type=color value="#ff0000">"##, css);
+            let f = fills(&dl);
+            assert!(
+                f.iter().any(|c| c.r == 255 && c.g == 0 && c.b == 0),
+                "{css}: color input must keep its swatch, got {f:?}"
+            );
+        }
+    }
+
     /// A color input with no `value` defaults to a black swatch.
     #[test]
     fn color_input_default_swatch_is_black() {
@@ -827,7 +841,7 @@
 
     /// BUG-225 — `appearance: none` must NOT suppress a text input's `value`
     /// text: the value is author content, not a UA primitive. Only the native
-    /// primitives (tick/dot/slider/bar/arrow/swatch) are removed.
+    /// primitives (tick/dot/slider/bar/arrow) are removed; a colour swatch is the value and stays.
     #[test]
     fn appearance_none_keeps_text_input_value() {
         let dl = build(

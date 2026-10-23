@@ -696,6 +696,31 @@ use super::*;
     }
 
     #[test]
+    fn expand_vars_adjacent_substitutions_stay_separate_tokens() {
+        // BUG-1501: `var(--a)var(--b)` — два токена, а не склеенный идентификатор.
+        let mut custom = HashMap::new();
+        custom.insert("--a".to_string(), "orange".to_string());
+        custom.insert("--b".to_string(), "red".to_string());
+        custom.insert("--n".to_string(), "10".to_string());
+        custom.insert("--e".to_string(), String::new());
+        let vp = Size::new(0.0, 0.0);
+        assert_eq!(expand_vars("var(--a)var(--b)", &custom, 0, 16.0, vp).as_deref(), Some("orange red"));
+        assert_eq!(expand_vars("var(--n)px", &custom, 0, 16.0, vp).as_deref(), Some("10 px"));
+        // Границы без риска склейки не трогаем.
+        assert_eq!(expand_vars("calc(var(--n)*2)", &custom, 0, 16.0, vp).as_deref(), Some("calc(10*2)"));
+        assert_eq!(expand_vars("1px var(--a)", &custom, 0, 16.0, vp).as_deref(), Some("1px orange"));
+        assert_eq!(expand_vars("1var(--e)px", &custom, 0, 16.0, vp).as_deref(), Some("1 px"));
+    }
+
+    #[test]
+    fn adjacent_var_substitution_is_invalid_at_computed_value_time() {
+        let s = style_for("color:crimson;--a:orange;--b:red;color:var(--a)var(--b)");
+        assert_ne!(s.color, Color { r: 255, g: 69, b: 0, a: 255 });
+        let s = style_for("--a:var(--b)var(--c);--b:orange;--c:red;color:var(--a)");
+        assert_ne!(s.color, Color { r: 255, g: 69, b: 0, a: 255 });
+    }
+
+    #[test]
     fn expand_vars_unclosed_paren_is_none() {
         // Сломанный синтаксис — declaration treated as invalid.
         let mut custom = HashMap::new();

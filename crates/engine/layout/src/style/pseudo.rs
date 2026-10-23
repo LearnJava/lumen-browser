@@ -331,6 +331,8 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.user_select = parent.user_select;
     style.tab_size = parent.tab_size;
     style.caret_color = parent.caret_color;
+    style.caret_shape = parent.caret_shape;
+    style.caret_animation = parent.caret_animation;
     style.overflow_wrap = parent.overflow_wrap;
     style.word_break = parent.word_break;
     style.line_break = parent.line_break;
@@ -548,10 +550,12 @@ fn compute_pseudo_element_style_inner(
     // pseudo-element in a subject cannot match here (`matches_complex_for_pseudo` returns
     // `None` for them before it looks at the node), and a `@media`/`@supports` block with no
     // such rule is not visited at all. Indices are the general index's own (same numbering).
-    let cands = with_front_cascade_index(|idx| {
-        idx.pseudo_rules.candidates(node_tag, node_id, &node_classes, node_attrs)
+    let (cands, style_keys) = with_front_cascade_index(|idx| {
+        let cands = idx.pseudo_rules.candidates(node_tag, node_id, &node_classes, node_attrs);
+        let keys = cands.iter().map(|&i| idx.order.style(i)).collect::<Vec<_>>();
+        (cands, keys)
     });
-    for rule_idx in cands {
+    for (rule_idx, key) in cands.into_iter().zip(style_keys) {
         let rule = &sheet.rules[rule_idx];
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
@@ -564,7 +568,7 @@ fn compute_pseudo_element_style_inner(
         }
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                matched.push((decl.important, spec, rule_idx, decl_idx, decl));
+                matched.push((decl.important, spec, key, decl_idx, decl));
             }
         }
     }

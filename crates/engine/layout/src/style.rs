@@ -253,7 +253,7 @@ pub use values::timing::{
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub(crate) use values::rule_computed::insert_gap_rule_computed;
 pub use values::grid_cssom::canonical_specified_grid;
-pub use values::text_cssom::{canonical_specified_text, transform_text_by_value};
+pub use values::text_cssom::{canonical_specified_text, transform_text_after_by_value, transform_text_by_value};
 pub use values::background_cssom::{canonical_specified_background, serialize_border_radius};
 pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
 pub use values::rule_interp::{canonical_gap_rule_value, interpolate_gap_rule_value, is_interpolable_gap_rule_property};
@@ -261,6 +261,7 @@ pub use values::rule_anim::{
     GapRuleOverride, PAINTED_GAP_RULE_PROPERTIES, gap_rule_computed_css, gap_rule_endpoint_css,
     transition_token_covers,
 };
+pub use values::caret::{CaretAnimation, CaretShape};
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
@@ -272,7 +273,8 @@ pub use values::misc::{
 };
 pub use container::{
     apply_container_rules, apply_matched_container_rules, evaluate_container_condition,
-    evaluate_container_query, matching_container_rules, ContainFlags,
+    evaluate_container_query, matching_container_rules, query_mentions_style, query_reads_standard_property,
+    ContainFlags,
     ContainerContext, ContainerKinds, ContainerType, ContentVisibility, InterpolateSizeMode,
 };
 pub use container_scroll::{Edge, EdgeFlags, ScrollStateInfo};

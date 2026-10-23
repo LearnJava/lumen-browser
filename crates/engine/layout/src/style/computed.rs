@@ -34,7 +34,7 @@ use lumen_core::ColorSpace;
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
-    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
@@ -83,6 +83,10 @@ pub struct LogicalMinMaxSizes {
     pub max_block: Option<Length>,
 }
 
+/// `(inline-axis, block-axis)` radii of the four flow-relative corners, in the order
+/// start-start, start-end, end-start, end-end (CSS Logical Properties L1 §3.3).
+pub type LogicalCornerRadii = [Option<(Length, Length)>; 4];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -106,12 +110,6 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
     /// Initial: `Normal`. См. [`UnicodeBidi`].
     pub unicode_bidi: UnicodeBidi,
-    /// CSS Writing Modes L4 §2.4.2 — `bidi-override` действует на весь текст внутри
-    /// бокса, включая вложенные inline. Наследуется: `Some((bidi, dir))` — ближайший
-    /// предок-или-сам с `bidi-override`/`isolate-override` и его `direction`;
-    /// вложенный `embed`/`isolate`/`plaintext` сбрасывает в `None`. Раскрывается в
-    /// [`crate::bidi`] для сегментов с `unicode-bidi: normal`.
-    pub bidi_override: Option<(UnicodeBidi, Direction)>,
     pub color: Color,
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
@@ -758,6 +756,11 @@ pub struct ComputedStyle {
     /// `currentcolor` / `color()` / системные цвета сохраняются как есть и
     /// разрешаются в `used_caret_color` (системные — ещё и постпассом).
     pub caret_color: Option<CssColor>,
+    /// CSS UI L4 §6.2 — `caret-shape: auto | bar | block | underscore`. Inherited.
+    pub caret_shape: CaretShape,
+    /// CSS UI L4 §6.2 — `caret-animation: auto | manual`. Inherited. `manual` —
+    /// каретка не мигает (анимацию ведёт автор).
+    pub caret_animation: CaretAnimation,
     /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
     /// Inherited. Default `Normal`.
     pub overflow_wrap: OverflowWrap,
@@ -901,6 +904,10 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited. Default `Nowrap`.
     /// Phase 0: parsing + storage; реальный multi-line flex — задача 4B.5.
     pub flex_wrap: FlexWrap,
+    /// CSS Flexbox L2 `flex-wrap: balance` — `flex_wrap` is then `Wrap`/`WrapReverse`.
+    pub flex_wrap_balance: bool,
+    /// CSS Flexbox L2 `flex-line-count` — minimum line count of a balanced container. Initial 1.
+    pub flex_line_count: u32,
     /// CSS Flexbox L1 §7.1 — `flex-grow`. Non-inherited. Default `0`.
     /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
     pub flex_grow: f32,
@@ -1227,6 +1234,11 @@ pub struct ComputedStyle {
     pub border_block_start_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-block-end-width`.
     pub border_block_end_width: Option<f32>,
+    /// CSS Logical Properties L1 §3.3 — `border-{start-start,start-end,end-start,end-end}-radius`
+    /// as `(inline-axis, block-axis)` radii, in that order. `None` until one is declared; the
+    /// post-cascade `resolve_logical_properties` maps each onto the physical corner the element's
+    /// own `writing-mode` + `direction` select.
+    pub border_logical_radii: Option<Box<LogicalCornerRadii>>,
     /// CSS Anchor Positioning L1 §2 — `anchor-name`. Custom-ident with `--` prefix.
     /// Non-inherited. When set, this element is registered as an anchor for positioned elements.
     pub anchor_name: Option<Box<str>>,

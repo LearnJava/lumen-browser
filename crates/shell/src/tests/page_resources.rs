@@ -65,7 +65,7 @@ fn dispatch_preload_hints_deduplicates_same_url() {
     let base = ResourceBase::Url("https://example.com/".to_owned());
     // rel="preload stylesheet" создаёт два хинта на один href
     let hints = vec![
-        PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()), fetch_priority: None },
+        PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()), fetch_priority: None, nonce: None },
         PreloadHint::Stylesheet { url: "style.css".into(), media: None, fetch_priority: None, nonce: None },
         PreloadHint::Stylesheet { url: "other.css".into(), media: None, fetch_priority: None, nonce: None },
     ];
@@ -1399,6 +1399,32 @@ fn stylesheet_node_registry_skips_style_src_blocked_link() {
     assert!(entries.is_empty(), "style-src 'none' must keep the link out of the registry");
 }
 
+/// BUG-1490: `style-src 'nonce-…'` пропускает `<link rel=stylesheet nonce>` с
+/// совпавшим nonce, а не судит его по URL — раньше гейт видел только адрес,
+/// не находил источника и блокировал лист. Без nonce или с чужим — блок.
+#[test]
+fn nonced_link_stylesheet_passes_style_src_nonce_policy() {
+    let doc = lumen_html_parser::parse(
+        r#"<html><head>
+                <meta http-equiv="Content-Security-Policy" content="style-src 'nonce-k'">
+                <link rel="stylesheet" nonce="k" href="ok.css">
+                <link rel="stylesheet" nonce="bad" href="wrong.css">
+                <link rel="stylesheet" href="none.css">
+            </head><body></body></html>"#,
+    );
+    // URL-база: файловый путь гейт не судит вовсе; порт 9 отказывает сразу.
+    let base = ResourceBase::Url("http://127.0.0.1:9/page.html".to_owned());
+    let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+
+    let (_css, _outcomes, blocked) = load_linked_stylesheets(&doc, &base, &null_sink(), None, &ctx);
+
+    assert_eq!(
+        blocked,
+        vec!["http://127.0.0.1:9/wrong.css".to_owned(), "http://127.0.0.1:9/none.css".to_owned()],
+        "only the links without a matching nonce are blocked"
+    );
+}
+
 // ──────────── BUG-509: CSS "determine the fallback encoding" wiring ───────
 
 /// `#\xC8{ visibility:hidden }` — byte 0xC8 decodes to `И` (U+0418) under
@@ -1757,4 +1783,65 @@ fn document_referrer_policy_unrecognised_meta_is_skipped() {
         crate::resource_base::document_referrer_policy(&doc),
         lumen_network::ReferrerPolicy::SameOrigin
     );
+}
+
+/// BUG-1491: прогрев `preload`/`modulepreload`/`prefetch` не шлёт запрос к
+/// источнику, запрещённому CSP. Свой сервер считает запрошенные пути:
+/// `script-src 'none'` обязан оставить его без `GET /s.js` и `GET /m.js`, а
+/// `as=image` (директиву `img-src` эта политика не трогает) — доехать, иначе
+/// «ничего не пришло» могло бы значить просто «прогрев не сработал».
+#[test]
+fn warm_preload_cache_sends_no_request_forbidden_by_csp() {
+    use lumen_html_parser::PreloadHint;
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::Mutex;
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn emit(&self, _event: &Event) {}
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_srv = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let seen = Arc::clone(&seen_srv);
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+                seen.lock().unwrap().push(line.split_whitespace().nth(1).unwrap_or("").to_owned());
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            });
+        }
+    });
+
+    let base = ResourceBase::Url(format!("http://127.0.0.1:{port}/"));
+    let sink: Arc<dyn EventSink> = Arc::new(NullSink);
+    let preload = |url: &str, as_kind: &str| PreloadHint::Preload {
+        url: url.into(),
+        as_kind: Some(as_kind.into()),
+        fetch_priority: None,
+        nonce: None,
+    };
+    let hints = vec![
+        preload("/s.js", "script"),
+        PreloadHint::ModulePreload { url: "/m.js".into(), nonce: None },
+        preload("/i.png", "image"),
+    ];
+    let csp = [lumen_network::csp::parse_csp_header("script-src 'none'")];
+    crate::page_pipeline::warm_preload_cache(&hints, &base, &sink, None, &csp);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !seen.lock().unwrap().iter().any(|p| p == "/i.png") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // The forbidden requests, had they been sent, were issued in the same
+    // loop as the allowed one — give them a moment to land before asserting.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let seen = seen.lock().unwrap();
+    assert!(seen.iter().any(|p| p == "/i.png"), "the permitted hint must still warm: {seen:?}");
+    assert!(!seen.iter().any(|p| p == "/s.js" || p == "/m.js"), "CSP-forbidden hint reached the server: {seen:?}");
 }

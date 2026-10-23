@@ -1987,8 +1987,10 @@ pub trait JsFetchProvider: Send + Sync {
     /// `"script"` for `modulepreload`): the bytes may later be served to a
     /// real `<script src>`/`@font-face`/`<img>` consumer, so the request must
     /// carry that consumer's destination, not a generic prefetch (BUG-1116).
-    fn fetch_preload_cached(&self, url: &str, as_kind: &str) -> Result<JsFetchResult> {
-        let _ = as_kind;
+    /// `nonce` — the `<link>` element's own `nonce` (`""` if none): a CSP
+    /// `'nonce-…'` source admits the hint by it (BUG-1491).
+    fn fetch_preload_cached(&self, url: &str, as_kind: &str, nonce: &str) -> Result<JsFetchResult> {
+        let _ = (as_kind, nonce);
         self.fetch_sync(url, "GET")
     }
 

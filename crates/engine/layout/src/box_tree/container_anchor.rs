@@ -6,7 +6,10 @@
 
 use super::*;
 use crate::counters::CounterMap;
-use crate::style::{matching_container_rules, apply_matched_container_rules, ContainerKinds, ScrollStateInfo};
+use crate::style::{
+    apply_matched_container_rules, matching_container_rules, query_mentions_style, query_reads_standard_property,
+    ContainerKinds, ScrollStateInfo,
+};
 use std::collections::HashSet;
 
 /// The nodes whose `overflow` goes to the viewport: the root element, and `body` while the
@@ -65,7 +68,27 @@ pub fn apply_container_styles(
     // the `%`-height basis a root-level container itself would resolve against.
     let mut boxless = HashMap::new();
     let propagating = viewport_propagating_nodes(root);
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode, counters, &propagating, &mut boxless);
+    // CSS Conditional 5 §style-container: with a `style()` query in the sheet every element
+    // answers queries, so the restyle runs per element ([`StyleSweep`]), not per `container-type`.
+    let sweep = sheet.container_rules.iter().any(|r| query_mentions_style(&r.condition)).then(|| StyleSweep {
+        doc,
+        sheet,
+        counters,
+        viewport,
+        dark_mode,
+        std_props: sheet.container_rules.iter().any(|r| query_reads_standard_property(&r.condition)),
+        boxed: boxed_elements(root, doc),
+        propagating: &propagating,
+        through_boxless: Default::default(),
+    });
+    let mut pending = HashMap::new();
+    if let Some(sweep) = &sweep {
+        sweep.run(root, None, viewport.height, &mut boxless, &mut pending);
+    }
+    apply_container_inner(
+        root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode, counters, &propagating,
+        &mut boxless, sweep.as_ref(), &mut pending,
+    );
     counters.set_cq_boxless(boxless);
 }
 
@@ -100,6 +123,8 @@ fn apply_container_inner(
     counters: &CounterMap,
     propagating: &HashSet<NodeId>,
     boxless: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+    sweep: Option<&StyleSweep>,
+    pending: &mut HashMap<NodeId, Option<Arc<ContainerContext>>>,
 ) {
     // The third element is the nearest query container above the box — the head of
     // the chain a descendant container links to via `ContainerContext::parent`.
@@ -109,16 +134,7 @@ fn apply_container_inner(
         // Derive content dimensions from already-laid-out rect + style — needed
         // both for container-query context (if `b` is a container) and as the
         // `parent_h` basis passed down to `b`'s own children either way.
-        let em = b.style.font_size;
-        let bw = b.rect.width;
-        let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
-        let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
-        let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
-        let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
-        let content_w = (bw - pad_l - pad_r
-            - b.style.border_left_width - b.style.border_right_width).max(0.0);
-        let content_h_val = (b.rect.height - pad_t - pad_b
-            - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
+        let ContentBox { pad_l, pad_t, w: content_w, h: content_h_val } = content_box(b, viewport);
 
         // A `Skip` box (`display: none`) is no principal box: it answers no query.
         let is_container = !matches!(b.kind, BoxKind::Skip) && is_query_container(&b.style);
@@ -129,30 +145,23 @@ fn apply_container_inner(
             } else {
                 None // inline-size: height not queryable
             };
-            let ctx = Arc::new(ContainerContext {
-                width: content_w,
-                height: content_h,
-                names: b.style.container_name.clone(),
-                custom_props: b.style.custom_props.clone(),
-                style_props: crate::selector_query::computed_style_to_map(&b.style),
-                font_size: em,
-                viewport,
-                own_containing_block_height: parent_h,
-                kinds: ContainerKinds { size: size_container, scroll_state: b.style.container_scroll_state },
-                scroll_state: if b.style.container_scroll_state {
-                    crate::scroll_state::scroll_state_info(b, propagating.contains(&b.node))
-                } else {
-                    ScrollStateInfo::default()
-                },
-                parent: outer,
-                rule_hits: Vec::new(),
-            }.with_rule_hits(sheet));
+            // With a sweep the chain behind the container is the element chain (style
+            // containers included), found when the sweep stopped at this box.
+            let parent = if sweep.is_some() { pending.remove(&b.node).flatten() } else { outer };
+            let ctx = Arc::new(
+                box_context(b, viewport, parent_h, (content_w, content_h_val), true, propagating, parent)
+                    .with_rule_hits(sheet),
+            );
             // Re-apply container rules to all direct + indirect descendants.
-            let mut seen = SeenBoxes::default();
-            for child in &mut b.children {
-                re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, &mut seen);
+            if let Some(sweep) = sweep {
+                sweep.run(b, Some(Arc::clone(&ctx)), content_h_val, boxless, pending);
+            } else {
+                let mut seen = SeenBoxes::default();
+                for child in &mut b.children {
+                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, &mut seen);
+                }
+                restyle_boxless(doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless);
             }
-            restyle_boxless(doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless);
             if !size_container {
                 // A scroll-state-only container does not contain its size: the queries
                 // restyle the subtree, but the box tree below keeps its first-pass geometry
@@ -307,7 +316,7 @@ fn anchor_scroll_for(
     let anchor = registry.get(name)?.node;
     let scrollers = registry
         .scroll_chains
-        .get(name)
+        .get(&anchor)
         .map(|chain| chain.iter().filter(|n| !ancestors.contains(n)).copied().collect())
         .unwrap_or_default();
     Some((anchor, scrollers))
@@ -340,8 +349,20 @@ fn apply_anchor_positions_rec(
     // `fixed_cb` — padding box of the nearest ancestor that captures `position: fixed`
     // (transform/filter/contain, css-transforms-1 §2); `None` — the viewport.
     let mut stack: Vec<(&mut LayoutBox, Rect, Option<Rect>, usize)> = vec![(lb, pcb, None, ancestors.len())];
+    // Pre-order index of the popped box — the numbering `collect_anchors_rec` gave the anchors
+    // (children are pushed in reverse so the pop order is document order).
+    let mut seq: u32 = 0;
     while let Some((lb, pcb, fixed_cb, depth)) = stack.pop() {
     ancestors.truncate(depth);
+    seq += 1;
+    // §2.2: an anchor must precede its positioned element in tree order.
+    let own_view;
+    let registry = if matches!(lb.style.position, Position::Absolute | Position::Fixed) {
+        own_view = registry.before(seq - 1);
+        &*own_view
+    } else {
+        registry
+    };
     let viewport_rect = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     // CSS Anchor Positioning L1 §4 — correct `anchor-size()` width/height against the
     // final, global anchor registry. The local registry `lay_out_abs_children` used is
@@ -505,7 +526,7 @@ fn apply_anchor_positions_rec(
 
     ancestors.push(lb.node);
     let child_depth = ancestors.len();
-    for child in &mut lb.children {
+    for child in lb.children.iter_mut().rev() {
         stack.push((child, my_pcb, my_fixed_cb, child_depth));
     }
     }
@@ -599,5 +620,219 @@ fn restyle_boxless(
             out.insert(id, style);
         }
         stack.extend(doc.get(id).children.iter().rev().map(|&c| (c, below_reached)));
+    }
+}
+
+/// Content-box geometry of a laid-out box.
+struct ContentBox {
+    pad_l: f32,
+    pad_t: f32,
+    w: f32,
+    h: f32,
+}
+
+/// Content size of `b` (padding and border cut off its border box) and its left/top padding.
+fn content_box(b: &LayoutBox, viewport: Size) -> ContentBox {
+    let em = b.style.font_size;
+    let bw = b.rect.width;
+    let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
+    let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
+    let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
+    let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
+    ContentBox {
+        pad_l,
+        pad_t,
+        w: (bw - pad_l - pad_r - b.style.border_left_width - b.style.border_right_width).max(0.0),
+        h: (b.rect.height - pad_t - pad_b - b.style.border_top_width - b.style.border_bottom_width).max(0.0),
+    }
+}
+
+/// The context `b` answers queries with. `content` — its content size; `std_props` — whether
+/// to serialize the computed style for `style(<standard property>)`.
+fn box_context(
+    b: &LayoutBox,
+    viewport: Size,
+    parent_h: f32,
+    content: (f32, f32),
+    std_props: bool,
+    propagating: &HashSet<NodeId>,
+    parent: Option<Arc<ContainerContext>>,
+) -> ContainerContext {
+    let size_container = !matches!(b.style.container_type, ContainerType::Normal);
+    ContainerContext {
+        width: content.0,
+        height: matches!(b.style.container_type, ContainerType::Size).then_some(content.1),
+        names: b.style.container_name.clone(),
+        custom_props: b.style.custom_props.clone(),
+        style_props: if std_props { crate::selector_query::computed_style_to_map(&b.style) } else { HashMap::new() },
+        font_size: b.style.font_size,
+        viewport,
+        own_containing_block_height: parent_h,
+        kinds: ContainerKinds { size: size_container, scroll_state: b.style.container_scroll_state },
+        scroll_state: if b.style.container_scroll_state {
+            crate::scroll_state::scroll_state_info(b, propagating.contains(&b.node))
+        } else {
+            ScrollStateInfo::default()
+        },
+        parent,
+        rule_hits: Vec::new(),
+    }
+}
+
+/// Elements that own a principal box — the rest are walked through the document
+/// ([`StyleSweep::boxless_below`]).
+fn boxed_elements(root: &LayoutBox, doc: &Document) -> HashSet<NodeId> {
+    let mut out = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(b) = stack.pop() {
+        if !matches!(b.kind, BoxKind::Skip) && matches!(doc.get(b.node).data, NodeData::Element { .. }) {
+            out.insert(b.node);
+        }
+        stack.extend(b.children.iter());
+    }
+    out
+}
+
+/// Restyle by `@container` rules when the sheet asks a `style()` question.
+///
+/// CSS Conditional 5 §style-container: every element is a style container, and a query
+/// is answered by the nearest ancestor that fits it — the parent for an unnamed `style()`,
+/// the nearest `container-name` bearer for a named one, the nearest `container-type`
+/// one for a size feature. So each element is restyled against its *parent's* context,
+/// and the contexts are linked into the ancestor chain (`ContainerContext::parent`),
+/// unlike the per-container pass of `re_style_subtree`. The geometry is not redone for a
+/// style-only container — like a scroll-state one it keeps the first-pass boxes.
+struct StyleSweep<'a> {
+    doc: &'a Document,
+    sheet: &'a Stylesheet,
+    counters: &'a CounterMap,
+    viewport: Size,
+    dark_mode: bool,
+    /// Some query reads a standard property: contexts carry the serialized computed style.
+    std_props: bool,
+    boxed: HashSet<NodeId>,
+    propagating: &'a HashSet<NodeId>,
+    /// Boxed elements whose parent element owns no box: the context of that parent, which
+    /// the box walk (it sees the box of the grandparent) would otherwise miss.
+    through_boxless: std::cell::RefCell<HashMap<NodeId, ContainerCtx>>,
+}
+
+type SweepCtx = Option<Arc<ContainerContext>>;
+type ContainerCtx = Arc<ContainerContext>;
+
+impl StyleSweep<'_> {
+    /// Restyles everything below `start` (whose own context is `ctx`; `None` — the document
+    /// box, nothing above it) down to the nested query containers, which are only restyled
+    /// themselves: the outer walk reaches them next, and finds in `pending` the context
+    /// they were restyled by — the head of their chain.
+    fn run(
+        &self,
+        start: &mut LayoutBox,
+        ctx: SweepCtx,
+        start_h: f32,
+        out: &mut HashMap<NodeId, Arc<ComputedStyle>>,
+        pending: &mut HashMap<NodeId, SweepCtx>,
+    ) {
+        self.boxless_below(start.node, &ctx, out);
+        // `(box, context of the parent element, parent node, parent content height)`.
+        let mut stack: Vec<(&mut LayoutBox, SweepCtx, NodeId, f32)> =
+            start.children.iter_mut().map(|c| (c, ctx.clone(), start.node, start_h)).collect();
+        while let Some((b, pc, parent_node, parent_h)) = stack.pop() {
+            // `display: none`: no principal box, walked through the document.
+            if matches!(b.kind, BoxKind::Skip) {
+                continue;
+            }
+            // Behind a box-less parent the context is that parent's, not the box ancestor's.
+            let pc = self.through_boxless.borrow_mut().remove(&b.node).map(Some).unwrap_or(pc);
+            if let Some(pc) = &pc {
+                let rules = matching_container_rules(self.doc, b.node, self.sheet, pc);
+                if !rules.is_empty() {
+                    apply_matched_container_rules(
+                        Arc::make_mut(&mut b.style), &rules, self.doc, b.node, self.viewport, self.dark_mode,
+                    );
+                }
+            }
+            // An anonymous or pseudo-element box shares its element's node: the context stays.
+            let is_element = b.node != parent_node && matches!(self.doc.get(b.node).data, NodeData::Element { .. });
+            if is_element && is_query_container(&b.style) {
+                pending.insert(b.node, pc);
+                continue;
+            }
+            let content = content_box(b, self.viewport);
+            let child_ctx = if is_element {
+                let c = Arc::new(box_context(
+                    b, self.viewport, parent_h, (content.w, content.h), self.std_props, self.propagating, pc,
+                ));
+                self.boxless_below(b.node, &Some(Arc::clone(&c)), out);
+                Some(c)
+            } else {
+                pc
+            };
+            for child in &mut b.children {
+                stack.push((child, child_ctx.clone(), b.node, content.h));
+            }
+        }
+    }
+
+    /// Restyles the elements below `node` that own no box (plain inline elements,
+    /// `display: none` / `contents`), stopping at the ones with a box — the box walk reaches
+    /// those. Every one is recorded in `out`, matched or not: the snapshot collectors read
+    /// their style (and custom properties) from there. A box-less query container answers
+    /// no query, so what lies below it is recorded but not matched.
+    fn boxless_below(&self, node: NodeId, ctx: &SweepCtx, out: &mut HashMap<NodeId, Arc<ComputedStyle>>) {
+        let mut stack: Vec<(NodeId, SweepCtx)> =
+            self.doc.get(node).children.iter().rev().map(|&c| (c, ctx.clone())).collect();
+        while let Some((id, pc)) = stack.pop() {
+            if !matches!(self.doc.get(id).data, NodeData::Element { .. }) {
+                continue;
+            }
+            if self.boxed.contains(&id) {
+                if self.doc.get(id).parent != Some(node)
+                    && let Some(pc) = pc
+                {
+                    self.through_boxless.borrow_mut().insert(id, pc);
+                }
+                continue;
+            }
+            let mut child_ctx = pc.clone();
+            if let Some(mut style) = out.get(&id).cloned().or_else(|| self.counters.style_arc(id)) {
+                if let Some(pc) = &pc {
+                    let rules = matching_container_rules(self.doc, id, self.sheet, pc);
+                    if !rules.is_empty() {
+                        apply_matched_container_rules(
+                            Arc::make_mut(&mut style), &rules, self.doc, id, self.viewport, self.dark_mode,
+                        );
+                    }
+                }
+                child_ctx = match pc {
+                    Some(pc) if !is_query_container(&style) => Some(Arc::new(self.boxless_context(&style, pc))),
+                    _ => None,
+                };
+                out.insert(id, style);
+            }
+            stack.extend(self.doc.get(id).children.iter().rev().map(|&c| (c, child_ctx.clone())));
+        }
+    }
+
+    /// The context of a box-less element: no size, no scroll state.
+    fn boxless_context(&self, style: &ComputedStyle, parent: Arc<ContainerContext>) -> ContainerContext {
+        ContainerContext {
+            width: 0.0,
+            height: None,
+            names: style.container_name.clone(),
+            custom_props: style.custom_props.clone(),
+            style_props: if self.std_props {
+                crate::selector_query::computed_style_to_map(style)
+            } else {
+                HashMap::new()
+            },
+            font_size: style.font_size,
+            viewport: self.viewport,
+            own_containing_block_height: 0.0,
+            kinds: ContainerKinds::default(),
+            scroll_state: ScrollStateInfo::default(),
+            parent: Some(parent),
+            rule_hits: Vec::new(),
+        }
     }
 }

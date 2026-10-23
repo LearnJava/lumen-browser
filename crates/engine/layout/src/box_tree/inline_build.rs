@@ -421,6 +421,8 @@ fn apply_first_letter_pseudo(
         source_node,
         source_char_offset: first_char_end as u32,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     });
 }
 
@@ -834,6 +836,8 @@ pub(crate) fn control_value_segments(
             source_node: node,
             source_char_offset: byte_offset,
             bidi_level: 0,
+            bidi_scopes: Vec::new(),
+            bidi_isolate: None,
         });
     };
     if !style.white_space.preserves_newlines() {
@@ -879,6 +883,26 @@ pub(crate) struct InlineEscape {
     /// собственный стиль здесь не подходит: цвет/шрифт `<span>`-а между ними
     /// был бы потерян.
     inherited: Arc<ComputedStyle>,
+}
+
+/// Текст, уже стоящий в строке непосредственно перед новым текстовым узлом: хвост последнего
+/// сегмента. Пробельный узел между inline-элементами дописывает схлопнутый пробел в `text`
+/// предыдущего сегмента, так что `<b>a</b> <i>b</i>` даёт здесь `"a "` (BUG-1486, `capitalize`
+/// продолжает слово через границу узла только без пробела). Принудительный перенос и атомарный
+/// бокс — граница слова.
+fn text_before(out: &[InlineSegment], escapes: &[InlineEscape]) -> String {
+    // Атомарный бокс (`escapes`) стоит ровно в конце уже собранного — это граница слова.
+    if escapes.last().is_some_and(|e| e.at == out.len()) {
+        return String::new();
+    }
+    match out.last() {
+        Some(last) if !last.forced_break => {
+            let mut tail: Vec<char> = last.text.chars().rev().take(2).collect();
+            tail.reverse();
+            tail.into_iter().collect()
+        }
+        _ => String::new(),
+    }
 }
 
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
@@ -927,6 +951,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                     byte_offset += 1; // the \n character
                 }
@@ -934,7 +960,8 @@ pub(crate) fn collect_inline_segments(
                 // not occupy advance width even in white-space: pre.
                 // text-transform действует и в `pre`/`pre-wrap` (там же U+0020 → U+3000
                 // для `full-width`).
-                let text = style.text_extra.transform_text(style.text_transform, &strip_invisible_controls(line));
+                let before = text_before(out, escapes);
+                let text = style.text_extra.transform_text_after(style.text_transform, &before, &strip_invisible_controls(line));
                 if !text.is_empty() {
                     out.push(InlineSegment {
                         text,
@@ -950,6 +977,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                 }
                 byte_offset += line.len() as u32;
@@ -981,12 +1010,15 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                     byte_offset += 1; // the \n character
                 }
                 let stripped = strip_invisible_controls(line);
                 if !stripped.chars().all(is_collapsible_whitespace) {
-                    let text = inherited.text_extra.transform_text(inherited.text_transform, &stripped);
+                    let before = text_before(out, escapes);
+                    let text = inherited.text_extra.transform_text_after(inherited.text_transform, &before, &stripped);
                     let kind = if *need_first_letter && !text.trim().is_empty() {
                         *need_first_letter = false;
                         PseudoKind::FirstLetter
@@ -1007,6 +1039,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                 }
                 byte_offset += line.len() as u32;
@@ -1018,7 +1052,8 @@ pub(crate) fn collect_inline_segments(
             let s = strip_invisible_controls(s);
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
-            let text = inherited.text_extra.transform_text(inherited.text_transform, &s);
+            let before = text_before(out, escapes);
+            let text = inherited.text_extra.transform_text_after(inherited.text_transform, &before, &s);
             // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
             // is the candidate for ::first-letter. Mark the whole first non-whitespace
             // segment; `apply_first_letter_pseudo` later looks up the ::first-letter rule
@@ -1043,6 +1078,8 @@ pub(crate) fn collect_inline_segments(
                 source_node: id,
                 source_char_offset: 0,
                 bidi_level: 0,
+                bidi_scopes: Vec::new(),
+                bidi_isolate: None,
             });
         }
         NodeData::Text(s) => {
@@ -1087,6 +1124,8 @@ pub(crate) fn collect_inline_segments(
                     source_node: id,
                     source_char_offset: 0,
                     bidi_level: 0,
+                    bidi_scopes: Vec::new(),
+                    bidi_isolate: None,
                 });
             }
         }
@@ -1173,6 +1212,8 @@ pub(crate) fn collect_inline_segments(
                     source_node: id,
                     source_char_offset: 0,
                     bidi_level: 0,
+                    bidi_scopes: Vec::new(),
+                    bidi_isolate: None,
                 };
                 let mut first_cut = first_cut;
                 let mut last_cut = last_cut;
@@ -1198,6 +1239,14 @@ pub(crate) fn collect_inline_segments(
             } else if added > 0 && (pre > 0.0 || post > 0.0) {
                 out[start].pre_space += pre;
                 out[start + added - 1].post_space += post;
+            }
+            // CSS Writing Modes L4 §2.2: the whole element, however many segments its
+            // descendants split it into, sits in one embedding/isolate/override.
+            if s.unicode_bidi != crate::style::UnicodeBidi::Normal {
+                let scope = BidiScope { node: id, bidi: s.unicode_bidi, dir: s.direction };
+                for seg in &mut out[start..] {
+                    seg.bidi_scopes.insert(0, scope);
+                }
             }
         }
         _ => {}
@@ -1521,6 +1570,13 @@ pub(super) fn make_content_text_segment(
         source_node: owner_id,
         source_char_offset: 0,
         bidi_level: 0,
+        // A generated box (`::before`, `::marker`, …) is its own bidi scope.
+        bidi_scopes: if style.unicode_bidi == crate::style::UnicodeBidi::Normal {
+            Vec::new()
+        } else {
+            vec![BidiScope { node: owner_id, bidi: style.unicode_bidi, dir: style.direction }]
+        },
+        bidi_isolate: None,
     }
 }
 
@@ -1549,6 +1605,8 @@ fn make_content_image_segment(
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     }
 }
 

@@ -17,6 +17,7 @@ use lumen_css_parser::{
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::font_palette::resolve_font_palette_overrides;
+use crate::style::substitute::{contains_env_call, env_calls_well_formed, substitution_value_well_formed};
 use crate::style::CaseLang;
 use crate::style::presentational::is_svg_presentational_element;
 use crate::style::share_safety::selector_is_share_safe;
@@ -771,11 +772,17 @@ pub(crate) fn compute_style_shareable(
     shareable &= is_svg_presentational_element(node_tag);
 
     ensure_cascade_index(sheet, viewport, dark_mode);
+    // BUG-1492: `key` is the rule's place in the source-order numbering shared with the
+    // `@media`/`@supports` blocks (`RuleOrder`); `rule_idx` indexes `sheet.rules`.
     let cands = with_front_cascade_index(|idx| {
-        idx.rules.candidates(node_tag, node_id, &node_classes, node_attrs)
+        idx.rules
+            .candidates(node_tag, node_id, &node_classes, node_attrs)
+            .into_iter()
+            .map(|i| (i, idx.order.style(i)))
+            .collect::<Vec<_>>()
     });
 
-    for &rule_idx in &cands {
+    for &(rule_idx, rule_key) in &cands {
         let rule = &sheet.rules[rule_idx];
         shareable &= rule.selectors.iter().all(selector_is_share_safe);
         let mut best: Option<Specificity> = None;
@@ -791,7 +798,7 @@ pub(crate) fn compute_style_shareable(
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 let lp = layer_pri(decl.important, layer_n);
-                matched.push((decl.important, false, lp, spec, rule_idx, decl_idx, decl, None));
+                matched.push((decl.important, false, lp, spec, rule_key, decl_idx, decl, None));
             }
         }
     }
@@ -801,8 +808,7 @@ pub(crate) fn compute_style_shareable(
     // индексом в `layer_order` имеет меньший приоритет для normal (earlier
     // declared → overridden by later), и больший для !important (CSS Cascade
     // L5 §6.4.5 inversion: earlier layer !important wins).
-    let layer_rule_base = sheet.rules.len()
-        + sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>();
+    let layer_rule_base = with_front_cascade_index(|idx| idx.order.end);
     // THREAD-4 срез 7: one candidate query over all `@layer` blocks (see
     // `CascadeIndex::layers`); `flat` is the rule's running offset across
     // blocks, i.e. exactly the old `layer_rule_offset + rule_idx`.
@@ -846,9 +852,9 @@ pub(crate) fn compute_style_shareable(
     // CSS Media Queries L4: rules внутри `@media`-блока, чей query
     // совпадает с текущим MediaContext, добавляются в каскад. В Phase 0
     // упрощённый MediaContext: media_type="screen", width/height из
-    // viewport. Source-order между обычными и
-    // @media-rules не сохраняется идеально (все @media идут после
-    // обычных) — это известное ограничение.
+    // viewport. Порядок появления между обычными правилами и блоками
+    // @media/@supports задаёт `RuleOrder` (BUG-1492): правило `r` блока
+    // имеет ключ `media_base[i] + r`.
     //
     // Perf: "active" per block precomputed once per (sheet, viewport,
     // dark_mode) in `CascadeIndex::active_media` — see its doc comment.
@@ -856,12 +862,11 @@ pub(crate) fn compute_style_shareable(
     // per node (not once per block) to avoid N thread-local accesses when
     // the stylesheet has many `@media` blocks.
     let active_media = with_front_cascade_index(|idx| idx.active_media.clone());
-    let mut next_rule_idx = sheet.rules.len();
     for (media_i, media) in sheet.media_rules.iter().enumerate() {
         if !active_media[media_i] {
-            next_rule_idx += media.rules.len();
             continue;
         }
+        let media_base = with_front_cascade_index(|idx| idx.order.media_base[media_i]);
         // BUG-284: candidate pre-filter (see @layer above) — real-world
         // stylesheets often put the bulk of their rules inside @media blocks.
         let media_cands = with_front_cascade_index(|idx| {
@@ -881,14 +886,13 @@ pub(crate) fn compute_style_shareable(
                 }
             }
             if let Some(spec) = best {
-                let global_rule_idx = next_rule_idx + rule_idx;
+                let global_rule_idx = media_base + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
                     matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
-        next_rule_idx += media.rules.len();
     }
     // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
     // Lumen's supported-properties list; include contained rules only when
@@ -899,9 +903,9 @@ pub(crate) fn compute_style_shareable(
     let active_supports = with_front_cascade_index(|idx| idx.active_supports.clone());
     for (supports_i, supports) in sheet.supports_rules.iter().enumerate() {
         if !active_supports[supports_i] {
-            next_rule_idx += supports.rules.len();
             continue;
         }
+        let supports_base = with_front_cascade_index(|idx| idx.order.supports_base[supports_i]);
         let supports_cands = with_front_cascade_index(|idx| {
             idx.supports[supports_i].candidates(node_tag, node_id, &node_classes, node_attrs)
         });
@@ -919,15 +923,17 @@ pub(crate) fn compute_style_shareable(
                 }
             }
             if let Some(spec) = best {
-                let global_rule_idx = next_rule_idx + rule_idx;
+                let global_rule_idx = supports_base + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
                     matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
-        next_rule_idx += supports.rules.len();
     }
+    // Everything numbered after this point (`@scope`, shadow sheets, inline style) follows
+    // all the plain rules and blocks.
+    let mut next_rule_idx = layer_rule_base;
     // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
     for scope_rule in &sheet.scope_rules {
         // Donut scoping (§3): `node` is in scope when it is an inclusive
@@ -1254,6 +1260,13 @@ pub(crate) fn compute_style_shareable(
     for (_, _, _, _, _, _, decl, _) in &matched {
         if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
+            // BUG-1500: `var()`/`env()` с недопустимым телом (`!`/`;` в fallback-е,
+            // лишний `!important`) — ошибка разбора, декларации как будто нет.
+            if (decl.value.contains("var(") || contains_env_call(&decl.value))
+                && !(substitution_value_well_formed(&decl.value) && env_calls_well_formed(&decl.value))
+            {
+                continue;
+            }
             if let Some(prop_rule) = registry.get(key.as_str())
                 && !decl.value.contains("var(")
                 && !validate_against_syntax(&decl.value, &prop_rule.syntax)
@@ -1586,15 +1599,6 @@ pub(crate) fn compute_style_shareable(
         };
     }
 
-    // CSS Writing Modes L4 §2.4.2 — контекст `bidi-override` для потомков.
-    style.bidi_override = match style.unicode_bidi {
-        crate::style::UnicodeBidi::BidiOverride | crate::style::UnicodeBidi::IsolateOverride => {
-            Some((style.unicode_bidi, style.direction))
-        }
-        crate::style::UnicodeBidi::Normal => style.bidi_override,
-        _ => None,
-    };
-
     // CSS Logical L1 §3.2 — `float`/`clear: inline-start|inline-end` раскрываются относительно
     // `direction` containing block (ближайшего блочного контейнера-предка, не самого элемента).
     {
@@ -1669,6 +1673,7 @@ pub(crate) fn compute_style_shareable(
             (true, true) => FlexDirection::ColumnReverse,
         };
         style.flex_wrap = FlexWrap::Nowrap;
+        style.flex_wrap_balance = false;
         style.justify_content = match style.box_pack {
             WebkitBoxPack::Start => AlignValue::Start,
             WebkitBoxPack::Center => AlignValue::Center,

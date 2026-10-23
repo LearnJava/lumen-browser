@@ -363,7 +363,7 @@ impl Parser<'_> {
             let query = parse_media_query(query_str);
             self.consume(); // '{'
             let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
-            let mut outcomes = vec![AtRuleOutcome::Media(MediaRule { query, rules })];
+            let mut outcomes = vec![AtRuleOutcome::Media(MediaRule { query, rules, pos: BlockPos::default() })];
             outcomes.extend(inner_at);
             return outcomes;
         }
@@ -375,7 +375,8 @@ impl Parser<'_> {
                 if c == '(' {
                     depth += 1;
                 } else if c == ')' {
-                    depth -= 1;
+                    // Лишняя `)` — обычный токен прелюдии (BUG-1493), не минус-глубина.
+                    depth = (depth - 1).max(0);
                 } else if c == '{' && depth == 0 {
                     break;
                 } else if c == ';' && depth == 0 {
@@ -396,7 +397,7 @@ impl Parser<'_> {
             self.consume(); // '{'
             let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
             let mut outcomes =
-                vec![AtRuleOutcome::Supports(SupportsRule { condition, rules })];
+                vec![AtRuleOutcome::Supports(SupportsRule { condition, rules, pos: BlockPos::default() })];
             outcomes.extend(inner_at);
             return outcomes;
         }

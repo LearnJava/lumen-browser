@@ -846,6 +846,61 @@ use super::*;
     }
 
     #[test]
+    fn at_supports_selector_pseudo_elements_bug1494() {
+        for sel in [
+            "selector(a > b)",
+            "selector(input::file-selector-button)",
+            "selector(input::details-content)",
+            "selector(input::details-content::before)",
+            "selector(input::-webkit-slider-thumb)",
+        ] {
+            assert!(parse_supports_condition(sel).evaluate(&[]), "{sel} should be supported");
+        }
+        // Список селекторов и неизвестные псевдо — не поддержаны.
+        for sel in [
+            "selector(div, div)",
+            "selector()",
+            "selector(div !)",
+            "selector(input::-webkit-asdf)",
+            "selector(::bogus)",
+            "selector(a:bogus)",
+        ] {
+            assert!(!parse_supports_condition(sel).evaluate(&[]), "{sel} should be unsupported");
+        }
+    }
+
+    #[test]
+    fn at_supports_at_rule_function_bug1494() {
+        for c in [
+            "at-rule(@supports)",
+            "at-rule( @supports)",
+            "at-rule(@supports )",
+            "at-rule(@MEDIA)",
+            "at-rule(@counter-style)",
+            "at-rule(@import)",
+            "at-rule(@swash)",
+            "at-rule(@starting-style)",
+            "at-rule(@supports) and (color: red)",
+            "at-rule(@doesnotexist) or (color: red)",
+            "not at-rule(@doesnotexist)",
+        ] {
+            assert!(parse_supports_condition(c).evaluate(&["color"]), "{c} should be true");
+        }
+        for c in [
+            "at-rule(@doesnotexist)",
+            "at-rule(@charset)",
+            "at-rule(@counter-style; system: fixed)",
+            "at-rule(supports)",
+            "at-rule()",
+            "not at-rule(@supports)",
+            "at-rule(@doesnotexist) and (color: red)",
+            "(color: red) and at-rule(@doesnotexist)",
+        ] {
+            assert!(!parse_supports_condition(c).evaluate(&["color"]), "{c} should be false");
+        }
+    }
+
+    #[test]
     fn complex_selector_is_supported_recurses() {
         // Прямая проверка ComplexSelector::is_supported на вложенности.
         let ok = parse_selector_list(":is(.a, :where(.b:has(> .c)))");
@@ -883,11 +938,15 @@ use super::*;
         // Реализованные технологии → true.
         assert!(parse_supports_condition("font-tech(variations)").evaluate(&[]));
         assert!(parse_supports_condition("font-tech(features-opentype)").evaluate(&[]));
-        // Нереализованные (цветные глифы, палитры, AAT, incremental) → false.
+        // COLR v0 + CPAL реализованы в `lumen-font` (BUG-1494).
+        assert!(parse_supports_condition("font-tech(color-COLRv0)").evaluate(&[]));
+        assert!(parse_supports_condition("font-tech(palettes)").evaluate(&[]));
+        // Нереализованные (COLR v1, SVG-глифы, AAT, incremental) → false.
         for t in [
             "font-tech(color-colrv1)",
             "font-tech(color-svg)",
-            "font-tech(palettes)",
+            "font-tech(features-opentype color-colrv0)",
+            "font-tech(features-opentype, color-colrv0)",
             "font-tech(features-aat)",
             "font-tech(incremental)",
             "font-tech(totally-fake)",
@@ -923,7 +982,7 @@ use super::*;
     fn at_supports_font_tech_format_in_combinators() {
         // Комбинируются с and/or/not как обычные условия.
         assert!(parse_supports_condition("font-format(woff2) and font-tech(variations)").evaluate(&[]));
-        assert!(!parse_supports_condition("font-format(woff2) and font-tech(palettes)").evaluate(&[]));
+        assert!(!parse_supports_condition("font-format(woff2) and font-tech(color-colrv1)").evaluate(&[]));
         assert!(parse_supports_condition("font-format(svg) or font-format(woff2)").evaluate(&[]));
         assert!(parse_supports_condition("not font-tech(color-colrv1)").evaluate(&[]));
     }
@@ -966,6 +1025,73 @@ use super::*;
         let cond = parse_supports_condition("");
         assert!(matches!(cond, SupportsCondition::Unknown));
         assert!(!cond.evaluate(&["color"]));
+    }
+
+    /// BUG-1493: грамматика условия — что по Conditional 3 §2 недопустимо или ложно.
+    #[test]
+    fn at_supports_grammar_rejects_invalid_conditions() {
+        let props = ["margin", "padding", "color", "display", "width", "background-color"];
+        for bad in [
+            "(margin: )",
+            "(margin:0;)",
+            "(margin:0 or padding:0)",
+            "(margin:0 and padding:0)",
+            "not(foo: baz)",
+            "not(color: red)",
+            "(color:green) or(color:red)",
+            "(color:green) and(color:red)",
+            "((margin:0) and (display:inline) or (width:1em))",
+            "( ( background-color: red ) or( background-color: green ) )",
+            "(color:red !bogus)",
+            "(color:red !important !important)",
+            "(color:red !important x)",
+            "(margin: 2px) )",
+            "(width: 0))",
+            "not (color:red) and (margin:0)",
+            "not not (color:red)",
+            "color: red",
+            "(color:red) foo",
+        ] {
+            assert!(!parse_supports_condition(bad).evaluate(&props), "{bad} must be false");
+        }
+    }
+
+    #[test]
+    fn at_supports_grammar_accepts_valid_conditions() {
+        let props = ["margin", "padding", "color", "display", "width", "background-color"];
+        for good in [
+            "(margin:0)",
+            "(margin:0 !important)",
+            "(margin:0 ! IMPORTANT)",
+            "(color:red) or (foo:bar)",
+            "(( background-color: red ) or ( background-color: green ))",
+            "not (color:red !important !important)",
+            "not (foo: baz)",
+            "not (margin:0;)",
+            "(color:red)and (margin:0)",
+            "(color:red) and /* c */ (margin:0) and (padding:0)",
+            "(--x:)",
+            "(--x: a:b !important)",
+            "(margin: 0]) or (color: red)",
+        ] {
+            assert!(parse_supports_condition(good).evaluate(&props), "{good} must be true");
+        }
+    }
+
+    /// BUG-1493: лишняя `)` в прелюдии не съедает следующее правило.
+    #[test]
+    fn at_supports_stray_close_paren_recovers() {
+        for prelude in ["(margin: 2px) )", "(width: 0))", "(margin: 0)) ;"] {
+            let css = format!("@supports {prelude} {{ a {{ color: red }} }} @supports (margin:0) {{ div {{ color: green }} }}");
+            let s = parse(&css);
+            let applied: Vec<_> = s
+                .supports_rules
+                .iter()
+                .filter(|r| r.condition.evaluate(&["margin"]))
+                .collect();
+            assert_eq!(applied.len(), 1, "{prelude}: second @supports must survive");
+            assert!(matches!(applied[0].condition, SupportsCondition::Decl { .. }));
+        }
     }
 
     // ── CSS Animations L1 §3 — @keyframes ──
@@ -1382,6 +1508,35 @@ use super::*;
     }
 
     #[test]
+    fn supports_declaration_with_invalid_var_is_unsupported() {
+        // CSS Variables L1 §3 (BUG-1500): `!`/`;` at the top level of a fallback and a
+        // non-`--ident` head make the declaration a parse error — the feature is false.
+        let ok = |c: &str| {
+            let s = parse(&format!("@supports {c} {{ a {{ color: green }} }}"));
+            s.supports_rules[0].condition.evaluate(&["color"])
+        };
+        assert!(ok("(color: var(--a))"));
+        assert!(ok("(color: var(--a, 1px))"));
+        assert!(ok("(color: var(--a, f(1;2)))"));
+        assert!(ok("(--a: var(--b, {;}))"));
+        // `<!--` is a <CDO-token>, escapes are part of the name.
+        assert!(ok("(color: var(--a) <!--)"));
+        assert!(ok(r"(color: var(--\30))"));
+        assert!(ok(r"(--\d800: a)"));
+        for bad in [
+            "(color: var(--a,!))",
+            "(color: var(--a,;))",
+            "(color: var(--a,!important))",
+            "(color: var(--a, var(--b,!)))",
+            "(color: var(1px))",
+            "(--a: var(--b,!))",
+            "(--: a)",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn nested_media_without_block_does_not_eat_tail() {
         // CSS Nesting L1 §5: same terminator rule applies to a nested at-rule
         // inside a qualified rule's own body.
@@ -1399,4 +1554,49 @@ use super::*;
         let s = parse("@supports (overflow-clip-margin: 20px) { p { color: green } }");
         assert_eq!(s.supports_rules.len(), 1);
         assert!(s.supports_rules[0].condition.evaluate(crate::SUPPORTED_PROPERTIES));
+    }
+
+    // ──────────────── BUG-1495: @font-face внутри @media / @supports ────────────────
+
+    #[test]
+    fn font_face_inside_media_is_hoisted_with_condition() {
+        let s = parse("@font-face{font-family:a;src:local(Arial)} @media all{@font-face{font-family:b;src:local(Arial)} p{color:red}} @font-face{font-family:c;src:local(Arial)}");
+        let fams: Vec<_> = s.font_faces.iter().map(|f| f.family.as_str()).collect();
+        // Порядок источника сохранён: b между a и c.
+        assert_eq!(fams, ["a", "b", "c"]);
+        assert!(s.font_faces[0].conditions.is_empty());
+        assert_eq!(s.font_faces[1].conditions.len(), 1);
+        assert_eq!(s.media_rules.len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn font_face_inside_supports_is_hoisted_with_condition() {
+        let s = parse("@supports (color:red){@font-face{font-family:b;src:local(Arial)}}");
+        assert_eq!(s.font_faces.len(), 1);
+        assert!(s.font_faces[0].conditions_hold(&MediaContext::default()));
+        let s = parse("@supports (not (color:red)){@font-face{font-family:b;src:local(Arial)}}");
+        assert_eq!(s.font_faces.len(), 1);
+        assert!(!s.font_faces[0].conditions_hold(&MediaContext::default()));
+    }
+
+    #[test]
+    fn retain_active_font_faces_drops_false_media() {
+        let mut s = parse(
+            "@media (min-width:2000px){@font-face{font-family:wide;src:local(Arial)}} \
+             @media print{@font-face{font-family:pr;src:local(Arial)}} \
+             @media screen{@font-face{font-family:scr;src:local(Arial)}}",
+        );
+        assert_eq!(s.font_faces.len(), 3);
+        let ctx = MediaContext { width: 1000.0, height: 800.0, ..MediaContext::default() };
+        s.retain_active_font_faces(&ctx);
+        let fams: Vec<_> = s.font_faces.iter().map(|f| f.family.as_str()).collect();
+        assert_eq!(fams, ["scr"]);
+    }
+
+    #[test]
+    fn at_rule_after_font_face_in_media_still_skipped_cleanly() {
+        let s = parse("@media all{@keyframes k{from{color:red}} @font-face{font-family:b;src:local(Arial)} p{color:red}}");
+        assert_eq!(s.font_faces.len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 1);
     }

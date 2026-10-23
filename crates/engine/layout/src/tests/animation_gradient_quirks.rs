@@ -693,6 +693,52 @@ fn caret_color_invalid_ignored() {
 }
 
 #[test]
+fn caret_shape_and_animation_parse_and_invalid_ignored() {
+    use crate::style::{CaretAnimation, CaretShape};
+    let root = lay("<p>x</p>", "p { caret-shape: block; caret-animation: manual; }");
+    let st = first_p_style(&root);
+    assert_eq!((st.caret_shape, st.caret_animation), (CaretShape::Block, CaretAnimation::Manual));
+    let root = lay("<p>x</p>", "p { caret-shape: underscore; caret-shape: none; caret-animation: manual; caret-animation: blink; }");
+    let st = first_p_style(&root);
+    assert_eq!((st.caret_shape, st.caret_animation), (CaretShape::Underscore, CaretAnimation::Manual));
+    let root = lay("<p>x</p>", "");
+    let st = first_p_style(&root);
+    assert_eq!((st.caret_shape, st.caret_animation), (CaretShape::Auto, CaretAnimation::Auto));
+}
+
+#[test]
+fn caret_shape_and_animation_are_inherited_and_css_wide() {
+    use crate::style::{CaretAnimation, CaretShape};
+    let root = lay(
+        "<div><p>x</p></div>",
+        "div { caret-shape: bar; caret-animation: manual; } p { caret-animation: initial; }",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.caret_shape, CaretShape::Bar, "inherited");
+    assert_eq!(div.style.caret_animation, CaretAnimation::Manual);
+    assert_eq!(p.style.caret_animation, CaretAnimation::Auto, "initial");
+}
+
+#[test]
+fn caret_shorthand_sets_all_three_and_resets_omitted() {
+    use crate::style::{CaretAnimation, CaretShape};
+    let root = lay("<p>x</p>", "p { caret-shape: block; caret: manual red underscore; }");
+    let st = first_p_style(&root);
+    assert_eq!(st.caret_color, Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })));
+    assert_eq!((st.caret_animation, st.caret_shape), (CaretAnimation::Manual, CaretShape::Underscore));
+    // Omitted components go back to initial.
+    let root = lay("<p>x</p>", "p { caret-color: red; caret-shape: block; caret: manual; }");
+    let st = first_p_style(&root);
+    assert_eq!((st.caret_color, st.caret_shape, st.caret_animation), (None, CaretShape::Auto, CaretAnimation::Manual));
+    // Invalid / duplicated component: the whole declaration is dropped.
+    let root = lay("<p>x</p>", "p { caret-shape: block; caret: block bar; } ");
+    assert_eq!(first_p_style(&root).caret_shape, CaretShape::Block);
+    let root = lay("<p>x</p>", "p { caret-shape: block; caret: 12px; } ");
+    assert_eq!(first_p_style(&root).caret_shape, CaretShape::Block);
+}
+
+#[test]
 fn overflow_wrap_break_word() {
     let root = lay("<p>x</p>", "p { overflow-wrap: break-word; }");
     assert_eq!(first_p_style(&root).overflow_wrap, OverflowWrap::BreakWord);

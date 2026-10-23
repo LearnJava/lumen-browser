@@ -26,6 +26,9 @@ const PAGE: &str = r#"<html><head><style>
 <div id="lt" class="up" lang="lt">i&#x307;&#x300;</div>
 <div id="ga" class="up" lang="ga">tAthair nathair</div>
 <span id="sharp" class="up" lang="de">&#xDF;</span>
+<div id="el" class="up" lang="el">καλημέρα αύριο</div>
+<div id="mid">a<span id="midspan" class="cap">b</span>c</div>
+<div id="midsp"><b>a</b> <i id="midi" class="cap">b</i></div>
 </body></html>"#;
 
 fn text(s: &mut InProcessSession, id: &str) -> String {
@@ -65,6 +68,18 @@ fn lang_is_inherited_and_overridable() {
     s.navigate_html(PAGE).expect("navigate_html");
     assert_eq!(text(&mut s, "child"), "\u{130}STANBUL");
     assert_eq!(text(&mut s, "child_en"), "ISTANBUL");
+}
+
+/// BUG-1486 — греческий регистр и продолжение слова `capitalize` через границу узла.
+#[test]
+fn greek_tonos_and_capitalize_across_nodes() {
+    let mut s = InProcessSession::new();
+    s.navigate_html(PAGE).expect("navigate_html");
+    assert_eq!(text(&mut s, "el"), "ΚΑΛΗΜΕΡΑ ΑΥΡΙΟ");
+    // WPT `text-transform-capitalize-036`: слово началось в предыдущем узле.
+    assert_eq!(text(&mut s, "midspan"), "b");
+    // Пробел перед элементом — граница слова.
+    assert_eq!(text(&mut s, "midi"), "B");
 }
 
 #[test]

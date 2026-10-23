@@ -1,6 +1,6 @@
 # BUG-1495 — `@font-face` внутри `@media` и `@supports` отбрасывается (в `@layer` — нет)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** css-parser (`crates/engine/css-parser/src/parser/at_rules.rs:547` `@font-face`; тело `@media`/`@supports`)
 
@@ -30,3 +30,10 @@ WPT-RUN-14 срез 22: `css-conditional/at-media-content-002.html`, `at-support
 ## Как проверить
 
 Таблица выше; `css/css-conditional/at-media-content-002.html`.
+
+## Исправление
+
+- Парсер (`at_rules.rs`, `supports.rs`): в теле `@media`/`@supports` верхнего уровня `@font-face` больше не пропускается — `parse_conditional_body_at_rule` разбирает его, кладёт в `FontFaceRule::conditions` условие группы (`LayerCondition`) и поднимает на верхний уровень листа через `Parser::bubbled` (порядок среди безусловных `@font-face` сохраняется).
+- Условие нельзя решить при разборе (зависит от viewport), поэтому правило хранит его, а `Stylesheet::retain_active_font_faces(&MediaContext)` отбрасывает ложные до загрузки шрифтов. Вызывается там, где viewport известен: `page_pipeline.rs` (страница), `frames/spawn.rs` (iframe), `relayout.rs` (пересборка листа), `driver/session.rs` (ранний снимок `document.fonts`).
+- Тесты: `font_face_inside_media_is_hoisted_with_condition`, `font_face_inside_supports_is_hoisted_with_condition`, `retain_active_font_faces_drops_false_media`, `at_rule_after_font_face_in_media_still_skipped_cleanly`; сквозные в `crates/driver/tests/cases/fontload3_document_fonts_population.rs` (`document.fonts.size` при истинном и ложном условии).
+- Остаток (`@keyframes`/`@property`/`@counter-style`/вложенный `@media` в теле условной группы) — [BUG-1686](BUG-1686-OPEN.md). `at-media-content-003`/`at-supports-content-003` (`@keyframes`) под этот баг не попадали и не изменились.

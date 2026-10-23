@@ -140,3 +140,45 @@
             "a plain rule before the pseudo rule must not shift it out of the index",
         );
     }
+
+    /// BUG-1492: a rule written after an `@media`/`@supports` block outranks an equally
+    /// specific rule inside it (order of appearance), and the other way round.
+    #[test]
+    fn media_and_supports_blocks_keep_source_order_with_plain_rules() {
+        let color_of = |css: &str, pseudo: bool| {
+            let doc = lumen_html_parser::parse(r#"<p class="a">t</p>"#);
+            let body = doc.body().expect("body");
+            let p = doc.get(body).children[0];
+            let sheet = lumen_css_parser::parse(css);
+            let parent = ComputedStyle::root();
+            if pseudo {
+                let s = compute_pseudo_element_style(&doc, p, "before", &sheet, &parent, VP, false)
+                    .expect("::before must match");
+                s.color
+            } else {
+                compute_style(&doc, p, &sheet, &parent, VP, false).color
+            }
+        };
+        let green = (0, 128, 0);
+        let red = (255, 0, 0);
+        let blue = (0, 0, 255);
+        for pseudo in [false, true] {
+            let sel = if pseudo { ".a::before" } else { ".a" };
+            let check = |css: String, want: (u8, u8, u8)| {
+                let c = color_of(&css, pseudo);
+                assert_eq!((c.r, c.g, c.b), want, "{css}");
+            };
+            check(format!("@media all{{{sel}{{color:red;content:\"x\"}}}} {sel}{{color:green;content:\"x\"}}"), green);
+            check(format!("@supports (margin:0){{{sel}{{color:red;content:\"x\"}}}} {sel}{{color:green;content:\"x\"}}"), green);
+            check(format!("{sel}{{color:red;content:\"x\"}} @media all{{{sel}{{color:blue;content:\"x\"}}}} {sel}{{color:green;content:\"x\"}}"), green);
+            check(format!("{sel}{{color:red;content:\"x\"}} @supports (margin:0){{{sel}{{color:blue;content:\"x\"}}}} {sel}{{color:green;content:\"x\"}}"), green);
+            check(format!("{sel}{{color:green;content:\"x\"}} @media all{{{sel}{{color:red;content:\"x\"}}}}"), red);
+            check(format!("{sel}{{color:green;content:\"x\"}} @supports (margin:0){{{sel}{{color:red;content:\"x\"}}}}"), red);
+            // `@media` then `@supports` then a plain rule, and the reverse order of the two blocks.
+            check(format!("@media all{{{sel}{{color:red;content:\"x\"}}}} @supports (margin:0){{{sel}{{color:blue;content:\"x\"}}}} {sel}{{color:green;content:\"x\"}}"), green);
+            check(format!("@supports (margin:0){{{sel}{{color:blue;content:\"x\"}}}} @media all{{{sel}{{color:red;content:\"x\"}}}}"), red);
+            check(format!("@media all{{{sel}{{color:red;content:\"x\"}}}} @supports (margin:0){{{sel}{{color:blue;content:\"x\"}}}}"), blue);
+            // An inactive block never takes part.
+            check(format!("{sel}{{color:green;content:\"x\"}} @media (max-width:10px){{{sel}{{color:red;content:\"x\"}}}}"), green);
+        }
+    }
