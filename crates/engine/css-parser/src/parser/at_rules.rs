@@ -267,6 +267,29 @@ pub struct FontFaceRule {
     pub line_gap_override: Option<String>,
     /// `size-adjust: <percentage>` — CSS Fonts L4 §14.4. Сырая строка.
     pub size_adjust: Option<String>,
+    /// Условия объемлющих `@media`/`@supports`, внутри которых объявлен
+    /// `@font-face` (BUG-1495). Пусто — безусловное правило. Правило
+    /// действует, только пока все условия истинны — см.
+    /// [`FontFaceRule::conditions_hold`].
+    pub conditions: Vec<LayerCondition>,
+}
+
+impl LayerCondition {
+    /// Истинно ли условие группы в контексте `ctx` (`@supports` не зависит
+    /// от контекста — вычисляется по [`crate::SUPPORTED_PROPERTIES`]).
+    pub fn holds(&self, ctx: &MediaContext) -> bool {
+        match self {
+            LayerCondition::Media(q) => q.matches(ctx),
+            LayerCondition::Supports(c) => c.evaluate(crate::SUPPORTED_PROPERTIES),
+        }
+    }
+}
+
+impl FontFaceRule {
+    /// Все объемлющие `@media`/`@supports` истинны в `ctx` (BUG-1495).
+    pub fn conditions_hold(&self, ctx: &MediaContext) -> bool {
+        self.conditions.iter().all(|c| c.holds(ctx))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -806,6 +829,7 @@ impl<'a> Parser<'a> {
             descent_override,
             line_gap_override,
             size_adjust,
+            conditions: Vec::new(),
         })
     }
 
@@ -1087,6 +1111,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `@`-правило в теле условной группы (`@media`/`@supports`) верхнего
+    /// уровня. Поддержан только `@font-face` (BUG-1495): он получает условие
+    /// группы в [`FontFaceRule::conditions`] и всплывает на верхний уровень
+    /// листа через [`Self::bubbled`]; остальные @-правила пропускаются.
+    pub(crate) fn parse_conditional_body_at_rule(&mut self, condition: &LayerCondition) {
+        let start = self.pos;
+        self.consume(); // '@'
+        let name = self.parse_ident().unwrap_or_default();
+        if name.eq_ignore_ascii_case("font-face") {
+            if let Some(mut face) = self.parse_font_face_body() {
+                face.conditions.push(condition.clone());
+                self.bubbled.push(AtRuleOutcome::FontFace(Box::new(face)));
+            }
+            return;
+        }
+        self.pos = start;
+        self.skip_at_rule();
+    }
+
     /// Парсит тело `@media <query> { <rules> }`. Грамматика query
     /// упрощённая: type-or-feature [and type-or-feature]* [, ...].
     /// Type-or-feature — ident (`screen`/`print`/...) или
@@ -1128,8 +1171,8 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 Some('@') => {
-                    // Nested @-правила в media пока не поддерживаем — skip.
-                    self.skip_at_rule();
+                    // Из nested @-правил в media поддержан только `@font-face`.
+                    self.parse_conditional_body_at_rule(&LayerCondition::Media(query.clone()));
                 }
                 Some(_) => {
                     let before = self.pos;

@@ -777,6 +777,12 @@ fn build_page_cascade(
         let _s = lumen_core::trace::span("parse-css", "parse");
         lumen_css_parser::parse(&css)
     };
+    // BUG-1495: `@font-face` под ложным `@media`/`@supports` не регистрируется.
+    sheet.retain_active_font_faces(&if media_print {
+        print_media_context(viewport, dark_mode)
+    } else {
+        screen_media_context(viewport, dark_mode)
+    });
     // CSS Color L5 §5.3: ICC bytes for `color(--name …)`.
     crate::subresources::load_sheet_color_profiles(
         &mut sheet,

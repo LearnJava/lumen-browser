@@ -485,6 +485,18 @@ impl Stylesheet {
         self.revision = StylesheetRevision::fresh();
     }
 
+    /// Отбрасывает `@font-face`, объявленные внутри `@media`/`@supports`, чьё
+    /// условие в `ctx` ложно (BUG-1495). Вызывается там, где известен
+    /// viewport страницы, до загрузки шрифтов; безусловные правила не
+    /// затрагивает. Ревизию меняет, только если что-то удалено.
+    pub fn retain_active_font_faces(&mut self, ctx: &MediaContext) {
+        let before = self.font_faces.len();
+        self.font_faces.retain(|f| f.conditions_hold(ctx));
+        if self.font_faces.len() != before {
+            self.mark_mutated();
+        }
+    }
+
     /// CSS Color L5 §5.3 — attaches ICC profile bytes to the `@color-profile`
     /// rules. `fetch` receives a rule's `src` and returns the profile bytes, or
     /// `None` when they could not be fetched (the rule then stays unloaded and

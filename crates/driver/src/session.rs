@@ -366,7 +366,15 @@ impl InProcessSession {
         {
             let mut doc_guard = Self::lock_arc_doc(&doc)?;
             let early_css = extract_style_blocks(&doc_guard);
-            let early_font_faces = lumen_css_parser::parse(&early_css).font_faces;
+            let mut early_sheet = lumen_css_parser::parse(&early_css);
+            // BUG-1495: `@font-face` под ложным `@media`/`@supports` не в `document.fonts`.
+            early_sheet.retain_active_font_faces(&lumen_css_parser::MediaContext {
+                media_type: "screen".into(),
+                width: self.viewport.width,
+                height: self.viewport.height,
+                ..Default::default()
+            });
+            let early_font_faces = early_sheet.font_faces;
             crate::font_faces::populate_document_fonts(&mut doc_guard, &early_font_faces);
         }
 

@@ -1526,3 +1526,48 @@ use super::*;
         assert_eq!(s.supports_rules.len(), 1);
         assert!(s.supports_rules[0].condition.evaluate(crate::SUPPORTED_PROPERTIES));
     }
+
+    // ──────────────── BUG-1495: @font-face внутри @media / @supports ────────────────
+
+    #[test]
+    fn font_face_inside_media_is_hoisted_with_condition() {
+        let s = parse("@font-face{font-family:a;src:local(Arial)} @media all{@font-face{font-family:b;src:local(Arial)} p{color:red}} @font-face{font-family:c;src:local(Arial)}");
+        let fams: Vec<_> = s.font_faces.iter().map(|f| f.family.as_str()).collect();
+        // Порядок источника сохранён: b между a и c.
+        assert_eq!(fams, ["a", "b", "c"]);
+        assert!(s.font_faces[0].conditions.is_empty());
+        assert_eq!(s.font_faces[1].conditions.len(), 1);
+        assert_eq!(s.media_rules.len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn font_face_inside_supports_is_hoisted_with_condition() {
+        let s = parse("@supports (color:red){@font-face{font-family:b;src:local(Arial)}}");
+        assert_eq!(s.font_faces.len(), 1);
+        assert!(s.font_faces[0].conditions_hold(&MediaContext::default()));
+        let s = parse("@supports (not (color:red)){@font-face{font-family:b;src:local(Arial)}}");
+        assert_eq!(s.font_faces.len(), 1);
+        assert!(!s.font_faces[0].conditions_hold(&MediaContext::default()));
+    }
+
+    #[test]
+    fn retain_active_font_faces_drops_false_media() {
+        let mut s = parse(
+            "@media (min-width:2000px){@font-face{font-family:wide;src:local(Arial)}} \
+             @media print{@font-face{font-family:pr;src:local(Arial)}} \
+             @media screen{@font-face{font-family:scr;src:local(Arial)}}",
+        );
+        assert_eq!(s.font_faces.len(), 3);
+        let ctx = MediaContext { width: 1000.0, height: 800.0, ..MediaContext::default() };
+        s.retain_active_font_faces(&ctx);
+        let fams: Vec<_> = s.font_faces.iter().map(|f| f.family.as_str()).collect();
+        assert_eq!(fams, ["scr"]);
+    }
+
+    #[test]
+    fn at_rule_after_font_face_in_media_still_skipped_cleanly() {
+        let s = parse("@media all{@keyframes k{from{color:red}} @font-face{font-family:b;src:local(Arial)} p{color:red}}");
+        assert_eq!(s.font_faces.len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 1);
+    }

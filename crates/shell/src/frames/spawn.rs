@@ -496,6 +496,8 @@ pub(crate) fn spawn_frame(
     // тоже едет в хэндл (срез 14): по нему рисуется содержимое фрейма и в
     // нём ищется host-бокс вложенного фрейма.
     let mut frame_sheet = lumen_css_parser::parse(&subresources.css);
+    // BUG-1495: `@font-face` под ложным `@media`/`@supports` не регистрируется.
+    frame_sheet.retain_active_font_faces(&env.media_ctx);
     // GAP-CSPENF срез 25: the CHILD's own policy, read once here so both
     // `load_frame_fonts` (`font-src`) and `fetch_frame_background_images`
     // (`img-src`) below can gate against it without each re-parsing —

@@ -191,6 +191,10 @@ impl Lumen {
         // (по умолчанию) `js_ctx` на UI-потоке пуст, и правки CSSOM с
         // `adoptedStyleSheets` до каскада отрисовки не доходили вовсе.
         let feed = self.cascade_feed.clone();
+        // BUG-1495: контекст для условных `@font-face` пересобираемого листа.
+        let font_media_ctx = self
+            .relayout_viewport()
+            .map(|vp| crate::stylesheets::screen_media_context(vp, self.dark_mode));
         let (adopted_fp, cssom_epoch) = feed
             .as_ref()
             .map(|f| (f.document_adopted_fingerprint(), f.cssom_epoch()))
@@ -244,6 +248,9 @@ impl Lumen {
                 }
             }
             let mut sheet = lumen_css_parser::parse(&css);
+            if let Some(ctx) = font_media_ctx.as_ref() {
+                sheet.retain_active_font_faces(ctx);
+            }
             // CSS Color L5 §5.3: no network on relayout — keep the ICC bytes
             // the first sheet already fetched.
             sheet.carry_color_profile_data(stylesheet);
