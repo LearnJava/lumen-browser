@@ -852,9 +852,11 @@ HEAVY_UNIT_NAME = "heavy lane"
 #: Browsers the heavy lane runs: enough to overlap their timeouts, few enough
 #: that two 5 GB runaways stay a 10 GB problem.
 HEAVY_PROCESSES = 2
-#: `--processes auto`: what one browser is assumed to cost, GB. Healthy ones hold
-#: 0.6-1.0 GB (`browser_rss_cap.DEFAULT_CAP_GB`), the heavy tests are in their own lane.
-AUTO_BROWSER_GB = 1.0
+#: `--processes auto`: what one browser is assumed to cost, GB. Healthy ones average
+#: ~1 GB but peak at 2-4 GB on editing/IndexedDB/referrer-policy tests; with 1.0 the
+#: first measurement (15 browsers on 22 GB free, floor 6) hit `--min-free-gb` within
+#: eight minutes and the watchdog killed 23 browsers, so the estimate carries headroom.
+AUTO_BROWSER_GB = 1.5
 #: `--processes auto` never goes below this: one browser per shard idles wptserve.
 AUTO_MIN_PROCESSES = 2
 
@@ -1991,7 +1993,7 @@ def _selftest_heavy() -> list:
                        plan_units([lanes["ws (heavy)"]], 150, 600, tmp) == [lanes["ws (heavy)"]]))
 
         checks.append(("auto: free memory minus the floor, shared by the lanes",
-                       auto_processes(17.0, 16, 3, 6.0) == 3
+                       auto_processes(21.0, 16, 3, 6.0) == 3
                        and auto_processes(100.0, 16, 1, 6.0) == 16
                        and auto_processes(2.0, 16, 3, 6.0) == AUTO_MIN_PROCESSES))
         checks.append(("auto: --processes takes a number or auto, nothing else",
@@ -2396,13 +2398,18 @@ def main() -> int:
                              "pipeline. Measured: same score, -14%% lumen CPU, -40%% mean RSS "
                              "(docs/tasks/p2-wpt-runner-throughput.md §PERF-10)")
     parser.add_argument("--min-free-gb", type=float, default=6.0,
-                        help="the run's memory floor (default: 6; 0 disables it). Three uses: "
-                             "with --parallel-shards a lane waits to start a unit while less "
-                             "physical memory than this is free and another lane is busy; "
-                             "--processes auto leaves it free; and (WPT-RUN-18) while free "
-                             "memory is below it the watchdog kills the biggest lumen of the "
-                             "run (>= 2 GB; its test -> CRASH, logged as reason low-free in "
-                             "rss-cap-kills.jsonl) instead of letting 40 neighbours page")
+                        help="the run's soft memory floor (default: 6; 0 disables it): with "
+                             "--parallel-shards a lane waits to start a unit while less physical "
+                             "memory than this is free and another lane is busy, and --processes "
+                             "auto leaves it free. See --kill-free-gb for the watchdog")
+    parser.add_argument("--kill-free-gb", type=float, default=2.0,
+                        help="the run's hard memory floor (default: 2; 0 disables it; WPT-RUN-18): "
+                             "while free memory is below it the watchdog kills the biggest lumen of "
+                             "the run (>= 2 GB; its test -> CRASH, logged as reason low-free in "
+                             "rss-cap-kills.jsonl) instead of letting 40 neighbours page. Measured "
+                             "on the 32 GB box: swap starts to grow only below ~1 GB free, and a "
+                             "kill at the soft 6 GB floor booked 81 healthy referrer-policy tests "
+                             "as CRASH")
     parser.add_argument("--max-browser-gb", type=float, default=browser_rss_cap.DEFAULT_CAP_GB,
                         help="kill a lumen of this run whose resident memory passes this many GB; "
                              "wptrunner reports its test CRASH and restarts the browser "
@@ -2636,11 +2643,11 @@ def main() -> int:
             return states
 
         rss_cap = browser_rss_cap.BrowserRssCap(args.max_browser_gb, args.out_dir,
-                                                min_free_gb=args.min_free_gb)
+                                                min_free_gb=args.kill_free_gb)
         if rss_cap.start():
             print(f"--max-browser-gb {args.max_browser_gb}: a lumen of this run above it is "
                   f"killed (test -> CRASH), kills logged to {browser_rss_cap.KILLS_FILE}; "
-                  f"--min-free-gb {args.min_free_gb}: below it the biggest lumen goes "
+                  f"--kill-free-gb {args.kill_free_gb}: below it the biggest lumen goes "
                   f"(reason low-free); memory log {browser_rss_cap.MEM_LOG_FILE}", flush=True)
         else:
             rss_cap = None
@@ -2747,6 +2754,7 @@ def main() -> int:
             "low_free_kills": sum(1 for kill in browser_rss_cap.load_kills(args.out_dir)
                                   if kill.get("reason") == "low-free"),
             "min_free_gb": getattr(args, "min_free_gb", 0),
+            "kill_free_gb": getattr(args, "kill_free_gb", 0),
             "heavy_tests": sorted(heavy),
             "memory": memory,
             "scope": sorted(scope) if scope else "full-corpus",
