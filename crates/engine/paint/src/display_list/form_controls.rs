@@ -137,13 +137,16 @@ fn emit_input_caret(b: &LayoutBox, value: &str, char_index: usize, width: f32, o
     // already true for `forced-colors`/`color-scheme` overrides applied
     // earlier in the cascade (see `style/adjust.rs`), so this is the same
     // resolution rule applied one more time at paint.
-    let color = s.used_caret_color();
+    // CSS UI L4 §6.2 `caret-shape`: the cell of the character under the caret
+    // is `font_size * 0.5` wide here, the same advance used for `caret_x`.
+    let shape = s.caret_shape;
+    let color = shape.paint_color(s.used_caret_color());
 
     out.push(DisplayCommand::PushClipRect {
         rect: Rect::new(content_x, content_y, content_w, content_h),
     });
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(caret_x, content_y, width, content_h),
+        rect: shape.rect(caret_x, content_y, content_h, font_size * 0.5, width),
         color,
     });
     out.push(DisplayCommand::PopClip);

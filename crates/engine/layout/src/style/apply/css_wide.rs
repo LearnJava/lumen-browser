@@ -193,6 +193,17 @@ fn apply_css_wide_keyword_with(
         "caret-color" => {
             style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
         }
+        "caret-shape" => {
+            style.caret_shape = if inh { inherited.caret_shape } else { init.caret_shape };
+        }
+        "caret-animation" => {
+            style.caret_animation = if inh { inherited.caret_animation } else { init.caret_animation };
+        }
+        "caret" => {
+            style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
+            style.caret_shape = if inh { inherited.caret_shape } else { init.caret_shape };
+            style.caret_animation = if inh { inherited.caret_animation } else { init.caret_animation };
+        }
         // `font-size` сюда не доходит: `apply_declaration` отсекает его до
         // keyword-ветки (BUG-731) — размер целиком считает pre-pass
         // `apply_font_size`, который один видит весь каскад, включая

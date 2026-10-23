@@ -331,6 +331,8 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.user_select = parent.user_select;
     style.tab_size = parent.tab_size;
     style.caret_color = parent.caret_color;
+    style.caret_shape = parent.caret_shape;
+    style.caret_animation = parent.caret_animation;
     style.overflow_wrap = parent.overflow_wrap;
     style.word_break = parent.word_break;
     style.line_break = parent.line_break;

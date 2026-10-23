@@ -20,6 +20,8 @@ use crate::style::{
     BackgroundRepeat,
     BackgroundSize,
     BackgroundSpecified,
+    CaretAnimation,
+    CaretShape,
     ColorScheme,
     ComputedStyle,
     CssColor,
@@ -56,6 +58,7 @@ use crate::style::{
     parse_position_axis,
     split_top_level_commas,
 };
+use crate::style::shorthand::apply_caret_shorthand;
 use crate::style::parse::box_sides::{
     apply_border_shorthand,
     apply_border_side_shorthand,
@@ -609,6 +612,19 @@ pub(in crate::style) fn apply_decl_paint(
                 style.caret_color = Some(c);
             }
         }
+        "caret-shape" => {
+            // CSS UI L4 §6.2: auto | bar | block | underscore.
+            if let Some(v) = CaretShape::parse(val) {
+                style.caret_shape = v;
+            }
+        }
+        "caret-animation" => {
+            // CSS UI L4 §6.2: auto | manual.
+            if let Some(v) = CaretAnimation::parse(val) {
+                style.caret_animation = v;
+            }
+        }
+        "caret" => apply_caret_shorthand(style, val, is_quirks),
         "mask" => {
             // CSS Masking L1 §4.8 shorthand: comma-separated list of layers.
             // Each layer: <mask-reference> || <position> [/ <size>]? ||
