@@ -4058,6 +4058,10 @@ CSSStyleDeclaration.prototype.item = function item(index) {
     var keys = Object.keys(_lumen_style_get_parsed(this)), i = index >>> 0;
     return i < keys.length ? keys[i] : '';
 };
+// WebIDL: an interface with an indexed getter and `length` is iterable
+// (`[...el.style]`); without an own member the style proxy answered any
+// unknown name — `Symbol.iterator` included — with a property value string.
+CSSStyleDeclaration.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
 Object.defineProperty(CSSStyleDeclaration.prototype, Symbol.toStringTag,
     { value: 'CSSStyleDeclaration', configurable: true });
 globalThis.CSSStyleDeclaration = CSSStyleDeclaration;
