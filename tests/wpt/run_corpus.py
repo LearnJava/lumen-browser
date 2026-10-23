@@ -210,7 +210,7 @@ def id_selected(test_id: str, prefixes: list, exclude_prefixes: list) -> bool:
 
 
 def plan_shards(manifest: dict, categories: list, prefixes: list = None,
-                exclude_prefixes: list = None) -> list:
+                exclude_prefixes: list = None, heavy: dict = None) -> list:
     """Split the selected categories into runnable shards.
 
     `prefixes` / `exclude_prefixes` (WPT-RUN-14) narrow the plan to a part of a
@@ -245,6 +245,11 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
     ceilings of `auto_ids`/`long_ids` instead, which is both tighter (a
     manual-heavy directory stops carrying phantom slack) and safer (a
     long-heavy one stops being under-budgeted); see WPT-RUN-5 slice 15.
+
+    `heavy` (WPT-RUN-18, `load_heavy_tests`): ids that are known to take one
+    browser to several GB. They stay in their category — and in the scored
+    denominator — but get their own shard `"<category> (heavy)"` (explicit id
+    list, `plan_units` runs it last and alone, on `HEAVY_PROCESSES` browsers).
     """
     by_category = {}
     automatable = set()
@@ -274,6 +279,16 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
                 shards.append(shard)
             else:
                 dropped += 1
+        if heavy:
+            # The category's known memory eaters leave their natural shards
+            # (`main` writes them into the exclude file) and ride in one extra
+            # shard per category instead — still planned, still scored.
+            lane = sorted(i for i in expand_heavy(heavy, ids) if i in automatable
+                          and id_selected(i, prefixes or [], exclude_prefixes or []))
+            if lane:
+                shard = _shard(f"{category}{HEAVY_SUFFIX}", None, lane, automatable, long_tests)
+                shard["test_ids"] = lane
+                shards.append(shard)
     if dropped:
         print(f"{dropped} shards hold only manual/visual tests — not planned "
               f"(wptrunner runs neither; they are not in the denominator)", file=sys.stderr)
@@ -636,7 +651,13 @@ def shard_targets(shard: dict) -> list:
     members = shard.get("members") or [shard]
     targets = []
     for member in members:
-        targets.extend(member["test_ids"] if member.get("test_ids") else [member["prefix"]])
+        if is_heavy(member):
+            # A path without a query selects every variant of the file, and a
+            # heavy shard holds whole files — 170 `html5lib_*.html?file=…` ids
+            # would be a 15 KB command line against Windows' 32 767.
+            targets.extend(sorted({test_id.split("?")[0] for test_id in member["test_ids"]}))
+        else:
+            targets.extend(member["test_ids"] if member.get("test_ids") else [member["prefix"]])
     return targets
 
 
@@ -797,6 +818,119 @@ BATCH_SUBDIR = "batches"
 #: same name as `run_smoke.SERVER_CONFIG_ENV`, repeated rather than imported
 #: because importing `run_smoke` pulls in the whole of `wptrunner`.
 SERVER_CONFIG_ENV = "LUMEN_WPT_SERVER_CONFIG"
+
+
+# --- WPT-RUN-18: one memory budget for the whole run --------------------------
+#
+# WPT-RUN-16 started 3 lanes x 14 browsers on a 32 GB box and spent ~1.5 h in
+# swap; the shards caught there booked false TIMEOUTs (`editing`,
+# `WebCryptoAPI`, `webaudio`). `--min-free-gb` looked at memory only when a lane
+# *started* a shard, and `browser_rss_cap` at one browser at a time. Three
+# remedies, none of which removes a test from the denominator:
+#
+# * the watchdog also kills the biggest browser while free memory is short
+#   (`browser_rss_cap.BrowserRssCap(min_free_gb=...)`);
+# * `--processes auto` sizes a shard from the memory that is free, not from a
+#   constant picked for an idle machine;
+# * the tests known to take a browser to several GB run last, alone, on
+#   `HEAVY_PROCESSES` browsers (`tests/wpt/heavy_tests.txt`).
+
+#: Known memory eaters: `<test file>  <reason>` per line.
+HEAVY_TESTS_PATH = os.path.join(TESTS_ROOT, "heavy_tests.txt")
+#: Suffix of the per-category shard that carries a category's heavy tests.
+HEAVY_SUFFIX = " (heavy)"
+#: Browsers the heavy lane runs: enough to overlap their timeouts, few enough
+#: that two 5 GB runaways stay a 10 GB problem.
+HEAVY_PROCESSES = 2
+#: `--processes auto`: what one browser is assumed to cost, GB. Healthy ones hold
+#: 0.6-1.0 GB (`browser_rss_cap.DEFAULT_CAP_GB`), the heavy tests are in their own lane.
+AUTO_BROWSER_GB = 1.0
+#: `--processes auto` never goes below this: one browser per shard idles wptserve.
+AUTO_MIN_PROCESSES = 2
+
+
+def load_heavy_tests(path: str = HEAVY_TESTS_PATH) -> dict:
+    """`{test file: reason}` from the heavy-test list.
+
+    One entry per line, `<test file path>` then whitespace then the reason;
+    blank lines and `#` comments are skipped. A missing reason is an error —
+    an unexplained exclusion from the general queue is how a list rots — and so
+    is a `?variant`: the entry is a file, and every variant of it is heavy.
+    """
+    heavy = {}
+    if not os.path.isfile(path):
+        return heavy
+    with open(path, encoding="utf-8") as fh:
+        for number, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                raise ValueError(f"{path}:{number}: '{parts[0]}' has no reason")
+            if "?" in parts[0] or not parts[0].startswith("/"):
+                raise ValueError(f"{path}:{number}: '{parts[0]}' must be a /path/to/file.html "
+                                 f"(no query; all variants of it are meant)")
+            heavy[parts[0]] = parts[1].strip()
+    return heavy
+
+
+def expand_heavy(heavy: dict, ids) -> set:
+    """The manifest ids that are heavy: a listed file and every `?variant` of it."""
+    return {i for i in ids if i.split("?")[0] in heavy}
+
+
+def is_heavy(unit: dict) -> bool:
+    """True for the heavy lane's shards and for the unit that bundles them."""
+    return bool(unit.get("heavy")) or unit["name"].endswith(HEAVY_SUFFIX)
+
+
+def unit_processes(unit: dict, default: int) -> int:
+    """`--processes` of one unit: the heavy lane never gets more than `HEAVY_PROCESSES`."""
+    return min(default, HEAVY_PROCESSES) if is_heavy(unit) else default
+
+
+def heavy_exclusions(shards: list) -> list:
+    """Test files the regular shards must leave to the heavy lane (the lines of
+    the exclude file; prefix semantics, so a file stands for all its variants)."""
+    return sorted({test_id.split("?")[0] for shard in shards if is_heavy(shard)
+                   for test_id in shard["test_ids"]})
+
+
+def auto_processes(free_gb: float, cpus: int, lanes: int, reserve_gb: float,
+                   browser_gb: float = AUTO_BROWSER_GB) -> int:
+    """`--processes auto`: browsers per lane such that all lanes together fit in
+    the memory that is free, minus the `reserve_gb` the run promises to leave
+    (`--min-free-gb`), and not more than the machine has CPU threads."""
+    fits = int((free_gb - reserve_gb) // (max(browser_gb, 0.1) * max(lanes, 1)))
+    return max(AUTO_MIN_PROCESSES, min(cpus, fits))
+
+
+def resolve_processes(value: str, lanes: int, reserve_gb: float):
+    """`(processes, note)` for a `--processes` argument: an integer as given, or
+    `auto` worked out from free memory and CPU count (`note` says how)."""
+    if value != "auto":
+        return int(value), None
+    free = available_memory_gb()
+    cpus = os.cpu_count() or 4
+    if free is None:
+        return 7, "psutil is not installed: --processes auto falls back to 7"
+    count = auto_processes(free, cpus, lanes, reserve_gb)
+    return count, (f"--processes auto: {free:.1f} GB free - {reserve_gb:g} GB reserve, "
+                   f"{lanes} lane(s), {cpus} CPUs, {AUTO_BROWSER_GB:g} GB per browser "
+                   f"-> {count} per lane")
+
+
+def processes_arg(text: str) -> str:
+    """argparse type of `--processes`: `auto` or a positive integer."""
+    if text == "auto":
+        return text
+    try:
+        if int(text) > 0:
+            return text
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(f"'{text}': expected a positive integer or 'auto'")
 
 
 def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
