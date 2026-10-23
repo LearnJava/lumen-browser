@@ -29,6 +29,16 @@ impl Lumen {
         caret_width_css(&platform::os_params::current(), dpi, dpi)
     }
 
+    /// CSS UI L4 §6.2 `caret-animation: manual` on the focused page field: the
+    /// UA does not blink its caret (the author animates `caret-color`).
+    fn focused_caret_manual(&self) -> bool {
+        use lumen_layout::CaretAnimation;
+        self.focused_node
+            .zip(self.layout_box.as_ref())
+            .and_then(|(nid, lb)| crate::forms::find_layout_box(lb, nid))
+            .is_some_and(|b| b.style.caret_animation == CaretAnimation::Manual)
+    }
+
     /// Whether some text caret exists to be painted: the window has focus and
     /// a page or frame field, or the address bar, is being edited.
     pub(crate) fn caret_present(&self) -> bool {
@@ -75,8 +85,9 @@ impl Lumen {
         let now = Instant::now();
         let sig = self.caret_signature();
         self.caret_blink.observe(sig, now);
-        let visible =
-            self.deterministic.enabled || self.caret_blink.visible(now, &platform::os_params::current());
+        let visible = self.deterministic.enabled
+            || self.focused_caret_manual()
+            || self.caret_blink.visible(now, &platform::os_params::current());
         self.caret_blink.note_painted(visible);
         visible && self.window_focused
     }
@@ -85,7 +96,7 @@ impl Lumen {
     /// last frame and returns the next instant the loop must wake at (`None`
     /// — nothing blinks: no caret, window in the background, solid caret).
     pub(crate) fn caret_next_wakeup(&mut self) -> Option<Instant> {
-        if self.deterministic.enabled || !self.caret_present() {
+        if self.deterministic.enabled || !self.caret_present() || self.focused_caret_manual() {
             return None;
         }
         let now = Instant::now();

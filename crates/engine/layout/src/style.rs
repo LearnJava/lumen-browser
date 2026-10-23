@@ -261,6 +261,7 @@ pub use values::rule_anim::{
     GapRuleOverride, PAINTED_GAP_RULE_PROPERTIES, gap_rule_computed_css, gap_rule_endpoint_css,
     transition_token_covers,
 };
+pub use values::caret::{CaretAnimation, CaretShape};
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,

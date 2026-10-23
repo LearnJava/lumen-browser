@@ -2356,6 +2356,9 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         ColorScheme::OnlyLight => "only light",
         ColorScheme::OnlyDark => "only dark",
     }.into());
+    // CSS UI L4 §6.2 — caret-shape / caret-animation.
+    m.insert("caret-shape".into(), style.caret_shape.to_css().into());
+    m.insert("caret-animation".into(), style.caret_animation.to_css().into());
     m.insert("forced-color-adjust".into(), match style.forced_color_adjust {
         ForcedColorAdjust::Auto => "auto",
         ForcedColorAdjust::None => "none",

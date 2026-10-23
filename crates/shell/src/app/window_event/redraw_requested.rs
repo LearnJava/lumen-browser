@@ -1310,13 +1310,15 @@ impl Lumen {
                 use lumen_layout::TextMeasurer;
                 s.chars().map(|c| m.char_width(c, fs)).sum()
             };
-            let rect = lumen_core::geom::Rect {
-                width: page_caret_w,
-                ..forms::textarea_caret_rect(field_lb, &value, cursor, &measure)
-            };
+            // CSS UI L4 §6.2 `caret-shape`: the cell is the character under the
+            // caret (a space past the end of a line).
+            let base = forms::textarea_caret_rect(field_lb, &value, cursor, &measure);
+            let cell = value.chars().nth(cursor).filter(|c| *c != '\n').unwrap_or(' ');
+            let shape = field_lb.style.caret_shape;
+            let rect = shape.rect(base.x, base.y, base.height, measure(&cell.to_string()), page_caret_w);
             // CSS UI L4 §6.3 `caret-color: auto` follows the text color —
             // same resolution `emit_input_caret` applies for `<input>`.
-            let color = field_lb.style.used_caret_color();
+            let color = shape.paint_color(field_lb.style.used_caret_color());
             let mut caret_cmd = vec![
                 lumen_paint::DisplayCommand::PushClipRect { rect: field_lb.rect },
                 lumen_paint::DisplayCommand::FillRect { rect, color },

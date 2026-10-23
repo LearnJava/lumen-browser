@@ -232,6 +232,8 @@ impl ComputedStyle {
             // CSS Text typography defaults.
             tab_size: 64.0,  // 8 spaces × 8px-space-width default.
             caret_color: None,  // `auto`.
+            caret_shape: CaretShape::Auto,
+            caret_animation: CaretAnimation::Auto,
             overflow_wrap: OverflowWrap::Normal,
             word_break: WordBreak::Normal,
             line_break: LineBreak::Auto,
@@ -665,6 +667,8 @@ impl ComputedStyle {
             // CSS Text typography — все inherited.
             tab_size: inherited.tab_size,
             caret_color: inherited.caret_color,
+            caret_shape: inherited.caret_shape,
+            caret_animation: inherited.caret_animation,
             overflow_wrap: inherited.overflow_wrap,
             word_break: inherited.word_break,
             line_break: inherited.line_break,

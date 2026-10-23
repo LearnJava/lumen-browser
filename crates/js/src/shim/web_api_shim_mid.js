@@ -2904,6 +2904,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
     'color-interpolation': ['auto', 'srgb', 'linearrgb'],
+    // CSS UI L4 §6.2 — `caret-shape` / `caret-animation` (inherited keyword longhands).
+    'caret-shape': ['auto', 'bar', 'block', 'underscore'],
+    'caret-animation': ['auto', 'manual'],
     // CSS Rhythmic Sizing L1 §3 (BUG-517) — `block-step-size` is a
     // `none | <length [0,∞]>` grammar, not a flat keyword list, so it gets
     // its own canon function (`_lumen_css_canonical_block_step_size`,

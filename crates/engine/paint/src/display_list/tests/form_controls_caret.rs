@@ -106,3 +106,39 @@ fn caret_width_override_sets_bar_width() {
         .any(|c| matches!(c, DisplayCommand::FillRect { rect, .. } if (rect.width - 3.5).abs() < 0.001));
     assert!(wide, "caret_width = 3.5 must emit a 3.5-wide FillRect");
 }
+
+/// CSS UI L4 §6.2 `caret-shape`: the shape decides the caret rectangle.
+fn caret_shape_fill(shape: &str) -> Rect {
+    let html = format!(
+        r#"<input type="text" value="abc" style="font-size:16px; caret-shape:{shape}; caret-color:lime">"#
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let tree = lumen_layout::layout(&doc, &lumen_css_parser::parse(""), Size::new(800.0, 600.0));
+    let node = find_input_node(&tree).expect("input box must exist");
+    let stacking_tree = StackingTree::build(&tree);
+    let order = PaintOrder::from_tree(&stacking_tree);
+    let mut overrides = HashMap::new();
+    overrides.insert(node, CompositorOverride { caret: Some(1), caret_width: Some(2.0), ..Default::default() });
+    let frame = CompositorAnimFrame { overrides, has_active: false };
+    let dl = build_display_list_ordered_with_anim(&tree, &stacking_tree, &order, Some(&frame));
+    // The caret is the last FillRect: it is emitted after the value text.
+    dl.iter()
+        .rev()
+        .find_map(|c| match c {
+            DisplayCommand::FillRect { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("caret FillRect")
+}
+
+#[test]
+fn caret_shape_bar_block_underscore_rects() {
+    let bar = caret_shape_fill("bar");
+    let block = caret_shape_fill("block");
+    let under = caret_shape_fill("underscore");
+    assert_eq!(bar.width, 2.0);
+    assert_eq!(block.width, 8.0, "block = one character cell (font-size * 0.5)");
+    assert_eq!(block.height, bar.height);
+    assert_eq!((under.width, under.height), (8.0, 2.0));
+    assert!((under.y + under.height - (bar.y + bar.height)).abs() < 0.001, "underscore sits at the cell bottom");
+}
