@@ -113,31 +113,32 @@ impl SupportsCondition {
 
 /// Парсит `@supports`-условие из строки между `@supports` и `{`.
 ///
-/// Грамматика (упрощённая): `<expr> = <term> (("and"|"or") <term>)*`,
-/// `<term> = "not"? <atom>`, `<atom> = "(" <inner> ")" | "selector(" sel ")"`,
-/// `<inner> = <expr> | <prop ":" value>`.
+/// Грамматика CSS Conditional L3 §2 / L4 §2:
+/// `<supports-condition> = not <in-parens> | <in-parens> [and <in-parens>]* |
+/// <in-parens> [or <in-parens>]*`,
+/// `<in-parens> = ( <supports-condition> ) | <supports-feature> | <general-enclosed>`,
+/// `<supports-feature> = ( <property>: <value> [!important]? ) | selector(…) |
+/// font-tech(…) | font-format(…)`.
 ///
-/// Phase 0 ограничения:
-/// - Mixing `and` и `or` на одном уровне не разрешено (per spec), но
-///   парсер lenient — берёт первый встретившийся combinator и применяет
-///   его ко всем term-ам этого уровня. Реалистичные tests этого не
-///   нарушают (`(a) and (b) and (c)` или `(a) or (b)`); смешанные — UB.
+/// - `not`/`and`/`or` — идентификаторы: за ключевым словом обязателен пробел
+///   (`not(`/`and(`/`or(` — функциональные токены, а не операторы), `and` и
+///   `or` на одном уровне не смешиваются, `not` не сочетается с `and`/`or`.
+/// - Скобки, чьё содержимое не разобралось ни как условие, ни как объявление
+///   (`<general-enclosed>`), дают [`SupportsCondition::Unknown`] — ложь, но
+///   условие вокруг остаётся допустимым, поэтому `not (…)` над ними истинно.
+/// - Любой другой синтаксический сбой (хвостовые токены, смесь связок, голый
+///   ident) делает недопустимым всё условие → `Unknown`.
 /// - Нерекурсивный `selector(...)` хранит сырой селектор; реальный
 ///   match — отложенная задача.
 pub fn parse_supports_condition(s: &str) -> SupportsCondition {
-    let s = s.trim();
-    if s.is_empty() {
-        return SupportsCondition::Unknown;
-    }
-    let bytes = s.as_bytes();
+    let b = s.trim().as_bytes();
     let mut pos = 0usize;
-    let result = parse_supports_expr(bytes, &mut pos);
-    skip_ws(bytes, &mut pos);
-    if pos < bytes.len() {
-        // Если что-то осталось — это синтаксическая ошибка; возвращаем
-        // частично разобранное (lenient).
+    let result = parse_condition(b, &mut pos);
+    skip_ws(b, &mut pos);
+    match result {
+        Some(c) if pos >= b.len() => c,
+        _ => SupportsCondition::Unknown,
     }
-    result
 }
 
 /// Парсит значение `override-colors` из `@font-palette-values`.
@@ -164,191 +165,248 @@ pub(crate) fn parse_override_colors(s: &str) -> Vec<(u16, String)> {
     result
 }
 
-pub(crate) fn skip_ws(b: &[u8], p: &mut usize) {
-    while *p < b.len() && b[*p].is_ascii_whitespace() {
-        *p += 1;
-    }
-}
-
-pub(crate) fn match_keyword_ci(b: &[u8], p: &mut usize, kw: &[u8]) -> bool {
-    skip_ws(b, p);
-    if *p + kw.len() > b.len() {
-        return false;
-    }
-    if !b[*p..*p + kw.len()].eq_ignore_ascii_case(kw) {
-        return false;
-    }
-    // Граница: следующий символ — не ident-char.
-    let after = *p + kw.len();
-    if after < b.len() {
-        let c = b[after];
-        if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' {
-            return false;
+/// Пробелы и комментарии `/* … */` между токенами условия.
+fn skip_ws(b: &[u8], p: &mut usize) {
+    loop {
+        while *p < b.len() && b[*p].is_ascii_whitespace() {
+            *p += 1;
         }
-    }
-    *p = after;
-    true
-}
-
-pub(crate) fn parse_supports_expr(b: &[u8], p: &mut usize) -> SupportsCondition {
-    let first = parse_supports_term(b, p);
-    skip_ws(b, p);
-    // Определяем combinator (если есть).
-    let saved = *p;
-    if match_keyword_ci(b, p, b"and") {
-        let mut terms = vec![first];
-        loop {
-            terms.push(parse_supports_term(b, p));
-            skip_ws(b, p);
-            let save = *p;
-            if !match_keyword_ci(b, p, b"and") {
-                *p = save;
-                break;
-            }
-        }
-        return SupportsCondition::And(terms);
-    }
-    *p = saved;
-    if match_keyword_ci(b, p, b"or") {
-        let mut terms = vec![first];
-        loop {
-            terms.push(parse_supports_term(b, p));
-            skip_ws(b, p);
-            let save = *p;
-            if !match_keyword_ci(b, p, b"or") {
-                *p = save;
-                break;
-            }
-        }
-        return SupportsCondition::Or(terms);
-    }
-    first
-}
-
-pub(crate) fn parse_supports_term(b: &[u8], p: &mut usize) -> SupportsCondition {
-    skip_ws(b, p);
-    if match_keyword_ci(b, p, b"not") {
-        let inner = parse_supports_atom(b, p);
-        return SupportsCondition::Not(Box::new(inner));
-    }
-    parse_supports_atom(b, p)
-}
-
-/// Если ввод в позиции `*p` начинается с функции `name` (case-insensitive),
-/// продвинуть `*p` за закрывающую `)` и вернуть содержимое скобок как строку.
-/// Иначе оставить `*p` без изменений и вернуть `None`. Учитывает вложенные
-/// скобки в аргументе (хотя для `font-tech`/`font-format` они не нужны).
-pub(crate) fn match_func_arg(b: &[u8], p: &mut usize, name: &[u8]) -> Option<String> {
-    let n = name.len();
-    if *p + n > b.len() || !b[*p..*p + n].eq_ignore_ascii_case(name) {
-        return None;
-    }
-    let start = *p + n;
-    let mut q = start;
-    let mut depth: i32 = 1;
-    while q < b.len() && depth > 0 {
-        match b[q] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 {
+        if b[*p..].starts_with(b"/*") {
+            *p = comment_end(b, *p);
+        } else {
             break;
         }
-        q += 1;
     }
-    let arg = std::str::from_utf8(&b[start..q]).unwrap_or("").to_string();
-    if q < b.len() && b[q] == b')' {
-        q += 1;
-    }
-    *p = q;
-    Some(arg)
 }
 
-pub(crate) fn parse_supports_atom(b: &[u8], p: &mut usize) -> SupportsCondition {
-    skip_ws(b, p);
-    // `font-tech( <font-tech> )` / `font-format( <font-format> )`
-    // (CSS Conditional L4 §4 / CSS Fonts L4 §4.3). Один ident-аргумент;
-    // у `font-format` допустим legacy-строковый синтаксис (кавычки снимаем).
-    if let Some(arg) = match_func_arg(b, p, b"font-tech(") {
-        return SupportsCondition::FontTech(arg.trim().to_ascii_lowercase());
+/// Индекс сразу за комментарием, начинающимся в `start` (EOF закрывает его).
+fn comment_end(b: &[u8], start: usize) -> usize {
+    b[start + 2..]
+        .windows(2)
+        .position(|w| w == b"*/")
+        .map_or(b.len(), |i| start + 2 + i + 2)
+}
+
+/// Индекс сразу за строкой, открытой кавычкой в `start` (EOF закрывает её).
+fn string_end(b: &[u8], start: usize) -> usize {
+    let quote = b[start];
+    let mut q = start + 1;
+    while q < b.len() {
+        match b[q] {
+            b'\\' => q += 1,
+            c if c == quote => return q + 1,
+            _ => {}
+        }
+        q += 1;
     }
-    if let Some(arg) = match_func_arg(b, p, b"font-format(") {
-        let unquoted = arg.trim().trim_matches(['"', '\'']).trim();
-        return SupportsCondition::FontFormat(unquoted.to_ascii_lowercase());
-    }
-    // `selector( ... )`
-    let saved = *p;
-    if *p + 9 <= b.len() && b[*p..*p + 9].eq_ignore_ascii_case(b"selector(") {
-        *p += 9;
-        let start = *p;
-        let mut depth: i32 = 1;
-        while *p < b.len() && depth > 0 {
-            match b[*p] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            *p += 1;
-        }
-        let sel_str = std::str::from_utf8(&b[start..*p]).unwrap_or("").trim().to_string();
-        if *p < b.len() && b[*p] == b')' {
-            *p += 1;
-        }
-        return SupportsCondition::Selector(sel_str);
-    }
-    *p = saved;
-    if *p < b.len() && b[*p] == b'(' {
-        *p += 1;
-        // Содержимое: может быть `<expr>` (nested condition) или
-        // `<prop>: <value>`. Различаем по наличию `:` на верхнем уровне.
-        let inner_start = *p;
-        let mut depth: i32 = 1;
-        while *p < b.len() && depth > 0 {
-            match b[*p] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            *p += 1;
-        }
-        let inner = std::str::from_utf8(&b[inner_start..*p]).unwrap_or("");
-        if *p < b.len() && b[*p] == b')' {
-            *p += 1;
-        }
-        // Determine: declaration or nested condition. Top-level `:`?
-        let inner_t = inner.trim();
-        let mut colon_pos: Option<usize> = None;
-        let inner_bytes = inner_t.as_bytes();
-        let mut d: i32 = 0;
-        for (i, &c) in inner_bytes.iter().enumerate() {
-            match c {
-                b'(' => d += 1,
-                b')' => d -= 1,
-                b':' if d == 0 => {
-                    colon_pos = Some(i);
-                    break;
+    b.len()
+}
+
+/// Индекс `)`, закрывающей `(` в `open`; строки и комментарии скобок не
+/// считают. EOF закрывает блок (CSS Syntax L3 §5.4.7) → `b.len()`.
+fn block_end(b: &[u8], open: usize) -> usize {
+    let mut depth = 0i32;
+    let mut q = open;
+    while q < b.len() {
+        match b[q] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return q;
                 }
-                _ => {}
             }
-        }
-        if let Some(idx) = colon_pos {
-            let property = inner_t[..idx].trim().to_string();
-            let value = inner_t[idx + 1..].trim().to_string();
-            if property.is_empty() {
-                return SupportsCondition::Unknown;
+            b'"' | b'\'' => {
+                q = string_end(b, q);
+                continue;
             }
-            return SupportsCondition::Decl { property, value };
+            b'/' if b.get(q + 1) == Some(&b'*') => {
+                q = comment_end(b, q);
+                continue;
+            }
+            b'\\' => q += 1,
+            _ => {}
         }
-        return parse_supports_condition(inner_t);
+        q += 1;
     }
-    SupportsCondition::Unknown
+    b.len()
+}
+
+/// Позиции байтов из `targets` на верхнем уровне `b` — вне `()`/`[]`/`{}`,
+/// строк и комментариев.
+fn top_level_positions(b: &[u8], targets: &[u8]) -> Vec<(usize, u8)> {
+    let mut found = Vec::new();
+    let mut depth = 0usize;
+    let mut q = 0usize;
+    while q < b.len() {
+        let c = b[q];
+        match c {
+            b'"' | b'\'' => {
+                q = string_end(b, q);
+                continue;
+            }
+            b'/' if b.get(q + 1) == Some(&b'*') => {
+                q = comment_end(b, q);
+                continue;
+            }
+            b'\\' => q += 1,
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && targets.contains(&c) => found.push((q, c)),
+            _ => {}
+        }
+        q += 1;
+    }
+    found
+}
+
+fn is_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c >= 0x80
+}
+
+/// `not`/`and`/`or` в позиции `*p`: идентификатор, за которым обязателен
+/// пробел или комментарий — `not(`/`and(`/`or(` это функциональные токены.
+fn match_keyword(b: &[u8], p: &mut usize, kw: &[u8]) -> bool {
+    let end = *p + kw.len();
+    if end > b.len() || !b[*p..end].eq_ignore_ascii_case(kw) {
+        return false;
+    }
+    let spaced = b.get(end).is_some_and(u8::is_ascii_whitespace) || b[end..].starts_with(b"/*");
+    if spaced {
+        *p = end;
+    }
+    spaced
+}
+
+/// `<supports-condition>`; `None` — синтаксическая ошибка.
+fn parse_condition(b: &[u8], p: &mut usize) -> Option<SupportsCondition> {
+    skip_ws(b, p);
+    if match_keyword(b, p, b"not") {
+        return Some(SupportsCondition::Not(Box::new(parse_in_parens(b, p)?)));
+    }
+    let mut terms = vec![parse_in_parens(b, p)?];
+    let mut is_and = None;
+    loop {
+        skip_ws(b, p);
+        let this_and = if match_keyword(b, p, b"and") {
+            true
+        } else if match_keyword(b, p, b"or") {
+            false
+        } else {
+            break;
+        };
+        // `and` и `or` на одном уровне не смешиваются (Conditional L3 §2).
+        if *is_and.get_or_insert(this_and) != this_and {
+            return None;
+        }
+        terms.push(parse_in_parens(b, p)?);
+    }
+    Some(match is_and {
+        None => terms.remove(0),
+        Some(true) => SupportsCondition::And(terms),
+        Some(false) => SupportsCondition::Or(terms),
+    })
+}
+
+/// `<supports-in-parens>`: `( … )`, функциональный тест или `<general-enclosed>`.
+fn parse_in_parens(b: &[u8], p: &mut usize) -> Option<SupportsCondition> {
+    skip_ws(b, p);
+    if b.get(*p) == Some(&b'(') {
+        let end = block_end(b, *p);
+        let inner = &b[*p + 1..end];
+        *p = (end + 1).min(b.len());
+        return Some(parse_paren_content(inner));
+    }
+    // Функция: `selector(…)`, `font-tech(…)`, `font-format(…)` или другая
+    // (`<general-enclosed>` — ложь). Голый идентификатор — ошибка.
+    let name_end = (*p..b.len()).find(|&i| !is_ident_byte(b[i])).unwrap_or(b.len());
+    if name_end == *p || b.get(name_end) != Some(&b'(') {
+        return None;
+    }
+    let name = b[*p..name_end].to_ascii_lowercase();
+    let end = block_end(b, name_end);
+    let arg = std::str::from_utf8(&b[name_end + 1..end]).ok()?.trim();
+    *p = (end + 1).min(b.len());
+    Some(match name.as_slice() {
+        // `font-tech( <font-tech> )` / `font-format( <font-format> )`
+        // (CSS Conditional L4 §4 / CSS Fonts L4 §4.3): один ident-аргумент;
+        // у `font-format` допустим legacy-строковый синтаксис (кавычки снимаем).
+        b"selector" => SupportsCondition::Selector(arg.to_string()),
+        b"font-tech" => SupportsCondition::FontTech(arg.to_ascii_lowercase()),
+        b"font-format" => {
+            let unquoted = arg.trim_matches(['"', '\'']).trim();
+            SupportsCondition::FontFormat(unquoted.to_ascii_lowercase())
+        }
+        _ => SupportsCondition::Unknown,
+    })
+}
+
+/// Содержимое `( … )`: объявление `prop: value`, если на верхнем уровне есть
+/// `:`, иначе вложенное условие. Не разобралось — `<general-enclosed>` (ложь).
+fn parse_paren_content(inner: &[u8]) -> SupportsCondition {
+    if let Some(&(colon, _)) = top_level_positions(inner, b":").first() {
+        let (Ok(prop), Ok(value)) =
+            (std::str::from_utf8(&inner[..colon]), std::str::from_utf8(&inner[colon + 1..]))
+        else {
+            return SupportsCondition::Unknown;
+        };
+        return parse_declaration(prop.trim(), value);
+    }
+    let mut q = 0usize;
+    let cond = parse_condition(inner, &mut q);
+    skip_ws(inner, &mut q);
+    match cond {
+        Some(c) if q >= inner.len() => c,
+        _ => SupportsCondition::Unknown,
+    }
+}
+
+/// `<property>: <value> [!important]?` внутри скобок. Значение по существу не
+/// проверяется (BUG-1475), но структура декларации — да: у обычного свойства
+/// значение не пусто и без `:`, `;` на верхнем уровне; `!important` — не более
+/// одного раза, в конце и ровно этим словом.
+fn parse_declaration(property: &str, value: &str) -> SupportsCondition {
+    let pb = property.as_bytes();
+    let valid_name = !pb.is_empty()
+        && pb.iter().all(|&c| is_ident_byte(c))
+        && !pb[0].is_ascii_digit()
+        && !(pb[0] == b'-' && pb.get(1).is_some_and(u8::is_ascii_digit));
+    if !valid_name {
+        return SupportsCondition::Unknown;
+    }
+    let custom = property.starts_with("--");
+    let vb = value.as_bytes();
+    let marks = top_level_positions(vb, b":;!");
+    if marks.iter().any(|&(_, c)| c == b';' || (c == b':' && !custom)) {
+        return SupportsCondition::Unknown;
+    }
+    let mut bangs = marks.iter().filter(|&&(_, c)| c == b'!').map(|&(i, _)| i);
+    let mut body = value;
+    if let Some(bang) = bangs.next() {
+        if bangs.next().is_some() || !is_important_tail(&vb[bang + 1..]) {
+            return SupportsCondition::Unknown;
+        }
+        body = &value[..bang];
+    }
+    let body = body.trim();
+    if body.is_empty() && !custom {
+        return SupportsCondition::Unknown;
+    }
+    SupportsCondition::Decl { property: property.to_string(), value: body.to_string() }
+}
+
+/// Хвост после `!`: ровно слово `important` (регистр не важен), пробелы и
+/// комментарии вокруг допустимы.
+fn is_important_tail(tail: &[u8]) -> bool {
+    let mut q = 0usize;
+    skip_ws(tail, &mut q);
+    let start = q;
+    while q < tail.len() && is_ident_byte(tail[q]) {
+        q += 1;
+    }
+    let word = &tail[start..q];
+    skip_ws(tail, &mut q);
+    q >= tail.len() && word.eq_ignore_ascii_case(b"important")
 }
 
 impl<'a> Parser<'a> {
@@ -364,7 +422,10 @@ impl<'a> Parser<'a> {
             if c == '(' {
                 depth += 1;
             } else if c == ')' {
-                depth -= 1;
+                // Лишняя `)` — обычный токен прелюдии (CSS Syntax L3 §5.4.2), а не
+                // отрицательная глубина: иначе `{` и `;` за ней уже не завершают
+                // прелюдию и правило съедает следующее.
+                depth = (depth - 1).max(0);
             } else if c == '{' && depth == 0 {
                 break;
             } else if c == ';' && depth == 0 {

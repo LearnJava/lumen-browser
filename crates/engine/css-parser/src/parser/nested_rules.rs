@@ -375,7 +375,8 @@ impl Parser<'_> {
                 if c == '(' {
                     depth += 1;
                 } else if c == ')' {
-                    depth -= 1;
+                    // Лишняя `)` — обычный токен прелюдии (BUG-1493), не минус-глубина.
+                    depth = (depth - 1).max(0);
                 } else if c == '{' && depth == 0 {
                     break;
                 } else if c == ';' && depth == 0 {

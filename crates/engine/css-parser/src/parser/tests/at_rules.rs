@@ -968,6 +968,73 @@ use super::*;
         assert!(!cond.evaluate(&["color"]));
     }
 
+    /// BUG-1493: грамматика условия — что по Conditional 3 §2 недопустимо или ложно.
+    #[test]
+    fn at_supports_grammar_rejects_invalid_conditions() {
+        let props = ["margin", "padding", "color", "display", "width", "background-color"];
+        for bad in [
+            "(margin: )",
+            "(margin:0;)",
+            "(margin:0 or padding:0)",
+            "(margin:0 and padding:0)",
+            "not(foo: baz)",
+            "not(color: red)",
+            "(color:green) or(color:red)",
+            "(color:green) and(color:red)",
+            "((margin:0) and (display:inline) or (width:1em))",
+            "( ( background-color: red ) or( background-color: green ) )",
+            "(color:red !bogus)",
+            "(color:red !important !important)",
+            "(color:red !important x)",
+            "(margin: 2px) )",
+            "(width: 0))",
+            "not (color:red) and (margin:0)",
+            "not not (color:red)",
+            "color: red",
+            "(color:red) foo",
+        ] {
+            assert!(!parse_supports_condition(bad).evaluate(&props), "{bad} must be false");
+        }
+    }
+
+    #[test]
+    fn at_supports_grammar_accepts_valid_conditions() {
+        let props = ["margin", "padding", "color", "display", "width", "background-color"];
+        for good in [
+            "(margin:0)",
+            "(margin:0 !important)",
+            "(margin:0 ! IMPORTANT)",
+            "(color:red) or (foo:bar)",
+            "(( background-color: red ) or ( background-color: green ))",
+            "not (color:red !important !important)",
+            "not (foo: baz)",
+            "not (margin:0;)",
+            "(color:red)and (margin:0)",
+            "(color:red) and /* c */ (margin:0) and (padding:0)",
+            "(--x:)",
+            "(--x: a:b !important)",
+            "(margin: 0]) or (color: red)",
+        ] {
+            assert!(parse_supports_condition(good).evaluate(&props), "{good} must be true");
+        }
+    }
+
+    /// BUG-1493: лишняя `)` в прелюдии не съедает следующее правило.
+    #[test]
+    fn at_supports_stray_close_paren_recovers() {
+        for prelude in ["(margin: 2px) )", "(width: 0))", "(margin: 0)) ;"] {
+            let css = format!("@supports {prelude} {{ a {{ color: red }} }} @supports (margin:0) {{ div {{ color: green }} }}");
+            let s = parse(&css);
+            let applied: Vec<_> = s
+                .supports_rules
+                .iter()
+                .filter(|r| r.condition.evaluate(&["margin"]))
+                .collect();
+            assert_eq!(applied.len(), 1, "{prelude}: second @supports must survive");
+            assert!(matches!(applied[0].condition, SupportsCondition::Decl { .. }));
+        }
+    }
+
     // ── CSS Animations L1 §3 — @keyframes ──
 
     #[test]
