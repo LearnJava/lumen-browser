@@ -3,6 +3,7 @@
 
 pub mod background;
 pub mod background_cssom;
+pub mod caret;
 pub mod box_model;
 pub mod color;
 pub mod dynamic_range_limit;

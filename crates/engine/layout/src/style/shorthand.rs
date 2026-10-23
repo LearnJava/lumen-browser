@@ -11,7 +11,7 @@ use lumen_core::geom::Size;
 use crate::style::parse::color::parse_css_color_legacy;
 use crate::style::{
     parse_auto_repeat, parse_grid_template_areas, parse_length, parse_subgrid_name_fill, parse_track_line_names,
-    ComputedStyle, CssColor,
+    CaretAnimation, CaretShape, ComputedStyle, CssColor,
     FlexBasis, FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridRepeat, GridTrackSize, Length, NameFill,
     TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextWrapMode, TextWrapStyle, WhiteSpace,
@@ -1004,4 +1004,54 @@ fn apply_grid_template_then_reset_auto(
     style.grid_auto_rows = Vec::new();
     style.grid_auto_columns = Vec::new();
     true
+}
+
+/// CSS UI L4 §6.2 — `caret: [ <'caret-color'> || <'caret-animation'> ||
+/// <'caret-shape'> ]`. Каждый компонент не более одного раза, любой порядок;
+/// пропущенные сбрасываются в initial (CSS Cascade L4 §3.1). Невалидное
+/// значение отбрасывается целиком — стиль остаётся прежним.
+pub(in crate::style) fn apply_caret_shorthand(style: &mut ComputedStyle, val: &str, is_quirks: bool) {
+    let mut color: Option<Option<CssColor>> = None;
+    let mut animation: Option<CaretAnimation> = None;
+    let mut shape: Option<CaretShape> = None;
+    let tokens = split_top_level_ws(val);
+    if tokens.is_empty() {
+        return;
+    }
+    for tok in tokens {
+        // `auto` общий для всех трёх свойств: он занимает ещё свободный слот
+        // в порядке color → animation → shape (грамматика однозначна только
+        // когда `auto` один на слот; два `auto` = color + animation).
+        if tok.eq_ignore_ascii_case("auto") {
+            if color.is_none() {
+                color = Some(None);
+            } else if animation.is_none() {
+                animation = Some(CaretAnimation::Auto);
+            } else if shape.is_none() {
+                shape = Some(CaretShape::Auto);
+            } else {
+                return;
+            }
+        } else if let Some(a) = CaretAnimation::parse(tok) {
+            if animation.is_some() {
+                return;
+            }
+            animation = Some(a);
+        } else if let Some(s) = CaretShape::parse(tok) {
+            if shape.is_some() {
+                return;
+            }
+            shape = Some(s);
+        } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+            if color.is_some() {
+                return;
+            }
+            color = Some(Some(c));
+        } else {
+            return;
+        }
+    }
+    style.caret_color = color.unwrap_or(None);
+    style.caret_animation = animation.unwrap_or_default();
+    style.caret_shape = shape.unwrap_or_default();
 }

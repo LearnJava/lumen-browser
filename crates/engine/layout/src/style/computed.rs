@@ -34,7 +34,7 @@ use lumen_core::ColorSpace;
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
-    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, TableLayout,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
@@ -756,6 +756,11 @@ pub struct ComputedStyle {
     /// `currentcolor` / `color()` / системные цвета сохраняются как есть и
     /// разрешаются в `used_caret_color` (системные — ещё и постпассом).
     pub caret_color: Option<CssColor>,
+    /// CSS UI L4 §6.2 — `caret-shape: auto | bar | block | underscore`. Inherited.
+    pub caret_shape: CaretShape,
+    /// CSS UI L4 §6.2 — `caret-animation: auto | manual`. Inherited. `manual` —
+    /// каретка не мигает (анимацию ведёт автор).
+    pub caret_animation: CaretAnimation,
     /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
     /// Inherited. Default `Normal`.
     pub overflow_wrap: OverflowWrap,
