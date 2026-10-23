@@ -152,7 +152,6 @@ pub(in crate::style) fn apply_all_shorthand(
     }
     next.direction = style.direction;
     next.unicode_bidi = style.unicode_bidi;
-    next.bidi_override = style.bidi_override;
     next.custom_props = std::mem::take(&mut style.custom_props);
     next.font_size = style.font_size;
     next.effective_zoom = style.effective_zoom;

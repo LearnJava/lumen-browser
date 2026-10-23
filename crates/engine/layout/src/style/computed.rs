@@ -106,12 +106,6 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
     /// Initial: `Normal`. См. [`UnicodeBidi`].
     pub unicode_bidi: UnicodeBidi,
-    /// CSS Writing Modes L4 §2.4.2 — `bidi-override` действует на весь текст внутри
-    /// бокса, включая вложенные inline. Наследуется: `Some((bidi, dir))` — ближайший
-    /// предок-или-сам с `bidi-override`/`isolate-override` и его `direction`;
-    /// вложенный `embed`/`isolate`/`plaintext` сбрасывает в `None`. Раскрывается в
-    /// [`crate::bidi`] для сегментов с `unicode-bidi: normal`.
-    pub bidi_override: Option<(UnicodeBidi, Direction)>,
     pub color: Color,
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.

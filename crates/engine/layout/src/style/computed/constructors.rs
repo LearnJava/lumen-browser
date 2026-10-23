@@ -15,7 +15,6 @@ impl ComputedStyle {
             direction: Direction::Ltr,
             block_container_direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
-            bidi_override: None,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
             color_css: None,
@@ -428,8 +427,6 @@ impl ComputedStyle {
             block_container_direction: inherited.block_container_direction,
             // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
             unicode_bidi: UnicodeBidi::Normal,
-            // Но `bidi-override` предка продолжает действовать на потомков.
-            bidi_override: inherited.bidi_override,
             font_size: inherited.font_size,
             // Seeded from the parent so the value compounds; the element's own
             // `zoom` declaration is folded in by the pre-pass below.

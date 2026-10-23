@@ -1586,15 +1586,6 @@ pub(crate) fn compute_style_shareable(
         };
     }
 
-    // CSS Writing Modes L4 §2.4.2 — контекст `bidi-override` для потомков.
-    style.bidi_override = match style.unicode_bidi {
-        crate::style::UnicodeBidi::BidiOverride | crate::style::UnicodeBidi::IsolateOverride => {
-            Some((style.unicode_bidi, style.direction))
-        }
-        crate::style::UnicodeBidi::Normal => style.bidi_override,
-        _ => None,
-    };
-
     // CSS Logical L1 §3.2 — `float`/`clear: inline-start|inline-end` раскрываются относительно
     // `direction` containing block (ближайшего блочного контейнера-предка, не самого элемента).
     {

@@ -424,6 +424,37 @@ pub struct InlineSegment {
     /// a segment wherever the level changes, so the value is uniform across
     /// `text`. `0` until the bidi pass runs (and for paragraphs it skips).
     pub bidi_level: u8,
+    /// Enclosing inline elements whose `unicode-bidi` is not `normal`, outermost
+    /// first (CSS Writing Modes L4 §2.2). Stamped by `collect_inline_segments`;
+    /// [`crate::bidi::resolve`] turns each into one pair of bidi control characters
+    /// around the whole element, however many segments it was split into. The
+    /// block container's own `unicode-bidi` is not listed — `resolve` takes it from
+    /// the block's style.
+    pub bidi_scopes: Vec<BidiScope>,
+    /// Innermost isolating scope ([`BidiScope::is_isolating`]) the text sits in,
+    /// assigned by [`crate::bidi::resolve`]; `None` outside any inline isolate.
+    /// Rule L2 never reverses a run across an isolate's boundary.
+    pub bidi_isolate: Option<NodeId>,
+}
+
+/// One inline element's `unicode-bidi` / `direction` pair (see
+/// [`InlineSegment::bidi_scopes`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BidiScope {
+    /// The element the scope belongs to — two sibling elements with equal values
+    /// are still two scopes.
+    pub node: NodeId,
+    pub bidi: crate::style::UnicodeBidi,
+    pub dir: crate::style::Direction,
+}
+
+impl BidiScope {
+    /// `isolate`, `isolate-override` and `plaintext` isolate their content from
+    /// the surrounding text (an LRI/RLI/FSI … PDI pair).
+    pub fn is_isolating(&self) -> bool {
+        use crate::style::UnicodeBidi::{Isolate, IsolateOverride, Plaintext};
+        matches!(self.bidi, Isolate | IsolateOverride | Plaintext)
+    }
 }
 
 /// Marks an inline segment as the target of a CSS structural pseudo-element.
@@ -518,6 +549,9 @@ pub struct InlineFrag {
     /// paint feeds it to [`crate::bidi::visual_text`], which is what turns an
     /// odd level into right-to-left glyph order.
     pub bidi_level: u8,
+    /// Innermost inline isolate the fragment sits in — copied from
+    /// [`InlineSegment::bidi_isolate`]. Rule L2 does not reverse across it.
+    pub bidi_isolate: Option<NodeId>,
     /// Later DOM text nodes whose words `wrap_inline_run` merged into this
     /// fragment, in text order (GAP-HLHITTEST). Paint wants one `DrawText`
     /// per same-style run, geometry wants one owner per character:
@@ -552,6 +586,7 @@ impl PartialEq for InlineFrag {
             source_node,
             source_char_offset,
             bidi_level,
+            bidi_isolate,
             merged_sources,
             forced_end,
         } = self;
@@ -569,6 +604,7 @@ impl PartialEq for InlineFrag {
             && source_node == &other.source_node
             && source_char_offset == &other.source_char_offset
             && bidi_level == &other.bidi_level
+            && bidi_isolate == &other.bidi_isolate
             && merged_sources == &other.merged_sources
             && forced_end == &other.forced_end
     }

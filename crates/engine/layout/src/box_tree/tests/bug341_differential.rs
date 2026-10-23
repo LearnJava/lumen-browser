@@ -99,6 +99,8 @@ fn apply_font_size_adjust_rewrites_box_and_segments() {
         source_node: lumen_dom::NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
     let mut inline_style = ComputedStyle::root();
     inline_style.font_size = 100.0;

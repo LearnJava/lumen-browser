@@ -406,6 +406,7 @@ mod tests {
             source_node,
             source_char_offset,
             bidi_level: 0,
+            bidi_isolate: None,
             merged_sources: Vec::new(),
             forced_end: false,
         }

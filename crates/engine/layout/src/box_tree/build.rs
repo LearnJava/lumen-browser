@@ -320,6 +320,8 @@ fn build_base_select_box(
             source_node: id,
             source_char_offset: 0,
             bidi_level: 0,
+            bidi_scopes: Vec::new(),
+            bidi_isolate: None,
         };
         trigger_children.push(anon_inline_run(id, style, vec![seg], BoxRole::AnonymousInlineRun));
     }
