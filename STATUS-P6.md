@@ -4,3 +4,6 @@ BUGS.md:182
 BUGS.md:183
 BUGS.md:184
 BUGS.md:185
+BUGS.md:353
+BUGS.md:354
+BUGS.md:355
