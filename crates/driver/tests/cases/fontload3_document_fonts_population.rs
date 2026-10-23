@@ -130,3 +130,33 @@ fn css_connected_face_defaults_extended_descriptors_when_absent() {
         .expect("eval defaults");
     assert_eq!(ok, "true");
 }
+
+// BUG-1495: `@font-face` внутри `@media`/`@supports` попадает в `document.fonts`,
+// только когда условие истинно.
+#[test]
+fn font_face_inside_true_media_and_supports_is_registered() {
+    let mut session = InProcessSession::new();
+    session
+        .navigate_html(
+            r#"<html><head><style>
+@media all { @font-face { font-family: "M"; src: local("Arial"); } }
+@supports (color: red) { @font-face { font-family: "S"; src: local("Arial"); } }
+</style></head><body></body></html>"#,
+        )
+        .expect("navigate_html");
+    assert_eq!(session.eval("document.fonts.size").expect("eval size"), "2");
+}
+
+#[test]
+fn font_face_inside_false_media_and_supports_is_not_registered() {
+    let mut session = InProcessSession::new();
+    session
+        .navigate_html(
+            r#"<html><head><style>
+@media print { @font-face { font-family: "M"; src: local("Arial"); } }
+@supports (not (color: red)) { @font-face { font-family: "S"; src: local("Arial"); } }
+</style></head><body></body></html>"#,
+        )
+        .expect("navigate_html");
+    assert_eq!(session.eval("document.fonts.size").expect("eval size"), "0");
+}

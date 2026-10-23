@@ -490,8 +490,8 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 Some('@') => {
-                    // Nested @-правила внутри @supports пока skip.
-                    self.skip_at_rule();
+                    // Из nested @-правил в @supports поддержан только `@font-face`.
+                    self.parse_conditional_body_at_rule(&LayerCondition::Supports(condition.clone()));
                 }
                 Some(_) => {
                     let before = self.pos;
