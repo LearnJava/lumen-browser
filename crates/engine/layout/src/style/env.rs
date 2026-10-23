@@ -10,6 +10,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lumen_core::geom::Size;
 use lumen_css_parser::MediaContext;
@@ -31,13 +32,36 @@ thread_local! {
     /// Current phase 0 risk: low (container queries Phase 2+, not in simple test pages).
     // SPLIT-ST9: видимость расширена до `crate::style`, потому что `cq*`-единицы
     // резолвит `Length::resolve`, уехавшая в `style::values::length`.
-    pub(in crate::style) static CONTAINER_CQ: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+    pub(in crate::style) static CONTAINER_CQ: Cell<Option<(Option<f32>, Option<f32>)>> = const { Cell::new(None) };
 }
 
 /// Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass.
 /// `height` is `None` when the container is `inline-size` type (block axis not queryable).
 pub fn set_cq_context(width: f32, height: Option<f32>) {
-    CONTAINER_CQ.with(|c| c.set(Some((width, height.unwrap_or(0.0)))));
+    set_cq_axes(Some(width), height);
+}
+
+/// Sets the `cq*` basis per axis: the content width of the nearest query container that contains
+/// its inline size, and the content height of the nearest one that contains its block size — two
+/// different containers when an `inline-size` one sits inside a `size` one. `None` — no such
+/// container, the small viewport is used (CSS Conditional 5 §container-lengths).
+pub fn set_cq_axes(width: Option<f32>, height: Option<f32>) {
+    CONTAINER_CQ.with(|c| c.set(Some((width, height))));
+}
+
+/// Some value with a `cq*` unit was parsed in this process (BUG-1499). The unit resolves against
+/// the container size, which only the container re-layout pass knows, so that pass must run for a
+/// sheet without any `@container` rule too. Monotone: a page that never parsed one never pays for it.
+static CQ_UNITS_SEEN: AtomicBool = AtomicBool::new(false);
+
+/// Records that a `cq*` length was parsed.
+pub(crate) fn note_cq_unit() {
+    CQ_UNITS_SEEN.store(true, Ordering::Relaxed);
+}
+
+/// Whether a `cq*` length was ever parsed ([`note_cq_unit`]).
+pub fn cq_units_seen() -> bool {
+    CQ_UNITS_SEEN.load(Ordering::Relaxed)
 }
 
 /// Clears the `cq*` context after the container re-layout pass completes.

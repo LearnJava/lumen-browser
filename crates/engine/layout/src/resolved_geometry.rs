@@ -30,7 +30,7 @@ use lumen_core::geom::{Rect, Size};
 
 use crate::box_tree::{BoxKind, BoxRole, LayoutBox};
 use crate::style_map::StyleMap;
-use crate::style::{BoxSizing, ComputedStyle, ContainFlags, Display, FloatSide, LengthOrAuto, Overflow, Position};
+use crate::style::{BoxSizing, ComputedStyle, ContainFlags, ContainerType, Display, FloatSide, LengthOrAuto, Overflow, Position};
 
 /// Key prefix under which [`apply_used_geometry`] keeps the *computed* value
 /// of every property it overwrites with a used one: `"computed:width"` →
@@ -83,6 +83,33 @@ pub(crate) struct GeomCtx {
     /// containing block of `position: fixed` children (css-transforms-1 §2,
     /// css-position-3 §3.1).
     pub fixed_cb: Option<Rect>,
+    /// Content width of the nearest ancestor query container that contains its inline size, and
+    /// content height of the nearest one that contains its block size — the basis of `cq*` units;
+    /// `None` on an axis without such a container (CSS Conditional 5 §container-lengths, BUG-1499).
+    pub container: (Option<f32>, Option<f32>),
+}
+
+/// Installs a container's size as the `cq*` resolution context for the scope of one box's
+/// used-value resolution, as the container re-layout does; leaves the context alone when there is no
+/// container on either axis.
+struct CqScope(bool);
+
+impl CqScope {
+    fn enter((w, h): (Option<f32>, Option<f32>)) -> Self {
+        let any = w.is_some() || h.is_some();
+        if any {
+            crate::style::set_cq_axes(w, h);
+        }
+        CqScope(any)
+    }
+}
+
+impl Drop for CqScope {
+    fn drop(&mut self) {
+        if self.0 {
+            crate::style::clear_cq_context();
+        }
+    }
 }
 
 impl GeomCtx {
@@ -91,7 +118,7 @@ impl GeomCtx {
     /// at the canvas origin.
     pub(crate) fn root(viewport: Size) -> Self {
         let icb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-        GeomCtx { flow_cb: icb, abs_cb: icb, parent_block_flow: true, scrollport: icb, fixed_cb: None }
+        GeomCtx { flow_cb: icb, abs_cb: icb, parent_block_flow: true, scrollport: icb, fixed_cb: None, container: (None, None) }
     }
 }
 
@@ -201,6 +228,7 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
             parent_block_flow: ctx.parent_block_flow,
             scrollport: ctx.scrollport,
             fixed_cb: ctx.fixed_cb,
+            container: ctx.container,
         };
     }
     let (bt, br, bb, bl) = (s.border_top_width, s.border_right_width, s.border_bottom_width, s.border_left_width);
@@ -222,6 +250,11 @@ pub(crate) fn child_ctx(b: &LayoutBox, ctx: &GeomCtx, vp: Size) -> GeomCtx {
         parent_block_flow: lays_out_block_flow(s.display),
         scrollport: if scrolls(s.overflow_x) || scrolls(s.overflow_y) { padding_box } else { ctx.scrollport },
         fixed_cb: if contains_fixed_descendants(s) { Some(padding_box) } else { ctx.fixed_cb },
+        container: match s.container_type {
+            ContainerType::Normal => ctx.container,
+            ContainerType::InlineSize => (Some(content_box.width), ctx.container.1),
+            ContainerType::Size => (Some(content_box.width), Some(content_box.height)),
+        },
     }
 }
 
@@ -232,6 +265,7 @@ pub(crate) fn apply_used_geometry(m: &mut StyleMap, b: &LayoutBox, ctx: &GeomCtx
     if !reports_used_geometry(b) {
         return;
     }
+    let _cq = CqScope::enter(ctx.container);
     let s = &b.style;
     let z = if s.effective_zoom > 0.0 { s.effective_zoom } else { 1.0 };
     let px = |v: f32| crate::selector_query::px_str(v / z);
