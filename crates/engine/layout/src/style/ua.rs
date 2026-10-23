@@ -12,9 +12,10 @@ use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::{
     BorderStyle, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
-    FontWeight, Length, LengthOrAuto, PointerEvents, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
+    FontWeight, Length, LengthOrAuto, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
 };
 use crate::style::AlignValue;
+use crate::style::Interactivity;
 
 // ──────────────── default display / declarations ────────────────
 
@@ -853,21 +854,31 @@ pub(in crate::style) fn apply_ua_slot(doc: &Document, node: NodeId, style: &mut 
         style.content_visibility = ContentVisibility::Hidden;
     }
 }
-/// UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
+/// UA stylesheet (HTML Rendering §15.4.2 / CSS UI L4 §6.4), нормальная часть:
+/// `dialog:modal { interactivity: auto }` и `:fullscreen { interactivity: auto }`.
 ///
-/// An element carrying the `inert` boolean attribute — and, because inertness is
-/// inherited down the DOM tree, every descendant of such an element — is made
-/// non-interactive. The UA origin sets `pointer-events: none` so that
-/// `ComputedStyle.pointer_events` reflects inertness (e.g. for `getComputedStyle`
-/// and cursor resolution), complementing the layout-level hit-test filter in
-/// `collect_clickable_elements` (lumen-layout `lib.rs`, see `// CSS: inert`).
+/// Модальный `<dialog>` и fullscreen-элемент вновь интерактивны внутри inert-
+/// поддерева: значение `auto` перекрывает унаследованное `inert`. Применяется в
+/// pre-cascade UA-фазе, поэтому author `interactivity` перекрывает его.
+/// Sentinel-атрибуты `data-lumen-modal` / `data-lumen-fullscreen` ставит JS-шим
+/// (см. `matching/forms.rs`, `:modal` / `:fullscreen`).
+pub(in crate::style) fn apply_ua_interactivity(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let n = doc.get(node);
+    let NodeData::Element { name, .. } = &n.data else { return };
+    let modal_dialog = name.local.as_str() == "dialog" && n.get_attr("data-lumen-modal").is_some();
+    if modal_dialog || n.get_attr("data-lumen-fullscreen").is_some() {
+        style.interactivity = Interactivity::Auto;
+    }
+}
+
+/// UA stylesheet (HTML Rendering §15.4.2): `[inert] { interactivity: inert !important }`.
 ///
-/// Applied during the pre-cascade UA phase, so an author `pointer-events`
-/// declaration overrides it (UA origin has the lowest cascade priority).
-/// [`inert::is_inert`] walks the ancestor chain, so a node nested inside an
-/// inert subtree is matched even when it carries no `inert` attribute itself.
-pub(in crate::style) fn apply_ua_inert(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
-    if crate::inert::is_inert(doc, node) {
-        style.pointer_events = PointerEvents::None;
+/// `!important` в UA-происхождении побеждает любое author-значение (в т.ч. `all:
+/// initial` и inline `style`), поэтому вызывается после author-каскада, как
+/// `<marquee> { overflow: hidden !important }`. Потомкам inert-элемента значение
+/// достаётся наследованием — author `interactivity: auto` на потомке его снимает.
+pub(in crate::style) fn apply_ua_inert_important(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if doc.get(node).get_attr("inert").is_some() {
+        style.interactivity = Interactivity::Inert;
     }
 }

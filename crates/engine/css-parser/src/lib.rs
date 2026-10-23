@@ -260,6 +260,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "inset-block",
     "inset-inline",
     "inset-inline-start",
+    "interactivity",
     "interest-delay",
     "interest-delay-end",
     "interest-delay-start",
