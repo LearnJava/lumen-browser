@@ -1022,3 +1022,48 @@ use super::*;
         let s_def = compute_style(&doc, a, &sheet_none, &root, vp, false);
         assert!(s_def.line_height_is_relative, "default/normal line-height must be relative");
     }
+
+    // ── BUG-1409: font-size keywords, negative values ─────────────────────
+
+    #[test]
+    fn font_size_absolute_size_keywords() {
+        for (kw, px) in [
+            ("xx-small", 9.0),
+            ("x-small", 10.0),
+            ("small", 13.0),
+            ("medium", 16.0),
+            ("large", 18.0),
+            ("x-large", 24.0),
+            ("xx-large", 32.0),
+            ("xxx-large", 48.0),
+        ] {
+            let s = p_style_inheriting_from_body(&format!("body {{ font-size: 40px; }} p {{ font-size: {kw}; }}"));
+            assert_eq!(s.font_size, px, "font-size: {kw}");
+        }
+    }
+
+    #[test]
+    fn font_size_relative_size_keywords_scale_parent() {
+        let larger = p_style_inheriting_from_body("body { font-size: 20px; } p { font-size: larger; }");
+        assert!((larger.font_size - 24.0).abs() < 1e-4, "larger={}", larger.font_size);
+        let smaller = p_style_inheriting_from_body("body { font-size: 24px; } p { font-size: smaller; }");
+        assert!((smaller.font_size - 20.0).abs() < 1e-4, "smaller={}", smaller.font_size);
+    }
+
+    #[test]
+    fn font_shorthand_takes_absolute_size_keyword() {
+        let s = p_style_with_css("p { font: xx-large serif; }");
+        assert_eq!(s.font_size, 32.0);
+    }
+
+    #[test]
+    fn font_size_negative_calc_clamps_to_zero() {
+        let s = p_style_with_css("p { font-size: calc(-10px); }");
+        assert_eq!(s.font_size, 0.0);
+    }
+
+    #[test]
+    fn font_size_negative_literal_is_invalid() {
+        let s = p_style_inheriting_from_body("body { font-size: 20px; } p { font-size: -5px; }");
+        assert_eq!(s.font_size, 20.0);
+    }
