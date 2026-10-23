@@ -52,6 +52,10 @@ pub enum SupportsCondition {
     /// (`font-format("woff2")`) снимаются при разборе. Evaluator возвращает
     /// `true`, если формат декодируется движком `lumen-font`.
     FontFormat(String),
+    /// `at-rule(@<name>)` — CSS Conditional L4 §3.3. Хранит lowercase-имя
+    /// at-правила без `@`; evaluator сверяет его со списком
+    /// [`SUPPORTED_AT_RULES`].
+    AtRule(String),
     /// Невалидный или нераспознанный тест — evaluator возвращает false.
     Unknown,
 }
@@ -61,7 +65,18 @@ pub enum SupportsCondition {
 /// шрифты (fvar/gvar/avar/HVAR/MVAR). Цветные глифы (COLR/CPAL, sbix, CBDT,
 /// SVG-in-OpenType), палитры, AAT/Graphite-фичи и инкрементальная загрузка
 /// пока не поддержаны — см. `crates/engine/font/src/lib.rs` (заголовок).
-pub(crate) const SUPPORTED_FONT_TECH: &[&str] = &["features-opentype", "variations"];
+pub(crate) const SUPPORTED_FONT_TECH: &[&str] =
+    &["features-opentype", "variations", "color-colrv0", "palettes"];
+
+/// At-правила, которые парсер/CSSOM Lumen распознают (`at-rule(@<name>)`,
+/// CSS Conditional L4 §3.3). `@charset` не at-правило в этом смысле, а
+/// `@position-try` и подобные пока не разбираются.
+pub(crate) const SUPPORTED_AT_RULES: &[&str] = &[
+    "property", "media", "import", "font-face", "font-palette-values", "font-feature-values",
+    "layer", "supports", "keyframes", "counter-style", "page", "scope", "starting-style",
+    "container", "color-profile", "function", "mixin", "view-transition", "namespace",
+    "swash", "stylistic", "ornaments", "annotation", "styleset", "character-variant",
+];
 
 /// Форматы шрифтов (`<font-format>`, CSS Fonts L4 §4.3), которые
 /// `lumen-font` умеет декодировать: TrueType (glyf), OpenType (CFF/glyf +
@@ -96,10 +111,18 @@ impl SupportsCondition {
             Self::Not(c) => !c.evaluate(known_properties),
             Self::And(cs) => cs.iter().all(|c| c.evaluate(known_properties)),
             Self::Or(cs) => cs.iter().any(|c| c.evaluate(known_properties)),
+            // `selector(<complex-selector>)` — ровно один complex-селектор,
+            // разобранный целиком (список `a, b` недопустим).
             Self::Selector(sel) => {
-                let list = parse_selector_list(sel);
-                !list.is_empty() && list.iter().all(ComplexSelector::is_supported)
+                let mut parser = Parser::new(sel);
+                let one = parser.parse_complex_selector();
+                parser.skip_ws_and_comments();
+                parser.peek().is_none()
+                    && one.is_some_and(|c| {
+                        c.is_supported() && complex_selector_is_valid(&c, true)
+                    })
             }
+            Self::AtRule(name) => SUPPORTED_AT_RULES.contains(&name.as_str()),
             Self::FontTech(tech) => SUPPORTED_FONT_TECH
                 .iter()
                 .any(|t| t.eq_ignore_ascii_case(tech)),
@@ -332,6 +355,7 @@ fn parse_in_parens(b: &[u8], p: &mut usize) -> Option<SupportsCondition> {
         // (CSS Conditional L4 §4 / CSS Fonts L4 §4.3): один ident-аргумент;
         // у `font-format` допустим legacy-строковый синтаксис (кавычки снимаем).
         b"selector" => SupportsCondition::Selector(arg.to_string()),
+        b"at-rule" => parse_at_rule_arg(arg),
         b"font-tech" => SupportsCondition::FontTech(arg.to_ascii_lowercase()),
         b"font-format" => {
             let unquoted = arg.trim_matches(['"', '\'']).trim();
@@ -339,6 +363,16 @@ fn parse_in_parens(b: &[u8], p: &mut usize) -> Option<SupportsCondition> {
         }
         _ => SupportsCondition::Unknown,
     })
+}
+
+/// Аргумент `at-rule(@<ident>)`: только имя, без дескрипторов и прелюдии.
+fn parse_at_rule_arg(arg: &str) -> SupportsCondition {
+    match arg.strip_prefix('@') {
+        Some(name) if !name.is_empty() && name.bytes().all(is_ident_byte) => {
+            SupportsCondition::AtRule(name.to_ascii_lowercase())
+        }
+        _ => SupportsCondition::Unknown,
+    }
 }
 
 /// Содержимое `( … )`: объявление `prop: value`, если на верхнем уровне есть
