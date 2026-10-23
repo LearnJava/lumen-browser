@@ -119,3 +119,7 @@ this is a straightforward "not yet built" entry, not a regression).
 | `CSS.supports("display","layout(foo)")` | `true` | `true` |
 
 Рисование `paint()` отсутствует и в растре: `BackgroundImage::Paint` в `display_list/background_mask.rs:440` — заглушка. Задача PAINT-WORKLET (`ROADMAP.md`).
+
+## Срез PAINT-WORKLET (2026-10-23)
+
+Закрыта часть про Paint Worklet: общий `Worklet`, `CSS.paintWorklet.addModule()` загружает и выполняет модуль, `registerPaint` виден только модулю, `paint()` в `background-image` рисуется (живое окно, `--screenshot`, `InProcessSession`). Остаётся `CSS.layoutWorklet`/`registerLayout` (PAINT-WORKLET-LAYOUT), `CSS.animationWorklet`, `audioWorklet.addModule` — баг остаётся OPEN.

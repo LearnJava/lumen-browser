@@ -1329,17 +1329,28 @@ use super::*;
     #[test]
     fn parse_paint_function_basic() {
         // CSS Paint API (Houdini) — parse paint(name) function.
-        assert_eq!(parse_paint_function("paint(my-paint)"), Some("my-paint".to_string()));
-        assert_eq!(parse_paint_function("paint('my-paint')"), Some("my-paint".to_string()));
-        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint(my-paint)"), Some(("my-paint".to_string(), vec![])));
+        assert_eq!(parse_paint_function("paint('my-paint')"), Some(("my-paint".to_string(), vec![])));
+        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some(("my-paint".to_string(), vec![])));
+    }
+
+    #[test]
+    fn parse_paint_function_arguments() {
+        // `paint(name, arg…)`: top-level commas split, nested ones (`rgb(1, 2, 3)`) and quoted ones stay.
+        assert_eq!(
+            parse_paint_function("paint(foo, 10px, rgb(1, 2, 3), 'a,b')"),
+            Some(("foo".to_string(), vec!["10px".into(), "rgb(1, 2, 3)".into(), "'a,b'".into()]))
+        );
+        assert_eq!(parse_paint_function("paint(foo,)"), None);
+        assert_eq!(parse_paint_function("paint(foo, bar(1)"), None);
     }
 
     #[test]
     fn parse_paint_function_with_whitespace() {
         // paint() name trimmed; outer whitespace ignored, inner whitespace preserved.
-        assert_eq!(parse_paint_function("  paint(test)  "), Some("test".to_string()));
+        assert_eq!(parse_paint_function("  paint(test)  "), Some(("test".to_string(), vec![])));
         // Interior whitespace is trimmed during parsing (inner trim).
-        assert_eq!(parse_paint_function("paint( test )"), Some("test".to_string()));
+        assert_eq!(parse_paint_function("paint( test )"), Some(("test".to_string(), vec![])));
     }
 
     #[test]
@@ -1356,7 +1367,7 @@ use super::*;
         // CSS Paint API (Houdini) — `background-image: paint(name)` must produce BackgroundImage::Paint.
         let s = cascade_at("<div></div>", "div { background-image: paint(my-worklet); }", &[0]);
         assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("my-worklet".to_string()));
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint { name: "my-worklet".to_string(), args: vec![] });
     }
 
     #[test]
@@ -1364,7 +1375,7 @@ use super::*;
         // paint("name") with double-quotes must strip quotes and produce Paint("name").
         let s = cascade_at("<div></div>", r#"div { background-image: paint("checker"); }"#, &[0]);
         assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("checker".to_string()));
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint { name: "checker".to_string(), args: vec![] });
     }
 
     #[test]

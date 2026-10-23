@@ -828,8 +828,41 @@ impl InProcessSession {
         {
             self.drain_canvas_updates();
             images.extend(self.canvas_image_set());
+            images.extend(self.paint_worklet_image_set());
         }
         images
+    }
+
+    /// Bitmaps the Houdini paint worklet draws for the page's `background-image:
+    /// paint()` layers, keyed the way the display list refers to them. Empty — and no
+    /// JS round trip — unless the page called `registerPaint()`.
+    #[cfg(feature = "v8")]
+    fn paint_worklet_image_set(&self) -> Vec<(String, Arc<lumen_image::Image>)> {
+        if lumen_js::paint_worklet_epoch() == 0 {
+            return Vec::new();
+        }
+        let (Some(rt), Ok(state)) = (self.js_runtime.as_ref(), self.state()) else {
+            return Vec::new();
+        };
+        let jobs = lumen_paint::collect_paint_requests(&state.layout_root, 1.0);
+        if jobs.is_empty() {
+            return Vec::new();
+        }
+        rt.set_paint_jobs(&jobs);
+        rt.flush_paint_images()
+            .into_iter()
+            .map(|(key, width, height, data)| {
+                let image = lumen_image::Image {
+                    width,
+                    height,
+                    format: lumen_image::PixelFormat::Rgba8,
+                    data,
+                    icc_profile: None,
+                    vector_source: None,
+                };
+                (key, Arc::new(image))
+            })
+            .collect()
     }
 
     /// Synthesize `mousedown` → `mouseup` → `click` on `node` at CSS viewport

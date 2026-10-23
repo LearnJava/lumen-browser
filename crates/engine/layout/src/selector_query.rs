@@ -624,7 +624,7 @@ fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
                 BackgroundImage::None
                 | BackgroundImage::Gradient(_)
                 | BackgroundImage::CrossFade { .. }
-                | BackgroundImage::Paint(_),
+                | BackgroundImage::Paint { .. },
             ) => "none".to_string(),
         })
         .collect::<Vec<_>>()

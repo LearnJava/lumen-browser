@@ -613,6 +613,7 @@ fn run_window_mode_inner(
         raf_task_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         raf_drain_gate: false,
         pending_lazy_image_reqs: Arc::new(Mutex::new(Vec::new())),
+        paint_jobs_sent: Vec::new(),
         no_scrollbar,
         maximized,
         first_paint_delivered: false,

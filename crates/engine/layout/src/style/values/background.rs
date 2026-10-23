@@ -219,9 +219,14 @@ pub enum BackgroundImage {
         /// Blend factor clamped to `[0.0, 1.0]`.
         t: f32,
     },
-    /// CSS Paint API (Houdini) — `paint(name)` generates dynamic image via registered worklet.
-    /// Phase 0: stored as placeholder grey `DrawImage`; Phase 1: calls worklet `paint()` callback.
-    Paint(String),
+    /// CSS Paint API (Houdini) — `paint(name, args…)`: an image the registered paint
+    /// worklet draws at the layer's tile size.
+    Paint {
+        /// Worklet name given to `registerPaint()`.
+        name: String,
+        /// Raw text of the extra arguments (`inputArguments`), top-level commas split.
+        args: Vec<String>,
+    },
 }
 
 /// CSS Backgrounds L3 §3.4 — `<repeat-style>` value of one axis.
