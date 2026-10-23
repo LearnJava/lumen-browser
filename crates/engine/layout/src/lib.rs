@@ -2324,6 +2324,10 @@ mod scroll_container;
 mod scroll_state_queries;
 
 #[cfg(test)]
+#[path = "tests/style_container_any_element.rs"]
+mod style_container_any_element;
+
+#[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]
 mod scroll_initial_target_tests;
 

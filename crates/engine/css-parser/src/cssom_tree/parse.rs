@@ -210,6 +210,24 @@ pub(super) fn collapse_ws(s: &str) -> String {
     out
 }
 
+/// `STYLE(--a: b)` → `style(--a: b)`: the name of a `style()` query is serialized in lower
+/// case (CSS Conditional 5 §«style()»; `containerQuery` reads it back that way).
+pub(super) fn lowercase_style_function(s: &str) -> String {
+    const NAME: &str = "style(";
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while let Some(rel) = lower[i..].find(NAME) {
+        let at = i + rel;
+        let glued = s[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        out.push_str(&s[i..at]);
+        out.push_str(if glued { &s[at..at + NAME.len()] } else { NAME });
+        i = at + NAME.len();
+    }
+    out.push_str(&s[i..]);
+    out
+}
+
 /// `(min-width:100px)` → `(min-width: 100px)` (вне `selector(…)`).
 pub(super) fn space_after_colons(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
@@ -479,7 +497,10 @@ fn build_at_rule(
             let prelude = match kind {
                 RuleKind::Container => {
                     let (text, funcs) = super::scroll_state_cond::extract_scroll_state_functions(params);
-                    super::scroll_state_cond::restore_scroll_state_functions(&space_after_colons(&collapse_ws(&text)), &funcs)
+                    lowercase_style_function(&super::scroll_state_cond::restore_scroll_state_functions(
+                        &space_after_colons(&collapse_ws(&text)),
+                        &funcs,
+                    ))
                 }
                 RuleKind::Media | RuleKind::Supports => space_after_colons(&params_c),
                 RuleKind::Scope => scope_prelude(&params_c)?,
