@@ -315,3 +315,11 @@ fn view_transition_rule_is_a_visible_declaration_rule() {
 fn view_transition_rule_takes_no_prelude() {
     assert!(tree("@view-transition foo { navigation: auto }").rules.is_empty());
 }
+
+#[test]
+fn style_query_function_name_is_lower_cased() {
+    assert_eq!(tree("@container STYLE(--foo: bar){}").rules[0].prelude, "style(--foo: bar)");
+    assert_eq!(tree("@container n Style(--a:b) and (min-width:1px){}").rules[0].prelude, "n style(--a: b) and (min-width: 1px)");
+    // A custom property or value that merely ends in `style` keeps its case.
+    assert_eq!(tree("@container style(--Mystyle(x): A){}").rules[0].prelude, "style(--Mystyle(x): A)");
+}

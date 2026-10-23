@@ -312,6 +312,32 @@ pub fn evaluate_container_query(condition: &str, name: Option<&str>, ctx: &Conta
     })
 }
 
+/// The prelude asks a `style()` question — every element is a style container, so the
+/// second pass has to give each one a context (`box_tree::container_anchor`).
+pub fn query_mentions_style(condition: &str) -> bool {
+    condition.to_ascii_lowercase().contains("style(")
+}
+
+/// A `style()` in the prelude may read a standard property (`style(color: red)`,
+/// `style(display)`), not only `--*`: the container's `style_props` map is needed.
+/// Conservative: a custom-property-only prelude is `false`, anything else `true`.
+pub fn query_reads_standard_property(condition: &str) -> bool {
+    let lower = condition.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(i) = rest.find("style(") {
+        rest = &rest[i + "style(".len()..];
+        // The first feature, and every feature after a `(` of a condition form.
+        let mut starts = vec![0usize];
+        starts.extend(rest.match_indices('(').map(|(j, _)| j + 1));
+        if starts.into_iter().any(|j| {
+            rest[j..].trim_start().chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Container features a query reads — they pick the one query container (CSS
 /// Conditional 5 §«container selection»): the nearest ancestor that answers all of them.
 #[derive(Default, Clone, Copy)]
@@ -546,10 +572,25 @@ fn evaluate_style_feature(feature: &str, ctx: &ContainerContext) -> bool {
     // Declaration form: `--prop: value` or `prop: value`.
     if let Some((name, value)) = inner.split_once(':') {
         let name = name.trim();
+        // `!important` in the query value is not part of the compared value.
+        let value = value.trim_end();
+        let value = value
+            .len()
+            .checked_sub("!important".len())
+            .filter(|&i| value.is_char_boundary(i) && value[i..].eq_ignore_ascii_case("!important"))
+            .map_or(value, |i| value[..i].trim_end());
         let want = normalize_style_value(value);
         if name.starts_with("--") {
-            return resolve_container_custom_prop(ctx, name).map(|v| normalize_style_value(&v))
-                == Some(want);
+            let have = resolve_container_custom_prop(ctx, name).map(|v| normalize_style_value(&v));
+            if value.contains("var(") {
+                // The query value substitutes `var()` against the container; a reference that
+                // fails leaves it guaranteed-invalid, which only an unset property equals.
+                return match expand_vars(value, &ctx.custom_props, 0, ctx.font_size, ctx.viewport) {
+                    Some(v) => have == Some(normalize_style_value(&v)),
+                    None => have.is_none(),
+                };
+            }
+            return have == Some(want);
         }
         // Standard property: compare against the container's own computed
         // style (case-insensitive — CSS keywords are ASCII case-insensitive).
@@ -729,17 +770,23 @@ pub fn matching_container_rules<'a>(
     let mut out = Vec::new();
     let precomputed = ctx.rule_hits.len() == sheet.container_rules.len();
     for (i, container_rule) in sheet.container_rules.iter().enumerate() {
-        let holds = if precomputed {
-            ctx.rule_hits[i]
-        } else {
-            evaluate_container_query(&container_rule.condition, container_rule.name.as_deref(), ctx)
-        };
-        if !holds {
+        if precomputed && !ctx.rule_hits[i] {
             continue;
         }
-        out.extend(container_rule.rules.iter().filter(|rule| {
+        let matched = container_rule.rules.iter().filter(|rule| {
             rule.selectors.iter().any(|complex| matches_complex(complex, doc, node))
-        }));
+        });
+        if precomputed {
+            out.extend(matched);
+            continue;
+        }
+        // Not precomputed: a query is evaluated only for a rule that selects the node.
+        let matched: Vec<&Rule> = matched.collect();
+        if !matched.is_empty()
+            && evaluate_container_query(&container_rule.condition, container_rule.name.as_deref(), ctx)
+        {
+            out.extend(matched);
+        }
     }
     out
 }
