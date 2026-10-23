@@ -32,6 +32,17 @@ fn settle(rt: &V8JsRuntime) {
     }
 }
 
+/// [`settle`] for a scoped transition, which ends with the animations of its pseudo-element tree
+/// (the UA group animation runs 0.25 s of wall-clock time).
+fn settle_animations(rt: &V8JsRuntime) {
+    for _ in 0..4 {
+        settle(rt);
+        rt.eval("_lumen_run_raf_callbacks(16); null").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    settle(rt);
+}
+
 fn log(rt: &V8JsRuntime) -> String {
     match rt.eval("log.join(',')").unwrap() {
         lumen_core::JsValue::String(s) => s,
@@ -656,7 +667,7 @@ fn the_scope_element_computes_to_all_while_its_transition_runs() {
          t.finished.then(function () { log.push(scope()); }); null",
     )
     .unwrap();
-    settle(&rt);
+    settle_animations(&rt);
     assert_eq!(log(&rt), "none,all,none,none");
     // A skipped transition resets it at once.
     rt.eval("log = []; var u = main.startViewTransition(); u.skipTransition(); log.push(scope()); null").unwrap();
@@ -675,7 +686,7 @@ fn scoped_pseudo_tree_is_answered_for_its_scope_element_only() {
          t.finished.then(function () { log.push(probe(main, '::view-transition')); }); null",
     )
     .unwrap();
-    settle(&rt);
+    settle_animations(&rt);
     // `main` answers for `::view-transition` and its `outer` group; `root`, the document element and `inner` do not.
     assert_eq!(log(&rt), ["\"absolute\"", "\"absolute\"", "\"\"", "\"\"", "\"\""].concat() + ",\"\"");
 }
@@ -692,7 +703,7 @@ fn scoped_pseudo_animations_target_the_scope_element() {
          t.finished.then(function () { log.push(document.getAnimations().length); }); null",
     )
     .unwrap();
-    settle(&rt);
+    settle_animations(&rt);
     let got = log(&rt);
     assert!(got.starts_with("main::view-transition-group(inner) main::view-transition-group(outer)"), "{got}");
     assert!(got.ends_with(",0"), "{got}");

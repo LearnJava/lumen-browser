@@ -345,7 +345,19 @@ function finish(s) {
     var settled = s.waits.map(function (p) { return p.then(noop, noop); });
     return Promise.all(settled).then(function () { return s.waits.length > seen ? waitAll() : undefined; });
   };
-  waitAll().then(function () {
+  // A scoped transition has no shell cross-fade to wait for: it ends with the animations of its
+  // pseudo-element tree (§6.3 "handle transition frame"), a cancelled one counts as ended.
+  var animationsDone = function () {
+    if (s.nid === null || !s.el || typeof s.el.getAnimations !== 'function') { return Promise.resolve(); }
+    var pending = s.el.getAnimations({ subtree: true }).filter(function (a) {
+      if (a.playState === 'finished' || a.playState === 'idle') { return false; }
+      var pe = a.effect && a.effect.pseudoElement;
+      return a.effect && a.effect.target === s.el && typeof pe === 'string' && pe.indexOf('::view-transition') === 0;
+    });
+    if (!pending.length) { return Promise.resolve(); }
+    return Promise.all(pending.map(function (a) { return a.finished.then(noop, noop); })).then(animationsDone);
+  };
+  waitAll().then(animationsDone).then(function () {
     if (s.phase !== 'animating') { return; }
     s.phase = 'done';
     clearCurrent(s);
