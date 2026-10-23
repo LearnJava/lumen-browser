@@ -1434,3 +1434,18 @@ use super::*;
         let s = parse(".q { @supports selector(&) { color: green } }");
         assert!(s.supports_rules[0].condition.evaluate(&[]));
     }
+
+    #[test]
+    fn property_with_braced_value_stays_a_declaration() {
+        // CSS Syntax §5.4.4: `{}`-блок — целое значение объявления (BUG-1500),
+        // а не вложенное правило с селектором `color:`.
+        let s = parse("p { color: red; color: { [ var(--a) ] } }");
+        assert_eq!(s.rules.len(), 1);
+        let decls = &s.rules[0].declarations;
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[1].property, "color");
+        assert_eq!(decls[1].value, "{ [ var(--a) ] }");
+        // А `a:hover { … }` по-прежнему вложенное правило.
+        let s = parse("p { a:hover { color: red } }");
+        assert_eq!(s.rules.len(), 2);
+    }

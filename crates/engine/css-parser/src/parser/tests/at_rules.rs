@@ -1508,6 +1508,35 @@ use super::*;
     }
 
     #[test]
+    fn supports_declaration_with_invalid_var_is_unsupported() {
+        // CSS Variables L1 §3 (BUG-1500): `!`/`;` at the top level of a fallback and a
+        // non-`--ident` head make the declaration a parse error — the feature is false.
+        let ok = |c: &str| {
+            let s = parse(&format!("@supports {c} {{ a {{ color: green }} }}"));
+            s.supports_rules[0].condition.evaluate(&["color"])
+        };
+        assert!(ok("(color: var(--a))"));
+        assert!(ok("(color: var(--a, 1px))"));
+        assert!(ok("(color: var(--a, f(1;2)))"));
+        assert!(ok("(--a: var(--b, {;}))"));
+        // `<!--` is a <CDO-token>, escapes are part of the name.
+        assert!(ok("(color: var(--a) <!--)"));
+        assert!(ok(r"(color: var(--\30))"));
+        assert!(ok(r"(--\d800: a)"));
+        for bad in [
+            "(color: var(--a,!))",
+            "(color: var(--a,;))",
+            "(color: var(--a,!important))",
+            "(color: var(--a, var(--b,!)))",
+            "(color: var(1px))",
+            "(--a: var(--b,!))",
+            "(--: a)",
+        ] {
+            assert!(!ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn nested_media_without_block_does_not_eat_tail() {
         // CSS Nesting L1 §5: same terminator rule applies to a nested at-rule
         // inside a qualified rule's own body.

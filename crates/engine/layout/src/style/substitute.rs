@@ -791,7 +791,8 @@ fn calls_well_formed(
             return false;
         }
         if let Some(fb) = fallback
-            && !(calls_well_formed(fb, find_env_open, env_head_is_valid)
+            && !(fallback_declaration_value_ok(fb)
+                && calls_well_formed(fb, find_env_open, env_head_is_valid)
                 && calls_well_formed(fb, find_var_open, var_head_is_valid))
         {
             return false;
@@ -799,6 +800,43 @@ fn calls_well_formed(
         rest = after;
     }
     true
+}
+
+/// Fallback `var()`/`env()` — `<declaration-value>` (CSS Variables L1 §3): на
+/// его верхнем уровне нет `!` и `;` (`var(--b,!)`, `var(--b,;)`,
+/// `var(--b,!important)` — ошибка разбора, BUG-1500). Внутри скобок, `{}`-блоков
+/// и строк оба символа допустимы.
+fn fallback_declaration_value_ok(fallback: &str) -> bool {
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    let bytes = fallback.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_string = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_string = Some(b),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'!' if is_cdo_bang(bytes, i) => {}
+            b'!' | b';' if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The `!` at `i` is the tail of a `<!--` <CDO-token>, not a `!` delimiter.
+fn is_cdo_bang(bytes: &[u8], i: usize) -> bool {
+    i > 0 && bytes[i - 1] == b'<' && bytes[i + 1..].starts_with(b"--")
 }
 
 /// `var( <custom-property-name> , ... )`: голова — ровно один `--ident`
@@ -822,7 +860,7 @@ pub fn substitution_value_well_formed(value: &str) -> bool {
     let mut stack: Vec<u8> = Vec::new();
     let mut in_string: Option<u8> = None;
     let mut escaped = false;
-    for b in cleaned.bytes() {
+    for (i, b) in cleaned.bytes().enumerate() {
         if let Some(q) = in_string {
             if escaped {
                 escaped = false;
@@ -841,7 +879,7 @@ pub fn substitution_value_well_formed(value: &str) -> bool {
             b'[' => stack.push(b']'),
             b'{' => stack.push(b'}'),
             b')' | b']' | b'}' if stack.pop() != Some(b) => return false,
-            b'!' if stack.is_empty() => return false,
+            b'!' if stack.is_empty() && !is_cdo_bang(cleaned.as_bytes(), i) => return false,
             _ => {}
         }
     }
