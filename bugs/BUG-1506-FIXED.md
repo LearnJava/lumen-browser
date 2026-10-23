@@ -1,6 +1,6 @@
 # BUG-1506 — `CSSRuleList`, `StyleSheetList` и `CSSStyleDeclaration` не итерируются (`[...sheet.cssRules]`, `for…of`, `[...el.style]`), нет `getPropertyPriority`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — `CSSRuleList`, `StyleSheetList`, `CSSStyleDeclaration`)
 
@@ -40,3 +40,7 @@ WPT-RUN-14 срез 22: `css-properties-values-api/at-property-cssom.html` (39 �
 ## Повторное измерение: WPT-RUN-14 срез 26 (2026-10-09)
 
 Те же `cssRules is not iterable` / `styleSheets is not iterable` в `css-page` (`page-rule-declarations-000/001/003/004`, `page-orientation.tentative` — `ERROR` на загрузке, 5 id) и `css-shadow/stylesheet-title-002` (`host.shadowRoot.styleSheets is not iterable`). `typeof document.styleSheets[Symbol.iterator]` и `typeof cssRules[Symbol.iterator]` — `undefined`.
+
+## Исправление (2026-10-23, P3)
+
+К моменту правки `CSSRuleList`/`StyleSheetList` уже получили `Symbol.iterator`, а `getPropertyPriority` у `element.style` и `rule.style` и числовой `style.length`/`item()` уже были. Оставалась `CSSStyleDeclaration`: у прототипа не было `[Symbol.iterator]`, и прокси стиля отвечал на него строкой-значением свойства. Теперь `CSSStyleDeclaration.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator]` (`web_api_shim_mid.js`). Тест — `crates/js/src/dom/tests/v8_bug1506_iterables.rs`. Идентичность обёрток (`styleSheets === styleSheets`) — BUG-1555, не здесь.
