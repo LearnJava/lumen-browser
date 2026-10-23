@@ -620,8 +620,43 @@ pub(crate) fn pseudo_class_is_supported(pc: &PseudoClass) -> bool {
 /// `SyntaxError`) и ничего не выбирают. `part(…)` приходит уже с аргументом.
 fn is_known_unmodeled_pseudo_element(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    matches!(lower.as_str(), "backdrop" | "file-selector-button" | "details-content" | "search-text")
-        || lower.starts_with("part(")
+    matches!(
+        lower.as_str(),
+        "backdrop"
+            | "file-selector-button"
+            | "details-content"
+            | "search-text"
+            // Совместимость (Compat Standard §3): `-webkit-`-псевдоэлементы
+            // элементов управления, которые поддерживает и Chromium.
+            | "-webkit-slider-thumb"
+            | "-webkit-slider-runnable-track"
+            | "-webkit-scrollbar"
+            | "-webkit-scrollbar-button"
+            | "-webkit-scrollbar-thumb"
+            | "-webkit-scrollbar-track"
+            | "-webkit-scrollbar-track-piece"
+            | "-webkit-scrollbar-corner"
+            | "-webkit-resizer"
+            | "-webkit-inner-spin-button"
+            | "-webkit-outer-spin-button"
+            | "-webkit-search-cancel-button"
+            | "-webkit-search-decoration"
+            | "-webkit-search-results-button"
+            | "-webkit-search-results-decoration"
+            | "-webkit-progress-bar"
+            | "-webkit-progress-value"
+            | "-webkit-progress-inner-element"
+            | "-webkit-meter-bar"
+            | "-webkit-meter-optimum-value"
+            | "-webkit-meter-suboptimum-value"
+            | "-webkit-meter-even-less-good-value"
+            | "-webkit-file-upload-button"
+            | "-webkit-details-marker"
+            | "-webkit-calendar-picker-indicator"
+            | "-webkit-datetime-edit"
+            | "-webkit-color-swatch"
+            | "-webkit-color-swatch-wrapper"
+    ) || lower.starts_with("part(")
 }
 
 /// True если псевдо-элемент распознан. `Unknown(_)` → `false`; `::slotted()`
@@ -1097,6 +1132,14 @@ pub(crate) fn compound_selector_is_valid(compound: &CompoundSelector) -> bool {
 /// маркером (`::before::column`, `::column::scroll-marker`, CSS Multi-column L2
 /// §column-pseudo).
 pub(crate) fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &PseudoElementKind) -> bool {
+    // `::details-content` — tree-abiding псевдоэлемент (Pseudo-Elements L4
+    // §3.2), у него есть собственные `::before`/`::after`.
+    if let (PseudoElementKind::Unknown(name), PseudoElementKind::Before | PseudoElementKind::After) =
+        (first, second)
+        && name.eq_ignore_ascii_case("details-content")
+    {
+        return true;
+    }
     matches!(
         (first, second),
         (
