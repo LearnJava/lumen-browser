@@ -35,7 +35,7 @@ use lumen_core::ColorSpace;
 use lumen_core::ext::{FaceRecord, FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
-    Bitmap, Colr, Cpal, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
+    Bitmap, Colr, Cpal, Font, Head, Outline, OwnedCmap, Rasterizer,
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
@@ -1236,7 +1236,7 @@ impl Renderer {
                     // здесь берём готовый id из `text_face_ids`.
                     font_stretch: _,
                     font_variation_axes,
-                    font_features: _,
+                    font_features,
                     font_palette,
                     tab_size,
                     letter_spacing,
@@ -1314,6 +1314,7 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
+                                font_features,
                                 *tab_size,
                                 (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
@@ -1335,6 +1336,7 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
+                                font_features,
                                 *tab_size,
                                 font_palette.as_ref(),
                                 dpr_f32,
@@ -1354,6 +1356,7 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
+                                font_features,
                                 *tab_size,
                                 (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
@@ -1548,6 +1551,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
+                                &[],
                                 &[],
                                 0.0,
                                 (0.0, 0.0),

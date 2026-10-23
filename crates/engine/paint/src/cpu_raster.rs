@@ -3870,6 +3870,7 @@ fn shear_glyph(glyph: &mut lumen_font::Glyph) {
 /// the rectangular `clip` are dropped; overlapping glyph pixels keep the max
 /// coverage (glyphs in a run rarely overlap, but kerning-tight pairs can).
 /// `lut` maps raw glyph coverage to gamma-corrected coverage ([`crate::text_gamma`]).
+#[allow(clippy::too_many_arguments)]
 fn blit_glyph_coverage(
     mask: &mut tiny_skia::Mask,
     bitmap: &lumen_font::Bitmap,
