@@ -950,30 +950,57 @@ fn pointer_events_css_wide_keywords() {
 }
 
 #[test]
-fn inert_sets_pointer_events_none() {
-    // UA rule `[inert] { pointer-events: none; }` (HTML Rendering §15.4.2).
+fn inert_attribute_maps_to_interactivity_inert() {
+    // UA rule `[inert] { interactivity: inert !important }` (HTML Rendering §15.4.2).
     let root = lay("<p inert>x</p>", "");
-    assert_eq!(first_p_style(&root).pointer_events, PointerEvents::None);
+    let s = first_p_style(&root);
+    assert_eq!(s.interactivity, Interactivity::Inert);
+    // `interactivity` is the carrier — `pointer-events` itself is left alone.
+    assert_eq!(s.pointer_events, PointerEvents::Auto);
+    assert_eq!(s.effective_pointer_events(), PointerEvents::None);
 }
 
 #[test]
-fn inert_inherited_to_descendant_pointer_events() {
-    // Inertness is inherited down the DOM tree: a descendant of an inert
-    // element is inert too, so its pointer-events is forced to none even
-    // though it carries no `inert` attribute of its own.
-    let root = lay("<div inert><p>x</p></div>", "");
+fn inert_is_inherited_and_a_descendant_can_reset_it() {
+    let root = lay("<div inert><p>x</p><p class=a>y</p></div>", ".a { interactivity: auto; }");
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let ps: Vec<_> = div.children.iter().filter(|c| matches!(&c.kind, BoxKind::Block)).collect();
+    assert_eq!(div.style.interactivity, Interactivity::Inert);
+    assert_eq!(ps[0].style.interactivity, Interactivity::Inert);
+    assert_eq!(ps[1].style.interactivity, Interactivity::Auto);
+}
+
+#[test]
+fn inert_attribute_beats_author_on_the_element_itself() {
+    // UA `!important`: author `auto`, `all: initial` and a later rule all lose.
+    let root = lay("<p inert>x</p>", "p { interactivity: auto; all: initial; display: block; }");
+    assert_eq!(first_p_style(&root).interactivity, Interactivity::Inert);
+}
+
+#[test]
+fn modal_dialog_and_fullscreen_reset_inherited_inert() {
+    let root = lay(
+        "<div inert><dialog open data-lumen-modal><span id=a inert></span></dialog><p data-lumen-fullscreen>f</p></div>",
+        "",
+    );
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let styles: Vec<_> = div.children.iter().map(|c| c.style.interactivity).collect();
+    assert!(!styles.is_empty() && styles.iter().all(|s| *s == Interactivity::Auto), "{styles:?}");
+}
+
+#[test]
+fn interactivity_css_wide_keywords_and_invalid_value() {
+    let root = lay("<div inert><p>x</p></div>", "p { interactivity: initial; }");
     let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
     let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-    assert_eq!(div.style.pointer_events, PointerEvents::None);
-    assert_eq!(p.style.pointer_events, PointerEvents::None);
-}
-
-#[test]
-fn inert_author_pointer_events_wins() {
-    // The inert rule lives in the UA origin, so an author `pointer-events`
-    // declaration overrides it.
-    let root = lay("<p inert>x</p>", "p { pointer-events: auto; }");
-    assert_eq!(first_p_style(&root).pointer_events, PointerEvents::Auto);
+    assert_eq!(p.style.interactivity, Interactivity::Auto);
+    let root = lay("<div inert><p>x</p></div>", "p { interactivity: inherit; }");
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.interactivity, Interactivity::Inert);
+    // Not a keyword of the grammar: the declaration is dropped, the value stays `auto`.
+    let root = lay("<p>x</p>", "p { interactivity: none; }");
+    assert_eq!(first_p_style(&root).interactivity, Interactivity::Auto);
 }
 
 #[test]

@@ -30,7 +30,7 @@ use crate::style::{
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
     apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
-    apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_heading_style, apply_ua_hidden, apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
@@ -636,9 +636,10 @@ pub(crate) fn compute_style_shareable(
     // UA stylesheet: <td>/<th> → padding: 1px (HTML Rendering §15.3.8); the
     // ancestor <table cellpadding=N> overrides it. Author `padding` wins.
     apply_ua_table_cell_padding(doc, node, &mut style);
-    // UA stylesheet (HTML Rendering §15.4.2): `[inert] { pointer-events: none; }`.
-    // Applied during the pre-cascade UA phase so author `pointer-events` wins.
-    apply_ua_inert(doc, node, &mut style);
+    // UA stylesheet (CSS UI L4 §6.4): `dialog:modal`, `:fullscreen` { interactivity: auto }.
+    // Pre-cascade UA phase, so an author `interactivity` wins. The `[inert]` rule
+    // is `!important` and runs after the cascade (`apply_ua_inert_important`).
+    apply_ua_interactivity(doc, node, &mut style);
     // UA stylesheet (HTML LS §3.2.6.2 / Rendering §hiddenCSS): `hidden` →
     // display:none; `hidden="until-found"` → content-visibility:hidden.
     // Author `display`/`content-visibility` declarations win (UA origin).
@@ -1780,6 +1781,9 @@ pub(crate) fn compute_style_shareable(
     // already resolved inline in the `"color"` branch of apply_declaration.
     drop(prof_apply);
     let _prof_post = lumen_core::profile::scope_detail("cs_post");
+    // HTML Rendering §15.4.2: `[inert] { interactivity: inert !important }` — UA
+    // `!important` outranks every author declaration, so it runs after the cascade.
+    apply_ua_inert_important(doc, node, &mut style);
     if disabled_by_author {
         style.appearance = crate::Appearance::None;
     }

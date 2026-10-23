@@ -29,6 +29,7 @@ use crate::style::{
     FillRule,
     ForcedColorAdjust,
     ImageRendering,
+    Interactivity,
     Isolation,
     MaskClip,
     MaskComposite,
@@ -625,6 +626,12 @@ pub(in crate::style) fn apply_decl_paint(
             }
         }
         "caret" => apply_caret_shorthand(style, val, is_quirks),
+        "interactivity" => {
+            // CSS UI L4 §6.4: auto | inert.
+            if let Some(v) = Interactivity::parse(val) {
+                style.interactivity = v;
+            }
+        }
         "mask" => {
             // CSS Masking L1 §4.8 shorthand: comma-separated list of layers.
             // Each layer: <mask-reference> || <position> [/ <size>]? ||

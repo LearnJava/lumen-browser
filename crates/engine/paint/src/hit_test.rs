@@ -180,7 +180,7 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
         return None;
     }
     let (source_node, frag_pe) = find_inline_source(b, child_point);
-    if matches!(frag_pe.unwrap_or(b.style.pointer_events), PointerEvents::None) {
+    if matches!(frag_pe.unwrap_or_else(|| b.style.effective_pointer_events()), PointerEvents::None) {
         return None;
     }
     Some(HitTestResult {
@@ -254,7 +254,7 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
         return;
     }
     let (source_node, frag_pe) = find_inline_source(b, child_point);
-    if matches!(frag_pe.unwrap_or(b.style.pointer_events), PointerEvents::None) {
+    if matches!(frag_pe.unwrap_or_else(|| b.style.effective_pointer_events()), PointerEvents::None) {
         return;
     }
     out.push(HitTestResult {
@@ -302,15 +302,15 @@ fn find_inline_source(b: &LayoutBox, point: Point) -> (NodeId, Option<PointerEve
         if rel_x >= start && rel_x < end {
             let src = frag.source_node;
             if src.index() != 0 {
-                return (src, Some(frag.style.pointer_events));
+                return (src, Some(frag.style.effective_pointer_events()));
             }
-            return (b.node, Some(frag.style.pointer_events));
+            return (b.node, Some(frag.style.effective_pointer_events()));
         }
     }
     // Fallback: return source_node of the last frag on the line (closest to right edge).
     if let Some(last) = line.last() {
         let src = if last.source_node.index() != 0 { last.source_node } else { b.node };
-        return (src, Some(last.style.pointer_events));
+        return (src, Some(last.style.effective_pointer_events()));
     }
     (b.node, None)
 }
@@ -446,6 +446,30 @@ mod tests {
         let inner = by_class(&doc, "inner");
         let res = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
         assert_eq!(res.node, inner, "auto на потомке возвращает его в hit-тест");
+    }
+
+    #[test]
+    fn inert_box_is_not_a_target_even_with_pointer_events_auto() {
+        // `[inert]` → `interactivity: inert` (UA !important): `pointer-events: auto` не спасает.
+        let (doc, root) = build(
+            r#"<div class="a" inert></div>"#,
+            ".a { pointer-events: auto; height: 50px; }",
+        );
+        let a = by_class(&doc, "a");
+        if let Some(res) = hit_test(Point::new(10.0, 10.0), &root) {
+            assert_ne!(res.node, a, "inert-бокс не цель указателя");
+        }
+    }
+
+    #[test]
+    fn interactivity_auto_descendant_is_a_target_inside_inert_subtree() {
+        let (doc, root) = build(
+            r#"<div class="outer" inert><div class="inner"></div></div>"#,
+            ".inner { interactivity: auto; height: 50px; }",
+        );
+        let inner = by_class(&doc, "inner");
+        let res = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(res.node, inner, "interactivity:auto на потомке возвращает его в hit-тест");
     }
 
     #[test]

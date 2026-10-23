@@ -193,6 +193,9 @@ fn apply_css_wide_keyword_with(
         "caret-color" => {
             style.caret_color = if inh { inherited.caret_color } else { init.caret_color };
         }
+        "interactivity" => {
+            style.interactivity = if inh { inherited.interactivity } else { init.interactivity };
+        }
         "caret-shape" => {
             style.caret_shape = if inh { inherited.caret_shape } else { init.caret_shape };
         }

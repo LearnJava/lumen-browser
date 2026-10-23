@@ -1,0 +1,2243 @@
+{
+ "bugs": {
+  "by_component": {
+   "chrome": 1,
+   "core": 1,
+   "css-parser": 44,
+   "dom": 6,
+   "encoding": 1,
+   "font": 3,
+   "js": 105,
+   "layout": 163,
+   "net": 2,
+   "network": 2,
+   "paint": 33,
+   "shell": 29,
+   "shell chrome": 1,
+   "snapshot": 1,
+   "storage": 1,
+   "test": 1,
+   "test-harness": 1,
+   "ua-стили": 5,
+   "wpt-инфраструктура": 1,
+   "wpt-харнесс": 1,
+   "дорожка split": 1,
+   "не локализован до конкретного фикса": 1,
+   "не локализовано": 2,
+   "тулинг wpt": 1,
+   "тулинг графтестов": 1
+  },
+  "debtor": 21,
+  "open": 293,
+  "rework": 37,
+  "top5": [
+   {
+    "blocked": 292,
+    "bug": "BUG-1411",
+    "components": [
+     "layout"
+    ],
+    "metadata": 0,
+    "roadmap": 292,
+    "tasks": [
+     "SHAPE-OUTSIDE-3"
+    ],
+    "wpt_status": 0
+   },
+   {
+    "blocked": 292,
+    "bug": "BUG-1518",
+    "components": [
+     "layout"
+    ],
+    "metadata": 0,
+    "roadmap": 292,
+    "tasks": [
+     "SHAPE-OUTSIDE-3"
+    ],
+    "wpt_status": 0
+   },
+   {
+    "blocked": 292,
+    "bug": "BUG-1519",
+    "components": [
+     "layout"
+    ],
+    "metadata": 0,
+    "roadmap": 292,
+    "tasks": [
+     "SHAPE-OUTSIDE-3"
+    ],
+    "wpt_status": 0
+   },
+   {
+    "blocked": 226,
+    "bug": "BUG-1467",
+    "components": [
+     "css-parser",
+     "layout"
+    ],
+    "metadata": 0,
+    "roadmap": 226,
+    "tasks": [
+     "RUNIN-1"
+    ],
+    "wpt_status": 0
+   },
+   {
+    "blocked": 207,
+    "bug": "BUG-1577",
+    "components": [
+     "js"
+    ],
+    "metadata": 0,
+    "roadmap": 207,
+    "tasks": [
+     "SHADOW-PARTS"
+    ],
+    "wpt_status": 0
+   }
+  ]
+ },
+ "graphic": {
+  "branch": "p1-svg-clippath",
+  "commit": "5b8345773",
+  "counts": {
+   "DEBTOR": 47,
+   "ERROR": 0,
+   "FAIL": 6,
+   "PASS": 112,
+   "SKIP": 0
+  },
+  "mode": "default",
+  "pass_rate": 0.6788,
+  "run": "20261020-200244.json",
+  "summary_mismatch": [],
+  "tests": {
+   "00-calibration": "PASS",
+   "01-sanity": "PASS",
+   "02-color-named": "PASS",
+   "03-color-formats": "PASS",
+   "04-color-alpha": "PASS",
+   "05-border-width": "PASS",
+   "06-border-sides": "PASS",
+   "07-box-sizing": "PASS",
+   "08-padding": "PASS",
+   "09-margin": "PASS",
+   "10-min-max-width": "PASS",
+   "100-transform-overflow": "PASS",
+   "101-radius-overflow": "PASS",
+   "102-opacity-stacking": "PASS",
+   "103-filter-transform": "PASS",
+   "104-mask-gradient-radius": "PASS",
+   "105-float-clear-margin": "PASS",
+   "106-transform-zindex": "PASS",
+   "107-shadow-radius-overflow": "PASS",
+   "108-nested-transforms": "PASS",
+   "109-clippath-transform": "PASS",
+   "11-min-max-height": "PASS",
+   "110-accent-color": "DEBTOR",
+   "111-appearance-none": "PASS",
+   "112-clip-path-fill-rule": "PASS",
+   "113-shape-outside-path": "DEBTOR",
+   "114-contain-intrinsic-size": "PASS",
+   "115-empty-cells": "PASS",
+   "116-gradient-interpolation": "PASS",
+   "117-quotes": "DEBTOR",
+   "118-media-hover-pointer": "PASS",
+   "119-paint-order": "PASS",
+   "12-display": "PASS",
+   "120-media-contrast-data": "DEBTOR",
+   "121-supports-selector": "PASS",
+   "122-line-height-step": "DEBTOR",
+   "123-supports-font-tech-format": "PASS",
+   "124-prefers-reduced-transparency": "PASS",
+   "125-media-scripting": "PASS",
+   "126-media-inverted-colors": "DEBTOR",
+   "128-icc-color-management": "PASS",
+   "129-svg-dynamic-createelementns": "PASS",
+   "13-visibility-opacity": "PASS",
+   "130-svg-dynamic-nested-transforms": "PASS",
+   "131-svg-dynamic-opacity-layering": "PASS",
+   "132-svg-dynamic-use-symbol": "DEBTOR",
+   "133-svg-dynamic-fill-rule": "PASS",
+   "134-svg-dynamic-stroke-styles": "DEBTOR",
+   "135-svg-dynamic-paint-order": "DEBTOR",
+   "136-svg-dynamic-ellipse-radial": "DEBTOR",
+   "137-svg-dynamic-transform-pinwheel": "DEBTOR",
+   "138-svg-dynamic-dashboard": "PASS",
+   "139-float-flow": "PASS",
+   "14-overflow": "PASS",
+   "140-placeholder-pseudo": "DEBTOR",
+   "141-backface-visibility": "DEBTOR",
+   "142-color-profile": "PASS",
+   "143-css-function": "PASS",
+   "144-anchor-function": "PASS",
+   "145-writing-mode": "DEBTOR",
+   "146-imagebitmap": "PASS",
+   "147-background-repeat-space": "DEBTOR",
+   "148-isolation": "PASS",
+   "149-nested-overflow-scroll": "DEBTOR",
+   "15-box-shadow": "PASS",
+   "150-font-variant-caps": "FAIL",
+   "151-unicode-bidi": "FAIL",
+   "152-grid-place-content": "PASS",
+   "153-zoom": "PASS",
+   "154-svg-external-image-gradients": "PASS",
+   "155-svg-inline-gradients": "FAIL",
+   "156-svg-mask": "DEBTOR",
+   "157-webgl2": "PASS",
+   "158-background-attachment": "PASS",
+   "159-background-clip-text": "FAIL",
+   "16-outline": "PASS",
+   "160-fieldset-legend": "PASS",
+   "161-grid-vertical-writing-mode": "PASS",
+   "162-multicol-forced-breaks": "PASS",
+   "163-table-height": "PASS",
+   "164-fieldset-flex-grid": "PASS",
+   "165-svg-clip-path": "PASS",
+   "17-calc": "PASS",
+   "18-images": "DEBTOR",
+   "19-object-fit": "DEBTOR",
+   "20-quirks-bgcolor": "PASS",
+   "21-border-style": "FAIL",
+   "22-transform": "PASS",
+   "23-pseudo-elements": "PASS",
+   "24-vertical-align": "PASS",
+   "25-table-layout": "PASS",
+   "26-mask-image": "PASS",
+   "27-direction-rtl": "PASS",
+   "28-css-containment": "PASS",
+   "29-container-queries": "PASS",
+   "30-css-filter": "PASS",
+   "31-clip-path": "PASS",
+   "32-list-markers": "DEBTOR",
+   "33-multi-column": "PASS",
+   "34-forms": "DEBTOR",
+   "35-grid-named-areas": "PASS",
+   "36-border-radius": "PASS",
+   "37-float-clear": "PASS",
+   "38-z-index": "PASS",
+   "39-gradients": "PASS",
+   "40-conic-gradients": "PASS",
+   "41-table": "PASS",
+   "42-position-sticky": "PASS",
+   "43-intrinsic-sizing": "PASS",
+   "44-media-queries": "PASS",
+   "45-multiple-backgrounds": "DEBTOR",
+   "46-individual-transforms": "DEBTOR",
+   "47-svg-basic": "PASS",
+   "48-line-clamp": "PASS",
+   "49-background-blend-mode": "PASS",
+   "50-css-variables": "PASS",
+   "51-scrollbar-rendering": "DEBTOR",
+   "52-text-shadow-blur": "DEBTOR",
+   "53-background-origin": "DEBTOR",
+   "54-svg-path-stroke": "PASS",
+   "55-video-placeholder": "PASS",
+   "56-mix-blend-mode": "FAIL",
+   "57-canvas-2d": "PASS",
+   "58-first-letter-line": "DEBTOR",
+   "59-image-set-cross-fade": "DEBTOR",
+   "60-svg-stroke-advanced": "PASS",
+   "61-view-transitions": "DEBTOR",
+   "62-scroll-snap": "DEBTOR",
+   "63-masonry": "DEBTOR",
+   "64-table": "DEBTOR",
+   "65-flex-align-content": "DEBTOR",
+   "66-selection-pseudo": "DEBTOR",
+   "67-attr-typed": "DEBTOR",
+   "68-font-variation-settings": "PASS",
+   "69-border-spacing": "PASS",
+   "70-object-fit": "DEBTOR",
+   "71-starting-style": "PASS",
+   "72-host-slotted": "PASS",
+   "73-gap-rule": "PASS",
+   "74-font-stretch": "PASS",
+   "75-masonry-auto-flow": "PASS",
+   "76-motion-path": "PASS",
+   "77-anchor-positioning": "DEBTOR",
+   "78-scroll-driven-animations": "DEBTOR",
+   "79-text-underline-offset": "DEBTOR",
+   "80-border-collapse": "DEBTOR",
+   "81-view-transition-name": "PASS",
+   "82-svg-use": "DEBTOR",
+   "83-scroll-behavior": "DEBTOR",
+   "84-text-decoration-skip-ink": "DEBTOR",
+   "85-anchor-name-basic": "PASS",
+   "86-position-anchor-fallback": "PASS",
+   "87-inset-area-none": "PASS",
+   "88-anchor-nested": "PASS",
+   "89-anchor-multiple-names": "PASS",
+   "90-avif-image": "DEBTOR",
+   "91-relative-color": "PASS",
+   "92-system-colors": "PASS",
+   "93-field-sizing": "DEBTOR",
+   "94-interpolate-size": "PASS",
+   "95-font-size-adjust": "DEBTOR",
+   "96-color-function-spaces": "PASS",
+   "97-counter-set": "DEBTOR",
+   "98-revert-layer": "PASS",
+   "99-offset-path-ray": "PASS"
+  },
+  "timestamp": "2026-10-20T20:02:44",
+  "total": 165
+ },
+ "schema": 1,
+ "stamp": "20261023-123810",
+ "wpt": {
+  "categories": {
+   "FileAPI": {
+    "harness_ok": 95,
+    "ids": 113,
+    "pass_rate": 0.3377,
+    "ran": 113,
+    "score": 38.16
+   },
+   "IndexedDB": {
+    "harness_ok": 535,
+    "ids": 813,
+    "pass_rate": 0.1119,
+    "ran": 813,
+    "score": 90.98
+   },
+   "WebCryptoAPI": {
+    "harness_ok": 168,
+    "ids": 313,
+    "pass_rate": 0.0467,
+    "ran": 313,
+    "score": 14.62
+   },
+   "accelerometer": {
+    "harness_ok": 11,
+    "ids": 12,
+    "pass_rate": 0.2792,
+    "ran": 12,
+    "score": 3.35
+   },
+   "accessibility": {
+    "harness_ok": 57,
+    "ids": 58,
+    "pass_rate": 0.9828,
+    "ran": 58,
+    "score": 57.0
+   },
+   "accname": {
+    "harness_ok": 16,
+    "ids": 19,
+    "pass_rate": 0.4332,
+    "ran": 19,
+    "score": 8.23
+   },
+   "acid": {
+    "harness_ok": 1,
+    "ids": 3,
+    "pass_rate": 0.1833,
+    "ran": 3,
+    "score": 0.55
+   },
+   "ai": {
+    "harness_ok": 162,
+    "ids": 169,
+    "pass_rate": 0.0015,
+    "ran": 169,
+    "score": 0.26
+   },
+   "ambient-light": {
+    "harness_ok": 9,
+    "ids": 10,
+    "pass_rate": 0.322,
+    "ran": 10,
+    "score": 3.22
+   },
+   "animation-worklet": {
+    "harness_ok": 18,
+    "ids": 39,
+    "pass_rate": 0.0805,
+    "ran": 39,
+    "score": 3.14
+   },
+   "apng": {
+    "harness_ok": 1,
+    "ids": 2,
+    "pass_rate": 0.0,
+    "ran": 2,
+    "score": 0.0
+   },
+   "attribution-reporting": {
+    "harness_ok": 21,
+    "ids": 24,
+    "pass_rate": 0.0833,
+    "ran": 24,
+    "score": 2.0
+   },
+   "audio-output": {
+    "harness_ok": 8,
+    "ids": 10,
+    "pass_rate": 0.108,
+    "ran": 10,
+    "score": 1.08
+   },
+   "audio-session": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.1567,
+    "ran": 3,
+    "score": 0.47
+   },
+   "autoplay-policy-detection": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.2733,
+    "ran": 3,
+    "score": 0.82
+   },
+   "avif": {
+    "harness_ok": 0,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "background-fetch": {
+    "harness_ok": 3,
+    "ids": 14,
+    "pass_rate": 0.1071,
+    "ran": 14,
+    "score": 1.5
+   },
+   "background-sync": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.56,
+    "ran": 2,
+    "score": 1.12
+   },
+   "badging": {
+    "harness_ok": 8,
+    "ids": 8,
+    "pass_rate": 0.3975,
+    "ran": 8,
+    "score": 3.18
+   },
+   "battery-status": {
+    "harness_ok": 14,
+    "ids": 17,
+    "pass_rate": 0.0782,
+    "ran": 17,
+    "score": 1.33
+   },
+   "beacon": {
+    "harness_ok": 13,
+    "ids": 17,
+    "pass_rate": 0.2282,
+    "ran": 17,
+    "score": 3.88
+   },
+   "bluetooth": {
+    "harness_ok": 7,
+    "ids": 155,
+    "pass_rate": 0.0104,
+    "ran": 155,
+    "score": 1.61
+   },
+   "browsing-topics": {
+    "harness_ok": 11,
+    "ids": 13,
+    "pass_rate": 0.4269,
+    "ran": 13,
+    "score": 5.55
+   },
+   "captured-mouse-events": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.0275,
+    "ran": 4,
+    "score": 0.11
+   },
+   "clear-site-data": {
+    "harness_ok": 5,
+    "ids": 13,
+    "pass_rate": 0.1731,
+    "ran": 13,
+    "score": 2.25
+   },
+   "client-hints": {
+    "harness_ok": 85,
+    "ids": 132,
+    "pass_rate": 0.3649,
+    "ran": 132,
+    "score": 48.17
+   },
+   "clipboard-apis": {
+    "harness_ok": 32,
+    "ids": 58,
+    "pass_rate": 0.2281,
+    "ran": 58,
+    "score": 13.23
+   },
+   "close-watcher": {
+    "harness_ok": 64,
+    "ids": 65,
+    "pass_rate": 0.226,
+    "ran": 65,
+    "score": 14.69
+   },
+   "compat": {
+    "harness_ok": 38,
+    "ids": 38,
+    "pass_rate": 0.9561,
+    "ran": 38,
+    "score": 36.33
+   },
+   "compression": {
+    "harness_ok": 56,
+    "ids": 74,
+    "pass_rate": 0.5795,
+    "ran": 74,
+    "score": 42.88
+   },
+   "compute-pressure": {
+    "harness_ok": 29,
+    "ids": 45,
+    "pass_rate": 0.136,
+    "ran": 45,
+    "score": 6.12
+   },
+   "connection-allowlist": {
+    "harness_ok": 52,
+    "ids": 73,
+    "pass_rate": 0.4205,
+    "ran": 73,
+    "score": 30.7
+   },
+   "console": {
+    "harness_ok": 14,
+    "ids": 19,
+    "pass_rate": 0.3911,
+    "ran": 19,
+    "score": 7.43
+   },
+   "contacts": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "container-timing": {
+    "harness_ok": 19,
+    "ids": 19,
+    "pass_rate": 0.0,
+    "ran": 19,
+    "score": 0.0
+   },
+   "content-dpr": {
+    "harness_ok": 2,
+    "ids": 6,
+    "pass_rate": 0.1667,
+    "ran": 6,
+    "score": 1.0
+   },
+   "content-index": {
+    "harness_ok": 4,
+    "ids": 5,
+    "pass_rate": 0.35,
+    "ran": 5,
+    "score": 1.75
+   },
+   "content-security-policy": {
+    "harness_ok": 701,
+    "ids": 896,
+    "pass_rate": 0.5007,
+    "ran": 896,
+    "score": 448.59
+   },
+   "contenteditable": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.875,
+    "ran": 4,
+    "score": 3.5
+   },
+   "cookies": {
+    "harness_ok": 36,
+    "ids": 82,
+    "pass_rate": 0.2873,
+    "ran": 82,
+    "score": 23.56
+   },
+   "cookiestore": {
+    "harness_ok": 40,
+    "ids": 74,
+    "pass_rate": 0.2974,
+    "ran": 74,
+    "score": 22.01
+   },
+   "core-aam": {
+    "harness_ok": 1,
+    "ids": 97,
+    "pass_rate": 0.0039,
+    "ran": 1,
+    "score": 0.38
+   },
+   "cors": {
+    "harness_ok": 23,
+    "ids": 27,
+    "pass_rate": 0.3059,
+    "ran": 27,
+    "score": 8.26
+   },
+   "cpu-performance": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "credential-management": {
+    "harness_ok": 10,
+    "ids": 13,
+    "pass_rate": 0.2231,
+    "ran": 13,
+    "score": 2.9
+   },
+   "css": {
+    "harness_ok": 21384,
+    "ids": 33496,
+    "pass_rate": 0.5347,
+    "ran": 33490,
+    "score": 17910.46
+   },
+   "cssom": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 1.0,
+    "ran": 2,
+    "score": 2.0
+   },
+   "custom-elements": {
+    "harness_ok": 171,
+    "ids": 188,
+    "pass_rate": 0.1628,
+    "ran": 188,
+    "score": 30.61
+   },
+   "delegated-ink": {
+    "harness_ok": 4,
+    "ids": 5,
+    "pass_rate": 0.0,
+    "ran": 5,
+    "score": 0.0
+   },
+   "density-size-correction": {
+    "harness_ok": 8,
+    "ids": 22,
+    "pass_rate": 0.2727,
+    "ran": 22,
+    "score": 6.0
+   },
+   "deprecation-reporting": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 1.0,
+    "ran": 2,
+    "score": 2.0
+   },
+   "device-bound-session-credentials": {
+    "harness_ok": 1,
+    "ids": 27,
+    "pass_rate": 0.037,
+    "ran": 27,
+    "score": 1.0
+   },
+   "device-memory": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.7225,
+    "ran": 4,
+    "score": 2.89
+   },
+   "device-posture": {
+    "harness_ok": 1,
+    "ids": 5,
+    "pass_rate": 0.104,
+    "ran": 5,
+    "score": 0.52
+   },
+   "digital-credentials": {
+    "harness_ok": 12,
+    "ids": 24,
+    "pass_rate": 0.0833,
+    "ran": 24,
+    "score": 2.0
+   },
+   "direct-sockets": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.0,
+    "ran": 3,
+    "score": 0.0
+   },
+   "document-picture-in-picture": {
+    "harness_ok": 8,
+    "ids": 22,
+    "pass_rate": 0.0,
+    "ran": 22,
+    "score": 0.0
+   },
+   "document-policy": {
+    "harness_ok": 7,
+    "ids": 10,
+    "pass_rate": 0.317,
+    "ran": 10,
+    "score": 3.17
+   },
+   "dom": {
+    "harness_ok": 628,
+    "ids": 724,
+    "pass_rate": 0.4606,
+    "ran": 724,
+    "score": 333.47
+   },
+   "domparsing": {
+    "harness_ok": 59,
+    "ids": 60,
+    "pass_rate": 0.3202,
+    "ran": 60,
+    "score": 19.21
+   },
+   "domxpath": {
+    "harness_ok": 30,
+    "ids": 34,
+    "pass_rate": 0.5906,
+    "ran": 34,
+    "score": 20.08
+   },
+   "dpub-aam": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 1.0,
+    "ran": 1,
+    "score": 1.0
+   },
+   "ecmascript": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 1.0,
+    "ran": 2,
+    "score": 2.0
+   },
+   "editing": {
+    "harness_ok": 775,
+    "ids": 842,
+    "pass_rate": 0.3706,
+    "ran": 841,
+    "score": 312.03
+   },
+   "element-timing": {
+    "harness_ok": 52,
+    "ids": 52,
+    "pass_rate": 0.0144,
+    "ran": 52,
+    "score": 0.75
+   },
+   "encoding": {
+    "harness_ok": 409,
+    "ids": 1343,
+    "pass_rate": 0.0562,
+    "ran": 1343,
+    "score": 75.49
+   },
+   "encoding-detection": {
+    "harness_ok": 75,
+    "ids": 75,
+    "pass_rate": 0.04,
+    "ran": 75,
+    "score": 3.0
+   },
+   "encrypted-media": {
+    "harness_ok": 73,
+    "ids": 99,
+    "pass_rate": 0.0128,
+    "ran": 99,
+    "score": 1.27
+   },
+   "entries-api": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.26,
+    "ran": 1,
+    "score": 0.26
+   },
+   "event-timing": {
+    "harness_ok": 70,
+    "ids": 74,
+    "pass_rate": 0.0472,
+    "ran": 74,
+    "score": 3.49
+   },
+   "eventsource": {
+    "harness_ok": 91,
+    "ids": 99,
+    "pass_rate": 0.3973,
+    "ran": 99,
+    "score": 39.33
+   },
+   "eyedropper": {
+    "harness_ok": 1,
+    "ids": 2,
+    "pass_rate": 0.89,
+    "ran": 2,
+    "score": 1.78
+   },
+   "fedcm": {
+    "harness_ok": 78,
+    "ids": 81,
+    "pass_rate": 0.0123,
+    "ran": 81,
+    "score": 1.0
+   },
+   "fenced-frame": {
+    "harness_ok": 186,
+    "ids": 199,
+    "pass_rate": 0.0143,
+    "ran": 199,
+    "score": 2.84
+   },
+   "fetch": {
+    "harness_ok": 638,
+    "ids": 921,
+    "pass_rate": 0.3032,
+    "ran": 921,
+    "score": 279.28
+   },
+   "file-system-access": {
+    "harness_ok": 8,
+    "ids": 10,
+    "pass_rate": 0.365,
+    "ran": 10,
+    "score": 3.65
+   },
+   "fledge": {
+    "harness_ok": 3,
+    "ids": 183,
+    "pass_rate": 0.0109,
+    "ran": 183,
+    "score": 2.0
+   },
+   "focus": {
+    "harness_ok": 13,
+    "ids": 43,
+    "pass_rate": 0.2093,
+    "ran": 43,
+    "score": 9.0
+   },
+   "font-access": {
+    "harness_ok": 11,
+    "ids": 12,
+    "pass_rate": 0.1392,
+    "ran": 12,
+    "score": 1.67
+   },
+   "forced-colors-mode": {
+    "harness_ok": 28,
+    "ids": 63,
+    "pass_rate": 0.2519,
+    "ran": 63,
+    "score": 15.87
+   },
+   "fs": {
+    "harness_ok": 69,
+    "ids": 100,
+    "pass_rate": 0.1059,
+    "ran": 100,
+    "score": 10.59
+   },
+   "fullscreen": {
+    "harness_ok": 65,
+    "ids": 94,
+    "pass_rate": 0.2341,
+    "ran": 94,
+    "score": 22.01
+   },
+   "gamepad": {
+    "harness_ok": 5,
+    "ids": 6,
+    "pass_rate": 0.305,
+    "ran": 6,
+    "score": 1.83
+   },
+   "generic-sensor": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.7967,
+    "ran": 3,
+    "score": 2.39
+   },
+   "geolocation": {
+    "harness_ok": 11,
+    "ids": 20,
+    "pass_rate": 0.5125,
+    "ran": 20,
+    "score": 10.25
+   },
+   "geolocation-sensor": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 1.0,
+    "ran": 1,
+    "score": 1.0
+   },
+   "gif": {
+    "harness_ok": 0,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "gpc": {
+    "harness_ok": 4,
+    "ids": 7,
+    "pass_rate": 0.3829,
+    "ran": 7,
+    "score": 2.68
+   },
+   "graphics-aria": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 1.0,
+    "ran": 1,
+    "score": 1.0
+   },
+   "gyroscope": {
+    "harness_ok": 9,
+    "ids": 10,
+    "pass_rate": 0.322,
+    "ran": 10,
+    "score": 3.22
+   },
+   "hr-time": {
+    "harness_ok": 17,
+    "ids": 18,
+    "pass_rate": 0.8056,
+    "ran": 18,
+    "score": 14.5
+   },
+   "hsts": {
+    "harness_ok": 0,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "html": {
+    "harness_ok": 7821,
+    "ids": 9981,
+    "pass_rate": 0.4416,
+    "ran": 9981,
+    "score": 4407.64
+   },
+   "html-aam": {
+    "harness_ok": 15,
+    "ids": 16,
+    "pass_rate": 0.4288,
+    "ran": 16,
+    "score": 6.86
+   },
+   "html-media-capture": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.97,
+    "ran": 2,
+    "score": 1.94
+   },
+   "html-ruby-extensions": {
+    "harness_ok": 82,
+    "ids": 84,
+    "pass_rate": 0.9762,
+    "ran": 84,
+    "score": 82.0
+   },
+   "https-upgrades": {
+    "harness_ok": 1,
+    "ids": 6,
+    "pass_rate": 0.1667,
+    "ran": 6,
+    "score": 1.0
+   },
+   "idle-detection": {
+    "harness_ok": 8,
+    "ids": 12,
+    "pass_rate": 0.415,
+    "ran": 12,
+    "score": 4.98
+   },
+   "imagebitmap-renderingcontext": {
+    "harness_ok": 13,
+    "ids": 14,
+    "pass_rate": 0.405,
+    "ran": 14,
+    "score": 5.67
+   },
+   "import-maps": {
+    "harness_ok": 38,
+    "ids": 57,
+    "pass_rate": 0.2207,
+    "ran": 57,
+    "score": 12.58
+   },
+   "inert": {
+    "harness_ok": 26,
+    "ids": 29,
+    "pass_rate": 0.4886,
+    "ran": 29,
+    "score": 14.17
+   },
+   "input-device-capabilities": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.41,
+    "ran": 1,
+    "score": 0.41
+   },
+   "input-events": {
+    "harness_ok": 29,
+    "ids": 33,
+    "pass_rate": 0.08,
+    "ran": 33,
+    "score": 2.64
+   },
+   "installedapp": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.44,
+    "ran": 2,
+    "score": 0.88
+   },
+   "intersection-observer": {
+    "harness_ok": 138,
+    "ids": 146,
+    "pass_rate": 0.4175,
+    "ran": 146,
+    "score": 60.95
+   },
+   "intervention-reporting": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 1.0,
+    "ran": 2,
+    "score": 2.0
+   },
+   "is-input-pending": {
+    "harness_ok": 1,
+    "ids": 12,
+    "pass_rate": 0.0433,
+    "ran": 12,
+    "score": 0.52
+   },
+   "jpegxl": {
+    "harness_ok": 39,
+    "ids": 46,
+    "pass_rate": 0.7609,
+    "ran": 46,
+    "score": 35.0
+   },
+   "js": {
+    "harness_ok": 33,
+    "ids": 35,
+    "pass_rate": 0.4023,
+    "ran": 35,
+    "score": 14.08
+   },
+   "js-self-profiling": {
+    "harness_ok": 24,
+    "ids": 24,
+    "pass_rate": 0.0233,
+    "ran": 24,
+    "score": 0.56
+   },
+   "keyboard-lock": {
+    "harness_ok": 5,
+    "ids": 7,
+    "pass_rate": 0.0943,
+    "ran": 7,
+    "score": 0.66
+   },
+   "keyboard-map": {
+    "harness_ok": 4,
+    "ids": 8,
+    "pass_rate": 0.0537,
+    "ran": 8,
+    "score": 0.43
+   },
+   "largest-contentful-paint": {
+    "harness_ok": 18,
+    "ids": 68,
+    "pass_rate": 0.1078,
+    "ran": 68,
+    "score": 7.33
+   },
+   "layout-instability": {
+    "harness_ok": 72,
+    "ids": 82,
+    "pass_rate": 0.2423,
+    "ran": 82,
+    "score": 19.87
+   },
+   "loading": {
+    "harness_ok": 52,
+    "ids": 53,
+    "pass_rate": 0.8302,
+    "ran": 53,
+    "score": 44.0
+   },
+   "long-animation-frame": {
+    "harness_ok": 25,
+    "ids": 41,
+    "pass_rate": 0.1422,
+    "ran": 41,
+    "score": 5.83
+   },
+   "longtask-timing": {
+    "harness_ok": 16,
+    "ids": 21,
+    "pass_rate": 0.6333,
+    "ran": 21,
+    "score": 13.3
+   },
+   "magnetometer": {
+    "harness_ok": 9,
+    "ids": 10,
+    "pass_rate": 0.211,
+    "ran": 10,
+    "score": 2.11
+   },
+   "managed": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.0,
+    "ran": 2,
+    "score": 0.0
+   },
+   "mathml": {
+    "harness_ok": 427,
+    "ids": 600,
+    "pass_rate": 0.4359,
+    "ran": 600,
+    "score": 261.56
+   },
+   "measure-memory": {
+    "harness_ok": 10,
+    "ids": 16,
+    "pass_rate": 0.05,
+    "ran": 16,
+    "score": 0.8
+   },
+   "media-capabilities": {
+    "harness_ok": 10,
+    "ids": 12,
+    "pass_rate": 0.2317,
+    "ran": 12,
+    "score": 2.78
+   },
+   "media-playback-quality": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.4,
+    "ran": 1,
+    "score": 0.4
+   },
+   "media-source": {
+    "harness_ok": 64,
+    "ids": 82,
+    "pass_rate": 0.4716,
+    "ran": 82,
+    "score": 38.67
+   },
+   "mediacapture-extensions": {
+    "harness_ok": 5,
+    "ids": 5,
+    "pass_rate": 0.0,
+    "ran": 5,
+    "score": 0.0
+   },
+   "mediacapture-fromelement": {
+    "harness_ok": 11,
+    "ids": 12,
+    "pass_rate": 0.2475,
+    "ran": 12,
+    "score": 2.97
+   },
+   "mediacapture-handle": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "mediacapture-image": {
+    "harness_ok": 16,
+    "ids": 24,
+    "pass_rate": 0.1379,
+    "ran": 24,
+    "score": 3.31
+   },
+   "mediacapture-insertable-streams": {
+    "harness_ok": 16,
+    "ids": 17,
+    "pass_rate": 0.0035,
+    "ran": 17,
+    "score": 0.06
+   },
+   "mediacapture-record": {
+    "harness_ok": 78,
+    "ids": 120,
+    "pass_rate": 0.3853,
+    "ran": 120,
+    "score": 46.24
+   },
+   "mediacapture-region": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "mediacapture-streams": {
+    "harness_ok": 37,
+    "ids": 58,
+    "pass_rate": 0.101,
+    "ran": 58,
+    "score": 5.86
+   },
+   "mediasession": {
+    "harness_ok": 8,
+    "ids": 9,
+    "pass_rate": 0.8456,
+    "ran": 9,
+    "score": 7.61
+   },
+   "merchant-validation": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.25,
+    "ran": 4,
+    "score": 1.0
+   },
+   "mimesniff": {
+    "harness_ok": 5,
+    "ids": 7,
+    "pass_rate": 0.18,
+    "ran": 7,
+    "score": 1.26
+   },
+   "mixed-content": {
+    "harness_ok": 326,
+    "ids": 388,
+    "pass_rate": 0.6283,
+    "ran": 388,
+    "score": 243.77
+   },
+   "mst-content-hint": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.14,
+    "ran": 4,
+    "score": 0.56
+   },
+   "nav-tracking-mitigations": {
+    "harness_ok": 0,
+    "ids": 2,
+    "pass_rate": 0.0,
+    "ran": 2,
+    "score": 0.0
+   },
+   "navigation-api": {
+    "harness_ok": 299,
+    "ids": 478,
+    "pass_rate": 0.0475,
+    "ran": 478,
+    "score": 22.7
+   },
+   "navigation-timing": {
+    "harness_ok": 42,
+    "ids": 58,
+    "pass_rate": 0.4543,
+    "ran": 58,
+    "score": 26.35
+   },
+   "netinfo": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.7367,
+    "ran": 3,
+    "score": 2.21
+   },
+   "network-error-logging": {
+    "harness_ok": 1,
+    "ids": 12,
+    "pass_rate": 0.0,
+    "ran": 12,
+    "score": 0.0
+   },
+   "notifications": {
+    "harness_ok": 13,
+    "ids": 29,
+    "pass_rate": 0.1959,
+    "ran": 29,
+    "score": 5.68
+   },
+   "orientation-event": {
+    "harness_ok": 8,
+    "ids": 27,
+    "pass_rate": 0.0507,
+    "ran": 27,
+    "score": 1.37
+   },
+   "orientation-sensor": {
+    "harness_ok": 14,
+    "ids": 16,
+    "pass_rate": 0.365,
+    "ran": 16,
+    "score": 5.84
+   },
+   "page-lifecycle": {
+    "harness_ok": 2,
+    "ids": 6,
+    "pass_rate": 0.28,
+    "ran": 6,
+    "score": 1.68
+   },
+   "page-visibility": {
+    "harness_ok": 6,
+    "ids": 11,
+    "pass_rate": 0.3182,
+    "ran": 11,
+    "score": 3.5
+   },
+   "paint-timing": {
+    "harness_ok": 47,
+    "ids": 56,
+    "pass_rate": 0.3671,
+    "ran": 56,
+    "score": 20.56
+   },
+   "parakeet": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.2267,
+    "ran": 3,
+    "score": 0.68
+   },
+   "payment-method-basic-card": {
+    "harness_ok": 2,
+    "ids": 4,
+    "pass_rate": 0.3325,
+    "ran": 4,
+    "score": 1.33
+   },
+   "payment-method-id": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 1.0,
+    "ran": 1,
+    "score": 1.0
+   },
+   "payment-request": {
+    "harness_ok": 27,
+    "ids": 33,
+    "pass_rate": 0.3618,
+    "ran": 33,
+    "score": 11.94
+   },
+   "performance-timeline": {
+    "harness_ok": 65,
+    "ids": 74,
+    "pass_rate": 0.3964,
+    "ran": 74,
+    "score": 29.33
+   },
+   "periodic-background-sync": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.4,
+    "ran": 3,
+    "score": 1.2
+   },
+   "permissions": {
+    "harness_ok": 14,
+    "ids": 18,
+    "pass_rate": 0.6283,
+    "ran": 18,
+    "score": 11.31
+   },
+   "permissions-policy": {
+    "harness_ok": 62,
+    "ids": 115,
+    "pass_rate": 0.1105,
+    "ran": 115,
+    "score": 12.71
+   },
+   "permissions-request": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.785,
+    "ran": 2,
+    "score": 1.57
+   },
+   "permissions-revoke": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.785,
+    "ran": 2,
+    "score": 1.57
+   },
+   "picture-in-picture": {
+    "harness_ok": 6,
+    "ids": 17,
+    "pass_rate": 0.0888,
+    "ran": 17,
+    "score": 1.51
+   },
+   "png": {
+    "harness_ok": 6,
+    "ids": 35,
+    "pass_rate": 0.1143,
+    "ran": 35,
+    "score": 4.0
+   },
+   "pointerevents": {
+    "harness_ok": 117,
+    "ids": 259,
+    "pass_rate": 0.1264,
+    "ran": 259,
+    "score": 32.73
+   },
+   "pointerlock": {
+    "harness_ok": 11,
+    "ids": 20,
+    "pass_rate": 0.2605,
+    "ran": 20,
+    "score": 5.21
+   },
+   "preload": {
+    "harness_ok": 67,
+    "ids": 80,
+    "pass_rate": 0.3788,
+    "ran": 80,
+    "score": 30.3
+   },
+   "presentation-api": {
+    "harness_ok": 13,
+    "ids": 13,
+    "pass_rate": 0.4615,
+    "ran": 13,
+    "score": 6.0
+   },
+   "print": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 1.0,
+    "ran": 1,
+    "score": 1.0
+   },
+   "private-aggregation": {
+    "harness_ok": 9,
+    "ids": 9,
+    "pass_rate": 0.1311,
+    "ran": 9,
+    "score": 1.18
+   },
+   "private-click-measurement": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.88,
+    "ran": 1,
+    "score": 0.88
+   },
+   "proximity": {
+    "harness_ok": 2,
+    "ids": 4,
+    "pass_rate": 0.28,
+    "ran": 4,
+    "score": 1.12
+   },
+   "push-api": {
+    "harness_ok": 7,
+    "ids": 12,
+    "pass_rate": 0.1483,
+    "ran": 12,
+    "score": 1.78
+   },
+   "quirks": {
+    "harness_ok": 20,
+    "ids": 50,
+    "pass_rate": 0.3566,
+    "ran": 50,
+    "score": 17.83
+   },
+   "referrer-policy": {
+    "harness_ok": 1219,
+    "ids": 1390,
+    "pass_rate": 0.4693,
+    "ran": 1390,
+    "score": 652.35
+   },
+   "remote-playback": {
+    "harness_ok": 9,
+    "ids": 9,
+    "pass_rate": 0.0356,
+    "ran": 9,
+    "score": 0.32
+   },
+   "reporting": {
+    "harness_ok": 18,
+    "ids": 26,
+    "pass_rate": 0.32,
+    "ran": 26,
+    "score": 8.32
+   },
+   "requestidlecallback": {
+    "harness_ok": 18,
+    "ids": 20,
+    "pass_rate": 0.7,
+    "ran": 20,
+    "score": 14.0
+   },
+   "resize-observer": {
+    "harness_ok": 13,
+    "ids": 20,
+    "pass_rate": 0.3845,
+    "ran": 20,
+    "score": 7.69
+   },
+   "resource-timing": {
+    "harness_ok": 120,
+    "ids": 159,
+    "pass_rate": 0.2677,
+    "ran": 159,
+    "score": 42.57
+   },
+   "sanitizer-api": {
+    "harness_ok": 27,
+    "ids": 27,
+    "pass_rate": 0.6419,
+    "ran": 27,
+    "score": 17.33
+   },
+   "savedata": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.7,
+    "ran": 2,
+    "score": 1.4
+   },
+   "scheduler": {
+    "harness_ok": 84,
+    "ids": 114,
+    "pass_rate": 0.2632,
+    "ran": 114,
+    "score": 30.0
+   },
+   "screen-capture": {
+    "harness_ok": 12,
+    "ids": 15,
+    "pass_rate": 0.222,
+    "ran": 15,
+    "score": 3.33
+   },
+   "screen-details": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.5,
+    "ran": 3,
+    "score": 1.5
+   },
+   "screen-orientation": {
+    "harness_ok": 11,
+    "ids": 15,
+    "pass_rate": 0.4007,
+    "ran": 15,
+    "score": 6.01
+   },
+   "screen-wake-lock": {
+    "harness_ok": 14,
+    "ids": 18,
+    "pass_rate": 0.4828,
+    "ran": 18,
+    "score": 8.69
+   },
+   "scroll-animations": {
+    "harness_ok": 223,
+    "ids": 254,
+    "pass_rate": 0.2006,
+    "ran": 254,
+    "score": 50.94
+   },
+   "scroll-performance-timing": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "scroll-to-text-fragment": {
+    "harness_ok": 13,
+    "ids": 26,
+    "pass_rate": 0.1027,
+    "ran": 26,
+    "score": 2.67
+   },
+   "secure-contexts": {
+    "harness_ok": 5,
+    "ids": 8,
+    "pass_rate": 0.2925,
+    "ran": 8,
+    "score": 2.34
+   },
+   "secure-payment-confirmation": {
+    "harness_ok": 19,
+    "ids": 20,
+    "pass_rate": 0.069,
+    "ran": 20,
+    "score": 1.38
+   },
+   "selection": {
+    "harness_ok": 155,
+    "ids": 171,
+    "pass_rate": 0.4059,
+    "ran": 171,
+    "score": 69.41
+   },
+   "serial": {
+    "harness_ok": 6,
+    "ids": 11,
+    "pass_rate": 0.0673,
+    "ran": 11,
+    "score": 0.74
+   },
+   "server-timing": {
+    "harness_ok": 4,
+    "ids": 10,
+    "pass_rate": 0.162,
+    "ran": 10,
+    "score": 1.62
+   },
+   "service-workers": {
+    "harness_ok": 168,
+    "ids": 331,
+    "pass_rate": 0.1144,
+    "ran": 331,
+    "score": 37.87
+   },
+   "shadow-dom": {
+    "harness_ok": 323,
+    "ids": 345,
+    "pass_rate": 0.3045,
+    "ran": 345,
+    "score": 105.04
+   },
+   "shape-detection": {
+    "harness_ok": 14,
+    "ids": 27,
+    "pass_rate": 0.0541,
+    "ran": 27,
+    "score": 1.46
+   },
+   "shared-storage": {
+    "harness_ok": 59,
+    "ids": 90,
+    "pass_rate": 0.0773,
+    "ran": 90,
+    "score": 6.96
+   },
+   "shared-storage-selecturl-limit": {
+    "harness_ok": 5,
+    "ids": 7,
+    "pass_rate": 0.0,
+    "ran": 7,
+    "score": 0.0
+   },
+   "signed-exchange": {
+    "harness_ok": 22,
+    "ids": 60,
+    "pass_rate": 0.0833,
+    "ran": 60,
+    "score": 5.0
+   },
+   "soft-navigation-heuristics": {
+    "harness_ok": 81,
+    "ids": 94,
+    "pass_rate": 0.0606,
+    "ran": 94,
+    "score": 5.7
+   },
+   "speculation-rules": {
+    "harness_ok": 9,
+    "ids": 530,
+    "pass_rate": 0.0066,
+    "ran": 530,
+    "score": 3.5
+   },
+   "speech-api": {
+    "harness_ok": 15,
+    "ids": 16,
+    "pass_rate": 0.2994,
+    "ran": 16,
+    "score": 4.79
+   },
+   "storage": {
+    "harness_ok": 46,
+    "ids": 56,
+    "pass_rate": 0.2264,
+    "ran": 56,
+    "score": 12.68
+   },
+   "storage-access-api": {
+    "harness_ok": 3,
+    "ids": 40,
+    "pass_rate": 0.0932,
+    "ran": 40,
+    "score": 3.73
+   },
+   "streams": {
+    "harness_ok": 199,
+    "ids": 312,
+    "pass_rate": 0.3914,
+    "ran": 312,
+    "score": 122.12
+   },
+   "subapps": {
+    "harness_ok": 5,
+    "ids": 8,
+    "pass_rate": 0.125,
+    "ran": 8,
+    "score": 1.0
+   },
+   "subresource-integrity": {
+    "harness_ok": 31,
+    "ids": 36,
+    "pass_rate": 0.4275,
+    "ran": 36,
+    "score": 15.39
+   },
+   "svg": {
+    "harness_ok": 870,
+    "ids": 1225,
+    "pass_rate": 0.3498,
+    "ran": 1225,
+    "score": 428.47
+   },
+   "svg-aam": {
+    "harness_ok": 7,
+    "ids": 7,
+    "pass_rate": 0.6814,
+    "ran": 7,
+    "score": 4.77
+   },
+   "timing-entrytypes-registry": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.6667,
+    "ran": 3,
+    "score": 2.0
+   },
+   "top-level-storage-access-api": {
+    "harness_ok": 2,
+    "ids": 3,
+    "pass_rate": 0.1633,
+    "ran": 3,
+    "score": 0.49
+   },
+   "touch-events": {
+    "harness_ok": 8,
+    "ids": 15,
+    "pass_rate": 0.324,
+    "ran": 15,
+    "score": 4.86
+   },
+   "trust-tokens": {
+    "harness_ok": 2,
+    "ids": 3,
+    "pass_rate": 0.2633,
+    "ran": 3,
+    "score": 0.79
+   },
+   "trusted-types": {
+    "harness_ok": 176,
+    "ids": 236,
+    "pass_rate": 0.4548,
+    "ran": 236,
+    "score": 107.33
+   },
+   "ua-client-hints": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.89,
+    "ran": 4,
+    "score": 3.56
+   },
+   "uievents": {
+    "harness_ok": 46,
+    "ids": 71,
+    "pass_rate": 0.2914,
+    "ran": 71,
+    "score": 20.69
+   },
+   "upgrade-insecure-requests": {
+    "harness_ok": 190,
+    "ids": 197,
+    "pass_rate": 0.4941,
+    "ran": 197,
+    "score": 97.33
+   },
+   "url": {
+    "harness_ok": 76,
+    "ids": 77,
+    "pass_rate": 0.7388,
+    "ran": 77,
+    "score": 56.89
+   },
+   "urlpattern": {
+    "harness_ok": 23,
+    "ids": 30,
+    "pass_rate": 0.7667,
+    "ran": 30,
+    "score": 23.0
+   },
+   "user-timing": {
+    "harness_ok": 59,
+    "ids": 61,
+    "pass_rate": 0.8751,
+    "ran": 61,
+    "score": 53.38
+   },
+   "vibration": {
+    "harness_ok": 3,
+    "ids": 4,
+    "pass_rate": 0.2025,
+    "ran": 4,
+    "score": 0.81
+   },
+   "video-rvfc": {
+    "harness_ok": 7,
+    "ids": 8,
+    "pass_rate": 0.0838,
+    "ran": 8,
+    "score": 0.67
+   },
+   "viewport": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "viewport-segments": {
+    "harness_ok": 0,
+    "ids": 3,
+    "pass_rate": 0.0,
+    "ran": 3,
+    "score": 0.0
+   },
+   "virtual-keyboard": {
+    "harness_ok": 3,
+    "ids": 3,
+    "pass_rate": 0.5633,
+    "ran": 3,
+    "score": 1.69
+   },
+   "visual-viewport": {
+    "harness_ok": 12,
+    "ids": 19,
+    "pass_rate": 0.3816,
+    "ran": 19,
+    "score": 7.25
+   },
+   "wai-aria": {
+    "harness_ok": 31,
+    "ids": 32,
+    "pass_rate": 0.4659,
+    "ran": 32,
+    "score": 14.91
+   },
+   "wasm": {
+    "harness_ok": 473,
+    "ids": 612,
+    "pass_rate": 0.2731,
+    "ran": 612,
+    "score": 167.11
+   },
+   "web-animations": {
+    "harness_ok": 180,
+    "ids": 197,
+    "pass_rate": 0.4772,
+    "ran": 197,
+    "score": 94.0
+   },
+   "web-based-payment-handler": {
+    "harness_ok": 10,
+    "ids": 13,
+    "pass_rate": 0.57,
+    "ran": 13,
+    "score": 7.41
+   },
+   "web-bundle": {
+    "harness_ok": 1,
+    "ids": 28,
+    "pass_rate": 0.0179,
+    "ran": 28,
+    "score": 0.5
+   },
+   "web-extensions": {
+    "harness_ok": 0,
+    "ids": 6,
+    "pass_rate": 0.0,
+    "ran": 6,
+    "score": 0.0
+   },
+   "web-install": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.0,
+    "ran": 4,
+    "score": 0.0
+   },
+   "web-locks": {
+    "harness_ok": 53,
+    "ids": 90,
+    "pass_rate": 0.1856,
+    "ran": 90,
+    "score": 16.7
+   },
+   "web-nfc": {
+    "harness_ok": 8,
+    "ids": 11,
+    "pass_rate": 0.0936,
+    "ran": 11,
+    "score": 1.03
+   },
+   "web-otp": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.69,
+    "ran": 1,
+    "score": 0.69
+   },
+   "web-share": {
+    "harness_ok": 14,
+    "ids": 15,
+    "pass_rate": 0.1707,
+    "ran": 15,
+    "score": 2.56
+   },
+   "webaudio": {
+    "harness_ok": 280,
+    "ids": 328,
+    "pass_rate": 0.5079,
+    "ran": 328,
+    "score": 166.58
+   },
+   "webauthn": {
+    "harness_ok": 25,
+    "ids": 53,
+    "pass_rate": 0.0323,
+    "ran": 53,
+    "score": 1.71
+   },
+   "webcodecs": {
+    "harness_ok": 186,
+    "ids": 240,
+    "pass_rate": 0.0592,
+    "ran": 240,
+    "score": 14.2
+   },
+   "webdriver": {
+    "harness_ok": 1,
+    "ids": 627,
+    "pass_rate": 0.0015,
+    "ran": 1,
+    "score": 0.93
+   },
+   "webgl": {
+    "harness_ok": 10,
+    "ids": 10,
+    "pass_rate": 0.351,
+    "ran": 10,
+    "score": 3.51
+   },
+   "webhid": {
+    "harness_ok": 3,
+    "ids": 6,
+    "pass_rate": 0.2583,
+    "ran": 6,
+    "score": 1.55
+   },
+   "webidl": {
+    "harness_ok": 59,
+    "ids": 62,
+    "pass_rate": 0.4839,
+    "ran": 62,
+    "score": 30.0
+   },
+   "webmcp": {
+    "harness_ok": 44,
+    "ids": 50,
+    "pass_rate": 0.041,
+    "ran": 50,
+    "score": 2.05
+   },
+   "webmessaging": {
+    "harness_ok": 137,
+    "ids": 161,
+    "pass_rate": 0.4673,
+    "ran": 161,
+    "score": 75.24
+   },
+   "webmidi": {
+    "harness_ok": 1,
+    "ids": 1,
+    "pass_rate": 0.51,
+    "ran": 1,
+    "score": 0.51
+   },
+   "webnn": {
+    "harness_ok": 538,
+    "ids": 574,
+    "pass_rate": 0.0045,
+    "ran": 574,
+    "score": 2.6
+   },
+   "webrtc": {
+    "harness_ok": 250,
+    "ids": 258,
+    "pass_rate": 0.0066,
+    "ran": 258,
+    "score": 1.7
+   },
+   "webrtc-encoded-transform": {
+    "harness_ok": 38,
+    "ids": 38,
+    "pass_rate": 0.0116,
+    "ran": 38,
+    "score": 0.44
+   },
+   "webrtc-extensions": {
+    "harness_ok": 9,
+    "ids": 10,
+    "pass_rate": 0.0,
+    "ran": 10,
+    "score": 0.0
+   },
+   "webrtc-ice": {
+    "harness_ok": 0,
+    "ids": 1,
+    "pass_rate": 0.0,
+    "ran": 1,
+    "score": 0.0
+   },
+   "webrtc-identity": {
+    "harness_ok": 4,
+    "ids": 4,
+    "pass_rate": 0.1075,
+    "ran": 4,
+    "score": 0.43
+   },
+   "webrtc-priority": {
+    "harness_ok": 2,
+    "ids": 2,
+    "pass_rate": 0.0,
+    "ran": 2,
+    "score": 0.0
+   },
+   "webrtc-stats": {
+    "harness_ok": 8,
+    "ids": 8,
+    "pass_rate": 0.125,
+    "ran": 8,
+    "score": 1.0
+   },
+   "webrtc-svc": {
+    "harness_ok": 5,
+    "ids": 5,
+    "pass_rate": 0.0,
+    "ran": 5,
+    "score": 0.0
+   },
+   "websockets": {
+    "harness_ok": 742,
+    "ids": 786,
+    "pass_rate": 0.4205,
+    "ran": 786,
+    "score": 330.51
+   },
+   "webstorage": {
+    "harness_ok": 28,
+    "ids": 54,
+    "pass_rate": 0.4489,
+    "ran": 54,
+    "score": 24.24
+   },
+   "webtransport": {
+    "harness_ok": 24,
+    "ids": 73,
+    "pass_rate": 0.0095,
+    "ran": 73,
+    "score": 0.69
+   },
+   "webusb": {
+    "harness_ok": 44,
+    "ids": 49,
+    "pass_rate": 0.0159,
+    "ran": 49,
+    "score": 0.78
+   },
+   "webvtt": {
+    "harness_ok": 90,
+    "ids": 322,
+    "pass_rate": 0.1379,
+    "ran": 322,
+    "score": 44.41
+   },
+   "webxr": {
+    "harness_ok": 158,
+    "ids": 165,
+    "pass_rate": 0.0326,
+    "ran": 165,
+    "score": 5.38
+   },
+   "window-management": {
+    "harness_ok": 5,
+    "ids": 5,
+    "pass_rate": 0.0,
+    "ran": 5,
+    "score": 0.0
+   },
+   "workers": {
+    "harness_ok": 282,
+    "ids": 337,
+    "pass_rate": 0.5858,
+    "ran": 337,
+    "score": 197.41
+   },
+   "worklets": {
+    "harness_ok": 10,
+    "ids": 22,
+    "pass_rate": 0.1414,
+    "ran": 22,
+    "score": 3.11
+   },
+   "x-frame-options": {
+    "harness_ok": 6,
+    "ids": 6,
+    "pass_rate": 0.8233,
+    "ran": 6,
+    "score": 4.94
+   },
+   "xhr": {
+    "harness_ok": 402,
+    "ids": 425,
+    "pass_rate": 0.4753,
+    "ran": 425,
+    "score": 202.0
+   },
+   "xml": {
+    "harness_ok": 12,
+    "ids": 19,
+    "pass_rate": 0.5263,
+    "ran": 19,
+    "score": 10.0
+   }
+  },
+  "commit": "d4114145a",
+  "finished": "2026-10-23T12:38:10",
+  "rendering": {
+   "fail": 13168,
+   "ids": 29293,
+   "pass": 16309,
+   "pass_rate": 0.5568
+  },
+  "run": "2026-10-22-popups.json",
+  "runner": {
+   "batch_small": 150,
+   "exclude_prefixes": [],
+   "max_browser_gb": 4.0,
+   "no_paint": true,
+   "parallel_shards": 2,
+   "processes": 10,
+   "shared_queue": true
+  },
+  "status_sum_ok": true,
+  "statuses": {
+   "CRASH": 57,
+   "ERROR": 2765,
+   "FAIL": 13168,
+   "NOT-RUN": 7,
+   "OK": 30106,
+   "OTHER": 1,
+   "PASS": 16309,
+   "SKIPPED": 178,
+   "TIMEOUT": 4803,
+   "UNSUPPORTED": 722
+  },
+  "subsystems": {
+   "CSS layout": {
+    "harness_ok": 21384,
+    "ids": 33496,
+    "pass_rate": 0.5347,
+    "ran": 33490,
+    "score": 17910.46,
+    "subtests_passed": 98374,
+    "subtests_total": 171645
+   },
+   "DOM": {
+    "harness_ok": 1211,
+    "ids": 1351,
+    "pass_rate": 0.3763,
+    "ran": 1351,
+    "score": 508.41,
+    "subtests_passed": 41422,
+    "subtests_total": 74741
+   },
+   "HTML (в т.ч. парсер `html/syntax`)": {
+    "harness_ok": 7821,
+    "ids": 9981,
+    "pass_rate": 0.4416,
+    "ran": 9981,
+    "score": 4407.64,
+    "subtests_passed": 81798,
+    "subtests_total": 121994
+   },
+   "Остальные API": {
+    "harness_ok": 14936,
+    "ids": 21915,
+    "pass_rate": 0.2702,
+    "ran": 21192,
+    "score": 5921.44,
+    "subtests_passed": 153340,
+    "subtests_total": 758645
+   },
+   "Сеть": {
+    "harness_ok": 1063,
+    "ids": 1373,
+    "pass_rate": 0.3565,
+    "ran": 1373,
+    "score": 489.54,
+    "subtests_passed": 5177,
+    "subtests_total": 12930
+   }
+  },
+  "subtest_rate": 0.3334,
+  "totals": {
+   "harness_ok": 46415,
+   "ids": 68116,
+   "not_run": 729,
+   "pass_rate": 0.4292,
+   "ran": 67387,
+   "score": 29237.46,
+   "subtests_passed": 380111,
+   "subtests_total": 1139955
+  }
+ }
+}

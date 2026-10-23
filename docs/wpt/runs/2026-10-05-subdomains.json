@@ -2,6 +2,7 @@
   "batch_small": 0,
   "binary": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\.tmp\\wpt-run9-bin\\lumen.exe",
   "commit": "d913a39b9",
+  "derived_from": "2026-10-05.json",
   "exclude_prefixes": [],
   "finished": "2026-10-05T16:15:35",
   "max_browser_gb": 4.0,

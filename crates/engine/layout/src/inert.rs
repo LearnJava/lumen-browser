@@ -18,10 +18,11 @@
 //!   focus traversal without re-walking the DOM on every event.
 //!
 //! **P4 (CSS: inert)** — UA stylesheet entry (done):
-//! - `[inert] { pointer-events: none; }` is applied by `apply_ua_inert` in the
-//!   pre-cascade UA phase (`style.rs`), so `ComputedStyle.pointer_events` is
-//!   `none` for inert nodes and their descendants. Author `pointer-events`
-//!   overrides it (UA origin).
+//! - `[inert] { interactivity: inert !important }` is applied by
+//!   `apply_ua_inert_important` after the cascade (`style/cascade.rs`);
+//!   `interactivity` is inherited, so descendants are inert too, and a
+//!   descendant (or a modal `<dialog>` / `:fullscreen` element) resets it with
+//!   `interactivity: auto`. Hit-testing reads `ComputedStyle::effective_pointer_events`.
 //!
 //! **P3 (shell wiring)** — event routing:
 //! - Call `collect_inert_regions(root, doc)` after each layout pass and store
@@ -80,8 +81,8 @@ pub struct InertRegion {
 /// be inert, its descendants are skipped because they are transitively inert.
 /// This avoids O(depth) redundant lookups for deeply nested inert subtrees.
 ///
-/// The UA rule `[inert] { pointer-events: none; }` is applied separately by
-/// `apply_ua_inert` in `style.rs`, so `ComputedStyle.pointer_events` already
+/// The UA rule `[inert] { interactivity: inert !important }` is applied separately by
+/// `apply_ua_inert_important` in `style/ua.rs`, so `ComputedStyle.interactivity` already
 /// reflects inertness. This function provides the complementary layout-level
 /// information (bounding boxes) that the shell needs for hit-test filtering.
 pub fn collect_inert_regions(root: &LayoutBox, doc: &Document) -> Vec<InertRegion> {

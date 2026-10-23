@@ -147,7 +147,10 @@ def wpt_runs(runs_dir: Path) -> list:
     """Полные прогоны корпуса (scope == full-corpus), от старого к свежему.
 
     Частичные прогоны (scope — список категорий) с полным корпусом не
-    сравнимы: их знаменатель — несколько категорий.
+    сравнимы: их знаменатель — несколько категорий. Снимок, названный в
+    `derived_from` другого снимка (составной: исходные отчёты + перепрогон
+    части шардов, как «с поддоменами» у WPT-RUN-9), заменён им и выпадает —
+    иначе свежая пара — два снимка одного коммита, а не два прогона.
     """
     runs = []
     for path in sorted(runs_dir.glob("*.json")) if runs_dir.is_dir() else []:
@@ -158,8 +161,9 @@ def wpt_runs(runs_dir: Path) -> list:
         if data.get("scope") != "full-corpus" or "scored" not in data:
             continue
         runs.append((data.get("finished", ""), path.name, data))
+    replaced = {r[2].get("derived_from") for r in runs}
     runs.sort(key=lambda r: (r[0], r[1]))
-    return [(name, data) for _, name, data in runs]
+    return [(name, data) for _, name, data in runs if name not in replaced]
 
 
 def wpt_statuses(scored: dict) -> dict:

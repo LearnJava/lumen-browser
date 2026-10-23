@@ -262,6 +262,7 @@ pub use values::rule_anim::{
     transition_token_covers,
 };
 pub use values::caret::{CaretAnimation, CaretShape};
+pub use values::interactivity::Interactivity;
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
     Appearance, BlockStepAlign, BlockStepInsert, BlockStepRound, Content, ContentItem,
@@ -399,7 +400,7 @@ use quirks::{apply_quirks_html_height, apply_quirks_line_height, apply_quirks_ta
 use ua::{
     apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_body_margin, apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls,
     apply_ua_form_controls_field_sizing_clear, apply_ua_heading_style, apply_ua_hidden,
-    apply_ua_hr_style, apply_ua_inert, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration,
     default_display, is_appearance_disabling_property, is_disableable_widget,
     strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,

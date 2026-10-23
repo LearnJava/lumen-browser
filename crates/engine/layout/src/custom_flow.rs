@@ -67,7 +67,8 @@ fn all_rules(sheet: &Stylesheet) -> impl Iterator<Item = &Rule> {
 
 /// Whether `decl`'s value reads one of `names` (over-approximation: a `var(` and the name's text).
 fn reads_any(decl: &Declaration, names: &[String]) -> bool {
-    decl.value.contains("var(") && names.iter().any(|n| decl.value.contains(n.as_str()))
+    // An escaped name (`var(--a\27 d)`, BUG-1502) is not a substring of its decoded key.
+    decl.value.contains("var(") && (decl.value.contains('\\') || names.iter().any(|n| decl.value.contains(n.as_str())))
 }
 
 impl<'s> CustomDep<'s> {

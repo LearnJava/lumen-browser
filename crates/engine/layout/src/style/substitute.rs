@@ -87,6 +87,15 @@ pub(in crate::style) fn expand_vars(
     } else {
         return None;
     };
+    // BUG-1502: объявление хранит имя раскрытым (`--\30` → `--0`), а в значении
+    // экранирование, которое нельзя раскрыть на месте (`\27 `), осталось как есть.
+    let decoded_name;
+    let effective_name = if effective_name.contains('\\') {
+        decoded_name = unescape_dashed_ident(effective_name)?;
+        decoded_name.as_str()
+    } else {
+        effective_name
+    };
     let resolved = if let Some(v) = custom.get(effective_name) {
         expand_vars(v.trim(), custom, depth + 1, em_basis, viewport)?
     } else {
@@ -872,7 +881,47 @@ fn is_cdo_bang(bytes: &[u8], i: usize) -> bool {
 /// (`var(--x ())`, `var(--x(),)` невалидны, `css-variables/var-parsing.html`).
 fn var_head_is_valid(head: &str) -> bool {
     let name = head.trim_matches(|c: char| c.is_ascii_whitespace());
-    name.len() > 2 && name.starts_with("--") && name.bytes().all(is_ident_byte)
+    name.len() > 2 && name.starts_with("--") && unescape_dashed_ident(name).is_some()
+}
+
+/// Имя из `var()` после раскрытия escape-последовательностей (CSS Syntax L3
+/// §4.3.7: `\` + 1–6 hex-цифр и один пробел-терминатор, либо `\` + любой символ,
+/// кроме перевода строки; 0, суррогат и значение за U+10FFFF — U+FFFD).
+/// `None`, если в имени остался неэкранированный не-ident символ.
+fn unescape_dashed_ident(name: &str) -> Option<String> {
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            if !c.is_ascii() || is_ident_byte(c as u8) {
+                out.push(c);
+                continue;
+            }
+            return None;
+        }
+        match chars.peek().copied() {
+            None | Some('\n' | '\r' | '\x0C') => return None,
+            Some(h) if h.is_ascii_hexdigit() => {
+                let mut code = 0u32;
+                let mut digits = 0;
+                while digits < 6 {
+                    let Some(d) = chars.peek().and_then(|h| h.to_digit(16)) else { break };
+                    code = code * 16 + d;
+                    digits += 1;
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some(' ' | '\t')) {
+                    chars.next();
+                }
+                out.push(char::from_u32(code).filter(|&c| c != '\0').unwrap_or('\u{FFFD}'));
+            }
+            Some(other) => {
+                out.push(other);
+                chars.next();
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Parse-time проверка значения с `var()`/`env()` (CSS Syntax §5.4.4

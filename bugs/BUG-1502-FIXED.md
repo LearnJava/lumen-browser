@@ -1,6 +1,6 @@
 # BUG-1502 — Имя пользовательского свойства с CSS-экранированием (`--\30`, `--\fffd`, `--a\27 d`) не совпадает с тем же именем без экранирования
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** css-parser (`crates/engine/css-parser/src/parser/declarations.rs` — имя пользовательского свойства с экранированием)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 22: `css-variables/variable-declaration-{31,32,34,35,36,42}.
 ## Как проверить
 
 Таблица выше; `css/css-variables/variable-declaration-32.html`.
+
+## Исправление
+
+Объявление и так хранило имя раскрытым (`parse_ident`), а в значении `var()` экранирование, которое нельзя раскрыть на месте (`\27 ` — не ident-символ), оставалось исходным: `var(--a\27 d)` отбрасывалось как недопустимое (`var_head_is_valid` не принимал `\` и пробел), а поиск шёл по неразвёрнутому имени. Теперь `unescape_dashed_ident` (`crates/engine/layout/src/style/substitute.rs`) раскрывает имя по CSS Syntax L3 §4.3.7 (hex 1–6 цифр + один пробел, `\`+символ, 0/суррогат/>U+10FFFF → U+FFFD) и в проверке головы `var()`, и в поиске; `custom_flow::reads_any` считает значение с `\` зависимым от любого изменённого имени. Тесты — `crates/engine/layout/src/tests/var_escaped_name.rs`. `setProperty`/`getPropertyValue` имя не раскрывают (CSSOM берёт строку как есть) — не менялись.

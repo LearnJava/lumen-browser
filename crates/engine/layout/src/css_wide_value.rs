@@ -28,6 +28,7 @@ pub fn is_inherited_property(prop: &str) -> bool {
             | "caption-side"
             | "caret-color"
             | "caret-shape"
+            | "interactivity"
             | "caret-animation"
             | "caret"
             | "color"
