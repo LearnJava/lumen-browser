@@ -302,11 +302,17 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
     }
     // Lowest odd level present, counting each even level as the odd one above
     // it (UAX #9: «including intermediate levels not actually present»).
-    let lowest_odd = frags
+    let mut lowest_odd = frags
         .iter()
         .map(|f| level_of(f) | 1)
         .min()
         .unwrap_or(1);
+    // An isolate's control characters sit at the paragraph level and are on the line, though no
+    // fragment carries them: in an RTL paragraph that puts level 1 in play, so the isolate
+    // (and the text beside it) is reversed as a unit.
+    if base_level == 1 && frags.iter().any(|f| f.bidi_isolate.is_some()) {
+        lowest_odd = 1;
+    }
 
     let mut level = max;
     while level >= lowest_odd {
@@ -320,7 +326,7 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
             i += 1;
             while i < frags.len()
                 && level_of(&frags[i]) >= level
-                && !isolate_boundary(&frags[i - 1], &frags[i])
+                && !(level > base_level && isolate_boundary(&frags[i - 1], &frags[i]))
             {
                 i += 1;
             }
@@ -335,7 +341,8 @@ pub(crate) fn reorder_line(frags: &mut [InlineFrag], base: Direction) {
 
 /// True when an isolate's opening or closing control character (LRI/RLI/FSI,
 /// PDI) sits between two neighbouring fragments. Those characters stay at the
-/// paragraph level, so rule L2 never reverses a run across them — without this
+/// paragraph level, so rule L2 never reverses a run *above* that level across them
+/// (the paragraph level itself reverses the isolate as one unit) — without this
 /// a `<bdi dir=ltr>א. </bdi>א` line was reflected as one piece and the
 /// isolate's content ended up on the wrong side of the text after it.
 fn isolate_boundary(before: &InlineFrag, after: &InlineFrag) -> bool {
@@ -362,6 +369,49 @@ fn reflect(run: &mut [InlineFrag], at_line_start: bool) {
     for frag in run.iter_mut() {
         frag.x = span_start + hi - (frag.x + frag.width);
     }
+}
+
+/// UAX #9 P2–P3 — the paragraph direction `unicode-bidi: plaintext` takes from the first
+/// strong character of the block's text (left-to-right when there is none). Looks at the
+/// first paragraph only: a forced break starts the next one.
+pub(crate) fn plaintext_direction(segments: &[InlineSegment]) -> Direction {
+    let mut text = String::new();
+    for seg in segments {
+        if seg.forced_break {
+            break;
+        }
+        text.push_str(&seg.text);
+    }
+    let info = BidiInfo::new(&text, None);
+    match info.paragraphs.first() {
+        Some(p) if p.level.is_rtl() => Direction::Rtl,
+        _ => Direction::Ltr,
+    }
+}
+
+/// UAX #9 P2–I2 over a stand-alone string — the `text-overflow` marker, which is its own
+/// bidi paragraph with the block's `base` direction (CSS UI L4 §6.2). Returns the text cut
+/// at every embedding-level change, each piece with its level.
+pub(crate) fn split_by_level(text: &str, base: Direction) -> Vec<(&str, u8)> {
+    let para_level = unicode_bidi::Level::new(u8::from(base == Direction::Rtl)).ok();
+    let info = BidiInfo::new(text, para_level);
+    let mut out: Vec<(&str, u8)> = Vec::new();
+    let mut start = 0usize;
+    let mut cur = 0u8;
+    for (off, _) in text.char_indices() {
+        let level = info.levels.get(off).map(|l| l.number()).unwrap_or(0);
+        if off == 0 {
+            cur = level;
+        } else if level != cur {
+            out.push((&text[start..off], cur));
+            start = off;
+            cur = level;
+        }
+    }
+    if start < text.len() {
+        out.push((&text[start..], cur));
+    }
+    out
 }
 
 /// UAX #9 rules L2 (character half) and L4 — the text of `level`'s fragment as
@@ -742,6 +792,40 @@ mod tests {
         let mut line = vec![frag(0.0, 30.0, 0, "one"), frag(35.0, 40.0, 0, "two")];
         reorder_line(&mut line, Direction::Rtl);
         assert_eq!(visual_order(&line), ["two", "one"]);
+    }
+
+    #[test]
+    fn rtl_paragraph_reverses_an_isolate_as_one_unit() {
+        // `ext` (level 2) then an `RLI A ום PDI` isolate (levels 4 and 3) in an RTL paragraph:
+        // the isolate lands left of `ext`, internally right-to-left (`A` rightmost).
+        let iso = Some(lumen_dom::NodeId::from_index(5));
+        let mut line = vec![
+            frag(0.0, 30.0, 2, "ext"),
+            frag(30.0, 10.0, 4, "A"),
+            frag(40.0, 20.0, 3, " ום"),
+        ];
+        line[1].bidi_isolate = iso;
+        line[2].bidi_isolate = iso;
+        reorder_line(&mut line, Direction::Rtl);
+        assert_eq!(visual_order(&line), [" ום", "A", "ext"]);
+    }
+
+    // ── plaintext_direction / split_by_level ─────────────────────────────────
+
+    #[test]
+    fn plaintext_takes_the_direction_of_the_first_strong_char() {
+        let ltr = [seg("abc \u{5d0}", Direction::Rtl, UnicodeBidi::Plaintext)];
+        assert_eq!(plaintext_direction(&ltr), Direction::Ltr);
+        let rtl = [seg("12 \u{5d0}bc", Direction::Ltr, UnicodeBidi::Plaintext)];
+        assert_eq!(plaintext_direction(&rtl), Direction::Rtl);
+    }
+
+    #[test]
+    fn marker_string_splits_at_level_changes() {
+        let pieces = split_by_level("A \u{5d0}\u{5d1}", Direction::Rtl);
+        assert_eq!(pieces, [("A", 2), (" \u{5d0}\u{5d1}", 1)]);
+        assert_eq!(split_by_level("-", Direction::Ltr), [("-", 0)]);
+        assert!(split_by_level("", Direction::Ltr).is_empty());
     }
 
     // ── visual_text ──────────────────────────────────────────────────────────

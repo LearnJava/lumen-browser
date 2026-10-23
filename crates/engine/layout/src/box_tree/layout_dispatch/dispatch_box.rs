@@ -687,10 +687,17 @@ pub(in crate::box_tree) fn dispatch_box(
             // the same segment list the frags will be mapped back onto.
             // `b.kind` keeps the logical, unsplit segments — resolution is a
             // pure function of them, so a relayout reproduces it exactly.
+            // `unicode-bidi: plaintext` on the block: the paragraph direction comes from its text
+            // (UAX #9 P2–P3), not from `direction` — it also decides `start` alignment.
+            let para_dir = if s.unicode_bidi == crate::style::UnicodeBidi::Plaintext {
+                crate::bidi::plaintext_direction(segments)
+            } else {
+                s.direction
+            };
             let resolved;
             let segments: &[InlineSegment] =
-                if crate::bidi::needs_resolution(segments, s.direction, s.unicode_bidi) {
-                    resolved = crate::bidi::resolve(segments, s.direction, s.unicode_bidi);
+                if crate::bidi::needs_resolution(segments, para_dir, s.unicode_bidi) {
+                    resolved = crate::bidi::resolve(segments, para_dir, s.unicode_bidi);
                     &resolved
                 } else {
                     segments
@@ -864,10 +871,10 @@ pub(in crate::box_tree) fn dispatch_box(
                 && lines.len() > 1
             {
                 let (first, rest) = lines.split_at_mut(1);
-                align_lines(first, wrap_width, s.text_align, s.text_align_last, s.direction);
-                align_lines(rest, cont_width, s.text_align, s.text_align_last, s.direction);
+                align_lines(first, wrap_width, s.text_align, s.text_align_last, para_dir);
+                align_lines(rest, cont_width, s.text_align, s.text_align_last, para_dir);
             } else {
-                align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
+                align_lines(lines, content_width, s.text_align, s.text_align_last, para_dir);
             }
             // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
             line_growth = super::inline_wrap::align_run_vertically(
@@ -878,10 +885,16 @@ pub(in crate::box_tree) fn dispatch_box(
             // container flow (`line_clamp_flow`), not run by run; here it only takes priority
             // over text-overflow:ellipsis (both cannot apply simultaneously).
             // CSS UI L4 §6.1: text-overflow требует overflow != visible; метка — значение
-            // правой стороны строки (левая сторона не рисуется: нет прокрутки к её краю).
+            // стороны, куда выходит строка: правой у LTR-абзаца, левой у RTL (прокрутки к
+            // противоположному краю нет, его метка не рисуется).
             if s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible {
                 let clamped = s.line_clamp.is_some_and(|n| n > 0);
-                match &s.text_overflow_right {
+                let rtl = para_dir == Direction::Rtl;
+                match if rtl { &s.text_overflow } else { &s.text_overflow_right } {
+                    // An RTL line overflows on the left: there «…» is a marker like a string.
+                    TextOverflow::Ellipsis if !clamped && rtl => {
+                        apply_text_overflow_string(lines, content_width, "\u{2026}", &b.style, line_h, true, m);
+                    }
                     TextOverflow::Ellipsis if !clamped => {
                         apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
                     }
@@ -892,7 +905,7 @@ pub(in crate::box_tree) fn dispatch_box(
                             Some(n) if n > 0 && lines.len() > n as usize => n as usize - 1,
                             _ => lines.len(),
                         };
-                        apply_text_overflow_string(&mut lines[..upto], content_width, marker, &b.style, line_h, m);
+                        apply_text_overflow_string(&mut lines[..upto], content_width, marker, &b.style, line_h, rtl, m);
                     }
                     _ => {}
                 }
