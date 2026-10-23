@@ -2015,6 +2015,10 @@ function _lumen_make_class_list(nid, fbid) {
     return _lumen_make_attr_token_list(nid, 'class', fbid);
 }
 
+function _lumen_make_part_list(nid, fbid) {
+    return _lumen_make_attr_token_list(nid, 'part', fbid);
+}
+
 // GAP-FOCUSGROUP: HTML LS «focusgroup» — `element.focusGroup` is the
 // DOMTokenList over the `focusgroup` attribute, with a `supports()` over the
 // spec's token set (same per-instance `supports` as `relList`, BUG-826).
@@ -8926,6 +8930,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
         get className()      { var nid = this.__nid__; var v = _lumen_u2n(_lumen_get_attr(nid, 'class')); return v !== null ? v : ''; },
         set className(v)     { var nid = this.__nid__; _lumen_set_attr(nid, 'class', String(v)); },
         get classList()      { return _lumen_wrapper_slot(this, '__classList__', _lumen_make_class_list); },
+        // CSS Shadow Parts L1 §4: `Element.part` — [SameObject, PutForwards=value] DOMTokenList
+        // over the `part` attribute (the names `::part()` selects by).
+        get part()           { return _lumen_wrapper_slot(this, '__part__', _lumen_make_part_list); },
+        set part(v)          { this.part.value = v; },
         get style()          { return _lumen_wrapper_slot(this, '__style__', _lumen_make_style); },
         // Web IDL [PutForwards=cssText] on `style` (BUG-494): a bare-string
         // assignment must forward to `.style.cssText`, not silently no-op

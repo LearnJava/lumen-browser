@@ -457,7 +457,7 @@ fn a_shadow_host_sibling_does_not_get_a_plain_siblings_cached_style() {
     doc.attach_shadow(shadow_host, ShadowRootMode::Open);
 
     let mut sheets: HashMap<NodeId, Stylesheet> = HashMap::new();
-    sheets.insert(shadow_host, lumen_css_parser::parse(":host { fill: rgb(255, 0, 0); }"));
+    sheets.insert(shadow_host, lumen_css_parser::parse(":host { fill: rgb(255, 0, 0) !important; }"));
     set_shadow_sheets(sheets);
 
     let flat = lumen_dom::build_flat_tree(&doc);
