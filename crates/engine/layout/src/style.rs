@@ -66,6 +66,7 @@ mod substitute;
 mod syntax_string;
 mod ua;
 mod values;
+mod zoom;
 
 // SPLIT-ST15. `ComputedStyle` (объявление + `impl`) уехала в `style::computed`.
 // Это центральный тип публичной поверхности крейта: `lib.rs` реэкспортирует его
@@ -85,7 +86,7 @@ use apply::apply_declaration;
 pub use cascade::{compute_style, take_compute_style_calls};
 #[cfg(test)]
 pub(in crate::style) use cascade::parse_zoom;
-pub(crate) use cascade::{scale_inherited_lengths, scale_visual_lengths, ZoomDeclared};
+pub(crate) use zoom::{scale_inherited_lengths, scale_visual_lengths, ZoomDeclared};
 // THREAD-4 срез 2: intra-pass structural memo for `compute_style` — see
 // `share_cache`'s module doc. Sole consumer is `counters::walk`.
 pub(crate) use share_cache::ShareCache;

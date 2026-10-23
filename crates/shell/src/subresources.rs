@@ -80,7 +80,7 @@ pub(crate) fn fetch_and_decode_background_images(
     let mut urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     // CSS Shapes L1 §6.2: `shape-outside: url()` images ride the same fetch (CSP,
     // cache, referrer policy); the caller turns them into alpha planes instead of
-    // painting them ([`report_shape_images`](crate::page_pipeline)).
+    // painting them ([`report_shape_images`](crate::page_shape_images)).
     for url in lumen_layout::collect_shape_image_requests(layout) {
         if !urls.contains(&url) {
             urls.push(url);
