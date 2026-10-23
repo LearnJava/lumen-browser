@@ -945,6 +945,7 @@ pub(crate) fn install_scroll_state(
     // or a page that only ever scrolls an `overflow: clip` container (never
     // calling `getComputedStyle`) would see the cache permanently empty.
     let cs_needed_for_request = Arc::clone(&flush.computed_styles_needed);
+    let flush_for_request = flush.clone();
     {
         let ss = Arc::clone(&flush.scroll_states);
         reg!(scope, ctx, store, "_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
@@ -1000,6 +1001,10 @@ pub(crate) fn install_scroll_state(
             let s = states.entry(nid).or_insert([0.0, 0.0, 0.0, 0.0]);
             s[0] = if is_clip("overflow-x") { 0.0 } else { x as f32 };
             s[1] = if is_clip("overflow-y") { 0.0 } else { y as f32 };
+            drop(styles);
+            drop(states);
+            // CQ-SCROLL-STATE-2: `scroll-state()` queries follow the offset.
+            flush_for_request.note_scroll_moved();
         });
     }
     // Queues a page-level scroll request from window.scrollTo/scrollBy.

@@ -449,7 +449,27 @@ pub fn child_list_narrowing_enabled() -> bool {
     !shallow_roots_disabled()
 }
 
+/// CQ-SCROLL-STATE-2: a scroller moved. A sheet that asks `scroll-state()` has to be
+/// restyled from scratch (the queries are answered once, in the layout pass), so the next
+/// flush runs the full path.
+pub(super) fn note_scroll_moved(
+    stylesheet: &Mutex<Option<Arc<lumen_css_parser::Stylesheet>>>,
+    dom_touched: &Mutex<super::dom_touched::DomTouched>,
+    flush_stale: &AtomicBool,
+) {
+    let Some(sheet) = stylesheet.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    if lumen_layout::sheet_has_scroll_state_queries(&sheet) {
+        super::dom_helpers::record_dom_touch_unattributed(dom_touched);
+        flush_stale.store(true, Ordering::Relaxed);
+    }
+}
+
 impl FlushHandles {
+    /// CQ-SCROLL-STATE-2: a scroller moved, see [`note_scroll_moved`].
+    pub(crate) fn note_scroll_moved(&self) {
+        note_scroll_moved(&self.stylesheet, &self.dom_touched, &self.flush_stale);
+    }
+
     /// Recompute style+layout and refresh `layout_rects`/`computed_styles`/
     /// `custom_properties` in place if anything might be stale.
     ///
@@ -601,6 +621,12 @@ impl FlushHandles {
         // layout it licenses. `None` on the very first flush (starts the
         // record) and for a replaced document; either way no reuse is licensed.
         let content_journal = doc_guard.take_content_journal();
+        // CQ-SCROLL-STATE-2: the fresh tree starts every scroller at offset 0 and gets the
+        // offsets back only after the layout (`restore_scroll_positions` below) — the
+        // `scroll-state()` queries of the layout itself read them from here.
+        let _scroll_hints = lumen_layout::sheet_has_scroll_state_queries(&sheet).then(|| {
+            lumen_layout::install_scroll_hints(self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()).clone())
+        });
         let incr_scope_guard = lumen_core::profile::scope("flush.try_incremental");
         let incr = self.try_incremental_flush(
             &doc_guard, &sheet, viewport, &measurer, current_focus, current_hover, &touched, content_journal.as_ref(),

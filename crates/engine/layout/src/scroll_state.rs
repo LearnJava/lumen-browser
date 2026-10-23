@@ -6,10 +6,56 @@
 //! `scroll_y` бокса, логические стороны — из `writing-mode`/`direction`.
 //! `scrolled`, `stuck`, `snapped` пока всегда «нет» (нужны направление
 //! пользовательской прокрутки, липкий сдвиг и снап-позиция на момент прохода).
+//!
+//! Свежее дерево раскладки начинается с `scroll_x == scroll_y == 0`, а прежние
+//! смещения возвращает `restore_scroll_positions` уже после прохода запросов.
+//! Чтобы запрос видел текущую прокрутку, вызывающий ставит [`install_scroll_hints`]
+//! на время раскладки: смещения из подсказок заменяют `scroll_x/y` бокса.
 
 use crate::box_tree::LayoutBox;
 use crate::style::{Direction, Edge, EdgeFlags, Overflow, ScrollStateInfo, WritingMode};
 use crate::{padding_box, scrollable_extent_x, scrollable_extent_y};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+thread_local! {
+    /// `NodeId::raw()` → `[scroll_x, scroll_y, ..]` текущей прокрутки контейнеров, пока
+    /// идёт раскладка (см. [`install_scroll_hints`]).
+    static HINTS: RefCell<Option<Rc<HashMap<u32, [f32; 4]>>>> = const { RefCell::new(None) };
+}
+
+/// Снимает подсказки прокрутки при выходе из области видимости.
+#[must_use = "подсказки действуют, пока жив возвращённый охранник"]
+pub struct ScrollHintsGuard(Option<Rc<HashMap<u32, [f32; 4]>>>);
+
+impl Drop for ScrollHintsGuard {
+    fn drop(&mut self) {
+        HINTS.with(|h| *h.borrow_mut() = self.0.take());
+    }
+}
+
+/// Текущие смещения прокрутки контейнеров (`NodeId::raw()` → `[scroll_x, scroll_y, ..]`)
+/// для `@container scroll-state(…)` во время раскладки этого потока. Без подсказки
+/// контейнер считается непрокрученным (свежее дерево). Прежние подсказки возвращаются
+/// при сбросе охранника.
+pub fn install_scroll_hints(states: HashMap<u32, [f32; 4]>) -> ScrollHintsGuard {
+    let prev = HINTS.with(|h| h.borrow_mut().replace(Rc::new(states)));
+    ScrollHintsGuard(prev)
+}
+
+/// Таблица стилей спрашивает `scroll-state(…)`: после прокрутки контейнера запросы надо
+/// пересчитать, то есть заново пройти раскладку (стили потомков строятся один раз).
+pub fn sheet_has_scroll_state_queries(sheet: &lumen_css_parser::Stylesheet) -> bool {
+    sheet.container_rules.iter().any(|r| r.preludes().any(|(_, c)| c.to_ascii_lowercase().contains("scroll-state(")))
+}
+
+/// Смещение контейнера: из подсказок, иначе из самого бокса.
+fn current_offset(b: &LayoutBox) -> (f32, f32) {
+    HINTS
+        .with(|h| h.borrow().as_ref().and_then(|m| m.get(&b.node.raw()).map(|s| (s[0], s[1]))))
+        .unwrap_or((b.scroll_x, b.scroll_y))
+}
 
 /// Допуск сравнения смещений прокрутки (CSS px).
 const EPS: f32 = 0.5;
@@ -35,18 +81,21 @@ pub(crate) fn scroll_state_info(b: &LayoutBox, viewport_scroller: bool) -> Scrol
         return ScrollStateInfo { block_start, inline_start, ..ScrollStateInfo::default() };
     }
     let pb = padding_box(b);
+    let (scroll_x, scroll_y) = current_offset(b);
     // Пользователь прокручивает только `scroll`/`auto`; `hidden`/`clip`/`visible` — нет.
     let user_scrollable = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto);
     let (mut top, mut bottom, mut left, mut right) = (false, false, false, false);
     if user_scrollable(s.overflow_x) {
         let (min_x, max_x) = scrollable_extent_x(b);
-        left = b.scroll_x > min_x + EPS;
-        right = b.scroll_x < max_x - pb.width - EPS;
+        let x = scroll_x.clamp(min_x, (max_x - pb.width).max(min_x));
+        left = x > min_x + EPS;
+        right = x < max_x - pb.width - EPS;
     }
     if user_scrollable(s.overflow_y) {
         let (min_y, max_y) = scrollable_extent_y(b);
-        top = b.scroll_y > min_y + EPS;
-        bottom = b.scroll_y < max_y - pb.height - EPS;
+        let y = scroll_y.clamp(min_y, (max_y - pb.height).max(min_y));
+        top = y > min_y + EPS;
+        bottom = y < max_y - pb.height - EPS;
     }
     ScrollStateInfo {
         scrollable: EdgeFlags([top, right, bottom, left]),
