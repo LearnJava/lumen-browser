@@ -1,6 +1,6 @@
 # BUG-1510 — `ViewTransition` не является интерфейсом: нет глобала `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent`; нет `types`, `transitionRoot`, `document.activeViewTransition`; `view-transition-class`/`-group` не разбираются
 
-**Статус:** OPEN (ДОРАБОТКА → VT-API-2)
+**Статус:** FIXED 2026-10-23 (P3)
 **Тип:** нереализованная функциональность; срез 1 (интерфейсы и автомат) сделан задачей `VT-API` 2026-10-21, остаток — `VT-API-2`.
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** js (`crates/js/src/view_transitions.rs` — `startViewTransition` возвращает простой объект)
@@ -51,3 +51,16 @@ WPT-RUN-14 срез 22: `css-view-transitions/{idlharness (17 из 66 сабте
 - `CSS.supports('view-transition-class','b')` и `('view-transition-group','normal')` — `false`: свойства не разбираются (строки `CSS-SPECS.md` для P4).
 - `Element.prototype.startViewTransition`/`activeViewTransition` — VT-SCOPED (BUG-1511).
 - UA-стиль и анимации псевдодерева — BUG-1509.
+
+## Исправление (2026-10-23, P3, ветка `p3-bug-1510`)
+
+Свойства `view-transition-class` (`none | <custom-ident>+`) и `view-transition-group`
+(`normal | contain | nearest | <custom-ident>`): поля `ComputedStyle::view_transition_class`/
+`view_transition_group`, разбор с валидацией в `style/apply/motion.rs` (недопустимое значение
+отбрасывает объявление), css-wide ключевые слова в `css_wide.rs`, запись в `SUPPORTED_PROPERTIES`
+(`CSS.supports`), отдача в `getComputedStyle` (`selector_query.rs`). Тесты:
+`anchor_positioning_tests::view_transition_{class,group}_parsed_and_validated`,
+`v8_vt_api::class_and_group_properties_are_supported_and_reported`.
+
+Остаток вынесен: `pagereveal`/`pageswap` — BUG-945; селектор `::view-transition-group(name.class)`
+и вложенные группы (`nested/*`) — VT-API-2.

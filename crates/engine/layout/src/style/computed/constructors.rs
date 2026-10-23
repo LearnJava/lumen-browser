@@ -412,6 +412,8 @@ impl ComputedStyle {
             anchor_bottom: None,
             anchor_left: None,
             view_transition_name: None,
+            view_transition_class: None,
+            view_transition_group: None,
             quotes: Quotes::Auto,
         }
     }
@@ -878,6 +880,8 @@ impl ComputedStyle {
             anchor_bottom: None,
             anchor_left: None,
             view_transition_name: None,
+            view_transition_class: None,
+            view_transition_group: None,
             // CSS Generated Content L3 §3.2 — quotes inherited.
             quotes: inherited.quotes.clone(),
         }

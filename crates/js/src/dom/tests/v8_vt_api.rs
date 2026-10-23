@@ -325,6 +325,23 @@ fn computed_style_reports_the_view_transition_name() {
 }
 
 #[test]
+fn class_and_group_properties_are_supported_and_reported() {
+    let rt = rt_with_dom();
+    assert!(is_true(&rt, "CSS.supports('view-transition-class', 'b')"));
+    assert!(is_true(&rt, "CSS.supports('view-transition-group', 'normal')"));
+    let nid = match rt.eval("document.body.__nid__").unwrap() {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("nid: {other:?}"),
+    };
+    let mut m = std::collections::HashMap::new();
+    m.insert("view-transition-class".to_string(), "a b".to_string());
+    m.insert("view-transition-group".to_string(), "contain".to_string());
+    rt.update_computed_styles(std::collections::HashMap::from([(nid, m)]));
+    assert!(is_true(&rt, "getComputedStyle(document.body).viewTransitionClass === 'a b'"));
+    assert!(is_true(&rt, "getComputedStyle(document.body).getPropertyValue('view-transition-group') === 'contain'"));
+}
+
+#[test]
 fn a_callback_that_never_settles_times_out() {
     let rt = rt_with_dom();
     rt.eval(

@@ -474,6 +474,8 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "view-timeline",
     "view-timeline-axis",
     "view-timeline-name",
+    "view-transition-class",
+    "view-transition-group",
     "view-transition-name",
     "visibility",
     "white-space",

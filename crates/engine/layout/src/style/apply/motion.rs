@@ -57,6 +57,19 @@ use lumen_core::geom::Size;
 /// (в любом порядке токенов). Угол — в градусах; `reverse <angle>` ≡ `auto`
 /// с добавкой `angle + 180deg`. Невалидное значение → `None` (декларация
 /// игнорируется).
+/// `<custom-ident>` for the `view-transition-*` properties: an identifier that is not a
+/// CSS-wide keyword (CSS Values L4 §4.2). Backslash escapes are not recognised.
+fn is_vt_custom_ident(s: &str) -> bool {
+    const RESERVED: [&str; 6] = ["initial", "inherit", "unset", "revert", "revert-layer", "default"];
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else { return false };
+    let start_ok = first.is_ascii_alphabetic() || first == '_' || !first.is_ascii();
+    let start_ok = start_ok || (first == '-' && s.len() > 1 && !s[1..].starts_with(|c: char| c.is_ascii_digit()));
+    start_ok
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii())
+        && !RESERVED.iter().any(|r| s.eq_ignore_ascii_case(r))
+}
+
 fn parse_offset_rotate(val: &str) -> Option<OffsetRotate> {
     let mut mode: Option<bool> = None; // Some(false) = auto, Some(true) = reverse
     let mut angle: Option<f32> = None;
@@ -322,6 +335,33 @@ pub(in crate::style) fn apply_decl_motion(
             } else {
                 Some(v.into())
             };
+        }
+        // CSS View Transitions L2 §2.2 — view-transition-class: none | <custom-ident>+.
+        // An invalid list drops the declaration (previous value stays).
+        "view-transition-class" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.view_transition_class = None;
+            } else {
+                let idents: Vec<&str> = v.split_ascii_whitespace().collect();
+                if !idents.is_empty()
+                    && idents.iter().all(|i| is_vt_custom_ident(i) && !i.eq_ignore_ascii_case("none"))
+                {
+                    style.view_transition_class = Some(idents.join(" ").into());
+                }
+            }
+        }
+        // CSS View Transitions L2 §2.3 — view-transition-group: normal | contain | nearest |
+        // <custom-ident>.
+        "view-transition-group" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("normal") {
+                style.view_transition_group = None;
+            } else if v.eq_ignore_ascii_case("contain") || v.eq_ignore_ascii_case("nearest") {
+                style.view_transition_group = Some(v.to_ascii_lowercase().into());
+            } else if is_vt_custom_ident(v) {
+                style.view_transition_group = Some(v.into());
+            }
         }
         "touch-action" => {
             let v = val.trim();
