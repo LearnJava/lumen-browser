@@ -1,6 +1,6 @@
 # BUG-1578 — CSS Shadow Parts не реализован: `::part()`, атрибут `part`, `Element.part`, `exportparts`
 
-**Статус:** OPEN (ДОРАБОТКА → SHADOW-PARTS)
+**Статус:** FIXED 2026-10-23 (P1)
 **Заведён:** 2026-10-09 (P2, WPT-RUN-14 срез 26, `css/css-page` + `css-animations` + `css-transitions` + `css-shadow` + `css-borders` + `css-scroll-snap`)
 **Область:** css-parser/layout/js (ноль совпадений по `::part` в `crates/engine/`; `Element.part` отсутствует; `CSS.supports("selector(::part(a))")` — `false`)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 26: `css/css-shadow/part/*` (48 id: 2 зелёных).
 ## Как проверить
 
 `css/css-shadow/part/simple.html`, `simple-forward.html`, `exportparts-layered.html`, `part-name-idl.html`.
+
+## Исправление
+
+Реализовано в SHADOW-PARTS: разбор `::part(<ident>+)` с хвостом из псевдоклассов и псевдоэлементов (`css-parser/parser/selectors.rs`, `pseudo.rs`), `matches_part_complex` (`layout/style/matching.rs`), цепочка областей `part_scopes_of`/`export_part_names` (`cascade.rs`) с `exportparts` на любую глубину, `:host::part()` в листе самого хоста, `::part()::before/after` (`pseudo.rs`), `Element.part` (`DOMTokenList`, `PutForwards=value`) в `web_api_shim_mid.js`, `CSS.supports("selector(::part(a))")`. Тесты: `shadow_dom_selectors` (layout), `v8_shadow_parts` (js). WPT `css/css-shadow/part`: simple, simple-forward, exportparts-layered, part-name-idl зелёные. Остаток — BUG-1691, BUG-1692.

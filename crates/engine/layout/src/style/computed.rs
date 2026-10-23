@@ -34,7 +34,7 @@ use lumen_core::ColorSpace;
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
-    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, TableLayout,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, InputSecurity, Interactivity, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
@@ -761,6 +761,12 @@ pub struct ComputedStyle {
     /// CSS UI L4 §6.2 — `caret-animation: auto | manual`. Inherited. `manual` —
     /// каретка не мигает (анимацию ведёт автор).
     pub caret_animation: CaretAnimation,
+    /// CSS UI L4 §6.4 — `interactivity: auto | inert`. Inherited. `inert` — элемент и его
+    /// потомки не становятся целью указателя (UA-правила `[inert]`, `dialog:modal`, `:fullscreen`).
+    pub interactivity: Interactivity,
+    /// CSS UI L4 §6.5 — `input-security: auto | none`. Inherited. `auto` — `<input type=password>`
+    /// скрывает символы; `none` — показывает текст.
+    pub input_security: InputSecurity,
     /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
     /// Inherited. Default `Normal`.
     pub overflow_wrap: OverflowWrap,
@@ -1320,6 +1326,12 @@ impl ComputedStyle {
     /// emphasis-marks остаются на `color`.
     pub fn used_text_fill_color(&self) -> Color {
         self.text_fill_color.resolve(self.color)
+    }
+
+    /// Used `pointer-events` для hit-test (CSS UI L4 §6.1/§6.4): `interactivity: inert`
+    /// превращает любое значение в `none` — inert-бокс не бывает целью указателя.
+    pub fn effective_pointer_events(&self) -> PointerEvents {
+        if self.interactivity == Interactivity::Inert { PointerEvents::None } else { self.pointer_events }
     }
 
     /// Used value `caret-color` (CSS UI L4 §6.3): `auto` и `currentcolor`

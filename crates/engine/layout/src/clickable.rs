@@ -2,7 +2,7 @@
 //! кликов P3, §12.14 task 7B.2). Вынесено из `lib.rs` без изменений.
 
 use crate::style::PointerEvents;
-use crate::{box_tree, inert, LayoutBox};
+use crate::{box_tree, LayoutBox};
 
 // ─── Clickable elements iterator (for P3 click-hint overlay, §12.14 task 7B.2) ──
 
@@ -80,14 +80,8 @@ fn collect_clickable_rec(
         continue;
     }
 
-    // The UA rule `[inert] { pointer-events: none; }` is applied by
-    // `apply_ua_inert` in style.rs. This guard provides the complementary
-    // layout-level filter: inert elements are never included in the clickable
-    // set regardless of an author `pointer-events` override.
-    if inert::is_inert(doc, b.node) {
-        continue;
-    }
-
+    // `[inert]` → `interactivity: inert` (inherited, `apply_ua_inert_important`) makes
+    // `effective_pointer_events` `none` too; a descendant may reset it to `auto`.
     // CSS Pointer Events L1: `pointer-events: none` on a block box excludes the box
     // itself from the clickable set. Children are always visited — a child's
     // pointer-events is independent (the property is not inherited).
@@ -96,7 +90,7 @@ fn collect_clickable_rec(
     // own style), so we cannot use `b.style.pointer_events` to gate InlineRun
     // processing. Instead, each inline link is gated by `frag.style.pointer_events`,
     // which reflects the actual inline element's computed value.
-    let block_pe_none = b.style.pointer_events == PointerEvents::None;
+    let block_pe_none = b.style.effective_pointer_events() == PointerEvents::None;
 
     match &b.kind {
         BoxKind::FormControl { kind } if !block_pe_none => {
@@ -153,7 +147,7 @@ fn collect_clickable_rec(
                 let mut cur_rect: Option<Rect> = None;
                 for frag in line {
                     // Treat pointer-events:none inline elements as if they have no link.
-                    let link = if frag.style.pointer_events == PointerEvents::None {
+                    let link = if frag.style.effective_pointer_events() == PointerEvents::None {
                         None
                     } else {
                         link_ancestor(doc, frag.source_node)

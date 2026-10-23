@@ -1,6 +1,6 @@
 # BUG-1577 — `ShadowRoot.getElementById` ищет по документу, `ShadowRoot.appendChild(DocumentFragment)` вставляет сам фрагмент: шаблонный custom element не строится
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P1)
 **Заведён:** 2026-10-09 (P2, WPT-RUN-14 срез 26, `css/css-page` + `css-animations` + `css-transitions` + `css-shadow` + `css-borders` + `css-scroll-snap`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js:4836` `ShadowRoot.prototype.getElementById`, `:4840` `ShadowRoot.prototype.appendChild`; у `DocumentFragment` нет `getElementById`)
 
@@ -39,3 +39,7 @@ WPT-RUN-14 срез 26: `css/css-shadow/part/*` — `No element found: i=1 id=pa
 ## Как проверить
 
 Проба выше; `css/css-shadow/part/different-host.html`.
+
+## Исправление
+
+Исправлено в SHADOW-PARTS (WIP 1): `getElementById` фрагмента и `ShadowRoot` в `web_api_shim_mid.js` ищет по поддереву узла (обход потомков, а не по документу), `appendChild` в `ShadowRoot` индексирует вставленные узлы. Проверено: `css/css-shadow/part/*` — 41 из 48 (было 8).

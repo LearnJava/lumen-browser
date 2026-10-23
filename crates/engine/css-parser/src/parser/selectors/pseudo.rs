@@ -19,26 +19,8 @@ impl Parser<'_> {
             self.consume();
             if is_element {
                 // Функциональный pseudo-element (например ::slotted(...))
-                let arg_start = self.pos;
                 let pe = self.parse_functional_pseudo_element(&lower);
                 self.skip_to_paren_close();
-                // `::part(<ident>+)` (CSS Shadow Parts) не моделируется, но
-                // аргумент сохраняется в имени, чтобы сериализация и
-                // валидация видели `::part(foo)`, а не голое `::part`.
-                if pe.is_none() && lower == "part" {
-                    let arg = self.input[arg_start..self.pos].trim_end_matches(')').trim();
-                    let well_formed = !arg.is_empty()
-                        && arg.split_ascii_whitespace().all(|t| {
-                            !t.starts_with(|c: char| c.is_ascii_digit())
-                                && t.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'))
-                        });
-                    if well_formed {
-                        let arg = arg.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
-                        return Some(SimpleSelector::PseudoElement(PseudoElementKind::Unknown(
-                            format!("{name}({arg})"),
-                        )));
-                    }
-                }
                 return Some(SimpleSelector::PseudoElement(pe.unwrap_or(
                     PseudoElementKind::Unknown(name)
                 )));
@@ -354,6 +336,23 @@ impl Parser<'_> {
                     return None;
                 }
                 Some(PseudoElementKind::Slotted(Some(list)))
+            }
+            "part" => {
+                // CSS Shadow Parts L1 §2: `::part(<ident>+)` — непустой список
+                // имён, разделённых пробелами. Не идент (`1a`, строка) — весь
+                // селектор невалиден (вызывающий оборачивает `None` в `Unknown`).
+                let mut names = Vec::new();
+                loop {
+                    self.skip_ws_and_comments();
+                    if self.peek() == Some(')') {
+                        break;
+                    }
+                    names.push(self.parse_ident()?);
+                }
+                if names.is_empty() {
+                    return None;
+                }
+                Some(PseudoElementKind::Part(names))
             }
             "highlight" => {
                 // CSS Highlight API L1 §3: `::highlight(name)` матчит элемент,

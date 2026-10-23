@@ -368,6 +368,11 @@ pub enum PseudoElementKind {
     /// Матчит элемент, который слотирован через `<slot>` и матчит хотя бы один
     /// из селекторов списка. None = нет селектора (невалидно для ::slotted, но parser может вернуть).
     Slotted(Option<Vec<ComplexSelector>>),
+    /// `::part(<ident>+)` (CSS Shadow Parts L1 §2) — элемент shadow tree с
+    /// атрибутом `part`, содержащим все перечисленные имена. Селектор перед
+    /// `::part()` относится к shadow host-у, а не к самому элементу; за
+    /// `::part()` допустимы псевдоклассы (к элементу) и один псевдоэлемент.
+    Part(Vec<String>),
     /// `::marker` (CSS Pseudo-Elements L4 §5.5) — маркер (bullet/number) list item.
     /// В Phase 0 парсится как обычное имя; P4 вводит как enum для будущей специализации.
     Marker,
@@ -617,7 +622,7 @@ pub(crate) fn pseudo_class_is_supported(pc: &PseudoClass) -> bool {
 /// Псевдоэлементы, определённые спецификациями, но не смоделированные
 /// движком (отдельного варианта [`PseudoElementKind`] нет, лежат в `Unknown`).
 /// Синтаксически валидны (`querySelectorAll('::backdrop')` — пустой список, не
-/// `SyntaxError`) и ничего не выбирают. `part(…)` приходит уже с аргументом.
+/// `SyntaxError`) и ничего не выбирают.
 fn is_known_unmodeled_pseudo_element(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
@@ -656,7 +661,7 @@ fn is_known_unmodeled_pseudo_element(name: &str) -> bool {
             | "-webkit-datetime-edit"
             | "-webkit-color-swatch"
             | "-webkit-color-swatch-wrapper"
-    ) || lower.starts_with("part(")
+    )
 }
 
 /// True если псевдо-элемент распознан. `Unknown(_)` → `false`; `::slotted()`
@@ -829,6 +834,10 @@ pub(crate) fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         PseudoElementKind::Slotted(None) => "::slotted()".into(),
         PseudoElementKind::Slotted(Some(sels)) => {
             format!("::slotted({})", sels_to_css_str(sels))
+        }
+        PseudoElementKind::Part(names) => {
+            let list: Vec<String> = names.iter().map(|n| serialize_identifier(n)).collect();
+            format!("::part({})", list.join(" "))
         }
         PseudoElementKind::Marker => "::marker".into(),
         PseudoElementKind::Selection => "::selection".into(),
@@ -1100,6 +1109,9 @@ pub(crate) fn compound_selector_is_valid(compound: &CompoundSelector) -> bool {
                 if let Some(prev) = seen_pe {
                     let allowed = (pseudo_element_allows_user_action(prev)
                         && is_user_action_pseudo_class(pc))
+                        // CSS Shadow Parts L1 §2: после `::part()` — любые
+                        // псевдоклассы (структурные парсятся, но не матчатся).
+                        || matches!(prev, PseudoElementKind::Part(_))
                         // `::scroll-button()` is a focusable, potentially
                         // disabled control (CSS Overflow L5 §scroll-buttons)
                         // — `:disabled`/`:enabled` are valid trailing
@@ -1140,6 +1152,11 @@ pub(crate) fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &Ps
     {
         return true;
     }
+    // CSS Shadow Parts L1 §2: за `::part()` допустим любой псевдоэлемент, кроме
+    // второго `::part()` и `::slotted()` — цепочка не раскрывает вложенное дерево.
+    if matches!(first, PseudoElementKind::Part(_)) {
+        return !matches!(second, PseudoElementKind::Part(_) | PseudoElementKind::Slotted(_));
+    }
     matches!(
         (first, second),
         (
@@ -1147,6 +1164,29 @@ pub(crate) fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &Ps
             PseudoElementKind::Marker | PseudoElementKind::Column
         ) | (PseudoElementKind::Column, PseudoElementKind::ScrollMarker)
     )
+}
+
+/// CSSOM §2.1.2 «serialize an identifier» — запись идента с экранированием.
+pub(crate) fn serialize_identifier(ident: &str) -> String {
+    let chars: Vec<char> = ident.chars().collect();
+    let mut out = String::with_capacity(ident.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let hex_escape = c.is_ascii_control()
+            || (c.is_ascii_digit() && (i == 0 || (i == 1 && chars[0] == '-')));
+        if c == '\0' {
+            out.push('\u{FFFD}');
+        } else if hex_escape {
+            out.push_str(&format!("\\{:x} ", c as u32));
+        } else if c == '-' && chars.len() == 1 {
+            out.push_str("\\-");
+        } else if c as u32 >= 0x80 || c == '-' || c == '_' || c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else {
+            out.push('\\');
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Может ли за pseudo-element-ом стоять user-action-псевдокласс.

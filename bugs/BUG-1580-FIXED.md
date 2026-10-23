@@ -1,6 +1,6 @@
 # BUG-1580 — Каскад «документ против shadow tree» не соблюдает порядок областей: правила `:host` побеждают правила документа
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P1)
 **Заведён:** 2026-10-09 (P2, WPT-RUN-14 срез 26, `css/css-page` + `css-animations` + `css-transitions` + `css-shadow` + `css-borders` + `css-scroll-snap`)
 **Область:** layout (`crates/engine/layout/src/` — каскад по областям encapsulation context; CSS Scoping 1 / CSS Cascade 5 §6.4)
 
@@ -31,3 +31,7 @@ WPT-RUN-14 срез 26: `css/css-shadow/css-scoping-shadow-host-rule.html` (reft
 ## Как проверить
 
 `css/css-shadow/css-scoping-shadow-host-rule.html`, `shadow-cascade-order-001.html`.
+
+## Исправление
+
+Исправлено в SHADOW-PARTS: ключ сортировки каскада получил поле контекста инкапсуляции `cx` (вместо `is_inline`); для нормальных деклараций внешний контекст бьёт внутренний, для `!important` — наоборот (Cascade 5 §6.4.2); применено к `:host`, `::slotted()`, `::part()`. Правила документа больше не протекают в shadow tree. Тесты `shadow_dom_selectors` (33), `share_cache`.

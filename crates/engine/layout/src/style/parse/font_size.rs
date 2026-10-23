@@ -118,7 +118,36 @@ fn resolve_font_size(
     viewport: Size,
     is_quirks: bool,
 ) -> Option<FontSizeBasis> {
+    // CSS Fonts L4 §2.5: absolute-size (`xx-small`…`xxx-large`) — фиксированная
+    // таблица px, не зависящая от родителя; relative-size (`larger`/`smaller`) —
+    // от font-size родителя.
+    let kw = val.trim();
+    if let Some(px) = absolute_size_px(kw) {
+        style.font_size = px;
+        return Some(FontSizeBasis::Absolute);
+    }
+    if kw.eq_ignore_ascii_case("larger") {
+        style.font_size = parent_fs * RELATIVE_SIZE_RATIO;
+        return Some(FontSizeBasis::ParentRelative);
+    }
+    if kw.eq_ignore_ascii_case("smaller") {
+        style.font_size = parent_fs / RELATIVE_SIZE_RATIO;
+        return Some(FontSizeBasis::ParentRelative);
+    }
     let len = parse_length_q(val, is_quirks)?;
+    // CSS Fonts L4 §2.5: `<length-percentage [0,∞]>` — отрицательный литерал
+    // невалиден (декларация отбрасывается), а отрицательный результат `calc()`
+    // зажимается в 0 (CSS Values L4 §10.1, clamping to the allowed range).
+    let negative_literal = match &len {
+        Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Percent(v) => *v < 0.0,
+        Length::Ch(v) | Length::Ex(v) | Length::Cap(v) | Length::Lh(v) | Length::Rlh(v)
+        | Length::Rex(v) | Length::Rch(v) => *v < 0.0,
+        Length::Vh(v) | Length::Vw(v) | Length::Vmin(v) | Length::Vmax(v) => *v < 0.0,
+        _ => false,
+    };
+    if negative_literal {
+        return None;
+    }
     // Для font-size: em и % считаются от parent_fs; vh/vw/vmin/vmax — от viewport.
     let (px, basis) = match &len {
         Length::Px(v) => (*v, FontSizeBasis::Absolute),
@@ -162,8 +191,28 @@ fn resolve_font_size(
         // Intrinsic keywords not meaningful for font-size — ignore.
         Length::MinContent | Length::MaxContent | Length::FitContent(_) | Length::Stretch => return None,
     };
-    style.font_size = px;
+    style.font_size = px.max(0.0);
     Some(basis)
+}
+
+/// Множитель `larger`/`smaller` относительно font-size родителя (как в Blink и
+/// Gecko; CSS Fonts L4 §2.5 оставляет коэффициент на усмотрение UA).
+const RELATIVE_SIZE_RATIO: f32 = 1.2;
+
+/// Таблица `<absolute-size>` в px при `medium` = 16px (CSS Fonts L4 §2.5);
+/// совпадает с `<font size=1…7>` из `presentational.rs`.
+fn absolute_size_px(kw: &str) -> Option<f32> {
+    const TABLE: [(&str, f32); 8] = [
+        ("xx-small", 9.0),
+        ("x-small", 10.0),
+        ("small", 13.0),
+        ("medium", 16.0),
+        ("large", 18.0),
+        ("x-large", 24.0),
+        ("xx-large", 32.0),
+        ("xxx-large", 48.0),
+    ];
+    TABLE.iter().find(|(name, _)| kw.eq_ignore_ascii_case(name)).map(|&(_, px)| px)
 }
 
 /// Применяет `<line-height>`-значение в `style.line_height` (+ флаг

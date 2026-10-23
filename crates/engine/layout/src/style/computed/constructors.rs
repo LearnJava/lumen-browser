@@ -234,6 +234,8 @@ impl ComputedStyle {
             caret_color: None,  // `auto`.
             caret_shape: CaretShape::Auto,
             caret_animation: CaretAnimation::Auto,
+            interactivity: Interactivity::Auto,
+            input_security: InputSecurity::Auto,
             overflow_wrap: OverflowWrap::Normal,
             word_break: WordBreak::Normal,
             line_break: LineBreak::Auto,
@@ -669,6 +671,8 @@ impl ComputedStyle {
             caret_color: inherited.caret_color,
             caret_shape: inherited.caret_shape,
             caret_animation: inherited.caret_animation,
+            interactivity: inherited.interactivity,
+            input_security: inherited.input_security,
             overflow_wrap: inherited.overflow_wrap,
             word_break: inherited.word_break,
             line_break: inherited.line_break,

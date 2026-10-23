@@ -152,6 +152,9 @@ mod v8_generic_sensor;
 mod v8_selector_syntax_error;
 
 #[cfg(feature = "v8-backend")]
+mod v8_shadow_parts;
+
+#[cfg(feature = "v8-backend")]
 mod v8_css_storage_nav_misc;
 
 #[cfg(feature = "v8-backend")]
@@ -341,6 +344,7 @@ mod v8_bug1437_text_motion;
 mod v8_bug1440_fragment_insertion;
 mod v8_gap_rule_interp;
 mod v8_bug1305_wa_neutral;
+mod v8_bug1504_wa_registered;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s61_positioned_skip;
 #[cfg(feature = "v8-backend")]

@@ -1,6 +1,6 @@
 # BUG-1409 — `font-size: xx-small…xxx-large`, `larger`, `smaller` не применяются; отрицательный `calc()`-размер не зажимается в 0
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** layout (`crates/engine/layout/src/style/parse/font_size.rs::resolve_font_size`, `:130`)
 
@@ -38,3 +38,11 @@ WPT-RUN-14 срез 18: `css-fonts/font-size-xxx-large.html` (reftest: `font-siz
 ## Как проверить
 
 `css/css-fonts/font-size-xxx-large.html`, `parsing/font-size-computed.html`, `parsing/font-size-invalid.html`.
+
+## Исправлено
+
+`resolve_font_size` (`style/parse/font_size.rs`) разбирает `<absolute-size>` по таблице CSS Fonts L4 §2.5
+(9/10/13/16/18/24/32/48 px; `Absolute` — берёт полный `zoom`) и `larger`/`smaller` как ×1,2 / ÷1,2 от
+`parent_fs`; тем же путём идёт `<font-size>`-компонент `font`-шортхенда. Отрицательный литерал
+(`-5px`, `-1em`, `-10%`) отбрасывает декларацию, отрицательный результат `calc()` зажимается в 0.
+Тесты — `style/tests/fonts.rs` (`font_size_*`, `font_shorthand_takes_absolute_size_keyword`).
