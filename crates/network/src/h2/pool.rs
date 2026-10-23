@@ -102,6 +102,10 @@ impl Drop for Reservation<'_> {
 pub struct H2Pool {
     slots: Mutex<HashMap<PoolKey, Slot>>,
     changed: Condvar,
+    /// Requesters that have parked on `changed` (tests only: lets a test
+    /// wait until a waiter is really queued instead of sleeping and hoping).
+    #[cfg(test)]
+    parked: std::sync::atomic::AtomicUsize,
 }
 
 impl std::fmt::Debug for H2Pool {
@@ -146,6 +150,10 @@ impl H2Pool {
                     let now = Instant::now();
                     if now >= deadline {
                         return Acquire::Direct;
+                    }
+                    #[cfg(test)]
+                    if !waited {
+                        self.parked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
                     waited = true;
                     slots = self
@@ -320,7 +328,13 @@ mod tests {
             let key = key.clone();
             std::thread::spawn(move || matches!(pool.acquire(&key), Acquire::Direct))
         };
-        std::thread::sleep(Duration::from_millis(50));
+        // Fail the handshake only once the waiter is parked: dropped earlier,
+        // the origin is simply free and the late thread would reserve it.
+        let queued = Instant::now();
+        while pool.parked.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(queued.elapsed() < Duration::from_secs(30), "the waiter never queued");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         drop(r);
         assert!(waiter.join().unwrap_or(false), "waiter must bypass after a failed handshake");
     }

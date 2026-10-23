@@ -81,7 +81,7 @@ Pass rate корпуса 42.92% — балл (PASS = 1, testharness — доля
 | [BUG-1518](../bugs/BUG-1518-OPEN.md) | layout | 292 | 0 | 292 | 0 | SHAPE-OUTSIDE-3 |
 | [BUG-1519](../bugs/BUG-1519-OPEN.md) | layout | 292 | 0 | 292 | 0 | SHAPE-OUTSIDE-3 |
 | [BUG-1467](../bugs/BUG-1467-OPEN.md) | css-parser/layout | 226 | 0 | 226 | 0 | RUNIN-1 |
-| [BUG-1577](../bugs/BUG-1577-OPEN.md) | js | 207 | 0 | 207 | 0 | SHADOW-PARTS |
+| [BUG-1577](../bugs/BUG-1577-FIXED.md) | js | 207 | 0 | 207 | 0 | SHADOW-PARTS |
 
 «Тестов» — объединение тестов из `tests/wpt/metadata/**/*.ini` (ожидание называет баг), WPT-путей в заметке незакрытой строки `ROADMAP.md` с этим багом в колонке `bugs` (каталог шире 500 тестов не считается) и детальных таблиц `docs/wpt-status.md`, плюс доля категории из категорийного индекса `docs/wpt-status.md` (её тесты не OK/PASS поровну между открытыми багами строки). Колонки справа — вклад каждого источника.
 

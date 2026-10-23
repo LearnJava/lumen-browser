@@ -185,28 +185,38 @@ fn deep_chain_with_margins_collapses_through_the_trampoline() {
             origin: BoxOrigin::default(),
         }
     }
-    let mut node = leaf();
-    for i in 1..=DEPTH {
-        node = margined_wrapper(i + 1, vec![node]);
-    }
-    let mut root = node;
-    let null_hp = lumen_core::ext::NullHyphenationProvider;
-    let init_pcb = Rect::new(0.0, 0.0, VIEWPORT.width, VIEWPORT.height);
-    // BUG-1026 regression guard: an O(depth²) margin-collapse walk at this
+    // Lays out a `depth`-deep margined chain; returns the root and the wall time.
+    let lay = |depth: usize| {
+        let mut node = leaf();
+        for i in 1..=depth {
+            node = margined_wrapper(i + 1, vec![node]);
+        }
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = Rect::new(0.0, 0.0, VIEWPORT.width, VIEWPORT.height);
+        let started = std::time::Instant::now();
+        super::super::lay_out(
+            &mut node, 0.0, 0.0, VIEWPORT.width, Some(VIEWPORT.height), None, VIEWPORT, init_pcb,
+            &null_hp, true,
+        );
+        (node, started.elapsed())
+    };
+    // BUG-1026 regression guard. An O(depth²) margin-collapse walk at this
     // DEPTH takes on the order of an hour (see `DEPTH`'s doc comment); an
-    // O(depth) one finishes in well under a second. 10s leaves generous
-    // headroom for slow CI hardware while still failing loudly, not just
-    // slowly, if the memoization regresses back to a per-level full walk.
-    let started = std::time::Instant::now();
-    super::super::lay_out(
-        &mut root, 0.0, 0.0, VIEWPORT.width, Some(VIEWPORT.height), None, VIEWPORT, init_pcb,
-        &null_hp, true,
-    );
-    let elapsed = started.elapsed();
+    // O(depth) one finishes in a couple of seconds. An absolute wall-clock
+    // limit flaked in a loaded full-workspace run (1.9 s alone, 3.4 s loaded),
+    // so the test checks the *growth*: a 4x deeper chain must cost about 4x
+    // (linear), not 16x (quadratic). Both runs share the machine's load, so
+    // the ratio is far steadier than either absolute time; the limit of 10x
+    // sits between the two. The shallow run is the best of two so a one-off
+    // stall cannot inflate the baseline's rival.
+    let shallow = lay(DEPTH / 4).1.min(lay(DEPTH / 4).1);
+    let (root, deep) = lay(DEPTH);
+    let growth = deep.as_secs_f64() / shallow.as_secs_f64().max(1e-6);
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
-        "layout of a {DEPTH}-deep margin-collapse chain took {elapsed:?} — \
-         looks like the BUG-1026 O(depth\u{b2}) margin-collapse walk regressed"
+        growth < 10.0,
+        "a {DEPTH}-deep margin-collapse chain took {deep:?} vs {shallow:?} for a quarter of \
+         the depth (x{growth:.1}; linear is ~x4, quadratic ~x16) — looks like the BUG-1026 \
+         O(depth\u{b2}) margin-collapse walk regressed"
     );
     assert_eq!(root.rect.y, 1.0, "y={}", root.rect.y);
     assert_eq!(root.rect.height, LEAF_HEIGHT, "height={}", root.rect.height);

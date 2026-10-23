@@ -905,49 +905,8 @@ pub(crate) fn collect_js_layout_snapshot(
     }
 }
 
-/// The alpha plane of `image`, one byte per pixel.
-fn image_alpha(image: &lumen_image::Image) -> lumen_dom::ImageAlpha {
-    lumen_dom::ImageAlpha {
-        width: image.width,
-        height: image.height,
-        alpha: image.to_rgba8().chunks_exact(4).map(|px| px[3]).collect(),
-    }
-}
-
-/// Hands the decoded `shape-outside: url()` images of `layout` to the document
-/// (CSS Shapes L1 §6.2) and lays the page out again when any of them is new: layout
-/// has no pixels, a float whose image is unknown wraps as if it had no shape.
-#[allow(clippy::too_many_arguments)]
-fn report_shape_images(
-    layout: LayoutBox,
-    images: &[(String, Arc<lumen_image::Image>)],
-    doc_arc: &Arc<Mutex<Document>>,
-    sheet: &lumen_css_parser::Stylesheet,
-    measurer: &lumen_paint::MultiFontMeasurer,
-    viewport: Size,
-    hp: &dyn HyphenationProvider,
-    dark_mode: bool,
-    media_print: bool,
-) -> LayoutBox {
-    let urls = lumen_layout::collect_shape_image_requests(&layout);
-    if urls.is_empty() {
-        return layout;
-    }
-    let Ok(mut d) = doc_arc.lock() else { return layout };
-    let mut changed = false;
-    for url in &urls {
-        if let Some((_, image)) = images.iter().find(|(key, _)| key == url) {
-            changed |= d.set_shape_image(url, image_alpha(image));
-        }
-    }
-    if !changed {
-        return layout;
-    }
-    layout_page(&d, sheet, measurer, viewport, hp, dark_mode, media_print)
-}
-
 /// One layout pass with BUG-270's per-pass `print` media flag bracketed.
-fn layout_page(
+pub(crate) fn layout_page(
     doc: &Document,
     sheet: &lumen_css_parser::Stylesheet,
     measurer: &lumen_paint::MultiFontMeasurer,
@@ -1928,7 +1887,7 @@ pub(crate) fn parse_and_layout(
     // CSS Shapes L1 §6.2: a `shape-outside: url()` image decides where the text wraps,
     // so it cannot wait for paint like a background — report its alpha plane and lay
     // the page out again once.
-    let layout = report_shape_images(
+    let layout = crate::page_shape_images::report_shape_images(
         layout, &images, &doc_arc, &sheet, &measurer, viewport, hp, dark_mode, media_print,
     );
     #[cfg(feature = "v8")]

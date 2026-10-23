@@ -11,6 +11,9 @@ cargo check -p lumen-layout
 # Tests for a specific crate.
 cargo test -p lumen-font
 
+# lumen-js compiles its tests only with the V8 backend (`cargo test --workspace` enables the feature itself).
+cargo test -p lumen-js --features v8-backend --lib -- <filter>
+
 # Integration tests on bundled Inter.
 cargo test -p lumen-font --test inter_real_font
 

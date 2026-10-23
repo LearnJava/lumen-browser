@@ -2327,30 +2327,7 @@ mod scroll_container;
 #[path = "tests/scroll_state_queries.rs"]
 mod scroll_state_queries;
 
+// Хвост подключений тестовых модулей вынесен в файл (правило размера файла, lint-policy §5.1).
 #[cfg(test)]
-#[path = "tests/style_container_any_element.rs"]
-mod style_container_any_element;
-
-#[cfg(test)]
-#[path = "tests/var_invalid_declaration_value.rs"]
-mod var_invalid_declaration_value;
-
-#[cfg(test)]
-#[path = "tests/var_escaped_name.rs"]
-mod var_escaped_name;
-
-#[cfg(test)]
-#[path = "tests/var_css_wide.rs"]
-mod var_css_wide;
-
-#[cfg(test)]
-#[path = "tests/scroll_initial_target.rs"]
-mod scroll_initial_target_tests;
-
-#[cfg(test)]
-#[path = "tests/deep_traversal_stress.rs"]
-mod deep_traversal_stress;
-
-#[cfg(test)]
-#[path = "tests/heading_level_pseudo.rs"]
-mod heading_level_pseudo;
+#[path = "tests/layout_test_mods_tail.rs"]
+mod layout_test_mods_tail;

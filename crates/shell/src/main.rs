@@ -175,6 +175,7 @@ mod omnibox;
 mod page_context_menu;
 mod page_load;
 mod page_pipeline;
+mod page_shape_images;
 mod persistent_js;
 mod panels;
 mod platform;

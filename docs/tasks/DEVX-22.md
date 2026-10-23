@@ -69,3 +69,28 @@
 - Полный `graphic_tests/run.py` прогнан, результат и регенерированные эталоны (если были
   намеренные изменения) — в том же коммите.
 - Все гейты п. 4 зелёные; влитые `chat-*` worktree и ветки убраны.
+
+## Состояние (WIP, сессия P6, 2026-10-23)
+
+Ветка `p6-devx-22`. **Сделано:**
+- П. 1: `cargo test --workspace --no-fail-fast` на `afaa0feda` (с `CARGO_INCREMENTAL=0` — диск D: почти полон, `incremental` в `target/debug` рос до 7 ГБ и ронял сборку): 22 538 ok, 2 FAILED — оба `lumen-js`, оба BUG-1677 (`navigator_clipboard_read_asks_and_returns_items`, `perf9_code_cache_full_still_stores_new_entry`), дубликатов не заводить.
+- П. 2: флаки починены в коде — `deep_chain_with_margins…` (порог 10 с → рост времени ×4 глубины < ×10, лучшее из двух мелких прогонов); `h2::pool::waiter_goes_direct_when_the_handshake_fails` (вместо `sleep(50ms)` ждёт `cfg(test)`-счётчик `parked`); `bounded_document_lock_waits_out_another_thread` (держатель не отпускает замок, пока главный поток не проверил `try_lock`). `bug341_s13_…` **не воспроизведён** (25 прогонов под 3 CPU-хогами + 4 полных прогона `lumen-shell`, всё зелёное; счётчики thread-local, гонки не видно) — оставить как есть, при повторе под нагрузкой завести баг с логом `{last:?}`.
+- П. 3 (пиксели, `LUMEN_PROFILE=debug`, слот не умеет dev-release по диску): полный `run.py --continue-on-fail` дважды обрывался `IPC WinError 10054` на TEST-08 / TEST-134 (по одному оба проходят; причина не найдена — возможно, чужой `taskkill lumen.exe`). Против прошлого прогона (`5b8345773`): **TEST-18** DEBTOR 6.09 → 2.08 % (улучшение; baseline в `KNOWN_DEBTORS_IPC` снижен до 2.08, строка 673 `run.py`); **TEST-61** (view-transitions) DEBTOR 3.26 → **FAIL 10.81 %** — регрессия VT-API (`d30f7bec7`, 21.10): колбэк `startViewTransition` теперь идёт `setTimeout(0)`, а IPC-снимок (`render_current_page_to_png` берёт `self.display_list`) его не видит — страница остаётся в состоянии «до»; бинарь от 20.10 даёт 3.26 %, любой от 22.10 — 10.81 %. Заметка: в IPC-режиме и обычный `setTimeout(800)`, меняющий DOM, в снимке не виден даже через 2.5 с (проба — страница с логом таймера) — вероятно, перерасклад идёт только в `redraw_requested`, а окно скрыто.
+
+**Осталось:**
+1. Завести `BUG-NNN` (следующий номер в `BUGS.md`) на TEST-61 / IPC-снимок не видит правок DOM от таймеров, с указателем в очередь владельца (P1, VT-API-2, или P3); либо починить: перед `Screenshot` тикнуть таймеры, дрейнить VT-события и сделать `relayout`. Решение про baseline 61 — только вместе с багом.
+2. Повторить полный `graphic_tests/run.py --continue-on-fail` (foreground, на dev-release/debug), убедиться, что TEST-134…165 проходят (обрыв IPC на 134 — перепроверить), закоммитить `results/*.json` и baseline-правку.
+3. П. 4 — гейты-скрипты: `check_file_sizes.py`, `check_doc_links.py`, `check_claude_md.py`, `check_crate_names.py`, `check_marketing_words.py`, `corpus_c.py check`, `cargo clippy --workspace --all-targets -- -D warnings`.
+4. П. 5 — уборка влитых `chat-*` worktree/веток (`git branch -r --merged origin/main`).
+5. П. 6 — строка про `--features v8-backend` в `docs/commands.md`, если её нет.
+6. Гейт перед закрытием: `cargo clippy -p lumen-layout -p lumen-network -p lumen-js --all-targets -- -D warnings` (lumen-js — с `--features v8-backend`), затем `/lumen-task-finish`, удалить указатель `ROADMAP.md:1252` из `STATUS-P6.md`, ROADMAP-строку DEVX-22 → `done`.
+
+**Как проверить сделанное:** `cargo test -p lumen-layout --lib deep_chain_with_margins`, `cargo test -p lumen-network --lib h2::pool`, `cargo test -p lumen-js --features v8-backend --lib bounded_document_lock`.
+
+## Итог (2026-10-23, сессия P6) — done
+
+- Полный `cargo test --workspace` (п. 1): 2 FAILED — оба BUG-1677; флаки п. 2 починены (`bug341_s13` не воспроизводится, оставлен).
+- Полный `graphic_tests/run.py --continue-on-fail` (debug-бинарь, коммит `7f5af0a35`): 165 тестов, 7 FAIL — 21, 56, 150, 151, 155, 159 идентичны прогону `5b8345773` (давние), **61** — регрессия IPC-снимка, заведён [BUG-1697](../../bugs/BUG-1697-OPEN.md) (указатель в `STATUS-P3.md`). TEST-18 — baseline снижен до 2.08 %. Обрыва IPC на 134+ не было. Результат — `graphic_tests/results/20261023-195817.json`.
+- Гейты п. 4 зелёные: `check_file_sizes` (разрезы: `network/interceptor_tests`, `core/ext/{wake_lock,audio_playback}_tests`, `driver/session/a11y_query`, `layout/selector_query/contain_css`, `layout/tests/layout_test_mods_tail`, `shell/page_load/css_pending`, `style/zoom`, `tests/background_alignment_quirks`, `page_shape_images`; baseline понижен), `check_doc_links`, `check_claude_md`, `check_crate_names`, `check_marketing_words`, `corpus_c.py check`, `cargo clippy --workspace --all-targets -- -D warnings`.
+- П. 5: зарегистрированных `chat-*` worktree и `origin/chat-*` веток нет; каталог `.claude/worktrees/chat-wpt-scouts2` не в `git worktree list` — не трогал (чужой, сессия Chat).
+- П. 6: строка про `--features v8-backend` в `docs/commands.md` добавлена.
