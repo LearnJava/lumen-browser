@@ -227,6 +227,88 @@ use super::*;
         assert_eq!(s.width, None);
     }
 
+    // ── BUG-1507: typed parameters, `returns`, conditional groups ──────────
+
+    /// Computed `width` in px of `.box` under `css`, `None` when it stays `auto`.
+    fn fn_width(css: &str) -> Option<f32> {
+        let s = cascade_at("<div class=\"box\"></div>", css, &[0]);
+        s.width.and_then(|w| w.resolve(16.0, None, Size::new(800.0, 600.0)))
+    }
+
+    #[test]
+    fn css_function_typed_parameter_with_default_and_returns() {
+        assert_eq!(
+            fn_width(
+                "@function --f(--a <length>: 3px) returns <length> { result: calc(var(--a) * 2); }                  .box { width: --f(); }"
+            ),
+            Some(6.0)
+        );
+        assert_eq!(
+            fn_width("@function --f(--a <length>) { result: var(--a); } .box { width: --f(5px); }"),
+            Some(5.0)
+        );
+        assert_eq!(
+            fn_width(
+                "@function --f(--a type(<length> | auto)) { result: var(--a); } .box { width: --f(7px); }"
+            ),
+            Some(7.0)
+        );
+    }
+
+    #[test]
+    fn css_function_typed_argument_is_computed() {
+        assert_eq!(
+            fn_width("@function --f(--a <length>) { result: var(--a); } .box { width: --f(calc(100px + 1px)); }"),
+            Some(101.0)
+        );
+    }
+
+    #[test]
+    fn css_function_type_mismatch_leaves_parameter_unbound() {
+        // The mismatching argument is IACVT, so `var(--a, 9px)` takes its fallback.
+        assert_eq!(
+            fn_width("@function --f(--a <length>) { result: var(--a, 9px); } .box { width: --f(red); }"),
+            Some(9.0)
+        );
+        // …or the default when one is declared.
+        assert_eq!(
+            fn_width("@function --f(--a <length>: 4px) { result: var(--a, 9px); } .box { width: --f(red); }"),
+            Some(4.0)
+        );
+    }
+
+    #[test]
+    fn css_function_returns_type_mismatch_invalidates_call() {
+        assert_eq!(fn_width("@function --f() returns <length> { result: 12s; } .box { width: --f(); }"), None);
+        assert_eq!(fn_width("@function --f() returns <length> { result: 7px; } .box { width: --f(); }"), Some(7.0));
+    }
+
+    #[test]
+    fn css_function_default_sees_earlier_parameters() {
+        assert_eq!(
+            fn_width(
+                "@function --f(--a: 5px, --b <length>: calc(var(--a) + 1px)) { result: var(--b); }                  .box { width: --f(); }"
+            ),
+            Some(6.0)
+        );
+    }
+
+    #[test]
+    fn css_function_media_group_in_body_applies_when_it_holds() {
+        assert_eq!(
+            fn_width("@function --f() { result: 1px; @media all { result: 5px; } } .box { width: --f(); }"),
+            Some(5.0)
+        );
+        assert_eq!(
+            fn_width("@function --f() { result: 1px; @media not all { result: 5px; } } .box { width: --f(); }"),
+            Some(1.0)
+        );
+        assert_eq!(
+            fn_width("@function --f() { result: 1px; @supports (width: 1px) { result: 3px; } } .box { width: --f(); }"),
+            Some(3.0)
+        );
+    }
+
     // ── BUG-519: unsupported nested at-rule inside `@function`/`@mixin` body
     // must not corrupt parsing of the declarations after it ─────────────────
 
