@@ -272,3 +272,26 @@ fn name_only_query_matches_a_container_name_without_type() {
     assert_eq!(custom(&tree, &doc, "#t", "--b"), "yes");
     assert_eq!(custom(&tree, &doc, "#t", "--z"), "no");
 }
+
+/// CQ-SCROLL-STATE-2: во время раскладки запросы видят смещения из подсказок, а не нулевые
+/// смещения свежего дерева.
+#[test]
+fn scrollable_reads_the_installed_scroll_hints() {
+    let html = r#"<div id="s"><div id="t"></div><div style="height:300px"></div></div>"#;
+    let (doc, first) = layout_tree(html, SCROLLER);
+    let node = find_box_by_selector(&first, &doc, "#s").expect("box").node;
+    let sheet = lumen_css_parser::parse(SCROLLER);
+    assert!(crate::sheet_has_scroll_state_queries(&sheet));
+    let at = |y: f32| {
+        let _hints = crate::install_scroll_hints([(node.raw(), [0.0, y, 0.0, 0.0])].into_iter().collect());
+        let tree = crate::layout(&doc, &sheet, Size::new(1024.0, 600.0));
+        ["--top", "--bottom"].map(|n| custom(&tree, &doc, "#t", n))
+    };
+    assert_eq!(at(0.0), ["no", "yes"]);
+    assert_eq!(at(100.0), ["yes", "yes"]);
+    assert_eq!(at(250.0), ["yes", "no"]);
+    // Смещение за краем зажимается, а подсказки после охранника сняты.
+    assert_eq!(at(9999.0), ["yes", "no"]);
+    let tree = crate::layout(&doc, &sheet, Size::new(1024.0, 600.0));
+    assert_eq!(custom(&tree, &doc, "#t", "--top"), "no");
+}

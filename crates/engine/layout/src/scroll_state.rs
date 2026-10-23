@@ -50,6 +50,21 @@ pub fn sheet_has_scroll_state_queries(sheet: &lumen_css_parser::Stylesheet) -> b
     sheet.container_rules.iter().any(|r| r.preludes().any(|(_, c)| c.to_ascii_lowercase().contains("scroll-state(")))
 }
 
+/// Ненулевые смещения прокрутки дерева (`NodeId::raw()` → `[scroll_x, scroll_y, 0, 0]`) —
+/// то, что [`install_scroll_hints`] и `restore_scroll_positions` возвращают в свежее дерево.
+pub fn scroll_offsets(root: &LayoutBox) -> HashMap<u32, [f32; 4]> {
+    let mut out = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(b) = stack.pop() {
+        if b.scroll_x != 0.0 || b.scroll_y != 0.0 {
+            // Первый бокс узла в порядке обхода — главный.
+            out.entry(b.node.raw()).or_insert([b.scroll_x, b.scroll_y, 0.0, 0.0]);
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
+}
+
 /// Смещение контейнера: из подсказок, иначе из самого бокса.
 fn current_offset(b: &LayoutBox) -> (f32, f32) {
     HINTS

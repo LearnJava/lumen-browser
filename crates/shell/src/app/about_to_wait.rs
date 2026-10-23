@@ -1619,6 +1619,7 @@ impl Lumen {
                 }
             }
             if !cmd_ids.is_empty() {
+                self.restyle_scroll_state_queries();
                 self.issue_container_scroll_command(&cmd_ids);
             }
         }
