@@ -277,7 +277,7 @@ pub use container::{
     apply_container_rules, apply_matched_container_rules, evaluate_container_condition,
     evaluate_container_query, matching_container_rules, query_mentions_style, query_reads_standard_property,
     ContainFlags,
-    ContainerContext, ContainerKinds, ContainerType, ContentVisibility, InterpolateSizeMode,
+    ContainerContext, ContainerKinds, ContainerType, size_containment_ineligible, ContentVisibility, InterpolateSizeMode,
 };
 pub use container_scroll::{Edge, EdgeFlags, ScrollStateInfo};
 pub use values::scroll::{

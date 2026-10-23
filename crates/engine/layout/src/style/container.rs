@@ -142,7 +142,7 @@ impl ContainerContext {
         self.rule_hits = sheet
             .container_rules
             .iter()
-            .map(|r| evaluate_container_query(&r.condition, r.name.as_deref(), &self))
+            .map(|r| evaluate_container_rule(r, &self))
             .collect();
         self
     }
@@ -156,11 +156,25 @@ pub struct ContainerKinds {
     pub size: bool,
     /// `scroll-state`: answers `scroll-state(…)`.
     pub scroll_state: bool,
+    /// The box cannot take size containment (CSS Conditional 5 §size-container): a size
+    /// query that picks this container is unknown, and does not fall through to an outer one.
+    pub ineligible: bool,
+}
+
+/// `display` values whose box cannot be a size container: no principal box
+/// (`contents`), non-atomic inline-level boxes, internal table boxes and tables.
+pub fn size_containment_ineligible(display: crate::style::Display) -> bool {
+    use crate::style::Display::*;
+    matches!(
+        display,
+        Contents | Inline | Table | InlineTable | TableRowGroup | TableHeaderGroup | TableFooterGroup | TableRow
+            | TableColumnGroup | TableColumn | TableCell
+    )
 }
 
 impl ContainerKinds {
     /// A size container.
-    pub const SIZE: Self = Self { size: true, scroll_state: false };
+    pub const SIZE: Self = Self { size: true, scroll_state: false, ineligible: false };
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
@@ -227,6 +241,12 @@ impl ContainerKinds {
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
     evaluate_container_query(condition, None, ctx)
+}
+
+/// The `@container` rule applies under `ctx`: its own query and the ones of the
+/// `@container` rules it is nested in all hold, each against its own container.
+pub fn evaluate_container_rule(rule: &lumen_css_parser::ContainerRule, ctx: &ContainerContext) -> bool {
+    rule.preludes().all(|(name, condition)| evaluate_container_query(condition, name, ctx))
 }
 
 /// Three-valued truth of a container condition: `None` is «unknown»
@@ -340,40 +360,72 @@ pub fn query_reads_standard_property(condition: &str) -> bool {
 
 /// Container features a query reads — they pick the one query container (CSS
 /// Conditional 5 §«container selection»): the nearest ancestor that answers all of them.
+/// A size feature is eligible on its own axis: `width` needs the inline axis, `height` the
+/// block axis (only `container-type: size` has it).
 #[derive(Default, Clone, Copy)]
 struct Needs {
-    size: bool,
+    inline: bool,
+    block: bool,
     scroll_state: bool,
+}
+
+impl Needs {
+    fn or(self, o: Needs) -> Needs {
+        Needs { inline: self.inline | o.inline, block: self.block | o.block, scroll_state: self.scroll_state | o.scroll_state }
+    }
+}
+
+/// Axes a size-feature name asks for; `aspect-ratio`/`orientation` read both.
+fn feature_needs(name: &str) -> Needs {
+    let base = name.strip_prefix("min-").or_else(|| name.strip_prefix("max-")).unwrap_or(name);
+    match base {
+        "width" | "inline-size" => Needs { inline: true, ..Needs::default() },
+        "height" | "block-size" => Needs { block: true, ..Needs::default() },
+        "aspect-ratio" | "orientation" => Needs { inline: true, block: true, ..Needs::default() },
+        _ => Needs::default(),
+    }
 }
 
 fn leaf_needs(s: &str) -> Needs {
     let lower = s.to_ascii_lowercase();
     if lower.starts_with("scroll-state(") {
-        return Needs { size: false, scroll_state: true };
+        return Needs { scroll_state: true, ..Needs::default() };
     }
     if lower.starts_with("style(") {
         return Needs::default();
     }
+    if s.contains(['<', '>', '=']) && !s.contains(':') {
+        // Range syntax: every feature name among the operands.
+        return lower
+            .split(|c: char| !(c.is_ascii_alphabetic() || c == '-'))
+            .filter(|w| !w.is_empty())
+            .fold(Needs::default(), |n, w| n.or(feature_needs(w)));
+    }
     let head: String = lower.chars().take_while(|c| c.is_ascii_alphabetic() || *c == '-').collect();
-    Needs { size: is_known_size_feature(&head) || s.contains(['<', '>', '=']), scroll_state: false }
+    feature_needs(&head)
 }
 
 fn evaluate_container_entry(condition: &str, name: Option<&str>, ctx: &ContainerContext) -> bool {
+    // `@container <name> { … }`: no query, true when a container of that name exists.
+    if condition.trim().is_empty() {
+        return name.is_some() && resolve_container(ctx, name, |_| true).is_some();
+    }
     let needs = std::cell::Cell::new(Needs::default());
     eval_tri(condition, &|leaf| {
-        let n = leaf_needs(leaf);
-        needs.set(Needs {
-            size: needs.get().size || n.size,
-            scroll_state: needs.get().scroll_state || n.scroll_state,
-        });
+        needs.set(needs.get().or(leaf_needs(leaf)));
         None
     });
     let needs = needs.get();
     let Some(c) = resolve_container(ctx, name, |c| {
-        (!needs.size || c.kinds.size) && (!needs.scroll_state || c.kinds.scroll_state)
+        (!needs.inline || c.kinds.size)
+            && (!needs.block || (c.kinds.size && c.height.is_some()))
+            && (!needs.scroll_state || c.kinds.scroll_state)
     }) else {
         return false;
     };
+    if c.kinds.ineligible && (needs.inline || needs.block) {
+        return false;
+    }
     eval_tri(condition, &|leaf| container_leaf(leaf, c)) == Some(true)
 }
 
@@ -783,7 +835,7 @@ pub fn matching_container_rules<'a>(
         // Not precomputed: a query is evaluated only for a rule that selects the node.
         let matched: Vec<&Rule> = matched.collect();
         if !matched.is_empty()
-            && evaluate_container_query(&container_rule.condition, container_rule.name.as_deref(), ctx)
+            && evaluate_container_rule(container_rule, ctx)
         {
             out.extend(matched);
         }
