@@ -927,6 +927,8 @@ fn wrap_inline_run_soft_hyphen_breaks_word_on_manual() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -980,6 +982,8 @@ fn wrap_inline_run_hyphens_none_no_break_on_shy() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
     let m = Fixed10;
     let hp = NullHyphenationProvider;
@@ -1035,6 +1039,8 @@ fn shy_invisible_when_word_fits_on_line() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -1100,6 +1106,8 @@ fn shy_rightmost_fitting_break_selected() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -1161,6 +1169,8 @@ fn shy_auto_mode_respects_shy_positions() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -1225,6 +1235,8 @@ fn shy_manual_no_hyphen_when_no_shy_in_word() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -1376,6 +1388,8 @@ fn overflow_wrap_break_word_splits_long_word() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -1449,6 +1463,8 @@ fn wrap_cjk(
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
     let lines = wrap_inline_run(
         &[seg], max_width, 16.0, 0.0,
@@ -1589,6 +1605,8 @@ fn word_break_break_all_breaks_at_current_position() {
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
 
     let m = Fixed10;
@@ -1645,6 +1663,8 @@ fn wrap_lines_glyph8(
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     };
     let lines = wrap_inline_run(
         &[seg], max_width, 16.0, 0.0,

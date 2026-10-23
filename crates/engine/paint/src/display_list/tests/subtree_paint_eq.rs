@@ -395,6 +395,7 @@ fn key_notices_every_field_emit_reads_and_ignores_dirty() {
         })),
         ("frag.padding_left", Box::new(|b| frag_mut(b, |f| f.padding_left += 1.0))),
         ("frag.bidi_level", Box::new(|b| frag_mut(b, |f| f.bidi_level += 1))),
+        ("frag.bidi_isolate", Box::new(|b| frag_mut(b, |f| f.bidi_isolate = Some(NodeId::from_index(77))))),
         ("frag.source_char_offset", Box::new(|b| frag_mut(b, |f| f.source_char_offset += 1))),
     ];
     for (name, f) in &frag_mutations {

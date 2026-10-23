@@ -259,6 +259,8 @@ fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSeg
         source_node: lumen_dom::NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     }
 }
 
@@ -561,4 +563,5 @@ mod nbsp_no_wrap;
 mod svg_inline_replaced;
 mod table_vwm;
 mod bug1371_bidi_override_nested;
+mod unicode_bidi_element_scope;
 mod bug1382_inline_margin_right;

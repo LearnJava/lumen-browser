@@ -552,6 +552,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     source_node: seg.source_node,
                     source_char_offset: seg.source_char_offset,
                     bidi_level: seg.bidi_level,
+                    bidi_isolate: seg.bidi_isolate,
                     merged_sources: Vec::new(),
                     forced_end: false,
                 });
@@ -591,6 +592,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });
@@ -622,6 +624,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });
@@ -711,6 +714,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
                     bidi_level: seg.bidi_level,
+                    bidi_isolate: seg.bidi_isolate,
                     merged_sources: Vec::new(),
                     forced_end: false,
                 });
@@ -744,6 +748,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 source_node: seg.source_node,
                 source_char_offset: frag_source_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });

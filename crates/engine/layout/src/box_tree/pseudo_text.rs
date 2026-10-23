@@ -55,6 +55,8 @@ pub(crate) fn apply_first_letter_style(
                     source_node,
                     source_char_offset: segments[i].source_char_offset + boundary as u32,
                     bidi_level: 0,
+                    bidi_scopes: Vec::new(),
+                    bidi_isolate: None,
                 };
                 // The enclosing inline's end edge moved to the tail; the letter keeps
                 // only its own pseudo-element edge.

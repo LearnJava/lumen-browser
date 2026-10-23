@@ -689,8 +689,8 @@ pub(in crate::box_tree) fn dispatch_box(
             // pure function of them, so a relayout reproduces it exactly.
             let resolved;
             let segments: &[InlineSegment] =
-                if crate::bidi::needs_resolution(segments, s.direction) {
-                    resolved = crate::bidi::resolve(segments, s.direction);
+                if crate::bidi::needs_resolution(segments, s.direction, s.unicode_bidi) {
+                    resolved = crate::bidi::resolve(segments, s.direction, s.unicode_bidi);
                     &resolved
                 } else {
                     segments

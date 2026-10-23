@@ -421,6 +421,8 @@ fn apply_first_letter_pseudo(
         source_node,
         source_char_offset: first_char_end as u32,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     });
 }
 
@@ -834,6 +836,8 @@ pub(crate) fn control_value_segments(
             source_node: node,
             source_char_offset: byte_offset,
             bidi_level: 0,
+            bidi_scopes: Vec::new(),
+            bidi_isolate: None,
         });
     };
     if !style.white_space.preserves_newlines() {
@@ -947,6 +951,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                     byte_offset += 1; // the \n character
                 }
@@ -971,6 +977,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                 }
                 byte_offset += line.len() as u32;
@@ -1002,6 +1010,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                     byte_offset += 1; // the \n character
                 }
@@ -1029,6 +1039,8 @@ pub(crate) fn collect_inline_segments(
                         source_node: id,
                         source_char_offset: byte_offset,
                         bidi_level: 0,
+                        bidi_scopes: Vec::new(),
+                        bidi_isolate: None,
                     });
                 }
                 byte_offset += line.len() as u32;
@@ -1066,6 +1078,8 @@ pub(crate) fn collect_inline_segments(
                 source_node: id,
                 source_char_offset: 0,
                 bidi_level: 0,
+                bidi_scopes: Vec::new(),
+                bidi_isolate: None,
             });
         }
         NodeData::Text(s) => {
@@ -1110,6 +1124,8 @@ pub(crate) fn collect_inline_segments(
                     source_node: id,
                     source_char_offset: 0,
                     bidi_level: 0,
+                    bidi_scopes: Vec::new(),
+                    bidi_isolate: None,
                 });
             }
         }
@@ -1196,6 +1212,8 @@ pub(crate) fn collect_inline_segments(
                     source_node: id,
                     source_char_offset: 0,
                     bidi_level: 0,
+                    bidi_scopes: Vec::new(),
+                    bidi_isolate: None,
                 };
                 let mut first_cut = first_cut;
                 let mut last_cut = last_cut;
@@ -1221,6 +1239,14 @@ pub(crate) fn collect_inline_segments(
             } else if added > 0 && (pre > 0.0 || post > 0.0) {
                 out[start].pre_space += pre;
                 out[start + added - 1].post_space += post;
+            }
+            // CSS Writing Modes L4 §2.2: the whole element, however many segments its
+            // descendants split it into, sits in one embedding/isolate/override.
+            if s.unicode_bidi != crate::style::UnicodeBidi::Normal {
+                let scope = BidiScope { node: id, bidi: s.unicode_bidi, dir: s.direction };
+                for seg in &mut out[start..] {
+                    seg.bidi_scopes.insert(0, scope);
+                }
             }
         }
         _ => {}
@@ -1544,6 +1570,13 @@ pub(super) fn make_content_text_segment(
         source_node: owner_id,
         source_char_offset: 0,
         bidi_level: 0,
+        // A generated box (`::before`, `::marker`, …) is its own bidi scope.
+        bidi_scopes: if style.unicode_bidi == crate::style::UnicodeBidi::Normal {
+            Vec::new()
+        } else {
+            vec![BidiScope { node: owner_id, bidi: style.unicode_bidi, dir: style.direction }]
+        },
+        bidi_isolate: None,
     }
 }
 
@@ -1572,6 +1605,8 @@ fn make_content_image_segment(
         source_node: NodeId::from_index(0),
         source_char_offset: 0,
         bidi_level: 0,
+        bidi_scopes: Vec::new(),
+        bidi_isolate: None,
     }
 }
 

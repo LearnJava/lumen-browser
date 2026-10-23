@@ -228,6 +228,7 @@ pub(crate) fn push_tabbed_frags(
             source_node: seg.source_node,
             source_char_offset: seg.source_char_offset.saturating_add((src_off + s) as u32),
             bidi_level: seg.bidi_level,
+            bidi_isolate: seg.bidi_isolate,
             merged_sources: Vec::new(),
             forced_end: false,
         });
@@ -368,6 +369,8 @@ pub(crate) fn caps_synthesis(
                     source_node: seg.source_node,
                     source_char_offset: seg.source_char_offset.saturating_add(idx as u32),
                     bidi_level: seg.bidi_level,
+                    bidi_scopes: Vec::new(),
+                    bidi_isolate: seg.bidi_isolate,
                 });
                 no_break.push(
                     out.len() > start + 1
@@ -878,6 +881,7 @@ pub(crate) fn wrap_inline_run_indented(
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });
@@ -909,6 +913,7 @@ pub(crate) fn wrap_inline_run_indented(
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });
@@ -1072,6 +1077,7 @@ pub(crate) fn wrap_inline_run_indented(
                         // this; CJK text does not use them.
                         source_char_offset: frag_source_offset.saturating_add(start as u32),
                         bidi_level: seg.bidi_level,
+                        bidi_isolate: seg.bidi_isolate,
                         merged_sources: Vec::new(),
                         forced_end: false,
                     });
@@ -1123,6 +1129,7 @@ pub(crate) fn wrap_inline_run_indented(
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
                         bidi_level: seg.bidi_level,
+                        bidi_isolate: seg.bidi_isolate,
                         merged_sources: Vec::new(),
                         forced_end: false,
                     });
@@ -1145,6 +1152,7 @@ pub(crate) fn wrap_inline_run_indented(
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
                         bidi_level: seg.bidi_level,
+                        bidi_isolate: seg.bidi_isolate,
                         merged_sources: Vec::new(),
                         forced_end: false,
                     });
@@ -1181,6 +1189,7 @@ pub(crate) fn wrap_inline_run_indented(
                                 source_node: seg.source_node,
                                 source_char_offset: frag_source_offset,
                                 bidi_level: seg.bidi_level,
+                                bidi_isolate: seg.bidi_isolate,
                                 merged_sources: Vec::new(),
                                 forced_end: false,
                             });
@@ -1237,6 +1246,7 @@ pub(crate) fn wrap_inline_run_indented(
                             source_node: seg.source_node,
                             source_char_offset: frag_source_offset,
                             bidi_level: seg.bidi_level,
+                            bidi_isolate: seg.bidi_isolate,
                             merged_sources: Vec::new(),
                             forced_end: false,
                         });
@@ -1322,6 +1332,7 @@ pub(crate) fn wrap_inline_run_indented(
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
                     bidi_level: seg.bidi_level,
+                    bidi_isolate: seg.bidi_isolate,
                     merged_sources: Vec::new(),
                     forced_end: false,
                 });
@@ -1693,6 +1704,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });
@@ -1742,6 +1754,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
                 bidi_level: seg.bidi_level,
+                bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
             });
