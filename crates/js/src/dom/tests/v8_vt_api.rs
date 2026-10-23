@@ -357,3 +357,133 @@ fn wait_until_ignores_rejections() {
     settle(&rt);
     assert_eq!(log(&rt), "finished");
 }
+
+/// BUG-1509 — `getComputedStyle(html, '::view-transition…')` answers the UA sheet under the
+/// page's rules while a transition is active, and nothing outside of it.
+#[test]
+fn pseudo_tree_computed_style_during_a_transition() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "#main { display: block; width: 10px; height: 10px; view-transition-name: target; \
+                 mix-blend-mode: multiply; } \
+         ::view-transition-image-pair(target) { position: fixed; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         function pos(sel) { return getComputedStyle(document.documentElement, sel).position; }
+         function blend(sel) { return getComputedStyle(document.documentElement, sel).mixBlendMode; }
+         log.push('before:' + JSON.stringify(pos('::view-transition')));
+         var vt = document.startViewTransition(function () {
+           log.push('cb:' + pos('::view-transition') + '/' + pos('::view-transition-group(target)') + '/' +
+                    pos('::view-transition-image-pair(target)') + '/' + pos('::view-transition-old(target)') + '/' +
+                    pos('::view-transition-group(root)') + '/' + blend('::view-transition-group(target)'));
+         });
+         vt.ready.then(function () {
+           log.push('ready:' + blend('::view-transition-group(target)') + '/' + blend('::view-transition-group(root)') + '/' +
+                    pos('::view-transition-image-pair(target)') + '/' + pos('::view-transition-image-pair(root)') + '/' +
+                    JSON.stringify(pos('::view-transition-group(nope)')) + '/' + blend('::view-transition-old(target)'));
+         });
+         vt.finished.then(function () { log.push('after:' + JSON.stringify(pos('::view-transition'))); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(
+        log(&rt),
+        "before:\"\",\
+         cb:absolute/absolute/fixed/absolute/absolute/normal,\
+         ready:multiply/normal/fixed/absolute/\"\"/plus-lighter,\
+         after:\"\""
+    );
+}
+
+#[test]
+fn pseudo_tree_computed_style_rejects_non_root_owner_and_malformed_pseudos() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval("var vt = document.startViewTransition(function () {}); null").unwrap();
+    settle(&rt);
+    // The transition is over; start one and probe inside its callback.
+    rt.eval(
+        "var log = [];
+         document.startViewTransition(function () {
+           var html = document.documentElement;
+           log.push(JSON.stringify([
+             getComputedStyle(document.body, '::view-transition').position,
+             getComputedStyle(html, '::view-transition-group').position,
+             getComputedStyle(html, '::view-transition-group(*)').position,
+             getComputedStyle(html, '::view-transition(x)').position,
+             getComputedStyle(html, '::view-transition-group(root)').position]));
+         }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "[\"\",\"\",\"\",\"\",\"absolute\"]");
+}
+
+/// BUG-1509 — a CSS animation the page puts on the pseudo-tree is listed by `getAnimations()` while
+/// the transition runs, and is gone with it.
+#[test]
+fn pseudo_tree_css_animation_is_listed_by_get_animations() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "@keyframes k { from { margin-left: 100px; } to { margin-left: 100px; } } \
+         :root::view-transition-group(root), :root::view-transition { animation: k 10s; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         _wa_gap_keyframes_json = function (n) {
+           return n === 'k' ? JSON.stringify([{ offset: 0, decls: [['margin-left', '100px']] },
+                                              { offset: 1, decls: [['margin-left', '100px']] }]) : null;
+         };
+         _lumen_has_keyframes = function () { return true; };
+         var html = document.documentElement;
+         log.push(html.getAnimations({ subtree: true }).length);
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           var anims = html.getAnimations({ subtree: true });
+           log.push(anims.length, anims.map(function (a) { return a.animationName + '@' + a.effect.pseudoElement; }).join('+'));
+           log.push(document.getAnimations().length, html.getAnimations().length);
+         });
+         vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "0,2,k@::view-transition+k@::view-transition-group(root),2,0,0");
+}
+
+/// BUG-1509 — with no author rules the UA sheet's own animations are on the tree: the group of
+/// every capture, the old and new images of the names present in that state.
+#[test]
+fn pseudo_tree_ua_animations_are_listed_by_get_animations() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("#main { display: block; view-transition-name: hero; }")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         var html = document.documentElement;
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           var names = function (list) {
+             return list.map(function (a) { return a.animationName.replace('-ua-view-transition-', '') + '@' + a.effect.pseudoElement; }).join(' ');
+           };
+           log.push(names(html.getAnimations({ subtree: true })));
+           log.push(document.getAnimations().length);
+         });
+         vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length + '/' + document.getAnimations().length); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    let got = log(&rt);
+    // Tree order: the groups first (root, then `hero`), per name group → image pair → old → new.
+    assert_eq!(
+        got,
+        "group-anim-root@::view-transition-group(root) fade-out@::view-transition-old(root) fade-in@::view-transition-new(root) \
+         group-anim-hero@::view-transition-group(hero) fade-out@::view-transition-old(hero) fade-in@::view-transition-new(hero),6,0/0"
+    );
+}

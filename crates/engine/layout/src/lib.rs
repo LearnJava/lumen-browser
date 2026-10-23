@@ -157,7 +157,7 @@ pub use selection::{
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
 pub use style::{
     is_highlight_pseudo, compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
-    compute_view_transition_pseudo_style, ViewTransitionPart,
+    compute_view_transition_pseudo_style, compute_view_transition_tree_style, ViewTransitionPart,
 };
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
