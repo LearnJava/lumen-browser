@@ -1556,6 +1556,25 @@ impl V8JsRuntime {
         self.run(|_inner| crate::canvas2d::flush_dirty())
     }
 
+    /// Hand the paint worklet the `background-image: paint()` layers of the laid-out
+    /// page (replaces the previous set). The bitmaps are drawn lazily by
+    /// [`Self::flush_paint_images`].
+    pub fn set_paint_jobs(&self, jobs: &[crate::paint_worklet::PaintJob]) {
+        let json = crate::paint_worklet::jobs_to_json(jobs);
+        // The JSON goes in as a JS string literal (JSON is a JS string once quoted again).
+        let quoted = serde_json::Value::String(json).to_string();
+        self.eval(&format!("__lumen_paint_set_requests({quoted});")).ok();
+    }
+
+    /// Run the paint worklet over the current [`Self::set_paint_jobs`] layers and drain
+    /// the bitmaps it (re)drew: `(image key, width, height, rgba)`. A layer whose
+    /// `inputProperties`, arguments and size did not change since the last call is not
+    /// redrawn, so an idle page returns an empty vec.
+    pub fn flush_paint_images(&self) -> Vec<crate::paint_worklet::PaintImage> {
+        self.eval("__lumen_paint_flush();").ok();
+        self.run(|_inner| crate::paint_worklet::take_published())
+    }
+
     /// Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id.
     ///
     /// Mirrors [`crate::QuickJsRuntime::register_img_bitmaps`]: the shell calls it

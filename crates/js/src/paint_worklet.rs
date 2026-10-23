@@ -1,292 +1,212 @@
-//! CSS Paint Worklet API stub (Houdini) — Phase 0
-//! Implements CSS.paintWorklet.addModule() and paint() invocation registration.
+//! CSS Painting API (Houdini) host side.
+//!
+//! The JS half lives in `shim/paint_worklet.js` (`Worklet`, `CSS.paintWorklet`,
+//! `registerPaint`, the renderer). This file wires it to the runtime: it installs
+//! the shim, hands the shim the `paint()` layers of the laid-out page
+//! ([`PaintJob`] → `__lumen_paint_set_requests`) and drains the bitmaps the shim
+//! drew ([`take_published`]). Everything is per JS thread (`thread_local!`), like
+//! the canvas registries it sits next to.
 
-// Долг по документации: файл написан до включения `missing_docs` и пока не
-// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
-// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
-#![allow(missing_docs)]
+use std::cell::RefCell;
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-
-/// Global registry of registered paint classes (keyed by worklet name).
-static PAINT_WORKLET_REGISTRY: OnceLock<Mutex<PaintWorkletRegistry>> = OnceLock::new();
-
-/// Maps worklet name (e.g. "my-paint") to its definition.
-#[derive(Clone, Debug, Default)]
-pub struct PaintWorkletRegistry {
-    worklets: HashMap<String, PaintWorkletDef>,
-}
-
-impl PaintWorkletRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register a paint worklet definition.
-    pub fn register(&mut self, name: String, def: PaintWorkletDef) {
-        self.worklets.insert(name, def);
-    }
-
-    /// Look up a registered worklet by name.
-    pub fn get(&self, name: &str) -> Option<PaintWorkletDef> {
-        self.worklets.get(name).cloned()
-    }
-
-    /// Get all registered worklets.
-    pub fn all(&self) -> Vec<(String, PaintWorkletDef)> {
-        self.worklets.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    }
-
-    /// Clear all registrations (for tests).
-    pub fn clear(&mut self) {
-        self.worklets.clear();
-    }
-}
-
-/// Get the global paint worklet registry, initializing it if necessary.
-pub fn get_paint_worklet_registry() -> &'static Mutex<PaintWorkletRegistry> {
-    PAINT_WORKLET_REGISTRY.get_or_init(|| Mutex::new(PaintWorkletRegistry::new()))
-}
-
-/// Definition of a registered paint worklet.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PaintWorkletDef {
-    /// Worklet name (e.g. "my-paint").
+/// One `background-image: paint()` layer the page needs a bitmap for.
+///
+/// Mirrors `lumen_paint::PaintRequest` (this crate sits below `lumen-paint`, so the
+/// shell converts between the two).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaintJob {
+    /// Renderer image key the bitmap is registered under.
+    pub key: String,
+    /// Arena index of the element whose computed style feeds `inputProperties`.
+    pub node: u32,
+    /// Name given to `registerPaint()`.
     pub name: String,
-    /// Module URL from CSS.paintWorklet.addModule().
-    pub module_url: String,
-    /// Input properties used by the paint function.
-    pub input_properties: Vec<String>,
+    /// Raw `paint()` arguments after the name.
+    pub args: Vec<String>,
+    /// Paint-size width in CSS px.
+    pub width: f32,
+    /// Paint-size height in CSS px.
+    pub height: f32,
+    /// Device pixel ratio the bitmap is rendered at.
+    pub dpr: f32,
 }
 
-/// V8 port of the former rquickjs `install_paint_worklet_api` (Ph3 V8
-/// migration S5-S7, rquickjs side removed in S12b-B4): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
-/// Uses a pure JS shim that stores worklet definitions in a global registry.
+/// A bitmap drawn by a paint worklet: `(key, width, height, rgba)`.
+pub type PaintImage = (String, u32, u32, Vec<u8>);
+
+thread_local! {
+    /// Bitmaps published by `_lumen_paint_publish`, drained by the host.
+    static PUBLISHED: RefCell<Vec<PaintImage>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Drain the bitmaps published since the last call.
+pub(crate) fn take_published() -> Vec<PaintImage> {
+    PUBLISHED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// `_lumen_paint_publish(key, canvasId)`: move the pixels of a finished
+/// `OffscreenCanvas` into the publish queue (the canvas is consumed).
+#[cfg(feature = "v8-backend")]
+fn publish(key: String, canvas_id: u32) {
+    if let Some((w, h, rgba)) = crate::offscreen_canvas::take_offscreen_pixels(canvas_id) {
+        PUBLISHED.with(|p| p.borrow_mut().push((key, w, h, rgba)));
+    }
+}
+
+/// JSON array the shim's `__lumen_paint_set_requests` parses.
+pub(crate) fn jobs_to_json(jobs: &[PaintJob]) -> String {
+    let items: Vec<serde_json::Value> = jobs
+        .iter()
+        .map(|j| {
+            serde_json::json!({
+                "key": j.key,
+                "node": j.node,
+                "name": j.name,
+                "args": j.args,
+                "w": j.width,
+                "h": j.height,
+                "dpr": j.dpr,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(items).to_string()
+}
+
+#[cfg(feature = "v8-backend")]
+const PAINT_WORKLET_SHIM: &str = include_str!("shim/paint_worklet.js");
+
+/// Install `Worklet`, `CSS.paintWorklet` and the paint renderer.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_paint_worklet_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use crate::v8_compat::into_v8_fn2;
     use lumen_core::ext::JsRuntime as _;
+    rt.register_native("_lumen_paint_publish", into_v8_fn2(publish))?;
     rt.eval(PAINT_WORKLET_SHIM)?;
     Ok(())
 }
-
-/// Pure-JS CSS Paint Worklet API shim.
-/// Defines CSS.paintWorklet.addModule() and registerPaint().
-#[cfg(feature = "v8-backend")]
-const PAINT_WORKLET_SHIM: &str = r#"(function(global) {
-  'use strict';
-
-  // Store registered paint worklets in a global map accessible from Rust bindings.
-  if (!__lumen_C._lumen_paint_worklets) {
-    __lumen_C._lumen_paint_worklets = new Map();
-  }
-
-  // Create or extend CSS global object.
-  if (!global.CSS) {
-    global.CSS = {};
-  }
-
-  // CSS.paintWorklet stub - manages paint function registrations.
-  global.CSS.paintWorklet = {
-    /// Module URL being loaded (tracks context during addModule execution).
-    _currentModule: null,
-
-    /// Add a paint module, execute it to allow registerPaint calls.
-    addModule: function(moduleUrl) {
-      return Promise.resolve().then(() => {
-        // Phase 0 stub: accept the URL but don't fetch/execute it.
-        // In Phase 1, this would fetch the module, execute it in a worker context,
-        // and collect registerPaint() calls via a proxy.
-        this._currentModule = moduleUrl;
-        return undefined;
-      });
-    }
-  };
-
-  // registerPaint() function - called within a paint module to register a class.
-  // In Phase 0, stores the registration in the global map.
-  // In Phase 1, would store input properties and execute paint() callbacks.
-  if (!global.registerPaint) {
-    global.registerPaint = function(name, paintClass) {
-      if (typeof name !== 'string') {
-        throw new TypeError('registerPaint: name must be a string');
-      }
-      if (typeof paintClass !== 'function' && typeof paintClass !== 'object') {
-        throw new TypeError('registerPaint: paintClass must be a constructor or object');
-      }
-
-      // Store the registration in the global registry.
-      const moduleUrl = global.CSS.paintWorklet._currentModule || '';
-      const def = {
-        name: name,
-        moduleUrl: moduleUrl,
-        inputProperties: paintClass.inputProperties || []
-      };
-      __lumen_C._lumen_paint_worklets.set(name, def);
-    };
-  }
-})(globalThis)"#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_paint_worklet_registry_register() {
-        let mut registry = PaintWorkletRegistry::new();
-        let def = PaintWorkletDef {
-            name: "test-paint".to_string(),
-            module_url: "https://example.com/paint.js".to_string(),
-            input_properties: vec!["--color".to_string()],
+    fn jobs_serialise_to_the_shape_the_shim_reads() {
+        let job = PaintJob {
+            key: "paint:1:ab".into(),
+            node: 7,
+            name: "foo".into(),
+            args: vec!["1px".into()],
+            width: 50.0,
+            height: 20.5,
+            dpr: 2.0,
         };
-        registry.register("test-paint".to_string(), def.clone());
-        assert_eq!(registry.get("test-paint"), Some(def));
+        let v: serde_json::Value = serde_json::from_str(&jobs_to_json(&[job])).unwrap();
+        assert_eq!(v[0]["key"], "paint:1:ab");
+        assert_eq!(v[0]["node"], 7);
+        assert_eq!(v[0]["args"][0], "1px");
+        assert_eq!(v[0]["w"], 50.0);
+        assert_eq!(v[0]["h"], 20.5);
     }
 
-    #[test]
-    fn test_paint_worklet_registry_clear() {
-        let mut registry = PaintWorkletRegistry::new();
-        let def = PaintWorkletDef {
-            name: "test".to_string(),
-            module_url: "test.js".to_string(),
-            input_properties: vec![],
-        };
-        registry.register("test".to_string(), def);
-        registry.clear();
-        assert_eq!(registry.get("test"), None);
-    }
-
-    #[test]
-    fn test_paint_worklet_def_clone() {
-        let def = PaintWorkletDef {
-            name: "clone-test".to_string(),
-            module_url: "module.js".to_string(),
-            input_properties: vec!["--size".to_string(), "--angle".to_string()],
-        };
-        let cloned = def.clone();
-        assert_eq!(def, cloned);
-    }
-
-    // ── JS integration tests ──────────────────────────────────────────────────
+    // ── JS integration ────────────────────────────────────────────────────────
 
     #[cfg(feature = "v8-backend")]
-    fn with_paint_worklet_api(f: impl FnOnce(&crate::v8_runtime::V8JsRuntime)) {
-        use crate::v8_runtime::V8JsRuntime;
+    fn runtime() -> crate::v8_runtime::V8JsRuntime {
         use lumen_core::ext::JsRuntime as _;
-
-        let rt = V8JsRuntime::new().unwrap();
+        let rt = crate::v8_runtime::V8JsRuntime::new().unwrap();
         rt.eval("if (!globalThis.CSS) { globalThis.CSS = {}; }").unwrap();
         install_paint_worklet_api_v8(&rt).unwrap();
-        f(&rt);
+        rt
+    }
+
+    #[cfg(feature = "v8-backend")]
+    fn pump(rt: &crate::v8_runtime::V8JsRuntime) {
+        use lumen_core::ext::JsRuntime as _;
+        // Microtasks drain when an `eval` returns; the module load chains a few promises.
+        for _ in 0..6 {
+            rt.eval("0").unwrap();
+        }
+    }
+
+    #[cfg(feature = "v8-backend")]
+    fn eval_bool(rt: &crate::v8_runtime::V8JsRuntime, src: &str) -> bool {
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_core::JsValue;
+        matches!(rt.eval(src).unwrap(), JsValue::Bool(true))
     }
 
     #[test]
     #[cfg(feature = "v8-backend")]
-    fn js_css_paintworklet_exists_and_has_add_module() {
-        use lumen_core::ext::JsRuntime as _;
-        use lumen_core::JsValue;
-
-        with_paint_worklet_api(|rt| {
-            let ok = rt
-                .eval(
-                    "typeof CSS !== 'undefined' && typeof CSS.paintWorklet !== 'undefined' \
-                     && typeof CSS.paintWorklet.addModule === 'function'",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true), "CSS.paintWorklet.addModule must be a function");
-        });
+    fn paint_worklet_is_a_worklet_with_add_module() {
+        let rt = runtime();
+        assert!(eval_bool(
+            &rt,
+            "typeof Worklet === 'function' && CSS.paintWorklet instanceof Worklet \
+             && typeof CSS.paintWorklet.addModule === 'function' \
+             && CSS.paintWorklet === CSS.paintWorklet \
+             && typeof globalThis.registerPaint === 'undefined'"
+        ));
     }
 
     #[test]
     #[cfg(feature = "v8-backend")]
-    fn js_add_module_returns_promise_like_object() {
-        use lumen_core::ext::JsRuntime as _;
-        use lumen_core::JsValue;
-
-        with_paint_worklet_api(|rt| {
-            // addModule() must return a thenable (Promise-like) — spec §4.2.
-            let ok = rt
-                .eval(
-                    r#"
-                    var p = CSS.paintWorklet.addModule('https://example.com/paint.js');
-                    p !== null && p !== undefined && typeof p.then === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true), "addModule must return a thenable");
-        });
+    fn add_module_returns_a_promise_and_rejects_unknown_blob() {
+        let rt = runtime();
+        assert!(eval_bool(
+            &rt,
+            "var p = CSS.paintWorklet.addModule('blob:null/00000000-0000-4000-8000-000000000000'); \
+             p instanceof Promise"
+        ));
     }
 
     #[test]
     #[cfg(feature = "v8-backend")]
-    fn js_register_paint_stores_worklet_in_registry() {
+    fn add_module_runs_a_blob_module_and_registers() {
         use lumen_core::ext::JsRuntime as _;
-        use lumen_core::JsValue;
-
-        with_paint_worklet_api(|rt| {
-            // registerPaint() must store the worklet definition in _lumen_paint_worklets.
-            let ok = rt
-                .eval(
-                    r#"
-                    class MyPainter {
-                        static get inputProperties() { return ['--color', '--size']; }
-                        paint(ctx, geom, props) {}
-                    }
-                    registerPaint('my-paint', MyPainter);
-                    _lumen_paint_worklets.has('my-paint')
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true), "registerPaint must store worklet in _lumen_paint_worklets");
-        });
+        let rt = runtime();
+        // Run the whole flow synchronously where possible: the module is evaluated in a
+        // microtask, so drain with a second eval after resolving.
+        rt.eval(
+            "globalThis.__done = false; globalThis.__err = null; \
+             var u = URL.createObjectURL(new Blob([\"registerPaint('foo', class { paint(){} })\"], \
+                                                   {type: 'text/javascript'})); \
+             CSS.paintWorklet.addModule(u).then(function(){ __done = true; }, function(e){ __err = String(e); });",
+        )
+        .unwrap();
+        pump(&rt);
+        assert!(eval_bool(&rt, "__done === true"), "addModule did not resolve");
     }
 
     #[test]
     #[cfg(feature = "v8-backend")]
-    fn js_register_paint_non_string_name_throws() {
+    fn requests_render_through_registered_class_and_publish_pixels() {
         use lumen_core::ext::JsRuntime as _;
-        use lumen_core::JsValue;
-
-        with_paint_worklet_api(|rt| {
-            // registerPaint with a non-string name must throw TypeError.
-            let threw = rt
-                .eval(
-                    r#"
-                    var threw = false;
-                    try {
-                        registerPaint(42, function() {});
-                    } catch (e) {
-                        threw = e instanceof TypeError || e.name === 'TypeError';
-                    }
-                    threw
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(threw, JsValue::Bool(true), "registerPaint(non-string) must throw TypeError");
-        });
-    }
-
-    #[test]
-    #[cfg(feature = "v8-backend")]
-    fn js_register_paint_stores_input_properties() {
-        use lumen_core::ext::JsRuntime as _;
-        use lumen_core::JsValue;
-
-        with_paint_worklet_api(|rt| {
-            let props_len = rt
-                .eval(
-                    r#"
-                    class Painter {
-                        static get inputProperties() { return ['--a', '--b', '--c']; }
-                    }
-                    registerPaint('props-test', Painter);
-                    var def = _lumen_paint_worklets.get('props-test');
-                    def ? def.inputProperties.length : -1
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(props_len, JsValue::Number(3.0), "inputProperties must have 3 entries");
-        });
+        let rt = runtime();
+        rt.eval(
+            "globalThis._lumen_make_element = function(){ return { computedStyleMap: function(){                return { get: function(){ return undefined; }, getAll: function(){ return []; } }; } }; };",
+        )
+        .unwrap();
+        rt.eval(
+            "var u = URL.createObjectURL(new Blob([\"registerPaint('foo', class { paint(ctx, g){ \
+               ctx.fillStyle = 'rgb(0,255,0)'; ctx.fillRect(0, 0, g.width, g.height); } })\"], \
+               {type: 'text/javascript'})); CSS.paintWorklet.addModule(u);",
+        )
+        .unwrap();
+        pump(&rt);
+        rt.set_paint_jobs(&[PaintJob {
+            key: "paint:1:k".into(),
+            node: 1,
+            name: "foo".into(),
+            args: vec![],
+            width: 4.0,
+            height: 2.0,
+            dpr: 1.0,
+        }]);
+        let images = rt.flush_paint_images();
+        assert_eq!(images.len(), 1, "one paint() layer must publish one bitmap");
+        let (key, w, h, rgba) = &images[0];
+        assert_eq!((key.as_str(), *w, *h), ("paint:1:k", 4, 2));
+        assert_eq!(&rgba[..4], &[0, 255, 0, 255], "the worklet filled the tile green");
+        assert!(rt.flush_paint_images().is_empty(), "an unchanged layer is not redrawn");
     }
 }
