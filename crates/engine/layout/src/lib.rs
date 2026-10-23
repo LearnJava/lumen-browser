@@ -1438,7 +1438,7 @@ fn resolve_custom_props(
     let m = std::sync::Arc::new(
         raw.iter()
             .map(|(name, value)| {
-                let computed = crate::style::expand_vars_and_env(value, &raw, em_basis, viewport).unwrap_or_default();
+                let computed = crate::style::expand_custom_property_value(name, value, &raw, em_basis, viewport).unwrap_or_default();
                 (name.clone(), computed.trim().to_string())
             })
             .collect::<std::collections::HashMap<String, String>>(),

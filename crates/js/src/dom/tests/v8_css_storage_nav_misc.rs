@@ -433,7 +433,7 @@ fn css_register_property_requires_name() {
 #[test]
 fn css_register_property_requires_dash_prefix() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "try { CSS.registerProperty({ name: 'my-color', inherits: false }); false; } catch (e) { e instanceof SyntaxError; }"));
+    assert!(bool_eval(&rt, "try { CSS.registerProperty({ name: 'my-color', syntax: '*', inherits: false }); false; } catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"));
 }
 
 #[test]

@@ -81,3 +81,27 @@ fn re_registration_throws_and_unregister_removes() {
     let again = ev(&mut s, "var n; try { CSS.unregisterProperty('--twice'); n='none'; } catch (e) { n = e.name; } n");
     assert_eq!(again, "NotFoundError");
 }
+
+#[test]
+fn var_cycle_makes_every_member_invalid() {
+    let mut s = InProcessSession::new();
+    s.navigate_html(
+        r#"<html><head><style>
+#q{--ca:var(--cb,hello);--cb:var(--ca,world);--cc:var(--ca,fb);--cd:var(--cb)}
+</style></head><body><div id=q></div></body></html>"#,
+    )
+    .expect("navigate_html");
+    ev(&mut s, "CSS.registerProperty({name:'--ca',syntax:'*',inherits:true}); CSS.registerProperty({name:'--cb',syntax:'*',inherits:true}); 'ok'");
+    let r = ev(&mut s, "var cs=getComputedStyle(document.getElementById('q')); ['--ca','--cb','--cc','--cd'].map(function(x){return cs.getPropertyValue(x)}).join('|')");
+    assert_eq!(r, "||fb|");
+}
+
+#[test]
+fn single_keyframe_starts_from_the_underlying_value() {
+    let mut s = session();
+    let r = ev(
+        &mut s,
+        "CSS.registerProperty({name:'--sk',syntax:'<length>',inherits:false,initialValue:'100px'}); var t=document.getElementById('t');          var a=t.animate({'--sk':'200px'},{duration:1000,iterations:3}); a.pause(); a.currentTime=2500;          getComputedStyle(t).getPropertyValue('--sk')",
+    );
+    assert_eq!(r, "150px");
+}

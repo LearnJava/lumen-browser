@@ -319,7 +319,7 @@ use values::color::srgb_gamma_decode;
 use crate::scroll_timeline::ScrollAxis;
 // `expand_vars_and_env` — `pub(crate)`, её зовёт `lib.rs`; остальные видны только
 // внутри `style` и его потомков, поэтому и реэкспорт сужен до `crate::style`.
-pub(crate) use substitute::expand_vars_and_env;
+pub(crate) use substitute::{expand_custom_property_value, expand_vars_and_env};
 // `env_calls_well_formed` — публичная: ею же inline-`style` CSSOM (`crates/js`)
 // решает, принять ли значение с `env()` (BUG-514).
 pub use substitute::env_calls_well_formed;

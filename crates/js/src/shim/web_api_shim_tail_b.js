@@ -5122,10 +5122,15 @@ function _wa_normalize_keyframes(keyframes) {
         // Property-indexed form: { opacity: [0, 1], transform: ['none', 'rotate(90deg)'] }
         var offsets = Array.isArray(keyframes.offset) ? keyframes.offset : null;
         var len = 0;
-        var propNames = [];
+        var propNames = [], lists = {};
         for (var pp in keyframes) {
-            if (pp !== 'offset' && pp !== 'easing' && pp !== 'composite' && Array.isArray(keyframes[pp])) {
-                if (keyframes[pp].length > len) len = keyframes[pp].length;
+            if (pp === 'offset' || pp === 'easing' || pp === 'composite') continue;
+            // WebIDL `(DOMString or sequence<DOMString>)`: a lone value is a one-item list (BUG-1505).
+            var lone = keyframes[pp];
+            if (typeof lone === 'string' || typeof lone === 'number') lone = [lone];
+            if (Array.isArray(lone)) {
+                lists[pp] = lone;
+                if (lone.length > len) len = lone.length;
                 propNames.push(pp);
             }
         }
@@ -5135,7 +5140,7 @@ function _wa_normalize_keyframes(keyframes) {
             kf2.easing = (Array.isArray(keyframes.easing) ? keyframes.easing[j] : keyframes.easing) || 'linear';
             kf2.composite = (Array.isArray(keyframes.composite) ? keyframes.composite[j] : keyframes.composite) || 'auto';
             for (var k = 0; k < propNames.length; k++) {
-                var arr = keyframes[propNames[k]];
+                var arr = lists[propNames[k]];
                 kf2[propNames[k]] = arr[j];
             }
             result.push(kf2);
