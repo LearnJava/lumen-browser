@@ -846,6 +846,61 @@ use super::*;
     }
 
     #[test]
+    fn at_supports_selector_pseudo_elements_bug1494() {
+        for sel in [
+            "selector(a > b)",
+            "selector(input::file-selector-button)",
+            "selector(input::details-content)",
+            "selector(input::details-content::before)",
+            "selector(input::-webkit-slider-thumb)",
+        ] {
+            assert!(parse_supports_condition(sel).evaluate(&[]), "{sel} should be supported");
+        }
+        // Список селекторов и неизвестные псевдо — не поддержаны.
+        for sel in [
+            "selector(div, div)",
+            "selector()",
+            "selector(div !)",
+            "selector(input::-webkit-asdf)",
+            "selector(::bogus)",
+            "selector(a:bogus)",
+        ] {
+            assert!(!parse_supports_condition(sel).evaluate(&[]), "{sel} should be unsupported");
+        }
+    }
+
+    #[test]
+    fn at_supports_at_rule_function_bug1494() {
+        for c in [
+            "at-rule(@supports)",
+            "at-rule( @supports)",
+            "at-rule(@supports )",
+            "at-rule(@MEDIA)",
+            "at-rule(@counter-style)",
+            "at-rule(@import)",
+            "at-rule(@swash)",
+            "at-rule(@starting-style)",
+            "at-rule(@supports) and (color: red)",
+            "at-rule(@doesnotexist) or (color: red)",
+            "not at-rule(@doesnotexist)",
+        ] {
+            assert!(parse_supports_condition(c).evaluate(&["color"]), "{c} should be true");
+        }
+        for c in [
+            "at-rule(@doesnotexist)",
+            "at-rule(@charset)",
+            "at-rule(@counter-style; system: fixed)",
+            "at-rule(supports)",
+            "at-rule()",
+            "not at-rule(@supports)",
+            "at-rule(@doesnotexist) and (color: red)",
+            "(color: red) and at-rule(@doesnotexist)",
+        ] {
+            assert!(!parse_supports_condition(c).evaluate(&["color"]), "{c} should be false");
+        }
+    }
+
+    #[test]
     fn complex_selector_is_supported_recurses() {
         // Прямая проверка ComplexSelector::is_supported на вложенности.
         let ok = parse_selector_list(":is(.a, :where(.b:has(> .c)))");
@@ -883,11 +938,15 @@ use super::*;
         // Реализованные технологии → true.
         assert!(parse_supports_condition("font-tech(variations)").evaluate(&[]));
         assert!(parse_supports_condition("font-tech(features-opentype)").evaluate(&[]));
-        // Нереализованные (цветные глифы, палитры, AAT, incremental) → false.
+        // COLR v0 + CPAL реализованы в `lumen-font` (BUG-1494).
+        assert!(parse_supports_condition("font-tech(color-COLRv0)").evaluate(&[]));
+        assert!(parse_supports_condition("font-tech(palettes)").evaluate(&[]));
+        // Нереализованные (COLR v1, SVG-глифы, AAT, incremental) → false.
         for t in [
             "font-tech(color-colrv1)",
             "font-tech(color-svg)",
-            "font-tech(palettes)",
+            "font-tech(features-opentype color-colrv0)",
+            "font-tech(features-opentype, color-colrv0)",
             "font-tech(features-aat)",
             "font-tech(incremental)",
             "font-tech(totally-fake)",
@@ -923,7 +982,7 @@ use super::*;
     fn at_supports_font_tech_format_in_combinators() {
         // Комбинируются с and/or/not как обычные условия.
         assert!(parse_supports_condition("font-format(woff2) and font-tech(variations)").evaluate(&[]));
-        assert!(!parse_supports_condition("font-format(woff2) and font-tech(palettes)").evaluate(&[]));
+        assert!(!parse_supports_condition("font-format(woff2) and font-tech(color-colrv1)").evaluate(&[]));
         assert!(parse_supports_condition("font-format(svg) or font-format(woff2)").evaluate(&[]));
         assert!(parse_supports_condition("not font-tech(color-colrv1)").evaluate(&[]));
     }
