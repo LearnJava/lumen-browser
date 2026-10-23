@@ -75,6 +75,17 @@ python scripts/mt_stall_bench.py --secs 6
 # subdirectory, --min-delta drops noise, --json is machine-readable. Format and
 # the full-run recipe — docs/wpt/pass-rate.md §«Файл результатов по тестам».
 python tests/wpt/run_diff.py docs/wpt/runs/A.json docs/wpt/runs/B.json --prefix css/css-break
+
+# Memory budget of a full WPT run (WPT-RUN-18). --processes auto = browsers per lane from
+# free RAM: (free - --min-free-gb) / (1.5 GB x lanes), at most the CPU count. --min-free-gb
+# (soft floor, 6) is a gate before each shard; --kill-free-gb (hard floor, 2) is the watchdog:
+# below it the biggest lumen of the run is killed (its test -> CRASH, rss-cap-kills.jsonl
+# reason `low-free`). The tests listed in tests/wpt/heavy_tests.txt run last in one
+# `heavy lane` on 2 browsers (--no-heavy-lane folds them back, --heavy-tests FILE swaps the
+# list). mem-log.tsv in --out-dir has free RAM, swap and browser RSS every 10 s. Recipe and
+# before/after numbers — docs/wpt/pass-rate.md §«Память полного прогона».
+python tests/wpt/run_corpus.py --all --parallel-shards 3 --processes auto --shared-queue \
+    --batch-small 150 --max-browser-gb 4 --min-free-gb 6 --kill-free-gb 2
 ```
 
 ---

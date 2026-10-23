@@ -1,0 +1,15 @@
+# Known memory eaters of the WPT corpus run (WPT-RUN-18).
+#
+# `run_corpus.py` takes every file listed here (all its ?variants) out of its
+# ordinary shard and runs it in the "heavy lane": one extra unit per run, last,
+# alone, on 2 browsers (`HEAVY_PROCESSES`). The tests stay in the denominator
+# and are scored as usual; only their place in the queue changes, so a 5 GB
+# browser no longer pages out its neighbours. Disable: `--no-heavy-lane`.
+#
+# Format: <test file as in MANIFEST.json, no ?query> <whitespace> <reason>.
+# A line without a reason is an error. Add a file only with a measurement
+# (rss-cap-kills.jsonl / mem-log.tsv of a run); drop it when its bug is fixed.
+
+/html/syntax/parsing/html5lib_write.html  55 variants, many iframes + document.write; 4.2-5.3 GB per browser, 0 subtests pass (WPT-RUN-16: 47 of 60 watchdog kills together with the other two html5lib files)
+/html/syntax/parsing/html5lib_write_single.html  55 variants, same page shape as html5lib_write.html (WPT-RUN-16 watchdog kills)
+/html/syntax/parsing/html5lib_url.html  60 variants, same page shape as html5lib_write.html (WPT-RUN-16 watchdog kills)

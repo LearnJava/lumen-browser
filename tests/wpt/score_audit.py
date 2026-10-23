@@ -72,14 +72,17 @@ def shard_index(manifest: dict, state: dict) -> tuple:
     shard that was supposed to carry it.
     """
     names = {s["name"] for s in state["shards"]}
-    categories = sorted({n.split("/")[0].replace(" (bare)", "") for n in names})
+    categories = sorted({n.split(" ")[0].split("/")[0] for n in names})
     # A `--prefixes` run planned its shards through the same filter; re-planning
     # without it would give shards the run never had, and the ids of the narrowed
     # ones would be blamed on a wider shard that is "not attempted" — i.e. a lost
     # id would pass as nobody's.
     planned = {s["name"]: s for s in run_corpus.plan_shards(
         manifest, categories, state.get("prefixes") or [],
-        state.get("exclude_prefixes") or [])}
+        state.get("exclude_prefixes") or [],
+        # WPT-RUN-18: the heavy lane is planned from the list the run used,
+        # recorded in the state — not from today's `heavy_tests.txt`.
+        {path: "" for path in state.get("heavy_tests") or []} or None)}
     # Longest prefix wins: `/css/CSS2/` must not swallow `/css/CSS2/floats/`.
     prefixes = sorted(((s["prefix"], name) for name, s in planned.items() if s["prefix"]),
                       key=lambda pair: -len(pair[0]))
