@@ -1291,6 +1291,10 @@ pub struct ComputedStyle {
     /// CSS View Transitions L2 §2.3 — `view-transition-group: normal | contain | nearest |
     /// <custom-ident>`. Non-inherited. Initial `None` (normal).
     pub view_transition_group: Option<Box<str>>,
+    /// CSS View Transitions L2 §2.4 — `view-transition-scope: none | all`. Non-inherited.
+    /// Initial `false` (none); `true` for `all`, which stops the name discovery of an
+    /// enclosing transition at this element.
+    pub view_transition_scope_all: bool,
     /// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial `auto`.
     /// Supplies the glyph pairs for `content: open-quote` / `close-quote`.
     pub quotes: Quotes,

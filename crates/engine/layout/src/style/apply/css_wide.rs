@@ -1379,6 +1379,45 @@ fn apply_css_wide_keyword_with(
         "view-transition-class" => {
             style.view_transition_class = if inh_only_inherit { inherited.view_transition_class.clone() } else { None };
         }
+        // CSS Animations L1 §3 / CSS Transitions L1 §2: non-inherited lists, the shorthand covers
+        // every longhand. Without these arms `animation: unset` left the earlier `animation-name`
+        // in place (a page's `::view-transition-group(*) { animation: unset }` kept the UA animation).
+        "animation" | "animation-name" | "animation-duration" | "animation-timing-function" | "animation-delay"
+        | "animation-iteration-count" | "animation-direction" | "animation-fill-mode" | "animation-play-state"
+        | "animation-timeline" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            let all = prop == "animation";
+            if all || prop == "animation-name" {
+                style.animation_names = src.animation_names.clone();
+            }
+            if all || prop == "animation-duration" {
+                style.animation_durations = src.animation_durations.clone();
+            }
+            if all || prop == "animation-timing-function" {
+                style.animation_timing_functions = src.animation_timing_functions.clone();
+            }
+            if all || prop == "animation-delay" {
+                style.animation_delays = src.animation_delays.clone();
+            }
+            if all || prop == "animation-iteration-count" {
+                style.animation_iteration_counts = src.animation_iteration_counts.clone();
+            }
+            if all || prop == "animation-direction" {
+                style.animation_directions = src.animation_directions.clone();
+            }
+            if all || prop == "animation-fill-mode" {
+                style.animation_fill_modes = src.animation_fill_modes.clone();
+            }
+            if all || prop == "animation-play-state" {
+                style.animation_play_states = src.animation_play_states.clone();
+            }
+            if all || prop == "animation-timeline" {
+                style.animation_timelines = src.animation_timelines.clone();
+            }
+        }
+        "view-transition-scope" => {
+            style.view_transition_scope_all = if inh_only_inherit { inherited.view_transition_scope_all } else { false };
+        }
         "view-transition-group" => {
             style.view_transition_group = if inh_only_inherit { inherited.view_transition_group.clone() } else { None };
         }

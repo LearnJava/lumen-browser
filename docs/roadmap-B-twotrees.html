@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-23",
+ "generated": "2026-10-24",
  "counts": {
-  "open": 295,
-  "fixed": 1337,
+  "open": 292,
+  "fixed": 1340,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -830,11 +830,22 @@
     {
      "id": "VT-SCOPED",
      "title": "VT-SCOPED: element.startViewTransition",
-     "status": "opt",
+     "status": "done",
      "size": "L",
-     "note": "Scoped View Transitions (`element.startViewTransition()`, CSS View Transitions L2 черновик): метода на `Element` нет (`typeof Element.prototype.startViewTransition` — `undefined`), 55 тестов `css-view-transitions/scoped/*` падают на первом вызове, 10 crashtest из них — TIMEOUT. **Решение пользователя перед началом:** в одном движке, спецификация — черновик. Если делать: после VT-API, область перехода (scope), захват и анимация внутри поддерева, `view-transition-scope`. Если нет — закрыть BUG-1511 как «не будем» и вывести `css-view-transitions/scoped/` (55 id) из знаменателя. Масштаб: 55 id среза S22 (20 OK с падениями, 25 FAIL, 10 TIMEOUT); кластер — `docs/wpt-vendor-notes/css.md` §css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins (WPT-RUN-14 S22, 2026-10-08). Критерий готовности: `scoped/capture.html`, `scoped/document-element-start-view-transition.html` зелёные.",
+     "note": "СРЕЗ 1 СДЕЛАН 2026-10-24 (P3, ветка `p3-bug-1511`): `Element.startViewTransition`/`activeViewTransition`, `view-transition-scope`, обнаружение имён по области, дерево псевдоэлементов области в `getComputedStyle`/`getAnimations`; WPT `scoped/` 27 из 40 подтестов (без reftest), crashtest 14 из 14. Остаток — VT-SCOPED-2. Исходная постановка: Scoped View Transitions (`element.startViewTransition()`, CSS View Transitions L2 черновик): метода на `Element` нет (`typeof Element.prototype.startViewTransition` — `undefined`), 55 тестов `css-view-transitions/scoped/*` падают на первом вызове, 10 crashtest из них — TIMEOUT. **Решение пользователя перед началом:** в одном движке, спецификация — черновик. Если делать: после VT-API, область перехода (scope), захват и анимация внутри поддерева, `view-transition-scope`. Если нет — закрыть BUG-1511 как «не будем» и вывести `css-view-transitions/scoped/` (55 id) из знаменателя. Масштаб: 55 id среза S22 (20 OK с падениями, 25 FAIL, 10 TIMEOUT); кластер — `docs/wpt-vendor-notes/css.md` §css-view-transitions + css-conditional + css-variables + css-properties-values-api + css-mixins (WPT-RUN-14 S22, 2026-10-08). Критерий готовности: `scoped/capture.html`, `scoped/document-element-start-view-transition.html` зелёные.",
      "bugs": [
       "BUG-1511"
+     ]
+    },
+    {
+     "id": "VT-SCOPED-2",
+     "title": "VT-SCOPED-2: пиксели и остаток",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток VT-SCOPED. (1) **Пиксели области:** снимок и кросс-фейд рисует шелл только для документа (`_lumen_vt_begin`/`_lumen_vt_end`), у `Element.startViewTransition` события в шелл не идут; нужна растеризация поддерева области (клип по границе области, `overflow`-клип, прокрутка внутри), 32 reftest `scoped/*-ref.html`. (2) **Несколько групп с одним именем:** `view-transition-name: auto`/`match-element` даёт группу на элемент (`auto-name*.html`: три пары `match-element`), в шиме имена хранятся словарём по имени. (3) **Значения анимаций дерева в вычисленном стиле** (`getComputedStyle(scope, '::view-transition-new(a)').opacity` = `0.5` во время анимации `stylize`, `run_in_parallel.html`, `display-inline-block.html`) — общий остаток VT-API-2. (4) `-ua-mix-blend-mode-plus-lighter` среди анимаций old/new (`fill-forwards.html`). (5) Пропуск перехода при `display: none` области (`display-none-during-transition.html`, сейчас TIMEOUT). (6) hit-testing сквозь участников (`hit-testing.html`, `hit-test-vt-overlay.html`). (7) `:root { view-transition-name: none }` убирает группу `root` (`document-element-start-view-transition.html`: UA-имя `root` у корня не в таблице стилей, шим добавляет его всегда). (8) `missing-view-transition-name.html`: ожидание псевдоэлементов `root` на целевом элементе.",
+     "bugs": [
+      "BUG-1511",
+      "BUG-1509"
      ]
     },
     {
@@ -971,10 +982,10 @@
     },
     {
      "id": "VT-API-2",
-     "title": "VT-API-2: UA-стиль и анимации псевдодерева",
+     "title": "VT-API-2: UA-стиль и анимации псевдодерева **BUG-1510 закрыт 2026-10-23 (P3): свойства `view-transition-class`/`-group` разбираются; остаток для этой задачи — сопоставление `::view-transition-group(name.class)` и вложенные группы.**",
      "status": "planned",
      "size": "L",
-     "note": "Остаток VT-API. (1) **UA-стиль и анимации дерева псевдоэлементов (BUG-1509):** во время активного перехода `getComputedStyle(html, '::view-transition…')` отдаёт UA-таблицу §6/§7 (`::view-transition`, `-group`, `-image-pair`, `-old`, `-new`: `position: absolute`/`fixed`, `inset`, `animation-name: -ua-view-transition-*`, `mix-blend-mode: plus-lighter` на old/new), авторские правила (`::view-transition-image-pair(target) { position: fixed }`) поверх; вне перехода — пусто; `document.getAnimations()` / `getAnimations({subtree: true})` показывают анимации групп/old/new (`pseudo-element-animations.html`, `computed-style-no-active-transition.html`). Имена берутся из `_lumen_vt_named_elements` старого и нового состояния; `compute_view_transition_pseudo_style` уже даёт авторскую часть, UA-часть нужно добавить. (2) **`finished` по концу анимации:** сейчас он разрешается задачей после `ready` (и после `waitUntil`), а кросс-фейд идёт в шелле ещё до 300 мс; нужен обратный канал шелл → JS «переход закончен» (тогда `document.activeViewTransition` живёт, пока идёт анимация). (3) **События `pagereveal`/`pageswap`** не отправляются (интерфейсы и `onpagereveal`/`onpageswap` есть): навигация, в связке с P3-viewtransnav, BUG-945 (`navigation/pagereveal-*`, `pageswap-*`, 44 TIMEOUT). (4) `view-transition-class` / `view-transition-group` и `::view-transition-group(*.class)` не разбираются — строки CSS-SPECS.md для P4, не здесь. Критерий готовности: `pseudo-get-computed-style.html`, `pseudo-element-animations.html`, `computed-style-no-active-transition.html`, `navigation/pagereveal-with-view-transition.html` зелёные.",
+     "note": "Остаток VT-API. (1) **UA-стиль и анимации дерева псевдоэлементов (BUG-1509) — срез 1 сделан 2026-10-23 (P3, ветка `p3-bug-1509`):** UA-стиль и авторские правила в `getComputedStyle`, анимации в `getAnimations()`; остаток — значения анимаций в вычисленном стиле псевдо, геометрия группы, `animate({pseudoElement})`. Исходная постановка: во время активного перехода `getComputedStyle(html, '::view-transition…')` отдаёт UA-таблицу §6/§7 (`::view-transition`, `-group`, `-image-pair`, `-old`, `-new`: `position: absolute`/`fixed`, `inset`, `animation-name: -ua-view-transition-*`, `mix-blend-mode: plus-lighter` на old/new), авторские правила (`::view-transition-image-pair(target) { position: fixed }`) поверх; вне перехода — пусто; `document.getAnimations()` / `getAnimations({subtree: true})` показывают анимации групп/old/new (`pseudo-element-animations.html`, `computed-style-no-active-transition.html`). Имена берутся из `_lumen_vt_named_elements` старого и нового состояния; `compute_view_transition_pseudo_style` уже даёт авторскую часть, UA-часть нужно добавить. (2) **`finished` по концу анимации:** сейчас он разрешается задачей после `ready` (и после `waitUntil`), а кросс-фейд идёт в шелле ещё до 300 мс; нужен обратный канал шелл → JS «переход закончен» (тогда `document.activeViewTransition` живёт, пока идёт анимация). (3) **События `pagereveal`/`pageswap`** не отправляются (интерфейсы и `onpagereveal`/`onpageswap` есть): навигация, в связке с P3-viewtransnav, BUG-945 (`navigation/pagereveal-*`, `pageswap-*`, 44 TIMEOUT). (4) `view-transition-class` / `view-transition-group` и `::view-transition-group(*.class)` не разбираются — строки CSS-SPECS.md для P4, не здесь. Критерий готовности: `pseudo-get-computed-style.html`, `pseudo-element-animations.html`, `computed-style-no-active-transition.html`, `navigation/pagereveal-with-view-transition.html` зелёные.",
      "bugs": [
       "BUG-1509",
       "BUG-1510",
@@ -9405,9 +9416,9 @@
       {
        "id": "TEXTQ-2",
        "title": "Гамма и контраст покрытия глифа",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Бриф — [docs/tasks/TEXTQ-2.md](docs/tasks/TEXTQ-2.md). Зависит от TEXTQ-1. Гамма + контраст покрытия по яркости цвета текста (Skia/DirectWrite-стиль), одна функция для GPU и CPU."
+       "note": "Бриф — [docs/tasks/TEXTQ-2.md](docs/tasks/TEXTQ-2.md). Зависит от TEXTQ-1. **Влито 2026-10-23 (p1-textq-2):** `crates/engine/paint/src/text_gamma.rs` — формула Skia (`SkMaskGamma`: фон `1 − lum`, линейное смешивание с `GAMMA`, усиление покрытия `CONTRAST`), одна на два пути: WGSL `text_gamma_correct` подставляется в текстовый шейдер, CPU — таблица 256 байт на `DrawText` в `blit_glyph_coverage`; `LUMEN_TEXT_GAMMA=0` отключает ([docs/automation.md](docs/automation.md)). Подбор по `166-text-quality`: `GAMMA = 1.9`, `CONTRAST = 1.0` (старт 1.8/1.0). «Чернота» панелей (Σ|пиксель − фон|) против Edge, Arial/Segoe × чёрный/белый: **до** 1.00/0.84/1.01/0.84 → **после** 1.01/0.99/1.03/1.00 (светлый текст был на 16 % тоньше). Попиксельный diff страницы не мера (ClearType): 9.08 → 9.12 %. На CPU-пути `65-flex-align-content` 0.50 % (достиг цели, запись из `KNOWN_DEBTORS_IPC` снята); 20 CPU-PNG в `snapshots/cpu/` перегенерированы. Гамма + контраст покрытия по яркости цвета текста (Skia/DirectWrite-стиль), одна функция для GPU и CPU."
       },
       {
        "id": "TEXTQ-3",
@@ -10499,37 +10510,16 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1507": {
-   "status": "open",
-   "title": "`@function`: типизированные параметры (`--a <length>`) и `@media` в теле функции не работают — вызов недопустим. Вызов `--f()` функции с типизированным параметр…",
-   "component": "layout (`crates/engine/layout/src/style/substitute.rs` — `expand_custom_functions`, `FunctionRule`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1508": {
-   "status": "open",
-   "title": "`@mixin`: условные группы в теле и `@result`, определение с недопустимым списком параметров не игнорируется. `@mixin --m(){@result{color:red;@media all{color:gr…",
-   "component": "css-parser/layout (`crates/engine/css-parser/src/parser/mixins.rs`, `crates/engine/layout/src/style/substitute.rs` — `expand_mixin_apply`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1509": {
    "status": "open",
-   "title": "Дерево псевдоэлементов View Transition не видно из DOM: нет UA-стиля `::view-transition*`, нет CSS-анимаций на них, `getAnimations()` пуст. `document.startViewT…",
+   "title": "**Срез 1 влит 2026-10-23 (P3):** UA-таблица стилей `::view-transition*` (`compute_view_transition_tree_style` в `layout/style/pseudo.rs`: цепочка корень → group…",
    "component": "layout/js (`crates/engine/layout/src/style/pseudo.rs` — `compute_view_transition_pseudo_style`; `crates/js/src/view_transitions.rs`; снимок и кросс-фейд собирает шелл)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1510": {
-   "status": "open",
-   "title": "`ViewTransition` не является интерфейсом: нет глобала `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent`; не…",
-   "component": "js (`crates/js/src/view_transitions.rs` — `startViewTransition` возвращает простой объект)",
    "date": null,
    "debtor": false
   },
   "BUG-1511": {
    "status": "open",
-   "title": "Scoped View Transitions (`element.startViewTransition()`): метода нет, 55 тестов `scoped/` падают на первом вызове. `typeof Element.prototype.startViewTransitio…",
+   "title": "**Срез 1 влит 2026-10-24 (P3):** `Element.prototype.startViewTransition` и `Element.activeViewTransition` (`view_transitions_shim.js`: тот же автомат на каждую…",
    "component": "js (`crates/js/src/view_transitions.rs` — `Element.prototype.startViewTransition`)",
    "date": null,
    "debtor": false
@@ -20919,6 +20909,27 @@
    "status": "fixed",
    "title": "`CSSRuleList`, `StyleSheetList` и `CSSStyleDeclaration` не итерируются (`[...sheet.cssRules]`, `for…of`, `[...el.style]`), нет `getPropertyPriority`. `Array.fro…",
    "component": "js (`crates/js/src/shim/web_api_shim_mid.js` — `CSSRuleList`, `StyleSheetList`, `CSSStyleDeclaration`)",
+   "date": "2026-10-23",
+   "debtor": false
+  },
+  "BUG-1507": {
+   "status": "fixed",
+   "title": "`@function`: типизированные параметры (`--a <length>`) и `@media` в теле функции не работают — вызов недопустим. Вызов `--f()` функции с типизированным параметр…",
+   "component": "layout (`crates/engine/layout/src/style/substitute.rs` — `expand_custom_functions`, `FunctionRule`)",
+   "date": "2026-10-23",
+   "debtor": false
+  },
+  "BUG-1508": {
+   "status": "fixed",
+   "title": "`@mixin`: условные группы в теле и `@result`, определение с недопустимым списком параметров не игнорируется. `@mixin --m(){@result{color:red;@media all{color:gr…",
+   "component": "css-parser/layout (`crates/engine/css-parser/src/parser/mixins.rs`, `crates/engine/layout/src/style/substitute.rs` — `expand_mixin_apply`)",
+   "date": "2026-10-23",
+   "debtor": false
+  },
+  "BUG-1510": {
+   "status": "fixed",
+   "title": "`ViewTransition` не был интерфейсом (нет глобалов `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent`, `types…",
+   "component": "js/css-parser/layout (`crates/js/src/view_transitions.rs`, `crates/engine/layout/src/style/apply/motion.rs`)",
    "date": "2026-10-23",
    "debtor": false
   }

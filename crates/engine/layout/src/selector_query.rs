@@ -2042,6 +2042,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         "view-transition-group".into(),
         style.view_transition_group.as_deref().unwrap_or("normal").into(),
     );
+    m.insert(
+        "view-transition-scope".into(),
+        if style.view_transition_scope_all { "all" } else { "none" }.into(),
+    );
     m.insert("interpolate-size".into(), match style.interpolate_size {
         InterpolateSizeMode::NumericOnly => "numeric-only",
         InterpolateSizeMode::AllowKeywords => "allow-keywords",

@@ -73,12 +73,12 @@ window.getComputedStyle = function(element, pseudoElt) {
     var illFormed = pseudo === _LUMEN_PSEUDO_INVALID;
     if (illFormed) pseudo = null;
     // The view-transition tree is answered by the View Transitions shim (UA sheet + page rules);
-    // outside an active transition, or on any element but the root, the pseudo does not exist.
+    // outside an active transition, or on an element that is not its scope, the pseudo does not exist.
     var vtTree = null;
     if (pseudo && pseudo.indexOf('view-transition') === 0) {
         // (a property of the global object: a bare `_lumen_…` name does not reach it from here)
-        if (element === document.documentElement && typeof globalThis._lumen_vt_pseudo_style === 'function') {
-            vtTree = globalThis._lumen_vt_pseudo_style(pseudo);
+        if (nid != null && typeof globalThis._lumen_vt_pseudo_style === 'function') {
+            vtTree = globalThis._lumen_vt_pseudo_style(pseudo, nid);
         }
         illFormed = vtTree === null;
         pseudo = null;
@@ -106,6 +106,9 @@ window.getComputedStyle = function(element, pseudoElt) {
         if (nid == null || illFormed) return '';
         if (vtTree !== null) return vtTree[name] || '';
         if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
+        // CSS View Transitions L2 §2.4: the scope element of a running transition is `all`.
+        if (name === 'view-transition-scope' && typeof globalThis._lumen_vt_scope_active === 'function'
+            && globalThis._lumen_vt_scope_active(nid)) return 'all';
         var base = _lumen_computed_property(nid, name);
         // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
         // settled value; a running transition of a rule property is applied here.
@@ -7221,13 +7224,16 @@ function _wa_get_animations_for(target, options) {
 // The pseudo-elements of an element that can carry animations: `::before`/`::after`, and for
 // the root the `::view-transition` tree of the active transition — plus those of a finished one,
 // so the animations they carried are dropped on the next sync.
-var _wa_vt_seen = {};
+var _wa_vt_seen = {};   // node index → { '::kind': true }
 function _wa_pseudo_targets(el) {
     var list = ['::before', '::after'];
-    if (el === document.documentElement && typeof globalThis._lumen_vt_pseudo_list === 'function') {
-        var kinds = globalThis._lumen_vt_pseudo_list();
-        for (var i = 0; i < kinds.length; i++) _wa_vt_seen['::' + kinds[i]] = true;
-        for (var k in _wa_vt_seen) list.push(k);
+    var nid = el && el.__nid__;
+    if (nid != null && typeof globalThis._lumen_vt_pseudo_list === 'function') {
+        var kinds = globalThis._lumen_vt_pseudo_list(nid);
+        var seen = _wa_vt_seen[nid];
+        if (!seen && kinds.length) seen = _wa_vt_seen[nid] = {};
+        for (var i = 0; i < kinds.length; i++) seen['::' + kinds[i]] = true;
+        for (var k in seen) list.push(k);
     }
     return list;
 }
@@ -7735,7 +7741,7 @@ function _css_new_clock() {
 function _css_prop(nid, pseudo, name) {
     // The `::view-transition` tree: the View Transitions shim's UA sheet under the page's rules.
     if (pseudo && pseudo.indexOf('::view-transition') === 0) {
-        var vt = typeof globalThis._lumen_vt_pseudo_style === 'function' ? globalThis._lumen_vt_pseudo_style(pseudo.slice(2)) : null;
+        var vt = typeof globalThis._lumen_vt_pseudo_style === 'function' ? globalThis._lumen_vt_pseudo_style(pseudo.slice(2), nid) : null;
         return vt && vt[name] || '';
     }
     if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo.slice(2), name) || '';
@@ -7952,10 +7958,14 @@ function _css_an_update_all() {
         _css_an_update(+key.slice(0, at), key.slice(at + 1) || null);
     }
     // The view-transition tree has UA `@keyframes` of its own, whatever the sheets define.
+    var vtOwners = typeof globalThis._lumen_vt_pseudo_owners === 'function' ? globalThis._lumen_vt_pseudo_owners() : [];
     var rootEl = document.documentElement;
-    if (rootEl && rootEl.__nid__ != null) {
-        var vtp = _wa_pseudo_targets(rootEl).slice(2);
-        for (var v = 0; v < vtp.length; v++) _css_an_update(rootEl.__nid__, vtp[v]);
+    if (rootEl && rootEl.__nid__ != null && vtOwners.indexOf(rootEl.__nid__) < 0) vtOwners.push(rootEl.__nid__);
+    // (owners of a finished transition too: their pseudo-element animations are dropped here)
+    for (var seenNid in _wa_vt_seen) if (vtOwners.indexOf(+seenNid) < 0) vtOwners.push(+seenNid);
+    for (var o = 0; o < vtOwners.length; o++) {
+        var vtp = _wa_pseudo_targets({ __nid__: vtOwners[o] }).slice(2);
+        for (var v = 0; v < vtp.length; v++) _css_an_update(vtOwners[o], vtp[v]);
     }
     if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
     var els = document.querySelectorAll('*');
