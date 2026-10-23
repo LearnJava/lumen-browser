@@ -199,6 +199,9 @@ pub(crate) struct TextSubStats {
     pick: std::sync::atomic::AtomicU64,
     /// Нормализация осей вариаций под face (per-run кэш).
     coord: std::sync::atomic::AtomicU64,
+    /// Шейпинг под-run-ов через `active_text_shaper` (TEXTQ-4) — цена промаха
+    /// [`TextRunCache`], на тёплом кадре не платится.
+    shape: std::sync::atomic::AtomicU64,
     /// Всё, что делается с символом после выбора face-а: проверка COLR, поиск
     /// глифа и укладка квада. Охватывает [`TextSubStats::look`] и
     /// [`TextSubStats::quad`] — разность называет проверку COLR и вызовы.
@@ -228,6 +231,7 @@ pub(crate) static TEXT_SUB: TextSubStats = TextSubStats {
     pre: std::sync::atomic::AtomicU64::new(0),
     pick: std::sync::atomic::AtomicU64::new(0),
     coord: std::sync::atomic::AtomicU64::new(0),
+    shape: std::sync::atomic::AtomicU64::new(0),
     glyf: std::sync::atomic::AtomicU64::new(0),
     look: std::sync::atomic::AtomicU64::new(0),
     quad: std::sync::atomic::AtomicU64::new(0),
@@ -249,6 +253,7 @@ impl TextSubStats {
             &self.pre,
             &self.pick,
             &self.coord,
+            &self.shape,
             &self.glyf,
             &self.look,
             &self.quad,
@@ -267,7 +272,7 @@ impl TextSubStats {
         use std::sync::atomic::Ordering::Relaxed;
         let ms = |slot: &std::sync::atomic::AtomicU64| slot.load(Relaxed) as f64 / 1e6;
         format!(
-            "text-sub: arm {:.2}ms run {:.2} loop {:.2} pre {:.2} pick {:.2} coord {:.2} \
+            "text-sub: arm {:.2}ms run {:.2} loop {:.2} pre {:.2} pick {:.2} coord {:.2} shape {:.2} \
              glyf {:.2} look {:.2} quad {:.2} sciss {:.2} xform {:.2} | \
              команд {} / символов {} / квадов {}",
             ms(&self.arm),
@@ -276,6 +281,7 @@ impl TextSubStats {
             ms(&self.pre),
             ms(&self.pick),
             ms(&self.coord),
+            ms(&self.shape),
             ms(&self.glyf),
             ms(&self.look),
             ms(&self.quad),
@@ -346,6 +352,9 @@ enum TextRunStep {
         /// Целая device-позиция пера глифа от `floor(rect.x × dpr)`, уже
         /// привязанная к сетке (TEXTQ-1); фаза пера зашита в `g`.
         pen_dev: i32,
+        /// Подъём глифа над baseline на целые device px — `y_offset` GPOS
+        /// (TEXTQ-4); `0.0` у подавляющего большинства глифов.
+        y_off_dev: f32,
         /// Растяжение битмапа до нужного размера: `1.0`, кроме глифа крупнее
         /// `MAX_GLYPH_RASTER_PX`. У каждого глифа СВОЁ, а не общее на run —
         /// `size-adjust` (CSS Fonts L4 §14.4, FONTLOAD-17) масштабирует
@@ -357,6 +366,15 @@ enum TextRunStep {
     /// Сдвинуть перо, ничего не кладя (табуляция или неотрисовавшийся глиф).
     Advance(f32),
 }
+
+/// Ось `font-variation-settings`: тег и значение.
+type VariationAxis = ([u8; 4], f32);
+/// Фича `font-feature-settings`: тег и значение.
+type FontFeature = ([u8; 4], u32);
+
+/// Оси вариаций face-а после слияния с дескриптором `@font-face` (в шейпер) и
+/// их нормализованные координаты (в растеризатор).
+type FaceAxesCoords = (Vec<([u8; 4], f32)>, Vec<f32>);
 
 /// План укладки run-а: последовательность [`TextRunStep`] от пера в `rect.x`.
 /// Позиции глифов в нём — относительно `floor(rect.x × dpr)`, а выбор фазы
@@ -469,7 +487,7 @@ fn build_text_run_key(
     tab_size: f32,
     (letter_spacing, word_spacing): (f32, f32),
     primary_face_id: usize,
-    axes: &[([u8; 4], f32)],
+    (axes, features): (&[VariationAxis], &[FontFeature]),
     (dpr, frac0): (f32, f32),
 ) {
     out.clear();
@@ -484,6 +502,12 @@ fn build_text_run_key(
     for (tag, value) in axes {
         out.push(u32::from_be_bytes(*tag));
         out.push(value.to_bits());
+    }
+    // TEXTQ-4: `font-feature-settings` меняет шейпинг (лигатуры, кернинг).
+    out.push(features.len() as u32);
+    for (tag, value) in features {
+        out.push(u32::from_be_bytes(*tag));
+        out.push(*value);
     }
 }
 
@@ -506,6 +530,15 @@ fn text_run_cache_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_TEXT_RUN_CACHE").is_ok_and(|v| v == "1"))
 }
 
+/// `true`, если шейпинг GPU-пути отключён (`LUMEN_NO_TEXT_SHAPING=1`) — рычаг
+/// отката TEXTQ-4 к укладке «глиф на кодпойнт из `cmap`, advance из `hmtx`»,
+/// без кернинга и `font-feature-settings`.
+fn text_shaping_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_TEXT_SHAPING").is_ok_and(|v| v == "1"))
+}
+
 /// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
@@ -524,6 +557,7 @@ pub(crate) fn push_text_glyphs(
     runs: &mut TextRunCache,
     runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
+    font_features: &[([u8; 4], u32)],
     tab_size: f32,
     (letter_spacing, word_spacing): (f32, f32),
     font_palette: Option<&FontPaletteSelection>,
@@ -576,11 +610,11 @@ pub(crate) fn push_text_glyphs(
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
     let mut char_face_cache: HashMap<char, (usize, u16)> = HashMap::new();
-    // Normalized variation coords per face_id — лениво вычисляется при первом
+    // Объединённые оси и normalized variation coords per face_id — лениво вычисляется при первом
     // обращении к данному face. Нормализация требует fvar+avar из шрифта
     // (единственный потребитель `ParsedFace` на пути без промахов атласа;
     // при пустых axes face не парсится вовсе).
-    let mut norm_coords_cache: HashMap<usize, Vec<f32>> = HashMap::new();
+    let mut norm_coords_cache: HashMap<usize, FaceAxesCoords> = HashMap::new();
     // CSS Fonts L4 §11.3 — развёрнутая палитра per face_id. Считается лениво:
     // у монохромного face-а (подавляющее большинство) `FaceMetrics.color` =
     // None и сюда не заходим ни разу.
@@ -598,7 +632,7 @@ pub(crate) fn push_text_glyphs(
             tab_size,
             (letter_spacing, word_spacing),
             primary_face_id,
-            font_variation_axes,
+            (font_variation_axes, font_features),
             (dpr, frac0),
         );
         let (found, h) = runs.get(&key, text);
@@ -619,10 +653,10 @@ pub(crate) fn push_text_glyphs(
         let mut cursor_x = rect.x;
         for step in plan.iter() {
             match step {
-                TextRunStep::Glyph { g, advance, pen_dev, bitmap_scale } => {
+                TextRunStep::Glyph { g, advance, pen_dev, y_off_dev, bitmap_scale } => {
                     let t_quad = log.then(std::time::Instant::now);
                     let pen = base_floor + *pen_dev as f32;
-                    push_glyph_quad(out, g, pen, baseline_dev, *bitmap_scale, dpr, color);
+                    push_glyph_quad(out, g, pen, baseline_dev - y_off_dev, *bitmap_scale, dpr, color);
                     cursor_x += advance;
                     if let Some(t0) = t_quad {
                         sub_add(&TEXT_SUB.quad, t0);
@@ -641,143 +675,213 @@ pub(crate) fn push_text_glyphs(
     let mut plan: Option<Vec<TextRunStep>> = cache_on.then(Vec::new);
     let _t_loop = sub_timer(log, &TEXT_SUB.lp);
     let mut cursor_x = rect.x;
-    // CSS Text L3 §8.1/§8.2 — `letter-spacing` следует за каждым символом,
-    // `word-spacing` — за каждым пробелом (layout уже учёл их в ширине).
-    let glyph_spacing = |ch: char| letter_spacing + if ch == ' ' { word_spacing } else { 0.0 };
-    for ch in text.chars() {
-        // CSS Text L3 §10.1 — tab character advances by tab_size pixels.
-        if ch == '\t' && tab_size > 0.0 {
+    // TEXTQ-4: фичи шейпинга — `font-feature-settings` плюс отказ от
+    // необязательных лигатур при ненулевом `letter-spacing`.
+    let shape_features = shaping_features(font_features, letter_spacing);
+    // CSS Text L3 §10.1 — tab character advances by tab_size pixels. Шейпинг
+    // идёт по отрезкам между табуляциями, чтобы табуляция не входила в
+    // лигатуру или кернинговую пару.
+    let segments: Vec<&str> = if tab_size > 0.0 { text.split('\t').collect() } else { vec![text] };
+    for (seg_idx, segment) in segments.into_iter().enumerate() {
+        if seg_idx > 0 {
             cursor_x += tab_size;
             if let Some(plan) = plan.as_mut() {
                 plan.push(TextRunStep::Advance(tab_size));
             }
-            continue;
         }
+        // Под-run-ы по резолвленному face-у: каскад выбирается на кодпойнт, а
+        // лигатура не может пересечь границу двух face-ов.
+        let mut sub_start = 0usize;
+        let mut sub_face = usize::MAX;
+        let mut boundaries: Vec<(usize, usize, usize)> = Vec::new();
         let t_pick = log.then(std::time::Instant::now);
-        let (face_id, glyph_id) = *char_face_cache
-            .entry(ch)
-            .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, lazy.faces));
-        let face = &lazy.faces[face_id];
-        let metrics = face
-            .metrics
-            .as_ref()
-            .expect("pick_face_for_codepoint вернул face_id с валидными metrics");
-        // CSS Fonts L4 §14.4 (FONTLOAD-17, BUG-467): size-adjust премультиплицирует
-        // font-size для КОНКРЕТНОГО face-а, из которого берётся глиф — разные
-        // символы одного run-а могут резолвиться в разные face-ы через
-        // `pick_face_for_codepoint` (fallback по unicode-range), поэтому
-        // масштаб растеризации/дисплея считается на глиф, а не на run
-        // (в отличие от baseline, который намеренно общий на весь run — см.
-        // выше). Раньше size-adjust не доезжал до растеризации вовсе —
-        // глиф всегда рисовался исходного размера (`bugs/BUG-467-OPEN.md`,
-        // срез FONTLOAD-16).
-        let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
-        let advance_scale = adjusted_font_size / metrics.units_per_em as f32;
-        // TEXTQ-1: глиф растрируется в точном размере в device px; перо
-        // привязано к сетке — целая часть + фаза из 4 четвертей пикселя.
-        let (glyph_size_q, bitmap_scale) = glyph_raster_size(adjusted_font_size, dpr);
-        let pen_local = frac0 + (cursor_x - rect.x) * dpr;
-        let (pen_int, x_phase) = snap_pen(pen_local, glyph_size_q);
-        let pen_dev = base_floor + pen_int as f32;
+        for (byte_idx, ch) in segment.char_indices() {
+            let (face_id, _) = *char_face_cache
+                .entry(ch)
+                .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, lazy.faces));
+            if sub_face == usize::MAX {
+                sub_face = face_id;
+            } else if face_id != sub_face {
+                boundaries.push((sub_face, sub_start, byte_idx));
+                sub_start = byte_idx;
+                sub_face = face_id;
+            }
+        }
+        if sub_face != usize::MAX {
+            boundaries.push((sub_face, sub_start, segment.len()));
+        }
         if let Some(t0) = t_pick {
             sub_add(&TEXT_SUB.pick, t0);
         }
-        let t_coord = log.then(std::time::Instant::now);
-        let coords: &[f32] = match norm_coords_cache.entry(face_id) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(v) => {
-                let axes = merge_variation_settings(&face.variation_settings, font_variation_axes);
-                let computed = if axes.is_empty() {
-                    Vec::new()
-                } else if let Some(parsed_face) = lazy.get(face_id) {
-                    normalize_variation_axes(parsed_face, &axes)
-                } else {
-                    Vec::new()
+        for (face_id, from, to) in boundaries {
+            let sub_text = &segment[from..to];
+            let face = &lazy.faces[face_id];
+            let metrics = face
+                .metrics
+                .as_ref()
+                .expect("pick_face_for_codepoint вернул face_id с валидными metrics");
+            // CSS Fonts L4 §14.4 (FONTLOAD-17, BUG-467): size-adjust премультиплицирует
+            // font-size для КОНКРЕТНОГО face-а — разные под-run-ы одного run-а могут
+            // резолвиться в разные face-ы через `pick_face_for_codepoint`
+            // (fallback по unicode-range), поэтому масштаб растеризации/дисплея
+            // считается на под-run, а не на run (в отличие от baseline, который
+            // намеренно общий на весь run — см. выше).
+            let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
+            let advance_scale = adjusted_font_size / metrics.units_per_em as f32;
+            // TEXTQ-1: глиф растрируется в точном размере в device px; перо
+            // привязано к сетке — целая часть + фаза из 4 четвертей пикселя.
+            let (glyph_size_q, bitmap_scale) = glyph_raster_size(adjusted_font_size, dpr);
+            let t_coord = log.then(std::time::Instant::now);
+            let (axes, coords): (&[([u8; 4], f32)], &[f32]) = {
+                let (axes, coords) = match norm_coords_cache.entry(face_id) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        let axes =
+                            merge_variation_settings(&face.variation_settings, font_variation_axes);
+                        let computed = if axes.is_empty() {
+                            Vec::new()
+                        } else if let Some(parsed_face) = lazy.get(face_id) {
+                            normalize_variation_axes(parsed_face, &axes)
+                        } else {
+                            Vec::new()
+                        };
+                        v.insert((axes, computed))
+                    }
                 };
-                v.insert(computed)
+                (axes, coords)
+            };
+            if let Some(t0) = t_coord {
+                sub_add(&TEXT_SUB.coord, t0);
             }
-        };
-        if let Some(t0) = t_coord {
-            sub_add(&TEXT_SUB.coord, t0);
-        }
-        let _t_glyf = sub_timer(log, &TEXT_SUB.glyf);
-        // CSS Fonts L4 §11.3 — COLR v0 цветной глиф: вместо одного quad-а
-        // текстовым цветом кладём по quad-у на каждый слой, снизу вверх, со
-        // своим цветом из выбранной палитры. Слой — обычный монохромный
-        // глиф, поэтому идёт через тот же атлас. Advance берём у базового
-        // глифа (сам он не растеризуется — слои его полностью замещают).
-        if let Some(layers) = metrics
-            .color
-            .as_ref()
-            .and_then(|c| c.colr.layers_for(glyph_id))
-        {
-            let palette = palette_cache
-                .entry(face_id)
-                .or_insert_with(|| {
-                    metrics.color.as_ref().and_then(|c| resolve_palette(c, font_palette))
-                })
-                .as_deref();
-            for layer in layers {
-                let Some(g) = ensure_glyph(
-                    cached, atlas, lazy, face_id, layer.glyph_id, glyph_size_q, x_phase, coords,
-                ) else {
-                    continue;
-                };
-                let t_quad = log.then(std::time::Instant::now);
-                push_glyph_quad(
-                    out,
-                    &g,
-                    pen_dev,
-                    baseline_dev,
-                    bitmap_scale,
-                    dpr,
-                    layer_color(palette, layer.palette_index, color),
-                );
-                if let Some(t0) = t_quad {
-                    sub_add(&TEXT_SUB.quad, t0);
-                    TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let t_shape = log.then(std::time::Instant::now);
+            let mut shaped = if text_shaping_disabled() {
+                Vec::new()
+            } else {
+                lumen_font::active_text_shaper().shape(
+                    &face.bytes,
+                    sub_text,
+                    lumen_core::ext::ShapeDirection::LeftToRight,
+                    None,
+                    &shape_features,
+                    axes,
+                )
+            };
+            if shaped.is_empty() {
+                // Шейпер выключен рычагом или не принял face, который
+                // распарсил наш парсер — укладываем по cmap/hmtx, как до
+                // TEXTQ-4.
+                shaped = cmap_shape(sub_text, metrics);
+            }
+            if let Some(t0) = t_shape {
+                sub_add(&TEXT_SUB.shape, t0);
+            }
+            for (i, sg) in shaped.iter().enumerate() {
+                let _t_glyf = sub_timer(log, &TEXT_SUB.glyf);
+                let glyph_id = sg.glyph_id;
+                // CSS Text L3 §8.2 — `letter-spacing` добавляется к КЛАСТЕРУ,
+                // а не к глифу: лигатура из двух символов получает его один
+                // раз, составной символ из базы и меток — тоже. Последний
+                // глиф кластера — тот, за которым следует другой кластер.
+                // `word-spacing` следует за разделителем слов (§8.1).
+                let cluster_end = shaped.get(i + 1).is_none_or(|n| n.cluster != sg.cluster);
+                let mut spacing = 0.0;
+                if cluster_end {
+                    spacing = letter_spacing;
+                    if word_spacing != 0.0
+                        && sub_text.get(sg.cluster as usize..).is_some_and(|t| t.starts_with(' '))
+                    {
+                        spacing += word_spacing;
+                    }
                 }
-            }
-            if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
-                cursor_x += adv as f32 * advance_scale + glyph_spacing(ch);
-            }
-            // Цветной глиф зависит от палитры и цвета текста — run с ним
-            // мимо кэша целиком (см. [`TextRunCache`]).
-            plan = None;
-            continue;
-        }
+                let advance = sg.x_advance as f32 * advance_scale + spacing;
+                // GPOS-смещение пера: по X — до привязки к сетке, по Y — на
+                // целые device px (растр глифа выровнен по baseline).
+                let x_off = sg.x_offset as f32 * advance_scale;
+                let y_off_dev = (sg.y_offset as f32 * advance_scale * dpr).round();
+                let pen_local = frac0 + (cursor_x - rect.x + x_off) * dpr;
+                let (pen_int, x_phase) = snap_pen(pen_local, glyph_size_q);
+                let pen_dev = base_floor + pen_int as f32;
+                let glyph_baseline = baseline_dev - y_off_dev;
+                // CSS Fonts L4 §11.3 — COLR v0 цветной глиф: вместо одного quad-а
+                // текстовым цветом кладём по quad-у на каждый слой, снизу вверх, со
+                // своим цветом из выбранной палитры. Слой — обычный монохромный
+                // глиф, поэтому идёт через тот же атлас. Advance берём у базового
+                // глифа (сам он не растеризуется — слои его полностью замещают).
+                if let Some(layers) = metrics
+                    .color
+                    .as_ref()
+                    .and_then(|c| c.colr.layers_for(glyph_id))
+                {
+                    let palette = palette_cache
+                        .entry(face_id)
+                        .or_insert_with(|| {
+                            metrics.color.as_ref().and_then(|c| resolve_palette(c, font_palette))
+                        })
+                        .as_deref();
+                    for layer in layers {
+                        let Some(g) = ensure_glyph(
+                            cached, atlas, lazy, face_id, layer.glyph_id, glyph_size_q, x_phase,
+                            coords,
+                        ) else {
+                            continue;
+                        };
+                        let t_quad = log.then(std::time::Instant::now);
+                        push_glyph_quad(
+                            out,
+                            &g,
+                            pen_dev,
+                            glyph_baseline,
+                            bitmap_scale,
+                            dpr,
+                            layer_color(palette, layer.palette_index, color),
+                        );
+                        if let Some(t0) = t_quad {
+                            sub_add(&TEXT_SUB.quad, t0);
+                            TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    cursor_x += advance;
+                    // Цветной глиф зависит от палитры и цвета текста — run с ним
+                    // мимо кэша целиком (см. [`TextRunCache`]).
+                    plan = None;
+                    continue;
+                }
 
-        let cached_glyph = ensure_glyph(
-            cached,
-            atlas,
-            lazy,
-            face_id,
-            glyph_id,
-            glyph_size_q,
-            x_phase,
-            coords,
-        );
+                let cached_glyph = ensure_glyph(
+                    cached,
+                    atlas,
+                    lazy,
+                    face_id,
+                    glyph_id,
+                    glyph_size_q,
+                    x_phase,
+                    coords,
+                );
 
-        if let Some(g) = cached_glyph {
-            let t_quad = log.then(std::time::Instant::now);
-            let advance = g.advance_native as f32 * advance_scale + glyph_spacing(ch);
-            push_glyph_quad(out, &g, pen_dev, baseline_dev, bitmap_scale, dpr, color);
-            cursor_x += advance;
-            if let Some(plan) = plan.as_mut() {
-                plan.push(TextRunStep::Glyph { g, advance, pen_dev: pen_int, bitmap_scale });
-            }
-            if let Some(t0) = t_quad {
-                sub_add(&TEXT_SUB.quad, t0);
-                TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-        } else {
-            // Глиф не отрисовался (composite-fallback, empty или нет места
-            // в атласе). Двигаем cursor на advance из выбранного face-а.
-            if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
-                let advance = adv as f32 * advance_scale + glyph_spacing(ch);
-                cursor_x += advance;
-                if let Some(plan) = plan.as_mut() {
-                    plan.push(TextRunStep::Advance(advance));
+                if let Some(g) = cached_glyph {
+                    let t_quad = log.then(std::time::Instant::now);
+                    push_glyph_quad(out, &g, pen_dev, glyph_baseline, bitmap_scale, dpr, color);
+                    cursor_x += advance;
+                    if let Some(plan) = plan.as_mut() {
+                        plan.push(TextRunStep::Glyph {
+                            g,
+                            advance,
+                            pen_dev: pen_int,
+                            y_off_dev,
+                            bitmap_scale,
+                        });
+                    }
+                    if let Some(t0) = t_quad {
+                        sub_add(&TEXT_SUB.quad, t0);
+                        TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                } else {
+                    // Глиф не отрисовался (пробел, empty или нет места в
+                    // атласе) — двигаем перо на advance из шейпера.
+                    cursor_x += advance;
+                    if let Some(plan) = plan.as_mut() {
+                        plan.push(TextRunStep::Advance(advance));
+                    }
                 }
             }
         }
@@ -787,6 +891,44 @@ pub(crate) fn push_text_glyphs(
     }
     runs.scratch = key;
     cursor_x
+}
+
+/// Фичи шейпинга run-а (TEXTQ-4): `font-feature-settings` как есть, а при
+/// ненулевом `letter-spacing` перед ними — выключенные `liga`/`clig`. CSS Text
+/// L3 §8.2: UA не должен применять необязательные лигатуры, когда между
+/// символами добавлен интервал. Выключатели идут ПЕРВЫМИ, поэтому явное
+/// `"liga" 1` автора, стоящее позже, их перекрывает (так делают и Chromium, и
+/// HarfBuzz — при совпадении диапазона побеждает последняя фича).
+pub(crate) fn shaping_features(
+    font_features: &[([u8; 4], u32)],
+    letter_spacing: f32,
+) -> std::borrow::Cow<'_, [([u8; 4], u32)]> {
+    if letter_spacing == 0.0 {
+        return std::borrow::Cow::Borrowed(font_features);
+    }
+    let mut all = Vec::with_capacity(font_features.len() + 2);
+    all.push((*b"liga", 0));
+    all.push((*b"clig", 0));
+    all.extend_from_slice(font_features);
+    std::borrow::Cow::Owned(all)
+}
+
+/// Укладка под-run-а без шейпера — глиф на кодпойнт из `cmap`, advance из
+/// `hmtx`. Запасной путь на случай, когда rustybuzz не принял face (так
+/// укладывался весь GPU-путь до TEXTQ-4).
+fn cmap_shape(text: &str, metrics: &FaceMetrics) -> Vec<lumen_core::ext::ShapedGlyph> {
+    text.char_indices()
+        .map(|(byte_idx, ch)| {
+            let glyph_id = metrics.cmap.glyph_index(ch as u32).unwrap_or(0);
+            lumen_core::ext::ShapedGlyph {
+                glyph_id,
+                cluster: byte_idx as u32,
+                x_advance: metrics.advances.get(glyph_id as usize).map_or(0, |&a| i32::from(a)),
+                x_offset: 0,
+                y_offset: 0,
+            }
+        })
+        .collect()
 }
 
 /// Ph3 writing-mode vertical, Срез 2 — rotates a glyph run's vertices 90° CW
@@ -829,6 +971,7 @@ pub(crate) fn push_text_glyphs_mixed(
     runs: &mut TextRunCache,
     runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
+    font_features: &[([u8; 4], u32)],
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
     dpr: f32,
@@ -847,7 +990,8 @@ pub(crate) fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette, dpr,
+                cached, runs, runs_enabled, font_variation_axes, font_features, tab_size, (0.0, 0.0),
+                font_palette, dpr,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -855,7 +999,8 @@ pub(crate) fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette, dpr,
+                cached, runs, runs_enabled, font_variation_axes, font_features, tab_size, (0.0, 0.0),
+                font_palette, dpr,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -967,7 +1112,6 @@ pub(crate) fn ensure_glyph(
     let result = rasterize_and_insert(
         atlas,
         &face.font,
-        &face.hmtx,
         face.head.units_per_em,
         key,
         coords,
@@ -1012,7 +1156,6 @@ enum GlyphRaster {
 fn rasterize_and_insert(
     atlas: &mut GlyphAtlas,
     font: &Font,
-    hmtx: &Hmtx,
     units_per_em: u16,
     key: AtlasKey,
     coords: &[f32],
@@ -1038,14 +1181,10 @@ fn rasterize_and_insert(
         InsertOutcome::Rejected => return GlyphRaster::Empty,
         InsertOutcome::OutOfSpace => return GlyphRaster::OutOfSpace,
     };
-    // HVAR delta applied: for variable fonts, advance width varies per axis instance.
-    // Font::advance_width_varied falls back to hmtx base when HVAR is absent.
-    let advance_native = font.advance_width_varied(key.glyph_id, hmtx, coords);
     GlyphRaster::Ready(CachedGlyph {
         entry,
         left: bitmap.left,
         top: bitmap.top,
-        advance_native,
     })
 }
 

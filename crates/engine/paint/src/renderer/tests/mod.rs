@@ -187,3 +187,5 @@ fn renderer_uses_no_indirect_calls() {
     }
     assert!(hits.is_empty(), "indirect-вызовы в рендере: {hits:?}");
 }
+
+mod text_shaping;
