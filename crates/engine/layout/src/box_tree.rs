@@ -23,7 +23,7 @@ use lumen_html_parser::{
 
 use crate::style::{
     clear_cq_context, compute_pseudo_element_style, compute_style,
-    set_cq_context, AlignValue,
+    set_cq_axes, AlignValue,
     BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontVariantCaps,

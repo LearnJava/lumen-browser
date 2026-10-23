@@ -99,7 +99,31 @@ pub struct ContainerRule {
     pub name: Option<String>,
     /// Сырая condition-строка типа `(min-width: 200px)` или `style(...)`.
     pub condition: String,
+    /// Preludes `(name, condition)` of the `@container` rules this one is nested in,
+    /// outermost first: the rule applies only when each of them holds as well — every
+    /// query picks its own container (CSS Conditional 5 §container-rule).
+    pub enclosing: Vec<(Option<String>, String)>,
     pub rules: Vec<Rule>,
+}
+
+impl ContainerRule {
+    /// Every prelude the rule depends on, the enclosing ones first, its own last.
+    pub fn preludes(&self) -> impl Iterator<Item = (Option<&str>, &str)> {
+        self.enclosing
+            .iter()
+            .map(|(n, c)| (n.as_deref(), c.as_str()))
+            .chain(std::iter::once((self.name.as_deref(), self.condition.as_str())))
+    }
+}
+
+/// Records `(name, condition)` as the outermost enclosing prelude of the `@container`
+/// rules in `outcomes` — the ones that bubbled out of that rule's body.
+pub(crate) fn enclose_container_rules(outcomes: &mut [AtRuleOutcome], name: &Option<String>, condition: &str) {
+    for o in outcomes {
+        if let AtRuleOutcome::Container(c) = o {
+            c.enclosing.insert(0, (name.clone(), condition.to_string()));
+        }
+    }
 }
 
 /// `@counter-style <name> { ... }` — CSS Counter Styles L3 §2.
@@ -1508,11 +1532,13 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_container_rule(&mut self) -> Option<ContainerRule> {
         let (name, condition) = self.parse_container_prelude()?;
         self.consume(); // '{'
-        let (rules, bubbled) = self.parse_bare_group_body();
+        let (rules, mut bubbled) = self.parse_bare_group_body();
+        enclose_container_rules(&mut bubbled, &name, &condition);
         self.bubbled.extend(bubbled);
         Some(ContainerRule {
             name,
             condition,
+            enclosing: Vec::new(),
             rules,
         })
     }

@@ -278,7 +278,7 @@ pub use container::{
     apply_container_rules, apply_matched_container_rules, evaluate_container_condition,
     evaluate_container_query, matching_container_rules, query_mentions_style, query_reads_standard_property,
     ContainFlags,
-    ContainerContext, ContainerKinds, ContainerType, ContentVisibility, InterpolateSizeMode,
+    ContainerContext, ContainerKinds, ContainerType, size_containment_ineligible, ContentVisibility, InterpolateSizeMode,
 };
 pub use container_scroll::{Edge, EdgeFlags, ScrollStateInfo};
 pub use values::scroll::{
@@ -336,12 +336,12 @@ use parse::font_size::{FontSizeBasis, apply_font_size};
 // по старому пути), поэтому реэкспорт обязателен даже там, где вызывателя
 // внутри `style.rs` нет (правило §2.1).
 pub use env::{
-    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active,
+    clear_animated_heights, clear_cq_context, clear_interactive_state, cq_context_active, cq_units_seen,
     forced_colors_active, pop_ch_ex_context, pop_lh_context, pop_root_font_metrics, push_root_font_metrics, root_font_metrics, print_media_active, push_ch_ex_context, push_lh_context,
-    set_animated_heights, set_cq_context, set_forced_colors, set_interactive_state,
+    set_animated_heights, set_cq_axes, set_cq_context, set_forced_colors, set_interactive_state,
     set_print_media, StyleEnvSnapshot, set_device_pixel_ratio, device_pixel_ratio,
 };
-pub(crate) use env::{animated_height_for, animated_heights_active};
+pub(crate) use env::{animated_height_for, animated_heights_active, note_cq_unit};
 pub use rule_roots::restyle_roots_for_rule_changes;
 pub use restyle_cache::RestyleIndexCache;
 pub use restyle::{

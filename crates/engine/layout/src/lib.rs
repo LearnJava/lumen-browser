@@ -2277,6 +2277,10 @@ mod containment_style_queries;
 pub(crate) use containment_style_queries::{style_ctx, style_ctx_with_style_props};
 
 #[cfg(test)]
+#[path = "tests/container_units.rs"]
+mod container_units;
+
+#[cfg(test)]
 #[path = "tests/container_queries_replaced.rs"]
 mod container_queries_replaced;
 #[cfg(test)]

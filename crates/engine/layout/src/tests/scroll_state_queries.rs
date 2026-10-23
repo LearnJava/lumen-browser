@@ -192,3 +192,83 @@ fn boxless_container_answers_no_query_below_it() {
     let html = r#"<div id="o"><div id="n"><span id="t"></span></div></div>"#;
     assert_eq!(custom_with_counters(html, css, "#t", "--m"), "no");
 }
+
+#[test]
+fn block_axis_query_skips_inline_size_container() {
+    // `.d` не отдаёт высоту: запрос по `height` идёт к `.c` (container-type: size).
+    let css = ".c { container-type: size; width: 200px; height: 100px }
+         .d { container-type: inline-size }
+         #t { --h: no }
+         @container (min-height: 50px) { #t { --h: yes } }";
+    let (doc, tree) = layout_tree(r#"<div class="c"><div class="d"><div id="t"></div></div></div>"#, css);
+    assert_eq!(custom(&tree, &doc, "#t", "--h"), "yes");
+}
+
+#[test]
+fn block_axis_query_without_size_container_is_false() {
+    let css = ".c { container-type: inline-size; width: 200px; height: 100px }
+         #t { --h: no }
+         @container (min-height: 50px) { #t { --h: yes } }";
+    let (doc, tree) = layout_tree(r#"<div class="c"><div id="t"></div></div>"#, css);
+    assert_eq!(custom(&tree, &doc, "#t", "--h"), "no");
+}
+
+#[test]
+fn query_over_both_axes_needs_one_container_with_both() {
+    let css = ".c { container-type: size; width: 200px; height: 100px }
+         .d { container-type: inline-size }
+         #t { --m: no }
+         @container ((width > 0px) and (height > 0px)) { #t { --m: yes } }";
+    let (doc, tree) = layout_tree(r#"<div class="c"><div class="d"><div id="t"></div></div></div>"#, css);
+    assert_eq!(custom(&tree, &doc, "#t", "--m"), "yes");
+}
+
+#[test]
+fn ineligible_nearest_container_makes_size_query_unknown() {
+    // `#i` — display: table не берёт size containment: запрос остаётся за ним и ложен,
+    // к внешнему `#o` не переходит.
+    let css = "#o, #i { container-type: inline-size; width: 200px }
+         #i { display: table }
+         #t { --m: no }
+         @container (min-width: 1px) { #t { --m: yes } }";
+    let (doc, tree) = layout_tree(r#"<div id="o"><div id="i"><p id="t"></p></div></div>"#, css);
+    assert_eq!(custom(&tree, &doc, "#t", "--m"), "no");
+}
+
+#[test]
+fn display_contents_container_in_the_middle_hides_outer_one() {
+    let css = ".c { container-type: inline-size; width: 30px }
+         #m { display: contents }
+         #t { --m: no }
+         @container (width: 30px) { #t { --m: yes } }";
+    let (doc, tree) = layout_tree(
+        r#"<div class="c"><div><div id="m" class="c"><div><div id="t"></div></div></div></div></div>"#,
+        css,
+    );
+    assert_eq!(custom(&tree, &doc, "#t", "--m"), "no");
+}
+
+#[test]
+fn nested_container_rule_needs_enclosing_query_too() {
+    let css = "#o { container: outer / size; width: 100px; height: 100px }
+         #i { container-type: size; width: 50px; height: 50px }
+         #t { --a: no; --b: no }
+         @container outer (width: 70px) { @container (height: 50px) { #t { --a: yes } } }
+         @container outer (width: 100px) { @container (height: 50px) { #t { --b: yes } } }";
+    let (doc, tree) = layout_tree(r#"<div id="o"><div id="i"><div id="t"></div></div></div>"#, css);
+    assert_eq!(custom(&tree, &doc, "#t", "--a"), "no");
+    assert_eq!(custom(&tree, &doc, "#t", "--b"), "yes");
+}
+
+#[test]
+fn name_only_query_matches_a_container_name_without_type() {
+    let css = "#o { container-name: --bar } #i { container-name: --foo }
+         #t { --f: no; --b: no; --z: no }
+         @container --foo { #t { --f: yes } }
+         @container --bar { #t { --b: yes } }
+         @container --baz { #t { --z: yes } }";
+    let (doc, tree) = layout_tree(r#"<div id="o"><div id="i"><div id="t"></div></div></div>"#, css);
+    assert_eq!(custom(&tree, &doc, "#t", "--f"), "yes");
+    assert_eq!(custom(&tree, &doc, "#t", "--b"), "yes");
+    assert_eq!(custom(&tree, &doc, "#t", "--z"), "no");
+}
