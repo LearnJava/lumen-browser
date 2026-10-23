@@ -205,39 +205,62 @@ pub(in crate::style) fn is_image_set_value(s: &str) -> bool {
     crate::image_set::is_image_set(s)
 }
 
-/// CSS Paint API (Houdini) — parse `paint(name)` and extract the worklet name.
-/// Returns `Some(name)` if the function is recognized; `None` otherwise.
-pub(in crate::style) fn parse_paint_function(s: &str) -> Option<String> {
+/// CSS Paint API (Houdini) — parse `paint(name, args…)` into the worklet name and the raw
+/// text of each extra argument (`inputArguments`, parsed later by the worklet side).
+/// Returns `None` if `s` is not a well-formed `paint()` call.
+pub(in crate::style) fn parse_paint_function(s: &str) -> Option<(String, Vec<String>)> {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();
-    if lower.starts_with("paint(") && s.ends_with(')') && !lower.ends_with("))") {
-        // Extract content between "paint(" and the final ")".
-        let start = "paint(".len();
-        let end = s.len() - 1;
-        if start >= end {
-            return None;  // Empty payload.
-        }
-        let inner = s[start..end].trim();
-        // Check for any stray closing parens in the extracted part.
-        if inner.contains(')') {
-            return None;
-        }
-        // Remove surrounding quotes if present (e.g., `paint("my-paint")` → `my-paint`).
-        let name = if (inner.starts_with('"') && inner.ends_with('"')) ||
-                     (inner.starts_with('\'') && inner.ends_with('\'')) {
-            if inner.len() < 2 {
-                return None;  // Quote-only string.
-            }
-            &inner[1..inner.len() - 1]
-        } else {
-            inner
-        };
-        if name.is_empty() {
-            return None;  // Empty name.
-        }
-        return Some(name.to_string());
+    if !(lower.starts_with("paint(") && s.ends_with(')')) {
+        return None;
     }
-    None
+    let inner = &s["paint(".len()..s.len() - 1];
+    // Split on top-level commas; a `)` that closes more than was opened means the
+    // outer parenthesis was not ours (`paint(a)) `), an unclosed one is malformed too.
+    let (mut parts, mut depth, mut quote, mut cur) = (Vec::new(), 0i32, None::<char>, String::new());
+    for ch in inner.chars() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            (None, ',') if depth == 0 => {
+                parts.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(ch);
+    }
+    if depth != 0 || quote.is_some() {
+        return None;
+    }
+    parts.push(cur);
+    let mut it = parts.into_iter().map(|p| p.trim().to_string());
+    let first = it.next()?;
+    // Remove surrounding quotes if present (e.g., `paint("my-paint")` → `my-paint`).
+    let name = if first.len() >= 2
+        && ((first.starts_with('"') && first.ends_with('"')) || (first.starts_with('\'') && first.ends_with('\'')))
+    {
+        first[1..first.len() - 1].to_string()
+    } else {
+        first
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let args: Vec<String> = it.collect();
+    // `paint(a,)` — an empty argument is a syntax error.
+    if args.iter().any(String::is_empty) {
+        return None;
+    }
+    Some((name, args))
 }
 
 /// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`
@@ -560,11 +583,10 @@ pub(in crate::style) fn parse_single_bg_layer(
             idx += 1;
             continue;
         }
-        if let Some(name) = parse_paint_function(t) {
-            // CSS Paint API (Houdini) — `paint(name)` → fetch registered worklet.
-            // Phase 0: stores as Paint(name); Phase 1: invokes worklet paint() callback.
-            // `// CSS: background: paint(name)`
-            layer.image = BackgroundImage::Paint(name);
+        if let Some((name, args)) = parse_paint_function(t) {
+            // CSS Paint API (Houdini) — `paint(name, args…)`: the worklet paints the image
+            // at display-list time (`lumen_paint::collect_paint_requests`).
+            layer.image = BackgroundImage::Paint { name, args };
             idx += 1;
             continue;
         }

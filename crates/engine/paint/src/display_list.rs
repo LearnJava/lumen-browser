@@ -230,6 +230,9 @@ use inline_frag::{background_clip_rect_in, background_origin_rect, background_or
 // Used only by `display_list/walk.rs` (via `super::*`).
 use inline_frag::content_box_rect;
 
+mod paint_worklet;
+pub use paint_worklet::{PaintRequest, collect_paint_requests};
+
 mod background_mask;
 use background_mask::{emit_background_image, emit_local_background, local_bg_color, local_round_clip, emit_push_mask, fixed_bg_viewport, rendered_mask_layers, FixedBgViewportGuard};
 pub use background_mask::with_fixed_background_viewport;

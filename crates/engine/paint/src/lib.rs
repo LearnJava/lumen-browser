@@ -362,6 +362,7 @@ pub use compositor::{
     LayerTree, ThreadedCompositor, ThreadedCompositorHandle,
 };
 pub use display_list::{
+    PaintRequest, collect_paint_requests,
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_dpr_cached, EmitCacheStats, SubtreeEmitCache,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,

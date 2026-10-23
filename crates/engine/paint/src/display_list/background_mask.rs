@@ -6,6 +6,8 @@
 
 use super::*;
 use super::inline_frag::mask_clip_layer_rect;
+use super::paint_worklet::{paint_image_key, paint_tile_size};
+use lumen_layout::BgSizeAxis;
 
 thread_local! {
     /// CSS Backgrounds L3 §3.6 — the viewport rect (scroll 0, page space) that
@@ -430,19 +432,22 @@ fn emit_background_layer(
                 }
             }
         }
-        BackgroundImage::Paint(name) => {
-            // CSS Paint API (Houdini) — paint(name) generates dynamic image via registered worklet.
-            // Phase 0: render as grey placeholder `DrawImage`; Phase 1: invoke worklet paint() callback.
-            // `// CSS: background: paint(name)`
-            out.push(DisplayCommand::DrawBackgroundImage {
-                rect: clip,
-                origin_rect: origin,
-                src: format!("paint:{}", name),  // Prefixed to distinguish from URL images.
-                size: layer.size,
-                position: layer.position,
-                repeat: layer.repeat,
-                image_rendering: b.style.image_rendering,
-            });
+        BackgroundImage::Paint { name, args } => {
+            // CSS Paint API (Houdini): the worklet host draws the bitmap under `src`
+            // (see `paint_worklet`); an image without intrinsic size gets the
+            // resolved tile size explicitly, so the renderer scales nothing.
+            let (w, h) = paint_tile_size(layer.size, origin);
+            if w > 0.0 && h > 0.0 {
+                out.push(DisplayCommand::DrawBackgroundImage {
+                    rect: clip,
+                    origin_rect: origin,
+                    src: paint_image_key(b.node.index(), name, args, w, h),
+                    size: BackgroundSize::Length(BgSizeAxis::Px(w), BgSizeAxis::Px(h)),
+                    position: layer.position,
+                    repeat: layer.repeat,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
         }
         _ => {}
     }

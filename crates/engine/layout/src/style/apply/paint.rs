@@ -381,9 +381,9 @@ pub(in crate::style) fn apply_decl_paint(
                     (BackgroundImage::Url(s.to_string()), css())
                 } else if let Some((a, b, t)) = parse_cross_fade(s) {
                     (BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }, css())
-                } else if let Some(paint_name) = parse_paint_function(s) {
-                    // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
-                    (BackgroundImage::Paint(paint_name), None)
+                } else if let Some((name, args)) = parse_paint_function(s) {
+                    // CSS Paint API (Houdini) — `paint(name, args…)` invokes the registered worklet.
+                    (BackgroundImage::Paint { name, args }, None)
                 } else if let Some((url, mods)) = parse_url_with_modifiers(s) {
                     // Модификаторы запроса (BUG-1433) читаются обратно только из computed-записи.
                     let css = if mods == UrlModifiers::default() { None } else { css() };
