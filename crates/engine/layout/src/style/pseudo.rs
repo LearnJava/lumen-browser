@@ -478,10 +478,10 @@ pub fn compute_pseudo_element_style(
     }
     // BUG-341 S20 census hook — see `PseudoCascadeStats`.
     if !PSEUDO_STATS_ON.load(std::sync::atomic::Ordering::Relaxed) {
-        return compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+        return compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode, &[]);
     }
     let t_pseudo = std::time::Instant::now();
-    let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode);
+    let out = compute_pseudo_element_style_inner(doc, node, pseudo, sheet, parent, viewport, dark_mode, &[]);
     note_pseudo_cascade(pseudo, t_pseudo.elapsed().as_nanos() as u64, out.is_some());
     out
 }
@@ -513,6 +513,7 @@ fn compute_pseudo_element_style_inner(
     parent: &ComputedStyle,
     viewport: Size,
     dark_mode: bool,
+    ua_decls: &[Declaration],
 ) -> Option<ComputedStyle> {
     let _prof = lumen_core::profile::scope_detail("pseudo_style");
     // CSS Color L5 §5.3 — see `compute_style_shareable`.
@@ -534,6 +535,7 @@ fn compute_pseudo_element_style_inner(
         && !is_scroll_group
         && ua_quote.is_none()
         && part_scopes.is_empty()
+        && ua_decls.is_empty()
         && !sheet_targets_pseudo(sheet, viewport, dark_mode, split_pseudo_request(pseudo).0)
     {
         return None;
@@ -657,7 +659,7 @@ fn compute_pseudo_element_style_inner(
         SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
     }
 
-    if matched.is_empty() {
+    if matched.is_empty() && ua_decls.is_empty() {
         // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
         // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
         if pseudo.eq_ignore_ascii_case("marker") {
@@ -714,7 +716,9 @@ fn compute_pseudo_element_style_inner(
     // The same for `::first-line` (§3.2): a box-level declaration (`margin`, `position`,
     // `word-break`, ...) does not apply to it, so the computed value is the parent's (BUG-1437).
     let is_first_line = pseudo.eq_ignore_ascii_case("first-line");
-    for (_, _, _, _, decl) in &matched {
+    // `ua_decls` are the UA-origin declarations (the `::view-transition-*` tree's UA sheet): they
+    // come first, so every author declaration overrides them whatever its specificity.
+    for decl in ua_decls.iter().chain(matched.iter().map(|&(_, _, _, _, d)| d)) {
         if (is_marker && !marker_property_applies(&decl.property))
             || (is_first_line && !first_line_property_applies(&decl.property))
         {
@@ -863,4 +867,103 @@ pub fn compute_view_transition_pseudo_style(
         viewport,
         dark_mode,
     )
+}
+
+/// The UA style sheet of the `::view-transition` pseudo-tree (CSS View Transitions L1 §6.1–6.5,
+/// "UA style sheet for view transition pseudo-elements") for one part and capture name, as
+/// declarations. `part` is `None` for the `::view-transition` root of the tree. `copied` are the
+/// properties the group takes from the captured element once the transition is activated
+/// (`mix-blend-mode`, `text-orientation`, `color-scheme`, …) — they join the group's declarations.
+fn view_transition_ua_decls(
+    part: Option<ViewTransitionPart>,
+    name: &str,
+    copied: &[(String, String)],
+    parent_map: &std::collections::HashMap<String, String>,
+) -> Vec<Declaration> {
+    // The UA sheet's `animation-*: inherit`: the computed style has no CSS-wide keyword for the
+    // animation lists, so the parent's computed value is written out.
+    let inherited = |prop: &str| parent_map.get(prop).map_or("inherit", String::as_str).to_string();
+    let decl = |property: &str, value: &str| Declaration {
+        property: property.to_string(),
+        value: value.to_string(),
+        important: false,
+    };
+    let mut out = Vec::new();
+    match part {
+        None => {
+            // `absolute`, not the older draft's `fixed`: the tree's containing block is the
+            // snapshot viewport (WPT `pseudo-get-computed-style`).
+            out.push(decl("position", "absolute"));
+            out.push(decl("inset", "0"));
+        }
+        Some(ViewTransitionPart::Group) => {
+            out.push(decl("position", "absolute"));
+            out.push(decl("top", "0"));
+            out.push(decl("left", "0"));
+            out.push(decl("animation-duration", "0.25s"));
+            out.push(decl("animation-fill-mode", "both"));
+            out.push(decl("animation-name", &format!("-ua-view-transition-group-anim-{name}")));
+            out.extend(copied.iter().map(|(p, v)| decl(p, v)));
+        }
+        Some(ViewTransitionPart::ImagePair) => {
+            out.push(decl("position", "absolute"));
+            out.push(decl("inset", "0"));
+            out.push(decl("animation-duration", &inherited("animation-duration")));
+            out.push(decl("animation-fill-mode", &inherited("animation-fill-mode")));
+            out.push(decl("isolation", "isolate"));
+        }
+        Some(part @ (ViewTransitionPart::Old | ViewTransitionPart::New)) => {
+            out.push(decl("position", "absolute"));
+            out.push(decl("inset-block-start", "0"));
+            out.push(decl("inline-size", "100%"));
+            out.push(decl("block-size", "auto"));
+            out.push(decl("animation-duration", &inherited("animation-duration")));
+            out.push(decl("animation-fill-mode", &inherited("animation-fill-mode")));
+            out.push(decl("mix-blend-mode", "plus-lighter"));
+            let fade = if part == ViewTransitionPart::Old { "out" } else { "in" };
+            out.push(decl("animation-name", &format!("-ua-view-transition-fade-{fade}")));
+        }
+    }
+    out
+}
+
+/// The full computed style of one node of the `::view-transition` pseudo-tree — the UA style
+/// sheet of [`view_transition_ua_decls`] under the author rules, with the parent chain
+/// `::view-transition` → group → image-pair → old/new, so `inherit` (the UA sheet's
+/// `animation-duration: inherit` on the image pair and the captures) reads the parent's value.
+/// `part` is `None` for `::view-transition` itself; `copied` as for
+/// [`view_transition_ua_decls`] (used for the group only).
+///
+/// Returns the style whether or not an author rule targets the node: the caller decides whether
+/// the node exists (a transition is active and `name` is one of its captures).
+pub fn compute_view_transition_tree_style(
+    doc: &Document,
+    sheet: &Stylesheet,
+    part: Option<ViewTransitionPart>,
+    name: &str,
+    copied: &[(String, String)],
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    let root = doc.document_element()?;
+    // Chain of (part, request) from the tree root down to the asked node.
+    let chain: &[Option<ViewTransitionPart>] = match part {
+        None => &[None],
+        Some(ViewTransitionPart::Group) => &[None, Some(ViewTransitionPart::Group)],
+        Some(ViewTransitionPart::ImagePair) => {
+            &[None, Some(ViewTransitionPart::Group), Some(ViewTransitionPart::ImagePair)]
+        }
+        Some(p @ (ViewTransitionPart::Old | ViewTransitionPart::New)) => {
+            &[None, Some(ViewTransitionPart::Group), Some(ViewTransitionPart::ImagePair), Some(p)]
+        }
+    };
+    let mut parent = ComputedStyle::root();
+    for &step in chain {
+        let request = step.map_or_else(|| "view-transition".to_string(), |p| p.request(name));
+        let parent_map = crate::computed_style_to_map(&parent);
+        let own_copied = if step == Some(ViewTransitionPart::Group) { copied } else { &[] };
+        let decls = view_transition_ua_decls(step, name, own_copied, &parent_map);
+        parent = compute_pseudo_element_style_inner(doc, root, &request, sheet, &parent, viewport, dark_mode, &decls)?;
+    }
+    Some(parent)
 }

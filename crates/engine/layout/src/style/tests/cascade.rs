@@ -1909,6 +1909,64 @@ use super::*;
         assert!(view_transition_style(css, ViewTransitionPart::New, "root").is_none());
     }
 
+    fn vt_tree_map(
+        css: &str,
+        part: Option<ViewTransitionPart>,
+        name: &str,
+        copied: &[(String, String)],
+    ) -> std::collections::HashMap<String, String> {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let html = doc.create_element(lumen_dom::QualName::html("html"));
+        doc.append_child(root, html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = lumen_core::geom::Size { width: 800.0, height: 600.0 };
+        let s = compute_view_transition_tree_style(&doc, &sheet, part, name, copied, vp, false)
+            .expect("the UA sheet always styles the tree");
+        crate::computed_style_to_map(&s)
+    }
+
+    #[test]
+    fn view_transition_tree_ua_sheet_without_author_rules() {
+        let m = |part, name| vt_tree_map("", part, name, &[]);
+        assert_eq!(m(None, "root")["position"], "absolute");
+        let group = m(Some(ViewTransitionPart::Group), "hero");
+        assert_eq!(group["position"], "absolute");
+        assert_eq!(group["animation-name"], "-ua-view-transition-group-anim-hero");
+        assert_eq!(group["animation-duration"], "0.25s");
+        assert_eq!(group["animation-fill-mode"], "both");
+        let pair = m(Some(ViewTransitionPart::ImagePair), "hero");
+        assert_eq!(pair["position"], "absolute");
+        assert_eq!(pair["isolation"], "isolate");
+        // `inherit` reads the group's value.
+        assert_eq!(pair["animation-duration"], "0.25s");
+        let old = m(Some(ViewTransitionPart::Old), "hero");
+        assert_eq!(old["position"], "absolute");
+        assert_eq!(old["mix-blend-mode"], "plus-lighter");
+        assert_eq!(old["animation-name"], "-ua-view-transition-fade-out");
+        assert_eq!(m(Some(ViewTransitionPart::New), "hero")["animation-name"], "-ua-view-transition-fade-in");
+    }
+
+    #[test]
+    fn view_transition_tree_author_overrides_ua_whatever_the_specificity() {
+        let css = "::view-transition-image-pair(hero) { position: fixed; }                   ::view-transition-group(*) { animation-duration: 2s; }";
+        let pair = vt_tree_map(css, Some(ViewTransitionPart::ImagePair), "hero", &[]);
+        assert_eq!(pair["position"], "fixed");
+        // Image pair `inherit`s the author-set group duration.
+        assert_eq!(pair["animation-duration"], "2s");
+        let other = vt_tree_map(css, Some(ViewTransitionPart::ImagePair), "x", &[]);
+        assert_eq!(other["position"], "absolute");
+    }
+
+    #[test]
+    fn view_transition_group_takes_copied_properties() {
+        let copied = [("mix-blend-mode".to_string(), "multiply".to_string())];
+        let group = vt_tree_map("", Some(ViewTransitionPart::Group), "target", &copied);
+        assert_eq!(group["mix-blend-mode"], "multiply");
+        let plain = vt_tree_map("", Some(ViewTransitionPart::Group), "target", &[]);
+        assert_eq!(plain["mix-blend-mode"], "normal");
+    }
+
     #[test]
     fn view_transition_arguments_are_case_sensitive_names() {
         let css = "::view-transition-old(Hero) { animation-duration: 3s; }";

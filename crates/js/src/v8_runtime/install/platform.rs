@@ -1288,6 +1288,46 @@ fn generated_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<
     Some(lumen_layout::computed_style_to_map(&style))
 }
 
+/// The computed style of one node of the `::view-transition` pseudo-tree as a property map:
+/// the UA sheet under the page's rules (CSS View Transitions L1 §6). `kind` is
+/// `view-transition` or `view-transition-<group|image-pair|old|new>(<name>)`; `copied` are the
+/// properties the group takes from the captured element once the transition is activated.
+/// Whether the node exists (a transition is active and `name` is one of its captures) is the
+/// caller's question — the shim answers it.
+fn view_transition_tree_style(
+    flush: &FlushHandles,
+    kind: &str,
+    copied: &[(String, String)],
+) -> Option<HashMap<String, String>> {
+    use lumen_layout::ViewTransitionPart as Part;
+    let (base, name) = match kind.split_once('(') {
+        Some((b, rest)) => (b, rest.strip_suffix(')')?),
+        None => (kind, ""),
+    };
+    let part = match base {
+        "view-transition" => None,
+        "view-transition-group" => Some(Part::Group),
+        "view-transition-image-pair" => Some(Part::ImagePair),
+        "view-transition-old" => Some(Part::Old),
+        "view-transition-new" => Some(Part::New),
+        _ => return None,
+    };
+    let sheet = flush.stylesheet.lock().ok()?.clone()?;
+    let sheet = flush.cssom_patched_sheet(&sheet).unwrap_or(sheet);
+    let [w, h] = *flush.viewport_size.lock().ok()?;
+    let doc = flush.doc.lock().ok()?;
+    let style = lumen_layout::compute_view_transition_tree_style(
+        &doc,
+        &sheet,
+        part,
+        name,
+        copied,
+        lumen_core::geom::Size::new(w, h),
+        false,
+    )?;
+    Some(lumen_layout::computed_style_to_map(&style))
+}
+
 /// `window.getComputedStyle` and custom-property reads off the cascade snapshot.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]
@@ -1351,6 +1391,18 @@ pub(crate) fn install_computed_styles(
                 .collect();
             named.sort_unstable();
             serde_json::to_string(&named).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
+    // CSS View Transitions L1 §6: `getComputedStyle(html, '::view-transition…')` while a
+    // transition is active. Answers the style map of one pseudo-tree node as JSON (`{}` when
+    // the kind is not one); `copied_json` is `[[property, value], …]` for the group.
+    {
+        let flush = flush.clone();
+        reg!(scope, ctx, store, "_lumen_vt_tree_style", move |kind: String, copied_json: String| -> String {
+            flush.maybe_flush();
+            let copied: Vec<(String, String)> = serde_json::from_str(&copied_json).unwrap_or_default();
+            let map = view_transition_tree_style(&flush, &kind, &copied).unwrap_or_default();
+            serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
         });
     }
     // CSSOM-6 (BUG-490): `getComputedStyle(el, pseudoElt)` — same lookup as

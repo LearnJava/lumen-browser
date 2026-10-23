@@ -357,3 +357,68 @@ fn wait_until_ignores_rejections() {
     settle(&rt);
     assert_eq!(log(&rt), "finished");
 }
+
+/// BUG-1509 — `getComputedStyle(html, '::view-transition…')` answers the UA sheet under the
+/// page's rules while a transition is active, and nothing outside of it.
+#[test]
+fn pseudo_tree_computed_style_during_a_transition() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "#main { display: block; width: 10px; height: 10px; view-transition-name: target; \
+                 mix-blend-mode: multiply; } \
+         ::view-transition-image-pair(target) { position: fixed; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         function pos(sel) { return getComputedStyle(document.documentElement, sel).position; }
+         function blend(sel) { return getComputedStyle(document.documentElement, sel).mixBlendMode; }
+         log.push('before:' + JSON.stringify(pos('::view-transition')));
+         var vt = document.startViewTransition(function () {
+           log.push('cb:' + pos('::view-transition') + '/' + pos('::view-transition-group(target)') + '/' +
+                    pos('::view-transition-image-pair(target)') + '/' + pos('::view-transition-old(target)') + '/' +
+                    pos('::view-transition-group(root)') + '/' + blend('::view-transition-group(target)'));
+         });
+         vt.ready.then(function () {
+           log.push('ready:' + blend('::view-transition-group(target)') + '/' + blend('::view-transition-group(root)') + '/' +
+                    pos('::view-transition-image-pair(target)') + '/' + pos('::view-transition-image-pair(root)') + '/' +
+                    JSON.stringify(pos('::view-transition-group(nope)')) + '/' + blend('::view-transition-old(target)'));
+         });
+         vt.finished.then(function () { log.push('after:' + JSON.stringify(pos('::view-transition'))); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(
+        log(&rt),
+        "before:\"\",\
+         cb:absolute/absolute/fixed/absolute/absolute/normal,\
+         ready:multiply/normal/fixed/absolute/\"\"/plus-lighter,\
+         after:\"\""
+    );
+}
+
+#[test]
+fn pseudo_tree_computed_style_rejects_non_root_owner_and_malformed_pseudos() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval("var vt = document.startViewTransition(function () {}); null").unwrap();
+    settle(&rt);
+    // The transition is over; start one and probe inside its callback.
+    rt.eval(
+        "var log = [];
+         document.startViewTransition(function () {
+           var html = document.documentElement;
+           log.push(JSON.stringify([
+             getComputedStyle(document.body, '::view-transition').position,
+             getComputedStyle(html, '::view-transition-group').position,
+             getComputedStyle(html, '::view-transition-group(*)').position,
+             getComputedStyle(html, '::view-transition(x)').position,
+             getComputedStyle(html, '::view-transition-group(root)').position]));
+         }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "[\"\",\"\",\"\",\"\",\"absolute\"]");
+}

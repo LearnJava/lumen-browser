@@ -37,6 +37,16 @@ function _lumen_normalize_highlight_pseudo(pseudoElt) {
 }
 function _lumen_normalize_pseudo_elt(pseudoElt) {
     if (typeof pseudoElt !== 'string' || pseudoElt.length === 0) return null;
+    // CSS View Transitions L1 §6: `::view-transition` and the four functional parts, whose
+    // `<custom-ident>` argument is case-sensitive. Only the document element owns the tree; a
+    // part without an argument, or with `*`, names no pseudo-element.
+    var vtm = /^::(view-transition(?:-group|-image-pair|-old|-new)?)(?:\(\s*([^()\s]+)\s*\))?$/i.exec(pseudoElt);
+    if (vtm) {
+        var vtBase = vtm[1].toLowerCase();
+        if (vtBase === 'view-transition') return vtm[2] === undefined ? 'view-transition' : _LUMEN_PSEUDO_INVALID;
+        return vtm[2] === undefined || vtm[2] === '*' ? _LUMEN_PSEUDO_INVALID : vtBase + '(' + vtm[2] + ')';
+    }
+    if (/^::view-transition/i.test(pseudoElt)) return _LUMEN_PSEUDO_INVALID;
     var hl = _lumen_normalize_highlight_pseudo(pseudoElt);
     if (hl !== null) return hl;
     var name = pseudoElt.replace(/^::?/, '').toLowerCase();
@@ -62,6 +72,17 @@ window.getComputedStyle = function(element, pseudoElt) {
     var pseudo = _lumen_normalize_pseudo_elt(pseudoElt);
     var illFormed = pseudo === _LUMEN_PSEUDO_INVALID;
     if (illFormed) pseudo = null;
+    // The view-transition tree is answered by the View Transitions shim (UA sheet + page rules);
+    // outside an active transition, or on any element but the root, the pseudo does not exist.
+    var vtTree = null;
+    if (pseudo && pseudo.indexOf('view-transition') === 0) {
+        // (a property of the global object: a bare `_lumen_…` name does not reach it from here)
+        if (element === document.documentElement && typeof globalThis._lumen_vt_pseudo_style === 'function') {
+            vtTree = globalThis._lumen_vt_pseudo_style(pseudo);
+        }
+        illFormed = vtTree === null;
+        pseudo = null;
+    }
     // Cache: keyed by nid, invalidated on next call (live object semantics).
     // BUG-483 ч.2: `length`/`item(i)`/`Symbol.iterator` used to be hardcoded
     // (length always 0, item() always '', no iterator at all) instead of
@@ -73,7 +94,8 @@ window.getComputedStyle = function(element, pseudoElt) {
     var entries = null;
     function resolveEntries() {
         if (entries === null) {
-            entries = nid == null || illFormed ? [] : JSON.parse(
+            entries = vtTree !== null ? Object.keys(vtTree).map(function (k) { return [k, vtTree[k]]; })
+                : nid == null || illFormed ? [] : JSON.parse(
                 pseudo ? _lumen_get_computed_style_pseudo_entries(nid, pseudo)
                        : _lumen_get_computed_style_entries(nid, false)
             );
@@ -82,6 +104,7 @@ window.getComputedStyle = function(element, pseudoElt) {
     }
     function readProp(name) {
         if (nid == null || illFormed) return '';
+        if (vtTree !== null) return vtTree[name] || '';
         if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
         var base = _lumen_computed_property(nid, name);
         // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the

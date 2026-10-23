@@ -158,6 +158,60 @@ function hasDuplicateNames() {
   return false;
 }
 
+// ── the pseudo-element tree (§6.4, UA style sheet) ──────────────────────────
+// `getComputedStyle(html, '::view-transition…')` answers while a transition is between "capture
+// the old state" and its end. The tree has a group per captured name (`root` always), and the
+// group takes `COPIED_PROPS` from the captured element once the transition is activated.
+var COPIED_PROPS = ['writing-mode', 'direction', 'text-orientation', 'mix-blend-mode', 'backdrop-filter', 'color-scheme'];
+
+// `{ name: [[property, value], …] }` of the elements carrying a `view-transition-name` now.
+function captureNames() {
+  var out = Object.create(null);
+  var list = [];
+  if (typeof _lumen_vt_named_elements === 'function') {
+    try { list = JSON.parse(_lumen_vt_named_elements()); } catch (e) { list = []; }
+  }
+  var rootNid = document.documentElement ? document.documentElement.__nid__ : null;
+  if (rootNid != null) { list.push([rootNid, 'root']); }
+  for (var i = 0; i < list.length; i++) {
+    var name = list[i][1];
+    if (name === 'auto' || name === 'match-element' || name in out) { continue; }
+    var props = [];
+    if (typeof _lumen_get_computed_style === 'function') {
+      for (var j = 0; j < COPIED_PROPS.length; j++) {
+        var v = _lumen_get_computed_style(list[i][0], COPIED_PROPS[j]);
+        if (v) { props.push([COPIED_PROPS[j], v]); }
+      }
+    }
+    out[name] = props;
+  }
+  return out;
+}
+
+// The style map of the pseudo-element `kind` (`view-transition`, `view-transition-old(a)`, …) of
+// the active transition, or null when the page has no such pseudo-element right now.
+Object.defineProperty(G, '_lumen_vt_pseudo_style', {
+  value: function (kind) {
+    var s = active;
+    if (!s || (s.phase !== 'update-callback-called' && s.phase !== 'animating')) { return null; }
+    var m = /^(view-transition(?:-group|-image-pair|-old|-new)?)(?:\(([^()]+)\))?$/.exec(kind);
+    if (!m || typeof _lumen_vt_tree_style !== 'function') { return null; }
+    var copied = [];
+    if (m[2] !== undefined) {
+      // The old/new parts exist for the names of that state only; group and image pair for either.
+      var inOld = s.oldNames && m[2] in s.oldNames;
+      var inNew = s.newNames && m[2] in s.newNames;
+      var exists = m[1] === 'view-transition-old' ? inOld : m[1] === 'view-transition-new' ? inNew : inOld || inNew;
+      if (!exists) { return null; }
+      if (m[1] === 'view-transition-group' && s.newNames) { copied = (inNew ? s.newNames : s.oldNames)[m[2]]; }
+    } else if (m[1] !== 'view-transition') {
+      return null;
+    }
+    try { return JSON.parse(_lumen_vt_tree_style(kind, JSON.stringify(copied))); } catch (e) { return null; }
+  },
+  writable: true, enumerable: false, configurable: true,
+});
+
 // §6.3 "skip the view transition": ready rejects with `reason`, finished follows the
 // update callback, which still runs when it has not yet.
 function skip(s, reason) {
@@ -188,6 +242,7 @@ function activate(s) {
     return;
   }
   s.phase = 'animating';
+  s.newNames = captureNames();
   native('_lumen_vt_end');
   s.ready.resolve(undefined);
   // The cross-fade itself runs in the shell; `finished` settles one task after `ready`
@@ -256,6 +311,7 @@ function capture(s) {
     return;
   }
   s.phase = 'update-callback-called';
+  s.oldNames = captureNames();
   s.began = true;
   native('_lumen_vt_begin');
   invokeCallback(s);

@@ -164,7 +164,7 @@ use property_syntax::{apply_property_initial_values, compute_registered_values};
 pub use syntax_string::validate_registered_property;
 pub use pseudo::{
     is_highlight_pseudo, compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
-    compute_view_transition_pseudo_style, merge_pseudo_inherited, ua_quote_content, ViewTransitionPart,
+    compute_view_transition_pseudo_style, compute_view_transition_tree_style, merge_pseudo_inherited, ua_quote_content, ViewTransitionPart,
 };
 pub(in crate::style) use pseudo::pseudo_element_name;
 pub(crate) use pseudo::highlight_inherited_style;
