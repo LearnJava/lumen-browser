@@ -75,65 +75,61 @@ WPT-RUN-16 (`docs/wpt/pass-rate.md` §«Четвёртая полная цифр
 - Не трогать движок: утечки памяти конкретных тестов — баги `bugs/BUG-NNN-OPEN.md` для P3, с
   RSS и тестом в описании.
 
-## Передача между сессиями (WIP, сессия 1 → 2)
+## Передача между сессиями (WIP, сессия 2 → 3)
 
-Ветка `p2-wpt-run-18` (слот `p2-work`), коммит WIP. Замер «до» **не идёт** — был запущен и убит при
-передаче через 6 минут, ничего не сохранилось; после перезапуска сессии прогон надо начинать заново
-и держать в той же сессии (память: прогон умирает вместе с сессией).
+Ветка `p2-wpt-run-18`, работать в основном чекауте `D:/RustProjects/lumen-browser` (слот p2-work свободен).
+Интерпретатор: `.tmp/venv-wpt/Scripts/python.exe` (psutil там есть; системный python — без psutil).
+Прогон умирает вместе с сессией: «после» запускать и дожидаться в той же сессии. `sleep` в этом окружении
+растягивается примерно вдвое — ждать циклами `until grep -q RUN_EXIT …; sleep 30` по ≤ 5 мин.
 
-**Сделано**
+**Код готов (самотест `python tests/wpt/run_corpus.py --selftest` зелёный, `score_audit.py --selftest` зелёный)**
 
-- `tests/wpt/browser_rss_cap.py`: триггер `low-free` (`min_free_gb`: при свободной памяти ниже порога
-  убивается самый большой браузер прогона не меньше `LOW_FREE_FLOOR_GB`=2, пауза `LOW_FREE_COOLDOWN_S`=5 с;
-  запись в `rss-cap-kills.jsonl` с `"reason": "low-free"`, у убийства по лимиту — `"cap"`), лог памяти
-  `mem-log.tsv` раз в 10 с (свободно/своп/число и RSS браузеров), CLI-сэмплер
-  `python tests/wpt/browser_rss_cap.py --sample PID --out FILE` для прогона без сторожа, самотест
-  (`python tests/wpt/browser_rss_cap.py` → `selftest: ok`).
-- `tests/wpt/run_corpus.py`: добавлены (пока **не подключены**) `load_heavy_tests`, `expand_heavy`, `is_heavy`,
-  `unit_processes`, `heavy_exclusions`, `auto_processes`, `resolve_processes`, `processes_arg`, константы
-  `HEAVY_*`, `AUTO_*`; `plan_shards(..., heavy=)` создаёт шард `"<категория> (heavy)"` с `test_ids`;
-  `shard_targets` для heavy-шарда отдаёт пути файлов без `?вариант` (путь без запроса выбирает все варианты).
-- Подготовлены (в `.tmp/`, не в git): `run18_arm.py` (запуск плеча A/B: `python .tmp/run18_arm.py <arm>
-  [--no-sample] -- <аргументы run_corpus>`, ставит `LUMEN_ALLOW_POPUPS=1`, пишет `.tmp/run18-<arm>.log`
-  и `RUN_EXIT=`, аварийно убивает плечо, если своп вырос больше чем на 14 ГБ), бинарь
-  `.tmp/wpt-run18-bin/lumen.exe` (= бинарь WPT-RUN-16, `dev-release` от 22.10, байт в байт).
-  Интерпретатор: `D:/RustProjects/lumen-browser/.tmp/venv-wpt/Scripts/python.exe` (в p2-work venv нет).
+- `browser_rss_cap.py`: сторож `low-free` (`min_free_gb`), `mem-log.tsv`, `summary()`, CLI-сэмплер `--sample`.
+- `run_corpus.py`: `--processes auto|N` (`resolve_processes`, `auto_processes`), heavy-полоса
+  (`--no-heavy-lane`, `--heavy-tests`, `load_heavy_tests`, `plan_shards(heavy=)`, `plan_units` → один юнит
+  `heavy lane` последним, `run_units_parallel` берёт его только при `running == 0`, `unit_processes` = 2,
+  два exclude-файла: `exclude-regular.txt` для обычных, https-список для heavy, `pick_exclude`);
+  в `state.json`: `heavy_tests`, `processes`; в снимке: `low_free_kills`, `min_free_gb`, `heavy_tests`, `memory`
+  (`min_free_seen_gb`, `max_swap_gb`, `low_free_polls`); в состоянии шарда `low_free_kills`, `heavy`.
+- `score_audit.shard_index`: категория шарда `name.split(" ")[0].split("/")[0]`, heavy из `state["heavy_tests"]`.
+- `tests/wpt/heavy_tests.txt`: три файла `html5lib_*` (acid3 `numbered-tests.html` НЕ включён — BUG-1267 FIXED;
+  webstorage `*quota*` НЕ включены — нет замера, добавить, только если замер «после» покажет рост RSS).
+- Самотесты `_selftest_heavy` (+ `_selftest_heavy_order` с поддельным `run_shard`).
+
+**Замер «до» — ГОТОВ** (рецепт WPT-RUN-16: `--parallel-shards 3 --processes 14 --shared-queue --batch-small 150
+--max-browser-gb 4`, код `run_corpus.py` из `95086b8b2` — старое поведение целиком, с гейтом старта 6 ГБ;
+бинарь `.tmp/wpt-run18-bin/lumen.exe`, набор: `--prefixes html/syntax,referrer-policy,editing,WebCryptoAPI,
+webaudio,IndexedDB,webstorage`, 4149 id; свободной памяти на старте 22.8 ГБ, своп 2.0 ГБ, чужих `lumen` не было).
+Файлы: `.tmp/run18-before.log`, `.tmp/run18-before.json` (+ `.ids.tsv.gz`), `.tmp/wpt-run18-before/mem-log.tsv`.
+Итог «до»: стена **8488 с** (2 ч 21 мин); минимум свободной памяти **0.00 ГБ**, 52 % опросов ниже 6 ГБ; своп
+2.0 → **8.5 ГБ**; до 43 браузеров / 22 ГБ RSS суммарно (один — до 4.22 ГБ); **все 7 шардов убиты по бюджету**
+(`timeout`), 2668 id не прогнано, pass-rate набора 4.77 %; статусы: CRASH 45, TIMEOUT 454, ERROR 222, OK 760;
+убийств сторожем по лимиту 3 (все в referrer-policy). `memstat18.py` (`.tmp/memstat18.py <mem-log.tsv>`) печатает
+строку со статистикой памяти. Для сравнения «тихий» прогон WPT-RUN-16 тех же шардов (`docs/wpt/runs/2026-10-22.json`,
+`--processes 10`, 2 полосы): editing 1076 с, referrer-policy 2198 с, IndexedDB 988 с, WebCryptoAPI 595 с,
+html/syntax 889 с (46 убийств), webaudio 142 с, webstorage 39 с — все `ran`.
 
 **Осталось**
 
-1. `run_corpus.py`: `plan_units` — heavy-шарды не в обычные батчи, а в один юнит последним
-   (`{"name": "heavy lane", "members": [...], "heavy": True, "report_path": batches/heavy.json}`, `split_batch`
-   разложит по членам); `run_units_parallel`: сортировка «heavy последним» (`key=(is_heavy, -budget)`),
-   `budget_of`/`run_shard` с `unit_processes(unit, args.processes)`, heavy-юнит берётся только когда
-   `running == 0` (увеличивать `running` внутри `take()` под мьютексом; на пути `PortsBusy` уменьшать);
-   то же `unit_processes` в последовательном цикле и в бюджетах `--resume`.
-2. `main()`: `--processes` с `type=processes_arg`, `default="7"`, разрешение через `resolve_processes(...,
-   args.parallel_shards, args.min_free_gb)` (печатать `note`); `--no-heavy-lane` и `--heavy-tests PATH`;
-   `plan_shards(..., heavy=load_heavy_tests())`; два exclude-файла: для обычных шардов (https-список +
-   `heavy_exclusions(shards)`), для heavy-юнита — только https-список (`run_shard(exclude_file=...)` на юнит);
-   `BrowserRssCap(args.max_browser_gb, out_dir, min_free_gb=args.min_free_gb)` — теперь сторож включается и при
-   `--max-browser-gb 0`, если задан `--min-free-gb`; в `state.json` писать `"heavy": bool`; в `run_shard` —
-   `state["low_free_kills"]`; в снимке — `low_free_kills`, `min_free_seen_gb`, `max_swap_gb`, `processes`
-   разрешённое число, `heavy`.
-3. `score_audit.shard_index`: категория шарда — `name.split(" ")[0].split("/")[0]` (сейчас `.replace(" (bare)")`
-   не понимает `" (heavy)"`), `plan_shards(..., heavy=load_heavy_tests() if state.get("heavy") else None)`;
-   то же в `attribute_shards`/`runnable_ids_per_shard` при необходимости.
-4. `tests/wpt/heavy_tests.txt`: `/html/syntax/parsing/html5lib_url.html`, `html5lib_write.html`,
-   `html5lib_write_single.html` (60+55+55 вариантов, 47 из 60 убийств сторожем в WPT-RUN-16),
-   `/acid/acid3/numbered-tests.html` (BUG-1267), webstorage `*quota*` (`storage_*_setitem_quotaexceedederr`,
-   `storage_*_quota_independent_from_*` — найти в манифесте), у каждой строки причина.
-5. Самотесты в `run_corpus.py --selftest`: `load_heavy_tests` (причина обязательна, `?` запрещён),
-   `plan_shards(heavy=)` + `plan_units` (heavy-юнит один, последний, `processes==2`), `auto_processes`,
-   `heavy_exclusions`, `shard_targets` heavy, сторож low-free уже покрыт самотестом `browser_rss_cap`.
-6. Замеры на тяжёлом наборе (`--prefixes html/syntax,referrer-policy,editing,WebCryptoAPI,webaudio,IndexedDB,
-   webstorage`, 7 шардов, 4149 id): «до» = рецепт WPT-RUN-16 (`--parallel-shards 3 --processes 14 --shared-queue
-   --batch-small 150 --max-browser-gb 4`, старое поведение = `--no-heavy-lane` без low-free, т.е.
-   `--min-free-gb 0 --processes 14`) с сэмплером; «после» = `--parallel-shards 3 --processes auto`. Внимание:
-   сторож портов `reap_lumen_orphans` при старте убил чужой `lumen --ipc-server` из `p6-work` (debug-сборка
-   другой сессии) — это поведение раннера, запускать прогон, когда чужих браузеров нет, и сказать об этом в
-   отчёте. Свободной памяти на машине при старте ~17–18 ГБ из 32 (фоновые процессы), своп уже 1.5–3 ГБ.
-7. Документация: `docs/wpt/pass-rate.md` (таблица «до/после», новый рецепт полного прогона:
-   `--all --parallel-shards 3 --processes auto --shared-queue --batch-small 150 --max-browser-gb 4`),
-   `--help`, `docs/commands.md`; `docs/doc-sync.md` — что ещё синхронизировать; затем
-   `python tests/wpt/run_corpus.py --selftest`, коммит, `merge --no-ff` в main, убрать указатель
-   `ROADMAP.md:1254` из `STATUS-P2.md`, статус WPT-RUN-18 в ROADMAP.
+1. Замер «после»: `python .tmp/run18_arm.py after --no-sample -- --binary D:/RustProjects/lumen-browser/.tmp/wpt-run18-bin/lumen.exe
+   --skip-manifest-update --prefixes <тот же набор> --out-dir D:/RustProjects/lumen-browser/.tmp/wpt-run18-after
+   --parallel-shards 3 --processes auto --shared-queue --batch-small 150 --max-browser-gb 4
+   --run-json D:/RustProjects/lumen-browser/.tmp/run18-after.json` (в фоне, лог `.tmp/run18-after.log`, строка
+   `RUN_EXIT=`; `.tmp/run18_arm.py` и `.tmp/wpt-run18-bin` скопированы в основной `.tmp`; своп-предохранитель
+   в скрипте убьёт плечо при росте свопа > 14 ГБ). Запускать, когда нет чужих `lumen` и сборок. Свой сторож пишет
+   `mem-log.tsv` сам. Ожидание: `--processes auto` при ~20 ГБ свободных даёт (20−6)/3 ≈ 4 браузера на полосу.
+   Проверить критерии «Готово, когда»: свободная память не ниже `--min-free-gb` (иначе — убийства `low-free`,
+   их число в таблицу), своп не растёт, TIMEOUT в `editing`/`WebCryptoAPI`/`webaudio` не больше тихих
+   перепрогонов (таблица падений `docs/wpt/pass-rate.md` §«Падения больше 1 балла», строки 810–820), стена ≤ 8488 с.
+   Если стена «после» больше «до» из-за малого `auto` — это результат, записать; решить по замеру, не подгонять.
+   Если heavy-полоса показала `low-free`/лимит-убийства `html5lib_*` — записать в таблицу; кандидатов в
+   `heavy_tests.txt` брать из `rss-cap-kills.jsonl` (≥ 2 убийств).
+2. Документация: `docs/wpt/pass-rate.md` — таблица «до/после» (§Как воспроизвести, строка ~304) и новый
+   рецепт полного прогона `--all --parallel-shards 3 --processes auto --shared-queue --batch-small 150
+   --max-browser-gb 4`; абзац про heavy-полосу и `low-free`; `docs/commands.md` (раздел про `run_corpus.py`) —
+   флаги `--processes auto`, `--min-free-gb`, `--no-heavy-lane`, `--heavy-tests`; `docs/doc-sync.md` — что ещё.
+   `--help` флагов уже обновлён. CAPABILITIES.md не трогать (движок не менялся).
+3. Финал: `python tests/wpt/run_corpus.py --selftest` и `tests/wpt/browser_rss_cap.py`, коммит, `merge --no-ff` в
+   `main`, push, убрать указатель `ROADMAP.md:1254` из `STATUS-P2.md`, статус WPT-RUN-18 в ROADMAP
+   (`/lumen-task-finish`). Перед `git add` — `git status --short`: в дереве чужие правки
+   `.claude-manager/*` и неотслеживаемые `graphic_tests/results/*`, `samples/`, `utils/` — не добавлять.

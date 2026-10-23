@@ -220,7 +220,8 @@ class BrowserRssCap:
     def maybe_log_memory(self, force: bool = False):
         """Append a row to `mem-log.tsv` at most once per `MEM_LOG_EVERY_S`."""
         now = self._clock()
-        if not force and self._last_mem_row is not None                 and now - self._last_mem_row < MEM_LOG_EVERY_S:
+        if (not force and self._last_mem_row is not None
+                and now - self._last_mem_row < MEM_LOG_EVERY_S):
             return
         self._last_mem_row = now
         free = self.available_bytes()
@@ -241,6 +242,16 @@ class BrowserRssCap:
                 fh.write(row)
         except OSError:
             pass
+
+    def summary(self) -> dict:
+        """What the run's memory did, for the snapshot: the lowest free memory and
+        the highest swap use any poll saw, and how many polls were below the floor."""
+        return {
+            "min_free_seen_gb": None if self.min_free_seen is None
+            else round(self.min_free_seen / 2**30, 2),
+            "max_swap_gb": round(self.max_swap_seen / 2**30, 2),
+            "low_free_polls": self.low_free_polls,
+        }
 
     def low_free_kills(self) -> int:
         with self._lock:

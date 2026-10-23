@@ -778,6 +778,14 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
             # The test that browser was running is reported CRASH by wptrunner;
             # this is what tells such a CRASH apart from an engine crash.
             state["rss_cap_kills"] = killed
+            low_free = sum(1 for pid in attempt_pids for kill in rss_cap.kills_under(pid)
+                           if kill.get("reason") == "low-free")
+            if low_free:
+                # The shard's CRASHes that are the run's own memory floor, not
+                # the engine's (WPT-RUN-18).
+                state["low_free_kills"] = low_free
+    if is_heavy(shard):
+        state["heavy"] = True
     return state
 
 
@@ -839,6 +847,8 @@ SERVER_CONFIG_ENV = "LUMEN_WPT_SERVER_CONFIG"
 HEAVY_TESTS_PATH = os.path.join(TESTS_ROOT, "heavy_tests.txt")
 #: Suffix of the per-category shard that carries a category's heavy tests.
 HEAVY_SUFFIX = " (heavy)"
+#: The one unit `plan_units` makes of all the per-category heavy shards.
+HEAVY_UNIT_NAME = "heavy lane"
 #: Browsers the heavy lane runs: enough to overlap their timeouts, few enough
 #: that two 5 GB runaways stay a 10 GB problem.
 HEAVY_PROCESSES = 2
@@ -897,6 +907,11 @@ def heavy_exclusions(shards: list) -> list:
                    for test_id in shard["test_ids"]})
 
 
+def pick_exclude(exclude_files, unit: dict):
+    """The `--exclude-file` of one unit: `exclude_files` is `(ordinary, heavy lane)`."""
+    return exclude_files[1] if is_heavy(unit) else exclude_files[0]
+
+
 def auto_processes(free_gb: float, cpus: int, lanes: int, reserve_gb: float,
                    browser_gb: float = AUTO_BROWSER_GB) -> int:
     """`--processes auto`: browsers per lane such that all lanes together fit in
@@ -943,7 +958,14 @@ def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
     and a batch closes once adding the next one would pass `max_ids`. Shards
     that are not small, and a batch of one, stay as they were — with
     `small == 0` the result is `shards` itself. Ordering is the caller's.
+
+    The heavy lane (WPT-RUN-18, `plan_shards(heavy=)`) is the exception: its
+    per-category shards never join a regular batch — they become one unit,
+    `HEAVY_UNIT_NAME`, last in the list, so the run's biggest memory eaters
+    meet each other and nothing else.
     """
+    heavy = [s for s in shards if is_heavy(s)]
+    shards = [s for s in shards if not is_heavy(s)]
     units, batch = [], []
 
     def close():
@@ -976,6 +998,16 @@ def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
             close()
         batch.append(shard)
     close()
+    if len(heavy) == 1:
+        units.append(heavy[0])
+    elif heavy:
+        units.append({
+            "name": HEAVY_UNIT_NAME, "prefix": None, "members": list(heavy), "heavy": True,
+            "ids": sum(s["ids"] for s in heavy),
+            "auto_ids": sum(s.get("auto_ids", s["ids"]) for s in heavy),
+            "long_ids": sum(s.get("long_ids", 0) for s in heavy),
+            "report_path": os.path.join(out_dir, BATCH_SUBDIR, "heavy.json"),
+        })
     return units
 
 
@@ -1070,6 +1102,10 @@ def split_batch(batch: dict, state: dict, out_dir: str) -> list:
             # the killed browser was running is in `rss-cap-kills.jsonl` time
             # order, not here.
             member_state["batch_rss_cap_kills"] = state["rss_cap_kills"]
+        if state.get("low_free_kills"):
+            member_state["batch_low_free_kills"] = state["low_free_kills"]
+        if is_heavy(member):
+            member_state["heavy"] = True
         states.append(member_state)
     return states
 
@@ -1143,9 +1179,13 @@ class SharedHeavyLock:
 
 #: Poll interval of the memory gate, seconds.
 MEMORY_GATE_POLL = 10.0
+#: How often a lane re-checks whether it may start the heavy lane, seconds.
+HEAVY_WAIT_POLL = 5.0
+#: `run_units_parallel.take()` answer: nothing to start yet, ask again.
+WAIT = object()
 
 
-def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
+def run_units_parallel(units: list, binary: str, args, exclude_files, finish,
                        rss_cap=None) -> int:
     """Run `units` on `args.parallel_shards` lanes pulling from one queue.
 
@@ -1176,9 +1216,10 @@ def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
 
     def budget_of(unit):
         return shard_timeout(unit, args.shard_timeout_base, args.shard_timeout_per_id,
-                             args.processes)
+                             unit_processes(unit, args.processes))
 
-    queue = sorted(units, key=budget_of, reverse=True)
+    # Longest budget first; the heavy lane after everything else.
+    queue = sorted(units, key=lambda unit: (is_heavy(unit), -budget_of(unit)))
     total = len(queue)
     mutex = threading.Lock()
     running = [0]
@@ -1187,9 +1228,16 @@ def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
     shared_lock = SharedHeavyLock(f"run_corpus.py pid={os.getpid()} --parallel-shards {lanes}")
 
     def take():
+        """`(unit, index)`; `(None, 0)` when the lane is done, `(WAIT, 0)` when
+        the next unit is the heavy lane and other lanes are still busy.
+        `running` is raised here, under the same mutex, so two lanes cannot both
+        see it at 0 and start the heavy lane side by side."""
         with mutex:
             if failures or not queue:
                 return None, 0
+            if is_heavy(queue[0]) and running[0] > 0:
+                return WAIT, 0
+            running[0] += 1
             started[0] += 1
             return queue.pop(0), started[0]
 
@@ -1216,6 +1264,9 @@ def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
             unit, index = take()
             if unit is None:
                 return
+            if unit is WAIT:
+                time.sleep(HEAVY_WAIT_POLL)
+                continue
             if not args.no_port_guard:
                 try:
                     port_guard.ensure_free(ports=ports, own_pid=os.getpid())
@@ -1223,16 +1274,18 @@ def run_units_parallel(units: list, binary: str, args, exclude_file, finish,
                     with mutex:
                         failures.append(f"lane {lane}: {exc}")
                         queue.insert(0, unit)
+                        running[0] -= 1
+                        started[0] -= 1
                     return
             budget = budget_of(unit)
             print(f"[{index}/{total}] lane {lane}: {unit['name']}: {unit['ids']} ids "
                   f"(budget {budget}s) started", flush=True)
-            with mutex:
-                running[0] += 1
             shared_lock.acquire()
             try:
-                state = run_shard(unit, binary, args.out_dir, args.processes, budget,
-                                  exclude_file, extra_env, rss_cap, args.shared_queue)
+                state = run_shard(unit, binary, args.out_dir,
+                                  unit_processes(unit, args.processes), budget,
+                                  pick_exclude(exclude_files, unit), extra_env, rss_cap,
+                                  args.shared_queue)
             except Exception as exc:  # noqa: BLE001 — a dead lane must still be reported
                 # An uncaught exception ends only this thread: the other lanes
                 # go on and the run exits 0 with the unit silently lost.
@@ -1698,7 +1751,8 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
 
 
 def attribute_shards(manifest: dict, per_test: list, shard_states: list,
-                     prefixes: list = None, exclude_prefixes: list = None) -> list:
+                     prefixes: list = None, exclude_prefixes: list = None,
+                     heavy: dict = None) -> list:
     """`per_test` rows with the shard that carried each id filled in.
 
     The attribution is `score_audit.shard_index`'s — the one rule every other
@@ -1712,7 +1766,8 @@ def attribute_shards(manifest: dict, per_test: list, shard_states: list,
 
     owner, _planned = score_audit.shard_index(
         manifest, {"shards": shard_states, "prefixes": prefixes or [],
-                   "exclude_prefixes": exclude_prefixes or []})
+                   "exclude_prefixes": exclude_prefixes or [],
+                   "heavy_tests": sorted(heavy or {})})
     return [row[:6] + (owner(row[0]) or "",) for row in per_test]
 
 
@@ -1844,6 +1899,7 @@ def _selftest() -> int:
     checks.extend(_selftest_prefixes())
     checks.extend(_selftest_batches())
     checks.extend(_selftest_shared_queue())
+    checks.extend(_selftest_heavy())
     with contextlib.redirect_stdout(io.StringIO()):
         cap_status = browser_rss_cap._selftest()  # noqa: SLF001 — its own selftest
     checks.append(("browser rss cap kills only an oversized lumen of this run",
@@ -1853,6 +1909,150 @@ def _selftest() -> int:
     failed = [label for label, ok in checks if not ok]
     print(f"selftest: {'PASS' if not failed else 'FAIL (' + ', '.join(failed) + ')'}")
     return 1 if failed else 0
+
+
+def _selftest_heavy() -> list:
+    """Prove the heavy lane and `--processes auto` without a browser (WPT-RUN-18).
+
+    What has to hold: a heavy test never leaves the plan (it moves to the
+    `(heavy)` shard, still an explicit id list inside the denominator), the
+    ordinary shards are told to skip it, the heavy lane runs after every other
+    unit and alone, on `HEAVY_PROCESSES` browsers, and `auto` can never ask for
+    more browsers than the free memory fits.
+    """
+    def leaf(*variants):
+        return ["hash"] + [[v, {}] for v in (variants or (None,))]
+
+    manifest = {"items": {"testharness": {
+        "html": {"syntax": {"w.html": leaf("html/syntax/w.html?f=a", "html/syntax/w.html?f=b"), "ok.html": leaf()}},
+        "ws": {"big.html": leaf("ws/big.html?x=1")},
+        "dom": {"d.html": leaf()},
+    }}}
+    checks = []
+    tmp = tempfile.mkdtemp(prefix="lumen-heavy-selftest-")
+    try:
+        listing = os.path.join(tmp, "heavy.txt")
+        with open(listing, "w", encoding="utf-8") as fh:
+            fh.write("# comment\n\n/html/syntax/w.html  eats 5 GB\n/ws/big.html  eats 4 GB\n")
+        heavy = load_heavy_tests(listing)
+
+        def rejects(text):
+            with open(listing, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                load_heavy_tests(listing)
+            except ValueError:
+                return True
+            return False
+
+        checks.append(("heavy list: file, reason, comments", heavy == {
+            "/html/syntax/w.html": "eats 5 GB", "/ws/big.html": "eats 4 GB"}))
+        checks.append(("heavy list: a line without a reason is an error",
+                       rejects("/html/syntax/w.html\n")))
+        checks.append(("heavy list: a ?variant is an error",
+                       rejects("/html/syntax/w.html?f=a  why\n")))
+        checks.append(("heavy list: a missing file is an empty list",
+                       load_heavy_tests(os.path.join(tmp, "none.txt")) == {}))
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            plain = plan_shards(manifest, ["html", "ws", "dom"])
+            shards = plan_shards(manifest, ["html", "ws", "dom"], heavy=heavy)
+        lanes = {s["name"]: s for s in shards if is_heavy(s)}
+        checks.append(("plan: one heavy shard per category that has heavy tests",
+                       sorted(lanes) == ["html (heavy)", "ws (heavy)"]))
+        checks.append(("plan: the heavy shard holds every variant, explicit ids",
+                       lanes["html (heavy)"]["test_ids"]
+                       == ["/html/syntax/w.html?f=a", "/html/syntax/w.html?f=b"]
+                       and lanes["html (heavy)"]["auto_ids"] == 2))
+        checks.append(("plan: the ordinary shards are unchanged (the denominator stays)",
+                       [s for s in shards if not is_heavy(s)] == plain))
+        checks.append(("targets: a heavy shard is addressed by file, not by variant",
+                       shard_targets(lanes["html (heavy)"]) == ["/html/syntax/w.html"]))
+        checks.append(("exclusions: the ordinary shards skip the heavy files",
+                       heavy_exclusions(shards) == ["/html/syntax/w.html", "/ws/big.html"]))
+        checks.append(("exclusions: the regular exclude file goes to ordinary units only",
+                       pick_exclude(("regular.txt", "https.txt"), lanes["ws (heavy)"]) == "https.txt"
+                       and pick_exclude(("regular.txt", "https.txt"), plain[0]) == "regular.txt"))
+
+        units = plan_units(shards, small=150, max_ids=600, out_dir=tmp)
+        lane_units = [u for u in units if is_heavy(u)]
+        checks.append(("units: the heavy lane is one unit, the last one",
+                       len(lane_units) == 1 and units[-1] is lane_units[0]
+                       and lane_units[0]["name"] == HEAVY_UNIT_NAME
+                       and [m["name"] for m in lane_units[0]["members"]]
+                       == ["html (heavy)", "ws (heavy)"]))
+        checks.append(("units: no heavy shard joined an ordinary batch",
+                       not any(is_heavy(m) for u in units[:-1] for m in u.get("members", ()))))
+        checks.append(("units: heavy runs on HEAVY_PROCESSES, the rest on --processes",
+                       unit_processes(lane_units[0], 14) == HEAVY_PROCESSES
+                       and unit_processes(lane_units[0], 1) == 1
+                       and unit_processes(units[0], 14) == 14))
+        checks.append(("units: a single heavy shard stays that shard",
+                       plan_units([lanes["ws (heavy)"]], 150, 600, tmp) == [lanes["ws (heavy)"]]))
+
+        checks.append(("auto: free memory minus the floor, shared by the lanes",
+                       auto_processes(17.0, 16, 3, 6.0) == 3
+                       and auto_processes(100.0, 16, 1, 6.0) == 16
+                       and auto_processes(2.0, 16, 3, 6.0) == AUTO_MIN_PROCESSES))
+        checks.append(("auto: --processes takes a number or auto, nothing else",
+                       processes_arg("auto") == "auto" and processes_arg("7") == "7"
+                       and all(_raises(argparse.ArgumentTypeError, processes_arg, bad)
+                               for bad in ("0", "-1", "x"))))
+        checks.append(("auto: a number is passed through",
+                       resolve_processes("5", 3, 6.0) == (5, None)))
+
+        checks.append(("lanes: the heavy lane starts only when every other lane is idle",
+                       _selftest_heavy_order(units, tmp)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return checks
+
+
+def _raises(exc, func, *args) -> bool:
+    try:
+        func(*args)
+    except exc:
+        return True
+    return False
+
+
+def _selftest_heavy_order(units: list, tmp: str) -> bool:
+    """`run_units_parallel` with a fake `run_shard`: three lanes, five ordinary
+    units and the heavy lane. The lane must start last and never overlap."""
+    global run_shard, HEAVY_WAIT_POLL
+    ordinary = [{"name": f"u{n}", "prefix": f"/u{n}/", "ids": 5, "auto_ids": 5,
+                 "long_ids": 0} for n in range(5)]
+    queue = ordinary + [u for u in units if is_heavy(u)]
+    log, active, mutex = [], [0], threading.Lock()
+
+    def fake(unit, binary, out_dir, processes, budget, exclude, extra_env, rss_cap, shared):
+        with mutex:
+            active[0] += 1
+            log.append((unit["name"], processes, exclude, active[0]))
+        time.sleep(0.15)
+        with mutex:
+            active[0] -= 1
+        return {"name": unit["name"], "outcome": "ran", "seconds": 0.0}
+
+    args = argparse.Namespace(parallel_shards=3, no_port_guard=True, out_dir=tmp, processes=7,
+                              shard_timeout_base=600, shard_timeout_per_id=None, min_free_gb=0,
+                              shared_queue=False)
+    saved = (run_shard, HEAVY_WAIT_POLL, heavy_lock.heavy_lock)
+    run_shard, HEAVY_WAIT_POLL = fake, 0.02
+    heavy_lock.heavy_lock = lambda owner: contextlib.nullcontext()
+    done = []
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            status = run_units_parallel(queue, "none", args, ("regular.txt", "https.txt"),
+                                        lambda unit, state: done.append(unit["name"]))
+    finally:
+        run_shard, HEAVY_WAIT_POLL, heavy_lock.heavy_lock = saved
+    last = log[-1] if log else None
+    return (status == 0 and len(log) == 6 and last is not None
+            and last[0] == HEAVY_UNIT_NAME and last[1] == HEAVY_PROCESSES
+            and last[2] == "https.txt" and last[3] == 1
+            and all(row[1] == 7 and row[2] == "regular.txt" for row in log[:-1])
+            and done[-1] == HEAVY_UNIT_NAME)
 
 
 def _selftest_prefixes() -> list:
@@ -2160,14 +2360,18 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="run every category in the manifest")
     parser.add_argument("--pilot", action="store_true", help=f"run the pilot selection ({len(PILOT_CATEGORIES)} categories)")
     parser.add_argument("--categories", default=None, help="comma-separated category list")
-    parser.add_argument("--processes", type=int, default=7,
-                        help="wptrunner --processes per shard (default: 7; six concurrent "
-                             "`lumen` instances plus a shard's orphans pushed a 7.6 GB "
-                             "Linux box into OOM — see kill_tree — pass a lower value "
-                             "on a machine that small). With --parallel-shards 3 on a "
-                             "16-thread/32 GB box, 14 measured -16..-35%% wall with the "
-                             "score inside the noise (p2-wpt-runner-throughput.md "
-                             "§процессы на шард)")
+    parser.add_argument("--processes", type=processes_arg, default="7",
+                        help="wptrunner --processes per shard: a number (default: 7; six "
+                             "concurrent `lumen` instances plus a shard's orphans pushed a "
+                             "7.6 GB Linux box into OOM - see kill_tree - pass a lower value "
+                             "on a machine that small) or `auto` (WPT-RUN-18): as many as fit "
+                             "in the memory that is free right now, minus --min-free-gb, "
+                             "shared by --parallel-shards lanes at ~1 GB a browser, at most "
+                             "the CPU count. With --parallel-shards 3 on a 16-thread/32 GB "
+                             "box a constant 14 measured -16..-35%% wall with the score "
+                             "inside the noise (p2-wpt-runner-throughput.md §процессы на "
+                             "шард) - and 1.5 h in swap when the machine was not idle "
+                             "(docs/wpt/pass-rate.md WPT-RUN-16)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--parallel-shards", type=int, default=1,
                         help="run this many shards at once, each on its own copy of the wptserve "
@@ -2192,15 +2396,25 @@ def main() -> int:
                              "pipeline. Measured: same score, -14%% lumen CPU, -40%% mean RSS "
                              "(docs/tasks/p2-wpt-runner-throughput.md §PERF-10)")
     parser.add_argument("--min-free-gb", type=float, default=6.0,
-                        help="with --parallel-shards, a lane waits to start a shard while less "
-                             "physical memory than this is free and another lane is busy "
-                             "(default: 6; 0 disables the gate)")
+                        help="the run's memory floor (default: 6; 0 disables it). Three uses: "
+                             "with --parallel-shards a lane waits to start a unit while less "
+                             "physical memory than this is free and another lane is busy; "
+                             "--processes auto leaves it free; and (WPT-RUN-18) while free "
+                             "memory is below it the watchdog kills the biggest lumen of the "
+                             "run (>= 2 GB; its test -> CRASH, logged as reason low-free in "
+                             "rss-cap-kills.jsonl) instead of letting 40 neighbours page")
     parser.add_argument("--max-browser-gb", type=float, default=browser_rss_cap.DEFAULT_CAP_GB,
                         help="kill a lumen of this run whose resident memory passes this many GB; "
                              "wptrunner reports its test CRASH and restarts the browser "
                              "(tests/wpt/browser_rss_cap.py — healthy browsers peak at ~1 GB, "
                              "the few runaways at 15-25 GB and TIMEOUT with no subtests anyway; "
                              f"default: {browser_rss_cap.DEFAULT_CAP_GB}, 0 disables)")
+    parser.add_argument("--no-heavy-lane", action="store_true",
+                        help="keep the known memory eaters (tests/wpt/heavy_tests.txt) in their "
+                             "ordinary shards instead of running them last, alone, on "
+                             f"{HEAVY_PROCESSES} browsers (WPT-RUN-18; the old behaviour)")
+    parser.add_argument("--heavy-tests", default=HEAVY_TESTS_PATH,
+                        help="the heavy-test list (default: tests/wpt/heavy_tests.txt)")
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=None,
                         help="flat per-id time budget, seconds; default is to derive the "
@@ -2239,6 +2453,14 @@ def main() -> int:
 
     if args.selftest:
         return _selftest()
+    args.processes_note = None
+    if args.processes == "auto" and not args.aggregate_only:
+        args.processes, args.processes_note = resolve_processes(
+            args.processes, args.parallel_shards, args.min_free_gb)
+        print(args.processes_note, flush=True)
+    elif args.processes == "auto":
+        args.processes = "7"  # replaced by the checkpoint's own value below
+    args.processes = int(args.processes)
 
     # PERF-10: testharness without rasterisation unless `--paint`. The env var
     # is inherited by every `run_smoke.py` subprocess (`run_shard` builds its
@@ -2262,9 +2484,22 @@ def main() -> int:
     manifest = load_manifest()
     prefixes = parse_prefixes(args.prefixes)
     exclude_prefixes = parse_prefixes(args.exclude_prefixes)
+    heavy, memory = {}, {}
+    if not (args.no_heavy_lane or args.aggregate_only):
+        try:
+            heavy = load_heavy_tests(args.heavy_tests)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
     if os.path.isfile(state_path):
         with open(state_path, encoding="utf-8") as fh:
             recorded = json.load(fh)
+        if args.resume and sorted(recorded.get("heavy_tests") or []) != sorted(heavy):
+            print(f"{state_path} was written with {len(recorded.get('heavy_tests') or [])} "
+                  f"heavy-lane test file(s); this command has {len(heavy)}. Shards of the "
+                  f"same name would cover different ids - use a separate --out-dir, or "
+                  f"--no-heavy-lane / --heavy-tests to match the recorded run", file=sys.stderr)
+            return 1
         recorded_filter = (recorded.get("prefixes") or [], recorded.get("exclude_prefixes") or [])
         if args.aggregate_only and not (prefixes or exclude_prefixes):
             # Scoring an existing run: the filter belongs to the run, as the
@@ -2286,6 +2521,9 @@ def main() -> int:
     if args.aggregate_only:
         checkpoint = json.load(open(state_path, encoding="utf-8")) if os.path.isfile(state_path) else {}
         shard_states = checkpoint.get("shards", [])
+        heavy = {path: "" for path in checkpoint.get("heavy_tests") or []}
+        if checkpoint.get("processes"):
+            args.processes = checkpoint["processes"]
         # Same reason as the commit: with no checkpoint there is no build to
         # name, and the CLI default names one that never ran anything.
         binary = args.binary or checkpoint.get("binary") or "unknown"
@@ -2322,26 +2560,45 @@ def main() -> int:
             print("pick a selection: --all, --pilot or --categories", file=sys.stderr)
             return 1
 
-        shards = plan_shards(manifest, categories, prefixes, exclude_prefixes)
+        shards = plan_shards(manifest, categories, prefixes, exclude_prefixes, heavy or None)
         print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids "
               f"({sum(s['auto_ids'] for s in shards)} automatable — the scored denominator), "
               f"--processes={args.processes}", flush=True)
+        heavy_shards = [s for s in shards if is_heavy(s)]
+        if heavy_shards:
+            print(f"heavy lane: {sum(s['auto_ids'] for s in heavy_shards)} ids of "
+                  f"{len(heavy_exclusions(heavy_shards))} known memory-eating file(s) leave "
+                  f"their shards and run last, alone, on {HEAVY_PROCESSES} browsers "
+                  f"({args.heavy_tests}; still in the denominator)", flush=True)
 
-        exclude_file = None
+        # Two exclude files (`pick_exclude`): the ordinary shards leave the heavy
+        # tests to the heavy lane; the heavy lane itself only skips what
+        # --skip-https skips.
+        https_file = heavy_file = exclude_file = None
+        skipped = []
         if args.skip_https:
             skipped = https_ids(manifest, set(categories), prefixes, exclude_prefixes)
-            exclude_file = os.path.join(args.out_dir, "exclude-https.txt")
-            with open(exclude_file, "w", encoding="utf-8") as fh:
+            https_file = os.path.join(args.out_dir, "exclude-https.txt")
+            with open(https_file, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(skipped) + "\n")
             print(f"--skip-https: {len(skipped)} ids excluded from the run "
                   f"(still in the denominator, scored 0)", flush=True)
+        if heavy_shards:
+            exclude_file = os.path.join(args.out_dir, "exclude-regular.txt")
+            with open(exclude_file, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(sorted(set(heavy_exclusions(shards)) | set(skipped))) + "\n")
+            heavy_file = https_file
+        else:
+            exclude_file = https_file
+        exclude_files = (exclude_file, heavy_file)
 
         shard_states = []
         if args.resume and os.path.isfile(state_path):
             with open(state_path, encoding="utf-8") as fh:
                 previous = json.load(fh)["shards"]
             budgets = {s["name"]: shard_timeout(s, args.shard_timeout_base,
-                                                args.shard_timeout_per_id, args.processes)
+                                                args.shard_timeout_per_id,
+                                                unit_processes(s, args.processes))
                        for s in shards}
             dropped_shards = set()
             if args.retry_timeouts:
@@ -2368,6 +2625,7 @@ def main() -> int:
             with open(state_path, "w", encoding="utf-8") as fh:
                 json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
                            "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
+                           "heavy_tests": sorted(heavy), "processes": args.processes,
                            "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
 
         def finish(unit, state):
@@ -2377,16 +2635,18 @@ def main() -> int:
             write_checkpoint()
             return states
 
-        rss_cap = browser_rss_cap.BrowserRssCap(args.max_browser_gb, args.out_dir)
+        rss_cap = browser_rss_cap.BrowserRssCap(args.max_browser_gb, args.out_dir,
+                                                min_free_gb=args.min_free_gb)
         if rss_cap.start():
             print(f"--max-browser-gb {args.max_browser_gb}: a lumen of this run above it is "
-                  f"killed (test -> CRASH), kills logged to {browser_rss_cap.KILLS_FILE}",
-                  flush=True)
+                  f"killed (test -> CRASH), kills logged to {browser_rss_cap.KILLS_FILE}; "
+                  f"--min-free-gb {args.min_free_gb}: below it the biggest lumen goes "
+                  f"(reason low-free); memory log {browser_rss_cap.MEM_LOG_FILE}", flush=True)
         else:
             rss_cap = None
         try:
             if args.parallel_shards > 1:
-                status = run_units_parallel(units, binary, args, exclude_file, finish, rss_cap)
+                status = run_units_parallel(units, binary, args, exclude_files, finish, rss_cap)
                 if status:
                     return status
             for index, shard in enumerate(units if args.parallel_shards <= 1 else [], 1):
@@ -2412,8 +2672,9 @@ def main() -> int:
                     # entirely, since a caught-nothing SIGKILL runs no Python at
                     # all (BUG-1029).
                     port_guard.reap_lumen_orphans(own_pid=os.getpid())
+                processes = unit_processes(shard, args.processes)
                 budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
-                                       args.processes)
+                                       processes)
                 print(f"[{index}/{len(units)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
                 # BUG-1029 §3: held per shard, not for the whole (possibly
                 # multi-day, --resume'd) run — a shard's browsers are the memory
@@ -2421,14 +2682,15 @@ def main() -> int:
                 # scripts/cargo-heavy.sh get in during the gap instead of being
                 # starved for as long as this corpus run keeps going.
                 with heavy_lock.heavy_lock(f"run_corpus.py pid={os.getpid()} shard={shard['name']}"):
-                    state = run_shard(shard, binary, args.out_dir, args.processes, budget,
-                                      exclude_file, rss_cap=rss_cap,
+                    state = run_shard(shard, binary, args.out_dir, processes, budget,
+                                      pick_exclude(exclude_files, shard), rss_cap=rss_cap,
                                       shared_queue=args.shared_queue)
                 finish(shard, state)
                 print(f" {state['outcome']} in {state['seconds']}s", flush=True)
         finally:
             if rss_cap is not None:
                 rss_cap.stop()
+                memory = rss_cap.summary()
 
     # A run only gets to be scored against what it actually covered. The scope
     # is derived from the shards, not from the CLI selection, so a resumed or
@@ -2482,6 +2744,11 @@ def main() -> int:
             "no_paint": os.environ.get("LUMEN_NO_PAINT") == "1",
             "max_browser_gb": getattr(args, "max_browser_gb", 0),
             "rss_cap_kills": len(browser_rss_cap.load_kills(args.out_dir)),
+            "low_free_kills": sum(1 for kill in browser_rss_cap.load_kills(args.out_dir)
+                                  if kill.get("reason") == "low-free"),
+            "min_free_gb": getattr(args, "min_free_gb", 0),
+            "heavy_tests": sorted(heavy),
+            "memory": memory,
             "scope": sorted(scope) if scope else "full-corpus",
             "prefixes": prefixes,
             "exclude_prefixes": exclude_prefixes,
@@ -2493,7 +2760,7 @@ def main() -> int:
         # are deleted after the run (WPT-RUN-17).
         ids_path = ids_file.ids_path_for(args.run_json)
         size = ids_file.write(ids_path, attribute_shards(manifest, per_test, shard_states,
-                                                         prefixes, exclude_prefixes))
+                                                         prefixes, exclude_prefixes, heavy))
         snapshot["ids_file"] = os.path.basename(ids_path)
         with open(args.run_json, "w", encoding="utf-8") as fh:
             json.dump(snapshot, fh, indent=2, sort_keys=True)
