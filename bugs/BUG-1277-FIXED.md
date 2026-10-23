@@ -36,3 +36,9 @@ WPT `css/css-ui/compute-kind-widget-generated/*` — 538 reftest упали (but
 `textarea`, `select multiple`, `input type=color`, `meter`, `progress` и 10 `grouped-*`), 264 проходят (checkbox,
 radio, select dropdown/menulist-button, link, range); плюс `compute-kind-widget-no-fallback-props-001.html`.
 `reftest_pixdiff.py --viewport 800x600`: все 539 — `thick` (от 328 до 24 332 пикселей на пару).
+
+## Доработка 2026-10-23 (p4-appearance-disabling)
+
+Первый срез снимал UA-стиль, но `appearance: none`-эталон WPT всё равно расходился с «авторская копия UA-значения»: strip обнулял ширины рамки, а `border-*-width: 1px` от автора возвращал рамку (стиль `solid` оставался). Теперь strip сбрасывает и `border-*-style` в `none` (`ua.rs::strip_ua_appearance_box_styling`) — одиночная ширина рамку не воскрешает. `<input type=color>` добавлен в отключаемые виджеты (эталон — `appearance:none`), а плитка цвета больше не гасится `appearance:none` (как `::-webkit-color-swatch` в Chrome). Логические `border-{start,end}-{start,end}-radius` (CSS Logical L1 §3.3) разрешаются по `writing-mode` + `direction` — раньше `getComputedStyle` отдавал пустую строку, `setProperty("", …)` удалял декларацию и виджет не отключался.
+
+Остаток кластера: `border-image-*` (свойства не разбираются — строка `border-image` в `CSS-SPECS.md`) и `background-color` у `<button>` (strip делает фон прозрачным, авторская копия `buttonface` — нет).

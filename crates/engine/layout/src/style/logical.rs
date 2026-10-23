@@ -197,6 +197,57 @@ pub(in crate::style) fn resolve_logical_properties(style: &mut ComputedStyle) {
             *slot = v;
         }
     }
+
+    // border-{start,end}-{start,end}-radius → the physical corner of each (block side, inline side).
+    if let Some(radii) = style.border_logical_radii.take() {
+        for (slot, radius) in radii.iter().enumerate() {
+            let Some((inline_r, block_r)) = radius else { continue };
+            let corner = logical_corner(style, slot);
+            // The first value is the radius along the inline axis; for a vertical writing mode
+            // that axis is the physical y axis, so the pair swaps.
+            let (x, y) = if vertical_wm { (block_r, inline_r) } else { (inline_r, block_r) };
+            let (cx, cy) = match corner {
+                Corner::TopLeft => (&mut style.border_top_left_radius, &mut style.border_top_left_radius_y),
+                Corner::TopRight => (&mut style.border_top_right_radius, &mut style.border_top_right_radius_y),
+                Corner::BottomRight => (&mut style.border_bottom_right_radius, &mut style.border_bottom_right_radius_y),
+                Corner::BottomLeft => (&mut style.border_bottom_left_radius, &mut style.border_bottom_left_radius_y),
+            };
+            *cx = x.clone();
+            *cy = y.clone();
+        }
+    }
+}
+
+/// Every vertical `writing-mode` runs its inline axis along the physical y axis.
+pub(in crate::style) fn is_vertical_writing_mode(wm: WritingMode) -> bool {
+    matches!(
+        wm,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    )
+}
+
+/// A physical box corner.
+#[derive(Clone, Copy, PartialEq)]
+pub(in crate::style) enum Corner {
+    TopLeft,
+    TopRight,
+    BottomRight,
+    BottomLeft,
+}
+
+/// The physical corner that flow-relative slot `slot` (`0` start-start, `1` start-end,
+/// `2` end-start, `3` end-end; first word = block side, second = inline side) names under
+/// `style`'s own `writing-mode` and `direction`.
+pub(in crate::style) fn logical_corner(style: &ComputedStyle, slot: usize) -> Corner {
+    let [inline_start, inline_end, block_start, block_end] = flow_relative_sides(style);
+    let block = if slot < 2 { block_start } else { block_end };
+    let inline = if slot.is_multiple_of(2) { inline_start } else { inline_end };
+    match (block, inline) {
+        (Side::Top, Side::Left) | (Side::Left, Side::Top) => Corner::TopLeft,
+        (Side::Top, Side::Right) | (Side::Right, Side::Top) => Corner::TopRight,
+        (Side::Bottom, Side::Right) | (Side::Right, Side::Bottom) => Corner::BottomRight,
+        _ => Corner::BottomLeft,
+    }
 }
 
 /// A physical box side.
