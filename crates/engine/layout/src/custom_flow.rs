@@ -147,7 +147,12 @@ impl<'s> CustomFlow<'s> {
         old: &ComputedStyle,
         new: &ComputedStyle,
     ) -> Option<Self> {
-        if disabled() || old.custom_props == new.custom_props || doc.has_author_shadow_roots() {
+        if disabled()
+            || old.custom_props == new.custom_props
+            || doc.has_author_shadow_roots()
+            // BUG-1505: script registrations compute values the dependency analysis cannot see.
+            || !doc.registered_custom_properties().is_empty()
+        {
             return None;
         }
         let mut probe = new.clone();

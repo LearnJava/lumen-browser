@@ -663,6 +663,15 @@ impl V8JsRuntime {
                 Arc::clone(&flush_stale),
                 Arc::clone(&dom_touched),
             )?;
+            install::install_registered_properties(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&doc),
+                Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
+                Arc::clone(&dom_touched),
+            )?;
             install::install_contenteditable(scope, ctx, store, Arc::clone(&doc))?;
             install::install_design_mode(
                 scope,

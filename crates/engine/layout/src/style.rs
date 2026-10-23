@@ -156,7 +156,7 @@ use adjust::{
     resolve_system_colors_in_style,
 };
 pub use property_syntax::validate_against_syntax;
-use property_syntax::apply_property_initial_values;
+use property_syntax::{apply_property_initial_values, compute_registered_values};
 // BUG-531: `CSS.registerProperty()` (`crates/js/src/css_properties_values_api.rs`)
 // is the only consumer outside `crate::style` — reachable only through this
 // re-export, since `syntax_string` itself stays private (§2.1).

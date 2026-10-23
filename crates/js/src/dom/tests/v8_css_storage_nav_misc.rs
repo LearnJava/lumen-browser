@@ -433,13 +433,14 @@ fn css_register_property_requires_name() {
 #[test]
 fn css_register_property_requires_dash_prefix() {
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "try { CSS.registerProperty({ name: 'my-color' }); false; } catch (e) { e instanceof SyntaxError; }"));
+    assert!(bool_eval(&rt, "try { CSS.registerProperty({ name: 'my-color', inherits: false }); false; } catch (e) { e instanceof SyntaxError; }"));
 }
 
 #[test]
-fn css_register_property_default_inherits() {
+fn css_register_property_requires_inherits() {
+    // BUG-1505: `inherits` is a `required` dictionary member (no default).
     let rt = v8_runtime_with_dom(make_doc());
-    assert!(bool_eval(&rt, "CSS.registerProperty({ name: '--default-inherit', syntax: '*', initialValue: 'val' }); CSS._getRegisteredProperties()['--default-inherit'].inherits"));
+    assert!(bool_eval(&rt, "try { CSS.registerProperty({ name: '--no-inherits', syntax: '*', initialValue: 'val' }); false; } catch (e) { e instanceof TypeError; }"));
 }
 
 #[test]
@@ -458,7 +459,7 @@ fn css_register_property_rejects_malformed_syntax() {
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(
         &rt,
-        "try { CSS.registerProperty({ name: '--bad-syntax', syntax: '<length', initialValue: '10px' }); false; } \
+        "try { CSS.registerProperty({ name: '--bad-syntax', syntax: '<length', inherits: false, initialValue: '10px' }); false; } \
          catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"
     ));
 }
@@ -468,7 +469,7 @@ fn css_register_property_rejects_mismatched_initial_value() {
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(
         &rt,
-        "try { CSS.registerProperty({ name: '--bad-initial', syntax: '<color>', initialValue: '10px' }); false; } \
+        "try { CSS.registerProperty({ name: '--bad-initial', syntax: '<color>', inherits: false, initialValue: '10px' }); false; } \
          catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"
     ));
 }
@@ -478,7 +479,7 @@ fn css_register_property_rejects_missing_initial_value_for_typed_syntax() {
     let rt = v8_runtime_with_dom(make_doc());
     assert!(bool_eval(
         &rt,
-        "try { CSS.registerProperty({ name: '--no-initial', syntax: '<length>' }); false; } \
+        "try { CSS.registerProperty({ name: '--no-initial', syntax: '<length>', inherits: false }); false; } \
          catch (e) { e instanceof DOMException && e.name === 'SyntaxError'; }"
     ));
 }

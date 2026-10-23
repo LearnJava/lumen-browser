@@ -26,7 +26,8 @@ use crate::style::{
     apply_bgcolor_presentational_hint, apply_bordercolor_presentational_hint,
     apply_cellspacing_presentational_hint, apply_declaration, apply_dir_presentational_hint,
     apply_font_element_presentational_hints, apply_font_size, apply_forced_colors_mode,
-    apply_image_presentational_hints, apply_property_initial_values, apply_quirks_html_height,
+    apply_image_presentational_hints, apply_property_initial_values, compute_registered_values,
+    apply_quirks_html_height,
     apply_quirks_line_height, apply_quirks_table_reset, apply_svg_presentational_hints,
     apply_table_cell_width_hint, apply_text_color_presentational_hint, apply_ua_body_margin,
     apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls, apply_ua_form_controls_field_sizing_clear,
@@ -515,9 +516,22 @@ pub(crate) fn compute_style_shareable(
     // на типичной странице 0..5 @property-правил, накладные расходы мизерны
     // в сравнении со стоимостью каскада. При повторе имени (см. spec —
     // last wins) `insert` корректно сохраняет последнее объявление.
+    // BUG-1505: `CSS.registerProperty()` registrations live on the document and are
+    // chained last, so a script registration wins over an `@property` rule of the same name.
+    let script_rules: Vec<PropertyRule> = doc
+        .registered_custom_properties()
+        .iter()
+        .map(|p| PropertyRule {
+            name: p.name.clone(),
+            syntax: p.syntax.clone(),
+            inherits: p.inherits,
+            initial_value: p.initial_value.clone(),
+        })
+        .collect();
     let registry: HashMap<&str, &PropertyRule> = sheet
         .properties
         .iter()
+        .chain(script_rules.iter())
         .map(|p| (p.name.as_str(), p))
         .collect();
 
@@ -1429,6 +1443,11 @@ pub(crate) fn compute_style_shareable(
     if doc.get(node).parent == Some(doc.root()) {
         style.root_font_size = style.font_size;
         style.root_zoom = style.effective_zoom;
+    }
+    // CSS Properties and Values L1 §2.3: registered values are made absolute against this
+    // element's own font-size, before any property reads them through `var()`.
+    if !registry.is_empty() {
+        compute_registered_values(&mut style.custom_props, &registry, style.font_size, viewport);
     }
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные

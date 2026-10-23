@@ -538,6 +538,19 @@ pub struct ImageAlpha {
     pub alpha: Vec<u8>,
 }
 
+/// A custom property registered by `CSS.registerProperty()` (CSS Properties and
+/// Values API §3.3): the same four descriptors an `@property` rule carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisteredCustomProperty {
+    /// Name with the leading `--`.
+    pub name: String,
+    /// Syntax string (`"<length>"`, `"*"`, …).
+    pub syntax: String,
+    pub inherits: bool,
+    /// `None` only for the universal syntax with no `initialValue`.
+    pub initial_value: Option<String>,
+}
+
 // ── Selection / Range ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -701,6 +714,11 @@ pub struct Document {
     /// Not serialised — captures are transient input state cleared on page restore.
     #[serde(skip)]
     pointer_captures: HashMap<u32, NodeId>,
+    /// Custom properties registered through `CSS.registerProperty()` (BUG-1505), in
+    /// registration order. The cascade consults them next to the `@property` rules of
+    /// the sheet (a script registration wins over a rule of the same name).
+    #[serde(default)]
+    registered_properties: Vec<RegisteredCustomProperty>,
     /// Runtime («dirty») value of a form control, keyed by its `NodeId`.
     ///
     /// HTML LS §4.10.5.5: an `<input>`/`<textarea>` has a *value* that the
@@ -882,6 +900,7 @@ impl Document {
             embedded_documents: HashMap::new(),
             shape_images: HashMap::new(),
             pointer_captures: HashMap::new(),
+            registered_properties: Vec::new(),
             dirty_values: HashMap::new(),
             text_selections: HashMap::new(),
             dirty_checkedness: HashMap::new(),
@@ -1785,6 +1804,29 @@ impl Document {
         }
         self.shape_images.insert(url.to_string(), std::sync::Arc::new(alpha));
         true
+    }
+
+    /// Registers `def` (`CSS.registerProperty()`); `false` when the name is already
+    /// registered by a script — the caller throws `InvalidModificationError`.
+    pub fn register_custom_property(&mut self, def: RegisteredCustomProperty) -> bool {
+        if self.registered_properties.iter().any(|p| p.name == def.name) {
+            return false;
+        }
+        self.registered_properties.push(def);
+        true
+    }
+
+    /// Removes a script registration (`CSS.unregisterProperty()`); `false` when
+    /// the name was not registered by a script.
+    pub fn unregister_custom_property(&mut self, name: &str) -> bool {
+        let before = self.registered_properties.len();
+        self.registered_properties.retain(|p| p.name != name);
+        self.registered_properties.len() != before
+    }
+
+    /// Script registrations in registration order — see [`Self::register_custom_property`].
+    pub fn registered_custom_properties(&self) -> &[RegisteredCustomProperty] {
+        &self.registered_properties
     }
 
     /// Every alpha plane [`Self::set_shape_image`] recorded, keyed by raw URL.
