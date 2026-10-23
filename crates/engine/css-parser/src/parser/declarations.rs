@@ -200,10 +200,24 @@ impl<'a> Parser<'a> {
                         let quoted = self.rest().trim_start().starts_with(['"', '\'']);
                         in_url = !quoted;
                     }
+                    // CSS Variables L1 §3: the function name is ASCII case-insensitive
+                    // (`VAR(--a)`); downstream code looks for the lowercase `var(`.
+                    let n = s.len();
+                    if c == '('
+                        && n >= 4
+                        && s.as_bytes()[n - 4..].eq_ignore_ascii_case(b"var(")
+                        && (n == 4 || !is_ident_byte(s.as_bytes()[n - 5]))
+                    {
+                        s.replace_range(n - 4.., "var(");
+                    }
                 }
                 (None, ')') | (None, ']') | (None, '}') => {
                     if stack.last() == Some(&c) {
                         stack.pop();
+                    } else if c != '}' && !decode_escapes {
+                        // A custom property is a `<declaration-value>`: no unmatched `)`/`]` (CSS Variables L1
+                        // §2.1): `--a: red)` is dropped, the earlier `--a` stays (BUG-1500).
+                        valid = false;
                     }
                     self.consume();
                     s.push(c);
@@ -222,6 +236,10 @@ impl<'a> Parser<'a> {
         }
         (s, valid)
     }
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b >= 0x80
 }
 
 /// Whether an expanded escape `d` can be spliced into the value text as

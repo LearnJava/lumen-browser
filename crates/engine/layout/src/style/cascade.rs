@@ -17,6 +17,7 @@ use lumen_css_parser::{
 use lumen_dom::{Document, DocumentMode, NodeData, NodeId};
 
 use crate::font_palette::resolve_font_palette_overrides;
+use crate::style::substitute::{contains_env_call, env_calls_well_formed, substitution_value_well_formed};
 use crate::style::CaseLang;
 use crate::style::presentational::is_svg_presentational_element;
 use crate::style::share_safety::selector_is_share_safe;
@@ -1259,6 +1260,13 @@ pub(crate) fn compute_style_shareable(
     for (_, _, _, _, _, _, decl, _) in &matched {
         if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
+            // BUG-1500: `var()`/`env()` с недопустимым телом (`!`/`;` в fallback-е,
+            // лишний `!important`) — ошибка разбора, декларации как будто нет.
+            if (decl.value.contains("var(") || contains_env_call(&decl.value))
+                && !(substitution_value_well_formed(&decl.value) && env_calls_well_formed(&decl.value))
+            {
+                continue;
+            }
             if let Some(prop_rule) = registry.get(key.as_str())
                 && !decl.value.contains("var(")
                 && !validate_against_syntax(&decl.value, &prop_rule.syntax)

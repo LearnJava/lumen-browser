@@ -2328,6 +2328,10 @@ mod scroll_state_queries;
 mod style_container_any_element;
 
 #[cfg(test)]
+#[path = "tests/var_invalid_declaration_value.rs"]
+mod var_invalid_declaration_value;
+
+#[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]
 mod scroll_initial_target_tests;
 

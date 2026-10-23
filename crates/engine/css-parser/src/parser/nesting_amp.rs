@@ -37,13 +37,27 @@ pub(super) fn prelude_terminator(input: &str) -> (usize, Option<char>) {
     (input.len(), None)
 }
 
+/// `prelude` — это `ident :` (имя свойства и двоеточие, дальше сразу `{`).
+fn is_property_colon_prelude(prelude: &str) -> bool {
+    let Some(head) = prelude.trim_end().strip_suffix(':') else {
+        return false;
+    };
+    let head = head.trim_end();
+    !head.is_empty() && head.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_') || !c.is_ascii())
+}
+
 impl Parser<'_> {
     /// Курсор на идентификаторе в теле стилевого правила: до ближайшего `;`/`}`
     /// верхнего уровня встречается `{` — это вложенное правило с типовым селектором.
     /// Пользовательское свойство (`--x: {…}`) остаётся объявлением. Курсор не сдвигается.
+    ///
+    /// Так же остаётся объявлением `ident : {…}`: `{}`-блок, которым значение
+    /// начинается, — допустимое значение (CSS Syntax §5.4.4; `color: { [ var(--a) ] }`,
+    /// BUG-1500), а `ident:` без продолжения не бывает селектором.
     pub(super) fn ident_led_block_ahead(&self) -> bool {
         let rest = &self.input[self.pos..];
-        matches!(prelude_terminator(rest), (_, Some('{'))) && !rest.starts_with("--")
+        let (len, term) = prelude_terminator(rest);
+        term == Some('{') && !rest.starts_with("--") && !is_property_colon_prelude(&rest[..len])
     }
 
     /// Prelude с ведущим `&` и ещё одним `&` дальше по цепочке (`& + &`, `&.a &`):

@@ -275,12 +275,28 @@ fn top_level_positions(b: &[u8], targets: &[u8]) -> Vec<(usize, u8)> {
             b'\\' => q += 1,
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            // `<!--` is one <CDO-token>, not a `!` delimiter.
+            b'!' if q > 0 && b[q - 1] == b'<' && b[q + 1..].starts_with(b"--") => {}
             _ if depth == 0 && targets.contains(&c) => found.push((q, c)),
             _ => {}
         }
         q += 1;
     }
     found
+}
+
+/// Ident characters, where a backslash plus the next byte is an escape (`--\30`, `--\d800`).
+fn is_ident_with_escapes(b: &[u8]) -> bool {
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' {
+            i += 1;
+        } else if !is_ident_byte(b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 fn is_ident_byte(c: u8) -> bool {
@@ -401,8 +417,10 @@ fn parse_paren_content(inner: &[u8]) -> SupportsCondition {
 /// одного раза, в конце и ровно этим словом.
 fn parse_declaration(property: &str, value: &str) -> SupportsCondition {
     let pb = property.as_bytes();
+    // `--` alone is reserved by CSS Variables L1 §2, not a custom property name.
     let valid_name = !pb.is_empty()
-        && pb.iter().all(|&c| is_ident_byte(c))
+        && property != "--"
+        && is_ident_with_escapes(pb)
         && !pb[0].is_ascii_digit()
         && !(pb[0] == b'-' && pb.get(1).is_some_and(u8::is_ascii_digit));
     if !valid_name {
@@ -426,7 +444,53 @@ fn parse_declaration(property: &str, value: &str) -> SupportsCondition {
     if body.is_empty() && !custom {
         return SupportsCondition::Unknown;
     }
+    if !var_calls_valid(body) {
+        return SupportsCondition::Unknown;
+    }
     SupportsCondition::Decl { property: property.to_string(), value: body.to_string() }
+}
+
+/// Каждый `var()` в `value` разбирается по CSS Variables L1 §3: голова — ровно
+/// один `--ident`, а fallback (`<declaration-value>`) не содержит `!` и `;` на
+/// своём верхнем уровне (`var(--a,!)`, `var(--a,;)`, `var(1px)` — ошибка
+/// разбора, и условие `@supports` над такой декларацией ложно, BUG-1500).
+/// Fallback проверяется рекурсивно. Значение без `var(` — всегда `true`.
+fn var_calls_valid(value: &str) -> bool {
+    let b = value.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => i = string_end(b, i),
+            b'/' if b.get(i + 1) == Some(&b'*') => i = comment_end(b, i),
+            b'v' | b'V'
+                if b.len() >= i + 4
+                    && b[i..i + 4].eq_ignore_ascii_case(b"var(")
+                    && (i == 0 || !is_ident_byte(b[i - 1])) =>
+            {
+                let open = i + 3;
+                let close = block_end(b, open);
+                let args = &b[open + 1..close];
+                let comma = top_level_positions(args, b",").first().map(|&(p, _)| p);
+                let head = &args[..comma.unwrap_or(args.len())];
+                let head = String::from_utf8_lossy(head);
+                let name = head.trim();
+                if !(name.len() > 2 && name.starts_with("--") && is_ident_with_escapes(name.as_bytes())) {
+                    return false;
+                }
+                if let Some(c) = comma {
+                    let fallback = &args[c + 1..];
+                    if !top_level_positions(fallback, b"!;").is_empty()
+                        || !var_calls_valid(&String::from_utf8_lossy(fallback))
+                    {
+                        return false;
+                    }
+                }
+                i = close + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    true
 }
 
 /// Хвост после `!`: ровно слово `important` (регистр не важен), пробелы и
