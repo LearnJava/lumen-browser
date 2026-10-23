@@ -536,6 +536,44 @@ use super::*;
         assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
     }
 
+    // ── `@mixin` conditional groups and invalid parameter lists (BUG-1508) ──
+
+    fn mixin_color(css: &str) -> Color {
+        cascade_at("<div class=\"box\"></div>", css, &[0]).color
+    }
+
+    const GREEN: Color = Color { r: 0, g: 128, b: 0, a: 255 };
+
+    #[test]
+    fn css_mixin_media_inside_result_applies_when_it_holds() {
+        // Probe 1 of BUG-1508.
+        let css = |cond: &str| {
+            format!(
+                "@mixin --m() {{ @result {{ color: red; @media {cond} {{ color: green; }} }} }}                  .box {{ @apply --m; }}"
+            )
+        };
+        assert_eq!(mixin_color(&css("all")), GREEN);
+        assert_eq!(mixin_color(&css("not all")), Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_mixin_groups_wrap_result_and_locals_in_source_order() {
+        // `mixin-conditionals.html` m1/m3/m5: a group around `@result`, around
+        // locals, and a bare local that overrides an earlier grouped one.
+        let m1 = "@mixin --m() { @result { color: red; } @media all { @result { color: green; } }                   @media not all { @result { color: red; } } } .box { @apply --m; }";
+        assert_eq!(mixin_color(m1), GREEN);
+        let m3 = "@mixin --m() { --c: red; @media all { --c: green; } @supports (color: green) { --d: blue; }                   @media not all { --c: red; } @result { color: var(--c); } } .box { @apply --m; }";
+        assert_eq!(mixin_color(m3), GREEN);
+        let m5 = "@mixin --m() { @media all { --c: pink; } --c: green; @result { color: var(--c); } }                   .box { @apply --m; }";
+        assert_eq!(mixin_color(m5), GREEN);
+    }
+
+    #[test]
+    fn css_mixin_invalid_parameter_list_keeps_the_earlier_definition() {
+        let css = "@mixin --m() { @result { color: green; } }                    @mixin --m(junk-in-parameter-list) { @result { color: red; } } .box { @apply --m; }";
+        assert_eq!(mixin_color(css), GREEN);
+    }
+
     // ── `scrollbar-gutter` (BUG-505): `stable && both-edges?`, order-independent ──
 
     #[test]

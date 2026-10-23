@@ -83,6 +83,17 @@ fn unwrap_type_function(raw: &str) -> &str {
     }
 }
 
+/// Итог [`Parser::open_conditional_group`].
+pub(super) enum ConditionalGroupOpen {
+    /// Не `@media`/`@supports`; курсор возвращён на `@`.
+    Other,
+    /// `@media`/`@supports` без блока (`;`), уже съедено.
+    NoBlock,
+    /// Условие разобрано, `{` съедена. `prelude` — исходный текст `@media …` /
+    /// `@supports …` для сериализации CSSOM.
+    Open { condition: LayerCondition, prelude: String },
+}
+
 /// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
 /// Color L5 §4. Declares a named custom colour profile referenced from
 /// `color(--name c1 c2 c3)`. The descriptors are parsed here; the profile bytes
@@ -1044,6 +1055,45 @@ impl<'a> Parser<'a> {
         Some(FunctionRule { name, parameters, returns, body })
     }
 
+    /// Курсор на `@`: если это `@media`/`@supports` с блоком, разбирает
+    /// условие и съедает `{` — тело читает вызывающий (CSS Functions and
+    /// Mixins L1 §3.2: условные группы внутри `@function`/`@mixin`).
+    pub(super) fn open_conditional_group(&mut self) -> ConditionalGroupOpen {
+        let start = self.pos;
+        self.consume(); // '@'
+        let name = self.parse_ident().unwrap_or_default();
+        let is_media = name.eq_ignore_ascii_case("media");
+        if !is_media && !name.eq_ignore_ascii_case("supports") {
+            self.pos = start;
+            return ConditionalGroupOpen::Other;
+        }
+        self.skip_ws_and_comments();
+        let prelude_start = self.pos;
+        let mut depth = 0i32;
+        while let Some(c) = self.peek() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = (depth - 1).max(0),
+                '{' | ';' if depth == 0 => break,
+                _ => {}
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            self.consume(); // `;` — at-rule without a block
+            return ConditionalGroupOpen::NoBlock;
+        }
+        let prelude = self.input[prelude_start..self.pos].trim();
+        let condition = if is_media {
+            LayerCondition::Media(parse_media_query(prelude))
+        } else {
+            LayerCondition::Supports(parse_supports_condition(prelude))
+        };
+        let prelude = format!("@{} {prelude}", if is_media { "media" } else { "supports" }).trim_end().to_string();
+        self.consume(); // '{'
+        ConditionalGroupOpen::Open { condition, prelude }
+    }
+
     /// Тело `@function` после уже съеденной `{` до парной `}` (съедается):
     /// объявления и вложенные `@media`/`@supports` группы (рекурсивно).
     /// Прочие вложенные at-правила пропускаются целиком, как и раньше.
@@ -1060,42 +1110,14 @@ impl<'a> Parser<'a> {
                 Some(';') => {
                     self.consume();
                 }
-                Some('@') => {
-                    let start = self.pos;
-                    self.consume();
-                    let name = self.parse_ident().unwrap_or_default();
-                    let is_media = name.eq_ignore_ascii_case("media");
-                    if !is_media && !name.eq_ignore_ascii_case("supports") {
-                        self.pos = start;
-                        self.recover_to_decl_boundary();
-                        continue;
+                Some('@') => match self.open_conditional_group() {
+                    ConditionalGroupOpen::Open { condition, .. } => {
+                        let inner = self.parse_function_body();
+                        items.push(FunctionBodyItem::Conditional { condition, items: inner });
                     }
-                    self.skip_ws_and_comments();
-                    let prelude_start = self.pos;
-                    let mut depth = 0i32;
-                    while let Some(c) = self.peek() {
-                        match c {
-                            '(' => depth += 1,
-                            ')' => depth = (depth - 1).max(0),
-                            '{' | ';' if depth == 0 => break,
-                            _ => {}
-                        }
-                        self.consume();
-                    }
-                    if self.peek() != Some('{') {
-                        self.consume(); // `;` — at-rule without a block
-                        continue;
-                    }
-                    let prelude = self.input[prelude_start..self.pos].trim();
-                    let condition = if is_media {
-                        LayerCondition::Media(parse_media_query(prelude))
-                    } else {
-                        LayerCondition::Supports(parse_supports_condition(prelude))
-                    };
-                    self.consume(); // '{'
-                    let inner = self.parse_function_body();
-                    items.push(FunctionBodyItem::Conditional { condition, items: inner });
-                }
+                    ConditionalGroupOpen::NoBlock => {}
+                    ConditionalGroupOpen::Other => self.recover_to_decl_boundary(),
+                },
                 Some(_) => match self.parse_declaration() {
                     Some(d) => items.push(FunctionBodyItem::Decl(d)),
                     None => self.recover_to_decl_boundary(),
