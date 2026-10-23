@@ -1267,6 +1267,30 @@ pub(crate) fn compute_style_shareable(
             {
                 continue;
             }
+            // BUG-1503 (CSS Cascade 4 §7.3): CSS-wide keywords on a custom property are
+            // resolved here, not stored as the literal word. `initial` removes the entry
+            // (guaranteed-invalid; a registered property gets its `initial-value` back from
+            // `apply_property_initial_values`), `inherit` takes the parent's value, `unset`
+            // is `inherit` for an inheriting property and `initial` for `inherits: false`.
+            // `revert*` stay literal: they are resolved against the UA baseline further down.
+            let keyword = decl.value.trim();
+            let wide = ["initial", "inherit", "unset"].into_iter().find(|k| keyword.eq_ignore_ascii_case(k));
+            if let Some(wide) = wide {
+                let inherits = registry.get(key.as_str()).is_none_or(|p| p.inherits);
+                let from_parent = wide == "inherit" || (wide == "unset" && inherits);
+                match from_parent.then(|| inherited.custom_props.get(key.as_str())).flatten() {
+                    Some(parent_value) => {
+                        let parent_value = parent_value.clone();
+                        style.custom_props.make_mut().insert(key, parent_value);
+                    }
+                    None => {
+                        if style.custom_props.contains_key(key.as_str()) {
+                            style.custom_props.make_mut().remove(key.as_str());
+                        }
+                    }
+                }
+                continue;
+            }
             if let Some(prop_rule) = registry.get(key.as_str())
                 && !decl.value.contains("var(")
                 && !validate_against_syntax(&decl.value, &prop_rule.syntax)

@@ -2336,6 +2336,10 @@ mod var_invalid_declaration_value;
 mod var_escaped_name;
 
 #[cfg(test)]
+#[path = "tests/var_css_wide.rs"]
+mod var_css_wide;
+
+#[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]
 mod scroll_initial_target_tests;
 
