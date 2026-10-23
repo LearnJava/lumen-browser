@@ -1,16 +1,17 @@
 //! P1/SPLIT-RN10: WGSL-исходники всех пайплайнов (fill/rrect/text/image/
 //! gradient/circle/shadow/mipgen/cross-fade/composite/path-clip/blend/
-//! mask/filter/blur) + glyph-атлас (`ATLAS_DIM`/`SIZE_BINS`/`size_bin_for`/
+//! mask/filter/blur) + glyph-атлас (`ATLAS_DIM`/`glyph_raster_size`/
 //! `atlas_key`) — из `renderer.rs` (54…1652 до вырезки). Последний батч
 //! группы RN. Вынесено из `renderer.rs`
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа RN, батч RN-10).
 
 use crate::atlas::AtlasKey;
 
-/// Размер атласа в пикселях (квадратный). Поднят с 512 до 1024 под
-/// multi-size atlas: типичная страница использует 2-3 размера шрифта,
-/// что даёт ~3× больше уникальных глифов в кеше.
-pub(crate) const ATLAS_DIM: u32 = 1024;
+/// Размер атласа в пикселях (квадратный). 512 → 1024 под multi-size atlas,
+/// 1024 → 2048 под TEXTQ-1: точные размеры в device px × 4 субпиксельные фазы
+/// дают в несколько раз больше записей, чем прежние 8 bin-ов (страница с
+/// десятком размеров/начертаний переполняла 1024² за кадр).
+pub(crate) const ATLAS_DIM: u32 = 2048;
 
 /// Минимальный запас полосы скролл-композитора с каждой стороны вьюпорта,
 /// в долях его высоты (BUG-405 срез 22).
@@ -64,32 +65,45 @@ pub(crate) const BAND_STRIP_BG_Z: f32 = -10_000.0;
 /// обещает: значение всегда режется по [`wgpu::Adapter::limits`].
 pub(crate) const MAX_TEXTURE_DIM_TARGET: u32 = 8192;
 
-/// Bin размеров растеризации (CSS px). `font_size` округляется до
-/// ближайшего bin вверх через `size_bin_for`. Если ≤ 8 — используется
-/// bin 8 (нечитаемо иначе всё равно); если > 64 — bin 64 с up-scaling-ом
-/// (большие заголовки редки, потеря качества на единичных headline-ах
-/// приемлема в Phase 0). При совпадении font_size с bin-ом квад не
-/// масштабируется (нет blur).
-pub(crate) const SIZE_BINS: [u16; 8] = [8, 12, 16, 20, 24, 32, 48, 64];
+/// Предел размера растеризации глифа, device px. Глиф крупнее растрируется
+/// на этом пределе и растягивается квадом (заголовки в сотни px редки, а
+/// bitmap такого глифа сопоставим с атласом).
+pub(crate) const MAX_GLYPH_RASTER_PX: f32 = 256.0;
 
-/// CSS px → размер растеризации в `SIZE_BINS`. Round-up до ближайшего bin;
-/// > последнего bin — клампим к последнему.
-pub(crate) fn size_bin_for(font_size: f32) -> u16 {
-    // NaN / negative / 0 — недопустимый вход (Phase 0 не должно происходить),
-    // клампим к min-bin без panic. INFINITY = «больше любого bin» → max-bin.
-    if font_size.is_nan() || font_size <= 0.0 {
-        return SIZE_BINS[0];
+/// Размер, до которого глиф получает субпиксельные фазы пера по X, device px.
+/// Крупнее смещение на долю пикселя не видно, а записей в атласе в 4 раза
+/// меньше.
+pub(crate) const SUBPIXEL_MAX_RASTER_PX: f32 = 48.0;
+
+/// Число субпиксельных фаз пера по X (`AtlasKey::x_phase ∈ 0..X_PHASES`).
+pub(crate) const X_PHASES: u8 = 4;
+
+/// Размер растеризации глифа: `(size_q, bitmap_scale)`. `size_q` — размер в
+/// device px × 4 (квант 1/4 px, минимум 1); `bitmap_scale` — во сколько раз
+/// растянуть bitmap до нужного размера: `1.0` всегда, кроме глифа крупнее
+/// [`MAX_GLYPH_RASTER_PX`]. Не-конечный или неположительный вход даёт
+/// минимальный размер без паники.
+pub(crate) fn glyph_raster_size(font_px: f32, dpr: f32) -> (u16, f32) {
+    let raster_px = font_px * dpr;
+    if raster_px.is_nan() || raster_px <= 0.0 {
+        return (1, 1.0);
     }
-    if font_size.is_infinite() {
-        return SIZE_BINS[SIZE_BINS.len() - 1];
+    let capped = raster_px.min(MAX_GLYPH_RASTER_PX);
+    let size_q = (capped * 4.0).round().max(1.0) as u16;
+    (size_q, raster_px / capped)
+}
+
+/// Привязка пера к пиксельной сетке: позиция пера `pen_dev` (device px от
+/// начала run-а) → `(целый пиксель, фаза)`. Малый глиф (`size_q` до
+/// [`SUBPIXEL_MAX_RASTER_PX`]) берёт ближайшую из [`X_PHASES`] четвертей
+/// пикселя, крупный — целый пиксель без фазы.
+pub(crate) fn snap_pen(pen_dev: f32, size_q: u16) -> (i32, u8) {
+    if f32::from(size_q) > SUBPIXEL_MAX_RASTER_PX * 4.0 {
+        return (pen_dev.round() as i32, 0);
     }
-    let target = font_size.ceil() as u16;
-    for &bin in &SIZE_BINS {
-        if bin >= target {
-            return bin;
-        }
-    }
-    SIZE_BINS[SIZE_BINS.len() - 1]
+    let q = (pen_dev * f32::from(X_PHASES)).round() as i32;
+    let phases = i32::from(X_PHASES);
+    (q.div_euclid(phases), q.rem_euclid(phases) as u8)
 }
 
 /// Конструктор `AtlasKey` из renderer-овых типов. face_id хранится в
@@ -100,10 +114,11 @@ pub(crate) fn size_bin_for(font_size: f32) -> u16 {
 pub(crate) fn atlas_key(
     face_id: usize,
     glyph_id: u16,
-    size_bin: u16,
+    size_q: u16,
+    x_phase: u8,
     coords_hash: u64,
 ) -> AtlasKey {
-    AtlasKey::new((face_id & 0xFFFF) as u16, glyph_id, size_bin, coords_hash)
+    AtlasKey::new((face_id & 0xFFFF) as u16, glyph_id, size_q, x_phase, coords_hash)
 }
 
 pub(crate) const FILL_SHADER_SRC: &str = r#"

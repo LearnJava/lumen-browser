@@ -1393,11 +1393,11 @@ pub struct Renderer {
     /// `None` означает «без resolver-а — всегда default face» (для тестов /
     /// headless-режимов).
     pub(crate) font_provider: Option<Arc<dyn FontProvider>>,
-    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id, size_bin)`.
-    /// `face_id` — глифы у разных face-ов имеют разный glyph_id; `size_bin`
-    /// — multi-size atlas (см. `SIZE_BINS`): один и тот же глиф для
-    /// font-size 16 и 32 даёт две разные записи (разная растеризация,
-    /// разный atlas-rect).
+    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id, size_q, x_phase,
+    /// coords_hash)`. `face_id` — глифы у разных face-ов имеют разный glyph_id;
+    /// `size_q` — размер в device px × 4 (TEXTQ-1): один и тот же глиф для
+    /// font-size 16 и 32 (или dpr 1 и 1.5) даёт разные записи; `x_phase` —
+    /// субпиксельная фаза пера по X (разный сдвиг контура, разный atlas-rect).
     pub(crate) cached_glyphs: HashMap<AtlasKey, Option<CachedGlyph>>,
     /// In headless mode: the `RENDER_ATTACHMENT | COPY_SRC` texture rendered to
     /// by the most recent `render()` call. Kept alive between `render()` and

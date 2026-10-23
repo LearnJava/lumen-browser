@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 166 качество текста (TEXTQ)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    width: 1022px; height: 718px;
+    margin: 1px;
+    display: grid;
+    grid-template-columns: 511px 511px;
+    grid-template-rows: 359px 359px;
+    overflow: hidden;
+  }
+  /* Четыре панели: {Arial, Segoe UI} x {чёрный на белом, белый на тёмном}. */
+  .p { padding: 6px 8px; overflow: hidden; line-height: 1.15; white-space: nowrap; }
+  .light { background: #ffffff; color: #000000; }
+  .dark { background: #202020; color: #ffffff; }
+  .arial { font-family: Arial, sans-serif; }
+  .segoe { font-family: "Segoe UI", sans-serif; }
+  .s11 { font-size: 11px; } .s12 { font-size: 12px; } .s13 { font-size: 13px; }
+  .s14 { font-size: 14px; } .s15 { font-size: 15px; } .s16 { font-size: 16px; }
+  .s17 { font-size: 17px; } .s20 { font-size: 20px; } .s28 { font-size: 28px; }
+  .s72 { font-size: 72px; line-height: 1; }
+  /* Дробный left: перо стартует не на целом device px. */
+  .frac { position: relative; left: 10.3px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="p arial light">
+    <div class="s11">Hamburgefonstiv 0123456789 11px</div>
+    <div class="s12">Hamburgefonstiv 0123456789 12px</div>
+    <div class="s13">Hamburgefonstiv 0123456789 13px</div>
+    <div class="s14">Hamburgefonstiv 0123456789 14px</div>
+    <div class="s15">Hamburgefonstiv 0123456789 15px</div>
+    <div class="s16">Hamburgefonstiv 0123456789 16px</div>
+    <div class="s17">Hamburgefonstiv 0123456789 17px</div>
+    <div class="s20">Hamburgefonstiv 20px</div>
+    <div class="s28">Hamburgefonstiv 28</div>
+    <div class="s72">Agy</div>
+    <div class="s13 frac">Fractional left 10.3px: Hamburgefonstiv</div>
+  </div>
+  <div class="p arial dark">
+    <div class="s11">Hamburgefonstiv 0123456789 11px</div>
+    <div class="s12">Hamburgefonstiv 0123456789 12px</div>
+    <div class="s13">Hamburgefonstiv 0123456789 13px</div>
+    <div class="s14">Hamburgefonstiv 0123456789 14px</div>
+    <div class="s15">Hamburgefonstiv 0123456789 15px</div>
+    <div class="s16">Hamburgefonstiv 0123456789 16px</div>
+    <div class="s17">Hamburgefonstiv 0123456789 17px</div>
+    <div class="s20">Hamburgefonstiv 20px</div>
+    <div class="s28">Hamburgefonstiv 28</div>
+    <div class="s72">Agy</div>
+    <div class="s13 frac">Fractional left 10.3px: Hamburgefonstiv</div>
+  </div>
+  <div class="p segoe light">
+    <div class="s11">Hamburgefonstiv 0123456789 11px</div>
+    <div class="s12">Hamburgefonstiv 0123456789 12px</div>
+    <div class="s13">Hamburgefonstiv 0123456789 13px</div>
+    <div class="s14">Hamburgefonstiv 0123456789 14px</div>
+    <div class="s15">Hamburgefonstiv 0123456789 15px</div>
+    <div class="s16">Hamburgefonstiv 0123456789 16px</div>
+    <div class="s17">Hamburgefonstiv 0123456789 17px</div>
+    <div class="s20">Hamburgefonstiv 20px</div>
+    <div class="s28">Hamburgefonstiv 28</div>
+    <div class="s72">Agy</div>
+    <div class="s13 frac">Fractional left 10.3px: Hamburgefonstiv</div>
+  </div>
+  <div class="p segoe dark">
+    <div class="s11">Hamburgefonstiv 0123456789 11px</div>
+    <div class="s12">Hamburgefonstiv 0123456789 12px</div>
+    <div class="s13">Hamburgefonstiv 0123456789 13px</div>
+    <div class="s14">Hamburgefonstiv 0123456789 14px</div>
+    <div class="s15">Hamburgefonstiv 0123456789 15px</div>
+    <div class="s16">Hamburgefonstiv 0123456789 16px</div>
+    <div class="s17">Hamburgefonstiv 0123456789 17px</div>
+    <div class="s20">Hamburgefonstiv 20px</div>
+    <div class="s28">Hamburgefonstiv 28</div>
+    <div class="s72">Agy</div>
+    <div class="s13 frac">Fractional left 10.3px: Hamburgefonstiv</div>
+  </div>
+</div>
+</body>
+</html>

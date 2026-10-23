@@ -10,11 +10,13 @@
 //! растеризованный `Bitmap` от `lumen-font::Rasterizer`. Так atlas
 //! тестируется в изоляции, а renderer связывает font + atlas сам.
 //!
-//! Ключ кэша — структурированный `AtlasKey { face_id, glyph_id, size_bin,
-//! coords_hash }`. Первые три поля закрывают **multi-size glyph caching**
-//! (при `font-size: 16px` глифы растеризируются на bin 16 без
-//! масштабирования, при 32px — на bin 32; раньше всё рисовалось на 24 px
-//! с linear-sampler-blur). `coords_hash` — 64-битный хэш normalized
+//! Ключ кэша — структурированный `AtlasKey { face_id, glyph_id, size_q,
+//! x_phase, coords_hash }`. Поля `size_q`/`x_phase` закрывают **точную
+//! растеризацию под device-пиксель** (TEXTQ-1): `size_q` — размер глифа в
+//! device px (`font_size × scale_factor`), квантованный до 1/4 px, без
+//! корзин-bin и без масштабирования квада; `x_phase` — субпиксельная фаза
+//! пера по X (`0…3` четвертей пикселя), контур глифа растрируется со сдвигом
+//! на `x_phase / 4` px. `coords_hash` — 64-битный хэш normalized
 //! variation coords, который добавляет **variable-fonts caching**: один
 //! `(face, glyph, size)` для двух разных `font-variation-settings` дают
 //! разные записи и не перезаписывают друг друга. Empty coords (default
@@ -40,13 +42,16 @@ use lumen_font::Bitmap;
 pub struct AtlasKey {
     pub face_id: u16,
     pub glyph_id: u16,
-    pub size_bin: u16,
+    /// Размер растеризации в device px × 4 (квант 1/4 px).
+    pub size_q: u16,
+    /// Субпиксельная фаза пера по X: сдвиг контура на `x_phase / 4` px.
+    pub x_phase: u8,
     pub coords_hash: u64,
 }
 
 impl AtlasKey {
-    pub fn new(face_id: u16, glyph_id: u16, size_bin: u16, coords_hash: u64) -> Self {
-        Self { face_id, glyph_id, size_bin, coords_hash }
+    pub fn new(face_id: u16, glyph_id: u16, size_q: u16, x_phase: u8, coords_hash: u64) -> Self {
+        Self { face_id, glyph_id, size_q, x_phase, coords_hash }
     }
 
     /// Стабильный 64-битный хэш normalized variation coords для cache key.
@@ -380,7 +385,7 @@ mod tests {
     }
 
     fn k(glyph: u16) -> AtlasKey {
-        AtlasKey::new(0, glyph, 16, 0)
+        AtlasKey::new(0, glyph, 64, 0, 0)
     }
 
     #[test]
@@ -426,8 +431,8 @@ mod tests {
     #[test]
     fn different_keys_store_separate_entries() {
         let mut atlas = GlyphAtlas::new(64);
-        let key_16 = AtlasKey::new(0, 1, 16, 0);
-        let key_32 = AtlasKey::new(0, 1, 32, 0);
+        let key_16 = AtlasKey::new(0, 1, 64, 0, 0);
+        let key_32 = AtlasKey::new(0, 1, 128, 0, 0);
         let e16 = atlas.insert(key_16, &bitmap(10, 12, 100)).unwrap();
         let e32 = atlas.insert(key_32, &bitmap(20, 24, 100)).unwrap();
         assert_ne!(
@@ -448,8 +453,8 @@ mod tests {
         let mut atlas = GlyphAtlas::new(64);
         let coords_a = [0.0_f32];
         let coords_b = [1.0_f32];
-        let k_a = AtlasKey::new(0, 1, 16, AtlasKey::hash_coords(&coords_a));
-        let k_b = AtlasKey::new(0, 1, 16, AtlasKey::hash_coords(&coords_b));
+        let k_a = AtlasKey::new(0, 1, 64, 0, AtlasKey::hash_coords(&coords_a));
+        let k_b = AtlasKey::new(0, 1, 64, 0, AtlasKey::hash_coords(&coords_b));
         assert_ne!(k_a, k_b, "разные coords дают разные ключи");
         let ea = atlas.insert(k_a, &bitmap(10, 12, 100)).unwrap();
         let eb = atlas.insert(k_b, &bitmap(10, 12, 200)).unwrap();

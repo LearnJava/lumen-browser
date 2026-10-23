@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-10-23T19:58:17",
+  "timestamp": "2026-10-23T22:13:00",
   "git": {
-    "commit": "7f5af0a35",
-    "branch": "p6-devx-22",
-    "subject": "Слияние origin/main в p6-devx-22"
+    "commit": "96f2e7f2a",
+    "branch": "p1-textq-1",
+    "subject": "Влить ветку p1-paint-worklet: CSS Paint API (Worklet, registerPaint, paint() в background-image)"
   },
   "crop_offset": [
-    1928,
+    8,
     99
   ],
   "halted_at": null,
   "summary": {
-    "total": 165,
+    "total": 166,
     "passed": 112,
-    "failed": 7,
+    "failed": 8,
     "errors": 0,
     "debtors": 46,
     "skipped": 0
@@ -234,7 +234,7 @@
       "html": "18-images.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.0798,
+      "diff_pct": 2.0829,
       "diff_region": {
         "top": 28,
         "left": 28,
@@ -255,7 +255,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.7667,
+      "diff_pct": 9.7622,
       "diff_region": {
         "top": 26,
         "left": 26,
@@ -287,7 +287,7 @@
       "html": "21-border-style.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.5355,
+      "diff_pct": 1.5356,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -427,7 +427,7 @@
       "html": "31-clip-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0677,
+      "diff_pct": 0.0623,
       "diff_region": {
         "top": 181,
         "left": 61,
@@ -480,7 +480,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.0787,
+      "diff_pct": 3.0794,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -561,12 +561,12 @@
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0463,
+      "diff_pct": 0.0543,
       "diff_region": {
         "top": 217,
-        "left": 413,
+        "left": 414,
         "bottom": 396,
-        "right": 787
+        "right": 788
       },
       "capture": "ipc"
     },
@@ -631,7 +631,7 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.5051,
+      "diff_pct": 1.4988,
       "diff_region": {
         "top": 0,
         "left": 0,
@@ -727,7 +727,7 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.574,
+      "diff_pct": 0.523,
       "diff_region": {
         "top": 23,
         "left": 21,
@@ -748,12 +748,12 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3633,
+      "diff_pct": 1.2908,
       "diff_region": {
-        "top": 66,
-        "left": 111,
+        "top": 67,
+        "left": 112,
         "bottom": 295,
-        "right": 912
+        "right": 911
       },
       "capture": "gdigrab",
       "debtor": {
@@ -769,7 +769,7 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1825,
+      "diff_pct": 1.0461,
       "diff_region": {
         "top": 36,
         "left": 33,
@@ -790,11 +790,11 @@
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2642,
+      "diff_pct": 0.2493,
       "diff_region": {
         "top": 26,
         "left": 27,
-        "bottom": 678,
+        "bottom": 681,
         "right": 976
       },
       "capture": "ipc"
@@ -806,10 +806,10 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.403,
+      "diff_pct": 0.3476,
       "diff_region": {
-        "top": 124,
-        "left": 122,
+        "top": 125,
+        "left": 123,
         "bottom": 411,
         "right": 711
       },
@@ -838,9 +838,9 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3832,
+      "diff_pct": 0.3296,
       "diff_region": {
-        "top": 184,
+        "top": 185,
         "left": 94,
         "bottom": 401,
         "right": 701
@@ -875,11 +875,11 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0486,
+      "diff_pct": 10.0292,
       "diff_region": {
         "top": 28,
         "left": 25,
-        "bottom": 395,
+        "bottom": 394,
         "right": 1022
       },
       "capture": "gdigrab",
@@ -896,12 +896,12 @@
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3029,
+      "diff_pct": 0.2045,
       "diff_region": {
-        "top": 19,
+        "top": 20,
         "left": 28,
-        "bottom": 649,
-        "right": 988
+        "bottom": 650,
+        "right": 989
       },
       "capture": "ipc"
     },
@@ -912,7 +912,7 @@
       "html": "61-view-transitions.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 10.8081,
+      "diff_pct": 10.7563,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -932,8 +932,8 @@
       "label": "CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers",
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.5535,
+      "status": "FAIL",
+      "diff_pct": 0.4774,
       "diff_region": {
         "top": 0,
         "left": 0,
@@ -944,7 +944,7 @@
       "debtor": {
         "bug": "BUG-644",
         "baseline": 0.75,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -1219,7 +1219,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.8197,
+      "diff_pct": 2.451,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -1240,7 +1240,7 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.7507,
+      "diff_pct": 5.4233,
       "diff_region": {
         "top": 45,
         "left": 60,
@@ -1261,7 +1261,7 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.272,
+      "diff_pct": 2.2115,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -1298,7 +1298,7 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.6828,
+      "diff_pct": 1.6812,
       "diff_region": {
         "top": 35,
         "left": 20,
@@ -1436,7 +1436,7 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0728,
+      "diff_pct": 0.0726,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1514,7 +1514,7 @@
       "html": "108-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3712,
+      "diff_pct": 0.3711,
       "diff_region": {
         "top": 94,
         "left": 94,
@@ -1533,7 +1533,7 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2079,
+      "diff_pct": 0.185,
       "diff_region": {
         "top": 85,
         "left": 87,
@@ -1721,7 +1721,7 @@
       "html": "97-counter-set.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3413,
+      "diff_pct": 1.397,
       "diff_region": {
         "top": 55,
         "left": 46,
@@ -1806,12 +1806,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0244,
+      "diff_pct": 0.0003,
       "diff_region": {
-        "top": 54,
-        "left": 44,
-        "bottom": 341,
-        "right": 332
+        "top": 137,
+        "left": 280,
+        "bottom": 137,
+        "right": 281
       },
       "capture": "ipc"
     },
@@ -1865,10 +1865,10 @@
       "html": "116-gradient-interpolation.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3655,
+      "diff_pct": 0.3768,
       "diff_region": {
         "top": 147,
-        "left": 29,
+        "left": 27,
         "bottom": 560,
         "right": 1006
       },
@@ -1881,9 +1881,9 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1287,
+      "diff_pct": 1.0958,
       "diff_region": {
-        "top": 57,
+        "top": 58,
         "left": 41,
         "bottom": 277,
         "right": 385
@@ -2111,9 +2111,9 @@
       "html": "133-svg-dynamic-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1496,
+      "diff_pct": 0.042,
       "diff_region": {
-        "top": 66,
+        "top": 104,
         "left": 140,
         "bottom": 689,
         "right": 1000
@@ -2127,9 +2127,9 @@
       "html": "134-svg-dynamic-stroke-styles.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.3424,
+      "diff_pct": 3.3652,
       "diff_region": {
-        "top": 19,
+        "top": 20,
         "left": 56,
         "bottom": 684,
         "right": 974
@@ -2169,7 +2169,7 @@
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5012,
+      "diff_pct": 0.5016,
       "diff_region": {
         "top": 91,
         "left": 81,
@@ -2190,7 +2190,7 @@
       "html": "137-svg-dynamic-transform-pinwheel.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.6679,
+      "diff_pct": 0.6585,
       "diff_region": {
         "top": 69,
         "left": 115,
@@ -2211,7 +2211,7 @@
       "html": "138-svg-dynamic-dashboard.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.107,
+      "diff_pct": 0.1066,
       "diff_region": {
         "top": 30,
         "left": 21,
@@ -2345,7 +2345,7 @@
       "html": "147-background-repeat-space.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9085,
+      "diff_pct": 2.9088,
       "diff_region": {
         "top": 41,
         "left": 49,
@@ -2473,7 +2473,7 @@
       "html": "155-svg-inline-gradients.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.3193,
+      "diff_pct": 1.3192,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -2537,7 +2537,7 @@
       "html": "159-background-clip-text.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.5068,
+      "diff_pct": 2.5066,
       "diff_region": {
         "top": 34,
         "left": 41,
@@ -2608,14 +2608,35 @@
       "html": "165-svg-clip-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0355,
+      "diff_pct": 0.0338,
       "diff_region": {
         "top": 55,
         "left": 55,
         "bottom": 350,
-        "right": 654
+        "right": 278
       },
       "capture": "ipc"
+    },
+    {
+      "id": "166",
+      "stem": "166-text-quality",
+      "label": "TEXTQ-1 качество текста в живом окне (wgpu): Arial и Segoe UI, чёрный на белом и белый на тёмном, 11/12/13/14/15/16/17/20/28/72 px + строка с дробным left 10.3px. Информационный: ClearType Edge против серого покрытия Lumen порога 0.5% не даёт, число — мера «мыла» (bin-ы размеров, дробные позиции). GPU_CAPTURE: снимается gdigrab-ом (wgpu-путь глифов; CPU-снимок текст растрирует иначе)",
+      "html": "166-text-quality.html",
+      "threshold": 0.5,
+      "status": "DEBTOR",
+      "diff_pct": 9.0762,
+      "diff_region": {
+        "top": 9,
+        "left": 8,
+        "bottom": 620,
+        "right": 789
+      },
+      "capture": "gdigrab",
+      "debtor": {
+        "bug": "BUG-128",
+        "baseline": 9.08,
+        "verdict": "OK"
+      }
     }
   ]
 }

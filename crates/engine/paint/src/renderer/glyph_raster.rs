@@ -288,26 +288,30 @@ impl TextSubStats {
     }
 }
 
-/// Кладёт два треугольника одного глифа: позиция от пера `cursor_x` и
-/// baseline-а, UV — из atlas-записи. Вынесено, потому что монохромный путь и
+/// Кладёт два треугольника одного глифа: позиция от пера `pen_dev` и baseline-а
+/// `baseline_dev`, UV — из atlas-записи. Вынесено, потому что монохромный путь и
 /// каждый слой COLR-глифа кладут один и тот же quad, различаясь только
 /// цветом и glyph-id.
+///
+/// Позиции приходят в device px и должны быть целыми (TEXTQ-1): левый край
+/// bitmap-а `left` и верх `top` у растеризатора целые, `bitmap_scale == 1.0`
+/// для всякого глифа, кроме сверхкрупного, поэтому углы квада лежат на целых
+/// device px и выборка из атласа идёт 1:1. В вершины уходят CSS px —
+/// деление на `dpr`.
 fn push_glyph_quad(
     out: &mut Vec<TextVertex>,
     g: &CachedGlyph,
-    cursor_x: f32,
-    baseline_y: f32,
-    display_scale: f32,
+    pen_dev: f32,
+    baseline_dev: f32,
+    bitmap_scale: f32,
+    dpr: f32,
     color: [f32; 4],
 ) {
-    let bm_left = g.left * display_scale;
-    let bm_top = g.top * display_scale;
-    let bm_w = g.entry.width as f32 * display_scale;
-    let bm_h = g.entry.height as f32 * display_scale;
-    let x0 = cursor_x + bm_left;
-    let y0 = baseline_y - bm_top;
-    let x1 = x0 + bm_w;
-    let y1 = y0 + bm_h;
+    let x0d = pen_dev + g.left * bitmap_scale;
+    let y0d = baseline_dev - g.top * bitmap_scale;
+    let x1d = x0d + g.entry.width as f32 * bitmap_scale;
+    let y1d = y0d + g.entry.height as f32 * bitmap_scale;
+    let (x0, y0, x1, y1) = (x0d / dpr, y0d / dpr, x1d / dpr, y1d / dpr);
     let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
     let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
     let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
@@ -339,19 +343,25 @@ enum TextRunStep {
         /// Сдвиг пера, уже домноженный на `font_size / units_per_em` face-а,
         /// с которого взят глиф.
         advance: f32,
-        /// Масштаб битмапа глифа bin → display (FONTLOAD-17): у каждого
-        /// глифа СВОЙ, а не общий на весь run — `size-adjust` (CSS Fonts L4
-        /// §14.4) масштабирует эффективный font-size лишь у face-а, которому
-        /// принадлежит глиф, а `pick_face_for_codepoint` внутри одного run-а
-        /// может выбирать разные face-ы для разных символов (fallback на
-        /// несовпадающий unicode-range).
-        display_scale: f32,
+        /// Целая device-позиция пера глифа от `floor(rect.x × dpr)`, уже
+        /// привязанная к сетке (TEXTQ-1); фаза пера зашита в `g`.
+        pen_dev: i32,
+        /// Растяжение битмапа до нужного размера: `1.0`, кроме глифа крупнее
+        /// `MAX_GLYPH_RASTER_PX`. У каждого глифа СВОЁ, а не общее на run —
+        /// `size-adjust` (CSS Fonts L4 §14.4, FONTLOAD-17) масштабирует
+        /// эффективный font-size лишь у face-а, которому принадлежит глиф, а
+        /// `pick_face_for_codepoint` внутри одного run-а может выбирать разные
+        /// face-ы для разных символов (fallback на несовпадающий unicode-range).
+        bitmap_scale: f32,
     },
     /// Сдвинуть перо, ничего не кладя (табуляция или неотрисовавшийся глиф).
     Advance(f32),
 }
 
 /// План укладки run-а: последовательность [`TextRunStep`] от пера в `rect.x`.
+/// Позиции глифов в нём — относительно `floor(rect.x × dpr)`, а выбор фазы
+/// зависит от дробной части `rect.x × dpr`, поэтому она и `dpr` входят в ключ
+/// плана.
 type TextRunPlan = std::sync::Arc<Vec<TextRunStep>>;
 
 /// Запись [`TextRunCache`]: численная часть ключа, строка и её план.
@@ -460,8 +470,11 @@ fn build_text_run_key(
     (letter_spacing, word_spacing): (f32, f32),
     primary_face_id: usize,
     axes: &[([u8; 4], f32)],
+    (dpr, frac0): (f32, f32),
 ) {
     out.clear();
+    out.push(dpr.to_bits());
+    out.push(frac0.to_bits());
     out.push(font_size.to_bits());
     out.push(tab_size.to_bits());
     out.push(letter_spacing.to_bits());
@@ -514,6 +527,7 @@ pub(crate) fn push_text_glyphs(
     tab_size: f32,
     (letter_spacing, word_spacing): (f32, f32),
     font_palette: Option<&FontPaletteSelection>,
+    dpr: f32,
 ) -> f32 {
     // BUG-405 срез 13: разбивка команды текста (`text-sub`, уровень 3).
     let log = crate::frame_log_level() >= 3;
@@ -550,6 +564,14 @@ pub(crate) fn push_text_glyphs(
     // ниже, применённая к primary face-у для позиции baseline.
     let primary_font_size = font_size * primary_face.size_adjust.unwrap_or(1.0);
     let baseline_y = rect.y + primary_font_size * ascent_ratio;
+    // TEXTQ-1: baseline — на целый device px, перо по X — целая часть
+    // `floor(rect.x × dpr)` плюс дробная `frac0`, из которой каждому глифу
+    // выбирается фаза.
+    let dpr = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+    let baseline_dev = (baseline_y * dpr).round();
+    let base_dev = rect.x * dpr;
+    let base_floor = base_dev.floor();
+    let frac0 = base_dev - base_floor;
 
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
@@ -577,6 +599,7 @@ pub(crate) fn push_text_glyphs(
             (letter_spacing, word_spacing),
             primary_face_id,
             font_variation_axes,
+            (dpr, frac0),
         );
         let (found, h) = runs.get(&key, text);
         key_hash = h;
@@ -596,9 +619,10 @@ pub(crate) fn push_text_glyphs(
         let mut cursor_x = rect.x;
         for step in plan.iter() {
             match step {
-                TextRunStep::Glyph { g, advance, display_scale } => {
+                TextRunStep::Glyph { g, advance, pen_dev, bitmap_scale } => {
                     let t_quad = log.then(std::time::Instant::now);
-                    push_glyph_quad(out, g, cursor_x, baseline_y, *display_scale, color);
+                    let pen = base_floor + *pen_dev as f32;
+                    push_glyph_quad(out, g, pen, baseline_dev, *bitmap_scale, dpr, color);
                     cursor_x += advance;
                     if let Some(t0) = t_quad {
                         sub_add(&TEXT_SUB.quad, t0);
@@ -649,11 +673,12 @@ pub(crate) fn push_text_glyphs(
         // срез FONTLOAD-16).
         let adjusted_font_size = font_size * face.size_adjust.unwrap_or(1.0);
         let advance_scale = adjusted_font_size / metrics.units_per_em as f32;
-        // Multi-size atlas: подбираем bin под adjusted_font_size, растеризуем
-        // глиф на этом bin-е. Display-масштаб = adjusted_font_size / size_bin —
-        // если размер совпал с bin-ом (12/16/24/32/...), масштаба нет, текст резкий.
-        let glyph_size_bin = size_bin_for(adjusted_font_size);
-        let glyph_display_scale = adjusted_font_size / glyph_size_bin as f32;
+        // TEXTQ-1: глиф растрируется в точном размере в device px; перо
+        // привязано к сетке — целая часть + фаза из 4 четвертей пикселя.
+        let (glyph_size_q, bitmap_scale) = glyph_raster_size(adjusted_font_size, dpr);
+        let pen_local = frac0 + (cursor_x - rect.x) * dpr;
+        let (pen_int, x_phase) = snap_pen(pen_local, glyph_size_q);
+        let pen_dev = base_floor + pen_int as f32;
         if let Some(t0) = t_pick {
             sub_add(&TEXT_SUB.pick, t0);
         }
@@ -694,7 +719,7 @@ pub(crate) fn push_text_glyphs(
                 .as_deref();
             for layer in layers {
                 let Some(g) = ensure_glyph(
-                    cached, atlas, lazy, face_id, layer.glyph_id, glyph_size_bin, coords,
+                    cached, atlas, lazy, face_id, layer.glyph_id, glyph_size_q, x_phase, coords,
                 ) else {
                     continue;
                 };
@@ -702,9 +727,10 @@ pub(crate) fn push_text_glyphs(
                 push_glyph_quad(
                     out,
                     &g,
-                    cursor_x,
-                    baseline_y,
-                    glyph_display_scale,
+                    pen_dev,
+                    baseline_dev,
+                    bitmap_scale,
+                    dpr,
                     layer_color(palette, layer.palette_index, color),
                 );
                 if let Some(t0) = t_quad {
@@ -727,17 +753,18 @@ pub(crate) fn push_text_glyphs(
             lazy,
             face_id,
             glyph_id,
-            glyph_size_bin,
+            glyph_size_q,
+            x_phase,
             coords,
         );
 
         if let Some(g) = cached_glyph {
             let t_quad = log.then(std::time::Instant::now);
             let advance = g.advance_native as f32 * advance_scale + glyph_spacing(ch);
-            push_glyph_quad(out, &g, cursor_x, baseline_y, glyph_display_scale, color);
+            push_glyph_quad(out, &g, pen_dev, baseline_dev, bitmap_scale, dpr, color);
             cursor_x += advance;
             if let Some(plan) = plan.as_mut() {
-                plan.push(TextRunStep::Glyph { g, advance, display_scale: glyph_display_scale });
+                plan.push(TextRunStep::Glyph { g, advance, pen_dev: pen_int, bitmap_scale });
             }
             if let Some(t0) = t_quad {
                 sub_add(&TEXT_SUB.quad, t0);
@@ -804,6 +831,7 @@ pub(crate) fn push_text_glyphs_mixed(
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
+    dpr: f32,
 ) {
     let mut y_cursor = 0.0_f32;
     for seg in crate::display_list::split_mixed_runs(text) {
@@ -819,7 +847,7 @@ pub(crate) fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette, dpr,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -827,7 +855,7 @@ pub(crate) fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, (0.0, 0.0), font_palette, dpr,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -915,14 +943,15 @@ pub(crate) fn ensure_glyph(
     lazy: &mut LazyParsedFaces<'_>,
     face_id: usize,
     glyph_id: u16,
-    size_bin: u16,
+    size_q: u16,
+    x_phase: u8,
     coords: &[f32],
 ) -> Option<CachedGlyph> {
     // BUG-405 срез 13: поиск в кэше атласа — отдельной подстатьёй `text-sub`.
     // Цена промаха (растеризация) считается ниже своим счётчиком (срез 3),
     // поэтому таймер снимается ровно на границе попадания/промаха.
     let t_look = (crate::frame_log_level() >= 3).then(std::time::Instant::now);
-    let key = atlas_key(face_id, glyph_id, size_bin, AtlasKey::hash_coords(coords));
+    let key = atlas_key(face_id, glyph_id, size_q, x_phase, AtlasKey::hash_coords(coords));
     let hit = cached.get(&key).copied();
     if let Some(t0) = t_look {
         sub_add(&TEXT_SUB.look, t0);
@@ -999,8 +1028,9 @@ fn rasterize_and_insert(
     if !matches!(glyph.outline, Outline::Simple(_)) {
         return GlyphRaster::Empty;
     }
-    let raster = Rasterizer::new(f32::from(key.size_bin), units_per_em);
-    let Some(bitmap): Option<Bitmap> = raster.rasterize(&glyph) else {
+    let raster = Rasterizer::new(f32::from(key.size_q) / 4.0, units_per_em);
+    let dx = f32::from(key.x_phase) / f32::from(X_PHASES);
+    let Some(bitmap): Option<Bitmap> = raster.rasterize_offset(&glyph, dx) else {
         return GlyphRaster::Empty;
     };
     let entry = match atlas.try_insert(key, &bitmap) {
