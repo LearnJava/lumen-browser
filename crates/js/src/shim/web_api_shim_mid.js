@@ -4234,6 +4234,29 @@ function _lumen_expand_insert_nids(args) {
     }
     return out;
 }
+// DOM LS §4.2.4 «insert»: вставка узла во фрагмент или в `ShadowRoot` перед
+// `refNid` (`null` — в конец). `DocumentFragment` не вставляется сам: в
+// приёмник переносятся его дети (BUG-1577 — шаблонный custom element
+// собирает shadow tree через `shadowRoot.appendChild(template.content.cloneNode(true))`).
+// Список детей — снимок: перенос первого опустошает источник.
+function _lumen_fragment_insert(parentNid, node, refNid) {
+    var nids = node.__isDocumentFragment__
+        ? _lumen_get_children(node.__nid__).slice() : [node.__nid__];
+    for (var i = 0; i < nids.length; i++) {
+        if (refNid === null) _lumen_append_child(parentNid, nids[i]);
+        else _lumen_insert_before(parentNid, nids[i], refNid);
+    }
+    return nids;
+}
+// `getElementById` фрагмента и `ShadowRoot`: поиск ограничен поддеревом
+// (DOM LS §4.2.5), `id` попадает в селектор атрибута как строка в кавычках.
+function _lumen_scoped_element_by_id(rootNid, id) {
+    var s = String(id);
+    if (s === '') return null;
+    var q = '[id="' + s.replace(/[\\"]/g, '\\$&').replace(/\n/g, '\\a ') + '"]';
+    var n = _lumen_u2n(_lumen_query_selector_scoped(rootNid, q));
+    return n !== null ? _lumen_make_element(n) : null;
+}
 function _lumen_node_or_text_nid(arg) {
     if (typeof arg === 'string') return _lumen_create_text_node(arg);
     if (arg && _lumen_adopt_detached(arg).__nid__ !== undefined) return arg.__nid__;
@@ -4274,9 +4297,13 @@ var _lumen_document_fragment_members = {
         },
         appendChild:          function(c) { var nid = this.__nid__;
             if (c && c.__nid__ !== undefined) {
-                _lumen_append_child(nid, c.__nid__);
+                _lumen_fragment_insert(nid, c, null);
             }
             return c;
+        },
+        // DOM LS §4.2.5: ссылка на элемент по id — только в поддереве фрагмента (BUG-1577).
+        getElementById:       function(id) {
+            return _lumen_scoped_element_by_id(this.__nid__, id);
         },
         removeChild:          function(c) { var nid = this.__nid__;
             if (c && c.__nid__ !== undefined) {
@@ -4327,11 +4354,8 @@ var _lumen_document_fragment_members = {
             if (!newNode || newNode.__nid__ === undefined) {
                 throw new TypeError('insertBefore: newNode must be a node');
             }
-            if (refNode === null || refNode === undefined) {
-                _lumen_append_child(nid, newNode.__nid__);
-            } else {
-                _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
-            }
+            _lumen_fragment_insert(nid, newNode,
+                (refNode === null || refNode === undefined) ? null : refNode.__nid__);
             return newNode;
         },
         replaceChild:         function(newChild, oldChild) { var nid = this.__nid__;
@@ -5297,19 +5321,48 @@ ShadowRoot.prototype.querySelectorAll = function(sel) {
     return _lumen_static_node_list(_lumen_query_selector_all_scoped(this.__nid__, _lumen_sel(sel)));
 };
 ShadowRoot.prototype.getElementById = function(id) {
-    var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
-    return n !== null ? _lumen_make_element(n) : null;
+    return _lumen_scoped_element_by_id(this.__nid__, id);
 };
 ShadowRoot.prototype.appendChild = function(c) {
     if (c && c.__nid__ !== undefined) {
         _lumen_ce_push_element_queue();
         try {
-            _lumen_append_child(this.__nid__, c.__nid__);
-            _lumen_ce_maybe_connected(c);
-            _lumen_ce_connect_descendants(c.__nid__);
+            var moved = _lumen_fragment_insert(this.__nid__, c, null);
+            for (var i = 0; i < moved.length; i++) {
+                _lumen_ce_maybe_connected(_lumen_make_element(moved[i]));
+                _lumen_ce_connect_descendants(moved[i]);
+            }
         } finally { _lumen_ce_pop_current_element_queue(); }
     }
     return c;
+};
+ShadowRoot.prototype.insertBefore = function(newNode, refNode) {
+    _lumen_adopt_detached(newNode);
+    _lumen_adopt_detached(refNode);
+    if (!newNode || newNode.__nid__ === undefined) {
+        throw new TypeError("Failed to execute 'insertBefore' on 'Node': parameter 1 is not of type 'Node'.");
+    }
+    var refNid = null;
+    if (refNode !== null && refNode !== undefined) {
+        if (refNode.__nid__ === undefined) {
+            throw new TypeError("Failed to execute 'insertBefore' on 'Node': parameter 2 is not of type 'Node'.");
+        }
+        if (_lumen_get_children(this.__nid__).indexOf(refNode.__nid__) < 0) {
+            throw new DOMException(
+                "Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.",
+                'NotFoundError');
+        }
+        refNid = refNode.__nid__;
+    }
+    _lumen_ce_push_element_queue();
+    try {
+        var moved = _lumen_fragment_insert(this.__nid__, newNode, refNid);
+        for (var i = 0; i < moved.length; i++) {
+            _lumen_ce_maybe_connected(_lumen_make_element(moved[i]));
+            _lumen_ce_connect_descendants(moved[i]);
+        }
+    } finally { _lumen_ce_pop_current_element_queue(); }
+    return newNode;
 };
 ShadowRoot.prototype.removeChild = function(c) {
     if (c && c.__nid__ !== undefined) {
