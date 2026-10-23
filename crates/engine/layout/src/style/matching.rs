@@ -276,6 +276,86 @@ pub(crate) fn matches_slotted_complex(
     }
 }
 
+/// CSS Shadow Parts L1 §2 — матчит сложный селектор с `::part(<ident>+)` в
+/// последнем compound-е против элемента `part_el` теневого дерева.
+///
+/// `host` — элемент, на который сел compound до `::part()` (теневой хост, чьи
+/// части видит эта область видимости), `names` — имена, под которыми `part_el`
+/// виден из этой области (токены `part`, пропущенные через `exportparts`
+/// промежуточных хостов). Условия:
+/// 1. в последнем compound-е есть `::part(sel_names)` и все `sel_names` ∈ `names`;
+/// 2. простые селекторы до `::part()` (с комбинаторами левее) матчат `host`;
+/// 3. простые селекторы после `::part()` — только нематериальные для структуры
+///    псевдоклассы (`:hover`, `:focus`, …) — матчат `part_el`; структурные
+///    псевдоклассы (`:first-child`, `:nth-child()`, …) части не матчат (§2),
+///    псевдоэлементы после `::part()` обрабатывает путь псевдоэлементов.
+pub(crate) fn matches_part_complex(
+    complex: &ComplexSelector,
+    doc: &Document,
+    part_el: NodeId,
+    host: NodeId,
+    names: &[&str],
+) -> Option<Specificity> {
+    let last = complex.tail.last().map(|(_, c)| c).unwrap_or(&complex.head);
+    let at = last.parts.iter().position(|p| {
+        matches!(p, SimpleSelector::PseudoElement(PseudoElementKind::Part(_)))
+    })?;
+    let SimpleSelector::PseudoElement(PseudoElementKind::Part(wanted)) = &last.parts[at] else {
+        return None;
+    };
+    if !wanted.iter().all(|w| names.contains(&w.as_str())) {
+        return None;
+    }
+    for p in &last.parts[at + 1..] {
+        match p {
+            SimpleSelector::PseudoClass(pc) if !pseudo_class_is_structural(pc) => {
+                if !matches_pseudo_class(pc, doc, part_el) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let head_last = CompoundSelector { parts: last.parts[..at].to_vec() };
+    let outer = if complex.tail.is_empty() {
+        ComplexSelector { head: head_last, tail: vec![] }
+    } else {
+        let mut tail = complex.tail.clone();
+        if let Some(l) = tail.last_mut() {
+            l.1 = head_last;
+        }
+        ComplexSelector { head: complex.head.clone(), tail }
+    };
+    // Пустой compound перед `::part()` (`::part(a)` без хоста) — как `*`.
+    let outer_empty = outer.tail.is_empty() && outer.head.parts.is_empty();
+    if outer_empty || matches_complex(&outer, doc, host) {
+        Some(complex.specificity())
+    } else {
+        None
+    }
+}
+
+/// Структурные псевдоклассы не матчат `::part()` (Shadow Parts L1 §2): у части нет
+/// осмысленных соседей в дереве, видимом снаружи.
+fn pseudo_class_is_structural(pc: &PseudoClass) -> bool {
+    matches!(
+        pc,
+        PseudoClass::FirstChild
+            | PseudoClass::LastChild
+            | PseudoClass::OnlyChild
+            | PseudoClass::FirstOfType
+            | PseudoClass::LastOfType
+            | PseudoClass::OnlyOfType
+            | PseudoClass::NthChild(..)
+            | PseudoClass::NthLastChild(..)
+            | PseudoClass::NthOfType(..)
+            | PseudoClass::NthLastOfType(..)
+            | PseudoClass::Empty
+            | PseudoClass::Root
+            | PseudoClass::Has(_)
+    )
+}
+
 fn matches_compound(compound: &CompoundSelector, doc: &Document, node: NodeId) -> bool {
     let NodeData::Element { name, attrs } = &doc.get(node).data else {
         return false;

@@ -441,3 +441,144 @@
         clear_shadow_sheets();
         assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 0));
     }
+
+    // ── CSS Shadow Parts L1: `::part()`, `exportparts`, контекст инкапсуляции ──
+
+    fn set_attr(doc: &mut lumen_dom::Document, id: NodeId, name: &str, value: &str) {
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+            attrs.push(lumen_dom::Attribute { name: lumen_dom::QualName::html(name), value: value.into() });
+        }
+    }
+
+    /// `<div id="host">` с shadow tree, внутри `<span part="p1 p2">`. (doc, host, span).
+    fn make_part_host() -> (lumen_dom::Document, NodeId, NodeId) {
+        let (mut doc, host) = make_shadow_host();
+        let sr = doc.shadow_root_of(host).expect("shadow root");
+        let span = doc.create_element(lumen_dom::QualName::html("span"));
+        set_attr(&mut doc, span, "part", "p1 p2");
+        doc.append_child(sr, span);
+        (doc, host, span)
+    }
+
+    fn color_of(s: &ComputedStyle) -> (u8, u8, u8) {
+        (s.color.r, s.color.g, s.color.b)
+    }
+
+    #[test]
+    fn part_rule_in_document_styles_part_element() {
+        let (doc, _host, span) = make_part_host();
+        let sheet = lumen_css_parser::parse("#host::part(p1) { color: red; }");
+        clear_shadow_sheets();
+        let s = compute_style(&doc, span, &sheet, &ComputedStyle::root(), VP, false);
+        assert_eq!(color_of(&s), (255, 0, 0));
+    }
+
+    #[test]
+    fn part_rule_needs_every_listed_name() {
+        let (doc, _host, span) = make_part_host();
+        let both = lumen_css_parser::parse("#host::part(p1 p2) { color: red; }");
+        let missing = lumen_css_parser::parse("#host::part(p1 p3) { color: red; }");
+        let wrong_host = lumen_css_parser::parse("#other::part(p1) { color: red; }");
+        let root = ComputedStyle::root();
+        assert_eq!(color_of(&compute_style(&doc, span, &both, &root, VP, false)), (255, 0, 0));
+        assert_eq!(color_of(&compute_style(&doc, span, &missing, &root, VP, false)), (0, 0, 0));
+        assert_eq!(color_of(&compute_style(&doc, span, &wrong_host, &root, VP, false)), (0, 0, 0));
+    }
+
+    #[test]
+    fn part_rule_does_not_style_element_without_part_attribute() {
+        let (mut doc, _host, span) = make_part_host();
+        let sr = doc.shadow_root_of(_host).expect("shadow root");
+        let plain = doc.create_element(lumen_dom::QualName::html("span"));
+        doc.append_child(sr, plain);
+        let sheet = lumen_css_parser::parse("#host::part(p1) { color: red; }");
+        let root = ComputedStyle::root();
+        assert_eq!(color_of(&compute_style(&doc, plain, &sheet, &root, VP, false)), (0, 0, 0));
+        assert_eq!(color_of(&compute_style(&doc, span, &sheet, &root, VP, false)), (255, 0, 0));
+    }
+
+    #[test]
+    fn part_with_pseudo_class_after_it_matches_the_part() {
+        let (doc, _host, span) = make_part_host();
+        let sheet = lumen_css_parser::parse(
+            "#host::part(p1):first-child { color: red; } #host::part(p1):not(.x) { color: blue; }",
+        );
+        let s = compute_style(&doc, span, &sheet, &ComputedStyle::root(), VP, false);
+        assert_eq!(color_of(&s), (0, 0, 255), "structural pseudo-classes never match a part");
+    }
+
+    #[test]
+    fn document_rule_does_not_reach_into_shadow_tree() {
+        let (doc, _host, span) = make_part_host();
+        let sheet = lumen_css_parser::parse("span { color: red; }");
+        let s = compute_style(&doc, span, &sheet, &ComputedStyle::root(), VP, false);
+        assert_eq!(color_of(&s), (0, 0, 0));
+    }
+
+    #[test]
+    fn normal_declaration_of_outer_context_beats_inner_one() {
+        // Cascade L5 §6.1: для normal выигрывает внешний контекст, даже при меньшей
+        // специфичности; для !important — внутренний.
+        let (doc, host, span) = make_part_host();
+        install_shadow_sheet(host, "span#x, span { color: green; }");
+        let sheet = lumen_css_parser::parse("#host::part(p1) { color: red; }");
+        let s = compute_style(&doc, span, &sheet, &ComputedStyle::root(), VP, false);
+        assert_eq!(color_of(&s), (255, 0, 0));
+        install_shadow_sheet(host, "span { color: green !important; }");
+        let s = compute_style(&doc, span, &sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(color_of(&s), (0, 128, 0));
+    }
+
+    #[test]
+    fn document_normal_rule_beats_host_rule_of_shadow_sheet() {
+        // BUG-1580: `:host` из shadow tree проигрывает обычному правилу документа.
+        let (doc, host) = make_shadow_host();
+        install_shadow_sheet(host, ":host { color: green; }");
+        let sheet = lumen_css_parser::parse("#host { color: red; }");
+        let s = compute_style(&doc, host, &sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(color_of(&s), (255, 0, 0));
+    }
+
+    /// outer-host › shadow › (`inner-host` [exportparts] › shadow › `<i part="deep">`).
+    fn make_exported_part(exportparts: Option<&str>) -> (lumen_dom::Document, NodeId, NodeId, NodeId) {
+        let (mut doc, outer, inner, deep) = make_nested_shadow_hosts();
+        set_attr(&mut doc, deep, "part", "deep");
+        set_attr(&mut doc, inner, "id", "inner");
+        if let Some(v) = exportparts {
+            set_attr(&mut doc, inner, "exportparts", v);
+        }
+        (doc, outer, inner, deep)
+    }
+
+    #[test]
+    fn part_is_visible_one_tree_out_without_exportparts() {
+        let (doc, outer, _inner, deep) = make_exported_part(None);
+        let mut map: HashMap<NodeId, Stylesheet> = HashMap::new();
+        map.insert(outer, lumen_css_parser::parse("#inner::part(deep) { color: red; }"));
+        set_shadow_sheets(map);
+        let doc_sheet = lumen_css_parser::parse("#host::part(deep) { color: blue; }");
+        let s = compute_style(&doc, deep, &doc_sheet, &ComputedStyle::root(), VP, false);
+        clear_shadow_sheets();
+        assert_eq!(color_of(&s), (255, 0, 0), "the document cannot see a part nobody exports");
+    }
+
+    #[test]
+    fn exportparts_forwards_part_to_the_outer_tree() {
+        // `inner` forwards `deep` as `shown` into `outer`'s shadow tree, so the document
+        // reaches it as `outer::part(shown)`; the old name stays visible only to `outer`'s sheet.
+        let (doc, outer, _inner, deep) = make_exported_part(Some("deep: shown"));
+        let doc_sheet = lumen_css_parser::parse("#host::part(shown) { color: blue; }");
+        let root = ComputedStyle::root();
+        clear_shadow_sheets();
+        assert_eq!(color_of(&compute_style(&doc, deep, &doc_sheet, &root, VP, false)), (0, 0, 255));
+        let by_old_name = lumen_css_parser::parse("#host::part(deep) { color: blue; }");
+        assert_eq!(color_of(&compute_style(&doc, deep, &by_old_name, &root, VP, false)), (0, 0, 0));
+        let mut map: HashMap<NodeId, Stylesheet> = HashMap::new();
+        map.insert(outer, lumen_css_parser::parse("#inner::part(deep) { color: green; }"));
+        set_shadow_sheets(map);
+        let s = compute_style(&doc, deep, &Stylesheet::default(), &root, VP, false);
+        clear_shadow_sheets();
+        assert_eq!(color_of(&s), (0, 128, 0));
+    }

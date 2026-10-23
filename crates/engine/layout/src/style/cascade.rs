@@ -34,7 +34,7 @@ use crate::style::{
     apply_ua_text_decoration, apply_webkit_scrollbar_pseudos, coerce_overflow_axes,
     complex_has_host, default_display, ensure_cascade_index, expand_attr_val,
     expand_custom_functions_scoped, expand_mixin_apply, expand_vars, forced_colors_active, matches_complex,
-    matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
+    matches_part_complex, matches_slotted_complex, node_in_scope, resolve_logical_properties, resolve_overflow_logical_properties,
     resolve_overscroll_behavior_logical_properties, resolve_system_colors_in_style,
     is_appearance_disabling_property, is_disableable_widget, strip_ua_appearance_box_styling,
     ua_font_family,
@@ -744,6 +744,15 @@ pub(crate) fn compute_style_shareable(
     let layer_pri = |imp: bool, layer_idx: i32| -> i32 {
         if imp { -layer_idx } else { layer_idx }
     };
+    // Second sort field: encapsulation context, then the `style` attribute bit
+    // (CSS Cascade L5 §6.1: context precedes element-attached styles). `depth` is the
+    // shadow-tree depth of the sheet the declaration came from (document 0, a shadow
+    // tree 1 + depth of its host's tree). Normal declarations: the OUTER context wins
+    // (higher rank for smaller depth); `!important`: the INNER one wins.
+    let cx = |imp: bool, depth: u32, inline: bool| -> u32 {
+        let rank = if imp { depth.min(CTX_MAX) } else { CTX_MAX - depth.min(CTX_MAX) };
+        rank * 2 + u32::from(inline)
+    };
     // (important, is_inline, layer_priority, specificity, rule_idx, decl_idx,
     // declaration, shadow origin). The last field tracks which shadow-tree
     // stylesheet (if any) a matched declaration physically came from — `None`
@@ -754,7 +763,7 @@ pub(crate) fn compute_style_shareable(
     // has its own `mixin_rules`, invisible to `sheet.mixin_rules` (BUG-518
     // mixin-shadow-dom follow-up).
     type MatchedDecl<'a> =
-        (bool, bool, i32, Specificity, usize, usize, &'a Declaration, Option<&'a Stylesheet>);
+        (bool, u32, i32, Specificity, usize, usize, &'a Declaration, Option<&'a Stylesheet>);
     let mut matched: Vec<MatchedDecl> = Vec::new();
 
 
@@ -798,7 +807,7 @@ pub(crate) fn compute_style_shareable(
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 let lp = layer_pri(decl.important, layer_n);
-                matched.push((decl.important, false, lp, spec, rule_key, decl_idx, decl, None));
+                matched.push((decl.important, cx(decl.important, 0, false), lp, spec, rule_key, decl_idx, decl, None));
             }
         }
     }
@@ -844,7 +853,7 @@ pub(crate) fn compute_style_shareable(
             let global_rule_idx = layer_rule_base + flat;
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 let lp = layer_pri(decl.important, layer_idx);
-                matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
+                matched.push((decl.important, cx(decl.important, 0, false), lp, spec, global_rule_idx, decl_idx, decl, None));
             }
         }
     }
@@ -889,7 +898,7 @@ pub(crate) fn compute_style_shareable(
                 let global_rule_idx = media_base + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
+                    matched.push((decl.important, cx(decl.important, 0, false), lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
@@ -926,7 +935,7 @@ pub(crate) fn compute_style_shareable(
                 let global_rule_idx = supports_base + rule_idx;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl, None));
+                    matched.push((decl.important, cx(decl.important, 0, false), lp, spec, global_rule_idx, decl_idx, decl, None));
                 }
             }
         }
@@ -959,7 +968,7 @@ pub(crate) fn compute_style_shareable(
             if let Some(spec) = best {
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl, None));
+                    matched.push((decl.important, cx(decl.important, 0, false), lp, spec, next_rule_idx, decl_idx, decl, None));
                 }
             }
             next_rule_idx += 1;
@@ -981,6 +990,14 @@ pub(crate) fn compute_style_shareable(
     // live for the rest of this function, so the `&Declaration` references pushed
     // into `matched` outlive the (closure-scoped) thread-local borrow.
     let any_shadow = SHADOW_SHEETS.with(|c| !c.borrow().is_empty());
+    let node_depth = if doc.has_author_shadow_roots() { shadow_tree_depth(doc, node) } else { 0 };
+    // CSS Scoping L1 §3.1: a document rule never reaches into a shadow tree. Everything
+    // pushed so far came from the document sheet, so an element inside a shadow tree
+    // drops it; only that tree's own sheet, `::part()` rules of the outer trees and the
+    // `style` attribute apply to it below.
+    if node_depth > 0 {
+        matched.clear();
+    }
     let own_shadow: Option<Stylesheet> = if any_shadow && doc.is_shadow_host(node) {
         SHADOW_SHEETS.with(|c| c.borrow().get(&node).cloned())
     } else {
@@ -1012,7 +1029,7 @@ pub(crate) fn compute_style_shareable(
                 let gidx = next_rule_idx + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                    matched.push((decl.important, cx(decl.important, node_depth + 1, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -1035,7 +1052,7 @@ pub(crate) fn compute_style_shareable(
                 let gidx = base + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                    matched.push((decl.important, cx(decl.important, node_depth + 1, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
                 }
             }
         }
@@ -1088,7 +1105,53 @@ pub(crate) fn compute_style_shareable(
                 let gidx = base + i;
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                     let lp = layer_pri(decl.important, layer_n);
-                    matched.push((decl.important, false, lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                    matched.push((decl.important, cx(decl.important, node_depth, false), lp, spec, gidx, decl_idx, decl, Some(shadow)));
+                }
+            }
+        }
+        SHADOW_HOST_SCOPE.with(|c| c.set(u32::MAX));
+    }
+
+    // (d) CSS Shadow Parts L1 §2: `node` carries `part="..."` and sits in a shadow tree —
+    // `host::part(name)` rules of every OUTER tree reach it, each tree seeing it under
+    // the names the inner hosts' `exportparts` forward to it.
+    let part_scopes = if node_depth > 0 {
+        part_scopes_of(doc, node)
+    } else {
+        Vec::new()
+    };
+    for scope in &part_scopes {
+        let names: Vec<&str> = scope.names.iter().map(String::as_str).collect();
+        SHADOW_HOST_SCOPE.with(|c| {
+            c.set(doc.enclosing_shadow_host(scope.host).map_or(u32::MAX, |h| h.index() as u32));
+        });
+        let (rules, key_base): (&[lumen_css_parser::Rule], usize) = match &scope.sheet {
+            Some(shadow) => (&shadow.rules, next_rule_idx),
+            None => (&sheet.rules, 0),
+        };
+        for (i, rule) in rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_part_complex(complex, doc, node, scope.host, &names) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((
+                        decl.important,
+                        cx(decl.important, scope.depth, false),
+                        lp,
+                        spec,
+                        key_base + i,
+                        decl_idx,
+                        decl,
+                        scope.sheet.as_ref(),
+                    ));
                 }
             }
         }
@@ -1103,7 +1166,7 @@ pub(crate) fn compute_style_shareable(
     for (decl_idx, decl) in inline_decls.iter().enumerate() {
         matched.push((
             decl.important,
-            true,
+            cx(decl.important, node_depth, true),
             layer_pri(decl.important, layer_n),
             Specificity::default(),
             next_rule_idx,
@@ -1162,8 +1225,8 @@ pub(crate) fn compute_style_shareable(
     // выкидывает объявления свойства с позицией ≥ своей — и normal, и
     // `!important` (Chrome: откат к слоям *до* текущего в порядке слоёв, а не в
     // порядке приоритета данной важности).
-    let layer_pos = |imp: bool, inline: bool, lp: i32| -> i32 {
-        (if imp { -lp } else { lp }) * 2 + i32::from(inline)
+    let layer_pos = |imp: bool, ctx_inline: u32, lp: i32| -> i32 {
+        (if imp { -lp } else { lp }) * 2 + i32::from(ctx_inline & 1 == 1)
     };
     while matched.iter().any(|&(_, _, _, _, _, _, decl, _)| {
         let v = decl.value.trim();
@@ -1867,4 +1930,82 @@ fn zero_unstyled_border_widths(style: &mut ComputedStyle) {
     if unstyled(style.border_left_style) {
         style.border_left_width = 0.0;
     }
+}
+
+/// Largest shadow-tree depth the cascade's context rank distinguishes.
+const CTX_MAX: u32 = 0xFFFF;
+
+/// How many shadow roots lie between `node` and the document: 0 for a document element
+/// (and for a slotted light child, whose real parent is the host), 1 inside a top-level
+/// shadow tree, and so on.
+fn shadow_tree_depth(doc: &Document, node: NodeId) -> u32 {
+    let mut depth = 0;
+    let mut cur = node;
+    while let Some(host) = doc.enclosing_shadow_host(cur) {
+        depth += 1;
+        cur = host;
+    }
+    depth
+}
+
+/// One outer tree's view of a `part` element (CSS Shadow Parts L1 §2, §3).
+struct PartScope {
+    /// The element a `host::part()` compound must match in this tree.
+    host: NodeId,
+    /// The sheet of the tree that contains `host` (`None` = the document sheet).
+    sheet: Option<Stylesheet>,
+    /// Shadow-tree depth of that sheet, the cascade's encapsulation context.
+    depth: u32,
+    /// The names the element answers to from this tree.
+    names: Vec<String>,
+}
+
+/// The `exportparts` of `host` applied to `names`: `inner:outer` forwards `inner` as `outer`,
+/// a bare `name` forwards it unchanged; a name the host does not list stays hidden.
+fn export_part_names(doc: &Document, host: NodeId, names: &[String]) -> Vec<String> {
+    let Some(list) = doc.get(host).get_attr("exportparts") else { return Vec::new() };
+    let mut out = Vec::new();
+    for entry in list.split(',') {
+        let entry = entry.trim();
+        let (inner, outer) = match entry.split_once(':') {
+            Some((i, o)) => (i.trim(), o.trim()),
+            None => (entry, entry),
+        };
+        if !inner.is_empty() && !outer.is_empty() && names.iter().any(|n| n == inner) {
+            out.push(outer.to_string());
+        }
+    }
+    out
+}
+
+/// The chain of outer trees from which `node` (an element inside a shadow tree) is visible as a
+/// part: its own `part` tokens are seen from the tree containing its host; that host's
+/// `exportparts` carries them one tree further out, and so on up to the document.
+fn part_scopes_of(doc: &Document, node: NodeId) -> Vec<PartScope> {
+    let mut scopes = Vec::new();
+    let mut names: Vec<String> = doc
+        .get(node)
+        .get_attr("part")
+        .map(|v| v.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default();
+    let mut host = doc.enclosing_shadow_host(node);
+    while let Some(h) = host {
+        if names.is_empty() {
+            break;
+        }
+        let tree_host = doc.enclosing_shadow_host(h);
+        let (sheet, depth) = match tree_host {
+            Some(th) => (SHADOW_SHEETS.with(|c| c.borrow().get(&th).cloned()), shadow_tree_depth(doc, h)),
+            None => (None, 0),
+        };
+        let next = export_part_names(doc, h, &names);
+        // A shadow tree without a sheet has no rules to offer, but its host may still
+        // forward the names.
+        if tree_host.is_none() || sheet.is_some() {
+            scopes.push(PartScope { host: h, sheet, depth, names });
+        }
+        names = next;
+        host = tree_host;
+    }
+    scopes
 }

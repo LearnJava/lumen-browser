@@ -47,6 +47,7 @@ pub(in crate::style) fn pseudo_element_name(kind: &PseudoElementKind) -> &str {
         PseudoElementKind::FirstLine => "first-line",
         PseudoElementKind::FirstLetter => "first-letter",
         PseudoElementKind::Slotted(_) => "slotted",
+        PseudoElementKind::Part(_) => "part",
         PseudoElementKind::Marker => "marker",
         PseudoElementKind::Selection => "selection",
         PseudoElementKind::TargetText => "target-text",
