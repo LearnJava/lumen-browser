@@ -753,14 +753,12 @@ impl std::error::Error for ImageRegisterError {}
 ///
 /// `left` / `top` — в пикселях растеризации (т.е. на размер bin-а из
 /// `SIZE_BINS`); сюда влияют только параметры растеризации, не итоговый
-/// display-размер. `advance_native` — в font units (`hmtx.advance_width`),
-/// масштаб по `font_size / units_per_em` применяется на стороне caller-а.
+/// display-размер. Advance в кэш не входит: после TEXTQ-4 его отдаёт шейпер.
 #[derive(Clone, Copy)]
 pub(crate) struct CachedGlyph {
     pub(crate) entry: GlyphEntry,
     pub(crate) left: f32,
     pub(crate) top: f32,
-    pub(crate) advance_native: u16,
 }
 
 /// Один загруженный face: TTF-байты + owned-кэш метрик, построенный один
@@ -957,7 +955,6 @@ pub(crate) fn layer_color(palette: Option<&[[f32; 4]]>, palette_index: u16, text
 pub(crate) struct ParsedFace<'a> {
     pub(crate) font: Font<'a>,
     pub(crate) head: Head,
-    pub(crate) hmtx: Hmtx<'a>,
 }
 
 /// Ленивый per-frame кэш [`ParsedFace`]-ов: face парсится при первом
@@ -987,8 +984,7 @@ impl<'a> LazyParsedFaces<'a> {
             let attempt = (|| {
                 let font = Font::parse(&self.faces[id].bytes).ok()?;
                 let head = font.head().ok()?;
-                let hmtx = font.hmtx().ok()?;
-                Some(ParsedFace { font, head, hmtx })
+                Some(ParsedFace { font, head })
             })();
             self.parsed[id] = Some(attempt);
         }
