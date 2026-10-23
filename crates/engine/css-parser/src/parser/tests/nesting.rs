@@ -641,6 +641,34 @@ use super::*;
 
     // ── @function tests ─────────────────────────────────────────────────────
 
+    /// Top-level declarations of an `@function` body (conditional groups skipped).
+    fn fn_decls(f: &FunctionRule) -> Vec<&Declaration> {
+        f.body.iter().filter_map(|i| if let FunctionBodyItem::Decl(d) = i { Some(d) } else { None }).collect()
+    }
+
+    #[test]
+    fn function_typed_parameters_and_returns() {
+        let s = parse(
+            "@function --f(--a <length>: 3px, --b type(<length> | auto), --c) returns type(<number>) { result: 1; }",
+        );
+        let f = &s.function_rules[0];
+        assert_eq!(f.parameters[0].name, "--a");
+        assert_eq!(f.parameters[0].syntax.as_deref(), Some("<length>"));
+        assert_eq!(f.parameters[0].default.as_deref(), Some("3px"));
+        assert_eq!(f.parameters[1].syntax.as_deref(), Some("<length> | auto"));
+        assert_eq!(f.parameters[2].syntax, None);
+        assert_eq!(f.returns_syntax(), Some("<number>"));
+    }
+
+    #[test]
+    fn function_body_keeps_conditional_groups_in_order() {
+        let s = parse("@function --f() { result: 1px; @media all { result: 5px; } @supports (width: 1px) { --x: 2; } }");
+        let f = &s.function_rules[0];
+        assert_eq!(f.body.len(), 3);
+        assert!(matches!(&f.body[1], FunctionBodyItem::Conditional { condition: LayerCondition::Media(_), items } if items.len() == 1));
+        assert!(matches!(&f.body[2], FunctionBodyItem::Conditional { condition: LayerCondition::Supports(_), .. }));
+    }
+
     #[test]
     fn function_basic_single_param() {
         let s = parse("@function --double(--x) { result: calc(var(--x) * 2); }");
@@ -650,9 +678,9 @@ use super::*;
         assert_eq!(f.parameters.len(), 1);
         assert_eq!(f.parameters[0].name, "--x");
         assert_eq!(f.parameters[0].default, None);
-        assert_eq!(f.declarations.len(), 1);
-        assert_eq!(f.declarations[0].property, "result");
-        assert_eq!(f.declarations[0].value, "calc(var(--x) * 2)");
+        assert_eq!(fn_decls(f).len(), 1);
+        assert_eq!(fn_decls(f)[0].property, "result");
+        assert_eq!(fn_decls(f)[0].value, "calc(var(--x) * 2)");
     }
 
     #[test]
@@ -690,9 +718,9 @@ use super::*;
              }",
         );
         let f = &s.function_rules[0];
-        assert_eq!(f.declarations.len(), 2);
-        assert_eq!(f.declarations[0].property, "--c");
-        assert_eq!(f.declarations[1].property, "result");
+        assert_eq!(fn_decls(f).len(), 2);
+        assert_eq!(fn_decls(f)[0].property, "--c");
+        assert_eq!(fn_decls(f)[1].property, "result");
     }
 
     #[test]
@@ -737,9 +765,9 @@ use super::*;
         );
         assert_eq!(s.function_rules.len(), 1);
         let f = &s.function_rules[0];
-        assert_eq!(f.declarations.len(), 1, "the nested at-rule must be skipped, not kept, as a declaration");
-        assert_eq!(f.declarations[0].property, "result");
-        assert_eq!(f.declarations[0].value, "5px");
+        assert_eq!(fn_decls(f).len(), 1, "the nested at-rule must be skipped, not kept, as a declaration");
+        assert_eq!(fn_decls(f)[0].property, "result");
+        assert_eq!(fn_decls(f)[0].value, "5px");
         assert_eq!(s.rules.len(), 1, "the sibling rule after @function must still parse");
     }
 
@@ -752,9 +780,9 @@ use super::*;
              }",
         );
         let f = &s.function_rules[0];
-        assert_eq!(f.declarations.len(), 1);
-        assert_eq!(f.declarations[0].property, "result");
-        assert_eq!(f.declarations[0].value, "PASS");
+        assert_eq!(fn_decls(f).len(), 1);
+        assert_eq!(fn_decls(f)[0].property, "result");
+        assert_eq!(fn_decls(f)[0].value, "PASS");
     }
 
     #[test]

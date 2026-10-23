@@ -1,6 +1,6 @@
 # BUG-1507 — `@function`: типизированные параметры (`--a <length>`) и `@media` в теле функции не работают — вызов недопустим
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** layout (`crates/engine/layout/src/style/substitute.rs` — `expand_custom_functions`, `FunctionRule`)
 
@@ -32,3 +32,9 @@ WPT-RUN-14 срез 22: `css-mixins/functions/*` — 21 id, 267 из 390 саб�
 ## Как проверить
 
 Таблица выше; `css/css-mixins/functions/dashed-function-eval.html`, `function-conditionals.html`.
+
+## Исправление
+
+`crates/engine/css-parser/src/parser/at_rules.rs`: `FunctionParameter.syntax` (тип `<length>` / `type(…)` отделён от имени — раньше имя было `--a <length>`, поэтому `var(--a)` не находил параметр), `FunctionRule::returns_syntax`, тело — `Vec<FunctionBodyItem>` с вложенными `@media`/`@supports`. `crates/engine/layout/src/style/substitute.rs`: `coerce_to_syntax` (проверка по сопоставителю `@property` + вычисленный вид), аргумент с ошибкой/несовпадением типа → значение по умолчанию, иначе параметр не задан; значения по умолчанию считаются в области предыдущих параметров; локальная `--x:` типизированного параметра сохраняет тип; активные условные группы разворачиваются в порядке источника. Тесты `css_function_*` (layout) и `function_typed_parameters_and_returns` (css-parser).
+
+Остаток (функциональные пробелы, не дефекты): `@container` в теле функции, `if()`/`attr()`/`inherit()` в `result`, CSSOM `CSSFunctionRule` (CSSOM-10).
