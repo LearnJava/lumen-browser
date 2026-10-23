@@ -1,6 +1,6 @@
 # BUG-1501 — `var(--a)var(--b)` без пробела между ссылками склеивается в два токена и принимается; по спецификации склейка двух подстановок без разделителя даёт недопустимое значение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** css-parser/layout (`crates/engine/layout/src/style/substitute.rs` — склейка подставленных `var()`)
 
@@ -29,3 +29,9 @@ WPT-RUN-14 срез 22: `css-variables/variable-declaration-{14,53,54,55}.html`,
 ## Как проверить
 
 Таблица выше; `css/css-variables/variable-declaration-53.html`.
+
+## Исправление
+
+- `layout/style/substitute.rs` (`expand_vars` + `token_boundary_sep`): на стыке префикса/подстановки/хвоста, где прямая склейка слила бы два токена (имя/число/размерность: `orange`+`red`, `10`+`px`, `1`+`em`), вставляется пробел; границы с разделителем (`(`, `,`, `*`, пробел) не трогаются. Работает и для `var()` внутри custom property (подстановка идёт тем же `expand_vars`). Побочно: `var(--n)px` при `--n:10` теперь тоже недопустимо (как в Chrome) — раньше принималось как `10px`.
+- Тесты: `style::tests::restyle::expand_vars_adjacent_substitutions_stay_separate_tokens`, `adjacent_var_substitution_is_invalid_at_computed_value_time`.
+- Reftest: `variable-declaration-14/53/54/55`, `variable-reference-15` — `thick` (898 px) → `identical`.
