@@ -86,3 +86,11 @@
 6. Гейт перед закрытием: `cargo clippy -p lumen-layout -p lumen-network -p lumen-js --all-targets -- -D warnings` (lumen-js — с `--features v8-backend`), затем `/lumen-task-finish`, удалить указатель `ROADMAP.md:1252` из `STATUS-P6.md`, ROADMAP-строку DEVX-22 → `done`.
 
 **Как проверить сделанное:** `cargo test -p lumen-layout --lib deep_chain_with_margins`, `cargo test -p lumen-network --lib h2::pool`, `cargo test -p lumen-js --features v8-backend --lib bounded_document_lock`.
+
+## Итог (2026-10-23, сессия P6) — done
+
+- Полный `cargo test --workspace` (п. 1): 2 FAILED — оба BUG-1677; флаки п. 2 починены (`bug341_s13` не воспроизводится, оставлен).
+- Полный `graphic_tests/run.py --continue-on-fail` (debug-бинарь, коммит `7f5af0a35`): 165 тестов, 7 FAIL — 21, 56, 150, 151, 155, 159 идентичны прогону `5b8345773` (давние), **61** — регрессия IPC-снимка, заведён [BUG-1697](../../bugs/BUG-1697-OPEN.md) (указатель в `STATUS-P3.md`). TEST-18 — baseline снижен до 2.08 %. Обрыва IPC на 134+ не было. Результат — `graphic_tests/results/20261023-195817.json`.
+- Гейты п. 4 зелёные: `check_file_sizes` (разрезы: `network/interceptor_tests`, `core/ext/{wake_lock,audio_playback}_tests`, `driver/session/a11y_query`, `layout/selector_query/contain_css`, `layout/tests/layout_test_mods_tail`, `shell/page_load/css_pending`, `style/zoom`, `tests/background_alignment_quirks`, `page_shape_images`; baseline понижен), `check_doc_links`, `check_claude_md`, `check_crate_names`, `check_marketing_words`, `corpus_c.py check`, `cargo clippy --workspace --all-targets -- -D warnings`.
+- П. 5: зарегистрированных `chat-*` worktree и `origin/chat-*` веток нет; каталог `.claude/worktrees/chat-wpt-scouts2` не в `git worktree list` — не трогал (чужой, сессия Chat).
+- П. 6: строка про `--features v8-backend` в `docs/commands.md` добавлена.

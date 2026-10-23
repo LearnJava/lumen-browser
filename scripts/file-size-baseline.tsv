@@ -4,24 +4,24 @@
 # Число может ехать ВНИЗ свободно, ВВЕРХ — только осознанно, тем же
 # коммитом, что и рост, и с объяснением в теле коммита.
 
-11857	crates/network/src/lib.rs
+11852	crates/network/src/lib.rs
 6178	crates/engine/html-parser/src/tree_builder.rs
 5603	crates/engine/paint/src/backends/femtovg_backend.rs
 5582	crates/engine/paint/src/renderer.rs
 5316	crates/engine/dom/src/lib.rs
-5010	crates/core/src/ext.rs
+4916	crates/core/src/ext.rs
 3921	crates/engine/paint/src/cpu_raster.rs
 3683	crates/js/src/worker.rs
 3391	crates/chrome/src/model.rs
 2763	crates/network/src/h3/conn_connect.rs
 2714	crates/js/src/filesystem_access.rs
 2700	crates/js/src/frame_bridge.rs
-2660	crates/engine/layout/src/selector_query.rs
+2637	crates/engine/layout/src/selector_query.rs
 2637	crates/js/src/subtle_crypto.rs
 2586	crates/shell/src/frames.rs
 2569	crates/bidi-server/src/protocol.rs
-2503	crates/shell/src/page_load.rs
-2498	crates/driver/src/session.rs
-2336	crates/engine/layout/src/lib.rs
+2480	crates/shell/src/page_load.rs
+2466	crates/driver/src/session.rs
+2333	crates/engine/layout/src/lib.rs
 2295	crates/js/src/offscreen_canvas.rs
 2193	crates/js/src/web_audio.rs
