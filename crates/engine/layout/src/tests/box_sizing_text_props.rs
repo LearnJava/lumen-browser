@@ -1235,7 +1235,7 @@ use super::*;
     fn font_weight_bold_keyword() {
         let root = lay("<p>x</p>", "p { font-weight: bold; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_weight, FontWeight(700));
+        assert_eq!(p.style.font_weight, FontWeight::new(700));
     }
 
     /// Численное значение.
@@ -1243,7 +1243,7 @@ use super::*;
     fn font_weight_numeric() {
         let root = lay("<p>x</p>", "p { font-weight: 300; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_weight, FontWeight(300));
+        assert_eq!(p.style.font_weight, FontWeight::new(300));
     }
 
     /// `lighter` от 700 = 400 (по таблице CSS Fonts L4).
@@ -1255,8 +1255,8 @@ use super::*;
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(div.style.font_weight, FontWeight(700));
-        assert_eq!(p.style.font_weight, FontWeight(400));
+        assert_eq!(div.style.font_weight, FontWeight::new(700));
+        assert_eq!(p.style.font_weight, FontWeight::new(400));
     }
 
     /// `bolder` от 400 = 700.
@@ -1269,8 +1269,8 @@ use super::*;
         let div = first_element_child(&root);
         let p = first_element_child(div);
         // div наследует normal=400; p получает bolder = 700.
-        assert_eq!(div.style.font_weight, FontWeight(400));
-        assert_eq!(p.style.font_weight, FontWeight(700));
+        assert_eq!(div.style.font_weight, FontWeight::new(400));
+        assert_eq!(p.style.font_weight, FontWeight::new(700));
     }
 
     /// `font-weight: normal` сбрасывает UA bold у `<strong>`.
@@ -1293,7 +1293,7 @@ use super::*;
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(p.style.font_weight, FontWeight(800));
+        assert_eq!(p.style.font_weight, FontWeight::new(800));
     }
 
     /// Невалидное значение игнорируется.

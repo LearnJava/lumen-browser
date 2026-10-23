@@ -217,7 +217,7 @@ pub(crate) use values::multicol_cssom::insert_multicol_computed;
 // вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub use values::typography::{
     ColorScheme, CssContinue, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing,
-    FontStretch, FontStyle, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
+    FontStretch, FontStyle, font_style_to_css, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
     FontVariantNumeric, NumericSpacing, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, TextJustify, CaseLang, resolve_match_parent, resolve_match_parent_last,

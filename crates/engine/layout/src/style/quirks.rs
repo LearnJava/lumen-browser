@@ -53,6 +53,7 @@ pub(in crate::style) fn apply_quirks_table_reset(doc: &Document, node: NodeId, s
     style.line_height_is_normal = true;
     style.font_family = default_font_family();
     style.font_style = FontStyle::Normal;
+    style.font_oblique_angle = None;
     style.font_variant_caps = FontVariantCaps::Normal;
     style.font_variant_ligatures = Default::default();
     style.font_variant_numeric = Default::default();

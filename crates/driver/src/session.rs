@@ -2272,7 +2272,7 @@ fn style_to_properties(style: &lumen_layout::ComputedStyle) -> ComputedPropertie
             .unwrap_or_else(|| "transparent".into()),
     );
     m.insert("font-size".into(), format!("{:.2}px", style.font_size));
-    m.insert("font-weight".into(), format!("{}", style.font_weight.0));
+    m.insert("font-weight".into(), style.font_weight.serialize());
     m.insert("width".into(), format_opt_length(style.width.as_ref()));
     m.insert("height".into(), format_opt_length(style.height.as_ref()));
     m.insert("margin-top".into(), format_length_or_auto(&style.margin_top));

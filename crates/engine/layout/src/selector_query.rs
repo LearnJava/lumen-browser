@@ -1618,12 +1618,11 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Typography ────────────────────────────────────────────────
     m.insert("font-size".into(), px_str(style.font_size / z));
-    m.insert("font-weight".into(), style.font_weight.0.to_string());
-    m.insert("font-style".into(), match style.font_style {
-        FontStyle::Normal => "normal",
-        FontStyle::Italic => "italic",
-        FontStyle::Oblique => "oblique",
-    }.into());
+    m.insert("font-weight".into(), style.font_weight.serialize());
+    m.insert(
+        "font-style".into(),
+        crate::style::font_style_to_css(style.font_style, style.font_oblique_angle),
+    );
     // CSS Fonts L4 §6.10: shorthand сериализуется значениями реализованных
     // компонент (ligatures, caps, numeric, position, emoji) — `-east-asian`/
     // `-alternates` всегда в initial. Все в initial → `normal`; иначе — только

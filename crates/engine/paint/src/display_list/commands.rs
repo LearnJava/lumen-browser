@@ -916,7 +916,7 @@ mod tests {
                 font_size: 16.0,
                 color,
                 font_family: vec!["Inter".to_string()],
-                font_weight: FontWeight(400),
+                font_weight: FontWeight::new(400),
                 font_style: FontStyle::Italic,
                 font_stretch: FontStretch(1000),
                 font_variation_axes: vec![(*b"wght", 700.0)],

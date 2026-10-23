@@ -600,6 +600,9 @@ fn evaluate(prop: &str, expr: &str, em_basis: f32, viewport: Size) -> Option<Str
         return None;
     }
     match r.d {
+        // CSS Fonts L4 §2.2: результат `calc()` для `font-weight` зажимается в `[1, 1000]`
+        // (литерал вне диапазона недопустим, вычисленное значение — нет).
+        NUM if prop == "font-weight" && !r.v.is_nan() => Some(number_literal(r.v.clamp(1.0, 1000.0))),
         NUM => {
             let v = if integer_property(prop) {
                 if r.v.is_nan() { 0.0 } else { (r.v + 0.5).floor() }
@@ -607,6 +610,10 @@ fn evaluate(prop: &str, expr: &str, em_basis: f32, viewport: Size) -> Option<Str
                 r.v
             };
             Some(number_literal(v))
+        }
+        // CSS Fonts L4 §2.3: угол `oblique` из `calc()` зажимается в `[-90deg, 90deg]`.
+        ANG if prop == "font-style" && !r.v.is_nan() => {
+            Some(format!("{}deg", number_literal(r.v.clamp(-90.0, 90.0))))
         }
         ANG => Some(format!("{}deg", number_literal(r.v))),
         TIME => Some(format!("{}s", number_literal(r.v))),
@@ -658,7 +665,8 @@ fn expected_dims(prop: &str) -> Option<&'static [Dim]> {
         "transition-delay" | "transition-duration" | "animation-delay" | "animation-duration" => {
             Some(&[TIME])
         }
-        "rotate" => Some(&[ANG]),
+        "rotate" | "font-style-angle" => Some(&[ANG]),
+        "font-weight" => Some(&[NUM]),
         _ => None,
     }
 }

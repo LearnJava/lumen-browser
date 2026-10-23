@@ -206,14 +206,12 @@ pub(in crate::style) fn apply_decl_text(
             apply_text_wrap_shorthand(style, val);
         }
         "font-style" => {
-            // CSS Fonts L4 — normal | italic | oblique. Прочее (`oblique 10deg`,
-            // `oblique -5deg`) пока не поддерживаем — берём как oblique.
-            style.font_style = match val.split_whitespace().next() {
-                Some("italic") => FontStyle::Italic,
-                Some("oblique") => FontStyle::Oblique,
-                Some("normal") => FontStyle::Normal,
-                _ => style.font_style,
-            };
+            // CSS Fonts L4 §2.3 — normal | italic | oblique <angle [-90deg, 90deg]>?.
+            // Недопустимое значение декларацию отбрасывает.
+            if let Some((fs, angle)) = FontStyle::parse(val) {
+                style.font_style = fs;
+                style.font_oblique_angle = angle;
+            }
         }
         "font-weight" => {
             if let Some(w) = parse_font_weight(val, parent_font_weight) {
@@ -234,6 +232,7 @@ pub(in crate::style) fn apply_decl_text(
             // явно заданные компоненты.
             if let Some(parts) = parse_font_shorthand(val) {
                 style.font_style = parts.style.unwrap_or(FontStyle::Normal);
+                style.font_oblique_angle = parts.oblique_angle;
                 style.font_variant_caps =
                     if parts.small_caps { FontVariantCaps::SmallCaps } else { FontVariantCaps::Normal };
                 // `font` сбрасывает ВСЕ longhand-ы `font-variant`, включая те,
