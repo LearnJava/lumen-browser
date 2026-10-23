@@ -414,6 +414,7 @@ impl ComputedStyle {
             view_transition_name: None,
             view_transition_class: None,
             view_transition_group: None,
+            view_transition_scope_all: false,
             quotes: Quotes::Auto,
         }
     }
@@ -882,6 +883,7 @@ impl ComputedStyle {
             view_transition_name: None,
             view_transition_class: None,
             view_transition_group: None,
+            view_transition_scope_all: false,
             // CSS Generated Content L3 §3.2 — quotes inherited.
             quotes: inherited.quotes.clone(),
         }

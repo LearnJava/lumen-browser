@@ -1379,6 +1379,9 @@ fn apply_css_wide_keyword_with(
         "view-transition-class" => {
             style.view_transition_class = if inh_only_inherit { inherited.view_transition_class.clone() } else { None };
         }
+        "view-transition-scope" => {
+            style.view_transition_scope_all = if inh_only_inherit { inherited.view_transition_scope_all } else { false };
+        }
         "view-transition-group" => {
             style.view_transition_group = if inh_only_inherit { inherited.view_transition_group.clone() } else { None };
         }

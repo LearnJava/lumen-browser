@@ -379,6 +379,18 @@
     }
 
     #[test]
+    fn view_transition_scope_parsed_and_validated() {
+        assert!(!vt_style("").view_transition_scope_all);
+        assert!(vt_style("div { view-transition-scope: all }").view_transition_scope_all);
+        assert!(vt_style("div { view-transition-scope: ALL }").view_transition_scope_all);
+        assert!(!vt_style("div { view-transition-scope: all; view-transition-scope: none }").view_transition_scope_all);
+        // Invalid values drop the declaration; the property is not inherited.
+        assert!(vt_style("div { view-transition-scope: all; view-transition-scope: auto }").view_transition_scope_all);
+        assert!(vt_style("div { view-transition-scope: all; view-transition-scope: initial }")
+            .view_transition_scope_all == false);
+    }
+
+    #[test]
     fn view_transition_name_default_is_none() {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");

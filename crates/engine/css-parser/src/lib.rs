@@ -477,6 +477,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "view-transition-class",
     "view-transition-group",
     "view-transition-name",
+    "view-transition-scope",
     "visibility",
     "white-space",
     "widows",

@@ -1393,6 +1393,26 @@ pub(crate) fn install_computed_styles(
             serde_json::to_string(&named).unwrap_or_else(|_| "[]".to_string())
         });
     }
+    // Scoped View Transitions: the rendered elements with `view-transition-scope: all`, as a
+    // JSON `[nodeIndex, …]`. Name discovery of an enclosing transition stops at them.
+    {
+        let cs = Arc::clone(&computed_styles);
+        let flush = flush.clone();
+        let needed = Arc::clone(&computed_styles_needed);
+        reg!(scope, ctx, store, "_lumen_vt_scope_roots", move || -> String {
+            needed.store(true, Ordering::Relaxed);
+            flush.maybe_flush();
+            let mut roots: Vec<u32> = cs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, m)| m.get("view-transition-scope").is_some_and(|v| v == "all"))
+                .map(|(nid, _)| *nid)
+                .collect();
+            roots.sort_unstable();
+            serde_json::to_string(&roots).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
     // CSS View Transitions L1 §6: `getComputedStyle(html, '::view-transition…')` while a
     // transition is active. Answers the style map of one pseudo-tree node as JSON (`{}` when
     // the kind is not one); `copied_json` is `[[property, value], …]` for the group.

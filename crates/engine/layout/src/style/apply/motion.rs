@@ -363,6 +363,15 @@ pub(in crate::style) fn apply_decl_motion(
                 style.view_transition_group = Some(v.into());
             }
         }
+        // CSS View Transitions L2 §2.4 — view-transition-scope: none | all.
+        "view-transition-scope" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.view_transition_scope_all = false;
+            } else if v.eq_ignore_ascii_case("all") {
+                style.view_transition_scope_all = true;
+            }
+        }
         "touch-action" => {
             let v = val.trim();
             style.touch_action = if v.contains("manipulation") {
