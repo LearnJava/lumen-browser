@@ -5614,7 +5614,13 @@ function _wa_gap_tr_current(rec, now, camel) {
 
 // The winning `@keyframes <name>` of the document as JSON, or null (a shim-level seam
 // over the native so the unit tests can substitute it).
-function _wa_gap_keyframes_json(name) { return _lumen_keyframes_json(name); }
+function _wa_gap_keyframes_json(name) {
+    // The UA `@keyframes` of the view-transition tree live in the View Transitions shim.
+    if (name.indexOf('-ua-view-transition-') === 0 && typeof globalThis._lumen_vt_ua_keyframes === 'function') {
+        return globalThis._lumen_vt_ua_keyframes(name);
+    }
+    return _lumen_keyframes_json(name);
+}
 
 // The keyframes of `name` that declare the longhand `kebab`: [{offset, value, easing}]
 // sorted by offset, one per offset (a later declaration wins), or null.
@@ -7212,12 +7218,26 @@ function _wa_get_animations_for(target, options) {
     return out;
 }
 
+// The pseudo-elements of an element that can carry animations: `::before`/`::after`, and for
+// the root the `::view-transition` tree of the active transition — plus those of a finished one,
+// so the animations they carried are dropped on the next sync.
+var _wa_vt_seen = {};
+function _wa_pseudo_targets(el) {
+    var list = ['::before', '::after'];
+    if (el === document.documentElement && typeof globalThis._lumen_vt_pseudo_list === 'function') {
+        var kinds = globalThis._lumen_vt_pseudo_list();
+        for (var i = 0; i < kinds.length; i++) _wa_vt_seen['::' + kinds[i]] = true;
+        for (var k in _wa_vt_seen) list.push(k);
+    }
+    return list;
+}
+
 // One element's relevant animations (Web Animations §5.2.3 `getAnimations()`), then those of
-// its `::before`/`::after`.
+// its `::before`/`::after` (and the view-transition tree).
 function _wa_collect_animations(el, out, withPseudo) {
     _css_gen++;
     _wa_motion_tr_sync(el);
-    var pe = withPseudo ? [null, '::before', '::after'] : [null];
+    var pe = withPseudo ? [null].concat(_wa_pseudo_targets(el)) : [null];
     for (var p = 0; p < pe.length; p++) {
         _wa_gap_an_sync(el, pe[p]);
         var mine = _wa_animations.filter(function(a) {
@@ -7713,6 +7733,11 @@ function _css_new_clock() {
 // Computed value of an `animation-*`/`transition-*` property of the element or one of its
 // pseudo-elements.
 function _css_prop(nid, pseudo, name) {
+    // The `::view-transition` tree: the View Transitions shim's UA sheet under the page's rules.
+    if (pseudo && pseudo.indexOf('::view-transition') === 0) {
+        var vt = typeof globalThis._lumen_vt_pseudo_style === 'function' ? globalThis._lumen_vt_pseudo_style(pseudo.slice(2)) : null;
+        return vt && vt[name] || '';
+    }
     if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo.slice(2), name) || '';
     return _lumen_computed_property(nid, name);
 }
@@ -7925,6 +7950,12 @@ function _css_an_update_all() {
     for (var key in _css_an_by_key) {
         var at = key.indexOf(':');
         _css_an_update(+key.slice(0, at), key.slice(at + 1) || null);
+    }
+    // The view-transition tree has UA `@keyframes` of its own, whatever the sheets define.
+    var rootEl = document.documentElement;
+    if (rootEl && rootEl.__nid__ != null) {
+        var vtp = _wa_pseudo_targets(rootEl).slice(2);
+        for (var v = 0; v < vtp.length; v++) _css_an_update(rootEl.__nid__, vtp[v]);
     }
     if (typeof _lumen_has_keyframes === 'function' && !_lumen_has_keyframes()) return;
     var els = document.querySelectorAll('*');

@@ -422,3 +422,68 @@ fn pseudo_tree_computed_style_rejects_non_root_owner_and_malformed_pseudos() {
     settle(&rt);
     assert_eq!(log(&rt), "[\"\",\"\",\"\",\"\",\"absolute\"]");
 }
+
+/// BUG-1509 — a CSS animation the page puts on the pseudo-tree is listed by `getAnimations()` while
+/// the transition runs, and is gone with it.
+#[test]
+fn pseudo_tree_css_animation_is_listed_by_get_animations() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "@keyframes k { from { margin-left: 100px; } to { margin-left: 100px; } } \
+         :root::view-transition-group(root), :root::view-transition { animation: k 10s; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         _wa_gap_keyframes_json = function (n) {
+           return n === 'k' ? JSON.stringify([{ offset: 0, decls: [['margin-left', '100px']] },
+                                              { offset: 1, decls: [['margin-left', '100px']] }]) : null;
+         };
+         _lumen_has_keyframes = function () { return true; };
+         var html = document.documentElement;
+         log.push(html.getAnimations({ subtree: true }).length);
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           var anims = html.getAnimations({ subtree: true });
+           log.push(anims.length, anims.map(function (a) { return a.animationName + '@' + a.effect.pseudoElement; }).join('+'));
+           log.push(document.getAnimations().length, html.getAnimations().length);
+         });
+         vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "0,2,k@::view-transition+k@::view-transition-group(root),2,0,0");
+}
+
+/// BUG-1509 — with no author rules the UA sheet's own animations are on the tree: the group of
+/// every capture, the old and new images of the names present in that state.
+#[test]
+fn pseudo_tree_ua_animations_are_listed_by_get_animations() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("#main { display: block; view-transition-name: hero; }")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         var html = document.documentElement;
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           var names = function (list) {
+             return list.map(function (a) { return a.animationName.replace('-ua-view-transition-', '') + '@' + a.effect.pseudoElement; }).join(' ');
+           };
+           log.push(names(html.getAnimations({ subtree: true })));
+           log.push(document.getAnimations().length);
+         });
+         vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length + '/' + document.getAnimations().length); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    let got = log(&rt);
+    // Tree order: the groups first (root, then `hero`), per name group → image pair → old → new.
+    assert_eq!(
+        got,
+        "group-anim-root@::view-transition-group(root) fade-out@::view-transition-old(root) fade-in@::view-transition-new(root) \
+         group-anim-hero@::view-transition-group(hero) fade-out@::view-transition-old(hero) fade-in@::view-transition-new(hero),6,0/0"
+    );
+}

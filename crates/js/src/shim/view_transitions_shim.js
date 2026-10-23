@@ -172,7 +172,7 @@ function captureNames() {
     try { list = JSON.parse(_lumen_vt_named_elements()); } catch (e) { list = []; }
   }
   var rootNid = document.documentElement ? document.documentElement.__nid__ : null;
-  if (rootNid != null) { list.push([rootNid, 'root']); }
+  if (rootNid != null) { list.unshift([rootNid, 'root']); }
   for (var i = 0; i < list.length; i++) {
     var name = list[i][1];
     if (name === 'auto' || name === 'match-element' || name in out) { continue; }
@@ -183,9 +183,21 @@ function captureNames() {
         if (v) { props.push([COPIED_PROPS[j], v]); }
       }
     }
-    out[name] = props;
+    out[name] = { props: props, rect: rectOf(list[i][0], list[i][0] === rootNid) };
   }
   return out;
+}
+
+// `[x, y, width, height]` of the border box of node `nid` (the viewport for the root), the
+// geometry the group's UA animation runs between; zeros when it cannot be read.
+function rectOf(nid, isRoot) {
+  try {
+    if (isRoot) { return [0, 0, window.innerWidth || 0, window.innerHeight || 0]; }
+    var el = typeof G._lumen_make_element === 'function' ? G._lumen_make_element(nid) : null;
+    var r = el && el.getBoundingClientRect();
+    if (r) { return [r.left, r.top, r.width, r.height]; }
+  } catch (e) { /* no box */ }
+  return [0, 0, 0, 0];
 }
 
 // The style map of the pseudo-element `kind` (`view-transition`, `view-transition-old(a)`, …) of
@@ -203,7 +215,7 @@ Object.defineProperty(G, '_lumen_vt_pseudo_style', {
       var inNew = s.newNames && m[2] in s.newNames;
       var exists = m[1] === 'view-transition-old' ? inOld : m[1] === 'view-transition-new' ? inNew : inOld || inNew;
       if (!exists) { return null; }
-      if (m[1] === 'view-transition-group' && s.newNames) { copied = (inNew ? s.newNames : s.oldNames)[m[2]]; }
+      if (m[1] === 'view-transition-group' && s.newNames) { copied = (inNew ? s.newNames : s.oldNames)[m[2]].props; }
     } else if (m[1] !== 'view-transition') {
       return null;
     }
@@ -398,6 +410,50 @@ Object.defineProperty(docProto, 'activeViewTransition', {
     'activeViewTransition').get,
   enumerable: true,
   configurable: true,
+});
+
+// The `@keyframes` of the UA sheet (§6.5): `-ua-view-transition-fade-out` / `-fade-in` on the
+// old / new image, `-ua-view-transition-group-anim-<name>` moving the group from the old box to
+// the new one (a name present in one state only keeps that box). JSON like
+// `_lumen_keyframes_json`, null for any other name.
+Object.defineProperty(G, '_lumen_vt_ua_keyframes', {
+  value: function (name) {
+    var fade = /^-ua-view-transition-fade-(out|in)$/.exec(name);
+    if (fade) {
+      var o = fade[1] === 'out' ? ['1', '0'] : ['0', '1'];
+      return JSON.stringify([{ offset: 0, decls: [['opacity', o[0]]] }, { offset: 1, decls: [['opacity', o[1]]] }]);
+    }
+    var g = /^-ua-view-transition-group-anim-(.+)$/.exec(name);
+    var s = active;
+    if (!g || !s) { return null; }
+    var from = s.oldNames && s.oldNames[g[1]], to = s.newNames && s.newNames[g[1]];
+    if (!from && !to) { return null; }
+    var box = function (e) {
+      var r = e.rect;
+      return [['transform', 'translate(' + r[0] + 'px, ' + r[1] + 'px)'], ['width', r[2] + 'px'], ['height', r[3] + 'px']];
+    };
+    return JSON.stringify([{ offset: 0, decls: box(from || to) }, { offset: 1, decls: box(to || from) }]);
+  },
+  writable: true, enumerable: false, configurable: true,
+});
+
+// Kinds of the pseudo-elements the active transition has, in tree order (`::view-transition`,
+// then per name group → image pair → old → new); empty when there is none.
+Object.defineProperty(G, '_lumen_vt_pseudo_list', {
+  value: function () {
+    var s = active;
+    if (!s || (s.phase !== 'update-callback-called' && s.phase !== 'animating')) { return []; }
+    var names = Object.keys(s.oldNames || {});
+    Object.keys(s.newNames || {}).forEach(function (n) { if (names.indexOf(n) < 0) { names.push(n); } });
+    var out = ['view-transition'];
+    names.forEach(function (n) {
+      out.push('view-transition-group(' + n + ')', 'view-transition-image-pair(' + n + ')');
+      if (s.oldNames && n in s.oldNames) { out.push('view-transition-old(' + n + ')'); }
+      if (s.newNames && n in s.newNames) { out.push('view-transition-new(' + n + ')'); }
+    });
+    return out;
+  },
+  writable: true, enumerable: false, configurable: true,
 });
 
 // ── pagereveal / pageswap (HTML LS §7.11.9) ─────────────────────────────────
