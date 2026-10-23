@@ -15,7 +15,7 @@
 //! registration's *initial value*, not to an ordinary declaration on a real
 //! element (which resolves `em`/`rem` normally).
 
-use crate::style::syntax_string::cascade_validate_against_syntax;
+use crate::style::syntax_string::{cascade_compute_registered_value, cascade_validate_against_syntax};
 use crate::style::CustomProps;
 use lumen_css_parser::PropertyRule;
 use std::collections::HashMap;
@@ -59,4 +59,31 @@ pub(in crate::style) fn apply_property_initial_values(
 /// чтобы не откатывать ранее принятые declarations.
 pub fn validate_against_syntax(value: &str, syntax: &str) -> bool {
     cascade_validate_against_syntax(value, syntax).unwrap_or(true)
+}
+
+/// CSS Properties and Values L1 §2.3: replaces the value of each registered custom
+/// property in `custom_props` by its computed form — `2em` → `20px`, `calc(1 + 2)` →
+/// `3` (BUG-1505). Runs once the element's own `font-size` is known; a value that
+/// is already computed (inherited from the parent) maps to itself, and a value still
+/// holding `var()` is left for substitution.
+pub(in crate::style) fn compute_registered_values(
+    custom_props: &mut CustomProps,
+    registry: &HashMap<&str, &PropertyRule>,
+    em: f32,
+    viewport: lumen_core::geom::Size,
+) {
+    for (name, p) in registry {
+        if p.syntax.trim() == "*" {
+            continue;
+        }
+        let Some(value) = custom_props.get(*name) else { continue };
+        if value.contains("var(") {
+            continue;
+        }
+        if let Some(computed) = cascade_compute_registered_value(value, &p.syntax, em, viewport)
+            && computed != *value
+        {
+            custom_props.make_mut().insert((*name).to_string(), computed);
+        }
+    }
 }

@@ -34,8 +34,32 @@ pub(crate) fn expand_vars_and_env(
     em_basis: f32,
     viewport: Size,
 ) -> Option<String> {
+    expand_vars_and_env_of(None, value, custom, em_basis, viewport)
+}
+
+/// [`expand_vars_and_env`] for the value of custom property `owner` itself: `owner` counts
+/// as being resolved, so `--a: var(--b, x); --b: var(--a, y)` makes `--a` guaranteed-invalid
+/// too instead of `x` (CSS Variables L1 §3.1: every property on a cycle is invalid).
+pub(crate) fn expand_custom_property_value(
+    owner: &str,
+    value: &str,
+    custom: &HashMap<String, String>,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<String> {
+    expand_vars_and_env_of(Some(owner), value, custom, em_basis, viewport)
+}
+
+fn expand_vars_and_env_of(
+    owner: Option<&str>,
+    value: &str,
+    custom: &HashMap<String, String>,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<String> {
     let after_var = if value.contains("var(") {
-        expand_vars(value, custom, 0, em_basis, viewport)?
+        let mut active: Vec<&str> = owner.and_then(|n| custom.get_key_value(n)).map(|(k, _)| k.as_str()).into_iter().collect();
+        expand_vars_tracked(value, custom, 0, em_basis, viewport, &mut active).ok()?
     } else {
         value.to_string()
     };

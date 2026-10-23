@@ -23,6 +23,7 @@ mod dom_core;
 mod dom_editing;
 pub(super) mod net;
 mod platform;
+mod registered_properties;
 mod storage;
 mod stylesheets;
 
@@ -32,6 +33,7 @@ pub(super) use dom_core::*;
 pub(super) use dom_editing::*;
 pub(super) use net::*;
 pub(super) use platform::*;
+pub(super) use registered_properties::*;
 pub(super) use storage::*;
 pub(super) use stylesheets::*;
 
