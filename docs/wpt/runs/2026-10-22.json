@@ -4,6 +4,7 @@
   "commit": "d4114145a",
   "exclude_prefixes": [],
   "finished": "2026-10-22T22:52:00",
+  "ids_file": "2026-10-22.ids.tsv.gz",
   "max_browser_gb": 4.0,
   "no_paint": true,
   "parallel_shards": 2,
