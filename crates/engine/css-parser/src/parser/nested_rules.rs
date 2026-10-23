@@ -448,10 +448,12 @@ impl Parser<'_> {
                 return vec![];
             };
             self.consume(); // '{'
-            let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
+            let (rules, mut inner_at) = self.parse_nested_group_body(parent_sels);
+            super::at_rules::enclose_container_rules(&mut inner_at, &cont_name, &condition);
             let mut outcomes = vec![AtRuleOutcome::Container(ContainerRule {
                 name: cont_name,
                 condition,
+                enclosing: Vec::new(),
                 rules,
             })];
             outcomes.extend(inner_at);

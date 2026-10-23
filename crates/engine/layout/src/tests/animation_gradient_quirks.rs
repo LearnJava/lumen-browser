@@ -721,6 +721,24 @@ fn caret_shape_and_animation_are_inherited_and_css_wide() {
 }
 
 #[test]
+fn input_security_parses_inherits_and_css_wide() {
+    use crate::style::InputSecurity;
+    let root = lay("<p>x</p>", "");
+    assert_eq!(first_p_style(&root).input_security, InputSecurity::Auto);
+    let root = lay("<p>x</p>", "p { input-security: none; input-security: disc; }");
+    assert_eq!(first_p_style(&root).input_security, InputSecurity::None, "invalid value ignored");
+    let root = lay("<div><p>x</p></div>", "div { input-security: none; } p { input-security: initial; }");
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(div.style.input_security, InputSecurity::None);
+    assert_eq!(p.style.input_security, InputSecurity::Auto, "initial");
+    let root = lay("<div><p>x</p></div>", "div { input-security: none; }");
+    let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+    assert_eq!(p.style.input_security, InputSecurity::None, "inherited");
+}
+
+#[test]
 fn caret_shorthand_sets_all_three_and_resets_omitted() {
     use crate::style::{CaretAnimation, CaretShape};
     let root = lay("<p>x</p>", "p { caret-shape: block; caret: manual red underscore; }");

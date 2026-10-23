@@ -65,6 +65,13 @@ python scripts/scroll_perf.py graphic_tests/1000000-final.html --ticks 25
 # FPS ceiling can't see. Baseline today: ~2.4 fps, ~404ms gaps (frozen). Control:
 # edit BUSY_MS=0 in the page → ~28 fps. This is the number M2.2c must beat.
 python scripts/mt_stall_bench.py --secs 6
+
+# Per-test comparison of two WPT corpus-run snapshots (both need `ids_file`, which
+# `run_corpus.py --run-json` writes next to the snapshot): which tests got worse /
+# better, with the status transition and score delta. --prefix narrows to a
+# subdirectory, --min-delta drops noise, --json is machine-readable. Format and
+# the full-run recipe — docs/wpt/pass-rate.md §«Файл результатов по тестам».
+python tests/wpt/run_diff.py docs/wpt/runs/A.json docs/wpt/runs/B.json --prefix css/css-break
 ```
 
 ---

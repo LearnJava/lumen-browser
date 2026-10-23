@@ -1291,9 +1291,9 @@ use super::*;
         assert_eq!(parse_length("20cqb"), Some(Length::Cqb(20.0)));
         assert_eq!(parse_length("5cqmin"), Some(Length::Cqmin(5.0)));
         assert_eq!(parse_length("5cqmax"), Some(Length::Cqmax(5.0)));
-        // Without container context, cq* resolve to None.
-        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), None);
-        assert_eq!(Length::Cqh(30.0).resolve(16.0, None, vp), None);
+        // Without container context, cq* fall back to the small viewport (BUG-1499).
+        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), Some(512.0));
+        assert_eq!(Length::Cqh(25.0).resolve(16.0, None, vp), Some(192.0));
     }
 
     #[test]
@@ -1310,22 +1310,22 @@ use super::*;
         assert_eq!(Length::Cqmax(10.0).resolve(16.0, None, vp), Some(80.0)); // 10% of max(800,600)
 
         clear_cq_context();
-        // After clearing, cq* units return None again.
-        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), None);
+        // After clearing, cq* units fall back to the viewport again.
+        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), Some(512.0));
     }
 
     #[test]
     fn cq_units_inline_size_container() {
         let vp = Size::new(1024.0, 768.0);
-        // inline-size container: block axis not queryable → height is None → stored as 0.0.
+        // inline-size container: block axis not queryable → no height in the context.
         set_cq_context(400.0, None);
 
         assert_eq!(Length::Cqw(25.0).resolve(16.0, None, vp), Some(100.0)); // 25% of 400
-        // cqh / cqb / cqmin / cqmax return None when block size is unavailable.
-        assert_eq!(Length::Cqh(50.0).resolve(16.0, None, vp), None);
-        assert_eq!(Length::Cqb(50.0).resolve(16.0, None, vp), None);
-        assert_eq!(Length::Cqmin(10.0).resolve(16.0, None, vp), None);
-        assert_eq!(Length::Cqmax(10.0).resolve(16.0, None, vp), None);
+        // The block axis is not exposed: cqh / cqb / cqmin / cqmax use the small viewport height.
+        assert_eq!(Length::Cqh(50.0).resolve(16.0, None, vp), Some(384.0));
+        assert_eq!(Length::Cqb(50.0).resolve(16.0, None, vp), Some(384.0));
+        assert_eq!(Length::Cqmin(50.0).resolve(16.0, None, vp), Some(200.0)); // min(400, 768)
+        assert_eq!(Length::Cqmax(50.0).resolve(16.0, None, vp), Some(384.0)); // max(400, 768)
 
         clear_cq_context();
     }

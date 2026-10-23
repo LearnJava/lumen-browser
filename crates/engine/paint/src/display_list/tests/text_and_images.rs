@@ -617,6 +617,21 @@
         );
     }
 
+    /// CSS UI L4 §6.5: `input-security: none` shows a password value as plain text;
+    /// an explicit `auto` (and the inherited value) keeps it masked.
+    #[test]
+    fn password_input_security_none_reveals_value() {
+        let dl = build(r#"<input type=password value="secret">"#, "input { input-security: none; }");
+        let t = texts(&dl);
+        assert!(t.contains(&"secret"), "input-security:none must not mask, got {t:?}");
+        let dl = build(r#"<input type=password value="secret">"#, "input { input-security: auto; }");
+        let t = texts(&dl);
+        assert!(!t.iter().any(|s| s.contains("secret")), "input-security:auto must mask, got {t:?}");
+        let dl = build(r#"<div><input type=password value="secret"></div>"#, "div { input-security: none; }");
+        let t = texts(&dl);
+        assert!(t.contains(&"secret"), "input-security is inherited, got {t:?}");
+    }
+
     /// `<input type=submit>` with no `value` renders the UA default label.
     #[test]
     fn submit_input_default_label() {

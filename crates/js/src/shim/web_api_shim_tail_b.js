@@ -6229,6 +6229,108 @@ function _wa_motion_seq_try(prop, from, to, t) {
     return undefined;
 }
 
+// CSS Properties and Values API §5 / Web Animations: a registered custom property animates
+// by the type of its `syntax` (BUG-1504). `_wa_custom_kind` reads the registration: a single
+// type (`<length>`, `<color>`, `<transform-list>`, …), optionally a `+` (space) / `#` (comma)
+// list. Alternatives (`<a> | <b>`), `*` and the non-interpolable types give null — the
+// caller keeps the generic string path.
+var _wa_custom_scalar_types = {
+    length: 1, number: 1, percentage: 1, 'length-percentage': 1, integer: 1, angle: 1,
+    time: 1, resolution: 1, flex: 1
+};
+
+function _wa_custom_kind(name) {
+    var def = null;
+    try { def = CSS._getRegisteredProperties()[name]; } catch (e) { return null; }
+    var s = def && typeof def.syntax === 'string' ? def.syntax.trim() : '';
+    var m = /^<([a-z-]+)>([+#]?)$/.exec(s);
+    if (!m) return null;
+    var leaf = _wa_custom_scalar_types[m[1]] ? 'scalar'
+        : m[1] === 'color' ? 'color'
+        : (m[1] === 'transform-function' || m[1] === 'transform-list') ? m[1] : null;
+    if (!leaf) return null;
+    // A transform-list is already space separated by itself; it takes no list multiplier.
+    if (leaf !== 'scalar' && leaf !== 'color' && m[2]) return null;
+    return { leaf: leaf, integer: m[1] === 'integer', sep: m[2] === '+' ? ' ' : m[2] === '#' ? ',' : '' };
+}
+
+function _wa_custom_color_text(c) {
+    var rgb = c[0] + ', ' + c[1] + ', ' + c[2];
+    return c[3] === 255 ? 'rgb(' + rgb + ')' : 'rgba(' + rgb + ', ' + (+(c[3] / 255).toFixed(3)) + ')';
+}
+
+function _wa_custom_leaf_interp(kind, a, b, t) {
+    if (a === b) return a;
+    if (kind.leaf === 'color') {
+        var ca = _wa_color_rgba(a), cb = _wa_color_rgba(b);
+        if (!ca || !cb) return t < 0.5 ? a : b;
+        var o = [];
+        for (var i = 0; i < 4; i++) o.push(Math.max(0, Math.min(255, Math.round(ca[i] + (cb[i] - ca[i]) * t))));
+        return _wa_custom_color_text(o);
+    }
+    if (kind.leaf === 'scalar') {
+        var r = _wa_lerp_scalar(a, b, t);
+        if (kind.integer && !isNaN(parseFloat(r))) return String(Math.round(parseFloat(r)));
+        return r;
+    }
+    return _wa_lerp_transform(a, b, t);
+}
+
+// Interpolate two values of the registered custom property `name`; undefined = not handled
+// here (the generic path takes it).
+function _wa_custom_interp(name, from, to, t) {
+    var kind = _wa_custom_kind(name);
+    if (!kind) return undefined;
+    from = String(from).trim(); to = String(to).trim();
+    if (!kind.sep) {
+        if (kind.leaf === 'scalar') return undefined;
+        return _wa_custom_leaf_interp(kind, from, to, t);
+    }
+    var la = _wa_split_top(from, kind.sep), lb = _wa_split_top(to, kind.sep);
+    // Lists of different lengths do not interpolate: discrete (Values 4 §4.3.2).
+    if (la.length !== lb.length) return t < 0.5 ? from : to;
+    var out = [];
+    for (var i = 0; i < la.length; i++) out.push(_wa_custom_leaf_interp(kind, la[i], lb[i], t));
+    return out.join(kind.sep === ',' ? ', ' : ' ');
+}
+
+function _wa_custom_leaf_composite(kind, under, v, mode) {
+    if (kind.leaf === 'color') {
+        var c = _wa_color_rgba(_wa_composite_color(under, v));
+        return c ? _wa_custom_color_text(c) : v;
+    }
+    if (kind.leaf === 'scalar') return _wa_composite_scalar(under, v);
+    // `<transform-function>`: the two functions sum; a list adds by concatenation and
+    // accumulates by summing the paired functions.
+    return _wa_composite_transform(under, v, kind.leaf === 'transform-function' ? 'accumulate' : mode);
+}
+
+// `add` / `accumulate` of `v` onto `under` for a registered custom property; undefined = not
+// handled here.
+function _wa_custom_composite(name, under, v, mode) {
+    var kind = _wa_custom_kind(name);
+    if (!kind) return undefined;
+    under = String(under).trim(); v = String(v).trim();
+    if (!kind.sep) return _wa_custom_leaf_composite(kind, under, v, mode);
+    var ua = _wa_split_top(under, kind.sep), va = _wa_split_top(v, kind.sep);
+    if (ua.length !== va.length) return v;
+    var out = [];
+    for (var i = 0; i < ua.length; i++) out.push(_wa_custom_leaf_composite(kind, ua[i], va[i], mode));
+    return out.join(kind.sep === ',' ? ', ' : ' ');
+}
+
+// Index of the iteration the effect currently sits in (Web Animations §4.8.4 current
+// iteration): what `iterationComposite: accumulate` multiplies the last keyframe by.
+function _wa_current_iteration(effect) {
+    var anim = effect._animation, t = effect._timing;
+    if (!anim || anim.effect !== effect || anim.currentTime == null) return 0;
+    var dur = +t.duration || 0, el = anim.currentTime - (+t.delay || 0);
+    if (el < 0 || dur <= 0) return 0;
+    var it = t.iterations == null ? 1 : +t.iterations;
+    if (isFinite(it) && el >= dur * it) return Math.max(0, Math.ceil(it) - 1);
+    return Math.floor(el / dur);
+}
+
 // Interpolate a single CSS property value between two string values.
 function _wa_interp_prop(prop, from, to, t) {
     from = _wa_canon_prop(prop, from); to = _wa_canon_prop(prop, to);
@@ -6240,6 +6342,10 @@ function _wa_interp_prop(prop, from, to, t) {
 
 function _wa_interp_prop_raw(prop, from, to, t) {
     if (from === to) return from;
+    if (prop.charAt(0) === '-') {
+        var cu = _wa_custom_interp(prop, from, to, t);
+        if (cu !== undefined) return cu;
+    }
     // `normal` spacing is 0 for interpolation (CSS Text 3 §8.1, §8.2).
     if (prop === 'letterSpacing' || prop === 'wordSpacing') {
         if (from === 'normal') from = '0px';
@@ -6335,6 +6441,10 @@ function _wa_composite_color(under, v) {
 function _wa_composite_value(prop, under, v, mode) {
     if (mode !== 'add' && mode !== 'accumulate') return v;
     if (under == null || under === '') return v;
+    if (prop.charAt(0) === '-') {
+        var cc = _wa_custom_composite(prop, under, v, mode);
+        if (cc !== undefined) return cc;
+    }
     if (prop === 'textIndent') return _wa_composite_text_indent(under, v);
     if (prop === 'transform') return _wa_composite_transform(under, v, mode);
     if (_wa_color_props[prop]) return _wa_composite_color(under, v);
@@ -6386,9 +6496,12 @@ function _wa_compute_at_p(effect, p) {
         var v = _wa_composite_value(prop, under[prop], _wa_canon_prop(prop, raw), mode);
         return _wa_gap_prop_re.test(prop) ? _wa_gap_resolve(effect, prop, v) : _wa_canon_prop(prop, v);
     }
+    var iterComp = effect.iterationComposite === 'accumulate' ? _wa_current_iteration(effect) : 0;
+    var ends = {};
     for (var prop in props) {
         var list = [];
         for (ki = 0; ki < kfs.length; ki++) { if (prop in kfs[ki]) list.push(kfs[ki]); }
+        if (iterComp > 0) ends[prop] = val(list[list.length - 1], prop);
         var base = under[prop];
         if (_wa_no_neutral_re.test(prop)) base = '';
         else if (_wa_gap_prop_re.test(prop) && base) base = _wa_gap_resolve(effect, prop, base);
@@ -6428,6 +6541,13 @@ function _wa_compute_at_p(effect, p) {
         if (kfe !== 'linear' && !/^cubic-bezier\(/.test(kfe)) lt = Math.max(0, Math.min(1, lt));
         lt = _wa_ease(lt, kfe);
         result[prop] = _wa_interp_prop(prop, val(from, prop), val(to, prop), lt);
+    }
+    // Web Animations 1 §5.4.5 iteration composite: every finished iteration adds the last
+    // keyframe's value once more under the interpolated one.
+    for (var ip in ends) {
+        var cur = result[ip];
+        for (var q = 0; q < iterComp; q++) cur = _wa_composite_value(ip, ends[ip], cur, 'accumulate');
+        result[ip] = _wa_canon_prop(ip, cur);
     }
     return result;
 }
@@ -6926,14 +7046,16 @@ function _wa_capture_underlying(anim, eff) {
     for (var pr in props) {
         var iv = '';
         // A neutral keyframe is the computed value, not the author's inline text.
-        if (!neutral[pr]) { try { iv = tgt.style[pr]; } catch (e) {} }
+        // A custom property is not an IDL attribute of the declaration: it reads by name.
+        var custom = pr.charAt(0) === '-';
+        if (!neutral[pr]) { try { iv = custom ? tgt.style.getPropertyValue(pr) : tgt.style[pr]; } catch (e) {} }
         if (!iv && (composites || neutral[pr] || _wa_gap_prop_re.test(pr))) {
             try {
                 if (!cs) cs = getComputedStyle(tgt);
-                iv = cs[pr];
+                iv = custom ? cs.getPropertyValue(pr) : cs[pr];
             } catch (e) {}
         }
-        if (!iv && neutral[pr]) { try { iv = tgt.style[pr]; } catch (e) {} }
+        if (!iv && neutral[pr]) { try { iv = custom ? tgt.style.getPropertyValue(pr) : tgt.style[pr]; } catch (e) {} }
         u[pr] = iv;
     }
     eff._underlying = u;
