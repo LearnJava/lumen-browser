@@ -706,7 +706,7 @@ pub(in crate::style) fn apply_decl_paint(
             // CSS Masking L1 §4.5 — `<geometry-box>#`.
             let values: Vec<BackgroundOrigin> = split_top_level_commas(val.trim())
                 .iter()
-                .filter_map(|s| BackgroundOrigin::parse(s.trim()))
+                .filter_map(|s| BackgroundOrigin::parse_geometry_box(s.trim()))
                 .collect();
             apply_mask_longhand(style, &values, |layer, v| layer.origin = v);
         }

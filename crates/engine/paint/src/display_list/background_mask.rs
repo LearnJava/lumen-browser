@@ -168,6 +168,22 @@ fn gradient_paint_rects(
     }
 }
 
+/// Область, относительно которой [`emit_background_layer`] позиционирует и
+/// обрезает слой.
+#[derive(Clone, Copy)]
+enum LayerArea {
+    /// Сам бокс: origin/clip берутся по `background-origin`/`-clip` от `b.rect`.
+    Own,
+    /// CSS Backgrounds L3 §3.6 `background-attachment: local`: border-box-аналог
+    /// прокручиваемой области (см. [`local_scroll_area`]) вместо `b.rect`.
+    Local(Rect),
+    /// `mask-clip: no-clip` (CSS Masking L1 §4.6): область рисования — этот
+    /// прямоугольник, а не бокс `background-clip`; плитки слоя продолжаются по
+    /// нему, и маска накрывает то, что выступает из элемента. Позиционирование — по
+    /// `origin` самого бокса.
+    Unclipped(Rect),
+}
+
 /// Эмитит одну background-layer команду.
 ///
 /// CSS Compositing L1 §8.3: если `layer.blend_mode != Normal`, оборачивает
@@ -192,10 +208,7 @@ fn emit_background_layer(
     // simplification the solid-color path already makes at the `FillRoundedRect`
     // call site above).
     radii: CornerRadii,
-    // CSS Backgrounds L3 §3.6 `background-attachment: local`: the border-box analogue of the
-    // scrollable area (see [`local_scroll_area`]) the layer is positioned and clipped against
-    // instead of `b.rect`; `None` — the box itself.
-    area: Option<Rect>,
+    area: LayerArea,
 ) {
     // CSS Backgrounds L4 §3.8 `background-clip: text` — paint the layer as for
     // `border-box`, then keep only what lies under the glyphs.
@@ -208,8 +221,9 @@ fn emit_background_layer(
         return;
     }
     let clip = match area {
-        Some(r) => background_clip_rect_in(b, r, layer.clip),
-        None => background_clip_rect(b, layer.clip),
+        LayerArea::Unclipped(r) => r,
+        LayerArea::Local(r) => background_clip_rect_in(b, r, layer.clip),
+        LayerArea::Own => background_clip_rect(b, layer.clip),
     };
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
@@ -259,8 +273,8 @@ fn emit_background_layer(
     };
     let fixed = fixed_vp.is_some();
     let origin = fixed_vp.unwrap_or_else(|| match area {
-        Some(r) => background_origin_rect_in(b, r, layer.origin),
-        None => background_origin_rect(b, layer.origin),
+        LayerArea::Local(r) => background_origin_rect_in(b, r, layer.origin),
+        LayerArea::Own | LayerArea::Unclipped(_) => background_origin_rect(b, layer.origin),
     });
     let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
@@ -584,7 +598,7 @@ pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for (i, layer) in layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
-        emit_background_layer(out, b, layer, dpr, i == 0, radii, None);
+        emit_background_layer(out, b, layer, dpr, i == 0, radii, LayerArea::Own);
     }
     if needs_isolation {
         out.push(DisplayCommand::PopOpacity);
@@ -703,7 +717,7 @@ pub(crate) fn emit_local_background(out: &mut Vec<DisplayCommand>, b: &LayoutBox
     let radii = CornerRadii::default();
     for (i, layer) in all.iter().rev().enumerate() {
         if is_local_layer(layer) {
-            emit_background_layer(out, b, layer, dpr, i == 0, radii, Some(area));
+            emit_background_layer(out, b, layer, dpr, i == 0, radii, LayerArea::Local(area));
         }
     }
     if needs_isolation {
@@ -800,6 +814,25 @@ fn mask_needs_composite(b: &LayoutBox) -> bool {
     layers.iter().any(|l| {
         matches!(l.image, BackgroundImage::Gradient(_)) && matches!(l.size, BackgroundSize::Length(..))
     }) || (layers.len() > 1 && !is_intersect_chain(layers))
+        // `mask-clip: no-clip`: `PushMask*` несёт один `rect` — и позиционирование,
+        // и область рисования, — поэтому слой, плитки которого выходят за
+        // элемент, собирается через офскрин.
+        || layers.iter().any(|l| l.clip == MaskClip::NoClip && is_renderable_mask_source(l))
+}
+
+/// Объединение рамок `b` и всех его потомков — область, которую `mask-clip:
+/// no-clip` обязан накрыть маской. Обход итеративный (глубина дерева не
+/// ограничена).
+fn subtree_rect(b: &LayoutBox) -> Rect {
+    let mut r = b.rect;
+    let mut stack = vec![b];
+    while let Some(n) = stack.pop() {
+        let (x0, y0) = (r.x.min(n.rect.x), r.y.min(n.rect.y));
+        let (x1, y1) = ((r.x + r.width).max(n.rect.x + n.rect.width), (r.y + r.height).max(n.rect.y + n.rect.height));
+        r = Rect::new(x0, y0, x1 - x0, y1 - y0);
+        stack.extend(n.children.iter());
+    }
+    r
 }
 
 /// Есть ли у слоя источник, который [`emit_push_mask`] умеет превратить в
@@ -929,20 +962,35 @@ fn composite_mask_layer_content(b: &LayoutBox, dpr: f32, layer: &MaskLayer) -> V
         BackgroundImage::Url(src) if !src.is_empty() => layer.image.clone(),
         _ => return Vec::new(),
     };
+    // У градиента нет собственного размера и пропорций: `auto`/`cover`/`contain`
+    // дают плитку во всю область позиционирования (CSS Images 3 §5.3). Без явной
+    // плитки `emit_background_layer` залил бы одной командой всю область
+    // рисования и проигнорировал `mask-repeat`/`mask-position`.
+    let size = match (&image, layer.size) {
+        (BackgroundImage::Gradient(_), BackgroundSize::Length(..)) | (BackgroundImage::Url(_), _) => layer.size,
+        (_, _) => BackgroundSize::Length(lumen_layout::BgSizeAxis::Percent(1.0), lumen_layout::BgSizeAxis::Percent(1.0)),
+    };
     let bg = BackgroundLayer {
         image,
         repeat: layer.repeat,
-        size: layer.size,
+        size,
         position: layer.position,
         origin: layer.origin,
         ..BackgroundLayer::default()
     };
     let mut out = Vec::new();
-    // `mask-clip` ограничивает рисуемую область слоя (§4.6); `border-box` и
-    // `no-clip` оставляют плитки в границах элемента.
+    if layer.clip == MaskClip::NoClip {
+        // `no-clip` (§4.6): плитки слоя продолжаются за границы элемента — маска
+        // накрывает и то, что выступает из него (потомки, `overflow: visible`).
+        let area = subtree_rect(b);
+        emit_background_layer(&mut out, b, &bg, dpr, true, CornerRadii::default(), LayerArea::Unclipped(area));
+        return out;
+    }
+    // `mask-clip` ограничивает рисуемую область слоя (§4.6); `border-box`
+    // оставляет плитки в границах элемента.
     let clip_rect = mask_clip_layer_rect(b, layer.clip).unwrap_or(b.rect);
     out.push(DisplayCommand::PushClipRect { rect: clip_rect });
-    emit_background_layer(&mut out, b, &bg, dpr, true, CornerRadii::default(), None);
+    emit_background_layer(&mut out, b, &bg, dpr, true, CornerRadii::default(), LayerArea::Own);
     out.push(DisplayCommand::PopClip);
     out
 }

@@ -416,6 +416,17 @@ impl BackgroundOrigin {
             _ => None,
         }
     }
+
+    /// `<geometry-box>` of `mask-origin` (CSS Masking L1 §4.5): the three CSS
+    /// boxes plus the SVG ones, which CSS Box 4 §1 maps onto CSS boxes —
+    /// `fill-box` is the content box, `stroke-box` and `view-box` the border box.
+    pub fn parse_geometry_box(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fill-box" => Some(Self::ContentBox),
+            "stroke-box" | "view-box" => Some(Self::BorderBox),
+            other => Self::parse(other),
+        }
+    }
 }
 
 /// CSS Backgrounds L3 §3.8 — `background-clip`. Non-inherited.
