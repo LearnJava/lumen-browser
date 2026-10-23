@@ -22,13 +22,15 @@ impl Stylesheet {
     /// the change is not confined to the elements a rule selects, and the caller has to
     /// recascade it all.
     ///
-    /// Why that is enough for an element to keep its style. The cascade orders the rules by
-    /// position: first the plain ones, then `@layer`, then the `@media` blocks, then the
-    /// `@supports` blocks, each group in source order. Inserting or removing a rule (a block)
-    /// shifts no other rule's standing against one of another group, and a block that is equal
-    /// in both sheets is active in both (its condition is evaluated per block, against the same
-    /// viewport). Within one group, the rules returned here are all that changed: the rest are
-    /// present in both sheets in the same relative order (the longest such run is kept). An
+    /// Why that is enough for an element to keep its style. The cascade orders the plain rules
+    /// and the `@media`/`@supports` blocks by order of appearance (a block's [`super::BlockPos`]
+    /// says how many plain rules precede it, and is part of the block's equality, so a block
+    /// that moved against the plain rules counts as changed), then `@layer` after them.
+    /// Inserting or removing a rule (a block) shifts no other rule's standing against another,
+    /// and a block that is equal in both sheets is active in both (its condition is evaluated per
+    /// block, against the same viewport). Within one group, the rules returned here are all that
+    /// changed: the rest are present in both sheets in the same relative order (the longest such
+    /// run is kept). An
     /// element that no returned rule selects therefore matches the same rules in the same
     /// order in both sheets, and cascades to the same style.
     ///

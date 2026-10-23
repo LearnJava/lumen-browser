@@ -28,7 +28,7 @@ pub use parser::{
     LayerCondition, LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaInvertedColors, MediaOrientation, MediaPointer, MediaQuery,
     MediaReducedData, MediaReducedTransparency, MediaScripting,
     MediaQueryClause, MediaRule, MixinParameter, MixinResultItem, MixinResultNodeInfo, MixinRule, MIXIN_APPLY_MARKER, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,
-    Rule, ScopeRule,
+    BlockPos, Rule, ScopeRule,
     SimpleSelector, Specificity, StartingStyleRule, Stylesheet, StylesheetNodeEntry, StylesheetRevision,
     SupportsCondition, SupportsRule, CssomRuleRef, CssomRuleMutationError, CssomOp,
     ViewTransitionNavigation, ViewTransitionRule,
