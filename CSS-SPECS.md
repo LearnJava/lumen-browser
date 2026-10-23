@@ -406,6 +406,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `reading-flow` / `reading-order` | ⬜ | не разбираются (WPT-RUN-14 S21, 2026-10-08): `CSS.supports('reading-flow','flex-visual')` — `false`. CSS Display 4 §reading-flow (порядок фокуса и чтения для flex/grid/block). WPT `css-display/reading-flow/*` — 5 id (`reading-flow-computed`, `reading-flow-invalid`, `reading-order-*`, 37 из 139 сабтестов) |
 | `view-transition-class` | 🟡 | `none \| <custom-ident>+` разбирается с валидацией, `CSS.supports`, `getComputedStyle` (BUG-1510, P3 2026-10-23). Не сделано: сопоставление `::view-transition-group(name.class)` (VT-API-2) |
 | `view-transition-group` | 🟡 | `normal \| contain \| nearest \| <custom-ident>` разбирается с валидацией, `CSS.supports`, `getComputedStyle` (BUG-1510, P3 2026-10-23). Не сделано: вложенные группы по значению (`nested/*`, VT-API-2) |
+| `view-transition-scope` | 🟡 | `none \| all` разбирается, css-wide, `getComputedStyle` (у области бегущего `Element.startViewTransition` — `all`); обрыв обнаружения имён на `all` (BUG-1511, P3 2026-10-24). Не сделано: пиксели области (VT-SCOPED-2) |
 
 ### [T1] Floats
 

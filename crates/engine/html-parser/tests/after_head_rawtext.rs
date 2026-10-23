@@ -15,7 +15,7 @@ fn find(doc: &Document, id: NodeId, local: &str) -> Option<NodeId> {
 }
 
 fn parent_local(doc: &Document, id: NodeId) -> String {
-    let parent = doc.get(id).parent.expect("has a parent");
+    let parent = doc.get(id).parent.unwrap();
     match &doc.get(parent).data {
         NodeData::Element { name, .. } => name.local.to_string(),
         _ => "#other".to_string(),
