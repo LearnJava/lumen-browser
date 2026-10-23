@@ -59,6 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import browser_rss_cap  # noqa: E402
 import corpus_stats  # noqa: E402
 import heavy_lock  # noqa: E402
+import ids_file  # noqa: E402
 import port_guard  # noqa: E402
 
 #: Pilot selection (WPT-RUN-4 slice 2): ten categories picked to exercise the
@@ -1190,6 +1191,60 @@ def rescue_results(raw_path: str) -> dict:
     return merged
 
 
+def dropped_from_raw_log(raw_path: str) -> set:
+    """Ids that wptrunner announced in `suite_start` and then never started.
+
+    wptrunner throws a test away silently when the browser will not come back
+    after a restart (`Max restarts exceeded`, or the `init_failed in state
+    RunningState` race): the test is in `suite_start`, no `test_start` follows,
+    and the report simply lacks it (WPT-RUN-16: 7 ids). Only a stream that
+    *finished* (`suite_end` is present) can say so — in a stream cut by a kill
+    every unreached test also has no `test_start`, and that is a killed shard,
+    already visible as one, not a dropped test.
+
+    Lines are pre-filtered by substring: a raw stream holds one `log` event per
+    request and reaches tens of megabytes, and only three actions matter.
+    """
+    announced, started, finished = set(), set(), False
+    with open(raw_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if '"suite_start"' in line:
+                action = "suite_start"
+            elif '"test_start"' in line:
+                action = "test_start"
+            elif '"suite_end"' in line:
+                action = "suite_end"
+            else:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("action") != action:
+                continue
+            if action == "suite_start":
+                for ids in (event.get("tests") or {}).values():
+                    announced.update(ids)
+            elif action == "test_start":
+                started.add(event.get("test"))
+            else:
+                finished = True
+    return announced - started if finished else set()
+
+
+def load_dropped(out_dir: str, results: dict) -> set:
+    """Ids some finished shard (or batch, `BATCH_SUBDIR`) dropped and no other
+    attempt produced a verdict for — see `dropped_from_raw_log`."""
+    dropped = set()
+    for directory in (out_dir, os.path.join(out_dir, BATCH_SUBDIR)):
+        if not os.path.isdir(directory):
+            continue
+        for entry in sorted(os.listdir(directory)):
+            if entry.endswith(RAW_SUFFIX):
+                dropped |= dropped_from_raw_log(os.path.join(directory, entry))
+    return dropped - set(results)
+
+
 def load_results(out_dir: str) -> tuple:
     """Load every shard's results, falling back to the raw stream per shard.
 
@@ -1252,7 +1307,7 @@ def load_results(out_dir: str) -> tuple:
 
 
 def resumable_states(previous: list, out_dir: str, retry_timeouts: bool,
-                     budgets: dict = None) -> list:
+                     budgets: dict = None, dropped_shards: set = None) -> list:
     """Decide which shards of a previous run `--resume` must not run again.
 
     `ran` is obvious. The interesting case is `timeout` — a shard killed on its
@@ -1275,6 +1330,13 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool,
       only exists to reproduce an older run). That path is safe because
       `run_shard` rotates the raw stream first, so a shorter second attempt
       cannot destroy the first one's results.
+
+    `dropped_shards` names the shards that hold a test wptrunner announced and
+    threw away (`dropped_from_raw_log`). Such a shard is `ran` and complete as
+    far as its outcome goes, so it is replayed only under `--retry-timeouts`,
+    the same switch and for the same reason as a killed one: a second attempt
+    is the only thing that can give those ids a verdict. The whole shard runs
+    again — wptrunner has no "just these ids" mode short of an explicit list.
 
     Any other outcome (`no-report`/`empty-report` — wptrunner died at startup)
     is always retried: it failed fast, so retrying is cheap, and it produced
@@ -1301,6 +1363,9 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool,
     """
     states, kept, retried, hollow = [], [], [], []
     for state in previous:
+        if state["outcome"] == "ran" and retry_timeouts and state["name"] in (dropped_shards or ()):
+            retried.append(state["name"])
+            continue
         if state["outcome"] == "ran":
             if shard_produced_nothing(out_dir, state) and not log_says_no_tests(
                     os.path.splitext(shard_report_path(out_dir, state))[0] + ".log"):
@@ -1398,7 +1463,7 @@ def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
 
 def score_reports(manifest: dict, out_dir: str, scope: set = None,
                   shard_states: list = None, prefixes: list = None,
-                  exclude_prefixes: list = None) -> dict:
+                  exclude_prefixes: list = None, per_test: list = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
     Ids with no result score 0 — that is the whole point of scoring against the
@@ -1409,6 +1474,13 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
     categories and reports 0.58%, which is arithmetically true and completely
     misleading: the other 263 categories were never asked to run. A full run
     passes `scope=None` and gets the whole corpus, which is the real number.
+
+    `per_test`, when given, is filled with one `(id, type, status, subtests
+    passed, subtests total, score, "")` row per scored id, in manifest order —
+    the data `write_ids_file` turns into the snapshot's `.ids.tsv.gz`. Ids that
+    ran nowhere get `DROPPED` (wptrunner announced and discarded them, see
+    `dropped_from_raw_log`) or `NOT-RUN`. The numbers in the return value are
+    computed the same way with or without it.
     """
     expected = {}
     for test_type, category, test_id in corpus_stats.iter_ids(manifest):
@@ -1421,6 +1493,11 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
         expected[test_id] = {"type": test_type, "category": category}
 
     results, recovered, empty_shards = load_results(out_dir)
+    # Ids of a type no executor is registered for (`wdspec`, `aamtest`) are in
+    # every `suite_start` and never started — that is the runner gap, not a drop.
+    executable = corpus_stats.supported_types()
+    dropped = {i for i in load_dropped(out_dir, results)
+               if i in expected and expected[i]["type"] in executable}
 
     per_category = {}
     totals = {"ids": 0, "score": 0.0, "ran": 0, "not_run": 0, "harness_ok": 0,
@@ -1441,6 +1518,9 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
             row["not_run"] += 1
             totals["not_run"] += 1
             status_counts["NOT-RUN"] = status_counts.get("NOT-RUN", 0) + 1
+            if per_test is not None:
+                per_test.append((test_id, meta["type"],
+                                 "DROPPED" if test_id in dropped else "NOT-RUN", 0, 0, 0.0, ""))
             continue
 
         row["ran"] += 1
@@ -1452,8 +1532,10 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
             totals["harness_ok"] += 1
 
         subtests = result.get("subtests") or []
+        passed_subtests = 0
         if subtests:
             passed = sum(1 for s in subtests if s.get("status") == "PASS")
+            passed_subtests = passed
             row["subtests_total"] += len(subtests)
             row["subtests_passed"] += passed
             totals["subtests_total"] += len(subtests)
@@ -1463,6 +1545,9 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
             score = 1.0 if status == "PASS" else 0.0
         row["score"] += score
         totals["score"] += score
+        if per_test is not None:
+            per_test.append((test_id, meta["type"], status, passed_subtests, len(subtests),
+                             score, ""))
 
     for row in per_category.values():
         row["score"] = round(row["score"], 2)
@@ -1470,11 +1555,31 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
     totals["score"] = round(totals["score"], 2)
     totals["pass_rate"] = round(totals["score"] / totals["ids"], 4) if totals["ids"] else 0.0
 
+    coverage = coverage_breakdown(manifest, results, empty_shards, shard_states or [])
+    coverage["dropped"] = len(dropped)
+    coverage["dropped_examples"] = sorted(dropped)[:10]
     return {"totals": totals, "status_counts": status_counts, "per_category": per_category,
             "recovered_shards": [{"shard": name, "results": n} for name, n in recovered],
-            "empty_shards": empty_shards,
-            "coverage": coverage_breakdown(manifest, results, empty_shards,
-                                           shard_states or [])}
+            "empty_shards": empty_shards, "coverage": coverage}
+
+
+def attribute_shards(manifest: dict, per_test: list, shard_states: list,
+                     prefixes: list = None, exclude_prefixes: list = None) -> list:
+    """`per_test` rows with the shard that carried each id filled in.
+
+    The attribution is `score_audit.shard_index`'s — the one rule every other
+    reader of `state.json` uses (longest prefix wins, explicit id lists first).
+    Without shard states (a bare `--aggregate-only` over a directory with no
+    `state.json`) the column stays empty.
+    """
+    if not shard_states:
+        return per_test
+    import score_audit  # noqa: PLC0415 — circular at module level, by design
+
+    owner, _planned = score_audit.shard_index(
+        manifest, {"shards": shard_states, "prefixes": prefixes or [],
+                   "exclude_prefixes": exclude_prefixes or []})
+    return [row[:6] + (owner(row[0]) or "",) for row in per_test]
 
 
 def _print_coverage(coverage: dict, not_run: int) -> None:
@@ -1498,6 +1603,11 @@ def _print_coverage(coverage: dict, not_run: int) -> None:
         print(f"    EMPTY REPORT: {hollow} of those are in shard(s) recorded as `ran` that "
               f"wrote no report at all: {named} — a checkpoint from before slice 16, where "
               f"that outcome is `empty-report` and gets retried")
+    dropped = coverage.get("dropped") or 0
+    if dropped:
+        print(f"    DROPPED:      {dropped}  announced by wptrunner and never started "
+              f"(browser would not restart) — {', '.join(coverage['dropped_examples'][:3])}"
+              f"{', ...' if dropped > 3 else ''}; `--resume --retry-timeouts` runs them again")
     silent = coverage.get("lost_in_ran_shards") or 0
     if silent:
         named = ", ".join(f"{e['shard']}={e['ids']}" for e in lost
@@ -1596,6 +1706,7 @@ def _selftest() -> int:
         ("id with a verdict is not counted", got["by_type"].get("testharness") == 3),
     ]
     checks.extend(_selftest_resume())
+    checks.extend(_selftest_dropped())
     checks.extend(_selftest_prefixes())
     checks.extend(_selftest_batches())
     checks.extend(_selftest_shared_queue())
@@ -1824,6 +1935,91 @@ def _selftest_resume() -> list:
         shutil.rmtree(out_dir, ignore_errors=True)
 
 
+def _selftest_dropped() -> list:
+    """Prove `DROPPED` and the per-test file on a synthetic out-dir (WPT-RUN-17).
+
+    The case is the one a healthy run never shows: wptrunner announces three
+    tests, starts two, and finishes normally (`suite_end`) — the third is gone
+    without a trace in the report. Next to it a shard killed mid-run (no
+    `suite_end`) whose unreached test must stay `NOT-RUN`: telling these two
+    apart is the whole point of requiring `suite_end`.
+    """
+    def raw(path, announced, started, finished):
+        events = [{"action": "log", "message": "noise"},
+                  {"action": "suite_start", "tests": {"/d": announced}}]
+        events += [{"action": "test_start", "test": t} for t in started]
+        if finished:
+            events.append({"action": "suite_end"})
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(json.dumps(e) for e in events) + "\n")
+
+    def leaf():
+        return ["hash", [None, {}]]
+
+    manifest = {"items": {"testharness": {
+        "d": {"a.html": leaf(), "b.html": leaf(), "c.html": leaf()},
+        "k": {"x.html": leaf(), "y.html": leaf()}},
+        "aamtest": {"d": {"z.py": leaf()}}}}
+    out_dir = tempfile.mkdtemp(prefix="lumen-dropped-selftest-")
+    try:
+        raw(os.path.join(out_dir, "d" + RAW_SUFFIX), ["/d/a.html", "/d/b.html", "/d/c.html", "/d/z.py"],
+            ["/d/a.html", "/d/b.html"], True)
+        raw(os.path.join(out_dir, "k" + RAW_SUFFIX), ["/k/x.html", "/k/y.html"],
+            ["/k/x.html"], False)
+        with open(os.path.join(out_dir, "d.json"), "w", encoding="utf-8") as fh:
+            json.dump({"results": [
+                {"test": "/d/a.html", "status": "OK",
+                 "subtests": [{"name": "1", "status": "PASS"}, {"name": "2", "status": "FAIL"}]},
+                {"test": "/d/b.html", "status": "TIMEOUT", "subtests": []}]}, fh)
+        with open(os.path.join(out_dir, "k.json"), "w", encoding="utf-8") as fh:
+            json.dump({"results": [{"test": "/k/x.html", "status": "PASS", "subtests": []}]}, fh)
+        states = [{"name": "d", "prefix": "/d/", "outcome": "ran", "returncode": 0},
+                  {"name": "k", "prefix": "/k/", "outcome": "timeout", "returncode": None}]
+
+        results, _recovered, _empty = load_results(out_dir)
+        dropped = load_dropped(out_dir, results)
+        per_test = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            scored = score_reports(manifest, out_dir, None, states, per_test=per_test)
+        rows = attribute_shards(manifest, per_test, states)
+        path = os.path.join(out_dir, "snap.ids.tsv.gz")
+        size = ids_file.write(path, rows)
+        again = os.path.join(out_dir, "again.ids.tsv.gz")
+        ids_file.write(again, list(reversed(rows)))
+        back = ids_file.read(path)
+        with open(path, "rb") as a, open(again, "rb") as b:
+            identical = a.read() == b.read()
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kept = resumable_states([dict(states[0], report=None)], out_dir, True, None, set())
+            replayed = resumable_states([dict(states[0])], out_dir, True, None, {"d"})
+            plain = resumable_states([dict(states[0])], out_dir, False, None, {"d"})
+        return [
+            ("dropped: announced, never started, stream finished",
+             dropped == {"/d/c.html", "/d/z.py"}),
+            ("dropped: a killed shard's unreached test is not dropped",
+             "/k/y.html" not in dropped),
+            ("dropped: counted in coverage, not in the score",
+             scored["coverage"]["dropped"] == 1 and scored["totals"]["not_run"] == 3),
+            ("dropped: a type with no executor is a runner gap, not a drop",
+             back["/d/z.py"]["status"] == "NOT-RUN"),
+            ("ids file: DROPPED and NOT-RUN told apart",
+             back["/d/c.html"]["status"] == "DROPPED" and back["/k/y.html"]["status"] == "NOT-RUN"),
+            ("ids file: subtests and score kept",
+             back["/d/a.html"]["passed"] == 1 and back["/d/a.html"]["total"] == 2
+             and back["/d/a.html"]["score"] == 0.5 and back["/d/a.html"]["shard"] == "d"),
+            ("ids file: scores add up to the snapshot's own total",
+             abs(sum(r["score"] for r in back.values()) - scored["totals"]["score"]) < 1e-6),
+            ("ids file: one row per scored id", len(back) == scored["totals"]["ids"] == 6),
+            ("ids file: byte-identical for identical rows", identical and size > 0),
+            ("resume: a shard with dropped tests is replayed only on --retry-timeouts",
+             len(kept) == 1 and replayed == [] and len(plain) == 1),
+        ]
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", default=None, help="path to lumen.exe (default: target/$LUMEN_PROFILE/lumen.exe)")
@@ -2013,8 +2209,13 @@ def main() -> int:
             budgets = {s["name"]: shard_timeout(s, args.shard_timeout_base,
                                                 args.shard_timeout_per_id, args.processes)
                        for s in shards}
+            dropped_shards = set()
+            if args.retry_timeouts:
+                owner = member_owner(shards)
+                dropped_shards = {owner(test_id) for test_id in load_dropped(
+                    args.out_dir, load_results(args.out_dir)[0])} - {None}
             shard_states = resumable_states(previous, args.out_dir, args.retry_timeouts,
-                                            budgets)
+                                            budgets, dropped_shards)
         done = {s["name"] for s in shard_states}
         for index, shard in enumerate(shards, 1):
             if shard["name"] in done:
@@ -2109,8 +2310,9 @@ def main() -> int:
                       if t not in corpus_stats.NON_AUTOMATABLE_TYPES}
     if scope and scope >= all_categories and not (prefixes or exclude_prefixes):
         scope = None
+    per_test = [] if args.run_json else None
     scored = score_reports(manifest, args.out_dir, scope, shard_states, prefixes,
-                           exclude_prefixes)
+                           exclude_prefixes, per_test)
     if scope:
         print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
               f"(partial run — denominator covers only what was selected)")
@@ -2152,9 +2354,17 @@ def main() -> int:
             "shards": shard_states,
             "scored": scored,
         }
+        # The per-test half (`ids_file`): the aggregates above cannot say *which*
+        # test moved when a category falls, and the raw reports they came from
+        # are deleted after the run (WPT-RUN-17).
+        ids_path = ids_file.ids_path_for(args.run_json)
+        size = ids_file.write(ids_path, attribute_shards(manifest, per_test, shard_states,
+                                                         prefixes, exclude_prefixes))
+        snapshot["ids_file"] = os.path.basename(ids_path)
         with open(args.run_json, "w", encoding="utf-8") as fh:
             json.dump(snapshot, fh, indent=2, sort_keys=True)
         print(f"run snapshot: {args.run_json}")
+        print(f"per-test results: {ids_path} ({len(per_test)} ids, {size / 1024:.0f} KiB)")
     return 0
 
 
