@@ -2332,6 +2332,10 @@ mod style_container_any_element;
 mod var_invalid_declaration_value;
 
 #[cfg(test)]
+#[path = "tests/var_escaped_name.rs"]
+mod var_escaped_name;
+
+#[cfg(test)]
 #[path = "tests/scroll_initial_target.rs"]
 mod scroll_initial_target_tests;
 
