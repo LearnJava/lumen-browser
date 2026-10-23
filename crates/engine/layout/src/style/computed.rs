@@ -83,6 +83,10 @@ pub struct LogicalMinMaxSizes {
     pub max_block: Option<Length>,
 }
 
+/// `(inline-axis, block-axis)` radii of the four flow-relative corners, in the order
+/// start-start, start-end, end-start, end-end (CSS Logical Properties L1 §3.3).
+pub type LogicalCornerRadii = [Option<(Length, Length)>; 4];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -1225,6 +1229,11 @@ pub struct ComputedStyle {
     pub border_block_start_width: Option<f32>,
     /// CSS Logical Properties L1 — `border-block-end-width`.
     pub border_block_end_width: Option<f32>,
+    /// CSS Logical Properties L1 §3.3 — `border-{start-start,start-end,end-start,end-end}-radius`
+    /// as `(inline-axis, block-axis)` radii, in that order. `None` until one is declared; the
+    /// post-cascade `resolve_logical_properties` maps each onto the physical corner the element's
+    /// own `writing-mode` + `direction` select.
+    pub border_logical_radii: Option<Box<LogicalCornerRadii>>,
     /// CSS Anchor Positioning L1 §2 — `anchor-name`. Custom-ident with `--` prefix.
     /// Non-inherited. When set, this element is registered as an anchor for positioned elements.
     pub anchor_name: Option<Box<str>>,

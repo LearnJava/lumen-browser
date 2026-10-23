@@ -2472,6 +2472,8 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             ("border-block-start-style", "border-top-style"), ("border-block-end-style", "border-bottom-style"),
             ("border-inline-start-color", "border-left-color"), ("border-inline-end-color", "border-right-color"),
             ("border-block-start-color", "border-top-color"), ("border-block-end-color", "border-bottom-color"),
+            ("border-start-start-radius", "border-top-left-radius"), ("border-start-end-radius", "border-top-right-radius"),
+            ("border-end-start-radius", "border-bottom-left-radius"), ("border-end-end-radius", "border-bottom-right-radius"),
         ];
         for (logical, physical) in LOGICAL_LONGHANDS {
             if let Some(v) = m.get(*physical).cloned() {
