@@ -865,8 +865,43 @@ use super::*;
         );
         let m = &s.mixin_rules[0];
         assert_eq!(m.locals.len(), 2);
-        assert_eq!(m.locals[0].property, "--before");
-        assert_eq!(m.locals[1].property, "--after");
+        let names: Vec<&str> = m
+            .locals
+            .iter()
+            .map(|l| match l {
+                FunctionBodyItem::Decl(d) => d.property.as_str(),
+                FunctionBodyItem::Conditional { .. } => "<group>",
+            })
+            .collect();
+        assert_eq!(names, ["--before", "--after"]);
+    }
+
+    #[test]
+    fn mixin_conditional_groups_wrap_locals_and_result() {
+        // `mixin-conditionals.html`: `@media`/`@supports` around locals and
+        // around `@result`, plus `@media` inside `@result` (BUG-1508).
+        let s = parse(
+            "@mixin --m() { --a: 1; @media all { --b: 2; @result { color: red; } }              @result { @media all { color: green; } } }",
+        );
+        let m = &s.mixin_rules[0];
+        assert!(matches!(m.locals[0], FunctionBodyItem::Decl(_)));
+        let FunctionBodyItem::Conditional { items, .. } = &m.locals[1] else { panic!("{:?}", m.locals) };
+        assert_eq!(items.len(), 1);
+        let result = m.result.as_ref().unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(matches!(&result[0], MixinResultItem::Conditional { items, .. } if items.len() == 1));
+        let MixinResultItem::Conditional { prelude, .. } = &result[1] else { panic!("{result:?}") };
+        assert_eq!(prelude, "@media all");
+    }
+
+    #[test]
+    fn mixin_with_invalid_parameter_list_is_dropped() {
+        // `mixin-parameters.html` "Mixins with invalid parameter lists are ignored".
+        let s = parse(
+            "@mixin --m(junk-in-parameter-list) { @result { color: red; } }              @mixin --n(--a, ) { @result { color: red; } }              @mixin --ok() { @result { color: green; } }",
+        );
+        assert_eq!(s.mixin_rules.len(), 1);
+        assert_eq!(s.mixin_rules[0].name, "--ok");
     }
 
     #[test]

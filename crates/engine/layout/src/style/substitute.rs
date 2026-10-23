@@ -683,7 +683,12 @@ fn expand_apply_rule(
     // against `custom` — a local does not see the caller's scope
     // (`mixin-locals.html` "Locals resolve against each other" /
     // "Locals resolve against parameters").
-    for decl in &mixin.locals {
+    // `@media`/`@supports` groups around locals apply only while they hold.
+    let mut active: Vec<&Declaration> = Vec::new();
+    let media_ctx = body_has_conditionals(&mixin.locals)
+        .then(|| crate::style::env::media_context_from_viewport(viewport, false));
+    collect_active_declarations(&mixin.locals, media_ctx.as_ref(), &mut active);
+    for decl in active {
         let Some(local_name) = decl.property.strip_prefix("--") else { continue };
         let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport)
             .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
@@ -759,6 +764,15 @@ fn expand_mixin_result_items(
             // (`mixins::expand_mixin_nested_rules`), which the ordinary
             // cascade matches independently; nothing to do here.
             MixinResultItem::NestedRule { .. } => {}
+            MixinResultItem::Conditional { condition, items, .. } => {
+                let ctx = crate::style::env::media_context_from_viewport(viewport, false);
+                if condition.holds(&ctx) {
+                    out.extend(expand_mixin_result_items(
+                        items, apply, mixins, layer_order, functions, local, caller_scope, depth, em_basis,
+                        viewport,
+                    ));
+                }
+            }
         }
     }
     out
