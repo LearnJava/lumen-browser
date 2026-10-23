@@ -30,3 +30,22 @@ WPT-RUN-14 срез 22: `container-queries/{container-selection,container-nested
 ## Как проверить
 
 Таблица выше; `css/css-conditional/container-queries/container-selection.html`, `unsupported-axis.html`.
+
+## Срез 1 (2026-10-23, P3)
+
+Сделано (`style/container.rs`, `box_tree/container_anchor.rs`, `css-parser` `ContainerRule::enclosing`):
+
+- выбор контейнера по оси: `Needs { inline, block, scroll_state }` вместо одного `size`; блоковая ось есть только у `container-type: size` (`unsupported-axis` 16/16, `container-selection` 21/21);
+- «ineligible» контейнер (`display: contents`/`inline`/`table`/внутренние табличные) выбирается, но запрос по размеру ложен и к внешнему не переходит (`ContainerKinds::ineligible`; `ineligible-containment` 2/2, `display-contents` 3/3); боксовые потомки бокс-less контейнера не получают правил внешнего (`shadowed_by_boxless_container`);
+- вложенный `@container` хранит охватывающие прелюдии (`ContainerRule::enclosing`), правило применяется при истинности всех (`container-nested` 14/14);
+- `@container --name { }` без запроса — по `container-name` без `container-type` (`query-container-name(-dynamic)`: 4/5 и 3/3);
+- `%`-высота потомков `inline-size`-контейнера с заданной `height` разрешается от неё при втором проходе.
+
+WPT `css/css-conditional/container-queries`: 784 → 798 из 1414 подтестов.
+
+Остаток (оставить открытым):
+
+- `nested-query-containers` (0/32): запрос сам меняет `display` контейнера на `inline`/`contents`/`table*`, что должно перевести вложенные контейнеры в «unknown» и обратно (нужен повторный проход с новым `display`);
+- `display-none` (3 подтеста): `getComputedStyle(el, '::before')` и `display:none` у самого элемента-цели — псевдоэлементная ветка вычисленного стиля не знает контейнерного контекста;
+- `top-layer-dialog-container`: после `dialog.showModal()` контейнер должен перемеряться по вьюпорту до чтения стиля;
+- `query-container-name`: именованный контейнер в shadow-дереве (область видимости имён).

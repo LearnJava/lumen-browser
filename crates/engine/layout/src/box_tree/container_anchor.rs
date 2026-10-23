@@ -31,9 +31,15 @@ fn viewport_propagating_nodes(root: &LayoutBox) -> HashSet<NodeId> {
     out
 }
 
-/// The box establishes a query container (`container-type` other than `normal`).
-fn is_query_container(style: &ComputedStyle) -> bool {
+/// The box has a `container-type` (size or scroll-state): it answers feature queries.
+fn is_typed_container(style: &ComputedStyle) -> bool {
     !matches!(style.container_type, ContainerType::Normal) || style.container_scroll_state
+}
+
+/// The box is a query container: typed, or only named — a name alone answers a
+/// `@container <name> { … }` rule that asks nothing (CSS Conditional 5 §container-rule).
+fn is_query_container(style: &ComputedStyle) -> bool {
+    is_typed_container(style) || !style.container_name.is_empty()
 }
 
 /// CSS Container Queries L1: second-pass after layout.
@@ -70,13 +76,13 @@ pub fn apply_container_styles(
     let propagating = viewport_propagating_nodes(root);
     // CSS Conditional 5 §style-container: with a `style()` query in the sheet every element
     // answers queries, so the restyle runs per element ([`StyleSweep`]), not per `container-type`.
-    let sweep = sheet.container_rules.iter().any(|r| query_mentions_style(&r.condition)).then(|| StyleSweep {
+    let sweep = sheet.container_rules.iter().any(|r| r.preludes().any(|(_, c)| query_mentions_style(c))).then(|| StyleSweep {
         doc,
         sheet,
         counters,
         viewport,
         dark_mode,
-        std_props: sheet.container_rules.iter().any(|r| query_reads_standard_property(&r.condition)),
+        std_props: sheet.container_rules.iter().any(|r| r.preludes().any(|(_, c)| query_reads_standard_property(c))),
         boxed: boxed_elements(root, doc),
         propagating: &propagating,
         through_boxless: Default::default(),
@@ -85,9 +91,10 @@ pub fn apply_container_styles(
     if let Some(sweep) = &sweep {
         sweep.run(root, None, viewport.height, &mut boxless, &mut pending);
     }
+    let shadowed = shadowed_by_boxless_container(root, doc, counters);
     apply_container_inner(
         root, doc, sheet, viewport, measurer, pcb, viewport.height, hp, dark_mode, counters, &propagating,
-        &mut boxless, sweep.as_ref(), &mut pending,
+        &mut boxless, sweep.as_ref(), &mut pending, &shadowed,
     );
     counters.set_cq_boxless(boxless);
 }
@@ -125,6 +132,7 @@ fn apply_container_inner(
     boxless: &mut HashMap<NodeId, Arc<ComputedStyle>>,
     sweep: Option<&StyleSweep>,
     pending: &mut HashMap<NodeId, Option<Arc<ContainerContext>>>,
+    shadowed: &HashSet<NodeId>,
 ) {
     // The third element is the nearest query container above the box — the head of
     // the chain a descendant container links to via `ContainerContext::parent`.
@@ -158,7 +166,7 @@ fn apply_container_inner(
             } else {
                 let mut seen = SeenBoxes::default();
                 for child in &mut b.children {
-                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, &mut seen);
+                    re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode, shadowed, &mut seen);
                 }
                 restyle_boxless(doc, sheet, counters, b.node, &seen, &ctx, viewport, dark_mode, boxless);
             }
@@ -175,7 +183,9 @@ fn apply_container_inner(
             // Re-lay out block-flow children with updated styles.
             let content_x = b.rect.x + pad_l + b.style.border_left_width;
             let content_y = b.rect.y + pad_t + b.style.border_top_width;
-            let avail_h: Option<f32> = content_h;
+            // An `inline-size` container does not expose its height to queries, but a
+            // specified one is still the `%`-height basis of its children.
+            let avail_h: Option<f32> = content_h.or_else(|| b.style.height.is_some().then_some(content_h_val));
             let child_pcb = if super::multicol_abspos::establishes_abs_cb(&b.style) {
                 Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
             } else {
@@ -538,6 +548,7 @@ fn apply_anchor_positions_rec(
 /// processed by `apply_container_inner` with their own context); that
 /// condition depends only on the popped node's own style, not on anything a
 /// deeper call would compute, so it does not change the safe classification.
+#[allow(clippy::too_many_arguments)]
 fn re_style_subtree(
     b: &mut LayoutBox,
     doc: &Document,
@@ -545,13 +556,15 @@ fn re_style_subtree(
     ctx: &ContainerContext,
     viewport: Size,
     dark_mode: bool,
+    shadowed: &HashSet<NodeId>,
     seen: &mut SeenBoxes,
 ) {
     let mut stack: Vec<&mut LayoutBox> = vec![b];
     while let Some(b) = stack.pop() {
         if !matches!(b.kind, BoxKind::Skip) {
             seen.boxed.insert(b.node);
-            let rules = matching_container_rules(doc, b.node, sheet, ctx);
+            // A box-less container nearer than `ctx` answers the query "unknown": no match.
+            let rules = if shadowed.contains(&b.node) { Vec::new() } else { matching_container_rules(doc, b.node, sheet, ctx) };
             if !rules.is_empty() {
                 apply_matched_container_rules(Arc::make_mut(&mut b.style), &rules, doc, b.node, viewport, dark_mode);
             }
@@ -567,6 +580,38 @@ fn re_style_subtree(
             stack.extend(b.children.iter_mut());
         }
     }
+}
+
+/// Boxed elements whose nearest query container (in the DOM) owns no principal box
+/// (`display: none` / `contents`): such a container is the one their queries pick, and it
+/// answers none — an outer container with a box must not answer for it.
+fn shadowed_by_boxless_container(root: &LayoutBox, doc: &Document, counters: &CounterMap) -> HashSet<NodeId> {
+    // Boxed element → whether it is a query container.
+    let mut boxed: HashMap<NodeId, bool> = HashMap::new();
+    let mut walk = vec![root];
+    while let Some(b) = walk.pop() {
+        if !matches!(b.kind, BoxKind::Skip) && matches!(doc.get(b.node).data, NodeData::Element { .. }) {
+            *boxed.entry(b.node).or_default() |= is_typed_container(&b.style);
+        }
+        walk.extend(b.children.iter());
+    }
+    let mut out = HashSet::new();
+    // `(element, whether its nearest query container above is box-less)`.
+    let mut stack: Vec<(NodeId, bool)> = vec![(doc.root(), false)];
+    while let Some((id, under_boxless)) = stack.pop() {
+        let mut below = under_boxless;
+        if matches!(doc.get(id).data, NodeData::Element { .. }) {
+            let own = boxed.get(&id).copied().or_else(|| counters.style_arc(id).map(|s| is_typed_container(&s)));
+            if boxed.contains_key(&id) && under_boxless {
+                out.insert(id);
+            }
+            if own == Some(true) {
+                below = !boxed.contains_key(&id);
+            }
+        }
+        stack.extend(doc.get(id).children.iter().map(|&c| (c, below)));
+    }
+    out
 }
 
 /// Nodes [`re_style_subtree`] met below a container: those with a box, and the nested
@@ -606,7 +651,7 @@ fn restyle_boxless(
             // A container with no principal box answers no query: what lies below it is
             // out of this container's reach and is not matched against it either — but it
             // is still recorded below, with its cascaded style (its queries all fail).
-            if is_query_container(&style) {
+            if is_typed_container(&style) {
                 below_reached = false;
             }
             if reached {
@@ -668,7 +713,11 @@ fn box_context(
         font_size: b.style.font_size,
         viewport,
         own_containing_block_height: parent_h,
-        kinds: ContainerKinds { size: size_container, scroll_state: b.style.container_scroll_state },
+        kinds: ContainerKinds {
+            size: size_container,
+            scroll_state: b.style.container_scroll_state,
+            ineligible: size_container && crate::style::size_containment_ineligible(b.style.display),
+        },
         scroll_state: if b.style.container_scroll_state {
             crate::scroll_state::scroll_state_info(b, propagating.contains(&b.node))
         } else {
@@ -805,7 +854,7 @@ impl StyleSweep<'_> {
                     }
                 }
                 child_ctx = match pc {
-                    Some(pc) if !is_query_container(&style) => Some(Arc::new(self.boxless_context(&style, pc))),
+                    Some(pc) if !is_typed_container(&style) => Some(Arc::new(self.boxless_context(&style, pc))),
                     _ => None,
                 };
                 out.insert(id, style);
