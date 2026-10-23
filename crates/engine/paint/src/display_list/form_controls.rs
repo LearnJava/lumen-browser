@@ -45,7 +45,8 @@ fn emit_input_value_text(
     }
     let s = &b.style;
     // Password masking: obscure each character (grapheme-approximate by char).
-    let text = if *input_type == InputType::Password {
+    // CSS UI L4 §6.5: `input-security: none` opts a sensitive field out of masking.
+    let text = if *input_type == InputType::Password && s.input_security == lumen_layout::style::InputSecurity::Auto {
         "\u{2022}".repeat(value.chars().count())
     } else {
         value.to_owned()

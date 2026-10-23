@@ -34,7 +34,7 @@ use lumen_core::ColorSpace;
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
-    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, Interactivity, TableLayout,
+    BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, InputSecurity, Interactivity, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
     Content, ContentVisibility, CssColor, CssContinue, Cursor, CustomProps, default_font_family,
@@ -764,6 +764,9 @@ pub struct ComputedStyle {
     /// CSS UI L4 §6.4 — `interactivity: auto | inert`. Inherited. `inert` — элемент и его
     /// потомки не становятся целью указателя (UA-правила `[inert]`, `dialog:modal`, `:fullscreen`).
     pub interactivity: Interactivity,
+    /// CSS UI L4 §6.5 — `input-security: auto | none`. Inherited. `auto` — `<input type=password>`
+    /// скрывает символы; `none` — показывает текст.
+    pub input_security: InputSecurity,
     /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
     /// Inherited. Default `Normal`.
     pub overflow_wrap: OverflowWrap,

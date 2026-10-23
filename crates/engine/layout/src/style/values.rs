@@ -8,6 +8,7 @@ pub mod box_model;
 pub mod color;
 pub mod dynamic_range_limit;
 pub mod flexgrid;
+pub mod input_security;
 pub mod interactivity;
 pub mod grid_cssom;
 pub mod grid_lanes;
