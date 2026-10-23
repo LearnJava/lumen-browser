@@ -262,6 +262,7 @@ pub use values::rule_anim::{
     transition_token_covers,
 };
 pub use values::caret::{CaretAnimation, CaretShape};
+pub use values::input_security::InputSecurity;
 pub use values::interactivity::Interactivity;
 pub use values::rule_list::{RuleItem, RuleList};
 pub use values::misc::{
