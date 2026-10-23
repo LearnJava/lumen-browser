@@ -29,3 +29,7 @@ origin и scope), а `importScripts("resources/urlpatterntests.js")` разре�
 
 Проверить, где сервис-воркер получает базовый URL для `importScripts` (`sw_worker.rs`) и как
 склеивается идентичность из origin и scope (`register`).
+
+## Дополнение (WPT-ENC-SCOUT, 2026-10-23)
+
+У `encoding` (15 id: 5 в корне и 10 в `streams/`, все `*.serviceworker.html`) картина иная, чем у `urlpattern`: все `importScripts` воркера получают 200, но результата тест всё равно не отдаёт и id уходит в TIMEOUT (0/0). Значит, вторая причина (идентичность `https://localhost:18443does/not/exist` без `/` или момент запуска/активации воркера) независима от разрешения базы `importScripts`; проверять её надо отдельно после исправления базы.

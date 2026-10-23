@@ -5,6 +5,7 @@
   "derived_from": "2026-10-22.json",
   "exclude_prefixes": [],
   "finished": "2026-10-23T12:38:10",
+  "ids_file": "2026-10-22-popups.ids.tsv.gz",
   "max_browser_gb": 4.0,
   "no_paint": true,
   "parallel_shards": 2,

@@ -26,6 +26,9 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tests" / "wpt"))
+import run_diff  # noqa: E402 — потестовое сравнение двух снимков (WPT-RUN-17)
+
 NA = "n/a"
 
 # Подсистемы — свод поверх верхнеуровневых категорий WPT. Агрегат хранит только
@@ -63,6 +66,8 @@ REGRESSION_SCORE = -1.0
 # прогонов — разница может быть от окружения, а не от кода.
 RUNNER_KEYS = ("processes", "parallel_shards", "batch_small", "shared_queue", "no_paint",
                "max_browser_gb", "exclude_prefixes")
+# Сколько худших тестов выводить под каждой просевшей категорией WPT.
+WORST_TESTS = 10
 # Источники, разнесённые во времени дальше этого, описывают разные состояния кода.
 STALE_DAYS = 7
 # Каталог из ROADMAP шире этого числа тестов — не привязка к багу, а область.
@@ -230,6 +235,24 @@ def wpt_regressions(cur: dict, prev: dict) -> list:
             rows.append((cat, d_score, d_ok, row, old))
     rows.sort(key=lambda r: (r[1], r[2]))
     return rows
+
+
+def wpt_worst(runs_dir: Path, cur: tuple, prev: tuple, regressions: list) -> dict:
+    """Худшие тесты каждой просевшей категории: `{категория: [запись run_diff]}`.
+
+    Нужны оба снимка с `ids_file` (`run_corpus.py --run-json` пишет его рядом
+    со снимком): агрегаты говорят, что категория просела, а какой тест — только
+    потестовый файл. Если у любого из двух его нет — пусто, отчёт как раньше.
+    """
+    tables = []
+    for name, data in (prev, cur):
+        ids = data.get("ids_file")
+        path = runs_dir / ids if ids else None
+        if not path or not path.is_file():
+            return {}
+        tables.append(run_diff.ids_file.read(str(path)))
+    return {cat: run_diff.worst_tests(tables[0], tables[1], cat, WORST_TESTS)
+            for cat, *_ in regressions}
 
 
 def runner_diff(cur: dict, prev: dict) -> list:
@@ -695,6 +718,8 @@ def render(snap: dict, prev_snap: dict | None) -> tuple:
             out.append(f"- WPT `{cat}`: балл {old['score']} → {row['score']} ({signed(d_score, 2)}), "
                        f"OK/PASS {old['harness_ok']} → {row['harness_ok']} ({signed(d_ok)}), "
                        f"pass rate {pp(row['pass_rate'], old['pass_rate'])}")
+            for t in (snap.get("wpt_worst") or {}).get(cat, []):
+                out.append(f"  - `{t['id']}`: {run_diff.transition(t)} ({signed(t['delta'], 2)})")
         if wpt_regs and len(wpt_regs) > 25:
             out.append(f"- … и ещё {len(wpt_regs) - 25} категорий WPT (полная таблица — в конце).")
         return out
@@ -905,6 +930,9 @@ def build(root: Path) -> dict:
     gt_prev = graphic_summary(*prev_run, root=root) if prev_run else None
     snap = {"schema": 1, "wpt": wpt, "wpt_prev": wpt_prev, "graphic": gt, "graphic_prev": gt_prev,
             "graphic_no_prev": why, "bugs": bugs_summary(root, wpt)}
+    if wpt and wpt_prev:
+        snap["wpt_worst"] = wpt_worst(root / "docs" / "wpt" / "runs", runs[-1], runs[-2],
+                                      wpt_regressions(wpt, wpt_prev)[:25])
     snap["stamp"] = snapshot_stamp(snap)
     # Отставание зависит от состояния git, а не от прогонов — в срез не пишется.
     snap["lag"] = {"wpt": commit_lag(root, wpt and wpt["commit"]),
@@ -926,7 +954,8 @@ def main(argv=None) -> int:
     payload = snapshot_payload(snap)
     # Срез хранит только свежие данные; предыдущие прогоны раннеров в нём не нужны.
     payload_core = {k: v for k, v in payload.items()
-                    if k not in ("wpt_prev", "graphic_prev", "graphic_no_prev", "lag")}
+                    if k not in ("wpt_prev", "graphic_prev", "graphic_no_prev", "lag",
+                                 "wpt_worst")}
     prev_snap, write = previous_snapshot(runs_dir, payload_core)
     text, head = render(snap, prev_snap)
     if args.check:

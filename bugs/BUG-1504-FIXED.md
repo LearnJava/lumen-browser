@@ -1,6 +1,6 @@
 # BUG-1504 — Анимация зарегистрированного свойства: списки (`<length>+`, `<length>#`), `<color>`, `<transform-function>` и `<transform-list>` не интерполируются — берётся конечное значение
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-23 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** layout (`crates/engine/layout/src/animation.rs` — интерполяция значений зарегистрированных пользовательских свойств)
 
@@ -34,3 +34,9 @@ WPT-RUN-14 срез 22: `css-properties-values-api/animation/custom-property-ani
 ## Как проверить
 
 Таблица выше; `css/css-properties-values-api/animation/custom-property-animation-length-space-list.html`, `custom-property-animation-color.html`.
+
+## Исправление
+
+Интерполяция в shim Web Animations ([`web_api_shim_tail_b.js`](../crates/js/src/shim/web_api_shim_tail_b.js)): `_wa_custom_kind` читает `syntax` из регистрации (`CSS._getRegisteredProperties()`) — один тип `<length>`/`<number>`/…/`<color>`/`<transform-function>`/`<transform-list>` с необязательным `+`/`#`. `_wa_custom_interp` интерполирует списки поэлементно (разная длина — дискретно), цвета (`rgb(r, g, b)` с пробелами, как сериализует getComputedStyle) и трансформации; `_wa_custom_composite` — `add`/`accumulate` по тем же правилам. Подлежащее значение (`_wa_capture_underlying`) для `--*` читается через `getPropertyValue`, а не `style[name]`. `iterationComposite: 'accumulate'` реализован общим кодом в `_wa_compute_at_p` (для всех свойств, не только пользовательских): каждая завершённая итерация добавляет значение последнего кадра. Тесты — `dom/tests/v8_bug1504_wa_registered.rs` (значения из WPT `css-properties-values-api/animation`).
+
+Остаток: одиночный кадр (`keyframes: '200px'`) — BUG-1505; `<transform-list>` с разными функциями (интерполяция через матрицу) остаётся дискретной; сам WPT-прогон на новом бинаре не делался.

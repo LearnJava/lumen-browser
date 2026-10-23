@@ -293,6 +293,53 @@ class GraphicModes(Fixture):
         self.assertEqual(payload["graphic"]["mode"], "ipc")
 
 
+class WorstTests(Fixture):
+    """Под просевшей категорией — худшие тесты из `ids_file` (WPT-RUN-17)."""
+
+    def put_ids(self, name: str, rows: list) -> None:
+        path = self.root / "docs/wpt/runs" / (name + ".ids.tsv.gz")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        qr.run_diff.ids_file.write(str(path), rows)
+
+    def setUp(self):
+        super().setUp()
+        self.full_repo()
+        self.put_ids("a", [("/css/x/t.html", "reftest", "PASS", 0, 0, 1.0, "css"),
+                           ("/css/x/u.html", "reftest", "PASS", 0, 0, 1.0, "css")])
+        self.put_ids("b", [("/css/x/t.html", "reftest", "FAIL", 0, 0, 0.0, "css"),
+                           ("/css/x/u.html", "reftest", "PASS", 0, 0, 1.0, "css")])
+
+    def with_ids_in_snapshots(self, *names):
+        for name in names:
+            path = self.root / "docs/wpt/runs" / (name + ".json")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["ids_file"] = name + ".ids.tsv.gz"
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_worst_tests_listed_under_the_fallen_category(self):
+        self.with_ids_in_snapshots("a", "b")
+        run(self.root)
+        text = (self.root / "docs/quality-report.md").read_text(encoding="utf-8")
+        self.assertIn("  - `/css/x/t.html`: PASS -> FAIL (-1.00)", text)
+        self.assertNotIn("/css/x/u.html", text.split("## WPT статусы")[0], "не изменившийся тест не в списке")
+
+    def test_without_ids_file_the_report_is_as_before(self):
+        run(self.root)
+        text = (self.root / "docs/quality-report.md").read_text(encoding="utf-8")
+        self.assertIn("- WPT `css`: балл", text)
+        self.assertNotIn("/css/x/t.html", text)
+
+    def test_one_side_without_ids_file_gives_no_list(self):
+        self.with_ids_in_snapshots("b")
+        self.assertEqual(qr.build(self.root)["wpt_worst"], {})
+
+    def test_worst_is_not_stored_in_the_quality_snapshot(self):
+        self.with_ids_in_snapshots("a", "b")
+        run(self.root)
+        stored = json.loads(next((self.root / "docs/quality/runs").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertNotIn("wpt_worst", stored)
+
+
 class Helpers(unittest.TestCase):
     def test_components(self):
         self.assertEqual(qr.components("css-parser + layout"), ["css-parser", "layout"])
