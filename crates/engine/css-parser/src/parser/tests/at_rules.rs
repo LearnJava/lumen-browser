@@ -221,6 +221,32 @@ use super::*;
     }
 
     #[test]
+    fn at_import_after_other_rules_is_dropped() {
+        // BUG-1513: Cascade 4 §2.2 — `@import` only before every rule except
+        // `@charset`, `@layer` statements and other `@import`s.
+        for css in [
+            "@media all{}@import \"i.css\";p{margin:0}",
+            "p{margin:0}@import \"i.css\";",
+            "@supports (color:red){}@import \"i.css\";p{margin:0}",
+            "@layer a{}@import \"i.css\";p{margin:0}",
+            "@namespace x \"urn:x\";@import \"i.css\";p{margin:0}",
+            "@font-face{font-family:f}@import \"i.css\";",
+        ] {
+            assert!(parse(css).imports.is_empty(), "{css}");
+        }
+    }
+
+    #[test]
+    fn at_import_before_layer_statement_and_after_it_stays() {
+        let s = parse("@layer a;@import \"i.css\";@layer b, c;@import \"j.css\";p{margin:0}");
+        assert_eq!(s.imports.len(), 2);
+        // A later `@import` after a style rule is dropped, earlier ones kept.
+        let s = parse("@import \"i.css\";p{margin:0}@import \"j.css\";");
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "i.css");
+    }
+
+    #[test]
     fn at_import_cyrillic_url() {
         let s = parse(r#"@import url("стили.css");"#);
         assert_eq!(s.imports[0].url, "стили.css");
