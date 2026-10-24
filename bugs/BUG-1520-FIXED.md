@@ -1,6 +1,6 @@
 # BUG-1520 — `<rt>` не получает UA-значение `font-size: 50%`: аннотация ruby рисуется шрифтом основного текста
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-24 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 23, `css/css-text-decor` + `css-gaps` + `css-shapes`)
 **Область:** layout (`crates/engine/layout/src/style/ua.rs` — UA-таблица стилей `<rt>`; `crates/engine/layout/src/ruby.rs`)
 
@@ -30,3 +30,7 @@ WPT-RUN-14 срез 23: `css-text-decor/text-emphasis-*` — 122 из 131 reftes
 ## Как проверить
 
 Таблица выше; после правки перепрогнать `css/css-text-decor/text-emphasis-position-property-002.html` и посмотреть остаток по BUG-1521.
+
+## Исправление (2026-10-24)
+
+`ua_font_size_factor` (`style/ua.rs`) отдаёт 0.5 для `<rt>` и `<rtc>`; `<rt>` внутри `<rtc>` не уменьшается повторно (`rtc > rt { font-size: inherit }`). `ruby.rs` уменьшения не дублирует. Тест: `rt_gets_ua_half_font_size_and_rtc_does_not_halve_twice`. Остаток по эталонам `text-emphasis-*` — BUG-1521.

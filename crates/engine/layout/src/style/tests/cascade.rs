@@ -643,6 +643,20 @@ use super::*;
         assert!((s.font_size - 20.0 * 0.83).abs() < 1e-4, "font_size={}", s.font_size);
     }
 
+    #[test]
+    fn rt_gets_ua_half_font_size_and_rtc_does_not_halve_twice() {
+        // BUG-1520: CSS Ruby 1 `rt, rtc { font-size: 50% }`, `rtc > rt` — inherit.
+        let css = "body { font-size: 40px; }";
+        let rt = cascade_at("<ruby>a<rt>x</rt></ruby>", css, &[0, 1]);
+        assert!((rt.font_size - 20.0).abs() < 1e-4, "rt font_size={}", rt.font_size);
+        let rtc = cascade_at("<ruby>a<rtc><rt>x</rt></rtc></ruby>", css, &[0, 1]);
+        assert!((rtc.font_size - 20.0).abs() < 1e-4, "rtc font_size={}", rtc.font_size);
+        let rt_in_rtc = cascade_at("<ruby>a<rtc><rt>x</rt></rtc></ruby>", css, &[0, 1, 0]);
+        assert!((rt_in_rtc.font_size - 20.0).abs() < 1e-4, "rt in rtc font_size={}", rt_in_rtc.font_size);
+        let author = cascade_at("<ruby>a<rt>x</rt></ruby>", "rt { font-size: 12px; }", &[0, 1]);
+        assert!((author.font_size - 12.0).abs() < 1e-4);
+    }
+
     // ── `all` shorthand (CSS Cascade L4 §3.2, GAP-CSSALL) ────────────────
 
     #[test]
