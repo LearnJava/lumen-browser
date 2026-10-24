@@ -458,6 +458,8 @@ pub(crate) fn build_grid_init(
     // а остаток раскладки — обычная сетка с явными размещениями (столбец на элемент).
     let row_lanes = (lanes_plain && lanes_axis == crate::style::LanesAxis::Row).then(|| {
         let flow = super::grid_lanes::RowFlow {
+            dense: super::grid_lanes::is_dense(s)
+                .then(|| (0..row_axis.n_tracks.max(1)).map(|r| fixed_lane_size(eff_row_template, r, em, definite_content_height, viewport)).collect()),
             n_lanes: row_axis.n_tracks.max(1) as usize,
             tolerance: super::grid_lanes::tolerance_px(s, em, Some(content_width), viewport),
             gap: col_gap,
@@ -738,13 +740,14 @@ pub(crate) fn build_grid_init(
                 l.resolve(em, definite_content_height, viewport).unwrap_or(em).max(0.0)
             }
         };
-        super::grid_lanes::LanesState::new(
+        let st = super::grid_lanes::LanesState::new(
             items,
             n_cols as usize,
             tolerance,
             row_gap,
             s.grid_lanes.direction.track_reverse,
-        )
+        );
+        if super::grid_lanes::is_dense(s) { st.dense(col_widths.clone(), col_gap) } else { st }
     });
     let probe_reuse: Vec<Option<(f32, f32, LayoutBox)>> = vec![None; item_idxs.len()];
     let item_baselines = vec![None; item_idxs.len()];
@@ -798,6 +801,15 @@ pub(crate) fn build_grid_init(
         lanes,
         row_lanes: row_lane_sizing,
     }))
+}
+
+/// Размер полосы-строки `r` из шаблона, если он задан длиной (иначе 0): по нему плотная упаковка
+/// сравнивает окна полос (`grid_lanes`).
+fn fixed_lane_size(template: &[GridTrackSize], r: u32, em: f32, basis: Option<f32>, viewport: Size) -> f32 {
+    match template.get(r as usize) {
+        Some(GridTrackSize::Length(l)) => l.resolve(em, basis, viewport).unwrap_or(0.0).max(0.0),
+        _ => 0.0,
+    }
 }
 
 /// Indices of the actual grid items of `children`. CSS Grid L1 §9.1: an

@@ -421,7 +421,13 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
         let h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
         frame.init.row_heights[k] = h;
         if let Some(lanes) = frame.init.lanes.as_mut() {
-            lanes.settle(k, h);
+            let (first, span) = lanes.settle(k, h);
+            // Плотная упаковка выбирает окно только теперь, когда известна высота элемента.
+            let want = (first as u32 + 1, (first + span) as u32 + 1, k as u32 + 1, k as u32 + 2);
+            if frame.init.placements[k] != want {
+                frame.init.placements[k] = want;
+                frame.init.probe_reuse[k] = None;
+            }
         }
     }
     record_flex_contrib(frame, i, viewport);

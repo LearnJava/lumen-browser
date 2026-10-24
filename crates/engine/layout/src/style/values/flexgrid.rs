@@ -768,11 +768,14 @@ pub enum GridAutoFlow {
 
 impl GridAutoFlow {
     pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "row" => Some(Self::Row),
-            "column" => Some(Self::Column),
-            "row dense" | "dense row" => Some(Self::RowDense),
-            "column dense" | "dense column" => Some(Self::ColumnDense),
+        // `[ row | column ] || dense`: `dense` без оси — это `row dense` (Grid L1 §7.7).
+        let lower = s.trim().to_ascii_lowercase();
+        let words: Vec<&str> = lower.split_whitespace().collect();
+        match words.as_slice() {
+            ["row"] => Some(Self::Row),
+            ["column"] => Some(Self::Column),
+            ["dense"] | ["row", "dense"] | ["dense", "row"] => Some(Self::RowDense),
+            ["column", "dense"] | ["dense", "column"] => Some(Self::ColumnDense),
             _ => None,
         }
     }

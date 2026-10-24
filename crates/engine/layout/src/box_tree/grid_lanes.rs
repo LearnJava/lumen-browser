@@ -8,8 +8,13 @@
 
 use super::grid::{resolve_grid_axis, GridAxis};
 use super::{LayoutBox, Size, TextMeasurer};
-use crate::style::{ComputedStyle, GridRepeat, GridTrackSize, LanesAxis};
+use crate::style::{ComputedStyle, GridAutoFlow, GridRepeat, GridTrackSize, LanesAxis};
 use std::sync::Arc;
+
+/// `grid-lanes-pack: dense` или устаревшее `grid-auto-flow: dense`.
+pub(super) fn is_dense(s: &ComputedStyle) -> bool {
+    s.grid_lanes.dense || matches!(s.grid_auto_flow, GridAutoFlow::RowDense | GridAutoFlow::ColumnDense)
+}
 
 /// Ось, вдоль которой идут полосы (`grid-lanes-direction: normal` берёт её из шаблона).
 pub(super) fn lanes_axis(s: &ComputedStyle) -> LanesAxis {
@@ -82,12 +87,21 @@ pub(super) struct LanesState {
     pub pos: Vec<f32>,
     /// Конец самого длинного потока — высота содержимого.
     pub extent: f32,
+    /// `grid-lanes-pack: dense`: занятые отрезки `(начало, конец)` каждой полосы — элемент встаёт в
+    /// самую раннюю щель, куда помещается (Grid L3 §4.5). `None` — обычная упаковка по концам полос.
+    busy: Option<Vec<Vec<(f32, f32)>>>,
+    /// Размеры полос и промежуток между ними: щель годится только окну того же суммарного размера.
+    lane_sizes: Vec<f32>,
+    lane_gap: f32,
 }
 
 impl LanesState {
     pub(super) fn new(items: Vec<LaneItem>, n_lanes: usize, tolerance: f32, gap: f32, track_reverse: bool) -> Self {
         let n_items = items.len();
         Self {
+            busy: None,
+            lane_sizes: Vec::new(),
+            lane_gap: 0.0,
             items,
             ends: vec![None; n_lanes.max(1)],
             tolerance,
@@ -100,11 +114,26 @@ impl LanesState {
         }
     }
 
-    /// Окно полос `(первая полоса, число полос)` элемента `k`.
+    /// Включает плотную упаковку: окно выбирает [`LanesState::settle`] по высоте элемента.
+    pub(super) fn dense(mut self, mut lane_sizes: Vec<f32>, lane_gap: f32) -> Self {
+        self.busy = Some(vec![Vec::new(); self.ends.len()]);
+        lane_sizes.resize(self.ends.len(), 0.0);
+        self.lane_sizes = lane_sizes;
+        self.lane_gap = lane_gap;
+        self
+    }
+
+    /// Окно полос `(первая полоса, число полос)` элемента `k`. При плотной упаковке окно уточняет
+    /// `settle` (нужна высота элемента), здесь — предварительное: определённое или первое.
     pub(super) fn choose(&mut self, k: usize) -> (usize, usize) {
         let n = self.ends.len();
         let item = self.items[k];
         let span = item.span.clamp(1, n);
+        if self.busy.is_some() {
+            let first = item.def.map_or(0, |d| d.min(n - span));
+            self.window[k] = (first, span);
+            return (first, span);
+        }
         let first = match item.def {
             Some(d) => d.min(n - span),
             None => pick_window(&self.ends, self.gap, span, self.tolerance, self.track_reverse, self.cursor),
@@ -117,7 +146,11 @@ impl LanesState {
     }
 
     /// Записывает позицию элемента `k` высотой `h` (внешней) и продвигает концы его полос.
-    pub(super) fn settle(&mut self, k: usize, h: f32) {
+    /// Возвращает окно полос — при плотной упаковке оно выбирается здесь.
+    pub(super) fn settle(&mut self, k: usize, h: f32) -> (usize, usize) {
+        if self.busy.is_some() {
+            return self.settle_dense(k, h);
+        }
         let (first, span) = self.window[k];
         let start = window_start(&self.ends, self.gap, first, span);
         self.pos[k] = start;
@@ -126,6 +159,43 @@ impl LanesState {
             *lane = Some(end);
         }
         self.extent = self.extent.max(end);
+        (first, span)
+    }
+
+    fn settle_dense(&mut self, k: usize, h: f32) -> (usize, usize) {
+        let n = self.ends.len();
+        let item = self.items[k];
+        let span = item.span.clamp(1, n);
+        let h = h.max(0.0);
+        let busy = self.busy.as_ref().expect("dense");
+        let pos = |w: usize| earliest_fit(busy, self.gap, w, span, h);
+        let first = match item.def {
+            Some(d) => d.min(n - span),
+            None => {
+                // Grid L3 §4.5: сначала окно, куда элемент встал бы без плотной упаковки; щель
+                // берётся лишь в окнах с тем же числом и суммарным размером полос.
+                let w0 = pick_window(&self.ends, self.gap, span, self.tolerance, self.track_reverse, self.cursor);
+                let total = |w: usize| self.lane_sizes[w..w + span].iter().sum::<f32>() + self.lane_gap * (span - 1) as f32;
+                let s0 = total(w0);
+                let order: Vec<usize> =
+                    if self.track_reverse { (0..=n - span).rev().collect() } else { (0..=n - span).collect() };
+                let cand: Vec<usize> = order.into_iter().filter(|&w| (total(w) - s0).abs() < 0.01).collect();
+                let min = cand.iter().map(|&w| pos(w)).fold(f32::INFINITY, f32::min);
+                cand.iter().copied().find(|&w| pos(w) <= min + self.tolerance).unwrap_or(w0)
+            }
+        };
+        self.cursor = if self.track_reverse { n - first } else { first + span };
+        let start = earliest_fit(busy, self.gap, first, span, h);
+        self.window[k] = (first, span);
+        self.pos[k] = start;
+        let end = start + h;
+        if let Some(busy) = self.busy.as_mut() {
+            for lane in &mut busy[first..first + span] {
+                lane.push((start, end));
+            }
+        }
+        self.extent = self.extent.max(end);
+        (first, span)
     }
 }
 
@@ -164,6 +234,8 @@ pub(super) struct RowLanes {
 
 /// Параметры потока полос-строк, не зависящие от замера.
 pub(super) struct RowFlow {
+    /// Плотная упаковка: размеры полос (0 — неизвестны до замера).
+    pub dense: Option<Vec<f32>>,
     pub n_lanes: usize,
     pub tolerance: f32,
     pub gap: f32,
@@ -181,12 +253,15 @@ pub(super) fn row_lanes(
     // Определённая полоса за явной сеткой создаёт неявную (как строка в обычной сетке).
     let n_lanes = items.iter().map(|i| i.def.map_or(i.span, |d| d + i.span)).fold(flow.n_lanes, usize::max);
     let mut st = LanesState::new(items, n_lanes, flow.tolerance, flow.gap, flow.track_reverse);
+    if let Some(sizes) = &flow.dense {
+        st = st.dense(sizes.clone(), 0.0);
+    }
     let mut placements = Vec::with_capacity(item_idxs.len());
     let mut col_widths = Vec::with_capacity(item_idxs.len());
     for (k, &i) in item_idxs.iter().enumerate() {
         let w = outer_width(&children[i]);
-        let (first, span) = st.choose(k);
-        st.settle(k, w);
+        st.choose(k);
+        let (first, span) = st.settle(k, w);
         placements.push((k as u32 + 1, k as u32 + 2, first as u32 + 1, (first + span) as u32 + 1));
         col_widths.push(w);
     }
@@ -300,6 +375,7 @@ pub(super) fn row_lanes_intrinsic(b: &LayoutBox, viewport: Size, per_item: &dyn 
     };
     let items = lane_items(&b.children, &item_idxs, &row_axis);
     let flow = RowFlow {
+        dense: is_dense(s).then(Vec::new),
         n_lanes: row_axis.n_tracks.max(1) as usize,
         tolerance: tolerance_px(s, s.font_size, Some(0.0), viewport),
         gap: s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0),
@@ -416,9 +492,23 @@ fn window_start(ends: &[Option<f32>], gap: f32, first: usize, span: usize) -> f3
 /// Grid L3 §4.4: окно с наименьшей позицией; окна в пределах `tolerance` от неё равноправны, из них
 /// берётся первое не раньше курсора (иначе первое вообще). `reverse` — порядок полос обратный.
 fn pick_window(ends: &[Option<f32>], gap: f32, span: usize, tolerance: f32, reverse: bool, cursor: usize) -> usize {
-    let n = ends.len();
+    pick_by(|w| window_start(ends, gap, w, span), ends.len(), span, tolerance, reverse, cursor)
+}
+
+/// Самая ранняя позиция, где элемент высотой `h` помещается во все полосы окна `first..first+span`
+/// (плотная упаковка): с нуля или сразу за концом какого-либо занятого отрезка, с промежутком.
+fn earliest_fit(busy: &[Vec<(f32, f32)>], gap: f32, first: usize, span: usize, h: f32) -> f32 {
+    let lanes = &busy[first..first + span];
+    let mut cands: Vec<f32> = vec![0.0];
+    cands.extend(lanes.iter().flatten().map(|&(_, e)| e + gap));
+    cands.sort_by(f32::total_cmp);
+    let fits = |t: f32| lanes.iter().flatten().all(|&(a, b)| !(t < b + gap && a < t + h + gap));
+    cands.into_iter().find(|&t| fits(t)).unwrap_or(0.0)
+}
+
+/// [`pick_window`] по произвольной позиции окна `pos`.
+fn pick_by(pos: impl Fn(usize) -> f32, n: usize, span: usize, tolerance: f32, reverse: bool, cursor: usize) -> usize {
     let starts: Vec<usize> = if reverse { (0..=n - span).rev().collect() } else { (0..=n - span).collect() };
-    let pos = |w: usize| window_start(ends, gap, w, span);
     let min = starts.iter().map(|&w| pos(w)).fold(f32::INFINITY, f32::min);
     let tied = |w: &usize| pos(*w) <= min + tolerance;
     // Номер линии, с которой окно начинается в порядке потока.
