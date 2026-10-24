@@ -283,7 +283,10 @@ fn scrollable_reads_the_installed_scroll_hints() {
     let sheet = lumen_css_parser::parse(SCROLLER);
     assert!(crate::sheet_has_scroll_state_queries(&sheet));
     let at = |y: f32| {
-        let _hints = crate::install_scroll_hints([(node.raw(), [0.0, y, 0.0, 0.0])].into_iter().collect());
+        let _hints = crate::install_scroll_hints(crate::ScrollHints {
+            offsets: [(node.raw(), [0.0, y, 0.0, 0.0])].into_iter().collect(),
+            ..Default::default()
+        });
         let tree = crate::layout(&doc, &sheet, Size::new(1024.0, 600.0));
         ["--top", "--bottom"].map(|n| custom(&tree, &doc, "#t", n))
     };

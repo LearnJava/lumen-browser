@@ -946,6 +946,7 @@ pub(crate) fn install_scroll_state(
     // calling `getComputedStyle`) would see the cache permanently empty.
     let cs_needed_for_request = Arc::clone(&flush.computed_styles_needed);
     let flush_for_request = flush.clone();
+    let flush_for_page = flush.clone();
     {
         let ss = Arc::clone(&flush.scroll_states);
         reg!(scope, ctx, store, "_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
@@ -1011,8 +1012,12 @@ pub(crate) fn install_scroll_state(
     // `smooth=1` → start_smooth_scroll; `smooth=0` → scroll_to (instant).
     {
         let pps = Arc::clone(&pending_page_scrolls);
+        let flush_page = flush_for_page.clone();
         reg!(scope, ctx, store, "_lumen_request_page_scroll", move |y: f64, smooth: u32| {
             pps.lock().unwrap().push((y as f32, smooth != 0));
+            if smooth == 0 {
+                flush_page.note_scroll_moved();
+            }
         });
     }
     // Returns current page scroll Y for window.scrollY / window.pageYOffset.
@@ -1043,6 +1048,7 @@ pub(crate) fn install_scroll_state(
         let px = Arc::clone(&page_scroll_x);
         reg!(scope, ctx, store, "_lumen_request_page_scroll_x", move |x: f64| {
             px.lock().unwrap().pending = Some(x as f32);
+            flush_for_page.note_scroll_moved();
         });
         let px = Arc::clone(&page_scroll_x);
         reg!(scope, ctx, store, "_lumen_get_page_scroll_x", move || -> f64 {

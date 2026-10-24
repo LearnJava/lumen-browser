@@ -445,6 +445,9 @@ pub(crate) struct Lumen {
     /// `scroll_y` предыдущего `RedrawRequested` — для оценки скорости скролла
     /// (fast-scroll деградация, EXPERIMENT.md §2 срез 2).
     pub(crate) last_frame_scroll_y: f32,
+    /// Смещение страницы `(x, y)`, на котором в последний раз отвечали запросы
+    /// `@container scroll-state(…)` (CQ-SCROLL-STATE-2).
+    pub(crate) scroll_state_page_seen: (f32, f32),
     /// EMA-скорость скролла в CSS px/кадр (сглаживает разовые wheel-рывки).
     pub(crate) scroll_velocity: f32,
     /// Режим быстрого скролла: тики CSS-анимаций/GIF/video-GIF заморожены,

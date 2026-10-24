@@ -109,6 +109,8 @@ impl Lumen {
                 }
             });
         }
+        // CQ-SCROLL-STATE-2: the root's `scroll-state()` follows the page scroll.
+        self.restyle_scroll_state_on_page_scroll();
         // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
         self.try_discard_offscreen_images();
         // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел

@@ -1183,6 +1183,10 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (*cur - y).abs() > f32::EPSILON;
         *cur = y;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
         moved
     }
 
@@ -1198,6 +1202,10 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_x.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (cur.committed - x).abs() > f32::EPSILON;
         cur.committed = x;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
         moved
     }
 

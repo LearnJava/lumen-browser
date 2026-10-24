@@ -92,6 +92,18 @@ impl Lumen {
         }
     }
 
+    /// Страница прокручена с прошлого кадра — запросы `scroll-state(…)` корневого элемента
+    /// отвечают по новому смещению.
+    pub(crate) fn restyle_scroll_state_on_page_scroll(&mut self) {
+        let now = (self.scroll_x, self.scroll_y);
+        if now != self.scroll_state_page_seen {
+            self.scroll_state_page_seen = now;
+            if self.layout_box.as_ref().is_some_and(lumen_layout::root_is_scroll_state_container) {
+                self.restyle_scroll_state_queries();
+            }
+        }
+    }
+
     /// Ставит контейнеру `target` смещение `(new_x, new_y)`: правит раскладку и
     /// готовый display list на месте и сообщает странице (`scroll`/`scrollend`).
     /// Общий хвост колеса потока браузера и усыновления смещения, которое вело

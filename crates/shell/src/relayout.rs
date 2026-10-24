@@ -386,7 +386,15 @@ impl Lumen {
             .map(lumen_layout::scroll_offsets);
         let (new_dl, lb) = match keep_scroll {
             Some(offsets) => {
-                relayout_page_keeping_scroll(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts, offsets)
+                relayout_page_keeping_scroll(
+                    src,
+                    viewport,
+                    &*self.hyp_provider,
+                    self.dark_mode,
+                    &self.web_fonts,
+                    offsets,
+                    (self.scroll_x, self.scroll_y),
+                )
             }
             None => relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts),
         };
@@ -1403,8 +1411,12 @@ pub(crate) fn relayout_page_keeping_scroll(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
     offsets: std::collections::HashMap<u32, [f32; 4]>,
+    page_scroll: (f32, f32),
 ) -> (DisplayList, lumen_layout::LayoutBox) {
-    let _hints = lumen_layout::install_scroll_hints(offsets.clone());
+    let _hints = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
+        offsets: offsets.clone(),
+        page: page_scroll,
+    });
     #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = page_measurer(&font, web_fonts);

@@ -1,6 +1,6 @@
 # BUG-1512 — Scroll-state container queries (`container-type: scroll-state`, `@container scroll-state(stuck|snapped|scrollable|scrolled)`) не реализованы
 
-**Статус:** OPEN (ДОРАБОТКА → CQ-SCROLL-STATE-2)
+**Статус:** OPEN (ДОРАБОТКА → CQ-SCROLL-STATE-3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** css-parser/layout (`container-type: scroll-state`, `@container scroll-state(…)`)
 
@@ -32,3 +32,13 @@ WPT-RUN-14 срез 22: `container-queries/scroll-state/*` — 54 id, 203 из 2
 - Правила `@container` выставляют custom properties; элементы без бокса получают результат через `CounterMap::cq_boxless` + `collect_custom_properties_for`.
 - WPT `css/css-conditional/container-queries/scroll-state/`: 39 → 161 из 237 субтестов; `scroll-state-scrollable-axis.html` и `scroll-state-scrolled-programmatic-absolute-scrolls.html` зелёные.
 - Остаток — задача CQ-SCROLL-STATE-2 (ROADMAP.md).
+
+## Срез 2 (CQ-SCROLL-STATE-2, 2026-10-24, P3) — влит
+
+- Корень: запросы `scroll-state()` отвечают один раз за проход раскладки, а свежее дерево начинается с нулевых смещений (прежние возвращает `restore_scroll_positions` уже после прохода). Теперь на время раскладки ставятся подсказки (`lumen_layout::install_scroll_hints`/`ScrollHints`: смещения контейнеров по `NodeId::raw()` и смещение страницы), `scroll_state_info` читает их вместо `scroll_x/y` и зажимает по границам прокрутки.
+- JS: `FlushHandles::maybe_flush` берёт подсказки из `scroll_states` и позиции страницы (в том числе из ещё не применённого `scrollTo`); `note_scroll_moved` (`_lumen_request_scroll`, `_lumen_request_page_scroll[_x]`, `update_scroll_states`, `set_page_scroll_y/x`) помечает флаш устаревшим и отключает инкрементальный путь — такая таблица проходит раскладку целиком. Тесты `v8_cq_scroll_state_invalidation`.
+- Оболочка: `Lumen::relayout` при таблице со `scroll-state()` берёт смещения текущего дерева (`relayout_page_keeping_scroll`: подсказки + `restore_scroll_positions` до сборки списка отображения); `restyle_scroll_state_queries` вызывается из `apply_container_scroll` (колесо), из очереди запросов `scrollTop` (`about_to_wait`) и по смещению страницы, если корень — контейнер (`RedrawRequested`).
+- Корень документа (`html`) — контейнер `scroll-state` по вьюпорту (`ViewportRole::Root`); `body` с ушедшим во вьюпорт `overflow` по-прежнему не отвечает.
+- Попутно: `el.style.overflow = ''` (и другие 2-значные шорткаты, `block-step`) убирал не все продольные объявления — после `overflow: initial` в `style` оставалось `overflow: initial`.
+- WPT `css/css-conditional/container-queries/scroll-state/`: 161 → 174 из 237 субтестов (`scrollable-change`, `scrollable-root`, `scrollable-container-type-change` зелёные).
+- Остаток — CQ-SCROLL-STATE-3 (ROADMAP.md): `scrolled`, `stuck`, `snapped`, `scrollable-body-002` (границы прокрутки страницы при `body{height; overflow}`), цели-псевдоэлементы, `var()` в запросе.
