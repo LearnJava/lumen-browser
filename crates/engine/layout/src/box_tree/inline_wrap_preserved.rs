@@ -43,7 +43,6 @@ fn break_offsets(text: &str, p: &PreservedWrap<'_>, style: &ComputedStyle) -> Ve
     let break_spaces = p.white_space == crate::style::WhiteSpace::BreakSpaces;
     let ow_chars = p.word_break == WordBreak::BreakWord
         || matches!(p.overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere);
-    let ls = style.letter_spacing;
     let mut out = Vec::new();
 
     let mut chars = text.char_indices().peekable();
@@ -76,10 +75,7 @@ fn break_offsets(text: &str, p: &PreservedWrap<'_>, style: &ComputedStyle) -> Ve
                 // CSS Text L3 §8.1: a word wider than the line breaks anywhere —
                 // the other opportunities are tried first, so only an unbroken
                 // word that is too wide falls back to character cuts.
-                let w = measure_text_w_varied(
-                    word, style.font_size, ls, style.tab_size,
-                    &style.font_family, &style.font_variation_settings, p.m,
-                );
+                let w = measure_text_w_styled(word, style, style.tab_size, p.m);
                 if w > p.max_width {
                     opps = word.char_indices().skip(1).map(|(o, _)| o).collect();
                 }

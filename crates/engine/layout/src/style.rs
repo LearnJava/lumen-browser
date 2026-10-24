@@ -222,7 +222,7 @@ pub use values::typography::{
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, TextJustify, CaseLang, resolve_match_parent, resolve_match_parent_last,
     TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
-    WhiteSpaceCollapse, BoxShadow, text_font_features,
+    WhiteSpaceCollapse, BoxShadow, text_font_features, text_variation_axes, with_text_variation_axes,
 };
 pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
 // BUG-508 — CSS Color HDR L1 `dynamic-range-limit`: own module (not folded

@@ -167,11 +167,8 @@ fn min_content_outer_height(b: &LayoutBox, measurer: Option<&dyn TextMeasurer>, 
             let mut best = 0.0_f32;
             let mut run = 0.0_f32;
             for seg in segments {
-                let ls = seg.style.letter_spacing;
-                let fams = &seg.style.font_family;
-                let fs = seg.style.font_size;
                 let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
-                let piece = |t: &str| measure_text_w_families(t, fs, ls, ts, fams, m);
+                let piece = |t: &str| measure_text_w_styled(t, &seg.style, ts, m);
                 if seg.style.white_space.is_nowrap() || seg.style.text_wrap_mode == TextWrapMode::Nowrap {
                     run += piece(&seg.text);
                     best = best.max(run);

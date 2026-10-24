@@ -4,6 +4,8 @@
 //! (`push_glyph_quad`…`rasterize_and_insert`). Вынесено из `renderer.rs`
 //! (`docs/tasks/p1-monolith-split-queue.md` §4, группа RN, батч RN-2).
 
+pub(crate) use crate::shaped_width::shaping_features;
+use crate::shaped_width::text_shaping_disabled;
 use super::*;
 
 /// BUG-405 срез 12: подстатьи одной команды SVG-супа (`DrawSvgFill`/
@@ -530,15 +532,6 @@ fn text_run_cache_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_TEXT_RUN_CACHE").is_ok_and(|v| v == "1"))
 }
 
-/// `true`, если шейпинг GPU-пути отключён (`LUMEN_NO_TEXT_SHAPING=1`) — рычаг
-/// отката TEXTQ-4 к укладке «глиф на кодпойнт из `cmap`, advance из `hmtx`»,
-/// без кернинга и `font-feature-settings`.
-fn text_shaping_disabled() -> bool {
-    use std::sync::OnceLock;
-    static OFF: OnceLock<bool> = OnceLock::new();
-    *OFF.get_or_init(|| std::env::var("LUMEN_NO_TEXT_SHAPING").is_ok_and(|v| v == "1"))
-}
-
 /// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
@@ -891,26 +884,6 @@ pub(crate) fn push_text_glyphs(
     }
     runs.scratch = key;
     cursor_x
-}
-
-/// Фичи шейпинга run-а (TEXTQ-4): `font-feature-settings` как есть, а при
-/// ненулевом `letter-spacing` перед ними — выключенные `liga`/`clig`. CSS Text
-/// L3 §8.2: UA не должен применять необязательные лигатуры, когда между
-/// символами добавлен интервал. Выключатели идут ПЕРВЫМИ, поэтому явное
-/// `"liga" 1` автора, стоящее позже, их перекрывает (так делают и Chromium, и
-/// HarfBuzz — при совпадении диапазона побеждает последняя фича).
-pub(crate) fn shaping_features(
-    font_features: &[([u8; 4], u32)],
-    letter_spacing: f32,
-) -> std::borrow::Cow<'_, [([u8; 4], u32)]> {
-    if letter_spacing == 0.0 {
-        return std::borrow::Cow::Borrowed(font_features);
-    }
-    let mut all = Vec::with_capacity(font_features.len() + 2);
-    all.push((*b"liga", 0));
-    all.push((*b"clig", 0));
-    all.extend_from_slice(font_features);
-    std::borrow::Cow::Owned(all)
 }
 
 /// Укладка под-run-а без шейпера — глиф на кодпойнт из `cmap`, advance из

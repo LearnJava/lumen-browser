@@ -150,6 +150,39 @@ use super::*;
     }
 
     #[test]
+    fn text_variation_axes_adds_auto_opsz_and_wdth_and_stack_variant_agrees() {
+        // TEXTQ-5: оси run-а для шейпера — те же, что уходят в `DrawText`;
+        // вариант без аллокации обязан совпадать с обычным на любом стиле.
+        let mut s = ComputedStyle::root();
+        s.font_size = 20.0;
+        assert_eq!(text_variation_axes(&s), vec![(*b"opsz", 20.0)]);
+        s.font_stretch = FontStretch(750);
+        assert_eq!(text_variation_axes(&s), vec![(*b"opsz", 20.0), (*b"wdth", 75.0)]);
+        // Ось автора не перекрывается автоматической.
+        s.font_variation_settings = vec![FontVariationSetting { tag: *b"opsz", value: 9.0 }];
+        assert_eq!(text_variation_axes(&s), vec![(*b"opsz", 9.0), (*b"wdth", 75.0)]);
+        s.font_optical_sizing = FontOpticalSizing::None;
+        s.font_stretch = FontStretch::NORMAL;
+        s.font_variation_settings.clear();
+        assert!(text_variation_axes(&s).is_empty());
+        // Сравнение двух реализаций на наборе стилей, включая переполнение стека.
+        for n in 0..5 {
+            for stretch in [FontStretch::NORMAL, FontStretch(500)] {
+                for sizing in [FontOpticalSizing::Auto, FontOpticalSizing::None] {
+                    let mut st = ComputedStyle::root();
+                    st.font_stretch = stretch;
+                    st.font_optical_sizing = sizing;
+                    st.font_variation_settings = (0..n)
+                        .map(|i| FontVariationSetting { tag: [b'a', b'x', b'0' + i as u8, b' '], value: i as f32 })
+                        .collect();
+                    let heap = text_variation_axes(&st);
+                    with_text_variation_axes(&st, |stack| assert_eq!(stack, heap.as_slice()));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn font_shorthand_style_variant_weight() {
         let s = p_style_with_css("p { font: italic small-caps bold 20px Georgia; }");
         assert_eq!(s.font_size, 20.0);

@@ -13,7 +13,7 @@ Block rect=(0.00, 0.00, 1024.00, 720.00)
           line[0]:
             frag[0] x=0.00 "LUMEN BROWSER"
             frag[1] x=118.67 "/ LAYOUT И ВИДИМОСТЬ"
-            frag[2] x=284.08 "— Страница 6 из 6"
+            frag[2] x=283.12 "— Страница 6 из 6"
       Skip rect=(0.00, 36.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
       Skip rect=(0.00, 36.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
       Skip rect=(0.00, 36.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
@@ -65,12 +65,12 @@ Block rect=(0.00, 0.00, 1024.00, 720.00)
             seg[6] "\n      — все на одной строке, перенос при нехватке места.\n    " color=#2d3748ff fs=13.00 lh=1.40
             line[0]:
               frag[0] x=0.00 "Текст строки:"
-              frag[1] x=79.31 "красный bold"
-              frag[2] x=155.93 "зелёный italic"
-              frag[3] x=234.23 "синий underline"
-              frag[4] x=323.42 "фиолетовый"
-              frag[5] x=394.82 "золотой bold"
-              frag[6] x=468.19 "— все на одной строке, перенос при нехватке места."
+              frag[1] x=78.65 "красный bold"
+              frag[2] x=155.27 "зелёный italic"
+              frag[3] x=233.57 "синий underline"
+              frag[4] x=322.76 "фиолетовый"
+              frag[5] x=393.81 "золотой bold"
+              frag[6] x=466.60 "— все на одной строке, перенос при нехватке места."
         Skip rect=(16.00, 198.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
       Skip rect=(0.00, 204.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
       Skip rect=(0.00, 204.60, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
@@ -109,14 +109,12 @@ Block rect=(0.00, 0.00, 1024.00, 720.00)
               frag[0] x=0.00 "OVERFLOW: HIDDEN — СОДЕРЖИМОЕ ОБРЕЗАЕТСЯ ПО ГРАНИЦЕ БЛОКА"
         Skip rect=(16.00, 296.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
         Block rect=(16.00, 296.00, 360.00, 36.00) bg=#ebf8ffff w=360.00 h=36.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden m=(0.00, 0.00, 4.00, 0.00) p=(4.00, 8.00, 4.00, 8.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#3182ceff,#3182ceff,#3182ceff,#3182ceff)
-          InlineRun rect=(26.00, 302.00, 340.00, 54.60) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
+          InlineRun rect=(26.00, 302.00, 340.00, 36.40) color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
             seg[0] "\n      overflow:hidden — этот текст очень длинный и будет обрезан при выходе за границу блока фиксированной высоты\n    " color=#2d3748ff fs=13.00 lh=1.40 overflow=hidden/hidden
             line[0]:
-              frag[0] x=0.00 "overflow:hidden — этот текст очень длинный и будет"
+              frag[0] x=0.00 "overflow:hidden — этот текст очень длинный и будет обрезан"
             line[1]:
-              frag[0] x=0.00 "обрезан при выходе за границу блока фиксированной"
-            line[2]:
-              frag[0] x=0.00 "высоты"
+              frag[0] x=0.00 "при выходе за границу блока фиксированной высоты"
         Skip rect=(16.00, 336.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
         Block rect=(16.00, 336.00, 360.00, 36.00) bg=#f0fff4ff w=360.00 h=36.00 box-sizing=border-box color=#2d3748ff fs=13.00 lh=1.40 p=(4.00, 8.00, 4.00, 8.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#38a169ff,#38a169ff,#38a169ff,#38a169ff)
           InlineRun rect=(26.00, 342.00, 340.00, 36.40) color=#2d3748ff fs=13.00 lh=1.40
@@ -209,8 +207,8 @@ Block rect=(0.00, 0.00, 1024.00, 720.00)
                   frag[0] x=0.00 "h:8vh"
             Skip rect=(289.00, 590.40, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
           InlineSpace rect=(0.00, 0.00, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
-          Block rect=(380.00, 532.80, 237.59, 19.40) display=inline-block box-sizing=border-box color=#718096ff fs=11.00 lh=1.40 p=(4.00, 0.00, 0.00, 0.00)
-            InlineRun rect=(380.00, 536.80, 237.59, 15.40) display=inline-block color=#718096ff fs=11.00 lh=1.40
+          Block rect=(380.00, 532.80, 237.30, 19.40) display=inline-block box-sizing=border-box color=#718096ff fs=11.00 lh=1.40 p=(4.00, 0.00, 0.00, 0.00)
+            InlineRun rect=(380.00, 536.80, 237.30, 15.40) display=inline-block color=#718096ff fs=11.00 lh=1.40
               seg[0] "\n      ← vh от высоты окна 720px · 8vh = ~58px\n    " color=#718096ff fs=11.00 lh=1.40
               line[0]:
                 frag[0] x=0.00 "← vh от высоты окна 720px · 8vh = ~58px"
@@ -231,14 +229,14 @@ Block rect=(0.00, 0.00, 1024.00, 720.00)
             seg[1] "Дочерний span наследует цвет (bold локально)." color=#e53e3eff fs=13.00 lh=1.40 font-weight=700
             line[0]:
               frag[0] x=0.00 "Родитель: color=красный, font-size=13px."
-              frag[1] x=230.89 "Дочерний span наследует цвет (bold локально)."
+              frag[1] x=230.19 "Дочерний span наследует цвет (bold локально)."
           Block rect=(16.00, 637.60, 992.00, 18.20) box-sizing=border-box color=#e53e3eff fs=13.00 lh=1.40 font-style=italic
             InlineRun rect=(16.00, 637.60, 992.00, 18.20) color=#e53e3eff fs=13.00 lh=1.40 font-style=italic
               seg[0] "\n        Вложенный div: наследует красный + добавляет italic.\n        " color=#e53e3eff fs=13.00 lh=1.40 font-style=italic
               seg[1] "Внук-span: цвет → синий, курсив унаследован." color=#3182ceff fs=13.00 lh=1.40 font-style=italic
               line[0]:
                 frag[0] x=0.00 "Вложенный div: наследует красный + добавляет italic."
-                frag[1] x=303.44 "Внук-span: цвет → синий, курсив унаследован."
+                frag[1] x=302.43 "Внук-span: цвет → синий, курсив унаследован."
           Skip rect=(16.00, 655.80, 0.00, 0.00) color=#e53e3eff fs=13.00 lh=1.40
         Skip rect=(16.00, 655.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40
       Skip rect=(0.00, 661.80, 0.00, 0.00) color=#2d3748ff fs=13.00 lh=1.40

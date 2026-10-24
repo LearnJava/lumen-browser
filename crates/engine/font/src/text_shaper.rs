@@ -128,7 +128,7 @@ thread_local! {
 /// Дешёвый отпечаток содержимого: длина, голова, хвост и 16 окон по 64 байта
 /// поровну по телу. Вместе с адресом и длиной отличает два шрифта, по очереди
 /// занимавшие один и тот же адрес.
-fn font_fingerprint(data: &[u8]) -> u64 {
+pub fn font_fingerprint(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ data.len() as u64;
     let mut feed = |bytes: &[u8]| {
         for b in bytes {

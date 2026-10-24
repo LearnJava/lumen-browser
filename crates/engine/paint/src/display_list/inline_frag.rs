@@ -151,22 +151,7 @@ pub(crate) fn emit_text_shadows(
             // font-variation-settings control opsz directly.
             font_features: lumen_layout::style::text_font_features(&frag.style),
             font_palette: palette_selection(&frag.style),
-            font_variation_axes: {
-                let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
-                    .iter().map(|s| (s.tag, s.value)).collect();
-                if frag.style.font_optical_sizing == FontOpticalSizing::Auto {
-                    let has_opsz = axes.iter().any(|(tag, _)| tag == b"opsz");
-                    if !has_opsz {
-                        axes.push((*b"opsz", frag.style.font_size));
-                    }
-                }
-                if frag.style.font_stretch != FontStretch::NORMAL
-                    && !axes.iter().any(|(t, _)| t == b"wdth")
-                {
-                    axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
-                }
-                axes
-            },
+            font_variation_axes: lumen_layout::style::text_variation_axes(&frag.style),
             tab_size: frag.style.tab_size,
             letter_spacing: super::spacing_to_fixed(frag.style.letter_spacing),
             word_spacing: super::spacing_to_fixed(frag.style.word_spacing + frag.style.word_spacing_pct * 0.25 * frag.style.font_size),

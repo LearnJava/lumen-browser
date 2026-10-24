@@ -21,20 +21,48 @@ pub(crate) fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
     (display, positions)
 }
 
-/// Measures text width (letter_spacing applied between each character).
-/// `tab_size` is used for `\t` characters; pass 0.0 when text contains no tabs.
-pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
+/// Ширина `text` как последовательности shaped run-ов между табуляциями
+/// (TEXTQ-5): кернинг и лигатуры считает шейпер измерителя
+/// ([`TextMeasurer::shaped_width`]) теми же фичами и осями, что и отрисовка;
+/// посимвольная сумма остаётся запасным путём для измерителей без шейпера.
+/// `letter-spacing` стоит между символами, после последнего его нет, `\t`
+/// занимает `tab_size`. Табуляция разрывает run: лигатура и кернинговая пара
+/// через неё не строятся — так же шейпит отрисовка.
+fn measure_run(
+    text: &str,
+    tab_size: f32,
+    params: &ShapeParams<'_>,
+    css_axes: &[crate::style::FontVariationSetting],
+    m: &dyn TextMeasurer,
+) -> f32 {
     if text.is_empty() {
         return 0.0;
     }
-    let total: f32 = text
-        .chars()
-        .map(|c| {
-            let cw = if c == '\t' { tab_size } else { m.char_width(c, font_size) };
-            cw + letter_spacing
-        })
-        .sum();
-    total - letter_spacing
+    let ls = params.letter_spacing;
+    let mut total = 0.0_f32;
+    for (i, piece) in text.split('\t').enumerate() {
+        if i > 0 {
+            total += tab_size + ls;
+        }
+        if piece.is_empty() {
+            continue;
+        }
+        total += match m.shaped_width(piece, params) {
+            Some(w) => w,
+            None => piece
+                .chars()
+                .map(|c| m.char_width_varied(c, params.font_size_px, css_axes, params.families) + ls)
+                .sum(),
+        };
+    }
+    total - ls
+}
+
+/// Measures text width (letter_spacing applied between each character).
+/// `tab_size` is used for `\t` characters; pass 0.0 when text contains no tabs.
+pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
+    let params = ShapeParams { font_size_px: font_size, letter_spacing, families: &[], features: &[], axes: &[] };
+    measure_run(text, tab_size, &params, &[], m)
 }
 
 /// Как [`measure_text_w`], но учитывает CSS `font-family` каскад.
@@ -50,21 +78,8 @@ pub fn measure_text_w_families(
     families: &[String],
     m: &dyn TextMeasurer,
 ) -> f32 {
-    if text.is_empty() {
-        return 0.0;
-    }
-    let total: f32 = text
-        .chars()
-        .map(|c| {
-            let cw = if c == '\t' {
-                tab_size
-            } else {
-                m.char_width_with_families(c, font_size, families)
-            };
-            cw + letter_spacing
-        })
-        .sum();
-    total - letter_spacing
+    let params = ShapeParams { font_size_px: font_size, letter_spacing, families, features: &[], axes: &[] };
+    measure_run(text, tab_size, &params, &[], m)
 }
 
 /// Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`.
@@ -81,21 +96,27 @@ pub fn measure_text_w_varied(
     axes: &[crate::style::FontVariationSetting],
     m: &dyn TextMeasurer,
 ) -> f32 {
-    if text.is_empty() {
-        return 0.0;
-    }
-    let total: f32 = text
-        .chars()
-        .map(|c| {
-            let cw = if c == '\t' {
-                tab_size
-            } else {
-                m.char_width_varied(c, font_size, axes, families)
-            };
-            cw + letter_spacing
-        })
-        .sum();
-    total - letter_spacing
+    let shape_axes: Vec<([u8; 4], f32)> = axes.iter().map(|a| (a.tag, a.value)).collect();
+    let params = ShapeParams { font_size_px: font_size, letter_spacing, families, features: &[], axes: &shape_axes };
+    measure_run(text, tab_size, &params, axes, m)
+}
+
+/// Ширина `text` с ПОЛНЫМИ шейпинг-параметрами `style` (TEXTQ-5): размер,
+/// `letter-spacing`, `font-family`, `font-feature-settings`/`font-variant-*`
+/// и оси вариаций (с автоматическими `opsz`/`wdth`) — ровно те, с которыми
+/// стиль уйдёт в `DrawText`. Ширина слова в раскладке совпадает с нарисованной.
+pub(crate) fn measure_text_w_styled(text: &str, style: &ComputedStyle, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
+    let features = crate::style::text_font_features(style);
+    crate::style::with_text_variation_axes(style, |axes| {
+        let params = ShapeParams {
+            font_size_px: style.font_size,
+            letter_spacing: style.letter_spacing,
+            families: &style.font_family,
+            features: &features,
+            axes,
+        };
+        measure_run(text, tab_size, &params, &style.font_variation_settings, m)
+    })
 }
 
 /// Tab-stop geometry of one run of text (CSS Text L3 §4.2 `tab-size`).
@@ -148,12 +169,16 @@ pub(crate) fn measure_text_tabbed(
     let ls = style.letter_spacing;
     let mut pen = start_x;
     let mut trailing_ls = 0.0_f32;
-    for c in text.chars() {
-        if c == '\t' {
+    for (i, piece) in text.split('\t').enumerate() {
+        if i > 0 {
             pen += tabs.advance(pen);
             trailing_ls = 0.0;
-        } else {
-            pen += m.char_width_varied(c, style.font_size, &style.font_variation_settings, &style.font_family) + ls;
+        }
+        if !piece.is_empty() {
+            // `measure_text_w_styled` не ставит интервал после последнего
+            // символа run-а — он следует за каждым символом, кроме последнего
+            // во всей строке.
+            pen += measure_text_w_styled(piece, style, 0.0, m) + ls;
             trailing_ls = ls;
         }
     }
@@ -512,13 +537,10 @@ fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
             max_w = max_w.max(seg.img_width);
             continue;
         }
-        let em = seg.style.font_size;
-        let ls = seg.style.letter_spacing;
         let tab = seg.style.tab_size;
-        let families = &seg.style.font_family;
         for raw in split_css_whitespace(&seg.text) {
             let (display, _) = strip_soft_hyphens(raw);
-            let w = measure_text_w_families(&display, em, ls, tab, families, m);
+            let w = measure_text_w_styled(&display, &seg.style, tab, m);
             max_w = max_w.max(w);
         }
     }
@@ -634,14 +656,7 @@ pub(crate) fn pretty_wrap(
         .rfind(|w| !w.is_empty())
         .map(|w| {
             let (display, _) = strip_soft_hyphens(w);
-            measure_text_w_families(
-                &display,
-                last_frag.style.font_size,
-                last_frag.style.letter_spacing,
-                0.0,
-                &last_frag.style.font_family,
-                m,
-            )
+            measure_text_w_styled(&display, &last_frag.style, 0.0, m)
         })
         .unwrap_or(last_frag.width);
 
@@ -966,7 +981,7 @@ pub(crate) fn wrap_inline_run_indented(
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w = measure_text_w_varied(&display_word, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+            let word_w = measure_text_w_styled(&display_word, style, 0.0, m);
             // CSS Text L3 §4.1.1 — inter-word gap before this word. Words within a
             // segment are always separated (they were split on real whitespace);
             // the first word of a segment is separated from the previous fragment
@@ -1051,14 +1066,14 @@ pub(crate) fn wrap_inline_run_indented(
                         // characters under `overflow-wrap: break-word|anywhere`.
                         if ow_chars {
                             let whole = &display_word[start..end];
-                            let w = measure_text_w_varied(whole, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                            let w = measure_text_w_styled(whole, style, 0.0, m);
                             if w > avail {
                                 end = start + char_break_offset(whole, avail, style.font_size, ls, &style.font_family, m);
                             }
                         }
                     }
                     let chunk = &display_word[start..end];
-                    let chunk_w = measure_text_w_varied(chunk, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                    let chunk_w = measure_text_w_styled(chunk, style, 0.0, m);
                     current_x += chunk_gap + chunk_pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -1112,7 +1127,7 @@ pub(crate) fn wrap_inline_run_indented(
 
                 if let Some((pfx, sfx)) = hyph_result {
                     // Emit prefix (with trailing '-') to current line, then wrap.
-                    let pfx_w = measure_text_w_varied(&pfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                    let pfx_w = measure_text_w_styled(&pfx, style, 0.0, m);
                     current_x += gap + pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -1136,7 +1151,7 @@ pub(crate) fn wrap_inline_run_indented(
                     result.push(std::mem::take(&mut current_line));
                     current_x = indent.soft;
                     // Emit suffix as first fragment on new line.
-                    let sfx_w = measure_text_w_varied(&sfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                    let sfx_w = measure_text_w_styled(&sfx, style, 0.0, m);
                     current_line.push(InlineFrag {
                         x: 0.0,
                         y_offset: 0.0,
@@ -1173,7 +1188,7 @@ pub(crate) fn wrap_inline_run_indented(
                         let head = &rest[..split];
                         let tail = &rest[split..];
                         if !head.is_empty() {
-                            let head_w = measure_text_w_varied(head, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                            let head_w = measure_text_w_styled(head, style, 0.0, m);
                             current_line.push(InlineFrag {
                                 x: current_x,
                                 y_offset: 0.0,
@@ -1230,7 +1245,7 @@ pub(crate) fn wrap_inline_run_indented(
                     let head = &rest[..split];
                     let tail = &rest[split..];
                     if !head.is_empty() {
-                        let head_w = measure_text_w_varied(head, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                        let head_w = measure_text_w_styled(head, style, 0.0, m);
                         current_line.push(InlineFrag {
                             x: current_x,
                             y_offset: 0.0,
