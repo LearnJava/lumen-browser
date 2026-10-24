@@ -993,11 +993,11 @@
      ]
     },
     {
-     "id": "CQ-SCROLL-STATE-2",
-     "title": "CQ-SCROLL-STATE-2: инвалидация по прокрутке, scrolled/stuck/snapped, прокрутка страницы",
+     "id": "CQ-SCROLL-STATE-3",
+     "title": "CQ-SCROLL-STATE-3: scrolled/stuck/snapped, body во вьюпорте, псевдоэлементы",
      "status": "planned",
      "size": "L",
-     "note": "Остаток CQ-SCROLL-STATE (76 из 237 субтестов `container-queries/scroll-state/`). (1) **Инвалидация по прокрутке:** состояния считаются один раз за проход `apply_container_styles` по `scroll_x/y` свежей раскладки; прокрутка (колесо, клавиши, `scrollTop`) запрос не пересчитывает — `scrollable: top/bottom` после прокрутки, `scroll-state-scrollable-change`, `-container-type-change`. Нужен пересчёт стиля только scroll-state-контейнеров по смене смещения без полной раскладки (ориентир — `refresh_anchor_scroll`) и сигнал оболочке/JS-флашу о смене. (2) **`scrolled`:** сейчас всегда `none`; нужно направление последней *пользовательской* прокрутки (колесо, клавиши, перетаскивание, касание, полоса прокрутки; программные `scrollTo`/`scrollTop` не считаются — это уже верно) — `scroll-state-scrolled-*`, 16 id. (3) **`stuck`:** липкий бокс (`position: sticky`, BUG-1468), сдвиг от `compute_sticky_offset` относительно скроллпорта, начальное состояние, `writing-mode` — `scroll-state-stuck-*`, `initially-stuck`. (4) **`snapped`:** выбранная снап-позиция по осям, `initially-snapped` (прокрутка к якорю на старте), `snapped-*`. (5) **Прокрутка страницы:** контейнер — `html`/`body` с `overflow`, ушедшим во вьюпорт: `scrollable-root`, `scrollable-body-001/002`. (6) Цели-псевдоэлементы `::before` (`scrollable-pseudo`, `snapped-pseudo`, `stuck-pseudo`); `query-with-var` (3 из 6: `var()` с запасным значением, зарегистрированные свойства). (7) Соседнее: `container-type` в `element.style` не проверяется и не канонизируется (`container-type-scroll-state-parsing`, 4 из 6: `scroll-state inline-size` → `inline-size scroll-state`, повтор и `normal scroll-state` невалидны); шорткат `container` в `getComputedStyle` (BUG-1514). (8) Ограничения среза 1: в scroll-state-only контейнере поддерево перестилизуется, но не перекладывается (правила, меняющие геометрию, раскладку не двигают); сегменты инлайн-текста держат собственный стиль, поэтому правило `@container` на инлайн-элементе видно в `getComputedStyle`, но в растр оно, возможно, не попадает — проверить `color` на `span` с текстом в контейнере. Критерий готовности: `scroll-state-scrollable-change.html`, `scroll-state-scrolled-wheel-scroll.html`, `scroll-state-initially-stuck.html`, `scroll-state-initially-snapped.html`, `scroll-state-scrollable-root.html` зелёные.",
+     "note": "Остаток CQ-SCROLL-STATE (63 из 237 субтестов `container-queries/scroll-state/`). (1) **`scrolled`:** сейчас всегда `none`; нужна последняя *относительная* прокрутка по осям (`scrollBy`, колесо, клавиши, касание, полоса; абсолютные `scrollTo`/`scrollTop=` не считаются; флаги осей хранятся, пока ту же ось не сдвинут в другую сторону; сдвиг считается по зажатому смещению — упор в край не меняет состояние). Тот же механизм `ScrollHints` (добавить флаги и результат раскладки обратно в JS/оболочку) — `scroll-state-scrolled-*`, 16 id. (2) **`stuck`:** липкий бокс (BUG-1468), сдвиг от `compute_sticky_offset`, начальное состояние, `writing-mode` — `scroll-state-stuck-*`, `initially-stuck`. (3) **`snapped`:** выбранная снап-позиция по осям, `initially-snapped`, `snapped-*`. (4) **`body` с ушедшим во вьюпорт `overflow`:** `scrollable-body-002` — `documentElement.scrollTop = 100` остаётся 0, потому что область прокрутки страницы не включает переполнение `#target` за пределы `body{height:500px}` (расчёт границ прокрутки страницы, не запросов). (5) Цели-псевдоэлементы `::before` (`scrollable-pseudo`, `snapped-pseudo`, `stuck-pseudo`); `query-with-var` (3 из 6: `var()` с запасным значением, зарегистрированные свойства). (6) Шорткат `container` в `getComputedStyle` (BUG-1514). (7) Ограничения: в scroll-state-only контейнере поддерево перестилизуется, но не перекладывается; пересчёт идёт полной раскладкой (на странице со `scroll-state()` каждый тик прокрутки — полный проход), точечного рестайла контейнеров нет; запросы с `style()` вместе со `scroll-state()` не проверялись. Критерий готовности: `scroll-state-scrolled-programmatic-relative-scrolls.html`, `scroll-state-initially-stuck.html`, `scroll-state-initially-snapped.html`, `scroll-state-scrollable-body-002.html` зелёные.",
      "bugs": [
       "BUG-1512",
       "BUG-1514",
@@ -9423,16 +9423,16 @@
       {
        "id": "TEXTQ-3",
        "title": "Прокрутка без дробного сдвига полосы",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Бриф — [docs/tasks/TEXTQ-3.md](docs/tasks/TEXTQ-3.md). Зависит от TEXTQ-1. Блит полосы прокрутки и слоёв со смещением скролла — на целые device px."
+       "note": "Бриф — [docs/tasks/TEXTQ-3.md](docs/tasks/TEXTQ-3.md). Зависит от TEXTQ-1. **Влито 2026-10-24 (p1-textq-3):** `band_blit_quads` привязывает сдвиг блита полосы к целым device px (`round(dy_css × dpr) / dpr`), `page-band-sampler` — `Nearest`; других блитов со скролл-смещением нет (overlay-блит без смещения, layer_cache — учёт памяти). Блит полосы прокрутки и слоёв со смещением скролла — на целые device px."
       },
       {
        "id": "TEXTQ-4",
        "title": "Шейпинг в GPU-пути отрисовки",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Бриф — [docs/tasks/TEXTQ-4.md](docs/tasks/TEXTQ-4.md). Зависит от TEXTQ-1. rustybuzz в `push_text_glyphs`: кернинг, лигатуры, `font_features`; кэш шейпинга."
+       "note": "Бриф — [docs/tasks/TEXTQ-4.md](docs/tasks/TEXTQ-4.md). Зависит от TEXTQ-1. **Влито 2026-10-24 (p1-textq-4):** `push_text_glyphs` бьёт run на отрезки по табуляциям и под-run-ы по face-у (`pick_face_for_codepoint`) и шейпит каждый через `active_text_shaper()` (оси вариаций — в шейпер, `font_features` из `DrawText` дошли до glyph-кода); позиция и `glyph_id` — из шейпера, `x_offset`/`y_offset` GPOS (по Y — на целые device px, поле `y_off_dev` шага плана). `letter-spacing` — на кластер; при ≠ 0 перед фичами автора кладутся `liga 0`/`clig 0`. Кэш шейпинга — это `TextRunCache` (ключ плана теперь включает `font_features`), шейпер не зовётся на попадании; `lumen_font::text_shaper` держит потоковый кэш `rustybuzz::Face` (8 записей, копия байтов, ключ — адрес+длина+отпечаток+оси): построение Face — ~0.2 мс на Inter, шейпинг короткой строки — ~0.05 мс. `CachedGlyph.advance_native` и `ParsedFace.hmtx` удалены (advance даёт шейпер). Рычаг отката `LUMEN_NO_TEXT_SHAPING=1` (глиф из `cmap`, advance из `hmtx`, как раньше) — он же запасной путь, если rustybuzz не принял face. **Замеры** (`dev-release`, Vulkan, `samples/bench-text-scroll.html`, `scroll_perf.py --ticks 25`): прокрутка (кадры из `TextRunCache`/композитора) avg 0.80/0.84 мс с шейпингом против 0.88/1.21 мс без — регрессии нет; холодный кадр (`LUMEN_FRAME_LOG=3`, `text-sub`): `shape` 3.4–4.8 мс на ~75 новых команд (4.1k символов), `DrawText` 8–10 мс против 6–8 мс без шейпинга. Страница 166 против Edge: 9.12 % без шейпинга → 9.11 % с ним (Arial/Segoe — ClearType, кернинг тут не мера). Полный `run.py --continue-on-fail` (20261024-005936): те же 8 FAIL, что и в предыдущем прогоне, дельта — только TEST-65 FAIL→PASS. Юнит-тесты `renderer/tests/text_shaping.rs`: `AVATAR` в Inter — перо = сумма advance-ов шейпера (как CPU-путь), не `hmtx`; `->` в Inter — один глиф (`calt`), `calt 0` возвращает два; `liga` в бандловых шрифтах нет (`fi` не лигатура ни в Inter, ни в Golos, ни в JetBrains Mono), поэтому проверка фич идёт на `calt`."
       },
       {
        "id": "TEXTQ-5",
@@ -9448,6 +9448,16 @@
        "size": "S",
        "note": "Бриф — [docs/tasks/TEXTQ-6.md](docs/tasks/TEXTQ-6.md). Зависит от TEXTQ-1. Синтетический bold (двойной квад) и italic (наклон вершин) в wgpu, как в CPU-пути."
       }
+     ]
+    },
+    {
+     "id": "CQ-SCROLL-STATE-2",
+     "title": "CQ-SCROLL-STATE-2: пересчёт scroll-state по прокрутке, корень страницы",
+     "status": "done",
+     "size": "L",
+     "note": "**Сделано (2026-10-24, ветка `p3-bug-1512`), срез 2 — пересчёт по прокрутке, корень страницы:** запросы `scroll-state()` отвечают один раз за проход раскладки, а свежее дерево начинается с нулевых смещений, поэтому раскладке теперь ставят подсказки (`lumen_layout::install_scroll_hints`/`ScrollHints`: смещения контейнеров и страницы, `scroll_state.rs`), а прокрутка делает следующий проход полным. JS: `FlushHandles::maybe_flush` ставит подсказки из `scroll_states` и позиции страницы (`scrollTo`/`scrollTop` из очереди запросов), `note_scroll_moved` (запрос прокрутки, `update_scroll_states`, `set_page_scroll_y/x`) помечает флаш устаревшим и не даёт инкрементальному пути пропустить проход. Оболочка: `Lumen::relayout` при таблице с `scroll-state()` берёт смещения из текущего дерева (`relayout_page_keeping_scroll`), `restyle_scroll_state_queries` вызывается после прокрутки контейнера (колесо, `scrollTop`) и после смещения страницы, если корень — контейнер. Корень (`html`) отвечает по вьюпорту (`ViewportRole::Root`: смещение страницы, размер вьюпорта); `body` с ушедшим во вьюпорт `overflow` — по-прежнему никак. Попутно `style.overflow = ''` (и другие 2-значные шорткаты, `block-step`) теперь убирает объявление из `style` целиком. WPT `scroll-state/`: 161 → 174 из 237 (`scrollable-change`, `scrollable-root`, `scrollable-container-type-change` и др. зелёные). Остаток — CQ-SCROLL-STATE-3.",
+     "bugs": [
+      "—"
      ]
     }
    ],

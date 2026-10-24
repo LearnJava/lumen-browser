@@ -1148,7 +1148,15 @@ impl V8JsRuntime {
     /// Replace the scroll-state table with a fresh snapshot from the layout tree.
     /// Mirrors [`crate::QuickJsRuntime::update_scroll_states`].
     pub fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>) {
-        *self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()) = states;
+        let mut cur = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
+        let moved = states
+            .iter()
+            .any(|(k, v)| cur.get(k).map_or(v[0] != 0.0 || v[1] != 0.0, |o| o[0] != v[0] || o[1] != v[1]));
+        *cur = states;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
     }
 
     /// Drain JS-initiated scroll requests queued by `_lumen_request_scroll`.
@@ -1175,6 +1183,10 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (*cur - y).abs() > f32::EPSILON;
         *cur = y;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
         moved
     }
 
@@ -1190,6 +1202,10 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_x.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (cur.committed - x).abs() > f32::EPSILON;
         cur.committed = x;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
         moved
     }
 

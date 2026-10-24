@@ -3789,6 +3789,14 @@ function _lumen_style_set_parsed(target, obj) {
     _lumen_backing_set_attr(_lumen_backing_fbid(target), target.__nid__, 'style', _lumen_serialize_style(obj));
 }
 
+// Longhands of the shorthands stored expanded that `setProperty(key, '')` and `removeProperty(key)`
+// must remove together with the shorthand (`overflow`, `block-step`, the two-value shorthands).
+function _lumen_shorthand_longhands_other(key) {
+    if (key === 'overflow') return ['overflow-x', 'overflow-y'];
+    if (key === 'block-step') return ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
+    if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) return _LUMEN_2V_SHORTHANDS[key];
+    return [];
+}
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     var key = _lumen_camel_to_kebab(String(prop));
     var obj = _lumen_style_get_parsed(this);
@@ -3876,6 +3884,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
             _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
         }
+        _lumen_shorthand_longhands_other(key).forEach(function(lh) { delete obj[lh]; });
         _lumen_gap_rule_delete(obj, key);
         _lumen_style_mark_important(obj, key, false);
         _lumen_style_set_parsed(nid, obj);
@@ -4032,6 +4041,11 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
     if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
         old = _lumen_text_shorthand_value(obj, key) || '';
         _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+    }
+    var otherLonghands = _lumen_shorthand_longhands_other(key);
+    if (otherLonghands.length) {
+        old = this.getPropertyValue(key) || '';
+        otherLonghands.forEach(function(lh) { delete obj[lh]; });
     }
     _lumen_gap_rule_delete(obj, key); _lumen_style_mark_important(obj, key, false);
     _lumen_style_set_parsed(nid, obj); return old;

@@ -71,6 +71,7 @@ pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
 mod scroll_state;
+pub use scroll_state::{install_scroll_hints, root_is_scroll_state_container, scroll_offsets, sheet_has_scroll_state_queries, ScrollHints, ScrollHintsGuard};
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;

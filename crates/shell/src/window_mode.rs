@@ -451,6 +451,7 @@ fn run_window_mode_inner(
         anim_frame: None,
         layout_box: None,
         last_frame_scroll_y: 0.0,
+        scroll_state_page_seen: (0.0, 0.0),
         scroll_velocity: 0.0,
         fast_scroll: false,
         page_tracks: tracks::PageTracks::default(),

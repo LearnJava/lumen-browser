@@ -376,7 +376,28 @@ impl Lumen {
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         // GAP-CSSANIM срез 9: see `animated_heights_snapshot` doc comment.
         lumen_layout::set_animated_heights(self.animated_heights_snapshot());
-        let (new_dl, lb) = relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
+        // CQ-SCROLL-STATE-2: a sheet with `scroll-state()` queries is restyled by a full pass that
+        // starts every scroller at offset 0, so the pass is told the current offsets and puts
+        // them back before the display list is built.
+        let keep_scroll = self
+            .layout_box
+            .as_ref()
+            .filter(|_| lumen_layout::sheet_has_scroll_state_queries(&src.stylesheet))
+            .map(lumen_layout::scroll_offsets);
+        let (new_dl, lb) = match keep_scroll {
+            Some(offsets) => {
+                relayout_page_keeping_scroll(
+                    src,
+                    viewport,
+                    &*self.hyp_provider,
+                    self.dark_mode,
+                    &self.web_fonts,
+                    offsets,
+                    (self.scroll_x, self.scroll_y),
+                )
+            }
+            None => relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts),
+        };
         lumen_layout::clear_interactive_state();
         lumen_layout::clear_animated_heights();
         lumen_layout::set_cv_scroll(0.0, 0.0);
@@ -1379,6 +1400,34 @@ pub(crate) fn relayout_page(
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
     compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
+}
+
+/// [`relayout_page`] для таблицы с `scroll-state()`: запросы читают смещения `offsets`, а
+/// готовое дерево получает их обратно до сборки списка отображения.
+pub(crate) fn relayout_page_keeping_scroll(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+    offsets: std::collections::HashMap<u32, [f32; 4]>,
+    page_scroll: (f32, f32),
+) -> (DisplayList, lumen_layout::LayoutBox) {
+    let _hints = lumen_layout::install_scroll_hints(lumen_layout::ScrollHints {
+        offsets: offsets.clone(),
+        page: page_scroll,
+    });
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = page_measurer(&font, web_fonts);
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    let doc = src.document.lock().unwrap();
+    let (mut layout, _) =
+        lumen_layout::layout_measured_hyp_with_counters(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
+    drop(doc);
+    lumen_layout::restore_scroll_positions(&mut layout, &offsets);
+    let dl = crate::display_list_metrics::paint_ordered_in(&layout, viewport);
+    (dl, layout)
 }
 
 /// Процесс-глобальные метрики системных шрифтов для измерителя: CSS

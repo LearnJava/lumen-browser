@@ -293,6 +293,9 @@ mod v8_bug493_sheet_registry;
 mod v8_bug504_scroll_flush;
 
 #[cfg(feature = "v8-backend")]
+mod v8_cq_scroll_state_invalidation;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug1238_scoped_collectors;
 #[cfg(feature = "v8-backend")]
 mod v8_bug935_s58_has_flush;
