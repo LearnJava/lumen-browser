@@ -306,6 +306,10 @@ pub(super) fn grid_col_intrinsic_sum(
     per_item: &dyn Fn(&LayoutBox) -> f32,
 ) -> Option<f32> {
     let s = &b.style;
+    // Grid L3 §3.6: полосы-строки текут по inline-оси — ширина контейнера это конец потока.
+    if !vertical && s.grid_lanes.enabled && super::grid_lanes::lanes_axis(s) == crate::style::LanesAxis::Row {
+        return Some(super::grid_lanes::row_lanes_intrinsic(b, viewport, per_item));
+    }
     if let Some(rep) = &s.grid_template_col_auto_repeat {
         return auto_fill_fixed_sum(b, rep, viewport, vertical);
     }

@@ -74,6 +74,12 @@ fn auto_repeat_count(rep: &GridRepeat, avail: Option<f32>, gap: f32, em: f32, vi
         GridTrackSize::FitContent(limit) => limit.resolve_fixed(em, avail, viewport).unwrap_or(0.0),
         other => other.resolve_fixed(em, avail, viewport).unwrap_or(0.0).max(0.0),
     };
+    auto_repeat_count_by(rep, avail, gap, &min_px)
+}
+
+/// [`auto_repeat_count`] с заданным размером дорожки (`min_px`) — для `grid-lanes`, где число
+/// повторов считается по содержимому (`grid_lanes::intrinsic_repeat_count`).
+pub(super) fn auto_repeat_count_by(rep: &GridRepeat, avail: f32, gap: f32, min_px: &dyn Fn(&GridTrackSize) -> f32) -> usize {
     let fixed_sum: f32 = rep.before.iter().chain(&rep.after).map(min_px).sum();
     let fixed_n = rep.before.len() + rep.after.len();
     let unit_sum: f32 = rep.tracks.iter().map(min_px).sum();
@@ -344,10 +350,19 @@ pub(crate) fn build_grid_init(
     // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
     // CSS Grid L1 §7.2.3.2: the repeat is expanded between the fixed tracks written around it;
     // `auto-fit` tracks that end up empty are collapsed after placement (below).
-    let col_repeat_count = s
-        .grid_template_col_auto_repeat
-        .as_ref()
-        .map(|rep| auto_repeat_count(rep, Some(content_width), col_gap, em, viewport));
+    let lanes_axis_early = if s.grid_lanes.enabled && vertical.is_none() { Some(super::grid_lanes::lanes_axis(s)) } else { None };
+    let lanes_repeat = |rep: &GridRepeat, is_col: bool, avail: Option<f32>, gap: f32| {
+        let on_axis = lanes_axis_early
+            == Some(if is_col { crate::style::LanesAxis::Column } else { crate::style::LanesAxis::Row });
+        if !on_axis {
+            return None;
+        }
+        super::grid_lanes::intrinsic_repeat_count(rep, is_col, children, &item_idxs, s, avail, gap, em, viewport, measurer)
+    };
+    let col_repeat_count = s.grid_template_col_auto_repeat.as_ref().map(|rep| {
+        lanes_repeat(rep, true, Some(content_width), col_gap)
+            .unwrap_or_else(|| auto_repeat_count(rep, Some(content_width), col_gap, em, viewport))
+    });
     let auto_fill_col_tracks: Vec<GridTrackSize> = match (&s.grid_template_col_auto_repeat, col_repeat_count) {
         (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
         _ => Vec::new(),
@@ -358,10 +373,10 @@ pub(crate) fn build_grid_init(
         &s.grid_template_columns
     };
     // Rows repeat against the container's definite content height; an indefinite one repeats once.
-    let row_repeat_count = s
-        .grid_template_row_auto_repeat
-        .as_ref()
-        .map(|rep| auto_repeat_count(rep, definite_content_height, row_gap, em, viewport));
+    let row_repeat_count = s.grid_template_row_auto_repeat.as_ref().map(|rep| {
+        lanes_repeat(rep, false, definite_content_height, row_gap)
+            .unwrap_or_else(|| auto_repeat_count(rep, definite_content_height, row_gap, em, viewport))
+    });
     let auto_fill_row_tracks: Vec<GridTrackSize> = match (&s.grid_template_row_auto_repeat, row_repeat_count) {
         (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
         _ => Vec::new(),
@@ -425,18 +440,41 @@ pub(crate) fn build_grid_init(
     // (`grid_lanes::lanes_axis` выбирает ось, `layout_dispatch` убирает строки из стиля); элемент
     // `k` занимает собственную строку `k`, а полосу выбирает проход замера. Столбцы авто-элементов
     // остаются как их разложила сетка — они задают вклад в размер полос.
-    let lane_items: Option<Vec<super::grid_lanes::LaneItem>> = (s.grid_lanes.enabled
+    let lanes_plain = s.grid_lanes.enabled
         && vertical.is_none()
         && inherited_cols.is_none()
         && inherited_rows.is_none()
-        && !subgrid_cols
-        && super::grid_lanes::lanes_axis(s) == crate::style::LanesAxis::Column)
+        && !subgrid_cols;
+    let lanes_axis = super::grid_lanes::lanes_axis(s);
+    let lane_items: Option<Vec<super::grid_lanes::LaneItem>> = (lanes_plain && lanes_axis == crate::style::LanesAxis::Column)
         .then(|| super::grid_lanes::lane_items(children, &item_idxs, &col_axis));
     if lane_items.is_some() {
         for (k, p) in placements.iter_mut().enumerate() {
             p.2 = k as u32 + 1;
             p.3 = k as u32 + 2;
         }
+    }
+    // Полосы-строки: ширины элементов известны до замера, поэтому полосы выбираются здесь,
+    // а остаток раскладки — обычная сетка с явными размещениями (столбец на элемент).
+    let row_lanes = (lanes_plain && lanes_axis == crate::style::LanesAxis::Row).then(|| {
+        let flow = super::grid_lanes::RowFlow {
+            n_lanes: row_axis.n_tracks.max(1) as usize,
+            tolerance: super::grid_lanes::tolerance_px(s, em, Some(content_width), viewport),
+            gap: col_gap,
+            track_reverse: s.grid_lanes.direction.track_reverse,
+        };
+        let items = super::grid_lanes::lane_items(children, &item_idxs, &row_axis);
+        let laid = super::grid_lanes::row_lanes(children, &item_idxs, items.clone(), &flow, &|c| {
+            super::grid_lanes::fit_outer_width(c, content_width, viewport, measurer)
+        });
+        (laid, items)
+    });
+    let (row_lanes, row_lane_sizing) = match row_lanes {
+        Some((laid, items)) => (Some(laid), Some(super::grid_lanes::RowLaneSizing::new(items))),
+        None => (None, None),
+    };
+    if let Some(rl) = &row_lanes {
+        placements.clone_from(&rl.placements);
     }
 
     // --- Step 2: Determine total grid dimensions ---
@@ -484,7 +522,9 @@ pub(crate) fn build_grid_init(
     // --- Step 3: Compute column widths ---
     // If the column axis is subgridded, use the inherited track sizes directly;
     // otherwise compute from the style as usual (CSS Grid L2 §9).
-    let (col_widths, col_offsets) = if let Some(ref ctx) = inherited_cols {
+    let (col_widths, col_offsets) = if let Some(rl) = row_lanes {
+        (rl.col_widths, rl.col_offsets)
+    } else if let Some(ref ctx) = inherited_cols {
         // Subgrid column axis: clip to n_cols (parent may span more tracks than
         // the explicit template; auto-place inside those tracks).
         let sizes: Vec<f32> = ctx.sizes.iter().take(n_cols as usize).cloned().collect();
@@ -756,6 +796,7 @@ pub(crate) fn build_grid_init(
         vertical,
         rtl,
         lanes,
+        row_lanes: row_lane_sizing,
     }))
 }
 

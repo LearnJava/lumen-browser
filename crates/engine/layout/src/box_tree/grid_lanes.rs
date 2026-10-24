@@ -7,8 +7,8 @@
 //! уложенных), [`LanesState::settle`] после замера записывает позицию и конец элемента.
 
 use super::grid::{resolve_grid_axis, GridAxis};
-use super::LayoutBox;
-use crate::style::{ComputedStyle, LanesAxis};
+use super::{LayoutBox, Size, TextMeasurer};
+use crate::style::{ComputedStyle, GridRepeat, GridTrackSize, LanesAxis};
 use std::sync::Arc;
 
 /// Ось, вдоль которой идут полосы (`grid-lanes-direction: normal` берёт её из шаблона).
@@ -27,18 +27,29 @@ pub(super) fn lanes_axis(s: &ComputedStyle) -> LanesAxis {
     }
 }
 
-/// Стиль для сетки `grid-lanes` с полосами-столбцами: шаблон строк игнорируется (строки здесь по одной на
-/// элемент, высоту даёт содержимое). `None` — стиль не меняется. Вынесено из `dispatch_box`: копия
+/// Стиль для сетки `grid-lanes`: у полос-столбцов шаблон строк игнорируется (строки здесь по одной на
+/// элемент, высоту даёт содержимое), у полос-строк — шаблон столбцов (столбец на элемент, ширина
+/// и позиция — из потока). `None` — стиль не меняется. Вынесено из `dispatch_box`: копия
 /// `ComputedStyle` в его кадре раздувает стек на каждом уровне вложенности.
 #[inline(never)]
 pub(super) fn lanes_style(s: &Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> {
-    if !s.grid_lanes.enabled || lanes_axis(s) != LanesAxis::Column {
+    if !s.grid_lanes.enabled {
         return None;
     }
     let mut ls = (**s).clone();
-    ls.grid_template_rows.clear();
-    ls.grid_template_row_auto_repeat = None;
-    ls.grid_auto_rows = Vec::new();
+    match lanes_axis(s) {
+        LanesAxis::Column => {
+            ls.grid_template_rows.clear();
+            ls.grid_template_row_auto_repeat = None;
+            ls.grid_auto_rows = Vec::new();
+        }
+        LanesAxis::Row => {
+            ls.grid_template_columns.clear();
+            ls.grid_template_col_auto_repeat = None;
+            ls.grid_auto_columns = Vec::new();
+        }
+        LanesAxis::Normal => return None,
+    }
     Some(Arc::new(ls))
 }
 
@@ -118,13 +129,18 @@ impl LanesState {
     }
 }
 
-/// Полосы элементов `item_idxs` по их `grid-column-*` (`resolve_grid_axis`).
-pub(super) fn lane_items(children: &[LayoutBox], item_idxs: &[usize], col_axis: &GridAxis) -> Vec<LaneItem> {
+/// Полосы элементов `item_idxs` по их `grid-column-*` (полосы-столбцы) или `grid-row-*` (полосы-строки)
+/// — `axis` — ось полос (`resolve_grid_axis`).
+pub(super) fn lane_items(children: &[LayoutBox], item_idxs: &[usize], axis: &GridAxis) -> Vec<LaneItem> {
     item_idxs
         .iter()
         .map(|&i| {
             let is = &children[i].style;
-            let (cs, ce) = resolve_grid_axis(&is.grid_column_start, &is.grid_column_end, col_axis);
+            let (cs, ce) = if axis.is_col {
+                resolve_grid_axis(&is.grid_column_start, &is.grid_column_end, axis)
+            } else {
+                resolve_grid_axis(&is.grid_row_start, &is.grid_row_end, axis)
+            };
             if cs != 0 {
                 LaneItem { def: Some(cs as usize - 1), span: (ce.saturating_sub(cs)).max(1) as usize }
             } else {
@@ -132,6 +148,233 @@ pub(super) fn lane_items(children: &[LayoutBox], item_idxs: &[usize], col_axis: 
             }
         })
         .collect()
+}
+
+/// Раскладка `grid-lanes` с полосами-строками: поток идёт по inline-оси, и ширина каждого
+/// элемента (fit-content с полями) известна до замера, поэтому полосы выбираются сразу. Каждому
+/// элементу достаётся свой столбец `k`: его ширина и смещение — размер и позиция в потоке.
+pub(super) struct RowLanes {
+    /// Размещение элементов: столбец `k`, окно полос выбранное потоком.
+    pub placements: Vec<Placement>,
+    pub col_widths: Vec<f32>,
+    pub col_offsets: Vec<f32>,
+    /// Конец самого длинного потока.
+    pub extent: f32,
+}
+
+/// Параметры потока полос-строк, не зависящие от замера.
+pub(super) struct RowFlow {
+    pub n_lanes: usize,
+    pub tolerance: f32,
+    pub gap: f32,
+    pub track_reverse: bool,
+}
+
+/// Поток полос-строк: `outer_width(item)` — ширина элемента вдоль потока вместе с полями.
+pub(super) fn row_lanes(
+    children: &[LayoutBox],
+    item_idxs: &[usize],
+    items: Vec<LaneItem>,
+    flow: &RowFlow,
+    outer_width: &dyn Fn(&LayoutBox) -> f32,
+) -> RowLanes {
+    // Определённая полоса за явной сеткой создаёт неявную (как строка в обычной сетке).
+    let n_lanes = items.iter().map(|i| i.def.map_or(i.span, |d| d + i.span)).fold(flow.n_lanes, usize::max);
+    let mut st = LanesState::new(items, n_lanes, flow.tolerance, flow.gap, flow.track_reverse);
+    let mut placements = Vec::with_capacity(item_idxs.len());
+    let mut col_widths = Vec::with_capacity(item_idxs.len());
+    for (k, &i) in item_idxs.iter().enumerate() {
+        let w = outer_width(&children[i]);
+        let (first, span) = st.choose(k);
+        st.settle(k, w);
+        placements.push((k as u32 + 1, k as u32 + 2, first as u32 + 1, (first + span) as u32 + 1));
+        col_widths.push(w);
+    }
+    RowLanes { placements, col_widths, col_offsets: st.pos, extent: st.extent }
+}
+
+/// Вклады элементов в размеры полос-строк (Grid L3 §3.4): автоматический элемент вносит свою
+/// высоту в каждую полосу (окно полос), которую мог бы занять, определённый — в свою.
+pub(super) struct RowLaneSizing {
+    items: Vec<LaneItem>,
+    /// `(первая полоса, за последней, высота)`.
+    contribs: Vec<(usize, usize, f32)>,
+}
+
+impl RowLaneSizing {
+    pub(super) fn new(items: Vec<LaneItem>) -> Self {
+        Self { items, contribs: Vec::new() }
+    }
+
+    /// Вклад элемента `k` внешней высотой `h` при `n_rows` полосах.
+    pub(super) fn record(&mut self, k: usize, n_rows: usize, h: f32) {
+        let item = self.items[k];
+        let span = item.span.clamp(1, n_rows.max(1));
+        match item.def {
+            Some(d) => {
+                let first = d.min(n_rows.saturating_sub(span));
+                self.contribs.push((first, first + span, h));
+            }
+            None => {
+                for first in 0..=n_rows.max(span) - span {
+                    self.contribs.push((first, first + span, h));
+                }
+            }
+        }
+    }
+
+    /// Grid L1 §11.5: сначала элементы в одну полосу, затем охватывающие полосы по возрастанию
+    /// числа полос; недостающее делится поровну между растущими полосами охвата.
+    pub(super) fn apply(mut self, heights: &mut [f32], gap: f32, growable: impl Fn(usize) -> bool) {
+        self.contribs.sort_by_key(|&(a, b, _)| b - a);
+        for (a, b, h) in self.contribs {
+            let b = b.min(heights.len());
+            if a >= b {
+                continue;
+            }
+            let targets: Vec<usize> = (a..b).filter(|&r| growable(r)).collect();
+            if targets.is_empty() {
+                continue;
+            }
+            let have: f32 = heights[a..b].iter().sum::<f32>() + gap * (b - a - 1) as f32;
+            let extra = h - have;
+            if extra > 0.0 {
+                let share = extra / targets.len() as f32;
+                for r in targets {
+                    heights[r] += share;
+                }
+            }
+        }
+    }
+}
+
+/// Ширина элемента вдоль потока полос-строк: fit-content от ширины контейнера, с полями.
+pub(super) fn fit_outer_width(
+    item: &LayoutBox,
+    content_width: f32,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) -> f32 {
+    let em = item.style.font_size;
+    let ml = item.style.margin_left.resolve_or_zero(em, 0.0, viewport);
+    let mr = item.style.margin_right.resolve_or_zero(em, 0.0, viewport);
+    // Процент вдоль потока считается от ширины контейнера (Grid L3 §3.6), не от области элемента.
+    if let Some(len) = item.style.width.as_ref().filter(|l| l.contains_percent() && !l.is_intrinsic())
+        && let Some(w) = len.resolve(em, Some(content_width), viewport)
+    {
+        let st = &item.style;
+        let edges = st.padding_left.resolve_or_zero(em, content_width, viewport)
+            + st.padding_right.resolve_or_zero(em, content_width, viewport)
+            + st.border_left_width
+            + st.border_right_width;
+        let border_box = match st.box_sizing {
+            crate::style::BoxSizing::ContentBox => w.max(0.0) + edges,
+            crate::style::BoxSizing::BorderBox => w.max(edges),
+        };
+        return border_box + ml + mr;
+    }
+    let (mn, mx) = super::grid_auto_cols::item_contribution(measurer, viewport)(item);
+    mx.min((content_width - ml - mr).max(mn)) + ml + mr
+}
+
+/// `flow-tolerance` в пикселях; `%` считается от `basis`.
+pub(super) fn tolerance_px(s: &ComputedStyle, em: f32, basis: Option<f32>, viewport: Size) -> f32 {
+    match &s.grid_lanes.tolerance {
+        crate::style::FlowTolerance::Normal => em,
+        crate::style::FlowTolerance::Infinite => f32::INFINITY,
+        crate::style::FlowTolerance::Length(l) => l.resolve(em, basis, viewport).unwrap_or(em).max(0.0),
+    }
+}
+
+/// Внутренний размер контейнера с полосами-строками вдоль потока (Grid L3 §3.6): конец самого
+/// длинного потока при размере элемента `per_item` (min- или max-content) и неограниченной ширине.
+pub(super) fn row_lanes_intrinsic(b: &LayoutBox, viewport: Size, per_item: &dyn Fn(&LayoutBox) -> f32) -> f32 {
+    let s = &b.style;
+    let item_idxs = super::grid::grid_item_indices(&b.children, super::fieldset::rendered_legend_idx_of(b));
+    let row_axis = GridAxis {
+        n_tracks: s.grid_template_rows.len().max(s.grid_template_areas.len()) as u32,
+        names: &s.grid_template_row_line_names,
+        areas: &s.grid_template_areas,
+        is_col: false,
+        clamp: false,
+    };
+    let items = lane_items(&b.children, &item_idxs, &row_axis);
+    let flow = RowFlow {
+        n_lanes: row_axis.n_tracks.max(1) as usize,
+        tolerance: tolerance_px(s, s.font_size, Some(0.0), viewport),
+        gap: s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0),
+        track_reverse: s.grid_lanes.direction.track_reverse,
+    };
+    let outer = |c: &LayoutBox| {
+        let em = c.style.font_size;
+        per_item(c)
+            + c.style.margin_left.resolve_or_zero(em, 0.0, viewport)
+            + c.style.margin_right.resolve_or_zero(em, 0.0, viewport)
+    };
+    row_lanes(&b.children, &item_idxs, items, &flow, &outer).extent
+}
+
+/// Дорожка с размером по содержимому (в `repeat(auto-fill, …)` она не имеет заранее известной длины).
+fn track_is_intrinsic(t: &GridTrackSize) -> bool {
+    match t {
+        GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::FitContent(_) => true,
+        GridTrackSize::Minmax(min, _) => track_is_intrinsic(min),
+        _ => false,
+    }
+}
+
+/// Grid L3 §7.2.3.2: число повторов `repeat(auto-fill | auto-fit, …)` с дорожками по содержимому.
+/// Такая дорожка считается как самый большой вклад элемента на одну полосу (вклад / число
+/// полос, которое он занимает). `None` — повтор из обычных длин, считается как у сетки.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn intrinsic_repeat_count(
+    rep: &GridRepeat,
+    is_col: bool,
+    children: &[LayoutBox],
+    item_idxs: &[usize],
+    s: &ComputedStyle,
+    avail: Option<f32>,
+    gap: f32,
+    em: f32,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Option<usize> {
+    if !rep.tracks.iter().any(track_is_intrinsic) {
+        return None;
+    }
+    let avail = avail.filter(|a| *a > 0.0)?;
+    // Число полос элемента — только из `span`/линий, длина шаблона для него не важна.
+    let (starts, names): (usize, &[Vec<String>]) =
+        if is_col { (s.grid_template_columns.len(), &s.grid_template_col_line_names) } else { (s.grid_template_rows.len(), &s.grid_template_row_line_names) };
+    let axis = GridAxis { n_tracks: starts as u32, names, areas: &s.grid_template_areas, is_col, clamp: false };
+    let spans = lane_items(children, item_idxs, &axis);
+    let unit = item_idxs
+        .iter()
+        .zip(&spans)
+        .map(|(&i, it)| {
+            let c = &children[i];
+            let ce = c.style.font_size;
+            let outer = if is_col {
+                super::intrinsic::max_content_outer_width(c, measurer, viewport)
+                    + c.style.margin_left.resolve_or_zero(ce, 0.0, viewport)
+                    + c.style.margin_right.resolve_or_zero(ce, 0.0, viewport)
+            } else {
+                super::intrinsic::max_content_outer_height(c, measurer, viewport)
+                    + c.style.margin_top.resolve_or_zero(ce, 0.0, viewport)
+                    + c.style.margin_bottom.resolve_or_zero(ce, 0.0, viewport)
+            };
+            outer / it.span.max(1) as f32
+        })
+        .fold(0.0_f32, f32::max);
+    fn size(t: &GridTrackSize, unit: f32, avail: f32, em: f32, viewport: Size) -> f32 {
+        match t {
+            GridTrackSize::FitContent(limit) => unit.min(limit.resolve_fixed(em, avail, viewport).unwrap_or(unit)),
+            GridTrackSize::Minmax(min, _) if track_is_intrinsic(min) => size(min, unit, avail, em, viewport),
+            t if track_is_intrinsic(t) => unit,
+            other => other.resolve_fixed(em, avail, viewport).unwrap_or(0.0).max(0.0),
+        }
+    }
+    Some(super::grid::auto_repeat_count_by(rep, avail, gap, &|t| size(t, unit, avail, em, viewport)))
 }
 
 /// Grid L3 §3.4: элемент с автоматическим положением вносит вклад в каждую полосу, которую мог бы

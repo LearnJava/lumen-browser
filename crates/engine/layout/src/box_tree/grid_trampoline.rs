@@ -105,6 +105,8 @@ pub(super) struct GridInit {
     /// `display: grid-lanes` с полосами-столбцами: выбор полосы и позиции элементов вдоль потока
     /// (`grid_lanes`). Строка `k` здесь — это элемент `k`, а не дорожка шаблона.
     pub(super) lanes: Option<super::grid_lanes::LanesState>,
+    /// `display: grid-lanes` с полосами-строками: вклады элементов в размеры полос (строк).
+    pub(super) row_lanes: Option<super::grid_lanes::RowLaneSizing>,
 }
 
 /// Базовая линия item'а, участвующего в baseline-группе строки.
@@ -468,6 +470,13 @@ fn grow_rows_for_item(frame: &mut Frame, k: usize, i: usize, viewport: Size) {
         }
     }
     let item_h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
+    if frame.init.row_lanes.is_some() {
+        let n_rows = frame.init.n_rows as usize;
+        if let Some(rl) = frame.init.row_lanes.as_mut() {
+            rl.record(k, n_rows, item_h);
+        }
+        return;
+    }
     grow(frame, r0, item_h);
 }
 
@@ -722,6 +731,10 @@ fn maximize_bounded_rows(init: &mut GridInit, viewport: Size) {
 /// offsets the Final phase positions cells against. Copied verbatim from the
 /// removed code's tail between the two loops.
 fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
+    if let Some(rl) = init.row_lanes.take() {
+        let (tmpl, auto_row) = (&init.eff_row_template, &init.auto_row);
+        rl.apply(&mut init.row_heights, init.row_gap, |r| row_grows_with_content(grid_track(r as u32, tmpl, auto_row)));
+    }
     if let Some(lanes) = &init.lanes {
         // Строка `k` — элемент `k`: смещение — его позиция в полосе, высота содержимого — самый
         // длинный поток (без промежутка после последнего элемента).
