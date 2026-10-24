@@ -192,6 +192,14 @@ pub(in crate::box_tree) fn dispatch_box(
         // vertical containers drives on an explicit heap stack instead of
         // recursing.
         let vs = style_with_used_size(&b.style, used_size_override);
+        // Multicol L1 in a vertical writing mode: columns down the inline axis (`multicol_vertical`).
+        if super::multicol_vertical::applies(b, &vs) {
+            super::multicol_vertical::lay_out(
+                b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp,
+                in_block_flow,
+            );
+            return DispatchOutcome::Done;
+        }
         let init = crate::vertical::build_vertical_init(
             b, &vs, start_x, start_y, available_width, available_height, measurer, viewport, pcb,
             in_block_flow,
