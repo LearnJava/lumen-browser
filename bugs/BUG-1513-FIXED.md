@@ -1,6 +1,6 @@
 # BUG-1513 — `@import` применяется в любой позиции листа, хотя после любого правила, кроме `@charset`/`@layer`-оператора/`@import`, он недопустим
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-24 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 22, `css/css-view-transitions` + `css-conditional` + `css-variables` + `css-properties-values-api` + `css-mixins`)
 **Область:** css-parser (`crates/engine/css-parser/src/parser.rs` — разбор `@import` и `@namespace` в листе)
 
@@ -32,3 +32,7 @@ WPT-RUN-14 срез 22: `css-conditional/at-media-003.html`, `at-supports-045.ht
 ## Как проверить
 
 Таблица выше; `css/css-conditional/at-media-003.html`, `at-supports-045.html`.
+
+## Исправление
+
+`Parser::parse_stylesheet` (`parser.rs`) держит `seen_other`/`seen_namespace`: style-правило и любое at-правило, кроме `@import`, `@layer`-оператора и `@charset`, закрывают окно `@import`; `@namespace` закрывает его тоже. Поздний `@import` не попадает в `Stylesheet::imports`. Тесты: `at_import_after_other_rules_is_dropped`, `at_import_before_layer_statement_and_after_it_stays`.
