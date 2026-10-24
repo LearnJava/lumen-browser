@@ -285,3 +285,42 @@ fn empty_flex_fieldset_keeps_legend_offset() {
     );
     assert_eq!(rect_of(&root, &doc, "f").height, 10.0 + 10.0 + 20.0 + 10.0 + 10.0);
 }
+
+/// Multicol: колонки начинаются ниже legend, legend не попадает в колонку и остаётся на границе.
+#[test]
+fn multicol_fieldset_columns_start_below_legend() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div><div id="b"></div></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{column-count:2;column-gap:0}}#a{{height:20px}}#b{{height:20px;break-before:column}}"),
+    );
+    let (l, a, b) = (rect_of(&root, &doc, "l"), rect_of(&root, &doc, "a"), rect_of(&root, &doc, "b"));
+    assert_eq!((l.x, l.y), (20.0, 0.0), "{l:?}");
+    assert_eq!((a.x, a.y), (20.0, 40.0), "{a:?}");
+    assert_eq!((b.x, b.y), (120.0, 40.0), "{b:?}");
+    assert_eq!(rect_of(&root, &doc, "f").height, 10.0 + 10.0 + 20.0 + 20.0 + 10.0 + 10.0);
+    let f = super::find_by_id_all(&root, &doc, "f").unwrap();
+    let fl = f.fieldset_legend.expect("legend отмечен");
+    assert!(fl.placed);
+    assert_eq!(f.children[fl.idx].node, fl.node, "idx указывает на legend после пересборки детей");
+}
+
+/// Multicol с явной `height`: смещение от legend входит в неё, колонки получают остаток.
+#[test]
+fn multicol_fieldset_explicit_height_excludes_legend_offset() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend><div id="a"></div></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{column-count:2;column-gap:0;height:150px}}#a{{height:20px}}"),
+    );
+    assert_eq!(rect_of(&root, &doc, "f").height, 150.0 + 40.0);
+    assert_eq!(rect_of(&root, &doc, "a").y, 40.0);
+}
+
+/// Multicol-fieldset только с legend: высота всё равно включает смещение от legend.
+#[test]
+fn empty_multicol_fieldset_keeps_legend_offset() {
+    let (root, doc) = lay(
+        r#"<fieldset id="f"><legend id="l">L</legend></fieldset>"#,
+        &format!("{FS}{LG}fieldset{{column-count:2}}"),
+    );
+    assert_eq!(rect_of(&root, &doc, "f").height, 10.0 + 10.0 + 20.0 + 10.0 + 10.0);
+}

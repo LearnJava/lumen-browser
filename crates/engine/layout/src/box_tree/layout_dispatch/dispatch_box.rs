@@ -1127,16 +1127,29 @@ pub(in crate::box_tree) fn dispatch_box(
                 // plain block-flow branch below is — a chain of nested
                 // multicol containers now runs on `multicol_trampoline`'s own
                 // explicit heap stack instead of the native one.
+                // HTML Rendering §15.3.13: у multicol-fieldset legend тоже стоит на границе, а
+                // колонки строятся в анонимном контейнере содержимого ниже него.
+                let legend_extra = if matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb) {
+                    super::fieldset::place_rendered_legend(
+                        b, content_x, content_width, children_available_height, measurer, viewport,
+                        children_pcb, hp,
+                    )
+                } else {
+                    0.0
+                };
+                let legend_node = super::fieldset::placed_legend_idx(b).map(|i| b.children[i].node);
                 match super::multicol_abspos::build_multicol_init(
-                    &mut b.children, content_x, content_y, content_width, &s, em, viewport,
-                    children_pcb, children_available_height, pcb, cb, is_positioned,
-                    padding_top, padding_bottom, size_contained, field_intrinsic, available_height,
+                    &mut b.children, content_x, content_y + legend_extra, content_width, &s, em, viewport,
+                    children_pcb, children_available_height.map(|h| (h - legend_extra).max(0.0)), pcb, cb,
+                    is_positioned, padding_top, padding_bottom, size_contained, field_intrinsic,
+                    available_height, legend_node,
                 ) {
                     Some(init) => return DispatchOutcome::NeedsMulticolLoop(init),
                     None => {
+                        super::fieldset::resync_legend_idx(b);
                         finalize_block_height(
                             b, &s, em, available_height, viewport, padding_top, padding_bottom,
-                            size_contained, field_intrinsic, 0.0, cb,
+                            size_contained, field_intrinsic, legend_extra, cb,
                         );
                         finish_after_match(b, &s, em, cb, available_height, is_positioned, pcb, &abs_deferred, measurer, viewport, hp);
                         return DispatchOutcome::Done;

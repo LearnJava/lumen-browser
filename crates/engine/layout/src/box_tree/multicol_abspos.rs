@@ -113,6 +113,7 @@ pub(crate) fn build_multicol_init(
     size_contained: bool,
     field_intrinsic: Option<(f32, f32)>,
     available_height: Option<f32>,
+    legend: Option<NodeId>,
 ) -> Option<Box<super::multicol_trampoline::MulticolInit>> {
     use super::multicol_trampoline::{MulticolInit, SegmentInit};
 
@@ -203,6 +204,9 @@ pub(crate) fn build_multicol_init(
         .enumerate()
         .filter(|(_, c)| !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        // Rendered legend multicol-fieldset'а стоит на границе (`place_rendered_legend`), в колонки
+        // он не попадает и доезжает до `children` как нефлоу-бокс.
+        .filter(|(_, c)| legend != Some(c.node))
         .map(|(i, _)| i)
         .collect();
 
