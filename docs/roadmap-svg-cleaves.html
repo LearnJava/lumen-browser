@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-24",
  "counts": {
-  "open": 292,
+  "open": 293,
   "fixed": 1340,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1635,
+ "total_bugs": 1636,
  "phases": [
   {
    "id": "P0",
@@ -557,10 +557,17 @@
     },
     {
      "id": "FIELDSET-LEGEND-3",
-     "title": "FIELDSET-LEGEND-3: multicol/вертикальный flex-grid fieldset и остаток",
+     "title": "FIELDSET-LEGEND-3: legend у multicol-fieldset",
+     "status": "done",
+     "size": "M",
+     "note": "Часть остатка FIELDSET-LEGEND-2. **Сделано (2026-10-24, ветка `p1-fieldset-legend-3`):** п. 1 для multicol-`<fieldset>` (`column-count`/`column-width`, горизонтальный `writing-mode`): `dispatch_box` ставит legend на границу (`place_rendered_legend`) до `build_multicol_init`, колонки строятся от `content_y + legend_extra` (явная высота за вычетом смещения), legend выпадает из `flow_idxs` (параметр `legend: Option<NodeId>`) и доезжает до `children` нефлоу-боксом, `fieldset::resync_legend_idx` пересчитывает `FieldsetLegend::idx` после пересборки детей `multicol_trampoline::finish_frame` (там же авто-высота получает `placed_content_offset`); `emit_column_rules` опускает начало `column-rule` на то же смещение. 3 теста в `box_tree/tests/fieldset_legend.rs`, графтест `167-fieldset-multicol` совпал с Edge (0,00 %). Остаток — FIELDSET-LEGEND-4."
+    },
+    {
+     "id": "FIELDSET-LEGEND-4",
+     "title": "FIELDSET-LEGEND-4: вертикальный flex/grid fieldset и остаток",
      "status": "planned",
      "size": "M",
-     "note": "Остаток FIELDSET-LEGEND-2: (1) multicol-`<fieldset>` (`column-count`/`column-width`) — legend остаётся обычным ребёнком контейнера, колонки строит `build_multicol_init` по всему `b.children` (фильтры `Skip` в `multicol_trampoline`/`multicol_abspos` не знают legend), рамка рисуется целой; то же для flex/grid-fieldset в вертикальном `writing-mode` (там `place_rendered_legend_vertical` не подключён к `flex_trampoline`/`grid_vertical`); (2) UA-значения fieldset (`padding-block`, `min-inline-size`) раскладываются по `writing-mode`, унаследованному к UA-фазе, — собственный `writing-mode` fieldset из автор-CSS приходит позже, и UA ставит горизонтальные стороны (после раскладки у вертикального fieldset min-content считает legend как обычный блок: на `legend − border` шире, чем в Edge); (3) `float` у legend и legend внутри `display: inline-block` fieldset не проверены против Edge; (4) переполнение: legend шире content box при `text-align: right` в Edge встаёт на `margin-start + margin-end` от края (проба `margin: 0 10px; width: 300px` → x=28), у нас на `margin-start`; (5) `dir`-атрибут не маппится в `direction` во всём движке (WPT `legend-align` `fieldset[dir=rtl] legend` ×2) и `display: table` на обычных элементах раскладывается как блок высотой 0 шириной в контейнер (поэтому legend с `display: table` блокифицируется — `legend-display` ждёт `table`-раскладку); (6) `border-radius` у groove-рамки не скругляется вовсе (CPU-растеризатор рисует groove как прямоугольные полосы — и у обычного `div`), у fieldset с legend это заметно сильнее. Критерий готовности: проба multicol-fieldset с legend совпадает с Edge, графтест с multicol-fieldset"
+     "note": "Остаток FIELDSET-LEGEND-3: (1) flex/grid-`<fieldset>` в вертикальном `writing-mode`: `place_rendered_legend_vertical` не подключён к `flex_trampoline`/`grid_vertical` (legend остаётся обычным ребёнком, рамка целая) (там `place_rendered_legend_vertical` не подключён к `flex_trampoline`/`grid_vertical`); (2) UA-значения fieldset (`padding-block`, `min-inline-size`) раскладываются по `writing-mode`, унаследованному к UA-фазе, — собственный `writing-mode` fieldset из автор-CSS приходит позже, и UA ставит горизонтальные стороны (после раскладки у вертикального fieldset min-content считает legend как обычный блок: на `legend − border` шире, чем в Edge); (3) `float` у legend и legend внутри `display: inline-block` fieldset не проверены против Edge; (4) переполнение: legend шире content box при `text-align: right` в Edge встаёт на `margin-start + margin-end` от края (проба `margin: 0 10px; width: 300px` → x=28), у нас на `margin-start`; (5) `dir`-атрибут не маппится в `direction` во всём движке (WPT `legend-align` `fieldset[dir=rtl] legend` ×2) и `display: table` на обычных элементах раскладывается как блок высотой 0 шириной в контейнер (поэтому legend с `display: table` блокифицируется — `legend-display` ждёт `table`-раскладку); (6) `border-radius` у groove-рамки не скругляется вовсе (CPU-растеризатор рисует groove как прямоугольные полосы — и у обычного `div`), у fieldset с legend это заметно сильнее. Критерий готовности: проба вертикального flex/grid-fieldset с legend совпадает с Edge, графтест с ним"
     },
     {
      "id": "GRID-VWM-2",
@@ -958,9 +965,9 @@
     {
      "id": "MULTICOL-VERTICAL",
      "title": "MULTICOL-VERTICAL: multicol в вертикальном writing-mode",
-     "status": "planned",
+     "status": "done",
      "size": "M",
-     "note": "Multicol в вертикальном `writing-mode` (Multicol L1 §3 + Writing Modes L3): колонки идут по inline-оси (физически вниз), у `vertical-rl` содержимое колонки течёт справа налево, высота колонки по блочной оси — физическая ширина контейнера. Сейчас `layout_dispatch` отправляет вертикальный блок в `vertical_trampoline` раньше multicol-ветки (`layout_dispatch.rs`, «CSS Writing Modes L3 §3»), колонки не строятся, дети стопкой по блочной оси. Нужно: ветка multicol для вертикального контейнера (по образцу `grid_vertical`) — число/ширина колонок по физической высоте, раскладка детей по inline-размеру колонки, нарезка по блочным экстентам, `column-span: all`, `column-fill`, принудительные разрывы; baseline multicol-контейнера во flex/grid. WPT: `css-flexbox/alignment/flex-align-baseline-multicol-002/003`, `css-grid/alignment/grid-align-baseline-multicol-002/003` (offsetLeft 105 против 195), `css-multicol/multicol-span-auto-size-in-vertical-writing-mode-*`. Выделено из MULTICOL-BREAKS-2 (пункт 4)."
+     "note": "Сделано (2026-10-24, ветка `p1-multicol-vertical`): `box_tree/multicol_vertical.rs` — ветка multicol для вертикального контейнера (`vertical-rl`/`vertical-lr`/`sideways-rl`, `direction: ltr`) до `vertical_trampoline`: колонки по физической y, длина колонки = ширина контейнера (явная, по `max-width` или по балансу/принудительным разрывам), поток от края начала блока. Элементы мерятся обычной вертикальной раскладкой и проходят «логико-горизонтальную» карту (`to_logical`: inline → x, block → y, четыре стороны margin/padding/border/радиусов вращаются, writing-mode контейнера → horizontal-tb), поэтому `multicol_flow` (модель разрывов, paginate/balanced, cut, slice-края) работает без копии по осям; фрагменты возвращает `from_logical`. `column-span: all`, forced/avoid-разрывы, вложенные обёртки (hoist по логическим краям), абсолютные дети; flex/grid/table и ортогональные потоки внутри монолитны. `baseline.rs::vertical_multicol_baseline` (первая — первая линия первой колонки, последняя — дальняя по блочной оси), `intrinsic.rs::max_content_outer_height` знает `column-count` вертикального режима (n колонок + gap). Побочно: `anon_style` сбрасывает `break-before/after` и `column-span` у анонимных боксов (строки `<br>` повторяли принудительный разрыв родителя, и каждая открывала колонку — в том числе в горизонтальном multicol). WPT `flex-align-baseline-multicol-002/003`, `grid-align-baseline-multicol-002/003` (по 12/12, ожидание TIMEOUT снято), `multicol-span-auto-size-in-vertical-writing-mode-001/002`; графтест 168 (0,11 %). Остаток — MULTICOL-VERTICAL-2. Выделено из MULTICOL-BREAKS-2 (пункт 4)."
     },
     {
      "id": "VT-API-2",
@@ -1028,6 +1035,16 @@
      "note": "Остаток SMOOTH-SCROLL (срез 1 — шаги из шима, `scroll-behavior`, `scrollX`, корневой скроллер, диапазон страницы по раскладке, см. строку SMOOTH-SCROLL). (1) Под-документы (`<iframe>`): прокрутка фрейма мгновенная — у фрейма нет своего rAF (`scroll-behavior-subframe-root`/`-window` 2/40, 2/28, `scrollIntoView-iframes`). (2) `scrollIntoView` проходит только первый скроллер цепочки: вложенные контейнеры и «скроллер → вьюпорт» одним вызовом (`scrollIntoView-multiple-nested` TIMEOUT, `scroll-behavior-scrollintoview-nested`), `scroll-padding` (`scrollIntoView-scrollPadding` 0/3), `position: fixed`, липкая цель (BUG-1468), writing-mode/rtl (`scrollIntoView-*writing-mode*`), `visualViewport` (`visual-scrollIntoView-*`). (3) Шаги анимации страницы не проходят через scroll-snap (раньше `start_smooth_scroll` привязывал к точке прилипания); якорный переход `#frag` остаётся нативным по y и не двигает x. (4) Прерывание жестом распознаётся по несовпадению позиции с запрошенной, а не по событию ввода; `smooth-scrollIntoView-with-unrelated-gesture-scroll` и `-with-smooth-fragment-scroll` — TIMEOUT. (5) Прокрутка при навигации по истории (`scroll-behavior-smooth-navigation` 1/3) и в обработчике `load` (`smooth-scroll-in-load-event`: размер вьюпорта в WPT-окне). (6) `vertical-align: <length>` у inline-block не применяется — из-за этого `scroll-behavior-element`/`-smooth-positions` не проходят в части `scrollIntoView` (отдельный пробел раскладки). (7) Промисы `scrollTo`/`scrollBy`/`scrollIntoView` (BUG-479) резолвятся в `undefined`, а WPT ждёт `{interrupted: boolean}` (`element-scroll-promises` 0/24, `window-scroll-promises` 0/18, `*-promise-interruption` 0/14 и 0/4, `*-after-removal` 0/5): запись анимации в `_lumen_smooth_anims` знает, чем закончилась — докатилась, вытеснена новым запросом или чужим смещением, — остаётся отдать это в промис; для вложенных скроллеров нужен обход всей цепочки в `scrollIntoView`. Критерий готовности: пункты 1–3 закрыты, `scroll-behavior-subframe-*` и `scrollIntoView-multiple-nested` зелёные.",
      "bugs": [
       "BUG-1560"
+     ]
+    },
+    {
+     "id": "MULTICOL-VERTICAL-2",
+     "title": "MULTICOL-VERTICAL-2: остаток multicol в вертикальном writing-mode",
+     "status": "planned",
+     "size": "M",
+     "note": "Остаток вертикального multicol (`box_tree/multicol_vertical.rs`): (1) `direction: rtl` и `sideways-lr` — inline-ось идёт снизу вверх, карта `to_logical` должна отражать x_t относительно нижнего края контейнера; (2) rendered legend fieldset и `column-height`/`column-wrap` (ряды колонок) — такие контейнеры уходят в прежнюю вертикальную раскладку без колонок; (3) out-of-flow потомки внутри режущегося содержимого (`scan_oof`/`take_oof` не вызываются), abspos-дети контейнера ставятся от начала контент-бокса; (4) вложенный вертикальный multicol не режется колонками родителя (монолитен); `column-width` без `column-count`, min-content и блочный размер (физическая ширина) вертикального multicol в `intrinsic.rs`; (5) flex/grid/table внутри колонок монолитны — нужна карта `subgrid_tracks`/осей flex; (6) повторная раскладка уже разрезанного контейнера дублирует фрагменты — BUG-1699.",
+     "bugs": [
+      "MULTICOL-VERTICAL"
      ]
     }
    ],
@@ -9419,9 +9436,9 @@
       {
        "id": "TEXTQ-5",
        "title": "Шейпинг в измерении ширины текста",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. Измеритель ширин раскладки через шейпер, ширина run-а = нарисованной."
+       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. **Влито 2026-10-24 (p1-textq-5):** `TextMeasurer::shaped_width` (+ `ShapeParams`) — ширина слова/run-а считается тем же `active_text_shaper()` с теми же фичами (`shaping_features`, общая с GPU/CPU) и осями (`style::text_variation_axes`, общая с `DrawText`), что и отрисовка; реализации `FontMeasurer`/`MultiFontMeasurer` режут run на под-run-ы по face-у каскада (`unicode-range`, `size-adjust`), посимвольная сумма — запасной путь (face >8 МиБ, шейпер отказал, моки). Кэш — потоковый, по `(отпечаток face, текст, фичи, оси)` в единицах шрифта. Табуляция рвёт run (как в отрисовке). CPU-растеризатор приведён к правилу wgpu: `letter-spacing` на кластер, `liga`/`clig` выключены. **Замер** (`lumen-bench`, `samples/heavy.html`, 2982 узла, layout med, 5 пар чередованием, `LUMEN_NO_TEXT_SHAPING=1` против шейпера): 47,1 → 48,9 мс (+3,8 %, в шуме машины). Шейпинг через пробел не учитывается (слово меряется между break opportunities). Рычаг `LUMEN_NO_TEXT_SHAPING=1` откатывает и измерение. Сдвинулись 6 CPU-эталонов, 4 дампа `dump-golden`; diff против Edge не хуже (151: 6,21→6,06 %, 27: 0,263→0,258 %)."
       },
       {
        "id": "TEXTQ-6",
@@ -11521,6 +11538,13 @@
    "status": "open",
    "title": "`getComputedStyle(el).minHeight`/`minWidth`/`maxHeight`/`maxWidth` при заданном `13vw`/`15vmin` отдают исходный текст (`13vw`), а `height`/`width` — абсолютную…",
    "component": "layout (`crates/engine/layout/src/selector_query.rs` — `sizing_computed_css`, `length_to_css`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1699": {
+   "status": "open",
+   "title": "Повторная раскладка уже разрезанного multicol-контейнера (float, перенесённый ниже) принимает фрагменты за элементы и дублирует их: блок, разрезанный на 2 колон…",
+   "component": "layout (`box_tree/multicol_trampoline.rs`, `multicol_vertical.rs`)",
    "date": null,
    "debtor": false
   },
@@ -22441,6 +22465,9 @@
   ],
   "layout (`box_tree/image_requests.rs::collect_cascade_background_image_requests`) + shell (`page_pipeline.rs` — `prefetch-bg-images` до `fetch-images`; `subresources.rs::spawn_background_image_prefetch`, `decode_background_image` через `IMAGE_CACHE`)": [
    "BUG-1117"
+  ],
+  "layout (`box_tree/multicol_trampoline.rs`, `multicol_vertical.rs`)": [
+   "BUG-1699"
   ],
   "layout (`crates/engine/layout/src/anchor.rs` — `collect_anchors`/поиск якоря по имени: порядок в дереве и область видимости имени)": [
    "BUG-1483"

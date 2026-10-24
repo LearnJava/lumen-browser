@@ -163,3 +163,94 @@ fn the_container_frame_surrounds_the_columns() {
     assert_rect(k[1], 8.0, 8.0, 30.0, 50.0);
     assert_rect(k[2], 38.0, 58.0, 30.0, 50.0);
 }
+
+/// Fragmentation L3 §4: a block longer than a column is cut at the column edge; with
+/// `box-decoration-break: slice` the cut edges (block-end of the first piece, block-start of the
+/// second — physical right/left in `vertical-lr`) lose border and padding, the inline edges keep them.
+#[test]
+fn a_block_longer_than_the_column_is_sliced_between_columns() {
+    let (doc, root) = lay(
+        "<div id='c'><div id='w'><div class='n'></div><div class='n'></div><div class='n'></div><div class='n'></div></div></div>",
+        "#c{writing-mode:vertical-lr;columns:2;column-gap:10px;column-fill:auto;width:100px;height:300px}         #w{width:160px;border:6px solid #333;box-sizing:border-box}.n{width:33px;margin:2px}",
+    );
+    let c = super::find_by_id_all(&root, &doc, "c").expect("нет #c");
+    assert_eq!(c.children.len(), 2, "две части обёртки: {:?}", c.children.iter().map(|k| k.rect).collect::<Vec<_>>());
+    assert_rect(c.children[0].rect, 0.0, 0.0, 100.0, 145.0);
+    assert_rect(c.children[1].rect, 0.0, 155.0, 60.0, 145.0);
+    let (a, b) = (&c.children[0].style, &c.children[1].style);
+    assert_eq!((a.border_left_width, a.border_right_width, a.border_top_width, a.border_bottom_width), (6.0, 0.0, 6.0, 6.0));
+    assert_eq!((b.border_left_width, b.border_right_width, b.border_top_width, b.border_bottom_width), (0.0, 6.0, 6.0, 6.0));
+}
+
+/// Fixed 8px per character: lines of known length and count.
+struct Fixed8;
+impl crate::TextMeasurer for Fixed8 {
+    fn char_width(&self, _: char, _: f32) -> f32 {
+        8.0
+    }
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
+
+const TEXT_CSS: &str = "#c{writing-mode:vertical-rl;width:120px;height:100px;columns:2;column-gap:10px;column-fill:auto;                        font-size:10px;line-height:10px}";
+
+fn text_html() -> String {
+    format!("<div id='c'>{}</div>", "aaaa ".repeat(30))
+}
+
+fn lay_text() -> (lumen_dom::Document, crate::box_tree::LayoutBox) {
+    let doc = lumen_html_parser::parse(&text_html());
+    let sheet = lumen_css_parser::parse(&format!("body{{margin:0}}{TEXT_CSS}"));
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+    (doc, root)
+}
+
+/// The lines of a text run are dealt out by position: 12 of them (120px of block size at 10px a
+/// line) fit a column, the remaining 6 open a third one below.
+#[test]
+fn the_lines_of_a_vertical_run_are_dealt_out_to_the_columns() {
+    let (doc, root) = lay_text();
+    let c = super::find_by_id_all(&root, &doc, "c").expect("нет #c");
+    let runs: Vec<(Rect, usize)> = c
+        .children
+        .iter()
+        .filter_map(|k| match &k.kind {
+            crate::box_tree::BoxKind::InlineRun { lines, .. } => Some((k.rect, lines.len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs.len(), 3, "{runs:?}");
+    assert_eq!(runs.iter().map(|r| r.1).collect::<Vec<_>>(), vec![12, 12, 6]);
+    assert_rect(runs[0].0, 0.0, 0.0, 120.0, 45.0);
+    assert_rect(runs[1].0, 0.0, 55.0, 120.0, 45.0);
+    assert_rect(runs[2].0, 60.0, 110.0, 60.0, 45.0);
+}
+
+/// Align L3 §9.1 for a multicol container: the first baseline is the first line of the first
+/// column (centre of the rightmost line in `vertical-rl`), the last one the farthest last line
+/// along the block axis (leftmost).
+#[test]
+fn a_vertical_multicol_container_reports_the_baselines_of_its_columns() {
+    use crate::box_tree::baseline::{box_baseline, BaselineSide};
+    let (doc, root) = lay_text();
+    let c = super::find_by_id_all(&root, &doc, "c").expect("нет #c");
+    let first = box_baseline(c, BaselineSide::First, Some(&Fixed8)).expect("first");
+    let last = box_baseline(c, BaselineSide::Last, Some(&Fixed8)).expect("last");
+    assert!(near(first, 115.0), "{first}");
+    assert!(near(last, 5.0), "{last}");
+}
+
+/// A `<br>` cuts a block into line blocks; they are anonymous and must not repeat the forced
+/// breaks of their parent (every one of them used to open a column of its own).
+#[test]
+fn line_blocks_of_a_br_do_not_repeat_the_forced_break_of_their_parent() {
+    let (doc, root) = lay(
+        "<div id='c'><div id='a'><span></span><br><span></span><br><span></span></div>         <div id='b'><span></span></div></div>",
+        "#c{columns:3;column-gap:0;column-fill:auto;width:300px;line-height:0}         #c>div{break-before:column;break-after:column}span{display:inline-block;width:10px;height:10px}",
+    );
+    let (a, b) = (rect_of(&doc, &root, "a"), rect_of(&doc, &root, "b"));
+    // The block a keeps all its lines in the first column, b starts the second.
+    assert!(near(a.x, 0.0) && a.width <= 100.5, "{a:?}");
+    assert!(near(b.x, 100.0), "{b:?}");
+}
