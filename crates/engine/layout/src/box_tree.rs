@@ -41,7 +41,7 @@ use crate::subgrid::{SubgridContext, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
 use crate::anchor::{collect_anchors_inline, InsetAreaKeyword};
 use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
-use crate::TextMeasurer;
+use crate::{ShapeParams, TextMeasurer};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ mod inline_wrap_preserved;
 mod inline_text_overflow;
 use inline_text_overflow::apply_text_overflow_string;
 pub use inline_wrap::{measure_text_w, measure_text_w_families, measure_text_w_varied};
-pub(crate) use inline_wrap::strip_soft_hyphens;
+pub(crate) use inline_wrap::{measure_text_w_styled, strip_soft_hyphens};
 use inline_wrap::{
     align_lines, align_one_line, ellipsize_last_line,
     apply_text_overflow_ellipsis, balance_wrap, one_line_fallback, pretty_wrap, step_line_height, wrap_inline_run,

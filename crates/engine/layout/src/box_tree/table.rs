@@ -684,21 +684,18 @@ fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) ->
                         line_w = 0.0;
                         continue;
                     }
-                    let fs = seg.style.font_size;
-                    let ls = seg.style.letter_spacing;
                     if seg.img_src.is_some() {
                         let w = seg.pre_space + seg.img_width + seg.post_space;
                         line_w += w;
                         run_min = run_min.max(w);
                     } else {
-                        let fams = &seg.style.font_family;
                         line_w += seg.pre_space
-                            + measure_text_w_families(&seg.text, fs, ls, 0.0, fams, m)
+                            + measure_text_w_styled(&seg.text, &seg.style, 0.0, m)
                             + seg.post_space;
                         for word in seg.text.split_ascii_whitespace() {
                             run_min = run_min.max(
                                 seg.pre_space
-                                    + measure_text_w_families(word, fs, ls, 0.0, fams, m)
+                                    + measure_text_w_styled(word, &seg.style, 0.0, m)
                                     + seg.post_space,
                             );
                         }

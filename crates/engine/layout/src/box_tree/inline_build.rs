@@ -578,7 +578,7 @@ pub(crate) fn inline_run_first_unit(
         .copied()
         .unwrap_or(strip.len());
     let st = &seg.style;
-    let w = measure_text_w_families(&strip[..end], st.font_size, st.letter_spacing, 0.0, &st.font_family, m);
+    let w = measure_text_w_styled(&strip[..end], st, 0.0, m);
     Some((w + seg.pre_space, glued))
 }
 

@@ -148,3 +148,55 @@ fn letter_spacing_turns_optional_ligatures_off_but_author_can_override() {
     let spaced = shaping_features(&author, 1.0);
     assert_eq!(spaced.as_ref(), &[(*b"liga", 0), (*b"clig", 0), (*b"liga", 1)]);
 }
+
+/// TEXTQ-5: ширина, которую раскладка получает от измерителя
+/// (`TextMeasurer::shaped_width`), — та же, на которую GPU-путь сдвигает перо.
+fn measured_width(text: &str, features: &[([u8; 4], u32)], letter_spacing: f32) -> f32 {
+    use lumen_layout::{ShapeParams, TextMeasurer};
+    let bytes = inter_bytes();
+    let font = lumen_font::Font::parse(&bytes).expect("font");
+    let params = ShapeParams {
+        font_size_px: FONT_SIZE,
+        letter_spacing,
+        families: &[],
+        features,
+        axes: &[],
+    };
+    let single = crate::FontMeasurer::new(&font).expect("measurer").shaped_width(text, &params);
+    // Многошрифтовый измеритель на пустом каскаде — bundled Inter, та же ширина.
+    let owned: &'static [u8] = Box::leak(bytes.clone().into_boxed_slice());
+    let static_font = lumen_font::Font::parse(owned).expect("font");
+    let multi = crate::MultiFontMeasurer::new(&static_font).expect("measurer").shaped_width(text, &params);
+    assert_eq!(single, multi, "FontMeasurer и MultiFontMeasurer расходятся на {text:?}");
+    single.expect("шейпер принял Inter")
+}
+
+#[test]
+fn layout_measurer_width_equals_gpu_pen_for_avatar() {
+    let mut runs = TextRunCache::default();
+    let (end_x, _) = lay_out(&mut runs, "AVATAR", &[], 0.0);
+    let measured = measured_width("AVATAR", &[], 0.0);
+    assert!((measured - end_x).abs() < 0.01, "измеритель {measured}, GPU-перо {end_x}");
+    // Кернинг реально учтён: посимвольная сумма из hmtx заметно шире.
+    assert!((hmtx_width("AVATAR") - measured).abs() > 1.0);
+}
+
+#[test]
+fn layout_measurer_width_equals_gpu_pen_with_features_and_spacing() {
+    for (text, features, ls) in [
+        ("->", vec![], 0.0),
+        ("->", vec![(*b"calt", 0)], 0.0),
+        ("->", vec![], 3.0),
+        ("abc", vec![], 3.0),
+        ("fi ffi", vec![(*b"liga", 1)], 2.5),
+        ("Hello, World", vec![], 0.0),
+    ] {
+        let mut runs = TextRunCache::default();
+        let (end_x, _) = lay_out(&mut runs, text, &features, ls);
+        let measured = measured_width(text, &features, ls);
+        assert!(
+            (measured - end_x).abs() < 0.01,
+            "{text:?} {features:?} ls={ls}: измеритель {measured}, GPU-перо {end_x}"
+        );
+    }
+}

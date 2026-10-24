@@ -120,6 +120,11 @@ impl<'a> Font<'a> {
         })
     }
 
+    /// Байты шрифта, из которых он разобран.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
+
     pub fn offset_table(&self) -> &OffsetTable {
         &self.offset_table
     }

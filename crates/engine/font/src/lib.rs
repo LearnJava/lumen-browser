@@ -71,7 +71,7 @@ pub use glyf::{
 };
 pub use gvar::{GlyphVariationData, Gvar, PointNumbers, TupleVariation};
 pub use head::{Head, IndexToLocFormat};
-pub use text_shaper::{RustybuzzShaper, active_text_shaper};
+pub use text_shaper::{RustybuzzShaper, active_text_shaper, font_fingerprint};
 pub use hvar::Hvar;
 pub use item_variation::{
     ItemVariationData, ItemVariationStore, RegionAxisCoordinates, VariationRegion,

@@ -183,21 +183,7 @@ pub(super) fn emit_frag_text(out: &mut Vec<DisplayCommand>, frag: &InlineFrag, g
         font_style: frag.style.font_style,
         font_features: lumen_layout::style::text_font_features(&frag.style),
         font_palette: palette_selection(&frag.style),
-        font_variation_axes: {
-            let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
-                .iter().map(|a| (a.tag, a.value)).collect();
-            if frag.style.font_optical_sizing == FontOpticalSizing::Auto
-                && !axes.iter().any(|(t, _)| t == b"opsz")
-            {
-                axes.push((*b"opsz", frag.style.font_size));
-            }
-            if frag.style.font_stretch != FontStretch::NORMAL
-                && !axes.iter().any(|(t, _)| t == b"wdth")
-            {
-                axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
-            }
-            axes
-        },
+        font_variation_axes: lumen_layout::style::text_variation_axes(&frag.style),
         tab_size: frag.style.tab_size,
         letter_spacing: super::spacing_to_fixed(frag.style.letter_spacing),
         word_spacing: super::spacing_to_fixed(frag.style.word_spacing + frag.style.word_spacing_pct * 0.25 * frag.style.font_size),
@@ -304,21 +290,7 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
                 font_style: frag.style.font_style,
                 font_features: lumen_layout::style::text_font_features(&frag.style),
                 font_palette: palette_selection(&frag.style),
-                font_variation_axes: {
-                    let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
-                        .iter().map(|a| (a.tag, a.value)).collect();
-                    if frag.style.font_optical_sizing == FontOpticalSizing::Auto
-                        && !axes.iter().any(|(t, _)| t == b"opsz")
-                    {
-                        axes.push((*b"opsz", frag.style.font_size));
-                    }
-                    if frag.style.font_stretch != FontStretch::NORMAL
-                        && !axes.iter().any(|(t, _)| t == b"wdth")
-                    {
-                        axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
-                    }
-                    axes
-                },
+                font_variation_axes: lumen_layout::style::text_variation_axes(&frag.style),
                 tab_size: frag.style.tab_size,
                 letter_spacing: 0,
                 word_spacing: 0,
@@ -408,21 +380,7 @@ pub(crate) fn emit_inline_run(
                 font_style: ef.style.font_style,
                 font_features: lumen_layout::style::text_font_features(&ef.style),
                 font_palette: palette_selection(&ef.style),
-                font_variation_axes: {
-                    let mut axes: Vec<([u8; 4], f32)> = ef.style.font_variation_settings
-                        .iter().map(|a| (a.tag, a.value)).collect();
-                    if ef.style.font_optical_sizing == FontOpticalSizing::Auto
-                        && !axes.iter().any(|(t, _)| t == b"opsz")
-                    {
-                        axes.push((*b"opsz", ef.style.font_size));
-                    }
-                    if ef.style.font_stretch != FontStretch::NORMAL
-                        && !axes.iter().any(|(t, _)| t == b"wdth")
-                    {
-                        axes.push((*b"wdth", ef.style.font_stretch.0 as f32 / 10.0));
-                    }
-                    axes
-                },
+                font_variation_axes: lumen_layout::style::text_variation_axes(&ef.style),
                 tab_size: 0.0,
                 letter_spacing: 0,
                 word_spacing: 0,

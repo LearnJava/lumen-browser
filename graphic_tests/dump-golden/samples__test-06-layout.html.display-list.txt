@@ -3,7 +3,7 @@ FillRect (0.00, 0.00, 1024.00, 36.00) #1e3a5fff
 DrawBorder (0.00, 0.00, 1024.00, 36.00) w=[0.00,0.00,3.00,0.00] c=[#e2e8f0ff,#e2e8f0ff,#e94560ff,#e2e8f0ff]
 DrawText (16.00, 12.00, 992.00, 36.00) "LUMEN BROWSER" 12.00 #e2e8f0ff family=["serif"] w=700 var=["opsz"=12]
 DrawText (134.67, 12.00, 992.00, 36.00) "/ LAYOUT И ВИДИМОСТЬ" 12.00 #7ec8e3ff family=["serif"] w=700 var=["opsz"=12]
-DrawText (300.08, 12.00, 992.00, 36.00) "— Страница 6 из 6" 12.00 #e2e8f0ff family=["serif"] w=700 var=["opsz"=12]
+DrawText (299.12, 12.00, 992.00, 36.00) "— Страница 6 из 6" 12.00 #e2e8f0ff family=["serif"] w=700 var=["opsz"=12]
 FillRect (0.00, 36.00, 1024.00, 121.00) #ffffffff
 DrawBorder (0.00, 36.00, 1024.00, 121.40) w=[0.00,0.00,1.00,0.00] c=[#2d3748ff,#2d3748ff,#e2e8f0ff,#2d3748ff]
 DrawText (16.00, 43.00, 992.00, 14.00) "DISPLAY: BLOCK — КАЖДЫЙ БЛОК НАЧИНАЕТСЯ С НОВОЙ СТРОКИ, ЗАНИМАЕТ ВСЮ ШИРИНУ" 10.00 #94a3b8ff family=["serif"] var=["opsz"=10]
@@ -20,13 +20,13 @@ FillRect (0.00, 157.00, 1024.00, 48.00) #ffffffff
 DrawBorder (0.00, 157.40, 1024.00, 47.20) w=[0.00,0.00,1.00,0.00] c=[#2d3748ff,#2d3748ff,#e2e8f0ff,#2d3748ff]
 DrawText (16.00, 164.40, 992.00, 14.00) "DISPLAY: INLINE — SPAN-ЭЛЕМЕНТЫ ТЕКУТ В СТРОКУ (БЕЗ PADDING/BORDER — ТЕ СТАКАЮТСЯ ВЕРТИКАЛЬНО)" 10.00 #94a3b8ff family=["serif"] var=["opsz"=10]
 DrawText (16.00, 183.00, 992.00, 18.20) "Текст строки:" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
-DrawText (95.31, 183.00, 992.00, 18.20) "красный bold" 13.00 #e53e3eff family=["serif"] w=700 var=["opsz"=13]
-DrawText (171.93, 183.00, 992.00, 18.20) "зелёный italic" 13.00 #38a169ff family=["serif"] style=italic var=["opsz"=13]
-DrawText (250.23, 183.00, 992.00, 18.20) "синий underline" 13.00 #3182ceff family=["serif"] var=["opsz"=13]
-FillRect (250.23, 194.70, 85.94, 1.00) #3182ceff
-DrawText (339.42, 183.00, 992.00, 18.20) "фиолетовый" 13.00 #805ad5ff family=["serif"] var=["opsz"=13]
-DrawText (410.82, 183.00, 992.00, 18.20) "золотой bold" 13.00 #d69e2eff family=["serif"] w=700 var=["opsz"=13]
-DrawText (484.19, 183.00, 992.00, 18.20) "— все на одной строке, перенос при нехватке места." 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
+DrawText (94.65, 183.00, 992.00, 18.20) "красный bold" 13.00 #e53e3eff family=["serif"] w=700 var=["opsz"=13]
+DrawText (171.27, 183.00, 992.00, 18.20) "зелёный italic" 13.00 #38a169ff family=["serif"] style=italic var=["opsz"=13]
+DrawText (249.57, 183.00, 992.00, 18.20) "синий underline" 13.00 #3182ceff family=["serif"] var=["opsz"=13]
+FillRect (249.57, 194.70, 85.94, 1.00) #3182ceff
+DrawText (338.76, 183.00, 992.00, 18.20) "фиолетовый" 13.00 #805ad5ff family=["serif"] var=["opsz"=13]
+DrawText (409.81, 183.00, 992.00, 18.20) "золотой bold" 13.00 #d69e2eff family=["serif"] w=700 var=["opsz"=13]
+DrawText (482.60, 183.00, 992.00, 18.20) "— все на одной строке, перенос при нехватке места." 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
 FillRect (0.00, 205.00, 1024.00, 68.00) #ffffffff
 DrawBorder (0.00, 204.60, 1024.00, 68.40) w=[0.00,0.00,1.00,0.00] c=[#2d3748ff,#2d3748ff,#e2e8f0ff,#2d3748ff]
 DrawText (16.00, 211.60, 992.00, 14.00) "DISPLAY: NONE — ЭЛЕМЕНТ ПОЛНОСТЬЮ СКРЫТ, МЕСТО НЕ ЗАНИМАЕТ (ТОЛЬКО НА БЛОЧНЫХ DIV)" 10.00 #94a3b8ff family=["serif"] var=["opsz"=10]
@@ -38,9 +38,8 @@ DrawText (16.00, 280.00, 992.00, 14.00) "OVERFLOW: HIDDEN — СОДЕРЖИМО
 FillRect (16.00, 296.00, 360.00, 36.00) #ebf8ffff
 DrawBorder (16.00, 296.00, 360.00, 36.00) w=[2.00,2.00,2.00,2.00] c=[#3182ceff,#3182ceff,#3182ceff,#3182ceff]
 PushClipRect (18.00, 298.00, 356.00, 32.00)
-DrawText (26.00, 304.60, 340.00, 18.20) "overflow:hidden — этот текст очень длинный и будет" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
-DrawText (26.00, 322.80, 340.00, 18.20) "обрезан при выходе за границу блока фиксированной" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
-DrawText (26.00, 341.00, 340.00, 18.20) "высоты" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
+DrawText (26.00, 304.60, 340.00, 18.20) "overflow:hidden — этот текст очень длинный и будет обрезан" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
+DrawText (26.00, 322.80, 340.00, 18.20) "при выходе за границу блока фиксированной высоты" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
 PopClip
 FillRect (16.00, 336.00, 360.00, 36.00) #f0fff4ff
 DrawBorder (16.00, 336.00, 360.00, 36.00) w=[2.00,2.00,2.00,2.00] c=[#38a169ff,#38a169ff,#38a169ff,#38a169ff]
@@ -84,14 +83,14 @@ DrawBorder (289.00, 532.80, 80.00, 57.60) w=[1.00,1.00,1.00,1.00] c=[#805ad5ff,#
 PushClipRect (290.00, 533.80, 78.00, 55.60)
 DrawText (298.00, 536.40, 62.00, 18.20) "h:8vh" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
 PopClip
-DrawText (380.00, 536.80, 237.59, 15.40) "← vh от высоты окна 720px · 8vh = ~58px" 11.00 #718096ff family=["serif"] var=["opsz"=11]
+DrawText (380.00, 536.80, 237.30, 15.40) "← vh от высоты окна 720px · 8vh = ~58px" 11.00 #718096ff family=["serif"] var=["opsz"=11]
 FillRect (0.00, 596.00, 1024.00, 66.00) #ffffffff
 DrawBorder (0.00, 596.40, 1024.00, 65.40) w=[0.00,0.00,1.00,0.00] c=[#2d3748ff,#2d3748ff,#e2e8f0ff,#2d3748ff]
 DrawText (16.00, 603.40, 992.00, 14.00) "НАСЛЕДОВАНИЕ CSS — ДОЧЕРНИЕ ЭЛЕМЕНТЫ НАСЛЕДУЮТ COLOR, FONT-SIZE, FONT-STYLE" 10.00 #94a3b8ff family=["serif"] var=["opsz"=10]
 DrawText (16.00, 622.00, 992.00, 18.20) "Родитель: color=красный, font-size=13px." 13.00 #e53e3eff family=["serif"] var=["opsz"=13]
-DrawText (246.89, 622.00, 992.00, 18.20) "Дочерний span наследует цвет (bold локально)." 13.00 #e53e3eff family=["serif"] w=700 var=["opsz"=13]
+DrawText (246.19, 622.00, 992.00, 18.20) "Дочерний span наследует цвет (bold локально)." 13.00 #e53e3eff family=["serif"] w=700 var=["opsz"=13]
 DrawText (16.00, 640.20, 992.00, 18.20) "Вложенный div: наследует красный + добавляет italic." 13.00 #e53e3eff family=["serif"] style=italic var=["opsz"=13]
-DrawText (319.44, 640.20, 992.00, 18.20) "Внук-span: цвет → синий, курсив унаследован." 13.00 #3182ceff family=["serif"] style=italic var=["opsz"=13]
+DrawText (318.43, 640.20, 992.00, 18.20) "Внук-span: цвет → синий, курсив унаследован." 13.00 #3182ceff family=["serif"] style=italic var=["opsz"=13]
 FillRect (0.00, 662.00, 1024.00, 160.00) #ffffffff
 DrawBorder (0.00, 661.80, 1024.00, 159.80) w=[0.00,0.00,1.00,0.00] c=[#2d3748ff,#2d3748ff,#e2e8f0ff,#2d3748ff]
 DrawText (16.00, 668.80, 992.00, 14.00) "ВЛОЖЕННЫЕ БЛОКИ — ПОРЯДОК ОТРИСОВКИ DOM (ДОЧЕРНИЕ ПОВЕРХ РОДИТЕЛЯ)" 10.00 #94a3b8ff family=["serif"] var=["opsz"=10]

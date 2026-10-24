@@ -1461,7 +1461,9 @@ impl FontVariantPosition {
 /// `font-feature-settings`.
 pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
     let caps = style.font_variant_caps.feature_tags();
-    let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len() + 8);
+    // `Vec::new()`: у типичного стиля фич нет, и раскладка зовёт эту функцию на
+    // каждое измеряемое слово (TEXTQ-5) — пустой Vec не аллоцирует.
+    let mut out = Vec::new();
     out.extend(caps.iter().map(|tag| (*tag, 1)));
     style.font_variant_ligatures.push_features(&mut out);
     style.font_variant_numeric.push_features(&mut out);
@@ -1472,6 +1474,51 @@ pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
     }
     out.extend(style.font_feature_settings.iter().map(|f| (f.tag, f.value)));
     out
+}
+
+/// Оси вариаций run-а для шейпера и растеризатора (`DrawText.font_variation_axes`):
+/// `font-variation-settings` автора плюс автоматические `opsz` (CSS Fonts L4 §7.12,
+/// `font-optical-sizing: auto` — оптический размер равен `font-size`) и `wdth`
+/// (`font-stretch` не `normal`), если автор их не задал. Один источник для
+/// отрисовки и для измерителя ширин раскладки (TEXTQ-5): иначе ширина run-а в
+/// раскладке и нарисованная расходятся на variable-шрифтах.
+pub fn text_variation_axes(style: &ComputedStyle) -> Vec<([u8; 4], f32)> {
+    let mut axes: Vec<([u8; 4], f32)> =
+        style.font_variation_settings.iter().map(|a| (a.tag, a.value)).collect();
+    if style.font_optical_sizing == FontOpticalSizing::Auto && !axes.iter().any(|(t, _)| t == b"opsz") {
+        axes.push((*b"opsz", style.font_size));
+    }
+    if style.font_stretch != FontStretch::NORMAL && !axes.iter().any(|(t, _)| t == b"wdth") {
+        axes.push((*b"wdth", style.font_stretch.0 as f32 / 10.0));
+    }
+    axes
+}
+
+/// [`text_variation_axes`] без аллокации для типичного стиля: до двух осей
+/// автора плюс автоматические `opsz`/`wdth` собираются на стеке. Раскладка зовёт
+/// это на каждое измеряемое слово (TEXTQ-5).
+pub fn with_text_variation_axes<R>(style: &ComputedStyle, f: impl FnOnce(&[([u8; 4], f32)]) -> R) -> R {
+    const STACK_AXES: usize = 4;
+    let css = &style.font_variation_settings;
+    if css.len() + 2 > STACK_AXES {
+        return f(&text_variation_axes(style));
+    }
+    let mut buf = [([0u8; 4], 0.0_f32); STACK_AXES];
+    let mut n = 0;
+    for a in css {
+        buf[n] = (a.tag, a.value);
+        n += 1;
+    }
+    let has = |buf: &[([u8; 4], f32)], tag: &[u8; 4]| buf.iter().any(|(t, _)| t == tag);
+    if style.font_optical_sizing == FontOpticalSizing::Auto && !has(&buf[..n], b"opsz") {
+        buf[n] = (*b"opsz", style.font_size);
+        n += 1;
+    }
+    if style.font_stretch != FontStretch::NORMAL && !has(&buf[..n], b"wdth") {
+        buf[n] = (*b"wdth", style.font_stretch.0 as f32 / 10.0);
+        n += 1;
+    }
+    f(&buf[..n])
 }
 
 /// CSS Fonts L4 §7.12 — `font-optical-sizing`. Inherited.
