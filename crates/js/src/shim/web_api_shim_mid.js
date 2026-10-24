@@ -2526,7 +2526,7 @@ function _lumen_serialize_style(obj) {
         shorthandOf[lh[0]] = sh;
         shorthandOf[lh[1]] = sh;
     });
-    ['white-space', 'text-wrap'].forEach(function(sh) {
+    ['white-space', 'text-wrap', 'container'].forEach(function(sh) {
         var lh = _LUMEN_TEXT_SHORTHANDS[sh];
         if (shorthandOf[lh[0]] || shorthandOf[lh[1]]) return;
         var v = _lumen_text_shorthand_value(obj, sh);
@@ -2635,6 +2635,8 @@ var _LUMEN_TEXT_PROPERTIES = {
 var _LUMEN_TEXT_SHORTHANDS = {
     'white-space': ['white-space-collapse', 'text-wrap-mode'],
     'text-wrap':   ['text-wrap-mode', 'text-wrap-style'],
+    // CSS Conditional 5 §3.3 (BUG-1514): `<'container-name'> [ / <'container-type'> ]?`.
+    'container':   ['container-name', 'container-type'],
 };
 var _LUMEN_WHITE_SPACE_LEGACY = {
     'normal':       ['collapse', 'wrap'],
@@ -2655,6 +2657,7 @@ function _lumen_expand_text_shorthand(name, strVal) {
         out[lh[1]] = lower;
         return out;
     }
+    if (name === 'container') return _lumen_expand_container_shorthand(strVal, lh);
     var tokens = lower.split(/\s+/).filter(function(t) { return t !== ''; });
     if (tokens.length < 1 || tokens.length > 2) return null;
     if (name === 'white-space') {
@@ -2698,6 +2701,33 @@ function _lumen_expand_text_shorthand(name, strVal) {
     out[lh[1]] = wstyle === null ? 'auto' : wstyle;
     return out;
 }
+// `container: none | <custom-ident>+ [ / <'container-type'> ]?`; the type defaults to `normal`.
+function _lumen_expand_container_shorthand(strVal, lh) {
+    var halves = strVal.split('/');
+    if (halves.length > 2) return null;
+    var names = _lumen_split_top_level_ws(halves[0].trim());
+    if (names.length === 0) return null;
+    var nameVal;
+    if (names.length === 1 && names[0].toLowerCase() === 'none') {
+        nameVal = 'none';
+    } else {
+        for (var i = 0; i < names.length; i++) {
+            if (['none', 'and', 'not', 'or', 'initial', 'inherit', 'unset', 'revert', 'revert-layer', 'default']
+                    .indexOf(names[i].toLowerCase()) !== -1) return null;
+            if (!/^-?[A-Za-z_\u0080-\uFFFF\\][\w\u0080-\uFFFF\\-]*$/.test(names[i])) return null;
+        }
+        nameVal = names.join(' ');
+    }
+    var typeVal = 'normal';
+    if (halves.length === 2) {
+        typeVal = _lumen_css_canonical_container_type(halves[1]);
+        if (typeVal === null || typeVal === undefined) return null;
+    }
+    var out = {};
+    out[lh[0]] = nameVal;
+    out[lh[1]] = typeVal;
+    return out;
+}
 // Shorthand value composed from the longhands in `obj`, or `undefined` when one is missing.
 function _lumen_text_shorthand_value(obj, name) {
     var lh = _LUMEN_TEXT_SHORTHANDS[name];
@@ -2708,6 +2738,7 @@ function _lumen_text_shorthand_value(obj, name) {
     if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(a) !== -1 || _LUMEN_CSS_WIDE_KEYWORDS.indexOf(b) !== -1) {
         return a === b ? a : undefined;
     }
+    if (name === 'container') return a + (b === 'normal' ? '' : ' / ' + b);
     if (name === 'white-space') {
         for (var k in _LUMEN_WHITE_SPACE_LEGACY) {
             if (_LUMEN_WHITE_SPACE_LEGACY[k][0] === a && _LUMEN_WHITE_SPACE_LEGACY[k][1] === b) return k;

@@ -1853,3 +1853,18 @@ fn computed_map_overflow_logical_vertical_rl_swaps_axes() {
     assert_eq!(m.get("overflow-block").map(String::as_str), Some("hidden"));
     assert_eq!(m.get("overflow-inline").map(String::as_str), Some("scroll"));
 }
+
+#[test]
+fn computed_map_container_shorthand() {
+    // BUG-1514: `container` serialises as `<name> [ / <type> ]?`, the type omitted when `normal`.
+    let m = div_computed_map("<div>x</div>", "div { container-type: inline-size; container-name: foo bar }");
+    assert_eq!(m.get("container").map(String::as_str), Some("foo bar / inline-size"));
+    assert_eq!(m.get("container-type").map(String::as_str), Some("inline-size"));
+    assert_eq!(m.get("container-name").map(String::as_str), Some("foo bar"));
+    let m = div_computed_map("<div>x</div>", "div { container: foo }");
+    assert_eq!(m.get("container").map(String::as_str), Some("foo"));
+    let m = div_computed_map("<div>x</div>", "div { container-type: size }");
+    assert_eq!(m.get("container").map(String::as_str), Some("none / size"));
+    let m = div_computed_map("<div>x</div>", "div { }");
+    assert_eq!(m.get("container").map(String::as_str), Some("none"));
+}
