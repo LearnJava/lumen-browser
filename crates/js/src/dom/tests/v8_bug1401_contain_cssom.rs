@@ -94,3 +94,39 @@ fn important_suffix_is_not_part_of_the_value() {
         "10px"
     );
 }
+
+/// BUG-1514: шорткат `container` — разбор в `container-name` + `container-type`, каноническая
+/// запись (тип `normal` опускается), отказ от недопустимых значений.
+#[test]
+fn container_shorthand_roundtrip() {
+    let rt = rt();
+    for (val, want) in [
+        ("none / normal", "none"),
+        ("foo bar / inline-size", "foo bar / inline-size"),
+        ("foo / normal", "foo"),
+        ("foo", "foo"),
+        ("none / size scroll-state", "none / size scroll-state"),
+        ("foo/scroll-state size", "foo / size scroll-state"),
+    ] {
+        assert_eq!(assign(&rt, "container", val), want, "container = {val:?}");
+    }
+    for val in ["", "foo /", "/ size", "none foo", "foo / bogus", "foo and bar", "foo / size / size"] {
+        assert_eq!(assign(&rt, "container", val), "", "container = {val:?} должно отклоняться");
+    }
+    assert_eq!(
+        eval_str(
+            &rt,
+            "var d = document.createElement('div'); d.setAttribute('style', \
+             'container-type:inline-size;container-name:foo bar'); d.style.container"
+        ),
+        "foo bar / inline-size"
+    );
+    assert_eq!(
+        eval_str(
+            &rt,
+            "var d = document.createElement('div'); d.style.container = 'a / size'; \
+             d.style.containerName + '|' + d.style.containerType + '|' + d.style.cssText"
+        ),
+        "a|size|container: a / size;"
+    );
+}

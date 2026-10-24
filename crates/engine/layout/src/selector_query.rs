@@ -2157,7 +2157,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("contain".into(), contain_to_css(style.contain));
     // CSS Conditional 5 §3.1: `normal | [ [ size | inline-size ] || scroll-state ]`, the size
     // axis first.
-    m.insert("container-type".into(), {
+    let container_type = {
         let axis = match style.container_type {
             ContainerType::Normal => "",
             ContainerType::Size => "size",
@@ -2169,11 +2169,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             (axis, false) => axis.to_owned(),
             (axis, true) => format!("{axis} scroll-state"),
         }
-    });
+    };
+    let container_name =
+        if style.container_name.is_empty() { "none".to_owned() } else { style.container_name.join(" ") };
+    // CSS Conditional 5 §3.3: `<'container-name'> [ / <'container-type'> ]?`; the type is omitted
+    // when it is `normal`.
     m.insert(
-        "container-name".into(),
-        if style.container_name.is_empty() { "none".to_owned() } else { style.container_name.join(" ") },
+        "container".into(),
+        if container_type == "normal" { container_name.clone() } else { format!("{container_name} / {container_type}") },
     );
+    m.insert("container-type".into(), container_type);
+    m.insert("container-name".into(), container_name);
     let cis_w = contain_intrinsic_to_css(
         style.contain_intrinsic_width_auto, style.contain_intrinsic_width.as_ref());
     let cis_h = contain_intrinsic_to_css(
