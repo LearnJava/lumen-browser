@@ -1,6 +1,6 @@
 # BUG-1515 — `getComputedStyle()` не отдаёт `shape-outside`, `shape-margin`, `shape-image-threshold`, `text-decoration` (шорткод), `text-decoration-skip-ink`, `text-decoration-skip-spaces`, `text-decoration-inset`, `text-emphasis*`, `text-underline-position`; `text-decoration-color: currentcolor`, `text-underline-offset`, `text-decoration-thickness` и `text-shadow` отдаются неразрешёнными
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-24 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 23, `css/css-text-decor` + `css-gaps` + `css-shapes`)
 **Область:** layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)
 
@@ -35,3 +35,7 @@ WPT-RUN-14 срез 23: `css-shapes/parsing/*-computed`, `shape-functions/*-comp
 ## Как проверить
 
 Таблица выше; `css/css-shapes/parsing/shape-margin-computed.html`, `css/css-text-decor/parsing/text-underline-position-computed.html`, `css/css-text-decor/text-underline-offset-computed.html`.
+
+2026-10-24 (P3): исправлено. `computed_style_to_map` отдаёт `shape-outside` (строка как задана), `shape-margin` (`em`/`calc()` свёрнуты, отрицательное → `0px`), `shape-image-threshold` (число или процент, зажат в [0, 1]), шорткат `text-decoration` (`<line> <style> <thickness> <color>`, значения по умолчанию опущены, всё по умолчанию — `none`; thickness входит в шорткат по L4 §2.1 и им сбрасывается), `text-emphasis`/`-style`/`-color`/`-position` (initial `auto`, `over right` → `over`), `text-underline-position` (`auto | [from-font | under] || [left | right]`), `text-decoration-skip-ink`, а также новые `text-decoration-skip-spaces` и `text-decoration-inset` (разбор, каскад, наследование, `CSS.supports`; пока только хранятся). `text-decoration-line` хранит `blink`/`spelling-error`/`grammar-error` (не рисуются). `text-underline-offset` и `text-decoration-thickness` резолвятся от `font-size` самого элемента, `calc()` с процентом сохраняется (`calc(-50% + 32px)`, `200%`); `currentcolor` в `text-shadow` отдаётся used-значением. Тесты: `computed_map_text_decoration_and_shapes_bug1515` (layout); все `*-computed` из «Как проверить» и ещё 11 файлов `css-text-decor`/`css-shapes` дают 0 расхождений на шиме `test_computed_value`.
+
+Остаток — **не** отсутствие свойства, а каноническая запись значения `shape-outside` (ROADMAP `SHAPE-OUTSIDE-COMPUTED`): `rect()`/`xywh()` → `inset()`, `calc()`/`em` внутри функций, нормализация позиции (`top 0% right calc(…)` → `90% 0%`), `path()` в каноническом виде, `shape()` с `center` → `50%`, отбрасывание `margin-box`.

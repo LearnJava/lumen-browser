@@ -829,11 +829,11 @@ pub(crate) fn push_text_decoration(out: &mut DisplayList, container_x: f32, line
         // `Under` places the line below all descenders (≈ 25% of font-size below baseline).
         // `Auto`/`FromFont` uses the standard position just below the baseline.
         let base_offset = match frag.style.text_underline_position {
-            TextUnderlinePosition::Under => fs * 0.25,
+            TextUnderlinePosition::Under | TextUnderlinePosition::UnderLeft | TextUnderlinePosition::UnderRight => fs * 0.25,
             _ => fs * 0.10,
         };
         // CSS Text Decoration L4 §5.3: text-underline-offset adds an explicit shift.
-        let extra = frag.style.text_underline_offset.unwrap_or(0.0);
+        let extra = frag.style.text_underline_offset.map_or(0.0, |px| px + frag.style.text_underline_offset_pct * fs);
         let deco_y = baseline_y + base_offset + extra;
         // CSS Text Decoration L4 §3.5: text-decoration-skip-ink.
         // `None` — continuous line; `Auto` — skip under descenders; `All` — skip every char.
@@ -888,6 +888,7 @@ fn resolve_decoration_thickness(value: TextDecorationThickness, font_size: f32) 
         }
         TextDecorationThickness::Length(px) => px.max(0.0),
         TextDecorationThickness::Percentage(frac) => (frac * font_size).max(0.0),
+        TextDecorationThickness::LengthPercentage { px, frac } => (px + frac * font_size).max(0.0),
     }
 }
 

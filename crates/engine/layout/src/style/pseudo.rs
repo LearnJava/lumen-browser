@@ -333,6 +333,8 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.text_underline_position = parent.text_underline_position;
     style.text_underline_offset = parent.text_underline_offset;
     style.text_decoration_skip_ink = parent.text_decoration_skip_ink;
+    style.text_underline_offset_pct = parent.text_underline_offset_pct;
+    style.text_decoration_skip_spaces = parent.text_decoration_skip_spaces;
     style.accent_color = parent.accent_color;
     style.color_scheme = parent.color_scheme;
     style.custom_props = parent.custom_props.clone();

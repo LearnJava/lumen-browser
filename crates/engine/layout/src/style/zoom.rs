@@ -174,10 +174,11 @@ pub(crate) fn scale_inherited_lengths(style: &mut ComputedStyle, z: f32, rem_k: 
     if declared.word_spacing {
         style.word_spacing *= z;
     }
-    if declared.decoration_thickness
-        && let TextDecorationThickness::Length(v) = &mut style.text_decoration_thickness
-    {
-        *v *= z;
+    if declared.decoration_thickness {
+        match &mut style.text_decoration_thickness {
+            TextDecorationThickness::Length(v) | TextDecorationThickness::LengthPercentage { px: v, .. } => *v *= z,
+            _ => {}
+        }
     }
     if declared.underline_offset
         && let Some(v) = style.text_underline_offset.as_mut()

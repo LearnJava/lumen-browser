@@ -57,8 +57,8 @@
 {
  "generated": "2026-10-24",
  "counts": {
-  "open": 292,
-  "fixed": 1340,
+  "open": 289,
+  "fixed": 1343,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -557,10 +557,17 @@
     },
     {
      "id": "FIELDSET-LEGEND-3",
-     "title": "FIELDSET-LEGEND-3: multicol/вертикальный flex-grid fieldset и остаток",
+     "title": "FIELDSET-LEGEND-3: legend у multicol-fieldset",
+     "status": "done",
+     "size": "M",
+     "note": "Часть остатка FIELDSET-LEGEND-2. **Сделано (2026-10-24, ветка `p1-fieldset-legend-3`):** п. 1 для multicol-`<fieldset>` (`column-count`/`column-width`, горизонтальный `writing-mode`): `dispatch_box` ставит legend на границу (`place_rendered_legend`) до `build_multicol_init`, колонки строятся от `content_y + legend_extra` (явная высота за вычетом смещения), legend выпадает из `flow_idxs` (параметр `legend: Option<NodeId>`) и доезжает до `children` нефлоу-боксом, `fieldset::resync_legend_idx` пересчитывает `FieldsetLegend::idx` после пересборки детей `multicol_trampoline::finish_frame` (там же авто-высота получает `placed_content_offset`); `emit_column_rules` опускает начало `column-rule` на то же смещение. 3 теста в `box_tree/tests/fieldset_legend.rs`, графтест `167-fieldset-multicol` совпал с Edge (0,00 %). Остаток — FIELDSET-LEGEND-4."
+    },
+    {
+     "id": "FIELDSET-LEGEND-4",
+     "title": "FIELDSET-LEGEND-4: вертикальный flex/grid fieldset и остаток",
      "status": "planned",
      "size": "M",
-     "note": "Остаток FIELDSET-LEGEND-2: (1) multicol-`<fieldset>` (`column-count`/`column-width`) — legend остаётся обычным ребёнком контейнера, колонки строит `build_multicol_init` по всему `b.children` (фильтры `Skip` в `multicol_trampoline`/`multicol_abspos` не знают legend), рамка рисуется целой; то же для flex/grid-fieldset в вертикальном `writing-mode` (там `place_rendered_legend_vertical` не подключён к `flex_trampoline`/`grid_vertical`); (2) UA-значения fieldset (`padding-block`, `min-inline-size`) раскладываются по `writing-mode`, унаследованному к UA-фазе, — собственный `writing-mode` fieldset из автор-CSS приходит позже, и UA ставит горизонтальные стороны (после раскладки у вертикального fieldset min-content считает legend как обычный блок: на `legend − border` шире, чем в Edge); (3) `float` у legend и legend внутри `display: inline-block` fieldset не проверены против Edge; (4) переполнение: legend шире content box при `text-align: right` в Edge встаёт на `margin-start + margin-end` от края (проба `margin: 0 10px; width: 300px` → x=28), у нас на `margin-start`; (5) `dir`-атрибут не маппится в `direction` во всём движке (WPT `legend-align` `fieldset[dir=rtl] legend` ×2) и `display: table` на обычных элементах раскладывается как блок высотой 0 шириной в контейнер (поэтому legend с `display: table` блокифицируется — `legend-display` ждёт `table`-раскладку); (6) `border-radius` у groove-рамки не скругляется вовсе (CPU-растеризатор рисует groove как прямоугольные полосы — и у обычного `div`), у fieldset с legend это заметно сильнее. Критерий готовности: проба multicol-fieldset с legend совпадает с Edge, графтест с multicol-fieldset"
+     "note": "Остаток FIELDSET-LEGEND-3: (1) flex/grid-`<fieldset>` в вертикальном `writing-mode`: `place_rendered_legend_vertical` не подключён к `flex_trampoline`/`grid_vertical` (legend остаётся обычным ребёнком, рамка целая) (там `place_rendered_legend_vertical` не подключён к `flex_trampoline`/`grid_vertical`); (2) UA-значения fieldset (`padding-block`, `min-inline-size`) раскладываются по `writing-mode`, унаследованному к UA-фазе, — собственный `writing-mode` fieldset из автор-CSS приходит позже, и UA ставит горизонтальные стороны (после раскладки у вертикального fieldset min-content считает legend как обычный блок: на `legend − border` шире, чем в Edge); (3) `float` у legend и legend внутри `display: inline-block` fieldset не проверены против Edge; (4) переполнение: legend шире content box при `text-align: right` в Edge встаёт на `margin-start + margin-end` от края (проба `margin: 0 10px; width: 300px` → x=28), у нас на `margin-start`; (5) `dir`-атрибут не маппится в `direction` во всём движке (WPT `legend-align` `fieldset[dir=rtl] legend` ×2) и `display: table` на обычных элементах раскладывается как блок высотой 0 шириной в контейнер (поэтому legend с `display: table` блокифицируется — `legend-display` ждёт `table`-раскладку); (6) `border-radius` у groove-рамки не скругляется вовсе (CPU-растеризатор рисует groove как прямоугольные полосы — и у обычного `div`), у fieldset с legend это заметно сильнее. Критерий готовности: проба вертикального flex/grid-fieldset с legend совпадает с Edge, графтест с ним"
     },
     {
      "id": "GRID-VWM-2",
@@ -9419,9 +9426,9 @@
       {
        "id": "TEXTQ-5",
        "title": "Шейпинг в измерении ширины текста",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. Измеритель ширин раскладки через шейпер, ширина run-а = нарисованной."
+       "note": "Бриф — [docs/tasks/TEXTQ-5.md](docs/tasks/TEXTQ-5.md). Зависит от TEXTQ-4. **Влито 2026-10-24 (p1-textq-5):** `TextMeasurer::shaped_width` (+ `ShapeParams`) — ширина слова/run-а считается тем же `active_text_shaper()` с теми же фичами (`shaping_features`, общая с GPU/CPU) и осями (`style::text_variation_axes`, общая с `DrawText`), что и отрисовка; реализации `FontMeasurer`/`MultiFontMeasurer` режут run на под-run-ы по face-у каскада (`unicode-range`, `size-adjust`), посимвольная сумма — запасной путь (face >8 МиБ, шейпер отказал, моки). Кэш — потоковый, по `(отпечаток face, текст, фичи, оси)` в единицах шрифта. Табуляция рвёт run (как в отрисовке). CPU-растеризатор приведён к правилу wgpu: `letter-spacing` на кластер, `liga`/`clig` выключены. **Замер** (`lumen-bench`, `samples/heavy.html`, 2982 узла, layout med, 5 пар чередованием, `LUMEN_NO_TEXT_SHAPING=1` против шейпера): 47,1 → 48,9 мс (+3,8 %, в шуме машины). Шейпинг через пробел не учитывается (слово меряется между break opportunities). Рычаг `LUMEN_NO_TEXT_SHAPING=1` откатывает и измерение. Сдвинулись 6 CPU-эталонов, 4 дампа `dump-golden`; diff против Edge не хуже (151: 6,21→6,06 %, 27: 0,263→0,258 %)."
       },
       {
        "id": "TEXTQ-6",
@@ -10520,27 +10527,6 @@
    "status": "open",
    "title": "**Срез 1 влит (CQ-SCROLL-STATE, 2026-10-21):** `container-type: scroll-state`, разбор и оценка `scroll-state()` (`scrollable` — по геометрии), трёхзначные услов…",
    "component": "css-parser/layout (`container-type: scroll-state`, `@container scroll-state(…)`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1513": {
-   "status": "open",
-   "title": "`@import` применяется в любой позиции листа, хотя после любого правила, кроме `@charset`/`@layer`-оператора/`@import`, он недопустим. CSS Cascade 4 §2.2 (`@impo…",
-   "component": "css-parser (`crates/engine/css-parser/src/parser.rs` — разбор `@import` и `@namespace` в листе)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1514": {
-   "status": "open",
-   "title": "`getComputedStyle()` не отдаёт `container-type`, `container-name`, `container`; сериализация shorthand `container` не каноническая. У элемента с `style=\"contain…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — `container-type`, `container-name`, `container`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1515": {
-   "status": "open",
-   "title": "`getComputedStyle()` не отдаёт `shape-outside`, `shape-margin`, `shape-image-threshold`, `text-decoration` (шорткод), `text-decoration-skip-ink`, `text-decorati…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
    "date": null,
    "debtor": false
   },
@@ -20923,6 +20909,27 @@
    "title": "`ViewTransition` не был интерфейсом (нет глобалов `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent`, `types…",
    "component": "js/css-parser/layout (`crates/js/src/view_transitions.rs`, `crates/engine/layout/src/style/apply/motion.rs`)",
    "date": "2026-10-23",
+   "debtor": false
+  },
+  "BUG-1513": {
+   "status": "fixed",
+   "title": "`@import` применяется в любой позиции листа, хотя после любого правила, кроме `@charset`/`@layer`-оператора/`@import`, он недопустим. CSS Cascade 4 §2.2 (`@impo…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs` — разбор `@import` и `@namespace` в листе)",
+   "date": "2026-10-24",
+   "debtor": false
+  },
+  "BUG-1514": {
+   "status": "fixed",
+   "title": "`getComputedStyle()` не отдаёт `container-type`, `container-name`, `container`; сериализация shorthand `container` не каноническая. У элемента с `style=\"contain…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — `container-type`, `container-name`, `container`)",
+   "date": "2026-10-24",
+   "debtor": false
+  },
+  "BUG-1515": {
+   "status": "fixed",
+   "title": "`getComputedStyle()` не отдаёт `shape-outside`, `shape-margin`, `shape-image-threshold`, `text-decoration` (шорткод), `text-decoration-skip-ink`, `text-decorati…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": "2026-10-24",
    "debtor": false
   }
  },

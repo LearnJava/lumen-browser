@@ -96,8 +96,19 @@ pub(in crate::style) fn parse_text_decoration_shorthand_q(val: &str, is_quirks: 
                 any_recognized = true;
             }
             "blink" => {
-                // CSS2 deprecated; токен поглощаем, чтобы он не попал в
-                // color-парсер.
+                // CSS2 deprecated: хранится ради getComputedStyle, не рисуется.
+                out_line.blink = true;
+                any_line = true;
+                any_recognized = true;
+            }
+            "spelling-error" => {
+                out_line.spelling_error = true;
+                any_line = true;
+                any_recognized = true;
+            }
+            "grammar-error" => {
+                out_line.grammar_error = true;
+                any_line = true;
                 any_recognized = true;
             }
             "currentcolor" => {
@@ -157,14 +168,26 @@ pub(in crate::style) fn parse_text_decoration_thickness(
         "from-font" => return Some(TextDecorationThickness::FromFont),
         _ => {}
     }
-    if let Some(pct_str) = trimmed.strip_suffix('%')
-        && let Ok(n) = pct_str.trim().parse::<f32>()
-    {
-        return Some(TextDecorationThickness::Percentage(n / 100.0));
-    }
-    let len = parse_length(trimmed)?;
-    let px = len.resolve(em_basis, None, viewport)?;
-    Some(TextDecorationThickness::Length(px))
+    let (px, frac) = parse_length_percentage_parts(trimmed, em_basis, viewport)?;
+    Some(if frac == 0.0 {
+        TextDecorationThickness::Length(px)
+    } else if px == 0.0 {
+        TextDecorationThickness::Percentage(frac)
+    } else {
+        TextDecorationThickness::LengthPercentage { px, frac }
+    })
+}
+
+/// `<length-percentage>` (включая `calc()`) как пара «абсолют px + доля процента»: `calc(10% - 1em)`
+/// при `em_basis = 20` → `(-20, 0.1)`. Процент линеен по базе, поэтому часть-процент — разность
+/// резолвов с базами 1 и 0. `None` — не `<length-percentage>`.
+pub(in crate::style) fn parse_length_percentage_parts(val: &str, em_basis: f32, viewport: Size) -> Option<(f32, f32)> {
+    let len = parse_length(val.trim())?;
+    let base = len.resolve(em_basis, Some(0.0), viewport)?;
+    let unit = len.resolve(em_basis, Some(1.0), viewport).unwrap_or(base);
+    let frac = unit - base;
+    // Шум f32 от вычитания не должен превращать чистую длину в «длину с процентом».
+    Some((base, if frac.abs() < 1e-6 { 0.0 } else { frac }))
 }
 
 /// WHATWG Compat §3.2 — `-webkit-text-stroke-width: <'border-width'>`:
@@ -291,6 +314,9 @@ pub(in crate::style) fn parse_text_emphasis_style(val: &str) -> Option<TextEmpha
 /// `[ over | under ] && [ right | left ]?`. Spec: vertical axis (over/under)
 /// обязателен, horizontal axis (right/left) опционален с default `right`.
 pub(in crate::style) fn parse_text_emphasis_position(val: &str) -> Option<TextEmphasisPosition> {
+    if val.trim().eq_ignore_ascii_case("auto") {
+        return Some(TextEmphasisPosition::Auto);
+    }
     let mut over: Option<bool> = None;
     let mut right: Option<bool> = None;
     for tok in val.split_whitespace() {
