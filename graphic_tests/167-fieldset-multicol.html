@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<!-- HTML Rendering §15.3.13 — `<fieldset>` с `column-count` / `column-width`: legend стоит на границе,
+     колонки строятся в анонимном контейнере содержимого ниже него (legend не попадает в колонку).
+     A: 2 колонки, legend выше рамки, баланс · B: 2 колонки, legend ниже 24px-рамки ·
+     C: явная высота + column-fill: auto (колонка = высота − legend) · D: column-width + column-gap
+     + column-rule · E: 3 колонки без явной высоты (высота по содержимому + legend) ·
+     F: forced break + legend margin-left:auto. Только цветные боксы, без текста. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; }
+  .s { margin: 0; padding: 12px; border: solid 8px #2b6cb0; width: 280px; height: 200px; box-sizing: border-box; }
+  .s legend { width: 90px; height: 26px; padding: 0; background: #ed8936; }
+  .blk { background: #a8c8ec; }
+  .blk2 { background: #8ab4e0; }
+
+  .a .s { column-count: 2; column-gap: 10px; }
+  .a .blk { height: 40px; margin-bottom: 8px; }
+  .a .blk2 { height: 40px; margin-bottom: 8px; }
+
+  .b .s { column-count: 2; column-gap: 10px; border-width: 24px; }
+  .b .s legend { height: 12px; width: 70px; }
+  .b .blk { height: 40px; }
+  .b .blk2 { height: 40px; }
+
+  .c .s { column-count: 2; column-gap: 12px; column-fill: auto; }
+  .c .blk { height: 50px; }
+  .c .blk2 { height: 50px; }
+
+  .d .s { column-width: 70px; column-gap: 14px; column-rule: 2px solid #c53030; }
+  .d .blk, .d .blk2 { height: 30px; }
+
+  .e .s { column-count: 3; column-gap: 8px; height: auto; }
+  .e .blk, .e .blk2 { height: 36px; }
+
+  .f .s { column-count: 2; column-gap: 10px; }
+  .f .s legend { margin-left: auto; }
+  .f .blk { height: 30px; }
+  .f .blk2 { height: 30px; break-before: column; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell a"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell b"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell c"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk"></div></fieldset></div>
+  <div class="cell d"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk"></div><div class="blk2"></div><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell e"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div><div class="blk"></div><div class="blk2"></div><div class="blk"></div><div class="blk2"></div></fieldset></div>
+  <div class="cell f"><fieldset class="s"><legend></legend><div class="blk"></div><div class="blk2"></div></fieldset></div>
+</div>
+</body>
+</html>

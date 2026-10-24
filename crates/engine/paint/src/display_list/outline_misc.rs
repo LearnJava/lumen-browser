@@ -114,6 +114,10 @@ pub(crate) fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         - s.padding_top.px()
         - s.padding_bottom.px())
     .max(0.0);
+    // HTML Rendering §15.3.13: колонки multicol-fieldset начинаются ниже поставленного legend.
+    let legend_offset = b.fieldset_legend.filter(|l| l.placed).map_or(0.0, |l| l.content_offset);
+    let content_y = content_y + legend_offset;
+    let content_h = (content_h - legend_offset).max(0.0);
     if content_w <= 0.0 || content_h <= 0.0 {
         return;
     }

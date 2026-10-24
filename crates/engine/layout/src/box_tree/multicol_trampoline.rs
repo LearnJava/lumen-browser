@@ -1591,8 +1591,10 @@ fn finish_frame(
         }
     }
     frame.b.children = out;
+    super::fieldset::resync_legend_idx(&mut frame.b);
 
-    let content_height = frame.init.cur_y - frame.init.content_y;
+    // Колонки начались ниже legend (`content_y` уже сдвинут), а высота fieldset включает этот сдвиг.
+    let content_height = frame.init.cur_y - frame.init.content_y + super::fieldset::placed_content_offset(&frame.b);
     finalize_block_height(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.available_height, viewport,
         frame.init.padding_top, frame.init.padding_bottom, frame.init.size_contained,

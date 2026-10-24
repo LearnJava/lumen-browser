@@ -88,6 +88,15 @@ pub(super) fn placed_content_offset(b: &LayoutBox) -> f32 {
     b.fieldset_legend.filter(|l| l.placed).map_or(0.0, |l| l.content_offset)
 }
 
+/// Контейнер пересобрал `children` (multicol режет и переставляет детей): находит legend по узлу и
+/// обновляет `idx`, по которому его читают baseline и рамка. Legend не режется и не клонируется.
+pub(super) fn resync_legend_idx(b: &mut LayoutBox) {
+    let Some(fl) = b.fieldset_legend else { return };
+    if let Some(idx) = b.children.iter().position(|c| c.node == fl.node) {
+        b.fieldset_legend = Some(FieldsetLegend { idx, ..fl });
+    }
+}
+
 /// Раскладывает rendered legend `b` на верхней границе и возвращает, на сколько содержимое
 /// fieldset опускается ниже `border-top + padding-top` (`max(legend − border-top, 0)`).
 ///
