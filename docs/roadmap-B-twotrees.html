@@ -75,8 +75,8 @@
 {
  "generated": "2026-10-24",
  "counts": {
-  "open": 293,
-  "fixed": 1340,
+  "open": 290,
+  "fixed": 1343,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -10558,27 +10558,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1513": {
-   "status": "open",
-   "title": "`@import` применяется в любой позиции листа, хотя после любого правила, кроме `@charset`/`@layer`-оператора/`@import`, он недопустим. CSS Cascade 4 §2.2 (`@impo…",
-   "component": "css-parser (`crates/engine/css-parser/src/parser.rs` — разбор `@import` и `@namespace` в листе)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1514": {
-   "status": "open",
-   "title": "`getComputedStyle()` не отдаёт `container-type`, `container-name`, `container`; сериализация shorthand `container` не каноническая. У элемента с `style=\"contain…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — `container-type`, `container-name`, `container`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1515": {
-   "status": "open",
-   "title": "`getComputedStyle()` не отдаёт `shape-outside`, `shape-margin`, `shape-image-threshold`, `text-decoration` (шорткод), `text-decoration-skip-ink`, `text-decorati…",
-   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1516": {
    "status": "open",
    "title": "CSSOM для `shape-outside`/`shape-margin`/`shape-image-threshold`, `clip-path: <basic-shape>` и свойств Text Decoration: `element.style` принимает недопустимое и…",
@@ -20965,6 +20944,27 @@
    "title": "`ViewTransition` не был интерфейсом (нет глобалов `ViewTransition`, `ViewTransitionTypeSet`, `CSSViewTransitionRule`, `PageRevealEvent`, `PageSwapEvent`, `types…",
    "component": "js/css-parser/layout (`crates/js/src/view_transitions.rs`, `crates/engine/layout/src/style/apply/motion.rs`)",
    "date": "2026-10-23",
+   "debtor": false
+  },
+  "BUG-1513": {
+   "status": "fixed",
+   "title": "`@import` применяется в любой позиции листа, хотя после любого правила, кроме `@charset`/`@layer`-оператора/`@import`, он недопустим. CSS Cascade 4 §2.2 (`@impo…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs` — разбор `@import` и `@namespace` в листе)",
+   "date": "2026-10-24",
+   "debtor": false
+  },
+  "BUG-1514": {
+   "status": "fixed",
+   "title": "`getComputedStyle()` не отдаёт `container-type`, `container-name`, `container`; сериализация shorthand `container` не каноническая. У элемента с `style=\"contain…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map` — `container-type`, `container-name`, `container`)",
+   "date": "2026-10-24",
+   "debtor": false
+  },
+  "BUG-1515": {
+   "status": "fixed",
+   "title": "`getComputedStyle()` не отдаёт `shape-outside`, `shape-margin`, `shape-image-threshold`, `text-decoration` (шорткод), `text-decoration-skip-ink`, `text-decorati…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": "2026-10-24",
    "debtor": false
   }
  },

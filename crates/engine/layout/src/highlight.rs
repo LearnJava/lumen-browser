@@ -88,6 +88,7 @@ impl HighlightLook {
         s.text_decoration_skip_ink = h.text_decoration_skip_ink;
         s.text_underline_position = h.text_underline_position;
         s.text_underline_offset = h.text_underline_offset;
+        s.text_underline_offset_pct = h.text_underline_offset_pct;
         s.text_stroke_width = h.text_stroke_width;
         s.text_stroke_color = h.text_stroke_color;
         s

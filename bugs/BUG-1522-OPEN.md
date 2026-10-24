@@ -32,3 +32,5 @@ WPT-RUN-14 срез 23: `text-underline-offset-calc.html`, `-percentage.html`, `
 ## Как проверить
 
 Таблица выше; `css/css-text-decor/text-underline-offset-percentage.html`, `text-underline-offset-calc.html`.
+
+2026-10-24 (P3, при BUG-1515): разбор и вычисленное значение сделаны — `text_underline_offset` (px) + `text_underline_offset_pct` (доля `%`) резолвятся от `font-size` элемента через `parse_length_percentage_parts`, `calc(…)` с процентом сохраняется, `getComputedStyle` отдаёт `40px` / `2px` / `200%` / `calc(-50% + 32px)` (WPT `text-underline-offset-computed` — 0 расхождений). Остаток: рисование — `%` от `1em` и `from-font` в `push_text_decoration` (сейчас смещение читает только `svg_text_decoration.rs`); reftest `text-underline-offset-{calc,percentage,variable,zero-position}` не перепроверены.

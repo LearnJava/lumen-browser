@@ -174,7 +174,7 @@ use super::*;
         assert!(matches!(p.style.text_emphasis_color, CssColor::CurrentColor), "initial = currentColor");
         assert_eq!(
             p.style.text_emphasis_position,
-            TextEmphasisPosition::OverRight
+            TextEmphasisPosition::Auto
         );
     }
 
@@ -291,7 +291,7 @@ use super::*;
         let p4 = first_element_child(&r4);
         assert_eq!(
             p4.style.text_emphasis_position,
-            TextEmphasisPosition::OverRight,
+            TextEmphasisPosition::Auto,
             "invalid declaration ignored, initial"
         );
     }
