@@ -255,6 +255,7 @@ mod table_trampoline;
 mod table_valign;
 mod table_vertical;
 mod multicol_trampoline;
+mod multicol_vertical;
 mod vertical_trampoline;
 mod vertical_row;
 mod vertical_float;

@@ -147,6 +147,11 @@ pub(crate) fn max_content_outer_height(
             if is_vertical_mode(b) && is_grid_container(b) {
                 grid_col_intrinsic_sum(b, viewport, true, &|c| max_content_outer_height(c, measurer, viewport))
                     .unwrap_or_else(longest)
+            } else if let (true, Some(n)) = (is_vertical_mode(b), s.column_count.filter(|n| *n > 1)) {
+                // Multicol L1 §3.4 in a vertical mode: the columns run along y, so the max-content
+                // inline size is `column-count` columns of the longest item plus the gaps.
+                let gap = s.multicol_column_gap(em, 0.0, viewport);
+                longest() * n as f32 + gap * (n - 1) as f32
             } else {
                 longest()
             }

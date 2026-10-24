@@ -469,6 +469,7 @@ mod multicol_mixed_break;
 mod multicol_wrap_margin;
 mod multicol_orphans;
 mod multicol_flex;
+mod multicol_vertical;
 mod multicol_grid_flow;
 mod multicol_table;
 mod multicol_oof;
