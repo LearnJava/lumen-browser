@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-10-24",
+ "generated": "2026-10-26",
  "counts": {
-  "open": 290,
-  "fixed": 1343,
+  "open": 299,
+  "fixed": 1347,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1636,
+ "total_bugs": 1649,
  "phases": [
   {
    "id": "P0",
@@ -691,10 +691,19 @@
      "tasks": [
       {
        "id": "GRID-LANES-2",
-       "title": "GRID-LANES-2: полосы-строки, dense, subgrid",
-       "status": "planned",
+       "title": "auto-fit, …)` с дорожками по содержимому: число повторов по самому большому min-/max-вкладу элемента на полосу (у полос-строк высота — реальной раскладкой копии элемента), `minmax()` с определённым максимумом считается по нему, `fit-content()` — по пределу; повтор с содержимым рядом с не-`<fixed-size>` дорожками недействителен (ось без шаблона). Побочно: max-content текста не считает пробелы по краям строки (блок с текстом, обрамлённым переводами строк и отступами, ровно в ширину самого текста) — общая поправка для shrink-to-fit/flex/grid. Остаток по подкаталогам не зелёных: subgrid 94, track-sizing 51 (`aspect-ratio`+min-height в авто-повторе, auto-fit с явными позициями за явной сеткой, равные дорожки авто-повтора со спаннерами), alignment 31 (fill-reverse/track-reverse с align-content/justify-content), intrinsic-sizing 42, item-placement 19, baseline 25, tentative 22, items 13, grid-placement 9, order 6. Оформлено задачей GRID-LANES-3. Критерий ROADMAP выполнен. Гейт: clippy -p lumen-layout, cargo test -p lumen-layout --lib (5830), graphic_tests без изменений (8 падений те же), dump_golden 12/12. GRID-LANES-2: полосы-строки, dense, subgrid",
+       "status": "done",
        "size": "L",
-       "note": "Остаток GRID-LANES (`tests/wpt/css/css-grid/grid-lanes`, 882 id: 222 идентичны, 546 `thick`). По убыванию отдачи: (1) полосы-строки — `grid-lanes-direction: row`, раскладка только по `grid-template-rows` (ось потока — inline, полосы — строки; ~260 id с `row` в имени, в `build_grid_init` ветка `lane_items` включается только при `LanesAxis::Column`, `lanes_axis` уже умеет `Row`); (2) `grid-lanes-pack: dense` и `grid-auto-flow: dense` в полосах (`item-placement/dense-packing`, 46 id: элемент ставится в самую раннюю щель полосы, `LanesState.ends` заменить интервалами занятости; тест `column-dense-packing-004` — щель берётся только при том же размере дорожки); (3) `fill-reverse`, шорткат `grid-lanes` (`grid-lanes: <template> / <flow-tolerance>`), `repeat(auto-fill|auto-fit)` и `fit-content()` в полосах (`track-sizing`, 113 id; 36 из них — testharness `no-match-ref`); (4) `subgrid` в grid-lanes (135 id), baseline-выравнивание (32), `order` (11), ортогональные элементы `column-negative-margin-003/004`. Проверка — `python .tmp/lanes_all.py`-подобный прогон `tests/wpt/reftest_pixdiff.py` по подкаталогам, viewport 800×600. Критерий: зелёных ref-тестов в `grid-lanes` ≥ 450"
+       "note": "Остаток GRID-LANES (`tests/wpt/css/css-grid/grid-lanes`, 882 id: 222 идентичны, 546 `thick`). По убыванию отдачи: (1) полосы-строки — `grid-lanes-direction: row`, раскладка только по `grid-template-rows` (ось потока — inline, полосы — строки; ~260 id с `row` в имени, в `build_grid_init` ветка `lane_items` включается только при `LanesAxis::Column`, `lanes_axis` уже умеет `Row`); (2) `grid-lanes-pack: dense` и `grid-auto-flow: dense` в полосах (`item-placement/dense-packing`, 46 id: элемент ставится в самую раннюю щель полосы, `LanesState.ends` заменить интервалами занятости; тест `column-dense-packing-004` — щель берётся только при том же размере дорожки); (3) `fill-reverse`, шорткат `grid-lanes` (`grid-lanes: <template> / <flow-tolerance>`), `repeat(auto-fill|auto-fit)` и `fit-content()` в полосах (`track-sizing`, 113 id; 36 из них — testharness `no-match-ref`); (4) `subgrid` в grid-lanes (135 id), baseline-выравнивание (32), `order` (11), ортогональные элементы `column-negative-margin-003/004`. Проверка — `python .tmp/lanes_all.py`-подобный прогон `tests/wpt/reftest_pixdiff.py` по подкаталогам, viewport 800×600. Критерий: зелёных ref-тестов в `grid-lanes` ≥ 450 | Сделано (2026-10-26, ветка `p1-grid-lanes-2`): замер `css/css-grid/grid-lanes` (882 id) — 456 идентичны эталону (было 222; ≥450 выполнено). Полосы-строки (`grid-lanes-direction: row`, ось потока inline: ширина элемента известна до замера, смещения из потока, внутренняя ширина — конец потока); плотная упаковка (`grid-lanes-pack: dense`, `grid-auto-flow: dense` без оси — окно с тем же числом и суммарным размером полос); `fill-reverse` (отражение позиций в `total`); область выравнивания по оси потока (`align-*`/`justify-*`: stretch/center/end) тянется до следующего элемента полосы (минус промежуток), у последнего — до размера контейнера; `repeat(auto-fill",
+       "tasks": [
+        {
+         "id": "GRID-LANES-3",
+         "title": "GRID-LANES-3: subgrid, intrinsic-sizing, остаток track-sizing",
+         "status": "planned",
+         "size": "L",
+         "note": "Остаток GRID-LANES-2 (`tests/wpt/css/css-grid/grid-lanes`, 882 id: 456 идентичны, 320 `thick`). По убыванию отдачи: (1) `subgrid` в grid-lanes (94 thick); (2) intrinsic-sizing (42: `grid-lanes-intrinsic-sizing-rows/cols`, `contain-intrinsic-size`); (3) track-sizing (51): равные дорожки авто-повтора со спаннерами (`column-auto-repeat-auto-003`: дорожки должны получиться по 60, получаются неравными), auto-fit с явными позициями за явной сеткой (`column-auto-repeat-021/022`), `aspect-ratio` + min-height в авто-повторе (`*-auto-006/007/008`); (4) alignment (31): `fill-reverse`/`track-reverse` + `align-content`/`justify-content`, в т.ч. при неопределённом размере; (5) baseline (25), item-placement (19: `row-dense-packing`, `negative-margin`), tentative (22), items (13), grid-placement (9), order (6). Проверка — прогон `tests/wpt/reftest_pixdiff.py`-подобным скриптом по подкаталогам, viewport 800×600. Критерий: зелёных ref-тестов в `grid-lanes` ≥ 540"
+        }
+       ]
       }
      ]
     },
@@ -751,7 +760,7 @@
     {
      "id": "HIGHLIGHT-PAINT",
      "title": "HIGHLIGHT-PAINT: выделение и highlight-псевдоэлементы",
-     "status": "done",
+     "status": "active",
      "size": "L",
      "note": "**Сделано (2026-10-21, ветка `p1-highlight-paint`):** `::selection`, `::highlight(name)` и каскад highlight-псевдоэлементов в headless-растре. `crates/engine/layout/src/highlight.rs`: `resolve_highlights` режет текстовые фрагменты по границам диапазонов (ширина куска — по `TextMeasurer` layout-а, смещения DOM→фрагмент с учётом схлопнутых пробелов) и кладёт на куски стек `HighlightLook`-ов по слоям; каскад идёт по цепочке предков (highlight inheritance, Pseudo 4 §3.3), UA-фон только если автор не стилизовал псевдоэлемент (§3.2); `PseudoElementKind::{SpellingError, GrammarError}` добавлены, `::highlight(name)` матчится по имени; `getComputedStyle(el, '::selection'|'::target-text'|'::spelling-error'|'::grammar-error'|'::highlight(x)')` считается на лету (JS-native `highlight_pseudo_style`), плохо сформированная строка отдаёт пустой стиль. `crates/engine/paint/src/display_list/highlight_paint.rs`: `with_highlights`; порядок — тень оригинала одним прогоном, фоны подсветки, глифы (обычные куски; у подсвеченных — декорации оригинала, тени подсветки, её глифы, декорации); новых `DisplayCommand` нет, оба растра работают без правок. `--screenshot`/`--dump-display-list` читают выделение документа и `CSS.highlights`. Старый `SelectionHighlight`/параметр `sel` удалены. Тесты: 13 в `layout/src/highlight/tests.rs`, 6 в `paint/.../tests/highlight_overlay.rs` (две пиксель-в-пиксель копии css-pseudo `active-selection-011` и `highlight-painting-001` с контролем «без выделения пиксели другие»). **Измерено на `lumen.exe` (`--screenshot`, 800×600, рецепт `--ahem`, до/после, срез css-pseudo + css-highlight-api по именам `selection|highlight|spelling|grammar|target-text`, 212 reftest):** совпадают с эталоном 55 → 73. Критерий готовности выполнен: `active-selection-011` и `highlight-painting-001` — пиксель-в-пиксель, `highlight-pseudos-computed.html` — все 82 проверки цикла теста (включая плохо сформированные строки) на реальном бинаре. Ещё 8 тестов были «зелёными» только потому, что ни тест, ни эталон подсветки не рисовали, а теперь краснеют честно: `custom-highlight-font-metrics-003`, `custom-highlight-painting-below-grammar`, `highlight-cascade-008`, `highlight-currentcolor-root-{explicit,implicit}-default-001`, `highlight-styling-001`, `selection-link-001/002` (`:visited::selection`). **Не сделано → HIGHLIGHT-PAINT-2:** живое окно (оверлей оболочки — только фон выделения), `::target-text` и ошибки орфографии в растре, вертикальный текст и SVG-текст, разбор оставшихся `thick`.",
      "bugs": [
@@ -760,10 +769,20 @@
      "tasks": [
       {
        "id": "HIGHLIGHT-PAINT-2",
-       "title": "HIGHLIGHT-PAINT-2: живое окно и остаток highlight-псевдоэлементов",
+       "title": "HIGHLIGHT-PAINT-2: живое окно — `::selection` целиком",
+       "status": "done",
+       "size": "M",
+       "note": "**Сделано (2026-10-26, ветка `p1-highlight-paint-2`, срез 1 — живое окно):** выделение документа в окне красится правилами `::selection` целиком (`color`, `text-shadow`, декорации, не только фон): `Lumen::doc_selection_page` (`crates/shell/src/lumen/doc_select.rs`) пересобирает страницу из `layout_box` через `page_highlights` + `paint_ordered_in_highlighted`, вклеивает фреймы (`splice_frame_content`) и кэширует по `(display_list_epoch, диапазон, вьюпорт, тема)`; `try_lock` мьютекса документа из THREAD-12 сохранён. Старый оверлей из прямоугольников (`build_page_with_selection_highlight`) удалён. Проверено в `--maximized` окне через `--mcp-live-port` + gdigrab: `::selection{background; color; text-shadow}` и `p.u::selection`. Остаток — HIGHLIGHT-PAINT-3.",
+       "bugs": [
+        "BUG-1457"
+       ]
+      },
+      {
+       "id": "HIGHLIGHT-PAINT-3",
+       "title": "HIGHLIGHT-PAINT-3: остаток highlight-псевдоэлементов",
        "status": "planned",
        "size": "M",
-       "note": "Остаток HIGHLIGHT-PAINT. (1) Разобрать оставшиеся `thick` (138 из 212 в срезе HIGHLIGHT-PAINT; рецепт — `tests/wpt/reftest_pixdiff.py --ahem --viewport 800x600`): одинаковые 257 px у ~15 `custom-highlight-painting-*` — не подсветка, а расхождение метрик layout и растра на шрифте не Ahem (куски подсветки стоят по `TextMeasurer`, слитый текст рисуется одним прогоном по advance растра; чинить в выборе шрифта, а не здесь); `:visited::selection` (`selection-link-*`); `currentcolor` у корня (`highlight-currentcolor-root-*`); `highlight-styling-001`; `::target-text` и `::spelling-error` в растре; `highlight-painting-002..004`, `active-selection-014/031/063`. (2) Живое окно: `Lumen::doc_selection_overlay`/`build_page_with_selection_highlight` (`crates/shell/src/lumen/doc_select.rs`, `app/window_event/redraw_requested.rs`) красят только фон — перевести на `lumen_layout::resolve_highlights` + `lumen_paint::with_highlights` (`display_list_metrics::page_highlights`/`paint_ordered_in_highlighted` уже есть): страница с выделением пересобирается из `layout_box` и кэшируется по `(display_list_epoch, диапазон)`, `anim_dl`/`splice_frame_content`/find-подсветка не должны сломаться; `::highlight()` и `::target-text` в окне — тем же путём. (3) `::spelling-error`/`::grammar-error` — UA-подчёркивание-волна (сейчас только стиль автора), `Highlight.type`. (4) вертикальные режимы письма (`emit_inline_run_vertical`) и SVG-текст игнорируют highlights. (5) `highlight-z-index`-подобная раскладка слоёв сверх фиксированного порядка. Критерий готовности: измерение (1) без регрессий, живое окно показывает `::selection{color; text-shadow}` (`--screenshot` живого окна через MCP) и `./graphic_tests` зелёные.",
+       "note": "Остаток HIGHLIGHT-PAINT-2. (1) Разобрать оставшиеся `thick` (138 из 212 в срезе HIGHLIGHT-PAINT; рецепт — `tests/wpt/reftest_pixdiff.py --ahem --viewport 800x600`): одинаковые 257 px у ~15 `custom-highlight-painting-*` — не подсветка, а расхождение метрик layout и растра на шрифте не Ahem (куски подсветки стоят по `TextMeasurer`, слитый текст рисуется одним прогоном по advance растра; чинить в выборе шрифта, а не здесь); `:visited::selection` (`selection-link-*`); `currentcolor` у корня (`highlight-currentcolor-root-*`); `highlight-styling-001`; `::target-text` и `::spelling-error` в растре; `highlight-painting-002..004`, `active-selection-014/031/063`. (2) Живое окно: `::highlight()` (в окне нет JS-контекста UI-потока — `CSS.highlights` читать через `cascade_feed`/поток движка) и `::target-text` (сейчас свой оверлей-фон `find::build_page_with_target_text_highlight`) — тем же путём, что `Lumen::doc_selection_page`; при открытом поиске выделение не рисуется (поиск побеждает) — свести слои. (3) `::spelling-error`/`::grammar-error` — UA-подчёркивание-волна (сейчас только стиль автора), `Highlight.type`. (4) вертикальные режимы письма (`emit_inline_run_vertical`) и SVG-текст игнорируют highlights. (5) `highlight-z-index`-подобная раскладка слоёв сверх фиксированного порядка. Критерий готовности: измерение (1) без регрессий, живое окно показывает `::selection{color; text-shadow}` (`--screenshot` живого окна через MCP) и `./graphic_tests` зелёные.",
        "bugs": [
         "BUG-1457"
        ]
@@ -1045,6 +1064,17 @@
      "note": "Остаток вертикального multicol (`box_tree/multicol_vertical.rs`): (1) `direction: rtl` и `sideways-lr` — inline-ось идёт снизу вверх, карта `to_logical` должна отражать x_t относительно нижнего края контейнера; (2) rendered legend fieldset и `column-height`/`column-wrap` (ряды колонок) — такие контейнеры уходят в прежнюю вертикальную раскладку без колонок; (3) out-of-flow потомки внутри режущегося содержимого (`scan_oof`/`take_oof` не вызываются), abspos-дети контейнера ставятся от начала контент-бокса; (4) вложенный вертикальный multicol не режется колонками родителя (монолитен); `column-width` без `column-count`, min-content и блочный размер (физическая ширина) вертикального multicol в `intrinsic.rs`; (5) flex/grid/table внутри колонок монолитны — нужна карта `subgrid_tracks`/осей flex; (6) повторная раскладка уже разрезанного контейнера дублирует фрагменты — BUG-1699.",
      "bugs": [
       "MULTICOL-VERTICAL"
+     ]
+    },
+    {
+     "id": "NAV-API-2",
+     "title": "NAV-API-2: остаток Navigation API",
+     "status": "planned",
+     "size": "L",
+     "note": "Остаток Navigation API после разведки WPT-NAV-SCOUT (`docs/wpt-vendor-notes/navigation-api.md`, кластеры G–K, потолок ≈56 баллов `navigation-api`). (1) `NavigationActivation` и `navigation.activation` (`navigation-activation/*`, 15 id). (2) Атрибуты `NavigateEvent` для якорей и форм: `navigationType: \"replace\"` на тот же URL, `userInitiated`, `sourceElement`, `downloadRequest`, `formData` (`navigate-event/navigate-anchor-*`, `navigate-form-*`). (3) `focusReset: \"after-transition\"`/`\"manual\"`, `scroll()`, автофокус после перехвата (`focus-reset/*`, `scroll-behavior/*`). (4) `precommitHandler`: `redirect`, отклонение, `traverse`, порядок событий (`precommit-handler/*`). (5) tentative `NavigateEvent.defer()` — по желанию. Баги A–F той же разведки (BUG-1700…1704, BUG-881) чинит P3; задача стартует после BUG-1700 и BUG-1703 — пока страницы крутятся в цикле перезагрузок и `navigate` приходит асинхронно, результат пунктов 1–4 не измерить. Критерий готовности: `navigation-activation/*` зелёные, пункты 2–4 закрыты на `navigate-event/navigate-anchor-*`, `focus-reset/*`, `precommit-handler/*`.",
+     "bugs": [
+      "BUG-1700",
+      "BUG-1703"
      ]
     }
    ],
@@ -10337,13 +10367,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1410": {
-   "status": "open",
-   "title": "`font-weight: 150.25` → computed `400` (ожидается `150.25`), `calc(100 + 200)` → `400` (ожидается `300`), `0`/`1001`/`-1` → `400` (невалидно, декларация должна…",
-   "component": "layout (`style/apply/text.rs`, `style/parse/font_size.rs`; `selector_query.rs`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1411": {
    "status": "open",
    "title": "При `line-height: 20px`: `<div><br></div>` — высота 0 (ожидается 20), `<p>&nbsp;</p>` — 0 (ожидается строка), `<div><br>D</div>` — 20 (ожидается 40), `<div>B<br…",
@@ -10565,27 +10588,6 @@
    "status": "open",
    "title": "`shape-outside: <image>` (`url()`, `linear-gradient()`, `radial-gradient()`) и `shape-image-threshold` не влияют на обтекание. `register_shape_outside` не знает…",
    "component": "layout (`crates/engine/layout/src/box_tree/shapes_floats.rs`, `block_flow_trampoline.rs::wire_shape_outside`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1520": {
-   "status": "open",
-   "title": "`<rt>` не получает UA-значение `font-size: 50%`: аннотация ruby рисуется шрифтом основного текста. У `<rt>` в UA-таблице нет `font-size: 50%` (UA-таблица стилей…",
-   "component": "layout (`crates/engine/layout/src/style/ua.rs` — UA-таблица стилей `<rt>`; `crates/engine/layout/src/ruby.rs`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1521": {
-   "status": "open",
-   "title": "`text-emphasis`: метки равномерно размазаны по ширине фрагмента, в вертикальном `writing-mode` не рисуются, `left`/`right` не учитываются, строка не растёт. `em…",
-   "component": "paint (`crates/engine/paint/src/display_list/text_run.rs::emit_text_emphasis_marks`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1522": {
-   "status": "open",
-   "title": "`text-underline-offset`: `em`, `%` и `calc()` не работают (`1em` считается от 16 px, `25%` и `calc(…)` — как `auto`), `from-font` и `<length-percentage>` в одно…",
-   "component": "css-parser/layout (`crates/engine/layout/src/style/apply/text.rs:902` — `text-underline-offset`: `Option<f32>`, `parse_length_px`)",
    "date": null,
    "debtor": false
   },
@@ -11524,6 +11526,97 @@
    "status": "open",
    "title": "Повторная раскладка уже разрезанного multicol-контейнера (float, перенесённый ниже) принимает фрагменты за элементы и дублирует их: блок, разрезанный на 2 колон…",
    "component": "layout (`box_tree/multicol_trampoline.rs`, `multicol_vertical.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1700": {
+   "status": "open",
+   "title": "`navigation.navigate(\"#frag\")`/`back()`/`traverseTo()` между записями одного документа — полная навигация (повторная загрузка, новый realm): страницы с безуслов…",
+   "component": "shell (`app/about_to_wait.rs`, `lumen/navigation.rs` — разбор `take_nav_updates`, `navigate_to_inner`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1701": {
+   "status": "open",
+   "title": "`iframe.contentWindow.navigation` — объект с полями `Navigation`, но без прототипа: `navigate`/`entries`/`reload` не функции, `currentEntry === undefined`. WPT…",
+   "component": "js/shell (`navigation_api.rs`, `frame_bridge.rs` — `window.navigation` под-документа)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1702": {
+   "status": "open",
+   "title": "`window.open(url, \"name\")` в существующий фрейм возвращает `null`, у cross-origin/`document.domain` фрейма нет `navigation`, `navigate` приходит в окно-источник…",
+   "component": "js/shell (`window.open` в именованный фрейм; фрейм другого origin; `target`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1703": {
+   "status": "open",
+   "title": "`navigate` диспатчится не синхронно внутри `navigation.navigate()`/`back()`/`traverseTo()`, а на следующем ходе оболочки: микрозадача обгоняет событие, `interce…",
+   "component": "js/shell (`navigation_api.rs` `_request`, `lumen/navigation.rs` `navigate_to_inner`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1704": {
+   "status": "open",
+   "title": "`window.stop` не определён (`typeof === \"undefined\"`). WPT `navigation-api` (`navigate-intercept-stop`, `precommitHandler-window-stop-before-commit`): 3 id",
+   "component": "js (`window.stop`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1705": {
+   "status": "open",
+   "title": "`indexedDB`, `IDBKeyRange`, `IDBDatabase` не определены в DedicatedWorker и SharedWorker (в ServiceWorker шим есть). WPT `IndexedDB`: 398 id `*.any.worker.html`…",
+   "component": "js (`worker.rs` `install_worker_scope_globals_v8`, `shared_worker.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1706": {
+   "status": "open",
+   "title": "Слушатель, добавленный внутри обработчика события IndexedDB, получает то же событие (диспетч обходит живой массив, а не копию): `EventWatcher` в `onupgradeneede…",
+   "component": "js (`idb_shim.js`/`dom.rs` — `_idb_dispatch_request`, `_idb_fire_txn`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1707": {
+   "status": "open",
+   "title": "Нет `getAllRecords()`, `getAll()`/`getAllKeys()` не принимают словарь `{query, count, direction}` (`DataError: invalid key or range`). WPT `IndexedDB`: 9 id, 17…",
+   "component": "js (`idb_shim.js` — `IDBObjectStore`/`IDBIndex`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1708": {
+   "status": "open",
+   "title": "`createObjectStore`/`createIndex` принимают невалидный `keyPath` (`'j a'`, `'a..b'`, `'.a'`) вместо `SyntaxError`. WPT `IndexedDB`: 3 id, 26 сабтестов",
+   "component": "js (`idb_shim.js` — проверка `keyPath`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1709": {
+   "status": "open",
+   "title": "Бинарные ключи IndexedDB (`ArrayBuffer`, typed array, `DataView`) не поддерживаются: `DataError: invalid key`; `indexedDB.cmp` с BigInt кидает не `DOMException`…",
+   "component": "js (`idb_shim.js` — `_idb_is_valid_key`, сравнение ключей)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1710": {
+   "status": "open",
+   "title": "`IndexedDB/structured-clone.any*.html` (6 вариантов) и `parallel-cursors-upgrade.any.html` не завершают загрузку: `navigate … DocumentReady` > 30 с, ERROR без с…",
+   "component": "js/shell (причина не локализована, `structured-clone.any.js` ~301–335)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1711": {
+   "status": "open",
+   "title": "`position: relative` на `<span>` с текстом не сдвигает его: `<p>left<span style=\"position:relative;top:30px\">XXXX</span></p>` — `top`/`left` игнорируются (DrawT…",
+   "component": "layout (inline-раскладка, `box_tree/layout_dispatch.rs::relative_offset` не вызывается для текстового inline-бокса)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1712": {
+   "status": "open",
+   "title": "`text-underline-position: from-font` не отличается от `auto`: позиция подчёркивания `0.10·fs`, толщина `from-font` `0.07·fs` — метрики `post.underlinePosition`/…",
+   "component": "paint (`crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration_pass`)",
    "date": null,
    "debtor": false
   },
@@ -20948,6 +21041,34 @@
    "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
    "date": "2026-10-24",
    "debtor": false
+  },
+  "BUG-1520": {
+   "status": "fixed",
+   "title": "`<rt>` не получает UA-значение `font-size: 50%`: аннотация ruby рисуется шрифтом основного текста. У `<rt>` в UA-таблице нет `font-size: 50%` (UA-таблица стилей…",
+   "component": "layout (`crates/engine/layout/src/style/ua.rs` — UA-таблица стилей `<rt>`; `crates/engine/layout/src/ruby.rs`)",
+   "date": "2026-10-24",
+   "debtor": false
+  },
+  "BUG-1521": {
+   "status": "fixed",
+   "title": "`text-emphasis`: метки равномерно размазаны по ширине фрагмента, в вертикальном `writing-mode` не рисуются, `left`/`right` не учитываются, строка не растёт. `em…",
+   "component": "paint (`crates/engine/paint/src/display_list/text_run.rs::emit_text_emphasis_marks`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1522": {
+   "status": "fixed",
+   "title": "`text-underline-offset`: `em`, `%` и `calc()` не работали, явный offset добавлялся к UA-позиции `auto` вместо отсчёта от baseline, underline рисовался поверх гл…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style/apply/text.rs:902` — `text-underline-offset`: `Option<f32>`, `parse_length_px`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1410": {
+   "status": "fixed",
+   "title": "`font-weight: 150.25` → computed `400` (ожидается `150.25`), `calc(100 + 200)` → `400` (ожидается `300`), `0`/`1001`/`-1` → `400` (невалидно, декларация должна…",
+   "component": "layout (`style/apply/text.rs`, `style/parse/font_size.rs`; `selector_query.rs`)",
+   "date": "2026-10-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -22187,6 +22308,18 @@
   "js (`grep -rn wholeText crates/js/src` — ноль совпадений)": [
    "BUG-1163"
   ],
+  "js (`idb_shim.js` — `IDBObjectStore`/`IDBIndex`)": [
+   "BUG-1707"
+  ],
+  "js (`idb_shim.js` — `_idb_is_valid_key`, сравнение ключей)": [
+   "BUG-1709"
+  ],
+  "js (`idb_shim.js` — проверка `keyPath`)": [
+   "BUG-1708"
+  ],
+  "js (`idb_shim.js`/`dom.rs` — `_idb_dispatch_request`, `_idb_fire_txn`)": [
+   "BUG-1706"
+  ],
   "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
    "BUG-964"
   ],
@@ -22201,6 +22334,12 @@
   ],
   "js (`web_api_shim_tail_b.js::_wa_motion_read` — чтение-время оверлей CSS-переходов и анимаций BUG-1293)": [
    "BUG-1648"
+  ],
+  "js (`window.stop`)": [
+   "BUG-1704"
+  ],
+  "js (`worker.rs` `install_worker_scope_globals_v8`, `shared_worker.rs`)": [
+   "BUG-1705"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -22358,8 +22497,17 @@
   "js/shell (`crates/js/src/v8_runtime/style_flush.rs`, `crates/js/src/v8_runtime/install/dom_core.rs`, `crates/js/src/v8_runtime/install/platform.rs`, `crates/shell/src/persistent_js.rs`)": [
    "BUG-560"
   ],
+  "js/shell (`navigation_api.rs`, `frame_bridge.rs` — `window.navigation` под-документа)": [
+   "BUG-1701"
+  ],
+  "js/shell (`window.open` в именованный фрейм; фрейм другого origin; `target`)": [
+   "BUG-1702"
+  ],
   "js/shell (service worker: `importScripts` base, `[sw …]` идентичность)": [
    "BUG-1226"
+  ],
+  "js/shell (причина не локализована, `structured-clone.any.js` ~301–335)": [
+   "BUG-1710"
   ],
   "js/shell (фокус: «focus fixup» и `:focus` в `--screenshot`)": [
    "BUG-1451"
@@ -23104,6 +23252,9 @@
   "layout (inline-раскладка — перенос строк между атомарными inline-боксами)": [
    "BUG-1284"
   ],
+  "layout (inline-раскладка, `box_tree/layout_dispatch.rs::relative_offset` не вызывается для текстового inline-бокса)": [
+   "BUG-1711"
+  ],
   "layout (замер текста: оценщик раскладки против глифов растра, `--screenshot`)": [
    "BUG-1398"
   ],
@@ -23573,6 +23724,9 @@
   ],
   "paint (`crates/engine/paint/src/display_list/geometry.rs::extend_start_to_paint_area`, `cpu_raster.rs`, `renderer.rs`, `femtovg_backend/image.rs` — сетка плиток `DrawBackgroundImage`)": [
    "BUG-1303"
+  ],
+  "paint (`crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration_pass`)": [
+   "BUG-1712"
   ],
   "paint (`crates/engine/paint/src/display_list/tests/text_and_images.rs:514`)": [
    "BUG-1466"

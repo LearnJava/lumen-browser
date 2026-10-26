@@ -586,14 +586,10 @@ impl Lumen {
                         .unwrap_or(find::TARGET_TEXT_HIGHLIGHT_DEFAULT),
                 );
                 (Some(page), Vec::new())
-            } else if let Some((rects, color)) = self.doc_selection_overlay() {
-                // CSS UI L4 §6.2: mouse/JS page-text selection. Shown only
-                // when no find / `::target-text` highlight is active.
-                let page = crate::lumen::build_page_with_selection_highlight(
-                    &self.display_list,
-                    &rects,
-                    color,
-                );
+            } else if let Some(page) = self.doc_selection_page() {
+                // CSS UI L4 §6.2: mouse/JS page-text selection, painted with its
+                // `::selection` rules. Shown only when no find / `::target-text`
+                // highlight is active.
                 (Some(page), Vec::new())
             } else {
                 (None, Vec::new())

@@ -17,61 +17,15 @@
 //! * `auto`/`text` — plain drag selection.
 
 use crate::*;
-use lumen_core::geom::Rect;
 use lumen_dom::Range;
-use lumen_layout::{Color, SelectScope, TextMeasurer};
-use lumen_paint::{DisplayCommand, DisplayList};
-
-/// Fallback highlight when no `::selection { background-color }` applies —
-/// same colour the form-control selection and `::target-text` default use.
-const SELECTION_FILL_DEFAULT: Color = Color { r: 0x30, g: 0x8a, b: 0xff, a: 110 };
+use lumen_layout::{SelectScope, TextMeasurer};
+use lumen_paint::DisplayList;
 
 /// An armed page-text drag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DocSelectDrag {
     /// `user-select: contain` scope the focus end is clamped into.
     pub(crate) contain: Option<Range>,
-}
-
-/// Inserts one selection `FillRect` per `rects` entry directly before the
-/// `DrawText` the rect belongs to (the last text command on the same line that
-/// starts at or left of the rect), so the highlight sits above the box
-/// backgrounds and below the glyphs — the `::selection` paint order. A rect
-/// with no matching text goes to the front of the list.
-pub(crate) fn build_page_with_selection_highlight(
-    base: &DisplayList,
-    rects: &[Rect],
-    color: Color,
-) -> DisplayList {
-    if rects.is_empty() {
-        return base.clone();
-    }
-    // (insert-before index, rect) for every selection rect.
-    let mut inserts: Vec<(usize, Rect)> = Vec::with_capacity(rects.len());
-    for r in rects {
-        let mut best: Option<(usize, f32)> = None;
-        for (i, cmd) in base.iter().enumerate() {
-            let DisplayCommand::DrawText { rect, .. } = cmd else { continue };
-            if (rect.y - r.y).abs() > 0.5 || rect.x > r.x + 0.5 {
-                continue;
-            }
-            if best.is_none_or(|(_, bx)| rect.x > bx) {
-                best = Some((i, rect.x));
-            }
-        }
-        inserts.push((best.map_or(0, |(i, _)| i), *r));
-    }
-    inserts.sort_by_key(|(i, _)| *i);
-    let mut out: DisplayList = Vec::with_capacity(base.len() + rects.len());
-    let mut next = 0;
-    for (idx, cmd) in base.iter().enumerate() {
-        while next < inserts.len() && inserts[next].0 == idx {
-            out.push(DisplayCommand::FillRect { rect: inserts[next].1, color });
-            next += 1;
-        }
-        out.push(cmd.clone());
-    }
-    out
 }
 
 /// The `(from, to)` char range a double (`clicks == 2`) or triple press selects
@@ -107,12 +61,26 @@ fn with_measurer<R>(f: impl FnOnce(&dyn TextMeasurer) -> R) -> Option<R> {
     Some(f(&m))
 }
 
-/// (идентификатор документа, прямоугольники, цвет).
-type SelectionOverlayCache = Option<(usize, (Vec<Rect>, Color))>;
+/// Страница с выделением: список, собранный с `::selection` поверх текста.
+#[derive(Clone)]
+struct SelectionPage {
+    /// Идентификатор документа (адрес мьютекса).
+    doc_id: usize,
+    /// Версия `display_list`, из которого `layout_box` собран.
+    epoch: u64,
+    range: Range,
+    /// Вьюпорт (биты `w`, `h`) и тема — от них зависят медиа-запросы `::selection`.
+    viewport: (u32, u32),
+    dark_mode: bool,
+    /// `None` — выделение ничего не закрашивает (`user-select: none`, пустые узлы).
+    list: Option<DisplayList>,
+}
 
 thread_local! {
-    /// Последний результат `doc_selection_overlay` с идентификатором документа.
-    static LAST_SELECTION_OVERLAY: std::cell::RefCell<SelectionOverlayCache> =
+    /// Последняя собранная страница с выделением. Пересборка из `layout_box` стоит
+    /// полного `paint_ordered`, поэтому ключ — `(display_list_epoch, диапазон)`; ряд
+    /// кадров, где не менялось ни выделение, ни список, берёт готовый.
+    static LAST_SELECTION_PAGE: std::cell::RefCell<Option<SelectionPage>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -240,10 +208,15 @@ impl Lumen {
         self.request_redraw();
     }
 
-    /// Page-space rectangles of the current document selection and the fill
-    /// colour, `None` when nothing is selected. The colour honours a page
-    /// `::selection { background-color }` rule on the range's start element.
-    pub(crate) fn doc_selection_overlay(&self) -> Option<(Vec<Rect>, Color)> {
+    /// Страница, на которой выделение документа закрашено правилами `::selection`
+    /// (CSS Pseudo-Elements L4 §3.6): `background-color`, `color`, `text-shadow`,
+    /// декорации. `None`, если ничего не выделено — тогда рисуется `display_list`.
+    ///
+    /// Список собирается из `layout_box` через `resolve_highlights` +
+    /// `with_highlights` — тем же путём, что `--screenshot`, — и кэшируется по
+    /// `(display_list_epoch, диапазон)`. Вклейка фреймов повторяется, как в
+    /// [`Self::set_display_list`].
+    pub(crate) fn doc_selection_page(&self) -> Option<DisplayList> {
         let src = self.layout_source.as_ref()?;
         let lb = self.layout_box.as_ref()?;
         // THREAD-12: не ждать мьютекс документа на UI-потоке — пока поток
@@ -254,43 +227,60 @@ impl Lumen {
         let doc = match src.document.try_lock() {
             Ok(g) => g,
             Err(std::sync::TryLockError::WouldBlock) => {
-                return LAST_SELECTION_OVERLAY.with(|c| {
-                    c.borrow().as_ref().filter(|(id, _)| *id == doc_id).map(|(_, v)| v.clone())
+                return LAST_SELECTION_PAGE.with(|c| {
+                    c.borrow().as_ref().filter(|p| p.doc_id == doc_id).and_then(|p| p.list.clone())
                 });
             }
             Err(_) => return None,
         };
-        let result = Self::selection_overlay_locked(self, &doc, src, lb);
-        LAST_SELECTION_OVERLAY.with(|c| *c.borrow_mut() = result.clone().map(|v| (doc_id, v)));
-        result
-    }
-
-    fn selection_overlay_locked(
-        &self,
-        doc: &lumen_dom::Document,
-        src: &LayoutSource,
-        lb: &lumen_layout::LayoutBox,
-    ) -> Option<(Vec<Rect>, Color)> {
-        let range = doc.get_selection().get_range().filter(|r| !r.is_collapsed())?;
-        let rects = with_measurer(|m| lumen_layout::selection_rects(lb, &range, m))?;
-        if rects.is_empty() {
+        let Some(range) = doc.get_selection().get_range().filter(|r| !r.is_collapsed()) else {
+            LAST_SELECTION_PAGE.with(|c| *c.borrow_mut() = None);
             return None;
+        };
+        let viewport = self.relayout_viewport()?;
+        let key = (viewport.width.to_bits(), viewport.height.to_bits());
+        let hit = LAST_SELECTION_PAGE.with(|c| {
+            c.borrow()
+                .as_ref()
+                .filter(|p| {
+                    p.doc_id == doc_id
+                        && p.epoch == self.display_list_epoch
+                        && p.range == range
+                        && p.viewport == key
+                        && p.dark_mode == self.dark_mode
+                })
+                .map(|p| p.list.clone())
+        });
+        if let Some(list) = hit {
+            return list;
         }
-        let color = (|| {
-            let viewport = self.relayout_viewport()?;
-            let elem = doc.get(range.start.container).parent.unwrap_or(range.start.container);
-            let style = lumen_layout::compute_selection_style(
-                doc,
-                elem,
-                &src.stylesheet,
-                &lumen_layout::ComputedStyle::root(),
-                viewport,
-                self.dark_mode,
-            )?;
-            style.background_color.map(|c| c.resolve(style.color))
-        })()
-        .unwrap_or(SELECTION_FILL_DEFAULT);
-        Some((rects, color))
+        let font = lumen_font::Font::parse(INTER_FONT).ok()?;
+        let measurer = crate::relayout::page_measurer(&font, &self.web_fonts);
+        let highlights = crate::display_list_metrics::page_highlights(
+            lb,
+            &doc,
+            &src.stylesheet,
+            viewport,
+            self.dark_mode,
+            &measurer,
+            &[],
+        );
+        drop(doc);
+        let list = highlights.map(|h| {
+            let mut list = crate::display_list_metrics::paint_ordered_in_highlighted(lb, viewport, Some(h));
+            crate::frames::splice_frame_content(&mut list, &self.frames);
+            list
+        });
+        let page = SelectionPage {
+            doc_id,
+            epoch: self.display_list_epoch,
+            range,
+            viewport: key,
+            dark_mode: self.dark_mode,
+            list: list.clone(),
+        };
+        LAST_SELECTION_PAGE.with(|c| *c.borrow_mut() = Some(page));
+        list
     }
 
     /// The selected text with `user-select: none` runs left out, `None` when
@@ -338,59 +328,5 @@ mod tests {
         assert_eq!(field_run(TypeableField::Textarea, "ab\ncd ef\ngh", 5, 3), Some((3, 8)));
         assert_eq!(field_run(TypeableField::Textarea, "ab\ncd", 1, 3), Some((0, 2)));
         assert_eq!(field_run(TypeableField::Textarea, "ab\ncd", 5, 3), Some((3, 5)));
-    }
-
-    fn text(x: f32, y: f32) -> DisplayCommand {
-        DisplayCommand::DrawText {
-            font_stretch: lumen_layout::FontStretch::NORMAL,
-            rect: Rect::new(x, y, 400.0, 20.0),
-            text: "t".to_string(),
-            font_size: 16.0,
-            color: Color::BLACK,
-            font_family: Vec::new(),
-            font_weight: lumen_layout::FontWeight::NORMAL,
-            font_style: lumen_layout::FontStyle::Normal,
-            font_variation_axes: Vec::new(),
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            letter_spacing: 0,
-            word_spacing: 0,
-            highlight_name: None,
-            text_orientation: None,
-        }
-    }
-
-    fn fill(x: f32) -> DisplayCommand {
-        DisplayCommand::FillRect { rect: Rect::new(x, 0.0, 1.0, 1.0), color: Color::BLACK }
-    }
-
-    #[test]
-    fn highlight_sits_before_its_own_text_and_after_backgrounds() {
-        let base = vec![fill(0.0), text(10.0, 0.0), text(60.0, 0.0), text(10.0, 20.0)];
-        let sel = Rect::new(70.0, 0.0, 30.0, 20.0);
-        let out = build_page_with_selection_highlight(&base, &[sel], SELECTION_FILL_DEFAULT);
-        assert_eq!(out.len(), 5);
-        // background first, then the first word, then the highlight right
-        // before the word it starts in (x = 60), then the rest.
-        assert!(matches!(out[0], DisplayCommand::FillRect { color, .. } if color == Color::BLACK));
-        assert!(matches!(out[1], DisplayCommand::DrawText { .. }));
-        assert!(matches!(out[2], DisplayCommand::FillRect { rect, .. } if rect == sel));
-        assert!(matches!(out[3], DisplayCommand::DrawText { rect, .. } if rect.x == 60.0));
-    }
-
-    #[test]
-    fn highlight_without_matching_text_goes_to_the_front() {
-        let base = vec![text(10.0, 100.0)];
-        let sel = Rect::new(10.0, 0.0, 30.0, 20.0);
-        let out = build_page_with_selection_highlight(&base, &[sel], SELECTION_FILL_DEFAULT);
-        assert!(matches!(out[0], DisplayCommand::FillRect { rect, .. } if rect == sel));
-        assert_eq!(out.len(), 2);
-    }
-
-    #[test]
-    fn no_rects_leaves_the_list_untouched() {
-        let base = vec![text(10.0, 0.0)];
-        assert_eq!(build_page_with_selection_highlight(&base, &[], SELECTION_FILL_DEFAULT), base);
     }
 }
