@@ -116,6 +116,8 @@ fn femtovg_stops(
     // CSS Images L4 §3.1 — interpolate fades to/through transparency in
     // premultiplied space (BUG-190); femtovg's 256-texel texture samples these
     // dense stops straight, reproducing the premultiplied curve.
+    // Stops outside the line shape the ramp: cut it to the visible window (BUG-1417).
+    let resolved = if repeating { resolved } else { crate::gradient_math::clip_stops_to_unit(&resolved) };
     let resolved = crate::gradient_math::premultiplied_subdivide_stops(&resolved);
     if !repeating {
         let mut out: Vec<(f32, femtovg::Color)> = resolved

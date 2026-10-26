@@ -1,6 +1,6 @@
 # BUG-1417 — Позиции цветовых остановок за пределами 0…100 % линии градиента обрезаются к концам линии
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P6)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 19, `css/css-images + css/css-values + css/css-color`)
 **Область:** paint/layout (разбор и растр линейных градиентов)
 
@@ -36,3 +36,18 @@ WPT-RUN-14 срез 19: `css-images/gradient/gradient-eval-001.html` — тес�
 ## Как проверить
 
 Страница из таблицы; `css/css-images/gradient/gradient-eval-001.html` … `009.html`.
+
+## Исправление (2026-10-26, P6)
+
+Корень: не парсер и не display list (там позиции не зажимаются), а оба растеризатора. `skia_gradient_stops`
+(`crates/engine/paint/src/cpu_raster.rs`) и `femtovg_stops` (`backends/femtovg_backend.rs`) делали `pos.clamp(0.0, 1.0)` для
+каждой остановки, то есть прижимали `-50px`/`150px` к концам линии. wgpu-шейдер читает позиции как есть и не затронут.
+
+Правка: `gradient_math::clip_stops_to_unit` вырезает из не повторяющегося градиента видимое окно `[0,1]` — считает цвет рампы
+в `0` и `1` (премультиплицированная интерполяция) и отбрасывает остановки за ними; список, целиком лежащий в `[0,1]`,
+возвращается без изменений. Применено в CPU-растре (линейный и радиальный) и в femtovg; повторяющиеся градиенты не тронуты.
+
+Проверка: `cpu_raster::tests::linear_gradient_stops_outside_the_line_keep_their_real_position` (все строки таблицы симптома,
+включая `±131070000px`), `gradient_math::tests::clip_*`; `graphic_tests/run.py` — дельта к прошлому прогону пустая.
+
+Остаток: `gradient-eval-001…009` и `gradient-infinity-*` WPT не перемерялись.
