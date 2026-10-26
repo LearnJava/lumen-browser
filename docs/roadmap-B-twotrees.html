@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-26",
  "counts": {
-  "open": 297,
+  "open": 298,
   "fixed": 1352,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1652,
+ "total_bugs": 1653,
  "phases": [
   {
    "id": "P0",
@@ -11634,6 +11634,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1716": {
+   "status": "open",
+   "title": "`window.opener` попапа — заглушка с одним `postMessage` (поля окна-открывателя недоступны) и становится `null` после навигации самого попапа (`location.replace`…",
+   "component": "js/shell (`crates/js/src/shim/web_api_shim_tail_mc.js` — `window.opener`/`_lumen_install_opener`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -22545,6 +22552,9 @@
   ],
   "js/shell (`crates/js/src/shim/web_api_shim_mid.js` — `HTMLLinkElement.disabled`/`sheet`; `crates/shell/src/stylesheets.rs`)": [
    "BUG-1554"
+  ],
+  "js/shell (`crates/js/src/shim/web_api_shim_tail_mc.js` — `window.opener`/`_lumen_install_opener`)": [
+   "BUG-1716"
   ],
   "js/shell (`crates/js/src/v8_runtime/style_flush.rs`, `crates/js/src/v8_runtime/install/dom_core.rs`, `crates/js/src/v8_runtime/install/platform.rs`, `crates/shell/src/persistent_js.rs`)": [
    "BUG-560"
