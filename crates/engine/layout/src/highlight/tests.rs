@@ -285,3 +285,61 @@ fn var_resolves_against_the_originating_element() {
     let look = &hl.pieces(first_frag(&root).unwrap()).unwrap()[0].looks[0];
     assert_eq!(look.background, Some(Color { r: 0, g: 128, b: 0, a: 255 }));
 }
+
+/// `<body>Outer<div id=host></div></body>` with the shadow text `inner` in `host`'s shadow
+/// root; returns the laid-out tree, the shadow root and its text node.
+fn shadow_setup(css: &str) -> (Document, Stylesheet, LayoutBox, NodeId, NodeId) {
+    let mut doc = lumen_html_parser::parse("<body>Outer<div id=host></div></body>");
+    let host = element(&doc, "div");
+    let sr = doc.attach_shadow(host, lumen_dom::ShadowRootMode::Open);
+    let inner = doc.create_text("inner");
+    doc.append_child(sr, inner);
+    let sheet = lumen_css_parser::parse(css);
+    let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+    (doc, sheet, root, sr, inner)
+}
+
+fn highlighted_text(b: &LayoutBox, hl: &Highlights, out: &mut Vec<String>) {
+    if let BoxKind::InlineRun { lines, .. } = &b.kind {
+        for frag in lines.iter().flatten() {
+            for p in hl.pieces(frag).unwrap_or_default().iter().filter(|p| !p.looks.is_empty()) {
+                out.push(frag.text[p.bytes.clone()].to_string());
+            }
+        }
+    }
+    b.children.iter().for_each(|c| highlighted_text(c, hl, out));
+}
+
+/// A range over `<body>` reaches the text of a shadow root inside it (flat-tree order).
+#[test]
+fn range_over_body_covers_shadow_text() {
+    let (doc, sheet, root, _, _) = shadow_setup("body{margin:0}");
+    let body = element(&doc, "body");
+    let n = doc.get(body).children.len() as u32;
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(body, 0), end: pos(body, n) }]).expect("highlights");
+    let mut got = Vec::new();
+    highlighted_text(&root, &hl, &mut got);
+    assert_eq!(got, ["Outer", "inner"]);
+}
+
+/// Endpoints inside a shadow tree: from the light text into the shadow text.
+#[test]
+fn range_from_light_text_into_shadow_text() {
+    let (doc, sheet, root, _, inner) = shadow_setup("body{margin:0}");
+    let outer = text_node(&doc, "Outer");
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(outer, 2), end: pos(inner, 3) }]).expect("highlights");
+    let mut got = Vec::new();
+    highlighted_text(&root, &hl, &mut got);
+    assert_eq!(got, ["ter", "inn"]);
+}
+
+/// A range ending at the shadow root's own end covers its text.
+#[test]
+fn range_to_the_end_of_a_shadow_root() {
+    let (doc, sheet, root, sr, _) = shadow_setup("body{margin:0}");
+    let outer = text_node(&doc, "Outer");
+    let hl = resolve(&doc, &sheet, &root, &[Range { start: pos(outer, 0), end: pos(sr, 1) }]).expect("highlights");
+    let mut got = Vec::new();
+    highlighted_text(&root, &hl, &mut got);
+    assert_eq!(got, ["Outer", "inner"]);
+}

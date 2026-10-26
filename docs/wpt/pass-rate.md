@@ -899,7 +899,7 @@ Like-for-like со скорингом 08-18 (рефтесты и TLS обнул�
 | категория | 10-05 | 10-22 | тихий | вердикт |
 |---|---:|---:|---:|---|
 | `webrtc` | 22.75 | 1.70 | — | **движок, намеренно**: COMPAT-API-01-WEBRTC (`c1eb0435f`, ADR-034) не объявляет `RTCPeerConnection` |
-| `selection` | 77.41 | 69.41 | 69.41 | **движок**: 9 рефтестов `shadow-dom/cross-shadow-boundary-*` были ложным PASS, пока выделение не рисовалось вовсе; после HIGHLIGHT-PAINT видно, что оно не заходит в shadow root — [BUG-1687](../../bugs/BUG-1687-OPEN.md) |
+| `selection` | 77.41 | 69.41 | 69.41 | **движок**: 9 рефтестов `shadow-dom/cross-shadow-boundary-*` были ложным PASS, пока выделение не рисовалось вовсе; после HIGHLIGHT-PAINT видно, что оно не заходит в shadow root — [BUG-1687](../../bugs/BUG-1687-FIXED.md) |
 | `editing` | 316.06 | 312.03 | 317.96 | **раннер**: шард шёл в своп (`live window closed`, 49 TIMEOUT); тихий выше 10-05 |
 | `quirks` | 20.30 | 17.83 | 17.83 | **движок**: −3 рефтеста (harness OK 23 → 20), воспроизводится; какие именно — не установить, отчёты WPT-RUN-9 поштучно не сохранились. 11 ERROR `document.open is not a function` (фасад `contentWindow.document` без `open`) были и на 10-05 — [BUG-1690](../../bugs/BUG-1690-OPEN.md); поштучное сравнение — WPT-RUN-17 |
 | `mediacapture-streams` | 8.06 | 5.86 | 5.86 | **движок**: UX-PERMISSIONS срез 4 (`7bbb846ed`) — `getUserMedia({audio})` ждёт ответа `#permPopover`, решение `permissions.setPermission` из `test_driver` до этой очереди не доходит; 18 TIMEOUT `GUM-*`, `MediaStream-*` — [BUG-1689](../../bugs/BUG-1689-OPEN.md) |
