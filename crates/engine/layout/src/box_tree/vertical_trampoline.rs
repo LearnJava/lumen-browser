@@ -169,10 +169,40 @@ fn step_child(
     // The root element is never one (its margins stay inside it).
     let same_mode = frame.b.children[i].style.writing_mode == frame.b.style.writing_mode
         && !frame.init.is_document;
+    // CSS Box Alignment L3 §5.2 (BUG-1526): along this container's inline axis (y) an auto-sized
+    // child follows its `justify-self` — a vertical child is `fit-content` tall once it is
+    // aligned (its height is its inline size), an orthogonal one is as tall as the room when
+    // `stretch`ed (its height is its content-sized block size otherwise).
+    let inline_override = {
+        let child = &frame.b.children[i];
+        let rev = vertical_inline_start_at_end(&frame.b.style);
+        let vertical_child = child.style.writing_mode != crate::style::WritingMode::HorizontalTb;
+        let em = child.style.font_size;
+        let sizing = super::self_align::inline_sizing(&frame.b.style, child, false, rev);
+        let room = (content_inline
+            - child.style.margin_top.resolve_or_zero(em, content_inline, viewport)
+            - child.style.margin_bottom.resolve_or_zero(em, content_inline, viewport))
+        .max(0.0);
+        let border_box = match sizing {
+            Some(super::self_align::InlineSizing::Fit) if vertical_child => {
+                Some(super::intrinsic::max_content_outer_height(child, measurer, viewport).min(room))
+            }
+            Some(super::self_align::InlineSizing::Stretch) if !vertical_child => Some(room),
+            _ => None,
+        };
+        border_box.map(|bb| {
+            let cs = &child.style;
+            let frame_v = cs.padding_top.resolve_or_zero(em, content_inline, viewport)
+                + cs.padding_bottom.resolve_or_zero(em, content_inline, viewport)
+                + cs.border_top_width
+                + cs.border_bottom_width;
+            super::self_align::size_override(cs, false, bb, frame_v)
+        })
+    };
     let child = &mut frame.b.children[i];
     match dispatch_box(
         child, content_x_left, content_y, remaining_block, Some(content_inline),
-        measurer, viewport, pcb, hp, same_mode, run_floats.as_ref(), AlignValue::Auto, None,
+        measurer, viewport, pcb, hp, same_mode, run_floats.as_ref(), frame.b.style.justify_items, inline_override,
     ) {
         DispatchOutcome::Done => {
             finish_child(frame, i, viewport, caches);
@@ -231,6 +261,12 @@ fn step_child(
             StepOutcome::Descend(ci, float_origin)
         }
     }
+}
+
+/// The inline-start edge of a vertical container is its bottom one: `direction: rtl`
+/// (bottom-to-top), or top-to-bottom for `sideways-lr`.
+fn vertical_inline_start_at_end(s: &ComputedStyle) -> bool {
+    (s.direction == crate::style::Direction::Rtl) != matches!(s.writing_mode, crate::style::WritingMode::SidewaysLr)
 }
 
 /// Runs right after a child finishes (synchronously or via a resumed
@@ -312,17 +348,36 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
     // ignores its inline-start margin, which for `direction: rtl` (bottom-to-top
     // inline direction, top-to-bottom for `sideways-lr`) puts it against the
     // bottom edge instead of the top one.
-    let inline_start_at_end = (frame.b.style.direction == crate::style::Direction::Rtl)
-        != matches!(frame.b.style.writing_mode, crate::style::WritingMode::SidewaysLr);
-    if inline_start_at_end
-        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+    let inline_start_at_end = vertical_inline_start_at_end(&frame.b.style);
+    if matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
         && !child.style.margin_top.is_auto()
         && !child.style.margin_bottom.is_auto()
     {
+        let mt = child.style.margin_top.resolve_or_zero(cem, content_inline, viewport);
         let mb = child.style.margin_bottom.resolve_or_zero(cem, content_inline, viewport);
-        let dy = frame.init.content_y + content_inline - mb - child.rect.height + rel_y - child.rect.y;
-        if dy.abs() > 0.01 {
-            shift_tree(child, 0.0, dy);
+        // CSS Box Alignment L3 §5.2 (BUG-1526): `justify-self` of the child along this container's
+        // inline axis (y); `normal`/`stretch` keep the over-constrained rule above.
+        let y = if let Some(align) =
+            super::self_align::inline_alignment(&frame.b.style, &child.style, false, inline_start_at_end)
+        {
+            Some(super::self_align::aligned_border_start(
+                align,
+                super::self_align::AlignArea {
+                    lo: frame.init.content_y,
+                    cell: content_inline,
+                    size: child.rect.height,
+                    m_lo: mt,
+                    m_hi: mb,
+                },
+            ))
+        } else {
+            inline_start_at_end.then_some(frame.init.content_y + content_inline - mb - child.rect.height)
+        };
+        if let Some(y) = y {
+            let dy = y + rel_y - child.rect.y;
+            if dy.abs() > 0.01 {
+                shift_tree(child, 0.0, dy);
+            }
         }
     }
     frame.init.cursor_block_consumed += child_block;

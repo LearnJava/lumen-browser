@@ -33,7 +33,7 @@ WPT-RUN-14 срез 21: `css-position/position-absolute-center-001.html`, `-002.
 
 ## Повторное измерение: WPT-RUN-14 срез 24 (2026-10-08)
 
-`css/css-align/abspos/*` (67 id, 856 из 1 086 сабтестов): `{align,justify}-self-*-{htb,vlr,vrl}-*`, `*-default-overflow-*`, `safe-*-self-*`, `stretch-intrinsic-size-*`, `table-*-self-stretch`. Тот же код нужен для статической позиции ([BUG-1528](BUG-1528-OPEN.md)) и размера по `justify-self` без `width` ([BUG-1526](BUG-1526-OPEN.md)).
+`css/css-align/abspos/*` (67 id, 856 из 1 086 сабтестов): `{align,justify}-self-*-{htb,vlr,vrl}-*`, `*-default-overflow-*`, `safe-*-self-*`, `stretch-intrinsic-size-*`, `table-*-self-stretch`. Тот же код нужен для статической позиции ([BUG-1528](BUG-1528-OPEN.md)) и размера по `justify-self` без `width` ([BUG-1526](BUG-1526-FIXED.md)).
 
 ## Исправление
 
@@ -49,6 +49,6 @@ WPT-RUN-14 срез 21: `css-position/position-absolute-center-001.html`, `-002.
 **Остаток (не закрыт этим багом):** `position-absolute-center-006/007` — это `display: table` с `margin: auto` и
 нулевыми инсетами, а не `justify-self` (имя файла в заявке указывало на него ошибочно); `auto` значения
 `justify-self`/`align-self` не берутся из `justify-items`/`align-items` содержащего блока; размер бокса без `width`
-по `justify-self` — [BUG-1526](BUG-1526-OPEN.md), статическая позиция — [BUG-1528](BUG-1528-OPEN.md). Проба в юнит-тесте
+по `justify-self` — [BUG-1526](BUG-1526-FIXED.md), статическая позиция — [BUG-1528](BUG-1528-OPEN.md). Проба в юнит-тесте
 показала, что `display:table` с единственным блочным потомком без табличных частей даёт ширину 0 даже в потоке —
 проверить на настоящей странице отдельно.

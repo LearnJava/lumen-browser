@@ -186,6 +186,14 @@ fn margin_auto_no_explicit_width_fills_container() {
 
 // ── CSS Box Alignment L3 §5.2 — block-level justify-self ──────────────────
 
+fn layout_box_width(css: &str) -> f32 {
+    let html = r#"<div id="box"></div>"#;
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse(css);
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    super::find_by_id_all(&root, &doc, "box").expect("box not found").rect.width
+}
+
 fn layout_box_x(css: &str) -> f32 {
     let html = r#"<div id="box"></div>"#;
     let doc = lumen_html_parser::parse(html);
@@ -223,10 +231,42 @@ fn justify_self_default_no_shift() {
 }
 
 #[test]
-fn justify_self_ignored_without_definite_width() {
-    // No width → block stretches to fill; justify-self has no free space → x=0.
+fn justify_self_auto_width_is_fit_content() {
+    // BUG-1526: no width + `justify-self: end` → the box shrinks to its content (an empty one is
+    // 0 wide) and sits at the inline-end instead of stretching over the free space.
     let x = layout_box_x("body{margin:0}#box { height: 50px; justify-self: end; }");
-    assert_eq!(x, 0.0, "auto-width justify-self:end must not shift, got {x}");
+    assert_eq!(x, 800.0, "auto-width justify-self:end must flush to the end, got {x}");
+    let w = layout_box_width("body{margin:0}#box { height: 50px; padding: 0 5px; justify-self: center; }");
+    assert_eq!(w, 10.0, "auto-width justify-self:center is fit-content wide, got {w}");
+}
+
+#[test]
+fn justify_self_stretch_and_normal_keep_filling() {
+    let w = layout_box_width("body{margin:0}#box { height: 50px; justify-self: stretch; }");
+    assert_eq!(w, 800.0, "justify-self:stretch must fill, got {w}");
+    let w = layout_box_width("body{margin:0}#box { height: 50px; justify-self: normal; }");
+    assert_eq!(w, 800.0, "justify-self:normal must fill, got {w}");
+}
+
+#[test]
+fn justify_self_unsafe_overflow_goes_before_the_start_and_safe_does_not() {
+    let wrap = "width: 40px;";
+    let x = nested_box_x(wrap, "width: 50px; height: 10px; justify-self: unsafe end;");
+    assert_eq!(x, -10.0, "unsafe end overflows to the start side, got {x}");
+    let x = nested_box_x(wrap, "width: 50px; height: 10px; justify-self: safe end;");
+    assert_eq!(x, 0.0, "safe end falls back to start, got {x}");
+    let x = nested_box_x(wrap, "width: 50px; height: 10px; justify-self: end;");
+    assert_eq!(x, -10.0, "the default overflow alignment is unsafe, got {x}");
+}
+
+#[test]
+fn justify_self_start_follows_the_container_direction() {
+    let x = nested_box_x("direction: rtl; width: 100px;", "width: 20px; height: 10px; justify-self: start;");
+    assert_eq!(x, 80.0, "start in an rtl container is its right edge, got {x}");
+    let x = nested_box_x("direction: rtl; width: 100px;", "width: 20px; height: 10px; justify-self: left;");
+    assert_eq!(x, 0.0, "left stays physical, got {x}");
+    let x = nested_box_x("width: 100px;", "direction: rtl; width: 20px; height: 10px; justify-self: self-start;");
+    assert_eq!(x, 80.0, "self-start follows the item's own direction, got {x}");
 }
 
 #[test]
@@ -289,11 +329,10 @@ fn justify_items_start_leaves_block_child_at_inline_start() {
 }
 
 #[test]
-fn justify_items_ignored_without_definite_child_width() {
-    // Auto-width child fills the container → no free inline space for the
-    // parent's justify-items:end to distribute, so x stays 0.
+fn justify_items_end_shrinks_an_auto_width_child() {
+    // The parent's justify-items:end reaches an auto-width child as `fit-content` + flush end.
     let x = nested_box_x("justify-items: end;", "height: 50px;");
-    assert_eq!(x, 0.0, "auto-width child must not shift, got {x}");
+    assert_eq!(x, 800.0, "empty auto-width child flushes to the end, got {x}");
 }
 
 #[test]

@@ -307,6 +307,24 @@ fn ratio_width(s: &ComputedStyle, h: f32, (aw, ah): (f32, f32), [padding_left, p
     }
 }
 
+/// CSS Box Alignment L3 §5.2 (BUG-1526): whether the `width: auto` of an in-flow block-level
+/// box is `fit-content` rather than stretched — its (effective) `justify-self` is an
+/// alignment, not `normal`/`stretch`. Auto inline margins keep the stretch: they absorb the
+/// free space themselves.
+fn justify_fits_content(b: &LayoutBox, s: &ComputedStyle, justify: AlignValue) -> bool {
+    matches!(
+        justify,
+        AlignValue::Start | AlignValue::End | AlignValue::Center | AlignValue::Baseline | AlignValue::LastBaseline
+    ) && s.width.is_none()
+        && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && matches!(s.display, Display::Block | Display::FlowRoot)
+        && s.writing_mode == crate::style::WritingMode::HorizontalTb
+        && !s.margin_left.is_auto()
+        && !s.margin_right.is_auto()
+        && !matches!(s.float_side, FloatSide::Left | FloatSide::Right)
+        && !matches!(s.position, Position::Absolute | Position::Fixed)
+}
+
 /// BUG-1385: the border-box width of a non-replaced block-level box (block, float, flex/grid
 /// container) whose `width` is `auto`, whose `height` is definite and which has a
 /// `aspect-ratio`. Inline-level boxes shrink-to-fit elsewhere; tables size by their columns.

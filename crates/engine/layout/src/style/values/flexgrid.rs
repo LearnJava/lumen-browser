@@ -1269,6 +1269,11 @@ pub struct ContentAlignExtra {
     /// `justify-self: safe …` / `justify-items: safe …` (read by grid).
     pub justify_self_safe: bool,
     pub justify_items_safe: bool,
+    /// An explicit `unsafe` on `align-self` / `justify-self`: no overflow correction at all, where
+    /// the bare keyword (default overflow alignment) still keeps an abs-pos box inside its
+    /// containing block (read by absolute positioning).
+    pub self_unsafe: bool,
+    pub justify_self_unsafe: bool,
     /// `justify-self: self-start | self-end` / `justify-items: …` — relative to the item's own
     /// writing mode and direction (read by grid).
     pub justify_self_own: bool,
@@ -1301,6 +1306,11 @@ impl AlignValue {
         };
         let wm_relative = matches!(rest.trim(), "start" | "end" | "self-start" | "self-end");
         Self::parse(rest).map(|v| (v, safe, wm_relative))
+    }
+
+    /// Was the value written with an explicit `unsafe` overflow keyword?
+    pub fn is_unsafe(s: &str) -> bool {
+        s.trim().to_ascii_lowercase().starts_with("unsafe ")
     }
 
     /// Was the keyword `self-start` / `self-end` (items' own axes)?

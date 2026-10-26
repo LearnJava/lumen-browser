@@ -308,6 +308,14 @@ pub(in crate::box_tree) fn dispatch_box(
         && !s.height_is_intrinsic_hint
         && s.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0)
         && s.height.as_ref().is_some_and(|h| resolve_block_size(h, em, available_height, viewport).is_some());
+    // §6.3: `justify-self: auto` resolves to the parent's `justify-items` (`parent_justify_items`,
+    // threaded from the in-flow block-child recursion). Independent-formatting-context call
+    // sites pass `AlignValue::Auto`, so their boxes keep the inline-start default.
+    let effective_justify = if matches!(s.justify_self, AlignValue::Auto) {
+        parent_justify_items
+    } else {
+        s.justify_self
+    };
     b.rect.width = if is_replaced {
         if let Some((pw, _)) = field_intrinsic {
             pw + s.border_left_width + s.border_right_width
@@ -348,6 +356,11 @@ pub(in crate::box_tree) fn dispatch_box(
         // BUG-1385 / Sizing L4 §4.1: a block-level box with a ratio, `width: auto` and a
         // definite height is as wide as the height run through the ratio — not stretched.
         w
+    } else if in_block_flow && justify_fits_content(b, &s, effective_justify) {
+        // CSS Box Alignment L3 §5.2 (BUG-1526): an auto-sized block-level box whose
+        // `justify-self` is not `normal`/`stretch` is `fit-content` wide, not stretched, so
+        // there is free inline space left to distribute (`block_flow_trampoline`).
+        max_content_outer_width(b, measurer, viewport).min((available_width - margin_left - margin_right).max(0.0))
     } else {
         (available_width - margin_left - margin_right).max(0.0)
     };
@@ -555,49 +568,10 @@ pub(in crate::box_tree) fn dispatch_box(
         b.rect.x = start_x + ml_computed;
     }
 
-    // CSS Box Alignment L3 §5.2 — `justify-self` for block-level boxes in normal
-    // flow with a definite inline size and no auto inline margins. Distributes the
-    // free inline space (containing block − box margin box) within the containing
-    // block: `center` centres, `end` flushes to the inline-end. `start` (and
-    // `stretch`/`normal`, whose block-level behaviour is inline-start) leave the box
-    // at the inline-start (current behaviour), so pages that don't align are
-    // unaffected. Auto margins take precedence (handled above), matching the spec's
-    // alignment/margin ordering. Same box class as auto-margin centring:
-    // non-replaced block-level in flow.
-    //
-    // §6.3: `justify-self: auto` resolves to the parent's `justify-items`
-    // (`parent_justify_items`, threaded from the in-flow block-child recursion).
-    // Independent-formatting-context call sites pass `AlignValue::Auto`, so their
-    // boxes keep the inline-start default.
-    let effective_justify = if matches!(s.justify_self, AlignValue::Auto) {
-        parent_justify_items
-    } else {
-        s.justify_self
-    };
-    if !ml_is_auto
-        && !mr_is_auto
-        && s.width.is_some()
-        && matches!(effective_justify, AlignValue::Center | AlignValue::End)
-        && !is_replaced
-        && !matches!(
-            s.display,
-            Display::InlineBlock
-                | Display::Flex
-                | Display::InlineFlex
-                | Display::Grid
-                | Display::InlineGrid
-        )
-        && !matches!(s.float_side, FloatSide::Left | FloatSide::Right)
-        && !matches!(s.position, Position::Absolute | Position::Fixed)
-    {
-        let remaining = (available_width - b.rect.width - margin_left - margin_right).max(0.0);
-        let shift = match effective_justify {
-            AlignValue::Center => remaining / 2.0,
-            AlignValue::End => remaining,
-            _ => 0.0,
-        };
-        b.rect.x = start_x + margin_left + shift;
-    }
+    // CSS Box Alignment L3 §5.2 — `justify-self` of an in-flow block-level box is applied by
+    // the parent once the child is laid out (`block_flow_trampoline::align_justify_self_child`),
+    // which knows the containing block's direction; an auto-sized box was already made
+    // `fit-content` wide above (`justify_fits_content`).
 
     // CSS Scrollbars L1 §6.2: `scrollbar-gutter: stable both-edges` mirrors the
     // gutter onto the inline-start edge too, so children start `unit` further
