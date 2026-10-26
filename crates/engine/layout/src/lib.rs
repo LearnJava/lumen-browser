@@ -2295,6 +2295,9 @@ mod functional_pseudo_classes;
 #[path = "tests/text_justify.rs"]
 mod text_justify;
 #[cfg(test)]
+#[path = "tests/br_lines.rs"]
+mod br_lines;
+#[cfg(test)]
 #[path = "tests/box_sizing_text_props.rs"]
 mod box_sizing_text_props;
 #[cfg(test)]
