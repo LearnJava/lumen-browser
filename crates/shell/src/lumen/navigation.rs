@@ -880,6 +880,7 @@ impl Lumen {
     /// that assignment.
     fn maybe_capture_mpa_view_transition_snapshot(&mut self, new_source: &PageSource) {
         self.pending_mpa_view_transition_snapshot = None;
+        self.pending_pagereveal_transition = false;
         let Some(ls) = self.layout_source.as_ref() else { return };
         let Some(from_origin) = self.source.resource_base().and_then(|b| b.origin()) else {
             return;
@@ -935,6 +936,7 @@ impl Lumen {
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         let (duration_ms, easing) = self.view_transition_author_params();
         self.view_transition = Some(ViewTransitionState { old_dl, start_ms: now_ms, duration_ms, easing });
+        self.pending_pagereveal_transition = true;
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }
