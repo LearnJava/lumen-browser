@@ -22,6 +22,20 @@ pub(super) fn clip_path_commands(clip: &ClipPath, refs: impl Into<ClipRefs>) -> 
     }
 }
 
+/// Попадает ли точка `p` (система элемента, до его transform) в область `clip-path`
+/// бокса `b` (BUG-1412). Пересечение всех слоёв клипа; без `clip-path` и для
+/// неразрешённой `url(#id)` — `true`, как и в отрисовке (`clip_path_commands`).
+pub(crate) fn clip_path_contains(b: &LayoutBox, p: lumen_core::geom::Point) -> bool {
+    let Some(clip) = &b.style.clip_path else { return true };
+    clip_path_commands(clip, ClipRefs::of_box(b)).iter().all(|cmd| match cmd {
+        DisplayCommand::PushClipPath { shape } => shape.contains(p.x, p.y),
+        DisplayCommand::PushClipRect { rect } => {
+            p.x >= rect.x && p.x < rect.x + rect.width && p.y >= rect.y && p.y < rect.y + rect.height
+        }
+        _ => true,
+    })
+}
+
 /// Открывает `clip-path` SVG-фигуры (у неё нет блочного пути `walk`, где клип
 /// эмитится для боксов): координаты фигуры уже документные, `PushTransform` нет.
 /// Возвращает число слоёв — столько же `PopClip` даст [`pop_clip_layers`].
