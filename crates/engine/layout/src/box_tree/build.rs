@@ -1503,6 +1503,7 @@ fn build_box_inner(
                               doc, sheet, viewport, dark_mode, counters, registry);
             }
         }
+        super::inline_build::give_leading_breaks_a_line(doc, &mut children);
         } // end else (non-item-container)
         // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
         // Must run for ALL child-building paths (item-container and non-item-container)
