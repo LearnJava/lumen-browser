@@ -1607,7 +1607,7 @@ use super::*;
     }
 
     #[test]
-    fn retain_active_font_faces_drops_false_media() {
+    fn retain_active_conditional_rules_drops_false_media() {
         let mut s = parse(
             "@media (min-width:2000px){@font-face{font-family:wide;src:local(Arial)}} \
              @media print{@font-face{font-family:pr;src:local(Arial)}} \
@@ -1615,14 +1615,116 @@ use super::*;
         );
         assert_eq!(s.font_faces.len(), 3);
         let ctx = MediaContext { width: 1000.0, height: 800.0, ..MediaContext::default() };
-        s.retain_active_font_faces(&ctx);
+        s.retain_active_conditional_rules(&ctx);
         let fams: Vec<_> = s.font_faces.iter().map(|f| f.family.as_str()).collect();
         assert_eq!(fams, ["scr"]);
     }
 
     #[test]
-    fn at_rule_after_font_face_in_media_still_skipped_cleanly() {
+    fn keyframes_before_font_face_in_media_do_not_derail_parsing() {
         let s = parse("@media all{@keyframes k{from{color:red}} @font-face{font-family:b;src:local(Arial)} p{color:red}}");
         assert_eq!(s.font_faces.len(), 1);
         assert_eq!(s.media_rules[0].rules.len(), 1);
+    }
+
+    // ──────────────── BUG-1686: прочие @-правила и вложенные группы в @media / @supports ────────────────
+
+    fn screen_ctx() -> MediaContext {
+        MediaContext { media_type: "screen".into(), width: 1000.0, height: 800.0, ..MediaContext::default() }
+    }
+
+    #[test]
+    fn keyframes_property_counter_style_inside_media_are_hoisted_with_condition() {
+        let s = parse(
+            "@keyframes a{from{color:red}} \
+             @media all{@keyframes b{from{color:red}to{color:blue}} \
+             @property --x{syntax:'*';inherits:false} \
+             @counter-style cs{system:cyclic;symbols:'*'} p{color:red}}",
+        );
+        let names: Vec<_> = s.keyframes.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        assert!(s.keyframes[0].conditions.is_empty());
+        assert_eq!(s.keyframes[1].conditions.len(), 1);
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.properties[0].conditions.len(), 1);
+        assert_eq!(s.counter_styles.len(), 1);
+        assert_eq!(s.counter_styles[0].conditions.len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn keyframes_inside_supports_hold_by_support() {
+        let s = parse("@supports (color:red){@keyframes k{from{color:red}}}");
+        assert!(conditions_hold(&s.keyframes[0].conditions, &screen_ctx()));
+        let s = parse("@supports (not (color:red)){@keyframes k{from{color:red}}}");
+        assert!(!conditions_hold(&s.keyframes[0].conditions, &screen_ctx()));
+    }
+
+    #[test]
+    fn retain_active_conditional_rules_drops_false_keyframes_property_counter_style() {
+        let mut s = parse(
+            "@media print{@keyframes p{from{color:red}} @property --p{syntax:'*';inherits:false} @counter-style pc{system:cyclic;symbols:'*'}} \
+             @media screen{@keyframes s{from{color:red}} @property --s{syntax:'*';inherits:false} @counter-style sc{system:cyclic;symbols:'*'}}",
+        );
+        s.retain_active_conditional_rules(&screen_ctx());
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.keyframes[0].name, "s");
+        assert_eq!(s.properties[0].name, "--s");
+        assert_eq!(s.counter_styles[0].name, "sc");
+    }
+
+    #[test]
+    fn nested_keyframes_get_every_enclosing_condition() {
+        let s = parse("@media screen{@supports (color:red){@keyframes k{from{color:red}}}}");
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.keyframes[0].conditions.len(), 2);
+        let s = parse("@media print{@supports (color:red){@keyframes k{from{color:red}}}}");
+        assert!(!conditions_hold(&s.keyframes[0].conditions, &screen_ctx()));
+    }
+
+    #[test]
+    fn supports_inside_media_is_hoisted_with_outer_condition() {
+        let s = parse("@media screen{p{color:red} @supports (color:red){a{color:blue}}} b{color:green}");
+        assert_eq!(s.media_rules.len(), 1);
+        assert_eq!(s.supports_rules.len(), 1);
+        assert_eq!(s.supports_rules[0].rules.len(), 1);
+        assert_eq!(s.supports_rules[0].outer.len(), 1);
+        assert!(s.supports_rules[0].holds(&screen_ctx()));
+        let print = MediaContext { media_type: "print".into(), ..screen_ctx() };
+        assert!(!s.supports_rules[0].holds(&print));
+    }
+
+    #[test]
+    fn media_inside_media_is_hoisted_and_not_a_cssom_rule() {
+        let s = parse("@media screen{@media (min-width:500px){a{color:blue}} p{color:red}} @media all{b{color:red}}");
+        assert_eq!(s.media_rules.len(), 3);
+        let hoisted = s.media_rules.iter().find(|m| !m.outer.is_empty()).unwrap();
+        assert!(hoisted.holds(&screen_ctx()));
+        assert!(!hoisted.holds(&MediaContext { width: 300.0, ..screen_ctx() }));
+        // Всплывший блок не запись `cssRules`: остаются два блока верхнего уровня.
+        assert_eq!(s.cssom_rules().len(), 2);
+        assert_eq!(s.top_level_order.len(), 2);
+    }
+
+    #[test]
+    fn cssom_delete_rule_skips_hoisted_media() {
+        let mut s = parse("@media screen{@media (min-width:500px){a{color:blue}}} @media all{b{color:red}}");
+        s.delete_rule(1).unwrap();
+        assert_eq!(s.media_rules.len(), 2);
+        assert_eq!(s.cssom_rules().len(), 1);
+        assert_eq!(s.media_rules[0].rules.len(), 0);
+    }
+
+    #[test]
+    fn nested_style_rule_media_inside_media_is_hoisted() {
+        let s = parse("@media screen{.a{@media (min-width:500px){color:blue}}}");
+        let hoisted = s.media_rules.iter().find(|m| !m.outer.is_empty()).expect("hoisted block");
+        assert_eq!(hoisted.rules.len(), 1);
+    }
+
+    #[test]
+    fn nested_group_inside_layer_does_not_escape_the_layer() {
+        let s = parse("@layer x{@media screen{@supports (color:red){a{color:blue}}}}");
+        assert!(s.supports_rules.is_empty());
+        assert!(s.media_rules.iter().all(|m| m.outer.is_empty()));
     }

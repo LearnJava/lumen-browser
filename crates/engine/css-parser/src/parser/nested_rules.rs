@@ -363,7 +363,7 @@ impl Parser<'_> {
             let query = parse_media_query(query_str);
             self.consume(); // '{'
             let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
-            let mut outcomes = vec![AtRuleOutcome::Media(MediaRule { query, rules, pos: BlockPos::default() })];
+            let mut outcomes = vec![AtRuleOutcome::Media(MediaRule { query, rules, pos: BlockPos::default(), outer: Vec::new() })];
             outcomes.extend(inner_at);
             return outcomes;
         }
@@ -397,7 +397,7 @@ impl Parser<'_> {
             self.consume(); // '{'
             let (rules, inner_at) = self.parse_nested_group_body(parent_sels);
             let mut outcomes =
-                vec![AtRuleOutcome::Supports(SupportsRule { condition, rules, pos: BlockPos::default() })];
+                vec![AtRuleOutcome::Supports(SupportsRule { condition, rules, pos: BlockPos::default(), outer: Vec::new() })];
             outcomes.extend(inner_at);
             return outcomes;
         }

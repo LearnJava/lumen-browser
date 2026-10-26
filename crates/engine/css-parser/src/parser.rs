@@ -485,16 +485,34 @@ impl Stylesheet {
         self.revision = StylesheetRevision::fresh();
     }
 
-    /// Отбрасывает `@font-face`, объявленные внутри `@media`/`@supports`, чьё
-    /// условие в `ctx` ложно (BUG-1495). Вызывается там, где известен
-    /// viewport страницы, до загрузки шрифтов; безусловные правила не
-    /// затрагивает. Ревизию меняет, только если что-то удалено.
-    pub fn retain_active_font_faces(&mut self, ctx: &MediaContext) {
-        let before = self.font_faces.len();
-        self.font_faces.retain(|f| f.conditions_hold(ctx));
-        if self.font_faces.len() != before {
+    /// Отбрасывает `@font-face`, `@keyframes`, `@property` и `@counter-style`,
+    /// объявленные внутри `@media`/`@supports`, чьё условие в `ctx` ложно
+    /// (BUG-1495, BUG-1686). Вызывается там, где известен viewport страницы, до
+    /// загрузки шрифтов и каскада; безусловные правила не затрагивает.
+    /// Ревизию меняет, только если что-то удалено.
+    pub fn retain_active_conditional_rules(&mut self, ctx: &MediaContext) {
+        let before = self.font_faces.len()
+            + self.keyframes.len()
+            + self.properties.len()
+            + self.counter_styles.len();
+        self.font_faces.retain(|r| conditions_hold(&r.conditions, ctx));
+        self.keyframes.retain(|r| conditions_hold(&r.conditions, ctx));
+        self.properties.retain(|r| conditions_hold(&r.conditions, ctx));
+        self.counter_styles.retain(|r| conditions_hold(&r.conditions, ctx));
+        let after = self.font_faces.len()
+            + self.keyframes.len()
+            + self.properties.len()
+            + self.counter_styles.len();
+        if after != before {
             self.mark_mutated();
         }
+    }
+
+    /// Номер `n`-го (по тегам `Media` в [`Self::top_level_order`]) блока в
+    /// [`Self::media_rules`]: всплывшие вложенные блоки (BUG-1686) тегов не
+    /// имеют и в счёте не участвуют.
+    fn nth_cssom_media_index(&self, n: usize) -> Option<usize> {
+        self.media_rules.iter().enumerate().filter(|(_, m)| m.outer.is_empty()).nth(n).map(|(i, _)| i)
     }
 
     /// CSS Color L5 §5.3 — attaches ICC profile bytes to the `@color-profile`
@@ -664,7 +682,7 @@ impl Stylesheet {
                     style_idx += 1;
                 }
                 TopLevelRuleKind::Media => {
-                    if let Some(r) = self.media_rules.get(media_idx) {
+                    if let Some(r) = self.nth_cssom_media_index(media_idx).map(|i| &self.media_rules[i]) {
                         out.push(CssomRuleRef::Media(r));
                     }
                     media_idx += 1;
@@ -725,9 +743,11 @@ impl Stylesheet {
                     .iter()
                     .filter(|k| **k == TopLevelRuleKind::Media)
                     .count();
+                let media_at =
+                    self.nth_cssom_media_index(media_before).unwrap_or(self.media_rules.len());
                 for (i, m) in self.media_rules.iter_mut().enumerate() {
                     if m.pos.rules_before > sub_index
-                        || (m.pos.rules_before == sub_index && i >= media_before)
+                        || (m.pos.rules_before == sub_index && i >= media_at)
                     {
                         m.pos.rules_before += 1;
                     }
@@ -740,17 +760,19 @@ impl Stylesheet {
                 self.rules.insert(sub_index, rule);
             }
             (TopLevelRuleKind::Media, _, Some(mut rule)) => {
+                let next = self.nth_cssom_media_index(sub_index);
+                let prev = sub_index.checked_sub(1).and_then(|p| self.nth_cssom_media_index(p));
                 rule.pos = BlockPos {
                     rules_before: self.top_level_order[..index]
                         .iter()
                         .filter(|k| **k == TopLevelRuleKind::Style)
                         .count(),
-                    seq: self.media_rules.get(sub_index).map_or_else(
-                        || sub_index.checked_sub(1).map_or(0, |p| self.media_rules[p].pos.seq + 1),
-                        |next| next.pos.seq,
+                    seq: next.map_or_else(
+                        || prev.map_or(0, |p| self.media_rules[p].pos.seq + 1),
+                        |n| self.media_rules[n].pos.seq,
                     ),
                 };
-                self.media_rules.insert(sub_index, rule);
+                self.media_rules.insert(next.unwrap_or(self.media_rules.len()), rule);
             }
             _ => return Err(CssomRuleMutationError::Syntax),
         }
@@ -792,7 +814,9 @@ impl Stylesheet {
                 }
             }
             TopLevelRuleKind::Media => {
-                self.media_rules.remove(sub_index);
+                if let Some(i) = self.nth_cssom_media_index(sub_index) {
+                    self.media_rules.remove(i);
+                }
             }
             TopLevelRuleKind::Mixin(midx) => {
                 self.mixin_rules.remove(midx);
@@ -860,7 +884,10 @@ impl Stylesheet {
         }
         let sub_index =
             self.top_level_order[..media_index].iter().filter(|k| **k == kind).count();
-        let Some(media_rule) = self.media_rules.get_mut(sub_index) else {
+        let Some(media_rule) = self
+            .nth_cssom_media_index(sub_index)
+            .and_then(|i| self.media_rules.get_mut(i))
+        else {
             return Err(CssomRuleMutationError::Syntax);
         };
         let Some(child) = media_rule.rules.get_mut(child_index) else {
@@ -1201,6 +1228,12 @@ struct Parser<'a> {
     /// из [`Self::parse_at_rule`]. [`Self::parse_stylesheet`] опустошает буфер
     /// после каждого top-level `@`-правила.
     bubbled: Vec<AtRuleOutcome>,
+    /// Условия объемлющих `@media`/`@supports`, чьё тело парсится сейчас
+    /// (внешняя группа первой) — BUG-1686.
+    cond_stack: Vec<LayerCondition>,
+    /// Глубина вложенности в тело `@layer` (BUG-1686: вложенные условные
+    /// группы там не всплывают).
+    layer_depth: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -1209,6 +1242,8 @@ impl<'a> Parser<'a> {
             input,
             pos: 0,
             bubbled: Vec::new(),
+            cond_stack: Vec::new(),
+            layer_depth: 0,
         }
     }
 
@@ -1353,8 +1388,12 @@ impl<'a> Parser<'a> {
                             AtRuleOutcome::Media(mut m) => {
                                 m.pos = BlockPos { rules_before: rules.len(), seq: block_seq };
                                 block_seq += 1;
+                                // Всплывший из тела другой группы блок
+                                // (BUG-1686) не отдельная запись `cssRules`.
+                                if m.outer.is_empty() {
+                                    top_level_order.push(TopLevelRuleKind::Media);
+                                }
                                 media_rules.push(m);
-                                top_level_order.push(TopLevelRuleKind::Media);
                             }
                             AtRuleOutcome::Import(i) => {
                                 if !(seen_other || seen_namespace) {

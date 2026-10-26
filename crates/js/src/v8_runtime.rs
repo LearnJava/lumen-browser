@@ -637,6 +637,7 @@ impl V8JsRuntime {
                 ctx,
                 store,
                 sheet_sync,
+                Arc::clone(&viewport_size),
             )?;
 
             install::install_constructed_stylesheets(

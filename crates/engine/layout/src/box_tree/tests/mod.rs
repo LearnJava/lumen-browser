@@ -570,3 +570,4 @@ mod text_emphasis_line_growth;
 mod textq5_shaped_measure;
 mod align_self_wpt;
 mod align_content_block;
+mod abs_static_align;
