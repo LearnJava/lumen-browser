@@ -1064,6 +1064,63 @@ fn finish_frame(
     }
 }
 
+/// CSS Box Alignment L3 §5.2 / §6.3 — `justify-self` (or, for `auto`, the parent's
+/// `justify-items`) of a finished in-flow block-level child: the margin box moves inside the
+/// containing block's content box to its inline-start / centre / inline-end. `start`/`end`
+/// follow the *container's* direction, `self-start`/`self-end` the child's own writing mode,
+/// `left`/`right` the physical side. Without an `unsafe`/`safe` keyword an overflowing box
+/// still aligns by its own side (`unsafe`); `safe` falls back to `start`. Auto inline margins
+/// take the free space first (CSS 2.1 §10.3.3), so such a box is left alone. An auto-sized
+/// box was made `fit-content` wide by `dispatch_box` (`justify_fits_content`).
+fn align_justify_self_child(frame: &mut Frame, idx: usize, viewport: Size) {
+    use crate::style::Direction;
+    let parent = &frame.init.s;
+    let rev = parent.direction == Direction::Rtl;
+    let content_x = frame.init.content_x;
+    let content_width = frame.init.content_width;
+    let child = &mut frame.b.children[idx];
+    let cs = &child.style;
+    if !matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot)
+        || cs.margin_left.is_auto()
+        || cs.margin_right.is_auto()
+        || matches!(cs.float_side, FloatSide::Left | FloatSide::Right)
+        || matches!(cs.position, Position::Absolute | Position::Fixed)
+    {
+        return;
+    }
+    let (value, own, side, safe) = if matches!(cs.justify_self, AlignValue::Auto) {
+        let x = &parent.content_align_extra;
+        (parent.justify_items, x.justify_items_own, x.justify_items_side, x.justify_items_safe)
+    } else {
+        let x = &cs.content_align_extra;
+        (cs.justify_self, x.justify_self_own, x.justify_self_side, x.justify_self_safe)
+    };
+    let value = super::grid_vertical::resolve_own(value, own, cs, true, !rev);
+    let mut align = super::grid_vertical::resolve_side(value, side, parent.writing_mode, rev);
+    align = match align {
+        AlignValue::Baseline => AlignValue::Start,
+        AlignValue::LastBaseline => AlignValue::End,
+        a => a,
+    };
+    if !matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center) {
+        return;
+    }
+    let em = cs.font_size;
+    let ml = cs.margin_left.resolve_or_zero(em, content_width, viewport);
+    let mr = cs.margin_right.resolve_or_zero(em, content_width, viewport);
+    let (m_s, m_e) = if rev { (mr, ml) } else { (ml, mr) };
+    if safe && child.rect.width + m_s + m_e > content_width && matches!(align, AlignValue::End | AlignValue::Center) {
+        align = AlignValue::Start;
+    }
+    let off = super::grid_vertical::axis_offset(align, content_width, child.rect.width, m_s, m_e, false, false);
+    let (rel_dx, _) = super::layout_dispatch::relative_offset(cs, em, content_width, frame.init.children_available_height, viewport);
+    let x = if rev { content_x + content_width - off - child.rect.width } else { content_x + off };
+    let dx = x + rel_dx - child.rect.x;
+    if dx.abs() > 0.01 {
+        shift_tree(child, dx, 0.0);
+    }
+}
+
 /// CSS 2.1 §10.3.3 — an over-constrained block-level box (a used width
 /// narrower than the room, neither horizontal margin `auto`) ignores
 /// `margin-left` when the *containing block's* `direction` is `rtl`, so the
@@ -1113,6 +1170,7 @@ fn post_child_bookkeeping(
     }
     frame.init.seen_inflow_child = true;
     let content_width = frame.init.content_width;
+    align_justify_self_child(frame, idx, viewport);
     align_rtl_overconstrained_child(frame, idx, viewport);
     // CSS 2.1 §8.3.1: the child's effective bottom margin is its own bottom
     // margin folded with any bottom margin escaping from its last-child chain
