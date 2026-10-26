@@ -803,6 +803,19 @@ pub(crate) fn emit_svg_text(
     }
 }
 
+/// Какие линии эмитить: CSS Text Decoration L3 §2 — underline и overline рисуются
+/// под текстом, line-through — поверх него.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecorationPass {
+    All,
+    BehindText,
+    AboveText,
+}
+
+pub(crate) fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, frag: &InlineFrag) {
+    push_text_decoration_pass(out, container_x, line_y, frag, DecorationPass::All);
+}
+
 /// Эмитит FillRect-ы для активных линий text-decoration. Геометрия —
 /// приблизительная: baseline ≈ line_y + font_size * 0.80 (соответствует
 /// ascent ratio Inter, на котором рендерер позиционирует глифы). Толщина
@@ -811,7 +824,13 @@ pub(crate) fn emit_svg_text(
 /// `Dotted` / `Dashed` / `Wavy`, L3 §2.2) разворачивается в один или
 /// несколько FillRect-ов через [`emit_decoration_line`]. Цвет — из
 /// `text-decoration-color` с fallback на currentColor (L3 §3).
-pub(crate) fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, frag: &InlineFrag) {
+pub(crate) fn push_text_decoration_pass(
+    out: &mut DisplayList,
+    container_x: f32,
+    line_y: f32,
+    frag: &InlineFrag,
+    pass: DecorationPass,
+) {
     let decoration = frag.style.text_decoration_line;
     if decoration.is_empty() || frag.width <= 0.0 {
         return;
@@ -824,17 +843,24 @@ pub(crate) fn push_text_decoration(out: &mut DisplayList, container_x: f32, line
     let color = frag.style.text_decoration_color.resolve(frag.style.color);
     let skip_ink = frag.style.text_decoration_skip_ink;
 
-    if decoration.underline {
+    let (behind, above) = (pass != DecorationPass::AboveText, pass != DecorationPass::BehindText);
+    if decoration.underline && behind {
         // CSS Text Decoration L4 §5.1: text-underline-position.
         // `Under` places the line below all descenders (≈ 25% of font-size below baseline).
         // `Auto`/`FromFont` uses the standard position just below the baseline.
-        let base_offset = match frag.style.text_underline_position {
-            TextUnderlinePosition::Under | TextUnderlinePosition::UnderLeft | TextUnderlinePosition::UnderRight => fs * 0.25,
-            _ => fs * 0.10,
+        let under = matches!(
+            frag.style.text_underline_position,
+            TextUnderlinePosition::Under | TextUnderlinePosition::UnderLeft | TextUnderlinePosition::UnderRight
+        );
+        // CSS Text Decoration L4 §5.3 (zero-position): явный offset отсчитывается от
+        // alphabetic baseline (для `under` — от нижнего края), а не от UA-позиции `auto`.
+        let deco_y = match frag.style.text_underline_offset {
+            Some(px) => {
+                let zero = if under { fs * 0.25 } else { 0.0 };
+                baseline_y + zero + px + frag.style.text_underline_offset_pct * fs
+            }
+            None => baseline_y + if under { fs * 0.25 } else { fs * 0.10 },
         };
-        // CSS Text Decoration L4 §5.3: text-underline-offset adds an explicit shift.
-        let extra = frag.style.text_underline_offset.map_or(0.0, |px| px + frag.style.text_underline_offset_pct * fs);
-        let deco_y = baseline_y + base_offset + extra;
         // CSS Text Decoration L4 §3.5: text-decoration-skip-ink.
         // `None` — continuous line; `Auto` — skip under descenders; `All` — skip every char.
         match skip_ink {
@@ -855,12 +881,12 @@ pub(crate) fn push_text_decoration(out: &mut DisplayList, container_x: f32, line
             }
         }
     }
-    if decoration.line_through {
+    if decoration.line_through && above {
         // line-through sits on the mid-ascent; skip-ink does not apply (spec §3.5).
         let y = baseline_y - fs * 0.30;
         emit_decoration_line(out, x, y, frag.width, thickness, color, style);
     }
-    if decoration.overline {
+    if decoration.overline && behind {
         let y = baseline_y - fs * 0.78;
         // `All` skips over all glyphs including those above/below the line (spec §3.5).
         if skip_ink == TextDecorationSkipInk::All {

@@ -22,8 +22,8 @@ DrawText (16.00, 164.40, 992.00, 14.00) "DISPLAY: INLINE — SPAN-ЭЛЕМЕНТ
 DrawText (16.00, 183.00, 992.00, 18.20) "Текст строки:" 13.00 #2d3748ff family=["serif"] var=["opsz"=13]
 DrawText (94.65, 183.00, 992.00, 18.20) "красный bold" 13.00 #e53e3eff family=["serif"] w=700 var=["opsz"=13]
 DrawText (171.27, 183.00, 992.00, 18.20) "зелёный italic" 13.00 #38a169ff family=["serif"] style=italic var=["opsz"=13]
-DrawText (249.57, 183.00, 992.00, 18.20) "синий underline" 13.00 #3182ceff family=["serif"] var=["opsz"=13]
 FillRect (249.57, 194.70, 85.94, 1.00) #3182ceff
+DrawText (249.57, 183.00, 992.00, 18.20) "синий underline" 13.00 #3182ceff family=["serif"] var=["opsz"=13]
 DrawText (338.76, 183.00, 992.00, 18.20) "фиолетовый" 13.00 #805ad5ff family=["serif"] var=["opsz"=13]
 DrawText (409.81, 183.00, 992.00, 18.20) "золотой bold" 13.00 #d69e2eff family=["serif"] w=700 var=["opsz"=13]
 DrawText (482.60, 183.00, 992.00, 18.20) "— все на одной строке, перенос при нехватке места." 13.00 #2d3748ff family=["serif"] var=["opsz"=13]

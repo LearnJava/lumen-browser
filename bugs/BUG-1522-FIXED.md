@@ -1,6 +1,6 @@
 # BUG-1522 — `text-underline-offset`: `em`, `%` и `calc()` не работают (`1em` считается от 16 px, `25%` и `calc(…)` — как `auto`), `from-font` и `<length-percentage>` в одном значении не различаются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 23, `css/css-text-decor` + `css-gaps` + `css-shapes`)
 **Область:** css-parser/layout (`crates/engine/layout/src/style/apply/text.rs:902` — `text-underline-offset`: `Option<f32>`, `parse_length_px`)
 
@@ -34,3 +34,9 @@ WPT-RUN-14 срез 23: `text-underline-offset-calc.html`, `-percentage.html`, `
 Таблица выше; `css/css-text-decor/text-underline-offset-percentage.html`, `text-underline-offset-calc.html`.
 
 2026-10-24 (P3, при BUG-1515): разбор и вычисленное значение сделаны — `text_underline_offset` (px) + `text_underline_offset_pct` (доля `%`) резолвятся от `font-size` элемента через `parse_length_percentage_parts`, `calc(…)` с процентом сохраняется, `getComputedStyle` отдаёт `40px` / `2px` / `200%` / `calc(-50% + 32px)` (WPT `text-underline-offset-computed` — 0 расхождений). Остаток: рисование — `%` от `1em` и `from-font` в `push_text_decoration` (сейчас смещение читает только `svg_text_decoration.rs`); reftest `text-underline-offset-{calc,percentage,variable,zero-position}` не перепроверены.
+
+## Исправление (2026-10-26, P3)
+
+Разбор и вычисленное значение — см. запись 2026-10-24 выше. Рисование (`svg_text_decoration.rs::push_text_decoration_pass`): явный `text-underline-offset` теперь отсчитывается от alphabetic baseline (zero-position, L4 §5.3; для `text-underline-position: under` — от нижнего края `0.25·fs`), а не добавляется к UA-позиции `auto` (`0.10·fs`); `%` и `em` берутся от `font-size` элемента. Заодно underline и overline рисуются **под** глифами, line-through — над (L3 §2, `DecorationPass`): раньше линия ложилась поверх текста, и `text-underline-offset-zero-position.html` показывал красную линию поверх зелёного глифа.
+
+WPT-reftest (`--screenshot`, 800×600): `text-underline-offset-percentage` и `-zero-position` — identical (было thick, 6000 px). Остаток вне этого бага: `-calc` — линии верны, расходятся глифы шести отдельных flex-элементов (интервал по x, без связи с подчёркиванием); `-002` — `position:relative; top` на inline-`<span>` не применяется (BUG-1711); `-variable` — `from-font` без метрик шрифта (BUG-1712). Тест: `underline_offset_is_measured_from_baseline` (paint).

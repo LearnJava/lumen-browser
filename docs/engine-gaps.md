@@ -45,6 +45,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 - **`sessionStorage` has no quota**, so a `while (true)` filling it hangs the page ([BUG-870](../bugs/BUG-870-OPEN.md)).
 - **A leaked IndexedDB connection stalls every later upgrade and delete on that name** — correct per spec, but it means a probe must close its connections or the next test waits forever.
+- **`indexedDB` does not exist in a dedicated or shared worker** ([BUG-1705](../bugs/BUG-1705-OPEN.md)) — only window and service worker get the shim, so every `IndexedDB/*.any.worker.html` / `*.any.sharedworker.html` fails on its first line; a probe for IDB-in-worker proves nothing until that lands. IDB `IDBRequest`/`IDBTransaction` are not `EventTarget`s and the listener array is live during dispatch ([BUG-1706](../bugs/BUG-1706-OPEN.md)).
 
 ## WPT-specific
 

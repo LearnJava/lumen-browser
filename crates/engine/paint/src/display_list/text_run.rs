@@ -254,6 +254,8 @@ pub(super) fn emit_frag_text(out: &mut Vec<DisplayCommand>, frag: &InlineFrag, g
     if !parts.glyphs {
         return;
     }
+    // CSS Text Decoration L3 §2: underline и overline лежат под глифами, line-through — над ними.
+    push_text_decoration_pass(out, container_x, frag_y, frag, DecorationPass::BehindText);
     out.push(DisplayCommand::DrawText {
         font_stretch: frag.style.font_stretch,
         rect: base_rect,
@@ -281,7 +283,7 @@ pub(super) fn emit_frag_text(out: &mut Vec<DisplayCommand>, frag: &InlineFrag, g
         },
     });
     emit_text_stroke(out, base_rect, frag);
-    push_text_decoration(out, container_x, frag_y, frag);
+    push_text_decoration_pass(out, container_x, frag_y, frag, DecorationPass::AboveText);
     emit_text_emphasis_marks(out, container_x, frag_y, frag);
 }
 

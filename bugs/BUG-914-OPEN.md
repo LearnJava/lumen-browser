@@ -46,3 +46,7 @@ triggered») перечисляют `transaction.error` и `db.error` явно.
 шима (цепочка `request.transaction` → `transaction.db`) и `addEventListener`
 у `IDBDatabase`; `preventDefault` на всплывшем `error` уже учитывается в
 `_idb_dispatch_request` и должен продолжать гасить аварийный откат транзакции.
+
+## Дополнение WPT-IDB-SCOUT (2026-10-26)
+
+Проба p8 разведки: `db.onerror`/`tx.onerror` — 0 вызовов, подтверждено. Вторая находка в том же диспетчере: `_idb_flush_txn` рассылает запросы и коммитит транзакцию одним синхронным проходом, поэтому `await`/`.then()` после события `success` видят уже завершённую транзакцию (`TransactionInactiveError`, `complete` приходит раньше микротаска) — нужен microtask checkpoint между событием и деактивацией. Прячется за [BUG-1706](BUG-1706-OPEN.md) (живой массив слушателей). Чинить вместе: задача `IDB-EVENTS` (`ROADMAP.md`). Кластеры и пробы — `docs/wpt-vendor-notes/IndexedDB.md`.
