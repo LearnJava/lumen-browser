@@ -64,6 +64,10 @@ function defineMethod(proto, name, fn) {
   Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: true, configurable: true });
 }
 
+// An engine-internal function other shims call: on the internal container, not the page's global
+// object (BUG-753) — the page shim reaches it through a bare `_lumen_vt_…` name.
+function exportInternal(name, fn) { __lumen_C[name] = fn; }
+
 var STATE = new WeakMap();      // ViewTransition → internal state
 var TYPES = new WeakMap();      // ViewTransitionTypeSet → Set<string>
 
@@ -262,11 +266,18 @@ function rectOf(nid, isRoot) {
 
 // The style map of the pseudo-element `kind` (`view-transition`, `view-transition-old(a)`, …) of
 // the active transition, or null when the page has no such pseudo-element right now.
-Object.defineProperty(G, '_lumen_vt_pseudo_style', {
-  value: function (kind, nid) {
+// `styleAbsent` (getComputedStyle only): a pseudo that does not exist — no active transition, or a
+// name outside its captures — still gets the UA sheet under the page's rules, as Chromium, WebKit
+// and Gecko do (WPT `computed-style-no-active-transition`); the document element's tree only.
+exportInternal('_lumen_vt_pseudo_style', function (kind, nid, styleAbsent) {
     var s = currentOfNid(nid);
-    if (!s || (s.phase !== 'update-callback-called' && s.phase !== 'animating')) { return null; }
+    var live = s && (s.phase === 'update-callback-called' || s.phase === 'animating');
     var m = /^(view-transition(?:-group|-image-pair|-old|-new)?)(?:\(([^()]+)\))?$/.exec(kind);
+    if (!live) {
+      if (!styleAbsent || !m || typeof _lumen_vt_tree_style !== 'function' || nid !== document.documentElement.__nid__) { return null; }
+      if ((m[2] !== undefined) !== (m[1] !== 'view-transition')) { return null; }
+      try { return JSON.parse(_lumen_vt_tree_style(kind, '[]')); } catch (e) { return null; }
+    }
     if (!m || typeof _lumen_vt_tree_style !== 'function') { return null; }
     var copied = [];
     if (m[2] !== undefined) {
@@ -274,15 +285,16 @@ Object.defineProperty(G, '_lumen_vt_pseudo_style', {
       var inOld = s.oldNames && m[2] in s.oldNames;
       var inNew = s.newNames && m[2] in s.newNames;
       var exists = m[1] === 'view-transition-old' ? inOld : m[1] === 'view-transition-new' ? inNew : inOld || inNew;
-      if (!exists) { return null; }
+      if (!exists) {
+        if (!styleAbsent || nid !== document.documentElement.__nid__) { return null; }
+        try { return JSON.parse(_lumen_vt_tree_style(kind, '[]')); } catch (e) { return null; }
+      }
       if (m[1] === 'view-transition-group' && s.newNames) { copied = (inNew ? s.newNames : s.oldNames)[m[2]].props; }
     } else if (m[1] !== 'view-transition') {
       return null;
     }
     try { return JSON.parse(_lumen_vt_tree_style(kind, JSON.stringify(copied))); } catch (e) { return null; }
-  },
-  writable: true, enumerable: false, configurable: true,
-});
+  });
 
 // §6.3 "skip the view transition": ready rejects with `reason`, finished follows the
 // update callback, which still runs when it has not yet.
@@ -345,14 +357,16 @@ function finish(s) {
     var settled = s.waits.map(function (p) { return p.then(noop, noop); });
     return Promise.all(settled).then(function () { return s.waits.length > seen ? waitAll() : undefined; });
   };
-  // A scoped transition has no shell cross-fade to wait for: it ends with the animations of its
-  // pseudo-element tree (§6.3 "handle transition frame"), a cancelled one counts as ended.
+  // §6.3 "handle transition frame": the transition ends with the animations of its pseudo-element
+  // tree, a cancelled one counts as ended. The shell's cross-fade of a document transition runs
+  // from the same author durations, so no shell → JS signal is needed for it.
   var animationsDone = function () {
-    if (s.nid === null || !s.el || typeof s.el.getAnimations !== 'function') { return Promise.resolve(); }
-    var pending = s.el.getAnimations({ subtree: true }).filter(function (a) {
+    var el = s.el || document.documentElement;
+    if (!el || typeof el.getAnimations !== 'function') { return Promise.resolve(); }
+    var pending = el.getAnimations({ subtree: true }).filter(function (a) {
       if (a.playState === 'finished' || a.playState === 'idle') { return false; }
       var pe = a.effect && a.effect.pseudoElement;
-      return a.effect && a.effect.target === s.el && typeof pe === 'string' && pe.indexOf('::view-transition') === 0;
+      return a.effect && a.effect.target === el && typeof pe === 'string' && pe.indexOf('::view-transition') === 0;
     });
     if (!pending.length) { return Promise.resolve(); }
     return Promise.all(pending.map(function (a) { return a.finished.then(noop, noop); })).then(animationsDone);
@@ -530,31 +544,24 @@ if (typeof Element === 'function' && Element.prototype) {
 
 // Whether the element `nid` is the scope of a running transition, which makes its
 // `view-transition-scope` compute to `all` meanwhile (§2.4).
-Object.defineProperty(G, '_lumen_vt_scope_active', {
-  value: function (nid) { return currentOfNid(nid) !== null; },
-  writable: true, enumerable: false, configurable: true,
-});
+exportInternal('_lumen_vt_scope_active', function (nid) { return currentOfNid(nid) !== null; });
 
 // Node indexes of the elements that carry a pseudo-element tree right now, the document element
 // first.
-Object.defineProperty(G, '_lumen_vt_pseudo_owners', {
-  value: function () {
+exportInternal('_lumen_vt_pseudo_owners', function () {
     var out = [];
     allCurrent().forEach(function (s) {
       if (s.phase !== 'update-callback-called' && s.phase !== 'animating') { return; }
       out.push(s.nid === null ? (document.documentElement ? document.documentElement.__nid__ : null) : s.nid);
     });
     return out.filter(function (n) { return n != null; });
-  },
-  writable: true, enumerable: false, configurable: true,
-});
+  });
 
 // The `@keyframes` of the UA sheet (§6.5): `-ua-view-transition-fade-out` / `-fade-in` on the
 // old / new image, `-ua-view-transition-group-anim-<name>` moving the group from the old box to
 // the new one (a name present in one state only keeps that box). JSON like
 // `_lumen_keyframes_json`, null for any other name.
-Object.defineProperty(G, '_lumen_vt_ua_keyframes', {
-  value: function (name) {
+exportInternal('_lumen_vt_ua_keyframes', function (name) {
     var fade = /^-ua-view-transition-fade-(out|in)$/.exec(name);
     if (fade) {
       var o = fade[1] === 'out' ? ['1', '0'] : ['0', '1'];
@@ -574,14 +581,11 @@ Object.defineProperty(G, '_lumen_vt_ua_keyframes', {
       return [['transform', 'translate(' + r[0] + 'px, ' + r[1] + 'px)'], ['width', r[2] + 'px'], ['height', r[3] + 'px']];
     };
     return JSON.stringify([{ offset: 0, decls: box(from || to) }, { offset: 1, decls: box(to || from) }]);
-  },
-  writable: true, enumerable: false, configurable: true,
-});
+  });
 
 // Kinds of the pseudo-elements the active transition has, in tree order (`::view-transition`,
 // then per name group → image pair → old → new); empty when there is none.
-Object.defineProperty(G, '_lumen_vt_pseudo_list', {
-  value: function (nid) {
+exportInternal('_lumen_vt_pseudo_list', function (nid) {
     var s = currentOfNid(nid);
     if (!s || (s.phase !== 'update-callback-called' && s.phase !== 'animating')) { return []; }
     var names = Object.keys(s.oldNames || {});
@@ -593,9 +597,7 @@ Object.defineProperty(G, '_lumen_vt_pseudo_list', {
       if (s.newNames && n in s.newNames) { out.push('view-transition-new(' + n + ')'); }
     });
     return out;
-  },
-  writable: true, enumerable: false, configurable: true,
-});
+  });
 
 // ── pagereveal / pageswap (HTML LS §7.11.9) ─────────────────────────────────
 // Only the interfaces and the event-handler attributes: firing them belongs to the
@@ -643,6 +645,42 @@ if (typeof Event === 'function') {
   defineGetter(PageSwapEvent.prototype, 'activation', function (self) { return eventData(self).activation; });
   defineGetter(PageSwapEvent.prototype, 'viewTransition', function (self) { return eventData(self).viewTransition; });
   defineInterface(PageSwapEvent);
+
+  // The `ViewTransition` of a cross-document transition on the new document: the shell cross-fades
+  // the departed page's frame (§3 of View Transitions L2) while the page sees an activated
+  // transition — update callback done, `ready` fulfilled, `finished` after its animations.
+  var revealTransition = function () {
+    var vt = Object.create(vtp);
+    var s = {
+      vt: vt, el: null, nid: null, claims: Object.create(null), callback: null, phase: 'animating',
+      began: true, callbackStarted: true, outcome: { ok: true }, followsCallback: true,
+      ready: deferred(), updateDone: deferred(), finished: deferred(), waits: [],
+      types: makeTypeSet([]),
+    };
+    STATE.set(vt, s);
+    if (active) { skip(active, domErr('Transition was aborted because of invocation of startViewTransition()', 'AbortError')); }
+    setCurrent(s);
+    s.newNames = captureNames(s, discover(s));
+    // The departed document's names are not known here; its whole-page capture is.
+    s.oldNames = Object.create(null);
+    if (s.newNames.root) { s.oldNames.root = s.newNames.root; }
+    s.updateDone.resolve(undefined);
+    s.ready.resolve(undefined);
+    later(function () { finish(s); });
+    return vt;
+  };
+  // HTML LS §7.11.9 "reveal a document": `pagereveal` on the window, `viewTransition` null when
+  // no cross-document transition runs.
+  exportInternal('_lumen_vt_pagereveal', function (withTransition) {
+      var vt = null;
+      if (withTransition) {
+        try { vt = revealTransition(); } catch (e) { vt = null; }
+      }
+      var ev = new PageRevealEvent('pagereveal', { viewTransition: vt });
+      var report = function (e) { if (typeof G._lumen_report_exception === 'function') { G._lumen_report_exception(e); } };
+      // (`dispatchEvent` runs the `onpagereveal` handler too)
+      try { window.dispatchEvent(ev); } catch (e) { report(e); }
+    });
 }
 if (typeof window === 'object' && window !== null) {
   if (!('onpagereveal' in window)) { window.onpagereveal = null; }

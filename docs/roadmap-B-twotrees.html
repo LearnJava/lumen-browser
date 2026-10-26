@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-26",
  "counts": {
-  "open": 299,
-  "fixed": 1347,
+  "open": 296,
+  "fixed": 1356,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1649,
+ "total_bugs": 1655,
  "phases": [
   {
    "id": "P0",
@@ -810,7 +810,7 @@
     {
      "id": "ANCHOR-SCROLL",
      "title": "ANCHOR-SCROLL: привязка якорного позиционирования к прокрутке",
-     "status": "done",
+     "status": "active",
      "size": "L",
      "note": "**Сделано (2026-10-21, ветка `p1-anchor-scroll`), срез 1 — показ:** бокс `absolute`/`fixed`, привязанный к якорю внутри `overflow` контейнеров, которых нет среди его предков, следует за их прокруткой в `--screenshot` и в живом окне (CSS Anchor Positioning 1 §4.3). `LayoutBox::anchor_scroll` (`AnchorScroll { scrollers: Vec<AnchorScroller { node, x, y }> }`, внешний контейнер первым) пишет `apply_anchor_positions` (`box_tree/container_anchor.rs::anchor_scroll_for`: якорь из `position-anchor`, иначе первый именованный в `anchor()`/`anchor-size()`; путь контейнеров якоря — `AnchorRegistry::scroll_chains` из `collect_anchors`; `chain_anchor_scroll` добавляет контейнеры якоря, который сам позиционирован по якорю, с защитой от циклов); смещения копирует `refresh_anchor_scroll` — из хвоста прохода, из `set_scroll_position` и из `restore_scroll_positions`. Геометрия бокса в дереве layout остаётся непрокрученной. Paint оборачивает бокс в `PushScrollLayer` с `id` контейнера (`display_list/print.rs::anchor_scroll_layers`; в `walk` и в `box_layer_ops`), поэтому `patch_scroll_layer` и `apply_scroll_overrides` двигают бокс вместе с контейнером без пересборки списка. **BUG-1479 закрыт:** `cpu_raster.rs` рисует `PushScrollLayer` со сдвигом через `render_offcanvas_transform_group` (слой по габариту содержимого, не по размеру холста). Тесты: `box_tree/tests/anchor_scroll.rs` (8), `display_list/tests/ordered_build_scroll.rs` (4), `cpu_raster.rs` (2). A/B по 210 reftest `css/css-anchor-position` (`--viewport 800x600`, Ahem): thick 169→159, identical 40→50 (`anchor-scroll-chained-001/002/003`, `-composited-scrolling-006`, `-composited-scrolling-paint-001`, `-scrollable-anchor`, `-update-005/006/009/010`), ни одного identical→thick. **Остаток — ANCHOR-SCROLL-2** (критерий `anchor-scroll-002/003`, `position-area-scrolling-005` не достигнут: им нужен `getBoundingClientRect`/`offsetTop` с прокруткой, BUG-1166).",
      "bugs": [
@@ -820,13 +820,23 @@
      "tasks": [
       {
        "id": "ANCHOR-SCROLL-2",
-       "title": "ANCHOR-SCROLL-2: геометрия для скриптов, position-area и fixed при прокрутке",
-       "status": "planned",
+       "title": "ANCHOR-SCROLL-2: геометрия для скриптов (срез 2 сделан)",
+       "status": "done",
        "size": "L",
-       "note": "Остаток ANCHOR-SCROLL. (1) **Геометрия для скриптов:** `getBoundingClientRect`/`offsetLeft`/`offsetTop` якоря в прокручиваемом контейнере и цели, привязанной к нему, обязаны отдавать прокрученное положение (`anchor-scroll-002.html`: цель и якорь `top = 40` после `scrollTop = 10`; `-003.html`). Опубликованные прямоугольники — координаты документа без смещений предков-скроллеров (BUG-1166), собираются тремя обходчиками (`collect_layout_rects`, `ScopedCollection::collect_layout_rects`, `collect_client_rects`): нужны вычитание смещений предков-контейнеров и `anchor_scroll` цели в каждом из них и согласованное отсечение «прямоугольник не сдвинулся» в `scoped_collect.rs`. (2) **`position-area` в прокручиваемом содержащем блоке** (`position-area-scrolling-001…007`, `position-area-scroll-adjust`): полоса сетки строится по scrollable overflow содержащего блока; `-005` ещё требует `position-try-fallbacks: flip-*` с проверкой переполнения при текущей прокрутке. (3) `anchor-scroll-position-try-*` (14 id) — после `position-try` (BUG-562). (4) **`position: fixed` и прокрутка страницы** (`anchor-scroll-fixedpos*`): фиксированная цель с якорем в потоке документа не следует за прокруткой страницы (маркеры `BeginFixedLayer` выводят её из прокрутки; цель с таким якорем должна оставаться в прокручиваемой части). (5) Якорь-`inline` без `LayoutBox` (BUG-1477): без него не зеленеют `anchor-scroll-001`, `-update-001…004/007`, `-implicit-*` — цель остаётся в статической позиции. (6) Hit-test цели: попадание считается по непрокрученному прямоугольнику. (7) Не разбирались: `anchor-scope-scroll`, `anchor-center-scroll-*`, `position-visibility-*-scroll*`, `anchor-scroll-to-sticky-*` (нужен ещё BUG-1468), `anchor-scroll-vlr/vrl`. Стартовая проба и A/B — рецепт в `docs/probe-method.md`, пачка `css/css-anchor-position` через `tests/wpt/reftest_pixdiff.classify`.",
+       "note": "**Сделано (2026-10-26, ветка `p1-anchor-scroll-2`), срез 2 — геометрия для скриптов (п. 1):** `getBoundingClientRect`/`getClientRects`/`getBoxQuads` вычитают прокрутку контейнеров-предков, а у бокса, позиционированного по якорю, ещё и прокрутку контейнеров якоря; `offsetLeft`/`offsetTop` не зависят от прокрутки предков, но сохраняют сдвиг по якорю. Сдвиг считается **при чтении**, а не при сборке прямоугольников: опубликованные прямоугольники остаются координатами документа (`collect_layout_rects` и `ScopedCollection` не тронуты, отсечение «не сдвинулся» не нужно, колесо/`scrollTop` видны сразу без пересборки). Нативная `_lumen_get_scroll_shift(nid)` (`install/platform.rs`) складывает `scroll_states` предков из DOM (корневой элемент — это вьюпорт, его прокрутка не вычитается, страница по-прежнему BUG-1166) и контейнеры якоря из `V8JsRuntime::anchor_scrollers` (`lumen_layout::collect_anchor_scrollers`, `CounterMap::anchor_scrollers` — пишет `apply_anchor_positions`, flush копирует в рантайм). Внутренние потребители `_lumen_get_bounding_rect` (`scrollIntoView`, IntersectionObserver, canvas) остаются на координатах документа. **По осям:** `AnchorScroller { follow_x, follow_y }` — ось следует прокрутке якоря, названного её `anchor()`-вставками (`left`/`right` — x, `top`/`bottom` — y), `position-area` и бокс без `anchor()` — обе оси; вставка на другой якорь оставляет ось на месте (`anchor-scroll-006`), это же поправило paint. WPT `css/css-anchor-position`: 6001→6018 субтестов (`anchor-scroll-002` 3/3, `-006` 3/3, `-007`, `-cleanup` 2/3, `anchor-position-inline-001…003`), `css/cssom-view` +3 (`getBoundingClientRect-scroll`), регрессий нет. Остаток — ANCHOR-SCROLL-3. Было: Остаток ANCHOR-SCROLL. (1) **Геометрия для скриптов:** `getBoundingClientRect`/`offsetLeft`/`offsetTop` якоря в прокручиваемом контейнере и цели, привязанной к нему, обязаны отдавать прокрученное положение (`anchor-scroll-002.html`: цель и якорь `top = 40` после `scrollTop = 10`; `-003.html`). Опубликованные прямоугольники — координаты документа без смещений предков-скроллеров (BUG-1166), собираются тремя обходчиками (`collect_layout_rects`, `ScopedCollection::collect_layout_rects`, `collect_client_rects`): нужны вычитание смещений предков-контейнеров и `anchor_scroll` цели в каждом из них и согласованное отсечение «прямоугольник не сдвинулся» в `scoped_collect.rs`. (2) **`position-area` в прокручиваемом содержащем блоке** (`position-area-scrolling-001…007`, `position-area-scroll-adjust`): полоса сетки строится по scrollable overflow содержащего блока; `-005` ещё требует `position-try-fallbacks: flip-*` с проверкой переполнения при текущей прокрутке. (3) `anchor-scroll-position-try-*` (14 id) — после `position-try` (BUG-562). (4) **`position: fixed` и прокрутка страницы** (`anchor-scroll-fixedpos*`): фиксированная цель с якорем в потоке документа не следует за прокруткой страницы (маркеры `BeginFixedLayer` выводят её из прокрутки; цель с таким якорем должна оставаться в прокручиваемой части). (5) Якорь-`inline` без `LayoutBox` (BUG-1477): без него не зеленеют `anchor-scroll-001`, `-update-001…004/007`, `-implicit-*` — цель остаётся в статической позиции. (6) Hit-test цели: попадание считается по непрокрученному прямоугольнику. (7) Не разбирались: `anchor-scope-scroll`, `anchor-center-scroll-*`, `position-visibility-*-scroll*`, `anchor-scroll-to-sticky-*` (нужен ещё BUG-1468), `anchor-scroll-vlr/vrl`. Стартовая проба и A/B — рецепт в `docs/probe-method.md`, пачка `css/css-anchor-position` через `tests/wpt/reftest_pixdiff.classify`.",
        "bugs": [
         "BUG-1469",
-        "BUG-1166",
+        "BUG-1166"
+       ]
+      },
+      {
+       "id": "ANCHOR-SCROLL-3",
+       "title": "ANCHOR-SCROLL-3: position-area в прокручиваемом блоке, fixed при прокрутке страницы, position-try",
+       "status": "planned",
+       "size": "L",
+       "note": "Остаток ANCHOR-SCROLL-2 (срез 2 закрыл геометрию для скриптов, п. 1). (1) **`position-area` в прокручиваемом содержащем блоке** (`position-area-scrolling-001…007`, `position-area-scroll-adjust`): полоса сетки строится по scrollable overflow содержащего блока; `-005` ещё требует `position-try-fallbacks: flip-*` с проверкой переполнения при текущей прокрутке. (2) `anchor-scroll-position-try-*` (14 id) — после `position-try` (BUG-562). (3) **`position: fixed` и прокрутка страницы** (`anchor-scroll-fixedpos*`): фиксированная цель с якорем в потоке документа не следует за прокруткой страницы (маркеры `BeginFixedLayer` выводят её из прокрутки; цель с таким якорем должна оставаться в прокручиваемой части). (4) Якорь-`inline` без `LayoutBox` (BUG-1477): без него не зеленеют `anchor-scroll-001`, `-update-001…004/007`, `-implicit-*` — цель остаётся в статической позиции. (5) Hit-test цели: попадание считается по непрокрученному прямоугольнику. (6) Не разбирались: `anchor-scope-scroll`, `anchor-center-scroll-*`, `position-visibility-*-scroll*`, `anchor-scroll-to-sticky-*` (нужен ещё BUG-1468), `anchor-scroll-vlr/vrl`. Стартовая проба и A/B — рецепт в `docs/probe-method.md`, пачка `css/css-anchor-position` через `tests/wpt/reftest_pixdiff.classify`. Геометрия контейнеров для скриптов уже сдвигается при чтении (`_lumen_get_scroll_shift`, см. ANCHOR-SCROLL-2); `anchor-scroll-003` (фрагментированный содержащий блок) и `-004` (inline-блок-скроллер, начальная позиция 160 вместо 140) — отдельные расхождения раскладки.",
+       "bugs": [
+        "BUG-1469",
         "BUG-1477",
         "BUG-562"
        ]
@@ -1009,9 +1019,9 @@
     {
      "id": "VT-API-2",
      "title": "VT-API-2: UA-стиль и анимации псевдодерева **BUG-1510 закрыт 2026-10-23 (P3): свойства `view-transition-class`/`-group` разбираются; остаток для этой задачи — сопоставление `::view-transition-group(name.class)` и вложенные группы.**",
-     "status": "planned",
+     "status": "done",
      "size": "L",
-     "note": "Остаток VT-API. (1) **UA-стиль и анимации дерева псевдоэлементов (BUG-1509) — срез 1 сделан 2026-10-23 (P3, ветка `p3-bug-1509`):** UA-стиль и авторские правила в `getComputedStyle`, анимации в `getAnimations()`; остаток — значения анимаций в вычисленном стиле псевдо, геометрия группы, `animate({pseudoElement})`. Исходная постановка: во время активного перехода `getComputedStyle(html, '::view-transition…')` отдаёт UA-таблицу §6/§7 (`::view-transition`, `-group`, `-image-pair`, `-old`, `-new`: `position: absolute`/`fixed`, `inset`, `animation-name: -ua-view-transition-*`, `mix-blend-mode: plus-lighter` на old/new), авторские правила (`::view-transition-image-pair(target) { position: fixed }`) поверх; вне перехода — пусто; `document.getAnimations()` / `getAnimations({subtree: true})` показывают анимации групп/old/new (`pseudo-element-animations.html`, `computed-style-no-active-transition.html`). Имена берутся из `_lumen_vt_named_elements` старого и нового состояния; `compute_view_transition_pseudo_style` уже даёт авторскую часть, UA-часть нужно добавить. (2) **`finished` по концу анимации:** сейчас он разрешается задачей после `ready` (и после `waitUntil`), а кросс-фейд идёт в шелле ещё до 300 мс; нужен обратный канал шелл → JS «переход закончен» (тогда `document.activeViewTransition` живёт, пока идёт анимация). (3) **События `pagereveal`/`pageswap`** не отправляются (интерфейсы и `onpagereveal`/`onpageswap` есть): навигация, в связке с P3-viewtransnav, BUG-945 (`navigation/pagereveal-*`, `pageswap-*`, 44 TIMEOUT). (4) `view-transition-class` / `view-transition-group` и `::view-transition-group(*.class)` не разбираются — строки CSS-SPECS.md для P4, не здесь. Критерий готовности: `pseudo-get-computed-style.html`, `pseudo-element-animations.html`, `computed-style-no-active-transition.html`, `navigation/pagereveal-with-view-transition.html` зелёные.",
+     "note": "**Сделано (2026-10-26, ветка `p1-vt-api-2`):** (1) `getComputedStyle(html, '::view-transition…')` отдаёт UA-таблицу и авторские правила и вне перехода и для имён вне захвата (`_lumen_vt_pseudo_style(kind, nid, styleAbsent)`, как Chromium/WebKit/Gecko), логические longhand'ы UA-таблицы (`inset-block-start`, `inline-size`) читаются как физические (`resolve_logical_properties` в `compute_pseudo_element_style_inner`); CSS-анимации псевдодерева видны в вычисленном стиле (`_wa_gap_an_value(…, pseudo)`), скриптовые `animate({pseudoElement})` не пишут в inline-стиль владельца, а читаются из `getComputedStyle(el, pseudo)` (`_wa_pseudo_applied`), завершённый скриптовый эффект без fill выпадает из `getAnimations()`, `display: none` псевдо/предка снимает его анимации. (2) `finished` документного перехода ждёт анимации его псевдодерева так же, как у scoped (канал шелл → JS не понадобился: кросс-фейд шелла идёт от тех же `animation-duration`). (3) `pagereveal` отправляется новому документу при каждой загрузке (`PersistentJs::fire_page_reveal` → `_lumen_vt_pagereveal`), `viewTransition` — активированный `ViewTransition` кросс-документного перехода (`Lumen::pending_pagereveal_transition`) или `null`. WPT css-view-transitions testharness (102 файла): +8 подтестов, регрессий нет. **Остаток — VT-API-3.** Исходная постановка: Остаток VT-API. (1) **UA-стиль и анимации дерева псевдоэлементов (BUG-1509) — срез 1 сделан 2026-10-23 (P3, ветка `p3-bug-1509`):** UA-стиль и авторские правила в `getComputedStyle`, анимации в `getAnimations()`; остаток — значения анимаций в вычисленном стиле псевдо, геометрия группы, `animate({pseudoElement})`. Исходная постановка: во время активного перехода `getComputedStyle(html, '::view-transition…')` отдаёт UA-таблицу §6/§7 (`::view-transition`, `-group`, `-image-pair`, `-old`, `-new`: `position: absolute`/`fixed`, `inset`, `animation-name: -ua-view-transition-*`, `mix-blend-mode: plus-lighter` на old/new), авторские правила (`::view-transition-image-pair(target) { position: fixed }`) поверх; вне перехода — пусто; `document.getAnimations()` / `getAnimations({subtree: true})` показывают анимации групп/old/new (`pseudo-element-animations.html`, `computed-style-no-active-transition.html`). Имена берутся из `_lumen_vt_named_elements` старого и нового состояния; `compute_view_transition_pseudo_style` уже даёт авторскую часть, UA-часть нужно добавить. (2) **`finished` по концу анимации:** сейчас он разрешается задачей после `ready` (и после `waitUntil`), а кросс-фейд идёт в шелле ещё до 300 мс; нужен обратный канал шелл → JS «переход закончен» (тогда `document.activeViewTransition` живёт, пока идёт анимация). (3) **События `pagereveal`/`pageswap`** не отправляются (интерфейсы и `onpagereveal`/`onpageswap` есть): навигация, в связке с P3-viewtransnav, BUG-945 (`navigation/pagereveal-*`, `pageswap-*`, 44 TIMEOUT). (4) `view-transition-class` / `view-transition-group` и `::view-transition-group(*.class)` не разбираются — строки CSS-SPECS.md для P4, не здесь. Критерий готовности: `pseudo-get-computed-style.html`, `pseudo-element-animations.html`, `computed-style-no-active-transition.html`, `navigation/pagereveal-with-view-transition.html` зелёные.",
      "bugs": [
       "BUG-1509",
       "BUG-1510",
@@ -10385,27 +10395,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1411": {
-   "status": "open",
-   "title": "При `line-height: 20px`: `<div><br></div>` — высота 0 (ожидается 20), `<p>&nbsp;</p>` — 0 (ожидается строка), `<div><br>D</div>` — 20 (ожидается 40), `<div>B<br…",
-   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs`; не локализовано)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1412": {
-   "status": "open",
-   "title": "Точка вне формы `clip-path` (за `inset(0 100px 0 0)` и за `circle(50px at 100px 100px)`) всё равно попадает в элемент: `elementFromPoint(150,400)` → `a` (ожидае…",
-   "component": "js/layout (`document.elementFromPoint`, hit-test)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1417": {
-   "status": "open",
-   "title": "остановки градиента вне отрезка линии (`-50px`, `150px`, `1e9px`, `-131070000px`) не продолжают интерполяцию за пределами бокса, а прижимаются к концам линии. П…",
-   "component": "paint/layout (разбор и растр линейных градиентов)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1418": {
    "status": "open",
    "title": "`background-color: currentcolor` и `background: currentcolor` не красят вовсе, `linear-gradient(currentcolor, blue)` теряет остановку (`DrawLinearGradient … sto…",
@@ -10609,13 +10598,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1523": {
-   "status": "open",
-   "title": "Подчёркивание предка распространяется на float, `position:absolute` и содержимое `inline-block`/`inline-flex` (CSS Text Decoration 3 §2.2 это запрещает). Декора…",
-   "component": "layout/paint (`crates/engine/layout/src/box_tree/` — распространение `text-decoration` на потомков; `crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1524": {
    "status": "open",
    "title": "`align-content`/`justify-content`/`align-items`/`justify-items`/`align-self`/`justify-self`/`place-*`: CSSOM принимает недопустимое, не знает `left`/`safe`/`leg…",
@@ -10630,17 +10612,17 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1526": {
+  "BUG-1715": {
    "status": "open",
-   "title": "`justify-self`/`align-self` у блока и у `position:absolute` бокса без заданного размера не сжимают бокс по содержимому и не выравнивают его в оставшемся месте;…",
-   "component": "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:875` — `justify-self` у блока; абсолютно позиционированный бокс — `box_tree/`)",
+   "title": "Остаток BUG-1526: `text-align: -webkit-right` не источник `justify-self: normal` у блока; `fit-content` вертикального abspos-бокса без min-content высоты (`*-de…",
+   "component": "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — stretch replaced/ratio/table; `style/values/typography.rs::TextAlign` — `-webkit-*`; `box_tree/intrinsic.rs` — min-content вертикального бокса)",
    "date": null,
    "debtor": false
   },
-  "BUG-1527": {
+  "BUG-1716": {
    "status": "open",
-   "title": "`align-content` не действует на блочный контейнер, `inline-block`, multicol и ячейку таблицы. Блок высотой 100 px с `align-content: start\\",
-   "component": "layout (`crates/engine/layout/src/box_tree/` — блочные контейнеры и ячейки таблицы: `align-content` применяется только в flex/grid)",
+   "title": "Остаток BUG-1527: `align-content` не действует на колонки multicol (`multicol/align-content-multicol.html`, 32 сабтеста); `align-content-block-002/003` красные…",
+   "component": "layout (`crates/engine/layout/src/box_tree/multicol_trampoline.rs` — `align-content` в multicol; перерасчёт после смены стиля предка; `position:relative` у inline-`<span>`, BUG-1711)",
    "date": null,
    "debtor": false
   },
@@ -11631,10 +11613,17 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1712": {
+  "BUG-1717": {
    "status": "open",
-   "title": "`text-underline-position: from-font` не отличается от `auto`: позиция подчёркивания `0.10·fs`, толщина `from-font` `0.07·fs` — метрики `post.underlinePosition`/…",
-   "component": "paint (`crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration_pass`)",
+   "title": "vkvideo.ru: цикл `getBoundingClientRect` в `initVideoElementAbrContext` держит поток движка 3–5 с (кадр `DOMRect` на вершине `[js-stall]`), MCP `eval` отвечает…",
+   "component": "js/layout (`getBoundingClientRect` → `DOMRect`, `web_api_shim_mid.js`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1718": {
+   "status": "open",
+   "title": "`window.opener` попапа — заглушка с одним `postMessage` (поля окна-открывателя недоступны) и становится `null` после навигации самого попапа (`location.replace`…",
+   "component": "js/shell (`crates/js/src/shim/web_api_shim_tail_mc.js` — `window.opener`/`_lumen_install_opener`)",
    "date": null,
    "debtor": false
   },
@@ -21081,10 +21070,73 @@
    "date": "2026-10-26",
    "debtor": false
   },
+  "BUG-1523": {
+   "status": "fixed",
+   "title": "Подчёркивание предка распространяется на float, `position:absolute` и содержимое `inline-block`/`inline-flex` (CSS Text Decoration 3 §2.2 это запрещает). Декора…",
+   "component": "layout/paint (`crates/engine/layout/src/box_tree/` — распространение `text-decoration` на потомков; `crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
   "BUG-1410": {
    "status": "fixed",
    "title": "`font-weight: 150.25` → computed `400` (ожидается `150.25`), `calc(100 + 200)` → `400` (ожидается `300`), `0`/`1001`/`-1` → `400` (невалидно, декларация должна…",
    "component": "layout (`style/apply/text.rs`, `style/parse/font_size.rs`; `selector_query.rs`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1411": {
+   "status": "fixed",
+   "title": "При `line-height: 20px`: `<div><br></div>` — высота 0 (ожидается 20), `<p>&nbsp;</p>` — 0 (ожидается строка), `<div><br>D</div>` — 20 (ожидается 40), `<div>B<br…",
+   "component": "layout (`crates/engine/layout/src/box_tree/inline_build.rs`, `inline_wrap.rs`; не локализовано)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1412": {
+   "status": "fixed",
+   "title": "Точка вне формы `clip-path` (за `inset(0 100px 0 0)` и за `circle(50px at 100px 100px)`) всё равно попадает в элемент: `elementFromPoint(150,400)` → `a` (ожидае…",
+   "component": "js/layout (`document.elementFromPoint`, hit-test)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1526": {
+   "status": "fixed",
+   "title": "`justify-self`/`align-self` у блока и у `position:absolute` бокса без заданного размера не сжимали бокс по содержимому и не выравнивали его в оставшемся месте;…",
+   "component": "layout (`crates/engine/layout/src/box_tree/self_align.rs`, `block_flow_trampoline.rs::align_justify_self_child`, `vertical_trampoline.rs`, `multicol_abspos.rs::place_abs_child`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1417": {
+   "status": "fixed",
+   "title": "остановки градиента вне отрезка линии (`-50px`, `150px`, `1e9px`, `-131070000px`) не продолжают интерполяцию за пределами бокса, а прижимаются к концам линии. П…",
+   "component": "paint/layout (разбор и растр линейных градиентов)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1712": {
+   "status": "fixed",
+   "title": "`text-underline-position: from-font` и `text-decoration-thickness: from-font` не отличались от `auto`: метрики `post.underlinePosition`/`underlineThickness` (с…",
+   "component": "paint/layout (`crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration_pass`, `crates/engine/paint/src/lib.rs` `OwnedFontMetrics::underline_px`, `crates/engine/layout/src/box_tree/inline_wrap.rs::annotate_font_underline`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1713": {
+   "status": "fixed",
+   "title": "`new TextDecoder('ascii')` бросает `RangeError`: метки windows-1252 (`ascii`/`us-ascii`/`latin1`/`iso-8859-1`/`windows-1252`, WHATWG Encoding §4.2) не поддержан…",
+   "component": "js + encoding (`crates/js/src/shim/text_encoding_shim.js:115`, `crates/engine/encoding/src/lib.rs::Encoding::from_label` — нет windows-1252)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1714": {
+   "status": "fixed",
+   "title": "vkvideo.ru: строковый `setTimeout` держит поток движка 2–9 с (в одном прогоне ≥ 98 с, MCP `eval` отклоняется), пока JS-чанки `st1-24.vkvideo.ru/dist/web/chunks/…",
+   "component": "js (`_lumen_link_hint_fetch` в `web_api_shim_mid.js` → синхронный нативный `_lumen_link_prefetch_sync`; `v8_runtime/install/net.rs` `_lumen_fetch_async_start`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1527": {
+   "status": "fixed",
+   "title": "`align-content` не действовал на блочный контейнер, `inline-block`, `flow-root`, `list-item` и ячейку таблицы. Исправлено: не-`normal` `align-content` делает бл…",
+   "component": "layout (`crates/engine/layout/src/box_tree/block_align_content.rs`, `bfc.rs::establishes_bfc`, `block_flow_trampoline.rs::finish_frame`, `table_valign.rs::cell_block_align`)",
    "date": "2026-10-26",
    "debtor": false
   }
@@ -21556,6 +21608,9 @@
   ],
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
+  ],
+  "js (`_lumen_link_hint_fetch` в `web_api_shim_mid.js` → синхронный нативный `_lumen_link_prefetch_sync`; `v8_runtime/install/net.rs` `_lumen_fetch_async_start`)": [
+   "BUG-1714"
   ],
   "js (`_lumen_set_inner_html`, `crates/js/src/v8_runtime/dom_helpers.rs` `import_node`)": [
    "BUG-1228"
@@ -22392,6 +22447,9 @@
   "js (шим), layout (`zoom`)": [
    "BUG-943"
   ],
+  "js + encoding (`crates/js/src/shim/text_encoding_shim.js:115`, `crates/engine/encoding/src/lib.rs::Encoding::from_label` — нет windows-1252)": [
+   "BUG-1713"
+  ],
   "js + layout (`crates/js/src/shim/web_api_shim_mid.js::_lumen_canonicalize_longhand`, `crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
    "BUG-1297"
   ],
@@ -22482,6 +22540,9 @@
   "js/layout (`document.elementFromPoint`, hit-test)": [
    "BUG-1412"
   ],
+  "js/layout (`getBoundingClientRect` → `DOMRect`, `web_api_shim_mid.js`)": [
+   "BUG-1717"
+  ],
   "js/layout (`getComputedStyle(el).gridTemplateColumns` — Rust-сторона `_lumen_get_computed_style`)": [
    "BUG-1383"
   ],
@@ -22511,6 +22572,9 @@
   ],
   "js/shell (`crates/js/src/shim/web_api_shim_mid.js` — `HTMLLinkElement.disabled`/`sheet`; `crates/shell/src/stylesheets.rs`)": [
    "BUG-1554"
+  ],
+  "js/shell (`crates/js/src/shim/web_api_shim_tail_mc.js` — `window.opener`/`_lumen_install_opener`)": [
+   "BUG-1718"
   ],
   "js/shell (`crates/js/src/v8_runtime/style_flush.rs`, `crates/js/src/v8_runtime/install/dom_core.rs`, `crates/js/src/v8_runtime/install/platform.rs`, `crates/shell/src/persistent_js.rs`)": [
    "BUG-560"
@@ -22695,9 +22759,6 @@
   "layout (`crates/engine/layout/src/box_tree/` — абсолютно позиционированный бокс: `justify-self`/`align-self`/`place-self` для бокса с обоими инсетами)": [
    "BUG-1481"
   ],
-  "layout (`crates/engine/layout/src/box_tree/` — блочные контейнеры и ячейки таблицы: `align-content` применяется только в flex/grid)": [
-   "BUG-1527"
-  ],
   "layout (`crates/engine/layout/src/box_tree/` — вертикальное положение сегмента в строке)": [
    "BUG-1369"
   ],
@@ -22742,14 +22803,14 @@
   "layout (`crates/engine/layout/src/box_tree/bfc.rs`, `block_flow_trampoline.rs` — схлопывание полей пустого блока)": [
    "BUG-1350"
   ],
+  "layout (`crates/engine/layout/src/box_tree/block_align_content.rs`, `bfc.rs::establishes_bfc`, `block_flow_trampoline.rs::finish_frame`, `table_valign.rs::cell_block_align`)": [
+   "BUG-1527"
+  ],
   "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:268-294` — `default_w = em * 1.5`, `marker_w = default_w.max(text_w)`)": [
    "BUG-1548"
   ],
   "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:819-830` — «the container height must also enclose all floats»; закреплено юнит-тестом `tests/half_leading_columns_floats.rs:621` `container_height_encloses_float`)": [
    "BUG-1403"
-  ],
-  "layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:875` — `justify-self` у блока; абсолютно позиционированный бокс — `box_tree/`)": [
-   "BUG-1526"
   ],
   "layout (`crates/engine/layout/src/box_tree/build.rs` — `display: contents` на `tr`/`tbody` внутри таблицы)": [
    "BUG-1536"
@@ -22941,6 +23002,12 @@
   "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — `auto`-поля через `resolve_or_zero`)": [
    "BUG-1282"
   ],
+  "layout (`crates/engine/layout/src/box_tree/multicol_abspos.rs::place_abs_child` — stretch replaced/ratio/table; `style/values/typography.rs::TextAlign` — `-webkit-*`; `box_tree/intrinsic.rs` — min-content вертикального бокса)": [
+   "BUG-1715"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/multicol_trampoline.rs` — `align-content` в multicol; перерасчёт после смены стиля предка; `position:relative` у inline-`<span>`, BUG-1711)": [
+   "BUG-1716"
+  ],
   "layout (`crates/engine/layout/src/box_tree/multicol_trampoline.rs`, `multicol_abspos.rs`)": [
    "BUG-1399"
   ],
@@ -22949,6 +23016,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree/pseudo_text.rs::is_first_letter_punctuation`)": [
    "BUG-1374"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/self_align.rs`, `block_flow_trampoline.rs::align_justify_self_child`, `vertical_trampoline.rs`, `multicol_abspos.rs::place_abs_child`)": [
+   "BUG-1526"
   ],
   "layout (`crates/engine/layout/src/box_tree/shapes_floats.rs` — `parse_circle_px`, `parse_shape_ellipse_px`, `register_shape_outside`)": [
    "BUG-1517"
@@ -23743,9 +23813,6 @@
   "paint (`crates/engine/paint/src/display_list/geometry.rs::extend_start_to_paint_area`, `cpu_raster.rs`, `renderer.rs`, `femtovg_backend/image.rs` — сетка плиток `DrawBackgroundImage`)": [
    "BUG-1303"
   ],
-  "paint (`crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration_pass`)": [
-   "BUG-1712"
-  ],
   "paint (`crates/engine/paint/src/display_list/tests/text_and_images.rs:514`)": [
    "BUG-1466"
   ],
@@ -23854,6 +23921,9 @@
   ],
   "paint/layout (`crates/engine/paint/src/display_list/commands.rs:54`)": [
    "BUG-1339"
+  ],
+  "paint/layout (`crates/engine/paint/src/display_list/svg_text_decoration.rs::push_text_decoration_pass`, `crates/engine/paint/src/lib.rs` `OwnedFontMetrics::underline_px`, `crates/engine/layout/src/box_tree/inline_wrap.rs::annotate_font_underline`)": [
+   "BUG-1712"
   ],
   "paint/layout (`display_list/background_mask.rs::local_bg_scroller`, `emit_background_layer` `BackgroundImage::Url`)": [
    "BUG-1653"

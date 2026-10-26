@@ -1823,6 +1823,10 @@ pub(crate) struct Lumen {
     /// transitions, with this snapshot as the "before" frame. See
     /// `docs/tasks/ph3-view-transitions-mpa.md`.
     pub(crate) pending_mpa_view_transition_snapshot: Option<lumen_paint::DisplayList>,
+    /// `true` once [`Self::maybe_reveal_mpa_view_transition`] started a cross-document
+    /// transition for the document being loaded: the `pagereveal` event of that document
+    /// (HTML LS §7.11.9, fired next to `load`) then carries a `ViewTransition`, `null` otherwise.
+    pub(crate) pending_pagereveal_transition: bool,
     /// Tab auto-archive state (7A.5).
     ///
     /// Background tabs idle for more than `ARCHIVE_AFTER_MS` are moved here from

@@ -74,11 +74,12 @@ window.getComputedStyle = function(element, pseudoElt) {
     if (illFormed) pseudo = null;
     // The view-transition tree is answered by the View Transitions shim (UA sheet + page rules);
     // outside an active transition, or on an element that is not its scope, the pseudo does not exist.
-    var vtTree = null;
+    var vtTree = null, vtPseudo = null;
     if (pseudo && pseudo.indexOf('view-transition') === 0) {
+        vtPseudo = '::' + pseudo;
         // (a property of the global object: a bare `_lumen_…` name does not reach it from here)
-        if (nid != null && typeof globalThis._lumen_vt_pseudo_style === 'function') {
-            vtTree = globalThis._lumen_vt_pseudo_style(pseudo, nid);
+        if (nid != null && typeof _lumen_vt_pseudo_style === 'function') {
+            vtTree = _lumen_vt_pseudo_style(pseudo, nid, true);
         }
         illFormed = vtTree === null;
         pseudo = null;
@@ -104,11 +105,21 @@ window.getComputedStyle = function(element, pseudoElt) {
     }
     function readProp(name) {
         if (nid == null || illFormed) return '';
-        if (vtTree !== null) return vtTree[name] || '';
-        if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
+        if (vtTree !== null) {
+            var vtBase = vtTree[name] || '';
+            if (vtBase === '' || !_wa_motion_eligible(name)) return vtBase;
+            // Script animations on the tree's pseudo-elements, over CSS Animations (same
+            // read-time overlay as an element's).
+            var vtScript = _wa_pseudo_applied(nid, vtPseudo, name.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); }));
+            return vtScript !== null ? vtScript : _wa_gap_an_value(nid, name, vtBase, vtBase, vtPseudo);
+        }
+        if (pseudo) {
+            var psScript = _wa_pseudo_applied(nid, '::' + pseudo, name.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); }));
+            return psScript !== null ? psScript : _lumen_get_computed_style_pseudo(nid, pseudo, name) || '';
+        }
         // CSS View Transitions L2 §2.4: the scope element of a running transition is `all`.
-        if (name === 'view-transition-scope' && typeof globalThis._lumen_vt_scope_active === 'function'
-            && globalThis._lumen_vt_scope_active(nid)) return 'all';
+        if (name === 'view-transition-scope' && typeof _lumen_vt_scope_active === 'function'
+            && _lumen_vt_scope_active(nid)) return 'all';
         var base = _lumen_computed_property(nid, name);
         // CSS Gap Decorations L1 §4.7 + CSS Transitions L1: the snapshot holds the
         // settled value; a running transition of a rule property is applied here.
@@ -5619,8 +5630,8 @@ function _wa_gap_tr_current(rec, now, camel) {
 // over the native so the unit tests can substitute it).
 function _wa_gap_keyframes_json(name) {
     // The UA `@keyframes` of the view-transition tree live in the View Transitions shim.
-    if (name.indexOf('-ua-view-transition-') === 0 && typeof globalThis._lumen_vt_ua_keyframes === 'function') {
-        return globalThis._lumen_vt_ua_keyframes(name);
+    if (name.indexOf('-ua-view-transition-') === 0 && typeof _lumen_vt_ua_keyframes === 'function') {
+        return _lumen_vt_ua_keyframes(name);
     }
     return _lumen_keyframes_json(name);
 }
@@ -5682,8 +5693,8 @@ function _wa_gap_an_progress(t, ms) {
 
 // The animated value of `kebab` for `nid` given its settled value `base`, or `value`
 // (what the transitions made of it) when no animation of the element touches it.
-function _wa_gap_an_value(nid, kebab, base, value) {
-    var list = _css_an_update(nid, null);
+function _wa_gap_an_value(nid, kebab, base, value, pseudo) {
+    var list = _css_an_update(nid, pseudo || null);
     if (!list.length) return value;
     var ms = _css_now();
     var camel = kebab.replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
@@ -7103,6 +7114,12 @@ function _wa_capture_underlying(anim, eff) {
 Animation.prototype._applyAtP = function(p) {
     var eff = this.effect;
     if (!eff || !eff.target) return;
+    // An effect on a pseudo-element paints nothing on its originating element: the values stay
+    // in `_prevStyles`, which `getComputedStyle(el, pseudo)` reads (`_wa_pseudo_applied`).
+    if (eff.pseudoElement) {
+        this._prevStyles = _wa_compute_at_p(eff, p);
+        return;
+    }
     _wa_capture_underlying(this, eff);
     var styles = _wa_compute_at_p(eff, p);
     for (var prop in styles) {
@@ -7111,9 +7128,35 @@ Animation.prototype._applyAtP = function(p) {
     this._prevStyles = styles;
 };
 
+// The value a script animation (`el.animate(…, { pseudoElement })`) gives property `camel` of
+// the pseudo-element `pseudo` (`::name`) of node `nid`, or null when none applies. The later
+// animation wins.
+function _wa_pseudo_applied(nid, pseudo, camel) {
+    var found = null;
+    for (var i = 0; i < _wa_animations.length; i++) {
+        var a = _wa_animations[i], e = a.effect;
+        if (!e || e.pseudoElement !== pseudo || !e.target || e.target.__nid__ !== nid) continue;
+        var ct = a.currentTime;
+        if (ct === null) continue;
+        // Sampled at the animation's current time (the frame loop has not ticked yet when a
+        // script reads right after `ready`).
+        var p = _wa_iter_progress(e._timing, ct);
+        if (p === -2) continue;   // past the end without a forwards fill: no longer in effect
+        if (p === -1) {
+            var fill = (e._timing && e._timing.fill) || 'auto';
+            if (fill !== 'backwards' && fill !== 'both') continue;
+            p = 0;
+        }
+        var styles = _wa_compute_at_p(e, p);
+        if (styles[camel] != null) found = String(styles[camel]);
+    }
+    return found;
+}
+
 Animation.prototype._clearStyles = function(keep) {
     var eff = this.effect;
     if (!eff || !eff.target) return;
+    if (eff.pseudoElement) { this._prevStyles = {}; return; }
     var before = this._inlineBefore || {};
     for (var prop in this._prevStyles) {
         if (keep && keep[prop]) continue;
@@ -7228,8 +7271,8 @@ var _wa_vt_seen = {};   // node index → { '::kind': true }
 function _wa_pseudo_targets(el) {
     var list = ['::before', '::after'];
     var nid = el && el.__nid__;
-    if (nid != null && typeof globalThis._lumen_vt_pseudo_list === 'function') {
-        var kinds = globalThis._lumen_vt_pseudo_list(nid);
+    if (nid != null && typeof _lumen_vt_pseudo_list === 'function') {
+        var kinds = _lumen_vt_pseudo_list(nid);
         var seen = _wa_vt_seen[nid];
         if (!seen && kinds.length) seen = _wa_vt_seen[nid] = {};
         for (var i = 0; i < kinds.length; i++) seen['::' + kinds[i]] = true;
@@ -7259,7 +7302,16 @@ function _wa_collect_animations(el, out, withPseudo) {
 // animation/transition judges that from its own clock, any other one from its play state.
 function _wa_is_relevant(a) {
     if (!_wa_eff(a)) return false;
-    return a._css ? _css_relevant(a) : a._state !== 'idle';
+    if (a._css) return _css_relevant(a);
+    if (a._state === 'idle') return false;
+    // Web Animations §5.2.3: a finished script animation whose effect is past its end phase
+    // and does not fill forwards is neither current nor in effect.
+    var eff = a.effect, ct = a.currentTime;
+    if (ct !== null && eff && eff._timing && !(a._pbRate < 0) && _wa_iter_progress(eff._timing, ct) === -2) {
+        var fill = eff._timing.fill;
+        return fill === 'forwards' || fill === 'both';
+    }
+    return true;
 }
 
 // The effect without the style flush the public getter of a CSS animation performs.
@@ -7741,7 +7793,7 @@ function _css_new_clock() {
 function _css_prop(nid, pseudo, name) {
     // The `::view-transition` tree: the View Transitions shim's UA sheet under the page's rules.
     if (pseudo && pseudo.indexOf('::view-transition') === 0) {
-        var vt = typeof globalThis._lumen_vt_pseudo_style === 'function' ? globalThis._lumen_vt_pseudo_style(pseudo.slice(2), nid) : null;
+        var vt = typeof _lumen_vt_pseudo_style === 'function' ? _lumen_vt_pseudo_style(pseudo.slice(2), nid) : null;
         return vt && vt[name] || '';
     }
     if (pseudo) return _lumen_get_computed_style_pseudo(nid, pseudo.slice(2), name) || '';
@@ -7811,6 +7863,27 @@ function _css_an_apply(a, lists, i) {
     if (a._eff && !a._effRepl) a._eff.composite = comp === 'add' || comp === 'accumulate' ? comp : 'replace';
 }
 
+function _css_vt_pseudo(pseudo) { return pseudo.indexOf('::view-transition') === 0; }
+
+// A `::view-transition` pseudo-element whose own box, or an ancestor's in the tree, is
+// `display: none` has no box, so no animation runs on it (CSS Animations L1 §3).
+function _css_vt_hidden(nid, pseudo) {
+    if (!pseudo) return false;
+    var m = /^::view-transition(?:-(group|image-pair|old|new))?(?:\(([^()]+)\))?$/.exec(pseudo);
+    if (!m) return false;
+    var chain = [pseudo];
+    if (m[1]) {
+        var arg = '(' + m[2] + ')';
+        if (m[1] === 'old' || m[1] === 'new') chain.push('::view-transition-image-pair' + arg);
+        if (m[1] !== 'group') chain.push('::view-transition-group' + arg);
+        chain.push('::view-transition');
+    }
+    for (var i = 0; i < chain.length; i++) {
+        if (_css_prop(nid, chain[i], 'display') === 'none') return true;
+    }
+    return false;
+}
+
 function _css_boxless(nid) {
     return _lumen_get_computed_style(nid, 'computed:-lumen-boxless') !== ''
         || _lumen_get_computed_style(nid, 'display') === 'none';
@@ -7827,7 +7900,7 @@ function _css_an_update(nid, pseudo) {
     var res = [];
     if (none && !cur) { res.lists = null; return res; }
     // CSS Animations L1 §3: an element that is not rendered runs no animation.
-    if (none || (!pseudo && _css_boxless(nid))) names = [];
+    if (none || (!pseudo || _css_vt_pseudo(pseudo) ? _css_boxless(nid) || _css_vt_hidden(nid, pseudo) : false)) names = [];
     var lists = _css_an_lists(nid, pseudo), next = [], occ = {};
     cur = cur || [];
     for (var i = 0; i < names.length; i++) {
@@ -7958,7 +8031,7 @@ function _css_an_update_all() {
         _css_an_update(+key.slice(0, at), key.slice(at + 1) || null);
     }
     // The view-transition tree has UA `@keyframes` of its own, whatever the sheets define.
-    var vtOwners = typeof globalThis._lumen_vt_pseudo_owners === 'function' ? globalThis._lumen_vt_pseudo_owners() : [];
+    var vtOwners = typeof _lumen_vt_pseudo_owners === 'function' ? _lumen_vt_pseudo_owners() : [];
     var rootEl = document.documentElement;
     if (rootEl && rootEl.__nid__ != null && vtOwners.indexOf(rootEl.__nid__) < 0) vtOwners.push(rootEl.__nid__);
     // (owners of a finished transition too: their pseudo-element animations are dropped here)

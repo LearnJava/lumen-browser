@@ -644,6 +644,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Calls `_lumen_deliver_popstate(state_json, url)` via `eval_js`.
     #[allow(dead_code)]
     fn fire_popstate(&self, state_json: &str, url: &str);
+    /// Fire `pagereveal` on `window` (HTML LS §7.11.9): the new document is about to be
+    /// shown for the first time. `with_transition` — a cross-document view transition is
+    /// running, so `event.viewTransition` is its `ViewTransition`, else `null`.
+    #[allow(dead_code)]
+    fn fire_page_reveal(&self, with_transition: bool) {
+        self.eval_js(&format!(
+            "if(typeof _lumen_vt_pagereveal==='function')_lumen_vt_pagereveal({with_transition})"
+        ));
+    }
     /// Fire a page-lifecycle event (`pageshow` / `pagehide`) on `window`
     /// (HTML Living Standard §8.6 — back/forward cache).
     ///
