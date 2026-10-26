@@ -1084,6 +1084,9 @@ fn finish_frame(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.available_height, frame.init.is_positioned,
         frame.init.pcb, &frame.init.abs_deferred, measurer, viewport, hp,
     );
+    super::abs_static_align::align_static_positions(
+        &mut frame.b, frame.init.content_x, frame.init.content_width, &frame.init.abs_deferred, viewport,
+    );
     if let Some(cut) = clamp_cut {
         line_clamp_flow::apply_cut(&mut frame.b, cut, viewport, measurer);
     }

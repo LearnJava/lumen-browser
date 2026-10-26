@@ -1,6 +1,6 @@
 # BUG-1528 — `align-self`/`justify-self`/`align-items` не влияют на статическую позицию абсолютного бокса в блочном контейнере; во flex-контейнере работает только ось блока
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P3); остаток — [BUG-1719](BUG-1719-OPEN.md)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout (`crates/engine/layout/src/box_tree/` — статическая позиция `position:absolute` бокса в блочном и flex-контейнере)
 
@@ -29,3 +29,9 @@ WPT-RUN-14 срез 24: `css-align/abspos/align-items-static-position`, `align-s
 ## Как проверить
 
 `css/css-align/abspos/align-self-static-position-001.html`, `abspos/justify-self-static-position-001.html`.
+
+## Исправлено
+
+`box_tree/abs_static_align.rs` (вызов из `block_flow_trampoline::finish_frame` после `finish_after_match`): у абсолютного ребёнка блочного контейнера (`block`/`flow-root`/`inline-block`/`list-item`, `horizontal-tb`) по оси с обоими `auto`-инсетами `justify-self` (для `auto` — `justify-items` контейнера) и `align-self` выравнивают бокс в прямоугольнике статической позиции: по x это content box контейнера, по y — точка потока без высоты (поэтому `end` уводит бокс выше точки на его высоту, `center` — на половину), без hull-коррекции. Попутно `reposition_abs_child` (второй проход для потомков за непозиционированной обёрткой) теперь применяет `justify-self`/`align-self` между двумя инсетами, как `place_abs_child` (общая `aligned_between_insets`). Проба: `align-self-static-position-001`, `-006`, `align-self-with-flex-grid-parent` — попиксельно; `-002`, `-008`, `justify-self-static-position-001` — лучше (было 28750→15000, 5000→2500, 3000→1500 px).
+
+Не вошло: прямоугольник-точка внутри inline-элемента, вертикальные режимы письма, `anchor-center` — см. [BUG-1719](BUG-1719-OPEN.md). Ось строки flex-контейнера берёт `justify-content`, а не `justify-self` — так в Flexbox §4.1, оставлено как есть.

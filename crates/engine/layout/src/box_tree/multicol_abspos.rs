@@ -660,26 +660,12 @@ fn place_abs_child(
         // Normal abs-pos: resolve from left/right/top/bottom insets. An axis with both insets and a
         // definite size is over-determined: auto margins absorb the free space, otherwise
         // `justify-self` / `align-self` place the box inside the inset-modified containing block.
-        let aligned = |fixed: bool, align: Option<super::self_align::Alignment>, near: Option<f32>, far: Option<f32>, auto_m: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
-            let (Some(n), Some(f)) = (near, far) else { return None };
-            let mut a = align?;
-            (fixed && !auto_m).then(|| {
-                // CSS Position L3 §5.2: without a `safe`/`unsafe` keyword the margin box stays inside
-                // the containing block joined with the inset-modified one (`hull` stays `None` for
-                // an explicit `unsafe`, see `abs_axis_alignment`).
-                a.hull = a.hull.map(|_| (origin.min(origin + n), (origin + extent).max(origin + extent - f)));
-                super::self_align::aligned_border_start(
-                    a,
-                    super::self_align::AlignArea { lo: origin + n, cell: extent - n - f, size, m_lo: m.0, m_hi: m.1 },
-                )
-            })
-        };
-        let aligned_x = aligned(
+        let aligned_x = aligned_between_insets(
             w_fixed || align_x.is_some(), align_x, left, right,
             cs.margin_left.is_auto() || cs.margin_right.is_auto(),
             cb.x, cb.width, child.rect.width, (c_ml, c_mr),
         );
-        let aligned_y = aligned(
+        let aligned_y = aligned_between_insets(
             h_fixed || align_y.is_some(), align_y, top, bottom,
             cs.margin_top.is_auto() || cs.margin_bottom.is_auto(),
             cb.y, cb.height, child.rect.height, (c_mt, c_mb),
@@ -725,7 +711,7 @@ fn place_abs_child(
 /// physical axis `is_x`. `None` for `auto`/`normal`/`stretch`: the box keeps its inset-driven
 /// position and size. `flow` is the containing block's style, supplying the writing mode and
 /// direction the axes are defined by.
-fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> AxisAlign {
+pub(super) fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> AxisAlign {
     use crate::style::{Direction, WritingMode};
     let rtl = flow.direction == Direction::Rtl;
     let (inline, rev) = if flow.writing_mode == WritingMode::HorizontalTb {
@@ -761,12 +747,12 @@ fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> A
 }
 
 /// [`abs_axis_alignment`]'s result for one physical axis.
-struct AxisAlign {
+pub(super) struct AxisAlign {
     /// `None` — the box keeps its inset-driven position and size.
-    aligned: Option<super::self_align::Alignment>,
+    pub(super) aligned: Option<super::self_align::Alignment>,
     /// An explicit `stretch`: also fills the axis of a box whose *block* axis it is, which
     /// `normal` leaves content-sized.
-    stretch: bool,
+    pub(super) stretch: bool,
 }
 
 /// Offset of an abs-pos box inside the gap between its two insets when the axis
@@ -876,6 +862,36 @@ pub(crate) fn fix_out_of_flow_descendants(
     }
 }
 
+/// Border-box start of an abs-pos box along one axis whose two insets `near`/`far` are set and
+/// whose size is definite (or aligned `fit-content`): CSS Box Alignment L3 §5.3 places it inside the
+/// inset-modified containing block `[origin + near, origin + extent - far]`. `None` — no
+/// alignment applies (`align` is `None`, an inset is `auto`, or auto margins take the free space).
+#[allow(clippy::too_many_arguments)]
+fn aligned_between_insets(
+    fixed: bool,
+    align: Option<super::self_align::Alignment>,
+    near: Option<f32>,
+    far: Option<f32>,
+    auto_m: bool,
+    origin: f32,
+    extent: f32,
+    size: f32,
+    m: (f32, f32),
+) -> Option<f32> {
+    let (Some(n), Some(f)) = (near, far) else { return None };
+    let mut a = align?;
+    (fixed && !auto_m).then(|| {
+        // CSS Position L3 §5.2: without a `safe`/`unsafe` keyword the margin box stays inside
+        // the containing block joined with the inset-modified one (`hull` stays `None` for
+        // an explicit `unsafe`, see `abs_axis_alignment`).
+        a.hull = a.hull.map(|_| (origin.min(origin + n), (origin + extent).max(origin + extent - f)));
+        super::self_align::aligned_border_start(
+            a,
+            super::self_align::AlignArea { lo: origin + n, cell: extent - n - f, size, m_lo: m.0, m_hi: m.1 },
+        )
+    })
+}
+
 /// Moves an already laid-out absolute `child` to where its insets put it in
 /// the final containing block `cb`. An axis with both insets `auto` keeps the
 /// static position the first pass gave it. The child's own layout is not
@@ -893,12 +909,24 @@ fn reposition_abs_child(child: &mut LayoutBox, cb: Rect, viewport: Size) {
     if top.is_some() && bottom.is_some() && abs_auto_sizes(&child.kind, cs).1 {
         child.rect.height = (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - mt - mb).max(0.0);
     }
+    // `justify-self` / `align-self` between two insets (the containing block's own flow is not
+    // known here: the box's own one stands in, as in `place_abs_child`).
+    let aligned_x = aligned_between_insets(
+        true, abs_axis_alignment(cs, cs, true).aligned, left, right,
+        cs.margin_left.is_auto() || cs.margin_right.is_auto(), cb.x, cb.width, child.rect.width, (ml, mr),
+    );
+    let aligned_y = aligned_between_insets(
+        true, abs_axis_alignment(cs, cs, false).aligned, top, bottom,
+        cs.margin_top.is_auto() || cs.margin_bottom.is_auto(), cb.y, cb.height, child.rect.height, (mt, mb),
+    );
     let x = match (left, right) {
+        (Some(_), Some(_)) if aligned_x.is_some() => aligned_x.unwrap_or(cb.x),
         (Some(l), _) => cb.x + l + ml,
         (None, Some(r)) => cb.x + cb.width - r - mr - child.rect.width,
         (None, None) => child.rect.x,
     };
     let y = match (top, bottom) {
+        (Some(_), Some(_)) if aligned_y.is_some() => aligned_y.unwrap_or(cb.y),
         (Some(t), _) => cb.y + t + mt,
         (None, Some(bv)) => cb.y + cb.height - bv - mb - child.rect.height,
         (None, None) => child.rect.y,
