@@ -568,6 +568,11 @@ pub struct InlineFrag {
     /// `pre`/`pre-wrap`). Такая строка выравнивается по `text-align-last`, как и последняя в блоке
     /// (CSS Text L3 §7.2). Выставляет `wrap_inline_run`.
     pub forced_end: bool,
+    /// Метрики подчёркивания шрифта для `text-underline-position: from-font` и
+    /// `text-decoration-thickness: from-font` (BUG-1712). Заполняет раскладка блока
+    /// ([`TextMeasurer::underline_metrics_with_families`]) только для фрагментов с
+    /// `underline`, которым они нужны; `None` — paint рисует эвристику `auto`.
+    pub font_underline: Option<crate::FontUnderlineMetrics>,
 }
 
 /// Равенство по значению, но стиль сначала по указателю: фрагменты строки делят `Arc` с сегментом и
@@ -593,6 +598,7 @@ impl PartialEq for InlineFrag {
             bidi_isolate,
             merged_sources,
             forced_end,
+            font_underline,
         } = self;
         x == &other.x
             && width == &other.width
@@ -611,6 +617,7 @@ impl PartialEq for InlineFrag {
             && bidi_isolate == &other.bidi_isolate
             && merged_sources == &other.merged_sources
             && forced_end == &other.forced_end
+            && font_underline == &other.font_underline
     }
 }
 

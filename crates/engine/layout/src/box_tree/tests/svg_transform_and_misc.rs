@@ -715,6 +715,7 @@ fn make_frag(x: f32, width: f32) -> super::super::InlineFrag {
         bidi_isolate: None,
         merged_sources: Vec::new(),
         forced_end: false,
+        font_underline: None,
     }
 }
 

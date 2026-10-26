@@ -908,6 +908,9 @@ pub(in crate::box_tree) fn dispatch_box(
                 }
             }
         }
+        if let Some(m) = measurer {
+            super::inline_wrap::annotate_font_underline(lines, m);
+        }
         let line_count = lines.len().max(1);
         // CSS Pseudo-elements L4 §3.1: the first formatted line uses the ::first-line
         // style's own font metrics for its line box height (BB-1).
