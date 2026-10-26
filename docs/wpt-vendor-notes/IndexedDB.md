@@ -9,9 +9,9 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 Вендорена целиком 2026-07-22 (коммит `c8cad69f`, `tests/wpt/IndexedDB/`, 245 файлов; `common/`/`service-workers/`-хелперы, на которые ссылаются немногие тесты, НЕ довендорены). Прогон `run_report.py --all --root IndexedDB --recursive`: 230 id получили результат, 197/230 harness OK (33 не добежали — почти все TIMEOUT/внешний hang, 1 `SKIP` из-за отсутствующей поддержки `testdriver.js` в минимальном исполнителе), 393/1225 сабтестов passed. Замеченные кластеры провалов (не заведены как BUG-NNN — первый проход, см. методологию выше): `IDBCursor.continuePrimaryKey` отсутствует (`TypeError: cursor.continuePrimaryKey is not a function`); брошенные ошибки в ряде путей курсора/ключей (`DataError`/`ReadOnlyError`/`TransactionInactiveError`) не всегда настоящие `DOMException` — у части `.code`/`.name` не совпадает с ожидаемым (напр. `indexedDB.cmp()` с BigInt-ключом кидает объект без `code`); транзакции: «Expected success event, but got upgradeneeded event» в ряде сценариев после `abort()` — расхождение в жизненном цикле версий; BigInt как ключ не поддержан (`TypeError: Do not know how to serialize a BigInt` во внутреннем JSON-based персисте) и структурное клонирование с циклами тоже падает на persist (`Converting circular structure to JSON`) — намекает, что внутренний слой персистентности IndexedDB сериализует значения через JSON, а не через настоящий structured-clone
 
 
-## Разведка WPT-IDB-SCOUT (2026-10-26) — ЧЕРНОВИК, не закрыта
+## Разведка WPT-IDB-SCOUT (2026-10-26)
 
-Статус: прогон и триаж сделаны, оформление (баги, задача P1, указатели, строка `docs/wpt-status.md`) — следующей сессией. Код не менялся.
+Статус: **закрыта** (2026-10-26). Код не менялся. Дефекты — BUG-1705…1710 и [BUG-914](../../bugs/BUG-914-OPEN.md) (указатели в `STATUS-P3.md`), фича — `IDB-EVENTS` (P1, `ROADMAP.md`), раннер — `WPT-IDB-RUNNER` (P2).
 
 **Прогон** (`run_corpus.py --prefixes IndexedDB --processes 7`, `dev-release` от `main` `6a43c1d0d`): 813 id, **12.02 %**, harness OK 556, сабтесты 582/3 692 (статусы: OK 556, TIMEOUT 211, ERROR 46). Повтор на чистом `target/dev-release/data/idb` — 12.05 %, то есть накопленное состояние IDB счёт почти не двигает (но ломает `indexedDB.databases()`, см. кластер N). Данные: `.tmp/wpt-idb2/` (первый), `.tmp/wpt-idb3/` (чистый) в слоте `p2-work`; классификатор — `.tmp/idb_cl.py`; пробы — `.tmp/probes/zz-scout-probe*.{html,any.js}` (в `tests/wpt/IndexedDB/` их держать нельзя — попадут в корпус).
 
@@ -48,10 +48,17 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 - Персистентность — «непрозрачный снимок» всей БД origin: рост `data/idb` растёт с числом тестов в одном origin.
 - `DOMMatrix is not defined` в воркере (5 id `structured-clone.any.worker.html`) и `crypto` в воркере ([BUG-1688](../../bugs/BUG-1688-OPEN.md)) — не IDB.
 
-### Что осталось сделать (следующая сессия)
+### Оформление (сделано)
 
-1. Завести `bugs/BUG-NNN-OPEN.md` + `BUGS.md` + указатели в `STATUS-P3.MD`: (A+B) `indexedDB`/`IDB*` не экспортируются в Dedicated/SharedWorker; (D) живые слушатели при диспетче; (E) `getAllRecords`/`getAll(options)`; (G) валидация keyPath; (I) бинарные ключи; (P) зависание загрузки `structured-clone` — после доуточнения; в BUG-914 дописать микротаск-находку и ссылку на эту заметку. Номера брать по `BUGS.md` (последний занятый — проверить).
-2. Задача P1 в `ROADMAP.md` + `STATUS-P1.md` (по образцу NAV-API-2): `IDB-EVENTS` — перевод шима на настоящие `EventTarget`/`Event` с bubbling `request→transaction→db`, microtask checkpoint, глобалы `IDBFactory`/`IDBVersionChangeEvent`, аксессоры вместо own-данных (кластеры D, H, K, M, J, F).
-3. Задача для P2 (раннер): `--processes 1` / отдельный профиль для `databases()`-тестов и чистка `data/idb` перед прогоном (кластер N).
-4. Строка `IndexedDB` в `docs/wpt-status.md` → ссылка на эту заметку; `docs/engine-gaps.md` — пункт про IDB в воркерах.
-5. Убрать из `STATUS-P2.md` указатель `ROADMAP.md:1262`; в `ROADMAP.md:1262` статус `planned` → `done`; убрать пометку «ЧЕРНОВИК» в заголовке раздела.
+| Кластер | Куда ушло |
+|---|---|
+| A, B | [BUG-1705](../../bugs/BUG-1705-OPEN.md) — шим IndexedDB не ставится в Dedicated/SharedWorker |
+| C | [BUG-1226](../../bugs/BUG-1226-OPEN.md) (общая для корпуса) |
+| D | [BUG-1706](../../bugs/BUG-1706-OPEN.md) + `IDB-EVENTS` |
+| E | [BUG-1707](../../bugs/BUG-1707-OPEN.md) |
+| G | [BUG-1708](../../bugs/BUG-1708-OPEN.md) |
+| I | [BUG-1709](../../bugs/BUG-1709-OPEN.md) |
+| P | [BUG-1710](../../bugs/BUG-1710-OPEN.md) |
+| F, H, J, K, L, M | `IDB-EVENTS` (P1, `ROADMAP.md`); K — также [BUG-914](../../bugs/BUG-914-OPEN.md) (дописана микротаск-находка) |
+| N | `WPT-IDB-RUNNER` (P2, `ROADMAP.md`) — чистка `data/idb` и `--processes 1` для `databases()`-тестов |
+| O, Q | не заведены: разнородный хвост по одному-двум id; брать после `IDB-EVENTS` повторной разведкой |
