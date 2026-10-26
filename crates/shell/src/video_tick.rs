@@ -6,6 +6,16 @@
 
 use crate::*;
 
+/// Media time between two decoded frames of a container `<video>` (≈ 30 fps cap).
+const VIDEO_FRAME_MS: u64 = 33;
+/// How often a playing `<video>` is re-checked for its next frame — the same
+/// ≈ 60 Hz as CSS animations (`ANIM_FRAME_INTERVAL`, BUG-1637). Waiting for the
+/// exact due time instead undershoots: the browser loop sleeps in
+/// `recv_timeout`, whose Windows wake-ups land on the ~15.6 ms timer tick, and
+/// a 33 ms wait became 47–62 ms (≈ 10 frames/s measured). A re-check with
+/// nothing due costs ~0.6 ms and presents nothing (`delta Identical`).
+const VIDEO_POLL: std::time::Duration = std::time::Duration::from_millis(12);
+
 impl Lumen {
     /// Mirror `page_tracks.tracks_by_video` into the shared
     /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
@@ -181,7 +191,9 @@ impl Lumen {
         let updates: Vec<(u32, usize, lumen_image::Image)> = playback
             .iter()
             .filter_map(|(nid, state)| {
-                if !state.paused {
+                // `playback` is shared with container videos; their frames are
+                // paced by `tick_video_sessions`, not by this GIF poll.
+                if !state.paused && self.video_gif_frames.contains_key(nid) {
                     has_playing = true;
                 }
                 let cycle = state.cycle_ms;
@@ -220,9 +232,24 @@ impl Lumen {
             self.video_gif_last_frame.insert(nid, idx);
         }
 
+        // Кадр, зарегистрированный выше, уходит в отрисовку этого же
+        // RedrawRequested; следующий проверяем по таймеру, а не немедленным
+        // `request_redraw` (тот гнал ~300 перерисовок/с всей страницы).
         if has_playing || has_updates {
-            self.request_redraw();
+            self.schedule_video_redraw(VIDEO_POLL);
         }
+    }
+
+    /// Разбудить цикл к следующему кадру видео через `page_anim_redraw_at`
+    /// (BUG-1637: тот же таймер из `about_to_wait`, что и у CSS-анимаций).
+    /// Видео-тики идут внутри `RedrawRequested` до отрисовки, поэтому кадр,
+    /// зарегистрированный в этом тике, показывается в этом же кадре; пока ролик
+    /// играет, немедленный `request_redraw` крутил цикл без пауз — ~300
+    /// перерисовок всей страницы в секунду ради ~30 новых кадров, и поток
+    /// окна не успевал декодировать (рывки).
+    fn schedule_video_redraw(&mut self, after: std::time::Duration) {
+        let at = std::time::Instant::now() + after;
+        self.page_anim_redraw_at = Some(self.page_anim_redraw_at.map_or(at, |t| t.min(at)));
     }
 
     /// Advance media-container `<video>` playback: drain pending loads, open
@@ -411,8 +438,8 @@ impl Lumen {
         // decode a paused seek needs; skip it and decode unconditionally
         // whenever the position actually moved.
         let playback = self.video_gif_store.playback.lock().unwrap();
-        let mut has_playing = false;
         let mut due: Vec<(u32, u64, bool)> = Vec::new();
+        let mut next_frame_ms: Option<u64> = None;
         for (nid, state) in playback.iter() {
             if !self.video_sessions.contains_key(nid) {
                 continue;
@@ -457,16 +484,21 @@ impl Lumen {
             if state.is_ended(elapsed_ms, rate) {
                 continue;
             }
-            has_playing = true;
-            // Cap re-decode rate at roughly 30fps — `frame_at` reseeks and
-            // decodes on every call, unlike the GIF path's precomputed table.
-            if last.is_none_or(|l| cur_ms.saturating_sub(l) >= 33) {
+            // Cap re-decode rate at roughly 30fps (VIDEO_FRAME_MS): each due
+            // tick decodes, converts to RGBA and re-uploads the texture.
+            let since = last.map_or(VIDEO_FRAME_MS, |l| cur_ms.saturating_sub(l));
+            let wait_ms = if since >= VIDEO_FRAME_MS {
                 due.push((*nid, cur_ms, true));
-            }
+                VIDEO_FRAME_MS
+            } else {
+                VIDEO_FRAME_MS - since
+            };
+            // Media milliseconds → wall clock at this node's playback rate.
+            let wall_ms = (wait_ms as f64 / rate.abs().max(0.0625)).ceil() as u64;
+            next_frame_ms = Some(next_frame_ms.map_or(wall_ms, |m: u64| m.min(wall_ms)));
         }
         drop(playback);
 
-        let has_due = !due.is_empty();
         for (nid, cur_ms, is_playing) in due {
             let Some(session) = self.video_sessions.get_mut(&nid) else { continue };
             let secs = cur_ms as f64 / 1000.0;
@@ -571,8 +603,10 @@ impl Lumen {
             }
         }
 
-        if has_playing || has_due {
-            self.request_redraw();
+        // Кадры этого тика уже в отрисовке этого же кадра (в том числе кадр
+        // перемотки на паузе); пока ролик играет — проснуться к следующему.
+        if let Some(ms) = next_frame_ms {
+            self.schedule_video_redraw(std::time::Duration::from_millis(ms.max(1)).min(VIDEO_POLL));
         }
     }
 }
