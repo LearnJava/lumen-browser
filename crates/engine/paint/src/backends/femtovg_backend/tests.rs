@@ -63,6 +63,27 @@ fn lru_map_cap_is_at_least_one() {
     assert_eq!(c.len(), 1);
 }
 
+#[test]
+fn lru_map_remove_variants_of_drops_only_that_source() {
+    let mut c: LruMap<u32> = LruMap::new(8);
+    c.insert("canvas:7@100x50".into(), 1);
+    c.insert("canvas:7@20x10".into(), 2);
+    c.insert("canvas:70@20x10".into(), 3);
+    // Другой src, который лишь начинается с "canvas:7@".
+    c.insert("canvas:7@x@20x10".into(), 4);
+    let mut removed = c.remove_variants_of("canvas:7");
+    removed.sort_unstable();
+    assert_eq!(removed, vec![1, 2]);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c.get("canvas:70@20x10"), Some(3));
+    assert_eq!(c.get("canvas:7@x@20x10"), Some(4));
+    // Порядок обращений тоже очищен: вытеснение не упирается в удалённые ключи.
+    let mut c: LruMap<u32> = LruMap::new(1);
+    c.insert("a@1x1".into(), 1);
+    assert_eq!(c.remove_variants_of("a"), vec![1]);
+    assert_eq!(c.insert("b@1x1".into(), 2), None);
+}
+
 // ─── Ph3 writing-mode vertical: text-orientation rotation geometry ──────
 
 /// Applies a femtovg `Transform2D` the same way the canvas does, so a test
