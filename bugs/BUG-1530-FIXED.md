@@ -1,6 +1,6 @@
 # BUG-1530 — Пустой `<span>` с горизонтальными `padding`/`border`/`margin` не занимает места в строке и не рисует фон
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_build.rs` — пустой inline-бокс с `padding`/`border`/`margin`)
 
@@ -30,3 +30,11 @@ WPT-RUN-14 срез 24: `css-inline/empty-span-size-001/002`, `model/phantom-lin
 ## Как проверить
 
 `css/css-inline/model/phantom-line-boxes-001.html`, `empty-span-size-001.html`.
+
+
+## Что сделано
+
+- `collect_inline_segments` (`box_tree/inline_build.rs`): если у inline-элемента не нашлось ни одного сегмента (нет текста, `<br>`, детей-блоков) и хотя бы одна из шести составляющих (`margin`/`border`/`padding` слева и справа) не нулевая, в строку кладётся пустой краевой сегмент (`text: ""`, `is_element_box`, `pre_space`/`post_space`) — как для кусков inline-бокса, разрезанного блоком. Нулевые поля поведение не меняют. Условие по отдельным составляющим, а не по сумме: `margin-left:-1px` и `padding-left:1px; margin-left:-1px` тоже делают строку нефантомной (CSS Inline 3 «invisible line boxes»).
+- WPT `css-inline/model/phantom-line-boxes-001…006`: 6 из 6 попиксельно. `empty-span-size-001/002` остаются красными — там `outline` у пустого span без полей, `<input>`, `<li>` и `scrollIntoView` под `reftest-wait`, к полям inline-оси это не относится.
+- Тесты: `box_tree::tests::block_in_inline_slice::empty_inline_box_*`. Display list 191 страницы корпуса (`graphic_tests`, `samples`) до/после — байт-в-байт.
+
