@@ -1084,7 +1084,7 @@ Regex поиска `rel=match` в `reftest_pixdiff.py` научен `<html:link>
 8. **`font-size: xx-large` и все ключевые слова размера не действуют (BUG-1409):** `getComputedStyle().fontSize` — `16px` для `xx-small…xxx-large`, `larger`, `smaller`; `calc(-10px)` не зажимается в 0.
 9. **`<br>` и `&nbsp;` в блоке: пустая строка не занимает высоты (BUG-1411):** `<div><br></div>` — 0 (ожидается 20), `<div><br>D</div>` — 20 (ожидается 40). Затронут эталон `font-size-zero-2-ref.html` и не менее 23 упавших reftest.
 10. **77 FAIL с `reftest-wait`** (`clip-path/animations/` 55, `css-fonts` 16) — WPT-RUN-15 дополнен; у `clip-path-transition-crash.html` (TIMEOUT) причина другая — переход `clip-path` не создаёт `Animation` (BUG-1234).
-11. **Hit-test игнорирует `clip-path` (BUG-1412):** `elementFromPoint` вне формы возвращает обрезанный элемент.
+11. **Hit-test игнорирует `clip-path` (BUG-1412, исправлено 2026-10-26):** `elementFromPoint` вне формы возвращал обрезанный элемент.
 
 ### Кластеры
 
