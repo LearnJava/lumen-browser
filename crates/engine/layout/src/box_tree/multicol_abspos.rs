@@ -705,18 +705,13 @@ fn abs_self_aligned_start(
     } else {
         (super::grid_vertical::resolve_own(cs.align_self, cx.self_own, cs, is_x, !rev), cx.self_safe)
     };
-    let (m_s, m_e) = if rev { (m_hi, m_lo) } else { (m_lo, m_hi) };
     if matches!(align, AlignValue::LastBaseline) {
         align = AlignValue::End;
     }
     if !matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center) {
         return None;
     }
-    if safe && size + m_s + m_e > cell && matches!(align, AlignValue::End | AlignValue::Center) {
-        align = AlignValue::Start;
-    }
-    let off = super::grid_vertical::axis_offset(align, cell, size, m_s, m_e, false, false);
-    Some(if rev { lo + cell - off - size } else { lo + off })
+    Some(super::self_align::aligned_border_start(align, safe, rev, lo, cell, size, m_lo, m_hi))
 }
 
 /// Offset of an abs-pos box inside the gap between its two insets when the axis

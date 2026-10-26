@@ -36,7 +36,16 @@ fn expectation(doc: &Document, b: &LayoutBox, key: &str) -> Option<f32> {
     attrs.iter().find(|a| a.name.local == key).and_then(|a| a.value.trim().parse().ok())
 }
 
-fn check_box(doc: &Document, b: &LayoutBox, origin: (f32, f32), file: &str, out: &mut Vec<String>) {
+fn check_box(
+    doc: &Document,
+    b: &LayoutBox,
+    origin: (f32, f32),
+    file: &str,
+    seen: &mut std::collections::HashSet<NodeId>,
+    out: &mut Vec<String>,
+) {
+    // Generated boxes (`::before`) share the node of their element: only the first box counts.
+    let own = seen.insert(b.node);
     let label = || match &doc.get(b.node).data {
         NodeData::Element { name, attrs, .. } => {
             let style = attrs.iter().find(|a| a.name.local == "style").map_or("", |a| a.value.as_str());
@@ -45,12 +54,12 @@ fn check_box(doc: &Document, b: &LayoutBox, origin: (f32, f32), file: &str, out:
         }
         _ => String::new(),
     };
-    for (key, got) in [
+    for (key, got) in own.then_some([
         ("data-expected-width", b.rect.width),
         ("data-expected-height", b.rect.height),
         ("data-offset-x", b.rect.x - origin.0),
         ("data-offset-y", b.rect.y - origin.1),
-    ] {
+    ]).into_iter().flatten() {
         if let Some(want) = expectation(doc, b, key)
             && (want - got).abs() > 0.5
         {
@@ -63,19 +72,37 @@ fn check_box(doc: &Document, b: &LayoutBox, origin: (f32, f32), file: &str, out:
         (b.rect.x + b.style.border_left_width, b.rect.y + b.style.border_top_width)
     };
     for c in &b.children {
-        check_box(doc, c, child_origin, file, out);
+        check_box(doc, c, child_origin, file, seen, out);
+    }
+}
+
+fn dump_box(doc: &Document, b: &LayoutBox, depth: usize) {
+    let tag = match &doc.get(b.node).data {
+        NodeData::Element { name, .. } => name.local.to_string(),
+        _ => "#".to_string(),
+    };
+    println!("{:indent$}{tag} {:?} x={} y={} w={} h={}", "", std::mem::discriminant(&b.kind), b.rect.x, b.rect.y, b.rect.width, b.rect.height, indent = depth * 2);
+    for c in &b.children {
+        dump_box(doc, c, depth + 1);
     }
 }
 
 /// Mismatches of one vendored file (`path` relative to `tests/wpt/`); empty when it passes.
 pub(super) fn check_file(path: &str) -> Vec<String> {
-    let full = format!("{}/../../../tests/wpt/{path}", env!("CARGO_MANIFEST_DIR"));
+    let full = if std::path::Path::new(path).is_absolute() {
+        path.to_string()
+    } else {
+        format!("{}/../../../tests/wpt/{path}", env!("CARGO_MANIFEST_DIR"))
+    };
     let html = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("{full}: {e}"));
     let doc = lumen_html_parser::parse(&html);
     let sheet = lumen_css_parser::parse(&style_text(&doc));
     let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
     let mut out = Vec::new();
-    check_box(&doc, &root, (0.0, 0.0), path, &mut out);
+    check_box(&doc, &root, (0.0, 0.0), path, &mut Default::default(), &mut out);
+    if std::env::var_os("LUMEN_ALIGN_DUMP").is_some() {
+        dump_box(&doc, &root, 0);
+    }
     out
 }
 

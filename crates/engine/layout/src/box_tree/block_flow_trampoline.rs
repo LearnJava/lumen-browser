@@ -657,6 +657,25 @@ fn step_child(
     frame.pending_collapsed_mt = collapsed_mt;
 
     let justify_items = frame.init.s.justify_items;
+    // CSS Box Alignment L3 §5.2 (BUG-1526): an explicit `justify-self: stretch` fills the room
+    // even for an orthogonal (vertical) child, whose width is otherwise content-sized.
+    let stretch_override = {
+        let child = &frame.b.children[i];
+        let rev = frame.init.s.direction == crate::style::Direction::Rtl;
+        (child.style.writing_mode != crate::style::WritingMode::HorizontalTb
+            && super::self_align::inline_sizing(&frame.init.s, child, true, rev)
+                == Some(super::self_align::InlineSizing::Stretch))
+        .then(|| {
+            let cs = &child.style;
+            let em = cs.font_size;
+            let margins = cs.margin_left.resolve_or_zero(em, eff_w, viewport) + cs.margin_right.resolve_or_zero(em, eff_w, viewport);
+            let frame_h = cs.padding_left.resolve_or_zero(em, eff_w, viewport)
+                + cs.padding_right.resolve_or_zero(em, eff_w, viewport)
+                + cs.border_left_width
+                + cs.border_right_width;
+            super::self_align::size_override(cs, true, eff_w - margins, frame_h)
+        })
+    };
     let child = &mut frame.b.children[i];
     // Writing Modes L3 §7.3.1 (FLEX-VWM-4): an in-flow orthogonal block whose
     // containing block has no definite height shrinks to its content along the
@@ -670,7 +689,7 @@ fn step_child(
     };
     match dispatch_box(
         child, eff_left, start_y, eff_w, children_available_height, measurer, viewport,
-        children_pcb, hp, !child_is_root_element, outer_for_child, justify_items, None,
+        children_pcb, hp, !child_is_root_element, outer_for_child, justify_items, stretch_override,
     ) {
         DispatchOutcome::Done => {
             post_child_bookkeeping(frame, i, viewport, bottom_cache);
@@ -1088,33 +1107,14 @@ fn align_justify_self_child(frame: &mut Frame, idx: usize, viewport: Size) {
     {
         return;
     }
-    let (value, own, side, safe) = if matches!(cs.justify_self, AlignValue::Auto) {
-        let x = &parent.content_align_extra;
-        (parent.justify_items, x.justify_items_own, x.justify_items_side, x.justify_items_safe)
-    } else {
-        let x = &cs.content_align_extra;
-        (cs.justify_self, x.justify_self_own, x.justify_self_side, x.justify_self_safe)
-    };
-    let value = super::grid_vertical::resolve_own(value, own, cs, true, !rev);
-    let mut align = super::grid_vertical::resolve_side(value, side, parent.writing_mode, rev);
-    align = match align {
-        AlignValue::Baseline => AlignValue::Start,
-        AlignValue::LastBaseline => AlignValue::End,
-        a => a,
-    };
-    if !matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center) {
-        return;
-    }
+    let Some((align, safe)) = super::self_align::inline_alignment(parent, cs, true, rev) else { return };
     let em = cs.font_size;
     let ml = cs.margin_left.resolve_or_zero(em, content_width, viewport);
     let mr = cs.margin_right.resolve_or_zero(em, content_width, viewport);
-    let (m_s, m_e) = if rev { (mr, ml) } else { (ml, mr) };
-    if safe && child.rect.width + m_s + m_e > content_width && matches!(align, AlignValue::End | AlignValue::Center) {
-        align = AlignValue::Start;
-    }
-    let off = super::grid_vertical::axis_offset(align, content_width, child.rect.width, m_s, m_e, false, false);
     let (rel_dx, _) = super::layout_dispatch::relative_offset(cs, em, content_width, frame.init.children_available_height, viewport);
-    let x = if rev { content_x + content_width - off - child.rect.width } else { content_x + off };
+    let x = super::self_align::aligned_border_start(
+        align, safe, rev, content_x, content_width, child.rect.width, ml, mr,
+    );
     let dx = x + rel_dx - child.rect.x;
     if dx.abs() > 0.01 {
         shift_tree(child, dx, 0.0);
