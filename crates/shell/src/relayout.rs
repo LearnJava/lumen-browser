@@ -249,7 +249,7 @@ impl Lumen {
             }
             let mut sheet = lumen_css_parser::parse(&css);
             if let Some(ctx) = font_media_ctx.as_ref() {
-                sheet.retain_active_font_faces(ctx);
+                sheet.retain_active_conditional_rules(ctx);
             }
             // CSS Color L5 §5.3: no network on relayout — keep the ICC bytes
             // the first sheet already fetched.

@@ -12,6 +12,15 @@ pub struct SupportsRule {
     pub rules: Vec<Rule>,
     /// Место блока среди обычных правил листа — см. [`BlockPos`].
     pub pos: BlockPos,
+    /// Условия объемлющих `@media`/`@supports` — см. [`MediaRule::outer`].
+    pub outer: Vec<LayerCondition>,
+}
+
+impl SupportsRule {
+    /// Блок действует в `ctx`: истинны его условие и все объемлющие условия.
+    pub fn holds(&self, ctx: &MediaContext) -> bool {
+        self.condition.evaluate(crate::SUPPORTED_PROPERTIES) && conditions_hold(&self.outer, ctx)
+    }
 }
 
 /// Условие в `@supports (...)`. Грамматика:
@@ -544,6 +553,8 @@ impl<'a> Parser<'a> {
         let cond_str = self.input[cond_start..self.pos].trim();
         let condition = parse_supports_condition(cond_str);
         self.consume(); // '{'
+        let outer = self.cond_stack.clone();
+        self.cond_stack.push(LayerCondition::Supports(condition.clone()));
         let mut rules = Vec::new();
         loop {
             self.skip_ws_and_comments();
@@ -553,21 +564,20 @@ impl<'a> Parser<'a> {
                     self.consume();
                     break;
                 }
-                Some('@') => {
-                    // Из nested @-правил в @supports поддержан только `@font-face`.
-                    self.parse_conditional_body_at_rule(&LayerCondition::Supports(condition.clone()));
-                }
+                Some('@') => self.parse_conditional_body_at_rule(),
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested, _)) = self.parse_rule() {
+                    if let Some((rule, nested, nested_at)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
+                        self.bubble_group_nested_at_rules(nested_at);
                     } else if self.pos == before {
                         self.consume();
                     }
                 }
             }
         }
-        Some(SupportsRule { condition, rules, pos: BlockPos::default() })
+        self.cond_stack.pop();
+        Some(SupportsRule { condition, rules, pos: BlockPos::default(), outer })
     }
 }

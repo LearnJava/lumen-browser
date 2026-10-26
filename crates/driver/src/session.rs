@@ -367,8 +367,8 @@ impl InProcessSession {
             let mut doc_guard = Self::lock_arc_doc(&doc)?;
             let early_css = extract_style_blocks(&doc_guard);
             let mut early_sheet = lumen_css_parser::parse(&early_css);
-            // BUG-1495: `@font-face` под ложным `@media`/`@supports` не в `document.fonts`.
-            early_sheet.retain_active_font_faces(&lumen_css_parser::MediaContext {
+            // BUG-1495/1686: `@font-face`, `@keyframes`, `@property`, `@counter-style` под ложным `@media`/`@supports` не в `document.fonts`.
+            early_sheet.retain_active_conditional_rules(&lumen_css_parser::MediaContext {
                 media_type: "screen".into(),
                 width: self.viewport.width,
                 height: self.viewport.height,

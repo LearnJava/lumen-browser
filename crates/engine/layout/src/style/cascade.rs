@@ -256,6 +256,7 @@ pub(crate) fn compute_style_shareable(
             syntax: p.syntax.clone(),
             inherits: p.inherits,
             initial_value: p.initial_value.clone(),
+            conditions: Vec::new(),
         })
         .collect();
     let registry: HashMap<&str, &PropertyRule> = sheet

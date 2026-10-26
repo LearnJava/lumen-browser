@@ -275,7 +275,7 @@ impl CascadeIndex {
 
         let t = std::time::Instant::now();
         let active_media: Vec<bool> =
-            sheet.media_rules.iter().map(|m| m.query.matches(media_ctx)).collect();
+            sheet.media_rules.iter().map(|m| m.holds(media_ctx)).collect();
         let layer_active: Vec<bool> = sheet
             .layers
             .iter()
@@ -290,7 +290,7 @@ impl CascadeIndex {
         let active_supports: Vec<bool> = sheet
             .supports_rules
             .iter()
-            .map(|s| s.condition.evaluate(SUPPORTED_PROPERTIES))
+            .map(|s| s.holds(media_ctx))
             .collect();
         let active_ns = t.elapsed().as_nanos() as u64;
 
