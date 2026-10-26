@@ -26,16 +26,87 @@ fn emphasis_mark_str(style: &TextEmphasisStyle) -> &str {
     }
 }
 
-/// CSS Text Decoration L4 §5 — emits per-character emphasis marks above or
-/// below each grapheme cluster of `frag.text`.
-///
-/// Phase 0: distributes marks uniformly over the fragment width (no per-glyph
-/// advance measurement). Accurate spacing requires a measurer at paint time
-/// (deferred to Phase 1).
+/// One base character of a fragment as `text-emphasis` sees it: where its advance starts along
+/// the inline axis and how long it is.
+struct EmphasisSlot {
+    start: f32,
+    len: f32,
+    /// Ideograph-class character (`is_cjk`) — upright under `text-orientation: mixed`.
+    cjk: bool,
+}
+
+/// CSS Text Decoration L3 §4.2 — emphasis marks go on every typographic character unit except
+/// white space and control characters; a combining mark belongs to its base.
+fn emphasis_slots(text: &str, total: f32, font_size: f32) -> Vec<Option<EmphasisSlot>> {
+    // The paint crate has no text measurer (see `emit_frag_text`), so the advance of a base
+    // character is estimated by class: an ideograph/kana/full-width form is one em, anything
+    // else is about 0.55 em; the estimates are scaled to the fragment width layout measured.
+    // Exact for monospace and for pure-CJK text, within a word's variance for the rest.
+    const NARROW: f32 = 0.55;
+    let mut clusters: Vec<(bool, f32, bool)> = Vec::new();
+    for c in text.chars() {
+        let combining = matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF
+            | 0x200B..=0x200F | 0x20D0..=0x20FF | 0x3099 | 0x309A | 0xFE00..=0xFE0F);
+        if combining && !clusters.is_empty() {
+            continue;
+        }
+        let cjk = lumen_layout::vertical::is_cjk(c);
+        let weight = if cjk { 1.0 } else { NARROW };
+        clusters.push((!(c.is_whitespace() || c.is_control()), weight, cjk));
+    }
+    let sum: f32 = clusters.iter().map(|&(_, w, _)| w).sum();
+    if sum <= 0.0 {
+        return Vec::new();
+    }
+    // A fragment layout could not measure (no measurer: width 0) falls back to the em estimate.
+    let scale = if total > 0.0 { total / sum } else { font_size };
+    let mut at = 0.0;
+    clusters
+        .into_iter()
+        .map(|(marked, w, cjk)| {
+            let slot = EmphasisSlot { start: at, len: w * scale, cjk };
+            at += w * scale;
+            marked.then_some(slot)
+        })
+        .collect()
+}
+
+/// Advance of the mark glyph, estimated for the same reason: the keyword shapes are one em of
+/// the mark font, a custom string about 0.6 em per character.
+fn emphasis_mark_advance(style: &TextEmphasisStyle, mark: &str, mark_size: f32) -> f32 {
+    match style {
+        TextEmphasisStyle::String(_) => mark.chars().count() as f32 * 0.6 * mark_size,
+        _ => mark_size,
+    }
+}
+
+fn emphasis_mark_cmd(frag: &InlineFrag, mark: &str, rect: Rect, mark_size: f32) -> DisplayCommand {
+    DisplayCommand::DrawText {
+        font_stretch: frag.style.font_stretch,
+        rect,
+        text: mark.to_string(),
+        font_size: mark_size,
+        color: frag.style.text_emphasis_color.resolve(frag.style.color),
+        font_family: frag.style.font_family.clone(),
+        font_weight: frag.style.font_weight,
+        font_style: frag.style.font_style,
+        font_variation_axes: vec![],
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 0.0,
+        letter_spacing: 0,
+        word_spacing: 0,
+        highlight_name: None,
+        text_orientation: None,
+    }
+}
+
+/// CSS Text Decoration L3 §4.2 — emits one emphasis mark per base character of `frag.text`,
+/// centred on the character's advance, hugging the em box of the text: above it for `over`,
+/// below it for `under` (layout makes room — `emphasis_extra`).
 fn emit_text_emphasis_marks(
     out: &mut Vec<DisplayCommand>,
     container_x: f32,
-    line_h: f32,
     frag_y: f32,
     frag: &InlineFrag,
 ) {
@@ -43,39 +114,54 @@ fn emit_text_emphasis_marks(
     if mark.is_empty() {
         return;
     }
-    let char_count = frag.text.chars().count();
-    if char_count == 0 {
+    let mark_size = TextEmphasisStyle::mark_size(frag.style.font_size);
+    let mark_y = if frag.style.text_emphasis_position.is_over() {
+        frag_y - mark_size
+    } else {
+        frag_y + frag.style.font_size
+    };
+    let mark_w = emphasis_mark_advance(&frag.style.text_emphasis_style, mark, mark_size);
+    let visual = lumen_layout::bidi::visual_text(&frag.text, frag.bidi_level);
+    let frag_x = container_x + frag.x;
+    for slot in emphasis_slots(&visual, frag.width, frag.style.font_size).into_iter().flatten() {
+        let x = frag_x + slot.start + (slot.len - mark_w) / 2.0;
+        out.push(emphasis_mark_cmd(frag, mark, Rect::new(x, mark_y, mark_w, mark_size * 1.5), mark_size));
+    }
+}
+
+/// Vertical counterpart of [`emit_text_emphasis_marks`] (CSS Text Decoration L3 §4.2: in a
+/// vertical writing mode `right`/`left` pick the side, `over`/`under` do not apply). The marks
+/// run down the column beside the glyph box, centred on each character's advance.
+///
+/// `column_x`/`col_width` are the column the fragment was painted in, `y0` the top of the
+/// fragment along the inline axis. The glyph box is where the rasterizer puts the glyph, which
+/// is not the centre of the column: an upright character starts at the column's left edge, a
+/// rotated one (`mixed` Latin, `sideways`) ends at its right edge (`rasterize_text_mixed`).
+fn emit_vertical_emphasis_marks(
+    out: &mut Vec<DisplayCommand>,
+    column_x: f32,
+    col_width: f32,
+    y0: f32,
+    frag: &InlineFrag,
+) {
+    let mark = emphasis_mark_str(&frag.style.text_emphasis_style);
+    if mark.is_empty() {
         return;
     }
-    let mark_size = frag.style.font_size * 0.5;
-    let is_over = frag.style.text_emphasis_position.is_over();
-    let mark_y = if is_over {
-        frag_y - mark_size * 1.2
-    } else {
-        frag_y + line_h
-    };
-    let color = frag.style.text_emphasis_color.resolve(frag.style.color);
-    let char_w = frag.width / char_count as f32;
-    let frag_x = container_x + frag.x;
-    for i in 0..char_count {
-        out.push(DisplayCommand::DrawText {
-            font_stretch: frag.style.font_stretch,
-            rect: Rect::new(frag_x + i as f32 * char_w, mark_y, char_w, mark_size * 1.5),
-            text: mark.to_string(),
-            font_size: mark_size,
-            color,
-            font_family: frag.style.font_family.clone(),
-            font_weight: frag.style.font_weight,
-            font_style: frag.style.font_style,
-            font_variation_axes: vec![],
-            font_features: Vec::new(),
-            font_palette: None,
-            tab_size: 0.0,
-            letter_spacing: 0,
-            word_spacing: 0,
-            highlight_name: None,
-            text_orientation: None,
-        });
+    let fs = frag.style.font_size;
+    let mark_size = TextEmphasisStyle::mark_size(fs);
+    let mark_w = emphasis_mark_advance(&frag.style.text_emphasis_style, mark, mark_size);
+    let right = frag.style.text_emphasis_position.is_right();
+    for slot in emphasis_slots(&frag.text, frag.width, fs).into_iter().flatten() {
+        let upright = match frag.style.text_orientation {
+            TextOrientation::Upright => true,
+            TextOrientation::Sideways => false,
+            _ => slot.cjk,
+        };
+        let box_left = if upright { column_x } else { column_x + col_width - fs };
+        let x = if right { box_left + fs } else { box_left - mark_size };
+        let y = y0 + slot.start + (slot.len - mark_size) / 2.0;
+        out.push(emphasis_mark_cmd(frag, mark, Rect::new(x, y, mark_w, mark_size * 1.5), mark_size));
     }
 }
 
@@ -196,7 +282,7 @@ pub(super) fn emit_frag_text(out: &mut Vec<DisplayCommand>, frag: &InlineFrag, g
     });
     emit_text_stroke(out, base_rect, frag);
     push_text_decoration(out, container_x, frag_y, frag);
-    emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
+    emit_text_emphasis_marks(out, container_x, frag_y, frag);
 }
 
 /// WHATWG Compat §3.2 — `-webkit-text-stroke`: обводка глифов поверх заливки
@@ -297,6 +383,7 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
                 highlight_name: None,
                 text_orientation: Some(frag.style.text_orientation),
             });
+            emit_vertical_emphasis_marks(out, column_x, col_width, rect.y, frag);
         }
     }
 }
