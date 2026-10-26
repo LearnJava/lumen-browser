@@ -485,8 +485,8 @@ fn place_abs_child(
     // CSS Position L3 §5.2 / Box Alignment L3 §5.3: a self-alignment other than `normal` makes
     // an `auto` inset 0 (the box is aligned inside the inset-modified containing block instead of
     // sitting at its static position) and an `auto` size `fit-content` instead of stretched.
-    let align_x = abs_axis_alignment(&cs, flow, true);
-    let align_y = abs_axis_alignment(&cs, flow, false);
+    let (axis_x, axis_y) = (abs_axis_alignment(&cs, flow, true), abs_axis_alignment(&cs, flow, false));
+    let (align_x, align_y) = (axis_x.aligned, axis_y.aligned);
     let zero_auto = |near: Option<f32>, far: Option<f32>, aligned: bool| {
         if aligned && (near.is_some() || far.is_some()) { (near.or(Some(0.0)), far.or(Some(0.0))) } else { (near, far) }
     };
@@ -555,10 +555,30 @@ fn place_abs_child(
     let ratio_sized_h = ratio && cs.height.is_none() && (cs.width.is_some() || ratio_stretched_w);
     let stretched_h = (top.is_some() && bottom.is_some() && h_auto && !ratio_sized_h && align_y.is_none())
         .then(|| (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0));
+    // A vertical box is as tall as its inline size: it fills the room only when it has none
+    // (`stretch`ed), otherwise `fit-content` once aligned (the room it is laid out in is the
+    // whole containing block).
+    let vertical_child = cs.writing_mode != crate::style::WritingMode::HorizontalTb
+        && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot);
+    let stretched_h = stretched_h.or_else(|| {
+        (vertical_child && align_y.is_some() && h_auto && top.is_some() && bottom.is_some()).then(|| {
+            let room = (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
+            max_content_outer_height(child, measurer, viewport).min(room)
+        })
+    });
     // CSS Position L3 §5.3: a form control with a UA-default `width` is «semi-replaced» — two insets
     // stretch it like a non-replaced box instead of keeping the 174px/200px/… UA size.
     let semi_stretched_w = left.is_some() && right.is_some() && w_auto && matches!(child.kind, BoxKind::FormControl { .. });
-    let stretched_w = (ratio_stretched_w || semi_stretched_w).then(|| (avail_w - c_ml - c_mr).max(0.0));
+    // An explicit `stretch` fills the room along the block axis of a vertical box too.
+    let block_stretched_w = vertical_child && axis_x.stretch && left.is_some() && right.is_some() && w_auto;
+    let stretched_w = (ratio_stretched_w || semi_stretched_w || block_stretched_w).then(|| {
+        let room = if block_stretched_w {
+            (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
+        } else {
+            avail_w
+        };
+        (room - c_ml - c_mr).max(0.0)
+    });
     // CSS 2.1 §10.5: a percentage `height` of an out-of-flow box resolves against
     // the padding box of its containing block, whose height is always definite.
     // CSS 2.1 §10.3.7 / Box 4: `padding` and `margin` percentages resolve against the containing
@@ -703,7 +723,7 @@ fn place_abs_child(
 /// physical axis `is_x`. `None` for `auto`/`normal`/`stretch`: the box keeps its inset-driven
 /// position and size. `flow` is the containing block's style, supplying the writing mode and
 /// direction the axes are defined by.
-fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> Option<(AlignValue, bool, bool)> {
+fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> AxisAlign {
     use crate::style::{Direction, WritingMode};
     let rtl = flow.direction == Direction::Rtl;
     let (inline, rev) = if flow.writing_mode == WritingMode::HorizontalTb {
@@ -725,7 +745,20 @@ fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> O
         AlignValue::Baseline => align = AlignValue::Start,
         _ => {}
     }
-    matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center).then_some((align, safe, rev))
+    AxisAlign {
+        aligned: matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center).then_some((align, safe, rev)),
+        stretch: align == AlignValue::Stretch,
+    }
+}
+
+/// [`abs_axis_alignment`]'s result for one physical axis.
+struct AxisAlign {
+    /// `(alignment, safe, axis runs against the physical direction)`; `None` — the box keeps its
+    /// inset-driven position and size.
+    aligned: Option<(AlignValue, bool, bool)>,
+    /// An explicit `stretch`: also fills the axis of a box whose *block* axis it is, which
+    /// `normal` leaves content-sized.
+    stretch: bool,
 }
 
 /// Offset of an abs-pos box inside the gap between its two insets when the axis
