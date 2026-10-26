@@ -903,14 +903,14 @@ impl lumen_core::ext::JsFetchProvider for SlowPreload {
         _nonce: &str,
     ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
         assert_eq!(as_kind, "script");
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        std::thread::sleep(std::time::Duration::from_millis(800));
         self.fetch_sync(url, "GET")
     }
 }
 
 /// BUG-1714: the hints a page inserts must not hold the engine thread. Three
-/// 400 ms fetches used to run one after another inside the timer task
-/// (1.2 s on the thread); now the task returns at once and the three overlap.
+/// 800 ms fetches used to run one after another inside the timer task
+/// (2.4 s on the thread); now the task returns at once and the three overlap.
 #[test]
 fn preload_links_do_not_block_the_engine_thread() {
     let rt = v8_runtime_with_dom_and_fetch(make_doc(), Arc::new(SlowPreload));
@@ -936,8 +936,8 @@ fn preload_links_do_not_block_the_engine_thread() {
     assert_eq!(rt.eval("globalThis.__b1714").unwrap(), lumen_core::JsValue::Number(0.0));
     rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     assert_eq!(rt.eval("globalThis.__b1714").unwrap(), lumen_core::JsValue::Number(3.0));
-    // Overlapping, not serial: 3 x 400 ms in series would be 1.2 s.
-    assert!(started.elapsed() < std::time::Duration::from_millis(1000), "{:?}", started.elapsed());
+    // Overlapping, not serial: 3 x 800 ms in series would be 2.4 s.
+    assert!(started.elapsed() < std::time::Duration::from_millis(2000), "{:?}", started.elapsed());
 }
 
 /// `link.relList.supports('preload')` is the first line of WPT's own
