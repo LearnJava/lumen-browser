@@ -6,7 +6,7 @@
 //! таблице (U+FFFD только на 0x98 в cp1251).
 
 use crate::Encoding;
-use crate::tables::{CP866, KOI8_R, WIN1251};
+use crate::tables::{CP866, KOI8_R, WIN1251, WIN1252};
 
 /// Декодирует байты в строку. Алиас для [`decode_to_string`], короткий и
 /// привычный по аналогии с `encoding_rs::Encoding::decode`.
@@ -37,6 +37,7 @@ pub fn decode_to_string_opts(encoding: Encoding, bytes: &[u8], ignore_bom: bool)
         Encoding::Utf32Le => decode_utf32(bytes, /*little_endian=*/ true, ignore_bom),
         Encoding::Utf32Be => decode_utf32(bytes, /*little_endian=*/ false, ignore_bom),
         Encoding::Windows1251 => decode_single_byte(bytes, &WIN1251),
+        Encoding::Windows1252 => decode_single_byte(bytes, &WIN1252),
         Encoding::Koi8R => decode_single_byte(bytes, &KOI8_R),
         Encoding::Cp866 => decode_single_byte(bytes, &CP866),
     }
@@ -244,6 +245,12 @@ mod tests {
         assert!(out.contains('\u{FFFD}'));
         assert!(out.contains("ab"));
         assert!(out.contains("cd"));
+    }
+
+    #[test]
+    fn win1252_decodes_c1_and_latin1() {
+        // 0x80 → €, 0xE9 → é, 0x81 — неотображаемый C1 остаётся U+0081 (WHATWG).
+        assert_eq!(decode(Encoding::Windows1252, &[0x80, 0xE9, 0x81]), "€é\u{81}");
     }
 
     #[test]
