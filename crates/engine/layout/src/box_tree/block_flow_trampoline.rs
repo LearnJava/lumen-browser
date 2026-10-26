@@ -1107,13 +1107,14 @@ fn align_justify_self_child(frame: &mut Frame, idx: usize, viewport: Size) {
     {
         return;
     }
-    let Some((align, safe)) = super::self_align::inline_alignment(parent, cs, true, rev) else { return };
+    let Some(align) = super::self_align::inline_alignment(parent, cs, true, rev) else { return };
     let em = cs.font_size;
     let ml = cs.margin_left.resolve_or_zero(em, content_width, viewport);
     let mr = cs.margin_right.resolve_or_zero(em, content_width, viewport);
     let (rel_dx, _) = super::layout_dispatch::relative_offset(cs, em, content_width, frame.init.children_available_height, viewport);
     let x = super::self_align::aligned_border_start(
-        align, safe, None, rev, content_x, content_width, child.rect.width, ml, mr,
+        align,
+        super::self_align::AlignArea { lo: content_x, cell: content_width, size: child.rect.width, m_lo: ml, m_hi: mr },
     );
     let dx = x + rel_dx - child.rect.x;
     if dx.abs() > 0.01 {

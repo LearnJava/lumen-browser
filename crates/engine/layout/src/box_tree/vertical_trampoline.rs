@@ -357,14 +357,21 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
         let mb = child.style.margin_bottom.resolve_or_zero(cem, content_inline, viewport);
         // CSS Box Alignment L3 §5.2 (BUG-1526): `justify-self` of the child along this container's
         // inline axis (y); `normal`/`stretch` keep the over-constrained rule above.
-        let y = if let Some((align, safe)) =
+        let y = if let Some(align) =
             super::self_align::inline_alignment(&frame.b.style, &child.style, false, inline_start_at_end)
         {
             Some(super::self_align::aligned_border_start(
-                align, safe, None, inline_start_at_end, frame.init.content_y, content_inline, child.rect.height, mt, mb,
+                align,
+                super::self_align::AlignArea {
+                    lo: frame.init.content_y,
+                    cell: content_inline,
+                    size: child.rect.height,
+                    m_lo: mt,
+                    m_hi: mb,
+                },
             ))
         } else {
-            inline_start_at_end.then(|| frame.init.content_y + content_inline - mb - child.rect.height)
+            inline_start_at_end.then_some(frame.init.content_y + content_inline - mb - child.rect.height)
         };
         if let Some(y) = y {
             let dy = y + rel_y - child.rect.y;

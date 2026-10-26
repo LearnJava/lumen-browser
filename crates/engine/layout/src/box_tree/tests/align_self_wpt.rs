@@ -106,6 +106,99 @@ pub(super) fn check_file(path: &str) -> Vec<String> {
     out
 }
 
+/// Vendored css-align files that pass in full (BUG-1526). Left out, with the reason: `blocks/
+/// justify-self-text-align-2` (`text-align: -webkit-right` as the source of `justify-self: normal`),
+/// `abspos/*-default-overflow-*-vrl` (a vertical box's `fit-content` needs its min-content
+/// height), `abspos/stretch-intrinsic-size-*` and `abspos/table-*-stretch` (stretching a replaced,
+/// ratio-sized or table box), `content-distribution/default-overflow-alignment-*` (flex/grid
+/// content distribution).
+const PASSING: &[&str] = &[
+    "css/css-align/blocks/justify-self-block-in-inline.html",
+    "css/css-align/blocks/justify-self-htb-ltr-htb.html",
+    "css/css-align/blocks/justify-self-htb-ltr-vlr.html",
+    "css/css-align/blocks/justify-self-htb-ltr-vrl.html",
+    "css/css-align/blocks/justify-self-htb-rtl-htb.html",
+    "css/css-align/blocks/justify-self-htb-rtl-vlr.html",
+    "css/css-align/blocks/justify-self-htb-rtl-vrl.html",
+    "css/css-align/blocks/justify-self-vlr-ltr-htb.html",
+    "css/css-align/blocks/justify-self-vlr-ltr-vlr.html",
+    "css/css-align/blocks/justify-self-vlr-ltr-vrl.html",
+    "css/css-align/blocks/justify-self-vlr-rtl-htb.html",
+    "css/css-align/blocks/justify-self-vlr-rtl-vlr.html",
+    "css/css-align/blocks/justify-self-vlr-rtl-vrl.html",
+    "css/css-align/blocks/justify-self-vrl-ltr-htb.html",
+    "css/css-align/blocks/justify-self-vrl-ltr-vlr.html",
+    "css/css-align/blocks/justify-self-vrl-ltr-vrl.html",
+    "css/css-align/blocks/justify-self-vrl-rtl-htb.html",
+    "css/css-align/blocks/justify-self-vrl-rtl-vlr.html",
+    "css/css-align/blocks/justify-self-vrl-rtl-vrl.html",
+    "css/css-align/blocks/safe-justify-self-htb.html",
+    "css/css-align/blocks/safe-justify-self-vlr.html",
+    "css/css-align/blocks/safe-justify-self-vrl.html",
+    "css/css-align/abspos/align-self-default-overflow-htb-ltr-htb.html",
+    "css/css-align/abspos/align-self-default-overflow-htb-rtl-htb.html",
+    "css/css-align/abspos/align-self-default-overflow-vrl-ltr-htb.html",
+    "css/css-align/abspos/align-self-default-overflow-vrl-ltr-vrl.html",
+    "css/css-align/abspos/align-self-default-overflow-vrl-rtl-htb.html",
+    "css/css-align/abspos/align-self-default-overflow-vrl-rtl-vrl.html",
+    "css/css-align/abspos/align-self-htb-ltr-htb.html",
+    "css/css-align/abspos/align-self-htb-ltr-vlr.html",
+    "css/css-align/abspos/align-self-htb-ltr-vrl.html",
+    "css/css-align/abspos/align-self-htb-rtl-htb.html",
+    "css/css-align/abspos/align-self-htb-rtl-vlr.html",
+    "css/css-align/abspos/align-self-htb-rtl-vrl.html",
+    "css/css-align/abspos/align-self-vlr-ltr-htb.html",
+    "css/css-align/abspos/align-self-vlr-ltr-vlr.html",
+    "css/css-align/abspos/align-self-vlr-ltr-vrl.html",
+    "css/css-align/abspos/align-self-vlr-rtl-htb.html",
+    "css/css-align/abspos/align-self-vlr-rtl-vlr.html",
+    "css/css-align/abspos/align-self-vlr-rtl-vrl.html",
+    "css/css-align/abspos/align-self-vrl-ltr-htb.html",
+    "css/css-align/abspos/align-self-vrl-ltr-vlr.html",
+    "css/css-align/abspos/align-self-vrl-ltr-vrl.html",
+    "css/css-align/abspos/align-self-vrl-rtl-htb.html",
+    "css/css-align/abspos/align-self-vrl-rtl-vlr.html",
+    "css/css-align/abspos/align-self-vrl-rtl-vrl.html",
+    "css/css-align/abspos/default-overflow-with-scroll.html",
+    "css/css-align/abspos/justify-self-default-overflow-htb-ltr-htb.html",
+    "css/css-align/abspos/justify-self-default-overflow-htb-ltr-vrl.html",
+    "css/css-align/abspos/justify-self-default-overflow-htb-rtl-htb.html",
+    "css/css-align/abspos/justify-self-default-overflow-htb-rtl-vrl.html",
+    "css/css-align/abspos/justify-self-default-overflow-vrl-ltr-htb.html",
+    "css/css-align/abspos/justify-self-default-overflow-vrl-rtl-htb.html",
+    "css/css-align/abspos/justify-self-htb-ltr-htb.html",
+    "css/css-align/abspos/justify-self-htb-ltr-vlr.html",
+    "css/css-align/abspos/justify-self-htb-ltr-vrl.html",
+    "css/css-align/abspos/justify-self-htb-rtl-htb.html",
+    "css/css-align/abspos/justify-self-htb-rtl-vlr.html",
+    "css/css-align/abspos/justify-self-htb-rtl-vrl.html",
+    "css/css-align/abspos/justify-self-vlr-ltr-htb.html",
+    "css/css-align/abspos/justify-self-vlr-ltr-vlr.html",
+    "css/css-align/abspos/justify-self-vlr-ltr-vrl.html",
+    "css/css-align/abspos/justify-self-vlr-rtl-htb.html",
+    "css/css-align/abspos/justify-self-vlr-rtl-vlr.html",
+    "css/css-align/abspos/justify-self-vlr-rtl-vrl.html",
+    "css/css-align/abspos/justify-self-vrl-ltr-htb.html",
+    "css/css-align/abspos/justify-self-vrl-ltr-vlr.html",
+    "css/css-align/abspos/justify-self-vrl-ltr-vrl.html",
+    "css/css-align/abspos/justify-self-vrl-rtl-htb.html",
+    "css/css-align/abspos/justify-self-vrl-rtl-vlr.html",
+    "css/css-align/abspos/justify-self-vrl-rtl-vrl.html",
+    "css/css-align/abspos/safe-align-self-htb.html",
+    "css/css-align/abspos/safe-align-self-vlr.html",
+    "css/css-align/abspos/safe-align-self-vrl.html",
+    "css/css-align/abspos/safe-justify-self-htb.html",
+    "css/css-align/abspos/safe-justify-self-vlr.html",
+    "css/css-align/abspos/safe-justify-self-vrl.html",
+];
+
+#[test]
+fn vendored_css_align_self_alignment_files_pass() {
+    let failures: Vec<String> = PASSING.iter().flat_map(|f| check_file(f)).take(20).collect();
+    assert!(failures.is_empty(), "{}", failures.join("
+"));
+}
+
 /// Ad-hoc survey: `LUMEN_ALIGN_WPT=css/css-align/blocks/a.html,...` prints every mismatch.
 #[test]
 #[ignore = "manual survey"]

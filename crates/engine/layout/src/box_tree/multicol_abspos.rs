@@ -482,16 +482,11 @@ fn place_abs_child(
         c_em, cb.height, viewport,
     );
 
-    // CSS Position L3 §5.2 / Box Alignment L3 §5.3: a self-alignment other than `normal` makes
-    // an `auto` inset 0 (the box is aligned inside the inset-modified containing block instead of
-    // sitting at its static position) and an `auto` size `fit-content` instead of stretched.
+    // CSS Box Alignment L3 §5.3: a self-alignment other than `normal` between two insets makes an
+    // `auto` size `fit-content` instead of stretched, and places the box inside them.
     let (axis_x, axis_y) = (abs_axis_alignment(&cs, flow, true), abs_axis_alignment(&cs, flow, false));
-    let (align_x, align_y) = (axis_x.aligned, axis_y.aligned);
-    let zero_auto = |near: Option<f32>, far: Option<f32>, aligned: bool| {
-        if aligned && (near.is_some() || far.is_some()) { (near.or(Some(0.0)), far.or(Some(0.0))) } else { (near, far) }
-    };
-    let (left, right) = zero_auto(left, right, align_x.is_some());
-    let (top, bottom) = zero_auto(top, bottom, align_y.is_some());
+    let align_x = axis_x.aligned.filter(|_| left.is_some() && right.is_some());
+    let align_y = axis_y.aligned.filter(|_| top.is_some() && bottom.is_some());
 
     let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
     let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
@@ -665,14 +660,18 @@ fn place_abs_child(
         // Normal abs-pos: resolve from left/right/top/bottom insets. An axis with both insets and a
         // definite size is over-determined: auto margins absorb the free space, otherwise
         // `justify-self` / `align-self` place the box inside the inset-modified containing block.
-        let aligned = |fixed: bool, align: Option<(AlignValue, bool, bool, bool)>, near: Option<f32>, far: Option<f32>, auto_m: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
+        let aligned = |fixed: bool, align: Option<super::self_align::Alignment>, near: Option<f32>, far: Option<f32>, auto_m: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
             let (Some(n), Some(f)) = (near, far) else { return None };
-            let (align, safe, explicit_unsafe, rev) = align?;
+            let mut a = align?;
             (fixed && !auto_m).then(|| {
                 // CSS Position L3 §5.2: without a `safe`/`unsafe` keyword the margin box stays inside
-                // the containing block joined with the inset-modified one.
-                let hull = (!explicit_unsafe).then(|| (origin.min(origin + n), (origin + extent).max(origin + extent - f)));
-                super::self_align::aligned_border_start(align, safe, hull, rev, origin + n, extent - n - f, size, m.0, m.1)
+                // the containing block joined with the inset-modified one (`hull` stays `None` for
+                // an explicit `unsafe`, see `abs_axis_alignment`).
+                a.hull = a.hull.map(|_| (origin.min(origin + n), (origin + extent).max(origin + extent - f)));
+                super::self_align::aligned_border_start(
+                    a,
+                    super::self_align::AlignArea { lo: origin + n, cell: extent - n - f, size, m_lo: m.0, m_hi: m.1 },
+                )
             })
         };
         let aligned_x = aligned(
@@ -753,17 +752,18 @@ fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> A
         _ => {}
     }
     AxisAlign {
-        aligned: matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center)
-            .then_some((align, safe, explicit_unsafe, rev)),
+        // `hull` is a placeholder here: the caller fills the interval in once the insets are known.
+        aligned: matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center).then_some(
+            super::self_align::Alignment { align, safe, hull: (!explicit_unsafe).then_some((0.0, 0.0)), rev },
+        ),
         stretch: align == AlignValue::Stretch,
     }
 }
 
 /// [`abs_axis_alignment`]'s result for one physical axis.
 struct AxisAlign {
-    /// `(alignment, safe, explicit unsafe, axis runs against the physical direction)`; `None` — the
-    /// box keeps its inset-driven position and size.
-    aligned: Option<(AlignValue, bool, bool, bool)>,
+    /// `None` — the box keeps its inset-driven position and size.
+    aligned: Option<super::self_align::Alignment>,
     /// An explicit `stretch`: also fills the axis of a box whose *block* axis it is, which
     /// `normal` leaves content-sized.
     stretch: bool,

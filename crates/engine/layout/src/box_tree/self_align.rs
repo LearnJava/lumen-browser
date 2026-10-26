@@ -4,9 +4,36 @@
 
 use super::*;
 
+/// A resolved self-alignment along one physical axis.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Alignment {
+    /// `Start`, `End` or `Center`.
+    pub(super) align: AlignValue,
+    /// `safe`: an overflowing box falls back to `start`.
+    pub(super) safe: bool,
+    /// The default overflow alignment of an abs-pos box (CSS Position L3 §5.2): the margin box is
+    /// kept inside this physical interval (the containing block joined with the inset-modified
+    /// one), the inline-start edge winning when it does not fit. `None` — no correction (blocks,
+    /// explicit `unsafe`).
+    pub(super) hull: Option<(f32, f32)>,
+    /// The axis runs against the physical direction (right-to-left / bottom-to-top).
+    pub(super) rev: bool,
+}
+
+/// The area a box is aligned in along one physical axis: `[lo, lo + cell]`, for a border box of
+/// `size` with margins `m_lo`/`m_hi` (low / high physical side).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AlignArea {
+    pub(super) lo: f32,
+    pub(super) cell: f32,
+    pub(super) size: f32,
+    pub(super) m_lo: f32,
+    pub(super) m_hi: f32,
+}
+
 /// The overflow-aware alignment of `child` in `parent`'s inline axis: `Start`/`End`/`Center`
-/// (a `baseline` falls back to its fallback alignment) plus `safe`, or `None` for the values
-/// that leave the box where flow put it (`normal`, `stretch`, `auto` resolving to either).
+/// (a `baseline` falls back to its fallback alignment), or `None` for the values that leave the
+/// box where flow put it (`normal`, `stretch`, `auto` resolving to either).
 ///
 /// `justify-self: auto` takes the parent's `justify-items` (§6.3). `horizontal` — the axis is
 /// physically x; `rev` — the parent's inline-start edge is the high one (right / bottom).
@@ -17,7 +44,7 @@ pub(super) fn inline_alignment(
     child: &ComputedStyle,
     horizontal: bool,
     rev: bool,
-) -> Option<(AlignValue, bool)> {
+) -> Option<Alignment> {
     let (value, own, side, safe) = if matches!(child.justify_self, AlignValue::Auto) {
         let x = &parent.content_align_extra;
         (parent.justify_items, x.justify_items_own, x.justify_items_side, x.justify_items_safe)
@@ -31,39 +58,27 @@ pub(super) fn inline_alignment(
         AlignValue::LastBaseline => AlignValue::End,
         a => a,
     };
-    matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center).then_some((align, safe))
+    matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center)
+        .then_some(Alignment { align, safe, hull: None, rev })
 }
 
-/// Border-box start (physical coordinate) of a box of border-box `size` with margins
-/// `m_lo`/`m_hi` aligned by `align` inside the area `[lo, lo + cell]`. `safe` falls back to
-/// `start` when the margin box overflows the area; without it an overflowing box still aligns
-/// by its own side (`unsafe`, CSS Box Alignment L3 §4.4). `hull` — the default overflow alignment
-/// of an abs-pos box (CSS Position L3 §5.2): the margin box is then kept inside this physical
-/// interval (the containing block joined with the inset-modified one), the inline-start edge
-/// winning when it does not fit.
-pub(super) fn aligned_border_start(
-    align: AlignValue,
-    safe: bool,
-    hull: Option<(f32, f32)>,
-    rev: bool,
-    lo: f32,
-    cell: f32,
-    size: f32,
-    m_lo: f32,
-    m_hi: f32,
-) -> f32 {
-    let (m_s, m_e) = if rev { (m_hi, m_lo) } else { (m_lo, m_hi) };
-    let align = if safe && size + m_s + m_e > cell && matches!(align, AlignValue::End | AlignValue::Center) {
+/// Border-box start (physical coordinate) of the box `area` describes, aligned by `a`.
+/// `safe` falls back to `start` when the margin box overflows the area; without it an
+/// overflowing box still aligns by its own side (`unsafe`, CSS Box Alignment L3 §4.4).
+pub(super) fn aligned_border_start(a: Alignment, area: AlignArea) -> f32 {
+    let AlignArea { lo, cell, size, m_lo, m_hi } = area;
+    let (m_s, m_e) = if a.rev { (m_hi, m_lo) } else { (m_lo, m_hi) };
+    let align = if a.safe && size + m_s + m_e > cell && matches!(a.align, AlignValue::End | AlignValue::Center) {
         AlignValue::Start
     } else {
-        align
+        a.align
     };
     let off = super::grid_vertical::axis_offset(align, cell, size, m_s, m_e, false, false);
-    let start = if rev { lo + cell - off - size } else { lo + off };
-    let Some((hull_lo, hull_hi)) = hull.filter(|_| !safe) else { return start };
+    let start = if a.rev { lo + cell - off - size } else { lo + off };
+    let Some((hull_lo, hull_hi)) = a.hull.filter(|_| !a.safe) else { return start };
     let total = size + m_lo + m_hi;
     let margin_start = start - m_lo;
-    let margin_start = if rev {
+    let margin_start = if a.rev {
         let end = (margin_start + total).max(hull_lo + total).min(hull_hi);
         end - total
     } else {
