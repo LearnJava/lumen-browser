@@ -294,6 +294,29 @@ use super::*;
         assert_eq!(p_style.text_decoration_style, TextDecorationStyle::Dotted);
     }
 
+    #[test]
+    fn text_decoration_does_not_propagate_to_float_abspos_atomic_inline() {
+        // BUG-1523, Text Decoration L3 §2.2: the ancestor's line reaches in-flow inline
+        // descendants only; a box's own declaration still applies.
+        let underlined = |css: &str| {
+            let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ text-decoration: underline; }} p {{ {css} }}"));
+            let root_style = ComputedStyle::root();
+            let div = doc.get(doc.body().unwrap()).children[0];
+            let vp = Size::new(800.0, 600.0);
+            let div_style = compute_style(&doc, div, &sheet, &root_style, vp, false);
+            let p = doc.get(div).children[0];
+            compute_style(&doc, p, &sheet, &div_style, vp, false).text_decoration_line.underline
+        };
+        assert!(underlined("display: inline;"));
+        assert!(!underlined("display: inline-block;"));
+        assert!(!underlined("display: inline-flex;"));
+        assert!(!underlined("display: inline-table;"));
+        assert!(!underlined("float: left;"));
+        assert!(!underlined("position: absolute;"));
+        assert!(underlined("display: inline-block; text-decoration: underline;"));
+    }
+
     // ── text-decoration-thickness ──────────────────────────────────────────
 
     #[test]

@@ -1548,6 +1548,21 @@ pub(crate) fn compute_style_shareable(
         style.vertical_align = crate::style::VerticalAlign::Baseline;
     }
 
+    // CSS Text Decoration L3 §2.2 — a decoration propagates to in-flow inline descendants only:
+    // not to floats, absolutely positioned boxes nor to the contents of atomic inlines. The line
+    // here is inherited, so such a box drops what it did not declare itself (children inherit
+    // the cleared value).
+    if !style.text_decoration_line_declared
+        && (style.float_side != crate::style::FloatSide::None
+            || matches!(style.position, crate::style::Position::Absolute | crate::style::Position::Fixed)
+            || matches!(
+                style.display,
+                Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
+            ))
+    {
+        style.text_decoration_line = crate::style::TextDecorationLine::default();
+    }
+
     // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
     // CssColor-typed fields (border-color, background-color, etc.) now that
     // style.color_scheme is final. The `color` field (Color, not CssColor) was

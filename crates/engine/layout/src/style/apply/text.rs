@@ -900,6 +900,7 @@ pub(in crate::style) fn apply_decl_text(
             // что-то распарсилось.
             if parsed.any_recognized || thickness.is_some() {
                 style.text_decoration_line = parsed.line.unwrap_or_default();
+                style.text_decoration_line_declared = true;
                 style.text_decoration_color = parsed.color.unwrap_or(CssColor::CurrentColor);
                 style.text_decoration_style = parsed.style.unwrap_or_default();
                 style.text_decoration_thickness = thickness.unwrap_or_default();
@@ -909,6 +910,7 @@ pub(in crate::style) fn apply_decl_text(
             let parsed = parse_text_decoration_shorthand_q(val, is_quirks);
             if let Some(d) = parsed.line {
                 style.text_decoration_line = d;
+                style.text_decoration_line_declared = true;
             }
         }
         "text-decoration-color" => {
