@@ -414,7 +414,13 @@ pub(super) fn lay_out_abs_children_with(
         let rtl = static_rtl && cb_override.is_none();
         let seen = child_seq.get(idx).map(|&seq| anchors.before(seq));
         let anchors = seen.as_deref().unwrap_or(&anchors);
-        place_abs_child(&mut parent.children[idx], static_x, rtl, static_y, cb, anchors, measurer, viewport, my_pcb, hp);
+        // The alignment axes are the containing block's (CSS Box Alignment L3 §5.3): known when
+        // it is `parent` itself; any other ancestor falls back to the box's own flow.
+        let cb_flow = (cb_override.is_none() && establishes_abs_cb(&parent.style)).then(|| parent.style.clone());
+        place_abs_child(
+            &mut parent.children[idx], static_x, rtl, static_y, cb, cb_flow.as_deref(), anchors, measurer, viewport,
+            my_pcb, hp,
+        );
     }
 }
 
@@ -444,6 +450,7 @@ fn place_abs_child(
     static_x_is_right: bool,
     static_y: f32,
     cb: Rect,
+    cb_flow: Option<&ComputedStyle>,
     anchors: &crate::anchor::AnchorRegistry,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
@@ -452,6 +459,7 @@ fn place_abs_child(
 ) {
     let cs = child.style.clone();
     let c_em = cs.font_size;
+    let flow = cb_flow.unwrap_or(&cs);
 
     // CSS Anchor Positioning L1 §3.1 — intercept `anchor()` in top/right/bottom/left
     // before falling back to the plain length/auto value.
@@ -474,6 +482,17 @@ fn place_abs_child(
         c_em, cb.height, viewport,
     );
 
+    // CSS Position L3 §5.2 / Box Alignment L3 §5.3: a self-alignment other than `normal` makes
+    // an `auto` inset 0 (the box is aligned inside the inset-modified containing block instead of
+    // sitting at its static position) and an `auto` size `fit-content` instead of stretched.
+    let align_x = abs_axis_alignment(&cs, flow, true);
+    let align_y = abs_axis_alignment(&cs, flow, false);
+    let zero_auto = |near: Option<f32>, far: Option<f32>, aligned: bool| {
+        if aligned && (near.is_some() || far.is_some()) { (near.or(Some(0.0)), far.or(Some(0.0))) } else { (near, far) }
+    };
+    let (left, right) = zero_auto(left, right, align_x.is_some());
+    let (top, bottom) = zero_auto(top, bottom, align_y.is_some());
+
     let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
     let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
     let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
@@ -481,7 +500,7 @@ fn place_abs_child(
 
     // Доступная ширина для layout абсолютного child.
     let (w_auto, h_auto) = abs_auto_sizes(&child.kind, &cs);
-    let avail_w = if left.is_some() && right.is_some() && w_auto {
+    let avail_w = if left.is_some() && right.is_some() && w_auto && align_x.is_none() {
         // Обе инсеты заданы, ширина `auto` → ширина выводится из зазора
         // между ними (CSS Position L3 §6), shrink-to-fit не применяется.
         (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
@@ -534,7 +553,7 @@ fn place_abs_child(
     let ratio = cs.aspect_ratio.is_some_and(|(aw, ah)| aw > 0.0 && ah > 0.0);
     let ratio_stretched_w = ratio && left.is_some() && right.is_some() && cs.width.is_none() && cs.height.is_none();
     let ratio_sized_h = ratio && cs.height.is_none() && (cs.width.is_some() || ratio_stretched_w);
-    let stretched_h = (top.is_some() && bottom.is_some() && h_auto && !ratio_sized_h)
+    let stretched_h = (top.is_some() && bottom.is_some() && h_auto && !ratio_sized_h && align_y.is_none())
         .then(|| (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0));
     // CSS Position L3 §5.3: a form control with a UA-default `width` is «semi-replaced» — two insets
     // stretch it like a non-replaced box instead of keeping the 174px/200px/… UA size.
@@ -626,16 +645,21 @@ fn place_abs_child(
         // Normal abs-pos: resolve from left/right/top/bottom insets. An axis with both insets and a
         // definite size is over-determined: auto margins absorb the free space, otherwise
         // `justify-self` / `align-self` place the box inside the inset-modified containing block.
-        let aligned = |fixed: bool, near: Option<f32>, far: Option<f32>, auto_m: bool, is_x: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
+        let aligned = |fixed: bool, align: Option<(AlignValue, bool, bool)>, near: Option<f32>, far: Option<f32>, auto_m: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
             let (Some(n), Some(f)) = (near, far) else { return None };
-            (fixed && !auto_m).then(|| abs_self_aligned_start(&cs, is_x, origin + n, extent - n - f, size, m.0, m.1)).flatten()
+            let (align, safe, rev) = align?;
+            (fixed && !auto_m).then(|| {
+                super::self_align::aligned_border_start(align, safe, rev, origin + n, extent - n - f, size, m.0, m.1)
+            })
         };
         let aligned_x = aligned(
-            w_fixed, left, right, cs.margin_left.is_auto() || cs.margin_right.is_auto(), true,
+            w_fixed || align_x.is_some(), align_x, left, right,
+            cs.margin_left.is_auto() || cs.margin_right.is_auto(),
             cb.x, cb.width, child.rect.width, (c_ml, c_mr),
         );
         let aligned_y = aligned(
-            h_fixed, top, bottom, cs.margin_top.is_auto() || cs.margin_bottom.is_auto(), false,
+            h_fixed || align_y.is_some(), align_y, top, bottom,
+            cs.margin_top.is_auto() || cs.margin_bottom.is_auto(),
             cb.y, cb.height, child.rect.height, (c_mt, c_mb),
         );
         let nx = match (left, right) {
@@ -673,45 +697,35 @@ fn place_abs_child(
     shift_tree(child, dx, dy);
 }
 
-/// CSS Box Alignment L3 §«Absolute-Position»: border-box start (physical coordinate) of an
-/// abs-pos box of border-box `size` and margins `m_lo`/`m_hi`, aligned by `justify-self` /
-/// `align-self` inside the inset-modified containing block `[lo, lo + cell]` of the physical
-/// axis `is_x`. `None` for `auto`/`normal`/`stretch`/baseline values — the box then keeps its
-/// inset-driven position. The containing block's writing mode and direction are taken from
-/// the box itself (both properties inherit from it).
-fn abs_self_aligned_start(
-    cs: &ComputedStyle,
-    is_x: bool,
-    lo: f32,
-    cell: f32,
-    size: f32,
-    m_lo: f32,
-    m_hi: f32,
-) -> Option<f32> {
+/// CSS Box Alignment L3 §«Absolute-Position»: the alignment — `Start`/`End`/`Center`, whether it
+/// is `safe`, and whether the axis runs against the physical direction — that `justify-self`
+/// (the containing block's inline axis) or `align-self` (its block axis) gives `cs` along the
+/// physical axis `is_x`. `None` for `auto`/`normal`/`stretch`: the box keeps its inset-driven
+/// position and size. `flow` is the containing block's style, supplying the writing mode and
+/// direction the axes are defined by.
+fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> Option<(AlignValue, bool, bool)> {
     use crate::style::{Direction, WritingMode};
-    let rtl = cs.direction == Direction::Rtl;
-    let horizontal = cs.writing_mode == WritingMode::HorizontalTb;
-    let (inline, rev) = if horizontal {
+    let rtl = flow.direction == Direction::Rtl;
+    let (inline, rev) = if flow.writing_mode == WritingMode::HorizontalTb {
         (is_x, is_x && rtl)
     } else if is_x {
-        (false, matches!(cs.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl))
+        (false, matches!(flow.writing_mode, WritingMode::VerticalRl | WritingMode::SidewaysRl))
     } else {
-        (true, rtl != (cs.writing_mode == WritingMode::SidewaysLr))
+        (true, rtl != (flow.writing_mode == WritingMode::SidewaysLr))
     };
     let cx = &cs.content_align_extra;
     let (mut align, safe) = if inline {
         let v = super::grid_vertical::resolve_own(cs.justify_self, cx.justify_self_own, cs, is_x, !rev);
-        (super::grid_vertical::resolve_side(v, cx.justify_self_side, cs.writing_mode, rev), cx.justify_self_safe)
+        (super::grid_vertical::resolve_side(v, cx.justify_self_side, flow.writing_mode, rev), cx.justify_self_safe)
     } else {
         (super::grid_vertical::resolve_own(cs.align_self, cx.self_own, cs, is_x, !rev), cx.self_safe)
     };
-    if matches!(align, AlignValue::LastBaseline) {
-        align = AlignValue::End;
+    match align {
+        AlignValue::LastBaseline => align = AlignValue::End,
+        AlignValue::Baseline => align = AlignValue::Start,
+        _ => {}
     }
-    if !matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center) {
-        return None;
-    }
-    Some(super::self_align::aligned_border_start(align, safe, rev, lo, cell, size, m_lo, m_hi))
+    matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center).then_some((align, safe, rev))
 }
 
 /// Offset of an abs-pos box inside the gap between its two insets when the axis
@@ -883,5 +897,5 @@ fn refit_out_of_flow_child(
     let ml = child.style.margin_left.resolve_or_zero(em, cb.width, viewport);
     let mt = child.style.margin_top.resolve_or_zero(em, cb.height, viewport);
     let (static_x, static_y) = (child.rect.x - ml, child.rect.y - mt);
-    place_abs_child(child, static_x, false, static_y, cb, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
+    place_abs_child(child, static_x, false, static_y, cb, None, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
 }
