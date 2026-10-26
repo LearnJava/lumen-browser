@@ -203,8 +203,9 @@ impl LanesState {
         let item = self.items[k];
         let span = item.span.clamp(1, n);
         let h = h.max(0.0);
-        let busy = self.busy.as_ref().expect("dense");
-        let pos = |w: usize| earliest_fit(busy, self.gap, w, span, h);
+        // Занятость полос на время выбора окна вынута из `self`, чтобы читать её рядом с остальным состоянием.
+        let mut busy = self.busy.take().unwrap_or_default();
+        let pos = |w: usize| earliest_fit(&busy, self.gap, w, span, h);
         let first = match item.def {
             Some(d) => d.min(n - span),
             None => {
@@ -221,15 +222,14 @@ impl LanesState {
             }
         };
         self.cursor = if self.track_reverse { n - first } else { first + span };
-        let start = earliest_fit(busy, self.gap, first, span, h);
+        let start = earliest_fit(&busy, self.gap, first, span, h);
         self.window[k] = (first, span);
         self.pos[k] = start;
         let end = start + h;
-        if let Some(busy) = self.busy.as_mut() {
-            for lane in &mut busy[first..first + span] {
-                lane.push((start, end));
-            }
+        for lane in &mut busy[first..first + span] {
+            lane.push((start, end));
         }
+        self.busy = Some(busy);
         self.extent = self.extent.max(end);
         (first, span)
     }
