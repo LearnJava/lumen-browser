@@ -22,8 +22,8 @@ use super::svg::SvgTransform;
 use super::svg_clip::user_bbox_of;
 use super::LayoutBox;
 use crate::style::{FilterFn, SvgClipPlacement, 
-    Color, ComputedStyle, FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput,
-    FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, compute_style, parse_color,
+    Color, ComputedStyle, FeBlendMode, FeColorMatrix, FeCompositeOp, FeEdgeMode, FeInput, FeLight,
+    FeLighting, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, compute_style, parse_color,
 };
 
 /// Разворачивает `url(#id)` в граф. `None` — элемента нет или это не `<filter>`.
@@ -88,6 +88,11 @@ pub(crate) fn resolve_filter_url(
             width: sub("width", viewport.width),
             height: sub("height", viewport.height),
             linear_rgb: interpolation_is_linear(doc, child, Some(filter_linear)),
+            tainted: match tag.as_str() {
+                "feflood" | "fedropshadow" => uses_current_color(doc, child, "flood-color"),
+                "fediffuselighting" | "fespecularlighting" => uses_current_color(doc, child, "lighting-color"),
+                _ => false,
+            },
         });
         if let Some(r) = doc.get(child).get_attr("result").map(str::trim)
             && !r.is_empty()
@@ -137,9 +142,19 @@ impl Ctx<'_> {
 
     /// `flood-color` + `flood-opacity` (presentation-атрибут / inline `style`).
     fn flood(&self) -> (Color, f32) {
-        let raw = svg_prop(self.doc, self.node, "flood-color");
-        let color = match raw.as_deref().map(str::trim) {
-            None => Color::BLACK,
+        let color = self.color_prop("flood-color", Color::BLACK);
+        let opacity = svg_prop(self.doc, self.node, "flood-opacity")
+            .and_then(|v| parse_number_or_percent(&v))
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        (color, opacity)
+    }
+
+    /// Цветовое свойство (`flood-color`, `lighting-color`) с `currentColor`.
+    fn color_prop(&self, name: &str, default: Color) -> Color {
+        let raw = svg_prop(self.doc, self.node, name);
+        match raw.as_deref().map(str::trim) {
+            None => default,
             Some(v) if v.eq_ignore_ascii_case("currentcolor") => {
                 let st = compute_style(
                     self.doc,
@@ -151,13 +166,8 @@ impl Ctx<'_> {
                 );
                 st.color
             }
-            Some(v) => parse_color(v).unwrap_or(Color::BLACK),
-        };
-        let opacity = svg_prop(self.doc, self.node, "flood-opacity")
-            .and_then(|v| parse_number_or_percent(&v))
-            .unwrap_or(1.0)
-            .clamp(0.0, 1.0);
-        (color, opacity)
+            Some(v) => parse_color(v).unwrap_or(default),
+        }
     }
 
     fn num_pair(&self, name: &str, default: f32) -> (f32, f32) {
@@ -216,6 +226,10 @@ fn build_primitive(c: &Ctx<'_>, tag: &str) -> FePrimitive {
                 Some("soft-light") => FeBlendMode::SoftLight,
                 Some("difference") => FeBlendMode::Difference,
                 Some("exclusion") => FeBlendMode::Exclusion,
+                Some("hue") => FeBlendMode::Hue,
+                Some("saturation") => FeBlendMode::Saturation,
+                Some("color") => FeBlendMode::Color,
+                Some("luminosity") => FeBlendMode::Luminosity,
                 _ => FeBlendMode::Normal,
             };
             FePrimitive::Blend { a: c.input("in"), b: c.input("in2"), mode }
@@ -263,10 +277,147 @@ fn build_primitive(c: &Ctx<'_>, tag: &str) -> FePrimitive {
                 opacity,
             }
         }
-        "fedisplacementmap" | "femorphology" | "feconvolvematrix" | "fetile" => {
-            FePrimitive::Unsupported { input: c.input("in") }
+        "fetile" => FePrimitive::Tile { input: c.input("in") },
+        "femorphology" => {
+            let (rx, ry) = c.num_pair("radius", 0.0);
+            FePrimitive::Morphology {
+                input: c.input("in"),
+                dilate: c.attr("operator").map(str::trim) == Some("dilate"),
+                rx,
+                ry,
+            }
         }
+        "feconvolvematrix" => convolve_matrix(c),
+        "fedisplacementmap" => FePrimitive::DisplacementMap {
+            input: c.input("in"),
+            map: c.input("in2"),
+            scale: c.num("scale", 0.0),
+            x_channel: channel(c.attr("xChannelSelector")),
+            y_channel: channel(c.attr("yChannelSelector")),
+        },
+        "feturbulence" => {
+            let (fx, fy) = c.num_pair("baseFrequency", 0.0);
+            let octaves = c.attr("numOctaves").and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(1);
+            FePrimitive::Turbulence {
+                fx,
+                fy,
+                octaves: octaves.max(0) as u32,
+                seed: c.num("seed", 0.0).round() as i32,
+                stitch: c.attr("stitchTiles").map(str::trim) == Some("stitch"),
+                fractal: c.attr("type").map(str::trim) == Some("fractalNoise"),
+            }
+        }
+        "fediffuselighting" | "fespecularlighting" => lighting(c, tag == "fespecularlighting"),
         _ => FePrimitive::Unsupported { input: FeInput::Empty },
+    }
+}
+
+/// `xChannelSelector`/`yChannelSelector`: `R`/`G`/`B`/`A` → 0..3 (по умолчанию `A`).
+fn channel(v: Option<&str>) -> usize {
+    match v.map(str::trim) {
+        Some("R") => 0,
+        Some("G") => 1,
+        Some("B") => 2,
+        _ => 3,
+    }
+}
+
+/// `feConvolveMatrix`; любой недопустимый атрибут (Filter Effects L1
+/// §«feConvolveMatrix») оставляет `kernel` пустым — примитив даёт прозрачный чёрный.
+fn convolve_matrix(c: &Ctx<'_>) -> FePrimitive {
+    let input = c.input("in");
+    let invalid = || FePrimitive::ConvolveMatrix {
+        input,
+        order: (3, 3),
+        kernel: Vec::new(),
+        divisor: 1.0,
+        bias: 0.0,
+        target: (0, 0),
+        edge: FeEdgeMode::Duplicate,
+        preserve_alpha: false,
+    };
+    let order = match c.attr("order").map(parse_number_list).as_deref() {
+        None => (3.0, 3.0),
+        Some([a]) => (*a, *a),
+        Some([a, b]) => (*a, *b),
+        Some(_) => return invalid(),
+    };
+    if order.0 < 1.0 || order.1 < 1.0 || order.0.fract() != 0.0 || order.1.fract() != 0.0 {
+        return invalid();
+    }
+    let (ox, oy) = (order.0 as usize, order.1 as usize);
+    let kernel = c.attr("kernelMatrix").map(parse_number_list).unwrap_or_default();
+    if kernel.len() != ox * oy {
+        return invalid();
+    }
+    let sum: f32 = kernel.iter().sum();
+    let divisor = match c.attr("divisor").and_then(|v| v.trim().parse::<f32>().ok()) {
+        Some(d) if d != 0.0 => d,
+        Some(_) => return invalid(),
+        None if sum != 0.0 => sum,
+        None => 1.0,
+    };
+    let target = |name: &str, len: usize| match c.attr(name).and_then(|v| v.trim().parse::<i32>().ok()) {
+        Some(t) => (0..len as i32).contains(&t).then_some(t),
+        None => Some((len / 2) as i32),
+    };
+    let (Some(tx), Some(ty)) = (target("targetX", ox), target("targetY", oy)) else {
+        return invalid();
+    };
+    FePrimitive::ConvolveMatrix {
+        input,
+        order: (ox, oy),
+        kernel,
+        divisor,
+        bias: c.num("bias", 0.0),
+        target: (tx, ty),
+        edge: match c.attr("edgeMode").map(str::trim) {
+            Some("wrap") => FeEdgeMode::Wrap,
+            Some("none") => FeEdgeMode::None,
+            _ => FeEdgeMode::Duplicate,
+        },
+        preserve_alpha: c.attr("preserveAlpha").map(str::trim) == Some("true"),
+    }
+}
+
+/// `feDiffuseLighting` / `feSpecularLighting` с первым источником света среди детей.
+fn lighting(c: &Ctx<'_>, specular: bool) -> FePrimitive {
+    let kind = if specular {
+        FeLighting::Specular { ks: c.num("specularConstant", 1.0), exponent: c.num("specularExponent", 1.0) }
+    } else {
+        FeLighting::Diffuse { kd: c.num("diffuseConstant", 1.0) }
+    };
+    let valid = match kind {
+        FeLighting::Diffuse { kd } => kd >= 0.0,
+        FeLighting::Specular { ks, exponent } => ks >= 0.0 && (1.0..=128.0).contains(&exponent),
+    };
+    let mut light = None;
+    for &n in &c.doc.get(c.node).children {
+        let Some(name) = c.doc.get(n).element_name() else { continue };
+        let sub = Ctx { node: n, ..*c };
+        let triple = |x: &str, y: &str, z: &str| [sub.num(x, 0.0), sub.num(y, 0.0), sub.num(z, 0.0)];
+        light = Some(match name.local.as_str().to_ascii_lowercase().as_str() {
+            "fedistantlight" => FeLight::Distant {
+                azimuth: sub.num("azimuth", 0.0),
+                elevation: sub.num("elevation", 0.0),
+            },
+            "fepointlight" => FeLight::Point { pos: triple("x", "y", "z") },
+            "fespotlight" => FeLight::Spot {
+                pos: triple("x", "y", "z"),
+                points_at: triple("pointsAtX", "pointsAtY", "pointsAtZ"),
+                exponent: sub.num("specularExponent", 1.0),
+                cone: sub.attr("limitingConeAngle").and_then(|v| v.trim().parse::<f32>().ok()),
+            },
+            _ => continue,
+        });
+        break;
+    }
+    FePrimitive::Lighting {
+        input: c.input("in"),
+        kind,
+        surface_scale: c.num("surfaceScale", 1.0),
+        color: c.color_prop("lighting-color", Color::WHITE),
+        light: if valid { light } else { None },
     }
 }
 
@@ -321,6 +472,12 @@ fn transfer_fn(doc: &Document, n: NodeId) -> FeTransfer {
         },
         _ => FeTransfer::Identity,
     }
+}
+
+/// Значение свойства упоминает `currentcolor` (в том числе внутри `color-mix()`,
+/// `contrast-color()`, `color(from …)`).
+fn uses_current_color(doc: &Document, n: NodeId, prop: &str) -> bool {
+    svg_prop(doc, n, prop).is_some_and(|v| v.to_ascii_lowercase().contains("currentcolor"))
 }
 
 fn is_tag(doc: &Document, n: NodeId, tag: &str) -> bool {
