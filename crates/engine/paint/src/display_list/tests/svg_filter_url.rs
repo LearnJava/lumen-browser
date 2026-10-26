@@ -51,6 +51,34 @@ fn css_filter_property_on_html_box_and_missing_reference() {
     assert!(matches!(&second[0], FilterFn::Url(u) if u.graph.is_none()));
 }
 
+#[test]
+fn new_primitives_parse_with_defaults_and_taint() {
+    let list = build(
+        r##"<svg width=100 height=100><filter id=f>
+        <feFlood flood-color="currentcolor"/>
+        <feConvolveMatrix kernelMatrix="1 1 1 1 1 1 1 1 1" divisor="0"/>
+        <feConvolveMatrix kernelMatrix="1 2"/>
+        <feMorphology operator="dilate" radius="2 3"/>
+        <feDisplacementMap in2="SourceGraphic" scale="10" xChannelSelector="G"/>
+        <feTurbulence baseFrequency="0.05" numOctaves="3" seed="2.4" type="fractalNoise"/>
+        <feDiffuseLighting lighting-color="red"><fePointLight x=1 y=2 z=3/></feDiffuseLighting>
+        <feSpecularLighting specularExponent="200"><feDistantLight/></feSpecularLighting>
+        </filter><rect width=50 height=50 filter="url(#f)" /></svg>"##,
+        "",
+    );
+    let g = url_filter(&list).and_then(|u| u.graph).expect("граф разрешён");
+    let k = |i: usize| &g.primitives[i].kind;
+    assert!(g.primitives[0].tainted && !g.primitives[1].tainted);
+    // Нулевой divisor заменяется суммой ядра; ядро неверной длины — прозрачность.
+    assert!(matches!(k(1), FePrimitive::ConvolveMatrix { divisor, target: (1, 1), .. } if *divisor == 9.0));
+    assert!(matches!(k(2), FePrimitive::ConvolveMatrix { kernel, .. } if kernel.is_empty()));
+    assert!(matches!(k(3), FePrimitive::Morphology { dilate: true, rx, ry, .. } if *rx == 2.0 && *ry == 3.0));
+    assert!(matches!(k(4), FePrimitive::DisplacementMap { x_channel: 1, y_channel: 3, scale, .. } if *scale == 10.0));
+    assert!(matches!(k(5), FePrimitive::Turbulence { octaves: 3, seed: 2, fractal: true, .. }));
+    assert!(matches!(k(6), FePrimitive::Lighting { light: Some(lumen_layout::FeLight::Point { .. }), .. }));
+    assert!(matches!(k(7), FePrimitive::Lighting { light: None, .. }), "specularExponent вне 1..128");
+}
+
 #[cfg(feature = "cpu-render")]
 mod raster {
     use super::*;
@@ -73,6 +101,17 @@ mod raster {
         );
         assert_eq!(px(&img, 40, 40), [0, 0, 255]);
         assert_eq!(px(&img, 10, 10), [255, 255, 255]);
+    }
+
+    #[test]
+    fn filter_ink_is_clipped_by_enclosing_overflow() {
+        let img = render(
+            r##"<div style="overflow:hidden;width:60px;height:60px"><svg width=200 height=120 style="display:block">
+            <filter id=f x=0 y=0 width=1 height=1><feFlood flood-color="#00f"/></filter>
+            <rect x=0 y=0 width=150 height=100 fill=red filter="url(#f)" /></svg></div>"##,
+        );
+        assert_eq!(px(&img, 30, 30), [0, 0, 255]);
+        assert_eq!(px(&img, 100, 30), [255, 255, 255]);
     }
 
     #[test]

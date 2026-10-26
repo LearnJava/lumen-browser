@@ -61,8 +61,10 @@ enum LayerComposite {
     /// composited onto the backdrop below with plain `SourceOver`.
     ///
     /// `bounds` — border box элемента (CSS px): bbox для `url(#id)` на SVG-фильтр
-    /// ([`crate::svg_filter`]).
-    Filter { filters: Vec<FilterFn>, bounds: Rect },
+    /// ([`crate::svg_filter`]). `clip` — активный прямоугольный клип на момент
+    /// `PushFilter`: чернила SVG-фильтра (смещение, заливка области) выходят за
+    /// содержимое слоя, поэтому клип надо применить и при сведении слоя.
+    Filter { filters: Vec<FilterFn>, bounds: Rect, clip: Option<Rect> },
     /// CSS Masking L1 §4 — `mask-image` (`PushMask*`/`PopMask`). The element's
     /// fully-composited subtree renders into a transparent full-size layer; on
     /// close the mask is evaluated per-pixel (the gradient's alpha channel —
@@ -776,6 +778,7 @@ fn rasterize_cpu_pixmap(
                 layer_ops.push(LayerComposite::Filter {
                     filters: filters.clone(),
                     bounds: bounds.unwrap_or(Rect::ZERO),
+                    clip: clip_rect,
                 });
             }
             // CSS Masking L1 §4 — `mask-image`. Like `PushOpacity`, the element's
@@ -998,9 +1001,9 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
             composite_blend_layer(&mut dst.pm, &src.pm, *mode, src_dirty);
             dst.mark(src_dirty);
         }
-        LayerComposite::Filter { filters, bounds } => {
+        LayerComposite::Filter { filters, bounds, clip } => {
             let written = if has_svg {
-                composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, src_dirty)
+                composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, *clip, src_dirty)
             } else {
                 composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
             };
@@ -1450,6 +1453,7 @@ fn composite_svg_filter_chain(
     src: &tiny_skia::Pixmap,
     filters: &[FilterFn],
     bounds: Rect,
+    clip: Option<Rect>,
     src_dirty: DrawBounds,
 ) -> Option<DrawBounds> {
     if filters.iter().any(|f| matches!(f, FilterFn::Url(u) if u.graph.is_none())) {
@@ -1481,7 +1485,21 @@ fn composite_svg_filter_chain(
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(origin.0, origin.1, cur.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    // Область фильтра растеризуется по целым пикселям, поэтому и клип — по целым
+    // (дробный край дал бы полосу полупрозрачных пикселей у границы `<svg>`).
+    let snapped = clip.map(|c| {
+        let (x0, y0) = (c.x.round(), c.y.round());
+        Rect::new(x0, y0, (c.x + c.width).round() - x0, (c.y + c.height).round() - y0)
+    });
+    let clip_mask = build_clip_mask(dst.width(), dst.height(), snapped);
+    dst.draw_pixmap(
+        origin.0,
+        origin.1,
+        cur.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        clip_mask.as_ref(),
+    );
     Some((
         origin.0 as f32,
         origin.1 as f32,

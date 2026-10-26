@@ -3,14 +3,17 @@
 //! `filter: url(#id)` хранится после каскада как [`FilterFn::Url`] с одним id;
 //! здесь, где есть `Document`, ссылка разворачивается в [`SvgFilter`]: дети
 //! `<filter>` (`feFlood`, `feOffset`, `feGaussianBlur`, `feColorMatrix`,
-//! `feComposite`, `feBlend`, `feMerge`, `feComponentTransfer`, `feDropShadow`)
-//! сводятся к вариантам [`FePrimitive`] с уже разобранными числами и входами
-//! (`in`/`in2`/`result` → индексы). Остальные `fe*` дают
+//! `feComposite`, `feBlend`, `feMerge`, `feComponentTransfer`, `feDropShadow`,
+//! `feTile`, `feMorphology`, `feConvolveMatrix`, `feDisplacementMap`,
+//! `feTurbulence`, `feDiffuseLighting`, `feSpecularLighting`) сводятся к
+//! вариантам [`FePrimitive`] с уже разобранными числами и входами
+//! (`in`/`in2`/`result` → индексы). Остальные `fe*` (`feImage`) дают
 //! [`FePrimitive::Unsupported`] (прозрачный чёрный), чтобы граф не терял позиции.
 //!
-//! Свойства `flood-color`/`flood-opacity`/`color-interpolation-filters` читаются
-//! из presentation-атрибута и inline-`style` примитива: правила таблицы стилей
-//! не учитываются (в `ComputedStyle` этих свойств пока нет).
+//! Свойства `flood-color`/`flood-opacity`/`lighting-color`/
+//! `color-interpolation-filters` читаются из presentation-атрибута и
+//! inline-`style` примитива: правила таблицы стилей не учитываются (в
+//! `ComputedStyle` этих свойств пока нет).
 
 use std::sync::Arc;
 
@@ -351,11 +354,11 @@ fn convolve_matrix(c: &Ctx<'_>) -> FePrimitive {
         return invalid();
     }
     let sum: f32 = kernel.iter().sum();
+    // Нулевой или отсутствующий `divisor` заменяется суммой ядра (0 → 1).
     let divisor = match c.attr("divisor").and_then(|v| v.trim().parse::<f32>().ok()) {
         Some(d) if d != 0.0 => d,
-        Some(_) => return invalid(),
-        None if sum != 0.0 => sum,
-        None => 1.0,
+        _ if sum != 0.0 => sum,
+        _ => 1.0,
     };
     let target = |name: &str, len: usize| match c.attr(name).and_then(|v| v.trim().parse::<i32>().ok()) {
         Some(t) => (0..len as i32).contains(&t).then_some(t),

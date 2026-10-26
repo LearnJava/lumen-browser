@@ -112,7 +112,8 @@ pub(super) fn convolve(src: &Img, p: &Convolve<'_>) -> Img {
             };
             let mut px = [0.0f32; 4];
             for c in 0..3 {
-                let v = acc[c] / p.divisor + p.bias * if p.preserve_alpha { 1.0 } else { alpha };
+                // Как в Blink: `bias` прибавляется к premultiplied цвету без умножения на альфу.
+                let v = acc[c] / p.divisor + p.bias;
                 px[c] = if p.preserve_alpha { v.clamp(0.0, 1.0) * alpha } else { v.clamp(0.0, alpha) };
             }
             px[3] = alpha;
