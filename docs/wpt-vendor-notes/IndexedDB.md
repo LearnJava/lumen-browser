@@ -46,7 +46,7 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 - **Микротаск после `success` опаздывает** (проба p7b): `_idb_flush_txn` рассылает запросы и коммитит транзакцию в одном синхронном проходе, поэтому `await`/`.then()` после события видит завершённую транзакцию (`TransactionInactiveError`, `complete` пришёл раньше микротаска). Нужен microtask checkpoint между событием и деактивацией. Прячется за кластером D: после его правки promise-стиль тестов упрётся сюда.
 - `IDBRequest.addEventListener` знает только `success`/`error`, `IDBTransaction` — `complete`/`abort`; нет `dispatchEvent`, `once`, `handleEvent`, наследования от `Event`.
 - Персистентность — «непрозрачный снимок» всей БД origin: рост `data/idb` растёт с числом тестов в одном origin.
-- `DOMMatrix is not defined` в воркере (5 id `structured-clone.any.worker.html`) и `crypto` в воркере ([BUG-1688](../../bugs/BUG-1688-OPEN.md)) — не IDB.
+- `DOMMatrix is not defined` в воркере (5 id `structured-clone.any.worker.html`) и `crypto` в воркере ([BUG-1688](../../bugs/BUG-1688-FIXED.md)) — не IDB.
 
 ### Оформление (сделано)
 

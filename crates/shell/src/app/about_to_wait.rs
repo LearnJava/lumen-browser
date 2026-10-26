@@ -338,6 +338,14 @@ impl Lumen {
         if self.video_gif_store.has_pending_video_load() {
             self.request_redraw();
         }
+        // Та же дыра для смены воспроизведения: `play()` после autoplay и
+        // перезапуск `loop` идут из JS-таймеров выше, а таймер кадров
+        // (`tick_video_sessions` → `schedule_video_redraw`) взводится только
+        // внутри `RedrawRequested` и в конце ролика гаснет. Без этой
+        // перерисовки видео стояло на одном кадре до движения мыши.
+        if self.video_gif_store.take_playback_change() {
+            self.request_redraw();
+        }
         // BUG-480 срез 1: таймеры фреймов участвуют в WaitUntil наравне с
         // таймерами страницы, иначе setTimeout ребёнка срабатывает с задержкой
         // до следующего пробуждения по чужому источнику.

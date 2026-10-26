@@ -557,6 +557,16 @@ const WEB_API_SHIM_TAIL_MC: &str = include_str!("shim/web_api_shim_tail_mc.js");
 #[cfg(feature = "v8-backend")]
 pub(crate) const IDB_SHIM: &str = include_str!("shim/idb_shim.js");
 
+/// Web Crypto (`self.crypto`, `SubtleCrypto`, `CryptoKey`) — вырезан из хвоста страничного
+/// шима отдельной частью: интерфейс `[Exposed=(Window,Worker)]`, и все виды воркеров
+/// исполняют ровно этот текст (BUG-1688). Зависит только от нативов
+/// [`crate::web_crypto_natives`]; публикует через `globalThis`. `.subtle`/`CryptoKey`
+/// (`[SecureContext]`) на странице выставляются по `_lumen_secure_context`, в воркере —
+/// хуком `_lumen_crypto_expose_secure`, который зовёт шим `isSecureContext` воркера.
+/// Порядок склейки закреплён тестом `web_api_shim_splices_its_parts_in_source_order`.
+#[cfg(feature = "v8-backend")]
+pub(crate) const CRYPTO_SHIM: &str = include_str!("shim/crypto_shim.js");
+
 /// Хвост страничного шима после [`IDB_SHIM`] — от `window.getSelection` до
 /// конца. Отдельная часть существует только ради разреза IndexedDB; порядок
 /// склейки закреплён тестом `web_api_shim_splices_its_parts_in_source_order`.
@@ -595,7 +605,7 @@ pub(crate) const WORKER_LOCATION_NAVIGATOR_SHIM: &str = include_str!("shim/worke
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_SHIM}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{ABORT_SHIM}{STREAMS_SHIM}{HEADERS_SHIM}{FETCH_BODY_SHIM}{FORM_DATA_SHIM}{TEXT_ENCODING_SHIM}{WEB_API_SHIM_MID_B3}{WEBSOCKET_SHIM}{WEB_API_SHIM_MID_B4}{GEOMETRY_SHIM}{PSEUDO_ELEMENT_SHIM}{URL_SHIM}{ORIGIN_SHIM}{WEB_API_SHIM_MID_C}{FILE_API_SHIM}{WEB_API_SHIM_MID_C2}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{CRYPTO_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a

@@ -905,7 +905,7 @@ Like-for-like со скорингом 08-18 (рефтесты и TLS обнул�
 | `mediacapture-streams` | 8.06 | 5.86 | 5.86 | **движок**: UX-PERMISSIONS срез 4 (`7bbb846ed`) — `getUserMedia({audio})` ждёт ответа `#permPopover`, решение `permissions.setPermission` из `test_driver` до этой очереди не доходит; 18 TIMEOUT `GUM-*`, `MediaStream-*` — [BUG-1689](../../bugs/BUG-1689-OPEN.md) |
 | `serial` | 2.59 | 0.74 | 0.74 | **движок, намеренно**: COMPAT-API-01-DEVICE (`c77cf07a8`) убрал `navigator.serial` |
 | `workers` | 199.08 | 197.41 | 197.83 | **движок**, перераспределение сабтестов: прошедших столько же (741 → 741), всего 1 526 → 1 534; поштучно не локализовать по той же причине, что `quirks` |
-| `WebCryptoAPI` | 16.17 | 14.62 | 22.23 | **раннер**: 39 `navigate: wait timeout` в свопе; тихий выше 10-05. 110 `*.any.worker.html` с `crypto is not defined` — так же и на `d913a39b9` — [BUG-1688](../../bugs/BUG-1688-OPEN.md) |
+| `WebCryptoAPI` | 16.17 | 14.62 | 22.23 | **раннер**: 39 `navigate: wait timeout` в свопе; тихий выше 10-05. 110 `*.any.worker.html` с `crypto is not defined` — так же и на `d913a39b9` — [BUG-1688](../../bugs/BUG-1688-FIXED.md) |
 | `webaudio` | 167.96 | 166.58 | 169.00 | **раннер**: 38 TIMEOUT под нагрузкой; тихий выше 10-05 |
 | `webhid` | 2.64 | 1.55 | 1.55 | **движок, намеренно**: COMPAT-API-01-DEVICE убрал `navigator.hid` |
 | `webusb` | 1.85 | 0.78 | 0.78 | **движок, намеренно**: COMPAT-API-01-DEVICE убрал `navigator.usb` |

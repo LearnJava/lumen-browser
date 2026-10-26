@@ -1590,32 +1590,11 @@ pub(crate) fn install_crypto_and_typed_om(
 ) -> JsResult<()> {
     // ── Web Crypto API ──────────────────────────────────────────────────────
     {
-        // Returns `n` cryptographically-random bytes as a Vec<u8> (JS Array of
-        // integers 0–255). Capped at 65 536 per call per WebCrypto spec §10.1.3.
-        reg!(scope, ctx, store, "_lumen_get_random_bytes", |n: u32| -> Vec<u8> {
-            let len = (n as usize).min(65_536);
-            let mut buf = vec![0u8; len];
-            getrandom::getrandom(&mut buf).unwrap_or(());
-            buf
-        });
-
-        // Computes a SHA digest using the named algorithm.
-        // `algo` must be one of "SHA-1", "SHA-256", "SHA-384", "SHA-512".
-        // `data` is the raw input bytes.  Returns empty Vec on unknown algo.
-        reg!(scope, ctx, store, 
-            "_lumen_sha_digest",
-            |algo: String, data: Vec<u8>| -> Vec<u8> {
-                // sha1::Digest trait must be in scope to call sha1::Sha1::digest().
-                use sha1::Digest as _;
-                match algo.as_str() {
-                    "SHA-1" => sha1::Sha1::digest(&data).to_vec(),
-                    "SHA-256" => sha2::Sha256::digest(&data).to_vec(),
-                    "SHA-384" => sha2::Sha384::digest(&data).to_vec(),
-                    "SHA-512" => sha2::Sha512::digest(&data).to_vec(),
-                    _ => Vec::new(),
-                }
-            }
-        );
+        // `_lumen_get_random_bytes`, `_lumen_sha_digest` and the `_lumen_subtle_*` family are
+        // shared with every worker flavour (BUG-1688) — see `crate::web_crypto_natives`.
+        for (name, native) in crate::web_crypto_natives::web_crypto_natives() {
+            register_v8_native(scope, ctx, store, name, native)?;
+        }
 
         // Compression Streams codecs (`CompressionStream` /
         // `DecompressionStream`). Stateful and keyed by an opaque handle
@@ -1635,123 +1614,6 @@ pub(crate) fn install_crypto_and_typed_om(
         reg!(scope, ctx, store, "_lumen_cs_free", |handle: f64| {
             crate::compression::cs_free(handle as u32);
         });
-    }
-
-    // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
-    // The underlying key store and algorithm functions in `crate::subtle_crypto`
-    // are plain Rust (no JS-engine dependency), so this is a thin wrapper.
-    {
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_generate_key",
-            |alg_json: String, extractable: bool, usages_json: String| -> String {
-                crate::subtle_crypto::generate_key(&alg_json, extractable, &usages_json)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_import_key",
-            |format: String, key_data: Vec<u8>, alg_json: String, extractable: bool, usages_json: String| -> String {
-                crate::subtle_crypto::import_key(&format, key_data, &alg_json, extractable, &usages_json)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_export_key",
-            |format: String, key_id: u32| -> Vec<u8> {
-                crate::subtle_crypto::export_key(&format, key_id).unwrap_or_default()
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_export_key_or_err",
-            |format: String, key_id: u32| -> String {
-                match crate::subtle_crypto::export_key(&format, key_id) {
-                    Ok(bytes) => {
-                        if bytes.first() == Some(&b'{') || bytes.first() == Some(&b'[') {
-                            format!("ok:{}", String::from_utf8_lossy(&bytes))
-                        } else {
-                            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-                            format!("hex:{hex}")
-                        }
-                    }
-                    Err(e) => format!("err:{e}"),
-                }
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_sign",
-            |alg_json: String, key_id: u32, data: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::sign_data(&alg_json, key_id, &data)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_verify",
-            |alg_json: String, key_id: u32, sig: Vec<u8>, data: Vec<u8>| -> bool {
-                crate::subtle_crypto::verify_signature(&alg_json, key_id, &sig, &data)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_encrypt",
-            |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_gcm_encrypt(key_id, &iv, &aad, &plaintext)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_decrypt",
-            |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_gcm_decrypt(key_id, &iv, &aad, &ciphertext)
-            }
-        );
-
-        reg!(scope, ctx, store, "_lumen_subtle_key_info", |key_id: u32| -> String {
-            crate::subtle_crypto::key_info(key_id)
-        });
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_aes_cbc_encrypt",
-            |key_id: u32, iv: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_cbc_encrypt(key_id, &iv, &plaintext)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_aes_cbc_decrypt",
-            |key_id: u32, iv: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_cbc_decrypt(key_id, &iv, &ciphertext)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_aes_ctr_crypt",
-            |key_id: u32, counter: Vec<u8>, length: u32, data: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::aes_ctr_crypt(key_id, &counter, length, &data)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_derive_bits",
-            |alg_json: String, key_id: u32, length_bits: u32| -> Vec<u8> {
-                crate::subtle_crypto::derive_bits(&alg_json, key_id, length_bits)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_rsa_oaep_encrypt",
-            |key_id: u32, label: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::rsa_oaep_encrypt(key_id, &label, &plaintext)
-            }
-        );
-
-        reg!(scope, ctx, store, 
-            "_lumen_subtle_rsa_oaep_decrypt",
-            |key_id: u32, label: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-                crate::subtle_crypto::rsa_oaep_decrypt(key_id, &label, &ciphertext)
-            }
-        );
     }
 
     // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL

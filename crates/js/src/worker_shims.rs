@@ -155,6 +155,12 @@ pub(crate) fn worker_global_shim(worker_id: u32) -> String {
       enumerable: true, configurable: true,
     }});
   }}
+  // BUG-1688: `crypto.subtle`/`CryptoKey` are `[SecureContext]`; the crypto shim leaves
+  // them to this point, where `isSecureContext` is known.
+  if (typeof _lumen_crypto_expose_secure === 'function') {{
+    if (globalThis.isSecureContext !== false) _lumen_crypto_expose_secure();
+    delete globalThis._lumen_crypto_expose_secure;
+  }}
 
   // ── "report the exception" inside a WorkerGlobalScope ──────────────────────
   // HTML LS §8.1.3.6 then §10.2.6 "runtime script errors": an uncaught
