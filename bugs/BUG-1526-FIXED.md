@@ -1,6 +1,6 @@
 # BUG-1526 — `justify-self`/`align-self` у блока и у `position:absolute` бокса без заданного размера не сжимают бокс по содержимому и не выравнивают его в оставшемся месте; `unsafe`/`safe` не различаются
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P3); остаток — [BUG-1715](BUG-1715-OPEN.md)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout (`crates/engine/layout/src/box_tree/block_flow_trampoline.rs:875` — `justify-self` у блока; абсолютно позиционированный бокс — `box_tree/`)
 
@@ -33,3 +33,11 @@ WPT-RUN-14 срез 24: `css-align/abspos/{align,justify}-self-*`, `*-default-ov
 ## Как проверить
 
 `css/css-align/blocks/justify-self-htb-ltr-htb.html`, `abspos/align-self-htb-ltr-htb.html`, `abspos/safe-align-self-htb.html`.
+
+## Исправление (2026-10-26, P3)
+
+Общий код выравнивания — `box_tree/self_align.rs` (`inline_alignment`, `aligned_border_start`, `inline_sizing`):
+
+- **Блок в потоке.** `dispatch_box` делает `width: auto` у блока с выравниванием (`justify-self`/`justify-items` родителя ≠ `normal`/`stretch`) `fit-content` (`justify_fits_content`); сдвиг по оси считает уже родитель после раскладки ребёнка (`align_justify_self_child` в горизонтальном потоке, `finish_child` в `vertical_trampoline`) — ему известны направление и режим письма контейнера. `start`/`end` — по контейнеру, `self-start`/`self-end` — по ребёнку, `left`/`right` — физически; `safe` откатывает к `start`, без ключевого слова выход за край разрешён. Явный `stretch` растягивает и ортогонального ребёнка (`UsedSizeOverride`), вертикальный ребёнок вертикального контейнера получает `fit-content` высоту через тот же override.
+- **`position:absolute`.** Оси выравнивания берутся у содержащего блока (`place_abs_child` получает его стиль, если это сам родитель), а не у бокса; между двумя инсетами auto-размер — `fit-content`, а не растяжение; default overflow alignment держит margin box внутри объединения CB и inset-modified CB (начальный край побеждает), явный `unsafe` (`ContentAlignExtra::{self_unsafe, justify_self_unsafe}`) — без поправки.
+- Проверка: `box_tree/tests/align_self_wpt.rs` — эмуляция `check-layout-th.js` на вендоренных файлах `css-align` (77 файлов целиком), плюс юнит-тесты в `flow_modes.rs` и `abs_auto_margins.rs`.
