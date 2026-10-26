@@ -469,7 +469,7 @@ fn rasterize_cpu_pixmap(
                         if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
                             && let Some(dst) = layers.last_mut()
                         {
-                            close_layer(dst, &top, &op);
+                            close_layer(dst, &top, &op, image_map);
                         }
                     }
                     Some(CpuClipKind::Rect) | None => {
@@ -509,7 +509,7 @@ fn rasterize_cpu_pixmap(
                         {
                             let (gw, gh) = (group.width() as f32, group.height() as f32);
                             let src = CpuLayer { pm: group, dirty: Some((0.0, 0.0, gw, gh)) };
-                            close_layer(dst, &src, &LayerComposite::Transform(group_t));
+                            close_layer(dst, &src, &LayerComposite::Transform(group_t), image_map);
                         }
                         continue;
                     }
@@ -545,7 +545,7 @@ fn rasterize_cpu_pixmap(
                         clip_stack = saved;
                     }
                     if let Some(dst) = layers.last_mut() {
-                        close_layer(dst, &top, &op);
+                        close_layer(dst, &top, &op, image_map);
                     }
                 }
                 clip_stack.pop();
@@ -724,7 +724,7 @@ fn rasterize_cpu_pixmap(
                     {
                         let (gw, gh) = (group.width() as f32, group.height() as f32);
                         let src = CpuLayer { pm: group, dirty: Some((0.0, 0.0, gw, gh)) };
-                        close_layer(dst, &src, &LayerComposite::Transform(group_t));
+                        close_layer(dst, &src, &LayerComposite::Transform(group_t), image_map);
                     }
                     continue;
                 }
@@ -883,7 +883,7 @@ fn rasterize_cpu_pixmap(
                         clip_mask = build_clip_mask(width, height, clip_rect);
                     }
                     if let Some(dst) = layers.last_mut() {
-                        close_layer(dst, &top, &op);
+                        close_layer(dst, &top, &op, image_map);
                     }
                 }
             }
@@ -916,7 +916,7 @@ fn rasterize_cpu_pixmap(
         let top = layers.pop().expect("len > 1");
         let op = layer_ops.pop().unwrap_or(LayerComposite::Opacity(1.0));
         if let Some(dst) = layers.last_mut() {
-            close_layer(dst, &top, &op);
+            close_layer(dst, &top, &op, image_map);
         }
     }
     Ok(layers.pop().expect("base layer").pm)
@@ -968,7 +968,12 @@ fn composite_layer(
 /// the backdrop, masks/clips only scale the source's zero alpha) — and the
 /// closed group's dirty box is propagated into `dst` so nested filter groups
 /// still see a correct ink superset.
-fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
+fn close_layer(
+    dst: &mut CpuLayer,
+    src: &CpuLayer,
+    op: &LayerComposite,
+    image_map: &std::collections::HashMap<&str, &Image>,
+) {
     // An SVG filter can paint on an empty source (`feFlood`), so it alone runs on
     // an untouched layer.
     let has_svg = matches!(op, LayerComposite::Filter { filters, .. }
@@ -1003,7 +1008,7 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
         }
         LayerComposite::Filter { filters, bounds, clip } => {
             let written = if has_svg {
-                composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, *clip, src_dirty)
+                composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, *clip, src_dirty, image_map)
             } else {
                 composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
             };
@@ -1455,6 +1460,7 @@ fn composite_svg_filter_chain(
     bounds: Rect,
     clip: Option<Rect>,
     src_dirty: DrawBounds,
+    image_map: &std::collections::HashMap<&str, &Image>,
 ) -> Option<DrawBounds> {
     if filters.iter().any(|f| matches!(f, FilterFn::Url(u) if u.graph.is_none())) {
         return composite_filter_layer(dst, src, &[], src_dirty);
@@ -1472,7 +1478,7 @@ fn composite_svg_filter_chain(
         match f {
             FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma),
             FilterFn::Url(u) => {
-                if let Some(win) = crate::svg_filter::apply(&cur, origin, canvas, u, bounds) {
+                if let Some(win) = crate::svg_filter::apply(&cur, origin, canvas, u, bounds, image_map) {
                     cur = win.pixmap;
                     origin = (win.x, win.y);
                 }
@@ -3222,7 +3228,7 @@ fn vector_tile<'a>(img: &Image, w: f32, h: f32, cache: &'a mut Option<Image>) ->
 
 /// Convert a decoded [`Image`] (straight RGBA8) into a premultiplied tiny-skia
 /// [`tiny_skia::Pixmap`] for use as a pattern shader source.
-fn image_to_pixmap(img: &Image) -> Option<tiny_skia::Pixmap> {
+pub(crate) fn image_to_pixmap(img: &Image) -> Option<tiny_skia::Pixmap> {
     let rgba = img.to_rgba8();
     let mut pm = tiny_skia::Pixmap::new(img.width, img.height)?;
     for (dst, chunk) in pm.pixels_mut().iter_mut().zip(rgba.chunks_exact(4)) {

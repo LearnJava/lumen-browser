@@ -10,7 +10,10 @@
 //! прозрачный чёрный. Поворот/скос CTM не учитывается: фильтр работает в
 //! осях страницы с масштабом `a`/`d` матрицы user space.
 
+use std::collections::HashMap;
+
 use lumen_core::geom::Rect;
+use lumen_image::Image;
 use lumen_layout::{
     FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput, FeLight, FePrimitive, FeTransfer, FilterUrl,
     SvgFilter,
@@ -18,6 +21,7 @@ use lumen_layout::{
 
 use crate::display_list::BlendMode;
 
+mod fe_image;
 mod fx;
 
 /// Premultiplied f32 RGBA изображение `w × h`.
@@ -78,6 +82,7 @@ pub(crate) fn apply(
     canvas: (u32, u32),
     url: &FilterUrl,
     bounds: Rect,
+    images: &HashMap<&str, &Image>,
 ) -> Option<Windowed> {
     let graph = url.graph.as_ref()?;
     let g = Geometry::new(url, bounds);
@@ -109,7 +114,7 @@ pub(crate) fn apply(
         }
     }
     let local_region = PxRect { x0: 0, y0: 0, x1: w as i32, y1: h as i32 };
-    let out = run_graph(graph, &g, &source, region, local_region);
+    let out = run_graph(graph, &g, &source, region, local_region, images);
     let mut pm = tiny_skia::Pixmap::new(w as u32, h as u32)?;
     let od = pm.data_mut();
     for (i, px) in out.d.iter().enumerate() {
@@ -191,7 +196,14 @@ fn region_px(graph: &SvgFilter, g: &Geometry, canvas: (u32, u32)) -> Option<PxRe
     (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
 }
 
-fn run_graph(graph: &SvgFilter, g: &Geometry, source: &Img, region: PxRect, local: PxRect) -> Img {
+fn run_graph(
+    graph: &SvgFilter,
+    g: &Geometry,
+    source: &Img,
+    region: PxRect,
+    local: PxRect,
+    images: &HashMap<&str, &Image>,
+) -> Img {
     let (w, h) = (source.w, source.h);
     let source_alpha = {
         let mut s = Img::new(w, h);
@@ -208,7 +220,7 @@ fn run_graph(graph: &SvgFilter, g: &Geometry, source: &Img, region: PxRect, loca
     for (idx, prim) in graph.primitives.iter().enumerate() {
         // Входы примитива (до вычисления подобласти: по ним считается её умолчание).
         let inputs_of: Vec<FeInput> = match &prim.kind {
-            FePrimitive::Flood { .. } => vec![],
+            FePrimitive::Flood { .. } | FePrimitive::Image { .. } => vec![],
             FePrimitive::Turbulence { .. } => vec![],
             FePrimitive::Unsupported { input } => vec![*input],
             FePrimitive::Offset { input, .. }
@@ -417,6 +429,10 @@ fn run_graph(graph: &SvgFilter, g: &Geometry, source: &Img, region: PxRect, loca
                     let p = fx::Lighting { kind: *kind, surface_scale: *surface_scale, color: c, light };
                     conv_out(fx::lighting(&fetched[0].0, &p))
                 }
+            },
+            FePrimitive::Image { href, fit } => match images.get(href.as_str()) {
+                Some(image) => fe_image::render(image, fit, sub, w, h),
+                None => Img::new(w, h),
             },
             FePrimitive::Unsupported { .. } => fetched[0].0.clone(),
         };
@@ -760,7 +776,7 @@ mod tests {
     #[test]
     fn flood_fills_filter_region_only() {
         let g = filter(vec![prim(FePrimitive::Flood { color: Color { r: 0, g: 0, b: 255, a: 255 }, opacity: 1.0 })]);
-        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap();
+        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0), &HashMap::new()).unwrap();
         // Область: x ∈ [5, 25).
         assert_eq!(px(&w, 12, 12), [0, 0, 255, 255]);
         assert_eq!(px(&w, 5, 5), [0, 0, 255, 255]);
@@ -771,7 +787,7 @@ mod tests {
     #[test]
     fn offset_moves_source() {
         let g = filter(vec![prim(FePrimitive::Offset { input: FeInput::SourceGraphic, dx: 5.0, dy: 0.0 })]);
-        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap();
+        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0), &HashMap::new()).unwrap();
         assert_eq!(px(&w, 12, 12), [0, 0, 0, 0]);
         assert_eq!(px(&w, 17, 12), [255, 0, 0, 255]);
         assert_eq!(px(&w, 22, 12), [255, 0, 0, 255]);
@@ -781,7 +797,7 @@ mod tests {
     #[test]
     fn blur_spreads_alpha_and_conserves_mass() {
         let g = filter(vec![prim(FePrimitive::GaussianBlur { input: FeInput::SourceGraphic, sx: 3.0, sy: 3.0 })]);
-        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap();
+        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0), &HashMap::new()).unwrap();
         let total: f32 = w.pixmap.data().chunks(4).map(|p| f32::from(p[3]) / 255.0).sum();
         // Часть массы уходит за край области фильтра (5 px запаса при σ = 3).
         assert!(total > 90.0 && total <= 100.5, "mass {total}");
@@ -794,7 +810,7 @@ mod tests {
             prim(FePrimitive::Flood { color: Color { r: 0, g: 255, b: 0, a: 255 }, opacity: 1.0 }),
             prim(FePrimitive::Composite { a: FeInput::Previous, b: FeInput::SourceGraphic, op: FeCompositeOp::In }),
         ]);
-        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap();
+        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(10.0, 10.0, 10.0, 10.0), &HashMap::new()).unwrap();
         assert_eq!(px(&w, 12, 12), [0, 255, 0, 255]);
         assert_eq!(px(&w, 7, 7), [0, 0, 0, 0]);
     }
@@ -802,11 +818,11 @@ mod tests {
     #[test]
     fn missing_graph_is_none() {
         let u = FilterUrl { id: "x".into(), graph: None, placement: None };
-        assert!(apply(&red_square(), (0, 0), (40, 40), &u, Rect::new(0.0, 0.0, 1.0, 1.0)).is_none());
+        assert!(apply(&red_square(), (0, 0), (40, 40), &u, Rect::new(0.0, 0.0, 1.0, 1.0), &HashMap::new()).is_none());
     }
 
     fn run(prims: Vec<SvgFilterPrimitive>) -> Windowed {
-        apply(&red_square(), (0, 0), (40, 40), &url(filter(prims)), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap()
+        apply(&red_square(), (0, 0), (40, 40), &url(filter(prims)), Rect::new(10.0, 10.0, 10.0, 10.0), &HashMap::new()).unwrap()
     }
 
     fn flood(color: Color) -> SvgFilterPrimitive {
@@ -913,7 +929,7 @@ mod tests {
     fn linear_rgb_round_trip_is_identity_for_merge_of_source() {
         let mut p = prim(FePrimitive::Merge(vec![FeInput::SourceGraphic]));
         p.linear_rgb = true;
-        let w = apply(&red_square(), (0, 0), (40, 40), &url(filter(vec![p])), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap();
+        let w = apply(&red_square(), (0, 0), (40, 40), &url(filter(vec![p])), Rect::new(10.0, 10.0, 10.0, 10.0), &HashMap::new()).unwrap();
         assert_eq!(px(&w, 12, 12), [255, 0, 0, 255]);
     }
 }

@@ -33,6 +33,39 @@ fn svg_rect_attribute_resolves_filter_graph() {
 }
 
 #[test]
+fn fe_image_href_becomes_image_primitive_with_fit() {
+    let list = build(
+        r##"<svg width=100 height=100><filter id=f><feImage href="pic.png" preserveAspectRatio="xMinYMax slice"/>
+        <feImage xlink:href="#el"/><feImage href="b.png" preserveAspectRatio="none"/></filter>
+        <rect width=50 height=50 filter="url(#f)" /></svg>"##,
+        "",
+    );
+    let g = url_filter(&list).and_then(|u| u.graph).expect("граф разрешён");
+    match &g.primitives[0].kind {
+        FePrimitive::Image { href, fit } => {
+            assert_eq!(href, "pic.png");
+            assert!(fit.slice && !fit.stretch);
+            assert_eq!((fit.align_x, fit.align_y), (0.0, 1.0));
+        }
+        other => panic!("ожидался Image, получено {other:?}"),
+    }
+    assert!(matches!(g.primitives[1].kind, FePrimitive::Unsupported { .. }), "ссылка на элемент пока не исполняется");
+    assert!(matches!(&g.primitives[2].kind, FePrimitive::Image { fit, .. } if fit.stretch));
+}
+
+#[test]
+fn fe_image_href_is_collected_as_a_subresource() {
+    let doc = lumen_html_parser::parse(
+        r##"<svg width=100 height=100><filter id=f><feImage href="pic.png"/><feImage href="pic.png"/></filter>
+        <rect width=50 height=50 filter="url(#f)" /></svg>
+        <div style="filter:url(#f)">x</div>"##,
+    );
+    let sheet = lumen_css_parser::parse("");
+    let tree = lumen_layout::layout(&doc, &sheet, lumen_core::geom::Size::new(800.0, 600.0));
+    assert_eq!(lumen_layout::collect_background_image_requests(&tree, 1.0), ["pic.png"]);
+}
+
+#[test]
 fn css_filter_property_on_html_box_and_missing_reference() {
     let list = build(
         r##"<svg width=0 height=0><filter id=f><feFlood/></filter></svg>
@@ -124,6 +157,63 @@ mod raster {
         assert_eq!(px(&img, 60, 60), [0, 255, 0]);
         // Угол области фильтра вне круга — фон.
         assert_eq!(px(&img, 34, 34), [255, 255, 255]);
+    }
+
+    fn render_with(html: &str, images: &[(String, std::sync::Arc<lumen_image::Image>)]) -> lumen_image::Image {
+        let list = build(html, "");
+        crate::cpu_raster::rasterize_cpu(200, 120, &list, images, 0.0, 0.0).expect("rasterize")
+    }
+
+    /// Картинка `w × h`: левая половина красная, правая синяя.
+    fn two_tone(w: u32, h: u32) -> (String, std::sync::Arc<lumen_image::Image>) {
+        let mut data = Vec::new();
+        for _ in 0..h {
+            for x in 0..w {
+                data.extend_from_slice(if x < w / 2 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+            }
+        }
+        let img = lumen_image::Image {
+            width: w,
+            height: h,
+            format: lumen_image::PixelFormat::Rgba8,
+            data,
+            icc_profile: None,
+            vector_source: None,
+        };
+        ("pic.png".to_string(), std::sync::Arc::new(img))
+    }
+
+    #[test]
+    fn fe_image_stretches_and_meets_into_the_filter_region() {
+        let pic = [two_tone(2, 1)];
+        let svg = |par: &str| {
+            format!(
+                r##"<svg width=200 height=120><filter id=f x=0 y=0 width=1 height=1 filterUnits=objectBoundingBox>
+                <feImage href="pic.png" preserveAspectRatio="{par}"/></filter>
+                <rect x=20 y=20 width=100 height=100 fill=green filter="url(#f)" /></svg>"##
+            )
+        };
+        // none: картинка 2×1 растягивается на 100×100; левая половина красная, правая синяя.
+        let img = render_with(&svg("none"), &pic);
+        assert_eq!(px(&img, 40, 70), [255, 0, 0]);
+        assert_eq!(px(&img, 100, 70), [0, 0, 255]);
+        assert_eq!(px(&img, 10, 70), [255, 255, 255]);
+        // meet (по умолчанию): 100×50 по центру, полосы сверху и снизу пустые.
+        let img = render_with(&svg("xMidYMid meet"), &pic);
+        assert_eq!(px(&img, 40, 70), [255, 0, 0]);
+        assert_eq!(px(&img, 100, 70), [0, 0, 255]);
+        assert_eq!(px(&img, 40, 30), [255, 255, 255]);
+        assert_eq!(px(&img, 40, 110), [255, 255, 255]);
+    }
+
+    #[test]
+    fn fe_image_without_registered_picture_is_transparent() {
+        let img = render_with(
+            r##"<svg width=200 height=120><filter id=f x=0 y=0 width=1 height=1><feImage href="nope.png"/></filter>
+            <rect x=20 y=20 width=50 height=50 fill=red filter="url(#f)" /></svg>"##,
+            &[],
+        );
+        assert_eq!(px(&img, 40, 40), [255, 255, 255]);
     }
 
     #[test]
