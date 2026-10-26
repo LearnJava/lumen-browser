@@ -243,6 +243,18 @@ pub struct ShapeParams<'a> {
     pub axes: &'a [([u8; 4], f32)],
 }
 
+/// Метрики подчёркивания шрифта (`post.underlinePosition`/`underlineThickness`
+/// плюс `MVAR` `undo`/`unds` для активных вариаций) в px — источник
+/// `text-underline-position: from-font` и `text-decoration-thickness: from-font`
+/// (CSS Text Decoration L4 §3.4, §5.1; BUG-1712).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontUnderlineMetrics {
+    /// Расстояние от baseline до ВЕРХА линии подчёркивания; положительное — ниже baseline.
+    pub position: f32,
+    /// Толщина линии подчёркивания.
+    pub thickness: f32,
+}
+
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
 /// Реализуется на стороне вызывающего кода (paint/shell), где есть доступ
@@ -387,6 +399,20 @@ pub trait TextMeasurer {
     fn line_gap_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
         let _ = families;
         self.line_gap_px(font_size_px)
+    }
+
+    /// Метрики подчёркивания первого резолвящегося по `families` face-а при
+    /// размере `font_size_px` и осях `axes` ([`style::text_variation_axes`]).
+    /// `None` — измеритель не знает метрик или шрифт их не объявляет
+    /// (`post` с нулями): paint тогда рисует эвристику `auto` (BUG-1712).
+    fn underline_metrics_with_families(
+        &self,
+        font_size_px: f32,
+        families: &[String],
+        axes: &[([u8; 4], f32)],
+    ) -> Option<FontUnderlineMetrics> {
+        let _ = (font_size_px, families, axes);
+        None
     }
 
     /// CSS2 §10.8.1 `line-height: normal` — используемая line-height в px,

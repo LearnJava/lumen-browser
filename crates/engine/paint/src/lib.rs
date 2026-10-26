@@ -401,7 +401,7 @@ pub use webgl::SoftwareWebGl;
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 
-use lumen_font::{Cmap, FontError, Hmtx, Hvar, UnicodeRange, VariationAxis, codepoint_in_ranges};
+use lumen_font::{Cmap, FontError, Hmtx, Hvar, Mvar, UnicodeRange, VariationAxis, codepoint_in_ranges};
 use lumen_layout::{FontVariationSetting, TextMeasurer};
 
 /// Реализация [`TextMeasurer`] на основе TTF-данных шрифта.
@@ -580,6 +580,8 @@ struct OwnedVariableFont {
     axes: Vec<VariationAxis>,
     /// Parsed HVAR table. `None` when the font has fvar but no HVAR (rare).
     hvar: Option<Hvar>,
+    /// Parsed MVAR table — вариации глобальных метрик (`undo`/`unds`, BUG-1712).
+    mvar: Option<Mvar>,
 }
 
 impl OwnedVariableFont {
@@ -594,6 +596,26 @@ impl OwnedVariableFont {
             let range = axis.default - axis.min;
             if range > 0.0 { -(axis.default - v) / range } else { 0.0 }
         }
+    }
+
+    /// Нормализованные координаты в порядке осей fvar для осей `axes` (CSS-пространство).
+    fn normalized_coords(&self, axes: &[([u8; 4], f32)]) -> Vec<f32> {
+        self.axes
+            .iter()
+            .map(|axis| {
+                let val = axes.iter().find(|(t, _)| *t == axis.tag).map_or(axis.default, |&(_, v)| v);
+                Self::normalize(axis, val)
+            })
+            .collect()
+    }
+
+    /// MVAR-дельта метрики `tag` для `axes`; `0.0`, если таблицы или записи нет.
+    fn metric_delta(&self, tag: &[u8; 4], axes: &[([u8; 4], f32)]) -> f32 {
+        let Some(mvar) = &self.mvar else { return 0.0 };
+        let Some(rec) = mvar.lookup(tag) else { return 0.0 };
+        mvar.store
+            .evaluate(rec.delta_set_outer, rec.delta_set_inner, &self.normalized_coords(axes))
+            .unwrap_or(0.0)
     }
 
     /// Returns HVAR-adjusted advance width for `glyph_id` given CSS `axes`.
@@ -653,6 +675,9 @@ struct OwnedFontMetrics {
     /// шрифт крупнее [`shaped_width::MAX_SHAPEABLE_FONT_BYTES`]: он меряется
     /// посимвольно.
     shape_bytes: Option<(Arc<[u8]>, u64)>,
+    /// `post.underlinePosition` / `post.underlineThickness` в font units (BUG-1712);
+    /// `None` — таблицы нет или шрифт не объявляет метрик (оба нуля).
+    underline_units: Option<(i16, i16)>,
 }
 
 impl OwnedFontMetrics {
@@ -687,7 +712,13 @@ impl OwnedFontMetrics {
         let var_data = fvar.map(|fvar| OwnedVariableFont {
             axes: fvar.axes.clone(),
             hvar: font.hvar().ok(),
+            mvar: font.mvar().ok(),
         });
+        let underline_units = font
+            .post()
+            .ok()
+            .filter(|p| p.underline_position != 0 || p.underline_thickness != 0)
+            .map(|p| (p.underline_position, p.underline_thickness));
         // Тот же приоритет источника, что `FontMeasurer::new` (bundled-fallback):
         // typo-метрики OS/2 предпочтительнее hhea, когда таблица есть.
         let os2 = font.os2().ok();
@@ -723,7 +754,25 @@ impl OwnedFontMetrics {
             normal_line_gap_units,
             shape_bytes: (bytes.len() <= shaped_width::MAX_SHAPEABLE_FONT_BYTES)
                 .then(|| (Arc::from(bytes), lumen_font::font_fingerprint(bytes))),
+            underline_units,
         })
+    }
+
+    /// Метрики подчёркивания в px с учётом MVAR (`undo`/`unds`) для `axes` (BUG-1712).
+    /// `None` — шрифт метрик не объявляет или толщина с вариациями не положительна.
+    fn underline_px(&self, font_size_px: f32, axes: &[([u8; 4], f32)]) -> Option<lumen_layout::FontUnderlineMetrics> {
+        let (pos, thick) = self.underline_units?;
+        let (mut pos, mut thick) = (f32::from(pos), f32::from(thick));
+        if let Some(var) = &self.var_data {
+            pos += var.metric_delta(b"undo", axes);
+            thick += var.metric_delta(b"unds", axes);
+        }
+        if thick <= 0.0 {
+            return None;
+        }
+        let scale = font_size_px / self.units_per_em as f32;
+        // `post.underlinePosition` — расстояние до ВЕРХА линии, отрицательное ниже baseline.
+        Some(lumen_layout::FontUnderlineMetrics { position: -pos * scale, thickness: thick * scale })
     }
 
     /// Ascent в px — та же формула, что [`FontMeasurer::ascent_px`], чтобы
@@ -1024,6 +1073,20 @@ impl PrimaryFontMetrics<'_> {
                 metrics.x_height_px(font_size_px * size_adjust.unwrap_or(1.0))
             }
             Self::Shared(m) => m.x_height_px(font_size_px),
+        }
+    }
+
+    /// Метрики подчёркивания (BUG-1712) — size-adjust домножает размер, как у x-height.
+    fn underline_px(
+        &self,
+        font_size_px: f32,
+        axes: &[([u8; 4], f32)],
+    ) -> Option<lumen_layout::FontUnderlineMetrics> {
+        match self {
+            Self::Owned { metrics, size_adjust, .. } => {
+                metrics.underline_px(font_size_px * size_adjust.unwrap_or(1.0), axes)
+            }
+            Self::Shared(m) => m.underline_px(font_size_px, axes),
         }
     }
 
@@ -1342,6 +1405,7 @@ impl MultiFontMeasurer {
                 normal_descent_units: 0,
                 normal_line_gap_units: 0,
                 shape_bytes: None,
+                underline_units: None,
             },
             unicode_ranges: Vec::new(),
             ascent_override: None,
@@ -1567,6 +1631,15 @@ impl TextMeasurer for MultiFontMeasurer {
             Some(m) => m.cap_height_px(font_size_px),
             None => self.cap_height_px(font_size_px),
         }
+    }
+
+    fn underline_metrics_with_families(
+        &self,
+        font_size_px: f32,
+        families: &[String],
+        axes: &[([u8; 4], f32)],
+    ) -> Option<lumen_layout::FontUnderlineMetrics> {
+        self.primary_metrics(families)?.underline_px(font_size_px, axes)
     }
 
     fn normal_line_height_px(&self, font_size_px: f32) -> f32 {
