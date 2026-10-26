@@ -243,6 +243,18 @@ pub struct ShapeParams<'a> {
     pub axes: &'a [([u8; 4], f32)],
 }
 
+/// Метрики подчёркивания шрифта (`post.underlinePosition`/`underlineThickness`
+/// плюс `MVAR` `undo`/`unds` для активных вариаций) в px — источник
+/// `text-underline-position: from-font` и `text-decoration-thickness: from-font`
+/// (CSS Text Decoration L4 §3.4, §5.1; BUG-1712).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontUnderlineMetrics {
+    /// Расстояние от baseline до ВЕРХА линии подчёркивания; положительное — ниже baseline.
+    pub position: f32,
+    /// Толщина линии подчёркивания.
+    pub thickness: f32,
+}
+
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
 /// Реализуется на стороне вызывающего кода (paint/shell), где есть доступ
@@ -387,6 +399,20 @@ pub trait TextMeasurer {
     fn line_gap_px_with_families(&self, font_size_px: f32, families: &[String]) -> f32 {
         let _ = families;
         self.line_gap_px(font_size_px)
+    }
+
+    /// Метрики подчёркивания первого резолвящегося по `families` face-а при
+    /// размере `font_size_px` и осях `axes` ([`style::text_variation_axes`]).
+    /// `None` — измеритель не знает метрик или шрифт их не объявляет
+    /// (`post` с нулями): paint тогда рисует эвристику `auto` (BUG-1712).
+    fn underline_metrics_with_families(
+        &self,
+        font_size_px: f32,
+        families: &[String],
+        axes: &[([u8; 4], f32)],
+    ) -> Option<FontUnderlineMetrics> {
+        let _ = (font_size_px, families, axes);
+        None
     }
 
     /// CSS2 §10.8.1 `line-height: normal` — используемая line-height в px,
@@ -2000,11 +2026,32 @@ pub fn refresh_anchor_scroll(root: &mut LayoutBox) {
     while let Some(b) = stack.pop() {
         if let Some(a) = b.anchor_scroll.as_mut() {
             for sc in &mut a.scrollers {
-                (sc.x, sc.y) = offsets.get(&sc.node).copied().unwrap_or((0.0, 0.0));
+                let (x, y) = offsets.get(&sc.node).copied().unwrap_or((0.0, 0.0));
+                (sc.x, sc.y) = (if sc.follow_x { x } else { 0.0 }, if sc.follow_y { y } else { 0.0 });
             }
         }
         stack.extend(b.children.iter_mut());
     }
+}
+
+/// [`collect_anchor_scrollers`]'s result.
+pub type AnchorScrollers = std::collections::HashMap<u32, Vec<(u32, bool, bool)>>;
+
+/// The scroll containers each anchor-positioned box follows (CSS Anchor Positioning L1 §4.3):
+/// `NodeId::index()` of the box → `(NodeId::raw(), follows x, follows y)` of every container in
+/// [`LayoutBox::anchor_scroll`], the principal box of a node only. The embedder adds the
+/// containers' current offsets to the box's `getBoundingClientRect`; the offsets themselves move
+/// without a relayout, the list only changes with one.
+pub fn collect_anchor_scrollers(root: &LayoutBox) -> AnchorScrollers {
+    let mut out = std::collections::HashMap::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if let Some(a) = &b.anchor_scroll {
+            out.entry(b.node.index() as u32).or_insert_with(|| a.scrollers.iter().map(|s| (s.node.raw(), s.follow_x, s.follow_y)).collect());
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
 }
 
 fn set_scroll_position_rec(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {

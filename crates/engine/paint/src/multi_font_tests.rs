@@ -866,3 +866,24 @@
         let w = m.char_width_with_families('А', 16.0, &["all".to_string()]);
         assert!(w > 0.0, "пустой unicode-range → нет ограничений, кириллица должна работать");
     }
+
+    /// BUG-1712: `post` + `MVAR` вариативного шрифта UnderlineTest-VF дают позицию и толщину
+    /// подчёркивания, меняющиеся с осью `UNDO`; шрифт без регистрации метрик не отдаёт.
+    #[test]
+    fn underline_metrics_follow_variation_axis() {
+        static VF: &[u8] =
+            include_bytes!("../../../../tests/wpt/css/css-text-decor/resources/UnderlineTest-VF.ttf");
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("underline-variable", VF.to_vec());
+        let fam = ["underline-variable".to_string()];
+        let at = |v: f32| m.underline_metrics_with_families(64.0, &fam, &[(*b"UNDO", v)]);
+        let (lo, mid, hi) = (at(200.0).unwrap(), at(640.0).unwrap(), at(1000.0).unwrap());
+        eprintln!("UNDO 200/640/1000: {lo:?} {mid:?} {hi:?}");
+        assert!(lo.position < mid.position && mid.position < hi.position, "позиция растёт с UNDO");
+        // Тест WPT: UNDO 640 даёт «целые 6 px», смещения −3.84325 / +3.375 попадают на UNDO 200 / 1000.
+        assert!((mid.position - 6.0).abs() < 0.01, "{mid:?}");
+        assert!((mid.position - 3.84325 - lo.position).abs() < 0.01, "{lo:?}");
+        assert!((mid.position + 3.375 - hi.position).abs() < 0.01, "{hi:?}");
+        assert!(m.underline_metrics_with_families(64.0, &["no-such".to_string()], &[]).is_none());
+    }

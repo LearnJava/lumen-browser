@@ -237,6 +237,7 @@ mod tests {
             bidi_isolate: None,
             merged_sources: Vec::new(),
             forced_end: false,
+            font_underline: None,
         }
     }
 

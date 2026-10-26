@@ -50,3 +50,7 @@ scroll-aware, **эти формулы нужно перевести** (верн�
 иначе `scrollIntoView` из уже прокрученного контейнера снова поедет не туда. Пинит
 это поведение тест `scroll_into_view_in_a_scrolled_container_does_not_drift` в `crates/js/src/dom/tests/v8_smooth_scroll.rs`
 и WPT `smooth-scroll-nonstop.html`.
+
+## Срез (ANCHOR-SCROLL-2, 2026-10-26): контейнеры — сделано, страница — нет
+
+`getBoundingClientRect`/`getClientRects`/`getBoxQuads` теперь вычитают прокрутку контейнеров-предков при чтении: `_lumen_get_scroll_shift(nid)` (`install/platform.rs`) складывает `scroll_states` DOM-предков (корневой элемент не считается — это вьюпорт) и контейнеры якоря; опубликованные прямоугольники остаются координатами документа, поэтому колесо и `scrollTop` видны без пересборки, а `ScopedCollection` не тронут. `offsetLeft`/`offsetTop` от прокрутки предков не зависят. **Не сделано:** прокрутка страницы (`scrollY`), `_lumen_get_bounding_rect` для внутренних потребителей (`scrollIntoView`, IntersectionObserver — остаются в координатах документа, поэтому `isIntersecting-change-events.html` и `scroll-margin-dynamic.html` по-прежнему красные); сдвиг считается по DOM-предкам, `position: fixed`/`absolute` внутри скроллера с содержащим блоком снаружи сдвигаются так же, как их красит paint.

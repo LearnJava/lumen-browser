@@ -312,6 +312,48 @@ pub(crate) fn install_element_geometry(
         });
     }
 
+    // How far the scrolling of ancestor scroll containers has moved `nid` away from the document
+    // position `_lumen_get_bounding_rect` answers with: `[dx, dy, anchor_dx, anchor_dy]`, the
+    // second pair being only the share that comes from the scroll containers of the anchor `nid` is
+    // positioned against (CSS Anchor Positioning L1 §4.3) — the part `offsetLeft`/`offsetTop` keep.
+    // The document element is the viewport, whose scrolling is not applied (BUG-1166).
+    {
+        let flush_shift = flush.clone();
+        reg!(scope, ctx, store, "_lumen_get_scroll_shift", move |nid: u32| -> Vec<f64> {
+            flush_shift.maybe_flush();
+            // Lock order of the flush itself: document first, scroll states after.
+            let doc = flush_shift.doc.lock().unwrap();
+            let ss = flush_shift.scroll_states.lock().unwrap();
+            if ss.values().all(|s| s[0] == 0.0 && s[1] == 0.0) {
+                return vec![0.0; 4];
+            }
+            let offset = |raw: u32| ss.get(&raw).map_or((0.0, 0.0), |s| (f64::from(s[0]), f64::from(s[1])));
+            let (mut ax, mut ay) = (0.0, 0.0);
+            let key = NodeId::from_raw(nid).index() as u32;
+            if let Some(list) = flush_shift.anchor_scrollers.lock().unwrap().get(&key) {
+                for &(raw, follow_x, follow_y) in list {
+                    let (x, y) = offset(raw);
+                    ax += if follow_x { x } else { 0.0 };
+                    ay += if follow_y { y } else { 0.0 };
+                }
+            }
+            let (mut dx, mut dy) = (ax, ay);
+            let parent = |n: NodeId| doc.try_get(n).and_then(|node| node.parent);
+            let mut cur = NodeId::from_raw(nid);
+            // Stops below the document element: its scrolling is the page's, not an ancestor's.
+            while let Some(par) = parent(cur) {
+                if parent(par).and_then(parent).is_none() {
+                    break;
+                }
+                let (x, y) = offset(par.raw());
+                dx += x;
+                dy += y;
+                cur = par;
+            }
+            vec![dx, dy, ax, ay]
+        });
+    }
+
     // GAP-HLHITTEST: which character of which text node is laid out under a
     // viewport point — flat `[nid, utf16Offset, nid, utf16Offset, …]`,
     // usually zero or one pair. Backs `CSS.highlights.highlightsFromPoint()`.

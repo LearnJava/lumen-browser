@@ -256,6 +256,7 @@ pub(crate) fn push_tabbed_frags(
             bidi_isolate: seg.bidi_isolate,
             merged_sources: Vec::new(),
             forced_end: false,
+            font_underline: None,
         });
         *x += width;
     }
@@ -899,6 +900,7 @@ pub(crate) fn wrap_inline_run_indented(
                 bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
+                font_underline: None,
             });
             current_x += img_w + seg.post_space;
             // Trailing whitespace after the image (a collapsed ws-only node) is
@@ -931,6 +933,7 @@ pub(crate) fn wrap_inline_run_indented(
                 bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
+                font_underline: None,
             });
             current_x += seg.post_space;
             prev_trailing_ws = false;
@@ -1095,6 +1098,7 @@ pub(crate) fn wrap_inline_run_indented(
                         bidi_isolate: seg.bidi_isolate,
                         merged_sources: Vec::new(),
                         forced_end: false,
+                        font_underline: None,
                     });
                     current_x += chunk_w;
                     first_chunk = false;
@@ -1147,6 +1151,7 @@ pub(crate) fn wrap_inline_run_indented(
                         bidi_isolate: seg.bidi_isolate,
                         merged_sources: Vec::new(),
                         forced_end: false,
+                        font_underline: None,
                     });
                     result.push(std::mem::take(&mut current_line));
                     current_x = indent.soft;
@@ -1170,6 +1175,7 @@ pub(crate) fn wrap_inline_run_indented(
                         bidi_isolate: seg.bidi_isolate,
                         merged_sources: Vec::new(),
                         forced_end: false,
+                        font_underline: None,
                     });
                     current_x += sfx_w + post;
                     continue;
@@ -1207,6 +1213,7 @@ pub(crate) fn wrap_inline_run_indented(
                                 bidi_isolate: seg.bidi_isolate,
                                 merged_sources: Vec::new(),
                                 forced_end: false,
+                                font_underline: None,
                             });
                             current_x += head_w;
                             first_chunk = false;
@@ -1264,6 +1271,7 @@ pub(crate) fn wrap_inline_run_indented(
                             bidi_isolate: seg.bidi_isolate,
                             merged_sources: Vec::new(),
                             forced_end: false,
+                            font_underline: None,
                         });
                         current_x += head_w;
                         first_chunk = false;
@@ -1350,6 +1358,7 @@ pub(crate) fn wrap_inline_run_indented(
                     bidi_isolate: seg.bidi_isolate,
                     merged_sources: Vec::new(),
                     forced_end: false,
+                    font_underline: None,
                 });
                 current_x += word_w;
             }
@@ -1768,6 +1777,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
+                font_underline: None,
             });
             prev_trailing_ws = seg.text.ends_with(|c: char| is_wrap_whitespace(c));
             continue;
@@ -1818,6 +1828,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 bidi_isolate: seg.bidi_isolate,
                 merged_sources: Vec::new(),
                 forced_end: false,
+                font_underline: None,
             });
         }
         prev_trailing_ws = seg_trail_ws;
@@ -1965,5 +1976,22 @@ pub(crate) fn ellipsize_last_line(
                 truncate_frag_with_ellipsis(&mut last[idx], avail, font_size, m, ellipsis, ellipsis_w);
             }
         }
+    }
+}
+
+/// Заполняет [`InlineFrag::font_underline`] (BUG-1712): метрики подчёркивания шрифта нужны paint
+/// только фрагментам с `underline`, у которых позиция или толщина стоят в `from-font`
+/// (CSS Text Decoration L4 §3.4, §5.1). Остальным не платим за запрос к измерителю.
+pub(crate) fn annotate_font_underline(lines: &mut [Vec<InlineFrag>], m: &dyn TextMeasurer) {
+    for frag in lines.iter_mut().flatten() {
+        let st = &frag.style;
+        if !st.text_decoration_line.underline
+            || (st.text_underline_position != crate::style::TextUnderlinePosition::FromFont
+                && st.text_decoration_thickness != crate::style::TextDecorationThickness::FromFont)
+        {
+            continue;
+        }
+        let axes = crate::style::text_variation_axes(st);
+        frag.font_underline = m.underline_metrics_with_families(st.font_size, &st.font_family, &axes);
     }
 }

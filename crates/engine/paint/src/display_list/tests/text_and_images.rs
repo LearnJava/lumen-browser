@@ -1213,6 +1213,50 @@
         assert!((calc - px).abs() < 0.01, "calc={calc} px={px}");
     }
 
+    /// BUG-1712: `text-underline-position: from-font` и `text-decoration-thickness: from-font` берут
+    /// позицию и толщину из метрик шрифта измерителя; `auto` и шрифт без метрик остаются эвристикой.
+    #[test]
+    fn underline_from_font_uses_measurer_metrics() {
+        struct WithUnderline(Option<lumen_layout::FontUnderlineMetrics>);
+        impl lumen_layout::TextMeasurer for WithUnderline {
+            fn char_width(&self, _: char, _: f32) -> f32 {
+                8.0
+            }
+            fn underline_metrics_with_families(
+                &self,
+                _: f32,
+                _: &[String],
+                _: &[([u8; 4], f32)],
+            ) -> Option<lumen_layout::FontUnderlineMetrics> {
+                self.0
+            }
+        }
+        let font = Some(lumen_layout::FontUnderlineMetrics { position: 3.0, thickness: 2.0 });
+        let line = |css: &str, m: Option<lumen_layout::FontUnderlineMetrics>| {
+            let doc = lumen_html_parser::parse("<p><a>x</a></p>");
+            let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
+            let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &WithUnderline(m));
+            let dl = build_display_list(&tree);
+            let rects = fill_rects(&dl);
+            assert_eq!(rects.len(), 1);
+            (rects[0].y, rects[0].height)
+        };
+        let base = "a { text-decoration: underline; ";
+        let (auto_y, auto_h) = line(&format!("{base}}}"), font);
+        // baseline ≈ 14.4 (см. `underline_positioned_below_baseline`).
+        assert!((auto_y - 16.0).abs() < 0.5, "auto — эвристика, got {auto_y}");
+        assert!(auto_h < 1.5, "auto thickness {auto_h}");
+        let (y, h) = line(&format!("{base}text-underline-position: from-font; text-decoration-thickness: from-font; }}"), font);
+        assert!((y - 17.4).abs() < 0.5, "from-font position 3px below baseline, got {y}");
+        assert!((h - 2.0).abs() < 0.01, "from-font thickness, got {h}");
+        // Явный offset складывается с позицией шрифта (L4 §5.3).
+        let (y_off, _) = line(&format!("{base}text-underline-position: from-font; text-underline-offset: 4px; }}"), font);
+        assert!((y_off - y - 4.0).abs() < 0.01, "offset поверх from-font: {y_off} vs {y}");
+        // Шрифт без метрик — как auto.
+        let (y_none, h_none) = line(&format!("{base}text-underline-position: from-font; text-decoration-thickness: from-font; }}"), None);
+        assert!((y_none - auto_y).abs() < 0.01 && (h_none - auto_h).abs() < 0.01, "{y_none} {h_none}");
+    }
+
     /// line-through лежит выше baseline, не ниже.
     #[test]
     fn line_through_positioned_above_baseline() {

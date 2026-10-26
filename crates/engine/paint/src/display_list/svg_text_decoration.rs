@@ -837,7 +837,12 @@ pub(crate) fn push_text_decoration_pass(
     }
     let fs = frag.style.font_size;
     let baseline_y = line_y + fs * 0.80;
-    let thickness = resolve_decoration_thickness(frag.style.text_decoration_thickness, fs);
+    let font_ul = frag.font_underline;
+    let thickness = match (frag.style.text_decoration_thickness, font_ul) {
+        // CSS Text Decoration L4 §3.2: `from-font` — толщина из шрифта (BUG-1712); без метрик — как `auto`.
+        (TextDecorationThickness::FromFont, Some(m)) => m.thickness.max(1.0),
+        (t, _) => resolve_decoration_thickness(t, fs),
+    };
     let style = frag.style.text_decoration_style;
     let x = container_x + frag.x;
     let color = frag.style.text_decoration_color.resolve(frag.style.color);
@@ -852,14 +857,21 @@ pub(crate) fn push_text_decoration_pass(
             frag.style.text_underline_position,
             TextUnderlinePosition::Under | TextUnderlinePosition::UnderLeft | TextUnderlinePosition::UnderRight
         );
+        // `from-font` (§5.1): позиция верха линии из `post`/`MVAR` шрифта (BUG-1712);
+        // шрифт без метрик — как `auto`.
+        let from_font = (frag.style.text_underline_position == TextUnderlinePosition::FromFont)
+            .then_some(font_ul)
+            .flatten()
+            .map(|m| m.position);
         // CSS Text Decoration L4 §5.3 (zero-position): явный offset отсчитывается от
-        // alphabetic baseline (для `under` — от нижнего края), а не от UA-позиции `auto`.
+        // alphabetic baseline (для `under` — от нижнего края; для `from-font` — от позиции
+        // шрифта), а не от UA-позиции `auto`.
         let deco_y = match frag.style.text_underline_offset {
             Some(px) => {
-                let zero = if under { fs * 0.25 } else { 0.0 };
+                let zero = if under { fs * 0.25 } else { from_font.unwrap_or(0.0) };
                 baseline_y + zero + px + frag.style.text_underline_offset_pct * fs
             }
-            None => baseline_y + if under { fs * 0.25 } else { fs * 0.10 },
+            None => baseline_y + if under { fs * 0.25 } else { from_font.unwrap_or(fs * 0.10) },
         };
         // CSS Text Decoration L4 §3.5: text-decoration-skip-ink.
         // `None` — continuous line; `Auto` — skip under descenders; `All` — skip every char.

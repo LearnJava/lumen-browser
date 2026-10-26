@@ -2601,6 +2601,15 @@ fn skia_gradient_stops(
     // premultiplied space (BUG-190); tiny-skia samples these dense stops in
     // straight space, reproducing the premultiplied curve. Opaque segments are
     // untouched, so solid gradients stay byte-identical.
+    // Stops outside the line (`-50px`, `150px`) shape the ramp: cut it to the
+    // visible window instead of squeezing them onto the ends (BUG-1417).
+    let clipped;
+    let resolved = if repeating {
+        resolved
+    } else {
+        clipped = crate::gradient_math::clip_stops_to_unit(resolved);
+        &clipped[..]
+    };
     let subdivided = crate::gradient_math::premultiplied_subdivide_stops(resolved);
     let resolved = &subdivided[..];
     let first = resolved.first().map(|s| s.0).unwrap_or(0.0);

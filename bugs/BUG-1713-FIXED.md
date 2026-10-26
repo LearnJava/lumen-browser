@@ -1,6 +1,6 @@
 # BUG-1713 — `new TextDecoder('ascii')` бросает `RangeError`: метки семейства windows-1252 (`ascii`/`us-ascii`/`latin1`/`iso-8859-1`/`windows-1252`) не поддержаны — vkvideo.ru падает в «Что-то пошло не так», видео не открывается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P6)
 **Заведён:** 2026-10-26 (Chat, живая проверка vkvideo.ru по запросу пользователя)
 **Область:** js + encoding (`crates/js/src/shim/text_encoding_shim.js:115` — `RangeError`; `crates/engine/encoding/src/lib.rs::Encoding::from_label` — нет `Windows1252`; `crates/engine/encoding/src/decoder.rs`, `tables.rs`)
 
@@ -38,3 +38,10 @@ new TextDecoder('latin1').decode(new Uint8Array([0x80, 0xE9]))  // Chrome: "€�
 - `cargo test -p lumen-encoding` и targeted-тест TextDecoder в `lumen-js` зелёные, clippy чистый.
 - WPT `encoding/textdecoder-labels.any.js` — подтесты для меток windows-1252 проходят (до фикса падают).
 - Живая проверка (`--maximized`, `LUMEN_NO_ADBLOCK=1`, без прокси): `https://vkvideo.ru/video-213276384_456243633` — в stderr нет `RangeError … 'ascii'`, экрана «Что-то пошло не так» нет, в DOM появился `<video>` плеера. Если плеер появился, но ролик не играет (`readyState`, `error`, `play()`), — завести следующий баг с конкретной причиной (MSE/HLS/кодек), в этом баге не чинить.
+
+## Исправление
+
+- `lumen-encoding`: `Encoding::Windows1252` + таблица `WIN1252` (WHATWG index-windows-1252, байты C1 0x81/0x8D/0x8F/0x90/0x9D -> одноимённые U+0081…, не U+FFFD), все метки windows-1252 в `from_label`; `meta charset=iso-8859-1` теперь тоже даёт windows-1252.
+- JS: отдельных правок рантайма не потребовалось (`text_encoding_for_label`/`text_decode` идут через `from_label`); обновлены комментарии шима.
+- Тесты: юниты в `lumen-encoding` (tables/decoder/lib/detect), V8-тест `dom/tests/v8_bug1713_textdecoder_latin1.rs`.
+- Живая проверка vkvideo.ru не выполнялась (проверка ролика — отдельно; при неработающем плеере заводить новый баг).

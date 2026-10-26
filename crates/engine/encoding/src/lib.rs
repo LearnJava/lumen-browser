@@ -3,8 +3,9 @@
 //! Phase 0 покрывает то, что реально встречается в русскоязычном вебе и
 //! в локальных файлах: UTF-8 (с BOM и без), UTF-16 LE/BE (BOM-driven —
 //! файлы из «Сохранить как → Unicode» в блокноте Windows), Windows-1251,
-//! KOI8-R, CP866. Эти шесть закрывают подавляющее большинство кириллических
-//! документов; ISO-8859-5 и MacCyrillic настолько редки, что их добавим
+//! KOI8-R, CP866 — эти шесть закрывают подавляющее большинство кириллических
+//! документов, — плюс windows-1252 (метки `ascii`/`latin1`/`iso-8859-1`, BUG-1713).
+//! ISO-8859-5 и MacCyrillic настолько редки, что их добавим
 //! по факту встречи.
 //!
 //! Алгоритм определения кодировки:
@@ -53,6 +54,9 @@ pub enum Encoding {
     Utf32Be,
     /// windows-1251 — однобайтная кириллица, дефолт русскоязычного веба до UTF-8.
     Windows1251,
+    /// windows-1252 — западноевропейская однобайтная; под неё WHATWG сводит метки
+    /// `ascii`/`latin1`/`iso-8859-1` (BUG-1713).
+    Windows1252,
     /// KOI8-R — однобайтная кириллица (RFC 1489), встречается в старых архивах.
     Koi8R,
     /// CP866 — однобайтная кириллица DOS; встречается в текстовых вложениях.
@@ -70,6 +74,7 @@ impl Encoding {
             Self::Utf32Le => "utf-32le",
             Self::Utf32Be => "utf-32be",
             Self::Windows1251 => "windows-1251",
+            Self::Windows1252 => "windows-1252",
             Self::Koi8R => "koi8-r",
             Self::Cp866 => "ibm866",
         }
@@ -90,6 +95,7 @@ impl Encoding {
             Self::Utf32Le => "UTF-32LE",
             Self::Utf32Be => "UTF-32BE",
             Self::Windows1251 => "windows-1251",
+            Self::Windows1252 => "windows-1252",
             Self::Koi8R => "KOI8-R",
             Self::Cp866 => "IBM866",
         }
@@ -117,9 +123,30 @@ impl Encoding {
             "utf-32" | "utf32" | "utf-32le" | "utf32le" => Some(Self::Utf32Le),
             "utf-32be" | "utf32be" => Some(Self::Utf32Be),
             "windows-1251" | "cp1251" | "x-cp1251" | "windows1251" => Some(Self::Windows1251),
+            "windows-1252" | "cp1252" | "x-cp1252" | "ascii" | "us-ascii" | "ansi_x3.4-1968"
+            | "iso-8859-1" | "iso8859-1" | "iso88591" | "iso_8859-1" | "iso_8859-1:1987"
+            | "iso-ir-100" | "latin1" | "l1" | "csisolatin1" | "cp819" | "ibm819" => Some(Self::Windows1252),
             "koi8-r" | "koi8r" | "koi8_r" | "koi" | "cskoi8r" => Some(Self::Koi8R),
             "ibm866" | "cp866" | "866" | "csibm866" => Some(Self::Cp866),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Encoding;
+
+    #[test]
+    fn latin1_family_labels_resolve_to_windows_1252() {
+        for label in [
+            "ascii", "us-ascii", "ansi_x3.4-1968", "latin1", "l1", "iso-8859-1", "ISO8859-1",
+            "iso88591", "iso_8859-1", "iso_8859-1:1987", "iso-ir-100", "csisolatin1", "cp819",
+            "ibm819", "cp1252", "x-cp1252", "windows-1252", " Latin1 ",
+        ] {
+            assert_eq!(Encoding::from_label(label), Some(Encoding::Windows1252), "{label}");
+        }
+        assert_eq!(Encoding::Windows1252.name(), "windows-1252");
+        assert_eq!(Encoding::Windows1252.canonical_name(), "windows-1252");
     }
 }

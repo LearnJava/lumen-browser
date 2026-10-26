@@ -102,6 +102,8 @@ pub(crate) struct FlushHandles {
     /// (e.g. `overflow` flipping to `clip`) sees the correctly reclamped
     /// value instead of silently losing a prior scroll position.
     pub(crate) scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// See [`super::runtime::V8JsRuntime::anchor_scrollers`].
+    pub(crate) anchor_scrollers: Arc<Mutex<lumen_layout::AnchorScrollers>>,
     /// CQ-SCROLL-STATE-2: the page's scroll position as `window.scrollY`/`scrollX` read it —
     /// the committed one and the instant `scrollTo` still waiting for the shell.
     pub(crate) page_scroll_y: Arc<Mutex<f32>>,
@@ -855,6 +857,7 @@ impl FlushHandles {
                 self.computed_styles_collected.store(true, Ordering::Relaxed);
             }
         }
+        *self.anchor_scrollers.lock().unwrap_or_else(|e| e.into_inner()) = counters.anchor_scrollers().clone();
         let collect_ms = collect_t0.elapsed().as_secs_f64() * 1000.0;
         drop(collect_scope);
         if incr_scope.is_some() {

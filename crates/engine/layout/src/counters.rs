@@ -477,6 +477,10 @@ pub struct CounterMap {
     /// Kept apart from [`Self::styles`], which is the reference the incremental
     /// cascade must reproduce bit for bit.
     cq_boxless: HashMap<NodeId, Arc<ComputedStyle>>,
+    /// CSS Anchor Positioning L1 §4.3 — for each anchor-positioned box, the scroll containers it
+    /// follows beyond its own box ancestors (see [`LayoutBox::anchor_scroll`]); filled by
+    /// `apply_anchor_positions`, read by the embedder to shift `getBoundingClientRect`.
+    anchor_scrollers: crate::AnchorScrollers,
     /// BUG-341 S24 — for every entry this pass overwrote, the value it replaced.
     ///
     /// Carrying `styles` across passes means a recomputed node's *previous*
@@ -662,6 +666,17 @@ impl CounterMap {
     /// Box-less elements restyled by `@container` rules (see [`Self::boxless_style`]).
     pub fn cq_boxless(&self) -> &HashMap<NodeId, Arc<ComputedStyle>> {
         &self.cq_boxless
+    }
+
+    /// Scroll containers each anchor-positioned box follows, keyed by `NodeId::index()` →
+    /// `(NodeId::raw(), follows x, follows y)` of the containers (see [`crate::collect_anchor_scrollers`]).
+    pub fn anchor_scrollers(&self) -> &crate::AnchorScrollers {
+        &self.anchor_scrollers
+    }
+
+    /// Stores the anchor scroll containers of this layout pass.
+    pub(crate) fn set_anchor_scrollers(&mut self, map: crate::AnchorScrollers) {
+        self.anchor_scrollers = map;
     }
 
     /// Stores the `@container`-restyled box-less elements of this layout pass.
