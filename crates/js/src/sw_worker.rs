@@ -78,6 +78,12 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
       enumerable: true, configurable: true,
     }});
   }}
+  // BUG-1688: `crypto.subtle`/`CryptoKey` are `[SecureContext]`; the crypto shim leaves
+  // them to this point, where `isSecureContext` is known.
+  if (typeof _lumen_crypto_expose_secure === 'function') {{
+    if (globalThis.isSecureContext !== false) _lumen_crypto_expose_secure();
+    delete globalThis._lumen_crypto_expose_secure;
+  }}
   globalThis.registration = {{
     scope: scope,
     active: {{ state: 'activated', scriptURL: '' }},

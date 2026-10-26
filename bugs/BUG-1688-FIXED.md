@@ -1,6 +1,6 @@
 # BUG-1688 — в воркерах нет `crypto`: 110 тестов WebCryptoAPI `*.any.worker.html` падают с ReferenceError
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P6)
 **Заведён:** 2026-10-23 (сессия Chat, по вердиктам WPT-RUN-16 — `docs/wpt/pass-rate.md`, строка `WebCryptoAPI` таблицы падений)
 **Область:** js (`crates/js/src/worker.rs` — глобалы воркера; `crates/js/src/v8_runtime/install/platform.rs` — нативы Web Crypto)
 
@@ -53,3 +53,20 @@ tests/wpt/run_corpus.py --binary <dev-release> --prefixes WebCryptoAPI/getRandom
 - `tests/wpt/run_corpus.py --prefixes WebCryptoAPI --processes 6` — ни одного
   `crypto is not defined` в `*.any.worker.html`; балл категории выше 14.62 (тихий перепрогон
   WPT-RUN-16 — 22.23).
+
+## Исправление (2026-10-26)
+
+- Нативы Web Crypto (`_lumen_get_random_bytes`, `_lumen_sha_digest`, 16 `_lumen_subtle_*`) вынесены из
+  `install_crypto_and_typed_om` в `crates/js/src/web_crypto_natives.rs` — список `(имя, native)`; страница
+  регистрирует его через `register_v8_native`, воркер — через `V8JsRuntime::register_native` в
+  `install_worker_scope_globals_v8` (общий для dedicated/shared/service). Нативы сжатия `_lumen_cs_*` остались
+  в странице (отдельный пробел, воркеров не касается).
+- Шим вырезан из `web_api_shim_tail_b.js` в `shim/crypto_shim.js` (`dom::CRYPTO_SHIM`), стоит между IDB и хвостом,
+  публикует через `globalThis`. `.subtle`/`CryptoKey`: на странице — по `_lumen_secure_context`; в воркере
+  `isSecureContext` задаёт шим вида воркера уже после (ему нужен URL воркера), поэтому шим оставляет хук
+  `_lumen_crypto_expose_secure`, а три блока `isSecureContext` (`worker_shims.rs`, `shared_worker.rs`,
+  `sw_worker.rs`) зовут его и удаляют.
+- Тесты: `worker.rs` — `v8_worker_has_web_crypto_on_secure_origin` (getRandomValues, randomUUID, SHA-256 `abc`),
+  `v8_worker_web_crypto_subtle_absent_on_insecure_origin`; порядок склейки — в
+  `web_api_shim_splices_its_parts_in_source_order`.
+- Не измерено: перепрогон `tests/wpt/run_corpus.py --prefixes WebCryptoAPI` (нужен бинарь `dev-release`).

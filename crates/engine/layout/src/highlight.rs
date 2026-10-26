@@ -171,9 +171,16 @@ impl TreeOrder {
         stack.push((root, 0));
         while let Some((node, child)) = stack.pop() {
             let kids = &doc.get(node).children;
-            if child < kids.len() {
+            // A host's shadow root comes before its light children: the flat tree
+            // shows the shadow content in the host's place.
+            let shadow = doc.shadow_root_of(node);
+            let lead = usize::from(shadow.is_some());
+            if child < kids.len() + lead {
                 stack.push((node, child + 1));
-                let k = kids[child];
+                let k = match shadow {
+                    Some(sr) if child == 0 => sr,
+                    _ => kids[child - lead],
+                };
                 o.pre.insert(k, n);
                 n += 1;
                 if matches!(doc.get(k).data, NodeData::Text(_)) {
@@ -194,8 +201,13 @@ impl TreeOrder {
         if matches!(node.data, NodeData::Text(_)) {
             return Some((*self.pre.get(&container)?, offset));
         }
-        let at = match node.children.get(offset as usize) {
-            Some(child) => *self.pre.get(child)?,
+        // Offset 0 of a shadow host reaches the shadow content that stands in for its children.
+        let lead = match doc.shadow_root_of(container) {
+            Some(sr) if offset == 0 => Some(sr),
+            _ => None,
+        };
+        let at = match lead.or_else(|| node.children.get(offset as usize).copied()) {
+            Some(child) => *self.pre.get(&child)?,
             None => *self.end.get(&container)?,
         };
         Some((at, 0))
@@ -422,7 +434,8 @@ fn chain_style(
             }
             chain.push(n);
         }
-        cur = doc.get(n).parent;
+        // A shadow root has no parent: the cascade continues at its host.
+        cur = doc.get(n).parent.or_else(|| doc.shadow_host_of(n));
     }
     let mut parent = cur.and_then(|n| memo.get(&n).cloned()).flatten();
     for &el in chain.iter().rev() {

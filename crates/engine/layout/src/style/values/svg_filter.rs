@@ -60,6 +60,11 @@ pub struct SvgFilterPrimitive {
     pub height: Option<f32>,
     /// `color-interpolation-filters: linearRGB` (значение по умолчанию) или `sRGB`.
     pub linear_rgb: bool,
+    /// Сам примитив «заражён» (Filter Effects L1 §«Tainted filter primitives»):
+    /// цвет зависит от `currentcolor`, который может раскрыть `:visited`.
+    /// Заражение переходит на все примитивы, читающие его результат;
+    /// `feDisplacementMap` с заражённой картой отдаёт вход без смещения.
+    pub tainted: bool,
 }
 
 /// Режим `feComposite`.
@@ -106,6 +111,70 @@ pub enum FeBlendMode {
     Difference,
     /// `exclusion`.
     Exclusion,
+    /// `hue`.
+    Hue,
+    /// `saturation`.
+    Saturation,
+    /// `color`.
+    Color,
+    /// `luminosity`.
+    Luminosity,
+}
+
+/// `edgeMode` у `feConvolveMatrix`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeEdgeMode {
+    /// `duplicate` (по умолчанию): край входа повторяется.
+    Duplicate,
+    /// `wrap`: вход замыкается по кругу.
+    Wrap,
+    /// `none`: за краем — прозрачный чёрный.
+    None,
+}
+
+/// Источник света `feDiffuseLighting`/`feSpecularLighting`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FeLight {
+    /// `feDistantLight`.
+    Distant {
+        /// `azimuth` (градусы).
+        azimuth: f32,
+        /// `elevation` (градусы).
+        elevation: f32,
+    },
+    /// `fePointLight` (координаты в единицах примитива).
+    Point {
+        /// `x`, `y`, `z`.
+        pos: [f32; 3],
+    },
+    /// `feSpotLight`.
+    Spot {
+        /// `x`, `y`, `z`.
+        pos: [f32; 3],
+        /// `pointsAtX/Y/Z`.
+        points_at: [f32; 3],
+        /// `specularExponent`.
+        exponent: f32,
+        /// `limitingConeAngle` (градусы).
+        cone: Option<f32>,
+    },
+}
+
+/// Вид освещения.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FeLighting {
+    /// `feDiffuseLighting`: `diffuseConstant`.
+    Diffuse {
+        /// `diffuseConstant`.
+        kd: f32,
+    },
+    /// `feSpecularLighting`.
+    Specular {
+        /// `specularConstant`.
+        ks: f32,
+        /// `specularExponent`.
+        exponent: f32,
+    },
 }
 
 /// Вид `feColorMatrix`.
@@ -227,10 +296,87 @@ pub enum FePrimitive {
         /// `flood-opacity`.
         opacity: f32,
     },
-    /// Примитив, которого движок ещё не исполняет (`feDisplacementMap`, `feTile`,
-    /// `feMorphology`, `feConvolveMatrix`, `feImage`, `feTurbulence`, освещение).
-    /// Результат — вход без изменений; примитив без входа (`feImage`, `feTurbulence`,
-    /// освещение) даёт [`FeInput::Empty`], то есть прозрачный чёрный.
+    /// `feTile`: подобласть входа замощает подобласть примитива.
+    Tile {
+        /// Вход.
+        input: FeInput,
+    },
+    /// `feMorphology`.
+    Morphology {
+        /// Вход.
+        input: FeInput,
+        /// `operator="dilate"` (иначе `erode`).
+        dilate: bool,
+        /// `radius` по X.
+        rx: f32,
+        /// `radius` по Y.
+        ry: f32,
+    },
+    /// `feConvolveMatrix`; пустое `kernel` — недопустимые атрибуты, результат
+    /// прозрачный чёрный.
+    ConvolveMatrix {
+        /// Вход.
+        input: FeInput,
+        /// `order` (столбцы, строки).
+        order: (usize, usize),
+        /// `kernelMatrix` по строкам.
+        kernel: Vec<f32>,
+        /// `divisor` (уже подставлена сумма ядра, если не задан или 0).
+        divisor: f32,
+        /// `bias`.
+        bias: f32,
+        /// `targetX`, `targetY`.
+        target: (i32, i32),
+        /// `edgeMode`.
+        edge: FeEdgeMode,
+        /// `preserveAlpha`.
+        preserve_alpha: bool,
+    },
+    /// `feDisplacementMap`.
+    DisplacementMap {
+        /// `in`.
+        input: FeInput,
+        /// `in2` (карта смещений).
+        map: FeInput,
+        /// `scale`.
+        scale: f32,
+        /// `xChannelSelector`: 0..3 = R, G, B, A.
+        x_channel: usize,
+        /// `yChannelSelector`.
+        y_channel: usize,
+    },
+    /// `feTurbulence`.
+    Turbulence {
+        /// `baseFrequency` по X.
+        fx: f32,
+        /// `baseFrequency` по Y.
+        fy: f32,
+        /// `numOctaves`.
+        octaves: u32,
+        /// `seed` (округлён).
+        seed: i32,
+        /// `stitchTiles="stitch"`.
+        stitch: bool,
+        /// `type="fractalNoise"` (иначе `turbulence`).
+        fractal: bool,
+    },
+    /// `feDiffuseLighting` / `feSpecularLighting`; без источника света — прозрачный
+    /// чёрный.
+    Lighting {
+        /// Вход (карта высот — его альфа).
+        input: FeInput,
+        /// Диффузное или бликовое.
+        kind: FeLighting,
+        /// `surfaceScale`.
+        surface_scale: f32,
+        /// `lighting-color`.
+        color: Color,
+        /// Источник света.
+        light: Option<FeLight>,
+    },
+    /// Примитив, которого движок ещё не исполняет (`feImage`). Результат — вход
+    /// без изменений; примитив без входа даёт [`FeInput::Empty`], то есть
+    /// прозрачный чёрный.
     Unsupported {
         /// Вход, который проходит как есть.
         input: FeInput,

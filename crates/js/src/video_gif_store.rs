@@ -23,6 +23,7 @@
 //! inner `Mutex`es never block.  They are present purely for `Sync`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use lumen_core::ext::VideoDecoder;
@@ -156,6 +157,22 @@ pub struct VideoGifStore {
     /// decode/PCM speed — that would need resampling and is out of scope
     /// here (see the remainder note on GAP-MEDIADECODE срез 17).
     pub playback_rates: Mutex<HashMap<u32, f64>>,
+    /// Set by the JS natives that change `playback` (`play`/`pause`/`seek`/
+    /// `playbackRate`), taken by the shell's `on_about_to_wait`. Frames of a
+    /// playing video are paced by a timer that `tick_video_sessions` arms only
+    /// from inside `RedrawRequested`, and it stops arming at the end of the
+    /// media; without this wake an `autoplay` start or a `loop` restart (both
+    /// issued from JS timers) waits for an unrelated redraw — mouse move,
+    /// scroll — and the video freezes on one frame meanwhile.
+    pub playback_changed: AtomicBool,
+    /// Last `(now_ms, Instant)` pair seen by those natives. `play_epoch_ms` is
+    /// in the page's `performance.now()` time, whose zero is the document's
+    /// time origin, not the shell's start; the shell reads `playback` through
+    /// [`Self::js_now_ms`] so both sides use one clock. With the shell's own
+    /// clock a video ran ahead of `currentTime` by the time between window
+    /// start and navigation — on a page opened minutes later `is_ended` held
+    /// from the first tick and the video never left its first frame.
+    pub js_clock: Mutex<Option<(u64, std::time::Instant)>>,
 }
 
 impl VideoGifStore {
@@ -172,6 +189,28 @@ impl VideoGifStore {
     pub fn has_pending_video_load(&self) -> bool {
         !self.pending_loads.lock().unwrap().is_empty()
             || !self.pending_container_loads.lock().unwrap().is_empty()
+    }
+
+    /// Record that JS changed a video's playback state at page time `now_ms`
+    /// (see `playback_changed` and `js_clock`).
+    pub fn note_playback_change(&self, now_ms: f64) {
+        *self.js_clock.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((now_ms.max(0.0) as u64, std::time::Instant::now()));
+        self.playback_changed.store(true, Ordering::Release);
+    }
+
+    /// The page's `performance.now()` in milliseconds, extrapolated from the
+    /// last sample; `None` before any video started playing.
+    pub fn js_now_ms(&self) -> Option<u64> {
+        self.js_clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map(|(ms, at)| ms + at.elapsed().as_millis() as u64)
+    }
+
+    /// Whether playback changed since the last call — the shell then needs one
+    /// redraw so `tick_video_sessions` picks the change up and re-arms its timer.
+    pub fn take_playback_change(&self) -> bool {
+        self.playback_changed.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -267,5 +306,26 @@ mod tests {
         store.pending_loads.lock().unwrap().push((1, "a.gif".to_string()));
         store.pending_loads.lock().unwrap().clear();
         assert!(!store.has_pending_video_load());
+    }
+
+    #[test]
+    fn take_playback_change_reports_each_change_once() {
+        let store = VideoGifStore::default();
+        assert!(!store.take_playback_change(), "fresh store has no change");
+        store.note_playback_change(10.0);
+        store.note_playback_change(20.0);
+        assert!(store.take_playback_change(), "a noted change wakes the shell");
+        assert!(!store.take_playback_change(), "taken once, then cleared");
+    }
+
+    /// The shell reads playback in page time: the last sample plus the time
+    /// passed since it, not the shell's own start-relative clock.
+    #[test]
+    fn js_now_ms_continues_from_the_last_page_time_sample() {
+        let store = VideoGifStore::default();
+        assert_eq!(store.js_now_ms(), None, "no sample before any playback change");
+        store.note_playback_change(5_000.0);
+        let now = store.js_now_ms().expect("sample recorded");
+        assert!((5_000..5_000 + 1_000).contains(&now), "page time continues from 5000, got {now}");
     }
 }

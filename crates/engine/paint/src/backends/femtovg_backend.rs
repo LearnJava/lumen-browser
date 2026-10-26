@@ -501,6 +501,29 @@ impl<V: Copy> LruMap<V> {
         self.map.values()
     }
 
+    /// Удаляет варианты одного исходника — ключи `"{src}@{W}x{H}"` — и возвращает
+    /// их значения, чтобы вызывающая сторона освободила текстуры. Варианты
+    /// другого `src`, который лишь начинается с `"{src}@"`, не трогает.
+    fn remove_variants_of(&mut self, src: &str) -> Vec<V> {
+        let is_variant = |key: &str| {
+            key.strip_prefix(src)
+                .and_then(|rest| rest.strip_prefix('@'))
+                .and_then(|size| size.split_once('x'))
+                .is_some_and(|(w, h)| w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok())
+        };
+        let mut removed = Vec::new();
+        self.order.retain(|key| {
+            if !is_variant(key) {
+                return true;
+            }
+            if let Some(v) = self.map.remove(key) {
+                removed.push(v);
+            }
+            false
+        });
+        removed
+    }
+
     /// Удаляет все записи, возвращая значения, чтобы вызывающая сторона их
     /// освободила.
     fn drain(&mut self) -> Vec<V> {
@@ -566,6 +589,10 @@ pub struct FemtovgBackend {
     /// `canvas.flush()`: вытесненный `ImageId` мог быть отрисован ранее в этом же
     /// кадре, поэтому удаление ждёт flush, как и остальные pending-delete-очереди.
     resized_variant_pending_delete: Vec<femtovg::ImageId>,
+    /// Текстуры, вытесненные повторной регистрацией того же `src` (кадры
+    /// `canvas:{nid}`, GIF, видео): старая могла быть отрисована в этом кадре,
+    /// поэтому удаляется после следующего `canvas.flush()`.
+    replaced_image_pending_delete: Vec<femtovg::ImageId>,
     /// Зарегистрированные layer snapshots: id → femtovg ImageId.
     snapshots: HashMap<u64, femtovg::ImageId>,
     /// Провайдер шрифтов для multi-family рендера (опциональный).
@@ -1842,6 +1869,7 @@ impl FemtovgBackend {
             raw_images: HashMap::new(),
             resized_variants: LruMap::new(RESIZED_VARIANT_CACHE_CAP),
             resized_variant_pending_delete: Vec::new(),
+            replaced_image_pending_delete: Vec::new(),
             snapshots: HashMap::new(),
             font_provider: None,
             loaded_fonts: HashMap::new(),
@@ -5399,6 +5427,10 @@ impl RenderBackend for FemtovgBackend {
         for id in variant_del {
             self.canvas.delete_image(id);
         }
+        let replaced_del: Vec<_> = self.replaced_image_pending_delete.drain(..).collect();
+        for id in replaced_del {
+            self.canvas.delete_image(id);
+        }
 
         let swap_result = match self.current_ctx() {
             Ok(ctx) => self
@@ -5503,7 +5535,14 @@ impl RenderBackend for FemtovgBackend {
         // BUG-272 срез 17: clone the Arc pointer, not the pixel buffer — this
         // slot shares the caller's allocation instead of a second full copy.
         self.raw_images.insert(src.clone(), image);
-        self.images.insert(src, id);
+        // Повторная регистрация того же `src` (новый кадр canvas/GIF/видео):
+        // прежняя текстура и её уменьшенные варианты держали бы старые пиксели
+        // и копились бы до навигации — по текстуре на каждый кадр.
+        let stale = self.resized_variants.remove_variants_of(&src);
+        self.resized_variant_pending_delete.extend(stale);
+        if let Some(old) = self.images.insert(src, id) {
+            self.replaced_image_pending_delete.push(old);
+        }
         // ADR-016 M3.2.1b-2: a late-arriving image repaints the same display list
         // with new pixels (the content hash — over commands, not pixel data — is
         // unchanged), so the retained band would blit stale content. Drop it.
@@ -5521,6 +5560,9 @@ impl RenderBackend for FemtovgBackend {
             self.canvas.delete_image(id);
         }
         for id in self.resized_variant_pending_delete.drain(..) {
+            self.canvas.delete_image(id);
+        }
+        for id in self.replaced_image_pending_delete.drain(..) {
             self.canvas.delete_image(id);
         }
         for (_, id) in self.snapshots.drain() {

@@ -66,6 +66,8 @@ pub mod video_bindings;
 pub mod video_gif_store;
 pub mod view_transitions;
 pub mod subtle_crypto;
+#[cfg(feature = "v8-backend")]
+pub(crate) mod web_crypto_natives;
 pub mod temporal_api;
 pub mod webgl_canvas;
 pub mod webtransport;

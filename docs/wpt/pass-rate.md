@@ -899,13 +899,13 @@ Like-for-like со скорингом 08-18 (рефтесты и TLS обнул�
 | категория | 10-05 | 10-22 | тихий | вердикт |
 |---|---:|---:|---:|---|
 | `webrtc` | 22.75 | 1.70 | — | **движок, намеренно**: COMPAT-API-01-WEBRTC (`c1eb0435f`, ADR-034) не объявляет `RTCPeerConnection` |
-| `selection` | 77.41 | 69.41 | 69.41 | **движок**: 9 рефтестов `shadow-dom/cross-shadow-boundary-*` были ложным PASS, пока выделение не рисовалось вовсе; после HIGHLIGHT-PAINT видно, что оно не заходит в shadow root — [BUG-1687](../../bugs/BUG-1687-OPEN.md) |
+| `selection` | 77.41 | 69.41 | 69.41 | **движок**: 9 рефтестов `shadow-dom/cross-shadow-boundary-*` были ложным PASS, пока выделение не рисовалось вовсе; после HIGHLIGHT-PAINT видно, что оно не заходит в shadow root — [BUG-1687](../../bugs/BUG-1687-FIXED.md) |
 | `editing` | 316.06 | 312.03 | 317.96 | **раннер**: шард шёл в своп (`live window closed`, 49 TIMEOUT); тихий выше 10-05 |
 | `quirks` | 20.30 | 17.83 | 17.83 | **движок**: −3 рефтеста (harness OK 23 → 20), воспроизводится; какие именно — не установить, отчёты WPT-RUN-9 поштучно не сохранились. 11 ERROR `document.open is not a function` (фасад `contentWindow.document` без `open`) были и на 10-05 — [BUG-1690](../../bugs/BUG-1690-OPEN.md); поштучное сравнение — WPT-RUN-17 |
 | `mediacapture-streams` | 8.06 | 5.86 | 5.86 | **движок**: UX-PERMISSIONS срез 4 (`7bbb846ed`) — `getUserMedia({audio})` ждёт ответа `#permPopover`, решение `permissions.setPermission` из `test_driver` до этой очереди не доходит; 18 TIMEOUT `GUM-*`, `MediaStream-*` — [BUG-1689](../../bugs/BUG-1689-OPEN.md) |
 | `serial` | 2.59 | 0.74 | 0.74 | **движок, намеренно**: COMPAT-API-01-DEVICE (`c77cf07a8`) убрал `navigator.serial` |
 | `workers` | 199.08 | 197.41 | 197.83 | **движок**, перераспределение сабтестов: прошедших столько же (741 → 741), всего 1 526 → 1 534; поштучно не локализовать по той же причине, что `quirks` |
-| `WebCryptoAPI` | 16.17 | 14.62 | 22.23 | **раннер**: 39 `navigate: wait timeout` в свопе; тихий выше 10-05. 110 `*.any.worker.html` с `crypto is not defined` — так же и на `d913a39b9` — [BUG-1688](../../bugs/BUG-1688-OPEN.md) |
+| `WebCryptoAPI` | 16.17 | 14.62 | 22.23 | **раннер**: 39 `navigate: wait timeout` в свопе; тихий выше 10-05. 110 `*.any.worker.html` с `crypto is not defined` — так же и на `d913a39b9` — [BUG-1688](../../bugs/BUG-1688-FIXED.md) |
 | `webaudio` | 167.96 | 166.58 | 169.00 | **раннер**: 38 TIMEOUT под нагрузкой; тихий выше 10-05 |
 | `webhid` | 2.64 | 1.55 | 1.55 | **движок, намеренно**: COMPAT-API-01-DEVICE убрал `navigator.hid` |
 | `webusb` | 1.85 | 0.78 | 0.78 | **движок, намеренно**: COMPAT-API-01-DEVICE убрал `navigator.usb` |

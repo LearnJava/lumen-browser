@@ -4269,6 +4269,26 @@ function _lumen_selection_tree_root_nid(nid) {
     return cur;
 }
 
+// Whether `nid` takes part in the flattened tree of the document (BUG-1687): the climb
+// crosses shadow roots via their hosts and ends at the document. Light children of a
+// media element are fallback content that is never rendered, so they are not part of it.
+// An approximation: slot assignment is not consulted.
+function _lumen_selection_in_flat_tree(nid) {
+    var cur = nid;
+    while (true) {
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        if (pid === null) {
+            if (!_lumen_is_shadow_root(cur)) { return cur === _lumen_root_nid; }
+            pid = _lumen_u2n(_lumen_get_shadow_root_host(cur));
+            if (pid === null) { return false; }
+        } else {
+            var tag = (_lumen_get_tag_name(pid) || '').toUpperCase();
+            if (tag === 'VIDEO' || tag === 'AUDIO') { return false; }
+        }
+        cur = pid;
+    }
+}
+
 // ── DocumentFragment wrapper ──────────────────────────────────────────────────
 // Wraps a DocumentFragment NodeId. Unlike ShadowRoot, a DocumentFragment is
 // consumed when appended: all children are moved to the target parent (DOM LS
@@ -13434,10 +13454,11 @@ var _lumen_selection = Object.create(Selection.prototype);
 
 (function() {
     function _raw() { return _lumen_get_selection(); } // null | [aNid,aOff,fNid,fOff]
+    function _node(nid) { return nid === _lumen_root_nid ? document : _lumen_make_element(nid); }
     var members = {
-        get anchorNode()   { var s = _raw(); return s ? _lumen_make_element(s[0]) : null; },
+        get anchorNode()   { var s = _raw(); return s ? _node(s[0]) : null; },
         get anchorOffset() { var s = _raw(); return s ? s[1] : 0; },
-        get focusNode()    { var s = _raw(); return s ? _lumen_make_element(s[2]) : null; },
+        get focusNode()    { var s = _raw(); return s ? _node(s[2]) : null; },
         get focusOffset()  { var s = _raw(); return s ? s[3] : 0; },
         get isCollapsed()  { var s = _raw(); return !s || (s[0] === s[2] && s[1] === s[3]); },
         get rangeCount()   { return _raw() ? 1 : 0; },
@@ -13488,14 +13509,18 @@ var _lumen_selection = Object.create(Selection.prototype);
             _lumen_clear_selection();
         },
         setBaseAndExtent: function(aN, aO, fN, fO) {
-            if (!aN || aN.__nid__ === undefined || !fN || fN.__nid__ === undefined) return;
-            var aNid = aN.__nid__, aOff = aO >>> 0;
-            var fNid = fN.__nid__, fOff = fO >>> 0;
-            // Selection API §4.3: anchor and focus must share a tree scope —
-            // if they don't (e.g. one is inside a shadow tree the other
-            // isn't), collapse the boundary point onto the anchor's, per
-            // real-browser behaviour (BUG-966, Mozilla bug 1887963).
-            if (_lumen_selection_tree_root_nid(aNid) !== _lumen_selection_tree_root_nid(fNid)) {
+            // `document` has no `__nid__` of its own: it is the arena root.
+            var aNid = aN === document ? _lumen_root_nid : (aN ? aN.__nid__ : undefined);
+            var fNid = fN === document ? _lumen_root_nid : (fN ? fN.__nid__ : undefined);
+            if (aNid === undefined || fNid === undefined) return;
+            var aOff = aO >>> 0, fOff = fO >>> 0;
+            // Anchor and focus in different tree scopes: the selection follows the flattened
+            // tree, so a boundary pair that both belong to it is kept as is (BUG-1687,
+            // `selection/shadow-dom/cross-shadow-boundary-*`). A point outside the flattened
+            // tree collapses onto the anchor's, per real-browser behaviour (BUG-966,
+            // Mozilla bug 1887963).
+            if (_lumen_selection_tree_root_nid(aNid) !== _lumen_selection_tree_root_nid(fNid)
+                && !(_lumen_selection_in_flat_tree(aNid) && _lumen_selection_in_flat_tree(fNid))) {
                 fNid = aNid; fOff = aOff;
             }
             _lumen_set_selection(aNid, aOff, fNid, fOff);
