@@ -236,6 +236,66 @@ pub fn atan2_det(y: f32, x: f32) -> f32 {
     r
 }
 
+/// Cuts a non-repeating gradient's resolved stops to the visible `[0,1]` window
+/// of the gradient line (CSS Images L3 §3.4.3, BUG-1417).
+///
+/// Stops placed outside the line (`-50px`, `150px`, `-1000%`) still define the
+/// colour ramp: the visible part must sample the ramp at its real position,
+/// not squeeze every stop onto the line ends. The ramp is evaluated at `0` and
+/// `1` (premultiplied interpolation, right limit at `0`, left limit at `1`) and
+/// the stops beyond those points are dropped. A list already inside `[0,1]` is
+/// returned unchanged, so ordinary gradients stay byte-identical.
+#[must_use]
+pub fn clip_stops_to_unit(resolved: &[(f32, Color)]) -> Vec<(f32, Color)> {
+    let (Some(&(first, first_color)), Some(&(last, last_color))) = (resolved.first(), resolved.last()) else {
+        return Vec::new();
+    };
+    let need_lo = first < 0.0;
+    let need_hi = last > 1.0;
+    if !need_lo && !need_hi {
+        return resolved.to_vec();
+    }
+    // Colour of the ramp at `t`, taking the segment `[a, b]` with `a <= t < b`.
+    let ramp_at = |t: f32| -> Color {
+        match resolved.iter().position(|s| s.0 > t) {
+            None => last_color,
+            Some(0) => first_color,
+            Some(j) => {
+                let (ap, ac) = resolved[j - 1];
+                let (bp, bc) = resolved[j];
+                lerp_color_premul(ac, bc, (t - ap) / (bp - ap))
+            }
+        }
+    };
+    let mut out: Vec<(f32, Color)> = Vec::with_capacity(resolved.len() + 2);
+    if need_lo {
+        out.push((0.0, ramp_at(0.0)));
+    }
+    out.extend(
+        resolved
+            .iter()
+            .copied()
+            .filter(|&(p, _)| (!need_lo || p > 0.0) && (!need_hi || p < 1.0)),
+    );
+    if need_hi {
+        // Left limit at 1: the first stop at or past 1 closes the last segment.
+        let end = match resolved.iter().position(|s| s.0 >= 1.0) {
+            Some(0) | None => first_color,
+            Some(k) => {
+                let (ap, ac) = resolved[k - 1];
+                let (bp, bc) = resolved[k];
+                lerp_color_premul(ac, bc, (1.0 - ap) / (bp - ap))
+            }
+        };
+        out.push((1.0, end));
+    }
+    // A ramp that lies wholly outside the line collapses to one colour.
+    if let [(p, c)] = out[..] {
+        out = if p < 1.0 { vec![(p, c), (1.0, c)] } else { vec![(0.0, c), (p, c)] };
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,5 +543,38 @@ mod tests {
     #[test]
     fn atan2_det_origin_is_zero() {
         assert_eq!(atan2_det(0.0, 0.0), 0.0);
+    }
+
+    // ── clip_stops_to_unit (BUG-1417) ────────────────────────────────────────
+
+    #[test]
+    fn clip_keeps_in_range_stops_untouched() {
+        let r = vec![(0.0, RED), (0.5, GREEN), (1.0, BLUE)];
+        assert_eq!(clip_stops_to_unit(&r), r);
+    }
+
+    #[test]
+    fn clip_samples_ramp_at_the_line_ends() {
+        // black -50px .. lime 150px on a 100px line: positions -0.5 .. 1.5.
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let lime = Color { r: 0, g: 255, b: 0, a: 255 };
+        let r = clip_stops_to_unit(&[(-0.5, black), (1.5, lime)]);
+        assert_eq!(r.len(), 2);
+        assert_eq!((r[0].0, r[1].0), (0.0, 1.0));
+        assert_eq!(r[0].1.g, 64); // t = 0.25
+        assert_eq!(r[1].1.g, 191); // t = 0.75
+    }
+
+    #[test]
+    fn clip_keeps_inner_stops_between_the_cuts() {
+        let r = clip_stops_to_unit(&[(-1.0, RED), (0.5, GREEN), (2.0, BLUE)]);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[1], (0.5, GREEN));
+    }
+
+    #[test]
+    fn clip_collapses_a_ramp_wholly_outside_the_line() {
+        let r = clip_stops_to_unit(&[(-3.0, RED), (-2.0, BLUE)]);
+        assert_eq!(r, vec![(0.0, BLUE), (1.0, BLUE)]);
     }
 }

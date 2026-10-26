@@ -168,6 +168,44 @@ fn single_colour_gradients_paint_solid() {
     }
 }
 
+/// BUG-1417 — colour stops placed outside the gradient line (`-50px`, `150px`,
+/// `±131070000px`, `-1000%`) shape the ramp: the box shows the middle of it,
+/// not the end colours squeezed onto the line ends.
+#[test]
+fn linear_gradient_stops_outside_the_line_keep_their_real_position() {
+    use lumen_layout::Length::{Percent, Px};
+    let black = Color { r: 0, g: 0, b: 0, a: 255 };
+    let lime = Color { r: 0, g: 255, b: 0, a: 255 };
+    let stop = |color, position| GradientStop {
+        color,
+        color_space: lumen_layout::ColorSpace::Srgb,
+        position: Some(position),
+    };
+    // (start, end, expected green at x=5, expected green at x=90) on a 100px line.
+    let cases = [
+        (Px(-50.0), Px(150.0), 70, 178),
+        (Px(-5000.0), Px(5100.0), 126, 129),
+        (Px(-131_070_000.0), Px(131_070_100.0), 127, 127),
+        (Percent(-1000.0), Percent(1100.0), 122, 132),
+    ];
+    for (a, b, want5, want90) in cases {
+        let cmds = vec![DisplayCommand::DrawLinearGradient {
+            rect: rect(0.0, 0.0, 100.0, 10.0),
+            angle_deg: 90.0,
+            stops: vec![stop(black, a.clone()), stop(lime, b.clone())],
+            repeating: false,
+        }];
+        let img = rasterize_cpu(100, 10, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        for (x, want) in [(5, want5), (90, want90)] {
+            let (r, g, bl, _) = px(&img, x, 5);
+            assert!(
+                r == 0 && bl == 0 && (g as i32 - want).abs() <= 2,
+                "stops {a:?}..{b:?} at x={x}: want green≈{want}, got ({r},{g},{bl})",
+            );
+        }
+    }
+}
+
 /// `DrawSvgPath` fills the tessellated triangle interior with the solid
 /// colour and leaves the background white outside it.
 #[test]
