@@ -37,6 +37,7 @@
 //! - Только 2D affine transforms. 3D transforms потребуют полного 4×4 invert
 //!   в `Mat4`.
 
+use crate::display_list::clip_path_contains;
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
@@ -119,6 +120,11 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
         }
         None => point,
     };
+    // CSS Masking L1 §9 / BUG-1412: `clip-path` режет и попадание — вне формы нет ни самого
+    // бокса, ни его потомков.
+    if !clip_path_contains(b, child_point) {
+        return None;
+    }
 
     // Группируем детей: positive-z SC, negative-z SC, остальные (in-flow +
     // auto/0-z SC). Не-SC дети идут в in-flow вместе с auto/0-z SC: в paint
@@ -214,6 +220,9 @@ fn hit_test_all_box(point: Point, b: &LayoutBox, out: &mut Vec<HitTestResult>) {
         }
         None => point,
     };
+    if !clip_path_contains(b, child_point) {
+        return;
+    }
 
     let mut positive: Vec<(&LayoutBox, i32)> = Vec::new();
     let mut negative: Vec<(&LayoutBox, i32)> = Vec::new();
@@ -756,5 +765,34 @@ mod tests {
             !hits.iter().any(|h| h.node == outer),
             "pointer-events:none box никогда не должен попасть в elementsFromPoint"
         );
+    }
+
+    /// BUG-1412: `clip-path` режет попадание — точка вне формы уходит в предка.
+    #[test]
+    fn clip_path_shape_limits_hit_zone() {
+        let (doc, root) = build(
+            r#"<div class="a"></div><div class="b"></div>"#,
+            ".a { width: 200px; height: 100px; clip-path: inset(0 100px 0 0); }             .b { width: 200px; height: 200px; clip-path: circle(50px at 100px 100px); }",
+        );
+        let (a, b) = (by_class(&doc, "a"), by_class(&doc, "b"));
+        let node_at = |x: f32, y: f32| hit_test(Point::new(x, y), &root).map(|r| r.node);
+        assert_eq!(node_at(50.0, 50.0), Some(a), "внутри inset");
+        assert_ne!(node_at(150.0, 50.0), Some(a), "вне inset");
+        assert_eq!(node_at(100.0, 200.0), Some(b), "центр круга");
+        assert_ne!(node_at(10.0, 110.0), Some(b), "угол вне круга");
+        let all: Vec<_> = hit_test_all(Point::new(150.0, 50.0), &root).iter().map(|h| h.node).collect();
+        assert!(!all.contains(&a), "elementsFromPoint тоже не видит обрезанное");
+    }
+
+    /// `clip-path` на предке отсекает и потомков, лежащих вне формы.
+    #[test]
+    fn clip_path_clips_descendant_hits() {
+        let (doc, root) = build(
+            r#"<div class="o"><div class="i"></div></div>"#,
+            ".o { width: 200px; height: 100px; clip-path: inset(0 100px 0 0); }             .i { width: 200px; height: 100px; }",
+        );
+        let i = by_class(&doc, "i");
+        assert!(hit_test(Point::new(150.0, 50.0), &root).is_none_or(|r| r.node != i));
+        assert_eq!(hit_test(Point::new(50.0, 50.0), &root).map(|r| r.node), Some(i));
     }
 }

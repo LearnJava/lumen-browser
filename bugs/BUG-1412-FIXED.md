@@ -1,6 +1,6 @@
 # BUG-1412 — Хит-тест игнорирует `clip-path`: `elementFromPoint` попадает в обрезанную область
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** js/layout (`document.elementFromPoint` — hit-test по боксам; `crates/shell` — снимок геометрии)
 
@@ -30,3 +30,11 @@ WPT-RUN-14 срез 18: `css-masking/hit-test/clip-path-shape-polygon-and-box-sh
 ## Как проверить
 
 `css/css-masking/hit-test/clip-path-shape-polygon-and-box-shadow.html`.
+
+## Исправление (2026-10-26, P6)
+
+Корень: `hit_test_box`/`hit_test_all_box` (`crates/engine/paint/src/hit_test.rs`) проверяли только `rect` бокса и не знали про `clip-path`, хотя отрисовка режет по форме.
+
+Правка: после инверсии transform бокс и всё его поддерево отбрасываются, если точка вне `clip-path` (`clip_path_contains` в `display_list/clip_url.rs` — те же слои клипа, что эмитит отрисовка: `inset` → rect, `circle`/`ellipse`/`polygon`/`path`/`inset round`/`<clipPath>` → `ResolvedClipShape::contains`, nonzero и even-odd). Неразрешённая `url(#id)` ничего не режет, как и в отрисовке. Тесты — `hit_test::tests::clip_path_*`.
+
+Остаток: WPT `css-masking/hit-test/*` не перемерялись; `clip-path-svg-geometry-box.html` (`SVGSVGElement` вместо `SVGRectElement`) и `clip-path-path-with-zoom-hittest.html` могут упираться в другие дефекты.

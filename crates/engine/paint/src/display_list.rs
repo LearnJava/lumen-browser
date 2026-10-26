@@ -213,6 +213,7 @@ mod text_run;
 use text_run::emit_inline_run;
 
 mod clip_url;
+pub(crate) use clip_url::clip_path_contains;
 use clip_url::{clip_path_commands, pop_clip_layers, pop_shape_filter, push_shape_clip_path, push_shape_filter};
 
 mod box_layer;

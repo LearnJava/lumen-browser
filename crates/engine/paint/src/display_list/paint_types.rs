@@ -269,6 +269,43 @@ pub enum ResolvedClipShape {
 }
 
 impl ResolvedClipShape {
+    /// Попадает ли точка (page px, до transform) внутрь формы. Граница
+    /// считается внутренней для эллипса/круга; многоугольник — по правилу
+    /// заливки (`nonzero` — число обхода, `even-odd` — чётность пересечений).
+    /// Используется hit-тестом (BUG-1412): `clip-path` режет и попадание.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        match self {
+            Self::Circle { cx, cy, r } => {
+                let (dx, dy) = (x - cx, y - cy);
+                *r > 0.0 && dx * dx + dy * dy <= r * r
+            }
+            Self::Ellipse { cx, cy, rx, ry } => {
+                if *rx <= 0.0 || *ry <= 0.0 {
+                    return false;
+                }
+                let (dx, dy) = ((x - cx) / rx, (y - cy) / ry);
+                dx * dx + dy * dy <= 1.0
+            }
+            Self::Polygon { verts, even_odd } => {
+                let mut winding = 0i32;
+                let mut crossings = 0u32;
+                for i in 0..verts.len() {
+                    let (x0, y0) = verts[i];
+                    let (x1, y1) = verts[(i + 1) % verts.len()];
+                    if (y0 <= y) == (y1 <= y) {
+                        continue;
+                    }
+                    let t = (y - y0) / (y1 - y0);
+                    if x < x0 + t * (x1 - x0) {
+                        crossings += 1;
+                        winding += if y1 > y0 { 1 } else { -1 };
+                    }
+                }
+                if *even_odd { crossings % 2 == 1 } else { winding != 0 }
+            }
+        }
+    }
+
     /// Axis-aligned bounding box формы (page px, до transform). Используется
     /// fallback-путями, не умеющими клиппить произвольную форму (wgpu
     /// scissor, hit-test).
