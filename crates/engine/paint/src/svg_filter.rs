@@ -12,11 +12,13 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput, FePrimitive, FeTransfer, FilterUrl,
+    FeBlendMode, FeColorMatrix, FeCompositeOp, FeInput, FeLight, FePrimitive, FeTransfer, FilterUrl,
     SvgFilter,
 };
 
 use crate::display_list::BlendMode;
+
+mod fx;
 
 /// Premultiplied f32 RGBA изображение `w × h`.
 #[derive(Clone)]
@@ -201,18 +203,25 @@ fn run_graph(graph: &SvgFilter, g: &Geometry, source: &Img, region: PxRect, loca
     let (bx, by, bw, bh) = g.bbox;
     let mut results: Vec<Res> = Vec::with_capacity(graph.primitives.len());
     let mut last: Option<usize> = None;
+    let mut tainted: Vec<bool> = Vec::with_capacity(graph.primitives.len());
 
     for (idx, prim) in graph.primitives.iter().enumerate() {
         // Входы примитива (до вычисления подобласти: по ним считается её умолчание).
         let inputs_of: Vec<FeInput> = match &prim.kind {
             FePrimitive::Flood { .. } => vec![],
+            FePrimitive::Turbulence { .. } => vec![],
             FePrimitive::Unsupported { input } => vec![*input],
             FePrimitive::Offset { input, .. }
+            | FePrimitive::Tile { input }
+            | FePrimitive::Morphology { input, .. }
+            | FePrimitive::ConvolveMatrix { input, .. }
+            | FePrimitive::Lighting { input, .. }
             | FePrimitive::GaussianBlur { input, .. }
             | FePrimitive::ColorMatrix { input, .. }
             | FePrimitive::ComponentTransfer { input, .. }
             | FePrimitive::DropShadow { input, .. } => vec![*input],
             FePrimitive::Composite { a, b, .. } | FePrimitive::Blend { a, b, .. } => vec![*a, *b],
+            FePrimitive::DisplacementMap { input, map, .. } => vec![*input, *map],
             FePrimitive::Merge(v) => v.clone(),
         };
         let fetch = |inp: FeInput, results: &[Res]| -> (Img, PxRect) {
@@ -231,7 +240,18 @@ fn run_graph(graph: &SvgFilter, g: &Geometry, source: &Img, region: PxRect, loca
             }
         };
         let fetched: Vec<(Img, PxRect)> = inputs_of.iter().map(|&i| fetch(i, &results)).collect();
-        let default_sub = fetched.iter().map(|f| f.1).reduce(PxRect::union).unwrap_or(local);
+        let input_tainted = |inp: FeInput| match inp {
+            FeInput::Previous => last.is_some_and(|i| tainted[i]),
+            FeInput::Result(i) => tainted.get(i).copied().unwrap_or(false),
+            _ => false,
+        };
+        let is_tainted = prim.tainted || inputs_of.iter().any(|&i| input_tainted(i));
+        // feTile замощает всю область фильтра, а не подобласть входа (как в Blink).
+        let default_sub = if matches!(prim.kind, FePrimitive::Tile { .. }) {
+            local
+        } else {
+            fetched.iter().map(|f| f.1).reduce(PxRect::union).unwrap_or(local)
+        };
 
         // Подобласть: заданные x/y/width/height поверх умолчания.
         let mut sub = default_sub;
@@ -323,11 +343,87 @@ fn run_graph(graph: &SvgFilter, g: &Geometry, source: &Img, region: PxRect, loca
                 }
                 conv_out(composite(&input, &shadow, FeCompositeOp::Over))
             }
+            FePrimitive::Tile { .. } => fx::tile(&fetched[0].0, fetched[0].1),
+            FePrimitive::Morphology { dilate, rx, ry, .. } => {
+                let (rx, ry) = (rx * kx, ry * ky);
+                if rx < 0.0 || ry < 0.0 {
+                    Img::new(w, h)
+                } else {
+                    fx::morphology(&fetched[0].0, *dilate, rx.round() as usize, ry.round() as usize)
+                }
+            }
+            FePrimitive::ConvolveMatrix { kernel, order, divisor, bias, target, edge, preserve_alpha, .. } => {
+                if kernel.is_empty() {
+                    Img::new(w, h)
+                } else {
+                    let p = fx::Convolve {
+                        order: *order,
+                        kernel,
+                        divisor: *divisor,
+                        bias: *bias,
+                        target: *target,
+                        edge: *edge,
+                        preserve_alpha: *preserve_alpha,
+                    };
+                    conv_out(fx::convolve(&conv_in(&fetched[0].0), &p))
+                }
+            }
+            FePrimitive::DisplacementMap { map, .. } if input_tainted(*map) => fetched[0].0.clone(),
+            FePrimitive::DisplacementMap { scale, x_channel, y_channel, .. } => {
+                conv_out(fx::displacement(&fetched[0].0, &conv_in(&fetched[1].0), (scale * kx, scale * ky), (*x_channel, *y_channel)))
+            }
+            FePrimitive::Turbulence { fx: bfx, fy: bfy, octaves, seed, stitch, fractal } => {
+                let to_user = |px: f32, py: f32| {
+                    (f64::from((px - g.tx) / g.sx), f64::from((py - g.ty) / g.sy))
+                };
+                let (x0, y0) = to_user((sub.x0 + region.x0) as f32, (sub.y0 + region.y0) as f32);
+                let (x1, y1) = to_user((sub.x1 + region.x0) as f32, (sub.y1 + region.y0) as f32);
+                let point = |x: usize, y: usize| to_user((x as i32 + region.x0) as f32, (y as i32 + region.y0) as f32);
+                let p = fx::Turbulence {
+                    fx: f64::from(*bfx),
+                    fy: f64::from(*bfy),
+                    octaves: *octaves,
+                    seed: *seed,
+                    stitch: *stitch,
+                    fractal: *fractal,
+                    tile: (x0, y0, x1 - x0, y1 - y0),
+                    point: &point,
+                };
+                conv_out(fx::turbulence(w, h, &p))
+            }
+            FePrimitive::Lighting { kind, surface_scale, color, light, .. } => match light {
+                None => Img::new(w, h),
+                Some(light) => {
+                    let (ux0, uy0) = (region.x0 as f32, region.y0 as f32);
+                    let zk = if obb { ((bw * bw + bh * bh) / 2.0).sqrt() } else { 1.0 }
+                        * ((g.sx * g.sx + g.sy * g.sy) / 2.0).sqrt();
+                    let place = |p: &[f32; 3]| {
+                        [g.sx * ux(p[0]) + g.tx - ux0, g.sy * uy(p[1]) + g.ty - uy0, p[2] * zk]
+                    };
+                    let light = match light {
+                        FeLight::Distant { .. } => *light,
+                        FeLight::Point { pos } => FeLight::Point { pos: place(pos) },
+                        FeLight::Spot { pos, points_at, exponent, cone } => FeLight::Spot {
+                            pos: place(pos),
+                            points_at: place(points_at),
+                            exponent: *exponent,
+                            cone: *cone,
+                        },
+                    };
+                    let mut c = [f32::from(color.r) / 255.0, f32::from(color.g) / 255.0, f32::from(color.b) / 255.0];
+                    if lin {
+                        c = c.map(srgb_to_linear);
+                    }
+                    let p = fx::Lighting { kind: *kind, surface_scale: *surface_scale, color: c, light };
+                    conv_out(fx::lighting(&fetched[0].0, &p))
+                }
+            },
             FePrimitive::Unsupported { .. } => fetched[0].0.clone(),
         };
         let mut out = out;
         clip_to(&mut out, sub);
         results.push(Res { img: out, sub });
+        tainted.push(is_tainted);
         last = Some(idx);
     }
     match last {
@@ -605,6 +701,10 @@ fn blend(top: &Img, back: &Img, mode: FeBlendMode) -> Img {
         FeBlendMode::SoftLight => BlendMode::SoftLight,
         FeBlendMode::Difference => BlendMode::Difference,
         FeBlendMode::Exclusion => BlendMode::Exclusion,
+        FeBlendMode::Hue => BlendMode::Hue,
+        FeBlendMode::Saturation => BlendMode::Saturation,
+        FeBlendMode::Color => BlendMode::Color,
+        FeBlendMode::Luminosity => BlendMode::Luminosity,
     };
     let unpre = |p: &[f32; 4]| {
         let a = p[3];
@@ -624,7 +724,7 @@ mod tests {
     use lumen_layout::{Color, SvgFilterPrimitive};
 
     fn prim(kind: FePrimitive) -> SvgFilterPrimitive {
-        SvgFilterPrimitive { kind, x: None, y: None, width: None, height: None, linear_rgb: false }
+        SvgFilterPrimitive { kind, x: None, y: None, width: None, height: None, linear_rgb: false, tainted: false }
     }
 
     fn url(graph: SvgFilter) -> FilterUrl {
@@ -703,6 +803,110 @@ mod tests {
     fn missing_graph_is_none() {
         let u = FilterUrl { id: "x".into(), graph: None, placement: None };
         assert!(apply(&red_square(), (0, 0), (40, 40), &u, Rect::new(0.0, 0.0, 1.0, 1.0)).is_none());
+    }
+
+    fn run(prims: Vec<SvgFilterPrimitive>) -> Windowed {
+        apply(&red_square(), (0, 0), (40, 40), &url(filter(prims)), Rect::new(10.0, 10.0, 10.0, 10.0)).unwrap()
+    }
+
+    fn flood(color: Color) -> SvgFilterPrimitive {
+        prim(FePrimitive::Flood { color, opacity: 1.0 })
+    }
+
+    #[test]
+    fn tile_repeats_input_subregion_over_whole_region() {
+        let mut seed = flood(Color { r: 0, g: 0, b: 255, a: 255 });
+        seed.x = Some(0.0);
+        seed.y = Some(0.0);
+        seed.width = Some(5.0);
+        seed.height = Some(5.0);
+        let w = run(vec![seed, prim(FePrimitive::Tile { input: FeInput::Previous })]);
+        assert_eq!(px(&w, 22, 22), [0, 0, 255, 255]);
+        assert_eq!(px(&w, 6, 6), [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn displacement_map_shifts_by_channel() {
+        // G = 1.0 → сдвиг +scale/2 по X; B = 0.5 → по Y нет сдвига.
+        let map = flood(Color { r: 0, g: 255, b: 128, a: 255 });
+        let disp = prim(FePrimitive::DisplacementMap {
+            input: FeInput::SourceGraphic,
+            map: FeInput::Previous,
+            scale: 10.0,
+            x_channel: 1,
+            y_channel: 2,
+        });
+        let w = run(vec![map, disp]);
+        assert_eq!(px(&w, 7, 12), [255, 0, 0, 255]);
+        assert_eq!(px(&w, 16, 12), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn morphology_dilates_and_erodes() {
+        let morph = |dilate| {
+            prim(FePrimitive::Morphology { input: FeInput::SourceGraphic, dilate, rx: 2.0, ry: 2.0 })
+        };
+        let d = run(vec![morph(true)]);
+        assert_eq!(px(&d, 8, 12), [255, 0, 0, 255]);
+        assert_eq!(px(&d, 7, 12)[3], 0);
+        let e = run(vec![morph(false)]);
+        assert_eq!(px(&e, 11, 12)[3], 0);
+        assert_eq!(px(&e, 13, 12), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn convolve_identity_kernel_keeps_source_and_bad_kernel_is_transparent() {
+        let conv = |kernel: Vec<f32>| {
+            prim(FePrimitive::ConvolveMatrix {
+                input: FeInput::SourceGraphic,
+                order: (3, 3),
+                kernel,
+                divisor: 1.0,
+                bias: 0.0,
+                target: (1, 1),
+                edge: lumen_layout::FeEdgeMode::Duplicate,
+                preserve_alpha: false,
+            })
+        };
+        let w = run(vec![conv(vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0])]);
+        assert_eq!(px(&w, 12, 12), [255, 0, 0, 255]);
+        assert_eq!(px(&w, 9, 12)[3], 0);
+        let w = run(vec![conv(Vec::new())]);
+        assert_eq!(px(&w, 12, 12), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn diffuse_lighting_overhead_light_on_flat_surface_is_full_colour() {
+        let lit = prim(FePrimitive::Lighting {
+            input: FeInput::SourceGraphic,
+            kind: lumen_layout::FeLighting::Diffuse { kd: 1.0 },
+            surface_scale: 1.0,
+            color: Color { r: 0, g: 255, b: 0, a: 255 },
+            light: Some(FeLight::Distant { azimuth: 0.0, elevation: 90.0 }),
+        });
+        let w = run(vec![lit]);
+        assert_eq!(px(&w, 15, 15), [0, 255, 0, 255]);
+        let dark = prim(FePrimitive::Lighting {
+            input: FeInput::SourceGraphic,
+            kind: lumen_layout::FeLighting::Diffuse { kd: 1.0 },
+            surface_scale: 1.0,
+            color: Color { r: 0, g: 255, b: 0, a: 255 },
+            light: None,
+        });
+        assert_eq!(px(&run(vec![dark]), 15, 15), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn turbulence_is_deterministic_and_varies() {
+        let t = |seed| {
+            prim(FePrimitive::Turbulence { fx: 0.1, fy: 0.1, octaves: 2, seed, stitch: false, fractal: true })
+        };
+        let a = run(vec![t(1)]);
+        let b = run(vec![t(1)]);
+        let c = run(vec![t(2)]);
+        assert_eq!(a.pixmap.data(), b.pixmap.data());
+        assert_ne!(a.pixmap.data(), c.pixmap.data());
+        assert_ne!(px(&a, 6, 6), px(&a, 17, 11));
     }
 
     #[test]
