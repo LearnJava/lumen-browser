@@ -79,7 +79,6 @@ mod transition_events;
 mod viewport;
 mod viewport_sync;
 
-pub(crate) use doc_select::build_page_with_selection_highlight;
 pub(crate) use dialogs::PendingLeave;
 pub(crate) use state::Lumen;
 pub(crate) use focused_field_snapshot::FocusedFieldSnapshot;
