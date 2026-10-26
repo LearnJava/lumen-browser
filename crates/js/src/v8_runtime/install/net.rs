@@ -842,6 +842,14 @@ pub(crate) fn install_fetch(
             // already fetched — `fetch_preloaded` — and goes to the network only
             // when there are none. A page `fetch()` has an empty destination and
             // does so only for a hint the shim matched (BUG-1151, `|preloaded`).
+            //
+            // BUG-1714: the third segment `preload:<nonce>` marks a `<link
+            // rel=preload|modulepreload|prefetch>` hint's own fetch — the
+            // destination segment is then the hint's `as` and the request goes
+            // through `fetch_preload_cached` (the shared `PREFETCH_CACHE`, CSP
+            // gate with the element's nonce), as `_lumen_link_prefetch_sync`
+            // does, but on a worker thread: a page that inserts a hundred
+            // hints held the engine thread for the whole serial download.
             let am_start = Arc::clone(&async_map);
             reg!(scope, ctx, store, 
                 "_lumen_fetch_async_start",
@@ -863,13 +871,17 @@ pub(crate) fn install_fetch(
                     let destination = load_parts.next().unwrap_or("").to_owned();
                     // BUG-1151: the shim matched a page `fetch()` to a `<link
                     // rel=preload as=fetch>` hint (third segment `preloaded`).
-                    let hinted = load_parts.next() == Some("preloaded");
-                    let use_preloaded = (!destination.is_empty() || hinted) && method == "GET" && !has_body;
+                    let third = load_parts.next();
+                    let hinted = third == Some("preloaded");
+                    let hint_nonce = third.and_then(|t| t.strip_prefix("preload:")).map(str::to_owned);
+                    let use_preloaded = (!destination.is_empty() || hinted) && method == "GET" && !has_body
+                        && hint_nonce.is_none();
                     std::thread::spawn(move || {
                         let preloaded = if use_preloaded { provider.fetch_preloaded(&url) } else { None };
-                        let res = match preloaded {
-                            Some(r) => Ok(r),
-                            None => provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                        let res = match (preloaded, hint_nonce) {
+                            (Some(r), _) => Ok(r),
+                            (None, Some(nonce)) => provider.fetch_preload_cached(&url, &destination, &nonce),
+                            (None, None) => provider.fetch_request(&lumen_core::ext::JsFetchRequest {
                                 url: &url,
                                 method: &method,
                                 headers: &headers,
