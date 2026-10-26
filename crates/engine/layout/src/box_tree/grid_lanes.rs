@@ -193,9 +193,9 @@ impl LanesState {
         (first, span)
     }
 
-    /// Растягивает область последнего элемента каждой полосы (`wants`) до `total` от его позиции.
+    /// Растягивает области элементов (`wants`) до следующего элемента полосы, у последнего — до `total`.
     pub(super) fn extend_last(&self, sizes: &mut [f32], total: f32) {
-        extend_last_items(&self.window, &self.pos, sizes, &self.wants, total);
+        extend_last_items(&self.window, &self.pos, sizes, &self.wants, self.gap, total);
     }
 
     fn settle_dense(&mut self, k: usize, h: f32) -> (usize, usize) {
@@ -373,24 +373,22 @@ impl RowLaneSizing {
     }
 }
 
-/// Элемент — последний в полосе, если его конец дальше всех в ней; у охватывающего несколько полос
-/// — последний во всех. Такой элемент с `wants` получает область до `total` от своей позиции.
-pub(super) fn extend_last_items(window: &[(usize, usize)], pos: &[f32], sizes: &mut [f32], wants: &[bool], total: f32) {
-    let n_lanes = window.iter().map(|&(f, s)| f + s).max().unwrap_or(0);
-    let mut last: Vec<Option<usize>> = vec![None; n_lanes];
-    for (k, &(f, s)) in window.iter().enumerate() {
-        for slot in &mut last[f..f + s] {
-            let better = slot.is_none_or(|p| pos[k] + sizes[k] >= pos[p] + sizes[p]);
-            if better {
-                *slot = Some(k);
-            }
-        }
-    }
+/// Область элемента с `wants` тянется до начала следующего элемента в его полосах (минус промежуток),
+/// а у последнего — до `total` от его позиции: выравнивание действует внутри такой области.
+pub(super) fn extend_last_items(window: &[(usize, usize)], pos: &[f32], sizes: &mut [f32], wants: &[bool], gap: f32, total: f32) {
+    let ends: Vec<f32> = pos.iter().zip(sizes.iter()).map(|(p, s)| p + s).collect();
     for k in 0..window.len() {
-        let (f, s) = window[k];
-        if wants[k] && last[f..f + s].iter().all(|&l| l == Some(k)) {
-            sizes[k] = sizes[k].max(total - pos[k]);
+        if !wants[k] {
+            continue;
         }
+        let (f, s) = window[k];
+        // Ближайший после `k` элемент, делящий с ним хотя бы одну полосу.
+        let next = (0..window.len())
+            .filter(|&j| j != k && pos[j] >= ends[k] - 1e-3 && window[j].0 < f + s && f < window[j].0 + window[j].1)
+            .map(|j| pos[j] - gap)
+            .fold(f32::INFINITY, f32::min);
+        let limit = if next.is_finite() { next } else { total };
+        sizes[k] = sizes[k].max(limit - pos[k]);
     }
 }
 
