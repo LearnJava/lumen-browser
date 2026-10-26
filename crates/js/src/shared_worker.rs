@@ -180,6 +180,12 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
       enumerable: true, configurable: true,
     });
   }
+  // BUG-1688: `crypto.subtle`/`CryptoKey` are `[SecureContext]`; the crypto shim leaves
+  // them to this point, where `isSecureContext` is known.
+  if (typeof _lumen_crypto_expose_secure === 'function') {
+    if (globalThis.isSecureContext !== false) _lumen_crypto_expose_secure();
+    delete globalThis._lumen_crypto_expose_secure;
+  }
 
   // Report an uncaught exception from onconnect/onmessage/a flushed timer.
   // HTML LS §8.1.3.6 then §10.2.6: it fires `error` at this global scope and

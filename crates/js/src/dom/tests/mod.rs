@@ -61,6 +61,9 @@ fn web_api_shim_splices_its_parts_in_source_order() {
         // хвостом и его продолжением, ровно один раз.
         "function _idb_schedule_flush()",
         "globalThis.indexedDB",
+        // Web Crypto — своя часть (BUG-1688; её исполняет и воркер) между IDB и хвостом.
+        "function getRandomValues(typedArray)",
+        "g._lumen_crypto_expose_secure = exposeSecure",
     ] {
         assert_eq!(
             shim.matches(marker).count(),

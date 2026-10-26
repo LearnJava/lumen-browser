@@ -531,6 +531,15 @@ pub(crate) fn install_worker_scope_globals_v8(
     // `typeof` guard), so it evaluates unchanged here, shared across
     // dedicated/shared/service workers like the rest of this function.
     rt.eval(crate::trusted_types::TRUSTED_TYPES_SHIM)?;
+    // BUG-1688: Web Crypto (`self.crypto`, `crypto.subtle`, `CryptoKey`) is
+    // `[Exposed=(Window,Worker)]`. The natives hold no page state (keys live in a
+    // per-thread store), so the page's own list is registered here too; the shim is the
+    // page's text. `.subtle`/`CryptoKey` wait for the flavour's `isSecureContext` shim,
+    // which runs the `_lumen_crypto_expose_secure` hook.
+    for (name, native) in crate::web_crypto_natives::web_crypto_natives() {
+        rt.register_native(name, native)?;
+    }
+    rt.eval(crate::dom::CRYPTO_SHIM)?;
     Ok(())
 }
 
@@ -1701,6 +1710,63 @@ mod tests_v8 {
             )
             .unwrap();
         assert_eq!(policy_ok, lumen_core::JsValue::Bool(true));
+    }
+
+    /// BUG-1688: `crypto` is `[Exposed=(Window,Worker)]` — a dedicated worker used to
+    /// throw `ReferenceError: crypto is not defined`.
+    #[test]
+    fn v8_worker_has_web_crypto_on_secure_origin() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "https://example.com/worker.js", false, Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval(
+                "var a = new Uint8Array(8); crypto.getRandomValues(a) === a \
+                 && /^[0-9a-f-]{36}$/.test(crypto.randomUUID()) \
+                 && typeof crypto.subtle === 'object' && typeof CryptoKey === 'function' \
+                 && !('_lumen_crypto_expose_secure' in self)"
+            )
+            .unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
+        rt.eval(
+            "var __d = null; crypto.subtle.digest('SHA-256', new Uint8Array([97, 98, 99])) \
+             .then(function (b) { __d = Array.from(new Uint8Array(b)).map(function (x) { \
+                 return ('0' + x.toString(16)).slice(-2); }).join(''); });",
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("__d").unwrap(),
+            lumen_core::JsValue::String(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string()
+            )
+        );
+    }
+
+    /// BUG-1688 / BUG-765: on an insecure origin the worker still gets
+    /// `getRandomValues`/`randomUUID`, but `crypto.subtle` and `CryptoKey` are absent.
+    #[test]
+    fn v8_worker_web_crypto_subtle_absent_on_insecure_origin() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_worker_globals_v8(
+            &rt, 0, Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())),
+            make_store(), None, "http://example.com/worker.js", false, Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(0u32)), None,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval(
+                "self.isSecureContext === false && crypto.getRandomValues(new Uint8Array(4)).length === 4 \
+                 && crypto.subtle === undefined && typeof CryptoKey === 'undefined' \
+                 && !('_lumen_crypto_expose_secure' in self)"
+            )
+            .unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
     }
 
     /// BUG-766: `DedicatedWorkerGlobalScope.isSecureContext` must exist and

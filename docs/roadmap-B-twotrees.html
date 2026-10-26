@@ -76,11 +76,11 @@
  "generated": "2026-10-26",
  "counts": {
   "open": 296,
-  "fixed": 1356,
+  "fixed": 1360,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1655,
+ "total_bugs": 1659,
  "phases": [
   {
    "id": "P0",
@@ -10626,10 +10626,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1528": {
+  "BUG-1721": {
    "status": "open",
-   "title": "`align-self`/`justify-self`/`align-items` не влияют на статическую позицию абсолютного бокса в блочном контейнере; во flex-контейнере работает только ось блока.…",
-   "component": "layout (`crates/engine/layout/src/box_tree/` — статическая позиция `position:absolute` бокса в блочном и flex-контейнере)",
+   "title": "Остаток BUG-1528: `align-self`/`justify-self` не выравнивают статическую позицию абсолютного бокса внутри `display:inline` (прямоугольник — точка в строке) и в…",
+   "component": "layout (`crates/engine/layout/src/box_tree/abs_static_align.rs`, `inline_build.rs`, `vertical_trampoline.rs`)",
    "date": null,
    "debtor": false
   },
@@ -11431,27 +11431,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1686": {
-   "status": "open",
-   "title": "`@keyframes`, `@property`, `@counter-style` и вложенный `@media`/`@supports` внутри тела `@media`/`@supports` отбрасываются (остаток BUG-1495: там поднят только…",
-   "component": "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs` `parse_media_rule`, `parse_conditional_body_at_rule`; `supports.rs` `parse_supports_rule`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1687": {
-   "status": "open",
-   "title": "Выделение не подсвечивает текст внутри shadow-дерева: `selectAllChildren(body)` оставляет текст shadow-хоста без `::selection`; 9 рефтестов `selection/shadow-do…",
-   "component": "layout (`crates/engine/layout/src/highlight.rs` — `TreeOrder` не обходит shadow root)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1688": {
-   "status": "open",
-   "title": "В воркерах нет `crypto`: `crypto.getRandomValues`/`crypto.subtle` в выделенном воркере — `ReferenceError: crypto is not defined`; 110 тестов `WebCryptoAPI/**/*.…",
-   "component": "js (`crates/js/src/worker.rs` `install_worker_scope_globals_v8` — нет шима и нативов Web Crypto; нативы — `v8_runtime/install/platform.rs` `install_crypto_and_typed_om`, только для страницы)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1689": {
    "status": "open",
    "title": "BiDi `permissions.setPermission` (`test_driver.set_permission`) не доходит до запроса разрешения: `getUserMedia({audio})` ждёт `#permPopover` и висит; 18 TIMEOU…",
@@ -11624,6 +11603,27 @@
    "status": "open",
    "title": "`window.opener` попапа — заглушка с одним `postMessage` (поля окна-открывателя недоступны) и становится `null` после навигации самого попапа (`location.replace`…",
    "component": "js/shell (`crates/js/src/shim/web_api_shim_tail_mc.js` — `window.opener`/`_lumen_install_opener`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1719": {
+   "status": "open",
+   "title": "У `<video controls>` нет нативной панели управления: ни play/pause, ни временной шкалы, ни громкости/mute, ни fullscreen (w3schools `html5_video.asp`); без `aut…",
+   "component": "shell/paint/layout (UA-панель `<video controls>` / `<audio controls>`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1720": {
+   "status": "open",
+   "title": "`<video>` внутри `<iframe>` не рисуется: w3schools `howto_css_fullscreen_video.asp` — видео во фрейме загружено и декодировано (`video: загружен nid=13`), но об…",
+   "component": "shell/engine (`<video>` во вложенном browsing context, `video_tick.rs`, `frame_bridge`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1722": {
+   "status": "open",
+   "title": "Фон выделения короче строки: у «OuterText» последняя буква не закрыта подсветкой (виден на `selection/shadow-dom/cross-shadow-boundary-1`); на PASS рефтестов не…",
+   "component": "layout/paint (`crates/engine/layout/src/highlight.rs` — ширина куска `HighlightPiece`, фон `::selection`)",
    "date": null,
    "debtor": false
   },
@@ -21139,6 +21139,34 @@
    "component": "layout (`crates/engine/layout/src/box_tree/block_align_content.rs`, `bfc.rs::establishes_bfc`, `block_flow_trampoline.rs::finish_frame`, `table_valign.rs::cell_block_align`)",
    "date": "2026-10-26",
    "debtor": false
+  },
+  "BUG-1686": {
+   "status": "fixed",
+   "title": "`@keyframes`, `@property`, `@counter-style` и вложенные `@media`/`@supports` внутри тела `@media`/`@supports` отбрасывались (остаток BUG-1495). Теперь первые тр…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs` `parse_conditional_body_at_rule`, `parse_media_rule`; `supports.rs` `parse_supports_rule`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1528": {
+   "status": "fixed",
+   "title": "`align-self`/`justify-self`/`justify-items` не влияли на статическую позицию абсолютного бокса в блочном контейнере. Исправлено: по оси с обоими `auto`-инсетами…",
+   "component": "layout (`crates/engine/layout/src/box_tree/abs_static_align.rs`, `block_flow_trampoline.rs::finish_frame`, `multicol_abspos.rs::reposition_abs_child`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1687": {
+   "status": "fixed",
+   "title": "Выделение не подсвечивало текст внутри shadow-дерева: `TreeOrder` не обходил shadow root, а `setBaseAndExtent` схлопывал фокус в чужом дереве на якорь. Обход ид…",
+   "component": "layout (`crates/engine/layout/src/highlight.rs` `TreeOrder`) + js (`web_api_shim_mid.js` `Selection.setBaseAndExtent`)",
+   "date": "2026-10-26",
+   "debtor": false
+  },
+  "BUG-1688": {
+   "status": "fixed",
+   "title": "В воркерах не было `crypto`: `crypto.getRandomValues`/`crypto.subtle` в выделенном воркере — `ReferenceError: crypto is not defined` (110 тестов `WebCryptoAPI/*…",
+   "component": "js (`crates/js/src/web_crypto_natives.rs`, `shim/crypto_shim.js`, `worker.rs` `install_worker_scope_globals_v8`)",
+   "date": "2026-10-26",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -21226,7 +21254,7 @@
   "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs:547` `@font-face`; тело `@media`/`@supports`)": [
    "BUG-1495"
   ],
-  "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs` `parse_media_rule`, `parse_conditional_body_at_rule`; `supports.rs` `parse_supports_rule`)": [
+  "css-parser (`crates/engine/css-parser/src/parser/at_rules.rs` `parse_conditional_body_at_rule`, `parse_media_rule`; `supports.rs` `parse_supports_rule`)": [
    "BUG-1686"
   ],
   "css-parser (`crates/engine/css-parser/src/parser/declarations.rs::parse_declaration`)": [
@@ -22324,6 +22352,9 @@
   "js (`crates/js/src/web_codecs.rs` — `webcodecs_shim`)": [
    "BUG-710"
   ],
+  "js (`crates/js/src/web_crypto_natives.rs`, `shim/crypto_shim.js`, `worker.rs` `install_worker_scope_globals_v8`)": [
+   "BUG-1688"
+  ],
   "js (`crates/js/src/webassembly.rs:112-125` â `WebAssembly.Table` constructor)": [
    "BUG-699"
   ],
@@ -22347,9 +22378,6 @@
   ],
   "js (`crates/js/src/worker.rs::atob_native_v8`/`btoa_native_v8`; `crates/js/src/shim/web_api_shim_mid_c.js`)": [
    "BUG-1016"
-  ],
-  "js (`crates/js/src/worker.rs` `install_worker_scope_globals_v8` — нет шима и нативов Web Crypto; нативы — `v8_runtime/install/platform.rs` `install_crypto_and_typed_om`, только для страницы)": [
-   "BUG-1688"
   ],
   "js (`crates/js/src/worker.rs` — `WORKER_SHIM`, бутстрап globals dedicated-воркера; `SHARED_WORKER_SHIM`/`sw_worker.rs` не проверялись)": [
    "BUG-1066"
@@ -22774,13 +22802,16 @@
   "layout (`crates/engine/layout/src/box_tree/` — относительное смещение внутри `InlineBlockRow`)": [
    "BUG-1291"
   ],
-  "layout (`crates/engine/layout/src/box_tree/` — статическая позиция `position:absolute` бокса в блочном и flex-контейнере)": [
-   "BUG-1528"
-  ],
   "layout (`crates/engine/layout/src/box_tree/`)": [
    "BUG-1338",
    "BUG-1341",
    "BUG-1345"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/abs_static_align.rs`, `block_flow_trampoline.rs::finish_frame`, `multicol_abspos.rs::reposition_abs_child`)": [
+   "BUG-1528"
+  ],
+  "layout (`crates/engine/layout/src/box_tree/abs_static_align.rs`, `inline_build.rs`, `vertical_trampoline.rs`)": [
+   "BUG-1721"
   ],
   "layout (`crates/engine/layout/src/box_tree/bfc.rs::collapsed_top_margin`, `:149–157`)": [
    "BUG-1431"
@@ -23089,7 +23120,7 @@
   "layout (`crates/engine/layout/src/grid_computed.rs`, `selector_query.rs`)": [
    "BUG-1655"
   ],
-  "layout (`crates/engine/layout/src/highlight.rs` — `TreeOrder` не обходит shadow root)": [
+  "layout (`crates/engine/layout/src/highlight.rs` `TreeOrder`) + js (`web_api_shim_mid.js` `Selection.setBaseAndExtent`)": [
    "BUG-1687"
   ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
@@ -23520,6 +23551,9 @@
   ],
   "layout/paint (`crates/engine/layout/src/box_tree/table.rs`)": [
    "BUG-1336"
+  ],
+  "layout/paint (`crates/engine/layout/src/highlight.rs` — ширина куска `HighlightPiece`, фон `::selection`)": [
+   "BUG-1722"
   ],
   "layout/paint (`crates/engine/layout/src/invariants.rs`, `crates/engine/paint/src/invariants.rs`)": [
    "BUG-1053"
@@ -24232,6 +24266,9 @@
   "shell/encoding (`crates/shell/src/stylesheets.rs::document_encoding`, `crates/engine/encoding/src/lib.rs::Encoding::from_label`)": [
    "BUG-1375"
   ],
+  "shell/engine (`<video>` во вложенном browsing context, `video_tick.rs`, `frame_bridge`)": [
+   "BUG-1720"
+  ],
   "shell/engine (загрузка вложенных `<iframe src>`, вставленных скриптом)": [
    "BUG-1693"
   ],
@@ -24274,6 +24311,9 @@
   ],
   "shell/paint": [
    "BUG-163"
+  ],
+  "shell/paint/layout (UA-панель `<video controls>` / `<audio controls>`)": [
+   "BUG-1719"
   ],
   "shell/storage": [
    "BUG-238"
