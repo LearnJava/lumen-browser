@@ -73,7 +73,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
     apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false, &mut counters);
     // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
-    apply_anchor_positions(&mut root, doc, &counters, viewport);
+    apply_anchor_positions(&mut root, doc, &mut counters, viewport);
     // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
     split_first_line_boxes(&mut root);
     #[cfg(debug_assertions)]
@@ -203,7 +203,7 @@ pub fn layout_measured_hyp_with_counters(
         apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
         apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
         // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
-        apply_anchor_positions(&mut root, doc, &counters, viewport);
+        apply_anchor_positions(&mut root, doc, &mut counters, viewport);
         // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
         split_first_line_boxes(&mut root);
     }
@@ -382,7 +382,7 @@ pub fn layout_mutation_incremental_with_counters(
     // Post-layout passes — same set as layout_measured_hyp, same order.
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
-    apply_anchor_positions(&mut root, doc, &counters, viewport);
+    apply_anchor_positions(&mut root, doc, &mut counters, viewport);
     split_first_line_boxes(&mut root);
     (root, counters)
 }
@@ -577,7 +577,7 @@ pub fn layout_mutation_incremental_restyle(
         // Post-layout passes — same set as layout_measured_hyp/layout_mutation_incremental, same order.
         apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
         apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode, &mut counters);
-        apply_anchor_positions(&mut root, doc, &counters, viewport);
+        apply_anchor_positions(&mut root, doc, &mut counters, viewport);
         split_first_line_boxes(&mut root);
     }
     (root, counters)

@@ -9755,7 +9755,10 @@ var _LUMEN_WRAPPER_MEMBERS = {
         getBoundingClientRect: function() { var nid = this.__nid__;
             var r = _lumen_get_bounding_rect(nid);
             if (!r) { return new DOMRect(0, 0, 0, 0); }
-            return new DOMRect(r[0], r[1], r[2], r[3]);
+            // Ancestor scroll containers (and the anchor's, for an anchor-positioned box) move the
+            // box away from the document position the native answers with (BUG-1166).
+            var sh = _lumen_get_scroll_shift(nid);
+            return new DOMRect(r[0] - sh[0], r[1] - sh[1], r[2], r[3]);
         },
         // BUG-1007: one `DOMRect` per CSS fragment — a multi-line plain inline
         // element (`<span>`, `<em>`, …) answers with one rect per visual line
@@ -9768,7 +9771,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         getClientRects: function() {
             var nid = this.__nid__;
             var rs = _lumen_get_client_rects(nid);
-            return new DOMRectList(rs.map(function(r) { return new DOMRect(r[0], r[1], r[2], r[3]); }));
+            var sh = _lumen_get_scroll_shift(nid);
+            return new DOMRectList(rs.map(function(r) { return new DOMRect(r[0] - sh[0], r[1] - sh[1], r[2], r[3]); }));
         },
         // CSSOM View §6 getBoxQuads() — same per-fragment source as
         // getClientRects (BUG-1007), one DOMQuad per line instead of one
@@ -9776,7 +9780,8 @@ var _LUMEN_WRAPPER_MEMBERS = {
         getBoxQuads: function() {
             var nid = this.__nid__;
             var rs = _lumen_get_client_rects(nid);
-            return rs.map(function(r) { return DOMQuad.fromRect(new DOMRect(r[0], r[1], r[2], r[3])); });
+            var sh = _lumen_get_scroll_shift(nid);
+            return rs.map(function(r) { return DOMQuad.fromRect(new DOMRect(r[0] - sh[0], r[1] - sh[1], r[2], r[3])); });
         },
         // `src` used to live here as an own property on EVERY element (BUG-305).
         // It is now one row of the reflection table (BUG-383) installed on the
@@ -9792,12 +9797,14 @@ var _LUMEN_WRAPPER_MEMBERS = {
         get offsetLeft()   { var nid = this.__nid__;
             if (_lumen_is_body(nid)) return 0;
             var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
-            return r[0] - _lumen_offset_origin(nid)[0];
+            // The scroll of the anchor's containers is part of an anchor-positioned box's layout
+            // offset (CSS Anchor Positioning L1 §4.3); scrolling of ancestors is not.
+            return r[0] - _lumen_get_scroll_shift(nid)[2] - _lumen_offset_origin(nid)[0];
         },
         get offsetTop()    { var nid = this.__nid__;
             if (_lumen_is_body(nid)) return 0;
             var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
-            return r[1] - _lumen_offset_origin(nid)[1];
+            return r[1] - _lumen_get_scroll_shift(nid)[3] - _lumen_offset_origin(nid)[1];
         },
         // BUG-482: the element itself, not just the origin it measures from —
         // same `_lumen_offset_parent_nid` walk BUG-476 built for offsetLeft/Top.

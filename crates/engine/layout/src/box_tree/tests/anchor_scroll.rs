@@ -134,3 +134,40 @@ fn anchored_to_each_other_does_not_loop() {
     );
     assert!(followed(&root, &doc, "t1").is_empty());
 }
+
+#[test]
+fn an_axis_whose_insets_name_another_anchor_does_not_follow() {
+    // anchor-scroll-006: `left` uses the default anchor (inside the scroller), `top` an anchor
+    // outside any scroller — only the horizontal scrolling moves the target.
+    let (mut root, doc) = build(
+        r#"<div id="s"><div id="spacer"></div><div id="a"></div></div><div id="o"></div><div id="t"></div>"#,
+        "#s{width:100px;height:100px;overflow:scroll}#spacer{width:400px;height:200px}\
+         #a{anchor-name:--a;width:50px;height:50px}#o{anchor-name:--o;width:10px;height:10px}\
+         #t{position:fixed;width:20px;height:20px;position-anchor:--a;left:anchor(left);top:anchor(--o bottom)}",
+    );
+    let scroller = find(&root, &doc, "s").node;
+    assert!(set_scroll_position(&mut root, scroller, 40.0, 60.0));
+    assert_eq!(followed(&root, &doc, "t"), vec![(scroller, 40.0, 0.0)]);
+}
+
+#[test]
+fn position_area_follows_both_axes() {
+    let (mut root, doc) = build(
+        r#"<div id="s"><div id="spacer"></div><div id="a"></div></div><div id="t"></div>"#,
+        "#s{width:100px;height:100px;overflow:scroll}#spacer{width:400px;height:200px}\
+         #a{anchor-name:--a;width:50px;height:50px}\
+         #t{position:absolute;width:20px;height:20px;position-anchor:--a;position-area:bottom right}",
+    );
+    let scroller = find(&root, &doc, "s").node;
+    assert!(set_scroll_position(&mut root, scroller, 40.0, 60.0));
+    assert_eq!(followed(&root, &doc, "t"), vec![(scroller, 40.0, 60.0)]);
+}
+
+#[test]
+fn the_followed_containers_are_listed_per_target() {
+    let (root, doc) = build(PAGE, SHEET);
+    let map = crate::collect_anchor_scrollers(&root);
+    let t = find(&root, &doc, "t").node;
+    assert_eq!(map.get(&(t.index() as u32)), Some(&vec![(find(&root, &doc, "s").node.raw(), true, true)]));
+    assert_eq!(map.len(), 1, "{map:?}");
+}

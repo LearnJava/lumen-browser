@@ -2000,11 +2000,32 @@ pub fn refresh_anchor_scroll(root: &mut LayoutBox) {
     while let Some(b) = stack.pop() {
         if let Some(a) = b.anchor_scroll.as_mut() {
             for sc in &mut a.scrollers {
-                (sc.x, sc.y) = offsets.get(&sc.node).copied().unwrap_or((0.0, 0.0));
+                let (x, y) = offsets.get(&sc.node).copied().unwrap_or((0.0, 0.0));
+                (sc.x, sc.y) = (if sc.follow_x { x } else { 0.0 }, if sc.follow_y { y } else { 0.0 });
             }
         }
         stack.extend(b.children.iter_mut());
     }
+}
+
+/// [`collect_anchor_scrollers`]'s result.
+pub type AnchorScrollers = std::collections::HashMap<u32, Vec<(u32, bool, bool)>>;
+
+/// The scroll containers each anchor-positioned box follows (CSS Anchor Positioning L1 §4.3):
+/// `NodeId::index()` of the box → `(NodeId::raw(), follows x, follows y)` of every container in
+/// [`LayoutBox::anchor_scroll`], the principal box of a node only. The embedder adds the
+/// containers' current offsets to the box's `getBoundingClientRect`; the offsets themselves move
+/// without a relayout, the list only changes with one.
+pub fn collect_anchor_scrollers(root: &LayoutBox) -> AnchorScrollers {
+    let mut out = std::collections::HashMap::new();
+    let mut stack: Vec<&LayoutBox> = vec![root];
+    while let Some(b) = stack.pop() {
+        if let Some(a) = &b.anchor_scroll {
+            out.entry(b.node.index() as u32).or_insert_with(|| a.scrollers.iter().map(|s| (s.node.raw(), s.follow_x, s.follow_y)).collect());
+        }
+        stack.extend(b.children.iter().rev());
+    }
+    out
 }
 
 fn set_scroll_position_rec(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
