@@ -702,30 +702,33 @@ fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
 /// (`0` = `auto`, later resolved to `floor(size)`). `normal` → `(1.0, 0)`.
 /// Returns `None` on malformed input, so the declaration is ignored and the
 /// previous value is kept (CSS error recovery).
-fn parse_initial_letter(val: &str) -> Option<(f32, u32)> {
+fn parse_initial_letter(val: &str) -> Option<(f32, u32, u8)> {
     let v = val.trim();
     if v.eq_ignore_ascii_case("normal") {
-        return Some((1.0, 0));
+        return Some((1.0, 0, 0));
     }
-    let mut it = v.split_whitespace();
-    let size: f32 = it.next()?.parse().ok()?;
-    if !size.is_finite() || size < 1.0 {
-        return None;
-    }
-    let sink = match it.next() {
-        Some(tok) => {
-            let n: i64 = tok.parse().ok()?;
-            if n < 1 {
-                return None;
-            }
-            u32::try_from(n).ok()?
-        }
-        None => 0,
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    let keyword = |t: &str| match t.to_ascii_lowercase().as_str() {
+        "drop" => Some(1u8),
+        "raise" => Some(2u8),
+        _ => None,
     };
-    if it.next().is_some() {
-        return None;
+    let size = |t: &str| t.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 1.0);
+    match toks.as_slice() {
+        [n] => Some((size(n)?, 0, 0)),
+        // `drop` sinks the letter by `floor(size)` lines (`auto`), `raise` by one.
+        [n, k] | [k, n] if keyword(k).is_some() => {
+            let kw = keyword(k)?;
+            Some((size(n)?, if kw == 2 { 1 } else { 0 }, kw))
+        }
+        [n, i] => {
+            // A `calc()` sink is substituted as a number before this point; an `<integer>`
+            // computed from a fractional result rounds to the nearest one.
+            let sink = i.parse::<f32>().ok().filter(|n| n.is_finite())?.round();
+            (sink >= 1.0).then_some((size(n)?, sink as u32, 0))
+        }
+        _ => None,
     }
-    Some((size, sink))
 }
 
 

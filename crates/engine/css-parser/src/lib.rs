@@ -255,6 +255,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "height",
     "hyphens",
     "image-rendering",
+    "initial-letter",
     "input-security",
     "inset",
     "inset-area",

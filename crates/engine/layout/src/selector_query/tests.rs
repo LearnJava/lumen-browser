@@ -1951,3 +1951,32 @@ fn computed_map_text_decoration_and_shapes_bug1515() {
         assert_eq!(m.get(prop).map(String::as_str), Some(want), "initial {prop}");
     }
 }
+
+#[test]
+fn computed_map_inline_properties_bug1529() {
+    let get = |css: &str, key: &str| {
+        div_computed_map("<div>x</div>", css).get(key).cloned().unwrap_or_default()
+    };
+    // `line-height`: `normal` stays a keyword, a number resolves to px, negatives are ignored.
+    assert_eq!(get("div { font-size: 40px }", "line-height"), "normal");
+    assert_eq!(get("div { font-size: 40px; line-height: 2 }", "line-height"), "80px");
+    assert_eq!(get("div { font-size: 40px; line-height: 0 }", "line-height"), "0px");
+    assert_eq!(get("div { font-size: 40px; line-height: 200% }", "line-height"), "80px");
+    assert_eq!(get("div { font-size: 40px; line-height: calc(200% + 10px) }", "line-height"), "90px");
+    assert_eq!(get("div { font-size: 40px; line-height: calc(10px - 0.5em) }", "line-height"), "0px");
+    assert_eq!(get("div { font-size: 40px; line-height: -2 }", "line-height"), "normal");
+    assert_eq!(get("div { font-size: 40px; line-height: auto }", "line-height"), "normal");
+    // `baseline-shift`.
+    assert_eq!(get("", "baseline-shift"), "0px");
+    assert_eq!(get("div { baseline-shift: -10px }", "baseline-shift"), "-10px");
+    assert_eq!(get("div { baseline-shift: 20% }", "baseline-shift"), "20%");
+    assert_eq!(get("div { baseline-shift: center }", "baseline-shift"), "center");
+    // `initial-letter`.
+    assert_eq!(get("", "initial-letter"), "normal");
+    assert_eq!(get("div { initial-letter: 3 2 }", "initial-letter"), "3 2");
+    assert_eq!(get("div { initial-letter: 1.23 }", "initial-letter"), "1.23");
+    assert_eq!(get("div { initial-letter: drop 2 }", "initial-letter"), "2 drop");
+    assert_eq!(get("div { initial-letter: 2 raise }", "initial-letter"), "2 raise");
+    assert_eq!(get("div { initial-letter: 1.23 calc(45.6) }", "initial-letter"), "1.23 46");
+    assert_eq!(get("div { initial-letter: calc(sign(1rem - 1px) * 1.5) }", "initial-letter"), "1.5");
+}

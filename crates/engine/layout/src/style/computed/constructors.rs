@@ -114,6 +114,7 @@ impl ComputedStyle {
             clear: ClearSide::None,
             initial_letter_size: 1.0,
             initial_letter_sink: 0,
+            initial_letter_keyword: 0,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
             border_top_left_radius: Length::Px(0.0),
@@ -549,6 +550,7 @@ impl ComputedStyle {
             clear: ClearSide::None,
             initial_letter_size: 1.0,
             initial_letter_sink: 0,
+            initial_letter_keyword: 0,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
             // border-radius не наследуется.
