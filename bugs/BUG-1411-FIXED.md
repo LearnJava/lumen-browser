@@ -1,6 +1,6 @@
 # BUG-1411 — Строка, состоящая только из `<br>` или `&nbsp;`, не занимает высоты; `<br>` в начале и подряд теряет перевод строки
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P6)
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** layout (`crates/engine/layout/src/box_tree/inline_build.rs` / `inline_wrap.rs` — построение строки; кандидат: тот же `split_whitespace()`/`trim`, что в BUG-1323)
 
@@ -47,3 +47,11 @@ WPT-RUN-14 срез 18: `css-fonts/font-size-zero-2.html`; 23 упавших ref
 ## Влияние на SHAPE-OUTSIDE-2 (2026-10-21)
 
 42 reftest `css-shapes/shape-outside` с `<br/>` после float (`supported-shapes/circle/shape-outside-circle-026.html` и др.) не проходят только из-за этого дефекта: подмена `<br/>` на блок высотой 40px даёт верный контур. Проба: `<div style="font:40px/1 Ahem;width:300px"><br/><br/>X</div>` — два пустых `Block` высотой 0 и один `InlineRun` с `X` (должно быть три строки).
+
+## Исправление (2026-10-26, P6)
+
+Корень: `<br>` в UA получает `display: block` (`style/ua.rs`), поэтому бокс-дерево режет поток на `InlineRun` вокруг нулевого по высоте `Block`. `B<br>` при этом верно (строку закрывает `<br>`), но `<br>`, перед которым нет текста (ведущий, подряд, после блока), обязан открыть пустую строку — её не было. `&nbsp;` в `<p>` уже давало строку (проба в `--dump-layout` на сборке 2026-10-26: 20).
+
+Правка: `give_leading_breaks_a_line` (`box_tree/inline_build.rs`, вызов из `build.rs` в ветке без item-контейнера) — `<br>`-блок без текста перед ним превращается в `InlineRun` из одного пустого forced-break сегмента; `wrap_inline_run` даёт ему пустую строку высотой со strut. Float/abspos/маркер строку не «держат»; во flex/grid `<br>` не трогается. Тесты — `tests/br_lines.rs`; проба `--dump-layout` по всем вариантам таблицы выше даёт 20/20/40/40/40/20/40/20/40.
+
+Остаток: 42 reftest `shape-outside` с `<br/>` после float (SHAPE-OUTSIDE-3) не перемерялись.

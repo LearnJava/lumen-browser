@@ -77,7 +77,7 @@ Pass rate корпуса 42.92% — балл (PASS = 1, testharness — доля
 
 | Баг | Компонент | Тестов | metadata | ROADMAP | wpt-status | Задачи |
 |---|---|---|---|---|---|---|
-| [BUG-1411](../bugs/BUG-1411-OPEN.md) | layout | 292 | 0 | 292 | 0 | SHAPE-OUTSIDE-3 |
+| [BUG-1411](../bugs/BUG-1411-FIXED.md) | layout | 292 | 0 | 292 | 0 | SHAPE-OUTSIDE-3 |
 | [BUG-1518](../bugs/BUG-1518-OPEN.md) | layout | 292 | 0 | 292 | 0 | SHAPE-OUTSIDE-3 |
 | [BUG-1519](../bugs/BUG-1519-OPEN.md) | layout | 292 | 0 | 292 | 0 | SHAPE-OUTSIDE-3 |
 | [BUG-1467](../bugs/BUG-1467-OPEN.md) | css-parser/layout | 226 | 0 | 226 | 0 | RUNIN-1 |
