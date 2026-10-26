@@ -10,12 +10,25 @@
 use super::baseline::{box_baseline, is_vertical, BaselineSide};
 use super::*;
 
+/// Выравнивание содержимого ячейки по оси блока: `align-content` (CSS Align L3 §«Block
+/// Containers»), пока оно не `normal`, иначе `vertical-align`. Ячейка не бывает ниже
+/// содержимого, поэтому `safe`/`unsafe` на результат не влияют.
+pub(super) fn cell_block_align(style: &ComputedStyle) -> VerticalAlign {
+    match style.align_content {
+        AlignValue::Start => VerticalAlign::Top,
+        AlignValue::Center => VerticalAlign::Middle,
+        AlignValue::End | AlignValue::LastBaseline => VerticalAlign::Bottom,
+        AlignValue::Baseline => VerticalAlign::Baseline,
+        _ => style.vertical_align,
+    }
+}
+
 /// Участвует ли ячейка в выравнивании по базовой линии строки: CSS 2.1 §17.5.3
 /// — любое значение, кроме `top`/`middle`/`bottom`, ведёт себя как `baseline`;
 /// ячейка с `rowspan > 1` в общую базовую линию не входит.
 pub(super) fn is_baseline_aligned(cell: &LayoutBox) -> bool {
     cell.row_span == 1
-        && !matches!(cell.style.vertical_align, VerticalAlign::Top | VerticalAlign::Middle | VerticalAlign::Bottom)
+        && !matches!(cell_block_align(&cell.style), VerticalAlign::Top | VerticalAlign::Middle | VerticalAlign::Bottom)
 }
 
 /// Отступы ячейки сверху/снизу (border + padding) и фактическая высота её

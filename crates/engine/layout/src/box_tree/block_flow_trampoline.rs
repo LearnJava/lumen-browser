@@ -1074,6 +1074,12 @@ fn finish_frame(
         frame.init.padding_top, frame.init.padding_bottom, frame.init.size_contained,
         frame.init.field_intrinsic, content_height, frame.init.cb,
     );
+    if clamp_cut.is_none() {
+        super::block_align_content::shift_content(
+            &mut frame.b, &frame.init.s, (frame.init.padding_top, frame.init.padding_bottom),
+            content_height, &mut frame.init.abs_deferred,
+        );
+    }
     finish_after_match(
         &mut frame.b, &frame.init.s, frame.init.em, frame.init.cb, frame.init.available_height, frame.init.is_positioned,
         frame.init.pcb, &frame.init.abs_deferred, measurer, viewport, hp,
@@ -1169,6 +1175,7 @@ fn post_child_bookkeeping(
         // Zero-height; does not break the collapsing chain.
         return;
     }
+    let was_first_inflow = !frame.init.seen_inflow_child;
     frame.init.seen_inflow_child = true;
     let content_width = frame.init.content_width;
     align_justify_self_child(frame, idx, viewport);
@@ -1200,7 +1207,14 @@ fn post_child_bookkeeping(
         }
         // `child_y` already includes the previous sibling's bottom margin
         // (`prev_block_mb`); the merged gap replaces it rather than stacking.
-        frame.init.child_y += merged - frame.init.prev_block_mb;
+        // An empty first child whose top margin escaped into this box's own margin
+        // (`b_collapses_top`) sits at the content top: the gap is already above it, so
+        // `child_y` stays and only the next sibling's margin collapses with it.
+        let escaped_first = was_first_inflow && frame.init.b_collapses_top && collapsed_mt > 0.0
+            && matches!(frame.b.children[idx].kind, BoxKind::Block);
+        if !escaped_first {
+            frame.init.child_y += merged - frame.init.prev_block_mb;
+        }
         frame.init.prev_block_mb = merged;
     } else {
         let child = &frame.b.children[idx];

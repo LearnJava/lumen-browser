@@ -461,7 +461,7 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
         if cell.row_span != 1 {
             continue;
         }
-        let dy = match cell.style.vertical_align {
+        let dy = match super::table_valign::cell_block_align(&cell.style) {
             VerticalAlign::Top => 0.0,
             va @ (VerticalAlign::Middle | VerticalAlign::Bottom) => {
                 super::table_valign::free_space_shift(cell, row_h, va)
@@ -469,7 +469,7 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
             _ => baselines.iter().find(|&&(j, _)| j == i).map_or(0.0, |&(_, bl)| above - bl),
         };
         super::table_valign::shift_cell_content(cell, dy);
-        if dy.abs() > 1e-4 && matches!(cell.style.vertical_align, VerticalAlign::Middle | VerticalAlign::Bottom) {
+        if dy.abs() > 1e-4 && matches!(super::table_valign::cell_block_align(&cell.style), VerticalAlign::Middle | VerticalAlign::Bottom) {
             frame.init.cell_dy.push((group_opt, row_field, i, dy));
         }
         cell.rect.height = row_h;
@@ -559,10 +559,10 @@ fn finish_table(
         let grown = (target_bottom - cell.rect.y).max(cell.rect.height);
         // §17.5.3: ячейка, растянутая на несколько строк, выравнивает содержимое по
         // всей высоте (`baseline` для неё равносильно `top`).
-        let dy = super::table_valign::free_space_shift(cell, grown, cell.style.vertical_align);
+        let dy = super::table_valign::free_space_shift(cell, grown, super::table_valign::cell_block_align(&cell.style));
         super::table_valign::shift_cell_content(cell, dy);
         cell.rect.height = grown;
-        if dy.abs() > 1e-4 && matches!(cell.style.vertical_align, VerticalAlign::Middle | VerticalAlign::Bottom) {
+        if dy.abs() > 1e-4 && matches!(super::table_valign::cell_block_align(&cell.style), VerticalAlign::Middle | VerticalAlign::Bottom) {
             frame.init.cell_dy.push((group, row, child_idx, dy));
         }
     }

@@ -1306,6 +1306,7 @@ fn set_align_content(style: &mut ComputedStyle, val: &str) {
     if let Some((v, safe, wm)) = AlignValue::parse_with_overflow(val) {
         style.align_content = v;
         style.content_align_extra.align_safe = safe;
+        style.content_align_extra.align_unsafe = AlignValue::is_unsafe(val);
         style.content_align_extra.align_wm = wm;
     }
 }
