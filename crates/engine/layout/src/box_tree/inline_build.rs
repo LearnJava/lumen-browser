@@ -255,6 +255,12 @@ pub(crate) fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     s.padding_right = Length::Px(0.0);
     s.padding_bottom = Length::Px(0.0);
     s.padding_left = Length::Px(0.0);
+    // Fragmentation L3 §3.1 / Multicol L1 §6.1: `break-*` and `column-span` are not inherited, so
+    // the line blocks a `<br>` cuts a block into must not repeat the forced breaks (or the
+    // spanning) of their parent — each of them would open a column of its own.
+    s.break_before = crate::style::BreakValue::Auto;
+    s.break_after = crate::style::BreakValue::Auto;
+    s.column_span_all = false;
     s.background_color = None;
     s.width = None;
     s.height = None;
@@ -578,7 +584,7 @@ pub(crate) fn inline_run_first_unit(
         .copied()
         .unwrap_or(strip.len());
     let st = &seg.style;
-    let w = measure_text_w_families(&strip[..end], st.font_size, st.letter_spacing, 0.0, &st.font_family, m);
+    let w = measure_text_w_styled(&strip[..end], st, 0.0, m);
     Some((w + seg.pre_space, glued))
 }
 

@@ -116,13 +116,19 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
       throw new TypeError('registerProperty requires an object argument');
     }
 
-    const name = definition.name;
-    if (!name || typeof name !== 'string') {
-      throw new TypeError('registerProperty: name is required and must be a string');
+    // WebIDL dictionary conversion: `name` and `inherits` are `required`, and a `DOMString`
+    // member is stringified rather than type-checked (`['--name', 3]` is `'--name,3'`).
+    if (definition.name === undefined) {
+      throw new TypeError("registerProperty: required member 'name' is undefined");
     }
+    if (definition.inherits === undefined) {
+      throw new TypeError("registerProperty: required member 'inherits' is undefined");
+    }
+    const name = String(definition.name);
+    const inherits = Boolean(definition.inherits);
 
-    if (!name.startsWith('--')) {
-      throw new SyntaxError(`CustomPropertyName: '${name}' must start with '--'`);
+    if (!name.startsWith('--') || name === '--') {
+      throw new DOMException(`CustomPropertyName: '${name}' must start with '--'`, 'SyntaxError');
     }
 
     // Extract optional fields with defaults. `syntax`/`initialValue` are
@@ -133,9 +139,14 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
     // one-character syntax "null", not the universal one.
     const hasSyntax = definition.syntax !== undefined;
     const syntax = hasSyntax ? String(definition.syntax) : '*';
-    const inherits = definition.inherits !== false; // default: true
     const hasInitialValue = definition.initialValue !== undefined;
     const initialValue = hasInitialValue ? String(definition.initialValue) : '';
+
+    // CSS Properties and Values API §3.3.2 step 2: a name registered by a script
+    // before is an error, whatever the new descriptors are.
+    if (__lumen_C._lumen_registered_properties.has(name)) {
+      throw new DOMException(`The property '${name}' has already been registered.`, 'InvalidModificationError');
+    }
 
     // BUG-531: validate `syntax`/`initialValue` against the CSS Properties
     // and Values API grammar before ever storing them — previously nothing
@@ -148,10 +159,9 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
       }
     }
 
-    // Check if already registered (override allowed per spec).
-    if (__lumen_C._lumen_registered_properties.has(name)) {
-      // Silently override or throw DOMException SyntaxError per CSS Houdini spec.
-      // Phase 0: just override.
+    // BUG-1505: the cascade reads the registration from the document, not from this Map.
+    if (typeof _lumen_register_css_property === 'function') {
+      _lumen_register_css_property(name, syntax, inherits, initialValue, hasInitialValue);
     }
 
     // Store definition.
@@ -161,15 +171,20 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
       inherits,
       initialValue
     });
+  };
 
-    // Notify native Rust code (if bindings exist).
-    if (typeof _lumen_register_css_property === 'function') {
-      try {
-        _lumen_register_css_property(name, syntax, inherits, initialValue);
-      } catch (e) {
-        // Rust bindings may fail; continue anyway.
-        console.warn('CSS.registerProperty Rust binding failed:', e);
-      }
+  // CSS.unregisterProperty(name): removes a registration made by registerProperty().
+  global.CSS.unregisterProperty = function(name) {
+    if (arguments.length < 1) {
+      throw new TypeError("Failed to execute 'unregisterProperty' on 'CSS': 1 argument required, but only 0 present.");
+    }
+    name = String(name);
+    if (!__lumen_C._lumen_registered_properties.has(name)) {
+      throw new DOMException(`The property '${name}' has not been registered.`, 'NotFoundError');
+    }
+    __lumen_C._lumen_registered_properties.delete(name);
+    if (typeof _lumen_unregister_css_property === 'function') {
+      _lumen_unregister_css_property(name);
     }
   };
 

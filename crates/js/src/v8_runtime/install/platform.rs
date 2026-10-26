@@ -945,6 +945,8 @@ pub(crate) fn install_scroll_state(
     // or a page that only ever scrolls an `overflow: clip` container (never
     // calling `getComputedStyle`) would see the cache permanently empty.
     let cs_needed_for_request = Arc::clone(&flush.computed_styles_needed);
+    let flush_for_request = flush.clone();
+    let flush_for_page = flush.clone();
     {
         let ss = Arc::clone(&flush.scroll_states);
         reg!(scope, ctx, store, "_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
@@ -1000,14 +1002,22 @@ pub(crate) fn install_scroll_state(
             let s = states.entry(nid).or_insert([0.0, 0.0, 0.0, 0.0]);
             s[0] = if is_clip("overflow-x") { 0.0 } else { x as f32 };
             s[1] = if is_clip("overflow-y") { 0.0 } else { y as f32 };
+            drop(styles);
+            drop(states);
+            // CQ-SCROLL-STATE-2: `scroll-state()` queries follow the offset.
+            flush_for_request.note_scroll_moved();
         });
     }
     // Queues a page-level scroll request from window.scrollTo/scrollBy.
     // `smooth=1` → start_smooth_scroll; `smooth=0` → scroll_to (instant).
     {
         let pps = Arc::clone(&pending_page_scrolls);
+        let flush_page = flush_for_page.clone();
         reg!(scope, ctx, store, "_lumen_request_page_scroll", move |y: f64, smooth: u32| {
             pps.lock().unwrap().push((y as f32, smooth != 0));
+            if smooth == 0 {
+                flush_page.note_scroll_moved();
+            }
         });
     }
     // Returns current page scroll Y for window.scrollY / window.pageYOffset.
@@ -1038,6 +1048,7 @@ pub(crate) fn install_scroll_state(
         let px = Arc::clone(&page_scroll_x);
         reg!(scope, ctx, store, "_lumen_request_page_scroll_x", move |x: f64| {
             px.lock().unwrap().pending = Some(x as f32);
+            flush_for_page.note_scroll_moved();
         });
         let px = Arc::clone(&page_scroll_x);
         reg!(scope, ctx, store, "_lumen_get_page_scroll_x", move || -> f64 {
@@ -1288,6 +1299,46 @@ fn generated_pseudo_style(flush: &FlushHandles, nid: u32, kind: &str) -> Option<
     Some(lumen_layout::computed_style_to_map(&style))
 }
 
+/// The computed style of one node of the `::view-transition` pseudo-tree as a property map:
+/// the UA sheet under the page's rules (CSS View Transitions L1 §6). `kind` is
+/// `view-transition` or `view-transition-<group|image-pair|old|new>(<name>)`; `copied` are the
+/// properties the group takes from the captured element once the transition is activated.
+/// Whether the node exists (a transition is active and `name` is one of its captures) is the
+/// caller's question — the shim answers it.
+fn view_transition_tree_style(
+    flush: &FlushHandles,
+    kind: &str,
+    copied: &[(String, String)],
+) -> Option<HashMap<String, String>> {
+    use lumen_layout::ViewTransitionPart as Part;
+    let (base, name) = match kind.split_once('(') {
+        Some((b, rest)) => (b, rest.strip_suffix(')')?),
+        None => (kind, ""),
+    };
+    let part = match base {
+        "view-transition" => None,
+        "view-transition-group" => Some(Part::Group),
+        "view-transition-image-pair" => Some(Part::ImagePair),
+        "view-transition-old" => Some(Part::Old),
+        "view-transition-new" => Some(Part::New),
+        _ => return None,
+    };
+    let sheet = flush.stylesheet.lock().ok()?.clone()?;
+    let sheet = flush.cssom_patched_sheet(&sheet).unwrap_or(sheet);
+    let [w, h] = *flush.viewport_size.lock().ok()?;
+    let doc = flush.doc.lock().ok()?;
+    let style = lumen_layout::compute_view_transition_tree_style(
+        &doc,
+        &sheet,
+        part,
+        name,
+        copied,
+        lumen_core::geom::Size::new(w, h),
+        false,
+    )?;
+    Some(lumen_layout::computed_style_to_map(&style))
+}
+
 /// `window.getComputedStyle` and custom-property reads off the cascade snapshot.
 #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 #[allow(clippy::too_many_arguments)]
@@ -1351,6 +1402,38 @@ pub(crate) fn install_computed_styles(
                 .collect();
             named.sort_unstable();
             serde_json::to_string(&named).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
+    // Scoped View Transitions: the rendered elements with `view-transition-scope: all`, as a
+    // JSON `[nodeIndex, …]`. Name discovery of an enclosing transition stops at them.
+    {
+        let cs = Arc::clone(&computed_styles);
+        let flush = flush.clone();
+        let needed = Arc::clone(&computed_styles_needed);
+        reg!(scope, ctx, store, "_lumen_vt_scope_roots", move || -> String {
+            needed.store(true, Ordering::Relaxed);
+            flush.maybe_flush();
+            let mut roots: Vec<u32> = cs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, m)| m.get("view-transition-scope").is_some_and(|v| v == "all"))
+                .map(|(nid, _)| *nid)
+                .collect();
+            roots.sort_unstable();
+            serde_json::to_string(&roots).unwrap_or_else(|_| "[]".to_string())
+        });
+    }
+    // CSS View Transitions L1 §6: `getComputedStyle(html, '::view-transition…')` while a
+    // transition is active. Answers the style map of one pseudo-tree node as JSON (`{}` when
+    // the kind is not one); `copied_json` is `[[property, value], …]` for the group.
+    {
+        let flush = flush.clone();
+        reg!(scope, ctx, store, "_lumen_vt_tree_style", move |kind: String, copied_json: String| -> String {
+            flush.maybe_flush();
+            let copied: Vec<(String, String)> = serde_json::from_str(&copied_json).unwrap_or_default();
+            let map = view_transition_tree_style(&flush, &kind, &copied).unwrap_or_default();
+            serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
         });
     }
     // CSSOM-6 (BUG-490): `getComputedStyle(el, pseudoElt)` — same lookup as

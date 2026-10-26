@@ -406,18 +406,23 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.text_decoration_line
             };
-            style.text_decoration_color = if inh {
-                inherited.text_decoration_color
-            } else {
-                init.text_decoration_color
-            };
-            // L3 shorthand сбрасывает также style (но не thickness — он
-            // исключён из L3 shorthand-а; см. parse_text_decoration_shorthand_q).
+            // Shorthand сбрасывает также color, style и thickness (L4 §2.1); longhand
+            // `text-decoration-line` трогает только линии.
             if prop == "text-decoration" {
+                style.text_decoration_color = if inh {
+                    inherited.text_decoration_color
+                } else {
+                    init.text_decoration_color
+                };
                 style.text_decoration_style = if inh {
                     inherited.text_decoration_style
                 } else {
                     init.text_decoration_style
+                };
+                style.text_decoration_thickness = if inh {
+                    inherited.text_decoration_thickness
+                } else {
+                    init.text_decoration_thickness
                 };
             }
         }
@@ -494,6 +499,21 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.text_underline_offset
             };
+            style.text_underline_offset_pct = if inh {
+                inherited.text_underline_offset_pct
+            } else {
+                init.text_underline_offset_pct
+            };
+        }
+        "text-decoration-skip-spaces" => {
+            style.text_decoration_skip_spaces = if inh {
+                inherited.text_decoration_skip_spaces
+            } else {
+                init.text_decoration_skip_spaces
+            };
+        }
+        "text-decoration-inset" => {
+            style.text_decoration_inset = if inh { inherited.text_decoration_inset } else { init.text_decoration_inset };
         }
         "text-decoration-skip-ink" => {
             style.text_decoration_skip_ink = if inh {
@@ -1377,6 +1397,51 @@ fn apply_css_wide_keyword_with(
         }
         "anchor-scope" => {
             style.anchor_scope = if inh_only_inherit { inherited.anchor_scope.clone() } else { init.anchor_scope.clone() };
+        }
+        "view-transition-class" => {
+            style.view_transition_class = if inh_only_inherit { inherited.view_transition_class.clone() } else { None };
+        }
+        // CSS Animations L1 §3 / CSS Transitions L1 §2: non-inherited lists, the shorthand covers
+        // every longhand. Without these arms `animation: unset` left the earlier `animation-name`
+        // in place (a page's `::view-transition-group(*) { animation: unset }` kept the UA animation).
+        "animation" | "animation-name" | "animation-duration" | "animation-timing-function" | "animation-delay"
+        | "animation-iteration-count" | "animation-direction" | "animation-fill-mode" | "animation-play-state"
+        | "animation-timeline" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            let all = prop == "animation";
+            if all || prop == "animation-name" {
+                style.animation_names = src.animation_names.clone();
+            }
+            if all || prop == "animation-duration" {
+                style.animation_durations = src.animation_durations.clone();
+            }
+            if all || prop == "animation-timing-function" {
+                style.animation_timing_functions = src.animation_timing_functions.clone();
+            }
+            if all || prop == "animation-delay" {
+                style.animation_delays = src.animation_delays.clone();
+            }
+            if all || prop == "animation-iteration-count" {
+                style.animation_iteration_counts = src.animation_iteration_counts.clone();
+            }
+            if all || prop == "animation-direction" {
+                style.animation_directions = src.animation_directions.clone();
+            }
+            if all || prop == "animation-fill-mode" {
+                style.animation_fill_modes = src.animation_fill_modes.clone();
+            }
+            if all || prop == "animation-play-state" {
+                style.animation_play_states = src.animation_play_states.clone();
+            }
+            if all || prop == "animation-timeline" {
+                style.animation_timelines = src.animation_timelines.clone();
+            }
+        }
+        "view-transition-scope" => {
+            style.view_transition_scope_all = if inh_only_inherit { inherited.view_transition_scope_all } else { false };
+        }
+        "view-transition-group" => {
+            style.view_transition_group = if inh_only_inherit { inherited.view_transition_group.clone() } else { None };
         }
         "view-transition-name" => {
             style.view_transition_name = if inh_only_inherit { inherited.view_transition_name.clone() } else { None };

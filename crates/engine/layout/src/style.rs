@@ -157,14 +157,14 @@ use adjust::{
     resolve_system_colors_in_style,
 };
 pub use property_syntax::validate_against_syntax;
-use property_syntax::apply_property_initial_values;
+use property_syntax::{apply_property_initial_values, compute_registered_values};
 // BUG-531: `CSS.registerProperty()` (`crates/js/src/css_properties_values_api.rs`)
 // is the only consumer outside `crate::style` — reachable only through this
 // re-export, since `syntax_string` itself stays private (§2.1).
 pub use syntax_string::validate_registered_property;
 pub use pseudo::{
     is_highlight_pseudo, compute_pseudo_element_style, compute_selection_style, compute_target_text_style,
-    compute_view_transition_pseudo_style, merge_pseudo_inherited, ua_quote_content, ViewTransitionPart,
+    compute_view_transition_pseudo_style, compute_view_transition_tree_style, merge_pseudo_inherited, ua_quote_content, ViewTransitionPart,
 };
 pub(in crate::style) use pseudo::pseudo_element_name;
 pub(crate) use pseudo::highlight_inherited_style;
@@ -219,10 +219,10 @@ pub use values::typography::{
     ColorScheme, CssContinue, Cursor, Direction, Display, FontFeatureSetting, FontOpticalSizing,
     FontStretch, FontStyle, font_style_to_css, FontVariantCaps, FontVariantEmoji, FontVariantLigatures,
     FontVariantNumeric, NumericSpacing, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, Overflow, TextAlign, TextAlignLast, TextDecorationLine,
-    TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
+    TextDecorationSkipInk, TextDecorationSkipSpaces, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextShadow, TextTransform, TextTransformExtra, TextCssomExtra, TextJustify, CaseLang, resolve_match_parent, resolve_match_parent_last,
     TextUnderlinePosition, UnicodeBidi, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace,
-    WhiteSpaceCollapse, BoxShadow, text_font_features,
+    WhiteSpaceCollapse, BoxShadow, text_font_features, text_variation_axes, with_text_variation_axes,
 };
 pub use values::color::{Color, ColorFloat, CssColor, SystemColor};
 // BUG-508 — CSS Color HDR L1 `dynamic-range-limit`: own module (not folded
@@ -320,7 +320,7 @@ use values::color::srgb_gamma_decode;
 use crate::scroll_timeline::ScrollAxis;
 // `expand_vars_and_env` — `pub(crate)`, её зовёт `lib.rs`; остальные видны только
 // внутри `style` и его потомков, поэтому и реэкспорт сужен до `crate::style`.
-pub(crate) use substitute::expand_vars_and_env;
+pub(crate) use substitute::{expand_custom_property_value, expand_vars_and_env};
 // `env_calls_well_formed` — публичная: ею же inline-`style` CSSOM (`crates/js`)
 // решает, принять ли значение с `env()` (BUG-514).
 pub use substitute::env_calls_well_formed;

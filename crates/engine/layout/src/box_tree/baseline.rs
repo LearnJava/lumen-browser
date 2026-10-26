@@ -508,6 +508,9 @@ fn vertical_content_baseline(b: &LayoutBox, side: BaselineSide, measurer: Option
             if matches!(b.style.display, Display::Grid | Display::InlineGrid) {
                 return b.grid_baselines.map(|(first, last)| if side == BaselineSide::First { first } else { last });
             }
+            if (b.style.column_count.is_some() || b.style.column_width.is_some()) && !b.children.is_empty() {
+                return vertical_multicol_baseline(b, side, measurer);
+            }
             // Дети с ортогональным режимом линий этой оси не дают; rendered legend fieldset'а
             // в базовой линии не участвует (HTML Rendering §15.3.13).
             let legend = b.fieldset_legend.filter(|l| l.placed).map(|l| l.idx);
@@ -561,6 +564,50 @@ fn multicol_baseline(b: &LayoutBox, side: BaselineSide, measurer: Option<&dyn Te
                 seg.iter().filter(|c| c.rect.x <= first_x + 0.5).find_map(|c| at(c))
             }
             BaselineSide::Last => seg.iter().filter_map(|c| at(c)).reduce(f32::max),
+        }
+    };
+    match side {
+        BaselineSide::First => segments.iter().find_map(|seg| segment_baseline(seg)),
+        BaselineSide::Last => segments.iter().rev().find_map(|seg| segment_baseline(seg)),
+    }
+}
+
+/// [`multicol_baseline`] для вертикального режима (`multicol_vertical`): колонки идут по y, линия
+/// отсчитывается по x. «Первая» — линия первого ребёнка первой колонки набора (самой верхней), а
+/// «последняя» — самая дальняя по блочной оси среди последних линий всех колонок: левее у
+/// `vertical-rl`, правее у `vertical-lr`.
+fn vertical_multicol_baseline(b: &LayoutBox, side: BaselineSide, measurer: Option<&dyn TextMeasurer>) -> Option<f32> {
+    use super::multicol_span::is_column_spanner;
+    let rtl = block_flow_is_rtl(&b.style);
+    let at = |c: &LayoutBox| box_baseline(c, side, measurer).map(|bl| c.rect.x - b.rect.x + bl);
+    let flow = || b.children.iter().filter(|c| is_in_flow_baseline_source(c) && is_vertical(&c.style));
+    let mut segments: Vec<Vec<&LayoutBox>> = Vec::new();
+    let mut in_columns = false;
+    for c in flow() {
+        if is_column_spanner(c) {
+            segments.push(vec![c]);
+            in_columns = false;
+        } else if in_columns {
+            if let Some(seg) = segments.last_mut() {
+                seg.push(c);
+            }
+        } else {
+            segments.push(vec![c]);
+            in_columns = true;
+        }
+    }
+    let segment_baseline = |seg: &[&LayoutBox]| -> Option<f32> {
+        if seg.len() == 1 && is_column_spanner(seg[0]) {
+            return at(seg[0]);
+        }
+        match side {
+            BaselineSide::First => {
+                let first_y = seg.iter().map(|c| c.rect.y).fold(f32::INFINITY, f32::min);
+                seg.iter().filter(|c| c.rect.y <= first_y + 0.5).find_map(|c| at(c))
+            }
+            BaselineSide::Last => {
+                seg.iter().filter_map(|c| at(c)).reduce(if rtl { f32::min } else { f32::max })
+            }
         }
     };
     match side {

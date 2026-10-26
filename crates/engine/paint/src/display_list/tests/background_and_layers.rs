@@ -434,8 +434,8 @@ use super::text_and_images::build;
 
     #[test]
     fn background_image_paint_emits_draw_background_image_with_paint_src() {
-        // CSS Paint API (Houdini) Phase 0 — `background-image: paint(name)` must emit
-        // DrawBackgroundImage with src prefixed "paint:" for renderer identification.
+        // CSS Paint API (Houdini) — `background-image: paint(name)` emits a DrawBackgroundImage
+        // keyed `paint:<node>:<hash>` with the tile size resolved (here: the 80×40 box).
         let dl = build(
             "<div></div>",
             "div { width: 80px; height: 40px; background-image: paint(my-worklet); }",
@@ -443,10 +443,25 @@ use super::text_and_images::build;
         let paint_bg = dl.iter().find(|c| {
             matches!(c, DisplayCommand::DrawBackgroundImage { src, .. } if src.starts_with("paint:"))
         });
-        assert!(paint_bg.is_some(), "paint() must emit DrawBackgroundImage with 'paint:' src");
-        if let Some(DisplayCommand::DrawBackgroundImage { src, .. }) = paint_bg {
-            assert_eq!(src, "paint:my-worklet", "src must be paint:<name>");
-        }
+        let Some(DisplayCommand::DrawBackgroundImage { src, size, .. }) = paint_bg else {
+            panic!("paint() must emit DrawBackgroundImage with 'paint:' src");
+        };
+        assert_eq!(
+            *size,
+            BackgroundSize::Length(lumen_layout::BgSizeAxis::Px(80.0), lumen_layout::BgSizeAxis::Px(40.0)),
+            "an image without intrinsic size gets the explicit tile size"
+        );
+        let src = src.clone();
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(&format!(
+            "{}div {{ width: 80px; height: 40px; background-image: paint(my-worklet); }}",
+            super::text_and_images::BODY_RESET
+        ));
+        let layout = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let reqs = crate::collect_paint_requests(&layout, 1.0);
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].key, src, "collector and emitter must agree on the key");
+        assert_eq!((reqs[0].name.as_str(), reqs[0].width, reqs[0].height), ("my-worklet", 80.0, 40.0));
     }
 
     #[test]

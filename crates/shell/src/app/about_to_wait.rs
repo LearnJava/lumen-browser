@@ -628,6 +628,10 @@ impl Lumen {
             }
         }
 
+        // ── Houdini Paint API: bitmaps of `background-image: paint()` layers ──
+        #[cfg(feature = "v8")]
+        self.pump_paint_worklet();
+
         // ── FONTLOAD-6: script-constructed FontFace → rendering (BUG-467) ─────
         // A `new FontFace(...)` whose `.load()` validated while it was a member
         // of some `FontFaceSet` never reached `lumen_font::FontRegistry` before
@@ -1615,6 +1619,7 @@ impl Lumen {
                 }
             }
             if !cmd_ids.is_empty() {
+                self.restyle_scroll_state_queries();
                 self.issue_container_scroll_command(&cmd_ids);
             }
         }

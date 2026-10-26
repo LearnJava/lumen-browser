@@ -27,6 +27,7 @@ pub mod idn;
 pub mod json;
 pub mod memory_pressure;
 pub mod module;
+pub mod paint_worklet;
 pub mod net_error;
 #[cfg(test)]
 mod net_error_corpus;
@@ -69,6 +70,7 @@ pub use form::{
 pub use json::{parse as parse_json, JsonError, JsonResult, JsonValue};
 pub use geom::{Point, Rect, Size};
 pub use module::Module;
+pub use paint_worklet::{PaintImage, PaintRequest};
 pub use sandbox::{parse_sandbox_value, SandboxFlags};
 pub use sri::{DigestProvider, IntegrityList, SriAlgorithm, SriError, SriHash, SriResult};
 pub use url::Url;

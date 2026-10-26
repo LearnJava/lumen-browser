@@ -55,7 +55,9 @@ pub mod backend_probe;
 pub mod renderer;
 pub mod scroll_cache;
 pub mod scroll_snap;
+pub(crate) mod shaped_width;
 pub mod svg_path;
+pub mod text_gamma;
 // Only the backends render `DrawTextStroke`; without one nothing calls `expand_all`.
 #[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg", feature = "cpu-render"))]
 pub(crate) mod text_stroke;
@@ -362,6 +364,7 @@ pub use compositor::{
     LayerTree, ThreadedCompositor, ThreadedCompositorHandle,
 };
 pub use display_list::{
+    PaintRequest, collect_paint_requests,
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_dpr_cached, EmitCacheStats, SubtreeEmitCache,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
@@ -429,6 +432,9 @@ pub struct FontMeasurer<'a> {
     normal_ascent_units: u16,
     normal_descent_units: u16,
     normal_line_gap_units: u16,
+    /// Байты шрифта и их отпечаток — для шейпинга ширин (TEXTQ-5).
+    bytes: &'a [u8],
+    fingerprint: u64,
 }
 
 /// cap-height в font units: `OS/2.sCapHeight` (v2+), иначе `0.7 em` — приближение
@@ -440,6 +446,16 @@ fn cap_height_units_of(os2: Option<&lumen_font::os2::Os2>, units_per_em: u16) ->
 }
 
 impl<'a> FontMeasurer<'a> {
+    /// Шрифт для шейпинга ширин (TEXTQ-5).
+    fn shape_face(&self, size_adjust: f32) -> shaped_width::ShapeFace<'a> {
+        shaped_width::ShapeFace {
+            bytes: self.bytes,
+            fingerprint: self.fingerprint,
+            units_per_em: self.units_per_em,
+            size_adjust,
+        }
+    }
+
     pub fn new(font: &lumen_font::Font<'a>) -> Result<Self, FontError> {
         let head = font.head()?;
         let hmtx = font.hmtx()?;
@@ -470,6 +486,8 @@ impl<'a> FontMeasurer<'a> {
             hmtx, cmap, units_per_em,
             ascent_units, descent_units, x_height_units, cap_height_units, line_gap_units,
             normal_ascent_units, normal_descent_units, normal_line_gap_units,
+            bytes: font.data(),
+            fingerprint: lumen_font::font_fingerprint(font.data()),
         })
     }
 }
@@ -507,6 +525,10 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
             // Fallback для неизвестных глифов: ~0.5em
             None => font_size_px * 0.5,
         }
+    }
+
+    fn shaped_width(&self, text: &str, params: &lumen_layout::ShapeParams<'_>) -> Option<f32> {
+        shaped_width::sub_run_width(&self.shape_face(1.0), text, params)
     }
 
     fn descent_px(&self, font_size_px: f32) -> f32 {
@@ -627,9 +649,24 @@ struct OwnedFontMetrics {
     normal_ascent_units: u16,
     normal_descent_units: u16,
     normal_line_gap_units: u16,
+    /// Байты шрифта для шейпинга ширин (TEXTQ-5) и их отпечаток. `None` —
+    /// шрифт крупнее [`shaped_width::MAX_SHAPEABLE_FONT_BYTES`]: он меряется
+    /// посимвольно.
+    shape_bytes: Option<(Arc<[u8]>, u64)>,
 }
 
 impl OwnedFontMetrics {
+    /// Шрифт для шейпинга ширин с `size-adjust` face-а; `None` — шейпить нечем.
+    fn shape_face(&self, size_adjust: f32) -> Option<shaped_width::ShapeFace<'_>> {
+        let (bytes, fingerprint) = self.shape_bytes.as_ref()?;
+        Some(shaped_width::ShapeFace {
+            bytes,
+            fingerprint: *fingerprint,
+            units_per_em: self.units_per_em,
+            size_adjust,
+        })
+    }
+
     fn from_bytes(bytes: &[u8]) -> Result<Self, FontError> {
         let font = lumen_font::Font::parse(bytes)?;
         let head = font.head()?;
@@ -684,6 +721,8 @@ impl OwnedFontMetrics {
             normal_ascent_units,
             normal_descent_units,
             normal_line_gap_units,
+            shape_bytes: (bytes.len() <= shaped_width::MAX_SHAPEABLE_FONT_BYTES)
+                .then(|| (Arc::from(bytes), lumen_font::font_fingerprint(bytes))),
         })
     }
 
@@ -1302,6 +1341,7 @@ impl MultiFontMeasurer {
                 normal_ascent_units: 0,
                 normal_descent_units: 0,
                 normal_line_gap_units: 0,
+                shape_bytes: None,
             },
             unicode_ranges: Vec::new(),
             ascent_override: None,
@@ -1313,6 +1353,67 @@ impl MultiFontMeasurer {
             .entry(family.to_ascii_lowercase())
             .or_default()
             .push(slot);
+    }
+}
+
+/// Шрифт, в который каскад `font-family` отправил символ при измерении
+/// shaped run-а ([`MultiFontMeasurer::resolve_shape_face`]).
+enum ResolvedFace<'a> {
+    /// @font-face-слот (со своим `size-adjust`).
+    Slot(&'a FontFaceSlot),
+    /// Системный face (generic или конкретное семейство).
+    System(Arc<OwnedFontMetrics>),
+    /// Ни одна семья не покрыла символ — bundled Inter.
+    Bundled,
+}
+
+impl ResolvedFace<'_> {
+    /// Что склеивает соседние символы в один под-run: тот же шрифт с тем же
+    /// `size-adjust`. Лигатура не может пересечь границу двух face-ов.
+    fn identity(&self, bundled: &FontMeasurer<'_>) -> Option<(u64, u32)> {
+        match self {
+            Self::Slot(slot) => {
+                let (_, fp) = slot.metrics.shape_bytes.as_ref()?;
+                Some((*fp, slot.size_adjust.unwrap_or(1.0).to_bits()))
+            }
+            Self::System(m) => Some((m.shape_bytes.as_ref()?.1, 1.0_f32.to_bits())),
+            Self::Bundled => Some((bundled.fingerprint, 1.0_f32.to_bits())),
+        }
+    }
+
+    fn shape_face<'s>(&'s self, bundled: &'s FontMeasurer<'_>) -> Option<shaped_width::ShapeFace<'s>> {
+        match self {
+            Self::Slot(slot) => slot.metrics.shape_face(slot.size_adjust.unwrap_or(1.0)),
+            Self::System(m) => m.shape_face(1.0),
+            Self::Bundled => Some(bundled.shape_face(1.0)),
+        }
+    }
+}
+
+impl MultiFontMeasurer {
+    /// Face, которым рендер нарисует `ch`: тот же порядок, что у
+    /// [`TextMeasurer::char_width_with_families`] — по семьям, внутри семьи
+    /// @font-face-слоты (с `unicode-range`), затем системное имя, иначе
+    /// bundled Inter. `families_lower` — уже в нижнем регистре.
+    fn resolve_shape_face(&self, ch: char, families_lower: &[String]) -> ResolvedFace<'_> {
+        let cp = ch as u32;
+        for lower in families_lower {
+            if let Some(slots) = self.faces.get(lower) {
+                for slot in slots {
+                    if codepoint_in_ranges(cp, &slot.unicode_ranges)
+                        && slot.metrics.try_char_width(ch, 1.0).is_some()
+                    {
+                        return ResolvedFace::Slot(slot);
+                    }
+                }
+            }
+            if let Some(m) = self.system_metrics(lower)
+                && m.try_char_width(ch, 1.0).is_some()
+            {
+                return ResolvedFace::System(m);
+            }
+        }
+        ResolvedFace::Bundled
     }
 }
 
@@ -1381,6 +1482,36 @@ impl TextMeasurer for MultiFontMeasurer {
             }
         }
         self.fallback.char_width(ch, font_size_px)
+    }
+
+    /// Ширина shaped run-а (TEXTQ-5): символы режутся на под-run-ы по face-у,
+    /// в который их отправил каскад семей, каждый шейпится целиком (кернинг и
+    /// лигатуры внутри под-run-а), ширины складываются. `None` — какой-то
+    /// face шейпить нельзя (крупный CJK-шрифт, битый файл): вызывающий код
+    /// меряет весь run посимвольно, а не половину так, половину этак.
+    fn shaped_width(&self, text: &str, params: &lumen_layout::ShapeParams<'_>) -> Option<f32> {
+        let lowered: Vec<String> = params.families.iter().map(|f| f.to_ascii_lowercase()).collect();
+        let mut total = 0.0_f32;
+        // Текущий под-run: face, его идентичность и начало в `text`.
+        let mut current: Option<(ResolvedFace<'_>, (u64, u32), usize)> = None;
+        for (idx, ch) in text.char_indices() {
+            let face = self.resolve_shape_face(ch, &lowered);
+            let id = face.identity(&self.fallback)?;
+            match &current {
+                Some((_, cur_id, _)) if *cur_id == id => {}
+                Some((cur_face, _, start)) => {
+                    let sf = cur_face.shape_face(&self.fallback)?;
+                    total += shaped_width::sub_run_width(&sf, &text[*start..idx], params)?;
+                    current = Some((face, id, idx));
+                }
+                None => current = Some((face, id, idx)),
+            }
+        }
+        if let Some((face, _, start)) = &current {
+            let sf = face.shape_face(&self.fallback)?;
+            total += shaped_width::sub_run_width(&sf, &text[*start..], params)?;
+        }
+        Some(total)
     }
 
     fn descent_px(&self, font_size_px: f32) -> f32 {

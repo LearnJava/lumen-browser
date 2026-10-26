@@ -268,6 +268,9 @@ const PAGES: &[&str] = &[
     // SVG-CLIPPATH: `clip-path: url(#id)` на `<clipPath>` (HTML-боксы, `<g>`, SVG-фигуры, `clip-rule`);
     // без текста, Edge совпадает на 0,04 %.
     "165-svg-clip-path",
+    // FIELDSET-LEGEND-3: `<fieldset>` с `column-count`/`column-width` — legend на границе, колонки ниже него;
+    // без текста.
+    "167-fieldset-multicol",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

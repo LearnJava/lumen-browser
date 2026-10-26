@@ -227,6 +227,88 @@ use super::*;
         assert_eq!(s.width, None);
     }
 
+    // ── BUG-1507: typed parameters, `returns`, conditional groups ──────────
+
+    /// Computed `width` in px of `.box` under `css`, `None` when it stays `auto`.
+    fn fn_width(css: &str) -> Option<f32> {
+        let s = cascade_at("<div class=\"box\"></div>", css, &[0]);
+        s.width.and_then(|w| w.resolve(16.0, None, Size::new(800.0, 600.0)))
+    }
+
+    #[test]
+    fn css_function_typed_parameter_with_default_and_returns() {
+        assert_eq!(
+            fn_width(
+                "@function --f(--a <length>: 3px) returns <length> { result: calc(var(--a) * 2); }                  .box { width: --f(); }"
+            ),
+            Some(6.0)
+        );
+        assert_eq!(
+            fn_width("@function --f(--a <length>) { result: var(--a); } .box { width: --f(5px); }"),
+            Some(5.0)
+        );
+        assert_eq!(
+            fn_width(
+                "@function --f(--a type(<length> | auto)) { result: var(--a); } .box { width: --f(7px); }"
+            ),
+            Some(7.0)
+        );
+    }
+
+    #[test]
+    fn css_function_typed_argument_is_computed() {
+        assert_eq!(
+            fn_width("@function --f(--a <length>) { result: var(--a); } .box { width: --f(calc(100px + 1px)); }"),
+            Some(101.0)
+        );
+    }
+
+    #[test]
+    fn css_function_type_mismatch_leaves_parameter_unbound() {
+        // The mismatching argument is IACVT, so `var(--a, 9px)` takes its fallback.
+        assert_eq!(
+            fn_width("@function --f(--a <length>) { result: var(--a, 9px); } .box { width: --f(red); }"),
+            Some(9.0)
+        );
+        // …or the default when one is declared.
+        assert_eq!(
+            fn_width("@function --f(--a <length>: 4px) { result: var(--a, 9px); } .box { width: --f(red); }"),
+            Some(4.0)
+        );
+    }
+
+    #[test]
+    fn css_function_returns_type_mismatch_invalidates_call() {
+        assert_eq!(fn_width("@function --f() returns <length> { result: 12s; } .box { width: --f(); }"), None);
+        assert_eq!(fn_width("@function --f() returns <length> { result: 7px; } .box { width: --f(); }"), Some(7.0));
+    }
+
+    #[test]
+    fn css_function_default_sees_earlier_parameters() {
+        assert_eq!(
+            fn_width(
+                "@function --f(--a: 5px, --b <length>: calc(var(--a) + 1px)) { result: var(--b); }                  .box { width: --f(); }"
+            ),
+            Some(6.0)
+        );
+    }
+
+    #[test]
+    fn css_function_media_group_in_body_applies_when_it_holds() {
+        assert_eq!(
+            fn_width("@function --f() { result: 1px; @media all { result: 5px; } } .box { width: --f(); }"),
+            Some(5.0)
+        );
+        assert_eq!(
+            fn_width("@function --f() { result: 1px; @media not all { result: 5px; } } .box { width: --f(); }"),
+            Some(1.0)
+        );
+        assert_eq!(
+            fn_width("@function --f() { result: 1px; @supports (width: 1px) { result: 3px; } } .box { width: --f(); }"),
+            Some(3.0)
+        );
+    }
+
     // ── BUG-519: unsupported nested at-rule inside `@function`/`@mixin` body
     // must not corrupt parsing of the declarations after it ─────────────────
 
@@ -452,6 +534,44 @@ use super::*;
         let css = format!("{imported} {importer}");
         let s = cascade_at("<div id=\"target\"></div>", &css, &[0]);
         assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    // ── `@mixin` conditional groups and invalid parameter lists (BUG-1508) ──
+
+    fn mixin_color(css: &str) -> Color {
+        cascade_at("<div class=\"box\"></div>", css, &[0]).color
+    }
+
+    const GREEN: Color = Color { r: 0, g: 128, b: 0, a: 255 };
+
+    #[test]
+    fn css_mixin_media_inside_result_applies_when_it_holds() {
+        // Probe 1 of BUG-1508.
+        let css = |cond: &str| {
+            format!(
+                "@mixin --m() {{ @result {{ color: red; @media {cond} {{ color: green; }} }} }}                  .box {{ @apply --m; }}"
+            )
+        };
+        assert_eq!(mixin_color(&css("all")), GREEN);
+        assert_eq!(mixin_color(&css("not all")), Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_mixin_groups_wrap_result_and_locals_in_source_order() {
+        // `mixin-conditionals.html` m1/m3/m5: a group around `@result`, around
+        // locals, and a bare local that overrides an earlier grouped one.
+        let m1 = "@mixin --m() { @result { color: red; } @media all { @result { color: green; } }                   @media not all { @result { color: red; } } } .box { @apply --m; }";
+        assert_eq!(mixin_color(m1), GREEN);
+        let m3 = "@mixin --m() { --c: red; @media all { --c: green; } @supports (color: green) { --d: blue; }                   @media not all { --c: red; } @result { color: var(--c); } } .box { @apply --m; }";
+        assert_eq!(mixin_color(m3), GREEN);
+        let m5 = "@mixin --m() { @media all { --c: pink; } --c: green; @result { color: var(--c); } }                   .box { @apply --m; }";
+        assert_eq!(mixin_color(m5), GREEN);
+    }
+
+    #[test]
+    fn css_mixin_invalid_parameter_list_keeps_the_earlier_definition() {
+        let css = "@mixin --m() { @result { color: green; } }                    @mixin --m(junk-in-parameter-list) { @result { color: red; } } .box { @apply --m; }";
+        assert_eq!(mixin_color(css), GREEN);
     }
 
     // ── `scrollbar-gutter` (BUG-505): `stable && both-edges?`, order-independent ──

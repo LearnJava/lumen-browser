@@ -1288,6 +1288,11 @@ impl<'a> Parser<'a> {
         let mut top_level_order: Vec<TopLevelRuleKind> = Vec::new();
         let mut top_level_spans: Vec<usize> = Vec::new();
         let mut block_seq = 0usize;
+        // CSS Cascade 4 §2.2 / Namespaces 3: `@import` is valid only before
+        // every rule except `@charset`, `@layer` statements and other
+        // `@import`s; `@namespace` also closes the `@import` window.
+        let mut seen_other = false;
+        let mut seen_namespace = false;
         loop {
             self.skip_ws_and_comments();
             // CSS Syntax §5.4.1 «consume a list of rules» (top-level): CDO/CDC
@@ -1319,7 +1324,21 @@ impl<'a> Parser<'a> {
                     self.recover_qualified_rule();
                 }
                 Some('@') => {
+                    let at_name: String = self.rest()[1..]
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                        .collect::<String>()
+                        .to_ascii_lowercase();
                     let primary = self.parse_at_rule();
+                    match &primary {
+                        AtRuleOutcome::Import(_) | AtRuleOutcome::LayerNames(_) => {}
+                        AtRuleOutcome::None => match at_name.as_str() {
+                            "import" | "layer" | "charset" => {}
+                            "namespace" => seen_namespace = true,
+                            _ => seen_other = true,
+                        },
+                        _ => seen_other = true,
+                    }
                     // Primary-outcome + at-rules, всплывшие из тела top-level
                     // conditional-group rule (сейчас @container) через `bubbled`.
                     let mut outcomes = std::mem::take(&mut self.bubbled);
@@ -1337,7 +1356,11 @@ impl<'a> Parser<'a> {
                                 media_rules.push(m);
                                 top_level_order.push(TopLevelRuleKind::Media);
                             }
-                            AtRuleOutcome::Import(i) => imports.push(i),
+                            AtRuleOutcome::Import(i) => {
+                                if !(seen_other || seen_namespace) {
+                                    imports.push(i);
+                                }
+                            }
                             AtRuleOutcome::FontFace(f) => font_faces.push(*f),
                             AtRuleOutcome::FontPaletteValues(fp) => {
                                 font_palette_values.push(fp)
@@ -1388,6 +1411,7 @@ impl<'a> Parser<'a> {
                 Some(_) => {
                     let before = self.pos;
                     if let Some((rule, nested, nested_at)) = self.parse_rule() {
+                        seen_other = true;
                         rules.push(rule);
                         top_level_order.push(TopLevelRuleKind::Style);
                         // CSS Nesting L1: flat-expanded nested rules, each its own

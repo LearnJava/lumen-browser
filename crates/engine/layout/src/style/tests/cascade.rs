@@ -643,6 +643,20 @@ use super::*;
         assert!((s.font_size - 20.0 * 0.83).abs() < 1e-4, "font_size={}", s.font_size);
     }
 
+    #[test]
+    fn rt_gets_ua_half_font_size_and_rtc_does_not_halve_twice() {
+        // BUG-1520: CSS Ruby 1 `rt, rtc { font-size: 50% }`, `rtc > rt` — inherit.
+        let css = "body { font-size: 40px; }";
+        let rt = cascade_at("<ruby>a<rt>x</rt></ruby>", css, &[0, 1]);
+        assert!((rt.font_size - 20.0).abs() < 1e-4, "rt font_size={}", rt.font_size);
+        let rtc = cascade_at("<ruby>a<rtc><rt>x</rt></rtc></ruby>", css, &[0, 1]);
+        assert!((rtc.font_size - 20.0).abs() < 1e-4, "rtc font_size={}", rtc.font_size);
+        let rt_in_rtc = cascade_at("<ruby>a<rtc><rt>x</rt></rtc></ruby>", css, &[0, 1, 0]);
+        assert!((rt_in_rtc.font_size - 20.0).abs() < 1e-4, "rt in rtc font_size={}", rt_in_rtc.font_size);
+        let author = cascade_at("<ruby>a<rt>x</rt></ruby>", "rt { font-size: 12px; }", &[0, 1]);
+        assert!((author.font_size - 12.0).abs() < 1e-4);
+    }
+
     // ── `all` shorthand (CSS Cascade L4 §3.2, GAP-CSSALL) ────────────────
 
     #[test]
@@ -1329,17 +1343,28 @@ use super::*;
     #[test]
     fn parse_paint_function_basic() {
         // CSS Paint API (Houdini) — parse paint(name) function.
-        assert_eq!(parse_paint_function("paint(my-paint)"), Some("my-paint".to_string()));
-        assert_eq!(parse_paint_function("paint('my-paint')"), Some("my-paint".to_string()));
-        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint(my-paint)"), Some(("my-paint".to_string(), vec![])));
+        assert_eq!(parse_paint_function("paint('my-paint')"), Some(("my-paint".to_string(), vec![])));
+        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some(("my-paint".to_string(), vec![])));
+    }
+
+    #[test]
+    fn parse_paint_function_arguments() {
+        // `paint(name, arg…)`: top-level commas split, nested ones (`rgb(1, 2, 3)`) and quoted ones stay.
+        assert_eq!(
+            parse_paint_function("paint(foo, 10px, rgb(1, 2, 3), 'a,b')"),
+            Some(("foo".to_string(), vec!["10px".into(), "rgb(1, 2, 3)".into(), "'a,b'".into()]))
+        );
+        assert_eq!(parse_paint_function("paint(foo,)"), None);
+        assert_eq!(parse_paint_function("paint(foo, bar(1)"), None);
     }
 
     #[test]
     fn parse_paint_function_with_whitespace() {
         // paint() name trimmed; outer whitespace ignored, inner whitespace preserved.
-        assert_eq!(parse_paint_function("  paint(test)  "), Some("test".to_string()));
+        assert_eq!(parse_paint_function("  paint(test)  "), Some(("test".to_string(), vec![])));
         // Interior whitespace is trimmed during parsing (inner trim).
-        assert_eq!(parse_paint_function("paint( test )"), Some("test".to_string()));
+        assert_eq!(parse_paint_function("paint( test )"), Some(("test".to_string(), vec![])));
     }
 
     #[test]
@@ -1356,7 +1381,7 @@ use super::*;
         // CSS Paint API (Houdini) — `background-image: paint(name)` must produce BackgroundImage::Paint.
         let s = cascade_at("<div></div>", "div { background-image: paint(my-worklet); }", &[0]);
         assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("my-worklet".to_string()));
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint { name: "my-worklet".to_string(), args: vec![] });
     }
 
     #[test]
@@ -1364,7 +1389,7 @@ use super::*;
         // paint("name") with double-quotes must strip quotes and produce Paint("name").
         let s = cascade_at("<div></div>", r#"div { background-image: paint("checker"); }"#, &[0]);
         assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("checker".to_string()));
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint { name: "checker".to_string(), args: vec![] });
     }
 
     #[test]
@@ -1896,6 +1921,64 @@ use super::*;
         // Originating compound must match the document element.
         let css = "body::view-transition-new(*) { animation-duration: 0s; }";
         assert!(view_transition_style(css, ViewTransitionPart::New, "root").is_none());
+    }
+
+    fn vt_tree_map(
+        css: &str,
+        part: Option<ViewTransitionPart>,
+        name: &str,
+        copied: &[(String, String)],
+    ) -> std::collections::HashMap<String, String> {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let html = doc.create_element(lumen_dom::QualName::html("html"));
+        doc.append_child(root, html);
+        let sheet = lumen_css_parser::parse(css);
+        let vp = lumen_core::geom::Size { width: 800.0, height: 600.0 };
+        let s = compute_view_transition_tree_style(&doc, &sheet, part, name, copied, vp, false)
+            .expect("the UA sheet always styles the tree");
+        crate::computed_style_to_map(&s)
+    }
+
+    #[test]
+    fn view_transition_tree_ua_sheet_without_author_rules() {
+        let m = |part, name| vt_tree_map("", part, name, &[]);
+        assert_eq!(m(None, "root")["position"], "absolute");
+        let group = m(Some(ViewTransitionPart::Group), "hero");
+        assert_eq!(group["position"], "absolute");
+        assert_eq!(group["animation-name"], "-ua-view-transition-group-anim-hero");
+        assert_eq!(group["animation-duration"], "0.25s");
+        assert_eq!(group["animation-fill-mode"], "both");
+        let pair = m(Some(ViewTransitionPart::ImagePair), "hero");
+        assert_eq!(pair["position"], "absolute");
+        assert_eq!(pair["isolation"], "isolate");
+        // `inherit` reads the group's value.
+        assert_eq!(pair["animation-duration"], "0.25s");
+        let old = m(Some(ViewTransitionPart::Old), "hero");
+        assert_eq!(old["position"], "absolute");
+        assert_eq!(old["mix-blend-mode"], "plus-lighter");
+        assert_eq!(old["animation-name"], "-ua-view-transition-fade-out");
+        assert_eq!(m(Some(ViewTransitionPart::New), "hero")["animation-name"], "-ua-view-transition-fade-in");
+    }
+
+    #[test]
+    fn view_transition_tree_author_overrides_ua_whatever_the_specificity() {
+        let css = "::view-transition-image-pair(hero) { position: fixed; }                   ::view-transition-group(*) { animation-duration: 2s; }";
+        let pair = vt_tree_map(css, Some(ViewTransitionPart::ImagePair), "hero", &[]);
+        assert_eq!(pair["position"], "fixed");
+        // Image pair `inherit`s the author-set group duration.
+        assert_eq!(pair["animation-duration"], "2s");
+        let other = vt_tree_map(css, Some(ViewTransitionPart::ImagePair), "x", &[]);
+        assert_eq!(other["position"], "absolute");
+    }
+
+    #[test]
+    fn view_transition_group_takes_copied_properties() {
+        let copied = [("mix-blend-mode".to_string(), "multiply".to_string())];
+        let group = vt_tree_map("", Some(ViewTransitionPart::Group), "target", &copied);
+        assert_eq!(group["mix-blend-mode"], "multiply");
+        let plain = vt_tree_map("", Some(ViewTransitionPart::Group), "target", &[]);
+        assert_eq!(plain["mix-blend-mode"], "normal");
     }
 
     #[test]

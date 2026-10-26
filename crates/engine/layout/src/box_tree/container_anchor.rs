@@ -12,21 +12,21 @@ use crate::style::{
 };
 use std::collections::HashSet;
 
-/// The nodes whose `overflow` goes to the viewport: the root element, and `body` while the
-/// root's own `overflow` is `visible` (CSS Overflow 3 §3.5).
-fn viewport_propagating_nodes(root: &LayoutBox) -> HashSet<NodeId> {
+/// The nodes whose `overflow` goes to the viewport: the root element (first), and `body` while
+/// the root's own `overflow` is `visible` (CSS Overflow 3 §3.5).
+fn viewport_propagating_nodes(root: &LayoutBox) -> Vec<NodeId> {
     fn first_box(b: &LayoutBox) -> Option<&LayoutBox> {
         b.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip))
     }
-    let mut out = HashSet::new();
+    let mut out = Vec::new();
     // `root` is the document box; its first real child is `html`, whose first is `body`.
     let Some(html) = first_box(root) else { return out };
-    out.insert(html.node);
+    out.push(html.node);
     let visible = |s: &ComputedStyle| matches!(s.overflow_x, Overflow::Visible) && matches!(s.overflow_y, Overflow::Visible);
     if visible(&html.style)
         && let Some(body) = first_box(html)
     {
-        out.insert(body.node);
+        out.push(body.node);
     }
     out
 }
@@ -129,7 +129,7 @@ fn apply_container_inner(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
     counters: &CounterMap,
-    propagating: &HashSet<NodeId>,
+    propagating: &[NodeId],
     boxless: &mut HashMap<NodeId, Arc<ComputedStyle>>,
     sweep: Option<&StyleSweep>,
     pending: &mut HashMap<NodeId, Option<Arc<ContainerContext>>>,
@@ -704,7 +704,7 @@ fn box_context(
     parent_h: f32,
     content: (f32, f32),
     std_props: bool,
-    propagating: &HashSet<NodeId>,
+    propagating: &[NodeId],
     parent: Option<Arc<ContainerContext>>,
 ) -> ContainerContext {
     let size_container = !matches!(b.style.container_type, ContainerType::Normal);
@@ -723,7 +723,15 @@ fn box_context(
             ineligible: size_container && crate::style::size_containment_ineligible(b.style.display),
         },
         scroll_state: if b.style.container_scroll_state {
-            crate::scroll_state::scroll_state_info(b, propagating.contains(&b.node))
+            crate::scroll_state::scroll_state_info(
+                b,
+                match propagating.iter().position(|&n| n == b.node) {
+                    Some(0) => crate::scroll_state::ViewportRole::Root,
+                    Some(_) => crate::scroll_state::ViewportRole::Propagated,
+                    None => crate::scroll_state::ViewportRole::None,
+                },
+                viewport,
+            )
         } else {
             ScrollStateInfo::default()
         },
@@ -764,7 +772,7 @@ struct StyleSweep<'a> {
     /// Some query reads a standard property: contexts carry the serialized computed style.
     std_props: bool,
     boxed: HashSet<NodeId>,
-    propagating: &'a HashSet<NodeId>,
+    propagating: &'a [NodeId],
     /// Boxed elements whose parent element owns no box: the context of that parent, which
     /// the box walk (it sees the box of the grandparent) would otherwise miss.
     through_boxless: std::cell::RefCell<HashMap<NodeId, ContainerCtx>>,

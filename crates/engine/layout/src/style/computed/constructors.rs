@@ -62,10 +62,13 @@ impl ComputedStyle {
             text_fill_color: CssColor::CurrentColor,
             text_stroke_width: 0.0,
             text_stroke_color: CssColor::CurrentColor,
-            text_emphasis_position: TextEmphasisPosition::OverRight,
+            text_emphasis_position: TextEmphasisPosition::Auto,
             text_underline_position: TextUnderlinePosition::Auto,
             text_underline_offset: None,
             text_decoration_skip_ink: TextDecorationSkipInk::Auto,
+            text_underline_offset_pct: 0.0,
+            text_decoration_skip_spaces: TextDecorationSkipSpaces::StartEnd,
+            text_decoration_inset: None,
             width: None,
             height: None,
             min_width: None,
@@ -413,6 +416,9 @@ impl ComputedStyle {
             anchor_bottom: None,
             anchor_left: None,
             view_transition_name: None,
+            view_transition_class: None,
+            view_transition_group: None,
+            view_transition_scope_all: false,
             quotes: Quotes::Auto,
         }
     }
@@ -480,6 +486,9 @@ impl ComputedStyle {
             text_underline_position: inherited.text_underline_position,
             text_underline_offset: inherited.text_underline_offset,
             text_decoration_skip_ink: inherited.text_decoration_skip_ink,
+            text_underline_offset_pct: inherited.text_underline_offset_pct,
+            text_decoration_skip_spaces: inherited.text_decoration_skip_spaces,
+            text_decoration_inset: None,
             accent_color: inherited.accent_color,
             color_scheme: inherited.color_scheme,
             // CSS Color HDR L1 §2: dynamic-range-limit is inherited. BUG-508.
@@ -880,6 +889,9 @@ impl ComputedStyle {
             anchor_bottom: None,
             anchor_left: None,
             view_transition_name: None,
+            view_transition_class: None,
+            view_transition_group: None,
+            view_transition_scope_all: false,
             // CSS Generated Content L3 §3.2 — quotes inherited.
             quotes: inherited.quotes.clone(),
         }

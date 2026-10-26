@@ -80,6 +80,33 @@ fn is_fragmentable_grid(b: &LayoutBox, container: &ComputedStyle) -> bool {
         })
 }
 
+/// CSS Multicol L1 §3 — the used `column-count` of a container whose content box is
+/// `content_width` wide in the inline axis, from `column-count` and `column-width`.
+pub(super) fn used_column_count(s: &ComputedStyle, em: f32, content_width: f32, col_gap: f32, viewport: Size) -> u32 {
+    (match (s.column_count, &s.column_width) {
+        (Some(n), Some(w_len)) => {
+            if let Some(w) = w_len.resolve(em, Some(content_width), viewport) {
+                let n_from_w = ((content_width + col_gap) / (w + col_gap)).floor() as u32;
+                n.min(n_from_w).max(1)
+            } else {
+                n.max(1)
+            }
+        }
+        (Some(n), None) => n.max(1),
+        (None, Some(w_len)) => {
+            if let Some(w) = w_len.resolve(em, Some(content_width), viewport)
+                && w > 0.0
+            {
+                ((content_width + col_gap) / (w + col_gap)).floor() as u32
+            } else {
+                1
+            }
+        }
+        (None, None) => 1,
+    })
+    .max(1)
+}
+
 /// LAYOUT-2 срез 7: pure precompute for the multicol dispatch arm — column
 /// count/width, `column-fill` mode, and the split of flow children into
 /// segments (by `column-span: all` boundaries) with each segment's
@@ -113,33 +140,13 @@ pub(crate) fn build_multicol_init(
     size_contained: bool,
     field_intrinsic: Option<(f32, f32)>,
     available_height: Option<f32>,
+    legend: Option<NodeId>,
 ) -> Option<Box<super::multicol_trampoline::MulticolInit>> {
     use super::multicol_trampoline::{MulticolInit, SegmentInit};
 
     let col_gap = s.multicol_column_gap(em, content_width, viewport);
 
-    // Compute column count from column-count / column-width.
-    let n_cols: u32 = match (s.column_count, &s.column_width) {
-        (Some(n), Some(w_len)) => {
-            if let Some(w) = w_len.resolve(em, Some(content_width), viewport) {
-                let n_from_w = ((content_width + col_gap) / (w + col_gap)).floor() as u32;
-                n.min(n_from_w).max(1)
-            } else {
-                n.max(1)
-            }
-        }
-        (Some(n), None) => n.max(1),
-        (None, Some(w_len)) => {
-            if let Some(w) = w_len.resolve(em, Some(content_width), viewport)
-                && w > 0.0
-            {
-                ((content_width + col_gap) / (w + col_gap)).floor() as u32
-            } else {
-                1
-            }
-        }
-        (None, None) => 1,
-    }.max(1);
+    let n_cols = used_column_count(s, em, content_width, col_gap, viewport);
 
     let col_w = ((content_width - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
 
@@ -203,6 +210,9 @@ pub(crate) fn build_multicol_init(
         .enumerate()
         .filter(|(_, c)| !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        // Rendered legend multicol-fieldset'а стоит на границе (`place_rendered_legend`), в колонки
+        // он не попадает и доезжает до `children` как нефлоу-бокс.
+        .filter(|(_, c)| legend != Some(c.node))
         .map(|(i, _)| i)
         .collect();
 

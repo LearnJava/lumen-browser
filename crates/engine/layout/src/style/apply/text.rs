@@ -39,6 +39,7 @@ use crate::style::{
     TextAlign,
     TextAlignLast,
     TextDecorationSkipInk,
+    TextDecorationSkipSpaces,
     TextDecorationStyle,
     TextOrientation,
     TextOverflow,
@@ -75,10 +76,10 @@ use crate::style::parse::content::parse_content_items;
 use crate::style::parse::counters::{parse_counter_list, parse_quotes};
 use crate::style::parse::font_size::{apply_line_height_value, parse_font_shorthand};
 use crate::style::parse::image::parse_url_value;
-use crate::style::parse::transform::parse_length_px;
 use crate::style::shorthand::{
     apply_text_emphasis_shorthand,
     apply_text_wrap_shorthand,
+    parse_length_percentage_parts,
     parse_text_decoration_shorthand_q,
     parse_text_decoration_thickness,
     parse_text_stroke_shorthand,
@@ -882,20 +883,26 @@ pub(in crate::style) fn apply_decl_text(
             }
         }
         "text-decoration" => {
-            // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
-            // Decoration L3 §2.1). Спецификация L3 не включает thickness в
-            // shorthand — для неё отдельный longhand. Per spec shorthand сбрасывает
-            // все 4 longhand-а к initial, затем применяет указанные значения.
-            let parsed = parse_text_decoration_shorthand_q(val, is_quirks);
+            // Shorthand: `<line> || <style> || <color> || <thickness>` в любом порядке
+            // (CSS Text Decoration L4 §2.1: thickness вошла в shorthand). Per spec он
+            // сбрасывает все longhand-ы к initial, затем применяет указанные значения.
+            let mut rest: Vec<&str> = Vec::new();
+            let mut thickness = None;
+            for tok in split_top_level_ws(val.trim()) {
+                match thickness.is_none().then(|| parse_text_decoration_thickness(tok, em_basis, viewport)).flatten() {
+                    Some(t) => thickness = Some(t),
+                    None => rest.push(tok),
+                }
+            }
+            let parsed = parse_text_decoration_shorthand_q(&rest.join(" "), is_quirks);
             // Если shorthand был полностью невалиден (ни одного распознанного
             // токена) — declaration ignored. Распознаём по тому, что хоть
             // что-то распарсилось.
-            if parsed.any_recognized {
+            if parsed.any_recognized || thickness.is_some() {
                 style.text_decoration_line = parsed.line.unwrap_or_default();
                 style.text_decoration_color = parsed.color.unwrap_or(CssColor::CurrentColor);
                 style.text_decoration_style = parsed.style.unwrap_or_default();
-                // text-decoration-thickness shorthand-ом не сбрасывается
-                // (исключена из L3 shorthand-а; см. §2.1).
+                style.text_decoration_thickness = thickness.unwrap_or_default();
             }
         }
         "text-decoration-line" => {
@@ -969,24 +976,42 @@ pub(in crate::style) fn apply_decl_text(
         "text-underline-position" => {
             // CSS Text Decoration L3 §6.1 / L4 §5.1.
             // Значения: auto | from-font | under | left | right.
-            // Phase 0: однословный keyword — комбинации (under left) игнорируем.
-            style.text_underline_position = match val.trim() {
-                "auto" => TextUnderlinePosition::Auto,
-                "from-font" => TextUnderlinePosition::FromFont,
-                "under" => TextUnderlinePosition::Under,
-                "left" => TextUnderlinePosition::Left,
-                "right" => TextUnderlinePosition::Right,
-                _ => style.text_underline_position,
-            };
+            // Грамматика: `auto | [ from-font | under ] || [ left | right ]`.
+            if let Some(p) = TextUnderlinePosition::parse(val) {
+                style.text_underline_position = p;
+            }
         }
         "text-underline-offset" => {
-            // CSS Text Decoration L4 §5.3: auto | <length>.
-            // Positive offset shifts underline away from text (downward for horizontal).
-            style.text_underline_offset = if val.trim() == "auto" {
-                None
-            } else {
-                parse_length_px(val.trim())
-            };
+            // CSS Text Decoration L4 §5.3: auto | <length-percentage>. Positive offset shifts
+            // underline away from text (downward for horizontal). `em`/`calc()` резолвятся от
+            // font-size самого элемента, процент хранится отдельно (`text_underline_offset_pct`).
+            if val.trim() == "auto" {
+                style.text_underline_offset = None;
+                style.text_underline_offset_pct = 0.0;
+            } else if let Some((px, frac)) = parse_length_percentage_parts(val, em_basis, viewport) {
+                style.text_underline_offset = Some(px);
+                style.text_underline_offset_pct = frac;
+            }
+        }
+        "text-decoration-skip-spaces" => {
+            // CSS Text Decoration L4 §3.6: none | all | [ start || end ].
+            if let Some(v) = TextDecorationSkipSpaces::parse(val) {
+                style.text_decoration_skip_spaces = v;
+            }
+        }
+        "text-decoration-inset" => {
+            // CSS Text Decoration L4 §4.2: `<length-percentage>{1,2} | auto`; один токен
+            // действует на обе стороны.
+            let toks = crate::style::values::length::split_top_level_ws(val.trim());
+            if toks.len() == 1 && toks[0].eq_ignore_ascii_case("auto") {
+                style.text_decoration_inset = None;
+            } else if (1..=2).contains(&toks.len()) {
+                let parts: Option<Vec<(f32, f32)>> =
+                    toks.iter().map(|t| parse_length_percentage_parts(t, em_basis, viewport)).collect();
+                if let Some(p) = parts {
+                    style.text_decoration_inset = Some([p[0], *p.get(1).unwrap_or(&p[0])]);
+                }
+            }
         }
         "text-decoration-skip-ink" => {
             // CSS Text Decoration L4 §3.5: auto | all | none.

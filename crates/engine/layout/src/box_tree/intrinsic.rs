@@ -15,10 +15,8 @@ use super::grid::{resolve_grid_axis, GridAxis};
 fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasurer>) -> f32 {
     measurer.map_or(0.0, |m| {
         segments.iter().map(|seg| {
-            let ls = seg.style.letter_spacing;
-            let fams = &seg.style.font_family;
             let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
-            measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
+            measure_text_w_styled(&seg.text, &seg.style, ts, m)
         }).sum()
     })
 }
@@ -149,6 +147,11 @@ pub(crate) fn max_content_outer_height(
             if is_vertical_mode(b) && is_grid_container(b) {
                 grid_col_intrinsic_sum(b, viewport, true, &|c| max_content_outer_height(c, measurer, viewport))
                     .unwrap_or_else(longest)
+            } else if let (true, Some(n)) = (is_vertical_mode(b), s.column_count.filter(|n| *n > 1)) {
+                // Multicol L1 §3.4 in a vertical mode: the columns run along y, so the max-content
+                // inline size is `column-count` columns of the longest item plus the gaps.
+                let gap = s.multicol_column_gap(em, 0.0, viewport);
+                longest() * n as f32 + gap * (n - 1) as f32
             } else {
                 longest()
             }
@@ -869,10 +872,8 @@ fn preferred_inline_block_width_impl(
             segments
                 .iter()
                 .map(|seg| {
-                    let ls = seg.style.letter_spacing;
-                    let fams = &seg.style.font_family;
                     let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
-                    measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
+                    measure_text_w_styled(&seg.text, &seg.style, ts, m)
                 })
                 .sum()
         });
@@ -1216,12 +1217,8 @@ pub(crate) fn min_content_outer_width_of_contents(
                 let mut best = 0.0_f32;
                 let mut run = 0.0_f32;
                 for seg in segments {
-                    let ls = seg.style.letter_spacing;
-                    let fams = &seg.style.font_family;
-                    let fs = seg.style.font_size;
                     let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
-                    let piece =
-                        |t: &str| measure_text_w_families(t, fs, ls, ts, fams, m);
+                    let piece = |t: &str| measure_text_w_styled(t, &seg.style, ts, m);
                     let no_wrap = seg.style.white_space.is_nowrap()
                         || seg.style.text_wrap_mode == TextWrapMode::Nowrap;
                     if no_wrap {

@@ -753,14 +753,12 @@ impl std::error::Error for ImageRegisterError {}
 ///
 /// `left` / `top` — в пикселях растеризации (т.е. на размер bin-а из
 /// `SIZE_BINS`); сюда влияют только параметры растеризации, не итоговый
-/// display-размер. `advance_native` — в font units (`hmtx.advance_width`),
-/// масштаб по `font_size / units_per_em` применяется на стороне caller-а.
+/// display-размер. Advance в кэш не входит: после TEXTQ-4 его отдаёт шейпер.
 #[derive(Clone, Copy)]
 pub(crate) struct CachedGlyph {
     pub(crate) entry: GlyphEntry,
     pub(crate) left: f32,
     pub(crate) top: f32,
-    pub(crate) advance_native: u16,
 }
 
 /// Один загруженный face: TTF-байты + owned-кэш метрик, построенный один
@@ -957,7 +955,6 @@ pub(crate) fn layer_color(palette: Option<&[[f32; 4]]>, palette_index: u16, text
 pub(crate) struct ParsedFace<'a> {
     pub(crate) font: Font<'a>,
     pub(crate) head: Head,
-    pub(crate) hmtx: Hmtx<'a>,
 }
 
 /// Ленивый per-frame кэш [`ParsedFace`]-ов: face парсится при первом
@@ -987,8 +984,7 @@ impl<'a> LazyParsedFaces<'a> {
             let attempt = (|| {
                 let font = Font::parse(&self.faces[id].bytes).ok()?;
                 let head = font.head().ok()?;
-                let hmtx = font.hmtx().ok()?;
-                Some(ParsedFace { font, head, hmtx })
+                Some(ParsedFace { font, head })
             })();
             self.parsed[id] = Some(attempt);
         }
@@ -1393,11 +1389,11 @@ pub struct Renderer {
     /// `None` означает «без resolver-а — всегда default face» (для тестов /
     /// headless-режимов).
     pub(crate) font_provider: Option<Arc<dyn FontProvider>>,
-    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id, size_bin)`.
-    /// `face_id` — глифы у разных face-ов имеют разный glyph_id; `size_bin`
-    /// — multi-size atlas (см. `SIZE_BINS`): один и тот же глиф для
-    /// font-size 16 и 32 даёт две разные записи (разная растеризация,
-    /// разный atlas-rect).
+    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id, size_q, x_phase,
+    /// coords_hash)`. `face_id` — глифы у разных face-ов имеют разный glyph_id;
+    /// `size_q` — размер в device px × 4 (TEXTQ-1): один и тот же глиф для
+    /// font-size 16 и 32 (или dpr 1 и 1.5) даёт разные записи; `x_phase` —
+    /// субпиксельная фаза пера по X (разный сдвиг контура, разный atlas-rect).
     pub(crate) cached_glyphs: HashMap<AtlasKey, Option<CachedGlyph>>,
     /// In headless mode: the `RENDER_ATTACHMENT | COPY_SRC` texture rendered to
     /// by the most recent `render()` call. Kept alive between `render()` and

@@ -220,7 +220,7 @@ fn build_text_pipeline(
 ) -> wgpu::RenderPipeline {
     let text_shader = timed_shader(device, wgpu::ShaderModuleDescriptor {
         label: Some("text-shader"),
-        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{TEXT_SHADER_SRC}").into()),
+        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{}{TEXT_SHADER_SRC}", crate::text_gamma::wgsl()).into()),
     });
     let text_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("text-layout"),

@@ -23,7 +23,7 @@ use crate::style::{
     ClearSide, Color, ColorScheme,
     FlexBasis, FlexDirection, FlexWrap,
     ContainerType, Content, ContentItem, ContentVisibility,
-    CssColor, CssContinue,
+    CssColor, CssContinue, ShapeOutside,
     Cursor, Direction, Display, FillRule, FilterFn, FloatSide, ForcedColorAdjust, FontStretch,
     FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
@@ -624,7 +624,7 @@ fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
                 BackgroundImage::None
                 | BackgroundImage::Gradient(_)
                 | BackgroundImage::CrossFade { .. }
-                | BackgroundImage::Paint(_),
+                | BackgroundImage::Paint { .. },
             ) => "none".to_string(),
         })
         .collect::<Vec<_>>()
@@ -1268,13 +1268,14 @@ fn box_shadow_list_to_css(v: &[BoxShadow], current: Color) -> String {
         .join(", ")
 }
 
-fn text_shadow_list_to_css(v: &[TextShadow]) -> String {
+fn text_shadow_list_to_css(v: &[TextShadow], current: Color) -> String {
     if v.is_empty() {
         return "none".into();
     }
     v.iter()
         .map(|s| {
-            let color = s.color.map_or_else(|| "currentcolor".into(), color_to_css);
+            // `currentcolor` сериализуется в used-значение (CSS Color 4 §4.5).
+            let color = color_to_css(s.color.unwrap_or(current));
             format!("{color} {} {} {}", px_str(s.offset_x), px_str(s.offset_y), px_str(s.blur))
         })
         .collect::<Vec<_>>()
@@ -1807,18 +1808,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         WhiteSpaceCollapse::PreserveSpaces => "preserve-spaces",
         WhiteSpaceCollapse::BreakSpaces => "break-spaces",
     }.into());
-    m.insert("text-decoration-line".into(), {
-        let td = &style.text_decoration_line;
-        if !td.underline && !td.overline && !td.line_through {
-            "none".into()
-        } else {
-            let mut parts = Vec::new();
-            if td.underline { parts.push("underline") }
-            if td.overline { parts.push("overline") }
-            if td.line_through { parts.push("line-through") }
-            parts.join(" ")
-        }
-    });
+    m.insert("text-decoration-line".into(), style.text_decoration_line.to_css());
     m.insert("text-decoration-style".into(), match style.text_decoration_style {
         TextDecorationStyle::Solid => "solid",
         TextDecorationStyle::Double => "double",
@@ -2033,6 +2023,18 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         "view-transition-name".into(),
         style.view_transition_name.as_deref().unwrap_or("none").into(),
     );
+    m.insert(
+        "view-transition-class".into(),
+        style.view_transition_class.as_deref().unwrap_or("none").into(),
+    );
+    m.insert(
+        "view-transition-group".into(),
+        style.view_transition_group.as_deref().unwrap_or("normal").into(),
+    );
+    m.insert(
+        "view-transition-scope".into(),
+        if style.view_transition_scope_all { "all" } else { "none" }.into(),
+    );
     m.insert("interpolate-size".into(), match style.interpolate_size {
         InterpolateSizeMode::NumericOnly => "numeric-only",
         InterpolateSizeMode::AllowKeywords => "allow-keywords",
@@ -2144,7 +2146,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("contain".into(), contain_to_css(style.contain));
     // CSS Conditional 5 §3.1: `normal | [ [ size | inline-size ] || scroll-state ]`, the size
     // axis first.
-    m.insert("container-type".into(), {
+    let container_type = {
         let axis = match style.container_type {
             ContainerType::Normal => "",
             ContainerType::Size => "size",
@@ -2156,11 +2158,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             (axis, false) => axis.to_owned(),
             (axis, true) => format!("{axis} scroll-state"),
         }
-    });
+    };
+    let container_name =
+        if style.container_name.is_empty() { "none".to_owned() } else { style.container_name.join(" ") };
+    // CSS Conditional 5 §3.3: `<'container-name'> [ / <'container-type'> ]?`; the type is omitted
+    // when it is `normal`.
     m.insert(
-        "container-name".into(),
-        if style.container_name.is_empty() { "none".to_owned() } else { style.container_name.join(" ") },
+        "container".into(),
+        if container_type == "normal" { container_name.clone() } else { format!("{container_name} / {container_type}") },
     );
+    m.insert("container-type".into(), container_type);
+    m.insert("container-name".into(), container_name);
     let cis_w = contain_intrinsic_to_css(
         style.contain_intrinsic_width_auto, style.contain_intrinsic_width.as_ref());
     let cis_h = contain_intrinsic_to_css(
@@ -2211,16 +2219,67 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
 
     // ── Shadows (CSS Backgrounds L3 §7.1, CSS Text Decoration L3 §2.5) ──
     m.insert("box-shadow".into(), box_shadow_list_to_css(&style.box_shadow, style.color));
-    m.insert("text-shadow".into(), text_shadow_list_to_css(&style.text_shadow));
+    m.insert("text-shadow".into(), text_shadow_list_to_css(&style.text_shadow, style.color));
 
     // CSS Text Decoration L4 §3.3/§3.7 (BUG-1050) — `auto`/`from-font`/`<length>`.
     m.insert("text-decoration-thickness".into(), match style.text_decoration_thickness {
         crate::TextDecorationThickness::Auto => "auto".into(),
         crate::TextDecorationThickness::FromFont => "from-font".into(),
         crate::TextDecorationThickness::Length(v) => px_str(v),
-        crate::TextDecorationThickness::Percentage(p) => format!("{p}%"),
+        crate::TextDecorationThickness::Percentage(frac) => length_percentage_css(0.0, frac).unwrap_or_else(|| px_str(0.0)),
+        crate::TextDecorationThickness::LengthPercentage { px, frac } => {
+            length_percentage_css(px, frac).unwrap_or_else(|| px_str(px))
+        }
     });
-    m.insert("text-underline-offset".into(), style.text_underline_offset.map_or("auto".into(), px_str));
+    m.insert("text-underline-offset".into(), match style.text_underline_offset {
+        None => "auto".into(),
+        Some(px) => length_percentage_css(px, style.text_underline_offset_pct).unwrap_or_else(|| px_str(px)),
+    });
+    m.insert("text-underline-position".into(), style.text_underline_position.to_css().into());
+    m.insert("text-decoration-skip-ink".into(), style.text_decoration_skip_ink.to_css().into());
+    m.insert("text-decoration-skip-spaces".into(), style.text_decoration_skip_spaces.to_css().into());
+    m.insert("text-decoration-inset".into(), match style.text_decoration_inset {
+        None => "auto".into(),
+        Some([start, end]) => {
+            let one = |(px, frac): (f32, f32)| length_percentage_css(px, frac).unwrap_or_else(|| px_str(px));
+            if start == end { one(start) } else { format!("{} {}", one(start), one(end)) }
+        }
+    });
+
+    // `text-decoration` — шорткат (CSS Text Decoration L4 §2.1): значения по умолчанию опускаются,
+    // порядок `<line> <style> <thickness> <color>`; всё по умолчанию — `none`.
+    {
+        let mut parts: Vec<String> = Vec::new();
+        if !style.text_decoration_line.is_none() {
+            parts.push(style.text_decoration_line.to_css());
+        }
+        if style.text_decoration_style != TextDecorationStyle::Solid {
+            parts.push(m["text-decoration-style"].clone());
+        }
+        if style.text_decoration_thickness != crate::TextDecorationThickness::Auto {
+            parts.push(m["text-decoration-thickness"].clone());
+        }
+        if style.text_decoration_color != CssColor::CurrentColor {
+            parts.push(m["text-decoration-color"].clone());
+        }
+        m.insert("text-decoration".into(), if parts.is_empty() { "none".into() } else { parts.join(" ") });
+    }
+
+    // ── Text emphasis (CSS Text Decoration L4 §5) ─────────────────────
+    let emphasis_style = style.text_emphasis_style.to_css();
+    let emphasis_color = color_to_css(style.text_emphasis_color.resolve(style.color));
+    m.insert("text-emphasis".into(), format!("{emphasis_style} {emphasis_color}"));
+    m.insert("text-emphasis-style".into(), emphasis_style);
+    m.insert("text-emphasis-color".into(), emphasis_color);
+    m.insert("text-emphasis-position".into(), style.text_emphasis_position.to_css().into());
+
+    // ── CSS Shapes L1 ─────────────────────────────────────────────────
+    m.insert("shape-outside".into(), match &style.shape_outside {
+        ShapeOutside::None => "none".into(),
+        ShapeOutside::Value(v) => v.clone(),
+    });
+    m.insert("shape-margin".into(), sizing_computed_css(&style.shape_margin, style.font_size));
+    m.insert("shape-image-threshold".into(), number_str(style.shape_image_threshold));
 
     // ── Perspective ──────────────────────────────────────────────────
     m.insert("perspective-origin".into(), format!(

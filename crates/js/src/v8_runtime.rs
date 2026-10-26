@@ -377,6 +377,9 @@ impl V8JsRuntime {
                 flush_stale: Arc::clone(&flush_stale),
                 never_flushed: Arc::clone(&self.style_never_flushed),
                 scroll_states: Arc::clone(&scroll_states),
+                page_scroll_y: Arc::clone(&page_scroll_y),
+                page_scroll_x: Arc::clone(&page_scroll_x),
+                pending_page_scrolls: Arc::clone(&pending_page_scrolls),
                 focused_nid: Arc::clone(&self.focused_nid),
                 last_flushed_focus: Arc::clone(&self.last_flushed_focus),
                 hovered_nid: Arc::clone(&self.hovered_nid),
@@ -655,6 +658,15 @@ impl V8JsRuntime {
             )?;
 
             install::install_selection(
+                scope,
+                ctx,
+                store,
+                Arc::clone(&doc),
+                Arc::clone(&dom_dirty),
+                Arc::clone(&flush_stale),
+                Arc::clone(&dom_touched),
+            )?;
+            install::install_registered_properties(
                 scope,
                 ctx,
                 store,

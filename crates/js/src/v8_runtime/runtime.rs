@@ -1148,7 +1148,15 @@ impl V8JsRuntime {
     /// Replace the scroll-state table with a fresh snapshot from the layout tree.
     /// Mirrors [`crate::QuickJsRuntime::update_scroll_states`].
     pub fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>) {
-        *self.scroll_states.lock().unwrap_or_else(|e| e.into_inner()) = states;
+        let mut cur = self.scroll_states.lock().unwrap_or_else(|e| e.into_inner());
+        let moved = states
+            .iter()
+            .any(|(k, v)| cur.get(k).map_or(v[0] != 0.0 || v[1] != 0.0, |o| o[0] != v[0] || o[1] != v[1]));
+        *cur = states;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
     }
 
     /// Drain JS-initiated scroll requests queued by `_lumen_request_scroll`.
@@ -1175,6 +1183,10 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (*cur - y).abs() > f32::EPSILON;
         *cur = y;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
         moved
     }
 
@@ -1190,6 +1202,10 @@ impl V8JsRuntime {
         let mut cur = self.page_scroll_x.lock().unwrap_or_else(|e| e.into_inner());
         let moved = (cur.committed - x).abs() > f32::EPSILON;
         cur.committed = x;
+        drop(cur);
+        if moved {
+            super::style_flush::note_scroll_moved(&self.flush_stylesheet, &self.dom_touched, &self.flush_stale);
+        }
         moved
     }
 
@@ -1554,6 +1570,25 @@ impl V8JsRuntime {
     /// thread since `canvas2d`'s `CANVASES`/`DIRTY` registries are `thread_local!`.
     pub fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
         self.run(|_inner| crate::canvas2d::flush_dirty())
+    }
+
+    /// Hand the paint worklet the `background-image: paint()` layers of the laid-out
+    /// page (replaces the previous set). The bitmaps are drawn lazily by
+    /// [`Self::flush_paint_images`].
+    pub fn set_paint_jobs(&self, jobs: &[lumen_core::PaintRequest]) {
+        let json = crate::paint_worklet::jobs_to_json(jobs);
+        // The JSON goes in as a JS string literal (JSON is a JS string once quoted again).
+        let quoted = serde_json::Value::String(json).to_string();
+        self.eval(&format!("__lumen_paint_set_requests({quoted});")).ok();
+    }
+
+    /// Run the paint worklet over the current [`Self::set_paint_jobs`] layers and drain
+    /// the bitmaps it (re)drew: `(image key, width, height, rgba)`. A layer whose
+    /// `inputProperties`, arguments and size did not change since the last call is not
+    /// redrawn, so an idle page returns an empty vec.
+    pub fn flush_paint_images(&self) -> Vec<lumen_core::PaintImage> {
+        self.eval("__lumen_paint_flush();").ok();
+        self.run(|_inner| crate::paint_worklet::take_published())
     }
 
     /// Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id.

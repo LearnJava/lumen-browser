@@ -28,73 +28,176 @@ impl TextShaper for RustybuzzShaper {
         if text.is_empty() {
             return Vec::new();
         }
-        let Some(mut face) = rustybuzz::Face::from_slice(font_data, 0) else {
-            return Vec::new();
-        };
+        with_face(font_data, variation_axes, |face| {
+            shape_with_face(face, text, direction, script, features)
+        })
+        .unwrap_or_default()
+    }
+}
 
-        if !variation_axes.is_empty() {
-            let variations: Vec<rustybuzz::Variation> = variation_axes
+/// Шейпинг `text` уже построенным `rustybuzz::Face`.
+fn shape_with_face(
+    face: &rustybuzz::Face<'_>,
+    text: &str,
+    direction: ShapeDirection,
+    script: Option<[u8; 4]>,
+    features: &[([u8; 4], u32)],
+) -> Vec<ShapedGlyph> {
+    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    buffer.push_str(text);
+    buffer.set_direction(match direction {
+        ShapeDirection::LeftToRight => rustybuzz::Direction::LeftToRight,
+        ShapeDirection::RightToLeft => rustybuzz::Direction::RightToLeft,
+    });
+    if let Some(tag) = script
+        && let Some(s) =
+            rustybuzz::Script::from_iso15924_tag(rustybuzz::ttf_parser::Tag::from_bytes(&tag))
+    {
+        buffer.set_script(s);
+    }
+    // Unset script/language are filled in from `text`'s own Unicode
+    // properties by `rustybuzz::shape` itself
+    // (`UnicodeBuffer::guess_segment_properties`) — it only fills what
+    // is not already set, so the explicit direction/script above stand.
+    //
+    // Exception: an explicit left-to-right request over text whose guessed
+    // script is natively right-to-left. HarfBuzz's `ensure_native_direction`
+    // would reverse the buffer back to logical order, but a caller asking
+    // for LTR passes text already in visual order (UAX #9 L2) and wants the
+    // glyphs left to right. A neutral script suppresses that reversal.
+    if script.is_none() && direction == ShapeDirection::LeftToRight {
+        let mut probe = rustybuzz::UnicodeBuffer::new();
+        probe.push_str(text);
+        probe.guess_segment_properties();
+        if is_native_rtl_script(probe.script()) {
+            buffer.set_script(rustybuzz::script::COMMON);
+        }
+    }
+
+    let rb_features: Vec<rustybuzz::Feature> = features
+        .iter()
+        .map(|(tag, value)| {
+            rustybuzz::Feature::new(rustybuzz::ttf_parser::Tag::from_bytes(tag), *value, ..)
+        })
+        .collect();
+
+    let glyphs = rustybuzz::shape(face, &rb_features, buffer);
+    glyphs
+        .glyph_infos()
+        .iter()
+        .zip(glyphs.glyph_positions())
+        .map(|(info, pos)| ShapedGlyph {
+            glyph_id: info.glyph_id as u16,
+            cluster: info.cluster,
+            x_advance: pos.x_advance,
+            x_offset: pos.x_offset,
+            y_offset: pos.y_offset,
+        })
+        .collect()
+}
+
+/// Сколько распарсенных face-ов держит [`with_face`] на поток.
+const FACE_CACHE_SLOTS: usize = 8;
+/// Face больше этого размера в кэш не кладётся: кэш хранит копию байтов.
+const FACE_CACHE_MAX_FONT_BYTES: usize = 8 << 20;
+
+/// Распарсенный `rustybuzz::Face` вместе с копией байтов, на которые он
+/// ссылается.
+struct CachedFace {
+    /// Адрес, длина и отпечаток байтов шрифта у вызывающего — ключ.
+    ptr: usize,
+    len: usize,
+    fingerprint: u64,
+    /// Оси вариаций, выставленные на `face` (`set_variations` не сбрасывается
+    /// пустым списком, поэтому они часть ключа).
+    variations: Vec<([u8; 4], u32)>,
+    // Поле `face` объявлено РАНЬШЕ `data`: при сбросе записи Face умирает
+    // первым и не переживает байты, на которые ссылается (см. SAFETY ниже).
+    face: rustybuzz::Face<'static>,
+    #[allow(dead_code)]
+    data: Box<[u8]>,
+}
+
+thread_local! {
+    /// Недавно использованные face-ы, свежий первым. Построение `Face`
+    /// (таблицы GSUB/GPOS) стоит ~0.2 мс на Inter — на порядок дороже самого
+    /// шейпинга короткой строки, а страница шейпит тысячи run-ов одним шрифтом.
+    static FACE_CACHE: std::cell::RefCell<Vec<CachedFace>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Дешёвый отпечаток содержимого: длина, голова, хвост и 16 окон по 64 байта
+/// поровну по телу. Вместе с адресом и длиной отличает два шрифта, по очереди
+/// занимавшие один и тот же адрес.
+pub fn font_fingerprint(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ data.len() as u64;
+    let mut feed = |bytes: &[u8]| {
+        for b in bytes {
+            h = (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3);
+        }
+    };
+    feed(&data[..data.len().min(256)]);
+    feed(&data[data.len().saturating_sub(256)..]);
+    if data.len() > 4096 {
+        let step = data.len() / 16;
+        for i in 0..16 {
+            let at = i * step;
+            feed(&data[at..(at + 64).min(data.len())]);
+        }
+    }
+    h
+}
+
+/// Выполняет `f` с `rustybuzz::Face` по `font_data` и осями `axes`; `None`,
+/// если шрифт не разбирается. Face берётся из потокового кэша, если этот
+/// шрифт уже встречался.
+fn with_face<R>(
+    font_data: &[u8],
+    axes: &[([u8; 4], f32)],
+    f: impl FnOnce(&rustybuzz::Face<'_>) -> R,
+) -> Option<R> {
+    let variations: Vec<([u8; 4], u32)> = axes.iter().map(|(t, v)| (*t, v.to_bits())).collect();
+    let set_variations = |face: &mut rustybuzz::Face<'_>| {
+        if !axes.is_empty() {
+            let list: Vec<rustybuzz::Variation> = axes
                 .iter()
                 .map(|(tag, value)| rustybuzz::Variation {
                     tag: rustybuzz::ttf_parser::Tag::from_bytes(tag),
                     value: *value,
                 })
                 .collect();
-            face.set_variations(&variations);
+            face.set_variations(&list);
         }
-
-        let mut buffer = rustybuzz::UnicodeBuffer::new();
-        buffer.push_str(text);
-        buffer.set_direction(match direction {
-            ShapeDirection::LeftToRight => rustybuzz::Direction::LeftToRight,
-            ShapeDirection::RightToLeft => rustybuzz::Direction::RightToLeft,
-        });
-        if let Some(tag) = script
-            && let Some(s) =
-                rustybuzz::Script::from_iso15924_tag(rustybuzz::ttf_parser::Tag::from_bytes(&tag))
-        {
-            buffer.set_script(s);
-        }
-        // Unset script/language are filled in from `text`'s own Unicode
-        // properties by `rustybuzz::shape` itself
-        // (`UnicodeBuffer::guess_segment_properties`) — it only fills what
-        // is not already set, so the explicit direction/script above stand.
-        //
-        // Exception: an explicit left-to-right request over text whose guessed
-        // script is natively right-to-left. HarfBuzz's `ensure_native_direction`
-        // would reverse the buffer back to logical order, but a caller asking
-        // for LTR passes text already in visual order (UAX #9 L2) and wants the
-        // glyphs left to right. A neutral script suppresses that reversal.
-        if script.is_none() && direction == ShapeDirection::LeftToRight {
-            let mut probe = rustybuzz::UnicodeBuffer::new();
-            probe.push_str(text);
-            probe.guess_segment_properties();
-            if is_native_rtl_script(probe.script()) {
-                buffer.set_script(rustybuzz::script::COMMON);
-            }
-        }
-
-        let rb_features: Vec<rustybuzz::Feature> = features
-            .iter()
-            .map(|(tag, value)| {
-                rustybuzz::Feature::new(rustybuzz::ttf_parser::Tag::from_bytes(tag), *value, ..)
-            })
-            .collect();
-
-        let glyphs = rustybuzz::shape(&face, &rb_features, buffer);
-        glyphs
-            .glyph_infos()
-            .iter()
-            .zip(glyphs.glyph_positions())
-            .map(|(info, pos)| ShapedGlyph {
-                glyph_id: info.glyph_id as u16,
-                cluster: info.cluster,
-                x_advance: pos.x_advance,
-                x_offset: pos.x_offset,
-                y_offset: pos.y_offset,
-            })
-            .collect()
+    };
+    if font_data.len() > FACE_CACHE_MAX_FONT_BYTES {
+        let mut face = rustybuzz::Face::from_slice(font_data, 0)?;
+        set_variations(&mut face);
+        return Some(f(&face));
     }
+    let (ptr, len) = (font_data.as_ptr() as usize, font_data.len());
+    let fingerprint = font_fingerprint(font_data);
+    FACE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(pos) = cache.iter().position(|e| {
+            e.ptr == ptr && e.len == len && e.fingerprint == fingerprint && e.variations == variations
+        }) {
+            let entry = cache.remove(pos);
+            cache.insert(0, entry);
+        } else {
+            let data: Box<[u8]> = Box::from(font_data);
+            // SAFETY: `data` — куча-аллокация, её адрес не меняется при
+            // перемещении `Box` внутрь `CachedFace`. Ссылка с лишённым
+            // временем жизни кладётся только в `face` той же записи, из записи
+            // не выдаётся (наружу уходит лишь `&Face` под заимствованием
+            // записи), а `face` объявлен перед `data` и потому уничтожается
+            // раньше байтов.
+            let bytes: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&data) };
+            let mut face = rustybuzz::Face::from_slice(bytes, 0)?;
+            set_variations(&mut face);
+            cache.insert(0, CachedFace { ptr, len, fingerprint, variations, face, data });
+            cache.truncate(FACE_CACHE_SLOTS);
+        }
+        Some(f(&cache[0].face))
+    })
 }
 
 /// The [`TextShaper`] implementation callers should use.
@@ -188,5 +291,23 @@ mod tests {
         let shaped =
             shaper.shape(BUNDLED_FONT, "Hi", ShapeDirection::LeftToRight, None, &[], &[]);
         assert_eq!(shaped.len(), 2);
+    }
+
+    #[test]
+    fn cached_face_shapes_like_a_fresh_one_and_tells_fonts_apart() {
+        const MONO: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+        let shape = |font: &[u8]| {
+            RustybuzzShaper.shape(font, "AVATAR", ShapeDirection::LeftToRight, None, &[], &[])
+        };
+        let first = shape(BUNDLED_FONT);
+        // Второй вызов идёт через кэш и обязан дать то же самое.
+        assert_eq!(first, shape(BUNDLED_FONT));
+        // Другой шрифт не подхватывает чужой Face.
+        let mono = shape(MONO);
+        assert_ne!(first, mono);
+        assert_eq!(mono, shape(MONO));
+        // Копия тех же байтов по другому адресу — отдельная запись, тот же итог.
+        let copy = BUNDLED_FONT.to_vec();
+        assert_eq!(first, shape(&copy));
     }
 }

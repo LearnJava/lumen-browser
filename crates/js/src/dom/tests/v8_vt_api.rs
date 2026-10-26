@@ -32,6 +32,17 @@ fn settle(rt: &V8JsRuntime) {
     }
 }
 
+/// [`settle`] for a scoped transition, which ends with the animations of its pseudo-element tree
+/// (the UA group animation runs 0.25 s of wall-clock time).
+fn settle_animations(rt: &V8JsRuntime) {
+    for _ in 0..4 {
+        settle(rt);
+        rt.eval("_lumen_run_raf_callbacks(16); null").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    settle(rt);
+}
+
 fn log(rt: &V8JsRuntime) -> String {
     match rt.eval("log.join(',')").unwrap() {
         lumen_core::JsValue::String(s) => s,
@@ -325,6 +336,23 @@ fn computed_style_reports_the_view_transition_name() {
 }
 
 #[test]
+fn class_and_group_properties_are_supported_and_reported() {
+    let rt = rt_with_dom();
+    assert!(is_true(&rt, "CSS.supports('view-transition-class', 'b')"));
+    assert!(is_true(&rt, "CSS.supports('view-transition-group', 'normal')"));
+    let nid = match rt.eval("document.body.__nid__").unwrap() {
+        lumen_core::JsValue::Number(n) => n as u32,
+        other => panic!("nid: {other:?}"),
+    };
+    let mut m = std::collections::HashMap::new();
+    m.insert("view-transition-class".to_string(), "a b".to_string());
+    m.insert("view-transition-group".to_string(), "contain".to_string());
+    rt.update_computed_styles(std::collections::HashMap::from([(nid, m)]));
+    assert!(is_true(&rt, "getComputedStyle(document.body).viewTransitionClass === 'a b'"));
+    assert!(is_true(&rt, "getComputedStyle(document.body).getPropertyValue('view-transition-group') === 'contain'"));
+}
+
+#[test]
 fn a_callback_that_never_settles_times_out() {
     let rt = rt_with_dom();
     rt.eval(
@@ -356,4 +384,346 @@ fn wait_until_ignores_rejections() {
     rt.eval("no(new Error('x'));").unwrap();
     settle(&rt);
     assert_eq!(log(&rt), "finished");
+}
+
+/// BUG-1509 — `getComputedStyle(html, '::view-transition…')` answers the UA sheet under the
+/// page's rules while a transition is active, and nothing outside of it.
+#[test]
+fn pseudo_tree_computed_style_during_a_transition() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "#main { display: block; width: 10px; height: 10px; view-transition-name: target; \
+                 mix-blend-mode: multiply; } \
+         ::view-transition-image-pair(target) { position: fixed; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         function pos(sel) { return getComputedStyle(document.documentElement, sel).position; }
+         function blend(sel) { return getComputedStyle(document.documentElement, sel).mixBlendMode; }
+         log.push('before:' + JSON.stringify(pos('::view-transition')));
+         var vt = document.startViewTransition(function () {
+           log.push('cb:' + pos('::view-transition') + '/' + pos('::view-transition-group(target)') + '/' +
+                    pos('::view-transition-image-pair(target)') + '/' + pos('::view-transition-old(target)') + '/' +
+                    pos('::view-transition-group(root)') + '/' + blend('::view-transition-group(target)'));
+         });
+         vt.ready.then(function () {
+           log.push('ready:' + blend('::view-transition-group(target)') + '/' + blend('::view-transition-group(root)') + '/' +
+                    pos('::view-transition-image-pair(target)') + '/' + pos('::view-transition-image-pair(root)') + '/' +
+                    JSON.stringify(pos('::view-transition-group(nope)')) + '/' + blend('::view-transition-old(target)'));
+         });
+         vt.finished.then(function () { log.push('after:' + JSON.stringify(pos('::view-transition'))); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(
+        log(&rt),
+        "before:\"\",\
+         cb:absolute/absolute/fixed/absolute/absolute/normal,\
+         ready:multiply/normal/fixed/absolute/\"\"/plus-lighter,\
+         after:\"\""
+    );
+}
+
+#[test]
+fn pseudo_tree_computed_style_rejects_non_root_owner_and_malformed_pseudos() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval("var vt = document.startViewTransition(function () {}); null").unwrap();
+    settle(&rt);
+    // The transition is over; start one and probe inside its callback.
+    rt.eval(
+        "var log = [];
+         document.startViewTransition(function () {
+           var html = document.documentElement;
+           log.push(JSON.stringify([
+             getComputedStyle(document.body, '::view-transition').position,
+             getComputedStyle(html, '::view-transition-group').position,
+             getComputedStyle(html, '::view-transition-group(*)').position,
+             getComputedStyle(html, '::view-transition(x)').position,
+             getComputedStyle(html, '::view-transition-group(root)').position]));
+         }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "[\"\",\"\",\"\",\"\",\"absolute\"]");
+}
+
+/// BUG-1509 — a CSS animation the page puts on the pseudo-tree is listed by `getAnimations()` while
+/// the transition runs, and is gone with it.
+#[test]
+fn pseudo_tree_css_animation_is_listed_by_get_animations() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(
+        "@keyframes k { from { margin-left: 100px; } to { margin-left: 100px; } } \
+         :root::view-transition-group(root), :root::view-transition { animation: k 10s; }",
+    )));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         _wa_gap_keyframes_json = function (n) {
+           return n === 'k' ? JSON.stringify([{ offset: 0, decls: [['margin-left', '100px']] },
+                                              { offset: 1, decls: [['margin-left', '100px']] }]) : null;
+         };
+         _lumen_has_keyframes = function () { return true; };
+         var html = document.documentElement;
+         log.push(html.getAnimations({ subtree: true }).length);
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           var anims = html.getAnimations({ subtree: true });
+           log.push(anims.length, anims.map(function (a) { return a.animationName + '@' + a.effect.pseudoElement; }).join('+'));
+           log.push(document.getAnimations().length, html.getAnimations().length);
+         });
+         vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "0,2,k@::view-transition+k@::view-transition-group(root),2,0,0");
+}
+
+/// BUG-1509 — with no author rules the UA sheet's own animations are on the tree: the group of
+/// every capture, the old and new images of the names present in that state.
+#[test]
+fn pseudo_tree_ua_animations_are_listed_by_get_animations() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("#main { display: block; view-transition-name: hero; }")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         var html = document.documentElement;
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           var names = function (list) {
+             return list.map(function (a) { return a.animationName.replace('-ua-view-transition-', '') + '@' + a.effect.pseudoElement; }).join(' ');
+           };
+           log.push(names(html.getAnimations({ subtree: true })));
+           log.push(document.getAnimations().length);
+         });
+         vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length + '/' + document.getAnimations().length); });
+         null",
+    )
+    .unwrap();
+    settle(&rt);
+    let got = log(&rt);
+    // Tree order: the groups first (root, then `hero`), per name group → image pair → old → new.
+    assert_eq!(
+        got,
+        "group-anim-root@::view-transition-group(root) fade-out@::view-transition-old(root) fade-in@::view-transition-new(root) \
+         group-anim-hero@::view-transition-group(hero) fade-out@::view-transition-old(hero) fade-in@::view-transition-new(hero),6,0/0"
+    );
+}
+
+// ── BUG-1511: scoped transitions (`Element.prototype.startViewTransition`) ───────────────────
+
+/// `main` (`div#main`, the outer named element) and `inner` (`span.highlight`, its child).
+fn scoped_rt(css: &str) -> V8JsRuntime {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(css)));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = []; var main = document.getElementById('main'); \
+         var inner = document.querySelector('.highlight'); var html = document.documentElement; null",
+    )
+    .unwrap();
+    rt
+}
+
+const NAMES_CSS: &str = "#main { display: block; view-transition-name: outer; } \
+                         .highlight { display: block; view-transition-name: inner; }";
+
+/// The groups of the pseudo-element tree of `owner`'s transition, probed from its update callback.
+fn groups_in_callback(rt: &V8JsRuntime, owner: &str, start_on: &str) -> String {
+    rt.eval(&format!(
+        "log = []; var vt = {start_on}.startViewTransition(function () {{ \
+           log.push(_lumen_vt_pseudo_list({owner}.__nid__).filter(function (k) {{ return k.indexOf('-group(') > 0; }}) \
+             .map(function (k) {{ return k.slice(k.indexOf('(') + 1, -1); }}).sort().join('+')); }}); \
+         vt.ready.catch(function (e) {{ log.push(e.name); }}); null",
+    ))
+    .unwrap();
+    settle(rt);
+    let out = log(rt);
+    rt.eval(&format!("if ({start_on}.activeViewTransition) {start_on}.activeViewTransition.skipTransition(); null")).unwrap();
+    settle(rt);
+    out
+}
+
+#[test]
+fn element_start_view_transition_is_scoped_to_its_element() {
+    let rt = scoped_rt("");
+    assert!(is_true(&rt, "Element.prototype.hasOwnProperty('startViewTransition') && Element.prototype.hasOwnProperty('activeViewTransition')"));
+    assert!(is_true(&rt, "Element.prototype.startViewTransition.length === 0 && Element.prototype.startViewTransition.name === 'startViewTransition'"));
+    assert!(is_true(&rt, "main.activeViewTransition === null"));
+    rt.eval("var t = main.startViewTransition(function () {}); null").unwrap();
+    assert!(is_true(&rt, "t instanceof ViewTransition && t.transitionRoot === main"));
+    assert!(is_true(&rt, "main.activeViewTransition === t && document.activeViewTransition === null && inner.activeViewTransition === null"));
+    // The document element shares its scope with the document.
+    assert!(is_true(&rt, "var d = html.startViewTransition(); document.activeViewTransition === d && html.activeViewTransition === d && d.transitionRoot === html"));
+    assert!(is_true(&rt, "(function() { try { Element.prototype.startViewTransition.call({}); return false; } catch (e) { return e instanceof TypeError; } })()"));
+    assert!(is_true(&rt, "(function() { try { main.startViewTransition(5); return false; } catch (e) { return /on 'Element'/.test(e.message); } })()"));
+    settle(&rt);
+    assert!(is_true(&rt, "main.activeViewTransition === null && document.activeViewTransition === null"));
+}
+
+#[test]
+fn skipping_a_scoped_transition_clears_only_its_scope() {
+    let rt = scoped_rt("");
+    rt.eval(
+        "var t = main.startViewTransition(); var u = inner.startViewTransition(); \
+         t.skipTransition(); t.ready.catch(function (e) { log.push('t:' + e.name); }); \
+         u.finished.then(function () { log.push('u done'); }); null",
+    )
+    .unwrap();
+    assert!(is_true(&rt, "main.activeViewTransition === null && inner.activeViewTransition === u"));
+    settle(&rt);
+    assert_eq!(log(&rt), "t:AbortError,u done");
+}
+
+#[test]
+fn restarting_a_scope_aborts_its_running_transition_and_document_element_shares_the_document_scope() {
+    let rt = scoped_rt("");
+    rt.eval(
+        "var a = document.startViewTransition(function () { log.push('cb-a'); }); \
+         var b = html.startViewTransition(function () { log.push('cb-b'); }); \
+         a.ready.catch(function (e) { log.push('a:' + e.name); }); b.ready.then(function () { log.push('b ready'); }); null",
+    )
+    .unwrap();
+    assert!(is_true(&rt, "document.activeViewTransition === b && b.transitionRoot === html"));
+    settle(&rt);
+    assert_eq!(log(&rt), "a:AbortError,cb-a,cb-b,b ready");
+}
+
+#[test]
+fn scoped_transitions_run_in_parallel_and_call_back_in_creation_order() {
+    let rt = scoped_rt("");
+    rt.eval(
+        "var vt1 = document.startViewTransition(function () { log.push('vt1'); }); \
+         var vt2 = inner.startViewTransition(function () { log.push('vt2'); }); \
+         var vt3 = main.startViewTransition(function () { log.push('vt3'); }); \
+         Promise.all([vt1.ready, vt2.ready, vt3.ready]).then(function () { log.push('all ready'); }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "vt1,vt2,vt3,all ready");
+}
+
+#[test]
+fn scoped_transitions_leave_the_shell_alone() {
+    let rt = scoped_rt(NAMES_CSS);
+    rt.eval("main.startViewTransition(function () {}); null").unwrap();
+    settle(&rt);
+    assert!(rt.take_view_transition_events().is_empty());
+}
+
+#[test]
+fn name_discovery_stops_at_scope_all_elements() {
+    // No scopes: the document sees everything.
+    let rt = scoped_rt(NAMES_CSS);
+    assert_eq!(groups_in_callback(&rt, "html", "document"), "inner+outer+root");
+    assert_eq!(groups_in_callback(&rt, "main", "main"), "inner+outer");
+    assert_eq!(groups_in_callback(&rt, "inner", "inner"), "inner");
+
+    // `inner` is a scope: the document and `main` no longer see it, it still sees itself.
+    let rt = scoped_rt(&format!("{NAMES_CSS} .highlight {{ view-transition-scope: all; }}"));
+    assert_eq!(groups_in_callback(&rt, "html", "document"), "outer+root");
+    assert_eq!(groups_in_callback(&rt, "main", "main"), "outer");
+    assert_eq!(groups_in_callback(&rt, "inner", "inner"), "inner");
+
+    // `main` is a scope: the document sees none of its subtree, `main` sees itself and below.
+    let rt = scoped_rt(&format!("{NAMES_CSS} #main {{ view-transition-scope: all; }}"));
+    assert_eq!(groups_in_callback(&rt, "html", "document"), "root");
+    assert_eq!(groups_in_callback(&rt, "main", "main"), "inner+outer");
+    assert_eq!(groups_in_callback(&rt, "inner", "inner"), "inner");
+
+    // A scope on the document element does not hide its subtree from the document.
+    let rt = scoped_rt(&format!("{NAMES_CSS} html {{ view-transition-scope: all; }}"));
+    assert_eq!(groups_in_callback(&rt, "html", "document"), "inner+outer+root");
+}
+
+#[test]
+fn an_element_captured_by_a_running_transition_cannot_join_another_one() {
+    let rt = scoped_rt(NAMES_CSS);
+    rt.eval(
+        "var t1 = main.startViewTransition(function () {}); \
+         t1.ready.then(function () { \
+           log.push('t1 ready'); \
+           var t2 = inner.startViewTransition(function () {}); \
+           t2.ready.catch(function (e) { log.push('t2:' + e.name); }); }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(log(&rt), "t1 ready,t2:InvalidStateError");
+}
+
+#[test]
+fn the_scope_element_computes_to_all_while_its_transition_runs() {
+    let rt = scoped_rt(NAMES_CSS);
+    rt.eval(
+        "var scope = function () { return getComputedStyle(main).viewTransitionScope; }; \
+         log.push(scope()); var t = main.startViewTransition(); log.push(scope()); \
+         log.push(getComputedStyle(inner).viewTransitionScope); \
+         t.finished.then(function () { log.push(scope()); }); null",
+    )
+    .unwrap();
+    settle_animations(&rt);
+    assert_eq!(log(&rt), "none,all,none,none");
+    // A skipped transition resets it at once.
+    rt.eval("log = []; var u = main.startViewTransition(); u.skipTransition(); log.push(scope()); null").unwrap();
+    assert_eq!(log(&rt), "none");
+}
+
+#[test]
+fn scoped_pseudo_tree_is_answered_for_its_scope_element_only() {
+    let rt = scoped_rt(NAMES_CSS);
+    rt.eval(
+        "var probe = function (el, sel) { return JSON.stringify(getComputedStyle(el, sel).position); }; \
+         var t = main.startViewTransition(function () { \
+           log.push(probe(main, '::view-transition') + probe(main, '::view-transition-group(outer)') + \
+                    probe(main, '::view-transition-group(root)') + probe(html, '::view-transition') + \
+                    probe(inner, '::view-transition')); }); \
+         t.finished.then(function () { log.push(probe(main, '::view-transition')); }); null",
+    )
+    .unwrap();
+    settle_animations(&rt);
+    // `main` answers for `::view-transition` and its `outer` group; `root`, the document element and `inner` do not.
+    assert_eq!(log(&rt), ["\"absolute\"", "\"absolute\"", "\"\"", "\"\"", "\"\""].concat() + ",\"\"");
+}
+
+#[test]
+fn scoped_pseudo_animations_target_the_scope_element() {
+    let rt = scoped_rt(NAMES_CSS);
+    rt.eval(
+        "var t = main.startViewTransition(); \
+         t.ready.then(function () { \
+           log.push(document.getAnimations().map(function (a) { \
+             return a.effect.target.id + a.effect.pseudoElement; }).sort().join(' ')); \
+           log.push(main.getAnimations({ subtree: true }).length + '/' + html.getAnimations().length); }); \
+         t.finished.then(function () { log.push(document.getAnimations().length); }); null",
+    )
+    .unwrap();
+    settle_animations(&rt);
+    let got = log(&rt);
+    assert!(got.starts_with("main::view-transition-group(inner) main::view-transition-group(outer)"), "{got}");
+    assert!(got.ends_with(",0"), "{got}");
+    assert!(got.contains("main::view-transition-old(outer)") && !got.contains("(root)"), "{got}");
+}
+
+/// `animation: unset` on the group and image pair leaves only the fade animations of the old and
+/// new images (WPT `scoped/capture.html`).
+#[test]
+fn page_animation_unset_removes_the_ua_group_animation_of_a_scoped_tree() {
+    let rt = scoped_rt(&format!(
+        "{NAMES_CSS} ::view-transition-group(*), ::view-transition-image-pair(*) {{ animation: unset; }}          ::view-transition-old(*) {{ animation: -ua-view-transition-fade-out 1s paused; }}          ::view-transition-new(*) {{ animation: -ua-view-transition-fade-in 1s paused; }}"
+    ));
+    rt.eval(
+        "main.startViewTransition().ready.then(function () {            log.push(main.getAnimations({ subtree: true }).map(function (a) {              return a.animationName.replace('-ua-view-transition-', '') + '@' + a.effect.pseudoElement; }).join(' ')); }); null",
+    )
+    .unwrap();
+    settle(&rt);
+    assert_eq!(
+        log(&rt),
+        "fade-out@::view-transition-old(outer) fade-in@::view-transition-new(outer) fade-out@::view-transition-old(inner) fade-in@::view-transition-new(inner)"
+    );
 }

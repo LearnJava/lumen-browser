@@ -274,6 +274,8 @@ mod v8_webworker;
 mod v8_cssom_stylesheets;
 #[cfg(feature = "v8-backend")]
 mod v8_cssom10_tree;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1506_iterables;
 
 #[cfg(feature = "v8-backend")]
 mod v8_cssom5_constructed_stylesheets;
@@ -289,6 +291,9 @@ mod v8_bug493_sheet_registry;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug504_scroll_flush;
+
+#[cfg(feature = "v8-backend")]
+mod v8_cq_scroll_state_invalidation;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1238_scoped_collectors;
@@ -339,6 +344,8 @@ mod v8_gap_rule_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1293_motion_overlay;
 mod v8_cssanim_model;
+#[cfg(feature = "v8-backend")]
+mod v8_paint_worklet;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1437_text_motion;
 #[cfg(feature = "v8-backend")]

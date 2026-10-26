@@ -1067,6 +1067,84 @@ pub(in crate::style) fn cascade_validate_against_syntax(value: &str, syntax: &st
     parse_syntax_string(syntax).ok().map(|parsed| value_matches_parsed_syntax(value, &parsed, false))
 }
 
+/// CSS Properties and Values L1 §2.3 «calculation of computed values»: the computed
+/// form of `value` for a registered property with `syntax` — lengths made absolute
+/// against `em` (the element's own font-size) and `viewport`, `calc()` of numbers
+/// folded, list items handled one by one. `None` — nothing to compute (universal
+/// syntax, a keyword/colour/other type, a value that does not match): the specified
+/// string is the computed one.
+pub(in crate::style) fn cascade_compute_registered_value(
+    value: &str,
+    syntax: &str,
+    em: f32,
+    viewport: lumen_core::geom::Size,
+) -> Option<String> {
+    let ParsedSyntax::Components(components) = parse_syntax_string(syntax).ok()? else {
+        return None;
+    };
+    let value = strip_css_comments(value);
+    let value = value.trim();
+    let component = components.iter().find(|c| component_matches(c, value, false))?;
+    let SyntaxComponentKind::Type(ty) = &component.kind else {
+        return None;
+    };
+    let one = |token: &str| compute_single_registered_value(*ty, token.trim(), em, viewport);
+    let join = |tokens: Vec<&str>, sep: &str| -> Option<String> {
+        tokens.into_iter().map(one).collect::<Option<Vec<_>>>().map(|v| v.join(sep))
+    };
+    match component.multiplier {
+        None => one(value),
+        Some(SyntaxMultiplier::Plus) => join(split_top_level_whitespace(value)?, " "),
+        Some(SyntaxMultiplier::Hash) => join(split_top_level_comma(value)?, ", "),
+    }
+}
+
+fn compute_single_registered_value(
+    ty: SyntaxType,
+    token: &str,
+    em: f32,
+    viewport: lumen_core::geom::Size,
+) -> Option<String> {
+    use crate::selector_query::length_to_css;
+    match ty {
+        SyntaxType::Length | SyntaxType::LengthPercentage => {
+            let length = parse_length_q(token, false)?;
+            if !length.contains_percent() {
+                return length.resolve(em, Some(0.0), viewport).map(|px| length_to_css(&Length::Px(px)));
+            }
+            if matches!(length, Length::Percent(_)) {
+                return Some(token.to_owned());
+            }
+            // A `calc()` that mixes `%` and lengths stays a `calc()`: `a% + bpx`. The
+            // percentage and the pixel part are read off two samples of the (linear)
+            // expression; a non-linear one (`min(%, px)`) fails the midpoint check.
+            let at = |basis: f32| length.resolve(em, Some(basis), viewport);
+            let (r0, r50, r100) = (at(0.0)?, at(50.0)?, at(100.0)?);
+            if ((r0 + r100) / 2.0 - r50).abs() > 1e-3 {
+                return None;
+            }
+            // At a 100px basis one percent is one pixel.
+            let (pct, px) = (r100 - r0, r0);
+            let pct_part = format!("{}%", length_to_css(&Length::Px(pct)).trim_end_matches("px"));
+            Some(match (pct == 0.0, px == 0.0) {
+                (true, _) => length_to_css(&Length::Px(px)),
+                (false, true) => pct_part,
+                (false, false) if px < 0.0 => format!("calc({pct_part} - {})", length_to_css(&Length::Px(-px))),
+                (false, false) => format!("calc({pct_part} + {})", length_to_css(&Length::Px(px))),
+            })
+        }
+        SyntaxType::Number | SyntaxType::Integer => {
+            let v = match token.parse::<f64>() {
+                Ok(v) => v,
+                Err(_) => matches_calc_typed(token, None)?,
+            };
+            let v = if ty == SyntaxType::Integer { v.round() } else { v };
+            Some(format!("{v}"))
+        }
+        _ => None,
+    }
+}
+
 /// CSS Properties and Values API — `CSS.registerProperty()`'s "register a
 /// custom property" algorithm (BUG-531), the part that was entirely
 /// missing: parses and validates `syntax`, then — if `initial_value` is

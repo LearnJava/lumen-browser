@@ -11,14 +11,14 @@
 //!    источник (`src`) держит свою `wgpu::Texture` + bind group; общий
 //!    sampler. Без cache hit — fallback на светло-серый fill (как раньше).
 //!
-//! Глифы растеризуются по требованию через `lumen_font::Rasterizer` на
-//! **подобранный bin размера** (`size_bin_for(font_size)`). Bin-набор —
-//! `SIZE_BINS = [8, 12, 16, 20, 24, 32, 48, 64]`; font_size округляется
-//! вверх до ближайшего bin (или до 64 если больше). Display-сторона
-//! масштабирует квад в долю `font_size / size_bin` — если font_size совпал
-//! с bin-ом (16/24 px), масштаба нет вовсе. Это устраняет blur от линейной
-//! интерполяции fixed-size атласа (раньше всё рисовалось на 24 px и потом
-//! масштабировалось).
+//! Глифы растеризуются по требованию через `lumen_font::Rasterizer` в
+//! **точном размере в device px** (TEXTQ-1): `font_size × scale_factor`,
+//! квантованный до 1/4 px (`glyph_raster_size`), без корзин-bin. Квад
+//! кладётся на целые device px (baseline — `round`, перо по X — целая часть +
+//! одна из 4 субпиксельных фаз, контур растрируется со сдвигом
+//! `Rasterizer::rasterize_offset`), поэтому выборка из атласа идёт 1:1 —
+//! тексель = пиксель, без линейной интерполяции. Исключение — глиф крупнее
+//! `MAX_GLYPH_RASTER_PX`: он растрируется в этом пределе и растягивается.
 
 // Долг по документации: файл написан до включения `missing_docs` и пока не
 // покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
@@ -35,7 +35,7 @@ use lumen_core::ColorSpace;
 use lumen_core::ext::{FaceRecord, FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
-    Bitmap, Colr, Cpal, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
+    Bitmap, Colr, Cpal, Font, Head, Outline, OwnedCmap, Rasterizer,
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
@@ -52,16 +52,16 @@ use crate::DisplayCommand;
 
 mod shaders;
 pub(crate) use shaders::{
-    atlas_key, size_bin_for, ATLAS_DIM, BAND_MARGIN_CAP_CSS, BAND_MIN_MARGIN_RATIO,
+    atlas_key, glyph_raster_size, snap_pen, ATLAS_DIM, BAND_MARGIN_CAP_CSS, BAND_MIN_MARGIN_RATIO,
     BAND_STRIP_BG_Z, BLEND_SHADER_SRC, BLUR_SHADER_SRC, CIRCLE_SHADER_SRC, CLIP_UNIFORM_WGSL,
     COMPOSITE_SHADER_SRC, CROSS_FADE_SHADER_SRC, FILL_SHADER_SRC, GRADIENT_SHADER_SRC,
     IMAGE_SHADER_SRC, MASK_COMPOSITE_SHADER_SRC, MASK_LAYER_SHADER_SRC, MAX_TEXTURE_DIM_TARGET,
     MIPGEN_SHADER_SRC, PATH_CLIP_MAX_VERTS, PATH_CLIP_SHADER_SRC, RRECT_CLIP_SHADER_SRC,
     RRECT_SHADER_SRC, SDF_RRECT_WGSL, SHADOW_SHADER_SRC, TEXT_SHADER_SRC,
-    blur_composite_shader_src, filter_shader_src,
+    blur_composite_shader_src, filter_shader_src, X_PHASES,
 };
 #[cfg(test)]
-use shaders::SIZE_BINS;
+use shaders::{MAX_GLYPH_RASTER_PX, SUBPIXEL_MAX_RASTER_PX};
 
 impl Renderer {
 
@@ -1236,7 +1236,7 @@ impl Renderer {
                     // здесь берём готовый id из `text_face_ids`.
                     font_stretch: _,
                     font_variation_axes,
-                    font_features: _,
+                    font_features,
                     font_palette,
                     tab_size,
                     letter_spacing,
@@ -1314,9 +1314,11 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
+                                font_features,
                                 *tab_size,
                                 (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
+                                dpr_f32,
                             );
                             rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
                         }
@@ -1334,8 +1336,10 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
+                                font_features,
                                 *tab_size,
                                 font_palette.as_ref(),
+                                dpr_f32,
                             );
                         }
                         _ => {
@@ -1352,9 +1356,11 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 font_variation_axes,
+                                font_features,
                                 *tab_size,
                                 (crate::display_list::spacing_px(*letter_spacing), crate::display_list::spacing_px(*word_spacing)),
                                 font_palette.as_ref(),
+                                dpr_f32,
                             );
                         }
                     }
@@ -1546,9 +1552,11 @@ impl Renderer {
                                 &mut self.text_run_cache,
                                 self.text_run_cache_enabled,
                                 &[],
+                                &[],
                                 0.0,
                                 (0.0, 0.0),
                                 None,
+                                dpr_f32,
                             );
                             if let Some(m) = transform_stack.last() {
                                 apply_affine_to_verts(

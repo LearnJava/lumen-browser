@@ -54,10 +54,17 @@ pub struct MixinRule {
     /// (e.g. a stray `font-size: 200px;`) belongs to no selector and is
     /// parsed but discarded, same as source authors are told to expect
     /// ("will be ignored" comment in the vendored `mixin-basic.html`).
-    pub locals: Vec<Declaration>,
+    ///
+    /// `@media`/`@supports` groups around locals stay as
+    /// [`FunctionBodyItem::Conditional`], in source order with the bare ones
+    /// (a later bare local overrides an earlier conditional one).
+    pub locals: Vec<FunctionBodyItem>,
     /// Body of the mixin's own `@result { ... }` block, in source order.
     /// `None` if the mixin has no `@result` (a no-op mixin — `@apply`
-    /// expands to zero declarations either way).
+    /// expands to zero declarations either way). Several `@result` blocks
+    /// (also inside `@media`/`@supports` groups of the mixin body) are
+    /// concatenated in source order; a group around `@result` becomes a
+    /// [`MixinResultItem::Conditional`] item.
     pub result: Option<Vec<MixinResultItem>>,
     /// Name of the `@layer` this `@mixin` was declared directly inside
     /// (named or the synthesized `__anon_N__` for an anonymous block),
@@ -276,6 +283,16 @@ pub enum MixinResultItem {
         /// The nested rule's body, in source order.
         body: Vec<MixinResultItem>,
     },
+    /// `@media`/`@supports` group (CSS Mixins L1 §conditional-rules) — `items`
+    /// take part in the expansion only while `condition` holds at `@apply`
+    /// time. A nested style rule inside a group is parsed but not
+    /// materialized (no conditional standalone `Rule` is produced for it).
+    Conditional {
+        /// Source text of the at-rule prelude (`@media (width < 1000px)`), for `cssText`.
+        prelude: String,
+        condition: LayerCondition,
+        items: Vec<MixinResultItem>,
+    },
 }
 
 impl MixinResultItem {
@@ -302,6 +319,11 @@ impl MixinResultItem {
                 let flat = body.iter().all(|it| matches!(it, MixinResultItem::Decl(_)));
                 let children: Vec<String> = body.iter().map(MixinResultItem::css_text).collect();
                 render_container(&prelude, &children, flat)
+            }
+            MixinResultItem::Conditional { prelude, items, .. } => {
+                let flat = items.iter().all(|it| matches!(it, MixinResultItem::Decl(_)));
+                let children: Vec<String> = items.iter().map(MixinResultItem::css_text).collect();
+                render_container(prelude, &children, flat)
             }
         }
     }
@@ -490,10 +512,19 @@ impl<'a> Parser<'a> {
         }
         self.consume(); // '('
         let params_str = self.read_balanced_parens()?;
-        let parameters: Vec<MixinParameter> = split_top_level_commas(&params_str)
-            .into_iter()
-            .filter_map(|raw| self.parse_mixin_parameter(raw))
-            .collect();
+        // One invalid parameter invalidates the whole `@mixin` (CSS Mixins L1
+        // §defining-mixins): the rule is dropped, so an earlier same-named
+        // mixin stays in force (`mixin-parameters.html` "invalid parameter
+        // lists are ignored").
+        let parameters: Option<Vec<MixinParameter>> = if params_str.trim().is_empty() {
+            Some(Vec::new())
+        } else {
+            split_top_level_commas(&params_str).into_iter().map(|raw| self.parse_mixin_parameter(raw)).collect()
+        };
+        let Some(parameters) = parameters else {
+            self.skip_until_block_end();
+            return None;
+        };
 
         self.skip_ws_and_comments();
         if self.peek() != Some('{') {
@@ -501,7 +532,9 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.consume(); // '{'
-        let (locals, result) = self.parse_mixin_body();
+        let mut locals = Vec::new();
+        let mut result = None;
+        self.parse_mixin_body(&mut locals, &mut result);
         Some(MixinRule { name, parameters, locals, result, layer: None })
     }
 
@@ -543,13 +576,17 @@ impl<'a> Parser<'a> {
 
     /// Parses the inside of an `@mixin`'s body (cursor already past the
     /// opening `{`, consumes the matching `}`): collects `--x:` locals
-    /// (both before and after `@result`) and the single `@result { ... }`
-    /// block, if present. Non-custom-property declarations at this level,
-    /// and any other `@`-rule or nested-selector token, are parsed/skipped
-    /// but otherwise discarded — see [`MixinRule`]'s doc comment.
-    fn parse_mixin_body(&mut self) -> (Vec<Declaration>, Option<Vec<MixinResultItem>>) {
-        let mut locals = Vec::new();
-        let mut result = None;
+    /// (both before and after `@result`) into `locals` and the `@result { ... }`
+    /// block(s) into `result`. A `@media`/`@supports` group is parsed with
+    /// the same grammar one level down; its locals and its `@result` are kept
+    /// wrapped in the group's condition. Non-custom-property declarations at
+    /// this level, and any other `@`-rule or nested-selector token, are
+    /// parsed/skipped but otherwise discarded — see [`MixinRule`]'s doc comment.
+    fn parse_mixin_body(
+        &mut self,
+        locals: &mut Vec<FunctionBodyItem>,
+        result: &mut Option<Vec<MixinResultItem>>,
+    ) {
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
@@ -569,26 +606,47 @@ impl<'a> Parser<'a> {
                         self.skip_ws_and_comments();
                         if self.peek() == Some('{') {
                             self.consume();
-                            result = Some(self.parse_mixin_result_body());
+                            let items = self.parse_mixin_result_body();
+                            result.get_or_insert_with(Vec::new).extend(items);
                         } else {
                             self.skip_until_block_end();
                         }
-                    } else {
-                        self.pos = at_start;
-                        self.skip_at_rule();
+                        continue;
+                    }
+                    self.pos = at_start;
+                    match self.open_conditional_group() {
+                        ConditionalGroupOpen::Open { condition, prelude } => {
+                            let mut inner_locals = Vec::new();
+                            let mut inner_result = None;
+                            self.parse_mixin_body(&mut inner_locals, &mut inner_result);
+                            if !inner_locals.is_empty() {
+                                locals.push(FunctionBodyItem::Conditional {
+                                    condition: condition.clone(),
+                                    items: inner_locals,
+                                });
+                            }
+                            if let Some(items) = inner_result {
+                                result.get_or_insert_with(Vec::new).push(MixinResultItem::Conditional {
+                                    prelude,
+                                    condition,
+                                    items,
+                                });
+                            }
+                        }
+                        ConditionalGroupOpen::NoBlock => {}
+                        ConditionalGroupOpen::Other => self.skip_at_rule(),
                     }
                 }
                 _ => match self.parse_declaration() {
                     Some(d) => {
                         if d.property.starts_with("--") {
-                            locals.push(d);
+                            locals.push(FunctionBodyItem::Decl(d));
                         }
                     }
                     None => self.recover_to_decl_boundary(),
                 },
             }
         }
-        (locals, result)
     }
 
     /// Parses the inside of a mixin's `@result { ... }` block (cursor
@@ -615,6 +673,15 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Some('@') => {
+                    match self.open_conditional_group() {
+                        ConditionalGroupOpen::Open { condition, prelude } => {
+                            let inner = self.parse_mixin_result_body();
+                            items.push(MixinResultItem::Conditional { prelude, condition, items: inner });
+                            continue;
+                        }
+                        ConditionalGroupOpen::NoBlock => continue,
+                        ConditionalGroupOpen::Other => {}
+                    }
                     let at_start = self.pos;
                     self.consume();
                     let ident = self.parse_ident().unwrap_or_default();
@@ -1086,6 +1153,9 @@ fn collect_nested_rule(
                 let block = apply.block.as_deref().unwrap_or(fallback.as_slice());
                 declarations.extend(block.iter().cloned());
             }
+            // Declarations of a group are not copied: the standalone `Rule`
+            // has no way to carry the condition (see `MixinResultItem::Conditional`).
+            MixinResultItem::Conditional { .. } => {}
             MixinResultItem::NestedRule { combinator: c2, selectors: s2, body: b2 } => {
                 collect_nested_rule(*c2, s2, b2, apply, &combined, out);
             }

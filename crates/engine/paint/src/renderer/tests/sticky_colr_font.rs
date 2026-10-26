@@ -424,9 +424,11 @@ fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
         &mut runs,
         true,
         &[],
+        &[],
         0.0,
         (0.0, 0.0),
         None,
+        1.0,
     );
 
     // Два слоя → два quad-а → 12 вершин; монохромный фолбэк дал бы 6.
@@ -470,11 +472,11 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
         left: 0.0,
         top: 0.0,
     };
-    assert!(atlas.insert(AtlasKey::new(u16::MAX, 0, 1, 0), &filler).is_some());
+    assert!(atlas.insert(AtlasKey::new(u16::MAX, 0, 1, 0, 0), &filler).is_some());
 
-    let key = atlas_key(0, 1, 32, 0);
+    let key = atlas_key(0, 1, 128, 0, 0);
     assert!(
-        ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 32, &[]).is_none(),
+        ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 128, 0, &[]).is_none(),
         "в переполненный атлас глиф не лёг"
     );
     assert!(atlas.exhausted(), "атлас пометил себя исчерпанным");
@@ -485,7 +487,7 @@ fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
 
     // Сброс атласа (в рантайме — на старте следующего кадра).
     atlas.reset();
-    let g = ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 32, &[]);
+    let g = ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 128, 0, &[]);
     assert!(g.is_some(), "после сброса тот же глиф растеризуется и ложится");
     assert!(cached.get(&key).copied().flatten().is_some(), "и попадает в мемоизацию");
 }
@@ -529,9 +531,11 @@ fn custom_palette_override_reaches_the_emitted_vertices() {
         &mut runs,
         true,
         &[],
+        &[],
         0.0,
         (0.0, 0.0),
         Some(&selection),
+        1.0,
     );
 
     assert_eq!(out.len(), 12);
@@ -582,9 +586,11 @@ fn text_run_cache_skips_color_glyph_runs() {
             &mut runs,
             true,
             &[],
+            &[],
             0.0,
             (0.0, 0.0),
             None,
+            1.0,
         );
     }
     assert_eq!(out.len(), 12, "цветной глиф всё ещё даёт quad на слой");
@@ -632,9 +638,11 @@ fn text_run_cache_replays_identical_vertices() {
             runs,
             enabled,
             &[],
+            &[],
             0.0,
             (0.0, 0.0),
             None,
+            1.0,
         );
         out
     };
@@ -1379,6 +1387,31 @@ fn band_blit_quad_offsets_uv_by_the_ring_phase() {
     );
     // По горизонтали кольца нет — u остаётся 0…1 при любой фазе.
     assert_eq!((shifted[0].1[0], shifted[0].2[0]), (0.0, 1.0));
+}
+
+/// TEXTQ-3: квад блита полосы стоит на целых device px при любом дробном
+/// сдвиге, иначе билинейная выборка размывает текст при каждой прокрутке.
+#[test]
+fn band_blit_quad_snaps_shift_to_whole_device_px() {
+    for dpr in [1.0_f32, 1.5, 2.0] {
+        // Целое число device px по высоте: `H / dpr` в CSS.
+        let h_px = 2400_u32;
+        for dy_css in [-762.0_f32, -762.3, -762.5, -762.77, -0.2, -1233.37, 0.0] {
+            let quads = band_blit_quads(dy_css, 1920.0 / dpr, h_px, 17, dpr);
+            assert_eq!(quads.len(), 1);
+            let y_dev = quads[0].0.y * dpr;
+            assert!(
+                (y_dev - y_dev.round()).abs() < 1e-3,
+                "dpr {dpr}, dy {dy_css}: верх квада {y_dev} device px не целый",
+            );
+            assert!(
+                (y_dev - dy_css * dpr).abs() <= 0.5 + 1e-3,
+                "dpr {dpr}, dy {dy_css}: сдвиг больше 0.5 device px",
+            );
+            let h_dev = quads[0].0.height * dpr;
+            assert!((h_dev - h_dev.round()).abs() < 1e-3, "высота квада не целая");
+        }
+    }
 }
 
 /// BUG-405 срез 30: гейт на разбор рычага переписи [`band_pass_load_ops`]

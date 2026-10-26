@@ -1559,7 +1559,7 @@ fn text_dl(text: &str, y: f32) -> Vec<DisplayCommand> {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn atlas_partial_upload_sends_only_changed_rows() {
-    const FULL: u64 = 1024 * 1024; // ATLAS_DIM × ATLAS_DIM, R8
+    const FULL: u64 = 2048 * 2048; // ATLAS_DIM × ATLAS_DIM, R8
     let mut whole = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
         .expect("headless renderer (плечо целой текстуры)");
     let mut rows = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)

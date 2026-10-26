@@ -1520,7 +1520,9 @@ impl FontVariantPosition {
 /// `font-feature-settings`.
 pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
     let caps = style.font_variant_caps.feature_tags();
-    let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len() + 8);
+    // `Vec::new()`: у типичного стиля фич нет, и раскладка зовёт эту функцию на
+    // каждое измеряемое слово (TEXTQ-5) — пустой Vec не аллоцирует.
+    let mut out = Vec::new();
     out.extend(caps.iter().map(|tag| (*tag, 1)));
     style.font_variant_ligatures.push_features(&mut out);
     style.font_variant_numeric.push_features(&mut out);
@@ -1531,6 +1533,51 @@ pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
     }
     out.extend(style.font_feature_settings.iter().map(|f| (f.tag, f.value)));
     out
+}
+
+/// Оси вариаций run-а для шейпера и растеризатора (`DrawText.font_variation_axes`):
+/// `font-variation-settings` автора плюс автоматические `opsz` (CSS Fonts L4 §7.12,
+/// `font-optical-sizing: auto` — оптический размер равен `font-size`) и `wdth`
+/// (`font-stretch` не `normal`), если автор их не задал. Один источник для
+/// отрисовки и для измерителя ширин раскладки (TEXTQ-5): иначе ширина run-а в
+/// раскладке и нарисованная расходятся на variable-шрифтах.
+pub fn text_variation_axes(style: &ComputedStyle) -> Vec<([u8; 4], f32)> {
+    let mut axes: Vec<([u8; 4], f32)> =
+        style.font_variation_settings.iter().map(|a| (a.tag, a.value)).collect();
+    if style.font_optical_sizing == FontOpticalSizing::Auto && !axes.iter().any(|(t, _)| t == b"opsz") {
+        axes.push((*b"opsz", style.font_size));
+    }
+    if style.font_stretch != FontStretch::NORMAL && !axes.iter().any(|(t, _)| t == b"wdth") {
+        axes.push((*b"wdth", style.font_stretch.0 as f32 / 10.0));
+    }
+    axes
+}
+
+/// [`text_variation_axes`] без аллокации для типичного стиля: до двух осей
+/// автора плюс автоматические `opsz`/`wdth` собираются на стеке. Раскладка зовёт
+/// это на каждое измеряемое слово (TEXTQ-5).
+pub fn with_text_variation_axes<R>(style: &ComputedStyle, f: impl FnOnce(&[([u8; 4], f32)]) -> R) -> R {
+    const STACK_AXES: usize = 4;
+    let css = &style.font_variation_settings;
+    if css.len() + 2 > STACK_AXES {
+        return f(&text_variation_axes(style));
+    }
+    let mut buf = [([0u8; 4], 0.0_f32); STACK_AXES];
+    let mut n = 0;
+    for a in css {
+        buf[n] = (a.tag, a.value);
+        n += 1;
+    }
+    let has = |buf: &[([u8; 4], f32)], tag: &[u8; 4]| buf.iter().any(|(t, _)| t == tag);
+    if style.font_optical_sizing == FontOpticalSizing::Auto && !has(&buf[..n], b"opsz") {
+        buf[n] = (*b"opsz", style.font_size);
+        n += 1;
+    }
+    if style.font_stretch != FontStretch::NORMAL && !has(&buf[..n], b"wdth") {
+        buf[n] = (*b"wdth", style.font_stretch.0 as f32 / 10.0);
+        n += 1;
+    }
+    f(&buf[..n])
 }
 
 /// CSS Fonts L4 §7.12 — `font-optical-sizing`. Inherited.
@@ -1716,11 +1763,50 @@ pub struct TextDecorationLine {
     pub underline: bool,
     pub overline: bool,
     pub line_through: bool,
+    /// `blink` (CSS2, L3 §2.1): хранится ради `getComputedStyle`, не рисуется.
+    pub blink: bool,
+    /// `spelling-error` (L4 §2.1.1): взаимоисключающе с остальными, не рисуется.
+    pub spelling_error: bool,
+    /// `grammar-error` (L4 §2.1.1): взаимоисключающе с остальными, не рисуется.
+    pub grammar_error: bool,
 }
 
 impl TextDecorationLine {
+    /// Нет ни одной *рисуемой* линии (`blink`/`spelling-error`/`grammar-error` не рисуются).
     pub const fn is_empty(self) -> bool {
         !self.underline && !self.overline && !self.line_through
+    }
+
+    /// Вычисленное значение — ключевое слово `none` (не задано ни одной линии, в том числе `blink`).
+    pub const fn is_none(self) -> bool {
+        self.is_empty() && !self.blink && !self.spelling_error && !self.grammar_error
+    }
+
+    /// Каноническая запись: `none` или линии в порядке `underline overline line-through blink`.
+    pub fn to_css(self) -> String {
+        if self.is_none() {
+            return "none".into();
+        }
+        if self.spelling_error {
+            return "spelling-error".into();
+        }
+        if self.grammar_error {
+            return "grammar-error".into();
+        }
+        let mut parts = Vec::with_capacity(4);
+        if self.underline {
+            parts.push("underline");
+        }
+        if self.overline {
+            parts.push("overline");
+        }
+        if self.line_through {
+            parts.push("line-through");
+        }
+        if self.blink {
+            parts.push("blink");
+        }
+        parts.join(" ")
     }
 }
 
@@ -1783,6 +1869,8 @@ pub enum TextDecorationThickness {
     FromFont,
     Length(f32),
     Percentage(f32),
+    /// `calc()` со слагаемым-процентом: `px + frac × 1em` (`calc(200% - 8px)`).
+    LengthPercentage { px: f32, frac: f32 },
 }
 
 /// CSS Text Decoration L4 §3.5 — `text-decoration-skip-ink`. Controls whether
@@ -1846,26 +1934,44 @@ pub enum TextEmphasisShape {
 /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Сторона
 /// относительно текстовой строки, на которой рисуются marks.
 ///
-/// Grammar: `[ over | under ] && [ right | left ]?`. Initial `over right`
-/// для horizontal writing mode (наш default; для vertical было бы `over
-/// right` тоже, но right имеет другой геометрический смысл — Phase 0 без
-/// writing-mode не различает).
+/// Grammar: `auto | [ over | under ] && [ right | left ]?`. Initial `auto` (L4); в
+/// горизонтальном письме он равен `over right`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextEmphasisPosition {
-    #[default]
     OverRight,
     OverLeft,
     UnderRight,
     UnderLeft,
+    /// `auto` (L4 §5.5, initial): сторона выбирается по `writing-mode`/`lang`; в раскладке как `over`.
+    #[default]
+    Auto,
 }
 
 impl TextEmphasisPosition {
     pub fn is_over(self) -> bool {
-        matches!(self, Self::OverRight | Self::OverLeft)
+        matches!(self, Self::OverRight | Self::OverLeft | Self::Auto)
+    }
+
+    /// Сторона меток в вертикальном письме: `right` (и `auto`) — справа от глифов, `left` — слева
+    /// (CSS Text Decoration L3 §4.2: в вертикальном режиме `over`/`under` не действуют).
+    pub fn is_right(self) -> bool {
+        matches!(self, Self::OverRight | Self::UnderRight | Self::Auto)
+    }
+
+    /// Каноническая запись: `right` опускается (initial), `auto` как есть.
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::OverRight => "over",
+            Self::OverLeft => "over left",
+            Self::UnderRight => "under",
+            Self::UnderLeft => "under left",
+            Self::Auto => "auto",
+        }
     }
 }
 
-/// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`.
+/// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`:
+/// `auto | [ from-font | under ] || [ left | right ]`.
 /// Управляет вертикальным положением underline относительно baseline.
 /// Inherited. Initial: `Auto`.
 /// Phase 0: parse + store; real offset calculation при underline paint — P2.
@@ -1883,6 +1989,157 @@ pub enum TextUnderlinePosition {
     Left,
     /// Для vertical writing-mode: underline рисуется с правой стороны.
     Right,
+    /// `from-font left`.
+    FromFontLeft,
+    /// `from-font right`.
+    FromFontRight,
+    /// `under left`.
+    UnderLeft,
+    /// `under right`.
+    UnderRight,
+}
+
+impl TextUnderlinePosition {
+    /// Разбор значения; `None` — невалидно. Токены вертикальной оси (`from-font`/`under`) и
+    /// горизонтальной (`left`/`right`) — в любом порядке, по одному.
+    pub fn parse(val: &str) -> Option<Self> {
+        let mut vert: Option<bool> = None; // Some(true) = under, Some(false) = from-font
+        let mut side: Option<bool> = None; // Some(true) = left, Some(false) = right
+        let mut auto = false;
+        let mut n = 0;
+        for tok in val.split_whitespace() {
+            n += 1;
+            match tok.to_ascii_lowercase().as_str() {
+                "auto" => auto = true,
+                "from-font" if vert.is_none() => vert = Some(false),
+                "under" if vert.is_none() => vert = Some(true),
+                "left" if side.is_none() => side = Some(true),
+                "right" if side.is_none() => side = Some(false),
+                _ => return None,
+            }
+        }
+        if auto {
+            return (n == 1).then_some(Self::Auto);
+        }
+        Some(match (vert, side) {
+            (None, None) => return None,
+            (Some(false), None) => Self::FromFont,
+            (Some(true), None) => Self::Under,
+            (None, Some(true)) => Self::Left,
+            (None, Some(false)) => Self::Right,
+            (Some(false), Some(true)) => Self::FromFontLeft,
+            (Some(false), Some(false)) => Self::FromFontRight,
+            (Some(true), Some(true)) => Self::UnderLeft,
+            (Some(true), Some(false)) => Self::UnderRight,
+        })
+    }
+
+    /// Рисуется ли underline под всеми выносными элементами (`under`, с `left`/`right` или без).
+    pub fn is_under(self) -> bool {
+        matches!(self, Self::Under | Self::UnderLeft | Self::UnderRight)
+    }
+
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::FromFont => "from-font",
+            Self::Under => "under",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::FromFontLeft => "from-font left",
+            Self::FromFontRight => "from-font right",
+            Self::UnderLeft => "under left",
+            Self::UnderRight => "under right",
+        }
+    }
+}
+
+/// CSS Text Decoration L4 §3.6 — `text-decoration-skip-spaces`:
+/// `none | all | [ start || end ]`. Inherited. Initial: `start end`.
+/// Только хранение: пропуск пробелов при рисовании линии пока не реализован.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecorationSkipSpaces {
+    None,
+    All,
+    Start,
+    End,
+    #[default]
+    StartEnd,
+}
+
+impl TextDecorationSkipSpaces {
+    pub fn parse(val: &str) -> Option<Self> {
+        let toks: Vec<String> = val.split_whitespace().map(str::to_ascii_lowercase).collect();
+        match toks.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            ["none"] => Some(Self::None),
+            ["all"] => Some(Self::All),
+            ["start"] => Some(Self::Start),
+            ["end"] => Some(Self::End),
+            ["start", "end"] | ["end", "start"] => Some(Self::StartEnd),
+            _ => Option::None,
+        }
+    }
+
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::All => "all",
+            Self::Start => "start",
+            Self::End => "end",
+            Self::StartEnd => "start end",
+        }
+    }
+}
+
+impl TextDecorationSkipInk {
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::All => "all",
+            Self::None => "none",
+        }
+    }
+}
+
+impl TextEmphasisStyle {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Размер метки — половина кегля текста (CSS Text Decoration L3 §4.2).
+    pub fn mark_size(font_size: f32) -> f32 {
+        font_size * 0.5
+    }
+
+    /// Каноническая запись: закрашенная фигура — одно слово (`filled` опускается), контурная —
+    /// `open <shape>`, строка — в двойных кавычках.
+    pub fn to_css(&self) -> String {
+        match self {
+            Self::None => "none".into(),
+            Self::Symbol { filled, shape } => {
+                let name = match shape {
+                    TextEmphasisShape::Dot => "dot",
+                    TextEmphasisShape::Circle => "circle",
+                    TextEmphasisShape::DoubleCircle => "double-circle",
+                    TextEmphasisShape::Triangle => "triangle",
+                    TextEmphasisShape::Sesame => "sesame",
+                };
+                if *filled { name.into() } else { format!("open {name}") }
+            }
+            Self::String(s) => {
+                let mut out = String::with_capacity(s.len() + 2);
+                out.push('"');
+                for c in s.chars() {
+                    if matches!(c, '"' | '\\') {
+                        out.push('\\');
+                    }
+                    out.push(c);
+                }
+                out.push('"');
+                out
+            }
+        }
+    }
 }
 
 /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. Inherited. Initial: `Auto`.

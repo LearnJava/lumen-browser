@@ -1105,3 +1105,49 @@ fn draw_text_renders_through_unicode_range_sibling_cascade() {
     }
     assert!(has_ink, "cascade over unicode-range siblings must still draw real ink");
 }
+
+/// TEXTQ-5: ширина, которую раскладка получает от измерителя, равна сдвигу
+/// пера CPU-пути (кернинг `AVATAR`, лигатуры выключены при `letter-spacing`).
+#[test]
+fn layout_measurer_width_equals_cpu_pen_advance() {
+    use lumen_layout::{ShapeParams, TextMeasurer};
+    let bundled: &'static [u8] = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
+    let font = lumen_font::Font::parse(bundled).expect("font");
+    let measurer = crate::FontMeasurer::new(&font).expect("measurer");
+    for (text, letter, features) in [
+        ("AVATAR", 0.0_f32, vec![]),
+        ("Hello, World", 0.0, vec![]),
+        ("fi ffi", 2.5, vec![(*b"liga", 1)]),
+        ("abc ->", 3.0, vec![]),
+    ] {
+        let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
+            rect: rect(2.0, 2.0, 400.0, 60.0),
+            text: text.to_string(),
+            font_size: 32.0,
+            color: Color { r: 0, g: 0, b: 255, a: 255 },
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            font_features: features.clone(),
+            font_palette: None,
+            tab_size: 0.0,
+            letter_spacing: crate::display_list::spacing_to_fixed(letter),
+            word_spacing: 0,
+            highlight_name: None,
+            text_orientation: None,
+        }];
+        rasterize_cpu(420, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let pen = TEST_PEN_END.with(std::cell::Cell::get) - 2.0;
+        let params = ShapeParams {
+            font_size_px: 32.0,
+            letter_spacing: crate::display_list::spacing_px(crate::display_list::spacing_to_fixed(letter)),
+            families: &[],
+            features: &features,
+            axes: &[],
+        };
+        let measured = measurer.shaped_width(text, &params).expect("шейпер принял Inter");
+        assert!((measured - pen).abs() < 0.01, "{text:?}: измеритель {measured}, CPU-перо {pen}");
+    }
+}

@@ -21,7 +21,7 @@ Moved out of `CLAUDE.md` on 2026-09-03: the list is only relevant to probe/triag
 
 ## Events and dispatch
 
-- **There is no `navigation` global at all** — `'onnavigate' in navigation` and every other Navigation API feature-detect throws `ReferenceError` before it even gets to answer `false` ([BUG-881](../bugs/BUG-881-OPEN.md)). What a probe should still not expect is shadow-tree retargeting, which is unmodelled, so a path crossing a shadow boundary lists the real nodes.
+- **`window.navigation` exists, but is thin** — `navigation.navigate("#frag")`/`back()`/`traverseTo()` between entries of one document reload the whole page ([BUG-1700](../bugs/BUG-1700-OPEN.md), a page that calls it unconditionally loops), `iframe.contentWindow.navigation` has no methods ([BUG-1701](../bugs/BUG-1701-OPEN.md)), `navigate` is dispatched asynchronously ([BUG-1703](../bugs/BUG-1703-OPEN.md)) and not at all for `location.hash`/anchors/`pushState` ([BUG-881](../bugs/BUG-881-OPEN.md)). What a probe should still not expect is shadow-tree retargeting, which is unmodelled, so a path crossing a shadow boundary lists the real nodes.
 
 - **A script's `cancel()`/seek of a CSS animation or transition moves the computed value, not the painted frame, for `opacity`/`transform`/colours/`height`** — those the frame loop (`AnimationScheduler`/`TransitionScheduler`) drives and the read-time overlay stands aside for them, so `getComputedStyle(el).transform` after `animation.cancel()` still reports the animated matrix, and `animationstart`/`animationend` do not follow a `startTime`/`currentTime` seek (CSSANIM-MODEL-2). Every other property follows the object's clock. `getAnimations()` lists a transition only for a property the page read before the change.
 

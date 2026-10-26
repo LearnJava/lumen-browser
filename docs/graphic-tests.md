@@ -1,6 +1,6 @@
 # Graphic tests
 
-`graphic_tests/NN-*.html` — ~160 pages (00 calibration + unit properties 01–99 + interactions 100–199 + `1000000-final.html`; the authoritative list is `TESTS` in `run.py`), one visual effect each, viewport 1024×720. Graphics only, no text.
+`graphic_tests/NN-*.html` — ~160 pages (00 calibration + unit properties 01–99 + interactions 100–199 + `1000000-final.html`; the authoritative list is `TESTS` in `run.py`), one visual effect each, viewport 1024×720. Graphics only, no text (the one exception is `166-text-quality.html`, TEXTQ-1: an informational text-quality page in `GPU_CAPTURE`, known debtor BUG-128).
 
 **00-calibration.html** — required first test: magenta stripes (`#ff00ff`) 1024 px wide at top and bottom of body. Used to detect crop offset in the Lumen desktop screenshot.
 

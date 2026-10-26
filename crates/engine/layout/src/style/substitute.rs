@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use lumen_core::geom::Size;
-use lumen_css_parser::{ApplyRule, Declaration, FunctionRule, MixinResultItem, MixinRule};
+use lumen_css_parser::{ApplyRule, Declaration, FunctionBodyItem, FunctionRule, MediaContext, MixinResultItem, MixinRule};
 use lumen_dom::{Document, NodeId};
 
 use crate::style::calc::parse_math_function_value;
@@ -34,8 +34,32 @@ pub(crate) fn expand_vars_and_env(
     em_basis: f32,
     viewport: Size,
 ) -> Option<String> {
+    expand_vars_and_env_of(None, value, custom, em_basis, viewport)
+}
+
+/// [`expand_vars_and_env`] for the value of custom property `owner` itself: `owner` counts
+/// as being resolved, so `--a: var(--b, x); --b: var(--a, y)` makes `--a` guaranteed-invalid
+/// too instead of `x` (CSS Variables L1 §3.1: every property on a cycle is invalid).
+pub(crate) fn expand_custom_property_value(
+    owner: &str,
+    value: &str,
+    custom: &HashMap<String, String>,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<String> {
+    expand_vars_and_env_of(Some(owner), value, custom, em_basis, viewport)
+}
+
+fn expand_vars_and_env_of(
+    owner: Option<&str>,
+    value: &str,
+    custom: &HashMap<String, String>,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<String> {
     let after_var = if value.contains("var(") {
-        expand_vars(value, custom, 0, em_basis, viewport)?
+        let mut active: Vec<&str> = owner.and_then(|n| custom.get_key_value(n)).map(|(k, _)| k.as_str()).into_iter().collect();
+        expand_vars_tracked(value, custom, 0, em_basis, viewport, &mut active).ok()?
     } else {
         value.to_string()
     };
@@ -322,9 +346,10 @@ const FUNCTION_CALL_MAX_DEPTH: u32 = 16;
 /// (csswg-drafts#11749, WPT `dashed-function-named-arg.tentative.html`).
 /// Actual named-argument binding stays unimplemented — the spec reserves it.
 ///
-/// Deferred (CSS Functions and Mixins L1, not yet implemented): `returns`
-/// type-checking, conditional group rules inside the function body
-/// (`@media`, `@container`).
+/// Typed parameters (`--a <length>`) and `returns <type>` are checked and
+/// brought to computed form; `@media`/`@supports` groups in the body apply
+/// while their condition holds. Deferred: `@container` groups, `if()` /
+/// `attr()` in `result`.
 ///
 /// Single-scope form: every call resolves against `functions` alone. A
 /// declaration written inside a shadow tree needs the tree-scoped lookup of
@@ -384,37 +409,122 @@ pub(in crate::style) fn expand_custom_functions_scoped(
         return None;
     }
 
+    // Arguments are evaluated in the caller's scope; a default sees the
+    // parameters bound before it (CSS Functions and Mixins L1 §2.1). An
+    // argument that is invalid (`var()` without value, type mismatch) falls
+    // back to the default, and without one the parameter is left unbound
+    // (guaranteed-invalid) — it shadows a same-named outer property.
     let mut local: HashMap<String, String> = custom.clone();
+    let mut typed: HashMap<&str, &str> = HashMap::new();
     for (i, param) in func.parameters.iter().enumerate() {
-        let raw_arg = match args.get(i) {
-            Some(a) => a.trim().to_string(),
-            None => param.default.clone()?,
+        let syntax = param.syntax.as_deref();
+        let given = args.get(i).map(|a| {
+            expand_vars(a.trim(), custom, depth + 1, em_basis, viewport)
+                .and_then(|v| expand_custom_functions_scoped(&v, scopes, custom, depth + 1, em_basis, viewport))
+                .and_then(|v| coerce_to_syntax(v, syntax, em_basis, viewport))
+        });
+        let value = match given {
+            Some(Some(v)) => Some(v),
+            Some(None) | None => match &param.default {
+                Some(d) => expand_vars(d, &local, depth + 1, em_basis, viewport)
+                    .and_then(|v| {
+                        expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport)
+                    })
+                    .and_then(|v| coerce_to_syntax(v, syntax, em_basis, viewport)),
+                // A missing argument with no default invalidates the call;
+                // an IACVT one merely leaves the parameter unbound.
+                None if given.is_none() => return None,
+                None => None,
+            },
         };
-        let expanded_arg = expand_vars(&raw_arg, custom, depth + 1, em_basis, viewport).and_then(|v| {
-            expand_custom_functions_scoped(&v, scopes, custom, depth + 1, em_basis, viewport)
-        })?;
-        local.insert(param.name.clone(), expanded_arg);
+        match value {
+            Some(v) => {
+                local.insert(param.name.clone(), v);
+            }
+            None => {
+                local.remove(&param.name);
+            }
+        }
+        if let Some(syn) = syntax.filter(|s| s.trim() != "*") {
+            typed.insert(param.name.as_str(), syn);
+        }
     }
 
+    let mut active: Vec<&Declaration> = Vec::new();
+    let media_ctx = body_has_conditionals(&func.body)
+        .then(|| crate::style::env::media_context_from_viewport(viewport, false));
+    collect_active_declarations(&func.body, media_ctx.as_ref(), &mut active);
+
     let mut result_raw: Option<&str> = None;
-    for decl in &func.declarations {
+    for decl in active {
         if decl.property.eq_ignore_ascii_case("result") {
             result_raw = Some(decl.value.as_str());
             continue;
         }
-        if let Some(local_name) = decl.property.strip_prefix("--") {
-            let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport).and_then(|v| {
-                expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport)
-            })?;
-            local.insert(format!("--{local_name}"), v);
+        if decl.property.starts_with("--") {
+            // A local that re-assigns a typed parameter keeps its type: a
+            // value that does not match it becomes guaranteed-invalid.
+            let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport)
+                .and_then(|v| expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport))
+                .and_then(|v| coerce_to_syntax(v, typed.get(decl.property.as_str()).copied(), em_basis, viewport));
+            match v {
+                Some(v) => {
+                    local.insert(decl.property.clone(), v);
+                }
+                None if typed.contains_key(decl.property.as_str()) => {
+                    local.remove(&decl.property);
+                }
+                None => return None,
+            }
         }
     }
-    let resolved = expand_vars(result_raw?, &local, depth + 1, em_basis, viewport).and_then(|v| {
-        expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport)
-    })?;
+    let resolved = expand_vars(result_raw?, &local, depth + 1, em_basis, viewport)
+        .and_then(|v| expand_custom_functions_scoped(&v, body_scopes, &local, depth + 1, em_basis, viewport))
+        .and_then(|v| coerce_to_syntax(v, func.returns_syntax(), em_basis, viewport))?;
 
     let combined = format!("{}{}{}", &value[..start], resolved, after_close);
     expand_custom_functions_scoped(&combined, scopes, custom, depth + 1, em_basis, viewport)
+}
+
+/// Checks `value` against the syntax string of a typed `@function`
+/// parameter or `returns` descriptor and returns its computed form
+/// (`calc(100px + 1px)` → `101px`); `None` when it does not match. No
+/// syntax, or the universal `*`, accepts the value as written.
+fn coerce_to_syntax(value: String, syntax: Option<&str>, em_basis: f32, viewport: Size) -> Option<String> {
+    let Some(syntax) = syntax.filter(|s| s.trim() != "*") else {
+        return Some(value);
+    };
+    if !crate::style::property_syntax::validate_against_syntax(&value, syntax) {
+        return None;
+    }
+    Some(
+        crate::style::syntax_string::cascade_compute_registered_value(&value, syntax, em_basis, viewport)
+            .unwrap_or(value),
+    )
+}
+
+fn body_has_conditionals(items: &[FunctionBodyItem]) -> bool {
+    items.iter().any(|i| matches!(i, FunctionBodyItem::Conditional { .. }))
+}
+
+/// Flattens an `@function` body into the declarations that apply, in source
+/// order: items of a `@media`/`@supports` group are kept only while its
+/// condition holds in `ctx` (`ctx` is `Some` whenever a group exists).
+fn collect_active_declarations<'a>(
+    items: &'a [FunctionBodyItem],
+    ctx: Option<&MediaContext>,
+    out: &mut Vec<&'a Declaration>,
+) {
+    for item in items {
+        match item {
+            FunctionBodyItem::Decl(d) => out.push(d),
+            FunctionBodyItem::Conditional { condition, items } => {
+                if ctx.is_some_and(|c| condition.holds(c)) {
+                    collect_active_declarations(items, ctx, out);
+                }
+            }
+        }
+    }
 }
 
 /// Finds the first `--<ident>(` call-site (CSS Functions and Mixins L1
@@ -573,7 +683,12 @@ fn expand_apply_rule(
     // against `custom` — a local does not see the caller's scope
     // (`mixin-locals.html` "Locals resolve against each other" /
     // "Locals resolve against parameters").
-    for decl in &mixin.locals {
+    // `@media`/`@supports` groups around locals apply only while they hold.
+    let mut active: Vec<&Declaration> = Vec::new();
+    let media_ctx = body_has_conditionals(&mixin.locals)
+        .then(|| crate::style::env::media_context_from_viewport(viewport, false));
+    collect_active_declarations(&mixin.locals, media_ctx.as_ref(), &mut active);
+    for decl in active {
         let Some(local_name) = decl.property.strip_prefix("--") else { continue };
         let v = expand_vars(&decl.value, &local, depth + 1, em_basis, viewport)
             .and_then(|v| expand_custom_functions(&v, functions, &local, depth + 1, em_basis, viewport))?;
@@ -649,6 +764,15 @@ fn expand_mixin_result_items(
             // (`mixins::expand_mixin_nested_rules`), which the ordinary
             // cascade matches independently; nothing to do here.
             MixinResultItem::NestedRule { .. } => {}
+            MixinResultItem::Conditional { condition, items, .. } => {
+                let ctx = crate::style::env::media_context_from_viewport(viewport, false);
+                if condition.holds(&ctx) {
+                    out.extend(expand_mixin_result_items(
+                        items, apply, mixins, layer_order, functions, local, caller_scope, depth, em_basis,
+                        viewport,
+                    ));
+                }
+            }
         }
     }
     out

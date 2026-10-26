@@ -346,6 +346,61 @@
         assert!(s.view_transition_name.is_none());
     }
 
+    fn vt_style(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        compute_style(&doc, div, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn view_transition_class_parsed_and_validated() {
+        assert_eq!(vt_style("div { view-transition-class: a  b }").view_transition_class.as_deref(), Some("a b"));
+        assert!(vt_style("div { view-transition-class: none }").view_transition_class.is_none());
+        // `none` inside a list and CSS-wide keywords are invalid → declaration dropped.
+        assert!(vt_style("div { view-transition-class: a none }").view_transition_class.is_none());
+        assert!(vt_style("div { view-transition-class: inherit-not 5 }").view_transition_class.is_none());
+        assert!(vt_style("div { view-transition-class: 5 }").view_transition_class.is_none());
+        let s = vt_style("div { view-transition-class: a; view-transition-class: 1x }");
+        assert_eq!(s.view_transition_class.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn view_transition_group_parsed_and_validated() {
+        assert!(vt_style("").view_transition_group.is_none());
+        assert_eq!(vt_style("div { view-transition-group: contain }").view_transition_group.as_deref(), Some("contain"));
+        assert_eq!(vt_style("div { view-transition-group: NEAREST }").view_transition_group.as_deref(), Some("nearest"));
+        assert_eq!(vt_style("div { view-transition-group: hero }").view_transition_group.as_deref(), Some("hero"));
+        assert!(vt_style("div { view-transition-group: contain; view-transition-group: normal }").view_transition_group.is_none());
+        assert!(vt_style("div { view-transition-group: a b }").view_transition_group.is_none());
+        assert!(vt_style("div { view-transition-group: 5 }").view_transition_group.is_none());
+    }
+
+    #[test]
+    fn view_transition_scope_parsed_and_validated() {
+        assert!(!vt_style("").view_transition_scope_all);
+        assert!(vt_style("div { view-transition-scope: all }").view_transition_scope_all);
+        assert!(vt_style("div { view-transition-scope: ALL }").view_transition_scope_all);
+        assert!(!vt_style("div { view-transition-scope: all; view-transition-scope: none }").view_transition_scope_all);
+        // Invalid values drop the declaration; the property is not inherited.
+        assert!(vt_style("div { view-transition-scope: all; view-transition-scope: auto }").view_transition_scope_all);
+        assert!(!vt_style("div { view-transition-scope: all; view-transition-scope: initial }").view_transition_scope_all);
+    }
+
+    #[test]
+    fn css_wide_keywords_reset_the_animation_lists() {
+        // `animation: unset` used to leave the earlier `animation-name` standing (BUG-1511: a page's
+        // `::view-transition-group(*) { animation: unset }` kept the UA group animation).
+        assert!(vt_style("div { animation-name: foo; animation: unset }").animation_names.is_empty());
+        assert!(vt_style("div { animation-name: foo; animation: initial }").animation_names.is_empty());
+        assert!(vt_style("div { animation-name: foo; animation-name: unset }").animation_names.is_empty());
+        let s = vt_style("div { animation: foo 3s; animation-duration: initial }");
+        assert_eq!(s.animation_names, vec!["foo".to_string()]);
+        assert_ne!(s.animation_durations, vec![3.0]);
+    }
+
     #[test]
     fn view_transition_name_default_is_none() {
         let doc = lumen_html_parser::parse("<div></div>");

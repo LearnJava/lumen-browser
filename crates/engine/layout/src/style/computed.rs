@@ -50,7 +50,7 @@ use crate::style::{
     Resize, ScrollMarkerGroup, ScrollTargetGroup, ScrollbarGutter, ScrollbarWidth, ScrollBehavior,
     ScrollInitialTarget, ScrollSnapAlign, ScrollSnapStop, ScrollSnapType, ShapeOutside, StrokeLinecap, StrokeLinejoin,
     SvgPaint, SvgPaintOrder,
-    TextAlign, TextAlignLast, TextCssomExtra, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
+    TextAlign, TextAlignLast, TextCssomExtra, TextDecorationLine, TextDecorationSkipInk, TextDecorationSkipSpaces, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
     TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
@@ -278,7 +278,7 @@ pub struct ComputedStyle {
     /// Initial `currentcolor`, резолвится в `color` фрагмента (`used_text_stroke_color`).
     pub text_stroke_color: CssColor,
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
-    /// Initial: `OverRight` (horizontal writing-mode).
+    /// Initial: `Auto` (в горизонтальном письме — `over right`).
     pub text_emphasis_position: TextEmphasisPosition,
     /// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`.
     /// Inherited. Initial: `Auto`. Controls whether underline is placed below
@@ -291,6 +291,14 @@ pub struct ComputedStyle {
     /// CSS Text Decoration L4 §3.5 — `text-decoration-skip-ink`. Inherited.
     /// Initial: `Auto`. Controls whether underlines skip over glyph descenders.
     pub text_decoration_skip_ink: TextDecorationSkipInk,
+    /// Доля `%` у `text-underline-offset` (`calc(200% - 8px)` → абсолют в `text_underline_offset`,
+    /// `2.0` здесь). База процента — `font-size` элемента; в раскладке пока не участвует.
+    pub text_underline_offset_pct: f32,
+    /// CSS Text Decoration L4 §3.6 — `text-decoration-skip-spaces`. Inherited. Initial: `start end`.
+    pub text_decoration_skip_spaces: TextDecorationSkipSpaces,
+    /// CSS Text Decoration L4 §4.2 — `text-decoration-inset`. Not inherited. `None` = `auto`;
+    /// `Some([start, end])`, каждый — `(px, доля %)` (`calc(10% - 20px)` → `(-20, 0.1)`).
+    pub text_decoration_inset: Option<[(f32, f32); 2]>,
     /// Явная ширина (CSS `width`). `None` = auto. Typed `Length`; `%`
     /// резолвится при layout с known cb_width.
     pub width: Option<Length>,
@@ -1289,6 +1297,16 @@ pub struct ComputedStyle {
     /// During a `document.startViewTransition()` call the shell matches old/new snapshots
     /// by name and cross-fades them. `None` means the property is `none`.
     pub view_transition_name: Option<Box<str>>,
+    /// CSS View Transitions L2 §2.2 — `view-transition-class: none | <custom-ident>+`.
+    /// Non-inherited. Initial `None` (none); otherwise the idents joined by single spaces.
+    pub view_transition_class: Option<Box<str>>,
+    /// CSS View Transitions L2 §2.3 — `view-transition-group: normal | contain | nearest |
+    /// <custom-ident>`. Non-inherited. Initial `None` (normal).
+    pub view_transition_group: Option<Box<str>>,
+    /// CSS View Transitions L2 §2.4 — `view-transition-scope: none | all`. Non-inherited.
+    /// Initial `false` (none); `true` for `all`, which stops the name discovery of an
+    /// enclosing transition at this element.
+    pub view_transition_scope_all: bool,
     /// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial `auto`.
     /// Supplies the glyph pairs for `content: open-quote` / `close-quote`.
     pub quotes: Quotes,

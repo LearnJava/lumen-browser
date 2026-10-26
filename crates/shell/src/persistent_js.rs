@@ -694,6 +694,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
     #[allow(dead_code)]
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
+    /// Hand the Houdini paint worklet the `background-image: paint()` layers of the
+    /// laid-out page (replaces the previous set). Default: no paint worklet.
+    fn set_paint_jobs(&self, _jobs: Vec<lumen_core::PaintRequest>) {}
+    /// Run the paint worklet over the jobs of [`Self::set_paint_jobs`] and drain the
+    /// bitmaps it (re)drew as `(image key, width, height, rgba)`; empty when nothing
+    /// changed since the last call. Default: no paint worklet.
+    fn flush_paint_images(&self) -> Vec<lumen_core::PaintImage> {
+        Vec::new()
+    }
     /// Drain script-constructed `FontFace`s that became render-eligible since
     /// the last call (FONTLOAD-6, BUG-467): `.load()` validated their bytes
     /// while already a member of some `FontFaceSet`. Each entry is
@@ -1436,6 +1445,12 @@ impl PersistentJs for V8PersistentJs {
     }
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
         self.rt.flush_canvas_updates()
+    }
+    fn set_paint_jobs(&self, jobs: Vec<lumen_core::PaintRequest>) {
+        self.rt.set_paint_jobs(&jobs);
+    }
+    fn flush_paint_images(&self) -> Vec<lumen_core::PaintImage> {
+        self.rt.flush_paint_images()
     }
     fn take_pending_scripted_font_faces(&self) -> Vec<lumen_js::ScriptedFontFaceEntry> {
         self.rt.take_pending_scripted_font_faces()

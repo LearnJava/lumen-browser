@@ -3685,6 +3685,9 @@ fn rasterize_text(
     let width = pixmap.width();
     let height = pixmap.height();
     let mut mask = tiny_skia::Mask::new(width, height).ok_or("Failed to create glyph mask")?;
+    // TEXTQ-2: gamma/contrast correction of glyph coverage by the text colour's
+    // luminance — the same function the wgpu text shader evaluates.
+    let coverage_lut = crate::text_gamma::coverage_lut(color.r, color.g, color.b);
     let mut any_coverage = false;
     // BUG-267: union bbox of every glyph bitmap actually blitted (page px),
     // returned to the caller for the layer's dirty tracking. Uses the unclipped
@@ -3744,15 +3747,17 @@ fn rasterize_text(
             // registered `@font-face` face or one of its unicode-range siblings
             // (FONTLOAD-18/19) or, failing that, the OS index under
             // `LUMEN_CPU_SYSTEM_FONTS` (`crate::cpu_font_resolve::resolve_face_candidates`).
+            // TEXTQ-5: те же фичи, что у wgpu-пути и измерителя раскладки —
+            // при ненулевом `letter-spacing` необязательные лигатуры выключены.
             let shaped = lumen_font::active_text_shaper().shape(
                 candidate.bytes,
                 sub_text,
                 lumen_core::ext::ShapeDirection::LeftToRight,
                 None,
-                font_features,
+                &crate::shaped_width::shaping_features(font_features, letter_spacing),
                 &[],
             );
-            for sg in &shaped {
+            for (glyph_idx, sg) in shaped.iter().enumerate() {
                 let pen_x = cursor_x + sg.x_offset as f32 * advance_scale;
                 let glyph_baseline = baseline_y - sg.y_offset as f32 * advance_scale;
                 if let Ok(Some(mut glyph)) = candidate.face.font.glyph_resolved(sg.glyph_id) {
@@ -3773,6 +3778,7 @@ fn rasterize_text(
                             clip,
                             width,
                             height,
+                            &coverage_lut,
                         ) {
                             any_coverage = true;
                             mark_ink(gb, &mut ink);
@@ -3788,6 +3794,7 @@ fn rasterize_text(
                                 clip,
                                 width,
                                 height,
+                                &coverage_lut,
                             )
                         {
                             any_coverage = true;
@@ -3797,9 +3804,16 @@ fn rasterize_text(
                         }
                     }
                 }
-                cursor_x += sg.x_advance as f32 * advance_scale + letter_spacing;
+                // CSS Text L3 §8.2: `letter-spacing` — на КЛАСТЕР, а не на глиф
+                // (как у wgpu-пути): лигатура из двух символов получает его раз.
+                let cluster_end = shaped.get(glyph_idx + 1).is_none_or(|n| n.cluster != sg.cluster);
+                cursor_x += sg.x_advance as f32 * advance_scale;
+                if cluster_end {
+                    cursor_x += letter_spacing;
+                }
                 // CSS Text L3 §8.1 — `word-spacing` follows every word separator.
-                if word_spacing != 0.0
+                if cluster_end
+                    && word_spacing != 0.0
                     && sub_text.get(sg.cluster as usize..).is_some_and(|t| t.starts_with(' '))
                 {
                     cursor_x += word_spacing;
@@ -3807,6 +3821,9 @@ fn rasterize_text(
             }
         }
     }
+
+    #[cfg(test)]
+    TEST_PEN_END.with(|c| c.set(cursor_x));
 
     if !any_coverage {
         return Ok(None);
@@ -3822,6 +3839,14 @@ fn rasterize_text(
         .ok_or("Invalid pixmap dimensions")?;
     pixmap.fill_rect(full, &paint, tiny_skia::Transform::identity(), Some(&mask));
     Ok(ink)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Где остановилось перо после последнего [`rasterize_text`] — шов для
+    /// теста «раскладка и CPU-путь дают одну ширину» (TEXTQ-5): ink-рамка
+    /// слишком груба, чтобы сверять до сотых пикселя.
+    static TEST_PEN_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 /// Horizontal shear factor for synthetic italic — tan 12°.
@@ -3864,6 +3889,8 @@ fn shear_glyph(glyph: &mut lumen_font::Glyph) {
 /// pixel for a deterministic pen-to-pixel snap. Pixels outside the pixmap or
 /// the rectangular `clip` are dropped; overlapping glyph pixels keep the max
 /// coverage (glyphs in a run rarely overlap, but kerning-tight pairs can).
+/// `lut` maps raw glyph coverage to gamma-corrected coverage ([`crate::text_gamma`]).
+#[allow(clippy::too_many_arguments)]
 fn blit_glyph_coverage(
     mask: &mut tiny_skia::Mask,
     bitmap: &lumen_font::Bitmap,
@@ -3872,6 +3899,7 @@ fn blit_glyph_coverage(
     clip: Option<&Rect>,
     width: u32,
     height: u32,
+    lut: &[u8; 256],
 ) -> bool {
     if bitmap.width == 0 || bitmap.height == 0 {
         return false;
@@ -3907,6 +3935,7 @@ fn blit_glyph_coverage(
                 continue;
             }
             let idx = (dy * w + dx) as usize;
+            let cov = lut[cov as usize];
             if cov > data[idx] {
                 data[idx] = cov;
             }

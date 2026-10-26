@@ -1853,3 +1853,101 @@ fn computed_map_overflow_logical_vertical_rl_swaps_axes() {
     assert_eq!(m.get("overflow-block").map(String::as_str), Some("hidden"));
     assert_eq!(m.get("overflow-inline").map(String::as_str), Some("scroll"));
 }
+
+#[test]
+fn computed_map_container_shorthand() {
+    // BUG-1514: `container` serialises as `<name> [ / <type> ]?`, the type omitted when `normal`.
+    let m = div_computed_map("<div>x</div>", "div { container-type: inline-size; container-name: foo bar }");
+    assert_eq!(m.get("container").map(String::as_str), Some("foo bar / inline-size"));
+    assert_eq!(m.get("container-type").map(String::as_str), Some("inline-size"));
+    assert_eq!(m.get("container-name").map(String::as_str), Some("foo bar"));
+    let m = div_computed_map("<div>x</div>", "div { container: foo }");
+    assert_eq!(m.get("container").map(String::as_str), Some("foo"));
+    let m = div_computed_map("<div>x</div>", "div { container-type: size }");
+    assert_eq!(m.get("container").map(String::as_str), Some("none / size"));
+    let m = div_computed_map("<div>x</div>", "div { }");
+    assert_eq!(m.get("container").map(String::as_str), Some("none"));
+}
+
+/// BUG-1515: `(декларация, свойство, ожидаемое computed-значение)` на `div { font-size: 40px; color: blue }`.
+#[test]
+fn computed_map_text_decoration_and_shapes_bug1515() {
+    let cases: &[(&str, &str, &str)] = &[
+        // text-decoration-line: blink и ключевые слова L4.
+        ("text-decoration-line: underline blink", "text-decoration-line", "underline blink"),
+        ("text-decoration-line: blink", "text-decoration-line", "blink"),
+        ("text-decoration-line: spelling-error", "text-decoration-line", "spelling-error"),
+        // text-decoration — шорткат с thickness из L4.
+        ("text-decoration: none", "text-decoration", "none"),
+        ("text-decoration: solid", "text-decoration", "none"),
+        ("text-decoration: currentcolor", "text-decoration", "none"),
+        ("text-decoration: double overline underline", "text-decoration", "underline overline double"),
+        ("text-decoration: underline overline line-through red", "text-decoration",
+            "underline overline line-through rgb(255, 0, 0)"),
+        ("text-decoration: underline red from-font", "text-decoration", "underline from-font rgb(255, 0, 0)"),
+        ("text-decoration: 10px", "text-decoration", "10px"),
+        ("text-decoration: auto", "text-decoration", "none"),
+        // text-decoration-color: currentcolor → used value.
+        ("text-decoration-color: currentcolor", "text-decoration-color", "rgb(0, 0, 255)"),
+        // text-underline-offset / thickness: em от font-size элемента, calc, процент.
+        ("text-underline-offset: 1em", "text-underline-offset", "40px"),
+        ("text-underline-offset: calc(10px - 8px)", "text-underline-offset", "2px"),
+        ("text-underline-offset: 200%", "text-underline-offset", "200%"),
+        ("text-underline-offset: calc(2em - 50%)", "text-underline-offset", "calc(-50% + 80px)"),
+        ("text-underline-offset: auto", "text-underline-offset", "auto"),
+        ("text-decoration-thickness: 200%", "text-decoration-thickness", "200%"),
+        ("text-decoration-thickness: calc(200% - 0.5em)", "text-decoration-thickness", "calc(200% - 20px)"),
+        ("text-decoration-thickness: calc(200% - 50%)", "text-decoration-thickness", "150%"),
+        // text-shadow: currentcolor → used value.
+        ("text-shadow: 10px 20px", "text-shadow", "rgb(0, 0, 255) 10px 20px 0px"),
+        // Остальные свойства L3/L4.
+        ("text-underline-position: from-font left", "text-underline-position", "from-font left"),
+        ("text-underline-position: left under", "text-underline-position", "under left"),
+        ("text-decoration-skip-ink: all", "text-decoration-skip-ink", "all"),
+        ("text-decoration-skip-spaces: end start", "text-decoration-skip-spaces", "start end"),
+        ("text-decoration-skip-spaces: none", "text-decoration-skip-spaces", "none"),
+        ("text-decoration-inset: 0.5em", "text-decoration-inset", "20px"),
+        ("text-decoration-inset: 1px 2px", "text-decoration-inset", "1px 2px"),
+        ("text-decoration-inset: 0 20%", "text-decoration-inset", "0px 20%"),
+        ("text-decoration-inset: calc(10% - 1em) 0", "text-decoration-inset", "calc(10% - 40px) 0px"),
+        ("text-decoration-inset: auto", "text-decoration-inset", "auto"),
+        // text-emphasis.
+        ("text-emphasis: none", "text-emphasis", "none rgb(0, 0, 255)"),
+        ("text-emphasis: open sesame", "text-emphasis", "open sesame rgb(0, 0, 255)"),
+        ("text-emphasis: '*'", "text-emphasis", "\"*\" rgb(0, 0, 255)"),
+        ("text-emphasis: dot red", "text-emphasis", "dot rgb(255, 0, 0)"),
+        ("text-emphasis-style: filled", "text-emphasis-style", "circle"),
+        ("text-emphasis-style: open", "text-emphasis-style", "open circle"),
+        ("text-emphasis-position: over right", "text-emphasis-position", "over"),
+        ("text-emphasis-position: under left", "text-emphasis-position", "under left"),
+        ("text-emphasis-position: auto", "text-emphasis-position", "auto"),
+        ("text-emphasis-color: currentcolor", "text-emphasis-color", "rgb(0, 0, 255)"),
+        // CSS Shapes.
+        ("shape-margin: calc(10px + 0.5em)", "shape-margin", "30px"),
+        ("shape-margin: calc(10px - 0.5em)", "shape-margin", "0px"),
+        ("shape-margin: 50%", "shape-margin", "50%"),
+        ("shape-image-threshold: 12.5", "shape-image-threshold", "1"),
+        ("shape-image-threshold: 50%", "shape-image-threshold", "0.5"),
+        ("shape-image-threshold: -100%", "shape-image-threshold", "0"),
+        ("shape-outside: circle(at 10% 20%)", "shape-outside", "circle(at 10% 20%)"),
+        ("shape-outside: none", "shape-outside", "none"),
+    ];
+    for (decl, prop, want) in cases {
+        let m = div_computed_map("<div>x</div>", &format!("div {{ font-size: 40px; color: blue; {decl} }}"));
+        assert_eq!(m.get(*prop).map(String::as_str), Some(*want), "{decl} → {prop}");
+    }
+    // Начальные значения.
+    let m = div_computed_map("<div>x</div>", "div { }");
+    for (prop, want) in [
+        ("text-decoration", "none"),
+        ("text-decoration-skip-spaces", "start end"),
+        ("text-decoration-inset", "auto"),
+        ("text-underline-position", "auto"),
+        ("text-emphasis-position", "auto"),
+        ("shape-outside", "none"),
+        ("shape-margin", "0px"),
+        ("shape-image-threshold", "0"),
+    ] {
+        assert_eq!(m.get(prop).map(String::as_str), Some(want), "initial {prop}");
+    }
+}

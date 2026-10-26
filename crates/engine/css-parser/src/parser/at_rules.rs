@@ -33,22 +33,65 @@ pub struct FunctionRule {
     pub name: String,
     /// Positional parameters in declared order.
     pub parameters: Vec<FunctionParameter>,
-    /// Raw `returns <type>` descriptor, if present. Stored but not type-checked
-    /// (call-site substitution is untyped string substitution, same as `var()`).
+    /// Raw `returns <type>` descriptor, if present (`<length>` or
+    /// `type(<length> | auto)`); [`FunctionRule::returns_syntax`] gives the
+    /// syntax string to check the result against.
     pub returns: Option<String>,
-    /// Body declarations in source order: local `--x: ...;` custom properties
-    /// used to build up a value, plus the `result: <value>;` descriptor that
-    /// gives the function's return value.
-    pub declarations: Vec<Declaration>,
+    /// Body in source order: local `--x: ...;` custom properties used to
+    /// build up a value, the `result: <value>;` descriptor that gives the
+    /// function's return value, and nested `@media`/`@supports` groups whose
+    /// items apply only while the condition holds.
+    pub body: Vec<FunctionBodyItem>,
 }
 
-/// One parameter of an `@function` rule: `--name` or `--name: <default>`.
+/// One item of an `@function` body — see [`FunctionRule::body`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionBodyItem {
+    Decl(Declaration),
+    /// Conditional group rule (CSS Functions and Mixins L1 §3.2): `items`
+    /// take part in the body only while `condition` holds.
+    Conditional { condition: LayerCondition, items: Vec<FunctionBodyItem> },
+}
+
+impl FunctionRule {
+    /// Syntax string of the `returns` type (`<length>`, `<length> | auto`),
+    /// unwrapping a `type(...)` wrapper. `None` — no `returns` descriptor.
+    pub fn returns_syntax(&self) -> Option<&str> {
+        self.returns.as_deref().map(unwrap_type_function)
+    }
+}
+
+/// One parameter of an `@function` rule: `--name [<type>] [: <default>]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionParameter {
     /// Dashed-ident parameter name, e.g. `--x`. Referenced inside the body via `var(--x)`.
     pub name: String,
+    /// Syntax string of the declared type (`<length>`, `<length> | auto`,
+    /// `*`); `None` for an untyped parameter. A typed parameter coerces its
+    /// argument and acts as a local registration for the name.
+    pub syntax: Option<String>,
     /// Optional default value, substituted when the call site omits this argument.
     pub default: Option<String>,
+}
+
+/// `type(<syntax>)` → `<syntax>`; anything else is returned as is (trimmed).
+fn unwrap_type_function(raw: &str) -> &str {
+    let raw = raw.trim();
+    match raw.get(..5) {
+        Some(head) if head.eq_ignore_ascii_case("type(") && raw.ends_with(')') => raw[5..raw.len() - 1].trim(),
+        _ => raw,
+    }
+}
+
+/// Итог [`Parser::open_conditional_group`].
+pub(super) enum ConditionalGroupOpen {
+    /// Не `@media`/`@supports`; курсор возвращён на `@`.
+    Other,
+    /// `@media`/`@supports` без блока (`;`), уже съедено.
+    NoBlock,
+    /// Условие разобрано, `{` съедена. `prelude` — исходный текст `@media …` /
+    /// `@supports …` для сериализации CSSOM.
+    Open { condition: LayerCondition, prelude: String },
 }
 
 /// `@color-profile --name { src: url(...); rendering-intent: ...; }` — CSS
@@ -972,14 +1015,16 @@ impl<'a> Parser<'a> {
                 if raw.is_empty() {
                     return None;
                 }
-                let param = match raw.split_once(':') {
-                    Some((n, default)) => FunctionParameter {
-                        name: n.trim().to_string(),
-                        default: Some(default.trim().to_string()),
-                    },
-                    None => FunctionParameter { name: raw.to_string(), default: None },
+                let (head, default) = match raw.split_once(':') {
+                    Some((h, d)) => (h.trim(), Some(d.trim().to_string())),
+                    None => (raw, None),
                 };
-                param.name.starts_with("--").then_some(param)
+                let (name, ty) = match head.split_once(char::is_whitespace) {
+                    Some((n, t)) => (n, t.trim()),
+                    None => (head, ""),
+                };
+                let syntax = (!ty.is_empty()).then(|| unwrap_type_function(ty).to_string());
+                name.starts_with("--").then(|| FunctionParameter { name: name.to_string(), syntax, default })
             })
             .collect();
 
@@ -1006,8 +1051,80 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.consume(); // '{'
-        let declarations = self.parse_declaration_block();
-        Some(FunctionRule { name, parameters, returns, declarations })
+        let body = self.parse_function_body();
+        Some(FunctionRule { name, parameters, returns, body })
+    }
+
+    /// Курсор на `@`: если это `@media`/`@supports` с блоком, разбирает
+    /// условие и съедает `{` — тело читает вызывающий (CSS Functions and
+    /// Mixins L1 §3.2: условные группы внутри `@function`/`@mixin`).
+    pub(super) fn open_conditional_group(&mut self) -> ConditionalGroupOpen {
+        let start = self.pos;
+        self.consume(); // '@'
+        let name = self.parse_ident().unwrap_or_default();
+        let is_media = name.eq_ignore_ascii_case("media");
+        if !is_media && !name.eq_ignore_ascii_case("supports") {
+            self.pos = start;
+            return ConditionalGroupOpen::Other;
+        }
+        self.skip_ws_and_comments();
+        let prelude_start = self.pos;
+        let mut depth = 0i32;
+        while let Some(c) = self.peek() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = (depth - 1).max(0),
+                '{' | ';' if depth == 0 => break,
+                _ => {}
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            self.consume(); // `;` — at-rule without a block
+            return ConditionalGroupOpen::NoBlock;
+        }
+        let prelude = self.input[prelude_start..self.pos].trim();
+        let condition = if is_media {
+            LayerCondition::Media(parse_media_query(prelude))
+        } else {
+            LayerCondition::Supports(parse_supports_condition(prelude))
+        };
+        let prelude = format!("@{} {prelude}", if is_media { "media" } else { "supports" }).trim_end().to_string();
+        self.consume(); // '{'
+        ConditionalGroupOpen::Open { condition, prelude }
+    }
+
+    /// Тело `@function` после уже съеденной `{` до парной `}` (съедается):
+    /// объявления и вложенные `@media`/`@supports` группы (рекурсивно).
+    /// Прочие вложенные at-правила пропускаются целиком, как и раньше.
+    fn parse_function_body(&mut self) -> Vec<FunctionBodyItem> {
+        let mut items = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some(';') => {
+                    self.consume();
+                }
+                Some('@') => match self.open_conditional_group() {
+                    ConditionalGroupOpen::Open { condition, .. } => {
+                        let inner = self.parse_function_body();
+                        items.push(FunctionBodyItem::Conditional { condition, items: inner });
+                    }
+                    ConditionalGroupOpen::NoBlock => {}
+                    ConditionalGroupOpen::Other => self.recover_to_decl_boundary(),
+                },
+                Some(_) => match self.parse_declaration() {
+                    Some(d) => items.push(FunctionBodyItem::Decl(d)),
+                    None => self.recover_to_decl_boundary(),
+                },
+            }
+        }
+        items
     }
 
     /// Читает содержимое между уже открытой `(` (позиция парсера сразу

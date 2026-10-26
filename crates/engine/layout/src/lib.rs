@@ -71,6 +71,7 @@ pub use style_map::StyleMap;
 pub mod scoped_collect;
 mod scroll_rollup;
 mod scroll_state;
+pub use scroll_state::{install_scroll_hints, root_is_scroll_state_container, scroll_offsets, sheet_has_scroll_state_queries, ScrollHints, ScrollHintsGuard};
 pub use scroll_rollup::RollupCache;
 pub mod paint_eq;
 pub use paint_eq::subtree_paint_eq;
@@ -157,7 +158,7 @@ pub use selection::{
 pub use text_geometry::{collect_text_frag_rects, frag_source_spans, text_hits_at_point, FragSpan, TextFragRect};
 pub use style::{
     is_highlight_pseudo, compute_selection_style, compute_style, compute_style_from_declarations, compute_target_text_style,
-    compute_view_transition_pseudo_style, ViewTransitionPart,
+    compute_view_transition_pseudo_style, compute_view_transition_tree_style, ViewTransitionPart,
 };
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
@@ -227,6 +228,21 @@ pub use style::{
     WhiteSpace, WordBreak,
 };
 
+/// Всё, от чего зависит ширина shaped run-а, кроме самого текста
+/// ([`TextMeasurer::shaped_width`]).
+#[derive(Debug, Clone, Copy)]
+pub struct ShapeParams<'a> {
+    pub font_size_px: f32,
+    /// `letter-spacing` в px; ненулевой выключает необязательные лигатуры.
+    pub letter_spacing: f32,
+    /// CSS `font-family` каскад.
+    pub families: &'a [String],
+    /// OpenType-фичи run-а — [`style::text_font_features`].
+    pub features: &'a [([u8; 4], u32)],
+    /// Оси вариаций run-а — [`style::text_variation_axes`].
+    pub axes: &'a [([u8; 4], f32)],
+}
+
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
 /// Реализуется на стороне вызывающего кода (paint/shell), где есть доступ
@@ -266,6 +282,23 @@ pub trait TextMeasurer {
     ) -> f32 {
         let _ = axes;
         self.char_width_with_families(ch, font_size_px, families)
+    }
+
+    /// Ширина `text` как ОДНОГО shaped run-а (TEXTQ-5): кернинг, лигатуры и
+    /// остальные фичи шрифта, те же `features`/`axes`, которыми шейпит
+    /// отрисовка. `text` не содержит `\t` — табуляции вызывающий код считает
+    /// сам.
+    ///
+    /// Результат включает `letter-spacing` после КАЖДОГО кластера (в том числе
+    /// последнего) — ровно как укладывает пером отрисовка; завершающий
+    /// интервал вызывающий код вычитает сам.
+    ///
+    /// `None` — измеритель не умеет шейпить (моки в тестах, шрифт, который
+    /// шейпер не принял): вызывающий код считает посимвольной суммой
+    /// [`Self::char_width_varied`].
+    fn shaped_width(&self, text: &str, params: &ShapeParams<'_>) -> Option<f32> {
+        let _ = (text, params);
+        None
     }
 
     /// Descent шрифта в пикселях при размере `font_size_px`.
@@ -1438,7 +1471,7 @@ fn resolve_custom_props(
     let m = std::sync::Arc::new(
         raw.iter()
             .map(|(name, value)| {
-                let computed = crate::style::expand_vars_and_env(value, &raw, em_basis, viewport).unwrap_or_default();
+                let computed = crate::style::expand_custom_property_value(name, value, &raw, em_basis, viewport).unwrap_or_default();
                 (name.clone(), computed.trim().to_string())
             })
             .collect::<std::collections::HashMap<String, String>>(),
