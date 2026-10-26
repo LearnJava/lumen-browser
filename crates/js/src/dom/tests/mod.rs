@@ -493,6 +493,9 @@ mod v8_bug1131_io_entry;
 mod v8_bug671_selection_interface;
 
 #[cfg(feature = "v8-backend")]
+mod v8_bug1687_selection_across_shadow;
+
+#[cfg(feature = "v8-backend")]
 mod v8_bug1137_history_interface;
 #[cfg(feature = "v8-backend")]
 mod v8_vt_api;
