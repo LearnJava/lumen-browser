@@ -197,7 +197,7 @@ pub fn build_hints_overlay(state: &HintState, scroll_x: f32, scroll_y: f32) -> D
                 font_size: BADGE_FONT_SIZE,
                 color: BADGE_FG,
                 font_family: Vec::new(),
-                font_weight: FontWeight(700),
+                font_weight: FontWeight::new(700),
                 font_style: FontStyle::Normal,
                 font_variation_axes: Vec::new(),
                 font_features: Vec::new(),

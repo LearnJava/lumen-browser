@@ -241,7 +241,7 @@ pub(crate) fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
             font_size: 13.0,
             color: fg,
             font_family: vec![],
-            font_weight: FontWeight(400),
+            font_weight: FontWeight::new(400),
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
             font_features: Vec::new(),

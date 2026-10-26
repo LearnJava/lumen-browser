@@ -1048,6 +1048,63 @@ pub enum FontStyle {
     Oblique,
 }
 
+impl FontStyle {
+    /// `normal | italic | oblique <angle [-90deg, 90deg]>?` (CSS Fonts L4 §2.3). Возвращает
+    /// стиль и угол `oblique` в тысячных градуса (`None` — голое `oblique`). `oblique 0deg`
+    /// — это `normal`; угол вне `[-90deg, 90deg]` или без единицы делает значение
+    /// недопустимым (`None`). `calc()` уже вычислен подстановкой `substitute_numeric_math`.
+    pub fn parse(val: &str) -> Option<(FontStyle, Option<i32>)> {
+        let mut it = val.split_whitespace();
+        let kw = it.next()?;
+        let angle = it.next();
+        if it.next().is_some() {
+            return None;
+        }
+        match (kw.to_ascii_lowercase().as_str(), angle) {
+            ("normal", None) => Some((FontStyle::Normal, None)),
+            ("italic", None) => Some((FontStyle::Italic, None)),
+            ("oblique", None) => Some((FontStyle::Oblique, None)),
+            ("oblique", Some(a)) => {
+                let milli = parse_angle_milli_deg(a)?;
+                if !(-90_000..=90_000).contains(&milli) {
+                    return None;
+                }
+                Some(if milli == 0 { (FontStyle::Normal, None) } else { (FontStyle::Oblique, Some(milli)) })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `<angle>` (`deg`/`grad`/`rad`/`turn`) в тысячных градуса; без единицы — `None`.
+pub(in crate::style) fn parse_angle_milli_deg(tok: &str) -> Option<i32> {
+    let t = tok.to_ascii_lowercase();
+    let (num, per_unit) = if let Some(n) = t.strip_suffix("deg") {
+        (n, 1.0)
+    } else if let Some(n) = t.strip_suffix("grad") {
+        (n, 0.9)
+    } else if let Some(n) = t.strip_suffix("rad") {
+        (n, 180.0 / std::f64::consts::PI)
+    } else {
+        (t.strip_suffix("turn")?, 360.0)
+    };
+    let v = num.parse::<f64>().ok().filter(|v| v.is_finite())?;
+    Some((v * per_unit * 1000.0).round().clamp(-1.0e9, 1.0e9) as i32)
+}
+
+/// Запись computed value `font-style`: `normal`, `italic`, `oblique`, `oblique 45deg`.
+pub fn font_style_to_css(style: FontStyle, angle: Option<i32>) -> String {
+    match (style, angle) {
+        (FontStyle::Normal, _) => "normal".into(),
+        (FontStyle::Italic, _) => "italic".into(),
+        (FontStyle::Oblique, None) => "oblique".into(),
+        (FontStyle::Oblique, Some(milli)) => {
+            let deg = f64::from(milli) / 1000.0;
+            format!("oblique {deg}deg")
+        }
+    }
+}
+
 /// CSS Fonts L4 §6.2 — `font-variant-caps`. Inherited.
 ///
 /// Полный набор значений спецификации. `font-variant` — shorthand, из
@@ -1606,20 +1663,52 @@ impl Default for FontStretch {
 
 /// CSS Fonts Module L4 §2.4 — `font-weight`. Inherited.
 ///
-/// Хранится численно (1..1000), как в spec: `normal` = 400, `bold` = 700.
-/// Ключевые слова `lighter` / `bolder` относительные — их разрешение
-/// (по правилам §2.4.3) делается при парсинге: смотрим на родительский weight
-/// и сдвигаем по таблице. `lighter` от 400 = 100; `bolder` от 400 = 700.
+/// Хранится численно, как в spec: `normal` = 400, `bold` = 700, допустимо любое
+/// число `[1, 1000]`, в том числе дробное (`150.25`). Ключевые слова `lighter` /
+/// `bolder` относительные — их разрешение (по таблице §2.2.1) делается при
+/// парсинге по весу родителя.
+///
+/// `.0` — целая часть (то, что видят подбор грани и растеризатор, как раньше),
+/// `.1` — дробная часть в тысячных (`0..=999`); для целых весов она `0`.
+/// Конструктор — [`FontWeight::new`] / [`FontWeight::from_f32`].
 ///
 /// Phase 0: layout различает свойство, рендерер пока всегда Inter Regular —
 /// real bold-варианта файлов нет. text_rendering_eq учитывает weight, чтобы
 /// bold-фрагменты не сливались с обычными.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FontWeight(pub u16);
+pub struct FontWeight(pub u16, pub u16);
 
 impl FontWeight {
-    pub const NORMAL: Self = Self(400);
-    pub const BOLD: Self = Self(700);
+    pub const NORMAL: Self = Self(400, 0);
+    pub const BOLD: Self = Self(700, 0);
+
+    /// Целый вес без дробной части.
+    pub const fn new(weight: u16) -> Self {
+        Self(weight, 0)
+    }
+
+    /// Вес из числа: зажимается в `[1, 1000]`, дробная часть хранится с точностью
+    /// до тысячных. `NaN` даёт `normal`.
+    pub fn from_f32(v: f32) -> Self {
+        if v.is_nan() {
+            return Self::NORMAL;
+        }
+        let milli = (f64::from(v.clamp(1.0, 1000.0)) * 1000.0).round() as u32;
+        Self((milli / 1000) as u16, (milli % 1000) as u16)
+    }
+
+    /// Точное значение веса.
+    pub fn value(self) -> f32 {
+        f32::from(self.0) + f32::from(self.1) / 1000.0
+    }
+
+    /// Каноническая запись computed value: `400`, `150.25`.
+    pub fn serialize(self) -> String {
+        if self.1 == 0 {
+            return self.0.to_string();
+        }
+        format!("{}.{:03}", self.0, self.1).trim_end_matches('0').to_string()
+    }
 
     pub fn is_bold(self) -> bool {
         self.0 >= 600

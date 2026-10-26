@@ -196,37 +196,56 @@ pub fn parse_font_palette(val: &str) -> Option<FontPalette> {
 }
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
-///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
+///   - любое число `[1, 1000]`, в том числе дробное (`150.25`); вне диапазона —
+///     значение недопустимо (`None`);
 ///   - относительные `lighter` / `bolder` — резолвятся относительно `parent`
-///     по таблице из CSS Fonts L4 §2.4.3.
+///     по таблице из CSS Fonts L4 §2.2.1.
+///
+/// `calc()` сюда приходит уже вычисленным в число (`substitute_numeric_math`).
 pub(in crate::style) fn parse_font_weight(val: &str, parent: FontWeight) -> Option<FontWeight> {
-    match val.trim() {
+    match val.trim().to_ascii_lowercase().as_str() {
         "normal" => Some(FontWeight::NORMAL),
         "bold" => Some(FontWeight::BOLD),
         "lighter" => Some(relative_lighter(parent)),
         "bolder" => Some(relative_bolder(parent)),
-        s => s.parse::<u16>().ok().filter(|&n| (1..=1000).contains(&n)).map(FontWeight),
+        s => parse_weight_number(s),
     }
 }
-/// CSS Fonts L4 §2.4.3 таблица для `lighter`. Сужаем weight в сторону normal.
-pub(in crate::style) fn relative_lighter(parent: FontWeight) -> FontWeight {
-    let w = parent.0;
-    FontWeight(match w {
-        100..=349 => 100,
-        350..=549 => 100,
-        550..=749 => 400,
-        _ => 700, // 750..=1000
-    })
+/// Допустимое числовое значение `font-weight` (токен шортката `font`).
+pub(in crate::style) fn is_weight_number(s: &str) -> bool {
+    parse_weight_number(s).is_some()
 }
-/// CSS Fonts L4 §2.4.3 таблица для `bolder`.
+/// `<number>` в диапазоне `[1, 1000]` (грамматика `font-weight`, CSS Fonts L4 §2.2).
+fn parse_weight_number(s: &str) -> Option<FontWeight> {
+    if s.ends_with('.') || !s.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'+' | b'-' | b'e' | b'E')) {
+        return None;
+    }
+    let n = s.parse::<f32>().ok().filter(|n| n.is_finite() && (1.0..=1000.0).contains(n))?;
+    Some(FontWeight::from_f32(n))
+}
+/// CSS Fonts L4 §2.2.1 таблица для `lighter`: вес ниже 100 не меняется, до 550 — 100,
+/// до 750 — 400, выше — 700.
+pub(in crate::style) fn relative_lighter(parent: FontWeight) -> FontWeight {
+    let w = parent.value();
+    if w < 100.0 {
+        parent
+    } else {
+        FontWeight::new(if w < 550.0 { 100 } else if w < 750.0 { 400 } else { 700 })
+    }
+}
+/// CSS Fonts L4 §2.2.1 таблица для `bolder`: до 350 — 400, до 550 — 700, до 900 — 900;
+/// 900 и выше не меняется.
 pub(in crate::style) fn relative_bolder(parent: FontWeight) -> FontWeight {
-    let w = parent.0;
-    FontWeight(match w {
-        0..=349 => 400,
-        350..=549 => 700,
-        550..=749 => 900,
-        _ => 900,
-    })
+    let w = parent.value();
+    if w < 350.0 {
+        FontWeight::new(400)
+    } else if w < 550.0 {
+        FontWeight::new(700)
+    } else if w < 900.0 {
+        FontWeight::new(900)
+    } else {
+        parent
+    }
 }
 /// Корневой font-size в CSS — 16px на момент Phase 0 (без `<html>`-стилей и
 /// настроек пользователя). Используется как базис для `rem`.

@@ -7,6 +7,28 @@
     }
 
     #[test]
+    fn font_weight_style_stretch_grammar() {
+        // BUG-1410.
+        assert_eq!(canon("font-weight", "150.25").as_deref(), Some("150.25"));
+        assert_eq!(canon("font-weight", "BOLD").as_deref(), Some("bold"));
+        assert_eq!(canon("font-weight", "calc(100 + 100)").as_deref(), Some("calc(200)"));
+        for bad in ["0", "-1", "1001", "auto", "bold 900"] {
+            assert!(canon("font-weight", bad).is_none(), "font-weight {bad:?}");
+        }
+        assert_eq!(canon("font-style", "oblique 0deg").as_deref(), Some("normal"));
+        assert_eq!(canon("font-style", "oblique 10grad").as_deref(), Some("oblique 10grad"));
+        assert_eq!(canon("font-style", "oblique calc(30deg * 2)").as_deref(), Some("oblique calc(60deg)"));
+        for bad in ["auto", "italic oblique", "oblique 91deg", "oblique 10"] {
+            assert!(canon("font-style", bad).is_none(), "font-style {bad:?}");
+        }
+        assert_eq!(canon("font-stretch", "50%").as_deref(), Some("50%"));
+        assert_eq!(canon("font-stretch", "Condensed").as_deref(), Some("condensed"));
+        for bad in ["0.5", "-10%", "auto"] {
+            assert!(canon("font-stretch", bad).is_none(), "font-stretch {bad:?}");
+        }
+    }
+
+    #[test]
     fn tab_size_accepts_number_or_non_negative_length() {
         assert_eq!(canon("tab-size", "0").as_deref(), Some("0"));
         assert_eq!(canon("tab-size", "2.5").as_deref(), Some("2.5"));

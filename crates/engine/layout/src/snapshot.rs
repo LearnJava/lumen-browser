@@ -356,7 +356,7 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
         }
     }
     if s.font_weight != FontWeight::NORMAL {
-        let _ = write!(out, " font-weight={}", s.font_weight.0);
+        let _ = write!(out, " font-weight={}", s.font_weight.serialize());
     }
     if s.font_variant_caps != FontVariantCaps::Normal {
         let _ = write!(out, " font-variant={}", s.font_variant_caps.as_str());

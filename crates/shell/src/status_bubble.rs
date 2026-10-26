@@ -348,7 +348,7 @@ pub(crate) fn build_overlay(lay: &BubbleLayout, alpha: f32, pal: &Palette) -> Di
             color: scaled(pal.text, alpha),
             // Тот же Inter, которым меряется ширина (`lumen/status_bubble.rs`).
             font_family: vec!["Inter".to_string()],
-            font_weight: FontWeight(400),
+            font_weight: FontWeight::new(400),
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
             font_features: Vec::new(),

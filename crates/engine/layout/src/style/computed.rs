@@ -170,6 +170,10 @@ pub struct ComputedStyle {
     /// (em/rem relative to the element's own font-size). Inherited.
     pub line_height_step: f32,
     pub font_style: FontStyle,
+    /// CSS Fonts L4 §2.3 — угол `oblique <angle>` в тысячных градуса (`[-90000, 90000]`).
+    /// Осмысленен только при `font_style == Oblique`; `None` — голое `oblique`
+    /// (синтетический наклон по умолчанию, 14deg). Inherited вместе с `font_style`.
+    pub font_oblique_angle: Option<i32>,
     pub font_weight: FontWeight,
     /// CSS Fonts L4 §6.2 — font-variant-caps (весь набор значений). Inherited.
     pub font_variant_caps: FontVariantCaps,
@@ -1384,6 +1388,7 @@ impl ComputedStyle {
             && (self.font_size - other.font_size).abs() < f32::EPSILON
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
+            && self.font_oblique_angle == other.font_oblique_angle
             && self.font_weight == other.font_weight
             && self.font_variant_caps == other.font_variant_caps
             && self.font_variant_ligatures == other.font_variant_ligatures
