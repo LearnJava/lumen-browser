@@ -1190,6 +1190,29 @@
         );
     }
 
+    /// `text-underline-offset` отсчитывается от alphabetic baseline (L4 §5.3 zero-position),
+    /// а не от UA-позиции `auto`; `em` и `%` — от font-size элемента (BUG-1522).
+    #[test]
+    fn underline_offset_is_measured_from_baseline() {
+        let y_of = |css: &str| {
+            let dl = build_wrapped("<p><a>x</a></p>", css, 800.0);
+            let rects = fill_rects(&dl);
+            assert_eq!(rects.len(), 1);
+            rects[0].y
+        };
+        // baseline ≈ 14.4; offset 0 — линия начинается на baseline.
+        let zero = y_of("a { text-decoration: underline; text-underline-offset: 0px; }");
+        assert!((zero - 14.4).abs() < 0.5, "offset 0 → baseline, got {zero}");
+        let px = y_of("a { text-decoration: underline; text-underline-offset: 4px; }");
+        assert!((px - zero - 4.0).abs() < 0.01, "px={px} zero={zero}");
+        let em = y_of("a { text-decoration: underline; font-size: 16px; text-underline-offset: 0.25em; }");
+        assert!((em - px).abs() < 0.01, "em={em} px={px}");
+        let pct = y_of("a { text-decoration: underline; text-underline-offset: 25%; }");
+        assert!((pct - px).abs() < 0.01, "pct={pct} px={px}");
+        let calc = y_of("a { text-decoration: underline; text-underline-offset: calc(50% - 4px); }");
+        assert!((calc - px).abs() < 0.01, "calc={calc} px={px}");
+    }
+
     /// line-through лежит выше baseline, не ниже.
     #[test]
     fn line_through_positioned_above_baseline() {
