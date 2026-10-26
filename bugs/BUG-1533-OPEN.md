@@ -6,7 +6,7 @@
 
 ## Симптом
 
-Строка с `visibility:collapse` остаётся на месте и занимает место: таблица из трёх строк по 30 px, средняя `collapse` — высота 90 (ожидается 60); то же для `tbody` (60 вместо 30), `border-collapse: collapse`. Для колонки проба не получилась: ширина таблицы упирается в [BUG-1335](BUG-1335-FIXED.md) и ширину по содержимому ([BUG-1531](BUG-1531-OPEN.md)). Computed-значение `collapse` верное. 17 id (13 testharness: 22 из 60 сабтестов; 4 reftest: `visibility-collapse-border-spacing-001/002`, `-colspan-003`, `-rowspan-005`). Ещё 8 id `visibility-collapse-{col,colspan,rowcol}-*` падают раньше, на ширине таблицы (492/1008, [BUG-1335](BUG-1335-FIXED.md)), и входят в тот кластер.
+Строка с `visibility:collapse` остаётся на месте и занимает место: таблица из трёх строк по 30 px, средняя `collapse` — высота 90 (ожидается 60); то же для `tbody` (60 вместо 30), `border-collapse: collapse`. Для колонки проба не получилась: ширина таблицы упирается в [BUG-1335](BUG-1335-FIXED.md) и ширину по содержимому ([BUG-1531](BUG-1531-FIXED.md)). Computed-значение `collapse` верное. 17 id (13 testharness: 22 из 60 сабтестов; 4 reftest: `visibility-collapse-border-spacing-001/002`, `-colspan-003`, `-rowspan-005`). Ещё 8 id `visibility-collapse-{col,colspan,rowcol}-*` падают раньше, на ширине таблицы (492/1008, [BUG-1335](BUG-1335-FIXED.md)), и входят в тот кластер.
 
 ## Проба
 

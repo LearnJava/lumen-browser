@@ -1,6 +1,6 @@
 # BUG-1531 — Ширина таблицы с `width` меньше суммы min-content колонок не раздвигается: ячейки вылезают за таблицу, а `table.offsetWidth` равна `width`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout (`crates/engine/layout/src/box_tree/table.rs` — вычисление ширины таблицы и колонок)
 
@@ -32,3 +32,7 @@ WPT-RUN-14 срез 24: `css-tables/tentative/{table-width-redistribution*,colum
 ## Как проверить
 
 Таблица выше; `css/css-tables/tentative/table-width-redistribution.html`, `tentative/column-widths.html`.
+
+## Исправление
+
+В `build_table_init` (`table.rs`) ширина таблицы поднимается до `table_min_content_width` (сумма минимумов колонок + border-spacing); `compute_table_col_widths` берёт `max(явная ширина, min-content)` для колонки. Тесты — `box_tree/tests/table_min_width.rs`. Не сделано: перемер WPT `css-tables/tentative/*` (18 id); в режиме `border-collapse: collapse` с `table-layout:auto` общие внутренние рёбра не вычитаются из суммы минимумов.

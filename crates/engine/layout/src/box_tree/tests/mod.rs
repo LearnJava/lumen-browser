@@ -517,6 +517,7 @@ mod nowrap_atomic_inline;
 mod table_blockify;
 mod table_anon;
 mod table_collapse_fixed;
+mod table_min_width;
 mod baseline_containers;
 mod grid_baseline2;
 mod grid_intrinsic_ratio;
