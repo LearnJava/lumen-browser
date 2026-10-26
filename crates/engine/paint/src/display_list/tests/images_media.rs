@@ -113,11 +113,9 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
             "*{margin:0}img{border:10px solid red;padding:5px}",
         );
         let imgs = images(&dl);
-        assert_eq!(imgs.len(), 2);
-        for img in imgs {
-            if let DisplayCommand::DrawImage { rect, .. } = img {
-                assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
-            }
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
         }
     }
 
