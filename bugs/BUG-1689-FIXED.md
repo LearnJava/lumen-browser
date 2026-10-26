@@ -1,6 +1,6 @@
 # BUG-1689 — `permissions.setPermission` (BiDi / `test_driver.set_permission`) не доходит до запроса разрешения `getUserMedia`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P6)
 **Заведён:** 2026-10-23 (сессия Chat, по вердиктам WPT-RUN-16 — `docs/wpt/pass-rate.md`, строка `mediacapture-streams` таблицы падений)
 **Область:** shell (`crates/shell/src/app/automation_cmds.rs` — `SetPermission`; `crates/shell/src/panels/permission_panel.rs`), js (`crates/js/src/notifications_bindings.rs` — `_lumen_ask_permission`)
 
@@ -54,3 +54,14 @@ origin из команды (`PermissionKind::from_page_name`), — так, чт�
   без `#permPopover`; `denied` — сразу `NotAllowedError`.
 - `tests/wpt/run_corpus.py --prefixes mediacapture-streams` — нет TIMEOUT `GUM-*`/`MediaStream-*` из-за
   ожидания разрешения, балл не ниже 8.06 (2026-10-05).
+
+## Исправление (2026-10-27)
+
+Выбран второй вариант: `permissions.js` отдаёт `_lumen_permission_override(name)` (`granted`/`denied`
+из `OVERRIDES`, иначе пусто), а `_lumen_ask_permission` (`notifications_bindings.rs`) сверяется с ним до
+постановки запроса в очередь `#permPopover`. Решение драйвера живёт только в `OVERRIDES` и
+process-global списке (повторно применяется на следующей навигации), в `PermissionPanel`/`lumen_storage`
+пользователя не попадает. `prompt` снимает решение — запрос снова идёт в popover.
+Тесты: `permissions::tests::embedder_override_is_visible_to_request_path`,
+`notifications_bindings::tests_v8::generic_prompt_honours_embedder_override`.
+Перепрогон `mediacapture-streams` не делался (нужен бинарь dev-release).
