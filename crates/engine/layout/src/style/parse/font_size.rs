@@ -10,6 +10,7 @@
 use lumen_core::geom::Size;
 use lumen_css_parser::Declaration;
 
+use crate::style::values::typography::parse_angle_milli_deg;
 use crate::style::{
     ComputedStyle, CssWideKeyword, FontStretch, FontStyle, Length, ROOT_FONT_SIZE,
     expand_vars_and_env, parse_css_wide_keyword, parse_length, parse_length_q,
@@ -300,6 +301,8 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
 pub(in crate::style) struct FontShorthand {
     /// `italic` / `oblique`; `None` → initial `normal`.
     pub(in crate::style) style: Option<FontStyle>,
+    /// Угол `oblique <angle>` в тысячных градуса; `None` — голое `oblique` / не `oblique`.
+    pub(in crate::style) oblique_angle: Option<i32>,
     /// `true`, если в leading-секции встретился `small-caps`.
     pub(in crate::style) small_caps: bool,
     /// Сырой токен веса (`bold`/`bolder`/`lighter`/`100`..`900`); `None` → `normal`.
@@ -410,6 +413,7 @@ pub(in crate::style) fn parse_font_shorthand(val: &str) -> Option<FontShorthand>
     let tokens: Vec<String> = split_font_shorthand_tokens(trimmed);
 
     let mut style: Option<FontStyle> = None;
+    let mut oblique_angle: Option<i32> = None;
     let mut small_caps = false;
     let mut weight: Option<String> = None;
     let mut stretch: Option<FontStretch> = None;
@@ -427,16 +431,26 @@ pub(in crate::style) fn parse_font_shorthand(val: &str) -> Option<FontShorthand>
             "oblique" => style = Some(FontStyle::Oblique),
             "small-caps" => small_caps = true,
             "bold" | "bolder" | "lighter" => weight = Some(tl),
-            // `oblique <angle>` — угол после oblique игнорируем (Phase 0 берёт
-            // oblique без угла), но потребляем как часть leading-секции.
-            _ if tl.ends_with("deg")
-                || tl.ends_with("grad")
-                || tl.ends_with("rad")
-                || tl.ends_with("turn") => {}
+            // `oblique <angle>` — угол сразу после `oblique`; `0deg` даёт `normal`,
+            // вне `[-90deg, 90deg]` — шорткод недопустим.
+            _ if style == Some(FontStyle::Oblique)
+                && oblique_angle.is_none()
+                && parse_angle_milli_deg(&tl).is_some() =>
+            {
+                let milli = parse_angle_milli_deg(&tl)?;
+                if !(-90_000..=90_000).contains(&milli) {
+                    return None;
+                }
+                if milli == 0 {
+                    style = None;
+                } else {
+                    oblique_angle = Some(milli);
+                }
+            }
             _ => {
                 if let Some(fs) = FontStretch::from_keyword(&tl) {
                     stretch = Some(fs);
-                } else if tl.parse::<u16>().ok().filter(|&n| (1..=1000).contains(&n)).is_some() {
+                } else if crate::style::parse::font::is_weight_number(&tl) {
                     weight = Some(tl);
                 } else {
                     // Неизвестный leading-токен → невалидный shorthand.
@@ -469,5 +483,5 @@ pub(in crate::style) fn parse_font_shorthand(val: &str) -> Option<FontShorthand>
     }
     let family = tokens[i..].join(" ");
 
-    Some(FontShorthand { style, small_caps, weight, stretch, size, line_height, family })
+    Some(FontShorthand { style, oblique_angle, small_caps, weight, stretch, size, line_height, family })
 }

@@ -1,6 +1,6 @@
 # BUG-1410 — `font-weight`/`font-style`/`font-stretch`: дробный вес и `calc()` читаются как 400, `oblique <angle>` теряет угол, `lighter`/`bolder` считаются неверно
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26
 **Заведён:** 2026-10-07 (P2, WPT-RUN-14 срез 18, `css/css-fonts` + `css/css-masking` + `css/WOFF2`)
 **Область:** layout (`crates/engine/layout/src/style/apply/text.rs`, `style/parse/font_size.rs` — разбор `font`; `selector_query.rs` — сериализация)
 

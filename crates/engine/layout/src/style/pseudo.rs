@@ -299,6 +299,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.line_height_is_normal = parent.line_height_is_normal;
     style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
+    style.font_oblique_angle = parent.font_oblique_angle;
     style.font_weight = parent.font_weight;
     style.font_variant_caps = parent.font_variant_caps;
     style.font_variant_emoji = parent.font_variant_emoji;
@@ -420,6 +421,7 @@ pub fn merge_pseudo_inherited(
         line_height_is_relative,
         line_height_is_normal,
         font_style,
+        font_oblique_angle,
         font_weight,
         font_variant_caps,
         font_variant_emoji,

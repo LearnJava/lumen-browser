@@ -2627,6 +2627,9 @@ var _LUMEN_BACKGROUND_PROPERTIES = {
 // returns its canonical serialization (BUG-1325).
 var _LUMEN_TEXT_PROPERTIES = {
     'tab-size': 1, 'letter-spacing': 1, 'word-spacing': 1, 'text-indent': 1, 'text-transform': 1,
+    // CSS Fonts L4 §2: `font-weight` `<number [1,1000]>`, `font-style` `oblique <angle>`,
+    // `font-stretch` `<percentage>` (BUG-1410).
+    'font-weight': 1, 'font-style': 1, 'font-stretch': 1,
 };
 
 // CSS Text L4 §2.1 / §6.4.3: `white-space` and `text-wrap` are shorthands; the inline-style

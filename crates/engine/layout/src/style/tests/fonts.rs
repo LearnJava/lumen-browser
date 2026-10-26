@@ -100,7 +100,7 @@ use super::*;
         // line-height, only applying weight.
         let s = p_style_with_css("p { font: 700 13px/1.4 sans-serif; }");
         assert_eq!(s.font_size, 13.0);
-        assert_eq!(s.font_weight, FontWeight(700));
+        assert_eq!(s.font_weight, FontWeight::new(700));
         assert!(s.line_height_is_relative);
         assert!((s.line_height - 1.4).abs() < 1e-4);
         assert_eq!(s.font_family.first().map(String::as_str), Some("sans-serif"));
@@ -274,7 +274,7 @@ use super::*;
         // (он не раскрывал). Проверяем, что теперь совпадает с литералом.
         let s = p_style_with_css("p { --f: 700 23px/1.4 serif; font: var(--f); }");
         assert_eq!(s.font_size, 23.0);
-        assert_eq!(s.font_weight, FontWeight(700));
+        assert_eq!(s.font_weight, FontWeight::new(700));
         assert!(s.line_height_is_relative);
         assert!((s.line_height - 1.4).abs() < 1e-4);
     }
@@ -292,7 +292,7 @@ use super::*;
         // `font-size: calc(...)` с тем же значением работал.
         let s = p_style_with_css("p { font: 700 calc(4px + 40px) serif; }");
         assert_eq!(s.font_size, 44.0);
-        assert_eq!(s.font_weight, FontWeight(700));
+        assert_eq!(s.font_weight, FontWeight::new(700));
     }
 
     #[test]
@@ -321,7 +321,7 @@ use super::*;
         // каскад в другую сторону.
         let s = p_style_with_css("p { font: 700 44px/1.2 serif; font-size: inherit; }");
         assert_eq!(s.font_size, ROOT_FONT_SIZE);
-        assert_eq!(s.font_weight, FontWeight(700));
+        assert_eq!(s.font_weight, FontWeight::new(700));
     }
 
     #[test]
@@ -1099,4 +1099,89 @@ use super::*;
     fn font_size_negative_literal_is_invalid() {
         let s = p_style_inheriting_from_body("body { font-size: 20px; } p { font-size: -5px; }");
         assert_eq!(s.font_size, 20.0);
+    }
+
+    // ── BUG-1410: дробный font-weight, calc(), oblique <angle>, lighter/bolder ──
+
+    #[test]
+    fn font_weight_fractional_and_calc() {
+        let s = p_style_with_css("p { font-weight: 150.25; }");
+        assert_eq!(s.font_weight.serialize(), "150.25");
+        let s = p_style_with_css("p { font-weight: calc(100 + 200); }");
+        assert_eq!(s.font_weight.serialize(), "300");
+        // calc() зажимается в [1, 1000].
+        let s = p_style_with_css("p { font-weight: calc(0); }");
+        assert_eq!(s.font_weight.serialize(), "1");
+        let s = p_style_with_css("p { font-weight: calc(-100); }");
+        assert_eq!(s.font_weight.serialize(), "1");
+        let s = p_style_with_css("p { font-weight: calc(2000); }");
+        assert_eq!(s.font_weight.serialize(), "1000");
+    }
+
+    #[test]
+    fn font_weight_out_of_range_literal_is_invalid() {
+        for bad in ["0", "-1", "1001", "bold 900", "auto", "1e"] {
+            let s = p_style_inheriting_from_body(&format!("body {{ font-weight: 300; }} p {{ font-weight: {bad}; }}"));
+            assert_eq!(s.font_weight, FontWeight::new(300), "font-weight: {bad}");
+        }
+    }
+
+    #[test]
+    fn font_weight_lighter_bolder_table() {
+        let cases = [
+            ("99", "99", "400"),
+            ("100", "100", "400"),
+            ("349", "100", "400"),
+            ("350", "100", "700"),
+            ("549", "100", "700"),
+            ("550", "400", "900"),
+            ("749", "400", "900"),
+            ("750", "700", "900"),
+            ("900", "700", "900"),
+            ("950", "700", "950"),
+            ("1000", "700", "1000"),
+        ];
+        for (base, lighter, bolder) in cases {
+            let l = p_style_inheriting_from_body(&format!("body {{ font-weight: {base}; }} p {{ font-weight: lighter; }}"));
+            assert_eq!(l.font_weight.serialize(), lighter, "lighter от {base}");
+            let b = p_style_inheriting_from_body(&format!("body {{ font-weight: {base}; }} p {{ font-weight: bolder; }}"));
+            assert_eq!(b.font_weight.serialize(), bolder, "bolder от {base}");
+        }
+    }
+
+    #[test]
+    fn font_style_oblique_angle() {
+        let angle = |css: &str| {
+            let s = p_style_with_css(&format!("p {{ font-style: {css}; }}"));
+            crate::style::font_style_to_css(s.font_style, s.font_oblique_angle)
+        };
+        assert_eq!(angle("oblique"), "oblique");
+        assert_eq!(angle("oblique 45deg"), "oblique 45deg");
+        assert_eq!(angle("oblique -10deg"), "oblique -10deg");
+        assert_eq!(angle("oblique 14deg"), "oblique 14deg");
+        assert_eq!(angle("oblique 10grad"), "oblique 9deg");
+        assert_eq!(angle("oblique 0deg"), "normal");
+        assert_eq!(angle("oblique calc(10deg - 10deg)"), "normal");
+        assert_eq!(angle("oblique calc(30deg * 2)"), "oblique 60deg");
+        assert_eq!(angle("oblique calc(100deg)"), "oblique 90deg");
+        assert_eq!(angle("oblique calc(-100deg)"), "oblique -90deg");
+        // Угол вне диапазона и без единицы — декларация отбрасывается (остаётся initial).
+        assert_eq!(angle("oblique 91deg"), "normal");
+        assert_eq!(angle("oblique 10"), "normal");
+        assert_eq!(angle("italic oblique"), "normal");
+    }
+
+    #[test]
+    fn font_style_angle_is_inherited_and_reset() {
+        let s = p_style_inheriting_from_body("body { font-style: oblique 20deg; }");
+        assert_eq!(crate::style::font_style_to_css(s.font_style, s.font_oblique_angle), "oblique 20deg");
+        let s = p_style_inheriting_from_body("body { font-style: oblique 20deg; } p { font-style: oblique; }");
+        assert_eq!(crate::style::font_style_to_css(s.font_style, s.font_oblique_angle), "oblique");
+    }
+
+    #[test]
+    fn font_shorthand_fractional_weight_and_oblique_angle() {
+        let s = p_style_with_css("p { font: oblique 10deg 150.5 12px serif; }");
+        assert_eq!(s.font_weight.serialize(), "150.5");
+        assert_eq!(crate::style::font_style_to_css(s.font_style, s.font_oblique_angle), "oblique 10deg");
     }

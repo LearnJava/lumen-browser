@@ -408,7 +408,7 @@ pub fn computed_style_map(lb: &LayoutBox) -> Vec<(String, String)> {
             .map_or_else(|| "transparent".to_string(), |_| "set".to_string()),
     ));
     out.push(("font-size".into(), fmt_px(s.font_size)));
-    out.push(("font-weight".into(), s.font_weight.0.to_string()));
+    out.push(("font-weight".into(), s.font_weight.serialize()));
     out.push(("opacity".into(), fmt_num(s.opacity)));
 
     out.push((
