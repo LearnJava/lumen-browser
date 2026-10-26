@@ -1085,10 +1085,8 @@ pub(in crate::style) fn parse_angle_milli_deg(tok: &str) -> Option<i32> {
         (n, 0.9)
     } else if let Some(n) = t.strip_suffix("rad") {
         (n, 180.0 / std::f64::consts::PI)
-    } else if let Some(n) = t.strip_suffix("turn") {
-        (n, 360.0)
     } else {
-        return None;
+        (t.strip_suffix("turn")?, 360.0)
     };
     let v = num.parse::<f64>().ok().filter(|v| v.is_finite())?;
     Some((v * per_unit * 1000.0).round().clamp(-1.0e9, 1.0e9) as i32)

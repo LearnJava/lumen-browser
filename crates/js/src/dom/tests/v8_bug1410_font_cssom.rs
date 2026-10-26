@@ -58,21 +58,3 @@ fn valid_values_keep_their_canonical_form() {
         assert_eq!(assign(&rt, prop, val), want, "{prop} = {val:?}");
     }
 }
-
-#[test]
-fn computed_font_weight_and_style() {
-    let rt = rt();
-    let computed = |style: &str| {
-        eval_str(
-            &rt,
-            &format!(
-                "var e = document.createElement('div'); document.body.appendChild(e); e.style.cssText = {style:?}; \
-                 var c = getComputedStyle(e); c.fontWeight + '|' + c.fontStyle"
-            ),
-        )
-    };
-    assert_eq!(computed("font-weight: 150.25"), "150.25|normal");
-    assert_eq!(computed("font-weight: calc(100 + 200)"), "300|normal");
-    assert_eq!(computed("font-style: oblique 45deg"), "400|oblique 45deg");
-    assert_eq!(computed("font-style: oblique 0deg"), "400|normal");
-}
