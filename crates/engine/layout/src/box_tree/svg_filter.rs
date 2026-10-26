@@ -5,9 +5,10 @@
 //! `<filter>` (`feFlood`, `feOffset`, `feGaussianBlur`, `feColorMatrix`,
 //! `feComposite`, `feBlend`, `feMerge`, `feComponentTransfer`, `feDropShadow`,
 //! `feTile`, `feMorphology`, `feConvolveMatrix`, `feDisplacementMap`,
-//! `feTurbulence`, `feDiffuseLighting`, `feSpecularLighting`) сводятся к
+//! `feTurbulence`, `feDiffuseLighting`, `feSpecularLighting`, `feImage` с адресом
+//! картинки) сводятся к
 //! вариантам [`FePrimitive`] с уже разобранными числами и входами
-//! (`in`/`in2`/`result` → индексы). Остальные `fe*` (`feImage`) дают
+//! (`in`/`in2`/`result` → индексы). Остальные `fe*` (`feImage` на элемент) дают
 //! [`FePrimitive::Unsupported`] (прозрачный чёрный), чтобы граф не терял позиции.
 //!
 //! Свойства `flood-color`/`flood-opacity`/`lighting-color`/
@@ -25,7 +26,7 @@ use super::svg::SvgTransform;
 use super::svg_clip::user_bbox_of;
 use super::LayoutBox;
 use crate::style::{FilterFn, SvgClipPlacement, 
-    Color, ComputedStyle, FeBlendMode, FeColorMatrix, FeCompositeOp, FeEdgeMode, FeInput, FeLight,
+    Color, ComputedStyle, FeBlendMode, FeColorMatrix, FeCompositeOp, FeEdgeMode, FeImageFit, FeInput, FeLight,
     FeLighting, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, compute_style, parse_color,
 };
 
@@ -311,8 +312,46 @@ fn build_primitive(c: &Ctx<'_>, tag: &str) -> FePrimitive {
             }
         }
         "fediffuselighting" | "fespecularlighting" => lighting(c, tag == "fespecularlighting"),
+        "feimage" => fe_image(c),
         _ => FePrimitive::Unsupported { input: FeInput::Empty },
     }
+}
+
+/// `feImage`: ссылка на картинку (`href`/`xlink:href`, не `#id`) — [`FePrimitive::Image`];
+/// ссылка на элемент документа пока не исполняется ([`FePrimitive::Unsupported`]).
+fn fe_image(c: &Ctx<'_>) -> FePrimitive {
+    let href = c.attr("href").or_else(|| c.attr("xlink:href")).map(str::trim).unwrap_or_default();
+    if href.is_empty() || href.starts_with('#') {
+        return FePrimitive::Unsupported { input: FeInput::Empty };
+    }
+    FePrimitive::Image { href: href.to_string(), fit: parse_image_fit(c.attr("preserveAspectRatio")) }
+}
+
+/// `preserveAspectRatio="[defer] <align> [meet|slice]"`.
+fn parse_image_fit(raw: Option<&str>) -> FeImageFit {
+    let mut fit = FeImageFit::default();
+    let Some(raw) = raw else { return fit };
+    let mut words = raw.split_whitespace().peekable();
+    if words.peek() == Some(&"defer") {
+        words.next();
+    }
+    match words.next() {
+        Some("none") => fit.stretch = true,
+        Some(a) if a.len() == 8 && a.starts_with('x') => {
+            let axis = |m: &str| match m {
+                "Min" => Some(0.0),
+                "Mid" => Some(0.5),
+                "Max" => Some(1.0),
+                _ => None,
+            };
+            if let (Some(ax), Some(ay)) = (axis(&a[1..4]), a[4..].strip_prefix('Y').and_then(axis)) {
+                (fit.align_x, fit.align_y) = (ax, ay);
+            }
+        }
+        _ => {}
+    }
+    fit.slice = words.next() == Some("slice");
+    fit
 }
 
 /// `xChannelSelector`/`yChannelSelector`: `R`/`G`/`B`/`A` → 0..3 (по умолчанию `A`).
