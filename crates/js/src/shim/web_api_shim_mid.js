@@ -15745,7 +15745,7 @@ function _lumen_link_hint_type_supported(dest, type) {
 // right shape for modulepreload (a body that cannot enter the module map is a
 // failed preload).
 //
-// BUG-1116: goes through `_lumen_link_prefetch_sync` (native, shares Rust's
+// BUG-1116: goes through `fetch_preload_cached` (native, shares Rust's
 // process-global `PREFETCH_CACHE`) instead of the page's own `fetch()` — a
 // real consumer of the same URL elsewhere on the page (`<script src>`,
 // `<link rel=stylesheet>`, or the engine's own early streaming warm-up of
@@ -15764,39 +15764,70 @@ function _lumen_link_hint_fetch(nid, href, onBody, dest) {
     setTimeout(function() {
         var url = _url_resolve(String(href), _lumen_document_base_url());
         var nonce = _lumen_u2n(_lumen_get_attr(nid, 'nonce'));
-        var ok = _lumen_link_prefetch_sync(url, dest || '', nonce === null ? '' : String(nonce));
-        if (!ok) {
-            _lumen_console_error('link hint fetch failed: ' + url);
-            _lumen_resource_fire(nid, 'error');
+        var nonceStr = nonce === null ? '' : String(nonce);
+        // BUG-1714: the request runs on a worker thread and settles from
+        // `_lumen_fetch_pump`, like a page `fetch()`. `_lumen_link_prefetch_sync`
+        // held the engine thread for the whole download, so a page that
+        // inserts a hundred chunk hints (vkvideo.ru) froze for seconds,
+        // fetching them one by one. The `|<as>|preload:<nonce>` load segment
+        // routes it through the same `fetch_preload_cached` as the sync native.
+        var handle = (typeof _lumen_fetch_async_start === 'function')
+            ? _lumen_fetch_async_start(url, 'GET', '', [], false, [],
+                                       '|' + (dest || '') + '|preload:' + nonceStr)
+            : 0;
+        if (!handle) {
+            var ok = _lumen_link_prefetch_sync(url, dest || '', nonceStr);
+            if (ok) _lumen_link_hint_settle(nid, url, onBody);
+            else _lumen_link_hint_failed(nid, url);
             return;
         }
-        try {
-            var status = _lumen_fetch_get_status();
-            if (status < 200 || status >= 300) throw new Error('HTTP ' + status);
-            var statusText = _lumen_fetch_get_status_text();
-            var rawHeaders = _lumen_fetch_get_headers();
-            var finalUrl = _lumen_fetch_get_url() || url;
-            var hdrs = [];
-            for (var i = 0; i + 1 < rawHeaders.length; i += 2) { hdrs.push([rawHeaders[i], rawHeaders[i + 1]]); }
-            var resp = _lumen_response_from_fetch_cache(status, statusText, hdrs, finalUrl, finalUrl !== url);
-            if (onBody) {
-                // Drain the body even when nothing reads it: an unread
-                // response holds its fetch slot (BUG-721).
-                resp.text().then(function(text) {
-                    onBody(url, resp, text);
-                    _lumen_resource_fire(nid, 'load');
-                }).catch(function(e) {
-                    _lumen_console_error('link hint body failed: ' + url + ': ' + e);
-                    _lumen_resource_fire(nid, 'error');
-                });
-                return;
-            }
-            _lumen_resource_fire(nid, 'load');
-        } catch (e) {
-            _lumen_console_error('link hint fetch failed: ' + url + ': ' + e);
-            _lumen_resource_fire(nid, 'error');
-        }
+        _lumen_fetch_track(function() {
+            var st = _lumen_fetch_async_poll(handle);
+            if (st === 0) return false;
+            var done = st === 1 && _lumen_fetch_async_commit(handle);
+            _lumen_fetch_async_free(handle);
+            if (done) _lumen_link_hint_settle(nid, url, onBody);
+            else _lumen_link_hint_failed(nid, url);
+            return true;
+        });
     }, 0);
+}
+
+function _lumen_link_hint_failed(nid, url) {
+    _lumen_console_error('link hint fetch failed: ' + url);
+    _lumen_resource_fire(nid, 'error');
+}
+
+// Reads the response the fetch left in the shared `FetchCache` slot and fires
+// the hint's `load`/`error`. Synchronous from the slot read to the `Response`
+// construction: the slot is overwritten by the next request.
+function _lumen_link_hint_settle(nid, url, onBody) {
+    try {
+        var status = _lumen_fetch_get_status();
+        if (status < 200 || status >= 300) throw new Error('HTTP ' + status);
+        var statusText = _lumen_fetch_get_status_text();
+        var rawHeaders = _lumen_fetch_get_headers();
+        var finalUrl = _lumen_fetch_get_url() || url;
+        var hdrs = [];
+        for (var i = 0; i + 1 < rawHeaders.length; i += 2) { hdrs.push([rawHeaders[i], rawHeaders[i + 1]]); }
+        var resp = _lumen_response_from_fetch_cache(status, statusText, hdrs, finalUrl, finalUrl !== url);
+        if (onBody) {
+            // Drain the body even when nothing reads it: an unread
+            // response holds its fetch slot (BUG-721).
+            resp.text().then(function(text) {
+                onBody(url, resp, text);
+                _lumen_resource_fire(nid, 'load');
+            }).catch(function(e) {
+                _lumen_console_error('link hint body failed: ' + url + ': ' + e);
+                _lumen_resource_fire(nid, 'error');
+            });
+            return;
+        }
+        _lumen_resource_fire(nid, 'load');
+    } catch (e) {
+        _lumen_console_error('link hint fetch failed: ' + url + ': ' + e);
+        _lumen_resource_fire(nid, 'error');
+    }
 }
 
 // `rel=preload`, §4.6.7 «process the linked resource».

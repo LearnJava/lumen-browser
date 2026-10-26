@@ -618,6 +618,8 @@ fn dynamic_preload_link_fetches_and_fires_load() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b826_load === 1 && globalThis.__b826_err === 0").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -639,6 +641,8 @@ fn preload_link_fires_error_on_http_failure() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b826_e === true").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -709,6 +713,8 @@ fn dynamic_prefetch_link_fires_load() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b826_pf === true").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -735,6 +741,8 @@ fn icon_link_fetches_and_fires_load_in_both_spellings() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b848_icon").unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(2.0));
 }
@@ -755,6 +763,8 @@ fn icon_link_fires_error_on_http_failure() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b848_ie === true").unwrap();
     assert_eq!(r, lumen_core::JsValue::Bool(true));
 }
@@ -784,6 +794,8 @@ fn modulepreload_link_load_and_bad_destination_error() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     // Order is not asserted: the two paths settle through different
     // queues (a plain task for the refusal, a fetch promise for the
     // load), and the spec fixes neither against the other.
@@ -837,6 +849,8 @@ fn parser_written_preload_link_fetches_at_interactive() {
     let before = rt.eval("globalThis.__b826_p").unwrap();
     assert_eq!(before, lumen_core::JsValue::Number(0.0));
     rt.eval("_lumen_apply_ready_state('interactive'); _lumen_tick_timers();").unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let after = rt.eval("globalThis.__b826_p").unwrap();
     assert_eq!(after, lumen_core::JsValue::Number(1.0));
 }
@@ -860,8 +874,70 @@ fn preload_link_is_not_fetched_twice_by_the_document_pass() {
                    _lumen_tick_timers();"#,
     )
     .unwrap();
+    // BUG-1714: a link hint's fetch runs on a worker thread; settle it as headless does.
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
     let r = rt.eval("globalThis.__b826_n").unwrap();
     assert_eq!(r, lumen_core::JsValue::Number(1.0));
+}
+
+/// Provider whose `<link>`-hint fetch is slow, like a chunk on a far CDN.
+struct SlowPreload;
+impl lumen_core::ext::JsFetchProvider for SlowPreload {
+    fn fetch_sync(
+        &self,
+        url: &str,
+        _method: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        Ok(lumen_core::ext::JsFetchResult {
+            status: 200,
+            status_text: "".into(),
+            headers: vec![],
+            body: b"x".to_vec(),
+            url: url.to_string(),
+        })
+    }
+    fn fetch_preload_cached(
+        &self,
+        url: &str,
+        as_kind: &str,
+        _nonce: &str,
+    ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+        assert_eq!(as_kind, "script");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        self.fetch_sync(url, "GET")
+    }
+}
+
+/// BUG-1714: the hints a page inserts must not hold the engine thread. Three
+/// 400 ms fetches used to run one after another inside the timer task
+/// (1.2 s on the thread); now the task returns at once and the three overlap.
+#[test]
+fn preload_links_do_not_block_the_engine_thread() {
+    let rt = v8_runtime_with_dom_and_fetch(make_doc(), Arc::new(SlowPreload));
+    rt.eval(
+        r#"globalThis.__b1714 = 0;
+                   for (var i = 0; i < 3; i++) {
+                       var l = document.createElement('link');
+                       l.rel = 'preload';
+                       l.as = 'script';
+                       l.href = 'chunk' + i + '.js';
+                       l.onload = function() { globalThis.__b1714++; };
+                       document.head.appendChild(l);
+                   }"#,
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    rt.eval("_lumen_tick_timers();").unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(300),
+        "the timer task waited for the hint downloads: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(rt.eval("globalThis.__b1714").unwrap(), lumen_core::JsValue::Number(0.0));
+    rt.settle_pending_fetches(std::time::Duration::from_secs(5));
+    assert_eq!(rt.eval("globalThis.__b1714").unwrap(), lumen_core::JsValue::Number(3.0));
+    // Overlapping, not serial: 3 x 400 ms in series would be 1.2 s.
+    assert!(started.elapsed() < std::time::Duration::from_millis(1000), "{:?}", started.elapsed());
 }
 
 /// `link.relList.supports('preload')` is the first line of WPT's own
