@@ -225,6 +225,8 @@ pub(in crate::style) fn ua_link_color(doc: &Document, node: NodeId) -> Option<Co
 }
 /// UA stylesheet: масштаб font-size для `<small>`, `<sub>`, `<sup>`.
 /// HTML5 §15.3.3: font-size: smaller (≈ 0.83× родительского).
+/// CSS Ruby 1 §4: `rt, rtc { font-size: 50% }`; `<rt>` внутри `<rtc>` размер контейнера
+/// не уменьшает повторно (`rtc > rt { font-size: inherit }`).
 /// Возвращает `Some(factor)` — multiplier к `parent_font_size`.
 pub(in crate::style) fn ua_font_size_factor(doc: &Document, node: NodeId) -> Option<f32> {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
@@ -232,6 +234,13 @@ pub(in crate::style) fn ua_font_size_factor(doc: &Document, node: NodeId) -> Opt
     };
     match name.local.as_str() {
         "small" | "sub" | "sup" => Some(0.83),
+        "rtc" => Some(0.5),
+        "rt" => {
+            let in_rtc = doc.get(node).parent.is_some_and(|p| {
+                matches!(&doc.get(p).data, NodeData::Element { name, .. } if name.local.as_str() == "rtc")
+            });
+            (!in_rtc).then_some(0.5)
+        }
         _ => None,
     }
 }

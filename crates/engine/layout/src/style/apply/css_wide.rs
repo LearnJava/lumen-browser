@@ -404,18 +404,23 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.text_decoration_line
             };
-            style.text_decoration_color = if inh {
-                inherited.text_decoration_color
-            } else {
-                init.text_decoration_color
-            };
-            // L3 shorthand сбрасывает также style (но не thickness — он
-            // исключён из L3 shorthand-а; см. parse_text_decoration_shorthand_q).
+            // Shorthand сбрасывает также color, style и thickness (L4 §2.1); longhand
+            // `text-decoration-line` трогает только линии.
             if prop == "text-decoration" {
+                style.text_decoration_color = if inh {
+                    inherited.text_decoration_color
+                } else {
+                    init.text_decoration_color
+                };
                 style.text_decoration_style = if inh {
                     inherited.text_decoration_style
                 } else {
                     init.text_decoration_style
+                };
+                style.text_decoration_thickness = if inh {
+                    inherited.text_decoration_thickness
+                } else {
+                    init.text_decoration_thickness
                 };
             }
         }
@@ -492,6 +497,21 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.text_underline_offset
             };
+            style.text_underline_offset_pct = if inh {
+                inherited.text_underline_offset_pct
+            } else {
+                init.text_underline_offset_pct
+            };
+        }
+        "text-decoration-skip-spaces" => {
+            style.text_decoration_skip_spaces = if inh {
+                inherited.text_decoration_skip_spaces
+            } else {
+                init.text_decoration_skip_spaces
+            };
+        }
+        "text-decoration-inset" => {
+            style.text_decoration_inset = if inh { inherited.text_decoration_inset } else { init.text_decoration_inset };
         }
         "text-decoration-skip-ink" => {
             style.text_decoration_skip_ink = if inh {

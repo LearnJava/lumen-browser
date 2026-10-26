@@ -59,10 +59,19 @@ use super::*;
 
     #[test]
     fn text_decoration_unrecognized_only_returns_none_line() {
-        let p = parse_text_decoration_shorthand("blink");
-        assert!(p.line.is_none());
         let p = parse_text_decoration_shorthand("");
         assert!(p.line.is_none());
+        let p = parse_text_decoration_shorthand("foo");
+        assert!(p.line.is_none());
+        assert!(!p.any_recognized);
+    }
+
+    #[test]
+    fn text_decoration_blink_is_stored_but_not_painted() {
+        let d = parse_text_decoration_shorthand("blink").line.unwrap();
+        assert!(d.blink);
+        assert!(d.is_empty(), "blink не рисуется");
+        assert!(!d.is_none(), "но вычисленное значение не none");
     }
 
     #[test]
@@ -346,15 +355,14 @@ use super::*;
     }
 
     #[test]
-    fn text_decoration_thickness_not_in_l3_shorthand() {
-        // CSS Text Decoration L3 §2.1 — thickness НЕ входит в shorthand.
-        // Установка через longhand + shorthand не должна сбрасывать thickness.
+    fn text_decoration_shorthand_resets_and_sets_thickness() {
+        // CSS Text Decoration L4 §2.1 — thickness входит в shorthand: он сбрасывает её к `auto`
+        // (BUG-1515), а токен `<length>` в нём задаёт толщину.
         let s = style_for("text-decoration-thickness: 5px; text-decoration: underline");
-        match s.text_decoration_thickness {
-            TextDecorationThickness::Length(px) => assert!((px - 5.0).abs() < 0.01,
-                                                            "shorthand НЕ должен сбрасывать thickness"),
-            other => panic!("expected Length(5.0), got {other:?}"),
-        }
+        assert_eq!(s.text_decoration_thickness, TextDecorationThickness::Auto);
+        assert!(s.text_decoration_line.underline);
+        let s = style_for("text-decoration: underline 7px red");
+        assert_eq!(s.text_decoration_thickness, TextDecorationThickness::Length(7.0));
         assert!(s.text_decoration_line.underline);
     }
 

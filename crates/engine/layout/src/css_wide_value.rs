@@ -103,6 +103,8 @@ pub fn is_inherited_property(prop: &str) -> bool {
             | "text-anchor"
             | "text-autospace"
             | "text-combine-upright"
+            | "text-decoration-skip-ink"
+            | "text-decoration-skip-spaces"
             | "text-emphasis"
             | "text-emphasis-color"
             | "text-emphasis-position"

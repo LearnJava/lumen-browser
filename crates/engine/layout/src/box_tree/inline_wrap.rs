@@ -1583,7 +1583,47 @@ pub(crate) fn align_run_vertically(
         *used_line_height = f.base + f.grow;
     }
     let line_h = step_line_height(*used_line_height, s.line_height_step);
-    apply_inline_vertical_align(lines, line_h, grow, fit.as_ref())
+    let (marks_top, marks_bottom) = if grow { emphasis_extra(lines, line_h) } else { (0.0, 0.0) };
+    if marks_top + marks_bottom > 0.0 {
+        // База свежая, не из `used_line_height`: тот мог вырасти в прошлом проходе.
+        let base = fit.as_ref().map_or_else(|| super::entry::used_line_height_px(s, m), |f| f.base + f.grow);
+        *used_line_height = base + marks_top + marks_bottom;
+    }
+    let growth = apply_inline_vertical_align(lines, line_h, grow, fit.as_ref());
+    if marks_top > 0.0 {
+        for frag in lines.iter_mut().flatten() {
+            if !matches!(frag.style.vertical_align, VerticalAlign::Top | VerticalAlign::TextTop) {
+                frag.y_offset += marks_top;
+            }
+        }
+    }
+    growth
+}
+
+/// CSS Text Decoration L3 §4.2 — метки `text-emphasis` занимают место в строке, если полуинтерлиньяжа
+/// (`line-height` − кегль) / 2 им не хватает: строка растёт сверху для `over` и снизу для `under`
+/// (в ruby-эталонах WPT `text-emphasis-line-height-*` метка — как `rt` в 50% кегля). Возвращает
+/// `(сверху, снизу)` — наибольшую нехватку по фрагментам рана; раскладка равномерная, поэтому рост
+/// одинаков у всех строк. Вертикальное письмо сюда не попадает (его ран раскладывается отдельно).
+fn emphasis_extra(lines: &[Vec<InlineFrag>], line_h: f32) -> (f32, f32) {
+    let (mut top, mut bottom) = (0.0_f32, 0.0_f32);
+    for frag in lines.iter().flatten() {
+        let st = &frag.style;
+        if st.text_emphasis_style.is_none()
+            || frag.img_src.is_some()
+            || frag.text.is_empty()
+            || st.writing_mode != crate::style::WritingMode::HorizontalTb
+        {
+            continue;
+        }
+        let need = (crate::style::TextEmphasisStyle::mark_size(st.font_size) - (line_h - st.font_size) / 2.0).max(0.0);
+        if st.text_emphasis_position.is_over() {
+            top = top.max(need);
+        } else {
+            bottom = bottom.max(need);
+        }
+    }
+    (top, bottom)
 }
 
 /// CSS 2.1 §10.8 — применяет вертикальное выравнивание к inline-фрагментам.

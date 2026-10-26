@@ -503,7 +503,13 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "shape-image-threshold" => {
-            if let Ok(n) = val.trim().parse::<f32>() {
+            // CSS Shapes L1 §3.3: `<number>` или `<percentage>`, зажимается в [0, 1].
+            let t = val.trim();
+            let n = match t.strip_suffix('%') {
+                Some(p) => p.trim().parse::<f32>().ok().map(|v| v / 100.0),
+                None => t.parse::<f32>().ok(),
+            };
+            if let Some(n) = n {
                 style.shape_image_threshold = n.clamp(0.0, 1.0);
             }
         }
