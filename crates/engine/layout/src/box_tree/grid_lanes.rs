@@ -8,7 +8,7 @@
 
 use super::grid::{resolve_grid_axis, GridAxis};
 use super::{LayoutBox, Size, TextMeasurer};
-use crate::style::{ComputedStyle, GridAutoFlow, GridRepeat, GridTrackSize, LanesAxis};
+use crate::style::{AlignValue, ComputedStyle, GridAutoFlow, GridRepeat, GridTrackSize, LanesAxis};
 use std::sync::Arc;
 
 /// `grid-lanes-pack: dense` или устаревшее `grid-auto-flow: dense`.
@@ -93,6 +93,9 @@ pub(super) struct LanesState {
     /// Размеры полос и промежуток между ними: щель годится только окну того же суммарного размера.
     lane_sizes: Vec<f32>,
     lane_gap: f32,
+    /// Элемент `k` выровнен по оси потока явно (`stretch`/`center`/`end`): последний в полосе получает
+    /// всё место до конца контейнера (Grid L3 §6).
+    pub wants: Vec<bool>,
 }
 
 impl LanesState {
@@ -100,6 +103,7 @@ impl LanesState {
         let n_items = items.len();
         Self {
             busy: None,
+            wants: vec![false; n_items],
             lane_sizes: Vec::new(),
             lane_gap: 0.0,
             items,
@@ -160,6 +164,11 @@ impl LanesState {
         }
         self.extent = self.extent.max(end);
         (first, span)
+    }
+
+    /// Растягивает область последнего элемента каждой полосы (`wants`) до `total` от его позиции.
+    pub(super) fn extend_last(&self, sizes: &mut [f32], total: f32) {
+        extend_last_items(&self.window, &self.pos, sizes, &self.wants, total);
     }
 
     fn settle_dense(&mut self, k: usize, h: f32) -> (usize, usize) {
@@ -233,9 +242,15 @@ pub(super) struct RowLanes {
 }
 
 /// Параметры потока полос-строк, не зависящие от замера.
-pub(super) struct RowFlow {
+pub(super) struct RowFlow<'a> {
     /// Плотная упаковка: размеры полос (0 — неизвестны до замера).
     pub dense: Option<Vec<f32>>,
+    /// `fill-reverse`: поток идёт от конца оси — позиции отражаются в `total`.
+    pub fill_reverse: bool,
+    /// Контейнер, чьё выравнивание по оси потока читают элементы (`None` — ширины считаются без него).
+    pub align: Option<&'a ComputedStyle>,
+    /// Размер контейнера вдоль потока: от него отражается `fill-reverse`.
+    pub total: f32,
     pub n_lanes: usize,
     pub tolerance: f32,
     pub gap: f32,
@@ -247,7 +262,7 @@ pub(super) fn row_lanes(
     children: &[LayoutBox],
     item_idxs: &[usize],
     items: Vec<LaneItem>,
-    flow: &RowFlow,
+    flow: &RowFlow<'_>,
     outer_width: &dyn Fn(&LayoutBox) -> f32,
 ) -> RowLanes {
     // Определённая полоса за явной сеткой создаёт неявную (как строка в обычной сетке).
@@ -262,10 +277,18 @@ pub(super) fn row_lanes(
         let w = outer_width(&children[i]);
         st.choose(k);
         let (first, span) = st.settle(k, w);
+        st.wants[k] = flow.align.is_some_and(|c| wants_flow_alignment(&children[i].style, c, true));
         placements.push((k as u32 + 1, k as u32 + 2, first as u32 + 1, (first + span) as u32 + 1));
         col_widths.push(w);
     }
-    RowLanes { placements, col_widths, col_offsets: st.pos, extent: st.extent }
+    if flow.align.is_some() {
+        st.extend_last(&mut col_widths, flow.total);
+    }
+    let mut col_offsets = st.pos;
+    if flow.fill_reverse {
+        mirror(&mut col_offsets, &col_widths, flow.total);
+    }
+    RowLanes { placements, col_widths, col_offsets, extent: st.extent }
 }
 
 /// Вклады элементов в размеры полос-строк (Grid L3 §3.4): автоматический элемент вносит свою
@@ -323,6 +346,47 @@ impl RowLaneSizing {
     }
 }
 
+/// Элемент — последний в полосе, если его конец дальше всех в ней; у охватывающего несколько полос
+/// — последний во всех. Такой элемент с `wants` получает область до `total` от своей позиции.
+pub(super) fn extend_last_items(window: &[(usize, usize)], pos: &[f32], sizes: &mut [f32], wants: &[bool], total: f32) {
+    let n_lanes = window.iter().map(|&(f, s)| f + s).max().unwrap_or(0);
+    let mut last: Vec<Option<usize>> = vec![None; n_lanes];
+    for (k, &(f, s)) in window.iter().enumerate() {
+        for slot in &mut last[f..f + s] {
+            let better = slot.is_none_or(|p| pos[k] + sizes[k] >= pos[p] + sizes[p]);
+            if better {
+                *slot = Some(k);
+            }
+        }
+    }
+    for k in 0..window.len() {
+        let (f, s) = window[k];
+        if wants[k] && last[f..f + s].iter().all(|&l| l == Some(k)) {
+            sizes[k] = sizes[k].max(total - pos[k]);
+        }
+    }
+}
+
+/// Выровнен ли элемент по оси потока явно: `justify-*` (полосы-строки, поток по inline) или
+/// `align-*` (полосы-столбцы). `normal` и `start` места сверх своего размера не просят.
+pub(super) fn wants_flow_alignment(item: &ComputedStyle, container: &ComputedStyle, inline_flow: bool) -> bool {
+    let v = if inline_flow {
+        if matches!(item.justify_self, AlignValue::Auto) { container.justify_items } else { item.justify_self }
+    } else if matches!(item.align_self, AlignValue::Auto) {
+        container.align_items
+    } else {
+        item.align_self
+    };
+    matches!(v, AlignValue::Stretch | AlignValue::Center | AlignValue::End)
+}
+
+/// `fill-reverse`: позиции `pos` элементов размером `size` отражаются в отрезке `[0, total]`.
+pub(super) fn mirror(pos: &mut [f32], size: &[f32], total: f32) {
+    for (p, s) in pos.iter_mut().zip(size) {
+        *p = total - (*p + s);
+    }
+}
+
 /// Ширина элемента вдоль потока полос-строк: fit-content от ширины контейнера, с полями.
 pub(super) fn fit_outer_width(
     item: &LayoutBox,
@@ -376,6 +440,9 @@ pub(super) fn row_lanes_intrinsic(b: &LayoutBox, viewport: Size, per_item: &dyn 
     let items = lane_items(&b.children, &item_idxs, &row_axis);
     let flow = RowFlow {
         dense: is_dense(s).then(Vec::new),
+        fill_reverse: false,
+        align: None,
+        total: 0.0,
         n_lanes: row_axis.n_tracks.max(1) as usize,
         tolerance: tolerance_px(s, s.font_size, Some(0.0), viewport),
         gap: s.column_gap.resolve(s.font_size, Some(0.0), viewport).unwrap_or(0.0).max(0.0),

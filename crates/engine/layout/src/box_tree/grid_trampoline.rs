@@ -420,7 +420,9 @@ fn post_probe_item(frame: &mut Frame, i: usize, measurer: Option<&dyn TextMeasur
     if frame.init.lanes.is_some() {
         let h = frame.init.item_block_size(k, &frame.b.children[i], viewport);
         frame.init.row_heights[k] = h;
+        let wants = super::grid_lanes::wants_flow_alignment(&frame.b.children[i].style, &frame.init.s, false);
         if let Some(lanes) = frame.init.lanes.as_mut() {
+            lanes.wants[k] = wants;
             let (first, span) = lanes.settle(k, h);
             // Плотная упаковка выбирает окно только теперь, когда известна высота элемента.
             let want = (first as u32 + 1, (first + span) as u32 + 1, k as u32 + 1, k as u32 + 2);
@@ -746,6 +748,13 @@ fn finish_probe_pass(init: &mut GridInit, viewport: Size) {
         // длинный поток (без промежутка после последнего элемента).
         init.row_offsets = lanes.pos.clone();
         init.y_off = lanes.extent;
+        // Область по оси потока — до высоты контейнера (определённой, иначе по самому длинному потоку).
+        let total = init.definite_content_height.unwrap_or(lanes.extent);
+        lanes.extend_last(&mut init.row_heights, total);
+        if init.s.grid_lanes.direction.fill_reverse {
+            // `fill-reverse`: элементы набраны от конца оси потока — отражение в том же отрезке.
+            super::grid_lanes::mirror(&mut init.row_offsets, &init.row_heights, total);
+        }
         return;
     }
     let n_rows = init.n_rows;

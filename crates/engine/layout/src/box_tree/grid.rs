@@ -460,6 +460,9 @@ pub(crate) fn build_grid_init(
         let flow = super::grid_lanes::RowFlow {
             dense: super::grid_lanes::is_dense(s)
                 .then(|| (0..row_axis.n_tracks.max(1)).map(|r| fixed_lane_size(eff_row_template, r, em, definite_content_height, viewport)).collect()),
+            fill_reverse: s.grid_lanes.direction.fill_reverse,
+            align: Some(s),
+            total: content_width,
             n_lanes: row_axis.n_tracks.max(1) as usize,
             tolerance: super::grid_lanes::tolerance_px(s, em, Some(content_width), viewport),
             gap: col_gap,
