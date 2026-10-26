@@ -558,8 +558,9 @@ fn rasterize_cpu_pixmap(
                     Some(img) => {
                         rasterize_image(&mut layer.pm, &snap_border_box(*rect), img, *object_fit, *object_position, c)?;
                     }
-                    // FLEX-VWM-6: an undrawn `<canvas>` is transparent, not a grey box.
-                    None if src.starts_with("canvas:") => {}
+                    // FLEX-VWM-6: an undrawn `<canvas>` is transparent, not a grey box;
+                    // so is a `<video>` with no frame registered yet.
+                    None if src.starts_with("canvas:") || src.starts_with("video:") => {}
                     None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
                 layer.mark(b);

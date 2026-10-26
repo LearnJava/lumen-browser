@@ -1504,7 +1504,9 @@ impl Renderer {
                     } else {
                         // FLEX-VWM-6: `<canvas>` без единой отрисовки прозрачен
                         // (HTML LS §4.12.5.1) — серый placeholder только для <img>.
-                        if src.starts_with("canvas:") {
+                        // `<video>` без зарегистрированного кадра тоже прозрачен:
+                        // под ним уже нарисован постер (или ничего).
+                        if src.starts_with("canvas:") || src.starts_with("video:") {
                             continue;
                         }
                         // Картинку никто не зарегистрировал (fetch не сделан /

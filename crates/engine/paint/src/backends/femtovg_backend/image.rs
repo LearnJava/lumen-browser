@@ -96,9 +96,10 @@ impl FemtovgBackend {
             path.rect(placed.x, placed.y, placed.width, placed.height);
             self.canvas.fill_path(&path, &paint);
             self.canvas.restore();
-        } else if !src.starts_with("canvas:") {
+        } else if !src.starts_with("canvas:") && !src.starts_with("video:") {
             // Placeholder — светло-серый прямоугольник. Не-отрисованный `<canvas>`
-            // (ключ `canvas:{nid}`) прозрачен, placeholder только у `<img>` (FLEX-VWM-6).
+            // (ключ `canvas:{nid}`) и `<video>` без кадра (`video:{nid}`) прозрачны,
+            // placeholder только у `<img>` (FLEX-VWM-6).
             self.draw_fill_rect(rect.x, rect.y, rect.width, rect.height, Color { r: 200, g: 200, b: 200, a: 255 });
         }
     }
