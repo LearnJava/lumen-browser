@@ -1,6 +1,6 @@
 # BUG-1521 — `text-emphasis`: метки равномерно размазаны по ширине фрагмента, в вертикальном `writing-mode` не рисуются, `left`/`right` не учитываются, строка не растёт
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P3). Метки по символам, вертикальный режим (`right`/`left`), рост строки (`emphasis_extra`); WPT с ruby-эталоном остаются `thick` из-за раскладки ruby
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 23, `css/css-text-decor` + `css-gaps` + `css-shapes`)
 **Область:** paint (`crates/engine/paint/src/display_list/text_run.rs::emit_text_emphasis_marks`)
 

@@ -566,4 +566,5 @@ mod table_vwm;
 mod bug1371_bidi_override_nested;
 mod unicode_bidi_element_scope;
 mod bug1382_inline_margin_right;
+mod text_emphasis_line_growth;
 mod textq5_shaped_measure;
