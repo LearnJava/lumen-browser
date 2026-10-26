@@ -16,6 +16,21 @@ const VIDEO_FRAME_MS: u64 = 33;
 /// nothing due costs ~0.6 ms and presents nothing (`delta Identical`).
 const VIDEO_POLL: std::time::Duration = std::time::Duration::from_millis(12);
 
+/// Whether a playing video's frame at media position `cur_ms` is due, and how
+/// many media milliseconds until the next one. Re-decoding is capped at
+/// roughly 30 fps (`VIDEO_FRAME_MS`): each due tick decodes, converts to RGBA
+/// and re-uploads the texture. A position behind the last shown frame is a
+/// seek back or a `loop` restart and is due at once — reading it as "0 ms
+/// since the last frame" held the old frame until the media clock caught up,
+/// a whole cycle for a looping video.
+fn playing_frame_wait(last_ms: Option<u64>, cur_ms: u64) -> (bool, u64) {
+    let since = match last_ms {
+        Some(l) if cur_ms >= l => cur_ms - l,
+        _ => VIDEO_FRAME_MS,
+    };
+    if since >= VIDEO_FRAME_MS { (true, VIDEO_FRAME_MS) } else { (false, VIDEO_FRAME_MS - since) }
+}
+
 impl Lumen {
     /// Mirror `page_tracks.tracks_by_video` into the shared
     /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
@@ -247,6 +262,16 @@ impl Lumen {
     /// играет, немедленный `request_redraw` крутил цикл без пауз — ~300
     /// перерисовок всей страницы в секунду ради ~30 новых кадров, и поток
     /// окна не успевал декодировать (рывки).
+    /// Clock for reading `VideoGifStore::playback`: the page's
+    /// `performance.now()` that JS wrote `play_epoch_ms` in (`js_now_ms`);
+    /// the shell's own clock only until the first `play`/`seek`, when every
+    /// entry is paused and the clock is not read at all.
+    pub(crate) fn media_clock_ms(&self) -> u64 {
+        self.video_gif_store
+            .js_now_ms()
+            .unwrap_or_else(|| self.epoch.elapsed().as_millis() as u64)
+    }
+
     fn schedule_video_redraw(&mut self, after: std::time::Duration) {
         let at = std::time::Instant::now() + after;
         self.page_anim_redraw_at = Some(self.page_anim_redraw_at.map_or(at, |t| t.min(at)));
@@ -484,15 +509,10 @@ impl Lumen {
             if state.is_ended(elapsed_ms, rate) {
                 continue;
             }
-            // Cap re-decode rate at roughly 30fps (VIDEO_FRAME_MS): each due
-            // tick decodes, converts to RGBA and re-uploads the texture.
-            let since = last.map_or(VIDEO_FRAME_MS, |l| cur_ms.saturating_sub(l));
-            let wait_ms = if since >= VIDEO_FRAME_MS {
+            let (is_due, wait_ms) = playing_frame_wait(last, cur_ms);
+            if is_due {
                 due.push((*nid, cur_ms, true));
-                VIDEO_FRAME_MS
-            } else {
-                VIDEO_FRAME_MS - since
-            };
+            }
             // Media milliseconds → wall clock at this node's playback rate.
             let wall_ms = (wait_ms as f64 / rate.abs().max(0.0625)).ceil() as u64;
             next_frame_ms = Some(next_frame_ms.map_or(wall_ms, |m: u64| m.min(wall_ms)));
@@ -608,5 +628,28 @@ impl Lumen {
         if let Some(ms) = next_frame_ms {
             self.schedule_video_redraw(std::time::Duration::from_millis(ms.max(1)).min(VIDEO_POLL));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{playing_frame_wait, VIDEO_FRAME_MS};
+
+    #[test]
+    fn first_frame_is_due_at_once() {
+        assert_eq!(playing_frame_wait(None, 0), (true, VIDEO_FRAME_MS));
+    }
+
+    #[test]
+    fn next_frame_waits_out_the_30fps_cap() {
+        assert_eq!(playing_frame_wait(Some(1_000), 1_010), (false, VIDEO_FRAME_MS - 10));
+        assert_eq!(playing_frame_wait(Some(1_000), 1_000 + VIDEO_FRAME_MS), (true, VIDEO_FRAME_MS));
+    }
+
+    /// `loop` restart: last shown frame at the end of the cycle, position back
+    /// near zero — the frame is due now, not after another full cycle.
+    #[test]
+    fn position_behind_the_last_frame_is_due_at_once() {
+        assert_eq!(playing_frame_wait(Some(6_034), 12), (true, VIDEO_FRAME_MS));
     }
 }
