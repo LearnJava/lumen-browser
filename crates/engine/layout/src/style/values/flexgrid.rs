@@ -1246,6 +1246,9 @@ pub struct ContentAlignExtra {
     pub justify_safe: bool,
     /// `align-content: safe …`.
     pub align_safe: bool,
+    /// `align-content: unsafe …`: a block container's content then moves out of the box on
+    /// overflow, where the bare keyword keeps it at the start (read by block containers).
+    pub align_unsafe: bool,
     /// `justify-content: left | right` (stored as `Start`/`End` in
     /// `justify_content`).
     pub justify_side: Option<ContentSide>,

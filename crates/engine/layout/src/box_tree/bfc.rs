@@ -19,6 +19,9 @@ pub(crate) fn establishes_bfc(b: &LayoutBox) -> bool {
         // its first child's margin-top stays inside it.
         || b.style.column_count.is_some()
         || b.style.column_width.is_some()
+        // CSS Box Alignment L3 §«Block Containers»: a non-`normal` `align-content` makes the block
+        // container an independent formatting context.
+        || super::block_align_content::applies(&b.style)
         // CSS Containment L1 §3.2 / §3.3: `contain: layout` and `contain: paint` make the box an
         // independent formatting context, so a child's margin never collapses through it.
         || b.style.contain.0 & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0) != 0

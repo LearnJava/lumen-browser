@@ -540,7 +540,7 @@ pub(super) fn dispatch(
         let free = cell_block_free(cell, target_w, rl, viewport);
         // Содержимое лежит у начала block-оси естественной ширины; при `rl` начало — правый край.
         let base = if rl { target_w - nat } else { 0.0 };
-        let toward_end = match cell.style.vertical_align {
+        let toward_end = match super::table_valign::cell_block_align(&cell.style) {
             VerticalAlign::Middle => free / 2.0,
             VerticalAlign::Bottom => free,
             _ => 0.0,
