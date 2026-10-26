@@ -21,6 +21,9 @@ pub struct PropertyRule {
     pub syntax: String,
     pub inherits: bool,
     pub initial_value: Option<String>,
+    /// Условия объемлющих `@media`/`@supports` (BUG-1686). Пусто — безусловное
+    /// правило; см. [`conditions_hold`].
+    pub conditions: Vec<LayerCondition>,
 }
 
 /// `@function <name>(<params>) [returns <type>]? { declarations }` — CSS
@@ -176,6 +179,9 @@ pub(crate) fn enclose_container_rules(outcomes: &mut [AtRuleOutcome], name: &Opt
 pub struct CounterStyleRule {
     pub name: String,
     pub declarations: Vec<Declaration>,
+    /// Условия объемлющих `@media`/`@supports` (BUG-1686). Пусто — безусловное
+    /// правило; см. [`conditions_hold`].
+    pub conditions: Vec<LayerCondition>,
 }
 
 /// `@page <selector>? { decls }` — CSS Paged Media L3 §3.
@@ -239,6 +245,9 @@ pub struct KeyframesRule {
     /// иметь несколько offset-ов (selector-list типа `0%, 50%`) —
     /// разворачивается в отдельные записи.
     pub frames: Vec<Keyframe>,
+    /// Условия объемлющих `@media`/`@supports` (BUG-1686). Пусто — безусловное
+    /// правило; см. [`conditions_hold`].
+    pub conditions: Vec<LayerCondition>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -352,10 +361,16 @@ impl LayerCondition {
     }
 }
 
+/// Все условия объемлющих `@media`/`@supports` истинны в `ctx` (BUG-1495,
+/// BUG-1686). Пустой список — безусловное правило.
+pub fn conditions_hold(conditions: &[LayerCondition], ctx: &MediaContext) -> bool {
+    conditions.iter().all(|c| c.holds(ctx))
+}
+
 impl FontFaceRule {
     /// Все объемлющие `@media`/`@supports` истинны в `ctx` (BUG-1495).
     pub fn conditions_hold(&self, ctx: &MediaContext) -> bool {
-        self.conditions.iter().all(|c| c.holds(ctx))
+        conditions_hold(&self.conditions, ctx)
     }
 }
 
@@ -762,6 +777,7 @@ impl<'a> Parser<'a> {
                 let mut rules = Vec::new();
                 let mut mixin_rules = Vec::new();
                 let mut nested = Vec::new();
+                self.layer_depth += 1;
                 loop {
                     self.skip_ws_and_comments();
                     match self.peek() {
@@ -818,6 +834,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                self.layer_depth -= 1;
                 AtRuleOutcome::LayerBlock { name, rules, mixin_rules, nested }
             }
             _ => AtRuleOutcome::None,
@@ -1252,23 +1269,72 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `@`-правило в теле условной группы (`@media`/`@supports`) верхнего
-    /// уровня. Поддержан только `@font-face` (BUG-1495): он получает условие
-    /// группы в [`FontFaceRule::conditions`] и всплывает на верхний уровень
-    /// листа через [`Self::bubbled`]; остальные @-правила пропускаются.
-    pub(crate) fn parse_conditional_body_at_rule(&mut self, condition: &LayerCondition) {
-        let start = self.pos;
-        self.consume(); // '@'
-        let name = self.parse_ident().unwrap_or_default();
-        if name.eq_ignore_ascii_case("font-face") {
-            if let Some(mut face) = self.parse_font_face_body() {
-                face.conditions.push(condition.clone());
-                self.bubbled.push(AtRuleOutcome::FontFace(Box::new(face)));
-            }
+    /// `@`-правило в теле условной группы (`@media`/`@supports`). Поддержаны
+    /// `@font-face`, `@keyframes`, `@property`, `@counter-style` (BUG-1495,
+    /// BUG-1686) — они получают условия всех объемлющих групп
+    /// ([`Self::cond_stack`]) и всплывают на верхний уровень листа через
+    /// [`Self::bubbled`] — и вложенные `@media`/`@supports`, которые всплывают
+    /// отдельным блоком с теми же условиями в `outer`. Остальные @-правила
+    /// пропускаются. Внутри `@layer` вложенные группы не всплывают: иначе
+    /// они вышли бы из слоя.
+    pub(crate) fn parse_conditional_body_at_rule(&mut self) {
+        let name: String = self.rest()[1..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let nested_group = matches!(name.as_str(), "media" | "supports") && self.layer_depth == 0;
+        let leaf = matches!(
+            name.as_str(),
+            "font-face" | "keyframes" | "-webkit-keyframes" | "property" | "counter-style"
+        );
+        if !(leaf || nested_group) {
+            self.skip_at_rule();
             return;
         }
-        self.pos = start;
-        self.skip_at_rule();
+        let conditions = self.cond_stack.clone();
+        match self.parse_at_rule() {
+            AtRuleOutcome::FontFace(mut f) => {
+                f.conditions = conditions;
+                self.bubbled.push(AtRuleOutcome::FontFace(f));
+            }
+            AtRuleOutcome::Keyframes(mut k) => {
+                k.conditions = conditions;
+                self.bubbled.push(AtRuleOutcome::Keyframes(k));
+            }
+            AtRuleOutcome::Property(mut p) => {
+                p.conditions = conditions;
+                self.bubbled.push(AtRuleOutcome::Property(p));
+            }
+            AtRuleOutcome::CounterStyle(mut c) => {
+                c.conditions = conditions;
+                self.bubbled.push(AtRuleOutcome::CounterStyle(c));
+            }
+            // `outer` проставил сам `parse_media_rule`/`parse_supports_rule`.
+            o @ (AtRuleOutcome::Media(_) | AtRuleOutcome::Supports(_)) => self.bubbled.push(o),
+            _ => {}
+        }
+    }
+
+    /// Вложенные в style-правило `@media`/`@supports` из тела условной
+    /// группы: всплывают блоком с условиями всех объемлющих групп.
+    pub(crate) fn bubble_group_nested_at_rules(&mut self, nested_at: Vec<AtRuleOutcome>) {
+        if self.layer_depth > 0 {
+            return;
+        }
+        for at in nested_at {
+            match at {
+                AtRuleOutcome::Media(mut m) => {
+                    m.outer = self.cond_stack.clone();
+                    self.bubbled.push(AtRuleOutcome::Media(m));
+                }
+                AtRuleOutcome::Supports(mut s) => {
+                    s.outer = self.cond_stack.clone();
+                    self.bubbled.push(AtRuleOutcome::Supports(s));
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Парсит тело `@media <query> { <rules> }`. Грамматика query
@@ -1302,6 +1368,8 @@ impl<'a> Parser<'a> {
         let query = parse_media_query(query_str);
         // Тело: рекурсивно парсим как обычные rules.
         self.consume(); // '{'
+        let outer = self.cond_stack.clone();
+        self.cond_stack.push(LayerCondition::Media(query.clone()));
         let mut rules = Vec::new();
         loop {
             self.skip_ws_and_comments();
@@ -1311,22 +1379,21 @@ impl<'a> Parser<'a> {
                     self.consume();
                     break;
                 }
-                Some('@') => {
-                    // Из nested @-правил в media поддержан только `@font-face`.
-                    self.parse_conditional_body_at_rule(&LayerCondition::Media(query.clone()));
-                }
+                Some('@') => self.parse_conditional_body_at_rule(),
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested, _)) = self.parse_rule() {
+                    if let Some((rule, nested, nested_at)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
+                        self.bubble_group_nested_at_rules(nested_at);
                     } else if self.pos == before {
                         self.consume();
                     }
                 }
             }
         }
-        Some(MediaRule { query, rules, pos: BlockPos::default() })
+        self.cond_stack.pop();
+        Some(MediaRule { query, rules, pos: BlockPos::default(), outer })
     }
 
     /// Парсит тело `@keyframes <name> { <frame>* }` — CSS Animations L1 §3.
@@ -1391,7 +1458,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Some(KeyframesRule { name, frames })
+        Some(KeyframesRule { name, frames, conditions: Vec::new() })
     }
 
     /// Парсит `@counter-style <name> { <descriptors> }` — CSS Counter Styles L3 §2.
@@ -1406,7 +1473,7 @@ impl<'a> Parser<'a> {
         }
         self.consume();
         let declarations = self.parse_declaration_block();
-        Some(CounterStyleRule { name, declarations })
+        Some(CounterStyleRule { name, declarations, conditions: Vec::new() })
     }
 
     /// Парсит `@page <selector>? { <decls> }` — CSS Paged Media L3 §3.
@@ -1775,6 +1842,7 @@ impl<'a> Parser<'a> {
             syntax,
             inherits,
             initial_value,
+            conditions: Vec::new(),
         })
     }
 

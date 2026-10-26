@@ -777,8 +777,8 @@ fn build_page_cascade(
         let _s = lumen_core::trace::span("parse-css", "parse");
         lumen_css_parser::parse(&css)
     };
-    // BUG-1495: `@font-face` под ложным `@media`/`@supports` не регистрируется.
-    sheet.retain_active_font_faces(&if media_print {
+    // BUG-1495/1686: `@font-face`, `@keyframes`, `@property`, `@counter-style` под ложным `@media`/`@supports` не регистрируется.
+    sheet.retain_active_conditional_rules(&if media_print {
         print_media_context(viewport, dark_mode)
     } else {
         screen_media_context(viewport, dark_mode)

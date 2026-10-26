@@ -18,6 +18,7 @@ mod bug1430_math_functions;
 mod bug1505_register_property;
 mod bug1329_text_transform_lang;
 mod bug1446_marker_computed_style;
+mod bug1686_conditional_group_at_rules;
 mod bug590_create_event_beforeunload;
 mod bug936_mask_layer_wgpu_vs_cpu;
 mod compare_backends;

@@ -26,6 +26,14 @@ fn mixin_result_node_json(info: &MixinResultNodeInfo) -> serde_json::Value {
     })
 }
 
+/// Media context for the conditions of a `@keyframes` declared inside
+/// `@media`/`@supports` (BUG-1686): the page viewport, screen media, default
+/// preferences (the JS-side `matchMedia` preference flags are not mirrored here).
+fn keyframes_media_context(viewport_size: &Mutex<[f32; 2]>) -> lumen_css_parser::MediaContext {
+    let [width, height] = *viewport_size.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_css_parser::MediaContext { width, height, ..Default::default() }
+}
+
 /// `document.styleSheets`, `<style>`/`<link>.sheet`, `CSSStyleSheet.cssRules`,
 /// `CSSStyleRule.selectorText`/`style.cssText`, `CSSMediaRule.media.mediaText`
 /// (CSSOM-1 срез 3, read-only) over `stylesheet_nodes`.
@@ -34,6 +42,7 @@ pub(crate) fn install_stylesheets(
     ctx: v8::Local<'_, v8::Context>,
     store: &mut Vec<OwnedNativeFn>,
     sync: super::super::sheet_sync::SheetSync,
+    viewport_size: Arc<Mutex<[f32; 2]>>,
 ) -> JsResult<()> {
     let stylesheet_nodes = Arc::clone(&sync.nodes);
     // Owner node ids in document order — the JS side's "sheet index" is this
@@ -84,13 +93,16 @@ pub(crate) fn install_stylesheets(
     // (`_wa_gap_an_value`), the Rust `AnimationScheduler` knowing only five properties.
     {
         let sync = sync.clone();
+        let vs = Arc::clone(&viewport_size);
         reg!(scope, ctx, store, "_lumen_keyframes_json", move |name: String| -> Option<String> {
             sync.sync();
+            let media = keyframes_media_context(&vs);
             let guard = sync.nodes.lock().unwrap_or_else(|e| e.into_inner());
             let rule = guard
                 .iter()
                 .filter(|e| !e.disabled)
                 .flat_map(|e| e.sheet.keyframes.iter())
+                .filter(|k| lumen_css_parser::conditions_hold(&k.conditions, &media))
                 .rfind(|k| k.name == name)?;
             let frames: Vec<serde_json::Value> = rule
                 .frames
@@ -111,10 +123,14 @@ pub(crate) fn install_stylesheets(
     // every element for CSS animations only when this is true.
     {
         let sync = sync.clone();
+        let vs = Arc::clone(&viewport_size);
         reg!(scope, ctx, store, "_lumen_has_keyframes", move || -> bool {
             sync.sync();
+            let media = keyframes_media_context(&vs);
             let guard = sync.nodes.lock().unwrap_or_else(|e| e.into_inner());
-            guard.iter().filter(|e| !e.disabled).any(|e| !e.sheet.keyframes.is_empty())
+            guard.iter().filter(|e| !e.disabled).any(|e| {
+                e.sheet.keyframes.iter().any(|k| lumen_css_parser::conditions_hold(&k.conditions, &media))
+            })
         });
     }
     {

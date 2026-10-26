@@ -16,6 +16,17 @@ pub struct MediaRule {
     pub rules: Vec<Rule>,
     /// Место блока среди обычных правил листа — см. [`BlockPos`].
     pub pos: BlockPos,
+    /// Условия объемлющих `@media`/`@supports`, из тела которых блок всплыл на
+    /// верхний уровень листа (BUG-1686). Пусто — обычный блок верхнего уровня.
+    /// Непустой `outer` — не отдельная запись `cssRules`: CSSOM его пропускает.
+    pub outer: Vec<LayerCondition>,
+}
+
+impl MediaRule {
+    /// Блок действует в `ctx`: истинны его запрос и все объемлющие условия.
+    pub fn holds(&self, ctx: &MediaContext) -> bool {
+        self.query.matches(ctx) && conditions_hold(&self.outer, ctx)
+    }
 }
 
 /// Media query — OR-список AND-clauses (Media Queries L4 §3). Пустой

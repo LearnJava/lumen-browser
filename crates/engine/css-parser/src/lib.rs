@@ -22,7 +22,7 @@ pub use compat_alias::{canonical_property_name, COMPAT_CSS_ALIASES};
 
 pub use parser::{
     is_valid_selector_list,
-    parse, parse_apply_call, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, ApplyRule, AttrOp, AttrSelector, ColorScheme,
+    parse, parse_apply_call, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, ApplyRule, AttrOp, AttrSelector, ColorScheme, conditions_hold,
     ColorProfileRule, Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
     DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionBodyItem, FunctionParameter, FunctionRule, ImportLayer, ImportRule, Keyframe, KeyframesRule,
     LayerCondition, LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaInvertedColors, MediaOrientation, MediaPointer, MediaQuery,
