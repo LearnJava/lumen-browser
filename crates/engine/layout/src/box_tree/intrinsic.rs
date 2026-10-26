@@ -12,12 +12,46 @@ use super::*;
 use super::grid::{resolve_grid_axis, GridAxis};
 
 /// max-content advance of a text run — all segments on one line (no wrapping).
+///
+/// CSS Text L3 §4.1.1: a run of collapsible whitespace is one space, and the line's leading and
+/// trailing whitespace is removed — `<div>\n  text\n</div>` is as wide as `<div>text</div>`.
 fn text_max_content(segments: &[InlineSegment], measurer: Option<&dyn TextMeasurer>) -> f32 {
     measurer.map_or(0.0, |m| {
-        segments.iter().map(|seg| {
-            let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
-            measure_text_w_styled(&seg.text, &seg.style, ts, m)
-        }).sum()
+        // (text, collapsed): whitespace-preserving segments are measured as they are.
+        let mut pieces: Vec<(std::borrow::Cow<'_, str>, bool, &InlineSegment)> = Vec::with_capacity(segments.len());
+        let mut prev_space = true;
+        for seg in segments {
+            if seg.style.white_space.preserves_whitespace() {
+                prev_space = false;
+                pieces.push((std::borrow::Cow::Borrowed(seg.text.as_str()), false, seg));
+                continue;
+            }
+            let mut s = String::with_capacity(seg.text.len());
+            for c in seg.text.chars() {
+                if super::entry::is_wrap_whitespace(c) {
+                    if !prev_space {
+                        s.push(' ');
+                        prev_space = true;
+                    }
+                } else {
+                    s.push(c);
+                    prev_space = false;
+                }
+            }
+            pieces.push((std::borrow::Cow::Owned(s), true, seg));
+        }
+        if let Some((text, true, _)) = pieces.iter_mut().rev().find(|(t, _, _)| !t.is_empty())
+            && text.ends_with(' ')
+        {
+            text.to_mut().pop();
+        }
+        pieces
+            .iter()
+            .map(|(text, _, seg)| {
+                let ts = super::inline_wrap::TabStops::of(&seg.style, m).unit;
+                measure_text_w_styled(text, &seg.style, ts, m)
+            })
+            .sum()
     })
 }
 

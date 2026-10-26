@@ -357,14 +357,16 @@ pub(crate) fn build_grid_init(
         if !on_axis {
             return None;
         }
-        super::grid_lanes::intrinsic_repeat_count(rep, is_col, children, &item_idxs, s, avail, gap, em, viewport, measurer)
+        super::grid_lanes::intrinsic_repeat(rep, is_col, children, &item_idxs, s, avail, gap, em, viewport, measurer, content_width, pcb)
     };
-    let col_repeat_count = s.grid_template_col_auto_repeat.as_ref().map(|rep| {
-        lanes_repeat(rep, true, Some(content_width), col_gap)
-            .unwrap_or_else(|| auto_repeat_count(rep, Some(content_width), col_gap, em, viewport))
+    // `grid-lanes`: повтор с дорожками по содержимому — число повторов и равные между собой дорожки.
+    let col_lanes_rep = s.grid_template_col_auto_repeat.as_ref().and_then(|rep| lanes_repeat(rep, true, Some(content_width), col_gap));
+    let col_repeat_count = s.grid_template_col_auto_repeat.as_ref().map(|rep| match &col_lanes_rep {
+        Some((n, _)) => *n,
+        None => auto_repeat_count(rep, Some(content_width), col_gap, em, viewport),
     });
     let auto_fill_col_tracks: Vec<GridTrackSize> = match (&s.grid_template_col_auto_repeat, col_repeat_count) {
-        (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
+        (Some(rep), Some(n)) => expand_auto_repeat(col_lanes_rep.as_ref().map_or(rep, |(_, r)| r), n),
         _ => Vec::new(),
     };
     let eff_col_template: &[GridTrackSize] = if s.grid_template_col_auto_repeat.is_some() {
@@ -373,12 +375,13 @@ pub(crate) fn build_grid_init(
         &s.grid_template_columns
     };
     // Rows repeat against the container's definite content height; an indefinite one repeats once.
-    let row_repeat_count = s.grid_template_row_auto_repeat.as_ref().map(|rep| {
-        lanes_repeat(rep, false, definite_content_height, row_gap)
-            .unwrap_or_else(|| auto_repeat_count(rep, definite_content_height, row_gap, em, viewport))
+    let row_lanes_rep = s.grid_template_row_auto_repeat.as_ref().and_then(|rep| lanes_repeat(rep, false, definite_content_height, row_gap));
+    let row_repeat_count = s.grid_template_row_auto_repeat.as_ref().map(|rep| match &row_lanes_rep {
+        Some((n, _)) => *n,
+        None => auto_repeat_count(rep, definite_content_height, row_gap, em, viewport),
     });
     let auto_fill_row_tracks: Vec<GridTrackSize> = match (&s.grid_template_row_auto_repeat, row_repeat_count) {
-        (Some(rep), Some(n)) => expand_auto_repeat(rep, n),
+        (Some(rep), Some(n)) => expand_auto_repeat(row_lanes_rep.as_ref().map_or(rep, |(_, r)| r), n),
         _ => Vec::new(),
     };
     let src_row_template: &[GridTrackSize] = if s.grid_template_row_auto_repeat.is_some() {

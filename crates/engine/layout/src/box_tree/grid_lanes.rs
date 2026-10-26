@@ -55,7 +55,34 @@ pub(super) fn lanes_style(s: &Arc<ComputedStyle>) -> Option<Arc<ComputedStyle>> 
         }
         LanesAxis::Normal => return None,
     }
+    // Повтор с дорожками по содержимому допускает рядом только дорожки фиксированного размера:
+    // иначе объявление недействительно и ось остаётся без шаблона (`none`).
+    let invalid = |rep: &Option<GridRepeat>| {
+        rep.as_ref().is_some_and(|r| {
+            r.tracks.iter().any(track_is_intrinsic) && r.before.iter().chain(&r.after).any(|t| !is_fixed_size(t))
+        })
+    };
+    if lanes_axis(s) == LanesAxis::Column && invalid(&ls.grid_template_col_auto_repeat) {
+        ls.grid_template_columns.clear();
+        ls.grid_template_col_auto_repeat = None;
+    } else if lanes_axis(s) == LanesAxis::Row && invalid(&ls.grid_template_row_auto_repeat) {
+        ls.grid_template_rows.clear();
+        ls.grid_template_row_auto_repeat = None;
+    }
     Some(Arc::new(ls))
+}
+
+/// `<fixed-size>` (Grid L1 §7.2.3): длина или `minmax()` с длиной, без `fr` и содержимого с обеих сторон.
+fn is_fixed_size(t: &GridTrackSize) -> bool {
+    match t {
+        GridTrackSize::Length(_) => true,
+        GridTrackSize::Minmax(lo, hi) => {
+            (matches!(**lo, GridTrackSize::Length(_)) || matches!(**hi, GridTrackSize::Length(_)))
+                && !lo.is_fr()
+                && !hi.is_fr()
+        }
+        _ => false,
+    }
 }
 
 /// Размещение элемента в сетке: `(начало, конец столбца, начало, конец строки)`, номера линий с 1.
@@ -466,11 +493,28 @@ fn track_is_intrinsic(t: &GridTrackSize) -> bool {
     }
 }
 
-/// Grid L3 §7.2.3.2: число повторов `repeat(auto-fill | auto-fit, …)` с дорожками по содержимому.
-/// Такая дорожка считается как самый большой вклад элемента на одну полосу (вклад / число
-/// полос, которое он занимает). `None` — повтор из обычных длин, считается как у сетки.
+/// Размер дорожки повтора по самому большому вкладу элемента на полосу: `min`/`max` — min- и
+/// max-content вклады (Grid L3 §7.2.3.2).
+fn repeat_track_size(t: &GridTrackSize, min: f32, max: f32, em: f32, avail: f32, viewport: Size) -> f32 {
+    match t {
+        GridTrackSize::MinContent => min,
+        GridTrackSize::FitContent(limit) => max.min(limit.resolve_fixed(em, avail, viewport).unwrap_or(max)),
+        // Определённый максимум задаёт размер, иначе — функция максимума (`auto` растёт до max-content).
+        GridTrackSize::Minmax(lo, hi) => match hi.resolve_fixed(em, avail, viewport) {
+            Some(px) => px.max(lo.resolve_fixed(em, avail, viewport).unwrap_or(0.0)).max(0.0),
+            None => repeat_track_size(hi, min, max, em, avail, viewport),
+        },
+        t if track_is_intrinsic(t) => max,
+        other => other.resolve_fixed(em, avail, viewport).unwrap_or(0.0).max(0.0),
+    }
+}
+
+/// Grid L3 §7.2.3.2: число повторов `repeat(auto-fill | auto-fit, …)` с дорожками по содержимому
+/// и сам повтор: дорожки с размером по содержимому в нём равны между собой (каждая — самый
+/// большой вклад элемента на одну полосу: вклад / число полос, которое он занимает). `None` —
+/// повтор из обычных длин, считается как у сетки.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn intrinsic_repeat_count(
+pub(super) fn intrinsic_repeat(
     rep: &GridRepeat,
     is_col: bool,
     children: &[LayoutBox],
@@ -481,7 +525,9 @@ pub(super) fn intrinsic_repeat_count(
     em: f32,
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
-) -> Option<usize> {
+    content_width: f32,
+    pcb: lumen_core::geom::Rect,
+) -> Option<(usize, GridRepeat)> {
     if !rep.tracks.iter().any(track_is_intrinsic) {
         return None;
     }
@@ -491,33 +537,31 @@ pub(super) fn intrinsic_repeat_count(
         if is_col { (s.grid_template_columns.len(), &s.grid_template_col_line_names) } else { (s.grid_template_rows.len(), &s.grid_template_row_line_names) };
     let axis = GridAxis { n_tracks: starts as u32, names, areas: &s.grid_template_areas, is_col, clamp: false };
     let spans = lane_items(children, item_idxs, &axis);
-    let unit = item_idxs
-        .iter()
-        .zip(&spans)
-        .map(|(&i, it)| {
-            let c = &children[i];
-            let ce = c.style.font_size;
-            let outer = if is_col {
-                super::intrinsic::max_content_outer_width(c, measurer, viewport)
-                    + c.style.margin_left.resolve_or_zero(ce, 0.0, viewport)
-                    + c.style.margin_right.resolve_or_zero(ce, 0.0, viewport)
-            } else {
-                super::intrinsic::max_content_outer_height(c, measurer, viewport)
-                    + c.style.margin_top.resolve_or_zero(ce, 0.0, viewport)
-                    + c.style.margin_bottom.resolve_or_zero(ce, 0.0, viewport)
-            };
-            outer / it.span.max(1) as f32
-        })
-        .fold(0.0_f32, f32::max);
-    fn size(t: &GridTrackSize, unit: f32, avail: f32, em: f32, viewport: Size) -> f32 {
-        match t {
-            GridTrackSize::FitContent(limit) => unit.min(limit.resolve_fixed(em, avail, viewport).unwrap_or(unit)),
-            GridTrackSize::Minmax(min, _) if track_is_intrinsic(min) => size(min, unit, avail, em, viewport),
-            t if track_is_intrinsic(t) => unit,
-            other => other.resolve_fixed(em, avail, viewport).unwrap_or(0.0).max(0.0),
-        }
+    let contribution = super::grid_auto_cols::item_contribution(measurer, viewport);
+    let (mut min, mut max) = (0.0_f32, 0.0_f32);
+    for (&i, it) in item_idxs.iter().zip(&spans) {
+        let c = &children[i];
+        let ce = c.style.font_size;
+        let share = it.span.max(1) as f32;
+        let (lo, hi) = if is_col {
+            let (lo, hi) = contribution(c);
+            let m = c.style.margin_left.resolve_or_zero(ce, 0.0, viewport) + c.style.margin_right.resolve_or_zero(ce, 0.0, viewport);
+            (lo + m, hi + m)
+        } else {
+            let m = c.style.margin_top.resolve_or_zero(ce, 0.0, viewport) + c.style.margin_bottom.resolve_or_zero(ce, 0.0, viewport);
+            // Полосы-строки: элемент уже имеет ширину (вдоль потока), высоту даёт его раскладка.
+            let w = fit_outer_width(c, content_width, viewport, measurer);
+            let mut probe = c.clone();
+            super::lay_out(&mut probe, 0.0, 0.0, w, None, measurer, viewport, pcb, &lumen_core::ext::NullHyphenationProvider, false);
+            let h = probe.rect.height + m;
+            (h, h)
+        };
+        min = min.max(lo / share);
+        max = max.max(hi / share);
     }
-    Some(super::grid::auto_repeat_count_by(rep, avail, gap, &|t| size(t, unit, avail, em, viewport)))
+    let count = super::grid::auto_repeat_count_by(rep, avail, gap, &|t| repeat_track_size(t, min, max, em, avail, viewport));
+    let equal = rep.clone();
+    Some((count, equal))
 }
 
 /// Grid L3 §3.4: элемент с автоматическим положением вносит вклад в каждую полосу, которую мог бы
