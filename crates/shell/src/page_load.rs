@@ -2141,6 +2141,8 @@ impl Lumen {
         // only when this page was restored from bfcache (set by navigate_back/
         // navigate_forward); a fresh load fires `persisted=false`.
         let pageshow_persisted = std::mem::take(&mut self.pending_pageshow_persisted);
+        #[cfg(feature = "v8")]
+        let pagereveal_transition = std::mem::take(&mut self.pending_pagereveal_transition);
         // ADR-016 M2.2c-2d: pageshow-lifecycle void-вызовы через `route_task_js` —
         // снимаем прямое `self.js_ctx`-обращение. Оба чистый fire-and-forget без
         // синхронного чтения результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`)
@@ -2150,6 +2152,8 @@ impl Lumen {
         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
             // BUG-640: `domComplete`/`loadEventStart` share the "before"
             // instant, `loadEventEnd` is the "after" one.
+            // HTML LS §7.11.9: the first rendering opportunity of the new document.
+            js.fire_page_reveal(pagereveal_transition);
             crate::nav_timing::record_load_start();
             js.notify_window_loaded();
             crate::nav_timing::record_load_end();

@@ -416,13 +416,15 @@ fn pseudo_tree_computed_style_during_a_transition() {
          null",
     )
     .unwrap();
-    settle(&rt);
+    settle_animations(&rt);
+    // A pseudo that does not exist (before the transition, after it, a name outside the captures)
+    // still answers with the UA sheet, as in the other engines.
     assert_eq!(
         log(&rt),
-        "before:\"\",\
+        "before:\"absolute\",\
          cb:absolute/absolute/fixed/absolute/absolute/normal,\
-         ready:multiply/normal/fixed/absolute/\"\"/plus-lighter,\
-         after:\"\""
+         ready:multiply/normal/fixed/absolute/\"absolute\"/plus-lighter,\
+         after:\"absolute\""
     );
 }
 
@@ -475,13 +477,16 @@ fn pseudo_tree_css_animation_is_listed_by_get_animations() {
            var anims = html.getAnimations({ subtree: true });
            log.push(anims.length, anims.map(function (a) { return a.animationName + '@' + a.effect.pseudoElement; }).join('+'));
            log.push(document.getAnimations().length, html.getAnimations().length);
+           // The page's 10 s animation keeps the transition (and its `finished`) running.
+           log.push(document.activeViewTransition === vt);
+           vt.skipTransition();
          });
          vt.finished.then(function () { log.push(html.getAnimations({ subtree: true }).length); });
          null",
     )
     .unwrap();
-    settle(&rt);
-    assert_eq!(log(&rt), "0,2,k@::view-transition+k@::view-transition-group(root),2,0,0");
+    settle_animations(&rt);
+    assert_eq!(log(&rt), "0,2,k@::view-transition+k@::view-transition-group(root),2,0,true,0");
 }
 
 /// BUG-1509 — with no author rules the UA sheet's own animations are on the tree: the group of
@@ -506,7 +511,7 @@ fn pseudo_tree_ua_animations_are_listed_by_get_animations() {
          null",
     )
     .unwrap();
-    settle(&rt);
+    settle_animations(&rt);
     let got = log(&rt);
     // Tree order: the groups first (root, then `hero`), per name group → image pair → old → new.
     assert_eq!(
@@ -563,7 +568,7 @@ fn element_start_view_transition_is_scoped_to_its_element() {
     assert!(is_true(&rt, "var d = html.startViewTransition(); document.activeViewTransition === d && html.activeViewTransition === d && d.transitionRoot === html"));
     assert!(is_true(&rt, "(function() { try { Element.prototype.startViewTransition.call({}); return false; } catch (e) { return e instanceof TypeError; } })()"));
     assert!(is_true(&rt, "(function() { try { main.startViewTransition(5); return false; } catch (e) { return /on 'Element'/.test(e.message); } })()"));
-    settle(&rt);
+    settle_animations(&rt);
     assert!(is_true(&rt, "main.activeViewTransition === null && document.activeViewTransition === null"));
 }
 
@@ -687,8 +692,9 @@ fn scoped_pseudo_tree_is_answered_for_its_scope_element_only() {
     )
     .unwrap();
     settle_animations(&rt);
-    // `main` answers for `::view-transition` and its `outer` group; `root`, the document element and `inner` do not.
-    assert_eq!(log(&rt), ["\"absolute\"", "\"absolute\"", "\"\"", "\"\"", "\"\""].concat() + ",\"\"");
+    // `main` answers for `::view-transition` and its `outer` group; `root` and `inner` do not. The
+    // document element, whose tree does not exist, still gets the UA sheet.
+    assert_eq!(log(&rt), ["\"absolute\"", "\"absolute\"", "\"\"", "\"absolute\"", "\"\""].concat() + ",\"\"");
 }
 
 #[test]
@@ -726,4 +732,116 @@ fn page_animation_unset_removes_the_ua_group_animation_of_a_scoped_tree() {
         log(&rt),
         "fade-out@::view-transition-old(outer) fade-in@::view-transition-new(outer) fade-out@::view-transition-old(inner) fade-in@::view-transition-new(inner)"
     );
+}
+
+// ── VT-API-2: pagereveal, script animations on the tree, display: none ───────────────────────
+
+#[test]
+fn pagereveal_fires_with_and_without_a_cross_document_view_transition() {
+    let rt = rt_with_dom();
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         window.onpagereveal = function (e) { log.push('on:' + (e.viewTransition === null)); };
+         addEventListener('pagereveal', function (e) { log.push('l:' + (e.viewTransition === null)); });
+         _lumen_vt_pagereveal(false);
+         log.push('active:' + (document.activeViewTransition === null));
+         null",
+    )
+    .unwrap();
+    // Both the listener and the `onpagereveal` handler run once, `viewTransition` is null.
+    let mut got: Vec<String> = log(&rt).split(',').map(str::to_owned).collect();
+    got.sort();
+    assert_eq!(got, ["active:true", "l:true", "on:true"]);
+
+    rt.eval(
+        "log = [];
+         window.onpagereveal = function (e) {
+           var vt = e.viewTransition;
+           log.push('vt:' + (vt instanceof ViewTransition) + ':' + (document.activeViewTransition === vt));
+           vt.ready.then(function () { log.push('ready'); });
+           vt.updateCallbackDone.then(function () { log.push('done'); });
+           vt.finished.then(function () { log.push('finished:' + (document.activeViewTransition === null)); });
+         };
+         _lumen_vt_pagereveal(true); null",
+    )
+    .unwrap();
+    settle_animations(&rt);
+    let out = log(&rt);
+    assert!(out.contains("vt:true:true"), "got {out}");
+    assert!(out.contains("ready") && out.contains("done"), "got {out}");
+    // `finished` follows the animations of the tree (the UA group animation runs 0.25 s).
+    assert!(out.ends_with("finished:true"), "got {out}");
+}
+
+#[test]
+fn skipping_the_revealed_transition_cancels_the_shell_fade() {
+    let rt = rt_with_dom();
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval("window.onpagereveal = function (e) { e.viewTransition.skipTransition(); }; _lumen_vt_pagereveal(true); null")
+        .unwrap();
+    settle(&rt);
+    // The page-side transition started without a `Begin` (the shell began the fade itself);
+    // skipping it tells the shell to drop the frame.
+    assert!(matches!(rt.take_view_transition_events().as_slice(), [ViewTransitionEvent::Cancel]));
+}
+
+#[test]
+fn script_animation_on_a_tree_pseudo_is_read_from_its_computed_style_not_written_to_the_owner() {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse("")));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = []; var html = document.documentElement;
+         var group = function () { return getComputedStyle(html, '::view-transition-group(root)').opacity; };
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           log.push(group());
+           var a = html.animate({ opacity: [0.5, 0.5] }, { duration: 10000, pseudoElement: '::view-transition-group(root)' });
+           log.push(group() + '/' + JSON.stringify(html.style.opacity));
+           a.finish();
+           log.push(group() + '/' + JSON.stringify(html.style.opacity) + '/' + html.getAnimations({ subtree: true }).filter(function (x) { return x.constructor === Animation; }).length);
+           vt.skipTransition();
+         });
+         null",
+    )
+    .unwrap();
+    settle_animations(&rt);
+    // The effect shows on the pseudo only; once finished without a forwards fill it is gone from
+    // both the computed style and `getAnimations()`.
+    assert_eq!(log(&rt), "1,0.5/\"\",1/\"\"/0");
+}
+
+fn animations_with_tree_rules(css: &str) -> String {
+    let rt = rt_with_dom();
+    rt.update_stylesheet(Arc::new(lumen_css_parser::parse(css)));
+    rt.update_viewport_size(800.0, 600.0);
+    rt.eval(
+        "var log = [];
+         _wa_gap_keyframes_json = function (n) {
+           return n === 'k' ? JSON.stringify([{ offset: 0, decls: [['margin-left', '100px']] },
+                                              { offset: 1, decls: [['margin-left', '100px']] }]) : null;
+         };
+         _lumen_has_keyframes = function () { return true; };
+         var html = document.documentElement;
+         var vt = document.startViewTransition(function () {});
+         vt.ready.then(function () {
+           log.push(html.getAnimations({ subtree: true }).filter(function (a) { return a.animationName === 'k'; }).length);
+           vt.skipTransition();
+         });
+         null",
+    )
+    .unwrap();
+    settle_animations(&rt);
+    log(&rt)
+}
+
+#[test]
+fn display_none_on_a_tree_pseudo_removes_the_animations_of_it_and_its_descendants() {
+    let k = "@keyframes k { from { margin-left: 100px; } to { margin-left: 100px; } }              :root::view-transition-group(root), :root::view-transition-image-pair(root),              :root::view-transition-old(root) { animation: k 10s; } ";
+    assert_eq!(animations_with_tree_rules(k), "3");
+    // The image pair's own `display: none` takes its animation and its child's.
+    assert_eq!(animations_with_tree_rules(&format!("{k}:root::view-transition-image-pair(root) {{ display: none; }}")), "1");
+    // The group's takes the whole subtree.
+    assert_eq!(animations_with_tree_rules(&format!("{k}:root::view-transition-group(root) {{ display: none; }}")), "0");
 }

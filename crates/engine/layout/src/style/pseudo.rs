@@ -760,7 +760,12 @@ fn compute_pseudo_element_style_inner(
         || split_pseudo_request(pseudo).0.starts_with("view-transition")
     {
         // CSS View Transitions L1 §6: the `::view-transition-*` tree is built
-        // by the UA, not by `content:` — no `content` required.
+        // by the UA, not by `content:` — no `content` required. Its UA sheet is written with
+        // logical longhands (`inset-block-start`, `inline-size`), which read back as their
+        // physical twins.
+        if split_pseudo_request(pseudo).0.starts_with("view-transition") {
+            crate::style::logical::resolve_logical_properties(&mut style);
+        }
         Some(style)
     } else if pseudo.eq_ignore_ascii_case("marker") {
         match &style.content {
