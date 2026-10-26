@@ -20,6 +20,10 @@ pub struct AnchorScroller {
     /// [`crate::refresh_anchor_scroll`] whenever a scroll position changes.
     pub x: f32,
     pub y: f32,
+    /// Whether the box follows the container's horizontal / vertical scrolling: an axis whose
+    /// insets name another anchor stays put (`x` / `y` stay `0.0`).
+    pub follow_x: bool,
+    pub follow_y: bool,
 }
 
 /// CSS Anchor Positioning L1 §4.3 «Scroll Adjustment» — the scroll containers between an

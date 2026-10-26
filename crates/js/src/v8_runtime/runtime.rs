@@ -93,6 +93,10 @@ pub struct V8JsRuntime {
     pub(super) lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     /// Scroll state per scroll-container node, updated after each relayout.
     pub(super) scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// CSS Anchor Positioning L1 §4.3: the scroll containers each anchor-positioned box follows
+    /// (`NodeId::index()` → `(NodeId::raw(), follows x, follows y)` list), refreshed by every flush. Their current offsets
+    /// (from [`Self::scroll_states`]) shift the box's `getBoundingClientRect`.
+    pub(super) anchor_scrollers: Arc<Mutex<lumen_layout::AnchorScrollers>>,
     /// Pending scroll requests queued by JS via `_lumen_request_scroll`.
     pub(super) pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     /// Pending page-level scroll requests from JS `window.scrollTo/scrollBy`.
@@ -494,6 +498,7 @@ impl V8JsRuntime {
             meta_viewport_scale: Arc::new(Mutex::new(1.0)),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
+            anchor_scrollers: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
             page_scroll_y: Arc::new(Mutex::new(0.0)),
@@ -1071,6 +1076,13 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_layout_rects`].
     pub fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         *self.layout_rects.lock().unwrap_or_else(|e| e.into_inner()) = rects;
+    }
+
+    /// Replace the scroll containers anchor-positioned boxes follow
+    /// ([`lumen_layout::collect_anchor_scrollers`]); every flush refreshes them from the layout
+    /// pass, a shell that publishes a tree of its own does so here.
+    pub fn update_anchor_scrollers(&self, map: lumen_layout::AnchorScrollers) {
+        *self.anchor_scrollers.lock().unwrap_or_else(|e| e.into_inner()) = map;
     }
 
     /// Replace the per-fragment client-rect table (BUG-1007) backing

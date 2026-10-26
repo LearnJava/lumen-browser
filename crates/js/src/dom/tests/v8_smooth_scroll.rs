@@ -322,3 +322,53 @@ fn scroll_on_an_element_without_a_scrolling_box_does_nothing() {
     assert_eq!(num(&rt, "f.scrollTop = 5; f.scrollLeft"), 0.0);
     assert!(rt.take_scroll_requests().is_empty());
 }
+
+// ── BUG-1166 / ANCHOR-SCROLL-2: scroll-aware `getBoundingClientRect` ──────────────────────────
+
+fn scrolled_main(rt: &V8JsRuntime, main_nid: u32, y: f32) {
+    let target = nid_of(rt, "target");
+    let free = nid_of(rt, "free");
+    rt.update_layout_rects(
+        [
+            (main_nid, [0.0, 10.0, 20.0, 20.0]),
+            (target, [0.0, 110.0, 10.0, 10.0]),
+            (free, [30.0, 200.0, 10.0, 10.0]),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    rt.update_client_rects([(target, vec![[0.0, 110.0, 10.0, 10.0]])].into_iter().collect());
+    rt.update_scroll_states([(main_nid, [0.0, y, 200.0, 200.0])].into_iter().collect());
+}
+
+#[test]
+fn bounding_rect_of_a_descendant_follows_the_scroll_of_its_container() {
+    let (rt, main_nid) = runtime("");
+    scrolled_main(&rt, main_nid, 50.0);
+    let top = |id: &str| num(&rt, &format!("document.getElementById('{id}').getBoundingClientRect().top"));
+    assert_eq!(top("target"), 60.0, "110 in the document, 50 scrolled away");
+    assert_eq!(top("main"), 10.0, "the container itself does not move");
+    assert_eq!(top("free"), 200.0, "a box outside the container does not move");
+    assert_eq!(num(&rt, "document.getElementById('target').getClientRects()[0].top"), 60.0);
+}
+
+#[test]
+fn offset_top_ignores_the_scroll_of_the_container() {
+    let (rt, main_nid) = runtime("position: relative;");
+    scrolled_main(&rt, main_nid, 50.0);
+    assert_eq!(num(&rt, "document.getElementById('target').offsetTop"), 100.0);
+}
+
+#[test]
+fn an_anchor_positioned_box_follows_the_scroll_of_its_anchors_container() {
+    let (rt, main_nid) = runtime("");
+    scrolled_main(&rt, main_nid, 50.0);
+    let free = nid_of(&rt, "free");
+    // `#free` is positioned against an anchor inside `#main`, vertical axis only.
+    rt.update_anchor_scrollers([(free, vec![(main_nid, false, true)])].into_iter().collect());
+    assert_eq!(num(&rt, "document.getElementById('free').getBoundingClientRect().top"), 150.0);
+    assert_eq!(num(&rt, "document.getElementById('free').getBoundingClientRect().left"), 30.0);
+    assert_eq!(num(&rt, "document.getElementById('free').offsetTop"), 150.0, "the anchor's scroll is layout offset");
+    rt.update_anchor_scrollers([(free, vec![(main_nid, true, false)])].into_iter().collect());
+    assert_eq!(num(&rt, "document.getElementById('free').getBoundingClientRect().top"), 200.0, "no vertical axis");
+}
