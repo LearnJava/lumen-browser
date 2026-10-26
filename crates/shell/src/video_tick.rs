@@ -339,8 +339,21 @@ impl Lumen {
                 icc_profile: None,
                 vector_source: None,
             });
+            // HTML LS §4.8.11.7: with a `poster` the poster stays the
+            // "poster frame" until playback starts (or a seek), so the first
+            // decoded frame is held back. Marking position 0 as already shown
+            // keeps the paused tick below from registering it either; `play()`
+            // or a seek moves the position and the tick draws the real frame.
+            let has_poster = self.layout_source.as_ref().is_some_and(|ls| {
+                let doc = ls.document.lock().unwrap();
+                doc.get(lumen_dom::NodeId::from_index(nid as usize))
+                    .get_attr("poster")
+                    .is_some_and(|p| !p.trim().is_empty())
+            });
             let key = format!("video:{nid}");
-            if let Some(r) = self.renderer.as_mut() {
+            if has_poster {
+                // Frame withheld — see above.
+            } else if let Some(r) = self.renderer.as_mut() {
                 if let Err(e) = r.register_image(key.clone(), Arc::clone(&image)) {
                     eprintln!("video: не зарегистрирован {key}: {e}");
                 }
@@ -369,7 +382,11 @@ impl Lumen {
                 },
             );
             self.video_sessions.insert(nid, session);
-            self.video_last_ms.remove(&nid);
+            if has_poster {
+                self.video_last_ms.insert(nid, 0);
+            } else {
+                self.video_last_ms.remove(&nid);
+            }
             // GAP-MEDIADECODE срез 14: a reload of the same node (e.g. a new
             // `src`) must not keep feeding PCM decoded against the OLD
             // session into a sink still open from the previous one.

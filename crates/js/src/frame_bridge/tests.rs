@@ -316,6 +316,32 @@
         );
     }
 
+    /// Предки внука сходятся к top: `parent.parent === top`, `parent.top ===
+    /// top`. Раньше фасад родителя был сам себе parent, и цикл поиска
+    /// TCF-локатора из `ads.pubmatic.com/AdServer/js/user_sync.html` вешал
+    /// поток движка навсегда.
+    #[test]
+    fn grandchild_ancestor_chain_reaches_top() {
+        with_child_context(
+            "<html><body><b>mid</b></body></html>",
+            Some("<html><body><i>root</i></body></html>"),
+            9,
+            true,
+            |rt| {
+                assert!(eval_bool(
+                    rt,
+                    "window.parent.parent === window.top && window.parent.top === window.top"
+                ));
+                assert!(eval_bool(
+                    rt,
+                    "var ba = window, steps = 0; \
+                     while (steps < 10) { if (ba === window.top) break; ba = ba.parent; steps++; } \
+                     ba === window.top && steps === 2"
+                ));
+            },
+        );
+    }
+
     /// BUG-921: `window.name` — свойство СВОЕГО контекста, снятое снимком при
     /// его создании, а не чтение документа родителя — cross-origin (`accessible
     /// = false`) не прячет его, в отличие от `.document`/`frameElement`.
