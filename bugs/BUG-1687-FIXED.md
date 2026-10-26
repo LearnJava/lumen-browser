@@ -1,6 +1,6 @@
 # BUG-1687 — выделение не подсвечивает текст внутри shadow-дерева
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-26 (P6)
 **Заведён:** 2026-10-22 (P2, WPT-RUN-16 — разбор падения категории `selection` −8.00 балла)
 **Область:** layout (`crates/engine/layout/src/highlight.rs` — `TreeOrder`)
 
@@ -33,3 +33,20 @@ HIGHLIGHT-PAINT (`cfa28ab9f`) выделение в растр не попада
 
 `tests/wpt/run_corpus.py --prefixes selection/shadow-dom` — `cross-shadow-boundary-1…6`, `-img`,
 `-select-root`, `-select-document` зелёные (было 9 FAIL, категория `selection` 69.41 → ~77).
+
+## Исправление
+
+- `TreeOrder::new` обходит узлы в порядке плоского дерева: shadow root хоста идёт перед светлыми детьми
+  (shadow-содержимое стоит на месте хоста); `(host, 0)` как граница диапазона ведёт к shadow root.
+  Распределение по `<slot>` не учитывается — светлые дети идут после shadow-содержимого.
+- `chain_style` продолжает каскад `::selection` у хоста, когда доходит до shadow root (у того нет `parent`).
+- `Selection.setBaseAndExtent` (BUG-966 схлопывал фокус при разных деревьях): точки из разных деревьев
+  сохраняются, если обе входят в плоское дерево документа (`_lumen_selection_in_flat_tree`: подъём через
+  хосты до документа, потомки `<video>`/`<audio>` не в счёт); иначе схлопывание прежнее
+  (`selection-nested-video.html`). Якорем принимается `document`, `anchorNode`/`focusNode` его возвращают.
+- Тесты: `highlight/tests.rs` (`range_over_body_covers_shadow_text` и ещё два),
+  `v8_bug1687_selection_across_shadow.rs`.
+- Проверка: 9 рефтестов `cross-shadow-boundary-*` (-1…-6, `-img`, `-select-root`, `-select-document`) —
+  скриншот теста и эталона через `lumen --viewport 400x160 --screenshot` совпадает попиксельно
+  (-4 сверяется с эталоном -3, как в самом тесте).
+- Дефект ширины фона из «Почему» вынесен в [BUG-1722](BUG-1722-OPEN.md).
