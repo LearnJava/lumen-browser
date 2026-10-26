@@ -217,9 +217,38 @@ pub enum FeTransfer {
     },
 }
 
+/// `preserveAspectRatio` примитива `feImage`: как вписать картинку в подобласть.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FeImageFit {
+    /// `none`: картинка растягивается на всю подобласть без сохранения пропорций.
+    pub stretch: bool,
+    /// Выравнивание по x: 0 — `xMin`, 0.5 — `xMid`, 1 — `xMax`.
+    pub align_x: f32,
+    /// Выравнивание по y: 0 — `YMin`, 0.5 — `YMid`, 1 — `YMax`.
+    pub align_y: f32,
+    /// `slice` (картинка покрывает подобласть, лишнее обрезается), иначе `meet`.
+    pub slice: bool,
+}
+
+impl Default for FeImageFit {
+    /// `xMidYMid meet`.
+    fn default() -> Self {
+        Self { stretch: false, align_x: 0.5, align_y: 0.5, slice: false }
+    }
+}
+
 /// Вид примитива с параметрами.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FePrimitive {
+    /// `feImage` со ссылкой на картинку (растровую или SVG): `href` — ключ, под
+    /// которым shell регистрирует декодированное изображение (адрес как в разметке,
+    /// без разрешения от базового URL).
+    Image {
+        /// Адрес картинки.
+        href: String,
+        /// `preserveAspectRatio`.
+        fit: FeImageFit,
+    },
     /// `feFlood`: цвет и непрозрачность.
     Flood {
         /// `flood-color`.
@@ -374,7 +403,7 @@ pub enum FePrimitive {
         /// Источник света.
         light: Option<FeLight>,
     },
-    /// Примитив, которого движок ещё не исполняет (`feImage`). Результат — вход
+    /// Примитив, которого движок ещё не исполняет (`feImage` со ссылкой на элемент). Результат — вход
     /// без изменений; примитив без входа даёт [`FeInput::Empty`], то есть
     /// прозрачный чёрный.
     Unsupported {

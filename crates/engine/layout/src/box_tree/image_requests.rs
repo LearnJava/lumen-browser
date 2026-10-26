@@ -258,6 +258,20 @@ fn collect_bg_image_inner(root: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
         for layer in &b.style.mask_layers {
             push_bg_image_urls(&layer.image, dpr, out);
         }
+        // Filter Effects L1 §feImage: a filter graph's picture is fetched like a background.
+        for f in &b.style.filter {
+            if let crate::style::FilterFn::Url(u) = f
+                && let Some(graph) = &u.graph
+            {
+                for p in &graph.primitives {
+                    if let crate::style::FePrimitive::Image { href, .. } = &p.kind
+                        && !out.iter().any(|x| x == href)
+                    {
+                        out.push(href.clone());
+                    }
+                }
+            }
+        }
         // CSS Lists L3 §2.3: a `list-style-image` marker also needs its URL fetched
         // and registered, same as a background image.
         if let BoxKind::Marker { image: Some(src), .. } = &b.kind
