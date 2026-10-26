@@ -356,7 +356,7 @@ impl Lumen {
         // Step 2.6: Video GIF animation — drain pending loads, advance frames.
         // Заморожено при fast-scroll по той же причине, что и Step 2.5.
         if !freeze_content_ticks {
-            let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
+            let video_elapsed_ms = self.media_clock_ms();
             self.tick_video_gifs(video_elapsed_ms);
             // GAP-MEDIADECODE срез 7: container-backed counterpart (UX-VIDEO-NATIVE).
             self.tick_video_sessions(video_elapsed_ms);
@@ -1146,7 +1146,7 @@ impl Lumen {
                 let nav_t = self
                     .nav_start
                     .map_or(0.0, |s| s.elapsed().as_secs_f64());
-                let clock_ms = self.epoch.elapsed().as_millis() as u64;
+                let clock_ms = self.media_clock_ms();
                 let playback = self.video_gif_store.playback.lock().unwrap();
                 let time_for = |node: lumen_dom::NodeId| -> f64 {
                     let nid = node.index() as u32;
