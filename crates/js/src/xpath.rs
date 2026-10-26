@@ -384,12 +384,67 @@ const XPATH_SHIM: &str = r#"
     return 0;
   }
 
+  // Identity key of a node, or null when it has none. Lumen node wrappers are
+  // created afresh on every access (so `===` is useless), but each carries the
+  // arena id `__nid__`; an attribute is keyed by its owner plus its name.
+  function nodeKey(n) {
+    if (!n) return null;
+    if (n.nodeType === 2) {
+      var ok = nodeKey(n.ownerElement);
+      return ok === null ? null : ok + '@' + n.name;
+    }
+    if (typeof document !== 'undefined' && n === document) return 'doc';
+    var v = n.__nid__;
+    return typeof v === 'number' ? 'n' + v : null;
+  }
+
+  // Tree order by one preorder walk of the shared root instead of
+  // O(N log N) native compareDocumentPosition calls. Null when some node is
+  // not in that tree (several roots) — the caller falls back to the comparator.
+  function sortByTreeOrder(nodes) {
+    var index = new Map();
+    var i = 0;
+    var stack = [documentRoot(nodes[0])];
+    while (stack.length) {
+      var n = stack.pop();
+      var k = nodeKey(n);
+      if (k !== null) index.set(k, i++);
+      var kids = childrenOf(n);
+      for (var c = kids.length - 1; c >= 0; c--) stack.push(kids[c]);
+    }
+    var keyed = [];
+    for (var j = 0; j < nodes.length; j++) {
+      var node = nodes[j];
+      var isAttr = node.nodeType === 2;
+      var pos = index.get(nodeKey(isAttr ? node.ownerElement : node));
+      if (pos === undefined) return null;
+      // Attributes follow their element and precede its children; the stable
+      // sort keeps attributes of one element in their input order.
+      keyed.push({ pos: isAttr ? pos + 0.5 : pos, node: node });
+    }
+    keyed.sort(function(a, b) { return a.pos - b.pos; });
+    return keyed.map(function(e) { return e.node; });
+  }
+
   function dedupeAndSort(nodes) {
     var out = [];
+    var seen = new Set();
+    var keyless = [];
     for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var k = nodeKey(n);
+      if (k !== null) {
+        if (!seen.has(k)) { seen.add(k); out.push(n); }
+        continue;
+      }
       var dup = false;
-      for (var j = 0; j < out.length; j++) { if (sameNode(nodes[i], out[j])) { dup = true; break; } }
-      if (!dup) out.push(nodes[i]);
+      for (var j = 0; j < keyless.length; j++) { if (sameNode(n, keyless[j])) { dup = true; break; } }
+      if (!dup) { keyless.push(n); out.push(n); }
+    }
+    if (out.length < 2) return out;
+    if (!keyless.length && out.length > 32) {
+      var sorted = sortByTreeOrder(out);
+      if (sorted) return sorted;
     }
     out.sort(docPositionCompare);
     return out;
@@ -423,7 +478,13 @@ const XPATH_SHIM: &str = r#"
     child: function(n) { return childrenOf(n); },
     descendant: function(n) {
       var out = [];
-      childrenOf(n).forEach(function(c) { out.push(c); out = out.concat(AXES.descendant(c)); });
+      var stack = childrenOf(n).reverse();
+      while (stack.length) {
+        var c = stack.pop();
+        out.push(c);
+        var kids = childrenOf(c);
+        for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      }
       return out;
     },
     'descendant-or-self': function(n) { return [n].concat(AXES.descendant(n)); },
@@ -533,7 +594,7 @@ const XPATH_SHIM: &str = r#"
           return v.type === 'number' ? v.value === (idx + 1) : toBoolean(v);
         });
       });
-      flat = flat.concat(candidates);
+      for (var i = 0; i < candidates.length; i++) flat.push(candidates[i]);
     });
     return dedupeAndSort(flat);
   }
