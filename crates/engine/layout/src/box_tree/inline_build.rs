@@ -1207,12 +1207,18 @@ pub(crate) fn collect_inline_segments(
             // Compute horizontal inline box model: margin + border + padding.
             // Use em=font_size, cb=0 (% padding on inline elements is uncommon).
             let em = s.font_size;
-            let pre = s.margin_left.resolve_or_zero(em, 0.0, viewport)
-                + s.border_left_width
-                + s.padding_left.resolve_or_zero(em, 0.0, viewport);
-            let post = s.padding_right.resolve_or_zero(em, 0.0, viewport)
-                + s.border_right_width
-                + s.margin_right.resolve_or_zero(em, 0.0, viewport);
+            let edges_pre = [
+                s.margin_left.resolve_or_zero(em, 0.0, viewport),
+                s.border_left_width,
+                s.padding_left.resolve_or_zero(em, 0.0, viewport),
+            ];
+            let edges_post = [
+                s.padding_right.resolve_or_zero(em, 0.0, viewport),
+                s.border_right_width,
+                s.margin_right.resolve_or_zero(em, 0.0, viewport),
+            ];
+            let pre: f32 = edges_pre.iter().sum();
+            let post: f32 = edges_post.iter().sum();
             let start = out.len();
             // CSS Pseudo-elements L4 §4 — ::before in inline formatting context.
             // Block pseudo-elements inside inline context are skipped (Phase 0).
@@ -1256,25 +1262,25 @@ pub(crate) fn collect_inline_segments(
             // `box-decoration-break: slice` — only the first piece keeps the
             // start edge and only the last one keeps the end edge.
             let cuts: Vec<usize> = escapes[esc_start..].iter().map(|e| e.at).collect();
+            // A piece without text of its own still has its edge: an empty segment carries it.
+            let edge = |pre_space: f32, post_space: f32| InlineSegment {
+                text: String::new(),
+                style: s.clone(),
+                pre_space,
+                post_space,
+                is_element_box: true,
+                img_src: None,
+                img_is_lazy: false,
+                img_width: 0.0,
+                forced_break: false,
+                pseudo_kind: PseudoKind::None,
+                source_node: id,
+                source_char_offset: 0,
+                bidi_level: 0,
+                bidi_scopes: Vec::new(),
+                bidi_isolate: None,
+            };
             if let (Some(&first_cut), Some(&last_cut)) = (cuts.first(), cuts.last()) {
-                // A piece without text of its own still has its edge: an empty segment carries it.
-                let edge = |pre_space: f32, post_space: f32| InlineSegment {
-                    text: String::new(),
-                    style: s.clone(),
-                    pre_space,
-                    post_space,
-                    is_element_box: true,
-                    img_src: None,
-                    img_is_lazy: false,
-                    img_width: 0.0,
-                    forced_break: false,
-                    pseudo_kind: PseudoKind::None,
-                    source_node: id,
-                    source_char_offset: 0,
-                    bidi_level: 0,
-                    bidi_scopes: Vec::new(),
-                    bidi_isolate: None,
-                };
                 let mut first_cut = first_cut;
                 let mut last_cut = last_cut;
                 let mut end = start + added;
@@ -1299,6 +1305,11 @@ pub(crate) fn collect_inline_segments(
             } else if added > 0 && (pre > 0.0 || post > 0.0) {
                 out[start].pre_space += pre;
                 out[start + added - 1].post_space += post;
+            } else if added == 0 && edges_pre.iter().chain(&edges_post).any(|e| *e != 0.0) {
+                // CSS 2.1 §9.4.2, CSS Inline 3 §3.4: an empty inline box with any non-zero horizontal
+                // margin/border/padding (even summing to zero or negative) is not a phantom line
+                // box: it takes its width in the line and paints its background/border (BUG-1530).
+                out.push(edge(pre, post));
             }
             // CSS Writing Modes L4 §2.2: the whole element, however many segments its
             // descendants split it into, sits in one embedding/isolate/override.

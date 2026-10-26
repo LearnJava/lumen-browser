@@ -44,3 +44,30 @@ fn uncut_inline_box_keeps_both_edges() {
     let p = pieces(r#"<span style="border:3px solid blue">a</span>"#);
     assert_eq!(p, vec![("a".into(), 3.0, 3.0, 3.0, 3.0)]);
 }
+
+// ── BUG-1530: empty inline box with horizontal edges keeps its width (CSS 2.1 §9.4.2) ──
+
+#[test]
+fn empty_inline_box_with_padding_keeps_an_edge_segment() {
+    let p = pieces(r#"x<span style="padding:0 10px"></span>y"#);
+    assert_eq!(p, vec![(String::new(), 0.0, 0.0, 10.0, 10.0)]);
+}
+
+#[test]
+fn empty_inline_box_with_margin_left_keeps_an_edge_segment() {
+    let p = pieces(r#"x<span style="margin-left:10px"></span>y"#);
+    assert_eq!(p, vec![(String::new(), 0.0, 0.0, 10.0, 0.0)]);
+}
+
+#[test]
+fn empty_inline_box_without_edges_stays_empty() {
+    assert!(pieces(r#"x<span></span>y"#).is_empty());
+}
+
+#[test]
+fn empty_inline_box_with_negative_or_cancelling_edges_keeps_an_edge_segment() {
+    let p = pieces(r#"x<span style="margin-left:-1px"></span>y"#);
+    assert_eq!(p, vec![(String::new(), 0.0, 0.0, -1.0, 0.0)]);
+    let p = pieces(r#"x<span style="padding-left:1px;margin-left:-1px"></span>y"#);
+    assert_eq!(p, vec![(String::new(), 0.0, 0.0, 0.0, 0.0)]);
+}
