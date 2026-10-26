@@ -233,6 +233,8 @@ fn apply_css_wide_keyword_with(
         }
         "font-style" => {
             style.font_style = if inh { inherited.font_style } else { init.font_style };
+            style.font_oblique_angle =
+                if inh { inherited.font_oblique_angle } else { init.font_oblique_angle };
         }
         "font-weight" => {
             style.font_weight = if inh { inherited.font_weight } else { init.font_weight };

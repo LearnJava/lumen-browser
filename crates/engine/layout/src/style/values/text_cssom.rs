@@ -8,7 +8,9 @@
 //! (`_lumen_css_canonical_text`), каскад ими не пользуется.
 
 use super::length::{canonical_specified_length as canonical_length, split_top_level_ws};
-use super::typography::{CaseLang, TextTransformExtra};
+use super::typography::{CaseLang, FontStretch, FontStyle, FontWeight, TextTransformExtra};
+use crate::style::math_value::canonical_specified_numeric_math;
+use crate::style::parse::font::parse_font_weight;
 
 /// Каноническая запись значения `value` свойства `prop` либо `None`, если оно не соответствует
 /// грамматике (присваивание тогда игнорируется). `None` и для свойства, которого здесь нет.
@@ -28,12 +30,77 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
             }
         }
         "text-indent" => text_indent(v),
+        "font-weight" => font_weight(v),
+        "font-style" => font_style(v),
+        "font-stretch" => font_stretch(v),
         "text-transform" => {
             let (case, extra) = TextTransformExtra::parse(v)?;
             Some(extra.serialize(case))
         }
         _ => None,
     }
+}
+
+/// Значение целиком — один вызов math-функции (`calc(…)`, `min(…)`…).
+fn is_math_call(v: &str) -> bool {
+    v.find('(').is_some_and(|open| v.ends_with(')') && v[..open].bytes().all(|b| b.is_ascii_alphabetic()))
+}
+
+/// `font-weight` (CSS Fonts L4 §2.2): `normal | bold | bolder | lighter | <number [1,1000]>`;
+/// вызов math-функции с числовым результатом хранится как `calc(<число>)`.
+fn font_weight(v: &str) -> Option<String> {
+    let kw = v.to_ascii_lowercase();
+    if matches!(kw.as_str(), "normal" | "bold" | "bolder" | "lighter") {
+        return Some(kw);
+    }
+    if is_math_call(v) {
+        return match canonical_specified_numeric_math("font-weight", v).as_str() {
+            "" => Some(v.to_string()),
+            "!" => None,
+            canon => Some(canon.to_string()),
+        };
+    }
+    let w = parse_font_weight(v, FontWeight::NORMAL)?;
+    Some(w.serialize())
+}
+
+/// `font-style` (CSS Fonts L4 §2.3): `normal | italic | oblique <angle [-90deg, 90deg]>?`.
+/// `oblique 0deg` — это `normal`; угол хранится в записанных единицах.
+fn font_style(v: &str) -> Option<String> {
+    let (kw, angle) = match v.split_once(char::is_whitespace) {
+        Some((kw, rest)) => (kw.to_ascii_lowercase(), Some(rest.trim())),
+        None => (v.to_ascii_lowercase(), None),
+    };
+    let Some(angle) = angle else {
+        return matches!(kw.as_str(), "normal" | "italic" | "oblique").then_some(kw);
+    };
+    if kw != "oblique" {
+        return None;
+    }
+    if is_math_call(angle) {
+        return match canonical_specified_numeric_math("font-style-angle", angle).as_str() {
+            "" => Some(format!("oblique {angle}")),
+            "!" => None,
+            canon => Some(format!("oblique {canon}")),
+        };
+    }
+    let (style, _) = FontStyle::parse(&format!("oblique {angle}"))?;
+    Some(if style == FontStyle::Normal { "normal".into() } else { format!("oblique {}", angle.to_ascii_lowercase()) })
+}
+
+/// `font-stretch` (CSS Fonts L4 §2.5): `<font-stretch-absolute>` — ключевое слово или
+/// `<percentage [0, ∞)>`; число без `%` недопустимо.
+fn font_stretch(v: &str) -> Option<String> {
+    let kw = v.to_ascii_lowercase();
+    if FontStretch::from_keyword(&kw).is_some() {
+        return Some(kw);
+    }
+    if is_math_call(v) {
+        return Some(v.to_string());
+    }
+    let pct = kw.strip_suffix('%')?;
+    let n = pct.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+    Some(format!("{n}%"))
 }
 
 /// `text-transform` над `text` по тому же коду, что и раскладка: `value` — computed-запись

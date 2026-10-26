@@ -124,7 +124,7 @@ mod highlight_tests {
     fn highlight_preserves_text_attributes() {
         let mut out = Vec::new();
         let family = vec!["Arial".to_string()];
-        let weight = FontWeight(600);
+        let weight = FontWeight::new(600);
         
         emit_text_with_highlights(
             Rect::new(5.0, 10.0, 200.0, 25.0),

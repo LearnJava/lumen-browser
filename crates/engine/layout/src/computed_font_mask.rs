@@ -10,7 +10,7 @@ use crate::selector_query::{
     position_component_to_css, px_str,
 };
 use crate::style::{
-    ClipPath, ComputedStyle, FontOpticalSizing, FontPalette, FontSizeAdjust, FontStyle,
+    ClipPath, ComputedStyle, FontOpticalSizing, FontPalette, FontSizeAdjust, FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
     FontVariantPosition, GeometryBox, MaskClip, MaskComposite, MaskLayer, MaskMode, ShapeValue,
 };
@@ -94,10 +94,13 @@ fn font_shorthand(style: &ComputedStyle, font_size_px: f32) -> String {
     match style.font_style {
         FontStyle::Normal => {}
         FontStyle::Italic => parts.push("italic".into()),
-        FontStyle::Oblique => parts.push("oblique".into()),
+        FontStyle::Oblique => parts.push(crate::style::font_style_to_css(
+            FontStyle::Oblique,
+            style.font_oblique_angle,
+        )),
     }
-    if style.font_weight.0 != 400 {
-        parts.push(style.font_weight.0.to_string());
+    if style.font_weight != FontWeight::NORMAL {
+        parts.push(style.font_weight.serialize());
     }
     let mut size = px_str(font_size_px);
     // `line-height: normal` хранится как относительные 1.2 — в шорткод не выводится.

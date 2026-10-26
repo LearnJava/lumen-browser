@@ -227,7 +227,7 @@ fn stroke_cmd_sized(text: &str, font_size: f32, width: f32, color: Color) -> Dis
         text: text.into(),
         font_size,
         font_family: Vec::new(),
-        font_weight: lumen_layout::FontWeight(400),
+        font_weight: lumen_layout::FontWeight::new(400),
         font_style: lumen_layout::FontStyle::Normal,
         font_features: Vec::new(),
         tab_size: 0.0,
