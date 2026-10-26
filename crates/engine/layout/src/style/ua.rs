@@ -205,8 +205,9 @@ pub(in crate::style) fn apply_ua_text_decoration(doc: &Document, node: NodeId, s
         "a" if doc.get(node).get_attr("href").is_some() => {
             style.text_decoration_line.underline = true;
         }
-        _ => {}
+        _ => return,
     }
+    style.text_decoration_line_declared = true;
 }
 /// UA stylesheet: `color` для `<a href="…">`.
 /// HTML5 §15.3.3: unvisited links → `color: -webkit-link` (обычно #0000ee).

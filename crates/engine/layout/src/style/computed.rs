@@ -249,6 +249,11 @@ pub struct ComputedStyle {
     /// Резолвится в раскладке, где известна метрика пробела.
     pub word_spacing_pct: f32,
     pub text_decoration_line: TextDecorationLine,
+    /// The element itself declared `text-decoration[-line]` (or the UA sheet did, `<a href>`/`<u>`…):
+    /// not inherited. A float, an absolutely positioned box and an atomic inline (`inline-block`,
+    /// `inline-flex`, …) drop the line propagated from an ancestor (Text Decoration L3 §2.2) but
+    /// keep the one declared on itself.
+    pub text_decoration_line_declared: bool,
     /// CSS Text Decoration L3 §3 — `text-decoration-color`. `CurrentColor`
     /// означает «использовать style.color при рендеринге» (initial value по
     /// spec). Inherited через каскад (как и `text-decoration-line` в Phase 0
