@@ -638,6 +638,65 @@ use lumen_dom::NodeId;
         assert_eq!(mark_count, 3, "три символа → три mark '*'");
     }
 
+    /// Прямоугольник основного текста `main` и прямоугольники меток ● в списке команд.
+    fn emphasis_rects(css: &str, html: &str, main: &str) -> (Rect, Vec<Rect>) {
+        let dl = build_wrapped(html, css, 800.0);
+        let mut base = None;
+        let mut marks = Vec::new();
+        for c in dl.iter() {
+            if let DisplayCommand::DrawText { rect, text, .. } = c {
+                if text == "\u{25CF}" {
+                    marks.push(*rect);
+                } else if text == main && base.is_none() {
+                    base = Some(*rect);
+                }
+            }
+        }
+        (base.unwrap_or_else(|| panic!("основной текст: {:?}", dl.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).collect::<Vec<_>>())), marks)
+    }
+
+    /// Пробельные символы метки не получают; метка стоит по центру своего символа, а не у его
+    /// левого края.
+    #[test]
+    fn text_emphasis_skips_white_space_and_centres_each_mark() {
+        let css = "p { text-emphasis-style: filled circle; font-size: 20px; margin: 0; }";
+        let (base, marks) = emphasis_rects(css, "<p>ab</p>", "ab");
+        assert_eq!(marks.len(), 2);
+        // Fixed8: символ 8px, метка 10px — центры меток в серединах слотов (4 и 12px).
+        assert_eq!(marks[0].x + 5.0 - base.x, 4.0, "{:?} vs {:?}", marks[0], base);
+        assert_eq!(marks[1].x + 5.0 - base.x, 12.0, "{:?} vs {:?}", marks[1], base);
+        let (_, marks) = emphasis_rects(css, "<p>a&nbsp;b</p>", "a\u{a0}b");
+        assert_eq!(marks.len(), 2, "неразрывный пробел — пробельный символ: {marks:?}");
+    }
+
+    /// Метка прижата к em-боксу текста: над ним для `over`, под ним для `under` — а не на краю
+    /// строки (при большом `line-height` она прежде улетала от глифов).
+    #[test]
+    fn text_emphasis_hugs_the_em_box_whatever_the_line_height() {
+        let css = "p { text-emphasis-style: filled circle; font-size: 20px; line-height: 4; margin: 0; }";
+        let (base, over) = emphasis_rects(css, "<p>a</p>", "a");
+        assert_eq!(over[0].y + 10.0, base.y, "over: нижний край метки (10px) — верх em-бокса");
+        let css = "p { text-emphasis: filled circle; text-emphasis-position: under right; font-size: 20px; line-height: 4; margin: 0; }";
+        let (base, under) = emphasis_rects(css, "<p>a</p>", "a");
+        assert_eq!(under[0].y, base.y + 20.0, "under: верх метки — низ em-бокса");
+    }
+
+    /// Вертикальное письмо: метки рядом с колонкой, `right` — справа от глифов, `left` — слева;
+    /// вдоль колонки идут по символам.
+    #[test]
+    fn text_emphasis_in_vertical_writing_mode_goes_beside_the_column() {
+        let css = "p { writing-mode: vertical-rl; text-emphasis-style: filled circle; \
+                   font-size: 20px; height: 200px; margin: 0; }";
+        let html = "<p>\u{8a66}\u{9a13}</p>";
+        let (base, marks) = emphasis_rects(css, html, "\u{8a66}\u{9a13}");
+        assert_eq!(marks.len(), 2, "{marks:?}");
+        assert!(marks[0].x >= base.x + 20.0, "справа от em-бокса: {:?} vs {:?}", marks[0], base);
+        assert!(marks[1].y > marks[0].y, "вдоль колонки сверху вниз");
+        let css = css.replace("font-size", "text-emphasis-position: over left; font-size");
+        let (base, marks) = emphasis_rects(&css, html, "\u{8a66}\u{9a13}");
+        assert!(marks[0].x + 10.0 <= base.x, "слева: {:?} vs {:?}", marks[0], base);
+    }
+
     // ── clip-path ──────────────────────────────────────────────────────────
 
     #[test]

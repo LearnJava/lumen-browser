@@ -1861,6 +1861,12 @@ impl TextEmphasisPosition {
         matches!(self, Self::OverRight | Self::OverLeft | Self::Auto)
     }
 
+    /// Сторона меток в вертикальном письме: `right` (и `auto`) — справа от глифов, `left` — слева
+    /// (CSS Text Decoration L3 §4.2: в вертикальном режиме `over`/`under` не действуют).
+    pub fn is_right(self) -> bool {
+        matches!(self, Self::OverRight | Self::UnderRight | Self::Auto)
+    }
+
     /// Каноническая запись: `right` опускается (initial), `auto` как есть.
     pub fn to_css(self) -> &'static str {
         match self {
@@ -2005,6 +2011,15 @@ impl TextDecorationSkipInk {
 }
 
 impl TextEmphasisStyle {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Размер метки — половина кегля текста (CSS Text Decoration L3 §4.2).
+    pub fn mark_size(font_size: f32) -> f32 {
+        font_size * 0.5
+    }
+
     /// Каноническая запись: закрашенная фигура — одно слово (`filled` опускается), контурная —
     /// `open <shape>`, строка — в двойных кавычках.
     pub fn to_css(&self) -> String {
