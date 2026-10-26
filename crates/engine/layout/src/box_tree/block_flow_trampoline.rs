@@ -1113,7 +1113,7 @@ fn align_justify_self_child(frame: &mut Frame, idx: usize, viewport: Size) {
     let mr = cs.margin_right.resolve_or_zero(em, content_width, viewport);
     let (rel_dx, _) = super::layout_dispatch::relative_offset(cs, em, content_width, frame.init.children_available_height, viewport);
     let x = super::self_align::aligned_border_start(
-        align, safe, rev, content_x, content_width, child.rect.width, ml, mr,
+        align, safe, None, rev, content_x, content_width, child.rect.width, ml, mr,
     );
     let dx = x + rel_dx - child.rect.x;
     if dx.abs() > 0.01 {

@@ -1298,6 +1298,7 @@ fn set_align_self(style: &mut ComputedStyle, val: &str) {
         style.align_self = v;
         let e = &mut style.content_align_extra;
         (e.self_safe, e.self_wm, e.self_own) = (safe, wm, AlignValue::is_self_relative(val));
+        e.self_unsafe = AlignValue::is_unsafe(val);
     }
 }
 
@@ -1328,10 +1329,12 @@ fn set_justify_self(style: &mut ComputedStyle, val: &str) {
         let e = &mut style.content_align_extra;
         (e.justify_self_safe, e.justify_self_own, e.justify_self_side) =
             (safe, AlignValue::is_self_relative(val), None);
+        e.justify_self_unsafe = AlignValue::is_unsafe(val);
     } else if let Some((side, safe)) = AlignValue::parse_self_side(val) {
         style.justify_self = if side == ContentSide::Left { AlignValue::Start } else { AlignValue::End };
         let e = &mut style.content_align_extra;
         (e.justify_self_safe, e.justify_self_own, e.justify_self_side) = (safe, false, Some(side));
+        e.justify_self_unsafe = AlignValue::is_unsafe(val);
     }
 }
 

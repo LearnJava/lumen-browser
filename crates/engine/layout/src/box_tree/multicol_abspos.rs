@@ -665,11 +665,14 @@ fn place_abs_child(
         // Normal abs-pos: resolve from left/right/top/bottom insets. An axis with both insets and a
         // definite size is over-determined: auto margins absorb the free space, otherwise
         // `justify-self` / `align-self` place the box inside the inset-modified containing block.
-        let aligned = |fixed: bool, align: Option<(AlignValue, bool, bool)>, near: Option<f32>, far: Option<f32>, auto_m: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
+        let aligned = |fixed: bool, align: Option<(AlignValue, bool, bool, bool)>, near: Option<f32>, far: Option<f32>, auto_m: bool, origin: f32, extent: f32, size: f32, m: (f32, f32)| {
             let (Some(n), Some(f)) = (near, far) else { return None };
-            let (align, safe, rev) = align?;
+            let (align, safe, explicit_unsafe, rev) = align?;
             (fixed && !auto_m).then(|| {
-                super::self_align::aligned_border_start(align, safe, rev, origin + n, extent - n - f, size, m.0, m.1)
+                // CSS Position L3 §5.2: without a `safe`/`unsafe` keyword the margin box stays inside
+                // the containing block joined with the inset-modified one.
+                let hull = (!explicit_unsafe).then(|| (origin.min(origin + n), (origin + extent).max(origin + extent - f)));
+                super::self_align::aligned_border_start(align, safe, hull, rev, origin + n, extent - n - f, size, m.0, m.1)
             })
         };
         let aligned_x = aligned(
@@ -734,11 +737,15 @@ fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> A
         (true, rtl != (flow.writing_mode == WritingMode::SidewaysLr))
     };
     let cx = &cs.content_align_extra;
-    let (mut align, safe) = if inline {
+    let (mut align, safe, explicit_unsafe) = if inline {
         let v = super::grid_vertical::resolve_own(cs.justify_self, cx.justify_self_own, cs, is_x, !rev);
-        (super::grid_vertical::resolve_side(v, cx.justify_self_side, flow.writing_mode, rev), cx.justify_self_safe)
+        (
+            super::grid_vertical::resolve_side(v, cx.justify_self_side, flow.writing_mode, rev),
+            cx.justify_self_safe,
+            cx.justify_self_unsafe,
+        )
     } else {
-        (super::grid_vertical::resolve_own(cs.align_self, cx.self_own, cs, is_x, !rev), cx.self_safe)
+        (super::grid_vertical::resolve_own(cs.align_self, cx.self_own, cs, is_x, !rev), cx.self_safe, cx.self_unsafe)
     };
     match align {
         AlignValue::LastBaseline => align = AlignValue::End,
@@ -746,16 +753,17 @@ fn abs_axis_alignment(cs: &ComputedStyle, flow: &ComputedStyle, is_x: bool) -> A
         _ => {}
     }
     AxisAlign {
-        aligned: matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center).then_some((align, safe, rev)),
+        aligned: matches!(align, AlignValue::Start | AlignValue::End | AlignValue::Center)
+            .then_some((align, safe, explicit_unsafe, rev)),
         stretch: align == AlignValue::Stretch,
     }
 }
 
 /// [`abs_axis_alignment`]'s result for one physical axis.
 struct AxisAlign {
-    /// `(alignment, safe, axis runs against the physical direction)`; `None` — the box keeps its
-    /// inset-driven position and size.
-    aligned: Option<(AlignValue, bool, bool)>,
+    /// `(alignment, safe, explicit unsafe, axis runs against the physical direction)`; `None` — the
+    /// box keeps its inset-driven position and size.
+    aligned: Option<(AlignValue, bool, bool, bool)>,
     /// An explicit `stretch`: also fills the axis of a box whose *block* axis it is, which
     /// `normal` leaves content-sized.
     stretch: bool,

@@ -361,7 +361,7 @@ fn finish_child(frame: &mut Frame, i: usize, viewport: Size, caches: &mut Margin
             super::self_align::inline_alignment(&frame.b.style, &child.style, false, inline_start_at_end)
         {
             Some(super::self_align::aligned_border_start(
-                align, safe, inline_start_at_end, frame.init.content_y, content_inline, child.rect.height, mt, mb,
+                align, safe, None, inline_start_at_end, frame.init.content_y, content_inline, child.rect.height, mt, mb,
             ))
         } else {
             inline_start_at_end.then(|| frame.init.content_y + content_inline - mb - child.rect.height)

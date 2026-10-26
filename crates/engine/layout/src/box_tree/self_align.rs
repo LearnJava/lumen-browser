@@ -37,10 +37,14 @@ pub(super) fn inline_alignment(
 /// Border-box start (physical coordinate) of a box of border-box `size` with margins
 /// `m_lo`/`m_hi` aligned by `align` inside the area `[lo, lo + cell]`. `safe` falls back to
 /// `start` when the margin box overflows the area; without it an overflowing box still aligns
-/// by its own side (`unsafe`, CSS Box Alignment L3 §4.4).
+/// by its own side (`unsafe`, CSS Box Alignment L3 §4.4). `hull` — the default overflow alignment
+/// of an abs-pos box (CSS Position L3 §5.2): the margin box is then kept inside this physical
+/// interval (the containing block joined with the inset-modified one), the inline-start edge
+/// winning when it does not fit.
 pub(super) fn aligned_border_start(
     align: AlignValue,
     safe: bool,
+    hull: Option<(f32, f32)>,
     rev: bool,
     lo: f32,
     cell: f32,
@@ -55,7 +59,17 @@ pub(super) fn aligned_border_start(
         align
     };
     let off = super::grid_vertical::axis_offset(align, cell, size, m_s, m_e, false, false);
-    if rev { lo + cell - off - size } else { lo + off }
+    let start = if rev { lo + cell - off - size } else { lo + off };
+    let Some((hull_lo, hull_hi)) = hull.filter(|_| !safe) else { return start };
+    let total = size + m_lo + m_hi;
+    let margin_start = start - m_lo;
+    let margin_start = if rev {
+        let end = (margin_start + total).max(hull_lo + total).min(hull_hi);
+        end - total
+    } else {
+        margin_start.min(hull_hi - total).max(hull_lo)
+    };
+    margin_start + m_lo
 }
 
 /// How an auto-sized in-flow block child's size along its parent's inline axis follows
