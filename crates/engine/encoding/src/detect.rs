@@ -430,6 +430,12 @@ mod tests {
     }
 
     #[test]
+    fn meta_charset_iso_8859_1_is_windows_1252() {
+        let html = b"<html><head><meta charset=iso-8859-1></head>";
+        assert_eq!(sniff_meta_charset(html), Some(Encoding::Windows1252));
+    }
+
+    #[test]
     fn meta_http_equiv_content_type() {
         let html =
             b"<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=koi8-r\">";

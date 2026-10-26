@@ -538,3 +538,6 @@ mod v8_bug689_attr_nodes;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug1424_alpha_opacity_serialization;
+
+#[cfg(feature = "v8-backend")]
+mod v8_bug1713_textdecoder_latin1;

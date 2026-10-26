@@ -10,11 +10,12 @@
 // chunk-of-a-stream rule for `ignoreBOM` are handled here in JS.
 //
 // Supported encodings match `lumen_encoding::Encoding` — UTF-8/16/32,
-// windows-1251, KOI8-R, IBM866 — the Cyrillic-web + Unicode set this browser
+// windows-1251, windows-1252 (ascii/latin1/iso-8859-1 labels, BUG-1713),
+// KOI8-R, IBM866 — the Cyrillic-web + Latin-1 + Unicode set this browser
 // actually implements (`docs/plan/tech-stack.md` deliberately rejects
 // `encoding_rs`/hand-porting the full ~40-encoding WHATWG set in favor of
 // this crate's own tables). A label for any other real-but-unimplemented
-// encoding (Shift_JIS, GBK, windows-1252, …) is treated the same as an
+// encoding (Shift_JIS, GBK, …) is treated the same as an
 // unknown label: `_lumen_text_encoding_for_label` returns undefined and the
 // constructor throws `RangeError` — a deliberate scope decision, not a bug.
 
@@ -85,7 +86,7 @@ TextEncoder.prototype.encodeInto = function(src, dest) {
 // the buffer cuts off mid-way, for the multi-byte encoding families where a
 // streaming chunk boundary can land inside a character. Those bytes must be
 // held back and prepended to the next chunk instead of being decoded now.
-// Single-byte encodings (windows-1251/koi8-r/ibm866) never have a pending
+// Single-byte encodings (windows-1251/1252/koi8-r/ibm866) never have a pending
 // remainder — every byte stands alone.
 function _lumenTextPendingTailLen(canonical, bytes) {
     var n = bytes.length;

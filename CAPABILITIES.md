@@ -65,7 +65,7 @@ breakdown, verdicts on every drop and caveats in [docs/wpt/pass-rate.md](docs/wp
 - ~304 tests.
 
 ### lumen-encoding (`crates/engine/encoding`)
-- ✅ Decoders: Windows-1251, KOI8-R, CP866, UTF-16 LE/BE (surrogates), UTF-8; BOM strip; `from_label` (WHATWG aliases).
+- ✅ Decoders: Windows-1251, Windows-1252 (`ascii`/`latin1`/`iso-8859-1` labels), KOI8-R, CP866, UTF-16 LE/BE (surrogates), UTF-8; BOM strip; `from_label` (WHATWG aliases).
 - ✅ `detect()` chain: BOM → `<meta charset>` → HTTP hint → valid-UTF-8 → Russian-frequency heuristic.
 - ✅ ICU4x 2.2 unicode provider (line-break UAX#14, grapheme/word UAX#29, bidi UAX#9); Knuth-Liang hyphenation (11 locales, used when `hyphens: auto`).
 - ⬜ ISO-8859-5, MacCyrillic, full HTML5 prescan, UTF-32.
