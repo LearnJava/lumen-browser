@@ -392,6 +392,10 @@ pub struct ComputedStyle {
     /// строк нормального потока занимает буквица сбоку. Не наследуется.
     /// `0` = `auto`, выводится как `floor(initial_letter_size)`.
     pub initial_letter_sink: u32,
+    /// CSS Inline Layout L3 §5.1 — ключевое слово `initial-letter`: `0` — не записано,
+    /// `1` — `drop`, `2` — `raise`. Раскладку не меняет (`drop` — это `sink = floor(size)`,
+    /// `raise` ставит `sink = 1`); нужно, чтобы `getComputedStyle` вернул записанную форму.
+    pub initial_letter_keyword: u8,
     /// CSS Compositing & Blending L1 §2.1 — `isolation`. Не наследуется.
     /// `Isolate` создаёт stacking context.
     pub isolation: Isolation,

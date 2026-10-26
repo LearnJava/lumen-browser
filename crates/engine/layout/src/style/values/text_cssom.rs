@@ -33,6 +33,10 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
         "font-weight" => font_weight(v),
         "font-style" => font_style(v),
         "font-stretch" => font_stretch(v),
+        "line-height" => line_height(v),
+        "baseline-shift" => baseline_shift(v),
+        "vertical-align" => vertical_align(v),
+        "initial-letter" => initial_letter(v),
         "text-transform" => {
             let (case, extra) = TextTransformExtra::parse(v)?;
             Some(extra.serialize(case))
@@ -101,6 +105,94 @@ fn font_stretch(v: &str) -> Option<String> {
     let pct = kw.strip_suffix('%')?;
     let n = pct.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
     Some(format!("{n}%"))
+}
+
+/// `line-height` (CSS Inline L3 §3.1): `normal | <number [0,∞)> | <length-percentage [0,∞)>`.
+fn line_height(v: &str) -> Option<String> {
+    if v.eq_ignore_ascii_case("normal") {
+        return Some("normal".into());
+    }
+    if let Ok(n) = v.parse::<f32>() {
+        return (n.is_finite() && n >= 0.0).then(|| format!("{n}"));
+    }
+    canonical_length_sorted(v, false, true)
+}
+
+/// Ключевые слова `<'alignment-baseline'>` внутри `vertical-align` (CSS Inline L3 §4.1).
+const ALIGNMENT_BASELINE_KEYWORDS: [&str; 8] = [
+    "baseline", "text-bottom", "alphabetic", "ideographic", "middle", "central", "mathematical", "text-top",
+];
+
+/// `baseline-shift` (CSS Inline L3 §4.2): `<length-percentage> | sub | super | top | center | bottom`;
+/// `baseline` — SVG-запись нулевого сдвига, оставлена для совместимости.
+fn baseline_shift(v: &str) -> Option<String> {
+    let kw = v.to_ascii_lowercase();
+    if matches!(kw.as_str(), "baseline" | "sub" | "super" | "top" | "center" | "bottom") {
+        return Some(kw);
+    }
+    canonical_length(v, false, false)
+}
+
+/// `vertical-align` (CSS Inline L3 §4): `[ first | last ] || <'alignment-baseline'> ||
+/// <'baseline-shift'>`; каждая часть не более одного раза. В записи пропущены начальные
+/// значения (`baseline`, нулевой сдвиг), порядок — `first|last`, выравнивание, сдвиг; пустая
+/// запись — `baseline`.
+fn vertical_align(v: &str) -> Option<String> {
+    let (mut edge, mut align, mut shift): (Option<String>, Option<String>, Option<String>) = (None, None, None);
+    for tok in split_top_level_ws(v) {
+        let kw = tok.to_ascii_lowercase();
+        let taken = if matches!(kw.as_str(), "first" | "last") {
+            edge.replace(kw)
+        } else if ALIGNMENT_BASELINE_KEYWORDS.contains(&kw.as_str()) {
+            align.replace(kw)
+        } else if matches!(kw.as_str(), "sub" | "super" | "top" | "center" | "bottom") {
+            shift.replace(kw)
+        } else {
+            shift.replace(canonical_length(tok, false, false)?)
+        };
+        if taken.is_some() {
+            return None;
+        }
+    }
+    let parts: Vec<String> = [
+        edge,
+        align.filter(|a| a != "baseline"),
+        shift.filter(|s| s != "0px"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    Some(if parts.is_empty() { "baseline".into() } else { parts.join(" ") })
+}
+
+/// `initial-letter` (CSS Inline L3 §5.1): `normal | <number [1,∞)> <integer [1,∞)> |
+/// <number [1,∞)> && [ drop | raise ]?`; ключевое слово в записи идёт после числа.
+fn initial_letter(v: &str) -> Option<String> {
+    if v.eq_ignore_ascii_case("normal") {
+        return Some("normal".into());
+    }
+    let toks = split_top_level_ws(v);
+    let is_kw = |t: &str| t.eq_ignore_ascii_case("drop") || t.eq_ignore_ascii_case("raise");
+    let size = |t: &str| {
+        if is_math_call(t) {
+            return Some(t.to_string());
+        }
+        t.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 1.0).map(|n| format!("{n}"))
+    };
+    match toks.as_slice() {
+        [n] => size(n),
+        [n, k] if is_kw(k) => Some(format!("{} {}", size(n)?, k.to_ascii_lowercase())),
+        [k, n] if is_kw(k) => Some(format!("{} {}", size(n)?, k.to_ascii_lowercase())),
+        [n, i] => {
+            let sink = if is_math_call(i) {
+                i.to_string()
+            } else {
+                i.parse::<i64>().ok().filter(|n| *n >= 1)?.to_string()
+            };
+            Some(format!("{} {sink}", size(n)?))
+        }
+        _ => None,
+    }
 }
 
 /// `text-transform` над `text` по тому же коду, что и раскладка: `value` — computed-запись

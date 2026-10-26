@@ -765,7 +765,10 @@ pub(crate) fn emit_svg_text(
     // sub/super offsets are approximate fractions of the em (no OS/2 sub/superscript
     // metrics in the paint stage). SVG screen-y grows downward, so a raise is negative.
     let shift_offset_y = match baseline_shift {
-        SvgBaselineShift::Baseline => 0.0,
+        SvgBaselineShift::Baseline
+        | SvgBaselineShift::Top
+        | SvgBaselineShift::Center
+        | SvgBaselineShift::Bottom => 0.0,
         SvgBaselineShift::Sub => font_size * 0.2,
         SvgBaselineShift::Super => -font_size * 0.4,
         SvgBaselineShift::Length(px) => -px,

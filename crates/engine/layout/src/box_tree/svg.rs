@@ -113,6 +113,13 @@ pub enum SvgBaselineShift {
     Length(f32),
     /// `<percentage>` as a fraction of the current font-size. Positive raises.
     Percentage(f32),
+    /// `top` — CSS Inline L3 §4.2: align the box's top edge with the line's. Only
+    /// readable through CSSOM; SVG text does not shift.
+    Top,
+    /// `center` — CSS Inline L3 §4.2; like [`Self::Top`], CSSOM only.
+    Center,
+    /// `bottom` — CSS Inline L3 §4.2; like [`Self::Top`], CSSOM only.
+    Bottom,
 }
 
 /// SVG transformation data from the `transform` presentation attribute.

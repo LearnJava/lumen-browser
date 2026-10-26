@@ -12,7 +12,7 @@ use lumen_css_parser::{parse_selector_list, ComplexSelector};
 use lumen_dom::{Document, NodeId};
 use lumen_core::{ColorSpace, Size};
 
-use crate::box_tree::{BoxKind, LayoutBox};
+use crate::box_tree::{BoxKind, LayoutBox, SvgBaselineShift};
 use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
     SvgColorInterpolation,
@@ -1679,12 +1679,34 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         }
     });
     m.insert("line-height".into(), {
-        let v = style.line_height;
-        if !style.line_height_is_relative {
-            // BUG-1050: an absolute `<length>` is stored as a ratio of the
-            // (zoomed) font-size; the computed value is that length in px.
-            px_str(v * style.font_size / z)
-        } else if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{}", v) }
+        // CSS Inline L3 §3.1: `normal` or a length. BUG-1050: every non-`normal` value is
+        // stored as a ratio of the (zoomed) font-size; a unitless `<number>` resolves to
+        // that length too (BUG-1529).
+        if style.line_height_is_normal {
+            "normal".into()
+        } else {
+            px_str(style.line_height * style.font_size / z)
+        }
+    });
+    m.insert("baseline-shift".into(), match style.baseline_shift {
+        SvgBaselineShift::Baseline => "0px".into(),
+        SvgBaselineShift::Sub => "sub".into(),
+        SvgBaselineShift::Super => "super".into(),
+        SvgBaselineShift::Top => "top".into(),
+        SvgBaselineShift::Center => "center".into(),
+        SvgBaselineShift::Bottom => "bottom".into(),
+        SvgBaselineShift::Length(px) => px_str(px),
+        SvgBaselineShift::Percentage(frac) => format!("{}%", (frac * 1e5).round() / 1e3),
+    });
+    m.insert("initial-letter".into(), {
+        let size = style.initial_letter_size;
+        match (style.initial_letter_keyword, style.initial_letter_sink) {
+            _ if size <= 1.0 && style.initial_letter_sink == 0 => "normal".into(),
+            (1, _) => format!("{size} drop"),
+            (2, _) => format!("{size} raise"),
+            (_, 0) => format!("{size}"),
+            (_, sink) => format!("{size} {sink}"),
+        }
     });
     // CSS Text L4 §11.2: `letter-spacing: 0` вычисляется в `normal`; `word-spacing: normal` — в `0px`.
     // CSS Text L4: a `<percentage>` stays a percentage in the computed value (`110%`,

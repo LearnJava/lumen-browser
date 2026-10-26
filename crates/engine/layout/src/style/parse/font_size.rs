@@ -233,11 +233,18 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
         style.line_height_is_normal = true;
     } else if let Ok(v) = val.parse::<f32>() {
         // Unitless `<number>` — relative: the line box scales with the
-        // used font-size (incl. any `font-size-adjust` rescale).
+        // used font-size (incl. any `font-size-adjust` rescale). Negative
+        // numbers are invalid (CSS Inline L3 §3.1) and leave the cascade alone.
+        if !v.is_finite() || v < 0.0 {
+            return;
+        }
         style.line_height = v;
         style.line_height_is_relative = true;
         style.line_height_is_normal = false;
     } else if let Some(len) = parse_length(val) {
+        if matches!(len, Length::Px(v) | Length::Em(v) | Length::Rem(v) | Length::Percent(v) if v < 0.0) {
+            return;
+        }
         // Every unit-bearing value computes to an absolute length
         // (CSS2 §10.8.1: `<length>`/`<percentage>`/`em`/`rem` line-height
         // resolves at computed-value time), so the line box must be frozen
@@ -278,8 +285,10 @@ pub(in crate::style) fn apply_line_height_value(style: &mut ComputedStyle, val: 
                 // ответ для length-результатов и неверный для чистых
                 // чисел внутри calc. Phase 0 ограничение: для чистых
                 // чисел используйте bare-form `line-height: 1.5`.
-                if let Some(px) = len.resolve(em_basis, None, viewport) {
-                    style.line_height = px / style.font_size;
+                // A `<percentage>` inside `calc()` is a share of the element's own
+                // font-size, and a negative sum clamps to zero (CSS Inline L3 §3.1).
+                if let Some(px) = len.resolve(em_basis, Some(style.font_size), viewport) {
+                    style.line_height = px.max(0.0) / style.font_size;
                 }
             }
             // Intrinsic keywords not meaningful for line-height — ignore.

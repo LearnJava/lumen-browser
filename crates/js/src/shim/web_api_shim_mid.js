@@ -2630,6 +2630,8 @@ var _LUMEN_TEXT_PROPERTIES = {
     // CSS Fonts L4 §2: `font-weight` `<number [1,1000]>`, `font-style` `oblique <angle>`,
     // `font-stretch` `<percentage>` (BUG-1410).
     'font-weight': 1, 'font-style': 1, 'font-stretch': 1,
+    // CSS Inline L3 (BUG-1529): `line-height`, `baseline-shift`, the `vertical-align` grammar, `initial-letter`.
+    'line-height': 1, 'baseline-shift': 1, 'vertical-align': 1, 'initial-letter': 1,
 };
 
 // CSS Text L4 §2.1 / §6.4.3: `white-space` and `text-wrap` are shorthands; the inline-style

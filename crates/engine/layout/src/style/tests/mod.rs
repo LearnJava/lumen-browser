@@ -156,13 +156,17 @@
     #[test]
     fn initial_letter_parse() {
         // normal → no effect.
-        assert_eq!(parse_initial_letter("normal"), Some((1.0, 0)));
-        assert_eq!(parse_initial_letter("  Normal "), Some((1.0, 0)));
+        assert_eq!(parse_initial_letter("normal"), Some((1.0, 0, 0)));
+        assert_eq!(parse_initial_letter("  Normal "), Some((1.0, 0, 0)));
         // single value: sink = auto (0 → floor(size) resolved at layout).
-        assert_eq!(parse_initial_letter("3"), Some((3.0, 0)));
-        assert_eq!(parse_initial_letter("2.5"), Some((2.5, 0)));
+        assert_eq!(parse_initial_letter("3"), Some((3.0, 0, 0)));
+        assert_eq!(parse_initial_letter("2.5"), Some((2.5, 0, 0)));
         // two values: explicit sink.
-        assert_eq!(parse_initial_letter("3 2"), Some((3.0, 2)));
+        assert_eq!(parse_initial_letter("3 2"), Some((3.0, 2, 0)));
+        // `drop` / `raise` keywords, in either order (CSS Inline L3 §5.1).
+        assert_eq!(parse_initial_letter("drop 3"), Some((3.0, 0, 1)));
+        assert_eq!(parse_initial_letter("2.5 raise"), Some((2.5, 1, 2)));
+        assert_eq!(parse_initial_letter("drop"), None);
         // size must be ≥ 1, sink ≥ 1.
         assert_eq!(parse_initial_letter("0.5"), None);
         assert_eq!(parse_initial_letter("3 0"), None);

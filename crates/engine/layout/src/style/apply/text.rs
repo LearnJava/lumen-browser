@@ -631,9 +631,10 @@ pub(in crate::style) fn apply_decl_text(
             };
         }
         "initial-letter" => {
-            if let Some((size, sink)) = parse_initial_letter(val) {
+            if let Some((size, sink, keyword)) = parse_initial_letter(val) {
                 style.initial_letter_size = size;
                 style.initial_letter_sink = sink;
+                style.initial_letter_keyword = keyword;
             }
         }
         "writing-mode" => {
@@ -843,6 +844,9 @@ pub(in crate::style) fn apply_decl_text(
                 "baseline" => style.baseline_shift = SvgBaselineShift::Baseline,
                 "sub" => style.baseline_shift = SvgBaselineShift::Sub,
                 "super" => style.baseline_shift = SvgBaselineShift::Super,
+                "top" => style.baseline_shift = SvgBaselineShift::Top,
+                "center" => style.baseline_shift = SvgBaselineShift::Center,
+                "bottom" => style.baseline_shift = SvgBaselineShift::Bottom,
                 other => {
                     if let Some(pct) = other.strip_suffix('%') {
                         if let Ok(n) = pct.trim().parse::<f32>() {
