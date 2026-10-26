@@ -247,40 +247,58 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
 
     // ── Тесты <video> / DrawImage placeholder ───────────────────────────────
 
-    #[test]
-    fn video_without_poster_emits_no_draw_image() {
-        // BUG-097: an empty <video> (no poster, no decoded frame) paints nothing —
-        // the element box is transparent, matching Chromium/Edge. The grey image
-        // placeholder is reserved for <img>, not media.
-        let dl = build(r#"<video src="clip.mp4"></video>"#, "");
-        let imgs = images(&dl);
-        assert!(
-            imgs.is_empty(),
-            "posterless video should emit no DrawImage, got {}",
-            imgs.len()
-        );
+    /// `src` of every DrawImage, in paint order.
+    fn image_srcs(dl: &DisplayList) -> Vec<&str> {
+        images(dl)
+            .into_iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawImage { src, .. } => Some(src.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn video_with_poster_emits_draw_image_with_poster_src() {
-        // When poster is set, DrawImage uses the poster URL so shell can register it.
-        let dl = build(r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#, "");
-        let imgs = images(&dl);
-        assert_eq!(imgs.len(), 1);
-        if let DisplayCommand::DrawImage { src, .. } = imgs[0] {
-            assert_eq!(src, "thumb.jpg");
+    fn video_without_poster_emits_only_the_frame_key() {
+        // BUG-097: an empty <video> (no poster, no decoded frame) paints nothing —
+        // the only DrawImage is the decoded-frame key `video:{nid}`, which every
+        // backend leaves transparent until the shell registers a frame. The grey
+        // image placeholder is reserved for <img>, not media.
+        let dl = build(r#"<video src="clip.mp4"></video>"#, "");
+        let srcs = image_srcs(&dl);
+        assert_eq!(srcs.len(), 1, "got {srcs:?}");
+        assert!(srcs[0].starts_with("video:"), "got {srcs:?}");
+    }
+
+    #[test]
+    fn video_paints_poster_then_live_frame_for_any_container() {
+        // mp4/webm and `<source>`-only videos used to paint the poster and
+        // never the decoded frame (only a `.gif` src did): sound played over a
+        // frozen picture. Now the poster is the bottom layer and the frame key
+        // is painted over it, whatever the source.
+        for html in [
+            r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#,
+            r#"<video poster="thumb.jpg"><source src="clip.webm"></video>"#,
+            r#"<video src="anim.gif" poster="thumb.jpg"></video>"#,
+        ] {
+            let dl = build(html, "");
+            let srcs = image_srcs(&dl);
+            assert_eq!(srcs.len(), 2, "{html}: {srcs:?}");
+            assert_eq!(srcs[0], "thumb.jpg", "{html}: {srcs:?}");
+            assert!(srcs[1].starts_with("video:"), "{html}: {srcs:?}");
         }
     }
 
     #[test]
     fn video_ua_default_rect_300_by_150() {
-        // Poster present so the replaced box paints a DrawImage at the UA-default rect.
         let dl = build(r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#, "");
         let imgs = images(&dl);
-        assert_eq!(imgs.len(), 1);
-        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
-            assert!((rect.width - 300.0).abs() < 0.1, "width={}", rect.width);
-            assert!((rect.height - 150.0).abs() < 0.1, "height={}", rect.height);
+        assert_eq!(imgs.len(), 2);
+        for img in imgs {
+            if let DisplayCommand::DrawImage { rect, .. } = img {
+                assert!((rect.width - 300.0).abs() < 0.1, "width={}", rect.width);
+                assert!((rect.height - 150.0).abs() < 0.1, "height={}", rect.height);
+            }
         }
     }
 
@@ -291,10 +309,12 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
             "video { width: 640px; height: 360px; }",
         );
         let imgs = images(&dl);
-        assert_eq!(imgs.len(), 1);
-        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
-            assert!((rect.width - 640.0).abs() < 0.1, "width={}", rect.width);
-            assert!((rect.height - 360.0).abs() < 0.1, "height={}", rect.height);
+        assert_eq!(imgs.len(), 2);
+        for img in imgs {
+            if let DisplayCommand::DrawImage { rect, .. } = img {
+                assert!((rect.width - 640.0).abs() < 0.1, "width={}", rect.width);
+                assert!((rect.height - 360.0).abs() < 0.1, "height={}", rect.height);
+            }
         }
     }
 
@@ -308,9 +328,11 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
             "*{margin:0}video{border:10px solid red;padding:5px}",
         );
         let imgs = images(&dl);
-        assert_eq!(imgs.len(), 1);
-        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
-            assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
+        assert_eq!(imgs.len(), 2);
+        for img in imgs {
+            if let DisplayCommand::DrawImage { rect, .. } = img {
+                assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
+            }
         }
     }
 

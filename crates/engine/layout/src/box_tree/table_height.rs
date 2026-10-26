@@ -158,7 +158,7 @@ fn grow_row(row: &mut LayoutBox, group: Option<usize>, row_field: usize, cum: f3
 /// `old_dy` и применяет сдвиг для `middle`/`bottom`; `top` и базовая линия остаются
 /// у верха (их сдвиг от роста строки не зависит).
 fn realign(cell: &mut LayoutBox, old_dy: f32) {
-    let va = cell.style.vertical_align;
+    let va = super::table_valign::cell_block_align(&cell.style);
     if !matches!(va, VerticalAlign::Middle | VerticalAlign::Bottom) {
         return;
     }

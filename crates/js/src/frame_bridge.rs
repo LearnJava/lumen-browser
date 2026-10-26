@@ -2293,21 +2293,22 @@ const FRAME_BRIDGE_SHIM: &str = r#"(function() {
     Object.defineProperty(w, 'self', { get: function() { return wins[bid]; }, configurable: true });
     Object.defineProperty(w, 'frames', { get: function() { return wins[bid]; }, configurable: true });
     // parent/top зависят от того, ЧЕЙ фасад читают и откуда. Фасад предка
-    // (PARENT_BID/TOP_BID в изоляте ребёнка) сам себе parent/top: контекст,
-    // в котором он построен, — его потомок. Фасад дочернего фрейма, читаемый
-    // из родителя, отсылает к настоящему окну читающего контекста (срез 2).
+    // (PARENT_BID/TOP_BID в изоляте ребёнка) ведёт вверх только к top
+    // (`parent.top === top`, `top.parent === top`): промежуточных предков
+    // изолят ребёнка не знает, поэтому у фрейма глубины ≥ 3 `parent.parent`
+    // — сразу top. Раньше фасад родителя был сам себе parent, и цикл поиска
+    // TCF-локатора `while (w !== top) w = w.parent` во внуке (pubmatic
+    // user_sync.html) крутился вечно. Фасад дочернего фрейма, читаемый из
+    // родителя, отсылает к настоящему окну читающего контекста (срез 2).
     Object.defineProperty(w, 'parent', {
       get: function() {
-        if (isAncestorBid(bid)) return wins[bid];
+        if (isAncestorBid(bid)) return topOfContext();
         return typeof window !== 'undefined' ? window : null;
       },
       configurable: true,
     });
     Object.defineProperty(w, 'top', {
-      get: function() {
-        if (isAncestorBid(bid)) return wins[bid];
-        return topOfContext();
-      },
+      get: function() { return topOfContext(); },
       configurable: true,
     });
     Object.defineProperty(w, 'closed', { get: function() { return false; }, configurable: true });

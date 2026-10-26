@@ -258,6 +258,7 @@ mod multicol_trampoline;
 mod multicol_vertical;
 mod vertical_trampoline;
 mod self_align;
+mod block_align_content;
 mod vertical_row;
 mod vertical_float;
 mod vertical_margins;

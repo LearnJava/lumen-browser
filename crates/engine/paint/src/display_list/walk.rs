@@ -197,7 +197,7 @@ pub(crate) fn emit_box_self(
             }
             emit_outline(b, out);
         }
-        BoxKind::Video { src, poster } => {
+        BoxKind::Video { poster, .. } => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -242,33 +242,7 @@ pub(crate) fn emit_box_self(
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 1: GIF-backed <video> — frame uploaded by shell under "video:{nid}".
-            // Non-GIF src or no src: fall back to poster image (Phase 0 behaviour).
-            // The shell's tick loop re-registers the current GIF frame under this key
-            // on every render tick, so the DrawImage command always shows the live frame.
-            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale the frame.
-            // BUG-431: destination is the content box, not the border box.
-            let nid = b.node.index();
-            let is_gif_src = src.to_ascii_lowercase().ends_with(".gif") && !src.is_empty();
-            if is_gif_src {
-                out.push(DisplayCommand::DrawImage {
-                    rect: content_box_rect(b),
-                    src: format!("video:{nid}"),
-                    alt: String::new(),
-                    object_fit: b.style.object_fit,
-                    object_position: b.style.object_position,
-                    image_rendering: b.style.image_rendering,
-                });
-            } else if !poster.is_empty() {
-                out.push(DisplayCommand::DrawImage {
-                    rect: content_box_rect(b),
-                    src: poster.clone(),
-                    alt: String::new(),
-                    object_fit: b.style.object_fit,
-                    object_position: b.style.object_position,
-                    image_rendering: b.style.image_rendering,
-                });
-            }
+            emit_video_content(b, poster, out);
             emit_outline(b, out);
         }
         BoxKind::Canvas { .. } => {
@@ -430,6 +404,34 @@ pub(crate) fn emit_box_self(
         apply_color_override(b, ov, &mut out[cmd_start..]);
     }
     emit_resize_grip(b, out);
+}
+
+/// `<video>` content: the poster (if any), then the current frame on top.
+///
+/// The shell registers decoded frames under `video:{nid}` — GIF and container
+/// sources alike — and re-registers the key on every playback tick, so the
+/// second DrawImage always shows the live frame. Until a frame is registered
+/// the key paints nothing in every backend (no grey placeholder), leaving the
+/// poster visible; with a poster the shell holds the first frame back until
+/// playback starts (HTML LS §4.8.11.7 "poster frame"). Earlier only a `.gif`
+/// `src` drew the frame, and an mp4/webm stayed frozen on the poster while its
+/// sound played.
+/// CSS: object-fit / object-position scale both images the same way.
+/// BUG-431: destination is the content box, not the border box.
+fn emit_video_content(b: &LayoutBox, poster: &str, out: &mut DisplayList) {
+    let rect = content_box_rect(b);
+    let draw = |src: String| DisplayCommand::DrawImage {
+        rect,
+        src,
+        alt: String::new(),
+        object_fit: b.style.object_fit,
+        object_position: b.style.object_position,
+        image_rendering: b.style.image_rendering,
+    };
+    if !poster.is_empty() {
+        out.push(draw(poster.to_string()));
+    }
+    out.push(draw(format!("video:{}", b.node.index())));
 }
 
 /// BUG-231: patch a box's own background fill and currentColor-derived border /
@@ -1558,7 +1560,7 @@ fn dispatch<'a>(
             }
             emit_outline(b, out);
         }
-        BoxKind::Video { src, poster } => {
+        BoxKind::Video { poster, .. } => {
             // visibility:hidden на `<video>` пропускает всё (no children).
             if !is_paint_visible(b) {
                 return close_position_layers(b, is_fixed, is_sticky, out);
@@ -1599,33 +1601,7 @@ fn dispatch<'a>(
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 1: GIF-backed <video> — frame uploaded by shell under "video:{nid}".
-            // Non-GIF src or no src: fall back to poster image (Phase 0 behaviour).
-            // The shell's tick loop re-registers the current GIF frame under this key
-            // on every render tick, so the DrawImage command always shows the live frame.
-            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale the frame.
-            // BUG-431: destination is the content box, not the border box.
-            let nid = b.node.index();
-            let is_gif_src = src.to_ascii_lowercase().ends_with(".gif") && !src.is_empty();
-            if is_gif_src {
-                out.push(DisplayCommand::DrawImage {
-                    rect: content_box_rect(b),
-                    src: format!("video:{nid}"),
-                    alt: String::new(),
-                    object_fit: b.style.object_fit,
-                    object_position: b.style.object_position,
-                    image_rendering: b.style.image_rendering,
-                });
-            } else if !poster.is_empty() {
-                out.push(DisplayCommand::DrawImage {
-                    rect: content_box_rect(b),
-                    src: poster.clone(),
-                    alt: String::new(),
-                    object_fit: b.style.object_fit,
-                    object_position: b.style.object_position,
-                    image_rendering: b.style.image_rendering,
-                });
-            }
+            emit_video_content(b, poster, out);
             emit_outline(b, out);
         }
         BoxKind::Canvas { .. } => {

@@ -31,6 +31,10 @@ fn style_text(doc: &Document) -> String {
     out
 }
 
+thread_local! {
+    static TITLE: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
 fn expectation(doc: &Document, b: &LayoutBox, key: &str) -> Option<f32> {
     let NodeData::Element { attrs, .. } = &doc.get(b.node).data else { return None };
     attrs.iter().find(|a| a.name.local == key).and_then(|a| a.value.trim().parse().ok())
@@ -44,13 +48,20 @@ fn check_box(
     seen: &mut std::collections::HashSet<NodeId>,
     out: &mut Vec<String>,
 ) {
+    let title = match &doc.get(b.node).data {
+        NodeData::Element { attrs, .. } => attrs.iter().find(|a| a.name.local == "title").map(|a| a.value.to_string()),
+        _ => None,
+    };
+    if let Some(t) = title {
+        TITLE.with(|c| *c.borrow_mut() = t);
+    }
     // Generated boxes (`::before`) share the node of their element: only the first box counts.
     let own = seen.insert(b.node);
     let label = || match &doc.get(b.node).data {
         NodeData::Element { name, attrs, .. } => {
             let style = attrs.iter().find(|a| a.name.local == "style").map_or("", |a| a.value.as_str());
             let class = attrs.iter().find(|a| a.name.local == "class").map_or("", |a| a.value.as_str());
-            format!("{file}: <{} class=\"{class}\" style=\"{style}\">", name.local)
+            format!("{file} [{}]: <{} class=\"{class}\" style=\"{style}\">", TITLE.with(|c| c.borrow().clone()), name.local)
         }
         _ => String::new(),
     };
@@ -95,7 +106,12 @@ pub(super) fn check_file(path: &str) -> Vec<String> {
         format!("{}/../../../tests/wpt/{path}", env!("CARGO_MANIFEST_DIR"))
     };
     let html = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("{full}: {e}"));
-    let doc = lumen_html_parser::parse(&html);
+    check_html(path, &html)
+}
+
+/// Mismatches of one document; `path` names it in the messages.
+pub(super) fn check_html(path: &str, html: &str) -> Vec<String> {
+    let doc = lumen_html_parser::parse(html);
     let sheet = lumen_css_parser::parse(&style_text(&doc));
     let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
     let mut out = Vec::new();
@@ -135,6 +151,10 @@ const PASSING: &[&str] = &[
     "css/css-align/blocks/safe-justify-self-htb.html",
     "css/css-align/blocks/safe-justify-self-vlr.html",
     "css/css-align/blocks/safe-justify-self-vrl.html",
+    "css/css-align/blocks/align-content-block-003.html",
+    "css/css-align/blocks/align-content-block-004.html",
+    "css/css-align/blocks/align-content-block-005.html",
+    "css/css-align/blocks/align-content-block-012.html",
     "css/css-align/abspos/align-self-default-overflow-htb-ltr-htb.html",
     "css/css-align/abspos/align-self-default-overflow-htb-rtl-htb.html",
     "css/css-align/abspos/align-self-default-overflow-vrl-ltr-htb.html",
