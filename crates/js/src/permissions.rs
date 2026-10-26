@@ -312,6 +312,16 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
     return true;
   };
 
+  // The embedder's verdict for `name`, or '' when none was set (or it was set
+  // back to `prompt`). `_lumen_ask_permission` consults it so a driver-set
+  // `granted`/`denied` settles a `getUserMedia`-style request without the
+  // popover, and `query()` and the request never disagree (BUG-1689).
+  __lumen_C._lumen_permission_override = function(name) {
+    name = String(name);
+    var s = OVERRIDES[name];
+    return (s === GRANTED || s === DENIED) ? s : '';
+  };
+
   // -- Permissions (§5) -------------------------------------------------------
 
   function Permissions() { throw new TypeError('Illegal constructor'); }
@@ -1143,6 +1153,21 @@ mod tests {
             assert!(!bool_eval(rt, "_lumen_permission_set('no-such-name', 'granted')"));
             assert!(!bool_eval(rt, "_lumen_permission_set('geolocation', 'maybe')"));
             assert_eq!(query(rt, "{ name: 'geolocation' }"), "resolved|granted");
+        });
+    }
+
+    /// BUG-1689: the embedder's `granted` / `denied` is readable by the request
+    /// path; `prompt` (and no verdict) reads as «none», so the popover is used.
+    #[test]
+    fn embedder_override_is_visible_to_request_path() {
+        with_permissions(|rt| {
+            assert_eq!(string_eval(rt, "_lumen_permission_override('microphone')"), "");
+            assert!(bool_eval(rt, "_lumen_permission_set('microphone', 'granted')"));
+            assert_eq!(string_eval(rt, "_lumen_permission_override('microphone')"), "granted");
+            assert!(bool_eval(rt, "_lumen_permission_set('microphone', 'denied')"));
+            assert_eq!(string_eval(rt, "_lumen_permission_override('microphone')"), "denied");
+            assert!(bool_eval(rt, "_lumen_permission_set('microphone', 'prompt')"));
+            assert_eq!(string_eval(rt, "_lumen_permission_override('microphone')"), "");
         });
     }
 }

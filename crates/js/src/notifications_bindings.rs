@@ -400,6 +400,12 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
   var _asks = {};
   __lumen_C._lumen_ask_permission = function(name) {
     return new Promise(function(resolve) {
+      // A decision set through `permissions.setPermission` (WebDriver BiDi)
+      // answers at once — no popover for a driver that cannot click it.
+      if (typeof _lumen_permission_override === 'function') {
+        var forced = _lumen_permission_override(name);
+        if (forced) { resolve(forced); return; }
+      }
       if (typeof _lumen_permission_prompt !== 'function') { resolve('granted'); return; }
       (_asks[name] = _asks[name] || []).push(resolve);
       try { _lumen_permission_prompt(name, _gesture()); } catch (e) { _lumen_permission_settle(name, 'denied'); }
@@ -547,6 +553,25 @@ mod tests_v8 {
         assert_eq!(rt.eval("got").unwrap(), JsValue::Null);
         rt.eval(&settle_script("microphone", "denied")).unwrap();
         assert_eq!(rt.eval("got").unwrap(), JsValue::String("denied".to_string()));
+    }
+
+    /// BUG-1689: a driver-set decision settles the request without queuing a
+    /// popover prompt; an unset one still goes to the queue.
+    #[test]
+    fn generic_prompt_honours_embedder_override() {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        install_notifications_mode(&rt, NotifPermMode::Interactive).unwrap();
+        rt.eval("globalThis._lumen_permission_override = function(n) { return n === 'microphone' ? 'denied' : ''; };")
+            .unwrap();
+        rt.eval("var got = null; _lumen_ask_permission('microphone').then(function(p) { got = p; });")
+            .unwrap();
+        rt.eval("0").unwrap();
+        assert_eq!(rt.eval("got").unwrap(), JsValue::String("denied".to_string()));
+        assert!(rt.take_permission_requests().is_empty());
+        rt.eval("var got2 = null; _lumen_ask_permission('clipboard-read').then(function(p) { got2 = p; });")
+            .unwrap();
+        assert_eq!(rt.take_permission_requests(), vec!["clipboard-read".to_string()]);
     }
 
     #[test]
