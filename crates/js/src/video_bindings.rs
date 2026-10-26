@@ -149,6 +149,7 @@ pub(crate) fn install_video_bindings_v8(
             {
                 e.play_epoch_ms = Some(now_ms as u64);
                 e.paused = false;
+                s.note_playback_change(now_ms);
             }
         });
         rt.register_native("__lumen_video_play", play)?;
@@ -162,6 +163,7 @@ pub(crate) fn install_video_bindings_v8(
                 if let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32)) {
                     e.freeze(now_ms as u64, rate);
                     e.paused = true;
+                    s.note_playback_change(now_ms);
                 }
             }
         });
@@ -179,6 +181,7 @@ pub(crate) fn install_video_bindings_v8(
                 if !e.paused {
                     e.play_epoch_ms = Some(now_ms as u64);
                 }
+                s.note_playback_change(now_ms);
             }
         });
         rt.register_native("__lumen_video_seek", seek)?;
@@ -332,6 +335,7 @@ pub(crate) fn install_video_bindings_v8(
                     e.play_epoch_ms = Some(now_ms as u64);
                 }
                 s.playback_rates.lock().unwrap().insert(nid, rate);
+                s.note_playback_change(now_ms);
             }
         });
         rt.register_native("__lumen_video_set_playback_rate", set_rate)?;
@@ -784,6 +788,41 @@ tt.length === 1
         let failed_78 = rt.eval("__lumen_video_failed(78)").unwrap();
         assert_eq!(failed_77, JsValue::Bool(true), "77 has a recorded failure");
         assert_eq!(failed_78, JsValue::Bool(false), "78 has no failure recorded");
+    }
+
+    /// `play`/`pause`/`seek`/rate natives must flag the change for the shell:
+    /// the frame timer is re-armed only from a redraw, so an `autoplay` start
+    /// or a `loop` restart from a JS timer otherwise froze the video.
+    #[test]
+    fn native_video_playback_changes_wake_the_shell() {
+        use crate::video_gif_store::{set_video_gif_store, VideoGifStore, VideoPlaybackState};
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = Arc::new(VideoGifStore::default());
+        store.playback.lock().unwrap().insert(1, VideoPlaybackState {
+            paused: true,
+            position_ms: 0,
+            play_epoch_ms: None,
+            cycle_ms: 6000,
+            loop_count: 1,
+            width: 0,
+            height: 0,
+        });
+        set_video_gif_store(store.clone());
+
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        assert!(!store.take_playback_change(), "installing bindings changes nothing");
+        for call in [
+            "__lumen_video_play(1, 1000)",
+            "__lumen_video_seek(1, 0, 7000)",
+            "__lumen_video_set_playback_rate(1, 2.0, 7100)",
+            "__lumen_video_pause(1, 7200)",
+        ] {
+            rt.eval(call).unwrap();
+            assert!(store.take_playback_change(), "{call} must wake the shell");
+        }
+        rt.eval("__lumen_video_play(2, 1000)").unwrap();
+        assert!(!store.take_playback_change(), "unknown node changes nothing");
     }
 
     /// GAP-MEDIADECODE срез 18: `__lumen_video_set_playback_rate` scales the
