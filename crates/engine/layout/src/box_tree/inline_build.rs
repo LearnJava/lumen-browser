@@ -792,6 +792,60 @@ pub(crate) fn breaks_inline_row(b: &LayoutBox) -> bool {
         )
 }
 
+/// `<br>` is a block-level box of zero height here (UA `display: block`), which is right when it
+/// ends a line of text (`B<br>`), but a `<br>` that no text precedes — leading, doubled, after a
+/// block — ends a line of its own that holds nothing (HTML rendering §15.3.1 "forced line break",
+/// CSS Text L3 §5.1; BUG-1411). Such a `<br>` becomes an `InlineRun` made of one empty forced-break
+/// segment, which `wrap_inline_run` lays out as an empty line box of the strut's height.
+pub(crate) fn give_leading_breaks_a_line(doc: &Document, children: &mut [LayoutBox]) {
+    // Whether the last in-flow child left an unterminated line that the next `<br>` ends.
+    let mut open_line = false;
+    for child in children.iter_mut() {
+        let out_of_flow = child.style.float_side != FloatSide::None
+            || matches!(child.style.position, Position::Absolute | Position::Fixed);
+        match &child.kind {
+            _ if out_of_flow || child.style.display == Display::None => {}
+            BoxKind::Marker { .. } => {}
+            BoxKind::InlineRun { .. } | BoxKind::InlineBlockRow => open_line = true,
+            BoxKind::Block if child.children.is_empty() && is_br_element(doc, child.node) => {
+                if open_line {
+                    open_line = false;
+                } else {
+                    let style = child.style.clone();
+                    child.kind = BoxKind::InlineRun {
+                        segments: vec![InlineSegment {
+                            text: String::new(),
+                            style,
+                            pre_space: 0.0,
+                            post_space: 0.0,
+                            is_element_box: false,
+                            img_src: None,
+                            img_is_lazy: false,
+                            img_width: 0.0,
+                            forced_break: true,
+                            pseudo_kind: PseudoKind::None,
+                            source_node: child.node,
+                            source_char_offset: 0,
+                            bidi_level: 0,
+                            bidi_scopes: Vec::new(),
+                            bidi_isolate: None,
+                        }],
+                        lines: vec![],
+                        first_line_style: None,
+                        row_continuation_width: None,
+                        first_line_inset: 0.0,
+                    };
+                }
+            }
+            _ => open_line = false,
+        }
+    }
+}
+
+fn is_br_element(doc: &Document, node: NodeId) -> bool {
+    matches!(&doc.get(node).data, NodeData::Element { name, .. } if name.local == "br")
+}
+
 pub(crate) fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<LayoutBox>) -> LayoutBox {
     let style = anon_style(parent);
     LayoutBox {
