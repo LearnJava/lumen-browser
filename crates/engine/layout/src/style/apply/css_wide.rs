@@ -404,6 +404,7 @@ fn apply_css_wide_keyword_with(
             } else {
                 init.text_decoration_line
             };
+            style.text_decoration_line_declared = true;
             // Shorthand сбрасывает также color, style и thickness (L4 §2.1); longhand
             // `text-decoration-line` трогает только линии.
             if prop == "text-decoration" {
