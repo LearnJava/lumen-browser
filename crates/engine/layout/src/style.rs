@@ -309,7 +309,7 @@ pub use values::svg_filter::{
 };
 pub use values::transform::{
     BackfaceVisibility, ClipPath, GeometryBox, SvgClipPath, SvgClipPlacement, SvgClipSubpath, FilterFn, FilterUrl, GradientStop, MaskComposite, MaskLayer, MaskMode,
-    ShapeValue, TransformFn, TransformStyle,
+    ShapeValue, TransformBox, TransformFn, TransformStyle,
 };
 // Вызывателей внутри производственного `style.rs` у них нет — только
 // `style::tests::*` через цепочку `use super::*` (тот же приём, что у

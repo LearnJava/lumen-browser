@@ -1379,6 +1379,9 @@ fn apply_css_wide_keyword_with(
         "scale" => {
             style.scale = if inh_only_inherit { inherited.scale } else { init.scale };
         }
+        "transform-box" => {
+            style.transform_box = if inh_only_inherit { inherited.transform_box } else { init.transform_box };
+        }
         "filter" => {
             style.filter = if inh_only_inherit { inherited.filter.clone() } else { init.filter.clone() };
         }

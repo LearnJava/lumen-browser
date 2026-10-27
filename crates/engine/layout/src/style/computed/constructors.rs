@@ -250,6 +250,7 @@ impl ComputedStyle {
             perspective: None,
             perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
             transform_style: TransformStyle::Flat,
+            transform_box: TransformBox::ViewBox,
             backface_visibility: BackfaceVisibility::Visible,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
@@ -697,6 +698,7 @@ impl ComputedStyle {
             perspective: None,
             perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
             transform_style: TransformStyle::Flat,
+            transform_box: TransformBox::ViewBox,
             backface_visibility: BackfaceVisibility::Visible,
             // CSS Lists — list-style-* наследуются.
             list_style_type: inherited.list_style_type.clone(),
