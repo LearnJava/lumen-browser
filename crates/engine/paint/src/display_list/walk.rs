@@ -1266,7 +1266,7 @@ fn dispatch<'a>(
             let has_filter = !b.style.filter.is_empty();
             if has_filter {
                 out.push(DisplayCommand::PushFilter {
-                    filters: b.style.filter.clone(),
+                    filters: b.style.filter.iter().map(|f| f.with_current_color(b.style.color)).collect(),
                     bounds: Some(b.rect),
                 });
             }

@@ -633,6 +633,7 @@ fn same_filter_kind(a: &FilterFn, b: &FilterFn) -> bool {
             | (Opacity(_), Opacity(_))
             | (Saturate(_), Saturate(_))
             | (Sepia(_), Sepia(_))
+            | (DropShadow { .. }, DropShadow { .. })
     )
 }
 
@@ -651,6 +652,14 @@ fn filter_identity_for(f: &FilterFn) -> FilterFn {
         FilterFn::Opacity(_) => FilterFn::Opacity(1.0),
         FilterFn::Saturate(_) => FilterFn::Saturate(1.0),
         FilterFn::Sepia(_) => FilterFn::Sepia(0.0),
+        // Lacuna (Filter Effects L1 §«Interpolation»): длины 0, цвет прозрачный. Тот же цвет с
+        // нулевой альфой — тогда интерполяция в premultiplied-виде не уводит тень в чёрный.
+        FilterFn::DropShadow { color, .. } => FilterFn::DropShadow {
+            dx: 0.0,
+            dy: 0.0,
+            blur: 0.0,
+            color: Some(Color { a: 0, ..color.unwrap_or(Color::BLACK) }),
+        },
         // `url()` не интерполируется (дискретно): нейтрального значения нет.
         FilterFn::Url(_) => f.clone(),
     }
@@ -674,6 +683,20 @@ fn interpolate_filter_fn_same_kind(a: &FilterFn, b: &FilterFn, t: f32) -> Filter
         (Opacity(a), Opacity(b)) => Opacity(lerp_f32(*a, *b, t)),
         (Saturate(a), Saturate(b)) => Saturate(lerp_f32(*a, *b, t)),
         (Sepia(a), Sepia(b)) => Sepia(lerp_f32(*a, *b, t)),
+        (
+            DropShadow { dx: ax, dy: ay, blur: ab, color: ac },
+            DropShadow { dx: bx, dy: by, blur: bb, color: bc },
+        ) => DropShadow {
+            dx: lerp_f32(*ax, *bx, t),
+            dy: lerp_f32(*ay, *by, t),
+            blur: lerp_f32(*ab, *bb, t),
+            // `currentcolor` не раскрыть без стиля: смешанная пара переключается пополам.
+            color: match (ac, bc) {
+                (Some(a), Some(b)) => Some(interpolate_color(*a, *b, t)),
+                (None, None) => None,
+                _ => if t < 0.5 { *ac } else { *bc },
+            },
+        },
         _ => a.clone(),
     }
 }
@@ -2731,6 +2754,31 @@ mod tests {
         let from = [FilterFn::Blur(0.0), FilterFn::Grayscale(0.0)];
         let to = [FilterFn::Blur(10.0), FilterFn::Contrast(2.0)];
         assert_eq!(interpolate_filter_list(&from, &to, 0.5), None);
+    }
+
+    #[test]
+    fn filter_list_drop_shadow_to_none_fades_to_transparent_shadow() {
+        // drop-shadow(30px 30px 0 black) → none при t=0.5: 15px 15px и чёрный с alpha ≈ 0.5
+        // (WPT css-filters-animation-drop-shadow).
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let from = [FilterFn::DropShadow { dx: 30.0, dy: 30.0, blur: 0.0, color: Some(black) }];
+        let r = interpolate_filter_list(&from, &[], 0.5).expect("padded with identity");
+        match r.as_slice() {
+            [FilterFn::DropShadow { dx, dy, blur, color: Some(c) }] => {
+                assert_eq!((*dx, *dy, *blur), (15.0, 15.0, 0.0));
+                assert_eq!((c.r, c.g, c.b), (0, 0, 0));
+                assert!((i32::from(c.a) - 128).abs() <= 1, "alpha {}", c.a);
+            }
+            other => panic!("ожидалась одна тень, получено {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_list_drop_shadow_currentcolor_pair_stays_currentcolor() {
+        let a = [FilterFn::DropShadow { dx: 0.0, dy: 0.0, blur: 2.0, color: None }];
+        let b = [FilterFn::DropShadow { dx: 10.0, dy: 0.0, blur: 4.0, color: None }];
+        let r = interpolate_filter_list(&a, &b, 0.5).expect("same kind");
+        assert_eq!(r, vec![FilterFn::DropShadow { dx: 5.0, dy: 0.0, blur: 3.0, color: None }]);
     }
 
     #[test]

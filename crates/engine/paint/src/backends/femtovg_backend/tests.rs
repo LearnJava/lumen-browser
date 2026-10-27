@@ -1240,3 +1240,21 @@ fn svg_url_filter_is_not_cacheable_and_floods_region_in_snapshot() {
     assert_eq!(at(12, 12), vec![0, 0, 0, 0]);
     assert_eq!(at(3, 8), vec![0, 0, 0, 0]);
 }
+
+/// `drop-shadow()` читает слой целиком (тень уходит за ink), поэтому, как `url()`, не
+/// кэшируется как цветовая матрица; снимок получает смещённую копию под источником.
+#[test]
+fn css_drop_shadow_is_not_cacheable_and_offsets_copy_in_snapshot() {
+    use lumen_core::geom::Rect;
+    use lumen_layout::{Color, FilterFn};
+    let f = FilterFn::DropShadow { dx: 6.0, dy: 0.0, blur: 0.0, color: Some(Color { r: 0, g: 128, b: 0, a: 255 }) };
+    assert!(!FemtovgBackend::filter_is_bbox_cacheable(std::slice::from_ref(&f)));
+    // Снимок 20×20 в device px при масштабе 2: смещение 6 CSS px = 12 device px.
+    let mut rgba = vec![0u8; 20 * 20 * 4];
+    rgba[(2 * 20 + 2) * 4..(2 * 20 + 2) * 4 + 4].copy_from_slice(&[0, 0, 255, 255]);
+    apply_svg_filter_rgba(&mut rgba, (20, 20), &f, Rect::new(1.0, 1.0, 2.0, 2.0), 2.0);
+    let at = |x: usize, y: usize| rgba[(y * 20 + x) * 4..(y * 20 + x) * 4 + 4].to_vec();
+    assert_eq!(at(2, 2), vec![0, 0, 255, 255]);
+    assert_eq!(at(14, 2), vec![0, 128, 0, 255]);
+    assert_eq!(at(8, 2), vec![0, 0, 0, 0]);
+}

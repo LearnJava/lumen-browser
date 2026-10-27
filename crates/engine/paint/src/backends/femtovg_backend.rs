@@ -1476,7 +1476,7 @@ fn apply_filter_rgba(rgba: &mut [u8], filter: &lumen_layout::FilterFn) {
                 b = fmix(b, sb, *amt);
             }
             // SVG-фильтр — `apply_svg_filter_rgba` (графу нужен весь слой, не пиксель).
-            FilterFn::Url(_) => {}
+            FilterFn::Url(_) | FilterFn::DropShadow { .. } => {}
         }
 
         // Re-premultiply: na is new alpha (f32 0..255), channel = straight * na.
@@ -2709,7 +2709,7 @@ impl FemtovgBackend {
                 for f in &filters {
                     match f {
                         lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_) => {}
-                        lumen_layout::FilterFn::Url(_) => {
+                        lumen_layout::FilterFn::Url(_) | lumen_layout::FilterFn::DropShadow { .. } => {
                             apply_svg_filter_rgba(&mut rgba, (iw, ih), f, svg_bounds, self.scale as f32);
                         }
                         other => apply_filter_rgba(&mut rgba, other),
@@ -3789,7 +3789,7 @@ impl FemtovgBackend {
                 lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
             )
         });
-        let has_svg = filters.iter().any(|f| matches!(f, lumen_layout::FilterFn::Url(_)));
+        let has_svg = filters.iter().any(lumen_layout::FilterFn::is_cpu_window_pass);
         !has_blur && !has_svg && has_color_matrix
     }
 
@@ -4811,7 +4811,7 @@ impl FemtovgBackend {
                     // (`feFlood`, смещение) и читает слой целиком — как блюр.
                     let has_svg = filters
                         .iter()
-                        .any(|f| matches!(f, lumen_layout::FilterFn::Url(_)));
+                        .any(lumen_layout::FilterFn::is_cpu_window_pass);
                     let acquired = if has_blur || has_svg {
                         None
                     } else {

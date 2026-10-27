@@ -300,7 +300,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
     }
     if !s.filter.is_empty() {
         pre.push(DisplayCommand::PushFilter {
-            filters: s.filter.clone(),
+            filters: s.filter.iter().map(|f| f.with_current_color(s.color)).collect(),
             bounds: Some(b.rect),
         });
         post.push(DisplayCommand::PopFilter);

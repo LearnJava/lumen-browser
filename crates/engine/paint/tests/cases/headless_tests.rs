@@ -1921,3 +1921,39 @@ fn headless_svg_filter_url_flood_paints_filter_region() {
     assert_eq!(px(7, 7), [0, 0, 255], "заливка выходит за border box, внутрь области фильтра");
     assert_eq!(px(40, 40), [255, 255, 255], "вне области фильтра — фон");
 }
+
+/// `filter: drop-shadow()` в окне (wgpu): слой читается на CPU, тень смещена на
+/// 30 px вправо; раньше функция в окне была тождеством.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn headless_css_drop_shadow_paints_offset_copy() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let square = Rect { x: 4.0, y: 4.0, width: 10.0, height: 10.0 };
+    let dl = vec![
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 0.0, width: 64.0, height: 64.0 },
+            color: Color { r: 255, g: 255, b: 255, a: 255 },
+        },
+        DisplayCommand::PushFilter {
+            filters: vec![FilterFn::DropShadow {
+                dx: 30.0,
+                dy: 0.0,
+                blur: 0.0,
+                color: Some(Color { r: 0, g: 128, b: 0, a: 255 }),
+            }],
+            bounds: Some(square),
+        },
+        DisplayCommand::FillRect { rect: square, color: Color { r: 0, g: 0, b: 255, a: 255 } },
+        DisplayCommand::PopFilter,
+    ];
+    let img = r.render_to_image(&dl, 0.0, 0.0).expect("render_to_image");
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        [img.data[o], img.data[o + 1], img.data[o + 2]]
+    };
+    assert_eq!(px(8, 8), [0, 0, 255], "источник");
+    assert_eq!(px(38, 8), [0, 128, 0], "тень правее на 30 px");
+    assert_eq!(px(24, 8), [255, 255, 255], "между ними пусто");
+}

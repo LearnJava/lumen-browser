@@ -2631,7 +2631,7 @@ impl Renderer {
                         flush_batch!();
                         // SVG-FILTER-5: `url(#id)` может красить за ink слоя
                         // (`feFlood`, смещение) — границы контента не годятся.
-                        let has_svg = filters.iter().any(|f| matches!(f, FilterFn::Url(_)));
+                        let has_svg = filters.iter().any(FilterFn::is_cpu_window_pass);
                         let content = if bbox_scissor_disabled() || has_svg {
                             LevelBounds::Unbounded
                         } else {

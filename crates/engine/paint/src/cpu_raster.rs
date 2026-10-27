@@ -19,6 +19,7 @@ use lumen_core::geom::Rect;
 use lumen_core::FontProvider;
 use crate::cpu_font_resolve::resolve_face_candidates;
 
+mod drop_shadow;
 pub(crate) mod text_stroke;
 
 /// How a pushed off-screen layer is composited back onto the layer below when
@@ -974,6 +975,9 @@ fn close_layer(
     op: &LayerComposite,
     image_map: &std::collections::HashMap<&str, &Image>,
 ) {
+    // `url()` and `drop-shadow()` run on a window of the layer that may outgrow its ink.
+    let has_window_pass = matches!(op, LayerComposite::Filter { filters, .. }
+        if filters.iter().any(FilterFn::is_cpu_window_pass));
     // An SVG filter can paint on an empty source (`feFlood`), so it alone runs on
     // an untouched layer.
     let has_svg = matches!(op, LayerComposite::Filter { filters, .. }
@@ -1007,7 +1011,7 @@ fn close_layer(
             dst.mark(src_dirty);
         }
         LayerComposite::Filter { filters, bounds, clip } => {
-            let written = if has_svg {
+            let written = if has_window_pass {
                 composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, *clip, src_dirty, image_map)
             } else {
                 composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
@@ -1518,6 +1522,10 @@ pub(crate) fn svg_filter_chain_window(
     for f in filters {
         match f {
             FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma * scale),
+            FilterFn::DropShadow { dx, dy, blur, color } => {
+                let color = color.unwrap_or(Color::BLACK);
+                cur = drop_shadow::apply(&cur, *dx * scale, *dy * scale, *blur * scale, color);
+            }
             FilterFn::Url(u) => {
                 if let Some(win) =
                     crate::svg_filter::apply_scaled(&cur, origin, canvas, u, bounds, image_map, scale)
@@ -1533,10 +1541,11 @@ pub(crate) fn svg_filter_chain_window(
 }
 
 /// Total spatial reach in px of a filter chain — how far the chain can carry
-/// ink beyond its source. Only `blur()` is spatial: three box passes of radius
-/// `r` (the same `r` [`gaussian_blur`] derives from σ — keep the formulas in
-/// sync) reach `3r` per side; the colour-matrix filters are per-pixel. Chained
-/// blurs add their reaches.
+/// ink beyond its source. `blur()` and `drop-shadow()` are spatial: three box
+/// passes of radius `r` (the same `r` [`gaussian_blur`] derives from σ — keep the
+/// formulas in sync) reach `3r` per side, a shadow adds its offset on top
+/// ([`drop_shadow::reach`]); the colour-matrix filters are per-pixel. Chained
+/// functions add their reaches.
 fn filter_chain_reach(filters: &[FilterFn]) -> f32 {
     filters
         .iter()
@@ -1545,6 +1554,7 @@ fn filter_chain_reach(filters: &[FilterFn]) -> f32 {
                 let radius = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0).round();
                 3.0 * radius.max(0.0)
             }
+            FilterFn::DropShadow { dx, dy, blur, .. } => drop_shadow::reach(*dx, *dy, *blur),
             _ => 0.0,
         })
         .sum()
@@ -1779,7 +1789,7 @@ fn apply_color_filter(pixmap: &mut tiny_skia::Pixmap, f: &FilterFn) {
         };
         let mut a_unit = a / 255.0;
         match f {
-            FilterFn::Blur(_) | FilterFn::Url(_) => {}
+            FilterFn::Blur(_) | FilterFn::Url(_) | FilterFn::DropShadow { .. } => {}
             FilterFn::Brightness(amt) => {
                 r = (r * amt).clamp(0.0, 1.0);
                 g = (g * amt).clamp(0.0, 1.0);

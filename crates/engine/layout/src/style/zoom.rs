@@ -217,8 +217,14 @@ pub(crate) fn scale_visual_lengths(style: &mut ComputedStyle, z: f32, rem_k: f32
     }
     style.outline_width *= z;
     for f in &mut style.filter {
-        if let FilterFn::Blur(r) = f {
-            *r *= z;
+        match f {
+            FilterFn::Blur(r) => *r *= z,
+            FilterFn::DropShadow { dx, dy, blur, .. } => {
+                *dx *= z;
+                *dy *= z;
+                *blur *= z;
+            }
+            _ => {}
         }
     }
     if let FlexBasis::Length(l) = &mut style.flex_basis {

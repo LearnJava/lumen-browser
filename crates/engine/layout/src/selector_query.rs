@@ -1009,7 +1009,7 @@ fn matrix_num(v: f32) -> String {
     if r.abs() < 1e-4 { format!("{:e}", r) } else { format!("{}", r) }
 }
 
-fn filter_fn_to_css(f: &FilterFn) -> String {
+fn filter_fn_to_css(f: &FilterFn, current: Color) -> String {
     match f {
         FilterFn::Blur(r) => format!("blur({})", px_str(*r)),
         FilterFn::Brightness(v) => format!("brightness({})", v),
@@ -1020,6 +1020,13 @@ fn filter_fn_to_css(f: &FilterFn) -> String {
         FilterFn::Opacity(v) => format!("opacity({})", v),
         FilterFn::Saturate(v) => format!("saturate({})", v),
         FilterFn::Sepia(v) => format!("sepia({})", v),
+        FilterFn::DropShadow { dx, dy, blur, color } => format!(
+            "drop-shadow({} {} {} {})",
+            color_to_css(color.unwrap_or(current)),
+            px_str(*dx),
+            px_str(*dy),
+            px_str(*blur)
+        ),
         FilterFn::Url(u) => format!("url(\"#{}\")", u.id),
     }
 }
@@ -2034,7 +2041,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("filter".into(), if style.filter.is_empty() {
         "none".into()
     } else {
-        style.filter.iter().map(filter_fn_to_css).collect::<Vec<_>>().join(" ")
+        style.filter.iter().map(|f| filter_fn_to_css(f, style.color)).collect::<Vec<_>>().join(" ")
     });
 
     // ── Compositing ───────────────────────────────────────────────
