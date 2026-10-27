@@ -18,10 +18,10 @@ true to code; keep it honest about ⬜ gaps too.
 
 Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
-WPT, whole corpus (68 116 automatable ids): **42.92 %** on `d4114145a` (WPT-RUN-16, 2026-10-22/23;
-42.65 % as snapped, before the popup-gate runner fix) against 33.71 % on `d913a39b9` (2026-10-05) —
-breakdown, verdicts on every drop and caveats in [docs/wpt/pass-rate.md](docs/wpt/pass-rate.md)
-§«Четвёртая полная цифра».
+WPT, whole corpus (68 116 automatable ids): **44.80 %** on `a76e4c7b9` (WPT-HOST-WPT, 2026-10-27,
+first run on upstream `browser_host: web-platform.test`) against 42.92 % on `d4114145a` (2026-10-22/23) —
+breakdown, host-vs-engine split and caveats in [docs/wpt/pass-rate.md](docs/wpt/pass-rate.md)
+§«Пятая полная цифра».
 
 ---
 
