@@ -470,21 +470,38 @@ pub(crate) fn split_inline_pieces(
     let mut rest = segs;
     // Escape-ы приходят в порядке обхода, их `at` не убывает; идём с конца,
     // чтобы отрезать хвост `split_off`-ом без сдвигов уже отданных индексов.
-    let mut tails: Vec<(Vec<InlineSegment>, NodeId, Arc<ComputedStyle>)> = Vec::new();
+    let mut tails: Vec<(Vec<InlineSegment>, InlineEscape)> = Vec::new();
     for esc in escapes.into_iter().rev() {
         let at = esc.at.min(rest.len());
-        tails.push((rest.split_off(at), esc.node, esc.inherited));
+        tails.push((rest.split_off(at), esc));
     }
     push_run(std::mem::take(&mut rest), out_items);
-    for (tail, node, inherited) in tails.into_iter().rev() {
-        let child = build_box_or_reuse(
-            doc, sheet, node, &inherited, viewport, flat, counters, registry, dark_mode, prev_index,
+    for (tail, esc) in tails.into_iter().rev() {
+        let mut child = build_box_or_reuse(
+            doc, sheet, esc.node, &esc.inherited, viewport, flat, counters, registry, dark_mode, prev_index,
         );
         if !matches!(child.kind, BoxKind::Skip) {
+            apply_inline_effects(&mut child, &esc.effects);
             out_items.push(child);
         }
         push_run(tail, out_items);
     }
+}
+
+/// Filter Effects L1 §3 / Compositing L1 §3.1: `filter` и `opacity` inline-элемента действуют
+/// на всех его потомков, в том числе на блок или float, который разрезал inline-бокс и лёг
+/// отдельным боксом потока (BUG-1543). Эффект ложится на сам бокс: цепочка `filter` потомка
+/// идёт первой, затем цепочки предков от внутреннего к внешнему; `opacity` перемножается.
+fn apply_inline_effects(child: &mut LayoutBox, effects: &[InlineEffectScope]) {
+    if effects.is_empty() {
+        return;
+    }
+    let mut style = (*child.style).clone();
+    for scope in effects.iter().rev() {
+        style.filter.extend(scope.style.filter.iter().cloned());
+        style.opacity *= scope.style.opacity;
+    }
+    child.style = Arc::new(style);
 }
 
 /// CSS Pseudo-elements L4 §5.3: `::first-line` относится к первой строке блока,
@@ -946,6 +963,10 @@ pub(crate) struct InlineEscape {
     /// собственный стиль здесь не подходит: цвет/шрифт `<span>`-а между ними
     /// был бы потерян.
     inherited: Arc<ComputedStyle>,
+    /// Объемлющие inline-элементы с `opacity < 1` / `filter`, внешний первым: бокс рисуется
+    /// вне их сегментов, поэтому их эффект переносится на него самого (Filter Effects L1 §3,
+    /// BUG-1543).
+    effects: Vec<InlineEffectScope>,
 }
 
 /// Текст, уже стоящий в строке непосредственно перед новым текстовым узлом: хвост последнего
@@ -1210,7 +1231,7 @@ pub(crate) fn collect_inline_segments(
             // её нет, вертикальный размер строки считается по метрикам шрифта,
             // и `<img width=50 height=50>` внутри `<a>` рисовался 50×16.8.
             if !produces_inline_segments_nested(doc, id, s.display) {
-                escapes.push(InlineEscape { at: out.len(), node: id, inherited: inherited.clone() });
+                escapes.push(InlineEscape { at: out.len(), node: id, inherited: inherited.clone(), effects: Vec::new() });
                 return;
             }
             // Compute horizontal inline box model: margin + border + padding.
@@ -1357,6 +1378,9 @@ pub(crate) fn collect_inline_segments(
                 let scope = InlineEffectScope { node: id, style: s.clone() };
                 for seg in &mut out[start..] {
                     seg.effect_scopes.insert(0, scope.clone());
+                }
+                for esc in &mut escapes[esc_start..] {
+                    esc.effects.insert(0, scope.clone());
                 }
             }
             // CSS Writing Modes L4 §2.2: the whole element, however many segments its
