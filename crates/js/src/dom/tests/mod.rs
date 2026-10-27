@@ -339,6 +339,7 @@ mod overflow_overlay;
 mod v8_bug1325_css_text_cssom;
 mod v8_bug1410_font_cssom;
 mod v8_bug1529_inline_cssom;
+mod v8_bug1535_table_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1297_background_cssom;
 #[cfg(feature = "v8-backend")]

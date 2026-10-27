@@ -30,3 +30,9 @@ WPT-RUN-14 срез 24: `css-tables/parsing/*-computed`/`*-invalid`, `inheritanc
 ## Как проверить
 
 `css/css-tables/parsing/border-collapse-computed.html`, `parsing/border-spacing-valid.html`.
+
+## Срез 1 (2026-10-27) — CSSOM таблиц и `border-spacing`
+
+Сделано: `border-collapse`, `caption-side`, `empty-cells`, `table-layout` в карте `computed_style_to_map` (`selector_query.rs`, `as_str()` у enum-ов в `style/values/box_model.rs`) и в `_LUMEN_KEYWORD_PROPERTIES` шима (неверные ключевые слова отбрасываются в `element.style`). `border-spacing`: разбор `<length>{1,2}` в `style/apply/layout.rs` резолвит `em`/`calc()` на каскаде (результат < 0 зажимается в 0), `%`, литерал < 0, безразмерное число и три компонента отвергаются; каноническая запись для `element.style` — `values/text_cssom.rs::border_spacing` (`calc(0.5em + 10px) calc(-0.5em + 10px)`, равные компоненты схлопываются). Тесты — `selector_query/tests.rs::computed_map_table_properties_bug1535`, `crates/js/src/dom/tests/v8_bug1535_table_cssom.rs`. WPT: `css-tables/parsing` 20/37 → 37/37, `inheritance.html`, `fixed-layout-2.html` проходят, `animations/border-spacing-interpolation.html` 96 → 104 из 120.
+
+Остаток (статус OPEN): интерполяция `border-spacing` (16 сабтестов) — отрицательный прогресс даёт `-6px` вместо 0, `inherit`/`unset` в `from` берут не значение родителя.

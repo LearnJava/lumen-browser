@@ -37,6 +37,7 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
         "baseline-shift" => baseline_shift(v),
         "vertical-align" => vertical_align(v),
         "initial-letter" => initial_letter(v),
+        "border-spacing" => border_spacing(v),
         "text-transform" => {
             let (case, extra) = TextTransformExtra::parse(v)?;
             Some(extra.serialize(case))
@@ -48,6 +49,21 @@ pub fn canonical_specified_text(prop: &str, value: &str) -> Option<String> {
 /// Значение целиком — один вызов math-функции (`calc(…)`, `min(…)`…).
 fn is_math_call(v: &str) -> bool {
     v.find('(').is_some_and(|open| v.ends_with(')') && v[..open].bytes().all(|b| b.is_ascii_alphabetic()))
+}
+
+/// `border-spacing` (CSS Tables L2): `<length [0,∞]>{1,2}`, без `%`; одинаковые компоненты
+/// сворачиваются в одно значение (кратчайшая запись, CSSOM §serialize a CSS value).
+fn border_spacing(v: &str) -> Option<String> {
+    let parts: Vec<String> = split_top_level_ws(v)
+        .into_iter()
+        .map(|tok| canonical_length_sorted(tok, false, true).filter(|c| !c.contains('%')))
+        .collect::<Option<_>>()?;
+    match parts.as_slice() {
+        [one] => Some(one.clone()),
+        [h, v] if h == v => Some(h.clone()),
+        [h, v] => Some(format!("{h} {v}")),
+        _ => None,
+    }
 }
 
 /// `font-weight` (CSS Fonts L4 §2.2): `normal | bold | bolder | lighter | <number [1,1000]>`;

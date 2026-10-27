@@ -1980,3 +1980,30 @@ fn computed_map_inline_properties_bug1529() {
     assert_eq!(get("div { initial-letter: 1.23 calc(45.6) }", "initial-letter"), "1.23 46");
     assert_eq!(get("div { initial-letter: calc(sign(1rem - 1px) * 1.5) }", "initial-letter"), "1.5");
 }
+
+#[test]
+fn computed_map_table_properties_bug1535() {
+    let get = |css: &str, key: &str| {
+        div_computed_map("<div>x</div>", css).get(key).cloned().unwrap_or_default()
+    };
+    for (prop, init) in [
+        ("border-collapse", "separate"),
+        ("caption-side", "top"),
+        ("empty-cells", "show"),
+        ("table-layout", "auto"),
+    ] {
+        assert_eq!(get("", prop), init, "initial {prop}");
+    }
+    assert_eq!(get("div { border-collapse: collapse }", "border-collapse"), "collapse");
+    assert_eq!(get("div { caption-side: bottom }", "caption-side"), "bottom");
+    assert_eq!(get("div { empty-cells: hide }", "empty-cells"), "hide");
+    assert_eq!(get("div { table-layout: fixed }", "table-layout"), "fixed");
+    // `border-spacing`: `calc()` resolves against the element's font; a negative result clamps to 0.
+    let fs = "div { font-size: 40px; ";
+    assert_eq!(get(&format!("{fs}border-spacing: calc(10px + 0.5em) calc(10px - 0.5em) }}"), "border-spacing"), "30px 0px");
+    assert_eq!(get(&format!("{fs}border-spacing: calc(10px - 0.5em) calc(10px + 0.5em) }}"), "border-spacing"), "0px 30px");
+    // `%`, a literal negative and a third component are invalid: the initial value stays.
+    for bad in ["10%", "-20px", "10px 20px 30px", "calc(10px + 5%)"] {
+        assert_eq!(get(&format!("{fs}border-spacing: {bad} }}"), "border-spacing"), "0px", "{bad}");
+    }
+}

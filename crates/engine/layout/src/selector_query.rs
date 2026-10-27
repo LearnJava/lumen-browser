@@ -1622,6 +1622,10 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         let (h, v) = (style.border_spacing_h, style.border_spacing_v);
         if h == v { px_str(h) } else { format!("{} {}", px_str(h), px_str(v)) }
     });
+    m.insert("border-collapse".into(), style.border_collapse.as_str().into());
+    m.insert("caption-side".into(), style.caption_side.as_str().into());
+    m.insert("empty-cells".into(), style.empty_cells.as_str().into());
+    m.insert("table-layout".into(), style.table_layout.as_str().into());
     m.insert("opacity".into(), opacity_to_css(style.opacity));
 
     // ── Typography ────────────────────────────────────────────────
