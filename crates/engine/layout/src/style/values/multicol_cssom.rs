@@ -164,6 +164,10 @@ pub(crate) fn insert_multicol_computed(style: &ComputedStyle, m: &mut HashMap<St
         .into(),
     );
     m.insert("column-span".into(), if style.column_span_all { "all" } else { "none" }.into());
+    // CSS Fragmentation L3 §5.1 — grouped here with the other fragmentation-related longhands.
+    let bdb = if style.box_decoration_clone { "clone" } else { "slice" };
+    m.insert("box-decoration-break".into(), bdb.into());
+    m.insert("-webkit-box-decoration-break".into(), bdb.into());
     m.insert(
         "column-wrap".into(),
         if style.column_wrap_nowrap {

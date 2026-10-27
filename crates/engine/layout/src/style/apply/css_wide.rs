@@ -921,6 +921,11 @@ fn apply_css_wide_keyword_with(
                 style.column_span_all = src.column_span_all;
             }
         }
+        // CSS Fragmentation L3 §5.1 — `box-decoration-break` is not inherited.
+        "box-decoration-break" | "-webkit-box-decoration-break" => {
+            let src = if inh_only_inherit { inherited } else { init };
+            style.box_decoration_clone = src.box_decoration_clone;
+        }
         // CSS Multi-column L1 §4 / CSS Gap Decorations L1 §3 — none of the
         // `*-rule*` properties are inherited.
         "column-rule-width" | "column-rule-style" | "column-rule-color" | "column-rule"

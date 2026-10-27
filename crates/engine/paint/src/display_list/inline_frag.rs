@@ -42,20 +42,28 @@ pub(crate) fn emit_inline_frag_box(
         return;
     }
     let s = &frag.style;
-    let bl = s.border_left_width;
-    let br = s.border_right_width;
+    // CSS Fragmentation L3 §5.1: a fragment without the box's start (end) edge paints no left
+    // (right) border or padding — `slice` cuts them off, `clone` marks every fragment with both.
+    let (bl, pl) = if frag.edge_start { (s.border_left_width, frag.padding_left) } else { (0.0, 0.0) };
+    let (br, pr) = if frag.edge_end { (s.border_right_width, frag.padding_right) } else { (0.0, 0.0) };
     let bt = s.border_top_width;
     let bb = s.border_bottom_width;
 
     // Border-box left edge = text_x - padding_left - border_left.
     // Snap to integer CSS pixels for consistent rendering with block-level boxes (BUG-084 partial).
-    let box_x = (container_x + frag.x - frag.padding_left - bl).round();
+    let box_x = (container_x + frag.x - pl - bl).round();
     // Border-box width = border_left + padding_left + text + padding_right + border_right.
-    let box_w = (bl + frag.padding_left + frag.width + frag.padding_right + br).round();
+    let box_w = (bl + pl + frag.width + pr + br).round();
     let box_h = line_h.round();
     let box_y = line_y.round();
 
-    let radii = CornerRadii::from_style_and_box(s, box_w, box_h);
+    let mut radii = CornerRadii::from_style_and_box(s, box_w, box_h);
+    if !frag.edge_start {
+        (radii.tl, radii.tl_y, radii.bl, radii.bl_y) = (0.0, 0.0, 0.0, 0.0);
+    }
+    if !frag.edge_end {
+        (radii.tr, radii.tr_y, radii.br, radii.br_y) = (0.0, 0.0, 0.0, 0.0);
+    }
 
     // Background (CSS Backgrounds L3: painted over padding+border area).
     // `background-clip: text` has no box painting area (L4 §3.8); inline

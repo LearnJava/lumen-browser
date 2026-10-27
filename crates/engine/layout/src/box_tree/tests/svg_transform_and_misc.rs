@@ -707,6 +707,8 @@ fn make_frag(x: f32, width: f32) -> super::super::InlineFrag {
         padding_right: 0.0,
         is_element_box: false,
         effect_scopes: Vec::new(),
+        edge_start: false,
+        edge_end: false,
         img_src: None,
         img_is_lazy: false,
         is_first_line: false,

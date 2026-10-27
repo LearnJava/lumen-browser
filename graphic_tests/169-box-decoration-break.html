@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!-- CSS Fragmentation L3 §5.1 — `box-decoration-break` на inline-боксе, разрезанном строками или блоком.
+     A: slice (по умолчанию): левая рамка/padding только на первой строке, правая только на последней ·
+     B: clone: рамка и padding на каждой строке, конец строки резервирует правый край ·
+     C: slice, блок внутри span: начальный край у первого куска, конечный у последнего ·
+     D: clone, блок внутри span: оба края у каждого куска · E: clone + margin 0 10px (margin клонируется вместе с рамкой и padding) ·
+     F: clone, `<br>` внутри span. Текст прозрачный (color: transparent): видны только боковые рамки, раскладка не зависит от глифов. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; font: 16px/18px Arial, sans-serif; color: transparent; }
+  .cell span { border-left: 8px solid #2b6cb0; border-right: 8px solid #c53030; padding: 0 6px; }
+  .cell div { background: #fefcbf; height: 12px; }
+  .clone span { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .wide span { margin: 0 10px; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="cell"><span>mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm</span></div>
+    <div class="cell clone"><span>mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm</span></div>
+    <div class="cell"><span>mmmmmmmmmmmm mmmmmmmmmmmm <div></div>mmmmmmmmmmmm mmmmmmmmmmmm</span></div>
+    <div class="cell clone"><span>mmmmmmmmmmmm mmmmmmmmmmmm <div></div>mmmmmmmmmmmm mmmmmmmmmmmm</span></div>
+    <div class="cell clone wide"><span>mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm</span></div>
+    <div class="cell clone"><span>mmmmmmmmmmmm mmmmmmmmmmmm <br>mmmmmmmmmmmm mmmmmmmmmmmm mmmmmmmmmmmm</span></div>
+  </div>
+</body>
+</html>

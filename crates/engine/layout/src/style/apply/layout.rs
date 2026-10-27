@@ -749,7 +749,7 @@ pub(in crate::style) fn apply_decl_layout(
                 _ => {}
             }
         }
-        "box-decoration-break" => {
+        "box-decoration-break" | "-webkit-box-decoration-break" => {
             match val.trim().to_ascii_lowercase().as_str() {
                 "clone" => style.box_decoration_clone = true,
                 "slice" => style.box_decoration_clone = false,
