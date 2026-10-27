@@ -247,6 +247,7 @@ pub(crate) fn push_tabbed_frags(
             padding_left: if n == 0 { pad_l } else { 0.0 },
             padding_right: if n == last { pad_r } else { 0.0 },
             is_element_box: seg.is_element_box,
+            effect_scopes: seg.effect_scopes.clone(),
             img_src: None,
             img_is_lazy: false,
             is_first_line: false,
@@ -385,6 +386,7 @@ pub(crate) fn caps_synthesis(
                     pre_space: 0.0,
                     post_space: 0.0,
                     is_element_box: seg.is_element_box,
+                    effect_scopes: seg.effect_scopes.clone(),
                     img_src: None,
                     img_is_lazy: false,
                     img_width: 0.0,
@@ -891,6 +893,7 @@ pub(crate) fn wrap_inline_run_indented(
                 padding_left: pad_l,
                 padding_right: pad_r,
                 is_element_box: true,
+                effect_scopes: seg.effect_scopes.clone(),
                 img_src: Some(img_src.clone()),
                 img_is_lazy: seg.img_is_lazy,
                 is_first_line: false,
@@ -924,6 +927,7 @@ pub(crate) fn wrap_inline_run_indented(
                 padding_left: style.padding_left.resolve_or_zero(em, max_width, viewport),
                 padding_right: style.padding_right.resolve_or_zero(em, max_width, viewport),
                 is_element_box: true,
+                effect_scopes: seg.effect_scopes.clone(),
                 img_src: None,
                 img_is_lazy: false,
                 is_first_line: false,
@@ -1087,6 +1091,7 @@ pub(crate) fn wrap_inline_run_indented(
                         padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
                         padding_right: if end == display_word.len() && is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
+                        effect_scopes: seg.effect_scopes.clone(),
                         img_src: None,
                         img_is_lazy: false,
                         is_first_line: false,
@@ -1142,6 +1147,7 @@ pub(crate) fn wrap_inline_run_indented(
                         padding_left: if is_seg_first { pad_l } else { 0.0 },
                         padding_right: 0.0,
                         is_element_box: seg.is_element_box,
+                        effect_scopes: seg.effect_scopes.clone(),
                         img_src: None,
                         img_is_lazy: false,
                         is_first_line: false,
@@ -1166,6 +1172,7 @@ pub(crate) fn wrap_inline_run_indented(
                         padding_left: 0.0,
                         padding_right: if is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
+                        effect_scopes: seg.effect_scopes.clone(),
                         img_src: None,
                         img_is_lazy: false,
                         is_first_line: false,
@@ -1204,6 +1211,7 @@ pub(crate) fn wrap_inline_run_indented(
                                 padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
                                 padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                                 is_element_box: seg.is_element_box,
+                                effect_scopes: seg.effect_scopes.clone(),
                                 img_src: None,
                                 img_is_lazy: false,
                                 is_first_line: false,
@@ -1262,6 +1270,7 @@ pub(crate) fn wrap_inline_run_indented(
                             padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
                             padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                             is_element_box: seg.is_element_box,
+                            effect_scopes: seg.effect_scopes.clone(),
                             img_src: None,
                             img_is_lazy: false,
                             is_first_line: false,
@@ -1302,6 +1311,8 @@ pub(crate) fn wrap_inline_run_indented(
                     if last.style.text_rendering_eq(style)
                         && last.padding_right == 0.0
                         && last.bidi_level == seg.bidi_level
+                        && last.effect_scopes == seg.effect_scopes
+                        && last.effect_scopes == seg.effect_scopes
                     {
                         let prev_end_x = last.width;
                         // No separating space when the boundary joined tightly
@@ -1349,6 +1360,7 @@ pub(crate) fn wrap_inline_run_indented(
                     padding_left: if is_seg_first { pad_l } else { 0.0 },
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
                     is_element_box: seg.is_element_box,
+                    effect_scopes: seg.effect_scopes.clone(),
                     img_src: None,
                     img_is_lazy: false,
                     is_first_line: false,
@@ -1768,6 +1780,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 padding_left: 0.0,
                 padding_right: 0.0,
                 is_element_box: true,
+                effect_scopes: seg.effect_scopes.clone(),
                 img_src: Some(img_src.clone()),
                 img_is_lazy: false,
                 is_first_line: false,
@@ -1797,6 +1810,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
             if last.style.text_rendering_eq(&seg.style)
                 && last.img_src.is_none()
                 && last.bidi_level == seg.bidi_level
+                && last.effect_scopes == seg.effect_scopes
             {
                 if boundary_space {
                     last.text.push(' ');
@@ -1819,6 +1833,7 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 padding_left: 0.0,
                 padding_right: 0.0,
                 is_element_box: seg.is_element_box,
+                effect_scopes: seg.effect_scopes.clone(),
                 img_src: None,
                 img_is_lazy: false,
                 is_first_line: false,

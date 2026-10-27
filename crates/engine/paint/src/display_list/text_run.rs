@@ -431,6 +431,13 @@ pub(crate) fn emit_inline_run(
     for (line_idx, line) in lines.iter().enumerate() {
         let line_y = b.rect.y + line_idx as f32 * line_h;
 
+        // An inline element with `opacity`/`filter` paints through its own layer: its
+        // backgrounds and text go into one group (Filter Effects L1 §3, Compositing L1 §3.1).
+        if !wants_ellipsis && line.iter().any(|f| !f.effect_scopes.is_empty()) {
+            emit_line_with_effects(line, 0, b.rect.x, b.rect.width, line_y, line_h, out);
+            continue;
+        }
+
         // Phase 1: inline frag backgrounds (under text).
         for frag in line.iter() {
             if !matches!(frag.style.visibility, Visibility::Visible) {
@@ -482,6 +489,65 @@ pub(crate) fn emit_inline_run(
             });
         } else {
             emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+        }
+    }
+}
+
+/// One formatted line whose fragments sit in inline elements with `opacity < 1` or `filter`
+/// (`InlineFrag::effect_scopes`). Consecutive fragments sharing the scope at `depth` are
+/// wrapped in one `PushOpacity`/`PushFilter` group over their border boxes, the nested scopes
+/// inside; the rest is painted as a plain line (backgrounds, then text).
+fn emit_line_with_effects(
+    frags: &[InlineFrag],
+    depth: usize,
+    container_x: f32,
+    container_width: f32,
+    line_y: f32,
+    line_h: f32,
+    out: &mut Vec<DisplayCommand>,
+) {
+    let mut i = 0;
+    while i < frags.len() {
+        let scope = frags[i].effect_scopes.get(depth);
+        let mut j = i + 1;
+        while j < frags.len() && frags[j].effect_scopes.get(depth) == scope {
+            j += 1;
+        }
+        let group = &frags[i..j];
+        i = j;
+        let Some(scope) = scope else {
+            for frag in group {
+                if matches!(frag.style.visibility, Visibility::Visible) {
+                    emit_inline_frag_box(out, container_x, line_y + frag.y_offset, line_h, frag);
+                }
+            }
+            emit_text_frags(group, container_x, container_width, line_y, line_h, out);
+            continue;
+        };
+        let (mut x0, mut x1, mut y0) = (f32::MAX, f32::MIN, f32::MAX);
+        for f in group {
+            let s = &f.style;
+            x0 = x0.min(container_x + f.x - f.padding_left - s.border_left_width);
+            x1 = x1.max(container_x + f.x + f.width + f.padding_right + s.border_right_width);
+            y0 = y0.min(line_y + f.y_offset);
+        }
+        let bounds = Some(Rect::new(x0, y0, (x1 - x0).max(0.0), line_h));
+        let style = &scope.style;
+        let opacity = style.opacity < 1.0;
+        let filter = !style.filter.is_empty();
+        if opacity {
+            out.push(DisplayCommand::PushOpacity { alpha: style.opacity, bounds });
+        }
+        if filter {
+            let filters = style.filter.iter().map(|f| f.with_current_color(style.color)).collect();
+            out.push(DisplayCommand::PushFilter { filters, bounds });
+        }
+        emit_line_with_effects(group, depth + 1, container_x, container_width, line_y, line_h, out);
+        if filter {
+            out.push(DisplayCommand::PopFilter);
+        }
+        if opacity {
+            out.push(DisplayCommand::PopOpacity);
         }
     }
 }

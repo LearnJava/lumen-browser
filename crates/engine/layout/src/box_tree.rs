@@ -175,7 +175,7 @@ pub use image_requests::{
 use image_requests::resolve_image_source;
 
 mod types;
-pub use types::{AnchorScroll, AnchorScroller, BidiScope, BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, UsedGridTracks, SvgMaskContent};
+pub use types::{AnchorScroll, AnchorScroller, BidiScope, BoxKind, BoxOrigin, BoxRole, FieldsetLegend, InlineEffectScope, InlineFrag, InlineSegment, MergedSource, LayoutBox, PseudoKind, UsedGridTracks, SvgMaskContent};
 
 mod pseudo_text;
 use pseudo_text::{

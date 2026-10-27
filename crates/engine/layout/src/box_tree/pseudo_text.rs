@@ -57,6 +57,7 @@ pub(crate) fn apply_first_letter_style(
                     bidi_level: 0,
                     bidi_scopes: Vec::new(),
                     bidi_isolate: None,
+                    effect_scopes: segments[i].effect_scopes.clone(),
                 };
                 // The enclosing inline's end edge moved to the tail; the letter keeps
                 // only its own pseudo-element edge.
