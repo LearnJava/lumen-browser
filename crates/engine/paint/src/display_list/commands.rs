@@ -694,6 +694,17 @@ pub enum DisplayCommand {
         /// Blend factor in `[0.0, 1.0]`. `0.0` = pure `src_a`, `1.0` = pure `src_b`.
         progress: f32,
     },
+    /// CSS Backgrounds L3 §6 — `border-image` с URL-источником.
+    ///
+    /// `area` — область border-image (border box плюс `border-image-outset`). Размер картинки
+    /// эмиттеру неизвестен, поэтому срезы и тайлинг считает растеризатор общей функцией
+    /// [`crate::border_image::border_image_quads`]. Незарегистрированный `src` — no-op.
+    /// Градиентный источник эмиттер раскладывает сам (`PushClipRect` + `Draw*Gradient`).
+    DrawBorderImage {
+        area: Rect,
+        src: String,
+        spec: crate::border_image::BorderImageSpec,
+    },
 }
 
 /// px → фиксированная точка для `DrawText::{letter,word}_spacing`: до ±128 px — 1/64 px, дальше
@@ -779,6 +790,7 @@ impl DisplayCommand {
             Self::BoxModelOverlay { .. } => "BoxModelOverlay",
             Self::DrawScrollbar { .. } => "DrawScrollbar",
             Self::DrawCrossFade { .. } => "DrawCrossFade",
+            Self::DrawBorderImage { .. } => "DrawBorderImage",
             Self::PageBreak => "PageBreak",
         }
     }
@@ -840,6 +852,7 @@ impl DisplayCommand {
             | Self::DrawLayerSnapshot { rect, .. } => Some(*rect),
 
             Self::DrawCrossFade { dest, .. } => Some(*dest),
+            Self::DrawBorderImage { area, .. } => Some(*area),
             Self::BoxModelOverlay { margin, .. } => Some(*margin),
 
             // `outline` paints *outside* the box by `offset` then `width`.
@@ -1068,6 +1081,16 @@ mod tests {
                 src_b: "b.png".to_string(),
                 progress: 0.3,
             },
+            DisplayCommand::DrawBorderImage {
+                area: rect,
+                src: "bi.png".to_string(),
+                spec: crate::border_image::BorderImageSpec {
+                    slice: [crate::border_image::SliceValue::Percent(100.0); 4],
+                    fill: true,
+                    width: [crate::border_image::WidthValue::Auto; 4],
+                    repeat: [crate::border_image::RepeatMode::Round; 2],
+                },
+            },
         ]
     }
 
@@ -1095,7 +1118,7 @@ mod tests {
             "BeginStickyLayer", "EndStickyLayer", "BeginFixedLayer", "EndFixedLayer",
             "BeginFixedBackground", "EndFixedBackground",
             "PushScrollLayer", "PopScrollLayer", "DrawSvgPath", "DrawSvgFill", "DrawSvgStroke",
-            "BoxModelOverlay", "DrawScrollbar", "DrawCrossFade", "PageBreak",
+            "BoxModelOverlay", "DrawScrollbar", "DrawCrossFade", "DrawBorderImage", "PageBreak",
         ];
         assert_eq!(names.len(), expected.len());
         for name in expected {

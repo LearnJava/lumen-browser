@@ -4516,6 +4516,34 @@ impl FemtovgBackend {
                 }
             }
 
+            // ── Border image ────────────────────────────────────────────────
+            // CSS Backgrounds L3 §6 — one image paint per slice/tile of the shared
+            // `border_image_quads`: the whole image placed so the slice window lands
+            // on `dst`, filled through the `dst` path only.
+            DisplayCommand::DrawBorderImage { area, src, spec } => {
+                if let (Some(&id), Some(raw)) =
+                    (self.images.get(src.as_str()), self.raw_images.get(src.as_str()))
+                {
+                    let (iw, ih) = (raw.width as f32, raw.height as f32);
+                    for q in crate::border_image::border_image_quads(spec, *area, iw, ih) {
+                        let sx = q.dst.width / q.src.width;
+                        let sy = q.dst.height / q.src.height;
+                        let paint = femtovg::Paint::image(
+                            id,
+                            q.dst.x - q.src.x * sx,
+                            q.dst.y - q.src.y * sy,
+                            iw * sx,
+                            ih * sy,
+                            0.0,
+                            1.0,
+                        );
+                        let mut path = femtovg::Path::new();
+                        path.rect(q.dst.x, q.dst.y, q.dst.width, q.dst.height);
+                        self.canvas.fill_path(&path, &paint);
+                    }
+                }
+            }
+
             // ── Layer snapshot ───────────────────────────────────────────────
             DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
                 if let Some(&img_id) = self.snapshots.get(id) {

@@ -1525,3 +1525,85 @@ fn draw_cross_fade_midpoint_is_even_mix() {
         "p=0.5 → равные доли красного и зелёного, got ({r},{g},{b})"
     );
 }
+
+/// 3×3 image: red corners, green edge cells, blue middle cell.
+fn nine_cell_image() -> Image {
+    let (r, g, b) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]);
+    let mut data = Vec::new();
+    for row in 0..3 {
+        for col in 0..3 {
+            let edge_x = col != 1;
+            let edge_y = row != 1;
+            data.extend_from_slice(match (edge_x, edge_y) {
+                (true, true) => &r,
+                (false, false) => &b,
+                _ => &g,
+            });
+        }
+    }
+    Image {
+        width: 3,
+        height: 3,
+        format: lumen_image::PixelFormat::Rgba8,
+        data,
+        icc_profile: None,
+        vector_source: None,
+    }
+}
+
+/// CSS Backgrounds L3 §6 — `DrawBorderImage` stretches each of the nine slices onto the
+/// matching part of the border area; the middle is left empty without `fill`.
+#[test]
+fn draw_border_image_nine_slice_stretch() {
+    use crate::border_image::{BorderImageSpec, RepeatMode, SliceValue, WidthValue};
+    let images = vec![("nine.png".to_string(), std::sync::Arc::new(nine_cell_image()))];
+    let mut spec = BorderImageSpec {
+        slice: [SliceValue::Number(1.0); 4],
+        fill: false,
+        width: [WidthValue::Px(10.0); 4],
+        repeat: [RepeatMode::Stretch; 2],
+    };
+    let cmds = vec![DisplayCommand::DrawBorderImage {
+        area: rect(4.0, 4.0, 56.0, 56.0),
+        src: "nine.png".to_string(),
+        spec,
+    }];
+    let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
+    // Bilinear sampling blends a little across slice seams — compare with a tolerance.
+    let near = |p: (u8, u8, u8, u8), want: (u8, u8, u8, u8)| {
+        let d = |a: u8, b: u8| a.abs_diff(b) <= 24;
+        d(p.0, want.0) && d(p.1, want.1) && d(p.2, want.2) && p.3 == want.3
+    };
+    assert!(near(px(&img, 8, 8), (255, 0, 0, 255)), "top-left corner is red");
+    assert!(near(px(&img, 55, 55), (255, 0, 0, 255)), "bottom-right corner is red");
+    assert!(near(px(&img, 32, 8), (0, 255, 0, 255)), "top edge is green, got {:?}", px(&img, 32, 8));
+    assert!(near(px(&img, 8, 32), (0, 255, 0, 255)), "left edge is green");
+    assert_eq!(px(&img, 32, 32), (255, 255, 255, 255), "middle is empty without fill");
+
+    spec.fill = true;
+    let cmds = vec![DisplayCommand::DrawBorderImage {
+        area: rect(4.0, 4.0, 56.0, 56.0),
+        src: "nine.png".to_string(),
+        spec,
+    }];
+    let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
+    assert!(near(px(&img, 32, 32), (0, 0, 255, 255)), "fill paints the blue middle");
+}
+
+/// An unregistered `src` paints nothing (mirrors the GPU renderer).
+#[test]
+fn draw_border_image_unregistered_is_noop() {
+    use crate::border_image::{BorderImageSpec, RepeatMode, SliceValue, WidthValue};
+    let cmds = vec![DisplayCommand::DrawBorderImage {
+        area: rect(4.0, 4.0, 56.0, 56.0),
+        src: "missing.png".to_string(),
+        spec: BorderImageSpec {
+            slice: [SliceValue::Number(1.0); 4],
+            fill: true,
+            width: [WidthValue::Px(10.0); 4],
+            repeat: [RepeatMode::Stretch; 2],
+        },
+    }];
+    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    assert_eq!(px(&img, 8, 8), (255, 255, 255, 255));
+}

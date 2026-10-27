@@ -86,6 +86,7 @@ use super::text_and_images::{build, fills, Fixed8, BODY_RESET};
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",
                 DisplayCommand::DrawCrossFade { .. } => "DrawCrossFade",
+                DisplayCommand::DrawBorderImage { .. } => "DrawBorderImage",
                 DisplayCommand::LazyImageSlot { .. } => "LazyImageSlot",
             })
             .collect();
