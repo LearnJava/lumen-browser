@@ -1107,6 +1107,54 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
     }
 
     #[test]
+    fn background_clip_border_area_color_is_masked_by_the_border() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; border: 10px solid rgba(0,0,0,0.2);              background: red; background-clip: border-area; }",
+        );
+        let n = names(&dl);
+        // The box fill is skipped; the colour is drawn once, inside the masked group,
+        // and the mask content is the element's border (opaque black).
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        let pop = n.iter().position(|c| *c == "PopMaskLayer").unwrap();
+        assert_eq!(n.iter().filter(|c| **c == "FillRect").count(), 1, "{n:?}");
+        assert!(n.iter().position(|c| *c == "FillRect").unwrap() < push, "{n:?}");
+        assert_eq!(&n[push + 1..pop], ["DrawBorder"], "{n:?}");
+        let mask_border = dl.iter().find_map(|c| match c {
+            DisplayCommand::DrawBorder { colors, widths, .. } if colors[0].a == 255 => Some(*widths),
+            _ => None,
+        });
+        assert_eq!(mask_border, Some([10.0; 4]));
+    }
+
+    #[test]
+    fn background_clip_border_area_without_border_paints_nothing() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: red; background-clip: border-area; }",
+        );
+        let n = names(&dl);
+        assert!(!n.contains(&"FillRect") && !n.contains(&"PushMaskLayer"), "{n:?}");
+    }
+
+    #[test]
+    fn background_clip_border_area_gradient_layer_is_masked() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; border: 8px dashed #000;              background-image: linear-gradient(red, blue); background-clip: border-area; }",
+        );
+        let n = names(&dl);
+        let push = n.iter().position(|c| *c == "PushMaskLayer").expect("PushMaskLayer");
+        assert!(n[..push].contains(&"DrawLinearGradient"), "{n:?}");
+        // The mask carries the dashed border, so the gaps stay unpainted.
+        assert!(dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::DrawBorder { styles, colors, .. }
+                if colors[0].a == 255 && styles.iter().all(|s| *s == BorderStyle::Dashed)
+        )));
+    }
+
+    #[test]
     fn background_clip_text_without_text_paints_nothing() {
         let dl = build(
             "<div></div>",

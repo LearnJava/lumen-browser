@@ -271,6 +271,9 @@ const PAGES: &[&str] = &[
     // FIELDSET-LEGEND-3: `<fieldset>` с `column-count`/`column-width` — legend на границе, колонки ниже него;
     // без текста.
     "167-fieldset-multicol",
+    // CSS Backgrounds L4 §3.8 — background-clip: border-area. Фон под нарисованной рамкой
+    // (PushMaskLayer alpha-маска из DrawBorder); без текста.
+    "171-background-clip-border-area",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

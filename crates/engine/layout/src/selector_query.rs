@@ -1100,6 +1100,7 @@ fn background_clip_to_css(c: BackgroundClip) -> &'static str {
         BackgroundClip::PaddingBox => "padding-box",
         BackgroundClip::ContentBox => "content-box",
         BackgroundClip::Text => "text",
+        BackgroundClip::BorderArea => "border-area",
     }
 }
 

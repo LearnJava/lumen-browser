@@ -222,6 +222,16 @@ fn emit_background_layer(
         });
         return;
     }
+    // CSS Backgrounds L4 §3.8 `background-clip: border-area` — paint the layer
+    // as for `border-box`, then keep only what lies under the drawn border.
+    if layer.clip == BackgroundClip::BorderArea {
+        let mut plain = layer.clone();
+        plain.clip = BackgroundClip::BorderBox;
+        emit_border_area_clipped(out, b, |inner| {
+            emit_background_layer(inner, b, &plain, dpr, suppress_blend, radii, area);
+        });
+        return;
+    }
     let clip = match area {
         LayerArea::Unclipped(r) => r,
         LayerArea::Local(r) => background_clip_rect_in(b, r, layer.clip),
@@ -543,6 +553,48 @@ fn emit_text_clipped(
     out.push(DisplayCommand::PopOpacity);
 }
 
+/// CSS Backgrounds L4 §3.8 — runs `paint` (which emits the background content
+/// as for `border-box`) and clips the result to the border area: the area the
+/// element's own `DrawBorder` covers, so rounded corners, per-side widths and
+/// `border-style` gaps (dashed, dotted, double) shape the visible background.
+///
+/// Emitted like [`emit_text_clipped`]: `PushOpacity(1)` · content ·
+/// `PushMaskLayer(alpha)` · opaque-black border · `PopMaskLayer` · `PopOpacity`.
+/// With no visible border nothing is painted (the border area is empty).
+fn emit_border_area_clipped(
+    out: &mut Vec<DisplayCommand>,
+    b: &LayoutBox,
+    paint: impl FnOnce(&mut Vec<DisplayCommand>),
+) {
+    let s = &b.style;
+    let styles = [
+        s.border_top_style, s.border_right_style, s.border_bottom_style, s.border_left_style,
+    ];
+    if !styles.iter().any(|st| st.is_visible()) {
+        return;
+    }
+    let mut content = Vec::new();
+    paint(&mut content);
+    if content.is_empty() {
+        return;
+    }
+    let black = Color { r: 0, g: 0, b: 0, a: 255 };
+    out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
+    out.extend(content);
+    out.push(DisplayCommand::PushMaskLayer { rect: b.rect, mode: MaskMode::Alpha });
+    out.push(DisplayCommand::DrawBorder {
+        rect: b.rect,
+        widths: [
+            s.border_top_width, s.border_right_width, s.border_bottom_width, s.border_left_width,
+        ],
+        colors: [black; 4],
+        styles,
+        radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+    });
+    out.push(DisplayCommand::PopMaskLayer);
+    out.push(DisplayCommand::PopOpacity);
+}
+
 /// CSS Backgrounds L3 §3.10 — эмитит все фоновые слои элемента.
 ///
 /// CSS Backgrounds L3 §3: слои рисуются снизу вверх — последний в списке (Vec)
@@ -600,6 +652,21 @@ pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox
             inner.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
         });
     }
+    // `border-area` likewise: the call sites skipped the box fill, the colour is
+    // painted here through the border-shaped mask.
+    if background_color_clip(b) == BackgroundClip::BorderArea
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        emit_border_area_clipped(out, b, |inner| {
+            let radii = CornerRadii::from_style_and_box(&b.style, b.rect.width, b.rect.height);
+            if radii.all_zero() {
+                inner.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+            } else {
+                inner.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: bg, radii });
+            }
+        });
+    }
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for (i, layer) in layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
@@ -611,9 +678,11 @@ pub(crate) fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox
 }
 
 /// A layer that scrolls with its box's contents (CSS Backgrounds L3 §3.6). `background-clip: text`
-/// stays with the box: its glyph mask is laid out against the unscrolled content.
+/// stays with the box: its glyph mask is laid out against the unscrolled content; so does
+/// `border-area`, whose border-shaped mask does not scroll.
 fn is_local_layer(l: &BackgroundLayer) -> bool {
-    l.attachment == BackgroundAttachment::Local && l.clip != BackgroundClip::Text
+    l.attachment == BackgroundAttachment::Local
+        && !matches!(l.clip, BackgroundClip::Text | BackgroundClip::BorderArea)
 }
 
 /// The box scrolls its own `background-attachment: local` layers: a block-level scroll container

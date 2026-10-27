@@ -66,12 +66,15 @@ pub(crate) fn emit_inline_frag_box(
     }
 
     // Background (CSS Backgrounds L3: painted over padding+border area).
-    // `background-clip: text` has no box painting area (L4 §3.8); inline
-    // fragments do not paint glyph-masked backgrounds yet, so no box fill.
+    // `background-clip: text | border-area` has no box painting area (L4 §3.8);
+    // inline fragments do not paint glyph-/border-masked backgrounds yet, so no
+    // box fill.
     if let Some(CssColor::Rgba(bg)) = s.background_color
         && bg.a > 0
         && box_w > 0.0
-        && s.background_layers.last().is_none_or(|l| l.clip != BackgroundClip::Text)
+        && s.background_layers.last().is_none_or(|l| {
+            !matches!(l.clip, BackgroundClip::Text | BackgroundClip::BorderArea)
+        })
     {
         let r = Rect::new(box_x, box_y, box_w, box_h);
         if radii.all_zero() {
@@ -183,6 +186,8 @@ pub(crate) fn emit_text_shadows(
 /// * `ContentBox`: shrink на border + padding.
 /// * `Text` (L4): пустой rect — фон виден только сквозь глифы, он эмитится
 ///   отдельно через `PushMaskLayer` (`emit_text_clipped`).
+/// * `BorderArea` (L4): пустой rect — фон виден только под рамкой, он эмитится
+///   через `PushMaskLayer` с отрисованной рамкой (`emit_border_area_clipped`).
 ///
 /// `max(0.0)` страхует от negative-w/h на очень узких box-ах.
 /// Возвращает painting area для background с учётом `clip` значения.
@@ -233,6 +238,9 @@ fn clip_rect_in(b: &LayoutBox, rect: Rect, clip: BackgroundClip) -> Rect {
         // solid-`background-color` call site skip its box fill; the glyph-masked
         // paint is emitted by `emit_background_image` / `emit_text_clipped`.
         BackgroundClip::Text => Rect::new(rect.x, rect.y, 0.0, 0.0),
+        // `border-area` (L4 §3.8) is a ring, not a rectangle: same empty marker,
+        // the ring-masked paint is emitted by `emit_border_area_clipped`.
+        BackgroundClip::BorderArea => Rect::new(rect.x, rect.y, 0.0, 0.0),
         BackgroundClip::PaddingBox => Rect::new(
             rect.x + s.border_left_width,
             rect.y + s.border_top_width,
