@@ -1,21 +1,39 @@
-# BUG-1759 — `Sec-Fetch-*` уходят на не потенциально доверенные URL (`http://`)
+# BUG-1759 — Отсоединённые `<audio src>` и `<img srcset>` не шлют ни `load`, ни `error`
 
 **Статус:** OPEN
 **Заведён:** 2026-10-27 (P2, WPT-FETCH-SCOUT, кластер M в [`docs/wpt-vendor-notes/fetch.md`](../docs/wpt-vendor-notes/fetch.md))
-**Область:** network (`crates/network/src/fetch_metadata.rs` — `fetch_metadata_headers`; навигационный блок профиля Chrome в fingerprint-наборе)
+**Область:** js (`crates/js/src/audio_element.rs::startLoad`, `crates/js/src/shim/*` — загрузка `<img>` по `srcset` для элемента вне документа)
 
 ## Симптом
 
-Fetch Metadata §2 (каждый из `Sec-Fetch-Dest/-Mode/-Site/-User`, шаг 1): «если URL запроса не потенциально доверенный — вернуть», то есть на `http://example.com/` Chrome заголовков `Sec-Fetch-*` не шлёт. `fetch_metadata_headers` ([fetch_metadata.rs:188](../crates/network/src/fetch_metadata.rs#L188)) проверяет только профиль и режим навигации — схема цели не учитывается, и подресурс по `http://` получает `Sec-Fetch-Site/-Mode/-Dest`. Это отличие от Chrome в отпечатке при профиле `Chrome`/`Edge`/`Strict` на любом http-сайте.
+Проба (временная `tests/wpt/fetch/zz-scout-probe.https.sub.html`, удалена; таймаут 3 с на случай):
 
-В WPT это видно в `fetch/metadata/generated/*.sub.html` (не-`https`): сабтесты `Not sent to non-trustworthy ... destination` — `assert_not_own_property: unexpected property "sec-fetch-site"` (88 сабтестов, 15 id). **Оговорка:** раннер сейчас ходит на `http://localhost`, а `localhost` — потенциально доверенный (Secure Contexts §3.2), так что на этих же тестах и Chrome прислал бы заголовки; честно засчитать починку WPT сможет только после `WPT-HOST-RESOLVE` (хост `web-platform.test`).
+```js
+const a = document.createElement('audio');            // не вставлен в документ
+a.onload = a.onerror = done;
+a.setAttribute('src', '/common/blank.html');          // не медиа → ожидается error
+// событие не приходит
+
+const i = document.createElement('img');              // не вставлен
+i.onload = i.onerror = done;
+i.setAttribute('srcset', '/images/green.png');        // ожидается load
+// событие не приходит; тот же img с src= — load приходит
+```
+
+Там же проверено, что `<embed>`, `<object>`, `<input type=image>`, `<track>` и `<img src>` (отсоединённый) событие шлют.
+
+Генерированные тесты `fetch/metadata/generated/element-audio*.html`, `element-img*.html`, `element-picture*.html` ждут именно `onload`/`onerror` такого элемента: первый же сабтест висит до таймаута теста, остальные — NOTRUN (`element-img.https.sub.html`: 1/45, `element-audio.https.sub.html`: 0/23, `element-picture.https.sub.html`: 3/66).
+
+## Причина
+
+Не установлена. `<audio>`: выбор ресурса (HTML §4.8.11.5 «resource selection algorithm») запускается и для элемента вне документа — `src` при установке ставит задачу загрузки; похоже, `startLoad` привязан к вставке в дерево (ср. [BUG-955](BUG-955-OPEN.md) — ранний возврат на пустом `src`). `<img srcset>`: «update the image data» для отсоединённого элемента выполняется (HTML §4.8.4.3.4), но путь выбора кандидата `srcset`, вероятно, живёт в раскладке (нужен viewport/density) и для элемента без бокса не вызывается.
 
 ## Что делать
 
-1. В `fetch_metadata_headers` (и в навигационном блоке профиля): цель не потенциально доверенная (`http`/`ws` кроме `localhost`/`127.0.0.0/8`/`::1`, не `file:`) — заголовки не добавлять.
-2. Юнит-тест: `http://example.com/x.png` — пусто, `http://localhost/x.png` и `https://example.com/x.png` — три заголовка.
+1. `<audio>`/`<video>`: установка `src` на элементе вне документа запускает выбор ресурса; не-медиа ответ → `error` (`MEDIA_ERR_SRC_NOT_SUPPORTED`).
+2. `<img>`: «update the image data» по `srcset` без бокса — плотность 1x/ширина viewport по умолчанию, затем `load`/`error`.
 
 ## Как проверить
 
-- `cargo test -p lumen-network fetch_metadata`.
-- После `WPT-HOST-RESOLVE`: `run_smoke.py /fetch/metadata/generated/element-img.sub.html` — без `unexpected property "sec-fetch-*"`; ожидаемый прирост до +4.7 балла.
+- `run_smoke.py /fetch/metadata/generated/element-img.https.sub.html /fetch/metadata/generated/element-audio.https.sub.html` — первый сабтест не висит (дальнейшие кросс-сайтовые сабтесты зависят от хоста `not-web-platform.test`, см. `WPT-HOST-RESOLVE`).
+- Ожидаемый прирост `fetch` — единицы баллов сам по себе; основной эффект — снятие TIMEOUT-а в 6 id `metadata/generated`.

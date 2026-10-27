@@ -1,39 +1,32 @@
-# BUG-1758 — Отсоединённые `<audio src>` и `<img srcset>` не шлют ни `load`, ни `error`
+# BUG-1758 — `fetch()`: `redirect: 'error'|'manual'` игнорируется, CORS-проверки на редиректах и preflight мягче спецификации
 
 **Статус:** OPEN
-**Заведён:** 2026-10-27 (P2, WPT-FETCH-SCOUT, кластер M в [`docs/wpt-vendor-notes/fetch.md`](../docs/wpt-vendor-notes/fetch.md))
-**Область:** js (`crates/js/src/audio_element.rs::startLoad`, `crates/js/src/shim/*` — загрузка `<img>` по `srcset` для элемента вне документа)
+**Заведён:** 2026-10-27 (P2, WPT-FETCH-SCOUT, кластер R в [`docs/wpt-vendor-notes/fetch.md`](../docs/wpt-vendor-notes/fetch.md))
+**Область:** js (`crates/js/src/shim/fetch_body_shim.js` — `Request.redirect`, `crates/js/src/shim/web_api_shim_mid_b3.js` — вызов `_lumen_fetch_async_start`), core (`lumen_core::ext::JsFetchRequest` — нет поля режима редиректа), network (`crates/network/src/lib.rs` — CORS на редиректах, preflight)
 
 ## Симптом
 
-Проба (временная `tests/wpt/fetch/zz-scout-probe.https.sub.html`, удалена; таймаут 3 с на случай):
+В прогоне `fetch` 2026-10-27 — 514 сабтестов в 35 id `api/cors/*` и `api/redirect/*` ждут отказа или `status 0` и получают обычный ответ:
 
-```js
-const a = document.createElement('audio');            // не вставлен в документ
-a.onload = a.onerror = done;
-a.setAttribute('src', '/common/blank.html');          // не медиа → ожидается error
-// событие не приходит
-
-const i = document.createElement('img');              // не вставлен
-i.onload = i.onerror = done;
-i.setAttribute('srcset', '/images/green.png');        // ожидается load
-// событие не приходит; тот же img с src= — load приходит
-```
-
-Там же проверено, что `<embed>`, `<object>`, `<input type=image>`, `<track>` и `<img src>` (отсоединённый) событие шлют.
-
-Генерированные тесты `fetch/metadata/generated/element-audio*.html`, `element-img*.html`, `element-picture*.html` ждут именно `onload`/`onerror` такого элемента: первый же сабтест висит до таймаута теста, остальные — NOTRUN (`element-img.https.sub.html`: 1/45, `element-audio.https.sub.html`: 0/23, `element-picture.https.sub.html`: 3/66).
+- `api/redirect/redirect-mode.any.html`: `redirect 301 in error redirect and cors mode` — `Should have rejected`; `... in manual redirect ...` — `Response's status is 0 expected 0 but got 200` (редирект пройден).
+- `api/cors/cors-redirect-credentials.any.html` (120 сабтестов): кросс-origin редирект на URL с `user:password@` не отвергается (Fetch §4.4 «HTTP-redirect fetch», шаг 8).
+- `api/cors/cors-preflight-status.any.html` (27 × 3 варианта): `Preflight request has been made expected "1" but got "0"` — сервер не видит OPTIONS-запроса; при статусе preflight ≠ 2xx запрос не отвергается.
+- `api/cors/cors-multiple-origins.any.html`: несколько значений `Access-Control-Allow-Origin` (`"",http://example.com,*`) не отвергаются.
+- `api/cors/cors-preflight-redirect`, `cors-redirect-preflight`: редирект на preflight и preflight после редиректа не отвергаются.
 
 ## Причина
 
-Не установлена. `<audio>`: выбор ресурса (HTML §4.8.11.5 «resource selection algorithm») запускается и для элемента вне документа — `src` при установке ставит задачу загрузки; похоже, `startLoad` привязан к вставке в дерево (ср. [BUG-955](BUG-955-OPEN.md) — ранний возврат на пустом `src`). `<img srcset>`: «update the image data» для отсоединённого элемента выполняется (HTML §4.8.4.3.4), но путь выбора кандидата `srcset`, вероятно, живёт в раскладке (нужен viewport/density) и для элемента без бокса не вызывается.
+1. `Request.redirect` сохраняется в состоянии запроса ([fetch_body_shim.js:508](../crates/js/src/shim/fetch_body_shim.js#L508)), но `JsFetchRequest` (`url, method, headers, body, mode, destination, token`) не несёт режима редиректа — сеть всегда делает `follow`.
+2. Preflight-логика есть (`crates/network/src/lib.rs:2790`, `cors::needs_preflight`), но для этих тестов сервер её не наблюдает — установить по представителю `cors-preflight-status` (возможные причины: путь `fetch_request_impl` не идёт через CORS-контекст для кросс-origin на другом порту; запрос считается simple).
+3. Проверки «редирект на URL с credentials», «несколько ACAO», «редирект preflight-а» — отсутствуют или мягкие.
 
 ## Что делать
 
-1. `<audio>`/`<video>`: установка `src` на элементе вне документа запускает выбор ресурса; не-медиа ответ → `error` (`MEDIA_ERR_SRC_NOT_SUPPORTED`).
-2. `<img>`: «update the image data» по `srcset` без бокса — плотность 1x/ширина viewport по умолчанию, затем `load`/`error`.
+1. Добавить в `JsFetchRequest` режим редиректа; `error` — network error на первом 3xx, `manual` — `opaqueredirect` ([BUG-1755](BUG-1755-OPEN.md)).
+2. Найти, почему preflight не уходит для `cors-preflight-status`; preflight с не-2xx статусом или с редиректом — network error.
+3. CORS-проверка ответа: ровно одно значение ACAO; редирект CORS-запроса на URL с credentials — network error; кросс-origin редирект обнуляет origin (`null`) по Fetch §4.4 шаг 12.
 
 ## Как проверить
 
-- `run_smoke.py /fetch/metadata/generated/element-img.https.sub.html /fetch/metadata/generated/element-audio.https.sub.html` — первый сабтест не висит (дальнейшие кросс-сайтовые сабтесты зависят от хоста `not-web-platform.test`, см. `WPT-HOST-RESOLVE`).
-- Ожидаемый прирост `fetch` — единицы баллов сам по себе; основной эффект — снятие TIMEOUT-а в 6 id `metadata/generated`.
+- `run_smoke.py /fetch/api/redirect/redirect-mode.any.html /fetch/api/cors/cors-preflight-status.any.html /fetch/api/cors/cors-redirect-credentials.any.html /fetch/api/cors/cors-multiple-origins.any.html`.
+- Ожидаемый прирост `fetch` до +25 баллов.

@@ -1,32 +1,26 @@
-# BUG-1757 — `fetch()`: `redirect: 'error'|'manual'` игнорируется, CORS-проверки на редиректах и preflight мягче спецификации
+# BUG-1757 — Глобалы воркеров: нет `atob`/`btoa` в SharedWorker, нет `URL.createObjectURL` в Worker
 
 **Статус:** OPEN
-**Заведён:** 2026-10-27 (P2, WPT-FETCH-SCOUT, кластер R в [`docs/wpt-vendor-notes/fetch.md`](../docs/wpt-vendor-notes/fetch.md))
-**Область:** js (`crates/js/src/shim/fetch_body_shim.js` — `Request.redirect`, `crates/js/src/shim/web_api_shim_mid_b3.js` — вызов `_lumen_fetch_async_start`), core (`lumen_core::ext::JsFetchRequest` — нет поля режима редиректа), network (`crates/network/src/lib.rs` — CORS на редиректах, preflight)
+**Заведён:** 2026-10-27 (P2, WPT-FETCH-SCOUT, кластер W в [`docs/wpt-vendor-notes/fetch.md`](../docs/wpt-vendor-notes/fetch.md))
+**Область:** js (`crates/js/src/shared_worker.rs` — установка глобальной области SharedWorker; `crates/js/src/worker.rs`/`worker_shims.rs` — `URL` в DedicatedWorker)
 
 ## Симптом
 
-В прогоне `fetch` 2026-10-27 — 514 сабтестов в 35 id `api/cors/*` и `api/redirect/*` ждут отказа или `status 0` и получают обычный ответ:
+- `*.any.sharedworker.html` — `ReferenceError: btoa is not defined`: 72 сабтеста `http-cache/*` (хелпер `http-cache/http-cache.js` кодирует ключ через `btoa`) и harness ERROR у 5 id `api/credentials/authentication-*.any.sharedworker.html`.
+- `api/basic/scheme-blob.sub.any.worker.html` — harness ERROR `URL.createObjectURL is not a function` (27 сабтестов того же файла в окне проходят).
 
-- `api/redirect/redirect-mode.any.html`: `redirect 301 in error redirect and cors mode` — `Should have rejected`; `... in manual redirect ...` — `Response's status is 0 expected 0 but got 200` (редирект пройден).
-- `api/cors/cors-redirect-credentials.any.html` (120 сабтестов): кросс-origin редирект на URL с `user:password@` не отвергается (Fetch §4.4 «HTTP-redirect fetch», шаг 8).
-- `api/cors/cors-preflight-status.any.html` (27 × 3 варианта): `Preflight request has been made expected "1" but got "0"` — сервер не видит OPTIONS-запроса; при статусе preflight ≠ 2xx запрос не отвергается.
-- `api/cors/cors-multiple-origins.any.html`: несколько значений `Access-Control-Allow-Origin` (`"",http://example.com,*`) не отвергаются.
-- `api/cors/cors-preflight-redirect`, `cors-redirect-preflight`: редирект на preflight и preflight после редиректа не отвергаются.
+`WindowOrWorkerGlobalScope` (HTML §8.3) обязывает `atob`/`btoa` в любом воркере; `URL.createObjectURL` — File API §8 — доступен в Window и DedicatedWorker/SharedWorker.
 
 ## Причина
 
-1. `Request.redirect` сохраняется в состоянии запроса ([fetch_body_shim.js:508](../crates/js/src/shim/fetch_body_shim.js#L508)), но `JsFetchRequest` (`url, method, headers, body, mode, destination, token`) не несёт режима редиректа — сеть всегда делает `follow`.
-2. Preflight-логика есть (`crates/network/src/lib.rs:2790`, `cors::needs_preflight`), но для этих тестов сервер её не наблюдает — установить по представителю `cors-preflight-status` (возможные причины: путь `fetch_request_impl` не идёт через CORS-контекст для кросс-origin на другом порту; запрос считается simple).
-3. Проверки «редирект на URL с credentials», «несколько ACAO», «редирект preflight-а» — отсутствуют или мягкие.
+Документирующий комментарий `install_shared_worker_global` ([shared_worker.rs:1077](../crates/js/src/shared_worker.rs#L1077)) прямо говорит, что бросающие `atob`/`btoa` выделенного воркера (`worker.rs`) сюда не перенесены. `URL.createObjectURL` в шиме выделенного воркера не установлен (блоб-реестр есть только у окна).
 
 ## Что делать
 
-1. Добавить в `JsFetchRequest` режим редиректа; `error` — network error на первом 3xx, `manual` — `opaqueredirect` ([BUG-1754](BUG-1754-OPEN.md)).
-2. Найти, почему preflight не уходит для `cors-preflight-status`; preflight с не-2xx статусом или с редиректом — network error.
-3. CORS-проверка ответа: ровно одно значение ACAO; редирект CORS-запроса на URL с credentials — network error; кросс-origin редирект обнуляет origin (`null`) по Fetch §4.4 шаг 12.
+1. Поставить в SharedWorker те же `atob`/`btoa`, что у выделенного воркера (общий хелпер, не копия).
+2. `URL.createObjectURL`/`revokeObjectURL` в DedicatedWorker и SharedWorker — через тот же блоб-реестр процесса, что и в окне (URL с origin воркера).
 
 ## Как проверить
 
-- `run_smoke.py /fetch/api/redirect/redirect-mode.any.html /fetch/api/cors/cors-preflight-status.any.html /fetch/api/cors/cors-redirect-credentials.any.html /fetch/api/cors/cors-multiple-origins.any.html`.
-- Ожидаемый прирост `fetch` до +25 баллов.
+- `run_smoke.py /fetch/http-cache/status.any.sharedworker.html /fetch/api/credentials/authentication-basic.any.sharedworker.html /fetch/api/basic/scheme-blob.sub.any.worker.html` — без `is not defined`/`is not a function`.
+- Ожидаемый прирост `fetch` ≈ +10 баллов; тот же пробел бьёт другие категории с `.any.sharedworker`.
