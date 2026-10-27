@@ -121,8 +121,7 @@ fn open_transport(
     host: &str,
     port: u16,
 ) -> Result<UdpDatagram, H3TransportError> {
-    let peer = resolver
-        .resolve(host, port)
+    let peer = crate::dns::resolve_with_env_override(resolver, host, port)
         .map_err(|e| H3TransportError::Resolve(format!("resolve {host}:{port}: {e}")))?
         .into_iter()
         .next()

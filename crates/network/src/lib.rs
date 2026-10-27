@@ -301,7 +301,7 @@ pub use cors::{
     is_cors_safelisted_method, is_cors_safelisted_request_header, is_forbidden_request_header,
     needs_preflight, unsafe_request_header_names,
 };
-pub use dns::SystemDnsResolver;
+pub use dns::{RESOLVE_ENV, ResolveOverride, SystemDnsResolver};
 pub use doh::{CachedDnsResolver, DohResolver};
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
 pub use hsts_preload::{HstsPreloadList, get_preload_list};
@@ -1390,8 +1390,7 @@ fn connect_inner(
     let tcp = if let Some(s5) = socks5 {
         // SOCKS5 path: connect TCP to proxy server, then SOCKS5-tunnel to target.
         // DNS is resolved by the proxy (no local leak) — required for Tor.
-        let proxy_addrs = resolver
-            .resolve(&s5.host, s5.port)
+        let proxy_addrs = dns::resolve_with_env_override(resolver, &s5.host, s5.port)
             .map_err(|e| net_failure(NetErrorCode::NameNotResolved, format!("resolve SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
         if proxy_addrs.is_empty() {
             return Err(net_failure(
@@ -1420,8 +1419,7 @@ fn connect_inner(
         // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого
         // resolver-а) — чтобы `classify_failure_stage` надёжно отнёс их к
         // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
-        let addrs = resolver
-            .resolve(host, port)
+        let addrs = dns::resolve_with_env_override(resolver, host, port)
             .map_err(|e| net_failure(NetErrorCode::NameNotResolved, format!("resolve {host}:{port}: {e}")))?;
         if addrs.is_empty() {
             return Err(net_failure(
