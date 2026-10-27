@@ -118,6 +118,32 @@ impl BorderImage {
         )
     }
 
+    /// Specified-запись шортката (`el.style.borderImage`): компоненты по умолчанию опускаются,
+    /// `/ width` и `/ outset` печатаются только когда отличаются от начальных.
+    pub fn specified_shorthand_css(&self) -> String {
+        let d = Self::default();
+        let mut parts: Vec<String> = Vec::new();
+        if self.is_active() {
+            parts.push(self.source_text());
+        }
+        if self.slice != d.slice || self.fill {
+            parts.push(self.slice_text());
+        }
+        let width = (self.width != d.width).then(|| shorten4(self.width.iter().map(width_text).collect()));
+        let outset = (self.outset != d.outset).then(|| shorten4(self.outset.iter().map(outset_text).collect()));
+        if width.is_some() || outset.is_some() {
+            let mut t = width.map_or_else(|| "/".to_string(), |w| format!("/ {w}"));
+            if let Some(o) = outset {
+                t = format!("{t} / {o}");
+            }
+            parts.push(t);
+        }
+        if self.repeat != d.repeat {
+            parts.push(self.repeat_text());
+        }
+        if parts.is_empty() { "none".into() } else { parts.join(" ") }
+    }
+
     fn source_text(&self) -> String {
         match &self.source {
             _ if self.source_css.is_some() => self.source_css.as_deref().unwrap_or("none").to_string(),
@@ -270,10 +296,8 @@ pub(in crate::style) fn parse_border_image_slice(s: &str) -> Option<([BorderImag
             fill = true;
         } else if let Some(n) = parse_number(t) {
             vals.push(BorderImageSlice::Number(n));
-        } else if let Some(p) = parse_percent(t) {
-            vals.push(BorderImageSlice::Percent(p));
         } else {
-            return None;
+            vals.push(BorderImageSlice::Percent(parse_percent(t)?));
         }
     }
     Some((expand4(&vals)?, fill))
@@ -493,8 +517,7 @@ pub fn canonical_specified_border_image(prop: &str, value: &str) -> Option<Strin
             Some(if h == w { repeat_kw(h).into() } else { format!("{} {}", repeat_kw(h), repeat_kw(w)) })
         }
         "border-image" => {
-            parse_border_image(v, 16.0, vp, false)?;
-            Some(v.to_string())
+            Some(parse_border_image(v, 16.0, vp, false)?.specified_shorthand_css())
         }
         _ => None,
     }
@@ -566,5 +589,10 @@ mod tests {
         assert_eq!(c("border-image-repeat", "round round").as_deref(), Some("round"));
         assert_eq!(c("border-image-source", "url(x)").as_deref(), Some("url(\"x\")"));
         assert!(c("border-image-outset", "10%").is_none());
+        assert_eq!(c("border-image", "fill 1 2% 3 4% / auto").as_deref(), Some("1 2% 3 4% fill / auto"));
+        assert_eq!(c("border-image", "1 / / 1px").as_deref(), Some("1 / / 1px"));
+        assert_eq!(c("border-image", "none 100% / 1 / 0 stretch").as_deref(), Some("none"));
+        assert_eq!(c("border-image", "none space space").as_deref(), Some("space"));
+        assert_eq!(c("border-image", "url(a) 1 / 1px 2% 3 auto / 2 round").as_deref(), Some("url(\"a\") 1 / 1px 2% 3 auto / 2 round"));
     }
 }

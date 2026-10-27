@@ -638,6 +638,7 @@ pub(crate) fn rasterize_cpu_pixmap(
                 let layer = layers.last_mut().expect("base layer");
                 if let Some(img) = image_map.get(src.as_str()) {
                     let (iw, ih) = (img.width as f32, img.height as f32);
+                    let mut vector_cache: Option<Image> = None;
                     for q in crate::border_image::border_image_quads(spec, *area, iw, ih) {
                         let sx = q.dst.width / q.src.width;
                         let sy = q.dst.height / q.src.height;
@@ -647,7 +648,13 @@ pub(crate) fn rasterize_cpu_pixmap(
                             iw * sx,
                             ih * sy,
                         );
-                        blit_image_into_rect(&mut layer.pm, placed, q.dst, img, 1.0, c)?;
+                        // SVG source: redraw at the placed size instead of stretching the raster.
+                        let tile = if placed.width * placed.height <= 16.0e6 {
+                            vector_tile(img, placed.width, placed.height, &mut vector_cache)
+                        } else {
+                            None
+                        };
+                        blit_image_into_rect(&mut layer.pm, placed, q.dst, tile.unwrap_or(img), 1.0, c)?;
                     }
                     layer.mark(b);
                 }

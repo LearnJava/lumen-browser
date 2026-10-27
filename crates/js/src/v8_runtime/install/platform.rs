@@ -613,6 +613,20 @@ pub(crate) fn install_css_supports_and_lazy_images(
             if !lumen_layout::style::webkit_gradient_value_valid(&value) {
                 return false;
             }
+            // border-image*: значение разбирается движком (отрицательный slice, лишний
+            // `fill`, три слова в `repeat` — не поддержаны). CSS-wide ключевые слова и `var()`
+            // валидны всегда.
+            let lower = prop.to_ascii_lowercase();
+            if lower.starts_with("border-image") {
+                let v = value.trim().to_ascii_lowercase();
+                let wide = matches!(v.as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
+                if !wide
+                    && !v.contains("var(")
+                    && lumen_layout::style::canonical_specified_background(&lower, &value).is_none()
+                {
+                    return false;
+                }
+            }
             lumen_css_parser::SUPPORTED_PROPERTIES
                 .iter()
                 .any(|p| p.eq_ignore_ascii_case(&prop))

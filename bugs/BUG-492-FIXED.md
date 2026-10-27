@@ -1,7 +1,7 @@
 # BUG-492: `border-image` (CSS Backgrounds and Borders Level 3) entirely
 unimplemented — not just `border-image-width`
 
-**Статус:** OPEN (ДОРАБОТКА → CSS-SPECS.md)
+**Статус:** FIXED 2026-10-27 (P4)
 **Тип:** доработка — функциональность (`border-image`: 5 лонгхендов + шорткод +
 алгоритм 9-slice рендеринга border-image) отсутствует целиком, включая сам
 paint-алгоритм, а не сломана точечно; см. ревизию P3 2026-09-03 ниже
@@ -116,3 +116,19 @@ regex doesn't match property rows wrapped in backticks) — the Tier-0 module
 note is the only edit safe from that blast radius; P4 can add the granular row
 when picking this up. Status flipped to `OPEN (ДОРАБОТКА → CSS-SPECS.md)`; row
 removed from `STATUS-P3.md`.
+
+## Исправление (P4, 2026-10-27, ветка `p4-border-image`)
+
+- layout: `style/values/border_image.rs` (типы, разбор шортката и пяти лонгхендов, computed- и
+  specified-запись), `ComputedStyle::border_image`, `apply/paint.rs`, `css_wide.rs`,
+  `getComputedStyle`, CSSOM `el.style.borderImage*` (канонизация и отказ от невалидных значений),
+  `CSS.supports('border-image-*', value)` проверяет значение.
+- paint: `paint/src/border_image.rs` (`border_image_quads` — §6.2–6.5: slice, scale-down width,
+  `stretch`/`repeat`/`round`/`space`, `fill`), `DisplayCommand::DrawBorderImage` (CPU, wgpu, femtovg),
+  градиент как источник (раскладывается эмиттером на клетки с пересчётом угла/радиусов под
+  анизотропный масштаб), SVG-источник перерастеризуется в размер клетки в CPU-растеризаторе.
+- Тесты: `lumen-layout` (5), `lumen-paint` (14), `lumen-js` `border_image_cssom`, графический
+  тест 170 (0.30 % против Edge).
+- Не сделано: анимация `border-image-slice/width/outset/source`; возврат к `border-style`, когда
+  картинка не загрузилась; перерастеризация SVG-источника в wgpu-окне; `cross-fade()`/`paint()` как
+  источник (рисуется обычная рамка).

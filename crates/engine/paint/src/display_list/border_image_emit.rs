@@ -86,7 +86,7 @@ pub(crate) fn emit_border_image(b: &LayoutBox, dpr: f32, out: &mut Vec<DisplayCo
                     area.height * sy,
                 );
                 out.push(DisplayCommand::PushClipRect { rect: dst });
-                push_gradient(out, g, full);
+                push_gradient(out, g, full, (area.width, area.height), (sx, sy));
                 out.push(DisplayCommand::PopClip);
             }
             true
@@ -95,11 +95,17 @@ pub(crate) fn emit_border_image(b: &LayoutBox, dpr: f32, out: &mut Vec<DisplayCo
     }
 }
 
-/// Один градиент на прямоугольнике `rect` (тот же выбор команды, что у фонового слоя).
-fn push_gradient(out: &mut Vec<DisplayCommand>, g: &ParsedGradient, rect: Rect) {
+/// Один градиент на прямоугольнике `rect` — образ исходной картинки `src_w × src_h`, растянутой
+/// на `rect` с масштабом `(sx, sy)`. Градиент рисуется в пространстве картинки, а потом
+/// масштабируется, поэтому направление линии и радиусы пересчитываются через `S⁻¹`.
+fn push_gradient(out: &mut Vec<DisplayCommand>, g: &ParsedGradient, rect: Rect, src: (f32, f32), scale: (f32, f32)) {
+    let (sx, sy) = scale;
     match g {
         ParsedGradient::Linear { angle_deg, corner, stops, repeating } => {
-            let angle = corner.map_or(*angle_deg, |c| c.angle_deg(rect.width, rect.height));
+            let angle = corner.map_or(*angle_deg, |c| c.angle_deg(src.0, src.1));
+            let (sin, cos) = angle.to_radians().sin_cos();
+            // Направление (sin, -cos) под анизотропным масштабом переходит в (sin/sx, -cos/sy).
+            let angle = (sin / sx).atan2(cos / sy).to_degrees();
             out.push(DisplayCommand::DrawLinearGradient {
                 rect,
                 angle_deg: angle,
@@ -109,14 +115,14 @@ fn push_gradient(out: &mut Vec<DisplayCommand>, g: &ParsedGradient, rect: Rect) 
         }
         ParsedGradient::Radial { center_x_pct, center_y_pct, shape, size, stops, repeating } => {
             let (radius_x, radius_y) = lumen_layout::radial_gradient_radii(
-                *shape, *size, *center_x_pct, *center_y_pct, rect.width, rect.height,
+                *shape, *size, *center_x_pct, *center_y_pct, src.0, src.1,
             );
             out.push(DisplayCommand::DrawRadialGradient {
                 rect,
                 center_x_pct: *center_x_pct,
                 center_y_pct: *center_y_pct,
-                radius_x,
-                radius_y,
+                radius_x: radius_x * sx,
+                radius_y: radius_y * sy,
                 stops: stops.clone(),
                 repeating: *repeating,
             });
