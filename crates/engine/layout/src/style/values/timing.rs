@@ -542,6 +542,47 @@ impl AnimationFillMode {
     }
 }
 
+/// CSS Animations L2 §3.9 — `animation-composition`. Default = `Replace`.
+/// Как значение анимации складывается с «нижележащим» значением свойства
+/// (Web Animations §5.4.2 composite operations).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnimationComposition {
+    /// Значение keyframe заменяет нижележащее.
+    #[default]
+    Replace,
+    /// Значение keyframe складывается с нижележащим (`add`).
+    Add,
+    /// Как `add`, но числа/длины суммируются покомпонентно (`accumulate`).
+    Accumulate,
+}
+
+impl AnimationComposition {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "replace" => Some(Self::Replace),
+            "add" => Some(Self::Add),
+            "accumulate" => Some(Self::Accumulate),
+            _ => None,
+        }
+    }
+
+    /// `<single-animation-composition>#`: любая невалидная запись отвергает весь список.
+    pub fn parse_list(s: &str) -> Option<Vec<AnimationComposition>> {
+        split_top_level_commas(s)
+            .into_iter()
+            .map(AnimationComposition::parse)
+            .collect()
+    }
+
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Add => "add",
+            Self::Accumulate => "accumulate",
+        }
+    }
+}
+
 /// CSS Transitions L2 §3.1 — `transition-behavior: normal | allow-discrete`.
 /// `allow-discrete` разрешает переход свойств с дискретной анимацией (flip на 50%).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

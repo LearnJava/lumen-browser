@@ -19,12 +19,13 @@ use lumen_dom::NodeId;
 use lumen_layout::{
     animation::{
         AnimatedStyle, AnimationFrame, AnimationInterpolator, AnimValue, KeyframeStyle,
-        LinearInterpolator, interpolate_gap_rules, merge_gap_rules, parse_keyframe_style,
+        LinearInterpolator, composite_keyframe_style, interpolate_gap_rules, merge_gap_rules,
+        parse_keyframe_style,
     },
     style::{
         ComputedStyle,
-        AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
-        IterationCount, TimingFunction,
+        AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState,
+        AnimationTimeline, IterationCount, TimingFunction,
     },
     collect_named_scroll_timelines, collect_named_view_timelines, find_nearest_scroll_container,
     resolve_scroll_progress, resolve_view_progress, LayoutBox, NamedScrollTimeline,
@@ -434,11 +435,17 @@ impl AnimationScheduler {
                 }
             };
 
-            // Интерполировать keyframe-значения.
-            let animated = interpolate_at(kf_rule, t, style);
+            // CSS Animations L2 §3.9 — как keyframe складывается с нижележащим значением.
+            let composition = get_cyclic(&style.animation_compositions, i)
+                .copied()
+                .unwrap_or_default();
 
             // Слить в overrides для этого узла.
             let entry = frame.overrides.entry(lb.node).or_default();
+
+            // Интерполировать keyframe-значения.
+            let under = underlying_keyframe_style(style, entry);
+            let animated = interpolate_at(kf_rule, t, style, composition, &under);
             if let Some(v) = animated.opacity {
                 entry.opacity = Some(v);
             }
@@ -523,7 +530,17 @@ fn apply_direction(progress: f32, iteration: u64, direction: AnimationDirection)
 // ─── Интерполяция keyframe-ов ──────────────────────────────────────────────
 
 /// Интерполировать свойства keyframe-правила в точке `t ∈ [0,1]`.
-fn interpolate_at(rule: &KeyframesRule, t: f32, base: &ComputedStyle) -> AnimatedStyle {
+///
+/// `composition` / `under` — `animation-composition` анимации и нижележащее значение
+/// (computed-стиль элемента, перекрытый результатом более ранних анимаций узла);
+/// `animation-composition` внутри самого keyframe имеет приоритет.
+fn interpolate_at(
+    rule: &KeyframesRule,
+    t: f32,
+    base: &ComputedStyle,
+    composition: AnimationComposition,
+    under: &KeyframeStyle,
+) -> AnimatedStyle {
     let frames = &rule.frames;
     if frames.is_empty() {
         return AnimatedStyle::default();
@@ -555,8 +572,12 @@ fn interpolate_at(rule: &KeyframesRule, t: f32, base: &ComputedStyle) -> Animate
         ((t - from_kf.offset) / interval).clamp(0.0, 1.0)
     };
 
-    let from_ks = parse_keyframe_style(&from_kf.declarations);
-    let to_ks = parse_keyframe_style(&to_kf.declarations);
+    let mut from_ks = parse_keyframe_style(&from_kf.declarations);
+    let mut to_ks = parse_keyframe_style(&to_kf.declarations);
+    let from_mode = from_ks.composition.unwrap_or(composition);
+    let to_mode = to_ks.composition.unwrap_or(composition);
+    composite_keyframe_style(&mut from_ks, under, from_mode);
+    composite_keyframe_style(&mut to_ks, under, to_mode);
 
     let mut animated = interpolate_keyframe_styles(&from_ks, &to_ks, local_t);
     // CSS Gap Decorations L1 §4.7: `*-rule-width` / `*-rule-color` look at every keyframe
@@ -569,6 +590,21 @@ fn interpolate_at(rule: &KeyframesRule, t: f32, base: &ComputedStyle) -> Animate
     let refs: Vec<(f32, &KeyframeStyle)> = parsed.iter().map(|(o, ks)| (*o, ks)).collect();
     animated.gap_rules = interpolate_gap_rules(&refs, base, t);
     animated
+}
+
+/// Нижележащее значение пяти анимируемых свойств: computed-стиль элемента, поверх него —
+/// то, что уже выдали более ранние анимации этого узла в текущем кадре.
+fn underlying_keyframe_style(base: &ComputedStyle, earlier: &AnimatedStyle) -> KeyframeStyle {
+    KeyframeStyle {
+        opacity: Some(earlier.opacity.unwrap_or(base.opacity)),
+        transform: Some(earlier.transform.clone().unwrap_or_else(|| base.transform.clone())),
+        color: Some(earlier.color.unwrap_or(base.color)),
+        background_color: Some(earlier.background_color.unwrap_or_else(|| {
+            base.background_color.map(|c| c.resolve(base.color)).unwrap_or_default()
+        })),
+        height: earlier.height.clone().or_else(|| base.height.clone()),
+        ..KeyframeStyle::default()
+    }
 }
 
 /// Попарно интерполировать все поля KeyframeStyle.
@@ -1176,5 +1212,28 @@ mod tests {
         let (_, events) = sched.tick(500.0, &plain_root, &sheet, 0.0, 0.0, vp);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, AnimationEventKind::Cancel);
+    }
+    fn opacity_at_midpoint(composition: &str, base_opacity: f32) -> f32 {
+        let mut sched = AnimationScheduler::new();
+        let mut root = make_animated_box(1, "fade", 2.0, IterationCount::Finite(1.0));
+        let style = std::sync::Arc::make_mut(&mut root.style);
+        style.opacity = base_opacity;
+        style.animation_timing_functions = vec![TimingFunction::Linear];
+        style.animation_compositions = AnimationComposition::parse_list(composition).unwrap();
+        let sheet = lumen_css_parser::parse(
+            "@keyframes fade { from { opacity: 0; } to { opacity: 0.5; } }",
+        );
+        let vp = Viewport { width: 1024.0, height: 720.0 };
+        sched.tick(0.0, &root, &sheet, 0.0, 0.0, vp);
+        let (frame, _) = sched.tick(1000.0, &root, &sheet, 0.0, 0.0, vp);
+        frame.overrides.get(&node(1)).and_then(|s| s.opacity).expect("opacity override")
+    }
+
+    #[test]
+    fn animation_composition_add_sums_with_the_underlying_value() {
+        // Midpoint of 0→0.5 is 0.25; `add` puts the element's own 0.5 under it.
+        assert!((opacity_at_midpoint("add", 0.5) - 0.75).abs() < 1e-3);
+        assert!((opacity_at_midpoint("accumulate", 0.5) - 0.75).abs() < 1e-3);
+        assert!((opacity_at_midpoint("replace", 0.5) - 0.25).abs() < 1e-3);
     }
 }

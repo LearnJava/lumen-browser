@@ -12,7 +12,7 @@
 
 use crate::style::{
     AnimationDirection,
-    AnimationFillMode, TransitionBehavior,
+    AnimationComposition, AnimationFillMode, TransitionBehavior,
     AnimationPlayState,
     BackfaceVisibility,
     ComputedStyle,
@@ -677,6 +677,11 @@ pub(in crate::style) fn apply_decl_motion(
         }
         "animation-play-state" => {
             style.animation_play_states = AnimationPlayState::parse_list(val);
+        }
+        "animation-composition" => {
+            if let Some(list) = AnimationComposition::parse_list(val) {
+                style.animation_compositions = list;
+            }
         }
         "animation-timeline" => {
             style.animation_timelines = parse_animation_timeline_list(val);

@@ -58,6 +58,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "anchor-name",
     "anchor-scope",
     "animation",
+    "animation-composition",
     "animation-delay",
     "animation-direction",
     "animation-duration",

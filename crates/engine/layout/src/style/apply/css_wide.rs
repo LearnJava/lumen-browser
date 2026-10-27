@@ -1415,9 +1415,13 @@ fn apply_css_wide_keyword_with(
         // in place (a page's `::view-transition-group(*) { animation: unset }` kept the UA animation).
         "animation" | "animation-name" | "animation-duration" | "animation-timing-function" | "animation-delay"
         | "animation-iteration-count" | "animation-direction" | "animation-fill-mode" | "animation-play-state"
-        | "animation-timeline" => {
+        | "animation-timeline" | "animation-composition" => {
             let src = if inh_only_inherit { inherited } else { init };
             let all = prop == "animation";
+            // `animation-composition` is outside the shorthand (CSS Animations L2).
+            if prop == "animation-composition" {
+                style.animation_compositions = src.animation_compositions.clone();
+            }
             if all || prop == "animation-name" {
                 style.animation_names = src.animation_names.clone();
             }
