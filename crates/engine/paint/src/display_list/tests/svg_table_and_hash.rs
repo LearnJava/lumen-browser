@@ -208,6 +208,8 @@ mod svg_text;
         DisplayCommand::PushBackdropFilter {
             filters: vec![lumen_layout::FilterFn::Blur(4.0)],
             bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+            radii: [0.0; 4],
+            wrappers: 0,
         }
     }
 

@@ -334,7 +334,15 @@ pub(crate) fn rasterize_cpu_pixmap(
     // BUG-1288: индекс команды, до которой цикл пропускает уже отрисованное
     // содержимое группы `PushTransform` (включая её `PopTransform`).
     let mut skip_until = 0usize;
+    // BUG-1539: `layers.len()` на входе каждой команды — по ней `PushBackdropFilter` находит
+    // слой, под которым лежит фон (до собственных групп элемента). Только при наличии таких команд.
+    let track_layer_depth =
+        commands.iter().any(|c| matches!(c, DisplayCommand::PushBackdropFilter { .. }));
+    let mut layer_depth_at: Vec<usize> = Vec::new();
     for (cmd_idx, cmd) in commands.iter().enumerate() {
+        if track_layer_depth {
+            layer_depth_at.push(layers.len());
+        }
         if cmd_idx < skip_until {
             continue;
         }
@@ -894,12 +902,17 @@ pub(crate) fn rasterize_cpu_pixmap(
             // within `bounds`, in place. The element's own content then paints
             // on top via the draws emitted up to the matching `PopBackdropFilter`,
             // which is therefore a no-op.
-            DisplayCommand::PushBackdropFilter { filters, bounds } => {
-                let target = layers.last_mut().expect("base layer");
-                apply_backdrop_filter(&mut target.pm, filters, bounds, width, height);
-                // Blur can spread existing backdrop ink into previously-blank
-                // pixels, but only within the written-back `bounds` region.
-                target.mark(rect_bounds(bounds));
+            DisplayCommand::PushBackdropFilter { filters, bounds, radii, wrappers } => {
+                // Слой, активный до собственных групп элемента (blend/opacity/transform/clip-path).
+                let wrappers = usize::from(*wrappers);
+                let base_len = if wrappers <= cmd_idx {
+                    layer_depth_at.get(cmd_idx - wrappers).copied().unwrap_or(layers.len())
+                } else {
+                    layers.len()
+                };
+                apply_backdrop_to_stack(
+                    &mut layers, &layer_ops, base_len, filters, bounds, radii, clip_rect, width, height, image_map,
+                );
             }
             DisplayCommand::PopBackdropFilter => {
                 // No-op: the backdrop was filtered in place at the matching Push.
@@ -1656,6 +1669,133 @@ fn crop_dirty_window(
     Some((cx0, cy0, crop))
 }
 
+/// Группа, сквозь которую виден фон: не корень фона (Filter Effects L2 §Backdrop Root).
+/// `isolation: isolate` на CPU — `PushOpacity { alpha: 1 }`, `overflow` со скруглением —
+/// `PushClipRoundedRect`, `transform` — `PushTransform`; ничто из этого не образует корень.
+fn backdrop_transparent(op: &LayerComposite) -> bool {
+    matches!(op, LayerComposite::Opacity(a) if *a >= 1.0)
+        || matches!(op, LayerComposite::ClipRoundedRect { .. } | LayerComposite::Transform(_))
+}
+
+/// Маска области `backdrop-filter`: рамка элемента, скруглённая `border-radius`, в пересечении
+/// с действующим прямоугольным клипом `clip` (`overflow` предка режет и фильтр фона).
+fn backdrop_region_mask(
+    bounds: &Rect,
+    radii: &[f32; 4],
+    clip: Option<Rect>,
+    width: u32,
+    height: u32,
+) -> Option<tiny_skia::Mask> {
+    let mut mask = if radii.iter().all(|r| *r <= 0.0) {
+        build_clip_mask(width, height, Some(*bounds))?
+    } else {
+        match rasterize_rounded_rect_coverage(bounds, radii, width, height) {
+            Some(cov) => tiny_skia::Mask::from_pixmap(cov.as_ref(), tiny_skia::MaskType::Alpha),
+            None => build_clip_mask(width, height, Some(*bounds))?,
+        }
+    };
+    if let Some(clip_mask) = build_clip_mask(width, height, clip) {
+        for (m, c) in mask.data_mut().iter_mut().zip(clip_mask.data()) {
+            *m = ((u32::from(*m) * u32::from(*c) + 127) / 255) as u8;
+        }
+    }
+    Some(mask)
+}
+
+/// Bounding box of `r` mapped through the 2D affine `t`.
+fn transform_rect_by(t: tiny_skia::Transform, r: &Rect) -> Rect {
+    let (x0, y0, x1, y1) = transform_bounds(t, rect_bounds(r));
+    // `transform_bounds` inflates by 1px for resampling bleed; the filter window wants the exact box.
+    Rect::new(x0 + 1.0, y0 + 1.0, (x1 - x0 - 2.0).max(0.0), (y1 - y0 - 2.0).max(0.0))
+}
+
+/// BUG-1539 — `PushBackdropFilter` над стеком групп.
+///
+/// Фон элемента — всё, что нарисовано до его собственных групп (`blend`/`opacity`/`transform`/
+/// `clip-path`, слои `base_len..`): они открыты уже, а их содержимое пусто, поэтому фильтровать
+/// «на месте» вершину стека нельзя. Берётся слой под собственными группами (сквозь группы, не
+/// образующие корень фона), его копия — фон — фильтруется в страничных координатах и
+/// записывается в вершину стека в её локальных координатах: через обратную матрицу
+/// собственного `transform`, в форме рамки с `border-radius`. Дальше группы элемента
+/// закрываются как обычно, поэтому opacity/transform/клип применяются и к отфильтрованному фону.
+#[allow(clippy::too_many_arguments)]
+fn apply_backdrop_to_stack(
+    layers: &mut [CpuLayer],
+    layer_ops: &[LayerComposite],
+    base_len: usize,
+    filters: &[FilterFn],
+    bounds: &Rect,
+    radii: &[f32; 4],
+    clip: Option<Rect>,
+    width: u32,
+    height: u32,
+    image_map: &std::collections::HashMap<&str, &Image>,
+) {
+    let top = layers.len() - 1;
+    let base_len = base_len.clamp(1, layers.len());
+    let mut src_idx = base_len - 1;
+    while src_idx > 0 && backdrop_transparent(&layer_ops[src_idx - 1]) {
+        src_idx -= 1;
+    }
+    if src_idx == top {
+        // Ни собственных групп, ни прозрачных предков: фон лежит прямо в активном слое.
+        apply_backdrop_filter(&mut layers[top].pm, filters, bounds, radii, clip, width, height);
+        // Blur can spread existing backdrop ink into previously-blank
+        // pixels, but only within the written-back `bounds` region.
+        layers[top].mark(rect_bounds(bounds));
+        return;
+    }
+    // Матрица «локальные координаты вершины стека → страница»: transform'ы всех групп над слоем фона
+    // (предков, сквозь которые виден фон, и собственных), внешний применяется последним.
+    let mut own_transform = None;
+    for op in &layer_ops[src_idx..] {
+        match op {
+            LayerComposite::Transform(t) => {
+                own_transform = Some(own_transform.map_or(*t, |acc: tiny_skia::Transform| acc.pre_concat(*t)));
+            }
+            // Проективный образ рамки (3D) на CPU не моделируется.
+            LayerComposite::Projective { .. } => return,
+            _ => {}
+        }
+    }
+    let to_local = match own_transform {
+        Some(t) => match t.invert() {
+            Some(inv) => Some(inv),
+            None => return,
+        },
+        None => None,
+    };
+    let mut backdrop = CpuLayer { pm: layers[src_idx].pm.clone(), dirty: layers[src_idx].dirty };
+    for i in src_idx + 1..base_len {
+        close_layer(&mut backdrop, &layers[i], &layer_ops[i - 1], image_map);
+    }
+    let page_region = own_transform.map_or(*bounds, |t| transform_rect_by(t, bounds));
+    apply_backdrop_filter(&mut backdrop.pm, filters, &page_region, &[0.0; 4], None, width, height);
+    let Some(mask) = backdrop_region_mask(bounds, radii, clip, width, height) else { return };
+    // Окно записи — рамка в локальных координатах верхнего слоя (вне неё маска нулевая).
+    let win = (
+        bounds.x.floor().max(0.0) as u32,
+        bounds.y.floor().max(0.0) as u32,
+        (bounds.x + bounds.width).ceil().max(0.0) as u32,
+        (bounds.y + bounds.height).ceil().max(0.0) as u32,
+    );
+    match to_local {
+        None => replace_through_mask(&mut layers[top].pm, &backdrop.pm, (0, 0), &mask, win),
+        Some(inv) => {
+            // Фон из страничных координат — в локальные (обратная матрица собственного transform).
+            let Some(mut local) = tiny_skia::Pixmap::new(width, height) else { return };
+            let paint = tiny_skia::PixmapPaint {
+                opacity: 1.0,
+                blend_mode: tiny_skia::BlendMode::Source,
+                quality: tiny_skia::FilterQuality::Bilinear,
+            };
+            local.draw_pixmap(0, 0, backdrop.pm.as_ref(), &paint, inv, None);
+            replace_through_mask(&mut layers[top].pm, &local, (0, 0), &mask, win);
+        }
+    }
+    layers[top].mark(rect_bounds(bounds));
+}
+
 /// Apply a `backdrop-filter` chain (CSS Filter Effects L1 §6.2) to the content
 /// already painted in `target` within `bounds`, in place.
 ///
@@ -1674,6 +1814,8 @@ fn apply_backdrop_filter(
     target: &mut tiny_skia::Pixmap,
     filters: &[FilterFn],
     bounds: &Rect,
+    radii: &[f32; 4],
+    clip: Option<Rect>,
     width: u32,
     height: u32,
 ) {
@@ -1696,20 +1838,54 @@ fn apply_backdrop_filter(
     // its filtered counterpart (outside the mask the original target is kept).
     // The crop window contains all of `bounds ∩ canvas`, so every masked pixel
     // is covered by the drawn pixmap.
-    let mask = build_clip_mask(width, height, Some(*bounds));
-    let paint = tiny_skia::PixmapPaint {
-        opacity: 1.0,
-        blend_mode: tiny_skia::BlendMode::Source,
-        quality: tiny_skia::FilterQuality::Nearest,
-    };
-    target.draw_pixmap(
-        cx0 as i32,
-        cy0 as i32,
-        filtered.as_ref(),
-        &paint,
-        tiny_skia::Transform::identity(),
-        mask.as_ref(),
-    );
+    if let Some(mask) = backdrop_region_mask(bounds, radii, clip, width, height) {
+        replace_through_mask(target, &filtered, (cx0, cy0), &mask, (cx0, cy0, cx1, cy1));
+    }
+}
+
+/// Replace `dst` with `src` weighted by the coverage `mask`: `dst = dst·(1−m) + src·m` per
+/// channel (both premultiplied). `src` is placed with its top-left at `origin` in `dst`'s pixel
+/// space; only the window `win = (x0, y0, x1, y1)` is visited. tiny-skia's `Source` blend under
+/// a mask scales `src` by the coverage *without* keeping `dst·(1−m)`, which punches transparent
+/// holes along anti-aliased edges — hence the explicit lerp.
+fn replace_through_mask(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    origin: (u32, u32),
+    mask: &tiny_skia::Mask,
+    win: (u32, u32, u32, u32),
+) {
+    let (dw, dh) = (dst.width(), dst.height());
+    let (sw, sh) = (src.width(), src.height());
+    let mw = mask.width();
+    if mw != dw || mask.height() != dh {
+        return;
+    }
+    let (ox, oy) = origin;
+    let x0 = win.0.max(ox);
+    let y0 = win.1.max(oy);
+    let x1 = win.2.min(dw).min(ox + sw);
+    let y1 = win.3.min(dh).min(oy + sh);
+    let md = mask.data();
+    let sd = src.data();
+    let dd = dst.data_mut();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let m = u32::from(md[(y * mw + x) as usize]);
+            if m == 0 {
+                continue;
+            }
+            let si = (((y - oy) * sw + (x - ox)) * 4) as usize;
+            let di = ((y * dw + x) * 4) as usize;
+            for c in 0..4 {
+                dd[di + c] = if m == 255 {
+                    sd[si + c]
+                } else {
+                    ((u32::from(dd[di + c]) * (255 - m) + u32::from(sd[si + c]) * m + 127) / 255) as u8
+                };
+            }
+        }
+    }
 }
 
 /// Gaussian blur of a premultiplied-RGBA pixmap via the SVG Filter Effects

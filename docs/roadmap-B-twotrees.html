@@ -76,11 +76,11 @@
  "generated": "2026-10-27",
  "counts": {
   "open": 298,
-  "fixed": 1368,
+  "fixed": 1369,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1669,
+ "total_bugs": 1670,
  "phases": [
   {
    "id": "P0",
@@ -10751,13 +10751,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1539": {
-   "status": "open",
-   "title": "`backdrop-filter` не применяется к элементу с `opacity<1`, `transform`, `clip-path`, `mix-blend-mode`; не обрезается по `border-radius`; `isolation` на предке о…",
-   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` `PushBackdropFilter`; `display_list/box_layer.rs:268` — порядок `PushBackdropFilter`/`PushTransform`/`PushClipPath`/`PushOpacity`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1541": {
    "status": "open",
    "title": "CSSOM `filter`/`backdrop-filter`: `backdrop-filter` нет в `getComputedStyle`; недопустимое принимается; `blur(0)` не канонизируется; `flood-*`/`lighting-color`/…",
@@ -11728,6 +11721,13 @@
    "status": "open",
    "title": "Найден WPT-SHADOW-SCOUT: у `document.implementation.createHTMLDocument()` нет `createNodeIterator`/`createTreeWalker`; остаток BUG-415; `ownerdocument-002.html`…",
    "component": "js (`web_api_shim_mid.js`, `createNodeIterator` только на главном `document`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1733": {
+   "status": "open",
+   "title": "Остаток [BUG-1539](bugs/BUG-1539-FIXED.md): на CPU-пути `backdrop-filter` теперь работает под собственными opacity/transform/clip-path/mix-blend-mode/border-rad…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs::apply_backdrop_to_stack`, wgpu `renderer.rs` `PushBackdropFilter`)",
    "date": null,
    "debtor": false
   },
@@ -21327,6 +21327,13 @@
    "component": "layout (`crates/engine/layout/src/box_tree/table.rs` — порядок `thead`/`tbody`/`tfoot`)",
    "date": "2026-10-27",
    "debtor": false
+  },
+  "BUG-1539": {
+   "status": "fixed",
+   "title": "`backdrop-filter` не применяется к элементу с `opacity<1`, `transform`, `clip-path`, `mix-blend-mode`; не обрезается по `border-radius`; `isolation` на предке о…",
+   "component": "paint (`crates/engine/paint/src/cpu_raster.rs` `PushBackdropFilter`; `display_list/box_layer.rs:268` — порядок `PushBackdropFilter`/`PushTransform`/`PushClipPath`/`PushOpacity`)",
+   "date": "2026-10-27",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -23990,6 +23997,9 @@
   ],
   "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
    "BUG-784"
+  ],
+  "paint (`crates/engine/paint/src/cpu_raster.rs::apply_backdrop_to_stack`, wgpu `renderer.rs` `PushBackdropFilter`)": [
+   "BUG-1733"
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_cpu_with_fonts` — CPU-очистка канвы) + эталоны `graphic_tests/dump-golden/`": [
    "BUG-1106"

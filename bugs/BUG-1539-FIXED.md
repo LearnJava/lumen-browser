@@ -1,6 +1,6 @@
 # BUG-1539 — `backdrop-filter` не применяется к элементу с `opacity<1`, `transform`, `clip-path`, `mix-blend-mode`; не обрезается по `border-radius`; `isolation` на предке ошибочно образует корень
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3, CPU-путь; остаток [BUG-1733](BUG-1733-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` `PushBackdropFilter`; `display_list/box_layer.rs:268` — порядок `PushBackdropFilter`/`PushTransform`/`PushClipPath`/`PushOpacity`)
 
@@ -34,3 +34,15 @@ WPT-RUN-14 срез 24: `css/filter-effects/backdrop-filter-*` (`-3d-transform-p
 ## Как проверить
 
 `css/filter-effects/backdrop-filter-basic-opacity-2.html`, `backdrop-filter-isolation-isolate.html`, `backdrop-filter-clip-rounded-clip.html`, `backdrop-filter-transform.html`.
+
+## Исправление (2026-10-27, P3)
+
+Причина — `PushBackdropFilter` на CPU фильтровал вершину стека слоёв «на месте», а собственные группы элемента (`PushBlendMode`/`PushOpacity`/`PushTransform`/`PushClipPath`) к этому моменту уже открыли пустые слои: фона там нет. Плюс область фильтра была прямоугольником без `border-radius`, а запись через `Source` + маску с AA-краем стирала альфу на границе.
+
+- `DisplayCommand::PushBackdropFilter` получила `radii` (скругление рамки) и `wrappers` (сколько собственных `Push*` эмитировано непосредственно перед ней) — `box_layer.rs`, `walk.rs`.
+- `cpu_raster.rs::apply_backdrop_to_stack`: фон берётся со слоя под собственными группами (сквозь `isolation: isolate`, скруглённый `overflow`-клип и `transform` предков — они не корни фона), копия фильтруется в страничных координатах и записывается в вершину стека в её локальных координатах (обратная матрица `transform`), по форме рамки ∩ активный клип; дальше группы элемента закрываются как обычно, поэтому opacity/transform/clip-path/blend действуют и на фильтрованный фон.
+- `replace_through_mask` вместо `draw_pixmap(Source, mask)`: явный lerp, без дыр на AA-краю.
+
+Замер (`tests/wpt/reftest_pixdiff`, `css/filter-effects/*backdrop*`, 800×600, база — бинарь до правки): `identical` 28→34, `thick` 55→48; перешли в `identical`: `basic-opacity-2`, `clipped`, `clip-rounded-clip`, `edge-pixels`, `plus-mask`, `plus-mask-large`, `with-mix-blend-mode-same-element`, `filters-blur-large`. Два «identical→thick» (`backdrop-root-clip-path-2`, `css-backdrop-filter-transform-clip`) — артефакт базы: у неё эталон не рисовался вовсе. Эталон CPU-снимка `30-css-filter` перегенерирован (край `backdrop-filter` больше не стирает альфу). Тесты: `cpu_raster/tests/layers_borders_images.rs::backdrop_filter_*`, `display_list/tests/shadows_and_transforms.rs::backdrop_filter_carries_radii_and_wrapper_count`.
+
+Остаток — [BUG-1733](BUG-1733-OPEN.md).

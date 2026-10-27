@@ -2782,7 +2782,7 @@ impl Renderer {
                 }
                 // CSS Filter Effects L1 §2 — backdrop-filter.
                 // Opens a new offscreen level for the element's own content.
-                DisplayCommand::PushBackdropFilter { filters, bounds } => {
+                DisplayCommand::PushBackdropFilter { filters, bounds, .. } => {
                     flush_batch!();
                     // `bounds` приходят в page-пространстве, как и всякий rect
                     // дисплей-листа: без scroll-offset-а и без накопленного
