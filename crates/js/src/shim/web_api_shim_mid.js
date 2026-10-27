@@ -12874,6 +12874,7 @@ globalThis.StyleSheetList = StyleSheetList;
 StyleSheetList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
 function MediaList() { throw new TypeError('Illegal constructor'); }
 globalThis.MediaList = MediaList;
+Object.defineProperty(MediaList.prototype, Symbol.toStringTag, { value: 'MediaList', configurable: true });
 
 // CSSOM-10: the rule interfaces. A rule wrapper is `Object.create(<class>.prototype)`
 // plus a hidden `_cssr = {be, id, last, …}` (see `_lumen_css_wrap`); every accessor
@@ -12967,26 +12968,6 @@ function _lumen_make_indexed_list(itemsFn, protoObj) {
             return undefined;
         },
     });
-}
-
-// A read-only `MediaList` over a fixed media-query text (`stylesheet.media`/
-// `CSSMediaRule.media`) — CSSOM-1 срез 3 does not track live media-query
-// edits (`appendMedium`/`deleteMedium` are no-ops), only the `mediaText`
-// (CSSOM View §6.2) callers actually read in the WPT slices BUG-471 cites.
-function _lumen_make_media_list(text) {
-    var t = text || '';
-    var m = Object.create(MediaList.prototype);
-    Object.defineProperty(m, 'mediaText', {
-        get: function() { return t; }, enumerable: true, configurable: true,
-    });
-    Object.defineProperty(m, 'length', {
-        get: function() { return t === '' ? 0 : 1; }, enumerable: true, configurable: true,
-    });
-    m.item = function(i) { return (i === 0 && t !== '') ? t : null; };
-    m.appendMedium = function() {};
-    m.deleteMedium = function() {};
-    m.toString = function() { return t; };
-    return m;
 }
 
 // ── CSSOM-10: backends, wrappers and rule prototypes over the Rust tree ───────
@@ -13243,35 +13224,56 @@ _lumen_css_prelude_acc(CSSPageRule.prototype, 'selectorText', true);
 _lumen_css_prelude_acc(CSSKeyframeRule.prototype, 'keyText', true);
 
 // ── CSSMediaRule / MediaList ──
+// CSSOM §6.1: the list is a view over `read()`/`write(text)` (the rule's prelude,
+// the owner's `media` attribute or a detached sheet's own text) — every call
+// re-splits it, so edits made elsewhere show up. Items keep their authored
+// text; two items are "the same query" when their serializations are equal.
+function _lumen_css_media_split(text) {
+    var out = [], depth = 0, cur = '';
+    for (var i = 0; i < text.length; i++) {
+        var c = text[i];
+        if (c === '(') depth++;
+        else if (c === ')' && depth > 0) depth--;
+        if (c === ',' && depth === 0) { out.push(cur); cur = ''; } else cur += c;
+    }
+    out.push(cur);
+    return out.map(function(s) { return s.trim().replace(/\s+/g, ' '); });
+}
+function _lumen_css_media_key(q) { return _lumen_serialize_media_query(q); }
 function _lumen_css_media_list(self, read, write) {
     var m = Object.create(MediaList.prototype);
     function items() {
         var t = read().trim();
-        return t === '' ? [] : t.split(',').map(function(s) { return s.trim(); });
+        if (t === '') return [];
+        return _lumen_css_media_split(t).map(function(s) { return s === '' ? 'not all' : s; });
     }
+    function set(v) { if (write) write(v); }
     Object.defineProperties(m, {
         mediaText: {
-            get: function() { return read(); },
-            set: write ? function(v) { write(String(v)); } : function() {},
+            get: function() { return items().join(', '); },
+            set: function(v) { set(v === null ? '' : String(v)); },
             enumerable: true, configurable: true,
         },
-        length: { get: function() { return items().length; }, enumerable: true, configurable: true },
     });
-    m.item = function(i) { var a = items(); i = i >>> 0; return i < a.length ? a[i] : null; };
     m.appendMedium = function(medium) {
-        medium = String(medium);
-        var a = items();
-        if (write && a.indexOf(medium) < 0) { a.push(medium); write(a.join(', ')); }
+        if (arguments.length < 1) throw new TypeError("Failed to execute 'appendMedium' on 'MediaList': 1 argument required, but only 0 present.");
+        var q = _lumen_css_media_split(String(medium));
+        if (q.length !== 1) return;
+        var a = items(), key = _lumen_css_media_key(q[0]);
+        for (var i = 0; i < a.length; i++) if (_lumen_css_media_key(a[i]) === key) return;
+        a.push(q[0] === '' ? 'not all' : q[0]);
+        set(a.join(', '));
     };
     m.deleteMedium = function(medium) {
+        if (arguments.length < 1) throw new TypeError("Failed to execute 'deleteMedium' on 'MediaList': 1 argument required, but only 0 present.");
         medium = String(medium);
-        var a = items(), k = a.indexOf(medium);
-        if (k < 0) throw new DOMException("Failed to execute 'deleteMedium' on 'MediaList': The medium provided ('" + medium + "') is not in the list.", 'NotFoundError');
-        a.splice(k, 1);
-        if (write) write(a.join(', '));
+        var key = _lumen_css_media_key(medium), a = items();
+        var rest = a.filter(function(s) { return _lumen_css_media_key(s) !== key; });
+        if (rest.length === a.length) throw new DOMException("Failed to execute 'deleteMedium' on 'MediaList': The medium provided ('" + medium + "') is not in the list.", 'NotFoundError');
+        set(rest.join(', '));
     };
-    m.toString = function() { return read(); };
-    return m;
+    m.toString = function() { return items().join(', '); };
+    return _lumen_make_indexed_list(items, m);
 }
 _lumen_css_acc(CSSMediaRule.prototype, 'media', function() {
     var self = this;
@@ -13553,8 +13555,14 @@ _lumen_css_acc(_lumen_css_sheet_proto, 'title', function() {
     return el ? (el.getAttribute('title') || null) : null;
 });
 _lumen_css_acc(_lumen_css_sheet_proto, 'media', function() {
-    var el = _lumen_css_owner(_lumen_css_be(this));
-    return _lumen_make_media_list(el ? (el.getAttribute('media') || '') : '');
+    var be = _lumen_css_be(this);
+    return be.media || (be.media = _lumen_css_media_list(this, function() {
+        var el = _lumen_css_owner(be);
+        return el ? (el.getAttribute('media') || '') : (be.mediaText || '');
+    }, function(v) {
+        var el = _lumen_css_owner(be);
+        if (el) el.setAttribute('media', v); else be.mediaText = v;
+    }));
 });
 _lumen_css_acc(_lumen_css_sheet_proto, 'parentStyleSheet', function() { _lumen_css_be(this); return null; });
 _lumen_css_acc(_lumen_css_sheet_proto, 'ownerRule', function() { _lumen_css_be(this); return null; });

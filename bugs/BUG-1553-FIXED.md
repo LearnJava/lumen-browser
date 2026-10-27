@@ -1,6 +1,6 @@
 # BUG-1553 — `MediaList`: `appendMedium`, `deleteMedium`, `mediaText =` не меняют список; `matchMedia("bogus").media` — `bogus`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3; остаток — [BUG-1765](BUG-1765-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** js (`crates/js/src/shim/web_api_shim_mid.js` — `MediaList`, `matchMedia`)
 
@@ -29,3 +29,9 @@ WPT-RUN-14 срез 25: `css/cssom/{MediaList,medialist-appendmedium-parse-singl
 ## Как проверить
 
 `css/cssom/MediaList.html`, `medialist-appendmedium-parse-single-and-dedup.html`.
+
+## Исправление
+
+`styleSheet.media` теперь живой `MediaList` (`_lumen_css_media_list`, `web_api_shim_mid.js`): один объект на лист, список читается из `media`-атрибута владельца (у открепленного листа — из собственного текста), `mediaText =`/`appendMedium`/`deleteMedium` пишут обратно. `appendMedium` разбирает аргумент как один запрос (запятая — no-op) и не дублирует; `deleteMedium` сравнивает запросы по сериализации, удаляет все совпадения, без аргумента — `TypeError`, нет совпадений — `NotFoundError`; индексы `m[i]`, `[object MediaList]`. Тест — `crates/js/src/dom/tests/v8_bug1553_media_list.rs`; сняты ожидания FAIL у 7 id `css/cssom/{MediaList,MediaList2,medialist-*}`.
+
+Остаток — [BUG-1765](BUG-1765-OPEN.md): `<style media>` игнорируется каскадом (`medialist-dynamic-001`), `matchMedia("bogus").media`.
