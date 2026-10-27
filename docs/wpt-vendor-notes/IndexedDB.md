@@ -78,9 +78,9 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 |---|---|---|---|---|---|
 | 1 | 98.33 | 12.09 | 569 | 585/3 805 | OK 569, TIMEOUT 203, ERROR 41 |
 | 2 | 97.33 | 11.97 | 560 | 584/3 697 | OK 560, TIMEOUT 207, ERROR 46 |
-| 3 | RUN3_SCORE |
+| 3 | 98.33 | 12.09 | 570 | 585/3 832 | OK 570, TIMEOUT 203, ERROR 40 |
 
-Между 1 и 2 балл сменил один тест — `open-request-queue.any.html` (OK 1/1 → TIMEOUT): у него собственное имя БД, хранилище соседей его не задевает, это нагрузочный флейк 7 браузеров. Остальные 12 смен статуса — без сабтестов (`structured-clone.any.html?*` — [BUG-1710](../../bugs/BUG-1710-OPEN.md), `*-metadata-revert`, `reading-autoincrement-*`). Тесты serial lane в трёх прогонах дают одинаковые статусы и сабтесты.
+Прогоны 1 и 3 совпали по баллу (`run_diff.py`: 0 хуже, 0 лучше, 4 смены статуса без сабтестов). Между 2 и 3 (и 1 и 2) балл сменил один тест — `open-request-queue.any.html` (OK 1/1 ↔ TIMEOUT): у него собственное имя БД, хранилище соседей его не задевает, это нагрузочный флейк 7 браузеров. Остальные смены статуса — без сабтестов (`structured-clone.any.html?*` — [BUG-1710](../../bugs/BUG-1710-OPEN.md), `*-metadata-revert`, `reading-autoincrement-*`). Тесты serial lane в трёх прогонах дают одинаковые статусы и сабтесты.
 
 **Что осталось от кластера N.** `abort-in-initial-upgradeneeded.any.html` в serial lane на пустом хранилище стабильно ERROR `expected 0 but got 1`: это уже не соседи (было 1…231), а собственная БД теста, которую шим не удаляет после отката первого upgrade, — [BUG-1753](../../bugs/BUG-1753-OPEN.md). Остальные тесты списка упираются в известные кластеры: D (`get-databases`, `idbfactory-origin-isolation`, `database-names-by-origin` — `Expected success event, but got upgradeneeded`), A/B/C (воркерные варианты), O (`idbfactory-databases-opaque-origin` — sandbox не бросает `SecurityError`). Остальные 11 id кластера N (`idb-partitioned-*`, `*-opaque-origin`, `structured-clone?81-…`, `idlharness`, `keypath`, `name-scopes`, `idbobjectstore_createIndex`, `worker-termination-aborts-upgrade`) к хранилищу не относятся и раннером не лечатся.
 
