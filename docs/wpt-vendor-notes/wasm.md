@@ -24,7 +24,7 @@
 | W6 | type reflection: `jsapi/function/`, `*/type.tentative`, `constructor-types.tentative` | 20 | OK 20 | 4 / 96 | `WebAssembly.Function`, `.type()` — предложение не отгружено в Chrome (флаг V8 `--experimental-wasm-type-reflection`) | не берём | 18.7 (3.1 п.п.) |
 | W7 | `jsapi/functions/{entry,incumbent,…}`, `proto-from-ctor-realm` | 4 | ERROR 3, TIMEOUT 1 | 0 / 4 | `iframe.contentWindow.Function` нет — пробел реалмов iframe/`window.open`, не wasm | общий пробел движка | 4.0 |
 | S | `*.any.serviceworker.html` | 14 | TIMEOUT 14 | — | корпусный TIMEOUT SW-вариантов (639/675 в прогоне 2026-10-22) | [BUG-1226](../../bugs/BUG-1226-OPEN.md) | 14.0 |
-| J | `jsapi/**/*.any.js` (jsshell) | 78 | SKIP 78 | — | `Executor does not support jsshell` — недостижимо для браузера, но в знаменателе | `WPT-JSSHELL-DENOM` (P2) | 78.0 (12.7 п.п.) |
+| J | `jsapi/**/*.any.js` (jsshell) | 78 | SKIP 78 | — | `Executor does not support jsshell` — недостижимо для браузера, но в знаменателе; wpt.fyi тоже считает их 0 — оставлены (`docs/wpt/pass-rate.md` §jsshell-варианты) | `WPT-JSSHELL-DENOM` (P2, закрыт) | 78.0 (12.7 п.п.), не взять |
 
 **Оформлено:** [BUG-1752](../../bugs/BUG-1752-OPEN.md) → `STATUS-P3.md`; `ROADMAP.md` `WASM-V8-NATIVE` (W1–W3, ≈+40.8 п.п., 27 → ≈68 %) и `WASM-CLONE` (W4) → `STATUS-P1.md`; `WASM-ESM` (W5) — `opt`, без указателя (предложение tentative, решение пользователя); `WPT-JSSHELL-DENOM` (J) → `STATUS-P2.md`. Таймауты/`.ini` не нужны: TIMEOUT в `core/` — следствие интерпретатора, а при нативном пути — BUG-1752. Порядок: BUG-1752 → WASM-V8-NATIVE → WASM-CLONE.
 
