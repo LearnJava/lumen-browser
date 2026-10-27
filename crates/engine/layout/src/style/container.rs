@@ -899,4 +899,7 @@ pub fn apply_matched_container_rules(
             apply_declaration(style, effective_decl, em, viewport, pw, &inherited, &inherited, is_quirks, dark_mode);
         }
     }
+    // The border shorthands keep the specified width of a `none` side; the computed 0 is set here
+    // as at the end of `compute_style`.
+    super::cascade::zero_unstyled_border_widths(style);
 }

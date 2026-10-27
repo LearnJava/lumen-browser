@@ -1706,7 +1706,7 @@ pub(in crate::style) const INITIAL_BORDER_WIDTH: f32 = 3.0;
 
 /// CSS Backgrounds L3 §4.2: a side whose `border-style` is `none`/`hidden` has a computed
 /// width of `0` whatever `border-width` says.
-fn zero_unstyled_border_widths(style: &mut ComputedStyle) {
+pub(in crate::style) fn zero_unstyled_border_widths(style: &mut ComputedStyle) {
     use crate::BorderStyle;
     let unstyled = |s: BorderStyle| matches!(s, BorderStyle::None | BorderStyle::Hidden);
     if unstyled(style.border_top_style) {
