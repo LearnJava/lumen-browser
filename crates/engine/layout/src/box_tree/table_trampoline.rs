@@ -366,8 +366,19 @@ fn step_cell(
 
     let row = row_box_mut(&mut frame.b, &frame.init.top_level, t, r);
     let row_content_y = row.rect.y;
+    let row_cell_h = super::table_height::row_cell_height(row, frame.init.content_width, viewport);
     let cell_box = &mut row.children[cell_local_idx];
     let saved_width = Arc::make_mut(&mut cell_box.style).width.take();
+    // Высота строки определена → потомки ячейки без своей `height` считают `%` от неё
+    // (CSS Tables L3 §3.4): ячейка получает её на время раскладки, как и ширину.
+    let saved_height = row_cell_h
+        .filter(|_| cell_box.row_span == 1 && cell_box.style.height.is_none())
+        .filter(|_| matches!(cell_box.style.writing_mode, crate::style::WritingMode::HorizontalTb))
+        .map(|h| {
+            let st = Arc::make_mut(&mut cell_box.style);
+            st.height = Some(Length::Px(h));
+            std::mem::replace(&mut st.box_sizing, BoxSizing::BorderBox)
+        });
     // Ячейка с вертикальным `writing-mode` (ортогональный поток в горизонтальной таблице): её
     // физическая ширина — размер по блочной оси, `auto` дал бы ширину по содержимому, а ячейка
     // обязана занять свой столбец целиком.
@@ -388,6 +399,11 @@ fn step_cell(
         false, None, AlignValue::Auto, None,
     );
     Arc::make_mut(&mut cell_box.style).width = saved_width;
+    if let Some(box_sizing) = saved_height {
+        let st = Arc::make_mut(&mut cell_box.style);
+        st.height = None;
+        st.box_sizing = box_sizing;
+    }
     match outcome {
         DispatchOutcome::Done => StepOutcome::Advance,
         DispatchOutcome::NeedsTableLoop(ci) => StepOutcome::Descend(ci),

@@ -509,6 +509,7 @@ mod flex_auto_min_size;
 mod flex_factor_below_one;
 mod table_trampoline;
 mod table_caption_layout;
+mod table_cell_percent;
 mod table_height;
 mod table_visibility_collapse;
 mod table_shrink_to_fit;

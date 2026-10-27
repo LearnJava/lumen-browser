@@ -26,6 +26,12 @@ WPT-RUN-14 срез 24: `css-tables/height-distribution/percentage-sizing-of-tab
 
 Считать процентную высоту потомка ячейки от высоты ячейки после распределения высоты строки/таблицы (CSS Tables 3 §«Cell box height»), если она определена не контентом.
 
+## Срез 1 (2026-10-27) — `height` строки
+
+Сделано в `box_tree/table_trampoline.rs::step_cell` и `table_height.rs::row_cell_height`: если у строки `height` определена, ячейка без своей `height` (не rowspan, горизонтальный writing-mode) на время раскладки получает её border-box высоту (как `finish_row`), поэтому потомок `height:50%`/`100%` считается от высоты строки; `height` ячейки остаётся минимумом, ячейка по-прежнему растёт под содержимое. Тесты — `box_tree/tests/table_cell_percent.rs`. A/B по 722 reftest (`css-tables`, `CSS2/tables`, `CSS2/height`, `css-sizing`) — без изменений.
+
+Остаток (статус остаётся OPEN): `table{height:100px} > td(auto) > div{height:50%}` — высота ячейки появляется только после распределения высоты таблицы между строками (`table_height::distribute`, постфактум), потомок уже разложен; нужен второй проход раскладки ячеек. Перечисленные в симптоме WPT-id (`percentage-sizing-of-table-cell-007`, `percent-height-table-cell-child`) этой причиной не объясняются: оба на A/B не изменились.
+
 ## Как проверить
 
 `css/css-tables/height-distribution/percentage-sizing-of-table-cell-007.html`, `percent-height-table-cell-child.html`.
