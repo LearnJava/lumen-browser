@@ -141,6 +141,18 @@ def collect(manifest: dict) -> dict:
     return per_category
 
 
+def count_jsshell(manifest: dict, categories=None) -> int:
+    """Testharness ids the manifest marks `jsshell` (the `.any.js` variant of
+    `// META: global=jsshell`). No browser executor runs them — wptrunner
+    answers `SKIP: Executor does not support jsshell` — yet they stay in the
+    denominator: wpt.fyi scores that SKIP 0/1 for every browser
+    (WPT-JSSHELL-DENOM, `docs/wpt/pass-rate.md` §Знаменатель). Reported on
+    its own line so the unreachable slice is visible, not subtracted."""
+    return sum(1 for test_type, category, _id, extras in iter_entries(manifest)
+               if test_type == "testharness" and extras.get("jsshell")
+               and (categories is None or category in categories))
+
+
 def summarize(per_category: dict) -> dict:
     """Roll `collect`'s table up into the numbers the journal quotes."""
     totals = {}
@@ -183,6 +195,7 @@ def main() -> int:
         wanted = set(args.category)
         per_category = {k: v for k, v in per_category.items() if k in wanted}
     summary = summarize(per_category)
+    summary["jsshell_ids"] = count_jsshell(manifest, set(args.category) if args.category else None)
 
     types = sorted(summary["per_type"], key=lambda t: -summary["per_type"][t])
     print(f"{'category':<34}{'total':>8}" + "".join(f"{t:>16}" for t in types))
@@ -198,6 +211,8 @@ def main() -> int:
     ceiling = 100.0 * summary["executable_ids"] / summary["automatable_ids"] if summary["automatable_ids"] else 0.0
     print(f"  executable today:    {summary['executable_ids']}   "
           f"({', '.join(summary['executable_types'])} only) -> ceiling {ceiling:.1f}%")
+    print(f"  of them jsshell:     {summary['jsshell_ids']}   "
+          f"(SKIP for every browser executor; wpt.fyi scores them 0 too — kept)")
 
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)

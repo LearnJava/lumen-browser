@@ -37,6 +37,41 @@ Lumen** — и, что важнее, что именно этой цифрой �
 | категории со скоупом 🚫 в `docs/wpt-status.md` | **да** | решение пользователя 2026-08-18: границу скоупа цифра не защищает |
 | `support` | нет | это фикстуры (картинки, хелперы), а не тесты |
 | `manual`, `visual` | нет, считаются отдельно | их не исполняет ни один раннер, включая апстримный — включение исказило бы то, что измерено, в любую сторону |
+| `testharness` с `jsshell: true` | **да**, печатается отдельной строкой | wpt.fyi считает их 0 у любого браузера — см. ниже |
+
+### jsshell-варианты остаются в знаменателе (WPT-JSSHELL-DENOM, 2026-10-27)
+
+`// META: global=jsshell` в `.any.js` даёт id вида `/wasm/jsapi/…/foo.any.js` с
+`{"jsshell": true}` в манифесте (`tools/manifest/sourcefile.py`, суффикс
+`.any.js`). В корпусе их **78, все в `wasm/jsapi/`** — 12.7 п.п. `wasm`
+(78 / 612), 0.11 п.п. всего корпуса (78 / 68 118). Решение — **не исключать**,
+потому что wpt.fyi их тоже считает:
+
+1. **wptrunner не выбрасывает их, а пишет SKIP.** `tools/wptrunner/wptrunner/wptrunner.py:302`:
+   `test.jsshell and not executor_cls.supports_jsshell` → `test_end(status="SKIP",
+   message="Executor does not support jsshell")`. `supports_jsshell = False` в
+   `executors/base.py:282`, и ни один браузерный executor его не переопределяет —
+   SKIP получает и Chrome, и Firefox, и Safari. Форматтер
+   `formatters/wptreport.py::test_end` кладёт в `wptreport.json` каждый
+   `test_end`, SKIP тоже.
+2. **results-processor wpt.fyi SKIP не отбрасывает.**
+   `wpt.fyi/results-processor/wptreport.py::summarize` пишет каждый результат
+   как `{'s': 'S', 'c': [0, 0]}` (`'SKIP'` → `'S'` в `STATUS_ABBREVIATIONS`);
+   фильтра по статусу там нет.
+3. **Фронтенд wpt.fyi считает такой id как 0 из 1.**
+   `wpt.fyi/webapp/views/wpt-results.js`: в подтестовом виде (вид по умолчанию,
+   `isDefaultView()`) `aggregateTotalsBySubtest` для `total === 0` делает
+   `total++` и `passes++` только при статусе `P`; в потестовом виде
+   `aggregateTotalsByTest` при `newAggProcess` даёт `[0, 1]` для статуса не из
+   `PASSING_STATUSES = ['O', 'P']`. Строки по статусу не фильтруются.
+
+Итог: у wpt.fyi эти 78 id — 0 у всех браузеров, в знаменателе. Наша формула
+(«не исполнили — значит не прошли») совпадает, исключение сделало бы цифру
+несопоставимой. Чтобы недостижимый срез был виден, `corpus_stats.py` печатает
+строку `of them jsshell: 78` (ключ `jsshell_ids` в `--json`), а в снимке
+прогона они остаются обычным SKIP со счётом 0. Пересматривать — только если
+wpt.fyi начнёт фильтровать `'S'` (проверка — `grep -n "'S'\|SKIP"` в двух
+файлах выше).
 
 Принцип, из которого всё вышеперечисленное следует: **не исполнили — значит не
 прошли**. Знаменатель не подгоняется под возможности раннера, иначе цифра растёт
