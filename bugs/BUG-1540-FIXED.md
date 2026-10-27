@@ -1,6 +1,6 @@
 # BUG-1540 — `filter: drop-shadow(…)` не реализован, хотя `CSS-SPECS.md` называет его ✅: функция принимается и молча отбрасывается
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P1; остаток [BUG-1726](BUG-1726-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — нет ветки `drop-shadow`; `style/values/transform.rs:149` `FilterFn` — нет варианта)
 
@@ -30,3 +30,7 @@ WPT-RUN-14 срез 24: `css/filter-effects/{drop-shadow-clipped-001,drop-shadow
 ## Как проверить
 
 `css/filter-effects/filters-drop-shadow-001.html`, `drop-shadow-clipped-001.html`.
+
+## Исправление (2026-10-27, P1)
+
+`FilterFn::DropShadow { dx, dy, blur, color }` (`blur` — σ, как у `blur()`; `color: None` = `currentcolor`), разбор `parse_drop_shadow`, масштаб `zoom`, интерполяция (`none ↔ тень` через прозрачную тень того же цвета), сериализация `drop-shadow(rgb(…) dx dy blur)` с `currentcolor` от `color` бокса. Исполнение — окном слоя вместе с `url()` (`FilterFn::is_cpu_window_pass`, `cpu_raster/drop_shadow.rs`): CPU-растр, wgpu и femtovg. Пиксель-дифф `css/filter-effects`: `filters-drop-shadow-001`, `svg-shorthand-drop-shadow-001` стали `identical`, регрессий нет. Остаток — [BUG-1726](BUG-1726-OPEN.md).
