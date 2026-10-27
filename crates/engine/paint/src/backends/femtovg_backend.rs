@@ -956,6 +956,9 @@ struct FilterLayerEntry {
     /// under (instead of recycling it to the scratch pool). `None` for blur
     /// chains, full-framebuffer fallbacks, and when the cache is disabled.
     cache_meta: Option<FilterCacheMeta>,
+    /// SVG-FILTER-5: border box элемента в CSS px экрана (границы графа
+    /// `url(#id)`); `Rect::ZERO`, когда у `PushFilter` нет `bounds`.
+    svg_bounds: Rect,
 }
 
 // ─── Offscreen layer support (BUG-133 opacity, BUG-146 filter) ───────────────
@@ -1472,7 +1475,7 @@ fn apply_filter_rgba(rgba: &mut [u8], filter: &lumen_layout::FilterFn) {
                 g = fmix(g, sg, *amt);
                 b = fmix(b, sb, *amt);
             }
-            // SVG-фильтры исполняет только CPU-растеризатор (SVG-FILTER).
+            // SVG-фильтр — `apply_svg_filter_rgba` (графу нужен весь слой, не пиксель).
             FilterFn::Url(_) => {}
         }
 
@@ -1483,6 +1486,50 @@ fn apply_filter_rgba(rgba: &mut [u8], filter: &lumen_layout::FilterFn) {
         px[1] = to_u8(g);
         px[2] = to_u8(b);
         px[3] = na as u8;
+    }
+}
+
+/// SVG-FILTER-5: `filter: url(#id)` над premultiplied RGBA-снимком слоя (`size` в
+/// device px, `bounds` — border box в CSS px, `scale` — device px на CSS px).
+/// Граф исполняет общий CPU-код [`crate::svg_filter`]; результат — окно области
+/// фильтра, остальное прозрачно. Висячая ссылка оставляет слой без изменений.
+fn apply_svg_filter_rgba(
+    rgba: &mut [u8],
+    size: (usize, usize),
+    filter: &lumen_layout::FilterFn,
+    bounds: Rect,
+    scale: f32,
+) {
+    let (w, h) = (size.0 as u32, size.1 as u32);
+    let Some(mut src) = tiny_skia::Pixmap::new(w, h) else { return };
+    src.data_mut().copy_from_slice(rgba);
+    let images = HashMap::new();
+    let canvas = (0.0, 0.0, w as f32, h as f32);
+    let Some((win, origin)) = crate::cpu_raster::svg_filter_chain_window(
+        &src,
+        std::slice::from_ref(filter),
+        bounds,
+        canvas,
+        &images,
+        scale,
+    ) else {
+        return;
+    };
+    rgba.fill(0);
+    let (ww, wh) = (win.width() as i32, win.height() as i32);
+    for y in 0..wh {
+        let dy = origin.1 + y;
+        if dy < 0 || dy >= h as i32 {
+            continue;
+        }
+        for x in 0..ww {
+            let dx = origin.0 + x;
+            if dx < 0 || dx >= w as i32 {
+                continue;
+            }
+            let (si, di) = ((y * ww + x) as usize * 4, (dy as usize * w as usize + dx as usize) * 4);
+            rgba[di..di + 4].copy_from_slice(&win.data()[si..si + 4]);
+        }
     }
 }
 
@@ -2584,7 +2631,7 @@ impl FemtovgBackend {
     /// Реализует PA-2: GPU Gaussian blur через `filter_image` + CPU colour-matrix
     /// через flush → screenshot → pixel process → re-upload.
     fn composite_filter_layer(&mut self, entry: FilterLayerEntry) {
-        let FilterLayerEntry { image_id: src_id, filters, prev_render_target, bbox, cache_meta } = entry;
+        let FilterLayerEntry { image_id: src_id, filters, prev_render_target, bbox, cache_meta, svg_bounds } = entry;
 
         // BUG-272 срез 14: undo the Push-time bbox save()+translate()+scissor(),
         // if any — mirrors composite_opacity_layer's own restore(). Safe to do
@@ -2660,11 +2707,12 @@ impl FemtovgBackend {
                     .collect();
                 // Apply colour-matrix filters left to right (CSS spec §4.1).
                 for f in &filters {
-                    if !matches!(
-                        f,
-                        lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
-                    ) {
-                        apply_filter_rgba(&mut rgba, f);
+                    match f {
+                        lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_) => {}
+                        lumen_layout::FilterFn::Url(_) => {
+                            apply_svg_filter_rgba(&mut rgba, (iw, ih), f, svg_bounds, self.scale as f32);
+                        }
+                        other => apply_filter_rgba(&mut rgba, other),
                     }
                 }
                 // Re-upload processed pixels. BUG-272 срез 4: reuse
@@ -3610,6 +3658,21 @@ impl FemtovgBackend {
     /// clamps to empty (the transformed box landed fully outside the target;
     /// callers fall back to a full-framebuffer layer, which stays correct —
     /// just not bbox-optimised — for that frame).
+    fn screen_bbox_css_px(&self, local: Rect) -> Option<Rect> {
+        let t = self.canvas.transform();
+        let corners = [
+            t.transform_point(local.x, local.y),
+            t.transform_point(local.x + local.width, local.y),
+            t.transform_point(local.x, local.y + local.height),
+            t.transform_point(local.x + local.width, local.y + local.height),
+        ];
+        let min_x = corners.iter().map(|c| c.0).fold(f32::MAX, f32::min);
+        let min_y = corners.iter().map(|c| c.1).fold(f32::MAX, f32::min);
+        let max_x = corners.iter().map(|c| c.0).fold(f32::MIN, f32::max);
+        let max_y = corners.iter().map(|c| c.1).fold(f32::MIN, f32::max);
+        (max_x > min_x && max_y > min_y).then(|| Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+    }
+
     fn screen_bbox_device_px(&self, local: Rect) -> Option<(f32, f32, usize, usize)> {
         if local.width <= 0.0 || local.height <= 0.0 {
             return None;
@@ -3726,7 +3789,8 @@ impl FemtovgBackend {
                 lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
             )
         });
-        !has_blur && has_color_matrix
+        let has_svg = filters.iter().any(|f| matches!(f, lumen_layout::FilterFn::Url(_)));
+        !has_blur && !has_svg && has_color_matrix
     }
 
     /// BUG-273 срез 2: device-pixel placement `(x0, y0, w, h)` plus the
@@ -4743,7 +4807,12 @@ impl FemtovgBackend {
                     let has_blur = filters
                         .iter()
                         .any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
-                    let acquired = if has_blur {
+                    // SVG-FILTER-5: граф `url(#id)` красит за границами bbox
+                    // (`feFlood`, смещение) и читает слой целиком — как блюр.
+                    let has_svg = filters
+                        .iter()
+                        .any(|f| matches!(f, lumen_layout::FilterFn::Url(_)));
+                    let acquired = if has_blur || has_svg {
                         None
                     } else {
                         bounds.and_then(|b| self.screen_bbox_device_px(b))
@@ -4781,6 +4850,9 @@ impl FemtovgBackend {
                                 // full-framebuffer fallback (`bbox == None`) is
                                 // scroll-baked, so drop the staged key there.
                                 cache_meta: bbox.and(cache_meta),
+                                svg_bounds: bounds
+                                    .and_then(|b| self.screen_bbox_css_px(b))
+                                    .unwrap_or(Rect::ZERO),
                             });
                             self.layer_stack_depth += 1;
                         }

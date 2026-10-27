@@ -1465,27 +1465,7 @@ fn composite_svg_filter_chain(
     if filters.iter().any(|f| matches!(f, FilterFn::Url(u) if u.graph.is_none())) {
         return composite_filter_layer(dst, src, &[], src_dirty);
     }
-    let canvas = (src.width(), src.height());
-    let margin = filter_chain_reach(filters) + 2.0;
-    let (mut cur, mut origin) = match clamp_crop(src_dirty, margin, canvas.0, canvas.1) {
-        Some((cx0, cy0, cx1, cy1)) => (
-            crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?,
-            (cx0 as i32, cy0 as i32),
-        ),
-        None => (tiny_skia::Pixmap::new(1, 1)?, (0, 0)),
-    };
-    for f in filters {
-        match f {
-            FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma),
-            FilterFn::Url(u) => {
-                if let Some(win) = crate::svg_filter::apply(&cur, origin, canvas, u, bounds, image_map) {
-                    cur = win.pixmap;
-                    origin = (win.x, win.y);
-                }
-            }
-            other => apply_color_filter(&mut cur, other),
-        }
-    }
+    let (cur, origin) = svg_filter_chain_window(src, filters, bounds, src_dirty, image_map, 1.0)?;
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
         blend_mode: tiny_skia::BlendMode::SourceOver,
@@ -1512,6 +1492,44 @@ fn composite_svg_filter_chain(
         origin.0 as f32 + cur.width() as f32,
         origin.1 as f32 + cur.height() as f32,
     ))
+}
+
+/// Цепочка фильтров с `url(#id)` над окном `src` → результат `(pixmap, origin)` в
+/// координатах холста. `scale` — device px на CSS px (CPU-растр: 1; wgpu-читалка
+/// слоя: DPR окна) — масштабирует σ блюра и user space графа. `None` — не хватило
+/// памяти под окно.
+pub(crate) fn svg_filter_chain_window(
+    src: &tiny_skia::Pixmap,
+    filters: &[FilterFn],
+    bounds: Rect,
+    src_dirty: DrawBounds,
+    image_map: &std::collections::HashMap<&str, &Image>,
+    scale: f32,
+) -> Option<(tiny_skia::Pixmap, (i32, i32))> {
+    let canvas = (src.width(), src.height());
+    let margin = filter_chain_reach(filters) * scale + 2.0;
+    let (mut cur, mut origin) = match clamp_crop(src_dirty, margin, canvas.0, canvas.1) {
+        Some((cx0, cy0, cx1, cy1)) => (
+            crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?,
+            (cx0 as i32, cy0 as i32),
+        ),
+        None => (tiny_skia::Pixmap::new(1, 1)?, (0, 0)),
+    };
+    for f in filters {
+        match f {
+            FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma * scale),
+            FilterFn::Url(u) => {
+                if let Some(win) =
+                    crate::svg_filter::apply_scaled(&cur, origin, canvas, u, bounds, image_map, scale)
+                {
+                    cur = win.pixmap;
+                    origin = (win.x, win.y);
+                }
+            }
+            other => apply_color_filter(&mut cur, other),
+        }
+    }
+    Some((cur, origin))
 }
 
 /// Total spatial reach in px of a filter chain — how far the chain can carry

@@ -1874,3 +1874,50 @@ fn mask_layer_composite_applies_compound_mask() {
     assert_eq!((on_bar[0], on_bar[1], on_bar[2]), (255, 0, 0), "перекладина 'H' должна показывать контент");
     assert_eq!((off_bar[0], off_bar[1], off_bar[2]), (255, 255, 255), "вне трёх прямоугольников — фон");
 }
+
+/// SVG-FILTER-5: `filter: url(#f)` с `feFlood` в окне (wgpu). Область фильтра —
+/// `[-50%, +150%]` border box, поэтому заливка выходит за красный квадрат; раньше
+/// окно рисовало квадрат без фильтра.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn headless_svg_filter_url_flood_paints_filter_region() {
+    use lumen_layout::{FePrimitive, FilterUrl, SvgFilter, SvgFilterPrimitive};
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let graph = SvgFilter {
+        filter_units_obb: true,
+        primitive_units_obb: false,
+        region: (-0.5, -0.5, 2.0, 2.0),
+        region_pct: [false; 4],
+        primitives: vec![SvgFilterPrimitive {
+            kind: FePrimitive::Flood { color: Color { r: 0, g: 0, b: 255, a: 255 }, opacity: 1.0 },
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            pct: [false; 4],
+            linear_rgb: false,
+            tainted: false,
+        }],
+    };
+    let url = FilterUrl { id: "f".into(), graph: Some(std::sync::Arc::new(graph)), placement: None };
+    let square = Rect { x: 10.0, y: 10.0, width: 10.0, height: 10.0 };
+    let dl = vec![
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 0.0, width: 64.0, height: 64.0 },
+            color: Color { r: 255, g: 255, b: 255, a: 255 },
+        },
+        DisplayCommand::PushFilter { filters: vec![FilterFn::Url(url)], bounds: Some(square) },
+        DisplayCommand::FillRect { rect: square, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PopFilter,
+    ];
+    let img = r.render_to_image(&dl, 0.0, 0.0).expect("render_to_image");
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        [img.data[o], img.data[o + 1], img.data[o + 2]]
+    };
+    assert_eq!(px(15, 15), [0, 0, 255], "центр: заливка заменила красный квадрат");
+    assert_eq!(px(7, 7), [0, 0, 255], "заливка выходит за border box, внутрь области фильтра");
+    assert_eq!(px(40, 40), [255, 255, 255], "вне области фильтра — фон");
+}

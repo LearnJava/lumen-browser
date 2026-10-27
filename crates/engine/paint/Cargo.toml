@@ -84,11 +84,12 @@ bincode.workspace = true
 default = ["backend-femtovg"]
 
 # wgpu-бэкенд — рантайм-дефолт браузера (ADR-017, вытеснил порядок ADR-010 RB-9)
-backend-wgpu = ["dep:wgpu", "dep:winit"]
+# `cpu-render`: `filter: url(#id)` в окне исполняет граф CPU-кодом `svg_filter` (SVG-FILTER-5)
+backend-wgpu = ["dep:wgpu", "dep:winit", "cpu-render"]
 
 # femtovg-бэкенд — рантайм-fallback: только при сбое инициализации wgpu либо по
 # явному `LUMEN_BACKEND=femtovg` (ADR-017; был дефолтом до флипа, ADR-010 RB-9)
-backend-femtovg = ["dep:femtovg", "dep:glutin", "dep:glutin-winit", "dep:winit", "dep:imgref", "dep:rgb"]
+backend-femtovg = ["dep:femtovg", "dep:glutin", "dep:glutin-winit", "dep:winit", "dep:imgref", "dep:rgb", "cpu-render"]
 
 # vello-бэкенд — план фазы 3, RB-7 заглушка (dep:vello добавляется в RB-10)
 backend-vello = []
