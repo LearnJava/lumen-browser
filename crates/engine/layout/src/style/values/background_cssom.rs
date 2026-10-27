@@ -36,6 +36,7 @@ pub fn canonical_specified_background(prop: &str, value: &str) -> Option<String>
             }
         }
         "border-radius" => border_radius(v),
+        p if p.starts_with("border-image") => super::border_image::canonical_specified_border_image(p, v),
         "border-top-left-radius"
         | "border-top-right-radius"
         | "border-bottom-right-radius"
@@ -65,6 +66,10 @@ fn lp(tok: &str, non_negative: bool) -> Option<String> {
     canonical_length_sorted(tok, false, non_negative)
 }
 
+pub(super) fn canonical_specified_image(s: &str) -> Option<String> {
+    image(s)
+}
+
 fn image(s: &str) -> Option<String> {
     if s.eq_ignore_ascii_case("none") {
         return Some("none".into());
@@ -85,6 +90,10 @@ fn image(s: &str) -> Option<String> {
     }
     let lower = s.to_ascii_lowercase();
     let name_lower = name.to_ascii_lowercase();
+    // BUG-1551: `url(a)` / `url('a')` → `url("a")`.
+    if name_lower == "url" {
+        return Some(super::misc_cssom::canonical_url(s).unwrap_or_else(|| s.to_string()));
+    }
     let is_gradient = (name_lower.ends_with("-gradient") && !name.starts_with('-'))
         || matches!(name_lower.as_str(), "image-set" | "-webkit-image-set");
     let opaque = ["var(", "env(", "attr(", "sign("].iter().any(|f| lower.contains(f));
@@ -523,6 +532,6 @@ mod tests {
     fn image_needs_function() {
         assert_eq!(c("background-image", "none, auto"), None);
         assert_eq!(c("background-image", "red"), None);
-        assert_eq!(c("background-image", "url(a.png), none").as_deref(), Some("url(a.png), none"));
+        assert_eq!(c("background-image", "url(a.png), none").as_deref(), Some("url(\"a.png\"), none"));
     }
 }

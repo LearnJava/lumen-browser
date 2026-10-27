@@ -1,6 +1,6 @@
 # BUG-1549 — Пустой `<li>` с `list-style-position: inside` имеет высоту 0: маркеры соседних `li` ложатся в одну точку
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** layout (`crates/engine/layout/src/box_tree/` — высота строки для `inside`-маркера у `li` без содержимого)
 

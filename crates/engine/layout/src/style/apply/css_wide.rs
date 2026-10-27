@@ -1195,6 +1195,29 @@ fn apply_css_wide_keyword_with(
             style.border_spacing_v = if inh_only_inherit { inherited.border_spacing_v } else { init.border_spacing_v };
         }
         // border / border-top / -right / -bottom / -left shorthand: width + style + color на сторону.
+        // CSS Backgrounds L3 §6 — `border-image*` are not inherited; `inherit` copies the parent value.
+        "border-image" | "border-image-source" | "border-image-slice" | "border-image-width"
+        | "border-image-outset" | "border-image-repeat" => {
+            let src = if inh_only_inherit { &inherited.border_image } else { &init.border_image };
+            let bi = &mut style.border_image;
+            if matches!(prop, "border-image" | "border-image-source") {
+                bi.source = src.source.clone();
+                bi.source_css = src.source_css.clone();
+            }
+            if matches!(prop, "border-image" | "border-image-slice") {
+                bi.slice = src.slice;
+                bi.fill = src.fill;
+            }
+            if matches!(prop, "border-image" | "border-image-width") {
+                bi.width = src.width;
+            }
+            if matches!(prop, "border-image" | "border-image-outset") {
+                bi.outset = src.outset;
+            }
+            if matches!(prop, "border-image" | "border-image-repeat") {
+                bi.repeat = src.repeat;
+            }
+        }
         "border" => {
             let (w, s, c) = if inh_only_inherit {
                 (inherited.border_top_width, inherited.border_top_style, inherited.border_top_color)
@@ -1211,6 +1234,7 @@ fn apply_css_wide_keyword_with(
                 *ss = s;
                 *sc = c;
             }
+            style.border_image = if inh_only_inherit { inherited.border_image.clone() } else { init.border_image.clone() };
         }
         "border-top" => {
             style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init_border_width(kw, init.border_top_width) };
@@ -1415,9 +1439,13 @@ fn apply_css_wide_keyword_with(
         // in place (a page's `::view-transition-group(*) { animation: unset }` kept the UA animation).
         "animation" | "animation-name" | "animation-duration" | "animation-timing-function" | "animation-delay"
         | "animation-iteration-count" | "animation-direction" | "animation-fill-mode" | "animation-play-state"
-        | "animation-timeline" => {
+        | "animation-timeline" | "animation-composition" => {
             let src = if inh_only_inherit { inherited } else { init };
             let all = prop == "animation";
+            // `animation-composition` is outside the shorthand (CSS Animations L2).
+            if prop == "animation-composition" {
+                style.animation_compositions = src.animation_compositions.clone();
+            }
             if all || prop == "animation-name" {
                 style.animation_names = src.animation_names.clone();
             }

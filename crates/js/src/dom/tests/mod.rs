@@ -279,6 +279,9 @@ mod v8_cssom_stylesheets;
 mod v8_cssom10_tree;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1506_iterables;
+mod v8_bug1553_media_list;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1552_style_float_shorthand;
 
 #[cfg(feature = "v8-backend")]
 mod v8_cssom5_constructed_stylesheets;
@@ -344,6 +347,7 @@ mod v8_bug1529_inline_cssom;
 mod v8_bug1535_table_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1297_background_cssom;
+mod v8_bug1551_misc_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1316_document_parentnode;
 #[cfg(feature = "v8-backend")]
@@ -407,6 +411,8 @@ mod v8_bug912_event_class_string;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug602_align_reflection;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1547_li_reflection;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug605_marquee_reflection;

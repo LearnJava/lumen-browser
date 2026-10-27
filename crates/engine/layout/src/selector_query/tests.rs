@@ -882,6 +882,17 @@ fn computed_map_transition_and_animation_lists() {
 }
 
 #[test]
+fn computed_map_animation_composition() {
+    let m = div_computed_map("<div>x</div>", "div { animation-composition: add, accumulate; }");
+    assert_eq!(m.get("animation-composition").map(String::as_str), Some("add, accumulate"));
+    // Invalid list is dropped as a whole → initial value.
+    let m = div_computed_map("<div>x</div>", "div { animation-composition: add, bogus; }");
+    assert_eq!(m.get("animation-composition").map(String::as_str), Some("replace"));
+    let m = div_computed_map("<div>x</div>", "div { }");
+    assert_eq!(m.get("animation-composition").map(String::as_str), Some("replace"));
+}
+
+#[test]
 fn computed_map_transition_defaults_without_declaration() {
     let m = div_computed_map("<div>x</div>", "");
     assert_eq!(m.get("transition-duration").map(String::as_str), Some("0s"));

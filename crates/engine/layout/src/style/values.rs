@@ -3,6 +3,7 @@
 
 pub mod background;
 pub mod background_cssom;
+pub mod border_image;
 pub mod caret;
 pub mod box_model;
 pub mod color;
@@ -14,6 +15,7 @@ pub mod grid_cssom;
 pub mod grid_lanes;
 pub mod length;
 pub mod misc;
+pub mod misc_cssom;
 pub mod multicol_cssom;
 pub mod named_colors;
 pub mod rule_anim;

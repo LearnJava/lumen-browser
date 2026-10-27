@@ -1,6 +1,6 @@
 # BUG-1547 — `<ol>`: маркер по умолчанию — `disc`, атрибуты `start`, `reversed`, `<li value>` и `type` не действуют, `li.value` — пустая строка
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** layout (`crates/engine/layout/src/style/ua.rs`, `crates/engine/layout/src/box_tree/inline_build.rs::li_ordinal`, `crates/engine/layout/src/counters.rs`), js (`HTMLLIElement.value`)
 
@@ -33,3 +33,11 @@ UA-таблица HTML Rendering §15.3.7: `ol { list-style-type: decimal }` (`u
 ## Как проверить
 
 `css/css-lists/counter-reset-reversed-list-item.html`, `css/css-counter-styles/lower-roman/css3-counter-styles-019.html` (после BUG-1546, BUG-1548); `<ol start=5>` рисует `5.`.
+
+## Исправление
+
+- `style/ua.rs::apply_ua_list` (UA-фаза каскада): `ol` — `decimal`, `ul`/`menu`/`dir` — `disc`/`circle`/`square` по числу предков-списков, `type` у `ol`/`ul`/`li`; `ol, ul, menu` получают `counter-reset: list-item` (`start` → `start-1`, `reversed` → `start+1` или число `li`+1), `li` — `counter-increment: list-item` (`-1` в `ol[reversed]`) и `counter-set` из `value`. Автор перекрывает через обычный каскад.
+- `counters.rs::walk`: элемент с `display: list-item`, не упомянувший `list-item`, увеличивает счётчик сам.
+- `box_tree/build.rs`: номер маркера — значение `list-item` из снимка счётчиков (`li_ordinal` остался запасным вариантом); `build_list_marker_text` принимает `i32` (нули и отрицательные).
+- `HTMLLIElement.value` — рефлексия атрибута (`long`, по умолчанию 0, HTML LS §4.4.8), `type` — строка; использованный номер маркера через IDL не отдаётся.
+- Тесты: `box_tree/tests/bug1547_list_markers.rs`, `dom/tests/v8_bug1547_li_reflection.rs`.

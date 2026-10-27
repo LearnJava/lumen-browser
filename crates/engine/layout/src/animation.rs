@@ -26,7 +26,7 @@
 #![allow(missing_docs)]
 
 use crate::style::{
-    AnimationDirection, AnimationFillMode, AnimationPlayState, Color, ComputedStyle, FilterFn,
+    AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState, Color, ComputedStyle, FilterFn,
     GapRuleOverride, GradientStop, InterpolateSizeMode, IterationCount, Length,
     PAINTED_GAP_RULE_PROPERTIES, TimingFunction, TransformFn, TransitionBehavior,
     gap_rule_computed_css, gap_rule_endpoint_css, interpolate_gap_rule_value,
@@ -252,6 +252,9 @@ pub struct KeyframeStyle {
     /// `{column,row}-rule-{width,color}` (`rule-width`/`rule-color` are expanded to both
     /// axes), in declaration order.
     pub gap_rules: Vec<(&'static str, String)>,
+    /// CSS Animations L2 §3.9 — `animation-composition` declared inside the keyframe
+    /// itself (the first item of the list); `None` = inherit the animation's own.
+    pub composition: Option<AnimationComposition>,
 }
 
 /// Parse the `declarations` of one `@keyframes` frame into a [`KeyframeStyle`].
@@ -280,6 +283,10 @@ pub fn parse_keyframe_style(declarations: &[Declaration]) -> KeyframeStyle {
                 if let Some(c) = crate::style::parse_color(decl.value.as_str()) {
                     ks.background_color = Some(c);
                 }
+            }
+            "animation-composition" => {
+                ks.composition = AnimationComposition::parse_list(decl.value.as_str())
+                    .and_then(|l| l.first().copied());
             }
             // `auto`/keyword heights are out of scope here (see
             // `TransitionScheduler::auto_height_cache` for that path) —
@@ -1257,6 +1264,91 @@ fn keyframe_interpolate(kf: &KeyframesRule, t: f32) -> Option<KeyframeStyle> {
         ),
         height: interp_optional_length(from_ks.height, to_ks.height, local_t, &interp),
         gap_rules: Vec::new(),
+        composition: None,
+    })
+}
+
+/// Web Animations §5.4.2 composite operations on the five properties the live scheduler
+/// animates: fold `ks` (one keyframe) onto `under` (the underlying value — the element's
+/// computed style, or what an earlier animation of the element produced) in place.
+/// `Replace` leaves `ks` as is. A property `ks` does not declare stays undeclared.
+///
+/// - `opacity`: `under + v`.
+/// - `color` / `background-color`: per-channel sum, saturating.
+/// - `height`: sum of two `px` lengths; any other pair (`auto`, `%`, `em`) replaces.
+/// - `transform`: `add` appends the keyframe list to the underlying one (matrix
+///   multiplication `under · v`); `accumulate` sums same-kind functions pairwise when the
+///   lists match in length and kind (scale accumulates around the identity `1`), else it
+///   appends like `add`.
+pub fn composite_keyframe_style(
+    ks: &mut KeyframeStyle,
+    under: &KeyframeStyle,
+    mode: AnimationComposition,
+) {
+    if mode == AnimationComposition::Replace {
+        return;
+    }
+    if let (Some(v), Some(u)) = (ks.opacity, under.opacity) {
+        ks.opacity = Some(u + v);
+    }
+    if let (Some(v), Some(u)) = (ks.color, under.color) {
+        ks.color = Some(add_colors(u, v));
+    }
+    if let (Some(v), Some(u)) = (ks.background_color, under.background_color) {
+        ks.background_color = Some(add_colors(u, v));
+    }
+    if let (Some(Length::Px(v)), Some(Length::Px(u))) = (&ks.height, &under.height) {
+        ks.height = Some(Length::Px(u + v));
+    }
+    if let (Some(v), Some(u)) = (&ks.transform, &under.transform) {
+        ks.transform = Some(composite_transform(u, v, mode));
+    }
+}
+
+fn add_colors(a: Color, b: Color) -> Color {
+    Color {
+        r: a.r.saturating_add(b.r),
+        g: a.g.saturating_add(b.g),
+        b: a.b.saturating_add(b.b),
+        a: a.a.saturating_add(b.a),
+    }
+}
+
+fn composite_transform(under: &[TransformFn], v: &[TransformFn], mode: AnimationComposition) -> Vec<TransformFn> {
+    let concat = || under.iter().chain(v.iter()).cloned().collect::<Vec<_>>();
+    if mode != AnimationComposition::Accumulate || under.len() != v.len() {
+        return concat();
+    }
+    let mut out = Vec::with_capacity(v.len());
+    for (u, w) in under.iter().zip(v.iter()) {
+        match accumulate_transform_fn(u, w) {
+            Some(f) => out.push(f),
+            None => return concat(),
+        }
+    }
+    out
+}
+
+fn accumulate_transform_fn(u: &TransformFn, w: &TransformFn) -> Option<TransformFn> {
+    use TransformFn as T;
+    Some(match (u, w) {
+        (T::Translate(a, b), T::Translate(c, d)) => T::Translate(a + c, b + d),
+        (T::TranslateX(a), T::TranslateX(b)) => T::TranslateX(a + b),
+        (T::TranslateY(a), T::TranslateY(b)) => T::TranslateY(a + b),
+        (T::TranslateZ(a), T::TranslateZ(b)) => T::TranslateZ(a + b),
+        (T::Translate3d(a, b, c), T::Translate3d(d, e, f)) => T::Translate3d(a + d, b + e, c + f),
+        (T::Rotate(a), T::Rotate(b)) => T::Rotate(a + b),
+        (T::RotateX(a), T::RotateX(b)) => T::RotateX(a + b),
+        (T::RotateY(a), T::RotateY(b)) => T::RotateY(a + b),
+        (T::RotateZ(a), T::RotateZ(b)) => T::RotateZ(a + b),
+        (T::Scale(a, b), T::Scale(c, d)) => T::Scale(a + c - 1.0, b + d - 1.0),
+        (T::ScaleX(a), T::ScaleX(b)) => T::ScaleX(a + b - 1.0),
+        (T::ScaleY(a), T::ScaleY(b)) => T::ScaleY(a + b - 1.0),
+        (T::ScaleZ(a), T::ScaleZ(b)) => T::ScaleZ(a + b - 1.0),
+        (T::Scale3d(a, b, c), T::Scale3d(d, e, f)) => T::Scale3d(a + d - 1.0, b + e - 1.0, c + f - 1.0),
+        (T::SkewX(a), T::SkewX(b)) => T::SkewX(a + b),
+        (T::SkewY(a), T::SkewY(b)) => T::SkewY(a + b),
+        _ => return None,
     })
 }
 
@@ -3770,5 +3862,76 @@ mod tests {
         let kfs = [decl_kf(0.0, &[("opacity", "0")]), decl_kf(1.0, &[("opacity", "1")])];
         let refs: Vec<(f32, &KeyframeStyle)> = kfs.iter().map(|(o, k)| (*o, k)).collect();
         assert!(interpolate_gap_rules(&refs, &ComputedStyle::root(), 0.5).is_none());
+    }
+    fn style_of(decls: &[(&str, &str)]) -> KeyframeStyle {
+        decl_kf(0.0, decls).1
+    }
+
+    #[test]
+    fn keyframe_composition_declaration_is_parsed() {
+        assert_eq!(
+            style_of(&[("animation-composition", "add, replace")]).composition,
+            Some(AnimationComposition::Add)
+        );
+        assert_eq!(style_of(&[("animation-composition", "bogus")]).composition, None);
+        assert_eq!(style_of(&[("opacity", "1")]).composition, None);
+    }
+
+    #[test]
+    fn composite_replace_keeps_keyframe_value() {
+        let mut ks = style_of(&[("opacity", "0.5")]);
+        let under = style_of(&[("opacity", "0.25")]);
+        composite_keyframe_style(&mut ks, &under, AnimationComposition::Replace);
+        assert_eq!(ks.opacity, Some(0.5));
+    }
+
+    #[test]
+    fn composite_add_sums_opacity_height_and_colors() {
+        let mut ks = style_of(&[
+            ("opacity", "0.5"),
+            ("height", "10px"),
+            ("color", "rgb(10, 20, 30)"),
+        ]);
+        let under = style_of(&[
+            ("opacity", "0.25"),
+            ("height", "5px"),
+            ("color", "rgb(1, 2, 3)"),
+        ]);
+        composite_keyframe_style(&mut ks, &under, AnimationComposition::Add);
+        assert_eq!(ks.opacity, Some(0.75));
+        assert!(matches!(ks.height, Some(Length::Px(h)) if (h - 15.0).abs() < 1e-4));
+        let c = ks.color.expect("color");
+        assert_eq!((c.r, c.g, c.b), (11, 22, 33));
+    }
+
+    #[test]
+    fn composite_leaves_undeclared_properties_alone() {
+        let mut ks = style_of(&[("opacity", "0.5")]);
+        let under = style_of(&[("height", "5px"), ("opacity", "0.5")]);
+        composite_keyframe_style(&mut ks, &under, AnimationComposition::Accumulate);
+        assert!(ks.height.is_none());
+    }
+
+    #[test]
+    fn composite_transform_add_appends_accumulate_sums() {
+        let under = style_of(&[("transform", "translateX(10px) scale(2)")]);
+        let mut added = style_of(&[("transform", "translateX(5px) scale(3)")]);
+        composite_keyframe_style(&mut added, &under, AnimationComposition::Add);
+        assert_eq!(added.transform.as_ref().map(Vec::len), Some(4));
+
+        let mut acc = style_of(&[("transform", "translateX(5px) scale(3)")]);
+        composite_keyframe_style(&mut acc, &under, AnimationComposition::Accumulate);
+        let list = acc.transform.expect("transform");
+        assert_eq!(list.len(), 2);
+        assert!(matches!(list[0], TransformFn::TranslateX(x) if (x - 15.0).abs() < 1e-4));
+        assert!(matches!(list[1], TransformFn::Scale(a, b) if (a - 4.0).abs() < 1e-4 && (b - 4.0).abs() < 1e-4));
+    }
+
+    #[test]
+    fn composite_transform_accumulate_mismatched_falls_back_to_append() {
+        let under = style_of(&[("transform", "translateX(10px)")]);
+        let mut acc = style_of(&[("transform", "rotate(10deg)")]);
+        composite_keyframe_style(&mut acc, &under, AnimationComposition::Accumulate);
+        assert_eq!(acc.transform.as_ref().map(Vec::len), Some(2));
     }
 }

@@ -420,6 +420,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     dest.x, dest.y, dest.width, dest.height,
                 ));
             }
+            DisplayCommand::DrawBorderImage { area, src, spec } => {
+                out.push_str(&format!(
+                    "DrawBorderImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} slice={:?} fill={} width={:?} repeat={:?}\n",
+                    area.x, area.y, area.width, area.height, spec.slice, spec.fill, spec.width, spec.repeat,
+                ));
+            }
         }
     }
     out

@@ -101,3 +101,50 @@ fn autonomous_custom_element_is_inline() {
     let div = first_element_child(&root);
     assert_eq!(div.children.len(), 1, "custom element must not split the line");
 }
+
+// ── `counter()` / `counters()` отдают представление без prefix/suffix (BUG-1550).
+
+fn flow_text(b: &LayoutBox, out: &mut String) {
+    if let BoxKind::InlineRun { segments, .. } = &b.kind {
+        for s in segments {
+            out.push_str(&s.text);
+        }
+    }
+    for c in &b.children {
+        flow_text(c, out);
+    }
+}
+
+fn generated_text(css: &str) -> String {
+    let root = lay_measured("<p>x</p>", css, 400.0);
+    let mut out = String::new();
+    flow_text(&root, &mut out);
+    out
+}
+
+#[test]
+fn counter_function_omits_default_affixes_of_custom_style() {
+    let t = generated_text(
+        "@counter-style f { system: cyclic; symbols: \"X\" \"Y\"; } \
+         p { counter-reset: a 3; } p::before { content: \"[\" counter(a, f) \"]\"; }",
+    );
+    assert!(t.starts_with("[X]"), "got {t:?}");
+}
+
+#[test]
+fn counter_function_omits_explicit_affixes_of_custom_style() {
+    let t = generated_text(
+        "@counter-style f { system: cyclic; symbols: \"X\" \"Y\"; prefix: \"<\"; suffix: \"!\"; } \
+         p { counter-reset: a 3; } p::before { content: \"[\" counter(a, f) \"]\"; }",
+    );
+    assert!(t.starts_with("[X]"), "got {t:?}");
+}
+
+#[test]
+fn counters_function_omits_affixes_of_custom_style() {
+    let t = generated_text(
+        "@counter-style f { system: cyclic; symbols: \"X\" \"Y\"; } \
+         p { counter-reset: a 3; } p::before { content: \"[\" counters(a, \"-\", f) \"]\"; }",
+    );
+    assert!(t.starts_with("[X]"), "got {t:?}");
+}

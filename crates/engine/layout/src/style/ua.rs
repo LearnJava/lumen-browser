@@ -12,7 +12,7 @@ use lumen_dom::{Document, NodeData, NodeId};
 
 use crate::style::{
     BorderStyle, Color, ComputedStyle, ContentVisibility, CssColor, Display, FontStyle,
-    FontWeight, Length, LengthOrAuto, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
+    FontWeight, Length, LengthOrAuto, ListStyleType, TextAlign, VerticalAlign, WhiteSpace, WritingMode,
 };
 use crate::style::AlignValue;
 use crate::style::Interactivity;
@@ -890,5 +890,123 @@ pub(in crate::style) fn apply_ua_interactivity(doc: &Document, node: NodeId, sty
 pub(in crate::style) fn apply_ua_inert_important(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     if doc.get(node).get_attr("inert").is_some() {
         style.interactivity = Interactivity::Inert;
+    }
+}
+
+/// HTML LS `parse integer` rules (§2.3.4.1): optional leading whitespace, `+`/`-`, digits;
+/// anything after the digits is ignored, no digits → `None`.
+fn parse_html_integer(s: &str) -> Option<i32> {
+    let s = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let (neg, rest) = match s.as_bytes().first()? {
+        b'-' => (true, &s[1..]),
+        b'+' => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let digits: &str = &rest[..rest.bytes().take_while(u8::is_ascii_digit).count()];
+    if digits.is_empty() {
+        return None;
+    }
+    let v = digits.parse::<i64>().unwrap_or(i64::MAX).min(i64::from(i32::MAX));
+    Some(if neg { -(v as i32) } else { v as i32 })
+}
+
+/// HTML Rendering §15.3.7 `type` attribute → `list-style-type`. `numbered` admits the `<ol>`
+/// keywords (`1`/`a`/`A`/`i`/`I`, case-sensitive), `bulleted` the `<ul>` ones
+/// (`disc`/`circle`/`square`, ASCII case-insensitive).
+fn list_type_attr(v: &str, numbered: bool, bulleted: bool) -> Option<ListStyleType> {
+    if numbered {
+        match v {
+            "1" => return Some(ListStyleType::Decimal),
+            "a" => return Some(ListStyleType::LowerAlpha),
+            "A" => return Some(ListStyleType::UpperAlpha),
+            "i" => return Some(ListStyleType::LowerRoman),
+            "I" => return Some(ListStyleType::UpperRoman),
+            _ => {}
+        }
+    }
+    if bulleted {
+        if v.eq_ignore_ascii_case("disc") {
+            return Some(ListStyleType::Disc);
+        } else if v.eq_ignore_ascii_case("circle") {
+            return Some(ListStyleType::Circle);
+        } else if v.eq_ignore_ascii_case("square") {
+            return Some(ListStyleType::Square);
+        }
+    }
+    None
+}
+
+fn is_list_container(doc: &Document, node: NodeId) -> bool {
+    matches!(&doc.get(node).data, NodeData::Element { name, .. }
+        if matches!(name.local.as_str(), "ol" | "ul" | "menu" | "dir"))
+}
+
+fn is_li(doc: &Document, node: NodeId) -> bool {
+    matches!(&doc.get(node).data, NodeData::Element { name, .. } if name.local.as_str() == "li")
+}
+
+/// UA stylesheet (HTML Rendering §15.3.7 «Lists»): marker type of `<ol>`/`<ul>`/`<menu>`/`<li>`
+/// (`decimal`; `disc`→`circle`→`square` by list nesting; the `type` attribute) and the implicit
+/// `list-item` counter — `ol, ul, menu { counter-reset: list-item }`, `li { counter-increment:
+/// list-item }` — with `<ol start>`, `<ol reversed>` and `<li value>` folded into the values
+/// (BUG-1547). Pre-cascade UA phase: author `list-style-type`/`counter-*` declarations win.
+pub(in crate::style) fn apply_ua_list(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return };
+    let el = doc.get(node);
+    match name.local.as_str() {
+        tag @ ("ol" | "ul" | "menu" | "dir") => {
+            let ordered = tag == "ol";
+            let mut depth = 0usize;
+            let mut cur = el.parent;
+            while let Some(p) = cur {
+                if is_list_container(doc, p) {
+                    depth += 1;
+                }
+                cur = doc.get(p).parent;
+            }
+            style.list_style_type = el
+                .get_attr("type")
+                .and_then(|v| list_type_attr(v, ordered, !ordered))
+                .unwrap_or(if ordered {
+                    ListStyleType::Decimal
+                } else {
+                    match depth {
+                        0 => ListStyleType::Disc,
+                        1 => ListStyleType::Circle,
+                        _ => ListStyleType::Square,
+                    }
+                });
+            let mut start = 0;
+            if ordered {
+                let reversed = el.get_attr("reversed").is_some();
+                let explicit = el.get_attr("start").and_then(parse_html_integer);
+                start = match (explicit, reversed) {
+                    (Some(s), false) => s.saturating_sub(1),
+                    (Some(s), true) => s.saturating_add(1),
+                    (None, false) => 0,
+                    // HTML LS §4.4.5: a reversed list counts down from its number of items.
+                    (None, true) => {
+                        let items = el.children.iter().filter(|&&c| is_li(doc, c)).count();
+                        i32::try_from(items).unwrap_or(i32::MAX).saturating_add(1)
+                    }
+                };
+            }
+            style.counter_reset = vec![("list-item".to_owned(), start)];
+        }
+        "li" => {
+            let parent = el.parent;
+            let in_ol = parent.is_some_and(|p| {
+                matches!(&doc.get(p).data, NodeData::Element { name, .. } if name.local.as_str() == "ol")
+            });
+            let reversed = in_ol && parent.is_some_and(|p| doc.get(p).get_attr("reversed").is_some());
+            if let Some(t) = el.get_attr("type").and_then(|v| list_type_attr(v, true, true)) {
+                style.list_style_type = t;
+            }
+            style.counter_increment = vec![("list-item".to_owned(), if reversed { -1 } else { 1 })];
+            if let Some(v) = el.get_attr("value").and_then(parse_html_integer) {
+                style.counter_set = vec![("list-item".to_owned(), v)];
+            }
+        }
+        _ => {}
     }
 }

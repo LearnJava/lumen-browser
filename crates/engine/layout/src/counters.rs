@@ -1806,6 +1806,13 @@ fn walk(
     let style_boundary = (style.contain.0 & crate::style::ContainFlags::STYLE.0 != 0).then(|| ctx.enter_style_boundary());
     let own_mark = ctx.fresh_log.len();
     ctx.apply_increment(&style.counter_increment);
+    // CSS Lists L3 §4.4: a `display: list-item` element increments `list-item` by itself unless
+    // its `counter-increment`/`counter-set` names it (an `<li>` gets it from `apply_ua_list`).
+    if style.display == crate::style::Display::ListItem
+        && !style.counter_increment.iter().chain(&style.counter_set).any(|(n, _)| n == "list-item")
+    {
+        ctx.apply_increment(&[("list-item".to_owned(), 1)]);
+    }
     ctx.apply_set(&style.counter_set);
     // Instances logged from here on belong to this element's children; the ones its own
     // properties made live on among its following siblings — unless the element is the
@@ -2573,21 +2580,21 @@ pub fn resolve_counter_value(def: &CounterStyleDef, n: i32, registry: &CounterSt
 /// and routes it through `format_counter_with_registry(ordinal, name, registry)`.
 pub fn build_list_marker_text(
     lst: ListStyleType,
-    ordinal: u32,
+    ordinal: i32,
     registry: &CounterStyleRegistry,
 ) -> String {
     match lst {
         // Bullets rendered geometrically; no text needed.
         ListStyleType::None | ListStyleType::Disc | ListStyleType::Circle | ListStyleType::Square => String::new(),
         // Built-in counter styles: format ordinal then append ". ".
-        ListStyleType::Decimal => format!("{}. ", format_counter_with_registry(ordinal as i32, "decimal", registry)),
-        ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
-        ListStyleType::LowerRoman => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-roman", registry)),
-        ListStyleType::UpperRoman => format!("{}. ", format_counter_with_registry(ordinal as i32, "upper-roman", registry)),
-        ListStyleType::LowerAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-alpha", registry)),
-        ListStyleType::UpperAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "upper-alpha", registry)),
-        ListStyleType::LowerGreek => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-greek", registry)),
-        ListStyleType::Custom(ref name) => format_marker_with_registry(ordinal as i32, name, registry),
+        ListStyleType::Decimal => format!("{}. ", format_counter_with_registry(ordinal, "decimal", registry)),
+        ListStyleType::DecimalLeadingZero => format!("{}{:02}. ", if ordinal < 0 { "-" } else { "" }, ordinal.unsigned_abs()),
+        ListStyleType::LowerRoman => format!("{}. ", format_counter_with_registry(ordinal, "lower-roman", registry)),
+        ListStyleType::UpperRoman => format!("{}. ", format_counter_with_registry(ordinal, "upper-roman", registry)),
+        ListStyleType::LowerAlpha => format!("{}. ", format_counter_with_registry(ordinal, "lower-alpha", registry)),
+        ListStyleType::UpperAlpha => format!("{}. ", format_counter_with_registry(ordinal, "upper-alpha", registry)),
+        ListStyleType::LowerGreek => format!("{}. ", format_counter_with_registry(ordinal, "lower-greek", registry)),
+        ListStyleType::Custom(ref name) => format_marker_with_registry(ordinal, name, registry),
     }
 }
 

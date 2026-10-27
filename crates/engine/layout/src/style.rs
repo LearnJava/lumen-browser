@@ -239,7 +239,7 @@ pub use values::box_model::{
     VerticalAlign,
 };
 pub use values::timing::{
-    AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
+    AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
     CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction, TransitionBehavior,
     parse_css_wide_keyword,
 };
@@ -254,6 +254,7 @@ pub use values::timing::{
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub(crate) use values::rule_computed::insert_gap_rule_computed;
 pub use values::grid_cssom::canonical_specified_grid;
+pub use values::misc_cssom::canonical_specified_misc;
 pub use values::text_cssom::{canonical_specified_text, transform_text_after_by_value, transform_text_by_value};
 pub use values::background_cssom::{canonical_specified_background, serialize_border_radius};
 pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};
@@ -263,6 +264,10 @@ pub use values::rule_anim::{
     transition_token_covers,
 };
 pub use values::caret::{CaretAnimation, CaretShape};
+pub use values::border_image::{
+    BorderImage, BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth,
+    canonical_specified_border_image,
+};
 pub use values::input_security::InputSecurity;
 pub use values::interactivity::Interactivity;
 pub use values::rule_list::{RuleItem, RuleList};
@@ -402,7 +407,7 @@ use quirks::{apply_quirks_html_height, apply_quirks_line_height, apply_quirks_ta
 use ua::{
     apply_ua_block_margins, snapshot_ua_block_box, swap_ua_block_box_for_vertical, apply_ua_body_margin, apply_ua_dialog_display, apply_ua_fieldset_style, apply_ua_form_controls,
     apply_ua_form_controls_field_sizing_clear, apply_ua_heading_style, apply_ua_hidden,
-    apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_slot, apply_ua_table_cell_padding,
+    apply_ua_hr_style, apply_ua_inert_important, apply_ua_interactivity, apply_ua_list, apply_ua_slot, apply_ua_table_cell_padding,
     apply_ua_text_decoration,
     default_display, is_appearance_disabling_property, is_disableable_widget,
     strip_ua_appearance_box_styling, ua_font_family, ua_font_size_factor,

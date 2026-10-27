@@ -498,6 +498,25 @@ fn list_style_position_inside_block_child_drops_below_marker_line() {
 }
 
 #[test]
+fn list_style_position_inside_empty_li_is_one_marker_line_tall() {
+    // BUG-1549: an empty `<li>` has no inline run to share the marker's line, but the
+    // marker still forms a line box — the `li` is one line tall and siblings stack.
+    let root = lay_measured(
+        "<ol><li></li><li></li></ol>",
+        "ol { padding: 0; margin: 0; width: 120px; list-style-position: inside; }",
+        400.0,
+    );
+    let ol = first_element_child(&root);
+    let lis: Vec<&LayoutBox> = ol.children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
+    assert_eq!(lis.len(), 2);
+    let m0 = lis[0].children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+    let m1 = lis[1].children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+    assert!(lis[0].rect.height > 0.0, "empty inside li has marker line height");
+    assert_eq!(lis[0].rect.height, lis[1].rect.height);
+    assert!(m1.rect.y > m0.rect.y, "markers do not overlap: {} vs {}", m0.rect.y, m1.rect.y);
+}
+
+#[test]
 fn list_style_image_marker_carries_url() {
     // CSS Lists L3 §2.3 — `list-style-image` populates the Marker box's
     // `image` field and the URL is collected for fetching.

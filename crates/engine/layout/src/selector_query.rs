@@ -16,7 +16,7 @@ use crate::box_tree::{BoxKind, LayoutBox, SvgBaselineShift};
 use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
     SvgColorInterpolation,
-    matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
+    matches_complex, AlignValue, AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
     BackgroundRepeat, BackgroundSize, BgSizeAxis, RepeatStyle, BlockStepAlign, BlockStepInsert, BlockStepRound,
     BorderStyle, BoxShadow, BoxSizing,
@@ -1549,6 +1549,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         [vr[0].as_str(), vr[1].as_str(), vr[2].as_str(), vr[3].as_str()],
     ));
 
+    // CSS Backgrounds L3 §6 — `border-image` shorthand and longhands.
+    for prop in [
+        "border-image-source", "border-image-slice", "border-image-width", "border-image-outset",
+        "border-image-repeat",
+    ] {
+        if let Some(v) = style.border_image.longhand_css(prop) {
+            m.insert(prop.into(), v);
+        }
+    }
+    m.insert("border-image".into(), style.border_image.shorthand_css());
+
     // ── Inset (positioned elements) ───────────────────────────────
     m.insert("top".into(), length_or_auto_to_css(&style.top));
     m.insert("right".into(), length_or_auto_to_css(&style.right));
@@ -2391,6 +2402,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             AnimationFillMode::Backwards => "backwards",
             AnimationFillMode::Both => "both",
         }).collect::<Vec<_>>().join(", ")
+    });
+    m.insert("animation-composition".into(), {
+        let list = if style.animation_compositions.is_empty() {
+            vec![AnimationComposition::default()]
+        } else {
+            style.animation_compositions.clone()
+        };
+        list.iter().map(|c| c.to_css()).collect::<Vec<_>>().join(", ")
     });
     m.insert("animation-play-state".into(), {
         let states = if style.animation_play_states.is_empty() {

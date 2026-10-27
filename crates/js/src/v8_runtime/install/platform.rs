@@ -613,6 +613,20 @@ pub(crate) fn install_css_supports_and_lazy_images(
             if !lumen_layout::style::webkit_gradient_value_valid(&value) {
                 return false;
             }
+            // border-image*: значение разбирается движком (отрицательный slice, лишний
+            // `fill`, три слова в `repeat` — не поддержаны). CSS-wide ключевые слова и `var()`
+            // валидны всегда.
+            let lower = prop.to_ascii_lowercase();
+            if lower.starts_with("border-image") {
+                let v = value.trim().to_ascii_lowercase();
+                let wide = matches!(v.as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
+                if !wide
+                    && !v.contains("var(")
+                    && lumen_layout::style::canonical_specified_background(&lower, &value).is_none()
+                {
+                    return false;
+                }
+            }
             lumen_css_parser::SUPPORTED_PROPERTIES
                 .iter()
                 .any(|p| p.eq_ignore_ascii_case(&prop))
@@ -810,6 +824,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         "_lumen_css_canonical_line_width",
         |value: String| -> Option<String> {
             lumen_layout::style::canonical_specified_line_width(&value)
+        }
+    );
+
+    // Canonical form of `content`, `font-family`, `font-size`, `list-style-image` for inline-`style`
+    // (BUG-1551): double-quoted strings, `url("…")`, unquoted identifier family names, `0.5%`.
+    // `None` — the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_misc",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_misc(&prop, &value)
         }
     );
 
