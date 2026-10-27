@@ -143,7 +143,7 @@ pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxT
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
     compute_local_transform, forward_box_transform, perspective_matrix, transform_fns_to_matrix,
-    translate_lp_matrix, TransformRef,
+    translate_lp_matrix, transform_origin_pivot, transform_reference_rect, TransformRef,
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
@@ -223,7 +223,7 @@ pub use style::{
     SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPatternDef, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     TextOverflow, TextShadow, TextTransform, TextUnderlinePosition,
-    TimingFunction, TransformFn, TransformStyle,
+    TimingFunction, TransformBox, TransformFn, TransformStyle,
     UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };

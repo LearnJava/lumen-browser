@@ -7,3 +7,38 @@ Test category, added 2026-08-06 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 ## Прогон и находки (`docs/wpt-status.md`)
 
 Вендорена целиком 2026-08-06 (коммит `35be3b44`, `tests/wpt/service-workers/`, 794 файла: `cache-storage/`, `service-worker/`). `run_report.py --all --root service-workers --recursive --processes=4` — ~34:24, 297 отобранных id, почти все `.https.`: **1/287 harness OK, 0/1 сабтестов**. 285 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 1 ERROR — артефакт застрявшего browsing context (класс BUG-380, `AssertionError: Got results from data-iframe.html, expected data-transfer-files.https.html`); единственный исполнившийся не-`.https.` тест (`data-iframe.html`) сам провалил единственный сабтест на постороннем 500 (`resources/test-helpers.sub.js`, `.sub.html`-гэп `wptserve/pipes.py`). Живая проба (`--mcp-live-port`) реальной SW-инфраструктуры (`_sw_origin`/`_lumen_sw_*` натив, `_sw_container.register`) нашла два новых бага: [BUG-674](../../bugs/BUG-674-FIXED.md) — реестр Service Worker и Cache Storage ключуется недоверенной JS-строкой origin без серверной привязки к реально навигированному origin (любой скрипт может подделать/прочитать чужой origin, класс [BUG-371](../../bugs/BUG-371-FIXED.md)); [BUG-675](../../bugs/BUG-675-FIXED.md) — `navigator.serviceWorker.register()` не валидирует script URL вовсе (cross-origin и `javascript:`-схема успешно регистрируются, класс BUG-646/656/666/667)
+
+## Разведка WPT-SW-SCOUT (2026-10-27)
+
+Статус: закрыта 2026-10-27. Баги [BUG-1742](../../bugs/BUG-1742-OPEN.md)…[BUG-1747](../../bugs/BUG-1747-OPEN.md) и дополнение к [BUG-1226](../../bugs/BUG-1226-OPEN.md) (очередь P3 в порядке J → C → A → F → D → E → G), задачи SW-MSG, SW-MODULE, SW-PRELOAD-ROUTER (очередь P1). Код не менялся.
+
+**Прогон** (`run_corpus.py --prefixes service-workers --processes 6`, `dev-release` от `main` `c9bcc4bab`, 1133 с): 331 id, **11.52 %** (в WPT-RUN-16 — 11.44 %), балл 38.14, harness OK 161, сабтесты 299 / 2 367. Статусы: OK 160, PASS 1, TIMEOUT 146, ERROR 21, CRASH 2, FAIL 1. Одно убийство по RSS-лимиту (4.02 ГБ).
+
+**Главное.** Сервис-воркер в Lumen — имитация на таймерах: регистрация не исполняет скрипт до «активации», `postMessage` в обе стороны — no-op, `clients` — заглушки. Почти все тесты `service-worker/` отдают результат из воркера сообщением, поэтому B (сообщения) и C (жизненный цикл) — TIMEOUT целиком. Второй по весу корень — J: тесты строят SW-окружение в iframe, а фасад `iframe.contentWindow` отдаёт глобалы по значению. `cache-storage/` живёт отдельно: в окне Cache API работает с ошибками формы (E), в воркерах `caches` нет вовсе (F).
+
+### Таблица кластеров
+
+Балл — потолок (Σ потерянных долей сабтестов, каждый id отнесён к одному кластеру — первой совпавшей причине); п.п. — от 331 id категории. Кластеры перекрываются: после J и C всплывут B и D.
+
+| Кл. | Группа | id | Сабтестов (PASS/всего) | Статусы | Причина (представитель) | Куда | Балл (п.п.) |
+|---|---|---|---|---|---|---|---|
+| A | `*.any.serviceworker.html` | 16 | 0 / 0 | TIMEOUT 16 | 70 «importScripts: HTTP 404», scope склеен как `https://localhost:18443resources/...` (11 в `cache-storage/`, `idlharness`) | [BUG-1226](../../bugs/BUG-1226-OPEN.md) | 16.0 (4.8) |
+| B | сообщения страница↔SW, Clients | 79 | 24 / 498 | TIMEOUT 59, OK 20 | `ServiceWorker.postMessage` no-op, нет `ExtendableMessageEvent`, `clients.get/matchAll` — заглушки, `waitUntil` не ждёт (`postmessage.https.html`, `clients-matchall.https.html`) | SW-MSG | 74.6 (22.5) |
+| C | регистрация и жизненный цикл | 33 | 56 / 167 | TIMEOUT 16, OK 17 | `updatefound` до резолва `register()`, scope не резолвится, `update()` — заглушка (`registration-service-worker-attributes`, `register-default-scope`) | [BUG-1742](../../bugs/BUG-1742-OPEN.md) | 27.3 (8.2) |
+| D | точность перехвата fetch | 21 | 6 / 173 | OK 15, TIMEOUT 5, FAIL 1 | из `respondWith` доходит только тело (status 200, без заголовков), `preventDefault` не даёт network error (`fetch-event-network-error`) | [BUG-1744](../../bugs/BUG-1744-OPEN.md) | 19.8 (6.0) |
+| E | Cache API в окне | 17 | 34 / 157 | OK 12, TIMEOUT 5 | нет `Cache`, тело «101,103,…», `statusText` «OK», опции match игнорируются (`cache-match.https.any.html`) | [BUG-1745](../../bugs/BUG-1745-OPEN.md) | 14.3 (4.3) |
+| F | `caches` в Dedicated/SharedWorker | 23 | 0 / 295 | ERROR 16, OK 7 | `self.caches` undefined, cleanup «reading 'delete'» (`cache-put.https.any.worker.html`) | [BUG-1746](../../bugs/BUG-1746-OPEN.md) | 23.0 (6.9) |
+| G | IDL | 8 | 118 / 410 | OK 4, ERROR 2, TIMEOUT 2 | нет `ServiceWorker`, `ServiceWorkerContainer`, `NavigationPreloadManager` (`idlharness.https.any.html`, `state.https.html`) | [BUG-1747](../../bugs/BUG-1747-OPEN.md) | 7.1 (2.1) |
+| H | navigation preload | 7 | 4 / 17 | OK 6, TIMEOUT 1 | нет `registration.navigationPreload` (`navigation-preload/*`) | SW-PRELOAD-ROUTER | 6.2 (1.9) |
+| H2 | static router `addRoutes` | 13 | 0 / 74 | TIMEOUT 11, OK 2 | нет `InstallEvent.addRoutes` (`tentative/static-router/*`) | SW-PRELOAD-ROUTER | 13.0 (3.9) |
+| I | модульные SW | 12 | 2 / 53 | TIMEOUT 9, OK 3 | 26 «Cannot use import statement outside a module» (`registration-script-module`, `update-registration-with-type`) | SW-MODULE | 11.7 (3.5) |
+| J | фасад iframe по значению | 64 | 25 / 256 | OK 54, TIMEOUT 7, ERROR 3 | `iframe.contentWindow.navigator.serviceWorker`, промис `fetch()`, `performance` теряются на границе изолятов | [BUG-1743](../../bugs/BUG-1743-OPEN.md) | 58.7 (17.7) |
+| K | раннер | 8 | 0 / 4 | OK 4, TIMEOUT 2, CRASH 2 | BiDi lost (`fetch-event.https.h2.html`, `local-url-inherit-controller`), testdriver «element click intercepted» (download, tentative), crashtest `test-wait` | шум, задач нет | 8.0 (2.4) |
+| Z | прочее | 14 | 3 / 236 | TIMEOUT 13, OK 1 | canvas-tainting, CSP в скоупе SW, `close()`, same-site-cookies — ждут B/C | после B/C | 13.2 (4.0) |
+| — | PASSED | 16 | 27 / 27 | OK 15, PASS 1 | | | 0 |
+
+Всего потеряно 292.9 балла (88.5 п.п. категории ≈ 0.43 п.п. корпуса).
+
+**Порядок.** J (BUG-1743) и C (BUG-1742) разблокируют больше всего и нужны SW-MSG; A (BUG-1226) зависит от резолва scope в BUG-1742. F → E (заголовок, затем форма Cache API). D и G — после C. SW-MSG — после BUG-1742; SW-MODULE — после BUG-1742; SW-PRELOAD-ROUTER — после BUG-1744 (`preloadResponse` у `FetchEvent`) и BUG-1747 (`NavigationPreloadManager`).
+
+**Проверка заметки.** Скрипты разбора не коммитились (лежали в `.tmp/` слота `p2-work`: `sw_an.py`, `sw_cl.py`, `sw_scan.py`, `sw_final.py sum|ids <кластер>`); после фикса кластера достаточно `run_corpus.py --prefixes service-workers/<подкаталог>` и сравнения статусов из таблицы.

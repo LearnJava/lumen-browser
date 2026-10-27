@@ -26,7 +26,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, contains_fixed_descendants, forward_box_transform, is_positioned_layer_auto,
     owns_paint_layer, perspective_matrix,
-    transform_fns_to_matrix, TransformRef, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
+    transform_fns_to_matrix, transform_origin_pivot, TransformRef, BoxOrigin, BoxRole, PseudoKind, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
@@ -140,15 +140,15 @@ fn first_line_content_rect(b: &LayoutBox, line: &[InlineFrag], line_h: f32) -> O
         if !matches!(frag.style.visibility, Visibility::Visible) {
             continue;
         }
-        let (pad_l, pad_r, bl, br) = if frag.is_element_box {
-            (
-                frag.padding_left,
-                frag.padding_right,
-                frag.style.border_left_width,
-                frag.style.border_right_width,
-            )
+        let (pad_l, bl) = if frag.is_element_box && frag.edge_start {
+            (frag.padding_left, frag.style.border_left_width)
         } else {
-            (0.0, 0.0, 0.0, 0.0)
+            (0.0, 0.0)
+        };
+        let (pad_r, br) = if frag.is_element_box && frag.edge_end {
+            (frag.padding_right, frag.style.border_right_width)
+        } else {
+            (0.0, 0.0)
         };
         let l = b.rect.x + frag.x - pad_l - bl;
         let r = b.rect.x + frag.x + frag.width + pad_r + br;

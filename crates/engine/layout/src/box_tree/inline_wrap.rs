@@ -248,6 +248,8 @@ pub(crate) fn push_tabbed_frags(
             padding_right: if n == last { pad_r } else { 0.0 },
             is_element_box: seg.is_element_box,
             effect_scopes: seg.effect_scopes.clone(),
+            edge_start: n == 0 && seg.pre_space > 0.0,
+            edge_end: n == last && seg.post_space > 0.0,
             img_src: None,
             img_is_lazy: false,
             is_first_line: false,
@@ -763,6 +765,62 @@ pub(crate) fn wrap_inline_run(
     )
 }
 
+/// Margin + border + padding of an inline box under `box-decoration-break: clone` (CSS Fragmentation
+/// L3 §5.1): every line fragment of the box repeats both edges, so each line reserves room for them.
+#[derive(Clone, Copy)]
+struct CloneEdges {
+    /// Resolved start margin + border + padding width.
+    start_w: f32,
+    /// Resolved end margin + border + padding width.
+    end_w: f32,
+    pad_r: f32,
+}
+
+impl CloneEdges {
+    /// Edges of the segment's element, `None` when it slices (the default) or has no edges.
+    fn of(seg: &InlineSegment, pad_l: f32, pad_r: f32, viewport: Size) -> Option<Self> {
+        if !seg.style.box_decoration_clone || !seg.is_element_box {
+            return None;
+        }
+        let em = seg.style.font_size;
+        let start_w = seg.style.margin_left.resolve_or_zero(em, 0.0, viewport) + seg.style.border_left_width + pad_l;
+        let end_w = seg.style.border_right_width + pad_r + seg.style.margin_right.resolve_or_zero(em, 0.0, viewport);
+        (start_w + end_w > 0.0).then_some(Self { start_w, end_w, pad_r })
+    }
+}
+
+/// Ends the current line inside an inline box. A `clone` box closes the line with its end edge
+/// (when the line's last fragment is the box's own) and opens the next with its start edge;
+/// `continuing` is false when the word that wraps is the first of the box, which brings its own
+/// start edge through `pre_space`.
+#[allow(clippy::too_many_arguments)]
+fn break_line(
+    result: &mut Vec<Vec<InlineFrag>>,
+    current_line: &mut Vec<InlineFrag>,
+    current_x: &mut f32,
+    soft: f32,
+    clone: Option<CloneEdges>,
+    style: &std::sync::Arc<ComputedStyle>,
+    continuing: bool,
+    clone_restart: &mut bool,
+) {
+    let mut x = soft;
+    if let Some(c) = clone
+        && continuing
+    {
+        if let Some(last) = current_line.last_mut()
+            && std::sync::Arc::ptr_eq(&last.style, style)
+        {
+            last.edge_end = true;
+            last.padding_right = c.pad_r;
+        }
+        x += c.start_w;
+        *clone_restart = true;
+    }
+    result.push(std::mem::take(current_line));
+    *current_x = x;
+}
+
 /// Разбивает прогон сегментов на строки, склеивая слова
 /// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
 /// `pre_space` / `post_space` (inline box model: margin + border + padding).
@@ -823,6 +881,12 @@ pub(crate) fn wrap_inline_run_indented(
         if seg.forced_break {
             if let Some(last) = current_line.last_mut() {
                 last.forced_end = true;
+                // `box-decoration-break: clone` — a `<br>` inside the box ends the line with its
+                // end edge, like a soft wrap does.
+                if last.style.box_decoration_clone && last.is_element_box && !last.edge_end && last.img_src.is_none() {
+                    last.edge_end = true;
+                    last.padding_right = last.style.padding_right.resolve_or_zero(last.style.font_size, max_width, viewport);
+                }
             }
             result.push(std::mem::take(&mut current_line));
             current_x = indent.after_forced;
@@ -894,6 +958,8 @@ pub(crate) fn wrap_inline_run_indented(
                 padding_right: pad_r,
                 is_element_box: true,
                 effect_scopes: seg.effect_scopes.clone(),
+                edge_start: true,
+                edge_end: true,
                 img_src: Some(img_src.clone()),
                 img_is_lazy: seg.img_is_lazy,
                 is_first_line: false,
@@ -928,6 +994,8 @@ pub(crate) fn wrap_inline_run_indented(
                 padding_right: style.padding_right.resolve_or_zero(em, max_width, viewport),
                 is_element_box: true,
                 effect_scopes: seg.effect_scopes.clone(),
+                edge_start: seg.pre_space > 0.0,
+                edge_end: seg.post_space > 0.0,
                 img_src: None,
                 img_is_lazy: false,
                 is_first_line: false,
@@ -962,6 +1030,9 @@ pub(crate) fn wrap_inline_run_indented(
         // Resolved padding for this segment's inline box (for paint use).
         let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
         let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
+        let clone = CloneEdges::of(seg, pad_l, pad_r, viewport);
+        // A `clone` box's start edge was just reserved at the head of a line: the next fragment owns it.
+        let mut clone_restart = false;
 
         let n = raw_words.len();
         for (wi, raw_word) in raw_words.iter().enumerate() {
@@ -987,6 +1058,23 @@ pub(crate) fn wrap_inline_run_indented(
             // Space that the inline box model contributes at the word boundaries.
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
+            // `box-decoration-break: clone`: a piece of the box that opens a line without the
+            // box's own start (a `<br>` or soft wrap cut it) repeats the start edge; every line
+            // that keeps going also keeps room for the end edge.
+            let continuing = !(is_seg_first && seg.pre_space > 0.0);
+            if let Some(c) = clone
+                && is_seg_first
+                && seg.pre_space == 0.0
+                && current_line.is_empty()
+                && !clone_restart
+            {
+                current_x += c.start_w;
+                clone_restart = true;
+            }
+            let end_reserve = match clone {
+                Some(c) if !is_seg_last => c.end_w,
+                _ => 0.0,
+            };
 
             let word_w = measure_text_w_styled(&display_word, style, 0.0, m);
             // CSS Text L3 §4.1.1 — inter-word gap before this word. Words within a
@@ -1023,7 +1111,7 @@ pub(crate) fn wrap_inline_run_indented(
             // `word-break: break-all` это достаточное условие, в том числе когда
             // слово начинает строку и переполняет контейнер в одиночку
             // (CSS Text L3 §5.2, §6.1).
-            let overflows = breakable && current_x + gap + pre + word_w > max_width;
+            let overflows = breakable && current_x + gap + pre + word_w + end_reserve > max_width;
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
             let needs_wrap = !current_line.is_empty() && overflows;
 
@@ -1034,7 +1122,7 @@ pub(crate) fn wrap_inline_run_indented(
             // Only relevant when the word does not fit as-is. The opportunities
             // are UAX #14's (hyphens, dashes, ZWSP, ideographs, SA scripts),
             // tailored by `line-break` and `word-break`.
-            let lb_avail = max_width - current_x - gap - pre;
+            let lb_avail = max_width - current_x - gap - pre - end_reserve;
             let lb_opps = if base_breakable && word_w > lb_avail {
                 crate::line_break::break_opportunities(&display_word, line_break, word_break)
             } else {
@@ -1048,7 +1136,7 @@ pub(crate) fn wrap_inline_run_indented(
                 while start < display_word.len() {
                     let chunk_gap = if current_line.is_empty() { 0.0 } else { word_inter };
                     let chunk_pre = if first_chunk { pre } else { 0.0 };
-                    let avail = (max_width - current_x - chunk_gap - chunk_pre).max(0.0);
+                    let avail = (max_width - current_x - chunk_gap - chunk_pre - end_reserve).max(0.0);
                     let mut end = opportunity_break_offset(
                         &display_word, start, &lb_opps, avail,
                         style.font_size, ls, &style.font_family, &style.font_variation_settings, m,
@@ -1057,8 +1145,11 @@ pub(crate) fn wrap_inline_run_indented(
                         if !current_line.is_empty() && !(glued_boundary && first_chunk) {
                             // Nothing fits in what is left of this line — wrap
                             // and measure again against the full width.
-                            result.push(std::mem::take(&mut current_line));
-                            current_x = indent.soft;
+                            let cont = continuing || !first_chunk;
+                            break_line(
+                                &mut result, &mut current_line, &mut current_x, indent.soft,
+                                clone, style, cont, &mut clone_restart,
+                            );
                             continue;
                         }
                         // The line is empty and even the shortest chunk
@@ -1082,16 +1173,19 @@ pub(crate) fn wrap_inline_run_indented(
                     let chunk = &display_word[start..end];
                     let chunk_w = measure_text_w_styled(chunk, style, 0.0, m);
                     current_x += chunk_gap + chunk_pre;
+                    let cs = std::mem::take(&mut clone_restart);
                     current_line.push(InlineFrag {
                         x: current_x,
                         y_offset: 0.0,
                         width: chunk_w,
                         text: chunk.to_string(),
                         style: style.clone(),
-                        padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
+                        padding_left: if cs || (first_chunk && is_seg_first) { pad_l } else { 0.0 },
                         padding_right: if end == display_word.len() && is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
                         effect_scopes: seg.effect_scopes.clone(),
+                        edge_start: cs || (first_chunk && is_seg_first && pre > 0.0),
+                        edge_end: end == display_word.len() && is_seg_last && post > 0.0,
                         img_src: None,
                         img_is_lazy: false,
                         is_first_line: false,
@@ -1109,8 +1203,10 @@ pub(crate) fn wrap_inline_run_indented(
                     first_chunk = false;
                     start = end;
                     if start < display_word.len() {
-                        result.push(std::mem::take(&mut current_line));
-                        current_x = indent.soft;
+                        break_line(
+                            &mut result, &mut current_line, &mut current_x, indent.soft,
+                            clone, style, true, &mut clone_restart,
+                        );
                     }
                 }
                 current_x += post;
@@ -1128,7 +1224,7 @@ pub(crate) fn wrap_inline_run_indented(
                         break_pts.sort_unstable();
                         break_pts.dedup();
                     }
-                    let avail = max_width - current_x - gap - pre;
+                    let avail = max_width - current_x - gap - pre - end_reserve;
                     try_hyp_break(&display_word, avail, style.font_size, ls, m, &break_pts)
                 } else {
                     None
@@ -1138,16 +1234,19 @@ pub(crate) fn wrap_inline_run_indented(
                     // Emit prefix (with trailing '-') to current line, then wrap.
                     let pfx_w = measure_text_w_styled(&pfx, style, 0.0, m);
                     current_x += gap + pre;
+                    let cs = std::mem::take(&mut clone_restart);
                     current_line.push(InlineFrag {
                         x: current_x,
                         y_offset: 0.0,
                         width: pfx_w,
                         text: pfx,
                         style: style.clone(),
-                        padding_left: if is_seg_first { pad_l } else { 0.0 },
+                        padding_left: if is_seg_first || cs { pad_l } else { 0.0 },
                         padding_right: 0.0,
                         is_element_box: seg.is_element_box,
                         effect_scopes: seg.effect_scopes.clone(),
+                        edge_start: cs || (is_seg_first && pre > 0.0),
+                        edge_end: false,
                         img_src: None,
                         img_is_lazy: false,
                         is_first_line: false,
@@ -1159,20 +1258,25 @@ pub(crate) fn wrap_inline_run_indented(
                         forced_end: false,
                         font_underline: None,
                     });
-                    result.push(std::mem::take(&mut current_line));
-                    current_x = indent.soft;
+                    break_line(
+                        &mut result, &mut current_line, &mut current_x, indent.soft,
+                        clone, style, true, &mut clone_restart,
+                    );
                     // Emit suffix as first fragment on new line.
                     let sfx_w = measure_text_w_styled(&sfx, style, 0.0, m);
+                    let cs = std::mem::take(&mut clone_restart);
                     current_line.push(InlineFrag {
-                        x: 0.0,
+                        x: current_x - indent.soft,
                         y_offset: 0.0,
                         width: sfx_w,
                         text: sfx,
                         style: style.clone(),
-                        padding_left: 0.0,
+                        padding_left: if cs { pad_l } else { 0.0 },
                         padding_right: if is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
                         effect_scopes: seg.effect_scopes.clone(),
+                        edge_start: cs,
+                        edge_end: is_seg_last && post > 0.0,
                         img_src: None,
                         img_is_lazy: false,
                         is_first_line: false,
@@ -1202,16 +1306,19 @@ pub(crate) fn wrap_inline_run_indented(
                         let tail = &rest[split..];
                         if !head.is_empty() {
                             let head_w = measure_text_w_styled(head, style, 0.0, m);
+                            let cs = std::mem::take(&mut clone_restart);
                             current_line.push(InlineFrag {
                                 x: current_x,
                                 y_offset: 0.0,
                                 width: head_w,
                                 text: head.to_string(),
                                 style: style.clone(),
-                                padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
+                                padding_left: if cs || (first_chunk && is_seg_first) { pad_l } else { 0.0 },
                                 padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                                 is_element_box: seg.is_element_box,
                                 effect_scopes: seg.effect_scopes.clone(),
+                                edge_start: cs || (first_chunk && is_seg_first && pre > 0.0),
+                                edge_end: tail.is_empty() && is_seg_last && post > 0.0,
                                 img_src: None,
                                 img_is_lazy: false,
                                 is_first_line: false,
@@ -1228,8 +1335,10 @@ pub(crate) fn wrap_inline_run_indented(
                         }
                         rest = tail;
                         if !rest.is_empty() {
-                            result.push(std::mem::take(&mut current_line));
-                            current_x = indent.soft;
+                            break_line(
+                                &mut result, &mut current_line, &mut current_x, indent.soft,
+                                clone, style, true, &mut clone_restart,
+                            );
                         }
                     }
                     current_x += post;
@@ -1240,8 +1349,10 @@ pub(crate) fn wrap_inline_run_indented(
                 // No hyphenation break found — normal wrap. A word that starts the
                 // line has nowhere to wrap to: it stays and overflows.
                 if needs_wrap {
-                    result.push(std::mem::take(&mut current_line));
-                    current_x = indent.soft;
+                    break_line(
+                        &mut result, &mut current_line, &mut current_x, indent.soft,
+                        clone, style, continuing, &mut clone_restart,
+                    );
                 }
             }
 
@@ -1261,16 +1372,19 @@ pub(crate) fn wrap_inline_run_indented(
                     let tail = &rest[split..];
                     if !head.is_empty() {
                         let head_w = measure_text_w_styled(head, style, 0.0, m);
+                        let cs = std::mem::take(&mut clone_restart);
                         current_line.push(InlineFrag {
                             x: current_x,
                             y_offset: 0.0,
                             width: head_w,
                             text: head.to_string(),
                             style: style.clone(),
-                            padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
+                            padding_left: if cs || (first_chunk && is_seg_first) { pad_l } else { 0.0 },
                             padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                             is_element_box: seg.is_element_box,
                             effect_scopes: seg.effect_scopes.clone(),
+                            edge_start: cs || (first_chunk && is_seg_first && pre > 0.0),
+                            edge_end: tail.is_empty() && is_seg_last && post > 0.0,
                             img_src: None,
                             img_is_lazy: false,
                             is_first_line: false,
@@ -1287,8 +1401,10 @@ pub(crate) fn wrap_inline_run_indented(
                     }
                     rest = tail;
                     if !rest.is_empty() {
-                        result.push(std::mem::take(&mut current_line));
-                        current_x = indent.soft;
+                        break_line(
+                            &mut result, &mut current_line, &mut current_x, indent.soft,
+                            clone, style, true, &mut clone_restart,
+                        );
                     }
                 }
                 current_x += post;
@@ -1351,16 +1467,19 @@ pub(crate) fn wrap_inline_run_indented(
             };
 
             if !merged {
+                let cs = std::mem::take(&mut clone_restart);
                 current_line.push(InlineFrag {
                     x: frag_x,
                     y_offset: 0.0,
                     width: word_w,
                     text: display_word,
                     style: style.clone(),
-                    padding_left: if is_seg_first { pad_l } else { 0.0 },
+                    padding_left: if is_seg_first || cs { pad_l } else { 0.0 },
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
                     is_element_box: seg.is_element_box,
                     effect_scopes: seg.effect_scopes.clone(),
+                    edge_start: cs || (is_seg_first && pre > 0.0),
+                    edge_end: is_seg_last && post > 0.0,
                     img_src: None,
                     img_is_lazy: false,
                     is_first_line: false,
@@ -1781,6 +1900,8 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 padding_right: 0.0,
                 is_element_box: true,
                 effect_scopes: seg.effect_scopes.clone(),
+                edge_start: false,
+                edge_end: false,
                 img_src: Some(img_src.clone()),
                 img_is_lazy: false,
                 is_first_line: false,
@@ -1834,6 +1955,8 @@ pub(crate) fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFra
                 padding_right: 0.0,
                 is_element_box: seg.is_element_box,
                 effect_scopes: seg.effect_scopes.clone(),
+                edge_start: false,
+                edge_end: false,
                 img_src: None,
                 img_is_lazy: false,
                 is_first_line: false,

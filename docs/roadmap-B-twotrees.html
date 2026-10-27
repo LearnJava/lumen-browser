@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-27",
  "counts": {
-  "open": 298,
+  "open": 306,
   "fixed": 1369,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1670,
+ "total_bugs": 1678,
  "phases": [
   {
    "id": "P0",
@@ -1193,6 +1193,36 @@
      "bugs": [
       "BUG-1700",
       "BUG-1703"
+     ]
+    },
+    {
+     "id": "WEBCRYPTO-CURVES",
+     "title": "WEBCRYPTO-CURVES: P-384/P-521, Ed25519/X25519 (Ed448/X448), getPublicKey",
+     "status": "planned",
+     "size": "L",
+     "note": "Недостающие кривые SubtleCrypto (кластер C1 разведки WPT-CRYPTO-SCOUT, `docs/wpt-vendor-notes/WebCryptoAPI.md`: ≈70 id, потолок ≈13 п.п. `WebCryptoAPI`). Сейчас есть только P-256 (`p256`); P-384/P-521, Ed25519/Ed448, X25519/X448 дают `NotSupportedError`. **Сделать:** (1) ECDSA/ECDH на P-384 и P-521 — `generateKey`/`importKey`/`exportKey` (`raw`/`spki`/`pkcs8`/`jwk`), `sign`/`verify`, `deriveBits`/`deriveKey` в `crates/js/src/subtle_crypto.rs`; (2) Ed25519 и X25519 (Secure Curves, `sign`/`verify`, `deriveBits`, все форматы ключей, JWK `OKP`); (3) Ed448/X448 — если найдётся зрелый крейт, иначе отдельная строка ROADMAP с причиной; (4) `SubtleCrypto.getPublicKey` (tentative) для всех асимметричных ключей. Нормализация алгоритма и проверки usages — уже из BUG-1736, сюда не входят. Новые крейты RustCrypto (`p384`, `p521`, `ed25519-dalek`, `x25519-dalek`, …) — с `**Why this dependency:**` по ADR-027. **Готово, когда:** `run_corpus.py --prefixes WebCryptoAPI` — `generateKey/successes_{ECDSA,ECDH,Ed25519,X25519}`, `import_export/{ec,okp}_importKey*`, `sign_verify/{ecdsa,eddsa}*`, `derive_bits_keys/{ecdh,cfrg}_*` без `NotSupportedError`; прирост ≥ +8 п.п. категории; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
+     "bugs": [
+      "BUG-1736"
+     ]
+    },
+    {
+     "id": "WEBCRYPTO-SYM",
+     "title": "WEBCRYPTO-SYM: AES-192, AES-KW + wrapKey, SHA-3, ChaCha20-Poly1305, AES-OCB, KMAC, Argon2",
+     "status": "planned",
+     "size": "L",
+     "note": "Недостающие симметричные алгоритмы и хеши SubtleCrypto (кластер C2 разведки WPT-CRYPTO-SCOUT, `docs/wpt-vendor-notes/WebCryptoAPI.md`: ≈60 id, потолок ≈12 п.п. `WebCryptoAPI`). **Сделать** в `crates/js/src/subtle_crypto.rs` + `crypto_shim.js`: (1) AES-192 во всех режимах (`AES-CBC`/`CTR`/`GCM`); (2) AES-KW и операции `wrapKey`/`unwrapKey` для всех форматов (`wrapKey_unwrapKey/*`); (3) SHA-3 (`SHA3-256/384/512`) в `digest`, HMAC, HKDF, PBKDF2, RSA, ECDSA; (4) cSHAKE/TurboSHAKE/KangarooTwelve в `digest` (tentative), KMAC, ChaCha20-Poly1305, AES-OCB, Argon2 — каждый отдельным пунктом, порядок по баллам из таблицы C2; что упирается в незрелый крейт — отдельная строка ROADMAP с причиной. Новые крейты RustCrypto (`aes-kw`, `sha3`, `k12`, `chacha20poly1305`, `ocb3`, `argon2`, …) — с `**Why this dependency:**` по ADR-027. Синхронный счёт (BUG-1738) здесь не чинить, но Argon2/KangarooTwelve проверять на воркерных вариантах. **Готово, когда:** `run_corpus.py --prefixes WebCryptoAPI` — `wrapKey_unwrapKey`, `digest/{sha3,cshake,turboshake,kangarootwelve}*`, `encrypt_decrypt/{aes_kw,chacha20_poly1305,aes_ocb}*` без `NotSupportedError`; прирост ≥ +6 п.п.; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
+     "bugs": [
+      "BUG-1736"
+     ]
+    },
+    {
+     "id": "WEBCRYPTO-PQ",
+     "title": "WEBCRYPTO-PQ: ML-KEM, ML-DSA, raw-форматы, SubtleCrypto.supports",
+     "status": "planned",
+     "size": "M",
+     "note": "Постквантовые алгоритмы SubtleCrypto (tentative, кластер C3 разведки WPT-CRYPTO-SCOUT, `docs/wpt-vendor-notes/WebCryptoAPI.md`: ≈20 id, потолок ≈5.7 п.п. `WebCryptoAPI`). **Сделать:** (1) ML-KEM-512/768/1024 — `generateKey`, импорт/экспорт, `encapsulateBits`/`encapsulateKey`/`decapsulateBits`/`decapsulateKey`; (2) ML-DSA-44/65/87 — `sign`/`verify` с `context`; (3) форматы `raw-public`/`raw-private`/`raw-seed`; (4) `SubtleCrypto.supports()` по реестру поддержанных алгоритмов (после WEBCRYPTO-CURVES/SYM отражает их). Крейты `ml-kem`, `ml-dsa` (RustCrypto) — с `**Why this dependency:**` по ADR-027 (provisional: спека tentative). **Готово, когда:** `run_corpus.py --prefixes WebCryptoAPI` — `*ML-KEM*`, `*ML-DSA*`, `supports*` без `NotSupportedError`/`TypeError: not a function`; прирост ≥ +3 п.п.; `scoped-test.sh` по `lumen-js` (`--features v8-backend`) зелёный; `CAPABILITIES.md` обновлён.",
+     "bugs": [
+      "BUG-1736"
      ]
     }
    ],
@@ -11731,6 +11761,62 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1734": {
+   "status": "open",
+   "title": "Найден WPT-CRYPTO-SCOUT: у `CryptoKey` нет `Symbol.toStringTag`, у `algorithm` AES/HMAC нет `length`, имя `RSASSA-PKCS1-V1_5` в верхнем регистре, неверные `usag…",
+   "component": "js (`crates/js/src/shim/crypto_shim.js` `CryptoKey`/`_make_crypto_key`, `subtle_crypto.rs` `algorithm_json`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1735": {
+   "status": "open",
+   "title": "Найден WPT-CRYPTO-SCOUT: `Crypto`/`SubtleCrypto`/`CryptoKey` не WebIDL-интерфейсы — нет глобала `SubtleCrypto`, методы — own-свойства, `Crypto` перечислим; `get…",
+   "component": "js (`crates/js/src/shim/crypto_shim.js` — `subtle`, `g.crypto`, `g.Crypto`, `getRandomValues`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1736": {
+   "status": "open",
+   "title": "Найден WPT-CRYPTO-SCOUT: нет «normalize an algorithm» (WebCrypto §18.4) и проверок usages/типа ключа — `NotSupportedError` вместо `SyntaxError`/`TypeError`/`Inv…",
+   "component": "js (`crypto_shim.js` — все методы `subtle`; `subtle_crypto.rs` — `generate_key`, `import_key`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1737": {
+   "status": "open",
+   "title": "Найден WPT-CRYPTO-SCOUT: `structuredClone`/`postMessage` теряют `CryptoKey` — клон простой объект, «exportKey: argument is not a CryptoKey» (кластер D: 38 id, ≈…",
+   "component": "js (structured clone `crates/js/src/v8_runtime/`, `crypto_shim.js` `CryptoKey.__ckid`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1738": {
+   "status": "open",
+   "title": "Найден WPT-CRYPTO-SCOUT: SubtleCrypto считает синхронно до возврата промиса — PBKDF2 ×100 000, RSA-keygen в «Bad usages», большие данные блокируют `load`: 14 ER…",
+   "component": "js (`crypto_shim.js` — операции в executor `new Promise`, `_to_bytes`; `web_crypto_natives.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1739": {
+   "status": "open",
+   "title": "Найден WPT-CRYPTO-SCOUT: игнорируются `tagLength` AES-GCM, `saltLength` RSA-PSS, параметры AES-CTR, `length` deriveBits; данные копируются после нормализации ал…",
+   "component": "js (`crypto_shim.js` `encrypt`/`decrypt`/`sign`/`verify`/`deriveBits`; `subtle_crypto.rs` `aes_gcm_*`, `rsa_verify`, `aes_ctr_crypt`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1740": {
+   "status": "open",
+   "title": "Найден WPT-STREAMS-SCOUT: `ReadableStream.length` 2 вместо 0, перечисляемые методы и служебный `_rs_do_cancel` на публичном прототипе, нет `Symbol.toStringTag`;…",
+   "component": "js (`crates/js/src/shim/streams_shim.js` — WebIDL-форма классов Streams)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1741": {
+   "status": "open",
+   "title": "Найден WPT-STREAMS-SCOUT: `transformer.cancel` не вызывается, `readableType`/`writableType` не отвергаются, `terminate()` не закрывает запись, исключение `start…",
+   "component": "js (`streams_shim.js` — `TransformStream`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -22091,6 +22177,12 @@
   "js (`crates/js/src/shim/` — `matchMedia`, `MediaQueryList`)": [
    "BUG-1562"
   ],
+  "js (`crates/js/src/shim/crypto_shim.js` `CryptoKey`/`_make_crypto_key`, `subtle_crypto.rs` `algorithm_json`)": [
+   "BUG-1734"
+  ],
+  "js (`crates/js/src/shim/crypto_shim.js` — `subtle`, `g.crypto`, `g.Crypto`, `getRandomValues`)": [
+   "BUG-1735"
+  ],
   "js (`crates/js/src/shim/event_shim.js`, путь диспатча / `composedPath`)": [
    "BUG-1729"
   ],
@@ -22111,6 +22203,9 @@
   ],
   "js (`crates/js/src/shim/performance_shim.js` — записи — объектные литералы)": [
    "BUG-1189"
+  ],
+  "js (`crates/js/src/shim/streams_shim.js` — WebIDL-форма классов Streams)": [
+   "BUG-1740"
   ],
   "js (`crates/js/src/shim/streams_shim.js`)": [
    "BUG-1204"
@@ -22564,6 +22659,12 @@
   "js (`crates/js/src/xhr.rs` `deliver`: последнее `progress` при `readyState` 3 до `_setReadyState(4)`; было: после)": [
    "BUG-1141"
   ],
+  "js (`crypto_shim.js` `encrypt`/`decrypt`/`sign`/`verify`/`deriveBits`; `subtle_crypto.rs` `aes_gcm_*`, `rsa_verify`, `aes_ctr_crypt`)": [
+   "BUG-1739"
+  ],
+  "js (`crypto_shim.js` — операции в executor `new Promise`, `_to_bytes`; `web_crypto_natives.rs`)": [
+   "BUG-1738"
+  ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
   ],
@@ -22597,6 +22698,9 @@
   "js (`idb_shim.js`/`dom.rs` — `_idb_dispatch_request`, `_idb_fire_txn`)": [
    "BUG-1706"
   ],
+  "js (`streams_shim.js` — `TransformStream`)": [
+   "BUG-1741"
+  ],
   "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
    "BUG-964"
   ],
@@ -22629,6 +22733,9 @@
   ],
   "js (shell)": [
    "BUG-233"
+  ],
+  "js (structured clone `crates/js/src/v8_runtime/`, `crypto_shim.js` `CryptoKey.__ckid`)": [
+   "BUG-1737"
   ],
   "js (исполнение `<script>` при вставке потомков)": [
    "BUG-1229"

@@ -2041,6 +2041,7 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("translate".into(), translate_to_css(style.translate.as_ref()));
     m.insert("rotate".into(), rotate_to_css(style.rotate));
     m.insert("scale".into(), scale_to_css(style.scale));
+    m.insert("transform-box".into(), style.transform_box.to_css().into());
 
     for (name, list) in [("filter", &style.filter), ("backdrop-filter", &style.backdrop_filter)] {
         m.insert(name.into(), if list.is_empty() {

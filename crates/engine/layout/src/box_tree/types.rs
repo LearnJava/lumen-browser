@@ -552,6 +552,12 @@ pub struct InlineFrag {
     /// True when this frag comes from an inline element box (not anonymous text).
     /// Used by the painter to draw element background/border.
     pub is_element_box: bool,
+    /// This fragment carries the start (left) border + padding of its inline box: the first
+    /// piece of the box, or every piece under `box-decoration-break: clone`. Under `slice` a
+    /// continuation fragment has no start edge (CSS Fragmentation L3 §5.1).
+    pub edge_start: bool,
+    /// Same for the end (right) border + padding: the last piece, or every piece under `clone`.
+    pub edge_end: bool,
     /// Non-None when this frag represents an inline-replaced `<img>`.
     /// `text` holds the alt attribute; `width` is the rendered pixel width.
     pub img_src: Option<String>,
@@ -612,6 +618,8 @@ impl PartialEq for InlineFrag {
             padding_left,
             padding_right,
             is_element_box,
+            edge_start,
+            edge_end,
             img_src,
             img_is_lazy,
             is_first_line,
@@ -632,6 +640,8 @@ impl PartialEq for InlineFrag {
             && padding_left == &other.padding_left
             && padding_right == &other.padding_right
             && is_element_box == &other.is_element_box
+            && edge_start == &other.edge_start
+            && edge_end == &other.edge_end
             && img_src == &other.img_src
             && img_is_lazy == &other.img_is_lazy
             && is_first_line == &other.is_first_line

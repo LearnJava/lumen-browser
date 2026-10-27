@@ -201,6 +201,48 @@ pub enum TransformStyle {
     Preserve3d,
 }
 
+/// CSS Transforms L1 §transform-box — reference box for `transform-origin`
+/// and percentage `translate`. For an element with a CSS layout box
+/// `ContentBox`/`FillBox` resolve to the content box and
+/// `BorderBox`/`StrokeBox`/`ViewBox` to the border box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformBox {
+    ContentBox,
+    BorderBox,
+    FillBox,
+    StrokeBox,
+    /// Initial value.
+    #[default]
+    ViewBox,
+}
+
+impl TransformBox {
+    /// Parse a single keyword (ASCII case-insensitive).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "content-box" => Some(Self::ContentBox),
+            "border-box" => Some(Self::BorderBox),
+            "fill-box" => Some(Self::FillBox),
+            "stroke-box" => Some(Self::StrokeBox),
+            "view-box" => Some(Self::ViewBox),
+            _ => None,
+        }
+    }
+
+    /// Serialisation keyword.
+    #[must_use]
+    pub fn to_css(self) -> &'static str {
+        match self {
+            Self::ContentBox => "content-box",
+            Self::BorderBox => "border-box",
+            Self::FillBox => "fill-box",
+            Self::StrokeBox => "stroke-box",
+            Self::ViewBox => "view-box",
+        }
+    }
+}
+
 /// CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
 /// `Hidden` = element is invisible when its back face is oriented toward
 /// the viewer (requires a 3D rendering context to have any effect).
