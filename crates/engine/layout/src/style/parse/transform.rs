@@ -3,9 +3,11 @@
 //! парсерами: угол, `<number-percentage>` и `<length>` в пикселях.
 //!
 //! Перенесено батчем SPLIT-ST5 из `crates/engine/layout/src/style.rs`
-//! (анкеры `fn parse_angle_to_radians` … `fn parse_length_px`, `fn parse_transform_list` … `fn parse_filter_list`, `fn parse_filter_fn`) без правок тел: изменены только пути модулей и
+//! (анкеры `fn parse_angle_to_radians` … `fn parse_length_px`, `fn parse_transform_list` … `fn parse_filter_list_strict`, `fn parse_filter_fn`) без правок тел: изменены только пути модулей и
 //! видимость тех items, которые продолжают звать `style.rs`, его тест-модули
 //! и соседние модули `style::parse`.
+
+use lumen_core::geom::Size;
 
 use crate::style::{parse_color_legacy, parse_length, Color, FilterFn, FilterUrl, Length, TransformFn};
 
@@ -242,9 +244,11 @@ pub(in crate::style) fn parse_transform_fn(name: &str, args: &str) -> Option<Tra
     }
 }
 
-/// Парсит `<filter-function-list>` — последовательность функций
-/// через whitespace.
-pub(in crate::style) fn parse_filter_list(s: &str) -> Vec<FilterFn> {
+/// Строгий разбор `<filter-value-list>` (Filter Effects L1 §3): любая недопустимая
+/// функция, посторонний токен или незакрытая скобка делают недействительным всё
+/// объявление (`None`). Функции с `calc()`/`var()` в аргументах и внешние `url(f.svg#id)`
+/// считаются допустимыми, но в список не попадают (их значение здесь не вычислить).
+pub(in crate::style) fn parse_filter_list_strict(s: &str) -> Option<Vec<FilterFn>> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0usize;
@@ -260,11 +264,8 @@ pub(in crate::style) fn parse_filter_list(s: &str) -> Vec<FilterFn> {
             i += 1;
         }
         let name = s[name_start..i].trim().to_ascii_lowercase();
-        if name.is_empty() {
-            break;
-        }
-        if i >= bytes.len() || bytes[i] != b'(' {
-            break;
+        if name.is_empty() || i >= bytes.len() || bytes[i] != b'(' {
+            return None;
         }
         i += 1;
         let args_start = i;
@@ -277,12 +278,31 @@ pub(in crate::style) fn parse_filter_list(s: &str) -> Vec<FilterFn> {
             }
             i += 1;
         }
+        if depth > 0 {
+            return None;
+        }
         let args = s[args_start..i.saturating_sub(1)].trim();
-        if let Some(f) = parse_filter_fn(&name, args) {
-            out.push(f);
+        match parse_filter_fn(&name, args) {
+            Some(f) => out.push(f),
+            None if !filter_args_unevaluable(&name, args) => return None,
+            None => {}
         }
     }
-    out
+    Some(out)
+}
+
+/// Допустимая, но не представимая здесь функция: `calc()`/`var()` в аргументах либо
+/// внешний `url(file.svg#id)` — не повод отвергать всё объявление.
+fn filter_args_unevaluable(name: &str, args: &str) -> bool {
+    let known = matches!(
+        name,
+        "blur" | "brightness" | "contrast" | "grayscale" | "hue-rotate" | "invert"
+            | "opacity" | "saturate" | "sepia" | "drop-shadow"
+    );
+    if known {
+        return args.contains('(');
+    }
+    name == "url" && !args.is_empty()
 }
 
 /// Аргументы `drop-shadow(<color>? && <length>{2,3})`: цвет до или после длин, блюр
@@ -326,7 +346,7 @@ fn parse_drop_shadow(args: &str) -> Option<FilterFn> {
             }
             color = Some(c);
         } else {
-            lengths.push(parse_length_px(tok)?);
+            lengths.push(parse_filter_length(tok)?);
         }
     }
     match lengths.as_slice() {
@@ -336,17 +356,47 @@ fn parse_drop_shadow(args: &str) -> Option<FilterFn> {
     }
 }
 
+/// `<length>` аргумента `blur()`/`drop-shadow()`: безразмерное число допустимо только как `0`.
+fn parse_filter_length(s: &str) -> Option<f32> {
+    let Some(v) = parse_length_px(s) else {
+        // `calc()`/`min()`/…: сворачиваем без контекста (`em` = 16px, процентов нет).
+        if !s.contains('(') {
+            return None;
+        }
+        return parse_length(s)?.resolve(16.0, None, Size { width: 0.0, height: 0.0 });
+    };
+    let unitless = s.trim().parse::<f32>().is_ok();
+    if unitless && v != 0.0 { None } else { Some(v) }
+}
+
+/// Количество `brightness()`/`contrast()`/`saturate()`/`grayscale()`/…: `<number>` либо
+/// `<percentage>`, отрицательное недопустимо, пустые скобки дают `default`; `cap` — верхний
+/// предел (`grayscale`/`invert`/`opacity`/`sepia` ограничены единицей).
+fn parse_filter_amount(args: &str, default: f32, cap: Option<f32>) -> Option<f32> {
+    if args.trim().is_empty() {
+        return Some(default);
+    }
+    let v = parse_number_or_percent(args).filter(|v| *v >= 0.0)?;
+    Some(cap.map_or(v, |c| v.min(c)))
+}
+
 fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
     match name {
-        "blur" => parse_length_px(args).map(FilterFn::Blur),
-        "brightness" => parse_number_or_percent(args).map(FilterFn::Brightness),
-        "contrast" => parse_number_or_percent(args).map(FilterFn::Contrast),
-        "grayscale" => parse_number_or_percent(args).map(FilterFn::Grayscale),
-        "hue-rotate" => parse_angle_to_radians(args).map(FilterFn::HueRotate),
-        "invert" => parse_number_or_percent(args).map(FilterFn::Invert),
-        "opacity" => parse_number_or_percent(args).map(FilterFn::Opacity),
-        "saturate" => parse_number_or_percent(args).map(FilterFn::Saturate),
-        "sepia" => parse_number_or_percent(args).map(FilterFn::Sepia),
+        "blur" if args.is_empty() => Some(FilterFn::Blur(0.0)),
+        "blur" => parse_filter_length(args).filter(|v| *v >= 0.0).map(FilterFn::Blur),
+        "brightness" => parse_filter_amount(args, 1.0, None).map(FilterFn::Brightness),
+        "contrast" => parse_filter_amount(args, 1.0, None).map(FilterFn::Contrast),
+        "grayscale" => parse_filter_amount(args, 1.0, Some(1.0)).map(FilterFn::Grayscale),
+        "hue-rotate" if args.is_empty() => Some(FilterFn::HueRotate(0.0)),
+        "hue-rotate" => {
+            // Безразмерный угол — только `0` (Filter Effects L1 §hue-rotate).
+            let unitless = args.trim().parse::<f32>().is_ok();
+            parse_angle_to_radians(args).filter(|a| !unitless || *a == 0.0).map(FilterFn::HueRotate)
+        }
+        "invert" => parse_filter_amount(args, 1.0, Some(1.0)).map(FilterFn::Invert),
+        "opacity" => parse_filter_amount(args, 1.0, Some(1.0)).map(FilterFn::Opacity),
+        "saturate" => parse_filter_amount(args, 1.0, None).map(FilterFn::Saturate),
+        "sepia" => parse_filter_amount(args, 1.0, Some(1.0)).map(FilterFn::Sepia),
         "drop-shadow" => parse_drop_shadow(args),
         // Filter Effects L1 §3 — `url(#id)` на `<filter>` того же документа
         // (внешние `file.svg#id` — отдельная задача).

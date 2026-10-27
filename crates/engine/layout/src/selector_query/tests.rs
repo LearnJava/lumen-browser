@@ -2007,3 +2007,54 @@ fn computed_map_table_properties_bug1535() {
         assert_eq!(get(&format!("{fs}border-spacing: {bad} }}"), "border-spacing"), "0px", "{bad}");
     }
 }
+
+fn filter_computed(prop: &str, value: &str) -> String {
+    let m = div_computed_map("<div>x</div>", &format!("div {{ color: rgb(0, 255, 0); {prop}: {value}; }}"));
+    m.get(prop).cloned().unwrap_or_default()
+}
+
+#[test]
+fn computed_map_backdrop_filter_and_filter_canonical_forms() {
+    // BUG-1541: `backdrop-filter` is in the computed map and both properties canonicalize.
+    for prop in ["filter", "backdrop-filter"] {
+        for (specified, want) in [
+            ("none", "none"),
+            ("blur(100px)", "blur(100px)"),
+            ("blur()", "blur(0px)"),
+            ("blur(0)", "blur(0px)"),
+            ("brightness(300%)", "brightness(3)"),
+            ("brightness()", "brightness(1)"),
+            ("grayscale(50%)", "grayscale(0.5)"),
+            ("grayscale(2)", "grayscale(1)"),
+            ("invert(100%)", "invert(1)"),
+            ("opacity(2)", "opacity(1)"),
+            ("sepia()", "sepia(1)"),
+            ("hue-rotate()", "hue-rotate(0deg)"),
+            ("hue-rotate(0)", "hue-rotate(0deg)"),
+            ("drop-shadow(1px 2px)", "drop-shadow(rgb(0, 255, 0) 1px 2px 0px)"),
+            ("blur(2px) contrast(20)", "blur(2px) contrast(20)"),
+            ("blur(calc(100px))", "blur(100px)"),
+            ("brightness(calc(300%))", "brightness(3)"),
+            ("brightness(calc(-10))", "brightness(0)"),
+            ("grayscale(calc(300%))", "grayscale(1)"),
+            ("opacity(calc(-10%))", "opacity(0)"),
+            ("drop-shadow(rgb(4, 5, 6) calc(1px) 2px 0px)", "drop-shadow(rgb(4, 5, 6) 1px 2px 0px)"),
+        ] {
+            assert_eq!(filter_computed(prop, specified), want, "{prop}: {specified}");
+        }
+    }
+}
+
+#[test]
+fn computed_map_filter_invalid_value_is_dropped() {
+    for prop in ["filter", "backdrop-filter"] {
+        for bad in [
+            "auto", "none blur(1px)", "blur(10)", "blur(-100px)", "blur(5px 6px)", "brightness(-20)",
+            "brightness(30px)", "contrast(-20)", "drop-shadow(10 20)", "drop-shadow(1px)",
+            "drop-shadow(1px 2px 3px 4px)", "drop-shadow(rgb(4, 5, 6))", "drop-shadow()",
+            "hue-rotate(90)", "opacity(-20)", "saturate(30px)", "sepia(-20)", "blur(1px) bogus(2)",
+        ] {
+            assert_eq!(filter_computed(prop, bad), "none", "{prop}: {bad}");
+        }
+    }
+}

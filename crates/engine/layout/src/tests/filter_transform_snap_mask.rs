@@ -482,14 +482,13 @@ fn filter_none_clears() {
 }
 
 #[test]
-fn filter_unknown_skipped() {
-    let root = lay("<p>x</p>", "p { filter: blur(5px) zomg(1); brightness(1); }");
-    // zomg() игнорируется, остальное парсится.
+fn filter_unknown_function_invalidates_declaration() {
+    // Filter Effects L1 §3: an unknown function makes the whole declaration invalid (BUG-1541),
+    // so the earlier valid `filter` from another rule stays.
+    let root = lay("<p>x</p>", "p { filter: blur(5px); } p { filter: blur(9px) zomg(1); }");
     let f = first_p_style(&root).filter.clone();
-    // brightness вне filter declaration — отдельный selector? Нет,
-    // оно в той же декларации `filter: blur(5px) zomg(1)` — zomg
-    // skipped, blur остался.
-    assert!(matches!(f[0], FilterFn::Blur(_)));
+    assert_eq!(f.len(), 1);
+    assert!(matches!(f[0], FilterFn::Blur(b) if (b - 5.0).abs() < f32::EPSILON));
 }
 
 #[test]
