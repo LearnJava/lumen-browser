@@ -14,7 +14,7 @@ Fourth full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.
 
 ## Разведка WPT-CRYPTO-SCOUT (2026-10-27)
 
-Статус: таблица готова, учёт (BUGS.md/ROADMAP/очереди) — в работе. Код не менялся.
+Статус: закрыта 2026-10-27. Баги BUG-1733…1738 (очередь P3), задачи WEBCRYPTO-CURVES, WEBCRYPTO-SYM, WEBCRYPTO-PQ (очередь P1, после BUG-1735). Код не менялся.
 
 **Прогон** (`run_corpus.py --prefixes WebCryptoAPI --processes 6`, `dev-release` от `main` `0e7f0a78a`, уже с фиксом BUG-1688): 313 id, **13.53 %** (было 4.67 %), балл 42.35, harness OK 298, сабтесты 12 804 / 62 750 (с воркерами сабтестов стало вчетверо больше); статусы OK 298, ERROR 14, TIMEOUT 1; 367 с.
 
