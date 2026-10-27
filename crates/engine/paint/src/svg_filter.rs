@@ -76,6 +76,7 @@ pub(crate) struct Windowed {
 /// `None` — граф не определён (ссылка в никуда): вызывающий пропускает фильтр.
 /// Пустая область/пустой граф дают `Some` с прозрачным окном нулевого размера
 /// (`pixmap` 1×1), т.е. элемент не виден.
+#[cfg(test)]
 pub(crate) fn apply(
     src: &tiny_skia::Pixmap,
     origin: (i32, i32),
@@ -84,8 +85,22 @@ pub(crate) fn apply(
     bounds: Rect,
     images: &HashMap<&str, &Image>,
 ) -> Option<Windowed> {
+    apply_scaled(src, origin, canvas, url, bounds, images, 1.0)
+}
+
+/// [`apply`] для растра в device px: `scale` — device px на CSS px (DPR окна).
+/// `bounds` остаётся в CSS px страницы, `src` — в device px.
+pub(crate) fn apply_scaled(
+    src: &tiny_skia::Pixmap,
+    origin: (i32, i32),
+    canvas: (u32, u32),
+    url: &FilterUrl,
+    bounds: Rect,
+    images: &HashMap<&str, &Image>,
+    scale: f32,
+) -> Option<Windowed> {
     let graph = url.graph.as_ref()?;
-    let g = Geometry::new(url, bounds);
+    let g = Geometry::new(url, bounds).scaled(scale);
     let Some(region) = region_px(graph, &g, canvas) else {
         return empty_window();
     };
@@ -139,6 +154,8 @@ struct Geometry {
     ty: f32,
     /// bbox элемента в user space `(x, y, w, h)`.
     bbox: (f32, f32, f32, f32),
+    /// База процентов `userSpaceOnUse`, которые каскад не раскрыл (HTML-бокс: его border box).
+    viewport: (f32, f32),
 }
 
 impl Geometry {
@@ -150,6 +167,7 @@ impl Geometry {
                 tx: p.matrix[4] + bounds.x,
                 ty: p.matrix[5] + bounds.y,
                 bbox: p.user_bbox,
+                viewport: (bounds.width, bounds.height),
             },
             None => Self {
                 sx: 1.0,
@@ -157,7 +175,26 @@ impl Geometry {
                 tx: bounds.x,
                 ty: bounds.y,
                 bbox: (0.0, 0.0, bounds.width, bounds.height),
+                viewport: (bounds.width, bounds.height),
             },
+        }
+    }
+
+    /// Те же отображения в device px (`scale` = DPR): bbox и viewport остаются в user units.
+    fn scaled(mut self, scale: f32) -> Self {
+        self.sx *= scale;
+        self.sy *= scale;
+        self.tx *= scale;
+        self.ty *= scale;
+        self
+    }
+
+    /// Нераскрытая доля процента → user units (`axis`: 0 — x/width, 1 — y/height).
+    fn pct(&self, v: f32, flagged: bool, axis: usize) -> f32 {
+        match (flagged, axis) {
+            (false, _) => v,
+            (true, 0) => v * self.viewport.0,
+            (true, _) => v * self.viewport.1,
         }
     }
 
@@ -179,6 +216,12 @@ fn to_px(r: (f32, f32, f32, f32)) -> PxRect {
 /// Область фильтра в пикселях холста, пересечённая с холстом; `None` — пусто.
 fn region_px(graph: &SvgFilter, g: &Geometry, canvas: (u32, u32)) -> Option<PxRect> {
     let (rx, ry, rw, rh) = graph.region;
+    let [px, py, pw, ph] = graph.region_pct;
+    let (rx, ry, rw, rh) = if graph.filter_units_obb {
+        (rx, ry, rw, rh)
+    } else {
+        (g.pct(rx, px, 0), g.pct(ry, py, 1), g.pct(rw, pw, 0), g.pct(rh, ph, 1))
+    };
     let (bx, by, bw, bh) = g.bbox;
     let user = if graph.filter_units_obb {
         if bw <= 0.0 || bh <= 0.0 {
@@ -279,10 +322,11 @@ fn run_graph(
                 (default_sub.x1 - default_sub.x0) as f32,
                 (default_sub.y1 - default_sub.y0) as f32,
             );
-            let x = prim.x.map_or(cur.0, |v| g.sx * ux(v) + g.tx);
-            let y = prim.y.map_or(cur.1, |v| g.sy * uy(v) + g.ty);
-            let wd = prim.width.map_or(cur.2, |v| g.sx * uw(v));
-            let ht = prim.height.map_or(cur.3, |v| g.sy * uh(v));
+            let [px, py, pw, ph] = prim.pct;
+            let x = prim.x.map_or(cur.0, |v| g.sx * ux(g.pct(v, px, 0)) + g.tx);
+            let y = prim.y.map_or(cur.1, |v| g.sy * uy(g.pct(v, py, 1)) + g.ty);
+            let wd = prim.width.map_or(cur.2, |v| g.sx * uw(g.pct(v, pw, 0)));
+            let ht = prim.height.map_or(cur.3, |v| g.sy * uh(g.pct(v, ph, 1)));
             let r = to_px((x - region.x0 as f32, y - region.y0 as f32, wd, ht));
             sub = PxRect { x0: r.x0.max(0), y0: r.y0.max(0), x1: r.x1.min(w as i32), y1: r.y1.min(h as i32) };
         }
@@ -740,7 +784,7 @@ mod tests {
     use lumen_layout::{Color, SvgFilterPrimitive};
 
     fn prim(kind: FePrimitive) -> SvgFilterPrimitive {
-        SvgFilterPrimitive { kind, x: None, y: None, width: None, height: None, linear_rgb: false, tainted: false }
+        SvgFilterPrimitive { kind, x: None, y: None, width: None, height: None, linear_rgb: false, tainted: false, pct: [false; 4] }
     }
 
     fn url(graph: SvgFilter) -> FilterUrl {
@@ -769,6 +813,7 @@ mod tests {
             filter_units_obb: true,
             primitive_units_obb: false,
             region: (-0.5, -0.5, 2.0, 2.0),
+            region_pct: [false; 4],
             primitives: prims,
         }
     }
@@ -782,6 +827,23 @@ mod tests {
         assert_eq!(px(&w, 5, 5), [0, 0, 255, 255]);
         assert_eq!(w.x, 5);
         assert_eq!(w.pixmap.width(), 20);
+    }
+
+    /// `userSpaceOnUse` с процентами, которые каскад оставил долей: база — border box HTML-бокса.
+    #[test]
+    fn user_space_percent_resolves_against_html_border_box() {
+        let mut flood = prim(FePrimitive::Flood { color: Color { r: 0, g: 0, b: 255, a: 255 }, opacity: 1.0 });
+        flood.width = Some(0.5);
+        flood.pct = [false, false, true, false];
+        let mut g = filter(vec![flood]);
+        g.filter_units_obb = false;
+        g.region = (0.0, 0.0, 1.0, 1.0);
+        g.region_pct = [false, false, true, true];
+        // Бокс 20×20: область 0..20 × 0..20, заливка — левая половина по ширине.
+        let w = apply(&red_square(), (0, 0), (40, 40), &url(g), Rect::new(0.0, 0.0, 20.0, 20.0), &HashMap::new()).unwrap();
+        assert_eq!((w.x, w.pixmap.width(), w.pixmap.height()), (0, 20, 20));
+        assert_eq!(px(&w, 5, 5), [0, 0, 255, 255]);
+        assert_eq!(px(&w, 15, 5)[3], 0);
     }
 
     #[test]

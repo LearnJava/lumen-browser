@@ -1204,3 +1204,39 @@ fn crop_region_rgba_clamps_to_buffer_bounds() {
     assert_eq!((w, h), (1, 2));
     assert_eq!(out, vec![2, 2, 2, 255, 4, 4, 4, 255]);
 }
+
+/// SVG-FILTER-5: `filter: url(#id)` читает слой целиком и красит за bbox, поэтому
+/// не кэшируется как цветовая матрица; `apply_svg_filter_rgba` заменяет снимок
+/// слоя окном области фильтра (`feFlood`), остальное прозрачно.
+#[test]
+fn svg_url_filter_is_not_cacheable_and_floods_region_in_snapshot() {
+    use lumen_core::geom::Rect;
+    use lumen_layout::{FePrimitive, FilterFn, FilterUrl, SvgFilter, SvgFilterPrimitive, Color};
+    let graph = SvgFilter {
+        filter_units_obb: true,
+        primitive_units_obb: false,
+        region: (0.0, 0.0, 1.0, 1.0),
+        region_pct: [false; 4],
+        primitives: vec![SvgFilterPrimitive {
+            kind: FePrimitive::Flood { color: Color { r: 0, g: 0, b: 255, a: 255 }, opacity: 1.0 },
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            pct: [false; 4],
+            linear_rgb: false,
+            tainted: false,
+        }],
+    };
+    let f = FilterFn::Url(FilterUrl { id: "f".into(), graph: Some(std::sync::Arc::new(graph)), placement: None });
+    assert!(!FemtovgBackend::filter_is_bbox_cacheable(std::slice::from_ref(&f)));
+    // Снимок 20×20 в device px при масштабе 2: border box 4×4 CSS px в (2, 2) = device [4, 12).
+    let mut rgba = vec![0u8; 20 * 20 * 4];
+    rgba[(5 * 20 + 5) * 4..(5 * 20 + 5) * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
+    apply_svg_filter_rgba(&mut rgba, (20, 20), &f, Rect::new(2.0, 2.0, 4.0, 4.0), 2.0);
+    let at = |x: usize, y: usize| rgba[(y * 20 + x) * 4..(y * 20 + x) * 4 + 4].to_vec();
+    assert_eq!(at(8, 8), vec![0, 0, 255, 255]);
+    assert_eq!(at(4, 4), vec![0, 0, 255, 255]);
+    assert_eq!(at(12, 12), vec![0, 0, 0, 0]);
+    assert_eq!(at(3, 8), vec![0, 0, 0, 0]);
+}

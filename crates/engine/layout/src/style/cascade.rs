@@ -1670,7 +1670,7 @@ pub(crate) fn compute_style_shareable(
     // non-`<filter>` leaves `graph == None` (paint ignores the whole chain).
     for f in &mut style.filter {
         if let FilterFn::Url(u) = f {
-            u.graph = crate::box_tree::resolve_filter_url(doc, sheet, &u.id, viewport, dark_mode);
+            u.graph = crate::box_tree::resolve_filter_url(doc, sheet, &u.id, node, viewport, dark_mode);
         }
     }
 

@@ -331,6 +331,9 @@ impl Renderer {
             /// Корректность чтений за пределами scissor гарантирована полными
             /// LoadOp::Clear этих текстур (clear не подчиняется scissor).
             scissor: Option<DeviceScissor>,
+            /// SVG-FILTER-5: цепочка с `url(#id)` исполняется чтением слоя на CPU
+            /// (см. `svg_filter_layer`); `None` — обычный GPU-путь.
+            svg: Option<svg_filter_layer::SvgFilterPlan>,
         }
         // CSS Filter Effects L1 §2 / Compositing §13 — backdrop-filter plan.
         // `from_level` = element's offscreen layer (content rendered here).
@@ -510,7 +513,7 @@ impl Renderer {
         // Tracks blend mode per opened offscreen level (for non-Normal PushBlendMode).
         let mut level_blend_mode_stack: Vec<(BlendMode, usize)> = Vec::new();
         // Tracks filter list per opened offscreen level (for CSS filter compositing).
-        let mut filter_stack: Vec<(Vec<FilterFn>, usize)> = Vec::new();
+        let mut filter_stack: Vec<(Vec<FilterFn>, usize, Option<Rect>)> = Vec::new();
         // Stack for backdrop-filter: (filter_list, element_bounds_css_px).
         // Bounds are stored already in **screen** space (scroll offset applied,
         // accumulated `PushTransform` applied) — both the parent-layer region the
@@ -2530,7 +2533,7 @@ impl Renderer {
                 }
                 // CSS Filter Effects L1 — PushFilter opens an offscreen level;
                 // PopFilter composites it onto the parent with filter applied.
-                DisplayCommand::PushFilter { filters, bounds: _ } => {
+                DisplayCommand::PushFilter { filters, bounds } => {
                     // BUG-405 срез 7 — внешняя тень рисуется аналитически, без
                     // своего offscreen-уровня и его трёх пассов.
                     //
@@ -2612,7 +2615,7 @@ impl Renderer {
                         }
                     }
                     flush_batch!();
-                    filter_stack.push((filters.clone(), render_plan.len()));
+                    filter_stack.push((filters.clone(), render_plan.len(), *bounds));
                     current_level += 1;
                     while level_first.len() <= current_level {
                         level_first.push(true);
@@ -2624,9 +2627,12 @@ impl Renderer {
                     level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopFilter => {
-                    if let Some((filters, plan_mark)) = filter_stack.pop() {
+                    if let Some((filters, plan_mark, push_bounds)) = filter_stack.pop() {
                         flush_batch!();
-                        let content = if bbox_scissor_disabled() {
+                        // SVG-FILTER-5: `url(#id)` может красить за ink слоя
+                        // (`feFlood`, смещение) — границы контента не годятся.
+                        let has_svg = filters.iter().any(|f| matches!(f, FilterFn::Url(_)));
+                        let content = if bbox_scissor_disabled() || has_svg {
                             LevelBounds::Unbounded
                         } else {
                             level_bounds
@@ -2751,6 +2757,15 @@ impl Renderer {
                             comp_v_start,
                             region,
                             scissor,
+                            svg: has_svg.then(|| {
+                                let page = translate_rect(push_bounds.unwrap_or(Rect::ZERO), dx, dy);
+                                svg_filter_layer::SvgFilterPlan {
+                                    bounds: apply_transform_to_clip(page, transform_stack.last()),
+                                    clip: clip_stack.last().map(|c| {
+                                        css_rect_to_device_scissor(*c, dpr_f32, surface_w, surface_h)
+                                    }),
+                                }
+                            }),
                         }));
                         current_level -= 1;
                         // Композит фильтра красит родителя в пределах
@@ -4448,6 +4463,21 @@ impl Renderer {
                 // один пасс цветовых фильтров, как и раньше.
                 RenderPlanItem::FilterComposite(plan) => {
                     if plan.from_level == 0 { continue; }
+                    if let Some(svg) = &plan.svg
+                        && self.composite_svg_filter_layer(
+                            &mut encoder,
+                            plan.from_level,
+                            &plan.filters,
+                            svg,
+                            &svg_filter_layer::SvgFilterTarget {
+                                frame_view: &frame_view,
+                                surface: (surface_w, surface_h),
+                                dpr: dpr_f32,
+                            },
+                        )
+                    {
+                        continue;
+                    }
                     let src_layer_idx = plan.from_level - 1;
                     let Some(cvb) = &comp_vbuf else { continue };
 
@@ -5541,6 +5571,8 @@ use pipelines::{
     build_hot_pipelines, hot_pipelines_awaited_in_ctor, hot_pipelines_serial, spawn_hot_pipelines,
     HotDeps, HotDelivery, HotKind, HotPipelines, PipelineDeps, WarmedPipeline, HOT_KINDS,
 };
+
+mod svg_filter_layer;
 
 mod band_compose;
 #[cfg(test)]
