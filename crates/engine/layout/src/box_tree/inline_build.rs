@@ -1814,7 +1814,7 @@ pub(crate) fn inject_marker(
     parent_id: NodeId,
     children: &mut Vec<LayoutBox>,
     style: &ComputedStyle,
-    ordinal: u32,
+    ordinal: i32,
     doc: &Document,
     sheet: &Stylesheet,
     viewport: Size,
