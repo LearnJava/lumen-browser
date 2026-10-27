@@ -2086,6 +2086,11 @@ function _lumen_style_merge_decl(obj, decl, important, force) {
     Object.keys(decl).forEach(function(k) {
         if (k === '__imp__') return;
         if (!important && !force && _lumen_style_is_important(obj, k)) return;
+        // A raw `border-image` value and the `border-image-*` longhands exclude each other.
+        if (k === 'border-image') _LUMEN_BORDER_IMAGE_KEYS.forEach(function(lh) { delete obj[lh]; });
+        else if (_LUMEN_BORDER_IMAGE_INITIAL.hasOwnProperty(k)) delete obj['border-image'];
+        // Parsing a block keeps the LAST of duplicate declarations, at its own position.
+        if (!force) delete obj[k];
         obj[k] = decl[k];
         _lumen_style_mark_important(obj, k, important);
     });
@@ -2142,6 +2147,7 @@ function _lumen_parse_decl_into(obj, prop, val) {
                 return;
             }
         }
+        if (_lumen_border_longhands(prop) !== null && _lumen_border_expand_into(obj, prop, val) !== undefined) return;
         if (prop === 'overflow') {
             var ov = _lumen_expand_overflow_shorthand(val);
             if (ov !== null) {
@@ -2502,16 +2508,152 @@ function _lumen_2v_shorthand_value(obj, shorthand) {
     return start === end ? start : start + ' ' + end;
 }
 
+// BUG-1552: the `border` / `border-{top,right,bottom,left}` / `border-image` shorthands.
+// `<line-width> || <line-style> || <color>` (CSS Backgrounds L3 §4.4), stored as the 3×4 side
+// longhands so `border: 1px; border-top: 1px` and `border-width`/`-style`/`-color` set one by one
+// meet in the same longhand keys and serialize back as `border: 1px` (CSSOM §6.7.2). Omitted
+// components reset to their initial value. `border` also resets the five `border-image-*`
+// longhands, and only serializes as `border` while they are all present and initial; of
+// `border-image` only `none` (the initial value) is modelled, any other value stays one raw key.
+var _LUMEN_BORDER_SIDES = ['top', 'right', 'bottom', 'left'];
+var _LUMEN_BORDER_PARTS = ['width', 'style', 'color'];
+var _LUMEN_BORDER_INITIAL = { width: 'medium', style: 'none', color: 'currentcolor' };
+var _LUMEN_BORDER_IMAGE_INITIAL = {
+    'border-image-source': 'none', 'border-image-slice': '100%', 'border-image-width': '1',
+    'border-image-outset': '0', 'border-image-repeat': 'stretch',
+};
+var _LUMEN_BORDER_IMAGE_KEYS = Object.keys(_LUMEN_BORDER_IMAGE_INITIAL);
+var _LUMEN_BORDER_SIDE_KEYS = [];
+_LUMEN_BORDER_SIDES.forEach(function(side) {
+    _LUMEN_BORDER_PARTS.forEach(function(part) { _LUMEN_BORDER_SIDE_KEYS.push('border-' + side + '-' + part); });
+});
+// Longhand keys covered by shorthand `key`, else null.
+function _lumen_border_longhands(key) {
+    if (key === 'border') return _LUMEN_BORDER_SIDE_KEYS.concat(_LUMEN_BORDER_IMAGE_KEYS);
+    if (key === 'border-image') return _LUMEN_BORDER_IMAGE_KEYS;
+    if (/^border-(top|right|bottom|left)$/.test(key)) {
+        return _LUMEN_BORDER_PARTS.map(function(part) { return key + '-' + part; });
+    }
+    return null;
+}
+// `{width, style, color}` for a `border*` shorthand value, or null when invalid.
+function _lumen_expand_border_shorthand(strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    if (_LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1) {
+        return { width: lowerVal, style: lowerVal, color: lowerVal };
+    }
+    var tokens = _lumen_split_top_level_ws(strVal.trim());
+    if (tokens.length < 1 || tokens.length > 3) return null;
+    var out = {};
+    for (var i = 0; i < tokens.length; i++) {
+        var c;
+        if ((c = _lumen_css_canonical_line_width(tokens[i])) != null) {
+            if (out.width !== undefined) return null;
+            out.width = c;
+        } else if ((c = _lumen_css_canonical_keyword(tokens[i], _LUMEN_KEYWORD_PROPERTIES['border-top-style'])) != null) {
+            if (out.style !== undefined) return null;
+            out.style = c;
+        } else if ((c = _lumen_css_canonical_color(tokens[i])) != null) {
+            if (out.color !== undefined) return null;
+            out.color = c;
+        } else {
+            return null;
+        }
+    }
+    _LUMEN_BORDER_PARTS.forEach(function(part) {
+        if (out[part] === undefined) out[part] = _LUMEN_BORDER_INITIAL[part];
+    });
+    return out;
+}
+// Writes the expansion of shorthand `key` (`border`, `border-<side>`, `border-image`) into `obj`.
+// true: handled; false: invalid value (declaration dropped); undefined: a `border-image` value
+// that is not modelled (the caller stores it raw).
+function _lumen_border_expand_into(obj, key, strVal) {
+    var lowerVal = strVal.trim().toLowerCase();
+    var wide = _LUMEN_CSS_WIDE_KEYWORDS.indexOf(lowerVal) !== -1;
+    if (key === 'border-image') {
+        if (lowerVal !== 'none' && !wide) return undefined;
+        _LUMEN_BORDER_IMAGE_KEYS.forEach(function(k) { obj[k] = wide ? lowerVal : _LUMEN_BORDER_IMAGE_INITIAL[k]; });
+        return true;
+    }
+    var e = _lumen_expand_border_shorthand(strVal);
+    if (e === null) return false;
+    _lumen_border_longhands(key).forEach(function(lh) {
+        if (_LUMEN_BORDER_IMAGE_INITIAL.hasOwnProperty(lh)) {
+            obj[lh] = wide ? lowerVal : _LUMEN_BORDER_IMAGE_INITIAL[lh];
+        } else {
+            obj[lh] = e[lh.slice(lh.lastIndexOf('-') + 1)];
+        }
+    });
+    return true;
+}
+// Value of `border`/`border-<side>`/`border-image` `key` if every covered longhand is in `obj`
+// and each part agrees across the sides: the non-initial parts in width/style/color order (`none`
+// when all are initial), else undefined. `border` needs the `border-image-*` longhands at their
+// initial value (or all one CSS-wide keyword) too.
+function _lumen_border_shorthand_value(obj, key) {
+    var lhs = _lumen_border_longhands(key);
+    if (!lhs) return undefined;
+    var has = function(k) { return Object.prototype.hasOwnProperty.call(obj, k); };
+    if (key === 'border-image') {
+        if (!_LUMEN_BORDER_IMAGE_KEYS.every(has)) return undefined;
+        var iv = _LUMEN_BORDER_IMAGE_KEYS.map(function(k) { return obj[k]; });
+        if (iv.every(function(v) { return v === iv[0]; }) && _LUMEN_CSS_WIDE_KEYWORDS.indexOf(iv[0]) !== -1) return iv[0];
+        return _LUMEN_BORDER_IMAGE_KEYS.every(function(k) { return obj[k] === _LUMEN_BORDER_IMAGE_INITIAL[k]; })
+            ? 'none' : undefined;
+    }
+    var vals = {};
+    for (var i = 0; i < lhs.length; i++) {
+        if (!has(lhs[i])) return undefined;
+        if (_LUMEN_BORDER_IMAGE_INITIAL.hasOwnProperty(lhs[i])) continue;
+        var part = lhs[i].slice(lhs[i].lastIndexOf('-') + 1);
+        if (vals[part] !== undefined && vals[part] !== obj[lhs[i]]) return undefined;
+        vals[part] = obj[lhs[i]];
+    }
+    var w = vals.width, st = vals.style, c = vals.color;
+    var wide = w === st && st === c && _LUMEN_CSS_WIDE_KEYWORDS.indexOf(w) !== -1;
+    if (key === 'border') {
+        var img = _lumen_border_shorthand_value(obj, 'border-image');
+        if (img === undefined || (wide ? img !== w : img !== 'none')) return undefined;
+    }
+    if (wide) return w;
+    var parts = [];
+    _LUMEN_BORDER_PARTS.forEach(function(p) {
+        if (vals[p] !== _LUMEN_BORDER_INITIAL[p]) parts.push(vals[p]);
+    });
+    return parts.length ? parts.join(' ') : 'none';
+}
+
 function _lumen_serialize_style(obj) {
     var keys = Object.keys(obj);
     var shorthandOf = {};   // longhand key -> owning shorthand name, only for collapsible groups
     var shorthandVal = {};  // shorthand name -> collapsed value
+    // CSSOM §6.7.2: a shorthand needs all its longhands at one priority. `border` outranks
+    // `border-width`/`-style`/`-color`, which outrank `border-<side>` and `border-image`.
+    var uniformPriority = function(lhs) {
+        var imp = _lumen_style_is_important(obj, lhs[0]);
+        return lhs.every(function(lh) { return _lumen_style_is_important(obj, lh) === imp; });
+    };
+    var claimShorthand = function(sh, lhs, v) {
+        if (v === undefined || !uniformPriority(lhs)) return;
+        if (lhs.some(function(lh) { return shorthandOf[lh]; })) return;  // a longhand is already covered
+        shorthandVal[sh] = v;
+        lhs.forEach(function(lh) { shorthandOf[lh] = sh; });
+    };
+    claimShorthand('border', _lumen_border_longhands('border'), _lumen_border_shorthand_value(obj, 'border'));
     Object.keys(_LUMEN_TRBL_SHORTHANDS).forEach(function(sh) {
+        if (shorthandOf[_LUMEN_TRBL_SHORTHANDS[sh][0]]) return;  // already part of `border`
         var v = _lumen_shorthand_value(obj, sh);
         if (v === undefined) return;
+        if (/^border-/.test(sh) && !uniformPriority(_LUMEN_TRBL_SHORTHANDS[sh])) return;  // sides below
         shorthandVal[sh] = v;
         _LUMEN_TRBL_SHORTHANDS[sh].forEach(function(lh) { shorthandOf[lh] = sh; });
     });
+    _LUMEN_BORDER_SIDES.forEach(function(side) {
+        var sh = 'border-' + side;
+        claimShorthand(sh, _lumen_border_longhands(sh), _lumen_border_shorthand_value(obj, sh));
+    });
+    claimShorthand('border-image', _LUMEN_BORDER_IMAGE_KEYS, _lumen_border_shorthand_value(obj, 'border-image'));
     var ovVal = _lumen_overflow_shorthand_value(obj);
     if (ovVal !== undefined) {
         shorthandVal['overflow'] = ovVal;
@@ -2603,6 +2745,8 @@ function _lumen_is_compat_alias_attr(prop) {
     return _lumen_camel_to_kebab(prop).indexOf('-webkit-') !== 0;
 }
 function _lumen_camel_to_kebab(prop) {
+    // CSSOM §6.7.1: the IDL attribute for `float` is `cssFloat` (`float` is a reserved word).
+    if (prop === 'cssFloat') return 'float';
     prop = prop.replace(/^[Ww]eb[Kk]it(?=[A-Z])/, 'webkit');
     var key = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
     // `webkitTransform` (lower-case vendor prefix) is the same IDL attribute as `WebkitTransform`.
@@ -3930,11 +4074,16 @@ function _lumen_style_set_parsed(target, obj) {
 
 // Longhands of the shorthands stored expanded that `setProperty(key, '')` and `removeProperty(key)`
 // must remove together with the shorthand (`overflow`, `block-step`, the two-value shorthands).
+function _lumen_style_drop(obj, key) {
+    delete obj[key];
+    _lumen_style_mark_important(obj, key, false);
+}
 function _lumen_shorthand_longhands_other(key) {
+    if (_LUMEN_TRBL_SHORTHANDS.hasOwnProperty(key)) return _LUMEN_TRBL_SHORTHANDS[key];
     if (key === 'overflow') return ['overflow-x', 'overflow-y'];
     if (key === 'block-step') return ['block-step-size', 'block-step-insert', 'block-step-align', 'block-step-round'];
     if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) return _LUMEN_2V_SHORTHANDS[key];
-    return [];
+    return _lumen_border_longhands(key) || [];
 }
 CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     var key = _lumen_camel_to_kebab(String(prop));
@@ -3942,6 +4091,8 @@ CSSStyleDeclaration.prototype.getPropertyValue = function(prop) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
     var shorthand = _lumen_shorthand_value(obj, key);
     if (shorthand !== undefined) return shorthand;
+    var borderSh = _lumen_border_shorthand_value(obj, key);
+    if (borderSh !== undefined) return borderSh;
     if (key === 'overflow') {
         var ovShorthand = _lumen_overflow_shorthand_value(obj);
         if (ovShorthand !== undefined) return ovShorthand;
@@ -4018,12 +4169,12 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         // CSSOM §6.7.4: setProperty(prop, "") removes the property; a TRBL shorthand is stored
         // as its four longhands, so those go too (BUG-1297: `border-style = ''` between WPT cases).
         if (_LUMEN_TRBL_SHORTHANDS.hasOwnProperty(key)) {
-            _LUMEN_TRBL_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+            _LUMEN_TRBL_SHORTHANDS[key].forEach(function(lh) { _lumen_style_drop(obj, lh); });
         }
         if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
-            _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+            _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { _lumen_style_drop(obj, lh); });
         }
-        _lumen_shorthand_longhands_other(key).forEach(function(lh) { delete obj[lh]; });
+        _lumen_shorthand_longhands_other(key).forEach(function(lh) { _lumen_style_drop(obj, lh); });
         _lumen_gap_rule_delete(obj, key);
         _lumen_style_mark_important(obj, key, false);
         _lumen_style_set_parsed(nid, obj);
@@ -4058,6 +4209,14 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
         obj[trblLonghands[3]] = expanded.left;
         _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
         return;
+    }
+    if (_lumen_border_longhands(key) !== null) {
+        var borderOk = _lumen_border_expand_into(obj, key, strVal);
+        if (borderOk === false) return; // invalid shorthand value: dropped
+        if (borderOk === true) {
+            _lumen_style_commit_decl(nid, realObj, obj, prio === 'important');
+            return;
+        }
     }
     if (key === 'overflow') {
         var ovExpanded = _lumen_expand_overflow_shorthand(strVal);
@@ -4169,6 +4328,7 @@ CSSStyleDeclaration.prototype.getPropertyPriority = function getPropertyPriority
     else if (_LUMEN_2V_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_2V_SHORTHANDS[key];
     else if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) longhands = _LUMEN_TEXT_SHORTHANDS[key];
     else if (_lumen_gap_rule_key_re.test(key)) longhands = JSON.parse(_lumen_css_gap_rule_longhands(key));
+    else longhands = _lumen_border_longhands(key);
     if (!longhands || !longhands.length) return '';
     return longhands.every(function(lh) { return _lumen_style_is_important(obj, lh); }) ? 'important' : '';
 };
@@ -4180,12 +4340,12 @@ CSSStyleDeclaration.prototype.removeProperty = function(prop) {
         : (_lumen_gap_rule_key_re.test(key) ? (this.getPropertyValue(key) || '') : '');
     if (_LUMEN_TEXT_SHORTHANDS.hasOwnProperty(key)) {
         old = _lumen_text_shorthand_value(obj, key) || '';
-        _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { delete obj[lh]; });
+        _LUMEN_TEXT_SHORTHANDS[key].forEach(function(lh) { _lumen_style_drop(obj, lh); });
     }
     var otherLonghands = _lumen_shorthand_longhands_other(key);
     if (otherLonghands.length) {
         old = this.getPropertyValue(key) || '';
-        otherLonghands.forEach(function(lh) { delete obj[lh]; });
+        otherLonghands.forEach(function(lh) { _lumen_style_drop(obj, lh); });
     }
     _lumen_gap_rule_delete(obj, key); _lumen_style_mark_important(obj, key, false);
     _lumen_style_set_parsed(nid, obj); return old;
@@ -4248,7 +4408,7 @@ function _lumen_make_style(nid, fbid) {
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
         has: function(t, prop) {
-            return prop in t || _lumen_is_compat_alias_attr(prop);
+            return prop in t || prop === 'cssFloat' || _lumen_is_compat_alias_attr(prop);
         },
         set: function(t, prop, value, receiver) {
             if (prop in t) return Reflect.set(t, prop, value, receiver);
@@ -4280,7 +4440,7 @@ function _lumen_make_rule_style(loc, proto) {
             return t.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
         },
         has: function(t, prop) {
-            return prop in t || _lumen_is_compat_alias_attr(prop);
+            return prop in t || prop === 'cssFloat' || _lumen_is_compat_alias_attr(prop);
         },
         set: function(t, prop, value, receiver) {
             if (prop in t) return Reflect.set(t, prop, value, receiver);
