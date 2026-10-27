@@ -2964,6 +2964,9 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     // native) below instead of an entry here.
     'column-fill': ['auto', 'balance', 'balance-all'],
     'column-span': ['none', 'all'],
+    // CSS Fragmentation L3 §5.1 — `slice | clone`; the legacy `-webkit-` name is a Compat §3 alias.
+    'box-decoration-break': ['slice', 'clone'],
+    '-webkit-box-decoration-break': ['slice', 'clone'],
     'column-wrap': ['auto', 'nowrap', 'wrap'],
     'block-step-insert': ['margin-box', 'padding-box', 'content-box'],
     'block-step-align':  ['auto', 'center', 'start', 'end'],

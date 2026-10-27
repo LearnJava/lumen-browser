@@ -132,6 +132,8 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "border-width",
     "bottom",
     "box-decoration-break",
+    // WHATWG Compat §3: `-webkit-box-decoration-break` is a simple alias of the standard property.
+    "-webkit-box-decoration-break",
     "box-shadow",
     "box-sizing",
     // WHATWG Compat §2.1 — legacy flexbox: the orient/pack/align/direction group feeds the
