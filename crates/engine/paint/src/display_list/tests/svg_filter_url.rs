@@ -49,8 +49,22 @@ fn fe_image_href_becomes_image_primitive_with_fit() {
         }
         other => panic!("ожидался Image, получено {other:?}"),
     }
-    assert!(matches!(g.primitives[1].kind, FePrimitive::Unsupported { .. }), "ссылка на элемент пока не исполняется");
+    assert!(matches!(g.primitives[1].kind, FePrimitive::Unsupported { .. }), "ссылка на несуществующий элемент");
     assert!(matches!(&g.primitives[2].kind, FePrimitive::Image { fit, .. } if fit.stretch));
+}
+
+#[test]
+fn fe_image_fragment_href_becomes_element_primitive() {
+    let list = build(
+        r##"<svg width=100 height=100><defs><rect id=r width=10 height=10 fill=green/><text><tspan id=t>x</tspan></text></defs>
+        <filter id=f><feImage href="#r"/><feImage href="#t"/><feImage href="#none"/></filter>
+        <rect width=50 height=50 filter="url(#f)" /></svg>"##,
+        "",
+    );
+    let g = url_filter(&list).and_then(|u| u.graph).expect("граф разрешён");
+    assert!(matches!(g.primitives[0].kind, FePrimitive::Element { .. }), "{:?}", g.primitives[0].kind);
+    assert!(matches!(g.primitives[1].kind, FePrimitive::Unsupported { .. }), "tspan без <text>-контекста не рисуется");
+    assert!(matches!(g.primitives[2].kind, FePrimitive::Unsupported { .. }));
 }
 
 #[test]
@@ -134,6 +148,30 @@ mod raster {
         );
         assert_eq!(px(&img, 40, 40), [0, 0, 255]);
         assert_eq!(px(&img, 10, 10), [255, 255, 255]);
+    }
+
+    /// `feImage href="#id"` на элемент из `<defs>`: рисуется в user space и сдвигается в начало подобласти.
+    #[test]
+    fn fe_image_element_ref_draws_target_at_subregion_origin() {
+        let img = render(
+            r##"<svg width=200 height=120><defs><rect id=r x=10 y=10 width=20 height=20 fill="#00f"/>
+            <filter id=f filterUnits=userSpaceOnUse x=50 y=40 width=60 height=60><feImage href="#r"/></filter></defs>
+            <rect width=200 height=120 fill=red filter="url(#f)" /></svg>"##,
+        );
+        // Начало user space — в (50, 40): цель занимает x ∈ [60, 80), y ∈ [50, 70).
+        assert_eq!(px(&img, 70, 60), [0, 0, 255]);
+        assert_eq!(px(&img, 55, 45), [255, 255, 255], "вне цели прозрачно: красный источник заменён");
+        assert_eq!(px(&img, 20, 20), [255, 255, 255]);
+    }
+
+    #[test]
+    fn fe_image_to_text_span_draws_nothing() {
+        let img = render(
+            r##"<svg width=200 height=120><defs><text><tspan id=t x=0 y=20 fill=red>FAIL</tspan></text>
+            <filter id=f filterUnits=userSpaceOnUse x=0 y=0 width=100 height=100><feImage href="#t"/></filter></defs>
+            <rect width=100 height=100 fill=red filter="url(#f)" /></svg>"##,
+        );
+        assert_eq!(px(&img, 50, 50), [255, 255, 255]);
     }
 
     #[test]

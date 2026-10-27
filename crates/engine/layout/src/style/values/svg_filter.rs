@@ -244,6 +244,41 @@ impl Default for FeImageFit {
     }
 }
 
+/// Картинка `feImage href="#id"`: боксы целевого элемента в user space (единичный
+/// масштаб, нулевое смещение), как содержимое `<use>`.
+#[derive(Debug, Clone)]
+pub struct FeElementPicture {
+    content: std::sync::Arc<Vec<crate::box_tree::LayoutBox>>,
+}
+
+impl FeElementPicture {
+    pub(crate) fn new(content: Vec<crate::box_tree::LayoutBox>) -> Self {
+        Self { content: std::sync::Arc::new(content) }
+    }
+
+    /// Копия боксов, переставленных матрицей user space → холст `m`
+    /// (`m[0]`/`m[3]` — масштаб, `m[4]`/`m[5]` — смещение), как у содержимого
+    /// `<pattern>`: масштаб запечён в прямоугольники, края остаются чёткими.
+    pub fn positioned(&self, m: [f32; 6]) -> Vec<crate::box_tree::LayoutBox> {
+        let mut boxes = (*self.content).clone();
+        crate::box_tree::lay_out_svg_children_positions(
+            &mut boxes,
+            m[4],
+            m[5],
+            m[0],
+            m[3],
+            &crate::box_tree::SvgTransform::identity(),
+        );
+        boxes
+    }
+}
+
+impl PartialEq for FeElementPicture {
+    fn eq(&self, o: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.content, &o.content)
+    }
+}
+
 /// Вид примитива с параметрами.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FePrimitive {
@@ -255,6 +290,12 @@ pub enum FePrimitive {
         href: String,
         /// `preserveAspectRatio`.
         fit: FeImageFit,
+    },
+    /// `feImage href="#id"`: элемент документа, нарисованный как содержимое `<use>`
+    /// в user space ссылающегося элемента, со сдвигом в начало подобласти.
+    Element {
+        /// Боксы цели.
+        picture: FeElementPicture,
     },
     /// `feFlood`: цвет и непрозрачность.
     Flood {
@@ -410,7 +451,7 @@ pub enum FePrimitive {
         /// Источник света.
         light: Option<FeLight>,
     },
-    /// Примитив, которого движок ещё не исполняет (`feImage` со ссылкой на элемент). Результат — вход
+    /// Примитив без исполнения (неизвестный `fe*`, `feImage` на цель без картинки). Результат — вход
     /// без изменений; примитив без входа даёт [`FeInput::Empty`], то есть
     /// прозрачный чёрный.
     Unsupported {

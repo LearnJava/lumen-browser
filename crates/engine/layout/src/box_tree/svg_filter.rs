@@ -5,11 +5,11 @@
 //! `<filter>` (`feFlood`, `feOffset`, `feGaussianBlur`, `feColorMatrix`,
 //! `feComposite`, `feBlend`, `feMerge`, `feComponentTransfer`, `feDropShadow`,
 //! `feTile`, `feMorphology`, `feConvolveMatrix`, `feDisplacementMap`,
-//! `feTurbulence`, `feDiffuseLighting`, `feSpecularLighting`, `feImage` с адресом
-//! картинки) сводятся к
+//! `feTurbulence`, `feDiffuseLighting`, `feSpecularLighting`, `feImage`) сводятся к
 //! вариантам [`FePrimitive`] с уже разобранными числами и входами
-//! (`in`/`in2`/`result` → индексы). Остальные `fe*` (`feImage` на элемент) дают
-//! [`FePrimitive::Unsupported`] (прозрачный чёрный), чтобы граф не терял позиции.
+//! (`in`/`in2`/`result` → индексы). Остальные `fe*` дают
+//! [`FePrimitive::Unsupported`] (прозрачный чёрный), чтобы граф не терял позиции;
+//! `feImage href="#id"` раскрывается в картинку-элемент ([`FePrimitive::Element`]).
 //!
 //! Свойства `flood-color`/`flood-opacity`/`lighting-color`/
 //! `color-interpolation-filters` читаются из presentation-атрибута и
@@ -27,7 +27,7 @@ use super::svg_clip::user_bbox_of;
 use super::LayoutBox;
 use crate::style::{FilterFn, SvgClipPlacement, 
     Color, ComputedStyle, FeBlendMode, FeColorMatrix, FeCompositeOp, FeEdgeMode, FeImageFit, FeInput, FeLight,
-    FeLighting, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, compute_style, parse_color,
+    FeElementPicture, FeLighting, FePrimitive, FeTransfer, SvgFilter, SvgFilterPrimitive, compute_style, parse_color,
 };
 
 /// Разворачивает `url(#id)` в граф. `None` — элемента нет или это не `<filter>`.
@@ -90,7 +90,17 @@ pub(crate) fn resolve_filter_url(
             continue;
         }
         let idx = primitives.len();
-        let ctx = Ctx { doc, node: child, results: &results, viewport, sheet, dark_mode, filter_style: &filter_style };
+        let ctx = Ctx {
+            doc,
+            node: child,
+            filter: f,
+            results: &results,
+            viewport,
+            svg_size: svg_basis.unwrap_or(viewport),
+            sheet,
+            dark_mode,
+            filter_style: &filter_style,
+        };
         let kind = build_primitive(&ctx, &tag);
         let sub = |attr: &str, axis: usize| {
             doc.get(child)
@@ -125,8 +135,12 @@ pub(crate) fn resolve_filter_url(
 struct Ctx<'a> {
     doc: &'a Document,
     node: NodeId,
+    /// Элемент `<filter>`, которому принадлежит примитив.
+    filter: NodeId,
     results: &'a [(String, usize)],
     viewport: Size,
+    /// Размер ближайшего `<svg>` ссылающегося элемента (база процентов картинки-элемента).
+    svg_size: Size,
     sheet: &'a Stylesheet,
     dark_mode: bool,
     filter_style: &'a ComputedStyle,
@@ -332,13 +346,56 @@ fn build_primitive(c: &Ctx<'_>, tag: &str) -> FePrimitive {
 }
 
 /// `feImage`: ссылка на картинку (`href`/`xlink:href`, не `#id`) — [`FePrimitive::Image`];
-/// ссылка на элемент документа пока не исполняется ([`FePrimitive::Unsupported`]).
+/// `#id` на элемент документа — [`FePrimitive::Element`] (отрисовка как у `<use>`);
+/// цель без картинки (`<tspan>`, `<defs>`, ссылка в никуда или цикл) даёт
+/// [`FePrimitive::Unsupported`] (прозрачный чёрный).
 fn fe_image(c: &Ctx<'_>) -> FePrimitive {
+    let empty = || FePrimitive::Unsupported { input: FeInput::Empty };
     let href = c.attr("href").or_else(|| c.attr("xlink:href")).map(str::trim).unwrap_or_default();
-    if href.is_empty() || href.starts_with('#') {
-        return FePrimitive::Unsupported { input: FeInput::Empty };
+    if href.is_empty() {
+        return empty();
     }
-    FePrimitive::Image { href: href.to_string(), fit: parse_image_fit(c.attr("preserveAspectRatio")) }
+    let Some(id) = href.strip_prefix('#') else {
+        return FePrimitive::Image { href: href.to_string(), fit: parse_image_fit(c.attr("preserveAspectRatio")) };
+    };
+    let Some(target) = c.doc.find_by_id(id) else { return empty() };
+    // Цель, чей `filter` снова ведёт в этот `<filter>`, не раскрываем: каскад цели
+    // вызвал бы `resolve_filter_url` рекурсивно.
+    let Some(_guard) = ElementGuard::enter(c.filter) else { return empty() };
+    let content = super::svg::element_picture(c.doc, c.sheet, target, c.viewport, c.svg_size, c.dark_mode);
+    if content.is_empty() {
+        return empty();
+    }
+    FePrimitive::Element { picture: FeElementPicture::new(content) }
+}
+
+thread_local! {
+    /// `<filter>`, чьи `feImage href="#id"` сейчас раскрываются (защита от цикла).
+    static EXPANDING: std::cell::RefCell<Vec<NodeId>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Охранник рекурсии раскрытия `feImage` на элемент.
+struct ElementGuard;
+
+impl ElementGuard {
+    fn enter(filter: NodeId) -> Option<Self> {
+        EXPANDING.with(|s| {
+            let mut s = s.borrow_mut();
+            if s.contains(&filter) || s.len() >= 8 {
+                return None;
+            }
+            s.push(filter);
+            Some(Self)
+        })
+    }
+}
+
+impl Drop for ElementGuard {
+    fn drop(&mut self) {
+        EXPANDING.with(|s| {
+            s.borrow_mut().pop();
+        });
+    }
 }
 
 /// `preserveAspectRatio="[defer] <align> [meet|slice]"`.

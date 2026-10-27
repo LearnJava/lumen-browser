@@ -263,7 +263,7 @@ pub(crate) fn rasterize_cpu_with_fonts(
 /// пиксели. `clear == None` — прозрачное полотно (слой группы `PushTransform`,
 /// BUG-1288), иначе заливка этим цветом.
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
-fn rasterize_cpu_pixmap(
+pub(crate) fn rasterize_cpu_pixmap(
     width: u32,
     height: u32,
     commands: &[DisplayCommand],
