@@ -18,10 +18,11 @@ family by *prefixing* the browser host, so with an IP it hands the browser
 and the alternate family stays `not-web-platform.test`, which resolves only if
 a hosts file says so. A test that reaches for another origin therefore does not
 fail on the engine's behaviour; it waits for a load that can never start.
-`WPT-RUN-10` (ROADMAP.md) moved `browser_host` to `"localhost"`, which fixes
+`WPT-RUN-10` (ROADMAP.md) moved `browser_host` to `"localhost"`, which fixed
 the own-subdomain family (`*.localhost` resolves under RFC 6761 with no
-machine change) but not the alternate-domain family — that gap is left open,
-see `env_options`'s comment.
+machine change) but not the alternate-domain family. `WPT-HOST-WPT` returned
+to the upstream `web-platform.test` and closed both: the runner hands the
+browser every name through `LUMEN_RESOLVE` — see `env_options`'s comment.
 
 What this script measures, in three independent pieces:
 
@@ -36,7 +37,8 @@ What this script measures, in three independent pieces:
   the unresolvable name adds on top). Plus the wall-clock the extra TIMEOUTs
   cost, priced with `score_audit.wall_clock`'s fitted seconds-per-TIMEOUT.
 * **probe** — what the servers actually hand out right now: every configured
-  domain resolved through the OS, and the origins the live server substitutes
+  domain resolved the way the browser does it (the runner's `LUMEN_RESOLVE`
+  map first, then the OS; `nonexistent.*` must stay unresolved), and the origins the live server substitutes
   into `/common/get-host-info.sub.js`, the helper 138 fetch tests alone read
   their "other origin" from. This is the end-to-end claim, and it needs a
   running corpus (or `serve.py`) to answer.
@@ -283,10 +285,15 @@ def compare(marked: set, statuses: dict, categories: dict) -> dict:
             "no_verdict": len(marked - set(statuses))}
 
 
-def configured_domains() -> dict:
+def configured_domains() -> tuple:
     """Every hostname `wptserve` will publish, straight from its own config
     builder — the point is what the *server* believes, and hardcoding the
-    subdomain list here would be a second copy of it that can drift."""
+    subdomain list here would be a second copy of it that can drift.
+
+    Returns `(families, override, not_domains)`: the per-family name maps,
+    the `LUMEN_RESOLVE` map the runner hands the browser (built by the same
+    `lumen_resolve_spec` the runner calls, WPT-HOST-WPT; `nonexistent.*` map
+    to `~NOTFOUND` there), and the `nonexistent.*` names that must stay unresolved."""
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "wptrunner"))
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "webdriver"))
@@ -307,10 +314,21 @@ def configured_domains() -> dict:
                             bind_address=True,
                             ports=override["ports"])
     with builder as config:
-        return {family: dict(domains) for family, domains in config.all_domains.items()}
+        families = {family: dict(domains) for family, domains in config.all_domains.items()}
+        spec = lumen_plugin.lumen_resolve_spec(config)
+        not_domains = set(config.not_domains_set)
+    override = {name.lower(): ip for name, _sep, ip in
+                (pair.partition("=") for pair in spec.split(",") if pair)}
+    return families, override, not_domains
 
 
-def resolves(hostname: str) -> bool:
+def resolves(hostname: str, override: dict = None) -> bool:
+    """Whether the *browser* resolves `hostname`: the `LUMEN_RESOLVE` map
+    first (`crates/network/src/dns.rs` checks it before any resolver), the
+    OS resolver otherwise."""
+    if override and hostname.rstrip(".").lower() in override:
+        # `~NOTFOUND` (the `nonexistent.*` names): the engine fails it at once.
+        return override[hostname.rstrip(".").lower()] != "~NOTFOUND"
     try:
         socket.getaddrinfo(hostname, None)
         return True
@@ -345,17 +363,11 @@ def _quoted_hosts(line: str) -> list:
 
 
 def probe(timeout: float = 5.0) -> dict:
-    """Resolve every configured domain, and ask a running server what origins it
-    hands the browser."""
-    domains = configured_domains()
-    unresolved = {family: sorted(h for h in hosts.values() if not resolves(h))
-                  for family, hosts in domains.items()}
-    total = sum(len(h) for h in domains.values())
-    result = {"domains": total,
-              "unresolvable": sum(len(v) for v in unresolved.values()),
-              "unresolvable_by_family": {k: len(v) for k, v in unresolved.items()},
-              "examples": {k: v[:4] for k, v in unresolved.items()}}
-
+    """Ask a running server what origins it hands the browser, and resolve every
+    configured domain. The server goes first: the OS lookups of the four
+    `nonexistent.*` names wait out a DNS timeout each, longer than a one-test
+    smoke run keeps wptserve up."""
+    domains, override, not_domains = configured_domains()
     with open(CONFIG_PATH, encoding="utf-8") as fh:
         port = json.load(fh)["ports"]["http"][0]
     url = f"http://127.0.0.1:{port}{HOST_INFO_URL}"
@@ -363,7 +375,22 @@ def probe(timeout: float = 5.0) -> dict:
         with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
             served = response.read().decode("utf-8", "replace")
     except OSError as exc:
-        result["served"] = {"error": f"{url}: {exc}"}
+        served = exc
+
+    # A name is wrong when it disagrees with wptserve: a real one that does not
+    # resolve, or a `nonexistent.*` one that does (tests check it fails).
+    wrong = {family: sorted(h for h in hosts.values()
+                            if resolves(h, override) == (h in not_domains))
+             for family, hosts in domains.items()}
+    total = sum(len(h) for h in domains.values())
+    result = {"domains": total,
+              "nonexistent": len(not_domains),
+              "via_lumen_resolve": len(override),
+              "wrong": sum(len(v) for v in wrong.values()),
+              "wrong_by_family": {k: len(v) for k, v in wrong.items()},
+              "examples": {k: v[:4] for k, v in wrong.items()}}
+    if isinstance(served, OSError):
+        result["served"] = {"error": f"{url}: {served}"}
         return result
 
     origins, pieces = {}, set()
@@ -377,7 +404,7 @@ def probe(timeout: float = 5.0) -> dict:
     browser_host = original[0] if original else "127.0.0.1"
     hosts = {(p + browser_host if p.endswith(".") else p) for p in pieces}
     result["served"] = {"url": url, "lines": origins,
-                        "hosts": {h: resolves(h) for h in sorted(hosts)}}
+                        "hosts": {h: resolves(h, override) for h in sorted(hosts)}}
     return result
 
 
@@ -557,9 +584,11 @@ def main() -> int:
     if args.probe:
         result["probe"] = probe()
         served = result["probe"].get("served", {})
-        print(f"\nprobe: {result['probe']['unresolvable']} of {result['probe']['domains']} "
-              f"configured domains do not resolve on this machine "
-              f"({result['probe']['unresolvable_by_family']})")
+        pr = result["probe"]
+        print(f"\nprobe: {pr['domains'] - pr['wrong']} of {pr['domains']} configured domains "
+              f"resolve for the browser as wptserve expects ({pr['via_lumen_resolve']} through "
+              f"LUMEN_RESOLVE, {pr['nonexistent']} nonexistent.* left unresolved); "
+              f"wrong by family: {pr['wrong_by_family']}")
         if "error" in served:
             print(f"  no server answering: {served['error']}")
         else:

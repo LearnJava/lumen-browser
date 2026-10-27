@@ -24,9 +24,19 @@ use lumen_core::ext::DnsResolver;
 /// прежний. Имена — ASCII без учёта регистра (IDN — в punycode, как его
 /// отдаёт URL-парсер); повтор имени добавляет адрес. Битая пара — диагностика
 /// в stderr и пропуск, как у `LUMEN_EXTRA_CA_CERT`.
+///
+/// Значение [`NOT_FOUND`] вместо IP — «имени нет» сразу, без похода в
+/// резолвер (`MAP … ~NOTFOUND` у Chrome `--host-resolver-rules`): WPT-имена
+/// `nonexistent.*` обязаны не резолвиться, а Windows-getaddrinfo отвечает
+/// NXDOMAIN на `.test` только через ~11 с — дольше таймаута теста. Адрес для
+/// того же имени в той же строке перекрывает `~NOTFOUND`.
 pub const RESOLVE_ENV: &str = "LUMEN_RESOLVE";
 
-/// Карта переопределений: нормализованное имя → адреса в порядке задания.
+/// Значение пары [`RESOLVE_ENV`]: имя не резолвится (немедленная ошибка).
+const NOT_FOUND: &str = "~NOTFOUND";
+
+/// Карта переопределений: нормализованное имя → адреса в порядке задания;
+/// пустой список — имя помечено [`NOT_FOUND`].
 type ResolveMap = HashMap<String, Vec<IpAddr>>;
 
 /// Нормализованная форма имени для поиска в карте: без хвостовой точки и
@@ -56,6 +66,10 @@ fn parse_resolve_spec(spec: &str) -> ResolveMap {
             continue;
         }
         let ip = ip.trim();
+        if ip == NOT_FOUND {
+            map.entry(normalize_host(name)).or_default();
+            continue;
+        }
         let ip_unbracketed = ip.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(ip);
         let Ok(ip) = IpAddr::from_str(ip_unbracketed) else {
             eprintln!("{RESOLVE_ENV}: `{ip}` в паре `{pair}` не IP-адрес, пропускаю");
@@ -75,14 +89,20 @@ fn env_resolve_map() -> &'static ResolveMap {
     MAP.get_or_init(|| std::env::var(RESOLVE_ENV).map(|s| parse_resolve_spec(&s)).unwrap_or_default())
 }
 
-/// Адреса из карты для `hostname` с подставленным `port`; `None` — имени в
-/// карте нет (пустая карта отвечает без нормализации имени).
-fn lookup(map: &ResolveMap, hostname: &str, port: u16) -> Option<Vec<SocketAddr>> {
+/// Ответ карты для `hostname` с подставленным `port`: адреса или ошибка
+/// [`NOT_FOUND`]; `None` — имени в карте нет (пустая карта отвечает без
+/// нормализации имени).
+fn lookup(map: &ResolveMap, hostname: &str, port: u16) -> Option<Result<Vec<SocketAddr>>> {
     if map.is_empty() {
         return None;
     }
-    map.get(&normalize_host(hostname))
-        .map(|ips| ips.iter().map(|&ip| SocketAddr::new(ip, port)).collect())
+    let ips = map.get(&normalize_host(hostname))?;
+    if ips.is_empty() {
+        return Some(Err(Error::Network(format!(
+            "resolve {hostname}: {RESOLVE_ENV} maps it to {NOT_FOUND}"
+        ))));
+    }
+    Some(Ok(ips.iter().map(|&ip| SocketAddr::new(ip, port)).collect()))
 }
 
 /// Резолв с учётом [`RESOLVE_ENV`]: имя из карты отвечает её адресами, иначе
@@ -95,10 +115,7 @@ pub(crate) fn resolve_with_env_override(
     hostname: &str,
     port: u16,
 ) -> Result<Vec<SocketAddr>> {
-    match lookup(env_resolve_map(), hostname, port) {
-        Some(addrs) => Ok(addrs),
-        None => resolver.resolve(hostname, port),
-    }
+    lookup(env_resolve_map(), hostname, port).unwrap_or_else(|| resolver.resolve(hostname, port))
 }
 
 /// Резолвер-обёртка с явной картой переопределений (синтаксис
@@ -120,10 +137,7 @@ impl ResolveOverride {
 
 impl DnsResolver for ResolveOverride {
     fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
-        match lookup(&self.map, hostname, port) {
-            Some(addrs) => Ok(addrs),
-            None => self.inner.resolve(hostname, port),
-        }
+        lookup(&self.map, hostname, port).unwrap_or_else(|| self.inner.resolve(hostname, port))
     }
 }
 
@@ -400,6 +414,17 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    #[test]
+    fn not_found_fails_without_inner_and_ip_overrides_it() {
+        let r = ResolveOverride::new("gone.test=~NOTFOUND,both.test=~NOTFOUND,both.test=127.0.0.1", Arc::new(FixedResolver));
+        let err = r.resolve("GONE.test", 80).unwrap_err().to_string();
+        assert!(err.contains("~NOTFOUND"), "{err}");
+        assert_eq!(r.resolve("both.test", 80).unwrap(), vec!["127.0.0.1:80".parse().unwrap()]);
+        // Регистр значения важен, как у Chrome: `~notfound` — не IP, пара пропущена.
+        let lower = ResolveOverride::new("gone.test=~notfound", Arc::new(FixedResolver));
+        assert_eq!(lower.resolve("gone.test", 80).unwrap(), vec!["10.9.9.9:80".parse().unwrap()]);
     }
 
     #[test]
