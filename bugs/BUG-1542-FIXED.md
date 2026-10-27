@@ -1,6 +1,6 @@
 # BUG-1542 — Размытие от `filter: blur()` выходит за границу `overflow:hidden` предка
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` — `PushFilter` с `blur` внутри `PushClipRect` предка с `overflow:hidden`)
 
@@ -29,3 +29,11 @@ WPT-RUN-14 срез 24: `css/filter-effects/blur-clip-stacking-context-001` (п�
 ## Как проверить
 
 `css/filter-effects/blur-clip-stacking-context-001.html`.
+
+## Исправление
+
+`composite_filter_layer` (`cpu_raster.rs`) композитил отфильтрованный слой без клипа: рисование в слой
+было обрезано клипом предка, но размытие выносило чернила за его границу. Клип, сохранённый в
+`LayerComposite::Filter` при `PushFilter`, теперь применяется и к результату цепочки с пространственным
+охватом (`filter_chain_reach > 0`); цепочки без охвата (цветовые матрицы) не трогаются — их краевое покрытие
+уже в пикселях. Тест: `filter_blur_is_clipped_by_ancestor_clip`.

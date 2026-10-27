@@ -1027,7 +1027,7 @@ fn close_layer(
             let written = if has_window_pass {
                 composite_svg_filter_chain(&mut dst.pm, &src.pm, filters, *bounds, *clip, src_dirty, image_map)
             } else {
-                composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
+                composite_filter_layer(&mut dst.pm, &src.pm, filters, *clip, src_dirty)
             };
             if let Some(written) = written {
                 dst.mark(written);
@@ -1438,9 +1438,11 @@ fn composite_filter_layer(
     dst: &mut tiny_skia::Pixmap,
     src: &tiny_skia::Pixmap,
     filters: &[FilterFn],
+    clip: Option<Rect>,
     src_dirty: DrawBounds,
 ) -> Option<DrawBounds> {
-    let margin = filter_chain_reach(filters) + 2.0;
+    let reach = filter_chain_reach(filters);
+    let margin = reach + 2.0;
     let (cx0, cy0, cx1, cy1) = clamp_crop(src_dirty, margin, src.width(), src.height())?;
     let mut cur = crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?;
     for f in filters {
@@ -1454,13 +1456,18 @@ fn composite_filter_layer(
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
+    // BUG-1542: the blur spreads ink past the ancestor clip that bounded the draws
+    // into the layer, so the clip is applied to the filtered result as well. A
+    // chain without spatial reach cannot move ink, and its edge coverage is
+    // already in the pixels — re-masking would square a fractional edge.
+    let clip_mask = if reach > 0.0 { build_clip_mask(dst.width(), dst.height(), clip) } else { None };
     dst.draw_pixmap(
         cx0 as i32,
         cy0 as i32,
         cur.as_ref(),
         &paint,
         tiny_skia::Transform::identity(),
-        None,
+        clip_mask.as_ref(),
     );
     Some((cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32))
 }
@@ -1480,7 +1487,7 @@ fn composite_svg_filter_chain(
     image_map: &std::collections::HashMap<&str, &Image>,
 ) -> Option<DrawBounds> {
     if filters.iter().any(|f| matches!(f, FilterFn::Url(u) if u.graph.is_none())) {
-        return composite_filter_layer(dst, src, &[], src_dirty);
+        return composite_filter_layer(dst, src, &[], clip, src_dirty);
     }
     let (cur, origin) = svg_filter_chain_window(src, filters, bounds, src_dirty, image_map, 1.0)?;
     let paint = tiny_skia::PixmapPaint {
