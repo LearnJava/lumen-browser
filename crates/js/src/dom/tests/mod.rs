@@ -407,6 +407,8 @@ mod v8_bug912_event_class_string;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug602_align_reflection;
+#[cfg(feature = "v8-backend")]
+mod v8_bug1547_li_reflection;
 
 #[cfg(feature = "v8-backend")]
 mod v8_bug605_marquee_reflection;

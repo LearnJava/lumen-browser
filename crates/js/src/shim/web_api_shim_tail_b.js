@@ -2134,6 +2134,13 @@ _lumen_install_reflection(HTMLOListElement.prototype, [
     ['type',           'type',           'string'],
 ]);
 
+// HTML LS §4.4.8: `value` is a plain `long` reflection (default 0), `type` a string. The marker
+// number itself lives in layout (BUG-1547); the IDL getter does not expose it.
+_lumen_install_reflection(HTMLLIElement.prototype, [
+    ['value',          'value',          'long',   0],
+    ['type',           'type',           'string'],
+]);
+
 _lumen_install_reflection(HTMLTimeElement.prototype, [
     ['dateTime',       'datetime',       'string'],
 ]);

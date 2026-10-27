@@ -1511,7 +1511,15 @@ fn build_box_inner(
             // CSS Lists L3 §2.1 — inject ::marker for list items.
             // ::marker comes before ::before in document order.
             if style.display == Display::ListItem {
-                let ordinal = li_ordinal(doc, id);
+                // BUG-1547: the marker number is the `list-item` counter (`<ol start>`, `reversed`,
+                // `<li value>` fold into it in `apply_ua_list`); the sibling count is the fallback
+                // for a node the counter walk left without a snapshot.
+                let ordinal = counters
+                    .counters(id)
+                    .and_then(|snap| snap.get("list-item"))
+                    .and_then(|stack| stack.last())
+                    .copied()
+                    .unwrap_or_else(|| li_ordinal(doc, id) as i32);
                 inject_marker(id, &mut children, &style, ordinal,
                               doc, sheet, viewport, dark_mode, counters, registry);
             }
