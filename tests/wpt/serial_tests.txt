@@ -1,0 +1,24 @@
+# Tests that need the origin's storage to themselves (WPT-IDB-RUNNER).
+#
+# Every test of a run shares the wptserve origins and one IndexedDB store,
+# `<binary dir>/data/idb`. `run_corpus.py` takes every file listed here (all
+# its variants) out of its ordinary shard and runs it in the "serial lane":
+# one extra unit per run, after the heavy lane, alone, on 1 browser
+# (`SERIAL_PROCESSES`), with the store emptied right before it. The tests stay
+# in the denominator and are scored as usual. Disable: `--no-serial-lane`.
+#
+# Format: <test id path as in MANIFEST.json, no ?query> <whitespace> <reason>.
+# A `.any.js` file is several ids (`.any.html`, `.any.worker.html`, ...): list
+# each. Add a file only when it reads or wipes the whole origin's storage
+# (`indexedDB.databases()`, `deleteAllDatabases`); see
+# docs/wpt-vendor-notes/IndexedDB.md, cluster N.
+
+/IndexedDB/abort-in-initial-upgradeneeded.any.html  expects databases() to be empty after the aborted open; got 1...231 databases of parallel tests
+/IndexedDB/abort-in-initial-upgradeneeded.any.worker.html  same test, dedicated-worker variant
+/IndexedDB/abort-in-initial-upgradeneeded.any.sharedworker.html  same test, shared-worker variant
+/IndexedDB/abort-in-initial-upgradeneeded.any.serviceworker.html  same test, service-worker variant
+/IndexedDB/get-databases.any.html  deleteAllDatabases() wipes the neighbours' databases, then counts databases() exactly
+/IndexedDB/get-databases.any.worker.html  same test, dedicated-worker variant
+/IndexedDB/idbfactory-origin-isolation.html  deleteAllDatabases() wipes the neighbours' databases
+/IndexedDB/idbfactory-databases-opaque-origin.html  reads databases() of the whole origin
+/IndexedDB/database-names-by-origin.html  cross-origin-helper-frame.html lists databases() of each origin
