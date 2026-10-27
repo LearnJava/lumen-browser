@@ -251,6 +251,7 @@ fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSeg
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
+        effect_scopes: Vec::new(),
         img_src: None,
         img_is_lazy: false,
         img_width: 0.0,

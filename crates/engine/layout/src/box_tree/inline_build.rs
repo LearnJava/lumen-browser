@@ -419,6 +419,7 @@ fn apply_first_letter_pseudo(
         pre_space: 0.0,
         post_space,
         is_element_box: false,
+        effect_scopes: segs[pos].effect_scopes.clone(),
         img_src: None,
         img_is_lazy: false,
         img_width: 0.0,
@@ -819,6 +820,7 @@ pub(crate) fn give_leading_breaks_a_line(doc: &Document, children: &mut [LayoutB
                             pre_space: 0.0,
                             post_space: 0.0,
                             is_element_box: false,
+                            effect_scopes: Vec::new(),
                             img_src: None,
                             img_is_lazy: false,
                             img_width: 0.0,
@@ -888,6 +890,7 @@ pub(crate) fn control_value_segments(
             pre_space: 0.0,
             post_space: 0.0,
             is_element_box: false,
+            effect_scopes: Vec::new(),
             img_src: None,
             img_is_lazy: false,
             img_width: 0.0,
@@ -1003,6 +1006,7 @@ pub(crate) fn collect_inline_segments(
                         pre_space: 0.0,
                         post_space: 0.0,
                         is_element_box: false,
+                        effect_scopes: Vec::new(),
                         img_src: None,
                         img_is_lazy: false,
                         img_width: 0.0,
@@ -1029,6 +1033,7 @@ pub(crate) fn collect_inline_segments(
                         pre_space: 0.0,
                         post_space: 0.0,
                         is_element_box: false,
+                        effect_scopes: Vec::new(),
                         img_src: None,
                         img_is_lazy: false,
                         img_width: 0.0,
@@ -1062,6 +1067,7 @@ pub(crate) fn collect_inline_segments(
                         pre_space: 0.0,
                         post_space: 0.0,
                         is_element_box: false,
+                        effect_scopes: Vec::new(),
                         img_src: None,
                         img_is_lazy: false,
                         img_width: 0.0,
@@ -1091,6 +1097,7 @@ pub(crate) fn collect_inline_segments(
                         pre_space: 0.0,
                         post_space: 0.0,
                         is_element_box: false,
+                        effect_scopes: Vec::new(),
                         img_src: None,
                         img_is_lazy: false,
                         img_width: 0.0,
@@ -1130,6 +1137,7 @@ pub(crate) fn collect_inline_segments(
                 pre_space: 0.0,
                 post_space: 0.0,
                 is_element_box: false,
+                effect_scopes: Vec::new(),
                 img_src: None,
                 img_is_lazy: false,
                 img_width: 0.0,
@@ -1176,6 +1184,7 @@ pub(crate) fn collect_inline_segments(
                     pre_space: 0.0,
                     post_space: 0.0,
                     is_element_box: false,
+                    effect_scopes: Vec::new(),
                     img_src: None,
                     img_is_lazy: false,
                     img_width: 0.0,
@@ -1269,6 +1278,7 @@ pub(crate) fn collect_inline_segments(
                 pre_space,
                 post_space,
                 is_element_box: true,
+                effect_scopes: Vec::new(),
                 img_src: None,
                 img_is_lazy: false,
                 img_width: 0.0,
@@ -1310,6 +1320,14 @@ pub(crate) fn collect_inline_segments(
                 // margin/border/padding (even summing to zero or negative) is not a phantom line
                 // box: it takes its width in the line and paints its background/border (BUG-1530).
                 out.push(edge(pre, post));
+            }
+            // Filter Effects L1 §3 / Compositing L1 §3.1: `opacity` and `filter` apply to an inline
+            // element as one group over all its boxes, not to each glyph run separately.
+            if s.opacity < 1.0 || !s.filter.is_empty() {
+                let scope = InlineEffectScope { node: id, style: s.clone() };
+                for seg in &mut out[start..] {
+                    seg.effect_scopes.insert(0, scope.clone());
+                }
             }
             // CSS Writing Modes L4 §2.2: the whole element, however many segments its
             // descendants split it into, sits in one embedding/isolate/override.
@@ -1633,6 +1651,7 @@ pub(super) fn make_content_text_segment(
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: false,
+        effect_scopes: Vec::new(),
         img_src: None,
         img_is_lazy: false,
         img_width: 0.0,
@@ -1668,6 +1687,7 @@ fn make_content_image_segment(
         pre_space: 0.0,
         post_space: 0.0,
         is_element_box: true,
+        effect_scopes: Vec::new(),
         img_src: Some(url),
         img_is_lazy: false,
         img_width: width,

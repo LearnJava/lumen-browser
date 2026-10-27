@@ -439,6 +439,27 @@ pub struct InlineSegment {
     /// assigned by [`crate::bidi::resolve`]; `None` outside any inline isolate.
     /// Rule L2 never reverses a run across an isolate's boundary.
     pub bidi_isolate: Option<NodeId>,
+    /// Enclosing inline elements that paint through their own layer (`opacity < 1`,
+    /// `filter`), outermost first. Stamped by `collect_inline_segments`; the painter wraps the
+    /// background, border and text of each run of fragments sharing a scope in one group, as it
+    /// does for a block (Filter Effects L1 §3, Compositing L1 §3.1).
+    pub effect_scopes: Vec<InlineEffectScope>,
+}
+
+/// One inline element that needs an offscreen layer (see [`InlineSegment::effect_scopes`]).
+#[derive(Debug, Clone)]
+pub struct InlineEffectScope {
+    /// The element itself — two sibling elements with equal styles are still two layers.
+    pub node: NodeId,
+    /// The element's own style: `opacity` and `filter` are read from it.
+    pub style: std::sync::Arc<ComputedStyle>,
+}
+
+impl PartialEq for InlineEffectScope {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node
+            && (std::sync::Arc::ptr_eq(&self.style, &other.style) || self.style == other.style)
+    }
 }
 
 /// One inline element's `unicode-bidi` / `direction` pair (see
@@ -573,6 +594,8 @@ pub struct InlineFrag {
     /// ([`TextMeasurer::underline_metrics_with_families`]) только для фрагментов с
     /// `underline`, которым они нужны; `None` — paint рисует эвристику `auto`.
     pub font_underline: Option<crate::FontUnderlineMetrics>,
+    /// See [`InlineSegment::effect_scopes`].
+    pub effect_scopes: Vec<InlineEffectScope>,
 }
 
 /// Равенство по значению, но стиль сначала по указателю: фрагменты строки делят `Arc` с сегментом и
@@ -599,6 +622,7 @@ impl PartialEq for InlineFrag {
             merged_sources,
             forced_end,
             font_underline,
+            effect_scopes,
         } = self;
         x == &other.x
             && width == &other.width
@@ -618,6 +642,7 @@ impl PartialEq for InlineFrag {
             && merged_sources == &other.merged_sources
             && forced_end == &other.forced_end
             && font_underline == &other.font_underline
+            && effect_scopes == &other.effect_scopes
     }
 }
 

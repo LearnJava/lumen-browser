@@ -1,7 +1,7 @@
 //! SVG-FILTER: `filter: url(#id)` → граф `<filter>` в `PushFilter` и итоговый растр.
 
 use super::*;
-use super::text_and_images::build;
+use super::text_and_images::{build, build_wrapped};
 use lumen_layout::{FePrimitive, FilterFn};
 
 fn url_filter(list: &DisplayList) -> Option<lumen_layout::FilterUrl> {
@@ -344,4 +344,34 @@ mod raster {
         assert_eq!(px(&img, 90, 50), [0, 128, 0], "тень вне области фильтра (x > 65)");
         assert_eq!(px(&img, 105, 50), [0, 128, 0], "правый край тени");
     }
+}
+
+/// `filter`/`opacity` на `display:inline` без блочных потомков: фон и текст элемента — в одной группе
+/// (Filter Effects L1 §3), вложенный элемент — группа внутри; соседний текст вне групп.
+#[test]
+fn inline_element_effects_wrap_its_fragments_in_layers() {
+    let list = build_wrapped(
+        r##"<p>a <span style="opacity:.5;background-color:red">b <b style="filter:blur(2px)">c</b> d</span> e</p>"##,
+        "",
+        800.0,
+    );
+    let names: Vec<&str> = list
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::PushOpacity { .. } => Some("PushOpacity"),
+            DisplayCommand::PopOpacity => Some("PopOpacity"),
+            DisplayCommand::PushFilter { .. } => Some("PushFilter"),
+            DisplayCommand::PopFilter => Some("PopFilter"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        ["PushOpacity", "PushFilter", "PopFilter", "PopOpacity"],
+        "одна группа opacity на span, внутри неё группа filter на b"
+    );
+    let fill = list.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. })).expect("фон span");
+    let push = list.iter().position(|c| matches!(c, DisplayCommand::PushOpacity { .. })).unwrap();
+    let pop = list.iter().position(|c| matches!(c, DisplayCommand::PopOpacity)).unwrap();
+    assert!(push < fill && fill < pop, "фон span внутри группы");
 }

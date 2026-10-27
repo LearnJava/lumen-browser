@@ -228,6 +228,7 @@ mod tests {
             padding_left: 0.0,
             padding_right: 0.0,
             is_element_box: false,
+            effect_scopes: Vec::new(),
             img_src: None,
             img_is_lazy: false,
             is_first_line: false,
