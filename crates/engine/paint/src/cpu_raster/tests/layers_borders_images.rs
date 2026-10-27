@@ -334,6 +334,24 @@ fn filter_blur_spreads_ink() {
     assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "far corner stays white");
 }
 
+/// BUG-1542: the blur of a `filter: blur()` descendant must not leak past the
+/// `overflow:hidden` ancestor's clip — the clip bounds the filtered result too.
+#[test]
+fn filter_blur_is_clipped_by_ancestor_clip() {
+    let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+    let cmds = vec![
+        DisplayCommand::PushClipRect { rect: rect(20.0, 20.0, 24.0, 24.0) },
+        DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)], bounds: None },
+        DisplayCommand::FillRect { rect: rect(20.0, 20.0, 24.0, 24.0), color: blue },
+        DisplayCommand::PopFilter,
+        DisplayCommand::PopClip,
+    ];
+    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    assert_eq!(px(&img, 46, 32), (255, 255, 255, 255), "right of the clip stays white");
+    assert_eq!(px(&img, 17, 32), (255, 255, 255, 255), "left of the clip stays white");
+    assert_ne!(px(&img, 32, 32), (255, 255, 255, 255), "inside the clip is painted");
+}
+
 /// BUG-850: an unclamped blur radius made `box_blur_h`/`box_blur_v`'s
 /// accumulator-priming loop cost O(radius) per row/column regardless of
 /// the layer's own size — `backdrop-filter: blur(100000px)` on a 1024px
