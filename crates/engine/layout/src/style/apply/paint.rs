@@ -10,9 +10,11 @@
 //! группу не входит по алфавиту, а по смыслу — порядок веток внутри `match`
 //! семантики не несёт, потому что все метки уникальны.
 
+use crate::style::values::border_image;
 use crate::style::{
     Appearance,
     BackgroundAttachment,
+    BorderImage,
     BackgroundClip,
     BackgroundImage,
     BackgroundLayer,
@@ -998,7 +1000,44 @@ pub(in crate::style) fn apply_decl_paint(
             }
         }
         // ── Borders ───────────────────────────────────────────────────────────
-        "border" => apply_border_shorthand(style, val, em_basis, viewport, is_quirks),
+        "border" => {
+            apply_border_shorthand(style, val, em_basis, viewport, is_quirks);
+            // CSS Backgrounds L3 §6.? — the `border` shorthand also resets `border-image` to initial.
+            style.border_image = BorderImage::default();
+        }
+        // CSS Backgrounds L3 §6 — `border-image` and its five longhands (a bad value is dropped).
+        "border-image" => {
+            if let Some(b) = border_image::parse_border_image(val, em_basis, viewport, is_quirks) {
+                style.border_image = b;
+            }
+        }
+        "border-image-source" => {
+            if let Some((img, css)) = border_image::parse_border_image_source(val, em_basis, viewport) {
+                style.border_image.source = img;
+                style.border_image.source_css = css;
+            }
+        }
+        "border-image-slice" => {
+            if let Some((slice, fill)) = border_image::parse_border_image_slice(val) {
+                style.border_image.slice = slice;
+                style.border_image.fill = fill;
+            }
+        }
+        "border-image-width" => {
+            if let Some(w) = border_image::parse_border_image_width(val, em_basis, viewport, is_quirks) {
+                style.border_image.width = w;
+            }
+        }
+        "border-image-outset" => {
+            if let Some(o) = border_image::parse_border_image_outset(val, em_basis, viewport, is_quirks) {
+                style.border_image.outset = o;
+            }
+        }
+        "border-image-repeat" => {
+            if let Some(r) = border_image::parse_border_image_repeat(val) {
+                style.border_image.repeat = r;
+            }
+        }
         "border-top" => apply_border_side_shorthand(
             &mut style.border_top_width, &mut style.border_top_style,
             &mut style.border_top_color, val, em_basis, viewport, is_quirks),

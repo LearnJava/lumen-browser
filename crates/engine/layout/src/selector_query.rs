@@ -1549,6 +1549,17 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         [vr[0].as_str(), vr[1].as_str(), vr[2].as_str(), vr[3].as_str()],
     ));
 
+    // CSS Backgrounds L3 §6 — `border-image` shorthand and longhands.
+    for prop in [
+        "border-image-source", "border-image-slice", "border-image-width", "border-image-outset",
+        "border-image-repeat",
+    ] {
+        if let Some(v) = style.border_image.longhand_css(prop) {
+            m.insert(prop.into(), v);
+        }
+    }
+    m.insert("border-image".into(), style.border_image.shorthand_css());
+
     // ── Inset (positioned elements) ───────────────────────────────
     m.insert("top".into(), length_or_auto_to_css(&style.top));
     m.insert("right".into(), length_or_auto_to_css(&style.right));

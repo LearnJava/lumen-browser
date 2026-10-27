@@ -219,6 +219,7 @@ pub use style::{
     PointerEvents,
     Position, PositionComponent, Quotes, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, CaretAnimation, CaretShape, InputSecurity, Interactivity,
+    BorderImage, BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth,
     FillRule, ScrollbarWidth, ShapeValue, StepPosition, StrokeLinecap, StrokeLinejoin,
     SvgGradientDef, SvgGradientUnits, SvgPaint, SvgPatternDef, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,

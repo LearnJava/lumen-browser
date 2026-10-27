@@ -33,7 +33,7 @@ use lumen_core::ColorSpace;
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
     AlignValue, ContentAlignExtra, AnimationComposition, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
-    Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
+    Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BorderImage, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, InputSecurity, Interactivity, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
     BoxSizing, BreakValue, ClearSide, ClipPath, Color, ColorScheme, ContainerType, ContainFlags,
@@ -713,6 +713,8 @@ pub struct ComputedStyle {
     pub background_layers: Vec<BackgroundLayer>,
     /// Списки per-layer-свойств как заданы автором — для `getComputedStyle` (BUG-1297).
     pub background_specified: Option<Box<BackgroundSpecified>>,
+    /// CSS Backgrounds L3 §6 — `border-image` (источник + slice/width/outset/repeat). Не наследуется.
+    pub border_image: BorderImage,
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
