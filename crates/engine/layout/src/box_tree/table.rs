@@ -406,6 +406,7 @@ pub(crate) fn build_table_init(
         children_pcb,
         cur_y,
         flat_row_rects: Vec::new(),
+        collapsed_rows: Vec::new(),
         span_fixes: Vec::new(),
         s: Arc::clone(&b.style),
         em,
