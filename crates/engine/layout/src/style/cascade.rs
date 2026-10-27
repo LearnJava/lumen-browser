@@ -1536,6 +1536,15 @@ pub(crate) fn compute_style_shareable(
         }
     }
 
+    // CSS Inline L3 §5.2 — `baseline-shift` on an HTML inline box acts as the matching
+    // `vertical-align` (BUG-1545); an explicit `vertical-align` keeps precedence. Runs
+    // before the flex/grid reset below: a blockified item ignores both.
+    if style.vertical_align == crate::style::VerticalAlign::Baseline
+        && let Some(va) = style.baseline_shift.as_inline_vertical_align()
+    {
+        style.vertical_align = va;
+    }
+
     // CSS Align L3 §vertical-align / Flexbox §4, Grid §6 — an in-flow child of a
     // flex or grid container is blockified, and `vertical-align` only applies
     // to inline-level boxes and table cells: the computed value has no effect

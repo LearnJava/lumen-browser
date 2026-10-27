@@ -1,6 +1,6 @@
 # BUG-1545 — `baseline-shift` не сдвигает текст HTML-элемента (`<span>`): `<length-percentage>`, `sub`, `top`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3; остаток [BUG-1761](BUG-1761-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout (`crates/engine/layout/src/box_tree/` — `baseline-shift` подключён только к SVG-тексту, `emit_svg_text`)
 
@@ -32,3 +32,9 @@ WPT-RUN-14 срез 24: `css-inline/baseline-shift/baseline-shift-{top,bottom,ce
 ## Как проверить
 
 `css/css-inline/baseline-shift/baseline-shift-length-percentage.html`.
+
+## Исправление
+
+`baseline-shift` на HTML inline-боксе (текст, `<img>`) действует как `vertical-align` того же значения — в CSS Inline L3 §5.2 `vertical-align` и есть шортхенд `baseline-shift`. В `style/cascade.rs` перед сбросом для flex/grid-элементов: при `vertical-align: baseline` и `baseline-shift != baseline` в `vertical_align` кладётся эквивалент (`SvgBaselineShift::as_inline_vertical_align`: `sub`/`super`/`top`/`bottom` как есть, `center` → `Middle`, длина → `Length`, процент → `Percent`). Явный `vertical-align` приоритетнее. Заодно `vertical-align: <percentage>` теперь считается от `line-height` самого элемента (CSS 2.1 §10.8.1), а не блока: `inline_wrap.rs::apply_inline_vertical_align`.
+
+Тесты: `box_tree/tests/bug1545_baseline_shift_html.rs`. Остаток reftest `css-inline/baseline-shift/*` (HTML-варианты): вертикаль совпадает с эталоном, горизонталь расходится из-за ширины пробелов — [BUG-1761](BUG-1761-OPEN.md). `*-svg.html` не разбирались (SVG-текст с `baseline-shift` и так работал; причина падения — отдельная).
