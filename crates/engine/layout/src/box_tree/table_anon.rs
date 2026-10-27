@@ -158,6 +158,33 @@ fn anon_box(
     }
 }
 
+/// CSS 2.1 §17.2: the first `table-header-group` child is always rendered before every other row
+/// group and the first `table-footer-group` child after them, whatever their source order. Later
+/// header/footer groups behave like ordinary row groups. BUG-1537.
+fn hoist_header_footer(children: &mut Vec<LayoutBox>) {
+    let is_group = |c: &LayoutBox| !matches!(c.kind, BoxKind::Skip) && part_of_box(c) == Some(Part::Group);
+    let header = children
+        .iter()
+        .position(|c| is_group(c) && c.style.display == Display::TableHeaderGroup);
+    let first_rows = children.iter().position(|c| is_group(c) || part_of_box(c) == Some(Part::Row));
+    if let (Some(h), Some(first)) = (header, first_rows)
+        && h > first
+    {
+        let b = children.remove(h);
+        children.insert(first, b);
+    }
+    let footer = children
+        .iter()
+        .position(|c| is_group(c) && c.style.display == Display::TableFooterGroup);
+    let last_rows = children.iter().rposition(|c| is_group(c) || part_of_box(c) == Some(Part::Row));
+    if let (Some(f), Some(last)) = (footer, last_rows)
+        && f < last
+    {
+        let b = children.remove(f);
+        children.insert(last, b);
+    }
+}
+
 /// Repairs `children` of a container (`kind`/`style`) per CSS 2.1 §17.2.1. `owner` is the
 /// container's node: the anonymous boxes carry it, like every other anonymous box.
 pub(super) fn fix_children(
@@ -165,11 +192,14 @@ pub(super) fn fix_children(
     owner: NodeId,
     kind: &BoxKind,
     style: &ComputedStyle,
-    children: Vec<LayoutBox>,
+    mut children: Vec<LayoutBox>,
 ) -> Vec<LayoutBox> {
     let Some(ctx) = ctx_of(kind, style) else {
         return children;
     };
+    if ctx == Ctx::Table {
+        hoist_header_footer(&mut children);
+    }
     let broken = children
         .iter()
         .any(|c| !matches!(c.kind, BoxKind::Skip) && !exempt(doc, c) && !accepted(ctx, c));

@@ -149,3 +149,14 @@ fn cell_text_indentation_does_not_widen_the_column() {
     assert!(p > 0.0, "{p}");
     assert_eq!(measured_cell_width(spaced), p);
 }
+
+// BUG-1537: CSS 2.1 §17.2 — the first thead renders first, the first tfoot last; later ones are
+// ordinary row groups in source order.
+#[test]
+fn first_header_and_footer_group_are_hoisted_to_the_table_ends() {
+    let html = r#"<table style="border-collapse:collapse"><tfoot id="f1"><tr><td style="height:10px">f1</td></tr></tfoot><tbody id="b1"><tr><td style="height:10px">b1</td></tr></tbody><thead id="h1"><tr><td style="height:10px">h1</td></tr></thead><thead id="h2"><tr><td style="height:10px">h2</td></tr></thead><tfoot id="f2"><tr><td style="height:10px">f2</td></tr></tfoot></table>"#;
+    let (doc, root) = lay(html);
+    let y = |id: &str| super::find_by_id_all(&root, &doc, id).unwrap_or_else(|| panic!("нет #{id}")).rect.y;
+    let (h1, b1, h2, f2, f1) = (y("h1"), y("b1"), y("h2"), y("f2"), y("f1"));
+    assert!(h1 < b1 && b1 < h2 && h2 < f2 && f2 < f1, "h1={h1} b1={b1} h2={h2} f2={f2} f1={f1}");
+}
