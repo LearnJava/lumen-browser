@@ -38,6 +38,22 @@ pub(super) fn target_height(init: &TableInit, natural: f32, viewport: Size) -> f
     target
 }
 
+/// Border-box высота ячеек строки `row`, если её задаёт `height` строки (CSS 2.1 §17.5.3:
+/// ячейки занимают всю высоту строки). `None` — у строки `height: auto`/процент.
+/// Ту же формулу применяет `finish_row`, когда выравнивает ячейки по строке.
+pub(super) fn row_cell_height(row: &LayoutBox, content_width: f32, viewport: Size) -> Option<f32> {
+    let s = &row.style;
+    let h = s.height.as_ref()?.resolve(s.font_size, None, viewport)?;
+    let pad = s.padding_top.resolve_or_zero(s.font_size, content_width, viewport)
+        + s.padding_bottom.resolve_or_zero(s.font_size, content_width, viewport)
+        + s.border_top_width
+        + s.border_bottom_width;
+    Some(match s.box_sizing {
+        BoxSizing::ContentBox => h.max(0.0),
+        BoxSizing::BorderBox => (h - pad).max(0.0),
+    })
+}
+
 /// Делит `extra` между строками таблицы `b` и сдвигает всё, что лежит ниже них.
 ///
 /// Доля строки пропорциональна её высоте; делят только строки с `height: auto`,
