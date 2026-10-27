@@ -436,6 +436,7 @@ fn filter_fn_name(f: &FilterFn) -> &'static str {
         FilterFn::Opacity(_) => "opacity",
         FilterFn::Saturate(_) => "saturate",
         FilterFn::Sepia(_) => "sepia",
+        FilterFn::DropShadow { .. } => "drop-shadow",
         FilterFn::Url(_) => "url",
     }
 }

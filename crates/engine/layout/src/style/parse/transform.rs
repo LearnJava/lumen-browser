@@ -7,7 +7,7 @@
 //! видимость тех items, которые продолжают звать `style.rs`, его тест-модули
 //! и соседние модули `style::parse`.
 
-use crate::style::{parse_length, FilterFn, FilterUrl, Length, TransformFn};
+use crate::style::{parse_color_legacy, parse_length, Color, FilterFn, FilterUrl, Length, TransformFn};
 
 /// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
 /// `100grad`. Без единицы — number-as-radians (для совместимости).
@@ -285,6 +285,57 @@ pub(in crate::style) fn parse_filter_list(s: &str) -> Vec<FilterFn> {
     out
 }
 
+/// Аргументы `drop-shadow(<color>? && <length>{2,3})`: цвет до или после длин, блюр
+/// неотрицательный. `currentcolor` и отсутствие цвета дают `None` (цвет бокса).
+fn parse_drop_shadow(args: &str) -> Option<FilterFn> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in args.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                buf.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            ws if ws.is_whitespace() && depth == 0 => {
+                if !buf.is_empty() {
+                    tokens.push(std::mem::take(&mut buf));
+                }
+            }
+            _ => buf.push(c),
+        }
+    }
+    if !buf.is_empty() {
+        tokens.push(buf);
+    }
+    let mut color: Option<Color> = None;
+    let mut seen_color = false;
+    let mut lengths: Vec<f32> = Vec::new();
+    for tok in &tokens {
+        if tok.eq_ignore_ascii_case("currentcolor") {
+            if std::mem::replace(&mut seen_color, true) {
+                return None;
+            }
+        } else if let Some(c) = parse_color_legacy(tok, false) {
+            if std::mem::replace(&mut seen_color, true) {
+                return None;
+            }
+            color = Some(c);
+        } else {
+            lengths.push(parse_length_px(tok)?);
+        }
+    }
+    match lengths.as_slice() {
+        [dx, dy] => Some(FilterFn::DropShadow { dx: *dx, dy: *dy, blur: 0.0, color }),
+        [dx, dy, b] if *b >= 0.0 => Some(FilterFn::DropShadow { dx: *dx, dy: *dy, blur: *b, color }),
+        _ => None,
+    }
+}
+
 fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
     match name {
         "blur" => parse_length_px(args).map(FilterFn::Blur),
@@ -296,6 +347,7 @@ fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
         "opacity" => parse_number_or_percent(args).map(FilterFn::Opacity),
         "saturate" => parse_number_or_percent(args).map(FilterFn::Saturate),
         "sepia" => parse_number_or_percent(args).map(FilterFn::Sepia),
+        "drop-shadow" => parse_drop_shadow(args),
         // Filter Effects L1 §3 — `url(#id)` на `<filter>` того же документа
         // (внешние `file.svg#id` — отдельная задача).
         "url" => {

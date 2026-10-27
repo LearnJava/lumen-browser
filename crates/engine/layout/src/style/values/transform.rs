@@ -257,9 +257,8 @@ pub enum TransformFn {
     Perspective(f32),
 }
 
-/// CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
-/// все 9 стандартных функций кроме `drop-shadow` (требует rendering
-/// pass — отложено).
+/// CSS Filter Effects L1 §3 — функции `filter`: 9 цветовых/блюр-функций,
+/// `drop-shadow()` и `url(#id)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FilterFn {
     /// `blur(<length>)` — радиус gaussian blur.
@@ -280,9 +279,40 @@ pub enum FilterFn {
     Saturate(f32),
     /// `sepia(<number-percentage>)`. 0.0 = unchanged, 1.0 = full sepia.
     Sepia(f32),
+    /// `drop-shadow(<color>? <length>{2,3})` — смещённая размытая копия альфа-маски
+    /// под элементом (Filter Effects L1 §«drop-shadow()»).
+    DropShadow {
+        /// Смещение по X в px.
+        dx: f32,
+        /// Смещение по Y в px.
+        dy: f32,
+        /// Третья длина — стандартное отклонение размытия (как у `blur()`), px.
+        blur: f32,
+        /// `None` — `currentcolor`: раскрывается при построении display list от `color` бокса.
+        color: Option<Color>,
+    },
     /// `url(#id)` — ссылка на SVG `<filter>` (Filter Effects L1 §3). Граф
     /// подставляет каскад (`box_tree/svg_filter.rs`), где виден `Document`.
     Url(FilterUrl),
+}
+
+impl FilterFn {
+    /// Функция исполняется на CPU-растре окном слоя (`cpu_raster::svg_filter_chain_window`):
+    /// `url(#id)` и `drop-shadow()` красят за пределами ink слоя, GPU-пасс блюра/матрицы
+    /// цвета их не покрывает. Группа с такой функцией не обрезается по bbox содержимого.
+    pub fn is_cpu_window_pass(&self) -> bool {
+        matches!(self, FilterFn::Url(_) | FilterFn::DropShadow { .. })
+    }
+
+    /// Копия функции для paint: `drop-shadow()` без цвета получает `current` (`color` бокса).
+    pub fn with_current_color(&self, current: Color) -> FilterFn {
+        match self {
+            FilterFn::DropShadow { dx, dy, blur, color: None } => {
+                FilterFn::DropShadow { dx: *dx, dy: *dy, blur: *blur, color: Some(current) }
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 /// `url(#id)` из `filter` и (после каскада) разобранный граф `<filter>`.

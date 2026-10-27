@@ -126,6 +126,38 @@ fn new_primitives_parse_with_defaults_and_taint() {
     assert!(matches!(k(7), FePrimitive::Lighting { light: None, .. }), "specularExponent вне 1..128");
 }
 
+/// `drop-shadow()`: цвет до или после длин, `currentcolor` — цвет бокса, мусор отбрасывается.
+#[test]
+fn css_drop_shadow_parses_and_resolves_current_color() {
+    let list = build(
+        r##"<div style="color:rgb(0,0,255);width:50px;height:50px;filter:drop-shadow(20px 10px rgb(0,255,0))"></div>
+        <div style="color:rgb(0,0,255);width:50px;height:50px;filter:drop-shadow(red 1px -2px 3px)"></div>
+        <div style="color:rgb(0,0,255);width:50px;height:50px;filter:drop-shadow(1px 2px 3px)"></div>
+        <div style="color:rgb(0,0,255);width:50px;height:50px;filter:drop-shadow(1px 2px -3px)"></div>
+        <div style="color:rgb(0,0,255);width:50px;height:50px;filter:drop-shadow(1px)"></div>"##,
+        "",
+    );
+    let shadows: Vec<FilterFn> = list
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::PushFilter { filters, .. } => filters.first().cloned(),
+            _ => None,
+        })
+        .collect();
+    let green = lumen_layout::Color { r: 0, g: 255, b: 0, a: 255 };
+    let red = lumen_layout::Color { r: 255, g: 0, b: 0, a: 255 };
+    let blue = lumen_layout::Color { r: 0, g: 0, b: 255, a: 255 };
+    assert_eq!(
+        shadows,
+        vec![
+            FilterFn::DropShadow { dx: 20.0, dy: 10.0, blur: 0.0, color: Some(green) },
+            FilterFn::DropShadow { dx: 1.0, dy: -2.0, blur: 3.0, color: Some(red) },
+            FilterFn::DropShadow { dx: 1.0, dy: 2.0, blur: 3.0, color: Some(blue) },
+        ],
+        "отрицательный блюр и одна длина невалидны: фильтр не создаётся"
+    );
+}
+
 #[cfg(feature = "cpu-render")]
 mod raster {
     use super::*;
@@ -272,5 +304,30 @@ mod raster {
         // правее x = 100 (за маской) фон остаётся белым, внутри маски блюр виден.
         assert_eq!(px(&img, 108, 40), [255, 255, 255]);
         assert!(px(&img, 90, 40)[1] < 250, "размытие внутри маски видно");
+    }
+
+    /// `drop-shadow()` рисует смещённую копию альфы под элементом; источник сверху.
+    #[test]
+    fn css_drop_shadow_paints_offset_copy_under_the_element() {
+        let img = render(
+            r##"<body style="margin:0"><div style="width:40px;height:40px;background:rgb(0,0,255);
+            filter:drop-shadow(60px 0 rgb(0,128,0))"></div></body>"##,
+        );
+        assert_eq!(px(&img, 20, 20), [0, 0, 255], "источник");
+        assert_eq!(px(&img, 80, 20), [0, 128, 0], "тень правее на 60px");
+        assert_eq!(px(&img, 55, 20), [255, 255, 255], "между ними пусто");
+    }
+
+    /// Блюр тени размывает её край, а непрозрачное ядро остаётся цветом тени.
+    #[test]
+    fn css_drop_shadow_blur_softens_the_shadow_edge() {
+        let img = render(
+            r##"<body style="margin:0"><div style="width:40px;height:40px;margin:20px;background:rgb(255,0,0);
+            filter:drop-shadow(80px 0 4px rgb(0,0,0))"></div></body>"##,
+        );
+        let core = px(&img, 120, 40);
+        let edge = px(&img, 100, 40);
+        assert!(core[0] < 40, "ядро тени тёмное: {core:?}");
+        assert!(edge[0] > core[0] && edge[0] < 255, "край размыт: {edge:?}");
     }
 }

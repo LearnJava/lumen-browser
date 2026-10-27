@@ -54,7 +54,8 @@ pub(super) fn push_shape_filter(b: &LayoutBox, out: &mut DisplayList) -> bool {
     if b.style.filter.is_empty() {
         return false;
     }
-    out.push(DisplayCommand::PushFilter { filters: b.style.filter.clone(), bounds: Some(b.rect) });
+    let filters = b.style.filter.iter().map(|f| f.with_current_color(b.style.color)).collect();
+    out.push(DisplayCommand::PushFilter { filters, bounds: Some(b.rect) });
     true
 }
 

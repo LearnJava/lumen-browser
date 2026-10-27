@@ -746,6 +746,8 @@ fn filter_bbox_inflate(filters: &[FilterFn]) -> f32 {
         .iter()
         .map(|f| match f {
             FilterFn::Blur(r) => (3.0 * r).ceil().min(32.0) + 2.0,
+            // Тень уходит за ink на смещение плюс охват блюра (`drop-shadow::reach`).
+            FilterFn::DropShadow { dx, dy, blur, .. } => dx.abs().max(dy.abs()) + (3.0 * blur).ceil() + 2.0,
             _ => 0.0,
         })
         .sum()
