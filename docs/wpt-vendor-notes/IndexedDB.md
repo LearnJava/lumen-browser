@@ -60,5 +60,28 @@ Third full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.m
 | I | [BUG-1709](../../bugs/BUG-1709-OPEN.md) |
 | P | [BUG-1710](../../bugs/BUG-1710-OPEN.md) |
 | F, H, J, K, L, M | `IDB-EVENTS` (P1, `ROADMAP.md`); K — также [BUG-914](../../bugs/BUG-914-OPEN.md) (дописана микротаск-находка) |
-| N | `WPT-IDB-RUNNER` (P2, `ROADMAP.md`) — чистка `data/idb` и `--processes 1` для `databases()`-тестов |
+| N | `WPT-IDB-RUNNER` (P2, сделано 2026-10-27, см. ниже) — serial lane и чистка `data/idb`; остаток — [BUG-1753](../../bugs/BUG-1753-OPEN.md) |
 | O, Q | не заведены: разнородный хвост по одному-двум id; брать после `IDB-EVENTS` повторной разведкой |
+
+## Раннер: serial lane и чистка `data/idb` (WPT-IDB-RUNNER, 2026-10-27)
+
+**Правило.** У всех тестов прогона общие origin-ы wptserve и одно хранилище IndexedDB — `<каталог бинаря>/data/idb` (`crates/shell/src/storage_stores.rs`; отдельного профиля у браузера нет). Поэтому `tests/wpt/run_corpus.py`:
+
+- перед прогоном очищает `data/idb` целиком (`--keep-idb` — не чистить);
+- тесты из `tests/wpt/serial_tests.txt` — те, что читают или стирают всё хранилище origin-а (`indexedDB.databases()`, `deleteAllDatabases` из `support-promises.js`, `cross-origin-helper-frame.html`), — выносит из общих шардов в юнит `serial lane`: после тяжёлой полосы, один, на 1 браузере, перед ним `data/idb` очищается ещё раз. Из знаменателя ничего не исключается; `--no-serial-lane` — по-старому.
+
+Сейчас в списке 9 id: `abort-in-initial-upgradeneeded.any{,.worker,.sharedworker,.serviceworker}.html`, `get-databases.any{,.worker}.html`, `idbfactory-origin-isolation.html`, `idbfactory-databases-opaque-origin.html`, `database-names-by-origin.html`. Новый тест с `databases()` — строкой в список (каждый `.any`-вариант отдельно).
+
+**Проверка** (`--prefixes IndexedDB --processes 7`, `dev-release` слота `p2-work` от 2026-10-27; данные — `.tmp/wpt-idbr{1,2,3}/` слота):
+
+| Прогон | Балл | % | harness OK | Сабтесты | Статусы |
+|---|---|---|---|---|---|
+| 1 | 98.33 | 12.09 | 569 | 585/3 805 | OK 569, TIMEOUT 203, ERROR 41 |
+| 2 | 97.33 | 11.97 | 560 | 584/3 697 | OK 560, TIMEOUT 207, ERROR 46 |
+| 3 | RUN3_SCORE |
+
+Между 1 и 2 балл сменил один тест — `open-request-queue.any.html` (OK 1/1 → TIMEOUT): у него собственное имя БД, хранилище соседей его не задевает, это нагрузочный флейк 7 браузеров. Остальные 12 смен статуса — без сабтестов (`structured-clone.any.html?*` — [BUG-1710](../../bugs/BUG-1710-OPEN.md), `*-metadata-revert`, `reading-autoincrement-*`). Тесты serial lane в трёх прогонах дают одинаковые статусы и сабтесты.
+
+**Что осталось от кластера N.** `abort-in-initial-upgradeneeded.any.html` в serial lane на пустом хранилище стабильно ERROR `expected 0 but got 1`: это уже не соседи (было 1…231), а собственная БД теста, которую шим не удаляет после отката первого upgrade, — [BUG-1753](../../bugs/BUG-1753-OPEN.md). Остальные тесты списка упираются в известные кластеры: D (`get-databases`, `idbfactory-origin-isolation`, `database-names-by-origin` — `Expected success event, but got upgradeneeded`), A/B/C (воркерные варианты), O (`idbfactory-databases-opaque-origin` — sandbox не бросает `SecurityError`). Остальные 11 id кластера N (`idb-partitioned-*`, `*-opaque-origin`, `structured-clone?81-…`, `idlharness`, `keypath`, `name-scopes`, `idbobjectstore_createIndex`, `worker-termination-aborts-upgrade`) к хранилищу не относятся и раннером не лечатся.
+
+**Рост хранилища за один прогон.** После прогона `IndexedDB` на очищенном `data/idb` — 172 МБ (прогон 1) и 707 МБ (прогон 2): персистентность пишет снимок всей БД origin-а (см. «Находки вне кластеров»), и объём WAL зависит от порядка тестов. Чистка перед прогоном и перед serial lane это гасит; само поведение — движок.

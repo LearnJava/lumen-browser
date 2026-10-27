@@ -210,7 +210,8 @@ def id_selected(test_id: str, prefixes: list, exclude_prefixes: list) -> bool:
 
 
 def plan_shards(manifest: dict, categories: list, prefixes: list = None,
-                exclude_prefixes: list = None, heavy: dict = None) -> list:
+                exclude_prefixes: list = None, heavy: dict = None,
+                serial: dict = None) -> list:
     """Split the selected categories into runnable shards.
 
     `prefixes` / `exclude_prefixes` (WPT-RUN-14) narrow the plan to a part of a
@@ -250,6 +251,9 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
     browser to several GB. They stay in their category — and in the scored
     denominator — but get their own shard `"<category> (heavy)"` (explicit id
     list, `plan_units` runs it last and alone, on `HEAVY_PROCESSES` browsers).
+    `serial` (WPT-IDB-RUNNER, same list format) does the same for the tests that
+    must not share the origin's storage: shard `"<category> (serial)"`, run on
+    `SERIAL_PROCESSES` browser.
     """
     by_category = {}
     automatable = set()
@@ -279,15 +283,25 @@ def plan_shards(manifest: dict, categories: list, prefixes: list = None,
                 shards.append(shard)
             else:
                 dropped += 1
-        if heavy:
-            # The category's known memory eaters leave their natural shards
-            # (`main` writes them into the exclude file) and ride in one extra
-            # shard per category instead — still planned, still scored.
-            lane = sorted(i for i in expand_heavy(heavy, ids) if i in automatable
+        # The category's known memory eaters (and the tests that need the
+        # origin's storage alone) leave their natural shards (`main` writes
+        # them into the exclude file) and ride in one extra shard per category
+        # and lane instead — still planned, still scored. A file on both lists
+        # goes serial: one browser is also the smaller memory risk.
+        serial_ids = expand_heavy(serial or {}, ids)
+        for listing, suffix, flag in ((heavy, HEAVY_SUFFIX, "heavy"),
+                                      (serial, SERIAL_SUFFIX, "serial")):
+            if not listing:
+                continue
+            members = expand_heavy(listing, ids)
+            if flag == "heavy":
+                members -= serial_ids
+            lane = sorted(i for i in members if i in automatable
                           and id_selected(i, prefixes or [], exclude_prefixes or []))
             if lane:
-                shard = _shard(f"{category}{HEAVY_SUFFIX}", None, lane, automatable, long_tests)
+                shard = _shard(f"{category}{suffix}", None, lane, automatable, long_tests)
                 shard["test_ids"] = lane
+                shard[flag] = True
                 shards.append(shard)
     if dropped:
         print(f"{dropped} shards hold only manual/visual tests — not planned "
@@ -720,6 +734,11 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
     # again. The mode matches an exception out of wptserve startup (a port from
     # the previous shard still bound), which the next attempt does not hit.
     for attempt in range(2):
+        if is_serial(shard):
+            # The serial lane runs alone (`plan_units`, `run_units_parallel`),
+            # so no other browser holds the store now — and whatever the run
+            # put there before is exactly what its tests must not see.
+            report_idb_clear(binary, f"  shard {shard['name']}")
         # Rotate whatever the previous attempt salvaged out of the way — see
         # RAW_PREV_SUFFIX. Only a non-empty stream is worth keeping, and only one
         # generation: the older it gets the less it can add over the newer runs.
@@ -786,6 +805,8 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
                 state["low_free_kills"] = low_free
     if is_heavy(shard):
         state["heavy"] = True
+    if is_serial(shard):
+        state["serial"] = True
     return state
 
 
@@ -893,12 +914,89 @@ def expand_heavy(heavy: dict, ids) -> set:
 
 
 def is_heavy(unit: dict) -> bool:
-    """True for the heavy lane's shards and for the unit that bundles them."""
-    return bool(unit.get("heavy")) or unit["name"].endswith(HEAVY_SUFFIX)
+    """True for the heavy lane's shards and for the unit that bundles them —
+    and for the serial lane's, which is a heavy lane of its own kind (out of
+    the ordinary shards, addressed by file, last, alone)."""
+    return (bool(unit.get("heavy")) or unit["name"].endswith(HEAVY_SUFFIX)
+            or is_serial(unit))
+
+
+# --- WPT-IDB-RUNNER: tests that need the origin's storage to themselves -------
+#
+# Every test of a run shares the few wptserve origins and one IndexedDB store,
+# `<binary dir>/data/idb` (the browser keeps its data next to the exe and has
+# no per-profile switch). `indexedDB.databases()` lists the whole origin, so
+# `abort-in-initial-upgradeneeded` saw 1...231 databases of the tests running
+# beside it instead of 0, and `get-databases` / `idbfactory-origin-isolation`
+# (`deleteAllDatabases`) delete their neighbours' databases mid-test. The store
+# also outlives the run: 63 MB after one IndexedDB run, 450 MB of WAL after two
+# (WPT-IDB-SCOUT, cluster N of `docs/wpt-vendor-notes/IndexedDB.md`). Two
+# remedies, neither of which touches the denominator:
+#
+# * the store is emptied once before a run starts any unit (`--keep-idb`: no);
+# * the tests of `tests/wpt/serial_tests.txt` leave their shards for the serial
+#   lane — after everything else, alone, on `SERIAL_PROCESSES` browser, and on
+#   a store emptied again right before it (`run_shard`).
+
+#: Tests that must not share the origin's storage: `<test file>  <reason>`.
+SERIAL_TESTS_PATH = os.path.join(TESTS_ROOT, "serial_tests.txt")
+#: Suffix of the per-category shard that carries a category's serial tests.
+SERIAL_SUFFIX = " (serial)"
+#: The one unit `plan_units` makes of all the per-category serial shards.
+SERIAL_UNIT_NAME = "serial lane"
+#: One browser: two would see each other's databases again.
+SERIAL_PROCESSES = 1
+
+
+def is_serial(unit: dict) -> bool:
+    """True for the serial lane's shards and for the unit that bundles them."""
+    return bool(unit.get("serial")) or unit["name"].endswith(SERIAL_SUFFIX)
+
+
+def idb_store_dir(binary: str) -> str:
+    """The binary's IndexedDB store (`crates/shell/src/storage_stores.rs`)."""
+    return os.path.join(os.path.dirname(os.path.abspath(binary)), "data", "idb")
+
+
+def clear_idb_store(binary: str) -> tuple:
+    """Delete everything in the binary's IndexedDB store.
+
+    `(bytes removed, paths left)`: a file a live browser still holds open
+    (Windows refuses to delete it) stays and is reported, it does not stop the
+    run. A store that does not exist is `(0, [])`."""
+    root = idb_store_dir(binary)
+    if not os.path.isdir(root):
+        return 0, []
+    removed, left = 0, []
+    for entry in os.listdir(root):
+        path = os.path.join(root, entry)
+        try:
+            size = sum(os.path.getsize(os.path.join(d, f)) for d, _, files in os.walk(path)
+                       for f in files) if os.path.isdir(path) else os.path.getsize(path)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            removed += size
+        except OSError:
+            left.append(path)
+    return removed, left
+
+
+def report_idb_clear(binary: str, when: str) -> None:
+    """`clear_idb_store` plus one line saying what it did."""
+    removed, left = clear_idb_store(binary)
+    if removed or left:
+        print(f"{when}: emptied {idb_store_dir(binary)} ({removed / 2**20:.1f} MB)"
+              + (f"; {len(left)} path(s) still held open: {left[:3]}" if left else ""),
+              flush=True)
 
 
 def unit_processes(unit: dict, default: int) -> int:
-    """`--processes` of one unit: the heavy lane never gets more than `HEAVY_PROCESSES`."""
+    """`--processes` of one unit: the heavy lane never gets more than
+    `HEAVY_PROCESSES`, the serial lane never more than `SERIAL_PROCESSES`."""
+    if is_serial(unit):
+        return min(default, SERIAL_PROCESSES)
     return min(default, HEAVY_PROCESSES) if is_heavy(unit) else default
 
 
@@ -964,7 +1062,8 @@ def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
     The heavy lane (WPT-RUN-18, `plan_shards(heavy=)`) is the exception: its
     per-category shards never join a regular batch — they become one unit,
     `HEAVY_UNIT_NAME`, last in the list, so the run's biggest memory eaters
-    meet each other and nothing else.
+    meet each other and nothing else. The serial lane (`plan_shards(serial=)`)
+    is a second such unit, `SERIAL_UNIT_NAME`, after the heavy one.
     """
     heavy = [s for s in shards if is_heavy(s)]
     shards = [s for s in shards if not is_heavy(s)]
@@ -1000,16 +1099,21 @@ def plan_units(shards: list, small: int, max_ids: int, out_dir: str) -> list:
             close()
         batch.append(shard)
     close()
-    if len(heavy) == 1:
-        units.append(heavy[0])
-    elif heavy:
-        units.append({
-            "name": HEAVY_UNIT_NAME, "prefix": None, "members": list(heavy), "heavy": True,
-            "ids": sum(s["ids"] for s in heavy),
-            "auto_ids": sum(s.get("auto_ids", s["ids"]) for s in heavy),
-            "long_ids": sum(s.get("long_ids", 0) for s in heavy),
-            "report_path": os.path.join(out_dir, BATCH_SUBDIR, "heavy.json"),
-        })
+    serial = [s for s in heavy if is_serial(s)]
+    heavy = [s for s in heavy if not is_serial(s)]
+    for lane, name, flags, report in ((heavy, HEAVY_UNIT_NAME, {"heavy": True}, "heavy.json"),
+                                      (serial, SERIAL_UNIT_NAME,
+                                       {"heavy": True, "serial": True}, "serial.json")):
+        if len(lane) == 1:
+            units.append(lane[0])
+        elif lane:
+            units.append({
+                "name": name, "prefix": None, "members": list(lane), **flags,
+                "ids": sum(s["ids"] for s in lane),
+                "auto_ids": sum(s.get("auto_ids", s["ids"]) for s in lane),
+                "long_ids": sum(s.get("long_ids", 0) for s in lane),
+                "report_path": os.path.join(out_dir, BATCH_SUBDIR, report),
+            })
     return units
 
 
@@ -1108,6 +1212,8 @@ def split_batch(batch: dict, state: dict, out_dir: str) -> list:
             member_state["batch_low_free_kills"] = state["low_free_kills"]
         if is_heavy(member):
             member_state["heavy"] = True
+        if is_serial(member):
+            member_state["serial"] = True
         states.append(member_state)
     return states
 
@@ -1220,8 +1326,9 @@ def run_units_parallel(units: list, binary: str, args, exclude_files, finish,
         return shard_timeout(unit, args.shard_timeout_base, args.shard_timeout_per_id,
                              unit_processes(unit, args.processes))
 
-    # Longest budget first; the heavy lane after everything else.
-    queue = sorted(units, key=lambda unit: (is_heavy(unit), -budget_of(unit)))
+    # Longest budget first; the heavy lane after everything else, the serial
+    # lane after the heavy one.
+    queue = sorted(units, key=lambda unit: (is_heavy(unit), is_serial(unit), -budget_of(unit)))
     total = len(queue)
     mutex = threading.Lock()
     running = [0]
@@ -1754,7 +1861,7 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None,
 
 def attribute_shards(manifest: dict, per_test: list, shard_states: list,
                      prefixes: list = None, exclude_prefixes: list = None,
-                     heavy: dict = None) -> list:
+                     heavy: dict = None, serial: dict = None) -> list:
     """`per_test` rows with the shard that carried each id filled in.
 
     The attribution is `score_audit.shard_index`'s — the one rule every other
@@ -1769,7 +1876,8 @@ def attribute_shards(manifest: dict, per_test: list, shard_states: list,
     owner, _planned = score_audit.shard_index(
         manifest, {"shards": shard_states, "prefixes": prefixes or [],
                    "exclude_prefixes": exclude_prefixes or [],
-                   "heavy_tests": sorted(heavy or {})})
+                   "heavy_tests": sorted(heavy or {}),
+                   "serial_tests": sorted(serial or {})})
     return [row[:6] + (owner(row[0]) or "",) for row in per_test]
 
 
@@ -2005,8 +2113,56 @@ def _selftest_heavy() -> list:
 
         checks.append(("lanes: the heavy lane starts only when every other lane is idle",
                        _selftest_heavy_order(units, tmp)))
+        checks.extend(_selftest_serial(manifest, heavy, tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    return checks
+
+
+def _selftest_serial(manifest: dict, heavy: dict, tmp: str) -> list:
+    """The serial lane (WPT-IDB-RUNNER) on the `_selftest_heavy` manifest:
+    `/html/syntax/ok.html` and `/dom/d.html` are serial, `/ws/big.html` is on
+    both lists. Plus `clear_idb_store` on a fake binary directory."""
+    checks = []
+    serial = {"/html/syntax/ok.html": "databases()", "/dom/d.html": "databases()",
+              "/ws/big.html": "both lists"}
+    with contextlib.redirect_stderr(io.StringIO()):
+        shards = plan_shards(manifest, ["html", "ws", "dom"], heavy=heavy, serial=serial)
+    names = sorted(s["name"] for s in shards if is_heavy(s))
+    checks.append(("serial: one serial shard per category, a file on both lists goes serial",
+                   names == ["dom (serial)", "html (heavy)", "html (serial)", "ws (serial)"]))
+    by_name = {s["name"]: s for s in shards}
+    checks.append(("serial: the ordinary shards skip the serial files",
+                   heavy_exclusions(shards) == ["/dom/d.html", "/html/syntax/ok.html",
+                                                "/html/syntax/w.html", "/ws/big.html"]))
+    checks.append(("serial: the serial shard is an explicit id list in the denominator",
+                   by_name["dom (serial)"]["test_ids"] == ["/dom/d.html"]
+                   and by_name["dom (serial)"]["auto_ids"] == 1))
+    units = plan_units(shards, small=150, max_ids=600, out_dir=tmp)
+    checks.append(("serial: heavy lane, then serial lane, both after everything else",
+                   [u["name"] for u in units[-2:]] == ["html (heavy)", SERIAL_UNIT_NAME]
+                   and not any(is_heavy(u) for u in units[:-2])))
+    checks.append(("serial: the serial lane runs on one browser",
+                   unit_processes(units[-1], 14) == SERIAL_PROCESSES == 1
+                   and unit_processes(by_name["dom (serial)"], 14) == 1
+                   and unit_processes(units[-2], 14) == HEAVY_PROCESSES))
+    checks.append(("serial: the lane is addressed by file",
+                   sorted(shard_targets(units[-1])) == ["/dom/d.html", "/html/syntax/ok.html",
+                                                        "/ws/big.html"]))
+
+    binary = os.path.join(tmp, "bin", "lumen.exe")
+    store = idb_store_dir(binary)
+    checks.append(("idb: a missing store is nothing to clear", clear_idb_store(binary) == (0, [])))
+    os.makedirs(os.path.join(store, "origin"))
+    with open(os.path.join(store, "origin", "db.sqlite"), "wb") as fh:
+        fh.write(b"x" * 100)
+    with open(os.path.join(store, "top.wal"), "wb") as fh:
+        fh.write(b"y" * 20)
+    with open(os.path.join(os.path.dirname(store), "keep.txt"), "w", encoding="utf-8") as fh:
+        fh.write("other data")
+    checks.append(("idb: the store is emptied, the rest of data/ stays",
+                   clear_idb_store(binary) == (120, []) and os.listdir(store) == []
+                   and os.path.isfile(os.path.join(os.path.dirname(store), "keep.txt"))))
     return checks
 
 
@@ -2422,6 +2578,15 @@ def main() -> int:
                              f"{HEAVY_PROCESSES} browsers (WPT-RUN-18; the old behaviour)")
     parser.add_argument("--heavy-tests", default=HEAVY_TESTS_PATH,
                         help="the heavy-test list (default: tests/wpt/heavy_tests.txt)")
+    parser.add_argument("--no-serial-lane", action="store_true",
+                        help="keep the tests of tests/wpt/serial_tests.txt in their ordinary "
+                             "shards instead of running them last, alone, on one browser on an "
+                             "emptied IndexedDB store (WPT-IDB-RUNNER; the old behaviour)")
+    parser.add_argument("--serial-tests", default=SERIAL_TESTS_PATH,
+                        help="the serial-test list (default: tests/wpt/serial_tests.txt)")
+    parser.add_argument("--keep-idb", action="store_true",
+                        help="do not empty <binary dir>/data/idb before the run (the serial "
+                             "lane still empties it before its own tests)")
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=None,
                         help="flat per-id time budget, seconds; default is to derive the "
@@ -2491,13 +2656,15 @@ def main() -> int:
     manifest = load_manifest()
     prefixes = parse_prefixes(args.prefixes)
     exclude_prefixes = parse_prefixes(args.exclude_prefixes)
-    heavy, memory = {}, {}
-    if not (args.no_heavy_lane or args.aggregate_only):
-        try:
+    heavy, serial, memory = {}, {}, {}
+    try:
+        if not (args.no_heavy_lane or args.aggregate_only):
             heavy = load_heavy_tests(args.heavy_tests)
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 1
+        if not (args.no_serial_lane or args.aggregate_only):
+            serial = load_heavy_tests(args.serial_tests)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     if os.path.isfile(state_path):
         with open(state_path, encoding="utf-8") as fh:
             recorded = json.load(fh)
@@ -2506,6 +2673,12 @@ def main() -> int:
                   f"heavy-lane test file(s); this command has {len(heavy)}. Shards of the "
                   f"same name would cover different ids - use a separate --out-dir, or "
                   f"--no-heavy-lane / --heavy-tests to match the recorded run", file=sys.stderr)
+            return 1
+        if args.resume and sorted(recorded.get("serial_tests") or []) != sorted(serial):
+            print(f"{state_path} was written with {len(recorded.get('serial_tests') or [])} "
+                  f"serial-lane test file(s); this command has {len(serial)}. Shards of the "
+                  f"same name would cover different ids - use a separate --out-dir, or "
+                  f"--no-serial-lane / --serial-tests to match the recorded run", file=sys.stderr)
             return 1
         recorded_filter = (recorded.get("prefixes") or [], recorded.get("exclude_prefixes") or [])
         if args.aggregate_only and not (prefixes or exclude_prefixes):
@@ -2529,6 +2702,7 @@ def main() -> int:
         checkpoint = json.load(open(state_path, encoding="utf-8")) if os.path.isfile(state_path) else {}
         shard_states = checkpoint.get("shards", [])
         heavy = {path: "" for path in checkpoint.get("heavy_tests") or []}
+        serial = {path: "" for path in checkpoint.get("serial_tests") or []}
         if checkpoint.get("processes"):
             args.processes = checkpoint["processes"]
         # Same reason as the commit: with no checkpoint there is no build to
@@ -2567,16 +2741,28 @@ def main() -> int:
             print("pick a selection: --all, --pilot or --categories", file=sys.stderr)
             return 1
 
-        shards = plan_shards(manifest, categories, prefixes, exclude_prefixes, heavy or None)
-        print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids "
-              f"({sum(s['auto_ids'] for s in shards)} automatable — the scored denominator), "
+        shards = plan_shards(manifest, categories, prefixes, exclude_prefixes, heavy or None,
+                             serial or None)
+        # A heavy/serial shard re-lists ids its ordinary shard still counts
+        # (the exclude file is what keeps them from running twice).
+        counted = [s for s in shards if not is_heavy(s)]
+        print(f"{len(shards)} shards, {sum(s['ids'] for s in counted)} manifest ids "
+              f"({sum(s['auto_ids'] for s in counted)} automatable — the scored denominator), "
               f"--processes={args.processes}", flush=True)
         heavy_shards = [s for s in shards if is_heavy(s)]
-        if heavy_shards:
-            print(f"heavy lane: {sum(s['auto_ids'] for s in heavy_shards)} ids of "
-                  f"{len(heavy_exclusions(heavy_shards))} known memory-eating file(s) leave "
+        memory_shards = [s for s in heavy_shards if not is_serial(s)]
+        serial_shards = [s for s in heavy_shards if is_serial(s)]
+        if memory_shards:
+            print(f"heavy lane: {sum(s['auto_ids'] for s in memory_shards)} ids of "
+                  f"{len(heavy_exclusions(memory_shards))} known memory-eating file(s) leave "
                   f"their shards and run last, alone, on {HEAVY_PROCESSES} browsers "
                   f"({args.heavy_tests}; still in the denominator)", flush=True)
+        if serial_shards:
+            print(f"serial lane: {sum(s['auto_ids'] for s in serial_shards)} ids of "
+                  f"{len(heavy_exclusions(serial_shards))} storage-sensitive file(s) leave "
+                  f"their shards and run last, alone, on {SERIAL_PROCESSES} browser on an "
+                  f"emptied IndexedDB store ({args.serial_tests}; still in the denominator)",
+                  flush=True)
 
         # Two exclude files (`pick_exclude`): the ordinary shards leave the heavy
         # tests to the heavy lane; the heavy lane itself only skips what
@@ -2632,7 +2818,8 @@ def main() -> int:
             with open(state_path, "w", encoding="utf-8") as fh:
                 json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
                            "prefixes": prefixes, "exclude_prefixes": exclude_prefixes,
-                           "heavy_tests": sorted(heavy), "processes": args.processes,
+                           "heavy_tests": sorted(heavy), "serial_tests": sorted(serial),
+                           "processes": args.processes,
                            "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
 
         def finish(unit, state):
@@ -2642,6 +2829,11 @@ def main() -> int:
             write_checkpoint()
             return states
 
+        if units and not args.keep_idb:
+            # What earlier runs left in the store slows every IndexedDB open
+            # and shows up in `databases()` (WPT-IDB-RUNNER); a WPT binary's
+            # store holds nothing worth keeping.
+            report_idb_clear(binary, "before the run")
         rss_cap = browser_rss_cap.BrowserRssCap(args.max_browser_gb, args.out_dir,
                                                 min_free_gb=args.kill_free_gb)
         if rss_cap.start():
@@ -2756,6 +2948,7 @@ def main() -> int:
             "min_free_gb": getattr(args, "min_free_gb", 0),
             "kill_free_gb": getattr(args, "kill_free_gb", 0),
             "heavy_tests": sorted(heavy),
+            "serial_tests": sorted(serial),
             "memory": memory,
             "scope": sorted(scope) if scope else "full-corpus",
             "prefixes": prefixes,
@@ -2768,7 +2961,7 @@ def main() -> int:
         # are deleted after the run (WPT-RUN-17).
         ids_path = ids_file.ids_path_for(args.run_json)
         size = ids_file.write(ids_path, attribute_shards(manifest, per_test, shard_states,
-                                                         prefixes, exclude_prefixes, heavy))
+                                                         prefixes, exclude_prefixes, heavy, serial))
         snapshot["ids_file"] = os.path.basename(ids_path)
         with open(args.run_json, "w", encoding="utf-8") as fh:
             json.dump(snapshot, fh, indent=2, sort_keys=True)

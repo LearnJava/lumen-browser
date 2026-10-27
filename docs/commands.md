@@ -82,7 +82,10 @@ python tests/wpt/run_diff.py docs/wpt/runs/A.json docs/wpt/runs/B.json --prefix 
 # below it the biggest lumen of the run is killed (its test -> CRASH, rss-cap-kills.jsonl
 # reason `low-free`). The tests listed in tests/wpt/heavy_tests.txt run last in one
 # `heavy lane` on 2 browsers (--no-heavy-lane folds them back, --heavy-tests FILE swaps the
-# list). mem-log.tsv in --out-dir has free RAM, swap and browser RSS every 10 s. Recipe and
+# list). tests/wpt/serial_tests.txt (indexedDB.databases() readers) runs after it on 1 browser
+# on an emptied <binary dir>/data/idb; the store is also emptied before every run
+# (--keep-idb: no, --no-serial-lane / --serial-tests FILE as above).
+# mem-log.tsv in --out-dir has free RAM, swap and browser RSS every 10 s. Recipe and
 # before/after numbers — docs/wpt/pass-rate.md §«Память полного прогона».
 python tests/wpt/run_corpus.py --all --parallel-shards 3 --processes auto --shared-queue \
     --batch-small 150 --max-browser-gb 4 --min-free-gb 6 --kill-free-gb 2
