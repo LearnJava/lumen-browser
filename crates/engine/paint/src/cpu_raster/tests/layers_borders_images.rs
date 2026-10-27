@@ -753,6 +753,8 @@ fn backdrop_filter_grayscale_filters_backdrop_in_bounds() {
         DisplayCommand::PushBackdropFilter {
             filters: vec![FilterFn::Grayscale(1.0)],
             bounds: rect(0.0, 0.0, 32.0, 32.0),
+            radii: [0.0; 4],
+            wrappers: 0,
         },
         DisplayCommand::PopBackdropFilter,
     ];
@@ -776,12 +778,109 @@ fn backdrop_filter_invert_filters_backdrop_in_bounds() {
         DisplayCommand::PushBackdropFilter {
             filters: vec![FilterFn::Invert(1.0)],
             bounds: rect(0.0, 0.0, 32.0, 32.0),
+            radii: [0.0; 4],
+            wrappers: 0,
         },
         DisplayCommand::PopBackdropFilter,
     ];
     let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
     assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "inside bounds: invert(black) = white");
     assert_eq!(px(&img, 50, 50), (0, 0, 0, 255), "outside bounds backdrop stays black");
+}
+
+/// BUG-1539: чёрный фон 64×64 и `invert(1)` над рамкой `bounds`; `pre` — собственные группы
+/// элемента, `wrappers` — их число.
+fn backdrop_over_black(
+    pre: Vec<DisplayCommand>,
+    post: Vec<DisplayCommand>,
+    bounds: Rect,
+    radii: [f32; 4],
+) -> Image {
+    let black = Color { r: 0, g: 0, b: 0, a: 255 };
+    let wrappers = pre.len() as u8;
+    let mut cmds = vec![DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: black }];
+    cmds.extend(pre);
+    cmds.push(DisplayCommand::PushBackdropFilter {
+        filters: vec![FilterFn::Invert(1.0)],
+        bounds,
+        radii,
+        wrappers,
+    });
+    cmds.push(DisplayCommand::PopBackdropFilter);
+    cmds.extend(post);
+    rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize")
+}
+
+/// BUG-1539: `opacity < 1` на самом элементе — отфильтрованный фон входит в его группу и
+/// смешивается с неотфильтрованным пополам, а не пропадает.
+#[test]
+fn backdrop_filter_under_own_opacity_blends_half() {
+    let img = backdrop_over_black(
+        vec![DisplayCommand::PushOpacity { alpha: 0.5, bounds: None }],
+        vec![DisplayCommand::PopOpacity],
+        rect(0.0, 0.0, 32.0, 32.0),
+        [0.0; 4],
+    );
+    let (r, g, b, _) = px(&img, 10, 10);
+    assert!((120..=135).contains(&r) && r == g && g == b, "invert(black) at .5 ≈ grey 127, got {r},{g},{b}");
+    assert_eq!(px(&img, 50, 50), (0, 0, 0, 255), "outside bounds stays black");
+}
+
+/// BUG-1539: `transform` на элементе — область фильтра переезжает вместе с рамкой.
+#[test]
+fn backdrop_filter_follows_own_transform() {
+    let img = backdrop_over_black(
+        vec![DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(20.0, 20.0) }],
+        vec![DisplayCommand::PopTransform],
+        rect(0.0, 0.0, 32.0, 32.0),
+        [0.0; 4],
+    );
+    assert_eq!(px(&img, 40, 40), (255, 255, 255, 255), "inside the translated box: inverted");
+    assert_eq!(px(&img, 10, 10), (0, 0, 0, 255), "the untransformed box position stays black");
+    assert_eq!(px(&img, 60, 60), (0, 0, 0, 255), "past the translated box stays black");
+}
+
+/// BUG-1539: `border-radius` скругляет область фильтра — за углом фон остаётся исходным.
+#[test]
+fn backdrop_filter_is_clipped_by_border_radius() {
+    let img = backdrop_over_black(vec![], vec![], rect(0.0, 0.0, 40.0, 40.0), [20.0; 4]);
+    assert_eq!(px(&img, 20, 20), (255, 255, 255, 255), "centre inverted");
+    assert_eq!(px(&img, 1, 1), (0, 0, 0, 255), "outside the rounded corner untouched");
+}
+
+/// BUG-1539: `clip-path` на элементе обрезает отфильтрованный фон по форме.
+#[test]
+fn backdrop_filter_is_clipped_by_own_clip_path() {
+    let img = backdrop_over_black(
+        vec![DisplayCommand::PushClipPath {
+            shape: ResolvedClipShape::Circle { cx: 16.0, cy: 16.0, r: 8.0 },
+        }],
+        vec![DisplayCommand::PopClip],
+        rect(0.0, 0.0, 32.0, 32.0),
+        [0.0; 4],
+    );
+    assert_eq!(px(&img, 16, 16), (255, 255, 255, 255), "inside the circle: inverted");
+    assert_eq!(px(&img, 2, 2), (0, 0, 0, 255), "outside the circle: untouched");
+}
+
+/// BUG-1539: `isolation: isolate` предка (`PushOpacity { 1 }`) не корень фона — фильтр видит фон под ним.
+#[test]
+fn backdrop_filter_sees_through_isolate_ancestor() {
+    let black = Color { r: 0, g: 0, b: 0, a: 255 };
+    let cmds = vec![
+        DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: black },
+        DisplayCommand::PushOpacity { alpha: 1.0, bounds: None },
+        DisplayCommand::PushBackdropFilter {
+            filters: vec![FilterFn::Invert(1.0)],
+            bounds: rect(0.0, 0.0, 32.0, 32.0),
+            radii: [0.0; 4],
+            wrappers: 0,
+        },
+        DisplayCommand::PopBackdropFilter,
+        DisplayCommand::PopOpacity,
+    ];
+    let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+    assert_eq!(px(&img, 10, 10), (255, 255, 255, 255));
 }
 
 /// `backdrop-filter: blur` softens a sharp backdrop edge. With a black/white
@@ -795,6 +894,8 @@ fn backdrop_filter_blur_softens_backdrop_edge() {
         DisplayCommand::PushBackdropFilter {
             filters: vec![FilterFn::Blur(4.0)],
             bounds: rect(0.0, 0.0, 64.0, 64.0),
+            radii: [0.0; 4],
+            wrappers: 0,
         },
         DisplayCommand::PopBackdropFilter,
     ];

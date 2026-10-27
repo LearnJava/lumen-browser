@@ -4892,7 +4892,7 @@ impl FemtovgBackend {
             // apply filter chain (GPU blur + CPU colour-matrix) → redirect element
             // draws to an offscreen layer. PopBackdropFilter blits the filtered backdrop
             // at element bounds (Copy op) then composites element content on top.
-            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+            DisplayCommand::PushBackdropFilter { filters, bounds, .. } => {
                 let prev_rt = self.current_rt();
                 // BUG-272 срез 10: the element's true on-screen device position,
                 // captured from the CURRENT (ambient) transform before anything

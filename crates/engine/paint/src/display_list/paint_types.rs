@@ -147,6 +147,13 @@ impl CornerRadii {
             && self.tl_y == 0.0 && self.tr_y == 0.0 && self.br_y == 0.0 && self.bl_y == 0.0
     }
 
+    /// Горизонтальные радиусы `[tl, tr, br, bl]` — форма `PushClipRoundedRect`/
+    /// `PushBackdropFilter`, где углы круглые.
+    #[must_use]
+    pub fn corners_h(&self) -> [f32; 4] {
+        [self.tl, self.tr, self.br, self.bl]
+    }
+
     fn resolve_radius(len: &Length, basis: f32) -> f32 {
         match len {
             Length::Px(v) => *v,
