@@ -57,6 +57,33 @@ _LUMEN_TESTHARNESSREPORT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "..", "..", "..", "tests", "wpt", "resources", "testharnessreport.js"))
 
+#: Where every wptserve name points (`LUMEN_RESOLVE`, WPT-HOST-WPT) and the
+#: address the servers bind: one IPv4 loopback for both, so neither the
+#: browser nor this process needs the OS resolver for a test hostname.
+_SERVER_IP = "127.0.0.1"
+
+
+def lumen_resolve_spec(config, ip=_SERVER_IP):
+    """`LUMEN_RESOLVE` value (`crates/network/src/dns.rs::RESOLVE_ENV`) for the
+    browser child: every name wptserve builds — `browser_host` and the
+    alternate host, each with its 30 subdomains — mapped to `ip`.
+
+    Read off `config.domains_set` (the same set `wpt make-hosts-file` writes),
+    not a copied list, so a change to `serve.py::_subdomains` or to
+    `browser_host` cannot drift from it. `not_domains_set`
+    (`nonexistent.*`) stays out on purpose: those names exist to *fail* to
+    resolve, and `.test` is a reserved TLD the OS resolver answers NXDOMAIN
+    for. The IDN subdomains already come punycoded from `ConfigBuilder`
+    (`_get_domains`); the engine compares ASCII-only, so a non-ASCII name
+    here is a config bug, not something to pass through.
+    """
+    names = sorted(config.domains_set)
+    non_ascii = [name for name in names if not name.isascii()]
+    if non_ascii:
+        raise ValueError(f"LUMEN_RESOLVE needs punycoded names, got {non_ascii}")
+    return ",".join(f"{name}={ip}" for name in names)
+
+
 #: Env var: `off` launches browsers without `_SPAWN_LOCK` (the old behaviour),
 #: for an A/B. Anything else (or unset) serializes the launch.
 SPAWN_LOCK_ENV = "LUMEN_WPT_SPAWN_LOCK"
@@ -136,6 +163,7 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
         # per screenshot (`LumenPrintRefTestExecutor`).
         "ipc_mode": test_type in ("reftest", "print-reftest"),
         "ca_cert_path": kwargs.get("ca_cert_path"),
+        "resolve_spec": lumen_resolve_spec(config),
         "forced_colors": os.environ.get("LUMEN_FORCED_COLORS") == "1",
         # PERF-10: `LUMEN_NO_PAINT=1` -> `--no-paint` (DOM+JS+layout, no GPU
         # backend). Same parent-env -> CLI-arg trick as above. Only for
@@ -157,35 +185,27 @@ def executor_kwargs(logger, test_type, test_environment, run_info_data, **kwargs
 
 
 def env_options():
-    # `wptserve`'s own default (`browser_host = "web-platform.test"`,
-    # `serve.py`) requires that hostname (and a long list of
-    # `*.web-platform.test` subdomains) resolve via the OS resolver — normally
-    # satisfied by adding entries to `/etc/hosts` (`wpt make-hosts-file`), a
-    # machine-wide setup step this project's "no live network / fully
-    # offline" rule (P2-wpt task doc) rules out relying on.
+    # `browser_host: "web-platform.test"` — wptserve's own default, back
+    # since WPT-HOST-WPT (user decision 2026-10-27, path 3 of WPT-RUN-10;
+    # measurement in `docs/wpt-vendor-notes/fetch.md` §WPT-HOST-RESOLVE).
+    # Upstream resolves it and the whole subdomain family through a hosts
+    # file (`wpt make-hosts-file`) — a machine-wide edit this runner may not
+    # make. Instead the browser child gets `LUMEN_RESOLVE` with every name of
+    # both families (`lumen_resolve_spec`, `LumenBrowser.__init__`), checked
+    # by the engine before any resolver.
     #
-    # `browser_host: "localhost"` (WPT-RUN-10, ROADMAP.md; user decision
-    # 2026-09-04, path 2 of 3 in `docs/tasks/p2-wpt-runner-throughput.md`):
-    # `wptserve` builds its subdomain family (`www`, `www1`, `www2`, two IDN
-    # labels) as a **prefix** on `browser_host`, so a literal IP (the prior
-    # value, `127.0.0.1`) turned every subdomain into an unresolvable
-    # `www1.127.0.0.1` — 1 892 automatable ids named only their own
-    # subdomain and got 0 % score, 69.4 % TIMEOUT (`tests/wpt/host_audit.py`).
-    # `*.localhost` resolves under RFC 6761 (glibc NSS, `systemd-resolved`
-    # included) with no `/etc/hosts` edit, so the subdomain family comes back
-    # to life without touching the machine. Two known gaps this does NOT
-    # close, deliberately left for a future task: the alternate-domain tests
-    # (`not-web-platform.test`, 305 ids) still get nothing, since that name
-    # isn't a suffix of `browser_host` under any choice here; and the
-    # Windows half of the corpus still runs on the old `127.0.0.1` value
-    # (Windows' `*.localhost` resolution is not validated here), so the two
-    # machines' pass-rates stay non-comparable on this slice until Windows
-    # picks up the same change. `*.localhost` resolves to `::1` first on
-    # this glibc/NSS setup, but `wptserve` only binds an IPv4 socket — this
-    # is not a dead end: `lumen_network`'s connect path already tries every
-    # resolved address in order (`lib.rs`, direct-connect loop) and falls
-    # through to the `127.0.0.1` address if `::1` refuses, so no engine
-    # change was needed here.
+    # History: `127.0.0.1` turned every subdomain into an unresolvable
+    # `www1.127.0.0.1`; `localhost` (WPT-RUN-10, 2026-09-04) revived the
+    # subdomains through RFC 6761 but left `not-web-platform.test` (1 129
+    # ids) dead, and loopback names broke the tests themselves:
+    # `www.localhost` is a different *site* from `localhost` (PSL `*` rule)
+    # and `http://localhost` is potentially trustworthy, so 661 `fetch/
+    # metadata` subtests expected what no browser can give there.
+    #
+    # `server_host`: wptserve binds and self-checks on `server_host`, which
+    # defaults to `browser_host` — resolved by *this* process's OS resolver,
+    # which knows nothing about `web-platform.test`. Pin it to the loopback
+    # address `LUMEN_RESOLVE` points at.
     #
     # `testharnessreport`: override the report script `wptserve` serves at
     # `/resources/testharnessreport.js`. `TestEnvironment.get_routes`
@@ -211,7 +231,8 @@ def env_options():
     # script restores the `__lumen_wpt_results` contract the executor
     # expects.
     return {
-        "browser_host": "localhost",
+        "browser_host": "web-platform.test",
+        "server_host": _SERVER_IP,
         "bind_address": True,
         "testharnessreport": [_LUMEN_TESTHARNESSREPORT],
     }
@@ -269,13 +290,19 @@ class LumenBrowser(WebDriverBrowser):
     speaks BiDi itself, there is no separate driver process."""
 
     def __init__(self, logger, binary, ipc_mode=False, ca_cert_path=None,
-                 forced_colors=False, no_paint=False, **kwargs):
+                 resolve_spec=None, forced_colors=False, no_paint=False, **kwargs):
         env = dict(kwargs.pop("env", None) or {})
         if ca_cert_path:
             # BUG-785: the browser has no CLI flag for this, only an env var
             # (single point of trust-root construction — see
             # `crates/network/src/tls/mod.rs`).
             env["LUMEN_EXTRA_CA_CERT"] = ca_cert_path
+        if resolve_spec:
+            # WPT-HOST-WPT: `browser_host: web-platform.test` and its
+            # alternate host resolve only through this map
+            # (`lumen_resolve_spec`) — same env-var-only channel as above,
+            # checked before any resolver in `crates/network/src/dns.rs`.
+            env["LUMEN_RESOLVE"] = resolve_spec
         # BUG-800: the persisted ad-block ("shields") default is on, same as
         # a real user session. EasyList false-positives on WPT's own
         # test-infra request shapes (e.g. `common/security-features/
