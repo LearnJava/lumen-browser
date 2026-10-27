@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-27",
  "counts": {
-  "open": 293,
-  "fixed": 1367,
+  "open": 298,
+  "fixed": 1368,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1663,
+ "total_bugs": 1669,
  "phases": [
   {
    "id": "P0",
@@ -1132,9 +1132,21 @@
     {
      "id": "SVG-FILTER-9",
      "title": "SVG-FILTER-9: GPU-шейдеры, bbox, inline-эффекты, CSS-свойства, интерфейсы",
+     "status": "done",
+     "size": "XL",
+     "note": "СРЕЗ 2 ВЛИТ 2026-10-27 (ветка p1-svg-filter-9): `filter`/`opacity` на `display:inline` (п. 5), остаток — SVG-FILTER-10. Остаток SVG-FILTER-8 (срез 1 — окно цепочки, отражение CTM, `feTurbulence`, наследование `color-interpolation-filters`, длины `<svg width>`; до него SVG-FILTER-7 — CSS `drop-shadow()`). (1) **GPU-путь, остаток:** wgpu и femtovg исполняют граф чтением слоя на CPU (SVG-FILTER-5), цена — синхронный readback на кадр; перенос примитивов на шейдеры, `feImage` в окне (карта картинок рендерера пуста), вращение/скос трансформа и скруглённый клип композита. (2) **`feImage`, остаток:** `BackgroundImage`/`FillPaint`/`StrokePaint`, наследование шаблона `<filter href>`, стиль цели наследуется от корня, а не от родителя в документе, сдвиг в начало подобласти не учитывает масштаб поворота/скоса CTM, `feImage-orientation.tentative` (EXIF). (3) **Проценты `userSpaceOnUse` у `<svg>` без числовых `width`/`height`** берут окно документа, а должны — размер, который `<svg>` получил в раскладке (`SvgLenCtx::own_svg_size`); `svg-filter-primitive-units-user-space` расходится на 400 px. (4) **bbox HTML-бокса** = объединение border box потомков с их transform (`filter-region-transformed-child-001`, `-composited-`), фильтр у пустого inline/`<g>`/`<foreignObject visibility:hidden>` нулевого размера (`empty-element-with-filter-003`, `svg-empty-*`), поворот/скос CTM. (5) **`filter`/`opacity` на `display:inline`:** срез 2 (2026-10-27) — `InlineSegment/InlineFrag::effect_scopes`, `emit_line_with_effects` оборачивает фон, рамку и текст фрагментов элемента (по строке) в `PushOpacity`/`PushFilter`; остаток — `effect-reference-on-span` расходится на 1 px (ряд `InlineBlockRow` с `<svg width=0>` ставит ран на 9, а не на 8), группа режется по ширине, которую намерила раскладка (`filter-external-*` / `blur-text` с `data:`-URL — внешний ресурс, п. 6), `mix-blend-mode`/`transform`/`clip-path` на inline, filter на inline, разорванном блоком, и BUG-1543 (блок-в-инлайне). (6) **CSS:** `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` в `ComputedStyle` + CSSOM + правила таблицы стилей (сейчас только атрибут и inline `style`), заражение цепочки `currentColor` для `tainting-css-dropshadow-*` ([BUG-1726](bugs/BUG-1726-OPEN.md)), внешний ресурс `filter-external-*`, `svg-image-root-filter` (фильтр на корне SVG-картинки). (7) **Интерфейсы** `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Мелочи: `feTurbulence` в `primitiveUnits=objectBoundingBox`, `kernelUnitLength`, мягкий край конуса `feSpotLight`. Критерий готовности: окно (wgpu) и `--screenshot` рисуют `filter: url(#f)` одинаково; `empty-element-with-filter-003`, `effect-reference-on-span`, `filter-region-transformed-child-001` зелёные.",
+     "bugs": [
+      "BUG-1538",
+      "BUG-1543",
+      "BUG-1726"
+     ]
+    },
+    {
+     "id": "SVG-FILTER-10",
+     "title": "SVG-FILTER-10: GPU-шейдеры, bbox, inline-эффекты (остаток), CSS-свойства, интерфейсы",
      "status": "planned",
      "size": "XL",
-     "note": "Остаток SVG-FILTER-8 (срез 1 — окно цепочки, отражение CTM, `feTurbulence`, наследование `color-interpolation-filters`, длины `<svg width>`; до него SVG-FILTER-7 — CSS `drop-shadow()`). (1) **GPU-путь, остаток:** wgpu и femtovg исполняют граф чтением слоя на CPU (SVG-FILTER-5), цена — синхронный readback на кадр; перенос примитивов на шейдеры, `feImage` в окне (карта картинок рендерера пуста), вращение/скос трансформа и скруглённый клип композита. (2) **`feImage`, остаток:** `BackgroundImage`/`FillPaint`/`StrokePaint`, наследование шаблона `<filter href>`, стиль цели наследуется от корня, а не от родителя в документе, сдвиг в начало подобласти не учитывает масштаб поворота/скоса CTM, `feImage-orientation.tentative` (EXIF). (3) **Проценты `userSpaceOnUse` у `<svg>` без числовых `width`/`height`** берут окно документа, а должны — размер, который `<svg>` получил в раскладке (`SvgLenCtx::own_svg_size`); `svg-filter-primitive-units-user-space` расходится на 400 px. (4) **bbox HTML-бокса** = объединение border box потомков с их transform (`filter-region-transformed-child-001`, `-composited-`), фильтр у пустого inline/`<g>`/`<foreignObject visibility:hidden>` нулевого размера (`empty-element-with-filter-003`, `svg-empty-*`), поворот/скос CTM. (5) **`filter`/`opacity` на `display:inline` без блочных потомков игнорируются** (`<span style=\"filter:…\">`, `effect-reference-on-span`; inline-текст сплющивается в строки без бокса-слоя) и BUG-1543 (блок-в-инлайне). (6) **CSS:** `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` в `ComputedStyle` + CSSOM + правила таблицы стилей (сейчас только атрибут и inline `style`), заражение цепочки `currentColor` для `tainting-css-dropshadow-*` ([BUG-1726](bugs/BUG-1726-OPEN.md)), внешний ресурс `filter-external-*`, `svg-image-root-filter` (фильтр на корне SVG-картинки). (7) **Интерфейсы** `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Мелочи: `feTurbulence` в `primitiveUnits=objectBoundingBox`, `kernelUnitLength`, мягкий край конуса `feSpotLight`. Критерий готовности: окно (wgpu) и `--screenshot` рисуют `filter: url(#f)` одинаково; `empty-element-with-filter-003`, `effect-reference-on-span`, `filter-region-transformed-child-001` зелёные.",
+     "note": "Остаток SVG-FILTER-9 (срез 2 — `filter`/`opacity` на `display:inline`, см. п. 5; до него SVG-FILTER-8 — окно цепочки, отражение CTM). Пункты 1–4, 6, 7 и остаток п. 5 прежние: (1) **GPU-путь, остаток:** wgpu и femtovg исполняют граф чтением слоя на CPU (SVG-FILTER-5), цена — синхронный readback на кадр; перенос примитивов на шейдеры, `feImage` в окне (карта картинок рендерера пуста), вращение/скос трансформа и скруглённый клип композита. (2) **`feImage`, остаток:** `BackgroundImage`/`FillPaint`/`StrokePaint`, наследование шаблона `<filter href>`, стиль цели наследуется от корня, а не от родителя в документе, сдвиг в начало подобласти не учитывает масштаб поворота/скоса CTM, `feImage-orientation.tentative` (EXIF). (3) **Проценты `userSpaceOnUse` у `<svg>` без числовых `width`/`height`** берут окно документа, а должны — размер, который `<svg>` получил в раскладке (`SvgLenCtx::own_svg_size`); `svg-filter-primitive-units-user-space` расходится на 400 px. (4) **bbox HTML-бокса** = объединение border box потомков с их transform (`filter-region-transformed-child-001`, `-composited-`), фильтр у пустого inline/`<g>`/`<foreignObject visibility:hidden>` нулевого размера (`empty-element-with-filter-003`, `svg-empty-*`), поворот/скос CTM. (5) **`filter`/`opacity` на `display:inline`:** срез 2 (2026-10-27) — `InlineSegment/InlineFrag::effect_scopes`, `emit_line_with_effects` оборачивает фон, рамку и текст фрагментов элемента (по строке) в `PushOpacity`/`PushFilter`; остаток — `effect-reference-on-span` расходится на 1 px (ряд `InlineBlockRow` с `<svg width=0>` ставит ран на 9, а не на 8), группа режется по ширине, которую намерила раскладка (`filter-external-*` / `blur-text` с `data:`-URL — внешний ресурс, п. 6), `mix-blend-mode`/`transform`/`clip-path` на inline, filter на inline, разорванном блоком, и BUG-1543 (блок-в-инлайне). (6) **CSS:** `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` в `ComputedStyle` + CSSOM + правила таблицы стилей (сейчас только атрибут и inline `style`), заражение цепочки `currentColor` для `tainting-css-dropshadow-*` ([BUG-1726](bugs/BUG-1726-OPEN.md)), внешний ресурс `filter-external-*`, `svg-image-root-filter` (фильтр на корне SVG-картинки). (7) **Интерфейсы** `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Мелочи: `feTurbulence` в `primitiveUnits=objectBoundingBox`, `kernelUnitLength`, мягкий край конуса `feSpotLight`. Критерий готовности: окно (wgpu) и `--screenshot` рисуют `filter: url(#f)` одинаково; `empty-element-with-filter-003`, `effect-reference-on-span`, `filter-region-transformed-child-001` зелёные.",
      "bugs": [
       "BUG-1538",
       "BUG-1543",
@@ -10732,13 +10744,6 @@
    "date": null,
    "debtor": false
   },
-  "BUG-1537": {
-   "status": "open",
-   "title": "`<thead>` и `<tfoot>` не переносятся в начало и в конец таблицы: строки идут в порядке документа. Таблица с `<tfoot>`, `<tbody>`, `<thead>` в таком порядке рису…",
-   "component": "layout (`crates/engine/layout/src/box_tree/table.rs` — порядок `thead`/`tbody`/`tfoot`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-1538": {
    "status": "open",
    "title": "SVG-фильтры не реализованы: `filter: url(#id)` и элемент `<filter>` с примитивами `fe*` ничего не делают. Для `<filter>` с любым из 16 проверенных примитивов (`…",
@@ -11681,6 +11686,48 @@
    "status": "open",
    "title": "Остаток BUG-1540: `drop-shadow()` рисуется окном слоя (ink ∩ холст + смещение + 3σ) — тень не видна, если источник вне холста (`filters-drop-shadow-003`, `drop-…",
    "component": "paint (`crates/engine/paint/src/cpu_raster.rs::svg_filter_chain_window`, `cpu_raster/drop_shadow.rs`, wgpu `renderer/svg_filter_layer.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1727": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: `attachShadow()` не бросает `TypeError` (нет `mode`, неверный `slotAssignment`) и `NotSupportedError` (хост не из списка, повторный выз…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `attachShadow`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1728": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: содержимое `<template>` теряется — фрагментный парсер (`innerHTML`) не заполняет `content`, `template.innerHTML` отдаёт пустую строку,…",
+   "component": "js/dom (`dom_core.rs` `_lumen_set_inner_html`/`import_node`, `dom_helpers.rs::serialize_node`, `cloneNode`/`importNode`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1729": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: путь события slotted-узла не идёт через `assignedSlot` и теневое дерево хоста (`lt > h1 > BODY` вместо `lt > slot > … > shadow root > h…",
+   "component": "js (`crates/js/src/shim/event_shim.js`, путь диспатча / `composedPath`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1730": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: `slotchange` приходит синхронно, а не в microtask; `assignedNodes({flatten:true})` не отдаёт fallback пустого слота; `slotchange-event.…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `slotchange`, `assignedNodes({flatten})`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1731": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: `document.activeElement` не ретаргетится на хост, `host.focus()` с `delegatesFocus` не делегирует, `:focus`/`:focus-within` не матчат х…",
+   "component": "js/shell (`web_api_shim_mid.js` `activeElement`, `focus()`, `:focus` в теневых деревьях)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1732": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: у `document.implementation.createHTMLDocument()` нет `createNodeIterator`/`createTreeWalker`; остаток BUG-415; `ownerdocument-002.html`…",
+   "component": "js (`web_api_shim_mid.js`, `createNodeIterator` только на главном `document`)",
    "date": null,
    "debtor": false
   },
@@ -21273,6 +21320,13 @@
    "component": "layout (`crates/engine/layout/src/box_tree/build.rs` — `display: contents` на `tr`/`tbody` внутри таблицы)",
    "date": "2026-10-27",
    "debtor": false
+  },
+  "BUG-1537": {
+   "status": "fixed",
+   "title": "`<thead>` и `<tfoot>` не переносятся в начало и в конец таблицы: строки идут в порядке документа. Таблица с `<tfoot>`, `<tbody>`, `<thead>` в таком порядке рису…",
+   "component": "layout (`crates/engine/layout/src/box_tree/table.rs` — порядок `thead`/`tbody`/`tfoot`)",
+   "date": "2026-10-27",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -22030,6 +22084,9 @@
   "js (`crates/js/src/shim/` — `matchMedia`, `MediaQueryList`)": [
    "BUG-1562"
   ],
+  "js (`crates/js/src/shim/event_shim.js`, путь диспатча / `composedPath`)": [
+   "BUG-1729"
+  ],
   "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)": [
    "BUG-1123"
   ],
@@ -22228,6 +22285,12 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)": [
    "BUG-496"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `attachShadow`)": [
+   "BUG-1727"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `slotchange`, `assignedNodes({flatten})`)": [
+   "BUG-1730"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)": [
    "BUG-479"
@@ -22533,6 +22596,9 @@
   "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)": [
    "BUG-1639"
   ],
+  "js (`web_api_shim_mid.js`, `createNodeIterator` только на главном `document`)": [
+   "BUG-1732"
+  ],
   "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)": [
    "BUG-1239"
   ],
@@ -22629,6 +22695,9 @@
   "js/dom (`document.title`)": [
    "BUG-1674"
   ],
+  "js/dom (`dom_core.rs` `_lumen_set_inner_html`/`import_node`, `dom_helpers.rs::serialize_node`, `cloneNode`/`importNode`)": [
+   "BUG-1728"
+  ],
   "js/dom (не локализовано)": [
    "BUG-1267"
   ],
@@ -22715,6 +22784,9 @@
   ],
   "js/shell (`navigation_api.rs`, `frame_bridge.rs` — `window.navigation` под-документа)": [
    "BUG-1701"
+  ],
+  "js/shell (`web_api_shim_mid.js` `activeElement`, `focus()`, `:focus` в теневых деревьях)": [
+   "BUG-1731"
   ],
   "js/shell (`window.open` в именованный фрейм; фрейм другого origin; `target`)": [
    "BUG-1702"
