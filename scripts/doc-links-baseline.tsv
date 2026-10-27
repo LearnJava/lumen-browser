@@ -349,7 +349,6 @@ docs/wpt-status.md	../bugs/BUG-615-OPEN.md	stale-status-suffix	bugs/BUG-615-FIXE
 docs/wpt-status.md	../bugs/BUG-616-OPEN.md	stale-status-suffix	bugs/BUG-616-FIXED.md
 docs/wpt-status.md	../bugs/BUG-617-OPEN.md	stale-status-suffix	bugs/BUG-617-FIXED.md
 docs/wpt-status.md	../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs/BUG-685-FIXED.md
-docs/wpt-status.md	../bugs/BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
 docs/wpt-status.md	../bugs/BUG-704-OPEN.md	stale-status-suffix	bugs/BUG-704-FIXED.md
 docs/wpt-status.md	../bugs/BUG-712-OPEN.md	stale-status-suffix	bugs/BUG-712-FIXED.md
 docs/wpt-status.md	../bugs/BUG-713-OPEN.md	stale-status-suffix	bugs/BUG-713-FIXED.md
@@ -406,7 +405,6 @@ docs/wpt-vendor-notes/svg.md	../../bugs/BUG-685-OPEN.md	stale-status-suffix	bugs
 docs/wpt-vendor-notes/uievents.md	../../bugs/BUG-574-OPEN.md	stale-status-suffix	bugs/BUG-574-FIXED.md
 docs/wpt-vendor-notes/viewport-segments.md	../../bugs/BUG-481-OPEN.md	stale-status-suffix	bugs/BUG-481-FIXED.md
 docs/wpt-vendor-notes/visual-viewport.md	../../bugs/BUG-481-OPEN.md	stale-status-suffix	bugs/BUG-481-FIXED.md
-docs/wpt-vendor-notes/wasm.md	../../bugs/BUG-699-OPEN.md	stale-status-suffix	bugs/BUG-699-FIXED.md
 docs/wpt-vendor-notes/web-animations.md	../../bugs/BUG-704-OPEN.md	stale-status-suffix	bugs/BUG-704-FIXED.md
 docs/wpt-vendor-notes/web-bundle.md	../../bugs/BUG-606-OPEN.md	stale-status-suffix	bugs/BUG-606-FIXED.md
 docs/wpt-vendor-notes/webgpu.md	../../bugs/BUG-712-OPEN.md	stale-status-suffix	bugs/BUG-712-FIXED.md

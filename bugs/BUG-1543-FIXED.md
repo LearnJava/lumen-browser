@@ -1,6 +1,6 @@
 # BUG-1543 — `filter` на `<span>` не применяется к вложенному float/блоку (блок-в-инлайне)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3; остаток [BUG-1754](BUG-1754-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout/paint (`filter` на `display:inline` элементе с блочным/плавающим потомком)
 
@@ -29,3 +29,7 @@ WPT-RUN-14 срез 24: `css/filter-effects/filtered-inline-applies-to-float.htm
 ## Как проверить
 
 `css/filter-effects/filtered-inline-applies-to-float.html`.
+
+## Исправление
+
+`collect_inline_segments` складывает в `InlineEscape` объемлющие inline-элементы с `opacity < 1` / `filter`; `split_inline_pieces` (`inline_build.rs`) переносит их эффект на бокс, ушедший escape-ом (блок, float, `<img>`): цепочка `filter` потомка, затем предков изнутри наружу, `opacity` перемножается. `filtered-inline-applies-to-float` совпадает с эталоном пиксель в пиксель; тесты `block_in_inline_slice.rs`. Группа не общая для нескольких escape-ов одного inline: каждый бокс фильтруется отдельно (различимо лишь при перекрытии боксов). Второй reftest (`filtered-inline-is-container`) — другой механизм (containing block для abs/fixed), вынесен в [BUG-1754](BUG-1754-OPEN.md).
