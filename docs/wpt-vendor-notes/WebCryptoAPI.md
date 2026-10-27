@@ -11,3 +11,31 @@ Fourth full test category, added 2026-07-22 by the WPT-VENDOR backlog (`ROADMAP.
 ## Baseline expectations (WPT-RUN-7-S4, 2026-10-18)
 
 Есть `tests/wpt/metadata/WebCryptoAPI/` (125 `.ini`): 313 инстансов, ~172 harness OK, ~2,0 тыс. из ~18 тыс. подтестов PASS. Причина провалов — пробел функциональности: SubtleCrypto не знает Ed25519/Ed448, X25519/X448, ML-KEM/ML-DSA, AES-KW/OCB, ChaCha20-Poly1305, KMAC, SHA-3/TurboSHAKE/KangarooTwelve, Argon2 (`NotSupportedError`), а в dedicated worker нет `crypto`/`SubtleCrypto`. `generateKey/failures_*` и `successes_RSA-*` флапают между harness `ERROR`/`TIMEOUT` и `OK` — в `.ini` объединённые значения плюс `TIMEOUT`. Подробности и метод — `docs/tasks/p2-test-track.md#test-3-срез-72-2026-10-18`. Прогонять с `--processes 4`: на 7 процессах wptrunner теряет ~90 id.
+
+## Разведка WPT-CRYPTO-SCOUT (2026-10-27)
+
+Статус: таблица готова, учёт (BUGS.md/ROADMAP/очереди) — в работе. Код не менялся.
+
+**Прогон** (`run_corpus.py --prefixes WebCryptoAPI --processes 6`, `dev-release` от `main` `0e7f0a78a`, уже с фиксом BUG-1688): 313 id, **13.53 %** (было 4.67 %), балл 42.35, harness OK 298, сабтесты 12 804 / 62 750 (с воркерами сабтестов стало вчетверо больше); статусы OK 298, ERROR 14, TIMEOUT 1; 367 с.
+
+**Главное.** Шим `crates/js/src/shim/crypto_shim.js` — литерал-объект без нормализации алгоритма: `CryptoKey` без `Symbol.toStringTag`/`algorithm.length` ломает первую же проверку всех «успешных» тестов (A); `NotSupportedError` вместо `SyntaxError`/`TypeError`/`InvalidAccessError` и «успех» там, где нужна ошибка (B); половина потерь — алгоритмы, которых нет (C).
+
+### Таблица кластеров
+
+Балл — потолок (Σ потерянных долей сабтестов, каждый упавший сабтест отнесён к одной причине — первой совпавшей); реальный прирост ниже: после фикса A в тех же сабтестах всплывают B/C. Сумма = 270.6 потерянных балла.
+
+| Кл. | Группа | id | Сабтестов | Статус | Причина (представитель) | Балл (п.п.) |
+|---|---|---|---|---|---|---|
+| A | форма `CryptoKey` | 66 | 4 684 | FAIL | движок: нет `Symbol.toStringTag`, `algorithm.length` у AES/HMAC, имя `RSASSA-PKCS1-V1_5`, usages пары RSA, `extractable` при импорте — [BUG-1727](../../bugs/BUG-1727-OPEN.md). `successes_RSA-OAEP` (32 id) | 58.7 (18.8) |
+| A2 | WebIDL `Crypto`/`SubtleCrypto`/`CryptoKey`, `getRandomValues` | 8+4 | 820+24 | FAIL | движок: нет глобала `SubtleCrypto`, методы — own-свойства; Float16/DataView, `QuotaExceededError` — [BUG-1728](../../bugs/BUG-1728-OPEN.md). `idlharness` | 7.6 (2.4) |
+| B | normalize algorithm, usages, порядок ошибок | 107 | 23 274 | FAIL | движок: нет §18.4; `generateKey/failures_*` «Bad usages»/«Empty algorithm»/«Bad algorithm», `*_importKey_failures_*`, hkdf/pbkdf2 «wrong (ECDH) key»/«bad hash name»/«missing deriveKey usage», `normalize-algorithm-name` — [BUG-1729](../../bugs/BUG-1729-OPEN.md) | 39.6 (12.6) |
+| C1 | кривые: P-384/P-521, Ed25519/Ed448, X25519/X448, `getPublicKey` | ≈70 | — | FAIL (NotSupportedError) | фича: `WEBCRYPTO-CURVES` | ≈41 (13) |
+| C2 | симметричное и хеши: AES-192, AES-KW + `wrapKey`/`unwrapKey`, AES-OCB, ChaCha20-Poly1305, KMAC, SHA-3/cSHAKE/TurboSHAKE/K12, Argon2 | ≈60 | — | FAIL | фича: `WEBCRYPTO-SYM` | ≈38 (12) |
+| C3 | постквантовые: ML-KEM (+`encapsulate*`), ML-DSA, `raw-*` форматы, `SubtleCrypto.supports` | ≈20 | — | FAIL | фича: `WEBCRYPTO-PQ` (tentative) | ≈18 (5.7) |
+| D | `structuredClone(CryptoKey)` | 38 | 126 | FAIL | движок: клон — простой объект, «exportKey: argument is not a CryptoKey» — [BUG-1730](../../bugs/BUG-1730-OPEN.md); 18 id поддержанных алгоритмов | 38.0 (12.1), из них ≈17 без C |
+| E | синхронные операции блокируют `load` | 15 | — | ERROR 14 / TIMEOUT 1 | движок: работа в executor промиса — pbkdf2 window ×8, `failures_RSA-*` window ×3 + worker TIMEOUT, kangarootwelve/turboshake window — [BUG-1731](../../bugs/BUG-1731-OPEN.md) | 14.5 (4.6) |
+| G | неверный результат | 35 | 1 967 | FAIL | движок: `tagLength` AES-GCM, `saltLength` RSA-PSS, AES-CTR, `length` deriveBits — [BUG-1732](../../bugs/BUG-1732-OPEN.md) | 4.7 (1.5) |
+| F | «transferred buffer during call» | 25 | 488 | FAIL | движок: данные копируются после `JSON.stringify(algorithm)` — BUG-1732 | 3.0 (1.0) |
+| H | прочее | 8 | 47 | FAIL | `historical` — **раннер**: тест ждёт небезопасный контекст, а `http://localhost` безопасен по Secure Contexts (на wpt.fyi — `web-platform.test`), не чинится; `algorithm-discards-context.window` — `iframe.contentDocument.body` null сразу после `appendChild` ([BUG-480](../../bugs/BUG-480-OPEN.md)) | 4.6 (1.5) |
+
+Раннер/бюджет: собственных проблем раннера нет — ERROR/TIMEOUT кластера E даёт движок (на воркерах те же тесты OK). Скрипты разбора: `.tmp/crypto_cl.py` (классификатор), `.tmp/crypto_files.py` (потери по файлам).
