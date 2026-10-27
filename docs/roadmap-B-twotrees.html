@@ -75,8 +75,8 @@
 {
  "generated": "2026-10-27",
  "counts": {
-  "open": 294,
-  "fixed": 1366,
+  "open": 293,
+  "fixed": 1367,
   "inprogress": 0,
   "wontfix": 3
  },
@@ -1120,12 +1120,24 @@
     },
     {
      "id": "SVG-FILTER-8",
-     "title": "SVG-FILTER-8: GPU-шейдеры, bbox, мутации, CSS-свойства, интерфейсы",
-     "status": "planned",
+     "title": "SVG-FILTER-8: окно цепочки, отражение CTM, длины svg (срез 1)",
+     "status": "done",
      "size": "XL",
-     "note": "Остаток SVG-FILTER-7 (срез 1 — CSS `drop-shadow()`; до него SVG-FILTER-6 — `feImage` на элемент, SVG-FILTER-5 — GPU-путь через чтение слоя, SVG-FILTER-4 — проценты `userSpaceOnUse`, SVG-FILTER-3 — `feImage` с картинкой). (1) **GPU-путь, остаток:** wgpu и femtovg исполняют граф чтением слоя на CPU (SVG-FILTER-5), цена — синхронный readback на кадр; перенос примитивов на шейдеры, `feImage` в окне (карта картинок рендерера пуста), вращение/скос трансформа и скруглённый клип композита. (2) **`feImage`, остаток:** `BackgroundImage`/`FillPaint`/`StrokePaint`, наследование шаблона `<filter href>`, стиль цели наследуется от корня, а не от родителя в документе (`fill` с внешнего `<svg>` не доходит), сдвиг в начало подобласти не учитывает масштаб поворота/скоса CTM, `feImage-orientation.tentative` (EXIF). (3) **Проценты `userSpaceOnUse` у `<svg>` без числовых `width`/`height` (`100%`, `auto`)** берут окно документа, а должны — размер, который `<svg>` получил в раскладке (`SvgLenCtx::own_svg_size`); Каскад видит только атрибуты `<svg>`, не его раскладку. `svg-filter-primitive-units-user-space` расходится на 400 px (в пределах `fuzzy` теста, причина не разбиралась). (4) **bbox HTML-бокса** = объединение border box потомков с их transform (`filter-region-transformed-child-001`, `-composited-`), `<g filter>` у пустого/смещённого контейнера (`svg-empty-*`), поворот/скос CTM (сейчас только масштаб+перенос). (5) **Мутации и инвалидация:** смена `id` у `<filter>`, `filter`-атрибута, `<filter>` в `<defs>`, удаление (`effect-reference-rename-*`, `-delete`, `svg-mutation-*` — через pixdiff не измеряются, нужен `run_corpus.py` с `/common/`); каскад читает граф один раз при расчёте стиля ссылающегося элемента. (6) **CSS:** `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` в `ComputedStyle` + CSSOM + правила таблицы стилей (сейчас только атрибут и inline `style`), заражение цепочки `currentColor` для `tainting-css-dropshadow-*` (сам `drop-shadow()` сделан в BUG-1540, остаток — [BUG-1726](bugs/BUG-1726-OPEN.md)), внешний ресурс `filter-external-*`. (7) **Интерфейсы** `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Мелочи: `feTurbulence` в `primitiveUnits=objectBoundingBox`, `kernelUnitLength`, мягкий край конуса `feSpotLight`. Критерий готовности: `feImage-with-hidden-container-defs.html`, `svg-mutation-function-to-url.html` зелёные в `run_corpus.py --prefixes css/filter-effects`; окно (wgpu) и `--screenshot` рисуют `filter: url(#f)` одинаково.",
+     "note": "**Сделано (2026-10-27, ветка `p1-svg-filter-8`), срез 1 — исправления по замеру `css/filter-effects`:** (а) цепочка `url(#f) drop-shadow()`/`url(#f) blur()`: окно слоя после `url()` сжато до области фильтра и обрезало тень/блюр следующей функции — теперь перед пространственной функцией окно раздувается на её охват (`grow_window`, `cpu_raster.rs`; `svg-mutation-single-to-multiple-002`); (б) отражающий CTM (`transform=\"scale(-1, 1)\"`): область фильтра и подобласти примитивов с отрицательной шириной нормализуются (`norm_span`), `feOffset`/`feDropShadow` меняют знак смещения (`morphology-mirrored`); (в) `feTurbulence` с отрицательной `baseFrequency` даёт нулевой шум, а не прозрачность (`filter-turbulence-invalid-001`); (г) `color-interpolation-filters` наследуется от предков `<filter>` (`<svg color-interpolation-filters=\"sRGB\">`; `effect-reference-lighting-no-light.tentative`); (д) `width`/`height` корневого `<svg>` принимают CSS-длины (`10px`, `2em`, `50%`, `auto`), а не только число — раньше `<svg width=\"24px\">` получал 300×150 (`svg_root_length_attr`, `build.rs`; `effect-reference-after-001`). Пункт 5 (мутации) измерен локально (`--screenshot` с подстановкой `waitForAtLeastOneFrame`/`takeScreenshot`): `svg-mutation-*`, `effect-reference-rename-*`, `-delete` и критерий `feImage-with-hidden-container-defs`/`svg-mutation-function-to-url` уже идентичны эталону. Из красных в идентичные: 4 reftest попиксельно, регрессий нет. Остаток — SVG-FILTER-9.",
      "bugs": [
       "BUG-1538",
+      "BUG-1726"
+     ]
+    },
+    {
+     "id": "SVG-FILTER-9",
+     "title": "SVG-FILTER-9: GPU-шейдеры, bbox, inline-эффекты, CSS-свойства, интерфейсы",
+     "status": "planned",
+     "size": "XL",
+     "note": "Остаток SVG-FILTER-8 (срез 1 — окно цепочки, отражение CTM, `feTurbulence`, наследование `color-interpolation-filters`, длины `<svg width>`; до него SVG-FILTER-7 — CSS `drop-shadow()`). (1) **GPU-путь, остаток:** wgpu и femtovg исполняют граф чтением слоя на CPU (SVG-FILTER-5), цена — синхронный readback на кадр; перенос примитивов на шейдеры, `feImage` в окне (карта картинок рендерера пуста), вращение/скос трансформа и скруглённый клип композита. (2) **`feImage`, остаток:** `BackgroundImage`/`FillPaint`/`StrokePaint`, наследование шаблона `<filter href>`, стиль цели наследуется от корня, а не от родителя в документе, сдвиг в начало подобласти не учитывает масштаб поворота/скоса CTM, `feImage-orientation.tentative` (EXIF). (3) **Проценты `userSpaceOnUse` у `<svg>` без числовых `width`/`height`** берут окно документа, а должны — размер, который `<svg>` получил в раскладке (`SvgLenCtx::own_svg_size`); `svg-filter-primitive-units-user-space` расходится на 400 px. (4) **bbox HTML-бокса** = объединение border box потомков с их transform (`filter-region-transformed-child-001`, `-composited-`), фильтр у пустого inline/`<g>`/`<foreignObject visibility:hidden>` нулевого размера (`empty-element-with-filter-003`, `svg-empty-*`), поворот/скос CTM. (5) **`filter`/`opacity` на `display:inline` без блочных потомков игнорируются** (`<span style=\"filter:…\">`, `effect-reference-on-span`; inline-текст сплющивается в строки без бокса-слоя) и BUG-1543 (блок-в-инлайне). (6) **CSS:** `flood-color`/`flood-opacity`/`lighting-color`/`color-interpolation-filters` в `ComputedStyle` + CSSOM + правила таблицы стилей (сейчас только атрибут и inline `style`), заражение цепочки `currentColor` для `tainting-css-dropshadow-*` ([BUG-1726](bugs/BUG-1726-OPEN.md)), внешний ресурс `filter-external-*`, `svg-image-root-filter` (фильтр на корне SVG-картинки). (7) **Интерфейсы** `SVGFilterElement`, `SVGFE*` (`idlharness`, 306 из 485 сабтестов). Мелочи: `feTurbulence` в `primitiveUnits=objectBoundingBox`, `kernelUnitLength`, мягкий край конуса `feSpotLight`. Критерий готовности: окно (wgpu) и `--screenshot` рисуют `filter: url(#f)` одинаково; `empty-element-with-filter-003`, `effect-reference-on-span`, `filter-region-transformed-child-001` зелёные.",
+     "bugs": [
+      "BUG-1538",
+      "BUG-1543",
       "BUG-1726"
      ]
     },
@@ -10708,22 +10720,15 @@
   },
   "BUG-1534": {
    "status": "open",
-   "title": "Потомок ячейки с `height: <percent>` не получает высоту, если высота ячейки определена строкой или таблицей, а не самой ячейкой. В `display:table-row` с `height…",
+   "title": "Потомок ячейки с `height: <percent>` не получает высоту, если высота ячейки определена таблицей (`height` таблицы), а не самой ячейкой (срез 1 2026-10-27: случа…",
    "component": "layout (`crates/engine/layout/src/box_tree/table_height.rs` — процентные высоты потомков ячейки)",
    "date": null,
    "debtor": false
   },
   "BUG-1535": {
    "status": "open",
-   "title": "`border-collapse`, `caption-side`, `empty-cells`, `table-layout` нет в `getComputedStyle`; `border-spacing` принимает `%` и `calc()` с вырожденным resolved-знач…",
-   "component": "css-parser/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`; разбор `border-spacing`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-1536": {
-   "status": "open",
-   "title": "`display: contents` на строке или группе строк таблицы: ячейки пропадают (0×0), таблица схлопывается. `<table><tr style=\"display:contents\"><td style=\"width:50px…",
-   "component": "layout (`crates/engine/layout/src/box_tree/build.rs` — `display: contents` на `tr`/`tbody` внутри таблицы)",
+   "title": "Остаток после среза 1 (2026-10-27: четыре свойства в `getComputedStyle`, `border-spacing` без `%`, `calc()` с резолвом em): `border-spacing` не интерполируется…",
+   "component": "animation/layout (интерполяция `border-spacing` — двухкомпонентное значение в `animation.rs`/анимационном слое)",
    "date": null,
    "debtor": false
   },
@@ -21261,6 +21266,13 @@
    "component": "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — нет ветки `drop-shadow`; `style/values/transform.rs:149` `FilterFn` — нет варианта)",
    "date": "2026-10-27",
    "debtor": false
+  },
+  "BUG-1536": {
+   "status": "fixed",
+   "title": "`display: contents` на строке или группе строк таблицы: ячейки пропадают (0×0), таблица схлопывается. `<table><tr style=\"display:contents\"><td style=\"width:50px…",
+   "component": "layout (`crates/engine/layout/src/box_tree/build.rs` — `display: contents` на `tr`/`tbody` внутри таблицы)",
+   "date": "2026-10-27",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -21296,6 +21308,9 @@
   ],
   "a11y/shell (`a11y/platform/windows.rs`, `shell/platform/msaa_wndproc.rs`)": [
    "BUG-1627"
+  ],
+  "animation/layout (интерполяция `border-spacing` — двухкомпонентное значение в `animation.rs`/анимационном слое)": [
+   "BUG-1535"
   ],
   "bidi-server (`crates/bidi-server/src/protocol.rs` — `replay_input_actions`; `crates/shell/src/app/about_to_wait.rs` — `AutomationCommand::Type`)": [
    "BUG-1194"
@@ -21462,9 +21477,6 @@
   ],
   "css-parser/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`; `style/parse/transform.rs` — разбор `filter`/`backdrop-filter`)": [
    "BUG-1541"
-  ],
-  "css-parser/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`; разбор `border-spacing`)": [
-   "BUG-1535"
   ],
   "css-parser/layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`; разбор `gap`/`row-gap`/`column-gap`/`grid-*-gap`)": [
    "BUG-1525"
@@ -23663,9 +23675,6 @@
   ],
   "layout/paint (`crates/engine/layout/src/style/parse/transform.rs:236` `parse_filter_fn` — `grayscale`/`sepia` не ограничены 1)": [
    "BUG-1544"
-  ],
-  "layout/paint (`filter` на `display:inline` элементе с блочным/плавающим потомком)": [
-   "BUG-1543"
   ],
   "layout/paint (`style/apply/paint.rs`, `crates/engine/paint/src/display_list/walk.rs:49/87/138`, `style/values/color.rs::to_color_opt`)": [
    "BUG-1418"

@@ -771,19 +771,54 @@ fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) ->
                 let mut line_w = 0.0f32;
                 let mut run_max = 0.0f32;
                 let mut run_min = 0.0f32;
+                // CSS Text L3 §4.1.1 (BUG-1536): a run of collapsible whitespace is one space and
+                // the line's leading/trailing whitespace is removed, so source indentation
+                // around a cell's text does not widen the column.
+                let mut prev_space = true;
+                let mut trailing_space_w = 0.0f32;
                 for seg in segments {
                     if seg.forced_break {
-                        run_max = run_max.max(line_w);
+                        run_max = run_max.max(line_w - trailing_space_w);
                         line_w = 0.0;
+                        prev_space = true;
+                        trailing_space_w = 0.0;
                         continue;
                     }
                     if seg.img_src.is_some() {
                         let w = seg.pre_space + seg.img_width + seg.post_space;
                         line_w += w;
                         run_min = run_min.max(w);
+                        prev_space = false;
+                        trailing_space_w = 0.0;
                     } else {
+                        let collapsed;
+                        let text = if seg.style.white_space.preserves_whitespace() {
+                            prev_space = false;
+                            trailing_space_w = 0.0;
+                            seg.text.as_str()
+                        } else {
+                            let mut s = String::with_capacity(seg.text.len());
+                            for c in seg.text.chars() {
+                                if super::entry::is_wrap_whitespace(c) {
+                                    if !prev_space {
+                                        s.push(' ');
+                                        prev_space = true;
+                                    }
+                                } else {
+                                    s.push(c);
+                                    prev_space = false;
+                                }
+                            }
+                            if s.ends_with(' ') {
+                                trailing_space_w = measure_text_w_styled(" ", &seg.style, 0.0, m);
+                            } else if !s.is_empty() {
+                                trailing_space_w = 0.0;
+                            }
+                            collapsed = s;
+                            collapsed.as_str()
+                        };
                         line_w += seg.pre_space
-                            + measure_text_w_styled(&seg.text, &seg.style, 0.0, m)
+                            + measure_text_w_styled(text, &seg.style, 0.0, m)
                             + seg.post_space;
                         for word in seg.text.split_ascii_whitespace() {
                             run_min = run_min.max(
@@ -794,7 +829,7 @@ fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) ->
                         }
                     }
                 }
-                run_max = run_max.max(line_w);
+                run_max = run_max.max(line_w - trailing_space_w);
                 (run_min, run_max)
             }
             BoxKind::Block | BoxKind::FlowRoot | BoxKind::InlineBlockRow => {
