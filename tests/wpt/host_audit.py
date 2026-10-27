@@ -44,7 +44,7 @@ What this script measures, in three independent pieces:
 Usage (from repo root, venv per tests/wpt/README.md):
 
     <venv>/python tests/wpt/host_audit.py [--out-dir .tmp/wpt-corpus]
-        [--manifest PATH] [--probe] [--json OUT] [--ids-json PATH]
+        [--manifest PATH] [--probe] [--alt] [--json OUT] [--ids-json PATH]
     <venv>/python tests/wpt/host_audit.py --selftest
 
 Safe to run against a live run's `--out-dir`: it only reads.
@@ -54,6 +54,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -115,27 +116,93 @@ def iter_sources(manifest: dict):
                 yield test_type, category, "/" + url.lstrip("/"), file_path
 
 
-def file_names_foreign_host(abs_path: str) -> bool:
-    """True when the file's own text reaches for another host."""
+#: The *alternate* family only (`WPT-HOST-RESOLVE`): `not-web-platform.test`
+#: and its subdomains, the one family `browser_host: "localhost"` cannot reach.
+#: `get-host-info`'s `NOTSAMESITE_HOST` is not here — on `localhost` it is the
+#: literal `127.0.0.1` — but `OTHER_NOTSAMESITE_HOST` is `{{hosts[alt][www2]}}`
+#: unconditionally, so a test that reads it is aimed at the alternate domain.
+ALT_MARKERS = (b"{{hosts[alt]", b"not-web-platform.test", b"OTHER_NOTSAMESITE",
+               b"SCHEME_CROSSDOMAIN_PORT")
+
+#: Local scripts a source pulls in, for the one-hop helper check: `<script
+#: src>`, `// META: script=`, `importScripts(...)` and ES `import ... from`.
+#: The alternate domain is mostly named by a helper, not the test itself —
+#: `fetch/metadata/resources/helper.sub.js` alone backs ~100 tests.
+HELPER_RE = re.compile(
+    rb"""(?:src\s*=\s*["']|META:\s*script=|importScripts\(\s*["']|from\s+["'])"""
+    rb"""([^"'\s?#)]+\.js)""")
+
+#: Helpers the hop does not follow. `get-host-info` spells `{{hosts[alt]}}` for
+#: every caller, but on `localhost` only `OTHER_NOTSAMESITE_HOST` keeps it —
+#: that is `ALT_MARKERS`' job, read off the caller's own text. Likewise
+#: `websockets/constants.sub.js` defines `SCHEME_CROSSDOMAIN_PORT` for all ~480
+#: websocket tests, and one of them reads it.
+HELPER_SKIP = frozenset({"common/get-host-info.sub.js", "websockets/constants.sub.js"})
+
+
+def _read_head(abs_path: str) -> bytes:
     try:
         with open(abs_path, "rb") as fh:
-            head = fh.read(READ_CAP)
+            return fh.read(READ_CAP)
     except OSError:
-        return False
-    return any(marker in head for marker in MARKERS)
+        return b""
 
 
-def scan(manifest: dict, tests_root: str = WPT_ROOT) -> dict:
+def file_names_foreign_host(abs_path: str, markers=MARKERS) -> bool:
+    """True when the file's own text reaches for another host."""
+    head = _read_head(abs_path)
+    return any(marker in head for marker in markers)
+
+
+def helper_paths(head: bytes, file_path: str) -> list:
+    """Tree-relative paths of the local scripts `head` references; absolute
+    URLs and anything outside the tree are dropped."""
+    out = []
+    for raw in HELPER_RE.findall(head):
+        ref = raw.decode("utf-8", "replace")
+        if "://" in ref or ref.startswith("//"):
+            continue
+        if ref.startswith("/"):
+            rel = ref.lstrip("/")
+        else:
+            rel = os.path.normpath(os.path.join(os.path.dirname(file_path), ref))
+        rel = rel.replace("\\", "/")
+        if not rel.startswith("..") and rel not in HELPER_SKIP:
+            out.append(rel)
+    return out
+
+
+def scan(manifest: dict, tests_root: str = WPT_ROOT, markers=MARKERS,
+         follow_helpers: bool = False) -> dict:
     """Classify every automatable manifest id by whether its source names a
     foreign host. One read per *file*, not per id: `.any.js` fans out into up to
-    four ids off one source, and `css/` variants into dozens."""
+    four ids off one source, and `css/` variants into dozens.
+
+    `follow_helpers` also marks a source whose directly referenced local
+    scripts carry a marker (one hop, each helper read once); such ids are
+    listed in `via_helper` as well."""
     verdict_by_file = {}
-    marked_ids, all_ids = set(), set()
+    helper_hit = {}
+    marked_ids, all_ids, via_helper = set(), set(), set()
     per_type = collections.Counter()
     marked_type = collections.Counter()
     per_category = collections.Counter()
     marked_category = collections.Counter()
     marked_files = set()
+
+    def classify(file_path):
+        head = _read_head(os.path.join(tests_root, file_path))
+        if any(marker in head for marker in markers):
+            return "direct"
+        if follow_helpers:
+            for rel in helper_paths(head, file_path):
+                hit = helper_hit.get(rel)
+                if hit is None:
+                    hit = file_names_foreign_host(os.path.join(tests_root, rel), markers)
+                    helper_hit[rel] = hit
+                if hit:
+                    return "helper"
+        return ""
 
     for test_type, category, test_id, file_path in iter_sources(manifest):
         if test_type in corpus_stats.NON_AUTOMATABLE_TYPES:
@@ -145,16 +212,20 @@ def scan(manifest: dict, tests_root: str = WPT_ROOT) -> dict:
         per_category[category] += 1
         hit = verdict_by_file.get(file_path)
         if hit is None:
-            hit = file_names_foreign_host(os.path.join(tests_root, file_path))
+            hit = classify(file_path)
             verdict_by_file[file_path] = hit
         if hit:
             marked_ids.add(test_id)
             marked_type[test_type] += 1
             marked_category[category] += 1
             marked_files.add(file_path)
+            if hit == "helper":
+                via_helper.add(test_id)
 
     return {"ids": sorted(marked_ids), "files": len(marked_files),
             "scanned_files": len(verdict_by_file), "total_ids": len(all_ids),
+            "via_helper": sorted(via_helper),
+            "marker_helpers": sorted(rel for rel, hit in helper_hit.items() if hit),
             "per_type": dict(per_type), "marked_by_type": dict(marked_type),
             "per_category": dict(per_category), "marked_by_category": dict(marked_category)}
 
@@ -321,6 +392,9 @@ def print_report(scan_result: dict, cost: dict, clock: dict) -> None:
         f"{c}={n}/{scan_result['per_category'][c]}"
         for c, n in sorted(scan_result["marked_by_category"].items(),
                            key=lambda kv: -kv[1])[:8]))
+    if scan_result.get("marker_helpers"):
+        print(f"  {len(scan_result['via_helper'])} of them only through a helper: "
+              + ", ".join(scan_result["marker_helpers"][:8]))
     if not cost:
         return
 
@@ -403,6 +477,34 @@ def selftest() -> int:
         assert cost["no_verdict"] == 1, cost["no_verdict"]
         assert cost["by_category"]["alpha"]["foreign"][0] == 1, cost["by_category"]
         assert cost["by_category"]["alpha"]["rest"][0] == 1, cost["by_category"]
+
+    # `--alt`: the alternate family, named directly or by a helper one hop away.
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "gamma", "resources"))
+        os.makedirs(os.path.join(root, "common"))
+        files = {
+            "gamma/resources/helper.sub.js": "x = 'http://{{hosts[alt][]}}:1'",
+            "gamma/resources/plain.js": "x = 1",
+            "gamma/via.html": "<script src='resources/helper.sub.js'></script>",
+            "gamma/via-meta.any.js": "// META: script=/gamma/resources/helper.sub.js\n",
+            "gamma/own.html": "<script src='/common/get-host-info.sub.js'></script>",
+            "gamma/other.html": "<script>get_host_info().HTTPS_OTHER_NOTSAMESITE_ORIGIN</script>",
+            "gamma/plain.html": "<script src='resources/plain.js'></script>",
+            "common/get-host-info.sub.js": "'{{hosts[alt][]}}'",
+        }
+        for rel, text in files.items():
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        manifest = {"items": {"testharness": {"gamma": {
+            name: ["h", [None, {}]] for name in
+            ("via.html", "via-meta.any.js", "own.html", "other.html", "plain.html")}}}}
+        result = scan(manifest, tests_root=root, markers=ALT_MARKERS, follow_helpers=True)
+        # `get-host-info` alone is not the alternate family on `localhost`.
+        assert result["ids"] == ["/gamma/other.html", "/gamma/via-meta.any.js",
+                                 "/gamma/via.html"], result["ids"]
+        assert result["via_helper"] == ["/gamma/via-meta.any.js", "/gamma/via.html"], result
+        assert result["marker_helpers"] == ["gamma/resources/helper.sub.js"], result
+        assert helper_paths(b"<script src='../x.js'>", "a.html") == []
     print("selftest: ok")
     return 0
 
@@ -419,6 +521,9 @@ def main() -> int:
     parser.add_argument("--ids-json", default=None,
                         help="write the marked id list here (for a follow-up run)")
     parser.add_argument("--json", dest="json_out", default=None, help="write the full result here")
+    parser.add_argument("--alt", action="store_true",
+                        help="count only the alternate family (not-web-platform.test), "
+                             "following each source's local scripts one hop")
     parser.add_argument("--selftest", action="store_true", help="run the built-in assertions")
     args = parser.parse_args()
 
@@ -429,7 +534,8 @@ def main() -> int:
         run_corpus.MANIFEST_PATH = args.manifest
     manifest = run_corpus.load_manifest()
     started = time.time()
-    scan_result = scan(manifest)
+    scan_result = (scan(manifest, markers=ALT_MARKERS, follow_helpers=True)
+                   if args.alt else scan(manifest))
     print(f"scanned {scan_result['scanned_files']} source files in "
           f"{time.time() - started:.0f}s", flush=True)
 

@@ -454,6 +454,11 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   within-category comparison is the control, because the marked ids are the
   cross-origin ones and are harder than average on their own merits.
   `--selftest` runs the built-in assertions. Fixing it is `WPT-RUN-10`.
+  `--alt` (WPT-HOST-RESOLVE) counts only the alternate `not-web-platform.test`
+  family — the one `browser_host: "localhost"` cannot reach — and follows each
+  source's local scripts one hop, since that domain is mostly named by a helper
+  (`fetch/metadata/resources/helper.sub.js`); results in
+  `docs/wpt-vendor-notes/fetch.md` §WPT-HOST-RESOLVE.
 - `tests/wpt/long_timeout_audit.py` — **ours** (WPT-RUN-5 slice 30) — prices a
   defect against the published number instead of arguing about it. Built for
   [BUG-796](../../bugs/BUG-796-FIXED.md) (`meta.content` is `undefined`, so
