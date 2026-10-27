@@ -444,7 +444,15 @@ pub enum DisplayCommand {
     /// offscreen layer (from_level > 1). При from_level == 1 (parent =
     /// surface texture) backdrop-filter пропускается — surface texture
     /// не поддерживает TEXTURE_BINDING в текущей конфигурации.
-    PushBackdropFilter { filters: Vec<FilterFn>, bounds: Rect },
+    ///
+    /// `radii` — `border-radius` рамки `[tl, tr, br, bl]` (px): область фильтра —
+    /// скруглённая рамка, не прямоугольник (нули — прямоугольник). `wrappers` —
+    /// сколько собственных `Push*`-команд элемента (blend, opacity, transform,
+    /// clip-path) эмитировано непосредственно перед этой: CPU-растеризатору
+    /// нужно отличить собственные группы элемента (фильтрованный фон входит в
+    /// них и получает их opacity/transform/клип) от групп предков (корни фона,
+    /// Filter Effects L2 §Backdrop Root), под которыми фона нет.
+    PushBackdropFilter { filters: Vec<FilterFn>, bounds: Rect, radii: [f32; 4], wrappers: u8 },
     /// Закрывает backdrop-filter-группу.
     PopBackdropFilter,
     /// CSS Positioning L3 §6.3 — position:sticky layer.
@@ -1020,7 +1028,9 @@ mod tests {
             DisplayCommand::PopTransform,
             DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(3.0), FilterFn::Sepia(0.5)], bounds: Some(rect) },
             DisplayCommand::PopFilter,
-            DisplayCommand::PushBackdropFilter { filters: vec![FilterFn::Grayscale(1.0)], bounds: rect },
+            DisplayCommand::PushBackdropFilter {
+                filters: vec![FilterFn::Grayscale(1.0)], bounds: rect, radii: [0.0; 4], wrappers: 0,
+            },
             DisplayCommand::PopBackdropFilter,
             DisplayCommand::BeginStickyLayer {
                 flow_rect: rect,

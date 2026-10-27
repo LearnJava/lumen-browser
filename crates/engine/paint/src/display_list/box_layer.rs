@@ -295,6 +295,8 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>, dpr: f32) -> Bo
         pre.push(DisplayCommand::PushBackdropFilter {
             filters: s.backdrop_filter.clone(),
             bounds: b.rect,
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height).corners_h(),
+            wrappers: pre.len().min(usize::from(u8::MAX)) as u8,
         });
         post.push(DisplayCommand::PopBackdropFilter);
     }

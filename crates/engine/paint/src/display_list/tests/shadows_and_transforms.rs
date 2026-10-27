@@ -984,6 +984,22 @@ use super::ordered_build_scroll::{build_ordered, count_variant};
         assert!(has_f, "PushFilter должен быть");
     }
 
+    /// BUG-1539: команда несёт радиусы рамки и число собственных групп элемента.
+    #[test]
+    fn backdrop_filter_carries_radii_and_wrapper_count() {
+        let dl = build_ordered(
+            "<div></div>",
+            "div { width: 50px; height: 50px; border-radius: 9px; opacity: .5; \
+             transform: translateX(5px); backdrop-filter: invert(1); }",
+        );
+        let (radii, wrappers) = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushBackdropFilter { radii, wrappers, .. } => Some((*radii, *wrappers)),
+            _ => None,
+        }).expect("PushBackdropFilter");
+        assert_eq!(radii, [9.0; 4]);
+        assert_eq!(wrappers, 2, "PushOpacity + PushTransform предшествуют фильтру фона");
+    }
+
     // ───────── background-clip rendering ─────────
 
     fn first_bg_rect(dl: &DisplayList) -> Rect {

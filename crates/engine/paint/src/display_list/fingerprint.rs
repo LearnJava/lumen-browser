@@ -864,7 +864,7 @@ pub fn anim_split_compose_plan(
                 mat_stack.push(if identity_below { Some(Mat4::IDENTITY) } else { cur_mat });
                 infl_stack.push(cur_infl + filter_bbox_inflate(filters));
             }
-            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+            DisplayCommand::PushBackdropFilter { filters, bounds, .. } => {
                 // Composite backdrop-фильтра пишет в `bounds` — учитываем его
                 // как «рисующую» область (плюс blur-инфляция).
                 let region = inflate_rect(*bounds, filter_bbox_inflate(filters));
