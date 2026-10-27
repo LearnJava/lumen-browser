@@ -1,4 +1,4 @@
-# BUG-1730 — `structuredClone`/`postMessage` теряют `CryptoKey`: клон — простой объект без ключа
+# BUG-1736 — `structuredClone`/`postMessage` теряют `CryptoKey`: клон — простой объект без ключа
 
 **Статус:** OPEN
 **Заведён:** 2026-10-27 (P2, WPT-CRYPTO-SCOUT)

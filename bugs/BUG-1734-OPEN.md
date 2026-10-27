@@ -1,4 +1,4 @@
-# BUG-1728 — `Crypto`/`SubtleCrypto`/`CryptoKey` не WebIDL-интерфейсы: нет глобала `SubtleCrypto`, методы — own-свойства; `getRandomValues` пропускает Float16Array/DataView
+# BUG-1734 — `Crypto`/`SubtleCrypto`/`CryptoKey` не WebIDL-интерфейсы: нет глобала `SubtleCrypto`, методы — own-свойства; `getRandomValues` пропускает Float16Array/DataView
 
 **Статус:** OPEN
 **Заведён:** 2026-10-27 (P2, WPT-CRYPTO-SCOUT)

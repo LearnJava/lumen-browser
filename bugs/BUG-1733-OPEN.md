@@ -1,4 +1,4 @@
-# BUG-1727 — `CryptoKey`: нет `Symbol.toStringTag`, у `algorithm` нет `length`, имя RSASSA в верхнем регистре, неверные `usages`/`extractable`
+# BUG-1733 — `CryptoKey`: нет `Symbol.toStringTag`, у `algorithm` нет `length`, имя RSASSA в верхнем регистре, неверные `usages`/`extractable`
 
 **Статус:** OPEN
 **Заведён:** 2026-10-27 (P2, WPT-CRYPTO-SCOUT)
