@@ -266,14 +266,16 @@ pub(super) struct Turbulence<'a> {
 }
 
 /// Шум в каждом пикселе; результат — непремультиплицированный RGBA, переведённый
-/// в premultiplied. Отрицательная частота или нулевое число октав — прозрачность.
+/// в premultiplied. Нулевое число октав — прозрачность; отрицательная частота
+/// не поддерживается и даёт нулевой шум (`fractalNoise` — серый 50%, `turbulence` —
+/// прозрачность), как у Chrome (`filter-turbulence-invalid-001`).
 pub(super) fn turbulence(w: usize, h: usize, p: &Turbulence<'_>) -> Img {
     let mut out = Img::new(w, h);
-    if p.fx < 0.0 || p.fy < 0.0 || p.octaves == 0 {
+    if p.octaves == 0 {
         return out;
     }
     let noise = Noise::new(p.seed);
-    let (mut fx, mut fy) = (p.fx, p.fy);
+    let (mut fx, mut fy) = if p.fx < 0.0 || p.fy < 0.0 { (0.0, 0.0) } else { (p.fx, p.fy) };
     let (tx, ty, tw, th) = p.tile;
     if p.stitch {
         let adjust = |f: f64, size: f64| {

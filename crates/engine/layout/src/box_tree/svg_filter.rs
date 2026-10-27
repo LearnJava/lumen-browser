@@ -598,12 +598,17 @@ fn is_tag(doc: &Document, n: NodeId, tag: &str) -> bool {
 }
 
 /// `color-interpolation-filters`: `linearRGB` (по умолчанию) или `sRGB`/`auto`.
-/// У примитива без значения наследуется значение `<filter>` (`inherited`).
+/// У примитива без значения наследуется значение `<filter>` (`inherited`); у самого
+/// `<filter>` (`inherited == None`) — значение ближайшего предка (свойство наследуемое).
 fn interpolation_is_linear(doc: &Document, n: NodeId, inherited: Option<bool>) -> bool {
     match svg_prop(doc, n, "color-interpolation-filters").as_deref().map(str::trim) {
         Some("linearRGB") => true,
         Some("sRGB" | "auto") => false,
-        _ => inherited.unwrap_or(true),
+        _ => match (inherited, doc.get(n).parent) {
+            (Some(v), _) => v,
+            (None, Some(parent)) if doc.get(parent).element_name().is_some() => interpolation_is_linear(doc, parent, None),
+            (None, _) => true,
+        },
     }
 }
 
@@ -770,5 +775,20 @@ mod tests {
             "d",
         );
         assert_eq!(g.region, (0.0, 0.0, 10.0, 0.5));
+    }
+
+    /// `color-interpolation-filters` наследуется: `<svg color-interpolation-filters="sRGB">`
+    /// действует на `<filter>` и его примитивы, собственное значение перекрывает.
+    #[test]
+    fn color_interpolation_filters_inherits_from_ancestors() {
+        let g = graph(
+            r#"<svg width="0" height="0" color-interpolation-filters="sRGB"><filter id="f"><feFlood/>
+            <feOffset color-interpolation-filters="linearRGB"/></filter></svg><div id="d"></div>"#,
+            "d",
+        );
+        assert!(!g.primitives[0].linear_rgb);
+        assert!(g.primitives[1].linear_rgb);
+        let g = graph(r#"<svg width="0" height="0"><filter id="f"><feFlood/></filter></svg><div id="d"></div>"#, "d");
+        assert!(g.primitives[0].linear_rgb, "умолчание — linearRGB");
     }
 }
