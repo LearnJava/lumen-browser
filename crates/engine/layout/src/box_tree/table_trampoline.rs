@@ -1,6 +1,7 @@
 use super::*;
 use super::layout_dispatch::dispatch_box;
 use super::block_flow_trampoline::{self, DispatchOutcome};
+use crate::style::Visibility;
 
 /// One row's worth of loop-entry state — column placement resolved ahead of
 /// time (CSS 2.1 §17.5 Steps 1–2: map each cell to its starting column,
@@ -57,6 +58,9 @@ pub(super) struct TableInit {
     /// `(y, height)` per row, DOM order — read back by `finish_table`'s
     /// rowspan post-fix (Pass 2) and the collapse-mode height epilogue.
     pub(super) flat_row_rects: Vec<(f32, f32)>,
+    /// CSS Tables 3 §«visibility: collapse» — per flat row: the row (or its row group) is
+    /// collapsed, so it has zero height and contributes no `border-spacing` slot.
+    pub(super) collapsed_rows: Vec<bool>,
     /// `(group_child_idx, row_field, cell_local_idx, start_flat_row, row_span)`
     /// — `row_field` is the row's own top-level `child_idx` when `group` is
     /// `None`, or its index within the group's `children` when `group` is
@@ -413,7 +417,15 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
         TopEntry::Group { child_idx, rows } => (Some(*child_idx), rows[r].0),
     };
 
+    // §17.5.5 / Tables 3: строка с `visibility: collapse` — или строка в такой группе, даже
+    // с собственным `visibility: visible` — не занимает места: высота 0 и без слота
+    // `border-spacing` вокруг неё.
+    let group_collapsed = match &frame.init.top_level[t] {
+        TopEntry::Group { child_idx, .. } => frame.b.children[*child_idx].style.visibility == Visibility::Collapse,
+        TopEntry::Row { .. } => false,
+    };
     let row = row_box_mut(&mut frame.b, &frame.init.top_level, t, r);
+    let collapsed = group_collapsed || row.style.visibility == Visibility::Collapse;
     // CSS 2.1 §17.5.3: ячейки, выровненные по базовой линии, ставятся так, чтобы
     // их базовые линии совпали; высота строки — не меньше суммы наибольшего
     // подъёма и наибольшего спуска.
@@ -456,6 +468,7 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
     };
     // Ячейки занимают всю высоту строки (§17.5.3), в том числе заданную `height` строки.
     let row_h = row_h.max(row_style_h - row_pad);
+    let (row_h, row_style_h) = if collapsed { (0.0, 0.0) } else { (row_h, row_style_h) };
     for &i in &cell_idxs {
         let cell = &mut row.children[i];
         if cell.row_span != 1 {
@@ -485,8 +498,13 @@ fn finish_row(frame: &mut Frame, measurer: Option<&dyn TextMeasurer>, viewport: 
     }
 
     let c_mb = row.style.margin_bottom.resolve_or_zero(em, content_width, viewport);
-    let next_y = row_rect_y + row_style_h + c_mb + v_spacing - collapse_v_overlap;
+    let next_y = if collapsed {
+        row_rect_y
+    } else {
+        row_rect_y + row_style_h + c_mb + v_spacing - collapse_v_overlap
+    };
     frame.init.flat_row_rects.push((row_rect_y, row_style_h));
+    frame.init.collapsed_rows.push(collapsed);
 
     match &frame.init.top_level[t] {
         TopEntry::Row { .. } => frame.init.cur_y = next_y,
@@ -550,13 +568,23 @@ fn finish_table(
         if end_flat == 0 {
             continue;
         }
-        let (last_y, last_h) = frame.init.flat_row_rects[end_flat - 1];
-        let target_bottom = last_y + last_h;
+        // Ячейка тянется до нижнего края последней несхлопнутой строки охвата; схлопнутые
+        // строки ей высоты не добавляют (если все схлопнуты — высота ячейки 0).
+        let span_collapsed = frame.init.collapsed_rows[start_flat.min(end_flat)..end_flat].iter().any(|&c| c);
+        let last_visible = (start_flat..end_flat).rev().find(|&k| !frame.init.collapsed_rows[k]);
+        let target_bottom = match last_visible {
+            Some(k) => frame.init.flat_row_rects[k].0 + frame.init.flat_row_rects[k].1,
+            None => frame.init.flat_row_rects[start_flat.min(end_flat - 1)].0,
+        };
         let cell = match group {
             None => &mut frame.b.children[row].children[child_idx],
             Some(g) => &mut frame.b.children[g].children[row].children[child_idx],
         };
-        let grown = (target_bottom - cell.rect.y).max(cell.rect.height);
+        let grown = if span_collapsed {
+            (target_bottom - cell.rect.y).max(0.0)
+        } else {
+            (target_bottom - cell.rect.y).max(cell.rect.height)
+        };
         // §17.5.3: ячейка, растянутая на несколько строк, выравнивает содержимое по
         // всей высоте (`baseline` для неё равносильно `top`).
         let dy = super::table_valign::free_space_shift(cell, grown, super::table_valign::cell_block_align(&cell.style));

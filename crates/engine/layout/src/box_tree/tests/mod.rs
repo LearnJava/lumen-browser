@@ -510,6 +510,7 @@ mod flex_factor_below_one;
 mod table_trampoline;
 mod table_caption_layout;
 mod table_height;
+mod table_visibility_collapse;
 mod table_shrink_to_fit;
 mod table_valign;
 mod atomic_text_align;
