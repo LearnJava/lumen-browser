@@ -1131,6 +1131,81 @@ use super::*;
         assert_eq!(p_style.backface_visibility, BackfaceVisibility::Visible);
     }
 
+    // ── transform-box (CSS Transforms L1) ─────────────────────────────────────
+
+    #[test]
+    fn transform_box_initial_is_view_box() {
+        assert_eq!(ComputedStyle::root().transform_box, TransformBox::ViewBox);
+    }
+
+    #[test]
+    fn transform_box_parses_every_keyword() {
+        for (kw, want) in [
+            ("content-box", TransformBox::ContentBox),
+            ("border-box", TransformBox::BorderBox),
+            ("fill-box", TransformBox::FillBox),
+            ("stroke-box", TransformBox::StrokeBox),
+            ("VIEW-BOX", TransformBox::ViewBox),
+        ] {
+            assert_eq!(ts_prop("transform-box", kw).transform_box, want, "{kw}");
+        }
+    }
+
+    #[test]
+    fn transform_box_invalid_ignored() {
+        let mut s = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        for v in ["fill-box", "padding-box", "fill-box stroke-box"] {
+            let d = Declaration { property: "transform-box".to_string(), value: v.to_string(), important: false };
+            apply_declaration(&mut s, &d, 16.0, vp, FontWeight::NORMAL, &root, &root, false, false);
+        }
+        assert_eq!(s.transform_box, TransformBox::FillBox);
+    }
+
+    #[test]
+    fn transform_box_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { transform-box: content-box; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.transform_box, TransformBox::ContentBox);
+        assert_eq!(p_style.transform_box, TransformBox::ViewBox);
+    }
+
+    #[test]
+    fn transform_box_reference_rect_and_pivot() {
+        use crate::{transform_origin_pivot, transform_reference_rect};
+        let pivot_of = |tb: &str| {
+            let doc = lumen_html_parser::parse("<div id=a></div>");
+            let sheet = lumen_css_parser::parse(&format!(
+                "body{{margin:0}} div{{width:100px;height:60px;padding:10px 20px;border:5px solid;\
+                 transform:rotate(1deg);transform-box:{tb}}}"
+            ));
+            let root = crate::layout(&doc, &sheet, Size::new(800.0, 600.0));
+            let div = doc.get(doc.body().unwrap()).children[0];
+            let b = crate::find_box_by_node(&root, div).expect("div box");
+            (transform_reference_rect(b), transform_origin_pivot(b), b.rect)
+        };
+        // border box: 150×90 (100+40+10, 60+20+10); centre at (75, 45).
+        let (r, p, rect) = pivot_of("border-box");
+        assert_eq!((r.width, r.height), (rect.width, rect.height));
+        assert!((p.0 - (rect.x + rect.width / 2.0)).abs() < 0.01);
+        // view-box and stroke-box coincide with border-box for CSS boxes.
+        assert_eq!(pivot_of("view-box").1, p);
+        assert_eq!(pivot_of("stroke-box").1, p);
+        // content box: inset by border 5 + padding (20 horiz / 10 vert).
+        let (r, p, rect) = pivot_of("content-box");
+        assert!((r.x - (rect.x + 25.0)).abs() < 0.01 && (r.y - (rect.y + 15.0)).abs() < 0.01);
+        assert!((r.width - 100.0).abs() < 0.01 && (r.height - 60.0).abs() < 0.01);
+        assert!((p.0 - (rect.x + 25.0 + 50.0)).abs() < 0.01);
+        assert!((p.1 - (rect.y + 15.0 + 30.0)).abs() < 0.01);
+        assert_eq!(pivot_of("fill-box").1, p);
+    }
+
     // ── gradient color-interpolation-method (CSS Images L4 §3.1) ──────────────
 
     /// `extract_gradient_interpolation` strips the `in <space>` clause and

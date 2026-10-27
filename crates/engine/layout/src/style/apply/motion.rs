@@ -26,6 +26,7 @@ use crate::style::{
     ScrollSnapStop,
     TimingFunction,
     TouchAction,
+    TransformBox,
     TransformStyle,
     expand_grouped_transition_property,
     parse_length_q,
@@ -560,6 +561,12 @@ pub(in crate::style) fn apply_decl_motion(
             } else {
                 TransformStyle::Flat
             };
+        }
+        "transform-box" => {
+            // CSS Transforms L1 §transform-box — single keyword, invalid ignored.
+            if let Some(v) = TransformBox::parse(val) {
+                style.transform_box = v;
+            }
         }
         "backface-visibility" => {
             // CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
