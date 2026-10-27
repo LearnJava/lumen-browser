@@ -299,6 +299,11 @@ pub(crate) fn build_table_init(
         BorderCollapse::Separate => (b.style.border_spacing_h, b.style.border_spacing_v),
     };
 
+    // CSS 2.1 §17.6.2.1: both cells meeting at a grid line take the border that wins the conflict.
+    if collapse {
+        super::table_collapse::resolve_collapsed_borders(b);
+    }
+
     // CSS Tables 3 §3.2: the table is never narrower than the sum of its columns' minimum
     // widths — a smaller `width` is raised to that sum. Content widths are measured once and
     // shared with the column distribution below.

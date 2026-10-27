@@ -393,8 +393,8 @@ pub enum BorderStyle {
     Dotted,
     Double,
     /// `hidden` — как `none`, но выигрывает конфликт (CSS Backgrounds L3 §4.3).
-    /// Из `border-style` недостижим (его разбор знает пять ключевых слов); приходит
-    /// только из `*-rule-style` (CSS Gap Decorations L1 §4.2).
+    /// Приходит из `border-style` / `border*` (`border-collapse: collapse` — разрешение конфликта,
+    /// `box_tree/table_collapse.rs`) и из `*-rule-style` (CSS Gap Decorations L1 §4.2).
     Hidden,
     /// `groove` — объёмный стиль (Backgrounds L3 §4.2); геометрию и оттенки даёт
     /// `lumen_paint::border_bevel` всем бэкендам; у `*-rule-style` — `rule_line_commands`.

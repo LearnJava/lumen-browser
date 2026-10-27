@@ -1,6 +1,6 @@
 # BUG-1532 — `border-collapse: collapse`: не работают `border-style: hidden`/`none` и приоритет стилей рамок при конфликте соседних ячеек
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3; остаток [BUG-1725](BUG-1725-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout/paint (`crates/engine/layout/src/box_tree/table.rs` — разрешение конфликтов рамок `border-collapse: collapse`, CSS 2.1 §17.6.2.1)
 
@@ -23,3 +23,11 @@ WPT-RUN-14 срез 24: `css-tables/border-conflict-resolution`, `border-collaps
 ## Как проверить
 
 `css/css-tables/border-conflict-resolution.html`, `tentative/collapsed-borders-painting-order-001.html`.
+
+## Исправление
+
+`box_tree/table_collapse.rs::resolve_collapsed_borders` (вызов из `build_table_init` при `collapse`) строит сетку ячеек с учётом `colspan`/`rowspan` и для каждой стороны каждой ячейки выбирает победителя конфликта (CSS 2.1 §17.6.2.1): `hidden` > шире > стиль (`double > solid > dashed > dotted > ridge > outset > groove > inset`) > ячейка выше/левее; победитель записывается в стили обеих ячеек до раскладки, поэтому перекрытие линии сетки и отрисовка согласованы. На внешнем краю рамка таблицы, строго победившая рамку ячейки, обнуляет эту сторону ячейки (рисует таблица); при ничьей остаётся рамка ячейки. Причина «hidden не работает» была в разборе: ключевое слово `hidden` не принималось в шорткатах `border`/`border-*` (`is_border_style_kw`). Заодно шорткат больше не обнуляет заданную ширину при `none`/`hidden` (обнуление — один раз после каскада, `zero_unstyled_border_widths`, теперь и в `pseudo.rs`/`container.rs`): иначе `border: none 10px` + динамический `border-style: solid` терял ширину. Тесты `box_tree/tests/table_collapse_conflict.rs`.
+
+Измерение (reftest-пиксель-дифф `--screenshot` 800×600, `css-tables` + `CSS2/tables`, 1463 теста): `thick` 285 → 277, `identical` 235 → 243; `border-conflict-resolution`, `border-conflict-element-001a/b/c`, `subpixel-collapsed-borders-001/002`, `fixed-table-layout-027/029` стали `identical`. Ещё 2353 теста `css-backgrounds`/`css-borders`/`CSS2/borders`/`CSS2/backgrounds`: регрессий 0.
+
+Остаток — [BUG-1725](BUG-1725-OPEN.md).

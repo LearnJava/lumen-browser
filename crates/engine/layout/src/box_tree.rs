@@ -89,6 +89,7 @@ use multicol_abspos::lay_out_abs_children;
 
 mod table;
 mod table_anon;
+mod table_collapse;
 use table::{lay_out_table_row, table_intrinsic_content_width};
 
 mod diagnostics;

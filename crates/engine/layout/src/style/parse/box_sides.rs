@@ -182,7 +182,7 @@ pub(in crate::style) fn parse_padding_shorthand(val: &str, is_quirks: bool) -> O
 fn is_border_style_kw(s: &str) -> bool {
     matches!(
         s.trim(),
-        "none" | "solid" | "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset"
+        "none" | "hidden" | "solid" | "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset"
     )
 }
 
@@ -768,7 +768,6 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
     let tokens = split_top_level_ws(val);
     // CSS Backgrounds L3 §4.4: the shorthand resets every sub-property to its initial value
     // (`medium` / `none` / `currentcolor`) before applying the listed ones (BUG-1342).
-    let mut invisible = true;
     reset_border_sides(style);
     for tok in &tokens {
         if let Some(v) = parse_border_width(tok, em_basis, viewport, is_quirks) {
@@ -778,7 +777,6 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
             style.border_left_width = v;
         } else if is_border_style_kw(tok) {
             let bs = parse_border_style_kw(tok);
-            invisible = !bs.is_visible();
             style.border_top_style = bs;
             style.border_right_style = bs;
             style.border_bottom_style = bs;
@@ -790,15 +788,9 @@ pub(in crate::style) fn apply_border_shorthand(style: &mut ComputedStyle, val: &
             style.border_left_color = c;
         }
     }
-    // CSS Backgrounds L3 §4.1: `border-*-width` computes to 0 when the style is `none`/`hidden`.
-    // `border: none` must therefore also drop a width set earlier (a UA `fieldset` border, an
-    // author `border: 1px solid` the rule overrides) instead of leaving it to layout.
-    if invisible {
-        style.border_top_width = 0.0;
-        style.border_right_width = 0.0;
-        style.border_bottom_width = 0.0;
-        style.border_left_width = 0.0;
-    }
+    // The computed width of a `none`/`hidden` side is 0 (CSS Backgrounds L3 §4.1), but that is
+    // applied once after the whole cascade (`zero_unstyled_border_widths`): zeroing it here would
+    // lose the specified width a later `border-style: solid` is meant to bring back.
 }
 
 /// Разбирает `border-{top,right,bottom,left}: <width> <style> <color>` в одну сторону.
@@ -812,7 +804,6 @@ pub(in crate::style) fn apply_border_side_shorthand(
     is_quirks: bool,
 ) {
     // Same reset as `apply_border_shorthand`: unlisted sub-properties return to initial.
-    let mut invisible = true;
     *width = 3.0;
     *bstyle = BorderStyle::None;
     *color = CssColor::CurrentColor;
@@ -821,14 +812,9 @@ pub(in crate::style) fn apply_border_side_shorthand(
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
-            invisible = !bstyle.is_visible();
         } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
             *color = c;
         }
-    }
-    // Same as `apply_border_shorthand`: a `none`/`hidden` side has a computed width of 0.
-    if invisible {
-        *width = 0.0;
     }
 }
 

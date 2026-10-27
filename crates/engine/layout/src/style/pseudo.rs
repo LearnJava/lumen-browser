@@ -739,6 +739,9 @@ fn compute_pseudo_element_style_inner(
         apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, parent, is_quirks, dark_mode);
     }
 
+    // Same as the end of `compute_style`: a `none`/`hidden` border side computes to width 0.
+    super::cascade::zero_unstyled_border_widths(&mut style);
+
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
     // ::marker renders by default (content comes from list-style-type); content:none suppresses it.
     // ::selection applies to active text selection — no content required (CSS Pseudo-elements L4 §5.6).
