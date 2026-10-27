@@ -344,6 +344,7 @@ mod v8_bug1529_inline_cssom;
 mod v8_bug1535_table_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1297_background_cssom;
+mod v8_bug1551_misc_cssom;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1316_document_parentnode;
 #[cfg(feature = "v8-backend")]

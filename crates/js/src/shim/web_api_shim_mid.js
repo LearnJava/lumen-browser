@@ -2860,6 +2860,14 @@ var _LUMEN_LINE_WIDTH_PROPERTIES = {
     'border-bottom-width': 1, 'border-left-width': 1,
     'border-inline-start-width': 1, 'border-inline-end-width': 1,
     'border-block-start-width': 1, 'border-block-end-width': 1,
+    'outline-width': 1,
+};
+
+// Longhands whose specified value has a CSSOM canonical form beyond the grammar tables above: the
+// native `_lumen_css_canonical_misc` (engine `style::values::misc_cssom`) re-serializes strings,
+// `url()`, `counter()`, font family names and `<length-percentage>` sizes (BUG-1551).
+var _LUMEN_MISC_PROPERTIES = {
+    'content': 1, 'font-family': 1, 'font-size': 1, 'list-style-image': 1,
 };
 
 // CSS Sizing L3 §4 (CSSOM-2/BUG-484, third slice): `width`/`height` accept
@@ -3751,8 +3759,13 @@ function _lumen_canonicalize_longhand(key, strVal) {
     if (pending !== undefined) return pending;
     var anchorFn = _lumen_anchor_fn_canon(_lumen_anchor_fn_mode(key), strVal);
     if (anchorFn !== undefined) return anchorFn;
+    // CSS UI L3 `invert` is a valid `<'outline-color'>` that the generic `<color>` grammar rejects.
+    if (key === 'outline-color' && lowerVal === 'invert') return 'invert';
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key)) {
         return _lumen_css_canonical_color(strVal);
+    }
+    if (_LUMEN_MISC_PROPERTIES.hasOwnProperty(key)) {
+        return _lumen_css_canonical_misc(key, strVal);
     }
     if (_LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key)) {
         var grammar = _LUMEN_LENGTH_PROPERTIES[key];
@@ -4087,6 +4100,7 @@ CSSStyleDeclaration.prototype.setProperty = function(prop, val, priority) {
     if (_LUMEN_COLOR_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_LINE_WIDTH_PROPERTIES.hasOwnProperty(key) ||
+        _LUMEN_MISC_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_SIZING_LENGTH_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_MULTICOL_PROPERTIES.hasOwnProperty(key) ||
         _LUMEN_MIN_MAX_SIZE_PROPERTIES.hasOwnProperty(key) ||

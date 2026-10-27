@@ -254,6 +254,7 @@ pub use values::timing::{
 // там, где вызывателя внутри `style.rs` уже нет (правило §2.1).
 pub(crate) use values::rule_computed::insert_gap_rule_computed;
 pub use values::grid_cssom::canonical_specified_grid;
+pub use values::misc_cssom::canonical_specified_misc;
 pub use values::text_cssom::{canonical_specified_text, transform_text_after_by_value, transform_text_by_value};
 pub use values::background_cssom::{canonical_specified_background, serialize_border_radius};
 pub use values::rule_cssom::{GapDecl, expand_gap_rule_declaration, gap_rule_longhand_names, gap_rule_shorthand_value};

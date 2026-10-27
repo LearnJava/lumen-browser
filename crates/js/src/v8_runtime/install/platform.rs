@@ -813,6 +813,16 @@ pub(crate) fn install_css_supports_and_lazy_images(
         }
     );
 
+    // Canonical form of `content`, `font-family`, `font-size`, `list-style-image` for inline-`style`
+    // (BUG-1551): double-quoted strings, `url("…")`, unquoted identifier family names, `0.5%`.
+    // `None` — the assignment is dropped.
+    reg!(scope, ctx, store,
+        "_lumen_css_canonical_misc",
+        |prop: String, value: String| -> Option<String> {
+            lumen_layout::style::canonical_specified_misc(&prop, &value)
+        }
+    );
+
     // Grammar check for the inline-`style` grid family (`grid-*`, `flex-grow`/
     // `flex-shrink`, `flow-tolerance`; BUG-1315): the trimmed value when it parses,
     // `None` when the assignment must be dropped. `web_api_shim_mid.js`
