@@ -571,24 +571,26 @@ pub(in crate::style) fn apply_decl_layout(
             }
         }
         "border-spacing" => {
-            // CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`.
-            // One value: both h and v. Two values: h then v. Negatives invalid — skip.
-            let parts: Vec<&str> = val.split_whitespace().collect();
-            if let Some(first) = parts.first()
-                && let Some(h) = parse_length_q(first, is_quirks)
-                && let Length::Px(hpx) = h
-                && hpx >= 0.0
-            {
-                let vpx = if parts.len() >= 2 {
-                    parse_length_q(parts[1], is_quirks)
-                        .and_then(|v| if let Length::Px(px) = v { Some(px) } else { None })
-                        .filter(|px| *px >= 0.0)
-                        .unwrap_or(hpx)
-                } else {
-                    hpx
-                };
-                style.border_spacing_h = hpx;
-                style.border_spacing_v = vpx;
+            // CSS Tables L2 §border-spacing — `<length>{1,2}` (no `%`). One value: both axes;
+            // two values: horizontal then vertical. A literal negative or any other token is
+            // invalid — the declaration is skipped; a `calc()` that turns negative clamps to 0.
+            let tokens = split_top_level_ws(val);
+            let axis = |tok: &str| -> Option<f32> {
+                let len = parse_length_q(tok, is_quirks)?;
+                if matches!(len, Length::Px(px) if px < 0.0) {
+                    return None;
+                }
+                // `%` has no basis here: `resolve` yields `None` for it.
+                len.resolve(em_basis, None, viewport).map(|px| px.max(0.0))
+            };
+            let parsed = match tokens.as_slice() {
+                [h] => axis(h).map(|h| (h, h)),
+                [h, v] => axis(h).zip(axis(v)),
+                _ => None,
+            };
+            if let Some((h, v)) = parsed {
+                style.border_spacing_h = h;
+                style.border_spacing_v = v;
             }
         }
         "column-count" => {

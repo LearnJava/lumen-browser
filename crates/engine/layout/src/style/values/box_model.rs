@@ -191,6 +191,14 @@ pub enum BorderCollapse {
 }
 
 impl BorderCollapse {
+    /// Serialised keyword (`getComputedStyle`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Separate => "separate",
+            Self::Collapse => "collapse",
+        }
+    }
+
     /// Parse CSS keyword; returns `None` for unrecognised values.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
@@ -215,6 +223,14 @@ pub enum EmptyCells {
 }
 
 impl EmptyCells {
+    /// Serialised keyword (`getComputedStyle`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::Hide => "hide",
+        }
+    }
+
     /// Parse CSS keyword; returns `None` for unrecognised values.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
@@ -237,6 +253,14 @@ pub enum CaptionSide {
 }
 
 impl CaptionSide {
+    /// Serialised keyword (`getComputedStyle`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
+
     /// Parse CSS keyword; returns `None` for unrecognised values.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
@@ -259,6 +283,14 @@ pub enum TableLayout {
 }
 
 impl TableLayout {
+    /// Serialised keyword (`getComputedStyle`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Fixed => "fixed",
+        }
+    }
+
     /// Parse CSS keyword; returns `None` for unrecognised values.
     pub fn parse(s: &str) -> Option<Self> {
         match s {

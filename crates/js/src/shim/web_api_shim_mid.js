@@ -2632,6 +2632,8 @@ var _LUMEN_TEXT_PROPERTIES = {
     'font-weight': 1, 'font-style': 1, 'font-stretch': 1,
     // CSS Inline L3 (BUG-1529): `line-height`, `baseline-shift`, the `vertical-align` grammar, `initial-letter`.
     'line-height': 1, 'baseline-shift': 1, 'vertical-align': 1, 'initial-letter': 1,
+    // CSS Tables L2 (BUG-1535): `<length [0,∞]>{1,2}`.
+    'border-spacing': 1,
 };
 
 // CSS Text L4 §2.1 / §6.4.3: `white-space` and `text-wrap` are shorthands; the inline-style
@@ -2943,6 +2945,11 @@ var _LUMEN_KEYWORD_PROPERTIES = {
     'float':       ['none', 'left', 'right', 'inline-start', 'inline-end'],
     'visibility':  ['visible', 'hidden', 'collapse'],
     'box-sizing':  ['border-box', 'content-box'],
+    // CSS Tables L2 / CSS 2.1 §17 (BUG-1535): keyword longhands of the table model.
+    'border-collapse': ['separate', 'collapse'],
+    'caption-side': ['top', 'bottom'],
+    'empty-cells': ['show', 'hide'],
+    'table-layout': ['auto', 'fixed'],
     'color-interpolation': ['auto', 'srgb', 'linearrgb'],
     // CSS UI L4 §6.2 — `caret-shape` / `caret-animation` (inherited keyword longhands).
     'caret-shape': ['auto', 'bar', 'block', 'underscore'],
