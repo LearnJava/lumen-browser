@@ -101,3 +101,51 @@ fn well_formed_table_gets_no_anonymous_boxes() {
     assert_eq!(tbody.children[0].origin.role, super::super::BoxRole::Element);
     assert_eq!(tbody.children[0].children.len(), 2);
 }
+
+// BUG-1536: `display: contents` на строке или группе строк таблицы.
+
+#[test]
+fn display_contents_row_cells_join_the_table() {
+    let html = r#"<table id="t"><tr style="display:contents"><td id="a" style="width:50px;height:20px;padding:0">a</td><td id="b" style="width:30px;height:20px;padding:0">b</td></tr></table>"#;
+    let (t, a, b) = (rect_of(html, "t"), rect_of(html, "a"), rect_of(html, "b"));
+    assert_eq!((a.width, a.height), (50.0, 20.0), "{a:?}");
+    assert_eq!((b.width, b.height), (30.0, 20.0), "{b:?}");
+    assert_eq!(b.x, a.x + a.width, "{a:?} {b:?}");
+    assert_eq!(t.height, 20.0, "{t:?}");
+}
+
+#[test]
+fn display_contents_row_group_rows_join_the_table() {
+    let html = r#"<table id="t"><tbody style="display:contents"><tr><td id="a" style="width:50px;height:20px;padding:0">a</td></tr><tr><td id="b" style="width:50px;height:20px;padding:0">b</td></tr></tbody></table>"#;
+    let (t, a, b) = (rect_of(html, "t"), rect_of(html, "a"), rect_of(html, "b"));
+    assert_eq!((a.width, a.height), (50.0, 20.0), "{a:?}");
+    assert_eq!(b.y, a.y + 20.0, "{a:?} {b:?}");
+    assert_eq!(t.height, 40.0, "{t:?}");
+}
+
+
+struct Mono;
+impl crate::TextMeasurer for Mono {
+    fn char_width(&self, _: char, size: f32) -> f32 {
+        size * 0.5
+    }
+    fn line_gap_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
+}
+
+fn measured_cell_width(html: &str) -> f32 {
+    let doc = lumen_html_parser::parse(html);
+    let sheet = lumen_css_parser::parse("body{margin:0}");
+    let root = super::super::layout_measured(&doc, &sheet, Size::new(500.0, 600.0), &Mono);
+    super::find_by_id_all(&root, &doc, "a").expect("нет #a").rect.width
+}
+
+#[test]
+fn cell_text_indentation_does_not_widen_the_column() {
+    let plain = r#"<table><tr><td id="a" style="padding:0">XXXX</td></tr></table>"#;
+    let spaced = "<table><tr><td id=\"a\" style=\"padding:0\">\n    XXXX\n    </td></tr></table>";
+    let p = measured_cell_width(plain);
+    assert!(p > 0.0, "{p}");
+    assert_eq!(measured_cell_width(spaced), p);
+}
