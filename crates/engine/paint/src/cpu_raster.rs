@@ -629,6 +629,36 @@ pub(crate) fn rasterize_cpu_pixmap(
                     layer.mark(b);
                 }
             }
+            // CSS Backgrounds L3 §6 — border-image: the nine slices / tiles come from the
+            // shared `border_image_quads`; each is the whole image placed so that its
+            // `src` window lands on `dst`, drawn through `dst` only. Unregistered → skipped.
+            DisplayCommand::DrawBorderImage { area, src, spec } => {
+                let b = rect_bounds(area);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                if let Some(img) = image_map.get(src.as_str()) {
+                    let (iw, ih) = (img.width as f32, img.height as f32);
+                    let mut vector_cache: Option<Image> = None;
+                    for q in crate::border_image::border_image_quads(spec, *area, iw, ih) {
+                        let sx = q.dst.width / q.src.width;
+                        let sy = q.dst.height / q.src.height;
+                        let placed = Rect::new(
+                            q.dst.x - q.src.x * sx,
+                            q.dst.y - q.src.y * sy,
+                            iw * sx,
+                            ih * sy,
+                        );
+                        // SVG source: redraw at the placed size instead of stretching the raster.
+                        let tile = if placed.width * placed.height <= 16.0e6 {
+                            vector_tile(img, placed.width, placed.height, &mut vector_cache)
+                        } else {
+                            None
+                        };
+                        blit_image_into_rect(&mut layer.pm, placed, q.dst, tile.unwrap_or(img), 1.0, c)?;
+                    }
+                    layer.mark(b);
+                }
+            }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, font_weight, font_style,
                 font_features, font_family, text_orientation, letter_spacing, word_spacing, ..

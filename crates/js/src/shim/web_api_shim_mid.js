@@ -2764,6 +2764,8 @@ var _LUMEN_BACKGROUND_PROPERTIES = {
     'background-position-x': 1, 'background-position-y': 1, 'box-shadow': 1, 'border-radius': 1,
     'border-top-left-radius': 1, 'border-top-right-radius': 1, 'border-bottom-right-radius': 1,
     'border-bottom-left-radius': 1,
+    'border-image': 1, 'border-image-source': 1, 'border-image-slice': 1, 'border-image-width': 1,
+    'border-image-outset': 1, 'border-image-repeat': 1,
 };
 
 // CSS Text L3/L4 longhands with a length or multi-component grammar: the native

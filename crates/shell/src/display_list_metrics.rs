@@ -40,6 +40,7 @@ pub(crate) fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskConicGradient { rect, .. }
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::DrawCrossFade { dest, .. } => dest,
+            DisplayCommand::DrawBorderImage { area, .. } => area,
             DisplayCommand::PopClip
             | DisplayCommand::PushClipPath { .. }
             | DisplayCommand::PushOpacity { .. }
@@ -144,6 +145,7 @@ pub(crate) fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskConicGradient { rect, .. }
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::DrawCrossFade { dest, .. } => dest,
+            DisplayCommand::DrawBorderImage { area, .. } => area,
             DisplayCommand::PopClip
             | DisplayCommand::PushClipPath { .. }
             | DisplayCommand::PushOpacity { .. }

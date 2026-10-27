@@ -210,6 +210,7 @@ impl ComputedStyle {
             content_align_extra: ContentAlignExtra::default(),
             background_layers: Vec::new(),
             background_specified: None,
+            border_image: BorderImage::default(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
@@ -647,6 +648,7 @@ impl ComputedStyle {
             // Backgrounds — не наследуются, defaults.
             background_layers: Vec::new(),
             background_specified: None,
+            border_image: BorderImage::default(),
             // Will Change — не наследуется; Pointer Events — наследуется.
             will_change: Vec::new(),
             pointer_events: inherited.pointer_events,

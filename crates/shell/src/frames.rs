@@ -1715,6 +1715,11 @@ pub(crate) fn rekey_frame_images(dl: &mut DisplayList, frames: &[FrameHandle], i
                     *src = key;
                 }
             }
+            DisplayCommand::DrawBorderImage { src, .. } => {
+                if let Some(key) = find_key(src) {
+                    *src = key;
+                }
+            }
             DisplayCommand::DrawCrossFade { src_a, src_b, .. } => {
                 if let Some(key) = find_key(src_a) {
                     *src_a = key;

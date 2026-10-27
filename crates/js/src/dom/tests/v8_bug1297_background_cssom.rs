@@ -100,3 +100,15 @@ fn border_style_accepts_hidden_and_empty_assignment_clears_the_shorthand() {
         ""
     );
 }
+
+#[test]
+fn border_image_cssom_and_supports() {
+    let rt = rt();
+    assert_eq!(assign(&rt, "borderImage", "fill 1 2% 3 4% / auto"), "1 2% 3 4% fill / auto");
+    assert_eq!(assign(&rt, "borderImage", "none 100% / 1 / 0 stretch"), "none");
+    assert_eq!(assign(&rt, "borderImageSlice", "-1"), "");
+    assert_eq!(assign(&rt, "borderImageRepeat", "round stretch space"), "");
+    assert_eq!(eval_str(&rt, "String(CSS.supports('border-image-slice', '-1'))"), "false");
+    assert_eq!(eval_str(&rt, "String(CSS.supports('border-image-source', 'url(x)'))"), "true");
+    assert_eq!(eval_str(&rt, "String(CSS.supports('border-image', 'inherit'))"), "true");
+}

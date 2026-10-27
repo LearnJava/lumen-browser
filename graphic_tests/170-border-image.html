@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!-- CSS Backgrounds L3 §6 — `border-image` на блоке (картинка 90×90: угловые клетки разных цветов, края с тёмным квадратом, середина с кольцом).
+     A: slice 30, stretch · B: repeat (плитки центрируются, крайние обрезаются) · C: round (целое число плиток, растянутых по оси) ·
+     D: space (зазоры между плитками) · E: fill + border-image-width 25px + outset 10px · F: линейный градиент как источник.
+     Текста нет: видны только рамки. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; box-sizing: border-box; }
+  .cell { float: left; width: 300px; height: 300px; margin: 0 16px 20px 0; }
+  .b { width: 190px; height: 130px; margin: 0; border: 30px solid #222; border-image-source: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Crect width='90' height='90' fill='%23fff'/%3E%3Crect width='30' height='30' fill='%23c53030'/%3E%3Crect x='60' width='30' height='30' fill='%232b6cb0'/%3E%3Crect y='60' width='30' height='30' fill='%232f855a'/%3E%3Crect x='60' y='60' width='30' height='30' fill='%23dd6b20'/%3E%3Crect x='30' width='30' height='30' fill='%23ecc94b'/%3E%3Crect x='38' y='8' width='14' height='14' fill='%23744210'/%3E%3Crect x='30' y='60' width='30' height='30' fill='%23ecc94b'/%3E%3Crect x='38' y='68' width='14' height='14' fill='%23744210'/%3E%3Crect y='30' width='30' height='30' fill='%23b794f4'/%3E%3Crect x='8' y='38' width='14' height='14' fill='%2344337a'/%3E%3Crect x='60' y='30' width='30' height='30' fill='%23b794f4'/%3E%3Crect x='68' y='38' width='14' height='14' fill='%2344337a'/%3E%3Crect x='30' y='30' width='30' height='30' fill='%23b2f5ea'/%3E%3Ccircle cx='45' cy='45' r='9' fill='%23285e61'/%3E%3C/svg%3E"); border-image-slice: 30; }
+  .rep { border-image-repeat: repeat; }
+  .rnd { border-image-repeat: round; border-image-width: 25px; }
+  .spc { border-image-repeat: space; border-image-width: 25px; }
+  .fil { border-image-slice: 30 fill; border-image-width: 25px; border-image-outset: 10px; margin: 10px 0 0 10px; }
+  .grd { border-image-source: linear-gradient(135deg, #c53030, #ecc94b 50%, #2b6cb0); border-image-slice: 12; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="cell"><div class="b"></div></div>
+    <div class="cell"><div class="b rep"></div></div>
+    <div class="cell"><div class="b rnd"></div></div>
+    <div class="cell"><div class="b spc"></div></div>
+    <div class="cell"><div class="b fil"></div></div>
+    <div class="cell"><div class="b grd"></div></div>
+  </div>
+</body>
+</html>

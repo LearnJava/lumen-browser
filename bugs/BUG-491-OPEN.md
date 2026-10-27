@@ -93,7 +93,7 @@ Two files are **not** attributed to this bug despite touching the same
 properties: `border-image-width-interpolation-math-functions.html` tests a
 different, non-draft property (`border-image-width`, CSS Backgrounds and
 Borders **Level 3**, not this Level 4 draft — filed separately as
-[BUG-492](../bugs/BUG-492-OPEN.md), not to conflate a mature spec gap with a
+[BUG-492](../bugs/BUG-492-FIXED.md), not to conflate a mature spec gap with a
 speculative-draft one); `border-width-hairline.html`'s one real failure is
 [BUG-384](../bugs/BUG-384-FIXED.md) (named window access on a bare
 identifier), not this bug.
@@ -144,7 +144,7 @@ plus five separate `box-shadow-*` component longhands, plus 8 `border-*-radius`
 pair shorthands, plus `border-clip`, plus a `<line-width>` keyword. Implementing
 `corner-shape`/`border-shape` also needs a new corner-clipping paint algorithm
 (notch/bevel/round/squircle corner geometry) that does not exist anywhere in
-`lumen-paint` today — same shape of finding as [BUG-492](BUG-492-OPEN.md)'s
+`lumen-paint` today — same shape of finding as [BUG-492](BUG-492-FIXED.md)'s
 9-slice `border-image` paint gap, which set this precedent.
 
 Unlike CSSOM-N/FRAME-style API gaps, this belongs to P4's existing CSS property

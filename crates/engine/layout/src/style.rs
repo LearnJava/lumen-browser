@@ -264,6 +264,10 @@ pub use values::rule_anim::{
     transition_token_covers,
 };
 pub use values::caret::{CaretAnimation, CaretShape};
+pub use values::border_image::{
+    BorderImage, BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth,
+    canonical_specified_border_image,
+};
 pub use values::input_security::InputSecurity;
 pub use values::interactivity::Interactivity;
 pub use values::rule_list::{RuleItem, RuleList};

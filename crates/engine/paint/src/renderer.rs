@@ -2148,6 +2148,39 @@ impl Renderer {
                         draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                     }
                 }
+                // CSS Backgrounds L3 §6 — border-image: one textured quad per slice/tile from the
+                // shared `border_image_quads` (UV = slice window / image size). Unregistered → skipped.
+                DisplayCommand::DrawBorderImage { area, src, spec } => {
+                    if !sync_scissor!() {
+                        continue;
+                    }
+                    let area = translate_rect(*area, dx, dy);
+                    let Some(gpu) = self.images.get(src) else { continue };
+                    let img_w = gpu.width as f32;
+                    let img_h = gpu.height as f32;
+                    if img_w <= 0.0 || img_h <= 0.0 { continue; }
+                    let v_start = image_vertices.len() as u32;
+                    let image_batch_idx = image_bind_groups.len() as u32;
+                    image_bind_groups.push(gpu.bind_group_linear.clone());
+                    for q in crate::border_image::border_image_quads(spec, area, img_w, img_h) {
+                        push_image_quad(
+                            &mut image_vertices,
+                            q.dst,
+                            [q.src.x / img_w, q.src.y / img_h],
+                            [(q.src.x + q.src.width) / img_w, (q.src.y + q.src.height) / img_h],
+                            1.0,
+                        );
+                    }
+                    if let Some(m) = transform_stack.last()
+                        && !img_xform_disabled()
+                    {
+                        apply_affine_to_verts(&mut image_vertices[v_start as usize..], m);
+                    }
+                    let v_count = image_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
+                    }
+                }
                 // CSS Images L3 §3.3 — GPU linear gradient pipeline.
                 DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                     if !sync_scissor!() {

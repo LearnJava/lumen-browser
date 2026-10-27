@@ -102,6 +102,7 @@ impl DisplayCommand {
                 mv(thumb_rect, dx, dy);
             }
             Self::DrawCrossFade { dest, .. } => mv(dest, dx, dy),
+            Self::DrawBorderImage { area, .. } => mv(area, dx, dy),
             Self::PopClip
             | Self::PopOpacity
             | Self::PopBlendMode

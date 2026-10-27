@@ -157,6 +157,9 @@ pub fn collect_cascade_background_image_requests(
             for layer in style.mask_layers.iter().filter(|_| own_box) {
                 push_bg_image_urls(&layer.image, dpr, &mut out);
             }
+            if own_box {
+                push_bg_image_urls(&style.border_image.source, dpr, &mut out);
+            }
             if style.display == Display::ListItem
                 && let Some(src) = &style.list_style_image
                 && !src.is_empty()
@@ -254,6 +257,8 @@ fn collect_bg_image_inner(root: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
         for layer in &b.style.background_layers {
             push_bg_image_urls(&layer.image, dpr, out);
         }
+        // CSS Backgrounds L3 §6: `border-image-source` is fetched like a background.
+        push_bg_image_urls(&b.style.border_image.source, dpr, out);
         // CSS Masking L1 §4.1: a `mask-image: url(...)` bitmap is fetched like a background.
         for layer in &b.style.mask_layers {
             push_bg_image_urls(&layer.image, dpr, out);

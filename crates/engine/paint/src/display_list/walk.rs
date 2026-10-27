@@ -64,7 +64,7 @@ pub(crate) fn emit_box_self(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 emit_box_border(b, radii, out);
             }
             emit_column_rules(b, out);
@@ -102,7 +102,7 @@ pub(crate) fn emit_box_self(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -150,7 +150,7 @@ pub(crate) fn emit_box_self(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -217,7 +217,7 @@ pub(crate) fn emit_box_self(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -267,7 +267,7 @@ pub(crate) fn emit_box_self(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -330,7 +330,7 @@ pub(crate) fn emit_box_self(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -1301,7 +1301,7 @@ fn dispatch<'a>(
                     || s.border_right_style.is_visible()
                     || s.border_bottom_style.is_visible()
                     || s.border_left_style.is_visible();
-                if has_border {
+                if has_border && !emit_border_image(b, dpr, out) {
                     emit_box_border(
                         b, CornerRadii::from_style_and_box(s, db.rect.width, db.rect.height), out,
                     );
@@ -1452,7 +1452,7 @@ fn dispatch<'a>(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -1518,7 +1518,7 @@ fn dispatch<'a>(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -1583,7 +1583,7 @@ fn dispatch<'a>(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -1627,7 +1627,7 @@ fn dispatch<'a>(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
@@ -1690,7 +1690,7 @@ fn dispatch<'a>(
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
                 || s.border_left_style.is_visible();
-            if has_border {
+            if has_border && !emit_border_image(b, dpr, out) {
                 let cur = s.color;
                 out.push(DisplayCommand::DrawBorder {
                     rect: b.rect,

@@ -256,6 +256,8 @@ pub use scrollbars::{ScrollLayerOverride, apply_scroll_overrides, patch_scroll_l
 use scrollbars::{SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR, SCROLLBAR_WIDTH_THIN};
 
 mod fieldset;
+mod border_image_emit;
+use border_image_emit::emit_border_image;
 use fieldset::{emit_box_border, fieldset_decoration_box};
 mod outline_misc;
 use outline_misc::{emit_column_rules, emit_outline, emit_resize_grip};

@@ -36,6 +36,7 @@ pub fn canonical_specified_background(prop: &str, value: &str) -> Option<String>
             }
         }
         "border-radius" => border_radius(v),
+        p if p.starts_with("border-image") => super::border_image::canonical_specified_border_image(p, v),
         "border-top-left-radius"
         | "border-top-right-radius"
         | "border-bottom-right-radius"

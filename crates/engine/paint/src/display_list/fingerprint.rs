@@ -656,6 +656,7 @@ fn draw_cmd_local_bbox(cmd: &DisplayCommand) -> Option<SegBounds> {
             SegBounds::Rect(inflate_rect(*rect, width + offset.max(0.0)))
         }
         DisplayCommand::DrawCrossFade { dest, .. } => SegBounds::Rect(*dest),
+        DisplayCommand::DrawBorderImage { area, .. } => SegBounds::Rect(*area),
         DisplayCommand::BoxModelOverlay { margin, .. } => SegBounds::Rect(*margin),
         DisplayCommand::DrawScrollbar { track_rect, thumb_rect, .. } => {
             SegBounds::Rect(union_rects(*track_rect, *thumb_rect))
@@ -1169,6 +1170,7 @@ pub(crate) fn get_command_rect(cmd: &DisplayCommand) -> Option<Rect> {
         DisplayCommand::DrawLinearGradient { rect, .. } => Some(*rect),
         DisplayCommand::DrawRadialGradient { rect, .. } => Some(*rect),
         DisplayCommand::DrawConicGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBorderImage { area, .. } => Some(*area),
         _ => None,
     }
 }

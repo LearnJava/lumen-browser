@@ -1402,3 +1402,65 @@ use super::text_and_images::build;
         assert_eq!(names.iter().filter(|n| **n == "DrawCrossFade").count(), 1, "{names:?}");
         assert!(!names.contains(&"PushOpacity"), "{names:?}");
     }
+
+    // ── border-image (CSS Backgrounds L3 §6) ────────────────────────────────
+
+    fn border_images(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter().filter(|c| matches!(c, DisplayCommand::DrawBorderImage { .. })).collect()
+    }
+
+    /// URL-источник заменяет `DrawBorder`: одна `DrawBorderImage` на область border box + outset.
+    #[test]
+    fn border_image_url_replaces_draw_border() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; border: 10px solid red; \
+             border-image: url(frame.png) 30 / 8px / 2px round; }",
+        );
+        let bis = border_images(&dl);
+        assert_eq!(bis.len(), 1, "одна DrawBorderImage");
+        assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::DrawBorder { .. })), "DrawBorder не нужен");
+        let DisplayCommand::DrawBorderImage { area, src, spec } = bis[0] else { unreachable!() };
+        assert_eq!(src, "frame.png");
+        // border box 100×60 плюс outset 2px со всех сторон.
+        assert!((area.width - 104.0).abs() < 0.1 && (area.height - 64.0).abs() < 0.1, "{area:?}");
+        assert_eq!(spec.repeat, [crate::border_image::RepeatMode::Round; 2]);
+        assert_eq!(spec.width, [crate::border_image::WidthValue::Px(8.0); 4]);
+        assert_eq!(spec.slice, [crate::border_image::SliceValue::Number(30.0); 4]);
+    }
+
+    /// Без `border-image-source` рамку по-прежнему рисует `border-style`.
+    #[test]
+    fn border_image_none_keeps_draw_border() {
+        let dl = build("<div>x</div>", "div { width: 80px; height: 40px; border: 4px solid red; }");
+        assert!(border_images(&dl).is_empty());
+        assert!(dl.iter().any(|c| matches!(c, DisplayCommand::DrawBorder { .. })));
+    }
+
+    /// Число в `border-image-width` умножает ширину рамки, `fill` доезжает до растеризатора.
+    #[test]
+    fn border_image_number_width_scales_border_and_keeps_fill() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; border: 5px solid red; \
+             border-image: url(f.png) 10 fill / 2; }",
+        );
+        let bis = border_images(&dl);
+        let DisplayCommand::DrawBorderImage { spec, .. } = bis[0] else { panic!("нет DrawBorderImage") };
+        assert!(spec.fill);
+        assert_eq!(spec.width, [crate::border_image::WidthValue::Px(10.0); 4]);
+    }
+
+    /// Градиент раскладывается на клипы и градиентные команды (картинка размером с область).
+    #[test]
+    fn border_image_gradient_lowers_to_clipped_gradients() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; border: 10px solid red; \
+             border-image: linear-gradient(red, blue) 10; }",
+        );
+        assert!(border_images(&dl).is_empty());
+        let grads = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. })).count();
+        assert_eq!(grads, 8, "восемь клеток без fill");
+        assert!(!dl.iter().any(|c| matches!(c, DisplayCommand::DrawBorder { .. })));
+    }
