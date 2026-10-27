@@ -75,12 +75,12 @@
 {
  "generated": "2026-10-27",
  "counts": {
-  "open": 292,
+  "open": 298,
   "fixed": 1369,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1664,
+ "total_bugs": 1670,
  "phases": [
   {
    "id": "P0",
@@ -11684,6 +11684,48 @@
   },
   "BUG-1727": {
    "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: `attachShadow()` не бросает `TypeError` (нет `mode`, неверный `slotAssignment`) и `NotSupportedError` (хост не из списка, повторный выз…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `attachShadow`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1728": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: содержимое `<template>` теряется — фрагментный парсер (`innerHTML`) не заполняет `content`, `template.innerHTML` отдаёт пустую строку,…",
+   "component": "js/dom (`dom_core.rs` `_lumen_set_inner_html`/`import_node`, `dom_helpers.rs::serialize_node`, `cloneNode`/`importNode`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1729": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: путь события slotted-узла не идёт через `assignedSlot` и теневое дерево хоста (`lt > h1 > BODY` вместо `lt > slot > … > shadow root > h…",
+   "component": "js (`crates/js/src/shim/event_shim.js`, путь диспатча / `composedPath`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1730": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: `slotchange` приходит синхронно, а не в microtask; `assignedNodes({flatten:true})` не отдаёт fallback пустого слота; `slotchange-event.…",
+   "component": "js (`crates/js/src/shim/web_api_shim_mid.js`, `slotchange`, `assignedNodes({flatten})`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1731": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: `document.activeElement` не ретаргетится на хост, `host.focus()` с `delegatesFocus` не делегирует, `:focus`/`:focus-within` не матчат х…",
+   "component": "js/shell (`web_api_shim_mid.js` `activeElement`, `focus()`, `:focus` в теневых деревьях)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1732": {
+   "status": "open",
+   "title": "Найден WPT-SHADOW-SCOUT: у `document.implementation.createHTMLDocument()` нет `createNodeIterator`/`createTreeWalker`; остаток BUG-415; `ownerdocument-002.html`…",
+   "component": "js (`web_api_shim_mid.js`, `createNodeIterator` только на главном `document`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1733": {
+   "status": "open",
    "title": "Остаток [BUG-1539](bugs/BUG-1539-FIXED.md): на CPU-пути `backdrop-filter` теперь работает под собственными opacity/transform/clip-path/mix-blend-mode/border-rad…",
    "component": "paint (`crates/engine/paint/src/cpu_raster.rs::apply_backdrop_to_stack`, wgpu `renderer.rs` `PushBackdropFilter`)",
    "date": null,
@@ -22049,6 +22091,9 @@
   "js (`crates/js/src/shim/` — `matchMedia`, `MediaQueryList`)": [
    "BUG-1562"
   ],
+  "js (`crates/js/src/shim/event_shim.js`, путь диспатча / `composedPath`)": [
+   "BUG-1729"
+  ],
   "js (`crates/js/src/shim/event_target_shim.js:21-25` — метод работает только с `this._listeners`; `web_api_shim_mid.js:3215` `function Node` — `Node.prototype` не наследует `EventTarget.prototype`; `crates/js/src/xhr.rs:59` `_XhrEventTarget` — своя база)": [
    "BUG-1123"
   ],
@@ -22247,6 +22292,12 @@
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `_lumen_make_dataset`)": [
    "BUG-496"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `attachShadow`)": [
+   "BUG-1727"
+  ],
+  "js (`crates/js/src/shim/web_api_shim_mid.js`, `slotchange`, `assignedNodes({flatten})`)": [
+   "BUG-1730"
   ],
   "js (`crates/js/src/shim/web_api_shim_mid.js`, `web_api_shim_tail_mc.js`, `web_api_shim_head.js`)": [
    "BUG-479"
@@ -22552,6 +22603,9 @@
   "js (`web_api_shim_mid.js` `_lumen_font_face_try_sources`)": [
    "BUG-1639"
   ],
+  "js (`web_api_shim_mid.js`, `createNodeIterator` только на главном `document`)": [
+   "BUG-1732"
+  ],
   "js (`web_api_shim_mid.js`: `importNode`, апгрейд custom element, обёртка `DocumentFragment`)": [
    "BUG-1239"
   ],
@@ -22648,6 +22702,9 @@
   "js/dom (`document.title`)": [
    "BUG-1674"
   ],
+  "js/dom (`dom_core.rs` `_lumen_set_inner_html`/`import_node`, `dom_helpers.rs::serialize_node`, `cloneNode`/`importNode`)": [
+   "BUG-1728"
+  ],
   "js/dom (не локализовано)": [
    "BUG-1267"
   ],
@@ -22734,6 +22791,9 @@
   ],
   "js/shell (`navigation_api.rs`, `frame_bridge.rs` — `window.navigation` под-документа)": [
    "BUG-1701"
+  ],
+  "js/shell (`web_api_shim_mid.js` `activeElement`, `focus()`, `:focus` в теневых деревьях)": [
+   "BUG-1731"
   ],
   "js/shell (`window.open` в именованный фрейм; фрейм другого origin; `target`)": [
    "BUG-1702"
@@ -23939,7 +23999,7 @@
    "BUG-784"
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs::apply_backdrop_to_stack`, wgpu `renderer.rs` `PushBackdropFilter`)": [
-   "BUG-1727"
+   "BUG-1733"
   ],
   "paint (`crates/engine/paint/src/cpu_raster.rs::rasterize_cpu_with_fonts` — CPU-очистка канвы) + эталоны `graphic_tests/dump-golden/`": [
    "BUG-1106"

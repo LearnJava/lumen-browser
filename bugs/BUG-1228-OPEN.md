@@ -24,3 +24,7 @@ w.innerHTML                      // '<span><template shadowrootmode="open" …><
 `setHTMLUnsafe` (Element, ShadowRoot, `Document.parseHTMLUnsafe`) создаёт теневые корни по
 `shadowrootmode`/`delegatesfocus`/`serializable`/`clonable` (HTML LS §13.2.6.4.?, «attach a shadow root»);
 `innerHTML` — нет.
+
+## Дополнение WPT-SHADOW-SCOUT (2026-10-27, [`shadow-dom.md`](../docs/wpt-vendor-notes/shadow-dom.md))
+
+Пробы `lumen --dump-layout`: (1) `innerHTML`/`setHTMLUnsafe` **выбрасывают** `<template shadowrootmode>` целиком, а не оставляют `<template>`: `d.innerHTML='<a><template shadowrootmode=open><i></i></template></a>'` → `<a></a>` (спека для `innerHTML` оставляет обычный `<template shadowrootmode="open">` в DOM, это 106 сабтестов `declarative-shadow-dom-opt-in.html` и 340 `…-attachment.html`); (2) у `HTMLTemplateElement` нет IDL-отражения `shadowRootMode`/`shadowRootDelegatesFocus`/`shadowRootClonable`/`shadowRootSerializable`/`shadowRootSlotAssignment` (`undefined`); (3) `Document.parseHTMLUnsafe` существует, но корни не создаёт; (4) см. [BUG-1728](BUG-1728-OPEN.md) — фрагментный парсер не заполняет `content` вложенного `<template>`, чинить вместе. Масштаб по баллам: 21 id, потолок 16 баллов (0.024 п.п. корпуса) — сабтестов много, id мало.

@@ -1,6 +1,6 @@
 # BUG-1539 — `backdrop-filter` не применяется к элементу с `opacity<1`, `transform`, `clip-path`, `mix-blend-mode`; не обрезается по `border-radius`; `isolation` на предке ошибочно образует корень
 
-**Статус:** FIXED 2026-10-27 (P3, CPU-путь; остаток [BUG-1727](BUG-1727-OPEN.md))
+**Статус:** FIXED 2026-10-27 (P3, CPU-путь; остаток [BUG-1733](BUG-1733-OPEN.md))
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** paint (`crates/engine/paint/src/cpu_raster.rs` `PushBackdropFilter`; `display_list/box_layer.rs:268` — порядок `PushBackdropFilter`/`PushTransform`/`PushClipPath`/`PushOpacity`)
 
@@ -45,4 +45,4 @@ WPT-RUN-14 срез 24: `css/filter-effects/backdrop-filter-*` (`-3d-transform-p
 
 Замер (`tests/wpt/reftest_pixdiff`, `css/filter-effects/*backdrop*`, 800×600, база — бинарь до правки): `identical` 28→34, `thick` 55→48; перешли в `identical`: `basic-opacity-2`, `clipped`, `clip-rounded-clip`, `edge-pixels`, `plus-mask`, `plus-mask-large`, `with-mix-blend-mode-same-element`, `filters-blur-large`. Два «identical→thick» (`backdrop-root-clip-path-2`, `css-backdrop-filter-transform-clip`) — артефакт базы: у неё эталон не рисовался вовсе. Эталон CPU-снимка `30-css-filter` перегенерирован (край `backdrop-filter` больше не стирает альфу). Тесты: `cpu_raster/tests/layers_borders_images.rs::backdrop_filter_*`, `display_list/tests/shadows_and_transforms.rs::backdrop_filter_carries_radii_and_wrapper_count`.
 
-Остаток — [BUG-1727](BUG-1727-OPEN.md).
+Остаток — [BUG-1733](BUG-1733-OPEN.md).
