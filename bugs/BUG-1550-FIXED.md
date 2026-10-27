@@ -1,6 +1,6 @@
 # BUG-1550 — `counter(name, <custom-style>)` добавляет `prefix` и `suffix` стиля (по умолчанию `". "`): `counter(a, f)` — `X.` вместо `X`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 25, `css/css-typed-om` + `cssom-view` + `cssom` + `css-lists` + `css-counter-styles`)
 **Область:** layout (`crates/engine/layout/src/counters.rs` — `format_counter_with_registry` и вызов из `counter()`/`counters()`)
 
@@ -30,3 +30,7 @@ WPT-RUN-14 срез 25: кластер `cs-atrule-other` (`css-counter-styles/co
 ## Как проверить
 
 `<style>@counter-style f{system:cyclic;symbols:"X" "Y"} #n::before{content:counter(a,f)}</style>` при `counter-reset:a 3` даёт `X`.
+
+## Исправление
+
+К моменту взятия дефект уже был устранён в COUNTER-STYLES-BUILTIN: `counters.rs::format_counter_with_registry` возвращает представление без `prefix`/`suffix` (для `counter()`/`counters()`), а `format_marker_with_registry` — с ними (для `::marker`). Добавлены регрессионные тесты `tests/counter_style_markers.rs` (`counter_function_omits_*`, `counters_function_omits_*`): циклический стиль с аффиксами по умолчанию и явными `prefix:"<"; suffix:"!"` даёт `X`.
