@@ -458,6 +458,10 @@ pub enum BackgroundClip {
     /// `text` (CSS Backgrounds L4) — фон клипается по форме текста
     /// внутри box-а. Phase 0 хранит как atom, реальный clip — P2.
     Text,
+    /// `border-area` (CSS Backgrounds L4 §3.8) — фон виден только там, где
+    /// нарисована рамка (border box минус padding box, со скруглениями и
+    /// разрывами `border-style`). Paint: `emit_border_area_clipped`.
+    BorderArea,
 }
 
 impl BackgroundClip {
@@ -467,6 +471,7 @@ impl BackgroundClip {
             "padding-box" => Some(Self::PaddingBox),
             "content-box" => Some(Self::ContentBox),
             "text" => Some(Self::Text),
+            "border-area" => Some(Self::BorderArea),
             _ => None,
         }
     }

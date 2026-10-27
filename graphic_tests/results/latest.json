@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-10-27T10:26:50",
+  "timestamp": "2026-10-27T23:27:48",
   "git": {
-    "commit": "c25b9a2e2",
-    "branch": "p4-css-bdb-clone",
-    "subject": "box-decoration-break (WIP): clone/slice для inline-боксов, -webkit- алиас, computed-значение"
+    "commit": "f60614cb3",
+    "branch": "p4-background-clip-border-area",
+    "subject": "Влить ветку p4-border-image: border-image (CSS Backgrounds L3 §6, BUG-492)"
   },
   "crop_offset": [
     8,
@@ -11,11 +11,11 @@
   ],
   "halted_at": null,
   "summary": {
-    "total": 169,
-    "passed": 116,
-    "failed": 7,
+    "total": 171,
+    "passed": 118,
+    "failed": 10,
     "errors": 0,
-    "debtors": 46,
+    "debtors": 43,
     "skipped": 0
   },
   "tests": [
@@ -233,8 +233,8 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.0829,
+      "status": "FAIL",
+      "diff_pct": 6.0936,
       "diff_region": {
         "top": 28,
         "left": 28,
@@ -245,7 +245,7 @@
       "debtor": {
         "bug": "BUG-219",
         "baseline": 2.08,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -427,7 +427,7 @@
       "html": "31-clip-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0623,
+      "diff_pct": 0.0618,
       "diff_region": {
         "top": 181,
         "left": 61,
@@ -512,7 +512,7 @@
       "html": "36-border-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2077,
+      "diff_pct": 0.2052,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -626,7 +626,7 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3523,
+      "diff_pct": 1.3501,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -647,7 +647,7 @@
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3816,
+      "diff_pct": 1.3821,
       "diff_region": {
         "top": 75,
         "left": 16,
@@ -668,7 +668,7 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1023,
+      "diff_pct": 0.1044,
       "diff_region": {
         "top": 38,
         "left": 51,
@@ -738,7 +738,7 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.2927,
+      "diff_pct": 1.2933,
       "diff_region": {
         "top": 67,
         "left": 112,
@@ -780,7 +780,7 @@
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2493,
+      "diff_pct": 0.2471,
       "diff_region": {
         "top": 26,
         "left": 27,
@@ -865,7 +865,7 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0218,
+      "diff_pct": 10.0216,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -886,7 +886,7 @@
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2045,
+      "diff_pct": 0.2036,
       "diff_region": {
         "top": 20,
         "left": 28,
@@ -901,8 +901,8 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 3.3782,
+      "status": "FAIL",
+      "diff_pct": 10.7836,
       "diff_region": {
         "top": 32,
         "left": 40,
@@ -913,7 +913,7 @@
       "debtor": {
         "bug": "BUG-103",
         "baseline": 3.26,
-        "verdict": "OK"
+        "verdict": "REGRESS"
       }
     },
     {
@@ -923,7 +923,7 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.3375,
+      "diff_pct": 0.3364,
       "diff_region": {
         "top": 9,
         "left": 9,
@@ -1044,7 +1044,7 @@
       "html": "68-font-variation-settings.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0022,
+      "diff_pct": 0.0027,
       "diff_region": {
         "top": 21,
         "left": 24,
@@ -1071,7 +1071,7 @@
       "html": "70-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1966,
+      "diff_pct": 1.1963,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -1167,7 +1167,7 @@
       "html": "76-motion-path.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0194,
+      "diff_pct": 0.0197,
       "diff_region": {
         "top": 305,
         "left": 102,
@@ -1204,7 +1204,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3631,
+      "diff_pct": 2.3805,
       "diff_region": {
         "top": 28,
         "left": 25,
@@ -1225,7 +1225,7 @@
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 5.6158,
+      "diff_pct": 5.6152,
       "diff_region": {
         "top": 45,
         "left": 60,
@@ -1283,7 +1283,7 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.6767,
+      "diff_pct": 1.6775,
       "diff_region": {
         "top": 35,
         "left": 20,
@@ -1304,7 +1304,7 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.3016,
+      "diff_pct": 8.3027,
       "diff_region": {
         "top": 31,
         "left": 51,
@@ -1346,7 +1346,7 @@
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.009,
+      "diff_pct": 0.0092,
       "diff_region": {
         "top": 448,
         "left": 700,
@@ -1366,7 +1366,7 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1763,
+      "diff_pct": 0.1799,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1421,7 +1421,7 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0726,
+      "diff_pct": 0.0723,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -1478,7 +1478,7 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0258,
+      "diff_pct": 0.026,
       "diff_region": {
         "top": 65,
         "left": 65,
@@ -1518,7 +1518,7 @@
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1862,
+      "diff_pct": 0.1868,
       "diff_region": {
         "top": 85,
         "left": 87,
@@ -1674,7 +1674,7 @@
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9472,
+      "diff_pct": 2.947,
       "diff_region": {
         "top": 50,
         "left": 40,
@@ -1791,12 +1791,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2262,
+      "diff_pct": 0.0003,
       "diff_region": {
-        "top": 90,
-        "left": 256,
+        "top": 137,
+        "left": 280,
         "bottom": 137,
-        "right": 305
+        "right": 281
       },
       "capture": "ipc"
     },
@@ -1941,7 +1941,7 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.5839,
+      "diff_pct": 9.5871,
       "diff_region": {
         "top": 32,
         "left": 41,
@@ -2043,10 +2043,10 @@
       "html": "130-svg-dynamic-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2995,
+      "diff_pct": 0.2989,
       "diff_region": {
         "top": 112,
-        "left": 202,
+        "left": 156,
         "bottom": 604,
         "right": 945
       },
@@ -2075,7 +2075,7 @@
       "html": "132-svg-dynamic-use-symbol.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.8258,
+      "diff_pct": 1.8252,
       "diff_region": {
         "top": 69,
         "left": 49,
@@ -2096,7 +2096,7 @@
       "html": "133-svg-dynamic-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.042,
+      "diff_pct": 0.0418,
       "diff_region": {
         "top": 104,
         "left": 140,
@@ -2112,7 +2112,7 @@
       "html": "134-svg-dynamic-stroke-styles.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.3652,
+      "diff_pct": 3.3653,
       "diff_region": {
         "top": 20,
         "left": 56,
@@ -2133,7 +2133,7 @@
       "html": "135-svg-dynamic-paint-order.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.181,
+      "diff_pct": 1.1807,
       "diff_region": {
         "top": 101,
         "left": 650,
@@ -2153,8 +2153,8 @@
       "label": "BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. GPU_CAPTURE: снимается gdigrab-ом (трансформы/AA-края реального окна; JS CPU-снимок исполняет)",
       "html": "136-svg-dynamic-ellipse-radial.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.5025,
+      "status": "FAIL",
+      "diff_pct": 0.499,
       "diff_region": {
         "top": 91,
         "left": 81,
@@ -2165,7 +2165,7 @@
       "debtor": {
         "bug": "BUG-247",
         "baseline": 0.55,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -2175,7 +2175,7 @@
       "html": "137-svg-dynamic-transform-pinwheel.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.6585,
+      "diff_pct": 0.6573,
       "diff_region": {
         "top": 69,
         "left": 115,
@@ -2362,7 +2362,7 @@
       "html": "149-nested-overflow-scroll.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0136,
+      "diff_pct": 1.0135,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -2383,7 +2383,7 @@
       "html": "150-font-variant-caps.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 7.4896,
+      "diff_pct": 7.4894,
       "diff_region": {
         "top": 46,
         "left": 37,
@@ -2458,7 +2458,7 @@
       "html": "155-svg-inline-gradients.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.3177,
+      "diff_pct": 1.3182,
       "diff_region": {
         "top": 26,
         "left": 20,
@@ -2663,6 +2663,38 @@
         "left": 25,
         "bottom": 435,
         "right": 844
+      },
+      "capture": "ipc"
+    },
+    {
+      "id": "170",
+      "stem": "170-border-image",
+      "label": "BIMG CSS Backgrounds L3 §6: border-image на блоке. A: slice 30 stretch · B: repeat — плитки центрируются, крайние обрезаются · C: round — целое число плиток · D: space — зазоры между плитками · E: fill + border-image-width 25px + outset 10px · F: линейный градиент как источник. Без текста",
+      "html": "170-border-image.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.3014,
+      "diff_region": {
+        "top": 31,
+        "left": 25,
+        "bottom": 548,
+        "right": 906
+      },
+      "capture": "ipc"
+    },
+    {
+      "id": "171",
+      "stem": "171-background-clip-border-area",
+      "label": "BCBA CSS Backgrounds L4 §3.8: background-clip: border-area — фон только под нарисованной рамкой. A: градиент, сплошная рамка · B: цвет + border-radius 50px · C: разные радиусы углов 20/80 и градиент · D: разные ширины сторон · E: два слоя border-area + padding-box · F: эталон border-box. Без текста",
+      "html": "171-background-clip-border-area.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0231,
+      "diff_region": {
+        "top": 25,
+        "left": 341,
+        "bottom": 214,
+        "right": 906
       },
       "capture": "ipc"
     }

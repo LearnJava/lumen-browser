@@ -576,6 +576,7 @@ use super::*;
             ("padding-box", BackgroundClip::PaddingBox),
             ("content-box", BackgroundClip::ContentBox),
             ("text", BackgroundClip::Text),
+            ("border-area", BackgroundClip::BorderArea),
         ] {
             let s = cascade_at(
                 "<div></div>",
@@ -590,6 +591,15 @@ use super::*;
     fn background_clip_case_insensitive() {
         let s = cascade_at("<div></div>", "div { background-clip: TEXT; }", &[0]);
         assert_eq!(s.background_layers[0].clip, BackgroundClip::Text);
+    }
+
+    #[test]
+    fn background_shorthand_takes_border_area_clip() {
+        let s = cascade_at("<div></div>", "div { background: red border-area; }", &[0]);
+        assert_eq!(s.background_layers[0].clip, BackgroundClip::BorderArea);
+        let s = cascade_at("<div></div>", "div { background: red padding-box border-area; }", &[0]);
+        assert_eq!(s.background_layers[0].origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(s.background_layers[0].clip, BackgroundClip::BorderArea);
     }
 
     #[test]

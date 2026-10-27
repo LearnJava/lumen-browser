@@ -648,9 +648,14 @@ pub(in crate::style) fn parse_single_bg_layer(
             idx += 1;
             continue;
         }
-        // background-clip only (text)
+        // background-clip only (text | border-area)
         if t.eq_ignore_ascii_case("text") {
             layer.clip = BackgroundClip::Text;
+            idx += 1;
+            continue;
+        }
+        if t.eq_ignore_ascii_case("border-area") {
+            layer.clip = BackgroundClip::BorderArea;
             idx += 1;
             continue;
         }
