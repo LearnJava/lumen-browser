@@ -33,3 +33,7 @@ origin и scope), а `importScripts("resources/urlpatterntests.js")` разре�
 ## Дополнение (WPT-ENC-SCOUT, 2026-10-23)
 
 У `encoding` (15 id: 5 в корне и 10 в `streams/`, все `*.serviceworker.html`) картина иная, чем у `urlpattern`: все `importScripts` воркера получают 200, но результата тест всё равно не отдаёт и id уходит в TIMEOUT (0/0). Значит, вторая причина (идентичность `https://localhost:18443does/not/exist` без `/` или момент запуска/активации воркера) независима от разрешения базы `importScripts`; проверять её надо отдельно после исправления базы.
+
+## Дополнение (WPT-STREAMS-SCOUT, 2026-10-27)
+
+`streams`: все 72 `*.any.serviceworker.html` (11–19 на подкаталог) — TIMEOUT 0/0, при этом `*.any.worker.html` и `*.any.sharedworker.html` тех же файлов проходят как `*.any.html` (748 из 1418 сабтестов). 72 id = 23 % знаменателя категории, потолок 72 балла (`streams` 39.14 %); после исправления ожидается ≈ 37.6 балла — столько получают `any.html`-близнецы. Причину внутри воркера не разбирал (проба — вне задачи разведки). См. `docs/wpt-vendor-notes/streams.md`, кластер S.

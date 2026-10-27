@@ -1796,3 +1796,7 @@ shell 1610+2 ok (без изменений — новый путь не имее
 ## Повторное измерение: WPT-RUN-14 срез 27 (2026-10-09)
 
 Тот же дефект `contentWindow`/`contentDocument` — `null` для созданного скриптом `<iframe>` — вероятно, ломает ещё 5 id (причина прочитана из кода теста, пробой не проверена; TIMEOUT воспроизведены по два раза): `css/mediaqueries/media-query-matches-in-iframe.html` (22 из 22 сабтестов, `Cannot read properties of null (reading 'getBoundingClientRect')`), `css/mediaqueries/mq-dynamic-empty-children.html` (TIMEOUT: ждёт `load` у `iframe.srcdoc`), `css/mediaqueries/test_media_queries.html` (TIMEOUT 20 с `LUMEN_WPT_HARD_CAP`, воспроизведён 4 раза; стоит на `onload="run()"` → `getElementById("subdoc").contentDocument`), `css/css-viewport/zoom/zoom-iframe-dynamic.html` (TIMEOUT, ждёт `resize` в `iframe.contentWindow`), `css/css-highlight-api/HighlightRegistry-highlightsFromPoint.html`.
+
+## Повторное измерение: WPT-STREAMS-SCOUT (2026-10-27)
+
+`streams`: 5 id упираются в `iframe.contentWindow === null` у динамически созданного `<iframe>` — `readable-streams/global.html` (ERROR, `reading 'ReadableStream'`), `readable-streams/cross-realm-crash.window.html` (`reading 'ReadableStreamDefaultReader'`), `queuing-strategies-size-function-per-global.window.html` (0/2), `transform-streams/invalid-realm.tentative.window.html` (0/1), `transferable/deserialize-error.window.html` (ERROR, `reading 'postMessage'`). Потолок 5 баллов. См. `docs/wpt-vendor-notes/streams.md`, кластер R.
