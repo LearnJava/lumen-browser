@@ -6,11 +6,126 @@
 //! реализации — отдельные crate-ы (`lumen-storage::CachedDnsResolver`),
 //! lumen-network знает их только через trait.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
 
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::DnsResolver;
+
+/// Переменная окружения с переопределением DNS: `host=ip[,host=ip…]`, по
+/// образцу `curl --resolve` (WPT-LUMEN-RESOLVE).
+///
+/// Нужна раннеру WPT: апстримный `browser_host: web-platform.test` и
+/// альтернативный `not-web-platform.test` с поддоменами не резолвятся без
+/// правки `/etc/hosts`, а правка системного файла — не то, что раннер вправе
+/// делать. Читается один раз на процесс; не задана — резолв байт-в-байт
+/// прежний. Имена — ASCII без учёта регистра (IDN — в punycode, как его
+/// отдаёт URL-парсер); повтор имени добавляет адрес. Битая пара — диагностика
+/// в stderr и пропуск, как у `LUMEN_EXTRA_CA_CERT`.
+pub const RESOLVE_ENV: &str = "LUMEN_RESOLVE";
+
+/// Карта переопределений: нормализованное имя → адреса в порядке задания.
+type ResolveMap = HashMap<String, Vec<IpAddr>>;
+
+/// Нормализованная форма имени для поиска в карте: без хвостовой точки и
+/// IPv6-скобок, ASCII-нижний регистр.
+fn normalize_host(hostname: &str) -> String {
+    let host = hostname.strip_suffix('.').unwrap_or(hostname);
+    let host = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(host);
+    host.to_ascii_lowercase()
+}
+
+/// Разобрать `host=ip[,host=ip…]`. Пустые сегменты пропускаются молча,
+/// битые пары (нет `=`, пустое или не-ASCII имя, имя с `:`/пробелом, не-IP
+/// значение) — с диагностикой в stderr.
+fn parse_resolve_spec(spec: &str) -> ResolveMap {
+    let mut map = ResolveMap::new();
+    for pair in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let Some((name, ip)) = pair.split_once('=') else {
+            eprintln!("{RESOLVE_ENV}: пара `{pair}` без `=`, пропускаю");
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty()
+            || !name.is_ascii()
+            || name.contains(|c: char| c == ':' || c == '/' || c.is_ascii_whitespace())
+        {
+            eprintln!("{RESOLVE_ENV}: имя `{name}` в паре `{pair}` не ASCII-хост, пропускаю");
+            continue;
+        }
+        let ip = ip.trim();
+        let ip_unbracketed = ip.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(ip);
+        let Ok(ip) = IpAddr::from_str(ip_unbracketed) else {
+            eprintln!("{RESOLVE_ENV}: `{ip}` в паре `{pair}` не IP-адрес, пропускаю");
+            continue;
+        };
+        let addrs = map.entry(normalize_host(name)).or_default();
+        if !addrs.contains(&ip) {
+            addrs.push(ip);
+        }
+    }
+    map
+}
+
+/// Карта из [`RESOLVE_ENV`], разобранная один раз на процесс.
+fn env_resolve_map() -> &'static ResolveMap {
+    static MAP: OnceLock<ResolveMap> = OnceLock::new();
+    MAP.get_or_init(|| std::env::var(RESOLVE_ENV).map(|s| parse_resolve_spec(&s)).unwrap_or_default())
+}
+
+/// Адреса из карты для `hostname` с подставленным `port`; `None` — имени в
+/// карте нет (пустая карта отвечает без нормализации имени).
+fn lookup(map: &ResolveMap, hostname: &str, port: u16) -> Option<Vec<SocketAddr>> {
+    if map.is_empty() {
+        return None;
+    }
+    map.get(&normalize_host(hostname))
+        .map(|ips| ips.iter().map(|&ip| SocketAddr::new(ip, port)).collect())
+}
+
+/// Резолв с учётом [`RESOLVE_ENV`]: имя из карты отвечает её адресами, иначе
+/// — `resolver`. Через эту функцию идут все соединения (`connect_inner` —
+/// прямое и SOCKS5-прокси, `h3::client_transport` — QUIC), поэтому
+/// переопределение действует поверх любого резолвера: системного,
+/// `CachedDnsResolver`, DoH, DoT.
+pub(crate) fn resolve_with_env_override(
+    resolver: &dyn DnsResolver,
+    hostname: &str,
+    port: u16,
+) -> Result<Vec<SocketAddr>> {
+    match lookup(env_resolve_map(), hostname, port) {
+        Some(addrs) => Ok(addrs),
+        None => resolver.resolve(hostname, port),
+    }
+}
+
+/// Резолвер-обёртка с явной картой переопределений (синтаксис
+/// [`RESOLVE_ENV`]): имя из карты → её адреса с запрошенным портом, промах —
+/// во `inner`. Для встраивающего кода и тестов, которым нужна карта, не
+/// зависящая от окружения процесса; переменная окружения применяется в
+/// `HttpClient` и без этой обёртки.
+pub struct ResolveOverride {
+    map: ResolveMap,
+    inner: Arc<dyn DnsResolver>,
+}
+
+impl ResolveOverride {
+    /// Обёртка над `inner` с картой из строки `host=ip[,host=ip…]`.
+    pub fn new(spec: &str, inner: Arc<dyn DnsResolver>) -> Self {
+        Self { map: parse_resolve_spec(spec), inner }
+    }
+}
+
+impl DnsResolver for ResolveOverride {
+    fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
+        match lookup(&self.map, hostname, port) {
+            Some(addrs) => Ok(addrs),
+            None => self.inner.resolve(hostname, port),
+        }
+    }
+}
 
 /// Код WSANO_DATA («имя верно, но записей запрошенного типа нет») из Winsock.
 /// Windows-getaddrinfo отдаёт его в том числе на sinkhole-ответ `0.0.0.0`/`::`
@@ -235,5 +350,65 @@ mod tests {
         check::<SystemDnsResolver>();
         // Object-safety: можно положить в Box<dyn DnsResolver>.
         let _: Box<dyn DnsResolver> = Box::new(SystemDnsResolver);
+    }
+
+    /// Резолвер-заглушка: любое имя → `10.9.9.9`, чтобы промах карты был
+    /// виден без сети.
+    struct FixedResolver;
+
+    impl DnsResolver for FixedResolver {
+        fn resolve(&self, _hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
+            Ok(vec![SocketAddr::new(IpAddr::from([10, 9, 9, 9]), port)])
+        }
+    }
+
+    #[test]
+    fn resolve_spec_parses_v4_and_v6() {
+        let map = parse_resolve_spec("a.test=127.0.0.1,b.test=::1");
+        assert_eq!(map["a.test"], vec![IpAddr::from([127, 0, 0, 1])]);
+        assert_eq!(map["b.test"], vec![IpAddr::from(std::net::Ipv6Addr::LOCALHOST)]);
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn resolve_spec_repeated_name_accumulates_and_dedups() {
+        let map = parse_resolve_spec(" a.test = 127.0.0.1 , A.test=[::1],a.test=127.0.0.1,");
+        assert_eq!(
+            map["a.test"],
+            vec![IpAddr::from([127, 0, 0, 1]), IpAddr::from(std::net::Ipv6Addr::LOCALHOST)]
+        );
+    }
+
+    #[test]
+    fn resolve_spec_skips_broken_pairs() {
+        let map = parse_resolve_spec(
+            "noeq,=127.0.0.1,bad.test=999.1.1.1,host:80=127.0.0.1,пример.test=127.0.0.1,ok.test=10.0.0.1",
+        );
+        assert_eq!(map.len(), 1, "{map:?}");
+        assert_eq!(map["ok.test"], vec![IpAddr::from([10, 0, 0, 1])]);
+        assert!(parse_resolve_spec("").is_empty());
+    }
+
+    #[test]
+    fn override_is_case_insensitive_and_substitutes_port() {
+        let r = ResolveOverride::new("Web-Platform.TEST=127.0.0.1,web-platform.test=::1", Arc::new(FixedResolver));
+        for host in ["web-platform.test", "WEB-PLATFORM.test", "web-platform.test."] {
+            let addrs = r.resolve(host, 8443).unwrap();
+            assert_eq!(
+                addrs,
+                vec!["127.0.0.1:8443".parse().unwrap(), "[::1]:8443".parse().unwrap()],
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn override_miss_goes_to_inner() {
+        let r = ResolveOverride::new("a.test=127.0.0.1", Arc::new(FixedResolver));
+        assert_eq!(r.resolve("b.test", 80).unwrap(), vec!["10.9.9.9:80".parse().unwrap()]);
+        // Поддомен — отдельное имя: wildcard-ов в карте нет, как у curl.
+        assert_eq!(r.resolve("www.a.test", 80).unwrap(), vec!["10.9.9.9:80".parse().unwrap()]);
+        let empty = ResolveOverride::new("", Arc::new(FixedResolver));
+        assert_eq!(empty.resolve("a.test", 81).unwrap(), vec!["10.9.9.9:81".parse().unwrap()]);
     }
 }

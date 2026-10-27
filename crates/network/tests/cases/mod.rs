@@ -13,5 +13,6 @@ mod accept_language;
 mod bug785_extra_ca;
 mod osroots_trust;
 mod http_client_fingerprint_profile;
+mod lumen_resolve;
 mod nav_post_body;
 mod tls_integration;
