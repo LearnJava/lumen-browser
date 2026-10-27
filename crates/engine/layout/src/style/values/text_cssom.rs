@@ -129,7 +129,8 @@ fn line_height(v: &str) -> Option<String> {
         return Some("normal".into());
     }
     if let Ok(n) = v.parse::<f32>() {
-        return (n.is_finite() && n >= 0.0).then(|| format!("{n}"));
+        // `-0` → `0` (CSSOM §serialize a CSS value: отрицательный ноль пишется как `0`).
+        return (n.is_finite() && n >= 0.0).then(|| format!("{}", n + 0.0));
     }
     canonical_length_sorted(v, false, true)
 }

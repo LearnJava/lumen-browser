@@ -71,6 +71,7 @@
     mod gap_rule_tests;
     mod grid_cssom_tests;
     mod has_relative_chain;
+    mod misc_cssom_tests;
     mod text_cssom_tests;
     mod masonry_auto_flow_tests;
     mod node_fanout_tests;
