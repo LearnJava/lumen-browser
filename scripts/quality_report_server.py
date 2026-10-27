@@ -69,15 +69,38 @@ pre.err { background: #fff0f0; border: 1px solid #d99; padding: 0.8rem;
 .tile .val { font-size: 1.5rem; font-weight: 600; }
 .tile .val.good { color: var(--good); }
 .tile .val.bad { color: var(--bad); }
-.tile .d { font-size: 0.85rem; color: var(--ink-2); margin-left: 0.3rem;
-           font-weight: 400; }
+.delta { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.delta.good { color: var(--good); }
+.delta.bad { color: var(--bad); }
+.delta.flat { color: var(--ink-2); font-weight: 400; }
+.tile .delta { display: block; font-size: 1.05rem; margin-top: 0.1rem; }
 .bar-row { margin: 0.65rem 0; }
 .bar-row .cap { display: flex; justify-content: space-between; font-size: 0.95em;
                 margin-bottom: 0.25rem; }
 .bar-row .cap .pct { font-variant-numeric: tabular-nums; }
-.bar-row .track { height: 10px; border-radius: 4px; background: var(--track); }
-.bar-row .fill { height: 100%; border-radius: 4px; background: var(--bar);
+.bar-row .cap .delta { margin-left: 0.6rem; font-size: 0.92em; }
+.bar-row .track { position: relative; height: 10px; border-radius: 4px;
+                  background: var(--track); }
+.bar-row .fill, .bar-row .seg { position: absolute; top: 0; height: 100%; }
+.bar-row .fill { left: 0; border-radius: 4px 0 0 4px; background: var(--bar);
                  min-width: 4px; }
+.bar-row .seg.gain { background: var(--good); }
+.bar-row .seg.loss { background: var(--bad); opacity: 0.45; }
+.bar-row .prev { position: absolute; top: -4px; height: 18px; width: 2px;
+                 margin-left: -1px; background: var(--ink); }
+.changes { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+           padding: 0.9rem 1.4rem 1rem; margin: 0 0 1.2rem; }
+.changes h2 { margin: 0 0 0.5rem; font-size: 1.15rem; }
+.changes .cmp { color: var(--ink-2); font-size: 0.93em; margin: 0.2rem 0; }
+.changes .warn { color: var(--bad); font-size: 0.93em; margin: 0.3rem 0 0.2rem 1.2rem;
+                 padding: 0; }
+.changes .cols { display: flex; gap: 2rem; flex-wrap: wrap; margin-top: 0.6rem; }
+.changes .col { flex: 1 1 24rem; }
+.changes h3 { margin: 0.2rem 0 0.3rem; font-size: 1rem; }
+.changes h3.good { color: var(--good); }
+.changes h3.bad { color: var(--bad); }
+.changes ul { margin: 0; padding-left: 1.2rem; }
+.changes li { margin: 0.2rem 0; }
 """
 
 TOOLBAR = """
@@ -97,10 +120,13 @@ INTRO_HELP = (
     "Этот отчёт отвечает на вопрос «стал ли браузер лучше со времени прошлого "
     "прогона тестов». Браузер прогоняется через тысячи автоматических тестов; "
     "здесь сведено, сколько из них проходит, где стало лучше или хуже и какие "
-    "известные ошибки мешают сильнее всего. Полосы ниже — доля пройденных "
-    "тестов по крупным частям браузера: чем длиннее полоса, тем лучше эта часть "
-    "работает (100% — проходит всё). Под полосами — общие итоги и их изменение "
-    "к прошлому прогону (Δ, «дельта»)."
+    "известные ошибки мешают сильнее всего. Блок «Что изменилось» — с какими "
+    "прогонами идёт сравнение, что выросло и что просело. Полосы ниже — доля "
+    "пройденных тестов по крупным частям браузера: чем длиннее полоса, тем "
+    "лучше эта часть работает (100% — проходит всё). Под полосами — общие итоги "
+    "и их изменение к прошлому прогону (Δ, «дельта»). Кнопка «Обновить отчёт» "
+    "тестов не запускает: она пересобирает отчёт из уже сохранённых прогонов, "
+    "поэтому без нового прогона цифры и Δ не меняются."
 )
 SECTION_HELP = {
     "Источники": (
@@ -152,8 +178,10 @@ SECTION_HELP = {
         "разделов выше."),
 }
 DASH_HELP = (
-    "Наведите курсор на полосу — всплывёт точное число тестов. Данные полос и "
-    "плиток взяты из таблиц этого же отчёта."
+    "Тонкая тёмная метка на полосе — значение прошлого прогона; зелёный кусок "
+    "между меткой и концом полосы — прирост, бледно-красный — потеря. Наведите "
+    "курсор на полосу — всплывёт точное число тестов. Данные полос и плиток "
+    "взяты из таблиц этого же отчёта."
 )
 
 _SUMMARY = re.compile(
@@ -163,46 +191,134 @@ _SUMMARY = re.compile(
 _STALE = re.compile(r"·\s*(\S+) старше соседнего источника на (\d+) дн\.")
 
 
-def parse_dashboard(text: str) -> str:
-    """Собирает HTML-дашборд из строки «Итог» и таблицы «WPT по подсистемам».
-    Чего-то нет в отчёте — соответствующий кусок просто не рисуется."""
-    bars: list[tuple[str, float, str]] = []  # (подпись, %, title для hover)
-    section = None
+_DELTA_PP = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*п\.п\.")
+_GT_RATE = re.compile(r"^Pass rate\s+[\d.]+%.*?Δ\s*([+-]?\d+(?:\.\d+)?)\s*п\.п\.")
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+CHANGES_TOP = 5  # строк в колонках «Стало лучше» / «Стало хуже»
+# Статусы WPT, рост которых — плохо (у PASS/OK — хорошо, у остальных — нейтрально).
+_BAD_STATUSES = {"FAIL", "ERROR", "CRASH", "TIMEOUT"}
+_GOOD_STATUSES = {"PASS", "OK"}
+
+
+def _sections(text: str) -> dict[str, list[str]]:
+    """Разделы `## …` отчёта → их строки без заголовка; текст до первого
+    заголовка — под ключом ""."""
+    out: dict[str, list[str]] = {"": []}
+    cur = ""
     for line in text.splitlines():
         m = re.match(r"^##\s+(.*)$", line.strip())
         if m:
-            section = m.group(1)
-            continue
-        if section == "WPT по подсистемам" and line.strip().startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) < 6 or cells[0] in ("Подсистема",) or set(cells[1]) <= {"-", ":"}:
-                continue
-            pm = re.match(r"([\d.]+)%", cells[5])
+            cur = m.group(1).strip()
+            out[cur] = []
+        else:
+            out[cur].append(line)
+    return out
+
+
+def _tables(lines: list[str]) -> list[list[list[str]]]:
+    """Таблицы среди строк раздела: каждая — список строк из ячеек, первая —
+    шапка; разделитель `|---|` выброшен."""
+    tables: list[list[list[str]]] = []
+    cur: list[list[str]] = []
+    for line in [*lines, ""]:
+        s = line.strip()
+        if s.startswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
+                cur.append(cells)
+        elif cur:
+            tables.append(cur)
+            cur = []
+    return tables
+
+
+def _num(s: str) -> float | None:
+    """Ведущее число ячейки (`+5047`, `53.47%`, `-26`) или None."""
+    m = re.match(r"\s*([+-]?\d+(?:\.\d+)?)", s.replace("−", "-"))
+    return float(m.group(1)) if m else None
+
+
+def _pp(s: str) -> float | None:
+    """Значение `±N.NN п.п.` из ячейки или None."""
+    m = _DELTA_PP.search(s)
+    return float(m.group(1)) if m else None
+
+
+def _delta_html(delta: float | None, text: str, higher_is_better: bool = True) -> str:
+    """Δ со стрелкой и цветом: зелёный — к лучшему, красный — к худшему."""
+    if delta is None:
+        return ""
+    if delta == 0:
+        return f'<span class="delta flat">= {html.escape(text)}</span>'
+    better = (delta > 0) == higher_is_better
+    arrow = "▲" if delta > 0 else "▼"
+    return (f'<span class="delta {"good" if better else "bad"}">'
+            f"{arrow} {html.escape(text)}</span>")
+
+
+def _bar_html(name: str, pct: float, delta: float | None, title: str) -> str:
+    """Полоса: синяя часть — общее у двух прогонов, цветной кусок — прирост или
+    потеря, тёмная метка — прошлое значение."""
+    cur = min(max(pct, 0.0), 100.0)
+    prev = None if delta is None else min(max(round(pct - delta, 2), 0.0), 100.0)
+    lo = cur if prev is None else min(cur, prev)
+    inner = f'<div class="fill" style="width:{lo:g}%"></div>'
+    if prev is not None and prev != cur:
+        kind = "gain" if cur > prev else "loss"
+        inner += (f'<div class="seg {kind}" style="left:{lo:g}%;'
+                  f'width:{abs(cur - prev):g}%"></div>')
+    if prev is not None:
+        inner += f'<div class="prev" style="left:{prev:g}%"></div>'
+        title += f"; было {prev:g}%, стало {pct:g}%"
+        d = _delta_html(delta, f"{delta:+g} п.п.")
+    else:
+        title += "; прошлого значения нет"
+        d = ""
+    return (f'<div class="bar-row" title="{html.escape(title)}">'
+            f'<div class="cap"><span>{html.escape(name)}</span>'
+            f'<span class="pct">{pct:g}%{d}</span></div>'
+            f'<div class="track">{inner}</div></div>')
+
+
+def parse_dashboard(text: str) -> str:
+    """Собирает HTML-дашборд из строки «Итог» и таблицы «WPT по подсистемам».
+    Чего-то нет в отчёте — соответствующий кусок просто не рисуется."""
+    sec = _sections(text)
+    bars: list[tuple[str, float, float | None, str]] = []  # (подпись, %, Δ п.п., title)
+    for table in _tables(sec.get("WPT по подсистемам", [])):
+        for cells in table[1:]:
+            pm = re.match(r"([\d.]+)%", cells[5]) if len(cells) >= 6 else None
             if not pm:
                 continue
             name = re.sub(r"[*`]", "", cells[0])
             name = re.sub(r"\s*\(.*\)$", "", name).strip()
-            title = f"прогнано {cells[2]} из {cells[1]} тестов, OK/PASS {cells[3]}, Δ {cells[6] if len(cells) > 6 else NA}"
-            bars.append((name, float(pm.group(1)), title))
+            title = f"прогнано {cells[2]} из {cells[1]} тестов, OK/PASS {cells[3]}"
+            bars.append((name, float(pm.group(1)),
+                         _pp(cells[6]) if len(cells) > 6 else None, title))
 
     sm = _SUMMARY.search(text)
     tiles = ""
     if sm:
         wpt, wpt_d, gt_ok, gt_all, gt_d, bugs, bugs_d, regress = sm.groups()
+        gt_rate = next((m for line in sec.get("graphic_tests", [])
+                        if (m := _GT_RATE.match(line.strip()))), None)
         bars.append(("graphic_tests (отрисовка)",
                      round(int(gt_ok) / int(gt_all) * 100, 1),
+                     float(gt_rate.group(1)) if gt_rate else None,
                      f"пройдено {gt_ok} из {gt_all}"))
 
-        def tile(lbl: str, val: str, delta: str | None, cls: str = "") -> str:
-            d = f'<span class="d">Δ {html.escape(delta)}</span>' if delta else ""
+        def tile(lbl: str, val: str, delta: str | None, cls: str = "",
+                 higher_is_better: bool = True) -> str:
+            d = (_delta_html(_num(delta), delta.strip(), higher_is_better)
+                 if delta else "")
             return (f'<div class="tile"><div class="lbl">{lbl}</div>'
-                    f'<div class="val {cls}">{val}{d}</div></div>')
+                    f'<div class="val {cls}">{val}</div>{d}</div>')
 
         stale = _STALE.search(text)
         tiles = ('<div class="tiles">'
                  + tile("WPT pass rate", f"{wpt}%", wpt_d)
                  + tile("graphic_tests пройдено", f"{gt_ok} / {gt_all}", gt_d, "good")
-                 + tile("Открытых багов", bugs, bugs_d)
+                 + tile("Открытых багов", bugs, bugs_d, higher_is_better=False)
                  + tile("Просадок", regress, None,
                         "bad" if int(regress) else "good")
                  + (tile(f"{html.escape(stale.group(1))} старше на", f"{stale.group(2)} дн.", None, "bad")
@@ -211,16 +327,100 @@ def parse_dashboard(text: str) -> str:
 
     if not bars and not tiles:
         return ""
-    bar_html = "".join(
-        f'<div class="bar-row" title="{html.escape(t)}">'
-        f'<div class="cap"><span>{html.escape(n)}</span>'
-        f'<span class="pct">{p:g}%</span></div>'
-        f'<div class="track"><div class="fill" style="width:{min(p, 100):g}%">'
-        f"</div></div></div>"
-        for n, p, t in bars)
+    bar_html = "".join(_bar_html(*b) for b in bars)
     return ('<div class="dash"><h2>Доля пройденных тестов по частям браузера</h2>'
             + bar_html + tiles + "</div>"
             + f'<div class="help">{DASH_HELP}</div>')
+
+
+def _anchor(heading: str) -> str:
+    """id заголовка раздела — для ссылок из блока «Что изменилось»."""
+    return "s-" + re.sub(r"\W+", "-", heading).strip("-")
+
+
+def _short_run(cell: str) -> str:
+    """Ячейка «Свежий»/«Предыдущий» таблицы «Источники» → `имя` (дата)."""
+    name = re.search(r"`([^`]+)`", cell)
+    day = _ISO_DAY.search(cell.split("`")[-1]) if name else None
+    out = f"<code>{html.escape(name.group(1))}</code>" if name else _inline(cell)
+    return out + (f" ({day.group(0)})" if day else "")
+
+
+def parse_changes(text: str) -> str:
+    """Блок «Что изменилось»: что с чем сравнивается, предупреждения о
+    нечестном сравнении, сдвиг статусов WPT, лучший рост и первые просадки."""
+    sec = _sections(text)
+    if "Источники" not in sec:
+        return ""
+    out = ['<div class="changes"><h2>Что изменилось с прошлого прогона</h2>']
+
+    src = _tables(sec["Источники"])
+    for row in src[0][1:] if src else []:
+        if len(row) >= 3:
+            label = re.sub(r"\s*\(.*\)$", "", row[0]).strip()
+            out.append(f'<div class="cmp">{_inline(label)}: {_short_run(row[1])} '
+                       f"сравнивается с {_short_run(row[2])}</div>")
+    warns = [s[2:] for s in (x.strip() for x in sec["Источники"]) if s.startswith("- ")]
+    if warns:
+        out.append('<ul class="warn">' + "".join(f"<li>{_inline(w)}</li>" for w in warns)
+                   + "</ul>")
+
+    st = _tables(sec.get("WPT: статусы тестов", []))
+    moved = []
+    for row in st[0][1:] if st else []:
+        d = _num(row[3]) if len(row) >= 4 else None
+        if d and not row[0].startswith("**"):
+            better = None if row[0] not in _GOOD_STATUSES | _BAD_STATUSES else row[0] in _GOOD_STATUSES
+            text_d = f"{row[0]} {row[2]} → {row[1]} ({row[3]})"
+            moved.append(_delta_html(d, text_d, better) if better is not None
+                         else f'<span class="delta flat">{html.escape(text_d)}</span>')
+    if moved:
+        out.append('<div class="cmp">Статусы WPT: ' + " · ".join(moved) + "</div>")
+
+    # Рост: категории WPT с ростом pass rate, по «выигранным тестам» ≈ тестов × Δ п.п.
+    gains: list[tuple[float, str]] = []
+    for table in _tables(sec.get("WPT по категориям", [])):
+        for row in table[1:]:
+            if len(row) < 6:
+                continue
+            tests, rate, dpp = _num(row[1]), _num(row[4]), _pp(row[5])
+            if tests and rate is not None and dpp and dpp > 0:
+                gains.append((tests * dpp, f"WPT {_inline(row[0])}: pass rate "
+                              f"{round(rate - dpp, 2):g} → {rate:g}% (+{dpp:g} п.п.), "
+                              f"OK/PASS {html.escape(row[3])}"))
+    gains.sort(key=lambda g: -g[0])
+    good = [g for _, g in gains[:CHANGES_TOP]]
+    for table in _tables(sec.get("graphic_tests", [])):
+        head = table[0]
+        if "Было" in head and "Стало" in head:
+            was, now = head.index("Было"), head.index("Стало")
+            good += [f"graphic_tests {_inline(r[0])}: "
+                     + ("новый тест, PASS" if r[was] in ("—", "-", "") else f"{html.escape(r[was])} → PASS")
+                     for r in table[1:] if len(r) > now and r[now] == "PASS" != r[was]]
+
+    reg_lines = sec.get("Просадки с прошлого отчёта", [])
+    regs = [s[2:] for s in (x.strip() for x in reg_lines) if s.startswith("- ")]
+    bad = [_inline(r) for r in regs[:CHANGES_TOP]]
+    if len(regs) > CHANGES_TOP:
+        bad.append(f'ещё {len(regs) - CHANGES_TOP} — <a href="#{_anchor("Просадки с прошлого отчёта")}">'
+                   "раздел «Просадки с прошлого отчёта»</a>")
+    if not regs:
+        note = next((s.strip() for s in reg_lines if s.strip()), "")
+        bad = [_inline(note)] if note else []
+    if "Разброс прогонов" in sec:
+        bad.append('оба прогона WPT на одном коммите — их разница это шум, см. '
+                   f'<a href="#{_anchor("Разброс прогонов")}">«Разброс прогонов»</a>')
+
+    def col(title: str, cls: str, items: list[str], empty: str) -> str:
+        body = ("<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+                if items else f'<div class="cmp">{empty}</div>')
+        return f'<div class="col"><h3 class="{cls}">{title}</h3>{body}</div>'
+
+    out.append('<div class="cols">'
+               + col("▲ Стало лучше", "good", good, "роста нет")
+               + col("▼ Стало хуже", "bad", bad, "просадок нет")
+               + "</div></div>")
+    return "".join(out)
 
 
 def _inline(text: str) -> str:
@@ -264,7 +464,8 @@ def md_to_html(text: str, with_help: bool = False) -> str:
             close_list()
             level = len(m.group(1))
             heading = m.group(2)
-            out.append(f"<h{level}>{_inline(heading)}</h{level}>")
+            out.append(f'<h{level} id="{html.escape(_anchor(heading))}">'
+                       f"{_inline(heading)}</h{level}>")
             if with_help and heading in SECTION_HELP:
                 out.append(f'<div class="help">{SECTION_HELP[heading]}</div>')
             i += 1
@@ -336,7 +537,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             text = REPORT.read_text(encoding="utf-8")
             body = (TOOLBAR + f'<div class="help">{INTRO_HELP}</div>'
-                    + parse_dashboard(text) + md_to_html(text, with_help=True))
+                    + parse_changes(text) + parse_dashboard(text)
+                    + md_to_html(text, with_help=True))
             self._send(200, page("Отчёт качества", body))
             return
         target = resolve_md(path)
