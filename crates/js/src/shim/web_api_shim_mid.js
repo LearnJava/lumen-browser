@@ -3430,6 +3430,83 @@ function _lumen_css_canonical_container_type(strVal) {
     return null;
 }
 
+// Filter Effects L1 §3 `filter` / `backdrop-filter`: `none | <filter-value-list>` (BUG-1541).
+// Every function is validated and serialized the way Chrome does: empty parens give the
+// function's default, `<number>` amounts below zero are rejected, `grayscale`/`invert`/
+// `opacity`/`sepia` clamp at 1 (100%), a bare `0` length/angle gets its unit, and
+// `drop-shadow` puts the colour first. Functions with math (`calc(…)`) and `url(…)` pass
+// through untouched.
+function _lumen_css_canonical_filter_number(arg, cap) {
+    if (!/^[+]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?%?$/i.test(arg)) return null;
+    var pct = arg.charAt(arg.length - 1) === '%';
+    var n = parseFloat(pct ? arg.slice(0, -1) : arg);
+    if (cap !== null && n > cap * (pct ? 100 : 1)) n = cap * (pct ? 100 : 1);
+    return String(n) + (pct ? '%' : '');
+}
+function _lumen_css_canonical_filter_fn(name, args) {
+    var kind = name.toLowerCase();
+    if (kind !== 'url' && /(^|[^a-z-])(calc|min|max|clamp|round|mod|rem|sin|cos|tan|asin|acos|atan2?|pow|sqrt|hypot|log|exp|abs|sign)\(/i.test(args)) {
+        return kind + '(' + args + ')';
+    }
+    var out;
+    switch (kind) {
+    case 'blur':
+        if (args === '') return 'blur(0px)';
+        out = args.indexOf('%') === -1 ? _lumen_css_canonical_length(args, false, true) : null;
+        return out === null || out === undefined ? null : 'blur(' + out + ')';
+    case 'brightness': case 'contrast': case 'saturate':
+    case 'grayscale': case 'invert': case 'opacity': case 'sepia':
+        if (args === '') return kind + '(1)';
+        out = _lumen_css_canonical_filter_number(
+            args, (kind === 'brightness' || kind === 'contrast' || kind === 'saturate') ? null : 1);
+        return out === null ? null : kind + '(' + out + ')';
+    case 'hue-rotate':
+        if (args === '') return 'hue-rotate(0deg)';
+        if (/^[+-]?0*\.?0*(e[+-]?\d+)?$/i.test(args) && /\d/.test(args)) return 'hue-rotate(0deg)';
+        return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?(deg|grad|rad|turn)$/i.test(args)
+            ? 'hue-rotate(' + args + ')' : null;
+    case 'drop-shadow': {
+        var tokens = _lumen_split_top_level_ws(args), color = null, lens = [];
+        for (var i = 0; i < tokens.length; i++) {
+            var len = tokens[i].indexOf('%') === -1 ? _lumen_css_canonical_length(tokens[i], false, false) : null;
+            if (len !== null && len !== undefined) { lens.push(len); continue; }
+            var c = _lumen_css_canonical_color(tokens[i]);
+            if (c === null || c === undefined || color !== null) return null;
+            color = c;
+        }
+        if (lens.length < 2 || lens.length > 3) return null;
+        if (lens.length === 3 && lens[2].charAt(0) === '-') return null;
+        return 'drop-shadow(' + (color !== null ? color + ' ' : '') + lens.join(' ') + ')';
+    }
+    case 'url':
+        return args === '' ? null : 'url(' + args + ')';
+    }
+    return null;
+}
+function _lumen_css_canonical_filter(strVal) {
+    var v = strVal.trim();
+    if (v === '') return null;
+    if (v.toLowerCase() === 'none') return 'none';
+    var out = [];
+    var re = /^([a-zA-Z-]+)\(/;
+    while (v !== '') {
+        var m = re.exec(v);
+        if (!m) return null;
+        var depth = 0, end = -1;
+        for (var i = m[0].length - 1; i < v.length; i++) {
+            var ch = v.charAt(i);
+            if (ch === '(') depth++;
+            else if (ch === ')' && --depth === 0) { end = i; break; }
+        }
+        if (end < 0) return null;
+        var fn = _lumen_css_canonical_filter_fn(m[1], v.substring(m[0].length, end).trim());
+        if (fn === null) return null;
+        out.push(fn);
+        v = v.substring(end + 1).trim();
+    }
+    return out.join(' ');
+}
+
 // CSS Overflow L4 §propdef-continue (BUG-505 срез 2): `normal | discard |
 // collapse`, plus the legacy `-webkit-legacy` token — single token only, no
 // combos (`continue-invalid.html` rejects every two-token pairing,
@@ -3779,6 +3856,9 @@ function _lumen_canonicalize_longhand(key, strVal) {
     }
     if (key === 'container-type') {
         return _lumen_css_canonical_container_type(strVal);
+    }
+    if (key === 'filter' || key === 'backdrop-filter') {
+        return _lumen_css_canonical_filter(strVal);
     }
     if (key === 'display') {
         return _lumen_css_canonical_display(strVal);

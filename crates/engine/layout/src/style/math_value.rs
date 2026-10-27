@@ -599,6 +599,13 @@ fn evaluate(prop: &str, expr: &str, em_basis: f32, viewport: Size) -> Option<Str
     if ev.pos != toks.len() {
         return None;
     }
+    // Filter Effects L1 §3: a negative `<number-percentage>` amount is invalid as a literal,
+    // but the result of a math function clamps to the range (`brightness(calc(-10))` = 0).
+    let r = if matches!(prop, "filter" | "backdrop-filter") && (r.d == NUM || r.d == PCT) && r.v < 0.0 {
+        Val { v: 0.0, d: r.d }
+    } else {
+        r
+    };
     match r.d {
         // CSS Fonts L4 §2.2: результат `calc()` для `font-weight` зажимается в `[1, 1000]`
         // (литерал вне диапазона недопустим, вычисленное значение — нет).
@@ -665,6 +672,7 @@ fn expected_dims(prop: &str) -> Option<&'static [Dim]> {
         "transition-delay" | "transition-duration" | "animation-delay" | "animation-duration" => {
             Some(&[TIME])
         }
+        "filter" | "backdrop-filter" => Some(&[NUM, PCT]),
         "rotate" | "font-style-angle" => Some(&[ANG]),
         "font-weight" => Some(&[NUM]),
         _ => None,
