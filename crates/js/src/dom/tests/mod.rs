@@ -279,6 +279,7 @@ mod v8_cssom_stylesheets;
 mod v8_cssom10_tree;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1506_iterables;
+mod v8_bug1553_media_list;
 #[cfg(feature = "v8-backend")]
 mod v8_bug1552_style_float_shorthand;
 
