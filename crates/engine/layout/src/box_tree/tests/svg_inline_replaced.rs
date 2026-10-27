@@ -69,3 +69,28 @@ fn svg_row_has_baseline_gap_like_img() {
     assert!(svg > 50.0, "svg row must reserve the baseline gap, got {svg}, img {img}");
     assert_eq!(svg, img);
 }
+
+/// `width`/`height` корневого `<svg>` принимают CSS-длины (`10px`, `2em`, `50%`), а не только число;
+/// `auto` оставляет умолчание 300×150.
+#[test]
+fn svg_root_size_attributes_accept_units() {
+    fn svg_size(attrs: &str) -> (f32, f32) {
+        let doc = lumen_html_parser::parse(&format!(
+            "<!doctype html><body><div style=\"width:400px;font-size:10px\"><svg id=s {attrs}></svg></div>"
+        ));
+        let sheet = lumen_css_parser::parse("body{margin:0}");
+        let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find(b: &LayoutBox) -> Option<&LayoutBox> {
+            if matches!(b.kind, BoxKind::SvgRoot { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find)
+        }
+        let b = find(&root).expect("svg box");
+        (b.rect.width, b.rect.height)
+    }
+    assert_eq!(svg_size(r#"width="10px" height="5px""#), (10.0, 5.0));
+    assert_eq!(svg_size(r#"width="2em" height="1em""#), (20.0, 10.0));
+    assert_eq!(svg_size(r#"width="50%" height="30""#), (200.0, 30.0));
+    assert_eq!(svg_size(r#"width="auto" height="auto""#), (300.0, 150.0));
+}

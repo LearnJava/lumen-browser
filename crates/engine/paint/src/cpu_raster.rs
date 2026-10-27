@@ -1519,7 +1519,18 @@ pub(crate) fn svg_filter_chain_window(
         ),
         None => (tiny_skia::Pixmap::new(1, 1)?, (0, 0)),
     };
-    for f in filters {
+    // Начальное окно уже раздуто на охват всей цепочки; после `url(#id)` оно
+    // сжато до области фильтра и пространственным функциям за ним нужно место.
+    let mut grown = true;
+    for (i, f) in filters.iter().enumerate() {
+        if !grown && matches!(f, FilterFn::Blur(_) | FilterFn::DropShadow { .. }) {
+            let margin = filter_chain_reach(&filters[i..]) * scale + 2.0;
+            if let Some((win, o)) = grow_window(&cur, origin, margin, canvas) {
+                cur = win;
+                origin = o;
+            }
+            grown = true;
+        }
         match f {
             FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma * scale),
             FilterFn::DropShadow { dx, dy, blur, color } => {
@@ -1532,12 +1543,42 @@ pub(crate) fn svg_filter_chain_window(
                 {
                     cur = win.pixmap;
                     origin = (win.x, win.y);
+                    grown = false;
                 }
             }
             other => apply_color_filter(&mut cur, other),
         }
     }
     Some((cur, origin))
+}
+
+/// Окно `win` в `origin` (координаты холста), раздутое на `margin` px прозрачными
+/// пикселями с каждой стороны и обрезанное по холсту. `None` — окно не изменилось
+/// (упирается в холст со всех сторон) или не хватило памяти.
+fn grow_window(
+    win: &tiny_skia::Pixmap,
+    origin: (i32, i32),
+    margin: f32,
+    canvas: (u32, u32),
+) -> Option<(tiny_skia::Pixmap, (i32, i32))> {
+    let m = margin.ceil() as i32;
+    let x0 = (origin.0 - m).max(0);
+    let y0 = (origin.1 - m).max(0);
+    let x1 = (origin.0 + win.width() as i32 + m).min(canvas.0 as i32);
+    let y1 = (origin.1 + win.height() as i32 + m).min(canvas.1 as i32);
+    if (x1 - x0) as u32 == win.width() && (y1 - y0) as u32 == win.height() || x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let mut out = tiny_skia::Pixmap::new((x1 - x0) as u32, (y1 - y0) as u32)?;
+    out.draw_pixmap(
+        origin.0 - x0,
+        origin.1 - y0,
+        win.as_ref(),
+        &tiny_skia::PixmapPaint { blend_mode: tiny_skia::BlendMode::Source, ..Default::default() },
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some((out, (x0, y0)))
 }
 
 /// Total spatial reach in px of a filter chain — how far the chain can carry

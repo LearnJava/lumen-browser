@@ -330,4 +330,18 @@ mod raster {
         assert!(core[0] < 40, "ядро тени тёмное: {core:?}");
         assert!(edge[0] > core[0] && edge[0] < 255, "край размыт: {edge:?}");
     }
+
+    /// `url(#f) drop-shadow()`: область фильтра обрезает вывод графа, но не тень за ним —
+    /// окно цепочки перед пространственной функцией раздувается на её охват.
+    #[test]
+    fn drop_shadow_after_url_is_not_clipped_by_filter_region() {
+        let img = render(
+            r##"<svg width=200 height=120><filter id=f><feOffset dx=0 dy=0 /></filter>
+            <rect x=10 y=10 width=50 height=100 fill=rgb(0,128,0)
+              filter="url(#f) drop-shadow(50px 0 rgb(0,128,0))" /></svg>"##,
+        );
+        assert_eq!(px(&img, 30, 50), [0, 128, 0], "источник");
+        assert_eq!(px(&img, 90, 50), [0, 128, 0], "тень вне области фильтра (x > 65)");
+        assert_eq!(px(&img, 105, 50), [0, 128, 0], "правый край тени");
+    }
 }

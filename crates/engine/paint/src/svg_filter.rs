@@ -199,10 +199,18 @@ impl Geometry {
         }
     }
 
-    /// Прямоугольник user space → страница.
+    /// Прямоугольник user space → страница. Отражающий масштаб (`scale(-1, 1)`) даёт
+    /// отрицательную ширину: прямоугольник приводится к неотрицательным `w`/`h`.
     fn rect(&self, x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
-        (self.sx * x + self.tx, self.sy * y + self.ty, self.sx * w, self.sy * h)
+        let (x, w) = norm_span(self.sx * x + self.tx, self.sx * w);
+        let (y, h) = norm_span(self.sy * y + self.ty, self.sy * h);
+        (x, y, w, h)
     }
+}
+
+/// Отрезок `(start, len)` с неотрицательной длиной: `len < 0` разворачивается влево от `start`.
+fn norm_span(start: f32, len: f32) -> (f32, f32) {
+    if len < 0.0 { (start + len, -len) } else { (start, len) }
 }
 
 fn to_px(r: (f32, f32, f32, f32)) -> PxRect {
@@ -337,6 +345,8 @@ fn run_graph(
             let y = prim.y.map_or(cur.1, |v| g.sy * uy(g.pct(v, py, 1)) + g.ty);
             let wd = prim.width.map_or(cur.2, |v| g.sx * uw(g.pct(v, pw, 0)));
             let ht = prim.height.map_or(cur.3, |v| g.sy * uh(g.pct(v, ph, 1)));
+            let (x, wd) = norm_span(x, wd);
+            let (y, ht) = norm_span(y, ht);
             let r = to_px((x - region.x0 as f32, y - region.y0 as f32, wd, ht));
             if prim.x.is_some() {
                 sub_origin.0 = r.x0;
@@ -351,6 +361,8 @@ fn run_graph(
         // Масштаб чисел примитива (`dx`, `stdDeviation`) в px страницы.
         let kx = g.sx.abs() * if obb { bw } else { 1.0 };
         let ky = g.sy.abs() * if obb { bh } else { 1.0 };
+        // Отражение осей (`scale(-1, 1)`) разворачивает смещения в страничных px.
+        let (sgn_x, sgn_y) = (g.sx.signum(), g.sy.signum());
         let conv_in = |img: &Img| if lin { to_linear(img) } else { img.clone() };
         let conv_out = |img: Img| if lin { to_srgb(&img) } else { img };
 
@@ -368,7 +380,7 @@ fn run_graph(
                 img
             }
             FePrimitive::Offset { dx, dy, .. } => {
-                offset(&fetched[0].0, (dx * kx).round() as i32, (dy * ky).round() as i32)
+                offset(&fetched[0].0, (dx * sgn_x * kx).round() as i32, (dy * sgn_y * ky).round() as i32)
             }
             FePrimitive::GaussianBlur { sx, sy, .. } => {
                 conv_out(blur(&conv_in(&fetched[0].0), sx * kx, sy * ky))
@@ -398,7 +410,7 @@ fn run_graph(
                 for (m, p) in mask.d.iter_mut().zip(&input.d) {
                     *m = [0.0, 0.0, 0.0, p[3]];
                 }
-                let mask = offset(&blur(&mask, sx * kx, sy * ky), (dx * kx).round() as i32, (dy * ky).round() as i32);
+                let mask = offset(&blur(&mask, sx * kx, sy * ky), (dx * sgn_x * kx).round() as i32, (dy * sgn_y * ky).round() as i32);
                 let a = opacity.clamp(0.0, 1.0) * f32::from(color.a) / 255.0;
                 let mut c = [
                     f32::from(color.r) / 255.0,
@@ -908,6 +920,29 @@ mod tests {
         prim(FePrimitive::Flood { color, opacity: 1.0 })
     }
 
+    /// `transform="scale(-1, 1)"`: область фильтра в user space отражается и остаётся
+    /// непустой; смещение `feOffset` меняет знак (`morphology-mirrored`).
+    #[test]
+    fn mirrored_axis_keeps_region_and_flips_offset() {
+        let mut g = filter(vec![flood(Color { r: 0, g: 0, b: 255, a: 255 })]);
+        g.filter_units_obb = false;
+        g.region = (0.0, 0.0, 20.0, 20.0);
+        let mut u = url(g);
+        u.placement = Some(lumen_layout::SvgClipPlacement { matrix: [-1.0, 0.0, 0.0, 1.0, 40.0, 0.0], user_bbox: (0.0, 0.0, 20.0, 20.0) });
+        let w = apply(&red_square(), (0, 0), (40, 40), &u, Rect::new(0.0, 0.0, 40.0, 40.0), &HashMap::new()).unwrap();
+        assert_eq!((w.x, w.y, w.pixmap.width(), w.pixmap.height()), (20, 0, 20, 20));
+
+        let mut off = prim(FePrimitive::Offset { input: FeInput::SourceGraphic, dx: 5.0, dy: 0.0 });
+        off.linear_rgb = false;
+        let mut g = filter(vec![off]);
+        g.region = (-1.0, -1.0, 4.0, 4.0);
+        let mut u = url(g);
+        u.placement = Some(lumen_layout::SvgClipPlacement { matrix: [-1.0, 0.0, 0.0, 1.0, 40.0, 0.0], user_bbox: (10.0, 10.0, 10.0, 10.0) });
+        let w = apply(&red_square(), (0, 0), (40, 40), &u, Rect::new(0.0, 0.0, 40.0, 40.0), &HashMap::new()).unwrap();
+        assert_eq!(px(&w, 7, 12), [255, 0, 0, 255], "сдвиг в user space +5 → страница −5");
+        assert_eq!(px(&w, 17, 12), [0, 0, 0, 0]);
+    }
+
     #[test]
     fn tile_repeats_input_subregion_over_whole_region() {
         let mut seed = flood(Color { r: 0, g: 0, b: 255, a: 255 });
@@ -1002,6 +1037,18 @@ mod tests {
         assert_eq!(a.pixmap.data(), b.pixmap.data());
         assert_ne!(a.pixmap.data(), c.pixmap.data());
         assert_ne!(px(&a, 6, 6), px(&a, 17, 11));
+    }
+
+    #[test]
+    fn turbulence_negative_frequency_is_zero_noise() {
+        let t = |fractal| {
+            let mut p = prim(FePrimitive::Turbulence { fx: -1.0, fy: 1.0, octaves: 1, seed: 0, stitch: false, fractal });
+            p.linear_rgb = false;
+            run(vec![p])
+        };
+        assert_eq!(px(&t(false), 12, 12)[3], 0, "turbulence: прозрачность");
+        let g = px(&t(true), 12, 12);
+        assert!((127..=128).contains(&g[3]) && g[0] <= 64, "fractalNoise: нулевой шум = 50% альфы: {g:?}");
     }
 
     #[test]

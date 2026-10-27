@@ -268,6 +268,20 @@ fn build_ruby_group_box(
     }
 }
 
+/// Атрибут `width`/`height` корневого `<svg>`: число или CSS-длина (`10px`, `2em`, `50%`);
+/// `auto` и мусор — как отсутствие. Абсолютная длина масштабируется `zoom`, как `width: Npx`.
+fn svg_root_length_attr(v: &str, zoom: f32) -> Option<crate::style::Length> {
+    use crate::style::Length;
+    let v = v.trim();
+    if let Ok(n) = v.parse::<f32>() {
+        return Some(Length::Px(n * zoom));
+    }
+    match crate::style::parse_length(v)? {
+        Length::Px(p) => Some(Length::Px(p * zoom)),
+        other => Some(other),
+    }
+}
+
 /// True when `node` is a `<select>`/`<selectlist>` host that opts into the
 /// HTML/CSS «Customizable Select» rendering (`appearance: base-select`).
 fn is_base_select_host(doc: &Document, node: NodeId) -> bool {
@@ -931,17 +945,15 @@ fn build_box_inner(
                 // CSS: object-fit, object-position — P4 can override viewBox scaling (Phase 2)
                 // CSS: intrinsic aspect-ratio from viewBox for replaced element sizing
                 if style.width.is_none()
-                    && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
+                    && let Some(w) = doc.get(id).get_attr("width").and_then(|v| svg_root_length_attr(v, style.effective_zoom))
                 {
                     // The attribute is an author length, so `zoom` scales it like `width: Npx`.
-                    let z = style.effective_zoom;
-                    Arc::make_mut(&mut style).width = Some(crate::style::Length::Px(w * z));
+                    Arc::make_mut(&mut style).width = Some(w);
                 }
                 if style.height.is_none()
-                    && let Some(h) = doc.get(id).get_attr("height").and_then(|v| v.trim().parse::<f32>().ok())
+                    && let Some(h) = doc.get(id).get_attr("height").and_then(|v| svg_root_length_attr(v, style.effective_zoom))
                 {
-                    let z = style.effective_zoom;
-                    Arc::make_mut(&mut style).height = Some(crate::style::Length::Px(h * z));
+                    Arc::make_mut(&mut style).height = Some(h);
                 }
                 BoxKind::SvgRoot {
                     view_box: parse_view_box(doc, id),
