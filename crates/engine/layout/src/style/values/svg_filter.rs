@@ -25,6 +25,11 @@ pub struct SvgFilter {
     /// Область фильтра `(x, y, width, height)`; значения по умолчанию
     /// (`-10% -10% 120% 120%`) уже подставлены.
     pub region: (f32, f32, f32, f32),
+    /// `[x, y, width, height]` области заданы процентами в `userSpaceOnUse` и ещё
+    /// не раскрыты: в `region` лежит доля (`%` / 100) от размера viewport, который
+    /// знает только paint (border box HTML-бокса). У SVG-элементов базу берёт
+    /// каскад (ближайший `<svg>`), и флаги сброшены.
+    pub region_pct: [bool; 4],
     /// Примитивы в порядке документа.
     pub primitives: Vec<SvgFilterPrimitive>,
 }
@@ -58,6 +63,8 @@ pub struct SvgFilterPrimitive {
     pub width: Option<f32>,
     /// См. [`Self::x`].
     pub height: Option<f32>,
+    /// Как [`SvgFilter::region_pct`], для `[x, y, width, height]` подобласти.
+    pub pct: [bool; 4],
     /// `color-interpolation-filters: linearRGB` (значение по умолчанию) или `sRGB`.
     pub linear_rgb: bool,
     /// Сам примитив «заражён» (Filter Effects L1 §«Tainted filter primitives»):
