@@ -57,12 +57,12 @@
 {
  "generated": "2026-10-27",
  "counts": {
-  "open": 304,
+  "open": 306,
   "fixed": 1369,
   "inprogress": 0,
   "wontfix": 3
  },
- "total_bugs": 1676,
+ "total_bugs": 1678,
  "phases": [
   {
    "id": "P0",
@@ -11785,6 +11785,20 @@
    "date": null,
    "debtor": false
   },
+  "BUG-1740": {
+   "status": "open",
+   "title": "Найден WPT-STREAMS-SCOUT: `ReadableStream.length` 2 вместо 0, перечисляемые методы и служебный `_rs_do_cancel` на публичном прототипе, нет `Symbol.toStringTag`;…",
+   "component": "js (`crates/js/src/shim/streams_shim.js` — WebIDL-форма классов Streams)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-1741": {
+   "status": "open",
+   "title": "Найден WPT-STREAMS-SCOUT: `transformer.cancel` не вызывается, `readableType`/`writableType` не отвергаются, `terminate()` не закрывает запись, исключение `start…",
+   "component": "js (`streams_shim.js` — `TransformStream`)",
+   "date": null,
+   "debtor": false
+  },
   "BUG-001": {
    "status": "fixed",
    "title": "display:none on inline elements not working",
@@ -22172,6 +22186,9 @@
   "js (`crates/js/src/shim/performance_shim.js` — записи — объектные литералы)": [
    "BUG-1189"
   ],
+  "js (`crates/js/src/shim/streams_shim.js` — WebIDL-форма классов Streams)": [
+   "BUG-1740"
+  ],
   "js (`crates/js/src/shim/streams_shim.js`)": [
    "BUG-1204"
   ],
@@ -22662,6 +22679,9 @@
   ],
   "js (`idb_shim.js`/`dom.rs` — `_idb_dispatch_request`, `_idb_fire_txn`)": [
    "BUG-1706"
+  ],
+  "js (`streams_shim.js` — `TransformStream`)": [
+   "BUG-1741"
   ],
   "js (`web_api_shim_mid.js::_lumen_serialize_style`/`_lumen_shorthand_value`/`_lumen_parse_style`)": [
    "BUG-964"
