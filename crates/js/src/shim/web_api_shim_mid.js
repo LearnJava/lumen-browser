@@ -13546,6 +13546,7 @@ _lumen_css_acc(_lumen_css_sheet_proto, 'disabled', function() {
 }, function(v) {
     var be = _lumen_css_be(this);
     if (be.c) _lumen_constructed_set_disabled(be.key, !!v);
+    else if (be.idx() >= 0) _lumen_sheet_set_override(be.key, v ? 2 : 1); // BUG-1554
 });
 _lumen_css_acc(_lumen_css_sheet_proto, 'ownerNode', function() { return _lumen_css_owner(_lumen_css_be(this)); });
 _lumen_css_acc(_lumen_css_sheet_proto, 'href', function() {
@@ -15109,6 +15110,12 @@ function _lumen_track_cloned_style_blocks(nid) {
         _lumen_resource_pending[nid] = 'style';
         _lumen_resource_pending_count++;
     }
+    // BUG-1554: a cloned `<link>` obtains its resource when it is inserted, like one built with
+    // `createElement` (HTML LS §4.6.7); the clone never inherits `_lumen_link_sheet_done`.
+    if (_lumen_is_link_element(nid) && _lumen_resource_pending[nid] === undefined) {
+        _lumen_resource_pending[nid] = 'link';
+        _lumen_resource_pending_count++;
+    }
     var kids = _lumen_get_children(nid);
     for (var i = 0; i < kids.length; i++) _lumen_track_cloned_style_blocks(kids[i]);
 }
@@ -15902,6 +15909,21 @@ function _lumen_deliver_parser_link_events(pairs) {
     }
 }
 
+// The text of a `data:` URL (RFC 2397), `null` for any other URL or an undecodable payload.
+function _lumen_link_data_url_text(url) {
+    var m = /^data:([^,]*?)(;base64)?,([\s\S]*)$/i.exec(url);
+    if (!m) return null;
+    try {
+        if (!m[2]) return decodeURIComponent(m[3]);
+        var bin = atob(decodeURIComponent(m[3]));
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder('utf-8').decode(bytes);
+    } catch (e) {
+        return null;
+    }
+}
+
 function _lumen_link_prepare(nid) {
     var rel = _lumen_u2n(_lumen_get_attr(nid, 'rel'));
     if (rel === null) return;
@@ -15919,6 +15941,8 @@ function _lumen_link_prepare(nid) {
     href = (href === null) ? '' : String(href).trim();
     // No href → no resource is obtained, so neither event fires.
     if (href === '') return;
+    // BUG-1554: `<link disabled>` obtains nothing until the attribute is cleared.
+    if (_lumen_u2n(_lumen_get_attr(nid, 'disabled')) !== null) return;
     // Claim the element before the fetch starts: the shell's cascade pass runs
     // once every script of the document has finished, so it would otherwise
     // report this same link a second time (BUG-804).
@@ -15938,13 +15962,29 @@ function _lumen_link_prepare(nid) {
             _lumen_resource_fire(nid, 'error');
             return;
         }
+        // BUG-1554: a `data:` sheet carries its bytes in the URL — no request, so it also loads
+        // where the page has no fetch provider (the headless screenshot path of a reftest).
+        var inline = _lumen_link_data_url_text(url);
+        if (inline !== null) {
+            if (!_lumen_resource_is_connected(nid)) return;
+            _lumen_stylesheet_register_link(nid, inline);
+            _lumen_resource_fire(nid, 'load');
+            return;
+        }
         fetch(url, { _lumenInitiatorType: 'link' }).then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             // Drain the body: an unread response holds its fetch slot (BUG-721).
             return resp.text();
-        }).then(function() {
+        }).then(function(text) {
+            // A link taken out of the tree while its sheet was in flight reports nothing (HTML LS
+            // §4.6.7: the fetch is cancelled with the element).
+            if (!_lumen_resource_is_connected(nid)) return;
+            // BUG-1554: a sheet the shell's cascade pass did not carry (inserted or enabled
+            // after it) joins `document.styleSheets` and the cascade now.
+            _lumen_stylesheet_register_link(nid, text);
             _lumen_resource_fire(nid, 'load');
         }).catch(function(e) {
+            if (!_lumen_resource_is_connected(nid)) return;
             _lumen_console_error('stylesheet load failed: ' + url + ': ' + e);
             _lumen_resource_fire(nid, 'error');
         });
@@ -16459,6 +16499,12 @@ function _lumen_is_style_element(nid) {
     var local;
     try { local = _lumen_u2n(_lumen_get_local_name(nid)); } catch (e) { return false; }
     return local !== null && String(local).toLowerCase() === 'style';
+}
+function _lumen_is_link_element(nid) {
+    if (nid === null || nid === undefined) return false;
+    var local;
+    try { local = _lumen_u2n(_lumen_get_local_name(nid)); } catch (e) { return false; }
+    return local !== null && String(local).toLowerCase() === 'link';
 }
 
 // A child list changed under `parent`: if that parent is a connected `<style>`,

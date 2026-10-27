@@ -363,6 +363,8 @@ impl V8JsRuntime {
                 pristine: Arc::clone(&self.patched_pristine),
                 child_list_gen: Arc::default(),
                 detached: Arc::default(),
+                state_touched: Arc::default(),
+                removed: Arc::default(),
             };
             *self.sheet_sync.lock().unwrap_or_else(|e| e.into_inner()) = Some(sheet_sync.clone());
             let flush_handles = FlushHandles {

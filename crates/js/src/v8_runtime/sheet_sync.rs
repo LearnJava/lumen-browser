@@ -27,9 +27,14 @@ use super::named_access::lock_document_bounded;
 use super::dom_touched::DomTouched;
 use super::style_flush::CssomDeltaLog;
 
-/// Лист шелла до наложения CSSOM-правок и ревизия результата наложения —
-/// см. [`SheetSync::pristine`].
-pub(crate) type PristineCascade = Arc<Mutex<Option<(StylesheetRevision, Arc<Stylesheet>)>>>;
+/// Листы шелла до наложения CSSOM-правок и ревизии результатов наложения (последние
+/// [`PRISTINE_KEPT`], старые первыми) — см. [`SheetSync::pristine`].
+pub(crate) type PristineCascade = Arc<Mutex<Vec<(StylesheetRevision, Arc<Stylesheet>)>>>;
+
+/// Сколько результатов наложения помнит [`SheetSync::pristine`]. Шелл и движок накладывают правки
+/// независимо, и флаш может получить лист не последнего наложения, а одного из предыдущих
+/// (BUG-1554: выключенный скриптом `<link>` оставался в каскаде флаша).
+const PRISTINE_KEPT: usize = 8;
 
 /// Ручки, которые нужны сверке реестра и записи CSSOM-правки. Все поля —
 /// `Arc`, клон дешёвый; живёт в нативах `install_stylesheets`, во
@@ -58,10 +63,11 @@ pub(crate) struct SheetSync {
     /// `ShadowRoot`, а не к документу — в `document.styleSheets` и в каскад
     /// документа они не попадают.
     pub(crate) shadow_owned: Arc<Mutex<HashSet<u32>>>,
-    /// Последний результат [`super::V8JsRuntime::patch_cascade`]: его ревизия
+    /// Последние результаты [`super::V8JsRuntime::patch_cascade`]: ревизия
     /// и лист шелла, на который накладывались правки. Шелл отдаёт результат
     /// обратно как лист синхронного флаша, и флаш по ревизии берёт исходный
-    /// лист, чтобы не наложить те же правки второй раз.
+    /// лист, чтобы не наложить те же правки второй раз. Помнится несколько
+    /// наложений: шелл может наложить заново, пока флаш держит лист предыдущего.
     pub(crate) pristine: PristineCascade,
     /// `<style>` узла → `DomTouched::child_list_gen` на момент, когда его лист
     /// последний раз сверялся с текстом. Смена поколения при том же тексте
@@ -74,6 +80,15 @@ pub(crate) struct SheetSync {
     /// узлов лист теряет, поэтому сверка откладывает его сюда, а
     /// `_lumen_stylesheet_take_detached` переселяет в реестр конструируемых.
     pub(crate) detached: DetachedSheets,
+    /// BUG-1554: узлы, чей лист включили/выключили скриптом (`sheet.disabled`,
+    /// `link.disabled`) или чей `<link>` догрузился уже после каскада шелла. Только
+    /// им [`patched_cascade`] выносит вердикт «применяется ли лист»: остальные
+    /// собрал сам шелл из того же DOM.
+    pub(crate) state_touched: Arc<Mutex<HashSet<u32>>>,
+    /// BUG-1554: листы из `state_touched`, которые реестр потерял (скрипт выключил лист или
+    /// `<link disabled>`). Шелл мог уже вложить их текст в каскад, пересобрав его из DOM, пока
+    /// лист был включён, — [`patched_cascade`] вырезает этот текст обратно.
+    pub(crate) removed: DetachedSheets,
 }
 
 /// Листы узлов, вышедших из дерева, — см. [`SheetSync::detached`].
@@ -111,14 +126,20 @@ impl CascadeSource {
         let patched = {
             let nodes = sync.nodes.lock().unwrap_or_else(|e| e.into_inner());
             let deltas = sync.deltas.lock().unwrap_or_else(|e| e.into_inner());
-            if deltas.is_empty() {
+            let touched = sync.state_touched.lock().unwrap_or_else(|e| e.into_inner());
+            if deltas.is_empty() && touched.is_empty() {
                 return None;
             }
             let shadow = sync.shadow_owned.lock().unwrap_or_else(|e| e.into_inner());
-            patched_cascade(sheet, &nodes, &deltas, &shadow, false)?
+            let removed = sync.removed.lock().unwrap_or_else(|e| e.into_inner());
+            patched_cascade(sheet, &nodes, &deltas, &shadow, &touched, &removed, false)?
         };
-        *sync.pristine.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((patched.revision(), Arc::new(sheet.clone())));
+        {
+            let mut kept = sync.pristine.lock().unwrap_or_else(|e| e.into_inner());
+            kept.push((patched.revision(), Arc::new(sheet.clone())));
+            let excess = kept.len().saturating_sub(PRISTINE_KEPT);
+            kept.drain(..excess);
+        }
         Some(patched)
     }
 
@@ -139,6 +160,8 @@ struct Owner {
     /// Текст `<style>`; `None` — `<link rel=stylesheet>`.
     style_text: Option<String>,
     in_shadow: bool,
+    /// BUG-1554: участвует ли лист в каскаде (`alternate`/`title`/`disabled` скрипта).
+    enabled: bool,
 }
 
 impl SheetSync {
@@ -151,6 +174,53 @@ impl SheetSync {
         self.dirty.store(true, Ordering::Relaxed);
         self.epoch.fetch_add(1, Ordering::Relaxed);
         self.relayout.store(true, Ordering::Relaxed);
+    }
+
+    /// BUG-1554: состояние владельца листа `nid` изменилось (вердикт скрипта, догрузка `<link>`):
+    /// реестр пересверяется, а каскад шелла и флаш — перестраиваются.
+    pub(crate) fn note_state_change(&self, nid: u32) {
+        self.state_touched.lock().unwrap_or_else(|e| e.into_inner()).insert(nid);
+        *self.synced.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.dirty.store(true, Ordering::Relaxed);
+        self.epoch.fetch_add(1, Ordering::Relaxed);
+        self.relayout.store(true, Ordering::Relaxed);
+    }
+
+    /// BUG-1554: тело `<link rel=stylesheet>` пришло уже после каскада шелла (его вставил скрипт
+    /// или снял `disabled`): лист входит в реестр на место `nid` в порядке дерева. `false` —
+    /// элемента нет в документе либо он не `<link>`-лист.
+    pub(crate) fn register_loaded_link(&self, nid: u32, text: &str) -> bool {
+        let media = {
+            let Some(doc) = lock_document_bounded(&self.doc) else { return false };
+            let id = NodeId::from_raw(nid);
+            if !doc.contains_id(id) || !doc.is_connected(id) {
+                return false;
+            }
+            let node = doc.get(id);
+            if !node.element_name().is_some_and(|n| n.local == "link") || doc.link_has_no_sheet(id) {
+                return false;
+            }
+            node.get_attr("media").map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned)
+        };
+        // Лист, который каскад шелла уже нёс (`<link>` до его прохода), второй раз не вливается.
+        if self.nodes.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|e| e.node == nid) {
+            return true;
+        }
+        // `media` на `<link>` отсекает лист целиком; каскад шелла такие не вливал вовсе.
+        let source = match media {
+            Some(m) => format!("@media {m} {{
+{text}
+}}
+"),
+            None => text.to_owned(),
+        };
+        self.nodes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(StylesheetNodeEntry { node: nid, sheet: Arc::new(lumen_css_parser::parse(&source)), disabled: false });
+        self.note_state_change(nid);
+        self.sync();
+        true
     }
 
     /// Сверить реестр с DOM, если DOM менялся с прошлой сверки.
@@ -176,7 +246,8 @@ impl SheetSync {
             return;
         };
         let mut owners = Vec::new();
-        collect_owners(&doc, doc.root(), false, &mut owners);
+        let preferred = doc.preferred_sheet_set();
+        collect_owners(&doc, doc.root(), false, preferred.as_deref(), &mut owners);
         drop(doc);
 
         let mut dropped: Vec<u32> = Vec::new();
@@ -195,6 +266,7 @@ impl SheetSync {
                 nodes.drain(..).map(|e| (e.node, e)).collect();
             let mut out = Vec::with_capacity(owners.len());
             for owner in owners {
+                let enabled = owner.enabled;
                 let prev = old.remove(&owner.node);
                 let generation = gens.get(&owner.node).copied().unwrap_or(0);
                 let rewritten = seen.insert(owner.node, generation).is_some_and(|old| old != generation);
@@ -211,12 +283,14 @@ impl SheetSync {
                         StylesheetNodeEntry {
                             node: owner.node,
                             sheet: Arc::new(lumen_css_parser::parse(&text)),
-                            disabled: false,
+                            disabled: !enabled,
                         }
                     }
                     (None, Some(prev)) => prev,
                     (None, None) => continue,
                 };
+                let mut entry = entry;
+                entry.disabled = !enabled;
                 if owner.in_shadow {
                     shadow.insert(owner.node);
                 }
@@ -224,7 +298,14 @@ impl SheetSync {
             }
             {
                 let mut detached = self.detached.lock().unwrap_or_else(|e| e.into_inner());
+                let touched = self.state_touched.lock().unwrap_or_else(|e| e.into_inner());
+                let mut removed = self.removed.lock().unwrap_or_else(|e| e.into_inner());
+                removed.retain(|(n, _)| !out.iter().any(|e| e.node == *n));
                 for (node, entry) in old {
+                    if touched.contains(&node) {
+                        removed.retain(|(n, _)| *n != node);
+                        removed.push((node, Arc::clone(&entry.sheet)));
+                    }
                     dropped.push(node);
                     detached.retain(|(n, _)| *n != node);
                     detached.push((node, entry.sheet));
@@ -305,6 +386,7 @@ impl SheetSync {
                 let seen = self.child_list_gen.lock().unwrap_or_else(|e| e.into_inner());
                 unchanged_text && seen.get(&nid).is_none_or(|&old| old == generation)
             }
+            Some(name) if name.local == "link" => !doc.link_has_no_sheet(id),
             Some(_) => true,
             None => false,
         }
@@ -332,12 +414,23 @@ pub(crate) fn patched_cascade(
     nodes: &[StylesheetNodeEntry],
     deltas: &[(u32, CssomOp)],
     shadow_owned: &HashSet<u32>,
+    state_touched: &HashSet<u32>,
+    removed: &[(u32, Arc<Stylesheet>)],
     merge_unlocated_text: bool,
 ) -> Option<Stylesheet> {
     let mut bases: HashMap<u32, usize> = HashMap::new();
     // CSSOM-10: листы с правками дерева заменяют свой кусок текста каскада.
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
     let mut unlocated: Vec<&Stylesheet> = Vec::new();
+    // BUG-1554: тексты листов, которые скрипт убрал, а шелл успел вложить в каскад.
+    for (_, gone) in removed {
+        let needle = gone.source().unwrap_or("");
+        if !needle.is_empty()
+            && let Some((start, end)) = sheet.locate_embedded_source(needle, 0)
+        {
+            replacements.push((start, end, String::new()));
+        }
+    }
     let mut cursor = 0usize;
     for entry in nodes {
         if shadow_owned.contains(&entry.node) {
@@ -347,18 +440,26 @@ pub(crate) fn patched_cascade(
         let tree_edited = deltas
             .iter()
             .any(|(n, op)| *n == entry.node && matches!(op, CssomOp::TreeEdit));
+        let touched = state_touched.contains(&entry.node);
         match sheet.locate_embedded_source(needle, cursor) {
             Some((start, end)) => {
                 cursor = end;
-                if tree_edited {
+                if entry.disabled && touched {
+                    // BUG-1554: скрипт выключил лист, который шелл уже вложил в каскад.
+                    replacements.push((start, end, String::new()));
+                } else if tree_edited {
                     replacements.push((start, end, entry.sheet.cssom_source_text()));
                 } else if deltas.iter().any(|(n, _)| *n == entry.node) {
                     let (base, _count) = sheet.cssom_range_for_source_span(start, end);
                     bases.insert(entry.node, base);
                 }
             }
+            None if entry.disabled => continue,
             None => {
-                let wanted = if needle.is_empty() {
+                let wanted = if touched {
+                    // BUG-1554: лист включили скриптом или `<link>` догрузился позже каскада шелла.
+                    true
+                } else if needle.is_empty() {
                     // `@layer`/`@scope`/… не входят в `cssom_rules()` — у правленого листа
                     // смотрим на дерево.
                     !entry.sheet.cssom_rules().is_empty() || (tree_edited && !entry.sheet.cssom_tree().rules.is_empty())
@@ -430,7 +531,7 @@ fn declares_layers(sheet: &Stylesheet) -> bool {
 
 /// Обход дерева в порядке документа с заходом в теневые деревья: теневой
 /// корень хоста обходится сразу после самого хоста, до его детей.
-fn collect_owners(doc: &Document, id: NodeId, in_shadow: bool, out: &mut Vec<Owner>) {
+fn collect_owners(doc: &Document, id: NodeId, in_shadow: bool, preferred: Option<&str>, out: &mut Vec<Owner>) {
     let node = doc.get(id);
     if let NodeData::Element { name, attrs } = &node.data {
         if name.local == "style" {
@@ -438,6 +539,7 @@ fn collect_owners(doc: &Document, id: NodeId, in_shadow: bool, out: &mut Vec<Own
                 node: id.raw(),
                 style_text: Some(style_text(doc, id)),
                 in_shadow,
+                enabled: doc.sheet_owner_enabled(id, preferred),
             });
             return;
         }
@@ -451,17 +553,18 @@ fn collect_owners(doc: &Document, id: NodeId, in_shadow: bool, out: &mut Vec<Own
             let is_sheet = attr("rel")
                 .split_ascii_whitespace()
                 .any(|r| r.eq_ignore_ascii_case("stylesheet"));
-            if is_sheet && !attr("href").is_empty() {
-                out.push(Owner { node: id.raw(), style_text: None, in_shadow });
+            // `<link disabled>` — не лист вовсе (HTML LS §4.6.7).
+            if is_sheet && !attr("href").is_empty() && !doc.link_has_no_sheet(id) {
+                out.push(Owner { node: id.raw(), style_text: None, in_shadow, enabled: doc.sheet_owner_enabled(id, preferred) });
             }
             return;
         }
         if let Some(sr) = doc.shadow_root_of(id) {
-            collect_owners(doc, sr, true, out);
+            collect_owners(doc, sr, true, preferred, out);
         }
     }
     for &child in &node.children {
-        collect_owners(doc, child, in_shadow, out);
+        collect_owners(doc, child, in_shadow, preferred, out);
     }
 }
 
@@ -496,7 +599,7 @@ mod tree_edit_tests {
         let nodes = [entry(1, edited), entry(2, lumen_css_parser::parse(second))];
         let deltas = [(1u32, CssomOp::TreeEdit)];
 
-        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), false).unwrap();
+        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), &HashSet::new(), &[], false).unwrap();
         let text = patched.source().unwrap();
         assert!(text.contains("@media print"), "{text}");
         assert!(text.contains(second), "{text}");
@@ -514,7 +617,7 @@ mod tree_edit_tests {
         let nodes = [entry(1, empty), entry(2, lumen_css_parser::parse("@layer second { p { color: red; } }"))];
         let deltas = [(1u32, CssomOp::TreeEdit)];
 
-        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), false).unwrap();
+        let patched = patched_cascade(&cascade, &nodes, &deltas, &HashSet::new(), &HashSet::new(), &[], false).unwrap();
         let text = patched.source().unwrap();
         assert!(text.contains("first") && text.contains("second"), "{text:?}");
         assert!(text.find("first").unwrap() < text.find("second").unwrap(), "{text:?}");

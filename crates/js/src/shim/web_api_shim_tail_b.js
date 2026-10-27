@@ -2011,6 +2011,48 @@ Object.defineProperty(HTMLAnchorElement.prototype, 'relList', {
     enumerable: true, configurable: true,
 });
 
+// HTML LS §4.6.7 `HTMLLinkElement.disabled` (BUG-1554): the content attribute, plus a script
+// verdict. Clearing a present attribute marks the sheet «explicitly enabled» (it then applies even
+// as an alternate, whatever `rel` becomes) and starts the load; setting it while the attribute is
+// absent and the setter's value is false does nothing.
+Object.defineProperty(HTMLLinkElement.prototype, 'disabled', {
+    get: function() {
+        return _lumen_reflect_nid(this) !== -1 && this.hasAttribute('disabled');
+    },
+    set: function(v) {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return;
+        if (v) {
+            if (!this.hasAttribute('disabled')) this.setAttribute('disabled', '');
+            return;
+        }
+        if (!this.hasAttribute('disabled')) return;
+        this.removeAttribute('disabled');
+        _lumen_sheet_set_override(nid, 1);
+        delete _lumen_link_sheet_done[nid];
+        if (_lumen_resource_is_connected(nid)) {
+            _lumen_link_prepare(nid);
+        } else if (_lumen_resource_pending[nid] === undefined) {
+            // Not in a document yet: the load starts at the next insertion.
+            _lumen_resource_pending[nid] = 'link';
+            _lumen_resource_pending_count++;
+        }
+    },
+    enumerable: true, configurable: true,
+});
+// Legacy `HTMLStyleElement.disabled` mirrors `sheet.disabled` (no attribute behind it).
+Object.defineProperty(HTMLStyleElement.prototype, 'disabled', {
+    get: function() {
+        var sheet = this.sheet;
+        return sheet ? sheet.disabled : false;
+    },
+    set: function(v) {
+        var nid = _lumen_reflect_nid(this);
+        if (nid !== -1) _lumen_sheet_set_override(nid, v ? 2 : 1);
+    },
+    enumerable: true, configurable: true,
+});
+
 _lumen_install_reflection(HTMLStyleElement.prototype, [
     ['media',          'media',          'string'],
     ['type',           'type',           'string'],

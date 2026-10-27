@@ -1534,15 +1534,15 @@ impl FlushHandles {
         sheet: &Arc<lumen_css_parser::Stylesheet>,
     ) -> Option<Arc<lumen_css_parser::Stylesheet>> {
         self.sheet_sync.sync();
-        let base = match &*self
+        let base = self
             .sheet_sync
             .pristine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-        {
-            Some((rev, pristine)) if *rev == sheet.revision() => Arc::clone(pristine),
-            _ => Arc::clone(sheet),
-        };
+            .iter()
+            .rev()
+            .find(|(rev, _)| *rev == sheet.revision())
+            .map_or_else(|| Arc::clone(sheet), |(_, pristine)| Arc::clone(pristine));
         let nodes = self
             .sheet_sync
             .nodes
@@ -1569,7 +1569,9 @@ impl FlushHandles {
         {
             return c.result.clone();
         }
-        let result = match super::sheet_sync::patched_cascade(&base, &nodes, &deltas, &shadow, true) {
+        let touched = self.sheet_sync.state_touched.lock().unwrap_or_else(|e| e.into_inner());
+        let removed = self.sheet_sync.removed.lock().unwrap_or_else(|e| e.into_inner());
+        let result = match super::sheet_sync::patched_cascade(&base, &nodes, &deltas, &shadow, &touched, &removed, true) {
             Some(patched) => Some(Arc::new(patched)),
             // Nothing to replay onto the pristine sheet — the shell's patched
             // one carries edits that were since dropped, so use the pristine.

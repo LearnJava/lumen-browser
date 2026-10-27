@@ -33,6 +33,8 @@ pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_trac
 pub mod page_translate;
 
 mod journal;
+mod sheet_sets;
+pub use sheet_sets::SheetOverride;
 use journal::ContentJournal;
 mod forms;
 mod implicit_submit;
@@ -596,6 +598,10 @@ pub struct Document {
     /// style sheets do not reach in" all hang off membership here.
     #[serde(default)]
     ua_shadow_roots: HashMap<NodeId, NodeId>,
+    /// BUG-1554: script verdicts on whether a `<style>`/`<link>` owner applies
+    /// (`sheet.disabled`, `link.disabled`) — see [`SheetOverride`].
+    #[serde(default)]
+    sheet_overrides: HashMap<NodeId, SheetOverride>,
     /// Maps each `<template>` element `NodeId` to its content `DocumentFragment` `NodeId`.
     ///
     /// The fragment is stored in the arena but is not a DOM child of the
@@ -885,6 +891,7 @@ impl Document {
             target_id: None,
             shadow_roots: HashMap::new(),
             ua_shadow_roots: HashMap::new(),
+            sheet_overrides: HashMap::new(),
             template_contents: HashMap::new(),
             selection: Selection::default(),
             composition: None,

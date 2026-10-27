@@ -135,12 +135,42 @@ pub(crate) fn install_stylesheets(
     }
     {
         let s = Arc::clone(&stylesheet_nodes);
+        let sync = sync.clone();
         reg!(scope, ctx, store, "_lumen_stylesheet_disabled", move |idx: u32| -> bool {
+            // BUG-1554: the flag is derived from the DOM and the script's verdicts at reconcile time.
+            sync.sync();
             s.lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .get(idx as usize)
                 .map(|e| e.disabled)
                 .unwrap_or(false)
+        });
+    }
+    // BUG-1554: вердикт скрипта о владельце листа (`sheet.disabled`, `link.disabled`):
+    // 0 — снять, 1 — включён принудительно, 2 — выключен.
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_sheet_set_override", move |nid: u32, state: i32| {
+            use lumen_dom::SheetOverride;
+            let Ok(mut doc) = sync.doc.lock() else { return };
+            let id = lumen_dom::NodeId::from_raw(nid);
+            if !doc.contains_id(id) {
+                return;
+            }
+            doc.set_sheet_override(id, match state {
+                1 => Some(SheetOverride::Enabled),
+                2 => Some(SheetOverride::Disabled),
+                _ => None,
+            });
+            drop(doc);
+            sync.note_state_change(nid);
+        });
+    }
+    // BUG-1554: тело `<link rel=stylesheet>`, пришедшее после каскада шелла.
+    {
+        let sync = sync.clone();
+        reg!(scope, ctx, store, "_lumen_stylesheet_register_link", move |nid: u32, text: String| -> bool {
+            sync.register_loaded_link(nid, &text)
         });
     }
     // CSSOM-8, вложенные правила — nested-rule addressing into a top-level
