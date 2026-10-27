@@ -76,6 +76,7 @@ pub(crate) struct Windowed {
 /// `None` — граф не определён (ссылка в никуда): вызывающий пропускает фильтр.
 /// Пустая область/пустой граф дают `Some` с прозрачным окном нулевого размера
 /// (`pixmap` 1×1), т.е. элемент не виден.
+#[cfg(test)]
 pub(crate) fn apply(
     src: &tiny_skia::Pixmap,
     origin: (i32, i32),
@@ -84,8 +85,22 @@ pub(crate) fn apply(
     bounds: Rect,
     images: &HashMap<&str, &Image>,
 ) -> Option<Windowed> {
+    apply_scaled(src, origin, canvas, url, bounds, images, 1.0)
+}
+
+/// [`apply`] для растра в device px: `scale` — device px на CSS px (DPR окна).
+/// `bounds` остаётся в CSS px страницы, `src` — в device px.
+pub(crate) fn apply_scaled(
+    src: &tiny_skia::Pixmap,
+    origin: (i32, i32),
+    canvas: (u32, u32),
+    url: &FilterUrl,
+    bounds: Rect,
+    images: &HashMap<&str, &Image>,
+    scale: f32,
+) -> Option<Windowed> {
     let graph = url.graph.as_ref()?;
-    let g = Geometry::new(url, bounds);
+    let g = Geometry::new(url, bounds).scaled(scale);
     let Some(region) = region_px(graph, &g, canvas) else {
         return empty_window();
     };
@@ -163,6 +178,15 @@ impl Geometry {
                 viewport: (bounds.width, bounds.height),
             },
         }
+    }
+
+    /// Те же отображения в device px (`scale` = DPR): bbox и viewport остаются в user units.
+    fn scaled(mut self, scale: f32) -> Self {
+        self.sx *= scale;
+        self.sy *= scale;
+        self.tx *= scale;
+        self.ty *= scale;
+        self
     }
 
     /// Нераскрытая доля процента → user units (`axis`: 0 — x/width, 1 — y/height).
