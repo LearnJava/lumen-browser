@@ -394,6 +394,12 @@ pub(crate) fn settle_after_load(parsed: &mut crate::page_pipeline::ParsedPage, v
     if !dom_dirty && focused.is_none() {
         return;
     }
+    // BUG-1554: a sheet the page enabled, disabled or finished loading after `load`
+    // (`link.disabled = false` in `window.onload`) reaches the cascade only through the CSSOM
+    // patch; the live window applies it in `refresh_dynamic_css`, this one-shot path never did.
+    if let Some(patched) = js.cascade_feed().and_then(|feed| feed.patch_cascade(&parsed.stylesheet)) {
+        parsed.stylesheet = patched;
+    }
     let layout = {
         let Ok(doc) = parsed.document.lock() else { return };
         lumen_layout::set_interactive_state(None, focused, None);

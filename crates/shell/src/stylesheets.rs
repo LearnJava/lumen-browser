@@ -619,6 +619,7 @@ pub(crate) fn build_stylesheet_node_registry(
     // filled it.
     let referrer_policy = crate::resource_base::document_referrer_policy(doc);
 
+    let preferred = doc.preferred_sheet_set();
     let mut out = Vec::with_capacity(owners.len());
     for owner in owners {
         match owner {
@@ -627,9 +628,11 @@ pub(crate) fn build_stylesheet_node_registry(
                 out.push(StylesheetNodeEntry {
                     node: id.index() as u32,
                     sheet: Arc::new(lumen_css_parser::parse(&text)),
-                    disabled: false,
+                    disabled: !doc.sheet_owner_enabled(id, preferred.as_deref()),
                 });
             }
+            // BUG-1554: `<link disabled>` — не лист вовсе (HTML LS §4.6.7).
+            StylesheetOwner::Link(id, ..) if doc.link_has_no_sheet(id) => {}
             StylesheetOwner::Link(id, href, charset_attr) => {
                 // BUG-1180: тот же гейт `style-src`, что `load_linked_stylesheets`
                 // ставит каскаду, — иначе вставленный скриптом `<link>` под
@@ -658,7 +661,7 @@ pub(crate) fn build_stylesheet_node_registry(
                     out.push(StylesheetNodeEntry {
                         node: id.index() as u32,
                         sheet: Arc::new(lumen_css_parser::parse(&text)),
-                        disabled: false,
+                        disabled: !doc.sheet_owner_enabled(id, preferred.as_deref()),
                     });
                 }
             }
@@ -778,6 +781,13 @@ fn parse_pi_pseudo_attrs(data: &str) -> Vec<(String, String)> {
 /// `charset` — легаси-атрибут `<link>` (HTML LS), один из ярусов CSS Syntax L3
 /// «determine the fallback encoding» (BUG-509).
 pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String, Option<String>, Option<String>)>, media_ctx: &lumen_css_parser::MediaContext) {
+    let preferred = doc.preferred_sheet_set();
+    collect_link_hrefs_in(doc, id, out, media_ctx, preferred.as_deref());
+}
+
+/// Обход [`collect_link_hrefs`]: `preferred` — выбранный набор листов документа (BUG-1554),
+/// посчитанный один раз на весь обход.
+fn collect_link_hrefs_in(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String, Option<String>, Option<String>)>, media_ctx: &lumen_css_parser::MediaContext, preferred: Option<&str>) {
     let node = doc.get(id);
     if let NodeData::ProcessingInstruction { target, data } = &node.data {
         if target == "xml-stylesheet" {
@@ -826,6 +836,9 @@ pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(Node
         if rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))
             && !href.is_empty()
             && link_media_matches(media, media_ctx)
+            // BUG-1554: `<link disabled>`, alternate и лист не из выбранного набора каскаду не нужны.
+            && !doc.link_has_no_sheet(id)
+            && doc.sheet_owner_enabled(id, preferred)
         {
             let charset = attrs
                 .iter()
@@ -843,6 +856,6 @@ pub(crate) fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<(Node
         return;
     }
     for &child in &node.children {
-        collect_link_hrefs(doc, child, out, media_ctx);
+        collect_link_hrefs_in(doc, child, out, media_ctx, preferred);
     }
 }

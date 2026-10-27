@@ -29,3 +29,15 @@ WPT-RUN-14 срез 25: `css/cssom/{HTMLLinkElement-disabled-001,002,003,004,006
 ## Как проверить
 
 `css/cssom/HTMLLinkElement-disabled-001.html`, `stylesheet-title.html`.
+
+## Срез 1 (2026-10-28, P3) — влит
+
+Сделано: единый вердикт «лист применяется» `Document::sheet_owner_enabled` (`crates/engine/dom/src/sheet_sets.rs`) для каскада шелла и реестра JS; предпочитаемый набор (`title`/`alternate`/`<meta http-equiv=default-style>`, набор — по первому **созданному** листу с заголовком, не по порядку в дереве); `HTMLLinkElement.disabled` (атрибут + «явно включён»), `CSSStyleSheet.disabled`/`HTMLStyleElement.disabled` для листов, принадлежащих элементу; `<link disabled>` — не лист и не в `document.styleSheets`; тело `<link>`, пришедшее после каскада шелла, входит в реестр и каскад (`_lumen_stylesheet_register_link`), `data:`-лист грузится без запроса; клон `<link>` грузится при вставке; `load`/`error` не стреляют на вынутом из дерева `<link>`; headless-снимок после `load` накладывает `patch_cascade` (`dump_mode::settle_after_load`). Подробности — `subsystems/js.md` §Done.
+
+WPT `css/cssom` (225 файлов): `HTMLLinkElement-disabled-001…004,006`, `HTMLLinkElement-load-event-002`, `preferred-stylesheet-order`, `stylesheet-title` — PASS (были красными, их `.ini` удалены); `HTMLLinkElement-disabled-alternate` (reftest) остаётся PASS уже за правильную причину. `html/semantics/document-metadata`: отклонений от прогона на бинаре до правки нет, `the-style-element/style_disabled.html` стал зелёным.
+
+Остаток:
+
+- `link-element-stylesheet-title`, `ttwf-cssom-doc-ext-load-count`, `ttwf-cssom-doc-ext-load-tree-order` ждут лист и у `<link>`, чей файл не пришёл (404): браузеры оставляют его в `document.styleSheets`, у нас не-загрузившийся `<link>` листа не имеет.
+- Смена `rel`/`href`/`title` через `setAttribute` не перезагружает лист (нет общего хука на смену атрибута `<link>`); почему `HTMLLinkElement-disabled-005` проходит — не выяснено.
+- `HTMLLinkElement-load-event` («не блокирует парсер»), `document.selectedStyleSheetSet`/`lastStyleSheetSet`.

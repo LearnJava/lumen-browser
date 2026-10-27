@@ -71,7 +71,8 @@ pub(crate) fn extract_style_chunks(
 ) -> (Vec<(NodeId, String)>, Vec<String>) {
     let mut out = Vec::new();
     let mut blocked = Vec::new();
-    walk_style_blocks(doc, doc.root(), csp_gate, &mut out, &mut blocked);
+    let preferred = doc.preferred_sheet_set();
+    walk_style_blocks(doc, doc.root(), csp_gate, preferred.as_deref(), &mut out, &mut blocked);
     (out, blocked)
 }
 
@@ -135,7 +136,8 @@ fn collect_sheet_order(
 pub(crate) fn inline_style_fingerprint(doc: &Document) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    hash_style_blocks(doc, doc.root(), &mut h);
+    let preferred = doc.preferred_sheet_set();
+    hash_style_blocks(doc, doc.root(), preferred.as_deref(), &mut h);
     // Пустой документ и документ без единого `<style>` должны давать один хэш —
     // отдельная соль не нужна, но длина цепочки в него уже вошла.
     0_u8.hash(&mut h);
@@ -143,7 +145,7 @@ pub(crate) fn inline_style_fingerprint(doc: &Document) -> u64 {
 }
 
 /// Рекурсивная половина [`inline_style_fingerprint`].
-fn hash_style_blocks(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher) {
+fn hash_style_blocks(doc: &Document, id: NodeId, preferred: Option<&str>, h: &mut impl std::hash::Hasher) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "style"
@@ -153,11 +155,12 @@ fn hash_style_blocks(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher)
                 h.write(s.as_bytes());
             }
         }
-        h.write_u8(0xff);
+        // BUG-1554: включение/выключение листа — тоже изменение каскада.
+        h.write_u8(if doc.sheet_owner_enabled(id, preferred) { 0xff } else { 0xfe });
         return;
     }
     for &child in &node.children {
-        hash_style_blocks(doc, child, h);
+        hash_style_blocks(doc, child, preferred, h);
     }
 }
 
@@ -260,6 +263,7 @@ fn walk_style_blocks(
     doc: &Document,
     id: NodeId,
     csp_gate: Option<&[lumen_network::csp::CspPolicy]>,
+    preferred: Option<&str>,
     out: &mut Vec<(NodeId, String)>,
     blocked: &mut Vec<String>,
 ) {
@@ -267,6 +271,10 @@ fn walk_style_blocks(
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "style"
     {
+        // BUG-1554: не из выбранного набора листов либо выключен скриптом — в каскад не входит.
+        if !doc.sheet_owner_enabled(id, preferred) {
+            return;
+        }
         let mut text = String::new();
         for &child in &node.children {
             if let NodeData::Text(s) = &doc.get(child).data {
@@ -299,7 +307,7 @@ fn walk_style_blocks(
         return;
     }
     for &child in &node.children {
-        walk_style_blocks(doc, child, csp_gate, out, blocked);
+        walk_style_blocks(doc, child, csp_gate, preferred, out, blocked);
     }
 }
 

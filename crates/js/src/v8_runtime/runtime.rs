@@ -544,7 +544,7 @@ impl V8JsRuntime {
             cssom_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sheet_synced: Arc::new(Mutex::new(None)),
             shadow_sheet_owners: Arc::new(Mutex::new(HashSet::new())),
-            patched_pristine: Arc::new(Mutex::new(None)),
+            patched_pristine: Arc::new(Mutex::new(Vec::new())),
             sheet_sync: Arc::new(Mutex::new(None)),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
