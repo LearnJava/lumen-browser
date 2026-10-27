@@ -286,7 +286,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopFilter => {
                 out.push_str("PopFilter\n");
             }
-            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+            DisplayCommand::PushBackdropFilter { filters, bounds, .. } => {
                 let names: Vec<&str> = filters.iter().map(filter_fn_name).collect();
                 out.push_str(&format!(
                     "PushBackdropFilter [{fns}] bounds=({x:.0},{y:.0},{w:.0},{h:.0})\n",

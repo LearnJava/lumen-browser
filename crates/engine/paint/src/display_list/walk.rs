@@ -1219,6 +1219,7 @@ fn dispatch<'a>(
             // CSS Compositing & Blending L1 §5: mix-blend-mode wraps opacity so
             // the element (faded by its own opacity) blends against the backdrop
             // (order Clip → Blend → Opacity, mirroring `box_layer_ops`).
+            let wrap_start = out.len();
             let has_blend = b.style.mix_blend_mode != LayoutBlendMode::Normal;
             if has_blend {
                 out.push(DisplayCommand::PushBlendMode {
@@ -1257,6 +1258,8 @@ fn dispatch<'a>(
                 out.push(DisplayCommand::PushBackdropFilter {
                     filters: b.style.backdrop_filter.clone(),
                     bounds: b.rect,
+                    radii: CornerRadii::from_style_and_box(&b.style, b.rect.width, b.rect.height).corners_h(),
+                    wrappers: (out.len() - wrap_start).min(usize::from(u8::MAX)) as u8,
                 });
             }
             // CSS Filter Effects L1 §4 — the element's own `filter` wraps the

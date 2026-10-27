@@ -229,6 +229,8 @@ fn group_bounds_covers_the_offscreen_and_clip_openers() {
         FemtovgBackend::group_bounds(&DisplayCommand::PushBackdropFilter {
             filters: vec![],
             bounds: r,
+            radii: [0.0; 4],
+            wrappers: 0,
         }),
         Some(r),
     );
