@@ -71,17 +71,20 @@ def lumen_resolve_spec(config, ip=_SERVER_IP):
     Read off `config.domains_set` (the same set `wpt make-hosts-file` writes),
     not a copied list, so a change to `serve.py::_subdomains` or to
     `browser_host` cannot drift from it. `not_domains_set`
-    (`nonexistent.*`) stays out on purpose: those names exist to *fail* to
-    resolve, and `.test` is a reserved TLD the OS resolver answers NXDOMAIN
-    for. The IDN subdomains already come punycoded from `ConfigBuilder`
-    (`_get_domains`); the engine compares ASCII-only, so a non-ASCII name
-    here is a config bug, not something to pass through.
+    (`nonexistent.*`) maps to `~NOTFOUND`, like Chrome's
+    `--host-resolver-rules`: those names exist to *fail* to resolve, and the
+    Windows resolver answers NXDOMAIN for `.test` only after ~11 s — past
+    the test's own timeout (`iframe-network-error.sub.html`,
+    `xhr/event-error.sub.any.js`). The IDN subdomains already come punycoded
+    from `ConfigBuilder` (`_get_domains`); the engine compares ASCII-only, so
+    a non-ASCII name here is a config bug, not something to pass through.
     """
     names = sorted(config.domains_set)
-    non_ascii = [name for name in names if not name.isascii()]
+    gone = sorted(config.not_domains_set)
+    non_ascii = [name for name in names + gone if not name.isascii()]
     if non_ascii:
         raise ValueError(f"LUMEN_RESOLVE needs punycoded names, got {non_ascii}")
-    return ",".join(f"{name}={ip}" for name in names)
+    return ",".join([f"{name}={ip}" for name in names] + [f"{name}=~NOTFOUND" for name in gone])
 
 
 #: Env var: `off` launches browsers without `_SPAWN_LOCK` (the old behaviour),

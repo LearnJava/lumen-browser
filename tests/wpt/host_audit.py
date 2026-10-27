@@ -292,8 +292,8 @@ def configured_domains() -> tuple:
 
     Returns `(families, override, not_domains)`: the per-family name maps,
     the `LUMEN_RESOLVE` map the runner hands the browser (built by the same
-    `lumen_resolve_spec` the runner calls, WPT-HOST-WPT), and the
-    `nonexistent.*` names that must stay unresolved."""
+    `lumen_resolve_spec` the runner calls, WPT-HOST-WPT; `nonexistent.*` map
+    to `~NOTFOUND` there), and the `nonexistent.*` names that must stay unresolved."""
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "wptrunner"))
     sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "webdriver"))
@@ -327,7 +327,8 @@ def resolves(hostname: str, override: dict = None) -> bool:
     first (`crates/network/src/dns.rs` checks it before any resolver), the
     OS resolver otherwise."""
     if override and hostname.rstrip(".").lower() in override:
-        return True
+        # `~NOTFOUND` (the `nonexistent.*` names): the engine fails it at once.
+        return override[hostname.rstrip(".").lower()] != "~NOTFOUND"
     try:
         socket.getaddrinfo(hostname, None)
         return True
