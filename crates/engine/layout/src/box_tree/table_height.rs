@@ -64,8 +64,10 @@ pub(super) fn distribute(b: &mut LayoutBox, init: &TableInit, extra: f32) {
         };
         row.style.height.is_none()
     };
-    let auto: Vec<bool> = (0..n).map(is_auto).collect();
-    let eligible: Vec<bool> = if auto.iter().any(|&a| a) { auto } else { vec![true; n] };
+    // Схлопнутые (`visibility: collapse`) строки излишек не получают — они остаются нулевыми.
+    let live = |i: usize| !init.collapsed_rows.get(i).copied().unwrap_or(false);
+    let auto: Vec<bool> = (0..n).map(|i| is_auto(i) && live(i)).collect();
+    let eligible: Vec<bool> = if auto.iter().any(|&a| a) { auto } else { (0..n).map(live).collect() };
     let weight_sum: f32 = (0..n).filter(|&i| eligible[i]).map(|i| init.flat_row_rects[i].1).sum();
     let n_eligible = eligible.iter().filter(|&&e| e).count() as f32;
     let share = |i: usize| -> f32 {
