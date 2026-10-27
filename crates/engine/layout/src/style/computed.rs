@@ -32,7 +32,7 @@ use lumen_core::ColorSpace;
 // путь `crate::style::<Имя>` работает и для тех имён, которые донор сам
 // втянул реэкспортом из `style/values/*`, `style/parse/*` (правило §2.1).
 use crate::style::{
-    AlignValue, ContentAlignExtra, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
+    AlignValue, ContentAlignExtra, AnimationComposition, AnimationDirection, AnimationFillMode, TransitionBehavior, AnimationPlayState, AnimationTimeline,
     Appearance, BackfaceVisibility, BackgroundLayer, BackgroundSpecified, BlockStepAlign, BlockStepInsert,
     BlockStepRound, BorderCollapse, BorderStyle, BoxShadow, CaptionSide, CaretAnimation, CaretShape, InputSecurity, Interactivity, TableLayout,
     RuleBreak, RuleInsets, RuleList, RuleOverlap, RuleVisibilityItems,
@@ -869,6 +869,9 @@ pub struct ComputedStyle {
     pub animation_fill_modes: Vec<AnimationFillMode>,
     /// CSS Animations L1 §3.8 — `animation-play-state: <single-animation-play-state>#`.
     pub animation_play_states: Vec<AnimationPlayState>,
+    /// CSS Animations L2 §3.9 — `animation-composition: <single-animation-composition>#`.
+    /// Non-inherited, not reset by the `animation` shorthand. Empty = all `replace`.
+    pub animation_compositions: Vec<AnimationComposition>,
     /// CSS Scroll-Driven Animations L1 §3.3 — `animation-timeline: auto | scroll() | view() | <ident>#`.
     /// Non-inherited. Parallel list to `animation_names`. Default empty = all `Auto`.
     pub animation_timelines: Vec<AnimationTimeline>,

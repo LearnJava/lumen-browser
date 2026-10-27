@@ -204,7 +204,7 @@ pub use style::{
     radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
     AlignValue, FlexDirection, FlexWrap, AnimationDirection, Appearance, ContainerContext, ContainerKinds, Edge, EdgeFlags, ScrollStateInfo, RuleBreak, RuleInset, RuleInsets, RuleItem, RuleList, GapRuleOverride,
     RuleOverlap, RuleVisibilityItems,
-    AnimationFillMode, AnimationPlayState, TransitionBehavior,
+    AnimationComposition, AnimationFillMode, AnimationPlayState, TransitionBehavior,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, RepeatStyle,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, GeometryBox, SvgClipPath, SvgClipPlacement, SvgClipSubpath, Color, ColorFloat,

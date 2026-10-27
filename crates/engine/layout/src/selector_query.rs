@@ -16,7 +16,7 @@ use crate::box_tree::{BoxKind, LayoutBox, SvgBaselineShift};
 use crate::ruby::{RubyAlign, RubyMerge};
 use crate::style::{
     SvgColorInterpolation,
-    matches_complex, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
+    matches_complex, AlignValue, AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin,
     BackgroundRepeat, BackgroundSize, BgSizeAxis, RepeatStyle, BlockStepAlign, BlockStepInsert, BlockStepRound,
     BorderStyle, BoxShadow, BoxSizing,
@@ -2391,6 +2391,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
             AnimationFillMode::Backwards => "backwards",
             AnimationFillMode::Both => "both",
         }).collect::<Vec<_>>().join(", ")
+    });
+    m.insert("animation-composition".into(), {
+        let list = if style.animation_compositions.is_empty() {
+            vec![AnimationComposition::default()]
+        } else {
+            style.animation_compositions.clone()
+        };
+        list.iter().map(|c| c.to_css()).collect::<Vec<_>>().join(", ")
     });
     m.insert("animation-play-state".into(), {
         let states = if style.animation_play_states.is_empty() {

@@ -239,7 +239,7 @@ pub use values::box_model::{
     VerticalAlign,
 };
 pub use values::timing::{
-    AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
+    AnimationComposition, AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline, CssWideKeyword,
     CustomProps, IterationCount, LinearEasingPoint, StepPosition, TimingFunction, TransitionBehavior,
     parse_css_wide_keyword,
 };
