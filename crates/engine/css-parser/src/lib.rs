@@ -463,6 +463,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "top",
     "touch-action",
     "transform",
+    "transform-box",
     "transform-origin",
     "transform-style",
     "transition",

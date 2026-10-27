@@ -653,11 +653,62 @@ pub struct TransformRef {
 }
 
 impl TransformRef {
-    /// Reference box бокса — его border box (`b.rect`).
+    /// Reference box бокса по `transform-box` (см. [`transform_reference_rect`]):
+    /// border box для `view-box` (initial) / `border-box` / `stroke-box`,
+    /// content box для `content-box` / `fill-box`.
     #[must_use]
     pub fn of_box(b: &LayoutBox) -> Self {
-        Self { width: b.rect.width, height: b.rect.height, em: b.style.font_size }
+        let r = transform_reference_rect(b);
+        Self { width: r.width, height: r.height, em: b.style.font_size }
     }
+}
+
+/// Reference box трансформации в тех же координатах, что и `b.rect`
+/// (CSS Transforms L1 §transform-box). Для элемента с CSS layout box
+/// `content-box`/`fill-box` = content box, `border-box`/`stroke-box`/`view-box`
+/// = border box (`b.rect`).
+#[must_use]
+pub fn transform_reference_rect(b: &LayoutBox) -> Rect {
+    use crate::style::TransformBox;
+    match b.style.transform_box {
+        TransformBox::ContentBox | TransformBox::FillBox => {
+            let s = &b.style;
+            let em = s.font_size;
+            let bw = b.rect.width;
+            let vp = Size::default();
+            let [pt, pr, pb, pl] = b.used_padding.unwrap_or_else(|| {
+                [
+                    s.padding_top.resolve_or_zero(em, bw, vp),
+                    s.padding_right.resolve_or_zero(em, bw, vp),
+                    s.padding_bottom.resolve_or_zero(em, bw, vp),
+                    s.padding_left.resolve_or_zero(em, bw, vp),
+                ]
+            });
+            Rect::new(
+                b.rect.x + s.border_left_width + pl,
+                b.rect.y + s.border_top_width + pt,
+                (b.rect.width - s.border_left_width - s.border_right_width - pl - pr).max(0.0),
+                (b.rect.height - s.border_top_width - s.border_bottom_width - pt - pb).max(0.0),
+            )
+        }
+        TransformBox::BorderBox | TransformBox::StrokeBox | TransformBox::ViewBox => b.rect,
+    }
+}
+
+/// `transform-origin` в локальных px бокса (от левого верхнего угла `b.rect`):
+/// смещение reference box + проценты/px от его размера.
+#[must_use]
+pub fn transform_origin_local(b: &LayoutBox) -> (f32, f32) {
+    let r = transform_reference_rect(b);
+    let (ox, oy, _) = b.style.transform_origin;
+    (r.x - b.rect.x + ox.resolve(r.width), r.y - b.rect.y + oy.resolve(r.height))
+}
+
+/// `transform-origin` в viewport-координатах (там же, где `b.rect`).
+#[must_use]
+pub fn transform_origin_pivot(b: &LayoutBox) -> (f32, f32) {
+    let (lx, ly) = transform_origin_local(b);
+    (b.rect.x + lx, b.rect.y + ly)
 }
 
 /// Матрица `translate(x, y)` / `translate3d(x, y, z)` с `<length-percentage>`
@@ -751,9 +802,7 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
     if b.style.transform.is_empty() && !has_individual && !has_motion {
         return None;
     }
-    let (ox, oy, _) = b.style.transform_origin;
-    let pivot_x = b.rect.x + ox.resolve(b.rect.width);
-    let pivot_y = b.rect.y + oy.resolve(b.rect.height);
+    let (pivot_x, pivot_y) = transform_origin_pivot(b);
     let mut m = Mat4::IDENTITY;
 
     // CSS Transforms L2 §2.4: individual properties compose before `transform`,
@@ -979,8 +1028,8 @@ fn walk(
     if box_can_own_property_node(b) {
         if creates_transform(style) {
             let id = PropertyTreeNodeId(trees.transform.nodes.len() as u32);
-            let (raw_ox, raw_oy, oz) = style.transform_origin;
-            let resolved_origin = (raw_ox.resolve(b.rect.width), raw_oy.resolve(b.rect.height), oz);
+            let (lx, ly) = transform_origin_local(b);
+            let resolved_origin = (lx, ly, style.transform_origin.2);
             let mut local = compute_local_transform(&style.transform, resolved_origin, TransformRef::of_box(b));
             // CSS Motion Path L1 (offset-path / offset-distance / offset-rotate).
             // Place the `offset-anchor` (default = transform-origin = centre) onto

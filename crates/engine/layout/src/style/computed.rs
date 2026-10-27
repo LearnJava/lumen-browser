@@ -53,7 +53,7 @@ use crate::style::{
     TextAlign, TextAlignLast, TextCssomExtra, TextDecorationLine, TextDecorationSkipInk, TextDecorationSkipSpaces, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextOrientation,
     TextOverflow, TextShadow, TextSizeAdjust, TextTransform, TextUnderlinePosition, TextWrapMode, TextWrapStyle,
-    TimingFunction, TouchAction, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
+    TimingFunction, TouchAction, TransformBox, TransformFn, TransformStyle, UnicodeBidi, UserSelect,
     VerticalAlign, Visibility, WebkitBoxAlign, WebkitBoxDirection, WebkitBoxOrient, WebkitBoxPack, WhiteSpace, WhiteSpaceCollapse, WordBreak,
     WritingMode,
 };
@@ -813,6 +813,9 @@ pub struct ComputedStyle {
     /// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
     /// `Preserve3d` makes children participate in 3D rendering context.
     pub transform_style: TransformStyle,
+    /// CSS Transforms L1 §transform-box — reference box of `transform-origin`
+    /// and percentage `translate`. Initial `view-box`; not inherited.
+    pub transform_box: TransformBox,
     /// CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
     /// Stored on ComputedStyle; actual back-face culling deferred until
     /// a 3D rendering context exists (3D projection ⬜).
