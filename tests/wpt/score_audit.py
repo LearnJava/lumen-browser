@@ -81,8 +81,10 @@ def shard_index(manifest: dict, state: dict) -> tuple:
         manifest, categories, state.get("prefixes") or [],
         state.get("exclude_prefixes") or [],
         # WPT-RUN-18: the heavy lane is planned from the list the run used,
-        # recorded in the state — not from today's `heavy_tests.txt`.
-        {path: "" for path in state.get("heavy_tests") or []} or None)}
+        # recorded in the state — not from today's `heavy_tests.txt`; the
+        # serial lane (WPT-IDB-RUNNER) likewise.
+        {path: "" for path in state.get("heavy_tests") or []} or None,
+        {path: "" for path in state.get("serial_tests") or []} or None)}
     # Longest prefix wins: `/css/CSS2/` must not swallow `/css/CSS2/floats/`.
     prefixes = sorted(((s["prefix"], name) for name, s in planned.items() if s["prefix"]),
                       key=lambda pair: -len(pair[0]))
