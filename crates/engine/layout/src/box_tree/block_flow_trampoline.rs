@@ -1025,6 +1025,14 @@ fn finish_frame(
     // The block-size below may use `lh`/`ch`/`ex`; `dispatch_box`'s context for
     // this box was dropped when it handed the children loop over to `run`.
     let _font_ctx = FontContext::enter(&frame.b, measurer);
+    // CSS Lists L3 §2.4: an `inside` marker no in-flow child has consumed (`<li></li>`)
+    // still forms a line box of its own, so the principal box is one marker line tall
+    // instead of collapsing to zero (BUG-1549).
+    if std::mem::take(&mut frame.init.inside_marker_w) > 0.0 {
+        frame.init.child_y += std::mem::take(&mut frame.init.inside_marker_h);
+        frame.init.prev_block_mb = 0.0;
+        frame.init.seen_inflow_child = true;
+    }
     // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this box
     // collapses its bottom margin (auto height, no bottom padding/border, no
     // BFC) and the last in-flow child is a collapsible block, that child's
