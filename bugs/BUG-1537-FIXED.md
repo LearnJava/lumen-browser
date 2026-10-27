@@ -1,6 +1,6 @@
 # BUG-1537 — `<thead>` и `<tfoot>` не переносятся в начало и в конец таблицы: строки идут в порядке документа
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-27 (P3)
 **Заведён:** 2026-10-08 (P2, WPT-RUN-14 срез 24, `css/filter-effects` + `css-inline` + `css-tables` + `css-align`)
 **Область:** layout (`crates/engine/layout/src/box_tree/table.rs` — порядок `thead`/`tbody`/`tfoot`)
 
@@ -23,3 +23,7 @@ WPT-RUN-14 срез 24: `css-tables/row-group-order.html`. Не путать с 
 ## Как проверить
 
 `css/css-tables/row-group-order.html`.
+
+## Исправление
+
+`table_anon::hoist_header_footer` (вызывается из `fix_children` для `Ctx::Table`): первый `table-header-group` переносится перед первой строкой/группой, первый `table-footer-group` — после последней; последующие header/footer остаются обычными группами в порядке документа. Тест `first_header_and_footer_group_are_hoisted_to_the_table_ends`. Графические тесты не затронуты: во всех трёх страницах с `<thead>` он уже стоит перед `<tbody>`.
