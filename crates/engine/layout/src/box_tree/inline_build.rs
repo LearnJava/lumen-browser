@@ -1280,7 +1280,37 @@ pub(crate) fn collect_inline_segments(
                 bidi_scopes: Vec::new(),
                 bidi_isolate: None,
             };
-            if let (Some(&first_cut), Some(&last_cut)) = (cuts.first(), cuts.last()) {
+            if s.box_decoration_clone && !cuts.is_empty() {
+                // `box-decoration-break: clone`: every piece keeps both edges, however the blocks cut it.
+                let tail: Vec<InlineSegment> = out.drain(start..).collect();
+                let mut tail = tail.into_iter();
+                let mut taken = start;
+                for k in 0..=cuts.len() {
+                    let hi = if k < cuts.len() { cuts[k] } else { start + added };
+                    let mut piece: Vec<InlineSegment> = tail.by_ref().take(hi.saturating_sub(taken)).collect();
+                    taken = taken.max(hi);
+                    if piece.is_empty() {
+                        if pre > 0.0 || post > 0.0 {
+                            piece.push(edge(pre, post));
+                        }
+                    } else {
+                        if Arc::ptr_eq(&piece[0].style, &s) {
+                            piece[0].pre_space += pre;
+                        } else if pre > 0.0 {
+                            piece.insert(0, edge(pre, 0.0));
+                        }
+                        if let Some(last) = piece.last_mut().filter(|l| Arc::ptr_eq(&l.style, &s)) {
+                            last.post_space += post;
+                        } else if post > 0.0 {
+                            piece.push(edge(0.0, post));
+                        }
+                    }
+                    out.extend(piece);
+                    if k < cuts.len() {
+                        escapes[esc_start + k].at = out.len();
+                    }
+                }
+            } else if let (Some(&first_cut), Some(&last_cut)) = (cuts.first(), cuts.last()) {
                 let mut first_cut = first_cut;
                 let mut last_cut = last_cut;
                 let mut end = start + added;

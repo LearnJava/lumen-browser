@@ -88,3 +88,67 @@ fn webkit_prefixed_alias_clones_too() {
     let l = lines(&format!("<span style=\"{END_EDGE};-webkit-box-decoration-break:clone\">x x x x x</span>"));
     assert_eq!(texts(&l), ["x x x", "x|x"]);
 }
+
+/// Every inline run of the page, in document order.
+fn runs(body: &str) -> Vec<Vec<Vec<InlineFrag>>> {
+    let html = format!(
+        "<html><body style=\"margin:0;font-size:20px\"><div style=\"width:400px\">{body}</div></body></html>"
+    );
+    let doc = lumen_html_parser::parse(&html);
+    let sheet = lumen_css_parser::parse("");
+    let hp = lumen_core::ext::NullHyphenationProvider;
+    let (tree, _) = super::super::layout_measured_hyp_with_counters(
+        &doc, &sheet, Size::new(800.0, 600.0), &Measurer, &hp, false,
+    );
+    fn walk(b: &LayoutBox, out: &mut Vec<Vec<Vec<InlineFrag>>>) {
+        if let BoxKind::InlineRun { lines, .. } = &b.kind {
+            out.push(lines.clone());
+        }
+        b.children.iter().for_each(|c| walk(c, out));
+    }
+    let mut out = Vec::new();
+    walk(&tree, &mut out);
+    out
+}
+
+#[test]
+fn clone_gives_every_piece_cut_by_a_block_both_edges() {
+    let style = "border-left:10px solid red;border-right:10px solid blue;box-decoration-break:clone";
+    let r = runs(&format!("<span style=\"{style}\">a<div>b</div>c</span>"));
+    let spans: Vec<&Vec<InlineFrag>> = r.iter().flat_map(|run| run.iter()).filter(|l| l.iter().any(|f| f.edge_start || f.edge_end)).collect();
+    assert_eq!(spans.len(), 2, "the two pieces around the block");
+    for line in spans {
+        assert!(line.first().unwrap().edge_start, "{line:?}");
+        assert!(line.last().unwrap().edge_end, "{line:?}");
+    }
+}
+
+#[test]
+fn slice_keeps_the_start_edge_of_the_first_piece_only() {
+    let style = "border-left:10px solid red;border-right:10px solid blue";
+    let r = runs(&format!("<span style=\"{style}\">a<div>b</div>c</span>"));
+    let n_start = r.iter().flat_map(|run| run.iter()).flatten().filter(|f| f.edge_start).count();
+    assert_eq!(n_start, 1);
+}
+
+#[test]
+fn clone_repeats_both_edges_around_a_br() {
+    let style = "border-left:10px solid red;border-right:10px solid blue;box-decoration-break:clone";
+    let r = runs(&format!("<span style=\"{style}\">a<br>b</span>"));
+    let l: Vec<&Vec<InlineFrag>> = r.iter().flatten().collect();
+    assert_eq!(l.len(), 2, "{r:?}");
+    for line in l {
+        assert!(line.first().unwrap().edge_start, "{line:?}");
+        assert!(line.last().unwrap().edge_end, "{line:?}");
+    }
+}
+
+#[test]
+fn clone_repeats_the_margin_with_the_edges() {
+    let style = "border-left:10px solid red;margin-left:7px;box-decoration-break:clone";
+    let l = lines(&format!("<span style=\"{style}\">x x x x x x</span>"));
+    assert!(l.len() >= 2, "{:?}", texts(&l));
+    for line in &l {
+        assert_eq!(line[0].x, 17.0, "text starts after margin + border on every line: {:?}", texts(&l));
+    }
+}

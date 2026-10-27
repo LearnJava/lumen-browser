@@ -763,25 +763,26 @@ pub(crate) fn wrap_inline_run(
     )
 }
 
-/// Border + padding of an inline box under `box-decoration-break: clone` (CSS Fragmentation L3
-/// §5.1): every line fragment of the box repeats both edges, so each line reserves room for them.
+/// Margin + border + padding of an inline box under `box-decoration-break: clone` (CSS Fragmentation
+/// L3 §5.1): every line fragment of the box repeats both edges, so each line reserves room for them.
 #[derive(Clone, Copy)]
 struct CloneEdges {
-    /// Resolved start border + padding width.
+    /// Resolved start margin + border + padding width.
     start_w: f32,
-    /// Resolved end border + padding width.
+    /// Resolved end margin + border + padding width.
     end_w: f32,
     pad_r: f32,
 }
 
 impl CloneEdges {
     /// Edges of the segment's element, `None` when it slices (the default) or has no edges.
-    fn of(seg: &InlineSegment, pad_l: f32, pad_r: f32) -> Option<Self> {
+    fn of(seg: &InlineSegment, pad_l: f32, pad_r: f32, viewport: Size) -> Option<Self> {
         if !seg.style.box_decoration_clone || !seg.is_element_box {
             return None;
         }
-        let start_w = seg.style.border_left_width + pad_l;
-        let end_w = seg.style.border_right_width + pad_r;
+        let em = seg.style.font_size;
+        let start_w = seg.style.margin_left.resolve_or_zero(em, 0.0, viewport) + seg.style.border_left_width + pad_l;
+        let end_w = seg.style.border_right_width + pad_r + seg.style.margin_right.resolve_or_zero(em, 0.0, viewport);
         (start_w + end_w > 0.0).then_some(Self { start_w, end_w, pad_r })
     }
 }
@@ -1025,7 +1026,7 @@ pub(crate) fn wrap_inline_run_indented(
         // Resolved padding for this segment's inline box (for paint use).
         let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
         let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
-        let clone = CloneEdges::of(seg, pad_l, pad_r);
+        let clone = CloneEdges::of(seg, pad_l, pad_r, viewport);
         // A `clone` box's start edge was just reserved at the head of a line: the next fragment owns it.
         let mut clone_restart = false;
 
