@@ -1631,6 +1631,44 @@ fn process_svg_node(
     }
 }
 
+/// `feImage href="#id"`: цель отрисовывается как содержимое `<use>` — в user space
+/// ссылающегося элемента, в том числе из `<defs>`/скрытого контейнера. Боксы стоят в
+/// единичном масштабе с нулевым смещением (дальше их переставляет
+/// [`crate::style::FeElementPicture::positioned`]). Пусто — цель ничего не рисует.
+pub(crate) fn element_picture(
+    doc: &Document,
+    sheet: &Stylesheet,
+    target: NodeId,
+    viewport: Size,
+    own_svg_size: Size,
+    dark_mode: bool,
+) -> Vec<LayoutBox> {
+    // `<tspan>`/`<textPath>` сами по себе ничего не рисуют (без внешнего `<text>`),
+    // в том числе через `<use>`.
+    let mut cur = target;
+    for _ in 0..8 {
+        let Some(name) = doc.get(cur).element_name() else { return Vec::new() };
+        let tag = name.local.as_str().to_ascii_lowercase();
+        if matches!(tag.as_str(), "tspan" | "textpath" | "tref") {
+            return Vec::new();
+        }
+        if tag != "use" {
+            break;
+        }
+        let href = doc.get(cur).get_attr("href").or_else(|| doc.get(cur).get_attr("xlink:href")).unwrap_or_default();
+        match doc.find_by_id(href.trim().trim_start_matches('#')) {
+            Some(next) => cur = next,
+            None => break,
+        }
+    }
+    let flat = FlatTree::default();
+    let mut out = Vec::new();
+    // `use_stack` с целью: `<use href="#цель">` внутри неё не раскрывается в себя.
+    process_svg_node(doc, sheet, target, &ComputedStyle::root(), viewport, own_svg_size, &flat, &mut out, dark_mode, &[target]);
+    lay_out_svg_children_positions(&mut out, 0.0, 0.0, 1.0, 1.0, &SvgTransform::identity());
+    out
+}
+
 // ─── SVG layout ──────────────────────────────────────────────────────────────
 
 /// Lays out an `SvgRoot` box: computes its CSS rect, then positions SVG shape children
@@ -1699,7 +1737,7 @@ pub(crate) fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, av
 /// Recursively positions SVG shape boxes (and `<g>` group children) using the
 /// viewBox-to-document-coordinate transform `(origin_x, origin_y, scale_x, scale_y)`.
 /// Composes element transforms hierarchically via `parent_transform`.
-fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, sx: f32, sy: f32, parent_transform: &SvgTransform) {
+pub(crate) fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, sx: f32, sy: f32, parent_transform: &SvgTransform) {
     for child in children.iter_mut() {
         lay_out_svg_element_position(child, ox, oy, sx, sy, parent_transform);
     }

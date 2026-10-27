@@ -299,6 +299,17 @@ use walk::{
 #[cfg(test)]
 use walk::depth_order_by_z;
 
+/// Команды отрисовки готовых боксов (содержимое `feImage href="#id"`): боксы уже
+/// стоят в координатах холста, поэтому DPR 1.
+#[cfg(feature = "cpu-render")]
+pub(crate) fn boxes_commands(boxes: &[LayoutBox]) -> DisplayList {
+    let mut out = DisplayList::new();
+    for b in boxes {
+        walk(b, &mut out, 1.0);
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "display_list/tests/highlight.rs"]
 mod highlight;

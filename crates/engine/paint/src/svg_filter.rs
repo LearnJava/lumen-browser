@@ -21,6 +21,7 @@ use lumen_layout::{
 
 use crate::display_list::BlendMode;
 
+mod fe_element;
 mod fe_image;
 mod fx;
 
@@ -215,6 +216,13 @@ fn to_px(r: (f32, f32, f32, f32)) -> PxRect {
 
 /// Область фильтра в пикселях холста, пересечённая с холстом; `None` — пусто.
 fn region_px(graph: &SvgFilter, g: &Geometry, canvas: (u32, u32)) -> Option<PxRect> {
+    let r = region_px_raw(graph, g)?;
+    let r = PxRect { x0: r.x0.max(0), y0: r.y0.max(0), x1: r.x1.min(canvas.0 as i32), y1: r.y1.min(canvas.1 as i32) };
+    (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
+}
+
+/// Область фильтра в пикселях холста без обрезки по холсту; `None` — пусто.
+fn region_px_raw(graph: &SvgFilter, g: &Geometry) -> Option<PxRect> {
     let (rx, ry, rw, rh) = graph.region;
     let [px, py, pw, ph] = graph.region_pct;
     let (rx, ry, rw, rh) = if graph.filter_units_obb {
@@ -234,9 +242,7 @@ fn region_px(graph: &SvgFilter, g: &Geometry, canvas: (u32, u32)) -> Option<PxRe
     if user.2 <= 0.0 || user.3 <= 0.0 {
         return None;
     }
-    let r = to_px(g.rect(user.0, user.1, user.2, user.3));
-    let r = PxRect { x0: r.x0.max(0), y0: r.y0.max(0), x1: r.x1.min(canvas.0 as i32), y1: r.y1.min(canvas.1 as i32) };
-    (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
+    Some(to_px(g.rect(user.0, user.1, user.2, user.3)))
 }
 
 fn run_graph(
@@ -257,13 +263,14 @@ fn run_graph(
     };
     let (bx, by, bw, bh) = g.bbox;
     let mut results: Vec<Res> = Vec::with_capacity(graph.primitives.len());
+    let region_raw = region_px_raw(graph, g);
     let mut last: Option<usize> = None;
     let mut tainted: Vec<bool> = Vec::with_capacity(graph.primitives.len());
 
     for (idx, prim) in graph.primitives.iter().enumerate() {
         // Входы примитива (до вычисления подобласти: по ним считается её умолчание).
         let inputs_of: Vec<FeInput> = match &prim.kind {
-            FePrimitive::Flood { .. } | FePrimitive::Image { .. } => vec![],
+            FePrimitive::Flood { .. } | FePrimitive::Image { .. } | FePrimitive::Element { .. } => vec![],
             FePrimitive::Turbulence { .. } => vec![],
             FePrimitive::Unsupported { input } => vec![*input],
             FePrimitive::Offset { input, .. }
@@ -310,6 +317,9 @@ fn run_graph(
 
         // Подобласть: заданные x/y/width/height поверх умолчания.
         let mut sub = default_sub;
+        // Начало подобласти без обрезки по холсту (и по области): от него отсчитывает
+        // `feImage href="#id"`; умолчание — начало области фильтра.
+        let mut sub_origin = region_raw.map_or((sub.x0, sub.y0), |r| (r.x0 - region.x0, r.y0 - region.y0));
         let obb = graph.primitive_units_obb;
         let ux = |v: f32| if obb { bx + v * bw } else { v };
         let uy = |v: f32| if obb { by + v * bh } else { v };
@@ -328,6 +338,12 @@ fn run_graph(
             let wd = prim.width.map_or(cur.2, |v| g.sx * uw(g.pct(v, pw, 0)));
             let ht = prim.height.map_or(cur.3, |v| g.sy * uh(g.pct(v, ph, 1)));
             let r = to_px((x - region.x0 as f32, y - region.y0 as f32, wd, ht));
+            if prim.x.is_some() {
+                sub_origin.0 = r.x0;
+            }
+            if prim.y.is_some() {
+                sub_origin.1 = r.y0;
+            }
             sub = PxRect { x0: r.x0.max(0), y0: r.y0.max(0), x1: r.x1.min(w as i32), y1: r.y1.min(h as i32) };
         }
 
@@ -478,6 +494,7 @@ fn run_graph(
                 Some(image) => fe_image::render(image, fit, sub, w, h),
                 None => Img::new(w, h),
             },
+            FePrimitive::Element { picture } => fe_element::render(picture, g, sub_origin, w, h),
             FePrimitive::Unsupported { .. } => fetched[0].0.clone(),
         };
         let mut out = out;
