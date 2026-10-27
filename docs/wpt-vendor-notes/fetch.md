@@ -32,3 +32,30 @@ Test category, added 2026-07-28 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 | CR | `api/crashtests/huge-fetch` | 3 | CRASH 3 | — | тело буферизуется целиком, RSS > 4 ГБ — сторож раннера убил браузер | — | 3.0 |
 
 **Скрипты** (в `.tmp/` слота `p2-work`, не коммитятся): `fetch-run.ids.tsv.gz`, `fetch-run/fetch.raw.jsonl`; `fetch_an.py groups|harness|msgs <подстрока>|subs <id>|ids <подстрока>`, `fetch_cl.py timeouts|clusters|gain <regex>|gainpath <путь> <regex>|where <regex>` (из Git Bash — с `MSYS2_ARG_CONV_EXCL='*'`).
+
+## WPT-HOST-RESOLVE: альтернативный домен и артефакты `localhost` (2026-10-27)
+
+**Замер по корпусу** — `host_audit.py --alt --out-dir .tmp/wpt-corpus` (прогон 2026-10-22): режим `--alt` считает только семейство `not-web-platform.test` — маркеры `{{hosts[alt]`, литерал домена, `OTHER_NOTSAMESITE` (`get-host-info` держит его на альтернативном домене при любом `browser_host`), `SCHEME_CROSSDOMAIN_PORT` — в самом тесте или в его локальных скриптах на один хоп (`<script src>`, `META: script=`, `importScripts`, `import … from`). Сам `get-host-info.sub.js` и `websockets/constants.sub.js` в хоп не берутся: они пишут `{{hosts[alt]}}` для всех вызывающих, а на `localhost` альтернативный домен из них берёт только тот, кто читает конкретную константу (без исключения хоп давал 1 608 id, из них 480 ложных `websockets/`).
+
+- **1 129 из 68 118 автоматизируемых id (1.7 %)**, 755 файлов; 374 id называют домен сами, 755 — через хелпер (`fetch/metadata/resources/helper.sub.js`, `fledge-util.sub.js`, `fedcm-helper.sub.js`, `cookie-helper.sub.js`, …). Прежняя оценка «305 id» считала только прямые упоминания.
+- Вердикты: TIMEOUT 27.1 % (остальной корпус — 7.3 %), балл 9.51 % против 43.69 %, 306 TIMEOUT, 2 893 непройденных сабтеста. Часы — 0.2 ч на корпус: это дефект цифры, не пропускной способности.
+- По категориям (id / TIMEOUT / балл): `speculation-rules` 222 / 0 / 3.0, `fledge` 180 / 0 / 0.0, `fetch` 100 / 54 / 11.7, `html` 89 / 48 / 1.1, `fedcm` 78 / 2 / 0.0, `cookies` 51 / 21 / 12.9, `loading` 43 / 1 / 41.0, `connection-allowlist` 41 / 19 / 16.3, `webaudio` 39 / 1 / 0.0, `storage-access-api` 33 / 24 / 1.5. В `speculation-rules`/`fledge`/`fedcm` API не реализовано — резолв там ничего не даст; реальный выигрыш сидит в `fetch`, `html`, `cookies`, `storage-access-api`, `connection-allowlist`.
+
+**`fetch/metadata`** (прогон разведки, 96 id с SW-вариантами): 85 id заденены альтернативным доменом, **60 из 64 TIMEOUT** — среди них (оставшиеся 4 — `unload` и три `redirect/*-downgrade/upgrade`). 1 720 сабтестов по адресату (из имени сабтеста):
+
+| адресат | сабтестов | PASS | что мешает |
+|---|---|---|---|
+| cross-site (`{{hosts[alt]}}`, https) | 306 | 0 | (а) домен не резолвится |
+| non-trustworthy cross-site (`http://{{hosts[alt]}}`) | 195 | 0 | (а) |
+| same-site (`www.localhost`) | 266 | 35 | (б) `www.localhost` и `localhost` — разные сайты: регистрируемый домен по правилу `*` PSL — сам хост, ожидание `same-site` недостижимо ни для какого браузера (21 сабтест `expected "same-site" but got "cross-site"`, остальное — NOTRUN за TIMEOUT) |
+| non-trustworthy same-site (`http://www.localhost`) | 195 | 22 | (б) `*.localhost` потенциально доверенный (Secure Contexts §3.2) — заголовки обязаны уйти |
+| non-trustworthy same-origin (`http://localhost`) | 200 | 24 | (б) то же; 88 сабтестов `unexpected property "sec-fetch-*"` из [BUG-1760](../../bugs/BUG-1760-OPEN.md) — на `localhost` правильное поведение, их засчитает только не-loopback хост |
+| same-origin / up-downgrade / прочее | 558 | 128 | не хост |
+
+То есть хост — не «≈ +10 сабтестов», а верхняя граница 1 162 сабтеста (501 — (а), 661 — (б)), из которых реально пройдёт меньшая часть: дальше их держат BUG-1759/BUG-1760 и TIMEOUT `<audio>`/`<img srcset>`.
+
+**Почему (б) не лечится `.ini`-ожиданиями.** Ожидания раннера помечают провал как ожидаемый, но балл не меняют, а кроме 21 явного `same-site`-сабтеста остальные 640 сабтестов (б) сейчас NOTRUN/TIMEOUT по (а) — заранее не отделить артефакт от дефекта. Обоим пунктам нужен один и тот же ход: хост, который не является loopback-именем.
+
+**Предложение (путь 3 WPT-RUN-10, расширенный).** `LUMEN_RESOLVE=host=ip[,host=ip…]` в движке — одна обёртка над `Arc<dyn DnsResolver>` ([`crates/network/src/dns.rs`](../../crates/network/src/dns.rs), рядом с `SystemDnsResolver`), проверяемая до любого резолвера (система/кэш/DoH/DoT), карта читается один раз в `OnceLock`, как `LUMEN_EXTRA_CA_CERT` ([`tls/mod.rs`](../../crates/network/src/tls/mod.rs)); IDN-имена — в punycode. Раннер (`tools/wptrunner/wptrunner/browsers/lumen.py`) возвращает `browser_host` к апстримному `web-platform.test` и передаёт в `LUMEN_RESOLVE` все 66 имён из `ConfigBuilder.all_domains` → `127.0.0.1`. Тогда оживают обе семьи (а), `www.web-platform.test` становится same-site, `http://web-platform.test` — недоверенным (б), и пропадает оговорка о `*.localhost` на Windows. Сертификат раннера — pregenerated ([`tests/wpt/certs/README.md`](../../tests/wpt/certs/README.md)): 34 SAN, из семейства `web-platform.test` только сам домен, `not-web-platform.test` нет вовсе, а wildcard rustls-webpki не принимает (BUG-1271) — его надо перевыпустить с явными SAN на все 66 имён, иначе `.https.`-половина упрётся в `certificate not valid for name`. Риск: смена `browser_host` двигает число всего корпуса (не только `fetch/`) — прогон нужен полный, со сравнением с 2026-10-22.
+
+**Решение пользователя (2026-10-27): путь 3 полностью.** Движок — [`WPT-LUMEN-RESOLVE`](../../ROADMAP.md) (P1: `LUMEN_RESOLVE` поверх любого `DnsResolver`); раннер — [`WPT-HOST-WPT`](../../ROADMAP.md) (P2, после P1: `browser_host: web-platform.test`, `LUMEN_RESOLVE` из `ConfigBuilder.all_domains`, перевыпуск сертификата с явными SAN, полный прогон и сравнение с 2026-10-22, отдельно `fetch/metadata` и 1 129 id `--alt`). Варианты отклонены: только альтернативный домен при `localhost` — оставляет 661 сабтест (б) недостижимым; `/etc/hosts` — меняет машину пользователя.
