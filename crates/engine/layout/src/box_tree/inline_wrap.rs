@@ -1825,7 +1825,12 @@ pub(crate) fn apply_inline_vertical_align(
                 VerticalAlign::Super => half_leading - frag_h * 0.35,
                 // CSS: positive length = shift up (above baseline) → negative screen y.
                 VerticalAlign::Length(px) => half_leading - px,
-                VerticalAlign::Percent(p) => half_leading - (p / 100.0 * line_h),
+                // CSS 2.1 §10.8.1: a percentage is of the element's OWN `line-height`, not of
+                // the block's line (a span with `line-height: 2` in a 16px block, BUG-1545).
+                VerticalAlign::Percent(p) => {
+                    let own_lh = if frag.style.line_height_is_normal { line_h } else { frag_h * frag.style.line_height };
+                    half_leading - (p / 100.0 * own_lh)
+                }
             };
             // Картинки и пустые куски боксов: высота inline-бокса неизвестна (frag_h —
             // приближение по кеглю), поэтому рост строки они не вызывают.

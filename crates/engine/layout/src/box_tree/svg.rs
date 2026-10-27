@@ -122,6 +122,26 @@ pub enum SvgBaselineShift {
     Bottom,
 }
 
+impl SvgBaselineShift {
+    /// CSS Inline L3 §5.2: `vertical-align` is the shorthand of `baseline-shift`, so a
+    /// HTML inline box is shifted exactly as `vertical-align` of the same value would
+    /// (BUG-1545). `None` for `baseline` — no shift. `center` lands on `Middle`: both
+    /// centre the fragment's box on the line box in this layout model.
+    pub(crate) fn as_inline_vertical_align(self) -> Option<crate::style::VerticalAlign> {
+        use crate::style::VerticalAlign;
+        match self {
+            Self::Baseline => None,
+            Self::Sub => Some(VerticalAlign::Sub),
+            Self::Super => Some(VerticalAlign::Super),
+            Self::Length(px) => Some(VerticalAlign::Length(px)),
+            Self::Percentage(f) => Some(VerticalAlign::Percent(f * 100.0)),
+            Self::Top => Some(VerticalAlign::Top),
+            Self::Center => Some(VerticalAlign::Middle),
+            Self::Bottom => Some(VerticalAlign::Bottom),
+        }
+    }
+}
+
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
 #[derive(Debug, Clone, Default, PartialEq)]
