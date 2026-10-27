@@ -71,3 +71,29 @@ fn empty_inline_box_with_negative_or_cancelling_edges_keeps_an_edge_segment() {
     let p = pieces(r#"x<span style="padding-left:1px;margin-left:-1px"></span>y"#);
     assert_eq!(p, vec![(String::new(), 0.0, 0.0, 0.0, 0.0)]);
 }
+
+// ── BUG-1543: `filter`/`opacity` of an inline reach the block that cut it (Filter Effects L1 §3) ──
+
+#[test]
+fn inline_filter_and_opacity_apply_to_block_inside() {
+    let doc = lumen_html_parser::parse(
+        r#"<!doctype html><body><span style="filter:blur(2px);opacity:0.5"><div id=f style="float:left;width:10px;height:10px"></div></span>"#,
+    );
+    let sheet = lumen_css_parser::parse("body{margin:0}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let f = super::find_by_id_all(&root, &doc, "f").expect("float box");
+    assert_eq!(f.style.filter.len(), 1, "{:?}", f.style.filter);
+    assert!((f.style.opacity - 0.5).abs() < 1e-6, "{}", f.style.opacity);
+}
+
+#[test]
+fn block_inside_unfiltered_inline_stays_unfiltered() {
+    let doc = lumen_html_parser::parse(
+        r#"<!doctype html><body><span><div id=f style="float:left;width:10px;height:10px"></div></span>"#,
+    );
+    let sheet = lumen_css_parser::parse("body{margin:0}");
+    let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+    let f = super::find_by_id_all(&root, &doc, "f").expect("float box");
+    assert!(f.style.filter.is_empty());
+    assert!((f.style.opacity - 1.0).abs() < 1e-6);
+}
