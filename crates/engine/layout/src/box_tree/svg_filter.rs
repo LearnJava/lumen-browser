@@ -35,6 +35,7 @@ pub(crate) fn resolve_filter_url(
     doc: &Document,
     sheet: &Stylesheet,
     id: &str,
+    node: NodeId,
     viewport: Size,
     dark_mode: bool,
 ) -> Option<Arc<SvgFilter>> {
@@ -42,6 +43,14 @@ pub(crate) fn resolve_filter_url(
     if !is_tag(doc, f, "filter") {
         return None;
     }
+    let filter_style = compute_style(doc, f, sheet, &ComputedStyle::root(), viewport, dark_mode);
+    // `<filter>` не входит в список SVG-элементов с presentation-атрибутами, поэтому
+    // `font-size="10px"` на нём каскад не видит: `em` в `width="1em"` читаем сами.
+    let em = svg_prop(doc, f, "font-size")
+        .and_then(|v| crate::style::parse_length(&v))
+        .and_then(|l| l.resolve(filter_style.font_size, Some(filter_style.font_size), viewport))
+        .unwrap_or(filter_style.font_size);
+    let lc = LenCtx { em, viewport };
     let obb = |attr: &str, default_obb: bool| -> bool {
         match doc.get(f).get_attr(attr).map(str::trim) {
             Some("objectBoundingBox") => true,
@@ -52,21 +61,24 @@ pub(crate) fn resolve_filter_url(
     let filter_units_obb = obb("filterUnits", true);
     let primitive_units_obb = obb("primitiveUnits", false);
 
-    let region_len = |attr: &str, default_frac: f32, basis: f32| -> f32 {
+    // Проценты `userSpaceOnUse` считаются от ближайшего SVG viewport ссылающегося
+    // элемента; у HTML-бокса (`None`) база — его border box, известный только paint.
+    let svg_basis = nearest_svg_viewport(doc, node, viewport);
+    let region_len = |attr: &str, default_frac: f32, axis: usize| -> (f32, bool) {
         let parsed = doc
             .get(f)
             .get_attr(attr)
-            .and_then(|v| parse_len(v, filter_units_obb, basis));
-        parsed.unwrap_or(if filter_units_obb { default_frac } else { default_frac * basis })
+            .and_then(|v| parse_len(v, filter_units_obb, svg_basis, axis, lc));
+        parsed.unwrap_or(if filter_units_obb {
+            (default_frac, false)
+        } else {
+            resolve_pct(default_frac, svg_basis, axis)
+        })
     };
-    let region = (
-        region_len("x", -0.1, viewport.width),
-        region_len("y", -0.1, viewport.height),
-        region_len("width", 1.2, viewport.width),
-        region_len("height", 1.2, viewport.height),
-    );
+    let (rx, ry, rw, rh) = (region_len("x", -0.1, 0), region_len("y", -0.1, 1), region_len("width", 1.2, 0), region_len("height", 1.2, 1));
+    let region = (rx.0, ry.0, rw.0, rh.0);
+    let region_pct = [rx.1, ry.1, rw.1, rh.1];
 
-    let filter_style = compute_style(doc, f, sheet, &ComputedStyle::root(), viewport, dark_mode);
     let filter_linear = interpolation_is_linear(doc, f, None);
 
     let mut primitives: Vec<SvgFilterPrimitive> = Vec::new();
@@ -80,17 +92,19 @@ pub(crate) fn resolve_filter_url(
         let idx = primitives.len();
         let ctx = Ctx { doc, node: child, results: &results, viewport, sheet, dark_mode, filter_style: &filter_style };
         let kind = build_primitive(&ctx, &tag);
-        let sub = |attr: &str, basis: f32| {
+        let sub = |attr: &str, axis: usize| {
             doc.get(child)
                 .get_attr(attr)
-                .and_then(|v| parse_len(v, primitive_units_obb, basis))
+                .and_then(|v| parse_len(v, primitive_units_obb, svg_basis, axis, lc))
         };
+        let (sx, sy, sw, sh) = (sub("x", 0), sub("y", 1), sub("width", 0), sub("height", 1));
         primitives.push(SvgFilterPrimitive {
             kind,
-            x: sub("x", viewport.width),
-            y: sub("y", viewport.height),
-            width: sub("width", viewport.width),
-            height: sub("height", viewport.height),
+            x: sx.map(|v| v.0),
+            y: sy.map(|v| v.0),
+            width: sw.map(|v| v.0),
+            height: sh.map(|v| v.0),
+            pct: [sx, sy, sw, sh].map(|v| v.is_some_and(|v| v.1)),
             linear_rgb: interpolation_is_linear(doc, child, Some(filter_linear)),
             tainted: match tag.as_str() {
                 "feflood" | "fedropshadow" => uses_current_color(doc, child, "flood-color"),
@@ -104,7 +118,7 @@ pub(crate) fn resolve_filter_url(
             results.push((r.to_string(), idx));
         }
     }
-    Some(Arc::new(SvgFilter { filter_units_obb, primitive_units_obb, region, primitives }))
+    Some(Arc::new(SvgFilter { filter_units_obb, primitive_units_obb, region, region_pct, primitives }))
 }
 
 #[derive(Clone, Copy)]
@@ -567,14 +581,70 @@ fn parse_number_or_percent(s: &str) -> Option<f32> {
 
 /// Длина области/подобласти: число (`px`) или `%`. В единицах `objectBoundingBox`
 /// и число, и процент — доли bbox (`%` / 100); в `userSpaceOnUse` процент
-/// берётся от `basis` (размер viewport).
-fn parse_len(raw: &str, obb: bool, basis: f32) -> Option<f32> {
+/// раскрывается от SVG viewport `basis` по оси `axis` (0 — x/width, 1 — y/height).
+/// Второй элемент — `true`, если процент остался долей (`basis == None`, HTML-бокс).
+fn parse_len(raw: &str, obb: bool, basis: Option<Size>, axis: usize, lc: LenCtx) -> Option<(f32, bool)> {
     let raw = raw.trim();
-    if let Some(p) = raw.strip_suffix('%') {
-        let v = p.trim().parse::<f32>().ok()? / 100.0;
-        return Some(if obb { v } else { v * basis });
+    if let Some(p) = raw.strip_suffix('%')
+        && let Ok(v) = p.trim().parse::<f32>()
+    {
+        let v = v / 100.0;
+        return Some(if obb { (v, false) } else { resolve_pct(v, basis, axis) });
     }
-    raw.strip_suffix("px").unwrap_or(raw).trim().parse::<f32>().ok()
+    if let Ok(v) = raw.strip_suffix("px").unwrap_or(raw).trim().parse::<f32>() {
+        return Some((v, false));
+    }
+    // `1em`, `calc(25% + 0.25px)` и прочие CSS `<length>`: в `objectBoundingBox` число
+    // px — доля bbox, `%` внутри выражения считается от 1.
+    let len = crate::style::parse_length(raw)?;
+    let pct_basis = if obb {
+        1.0
+    } else {
+        let b = basis.unwrap_or(lc.viewport);
+        if axis == 0 { b.width } else { b.height }
+    };
+    len.resolve(lc.em, Some(pct_basis), lc.viewport).map(|v| (v, false))
+}
+
+/// Что нужно CSS-длине атрибута `<filter>`: `em` и размер окна для `vw`/`vh`.
+#[derive(Clone, Copy)]
+struct LenCtx {
+    em: f32,
+    viewport: Size,
+}
+
+/// Доля viewport → user units, если база известна; иначе доля остаётся с флагом.
+fn resolve_pct(frac: f32, basis: Option<Size>, axis: usize) -> (f32, bool) {
+    match basis {
+        Some(b) => (frac * if axis == 0 { b.width } else { b.height }, false),
+        None => (frac, true),
+    }
+}
+
+/// Размер ближайшего SVG viewport для `node`, лежащего внутри `<svg>`: `viewBox`
+/// или числовые `width`/`height` ближайшего предка `<svg>` (нет — окно документа).
+/// `None` — `node` не потомок `<svg>` (HTML-бокс или внешний `<svg>`).
+fn nearest_svg_viewport(doc: &Document, node: NodeId, viewport: Size) -> Option<Size> {
+    let svg = {
+        let mut cur = doc.get(node).parent;
+        loop {
+            let n = cur?;
+            if is_tag(doc, n, "svg") {
+                break n;
+            }
+            cur = doc.get(n).parent;
+        }
+    };
+    if let Some(vb) = super::svg::parse_view_box(doc, svg) {
+        return Some(Size { width: vb.width, height: vb.height });
+    }
+    let dim = |attr: &str, fallback: f32| {
+        doc.get(svg)
+            .get_attr(attr)
+            .and_then(|v| v.trim().strip_suffix("px").unwrap_or(v.trim()).trim().parse::<f32>().ok())
+            .unwrap_or(fallback)
+    };
+    Some(Size { width: dim("width", viewport.width), height: dim("height", viewport.height) })
 }
 
 /// Записывает в `FilterFn::Url` бокса положение его user space в документе
@@ -590,5 +660,58 @@ pub(super) fn place_filters(b: &mut LayoutBox, m_doc: &SvgTransform) {
         if let FilterFn::Url(u) = f {
             u.placement = Some(placement);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph(html: &str, referrer: &str) -> Arc<SvgFilter> {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let node = doc.find_by_id(referrer).expect("referrer");
+        resolve_filter_url(&doc, &sheet, "f", node, Size::new(800.0, 600.0), false).expect("filter")
+    }
+
+    const FILTER: &str = r#"<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="100%" height="50%">
+        <feFlood width="50%" height="1em"/></filter>"#;
+
+    /// Проценты `userSpaceOnUse` у потомка `<svg width height>` берутся от размера этого `<svg>`.
+    #[test]
+    fn user_space_percent_uses_nearest_svg_size() {
+        let g = graph(&format!(r#"<svg width="150" height="120">{FILTER}<rect id="r"/></svg>"#), "r");
+        assert_eq!(g.region, (0.0, 0.0, 150.0, 60.0));
+        assert_eq!(g.region_pct, [false; 4]);
+        assert_eq!(g.primitives[0].width, Some(75.0));
+        assert_eq!(g.primitives[0].pct, [false; 4]);
+    }
+
+    /// `viewBox` перекрывает `width`/`height`.
+    #[test]
+    fn user_space_percent_prefers_view_box() {
+        let g = graph(&format!(r#"<svg width="150" height="120" viewBox="0 0 40 20">{FILTER}<rect id="r"/></svg>"#), "r");
+        assert_eq!(g.region, (0.0, 0.0, 40.0, 10.0));
+    }
+
+    /// У HTML-бокса база — его border box, известный только paint: остаётся доля с флагом.
+    #[test]
+    fn user_space_percent_on_html_box_stays_fraction() {
+        let g = graph(&format!(r#"<svg width="0" height="0">{FILTER}</svg><div id="d"></div>"#), "d");
+        assert_eq!(g.region, (0.0, 0.0, 1.0, 0.5));
+        assert_eq!(g.region_pct, [false, false, true, true]);
+        assert_eq!(g.primitives[0].width, Some(0.5));
+        assert_eq!(g.primitives[0].pct, [false, false, true, false]);
+    }
+
+    /// `em` и `calc()` в атрибутах области: в `objectBoundingBox` число px — доля bbox,
+    /// `%` внутри `calc()` считается от 1; `font-size` читается с самого `<filter>`.
+    #[test]
+    fn region_accepts_em_and_calc_in_object_bounding_box() {
+        let g = graph(
+            r#"<svg width="0" height="0"><filter id="f" x="0" y="0" width="1em" height="calc(25% + 0.25px)" font-size="10px"/></svg><div id="d"></div>"#,
+            "d",
+        );
+        assert_eq!(g.region, (0.0, 0.0, 10.0, 0.5));
     }
 }
