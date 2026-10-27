@@ -2042,11 +2042,13 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("rotate".into(), rotate_to_css(style.rotate));
     m.insert("scale".into(), scale_to_css(style.scale));
 
-    m.insert("filter".into(), if style.filter.is_empty() {
-        "none".into()
-    } else {
-        style.filter.iter().map(|f| filter_fn_to_css(f, style.color)).collect::<Vec<_>>().join(" ")
-    });
+    for (name, list) in [("filter", &style.filter), ("backdrop-filter", &style.backdrop_filter)] {
+        m.insert(name.into(), if list.is_empty() {
+            "none".into()
+        } else {
+            list.iter().map(|f| filter_fn_to_css(f, style.color)).collect::<Vec<_>>().join(" ")
+        });
+    }
 
     // ── Compositing ───────────────────────────────────────────────
     m.insert("mix-blend-mode".into(), mix_blend_mode_to_css(style.mix_blend_mode).into());

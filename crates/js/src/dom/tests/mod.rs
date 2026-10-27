@@ -330,6 +330,7 @@ mod v8_cssom11_pseudo_element;
 mod v8_bug1315_grid_cssom;
 mod v8_bug1391_sizing_cssom;
 mod v8_bug1401_contain_cssom;
+mod v8_bug1541_filter_cssom;
 mod v8_bug1402_multicol_cssom;
 mod v8_bug1459_style_important;
 mod v8_bug1476_display_canonical;

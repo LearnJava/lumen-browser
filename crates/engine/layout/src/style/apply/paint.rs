@@ -93,7 +93,7 @@ use crate::style::parse::image::{
     parse_url_with_modifiers, UrlModifiers,
 };
 use crate::style::parse::shape::parse_clip_path;
-use crate::style::parse::transform::parse_filter_list;
+use crate::style::parse::transform::parse_filter_list_strict;
 use lumen_core::ColorSpace;
 use lumen_core::geom::Size;
 
@@ -341,16 +341,16 @@ pub(in crate::style) fn apply_decl_paint(
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") {
                 style.filter = Vec::new();
-            } else {
-                style.filter = parse_filter_list(trimmed);
+            } else if let Some(list) = parse_filter_list_strict(trimmed) {
+                style.filter = list;
             }
         }
         "backdrop-filter" => {
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") {
                 style.backdrop_filter = Vec::new();
-            } else {
-                style.backdrop_filter = parse_filter_list(trimmed);
+            } else if let Some(list) = parse_filter_list_strict(trimmed) {
+                style.backdrop_filter = list;
             }
         }
         "print-color-adjust" | "color-adjust" => {
