@@ -63,6 +63,7 @@ impl Lumen {
         self.stream_image_sizes_dirty = false;
         self.stream_image_errors = std::collections::HashSet::new();
         self.stream_image_events_fired = std::collections::HashSet::new();
+        self.pending_window_load = None;
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
         self.frozen_styles = HashMap::new();

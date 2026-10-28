@@ -113,6 +113,8 @@ pub(crate) struct PageSnapshot {
     pub(crate) stream_image_errors: std::collections::HashSet<String>,
     /// BUG-1048: mirrors [`Lumen::stream_image_events_fired`].
     pub(crate) stream_image_events_fired: std::collections::HashSet<(u32, String)>,
+    /// LOAD-1: mirrors [`Lumen::pending_window_load`].
+    pub(crate) pending_window_load: Option<crate::page_load::PendingWindowLoad>,
     pub(crate) ime_composing: Option<String>,
     pub(crate) bfcache: BfCache,
     /// Parsed stylesheets of frozen bfcache pages, keyed by URL.

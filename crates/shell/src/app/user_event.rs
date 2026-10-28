@@ -406,11 +406,14 @@ impl Lumen {
                             if let (true, Some(start), Some(url)) =
                                 (self.js_present, nav_start, self.source.url_str().map(str::to_owned))
                             {
-                                let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-                                let detail_json = nav_timing::detail_json(nav_meta, start);
-                                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                                    j.deliver_nav_timing(&url, duration_ms, &detail_json);
-                                });
+                                let delivery = crate::page_load::NavTimingDelivery { meta: nav_meta, start, url };
+                                // LOAD-1: страница без ожидания картинок ещё не получила
+                                // `load` — метки `loadEvent*` появятся позже, запись уйдёт
+                                // вместе с ним (`Lumen::maybe_fire_window_load`).
+                                match self.pending_window_load.as_mut() {
+                                    Some(pending) => pending.nav_timing = Some(delivery),
+                                    None => delivery.deliver(self),
+                                }
                             }
                         }
                         click_log::log_page_ready(&self.source.describe(), self.scroll_y);

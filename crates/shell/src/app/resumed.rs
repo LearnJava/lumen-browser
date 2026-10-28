@@ -89,6 +89,7 @@ impl Lumen {
         self.stream_image_sizes_dirty = false;
         self.stream_image_errors.clear();
         self.stream_image_events_fired.clear();
+        self.pending_window_load = None;
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.

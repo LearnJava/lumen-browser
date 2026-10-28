@@ -530,6 +530,7 @@ fn run_window_mode_inner(
         stream_image_sizes_dirty: false,
         stream_image_errors: std::collections::HashSet::new(),
         stream_image_events_fired: std::collections::HashSet::new(),
+        pending_window_load: None,
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
         pending_post_reload_traversal: None,

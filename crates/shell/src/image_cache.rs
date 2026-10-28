@@ -188,6 +188,20 @@ impl DecodedImageCache {
         }
     }
 
+    /// LOAD-1: non-blocking look at the slot of `src` in the current generation.
+    ///
+    /// `None` — nobody has produced (or finished producing) this image yet; the
+    /// caller must not wait for it. `Some(outcome)` — the decode already finished
+    /// (`Some(None)` inside is a cached failure). The live pipeline uses this to
+    /// take only what the progressive loaders have already decoded and leave the
+    /// rest to the post-render path instead of blocking `RenderDone` on the network.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
+    pub fn peek_current(&self, src: &str) -> Option<CachedDecode> {
+        let slot = Arc::clone(self.inner.lock().unwrap().slots.get(src)?);
+        let state = slot.state.lock().unwrap();
+        state.clone()
+    }
+
     /// Convenience for the UI-thread consumer ([`fetch_and_decode_images`]): decode
     /// using the cache's current generation.
     ///
