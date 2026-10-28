@@ -1021,8 +1021,7 @@ impl Lumen {
                 let chunk_proxy = proxy.clone();
                 // Separate clones for prefetch warm-up: `cookie_jar`/`sink` below are
                 // moved into the streaming call, so the per-chunk closure keeps its own.
-                let cj_prefetch = Some(Arc::clone(&cookie_jar));
-                let sink_prefetch = Arc::clone(&sink);
+                let mut warm_client = WarmClient::new(Arc::clone(&sink), Some(Arc::clone(&cookie_jar)));
                 // BUG-1185: CSP заголовка ответа, чьё тело течёт, — разбирается
                 // один раз на hop (у каждого ответа цепочки свои заголовки).
                 let mut header_csp: Option<(String, Vec<lumen_network::csp::CspPolicy>)> = None;
@@ -1046,11 +1045,11 @@ impl Lumen {
                         chunk,
                         &base,
                         header_csp.as_ref().map_or(&[][..], |(_, p)| p),
+                        crate::page_source::referrer_policy_header(headers).as_deref(),
                         &chunk_proxy,
                         tab_id,
                         generation,
-                        &sink_prefetch,
-                        cj_prefetch.as_ref(),
+                        &mut warm_client,
                         &media_ctx,
                     );
                     let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation));
@@ -1091,7 +1090,7 @@ impl Lumen {
                     }
                 }
             } else {
-                let cj_prefetch = Some(Arc::clone(&cookie_jar));
+                let mut warm_client = WarmClient::new(Arc::clone(&sink), Some(Arc::clone(&cookie_jar)));
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
@@ -1112,11 +1111,11 @@ impl Lumen {
                         chunk,
                         &raw.base,
                         &[],
+                        None,
                         &proxy,
                         tab_id,
                         generation,
-                        &sink,
-                        cj_prefetch.as_ref(),
+                        &mut warm_client,
                         &media_ctx,
                     );
                     if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), tab_id, generation)).is_err() {
@@ -2322,11 +2321,11 @@ fn feed_preload_and_emit(
     chunk: &[u8],
     base: &ResourceBase,
     header_csp: &[lumen_network::csp::CspPolicy],
+    header_referrer: Option<&str>,
     proxy: &EventLoopProxy<LoadEvent>,
     tab_id: usize,
     generation: u64,
-    sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
+    warm_client: &mut WarmClient,
     media_ctx: &lumen_css_parser::MediaContext,
 ) {
     use lumen_network::RequestDestination;
@@ -2346,7 +2345,9 @@ fn feed_preload_and_emit(
     // BUG-1491: gated by the same header + `<meta>` policies as the
     // stylesheet/script warm-up below.
     let doc_csp: Vec<_> = header_csp.iter().chain(&meta_csp).cloned().collect();
-    crate::page_pipeline::warm_preload_cache(&early, base, sink, cookie_jar.cloned(), &doc_csp);
+    crate::page_pipeline::warm_preload_cache(
+        &early, base, &warm_client.sink, warm_client.cookie_jar.clone(), &doc_csp,
+    );
     let self_origin = base.origin();
     // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
     // HTML is still streaming. Linked stylesheets AND external classic scripts are
@@ -2355,6 +2356,10 @@ fn feed_preload_and_emit(
     // bytes instantly instead of blocking on the socket (cascade + script order
     // untouched — a cache miss simply re-fetches there). Stylesheets additionally
     // parse here to feed progressive intermediate frames (the previous PH1-2 path).
+    let referrer_policy = crate::resource_base::referrer_policy_of(
+        header_referrer,
+        scanner.meta_referrer().iter().map(String::as_str),
+    );
     for hint in &early {
         let (raw_url, dest, is_css) = match hint {
             lumen_html_parser::PreloadHint::Stylesheet { url, media, .. } => {
@@ -2395,21 +2400,23 @@ fn feed_preload_and_emit(
                 }
             }
             ResolvedResource::Url(resolved) => {
+                // LOAD-3C: загрузка идёт на ограниченном пуле (`WARM_POOL`, ≤ 8
+                // потоков), а не на потоке под каждую подсказку, и тем же клиентом
+                // с той же referrer-политикой, что финальный проход
+                // (`scripts.rs`, `document_referrer_policy`): общий пул соединений,
+                // один и тот же `Referer`.
+                let client = warm_client.client(base, referrer_policy);
                 let proxy2 = proxy.clone();
-                let base = base.clone();
-                let sink = Arc::clone(sink);
-                let cookie_jar = cookie_jar.cloned();
-                std::thread::spawn(move || {
-                    use lumen_core::url::Url;
-                    let Ok(parsed) = Url::parse(&resolved) else {
-                        if is_css {
-                            let _ = proxy2.send_event(LoadEvent::CssLoaded(
-                                Box::default(), tab_id, generation));
-                        }
-                        return;
-                    };
-                    let resource = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
-                        let client = base.http_client_for_subresource(sink, cookie_jar);
+                let Ok(parsed) = lumen_core::url::Url::parse(&resolved) else {
+                    if is_css {
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::default(), tab_id, generation));
+                    }
+                    continue;
+                };
+                crate::prefetch::PREFETCH_CACHE.warm_with(
+                    generation,
+                    &resolved,
+                    move || {
                         client
                             .fetch_subresource_with_content_type(&parsed, dest)
                             .map(|(body, content_type)| crate::prefetch::CachedResource {
@@ -2417,22 +2424,71 @@ fn feed_preload_and_emit(
                                 content_type,
                             })
                             .map_err(|e| e.to_string())
-                    });
-                    if is_css {
-                        // Progressive preview frame only — the authoritative
-                        // parse (BUG-509 fallback-encoding algorithm) happens
-                        // later in `stylesheets::fetch_stylesheet_text` once
-                        // the full document (and its own charset) is known.
-                        // Сбой загрузки → пустая таблица: `CssLoaded` обязан
-                        // прийти ровно один раз (BUG-1225, счётчик ожидания).
-                        let sheet = resource
-                            .map(|r| lumen_css_parser::parse(&String::from_utf8_lossy(&r.body[..])))
-                            .unwrap_or_default();
-                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
-                    }
-                });
+                    },
+                    move |resource| {
+                        if is_css {
+                            // Progressive preview frame only — the authoritative
+                            // parse (BUG-509 fallback-encoding algorithm) happens
+                            // later in `stylesheets::fetch_stylesheet_text` once
+                            // the full document (and its own charset) is known.
+                            // Сбой загрузки → пустая таблица: `CssLoaded` обязан
+                            // прийти ровно один раз (BUG-1225, счётчик ожидания).
+                            let sheet = resource
+                                .map(|r| lumen_css_parser::parse(&String::from_utf8_lossy(&r.body[..])))
+                                .unwrap_or_default();
+                            let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), tab_id, generation));
+                        }
+                    },
+                );
             }
         }
+    }
+}
+
+/// LOAD-3C: клиент раннего прогрева одной навигации. Один `HttpClient` на пару
+/// (база документа, referrer-политика) — у клиента свой пул keep-alive
+/// соединений, поэтому 30 скриптов одного хоста идут по нескольким сокетам, а не
+/// каждый по новому. Смена базы (редирект) или политики (`<meta name=referrer>`
+/// появился в очередном chunk-е) пересобирает клиент.
+pub(crate) struct WarmClient {
+    sink: Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    shared: Option<WarmClientKey>,
+}
+
+struct WarmClientKey {
+    base: String,
+    policy: lumen_network::ReferrerPolicy,
+    client: Arc<lumen_network::HttpClient>,
+}
+
+impl WarmClient {
+    pub(crate) fn new(sink: Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> Self {
+        Self { sink, cookie_jar, shared: None }
+    }
+
+    fn client(
+        &mut self,
+        base: &ResourceBase,
+        policy: lumen_network::ReferrerPolicy,
+    ) -> Arc<lumen_network::HttpClient> {
+        let base_key = match base {
+            ResourceBase::Url(u) => u.clone(),
+            ResourceBase::File(p) => p.to_string_lossy().into_owned(),
+        };
+        if let Some(shared) = &self.shared
+            && shared.base == base_key
+            && shared.policy == policy
+        {
+            return Arc::clone(&shared.client);
+        }
+        let client = Arc::new(base.http_client_for_subresource_with_policy(
+            Arc::clone(&self.sink),
+            self.cookie_jar.clone(),
+            policy,
+        ));
+        self.shared = Some(WarmClientKey { base: base_key, policy, client: Arc::clone(&client) });
+        client
     }
 }
 

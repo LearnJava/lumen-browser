@@ -327,12 +327,13 @@ fn collect_source_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
 pub struct PreloadScanner {
     push: PushTokenizer,
     meta_csp: Vec<String>,
+    meta_referrer: Vec<String>,
 }
 
 impl PreloadScanner {
     /// Создаёт новый инкрементальный сканер.
     pub fn new() -> Self {
-        Self { push: PushTokenizer::new(), meta_csp: Vec::new() }
+        Self { push: PushTokenizer::new(), meta_csp: Vec::new(), meta_referrer: Vec::new() }
     }
 
     /// Скармливает очередной chunk сырых байт и возвращает все hint-ы,
@@ -343,6 +344,7 @@ impl PreloadScanner {
     pub fn feed_bytes(&mut self, chunk: &[u8]) -> Vec<PreloadHint> {
         let tokens = self.push.feed_bytes(chunk);
         collect_meta_csp(&tokens, &mut self.meta_csp);
+        collect_meta_referrer(&tokens, &mut self.meta_referrer);
         collect_hints_from_tokens(&tokens)
     }
 
@@ -352,6 +354,7 @@ impl PreloadScanner {
     pub fn end(&mut self) -> Vec<PreloadHint> {
         let tokens = self.push.end();
         collect_meta_csp(&tokens, &mut self.meta_csp);
+        collect_meta_referrer(&tokens, &mut self.meta_referrer);
         collect_hints_from_tokens(&tokens)
     }
 
@@ -364,6 +367,28 @@ impl PreloadScanner {
     /// спецификации, но цена ошибки — лишь пропущенный прогрев.
     pub fn meta_csp(&self) -> &[String] {
         &self.meta_csp
+    }
+
+    /// `content` каждого `<meta name="referrer">`, встреченного до сих пор, в
+    /// порядке документа (LOAD-3C). Раннему прогреву скриптов нужна та же
+    /// referrer-политика, с которой финальный проход возьмёт тот же URL, а DOM
+    /// с `Document::meta_referrer` на этом этапе ещё не построен.
+    pub fn meta_referrer(&self) -> &[String] {
+        &self.meta_referrer
+    }
+}
+
+/// Дописать в `out` `content` каждого `<meta name="referrer">` из `tokens` —
+/// тот же отбор, что у разборщика DOM (`Document::add_meta_referrer`).
+fn collect_meta_referrer(tokens: &[Token], out: &mut Vec<String>) {
+    for tok in tokens {
+        if let Token::StartTag { name, attrs, .. } = tok
+            && name == "meta"
+            && find_attr(attrs, "name").is_some_and(|v| v.eq_ignore_ascii_case("referrer"))
+            && let Some(content) = find_attr(attrs, "content")
+        {
+            out.push(content.to_string());
+        }
     }
 }
 
@@ -1235,6 +1260,19 @@ mod streaming_tests {
         }
         scanner.end();
         assert_eq!(scanner.meta_csp(), ["script-src 'none'", "style-src 'self'"]);
+    }
+
+    /// LOAD-3C: `<meta name=referrer>` доходит до раннего прогрева — тот же
+    /// набор, что у DOM (`Document::meta_referrer`), включая границы chunk-ов.
+    #[test]
+    fn scanner_collects_meta_referrer_across_chunks() {
+        let html = r#"<meta name="viewport" content="width=1"><meta name="Referrer" content="origin"><meta name=referrer><meta name="referrer" content="no-referrer">"#;
+        let mut scanner = PreloadScanner::new();
+        for b in html.as_bytes() {
+            scanner.feed_bytes(std::slice::from_ref(b));
+        }
+        scanner.end();
+        assert_eq!(scanner.meta_referrer(), ["origin", "no-referrer"]);
     }
 
     #[test]
