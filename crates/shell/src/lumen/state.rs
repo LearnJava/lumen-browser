@@ -1091,6 +1091,9 @@ pub(crate) struct Lumen {
     /// Instant at which the current navigation began (set in `reload()`).
     /// Used to compute `duration` for the W3C Navigation Timing entry.
     pub(crate) nav_start: Option<std::time::Instant>,
+    /// LOAD-0: метки первого контента / применения финальной страницы /
+    /// финального кадра; сбрасываются вместе с `nav_start`, но живут дольше него.
+    pub(crate) load_marks: crate::load_marks::LoadMarks,
     /// FTS5-индекс по тексту посещённых страниц — используется omnibox (@history).
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     pub(crate) history_fts: HistoryFts,

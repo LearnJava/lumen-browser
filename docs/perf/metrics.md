@@ -38,6 +38,23 @@
 PerformanceObserver paint-timing будет дописан в движке (JS-каркас частично
 готов: `performance.now`, long-animation-frames, soft-navigation в `crates/js`).
 
+### Метки загрузки живого окна (LOAD-0)
+
+Меряются в живом окне (не headless), пишутся в `health.<pid>.log` записью
+`kind: load_timing` (`health_log::log_load_timing`, нужен `LUMEN_HEALTH_LOG=1`),
+`scripts/perf_audit.py` переводит их в секунды в `results.json`. Отсчёт — от старта
+навигации (`LoadMarks::reset`, [`load_marks.rs`](../../crates/shell/src/load_marks.rs)).
+
+| Поле `results.json` | Момент |
+|---|---|
+| `first_content_s` | `paint_partial_dom` отдал непустой display list (нет поля — потоковая отрисовка не успела) |
+| `final_applied_s` | `apply_loaded_page` завершён |
+| `final_frame_s` | первый `RedrawRequested` после применения финальной страницы |
+| `ready_s` | прежнее: `readyState == complete` по MCP |
+
+Эти же поля — замер «до/после» для всех задач дорожки LOAD, на списке
+[corpus-user-ru.txt](corpus-user-ru.txt) без прокси.
+
 ## Протокол
 
 ```bash

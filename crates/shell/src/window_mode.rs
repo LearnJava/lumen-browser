@@ -622,6 +622,7 @@ fn run_window_mode_inner(
         load_failed: false,
         load_error_message: None,
         nav_start: None,
+        load_marks: Default::default(),
         history_fts: open_persistent(
             "history_fts.db",
             HistoryFts::open,

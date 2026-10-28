@@ -158,6 +158,10 @@ def read_health_events(path: Path, pos: int) -> tuple[list[dict], int]:
     """Новые строки `health.log` (JSONL) с позиции pos; битые строки пропускаются."""
     try:
         with path.open("rb") as f:
+            # Рестарт окна = новый health.<pid>.log: позиция от старого файла
+            # за концом нового, иначе все сайты после рестарта остаются без записей.
+            if pos > path.stat().st_size:
+                pos = 0
             f.seek(pos)
             chunk = f.read()
     except OSError:
@@ -172,6 +176,20 @@ def read_health_events(path: Path, pos: int) -> tuple[list[dict], int]:
         except json.JSONDecodeError:
             continue
     return events, pos + len(chunk)
+
+
+def pick_load_timing(events: list[dict], url: str) -> dict:
+    """LOAD-0: запись `load_timing` для сайта. Редиректы и SSO-страницы пишут свои
+    записи — берём ту, чей хост совпадает с хостом сайта (последнюю), иначе последнюю."""
+    from urllib.parse import urlparse
+
+    def host(u: str) -> str:
+        h = (urlparse(u).hostname or "").lower()
+        return h[4:] if h.startswith("www.") else h
+
+    want = host(url)
+    same = [e for e in events if want and host(str(e.get("url", ""))) == want]
+    return (same or events)[-1]
 
 
 def classify_status(
@@ -1216,6 +1234,16 @@ def audit_site_live(
 
     health_events, br.health_log_pos = br.health_events_since(health_pos)
     rec["broken_render_signal"] = any(e.get("kind") == "broken_render" for e in health_events)
+    # LOAD-0: метки загрузки живого окна (health_log::log_load_timing); берём
+    # последнюю запись за сайт — мс от старта навигации переводим в секунды.
+    lt = [e for e in health_events if e.get("kind") == "load_timing"]
+    if lt:
+        pick = pick_load_timing(lt, url)
+        for src, dst in (("first_content_ms", "first_content_s"),
+                         ("final_applied_ms", "final_applied_s"),
+                         ("final_frame_ms", "final_frame_s")):
+            if isinstance(pick.get(src), (int, float)):
+                rec[dst] = round(pick[src] / 1000.0, 2)
     rec["suspected_duplicate_frame"] = bool(
         png_hash_counts is not None and rec.get("png_hash") and png_hash_counts[rec["png_hash"]] > 1
     )

@@ -14,6 +14,10 @@ const ANIM_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 impl Lumen {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn on_redraw_requested(&mut self) {
+        // LOAD-0: первый кадр после применения финальной страницы.
+        if let Some(t) = self.load_marks.mark_frame(std::time::Instant::now()) {
+            crate::health_log::log_load_timing(&self.source.describe(), t);
+        }
         // HTML §8.1.5.1 «Update the rendering» — spec-correct order:
         //   1.   scroll              ← advance_scroll_anim + advance_momentum
         //   1.5  scroll-driven anims ← deliver_scroll_progress → ScrollTimeline.currentTime

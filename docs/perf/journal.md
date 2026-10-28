@@ -972,3 +972,62 @@ BROKEN_RENDER 18, HUNG 14. Флапы 0 (повторов не было, `--no-r
 - Поправка по ходу: фразы «unsupported browser» искались в сыром исходнике и давали 16 ложных WALL_SOFT (tiktok, t-online, uber…: строки из бандлов) — теперь ищутся в видимом тексте.
 - Р16 не измерим без JS-плеча Lumen.
 **Заведённые баги:** нет новых (BUG-1629 уже открыт). Не решённое этим прогоном: российский корень в хранилище Lumen (7 банковских/гос сайтов) — пункт «OS-доверие» ADR-034.
+
+
+---
+
+## 2026-10-28 — LOAD-0 — база меток загрузки на сайтах пользователя — Windows 10, маршрут home-direct, без прокси
+
+`python scripts/perf_audit.py --corpus docs/perf/corpus-user-ru.txt --mode stability --env LUMEN_NO_ADBLOCK=1`,
+`target/dev-release/lumen.exe` от `main` 69b61a5cb + коммит LOAD-0 (метки). LOAD-1 в `main` ещё нет, поэтому база снята на коде
+без LOAD-1 (отдельный worktree и cherry-pick не нужны). Живое окно, блокировщик рекламы выключен, `data/fingerprint.toml` без `proxy =`.
+Метки — `load_timing` в `health.<pid>.log` ([metrics.md](metrics.md) §«Метки загрузки живого окна»).
+
+| метрика | медиана, с | сайтов |
+|---|---|---|
+| `ready_s` | 20,34 | 26 |
+| `first_content_s` | 3,10 | 1 |
+| `final_applied_s` | 6,97 | 26 |
+| `final_frame_s` | 6,97 | 26 |
+
+Статусы: OK 18, BROKEN_RENDER 5, DEGRADED 3, TIMEOUT 2 (hh-ru, gazeta-ru), NET_FAIL 2 (tbank-ru, sberbank-ru — закрыты сетью).
+
+Замечания для LOAD-1…:
+- `first_content_s` есть только у `yandex-ru`: потоковая отрисовка до применения финальной страницы срабатывает почти нигде —
+  это и есть поле для LOAD-1 (страница на экран без ожидания картинок). Пустая метка = «первого кадра с контентом раньше финала не было».
+- `final_frame_s` ≈ `final_applied_s` (кадр сразу следует за применением): задержка страницы целиком в приходе финальной страницы, не в кадре.
+- Несколько сайтов дают кратные 10 с значения (`auto-ru` 10,27; `drom-ru` 10,2; `cian-ru` 10,12; `mos-ru` 20,15; `market-yandex-ru` 30,38) — похоже на сетевые таймауты 10 с на подзапрос; перед сравнением «до/после» перепроверить повтором.
+- Повторный прогон на том же коде дал `final_applied_s` pikabu 7,0/7,3, ria 15,9/16,1, vk 4,8/15,7: разброс между прогонами велик, сравнивать медианы по ≥ 2 прогонам.
+
+| сайт | статус | ready_s | first_content_s | final_applied_s | final_frame_s |
+|---|---|---|---|---|---|
+| dzen-ru | OK | 2.45 | — | 1.79 | 1.79 |
+| pikabu-ru | OK | 21.19 | — | 7.02 | 7.03 |
+| mail-ru | BROKEN_RENDER | 20.27 | — | 4.55 | 4.55 |
+| ozon-ru | OK | 0.7 | — | 0.58 | 0.58 |
+| avito-ru | OK | 1.84 | — | 1.75 | 1.75 |
+| habr-com | OK | 86.8 | — | 78.82 | 78.82 |
+| yandex-ru | OK | 26.47 | 3.1 | 6.92 | 6.92 |
+| vk-com | BROKEN_RENDER | 10.42 | — | 4.76 | 4.76 |
+| rbc-ru | OK | 4.47 | — | 3.25 | 3.25 |
+| ria-ru | DEGRADED | 33.42 | — | 15.88 | 15.88 |
+| lenta-ru | BROKEN_RENDER | 17.2 | — | 2.92 | 2.92 |
+| gosuslugi-ru | BROKEN_RENDER | 1.44 | — | 0.72 | 0.72 |
+| wildberries-ru | OK | 7.25 | — | 7.09 | 7.09 |
+| kinopoisk-ru | OK | 0.81 | — | 2.54 | 2.54 |
+| ok-ru | OK | 45.24 | — | 6.38 | 6.38 |
+| rutube-ru | DEGRADED | 52.16 | — | 25.68 | 25.68 |
+| 2gis-ru | BROKEN_RENDER | 22.45 | — | 2.46 | 2.46 |
+| hh-ru | TIMEOUT | — | — | — | — |
+| gazeta-ru | TIMEOUT | — | — | — | — |
+| kp-ru | DEGRADED | 20.27 | — | 3.56 | 3.56 |
+| sports-ru | OK | 36.02 | — | 17.34 | 17.79 |
+| vc-ru | OK | 25.73 | — | 15.3 | 15.3 |
+| auto-ru | OK | 20.41 | — | 10.27 | 10.27 |
+| drom-ru | OK | 20.33 | — | 10.2 | 10.2 |
+| cian-ru | OK | 20.27 | — | 10.12 | 10.12 |
+| mos-ru | OK | 30.28 | — | 20.15 | 20.15 |
+| tbank-ru | NET_FAIL | — | — | — | — |
+| sberbank-ru | NET_FAIL | — | — | — | — |
+| rambler-ru | OK | 20.36 | — | 10.23 | 10.23 |
+| market-yandex-ru | OK | 40.56 | — | 30.38 | 30.38 |

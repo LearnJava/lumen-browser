@@ -26,6 +26,7 @@
 //! по сети — в зависимости от того, каким способом загружена страница.
 
 mod adblock;
+mod load_marks;
 mod address_bar;
 mod assets;
 mod app;
