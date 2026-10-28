@@ -257,6 +257,13 @@ function _lumen_navigate_or_fragment(rawUrl, replace) {
     if (resolved !== null) {
         var curBase = _lumen_loc_href.split('#')[0];
         var newBase = resolved.split('#')[0];
+        if (curBase === newBase && resolved === _lumen_loc_href && resolved.indexOf('#') >= 0) {
+            // The very same URL with a fragment (HTML LS §7.4.2): no reload and
+            // no `hashchange` — the current entry is replaced.
+            _lumen_history_replace('null', resolved);
+            _lumen_history_replace_url(resolved, 'null');
+            return;
+        }
         if (curBase === newBase && resolved !== _lumen_loc_href) {
             var oldHref = _lumen_loc_href;
             _lumen_location_update(resolved);

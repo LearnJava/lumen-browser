@@ -46,14 +46,16 @@ impl Lumen {
                 continue;
             }
             entries.push(serde_json::json!({
-                "url": e.source.url_str().unwrap_or(""),
+                "url": e.display_url.as_deref().or_else(|| e.source.url_str()).unwrap_or(""),
                 "key": e.nav_key,
                 "id": format!("id-{}", e.nav_key.strip_prefix("nav-").unwrap_or("0")),
                 "state": state_value(e.same_doc_state_json.as_deref()),
             }));
             idx += 1;
         }
-        let cur_url = self.source.url_str().unwrap_or("");
+        // A same-document entry (`pushState`, fragment) lives at `display_url`;
+        // `source` is the document it belongs to.
+        let cur_url = self.current_display_url();
         let cur_key = self.current_nav_key.clone();
         entries.push(serde_json::json!({
             "url": cur_url,
@@ -66,7 +68,7 @@ impl Lumen {
                 continue;
             }
             entries.push(serde_json::json!({
-                "url": e.source.url_str().unwrap_or(""),
+                "url": e.display_url.as_deref().or_else(|| e.source.url_str()).unwrap_or(""),
                 "key": e.nav_key,
                 "id": format!("id-{}", e.nav_key.strip_prefix("nav-").unwrap_or("0")),
                 "state": state_value(e.same_doc_state_json.as_deref()),

@@ -699,41 +699,31 @@ impl Lumen {
         #[cfg(feature = "v8")]
         {
             let updates = self.drain_query_js(|j| j.take_history_url_updates()).unwrap_or_default();
+            // BUG-1700: the Navigation API only learns of a same-document entry
+            // from the stacks the shell publishes, so a `pushState`/`replaceState`/
+            // fragment navigation has to republish them (`entries()`, `currentEntry`,
+            // `currententrychange`, `navigatesuccess` for the pushed entry).
+            let mut pushed = false;
+            let mut replaced = false;
             for (is_push, url, new_state_json) in updates {
                 if is_push {
-                    // pushState: save current state to nav_back as same-doc entry.
-                    // BUG-829: before the first pushState `display_url` is None —
-                    // the document URL lives in `source` — so the entry used to be
-                    // stored with no URL at all and `fire_popstate` handed JS an
-                    // empty string, which `_lumen_deliver_popstate` reads as "keep
-                    // the current URL". Traversing back therefore restored the
-                    // state and left `location` on the pushed URL. Fall back to the
-                    // document's own URL, the same way `current_display_url` does.
-                    let old_display = self
-                        .display_url
-                        .take()
-                        .or_else(|| self.source.url_str().map(str::to_owned));
-                    let old_state = std::mem::replace(
-                         &mut self.current_history_state_json,
-                        new_state_json,
-                    );
-                     self.nav_back.push(NavEntry {
-                         source: self.source.clone(),
-                         scroll_x: self.scroll_x,
-                         scroll_y: self.scroll_y,
-                         display_url: old_display,
-                         same_doc_state_json: Some(old_state),
-                         nav_key: self.current_nav_key.clone(),
-                         frame_target: None,
-                     });
-                    self.nav_key_counter += 1;
-                    self.current_nav_key = format!("nav-{}", self.nav_key_counter);
-                    self.display_url = Some(url);
+                    self.push_same_document_entry(url, new_state_json);
+                    pushed = true;
                 } else {
                     // replaceState: update URL + state, no nav_back push.
                     self.current_history_state_json = new_state_json;
                     self.display_url = Some(url);
+                    replaced = true;
                 }
+            }
+            if pushed || replaced {
+                self.commit_nav_state();
+            }
+            if pushed {
+                self.fire_current_entry_change();
+            }
+            if pushed || replaced {
+                self.fire_navigate_success();
             }
         }
 
@@ -830,34 +820,30 @@ impl Lumen {
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
                         if let Some(pending) = self.pending_intercepted.take() {
+                            // The handler need not return a URL: the entry is then
+                            // the one `navigate()` asked for.
+                            let new_url = match &pending {
+                                PendingIntercepted::Push { url: asked, .. }
+                                | PendingIntercepted::Replace { url: asked, .. }
+                                    if new_url.is_empty() => asked.clone(),
+                                _ => new_url,
+                            };
                             match pending {
                                 PendingIntercepted::Push { .. }
                                 | PendingIntercepted::Replace { .. }
                                 | PendingIntercepted::Back { .. }
                                 | PendingIntercepted::Forward { .. } => {
-                                    self.display_url = Some(new_url.clone());
-                                    self.current_history_state_json = state.clone();
+                                    if matches!(pending, PendingIntercepted::Push { .. }) {
+                                        self.push_same_document_entry(new_url.clone(), state.clone());
+                                    } else {
+                                        self.display_url = Some(new_url.clone());
+                                        self.current_history_state_json = state.clone();
+                                    }
                                     if let Some(t) = title {
                                         self.title = Some(t.clone());
                                         if let Some(w) = self.window.as_ref() {
                                             w.set_title(&window_title(Some(&t)));
                                         }
-                                    }
-                                    if matches!(pending, PendingIntercepted::Push { .. }) {
-                                        self.nav_back.push(NavEntry {
-                                            source: PageSource::url(new_url.clone()),
-                                            scroll_x: 0.0,
-                                            scroll_y: 0.0,
-                                            display_url: None,
-                                            same_doc_state_json: Some(state.clone()),
-                                            nav_key: self.current_nav_key.clone(),
-                                            frame_target: None,
-                                        });
-                                        self.nav_key_counter += 1;
-                                        self.current_nav_key = format!(
-                                            "nav-{}",
-                                            self.nav_key_counter
-                                        );
                                     }
                                     self.commit_nav_state();
                                     self.fire_navigate_success();
