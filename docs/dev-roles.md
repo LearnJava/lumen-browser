@@ -16,6 +16,18 @@ Crates — the full list with per-crate state is [`SUBSYSTEMS.md`](../SUBSYSTEMS
 
 ---
 
+## Where work comes from: real sites first (user decision 2026-10-28)
+
+[ADR-034](decisions/ADR-034-site-compatibility-strategy.md) "level 0 — the site works" is the
+priority for every queue. A task enters `STATUS-P1…P4.md` only if it is traceable to a real site or
+to page-load speed: a cluster from the compat crawl (`docs/tasks/SITES-TRIAGE.md`), a `LOAD-*`
+task (`docs/tasks/LOAD.md`), a bug whose `bugs/BUG-NNN-*.md` names the sites it breaks, or a
+user-visible UX defect. WPT and spec corners are a **regression guard**, not a source of work: a
+WPT failure is queued only when a site depends on it. The spec-driven pointers that were queued on
+2026-10-28 are parked, not deleted — [`plan/queue-frozen-2026-10-28.md`](plan/queue-frozen-2026-10-28.md).
+
+---
+
 ## Feature development: P1 and P2 collaboration
 
 **P1 and P2 work on features from the roadmap in parallel.** Coordination:
