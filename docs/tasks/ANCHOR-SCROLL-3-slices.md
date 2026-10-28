@@ -36,4 +36,4 @@
 - **Гейт:** `cargo clippy -p lumen-layout -p lumen-paint --all-targets -- -D warnings` (для paint — `--features backend-wgpu`, иначе dead-code `rasterize_cpu`); `cargo test -p lumen-layout --profile dev-release anchor`; `cargo test -p lumen-paint --profile dev-release anchor`; пиксели двигаются — полный `graphic_tests/run.py --continue-on-fail`; обновить CAPABILITIES.md («a `fixed` box does not follow page scroll»).
 - **Зависит от:** ANCHOR-SCROLL-3-S2 (оба среза правят `container_anchor.rs`; чтобы не конфликтовать).
 
-> Примечание планировщика (2026-10-28): срез S1 — дефект раскладки, не фича; заведён как [BUG-1774](../../bugs/BUG-1774-OPEN.md) в очередь P3. Срез S2 от него не зависит.
+> Примечание планировщика (2026-10-28): срез S1 — дефект раскладки, не фича; заведён как [BUG-1774](../../bugs/BUG-1774-FIXED.md) в очередь P3. Срез S2 от него не зависит.

@@ -1,6 +1,6 @@
 # BUG-1774 — схлопнутый пробел между `inline-block` и следующим inline-элементом теряется
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-10-28 (P3)
 **Заведён:** 2026-10-28 (P5, ревизия очередей: нарезка ANCHOR-SCROLL-3, срез 1 вынесен в баг)
 **Область:** layout (`crates/engine/layout/src/box_tree/build.rs:1342-1356` — `build_box_inner`, ветка `is_inline_content(...)` при сборке `InlineBlockRow`)
 
@@ -45,3 +45,15 @@ inline (`pending` пуст, `row_items` не пуст), дописывать н�
 3. Гейт: `cargo clippy -p lumen-layout --all-targets -- -D warnings`, `cargo test -p lumen-layout
    anchor_inline`; раскладка двигает пиксели — полный `python graphic_tests/run.py
    --continue-on-fail` и перегенерация эталонов в том же коммите.
+
+## Исправление (2026-10-28, P3)
+
+`build_box_inner` (ветка `is_inline_content`): `lead_space = had_ws && pending.is_empty() &&
+pending_escapes.is_empty() && !row_items.is_empty()` считается до `collect_inline_segments`;
+если после вызова появился новый сегмент, не сохраняющий пробелы и не начинающийся с
+пробельного символа, ему в начало вставляется `' '`. Тест —
+`space_after_inline_block_survives_before_inline_element` (`tests/anchor_inline.rs`). WPT
+`anchor-scroll-001` и `anchor-scroll-update-001/002/003/004/007` — `identical` по
+`reftest_pixdiff` (800×600, Ahem). Полный прогон `graphic_tests/run.py`: пиксели не сдвинулись
+(красные 18/21/56/61/62/150/151/155/159 — те же проценты без правки; 18 и 61 красные на `main`
+независимо от этого бага).

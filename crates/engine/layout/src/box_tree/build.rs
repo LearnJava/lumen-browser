@@ -1353,8 +1353,25 @@ fn build_box_inner(
                             let gap = super::segment_break::folded_gap(&last.text, had_break);
                             last.text.push(gap);
                         }
+                        // BUG-1774: the previous sibling was an atomic inline, so
+                        // `pending` is empty and the gap has no segment to trail.
+                        // Lead the first new segment with it instead — the same path
+                        // a bare ` foo` text node takes.
+                        let lead_space = had_ws
+                            && pending.is_empty()
+                            && pending_escapes.is_empty()
+                            && !row_items.is_empty();
+                        let before = pending.len();
                         had_break = false;
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, &mut pending_escapes, flat, counters, registry, &mut need_first_letter, dark_mode);
+                        if lead_space
+                            && let Some(first) = pending.get_mut(before)
+                            && !first.forced_break
+                            && !first.style.white_space.preserves_whitespace()
+                            && !first.text.starts_with(is_wrap_whitespace)
+                        {
+                            first.text.insert(0, ' ');
+                        }
                         had_ws = false;
                         i += 1;
                     } else if is_atomic_inline_level(doc, sheet, cid, &style, viewport, dark_mode, counters)
