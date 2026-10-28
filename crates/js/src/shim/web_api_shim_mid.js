@@ -10104,13 +10104,29 @@ var _LUMEN_WRAPPER_MEMBERS = {
         // `<body>` in quirks mode) is the VIEWPORT — its client box is the
         // viewport's, its scroll offsets are the page's, and its scroll methods
         // scroll the page. Everything else is an ordinary box.
+        // BUG-1556: CSSOM View §Element — the client box is the PADDING box, so the borders come
+        // off the border-box rect (`clientLeft`/`clientTop` are those border widths).
         get clientWidth()  { var nid = this.__nid__;
             if (_lumen_is_root_scroller(nid)) return _lumen_get_viewport_size()[0];
-            var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0;
+            var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
+            var bl = parseFloat(_lumen_get_computed_style(nid, 'border-left-width')) || 0;
+            var br = parseFloat(_lumen_get_computed_style(nid, 'border-right-width')) || 0;
+            return Math.max(0, r[2] - bl - br);
         },
         get clientHeight() { var nid = this.__nid__;
             if (_lumen_is_root_scroller(nid)) return _lumen_get_viewport_size()[1];
-            var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0;
+            var r = _lumen_get_bounding_rect(nid); if (!r) return 0;
+            var bt = parseFloat(_lumen_get_computed_style(nid, 'border-top-width')) || 0;
+            var bb = parseFloat(_lumen_get_computed_style(nid, 'border-bottom-width')) || 0;
+            return Math.max(0, r[3] - bt - bb);
+        },
+        get clientLeft() { var nid = this.__nid__;
+            if (_lumen_is_root_scroller(nid) || !_lumen_get_bounding_rect(nid)) return 0;
+            return parseFloat(_lumen_get_computed_style(nid, 'border-left-width')) || 0;
+        },
+        get clientTop() { var nid = this.__nid__;
+            if (_lumen_is_root_scroller(nid) || !_lumen_get_bounding_rect(nid)) return 0;
+            return parseFloat(_lumen_get_computed_style(nid, 'border-top-width')) || 0;
         },
         get scrollLeft() { var nid = this.__nid__;
             if (_lumen_is_root_scroller(nid)) return _lumen_get_page_scroll_x();

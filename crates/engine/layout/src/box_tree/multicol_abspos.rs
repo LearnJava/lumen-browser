@@ -402,7 +402,7 @@ pub(super) fn lay_out_abs_children_with(
     // carries a transform/filter/…; otherwise they resolve against the viewport.
     let fixed_cb = fixed_cb_rect(parent);
 
-    let static_rtl = static_x_is_right_edge(parent);
+    let (static_right, static_bottom) = static_edges(parent);
     for &(idx, static_x, static_y, cb_override) in deferred {
         let cb = if let Some(cb) = cb_override {
             cb
@@ -411,15 +411,16 @@ pub(super) fn lay_out_abs_children_with(
         } else {
             my_pcb
         };
-        let rtl = static_rtl && cb_override.is_none();
+        let rtl = static_right && cb_override.is_none();
+        let bottom = static_bottom && cb_override.is_none();
         let seen = child_seq.get(idx).map(|&seq| anchors.before(seq));
         let anchors = seen.as_deref().unwrap_or(&anchors);
         // The alignment axes are the containing block's (CSS Box Alignment L3 §5.3): known when
         // it is `parent` itself; any other ancestor falls back to the box's own flow.
         let cb_flow = (cb_override.is_none() && establishes_abs_cb(&parent.style)).then(|| parent.style.clone());
         place_abs_child(
-            &mut parent.children[idx], static_x, rtl, static_y, cb, cb_flow.as_deref(), anchors, measurer, viewport,
-            my_pcb, hp,
+            &mut parent.children[idx], static_x, rtl, static_y, bottom, cb, cb_flow.as_deref(), anchors, measurer,
+            viewport, my_pcb, hp,
         );
     }
 }
@@ -438,6 +439,32 @@ pub(super) fn static_x_is_right_edge(parent: &LayoutBox) -> bool {
         && s.column_width.is_none()
 }
 
+/// Which physical edges of the content box of a block-flow `parent` the static position of an
+/// abs-pos child sits against — `(x is the right edge, y is the bottom edge)`; the box's margin
+/// edge touches the *start* of the container's inline axis and of its block axis (CSS Position L3
+/// §static-position, CSS Writing Modes L4 §4.2): the right edge for `horizontal-tb` `rtl` and for
+/// `vertical-rl`, the bottom edge when a vertical inline axis runs upward. The flow loop
+/// hands the edge over as `static_x`/`static_y` and [`place_abs_child`] subtracts the box size
+/// (BUG-1556). Containers whose static position is computed elsewhere (multicol, tables, flex,
+/// grid, inline-level) keep the top-left corner.
+pub(super) fn static_edges(parent: &LayoutBox) -> (bool, bool) {
+    use crate::style::{Direction, WritingMode};
+    let s = &parent.style;
+    if !(matches!(parent.kind, BoxKind::Block | BoxKind::FlowRoot)
+        && matches!(s.display, Display::Block | Display::FlowRoot)
+        && s.column_count.is_none()
+        && s.column_width.is_none())
+    {
+        return (false, false);
+    }
+    let bottom = super::vertical_trampoline::vertical_inline_start_at_end(s);
+    match s.writing_mode {
+        WritingMode::HorizontalTb => (s.direction == Direction::Rtl, false),
+        WritingMode::VerticalRl | WritingMode::SidewaysRl => (true, bottom),
+        WritingMode::VerticalLr | WritingMode::SidewaysLr => (false, bottom),
+    }
+}
+
 /// Lays out one absolutely/fixed-positioned `child` against its containing
 /// block `cb` and moves it to its final position (CSS Position L3 §6).
 /// `static_x`/`static_y` is the static position used for an axis whose insets
@@ -449,6 +476,7 @@ fn place_abs_child(
     static_x: f32,
     static_x_is_right: bool,
     static_y: f32,
+    static_y_is_bottom: bool,
     cb: Rect,
     cb_flow: Option<&ComputedStyle>,
     anchors: &crate::anchor::AnchorRegistry,
@@ -557,6 +585,16 @@ fn place_abs_child(
         && matches!(child.kind, BoxKind::Block | BoxKind::FlowRoot);
     let stretched_h = stretched_h.or_else(|| {
         (vertical_child && align_y.is_some() && h_auto && top.is_some() && bottom.is_some()).then(|| {
+            let room = (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
+            max_content_outer_height(child, measurer, viewport).min(room)
+        })
+    });
+    // CSS 2.1 §10.3.7 on the inline axis of a vertical box: with `height: auto` and a free inset its
+    // height is shrink-to-fit (the content, at most the room left), not the containing block's
+    // height — an empty box is 0 high whatever the viewport or the transformed ancestor is
+    // (BUG-1556, `position: fixed` was laid out once against the viewport and refit against the CB).
+    let stretched_h = stretched_h.or_else(|| {
+        (vertical_child && h_auto && !ratio && (top.is_none() || bottom.is_none())).then(|| {
             let room = (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
             max_content_outer_height(child, measurer, viewport).min(room)
         })
@@ -695,6 +733,7 @@ fn place_abs_child(
             }
             (Some(t), _)     => cb.y + t + c_mt,
             (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
+            (None, None) if static_y_is_bottom => static_y - c_mb - child.rect.height,
             (None, None)     => static_y + c_mt,
         };
         (nx, ny)
@@ -966,5 +1005,5 @@ fn refit_out_of_flow_child(
     let ml = child.style.margin_left.resolve_or_zero(em, cb.width, viewport);
     let mt = child.style.margin_top.resolve_or_zero(em, cb.height, viewport);
     let (static_x, static_y) = (child.rect.x - ml, child.rect.y - mt);
-    place_abs_child(child, static_x, false, static_y, cb, None, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
+    place_abs_child(child, static_x, false, static_y, false, cb, None, &crate::anchor::AnchorRegistry::default(), measurer, viewport, cb, hp);
 }
