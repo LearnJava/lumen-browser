@@ -13,7 +13,8 @@ use std::sync::Arc;
 use lumen_core::geom::Size;
 
 use crate::style::parse::image::{
-    is_gradient_function, is_image_set_value, parse_background_gradient, parse_cross_fade, parse_url_value,
+    is_gradient_function, is_image_set_value, parse_background_gradient, parse_cross_fade, parse_paint_function,
+    parse_url_value,
 };
 use crate::style::parse::image_computed::computed_image_css;
 use crate::style::values::length::split_top_level_ws;
@@ -255,6 +256,10 @@ pub(in crate::style) fn parse_border_image_source(
     }
     if let Some(u) = parse_url_value(s) {
         return Some((BackgroundImage::Url(u), None));
+    }
+    // CSS Paint API (Houdini): the worklet draws the border image (`lumen_paint::collect_paint_requests`).
+    if let Some((name, args)) = parse_paint_function(s) {
+        return Some((BackgroundImage::Paint { name, args }, Some(Arc::from(s))));
     }
     if is_gradient_function(s) {
         let css = computed_image_css(s, em_basis, viewport).map(Arc::<str>::from);

@@ -62,7 +62,28 @@ fn request_for(b: &LayoutBox, layer: &BackgroundLayer, dpr: f32) -> Option<Paint
     })
 }
 
-/// Every `background-image: paint()` layer of the laid-out tree, in document order,
+/// Request for the `border-image-source: paint()` of `b`: the image is as large as the
+/// border-image area (CSS Paint API §5, plus `border-image-outset`).
+fn border_image_request(b: &LayoutBox, dpr: f32) -> Option<PaintRequest> {
+    let BackgroundImage::Paint { name, args } = &b.style.border_image.source else { return None };
+    let area = super::border_image_emit::border_image_area(b);
+    let (width, height) = (area.width, area.height);
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let node = b.node.index();
+    Some(PaintRequest {
+        key: paint_image_key(node, name, args, width, height),
+        node: u32::try_from(node).ok()?,
+        name: name.clone(),
+        args: args.clone(),
+        width,
+        height,
+        dpr,
+    })
+}
+
+/// Every `background-image` / `border-image-source` `paint()` image of the laid-out tree, in document order,
 /// duplicates (same key) removed. `dpr` is the device pixel ratio of the surface the
 /// page is painted on.
 ///
@@ -75,10 +96,14 @@ pub fn collect_paint_requests(root: &LayoutBox, dpr: f32) -> Vec<PaintRequest> {
     let mut out: Vec<PaintRequest> = Vec::new();
     let mut stack: Vec<&LayoutBox> = vec![root];
     while let Some(b) = stack.pop() {
-        for layer in &b.style.background_layers {
-            if let Some(req) = request_for(b, layer, dpr)
-                && !out.iter().any(|r| r.key == req.key)
-            {
+        let requests = b
+            .style
+            .background_layers
+            .iter()
+            .filter_map(|layer| request_for(b, layer, dpr))
+            .chain(border_image_request(b, dpr));
+        for req in requests {
+            if !out.iter().any(|r| r.key == req.key) {
                 out.push(req);
             }
         }
