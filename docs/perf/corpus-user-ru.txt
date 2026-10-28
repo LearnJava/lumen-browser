@@ -1,0 +1,34 @@
+# Сайты пользователя — главная проверка дорожек LOAD и SITES (решение 2026-10-28).
+# Первые 6 названы пользователем, остальные 24 — популярные RU-сайты из корпуса C.
+# Открывать БЕЗ прокси: в data/fingerprint.toml нет `proxy =`, Chrome — с --no-proxy-server.
+# Формат строк: <slug> <url> (как docs/perf/corpus-c-ru.txt).
+dzen-ru                     https://dzen.ru/
+pikabu-ru                   https://pikabu.ru/
+mail-ru                     https://mail.ru/
+ozon-ru                     https://ozon.ru/
+avito-ru                    https://avito.ru/
+habr-com                    https://habr.com/
+yandex-ru                   https://yandex.ru/
+vk-com                      https://vk.com/
+rbc-ru                      https://www.rbc.ru/
+ria-ru                      https://ria.ru/
+lenta-ru                    https://lenta.ru/
+gosuslugi-ru                https://gosuslugi.ru/
+wildberries-ru              https://wildberries.ru/
+kinopoisk-ru                https://kinopoisk.ru/
+ok-ru                       https://ok.ru/
+rutube-ru                   https://rutube.ru/
+2gis-ru                     https://2gis.ru/
+hh-ru                       https://hh.ru/
+gazeta-ru                   https://gazeta.ru/
+kp-ru                       https://kp.ru/
+sports-ru                   https://sports.ru/
+vc-ru                       https://vc.ru/
+auto-ru                     https://auto.ru/
+drom-ru                     https://drom.ru/
+cian-ru                     https://cian.ru/
+mos-ru                      https://mos.ru/
+tbank-ru                    https://tbank.ru/
+sberbank-ru                 https://sberbank.ru/
+rambler-ru                  https://rambler.ru/
+market-yandex-ru            https://market.yandex.ru/

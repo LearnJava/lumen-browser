@@ -50,8 +50,9 @@ BUG-1116, `docs/perf/journal.md:358`): HTML сразу, CSS +700 мс, карт�
 3. Запись `health_log::log_load_timing(url, marks)` рядом с `log_render_health`
    (`health_log.rs:128`); `perf_audit.py` достаёт новый `kind` из `health.<pid>.log`
    (`perf_audit.py:1021-1026, 1217`) в поля `first_content_s`, `final_frame_s`.
-4. Базовый замер: `perf_audit.py` в режиме stability на 30 сайтах веса 3 из
-   `docs/perf/corpus-c.tsv` (15 RU + 15 global), запись в `docs/perf/journal.md`.
+4. Базовый замер: `perf_audit.py` в режиме stability на сайтах пользователя
+   `docs/perf/corpus-user-ru.txt` (30 RU-сайтов, **без прокси**: в `data/fingerprint.toml` нет
+   `proxy =`), запись в `docs/perf/journal.md`. Этот же список — замер «до/после» для всех LOAD-*.
 
 **Done when:** поля есть в JSON perf_audit; unit-тест на сброс/заполнение меток; запись
 базы в журнале (медианы `first_content_s`, `final_frame_s`, `ready_s`).
