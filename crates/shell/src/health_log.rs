@@ -10,6 +10,8 @@
 //!   that was open when it fired.
 //! * `console_error` — a page's own `console.error(...)` call (site is buggy).
 //! * `load_error` — a navigation that failed to load at all.
+//! * `script_stall` — a page script held the JS thread past the "page is not
+//!   responding" threshold (COMPAT-HANG).
 //! * `broken_render` — a page that loaded but painted nothing despite a
 //!   content-bearing DOM (white-screen / broken-render heuristic).
 //!
@@ -112,6 +114,17 @@ pub fn log_load_error(url: &str, error: &str) {
     }
     let mut obj = base("load_error", url);
     obj.insert("detail".into(), JsonValue::String(truncate(error)));
+    append(obj);
+}
+
+/// COMPAT-HANG: a page script held the JS thread past the "page is not
+/// responding" threshold; `detail` says how long and what the user chose.
+pub fn log_script_stall(url: &str, detail: &str) {
+    if !is_enabled() {
+        return;
+    }
+    let mut obj = base("script_stall", url);
+    obj.insert("detail".into(), JsonValue::String(truncate(detail)));
     append(obj);
 }
 

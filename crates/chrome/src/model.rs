@@ -22,9 +22,11 @@ mod dialog;
 mod security;
 pub use security::ChromeSecurityModel;
 mod login_bar;
+mod hang_bar;
 mod media_bar;
 pub use dialog::ChromeDialogModel;
 pub use login_bar::ChromeLoginOfferModel;
+pub use hang_bar::ChromeHangBarModel;
 pub use media_bar::ChromeMediaBarModel;
 mod update_bar;
 pub use update_bar::{ChromeUpdateAction, ChromeUpdateModel};
@@ -168,6 +170,8 @@ pub struct ChromeModel {
     pub login_offer: ChromeLoginOfferModel,
     /// `#mediaBar` «для видео нужен компонент ОС» (COMPAT-MEDIA-OSDEC-WIN-BAR).
     pub media_bar: ChromeMediaBarModel,
+    /// `#hangBar` «страница не отвечает» (COMPAT-HANG).
+    pub hang_bar: ChromeHangBarModel,
     /// `#dialogBox` — `alert`/`confirm`/`prompt` страницы (UX-DIALOGS).
     pub dialog: ChromeDialogModel,
     /// `#securityBox` — ошибка сертификата / вредоносный сайт (UX-SECURITY-UI).
@@ -1288,6 +1292,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     update_bar::bind_update(doc, &model.update);
     login_bar::bind_login_offer(doc, &model.login_offer);
     media_bar::bind_media_bar(doc, &model.media_bar);
+    hang_bar::bind_hang_bar(doc, &model.hang_bar);
     dialog::bind_dialog(doc, &model.dialog);
     security::bind_security(doc, &model.security);
 }

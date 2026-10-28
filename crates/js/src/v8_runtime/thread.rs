@@ -17,6 +17,7 @@ use super::*;
 pub(super) fn v8_thread_main(
     cmd_rx: std::sync::mpsc::Receiver<V8Command>,
     init_tx: Sender<Result<(), JsError>>,
+    stall: lumen_core::script_stall::StallHandle,
 ) {
     ensure_v8_platform();
 
@@ -79,6 +80,16 @@ pub(super) fn v8_thread_main(
     codegen_hook::install(&mut inner.isolate, &inner.context);
     // BUG-935 срез 53: `LUMEN_JS_STALL_SAMPLE_MS` — стек долгой JS-задачи в stderr.
     let stall_sampler = super::stall_sampler::StallSampler::start(&mut inner.isolate, &inner.context);
+    // COMPAT-HANG: `TerminateExecution` зовёт оболочка с UI-потока (кнопка
+    // «Остановить скрипт», закрытие вкладки), поэтому замыкание держит
+    // потокобезопасную ручку изолята, а не сам изолят.
+    let terminate_handle = inner.isolate.thread_safe_handle();
+    stall.set_terminator({
+        let h = terminate_handle.clone();
+        move || {
+            h.terminate_execution();
+        }
+    });
     let _ = init_tx.send(Ok(()));
 
     while let Ok(cmd) = cmd_rx.recv() {
@@ -87,7 +98,16 @@ pub(super) fn v8_thread_main(
                 if let Some(s) = &stall_sampler {
                     s.job_started();
                 }
+                // Просьба об остановке, пришедшая между задачами, не должна
+                // убить следующую.
+                terminate_handle.cancel_terminate_execution();
+                stall.job_started();
                 job(&mut inner);
+                stall.job_finished();
+                // После `TerminateExecution` изолят остаётся «прерываемым» до
+                // возврата на верхний уровень — снимаем, чтобы следующая задача
+                // (таймер, обработчик события) исполнялась.
+                terminate_handle.cancel_terminate_execution();
                 if let Some(s) = &stall_sampler {
                     s.job_finished();
                 }

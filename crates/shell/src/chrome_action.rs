@@ -140,6 +140,19 @@ impl Lumen {
                 }
             }
             ChromeAction::DismissMediaBar => self.media_bar.dismiss(),
+            ChromeAction::HangWait => self.script_hang.wait(),
+            ChromeAction::HangStop => {
+                self.script_hang.stop();
+            }
+            ChromeAction::HangReload => {
+                // Без остановки новая загрузка встала бы за зависшим скриптом.
+                self.script_hang.stop();
+                let flag = Rc::clone(&self.pending_reload);
+                self.runtime.handle().queue_task(
+                    runtime::TaskSource::UserInteraction,
+                    move || { flag.set(true); },
+                );
+            }
             ChromeAction::DialogOk => self.answer_page_dialog(true, event_loop),
             ChromeAction::DialogCancel => self.answer_page_dialog(false, event_loop),
             ChromeAction::NewTab => self.open_new_tab_for_typing(),

@@ -627,6 +627,14 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 }
 .media-bar.open{ display:flex; }
 
+/* ---------- Hang bar (COMPAT-HANG) ---------- */
+.hang-bar{
+  position:fixed; right:378px; top:92px; width:340px; background:var(--surface-0); color:var(--text-primary);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; gap:10px; padding:12px; z-index:650;
+}
+.hang-bar.open{ display:flex; }
+
 /* ---------- Page dialog (UX-DIALOGS) ---------- */
 .dialog-box{
   position:fixed; left:calc(50% - 210px); top:120px; width:420px; background:var(--surface-0); color:var(--text-primary);
@@ -1091,6 +1099,20 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
   <div class="login-actions">
     <button id="mediaHideBtn" data-action="dismiss-media-bar">Скрыть</button>
     <button class="primary" id="mediaInstallBtn" data-action="open-media-install"></button>
+  </div>
+</div>
+
+<!-- ================= HANG BAR (COMPAT-HANG) ================= -->
+<div class="hang-bar" id="hangBar" role="alert">
+  <div class="upd-row">
+    <div class="upd-icon"><svg class="icon"><use href="#i-clock"/></svg></div>
+    <div class="upd-text"><div class="upd-title" id="hangTitle">Страница не отвечает</div><div class="upd-meta" id="hangMeta"></div></div>
+    <button class="upd-close" data-action="hang-wait" aria-label="Подождать"><svg class="icon"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="login-actions">
+    <button id="hangWaitBtn" data-action="hang-wait">Подождать</button>
+    <button id="hangReloadBtn" data-action="hang-reload">Перезагрузить</button>
+    <button class="primary" id="hangStopBtn" data-action="hang-stop">Остановить скрипт</button>
   </div>
 </div>
 
