@@ -262,6 +262,7 @@ impl PageSource {
                     .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
                     .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
                     .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
+                let warm_jar = cookie_jar.clone();
                 if let Some(jar) = cookie_jar {
                     builder = builder.with_cookie_jar(
                         Arc::new(lumen_storage::CookieJarProvider::new(jar)),
@@ -284,6 +285,7 @@ impl PageSource {
                 fetch_span.set_bytes(bytes.len());
                 eprintln!("Получено {} байт", bytes.len());
                 emit_early_hints(&early_hint_links, &final_url, &sink);
+                emit_response_link_headers(&resp_headers, &final_url, &sink, warm_jar);
                 let coop = resp_headers.iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
                     .map(|(_, v)| v.as_str());
@@ -396,6 +398,7 @@ impl PageSource {
             .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
             .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
             .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
+        let warm_jar = cookie_jar.clone();
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
@@ -412,6 +415,7 @@ impl PageSource {
         let redirected = final_url != lumen_url;
         eprintln!("Получено {} байт (streaming)", bytes.len());
         emit_early_hints(&early_hint_links, &final_url, &sink);
+        emit_response_link_headers(&resp_headers, &final_url, &sink, warm_jar);
         let coop = resp_headers.iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
             .map(|(_, v)| v.as_str());
@@ -578,6 +582,57 @@ fn emit_early_hints(early_hint_links: &[String], final_url: &lumen_core::url::Ur
     }
     let base = ResourceBase::Url(final_url.to_string());
     crate::page_pipeline::dispatch_preload_hints(&hints, &base, sink, &mut std::collections::HashSet::new());
+}
+
+/// Every `Link:` header value of the final document response (BUG-906).
+pub(crate) fn response_link_headers(resp_headers: &[(String, String)]) -> Vec<String> {
+    resp_headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("link"))
+        .map(|(_, v)| v.clone())
+        .collect()
+}
+
+/// HTML LS §4.6.6 «Link headers»: the final response's `Link:` header is
+/// processed like the equivalent `<link>` elements. Document-response entry
+/// point of [`emit_link_hints`]; gated by the response's own CSP header
+/// (BUG-1491) because the `<meta>` policies are not known yet at this stage.
+fn emit_response_link_headers(
+    resp_headers: &[(String, String)],
+    final_url: &lumen_core::url::Url,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) {
+    let csp: Vec<_> = content_security_policy_header(resp_headers)
+        .iter()
+        .map(|p| lumen_network::csp::parse_csp_header(p))
+        .collect();
+    emit_link_hints(&response_link_headers(resp_headers), final_url, sink, cookie_jar, &csp);
+}
+
+/// Starts what the `Link:` header values of a response at `base_url` ask for
+/// (BUG-906): preload/modulepreload/prefetch hints fetch into `PREFETCH_CACHE`
+/// (an element has the JS shim for that, a header has no element), the rest are
+/// logged like early hints. Runs with the document's cookie jar, unlike
+/// [`emit_early_hints`]. Shared by the document response and by the stylesheet/
+/// script subresource responses.
+pub(crate) fn emit_link_hints(
+    links: &[String],
+    base_url: &lumen_core::url::Url,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    csp: &[lumen_network::csp::CspPolicy],
+) {
+    let hints: Vec<lumen_html_parser::PreloadHint> = links
+        .iter()
+        .flat_map(|v| lumen_html_parser::parse_link_header(v))
+        .collect();
+    if hints.is_empty() {
+        return;
+    }
+    let base = ResourceBase::Url(base_url.to_string());
+    crate::page_pipeline::dispatch_preload_hints(&hints, &base, sink, &mut std::collections::HashSet::new());
+    crate::page_pipeline::warm_preload_cache(&hints, &base, sink, cookie_jar, csp);
 }
 
 /// Whether `resp_headers` carry `Cache-Control: no-store`, per RFC 9111 §5.2.
@@ -1182,6 +1237,27 @@ mod tests {
         // SAFETY: see above.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         assert!(events.is_empty());
+    }
+
+    // ---- BUG-906: `Link:` header of the final document response ----
+
+    #[test]
+    fn response_link_headers_collects_every_occurrence_case_insensitively() {
+        let headers = vec![
+            ("Content-Type".to_owned(), "text/html".to_owned()),
+            ("Link".to_owned(), "</a.js>; rel=preload; as=script".to_owned()),
+            ("link".to_owned(), "</b.css>; rel=prefetch".to_owned()),
+        ];
+        let links = response_link_headers(&headers);
+        assert_eq!(links.len(), 2);
+        let hints: Vec<_> = links.iter().flat_map(|v| lumen_html_parser::parse_link_header(v)).collect();
+        assert!(matches!(&hints[0], lumen_html_parser::PreloadHint::Preload { url, .. } if url == "/a.js"));
+        assert!(matches!(&hints[1], lumen_html_parser::PreloadHint::Prefetch { url } if url == "/b.css"));
+    }
+
+    #[test]
+    fn response_without_link_header_has_no_link_values() {
+        assert!(response_link_headers(&[("Content-Type".to_owned(), "text/html".to_owned())]).is_empty());
     }
 
     #[test]
