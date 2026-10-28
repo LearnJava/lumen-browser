@@ -6097,7 +6097,8 @@ function _wa_custom_interp(name, from, to, t) {
     var kind = _wa_custom_kind(name, [from, to]);
     if (!kind) return undefined;
     if (!kind.sep) {
-        if (kind.leaf === 'scalar') return undefined;
+        // A plain scalar pair is the generic path's; one mixing `%` and lengths needs the sum form.
+        if (kind.leaf === 'scalar' && !/%|calc\(/i.test(from + to)) return undefined;
         return _wa_custom_leaf_interp(kind, from, to, t);
     }
     var la = _wa_split_top(from, kind.sep), lb = _wa_split_top(to, kind.sep);

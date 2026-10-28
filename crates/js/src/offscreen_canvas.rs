@@ -319,6 +319,13 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         }),
     )?;
     rt.register_native(
+        "_lumen_offscreen_canvas2d_set_opaque",
+        into_v8_fn1(|canvas_id: u32| {
+            with_offscreen_canvas(canvas_id, |c| c.set_opaque());
+            mark_offscreen_dirty(canvas_id);
+        }),
+    )?;
+    rt.register_native(
         "_lumen_offscreen_canvas2d_clear_rect",
         into_v8_fn5(|canvas_id: u32, x: f64, y: f64, w: f64, h: f64| {
             with_offscreen_canvas(canvas_id, |c| {
@@ -515,6 +522,34 @@ pub(crate) fn install_offscreen_canvas_bindings_v8(
         "_lumen_offscreen_canvas2d_clip",
         into_v8_fn1(|canvas_id: u32| {
             with_offscreen_canvas(canvas_id, |c| c.clip());
+        }),
+    )?;
+    // `fill(path)` / `stroke(path)` / `clip(path)` with a `Path2D` argument: the path
+    // object lives in `canvas2d`'s registry, keyed by the id the page-side class carries.
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_fill_path",
+        into_v8_fn2(|canvas_id: u32, path_id: u32| {
+            if let Some(pd) = crate::canvas2d::path2d_snapshot(path_id) {
+                with_offscreen_canvas(canvas_id, |c| c.fill_with_path2d(&pd));
+                mark_offscreen_dirty(canvas_id);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_stroke_path",
+        into_v8_fn2(|canvas_id: u32, path_id: u32| {
+            if let Some(pd) = crate::canvas2d::path2d_snapshot(path_id) {
+                with_offscreen_canvas(canvas_id, |c| c.stroke_with_path2d(&pd));
+                mark_offscreen_dirty(canvas_id);
+            }
+        }),
+    )?;
+    rt.register_native(
+        "_lumen_offscreen_canvas2d_clip_path",
+        into_v8_fn2(|canvas_id: u32, path_id: u32| {
+            if let Some(pd) = crate::canvas2d::path2d_snapshot(path_id) {
+                with_offscreen_canvas(canvas_id, |c| c.clip_with_path2d(&pd));
+            }
         }),
     )?;
 
@@ -1377,6 +1412,10 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
       // Create and cache a 2D context proxy
       const canvasId = this.__canvas_id__;
       const canvasRef = this;
+      // `{ alpha: false }`: an opaque bitmap (starts black, `clearRect` leaves it opaque).
+      if (options !== null && typeof options === 'object' && options.alpha === false) {
+        _lumen_offscreen_canvas2d_set_opaque(canvasId);
+      }
       // Хранилище четырёх атрибутов с парой get/set (BUG-456 симптом 2): как
       // поля литерала они жить не могут (аксессор с тем же ключом их
       // перекрывает — `lineWidth: 1` ниже был мёртвым кодом, затёртым
@@ -1457,9 +1496,28 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
         roundRect: function(x, y, w, h, radii) {
           _offscreen_round_rect(canvasId, x, y, w, h, radii);
         },
-        fill: () => _lumen_offscreen_canvas2d_fill(canvasId),
-        stroke: () => _lumen_offscreen_canvas2d_stroke(canvasId),
-        clip: () => _lumen_offscreen_canvas2d_clip(canvasId),
+        // `fill(path?)`, `stroke(path?)`, `clip(path?)`: a `Path2D` argument replaces the current path.
+        fill: function(ruleOrPath) {
+          if (typeof Path2D === 'function' && ruleOrPath instanceof Path2D) {
+            _lumen_offscreen_canvas2d_fill_path(canvasId, ruleOrPath.__pid__);
+          } else {
+            _lumen_offscreen_canvas2d_fill(canvasId);
+          }
+        },
+        stroke: function(path) {
+          if (typeof Path2D === 'function' && path instanceof Path2D) {
+            _lumen_offscreen_canvas2d_stroke_path(canvasId, path.__pid__);
+          } else {
+            _lumen_offscreen_canvas2d_stroke(canvasId);
+          }
+        },
+        clip: function(ruleOrPath) {
+          if (typeof Path2D === 'function' && ruleOrPath instanceof Path2D) {
+            _lumen_offscreen_canvas2d_clip_path(canvasId, ruleOrPath.__pid__);
+          } else {
+            _lumen_offscreen_canvas2d_clip(canvasId);
+          }
+        },
 
         // State stack. Pushes/pops the native CTM/path-clip state and the
         // four JS-mirrored attributes together — the BUG-455 lesson.

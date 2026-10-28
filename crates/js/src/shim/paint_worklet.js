@@ -90,6 +90,10 @@
     });
   }
 
+  function workletImport() {
+    return Promise.reject(new TypeError('import() is not supported in a worklet'));
+  }
+
   // Worklets §3 «addModule()»: fetch, evaluate, resolve; any failure is an AbortError.
   function Worklet() { throw new TypeError('Illegal constructor'); }
   Worklet.prototype.addModule = function addModule(moduleURL, options) {
@@ -105,20 +109,23 @@
       }
       moduleSource(resolved).then(function (src) {
         var run;
+        // Worklets do not support `import()` (Worklets §2.1: the module map's dynamic import
+        // always fails with a TypeError), so a call is routed to a rejecting stub.
+        src = src.replace(/(^|[^.\w$])import\s*\(/g, '$1__lumen_worklet_import(');
         try {
-          run = new Function('registerPaint', src);
+          run = new Function('registerPaint', '__lumen_worklet_import', src);
         } catch (e) {
           // Worklet modules are ES modules, so a top-level `await` is legal: evaluate the
           // body as an async function (a genuine syntax error fails here again).
           try {
-            run = new AsyncFunction('registerPaint', src);
+            run = new AsyncFunction('registerPaint', '__lumen_worklet_import', src);
           } catch (e2) {
             reject(new DOMException('addModule: module failed to evaluate: ' + e, 'AbortError'));
             return;
           }
         }
         try {
-          var done = run(registerPaint);
+          var done = run(registerPaint, workletImport);
           if (done && typeof done.then === 'function') {
             done.then(function () { resolve(undefined); }, function (e) {
               reject(new DOMException('addModule: module failed to evaluate: ' + e, 'AbortError'));
@@ -355,12 +362,9 @@
     var pxW = Math.max(1, Math.min(4096, Math.ceil(req.w * dpr)));
     var pxH = Math.max(1, Math.min(4096, Math.ceil(req.h * dpr)));
     var canvas = new OffscreenCanvas(pxW, pxH);
-    var ctx = canvas.getContext('2d');
+    // `contextOptions.alpha: false` — an opaque bitmap that starts black.
+    var ctx = canvas.getContext('2d', { alpha: def.alpha });
     ctx.scale(pxW / req.w, pxH / req.h);
-    if (!def.alpha) {
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, req.w, req.h);
-    }
     function publish() {
       _lumen_paint_publish(req.key, canvas.__canvas_id__);
     }
