@@ -21,6 +21,16 @@ abroad / 15,2 % на ru, `blank:near-empty` на 239 сайтах, TIMEOUT+HUNG 
 - Global-сайты разбирать по точке abroad, RU-сайты — по точке ru (journal:838-850:
   на ru global завышен гео-блокировкой).
 
+## Сайты пользователя — первыми
+
+`docs/perf/corpus-user-ru.txt` — 30 сайтов: 6 названы пользователем (dzen, pikabu, mail.ru,
+ozon, avito, habr), 24 — популярные RU-сайты. Это главная проверка: в каждом срезе 2–4 сначала
+разбираются они, потом остальной корпус. Открывать **без прокси** (решение пользователя):
+в `data/fingerprint.toml` нет `proxy =`, Chrome — `--chrome-arg=--no-proxy-server`.
+Состояние на 2026-10-20 (точка ru): mail.ru BROKEN_RENDER, avito HUNG + blank, pikabu blank
+31 с, ozon SITE_REFUSED (антибот), ok/lenta/kp/sports HUNG, rutube/banki TIMEOUT, gosuslugi и
+gazeta BROKEN_RENDER; dzen и habr в корпусе C не было.
+
 ## Общие правила для срезов 2–4
 
 - Каждый кластер, который чинится в движке, — строка `OPEN` в `BUGS.md` (номер — по
@@ -51,9 +61,14 @@ abroad / 15,2 % на ru, `blank:near-empty` на 239 сайтах, TIMEOUT+HUNG 
    с их классом.
 4. CLI: `python scripts/compat_triage.py --results A.jsonl [--results B.jsonl] --corpus
    docs/perf/corpus-c.tsv --out <md>`; тест на синтетических строках JSONL (3–4 сайта).
+5. Свежий прогон сайтов пользователя без прокси:
+   `python scripts/compat_crawl.py --corpus docs/perf/corpus-user-ru.txt --env LUMEN_NO_ADBLOCK=1
+   --no-rerun --timeout 40 --chrome-arg=--no-proxy-server --out .tmp/compat-crawl-user-<дата>`
+   (≈ 30 мин) и первым разделом отчёта — таблица по этим 30 сайтам: статус, класс, причина,
+   `ready_s`. Сайт пользователя получает вес 5 при подсчёте веса кластера.
 
-**Done when:** тест зелёный; отчёт закоммичен; в нём ≥ 15 кластеров с весом и примерами,
-сумма сайтов по классам = числу не-OK сайтов.
+**Done when:** тест зелёный; отчёт закоммичен; в нём таблица 30 сайтов пользователя и ≥ 15
+кластеров с весом и примерами, сумма сайтов по классам = числу не-OK сайтов.
 
 ## SITES-TRIAGE-2 — пустые страницы (P2, M; после SITES-TRIAGE-1)
 
