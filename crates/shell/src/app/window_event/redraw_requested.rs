@@ -770,12 +770,13 @@ impl Lumen {
                 h_state,
             ));
             // BUG-1642: билдеры считают от верха страницы, overlay рисуется в координатах окна.
-            // Полосы фреймов уже в страничных координатах своего хоста — их не сдвигаем.
             scrollbar::shift_overlay_y(&mut scrollbar_cmds, page_y_offset);
+            // Полосы фреймов считаются от бокса хоста на странице — сдвиг окна берут сами (BUG-1683).
             scrollbar_cmds.extend(frames::frame_scrollbar_overlay(
                 &self.frames,
                 self.scroll_x,
                 self.scroll_y,
+                self.page_offset(),
             ));
             // UX-FIND-ALL: метки совпадений поиска поверх трека (после thumb-а).
             let mut find_marks = scrollbar::build_find_marks(
