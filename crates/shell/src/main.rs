@@ -68,6 +68,7 @@ mod page_source;
 mod paint_worklet_host;
 mod page_state;
 mod present_log;
+mod async_scripts;
 mod parallel_fetch;
 mod resource_base;
 mod css_url_rebase;

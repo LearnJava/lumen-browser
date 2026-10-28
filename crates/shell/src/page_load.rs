@@ -883,6 +883,7 @@ impl Lumen {
             animated_gifs: Vec::new(), // lumen-driver path has no animated GIF support yet
             lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
             images_deferred: false,
+            async_scripts: None,
             fired_image_events: Vec::new(),
             layout_box: rendered.layout_box,
             // Driver path renders via lumen-driver which uses Arc<dyn FontProvider>;
@@ -1474,6 +1475,32 @@ impl Lumen {
         self.relayout_raf_dirty();
     }
 
+    /// LOAD-3A: исполнить `async`-скрипты страницы, которые успели скачаться, на её JS-хэндле
+    /// (как задачу таймера: правки DOM подхватит тот же `take_dom_dirty`). Зовётся каждый проход
+    /// `about_to_wait` и по `LoadEvent::AsyncScriptReady`; пока хоть один не исполнен, `load` не идёт.
+    pub(crate) fn drive_async_scripts(&mut self) {
+        let Some(feed) = self.pending_window_load.as_ref().and_then(|p| p.async_scripts.clone())
+        else {
+            return;
+        };
+        let ready = feed.take_ready();
+        if ready.is_empty() {
+            return;
+        }
+        let count = ready.len();
+        #[cfg(feature = "v8")]
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+            for script in &ready {
+                js.run_async_script(script);
+            }
+        });
+        #[cfg(not(feature = "v8"))]
+        drop(ready);
+        // Движковый поток исполняет задачи по порядку, так что `load`, поставленный следом,
+        // встанет после скриптов.
+        feed.mark_executed(count);
+    }
+
     /// LOAD-1: доставить `load`, `readyState=complete` и `pageshow` страницы, отданной без
     /// ожидания картинок (HTML LS §8.2.3: `load` ждёт все отложенные ресурсы документа).
     ///
@@ -1489,7 +1516,18 @@ impl Lumen {
             let ledger = self.stream_images_requested.lock().unwrap_or_else(|e| e.into_inner());
             unsettled_images(&ledger.urls, &self.stream_image_sizes, &self.stream_image_errors)
         };
-        if !window_load_due(true, self.stream_image_sizes_dirty, unsettled, self.deferred_frames_busy()) {
+        let async_busy = self
+            .pending_window_load
+            .as_ref()
+            .and_then(|p| p.async_scripts.as_ref())
+            .is_some_and(|feed| feed.pending() > 0);
+        if !window_load_due(
+            true,
+            self.stream_image_sizes_dirty,
+            unsettled,
+            self.deferred_frames_busy(),
+            async_busy,
+        ) {
             return;
         }
         let Some(pending) = self.pending_window_load.take() else { return };
@@ -2265,6 +2303,7 @@ impl Lumen {
                 pageshow_persisted,
                 nav_timing: None,
                 frames_scan_pending: true,
+                async_scripts: page.async_scripts.take(),
             });
             // Всё, что конвейер не ждал и что ещё не в полёте, уходит в сеть сейчас.
             let viewport = self.relayout_viewport().unwrap_or_else(|| Size::new(1024.0, 720.0));
@@ -2569,6 +2608,9 @@ pub(crate) enum LoadEvent {
     /// script-created `<img>` whose fetch 404s never got `onerror` and
     /// `complete` stayed `false` forever.
     ImageDecodeFailed { src: String },
+    /// LOAD-3A: фоновая загрузка `async`-скрипта страницы закончилась — будит цикл, чтобы
+    /// `about_to_wait` ([`Lumen::drive_async_scripts`]) исполнил его, не дожидаясь иного события.
+    AsyncScriptReady,
     /// PH3-19: web-шрифт из @font-face url() декодирован в фоновом потоке.
     /// Регистрируется в FontRegistry + MultiFontMeasurer и вызывает relayout —
     /// текст появляется в fallback-шрифте сразу, подменяется по приходу (FOUT).
@@ -2677,6 +2719,8 @@ pub(crate) struct PendingWindowLoad {
     /// LOAD-1B: первый скан `<iframe>` страницы ещё не прошёл (`Lumen::drive_deferred_frames`):
     /// фреймов, о которых окно не знает, быть не может только после него.
     pub(crate) frames_scan_pending: bool,
+    /// LOAD-3A: `async`-скрипты страницы, которых `load` ещё ждёт (`Lumen::drive_async_scripts`).
+    pub(crate) async_scripts: Option<Arc<crate::async_scripts::AsyncScriptFeed>>,
 }
 
 /// Всё, что нужно, чтобы отправить `PerformanceNavigationTiming` в JS-рантайм страницы.
@@ -2714,6 +2758,13 @@ pub(crate) fn unsettled_images(
 /// LOAD-1: пора ли доставлять отложенный `load` — ждёт и проход, раздающий картинкам их
 /// `load`/`error` (`dirty`), и последнюю незавершённую картинку. LOAD-1B: и последний
 /// `<iframe>` (`frames_busy`) — HTML LS §8.2.3 держит `load` до `load` вложенных документов.
-pub(crate) fn window_load_due(pending: bool, dirty: bool, unsettled: usize, frames_busy: bool) -> bool {
-    pending && !dirty && unsettled == 0 && !frames_busy
+/// LOAD-3A: и последний `async`-скрипт (`async_busy`) — он задерживает `load`, но не `DOMContentLoaded`.
+pub(crate) fn window_load_due(
+    pending: bool,
+    dirty: bool,
+    unsettled: usize,
+    frames_busy: bool,
+    async_busy: bool,
+) -> bool {
+    pending && !dirty && unsettled == 0 && !frames_busy && !async_busy
 }
