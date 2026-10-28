@@ -296,3 +296,75 @@
 | t-online-de | TIMEOUT/HUNG | stderr: [js error] uncaught typeerror: cannot read properties of undefined (reading 'confi | 37.2 |
 | vimeo-com | TIMEOUT/HUNG | без улик | 30.1 |
 | vkvideo-ru | TIMEOUT/HUNG | stderr: [js warn] [api-cache] idle gc failed transactioninactiveerror: transaction is not  | 31.3 |
+
+## Разбор blank (SITES-TRIAGE-2)
+
+Срез 2026-10-28: 30 сайтов класса `blank:near-empty` веса 3 (10) и 2 (первые 20 по алфавиту). Каждый открыт живым окном Lumen (`--maximized`-аналог `compat_crawl`, `LUMEN_NO_ADBLOCK=1`, без прокси) и эталонным Chrome: `compat_crawl.py --corpus .tmp/blank30.txt --env LUMEN_NO_ADBLOCK=1 --no-rerun --timeout 40 --chrome-arg=--no-proxy-server`; сайты, давшие `TIMEOUT` из-за общего окна, перепрогнаны с `--restart-every 1`. «Знаков» — видимый текст Lumen / Chrome.
+
+**Главный вывод.** Из 30 «пустых» страниц 9 на повторе загружаются (контент появляется на 8–35 с — это замер раньше контента, дорожка LOAD), 6 упираются в таймаут/зависание (передаются в SITES-TRIAGE-3), 1 — ложное срабатывание правила (google.com), 3 — «не наш» (НУЦ, NGENIX, PerimeterX), 4 — причина не изолирована, 7 сайтов объясняются 5 новыми дефектами движка (заведены).
+
+| сайт | вес | статус | ready_s | знаков Lumen / Chrome | причина | пояснение |
+|---|---|---|---|---|---|---|
+| 2gis-ru | 3 | BROKEN_RENDER | 8.05 | 1789 / 1750 | медленная загрузка | контент появляется на 8–16 с (в базовом прогоне text=0, сейчас 1790); исключение `Clickstream Agent offline` нефатально |
+| cnn-com | 3 | TIMEOUT | 40.7 | 0 / 9107 | таймаут загрузки | сеть отвечает 200, текст пуст за 40 с; поток движка занят — уже [BUG-1778](../../../bugs/BUG-1778-OPEN.md) |
+| google-com | 3 | OK | 9.3 | 164 / 1986 | ложное срабатывание + вёрстка | Chrome 1986 знаков — это consent-диалог; Lumen получает страницу без диалога (164 знака), но с разваленной вёрсткой: лого слева, поле поиска (`textarea.gLFyf` есть в HTML) не видно → в SITES-TRIAGE-4 |
+| mirtesen-ru | 3 | DEGRADED | 6.02 | 2 / 9812 | JS-исключение | `{}.toString.call(<элемент>)` даёт `[object Object]`, tippy.js не узнаёт элемент и зовёт `querySelectorAll(<элемент>)` → `SyntaxError`; [BUG-1779](../../../bugs/BUG-1779-OPEN.md) |
+| roblox-com | 3 | DEGRADED | 13.14 | 970 / 1924 | медленная загрузка / частично | 970 знаков за 13 с (в базовом 0); SignalR/WebSocket `failed to connect` нефатален; полноту сверять в SITES-TRIAGE-4 |
+| rt-ru | 3 | OK | 12.22 | 3315 / 6360 | медленная загрузка | сейчас OK, 3315 знаков за 12 с; в базовом прогоне 0 — замер раньше появления контента |
+| samsung-com | 3 | BROKEN_RENDER | 8.34 | 46 / 3344 | JS-исключение (не изолировано) | `Cannot read properties of null (reading 'document')` и `videoInfo.el.load is not a function` в инициализации видеоблока; минимальная репродукция не найдена, бага нет |
+| theguardian-com | 3 | OK | 17.56 | 15447 / 18593 | медленная загрузка | сейчас OK, 15447 знаков за 17,6 с; в базовом прогоне 0 |
+| tumblr-com | 3 | OK | 30.06 | 8425 / 9713 | медленная загрузка | OK, 8425 знаков за 30 с; в первом прогоне серии — TIMEOUT (окно, не перезапущенное после зависшего сайта) |
+| tutu-ru | 3 | DEGRADED | 28.89 | 0 / 9955 | таймаут загрузки | запросы идут (200), `ready` не наступает за 29–40 с, текст 0, исключений нет → список SITES-TRIAGE-3 |
+| afisha-ru | 2 | BROKEN_RENDER | 1.25 | 11 / 8482 | зацикливание SSO | автологин Сбер ID: `id.sber.ru/CSAFront/api/initlow` → 400 → `/auth/cb/?error=sso_error` перезагружается по кругу, виден только лого и две точки; [BUG-1780](../../../bugs/BUG-1780-OPEN.md) |
+| aviasales-ru | 2 | DEGRADED | 7.7 | 1 / 9026 | JS-исключение | тот же `[object Object] is not a valid selector` (BUG-1779) после предупреждений effector `undefined is used to skip updates` |
+| b2b-center-ru | 2 | OK | 4.74 | 1 / 8808 | нет API | `fetch(blob:…)` внутри Worker → `unsupported scheme: blob`; [BUG-1781](../../../bugs/BUG-1781-OPEN.md) |
+| bild-de | 2 | DEGRADED | 23.14 | 0 / 20742 | скрипт отказал / таймаут | `Integrity check failed: getComputedStyle` и `Cannot init rosetta` (загрузчик consent сверяет «нативность» API); текст 0 за 23 с → SITES-TRIAGE-3, гипотеза не подтверждена |
+| britannica-com | 2 | DEGRADED | 35.33 | 5273 / 4660 | медленная загрузка | 5273 знака (Chrome 4660) за 35 с; пусто только в базовом замере |
+| bspb-ru | 2 | NET_FAIL | 2.19 | 0 / 4787 | не наш: сертификат НУЦ | `Russian Trusted Sub CA` — `UnknownIssuer` без согласия пользователя (политика COMPAT-TRUST-NUC, `crates/network/src/tls/nuc.rs`) |
+| cbr-ru | 2 | DEGRADED | 9.55 | 0 / 3994 | прочее, без улик | ответ 200, исключений нет, текст 0 за 9,5 с при Chrome 3994; причину не изолировал |
+| claude-ai | 2 | DEGRADED | 6.38 | 2 / 3678 | нет API | `console.assert is not a function`; [BUG-1782](../../../bugs/BUG-1782-OPEN.md) |
+| cloudpayments-ru | 2 | DEGRADED | 15.12 | 3687 / 3712 | медленная загрузка | 3687 знаков (Chrome 3712) за 15 с; в базовом DEAD |
+| dailymail-com | 2 | TIMEOUT | 40.92 | 0 / 1298 | таймаут загрузки | сеть 200, текст 0 за 40 с (CMP + реклама) → SITES-TRIAGE-3 |
+| dailymotion-com | 2 | BROKEN_RENDER | 5.48 | 2 / 3440 | прочее: пустой consent-диалог | виден модальный блок с иконками-«битыми картинками» и без текста (2 знака против 3440); исключений нет, причина не изолирована |
+| dell-com | 2 | DEGRADED | 27.28 | 8962 / 10082 | медленная загрузка | 8962 знака (Chrome 10082) за 27 с; в базовом DEAD |
+| ea-com | 2 | DEAD | — | 0 / 7986 | падение V8 | процесс умирает: `bad_optional_access was thrown in -fno-exceptions mode` после `Cannot read properties of undefined (reading 'call')`; воспроизводится 2 из 2; [BUG-1783](../../../bugs/BUG-1783-OPEN.md) |
+| eapteka-ru | 2 | OK | 1.06 | 99 / 26574 | антибот: JS-проверка NGENIX | страница «Сейчас будет выполнена проверка вашего браузера», Chrome её проходит (26574 знака), Lumen остаётся на ней (99); класс «не наш» до выяснения механизма |
+| eldorado-ru | 2 | OK | 2.19 | 1 / 2286 | прочее, без улик | виден только спиннер, `ready` 2,2 с, исключений нет; Chrome 2286 знаков |
+| elpais-com | 2 | HUNG | 42.84 | 0 / 29308 | скрипт не загрузился | `loadExternalScript: Timeout loading ArcP` при том что `arc/subs/p.min.js` ответил 200 — возможно не срабатывает `onload` динамического `<script>`; HUNG → SITES-TRIAGE-3 |
+| film-ru | 2 | DEGRADED | 29.56 | 0 / 8576 | таймаут загрузки | текст 0 за 30 с; журнал забит `video аудио: открыт вывод`, грузится recaptcha → SITES-TRIAGE-3 |
+| fiverr-com | 2 | DEGRADED | 20.3 | 0 / 3291 | антибот: PerimeterX | скрипт PX шлёт `collector/clientError`, текст 0 за 20 с при Chrome 3291; страница-заглушка не распознана `walls` |
+| free-fr | 2 | OK | 20.58 | 22531 / 22995 | медленная загрузка | OK, 22531 знак (Chrome 22995) за 20 с; в базовом 0 |
+| gazeta-ru | 2 | BROKEN_RENDER | 1.17 | 1703 / 5154 | зацикливание SSO | тот же автологин Сбер ID → `auth?error=sso_error`, сейчас 1703 знака против 5154; [BUG-1780](../../../bugs/BUG-1780-OPEN.md) |
+
+### Сводка по причинам
+
+| причина | сайтов | сайты |
+|---|---|---|
+| медленная загрузка | 8 | 2gis-ru, rt-ru, theguardian-com, tumblr-com, britannica-com, cloudpayments-ru, dell-com, free-fr |
+| таймаут загрузки | 4 | cnn-com, tutu-ru, dailymail-com, film-ru |
+| JS-исключение | 2 | mirtesen-ru, aviasales-ru |
+| зацикливание SSO | 2 | afisha-ru, gazeta-ru |
+| нет API | 2 | b2b-center-ru, claude-ai |
+| прочее, без улик | 2 | cbr-ru, eldorado-ru |
+| ложное срабатывание + вёрстка | 1 | google-com |
+| медленная загрузка / частично | 1 | roblox-com |
+| JS-исключение (не изолировано) | 1 | samsung-com |
+| скрипт отказал / таймаут | 1 | bild-de |
+| не наш: сертификат НУЦ | 1 | bspb-ru |
+| прочее: пустой consent-диалог | 1 | dailymotion-com |
+| падение V8 | 1 | ea-com |
+| антибот: JS-проверка NGENIX | 1 | eapteka-ru |
+| скрипт не загрузился | 1 | elpais-com |
+| антибот: PerimeterX | 1 | fiverr-com |
+
+### Заведённые баги
+
+| баг | вес | сайты | суть |
+|---|---|---|---|
+| [BUG-1779](../../../bugs/BUG-1779-OPEN.md) | 5 | mirtesen-ru, aviasales-ru | `Object.prototype.toString.call(<HTML-элемент>)` → `[object Object]` |
+| [BUG-1780](../../../bugs/BUG-1780-OPEN.md) | 4 | afisha-ru, gazeta-ru | зацикливание автологина Сбер ID (`sso_error`) |
+| [BUG-1781](../../../bugs/BUG-1781-OPEN.md) | 4 | b2b-center-ru (+ uchi-ru) | `fetch(blob:)` в Worker |
+| [BUG-1782](../../../bugs/BUG-1782-OPEN.md) | 4 | claude-ai (+ kaspersky-ru) | нет `console.assert/time/…` |
+| [BUG-1783](../../../bugs/BUG-1783-OPEN.md) | 2 | ea-com | падение V8 `bad_optional_access` |
+
+Передано дальше: зависания/таймауты (cnn, tutu, dailymail, elpais, film, bild) — SITES-TRIAGE-3; вёрстка google-com и полнота roblox — SITES-TRIAGE-4. Без бага остались: cbr-ru, eldorado-ru, dailymotion-com, samsung-com (причина не изолирована), eapteka-ru, fiverr-com (антибот), bspb-ru (политика НУЦ).
