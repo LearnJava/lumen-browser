@@ -581,6 +581,10 @@ impl Lumen {
         if let Some(at) = self.frustration_tick() {
             next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
         }
+        // LOAD-2: дедлайн ожидания стилей `<head>` — черновик без медленных таблиц.
+        if let Some(at) = self.stream_css_deadline_tick() {
+            next_wakeup = Some(next_wakeup.map_or(at, |t| t.min(at)));
+        }
         // BUG-1630: кадр живой анимации хрома — по таймеру, чтобы между кадрами
         // цикл доходил до `about_to_wait` (см. `chrome_anim_redraw_at`).
         // BUG-1637: то же для живой анимации/перехода страницы.

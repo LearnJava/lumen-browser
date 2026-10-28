@@ -132,6 +132,17 @@ graphic_tests без изменений.
 (`subdocument_frames.rs:1488`): черновик рисуется по CssLoaded и по дедлайну; на стенде с
 CSS +5 с первый кадр с контентом ≤ 2,2 с (LOAD-0).
 
+**Сделано (2026-10-28).** `css_pending.rs`: счётчик хранит момент первого `add`; через
+`STREAM_CSS_DEADLINE` (2 с) `stream_css_pending` становится `false`, а `stream_css_pending_expired`
+отдаёт дедлайн ровно один раз. `Lumen::stream_css_deadline_tick` (из `about_to_wait`) рисует черновик
+и вкладывает дедлайн в `WaitUntil`; `CssLoaded` после снятия ожидания тоже рисует
+(`paint_stream_draft`, без 16-мс троттлинга). Находка: `LoadDone` сбрасывал `stream_builder` и
+`stream_sheet`, и пока финальный pipeline ждал медленный CSS, рисовать было не из чего — сброс
+перенесён в `RenderDone`. Стенд `load_lab.py --css-ms 5000` (dev-release): `first_content_ms`
+(LOAD-0) 2,03 с; без дедлайна черновика не было вовсе. Финальный `build_page_cascade`
+(`stylesheets.rs:336`) по-прежнему ждёт тот же CSS: `final_applied_ms` 8,6 с при CSS +5 с и
+картинках/iframe +3 с (CSS 5,0 с + скрипты/iframe), не менялся.
+
 ## LOAD-3C — прогрев скриптов без потока на каждую подсказку (P1, S)
 
 **Depends on:** —. **Files:** `page_load.rs:2244-2307`, `prefetch.rs`.
